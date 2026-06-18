@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "release-operator.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "release-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "release-operator.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "release-operator.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: operator
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        {{- with .Values.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        args:
+          - "--config=/etc/release-operator/config.yaml"
+          - "--customer-id={{ required "customerID is required" .Values.customerID }}"
+        env:
+        - name: CUSTOMER_ID
+          value: "{{ .Values.customerID }}"
+        {{- if or .Values.harbor.existingSecret (and .Values.harbor.username .Values.harbor.password) }}
+        - name: HARBOR_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: {{ if .Values.harbor.existingSecret }}{{ .Values.harbor.existingSecret }}{{ else }}{{ .Release.Name }}-harbor-creds{{ end }}
+              key: username
+        - name: HARBOR_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ if .Values.harbor.existingSecret }}{{ .Values.harbor.existingSecret }}{{ else }}{{ .Release.Name }}-harbor-creds{{ end }}
+              key: password
+        {{- end }}
+        - name: NOTIFICATION_ENDPOINT
+          value: "{{ .Values.notificationEndpoint }}"
+        ports:
+        - name: grpc
+          containerPort: {{ .Values.grpc.addr | replace ":" "" | default "8443" }}
+          protocol: TCP
+        {{- if .Values.tls.enabled }}
+        volumeMounts:
+        - name: tls-certs
+          mountPath: /etc/release-operator/tls
+          readOnly: true
+        {{- if or .Values.harbor.caCert .Values.harbor.existingCaSecret }}
+        - name: harbor-ca
+          mountPath: /etc/release-operator/harbor-ca
+          readOnly: true
+        {{- end }}
+        - name: config
+          mountPath: /etc/release-operator/config.yaml
+          subPath: config.yaml
+          readOnly: true
+        {{- end }}
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        livenessProbe:
+          tcpSocket:
+            port: grpc
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          tcpSocket:
+            port: grpc
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      {{- if .Values.tls.enabled }}
+      volumes:
+      - name: tls-certs
+        projected:
+          sources:
+          - secret:
+              name: {{ if .Values.tls.existingCertSecret }}{{ .Values.tls.existingCertSecret }}{{ else }}{{ .Release.Name }}-tls{{ end }}
+          - secret:
+              name: {{ if .Values.tls.existingCaSecret }}{{ .Values.tls.existingCaSecret }}{{ else }}{{ .Release.Name }}-ca{{ end }}
+      {{- if or .Values.harbor.caCert .Values.harbor.existingCaSecret }}
+      - name: harbor-ca
+        secret:
+          secretName: {{ if .Values.harbor.existingCaSecret }}{{ .Values.harbor.existingCaSecret }}{{ else }}{{ .Release.Name }}-harbor-ca{{ end }}
+      {{- end }}
+      - name: config
+        configMap:
+          name: {{ .Release.Name }}-config
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

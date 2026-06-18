@@ -1,0 +1,34 @@
+namespace: "sandbox-prod"
+# Magic Gateway configuration
+magic-gateway:
+  enabled: true
+  imageRepository: localhost:5000/aliyun-zcb/b0000000/magic/magic-gateway
+  replicaCount: 1
+
+  fullnameOverride: "magic-gateway"
+
+# Sandbox Gateway configuration
+sandbox-gateway:
+  enabled: true
+  imageRepository: localhost:5000/aliyun-zcb/b0000000/magic/sandbox-components
+  replicaCount: 1
+
+  fullnameOverride: "sandbox-gateway"
+
+  ingress:
+    enabled: true
+    className: nginx
+
+  agent:
+    imageRepository: localhost:5000/aliyun-zcb/b0000000/magic/super-magic
+    port: "8002"
+
+  fuse:
+    imageRepository: docker-hub/dtyq/s3fs-fuse-mod
+    imageTag: "master"
+    imageDigest: sha256:bda22158fbb7bb437d7e34f1a82e4251298a42c2d9e04ac36f1f17225c941b75
+
+  playwright:
+    imageRepository: docker-hub/dtyq/playwright-mod
+    imageTag: "master"
+    imageDigest: sha256:c68c73cad049181759bca48908f5afae24665bfe7a63c768fa523f0ee3e6ff97

@@ -1,0 +1,67 @@
+{{- $gateway := .Values.gateway | default dict }}
+{{- $magicService := .Values.magicService | default dict }}
+{{- $openai := .Values.openai | default dict }}
+{{- $claude := .Values.claude | default dict }}
+{{- $claudeCache := .Values.claudeCache | default dict }}
+{{- $deepseek := .Values.deepseek | default dict }}
+{{- $doubao := .Values.doubao | default dict }}
+{{- $qwen := .Values.qwen | default dict }}
+{{- $gemini := .Values.gemini | default dict }}
+{{- $imageGenerator := .Values.imageGenerator | default dict }}
+{{- $textToImage := .Values.textToImage | default dict }}
+{{- $voiceUnderstanding := .Values.voiceUnderstanding | default dict }}
+{{- $bing := .Values.bing | default dict }}
+{{- $serpapi := .Values.serpapi | default dict }}
+{{- $metaso := .Values.metaso | default dict }}
+{{- $amap := .Values.amap | default dict }}
+
+{{- /* 提取公共变量 */ -}}
+{{- $magicServiceBaseUrl := $magicService.baseUrl | default (include "common.utils.serviceHttpUrl" (dict "service" "magic-service" "default" "magic-service" "context" .)) }}
+{{- $magicServiceV1Url := printf "%s/v1" $magicServiceBaseUrl }}
+{{- $magicServiceDomain := $magicServiceBaseUrl | trimPrefix "http://" | trimPrefix "https://" }}
+
+{{- $bingSubscriptionEndpoint := $bing.subscriptionEndpoint | default "https://search-apis.xmindai.cn/xs/v7.0" }}
+{{- $searchApisBaseUrl := $bingSubscriptionEndpoint | trimSuffix "xs/v7.0" }}
+
+{{- $amapApiEndpoint := $amap.apiEndpoint | default "" }}
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "magic-gateway.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "magic-gateway.labels" . | nindent 4 }}
+data:
+  # Gateway settings
+  MAGIC_GATEWAY_PORT: {{ $gateway.port | default "80" | quote }}
+  MAGIC_GATEWAY_DEBUG: {{ $gateway.debug | default "false" | quote }}
+
+  # Magic Service URLs
+  MAGIC_API_BASE_URL: {{ $magicServiceV1Url | quote }}
+  MAGIC_API_SERVICE_BASE_URL: {{ $magicServiceBaseUrl | quote }}
+  
+  # AI Model API URLs (大部分使用 magic-service 作为代理)
+  OPENAI_API_BASE_URL: {{ $openai.apiBaseUrl | default $magicServiceV1Url | quote }}
+  CLAUDE_API_BASE_URL: {{ $claude.apiBaseUrl | default $magicServiceV1Url | quote }}
+  CLAUDE_CACHE_API_BASE_URL: {{ $claudeCache.apiBaseUrl | default $magicServiceV1Url | quote }}
+  DEEPSEEK_API_BASE_URL: {{ $deepseek.apiBaseUrl | default $magicServiceV1Url | quote }}
+  DOUBAO_API_BASE_URL: {{ $doubao.apiBaseUrl | default $magicServiceV1Url | quote }}
+  QWEN_API_BASE_URL: {{ $qwen.apiBaseUrl | default $magicServiceV1Url | quote }}
+  GEMINI_API_BASE_URL: {{ $gemini.apiBaseUrl | default "https://new-api.letsmagic.cc/v1" | quote }}
+  
+  # Image and Voice Services
+  IMAGE_GENERATOR_API_URL: {{ $imageGenerator.apiUrl | default (printf "%s/api/chat" $magicServiceBaseUrl) | quote }}
+  TEXT_TO_IMAGE_API_BASE_URL: {{ $textToImage.apiBaseUrl | default (printf "%s/v2" $magicServiceBaseUrl) | quote }}
+  TEXT_TO_IMAGE_PLATFORM: {{ $textToImage.platform | default "magic-service" | quote }}
+  VOICE_UNDERSTANDING_API_BASE_URL: {{ $voiceUnderstanding.apiBaseUrl | default (printf "%s/api/v1" $magicServiceBaseUrl) | quote }}
+  
+  # Third-party Service Endpoints
+  BING_SUBSCRIPTION_ENDPOINT: {{ $bingSubscriptionEndpoint | quote }}
+  SERPAPI_API_ENDPOINT: {{ $serpapi.apiEndpoint | default "https://serpapi.com" | quote }}
+  METASO_API_ENDPOINT: {{ $metaso.apiEndpoint | default "https://metaso.cn" | quote }}
+
+  MAGIC_GATEWAY_ALLOWED_TARGET_IP: {{ $gateway.allowedTargetIp | default "127.0.0.1" | quote }}
+  MAGIC_GATEWAY_ALLOWED_TARGET_URLS: {{ $gateway.allowedTargetUrls | default (printf "domain:%s@MagicService|prefix:%s@searchAPI|domain:%s@aapmplusAPI|domain:api.tikhub.dev@小红书API" $magicServiceDomain $searchApisBaseUrl $amapApiEndpoint) | quote }}
+  MAGIC_GATEWAY_SPECIAL_API_KEYS: {{ $gateway.specialApiKeys | default "TEXT_TO_IMAGE_API_BASE_URL:TEXT_TO_IMAGE_ACCESS_KEY|VOICE_UNDERSTANDING_API_BASE_URL:VOICE_UNDERSTANDING_API_KEY|BING_SUBSCRIPTION_ENDPOINT:BING_SUBSCRIPTION_KEY|OTEL_EXPORTER_OTLP_ENDPOINT:OTEL_EXPORTER_OTLP_HEADERS" | quote }}
+  MAGIC_GATEWAY_ENV_WHITELIST_PREFIXES: {{ $gateway.envWhitelistPrefixes | default "OPENAI_,MAGIC_,DEEPSEEK_,TEXT_TO_IMAGE_,VOICE_UNDERSTANDING_,CLAUDE_,DOUBAO_,MAGE_GENERATOR,METASO_,OTEL_,QWEN_,SERPAPI_,TIKHUB_,GEMINI_,BING_,AMAP_" | quote }}

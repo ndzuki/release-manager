@@ -1,0 +1,51 @@
+{{- $ingress := .Values.ingress | default dict -}}
+{{- if $ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "sandbox-gateway.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sandbox-gateway.labels" . | nindent 4 }}
+  {{- with include "common.ingress.annotations" . }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if $ingress.tls }}
+  tls:
+  {{- range $ingress.tls }}
+  - hosts:
+    {{- range .hosts }}
+    - {{ . | quote }}
+    {{- end }}
+    secretName: {{ .secretName }}
+  {{- end }}
+  {{- else if and .Values.global .Values.global.ingress .Values.global.ingress.tls .Values.global.ingress.tls.enabled }}
+  tls:
+  - hosts:
+    {{- range $ingress.hosts }}
+    - {{ .host | quote }}
+    {{- end }}
+    secretName: {{ .Values.global.ingress.tls.secretName | default "sandbox-gateway-tls" }}
+  {{- end }}
+  {{- if $ingress.className }}
+  ingressClassName: {{ $ingress.className }}
+  {{- end }}
+  rules:
+  {{- range $ingress.hosts }}
+  - host: {{ .host | quote }}
+    http:
+      paths:
+      {{- range .paths }}
+      - path: {{ .path }}
+        pathType: {{ .pathType }}
+        backend:
+          service:
+            name: {{ include "sandbox-gateway.fullname" $ }}
+            port:
+              name: http
+      {{- end }}
+  {{- end }}
+{{- end }}
+

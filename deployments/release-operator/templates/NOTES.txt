@@ -1,0 +1,46 @@
+🚀 Release Operator 已部署成功！
+
+**客户 ID:** {{ .Values.customerID }}
+**Chart 版本:** {{ .Chart.Name }}-{{ .Chart.Version }}
+
+---
+
+## 验证部署
+
+```bash
+# 检查 Pod 状态
+kubectl get pods -l app.kubernetes.io/name=release-operator
+
+# 查看日志
+kubectl logs -l app.kubernetes.io/name=release-operator -f
+
+# 检查 gRPC 端口
+kubectl port-forward svc/{{ .Release.Name }} 8443:grpc
+```
+
+## 配置状态
+
+| 配置项 | 值 |
+|--------|-----|
+| gRPC 地址 | `:8443` |
+| Harbor | `{{ .Values.harbor.url }}` |
+| Helm 超时 | `{{ .Values.helm.upgradeTimeout }}` |
+| mTLS | {{ if .Values.tls.enabled }}✅ 已启用{{ else }}❌ 未启用{{ end }} |
+| 通知服务 | `{{ .Values.notificationEndpoint }}` |
+
+{{- if .Values.tls.enabled }}
+## 证书
+
+{{- if or .Values.tls.existingCertSecret .Values.tls.cert }}
+✅ TLS 证书已配置
+{{- else }}
+⚠️  **TLS 证书未配置!** 请通过 `--set tls.cert=... --set tls.key=... --set tls.ca=...` 提供证书。
+{{- end }}
+{{- end }}
+
+## 升级
+
+```bash
+helm upgrade {{ .Release.Name }} ./deployments/release-operator \
+  --set image.tag=<new-version>
+```

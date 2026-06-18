@@ -1,0 +1,65 @@
+{{- $global := .Values.global | default dict -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sandbox-gateway.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sandbox-gateway.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "sandbox-gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sandbox-gateway.selectorLabels" . | nindent 8 }}
+      {{- with (.Values.podAnnotations | default $global.podAnnotations) }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- include "common.images.pullSecrets" (dict "global" $global) | nindent 6 }}
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ include "sandbox-gateway.serviceAccountName" . }}
+      serviceAccount: {{ include "sandbox-gateway.serviceAccountName" . }}
+      {{- end }}
+      restartPolicy: Always
+      containers:
+      - name: {{ .Chart.Name }}
+        image: {{ include "common.images.app" . }}
+        imagePullPolicy: {{ .Values.imagePullPolicy | default $global.imagePullPolicy | default "Always" | quote }}
+        command:
+        - /app/bin/sandbox-gateway
+        ports:
+        - name: http
+          containerPort: {{ .Values.service.targetPort }}
+          protocol: TCP
+        env:
+        - name: MAGIC_GATEWAY_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: magic-gateway
+              key: MAGIC_GATEWAY_API_KEY
+        {{- if .Values.extraEnvVars }}
+        {{- include "common.tplvalues.render" (dict "value" .Values.extraEnvVars "context" .) | nindent 8 }}
+        {{- end }}
+        envFrom:
+        - configMapRef:
+            name: {{ include "sandbox-gateway.fullname" . }}
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+

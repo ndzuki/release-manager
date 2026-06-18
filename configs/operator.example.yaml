@@ -1,0 +1,36 @@
+# Release Operator Configuration Example
+# Copy this file and modify for your environment.
+
+server:
+  grpc_addr: ":8443"     # gRPC listen address for receiving release notifications
+
+log:
+  level: info            # debug, info, warn, error
+  format: json           # json, console
+  output: stdout         # stdout or file path
+
+tls:
+  ca_file: /etc/release-operator/tls/ca.crt
+  cert_file: /etc/release-operator/tls/tls.crt
+  key_file: /etc/release-operator/tls/tls.key
+  require_client_cert: true
+  # allowed_fingerprints is only needed if you want to restrict which
+  # notification server can connect:
+  # allowed_fingerprints:
+  #   - "ABCDEF1234567890..."
+
+harbor:
+  url: "https://harbor.example.com"
+  username: ""             # Will be read from HARBOR_USERNAME env
+  password: ""             # Will be read from HARBOR_PASSWORD env
+  insecure_skip_verify: false
+  timeout: 60s
+
+helm:
+  upgrade_timeout: 10m
+  default_namespace: "sandbox-prod"
+  max_history: 10
+  atomic: true              # Auto rollback on failure
+  wait: true                # Wait for resources to be ready
+  create_namespace: false
+  cache_dir: /tmp/helm-cache

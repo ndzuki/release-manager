@@ -1,0 +1,34 @@
+# Release Notification Service Configuration Example
+# Copy this file and modify for your environment.
+
+server:
+  grpc_addr: ":8443"     # gRPC for customer management API
+  http_addr: ":8080"     # HTTP for webhook + REST API
+  read_timeout: 30s
+  write_timeout: 30s
+  shutdown_timeout: 15s
+
+log:
+  level: info
+  format: json
+  output: stdout
+
+tls:
+  ca_file: /etc/release-manager/tls/ca.crt
+  cert_file: /etc/release-manager/tls/tls.crt
+  key_file: /etc/release-manager/tls/tls.key
+  require_client_cert: true
+
+harbor:
+  url: "https://harbor.example.com"
+  insecure_skip_verify: false
+  timeout: 60s
+
+store:
+  type: sqlite           # sqlite or postgres
+  dsn: /data/release-manager.db
+
+dingtalk:
+  webhook_url: ""         # DingTalk robot webhook URL
+  secret: ""              # HMAC secret for signing
+  enabled: false

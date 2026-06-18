@@ -1,0 +1,309 @@
+syntax = "proto3";
+
+package release.v1;
+
+option go_package = "github.com/ndzuki/release-manager/api/gen/release/v1;releasev1";
+
+// =============================================================================
+// ReleaseNotificationService - 由 release-notification 调用, release-operator 实现
+// 用于通知客户集群有新的 Helm chart 发布
+// =============================================================================
+service ReleaseNotificationService {
+  // NotifyRelease 通知有新的 chart 版本可用
+  rpc NotifyRelease(NotifyReleaseRequest) returns (NotifyReleaseResponse);
+  // UpdateCertificate 远程更新 mTLS 证书（热加载，无需重启 Pod）
+  rpc UpdateCertificate(UpdateCertificateRequest) returns (UpdateCertificateResponse);
+}
+
+// =============================================================================
+// StatusReportService - 由 release-operator 调用, release-notification 实现
+// 用于上报 release 更新结果
+// =============================================================================
+service StatusReportService {
+  // ReportStatus 上报 release 更新状态
+  rpc ReportStatus(ReportStatusRequest) returns (ReportStatusResponse);
+}
+
+// =============================================================================
+// CustomerManagementService - release-notification 的管理 API
+// 用于管理客户白名单
+// =============================================================================
+service CustomerManagementService {
+  // ListCustomers 列出所有客户
+  rpc ListCustomers(ListCustomersRequest) returns (ListCustomersResponse);
+  // GetCustomer 获取单个客户信息
+  rpc GetCustomer(GetCustomerRequest) returns (GetCustomerResponse);
+  // CreateCustomer 创建新客户
+  rpc CreateCustomer(CreateCustomerRequest) returns (CreateCustomerResponse);
+  // UpdateCustomer 更新客户信息
+  rpc UpdateCustomer(UpdateCustomerRequest) returns (UpdateCustomerResponse);
+  // DeleteCustomer 删除客户
+  rpc DeleteCustomer(DeleteCustomerRequest) returns (DeleteCustomerResponse);
+}
+
+// =============================================================================
+// Enums
+// =============================================================================
+
+enum ReleaseStatus {
+  RELEASE_STATUS_UNSPECIFIED = 0;
+  RELEASE_STATUS_PENDING = 1;
+  RELEASE_STATUS_PULLING_CHART = 2;
+  RELEASE_STATUS_UPGRADING = 3;
+  RELEASE_STATUS_SUCCEEDED = 4;
+  RELEASE_STATUS_FAILED = 5;
+  RELEASE_STATUS_ROLLING_BACK = 6;
+  RELEASE_STATUS_ROLLED_BACK = 7;
+  RELEASE_STATUS_ROLLBACK_FAILED = 8;
+}
+
+// =============================================================================
+// Release Notification messages
+// =============================================================================
+
+message NotifyReleaseRequest {
+  // chart_name Helm chart 名称, e.g. "magic-sandbox"
+  string chart_name = 1;
+  // chart_version Helm chart 版本, e.g. "0.0.15"
+  string chart_version = 2;
+  // chart_url OCI chart URL, e.g. "oci://harbor.example.com/helm/magic-sandbox"
+  string chart_url = 3;
+  // 组件名 → 新镜像 tag 的映射
+  map<string, string> images = 4;
+  // release_notes 发布说明 (可选)
+  string release_notes = 5;
+  // request_id 唯一请求 ID, 用于幂等性和追踪
+  string request_id = 6;
+  // namespace Helm release 所在的 namespace
+  string namespace = 7;
+  // release_name Helm release 名称, 默认等于 chart_name
+  string release_name = 8;
+  // timeout_seconds 升级超时时间 (秒), 0 使用默认值
+  int32 timeout_seconds = 9;
+}
+
+message NotifyReleaseResponse {
+  // accepted 是否接受该通知 (ACK)
+  bool accepted = 1;
+  // message 响应信息
+  string message = 2;
+}
+
+// =============================================================================
+// UpdateCertificate messages
+// =============================================================================
+message UpdateCertificateRequest {
+  // tls_cert_pem 新的 TLS 证书 PEM
+  string tls_cert_pem = 1;
+  // tls_key_pem 新的 TLS 私钥 PEM
+  string tls_key_pem = 2;
+  // ca_cert_pem 新的 CA 证书 PEM（可选，CA 变更时提供）
+  string ca_cert_pem = 3;
+  // request_id 唯一请求 ID，用于追踪
+  string request_id = 4;
+}
+
+message UpdateCertificateResponse {
+  // accepted 是否接受更新请求
+  bool accepted = 1;
+  // message 响应信息
+  string message = 2;
+  // new_fingerprint 新证书的 SHA256 指纹（用于白名单更新）
+  string new_fingerprint = 3;
+}
+
+// =============================================================================
+// Status Report messages
+// =============================================================================
+
+message ReportStatusRequest {
+  // customer_id 客户标识
+  string customer_id = 1;
+  // request_id 对应的 release 请求 ID
+  string request_id = 2;
+  // chart_name Helm chart 名称
+  string chart_name = 3;
+  // chart_version 更新的 chart 版本
+  string chart_version = 4;
+  // status 最终状态
+  ReleaseStatus status = 5;
+  // error_message 失败原因描述
+  string error_message = 6;
+  // duration_seconds 操作耗时 (秒)
+  int64 duration_seconds = 7;
+  // started_at 开始时间 (Unix timestamp 秒)
+  int64 started_at = 8;
+  // completed_at 完成时间 (Unix timestamp 秒)
+  int64 completed_at = 9;
+}
+
+message ReportStatusResponse {
+  // acknowledged 是否收到确认
+  bool acknowledged = 1;
+  // message 响应信息
+  string message = 2;
+}
+
+// =============================================================================
+// Customer Management messages
+// =============================================================================
+
+message Customer {
+  // id 客户唯一标识
+  string id = 1;
+  // name 客户名称 (用于显示)
+  string name = 2;
+  // operator_endpoint release-operator 的 gRPC 地址, e.g. "10.0.0.5:8443"
+  string operator_endpoint = 3;
+  // cert_fingerprint 客户端证书 SHA256 指纹 (用于 mTLS 验证)
+  string cert_fingerprint = 4;
+  // enabled 是否启用自动更新
+  bool enabled = 5;
+  // labels 客户标签 (用于分组/筛选)
+  map<string, string> labels = 6;
+  // created_at 创建时间 (Unix timestamp 秒)
+  int64 created_at = 7;
+  // updated_at 更新时间 (Unix timestamp 秒)
+  int64 updated_at = 8;
+}
+
+message ListCustomersRequest {
+  // filter_enabled 按启用状态筛选, 不设置则返回全部
+  optional bool filter_enabled = 1;
+  // page_size 分页大小
+  int32 page_size = 2;
+  // page_token 分页 token
+  string page_token = 3;
+}
+
+message ListCustomersResponse {
+  repeated Customer customers = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+message GetCustomerRequest {
+  string id = 1;
+}
+
+message GetCustomerResponse {
+  Customer customer = 1;
+}
+
+message CreateCustomerRequest {
+  string name = 1;
+  string operator_endpoint = 2;
+  string cert_fingerprint = 3;
+  bool enabled = 4;
+  map<string, string> labels = 5;
+}
+
+message CreateCustomerResponse {
+  Customer customer = 1;
+}
+
+message UpdateCustomerRequest {
+  string id = 1;
+  optional string name = 2;
+  optional string operator_endpoint = 3;
+  optional string cert_fingerprint = 4;
+  optional bool enabled = 5;
+  optional map<string, string> labels = 6;
+}
+
+message UpdateCustomerResponse {
+  Customer customer = 1;
+}
+
+message DeleteCustomerRequest {
+  string id = 1;
+}
+
+message DeleteCustomerResponse {
+  bool deleted = 1;
+}
+
+// =============================================================================
+// OperatorService - release-operator 运维管理 API
+// 由 release-notification（或管理工具）调用, release-operator 实现
+// =============================================================================
+service OperatorService {
+  // GetOperatorStatus 查询 operator 自身状态
+  rpc GetOperatorStatus(GetOperatorStatusRequest) returns (GetOperatorStatusResponse);
+  // ListReleases 列出 operator 管理的所有 Helm releases
+  rpc ListReleases(ListOperatorReleasesRequest) returns (ListOperatorReleasesResponse);
+  // RollbackRelease 强制回滚某个 release 到指定版本
+  rpc RollbackRelease(RollbackReleaseRequest) returns (RollbackReleaseResponse);
+  // GetCertificateInfo 查询当前 mTLS 证书信息
+  rpc GetCertificateInfo(GetCertificateInfoRequest) returns (GetCertificateInfoResponse);
+  // UpdateConfiguration 热更新运行配置
+  rpc UpdateConfiguration(UpdateConfigurationRequest) returns (UpdateConfigurationResponse);
+}
+
+// --- GetOperatorStatus ---
+message GetOperatorStatusRequest {}
+message GetOperatorStatusResponse {
+  string version = 1;             // operator 版本
+  string helm_version = 2;         // Helm 二进制版本
+  int64 uptime_seconds = 3;        // 运行时长
+  int32 active_releases = 4;       // 正在进行的发布数
+  int32 queued_releases = 5;       // 队列中的发布数
+  string customer_id = 6;          // 客户标识
+  string notification_endpoint = 7; // 通知服务地址
+}
+
+// --- ListReleases ---
+message ListOperatorReleasesRequest {
+  string namespace = 1; // 过滤 namespace，空=全部
+}
+message ListOperatorReleasesResponse {
+  repeated OperatorRelease releases = 1;
+}
+message OperatorRelease {
+  string name = 1;            // release 名称
+  string namespace = 2;       // namespace
+  string chart = 3;           // chart 名称
+  string chart_version = 4;   // 当前部署的 chart 版本
+  string status = 5;          // deployed, failed, pending-upgrade 等
+  int32 revision = 6;         // 当前 revision 号
+  string updated = 7;         // 最后更新时间
+}
+
+// --- RollbackRelease ---
+message RollbackReleaseRequest {
+  string release_name = 1;    // release 名称
+  string namespace = 2;       // namespace
+  int32 revision = 3;         // 目标 revision（0=上一版本）
+}
+message RollbackReleaseResponse {
+  bool success = 1;
+  string message = 2;
+  int32 new_revision = 3;     // 回滚后的 revision
+}
+
+// --- GetCertificateInfo ---
+message GetCertificateInfoRequest {}
+message GetCertificateInfoResponse {
+  string fingerprint = 1;          // 当前证书 SHA256 指纹
+  string subject = 2;              // 证书 CN
+  string not_after = 3;            // 到期时间 (RFC3339)
+  int64 days_until_expiry = 4;     // 距到期天数
+  string issuer = 5;               // 签发者
+}
+
+// --- UpdateConfiguration ---
+message UpdateConfigurationRequest {
+  // 以下字段可选，非空时更新对应配置（热生效）
+  optional string harbor_url = 1;
+  optional string harbor_username = 2;
+  optional string harbor_password = 3;
+  optional int32 helm_upgrade_timeout_seconds = 4;
+  optional int32 helm_max_history = 5;
+  optional bool helm_atomic = 6;
+  optional string log_level = 7;
+}
+message UpdateConfigurationResponse {
+  bool accepted = 1;
+  string message = 2;
+  repeated string changed_fields = 3; // 实际变更的字段列表
+}

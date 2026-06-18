@@ -1,0 +1,28 @@
+# Build stage
+FROM golang:1.22-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /build
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+# CGO enabled for SQLite (modernc.org/sqlite is pure Go, but enabling for fallback)
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /release-manager ./cmd/release-manager/
+
+# Runtime stage
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates
+
+COPY --from=builder /release-manager /usr/local/bin/release-manager
+
+RUN mkdir -p /data && adduser -D -s /bin/sh -h /data release-manager
+USER release-manager
+WORKDIR /data
+
+EXPOSE 8080 8443
+
+ENTRYPOINT ["release-manager"]

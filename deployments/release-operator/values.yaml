@@ -1,0 +1,141 @@
+# =============================================================================
+# Release Operator Helm Chart — 客户集群一键部署
+#
+# 安装方式:
+#   helm install release-operator ./deployments/release-operator \
+#     --set customerID=customer-001 \
+#     --set tls.cert=.... -set tls.key=... -set tls.ca=...
+#
+# 或使用 values 文件:
+#   helm install release-operator ./deployments/release-operator \
+#     -f customer-values.yaml
+# =============================================================================
+
+# --- 必填参数 ---
+# customerID 客户唯一标识 (必填)
+# 对应 release-manager 中配置的客户 ID
+customerID: "input_customerID_here"
+
+# notificationEndpoint release-manager 的 gRPC 地址
+# 用于 release-operator 上报状态
+notificationEndpoint: "release-manager:8443"
+
+# --- Operator 镜像 ---
+image:
+  repository: harbor.example.com/release-operator/release-operator
+  # tag 请指定具体版本，不要在生产环境使用 latest
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+# - name: harbor-creds
+
+# --- gRPC 服务 ---
+grpc:
+  addr: ":8443"
+  service:
+    type: ClusterIP
+    port: 8443
+
+# --- TLS / mTLS 证书配置 ---
+# 两种方式提供证书:
+#   方式 1 (推荐): 直接填入证书值, chart 会自动创建 Secret
+#   方式 2: 引用已存在的 Secret 名称
+tls:
+  # 是否启用 mTLS
+  enabled: true
+  # 方式 1: 直接提供证书内容 (base64 或原始 PEM)
+  cert: "" # 客户端证书 PEM (tls.crt)
+  key: "" # 客户端私钥 PEM (tls.key)
+  ca: "" # CA 证书 PEM (ca.crt)
+  # 方式 2: 引用已存在的 Secret (当上面的 cert/key/ca 为空时生效)
+  existingCertSecret: ""
+  existingCaSecret: ""
+
+# --- Harbor 仓库配置 ---
+harbor:
+  url: "https://harbor.example.com"
+  username: ""
+  password: ""
+  insecureSkipVerify: false
+  timeout: 60s
+  # 引用已存在的 Secret (设置后 username/password 将被忽略)
+  existingSecret: ""
+  # Harbor 自签 CA 证书 PEM (用于自签证书场景)
+  caCert: ""
+  existingCaSecret: ""
+
+# --- Helm 操作配置 ---
+helm:
+  upgradeTimeout: 10m
+  defaultNamespace: "default"
+  maxHistory: 10
+  atomic: true # 失败自动回滚 (helm --atomic)
+  wait: true # 等待资源就绪
+  createNamespace: false
+  cacheDir: /tmp/helm-cache
+
+# --- 日志 ---
+log:
+  level: info # debug, info, warn, error
+  format: json # json, console
+  output: stdout
+
+# --- 资源限制 ---
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+# --- 调度配置 ---
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# replicaCount 副本数 (通常为 1)
+replicaCount: 1
+
+# --- ServiceAccount & RBAC ---
+serviceAccount:
+  create: true
+  name: release-operator
+  annotations: {}
+
+rbac:
+  create: true
+  # 如果已有 ClusterRole, 设置为 false 并指定 existingClusterRoleName
+  existingClusterRoleName: ""
+  # managedNamespaces: 需要管理 Helm release 的 namespace 列表
+  # 会在每个 namespace 中创建 Role + RoleBinding
+  managedNamespaces:
+    - default
+
+# --- Pod 安全 ---
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  fsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+
+# --- NetworkPolicy ---
+networkPolicy:
+  enabled: true
+  ingressSources:
+    - namespaceSelector:
+        matchLabels:
+          name: release-manager
+  harborCIDRs:
+    - ipBlock:
+        cidr: 0.0.0.0/0 # TODO: 限定为实际 Harbor IP 段

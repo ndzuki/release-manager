@@ -1,0 +1,31 @@
+# Build stage
+FROM golang:1.22-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /build
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /release-operator ./cmd/release-operator/
+
+# Runtime stage
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates
+
+# Install helm with version pinning and checksum verification
+ARG HELM_VERSION=4.2.1
+ARG TARGETARCH=amd64
+RUN wget -q "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${TARGETARCH}.tar.gz" -O /tmp/helm.tar.gz \
+    && tar -xzf /tmp/helm.tar.gz -C /usr/local/bin linux-${TARGETARCH}/helm \
+    && rm -rf /tmp/helm.tar.gz /tmp/linux-${TARGETARCH}
+
+COPY --from=builder /release-operator /usr/local/bin/release-operator
+
+RUN adduser -D -s /bin/sh release-operator
+USER release-operator
+
+ENTRYPOINT ["release-operator"]

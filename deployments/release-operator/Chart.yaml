@@ -1,0 +1,18 @@
+apiVersion: v2
+name: release-operator
+description: >
+  Release Operator — 自动化 Helm Chart 更新服务。
+  部署在私有化客户 K8s 集群中，接收来自 release-manager 的更新通知，
+  自动从 Harbor 拉取 Helm chart 并执行 helm upgrade。
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - release
+  - operator
+  - helm
+  - automation
+  - deployment
+maintainers:
+  - email: ops@example.com
+    name: Release Ops Team
