@@ -44,7 +44,15 @@
       "Bash(git init *)",
       "Bash(git add *)",
       "Bash(git commit *)",
-      "Bash(GOPRIVATE='*' go build ./cmd/release-operator/)"
+      "Bash(GOPRIVATE='*' go build ./cmd/release-operator/)",
+      "Bash(go env *)",
+      "Bash(go get *)",
+      "Bash(go vet *)",
+      "Skill(cc-skills-golang:golang-how-to)",
+      "Skill(cc-skills-golang:golang-error-handling)",
+      "Skill(cc-skills-golang:golang-safety)",
+      "Bash(chmod +x /home/nd/src/repos/github.com/ndzuki/release-operator/scripts/dev-setup.sh)",
+      "Bash(bash -c \"sed -i '201s/build_deploy_operator$/build_deploy_operator false/' /home/nd/src/repos/github.com/ndzuki/release-operator/scripts/dev-setup.sh\")"
     ]
   }
 }

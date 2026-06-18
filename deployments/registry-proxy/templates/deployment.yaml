@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app: registry-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: registry-proxy
+  template:
+    metadata:
+      labels:
+        app: registry-proxy
+    spec:
+      containers:
+      - name: registry
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        ports:
+        - containerPort: 5000
+        env:
+        - name: REGISTRY_PROXY_REMOTEURL
+          value: "{{ .Values.harbor.url }}"
+        - name: REGISTRY_PROXY_USERNAME
+          value: "{{ .Values.harbor.username }}"
+        - name: REGISTRY_PROXY_PASSWORD
+          value: "{{ .Values.harbor.password }}"
+        - name: REGISTRY_HTTP_ADDR
+          value: ":5000"
+        - name: REGISTRY_STORAGE_DELETE_ENABLED
+          value: "true"
+        {{- if .Values.harbor.insecure }}
+        - name: REGISTRY_HTTP_TLS_INSECURE
+          value: "true"
+        {{- end }}
+        {{- if .Values.persistence.enabled }}
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/registry
+        {{- end }}
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /v2/
+            port: 5000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /v2/
+            port: 5000
+          initialDelaySeconds: 3
+          periodSeconds: 5
+      {{- if .Values.persistence.enabled }}
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: {{ .Release.Name }}-data
+      {{- end }}

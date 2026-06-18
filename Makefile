@@ -172,7 +172,7 @@ dev-up: ## 一键部署本地开发环境 (从 .env 读取 Harbor 配置)
 
 .PHONY: dev-down
 dev-down: ## 清理本地开发环境
-	@scripts/dev-setup.sh --cleanup
+	@CLUSTER_NAME=$(KIND_CLUSTER_NAME) scripts/dev-setup.sh --cleanup
 
 .PHONY: dev-operator
 dev-operator: image-operator ## 仅重新构建并部署 operator 到 kind

@@ -20,12 +20,12 @@ import (
 	"strings"
 	"time"
 
+	"sync"
+
+	"github.com/casbin/casbin/v3"
+	"github.com/casbin/casbin/v3/model"
 	"github.com/go-logr/logr"
 )
-
-// =============================================================================
-// RBAC 角色和权限
-// =============================================================================
 
 // Role 定义系统角色。
 type Role string
@@ -36,51 +36,111 @@ const (
 	RoleViewer   Role = "viewer"
 )
 
-// RolePermissions 定义每个角色的 API 权限映射。
-var RolePermissions = map[Role]map[string][]string{
-	RoleAdmin: {
-		"/api/v1/customers":     {"GET", "POST", "PUT", "DELETE"},
-		"/api/v1/charts":        {"GET", "POST", "PUT", "DELETE"},
-		"/api/v1/releases":      {"GET"},
-		"/api/v1/dashboard":     {"GET"},
-		"/api/v1/users":         {"GET", "POST", "PUT", "DELETE"},
-		"/api/v1/orgs":          {"GET", "POST", "PUT", "DELETE"},
-		"/api/v1/certificates":  {"GET", "POST", "PUT"},
-	},
-	RoleOperator: {
-		"/api/v1/customers":     {"GET", "POST", "PUT", "DELETE"},
-		"/api/v1/charts":        {"GET", "POST", "PUT", "DELETE"},
-		"/api/v1/releases":      {"GET"},
-		"/api/v1/dashboard":     {"GET"},
-		"/api/v1/certificates":  {"GET", "POST", "PUT"},
-		"/api/v1/users":         {"GET"},
-		"/api/v1/orgs":          {"GET"},
-	},
-	RoleViewer: {
-		"/api/v1/customers":    {"GET"},
-		"/api/v1/charts":       {"GET"},
-		"/api/v1/releases":     {"GET"},
-		"/api/v1/dashboard":    {"GET"},
-		"/api/v1/certificates": {"GET"},
-	},
+// casbinRBACModel 定义 casbin RBAC 模型。
+const casbinRBACModel = `
+[request_definition]
+r = sub, org, obj, act
+
+[policy_definition]
+p = sub, org, obj, act
+
+[role_definition]
+g = _, _
+
+[policy_effect]
+e = some(where (p.eft == allow))
+
+[matchers]
+m = g(r.sub, p.sub) && (p.org == r.org || p.org == "*") && keyMatch(r.obj, p.obj) && regexMatch(r.act, p.act)
+`
+
+// CasbinRBAC 封装 casbin 同步执行器。
+type CasbinRBAC struct {
+	enforcer *casbin.SyncedCachedEnforcer
+	mu       sync.RWMutex
+	log      logr.Logger
 }
 
-// CheckPermission 检查用户是否对指定资源有操作权限。
-func CheckPermission(role Role, path, method string) bool {
-	perms, ok := RolePermissions[role]
-	if !ok {
-		return false
+// NewCasbinRBAC 创建 casbin RBAC 执行器。
+func NewCasbinRBAC(log logr.Logger) (*CasbinRBAC, error) {
+	m, err := model.NewModelFromString(casbinRBACModel)
+	if err != nil {
+		return nil, fmt.Errorf("parse casbin model: %w", err)
 	}
-	for prefix, methods := range perms {
-		if strings.HasPrefix(path, prefix) {
-			for _, m := range methods {
-				if m == method || m == "*" {
-					return true
-				}
-			}
-		}
+
+	enforcer, err := casbin.NewSyncedCachedEnforcer(m)
+	if err != nil {
+		return nil, fmt.Errorf("create casbin enforcer: %w", err)
 	}
-	return false
+
+	r := &CasbinRBAC{enforcer: enforcer, log: log.WithName("casbin")}
+	r.loadPolicies()
+	return r, nil
+}
+
+// loadPolicies 加载预定义 RBAC 策略。
+func (r *CasbinRBAC) loadPolicies() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	policies := [][]string{
+		// admin — 全部权限
+		{"admin", "*", "/api/v1/*", "(GET|POST|PUT|DELETE)"},
+		// operator — 运维权限
+		{"operator", "*", "/api/v1/customers*", "(GET|POST|PUT|DELETE)"},
+		{"operator", "*", "/api/v1/charts*", "(GET|POST|PUT|DELETE)"},
+		{"operator", "*", "/api/v1/releases*", "(GET)"},
+		{"operator", "*", "/api/v1/dashboard*", "(GET)"},
+		{"operator", "*", "/api/v1/certificates*", "(GET|POST|PUT)"},
+		{"operator", "*", "/api/v1/users", "(GET)"},
+		{"operator", "*", "/api/v1/orgs*", "(GET)"},
+		// viewer — 只读
+		{"viewer", "*", "/api/v1/*", "(GET)"},
+	}
+	for _, p := range policies {
+		if _, err := r.enforcer.AddPolicy(p); err != nil { r.log.Error(err, "casbin add policy failed", "policy", p) }
+	}
+	// 角色继承
+	r.enforcer.AddGroupingPolicy("admin", "operator")
+	r.enforcer.AddGroupingPolicy("operator", "viewer")
+}
+
+// Enforce 检查用户是否有权限 (sub=userID, org=orgID, obj=path, act=method)。
+func (r *CasbinRBAC) Enforce(sub, org, obj, act string) (bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.enforcer.Enforce(sub, org, obj, act)
+}
+
+// AddRoleForUser 为用户绑定角色。
+func (r *CasbinRBAC) AddRoleForUser(user, role string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, err := r.enforcer.AddRoleForUser(user, role)
+	return err
+}
+
+// DeleteRoleForUser 移除用户的角色。
+func (r *CasbinRBAC) DeleteRoleForUser(user, role string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, err := r.enforcer.DeleteRoleForUser(user, role)
+	return err
+}
+
+// GetRolesForUser 获取用户角色列表。
+func (r *CasbinRBAC) GetRolesForUser(user string) ([]string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.enforcer.GetRolesForUser(user)
+}
+
+// AddPolicy 添加自定义策略。
+func (r *CasbinRBAC) AddPolicy(sub, org, obj, act string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, err := r.enforcer.AddPolicy(sub, org, obj, act)
+	return err
 }
 
 // =============================================================================
@@ -411,3 +471,62 @@ func base64Decode(s string) ([]byte, error) {
 	return []byte(s), nil
 }
 
+
+// =============================================================================
+// RBAC 用户管理 HTTP Handler
+// =============================================================================
+
+// UserRBACHandler 处理 /api/v1/users 路由 — 用户角色绑定管理。
+type UserRBACHandler struct {
+	rbac  *CasbinRBAC
+	store Store
+	log   logr.Logger
+}
+
+func NewUserRBACHandler(rbac *CasbinRBAC, store Store, log logr.Logger) *UserRBACHandler {
+	return &UserRBACHandler{rbac: rbac, store: store, log: log.WithName("user-rbac")}
+}
+
+func (h *UserRBACHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/users")
+	switch {
+	case path == "" || path == "/":
+		h.listUsers(w, r)
+	case strings.HasPrefix(path, "/") && !strings.Contains(path[1:], "/"):
+		h.userRoles(w, r, path[1:])
+	default:
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+	}
+}
+
+func (h *UserRBACHandler) listUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := h.store.ListUsers()
+	if err != nil { writeJSON(w, 500, map[string]string{"error": err.Error()}); return }
+	type UserWithRoles struct{ User User; Roles []string }
+	result := make([]UserWithRoles, 0, len(users))
+	for _, u := range users {
+		roles, _ := h.rbac.GetRolesForUser(u.ID)
+		if roles == nil { roles = []string{} }
+		result = append(result, UserWithRoles{User: u, Roles: roles})
+	}
+	writeJSON(w, 200, result)
+}
+
+func (h *UserRBACHandler) userRoles(w http.ResponseWriter, r *http.Request, userID string) {
+	switch r.Method {
+	case http.MethodGet:
+		roles, _ := h.rbac.GetRolesForUser(userID)
+		if roles == nil { roles = []string{} }
+		writeJSON(w, 200, map[string]any{"user_id": userID, "roles": roles})
+	case http.MethodPut:
+		var req struct{ Role string }
+		if json.NewDecoder(r.Body).Decode(&req) != nil { writeJSON(w, 400, map[string]string{"error":"invalid JSON"}); return }
+		if req.Role != "admin" && req.Role != "operator" && req.Role != "viewer" { writeJSON(w, 400, map[string]string{"error":"role must be admin/operator/viewer"}); return }
+		for _, old := range []string{"admin","operator","viewer"} { h.rbac.DeleteRoleForUser(userID, old) }
+		if err := h.rbac.AddRoleForUser(userID, req.Role); err != nil { writeJSON(w, 500, map[string]string{"error":err.Error()}); return }
+		h.log.Info("role bound", "user", userID, "role", req.Role)
+		writeJSON(w, 200, map[string]string{"message":"role updated"})
+	default:
+		writeJSON(w, 405, map[string]string{"error":"method not allowed"})
+	}
+}

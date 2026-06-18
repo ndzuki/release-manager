@@ -6,23 +6,22 @@
 
 **Release Manager** — 企业级 Helm Chart 自动化发布管理平台。
 为私有化部署的客户 K8s 集群提供从 CI 构建到自动部署、mTLS 证书远程热更新、
-监控告警的全链路运维自动化。支持多租户、OIDC/LDAP/钉钉扫码登录。
+监控告警的全链路运维自动化。
 
 ## 架构
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                    Release Manager (中心平台)                      │
-│                                                                  │
-│  ┌─────────────┐  ┌──────────┐  ┌───────────┐  ┌──────────────┐ │
-│  │  Web UI     │  │ REST API │  │ gRPC API  │  │ DingTalk Bot │ │
-│  │  (Vue 3)    │  │ (net/http)│  │ (mTLS)    │  │ (Markdown)   │ │
-│  └─────────────┘  └──────────┘  └───────────┘  └──────────────┘ │
-│  ┌───────────────────────────────────────────────────────────────┐│
-│  │ 多租户 · OIDC/LDAP/钉钉扫码 · Cache · Dashboard · 证书热更新 ││
-│  └───────────────────────────────────────────────────────────────┘│
-└──────────────────────┬───────────────────────────────────────────┘
-                       │ mTLS gRPC (双向认证 + 证书热加载)
+┌───────────────────────────────────────────────────────────────────┐
+│                    Release Manager (中心平台)                       │
+│  ┌─────────────┐  ┌──────────┐  ┌───────────┐  ┌──────────────┐  │
+│  │  Web UI     │  │ REST API │  │ gRPC API  │  │ DingTalk Bot │  │
+│  │  (Vue 3)    │  │ (net/http)│  │ (mTLS)    │  │ (Markdown)   │  │
+│  └─────────────┘  └──────────┘  └───────────┘  └──────────────┘  │
+│  ┌────────────────────────────────────────────────────────────────┐│
+│  │ Casbin RBAC · OIDC/LDAP/钉钉扫码 · Cache · Dashboard · 热更新││
+│  └────────────────────────────────────────────────────────────────┘│
+└──────────────────────┬────────────────────────────────────────────┘
+                       │ mTLS gRPC (双向认证 + TLS 热加载)
     ┌──────────────────┼──────────────────────┐
     ▼                  ▼                      ▼
 ┌──────────┐    ┌──────────┐          ┌──────────┐
@@ -30,56 +29,79 @@
 │release-op│    │release-op│          │release-op│
 │Helm SDK  │    │Helm SDK  │          │Helm SDK  │
 │K8s       │    │K8s       │          │K8s       │
-└──────────┘    └──────────┘          └──────────┘
+└────┬─────┘    └────┬─────┘          └────┬─────┘
+     │               │                    │
+     └───────────────┼────────────────────┘
+                     │ localhost:5000
+              ┌──────▼──────┐    proxy    ┌─────────┐
+              │ registry:3  │───────────→ │ Harbor  │ ← 唯一源
+              │ (proxy mode)│             │ (OCI)   │
+              └─────────────┘             └─────────┘
 ```
 
-## 快速启动 (3 条命令)
+## 快速启动
 
 ```bash
-# 1. 一键部署本地开发环境 (kind + operator + 证书)
+# 1. 一键部署本地开发环境 (kind 集群 + registry proxy + release-operator)
 make dev-up
 
 # 2. 启动 release-manager (另开终端)
 make dev-manager
 
-# 3. 启动前端 (另开终端)
+# 3. 启动前端 (另开终端) 
 make dev-web
 # → 前端: http://localhost:3000
 # → API:  http://localhost:8080/health
 ```
 
-## Makefile 完整目标
+## 自动化链路
 
-### 开发工作流
-```bash
-make dev-up        # 一键部署: kind 集群 + ingress-nginx + 证书 + release-operator
-make dev-manager   # 本地启动 release-manager (HTTP :8080, gRPC :8443)
-make dev-web       # 本地启动 Vue 前端 (localhost:3000)
-make dev-register  # 注册 localhost001 客户到 manager
-make dev-operator  # 仅重建并部署 operator (改代码后快速验证)
-make dev-down      # 清理整个开发环境
+```
+Harbor webhook (PUSH_HELMCHART)
+  → release-manager (HMAC 验证)
+    → gRPC NotifyRelease (mTLS)
+      → release-operator
+        → helm pull oci://localhost:5000/helm/xxx (registry proxy)
+        → helm upgrade
+        → ReportStatus (gRPC)
+          → release-manager
+            → DingTalk 通知（失败附原因）
 ```
 
-### 构建与测试
-```bash
-make tools         # 安装开发工具 (buf, swag, golangci-lint)
-make proto         # 生成 protobuf 代码
-make deps          # 下载 Go 依赖
-make build         # 构建 release-operator + release-manager
-make test          # 运行单元测试
-make test-e2e      # E2E 测试 (需要 kind 集群)
-make lint          # 代码静态检查
-make vet           # go vet
-make fmt           # 代码格式化
-```
+## 核心能力
 
-### 镜像与文档
+| 能力 | 描述 |
+|------|------|
+| **发布自动化** | CI → Harbor → webhook → manager → operator → helm upgrade |
+| **Chart 定制** | 按客户分配 Chart，支持客户专属 values 覆盖，部署顺序控制 |
+| **多租户** | Organization 级隔离，Casbin RBAC (admin/operator/viewer) |
+| **认证** | OIDC / LDAP / 钉钉扫码 / API Key 四种登录方式 |
+| **证书热更新** | gRPC `UpdateCertificate` RPC + `tls.Config.GetCertificate`，秒级生效 |
+| **Registry 代理** | 客户本地 registry:3 代理到 Harbor，唯一源 + 本地缓存 |
+| **监控面板** | 客户状态、版本一览、证书到期预警、发布成功率 |
+| **存储** | SQLite (开发) / PostgreSQL (生产) |
+
+## Makefile 目标
+
 ```bash
-make image-operator  # 构建 operator Docker 镜像
-make image-manager   # 构建 manager Docker 镜像
-make docs            # 生成 OpenAPI v3 文档 (swag init)
-make docs-serve      # Docker Swagger UI 预览
-make clean           # 清理构建产物
+# 快速启动
+make dev-up          # 一键: kind + registry proxy + operator + 证书
+make dev-manager     # 本地启动 release-manager
+make dev-web         # 本地启动 Vue 前端
+make dev-down        # 一键清理
+
+# 构建
+make build           # go build → bin/release-operator + bin/release-manager
+make test            # 单元测试 (50+ tests)
+make lint            # golangci-lint
+
+# 镜像
+make image-operator  # docker build release-operator
+make image-manager   # docker build release-manager
+
+# 文档
+make docs            # swag init → OpenAPI v3
+make docs-serve      # Swagger UI 预览
 ```
 
 ## 项目结构
@@ -87,67 +109,54 @@ make clean           # 清理构建产物
 ```
 release-manager/
 ├── cmd/
-│   ├── release-operator/         # 客户集群内 operator 入口
-│   └── release-manager/          # 中心管理平台入口 (swag 注解)
+│   ├── release-operator/         # 客户集群 operator 入口
+│   └── release-manager/          # 中心管理平台入口
 ├── internal/
-│   ├── config/                   # YAML 配置 + mTLS TLS 构建
+│   ├── config/                   # YAML 配置 + mTLS
 │   ├── manager/                  # release-manager 核心
-│   │   ├── server.go             # HTTP + gRPC 双协议服务
+│   │   ├── server.go             # HTTP + gRPC
 │   │   ├── webhook.go            # Harbor webhook (HMAC-SHA256)
 │   │   ├── forwarder.go          # gRPC 批量转发
 │   │   ├── dingtalk.go           # 钉钉通知
-│   │   ├── store.go              # 持久化 (SQLite/Memory)
-│   │   ├── models.go             # 多租户 & Chart 配置数据模型
-│   │   ├── auth.go               # OIDC/LDAP/钉钉认证中间件
-│   │   ├── chart_config.go       # Chart 分配 & 监控面板 API
-│   │   └── cache.go              # 内存缓存层 (TTL + 淘汰)
+│   │   ├── store.go              # 持久化接口 + Memory/SQLite
+│   │   ├── pgstore.go            # PostgreSQL 实现 (生产)
+│   │   ├── models.go             # 多租户 & Chart 配置模型
+│   │   ├── auth.go               # 认证中间件
+│   │   ├── auth_providers.go     # LDAP/OIDC/钉钉/Casbin RBAC
+│   │   ├── init.go               # 首次初始化 (SMTP)
+│   │   ├── chart_config.go       # Chart 分配 & 监控面板
+│   │   └── cache.go              # 内存缓存层
 │   ├── operator/                 # release-operator 核心
-│   │   ├── server.go             # gRPC + TLS 热加载 (GetCertificate)
-│   │   ├── controller.go         # 异步发布状态机 (8 态)
+│   │   ├── server.go             # gRPC + TLS 热加载
+│   │   ├── controller.go         # 异步发布状态机
 │   │   ├── helm.go               # Helm v4 SDK 封装
 │   │   ├── reporter.go           # 状态上报客户端
-│   │   └── ops_api.go            # OperatorService 运维管理 API
+│   │   └── ops_api.go            # OperatorService 运维 API
 │   └── pkg/                      # 共享库
-│       ├── log/                  # 结构化日志 (zap → logr)
+│       ├── log/                  # 结构化日志
 │       ├── retry/                # 指数退避重试
-│       └── tls/                  # mTLS 证书生成/验证工具
-├── web/                          # 前端 (Vue 3 + TypeScript)
-│   ├── src/
-│   │   ├── views/                # 页面: Dashboard, Customers, Charts, Releases, Certs, Login
-│   │   ├── components/           # AppLayout (侧边栏+导航)
-│   │   ├── composables/         # useApi (API 客户端+认证)
-│   │   ├── stores/              # Pinia auth store
-│   │   └── router/              # Vue Router + 认证守卫
-│   ├── package.json
-│   ├── vite.config.ts
-│   └── index.html
+│       └── tls/                  # mTLS 证书工具
+├── web/                          # 前端 Vue 3
 ├── deployments/
-│   ├── release-operator/         # operator Helm chart (一键部署 + values.schema.json)
-│   └── release-manager/          # manager Kustomize (base + prod/staging overlays)
-├── api/proto/release/v1/         # Protobuf + buf 配置
-├── api/openapi/                  # swag 生成的 OpenAPI v3 文档
+│   ├── release-operator/         # operator Helm chart
+│   ├── release-manager/          # manager Kustomize
+│   └── registry-proxy/           # registry:3 proxy chart
+├── api/proto/release/v1/         # Protobuf
+├── api/gen/release/v1/           # 生成的 gRPC 代码
 ├── configs/                      # 配置模板
-├── scripts/                      # 证书生成 + CI/CD + 本地开发环境
+├── scripts/                      # dev-setup + CI/CD + 证书
 ├── docs/                         # 设计 & 部署文档
-└── Makefile                      # 统一构建入口
+└── Makefile
 ```
-
-## 组件
-
-| 组件 | 位置 | 描述 |
-|------|------|------|
-| **release-operator** | `cmd/release-operator/` | 部署在客户 K8s 集群，Helm v4 SDK `helm upgrade` |
-| **release-manager** | `cmd/release-manager/` | 中心平台，webhook + 白名单 + 转发 + 钉钉 |
-| **Web UI** | `web/` | Vue 3 前端，Dashboard / 客户 / Chart / 发布 / 证书管理 |
 
 ## 文档
 
 | 文档 | 内容 |
 |------|------|
+| [设计文档](docs/design.md) | 系统架构、多租户、安全设计、自动化链路 |
+| [部署指南](docs/deployment.md) | 生产部署、证书轮换、Harbor 自签证书、存储配置 |
+| [开发文档](docs/development.md) | 本地开发、Makefile 目标、前端启动 |
 | [API 文档](api/proto/release/v1/swagger.md) | gRPC + REST API 详细说明 |
-| [设计文档](docs/design.md) | 系统架构、多租户、安全设计 |
-| [部署指南](docs/deployment.md) | 生产部署、证书轮换、CI/CD |
-| [开发文档](docs/development.md) | 本地开发、代码规范、前端启动 |
 
 ## License
 

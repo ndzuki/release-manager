@@ -1,0 +1,6 @@
+apiVersion: v2
+name: registry-proxy
+description: Docker Registry v3 configured as pull-through cache proxy to Harbor
+type: application
+version: 0.1.0
+appVersion: "3.0.0"

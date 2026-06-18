@@ -12,17 +12,38 @@
 
 ```bash
 # 完整本地开发环境 (3 条命令)
-make dev-up        # 终端 1: kind 集群 + operator + 证书
+make dev-up        # 终端 1: kind 集群 + registry proxy + operator + 证书
 make dev-manager   # 终端 2: release-manager (HTTP :8080, gRPC :8443)
 make dev-web       # 终端 3: Vue 前端 (http://localhost:3000)
 ```
 
 `make dev-up` 自动完成:
-1. 创建 kind 集群 (模拟客户私有化环境)
-2. 安装 ingress-nginx
-3. 生成 mTLS 证书 (CA 10 年, Client 3 年)
-4. 构建 release-operator 镜像 + 加载到 kind
-5. Helm 部署 release-operator (customerID=localhost001)
+1. 从 `.env` 读取 Harbor 配置
+2. 创建 kind 集群 (模拟客户私有化环境)
+3. 部署 registry:3 proxy (localhost:30500 → Harbor pull-through cache)
+4. 生成 mTLS 证书 (CA 10 年, Client 3 年)
+5. 自动获取 Harbor 自签 CA 并注入 K8s Secret
+6. 构建 release-operator 镜像 + 加载到 kind
+7. Helm 部署 release-operator (customerID=localhost001)
+
+### 一键清理
+
+```bash
+make dev-down      # 删除 kind 集群
+```
+
+### 自动化链路验证
+
+```bash
+# 1. 注册客户
+make dev-register
+# 2. 模拟 Harbor webhook
+curl -X POST http://localhost:8080/api/v1/webhook/harbor \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"PUSH_HELMCHART","event_data":{"resources":[{"tag":"0.0.15","resource_url":"oci://localhost:5000/helm/magic-sandbox"}],"repository":{"name":"helm/magic-sandbox"}}}'
+# 3. 查看结果
+curl http://localhost:8080/api/v1/releases | jq .
+```
 
 ## 前端开发
 

@@ -1,29 +1,23 @@
-# Build stage
-FROM golang:1.22-alpine AS builder
-
-RUN apk add --no-cache git ca-certificates
-
-WORKDIR /build
-
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /release-operator ./cmd/release-operator/
-
-# Runtime stage
+# =============================================================================
+# release-operator Docker 镜像
+#
+# 本地开发: 先用 go build 编译二进制，再 COPY 进镜像（避免 Docker build 内网络问题）
+# 生产 CI:  可改为多阶段构建
+# =============================================================================
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates curl
 
-# Install helm with version pinning and checksum verification
+# 安装 Helm v4 (版本锁定)
 ARG HELM_VERSION=4.2.1
 ARG TARGETARCH=amd64
 RUN wget -q "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${TARGETARCH}.tar.gz" -O /tmp/helm.tar.gz \
     && tar -xzf /tmp/helm.tar.gz -C /usr/local/bin linux-${TARGETARCH}/helm \
     && rm -rf /tmp/helm.tar.gz /tmp/linux-${TARGETARCH}
 
-COPY --from=builder /release-operator /usr/local/bin/release-operator
+# 本地编译的二进制文件 (通过 docker build --build-arg 或直接 COPY)
+# 构建方式: CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/release-operator ./cmd/release-operator/
+COPY bin/release-operator /usr/local/bin/release-operator
 
 RUN adduser -D -s /bin/sh release-operator
 USER release-operator

@@ -1,0 +1,31 @@
+# Docker Registry v3 — Harbor pull-through cache proxy
+# 部署在 kind 集群中，代理 Harbor，K8s Pod 通过 localhost:5000 拉取镜像
+# v3 新增 OCI 1.1 支持，proxy 配置与 v2 完全兼容
+image:
+  repository: registry
+  tag: "3.0.0"
+
+service:
+  type: NodePort
+  port: 5000
+  nodePort: 30500
+
+# Harbor 上游配置 (.env 注入)
+harbor:
+  url: ""        # 从 .env 读取，如 https://120.77.206.182
+  username: ""   # Harbor 用户名
+  password: ""   # Harbor 密码
+  insecure: true # 自签证书时设为 true
+
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClass: standard
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi

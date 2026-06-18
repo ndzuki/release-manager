@@ -1,3 +1,25 @@
+## 存储选择
+
+| 环境 | type | DSN 示例 |
+|------|------|----------|
+| 开发 | `sqlite` | `data/release-manager.db` |
+| 生产 | `postgres` | `host=pg.example.com port=5432 user=release password=... dbname=release-manager sslmode=require` |
+
+## Registry Proxy 部署
+
+客户私有化 K8s 集群需部署 registry:3 作为 Harbor 代理:
+
+```bash
+helm install registry-proxy ./deployments/registry-proxy \
+  --namespace registry --create-namespace \
+  --set harbor.url=https://harbor.example.com \
+  --set harbor.username=robot\$xxx \
+  --set harbor.password=<token> \
+  --set harbor.insecure=true \
+  --set service.nodePort=30500
+```
+
+
 # 部署指南
 
 ## release-manager 部署方式

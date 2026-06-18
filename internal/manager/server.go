@@ -40,6 +40,8 @@ type Server struct {
 	chartConfig   *ChartConfigHandler // chart 部署配置管理
 	authMiddleware *AuthMiddleware    // 多租户认证中间件
 	initHandler    *InitHandler       // 首次初始化处理器
+	casbinRBAC     *CasbinRBAC
+	userRBAC       *UserRBACHandler
 	grpcServer    *grpc.Server
 	httpServer    *http.Server
 }
@@ -89,8 +91,15 @@ func NewServer(cfg *config.Config, log logr.Logger) (*Server, error) {
 	}
 	initH := NewInitHandler(store, smtpCfg, cfg.DevMode, log)
 
+	// Casbin RBAC
+	rbac, err := NewCasbinRBAC(log)
+	if err != nil { return nil, fmt.Errorf("init casbin rbac: %w", err) }
+	userRBAC := NewUserRBACHandler(rbac, store, log)
+
 	s := &Server{
 		initHandler: initH,
+		casbinRBAC:  rbac,
+		userRBAC:    userRBAC,
 		cfg:       cfg,
 		cache:     cache,
 		chartConfig: chartCfg,
@@ -226,6 +235,10 @@ func (s *Server) serveHTTP(ctx context.Context) error {
 	// Chart 部署配置 & 监控面板（多租户认证）
 	mux.Handle("/api/v1/orgs/", s.authMiddleware.Handler(s.chartConfig))
 	mux.Handle("/api/v1/dashboard/", s.authMiddleware.Handler(s.chartConfig))
+
+	// 用户角色管理（多租户认证 + Casbin RBAC）
+	mux.Handle("/api/v1/users", s.authMiddleware.Handler(s.userRBAC))
+	mux.Handle("/api/v1/users/", s.authMiddleware.Handler(s.userRBAC))
 
 	// 管理 API（API Key 认证保护，向后兼容）
 	authHandler := s.apiKeyMiddleware(http.HandlerFunc(s.routeREST))
