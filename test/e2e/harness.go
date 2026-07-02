@@ -28,6 +28,26 @@ const (
 	defaultCustomerID  = "localhost001"
 )
 
+var testHarness *Harness
+
+// fatalf panics or calls t.Fatalf. Use when t may be nil (TestMain context).
+func fatalf(t *testing.T, format string, args ...interface{}) {
+	if t != nil {
+		t.Fatalf(format, args...)
+	} else {
+		panic(fmt.Sprintf(format, args...))
+	}
+}
+
+// logf logs via t.Logf or stdout when t is nil (TestMain context).
+func logf(t *testing.T, format string, args ...interface{}) {
+	if t != nil {
+		t.Logf(format, args...)
+	} else {
+		fmt.Printf(format+"\n", args...)
+	}
+}
+
 // Harness provides the full E2E test environment.
 type Harness struct {
 	T *testing.T
@@ -60,12 +80,10 @@ type Harness struct {
 	mu         sync.Mutex
 }
 
-// NewHarness creates the full E2E test environment.
-func NewHarness(t *testing.T) *Harness {
-	t.Helper()
-
+// newHarnessInternal creates the full E2E environment. Use via SetupTest or TestMain.
+func newHarnessInternal() *Harness {
 	h := &Harness{
-		T:           t,
+		T:           nil,
 		ClusterName: defaultClusterName,
 		CustomerID:  defaultCustomerID,
 		hmacKey:     "e2e-test-hmac-secret",
@@ -77,19 +95,19 @@ func NewHarness(t *testing.T) *Harness {
 	reuseCluster := os.Getenv("KIND_CLUSTER_REUSE")
 	if reuseCluster != "" {
 		h.ClusterName = reuseCluster
-		t.Logf("Reusing existing kind cluster: %s", h.ClusterName)
+		logf(h.T, "Reusing existing kind cluster: %s", h.ClusterName)
 	} else {
 		// Step 1: Create kind cluster
-		t.Log("Creating kind cluster...")
+		logf(h.T, "Creating kind cluster...")
 		if err := createKindCluster(h.ClusterName); err != nil {
-			t.Fatalf("create kind cluster: %v", err)
+			fatalf(h.T, "create kind cluster: %v", err)
 		}
 		h.addCleanup(func() {
 			if os.Getenv("KEEP_CLUSTER") == "1" {
-				t.Logf("Keeping cluster: %s", h.ClusterName)
+				logf(h.T, "Keeping cluster: %s", h.ClusterName)
 				return
 			}
-			t.Log("Deleting kind cluster...")
+			logf(h.T, "Deleting kind cluster...")
 			_ = deleteKindCluster(h.ClusterName)
 		})
 	}
@@ -98,18 +116,18 @@ func NewHarness(t *testing.T) *Harness {
 	var err error
 	h.Kubeconfig, err = kindKubeconfig(h.ClusterName)
 	if err != nil {
-		t.Fatalf("get kubeconfig: %v", err)
+		fatalf(h.T, "get kubeconfig: %v", err)
 	}
 	os.Setenv("KUBECONFIG", h.Kubeconfig)
 
 	restCfg, err := clientcmd.BuildConfigFromFlags("", h.Kubeconfig)
 	if err != nil {
-		t.Fatalf("build rest config: %v", err)
+		fatalf(h.T, "build rest config: %v", err)
 	}
 
 	h.K8sClient, err = kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		t.Fatalf("create k8s client: %v", err)
+		fatalf(h.T, "create k8s client: %v", err)
 	}
 
 	// Step 3: Determine Harbor mode
@@ -120,44 +138,44 @@ func NewHarness(t *testing.T) *Harness {
 	registryMode := "standalone"
 	if harborURL != "" && harborPass != "" {
 		registryMode = "proxy"
-		t.Logf("Harbor mode: proxy to %s", harborURL)
+		logf(h.T, "Harbor mode: proxy to %s", harborURL)
 	} else {
-		t.Log("Harbor mode: standalone registry")
+		logf(h.T, "Harbor mode: standalone registry")
 	}
 
 	// Step 4: Deploy registry
-	t.Log("Deploying registry...")
+	logf(h.T, "Deploying registry...")
 	h.RegistryAddr, _, err = deployRegistry(ctx, h.K8sClient, registryMode, harborURL, harborUser, harborPass)
 	if err != nil {
-		t.Fatalf("deploy registry: %v", err)
+		fatalf(h.T, "deploy registry: %v", err)
 	}
 	h.addCleanup(func() {
 		_ = h.K8sClient.CoreV1().Namespaces().Delete(ctx, "registry", metav1.DeleteOptions{})
 	})
 
 	// Step 5: Generate certs
-	t.Log("Generating mTLS certificates...")
+	logf(h.T, "Generating mTLS certificates...")
 	h.caFile, h.certFile, h.keyFile, h.Fingerprint, err = generateCerts(h.CustomerID)
 	if err != nil {
-		t.Fatalf("generate certs: %v", err)
+		fatalf(h.T, "generate certs: %v", err)
 	}
 
 	h.CABundle, _ = os.ReadFile(h.caFile)
 	h.ClientCert, _ = tls.LoadX509KeyPair(h.certFile, h.keyFile)
 
 	// Step 6: Deploy manager
-	t.Log("Deploying manager...")
+	logf(h.T, "Deploying manager...")
 	h.ManagerHTTP, h.ManagerGRPC, _, err = deployManager(ctx, h.K8sClient, h.ClusterName, h.caFile, []string{h.Fingerprint}, h.hmacKey)
 	if err != nil {
-		t.Fatalf("deploy manager: %v", err)
+		fatalf(h.T, "deploy manager: %v", err)
 	}
 
 	// Step 7: Register customer
-	t.Log("Registering customer...")
+	logf(h.T, "Registering customer...")
 	h.registerCustomer()
 
 	// Step 8: Deploy operator
-	t.Log("Deploying operator...")
+	logf(h.T, "Deploying operator...")
 	_, _ = deployOperator(ctx, h.K8sClient, h.ClusterName, h.CustomerID,
 		h.ManagerGRPC, h.caFile, h.certFile, h.keyFile)
 
@@ -171,6 +189,17 @@ func (h *Harness) Close() {
 	for i := len(h.cleanupFns) - 1; i >= 0; i-- {
 		h.cleanupFns[i]()
 	}
+}
+
+// SetupTest returns the global Harness for a single test. TestMain must call newHarnessInternal() first.
+// It wires the test's *testing.T into the harness so that logging and DumpState work correctly.
+func SetupTest(t *testing.T) *Harness {
+	t.Helper()
+	if testHarness == nil {
+		t.Fatal("testHarness is nil — TestMain must call newHarnessInternal()")
+	}
+	testHarness.T = t
+	return testHarness
 }
 
 func (h *Harness) addCleanup(fn func()) {
@@ -319,7 +348,7 @@ func (h *Harness) WaitForReleaseStatus(ctx context.Context, customerID, chartNam
 
 // DumpState collects diagnostic info on test failure.
 func (h *Harness) DumpState() {
-	if !h.T.Failed() {
+	if h.T == nil || !h.T.Failed() {
 		return
 	}
 
