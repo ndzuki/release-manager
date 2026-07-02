@@ -1,0 +1,28 @@
+name: E2E Tests
+on:
+  pull_request:
+    paths-ignore: ['docs/**', '*.md']
+  push:
+    branches: [main]
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.22' }
+      - name: Run E2E tests
+        run: go test -tags=e2e -v -timeout 30m ./test/e2e/...
+        env:
+          HARBOR_URL: ${{ secrets.HARBOR_URL }}
+          HARBOR_ROBOT_NAME: ${{ secrets.HARBOR_ROBOT_NAME }}
+          HARBOR_ROBOT_TOKEN: ${{ secrets.HARBOR_ROBOT_TOKEN }}
+      - name: Export kind logs (on failure)
+        if: failure()
+        run: kind export logs /tmp/kind-logs
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: kind-logs
+          path: /tmp/kind-logs

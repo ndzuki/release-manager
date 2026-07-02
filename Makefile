@@ -137,6 +137,27 @@ test-e2e: ## 运行 E2E 测试（需要 kind 集群）
 	$(GO) test -v -race -count=1 -tags=e2e -timeout 10m ./internal/operator/
 	@echo "$(GREEN)E2E tests passed$(NC)"
 
+.PHONY: test-e2e-full
+test-e2e-full: ## 全链路 E2E 测试 (本地一键: kind + deploy + test)
+	@echo "$(YELLOW)Running full E2E test suite...$(NC)"
+	$(GO) test -tags=e2e -v -timeout 30m -count=1 ./test/e2e/...
+	@echo "$(GREEN)E2E tests passed$(NC)"
+
+.PHONY: test-e2e-local
+test-e2e-local: build image-operator image-manager ## 本地快速 E2E (跳过镜像构建)
+	@echo "$(YELLOW)Running E2E tests (reuse images)...$(NC)"
+	SKIP_BUILD=1 $(GO) test -tags=e2e -v -timeout 30m -count=1 ./test/e2e/...
+	@echo "$(GREEN)E2E tests passed$(NC)"
+
+.PHONY: test-e2e-scenario
+test-e2e-scenario: ## 运行单个 E2E 场景 (需 SCENARIO=TestHappyPath)
+ifndef SCENARIO
+	$(error SCENARIO is required, e.g. SCENARIO=TestHappyPath make test-e2e-scenario)
+endif
+	@echo "$(YELLOW)Running E2E scenario: $(SCENARIO)$(NC)"
+	$(GO) test -tags=e2e -v -timeout 10m -count=1 -run $(SCENARIO) ./test/e2e/...
+	@echo "$(GREEN)Scenario $(SCENARIO) passed$(NC)"
+
 .PHONY: test-cover
 test-cover: ## 运行测试并生成覆盖率报告
 	@echo "$(YELLOW)Running tests with coverage...$(NC)"
