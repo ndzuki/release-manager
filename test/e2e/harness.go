@@ -119,6 +119,7 @@ func newHarnessInternal() *Harness {
 		fatalf(h.T, "get kubeconfig: %v", err)
 	}
 	os.Setenv("KUBECONFIG", h.Kubeconfig)
+	h.addCleanup(func() { os.Remove(h.Kubeconfig) })
 
 	restCfg, err := clientcmd.BuildConfigFromFlags("", h.Kubeconfig)
 	if err != nil {
@@ -145,7 +146,7 @@ func newHarnessInternal() *Harness {
 
 	// Step 4: Deploy registry
 	logf(h.T, "Deploying registry...")
-	h.RegistryAddr, _, err = deployRegistry(ctx, h.K8sClient, registryMode, harborURL, harborUser, harborPass)
+	h.RegistryAddr, _, err = deployRegistry(ctx, h.K8sClient, h.ClusterName, registryMode, harborURL, harborUser, harborPass)
 	if err != nil {
 		fatalf(h.T, "deploy registry: %v", err)
 	}
@@ -165,19 +166,28 @@ func newHarnessInternal() *Harness {
 
 	// Step 6: Deploy manager
 	logf(h.T, "Deploying manager...")
-	h.ManagerHTTP, h.ManagerGRPC, _, err = deployManager(ctx, h.K8sClient, h.ClusterName, h.caFile, []string{h.Fingerprint}, h.hmacKey)
+	dingtalkURL := os.Getenv("E2E_DINGTALK_URL")
+	var managerCleanup func()
+	h.ManagerHTTP, h.ManagerGRPC, managerCleanup, err = deployManager(ctx, h.K8sClient, h.ClusterName, h.caFile, []string{h.Fingerprint}, h.hmacKey, dingtalkURL)
 	if err != nil {
 		fatalf(h.T, "deploy manager: %v", err)
 	}
+	h.addCleanup(managerCleanup)
 
 	// Step 7: Register customer
 	logf(h.T, "Registering customer...")
-	h.registerCustomer()
+	if err := h.registerCustomer(); err != nil {
+		fatalf(h.T, "register customer: %v", err)
+	}
 
 	// Step 8: Deploy operator
 	logf(h.T, "Deploying operator...")
-	_, _ = deployOperator(ctx, h.K8sClient, h.ClusterName, h.CustomerID,
+	operatorCleanup, err := deployOperator(ctx, h.K8sClient, h.ClusterName, h.CustomerID,
 		h.ManagerGRPC, h.caFile, h.certFile, h.keyFile)
+	if err != nil {
+		fatalf(h.T, "deploy operator: %v", err)
+	}
+	h.addCleanup(operatorCleanup)
 
 	return h
 }
@@ -209,8 +219,8 @@ func (h *Harness) addCleanup(fn func()) {
 }
 
 // registerCustomer registers the test customer with the manager.
-func (h *Harness) registerCustomer() {
-	h.RegisterCustomer(h.CustomerID, "E2E Test Customer",
+func (h *Harness) registerCustomer() error {
+	return h.RegisterCustomer(h.CustomerID, "E2E Test Customer",
 		fmt.Sprintf("release-operator-%s.release-operator-%s:8443", h.CustomerID, h.CustomerID),
 		h.Fingerprint, true)
 }

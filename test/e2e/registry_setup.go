@@ -27,8 +27,19 @@ const (
 //   - "proxy": registry acts as pull-through cache to Harbor (requires harbor creds)
 //   - "standalone": registry runs as an independent OCI registry (no Harbor)
 //
+// clusterName is the kind cluster name, used to pre-load the registry image.
 // Returns the registry address (localhost:30500) and a cleanup function.
-func deployRegistry(ctx context.Context, clientset kubernetes.Interface, mode string, harborURL, harborUser, harborPass string) (string, func(), error) {
+func deployRegistry(ctx context.Context, clientset kubernetes.Interface, clusterName, mode string, harborURL, harborUser, harborPass string) (string, func(), error) {
+	// Pre-load registry image into kind (kind nodes may not have internet access)
+	pullCmd := exec.CommandContext(ctx, "docker", "pull", registryImage)
+	if out, err := pullCmd.CombinedOutput(); err != nil {
+		// docker pull failed — image might already exist locally, continue
+		_ = out
+	}
+	loadCmd := exec.CommandContext(ctx, "kind", "load", "docker-image", registryImage, "--name", clusterName)
+	if out, err := loadCmd.CombinedOutput(); err != nil {
+		return "", nil, fmt.Errorf("kind load docker-image %s: %w\n%s", registryImage, err, string(out))
+	}
 	// Create namespace
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: registryNamespace}}
 	_, _ = clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
