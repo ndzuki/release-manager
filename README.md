@@ -1,6 +1,6 @@
 # Release Manager
 
-[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![Helm](https://img.shields.io/badge/Helm-v4-0F1689?style=flat&logo=helm)](https://helm.sh/)
 [![Vue](https://img.shields.io/badge/Vue-3.5-4FC08D?style=flat&logo=vuedotjs)](https://vuejs.org/)
 

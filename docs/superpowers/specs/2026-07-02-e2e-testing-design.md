@@ -331,7 +331,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.26.0'
       - name: Run E2E tests
         run: go test -tags=e2e -v -timeout 30m ./test/e2e/...
         env:

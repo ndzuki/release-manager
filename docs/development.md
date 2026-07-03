@@ -114,7 +114,7 @@ server: {
 
 ### 技术栈
 
-- Go 1.22+, Helm v4 SDK, gRPC + protobuf, SQLite, logr + zap
+- Go 1.26, Helm v4 SDK, gRPC + protobuf, SQLite, logr + zap
 
 ### 本地运行
 
