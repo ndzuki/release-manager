@@ -90,6 +90,9 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 		return nil, fmt.Errorf("wait for operator pod: %w", err)
 	}
 
+	// Give gRPC server a moment to fully initialize before accepting connections.
+	time.Sleep(5 * time.Second)
+
 	cleanup := func() {
 		_ = clientset.CoreV1().Namespaces().Delete(ctx, ns, metav1.DeleteOptions{})
 	}
