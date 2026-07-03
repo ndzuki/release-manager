@@ -28,9 +28,10 @@ func TestMultiCustomerConcurrentForward(t *testing.T) {
 			fmt.Sprintf("release-operator-%s.release-operator-%s:8443", custID, custID),
 			h.Fingerprint, true))
 
-		_, err := deployOperator(ctx, h.K8sClient, h.ClusterName, custID,
+		cleanup, err := deployOperator(ctx, h.K8sClient, h.ClusterName, custID,
 			h.ManagerGRPC, h.caFile, h.certFile, h.keyFile)
 		require.NoError(t, err)
+		t.Cleanup(cleanup)
 	}
 
 	// Push chart and trigger

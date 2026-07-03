@@ -52,7 +52,32 @@
       "Skill(cc-skills-golang:golang-error-handling)",
       "Skill(cc-skills-golang:golang-safety)",
       "Bash(chmod +x /home/nd/src/repos/github.com/ndzuki/release-operator/scripts/dev-setup.sh)",
-      "Bash(bash -c \"sed -i '201s/build_deploy_operator$/build_deploy_operator false/' /home/nd/src/repos/github.com/ndzuki/release-operator/scripts/dev-setup.sh\")"
+      "Bash(bash -c \"sed -i '201s/build_deploy_operator$/build_deploy_operator false/' /home/nd/src/repos/github.com/ndzuki/release-operator/scripts/dev-setup.sh\")",
+      "Bash(git config *)",
+      "Bash(/home/nd/.claude/plugins/cache/claude-plugins-official/superpowers/6.0.3/skills/subagent-driven-development/scripts/task-brief *)",
+      "Bash(/home/nd/.claude/plugins/cache/claude-plugins-official/superpowers/6.0.3/skills/subagent-driven-development/scripts/review-package aa97fa9 *)",
+      "Bash(awk '/^```/ { infence = !infence; print NR, \"FENCE:\", infence ? \"OPEN\" : \"CLOSE\" }' docs/superpowers/plans/2026-07-02-e2e-testing.md)",
+      "Bash(awk '/^```/ { infence = !infence; print NR, \"FENCE:\", infence ? \"OPEN\" : \"CLOSE\", $0 }' docs/superpowers/plans/2026-07-02-e2e-testing.md)",
+      "Bash(awk *)",
+      "Bash(git *)",
+      "Bash(/home/nd/.claude/plugins/cache/claude-plugins-official/superpowers/6.0.3/skills/subagent-driven-development/scripts/review-package 43b28db *)",
+      "Bash(/home/nd/.claude/plugins/cache/claude-plugins-official/superpowers/6.0.3/skills/subagent-driven-development/scripts/review-package 5dd6b11 *)",
+      "Bash(/home/nd/.claude/plugins/cache/claude-plugins-official/superpowers/6.0.3/skills/subagent-driven-development/scripts/review-package f43d6b0 *)",
+      "Bash(/home/nd/.claude/plugins/cache/claude-plugins-official/superpowers/6.0.3/skills/subagent-driven-development/scripts/review-package 43d4cd4 *)",
+      "Bash(/home/nd/.claude/plugins/cache/claude-plugins-official/superpowers/6.0.3/skills/subagent-driven-development/scripts/review-package b7c39fa *)",
+      "Bash(/home/nd/.claude/plugins/cache/claude-plugins-official/superpowers/6.0.3/skills/subagent-driven-development/scripts/review-package 0d2c474 *)",
+      "Bash(/home/nd/.claude/plugins/cache/claude-plugins-official/superpowers/6.0.3/skills/subagent-driven-development/scripts/review-package 835321f *)",
+      "Bash(/home/nd/.claude/plugins/cache/claude-plugins-official/superpowers/6.0.3/skills/subagent-driven-development/scripts/review-package 7198d4f *)",
+      "Bash(make *)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(python3 /tmp/fix_harness.py)",
+      "Bash(python3 *)",
+      "Bash(go version *)",
+      "Bash(kind get *)",
+      "Bash(kubectl get *)",
+      "Bash(kubectl logs *)",
+      "Bash(docker run *)",
+      "Bash(kind delete *)"
     ]
   }
 }

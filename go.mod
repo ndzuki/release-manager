@@ -1,6 +1,6 @@
 module github.com/ndzuki/release-manager
 
-go 1.22.0
+go 1.26.0
 
 require (
 	github.com/casbin/casbin/v3 v3.10.0

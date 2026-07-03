@@ -193,9 +193,12 @@ func newHarnessInternal() *Harness {
 }
 
 // Close runs all cleanup functions in reverse order.
+// Resets h.T to nil first so cleanup logging via logf uses fmt.Printf
+// instead of t.Logf (which panics after test completion).
 func (h *Harness) Close() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.T = nil // prevent t.Logf panic in cleanup after test completion
 	for i := len(h.cleanupFns) - 1; i >= 0; i-- {
 		h.cleanupFns[i]()
 	}
