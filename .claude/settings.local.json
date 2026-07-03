@@ -100,7 +100,10 @@
       "Bash(sed -i 's|if err != nil { fatalf.*get operator ClusterIP.*}||' test/e2e/harness.go)",
       "Bash(sed -i 's|if err := h.registerCustomer\\(ctx, opIP\\)|if err := h.registerCustomer\\(ctx\\)|' test/e2e/harness.go)",
       "Bash(sed -i 's|func \\(h \\\\*Harness\\) registerCustomer\\(ctx context.Context, endpoint string\\) error {|func \\(h *Harness\\) registerCustomer\\(ctx context.Context\\) error {|' test/e2e/harness.go)",
-      "Bash(sed -i 's|fmt.Sprintf\\(\"%s:8443\", endpoint\\)|fmt.Sprintf\\(\"release-operator-%s.release-operator-%s:8443\", h.CustomerID, h.CustomerID\\)|' test/e2e/harness.go)"
+      "Bash(sed -i 's|fmt.Sprintf\\(\"%s:8443\", endpoint\\)|fmt.Sprintf\\(\"release-operator-%s.release-operator-%s:8443\", h.CustomerID, h.CustomerID\\)|' test/e2e/harness.go)",
+      "Bash(KEEP_CLUSTER=1 go test *)",
+      "Bash(KUBECONFIG=/tmp/kc kubectl get pods -A)",
+      "Bash(KUBECONFIG=/tmp/kc kubectl get configmap -n release-manager release-manager-config -o yaml)"
     ]
   }
 }

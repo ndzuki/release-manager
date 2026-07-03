@@ -129,6 +129,7 @@ func DefaultConfig() *Config {
 		},
 		TLS: TLSConfig{
 			RequireClientCert: true,
+			ClientInsecureSkipVerify: true,
 		},
 		Harbor: HarborConfig{
 			Timeout: 60 * time.Second,
