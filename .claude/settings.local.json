@@ -90,7 +90,10 @@
       "Bash(KEEP_CLUSTER=1 go test -tags=e2e -v -timeout 30m -count=1 -run TestHappyPath ./test/e2e/)",
       "Bash(KEEP_CLUSTER=1 go test -tags=e2e -v -timeout 30m -count=1 -run \"TestDingTalk|TestHappyPath\" ./test/e2e/)",
       "Bash(curl -s http://localhost:30500/v2/_catalog)",
-      "Bash(curl -s http://localhost:30500/v2/helm/test-chart/tags/list)"
+      "Bash(curl -s http://localhost:30500/v2/helm/test-chart/tags/list)",
+      "Bash(KEEP_CLUSTER=1 go test -tags=e2e -v -timeout 30m -count=1 -run TestDingTalk ./test/e2e/)",
+      "Bash(KUBECONFIG=/tmp/kc kubectl logs -n release-manager deploy/release-manager)",
+      "Bash(curl -s \"http://localhost:30500/v2/helm/test-chart/tags/list\")"
     ]
   }
 }
