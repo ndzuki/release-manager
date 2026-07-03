@@ -169,6 +169,9 @@ spec:
       - name: manager
         image: release-manager:dev
         imagePullPolicy: IfNotPresent
+        args:
+        - "--config"
+        - "/etc/release-manager/config.yaml"
         ports:
         - containerPort: 8080
           name: http

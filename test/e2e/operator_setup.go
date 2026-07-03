@@ -96,7 +96,7 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 		"--set", "tls.existingCaSecret=release-operator-ca",
 		"--set", "harbor.insecureSkipVerify=true",
 		"--set", "rbac.managedNamespaces[0]=default",
-		"--set", fmt.Sprintf("rbac.clusterRoleName=release-operator-%s-clusterrole", customerID),
+		"--set", fmt.Sprintf("serviceAccount.name=release-operator-%s", customerID),
 		"--set", "networkPolicy.enabled=false",
 		"--timeout", "2m",
 	)
