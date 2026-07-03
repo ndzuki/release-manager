@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 )
 
@@ -21,23 +20,6 @@ var testChartFS embed.FS
 // version overrides the chart's version field before pushing.
 func pushChartOCI(ctx context.Context, registryAddr, chartPath, version string) error {
 	ociRef := fmt.Sprintf("oci://%s/helm/test-chart", registryAddr)
-
-	// Update version in Chart.yaml
-	chartYaml := filepath.Join(chartPath, "Chart.yaml")
-	data, err := os.ReadFile(chartYaml)
-	if err != nil {
-		return fmt.Errorf("read Chart.yaml: %w", err)
-	}
-	lines := strings.Split(string(data), "\n")
-	for i, line := range lines {
-		if strings.HasPrefix(line, "version:") {
-			lines[i] = fmt.Sprintf("version: %s", version)
-			break
-		}
-	}
-	if err := os.WriteFile(chartYaml, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
-		return fmt.Errorf("write Chart.yaml: %w", err)
-	}
 
 	// Package
 	pkgCmd := exec.CommandContext(ctx, "helm", "package", chartPath,

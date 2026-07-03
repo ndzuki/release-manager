@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 	"time"
@@ -42,7 +43,9 @@ func deployRegistry(ctx context.Context, clientset kubernetes.Interface, cluster
 	}
 	// Create namespace
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: registryNamespace}}
-	_, _ = clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	if _, err := clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil {
+		log.Printf("warning: create namespace %s: %v", registryNamespace, err)
+	}
 
 	// Build YAML manifest based on mode
 	configYaml := ""

@@ -29,6 +29,7 @@ func TestDingTalkNotification(t *testing.T) {
 	httpAddr := h.ManagerHTTP
 	err := patchManagerDingTalk(ctx, h.K8sClient, mock.URL(), httpAddr)
 	require.NoError(t, err, "patch manager with dingtalk url")
+	defer patchManagerDingTalk(ctx, h.K8sClient, "", httpAddr) // disable dingtalk after test
 
 	// Extract the embedded test chart
 	chartDir, err := extractTestChart()
@@ -42,7 +43,7 @@ func TestDingTalkNotification(t *testing.T) {
 
 	// Trigger webhook
 	t.Log("Triggering webhook for v0.1.0...")
-	err = h.TriggerWebhook("test-chart", "0.1.0")
+	err = h.TriggerWebhook(ctx, "test-chart", "0.1.0")
 	require.NoError(t, err, "trigger webhook")
 
 	// Wait for release success

@@ -25,7 +25,7 @@ func TestMain(m *testing.M) {
 		}
 	}()
 
-	testHarness = newHarnessInternal()
+	newHarnessInternal()
 
 	code := m.Run()
 	testHarness.Close()

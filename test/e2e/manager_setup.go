@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -33,7 +34,9 @@ func deployManager(ctx context.Context, clientset kubernetes.Interface, clusterN
 	ns := managerNamespace
 
 	// Create namespace
-	_, _ = clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}, metav1.CreateOptions{})
+	if _, err := clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}, metav1.CreateOptions{}); err != nil {
+		log.Printf("warning: create namespace %s: %v", ns, err)
+	}
 
 	// Helper for kubectl commands
 	kubectl := func(args ...string) error {
@@ -46,27 +49,8 @@ func deployManager(ctx context.Context, clientset kubernetes.Interface, clusterN
 
 	// Build and load image
 	if os.Getenv("SKIP_BUILD") != "1" {
-		root := projectRoot()
-
-		buildCmd := exec.CommandContext(ctx, "go", "build", "-ldflags=-s -w",
-			"-o", "bin/release-manager", "./cmd/release-manager/")
-		buildCmd.Dir = root
-	buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-		if out, err := buildCmd.CombinedOutput(); err != nil {
-			return "", "", nil, fmt.Errorf("build manager: %w\n%s", err, string(out))
-		}
-
-		dockerCmd := exec.CommandContext(ctx, "docker", "build",
-			"-f", "Dockerfile.manager", "-t", "release-manager:dev", ".")
-		dockerCmd.Dir = root
-		if out, err := dockerCmd.CombinedOutput(); err != nil {
-			return "", "", nil, fmt.Errorf("docker build manager: %w\n%s", err, string(out))
-		}
-
-		loadCmd := exec.CommandContext(ctx, "kind", "load", "docker-image",
-			"release-manager:dev", "--name", clusterName)
-		if out, err := loadCmd.CombinedOutput(); err != nil {
-			return "", "", nil, fmt.Errorf("kind load manager: %w\n%s", err, string(out))
+		if err := buildAndLoadImage(ctx, clusterName, "release-manager", "release-manager:dev", "Dockerfile.manager"); err != nil {
+			return "", "", nil, err
 		}
 	}
 

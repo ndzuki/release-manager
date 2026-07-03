@@ -3,8 +3,8 @@
 package e2e
 
 import (
+	"context"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
@@ -17,7 +17,7 @@ import (
 // generateCerts creates CA and client certificates for mTLS testing.
 // Certificates are written to a temp directory.
 // Returns paths and the SHA256 fingerprint of the client cert.
-func generateCerts(customerID string) (caFile, certFile, keyFile string, fingerprint string, err error) {
+func generateCerts(ctx context.Context, customerID string) (caFile, certFile, keyFile string, fingerprint string, err error) {
 	dir, err := os.MkdirTemp("", "e2e-certs-*")
 	if err != nil {
 		return "", "", "", "", fmt.Errorf("create certs temp dir: %w", err)
@@ -31,7 +31,7 @@ func generateCerts(customerID string) (caFile, certFile, keyFile string, fingerp
 
 	// Generate CA
 	run := func(name string, args ...string) error {
-		cmd := exec.Command(name, args...)
+		cmd := exec.CommandContext(ctx, name, args...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("%s: %w\n%s", name, err, string(out))
 		}
@@ -73,11 +73,6 @@ func generateCerts(customerID string) (caFile, certFile, keyFile string, fingerp
 	os.Remove(cCsr)
 
 	return caCrt, cCrt, cKey, fp, nil
-}
-
-// loadClientCert loads a tls.Certificate from cert and key files.
-func loadClientCert(certFile, keyFile string) (tls.Certificate, error) {
-	return tls.LoadX509KeyPair(certFile, keyFile)
 }
 
 // certFingerprint returns the SHA256 fingerprint of a certificate file.

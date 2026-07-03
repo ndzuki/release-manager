@@ -143,7 +143,7 @@ func TestCertificateHotReload(t *testing.T) {
 	// Step 2: Generate cert-B with a fresh CA + client cert.
 	// -----------------------------------------------------------------------
 	t.Log("Step 2: Generating cert-B...")
-	caBFile, certBFile, keyBFile, fpB, err := generateCerts("cert-reload-test")
+	caBFile, certBFile, keyBFile, fpB, err := generateCerts(ctx, "cert-reload-test")
 	require.NoError(t, err, "should generate cert-B")
 
 	// All cert-B files live in a single temp directory created by generateCerts.

@@ -31,7 +31,7 @@ func TestHappyPath_InstallAndUpgrade(t *testing.T) {
 
 	// Trigger webhook
 	t.Log("Triggering webhook for v0.1.0...")
-	err = h.TriggerWebhook("test-chart", "0.1.0")
+	err = h.TriggerWebhook(ctx, "test-chart", "0.1.0")
 	require.NoError(t, err, "trigger webhook")
 
 	// Wait for release success
@@ -45,7 +45,7 @@ func TestHappyPath_InstallAndUpgrade(t *testing.T) {
 	require.NoError(t, err, "wait for pod ready")
 
 	// Verify release record
-	releases, err := h.GetReleases(h.CustomerID)
+	releases, err := h.GetReleases(ctx, h.CustomerID)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(releases), 1)
 	assert.Equal(t, "helm/test-chart", releases[0].ChartName)
@@ -58,7 +58,7 @@ func TestHappyPath_InstallAndUpgrade(t *testing.T) {
 	require.NoError(t, err, "push chart v0.1.1")
 
 	t.Log("Triggering webhook for v0.1.1...")
-	err = h.TriggerWebhook("test-chart", "0.1.1")
+	err = h.TriggerWebhook(ctx, "test-chart", "0.1.1")
 	require.NoError(t, err, "trigger webhook")
 
 	t.Log("Waiting for upgrade success...")
@@ -66,7 +66,7 @@ func TestHappyPath_InstallAndUpgrade(t *testing.T) {
 	require.NoError(t, err, "wait for upgrade success")
 
 	// Verify both releases exist
-	releases, err = h.GetReleases(h.CustomerID)
+	releases, err = h.GetReleases(ctx, h.CustomerID)
 	require.NoError(t, err)
 	versions := make(map[string]bool)
 	for _, r := range releases {

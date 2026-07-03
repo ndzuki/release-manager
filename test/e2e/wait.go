@@ -13,12 +13,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// timeoutMultiplier reads E2E_TIMEOUT_MULTIPLIER from env, defaults to 1.
-func timeoutMultiplier() time.Duration {
-	// Simple approach: parse env or return 1
-	return 1
-}
-
 // retryUntil polls fn at interval until it returns (true, nil) or ctx expires.
 // Returns the last error from fn, or context error.
 func retryUntil(ctx context.Context, interval, timeout time.Duration, fn func() (bool, error)) error {

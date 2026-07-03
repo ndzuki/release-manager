@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -78,6 +79,7 @@ type Harness struct {
 	// Cleanup stack (LIFO)
 	cleanupFns []func()
 	mu         sync.Mutex
+	closeOnce  sync.Once
 }
 
 // newHarnessInternal creates the full E2E environment. Use via SetupTest or TestMain.
@@ -88,6 +90,7 @@ func newHarnessInternal() *Harness {
 		CustomerID:  defaultCustomerID,
 		hmacKey:     "e2e-test-hmac-secret",
 	}
+	testHarness = h // set immediately so TestMain's defer/recover can access h.Close()
 
 	ctx := context.Background()
 
@@ -156,13 +159,21 @@ func newHarnessInternal() *Harness {
 
 	// Step 5: Generate certs
 	logf(h.T, "Generating mTLS certificates...")
-	h.caFile, h.certFile, h.keyFile, h.Fingerprint, err = generateCerts(h.CustomerID)
+	h.caFile, h.certFile, h.keyFile, h.Fingerprint, err = generateCerts(ctx, h.CustomerID)
 	if err != nil {
 		fatalf(h.T, "generate certs: %v", err)
 	}
+	certDir := filepath.Dir(h.caFile)
+	h.addCleanup(func() { os.RemoveAll(certDir) })
 
-	h.CABundle, _ = os.ReadFile(h.caFile)
-	h.ClientCert, _ = tls.LoadX509KeyPair(h.certFile, h.keyFile)
+	h.CABundle, err = os.ReadFile(h.caFile)
+	if err != nil {
+		fatalf(h.T, "read CA file %s: %v", h.caFile, err)
+	}
+	h.ClientCert, err = tls.LoadX509KeyPair(h.certFile, h.keyFile)
+	if err != nil {
+		fatalf(h.T, "load client cert pair (%s, %s): %v", h.certFile, h.keyFile, err)
+	}
 
 	// Step 6: Deploy manager
 	logf(h.T, "Deploying manager...")
@@ -176,7 +187,7 @@ func newHarnessInternal() *Harness {
 
 	// Step 7: Register customer
 	logf(h.T, "Registering customer...")
-	if err := h.registerCustomer(); err != nil {
+	if err := h.registerCustomer(ctx); err != nil {
 		fatalf(h.T, "register customer: %v", err)
 	}
 
@@ -196,12 +207,14 @@ func newHarnessInternal() *Harness {
 // Resets h.T to nil first so cleanup logging via logf uses fmt.Printf
 // instead of t.Logf (which panics after test completion).
 func (h *Harness) Close() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.T = nil // prevent t.Logf panic in cleanup after test completion
-	for i := len(h.cleanupFns) - 1; i >= 0; i-- {
-		h.cleanupFns[i]()
-	}
+	h.closeOnce.Do(func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.T = nil // prevent t.Logf panic in cleanup after test completion
+		for i := len(h.cleanupFns) - 1; i >= 0; i-- {
+			h.cleanupFns[i]()
+		}
+	})
 }
 
 // SetupTest returns the global Harness for a single test. TestMain must call newHarnessInternal() first.
@@ -222,14 +235,14 @@ func (h *Harness) addCleanup(fn func()) {
 }
 
 // registerCustomer registers the test customer with the manager.
-func (h *Harness) registerCustomer() error {
-	return h.RegisterCustomer(h.CustomerID, "E2E Test Customer",
+func (h *Harness) registerCustomer(ctx context.Context) error {
+	return h.RegisterCustomer(ctx, h.CustomerID, "E2E Test Customer",
 		fmt.Sprintf("release-operator-%s.release-operator-%s:8443", h.CustomerID, h.CustomerID),
 		h.Fingerprint, true)
 }
 
 // RegisterCustomer registers a customer with the manager API.
-func (h *Harness) RegisterCustomer(id, name, endpoint, fingerprint string, enabled bool) error {
+func (h *Harness) RegisterCustomer(ctx context.Context, id, name, endpoint, fingerprint string, enabled bool) error {
 	body := map[string]interface{}{
 		"id":                id,
 		"name":              name,
@@ -239,7 +252,7 @@ func (h *Harness) RegisterCustomer(id, name, endpoint, fingerprint string, enabl
 	}
 	payload, _ := json.Marshal(body)
 
-	req, _ := http.NewRequest("POST",
+	req, _ := http.NewRequestWithContext(ctx, "POST",
 		fmt.Sprintf("http://%s/api/v1/customers", h.ManagerHTTP),
 		bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
@@ -260,7 +273,7 @@ func (h *Harness) RegisterCustomer(id, name, endpoint, fingerprint string, enabl
 
 // TriggerWebhook sends a Harbor webhook payload to the manager.
 // In Harbor mode, it includes HMAC signature. In standalone mode, no signature.
-func (h *Harness) TriggerWebhook(chartName, version string) error {
+func (h *Harness) TriggerWebhook(ctx context.Context, chartName, version string) error {
 	payload := map[string]interface{}{
 		"type":      "PUSH_HELMCHART",
 		"occur_at":  time.Now().Unix(),
@@ -282,7 +295,7 @@ func (h *Harness) TriggerWebhook(chartName, version string) error {
 
 	body, _ := json.Marshal(payload)
 
-	req, _ := http.NewRequest("POST",
+	req, _ := http.NewRequestWithContext(ctx, "POST",
 		fmt.Sprintf("http://%s/api/v1/webhook/harbor", h.ManagerHTTP),
 		bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -320,13 +333,13 @@ type ReleaseRecord struct {
 }
 
 // GetReleases fetches releases from the manager API for a customer.
-func (h *Harness) GetReleases(customerID string) ([]ReleaseRecord, error) {
+func (h *Harness) GetReleases(ctx context.Context, customerID string) ([]ReleaseRecord, error) {
 	url := fmt.Sprintf("http://%s/api/v1/releases", h.ManagerHTTP)
 	if customerID != "" {
 		url += "?customer_id=" + customerID
 	}
 
-	req, _ := http.NewRequest("GET", url, nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 	req.Header.Set("X-API-Key", "e2e-test-key")
 
 	resp, err := http.DefaultClient.Do(req)
@@ -346,9 +359,10 @@ func (h *Harness) GetReleases(customerID string) ([]ReleaseRecord, error) {
 // WaitForReleaseStatus polls until a release for the given chart reaches expectedStatus.
 func (h *Harness) WaitForReleaseStatus(ctx context.Context, customerID, chartName, expectedStatus string, timeout time.Duration) error {
 	return retryUntil(ctx, 5*time.Second, timeout, func() (bool, error) {
-		releases, err := h.GetReleases(customerID)
+		releases, err := h.GetReleases(ctx, customerID)
 		if err != nil {
-			return false, err
+			fmt.Printf("[WaitForReleaseStatus] transient error from GetReleases: %v\n", err)
+			return false, nil
 		}
 		for _, r := range releases {
 			if r.ChartName == "helm/"+chartName && r.Status == expectedStatus {
@@ -375,7 +389,7 @@ func (h *Harness) DumpState() {
 	}
 
 	// Releases
-	releases, _ := h.GetReleases("")
+	releases, _ := h.GetReleases(ctx, "")
 	for _, r := range releases {
 		h.T.Logf("  Release/%s: chart=%s version=%s status=%s error=%s",
 			r.CustomerID, r.ChartName, r.Version, r.Status, r.Error)

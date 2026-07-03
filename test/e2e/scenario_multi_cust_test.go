@@ -24,7 +24,7 @@ func TestMultiCustomerConcurrentForward(t *testing.T) {
 	for _, custID := range customers {
 		t.Logf("Deploying operator for %s...", custID)
 		// Register customer
-		require.NoError(t, h.RegisterCustomer(custID, custID,
+		require.NoError(t, h.RegisterCustomer(ctx, custID, custID,
 			fmt.Sprintf("release-operator-%s.release-operator-%s:8443", custID, custID),
 			h.Fingerprint, true))
 
@@ -41,7 +41,7 @@ func TestMultiCustomerConcurrentForward(t *testing.T) {
 	require.NoError(t, pushChartOCI(ctx, h.RegistryAddr, chartDir, "0.4.0"))
 
 	start := time.Now()
-	require.NoError(t, h.TriggerWebhook("test-chart", "0.4.0"))
+	require.NoError(t, h.TriggerWebhook(ctx, "test-chart", "0.4.0"))
 
 	// Wait for all 3 customers to succeed (localhost001 + customer-002 + customer-003)
 	allCustomers := append([]string{h.CustomerID}, customers...)
@@ -61,7 +61,7 @@ func TestMultiCustomerConcurrentForward(t *testing.T) {
 
 	// Verify release records for all customers
 	for _, custID := range allCustomers {
-		releases, err := h.GetReleases(custID)
+		releases, err := h.GetReleases(ctx, custID)
 		require.NoError(t, err)
 		found := false
 		for _, r := range releases {

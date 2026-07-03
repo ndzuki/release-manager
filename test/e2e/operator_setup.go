@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,7 +27,9 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 	ns := fmt.Sprintf("release-operator-%s", customerID)
 
 	// Create namespace
-	_, _ = clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}, metav1.CreateOptions{})
+	if _, err := clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}, metav1.CreateOptions{}); err != nil {
+		log.Printf("warning: create namespace %s: %v", ns, err)
+	}
 
 	// Helper to run kubectl commands
 	kubectl := func(args ...string) error {
@@ -54,30 +57,8 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 
 	// Build and load image (if SKIP_BUILD is not set)
 	if os.Getenv("SKIP_BUILD") != "1" {
-		root := projectRoot()
-
-		// Build binary
-		buildCmd := exec.CommandContext(ctx, "go", "build", "-ldflags=-s -w",
-			"-o", "bin/release-operator", "./cmd/release-operator/")
-		buildCmd.Dir = root
-		buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-		if out, err := buildCmd.CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("build operator: %w\n%s", err, string(out))
-		}
-
-		// Build image
-		dockerCmd := exec.CommandContext(ctx, "docker", "build",
-			"-f", "Dockerfile.operator", "-t", "release-operator:dev", ".")
-		dockerCmd.Dir = root
-		if out, err := dockerCmd.CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("docker build operator: %w\n%s", err, string(out))
-		}
-
-		// Load into kind
-		loadCmd := exec.CommandContext(ctx, "kind", "load", "docker-image",
-			"release-operator:dev", "--name", clusterName)
-		if out, err := loadCmd.CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("kind load operator: %w\n%s", err, string(out))
+		if err := buildAndLoadImage(ctx, clusterName, "release-operator", "release-operator:dev", "Dockerfile.operator"); err != nil {
+			return nil, err
 		}
 	}
 
