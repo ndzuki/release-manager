@@ -28,9 +28,9 @@ func pushChartOCI(ctx context.Context, registryAddr, chartPath, version string) 
 		return fmt.Errorf("helm package: %w\n%s", err, string(out))
 	}
 
-	// Push (insecure HTTPS: registry uses self-signed cert)
+	// Push (plain HTTP: registry serves HTTP without TLS)
 	pkgFile := filepath.Join(os.TempDir(), fmt.Sprintf("test-chart-%s.tgz", version))
-	pushCmd := exec.CommandContext(ctx, "helm", "push", pkgFile, ociRef, "--insecure-skip-tls-verify")
+	pushCmd := exec.CommandContext(ctx, "helm", "push", pkgFile, ociRef, "--plain-http")
 	if out, err := pushCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("helm push: %w\n%s", err, string(out))
 	}
