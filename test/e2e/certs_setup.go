@@ -59,7 +59,8 @@ func generateCerts(ctx context.Context, customerID string) (caFile, certFile, ke
 	}
 	if err := run("openssl", "x509", "-req", "-in", cCsr,
 		"-CA", caCrt, "-CAkey", caKey, "-CAcreateserial",
-		"-out", cCrt, "-days", "365", "-sha256"); err != nil {
+		"-out", cCrt, "-days", "365", "-sha256",
+			"-addext", fmt.Sprintf("subjectAltName=DNS:release-operator-%s.release-operator-%s,DNS:localhost", customerID, customerID)); err != nil {
 		return "", "", "", "", err
 	}
 

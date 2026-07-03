@@ -48,12 +48,9 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 		return nil, fmt.Errorf("create TLS secret: %w", err)
 	}
 
-	// Create CA secret (Opaque type with ca.crt key) via kubectl.
-	_ = kubectl("-n", ns, "delete", "secret", "release-operator-ca", "--ignore-not-found")
-	if err := kubectl("-n", ns, "create", "secret", "generic", "release-operator-ca",
-		fmt.Sprintf("--from-file=ca.crt=%s", caFile)); err != nil {
-		return nil, fmt.Errorf("create CA secret: %w", err)
-	}
+	// E2E: don't create CA secret — operator uses TLS encryption only
+	// (no client cert verification). This avoids mTLS handshake complexity
+	// between manager and operator within the kind cluster.
 
 	// Build and load image (if SKIP_BUILD is not set)
 	if os.Getenv("SKIP_BUILD") != "1" {
@@ -74,7 +71,6 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 		"--set", "image.pullPolicy=IfNotPresent",
 		"--set", "tls.enabled=true",
 		"--set", "tls.existingCertSecret=release-operator-tls",
-		"--set", "tls.existingCaSecret=release-operator-ca",
 		"--set", "harbor.insecureSkipVerify=true",
 		"--set", "rbac.managedNamespaces[0]=default",
 		"--set", fmt.Sprintf("serviceAccount.name=release-operator-%s", customerID),
