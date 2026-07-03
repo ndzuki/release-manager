@@ -168,7 +168,7 @@ func newHarnessInternal() *Harness {
 	logf(h.T, "Deploying manager...")
 	dingtalkURL := os.Getenv("E2E_DINGTALK_URL")
 	var managerCleanup func()
-	h.ManagerHTTP, h.ManagerGRPC, managerCleanup, err = deployManager(ctx, h.K8sClient, h.ClusterName, h.caFile, []string{h.Fingerprint}, h.hmacKey, dingtalkURL)
+	h.ManagerHTTP, h.ManagerGRPC, managerCleanup, err = deployManager(ctx, h.K8sClient, h.ClusterName, h.caFile, h.certFile, h.keyFile, []string{h.Fingerprint}, h.hmacKey, dingtalkURL)
 	if err != nil {
 		fatalf(h.T, "deploy manager: %v", err)
 	}

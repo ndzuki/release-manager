@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -27,7 +26,10 @@ const (
 // Returns HTTP address (localhost:30080), gRPC address (localhost:30443),
 // and a cleanup function.
 // If dingtalkURL is non-empty, the manager config will include DingTalk bot integration.
-func deployManager(ctx context.Context, clientset kubernetes.Interface, clusterName, caFile string, allowedFingerprints []string, hmacKey, dingtalkURL string) (string, string, func(), error) {
+// certFile and keyFile are used for BOTH the manager's gRPC server and its
+// client connection to operators — they must be signed by the same CA that
+// operators trust (i.e., from generateCerts).
+func deployManager(ctx context.Context, clientset kubernetes.Interface, clusterName, caFile, certFile, keyFile string, allowedFingerprints []string, hmacKey, dingtalkURL string) (string, string, func(), error) {
 	ns := managerNamespace
 
 	// Create namespace
@@ -68,29 +70,13 @@ func deployManager(ctx context.Context, clientset kubernetes.Interface, clusterN
 		}
 	}
 
-	// Generate a self-signed server cert for the manager (for mTLS serving)
-	certDir, err := os.MkdirTemp("", "manager-server-certs-*")
-	if err != nil {
-		return "", "", nil, fmt.Errorf("create temp dir: %w", err)
-	}
-	defer os.RemoveAll(certDir)
-
-	serverKey := filepath.Join(certDir, "tls.key")
-	serverCrt := filepath.Join(certDir, "tls.crt")
-
-	genCert := exec.CommandContext(ctx, "openssl", "req", "-x509", "-newkey", "rsa:2048",
-		"-keyout", serverKey, "-out", serverCrt, "-days", "365", "-nodes",
-		"-subj", "/O=Release Manager E2E/CN=release-manager")
-	if out, err := genCert.CombinedOutput(); err != nil {
-		return "", "", nil, fmt.Errorf("generate server cert: %w\n%s", err, string(out))
-	}
-
-	// Create TLS secret with CA cert (for client verification), server cert, and server key
+	// Create TLS secret using the same CA + client cert that operators trust.
+	// Manager uses this cert for BOTH its gRPC server and forwarding to operators.
 	_ = kubectl("-n", ns, "delete", "secret", "release-manager-tls", "--ignore-not-found")
 	if err := kubectl("-n", ns, "create", "secret", "generic", "release-manager-tls",
 		fmt.Sprintf("--from-file=ca.crt=%s", caFile),
-		fmt.Sprintf("--from-file=tls.crt=%s", serverCrt),
-		fmt.Sprintf("--from-file=tls.key=%s", serverKey)); err != nil {
+		fmt.Sprintf("--from-file=tls.crt=%s", certFile),
+		fmt.Sprintf("--from-file=tls.key=%s", keyFile)); err != nil {
 		return "", "", nil, fmt.Errorf("create TLS secret: %w", err)
 	}
 
