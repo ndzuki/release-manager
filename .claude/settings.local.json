@@ -85,7 +85,12 @@
       "Bash(KUBECONFIG=/tmp/e2e-kc kubectl get pod -n release-operator-localhost001 -o yaml)",
       "Bash(KUBECONFIG=/tmp/e2e-kc kubectl exec -n release-operator-localhost001 deploy/release-operator-localhost001 -- ls -la /etc/release-operator/tls/)",
       "Bash(KUBECONFIG=/tmp/e2e-kc kubectl exec -n release-operator-localhost001 deploy/release-operator-localhost001 -- cat /etc/release-operator/tls/tls.crt)",
-      "Bash(buf generate *)"
+      "Bash(buf generate *)",
+      "Bash(KUBECONFIG=/tmp/kc kubectl logs -n release-operator-localhost001 deploy/release-operator-localhost001)",
+      "Bash(KEEP_CLUSTER=1 go test -tags=e2e -v -timeout 30m -count=1 -run TestHappyPath ./test/e2e/)",
+      "Bash(KEEP_CLUSTER=1 go test -tags=e2e -v -timeout 30m -count=1 -run \"TestDingTalk|TestHappyPath\" ./test/e2e/)",
+      "Bash(curl -s http://localhost:30500/v2/_catalog)",
+      "Bash(curl -s http://localhost:30500/v2/helm/test-chart/tags/list)"
     ]
   }
 }

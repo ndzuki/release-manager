@@ -19,7 +19,9 @@ var testChartFS embed.FS
 // registryAddr is e.g. "localhost:30500", chartPath is the local chart dir,
 // version overrides the chart's version field before pushing.
 func pushChartOCI(ctx context.Context, registryAddr, chartPath, version string) error {
-	ociRef := fmt.Sprintf("oci://%s/helm/test-chart", registryAddr)
+	// Push to oci://host/helm (chart name test-chart comes from Chart.yaml).
+	// The chart is stored at host/helm/test-chart:version.
+	ociRef := fmt.Sprintf("oci://%s/helm", registryAddr)
 
 	// Package
 	pkgCmd := exec.CommandContext(ctx, "helm", "package", chartPath,
