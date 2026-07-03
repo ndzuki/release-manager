@@ -84,6 +84,8 @@ data:
     server:
       grpc_addr: ":8443"
       http_addr: ":8080"
+      write_timeout: "300s"
+      read_timeout: "60s"
     log:
       level: debug
       format: json
