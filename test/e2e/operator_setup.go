@@ -113,7 +113,21 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 	if out, err := applyCmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("apply patched operator configmap: %w\n%s", err, string(out))
 	}
-	// Restart operator to pick up new config
+	// Add emptyDir at /tmp so Helm can write cache files (readOnlyRootFilesystem is set)
+	patchDeployCmd := exec.CommandContext(ctx, "kubectl", "-n", ns, "patch",
+		fmt.Sprintf("deployment/release-operator-%s", customerID),
+		"--type=json", "-p",
+		`[{"op":"add","path":"/spec/template/spec/volumes/-","value":{"name":"tmpdir","emptyDir":{}}},{"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{"name":"tmpdir","mountPath":"/tmp"}}]`)
+	if out, err := patchDeployCmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("patch operator deployment for /tmp: %w\n%s", err, string(out))
+	}
+	// Wait for rollout to complete
+	waitRollout := exec.CommandContext(ctx, "kubectl", "-n", ns, "rollout", "status",
+		fmt.Sprintf("deployment/release-operator-%s", customerID), "--timeout=2m")
+	if out, err := waitRollout.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("wait for operator rollout: %w\n%s", err, string(out))
+	}
+	// Restart operator to pick up new config (triggers a fresh pod with emptyDir)
 	restartCmd := exec.CommandContext(ctx, "kubectl", "-n", ns, "rollout", "restart",
 		fmt.Sprintf("deployment/release-operator-%s", customerID))
 	if out, err := restartCmd.CombinedOutput(); err != nil {
