@@ -90,10 +90,13 @@ data:
       level: debug
       format: json
     tls:
-      ca_file: ""
-      cert_file: ""
-      key_file: ""
-      require_client_cert: false
+      ca_file: /etc/release-manager/certs/ca.crt
+      cert_file: /etc/release-manager/certs/tls.crt
+      key_file: /etc/release-manager/certs/tls.key
+      require_client_cert: true
+      allowed_fingerprints:
+        - %s
+      client_insecure_skip_verify: true
     harbor:
       url: http://registry.registry:5000
       insecure_skip_verify: true
@@ -110,7 +113,7 @@ data:
       dsn: /data/release-manager.db
     dev_mode: true
     api_key: e2e-test-key
-`, ns, hmacKey, dingtalkSection)
+`, ns, strings.Join(allowedFingerprints, "\n        - "), hmacKey, dingtalkSection)
 
 	// Apply ConfigMap
 	cmCmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")

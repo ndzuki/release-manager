@@ -17,6 +17,12 @@ import (
 )
 
 // deployOperator builds the operator image, loads it into kind, and deploys via Helm.
+//
+// customerID identifies the customer for this operator instance.
+// notifEndpoint is the manager's gRPC address that the operator reports back to.
+// caFile, certFile, keyFile are mTLS certificate paths.
+//
+// Returns a cleanup function that removes the operator namespace.
 func deployOperator(ctx context.Context, clientset kubernetes.Interface, clusterName, customerID, notifEndpoint, caFile, certFile, keyFile string) (func(), error) {
 	ns := fmt.Sprintf("release-operator-%s", customerID)
 
@@ -25,6 +31,7 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 		log.Printf("warning: create namespace %s: %v", ns, err)
 	}
 
+	// Helper to run kubectl commands
 	kubectl := func(args ...string) error {
 		cmd := exec.CommandContext(ctx, "kubectl", args...)
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -33,27 +40,29 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 		return nil
 	}
 
-	// Create TLS secret
+	// Create TLS secret (kubernetes.io/tls type) via kubectl.
+	// Delete first for idempotency.
 	_ = kubectl("-n", ns, "delete", "secret", "release-operator-tls", "--ignore-not-found")
 	if err := kubectl("-n", ns, "create", "secret", "tls", "release-operator-tls",
 		fmt.Sprintf("--cert=%s", certFile), fmt.Sprintf("--key=%s", keyFile)); err != nil {
 		return nil, fmt.Errorf("create TLS secret: %w", err)
 	}
-	// Create CA secret for chart volume mount
+
+	// Create CA secret (Opaque type with ca.crt key) via kubectl.
 	_ = kubectl("-n", ns, "delete", "secret", "release-operator-ca", "--ignore-not-found")
 	if err := kubectl("-n", ns, "create", "secret", "generic", "release-operator-ca",
 		fmt.Sprintf("--from-file=ca.crt=%s", caFile)); err != nil {
 		return nil, fmt.Errorf("create CA secret: %w", err)
 	}
 
-	// Build and load image
+	// Build and load image (if SKIP_BUILD is not set)
 	if os.Getenv("SKIP_BUILD") != "1" {
 		if err := buildAndLoadImage(ctx, clusterName, "release-operator", "release-operator:dev", "Dockerfile.operator"); err != nil {
 			return nil, err
 		}
 	}
 
-	// Deploy via Helm with TLS disabled to avoid SNI/hostname issues in kind
+	// Deploy via Helm
 	helmCmd := exec.CommandContext(ctx, "helm", "upgrade", "--install",
 		fmt.Sprintf("release-operator-%s", customerID),
 		filepath.Join(projectRoot(), "deployments/release-operator"),
@@ -63,10 +72,9 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 		"--set", "image.repository=release-operator",
 		"--set", "image.tag=dev",
 		"--set", "image.pullPolicy=IfNotPresent",
-		// Disable TLS — the chart hardcodes cert paths but setting tls.enabled=false
-		// skips the secret volume mount; then we patch cert_file to empty so
-		// serveGRPC falls back to insecure gRPC.
-		"--set", "tls.enabled=false",
+		"--set", "tls.enabled=true",
+		"--set", "tls.existingCertSecret=release-operator-tls",
+		"--set", "tls.existingCaSecret=release-operator-ca",
 		"--set", "harbor.insecureSkipVerify=true",
 		"--set", "rbac.managedNamespaces[0]=default",
 		"--set", fmt.Sprintf("serviceAccount.name=release-operator-%s", customerID),
@@ -82,30 +90,7 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 		return nil, fmt.Errorf("wait for operator pod: %w", err)
 	}
 
-	// Patch configmap to clear cert_file/key_file so serveGRPC uses insecure gRPC.
-	// Using kubectl patch instead of get+apply to avoid YAML parsing issues.
-	cmName := fmt.Sprintf("release-operator-%s-config", customerID)
-	patchJSON := `{"data":{"config.yaml":"server:\n  grpc_addr: \":8443\"\nlog:\n  level: \"info\"\n  format: \"json\"\n  output: \"stdout\"\ntls:\n  ca_file: \"\"\n  cert_file: \"\"\n  key_file: \"\"\n  require_client_cert: false\nharbor:\n  url: \"https://harbor.example.com\"\n  insecure_skip_verify: true\n  timeout: \"60s\"\n  ca_file: \"\"\nhelm:\n  upgrade_timeout: \"10m\"\n  default_namespace: \"default\"\n  max_history: 10\n  atomic: true\n  wait: true\n  create_namespace: false\n  cache_dir: \"/tmp/helm-cache\"\nnotification_endpoint: \"` + notifEndpoint + `\"\n"}}`
-	_ = kubectl("-n", ns, "patch", "configmap", cmName, "--type=merge", "-p", patchJSON)
-
-	// Add emptyDir at /tmp for Helm cache (readOnlyRootFilesystem is set)
-	_ = kubectl("-n", ns, "patch",
-		fmt.Sprintf("deployment/release-operator-%s", customerID),
-		"--type=json", "-p",
-		`[{"op":"add","path":"/spec/template/spec/volumes/-","value":{"name":"tmpdir","emptyDir":{}}},{"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{"name":"tmpdir","mountPath":"/tmp"}}]`)
-
-	// Restart to pick up new config and emptyDir volume
-	_ = kubectl("-n", ns, "rollout", "restart",
-		fmt.Sprintf("deployment/release-operator-%s", customerID))
-
-	// Wait for rollout to complete
-	waitRollout := exec.CommandContext(ctx, "kubectl", "-n", ns, "rollout", "status",
-		fmt.Sprintf("deployment/release-operator-%s", customerID), "--timeout=2m")
-	if out, err := waitRollout.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("wait for operator rollout: %w\n%s", err, string(out))
-	}
-
-	// Give gRPC server time to fully initialize
+	// Give gRPC server a moment to fully initialize before accepting connections.
 	time.Sleep(5 * time.Second)
 
 	cleanup := func() {
