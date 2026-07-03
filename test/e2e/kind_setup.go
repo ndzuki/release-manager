@@ -21,7 +21,20 @@ var kindProvider = cluster.NewProvider(
 
 // createKindCluster creates a kind cluster with NodePort mappings for
 // registry (30500), manager HTTP (30080), and manager gRPC (30443).
+// If a cluster with the same name already exists (e.g. from a previous
+// failed run), it is deleted first to ensure a clean slate.
 func createKindCluster(name string) error {
+	// If a leftover cluster exists, delete it first
+	exists, err := kindClusterExists(name)
+	if err != nil {
+		return fmt.Errorf("check cluster existence: %w", err)
+	}
+	if exists {
+		if err := kindProvider.Delete(name, ""); err != nil {
+			return fmt.Errorf("delete existing cluster %s: %w", name, err)
+		}
+	}
+
 	// Build config YAML dynamically
 	config := fmt.Sprintf(`kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
