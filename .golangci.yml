@@ -1,0 +1,93 @@
+run:
+  timeout: 5m
+  tests: true
+  build-tags:
+    - integration
+
+linters:
+  disable-all: true
+  enable:
+    # ---- 正确性 / bug 风险 ----
+    - errcheck # 未处理的 error 返回值
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - gosimple
+    - nilerr # err != nil 分支却返回 nil 的反模式
+    - contextcheck # context 未透传 / 未正确取消
+    - bodyclose # http.Response.Body 未 Close
+    - sqlclosecheck # sql.Rows / sql.Stmt 未 Close
+    - rowserrcheck # sql.Rows 迭代后未检查 Err()
+    - noctx # 发起 http 请求未带 context
+
+    # ---- 安全 ----
+    - gosec
+
+    # ---- 代码风格与规范 ----
+    - revive
+    - gocritic
+    - unconvert
+    - unparam
+    - misspell
+    - whitespace
+    - goimports
+    - gofmt
+
+    # ---- 复杂度控制 ----
+    - gocyclo
+    - dupl
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+
+  dupl:
+    threshold: 100
+
+  gosec:
+    excludes:
+      - G104 # 未处理 error 已由 errcheck 覆盖，避免重复告警
+
+  revive:
+    rules:
+      - name: exported
+        disabled: false
+      - name: error-return
+        disabled: false
+      - name: context-as-argument
+        disabled: false
+      - name: unused-parameter
+        disabled: false
+
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+      - style
+    disabled-checks:
+      - hugeParam # DTO/proto 生成的大 struct 按值传递很常见，关掉减少噪音
+
+issues:
+  exclude-rules:
+    # 测试文件放宽复杂度 / 魔法数字限制
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - dupl
+        - gosec
+    # buf/protoc 生成代码、mock 文件不检查
+    - path: (\.pb\.go|\.pb\.gw\.go|_mock\.go|/mocks/|/gen/)
+      linters:
+        - all
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+output:
+  formats:
+    - format: colored-line-number
+  sort-results: true

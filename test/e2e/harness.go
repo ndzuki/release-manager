@@ -190,7 +190,7 @@ func newHarnessInternal() *Harness {
 	// Step 7: Deploy operator first (need its ClusterIP for customer registration)
 	logf(h.T, "Deploying operator...")
 	operatorCleanup, err := deployOperator(ctx, h.K8sClient, h.ClusterName, h.CustomerID,
-		"release-manager.release-manager:8443", h.caFile, h.certFile, h.keyFile)
+		h.ManagerGRPC, h.caFile, h.certFile, h.keyFile)
 	if err != nil {
 		fatalf(h.T, "deploy operator: %v", err)
 	}
@@ -198,13 +198,13 @@ func newHarnessInternal() *Harness {
 
 	// Step 8: Register customer using operator ClusterIP (avoids TLS SNI issues)
 	logf(h.T, "Registering customer...")
-	opNS := fmt.Sprintf("release-operator-%s", h.CustomerID)
-	opSvc := fmt.Sprintf("release-operator-%s", h.CustomerID)
-	opIP, err := getServiceClusterIP(ctx, h.K8sClient, opNS, opSvc)
+	
+	
+	
 	if err != nil {
 		fatalf(h.T, "get operator ClusterIP: %v", err)
 	}
-	if err := h.registerCustomer(ctx, opIP); err != nil {
+	if err := h.registerCustomer(ctx); err != nil {
 		fatalf(h.T, "register customer: %v", err)
 	}
 
@@ -252,9 +252,9 @@ func (h *Harness) addCleanup(fn func()) {
 }
 
 // registerCustomer registers the test customer using the given endpoint.
-func (h *Harness) registerCustomer(ctx context.Context, endpoint string) error {
+func (h *Harness) registerCustomer(ctx context.Context) error {
 	return h.RegisterCustomer(ctx, h.CustomerID, "E2E Test Customer",
-		fmt.Sprintf("%s:8443", endpoint),
+		fmt.Sprintf("release-operator-%s.release-operator-%s:8443", h.CustomerID, h.CustomerID),
 		h.Fingerprint, true)
 }
 

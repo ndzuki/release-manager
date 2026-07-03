@@ -93,7 +93,14 @@
       "Bash(curl -s http://localhost:30500/v2/helm/test-chart/tags/list)",
       "Bash(KEEP_CLUSTER=1 go test -tags=e2e -v -timeout 30m -count=1 -run TestDingTalk ./test/e2e/)",
       "Bash(KUBECONFIG=/tmp/kc kubectl logs -n release-manager deploy/release-manager)",
-      "Bash(curl -s \"http://localhost:30500/v2/helm/test-chart/tags/list\")"
+      "Bash(curl -s \"http://localhost:30500/v2/helm/test-chart/tags/list\")",
+      "Bash(sed -i 's|opNS := fmt.Sprintf.*||' test/e2e/harness.go)",
+      "Bash(sed -i 's|opSvc := fmt.Sprintf.*||' test/e2e/harness.go)",
+      "Bash(sed -i 's|opIP, err := getServiceClusterIP.*||' test/e2e/harness.go)",
+      "Bash(sed -i 's|if err != nil { fatalf.*get operator ClusterIP.*}||' test/e2e/harness.go)",
+      "Bash(sed -i 's|if err := h.registerCustomer\\(ctx, opIP\\)|if err := h.registerCustomer\\(ctx\\)|' test/e2e/harness.go)",
+      "Bash(sed -i 's|func \\(h \\\\*Harness\\) registerCustomer\\(ctx context.Context, endpoint string\\) error {|func \\(h *Harness\\) registerCustomer\\(ctx context.Context\\) error {|' test/e2e/harness.go)",
+      "Bash(sed -i 's|fmt.Sprintf\\(\"%s:8443\", endpoint\\)|fmt.Sprintf\\(\"release-operator-%s.release-operator-%s:8443\", h.CustomerID, h.CustomerID\\)|' test/e2e/harness.go)"
     ]
   }
 }
