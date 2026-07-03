@@ -29,7 +29,7 @@ func TestMultiCustomerConcurrentForward(t *testing.T) {
 			h.Fingerprint, true))
 
 		cleanup, err := deployOperator(ctx, h.K8sClient, h.ClusterName, custID,
-			h.ManagerGRPC, h.caFile, h.certFile, h.keyFile)
+			"release-manager.release-manager:8443", h.caFile, h.certFile, h.keyFile)
 		require.NoError(t, err)
 		t.Cleanup(cleanup)
 	}

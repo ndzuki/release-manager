@@ -190,7 +190,7 @@ func newHarnessInternal() *Harness {
 	// Step 7: Deploy operator first (need its ClusterIP for customer registration)
 	logf(h.T, "Deploying operator...")
 	operatorCleanup, err := deployOperator(ctx, h.K8sClient, h.ClusterName, h.CustomerID,
-		h.ManagerGRPC, h.caFile, h.certFile, h.keyFile)
+		"release-manager.release-manager:8443", h.caFile, h.certFile, h.keyFile)
 	if err != nil {
 		fatalf(h.T, "deploy operator: %v", err)
 	}
