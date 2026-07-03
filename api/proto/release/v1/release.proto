@@ -208,7 +208,7 @@ message UpdateCustomerRequest {
   optional string operator_endpoint = 3;
   optional string cert_fingerprint = 4;
   optional bool enabled = 5;
-  optional map<string, string> labels = 6;
+  map<string, string> labels = 6;
 }
 
 message UpdateCustomerResponse {

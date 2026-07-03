@@ -179,8 +179,8 @@ func (s *operatorManagementServer) UpdateConfiguration(ctx context.Context, req 
 		cfg.Harbor.Password = *req.HarborPassword
 		changed = append(changed, "harbor_password")
 	}
-	if req.HelmUpgradeTimeoutSecs != nil {
-		cfg.Helm.UpgradeTimeout = time.Duration(*req.HelmUpgradeTimeoutSecs) * time.Second
+	if req.HelmUpgradeTimeoutSeconds != nil {
+		cfg.Helm.UpgradeTimeout = time.Duration(*req.HelmUpgradeTimeoutSeconds) * time.Second
 		changed = append(changed, "helm_upgrade_timeout")
 	}
 	if req.HelmMaxHistory != nil {
