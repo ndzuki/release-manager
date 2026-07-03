@@ -57,10 +57,18 @@ func generateCerts(ctx context.Context, customerID string) (caFile, certFile, ke
 		"-out", cCsr); err != nil {
 		return "", "", "", "", err
 	}
+
+	// Write SAN extension file for TLS hostname verification.
+	// Manager dials operator at its service DNS: release-operator-{id}.release-operator-{id}
+	sanFile := filepath.Join(dir, "san.cnf")
+	sanContent := fmt.Sprintf("subjectAltName=DNS:release-operator-%[1]s.release-operator-%[1]s,DNS:localhost", customerID)
+	if err := os.WriteFile(sanFile, []byte(sanContent), 0o644); err != nil {
+		return "", "", "", "", fmt.Errorf("write SAN extfile: %w", err)
+	}
 	if err := run("openssl", "x509", "-req", "-in", cCsr,
 		"-CA", caCrt, "-CAkey", caKey, "-CAcreateserial",
 		"-out", cCrt, "-days", "365", "-sha256",
-			"-addext", fmt.Sprintf("subjectAltName=DNS:release-operator-%s.release-operator-%s,DNS:localhost", customerID, customerID)); err != nil {
+		"-extfile", sanFile); err != nil {
 		return "", "", "", "", err
 	}
 
