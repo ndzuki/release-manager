@@ -60,6 +60,7 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 		buildCmd := exec.CommandContext(ctx, "go", "build", "-ldflags=-s -w",
 			"-o", "bin/release-operator", "./cmd/release-operator/")
 		buildCmd.Dir = root
+		buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 		if out, err := buildCmd.CombinedOutput(); err != nil {
 			return nil, fmt.Errorf("build operator: %w\n%s", err, string(out))
 		}
