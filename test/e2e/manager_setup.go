@@ -89,8 +89,8 @@ data:
       format: json
     tls:
       ca_file: /etc/release-manager/certs/ca.crt
-      cert_file: /etc/release-manager/certs/tls.crt
-      key_file: /etc/release-manager/certs/tls.key
+      cert_file: ""
+      key_file: ""
       require_client_cert: true
       allowed_fingerprints:
         - %s
