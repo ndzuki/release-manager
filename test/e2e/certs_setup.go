@@ -61,7 +61,13 @@ func generateCerts(ctx context.Context, customerID string) (caFile, certFile, ke
 	// Write SAN extension file for TLS hostname verification.
 	// Manager dials operator at its service DNS: release-operator-{id}.release-operator-{id}
 	sanFile := filepath.Join(dir, "san.cnf")
-	sanContent := fmt.Sprintf("subjectAltName=DNS:release-operator-%[1]s.release-operator-%[1]s,DNS:localhost", customerID)
+	// Add SANs for all possible hostnames gRPC might use for TLS SNI:
+	// - Full K8s service DNS: release-operator-{id}.release-operator-{id}
+	// - Short service name: release-operator-{id}
+	// - Service DNS with svc suffix: release-operator-{id}.release-operator-{id}.svc
+	// - localhost for port-forward scenarios
+	// - CN (customerID) as fallback
+	sanContent := fmt.Sprintf("subjectAltName=DNS:release-operator-%[1]s.release-operator-%[1]s,DNS:release-operator-%[1]s,DNS:release-operator-%[1]s.release-operator-%[1]s.svc,DNS:localhost,DNS:%[1]s", customerID)
 	if err := os.WriteFile(sanFile, []byte(sanContent), 0o644); err != nil {
 		return "", "", "", "", fmt.Errorf("write SAN extfile: %w", err)
 	}
