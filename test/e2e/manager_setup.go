@@ -89,11 +89,12 @@ data:
       format: json
     tls:
       ca_file: /etc/release-manager/certs/ca.crt
-      cert_file: ""
-      key_file: ""
+      cert_file: /etc/release-manager/certs/tls.crt
+      key_file: /etc/release-manager/certs/tls.key
       require_client_cert: true
       allowed_fingerprints:
         - %s
+      client_insecure_skip_verify: true
     harbor:
       url: http://registry.registry:5000
       insecure_skip_verify: true

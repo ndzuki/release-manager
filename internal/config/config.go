@@ -60,11 +60,12 @@ type LogConfig struct {
 
 // TLSConfig 定义 mTLS 双向认证配置。
 type TLSConfig struct {
-	CAFile              string   `yaml:"ca_file"`               // CA 证书文件路径
-	CertFile            string   `yaml:"cert_file"`             // 服务端/客户端证书文件路径
-	KeyFile             string   `yaml:"key_file"`              // 私钥文件路径
-	RequireClientCert   bool     `yaml:"require_client_cert"`   // 是否要求客户端证书
-	AllowedFingerprints []string `yaml:"allowed_fingerprints"`  // 允许的客户端证书 SHA256 指纹白名单
+	CAFile                   string   `yaml:"ca_file"`                      // CA 证书文件路径
+	CertFile                 string   `yaml:"cert_file"`                    // 服务端/客户端证书文件路径
+	KeyFile                  string   `yaml:"key_file"`                     // 私钥文件路径
+	RequireClientCert        bool     `yaml:"require_client_cert"`          // 是否要求客户端证书
+	AllowedFingerprints      []string `yaml:"allowed_fingerprints"`         // 允许的客户端证书 SHA256 指纹白名单
+	ClientInsecureSkipVerify bool     `yaml:"client_insecure_skip_verify"`  // 客户端模式跳过 TLS 主机名验证（仅 E2E）
 }
 
 // HarborConfig 定义 Harbor OCI 仓库连接参数。
@@ -226,8 +227,9 @@ func (c *TLSConfig) BuildClientTLSConfig() (*cryptotls.Config, error) {
 	}
 
 	tlsCfg := &cryptotls.Config{
-		Certificates: []cryptotls.Certificate{cert},
-		MinVersion:   cryptotls.VersionTLS13,
+		Certificates:          []cryptotls.Certificate{cert},
+		MinVersion:            cryptotls.VersionTLS13,
+		InsecureSkipVerify:    c.ClientInsecureSkipVerify,
 	}
 
 	if c.CAFile != "" {
