@@ -10,35 +10,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"helm.sh/helm/v4/pkg/chart"
-	"helm.sh/helm/v4/pkg/chart/loader"
+	"sync"
 )
 
 //go:embed testdata/testchart/*
 var testChartFS embed.FS
-
-// loadTestChart loads the embedded test chart from the filesystem.
-func loadTestChart() (chart.Charter, error) {
-	// Write embedded files to a temp dir for helm loader
-	tmpDir, err := os.MkdirTemp("", "test-chart-*")
-	if err != nil {
-		return nil, fmt.Errorf("create temp dir: %w", err)
-	}
-
-	if err := copyEmbeddedDir("testdata/testchart", tmpDir); err != nil {
-		os.RemoveAll(tmpDir)
-		return nil, fmt.Errorf("copy embedded chart: %w", err)
-	}
-
-	ch, err := loader.Load(tmpDir)
-	if err != nil {
-		os.RemoveAll(tmpDir)
-		return nil, fmt.Errorf("load chart: %w", err)
-	}
-
-	return ch, nil
-}
 
 // pushChartOCI pushes a chart directory to an OCI registry using helm CLI.
 // registryAddr is e.g. "localhost:30500", chartPath is the local chart dir,
@@ -107,4 +83,32 @@ func copyEmbeddedDir(src, dst string) error {
 		}
 	}
 	return nil
+}
+
+var (
+	projectRootOnce sync.Once
+	projectRootDir  string
+)
+
+// projectRoot returns the project root directory (where go.mod lives).
+// Walks up from the current working directory until go.mod is found.
+func projectRoot() string {
+	projectRootOnce.Do(func() {
+		dir, err := os.Getwd()
+		if err != nil {
+			panic(fmt.Sprintf("getwd: %v", err))
+		}
+		for {
+			if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+				projectRootDir = dir
+				return
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				panic("projectRoot: go.mod not found in any parent directory")
+			}
+			dir = parent
+		}
+	})
+	return projectRootDir
 }

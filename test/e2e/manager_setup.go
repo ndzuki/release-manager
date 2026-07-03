@@ -26,7 +26,8 @@ const (
 //
 // Returns HTTP address (localhost:30080), gRPC address (localhost:30443),
 // and a cleanup function.
-func deployManager(ctx context.Context, clientset kubernetes.Interface, clusterName, caFile string, allowedFingerprints []string, hmacKey string) (string, string, func(), error) {
+// If dingtalkURL is non-empty, the manager config will include DingTalk bot integration.
+func deployManager(ctx context.Context, clientset kubernetes.Interface, clusterName, caFile string, allowedFingerprints []string, hmacKey, dingtalkURL string) (string, string, func(), error) {
 	ns := managerNamespace
 
 	// Create namespace
@@ -43,14 +44,18 @@ func deployManager(ctx context.Context, clientset kubernetes.Interface, clusterN
 
 	// Build and load image
 	if os.Getenv("SKIP_BUILD") != "1" {
+		root := projectRoot()
+
 		buildCmd := exec.CommandContext(ctx, "go", "build", "-ldflags=-s -w",
 			"-o", "bin/release-manager", "./cmd/release-manager/")
+		buildCmd.Dir = root
 		if out, err := buildCmd.CombinedOutput(); err != nil {
 			return "", "", nil, fmt.Errorf("build manager: %w\n%s", err, string(out))
 		}
 
 		dockerCmd := exec.CommandContext(ctx, "docker", "build",
 			"-f", "Dockerfile.manager", "-t", "release-manager:dev", ".")
+		dockerCmd.Dir = root
 		if out, err := dockerCmd.CombinedOutput(); err != nil {
 			return "", "", nil, fmt.Errorf("docker build manager: %w\n%s", err, string(out))
 		}
@@ -88,6 +93,15 @@ func deployManager(ctx context.Context, clientset kubernetes.Interface, clusterN
 		return "", "", nil, fmt.Errorf("create TLS secret: %w", err)
 	}
 
+	// Build dingtalk config section if URL is provided
+	dingtalkSection := ""
+	if dingtalkURL != "" {
+		dingtalkSection = fmt.Sprintf(`    dingtalk:
+      webhook_url: "%s"
+      enabled: true
+`, dingtalkURL)
+	}
+
 	// Render manager config via templated YAML
 	configYaml := fmt.Sprintf(`apiVersion: v1
 kind: ConfigMap
@@ -120,12 +134,12 @@ data:
       atomic: true
       wait: true
       create_namespace: true
-    store:
+%s    store:
       type: sqlite
       dsn: /data/release-manager.db
     dev_mode: true
     api_key: e2e-test-key
-`, ns, strings.Join(allowedFingerprints, "\n        - "), hmacKey)
+`, ns, strings.Join(allowedFingerprints, "\n        - "), hmacKey, dingtalkSection)
 
 	// Apply ConfigMap
 	cmCmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
@@ -219,4 +233,93 @@ spec:
 	}
 
 	return httpAddr, grpcAddr, cleanup, nil
+}
+
+// patchManagerDingTalk updates the manager ConfigMap with a DingTalk webhook URL
+// and restarts the manager deployment so the new config takes effect.
+// It waits for the new pod to be ready and the HTTP endpoint to become available.
+func patchManagerDingTalk(ctx context.Context, clientset kubernetes.Interface, dingtalkURL, httpAddr string) error {
+	ns := managerNamespace
+
+	kubectl := func(args ...string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, "kubectl", args...)
+		return cmd.CombinedOutput()
+	}
+
+	// Get the current ConfigMap as text
+	cmData, err := kubectl("-n", ns, "get", "configmap", "release-manager-config",
+		"-o", `jsonpath={.data['config\.yaml']}`)
+	if err != nil {
+		return fmt.Errorf("get configmap: %w\n%s", err, string(cmData))
+	}
+
+	configContent := string(cmData)
+
+	// Check if dingtalk section already exists
+	if strings.Contains(configContent, "dingtalk:") {
+		// Update the webhook_url line
+		lines := strings.Split(configContent, "\n")
+		for i, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "webhook_url:") {
+				lines[i] = "      webhook_url: \"" + dingtalkURL + "\""
+				break
+			}
+		}
+		configContent = strings.Join(lines, "\n")
+	} else {
+		// Insert dingtalk section before "store:"
+		dingtalkSection := fmt.Sprintf(`    dingtalk:
+      webhook_url: "%s"
+      enabled: true
+`, dingtalkURL)
+		configContent = strings.Replace(configContent, "    store:", dingtalkSection+"    store:", 1)
+	}
+
+	// Re-apply the ConfigMap with updated content using stdin
+	patchConfig := fmt.Sprintf(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: release-manager-config
+  namespace: %s
+data:
+  config.yaml: |
+%s`, ns, indentConfigYAML(configContent))
+
+	applyCmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
+	applyCmd.Stdin = strings.NewReader(patchConfig)
+	applyOut, err := applyCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("apply configmap: %w\n%s", err, string(applyOut))
+	}
+
+	// Rollout restart and wait for it to complete
+	restartOut, err := kubectl("-n", ns, "rollout", "restart", "deployment", "release-manager")
+	if err != nil {
+		return fmt.Errorf("rollout restart: %w\n%s", err, string(restartOut))
+	}
+
+	statusOut, err := kubectl("-n", ns, "rollout", "status", "deployment", "release-manager", "--timeout=120s")
+	if err != nil {
+		return fmt.Errorf("rollout status: %w\n%s", err, string(statusOut))
+	}
+
+	// Verify endpoints are back
+	if err := waitForHTTPReady(ctx, fmt.Sprintf("http://%s/health", httpAddr), 60*time.Second); err != nil {
+		return fmt.Errorf("wait for manager HTTP after restart: %w", err)
+	}
+
+	return nil
+}
+
+// indentConfigYAML adds 4 spaces of indentation to each line for embedding
+// in a ConfigMap data section.
+func indentConfigYAML(content string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if line != "" {
+			lines[i] = "    " + line
+		}
+	}
+	return strings.Join(lines, "\n")
 }

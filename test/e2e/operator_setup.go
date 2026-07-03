@@ -54,9 +54,12 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 
 	// Build and load image (if SKIP_BUILD is not set)
 	if os.Getenv("SKIP_BUILD") != "1" {
+		root := projectRoot()
+
 		// Build binary
 		buildCmd := exec.CommandContext(ctx, "go", "build", "-ldflags=-s -w",
 			"-o", "bin/release-operator", "./cmd/release-operator/")
+		buildCmd.Dir = root
 		if out, err := buildCmd.CombinedOutput(); err != nil {
 			return nil, fmt.Errorf("build operator: %w\n%s", err, string(out))
 		}
@@ -64,6 +67,7 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 		// Build image
 		dockerCmd := exec.CommandContext(ctx, "docker", "build",
 			"-f", "Dockerfile.operator", "-t", "release-operator:dev", ".")
+		dockerCmd.Dir = root
 		if out, err := dockerCmd.CombinedOutput(); err != nil {
 			return nil, fmt.Errorf("docker build operator: %w\n%s", err, string(out))
 		}
@@ -77,10 +81,9 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 	}
 
 	// Deploy via Helm
-	projectDir, _ := os.Getwd()
 	helmCmd := exec.CommandContext(ctx, "helm", "upgrade", "--install",
 		fmt.Sprintf("release-operator-%s", customerID),
-		filepath.Join(projectDir, "deployments/release-operator"),
+		filepath.Join(projectRoot(), "deployments/release-operator"),
 		"-n", ns,
 		"--set", fmt.Sprintf("customerID=%s", customerID),
 		"--set", fmt.Sprintf("notificationEndpoint=%s", notifEndpoint),
