@@ -78,7 +78,13 @@
       "Bash(kubectl logs *)",
       "Bash(docker run *)",
       "Bash(kind delete *)",
-      "Bash(KEEP_CLUSTER=1 go test -tags=e2e -v -timeout 30m -run TestDingTalkNotification ./test/e2e/)"
+      "Bash(KEEP_CLUSTER=1 go test -tags=e2e -v -timeout 30m -run TestDingTalkNotification ./test/e2e/)",
+      "Bash(export KUBECONFIG=/tmp/e2e-kubeconfig)",
+      "Bash(export KUBECONFIG=/tmp/e2e-kc)",
+      "Bash(KUBECONFIG=/tmp/e2e-kc kubectl logs -n release-manager deploy/release-manager)",
+      "Bash(KUBECONFIG=/tmp/e2e-kc kubectl get pod -n release-operator-localhost001 -o yaml)",
+      "Bash(KUBECONFIG=/tmp/e2e-kc kubectl exec -n release-operator-localhost001 deploy/release-operator-localhost001 -- ls -la /etc/release-operator/tls/)",
+      "Bash(KUBECONFIG=/tmp/e2e-kc kubectl exec -n release-operator-localhost001 deploy/release-operator-localhost001 -- cat /etc/release-operator/tls/tls.crt)"
     ]
   }
 }

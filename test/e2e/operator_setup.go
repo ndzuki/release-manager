@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -88,6 +89,39 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 	// Wait for operator pod ready
 	if err := waitForPodReady(ctx, clientset, ns, "app.kubernetes.io/name=release-operator", 2*time.Minute); err != nil {
 		return nil, fmt.Errorf("wait for operator pod: %w", err)
+	}
+
+	// Patch operator configmap to disable TLS. The chart hardcodes cert_file/key_file;
+	// we clear them so serveGRPC starts without TLS, matching the manager's insecure mode.
+	cmName := fmt.Sprintf("release-operator-%s-config", customerID)
+	getCmd := exec.CommandContext(ctx, "kubectl", "-n", ns, "get", "configmap", cmName, "-o", "yaml")
+	cmYAML, err := getCmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("get operator configmap: %w\n%s", err, string(cmYAML))
+	}
+	// Replace TLS file paths with empty strings and disable client cert requirement
+	patched := strings.ReplaceAll(string(cmYAML),
+		`ca_file: "/etc/release-operator/tls/ca.crt"`, `ca_file: ""`)
+	patched = strings.ReplaceAll(patched,
+		`cert_file: "/etc/release-operator/tls/tls.crt"`, `cert_file: ""`)
+	patched = strings.ReplaceAll(patched,
+		`key_file: "/etc/release-operator/tls/tls.key"`, `key_file: ""`)
+	patched = strings.ReplaceAll(patched,
+		`require_client_cert: true`, `require_client_cert: false`)
+	applyCmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
+	applyCmd.Stdin = strings.NewReader(patched)
+	if out, err := applyCmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("apply patched operator configmap: %w\n%s", err, string(out))
+	}
+	// Restart operator to pick up new config
+	restartCmd := exec.CommandContext(ctx, "kubectl", "-n", ns, "rollout", "restart",
+		fmt.Sprintf("deployment/release-operator-%s", customerID))
+	if out, err := restartCmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("restart operator: %w\n%s", err, string(out))
+	}
+	// Wait for new operator pod ready
+	if err := waitForPodReady(ctx, clientset, ns, "app.kubernetes.io/name=release-operator", 2*time.Minute); err != nil {
+		return nil, fmt.Errorf("wait for operator pod after restart: %w", err)
 	}
 
 	cleanup := func() {
