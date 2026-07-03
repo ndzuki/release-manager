@@ -58,9 +58,10 @@ type Harness struct {
 	K8sClient   kubernetes.Interface
 
 	// Endpoints
-	RegistryAddr string
-	ManagerHTTP  string
-	ManagerGRPC  string
+	RegistryAddr         string // host-accessible address (localhost:30500)
+	RegistryInternalAddr string // cluster-internal address (registry.registry:5000)
+	ManagerHTTP          string
+	ManagerGRPC          string
 
 	// mTLS
 	CustomerID  string
@@ -150,6 +151,7 @@ func newHarnessInternal() *Harness {
 	// Step 4: Deploy registry
 	logf(h.T, "Deploying registry...")
 	h.RegistryAddr, _, err = deployRegistry(ctx, h.K8sClient, h.ClusterName, registryMode, harborURL, harborUser, harborPass)
+	h.RegistryInternalAddr = "registry.registry:5000" // cluster-internal service address
 	if err != nil {
 		fatalf(h.T, "deploy registry: %v", err)
 	}
@@ -282,7 +284,7 @@ func (h *Harness) TriggerWebhook(ctx context.Context, chartName, version string)
 			"resources": []map[string]interface{}{
 				{
 					"tag":          version,
-					"resource_url": fmt.Sprintf("oci://%s/helm/%s", h.RegistryAddr, chartName),
+					"resource_url": fmt.Sprintf("oci://%s/helm/%s", h.RegistryInternalAddr, chartName),
 				},
 			},
 			"repository": map[string]interface{}{
