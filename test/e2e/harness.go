@@ -187,13 +187,7 @@ func newHarnessInternal() *Harness {
 	}
 	h.addCleanup(managerCleanup)
 
-	// Step 7: Register customer
-	logf(h.T, "Registering customer...")
-	if err := h.registerCustomer(ctx); err != nil {
-		fatalf(h.T, "register customer: %v", err)
-	}
-
-	// Step 8: Deploy operator
+	// Step 7: Deploy operator first (need its ClusterIP for customer registration)
 	logf(h.T, "Deploying operator...")
 	operatorCleanup, err := deployOperator(ctx, h.K8sClient, h.ClusterName, h.CustomerID,
 		h.ManagerGRPC, h.caFile, h.certFile, h.keyFile)
@@ -202,7 +196,28 @@ func newHarnessInternal() *Harness {
 	}
 	h.addCleanup(operatorCleanup)
 
+	// Step 8: Register customer using operator ClusterIP (avoids TLS SNI issues)
+	logf(h.T, "Registering customer...")
+	opNS := fmt.Sprintf("release-operator-%s", h.CustomerID)
+	opSvc := fmt.Sprintf("release-operator-%s", h.CustomerID)
+	opIP, err := getServiceClusterIP(ctx, h.K8sClient, opNS, opSvc)
+	if err != nil {
+		fatalf(h.T, "get operator ClusterIP: %v", err)
+	}
+	if err := h.registerCustomer(ctx, opIP); err != nil {
+		fatalf(h.T, "register customer: %v", err)
+	}
+
 	return h
+}
+
+// getServiceClusterIP returns the ClusterIP of a Kubernetes service.
+func getServiceClusterIP(ctx context.Context, clientset kubernetes.Interface, namespace, name string) (string, error) {
+	svc, err := clientset.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("get service %s/%s: %w", namespace, name, err)
+	}
+	return svc.Spec.ClusterIP, nil
 }
 
 // Close runs all cleanup functions in reverse order.
@@ -236,10 +251,10 @@ func (h *Harness) addCleanup(fn func()) {
 	h.cleanupFns = append(h.cleanupFns, fn)
 }
 
-// registerCustomer registers the test customer with the manager.
-func (h *Harness) registerCustomer(ctx context.Context) error {
+// registerCustomer registers the test customer using the given endpoint.
+func (h *Harness) registerCustomer(ctx context.Context, endpoint string) error {
 	return h.RegisterCustomer(ctx, h.CustomerID, "E2E Test Customer",
-		fmt.Sprintf("release-operator-%s.release-operator-%s:8443", h.CustomerID, h.CustomerID),
+		fmt.Sprintf("%s:8443", endpoint),
 		h.Fingerprint, true)
 }
 
