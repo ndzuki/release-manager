@@ -103,7 +103,12 @@
       "Bash(sed -i 's|fmt.Sprintf\\(\"%s:8443\", endpoint\\)|fmt.Sprintf\\(\"release-operator-%s.release-operator-%s:8443\", h.CustomerID, h.CustomerID\\)|' test/e2e/harness.go)",
       "Bash(KEEP_CLUSTER=1 go test *)",
       "Bash(KUBECONFIG=/tmp/kc kubectl get pods -A)",
-      "Bash(KUBECONFIG=/tmp/kc kubectl get configmap -n release-manager release-manager-config -o yaml)"
+      "Bash(KUBECONFIG=/tmp/kc kubectl get configmap -n release-manager release-manager-config -o yaml)",
+      "Bash(KUBECONFIG=/tmp/kc kubectl get svc -A)",
+      "Bash(KUBECONFIG=/tmp/kc kubectl exec -n release-manager deploy/release-manager -- nslookup release-operator-localhost001.release-operator-localhost001.svc.cluster.local)",
+      "Bash(KUBECONFIG=/tmp/kc kubectl exec -n release-manager deploy/release-manager -- nslookup 10.96.64.180)",
+      "Bash(sed -i 's|release-operator-%s.release-operator-%s:8443|release-operator-%s.release-operator-%s.svc.cluster.local:8443|g' test/e2e/harness.go)",
+      "Bash(sed -i 's|fmt.Sprintf\\(\"release-operator-%s.release-operator-%s:8443\"|fmt.Sprintf\\(\"release-operator-%s.release-operator-%s.svc.cluster.local:8443\"|g' test/e2e/scenario_multi_cust_test.go)"
     ]
   }
 }

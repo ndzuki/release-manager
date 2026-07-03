@@ -254,7 +254,7 @@ func (h *Harness) addCleanup(fn func()) {
 // registerCustomer registers the test customer using the given endpoint.
 func (h *Harness) registerCustomer(ctx context.Context) error {
 	return h.RegisterCustomer(ctx, h.CustomerID, "E2E Test Customer",
-		fmt.Sprintf("release-operator-%s.release-operator-%s:8443", h.CustomerID, h.CustomerID),
+		fmt.Sprintf("release-operator-%s.release-operator-%s.svc.cluster.local:8443", h.CustomerID, h.CustomerID),
 		h.Fingerprint, true)
 }
 

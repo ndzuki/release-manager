@@ -25,7 +25,7 @@ func TestMultiCustomerConcurrentForward(t *testing.T) {
 		t.Logf("Deploying operator for %s...", custID)
 		// Register customer
 		require.NoError(t, h.RegisterCustomer(ctx, custID, custID,
-			fmt.Sprintf("release-operator-%s.release-operator-%s:8443", custID, custID),
+			fmt.Sprintf("release-operator-%s.release-operator-%s.svc.cluster.local:8443", custID, custID),
 			h.Fingerprint, true))
 
 		cleanup, err := deployOperator(ctx, h.K8sClient, h.ClusterName, custID,
