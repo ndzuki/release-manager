@@ -1,23 +1,16 @@
-# Build stage
-FROM golang:1.22-alpine AS builder
-
-RUN apk add --no-cache git ca-certificates
-
-WORKDIR /build
-
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY . .
-# CGO enabled for SQLite (modernc.org/sqlite is pure Go, but enabling for fallback)
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /release-manager ./cmd/release-manager/
-
-# Runtime stage
+# =============================================================================
+# release-manager Docker 镜像
+#
+# 本地开发: 先用 go build 编译二进制，再 COPY 进镜像（避免 Docker build 内 Go 版本不匹配）
+# 生产 CI:  可改为多阶段构建，使用与 go.mod 匹配的 golang 镜像
+# =============================================================================
 FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates
 
-COPY --from=builder /release-manager /usr/local/bin/release-manager
+# 本地编译的二进制文件
+# 构建方式: CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/release-manager ./cmd/release-manager/
+COPY bin/release-manager /usr/local/bin/release-manager
 
 RUN mkdir -p /data && adduser -D -s /bin/sh -h /data release-manager
 USER release-manager
