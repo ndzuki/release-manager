@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"crypto/tls"
 	"net"
 	"net/http"
 	"time"
@@ -49,13 +50,20 @@ func waitForPodReady(ctx context.Context, clientset kubernetes.Interface, namesp
 }
 
 // waitForHTTPReady polls url until it returns 200 OK.
+// Uses an insecure HTTP client that skips TLS verification (needed for
+// self-signed certs on the local registry).
 func waitForHTTPReady(ctx context.Context, url string, timeout time.Duration) error {
+	insecureClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
 	return retryUntil(ctx, 1*time.Second, timeout, func() (bool, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return false, err
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := insecureClient.Do(req)
 		if err != nil {
 			return false, nil // not ready yet
 		}

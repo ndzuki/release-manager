@@ -6,7 +6,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,7 +24,8 @@ const (
 	registryAddr      = "localhost:30500"
 )
 
-// deployRegistry deploys a Docker registry to the kind cluster.
+// deployRegistry deploys a Docker registry to the kind cluster with HTTPS
+// using a self-signed certificate (operator's Helm client defaults to HTTPS).
 //
 // Two modes:
 //   - "proxy": registry acts as pull-through cache to Harbor (requires harbor creds)
@@ -34,20 +37,53 @@ func deployRegistry(ctx context.Context, clientset kubernetes.Interface, cluster
 	// Pre-load registry image into kind (kind nodes may not have internet access)
 	pullCmd := exec.CommandContext(ctx, "docker", "pull", registryImage)
 	if out, err := pullCmd.CombinedOutput(); err != nil {
-		// docker pull failed — image might already exist locally, continue
-		_ = out
+		_ = out // image might already exist locally
 	}
 	loadCmd := exec.CommandContext(ctx, "kind", "load", "docker-image", registryImage, "--name", clusterName)
 	if out, err := loadCmd.CombinedOutput(); err != nil {
 		return "", nil, fmt.Errorf("kind load docker-image %s: %w\n%s", registryImage, err, string(out))
 	}
+
 	// Create namespace
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: registryNamespace}}
 	if _, err := clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil {
 		log.Printf("warning: create namespace %s: %v", registryNamespace, err)
 	}
 
-	// Build YAML manifest based on mode
+	// Generate self-signed cert for HTTPS. The operator's Helm client defaults
+	// to HTTPS; a plain HTTP registry would cause "http: server gave HTTP
+	// response to HTTPS client" errors during helm pull.
+	certDir, err := os.MkdirTemp("", "registry-certs-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(certDir)
+	certKey := filepath.Join(certDir, "tls.key")
+	certCrt := filepath.Join(certDir, "tls.crt")
+	genCert := exec.CommandContext(ctx, "openssl", "req", "-x509", "-newkey", "rsa:2048",
+		"-keyout", certKey, "-out", certCrt, "-days", "365", "-nodes",
+		"-subj", "/CN=registry.registry",
+		"-addext", "subjectAltName=DNS:registry.registry,DNS:localhost")
+	if out, err := genCert.CombinedOutput(); err != nil {
+		return "", nil, fmt.Errorf("generate registry cert: %w\n%s", err, string(out))
+	}
+
+	// Create TLS secret
+	createCmd := exec.CommandContext(ctx, "kubectl", "-n", registryNamespace,
+		"create", "secret", "tls", "registry-tls",
+		"--cert="+certCrt, "--key="+certKey,
+		"--dry-run=client", "-o", "yaml")
+	secretYAML, err := createCmd.CombinedOutput()
+	if err != nil {
+		return "", nil, fmt.Errorf("create registry TLS secret YAML: %w\n%s", err, string(secretYAML))
+	}
+	applyCmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
+	applyCmd.Stdin = strings.NewReader(string(secretYAML))
+	if out, err := applyCmd.CombinedOutput(); err != nil {
+		return "", nil, fmt.Errorf("kubectl apply registry TLS secret: %w\n%s", err, string(out))
+	}
+
+	// Build registry config YAML
 	configYaml := ""
 	if mode == "proxy" && harborURL != "" {
 		configYaml = fmt.Sprintf(`version: 0.1
@@ -88,13 +124,23 @@ spec:
         env:
         - name: REGISTRY_HTTP_ADDR
           value: "0.0.0.0:5000"
+        - name: REGISTRY_HTTP_TLS_CERTIFICATE
+          value: /certs/tls.crt
+        - name: REGISTRY_HTTP_TLS_KEY
+          value: /certs/tls.key
         volumeMounts:
         - name: config
           mountPath: /etc/docker/registry
+        - name: certs
+          mountPath: /certs
+          readOnly: true
       volumes:
       - name: config
         configMap:
           name: registry-config
+      - name: certs
+        secret:
+          secretName: registry-tls
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -120,7 +166,7 @@ spec:
     nodePort: %d
 `, registryNamespace, registryImage, registryNamespace, indent(configYaml, 4), registryNamespace, registryNodePort)
 
-	// Apply via kubectl (simplest approach for arbitrary YAML)
+	// Apply via kubectl
 	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -132,9 +178,9 @@ spec:
 		return "", nil, fmt.Errorf("wait for registry pod: %w", err)
 	}
 
-	// Verify registry HTTP endpoint
-	if err := waitForHTTPReady(ctx, fmt.Sprintf("http://%s/v2/", registryAddr), 30*time.Second); err != nil {
-		return "", nil, fmt.Errorf("wait for registry HTTP: %w", err)
+	// Verify registry HTTPS endpoint (use --insecure for self-signed cert)
+	if err := waitForHTTPReady(ctx, fmt.Sprintf("https://%s/v2/", registryAddr), 30*time.Second); err != nil {
+		return "", nil, fmt.Errorf("wait for registry HTTPS: %w", err)
 	}
 
 	cleanup := func() {

@@ -151,7 +151,7 @@ func newHarnessInternal() *Harness {
 	// Step 4: Deploy registry
 	logf(h.T, "Deploying registry...")
 	h.RegistryAddr, _, err = deployRegistry(ctx, h.K8sClient, h.ClusterName, registryMode, harborURL, harborUser, harborPass)
-	h.RegistryInternalAddr = "registry.registry:5000" // cluster-internal service address
+	h.RegistryInternalAddr = "registry.registry:5000" // cluster-internal (HTTPS with self-signed cert)
 	if err != nil {
 		fatalf(h.T, "deploy registry: %v", err)
 	}
