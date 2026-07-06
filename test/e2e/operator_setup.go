@@ -101,6 +101,15 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 	if out, err := waitRollout.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("wait for operator rollout after env patch: %w\n%s", err, string(out))
 	}
+	// Mount emptyDir at /tmp so Helm can write cache files (readOnlyRootFilesystem is set).
+	_ = kubectl("-n", ns, "patch",
+		fmt.Sprintf("deployment/release-operator-%s", customerID),
+		"--type=json", "-p",
+		`[{"op":"add","path":"/spec/template/spec/volumes/-","value":{"name":"tmpdir","emptyDir":{}}},{"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{"name":"tmpdir","mountPath":"/tmp"}}]`)
+	// Wait for rollout
+	waitVol := exec.CommandContext(ctx, "kubectl", "-n", ns, "rollout", "status",
+		fmt.Sprintf("deployment/release-operator-%s", customerID), "--timeout=2m")
+	_ = waitVol.Run()
 	// Give gRPC server a moment to fully initialize after restart.
 	time.Sleep(5 * time.Second)
 
