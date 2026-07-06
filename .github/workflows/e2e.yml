@@ -20,7 +20,7 @@ jobs:
           HARBOR_ROBOT_TOKEN: ${{ secrets.HARBOR_ROBOT_TOKEN }}
       - name: Export kind logs (on failure)
         if: failure()
-        run: kind export logs /tmp/kind-logs
+        run: kind export logs /tmp/kind-logs --name release-e2e-test || true
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

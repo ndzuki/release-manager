@@ -16,7 +16,6 @@ coverage.html
 vendor/
 
 # Proto generated files
-api/gen/
 
 # IDE
 .idea/
