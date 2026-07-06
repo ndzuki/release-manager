@@ -366,7 +366,12 @@ func (h *Harness) GetReleases(ctx context.Context, customerID string) ([]Release
 	defer resp.Body.Close()
 
 	var releases []ReleaseRecord
-	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("read releases body: %w", readErr)
+	}
+	if err := json.Unmarshal(body, &releases); err != nil {
+		fmt.Printf("[GetReleases] decode error: %v, status=%d, body=%s\n", err, resp.StatusCode, string(body))
 		return nil, fmt.Errorf("decode releases: %w", err)
 	}
 
