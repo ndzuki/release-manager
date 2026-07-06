@@ -44,6 +44,16 @@ func deployRegistry(ctx context.Context, clientset kubernetes.Interface, cluster
 		return "", nil, fmt.Errorf("kind load docker-image %s: %w\n%s", registryImage, err, string(out))
 	}
 
+	// Pre-load nginx:alpine used by the test chart (kind nodes have no internet).
+	dockerPullCmd := exec.CommandContext(ctx, "docker", "pull", "nginx:alpine")
+	if out, err := dockerPullCmd.CombinedOutput(); err != nil {
+		_ = out // image might already exist locally
+	}
+	kindLoadCmd := exec.CommandContext(ctx, "kind", "load", "docker-image", "nginx:alpine", "--name", clusterName)
+	if out, err := kindLoadCmd.CombinedOutput(); err != nil {
+		log.Printf("warning: kind load nginx:alpine: %v\n%s", err, string(out))
+	}
+
 	// Create namespace
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: registryNamespace}}
 	if _, err := clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil {
