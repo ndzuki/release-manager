@@ -136,7 +136,8 @@
       "Bash(sed -i 's|CompletedAt: &now,|CompletedAt: completedAt,|' internal/manager/server.go)",
       "Bash(sed -i 's|COALESCE\\(completed_at, datetime\\(0\\)\\)|completed_at|' internal/manager/store.go)",
       "Bash(sed -i 's|&r.CompletedAt\\)|&r.CompletedAt\\); if err == nil \\\\&\\\\& r.CompletedAt.IsZero\\(\\) { r.CompletedAt = time.Unix\\(0, 0\\) }|' internal/manager/store.go)",
-      "Bash(sed -i '/&r.CompletedAt/{ *)"
+      "Bash(sed -i '/&r.CompletedAt/{ *)",
+      "Bash(curl -sk \"http://localhost:30080/api/v1/releases/\" -H \"X-API-Key: e2e-test-key\")"
     ]
   }
 }
