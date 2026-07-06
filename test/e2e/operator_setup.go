@@ -80,6 +80,7 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 		"--set", fmt.Sprintf("rbac.managedNamespaces[1]=%s", ns),
 		"--set", fmt.Sprintf("serviceAccount.name=release-operator-%s", customerID),
 		"--set", "networkPolicy.enabled=false",
+		"--set", "helm.upgradeTimeout=30s",
 		"--timeout", "2m",
 	)
 	if out, err := helmCmd.CombinedOutput(); err != nil {

@@ -14,7 +14,6 @@ import (
 )
 
 func TestOperatorUnreachable(t *testing.T) {
-	t.Skip("forwarder doesn't create failed release records for unreachable operators — fix manager first")
 	h := SetupTest(t)
 	defer h.DumpState()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -78,7 +77,6 @@ func TestCustomerDisabled(t *testing.T) {
 }
 
 func TestHelmUpgradeFailure(t *testing.T) {
-	t.Skip("Helm --wait timeout is 10m — invalid image pod never fails within test timeout")
 	h := SetupTest(t)
 	defer h.DumpState()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

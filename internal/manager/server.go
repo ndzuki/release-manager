@@ -131,6 +131,25 @@ func (s *Server) onReleaseNotification(notification ReleaseNotification) error {
 		return fmt.Errorf("forward to customers: %w", err)
 	}
 
+	// Create failed release records for customers the forwarder couldn't reach.
+	for _, r := range results {
+		if !r.Success {
+			record := ReleaseRecord{
+				RequestID:    GenerateRequestID(),
+				CustomerID:   r.CustomerID,
+				ChartName:    notification.ChartName,
+				ChartVersion: notification.ChartVersion,
+				Status:       "failed",
+				ErrorMessage: r.ErrorMessage,
+				StartedAt:    notification.OccurredAt,
+				CompletedAt:  time.Now(),
+			}
+			if err := s.store.CreateReleaseRecord(record); err != nil {
+				s.log.Error(err, "failed to create failed release record", "customer", r.CustomerID)
+			}
+		}
+	}
+
 	// 钉钉通知为尽力而为，不因钉钉失败而阻塞主流程
 	if s.cfg.DingTalk.Enabled {
 		if err := s.dingtalk.SendReleaseNotification(
