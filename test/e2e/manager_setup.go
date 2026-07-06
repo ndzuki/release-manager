@@ -106,8 +106,7 @@ data:
       wait: true
       create_namespace: true
 %s    store:
-      type: sqlite
-      dsn: /data/release-manager.db
+      type: memory
     dev_mode: true
     api_key: e2e-test-key
 `, ns, hmacKey, dingtalkSection)
