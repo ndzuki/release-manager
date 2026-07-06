@@ -41,7 +41,9 @@ func TestHappyPath_InstallAndUpgrade(t *testing.T) {
 
 	// Verify Pod is running
 	t.Log("Verifying Pod is ready...")
-	err = waitForPodReady(ctx, h.K8sClient, "default", "app=test-chart", 2*time.Minute)
+	// Helm deploys to the operator's namespace (in-cluster kubeconfig context).
+	opNS := fmt.Sprintf("release-operator-%s", h.CustomerID)
+	err = waitForPodReady(ctx, h.K8sClient, opNS, "app=test-chart", 2*time.Minute)
 	require.NoError(t, err, "wait for pod ready")
 
 	// Verify release record
