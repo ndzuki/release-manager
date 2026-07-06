@@ -201,6 +201,9 @@ func (s *Server) serveGRPC(ctx context.Context) error {
 	s.grpcServer = grpc.NewServer(opts...)
 	svc := &customerManagementServer{store: s.store, log: s.log}
 	releasev1.RegisterCustomerManagementServiceServer(s.grpcServer, svc)
+	// Register StatusReportService so operators can report back release results.
+	statusSvc := &statusReportServer{store: s.store, log: s.log}
+	releasev1.RegisterStatusReportServiceServer(s.grpcServer, statusSvc)
 
 	lis, err := net.Listen("tcp", s.cfg.Server.GRPCAddr)
 	if err != nil {
@@ -541,4 +544,50 @@ func withLogging(log logr.Logger, next http.Handler) http.Handler {
 			"duration", time.Since(start).String(),
 		)
 	})
+}
+
+// =============================================================================
+// gRPC StatusReportService — 接收 operator 上报的 release 结果
+// =============================================================================
+
+type statusReportServer struct {
+	releasev1.UnimplementedStatusReportServiceServer
+	store Store
+	log   logr.Logger
+}
+
+// ReportStatus records a release status report from an operator.
+func (s *statusReportServer) ReportStatus(ctx context.Context, req *releasev1.ReportStatusRequest) (*releasev1.ReportStatusResponse, error) {
+	s.log.Info("received release status report",
+		"customer_id", req.CustomerId,
+		"request_id", req.RequestId,
+		"chart", req.ChartName,
+		"version", req.ChartVersion,
+		"status", req.Status,
+	)
+
+	record := ReleaseRecord{
+		RequestID:       req.RequestId,
+		CustomerID:      req.CustomerId,
+		ChartName:       req.ChartName,
+		ChartVersion:    req.ChartVersion,
+		Status:          req.Status.String(),
+		ErrorMessage:    req.ErrorMessage,
+		DurationSecs: req.DurationSeconds,
+		StartedAt:    time.Unix(req.StartedAt, 0),
+		CompletedAt:  time.Now(),
+	}
+
+	if err := s.store.CreateReleaseRecord(record); err != nil {
+		s.log.Error(err, "failed to create release record")
+		return &releasev1.ReportStatusResponse{
+			Acknowledged: false,
+			Message:      err.Error(),
+		}, nil
+	}
+
+	return &releasev1.ReportStatusResponse{
+		Acknowledged: true,
+		Message:      "status recorded",
+	}, nil
 }

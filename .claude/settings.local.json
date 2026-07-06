@@ -115,7 +115,9 @@
       "Bash(KUBECONFIG=/tmp/kc2 kubectl get configmap -n release-manager release-manager-config -o jsonpath='{.data.config\\\\.yaml}')",
       "Bash(openssl req *)",
       "Bash(KUBECONFIG=/tmp/kc kubectl get secret -n release-operator-localhost001 release-operator-tls -o jsonpath='{.data.tls\\\\.crt}')",
-      "Bash(openssl genrsa *)"
+      "Bash(openssl genrsa *)",
+      "Bash(sed -i 's|DurationSeconds: int\\(req.DurationSeconds\\),|DurationSecs: req.DurationSeconds,|' internal/manager/server.go)",
+      "Bash(sed -i 's|CreatedAt:       time.Now\\(\\),|StartedAt:    time.Unix\\(req.StartedAt, 0\\),\\\\n\\\\t\\\\tCompletedAt:  time.Now\\(\\),|' internal/manager/server.go)"
     ]
   }
 }
