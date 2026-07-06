@@ -117,7 +117,15 @@
       "Bash(KUBECONFIG=/tmp/kc kubectl get secret -n release-operator-localhost001 release-operator-tls -o jsonpath='{.data.tls\\\\.crt}')",
       "Bash(openssl genrsa *)",
       "Bash(sed -i 's|DurationSeconds: int\\(req.DurationSeconds\\),|DurationSecs: req.DurationSeconds,|' internal/manager/server.go)",
-      "Bash(sed -i 's|CreatedAt:       time.Now\\(\\),|StartedAt:    time.Unix\\(req.StartedAt, 0\\),\\\\n\\\\t\\\\tCompletedAt:  time.Now\\(\\),|' internal/manager/server.go)"
+      "Bash(sed -i 's|CreatedAt:       time.Now\\(\\),|StartedAt:    time.Unix\\(req.StartedAt, 0\\),\\\\n\\\\t\\\\tCompletedAt:  time.Now\\(\\),|' internal/manager/server.go)",
+      "Bash(curl -sk \"http://localhost:30080/api/v1/releases/?customer_id=localhost001\" -H \"X-API-Key: e2e-test-key\")",
+      "Bash(curl -sk \"http://localhost:30080/api/v1/releases\" -H \"X-API-Key: e2e-test-key\")",
+      "Bash(KUBECONFIG=/tmp/kc kubectl port-forward -n release-manager svc/release-manager 38080:8080)",
+      "Bash(curl -sk \"http://localhost:38080/api/v1/releases/\" -H \"X-API-Key: e2e-test-key\")",
+      "Bash(curl -sk \"http://localhost:38080/api/v1/releases\" -H \"X-API-Key: e2e-test-key\")",
+      "Bash(kill %1)",
+      "Bash(sed -i 's|/api/v1/releases?|/api/v1/releases/?|' test/e2e/harness.go)",
+      "Bash(sed -i 's|/api/v1/releases\"|/api/v1/releases/\"|' test/e2e/harness.go)"
     ]
   }
 }

@@ -513,7 +513,7 @@ func (s *SQLiteStore) UpdateReleaseRecord(requestID, customerID, status, errMsg 
 }
 
 func (s *SQLiteStore) ListReleaseRecords(requestID string) ([]ReleaseRecord, error) {
-	query := "SELECT id, request_id, customer_id, chart_name, chart_version, status, COALESCE(error_message,''), duration_secs, started_at, COALESCE(completed_at, datetime(0)) FROM release_records"
+	query := "SELECT id, request_id, customer_id, chart_name, chart_version, status, COALESCE(error_message,''), duration_secs, started_at, COALESCE(completed_at, 0) FROM release_records"
 	args := []any{}
 	if requestID != "" {
 		query += " WHERE request_id = ?"

@@ -351,7 +351,7 @@ type ReleaseRecord struct {
 
 // GetReleases fetches releases from the manager API for a customer.
 func (h *Harness) GetReleases(ctx context.Context, customerID string) ([]ReleaseRecord, error) {
-	url := fmt.Sprintf("http://%s/api/v1/releases", h.ManagerHTTP)
+	url := fmt.Sprintf("http://%s/api/v1/releases/", h.ManagerHTTP)
 	if customerID != "" {
 		url += "?customer_id=" + customerID
 	}
