@@ -501,6 +501,7 @@ func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requestID := strings.TrimPrefix(r.URL.Path, "/api/v1/releases/")
+	customerID := r.URL.Query().Get("customer_id")
 	records, err := s.store.ListReleaseRecords(requestID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -508,6 +509,15 @@ func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
 	}
 	if records == nil {
 		records = []ReleaseRecord{}
+	}
+	if customerID != "" {
+		var filtered []ReleaseRecord
+		for _, rec := range records {
+			if rec.CustomerID == customerID {
+				filtered = append(filtered, rec)
+			}
+		}
+		records = filtered
 	}
 	writeJSON(w, http.StatusOK, records)
 }

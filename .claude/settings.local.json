@@ -145,7 +145,9 @@
       "Bash(sed -i '/^func TestDingTalkNotification/a\\\\\\\\tt.Skip\\(\"manager restart race — fix in follow-up\"\\)' test/e2e/scenario_dingtalk_test.go)",
       "Bash(sed -i '/^func TestOperatorUnreachable/a\\\\\\\\tt.Skip\\(\"blocks forwarder for other tests — run separately\"\\)' test/e2e/scenario_failures_test.go)",
       "Bash(sed -i '/^func TestHelmUpgradeFailure/a\\\\\\\\tt.Skip\\(\"needs debug — fix in follow-up\"\\)' test/e2e/scenario_failures_test.go)",
-      "Bash(sed -i '/^func TestMultiCustomerConcurrentForward/a\\\\\\\\tt.Skip\\(\"chart conflict between customers — fix in follow-up\"\\)' test/e2e/scenario_multi_cust_test.go)"
+      "Bash(sed -i '/^func TestMultiCustomerConcurrentForward/a\\\\\\\\tt.Skip\\(\"chart conflict between customers — fix in follow-up\"\\)' test/e2e/scenario_multi_cust_test.go)",
+      "Bash(sed -i '/requestID := strings.TrimPrefix/a\\\\\\\\tcustomerID := r.URL.Query\\(\\).Get\\(\"customer_id\"\\)' internal/manager/server.go)",
+      "Bash(sed -i '/writeJSON\\(w, http.StatusOK, records\\)/i\\\\\\\\tif customerID != \"\" {\\\\n\\\\t\\\\tvar filtered []ReleaseRecord\\\\n\\\\t\\\\tfor _, rec := range records {\\\\n\\\\t\\\\t\\\\tif rec.CustomerID == customerID {\\\\n\\\\t\\\\t\\\\t\\\\tfiltered = append\\(filtered, rec\\)\\\\n\\\\t\\\\t\\\\t}\\\\n\\\\t\\\\t}\\\\n\\\\t\\\\trecords = filtered\\\\n\\\\t}' internal/manager/server.go)"
     ]
   }
 }
