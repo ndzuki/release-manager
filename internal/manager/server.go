@@ -315,7 +315,7 @@ func (s *Server) routeREST(w http.ResponseWriter, r *http.Request) {
 		s.handleCustomers(w, r)
 	case strings.HasPrefix(path, "/api/v1/customers/"):
 		s.handleCustomer(w, r)
-	case strings.HasPrefix(path, "/api/v1/releases/"):
+	case path == "/api/v1/releases", strings.HasPrefix(path, "/api/v1/releases/"):
 		s.handleReleases(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
