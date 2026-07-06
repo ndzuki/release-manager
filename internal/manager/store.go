@@ -530,11 +530,14 @@ func (s *SQLiteStore) ListReleaseRecords(requestID string) ([]ReleaseRecord, err
 	var records []ReleaseRecord
 	for rows.Next() {
 		var r ReleaseRecord
+		var completedAt sql.NullTime
 		if err := rows.Scan(&r.ID, &r.RequestID, &r.CustomerID, &r.ChartName, &r.ChartVersion,
-			&r.Status, &r.ErrorMessage, &r.DurationSecs, &r.StartedAt, &r.CompletedAt); err != nil {
+			&r.Status, &r.ErrorMessage, &r.DurationSecs, &r.StartedAt, &completedAt); err != nil {
 			return nil, err
 		}
-		records = append(records, r)
+		if completedAt.Valid {
+			r.CompletedAt = completedAt.Time
+		}
 	}
 	return records, rows.Err()
 }

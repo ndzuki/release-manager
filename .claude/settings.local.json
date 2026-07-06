@@ -125,7 +125,18 @@
       "Bash(curl -sk \"http://localhost:38080/api/v1/releases\" -H \"X-API-Key: e2e-test-key\")",
       "Bash(kill %1)",
       "Bash(sed -i 's|/api/v1/releases?|/api/v1/releases/?|' test/e2e/harness.go)",
-      "Bash(sed -i 's|/api/v1/releases\"|/api/v1/releases/\"|' test/e2e/harness.go)"
+      "Bash(sed -i 's|/api/v1/releases\"|/api/v1/releases/\"|' test/e2e/harness.go)",
+      "Bash(sed -i 's|COALESCE\\(completed_at, 0\\)|completed_at|' internal/manager/store.go)",
+      "Bash(sed -i 's|CompletedAt   time.Time|CompletedAt   *time.Time|' internal/manager/store.go)",
+      "Bash(sed -i 's|r.CompletedAt = completedAt|r.CompletedAt = \\\\&completedAt|' internal/manager/store.go)",
+      "Bash(sed -i 's|completedAt time.Time|completedAt *time.Time|' internal/manager/store.go)",
+      "Bash(sed -i 's|r.CompletedAt = &completedAt|r.CompletedAt = completedAt|' internal/manager/store.go)",
+      "Bash(sed -i 's|func.*PostgreSQLStore.*UpdateReleaseRecord.*completedAt time.Time|// placeholder|' internal/manager/pgstore.go)",
+      "Bash(sed -i 's|now := time.Now\\(\\)|now := time.Now\\(\\); completedAt := \\\\&now|' internal/manager/server.go)",
+      "Bash(sed -i 's|CompletedAt: &now,|CompletedAt: completedAt,|' internal/manager/server.go)",
+      "Bash(sed -i 's|COALESCE\\(completed_at, datetime\\(0\\)\\)|completed_at|' internal/manager/store.go)",
+      "Bash(sed -i 's|&r.CompletedAt\\)|&r.CompletedAt\\); if err == nil \\\\&\\\\& r.CompletedAt.IsZero\\(\\) { r.CompletedAt = time.Unix\\(0, 0\\) }|' internal/manager/store.go)",
+      "Bash(sed -i '/&r.CompletedAt/{ *)"
     ]
   }
 }
