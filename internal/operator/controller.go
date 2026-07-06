@@ -4,6 +4,7 @@ package operator
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -202,7 +203,12 @@ func (c *Controller) processRelease(ctx context.Context, req ReleaseRequest) Rel
 
 	releaseName := req.ReleaseName
 	if releaseName == "" {
+		// Strip repository prefix (e.g. "helm/test-chart" -> "test-chart")
+		// since Helm release names must not contain "/".
 		releaseName = req.ChartName
+		if idx := strings.LastIndex(releaseName, "/"); idx >= 0 {
+			releaseName = releaseName[idx+1:]
+		}
 	}
 
 	timeout := req.Timeout
