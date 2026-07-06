@@ -341,12 +341,12 @@ func (h *Harness) TriggerWebhook(ctx context.Context, chartName, version string)
 
 // ReleaseRecord represents a release from the manager API.
 type ReleaseRecord struct {
-	ID         string `json:"id"`
-	CustomerID string `json:"customer_id"`
-	ChartName  string `json:"chart_name"`
+	ID           string `json:"id"`
+	CustomerID   string `json:"customer_id"`
+	ChartName    string `json:"chart_name"`
 	ChartVersion string `json:"chart_version"`
-	Status     string `json:"status"`
-	Error      string `json:"error,omitempty"`
+	Status       string `json:"status"`
+	ErrorMessage string `json:"error_message,omitempty"`
 }
 
 // GetReleases fetches releases from the manager API for a customer.
@@ -414,7 +414,7 @@ func (h *Harness) DumpState() {
 	releases, _ := h.GetReleases(ctx, "")
 	for _, r := range releases {
 		h.T.Logf("  Release/%s: chart=%s version=%s status=%s error=%s",
-			r.CustomerID, r.ChartName, r.ChartVersion, r.Status, r.Error)
+			r.CustomerID, r.ChartName, r.ChartVersion, r.Status, r.ErrorMessage)
 	}
 
 	h.T.Log("=== END STATE DUMP ===")

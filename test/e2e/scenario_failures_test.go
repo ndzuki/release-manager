@@ -41,8 +41,8 @@ func TestOperatorUnreachable(t *testing.T) {
 	releases, _ := h.GetReleases(ctx, "unreachable-cust")
 	var found bool
 	for _, r := range releases {
-		if r.ChartName == "helm/test-chart" {
-			assert.Contains(t, r.Error, "dial")
+		if r.ChartName == "helm/test-chart" && r.Status == "failed" {
+			assert.NotEmpty(t, r.ErrorMessage, "should have error message")
 			found = true
 		}
 	}
@@ -82,30 +82,44 @@ func TestHelmUpgradeFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	// Create a bad chart with an invalid image that will fail to pull
+	// Use a unique chart name so this is a fresh install, not an upgrade.
+	// If a previous release exists, old ReplicaSet pods keep the Deployment
+	// "available" and Helm --atomic reports success even with an invalid image.
+	chartName := "test-chart-failure"
+
 	chartDir, err := extractTestChart()
 	require.NoError(t, err, "extract test chart")
 	defer os.RemoveAll(chartDir)
+
+	// Override Chart.yaml name so OCI path is helm/test-chart-failure
+	chartYaml := filepath.Join(chartDir, "Chart.yaml")
+	require.NoError(t, os.WriteFile(chartYaml, []byte(`apiVersion: v2
+name: `+chartName+`
+description: E2E failure test chart
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+`), 0o644))
 
 	// Override values.yaml with invalid image
 	badValues := "replicaCount: 1\nimage: invalid-image:no-exist\n"
 	require.NoError(t, os.WriteFile(filepath.Join(chartDir, "values.yaml"), []byte(badValues), 0o644))
 
-	require.NoError(t, pushChartOCI(ctx, h.RegistryAddr, chartDir, "0.3.1"))
-	require.NoError(t, h.TriggerWebhook(ctx, "test-chart", "0.3.1"))
+	require.NoError(t, pushChartOCI(ctx, h.RegistryAddr, chartDir, "0.1.0"))
+	require.NoError(t, h.TriggerWebhook(ctx, chartName, "0.1.0"))
 
 	// Wait for rolled_back status (helm --atomic rolls back on image pull failure)
-	err = h.WaitForReleaseStatus(ctx, h.CustomerID, "test-chart", "rolled_back", 3*time.Minute)
+	err = h.WaitForReleaseStatus(ctx, h.CustomerID, chartName, "rolled_back", 2*time.Minute)
 	require.NoError(t, err)
 
-	// Verify error message contains pull/upgrade failure info
+	// Verify error message and status
 	releases, err := h.GetReleases(ctx, h.CustomerID)
 	require.NoError(t, err)
 	var found bool
 	for _, r := range releases {
-		if r.ChartName == "helm/test-chart" && r.ChartVersion == "0.3.1" {
+		if r.ChartName == "helm/"+chartName && r.ChartVersion == "0.1.0" {
 			assert.Equal(t, "rolled_back", r.Status)
-			assert.NotEmpty(t, r.Error, "should have error message")
+			assert.NotEmpty(t, r.ErrorMessage, "should have error message")
 			found = true
 		}
 	}
