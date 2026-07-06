@@ -110,7 +110,9 @@
       "Bash(sed -i 's|release-operator-%s.release-operator-%s:8443|release-operator-%s.release-operator-%s.svc.cluster.local:8443|g' test/e2e/harness.go)",
       "Bash(sed -i 's|fmt.Sprintf\\(\"release-operator-%s.release-operator-%s:8443\"|fmt.Sprintf\\(\"release-operator-%s.release-operator-%s.svc.cluster.local:8443\"|g' test/e2e/scenario_multi_cust_test.go)",
       "Bash(KUBECONFIG=/tmp/kc kubectl get pods -n release-operator-localhost001 --no-headers)",
-      "Bash(openssl x509 *)"
+      "Bash(openssl x509 *)",
+      "Bash(KUBECONFIG=/tmp/kc kubectl get configmap -n release-manager release-manager-config -o jsonpath='{.data.config\\\\.yaml}')",
+      "Bash(KUBECONFIG=/tmp/kc2 kubectl get configmap -n release-manager release-manager-config -o jsonpath='{.data.config\\\\.yaml}')"
     ]
   }
 }

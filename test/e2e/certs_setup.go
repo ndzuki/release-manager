@@ -67,7 +67,8 @@ func generateCerts(ctx context.Context, customerID string) (caFile, certFile, ke
 	// - Service DNS with svc suffix: release-operator-{id}.release-operator-{id}.svc
 	// - localhost for port-forward scenarios
 	// - CN (customerID) as fallback
-	sanContent := fmt.Sprintf("subjectAltName=DNS:release-operator-%[1]s.release-operator-%[1]s,DNS:release-operator-%[1]s,DNS:release-operator-%[1]s.release-operator-%[1]s.svc,DNS:release-operator-%[1]s.release-operator-%[1]s.svc.cluster.local,DNS:localhost,DNS:%[1]s", customerID)
+	// Add SANs + key usage extensions required by Go TLS for server/client auth.
+	sanContent := fmt.Sprintf("subjectAltName=DNS:release-operator-%[1]s.release-operator-%[1]s,DNS:release-operator-%[1]s,DNS:release-operator-%[1]s.release-operator-%[1]s.svc,DNS:release-operator-%[1]s.release-operator-%[1]s.svc.cluster.local,DNS:localhost,DNS:%[1]s\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth,clientAuth", customerID)
 	if err := os.WriteFile(sanFile, []byte(sanContent), 0o644); err != nil {
 		return "", "", "", "", fmt.Errorf("write SAN extfile: %w", err)
 	}
