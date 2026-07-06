@@ -112,7 +112,10 @@
       "Bash(KUBECONFIG=/tmp/kc kubectl get pods -n release-operator-localhost001 --no-headers)",
       "Bash(openssl x509 *)",
       "Bash(KUBECONFIG=/tmp/kc kubectl get configmap -n release-manager release-manager-config -o jsonpath='{.data.config\\\\.yaml}')",
-      "Bash(KUBECONFIG=/tmp/kc2 kubectl get configmap -n release-manager release-manager-config -o jsonpath='{.data.config\\\\.yaml}')"
+      "Bash(KUBECONFIG=/tmp/kc2 kubectl get configmap -n release-manager release-manager-config -o jsonpath='{.data.config\\\\.yaml}')",
+      "Bash(openssl req *)",
+      "Bash(KUBECONFIG=/tmp/kc kubectl get secret -n release-operator-localhost001 release-operator-tls -o jsonpath='{.data.tls\\\\.crt}')",
+      "Bash(openssl genrsa *)"
     ]
   }
 }

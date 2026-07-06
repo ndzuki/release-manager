@@ -137,7 +137,10 @@ func (s *Server) buildHotReloadTLS() (*cryptotls.Config, error) {
 func (s *Server) serveGRPC(ctx context.Context) error {
 	var opts []grpc.ServerOption
 
-	if s.cfg.TLS.CertFile != "" {
+	// E2E_INSECURE_GRPC skips TLS for E2E testing within kind clusters.
+	if os.Getenv("E2E_INSECURE_GRPC") == "true" {
+		s.log.Info("E2E_INSECURE_GRPC=true — starting gRPC server without TLS")
+	} else if s.cfg.TLS.CertFile != "" {
 		tlsCfg, err := s.buildHotReloadTLS()
 		if err != nil {
 			return fmt.Errorf("build TLS config: %w", err)
