@@ -403,6 +403,14 @@ func (c *HelmClient) PullChart(ctx context.Context, chartURL, version, destDir s
 	}
 
 	c.log.Info("chart pulled successfully via SDK", "path", resultPath)
+
+	// Helm v4 may return empty resultPath even on success;
+	// construct the expected tarball path from destDir.
+	if resultPath == "" {
+		chartName := filepath.Base(chartURL)
+		resultPath = filepath.Join(destDir, fmt.Sprintf("%s-%s.tgz", chartName, version))
+		c.log.Info("constructed chart path from destDir", "path", resultPath)
+	}
 	return resultPath, nil
 }
 
