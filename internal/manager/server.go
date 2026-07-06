@@ -571,7 +571,7 @@ func (s *statusReportServer) ReportStatus(ctx context.Context, req *releasev1.Re
 		CustomerID:      req.CustomerId,
 		ChartName:       req.ChartName,
 		ChartVersion:    req.ChartVersion,
-		Status:          req.Status.String(),
+		Status:          statusFromProto(req.Status),
 		ErrorMessage:    req.ErrorMessage,
 		DurationSecs: req.DurationSeconds,
 		StartedAt:    time.Unix(req.StartedAt, 0),
@@ -590,4 +590,17 @@ func (s *statusReportServer) ReportStatus(ctx context.Context, req *releasev1.Re
 		Acknowledged: true,
 		Message:      "status recorded",
 	}, nil
+}
+
+func statusFromProto(s releasev1.ReleaseStatus) string {
+	switch s {
+	case releasev1.ReleaseStatus_RELEASE_STATUS_SUCCEEDED:
+		return "success"
+	case releasev1.ReleaseStatus_RELEASE_STATUS_FAILED:
+		return "failed"
+	case releasev1.ReleaseStatus_RELEASE_STATUS_ROLLED_BACK:
+		return "rolled_back"
+	default:
+		return strings.ToLower(strings.TrimPrefix(s.String(), "RELEASE_STATUS_"))
+	}
 }
