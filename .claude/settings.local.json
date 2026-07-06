@@ -149,7 +149,9 @@
       "Bash(sed -i '/requestID := strings.TrimPrefix/a\\\\\\\\tcustomerID := r.URL.Query\\(\\).Get\\(\"customer_id\"\\)' internal/manager/server.go)",
       "Bash(sed -i '/writeJSON\\(w, http.StatusOK, records\\)/i\\\\\\\\tif customerID != \"\" {\\\\n\\\\t\\\\tvar filtered []ReleaseRecord\\\\n\\\\t\\\\tfor _, rec := range records {\\\\n\\\\t\\\\t\\\\tif rec.CustomerID == customerID {\\\\n\\\\t\\\\t\\\\t\\\\tfiltered = append\\(filtered, rec\\)\\\\n\\\\t\\\\t\\\\t}\\\\n\\\\t\\\\t}\\\\n\\\\t\\\\trecords = filtered\\\\n\\\\t}' internal/manager/server.go)",
       "Bash(gh run *)",
-      "Bash(curl -sf http://localhost:30500/v2/_catalog)"
+      "Bash(curl -sf http://localhost:30500/v2/_catalog)",
+      "Bash(sed -i '26s/func deployOperator\\(/func deployOperator\\(ctx context.Context, clientset kubernetes.Interface, clusterName, customerID, notifEndpoint, caFile, certFile, keyFile string\\) \\(func\\(\\), error\\) {\\\\n\\\\treturn deployOperatorInternal\\(ctx, clientset, clusterName, customerID, notifEndpoint, caFile, certFile, keyFile, true\\)\\\\n}\\\\n\\\\nfunc deployOperatorInternal\\(ctx context.Context, clientset kubernetes.Interface, clusterName, customerID, notifEndpoint, caFile, certFile, keyFile string, insecure bool\\) \\(func\\(\\), error\\) {\\\\n_placeholder_/' test/e2e/operator_setup.go)",
+      "Bash(sed -i '/_placeholder_/d' test/e2e/operator_setup.go)"
     ]
   }
 }
