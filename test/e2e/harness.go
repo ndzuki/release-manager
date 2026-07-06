@@ -344,7 +344,7 @@ type ReleaseRecord struct {
 	ID         string `json:"id"`
 	CustomerID string `json:"customer_id"`
 	ChartName  string `json:"chart_name"`
-	Version    string `json:"version"`
+	ChartVersion string `json:"chart_version"`
 	Status     string `json:"status"`
 	Error      string `json:"error,omitempty"`
 }
@@ -414,7 +414,7 @@ func (h *Harness) DumpState() {
 	releases, _ := h.GetReleases(ctx, "")
 	for _, r := range releases {
 		h.T.Logf("  Release/%s: chart=%s version=%s status=%s error=%s",
-			r.CustomerID, r.ChartName, r.Version, r.Status, r.Error)
+			r.CustomerID, r.ChartName, r.ChartVersion, r.Status, r.Error)
 	}
 
 	h.T.Log("=== END STATE DUMP ===")

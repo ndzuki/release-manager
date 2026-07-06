@@ -65,7 +65,7 @@ func TestMultiCustomerConcurrentForward(t *testing.T) {
 		require.NoError(t, err)
 		found := false
 		for _, r := range releases {
-			if r.ChartName == "helm/test-chart" && r.Version == "0.4.0" {
+			if r.ChartName == "helm/test-chart" && r.ChartVersion == "0.4.0" {
 				assert.Equal(t, "success", r.Status)
 				found = true
 			}

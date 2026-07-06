@@ -103,7 +103,7 @@ func TestHelmUpgradeFailure(t *testing.T) {
 	require.NoError(t, err)
 	var found bool
 	for _, r := range releases {
-		if r.ChartName == "helm/test-chart" && r.Version == "0.3.1" {
+		if r.ChartName == "helm/test-chart" && r.ChartVersion == "0.3.1" {
 			assert.Equal(t, "failed", r.Status)
 			assert.NotEmpty(t, r.Error, "should have error message")
 			found = true

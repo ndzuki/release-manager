@@ -51,7 +51,7 @@ func TestHappyPath_InstallAndUpgrade(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(releases), 1)
 	assert.Equal(t, "helm/test-chart", releases[0].ChartName)
-	assert.Equal(t, "0.1.0", releases[0].Version)
+	assert.Equal(t, "0.1.0", releases[0].ChartVersion)
 	assert.Equal(t, "success", releases[0].Status)
 
 	// Push v0.1.1 (upgrade)
@@ -73,7 +73,7 @@ func TestHappyPath_InstallAndUpgrade(t *testing.T) {
 	versions := make(map[string]bool)
 	for _, r := range releases {
 		if r.ChartName == "helm/test-chart" {
-			versions[r.Version] = true
+			versions[r.ChartVersion] = true
 		}
 	}
 	assert.True(t, versions["0.1.0"], "should have release v0.1.0")

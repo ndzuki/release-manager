@@ -138,7 +138,10 @@
       "Bash(sed -i 's|&r.CompletedAt\\)|&r.CompletedAt\\); if err == nil \\\\&\\\\& r.CompletedAt.IsZero\\(\\) { r.CompletedAt = time.Unix\\(0, 0\\) }|' internal/manager/store.go)",
       "Bash(sed -i '/&r.CompletedAt/{ *)",
       "Bash(curl -sk \"http://localhost:30080/api/v1/releases/\" -H \"X-API-Key: e2e-test-key\")",
-      "Bash(grep *)"
+      "Bash(grep *)",
+      "Bash(sed -i 's|r\\\\.Version|r.ChartVersion|g' test/e2e/harness.go)",
+      "Bash(sed -i 's|releases\\\\[0\\\\]\\\\.Version|releases[0].ChartVersion|g' test/e2e/00_scenario_happy_path_test.go)",
+      "Bash(sed -i 's|\\\\.Version|.ChartVersion|g' test/e2e/00_scenario_happy_path_test.go test/e2e/scenario_failures_test.go test/e2e/scenario_multi_cust_test.go)"
     ]
   }
 }
