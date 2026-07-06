@@ -30,8 +30,12 @@ func pushChartOCI(ctx context.Context, registryAddr, chartPath, version string) 
 		return fmt.Errorf("helm package: %w\n%s", err, string(out))
 	}
 
-	// Push (plain HTTP: registry serves HTTP without TLS)
-	pkgFile := filepath.Join(os.TempDir(), fmt.Sprintf("test-chart-%s.tgz", version))
+	// Find the packaged tarball (helm package names it <chartname>-<version>.tgz).
+	matches, err := filepath.Glob(filepath.Join(os.TempDir(), fmt.Sprintf("*-%s.tgz", version)))
+	if err != nil || len(matches) == 0 {
+		return fmt.Errorf("find chart package *-%s.tgz in %s: %w", version, os.TempDir(), err)
+	}
+	pkgFile := matches[0]
 	pushCmd := exec.CommandContext(ctx, "helm", "push", pkgFile, ociRef, "--plain-http")
 	if out, err := pushCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("helm push: %w\n%s", err, string(out))
