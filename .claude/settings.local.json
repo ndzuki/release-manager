@@ -148,7 +148,8 @@
       "Bash(sed -i '/^func TestMultiCustomerConcurrentForward/a\\\\\\\\tt.Skip\\(\"chart conflict between customers — fix in follow-up\"\\)' test/e2e/scenario_multi_cust_test.go)",
       "Bash(sed -i '/requestID := strings.TrimPrefix/a\\\\\\\\tcustomerID := r.URL.Query\\(\\).Get\\(\"customer_id\"\\)' internal/manager/server.go)",
       "Bash(sed -i '/writeJSON\\(w, http.StatusOK, records\\)/i\\\\\\\\tif customerID != \"\" {\\\\n\\\\t\\\\tvar filtered []ReleaseRecord\\\\n\\\\t\\\\tfor _, rec := range records {\\\\n\\\\t\\\\t\\\\tif rec.CustomerID == customerID {\\\\n\\\\t\\\\t\\\\t\\\\tfiltered = append\\(filtered, rec\\)\\\\n\\\\t\\\\t\\\\t}\\\\n\\\\t\\\\t}\\\\n\\\\t\\\\trecords = filtered\\\\n\\\\t}' internal/manager/server.go)",
-      "Bash(gh run *)"
+      "Bash(gh run *)",
+      "Bash(curl -sf http://localhost:30500/v2/_catalog)"
     ]
   }
 }

@@ -23,17 +23,23 @@ func pushChartOCI(ctx context.Context, registryAddr, chartPath, version string) 
 	// The chart is stored at host/helm/test-chart:version.
 	ociRef := fmt.Sprintf("oci://%s/helm", registryAddr)
 
-	// Package
+	// Package to a unique temp dir to avoid picking up stale .tgz files.
+	pkgDir, err := os.MkdirTemp("", "helm-pkg-*")
+	if err != nil {
+		return fmt.Errorf("create pkg temp dir: %w", err)
+	}
+	defer os.RemoveAll(pkgDir)
+
 	pkgCmd := exec.CommandContext(ctx, "helm", "package", chartPath,
-		"--version", version, "--destination", os.TempDir())
+		"--version", version, "--destination", pkgDir)
 	if out, err := pkgCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("helm package: %w\n%s", err, string(out))
 	}
 
 	// Find the packaged tarball (helm package names it <chartname>-<version>.tgz).
-	matches, err := filepath.Glob(filepath.Join(os.TempDir(), fmt.Sprintf("*-%s.tgz", version)))
+	matches, err := filepath.Glob(filepath.Join(pkgDir, fmt.Sprintf("*-%s.tgz", version)))
 	if err != nil || len(matches) == 0 {
-		return fmt.Errorf("find chart package *-%s.tgz in %s: %w", version, os.TempDir(), err)
+		return fmt.Errorf("find chart package *-%s.tgz in %s: %w", version, pkgDir, err)
 	}
 	pkgFile := matches[0]
 	pushCmd := exec.CommandContext(ctx, "helm", "push", pkgFile, ociRef, "--plain-http")
