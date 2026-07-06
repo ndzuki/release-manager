@@ -14,7 +14,6 @@ import (
 )
 
 func TestOperatorUnreachable(t *testing.T) {
-	t.Skip("blocks forwarder for other tests — run separately")
 	h := SetupTest(t)
 	defer h.DumpState()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -78,7 +77,6 @@ func TestCustomerDisabled(t *testing.T) {
 }
 
 func TestHelmUpgradeFailure(t *testing.T) {
-	t.Skip("needs debug — fix in follow-up")
 	h := SetupTest(t)
 	defer h.DumpState()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -96,8 +94,8 @@ func TestHelmUpgradeFailure(t *testing.T) {
 	require.NoError(t, pushChartOCI(ctx, h.RegistryAddr, chartDir, "0.3.1"))
 	require.NoError(t, h.TriggerWebhook(ctx, "test-chart", "0.3.1"))
 
-	// Wait for failed status (helm --atomic will rollback on failure)
-	err = h.WaitForReleaseStatus(ctx, h.CustomerID, "test-chart", "failed", 3*time.Minute)
+	// Wait for rolled_back status (helm --atomic rolls back on image pull failure)
+	err = h.WaitForReleaseStatus(ctx, h.CustomerID, "test-chart", "rolled_back", 3*time.Minute)
 	require.NoError(t, err)
 
 	// Verify error message contains pull/upgrade failure info
@@ -106,7 +104,7 @@ func TestHelmUpgradeFailure(t *testing.T) {
 	var found bool
 	for _, r := range releases {
 		if r.ChartName == "helm/test-chart" && r.ChartVersion == "0.3.1" {
-			assert.Equal(t, "failed", r.Status)
+			assert.Equal(t, "rolled_back", r.Status)
 			assert.NotEmpty(t, r.Error, "should have error message")
 			found = true
 		}
