@@ -4,6 +4,7 @@ package operator
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -91,7 +92,10 @@ func (r *Reporter) dial(parentCtx context.Context) (*grpc.ClientConn, error) {
 
 	var opts []grpc.DialOption
 
-	if r.tlsCfg != nil && r.tlsCfg.CertFile != "" {
+	// E2E_INSECURE_GRPC skips TLS for E2E testing within kind clusters.
+	if os.Getenv("E2E_INSECURE_GRPC") == "true" {
+		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	} else if r.tlsCfg != nil && r.tlsCfg.CertFile != "" {
 		tlsCfg, err := r.tlsCfg.BuildClientTLSConfig()
 		if err != nil {
 			return nil, fmt.Errorf("build TLS config: %w", err)
