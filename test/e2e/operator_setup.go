@@ -92,17 +92,6 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 		return nil, fmt.Errorf("wait for operator pod: %w", err)
 	}
 
-	// Set E2E_INSECURE_GRPC=true env var on the operator deployment so serveGRPC
-	// skips TLS entirely (bypasses TLS SNI/hostname/GetCertificate issues).
-	_ = kubectl("-n", ns, "set", "env",
-		fmt.Sprintf("deployment/release-operator-%s", customerID),
-		"E2E_INSECURE_GRPC=true")
-	// Wait for rollout to complete
-	waitRollout := exec.CommandContext(ctx, "kubectl", "-n", ns, "rollout", "status",
-		fmt.Sprintf("deployment/release-operator-%s", customerID), "--timeout=2m")
-	if out, err := waitRollout.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("wait for operator rollout after env patch: %w\n%s", err, string(out))
-	}
 	// Mount emptyDir at /tmp so Helm can write cache files (readOnlyRootFilesystem is set).
 	_ = kubectl("-n", ns, "patch",
 		fmt.Sprintf("deployment/release-operator-%s", customerID),

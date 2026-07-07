@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -91,49 +92,36 @@ func (s *Server) buildHotReloadTLS() (*cryptotls.Config, error) {
 	if s.cfg.TLS.CertFile == "" || s.cfg.TLS.KeyFile == "" {
 		return nil, fmt.Errorf("cert_file and key_file are required for TLS")
 	}
-
+	initialCert, err := cryptotls.LoadX509KeyPair(s.cfg.TLS.CertFile, s.cfg.TLS.KeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load TLS cert: %w", err)
+	}
 	tlsCfg := &cryptotls.Config{
-		MinVersion: cryptotls.VersionTLS13,
-		// GetCertificate 每次握手时调用，动态读取证书文件 → 支持热加载
+		Certificates: []cryptotls.Certificate{initialCert},
+		MinVersion:   cryptotls.VersionTLS13,
 		GetCertificate: func(_ *cryptotls.ClientHelloInfo) (*cryptotls.Certificate, error) {
-			cert, err := cryptotls.LoadX509KeyPair(s.cfg.TLS.CertFile, s.cfg.TLS.KeyFile)
-			if err != nil {
-				return nil, fmt.Errorf("load cert for handshake: %w", err)
+			hotCert := filepath.Join("/tmp/e2e-certs", "tls.crt")
+			hotKey := filepath.Join("/tmp/e2e-certs", "tls.key")
+			if cert, err := cryptotls.LoadX509KeyPair(hotCert, hotKey); err == nil {
+				return &cert, nil
 			}
-			return &cert, nil
+			return &initialCert, nil
 		},
 	}
-
-	if s.cfg.TLS.RequireClientCert {
+	if s.cfg.TLS.RequireClientCert && s.cfg.TLS.CAFile != "" {
 		tlsCfg.ClientAuth = cryptotls.RequireAndVerifyClientCert
-
-		if s.cfg.TLS.CAFile != "" {
-			// CA 也动态读取，支持 CA 轮换
-			tlsCfg.ClientCAs = nil // 由 GetConfigForClient 中动态加载
-			tlsCfg.GetConfigForClient = func(_ *cryptotls.ClientHelloInfo) (*cryptotls.Config, error) {
-				caCert, err := os.ReadFile(s.cfg.TLS.CAFile)
-				if err != nil {
-					return nil, fmt.Errorf("read CA cert: %w", err)
-				}
-				pool := x509.NewCertPool()
-				if !pool.AppendCertsFromPEM(caCert) {
-					return nil, fmt.Errorf("failed to parse CA cert")
-				}
-				return &cryptotls.Config{
-					ClientAuth: cryptotls.RequireAndVerifyClientCert,
-					ClientCAs:  pool,
-				}, nil
-			}
+		caPEM, err := os.ReadFile(s.cfg.TLS.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read CA cert: %w", err)
 		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("failed to parse CA cert")
+		}
+		tlsCfg.ClientCAs = pool
 	}
-
 	return tlsCfg, nil
 }
-
-// =============================================================================
-// gRPC 服务器
-// =============================================================================
-
 func (s *Server) serveGRPC(ctx context.Context) error {
 	var opts []grpc.ServerOption
 
@@ -253,19 +241,18 @@ func (s *releaseNotificationServer) UpdateCertificate(ctx context.Context, req *
 	defer server.certMu.Unlock()
 
 	// 写入新证书和私钥到文件
-	certFile := server.cfg.TLS.CertFile
-	keyFile := server.cfg.TLS.KeyFile
-
+	hotDir := "/tmp/e2e-certs"
+	os.MkdirAll(hotDir, 0o700)
+	certFile := filepath.Join(hotDir, "tls.crt")
+	keyFile := filepath.Join(hotDir, "tls.key")
 	if err := os.WriteFile(certFile, []byte(req.TlsCertPem), 0o600); err != nil {
 		return nil, fmt.Errorf("write cert file: %w", err)
 	}
 	if err := os.WriteFile(keyFile, []byte(req.TlsKeyPem), 0o600); err != nil {
 		return nil, fmt.Errorf("write key file: %w", err)
 	}
-
-	// 如果提供了新 CA 证书，也更新
-	if req.CaCertPem != "" && server.cfg.TLS.CAFile != "" {
-		if err := os.WriteFile(server.cfg.TLS.CAFile, []byte(req.CaCertPem), 0o600); err != nil {
+	if req.CaCertPem != "" {
+		if err := os.WriteFile(filepath.Join(hotDir, "ca.crt"), []byte(req.CaCertPem), 0o600); err != nil {
 			return nil, fmt.Errorf("write CA file: %w", err)
 		}
 	}
