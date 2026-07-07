@@ -199,6 +199,6 @@ func TestCertificateHotReload(t *testing.T) {
 	// Steps 6-7 (cross-CA cert verification) require generating cert-B
 	// with the SAME CA as cert-A — a future enhancement. The core cert
 	// reload mechanism is verified: TLS connects, UpdateCertificate writes
-	// to /tmp/e2e-certs, GetCertificate hot-reload path works.
+	// to the configured HotReloadDir (E2E: /tmp/e2e-certs), GetCertificate hot-reload path works.
 	_ = fpB
 }

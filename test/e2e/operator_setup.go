@@ -73,6 +73,7 @@ func deployOperator(ctx context.Context, clientset kubernetes.Interface, cluster
 		"--set", "image.tag=dev",
 		"--set", "image.pullPolicy=IfNotPresent",
 		"--set", "tls.enabled=true",
+		"--set", "tls.hotReloadDir=/tmp/e2e-certs",
 		"--set", "tls.existingCertSecret=release-operator-tls",
 		"--set", "tls.existingCaSecret=release-operator-ca",
 		"--set", "harbor.insecureSkipVerify=true",

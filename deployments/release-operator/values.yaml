@@ -51,6 +51,8 @@ tls:
   # 方式 2: 引用已存在的 Secret (当上面的 cert/key/ca 为空时生效)
   existingCertSecret: ""
   existingCaSecret: ""
+  # hotReloadDir 证书热加载目录，默认 /var/lib/release-operator/certs
+  hotReloadDir: "/var/lib/release-operator/certs"
 
 # --- Harbor 仓库配置 ---
 harbor:

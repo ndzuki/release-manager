@@ -19,6 +19,7 @@ data:
       cert_file: "/etc/release-operator/tls/tls.crt"
       key_file: "/etc/release-operator/tls/tls.key"
       require_client_cert: {{ .Values.tls.enabled }}
+      hot_reload_dir: "{{ .Values.tls.hotReloadDir }}"
 
     harbor:
       url: "{{ .Values.harbor.url }}"
