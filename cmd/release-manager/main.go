@@ -27,6 +27,24 @@
 //
 // @tag.name 发布管理
 // @tag.description 查询发布记录的更新状态。
+//
+// @tag.name 初始化
+// @tag.description 系统首次初始化 — 创建管理员账号、邮箱验证。
+//
+// @tag.name 认证
+// @tag.description 管理员登录认证。
+//
+// @tag.name Webhook
+// @tag.description Harbor webhook 接收端点。
+//
+// @tag.name Dashboard
+// @tag.description 系统概览监控面板。
+//
+// @tag.name 用户管理
+// @tag.description 平台用户和角色管理。
+//
+// @tag.name 审计日志
+// @tag.description 操作审计日志查询。
 package main
 
 import (

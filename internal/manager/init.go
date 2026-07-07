@@ -127,7 +127,14 @@ func (h *InitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GET /api/v1/init — 查询初始化状态
+// 查询初始化状态
+// @Summary      查询初始化状态
+// @Description  检查系统是否已完成首次初始化
+// @Tags         初始化
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  map[string]any  "初始化状态"
+// @Router       /api/v1/init [get]
 func (h *InitHandler) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"initialized": h.IsInitialized(),
@@ -135,7 +142,17 @@ func (h *InitHandler) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// POST /api/v1/init — 创建管理员账号
+// 创建管理员账号
+// @Summary      创建管理员账号
+// @Description  首次初始化系统，创建管理员用户（仅未初始化时可用）
+// @Tags         初始化
+// @Accept       json
+// @Produce      json
+// @Param        request  body      object{username=string,password=string,email=string}  true  "管理员信息"
+// @Success      201      {object}  map[string]any  "初始化成功"
+// @Failure      400      {object}  map[string]string  "参数校验失败"
+// @Failure      409      {object}  map[string]string  "系统已初始化"
+// @Router       /api/v1/init [post]
 func (h *InitHandler) handleInit(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -217,7 +234,16 @@ func (h *InitHandler) handleInit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// POST /api/v1/auth/login — 管理员登录
+// 管理员登录
+// @Summary      管理员登录
+// @Description  使用用户名和密码登录，返回 session token
+// @Tags         认证
+// @Accept       json
+// @Produce      json
+// @Param        request  body      object{username=string,password=string}  true  "登录凭证"
+// @Success      200      {object}  map[string]any  "登录成功"
+// @Failure      401      {object}  map[string]string  "认证失败"
+// @Router       /api/v1/auth/login [post]
 func (h *InitHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})

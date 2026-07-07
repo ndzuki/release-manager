@@ -85,6 +85,19 @@ func NewWebhookHandler(log logr.Logger, hmacKey string, notifier func(ReleaseNot
 //  3. 验证 HMAC-SHA256 签名（若配置）
 //  4. 解析 JSON payload
 //  5. 仅处理 PUSH_HELMCHART 事件，调用 notifier 回调
+//
+// 接收 Harbor webhook
+// @Summary      接收 Harbor webhook
+// @Description  处理 Harbor PUSH_HELMCHART 事件，验证 HMAC 签名并转发到客户集群
+// @Tags         Webhook
+// @Accept       json
+// @Produce      json
+// @Param        request  body      HarborWebhookPayload  true  "Harbor webhook 载荷"
+// @Success      200      {object}  map[string]string      "处理成功"
+// @Failure      400      {object}  map[string]string      "无效请求"
+// @Failure      500      {object}  map[string]string      "处理失败"
+// @Security     HmacSignature
+// @Router       /api/v1/webhook/harbor [post]
 func (s *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

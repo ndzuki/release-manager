@@ -8,6 +8,7 @@ package manager
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -95,6 +96,10 @@ type Store interface {
 	CreateCustomerChartBinding(b CustomerChartBinding) (*CustomerChartBinding, error)
 	DeleteCustomerChartBinding(orgID, bindingID string) error
 
+	// --- 操作审计日志 ---
+	CreateAuditLog(entry AuditLogEntry) error
+	ListAuditLogs(filter AuditLogFilter) ([]AuditLogEntry, error)
+
 	Close() error
 }
 
@@ -111,7 +116,8 @@ type MemoryStore struct {
 	bindings     map[string]CustomerChartBinding
 	initDone     bool
 	adminUser    *AdminUser
-	verifyTokens map[string]string // email → token
+	verifyTokens map[string]string  // email → token
+	auditLogs    []AuditLogEntry    // 审计日志（内存版）
 	log          logr.Logger
 }
 
@@ -323,6 +329,59 @@ func (s *MemoryStore) GetUserByEmail(email string) (*User, error) {
 	return nil, fmt.Errorf("not found")
 }
 
+// --- 审计日志 (MemoryStore) ---
+
+func (s *MemoryStore) CreateAuditLog(entry AuditLogEntry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.auditLogs = append(s.auditLogs, entry)
+	return nil
+}
+
+func (s *MemoryStore) ListAuditLogs(filter AuditLogFilter) ([]AuditLogEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if filter.Limit <= 0 {
+		filter.Limit = 50
+	}
+	if filter.Limit > 200 {
+		filter.Limit = 200
+	}
+
+	var result []AuditLogEntry
+	for i := len(s.auditLogs) - 1; i >= 0; i-- {
+		e := s.auditLogs[i]
+		if filter.UserID != "" && e.UserID != filter.UserID {
+			continue
+		}
+		if filter.Resource != "" && e.Resource != filter.Resource {
+			continue
+		}
+		if filter.ResourceID != "" && e.ResourceID != filter.ResourceID {
+			continue
+		}
+		if filter.Method != "" && e.Method != filter.Method {
+			continue
+		}
+		if filter.Path != "" && !strings.HasPrefix(e.Path, filter.Path) {
+			continue
+		}
+		result = append(result, e)
+	}
+
+	// Apply pagination
+	start := filter.Offset
+	if start >= len(result) {
+		return []AuditLogEntry{}, nil
+	}
+	end := start + filter.Limit
+	if end > len(result) {
+		end = len(result)
+	}
+	return result[start:end], nil
+}
+
 // Close 无操作，满足 Store 接口。
 func (s *MemoryStore) Close() error { return nil }
 
@@ -512,6 +571,28 @@ func migrate(db *sql.DB, log logr.Logger) error {
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_customer_chart_bindings_org_cust ON customer_chart_bindings(org_id, customer_id)`,
+
+		// 操作审计日志
+		`CREATE TABLE IF NOT EXISTS audit_logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+			user_id TEXT NOT NULL DEFAULT 'anonymous',
+			username TEXT NOT NULL DEFAULT '',
+			org_id TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL DEFAULT '',
+			resource TEXT NOT NULL DEFAULT '',
+			resource_id TEXT NOT NULL DEFAULT '',
+			method TEXT NOT NULL DEFAULT '',
+			path TEXT NOT NULL DEFAULT '',
+			status_code INTEGER NOT NULL DEFAULT 0,
+			client_ip TEXT NOT NULL DEFAULT '',
+			user_agent TEXT NOT NULL DEFAULT '',
+			req_body_snippet TEXT NOT NULL DEFAULT '',
+			duration_ms INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_logs_resource ON audit_logs(resource)`,
 	}
 
 	for _, m := range migrations {
@@ -941,6 +1022,83 @@ func (s *SQLiteStore) DeleteCustomerChartBinding(orgID, bindingID string) error 
 		return fmt.Errorf("binding %s not found", bindingID)
 	}
 	return nil
+}
+
+// =============================================================================
+// SQLite — 操作审计日志
+// =============================================================================
+
+func (s *SQLiteStore) CreateAuditLog(entry AuditLogEntry) error {
+	_, err := s.db.Exec(
+		`INSERT INTO audit_logs (timestamp, user_id, username, org_id, action, resource, resource_id, method, path, status_code, client_ip, user_agent, req_body_snippet, duration_ms)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		entry.Timestamp, entry.UserID, entry.Username, entry.OrgID, entry.Action,
+		entry.Resource, entry.ResourceID, entry.Method, entry.Path,
+		entry.StatusCode, entry.ClientIP, entry.UserAgent, entry.ReqBodySnippet, entry.DurationMs,
+	)
+	return err
+}
+
+func (s *SQLiteStore) ListAuditLogs(filter AuditLogFilter) ([]AuditLogEntry, error) {
+	if filter.Limit <= 0 {
+		filter.Limit = 50
+	}
+	if filter.Limit > 200 {
+		filter.Limit = 200
+	}
+
+	query := "SELECT id, timestamp, user_id, username, org_id, action, resource, resource_id, method, path, status_code, client_ip, user_agent, req_body_snippet, duration_ms FROM audit_logs WHERE 1=1"
+	args := []any{}
+
+	if filter.UserID != "" {
+		query += " AND user_id = ?"
+		args = append(args, filter.UserID)
+	}
+	if filter.Resource != "" {
+		query += " AND resource = ?"
+		args = append(args, filter.Resource)
+	}
+	if filter.ResourceID != "" {
+		query += " AND resource_id = ?"
+		args = append(args, filter.ResourceID)
+	}
+	if filter.Method != "" {
+		query += " AND method = ?"
+		args = append(args, filter.Method)
+	}
+	if filter.Path != "" {
+		query += " AND path LIKE ?"
+		args = append(args, filter.Path+"%")
+	}
+	if filter.Since != "" {
+		query += " AND timestamp >= ?"
+		args = append(args, filter.Since)
+	}
+	if filter.Until != "" {
+		query += " AND timestamp <= ?"
+		args = append(args, filter.Until)
+	}
+
+	query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+	args = append(args, filter.Limit, filter.Offset)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list audit logs: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []AuditLogEntry
+	for rows.Next() {
+		var e AuditLogEntry
+		if err := rows.Scan(&e.ID, &e.Timestamp, &e.UserID, &e.Username, &e.OrgID, &e.Action,
+			&e.Resource, &e.ResourceID, &e.Method, &e.Path,
+			&e.StatusCode, &e.ClientIP, &e.UserAgent, &e.ReqBodySnippet, &e.DurationMs); err != nil {
+			return nil, fmt.Errorf("scan audit log: %w", err)
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
 }
 
 // Close 关闭数据库连接。

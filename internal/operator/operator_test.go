@@ -2,6 +2,13 @@ package operator
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"fmt"
+	"math/big"
+	"os"
 	"testing"
 	"time"
 
@@ -167,4 +174,100 @@ func TestHelmClient_LogWriter(t *testing.T) {
 	n, err := w.Write([]byte("test log message\n"))
 	assert.NoError(t, err)
 	assert.Greater(t, n, 0)
+}
+
+func TestLoadCertFromFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	certPath := tmpDir + "/cert.pem"
+
+	// Invalid file path
+	_, err := loadCertFromFile("/nonexistent/cert.pem")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read cert file")
+
+	// Invalid PEM content
+	require.NoError(t, os.WriteFile(certPath, []byte("not-valid-pem"), 0o644))
+	_, err = loadCertFromFile(certPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to decode PEM")
+}
+
+func TestCertFingerprint(t *testing.T) {
+	// Create a minimal self-signed cert for testing
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(1 * time.Hour),
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+
+	cert, err := x509.ParseCertificate(certDER)
+	require.NoError(t, err)
+
+	fp := certFingerprint(cert)
+	assert.NotEmpty(t, fp)
+	assert.Len(t, fp, 64) // SHA256 hex = 64 chars
+}
+
+func TestController_SubmitMultiple(t *testing.T) {
+	log := logr.Discard()
+	cfg := config.DefaultConfig()
+	helmClient := NewHelmClient(&cfg.Helm, &cfg.Harbor, log)
+	reporter := &mockReporter{}
+	ctrl := NewController(helmClient, reporter, cfg, log)
+
+	for i := range 5 {
+		req := ReleaseRequest{
+			RequestID:    fmt.Sprintf("req-%03d", i),
+			ChartName:    "test",
+			ChartURL:     "oci://harbor/helm/test",
+			ChartVersion: "1.0.0",
+			ReleaseName:  "test-release",
+			Namespace:    "default",
+		}
+		assert.True(t, ctrl.Submit(req), "request %d should be accepted", i)
+	}
+
+	// Duplicate should be rejected
+	req := ReleaseRequest{
+		RequestID:    "req-000",
+		ChartName:    "test",
+		ChartURL:     "oci://harbor/helm/test",
+		ChartVersion: "1.0.0",
+		ReleaseName:  "test-release",
+		Namespace:    "default",
+	}
+	assert.False(t, ctrl.Submit(req), "duplicate should be rejected")
+}
+
+func TestController_StartCancelCleanup(t *testing.T) {
+	log := logr.Discard()
+	cfg := config.DefaultConfig()
+	helmClient := NewHelmClient(&cfg.Helm, &cfg.Harbor, log)
+	reporter := &mockReporter{}
+	ctrl := NewController(helmClient, reporter, cfg, log)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ctrl.Start(ctx)
+
+	// Submit then cancel - goroutines should drain cleanly
+	ctrl.Submit(ReleaseRequest{
+		RequestID:    "req-cancel",
+		ChartName:    "test",
+		ChartURL:     "oci://harbor/helm/test",
+		ChartVersion: "1.0.0",
+		ReleaseName:  "test-release",
+		Namespace:    "default",
+	})
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	// Give goroutines time to drain before Shutdown
+	time.Sleep(50 * time.Millisecond)
+	ctrl.Shutdown()
 }

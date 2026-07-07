@@ -133,6 +133,28 @@ func migratePostgres(db *sql.DB, log logr.Logger) error {
 		`CREATE INDEX IF NOT EXISTS idx_release_records_customer ON release_records(customer_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_chart_definitions_org ON chart_definitions(org_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_customer_chart_bindings_org_cust ON customer_chart_bindings(org_id, customer_id)`,
+
+		// 操作审计日志
+		`CREATE TABLE IF NOT EXISTS audit_logs (
+			id SERIAL PRIMARY KEY,
+			timestamp TIMESTAMPTZ DEFAULT NOW(),
+			user_id TEXT NOT NULL DEFAULT 'anonymous',
+			username TEXT NOT NULL DEFAULT '',
+			org_id TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL DEFAULT '',
+			resource TEXT NOT NULL DEFAULT '',
+			resource_id TEXT NOT NULL DEFAULT '',
+			method TEXT NOT NULL DEFAULT '',
+			path TEXT NOT NULL DEFAULT '',
+			status_code INTEGER NOT NULL DEFAULT 0,
+			client_ip TEXT NOT NULL DEFAULT '',
+			user_agent TEXT NOT NULL DEFAULT '',
+			req_body_snippet TEXT NOT NULL DEFAULT '',
+			duration_ms INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_logs_resource ON audit_logs(resource)`,
 	}
 
 	for _, m := range migrations {
@@ -473,4 +495,89 @@ func (s *PostgreSQLStore) SetVerifyToken(email, token string) error {
 // Close 关闭数据库连接池。
 func (s *PostgreSQLStore) Close() error {
 	return s.db.Close()
+}
+
+// =============================================================================
+// PostgreSQL — 操作审计日志
+// =============================================================================
+
+func (s *PostgreSQLStore) CreateAuditLog(entry AuditLogEntry) error {
+	_, err := s.db.Exec(
+		`INSERT INTO audit_logs (timestamp, user_id, username, org_id, action, resource, resource_id, method, path, status_code, client_ip, user_agent, req_body_snippet, duration_ms)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+		entry.Timestamp, entry.UserID, entry.Username, entry.OrgID, entry.Action,
+		entry.Resource, entry.ResourceID, entry.Method, entry.Path,
+		entry.StatusCode, entry.ClientIP, entry.UserAgent, entry.ReqBodySnippet, entry.DurationMs,
+	)
+	return err
+}
+
+func (s *PostgreSQLStore) ListAuditLogs(filter AuditLogFilter) ([]AuditLogEntry, error) {
+	if filter.Limit <= 0 {
+		filter.Limit = 50
+	}
+	if filter.Limit > 200 {
+		filter.Limit = 200
+	}
+
+	query := "SELECT id, timestamp, user_id, username, org_id, action, resource, resource_id, method, path, status_code, client_ip, user_agent, req_body_snippet, duration_ms FROM audit_logs WHERE 1=1"
+	args := []any{}
+	paramIdx := 1
+
+	if filter.UserID != "" {
+		query += fmt.Sprintf(" AND user_id = $%d", paramIdx)
+		args = append(args, filter.UserID)
+		paramIdx++
+	}
+	if filter.Resource != "" {
+		query += fmt.Sprintf(" AND resource = $%d", paramIdx)
+		args = append(args, filter.Resource)
+		paramIdx++
+	}
+	if filter.ResourceID != "" {
+		query += fmt.Sprintf(" AND resource_id = $%d", paramIdx)
+		args = append(args, filter.ResourceID)
+		paramIdx++
+	}
+	if filter.Method != "" {
+		query += fmt.Sprintf(" AND method = $%d", paramIdx)
+		args = append(args, filter.Method)
+		paramIdx++
+	}
+	if filter.Path != "" {
+		query += fmt.Sprintf(" AND path LIKE $%d", paramIdx)
+		args = append(args, filter.Path+"%")
+		paramIdx++
+	}
+	if filter.Since != "" {
+		query += fmt.Sprintf(" AND timestamp >= $%d", paramIdx)
+		args = append(args, filter.Since)
+		paramIdx++
+	}
+	if filter.Until != "" {
+		query += fmt.Sprintf(" AND timestamp <= $%d", paramIdx)
+		args = append(args, filter.Until)
+		paramIdx++
+	}
+
+	query += fmt.Sprintf(" ORDER BY timestamp DESC LIMIT $%d OFFSET $%d", paramIdx, paramIdx+1)
+	args = append(args, filter.Limit, filter.Offset)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list audit logs: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []AuditLogEntry
+	for rows.Next() {
+		var e AuditLogEntry
+		if err := rows.Scan(&e.ID, &e.Timestamp, &e.UserID, &e.Username, &e.OrgID, &e.Action,
+			&e.Resource, &e.ResourceID, &e.Method, &e.Path,
+			&e.StatusCode, &e.ClientIP, &e.UserAgent, &e.ReqBodySnippet, &e.DurationMs); err != nil {
+			return nil, fmt.Errorf("scan audit log: %w", err)
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
 }

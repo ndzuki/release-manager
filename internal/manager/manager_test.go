@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/ndzuki/release-manager/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -589,4 +590,379 @@ func TestSQLiteStore_ChartConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, bindings, 1)
 	assert.Equal(t, "bind-2", bindings[0].ID)
+}
+
+// ---------------------------------------------------------------------------
+// 审计日志
+// ---------------------------------------------------------------------------
+
+func TestSQLiteStore_AuditLog(t *testing.T) {
+	store := newTestSQLiteStore(t)
+
+	entry := AuditLogEntry{
+		Timestamp:      time.Now().UTC().Truncate(time.Second),
+		UserID:         "admin",
+		Username:       "Administrator",
+		OrgID:          "default",
+		Action:         "POST",
+		Resource:       "customer",
+		ResourceID:     "cust-001",
+		Method:         "POST",
+		Path:           "/api/v1/customers",
+		StatusCode:     201,
+		ClientIP:       "10.0.0.1",
+		UserAgent:      "curl/8.0",
+		ReqBodySnippet: `{"id":"cust-001","name":"Test"}`,
+		DurationMs:     45,
+	}
+
+	// Create
+	err := store.CreateAuditLog(entry)
+	require.NoError(t, err)
+
+	// List with filter: by user
+	logs, err := store.ListAuditLogs(AuditLogFilter{UserID: "admin", Limit: 50})
+	require.NoError(t, err)
+	assert.Len(t, logs, 1)
+	assert.Equal(t, "customer", logs[0].Resource)
+	assert.Equal(t, "cust-001", logs[0].ResourceID)
+	assert.Equal(t, int64(45), logs[0].DurationMs)
+
+	// Filter by resource
+	logs, err = store.ListAuditLogs(AuditLogFilter{Resource: "customer", Limit: 50})
+	require.NoError(t, err)
+	assert.Len(t, logs, 1)
+
+	// Filter with no match
+	logs, err = store.ListAuditLogs(AuditLogFilter{UserID: "nonexistent", Limit: 50})
+	require.NoError(t, err)
+	assert.Len(t, logs, 0)
+}
+
+func TestAuditLogger_Middleware(t *testing.T) {
+	store := NewMemoryStore(logr.Discard())
+	auditLogger := NewAuditLogger(store, logr.Discard())
+	defer auditLogger.Close()
+
+	// Wrap a simple handler
+	handler := auditLogger.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/customers", nil)
+	req.RemoteAddr = "10.0.0.5:54321"
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Wait for async write
+	time.Sleep(50 * time.Millisecond)
+
+	logs, err := store.ListAuditLogs(AuditLogFilter{Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, logs, 1)
+	assert.Equal(t, "GET", logs[0].Method)
+	assert.Equal(t, "/api/v1/customers", logs[0].Path)
+	assert.Equal(t, http.StatusOK, logs[0].StatusCode)
+	assert.Equal(t, "anonymous", logs[0].UserID)
+	assert.True(t, logs[0].DurationMs >= 0)
+}
+
+func TestAuditLogger_AsyncWrite(t *testing.T) {
+	store := NewMemoryStore(logr.Discard())
+	auditLogger := NewAuditLogger(store, logr.Discard())
+	defer auditLogger.Close()
+
+	// Send multiple requests rapidly
+	for i := 0; i < 20; i++ {
+		go func(n int) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/releases", nil)
+			req.RemoteAddr = "10.0.0.1:12345"
+			req.Header.Set("X-API-Key", "test-key") // auth middleware would set user in real path
+			w := httptest.NewRecorder()
+			auditLogger.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusCreated)
+			})).ServeHTTP(w, req)
+		}(i)
+	}
+
+	// Give async writer time to flush
+	time.Sleep(100 * time.Millisecond)
+
+	logs, err := store.ListAuditLogs(AuditLogFilter{Limit: 200})
+	require.NoError(t, err)
+	assert.Len(t, logs, 20, "all 20 audit entries should be persisted")
+}
+
+func TestClassifyRequest(t *testing.T) {
+	tests := []struct {
+		method, path          string
+		expectedRes, expectedID string
+	}{
+		{"GET", "/api/v1/customers", "customer", ""},
+		{"GET", "/api/v1/customers/cust-001", "customer", "cust-001"},
+		{"POST", "/api/v1/customers", "customer", ""},
+		{"PUT", "/api/v1/customers/cust-001", "customer", "cust-001"},
+		{"DELETE", "/api/v1/customers/cust-001", "customer", "cust-001"},
+		{"GET", "/api/v1/releases/req-123", "release", "req-123"},
+		{"GET", "/api/v1/users", "user", ""},
+		{"GET", "/api/v1/users/user-1", "user", "user-1"},
+		{"GET", "/api/v1/orgs/", "org", ""},
+		{"GET", "/api/v1/dashboard/", "dashboard", ""},
+		{"GET", "/api/v1/audit-logs", "audit_log", ""},
+		{"POST", "/api/v1/init", "init", ""},
+		{"POST", "/api/v1/auth/login", "auth", ""},
+		{"POST", "/api/v1/webhook/harbor", "webhook", ""},
+		{"GET", "/health", "health", ""},
+		{"GET", "/some/unknown/path", "unknown", ""},
+	}
+
+	for _, tt := range tests {
+		resource, resourceID := classifyRequest(tt.method, tt.path)
+		assert.Equal(t, tt.expectedRes, resource, "method=%s path=%s", tt.method, tt.path)
+		assert.Equal(t, tt.expectedID, resourceID, "method=%s path=%s", tt.method, tt.path)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HTTP Handler 层测试
+// ---------------------------------------------------------------------------
+
+func TestHandleCustomers_CRUD(t *testing.T) {
+	log := logr.Discard()
+	store := NewMemoryStore(log)
+
+	cfg := &config.Config{APIKey: "test-key"}
+	srv := &Server{
+		cfg:   cfg,
+		log:   log,
+		store: store,
+	}
+
+	// POST - Create customer
+	createBody := `{"id":"cust-001","name":"Test","operator_endpoint":"10.0.0.1:8443","cert_fingerprint":"ABC123","enabled":true}`
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/customers", strings.NewReader(createBody))
+	createReq.Header.Set("X-API-Key", "test-key")
+	createW := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(createW, createReq)
+	assert.Equal(t, http.StatusCreated, createW.Code, "POST should return 201")
+
+	// GET - List customers
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/customers", nil)
+	listReq.Header.Set("X-API-Key", "test-key")
+	listW := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(listW, listReq)
+	assert.Equal(t, http.StatusOK, listW.Code)
+
+	// GET - Single customer
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/customers/cust-001", nil)
+	getReq.Header.Set("X-API-Key", "test-key")
+	getW := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(getW, getReq)
+	assert.Equal(t, http.StatusOK, getW.Code)
+
+	// PUT - Update customer
+	updateBody := `{"name":"Updated Name","enabled":false}`
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/customers/cust-001", strings.NewReader(updateBody))
+	updateReq.Header.Set("X-API-Key", "test-key")
+	updateW := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(updateW, updateReq)
+	assert.Equal(t, http.StatusOK, updateW.Code)
+
+	// DELETE - Delete customer
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/customers/cust-001", nil)
+	deleteReq.Header.Set("X-API-Key", "test-key")
+	deleteW := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(deleteW, deleteReq)
+	assert.Equal(t, http.StatusOK, deleteW.Code)
+}
+
+func TestHandleCustomers_Unauthorized(t *testing.T) {
+	log := logr.Discard()
+	store := NewMemoryStore(log)
+
+	cfg := &config.Config{APIKey: "test-key"}
+	srv := &Server{
+		cfg:   cfg,
+		log:   log,
+		store: store,
+	}
+
+	// Without API key
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/customers", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestHandleCustomers_Validation(t *testing.T) {
+	log := logr.Discard()
+	store := NewMemoryStore(log)
+
+	cfg := &config.Config{APIKey: "test-key"}
+	srv := &Server{
+		cfg:   cfg,
+		log:   log,
+		store: store,
+	}
+
+	// Missing required fields
+	body := `{"id":"","name":"","operator_endpoint":""}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/customers", strings.NewReader(body))
+	req.Header.Set("X-API-Key", "test-key")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleReleases(t *testing.T) {
+	log := logr.Discard()
+	store := NewMemoryStore(log)
+
+	cfg := &config.Config{APIKey: "test-key"}
+	srv := &Server{
+		cfg:   cfg,
+		log:   log,
+		store: store,
+	}
+
+	// Create a release record first
+	_ = store.CreateReleaseRecord(ReleaseRecord{
+		RequestID:    "req-001",
+		CustomerID:   "cust-001",
+		ChartName:    "magic-sandbox",
+		ChartVersion: "1.0.0",
+		Status:       "success",
+		StartedAt:    time.Now(),
+	})
+
+	// GET releases
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/releases/req-001", nil)
+	req.Header.Set("X-API-Key", "test-key")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleLogin(t *testing.T) {
+	log := logr.Discard()
+	store := NewSQLiteInMemoryStore(t)
+
+	// Create an admin user via the store
+	hash := hashPassword("testpassword")
+	err := store.CreateAdminUser(AdminUser{
+		Username:      "testadmin",
+		PasswordHash:  hash,
+		Email:         "admin@test.com",
+		Role:          "admin",
+		EmailVerified: true,
+		CreatedAt:     time.Now(),
+	})
+	require.NoError(t, err)
+
+	cfg := &config.Config{APIKey: ""}
+	mockSMTP := SMTPConfig{Enabled: false}
+	initH := NewInitHandler(store, mockSMTP, false, log)
+
+	srv := &Server{
+		cfg:         cfg,
+		log:         log,
+		store:       store,
+		initHandler: initH,
+	}
+
+	// POST /api/v1/auth/login with correct credentials
+	loginBody := `{"username":"testadmin","password":"testpassword"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(loginBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Wrong password
+	loginBody = `{"username":"testadmin","password":"wrong"}`
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(loginBody))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestHealthEndpoint(t *testing.T) {
+	log := logr.Discard()
+	store := NewMemoryStore(log)
+
+	cfg := &config.Config{APIKey: ""}
+	srv := &Server{
+		cfg:   cfg,
+		log:   log,
+		store: store,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"status":"ok"`)
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
+// Handler returns the Server's HTTP handler assembly for httptest.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+
+	// Init + Login (no auth)
+	mux.Handle("/api/v1/init", s.initHandler)
+	mux.HandleFunc("/api/v1/auth/login", s.initHandler.HandleLogin)
+
+	// Webhook
+	if s.webhook != nil {
+		mux.Handle("/api/v1/webhook/harbor", s.webhook)
+	}
+
+	// Chart config & dashboard (auth middleware)
+	if s.authMiddleware != nil {
+		if s.chartConfig != nil {
+			mux.Handle("/api/v1/orgs/", s.authMiddleware.Handler(s.chartConfig))
+			mux.Handle("/api/v1/dashboard/", s.authMiddleware.Handler(s.chartConfig))
+		}
+		if s.userRBAC != nil {
+			mux.Handle("/api/v1/users", s.authMiddleware.Handler(s.userRBAC))
+			mux.Handle("/api/v1/users/", s.authMiddleware.Handler(s.userRBAC))
+		}
+	}
+
+	// Audit logs
+	if s.store != nil {
+		mux.Handle("/api/v1/audit-logs", http.HandlerFunc(s.handleAuditLogs))
+	}
+
+	// REST API (API key auth)
+	authHandler := s.apiKeyMiddleware(http.HandlerFunc(s.routeREST))
+	mux.Handle("/api/v1/customers", authHandler)
+	mux.Handle("/api/v1/customers/", authHandler)
+	mux.Handle("/api/v1/releases/", authHandler)
+
+	// Health
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	return mux
+}
+
+// NewSQLiteInMemoryStore creates a SQLiteStore for testing using :memory: DSN.
+func NewSQLiteInMemoryStore(t *testing.T) *SQLiteStore {
+	t.Helper()
+	store, err := NewSQLiteStore(":memory:", logr.Discard())
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+	return store
 }

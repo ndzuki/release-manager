@@ -116,6 +116,43 @@ type CertificateWarning struct {
 }
 
 // =============================================================================
+// 操作审计日志
+// =============================================================================
+
+// AuditLogEntry 表示一条 API 操作审计记录。
+// 审计日志只增不删（append-only），管理员只读。
+type AuditLogEntry struct {
+	ID             int64     `json:"id"`               // 自增主键
+	Timestamp      time.Time `json:"timestamp"`        // 请求时间
+	UserID         string    `json:"user_id"`          // 操作人 ID（匿名请求为 "anonymous"）
+	Username       string    `json:"username"`         // 操作人名称
+	OrgID          string    `json:"org_id"`           // 所属组织 ID
+	Action         string    `json:"action"`           // 操作类型（HTTP method）
+	Resource       string    `json:"resource"`         // 目标资源类型（customer, release, user, chart 等）
+	ResourceID     string    `json:"resource_id"`      // 目标资源 ID
+	Method         string    `json:"method"`           // HTTP method
+	Path           string    `json:"path"`             // 请求路径
+	StatusCode     int       `json:"status_code"`      // HTTP 响应状态码
+	ClientIP       string    `json:"client_ip"`        // 客户端 IP
+	UserAgent      string    `json:"user_agent"`       // User-Agent
+	ReqBodySnippet string    `json:"req_body_snippet"` // 请求体摘要（截断至 256 字符）
+	DurationMs     int64     `json:"duration_ms"`      // 请求处理耗时（毫秒）
+}
+
+// AuditLogFilter 审计日志查询过滤条件。
+type AuditLogFilter struct {
+	UserID     string `json:"user_id"`     // 按操作人过滤
+	Resource   string `json:"resource"`    // 按资源类型过滤
+	ResourceID string `json:"resource_id"` // 按资源 ID 过滤
+	Method     string `json:"method"`      // 按 HTTP method 过滤
+	Path       string `json:"path"`        // 按路径前缀过滤
+	Since      string `json:"since"`       // 起始时间，RFC3339 格式
+	Until      string `json:"until"`       // 截止时间，RFC3339 格式
+	Limit      int    `json:"limit"`       // 每页条数，默认 50，最大 200
+	Offset     int    `json:"offset"`      // 分页偏移量
+}
+
+// =============================================================================
 // API 请求/响应类型
 // =============================================================================
 
