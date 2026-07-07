@@ -17,24 +17,24 @@ import (
 
 // Customer 表示一个私有化部署客户。
 type Customer struct {
-	ID               string            `json:"id" example:"customer-001"`              // 客户唯一标识
-	Name             string            `json:"name" example:"某客户"`                     // 客户名称
-	OperatorEndpoint string            `json:"operator_endpoint" example:"10.0.0.5:8443"` // release-operator gRPC 地址
+	ID               string            `json:"id" example:"customer-001"`                  // 客户唯一标识
+	Name             string            `json:"name" example:"某客户"`                         // 客户名称
+	OperatorEndpoint string            `json:"operator_endpoint" example:"10.0.0.5:8443"`  // release-operator gRPC 地址
 	CertFingerprint  string            `json:"cert_fingerprint" example:"ABCDEF123456..."` // mTLS 客户端证书 SHA256 指纹
-	Enabled          bool              `json:"enabled" example:"true"`                 // 是否启用自动更新
-	Labels           map[string]string `json:"labels,omitempty"`                      // 客户标签（分组/筛选）
-	CreatedAt        time.Time         `json:"created_at"`                            // 创建时间
-	UpdatedAt        time.Time         `json:"updated_at"`                            // 更新时间
+	Enabled          bool              `json:"enabled" example:"true"`                     // 是否启用自动更新
+	Labels           map[string]string `json:"labels,omitempty"`                           // 客户标签（分组/筛选）
+	CreatedAt        time.Time         `json:"created_at"`                                 // 创建时间
+	UpdatedAt        time.Time         `json:"updated_at"`                                 // 更新时间
 }
 
 // CreateCustomerRequest 创建客户的请求体。
 type CreateCustomerRequest struct {
-	ID               string            `json:"id" example:"customer-001"`              // 客户唯一标识（必填）
-	Name             string            `json:"name" example:"某客户"`                     // 客户名称（必填）
-	OperatorEndpoint string            `json:"operator_endpoint" example:"10.0.0.5:8443"` // operator gRPC 地址（必填）
+	ID               string            `json:"id" example:"customer-001"`                  // 客户唯一标识（必填）
+	Name             string            `json:"name" example:"某客户"`                         // 客户名称（必填）
+	OperatorEndpoint string            `json:"operator_endpoint" example:"10.0.0.5:8443"`  // operator gRPC 地址（必填）
 	CertFingerprint  string            `json:"cert_fingerprint" example:"ABCDEF123456..."` // 证书指纹（必填）
-	Enabled          bool              `json:"enabled" example:"true"`                 // 是否启用
-	Labels           map[string]string `json:"labels,omitempty"`                      // 客户标签
+	Enabled          bool              `json:"enabled" example:"true"`                     // 是否启用
+	Labels           map[string]string `json:"labels,omitempty"`                           // 客户标签
 }
 
 // UpdateCustomerRequest 更新客户的请求体（所有字段可选）。
@@ -48,16 +48,16 @@ type UpdateCustomerRequest struct {
 
 // ReleaseRecord 表示一次发布操作记录。
 type ReleaseRecord struct {
-	ID            string    `json:"id"`             // 记录 ID
-	RequestID     string    `json:"request_id"`     // 请求 ID
-	CustomerID    string    `json:"customer_id"`    // 客户 ID
-	ChartName     string    `json:"chart_name"`     // Helm chart 名称
-	ChartVersion  string    `json:"chart_version"`  // chart 版本
-	Status        string    `json:"status"`         // 发布状态
-	ErrorMessage  string    `json:"error_message"`  // 错误信息
-	DurationSecs  int64     `json:"duration_secs"`  // 操作耗时（秒）
-	StartedAt     time.Time `json:"started_at"`     // 开始时间
-	CompletedAt   time.Time `json:"completed_at"`   // 完成时间
+	ID           string    `json:"id"`            // 记录 ID
+	RequestID    string    `json:"request_id"`    // 请求 ID
+	CustomerID   string    `json:"customer_id"`   // 客户 ID
+	ChartName    string    `json:"chart_name"`    // Helm chart 名称
+	ChartVersion string    `json:"chart_version"` // chart 版本
+	Status       string    `json:"status"`        // 发布状态
+	ErrorMessage string    `json:"error_message"` // 错误信息
+	DurationSecs int64     `json:"duration_secs"` // 操作耗时（秒）
+	StartedAt    time.Time `json:"started_at"`    // 开始时间
+	CompletedAt  time.Time `json:"completed_at"`  // 完成时间
 }
 
 // Store 定义客户和发布记录的数据持久化接口。
@@ -104,26 +104,26 @@ type Store interface {
 
 // MemoryStore 是 Store 的内存实现，适合测试和单节点部署。
 type MemoryStore struct {
-	mu        sync.RWMutex
-	customers map[string]Customer
-	records   map[string]ReleaseRecord
-	charts    map[string]ChartDefinition
-	bindings  map[string]CustomerChartBinding
-	initDone  bool
-	adminUser *AdminUser
+	mu           sync.RWMutex
+	customers    map[string]Customer
+	records      map[string]ReleaseRecord
+	charts       map[string]ChartDefinition
+	bindings     map[string]CustomerChartBinding
+	initDone     bool
+	adminUser    *AdminUser
 	verifyTokens map[string]string // email → token
-	log       logr.Logger
+	log          logr.Logger
 }
 
 // NewMemoryStore 创建一个新的 MemoryStore。
 func NewMemoryStore(log logr.Logger) *MemoryStore {
 	return &MemoryStore{
-		customers: make(map[string]Customer),
-		records:   make(map[string]ReleaseRecord),
-		charts:    make(map[string]ChartDefinition),
-		bindings:  make(map[string]CustomerChartBinding),
+		customers:    make(map[string]Customer),
+		records:      make(map[string]ReleaseRecord),
+		charts:       make(map[string]ChartDefinition),
+		bindings:     make(map[string]CustomerChartBinding),
 		verifyTokens: make(map[string]string),
-		log:       log.WithName("memory-store"),
+		log:          log.WithName("memory-store"),
 	}
 }
 
@@ -263,29 +263,59 @@ func (s *MemoryStore) ListReleaseRecords(requestID string) ([]ReleaseRecord, err
 }
 
 // --- Admin user & init methods ---
-func (s *MemoryStore) GetInitStatus() (bool, error) { s.mu.RLock(); defer s.mu.RUnlock(); return s.initDone, nil }
-func (s *MemoryStore) SetInitStatus(initialized bool) error { s.mu.Lock(); defer s.mu.Unlock(); s.initDone = initialized; return nil }
-func (s *MemoryStore) CreateAdminUser(u AdminUser) error { s.mu.Lock(); defer s.mu.Unlock(); copied := u; s.adminUser = &copied; return nil }
-func (s *MemoryStore) GetAdminUser(username string) (*AdminUser, error) {
-	s.mu.RLock(); defer s.mu.RUnlock()
-	if s.adminUser == nil || s.adminUser.Username != username { return nil, fmt.Errorf("user not found") }
-	c := *s.adminUser; return &c, nil
+func (s *MemoryStore) GetInitStatus() (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.initDone, nil
 }
-func (s *MemoryStore) SetVerifyToken(email, token string) error { s.mu.Lock(); defer s.mu.Unlock(); s.verifyTokens[email] = token; return nil }
+func (s *MemoryStore) SetInitStatus(initialized bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initDone = initialized
+	return nil
+}
+func (s *MemoryStore) CreateAdminUser(u AdminUser) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copied := u
+	s.adminUser = &copied
+	return nil
+}
+func (s *MemoryStore) GetAdminUser(username string) (*AdminUser, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.adminUser == nil || s.adminUser.Username != username {
+		return nil, fmt.Errorf("user not found")
+	}
+	c := *s.adminUser
+	return &c, nil
+}
+func (s *MemoryStore) SetVerifyToken(email, token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.verifyTokens[email] = token
+	return nil
+}
 
 // --- User management stubs ---
 func (s *MemoryStore) ListUsers() ([]User, error) {
-	s.mu.RLock(); defer s.mu.RUnlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var users []User
 	for _, c := range s.customers {
 		users = append(users, User{ID: c.ID, Name: c.Name, OrgID: "default", Role: "viewer", Enabled: c.Enabled})
 	}
-	if s.adminUser != nil { users = append(users, User{ID: s.adminUser.Username, Name: s.adminUser.Username, OrgID: "default", Role: s.adminUser.Role, Email: s.adminUser.Email}) }
+	if s.adminUser != nil {
+		users = append(users, User{ID: s.adminUser.Username, Name: s.adminUser.Username, OrgID: "default", Role: s.adminUser.Role, Email: s.adminUser.Email})
+	}
 	return users, nil
 }
 func (s *MemoryStore) GetUser(id string) (*User, error) {
-	s.mu.RLock(); defer s.mu.RUnlock()
-	if s.adminUser != nil && s.adminUser.Username == id { return &User{ID: id, Name: id, Role: s.adminUser.Role, Email: s.adminUser.Email}, nil }
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.adminUser != nil && s.adminUser.Username == id {
+		return &User{ID: id, Name: id, Role: s.adminUser.Role, Email: s.adminUser.Email}, nil
+	}
 	return nil, fmt.Errorf("user %s not found", id)
 }
 func (s *MemoryStore) CreateUser(u User) error { return nil }
@@ -299,43 +329,58 @@ func (s *MemoryStore) Close() error { return nil }
 // --- Chart 部署配置方法 (MemoryStore) ---
 
 func (s *MemoryStore) ListChartDefinitions(orgID string) ([]ChartDefinition, error) {
-	s.mu.RLock(); defer s.mu.RUnlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var result []ChartDefinition
 	for _, c := range s.charts {
-		if c.OrgID == orgID { result = append(result, c) }
+		if c.OrgID == orgID {
+			result = append(result, c)
+		}
 	}
 	return result, nil
 }
 func (s *MemoryStore) GetChartDefinition(orgID, chartID string) (*ChartDefinition, error) {
-	s.mu.RLock(); defer s.mu.RUnlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	c, ok := s.charts[orgID+":"+chartID]
-	if !ok { return nil, fmt.Errorf("chart %s not found", chartID) }
+	if !ok {
+		return nil, fmt.Errorf("chart %s not found", chartID)
+	}
 	return &c, nil
 }
 func (s *MemoryStore) CreateChartDefinition(c ChartDefinition) (*ChartDefinition, error) {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	key := c.OrgID + ":" + c.ID
 	s.charts[key] = c
 	return &c, nil
 }
 func (s *MemoryStore) ListCustomerChartBindings(orgID, customerID string) ([]CustomerChartBinding, error) {
-	s.mu.RLock(); defer s.mu.RUnlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var result []CustomerChartBinding
 	for _, b := range s.bindings {
-		if b.OrgID == orgID && b.CustomerID == customerID { result = append(result, b) }
+		if b.OrgID == orgID && b.CustomerID == customerID {
+			result = append(result, b)
+		}
 	}
 	return result, nil
 }
 func (s *MemoryStore) CreateCustomerChartBinding(b CustomerChartBinding) (*CustomerChartBinding, error) {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	key := b.OrgID + ":" + b.CustomerID + ":" + b.ChartID
 	s.bindings[key] = b
 	return &b, nil
 }
 func (s *MemoryStore) DeleteCustomerChartBinding(orgID, bindingID string) error {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for k, b := range s.bindings {
-		if b.OrgID == orgID && b.ID == bindingID { delete(s.bindings, k); return nil }
+		if b.OrgID == orgID && b.ID == bindingID {
+			delete(s.bindings, k)
+			return nil
+		}
 	}
 	return fmt.Errorf("binding %s not found", bindingID)
 }
@@ -392,6 +437,81 @@ func migrate(db *sql.DB, log logr.Logger) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_release_records_request ON release_records(request_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_release_records_customer ON release_records(customer_id)`,
+
+		// 用户管理
+		`CREATE TABLE IF NOT EXISTS users (
+			id TEXT PRIMARY KEY,
+			org_id TEXT,
+			name TEXT NOT NULL,
+			email TEXT NOT NULL,
+			role TEXT NOT NULL DEFAULT 'viewer',
+			auth_provider TEXT DEFAULT 'local',
+			external_id TEXT DEFAULT '',
+			dingtalk_user_id TEXT DEFAULT '',
+			enabled INTEGER DEFAULT 1,
+			last_login_at DATETIME,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
+
+		// 管理员用户
+		`CREATE TABLE IF NOT EXISTS admin_users (
+			username TEXT PRIMARY KEY,
+			password_hash TEXT NOT NULL,
+			email TEXT NOT NULL,
+			role TEXT NOT NULL DEFAULT 'admin',
+			email_verified INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+
+		// 系统配置
+		`CREATE TABLE IF NOT EXISTS system_config (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+
+		// 验证令牌
+		`CREATE TABLE IF NOT EXISTS verify_tokens (
+			email TEXT PRIMARY KEY,
+			token TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+
+		// Chart 部署配置
+		`CREATE TABLE IF NOT EXISTS chart_definitions (
+			id TEXT PRIMARY KEY,
+			org_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			oci_url TEXT NOT NULL,
+			default_values TEXT DEFAULT '{}',
+			labels TEXT DEFAULT '{}',
+			enabled INTEGER DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_chart_definitions_org ON chart_definitions(org_id)`,
+
+		`CREATE TABLE IF NOT EXISTS customer_chart_bindings (
+			id TEXT PRIMARY KEY,
+			org_id TEXT NOT NULL,
+			customer_id TEXT NOT NULL,
+			chart_id TEXT NOT NULL,
+			chart_name TEXT NOT NULL,
+			enabled INTEGER DEFAULT 1,
+			release_name TEXT NOT NULL,
+			namespace TEXT NOT NULL DEFAULT 'default',
+			custom_values TEXT DEFAULT '{}',
+			deploy_order INTEGER DEFAULT 0,
+			current_version TEXT DEFAULT '',
+			last_deployed_at DATETIME,
+			last_status TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_customer_chart_bindings_org_cust ON customer_chart_bindings(org_id, customer_id)`,
 	}
 
 	for _, m := range migrations {
@@ -487,8 +607,12 @@ func (s *SQLiteStore) UpdateCustomer(c Customer) (*Customer, error) {
 // DeleteCustomer 删除客户。
 func (s *SQLiteStore) DeleteCustomer(id string) error {
 	r, err := s.db.Exec("DELETE FROM customers WHERE id = ?", id)
-	if err != nil { return err }
-	if n, _ := r.RowsAffected(); n == 0 { return fmt.Errorf("customer %s not found", id) }
+	if err != nil {
+		return err
+	}
+	if n, _ := r.RowsAffected(); n == 0 {
+		return fmt.Errorf("customer %s not found", id)
+	}
 	return nil
 }
 
@@ -507,8 +631,12 @@ func (s *SQLiteStore) UpdateReleaseRecord(requestID, customerID, status, errMsg 
 		 WHERE request_id = ? AND customer_id = ?`,
 		status, errMsg, completedAt, durationSecs, requestID, customerID,
 	)
-	if err != nil { return err }
-	if n, _ := r.RowsAffected(); n == 0 { return fmt.Errorf("release record %s:%s not found", requestID, customerID) }
+	if err != nil {
+		return err
+	}
+	if n, _ := r.RowsAffected(); n == 0 {
+		return fmt.Errorf("release record %s:%s not found", requestID, customerID)
+	}
 	return nil
 }
 
@@ -542,29 +670,288 @@ func (s *SQLiteStore) ListReleaseRecords(requestID string) ([]ReleaseRecord, err
 	return records, rows.Err()
 }
 
-// Close 关闭数据库连接。
-// SQLite admin stubs
-func (s *SQLiteStore) ListUsers() ([]User, error) { return nil, fmt.Errorf("not implemented") }
-func (s *SQLiteStore) GetUser(id string) (*User, error) { return nil, fmt.Errorf("not found") }
-func (s *SQLiteStore) CreateUser(u User) error { return fmt.Errorf("not implemented") }
-func (s *SQLiteStore) GetUserByEmail(email string) (*User, error) { return nil, fmt.Errorf("not found") }
+// =============================================================================
+// SQLite — 用户管理
+// =============================================================================
 
-func (s *SQLiteStore) GetInitStatus() (bool, error) { return false, fmt.Errorf("not implemented") }
-func (s *SQLiteStore) SetInitStatus(initialized bool) error { return fmt.Errorf("not implemented") }
-func (s *SQLiteStore) CreateAdminUser(u AdminUser) error { return fmt.Errorf("not implemented") }
-func (s *SQLiteStore) GetAdminUser(username string) (*AdminUser, error) { return nil, fmt.Errorf("not found") }
-func (s *SQLiteStore) SetVerifyToken(email, token string) error { return fmt.Errorf("not implemented") }
+func (s *SQLiteStore) ListUsers() ([]User, error) {
+	rows, err := s.db.Query("SELECT id, org_id, name, email, role, auth_provider, external_id, dingtalk_user_id, enabled, COALESCE(last_login_at,''), created_at, updated_at FROM users ORDER BY name")
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	defer rows.Close()
 
-// SQLite chart config stubs — 生产环境应使用完整的数据库实现
-func (s *SQLiteStore) ListChartDefinitions(orgID string) ([]ChartDefinition, error) { return nil, nil }
-func (s *SQLiteStore) GetChartDefinition(orgID, chartID string) (*ChartDefinition, error) {
-	return nil, fmt.Errorf("chart %s not found", chartID)
+	var users []User
+	for rows.Next() {
+		var u User
+		var orgID, email, authProvider, externalID, dingTalkUserID sql.NullString
+		var lastLoginAt string
+		if err := rows.Scan(&u.ID, &orgID, &u.Name, &email, &u.Role, &authProvider, &externalID, &dingTalkUserID, &u.Enabled, &lastLoginAt, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan user: %w", err)
+		}
+		if orgID.Valid {
+			u.OrgID = orgID.String
+		}
+		if email.Valid {
+			u.Email = email.String
+		}
+		if authProvider.Valid {
+			u.AuthProvider = authProvider.String
+		}
+		if externalID.Valid {
+			u.ExternalID = externalID.String
+		}
+		if dingTalkUserID.Valid {
+			u.DingTalkUserID = dingTalkUserID.String
+		}
+		if t, err := time.Parse("2006-01-02 15:04:05", lastLoginAt); err == nil {
+			u.LastLoginAt = t
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
 }
-func (s *SQLiteStore) CreateChartDefinition(c ChartDefinition) (*ChartDefinition, error) { return &c, nil }
-func (s *SQLiteStore) ListCustomerChartBindings(orgID, customerID string) ([]CustomerChartBinding, error) { return nil, nil }
-func (s *SQLiteStore) CreateCustomerChartBinding(b CustomerChartBinding) (*CustomerChartBinding, error) { return &b, nil }
-func (s *SQLiteStore) DeleteCustomerChartBinding(orgID, bindingID string) error { return nil }
 
+func (s *SQLiteStore) GetUser(id string) (*User, error) {
+	var u User
+	var orgID, email, authProvider, externalID, dingTalkUserID sql.NullString
+	var lastLoginAt string
+	err := s.db.QueryRow(
+		"SELECT id, org_id, name, email, role, auth_provider, external_id, dingtalk_user_id, enabled, COALESCE(last_login_at,''), created_at, updated_at FROM users WHERE id = ?", id,
+	).Scan(&u.ID, &orgID, &u.Name, &email, &u.Role, &authProvider, &externalID, &dingTalkUserID, &u.Enabled, &lastLoginAt, &u.CreatedAt, &u.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("user %s not found", id)
+	}
+	if orgID.Valid {
+		u.OrgID = orgID.String
+	}
+	if email.Valid {
+		u.Email = email.String
+	}
+	if authProvider.Valid {
+		u.AuthProvider = authProvider.String
+	}
+	if externalID.Valid {
+		u.ExternalID = externalID.String
+	}
+	if dingTalkUserID.Valid {
+		u.DingTalkUserID = dingTalkUserID.String
+	}
+	if t, err := time.Parse("2006-01-02 15:04:05", lastLoginAt); err == nil {
+		u.LastLoginAt = t
+	}
+	return &u, nil
+}
+
+func (s *SQLiteStore) CreateUser(u User) error {
+	_, err := s.db.Exec(
+		`INSERT INTO users (id, org_id, name, email, role, auth_provider, external_id, dingtalk_user_id, enabled, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		u.ID, nullStr(u.OrgID), u.Name, nullStr(u.Email), u.Role, nullStr(u.AuthProvider), nullStr(u.ExternalID), nullStr(u.DingTalkUserID), u.Enabled, u.CreatedAt, u.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("create user: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) GetUserByEmail(email string) (*User, error) {
+	var u User
+	var orgID, authProvider, externalID, dingTalkUserID sql.NullString
+	var emailStr sql.NullString
+	var lastLoginAt string
+	err := s.db.QueryRow(
+		"SELECT id, org_id, name, email, role, auth_provider, external_id, dingtalk_user_id, enabled, COALESCE(last_login_at,''), created_at, updated_at FROM users WHERE email = ?", email,
+	).Scan(&u.ID, &orgID, &u.Name, &emailStr, &u.Role, &authProvider, &externalID, &dingTalkUserID, &u.Enabled, &lastLoginAt, &u.CreatedAt, &u.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("user with email %s not found", email)
+	}
+	if orgID.Valid {
+		u.OrgID = orgID.String
+	}
+	if emailStr.Valid {
+		u.Email = emailStr.String
+	}
+	if authProvider.Valid {
+		u.AuthProvider = authProvider.String
+	}
+	if externalID.Valid {
+		u.ExternalID = externalID.String
+	}
+	if dingTalkUserID.Valid {
+		u.DingTalkUserID = dingTalkUserID.String
+	}
+	if t, err := time.Parse("2006-01-02 15:04:05", lastLoginAt); err == nil {
+		u.LastLoginAt = t
+	}
+	return &u, nil
+}
+
+// =============================================================================
+// SQLite — 初始化 & 管理员用户
+// =============================================================================
+
+func (s *SQLiteStore) GetInitStatus() (bool, error) {
+	var val string
+	err := s.db.QueryRow("SELECT value FROM system_config WHERE key='initialized'").Scan(&val)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get init status: %w", err)
+	}
+	return val == "true", nil
+}
+
+func (s *SQLiteStore) SetInitStatus(initialized bool) error {
+	v := "false"
+	if initialized {
+		v = "true"
+	}
+	_, err := s.db.Exec(
+		"INSERT OR REPLACE INTO system_config (key, value, updated_at) VALUES ('initialized', ?, CURRENT_TIMESTAMP)", v,
+	)
+	if err != nil {
+		return fmt.Errorf("set init status: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) CreateAdminUser(u AdminUser) error {
+	_, err := s.db.Exec(
+		`INSERT OR REPLACE INTO admin_users (username, password_hash, email, role, email_verified, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		u.Username, u.PasswordHash, u.Email, u.Role, u.EmailVerified, u.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("create admin user: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) GetAdminUser(username string) (*AdminUser, error) {
+	var u AdminUser
+	err := s.db.QueryRow(
+		"SELECT username, password_hash, email, role, email_verified, created_at FROM admin_users WHERE username = ?", username,
+	).Scan(&u.Username, &u.PasswordHash, &u.Email, &u.Role, &u.EmailVerified, &u.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("user %s not found", username)
+	}
+	return &u, nil
+}
+
+func (s *SQLiteStore) SetVerifyToken(email, token string) error {
+	_, err := s.db.Exec(
+		"INSERT OR REPLACE INTO verify_tokens (email, token, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)", email, token,
+	)
+	if err != nil {
+		return fmt.Errorf("set verify token: %w", err)
+	}
+	return nil
+}
+
+// =============================================================================
+// SQLite — Chart 部署配置
+// =============================================================================
+
+func (s *SQLiteStore) ListChartDefinitions(orgID string) ([]ChartDefinition, error) {
+	rows, err := s.db.Query(
+		"SELECT id, org_id, name, description, oci_url, enabled, labels, created_at, updated_at FROM chart_definitions WHERE org_id = ? ORDER BY name", orgID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list chart definitions: %w", err)
+	}
+	defer rows.Close()
+
+	var charts []ChartDefinition
+	for rows.Next() {
+		var c ChartDefinition
+		var labelsJSON string
+		if err := rows.Scan(&c.ID, &c.OrgID, &c.Name, &c.Description, &c.OCIURL, &c.Enabled, &labelsJSON, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan chart definition: %w", err)
+		}
+		charts = append(charts, c)
+	}
+	return charts, rows.Err()
+}
+
+func (s *SQLiteStore) GetChartDefinition(orgID, chartID string) (*ChartDefinition, error) {
+	var c ChartDefinition
+	var labelsJSON string
+	err := s.db.QueryRow(
+		"SELECT id, org_id, name, description, oci_url, enabled, labels, created_at, updated_at FROM chart_definitions WHERE org_id = ? AND id = ?", orgID, chartID,
+	).Scan(&c.ID, &c.OrgID, &c.Name, &c.Description, &c.OCIURL, &c.Enabled, &labelsJSON, &c.CreatedAt, &c.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("chart %s not found", chartID)
+	}
+	return &c, nil
+}
+
+func (s *SQLiteStore) CreateChartDefinition(c ChartDefinition) (*ChartDefinition, error) {
+	_, err := s.db.Exec(
+		`INSERT INTO chart_definitions (id, org_id, name, description, oci_url, enabled, labels) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		c.ID, c.OrgID, c.Name, c.Description, c.OCIURL, c.Enabled, "{}",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create chart definition: %w", err)
+	}
+	return &c, nil
+}
+
+func (s *SQLiteStore) ListCustomerChartBindings(orgID, customerID string) ([]CustomerChartBinding, error) {
+	rows, err := s.db.Query(
+		`SELECT id, org_id, customer_id, chart_id, chart_name, enabled, release_name, namespace, deploy_order,
+		        COALESCE(current_version,''), COALESCE(last_status,''), created_at, updated_at
+		 FROM customer_chart_bindings WHERE org_id = ? AND customer_id = ? ORDER BY deploy_order`, orgID, customerID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list customer chart bindings: %w", err)
+	}
+	defer rows.Close()
+
+	var bindings []CustomerChartBinding
+	for rows.Next() {
+		var b CustomerChartBinding
+		if err := rows.Scan(&b.ID, &b.OrgID, &b.CustomerID, &b.ChartID, &b.ChartName, &b.Enabled, &b.ReleaseName, &b.Namespace, &b.DeployOrder, &b.CurrentVersion, &b.LastStatus, &b.CreatedAt, &b.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan binding: %w", err)
+		}
+		bindings = append(bindings, b)
+	}
+	return bindings, rows.Err()
+}
+
+func (s *SQLiteStore) CreateCustomerChartBinding(b CustomerChartBinding) (*CustomerChartBinding, error) {
+	_, err := s.db.Exec(
+		`INSERT INTO customer_chart_bindings (id, org_id, customer_id, chart_id, chart_name, enabled, release_name, namespace, deploy_order)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		b.ID, b.OrgID, b.CustomerID, b.ChartID, b.ChartName, b.Enabled, b.ReleaseName, b.Namespace, b.DeployOrder,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create customer chart binding: %w", err)
+	}
+	return &b, nil
+}
+
+func (s *SQLiteStore) DeleteCustomerChartBinding(orgID, bindingID string) error {
+	r, err := s.db.Exec("DELETE FROM customer_chart_bindings WHERE org_id = ? AND id = ?", orgID, bindingID)
+	if err != nil {
+		return fmt.Errorf("delete customer chart binding: %w", err)
+	}
+	if n, _ := r.RowsAffected(); n == 0 {
+		return fmt.Errorf("binding %s not found", bindingID)
+	}
+	return nil
+}
+
+// Close 关闭数据库连接。
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
+}
+
+// nullStr 返回 NULL 对应的 SQL nullable string 值，空字符串视为 NULL。
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }

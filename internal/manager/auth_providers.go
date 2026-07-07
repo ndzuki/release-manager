@@ -13,6 +13,7 @@
 package manager
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -98,7 +99,9 @@ func (r *CasbinRBAC) loadPolicies() {
 		{"viewer", "*", "/api/v1/*", "(GET)"},
 	}
 	for _, p := range policies {
-		if _, err := r.enforcer.AddPolicy(p); err != nil { r.log.Error(err, "casbin add policy failed", "policy", p) }
+		if _, err := r.enforcer.AddPolicy(p); err != nil {
+			r.log.Error(err, "casbin add policy failed", "policy", p)
+		}
 	}
 	// 角色继承
 	r.enforcer.AddGroupingPolicy("admin", "operator")
@@ -149,18 +152,18 @@ func (r *CasbinRBAC) AddPolicy(sub, org, obj, act string) error {
 
 // LDAPConfig LDAP 连接配置。
 type LDAPConfig struct {
-	Host           string `yaml:"host"`            // LDAP 服务器地址 (e.g. ldap.example.com:389)
-	BaseDN         string `yaml:"base_dn"`         // 搜索基 DN (e.g. dc=example,dc=com)
-	BindDN         string `yaml:"bind_dn"`         // 绑定 DN (e.g. cn=admin,dc=example,dc=com)
-	BindPassword   string `yaml:"bind_password"`   // 绑定密码
-	UserFilter     string `yaml:"user_filter"`     // 用户过滤 (e.g. (&(uid=%s)(objectClass=posixAccount)))
-	GroupFilter    string `yaml:"group_filter"`    // 组过滤 (e.g. (&(cn=%s)(objectClass=groupOfNames)))
-	GroupAttr      string `yaml:"group_attr"`      // 组成员属性 (e.g. member)
-	EmailAttr      string `yaml:"email_attr"`      // 邮箱属性 (e.g. mail)
-	UseTLS         bool   `yaml:"use_tls"`         // 使用 TLS
-	SkipTLSVerify  bool   `yaml:"skip_tls_verify"` // 跳过 TLS 验证
-	CAFile         string `yaml:"ca_file"`         // 自定义 CA 文件
-	Enabled        bool   `yaml:"enabled"`
+	Host          string `yaml:"host"`            // LDAP 服务器地址 (e.g. ldap.example.com:389)
+	BaseDN        string `yaml:"base_dn"`         // 搜索基 DN (e.g. dc=example,dc=com)
+	BindDN        string `yaml:"bind_dn"`         // 绑定 DN (e.g. cn=admin,dc=example,dc=com)
+	BindPassword  string `yaml:"bind_password"`   // 绑定密码
+	UserFilter    string `yaml:"user_filter"`     // 用户过滤 (e.g. (&(uid=%s)(objectClass=posixAccount)))
+	GroupFilter   string `yaml:"group_filter"`    // 组过滤 (e.g. (&(cn=%s)(objectClass=groupOfNames)))
+	GroupAttr     string `yaml:"group_attr"`      // 组成员属性 (e.g. member)
+	EmailAttr     string `yaml:"email_attr"`      // 邮箱属性 (e.g. mail)
+	UseTLS        bool   `yaml:"use_tls"`         // 使用 TLS
+	SkipTLSVerify bool   `yaml:"skip_tls_verify"` // 跳过 TLS 验证
+	CAFile        string `yaml:"ca_file"`         // 自定义 CA 文件
+	Enabled       bool   `yaml:"enabled"`
 }
 
 // LDAPAuth LDAP 认证提供者。
@@ -284,7 +287,9 @@ func (a *OIDCAuth) Authenticate(r *http.Request) (*User, error) {
 	user, err := a.store.GetUserByEmail(email)
 	if err != nil {
 		name, _ := claims["name"].(string)
-		if name == "" { name = email }
+		if name == "" {
+			name = email
+		}
 		user = &User{
 			ID:           email,
 			Name:         name,
@@ -428,7 +433,9 @@ func (a *DingTalkAuth) getUserInfo(token string) (*dingTalkUserInfo, error) {
 
 func basicAuth(r *http.Request) (username, password string) {
 	u, p, ok := r.BasicAuth()
-	if !ok { return "", "" }
+	if !ok {
+		return "", ""
+	}
 	return u, p
 }
 
@@ -453,24 +460,30 @@ func groupsToRole(groups []string, log logr.Logger) string {
 
 func parseJWTClaims(token string) (map[string]any, error) {
 	parts := strings.Split(token, ".")
-	if len(parts) != 3 { return nil, fmt.Errorf("invalid JWT format") }
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid JWT format")
+	}
 	var claims map[string]any
 	data, err := base64Decode(parts[1])
-	if err != nil { return nil, err }
-	if err := json.Unmarshal(data, &claims); err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(data, &claims); err != nil {
+		return nil, err
+	}
 	return claims, nil
 }
 
 func base64Decode(s string) ([]byte, error) {
-	// padding
-	switch len(s) % 4 {
-	case 2: s += "=="
-	case 3: s += "="
+	// Try URL-safe unpadded (JWT standard), then std with padding, then raw std
+	if data, err := base64.RawURLEncoding.DecodeString(s); err == nil {
+		return data, nil
 	}
-	// standard decode — simplified
-	return []byte(s), nil
+	if data, err := base64.RawStdEncoding.DecodeString(s); err == nil {
+		return data, nil
+	}
+	return base64.StdEncoding.DecodeString(s)
 }
-
 
 // =============================================================================
 // RBAC 用户管理 HTTP Handler
@@ -501,12 +514,20 @@ func (h *UserRBACHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *UserRBACHandler) listUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := h.store.ListUsers()
-	if err != nil { writeJSON(w, 500, map[string]string{"error": err.Error()}); return }
-	type UserWithRoles struct{ User User; Roles []string }
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	type UserWithRoles struct {
+		User  User
+		Roles []string
+	}
 	result := make([]UserWithRoles, 0, len(users))
 	for _, u := range users {
 		roles, _ := h.rbac.GetRolesForUser(u.ID)
-		if roles == nil { roles = []string{} }
+		if roles == nil {
+			roles = []string{}
+		}
 		result = append(result, UserWithRoles{User: u, Roles: roles})
 	}
 	writeJSON(w, 200, result)
@@ -516,17 +537,30 @@ func (h *UserRBACHandler) userRoles(w http.ResponseWriter, r *http.Request, user
 	switch r.Method {
 	case http.MethodGet:
 		roles, _ := h.rbac.GetRolesForUser(userID)
-		if roles == nil { roles = []string{} }
+		if roles == nil {
+			roles = []string{}
+		}
 		writeJSON(w, 200, map[string]any{"user_id": userID, "roles": roles})
 	case http.MethodPut:
 		var req struct{ Role string }
-		if json.NewDecoder(r.Body).Decode(&req) != nil { writeJSON(w, 400, map[string]string{"error":"invalid JSON"}); return }
-		if req.Role != "admin" && req.Role != "operator" && req.Role != "viewer" { writeJSON(w, 400, map[string]string{"error":"role must be admin/operator/viewer"}); return }
-		for _, old := range []string{"admin","operator","viewer"} { h.rbac.DeleteRoleForUser(userID, old) }
-		if err := h.rbac.AddRoleForUser(userID, req.Role); err != nil { writeJSON(w, 500, map[string]string{"error":err.Error()}); return }
+		if json.NewDecoder(r.Body).Decode(&req) != nil {
+			writeJSON(w, 400, map[string]string{"error": "invalid JSON"})
+			return
+		}
+		if req.Role != "admin" && req.Role != "operator" && req.Role != "viewer" {
+			writeJSON(w, 400, map[string]string{"error": "role must be admin/operator/viewer"})
+			return
+		}
+		for _, old := range []string{"admin", "operator", "viewer"} {
+			h.rbac.DeleteRoleForUser(userID, old)
+		}
+		if err := h.rbac.AddRoleForUser(userID, req.Role); err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
 		h.log.Info("role bound", "user", userID, "role", req.Role)
-		writeJSON(w, 200, map[string]string{"message":"role updated"})
+		writeJSON(w, 200, map[string]string{"message": "role updated"})
 	default:
-		writeJSON(w, 405, map[string]string{"error":"method not allowed"})
+		writeJSON(w, 405, map[string]string{"error": "method not allowed"})
 	}
 }

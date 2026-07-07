@@ -19,19 +19,19 @@ import (
 // Config 是 release-manager 系统的顶层配置。
 type Config struct {
 	// Server 服务器配置（gRPC 和 HTTP 监听地址、超时等）
-	Server   ServerConfig `yaml:"server"`
+	Server ServerConfig `yaml:"server"`
 	// Log 日志配置（级别、格式、输出路径）
-	Log      LogConfig    `yaml:"log"`
+	Log LogConfig `yaml:"log"`
 	// TLS mTLS 证书配置
-	TLS      TLSConfig    `yaml:"tls"`
+	TLS TLSConfig `yaml:"tls"`
 	// Harbor Harbor 仓库连接配置
-	Harbor   HarborConfig `yaml:"harbor"`
+	Harbor HarborConfig `yaml:"harbor"`
 	// Helm Helm 操作配置（超时、默认 namespace、回滚策略等）
-	Helm     HelmConfig   `yaml:"helm"`
+	Helm HelmConfig `yaml:"helm"`
 	// DingTalk 钉钉机器人通知配置
 	DingTalk DingTalkConfig `yaml:"dingtalk"`
 	// Store 数据存储配置（SQLite 或 PostgreSQL）
-	Store    StoreConfig  `yaml:"store"`
+	Store StoreConfig `yaml:"store"`
 	// NotificationEndpoint release-manager 服务的 gRPC 地址（仅 operator 使用）
 	NotificationEndpoint string `yaml:"notification_endpoint"`
 	// SMTP 邮件配置（邮箱验证和密码找回）
@@ -60,33 +60,34 @@ type LogConfig struct {
 
 // TLSConfig 定义 mTLS 双向认证配置。
 type TLSConfig struct {
-	CAFile                   string   `yaml:"ca_file"`                      // CA 证书文件路径
-	CertFile                 string   `yaml:"cert_file"`                    // 服务端/客户端证书文件路径
-	KeyFile                  string   `yaml:"key_file"`                     // 私钥文件路径
-	RequireClientCert        bool     `yaml:"require_client_cert"`          // 是否要求客户端证书
-	AllowedFingerprints      []string `yaml:"allowed_fingerprints"`         // 允许的客户端证书 SHA256 指纹白名单
-	ClientInsecureSkipVerify bool     `yaml:"client_insecure_skip_verify"`  // 客户端模式跳过 TLS 主机名验证（仅 E2E）
+	CAFile                   string   `yaml:"ca_file"`                     // CA 证书文件路径
+	CertFile                 string   `yaml:"cert_file"`                   // 服务端/客户端证书文件路径
+	KeyFile                  string   `yaml:"key_file"`                    // 私钥文件路径
+	RequireClientCert        bool     `yaml:"require_client_cert"`         // 是否要求客户端证书
+	AllowedFingerprints      []string `yaml:"allowed_fingerprints"`        // 允许的客户端证书 SHA256 指纹白名单
+	ClientInsecureSkipVerify bool     `yaml:"client_insecure_skip_verify"` // 客户端模式跳过 TLS 主机名验证（仅 E2E）
+	HotReloadDir             string   `yaml:"hot_reload_dir"`              // 证书热加载目录，默认 /var/lib/release-operator/certs
 }
 
 // HarborConfig 定义 Harbor OCI 仓库连接参数。
 type HarborConfig struct {
-	URL                string        `yaml:"url"`                   // Harbor 地址，如 https://harbor.example.com
-	Username           string        `yaml:"username"`              // 登录用户名
-	Password           string        `yaml:"password"`              // 登录密码
-	InsecureSkipVerify bool          `yaml:"insecure_skip_verify"`  // 跳过 TLS 证书验证（仅用于自签名证书）
-	Timeout            time.Duration `yaml:"timeout"`               // 连接超时
-	WebhookHMACSecret  string        `yaml:"webhook_hmac_secret"`   // Harbor webhook HMAC 签名密钥
-	CAFile             string        `yaml:"ca_file"`                // Harbor 自签 CA 证书文件路径 (PEM)
+	URL                string        `yaml:"url"`                  // Harbor 地址，如 https://harbor.example.com
+	Username           string        `yaml:"username"`             // 登录用户名
+	Password           string        `yaml:"password"`             // 登录密码
+	InsecureSkipVerify bool          `yaml:"insecure_skip_verify"` // 跳过 TLS 证书验证（仅用于自签名证书）
+	Timeout            time.Duration `yaml:"timeout"`              // 连接超时
+	WebhookHMACSecret  string        `yaml:"webhook_hmac_secret"`  // Harbor webhook HMAC 签名密钥
+	CAFile             string        `yaml:"ca_file"`              // Harbor 自签 CA 证书文件路径 (PEM)
 }
 
 // HelmConfig 定义 Helm 操作参数。
 type HelmConfig struct {
-	UpgradeTimeout   time.Duration `yaml:"upgrade_timeout"`    // upgrade 默认超时，默认 10m
-	DefaultNamespace string        `yaml:"default_namespace"`  // 默认 K8s namespace
-	MaxHistory       int           `yaml:"max_history"`        // 保留的最大 release 版本数
-	Atomic           bool          `yaml:"atomic"`             // 失败时自动回滚（helm --atomic）
-	Wait             bool          `yaml:"wait"`               // 等待所有资源就绪
-	CreateNamespace  bool          `yaml:"create_namespace"`   // 自动创建 namespace
+	UpgradeTimeout   time.Duration `yaml:"upgrade_timeout"`   // upgrade 默认超时，默认 10m
+	DefaultNamespace string        `yaml:"default_namespace"` // 默认 K8s namespace
+	MaxHistory       int           `yaml:"max_history"`       // 保留的最大 release 版本数
+	Atomic           bool          `yaml:"atomic"`            // 失败时自动回滚（helm --atomic）
+	Wait             bool          `yaml:"wait"`              // 等待所有资源就绪
+	CreateNamespace  bool          `yaml:"create_namespace"`  // 自动创建 namespace
 	CacheDir         string        `yaml:"cache_dir"`         // Helm 缓存目录
 }
 
@@ -128,8 +129,9 @@ func DefaultConfig() *Config {
 			Format: "json",
 		},
 		TLS: TLSConfig{
-			RequireClientCert: true,
+			RequireClientCert:        true,
 			ClientInsecureSkipVerify: true,
+			HotReloadDir:             "/var/lib/release-operator/certs",
 		},
 		Harbor: HarborConfig{
 			Timeout: 60 * time.Second,
@@ -228,9 +230,9 @@ func (c *TLSConfig) BuildClientTLSConfig() (*cryptotls.Config, error) {
 	}
 
 	tlsCfg := &cryptotls.Config{
-		Certificates:          []cryptotls.Certificate{cert},
-		MinVersion:            cryptotls.VersionTLS13,
-		InsecureSkipVerify:    c.ClientInsecureSkipVerify,
+		Certificates:       []cryptotls.Certificate{cert},
+		MinVersion:         cryptotls.VersionTLS13,
+		InsecureSkipVerify: c.ClientInsecureSkipVerify,
 	}
 
 	if c.CAFile != "" {

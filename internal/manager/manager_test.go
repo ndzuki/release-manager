@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -363,4 +364,229 @@ func TestForwarder_OnlyEnabled(t *testing.T) {
 	assert.Len(t, results, 1) // only the enabled one
 	assert.Equal(t, "a", results[0].CustomerID)
 	assert.False(t, results[0].Success) // will fail because no real gRPC server
+}
+
+// ---------------------------------------------------------------------------
+// bcrypt 密码哈希
+// ---------------------------------------------------------------------------
+
+func TestHashPassword_Bcrypt(t *testing.T) {
+	hash := hashPassword("testpassword123")
+	assert.True(t, strings.HasPrefix(hash, "$2a$"), "hash should be bcrypt format starting with $2a$")
+	assert.NotEqual(t, "testpassword123", hash, "hash should not be plaintext")
+
+	// Verify same password produces different hash (bcrypt uses random salt)
+	hash2 := hashPassword("testpassword123")
+	assert.NotEqual(t, hash, hash2, "bcrypt should produce different hashes due to random salt")
+}
+
+func TestVerifyLoginPassword_Bcrypt(t *testing.T) {
+	hash := hashPassword("secure-password")
+	user := &AdminUser{Username: "test", PasswordHash: hash, Email: "test@example.com", Role: "admin"}
+
+	assert.True(t, verifyLoginPassword(user, "secure-password"),
+		"bcrypt should verify correct password")
+	assert.False(t, verifyLoginPassword(user, "wrong-password"),
+		"bcrypt should reject wrong password")
+}
+
+func TestVerifyLoginPassword_SHA256Compat(t *testing.T) {
+	// Simulate legacy SHA256 hash
+	legacyHash := sha256Hex("old-password")
+	user := &AdminUser{Username: "legacy", PasswordHash: legacyHash, Email: "legacy@example.com", Role: "admin"}
+
+	assert.True(t, verifyLoginPassword(user, "old-password"),
+		"SHA256 compat should verify correct password")
+	assert.False(t, verifyLoginPassword(user, "wrong"),
+		"SHA256 compat should reject wrong password")
+}
+
+// ---------------------------------------------------------------------------
+// base64Decode
+// ---------------------------------------------------------------------------
+
+func TestBase64Decode(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"standard padded", base64.StdEncoding.EncodeToString([]byte(`{"sub":"user1"}`))},
+		{"url-safe unpadded (JWT)", base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"user2","email":"a@b.com"}`))},
+		{"raw standard unpadded", base64.RawStdEncoding.EncodeToString([]byte(`{"sub":"user3"}`))},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := base64Decode(tt.input)
+			require.NoError(t, err)
+			assert.Contains(t, string(data), `"sub"`)
+		})
+	}
+
+	// JWT payload: typical eyJ... format (base64 url-safe unpadded)
+	jwtPayload := "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ"
+	data, err := base64Decode(jwtPayload)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "John")
+}
+
+// ---------------------------------------------------------------------------
+// SQLiteStore 用户管理 & 初始化 & Chart 配置
+// ---------------------------------------------------------------------------
+
+func newTestSQLiteStore(t *testing.T) *SQLiteStore {
+	t.Helper()
+	store, err := NewSQLiteStore(":memory:", logr.Discard())
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+	return store
+}
+
+func TestSQLiteStore_UserManagement(t *testing.T) {
+	store := newTestSQLiteStore(t)
+
+	u := User{
+		ID: "user-1", OrgID: "org-1", Name: "Test User",
+		Email: "user@example.com", Role: "operator",
+		AuthProvider: "oidc", ExternalID: "ext-1",
+		Enabled:   true,
+		CreatedAt: time.Now().UTC().Truncate(time.Second),
+		UpdatedAt: time.Now().UTC().Truncate(time.Second),
+	}
+
+	// Create
+	err := store.CreateUser(u)
+	require.NoError(t, err)
+
+	// GetUser
+	got, err := store.GetUser("user-1")
+	require.NoError(t, err)
+	assert.Equal(t, "Test User", got.Name)
+	assert.Equal(t, "operator", got.Role)
+	assert.Equal(t, "user@example.com", got.Email)
+
+	// GetUserByEmail
+	gotByEmail, err := store.GetUserByEmail("user@example.com")
+	require.NoError(t, err)
+	assert.Equal(t, "user-1", gotByEmail.ID)
+
+	// ListUsers
+	u2 := User{ID: "user-2", OrgID: "org-1", Name: "User 2", Email: "u2@example.com", Role: "viewer", Enabled: true, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	require.NoError(t, store.CreateUser(u2))
+
+	users, err := store.ListUsers()
+	require.NoError(t, err)
+	assert.Len(t, users, 2)
+}
+
+func TestSQLiteStore_InitFlow(t *testing.T) {
+	store := newTestSQLiteStore(t)
+
+	// Initially not initialized
+	init, err := store.GetInitStatus()
+	require.NoError(t, err)
+	assert.False(t, init)
+
+	// Create admin user
+	admin := AdminUser{
+		Username:      "admin",
+		PasswordHash:  "$2a$12$...",
+		Email:         "admin@example.com",
+		Role:          "admin",
+		EmailVerified: true,
+		CreatedAt:     time.Now().UTC().Truncate(time.Second),
+	}
+	err = store.CreateAdminUser(admin)
+	require.NoError(t, err)
+
+	// Get admin user
+	got, err := store.GetAdminUser("admin")
+	require.NoError(t, err)
+	assert.Equal(t, "admin@example.com", got.Email)
+	assert.Equal(t, "admin", got.Role)
+
+	// Set verify token
+	err = store.SetVerifyToken("admin@example.com", "token-abc123")
+	require.NoError(t, err)
+
+	// Set init status
+	err = store.SetInitStatus(true)
+	require.NoError(t, err)
+
+	init, err = store.GetInitStatus()
+	require.NoError(t, err)
+	assert.True(t, init)
+
+	// Replace admin user (insert or replace)
+	admin.PasswordHash = "$2a$12$newhash..."
+	err = store.CreateAdminUser(admin)
+	require.NoError(t, err)
+	got, err = store.GetAdminUser("admin")
+	require.NoError(t, err)
+	assert.Equal(t, "$2a$12$newhash...", got.PasswordHash)
+}
+
+func TestSQLiteStore_ChartConfig(t *testing.T) {
+	store := newTestSQLiteStore(t)
+
+	// Create chart definitions
+	cd1 := ChartDefinition{
+		ID: "chart-1", OrgID: "org-1", Name: "Magic Sandbox",
+		Description: "Sandbox app", OCIURL: "oci://harbor/helm/magic-sandbox",
+		Enabled: true,
+	}
+	_, err := store.CreateChartDefinition(cd1)
+	require.NoError(t, err)
+
+	cd2 := ChartDefinition{
+		ID: "chart-2", OrgID: "org-1", Name: "Monitor",
+		Description: "Monitoring", OCIURL: "oci://harbor/helm/monitor",
+		Enabled: true,
+	}
+	_, err = store.CreateChartDefinition(cd2)
+	require.NoError(t, err)
+
+	// List by org
+	charts, err := store.ListChartDefinitions("org-1")
+	require.NoError(t, err)
+	assert.Len(t, charts, 2)
+
+	// Get specific
+	got, err := store.GetChartDefinition("org-1", "chart-1")
+	require.NoError(t, err)
+	assert.Equal(t, "Magic Sandbox", got.Name)
+
+	// Create customer chart binding
+	binding := CustomerChartBinding{
+		ID: "bind-1", OrgID: "org-1", CustomerID: "cust-1",
+		ChartID: "chart-1", ChartName: "Magic Sandbox",
+		Enabled: true, ReleaseName: "magic-sandbox-cust1",
+		Namespace: "production", DeployOrder: 0,
+	}
+	_, err = store.CreateCustomerChartBinding(binding)
+	require.NoError(t, err)
+
+	binding2 := CustomerChartBinding{
+		ID: "bind-2", OrgID: "org-1", CustomerID: "cust-1",
+		ChartID: "chart-2", ChartName: "Monitor",
+		Enabled: true, ReleaseName: "monitor-cust1",
+		Namespace: "monitoring", DeployOrder: 1,
+	}
+	_, err = store.CreateCustomerChartBinding(binding2)
+	require.NoError(t, err)
+
+	// List bindings for customer
+	bindings, err := store.ListCustomerChartBindings("org-1", "cust-1")
+	require.NoError(t, err)
+	assert.Len(t, bindings, 2)
+	assert.Equal(t, "magic-sandbox-cust1", bindings[0].ReleaseName)
+
+	// Delete binding
+	err = store.DeleteCustomerChartBinding("org-1", "bind-1")
+	require.NoError(t, err)
+
+	bindings, err = store.ListCustomerChartBindings("org-1", "cust-1")
+	require.NoError(t, err)
+	assert.Len(t, bindings, 1)
+	assert.Equal(t, "bind-2", bindings[0].ID)
 }

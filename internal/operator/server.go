@@ -15,8 +15,8 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 
@@ -24,8 +24,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	"github.com/ndzuki/release-manager/internal/config"
 	releasev1 "github.com/ndzuki/release-manager/api/gen/release/v1"
+	"github.com/ndzuki/release-manager/internal/config"
 )
 
 // Server 是 release-operator 的 gRPC 服务器。
@@ -86,6 +86,14 @@ func (s *Server) Run(ctx context.Context) error {
 // TLS 热加载: 使用 GetCertificate 回调，每次握手动态读取证书文件
 // =============================================================================
 
+// hotReloadDir 返回证书热加载目录，优先使用配置值。
+func (s *Server) hotReloadDir() string {
+	if s.cfg.TLS.HotReloadDir != "" {
+		return s.cfg.TLS.HotReloadDir
+	}
+	return "/var/lib/release-operator/certs"
+}
+
 // buildHotReloadTLS 构建支持热加载的 TLS 配置。
 // GetCertificate 回调在每次 TLS 握手时被调用，从文件系统读取最新证书。
 func (s *Server) buildHotReloadTLS() (*cryptotls.Config, error) {
@@ -100,8 +108,9 @@ func (s *Server) buildHotReloadTLS() (*cryptotls.Config, error) {
 		Certificates: []cryptotls.Certificate{initialCert},
 		MinVersion:   cryptotls.VersionTLS13,
 		GetCertificate: func(_ *cryptotls.ClientHelloInfo) (*cryptotls.Certificate, error) {
-			hotCert := filepath.Join("/tmp/e2e-certs", "tls.crt")
-			hotKey := filepath.Join("/tmp/e2e-certs", "tls.key")
+			hotDir := s.hotReloadDir()
+			hotCert := filepath.Join(hotDir, "tls.crt")
+			hotKey := filepath.Join(hotDir, "tls.key")
 			if cert, err := cryptotls.LoadX509KeyPair(hotCert, hotKey); err == nil {
 				return &cert, nil
 			}
@@ -240,9 +249,11 @@ func (s *releaseNotificationServer) UpdateCertificate(ctx context.Context, req *
 	server.certMu.Lock()
 	defer server.certMu.Unlock()
 
-	// 写入新证书和私钥到文件
-	hotDir := "/tmp/e2e-certs"
-	os.MkdirAll(hotDir, 0o700)
+	// 写入新证书和私钥到文件（使用可配置的热加载目录）
+	hotDir := server.hotReloadDir()
+	if err := os.MkdirAll(hotDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create cert hot reload dir %s: %w", hotDir, err)
+	}
 	certFile := filepath.Join(hotDir, "tls.crt")
 	keyFile := filepath.Join(hotDir, "tls.key")
 	if err := os.WriteFile(certFile, []byte(req.TlsCertPem), 0o600); err != nil {

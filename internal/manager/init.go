@@ -1,7 +1,9 @@
 // Package manager 实现 release-manager 首次初始化流程。
 //
 // 生产环境: 首次启动 → 前端重定向到 /init → 用户创建管理员账号(用户名+密码+邮箱)
-//   → SMTP 发送验证邮件 → 验证通过后进入控制台
+//
+//	→ SMTP 发送验证邮件 → 验证通过后进入控制台
+//
 // 开发环境 (dev_mode=true): 自动初始化 admin/admin，跳过 SMTP
 package manager
 
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // InitHandler 处理首次初始化请求。
@@ -74,10 +77,10 @@ func (h *InitHandler) autoInitDev() {
 
 	passwordHash := hashPassword("admin")
 	admin := AdminUser{
-		Username:     "admin",
-		PasswordHash: passwordHash,
-		Email:        "admin@localhost.local",
-		Role:         "admin",
+		Username:      "admin",
+		PasswordHash:  passwordHash,
+		Email:         "admin@localhost.local",
+		Role:          "admin",
 		EmailVerified: true,
 		CreatedAt:     time.Now(),
 	}
@@ -236,9 +239,17 @@ func (h *InitHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.PasswordHash != hashPassword(req.Password) {
+	// 密码验证：优先 bcrypt，兼容旧 SHA256 并自动迁移
+	if !verifyLoginPassword(user, req.Password) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return
+	}
+	// SHA256 → bcrypt 自动迁移
+	if !strings.HasPrefix(user.PasswordHash, "$2a$") {
+		user.PasswordHash = hashPassword(req.Password)
+		if err := h.store.CreateAdminUser(*user); err != nil {
+			h.log.Error(err, "failed to migrate password hash to bcrypt")
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -298,15 +309,35 @@ type AdminUser struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
-// 密码哈希 (SHA256，生产环境应使用 bcrypt)
+// hashPassword 使用 bcrypt 对密码进行哈希，cost=12。
 func hashPassword(password string) string {
-	hash := sha256.Sum256([]byte(password))
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+	if err != nil {
+		// bcrypt 极少失败，当失败时退回 SHA256（如内存不足）
+		sha256Hash := sha256.Sum256([]byte(password))
+		return hex.EncodeToString(sha256Hash[:])
+	}
+	return string(hash)
+}
+
+// sha256Hex 计算 SHA256 哈希的十六进制字符串（仅用于 SHA256→bcrypt 迁移比对）。
+func sha256Hex(s string) string {
+	hash := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(hash[:])
 }
 
 // 简单邮箱校验
 func isValidEmail(email string) bool {
 	return strings.Contains(email, "@") && strings.Contains(email, ".")
+}
+
+// verifyLoginPassword 验证登录密码，优先 bcrypt 比对，兼容旧 SHA256 哈希。
+func verifyLoginPassword(user *AdminUser, password string) bool {
+	if strings.HasPrefix(user.PasswordHash, "$2a$") {
+		return bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) == nil
+	}
+	// 旧 SHA256 哈希兼容比对
+	return user.PasswordHash == sha256Hex(password)
 }
 
 // =============================================================================
