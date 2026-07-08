@@ -30,20 +30,21 @@ import (
 
 // Server 是 release-manager 服务的核心结构体。
 type Server struct {
-	cfg           *config.Config
-	log           logr.Logger
-	store         Store               // 客户和发布记录存储
-	cache         *Cache              // 内存缓存层
-	webhook       *WebhookHandler     // Harbor webhook 处理器
-	forwarder     *Forwarder          // gRPC 通知转发器
-	dingtalk      *DingTalkClient     // 钉钉通知客户端
-	chartConfig   *ChartConfigHandler // chart 部署配置管理
-	authMiddleware *AuthMiddleware    // 多租户认证中间件
-	initHandler    *InitHandler       // 首次初始化处理器
+	cfg            *config.Config
+	log            logr.Logger
+	store          Store               // 客户和发布记录存储
+	cache          *Cache              // 内存缓存层
+	webhook        *WebhookHandler     // Harbor webhook 处理器
+	forwarder      *Forwarder          // gRPC 通知转发器
+	dingtalk       *DingTalkClient     // 钉钉通知客户端
+	chartConfig    *ChartConfigHandler // chart 部署配置管理
+	authMiddleware *AuthMiddleware     // 多租户认证中间件
+	initHandler    *InitHandler        // 首次初始化处理器
 	casbinRBAC     *CasbinRBAC
 	userRBAC       *UserRBACHandler
-	grpcServer    *grpc.Server
-	httpServer    *http.Server
+	auditLogger    *AuditLogger        // 操作审计日志中间件
+	grpcServer     *grpc.Server
+	httpServer     *http.Server
 }
 
 // NewServer 创建 release-manager 服务实例。
@@ -96,18 +97,22 @@ func NewServer(cfg *config.Config, log logr.Logger) (*Server, error) {
 	if err != nil { return nil, fmt.Errorf("init casbin rbac: %w", err) }
 	userRBAC := NewUserRBACHandler(rbac, store, log)
 
+	// 审计日志
+	auditLogger := NewAuditLogger(store, log)
+
 	s := &Server{
 		initHandler: initH,
 		casbinRBAC:  rbac,
 		userRBAC:    userRBAC,
-		cfg:       cfg,
-		cache:     cache,
+		cfg:         cfg,
+		cache:       cache,
 		chartConfig: chartCfg,
 		authMiddleware: authM,
-		log:       log.WithName("manager"),
-		store:     store,
-		forwarder: forwarder,
-		dingtalk:  dingtalk,
+		auditLogger: auditLogger,
+		log:         log.WithName("manager"),
+		store:       store,
+		forwarder:   forwarder,
+		dingtalk:    dingtalk,
 	}
 
 	s.webhook = NewWebhookHandler(log, cfg.Harbor.WebhookHMACSecret, s.onReleaseNotification)
@@ -185,6 +190,10 @@ func (s *Server) Run(ctx context.Context) error {
 			}
 			if s.grpcServer != nil {
 				s.grpcServer.GracefulStop()
+			}
+			// 关闭审计日志记录器（排空积压数据）
+			if s.auditLogger != nil {
+				s.auditLogger.Close()
 			}
 			// 关闭数据存储连接
 			if s.store != nil {
@@ -275,9 +284,16 @@ func (s *Server) serveHTTP(ctx context.Context) error {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	// 审计日志查询（多租户认证）
+	mux.Handle("/api/v1/audit-logs", s.authMiddleware.Handler(http.HandlerFunc(s.handleAuditLogs)))
+
+	// 注入审计日志中间件（包装所有 handler）
+	var h http.Handler = mux
+	h = s.auditLogger.Middleware(h)
+
 	s.httpServer = &http.Server{
 		Addr:         s.cfg.Server.HTTPAddr,
-		Handler:      withLogging(s.log, mux),
+		Handler:      withLogging(s.log, h),
 		ReadTimeout:  s.cfg.Server.ReadTimeout,
 		WriteTimeout: s.cfg.Server.WriteTimeout,
 		IdleTimeout:  120 * time.Second,
@@ -539,6 +555,61 @@ func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
 		records = filtered
 	}
 	writeJSON(w, http.StatusOK, records)
+}
+
+// 查询审计日志
+// @Summary      查询审计日志
+// @Description  按用户、资源、时间范围等条件查询操作审计日志，支持分页
+// @Tags         审计日志
+// @Accept       json
+// @Produce      json
+// @Param        user_id     query     string  false  "操作人 ID"
+// @Param        resource    query     string  false  "资源类型"
+// @Param        resource_id query     string  false  "资源 ID"
+// @Param        method      query     string  false  "HTTP method"
+// @Param        path        query     string  false  "路径前缀"
+// @Param        since       query     string  false  "起始时间 (RFC3339)"
+// @Param        until       query     string  false  "截止时间 (RFC3339)"
+// @Param        limit       query     int     false  "每页条数 (默认50，最大200)"
+// @Param        offset      query     int     false  "分页偏移量"
+// @Success      200         {array}   AuditLogEntry  "审计日志列表"
+// @Failure      500         {object}  map[string]string  "内部错误"
+// @Security     ApiKeyAuth
+// @Router       /api/v1/audit-logs [get]
+func (s *Server) handleAuditLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	q := r.URL.Query()
+	filter := AuditLogFilter{
+		UserID:     q.Get("user_id"),
+		Resource:   q.Get("resource"),
+		ResourceID: q.Get("resource_id"),
+		Method:     q.Get("method"),
+		Path:       q.Get("path"),
+		Since:      q.Get("since"),
+		Until:      q.Get("until"),
+		Limit:      50,
+		Offset:     0,
+	}
+	if l := q.Get("limit"); l != "" {
+		fmt.Sscanf(l, "%d", &filter.Limit)
+	}
+	if o := q.Get("offset"); o != "" {
+		fmt.Sscanf(o, "%d", &filter.Offset)
+	}
+
+	entries, err := s.store.ListAuditLogs(filter)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if entries == nil {
+		entries = []AuditLogEntry{}
+	}
+	writeJSON(w, http.StatusOK, entries)
 }
 
 // =============================================================================

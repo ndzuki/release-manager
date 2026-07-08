@@ -1,0 +1,685 @@
+basePath: /api/v1
+definitions:
+  internal_manager.AuditLogEntry:
+    properties:
+      action:
+        description: 操作类型（HTTP method）
+        type: string
+      client_ip:
+        description: 客户端 IP
+        type: string
+      duration_ms:
+        description: 请求处理耗时（毫秒）
+        type: integer
+      id:
+        description: 自增主键
+        type: integer
+      method:
+        description: HTTP method
+        type: string
+      org_id:
+        description: 所属组织 ID
+        type: string
+      path:
+        description: 请求路径
+        type: string
+      req_body_snippet:
+        description: 请求体摘要（截断至 256 字符）
+        type: string
+      resource:
+        description: 目标资源类型（customer, release, user, chart 等）
+        type: string
+      resource_id:
+        description: 目标资源 ID
+        type: string
+      status_code:
+        description: HTTP 响应状态码
+        type: integer
+      timestamp:
+        description: 请求时间
+        type: string
+      user_agent:
+        description: User-Agent
+        type: string
+      user_id:
+        description: 操作人 ID（匿名请求为 "anonymous"）
+        type: string
+      username:
+        description: 操作人名称
+        type: string
+    required:
+    - action
+    - client_ip
+    - duration_ms
+    - id
+    - method
+    - org_id
+    - path
+    - req_body_snippet
+    - resource
+    - resource_id
+    - status_code
+    - timestamp
+    - user_agent
+    - user_id
+    - username
+    type: object
+  internal_manager.Customer:
+    properties:
+      cert_fingerprint:
+        description: mTLS 客户端证书 SHA256 指纹
+        example: ABCDEF123456...
+        type: string
+      created_at:
+        description: 创建时间
+        type: string
+      enabled:
+        description: 是否启用自动更新
+        example: true
+        type: boolean
+      id:
+        description: 客户唯一标识
+        example: customer-001
+        type: string
+      labels:
+        additionalProperties:
+          type: string
+        description: 客户标签（分组/筛选）
+        type: object
+      name:
+        description: 客户名称
+        example: 某客户
+        type: string
+      operator_endpoint:
+        description: release-operator gRPC 地址
+        example: 10.0.0.5:8443
+        type: string
+      updated_at:
+        description: 更新时间
+        type: string
+    required:
+    - cert_fingerprint
+    - created_at
+    - enabled
+    - id
+    - name
+    - operator_endpoint
+    - updated_at
+    type: object
+  internal_manager.HarborRepository:
+    properties:
+      name:
+        description: 如 "helm/magic-sandbox"
+        type: string
+      namespace:
+        description: 项目名
+        type: string
+      repo_full_name:
+        description: 如 "library/helm/magic-sandbox"
+        type: string
+      repo_type:
+        description: 仓库类型，"CHART"
+        type: string
+    required:
+    - name
+    - namespace
+    - repo_full_name
+    - repo_type
+    type: object
+  internal_manager.HarborResource:
+    properties:
+      digest:
+        description: 内容摘要
+        type: string
+      labels:
+        additionalProperties:
+          type: string
+        type: object
+      resource_url:
+        description: OCI 资源 URL
+        type: string
+      tag:
+        description: chart 版本号
+        type: string
+    required:
+    - digest
+    - resource_url
+    - tag
+    type: object
+  internal_manager.HarborWebhookPayload:
+    properties:
+      event_data:
+        properties:
+          repository:
+            allOf:
+            - $ref: '#/definitions/internal_manager.HarborRepository'
+            description: 仓库元数据
+          resources:
+            description: 推送的 chart 资源列表
+            items:
+              $ref: '#/definitions/internal_manager.HarborResource'
+            type: array
+        required:
+        - repository
+        - resources
+        type: object
+      occur_at:
+        description: 事件发生时间（Unix 时间戳）
+        type: integer
+      operator:
+        description: 操作者
+        type: string
+      type:
+        description: 事件类型，如 "PUSH_HELMCHART"
+        type: string
+    required:
+    - event_data
+    - occur_at
+    - operator
+    - type
+    type: object
+  internal_manager.ReleaseRecord:
+    properties:
+      chart_name:
+        description: Helm chart 名称
+        type: string
+      chart_version:
+        description: chart 版本
+        type: string
+      completed_at:
+        description: 完成时间
+        type: string
+      customer_id:
+        description: 客户 ID
+        type: string
+      duration_secs:
+        description: 操作耗时（秒）
+        type: integer
+      error_message:
+        description: 错误信息
+        type: string
+      id:
+        description: 记录 ID
+        type: string
+      request_id:
+        description: 请求 ID
+        type: string
+      started_at:
+        description: 开始时间
+        type: string
+      status:
+        description: 发布状态
+        type: string
+    required:
+    - chart_name
+    - chart_version
+    - completed_at
+    - customer_id
+    - duration_secs
+    - error_message
+    - id
+    - request_id
+    - started_at
+    - status
+    type: object
+  internal_manager.UpdateCustomerRequest:
+    properties:
+      cert_fingerprint:
+        description: 证书指纹
+        type: string
+      enabled:
+        description: 是否启用
+        type: boolean
+      labels:
+        additionalProperties:
+          type: string
+        description: 客户标签
+        type: object
+      name:
+        description: 客户名称
+        type: string
+      operator_endpoint:
+        description: operator gRPC 地址
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: ops@example.com
+    name: Release Ops Team
+  description: Release Manager 系统中心通知服务 — 接收 Harbor webhook，管理客户白名单，转发更新通知。
+  termsOfService: https://example.com/terms
+  title: Release Notification API
+  version: 1.0.0
+paths:
+  /api/v1/audit-logs:
+    get:
+      consumes:
+      - application/json
+      description: 按用户、资源、时间范围等条件查询操作审计日志，支持分页
+      parameters:
+      - description: 操作人 ID
+        in: query
+        name: user_id
+        type: string
+      - description: 资源类型
+        in: query
+        name: resource
+        type: string
+      - description: 资源 ID
+        in: query
+        name: resource_id
+        type: string
+      - description: HTTP method
+        in: query
+        name: method
+        type: string
+      - description: 路径前缀
+        in: query
+        name: path
+        type: string
+      - description: 起始时间 (RFC3339)
+        in: query
+        name: since
+        type: string
+      - description: 截止时间 (RFC3339)
+        in: query
+        name: until
+        type: string
+      - description: 每页条数 (默认50，最大200)
+        in: query
+        name: limit
+        type: integer
+      - description: 分页偏移量
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 审计日志列表
+          schema:
+            items:
+              $ref: '#/definitions/internal_manager.AuditLogEntry'
+            type: array
+        "500":
+          description: 内部错误
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: 查询审计日志
+      tags:
+      - 审计日志
+  /api/v1/auth/login:
+    post:
+      consumes:
+      - application/json
+      description: 使用用户名和密码登录，返回 session token
+      parameters:
+      - description: 登录凭证
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            password:
+              type: string
+            username:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 登录成功
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: 认证失败
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: 管理员登录
+      tags:
+      - 认证
+  /api/v1/customers:
+    get:
+      consumes:
+      - application/json
+      description: 返回所有已注册的客户列表，支持按启用状态过滤
+      parameters:
+      - description: 是否只返回已启用客户
+        in: query
+        name: enabled
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 客户列表
+          schema:
+            items:
+              $ref: '#/definitions/internal_manager.Customer'
+            type: array
+        "500":
+          description: 内部错误
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: 列出所有客户
+      tags:
+      - 客户管理
+  /api/v1/customers/{id}:
+    delete:
+      consumes:
+      - application/json
+      - application/json
+      - application/json
+      description: |-
+        根据客户 ID 获取客户信息
+        更新指定客户的信息（支持部分更新）
+        从白名单中移除指定客户
+      parameters:
+      - description: 客户 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 客户 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 要更新的字段
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_manager.UpdateCustomerRequest'
+      - description: 客户 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      - application/json
+      - application/json
+      responses:
+        "200":
+          description: 删除成功
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: 客户不存在
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - ApiKeyAuth: []
+      - ApiKeyAuth: []
+      summary: 删除客户
+      tags:
+      - 客户管理
+      - 客户管理
+      - 客户管理
+    get:
+      consumes:
+      - application/json
+      - application/json
+      - application/json
+      description: |-
+        根据客户 ID 获取客户信息
+        更新指定客户的信息（支持部分更新）
+        从白名单中移除指定客户
+      parameters:
+      - description: 客户 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 客户 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 要更新的字段
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_manager.UpdateCustomerRequest'
+      - description: 客户 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      - application/json
+      - application/json
+      responses:
+        "200":
+          description: 删除成功
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: 客户不存在
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - ApiKeyAuth: []
+      - ApiKeyAuth: []
+      summary: 删除客户
+      tags:
+      - 客户管理
+      - 客户管理
+      - 客户管理
+    put:
+      consumes:
+      - application/json
+      - application/json
+      - application/json
+      description: |-
+        根据客户 ID 获取客户信息
+        更新指定客户的信息（支持部分更新）
+        从白名单中移除指定客户
+      parameters:
+      - description: 客户 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 客户 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 要更新的字段
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_manager.UpdateCustomerRequest'
+      - description: 客户 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      - application/json
+      - application/json
+      responses:
+        "200":
+          description: 删除成功
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: 客户不存在
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - ApiKeyAuth: []
+      - ApiKeyAuth: []
+      summary: 删除客户
+      tags:
+      - 客户管理
+      - 客户管理
+      - 客户管理
+  /api/v1/init:
+    get:
+      consumes:
+      - application/json
+      description: 检查系统是否已完成首次初始化
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 初始化状态
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 查询初始化状态
+      tags:
+      - 初始化
+    post:
+      consumes:
+      - application/json
+      description: 首次初始化系统，创建管理员用户（仅未初始化时可用）
+      parameters:
+      - description: 管理员信息
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            email:
+              type: string
+            password:
+              type: string
+            username:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: 初始化成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 参数校验失败
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: 系统已初始化
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: 创建管理员账号
+      tags:
+      - 初始化
+  /api/v1/releases/{requestId}:
+    get:
+      consumes:
+      - application/json
+      description: 根据请求 ID 查询发布状态记录
+      parameters:
+      - description: 请求 ID
+        in: path
+        name: requestId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 发布记录列表
+          schema:
+            items:
+              $ref: '#/definitions/internal_manager.ReleaseRecord'
+            type: array
+        "500":
+          description: 内部错误
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: 查询发布记录
+      tags:
+      - 发布管理
+  /api/v1/webhook/harbor:
+    post:
+      consumes:
+      - application/json
+      description: 处理 Harbor PUSH_HELMCHART 事件，验证 HMAC 签名并转发到客户集群
+      parameters:
+      - description: Harbor webhook 载荷
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_manager.HarborWebhookPayload'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 处理成功
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: 无效请求
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: 处理失败
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - HmacSignature: []
+      summary: 接收 Harbor webhook
+      tags:
+      - Webhook
+securityDefinitions:
+  ApiKeyAuth:
+    description: 管理 API 认证密钥。webhook 端点使用 HMAC 签名验证，不需要此认证。
+    in: header
+    name: X-API-Key
+    type: apiKey
+swagger: "2.0"
