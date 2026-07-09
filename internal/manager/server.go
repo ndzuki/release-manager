@@ -24,8 +24,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	"github.com/ndzuki/release-manager/internal/config"
 	releasev1 "github.com/ndzuki/release-manager/api/gen/release/v1"
+	"github.com/ndzuki/release-manager/internal/config"
 )
 
 // Server 是 release-manager 服务的核心结构体。
@@ -42,7 +42,7 @@ type Server struct {
 	initHandler    *InitHandler        // 首次初始化处理器
 	casbinRBAC     *CasbinRBAC
 	userRBAC       *UserRBACHandler
-	auditLogger    *AuditLogger        // 操作审计日志中间件
+	auditLogger    *AuditLogger // 操作审计日志中间件
 	grpcServer     *grpc.Server
 	httpServer     *http.Server
 }
@@ -94,25 +94,30 @@ func NewServer(cfg *config.Config, log logr.Logger) (*Server, error) {
 
 	// Casbin RBAC
 	rbac, err := NewCasbinRBAC(log)
-	if err != nil { return nil, fmt.Errorf("init casbin rbac: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("init casbin rbac: %w", err)
+	}
 	userRBAC := NewUserRBACHandler(rbac, store, log)
 
-	// 审计日志
-	auditLogger := NewAuditLogger(store, log)
+	// 审计日志默认关闭，仅在配置显式启用后创建并注入中间件。
+	var auditLogger *AuditLogger
+	if cfg.Audit.Enabled {
+		auditLogger = NewAuditLoggerWithBuffer(store, log, cfg.Audit.BufferSize)
+	}
 
 	s := &Server{
-		initHandler: initH,
-		casbinRBAC:  rbac,
-		userRBAC:    userRBAC,
-		cfg:         cfg,
-		cache:       cache,
-		chartConfig: chartCfg,
+		initHandler:    initH,
+		casbinRBAC:     rbac,
+		userRBAC:       userRBAC,
+		cfg:            cfg,
+		cache:          cache,
+		chartConfig:    chartCfg,
 		authMiddleware: authM,
-		auditLogger: auditLogger,
-		log:         log.WithName("manager"),
-		store:       store,
-		forwarder:   forwarder,
-		dingtalk:    dingtalk,
+		auditLogger:    auditLogger,
+		log:            log.WithName("manager"),
+		store:          store,
+		forwarder:      forwarder,
+		dingtalk:       dingtalk,
 	}
 
 	s.webhook = NewWebhookHandler(log, cfg.Harbor.WebhookHMACSecret, s.onReleaseNotification)
@@ -289,7 +294,9 @@ func (s *Server) serveHTTP(ctx context.Context) error {
 
 	// 注入审计日志中间件（包装所有 handler）
 	var h http.Handler = mux
-	h = s.auditLogger.Middleware(h)
+	if s.auditLogger != nil {
+		h = s.auditLogger.Middleware(h)
+	}
 
 	s.httpServer = &http.Server{
 		Addr:         s.cfg.Server.HTTPAddr,
@@ -490,11 +497,21 @@ func (s *Server) handleCustomer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		c := Customer{ID: id}
-		if req.Name != nil { c.Name = *req.Name }
-		if req.OperatorEndpoint != nil { c.OperatorEndpoint = *req.OperatorEndpoint }
-		if req.CertFingerprint != nil { c.CertFingerprint = *req.CertFingerprint }
-		if req.Enabled != nil { c.Enabled = *req.Enabled }
-		if req.Labels != nil { c.Labels = req.Labels }
+		if req.Name != nil {
+			c.Name = *req.Name
+		}
+		if req.OperatorEndpoint != nil {
+			c.OperatorEndpoint = *req.OperatorEndpoint
+		}
+		if req.CertFingerprint != nil {
+			c.CertFingerprint = *req.CertFingerprint
+		}
+		if req.Enabled != nil {
+			c.Enabled = *req.Enabled
+		}
+		if req.Labels != nil {
+			c.Labels = req.Labels
+		}
 		updated, err := s.store.UpdateCustomer(c)
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") {
@@ -667,12 +684,12 @@ func (s *statusReportServer) ReportStatus(ctx context.Context, req *releasev1.Re
 	)
 
 	record := ReleaseRecord{
-		RequestID:       req.RequestId,
-		CustomerID:      req.CustomerId,
-		ChartName:       req.ChartName,
-		ChartVersion:    req.ChartVersion,
-		Status:          statusFromProto(req.Status),
-		ErrorMessage:    req.ErrorMessage,
+		RequestID:    req.RequestId,
+		CustomerID:   req.CustomerId,
+		ChartName:    req.ChartName,
+		ChartVersion: req.ChartVersion,
+		Status:       statusFromProto(req.Status),
+		ErrorMessage: req.ErrorMessage,
 		DurationSecs: req.DurationSeconds,
 		StartedAt:    time.Unix(req.StartedAt, 0),
 		CompletedAt:  time.Now(),

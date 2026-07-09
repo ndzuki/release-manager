@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"k8s.io/apimachinery/pkg/util/wait"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -84,4 +84,3 @@ func waitForGRPCReady(ctx context.Context, addr string, timeout time.Duration) e
 		return true, nil
 	})
 }
-

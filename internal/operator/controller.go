@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-logr/logr"
 
-	"github.com/ndzuki/release-manager/internal/config"
 	releasev1 "github.com/ndzuki/release-manager/api/gen/release/v1"
+	"github.com/ndzuki/release-manager/internal/config"
 )
 
 // ReleaseStatus 表示发布操作的当前状态。

@@ -195,12 +195,30 @@ dev-up: ## 一键部署本地开发环境 (从 .env 读取 Harbor 配置)
 dev-down: ## 清理本地开发环境
 	@CLUSTER_NAME=$(KIND_CLUSTER_NAME) scripts/dev-setup.sh --cleanup
 
+.PHONY: test-env
+test-env: ## 部署本地测试环境 (kind + manager/operator)
+	@chmod +x scripts/test-env.sh
+	@CLUSTER_NAME=$(KIND_CLUSTER_NAME) \
+	 CUSTOMER_ID=$(CUSTOMER_ID) \
+	 OPERATOR_IMAGE=$(OPERATOR_IMAGE) \
+	 MANAGER_HTTP_PORT=$(MANAGER_PORT) \
+	 MANAGER_GRPC_PORT=$(GRPC_PORT) \
+	 scripts/test-env.sh deploy
+
+.PHONY: test-env-destroy
+test-env-destroy: ## 销毁本地测试环境
+	@CLUSTER_NAME=$(KIND_CLUSTER_NAME) scripts/test-env.sh --cleanup
+
+.PHONY: test-env-status
+test-env-status: ## 查看本地测试环境状态
+	@CLUSTER_NAME=$(KIND_CLUSTER_NAME) scripts/test-env.sh --status
+
 .PHONY: dev-operator
 dev-operator: image-operator ## 仅重新构建并部署 operator 到 kind
 	@scripts/dev-setup.sh --operator
 
 .PHONY: dev-manager
-dev-manager: build-manager ## 本地启动 release-manager
+dev-manager: build-notification ## 本地启动 release-manager
 	@echo "$(YELLOW)Starting release-manager locally...$(NC)"
 	@echo "$(BLUE)  HTTP: http://localhost:$(MANAGER_PORT)/health$(NC)"
 	@echo "$(BLUE)  gRPC: localhost:$(GRPC_PORT)$(NC)"

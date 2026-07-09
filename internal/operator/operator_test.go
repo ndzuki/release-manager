@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ndzuki/release-manager/internal/config"
 	releasev1 "github.com/ndzuki/release-manager/api/gen/release/v1"
+	"github.com/ndzuki/release-manager/internal/config"
 )
 
 func TestMapStatusToProto(t *testing.T) {
@@ -48,8 +48,8 @@ func TestMapStatusToProto(t *testing.T) {
 
 func TestBuildValuesOverrides(t *testing.T) {
 	images := map[string]string{
-		"magic-gateway":    "1.2.3",
-		"sandbox-gateway":  "1.2.4",
+		"magic-gateway":   "1.2.3",
+		"sandbox-gateway": "1.2.4",
 	}
 
 	values := buildValuesOverrides(images)
@@ -270,4 +270,82 @@ func TestController_StartCancelCleanup(t *testing.T) {
 	// Give goroutines time to drain before Shutdown
 	time.Sleep(50 * time.Millisecond)
 	ctrl.Shutdown()
+}
+
+func TestReporter_ConstructAndRequestID(t *testing.T) {
+	cfg := config.DefaultConfig()
+	reporter := NewReporter("localhost:8443", "customer-1", &cfg.TLS, logr.Discard())
+
+	require.NotNil(t, reporter)
+	assert.Equal(t, "localhost:8443", reporter.endpoint)
+	assert.Equal(t, "customer-1", reporter.customerID)
+	assert.NotEmpty(t, GenerateRequestID())
+	assert.NotEqual(t, GenerateRequestID(), GenerateRequestID())
+}
+
+func TestNewServerAndHotReloadDir(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.NotificationEndpoint = "manager:8443"
+	cfg.TLS.HotReloadDir = "/tmp/custom-certs"
+
+	srv, err := NewServer(cfg, "customer-1", cfg.NotificationEndpoint, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, srv)
+
+	assert.Equal(t, "customer-1", srv.customerID)
+	assert.Equal(t, "/tmp/custom-certs", srv.hotReloadDir())
+
+	srv.cfg.TLS.HotReloadDir = ""
+	assert.Equal(t, "/var/lib/release-operator/certs", srv.hotReloadDir())
+}
+
+func TestOperatorManagementServer_GetOperatorStatus(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.NotificationEndpoint = "manager:8443"
+	srv, err := NewServer(cfg, "customer-1", cfg.NotificationEndpoint, logr.Discard())
+	require.NoError(t, err)
+
+	api := &operatorManagementServer{server: srv, log: logr.Discard(), startTime: time.Now().Add(-2 * time.Second)}
+	resp, err := api.GetOperatorStatus(context.Background(), &releasev1.GetOperatorStatusRequest{})
+	require.NoError(t, err)
+
+	assert.Equal(t, "customer-1", resp.CustomerId)
+	assert.Equal(t, "manager:8443", resp.NotificationEndpoint)
+	assert.GreaterOrEqual(t, resp.UptimeSeconds, int64(1))
+}
+
+func TestOperatorManagementServer_RollbackReleaseValidation(t *testing.T) {
+	cfg := config.DefaultConfig()
+	srv, err := NewServer(cfg, "customer-1", "manager:8443", logr.Discard())
+	require.NoError(t, err)
+
+	api := &operatorManagementServer{server: srv, log: logr.Discard(), startTime: time.Now()}
+	resp, err := api.RollbackRelease(context.Background(), &releasev1.RollbackReleaseRequest{})
+	require.NoError(t, err)
+
+	assert.False(t, resp.Success)
+	assert.Contains(t, resp.Message, "release_name is required")
+}
+
+func TestOperatorManagementServer_UpdateConfiguration(t *testing.T) {
+	cfg := config.DefaultConfig()
+	srv, err := NewServer(cfg, "customer-1", "manager:8443", logr.Discard())
+	require.NoError(t, err)
+
+	harborURL := "https://harbor.test"
+	maxHistory := int32(3)
+	atomic := false
+	api := &operatorManagementServer{server: srv, log: logr.Discard(), startTime: time.Now()}
+	resp, err := api.UpdateConfiguration(context.Background(), &releasev1.UpdateConfigurationRequest{
+		HarborUrl:      &harborURL,
+		HelmMaxHistory: &maxHistory,
+		HelmAtomic:     &atomic,
+	})
+	require.NoError(t, err)
+
+	assert.True(t, resp.Accepted)
+	assert.ElementsMatch(t, []string{"harbor_url", "helm_max_history", "helm_atomic"}, resp.ChangedFields)
+	assert.Equal(t, harborURL, srv.cfg.Harbor.URL)
+	assert.Equal(t, int(maxHistory), srv.cfg.Helm.MaxHistory)
+	assert.False(t, srv.cfg.Helm.Atomic)
 }

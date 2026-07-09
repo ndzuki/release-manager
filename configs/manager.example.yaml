@@ -32,3 +32,9 @@ dingtalk:
   webhook_url: ""         # DingTalk robot webhook URL
   secret: ""              # HMAC secret for signing
   enabled: false
+
+# 操作审计日志默认关闭；生产启用时建议配合持久化存储和保留策略。
+audit:
+  enabled: false
+  retention_days: 0
+  buffer_size: 1000

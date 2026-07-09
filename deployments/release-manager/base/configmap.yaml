@@ -37,3 +37,8 @@ data:
       webhook_url: ""
       secret: ""
       enabled: false
+
+    audit:
+      enabled: false
+      retention_days: 0
+      buffer_size: 1000

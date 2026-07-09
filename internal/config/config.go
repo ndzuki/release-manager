@@ -32,6 +32,8 @@ type Config struct {
 	DingTalk DingTalkConfig `yaml:"dingtalk"`
 	// Store 数据存储配置（SQLite 或 PostgreSQL）
 	Store StoreConfig `yaml:"store"`
+	// Audit 操作审计日志配置
+	Audit AuditConfig `yaml:"audit"`
 	// NotificationEndpoint release-manager 服务的 gRPC 地址（仅 operator 使用）
 	NotificationEndpoint string `yaml:"notification_endpoint"`
 	// SMTP 邮件配置（邮箱验证和密码找回）
@@ -114,6 +116,13 @@ type StoreConfig struct {
 	DSN  string `yaml:"dsn"`  // 数据库连接字符串
 }
 
+// AuditConfig 定义操作审计日志配置。
+type AuditConfig struct {
+	Enabled       bool `yaml:"enabled"`        // 是否启用审计日志，默认 false
+	RetentionDays int  `yaml:"retention_days"` // 保留天数，0 表示永久保留
+	BufferSize    int  `yaml:"buffer_size"`    // 异步写入缓冲容量
+}
+
 // DefaultConfig 返回带有生产级默认值的配置。
 func DefaultConfig() *Config {
 	return &Config{
@@ -148,6 +157,11 @@ func DefaultConfig() *Config {
 		Store: StoreConfig{
 			Type: "sqlite",
 			DSN:  "data/release-manager.db",
+		},
+		Audit: AuditConfig{
+			Enabled:       false,
+			RetentionDays: 0,
+			BufferSize:    1000,
 		},
 	}
 }

@@ -1,0 +1,17 @@
+{{- if .Values.audit.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-audit
+  labels:
+    {{- include "release-operator.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.audit.persistence.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.audit.persistence.size }}
+  {{- if .Values.audit.persistence.storageClass }}
+  storageClassName: {{ .Values.audit.persistence.storageClass | quote }}
+  {{- end }}
+{{- end }}

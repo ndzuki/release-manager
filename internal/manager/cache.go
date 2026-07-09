@@ -13,10 +13,10 @@ import (
 
 // Cache 提供内存缓存实现。
 type Cache struct {
-	mu       sync.RWMutex
-	items    map[string]*cacheItem
-	maxSize  int
-	stopCh   chan struct{} // 发送信号停止 cleanupLoop
+	mu      sync.RWMutex
+	items   map[string]*cacheItem
+	maxSize int
+	stopCh  chan struct{} // 发送信号停止 cleanupLoop
 }
 
 type cacheItem struct {
@@ -108,14 +108,14 @@ func (c *Cache) cleanupLoop() {
 		case <-c.stopCh:
 			return
 		case <-t.C:
-		c.mu.Lock()
-		now := time.Now()
-		for k, item := range c.items {
-			if now.After(item.expireAt) {
-				delete(c.items, k)
+			c.mu.Lock()
+			now := time.Now()
+			for k, item := range c.items {
+				if now.After(item.expireAt) {
+					delete(c.items, k)
+				}
 			}
-		}
-		c.mu.Unlock()
+			c.mu.Unlock()
 		}
 	}
 }
@@ -125,17 +125,17 @@ func (c *Cache) cleanupLoop() {
 // =============================================================================
 
 const (
-	CacheKeyCustomerStatus     = "customer:status:"      // + customerID
-	CacheKeyChartVersions      = "chart:versions:"        // + customerID + ":" + chartName
-	CacheKeySystemOverview     = "system:overview"
-	CacheKeySession            = "session:"               // + token
+	CacheKeyCustomerStatus      = "customer:status:" // + customerID
+	CacheKeyChartVersions       = "chart:versions:"  // + customerID + ":" + chartName
+	CacheKeySystemOverview      = "system:overview"
+	CacheKeySession             = "session:"              // + token
 	CacheKeyCustomerDeployments = "customer:deployments:" // + customerID
 
 	// TTL 定义
-	TTLCustomerStatus     = 2 * time.Minute
-	TTLChartVersions      = 10 * time.Minute
-	TTLSystemOverview     = 1 * time.Minute
-	TTLSession            = 24 * time.Hour
+	TTLCustomerStatus = 2 * time.Minute
+	TTLChartVersions  = 10 * time.Minute
+	TTLSystemOverview = 1 * time.Minute
+	TTLSession        = 24 * time.Hour
 )
 
 // =============================================================================

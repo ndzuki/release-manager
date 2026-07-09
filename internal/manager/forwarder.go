@@ -14,8 +14,8 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/ndzuki/release-manager/internal/config"
 	releasev1 "github.com/ndzuki/release-manager/api/gen/release/v1"
+	"github.com/ndzuki/release-manager/internal/config"
 )
 
 // ForwardResult 保存向单个客户转发通知的结果。
@@ -29,10 +29,10 @@ type ForwardResult struct {
 
 // Forwarder 将发布通知批量转发给客户 operator。
 type Forwarder struct {
-	store    Store
-	tlsCfg   *config.TLSConfig
-	log      logr.Logger
-	timeout  time.Duration
+	store   Store
+	tlsCfg  *config.TLSConfig
+	log     logr.Logger
+	timeout time.Duration
 }
 
 // NewForwarder 创建新的 Forwarder。

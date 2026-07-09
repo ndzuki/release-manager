@@ -198,9 +198,7 @@ func newHarnessInternal() *Harness {
 
 	// Step 8: Register customer using operator ClusterIP (avoids TLS SNI issues)
 	logf(h.T, "Registering customer...")
-	
-	
-	
+
 	if err != nil {
 		fatalf(h.T, "get operator ClusterIP: %v", err)
 	}
@@ -292,9 +290,9 @@ func (h *Harness) RegisterCustomer(ctx context.Context, id, name, endpoint, fing
 // In Harbor mode, it includes HMAC signature. In standalone mode, no signature.
 func (h *Harness) TriggerWebhook(ctx context.Context, chartName, version string) error {
 	payload := map[string]interface{}{
-		"type":      "PUSH_HELMCHART",
-		"occur_at":  time.Now().Unix(),
-		"operator":  "e2e-test",
+		"type":     "PUSH_HELMCHART",
+		"occur_at": time.Now().Unix(),
+		"operator": "e2e-test",
 		"event_data": map[string]interface{}{
 			"resources": []map[string]interface{}{
 				{

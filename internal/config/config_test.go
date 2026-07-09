@@ -387,3 +387,32 @@ func TestTLSConfig_BuildClientTLSConfig_SkipVerify(t *testing.T) {
 	assert.NotNil(t, cfg)
 	assert.True(t, cfg.InsecureSkipVerify)
 }
+
+func TestAuditConfig_Defaults(t *testing.T) {
+	cfg := DefaultConfig()
+
+	assert.False(t, cfg.Audit.Enabled)
+	assert.Equal(t, 0, cfg.Audit.RetentionDays)
+	assert.Equal(t, 1000, cfg.Audit.BufferSize)
+}
+
+func TestAuditConfig_Enabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	yamlContent := `
+audit:
+  enabled: true
+  retention_days: 30
+  buffer_size: 2048
+`
+	err := os.WriteFile(configPath, []byte(yamlContent), 0o644)
+	require.NoError(t, err)
+
+	cfg, err := Load(configPath)
+	require.NoError(t, err)
+
+	assert.True(t, cfg.Audit.Enabled)
+	assert.Equal(t, 30, cfg.Audit.RetentionDays)
+	assert.Equal(t, 2048, cfg.Audit.BufferSize)
+}
