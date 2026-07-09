@@ -15,6 +15,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestWebhookHandler_PushHelmChart(t *testing.T) {
@@ -377,12 +378,15 @@ func TestHashPassword_Bcrypt(t *testing.T) {
 	assert.True(t, strings.HasPrefix(hash, "$2a$"), "hash should be bcrypt format starting with $2a$")
 	assert.NotEqual(t, "testpassword123", hash, "hash should not be plaintext")
 
-	// Verify same password produces different hash (bcrypt uses random salt)
-	hash2 := hashPassword("testpassword123")
-	assert.NotEqual(t, hash, hash2, "bcrypt should produce different hashes due to random salt")
+	cost, err := bcrypt.Cost([]byte(hash))
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, cost, defaultBcryptCost)
+	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(hash), []byte("testpassword123")))
 }
 
 func TestVerifyLoginPassword_Bcrypt(t *testing.T) {
+	useFastBcrypt(t)
+
 	hash := hashPassword("secure-password")
 	user := &AdminUser{Username: "test", PasswordHash: hash, Email: "test@example.com", Role: "admin"}
 
@@ -848,6 +852,8 @@ func TestHandleReleases(t *testing.T) {
 }
 
 func TestHandleLogin(t *testing.T) {
+	useFastBcrypt(t)
+
 	log := logr.Discard()
 	store := NewSQLiteInMemoryStore(t)
 
@@ -912,6 +918,16 @@ func TestHealthEndpoint(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
+
+func useFastBcrypt(t *testing.T) {
+	t.Helper()
+
+	previousCost := bcryptCost
+	bcryptCost = bcrypt.MinCost
+	t.Cleanup(func() {
+		bcryptCost = previousCost
+	})
+}
 
 // Handler returns the Server's HTTP handler assembly for httptest.
 func (s *Server) Handler() http.Handler {
@@ -1166,6 +1182,8 @@ func TestChartPathHelpers(t *testing.T) {
 }
 
 func TestInitHandler_StatusInitAndLogin(t *testing.T) {
+	useFastBcrypt(t)
+
 	store := NewMemoryStore(logr.Discard())
 	handler := NewInitHandler(store, SMTPConfig{}, false, logr.Discard())
 
@@ -1202,6 +1220,8 @@ func TestInitHandler_StatusInitAndLogin(t *testing.T) {
 }
 
 func TestInitHandler_DevModeAndHelpers(t *testing.T) {
+	useFastBcrypt(t)
+
 	store := NewMemoryStore(logr.Discard())
 	handler := NewInitHandler(store, SMTPConfig{}, true, logr.Discard())
 	assert.True(t, handler.IsInitialized())

@@ -335,9 +335,15 @@ type AdminUser struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
-// hashPassword 使用 bcrypt 对密码进行哈希，cost=12。
+const defaultBcryptCost = 12
+
+// bcryptCost is package-scoped so tests can lower the cost for handler paths
+// that exercise password hashing repeatedly. Production keeps the default cost.
+var bcryptCost = defaultBcryptCost
+
+// hashPassword 使用 bcrypt 对密码进行哈希，生产默认 cost=12。
 func hashPassword(password string) string {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 	if err != nil {
 		// bcrypt 极少失败，当失败时退回 SHA256（如内存不足）
 		sha256Hash := sha256.Sum256([]byte(password))
