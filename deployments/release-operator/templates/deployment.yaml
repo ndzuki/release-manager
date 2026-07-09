@@ -55,11 +55,12 @@ spec:
         - name: grpc
           containerPort: {{ .Values.grpc.addr | replace ":" "" | default "8443" }}
           protocol: TCP
-        {{- if .Values.tls.enabled }}
         volumeMounts:
+        {{ if .Values.tls.enabled }}
         - name: tls-certs
           mountPath: /etc/release-operator/tls
           readOnly: true
+        {{- end }}
         {{- if or .Values.harbor.caCert .Values.harbor.existingCaSecret }}
         - name: harbor-ca
           mountPath: /etc/release-operator/harbor-ca
@@ -69,6 +70,9 @@ spec:
           mountPath: /etc/release-operator/config.yaml
           subPath: config.yaml
           readOnly: true
+        {{- if .Values.audit.persistence.enabled }}
+        - name: audit-data
+          mountPath: /data
         {{- end }}
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
@@ -82,8 +86,8 @@ spec:
             port: grpc
           initialDelaySeconds: 5
           periodSeconds: 10
-      {{- if .Values.tls.enabled }}
       volumes:
+      {{ if .Values.tls.enabled }}
       - name: tls-certs
         projected:
           sources:
@@ -91,6 +95,7 @@ spec:
               name: {{ if .Values.tls.existingCertSecret }}{{ .Values.tls.existingCertSecret }}{{ else }}{{ .Release.Name }}-tls{{ end }}
           - secret:
               name: {{ if .Values.tls.existingCaSecret }}{{ .Values.tls.existingCaSecret }}{{ else }}{{ .Release.Name }}-ca{{ end }}
+      {{- end }}
       {{- if or .Values.harbor.caCert .Values.harbor.existingCaSecret }}
       - name: harbor-ca
         secret:
@@ -99,6 +104,10 @@ spec:
       - name: config
         configMap:
           name: {{ .Release.Name }}-config
+      {{- if .Values.audit.persistence.enabled }}
+      - name: audit-data
+        persistentVolumeClaim:
+          claimName: {{ .Release.Name }}-audit
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

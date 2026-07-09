@@ -41,20 +41,20 @@ type HarborResource struct {
 
 // HarborRepository 表示 Harbor 仓库元数据。
 type HarborRepository struct {
-	Name         string `json:"name"`          // 如 "helm/magic-sandbox"
-	Namespace    string `json:"namespace"`     // 项目名
+	Name         string `json:"name"`           // 如 "helm/magic-sandbox"
+	Namespace    string `json:"namespace"`      // 项目名
 	RepoFullName string `json:"repo_full_name"` // 如 "library/helm/magic-sandbox"
-	RepoType     string `json:"repo_type"`     // 仓库类型，"CHART"
+	RepoType     string `json:"repo_type"`      // 仓库类型，"CHART"
 }
 
 // ReleaseNotification 是从 Harbor webhook 中提取的发布通知数据。
 type ReleaseNotification struct {
-	ChartName    string            `json:"chart_name"`    // Helm chart 名称
-	ChartVersion string            `json:"chart_version"` // chart 版本
-	ChartURL     string            `json:"chart_url"`     // OCI chart URL
-	ProjectName  string            `json:"project_name"`  // Harbor 项目名
+	ChartName    string            `json:"chart_name"`       // Helm chart 名称
+	ChartVersion string            `json:"chart_version"`    // chart 版本
+	ChartURL     string            `json:"chart_url"`        // OCI chart URL
+	ProjectName  string            `json:"project_name"`     // Harbor 项目名
 	Images       map[string]string `json:"images,omitempty"` // 组件→镜像 tag 映射
-	OccurredAt   time.Time         `json:"occurred_at"`   // 事件发生时间
+	OccurredAt   time.Time         `json:"occurred_at"`      // 事件发生时间
 }
 
 // 请求体最大 1 MiB，防止 OOM。

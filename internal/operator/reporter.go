@@ -13,17 +13,17 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
+	releasev1 "github.com/ndzuki/release-manager/api/gen/release/v1"
 	"github.com/ndzuki/release-manager/internal/config"
 	"github.com/ndzuki/release-manager/internal/pkg/retry"
-	releasev1 "github.com/ndzuki/release-manager/api/gen/release/v1"
 )
 
 // Reporter reports release status back to the notification service.
 type Reporter struct {
-	endpoint string
+	endpoint   string
 	customerID string
-	tlsCfg  *config.TLSConfig
-	log     logr.Logger
+	tlsCfg     *config.TLSConfig
+	log        logr.Logger
 }
 
 // NewReporter creates a new Reporter.

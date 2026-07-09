@@ -83,6 +83,14 @@ log:
   format: json # json, console
   output: stdout
 
+# --- 审计日志持久化（用于与 manager 同 Pod/共享 /data 时保存 SQLite 审计数据） ---
+audit:
+  persistence:
+    enabled: false
+    size: 5Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+
 # --- 资源限制 ---
 resources:
   limits:

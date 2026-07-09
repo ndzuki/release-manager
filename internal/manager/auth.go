@@ -155,12 +155,12 @@ func (m *AuthMiddleware) Handler(next http.Handler) http.Handler {
 	})
 }
 
-
 // =============================================================================
 // 上下文工具
 // =============================================================================
 
 type contextKey string
+
 const ctxKeyUser contextKey = "user"
 
 func UserFromContext(ctx context.Context) (*User, bool) {

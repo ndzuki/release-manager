@@ -33,11 +33,19 @@ type AuditLogger struct {
 
 // NewAuditLogger 创建审计日志记录器并启动后台 writer。
 func NewAuditLogger(store Store, log logr.Logger) *AuditLogger {
+	return NewAuditLoggerWithBuffer(store, log, auditChannelBuffer)
+}
+
+// NewAuditLoggerWithBuffer 创建指定缓冲容量的审计日志记录器。
+func NewAuditLoggerWithBuffer(store Store, log logr.Logger, bufferSize int) *AuditLogger {
+	if bufferSize <= 0 {
+		bufferSize = auditChannelBuffer
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &AuditLogger{
 		store:  store,
 		log:    log.WithName("audit"),
-		ch:     make(chan AuditLogEntry, auditChannelBuffer),
+		ch:     make(chan AuditLogEntry, bufferSize),
 		ctx:    ctx,
 		cancel: cancel,
 	}

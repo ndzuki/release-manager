@@ -42,9 +42,9 @@ func dialWithCert(ctx context.Context, addr, caFile, certFile, keyFile string) (
 	}
 
 	tlsCfg := &tls.Config{
-		Certificates: []tls.Certificate{clientCert},
-		RootCAs:      certPool,
-		MinVersion:   tls.VersionTLS12,
+		Certificates:       []tls.Certificate{clientCert},
+		RootCAs:            certPool,
+		MinVersion:         tls.VersionTLS12,
 		ServerName:         "localhost", // match DNS SAN for port-forward
 		InsecureSkipVerify: true,        // cross-CA cert reload
 	}

@@ -116,8 +116,8 @@ type MemoryStore struct {
 	bindings     map[string]CustomerChartBinding
 	initDone     bool
 	adminUser    *AdminUser
-	verifyTokens map[string]string  // email → token
-	auditLogs    []AuditLogEntry    // 审计日志（内存版）
+	verifyTokens map[string]string // email → token
+	auditLogs    []AuditLogEntry   // 审计日志（内存版）
 	log          logr.Logger
 }
 

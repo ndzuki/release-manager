@@ -6,11 +6,12 @@
 //   - 部署顺序: DeployOrder 控制依赖图，低值先部署
 //
 // REST API:
-//   GET    /api/v1/orgs/{orgId}/charts                     # 列出组织下的 chart 定义
-//   POST   /api/v1/orgs/{orgId}/charts                     # 创建 chart 定义
-//   GET    /api/v1/orgs/{orgId}/customers/{custId}/charts  # 列出客户分配的 charts
-//   POST   /api/v1/orgs/{orgId}/customers/{custId}/charts  # 为客户分配 chart
-//   DELETE /api/v1/orgs/{orgId}/customers/{custId}/charts/{bindingId} # 移除分配
+//
+//	GET    /api/v1/orgs/{orgId}/charts                     # 列出组织下的 chart 定义
+//	POST   /api/v1/orgs/{orgId}/charts                     # 创建 chart 定义
+//	GET    /api/v1/orgs/{orgId}/customers/{custId}/charts  # 列出客户分配的 charts
+//	POST   /api/v1/orgs/{orgId}/customers/{custId}/charts  # 为客户分配 chart
+//	DELETE /api/v1/orgs/{orgId}/customers/{custId}/charts/{bindingId} # 移除分配
 package manager
 
 import (
@@ -145,14 +146,14 @@ func (h *ChartConfigHandler) handleCustomerCharts(w http.ResponseWriter, r *http
 		}
 
 		binding := CustomerChartBinding{
-			ID:          generateID("binding"),
-			OrgID:       orgID,
-			CustomerID:  custID,
-			ChartID:     req.ChartID,
-			ChartName:   chart.Name,
-			Enabled:     true,
-			ReleaseName: req.ReleaseName,
-			Namespace:   req.Namespace,
+			ID:           generateID("binding"),
+			OrgID:        orgID,
+			CustomerID:   custID,
+			ChartID:      req.ChartID,
+			ChartName:    chart.Name,
+			Enabled:      true,
+			ReleaseName:  req.ReleaseName,
+			Namespace:    req.Namespace,
 			CustomValues: req.CustomValues,
 			DeployOrder:  req.DeployOrder,
 			CreatedAt:    time.Now(),

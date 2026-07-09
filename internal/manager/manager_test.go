@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -698,7 +699,7 @@ func TestAuditLogger_AsyncWrite(t *testing.T) {
 
 func TestClassifyRequest(t *testing.T) {
 	tests := []struct {
-		method, path          string
+		method, path            string
 		expectedRes, expectedID string
 	}{
 		{"GET", "/api/v1/customers", "customer", ""},
@@ -965,4 +966,321 @@ func NewSQLiteInMemoryStore(t *testing.T) *SQLiteStore {
 	require.NoError(t, err)
 	t.Cleanup(func() { store.Close() })
 	return store
+}
+
+func TestNewServer_AuditDisabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Store.DSN = filepath.Join(t.TempDir(), "release-manager.db")
+	cfg.Audit.Enabled = false
+
+	srv, err := NewServer(cfg, logr.Discard())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.store.Close() })
+
+	assert.Nil(t, srv.auditLogger)
+}
+
+func TestNewServer_AuditEnabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Store.DSN = filepath.Join(t.TempDir(), "release-manager.db")
+	cfg.Audit.Enabled = true
+	cfg.Audit.BufferSize = 2
+
+	srv, err := NewServer(cfg, logr.Discard())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.store.Close() })
+	t.Cleanup(func() { srv.auditLogger.Close() })
+
+	require.NotNil(t, srv.auditLogger)
+	assert.Equal(t, cap(srv.auditLogger.ch), cfg.Audit.BufferSize)
+}
+
+func TestCache_BasicOperationsAndTypedHelpers(t *testing.T) {
+	cache := NewCache(4)
+	defer cache.Close()
+
+	cache.Set("plain", "value", time.Minute)
+	got, ok := cache.Get("plain")
+	require.True(t, ok)
+	assert.Equal(t, "value", got)
+
+	cache.Set("expired", "old", -time.Second)
+	_, ok = cache.Get("expired")
+	assert.False(t, ok)
+
+	cache.Set("prefix:a", 1, time.Minute)
+	cache.Set("prefix:b", 2, time.Minute)
+	cache.DeleteByPrefix("prefix:")
+	_, ok = cache.Get("prefix:a")
+	assert.False(t, ok)
+	_, ok = cache.Get("prefix:b")
+	assert.False(t, ok)
+
+	status := &CustomerStatus{CustomerID: "cust-1", Online: true}
+	cache.SetCustomerStatus("cust-1", status)
+	cachedStatus, ok := cache.GetCustomerStatus("cust-1")
+	require.True(t, ok)
+	assert.Equal(t, status, cachedStatus)
+	cache.InvalidateCustomerStatus("cust-1")
+	_, ok = cache.GetCustomerStatus("cust-1")
+	assert.False(t, ok)
+
+	overview := &SystemOverview{TotalCustomers: 3, EnabledCustomers: 2}
+	cache.SetSystemOverview(overview)
+	cachedOverview, ok := cache.GetSystemOverview()
+	require.True(t, ok)
+	assert.Equal(t, overview, cachedOverview)
+	cache.InvalidateSystemOverview()
+	_, ok = cache.GetSystemOverview()
+	assert.False(t, ok)
+}
+
+func TestCache_EvictWhenFull(t *testing.T) {
+	cache := NewCache(2)
+	defer cache.Close()
+
+	cache.Set("a", 1, time.Minute)
+	cache.Set("b", 2, time.Minute)
+	cache.Set("c", 3, time.Minute)
+
+	cache.mu.RLock()
+	defer cache.mu.RUnlock()
+	assert.LessOrEqual(t, len(cache.items), 3)
+	assert.Contains(t, cache.items, "c")
+}
+
+func TestAuthProviders_APIKeySessionAndMiddleware(t *testing.T) {
+	log := logr.Discard()
+	apiKeyAuth := NewAPIKeyAuth("secret", log)
+	assert.Equal(t, "apikey", apiKeyAuth.Name())
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	_, err := apiKeyAuth.Authenticate(req)
+	require.Error(t, err)
+
+	req.Header.Set("X-API-Key", "secret")
+	user, err := apiKeyAuth.Authenticate(req)
+	require.NoError(t, err)
+	assert.Equal(t, "admin", user.ID)
+	assert.Equal(t, "default", user.OrgID)
+
+	cache := NewCache(8)
+	defer cache.Close()
+	sessionAuth := NewSessionAuth(cache, time.Hour, log)
+	assert.Equal(t, "session", sessionAuth.Name())
+	token, err := sessionAuth.CreateSession(&User{ID: "u1", Name: "User One"})
+	require.NoError(t, err)
+	require.NotEmpty(t, token)
+
+	sessionReq := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	sessionReq.Header.Set("Authorization", "Bearer "+token)
+	sessionUser, err := sessionAuth.Authenticate(sessionReq)
+	require.NoError(t, err)
+	assert.Equal(t, "u1", sessionUser.ID)
+	assert.Equal(t, token, extractBearerToken(sessionReq))
+
+	middleware := NewAuthMiddleware(log, sessionAuth, apiKeyAuth)
+	handler := middleware.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctxUser, ok := UserFromContext(r.Context())
+		require.True(t, ok)
+		assert.Equal(t, "u1", ctxUser.ID)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, sessionReq)
+	assert.Equal(t, http.StatusNoContent, w.Code)
+
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", http.NoBody))
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestChartConfigHandler_CRUDAndOverview(t *testing.T) {
+	store := NewMemoryStore(logr.Discard())
+	cache := NewCache(16)
+	defer cache.Close()
+	handler := NewChartConfigHandler(store, cache, logr.Discard())
+
+	chartBody := `{"name":"app","description":"demo","oci_url":"oci://registry/app","default_values":{"replicas":2},"labels":{"tier":"backend"}}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/orgs/org-1/charts", strings.NewReader(chartBody))
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+	var chart ChartDefinition
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &chart))
+	assert.Equal(t, "org-1", chart.OrgID)
+	assert.Equal(t, "app", chart.Name)
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/orgs/org-1/charts", http.NoBody)
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	bindingBody := `{"chart_id":"` + chart.ID + `","release_name":"app-prod","namespace":"prod","deploy_order":7}`
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/orgs/org-1/customers/cust-1/charts", strings.NewReader(bindingBody))
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+	var binding CustomerChartBinding
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &binding))
+	assert.Equal(t, "cust-1", binding.CustomerID)
+	assert.Equal(t, "app", binding.ChartName)
+	assert.Equal(t, "prod", binding.Namespace)
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/orgs/org-1/customers/cust-1/charts", http.NoBody)
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	_, err := store.CreateCustomer(Customer{ID: "cust-1", Name: "Customer 1", Enabled: true})
+	require.NoError(t, err)
+	_, err = store.CreateCustomer(Customer{ID: "cust-2", Name: "Customer 2", Enabled: false})
+	require.NoError(t, err)
+	require.NoError(t, store.CreateReleaseRecord(ReleaseRecord{RequestID: "r1", CustomerID: "cust-1", Status: "SUCCEEDED"}))
+	require.NoError(t, store.CreateReleaseRecord(ReleaseRecord{RequestID: "r2", CustomerID: "cust-1", Status: "FAILED"}))
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/overview", http.NoBody)
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var overview SystemOverview
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &overview))
+	assert.Equal(t, 2, overview.TotalCustomers)
+	assert.Equal(t, 1, overview.EnabledCustomers)
+	assert.Equal(t, 50.0, overview.ReleaseSuccessRate)
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/orgs/org-1/customers/cust-1/charts/"+binding.ID, http.NoBody)
+	handler.handleCustomerCharts(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestChartPathHelpers(t *testing.T) {
+	assert.True(t, matchPath("orgs/acme/charts", "orgs/*/charts"))
+	assert.True(t, matchPath("ORGS/acme/CHARTS", "orgs/*/charts"))
+	assert.False(t, matchPath("orgs/acme/customers/c1/charts", "orgs/*/charts"))
+	assert.Equal(t, "acme", extractSegment("/api/v1/orgs/acme/customers/c1/charts", "orgs"))
+	assert.Equal(t, "c1", extractSegment("/api/v1/orgs/acme/customers/c1/charts", "customers"))
+	assert.Empty(t, extractSegment("/api/v1/orgs", "orgs"))
+	assert.True(t, strings.HasPrefix(generateID("chart"), "chart-"))
+}
+
+func TestInitHandler_StatusInitAndLogin(t *testing.T) {
+	store := NewMemoryStore(logr.Discard())
+	handler := NewInitHandler(store, SMTPConfig{}, false, logr.Discard())
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/init", http.NoBody))
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"initialized":false`)
+
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/init", strings.NewReader(`{"username":"ad","password":"secret1","email":"admin@example.com"}`)))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/init", strings.NewReader(`{"username":"admin","password":"secret1","email":"admin@example.com"}`)))
+	require.Equal(t, http.StatusCreated, w.Code)
+	assert.True(t, handler.IsInitialized())
+
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/init", strings.NewReader(`{"username":"admin","password":"secret1","email":"admin@example.com"}`)))
+	assert.Equal(t, http.StatusConflict, w.Code)
+
+	w = httptest.NewRecorder()
+	handler.HandleLogin(w, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"secret1"}`)))
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "admin-session-admin")
+
+	w = httptest.NewRecorder()
+	handler.HandleLogin(w, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"wrong"}`)))
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+	w = httptest.NewRecorder()
+	handler.HandleLogin(w, httptest.NewRequest(http.MethodGet, "/api/v1/auth/login", http.NoBody))
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
+
+func TestInitHandler_DevModeAndHelpers(t *testing.T) {
+	store := NewMemoryStore(logr.Discard())
+	handler := NewInitHandler(store, SMTPConfig{}, true, logr.Discard())
+	assert.True(t, handler.IsInitialized())
+
+	admin, err := store.GetAdminUser("admin")
+	require.NoError(t, err)
+	assert.True(t, verifyLoginPassword(admin, "admin"))
+	assert.False(t, verifyLoginPassword(admin, "bad"))
+	assert.True(t, isValidEmail("user@example.com"))
+	assert.False(t, isValidEmail("invalid"))
+	assert.Len(t, handler.generateVerifyToken("user@example.com"), 32)
+
+	legacy := &AdminUser{Username: "legacy", PasswordHash: sha256Hex("secret")}
+	assert.True(t, verifyLoginPassword(legacy, "secret"))
+}
+
+func TestCasbinRBACAndUserHandler(t *testing.T) {
+	log := logr.Discard()
+	rbac, err := NewCasbinRBAC(log)
+	require.NoError(t, err)
+
+	require.NoError(t, rbac.AddRoleForUser("u1", "viewer"))
+	ok, err := rbac.Enforce("u1", "default", "/api/v1/customers", http.MethodGet)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	ok, err = rbac.Enforce("u1", "default", "/api/v1/customers", http.MethodPost)
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	require.NoError(t, rbac.AddPolicy("custom", "default", "/api/v1/custom", "GET"))
+	require.NoError(t, rbac.AddRoleForUser("u1", "custom"))
+	roles, err := rbac.GetRolesForUser("u1")
+	require.NoError(t, err)
+	assert.Contains(t, roles, "custom")
+	require.NoError(t, rbac.DeleteRoleForUser("u1", "custom"))
+
+	store := NewMemoryStore(log)
+	require.NoError(t, store.CreateAdminUser(AdminUser{Username: "admin", Email: "admin@example.com", Role: "admin"}))
+	handler := NewUserRBACHandler(rbac, store, log)
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/users", http.NoBody))
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/api/v1/users/admin", strings.NewReader(`{"Role":"operator"}`)))
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/users/admin", http.NoBody))
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "operator")
+
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/api/v1/users/admin", strings.NewReader(`{"Role":"owner"}`)))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/v1/users/admin", http.NoBody))
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
+
+func TestAuthProviderHelpers(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	req.SetBasicAuth("user", "pass")
+	u, p := basicAuth(req)
+	assert.Equal(t, "user", u)
+	assert.Equal(t, "pass", p)
+
+	assert.Equal(t, "first", getAttr(map[string][]string{"mail": {"first", "second"}}, "mail"))
+	assert.Empty(t, getAttr(map[string][]string{}, "mail"))
+	assert.Equal(t, "admin", groupsToRole([]string{"release-admins"}, logr.Discard()))
+	assert.Equal(t, "operator", groupsToRole([]string{"operators"}, logr.Discard()))
+	assert.Equal(t, "viewer", groupsToRole([]string{"users"}, logr.Discard()))
+
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"email":"user@example.com","name":"User"}`))
+	claims, err := parseJWTClaims("header." + payload + ".sig")
+	require.NoError(t, err)
+	assert.Equal(t, "user@example.com", claims["email"])
+	_, err = parseJWTClaims("invalid")
+	assert.Error(t, err)
 }
