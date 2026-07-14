@@ -16,6 +16,11 @@ IMAGE_TAG ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 # Binary names
 OPERATOR_BIN := release-operator
 MANAGER_BIN := release-manager
+WEBHOOK_BIN := release-webhook
+API_BIN := release-api
+ORCHESTRATOR_BIN := release-orchestrator
+AUTH_BIN := release-auth
+NOTIFIER_BIN := release-notifier
 
 # Proto configuration
 BUF ?= $(GOBIN)/buf
@@ -79,24 +84,50 @@ proto-lint: ## 检查 proto 文件
 	cd $(PROTO_DIR) && $(BUF) lint
 	@echo "$(GREEN)Proto lint passed$(NC)"
 
-# =============================================================================
-# 构建
-# =============================================================================
-
 .PHONY: build
-build: build-operator build-notification ## 构建所有二进制文件
+build: proto build-operator build-manager build-webhook build-api build-orchestrator build-auth build-notifier ## Build all binaries
 
 .PHONY: build-operator
-build-operator: proto ## 构建 release-operator
+build-operator: proto ## Build release-operator
 	@echo "$(YELLOW)Building $(OPERATOR_BIN)...$(NC)"
 	$(GO) build -o bin/$(OPERATOR_BIN) ./cmd/$(OPERATOR_BIN)/
 	@echo "$(GREEN)$(OPERATOR_BIN) built$(NC)"
 
-.PHONY: build-notification
-build-notification: proto ## 构建 release-manager
+.PHONY: build-manager
+build-manager: proto ## Build release-manager (monolith, backward compat)
 	@echo "$(YELLOW)Building $(MANAGER_BIN)...$(NC)"
 	$(GO) build -o bin/$(MANAGER_BIN) ./cmd/$(MANAGER_BIN)/
 	@echo "$(GREEN)$(MANAGER_BIN) built$(NC)"
+
+.PHONY: build-webhook
+build-webhook: proto ## Build release-webhook
+	@echo "$(YELLOW)Building $(WEBHOOK_BIN)...$(NC)"
+	$(GO) build -o bin/$(WEBHOOK_BIN) ./cmd/$(WEBHOOK_BIN)/
+	@echo "$(GREEN)$(WEBHOOK_BIN) built$(NC)"
+
+.PHONY: build-api
+build-api: proto ## Build release-api
+	@echo "$(YELLOW)Building $(API_BIN)...$(NC)"
+	$(GO) build -o bin/$(API_BIN) ./cmd/$(API_BIN)/
+	@echo "$(GREEN)$(API_BIN) built$(NC)"
+
+.PHONY: build-orchestrator
+build-orchestrator: proto ## Build release-orchestrator
+	@echo "$(YELLOW)Building $(ORCHESTRATOR_BIN)...$(NC)"
+	$(GO) build -o bin/$(ORCHESTRATOR_BIN) ./cmd/$(ORCHESTRATOR_BIN)/
+	@echo "$(GREEN)$(ORCHESTRATOR_BIN) built$(NC)"
+
+.PHONY: build-auth
+build-auth: proto ## Build release-auth
+	@echo "$(YELLOW)Building $(AUTH_BIN)...$(NC)"
+	$(GO) build -o bin/$(AUTH_BIN) ./cmd/$(AUTH_BIN)/
+	@echo "$(GREEN)$(AUTH_BIN) built$(NC)"
+
+.PHONY: build-notifier
+build-notifier: proto ## Build release-notifier
+	@echo "$(YELLOW)Building $(NOTIFIER_BIN)...$(NC)"
+	$(GO) build -o bin/$(NOTIFIER_BIN) ./cmd/$(NOTIFIER_BIN)/
+	@echo "$(GREEN)$(NOTIFIER_BIN) built$(NC)"
 
 # =============================================================================
 # 代码质量
@@ -254,14 +285,43 @@ image-operator: ## 构建 release-operator Docker 镜像
 	@echo "$(GREEN)Operator image built$(NC)"
 
 .PHONY: image-manager
-image-manager: ## 构建 release-manager Docker 镜像
+image-manager: ## Build release-manager Docker image (monolith)
 	@echo "$(YELLOW)Building manager image...$(NC)"
-	$(DOCKER) build -f Dockerfile.manager \
-		-t release-manager:dev .
+	$(DOCKER) build -f Dockerfile.manager -t release-manager:$(IMAGE_TAG) .
 	@echo "$(GREEN)Manager image built$(NC)"
 
 .PHONY: image
-image: image-operator image-notification ## 构建所有 Docker 镜像
+image: image-operator image-manager image-webhook image-api image-orchestrator image-auth image-notifier ## Build all Docker images
+
+.PHONY: image-webhook
+image-webhook: build-webhook ## Build release-webhook Docker image
+	@echo "$(YELLOW)Building webhook image...$(NC)"
+	$(DOCKER) build -f Dockerfile.webhook --build-arg BINARY=$(WEBHOOK_BIN) -t $(WEBHOOK_BIN):$(IMAGE_TAG) .
+	@echo "$(GREEN)Webhook image built$(NC)"
+
+.PHONY: image-api
+image-api: build-api ## Build release-api Docker image
+	@echo "$(YELLOW)Building api image...$(NC)"
+	$(DOCKER) build -f Dockerfile.micro --build-arg BINARY=$(API_BIN) -t $(API_BIN):$(IMAGE_TAG) .
+	@echo "$(GREEN)API image built$(NC)"
+
+.PHONY: image-orchestrator
+image-orchestrator: build-orchestrator ## Build release-orchestrator Docker image
+	@echo "$(YELLOW)Building orchestrator image...$(NC)"
+	$(DOCKER) build -f Dockerfile.micro --build-arg BINARY=$(ORCHESTRATOR_BIN) -t $(ORCHESTRATOR_BIN):$(IMAGE_TAG) .
+	@echo "$(GREEN)Orchestrator image built$(NC)"
+
+.PHONY: image-auth
+image-auth: build-auth ## Build release-auth Docker image
+	@echo "$(YELLOW)Building auth image...$(NC)"
+	$(DOCKER) build -f Dockerfile.micro --build-arg BINARY=$(AUTH_BIN) -t $(AUTH_BIN):$(IMAGE_TAG) .
+	@echo "$(GREEN)Auth image built$(NC)"
+
+.PHONY: image-notifier
+image-notifier: build-notifier ## Build release-notifier Docker image
+	@echo "$(YELLOW)Building notifier image...$(NC)"
+	$(DOCKER) build -f Dockerfile.micro --build-arg BINARY=$(NOTIFIER_BIN) -t $(NOTIFIER_BIN):$(IMAGE_TAG) .
+	@echo "$(GREEN)Notifier image built$(NC)"
 
 # =============================================================================
 # 清理

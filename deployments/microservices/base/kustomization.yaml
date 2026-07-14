@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - configmap.yaml
+  - webhook.yaml
+  - services.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: release-manager
+  app.kubernetes.io/managed-by: kustomize
+
+images:
+  - name: release-webhook
+    newName: harbor.example.com/release-operator/release-webhook
+    newTag: latest
+  - name: release-api
+    newName: harbor.example.com/release-operator/release-api
+    newTag: latest
+  - name: release-orchestrator
+    newName: harbor.example.com/release-operator/release-orchestrator
+    newTag: latest
+  - name: release-auth
+    newName: harbor.example.com/release-operator/release-auth
+    newTag: latest
+  - name: release-notifier
+    newName: harbor.example.com/release-operator/release-notifier
+    newTag: latest

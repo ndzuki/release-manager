@@ -340,3 +340,101 @@ g(r.sub, p.sub) && (p.org == r.org || p.org == "*")
 | Registry proxy | registry:3 HTTP timeout |
 | gRPC 转发 | `context.WithTimeout` 60s |
 | 状态上报 | `context.WithTimeout` 3 分钟 + 5 次重试 |
+
+## 11. 微服务拆分 (v1 · 2026-07-14)
+
+### 11.1 当前阶段：共享数据库
+
+**本轮已完成**：将单体 `release-manager` 拆分为 5 个可独立构建和部署的服务，
+同时保留 `release-operator` 作为客户集群 Agent 不变。
+
+```
+                          ┌─────────────────────────┐
+                          │    API Gateway / Ingress │
+                          │    (nginx / traefik)     │
+                          └──────┬────────┬─────────┘
+                                 │        │
+              ┌──────────────────┼────────┼──────────────────┐
+              │                  │        │                  │
+       ┌──────▼──────┐  ┌───────▼──┐ ┌───▼────────┐ ┌──────▼──────┐
+       │release-     │  │release-api│ │release-    │ │release-auth │
+       │webhook      │  │(REST +    │ │orchestrator│ │(init,login, │
+       │(Harbor      │  │ dashboard)│ │(forward,   │ │ RBAC)       │
+       │webhook)     │  │           │ │ coordinate)│ │             │
+       └──────┬──────┘  └───────┬──┘ └───┬────────┘ └──────┬──────┘
+              │                 │         │                │
+              └─────────────────┼─────────┼────────────────┘
+                                │         │
+                         ┌──────▼─────────▼──────┐
+                         │   Shared SQLite/       │
+                         │   PostgreSQL Store     │
+                         └────────────────────────┘
+
+       ┌──────────────┐
+       │release-       │  ← 客户集群 Agent (保持不变)
+       │operator       │
+       └──────────────┘
+
+       ┌──────────────┐
+       │release-       │  ← 钉钉/邮件通知
+       │notifier       │
+       └──────────────┘
+```
+
+**服务职责**：
+
+| 服务 | 端口 | 职责 |
+|------|------|------|
+| `release-webhook` | 8080 | Harbor webhook 接收、HMAC 验证、事件解析 |
+| `release-api` | 8080, 8443 | REST 管理 API（客户/发布/审计）、监控面板、系统初始化 |
+| `release-orchestrator` | 8080, 8443 | 通知编排、gRPC 转发到客户 operator、状态记录 |
+| `release-auth` | 8080 | 多租户认证、系统初始化、管理员登录、RBAC |
+| `release-notifier` | 8080 | 钉钉机器人通知、邮件发送 |
+| `release-operator` | 8443 | 客户集群 Agent（不变） |
+| `release-manager` | 8080, 8443 | **单体兼容**（保留原有入口，逐步退役） |
+
+### 11.2 后续分库候选
+
+**本轮不拆库**，所有服务共享同一 SQLite/PostgreSQL 实例。
+
+未来分库候选：
+- `auth_db`: 用户、组织、RBAC 策略
+- `release_db`: 客户、发布记录、chart 配置
+- `audit_db`: 审计日志（独立扩展）
+
+触发条件：当单个服务成为瓶颈或需要独立扩展时。
+
+### 11.3 服务间通信
+
+**当前阶段**：所有服务共享同一个 Go 模块和 Store 接口，服务间通过共享数据库通信。
+
+**后续演进**：
+- gRPC（已有基础设施）：`release-webhook → release-orchestrator` 通过 gRPC 调用替代进程内回调
+- 事件总线：引入 NATS 或 Redis Pub/Sub 用于发布通知的异步广播
+- API Gateway：统一前端入口路由，隐藏服务拓扑
+
+### 11.4 服务间 mTLS
+
+当前 `release-operator` 与 `release-manager` 间的 gRPC 通信已支持 mTLS。
+服务间（webhook→orchestrator、api→store）当前通过本地网络通信，建议后续统一使用 mTLS。
+
+### 11.5 灰度迁移步骤
+
+1. **Phase 1** (当前): 单体 + 微服务并存，`release-manager` 作为回退
+2. **Phase 2**: 前端通过 Ingress 路由到对应微服务，单体降级为编排器
+3. **Phase 3**: 拆分数据库，引入事件总线
+4. **Phase 4**: 退役单体 `release-manager`
+
+### 11.6 回滚策略
+
+任何时候可以回退到单体 `release-manager`：
+- 前端 Ingress 指回 `release-manager` Service
+- 微服务 Deployment 缩容到 0
+- 单体包含所有功能，零数据迁移
+
+### 11.7 关键决策
+
+1. **共享数据库优先** — 避免分布式事务，降低迁移风险
+2. **release-operator 不拆分** — 客户集群 Agent 独立运行，无需拆分
+3. **暂不引入消息队列** — gRPC + 进程内 channel 已满足当前需求
+4. **API Gateway 统一前端入口** — 前端无需感知后端拆分

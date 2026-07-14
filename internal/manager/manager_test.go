@@ -960,7 +960,7 @@ func (s *Server) Handler() http.Handler {
 	}
 
 	// REST API (API key auth)
-	authHandler := s.apiKeyMiddleware(http.HandlerFunc(s.routeREST))
+	authHandler := APIKeyMiddleware(s.cfg.APIKey, s.log)(http.HandlerFunc(s.routeREST))
 	mux.Handle("/api/v1/customers", authHandler)
 	mux.Handle("/api/v1/customers/", authHandler)
 	mux.Handle("/api/v1/releases/", authHandler)
