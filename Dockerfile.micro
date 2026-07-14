@@ -1,0 +1,19 @@
+# =============================================================================
+# Generic microservice Docker image for release-manager services.
+#
+# Build: make build-<service> && make image-<service>
+# Or:    docker build -f Dockerfile.micro --build-arg BINARY=release-webhook -t release-webhook:dev .
+# =============================================================================
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates
+
+ARG BINARY=release-api
+COPY bin/${BINARY} /usr/local/bin/${BINARY}
+
+RUN adduser -D -s /bin/sh releaser
+USER releaser
+
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/${BINARY}"]

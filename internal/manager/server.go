@@ -277,7 +277,7 @@ func (s *Server) serveHTTP(ctx context.Context) error {
 	mux.Handle("/api/v1/users/", s.authMiddleware.Handler(s.userRBAC))
 
 	// 管理 API（API Key 认证保护，向后兼容）
-	authHandler := s.apiKeyMiddleware(http.HandlerFunc(s.routeREST))
+	authHandler := APIKeyMiddleware(s.cfg.APIKey, s.log)(http.HandlerFunc(s.routeREST))
 	mux.Handle("/api/v1/customers", authHandler)
 	mux.Handle("/api/v1/customers/", authHandler)
 	mux.Handle("/api/v1/releases/", authHandler)
@@ -300,7 +300,7 @@ func (s *Server) serveHTTP(ctx context.Context) error {
 
 	s.httpServer = &http.Server{
 		Addr:         s.cfg.Server.HTTPAddr,
-		Handler:      withLogging(s.log, h),
+		Handler:      WithLogging(s.log, h),
 		ReadTimeout:  s.cfg.Server.ReadTimeout,
 		WriteTimeout: s.cfg.Server.WriteTimeout,
 		IdleTimeout:  120 * time.Second,
@@ -325,29 +325,49 @@ func (s *Server) serveHTTP(ctx context.Context) error {
 // 认证中间件
 // =============================================================================
 
-// apiKeyMiddleware 通过 X-API-Key header 验证 API 请求。
-// 未配置 APIKey 时输出警告但不拒绝请求（向后兼容）。
-func (s *Server) apiKeyMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.APIKey == "" {
-			s.log.Info("WARNING: REST API has no API key configured — endpoints are unprotected")
-			next.ServeHTTP(w, r)
-			return
-		}
+// =============================================================================
+// Exported handler utilities for microservice composition.
+// =============================================================================
 
-		key := r.Header.Get("X-API-Key")
-		if key == "" {
-			key = r.URL.Query().Get("api_key")
-		}
-		if key != s.cfg.APIKey {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
-			return
-		}
+// APIKeyMiddleware validates requests via X-API-Key header.
+// Returns a middleware that can be used by microservice cmd/ entries.
+func APIKeyMiddleware(apiKey string, log logr.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if apiKey == "" {
+				log.Info("WARNING: REST API has no API key configured — endpoints are unprotected")
+				next.ServeHTTP(w, r)
+				return
+			}
+			key := r.Header.Get("X-API-Key")
+			if key == "" {
+				key = r.URL.Query().Get("api_key")
+			}
+			if key != apiKey {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// WithLogging wraps an HTTP handler with request logging.
+func WithLogging(log logr.Logger, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
 		next.ServeHTTP(w, r)
+		log.V(1).Info("HTTP request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"duration", time.Since(start).String(),
+		)
 	})
 }
+
+
 
 // routeREST 根据 URL 路径路由 REST 请求。
 func (s *Server) routeREST(w http.ResponseWriter, r *http.Request) {

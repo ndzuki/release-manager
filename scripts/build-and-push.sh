@@ -14,7 +14,7 @@ VERSION_TAG="${2:-latest}"
 
 if [ -z "$SERVICE_NAME" ]; then
     echo "Usage: $0 <service-name> <version-tag>"
-    echo "  service-name: release-operator | release-notification"
+    echo "  service-name: release-operator | release-manager | release-webhook | release-api | release-orchestrator | release-auth | release-notifier"
     echo "  version-tag:  e.g. v1.0.0, latest"
     exit 1
 fi
@@ -36,15 +36,18 @@ if [ -n "$HARBOR_USERNAME" ] && [ -n "$HARBOR_PASSWORD" ]; then
     echo "$HARBOR_PASSWORD" | docker login "$HARBOR_URL" -u "$HARBOR_USERNAME" --password-stdin
 fi
 
-# Build image
-DOCKERFILE="Dockerfile.${SERVICE_NAME}"
-if [ ! -f "$DOCKERFILE" ]; then
-    echo "ERROR: Dockerfile not found: $DOCKERFILE"
-    exit 1
-fi
+# Select Dockerfile based on service
+case "$SERVICE_NAME" in
+    release-operator)    DOCKERFILE="Dockerfile.operator" ;;
+    release-manager)      DOCKERFILE="Dockerfile.manager" ;;
+    release-webhook)      DOCKERFILE="Dockerfile.webhook" ;;
+    release-api|release-orchestrator|release-auth|release-notifier) DOCKERFILE="Dockerfile.micro" ;;
+    *)                   DOCKERFILE="Dockerfile.${SERVICE_NAME}" ;;
+esac
 
 docker build \
     -f "$DOCKERFILE" \
+    --build-arg BINARY="${SERVICE_NAME}" \
     -t "$IMAGE_NAME" \
     -t "${HARBOR_URL}/${HARBOR_PROJECT}/${SERVICE_NAME}:latest" \
     .

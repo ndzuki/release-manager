@@ -1,0 +1,17 @@
+# =============================================================================
+# release-webhook Docker image.
+# Receives Harbor PUSH_HELMCHART webhook events.
+# =============================================================================
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates
+
+ARG BINARY=release-webhook
+COPY bin/${BINARY} /usr/local/bin/${BINARY}
+
+RUN adduser -D -s /bin/sh releaser
+USER releaser
+
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/release-webhook"]

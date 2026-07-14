@@ -1,0 +1,303 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-api
+  labels:
+    app.kubernetes.io/name: release-api
+    app.kubernetes.io/component: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: release-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: release-api
+    spec:
+      containers:
+      - name: api
+        image: release-api:latest
+        imagePullPolicy: IfNotPresent
+        args: ["--config=/etc/release-manager/config.yaml"]
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: grpc
+          containerPort: 8443
+          protocol: TCP
+        env:
+        - name: CONFIG_PATH
+          value: /etc/release-manager/config.yaml
+        volumeMounts:
+        - name: config
+          mountPath: /etc/release-manager/config.yaml
+          subPath: config.yaml
+          readOnly: true
+        - name: data
+          mountPath: /data
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits: { cpu: 500m, memory: 512Mi }
+          requests: { cpu: 50m, memory: 64Mi }
+      volumes:
+      - name: config
+        configMap:
+          name: microservice-config
+      - name: data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: release-api
+  labels:
+    app.kubernetes.io/name: release-api
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+  - name: grpc
+    port: 8443
+    targetPort: grpc
+  selector:
+    app.kubernetes.io/name: release-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-orchestrator
+  labels:
+    app.kubernetes.io/name: release-orchestrator
+    app.kubernetes.io/component: orchestrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: release-orchestrator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: release-orchestrator
+    spec:
+      containers:
+      - name: orchestrator
+        image: release-orchestrator:latest
+        imagePullPolicy: IfNotPresent
+        args: ["--config=/etc/release-manager/config.yaml"]
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: grpc
+          containerPort: 8443
+          protocol: TCP
+        env:
+        - name: CONFIG_PATH
+          value: /etc/release-manager/config.yaml
+        volumeMounts:
+        - name: config
+          mountPath: /etc/release-manager/config.yaml
+          subPath: config.yaml
+          readOnly: true
+        - name: data
+          mountPath: /data
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits: { cpu: 500m, memory: 512Mi }
+          requests: { cpu: 50m, memory: 64Mi }
+      volumes:
+      - name: config
+        configMap:
+          name: microservice-config
+      - name: data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: release-orchestrator
+  labels:
+    app.kubernetes.io/name: release-orchestrator
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+  - name: grpc
+    port: 8443
+    targetPort: grpc
+  selector:
+    app.kubernetes.io/name: release-orchestrator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-auth
+  labels:
+    app.kubernetes.io/name: release-auth
+    app.kubernetes.io/component: auth
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: release-auth
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: release-auth
+    spec:
+      containers:
+      - name: auth
+        image: release-auth:latest
+        imagePullPolicy: IfNotPresent
+        args: ["--config=/etc/release-manager/config.yaml"]
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        env:
+        - name: CONFIG_PATH
+          value: /etc/release-manager/config.yaml
+        volumeMounts:
+        - name: config
+          mountPath: /etc/release-manager/config.yaml
+          subPath: config.yaml
+          readOnly: true
+        - name: data
+          mountPath: /data
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits: { cpu: 500m, memory: 256Mi }
+          requests: { cpu: 50m, memory: 64Mi }
+      volumes:
+      - name: config
+        configMap:
+          name: microservice-config
+      - name: data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: release-auth
+  labels:
+    app.kubernetes.io/name: release-auth
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+  selector:
+    app.kubernetes.io/name: release-auth
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-notifier
+  labels:
+    app.kubernetes.io/name: release-notifier
+    app.kubernetes.io/component: notifier
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: release-notifier
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: release-notifier
+    spec:
+      containers:
+      - name: notifier
+        image: release-notifier:latest
+        imagePullPolicy: IfNotPresent
+        args: ["--config=/etc/release-manager/config.yaml"]
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        env:
+        - name: CONFIG_PATH
+          value: /etc/release-manager/config.yaml
+        volumeMounts:
+        - name: config
+          mountPath: /etc/release-manager/config.yaml
+          subPath: config.yaml
+          readOnly: true
+        - name: data
+          mountPath: /data
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits: { cpu: 500m, memory: 256Mi }
+          requests: { cpu: 50m, memory: 64Mi }
+      volumes:
+      - name: config
+        configMap:
+          name: microservice-config
+      - name: data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: release-notifier
+  labels:
+    app.kubernetes.io/name: release-notifier
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+  selector:
+    app.kubernetes.io/name: release-notifier
