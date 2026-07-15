@@ -20,6 +20,63 @@ MANAGER_PORT := 8081
 GRPC_PORT    := 8444
 
 # ---------------------------------------------------------------------------
+# Multi-service build & run
+# ---------------------------------------------------------------------------
+SERVICES := webhook orchestrator operator auth notifier api
+BIN_DIR  := bin
+
+.PHONY: build-all
+build-all: $(addprefix build-,$(SERVICES)) ## Build all microservices
+
+.PHONY: build-webhook
+build-webhook: proto ## Build release-webhook
+	@echo "$(BLUE)building release-webhook...$(NC)"
+	$(GO) build -o $(BIN_DIR)/release-webhook ./cmd/webhook/
+
+.PHONY: build-orchestrator
+build-orchestrator: proto ## Build release-orchestrator
+	$(GO) build -o $(BIN_DIR)/release-orchestrator ./cmd/orchestrator/
+
+.PHONY: build-operator
+build-operator: proto ## Build release-operator
+	$(GO) build -o $(BIN_DIR)/release-operator ./cmd/operator/
+
+.PHONY: build-auth
+build-auth: proto ## Build release-auth
+	$(GO) build -o $(BIN_DIR)/release-auth ./cmd/auth/
+
+.PHONY: build-notifier
+build-notifier: proto ## Build release-notifier
+	$(GO) build -o $(BIN_DIR)/release-notifier ./cmd/notifier/
+
+.PHONY: build-api
+build-api: proto ## Build release-api
+	$(GO) build -o $(BIN_DIR)/release-api ./cmd/api/
+
+.PHONY: run-webhook
+run-webhook: build-webhook ## Start release-webhook
+	./$(BIN_DIR)/release-webhook --config configs/webhook.dev.yaml
+
+.PHONY: run-orchestrator
+run-orchestrator: build-orchestrator ## Start release-orchestrator
+	./$(BIN_DIR)/release-orchestrator --config configs/orchestrator.dev.yaml
+
+.PHONY: run-operator
+run-operator: build-operator ## Start release-operator
+	./$(BIN_DIR)/release-operator --config configs/operator.dev.yaml
+
+.PHONY: run-auth
+run-auth: build-auth ## Start release-auth
+	./$(BIN_DIR)/release-auth --config configs/auth.dev.yaml
+
+.PHONY: run-notifier
+run-notifier: build-notifier ## Start release-notifier
+	./$(BIN_DIR)/release-notifier --config configs/notifier.dev.yaml
+
+.PHONY: run-api
+run-api: build-api ## Start release-api
+	./$(BIN_DIR)/release-api --config configs/api.dev.yaml
+# ---------------------------------------------------------------------------
 # Kulala integration — open .http files directly in Neovim
 # ---------------------------------------------------------------------------
 KULALA_DIR := api/kulala
