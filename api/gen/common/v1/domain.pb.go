@@ -513,6 +513,59 @@ func (x *Cluster) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+// ActorContext identifies the initiating principal for audit and authorization.
+type ActorContext struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Organization  string                 `protobuf:"bytes,2,opt,name=organization,proto3" json:"organization,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ActorContext) Reset() {
+	*x = ActorContext{}
+	mi := &file_common_v1_domain_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ActorContext) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ActorContext) ProtoMessage() {}
+
+func (x *ActorContext) ProtoReflect() protoreflect.Message {
+	mi := &file_common_v1_domain_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ActorContext.ProtoReflect.Descriptor instead.
+func (*ActorContext) Descriptor() ([]byte, []int) {
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ActorContext) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *ActorContext) GetOrganization() string {
+	if x != nil {
+		return x.Organization
+	}
+	return ""
+}
+
 var File_common_v1_domain_proto protoreflect.FileDescriptor
 
 const file_common_v1_domain_proto_rawDesc = "" +
@@ -562,7 +615,10 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"customerId\x12%\n" +
 	"\x0ekubeconfig_ref\x18\x04 \x01(\tR\rkubeconfigRef\x129\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAtB>Z<github.com/ndzuki/release-manager/api/gen/common/v1;commonv1b\x06proto3"
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"K\n" +
+	"\fActorContext\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\"\n" +
+	"\forganization\x18\x02 \x01(\tR\forganizationB>Z<github.com/ndzuki/release-manager/api/gen/common/v1;commonv1b\x06proto3"
 
 var (
 	file_common_v1_domain_proto_rawDescOnce sync.Once
@@ -576,7 +632,7 @@ func file_common_v1_domain_proto_rawDescGZIP() []byte {
 	return file_common_v1_domain_proto_rawDescData
 }
 
-var file_common_v1_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_common_v1_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_common_v1_domain_proto_goTypes = []any{
 	(*ReleaseDigest)(nil),         // 0: common.v1.ReleaseDigest
 	(*ReleaseBundle)(nil),         // 1: common.v1.ReleaseBundle
@@ -585,16 +641,17 @@ var file_common_v1_domain_proto_goTypes = []any{
 	(*SecretRef)(nil),             // 4: common.v1.SecretRef
 	(*Customer)(nil),              // 5: common.v1.Customer
 	(*Cluster)(nil),               // 6: common.v1.Cluster
-	(*timestamppb.Timestamp)(nil), // 7: google.protobuf.Timestamp
+	(*ActorContext)(nil),          // 7: common.v1.ActorContext
+	(*timestamppb.Timestamp)(nil), // 8: google.protobuf.Timestamp
 }
 var file_common_v1_domain_proto_depIdxs = []int32{
 	0, // 0: common.v1.ReleaseBundle.digest:type_name -> common.v1.ReleaseDigest
-	7, // 1: common.v1.ReleaseBundle.created_at:type_name -> google.protobuf.Timestamp
-	7, // 2: common.v1.ReleaseDefinition.created_at:type_name -> google.protobuf.Timestamp
-	7, // 3: common.v1.ReleaseDefinition.updated_at:type_name -> google.protobuf.Timestamp
-	7, // 4: common.v1.ValuesRevision.created_at:type_name -> google.protobuf.Timestamp
-	7, // 5: common.v1.Customer.created_at:type_name -> google.protobuf.Timestamp
-	7, // 6: common.v1.Cluster.created_at:type_name -> google.protobuf.Timestamp
+	8, // 1: common.v1.ReleaseBundle.created_at:type_name -> google.protobuf.Timestamp
+	8, // 2: common.v1.ReleaseDefinition.created_at:type_name -> google.protobuf.Timestamp
+	8, // 3: common.v1.ReleaseDefinition.updated_at:type_name -> google.protobuf.Timestamp
+	8, // 4: common.v1.ValuesRevision.created_at:type_name -> google.protobuf.Timestamp
+	8, // 5: common.v1.Customer.created_at:type_name -> google.protobuf.Timestamp
+	8, // 6: common.v1.Cluster.created_at:type_name -> google.protobuf.Timestamp
 	7, // [7:7] is the sub-list for method output_type
 	7, // [7:7] is the sub-list for method input_type
 	7, // [7:7] is the sub-list for extension type_name
@@ -613,7 +670,7 @@ func file_common_v1_domain_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_common_v1_domain_proto_rawDesc), len(file_common_v1_domain_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

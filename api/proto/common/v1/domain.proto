@@ -62,3 +62,9 @@ message Cluster {
   string kubeconfig_ref = 4;
   google.protobuf.Timestamp created_at = 5;
 }
+
+// ActorContext identifies the initiating principal for audit and authorization.
+message ActorContext {
+  string user_id = 1;
+  string organization = 2;
+}

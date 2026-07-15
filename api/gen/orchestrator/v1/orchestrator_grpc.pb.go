@@ -19,15 +19,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	OrchestratorService_PublishRelease_FullMethodName = "/orchestrator.v1.OrchestratorService/PublishRelease"
+	OrchestratorService_CreateOperation_FullMethodName = "/orchestrator.v1.OrchestratorService/CreateOperation"
+	OrchestratorService_PublishRelease_FullMethodName  = "/orchestrator.v1.OrchestratorService/PublishRelease"
 )
 
 // OrchestratorServiceClient is the client API for OrchestratorService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-//
-// OrchestratorService coordinates release publish workflows.
 type OrchestratorServiceClient interface {
+	CreateOperation(ctx context.Context, in *CreateOperationRequest, opts ...grpc.CallOption) (*CreateOperationResponse, error)
 	PublishRelease(ctx context.Context, in *PublishReleaseRequest, opts ...grpc.CallOption) (*PublishReleaseResponse, error)
 }
 
@@ -37,6 +37,16 @@ type orchestratorServiceClient struct {
 
 func NewOrchestratorServiceClient(cc grpc.ClientConnInterface) OrchestratorServiceClient {
 	return &orchestratorServiceClient{cc}
+}
+
+func (c *orchestratorServiceClient) CreateOperation(ctx context.Context, in *CreateOperationRequest, opts ...grpc.CallOption) (*CreateOperationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateOperationResponse)
+	err := c.cc.Invoke(ctx, OrchestratorService_CreateOperation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *orchestratorServiceClient) PublishRelease(ctx context.Context, in *PublishReleaseRequest, opts ...grpc.CallOption) (*PublishReleaseResponse, error) {
@@ -52,9 +62,8 @@ func (c *orchestratorServiceClient) PublishRelease(ctx context.Context, in *Publ
 // OrchestratorServiceServer is the server API for OrchestratorService service.
 // All implementations must embed UnimplementedOrchestratorServiceServer
 // for forward compatibility.
-//
-// OrchestratorService coordinates release publish workflows.
 type OrchestratorServiceServer interface {
+	CreateOperation(context.Context, *CreateOperationRequest) (*CreateOperationResponse, error)
 	PublishRelease(context.Context, *PublishReleaseRequest) (*PublishReleaseResponse, error)
 	mustEmbedUnimplementedOrchestratorServiceServer()
 }
@@ -66,6 +75,9 @@ type OrchestratorServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedOrchestratorServiceServer struct{}
 
+func (UnimplementedOrchestratorServiceServer) CreateOperation(context.Context, *CreateOperationRequest) (*CreateOperationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateOperation not implemented")
+}
 func (UnimplementedOrchestratorServiceServer) PublishRelease(context.Context, *PublishReleaseRequest) (*PublishReleaseResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PublishRelease not implemented")
 }
@@ -88,6 +100,24 @@ func RegisterOrchestratorServiceServer(s grpc.ServiceRegistrar, srv Orchestrator
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&OrchestratorService_ServiceDesc, srv)
+}
+
+func _OrchestratorService_CreateOperation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateOperationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrchestratorServiceServer).CreateOperation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrchestratorService_CreateOperation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrchestratorServiceServer).CreateOperation(ctx, req.(*CreateOperationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _OrchestratorService_PublishRelease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -115,6 +145,10 @@ var OrchestratorService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "orchestrator.v1.OrchestratorService",
 	HandlerType: (*OrchestratorServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateOperation",
+			Handler:    _OrchestratorService_CreateOperation_Handler,
+		},
 		{
 			MethodName: "PublishRelease",
 			Handler:    _OrchestratorService_PublishRelease_Handler,

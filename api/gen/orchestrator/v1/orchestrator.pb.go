@@ -10,6 +10,7 @@ import (
 	v1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -22,6 +23,176 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// CreateOperationRequest submits a new release operation for orchestration.
+type CreateOperationRequest struct {
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	OperationType           string                 `protobuf:"bytes,1,opt,name=operation_type,json=operationType,proto3" json:"operation_type,omitempty"` // INSTALL, UPGRADE, ROLLBACK, EMERGENCY
+	BundleId                string                 `protobuf:"bytes,2,opt,name=bundle_id,json=bundleId,proto3" json:"bundle_id,omitempty"`                // ReleaseBundle ID
+	ReleaseDefinitionId     string                 `protobuf:"bytes,3,opt,name=release_definition_id,json=releaseDefinitionId,proto3" json:"release_definition_id,omitempty"`
+	ValuesRevisionId        string                 `protobuf:"bytes,4,opt,name=values_revision_id,json=valuesRevisionId,proto3" json:"values_revision_id,omitempty"`                       // must be approved
+	ValuesPatch             string                 `protobuf:"bytes,5,opt,name=values_patch,json=valuesPatch,proto3" json:"values_patch,omitempty"`                                        // JSON merge patch (optional)
+	ExpectedCurrentRevision int32                  `protobuf:"varint,6,opt,name=expected_current_revision,json=expectedCurrentRevision,proto3" json:"expected_current_revision,omitempty"` // required for UPGRADE/ROLLBACK
+	IdempotencyKey          string                 `protobuf:"bytes,7,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	Actor                   *v1.ActorContext       `protobuf:"bytes,8,opt,name=actor,proto3" json:"actor,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *CreateOperationRequest) Reset() {
+	*x = CreateOperationRequest{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateOperationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateOperationRequest) ProtoMessage() {}
+
+func (x *CreateOperationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateOperationRequest.ProtoReflect.Descriptor instead.
+func (*CreateOperationRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *CreateOperationRequest) GetOperationType() string {
+	if x != nil {
+		return x.OperationType
+	}
+	return ""
+}
+
+func (x *CreateOperationRequest) GetBundleId() string {
+	if x != nil {
+		return x.BundleId
+	}
+	return ""
+}
+
+func (x *CreateOperationRequest) GetReleaseDefinitionId() string {
+	if x != nil {
+		return x.ReleaseDefinitionId
+	}
+	return ""
+}
+
+func (x *CreateOperationRequest) GetValuesRevisionId() string {
+	if x != nil {
+		return x.ValuesRevisionId
+	}
+	return ""
+}
+
+func (x *CreateOperationRequest) GetValuesPatch() string {
+	if x != nil {
+		return x.ValuesPatch
+	}
+	return ""
+}
+
+func (x *CreateOperationRequest) GetExpectedCurrentRevision() int32 {
+	if x != nil {
+		return x.ExpectedCurrentRevision
+	}
+	return 0
+}
+
+func (x *CreateOperationRequest) GetIdempotencyKey() string {
+	if x != nil {
+		return x.IdempotencyKey
+	}
+	return ""
+}
+
+func (x *CreateOperationRequest) GetActor() *v1.ActorContext {
+	if x != nil {
+		return x.Actor
+	}
+	return nil
+}
+
+// CreateOperationResponse returns the pending operation details.
+type CreateOperationResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	State         string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"` // always "pending"
+	PreflightId   string                 `protobuf:"bytes,3,opt,name=preflight_id,json=preflightId,proto3" json:"preflight_id,omitempty"`
+	AcceptedAt    *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=accepted_at,json=acceptedAt,proto3" json:"accepted_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateOperationResponse) Reset() {
+	*x = CreateOperationResponse{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateOperationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateOperationResponse) ProtoMessage() {}
+
+func (x *CreateOperationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateOperationResponse.ProtoReflect.Descriptor instead.
+func (*CreateOperationResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *CreateOperationResponse) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *CreateOperationResponse) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *CreateOperationResponse) GetPreflightId() string {
+	if x != nil {
+		return x.PreflightId
+	}
+	return ""
+}
+
+func (x *CreateOperationResponse) GetAcceptedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.AcceptedAt
+	}
+	return nil
+}
+
 // PublishReleaseRequest triggers release orchestration for a definition.
 type PublishReleaseRequest struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
@@ -32,7 +203,7 @@ type PublishReleaseRequest struct {
 
 func (x *PublishReleaseRequest) Reset() {
 	*x = PublishReleaseRequest{}
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[0]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -44,7 +215,7 @@ func (x *PublishReleaseRequest) String() string {
 func (*PublishReleaseRequest) ProtoMessage() {}
 
 func (x *PublishReleaseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[0]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -57,7 +228,7 @@ func (x *PublishReleaseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishReleaseRequest.ProtoReflect.Descriptor instead.
 func (*PublishReleaseRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{0}
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *PublishReleaseRequest) GetReleaseDefinitionId() string {
@@ -78,7 +249,7 @@ type PublishReleaseResponse struct {
 
 func (x *PublishReleaseResponse) Reset() {
 	*x = PublishReleaseResponse{}
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[1]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -90,7 +261,7 @@ func (x *PublishReleaseResponse) String() string {
 func (*PublishReleaseResponse) ProtoMessage() {}
 
 func (x *PublishReleaseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[1]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -103,7 +274,7 @@ func (x *PublishReleaseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishReleaseResponse.ProtoReflect.Descriptor instead.
 func (*PublishReleaseResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{1}
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *PublishReleaseResponse) GetOperationId() string {
@@ -133,7 +304,7 @@ type ReleaseOperation struct {
 
 func (x *ReleaseOperation) Reset() {
 	*x = ReleaseOperation{}
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[2]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -145,7 +316,7 @@ func (x *ReleaseOperation) String() string {
 func (*ReleaseOperation) ProtoMessage() {}
 
 func (x *ReleaseOperation) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[2]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -158,7 +329,7 @@ func (x *ReleaseOperation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseOperation.ProtoReflect.Descriptor instead.
 func (*ReleaseOperation) Descriptor() ([]byte, []int) {
-	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{2}
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ReleaseOperation) GetId() string {
@@ -193,7 +364,22 @@ var File_orchestrator_v1_orchestrator_proto protoreflect.FileDescriptor
 
 const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\n" +
-	"\"orchestrator/v1/orchestrator.proto\x12\x0forchestrator.v1\x1a\x16common/v1/domain.proto\"K\n" +
+	"\"orchestrator/v1/orchestrator.proto\x12\x0forchestrator.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x16common/v1/domain.proto\"\xf5\x02\n" +
+	"\x16CreateOperationRequest\x12%\n" +
+	"\x0eoperation_type\x18\x01 \x01(\tR\roperationType\x12\x1b\n" +
+	"\tbundle_id\x18\x02 \x01(\tR\bbundleId\x122\n" +
+	"\x15release_definition_id\x18\x03 \x01(\tR\x13releaseDefinitionId\x12,\n" +
+	"\x12values_revision_id\x18\x04 \x01(\tR\x10valuesRevisionId\x12!\n" +
+	"\fvalues_patch\x18\x05 \x01(\tR\vvaluesPatch\x12:\n" +
+	"\x19expected_current_revision\x18\x06 \x01(\x05R\x17expectedCurrentRevision\x12'\n" +
+	"\x0fidempotency_key\x18\a \x01(\tR\x0eidempotencyKey\x12-\n" +
+	"\x05actor\x18\b \x01(\v2\x17.common.v1.ActorContextR\x05actor\"\xb2\x01\n" +
+	"\x17CreateOperationResponse\x12!\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x14\n" +
+	"\x05state\x18\x02 \x01(\tR\x05state\x12!\n" +
+	"\fpreflight_id\x18\x03 \x01(\tR\vpreflightId\x12;\n" +
+	"\vaccepted_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"acceptedAt\"K\n" +
 	"\x15PublishReleaseRequest\x122\n" +
 	"\x15release_definition_id\x18\x01 \x01(\tR\x13releaseDefinitionId\"S\n" +
 	"\x16PublishReleaseResponse\x12!\n" +
@@ -203,8 +389,9 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x122\n" +
 	"\x15release_definition_id\x18\x02 \x01(\tR\x13releaseDefinitionId\x12\x16\n" +
 	"\x06status\x18\x03 \x01(\tR\x06status\x120\n" +
-	"\x06digest\x18\x04 \x01(\v2\x18.common.v1.ReleaseDigestR\x06digest2x\n" +
-	"\x13OrchestratorService\x12a\n" +
+	"\x06digest\x18\x04 \x01(\v2\x18.common.v1.ReleaseDigestR\x06digest2\xde\x01\n" +
+	"\x13OrchestratorService\x12d\n" +
+	"\x0fCreateOperation\x12'.orchestrator.v1.CreateOperationRequest\x1a(.orchestrator.v1.CreateOperationResponse\x12a\n" +
 	"\x0ePublishRelease\x12&.orchestrator.v1.PublishReleaseRequest\x1a'.orchestrator.v1.PublishReleaseResponseBJZHgithub.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1b\x06proto3"
 
 var (
@@ -219,22 +406,30 @@ func file_orchestrator_v1_orchestrator_proto_rawDescGZIP() []byte {
 	return file_orchestrator_v1_orchestrator_proto_rawDescData
 }
 
-var file_orchestrator_v1_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_orchestrator_v1_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_orchestrator_v1_orchestrator_proto_goTypes = []any{
-	(*PublishReleaseRequest)(nil),  // 0: orchestrator.v1.PublishReleaseRequest
-	(*PublishReleaseResponse)(nil), // 1: orchestrator.v1.PublishReleaseResponse
-	(*ReleaseOperation)(nil),       // 2: orchestrator.v1.ReleaseOperation
-	(*v1.ReleaseDigest)(nil),       // 3: common.v1.ReleaseDigest
+	(*CreateOperationRequest)(nil),  // 0: orchestrator.v1.CreateOperationRequest
+	(*CreateOperationResponse)(nil), // 1: orchestrator.v1.CreateOperationResponse
+	(*PublishReleaseRequest)(nil),   // 2: orchestrator.v1.PublishReleaseRequest
+	(*PublishReleaseResponse)(nil),  // 3: orchestrator.v1.PublishReleaseResponse
+	(*ReleaseOperation)(nil),        // 4: orchestrator.v1.ReleaseOperation
+	(*v1.ActorContext)(nil),         // 5: common.v1.ActorContext
+	(*timestamppb.Timestamp)(nil),   // 6: google.protobuf.Timestamp
+	(*v1.ReleaseDigest)(nil),        // 7: common.v1.ReleaseDigest
 }
 var file_orchestrator_v1_orchestrator_proto_depIdxs = []int32{
-	3, // 0: orchestrator.v1.ReleaseOperation.digest:type_name -> common.v1.ReleaseDigest
-	0, // 1: orchestrator.v1.OrchestratorService.PublishRelease:input_type -> orchestrator.v1.PublishReleaseRequest
-	1, // 2: orchestrator.v1.OrchestratorService.PublishRelease:output_type -> orchestrator.v1.PublishReleaseResponse
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	5, // 0: orchestrator.v1.CreateOperationRequest.actor:type_name -> common.v1.ActorContext
+	6, // 1: orchestrator.v1.CreateOperationResponse.accepted_at:type_name -> google.protobuf.Timestamp
+	7, // 2: orchestrator.v1.ReleaseOperation.digest:type_name -> common.v1.ReleaseDigest
+	0, // 3: orchestrator.v1.OrchestratorService.CreateOperation:input_type -> orchestrator.v1.CreateOperationRequest
+	2, // 4: orchestrator.v1.OrchestratorService.PublishRelease:input_type -> orchestrator.v1.PublishReleaseRequest
+	1, // 5: orchestrator.v1.OrchestratorService.CreateOperation:output_type -> orchestrator.v1.CreateOperationResponse
+	3, // 6: orchestrator.v1.OrchestratorService.PublishRelease:output_type -> orchestrator.v1.PublishReleaseResponse
+	5, // [5:7] is the sub-list for method output_type
+	3, // [3:5] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_orchestrator_v1_orchestrator_proto_init() }
@@ -248,7 +443,7 @@ func file_orchestrator_v1_orchestrator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_orchestrator_v1_orchestrator_proto_rawDesc), len(file_orchestrator_v1_orchestrator_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

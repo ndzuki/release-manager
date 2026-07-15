@@ -2,9 +2,31 @@ syntax = "proto3";
 
 package orchestrator.v1;
 
+import "google/protobuf/timestamp.proto";
+
 import "common/v1/domain.proto";
 
 option go_package = "github.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1";
+
+// CreateOperationRequest submits a new release operation for orchestration.
+message CreateOperationRequest {
+  string operation_type = 1;          // INSTALL, UPGRADE, ROLLBACK, EMERGENCY
+  string bundle_id = 2;               // ReleaseBundle ID
+  string release_definition_id = 3;
+  string values_revision_id = 4;      // must be approved
+  string values_patch = 5;            // JSON merge patch (optional)
+  int32 expected_current_revision = 6;// required for UPGRADE/ROLLBACK
+  string idempotency_key = 7;
+  common.v1.ActorContext actor = 8;
+}
+
+// CreateOperationResponse returns the pending operation details.
+message CreateOperationResponse {
+  string operation_id = 1;
+  string state = 2;                   // always "pending"
+  string preflight_id = 3;
+  google.protobuf.Timestamp accepted_at = 4;
+}
 
 // PublishReleaseRequest triggers release orchestration for a definition.
 message PublishReleaseRequest {
@@ -25,7 +47,7 @@ message ReleaseOperation {
   common.v1.ReleaseDigest digest = 4;
 }
 
-// OrchestratorService coordinates release publish workflows.
 service OrchestratorService {
+  rpc CreateOperation(CreateOperationRequest) returns (CreateOperationResponse);
   rpc PublishRelease(PublishReleaseRequest) returns (PublishReleaseResponse);
 }
