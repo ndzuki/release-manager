@@ -1,0 +1,73 @@
+# =============================================================================
+# Release Manager — gRPC endpoints (Kulala GRPC support)
+# Environment: dev (Operator :8444)
+#
+# Kulala supports GRPC requests with protobuf descriptor references.
+# Place the generated descriptor set at api/gen/descriptor.pb
+# (buf build --as-file-descriptor-set).
+# =============================================================================
+
+### Operator — Connect Session (bidirectional stream)
+# @name OperatorConnect
+GRPC {{GRPC_HOST}}:{{GRPC_PORT}}/release.v1.ReleaseNotificationService/Connect
+Content-Type: application/grpc
+Authorization: Bearer {{operator_token}}
+
+{}
+
+### Operator — Notify Release
+# @name NotifyRelease
+GRPC {{GRPC_HOST}}:{{GRPC_PORT}}/release.v1.ReleaseNotificationService/NotifyRelease
+Content-Type: application/grpc
+
+{
+  "operation_id": "{{operation_id}}",
+  "customer_id": "{{CUSTOMER_ID}}",
+  "cluster_id": "{{CLUSTER_NAME}}",
+  "namespace": "{{NAMESPACE}}",
+  "release_name": "{{RELEASE_NAME}}",
+  "chart_ref": "{{CHART_REF}}",
+  "target_version": "{{CHART_VERSION}}",
+  "values_patch": "{\"replicas\":3}"
+}
+
+### Operator — Report Status
+# @name ReportStatus
+GRPC {{GRPC_HOST}}:{{GRPC_PORT}}/release.v1.StatusReportService/ReportStatus
+Content-Type: application/grpc
+
+{
+  "operation_id": "{{operation_id}}",
+  "status": "succeeded",
+  "error_message": "",
+  "duration_ms": 3500,
+  "old_version": "1",
+  "new_version": "2"
+}
+
+### Operator — List Installed Releases
+# @name ListHelmReleases
+GRPC {{GRPC_HOST}}:{{GRPC_PORT}}/release.v1.ReleaseNotificationService/ListHelmReleases
+Content-Type: application/grpc
+
+{}
+
+### Operator — Preflight check
+# @name PreflightCheck
+GRPC {{GRPC_HOST}}:{{GRPC_PORT}}/release.v1.ReleaseNotificationService/Preflight
+Content-Type: application/grpc
+
+{
+  "operation_id": "{{operation_id}}",
+  "chart_ref": "{{CHART_REF}}",
+  "chart_digest": "sha256:chartdef456",
+  "image_ref": "harbor.example.com/library/{{RELEASE_NAME}}",
+  "image_digest": "{{IMAGE_DIGEST}}"
+}
+
+### Operator — Check Health
+# @name CheckOperatorHealth
+GRPC {{GRPC_HOST}}:{{GRPC_PORT}}/grpc.health.v1.Health/Check
+Content-Type: application/grpc
+
+{}

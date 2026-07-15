@@ -1,0 +1,104 @@
+# =============================================================================
+# Release Manager — Auth APIs
+# Environment: dev (Manager :8081)
+# =============================================================================
+
+# =============================================================================
+# Init & Auth
+# =============================================================================
+
+### Check Init Status
+# @name CheckInit
+GET {{BASE_URL}}/api/v1/init
+
+### Initialize System (first-time setup)
+# @name Initialize
+POST {{BASE_URL}}/api/v1/init
+Content-Type: application/json
+
+{
+  "username": "{{ADMIN_USER}}",
+  "password": "{{ADMIN_PASS}}",
+  "email": "admin@dev.local"
+}
+
+### Login
+# @name Login
+POST {{BASE_URL}}/api/v1/auth/login
+Content-Type: application/json
+
+{
+  "username": "{{ADMIN_USER}}",
+  "password": "{{ADMIN_PASS}}"
+}
+
+### Refresh Session
+# @name Refresh
+POST {{BASE_URL}}/api/v1/auth/refresh
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{}
+
+### Get Current User
+# @name GetMe
+GET {{BASE_URL}}/api/v1/auth/me
+Authorization: Bearer {{token}}
+
+### Logout
+# @name Logout
+POST {{BASE_URL}}/api/v1/auth/logout
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{}
+
+# =============================================================================
+# Organizations
+# =============================================================================
+
+### List Organizations
+# @name ListOrgs
+GET {{BASE_URL}}/api/v1/organizations
+Authorization: Bearer {{token}}
+
+### Create Organization
+# @name CreateOrg
+POST {{BASE_URL}}/api/v1/organizations
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "DevOps Team"
+}
+
+# =============================================================================
+# Users
+# =============================================================================
+
+### List Users
+# @name ListUsers
+GET {{BASE_URL}}/api/v1/users
+Authorization: Bearer {{token}}
+
+### Create User
+# @name CreateUser
+POST {{BASE_URL}}/api/v1/users
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "username": "deployer01",
+  "email": "deployer01@example.com",
+  "role": "deployer"
+}
+
+### Update User Role
+# @name UpdateUserRole
+PUT {{BASE_URL}}/api/v1/users/deployer01
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "role": "release_admin"
+}

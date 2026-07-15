@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package common.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/ndzuki/release-manager/api/gen/common/v1;commonv1";
+
+// Pagination holds cursor-based pagination parameters.
+message Pagination {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+// PaginationResponse holds cursor-based pagination response metadata.
+message PaginationResponse {
+  string next_page_token = 1;
+  int32 total_size = 2;
+}
+
+// ErrorDetail is a structured error payload for API responses.
+message ErrorDetail {
+  int32 code = 1;
+  string message = 2;
+  repeated FieldViolation details = 3;
+}
+
+// FieldViolation describes a single field-level validation error.
+message FieldViolation {
+  string field = 1;
+  string description = 2;
+}
+
+// TimestampRange represents a closed time interval [start, end).
+message TimestampRange {
+  google.protobuf.Timestamp start = 1;
+  google.protobuf.Timestamp end = 2;
+}
