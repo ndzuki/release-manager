@@ -33,6 +33,9 @@ func NewGRPC(port int, logger *slog.Logger) *GRPCServer {
 	}
 }
 
+// Server returns the underlying gRPC server for service registration.
+func (s *GRPCServer) Server() *grpc.Server { return s.srv }
+
 // Start begins listening and blocks until the server stops.
 func (s *GRPCServer) Start() error {
 	lis, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", fmt.Sprintf(":%d", s.port))
