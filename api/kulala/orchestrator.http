@@ -1,0 +1,142 @@
+# =============================================================================
+# Release Manager — Orchestrator gRPC endpoints (Kulala GRPC support)
+# Environment: dev (Orchestrator gRPC :8446)
+#
+# Before testing, start the orchestrator:
+#   make run-orchestrator
+# or:
+#   make dev-stage-publish
+#
+# gRPC service: orchestrator.v1.OrchestratorService
+# =============================================================================
+
+### Orchestrator — Health Check
+# @name OrchestratorHealth
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/grpc.health.v1.Health/Check
+Content-Type: application/grpc
+
+{}
+
+# =============================================================================
+# Test flow:
+#   1. First create a ReleaseDefinition (POST /api/v1/release-definitions on API)
+#   2. Then CreateOperation here →
+#   3. Verify with Get Operation on API
+#   Makefile target: make dev (starts both api + orchestrator)
+# =============================================================================
+
+### Orchestrator — Create INSTALL Operation
+# @name CreateInstallOperation
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/CreateOperation
+Content-Type: application/grpc
+
+{
+  "operation_type": "INSTALL",
+  "bundle_id": "bundle-001",
+  "release_definition_id": "{{DEFINITION_ID}}",
+  "values_revision_id": "{{REVISION_ID}}",
+  "idempotency_key": "install-{{DEFINITION_ID}}-v1"
+}
+
+### Orchestrator — Create UPGRADE Operation
+# @name CreateUpgradeOperation
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/CreateOperation
+Content-Type: application/grpc
+
+{
+  "operation_type": "UPGRADE",
+  "bundle_id": "bundle-002",
+  "release_definition_id": "{{DEFINITION_ID}}",
+  "values_revision_id": "{{REVISION_ID}}",
+  "expected_current_revision": 1,
+  "idempotency_key": "upgrade-{{DEFINITION_ID}}-v2"
+}
+
+### Orchestrator — Create EMERGENCY Operation
+# Emergency skips preflight and goes pending → queued.
+# @name CreateEmergencyOperation
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/CreateOperation
+Content-Type: application/grpc
+
+{
+  "operation_type": "EMERGENCY",
+  "bundle_id": "bundle-003",
+  "release_definition_id": "{{DEFINITION_ID}}",
+  "values_revision_id": "{{REVISION_ID}}",
+  "idempotency_key": "emergency-{{DEFINITION_ID}}-v1"
+}
+
+### Orchestrator — Idempotency Check
+# Resend with same idempotency_key → must return same operation_id.
+# @name IdempotencyCheck
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/CreateOperation
+Content-Type: application/grpc
+
+{
+  "operation_type": "INSTALL",
+  "bundle_id": "bundle-001",
+  "release_definition_id": "{{DEFINITION_ID}}",
+  "values_revision_id": "{{REVISION_ID}}",
+  "idempotency_key": "install-{{DEFINITION_ID}}-v1"
+}
+
+### Orchestrator — PublishRelease (skeleton)
+# @name PublishRelease
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/PublishRelease
+Content-Type: application/grpc
+
+{
+  "release_definition_id": "{{DEFINITION_ID}}"
+}
+
+### Orchestrator — CreateOperation (missing definition)
+# Expected: NOT_FOUND error.
+# @name CreateOpMissingDef
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/CreateOperation
+Content-Type: application/grpc
+
+{
+  "operation_type": "INSTALL",
+  "bundle_id": "bundle-001",
+  "release_definition_id": "nonexistent-def",
+  "idempotency_key": "missing-def-test"
+}
+
+### Orchestrator — CreateOperation (invalid type)
+# Expected: INVALID_ARGUMENT error.
+# @name CreateOpInvalidType
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/CreateOperation
+Content-Type: application/grpc
+
+{
+  "operation_type": "INVALID",
+  "bundle_id": "bundle-001",
+  "release_definition_id": "{{DEFINITION_ID}}",
+  "idempotency_key": "invalid-type-test"
+}
+
+### Orchestrator — Release Busy (send two different ops for same definition)
+# First request:
+# @name ReleaseBusy1
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/CreateOperation
+Content-Type: application/grpc
+
+{
+  "operation_type": "INSTALL",
+  "bundle_id": "bundle-004",
+  "release_definition_id": "{{DEFINITION_ID}}",
+  "idempotency_key": "busy-test-1"
+}
+
+### Orchestrator — Release Busy (second request, must fail)
+# Expected: FAILED_PRECONDITION / release_busy.
+# @name ReleaseBusy2
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/CreateOperation
+Content-Type: application/grpc
+
+{
+  "operation_type": "UPGRADE",
+  "bundle_id": "bundle-005",
+  "release_definition_id": "{{DEFINITION_ID}}",
+  "idempotency_key": "busy-test-2"
+}
