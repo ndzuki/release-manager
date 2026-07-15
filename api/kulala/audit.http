@@ -1,0 +1,55 @@
+# =============================================================================
+# Release Manager — Audit & Notification APIs
+# Environment: dev (Manager :8081)
+# =============================================================================
+
+### List Audit Logs
+# @name ListAuditLogs
+GET {{BASE_URL}}/api/v1/audit-logs?page=1&page_size=20
+Authorization: Bearer {{token}}
+
+### Get Audit Log Detail
+# @name GetAuditLog
+GET {{BASE_URL}}/api/v1/audit-logs/{{audit_log_id}}
+Authorization: Bearer {{token}}
+
+### Export Audit Logs
+# @name ExportAuditLogs
+POST {{BASE_URL}}/api/v1/audit-logs/exports
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "from": "2026-07-01T00:00:00Z",
+  "to": "2026-07-15T00:00:00Z",
+  "format": "jsonl"
+}
+
+### List Notification Jobs
+# @name ListNotificationJobs
+GET {{BASE_URL}}/api/v1/notification-jobs
+Authorization: Bearer {{token}}
+
+### Retry Notification Job
+# @name RetryNotificationJob
+POST {{BASE_URL}}/api/v1/notification-jobs/{{job_id}}/retry
+Authorization: Bearer {{token}}
+
+### Send Test Notification
+# @name SendTestNotification
+POST {{BASE_URL}}/api/v1/notification-settings/test
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "channel": "dingtalk",
+  "recipient": "{{DINGTALK_WEBHOOK_URL}}"
+}
+
+# =============================================================================
+# Metrics (Layer 6)
+# =============================================================================
+
+### Prometheus Metrics
+# @name Metrics
+GET {{BASE_URL}}/metrics

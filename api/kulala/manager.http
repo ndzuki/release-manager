@@ -1,0 +1,342 @@
+# =============================================================================
+# Release Manager — Core Manager APIs
+# Environment: dev (Manager :8081)
+#
+# Variable reference:
+#   {{token}} — set by Login request response handler
+#   {{api_key}} — X-API-Key header value
+# =============================================================================
+
+# =============================================================================
+# Health Check
+# =============================================================================
+
+### Health Check
+# @name Health
+GET {{BASE_URL}}/health
+
+### Readiness Check
+# @name Ready
+GET {{BASE_URL}}/readyz
+
+# =============================================================================
+# Customers (Layer 2)
+# =============================================================================
+
+### List Customers
+# @name ListCustomers
+GET {{BASE_URL}}/api/v1/customers
+Authorization: Bearer {{token}}
+
+### Get Customer
+# @name GetCustomer
+GET {{BASE_URL}}/api/v1/customers/{{CUSTOMER_ID}}
+Authorization: Bearer {{token}}
+
+### Create Customer
+# @name CreateCustomer
+POST {{BASE_URL}}/api/v1/customers
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "id": "{{CUSTOMER_ID}}",
+  "name": "本地开发环境"
+}
+
+### Update Customer
+# @name UpdateCustomer
+PUT {{BASE_URL}}/api/v1/customers/{{CUSTOMER_ID}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "本地开发环境(更新)"
+}
+
+### Disable Customer (soft delete)
+# @name DisableCustomer
+DELETE {{BASE_URL}}/api/v1/customers/{{CUSTOMER_ID}}
+Authorization: Bearer {{token}}
+
+# =============================================================================
+# Clusters (Layer 2)
+# =============================================================================
+
+### List Clusters
+# @name ListClusters
+GET {{BASE_URL}}/api/v1/customers/{{CUSTOMER_ID}}/clusters
+Authorization: Bearer {{token}}
+
+### Create Cluster (direct strategy)
+# @name CreateClusterDirect
+POST {{BASE_URL}}/api/v1/customers/{{CUSTOMER_ID}}/clusters
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "{{CLUSTER_NAME}}",
+  "environment": "dev",
+  "image_source_mode": "direct",
+  "image_base_uri": "",
+  "chart_source_mode": "direct",
+  "chart_base_uri": ""
+}
+
+### Create Cluster (proxy strategy)
+# @name CreateClusterProxy
+POST {{BASE_URL}}/api/v1/customers/{{CUSTOMER_ID}}/clusters
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "customer-prod",
+  "environment": "production",
+  "image_source_mode": "pull_through_cache",
+  "image_base_uri": "harbor-proxy.customer.local",
+  "chart_source_mode": "direct",
+  "chart_base_uri": ""
+}
+
+### Create Cluster (cloud_vendor strategy)
+# @name CreateClusterCloud
+POST {{BASE_URL}}/api/v1/customers/{{CUSTOMER_ID}}/clusters
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "aliyun-hangzhou",
+  "environment": "production",
+  "image_source_mode": "replicated",
+  "image_base_uri": "registry.cn-hangzhou.aliyuncs.com",
+  "image_repo_prefix": "customer-a",
+  "chart_source_mode": "replicated",
+  "chart_base_uri": "registry.cn-hangzhou.aliyuncs.com",
+  "chart_repo_prefix": "customer-a"
+}
+
+### Get Cluster
+# @name GetCluster
+GET {{BASE_URL}}/api/v1/customers/{{CUSTOMER_ID}}/clusters/{{CLUSTER_NAME}}
+Authorization: Bearer {{token}}
+
+### Check Registry Connectivity
+# @name CheckRegistry
+POST {{BASE_URL}}/api/v1/customers/{{CUSTOMER_ID}}/clusters/{{CLUSTER_NAME}}/check-registry
+Authorization: Bearer {{token}}
+
+# =============================================================================
+# Operator Enrollment (Layer 2)
+# =============================================================================
+
+### Generate Enrollment Token
+# @name GenEnrollmentToken
+POST {{BASE_URL}}/api/v1/customers/{{CUSTOMER_ID}}/clusters/{{CLUSTER_NAME}}/enrollment-tokens
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "ttl_hours": 24
+}
+
+### List Operators
+# @name ListOperators
+GET {{BASE_URL}}/api/v1/operators
+Authorization: Bearer {{token}}
+
+### Rotate Operator Certificate
+# @name RotateCert
+POST {{BASE_URL}}/api/v1/customers/{{CUSTOMER_ID}}/clusters/{{CLUSTER_NAME}}/operators/{{OPERATOR_NAME}}/rotate-certificate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{}
+
+### Revoke Operator
+# @name RevokeOperator
+POST {{BASE_URL}}/api/v1/customers/{{CUSTOMER_ID}}/clusters/{{CLUSTER_NAME}}/operators/{{OPERATOR_NAME}}/revoke
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "reason": "manual revocation test"
+}
+
+# =============================================================================
+# Release Definitions (Layer 2)
+# =============================================================================
+
+### Create Release Definition
+# @name CreateReleaseDef
+POST {{BASE_URL}}/api/v1/release-definitions
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "customer_id": "{{CUSTOMER_ID}}",
+  "cluster_id": "{{CLUSTER_NAME}}",
+  "namespace": "{{NAMESPACE}}",
+  "release_name": "{{RELEASE_NAME}}"
+}
+
+### List Release Definitions
+# @name ListReleaseDefs
+GET {{BASE_URL}}/api/v1/release-definitions?customer_id={{CUSTOMER_ID}}&cluster_id={{CLUSTER_NAME}}
+Authorization: Bearer {{token}}
+
+### Get Release Inventory (synced from operator)
+# @name GetInventory
+GET {{BASE_URL}}/api/v1/customers/{{CUSTOMER_ID}}/clusters/{{CLUSTER_NAME}}/releases
+Authorization: Bearer {{token}}
+
+### Trigger Release Sync
+# @name SyncReleases
+POST {{BASE_URL}}/api/v1/customers/{{CUSTOMER_ID}}/clusters/{{CLUSTER_NAME}}/sync-releases
+Authorization: Bearer {{token}}
+
+# =============================================================================
+# ValuesRevision (Layer 2)
+# =============================================================================
+
+### Create ValuesRevision (draft)
+# @name CreateValuesRevision
+POST {{BASE_URL}}/api/v1/values-revisions
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "release_definition_id": "{{definition_id}}",
+  "values": {
+    "image": {
+      "repository": "harbor.example.com/library/{{RELEASE_NAME}}",
+      "tag": "latest"
+    },
+    "replicas": 2
+  }
+}
+
+### Approve ValuesRevision
+# @name ApproveRevision
+POST {{BASE_URL}}/api/v1/values-revisions/{{revision_id}}/approve
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "comment": "LGTM for production"
+}
+
+### Reject ValuesRevision
+# @name RejectRevision
+POST {{BASE_URL}}/api/v1/values-revisions/{{revision_id}}/reject
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "reason": "missing resource limits"
+}
+
+### List ValuesRevisions
+# @name ListRevisions
+GET {{BASE_URL}}/api/v1/values-revisions?release_definition_id={{definition_id}}
+Authorization: Bearer {{token}}
+
+# =============================================================================
+# Release Operations (Layer 3)
+# =============================================================================
+
+### Create INSTALL Operation
+# @name CreateInstallOp
+POST {{BASE_URL}}/api/v1/release-operations
+Content-Type: application/json
+Authorization: Bearer {{token}}
+Idempotency-Key: install-{{RELEASE_NAME}}-v1
+
+{
+  "operation_type": "INSTALL",
+  "bundle_id": "{{bundle_id}}",
+  "release_definition_id": "{{definition_id}}",
+  "values_revision_id": "{{revision_id}}"
+}
+
+### Create UPGRADE Operation
+# @name CreateUpgradeOp
+POST {{BASE_URL}}/api/v1/release-operations
+Content-Type: application/json
+Authorization: Bearer {{token}}
+Idempotency-Key: upgrade-{{RELEASE_NAME}}-v2
+
+{
+  "operation_type": "UPGRADE",
+  "bundle_id": "{{bundle_id}}",
+  "release_definition_id": "{{definition_id}}",
+  "values_revision_id": "{{revision_id}}",
+  "expected_current_revision": 1,
+  "values_patch": {
+    "replicas": 3
+  }
+}
+
+### Get Operation Status
+# @name GetOperation
+GET {{BASE_URL}}/api/v1/release-operations/{{operation_id}}
+Authorization: Bearer {{token}}
+
+### Cancel Operation
+# @name CancelOperation
+POST {{BASE_URL}}/api/v1/release-operations/{{operation_id}}/cancel
+Authorization: Bearer {{token}}
+
+### List Release History
+# @name ListReleases
+GET {{BASE_URL}}/api/v1/releases?release_name={{RELEASE_NAME}}&status=succeeded
+Authorization: Bearer {{token}}
+
+# =============================================================================
+# Roollback (Layer 3+)
+# =============================================================================
+
+### Rollback Release
+# @name RollbackRelease
+POST {{BASE_URL}}/api/v1/releases/{{RELEASE_NAME}}/rollback
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "target_helm_revision": 1,
+  "expected_current_revision": 2
+}
+
+# =============================================================================
+# Emergency Patch (Layer 4)
+# =============================================================================
+
+### Emergency SetContainerImage
+# @name EmergencySetImage
+POST {{BASE_URL}}/api/v1/releases/{{release_id}}/emergency-patch
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "operation_type": "SetContainerImage",
+  "target_kind": "Deployment",
+  "target_name": "{{RELEASE_NAME}}",
+  "container_name": "app",
+  "image_digest": "{{IMAGE_DIGEST}}",
+  "reason": "Critical CVE fix for log4j",
+  "convergence_policy": "REQUIRE_PROMOTION"
+}
+
+### Emergency SetReplicas
+# @name EmergencySetReplicas
+POST {{BASE_URL}}/api/v1/releases/{{release_id}}/emergency-patch
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "operation_type": "SetReplicas",
+  "target_kind": "Deployment",
+  "target_name": "{{RELEASE_NAME}}",
+  "replicas": 5,
+  "reason": "Traffic spike",
+  "convergence_policy": "REQUIRE_PROMOTION"
+}

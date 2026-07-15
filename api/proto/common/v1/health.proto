@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package common.v1;
+
+option go_package = "github.com/ndzuki/release-manager/api/gen/common/v1;commonv1";
+
+// HealthCheckRequest is an empty request for the health checking service.
+message HealthCheckRequest {}
+
+// HealthCheckResponse contains the health status of a service.
+message HealthCheckResponse {
+  enum ServingStatus {
+    SERVING_STATUS_UNSPECIFIED = 0;
+    SERVING_STATUS_SERVING = 1;
+    SERVING_STATUS_NOT_SERVING = 2;
+  }
+  ServingStatus status = 1;
+}
