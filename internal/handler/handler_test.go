@@ -1,13 +1,15 @@
+// Package handler contains HTTP handler tests.
 package handler
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
 func TestHealth(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/health", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	Health().ServeHTTP(rec, req)
@@ -23,7 +25,7 @@ func TestHealth(t *testing.T) {
 }
 
 func TestReady_AllPassing(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/readyz", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	checks := map[string]func() error{
@@ -39,7 +41,7 @@ func TestReady_AllPassing(t *testing.T) {
 }
 
 func TestReady_Degraded(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/readyz", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	checks := map[string]func() error{

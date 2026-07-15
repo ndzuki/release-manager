@@ -1,3 +1,4 @@
+version: "2"
 run:
   timeout: 5m
   tests: true
@@ -13,7 +14,6 @@ linters:
     - staticcheck
     - ineffassign
     - unused
-    - gosimple
     - nilerr # err != nil 分支却返回 nil 的反模式
     - contextcheck # context 未透传 / 未正确取消
     - bodyclose # http.Response.Body 未 Close
@@ -31,8 +31,6 @@ linters:
     - unparam
     - misspell
     - whitespace
-    - goimports
-    - gofmt
 
     # ---- 复杂度控制 ----
     - gocyclo
@@ -72,6 +70,11 @@ linters-settings:
     disabled-checks:
       - hugeParam # DTO/proto 生成的大 struct 按值传递很常见，关掉减少噪音
 
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
 issues:
   exclude-rules:
     # 测试文件放宽复杂度 / 魔法数字限制
@@ -89,5 +92,7 @@ issues:
 
 output:
   formats:
-    - format: colored-line-number
+    text:
+      path: stdout
+      color: true
   sort-results: true

@@ -1,3 +1,4 @@
+// Package server provides gRPC server lifecycle management.
 package server
 
 import (
@@ -8,7 +9,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
-	"google.golang.org/grpc/health/grpc_health_v1"
+	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
 )
 
 // GRPCServer wraps the gRPC server for the manager service.
@@ -34,7 +35,7 @@ func NewGRPC(port int, logger *slog.Logger) *GRPCServer {
 
 // Start begins listening and blocks until the server stops.
 func (s *GRPCServer) Start() error {
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.port))
+	lis, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", fmt.Sprintf(":%d", s.port))
 	if err != nil {
 		return fmt.Errorf("grpc listen: %w", err)
 	}

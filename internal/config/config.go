@@ -1,3 +1,4 @@
+// Package config loads release-manager configuration.
 package config
 
 import (
