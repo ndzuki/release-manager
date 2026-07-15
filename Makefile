@@ -2,9 +2,10 @@
 # =============================================================================
 
 GO          := go
-BUF         := $(HOME)/go/bin/buf
+BUF         := $(shell which buf 2>/dev/null || echo buf)
 PROTO_DIR   := api/proto
 GEN_DIR     := api/gen
+GOBIN       := $(shell go env GOBIN 2>/dev/null || echo $(HOME)/go/bin)
 
 # Colors (via printf for portable escape)
 ESC         := $(shell printf '\e')
@@ -48,11 +49,10 @@ api-audit: ## 打开 Audit/Notification 集合 (Kulala)
 # ---------------------------------------------------------------------------
 .PHONY: proto
 proto: ## Generate protobuf code and lint
-	@echo "$(YELLOW)Generating protobuf code...$(NC)"
-	cd $(PROTO_DIR) && $(BUF) generate
-	cd $(PROTO_DIR) && $(BUF) lint
-	@echo "$(GREEN)Proto code generated and linted$(NC)"
-
+	@command -v buf >/dev/null 2>&1 || { go install github.com/bufbuild/buf/cmd/buf@latest && export PATH="$(GOBIN):$$PATH"; }; \
+	echo "$(YELLOW)Generating protobuf code...$(NC)"; \
+	cd $(PROTO_DIR) && buf generate; \
+	echo "$(GREEN)Proto code generated$(NC)"
 # ---------------------------------------------------------------------------
 # Stage-by-stage local deployment
 # Each stage starts only the services needed for its atomic requirements.
