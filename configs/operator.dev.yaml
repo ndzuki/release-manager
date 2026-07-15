@@ -1,0 +1,3 @@
+http_port: 8084
+grpc_port: 8447
+log_level: debug

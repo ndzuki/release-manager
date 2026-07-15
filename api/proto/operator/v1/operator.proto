@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package operator.v1;
+
+import "common/v1/domain.proto";
+
+option go_package = "github.com/ndzuki/release-manager/api/gen/operator/v1;operatorv1";
+
+// EnrollRequest registers an operator agent with the manager.
+message EnrollRequest {
+  string operator_id = 1;
+  string cluster_id = 2;
+  map<string, string> capabilities = 3;
+}
+
+// EnrollResponse acknowledges enrollment and returns a session token.
+message EnrollResponse {
+  string session_id = 1;
+  int64 ttl_seconds = 2;
+}
+
+// CommandStreamRequest is the operator's acknowledgment of a deploy command.
+message CommandStreamRequest {
+  string operation_id = 1;
+  string status = 2;
+  string message = 3;
+}
+
+// CommandStreamResponse is a deploy directive from manager to operator.
+message CommandStreamResponse {
+  string operation_id = 1;
+  common.v1.ReleaseBundle bundle = 2;
+  bytes values = 3;
+}
+
+// OperatorService manages the bidirectional stream between manager and operator agents.
+service OperatorService {
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+  rpc CommandStream(stream CommandStreamRequest) returns (stream CommandStreamResponse);
+}

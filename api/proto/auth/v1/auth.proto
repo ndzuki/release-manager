@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package auth.v1;
+
+option go_package = "github.com/ndzuki/release-manager/api/gen/auth/v1;authv1";
+
+// LoginRequest carries user credentials.
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+// LoginResponse returns a session token on success.
+message LoginResponse {
+  string token = 1;
+  int64 expires_at = 2;
+}
+
+// ValidateTokenRequest checks if a token is still valid.
+message ValidateTokenRequest {
+  string token = 1;
+}
+
+// ValidateTokenResponse returns the token's validity and associated principal.
+message ValidateTokenResponse {
+  bool valid = 1;
+  string user_id = 2;
+  repeated string roles = 3;
+}
+
+// AuthService handles authentication and token management.
+service AuthService {
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+}

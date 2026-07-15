@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package common.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/ndzuki/release-manager/api/gen/common/v1;commonv1";
+
+// ReleaseDigest is an immutable content-addressable identifier for a ReleaseBundle.
+message ReleaseDigest {
+  string algorithm = 1;
+  string value = 2;
+}
+
+// ReleaseBundle is the atomic unit of a release — immutable once published.
+message ReleaseBundle {
+  string id = 1;
+  string name = 2;
+  ReleaseDigest digest = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+// ReleaseDefinition decouples the install preflight cycle from artifact ingestion.
+message ReleaseDefinition {
+  string id = 1;
+  string name = 2;
+  string customer_id = 3;
+  string cluster_id = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+// ValuesRevision stores the desired configuration for a release target.
+message ValuesRevision {
+  string id = 1;
+  string release_definition_id = 2;
+  int32 revision = 3;
+  bytes values = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+// SecretRef holds a reference to a secret, never the secret value itself.
+message SecretRef {
+  string name = 1;
+  string namespace = 2;
+  string key = 3;
+}
+
+// Customer represents a tenant in the release manager.
+message Customer {
+  string id = 1;
+  string name = 2;
+  string slug = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+// Cluster represents a target cluster within a customer.
+message Cluster {
+  string id = 1;
+  string name = 2;
+  string customer_id = 3;
+  string kubeconfig_ref = 4;
+  google.protobuf.Timestamp created_at = 5;
+}

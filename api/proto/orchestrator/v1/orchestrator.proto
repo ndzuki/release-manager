@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package orchestrator.v1;
+
+import "common/v1/domain.proto";
+
+option go_package = "github.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1";
+
+// PublishReleaseRequest triggers release orchestration for a definition.
+message PublishReleaseRequest {
+  string release_definition_id = 1;
+}
+
+// PublishReleaseResponse returns the release operation status.
+message PublishReleaseResponse {
+  string operation_id = 1;
+  string status = 2;
+}
+
+// ReleaseOperation represents a single publish operation.
+message ReleaseOperation {
+  string id = 1;
+  string release_definition_id = 2;
+  string status = 3;
+  common.v1.ReleaseDigest digest = 4;
+}
+
+// OrchestratorService coordinates release publish workflows.
+service OrchestratorService {
+  rpc PublishRelease(PublishReleaseRequest) returns (PublishReleaseResponse);
+}

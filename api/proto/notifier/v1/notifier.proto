@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package notifier.v1;
+
+option go_package = "github.com/ndzuki/release-manager/api/gen/notifier/v1;notifierv1";
+
+// NotifyRequest carries a notification payload.
+message NotifyRequest {
+  string event_type = 1;
+  string target = 2;
+  string payload = 3;
+  map<string, string> metadata = 4;
+}
+
+// NotifyResponse acknowledges notification delivery.
+message NotifyResponse {
+  string notification_id = 1;
+  string status = 2;
+}
+
+// NotifierService dispatches notifications about release events.
+service NotifierService {
+  rpc Notify(NotifyRequest) returns (NotifyResponse);
+}
