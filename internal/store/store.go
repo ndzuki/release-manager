@@ -99,22 +99,24 @@ type ActorContext struct {
 
 // Operation is the core domain object representing a release operation.
 type Operation struct {
-	ID                  string          `json:"id"`
-	OperationType       OperationType   `json:"operation_type"`
-	Status              OperationStatus `json:"status"`
-	ReleaseDefinitionID string          `json:"release_definition_id"`
-	IdempotencyKey      string          `json:"idempotency_key"`
-	RequestHash         string          `json:"request_hash"`
-	StateVersion        int             `json:"state_version"`
-	BundleID            string          `json:"bundle_id"`
-	ValuesRevisionID    string          `json:"values_revision_id"`
-	ExpectedRevision    int             `json:"expected_revision"`
-	ValuesPatch         []byte          `json:"values_patch,omitempty"`
-	Actor               ActorContext    `json:"actor"`
-	CreatedAt           time.Time       `json:"created_at"`
-	UpdatedAt           time.Time       `json:"updated_at"`
-	Deadline            *time.Time      `json:"deadline,omitempty"`
-	LastError           string          `json:"last_error,omitempty"`
+	ID                  string               `json:"id"`
+	OperationType       OperationType        `json:"operation_type"`
+	Status              OperationStatus      `json:"status"`
+	ReleaseDefinitionID string               `json:"release_definition_id"`
+	IdempotencyKey      string               `json:"idempotency_key"`
+	RequestHash         string               `json:"request_hash"`
+	StateVersion        int                  `json:"state_version"`
+	BundleID            string               `json:"bundle_id"`
+	ValuesRevisionID    string               `json:"values_revision_id"`
+	ExpectedRevision    int                  `json:"expected_revision"`
+	ValuesPatch         []byte               `json:"values_patch,omitempty"`
+	EmergencyAction     EmergencyAction      `json:"emergency_action,omitempty"`
+	Convergence         EmergencyConvergence `json:"convergence,omitempty"`
+	Actor               ActorContext         `json:"actor"`
+	CreatedAt           time.Time            `json:"created_at"`
+	UpdatedAt           time.Time            `json:"updated_at"`
+	Deadline            *time.Time           `json:"deadline,omitempty"`
+	LastError           string               `json:"last_error,omitempty"`
 }
 
 // ReleaseDefinition represents a Helm release target configuration.
@@ -126,6 +128,7 @@ type ReleaseDefinition struct {
 	Namespace         string           `json:"namespace"`
 	ReleaseName       string           `json:"release_name"`
 	ChartName         string           `json:"chart_name"`
+	HPAManaged        bool             `json:"hpa_managed"`
 	Status            DefinitionStatus `json:"status"`
 	OptimisticVersion int              `json:"optimistic_version"`
 	CreatedBy         string           `json:"created_by"`
@@ -603,6 +606,8 @@ type OperationStore interface {
 	GetByIdempotencyKey(ctx context.Context, key string) (*Operation, error)
 	UpdateStatus(ctx context.Context, id string, status OperationStatus, stateVersion int, lastError string) (*Operation, error)
 	HasActiveForDefinition(ctx context.Context, definitionID string) (bool, error)
+	HasActiveStandardForDefinition(ctx context.Context, definitionID string) (bool, error)
+	HasPendingPromotionForDefinition(ctx context.Context, definitionID string) (bool, error)
 	HasActiveEmergencyForDefinition(ctx context.Context, definitionID string) (bool, error)
 	List(ctx context.Context, definitionID string) ([]*Operation, error)
 }
@@ -611,7 +616,10 @@ type OperationStore interface {
 type DefinitionStore interface {
 	Create(ctx context.Context, def *ReleaseDefinition) error
 	Get(ctx context.Context, id string) (*ReleaseDefinition, error)
+	Update(ctx context.Context, def *ReleaseDefinition) error
+	List(ctx context.Context) ([]*ReleaseDefinition, error)
 }
+
 // ValuesStore defines the persistence contract for values revisions.
 // For Create, the caller MUST populate Revision via GetNextRevisionNumber
 // and Digest via the values package before calling.
@@ -752,6 +760,7 @@ type BindingStore interface {
 // AuditEventStore defines the persistence contract for audit events (REQ-050).
 type AuditEventStore interface {
 	Create(ctx context.Context, e *AuditEvent) error
+	ListByResource(ctx context.Context, resourceType, resourceID string) ([]*AuditEvent, error)
 	CreateBatch(ctx context.Context, events []*AuditEvent) error
 }
 

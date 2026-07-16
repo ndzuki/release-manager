@@ -26,7 +26,7 @@ func setupService(t *testing.T) (*Service, store.Store, func()) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	verifier := trust.NewStubVerifier(st.Verifications(), logger)
-	svc := NewService(st, verifier, "staging", logger)
+	svc := NewService(st, verifier, "staging", nil, logger)
 
 	return svc, st, func() { st.Close() }
 }
@@ -65,11 +65,11 @@ func TestCreateOperation_Install_Success(t *testing.T) {
 	seedDefinition(t, st)
 
 	resp, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
-		OperationType:          "INSTALL",
-		BundleId:               "bundle-001",
-		ReleaseDefinitionId:    "def-001",
-		ValuesRevisionId:       "vr-001",
-		IdempotencyKey:         "idem-001",
+		OperationType:           "INSTALL",
+		BundleId:                "bundle-001",
+		ReleaseDefinitionId:     "def-001",
+		ValuesRevisionId:        "vr-001",
+		IdempotencyKey:          "idem-001",
 		ExpectedCurrentRevision: 0,
 		Actor: &commonv1.ActorContext{
 			UserId:       "user-001",

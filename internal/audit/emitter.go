@@ -80,11 +80,10 @@ func NewEmitter(st store.AuditEventStore, logger *slog.Logger, cfg EmitterConfig
 // AC-050-03: buffer full increments BufferFullCount counter.
 func (e *Emitter) Emit(event *store.AuditEvent) bool {
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	if e.closed {
-		e.mu.Unlock()
 		return false
 	}
-	e.mu.Unlock()
 
 	if event.ID == "" {
 		event.ID = uuid.New().String()
@@ -118,11 +117,13 @@ func (e *Emitter) Emit(event *store.AuditEvent) bool {
 // Returns when all events are drained or context is cancelled.
 func (e *Emitter) Shutdown(ctx context.Context) error {
 	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return nil
+	}
 	e.closed = true
-	e.mu.Unlock()
-
 	close(e.buffer)
-
+	e.mu.Unlock()
 	done := make(chan struct{})
 	var shutdownErr error
 	go func() {
@@ -181,7 +182,9 @@ func (e *Emitter) flushBatch(batch []*store.AuditEvent) {
 		)
 		return
 	}
+	e.mu.Lock()
 	e.EventsPersisted += int64(len(batch))
+	e.mu.Unlock()
 }
 
 // drainRemaining collects any remaining events from the closed channel and
@@ -210,7 +213,9 @@ func (e *Emitter) drainRemaining(ctx context.Context) error {
 		}
 		return fmt.Errorf("persist failed, events spooled to %s: %w", e.spoolPath, err)
 	}
+	e.mu.Lock()
 	e.EventsPersisted += int64(len(remaining))
+	e.mu.Unlock()
 	return nil
 }
 

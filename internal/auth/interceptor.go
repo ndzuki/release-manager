@@ -39,13 +39,13 @@ func NewAuthInterceptor(jwt *JWTManager, enforcer *Enforcer, publicMethods map[s
 					fmt.Errorf("invalid token: %w", err))
 			}
 
-			// Inject user ID into context.
 			ctx = context.WithValue(ctx, userIDKey, claims.UserID)
 			ctx = context.WithValue(ctx, rolesKey, claims.Roles)
+			ctx = context.WithValue(ctx, organizationIDKey, claims.OrgID)
 
 			// REQ-027: Enforce RBAC.
 			// Map procedure to (domain, obj, act).
-			dom, obj, act := mapProcedure(procedure)
+			dom, obj, act := mapProcedure(procedure, claims.OrgID)
 			if err := enforcer.Enforce(claims.UserID, dom, obj, act); err != nil {
 				logger.Warn("access denied",
 					"user_id", claims.UserID,
@@ -69,22 +69,18 @@ func extractToken(authHeader string) string {
 }
 
 // mapProcedure maps a Connect RPC procedure to Casbin (domain, obj, act).
-// Procedures follow the pattern: /package.Service/Method
-func mapProcedure(procedure string) (string, string, string) {
-	// Extract org_id from procedure? For now, use a default domain.
-	// In production, the org_id would be in the request body or URL.
+// Procedures follow the pattern: /package.Service/Method.
+func mapProcedure(procedure, domain string) (mappedDomain, object, action string) {
 	parts := strings.Split(strings.TrimPrefix(procedure, "/"), "/")
 	if len(parts) < 2 {
-		return "*", "*", "*"
+		return domain, "*", "*"
 	}
 
-	service := parts[1] // e.g., "OrganizationService"
-	method := parts[2]  // e.g., "CreateOrganization"
-
+	service := parts[0]
+	method := parts[1]
 	obj := mapServiceToObject(service)
 	act := mapMethodToAction(method)
-
-	return "*", obj, act
+	return domain, obj, act
 }
 
 func mapServiceToObject(service string) string {
@@ -95,6 +91,8 @@ func mapServiceToObject(service string) string {
 		return "binding"
 	case strings.Contains(service, "Auth"):
 		return "auth"
+	case strings.Contains(service, "Orchestrator"):
+		return "release"
 	default:
 		return "*"
 	}
@@ -106,9 +104,10 @@ func mapMethodToAction(method string) string {
 		return "read"
 	case strings.HasPrefix(method, "Create"), strings.HasPrefix(method, "Add"),
 		strings.HasPrefix(method, "Update"), strings.HasPrefix(method, "Disable"),
-		strings.HasPrefix(method, "Remove"), strings.HasPrefix(method, "Revoke"):
-		return "write"
-	case strings.HasPrefix(method, "Delete"):
+		strings.HasPrefix(method, "Remove"), strings.HasPrefix(method, "Revoke"),
+		strings.HasPrefix(method, "Delete"), strings.HasPrefix(method, "Emergency"),
+		strings.HasPrefix(method, "Publish"), strings.HasPrefix(method, "Configure"),
+		strings.HasPrefix(method, "Sync"):
 		return "write"
 	default:
 		return "*"
@@ -118,3 +117,25 @@ func mapMethodToAction(method string) string {
 type rolesCtxKey string
 
 const rolesKey rolesCtxKey = "roles"
+
+type organizationCtxKey string
+
+const organizationIDKey organizationCtxKey = "organizationID"
+
+// UserIDFromContext returns the authenticated user ID.
+func UserIDFromContext(ctx context.Context) string {
+	userID, ok := ctx.Value(userIDKey).(string)
+	if !ok {
+		return ""
+	}
+	return userID
+}
+
+// OrganizationIDFromContext returns the authenticated organization ID.
+func OrganizationIDFromContext(ctx context.Context) string {
+	organizationID, ok := ctx.Value(organizationIDKey).(string)
+	if !ok {
+		return ""
+	}
+	return organizationID
+}

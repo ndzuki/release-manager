@@ -22,12 +22,12 @@ func (s *definitionStore) Create(ctx context.Context, def *store.ReleaseDefiniti
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO release_definitions (
 			id, name, customer_id, cluster_id, namespace, release_name,
-			chart_name, status, optimistic_version, created_by,
+			chart_name, hpa_managed, status, optimistic_version, created_by,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		def.ID, def.Name, def.CustomerID, def.ClusterID,
-		def.Namespace, def.ReleaseName, def.ChartName,
+		def.Namespace, def.ReleaseName, def.ChartName, def.HPAManaged,
 		string(def.Status), def.OptimisticVersion, def.CreatedBy,
 		def.CreatedAt.UTC().Format(time.RFC3339), def.UpdatedAt.UTC().Format(time.RFC3339),
 	)
@@ -40,7 +40,7 @@ func (s *definitionStore) Create(ctx context.Context, def *store.ReleaseDefiniti
 func (s *definitionStore) Get(ctx context.Context, id string) (*store.ReleaseDefinition, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, customer_id, cluster_id, namespace, release_name,
-			chart_name, status, optimistic_version, created_by,
+			chart_name, hpa_managed, status, optimistic_version, created_by,
 			created_at, updated_at
 		FROM release_definitions WHERE id = ?
 	`, id)
@@ -54,13 +54,13 @@ func (s *definitionStore) Update(ctx context.Context, def *store.ReleaseDefiniti
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE release_definitions
 		SET name = ?, customer_id = ?, cluster_id = ?, namespace = ?,
-		    release_name = ?, chart_name = ?, status = ?,
+		    release_name = ?, chart_name = ?, hpa_managed = ?, status = ?,
 		    optimistic_version = optimistic_version + 1,
 		    updated_at = ?
 		WHERE id = ? AND optimistic_version = ?
 	`,
 		def.Name, def.CustomerID, def.ClusterID,
-		def.Namespace, def.ReleaseName, def.ChartName,
+		def.Namespace, def.ReleaseName, def.ChartName, def.HPAManaged,
 		string(def.Status), now, def.ID, def.OptimisticVersion,
 	)
 	if err != nil {
@@ -79,7 +79,7 @@ func (s *definitionStore) Update(ctx context.Context, def *store.ReleaseDefiniti
 func (s *definitionStore) List(ctx context.Context) ([]*store.ReleaseDefinition, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, customer_id, cluster_id, namespace, release_name,
-			chart_name, status, optimistic_version, created_by,
+			chart_name, hpa_managed, status, optimistic_version, created_by,
 			created_at, updated_at
 		FROM release_definitions
 		ORDER BY created_at DESC
@@ -103,6 +103,7 @@ func (s *definitionStore) List(ctx context.Context) ([]*store.ReleaseDefinition,
 func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.ReleaseDefinition, error) {
 	var (
 		id, name, customerID, clusterID, namespace, releaseName, chartName string
+		hpaManaged                                                         bool
 		status                                                             string
 		optimisticVersion                                                  int
 		createdBy                                                          string
@@ -111,7 +112,7 @@ func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.Release
 
 	err := row.Scan(
 		&id, &name, &customerID, &clusterID, &namespace, &releaseName,
-		&chartName, &status, &optimisticVersion, &createdBy,
+		&chartName, &hpaManaged, &status, &optimisticVersion, &createdBy,
 		&createdAt, &updatedAt,
 	)
 	if err != nil {
@@ -138,6 +139,7 @@ func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.Release
 		Namespace:         namespace,
 		ReleaseName:       releaseName,
 		ChartName:         chartName,
+		HPAManaged:        hpaManaged,
 		Status:            store.DefinitionStatus(status),
 		OptimisticVersion: optimisticVersion,
 		CreatedBy:         createdBy,

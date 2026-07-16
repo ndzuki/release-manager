@@ -26,6 +26,10 @@ type Service interface {
 	Register(mux *http.ServeMux, logger *slog.Logger) error
 }
 
+type shutdowner interface {
+	Shutdown(context.Context) error
+}
+
 // Run starts a service with config loading, signal handling, and graceful shutdown.
 func Run(configPath string, svc Service) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -78,6 +82,11 @@ func Run(configPath string, svc Service) {
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("shutdown error", "error", err)
+	}
+	if service, ok := svc.(shutdowner); ok {
+		if err := service.Shutdown(shutdownCtx); err != nil {
+			logger.Error("service shutdown error", "error", err)
+		}
 	}
 
 	logger.Info(svc.Name() + " stopped")

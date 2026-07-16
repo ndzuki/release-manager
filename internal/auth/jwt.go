@@ -36,8 +36,8 @@ type Claims struct {
 	OrgID  string   `json:"org_id,omitempty"`
 }
 
-// GenerateAccessToken creates a signed HS256 JWT for the given user.
-func (m *JWTManager) GenerateAccessToken(userID string, roles []string) (string, time.Time, error) {
+// GenerateAccessToken creates a signed HS256 JWT for the given user and organization.
+func (m *JWTManager) GenerateAccessToken(userID string, roles []string, orgID string) (string, time.Time, error) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(m.accessTTL)
 
@@ -50,6 +50,7 @@ func (m *JWTManager) GenerateAccessToken(userID string, roles []string) (string,
 		},
 		UserID: userID,
 		Roles:  roles,
+		OrgID:  orgID,
 	}
 
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(m.signingKey)

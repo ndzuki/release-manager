@@ -15,6 +15,7 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
+	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/store"
 	"github.com/ndzuki/release-manager/internal/trust"
@@ -25,12 +26,19 @@ type Service struct {
 	store     store.Store
 	verifier  trust.Verifier
 	targetEnv string
+	audit     *audit.Emitter
 	logger    *slog.Logger
 }
 
 // NewService creates a new orchestrator Connect service.
-func NewService(st store.Store, verifier trust.Verifier, targetEnv string, logger *slog.Logger) *Service {
-	return &Service{store: st, verifier: verifier, targetEnv: targetEnv, logger: logger}
+func NewService(
+	st store.Store,
+	verifier trust.Verifier,
+	targetEnv string,
+	emitter *audit.Emitter,
+	logger *slog.Logger,
+) *Service {
+	return &Service{store: st, verifier: verifier, targetEnv: targetEnv, audit: emitter, logger: logger}
 }
 
 // CreateOperation creates a new release operation from the given request.
@@ -92,6 +100,12 @@ func (s *Service) CreateOperation(
 		if activeEmergency {
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Errorf("definition %s has a running EMERGENCY operation; standard operations are denied", msg.ReleaseDefinitionId))
+		}
+	}
+
+	if opType.IsStandard() {
+		if err := s.checkEmergencyConvergence(ctx, msg.ReleaseDefinitionId, msg.ValuesRevisionId); err != nil {
+			return nil, err
 		}
 	}
 
@@ -212,6 +226,9 @@ func (s *Service) PublishRelease(
 	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
 		return nil, connect.NewError(connect.CodePermissionDenied, err)
 	}
+	if err := s.checkEmergencyConvergence(ctx, msg.ReleaseDefinitionId, ""); err != nil {
+		return nil, err
+	}
 
 	// AC-014-04: disabled cluster cannot be a release target.
 	cluster, err := s.store.Clusters().Get(ctx, def.ClusterID)
@@ -232,6 +249,45 @@ func (s *Service) PublishRelease(
 		OperationId: "",
 		Status:      "not_implemented",
 	}), nil
+}
+
+func (s *Service) checkEmergencyConvergence(
+	ctx context.Context,
+	definitionID string,
+	valuesRevisionID string,
+) error {
+	pending, err := s.store.Operations().HasPendingPromotionForDefinition(ctx, definitionID)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("emergency convergence check: %w", err))
+	}
+	if !pending {
+		return nil
+	}
+	if valuesRevisionID == "" {
+		return convergenceRequiredError(definitionID)
+	}
+
+	revision, err := s.store.Values().Get(ctx, valuesRevisionID)
+	if err != nil {
+		if err == store.ErrNotFound {
+			return connect.NewError(connect.CodeNotFound,
+				fmt.Errorf("values_revision not found: %s", valuesRevisionID))
+		}
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("values revision lookup: %w", err))
+	}
+	if revision.ReleaseDefinitionID != definitionID || revision.Status != store.ValuesStatusApproved {
+		return convergenceRequiredError(definitionID)
+	}
+
+	return nil
+}
+
+func convergenceRequiredError(definitionID string) error {
+	err := connect.NewError(connect.CodeFailedPrecondition,
+		fmt.Errorf("convergence_required: definition %s requires an approved ValuesRevision before Helm operations resume", definitionID))
+	err.Meta().Set("X-Reason-Code", "convergence_required")
+	err.Meta().Set("X-Remediation", "create and approve a ValuesRevision, then retry with values_revision_id")
+	return err
 }
 
 func (s *Service) toResponse(op *store.Operation) *orchestratorv1.CreateOperationResponse {

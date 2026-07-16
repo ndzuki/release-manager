@@ -206,6 +206,9 @@ var migrationStatements = []string{
 		UNIQUE(customer_id, cluster_id, namespace, release_name)
 	)`,
 
+	// REQ-032: metadata-driven HPA safety gate for SetReplicas.
+	`ALTER TABLE release_definitions ADD COLUMN hpa_managed INTEGER NOT NULL DEFAULT 0`,
+
 	`CREATE TABLE IF NOT EXISTS values_revisions (
 		id                    TEXT PRIMARY KEY,
 		release_definition_id TEXT NOT NULL REFERENCES release_definitions(id) ON DELETE CASCADE,
@@ -242,6 +245,10 @@ var migrationStatements = []string{
 		deadline             TEXT,
 		last_error           TEXT NOT NULL DEFAULT ''
 	)`,
+
+	// REQ-032: typed emergency metadata and Helm convergence policy.
+	`ALTER TABLE operations ADD COLUMN emergency_action TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE operations ADD COLUMN convergence TEXT NOT NULL DEFAULT ''`,
 
 	`CREATE INDEX IF NOT EXISTS idx_operations_definition ON operations(release_definition_id, status)`,
 	`CREATE INDEX IF NOT EXISTS idx_operations_idempotency ON operations(idempotency_key)`,

@@ -36,12 +36,14 @@ func (s *operationStore) Create(ctx context.Context, op *store.Operation) error 
 			id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
 			bundle_id, values_revision_id, expected_revision, values_patch,
+			emergency_action, convergence,
 			actor, created_at, updated_at, deadline, last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		op.ID, string(op.OperationType), string(op.Status), op.ReleaseDefinitionID,
 		op.IdempotencyKey, op.RequestHash, op.StateVersion,
 		op.BundleID, op.ValuesRevisionID, op.ExpectedRevision, op.ValuesPatch,
+		string(op.EmergencyAction), string(op.Convergence),
 		string(actorJSON), op.CreatedAt.UTC().Format(time.RFC3339), op.UpdatedAt.UTC().Format(time.RFC3339),
 		deadline, op.LastError,
 	)
@@ -56,6 +58,7 @@ func (s *operationStore) Get(ctx context.Context, id string) (*store.Operation, 
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
 			bundle_id, values_revision_id, expected_revision, values_patch,
+			emergency_action, convergence,
 			actor, created_at, updated_at, deadline, last_error
 		FROM operations WHERE id = ?
 	`, id)
@@ -67,6 +70,7 @@ func (s *operationStore) GetByIdempotencyKey(ctx context.Context, key string) (*
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
 			bundle_id, values_revision_id, expected_revision, values_patch,
+			emergency_action, convergence,
 			actor, created_at, updated_at, deadline, last_error
 		FROM operations WHERE idempotency_key = ?
 	`, key)
@@ -105,6 +109,39 @@ func (s *operationStore) HasActiveForDefinition(ctx context.Context, definitionI
 	return count > 0, nil
 }
 
+// HasActiveStandardForDefinition returns true if a standard operation is active.
+func (s *operationStore) HasActiveStandardForDefinition(ctx context.Context, definitionID string) (bool, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM operations
+		WHERE release_definition_id = ?
+		  AND operation_type IN ('INSTALL','UPGRADE','ROLLBACK')
+		  AND status NOT IN ('succeeded','failed','cancelled','timeout')
+	`, definitionID)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return false, fmt.Errorf("count active standard operations: %w", err)
+	}
+	return count > 0, nil
+}
+
+// HasPendingPromotionForDefinition returns true when Helm must wait for a
+// promoted ValuesRevision after a successful emergency change.
+func (s *operationStore) HasPendingPromotionForDefinition(ctx context.Context, definitionID string) (bool, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM operations
+		WHERE release_definition_id = ?
+		  AND operation_type = 'EMERGENCY'
+		  AND status = 'succeeded'
+		  AND convergence = 'require_promotion'
+		  AND values_revision_id = ''
+	`, definitionID)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return false, fmt.Errorf("count pending emergency promotions: %w", err)
+	}
+	return count > 0, nil
+}
+
 // HasActiveEmergencyForDefinition returns true if there is an active EMERGENCY operation
 // for the given definition. Used for AC-032-06 conflict detection.
 func (s *operationStore) HasActiveEmergencyForDefinition(ctx context.Context, definitionID string) (bool, error) {
@@ -126,6 +163,7 @@ func (s *operationStore) List(ctx context.Context, definitionID string) ([]*stor
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
 			bundle_id, values_revision_id, expected_revision, values_patch,
+			emergency_action, convergence,
 			actor, created_at, updated_at, deadline, last_error
 		FROM operations
 		WHERE release_definition_id = ?
@@ -150,19 +188,21 @@ func (s *operationStore) List(ctx context.Context, definitionID string) ([]*stor
 func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operation, error) {
 	var (
 		id, opType, status, defID, idemKey, reqHash string
-		stateVer, expectedRev                         int
-		bundleID, valuesRevID                         string
-		valuesPatch                                   []byte
-		actorJSON                                     string
-		createdAt, updatedAt                          string
-		deadline                                      *string
-		lastError                                     string
+		stateVer, expectedRev                       int
+		bundleID, valuesRevID                       string
+		valuesPatch                                 []byte
+		emergencyAction, convergence                string
+		actorJSON                                   string
+		createdAt, updatedAt                        string
+		deadline                                    *string
+		lastError                                   string
 	)
 
 	err := row.Scan(
 		&id, &opType, &status, &defID,
 		&idemKey, &reqHash, &stateVer,
 		&bundleID, &valuesRevID, &expectedRev, &valuesPatch,
+		&emergencyAction, &convergence,
 		&actorJSON, &createdAt, &updatedAt, &deadline, &lastError,
 	)
 	if err != nil {
@@ -174,25 +214,27 @@ func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operatio
 
 	return buildOperation(id, opType, status, defID, idemKey, reqHash,
 		stateVer, bundleID, valuesRevID, expectedRev, valuesPatch,
-		actorJSON, createdAt, updatedAt, deadline, lastError)
+		emergencyAction, convergence, actorJSON, createdAt, updatedAt, deadline, lastError)
 }
 
 func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 	var (
 		id, opType, status, defID, idemKey, reqHash string
-		stateVer, expectedRev                         int
-		bundleID, valuesRevID                         string
-		valuesPatch                                   []byte
-		actorJSON                                     string
-		createdAt, updatedAt                          string
-		deadline                                      *string
-		lastError                                     string
+		stateVer, expectedRev                       int
+		bundleID, valuesRevID                       string
+		valuesPatch                                 []byte
+		emergencyAction, convergence                string
+		actorJSON                                   string
+		createdAt, updatedAt                        string
+		deadline                                    *string
+		lastError                                   string
 	)
 
 	err := rows.Scan(
 		&id, &opType, &status, &defID,
 		&idemKey, &reqHash, &stateVer,
 		&bundleID, &valuesRevID, &expectedRev, &valuesPatch,
+		&emergencyAction, &convergence,
 		&actorJSON, &createdAt, &updatedAt, &deadline, &lastError,
 	)
 	if err != nil {
@@ -201,13 +243,18 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 
 	return buildOperation(id, opType, status, defID, idemKey, reqHash,
 		stateVer, bundleID, valuesRevID, expectedRev, valuesPatch,
-		actorJSON, createdAt, updatedAt, deadline, lastError)
+		emergencyAction, convergence, actorJSON, createdAt, updatedAt, deadline, lastError)
 }
 
-func buildOperation(id, opType, status, defID, idemKey, reqHash string,
-	stateVer int, bundleID, valuesRevID string, expectedRev int,
-	valuesPatch []byte, actorJSON, createdAt, updatedAt string,
-	deadline *string, lastError string,
+func buildOperation(
+	id, opType, status, defID, idemKey, reqHash string,
+	stateVer int,
+	bundleID, valuesRevID string,
+	expectedRev int,
+	valuesPatch []byte,
+	emergencyAction, convergence, actorJSON, createdAt, updatedAt string,
+	deadline *string,
+	lastError string,
 ) (*store.Operation, error) {
 	var actor store.ActorContext
 	if err := json.Unmarshal([]byte(actorJSON), &actor); err != nil {
@@ -244,6 +291,8 @@ func buildOperation(id, opType, status, defID, idemKey, reqHash string,
 		ValuesRevisionID:    valuesRevID,
 		ExpectedRevision:    expectedRev,
 		ValuesPatch:         valuesPatch,
+		EmergencyAction:     store.EmergencyAction(emergencyAction),
+		Convergence:         store.EmergencyConvergence(convergence),
 		Actor:               actor,
 		CreatedAt:           ct,
 		UpdatedAt:           ut,

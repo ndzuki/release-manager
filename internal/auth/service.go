@@ -13,6 +13,7 @@ import (
 )
 
 // AuthService implements the AuthService Connect handler (REQ-025).
+//
 //nolint:revive // AuthService is the canonical name matching the proto service
 type AuthService struct {
 	store   store.Store
@@ -50,9 +51,9 @@ func (s *AuthService) Login(
 		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid credentials"))
 	}
 
-	roles := s.userRoles(ctx, u.ID)
+	roles, orgID := s.userAccess(ctx, u.ID)
 
-	accessToken, accessExp, err := s.jwt.GenerateAccessToken(u.ID, roles)
+	accessToken, accessExp, err := s.jwt.GenerateAccessToken(u.ID, roles, orgID)
 	if err != nil {
 		s.logger.Error("generate access token failed", "error", err)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("token generation failed"))
@@ -144,9 +145,9 @@ func (s *AuthService) RefreshToken(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("token rotation failed"))
 	}
 
-	roles := s.userRoles(ctx, ss.UserID)
+	roles, orgID := s.userAccess(ctx, ss.UserID)
 
-	accessToken, accessExp, err := s.jwt.GenerateAccessToken(ss.UserID, roles)
+	accessToken, accessExp, err := s.jwt.GenerateAccessToken(ss.UserID, roles, orgID)
 	if err != nil {
 		s.logger.Error("generate access token failed", "error", err)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("token generation failed"))
@@ -234,22 +235,24 @@ func (s *AuthService) ChangePassword(
 	return connect.NewResponse(&authv1.ChangePasswordResponse{}), nil
 }
 
-// userRoles returns the roles for a user from their organization memberships.
-func (s *AuthService) userRoles(ctx context.Context, userID string) []string {
+func (s *AuthService) userAccess(
+	ctx context.Context,
+	userID string,
+) (roles []string, organizationID string) {
 	members, err := s.store.OrgMembers().ListByUser(ctx, userID)
 	if err != nil || len(members) == 0 {
-		return []string{}
+		return []string{}, ""
 	}
-	seen := make(map[string]bool)
-	var roles []string
-	for _, m := range members {
-		r := string(m.Role)
-		if !seen[r] {
-			seen[r] = true
-			roles = append(roles, r)
+	seen := make(map[string]bool, len(members))
+	roles = make([]string, 0, len(members))
+	for _, member := range members {
+		role := string(member.Role)
+		if !seen[role] {
+			seen[role] = true
+			roles = append(roles, role)
 		}
 	}
-	return roles
+	return roles, members[0].OrgID
 }
 
 // userIDFromCtx extracts the authenticated user ID from context.
