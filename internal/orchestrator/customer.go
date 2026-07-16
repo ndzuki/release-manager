@@ -9,8 +9,8 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
+	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -159,6 +159,37 @@ func (s *Service) DisableCustomer(
 		}
 	}
 
+	// Cascade: revoke all enrollment tokens for this customer (AC-015-04).
+	tokens, err := s.store.EnrollmentTokens().ListByCustomer(ctx, c.ID)
+	if err != nil {
+		s.logger.Warn("listing tokens for cascade revoke", "error", err)
+	}
+	for _, t := range tokens {
+		if !t.Used {
+			if err := s.store.EnrollmentTokens().Revoke(ctx, t.ID); err != nil {
+				s.logger.Warn("cascade revoke token", "token_id", t.ID, "error", err)
+			}
+		}
+	}
+
+	// Cascade: revoke all active operators for this customer.
+	operators, err := s.store.Operators().ListByCustomer(ctx, c.ID)
+	if err != nil {
+		s.logger.Warn("listing operators for cascade revoke", "error", err)
+	}
+	for _, op := range operators {
+		if op.Status == store.OperatorActive {
+			if err := s.store.Operators().Revoke(ctx, op.ID); err != nil {
+				s.logger.Warn("cascade revoke operator", "operator_id", op.ID, "error", err)
+			}
+			// Close active sessions.
+			if sess, err := s.store.Sessions().GetActiveByOperator(ctx, op.ID); err == nil {
+				if err := s.store.Sessions().UpdateStatus(ctx, sess.ID, store.SessionOffline); err != nil {
+					s.logger.Warn("cascade close session", "session_id", sess.ID, "error", err)
+				}
+			}
+		}
+	}
 	s.logger.Warn("customer disabled", "id", c.ID, "name", c.Name)
 	return connect.NewResponse(&orchestratorv1.DisableCustomerResponse{}), nil
 }

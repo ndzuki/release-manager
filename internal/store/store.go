@@ -12,18 +12,18 @@ import (
 type VerificationStatus string
 
 const (
-	VerificationTrusted              VerificationStatus = "trusted"
-	VerificationRejected             VerificationStatus = "rejected"
-	VerificationPolicyWarning        VerificationStatus = "policy_warning"
-	VerificationSignatureMissing     VerificationStatus = "signature_missing"
+	VerificationTrusted                 VerificationStatus = "trusted"
+	VerificationRejected                VerificationStatus = "rejected"
+	VerificationPolicyWarning           VerificationStatus = "policy_warning"
+	VerificationSignatureMissing        VerificationStatus = "signature_missing"
 	VerificationVerificationUnavailable VerificationStatus = "verification_unavailable"
 )
 
 // Sentinel errors for store operations.
 var (
-	ErrNotFound        = errors.New("store: not found")
-	ErrOptimisticLock  = errors.New("store: optimistic lock conflict")
-	ErrDuplicateKey    = errors.New("store: duplicate key")
+	ErrNotFound       = errors.New("store: not found")
+	ErrOptimisticLock = errors.New("store: optimistic lock conflict")
+	ErrDuplicateKey   = errors.New("store: duplicate key")
 )
 
 // OperationType classifies the kind of release operation.
@@ -86,7 +86,7 @@ const (
 type ValuesStatus string
 
 const (
-	ValuesStatusDraft   ValuesStatus = "draft"
+	ValuesStatusDraft    ValuesStatus = "draft"
 	ValuesStatusApproved ValuesStatus = "approved"
 )
 
@@ -118,18 +118,18 @@ type Operation struct {
 
 // ReleaseDefinition represents a Helm release target configuration.
 type ReleaseDefinition struct {
-	ID               string           `json:"id"`
-	Name             string           `json:"name"`
-	CustomerID       string           `json:"customer_id"`
-	ClusterID        string           `json:"cluster_id"`
-	Namespace        string           `json:"namespace"`
-	ReleaseName      string           `json:"release_name"`
-	ChartName        string           `json:"chart_name"`
-	Status           DefinitionStatus `json:"status"`
-	OptimisticVersion int             `json:"optimistic_version"`
-	CreatedBy        string           `json:"created_by"`
-	CreatedAt        time.Time        `json:"created_at"`
-	UpdatedAt        time.Time        `json:"updated_at"`
+	ID                string           `json:"id"`
+	Name              string           `json:"name"`
+	CustomerID        string           `json:"customer_id"`
+	ClusterID         string           `json:"cluster_id"`
+	Namespace         string           `json:"namespace"`
+	ReleaseName       string           `json:"release_name"`
+	ChartName         string           `json:"chart_name"`
+	Status            DefinitionStatus `json:"status"`
+	OptimisticVersion int              `json:"optimistic_version"`
+	CreatedBy         string           `json:"created_by"`
+	CreatedAt         time.Time        `json:"created_at"`
+	UpdatedAt         time.Time        `json:"updated_at"`
 }
 
 // ValuesRevision stores the desired configuration for a release target.
@@ -163,30 +163,30 @@ const (
 type OperatorStatus string
 
 const (
-	OperatorActive    OperatorStatus = "active"
+	OperatorActive     OperatorStatus = "active"
 	OperatorSuperseded OperatorStatus = "superseded"
-	OperatorRevoked   OperatorStatus = "revoked"
+	OperatorRevoked    OperatorStatus = "revoked"
 )
 
 // SessionStatus tracks the operator connection lifecycle.
 type SessionStatus string
 
 const (
-	SessionOnline   SessionStatus = "online"
-	SessionSuspect  SessionStatus = "suspect"
-	SessionOffline  SessionStatus = "offline"
+	SessionOnline  SessionStatus = "online"
+	SessionSuspect SessionStatus = "suspect"
+	SessionOffline SessionStatus = "offline"
 )
 
 // CommandStatus is the outbox delivery and execution state.
 type CommandStatus string
 
 const (
-	CommandPending     CommandStatus = "pending"
-	CommandDelivered   CommandStatus = "delivered"
-	CommandPersisted   CommandStatus = "persisted"
-	CommandRunning     CommandStatus = "running"
-	CommandSucceeded   CommandStatus = "succeeded"
-	CommandFailed      CommandStatus = "failed"
+	CommandPending   CommandStatus = "pending"
+	CommandDelivered CommandStatus = "delivered"
+	CommandPersisted CommandStatus = "persisted"
+	CommandRunning   CommandStatus = "running"
+	CommandSucceeded CommandStatus = "succeeded"
+	CommandFailed    CommandStatus = "failed"
 )
 
 // Customer represents a tenant in the release-manager.
@@ -201,59 +201,64 @@ type Customer struct {
 
 // Cluster represents a target Kubernetes cluster belonging to a customer.
 type Cluster struct {
-	ID           string        `json:"id"`
-	Name         string        `json:"name"`
-	CustomerID   string        `json:"customer_id"`
-	KubeconfigRef string       `json:"kubeconfig_ref"`
-	Status       ClusterStatus `json:"status"`
-	CreatedAt    time.Time     `json:"created_at"`
-	UpdatedAt    time.Time     `json:"updated_at"`
+	ID            string        `json:"id"`
+	Name          string        `json:"name"`
+	CustomerID    string        `json:"customer_id"`
+	KubeconfigRef string        `json:"kubeconfig_ref"`
+	Status        ClusterStatus `json:"status"`
+	CreatedAt     time.Time     `json:"created_at"`
+	UpdatedAt     time.Time     `json:"updated_at"`
 }
 
 // EnrollmentToken is a single-use token for operator registration.
 type EnrollmentToken struct {
-	ID           string     `json:"id"`
-	CustomerID   string     `json:"customer_id"`
-	ClusterID    string     `json:"cluster_id"`
-	Token        string     `json:"token"`
-	CreatedAt    time.Time  `json:"created_at"`
-	ExpiresAt    time.Time  `json:"expires_at"`
-	Used         bool       `json:"used"`
-	UsedAt       *time.Time `json:"used_at,omitempty"`
-	OperatorID   string     `json:"operator_id,omitempty"`
+	ID         string     `json:"id"`
+	CustomerID string     `json:"customer_id"`
+	ClusterID  string     `json:"cluster_id"`
+	Token      string     `json:"token"`
+	TokenHash  string     `json:"token_hash"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	Used       bool       `json:"used"`
+	UsedAt     *time.Time `json:"used_at,omitempty"`
+	OperatorID string     `json:"operator_id,omitempty"`
 }
 
 // Operator represents a registered operator agent in a cluster.
 type Operator struct {
-	ID              string         `json:"id"`
-	CustomerID      string         `json:"customer_id"`
-	ClusterID       string         `json:"cluster_id"`
-	CertSerial      string         `json:"cert_serial"`
-	Status          OperatorStatus `json:"status"`
-	SupersededBy    string         `json:"superseded_by,omitempty"`
-	RevokedAt       *time.Time     `json:"revoked_at,omitempty"`
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	CustomerID   string         `json:"customer_id"`
+	ClusterID    string         `json:"cluster_id"`
+	CertSerial   string         `json:"cert_serial"`
+	Status       OperatorStatus `json:"status"`
+	SupersededBy string         `json:"superseded_by,omitempty"`
+	RevokedAt    *time.Time     `json:"revoked_at,omitempty"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
 // Session tracks a live operator connection.
 type Session struct {
-	ID             string        `json:"id"`
-	OperatorID     string        `json:"operator_id"`
-	Status         SessionStatus `json:"status"`
-	StartedAt      time.Time     `json:"started_at"`
-	LastHeartbeat  time.Time     `json:"last_heartbeat"`
-	ExpiresAt      time.Time     `json:"expires_at"`
+	ID            string        `json:"id"`
+	OperatorID    string        `json:"operator_id"`
+	Status        SessionStatus `json:"status"`
+	StartedAt     time.Time     `json:"started_at"`
+	LastHeartbeat time.Time     `json:"last_heartbeat"`
+	ExpiresAt     time.Time     `json:"expires_at"`
 }
 
 // OutboxEntry holds a command pending delivery in the outbox.
 type OutboxEntry struct {
 	ID            string        `json:"id"`
+	CommandID     string        `json:"command_id"` // de-duplication key, independent of operation_id
 	OperationID   string        `json:"operation_id"`
+	OperationType string        `json:"operation_type"` // INSTALL, UPGRADE, ROLLBACK, etc.
 	OperatorID    string        `json:"operator_id"`
 	Payload       []byte        `json:"payload"`
 	Status        CommandStatus `json:"status"`
 	MaxInFlight   int           `json:"max_inflight"`
+	Sequence      int64         `json:"sequence"` // global monotonic sequence number
 	ResultJSON    string        `json:"result_json,omitempty"`
 	CreatedAt     time.Time     `json:"created_at"`
 	UpdatedAt     time.Time     `json:"updated_at"`
@@ -421,19 +426,19 @@ const (
 
 // NotificationJob tracks a notification delivery attempt.
 type NotificationJob struct {
-	ID          string
-	OperationID string
-	Channel     NotificationChannel
-	Recipient   string
-	Status      NotificationStatus
-	RetryCount  int
-	MaxRetries  int
-	NextRetryAt *time.Time
-	LastError   string
+	ID           string
+	OperationID  string
+	Channel      NotificationChannel
+	Recipient    string
+	Status       NotificationStatus
+	RetryCount   int
+	MaxRetries   int
+	NextRetryAt  *time.Time
+	LastError    string
 	DeadLetterAt *time.Time
-	Metadata    map[string]string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	Metadata     map[string]string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // --- Emergency change domain types (REQ-032) ---
@@ -460,7 +465,7 @@ func (a EmergencyAction) Valid() bool {
 type EmergencyConvergence string
 
 const (
-	EmergencyRequirePromotion    EmergencyConvergence = "require_promotion"
+	EmergencyRequirePromotion      EmergencyConvergence = "require_promotion"
 	EmergencyRevertOnNextReconcile EmergencyConvergence = "revert_on_next_reconcile"
 )
 
@@ -470,6 +475,60 @@ type EmergencyPayload struct {
 	Payload     string // JSON-encoded action-specific parameters
 	Reason      string
 	Convergence EmergencyConvergence
+}
+
+// --- Bundle domain types (REQ-011) ---
+
+// BundleStatus is the lifecycle state of a ReleaseBundle.
+type BundleStatus string
+
+const (
+	BundleReceived  BundleStatus = "received"
+	BundleValidated BundleStatus = "validated"
+	BundleRejected  BundleStatus = "rejected"
+)
+
+// Valid returns true if the status is a recognized value.
+func (s BundleStatus) Valid() bool {
+	switch s {
+	case BundleReceived, BundleValidated, BundleRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+// BundleImage maps a container image to its Helm values path.
+type BundleImage struct {
+	Ref        string
+	Digest     string
+	ValuesPath string
+}
+
+// ReleaseBundle represents an immutable release artifact bundle.
+type ReleaseBundle struct {
+	ID            string
+	Name          string
+	DigestAlg     string
+	DigestValue   string
+	Status        BundleStatus
+	ChartRef      string
+	ChartVersion  string
+	ChartDigest   string
+	Images        []BundleImage
+	GitCommit     string
+	PipelineID    string
+	SignatureRef  string
+	SBOMRef       string
+	ProvenanceRef string
+	CreatedAt     time.Time
+}
+
+// BundleStore defines the persistence contract for release bundles.
+type BundleStore interface {
+	Create(ctx context.Context, b *ReleaseBundle) error
+	Get(ctx context.Context, id string) (*ReleaseBundle, error)
+	GetByDigest(ctx context.Context, alg, value string) (*ReleaseBundle, error)
 }
 
 // TrustPolicy defines the verification rules for an environment.
@@ -489,6 +548,48 @@ type VerificationRecord struct {
 	Subject        string
 	Summary        string
 	CreatedAt      time.Time
+}
+
+// ── Inventory domain types (REQ-017) ───────────────────────────────
+
+// InventoryStatus is the lifecycle state of a release in the inventory cache.
+type InventoryStatus string
+
+const (
+	InventoryActive    InventoryStatus = "active"
+	InventoryMissing   InventoryStatus = "missing"
+	InventoryOutOfSync InventoryStatus = "out_of_sync" // reserved for future use
+)
+
+// ReleaseInventory represents a cached release snapshot in the orchestrator's observation store.
+// Unique key: (customer_id, cluster_id, namespace, release_name).
+type ReleaseInventory struct {
+	CustomerID      string
+	ClusterID       string
+	Namespace       string
+	ReleaseName     string
+	Chart           string
+	ChartVersion    string
+	Revision        int
+	Status          string
+	ValuesDigest    string
+	InventoryStatus InventoryStatus
+	LastSyncID      string
+	SnapshotVersion int64
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+// InventorySyncLog records the application of a sync snapshot for idempotency.
+type InventorySyncLog struct {
+	SyncID          string
+	CustomerID      string
+	ClusterID       string
+	IsFullSnapshot  bool
+	AcceptedCount   int
+	MissingCount    int
+	SnapshotVersion int64
+	CreatedAt       time.Time
 }
 
 // OperationStore defines the persistence contract for operations.
@@ -517,7 +618,6 @@ type ValuesStore interface {
 	GetLatestApproved(ctx context.Context, definitionID string) (*ValuesRevision, error)
 	List(ctx context.Context, definitionID string) ([]*ValuesRevision, error)
 }
-
 
 // CustomerStore defines the persistence contract for customers.
 type CustomerStore interface {
@@ -555,14 +655,21 @@ type EnrollmentTokenStore interface {
 	Create(ctx context.Context, t *EnrollmentToken) error
 	GetByToken(ctx context.Context, token string) (*EnrollmentToken, error)
 	MarkUsed(ctx context.Context, id, operatorID string) error
+	Revoke(ctx context.Context, id string) error
+	ListByCustomer(ctx context.Context, customerID string) ([]*EnrollmentToken, error)
+	ListByCluster(ctx context.Context, clusterID string) ([]*EnrollmentToken, error)
 }
 
-// OperatorStore defines the persistence contract for operators.
 type OperatorStore interface {
 	Create(ctx context.Context, op *Operator) error
 	Get(ctx context.Context, id string) (*Operator, error)
 	GetByCertSerial(ctx context.Context, serial string) (*Operator, error)
+	GetByClusterID(ctx context.Context, clusterID string) (*Operator, error)
+	GetByName(ctx context.Context, name string) (*Operator, error)
 	Update(ctx context.Context, op *Operator) error
+	Revoke(ctx context.Context, id string) error
+	ListByCustomer(ctx context.Context, customerID string) ([]*Operator, error)
+	ListByCluster(ctx context.Context, clusterID string) ([]*Operator, error)
 }
 
 // SessionStore defines the persistence contract for operator sessions.
@@ -579,10 +686,15 @@ type SessionStore interface {
 type OutboxStore interface {
 	Create(ctx context.Context, e *OutboxEntry) error
 	Get(ctx context.Context, id string) (*OutboxEntry, error)
+	GetByCommandID(ctx context.Context, commandID string) (*OutboxEntry, error)
 	GetPendingForOperator(ctx context.Context, operatorID string) (*OutboxEntry, error)
+	GetDeliveredNotAcked(ctx context.Context, operatorID string) ([]*OutboxEntry, error)
+	GetInflightForOperator(ctx context.Context, operatorID string) (*OutboxEntry, error)
+	GetNextSequence(ctx context.Context) (int64, error)
 	UpdateStatus(ctx context.Context, id string, status CommandStatus, resultJSON string) error
 	GetNextPending(ctx context.Context, operatorID string) (*OutboxEntry, error)
 }
+
 // UserStore defines the persistence contract for local user accounts (REQ-025).
 type UserStore interface {
 	Create(ctx context.Context, u *User) error
@@ -650,6 +762,77 @@ type VerificationStore interface {
 	GetByDigestAndPolicy(ctx context.Context, artifactDigest, policyVersion string) (*VerificationRecord, error)
 }
 
+// --- Cluster artifact routing domain types (REQ-014) ---
+
+// ArtifactType classifies the kind of artifact routed to a cluster.
+type ArtifactType string
+
+const (
+	ArtifactImage ArtifactType = "image"
+	ArtifactChart ArtifactType = "chart"
+)
+
+// Valid returns true if the artifact type is a recognized value.
+func (t ArtifactType) Valid() bool {
+	return t == ArtifactImage || t == ArtifactChart
+}
+
+// ArtifactMode describes how the cluster obtains the artifact.
+type ArtifactMode string
+
+const (
+	ModeDirect           ArtifactMode = "direct"
+	ModePullThroughCache ArtifactMode = "pull_through_cache"
+	ModeReplicated       ArtifactMode = "replicated"
+)
+
+// Valid returns true if the artifact mode is a recognized value.
+func (m ArtifactMode) Valid() bool {
+	return m == ModeDirect || m == ModePullThroughCache || m == ModeReplicated
+}
+
+// ClusterRoute defines a prefix-based routing rule for a specific artifact type.
+type ClusterRoute struct {
+	ID           string       `json:"id"`
+	ClusterID    string       `json:"cluster_id"`
+	ArtifactType ArtifactType `json:"artifact_type"`
+	Mode         ArtifactMode `json:"mode"`
+	SourcePrefix string       `json:"source_prefix"`
+	TargetPrefix string       `json:"target_prefix"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
+}
+
+// ClusterRouteStore defines the persistence contract for cluster artifact routes.
+type ClusterRouteStore interface {
+	Create(ctx context.Context, r *ClusterRoute) error
+	Get(ctx context.Context, id string) (*ClusterRoute, error)
+	ListByCluster(ctx context.Context, clusterID string) ([]*ClusterRoute, error)
+	ListByClusterAndType(ctx context.Context, clusterID string, artifactType ArtifactType) ([]*ClusterRoute, error)
+	Update(ctx context.Context, r *ClusterRoute) error
+	Delete(ctx context.Context, id string) error
+}
+
+// InventoryStore defines the persistence contract for release inventory sync (REQ-017).
+type InventoryStore interface {
+	// Upsert inserts or updates an inventory row by unique key.
+	Upsert(ctx context.Context, item *ReleaseInventory) error
+
+	// ListByCluster returns all inventory rows for a cluster.
+	ListByCluster(ctx context.Context, customerID, clusterID string) ([]*ReleaseInventory, error)
+
+	// MarkMissing sets InventoryMissing for all rows in a cluster not present in the given set.
+	// Returns the count of rows marked missing.
+	MarkMissing(ctx context.Context, customerID, clusterID string, presentKeys []string) (int, error)
+
+	// CreateSyncLog records a sync attempt for idempotency.
+	// Returns true if inserted (first time), false if already exists.
+	CreateSyncLog(ctx context.Context, log *InventorySyncLog) (bool, error)
+
+	// GetBySyncID checks whether a sync_id has already been applied.
+	GetBySyncID(ctx context.Context, syncID string) (*InventorySyncLog, error)
+}
+
 // Store is the top-level persistence abstraction.
 type Store interface {
 	Operations() OperationStore
@@ -668,7 +851,10 @@ type Store interface {
 	Bindings() BindingStore
 	AuditEvents() AuditEventStore
 	Notifications() NotificationStore
+	Bundles() BundleStore
 	Verifications() VerificationStore
 	CustomerEvents() CustomerEventStore
+	ClusterRoutes() ClusterRouteStore
+	Inventories() InventoryStore
 	Close() error
 }

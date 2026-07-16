@@ -200,7 +200,7 @@ func (s *Service) PublishRelease(
 ) (*connect.Response[orchestratorv1.PublishReleaseResponse], error) {
 	msg := req.Msg
 
-	// AC-013-02: Verify the definition exists and customer is not disabled.
+	// Verify the definition exists and both customer and cluster are active.
 	def, err := s.store.Definitions().Get(ctx, msg.ReleaseDefinitionId)
 	if err == store.ErrNotFound {
 		return nil, connect.NewError(connect.CodeNotFound,
@@ -211,6 +211,20 @@ func (s *Service) PublishRelease(
 	}
 	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
 		return nil, connect.NewError(connect.CodePermissionDenied, err)
+	}
+
+	// AC-014-04: disabled cluster cannot be a release target.
+	cluster, err := s.store.Clusters().Get(ctx, def.ClusterID)
+	if err == store.ErrNotFound {
+		return nil, connect.NewError(connect.CodeNotFound,
+			fmt.Errorf("cluster %q not found for definition %s", def.ClusterID, msg.ReleaseDefinitionId))
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("cluster lookup: %w", err))
+	}
+	if cluster.Status == store.ClusterDisabled {
+		return nil, connect.NewError(connect.CodePermissionDenied,
+			fmt.Errorf("cluster %q is disabled, cannot publish", cluster.ID))
 	}
 
 	s.logger.Info("publish release requested (skeleton)", "definition", msg.ReleaseDefinitionId)
@@ -245,7 +259,6 @@ func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
 	return fmt.Sprintf("%x", h)
 }
 
-
 // checkCustomerNotDisabled verifies the customer is not disabled.
 // Returns PermissionDenied if the customer is disabled.
 func (s *Service) checkCustomerNotDisabled(ctx context.Context, customerID string) error {
@@ -258,5 +271,6 @@ func (s *Service) checkCustomerNotDisabled(ctx context.Context, customerID strin
 	}
 	return nil
 }
+
 // Compile-time check: Service implements the Connect handler interface.
 var _ orchestratorv1connect.OrchestratorServiceHandler = (*Service)(nil)
