@@ -8,6 +8,17 @@ import (
 	"time"
 )
 
+// VerificationStatus is the outcome of an artifact trust verification.
+type VerificationStatus string
+
+const (
+	VerificationTrusted              VerificationStatus = "trusted"
+	VerificationRejected             VerificationStatus = "rejected"
+	VerificationPolicyWarning        VerificationStatus = "policy_warning"
+	VerificationSignatureMissing     VerificationStatus = "signature_missing"
+	VerificationVerificationUnavailable VerificationStatus = "verification_unavailable"
+)
+
 // Sentinel errors for store operations.
 var (
 	ErrNotFound        = errors.New("store: not found")
@@ -461,6 +472,25 @@ type EmergencyPayload struct {
 	Convergence EmergencyConvergence
 }
 
+// TrustPolicy defines the verification rules for an environment.
+type TrustPolicy struct {
+	PolicyVersion  string
+	FailClosed     bool
+	TrustedIssuers []string
+}
+
+// VerificationRecord captures the result of an artifact trust verification.
+type VerificationRecord struct {
+	ID             string
+	ArtifactDigest string
+	PolicyVersion  string
+	Status         VerificationStatus
+	Issuer         string
+	Subject        string
+	Summary        string
+	CreatedAt      time.Time
+}
+
 // OperationStore defines the persistence contract for operations.
 type OperationStore interface {
 	Create(ctx context.Context, op *Operation) error
@@ -601,6 +631,12 @@ type NotificationStore interface {
 	MarkDeadLetter(ctx context.Context, id string) error
 }
 
+// VerificationStore defines the persistence contract for verification records.
+type VerificationStore interface {
+	Create(ctx context.Context, rec *VerificationRecord) error
+	GetByDigestAndPolicy(ctx context.Context, artifactDigest, policyVersion string) (*VerificationRecord, error)
+}
+
 // Store is the top-level persistence abstraction.
 type Store interface {
 	Operations() OperationStore
@@ -619,5 +655,6 @@ type Store interface {
 	Bindings() BindingStore
 	AuditEvents() AuditEventStore
 	Notifications() NotificationStore
+	Verifications() VerificationStore
 	Close() error
 }

@@ -141,6 +141,7 @@ type CreateOperationRequest struct {
 	ExpectedCurrentRevision int32                  `protobuf:"varint,6,opt,name=expected_current_revision,json=expectedCurrentRevision,proto3" json:"expected_current_revision,omitempty"` // required for UPGRADE/ROLLBACK
 	IdempotencyKey          string                 `protobuf:"bytes,7,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
 	Actor                   *v1.ActorContext       `protobuf:"bytes,8,opt,name=actor,proto3" json:"actor,omitempty"`
+	SignatureRef            *v1.SignatureRef       `protobuf:"bytes,9,opt,name=signature_ref,json=signatureRef,proto3" json:"signature_ref,omitempty"` // optional: artifact trust verification
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -231,15 +232,23 @@ func (x *CreateOperationRequest) GetActor() *v1.ActorContext {
 	return nil
 }
 
+func (x *CreateOperationRequest) GetSignatureRef() *v1.SignatureRef {
+	if x != nil {
+		return x.SignatureRef
+	}
+	return nil
+}
+
 // CreateOperationResponse returns the pending operation details.
 type CreateOperationResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
-	State         string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"` // always "pending"
-	PreflightId   string                 `protobuf:"bytes,3,opt,name=preflight_id,json=preflightId,proto3" json:"preflight_id,omitempty"`
-	AcceptedAt    *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=accepted_at,json=acceptedAt,proto3" json:"accepted_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	OperationId        string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	State              string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"` // always "pending"
+	PreflightId        string                 `protobuf:"bytes,3,opt,name=preflight_id,json=preflightId,proto3" json:"preflight_id,omitempty"`
+	AcceptedAt         *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=accepted_at,json=acceptedAt,proto3" json:"accepted_at,omitempty"`
+	VerificationResult v1.VerificationResult  `protobuf:"varint,5,opt,name=verification_result,json=verificationResult,proto3,enum=common.v1.VerificationResult" json:"verification_result,omitempty"` // trust verification outcome
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *CreateOperationResponse) Reset() {
@@ -298,6 +307,13 @@ func (x *CreateOperationResponse) GetAcceptedAt() *timestamppb.Timestamp {
 		return x.AcceptedAt
 	}
 	return nil
+}
+
+func (x *CreateOperationResponse) GetVerificationResult() v1.VerificationResult {
+	if x != nil {
+		return x.VerificationResult
+	}
+	return v1.VerificationResult(0)
 }
 
 // PublishReleaseRequest triggers release orchestration for a definition.
@@ -1544,7 +1560,7 @@ var File_orchestrator_v1_orchestrator_proto protoreflect.FileDescriptor
 
 const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\n" +
-	"\"orchestrator/v1/orchestrator.proto\x12\x0forchestrator.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x16common/v1/domain.proto\"\xf5\x02\n" +
+	"\"orchestrator/v1/orchestrator.proto\x12\x0forchestrator.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x16common/v1/domain.proto\x1a\x15common/v1/trust.proto\"\xb3\x03\n" +
 	"\x16CreateOperationRequest\x12%\n" +
 	"\x0eoperation_type\x18\x01 \x01(\tR\roperationType\x12\x1b\n" +
 	"\tbundle_id\x18\x02 \x01(\tR\bbundleId\x122\n" +
@@ -1553,13 +1569,15 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\fvalues_patch\x18\x05 \x01(\tR\vvaluesPatch\x12:\n" +
 	"\x19expected_current_revision\x18\x06 \x01(\x05R\x17expectedCurrentRevision\x12'\n" +
 	"\x0fidempotency_key\x18\a \x01(\tR\x0eidempotencyKey\x12-\n" +
-	"\x05actor\x18\b \x01(\v2\x17.common.v1.ActorContextR\x05actor\"\xb2\x01\n" +
+	"\x05actor\x18\b \x01(\v2\x17.common.v1.ActorContextR\x05actor\x12<\n" +
+	"\rsignature_ref\x18\t \x01(\v2\x17.common.v1.SignatureRefR\fsignatureRef\"\x82\x02\n" +
 	"\x17CreateOperationResponse\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\x12!\n" +
 	"\fpreflight_id\x18\x03 \x01(\tR\vpreflightId\x12;\n" +
 	"\vaccepted_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"acceptedAt\"K\n" +
+	"acceptedAt\x12N\n" +
+	"\x13verification_result\x18\x05 \x01(\x0e2\x1d.common.v1.VerificationResultR\x12verificationResult\"K\n" +
 	"\x15PublishReleaseRequest\x122\n" +
 	"\x15release_definition_id\x18\x01 \x01(\tR\x13releaseDefinitionId\"S\n" +
 	"\x16PublishReleaseResponse\x12!\n" +
@@ -1708,57 +1726,61 @@ var file_orchestrator_v1_orchestrator_proto_goTypes = []any{
 	(*EmergencyChangeRequest)(nil),        // 27: orchestrator.v1.EmergencyChangeRequest
 	(*EmergencyChangeResponse)(nil),       // 28: orchestrator.v1.EmergencyChangeResponse
 	(*v1.ActorContext)(nil),               // 29: common.v1.ActorContext
-	(*timestamppb.Timestamp)(nil),         // 30: google.protobuf.Timestamp
-	(*v1.ReleaseDigest)(nil),              // 31: common.v1.ReleaseDigest
-	(*v1.Customer)(nil),                   // 32: common.v1.Customer
-	(*v1.Cluster)(nil),                    // 33: common.v1.Cluster
+	(*v1.SignatureRef)(nil),               // 30: common.v1.SignatureRef
+	(*timestamppb.Timestamp)(nil),         // 31: google.protobuf.Timestamp
+	(v1.VerificationResult)(0),            // 32: common.v1.VerificationResult
+	(*v1.ReleaseDigest)(nil),              // 33: common.v1.ReleaseDigest
+	(*v1.Customer)(nil),                   // 34: common.v1.Customer
+	(*v1.Cluster)(nil),                    // 35: common.v1.Cluster
 }
 var file_orchestrator_v1_orchestrator_proto_depIdxs = []int32{
 	29, // 0: orchestrator.v1.CreateOperationRequest.actor:type_name -> common.v1.ActorContext
-	30, // 1: orchestrator.v1.CreateOperationResponse.accepted_at:type_name -> google.protobuf.Timestamp
-	31, // 2: orchestrator.v1.ReleaseOperation.digest:type_name -> common.v1.ReleaseDigest
-	32, // 3: orchestrator.v1.CreateCustomerResponse.customer:type_name -> common.v1.Customer
-	32, // 4: orchestrator.v1.GetCustomerResponse.customer:type_name -> common.v1.Customer
-	32, // 5: orchestrator.v1.ListCustomersResponse.customers:type_name -> common.v1.Customer
-	32, // 6: orchestrator.v1.UpdateCustomerResponse.customer:type_name -> common.v1.Customer
-	33, // 7: orchestrator.v1.CreateClusterResponse.cluster:type_name -> common.v1.Cluster
-	33, // 8: orchestrator.v1.GetClusterResponse.cluster:type_name -> common.v1.Cluster
-	33, // 9: orchestrator.v1.ListClustersResponse.clusters:type_name -> common.v1.Cluster
-	0,  // 10: orchestrator.v1.EmergencyChangeRequest.action:type_name -> orchestrator.v1.EmergencyAction
-	1,  // 11: orchestrator.v1.EmergencyChangeRequest.convergence:type_name -> orchestrator.v1.EmergencyConvergence
-	29, // 12: orchestrator.v1.EmergencyChangeRequest.actor:type_name -> common.v1.ActorContext
-	1,  // 13: orchestrator.v1.EmergencyChangeResponse.convergence:type_name -> orchestrator.v1.EmergencyConvergence
-	2,  // 14: orchestrator.v1.OrchestratorService.CreateOperation:input_type -> orchestrator.v1.CreateOperationRequest
-	4,  // 15: orchestrator.v1.OrchestratorService.PublishRelease:input_type -> orchestrator.v1.PublishReleaseRequest
-	7,  // 16: orchestrator.v1.OrchestratorService.CreateCustomer:input_type -> orchestrator.v1.CreateCustomerRequest
-	9,  // 17: orchestrator.v1.OrchestratorService.GetCustomer:input_type -> orchestrator.v1.GetCustomerRequest
-	11, // 18: orchestrator.v1.OrchestratorService.ListCustomers:input_type -> orchestrator.v1.ListCustomersRequest
-	13, // 19: orchestrator.v1.OrchestratorService.UpdateCustomer:input_type -> orchestrator.v1.UpdateCustomerRequest
-	15, // 20: orchestrator.v1.OrchestratorService.DisableCustomer:input_type -> orchestrator.v1.DisableCustomerRequest
-	17, // 21: orchestrator.v1.OrchestratorService.CreateCluster:input_type -> orchestrator.v1.CreateClusterRequest
-	19, // 22: orchestrator.v1.OrchestratorService.GetCluster:input_type -> orchestrator.v1.GetClusterRequest
-	21, // 23: orchestrator.v1.OrchestratorService.ListClusters:input_type -> orchestrator.v1.ListClustersRequest
-	23, // 24: orchestrator.v1.OrchestratorService.DisableCluster:input_type -> orchestrator.v1.DisableClusterRequest
-	25, // 25: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:input_type -> orchestrator.v1.CreateEnrollmentTokenRequest
-	27, // 26: orchestrator.v1.OrchestratorService.EmergencyChange:input_type -> orchestrator.v1.EmergencyChangeRequest
-	3,  // 27: orchestrator.v1.OrchestratorService.CreateOperation:output_type -> orchestrator.v1.CreateOperationResponse
-	5,  // 28: orchestrator.v1.OrchestratorService.PublishRelease:output_type -> orchestrator.v1.PublishReleaseResponse
-	8,  // 29: orchestrator.v1.OrchestratorService.CreateCustomer:output_type -> orchestrator.v1.CreateCustomerResponse
-	10, // 30: orchestrator.v1.OrchestratorService.GetCustomer:output_type -> orchestrator.v1.GetCustomerResponse
-	12, // 31: orchestrator.v1.OrchestratorService.ListCustomers:output_type -> orchestrator.v1.ListCustomersResponse
-	14, // 32: orchestrator.v1.OrchestratorService.UpdateCustomer:output_type -> orchestrator.v1.UpdateCustomerResponse
-	16, // 33: orchestrator.v1.OrchestratorService.DisableCustomer:output_type -> orchestrator.v1.DisableCustomerResponse
-	18, // 34: orchestrator.v1.OrchestratorService.CreateCluster:output_type -> orchestrator.v1.CreateClusterResponse
-	20, // 35: orchestrator.v1.OrchestratorService.GetCluster:output_type -> orchestrator.v1.GetClusterResponse
-	22, // 36: orchestrator.v1.OrchestratorService.ListClusters:output_type -> orchestrator.v1.ListClustersResponse
-	24, // 37: orchestrator.v1.OrchestratorService.DisableCluster:output_type -> orchestrator.v1.DisableClusterResponse
-	26, // 38: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:output_type -> orchestrator.v1.CreateEnrollmentTokenResponse
-	28, // 39: orchestrator.v1.OrchestratorService.EmergencyChange:output_type -> orchestrator.v1.EmergencyChangeResponse
-	27, // [27:40] is the sub-list for method output_type
-	14, // [14:27] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	30, // 1: orchestrator.v1.CreateOperationRequest.signature_ref:type_name -> common.v1.SignatureRef
+	31, // 2: orchestrator.v1.CreateOperationResponse.accepted_at:type_name -> google.protobuf.Timestamp
+	32, // 3: orchestrator.v1.CreateOperationResponse.verification_result:type_name -> common.v1.VerificationResult
+	33, // 4: orchestrator.v1.ReleaseOperation.digest:type_name -> common.v1.ReleaseDigest
+	34, // 5: orchestrator.v1.CreateCustomerResponse.customer:type_name -> common.v1.Customer
+	34, // 6: orchestrator.v1.GetCustomerResponse.customer:type_name -> common.v1.Customer
+	34, // 7: orchestrator.v1.ListCustomersResponse.customers:type_name -> common.v1.Customer
+	34, // 8: orchestrator.v1.UpdateCustomerResponse.customer:type_name -> common.v1.Customer
+	35, // 9: orchestrator.v1.CreateClusterResponse.cluster:type_name -> common.v1.Cluster
+	35, // 10: orchestrator.v1.GetClusterResponse.cluster:type_name -> common.v1.Cluster
+	35, // 11: orchestrator.v1.ListClustersResponse.clusters:type_name -> common.v1.Cluster
+	0,  // 12: orchestrator.v1.EmergencyChangeRequest.action:type_name -> orchestrator.v1.EmergencyAction
+	1,  // 13: orchestrator.v1.EmergencyChangeRequest.convergence:type_name -> orchestrator.v1.EmergencyConvergence
+	29, // 14: orchestrator.v1.EmergencyChangeRequest.actor:type_name -> common.v1.ActorContext
+	1,  // 15: orchestrator.v1.EmergencyChangeResponse.convergence:type_name -> orchestrator.v1.EmergencyConvergence
+	2,  // 16: orchestrator.v1.OrchestratorService.CreateOperation:input_type -> orchestrator.v1.CreateOperationRequest
+	4,  // 17: orchestrator.v1.OrchestratorService.PublishRelease:input_type -> orchestrator.v1.PublishReleaseRequest
+	7,  // 18: orchestrator.v1.OrchestratorService.CreateCustomer:input_type -> orchestrator.v1.CreateCustomerRequest
+	9,  // 19: orchestrator.v1.OrchestratorService.GetCustomer:input_type -> orchestrator.v1.GetCustomerRequest
+	11, // 20: orchestrator.v1.OrchestratorService.ListCustomers:input_type -> orchestrator.v1.ListCustomersRequest
+	13, // 21: orchestrator.v1.OrchestratorService.UpdateCustomer:input_type -> orchestrator.v1.UpdateCustomerRequest
+	15, // 22: orchestrator.v1.OrchestratorService.DisableCustomer:input_type -> orchestrator.v1.DisableCustomerRequest
+	17, // 23: orchestrator.v1.OrchestratorService.CreateCluster:input_type -> orchestrator.v1.CreateClusterRequest
+	19, // 24: orchestrator.v1.OrchestratorService.GetCluster:input_type -> orchestrator.v1.GetClusterRequest
+	21, // 25: orchestrator.v1.OrchestratorService.ListClusters:input_type -> orchestrator.v1.ListClustersRequest
+	23, // 26: orchestrator.v1.OrchestratorService.DisableCluster:input_type -> orchestrator.v1.DisableClusterRequest
+	25, // 27: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:input_type -> orchestrator.v1.CreateEnrollmentTokenRequest
+	27, // 28: orchestrator.v1.OrchestratorService.EmergencyChange:input_type -> orchestrator.v1.EmergencyChangeRequest
+	3,  // 29: orchestrator.v1.OrchestratorService.CreateOperation:output_type -> orchestrator.v1.CreateOperationResponse
+	5,  // 30: orchestrator.v1.OrchestratorService.PublishRelease:output_type -> orchestrator.v1.PublishReleaseResponse
+	8,  // 31: orchestrator.v1.OrchestratorService.CreateCustomer:output_type -> orchestrator.v1.CreateCustomerResponse
+	10, // 32: orchestrator.v1.OrchestratorService.GetCustomer:output_type -> orchestrator.v1.GetCustomerResponse
+	12, // 33: orchestrator.v1.OrchestratorService.ListCustomers:output_type -> orchestrator.v1.ListCustomersResponse
+	14, // 34: orchestrator.v1.OrchestratorService.UpdateCustomer:output_type -> orchestrator.v1.UpdateCustomerResponse
+	16, // 35: orchestrator.v1.OrchestratorService.DisableCustomer:output_type -> orchestrator.v1.DisableCustomerResponse
+	18, // 36: orchestrator.v1.OrchestratorService.CreateCluster:output_type -> orchestrator.v1.CreateClusterResponse
+	20, // 37: orchestrator.v1.OrchestratorService.GetCluster:output_type -> orchestrator.v1.GetClusterResponse
+	22, // 38: orchestrator.v1.OrchestratorService.ListClusters:output_type -> orchestrator.v1.ListClustersResponse
+	24, // 39: orchestrator.v1.OrchestratorService.DisableCluster:output_type -> orchestrator.v1.DisableClusterResponse
+	26, // 40: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:output_type -> orchestrator.v1.CreateEnrollmentTokenResponse
+	28, // 41: orchestrator.v1.OrchestratorService.EmergencyChange:output_type -> orchestrator.v1.EmergencyChangeResponse
+	29, // [29:42] is the sub-list for method output_type
+	16, // [16:29] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_orchestrator_v1_orchestrator_proto_init() }

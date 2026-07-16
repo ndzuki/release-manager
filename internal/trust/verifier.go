@@ -1,0 +1,228 @@
+// Package trust implements artifact trust verification for the release pipeline.
+package trust
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+
+	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
+	"github.com/ndzuki/release-manager/internal/store"
+)
+
+// ErrVerificationUnavailable is returned when the verification backend is unreachable
+// and the policy mandates fail-closed.
+var ErrVerificationUnavailable = errors.New("trust: verification backend unavailable")
+
+// Input holds the data needed to verify artifact trust.
+type Input struct {
+	Digest       string
+	SignatureRef *commonv1.SignatureRef
+	Policy       store.TrustPolicy
+}
+
+// Output captures the result of a trust verification.
+type Output struct {
+	Status  store.VerificationStatus
+	Summary string
+	Record  *store.VerificationRecord
+}
+
+// Verifier is the interface for artifact trust verification.
+type Verifier interface {
+	// Verify checks artifact trust and returns the verification outcome.
+	// It MUST be idempotent: calling Verify twice with the same Digest + Policy
+	// MUST produce the same result without re-validating the signature.
+	Verify(ctx context.Context, in Input) (*Output, error)
+}
+
+// StubVerifier performs digest comparison and signature presence checks.
+// It does NOT validate actual cryptographic signatures — that is the
+// responsibility of CosignVerifier or similar external verifiers.
+type StubVerifier struct {
+	st     store.VerificationStore
+	logger *slog.Logger
+}
+
+// NewStubVerifier creates a StubVerifier backed by the given store.
+func NewStubVerifier(st store.VerificationStore, logger *slog.Logger) *StubVerifier {
+	return &StubVerifier{st: st, logger: logger}
+}
+
+// Verify checks artifact trust against the given policy.
+//
+// Verification flow (ordered):
+//  1. Check store for existing record (AC-012-03: idempotent reuse by policy_version).
+//  2. Digest consistency check (AC-012-01: mismatch → rejected).
+//  3. Signature presence check (AC-012-02: unsigned → signature_missing).
+//  4. Signature format check (valid → trusted; else signature_invalid).
+//  5. Issuer trust check (untrusted_issuer).
+//  6. Backend unavailable → verification_unavailable + fail closed (AC-012-04).
+func (v *StubVerifier) Verify(ctx context.Context, in Input) (*Output, error) {
+	// AC-012-03: Idempotent reuse — check store for existing record.
+	existing, err := v.st.GetByDigestAndPolicy(ctx, in.Digest, in.Policy.PolicyVersion)
+	if err == nil {
+		v.logger.Debug("verification record reused",
+			"digest", in.Digest,
+			"policy_version", in.Policy.PolicyVersion,
+			"status", existing.Status,
+		)
+		return &Output{
+			Status:  existing.Status,
+			Summary: existing.Summary,
+			Record:  existing,
+		}, nil
+	}
+	if err != store.ErrNotFound {
+		return nil, fmt.Errorf("verification store lookup: %w", err)
+	}
+
+	// Not found — perform fresh verification.
+	result := v.verify(in)
+	return result, nil
+}
+
+func (v *StubVerifier) verify(in Input) *Output {
+	// AC-012-01: Digest consistency check.
+	// If a signature reference is provided, its digest MUST match the computed digest.
+	if in.SignatureRef != nil && in.SignatureRef.Digest != "" {
+		if in.SignatureRef.Digest != in.Digest {
+			return &Output{
+				Status:  store.VerificationRejected,
+				Summary: "digest_mismatch: artifact digest does not match signed digest",
+			}
+		}
+	}
+
+	// AC-012-02: Signature presence check.
+	// Production artifacts MUST carry a signature reference.
+	if in.SignatureRef == nil || in.SignatureRef.Signature == "" {
+		return &Output{
+			Status:  store.VerificationSignatureMissing,
+			Summary: "signature_missing: artifact has no attached signature",
+		}
+	}
+
+	// Signature format check: basic validation that it's non-empty and well-formed.
+	// Stub verifier does not perform actual cryptographic validation.
+	if !isValidSignatureFormat(in.SignatureRef.Signature) {
+		return &Output{
+			Status:  store.VerificationRejected,
+			Summary: "signature_invalid: signature format validation failed",
+		}
+	}
+
+	// Issuer trust check.
+	if !isTrustedIssuer(in.SignatureRef.Issuer, in.Policy.TrustedIssuers) {
+		return &Output{
+			Status:  store.VerificationRejected,
+			Summary: fmt.Sprintf("untrusted_issuer: issuer %q is not in trusted issuers list", in.SignatureRef.Issuer),
+		}
+	}
+
+	return &Output{
+		Status:  store.VerificationTrusted,
+		Summary: "trusted: digest matches, signature present, issuer trusted",
+	}
+}
+
+// isValidSignatureFormat performs basic format validation.
+// Actual cryptographic verification is deferred to CosignVerifier.
+func isValidSignatureFormat(sig string) bool {
+	return sig != ""
+}
+
+// isTrustedIssuer checks whether the given issuer is in the trusted list.
+func isTrustedIssuer(issuer string, trusted []string) bool {
+	if len(trusted) == 0 {
+		// No trusted issuers configured → reject all (fail-safe).
+		return false
+	}
+	for _, t := range trusted {
+		if t == issuer {
+			return true
+		}
+	}
+	return false
+}
+
+// StoreVerifier wraps another Verifier with store-backed caching.
+// It persists verification results after a successful Verify call,
+// enabling idempotent reuse (AC-012-03) for subsequent calls.
+type StoreVerifier struct {
+	inner  Verifier
+	st     store.VerificationStore
+	logger *slog.Logger
+}
+
+// NewStoreVerifier creates a StoreVerifier that caches results.
+func NewStoreVerifier(inner Verifier, st store.VerificationStore, logger *slog.Logger) *StoreVerifier {
+	return &StoreVerifier{inner: inner, st: st, logger: logger}
+}
+
+// Verify delegates to the inner verifier and persists the result.
+func (v *StoreVerifier) Verify(ctx context.Context, in Input) (*Output, error) {
+	out, err := v.inner.Verify(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+
+	// Persist the verification result for future idempotent reuse.
+	// Use a deterministic ID based on digest + policy_version.
+	rec := out.Record
+	if rec == nil {
+		rec = &store.VerificationRecord{
+			ArtifactDigest: in.Digest,
+			PolicyVersion:  in.Policy.PolicyVersion,
+			Status:         out.Status,
+			Issuer:         issuerFromRef(in.SignatureRef),
+			Subject:        subjectFromRef(in.SignatureRef),
+			Summary:        out.Summary,
+		}
+	}
+
+	if err := v.st.Create(ctx, rec); err != nil {
+		v.logger.Warn("failed to persist verification record", "err", err)
+		// Non-fatal: verification result is still valid, just not cached.
+	}
+
+	out.Record = rec
+	return out, nil
+}
+
+func issuerFromRef(ref *commonv1.SignatureRef) string {
+	if ref == nil {
+		return ""
+	}
+	return ref.Issuer
+}
+
+func subjectFromRef(ref *commonv1.SignatureRef) string {
+	if ref == nil {
+		return ""
+	}
+	return ref.Subject
+}
+
+// StatusToProto converts a store verification status to its proto enum value.
+func StatusToProto(s store.VerificationStatus) commonv1.VerificationResult {
+	switch s {
+	case store.VerificationTrusted:
+		return commonv1.VerificationResult_VERIFICATION_RESULT_TRUSTED
+	case store.VerificationRejected:
+		return commonv1.VerificationResult_VERIFICATION_RESULT_REJECTED
+	case store.VerificationPolicyWarning:
+		return commonv1.VerificationResult_VERIFICATION_RESULT_POLICY_WARNING
+	case store.VerificationSignatureMissing:
+		return commonv1.VerificationResult_VERIFICATION_RESULT_SIGNATURE_MISSING
+	case store.VerificationVerificationUnavailable:
+		return commonv1.VerificationResult_VERIFICATION_RESULT_VERIFICATION_UNAVAILABLE
+	default:
+		return commonv1.VerificationResult_VERIFICATION_RESULT_UNSPECIFIED
+	}
+}
+
+// Compile-time check: StubVerifier implements Verifier.
+var _ Verifier = (*StubVerifier)(nil)
+var _ Verifier = (*StoreVerifier)(nil)

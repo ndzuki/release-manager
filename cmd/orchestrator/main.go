@@ -11,10 +11,12 @@ import (
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/orchestrator"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
+	"github.com/ndzuki/release-manager/internal/trust"
 )
 
 type orchSvc struct {
-	dbPath string
+	dbPath    string
+	targetEnv string
 }
 
 func (s *orchSvc) Name() string { return "release-orchestrator" }
@@ -34,7 +36,13 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	// TODO: Inject auditEmitter into orchestrator.Service to record audit events
 	// on CreateOperation, PublishRelease, and EmergencyChange.
 
-	svc := orchestrator.NewService(st, logger)
+	verifier := trust.NewStoreVerifier(
+		trust.NewStubVerifier(st.Verifications(), logger),
+		st.Verifications(),
+		logger,
+	)
+
+	svc := orchestrator.NewService(st, verifier, s.targetEnv, logger)
 	path, h := orchestratorv1connect.NewOrchestratorServiceHandler(svc)
 	mux.Handle(path, h)
 	return nil
@@ -43,7 +51,8 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 func main() {
 	configPath := flag.String("config", "configs/orchestrator.dev.yaml", "path to config file")
 	dbPath := flag.String("db", "data/orchestrator.db", "path to SQLite database")
+	targetEnv := flag.String("target-env", "staging", "target environment (production, staging)")
 	flag.Parse()
 
-	app.Run(*configPath, &orchSvc{dbPath: *dbPath})
+	app.Run(*configPath, &orchSvc{dbPath: *dbPath, targetEnv: *targetEnv})
 }

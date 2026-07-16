@@ -30,6 +30,7 @@ type Store struct {
 	bindings    *bindingStore
 	audit       *auditEventStore
 	notif       *notificationStore
+	verifs      *verificationStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -71,8 +72,8 @@ func Open(dsn string) (*Store, error) {
 	s.orgs = &organizationStore{db: db}
 	s.orgMembers = &organizationMemberStore{db: db}
 	s.bindings = &bindingStore{db: db}
-	s.audit = &auditEventStore{db: db}
 	s.notif = &notificationStore{db: db}
+	s.verifs = &verificationStore{db: db}
 	return s, nil
 }
 
@@ -123,6 +124,9 @@ func (s *Store) AuditEvents() store.AuditEventStore { return s.audit }
 
 // Notifications returns the NotificationStore.
 func (s *Store) Notifications() store.NotificationStore { return s.notif }
+
+// Verifications returns the VerificationStore.
+func (s *Store) Verifications() store.VerificationStore { return s.verifs }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
@@ -372,6 +376,19 @@ var migrationStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_notification_jobs_status ON notification_jobs(status)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_jobs_dedup ON notification_jobs(operation_id, channel, recipient)`,
+
+	// Artifact trust verification (REQ-012)
+	`CREATE TABLE IF NOT EXISTS verification_records (
+		id              TEXT PRIMARY KEY,
+		artifact_digest TEXT NOT NULL,
+		policy_version  TEXT NOT NULL DEFAULT '',
+		status          TEXT NOT NULL DEFAULT '',
+		issuer          TEXT NOT NULL DEFAULT '',
+		subject         TEXT NOT NULL DEFAULT '',
+		summary         TEXT NOT NULL DEFAULT '',
+		created_at      TEXT NOT NULL
+	)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_records_digest_policy ON verification_records(artifact_digest, policy_version, created_at)`,
 }
 
 // nowUTC returns the current time in UTC as an RFC3339 string for SQLite storage.
