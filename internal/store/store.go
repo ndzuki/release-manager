@@ -132,6 +132,124 @@ type ValuesRevision struct {
 	UpdatedAt           time.Time    `json:"updated_at"`
 }
 
+// CustomerStatus is the lifecycle state of a customer tenant.
+type CustomerStatus string
+
+const (
+	CustomerActive   CustomerStatus = "active"
+	CustomerDisabled CustomerStatus = "disabled"
+)
+
+// ClusterStatus is the lifecycle state of a target cluster.
+type ClusterStatus string
+
+const (
+	ClusterActive   ClusterStatus = "active"
+	ClusterDisabled ClusterStatus = "disabled"
+)
+
+// OperatorStatus indicates the enrollment state of an operator.
+type OperatorStatus string
+
+const (
+	OperatorActive    OperatorStatus = "active"
+	OperatorSuperseded OperatorStatus = "superseded"
+	OperatorRevoked   OperatorStatus = "revoked"
+)
+
+// SessionStatus tracks the operator connection lifecycle.
+type SessionStatus string
+
+const (
+	SessionOnline   SessionStatus = "online"
+	SessionSuspect  SessionStatus = "suspect"
+	SessionOffline  SessionStatus = "offline"
+)
+
+// CommandStatus is the outbox delivery and execution state.
+type CommandStatus string
+
+const (
+	CommandPending     CommandStatus = "pending"
+	CommandDelivered   CommandStatus = "delivered"
+	CommandPersisted   CommandStatus = "persisted"
+	CommandRunning     CommandStatus = "running"
+	CommandSucceeded   CommandStatus = "succeeded"
+	CommandFailed      CommandStatus = "failed"
+)
+
+// Customer represents a tenant in the release-manager.
+type Customer struct {
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Slug      string         `json:"slug"`
+	Status    CustomerStatus `json:"status"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+}
+
+// Cluster represents a target Kubernetes cluster belonging to a customer.
+type Cluster struct {
+	ID           string        `json:"id"`
+	Name         string        `json:"name"`
+	CustomerID   string        `json:"customer_id"`
+	KubeconfigRef string       `json:"kubeconfig_ref"`
+	Status       ClusterStatus `json:"status"`
+	CreatedAt    time.Time     `json:"created_at"`
+	UpdatedAt    time.Time     `json:"updated_at"`
+}
+
+// EnrollmentToken is a single-use token for operator registration.
+type EnrollmentToken struct {
+	ID           string     `json:"id"`
+	CustomerID   string     `json:"customer_id"`
+	ClusterID    string     `json:"cluster_id"`
+	Token        string     `json:"token"`
+	CreatedAt    time.Time  `json:"created_at"`
+	ExpiresAt    time.Time  `json:"expires_at"`
+	Used         bool       `json:"used"`
+	UsedAt       *time.Time `json:"used_at,omitempty"`
+	OperatorID   string     `json:"operator_id,omitempty"`
+}
+
+// Operator represents a registered operator agent in a cluster.
+type Operator struct {
+	ID              string         `json:"id"`
+	CustomerID      string         `json:"customer_id"`
+	ClusterID       string         `json:"cluster_id"`
+	CertSerial      string         `json:"cert_serial"`
+	Status          OperatorStatus `json:"status"`
+	SupersededBy    string         `json:"superseded_by,omitempty"`
+	RevokedAt       *time.Time     `json:"revoked_at,omitempty"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+}
+
+// Session tracks a live operator connection.
+type Session struct {
+	ID             string        `json:"id"`
+	OperatorID     string        `json:"operator_id"`
+	Status         SessionStatus `json:"status"`
+	StartedAt      time.Time     `json:"started_at"`
+	LastHeartbeat  time.Time     `json:"last_heartbeat"`
+	ExpiresAt      time.Time     `json:"expires_at"`
+}
+
+// OutboxEntry holds a command pending delivery in the outbox.
+type OutboxEntry struct {
+	ID            string        `json:"id"`
+	OperationID   string        `json:"operation_id"`
+	OperatorID    string        `json:"operator_id"`
+	Payload       []byte        `json:"payload"`
+	Status        CommandStatus `json:"status"`
+	MaxInFlight   int           `json:"max_inflight"`
+	ResultJSON    string        `json:"result_json,omitempty"`
+	CreatedAt     time.Time     `json:"created_at"`
+	UpdatedAt     time.Time     `json:"updated_at"`
+	DeliveredAt   *time.Time    `json:"delivered_at,omitempty"`
+	AckedAt       *time.Time    `json:"acked_at,omitempty"`
+}
+
 // OperationStore defines the persistence contract for operations.
 type OperationStore interface {
 	Create(ctx context.Context, op *Operation) error
@@ -158,10 +276,68 @@ type ValuesStore interface {
 	List(ctx context.Context, definitionID string) ([]*ValuesRevision, error)
 }
 
+
+// CustomerStore defines the persistence contract for customers.
+type CustomerStore interface {
+	Create(ctx context.Context, c *Customer) error
+	Get(ctx context.Context, id string) (*Customer, error)
+	GetBySlug(ctx context.Context, slug string) (*Customer, error)
+	Update(ctx context.Context, c *Customer) error
+	List(ctx context.Context) ([]*Customer, error)
+}
+
+// ClusterStore defines the persistence contract for clusters.
+type ClusterStore interface {
+	Create(ctx context.Context, c *Cluster) error
+	Get(ctx context.Context, id string) (*Cluster, error)
+	Update(ctx context.Context, c *Cluster) error
+	List(ctx context.Context, customerID string) ([]*Cluster, error)
+	ListAll(ctx context.Context) ([]*Cluster, error)
+}
+
+// EnrollmentTokenStore defines the persistence contract for enrollment tokens.
+type EnrollmentTokenStore interface {
+	Create(ctx context.Context, t *EnrollmentToken) error
+	GetByToken(ctx context.Context, token string) (*EnrollmentToken, error)
+	MarkUsed(ctx context.Context, id, operatorID string) error
+}
+
+// OperatorStore defines the persistence contract for operators.
+type OperatorStore interface {
+	Create(ctx context.Context, op *Operator) error
+	Get(ctx context.Context, id string) (*Operator, error)
+	GetByCertSerial(ctx context.Context, serial string) (*Operator, error)
+	Update(ctx context.Context, op *Operator) error
+}
+
+// SessionStore defines the persistence contract for operator sessions.
+type SessionStore interface {
+	Create(ctx context.Context, s *Session) error
+	Get(ctx context.Context, id string) (*Session, error)
+	Heartbeat(ctx context.Context, id string) error
+	UpdateStatus(ctx context.Context, id string, status SessionStatus) error
+	GetActiveByOperator(ctx context.Context, operatorID string) (*Session, error)
+	ListExpiredSuspect(ctx context.Context, suspectAfter time.Duration) ([]*Session, error)
+}
+
+// OutboxStore defines the persistence contract for the command outbox.
+type OutboxStore interface {
+	Create(ctx context.Context, e *OutboxEntry) error
+	Get(ctx context.Context, id string) (*OutboxEntry, error)
+	GetPendingForOperator(ctx context.Context, operatorID string) (*OutboxEntry, error)
+	UpdateStatus(ctx context.Context, id string, status CommandStatus, resultJSON string) error
+	GetNextPending(ctx context.Context, operatorID string) (*OutboxEntry, error)
+}
 // Store is the top-level persistence abstraction.
 type Store interface {
 	Operations() OperationStore
 	Definitions() DefinitionStore
 	Values() ValuesStore
+	Customers() CustomerStore
+	Clusters() ClusterStore
+	EnrollmentTokens() EnrollmentTokenStore
+	Operators() OperatorStore
+	Sessions() SessionStore
+	Outbox() OutboxStore
 	Close() error
 }

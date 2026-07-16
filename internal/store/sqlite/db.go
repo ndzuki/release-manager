@@ -13,10 +13,16 @@ import (
 
 // Store implements store.Store backed by SQLite.
 type Store struct {
-	db *sql.DB
-	ops *operationStore
-	defs *definitionStore
-	vals *valuesStore
+	db          *sql.DB
+	ops         *operationStore
+	defs        *definitionStore
+	vals        *valuesStore
+	customers   *customerStore
+	clusters    *clusterStore
+	tokens      *enrollmentTokenStore
+	operators   *operatorStore
+	sessions    *sessionStore
+	outbox      *outboxStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -47,11 +53,35 @@ func Open(dsn string) (*Store, error) {
 	s.ops = &operationStore{db: db}
 	s.defs = &definitionStore{db: db}
 	s.vals = &valuesStore{db: db}
+	s.customers = &customerStore{db: db}
+	s.clusters = &clusterStore{db: db}
+	s.tokens = &enrollmentTokenStore{db: db}
+	s.operators = &operatorStore{db: db}
+	s.sessions = &sessionStore{db: db}
+	s.outbox = &outboxStore{db: db}
 	return s, nil
 }
 
 // Operations returns the OperationStore.
 func (s *Store) Operations() store.OperationStore { return s.ops }
+
+// Customers returns the CustomerStore.
+func (s *Store) Customers() store.CustomerStore { return s.customers }
+
+// Clusters returns the ClusterStore.
+func (s *Store) Clusters() store.ClusterStore { return s.clusters }
+
+// EnrollmentTokens returns the EnrollmentTokenStore.
+func (s *Store) EnrollmentTokens() store.EnrollmentTokenStore { return s.tokens }
+
+// Operators returns the OperatorStore.
+func (s *Store) Operators() store.OperatorStore { return s.operators }
+
+// Sessions returns the SessionStore.
+func (s *Store) Sessions() store.SessionStore { return s.sessions }
+
+// Outbox returns the OutboxStore.
+func (s *Store) Outbox() store.OutboxStore { return s.outbox }
 
 // Definitions returns the DefinitionStore.
 func (s *Store) Definitions() store.DefinitionStore { return s.defs }
@@ -136,6 +166,83 @@ var migrationStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_operations_definition ON operations(release_definition_id, status)`,
 	`CREATE INDEX IF NOT EXISTS idx_operations_idempotency ON operations(idempotency_key)`,
 	`CREATE INDEX IF NOT EXISTS idx_values_def ON values_revisions(release_definition_id)`,
+
+	// Tenancy — customers and clusters (REQ-013, REQ-014)
+	`CREATE TABLE IF NOT EXISTS customers (
+		id         TEXT PRIMARY KEY,
+		name       TEXT NOT NULL,
+		slug       TEXT NOT NULL UNIQUE,
+		status     TEXT NOT NULL DEFAULT 'active',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`,
+
+	`CREATE TABLE IF NOT EXISTS clusters (
+		id             TEXT PRIMARY KEY,
+		name           TEXT NOT NULL,
+		customer_id    TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+		kubeconfig_ref TEXT NOT NULL DEFAULT '',
+		status         TEXT NOT NULL DEFAULT 'active',
+		created_at     TEXT NOT NULL,
+		updated_at     TEXT NOT NULL
+	)`,
+
+	`CREATE INDEX IF NOT EXISTS idx_clusters_customer ON clusters(customer_id)`,
+
+	// Operator enrollment and session management (REQ-015, REQ-044)
+	`CREATE TABLE IF NOT EXISTS enrollment_tokens (
+		id          TEXT PRIMARY KEY,
+		customer_id TEXT NOT NULL,
+		cluster_id  TEXT NOT NULL,
+		token       TEXT NOT NULL UNIQUE,
+		created_at  TEXT NOT NULL,
+		expires_at  TEXT NOT NULL,
+		used        INTEGER NOT NULL DEFAULT 0,
+		used_at     TEXT,
+		operator_id TEXT NOT NULL DEFAULT ''
+	)`,
+
+	`CREATE TABLE IF NOT EXISTS operators (
+		id            TEXT PRIMARY KEY,
+		customer_id   TEXT NOT NULL,
+		cluster_id    TEXT NOT NULL,
+		cert_serial   TEXT NOT NULL,
+		status        TEXT NOT NULL DEFAULT 'active',
+		superseded_by TEXT NOT NULL DEFAULT '',
+		revoked_at    TEXT,
+		created_at    TEXT NOT NULL,
+		updated_at    TEXT NOT NULL
+	)`,
+
+	`CREATE INDEX IF NOT EXISTS idx_operators_cert ON operators(cert_serial)`,
+
+	`CREATE TABLE IF NOT EXISTS sessions (
+		id             TEXT PRIMARY KEY,
+		operator_id    TEXT NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
+		status         TEXT NOT NULL DEFAULT 'online',
+		started_at     TEXT NOT NULL,
+		last_heartbeat TEXT NOT NULL,
+		expires_at     TEXT NOT NULL
+	)`,
+
+	`CREATE INDEX IF NOT EXISTS idx_sessions_operator ON sessions(operator_id, status)`,
+
+	// Command outbox (REQ-016)
+	`CREATE TABLE IF NOT EXISTS outbox (
+		id           TEXT PRIMARY KEY,
+		operation_id TEXT NOT NULL DEFAULT '',
+		operator_id  TEXT NOT NULL,
+		payload      BLOB NOT NULL DEFAULT (x''),
+		status       TEXT NOT NULL DEFAULT 'pending',
+		max_inflight INTEGER NOT NULL DEFAULT 1,
+		result_json  TEXT NOT NULL DEFAULT '',
+		created_at   TEXT NOT NULL,
+		updated_at   TEXT NOT NULL,
+		delivered_at TEXT,
+		acked_at     TEXT
+	)`,
+
+	`CREATE INDEX IF NOT EXISTS idx_outbox_operator_status ON outbox(operator_id, status)`,
 }
 
 // nowUTC returns the current time in UTC as an RFC3339 string for SQLite storage.

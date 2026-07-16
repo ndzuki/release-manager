@@ -22,14 +22,17 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// EnrollRequest registers an operator agent with the manager.
+// EnrollRequest registers an operator agent with the orchestrator using a single-use token.
 type EnrollRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	OperatorId    string                 `protobuf:"bytes,1,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
-	ClusterId     string                 `protobuf:"bytes,2,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
-	Capabilities  map[string]string      `protobuf:"bytes,3,rep,name=capabilities,proto3" json:"capabilities,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	EnrollmentToken string                 `protobuf:"bytes,1,opt,name=enrollment_token,json=enrollmentToken,proto3" json:"enrollment_token,omitempty"`
+	CustomerId      string                 `protobuf:"bytes,2,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	ClusterId       string                 `protobuf:"bytes,3,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	OperatorId      string                 `protobuf:"bytes,4,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
+	CsrPem          []byte                 `protobuf:"bytes,5,opt,name=csr_pem,json=csrPem,proto3" json:"csr_pem,omitempty"` // PEM-encoded certificate signing request
+	Capabilities    map[string]string      `protobuf:"bytes,6,rep,name=capabilities,proto3" json:"capabilities,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *EnrollRequest) Reset() {
@@ -62,9 +65,16 @@ func (*EnrollRequest) Descriptor() ([]byte, []int) {
 	return file_operator_v1_operator_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *EnrollRequest) GetOperatorId() string {
+func (x *EnrollRequest) GetEnrollmentToken() string {
 	if x != nil {
-		return x.OperatorId
+		return x.EnrollmentToken
+	}
+	return ""
+}
+
+func (x *EnrollRequest) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
 	}
 	return ""
 }
@@ -76,6 +86,20 @@ func (x *EnrollRequest) GetClusterId() string {
 	return ""
 }
 
+func (x *EnrollRequest) GetOperatorId() string {
+	if x != nil {
+		return x.OperatorId
+	}
+	return ""
+}
+
+func (x *EnrollRequest) GetCsrPem() []byte {
+	if x != nil {
+		return x.CsrPem
+	}
+	return nil
+}
+
 func (x *EnrollRequest) GetCapabilities() map[string]string {
 	if x != nil {
 		return x.Capabilities
@@ -83,13 +107,14 @@ func (x *EnrollRequest) GetCapabilities() map[string]string {
 	return nil
 }
 
-// EnrollResponse acknowledges enrollment and returns a session token.
+// EnrollResponse acknowledges enrollment and starts a session.
 type EnrollResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	TtlSeconds    int64                  `protobuf:"varint,2,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	SessionId      string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	TtlSeconds     int64                  `protobuf:"varint,2,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"`
+	CertificatePem []byte                 `protobuf:"bytes,3,opt,name=certificate_pem,json=certificatePem,proto3" json:"certificate_pem,omitempty"` // signed client certificate (mTLS)
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *EnrollResponse) Reset() {
@@ -136,12 +161,23 @@ func (x *EnrollResponse) GetTtlSeconds() int64 {
 	return 0
 }
 
-// CommandStreamRequest is the operator's acknowledgment of a deploy command.
+func (x *EnrollResponse) GetCertificatePem() []byte {
+	if x != nil {
+		return x.CertificatePem
+	}
+	return nil
+}
+
+// CommandStreamRequest carries operator status updates and acknowledgments.
 type CommandStreamRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
-	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
-	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*CommandStreamRequest_Hello
+	//	*CommandStreamRequest_Ack
+	//	*CommandStreamRequest_Heartbeat
+	//	*CommandStreamRequest_Result
+	Payload       isCommandStreamRequest_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -176,40 +212,320 @@ func (*CommandStreamRequest) Descriptor() ([]byte, []int) {
 	return file_operator_v1_operator_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *CommandStreamRequest) GetOperationId() string {
+func (x *CommandStreamRequest) GetPayload() isCommandStreamRequest_Payload {
 	if x != nil {
-		return x.OperationId
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *CommandStreamRequest) GetHello() *Hello {
+	if x != nil {
+		if x, ok := x.Payload.(*CommandStreamRequest_Hello); ok {
+			return x.Hello
+		}
+	}
+	return nil
+}
+
+func (x *CommandStreamRequest) GetAck() *Ack {
+	if x != nil {
+		if x, ok := x.Payload.(*CommandStreamRequest_Ack); ok {
+			return x.Ack
+		}
+	}
+	return nil
+}
+
+func (x *CommandStreamRequest) GetHeartbeat() *Heartbeat {
+	if x != nil {
+		if x, ok := x.Payload.(*CommandStreamRequest_Heartbeat); ok {
+			return x.Heartbeat
+		}
+	}
+	return nil
+}
+
+func (x *CommandStreamRequest) GetResult() *Result {
+	if x != nil {
+		if x, ok := x.Payload.(*CommandStreamRequest_Result); ok {
+			return x.Result
+		}
+	}
+	return nil
+}
+
+type isCommandStreamRequest_Payload interface {
+	isCommandStreamRequest_Payload()
+}
+
+type CommandStreamRequest_Hello struct {
+	Hello *Hello `protobuf:"bytes,1,opt,name=hello,proto3,oneof"` // initial session hello (after Enroll)
+}
+
+type CommandStreamRequest_Ack struct {
+	Ack *Ack `protobuf:"bytes,2,opt,name=ack,proto3,oneof"` // command acknowledgment
+}
+
+type CommandStreamRequest_Heartbeat struct {
+	Heartbeat *Heartbeat `protobuf:"bytes,3,opt,name=heartbeat,proto3,oneof"` // periodic liveness
+}
+
+type CommandStreamRequest_Result struct {
+	Result *Result `protobuf:"bytes,4,opt,name=result,proto3,oneof"` // command completion result
+}
+
+func (*CommandStreamRequest_Hello) isCommandStreamRequest_Payload() {}
+
+func (*CommandStreamRequest_Ack) isCommandStreamRequest_Payload() {}
+
+func (*CommandStreamRequest_Heartbeat) isCommandStreamRequest_Payload() {}
+
+func (*CommandStreamRequest_Result) isCommandStreamRequest_Payload() {}
+
+// Hello is sent by the operator to establish a session after enrollment.
+type Hello struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	OperatorId    string                 `protobuf:"bytes,2,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Hello) Reset() {
+	*x = Hello{}
+	mi := &file_operator_v1_operator_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Hello) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Hello) ProtoMessage() {}
+
+func (x *Hello) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Hello.ProtoReflect.Descriptor instead.
+func (*Hello) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Hello) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
 	}
 	return ""
 }
 
-func (x *CommandStreamRequest) GetStatus() string {
+func (x *Hello) GetOperatorId() string {
+	if x != nil {
+		return x.OperatorId
+	}
+	return ""
+}
+
+// Ack acknowledges receipt of a command delivered to the operator.
+type Ack struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OutboxId      string                 `protobuf:"bytes,1,opt,name=outbox_id,json=outboxId,proto3" json:"outbox_id,omitempty"`
+	CommandId     string                 `protobuf:"bytes,2,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Ack) Reset() {
+	*x = Ack{}
+	mi := &file_operator_v1_operator_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Ack) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Ack) ProtoMessage() {}
+
+func (x *Ack) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Ack.ProtoReflect.Descriptor instead.
+func (*Ack) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *Ack) GetOutboxId() string {
+	if x != nil {
+		return x.OutboxId
+	}
+	return ""
+}
+
+func (x *Ack) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+// Heartbeat signals operator liveness.
+type Heartbeat struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Heartbeat) Reset() {
+	*x = Heartbeat{}
+	mi := &file_operator_v1_operator_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Heartbeat) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Heartbeat) ProtoMessage() {}
+
+func (x *Heartbeat) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
+func (*Heartbeat) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *Heartbeat) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+// Result reports command execution outcome.
+type Result struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OutboxId      string                 `protobuf:"bytes,1,opt,name=outbox_id,json=outboxId,proto3" json:"outbox_id,omitempty"`
+	CommandId     string                 `protobuf:"bytes,2,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	Status        string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"` // "succeeded" or "failed"
+	Message       string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	Output        []byte                 `protobuf:"bytes,5,opt,name=output,proto3" json:"output,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Result) Reset() {
+	*x = Result{}
+	mi := &file_operator_v1_operator_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Result) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Result) ProtoMessage() {}
+
+func (x *Result) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Result.ProtoReflect.Descriptor instead.
+func (*Result) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *Result) GetOutboxId() string {
+	if x != nil {
+		return x.OutboxId
+	}
+	return ""
+}
+
+func (x *Result) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *Result) GetStatus() string {
 	if x != nil {
 		return x.Status
 	}
 	return ""
 }
 
-func (x *CommandStreamRequest) GetMessage() string {
+func (x *Result) GetMessage() string {
 	if x != nil {
 		return x.Message
 	}
 	return ""
 }
 
-// CommandStreamResponse is a deploy directive from manager to operator.
+func (x *Result) GetOutput() []byte {
+	if x != nil {
+		return x.Output
+	}
+	return nil
+}
+
+// CommandStreamResponse delivers commands and session events.
 type CommandStreamResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
-	Bundle        *v1.ReleaseBundle      `protobuf:"bytes,2,opt,name=bundle,proto3" json:"bundle,omitempty"`
-	Values        []byte                 `protobuf:"bytes,3,opt,name=values,proto3" json:"values,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*CommandStreamResponse_Command
+	//	*CommandStreamResponse_SessionEvent
+	Payload       isCommandStreamResponse_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CommandStreamResponse) Reset() {
 	*x = CommandStreamResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[3]
+	mi := &file_operator_v1_operator_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -221,7 +537,7 @@ func (x *CommandStreamResponse) String() string {
 func (*CommandStreamResponse) ProtoMessage() {}
 
 func (x *CommandStreamResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[3]
+	mi := &file_operator_v1_operator_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -234,57 +550,252 @@ func (x *CommandStreamResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandStreamResponse.ProtoReflect.Descriptor instead.
 func (*CommandStreamResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{3}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *CommandStreamResponse) GetOperationId() string {
+func (x *CommandStreamResponse) GetPayload() isCommandStreamResponse_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *CommandStreamResponse) GetCommand() *Command {
+	if x != nil {
+		if x, ok := x.Payload.(*CommandStreamResponse_Command); ok {
+			return x.Command
+		}
+	}
+	return nil
+}
+
+func (x *CommandStreamResponse) GetSessionEvent() *SessionEvent {
+	if x != nil {
+		if x, ok := x.Payload.(*CommandStreamResponse_SessionEvent); ok {
+			return x.SessionEvent
+		}
+	}
+	return nil
+}
+
+type isCommandStreamResponse_Payload interface {
+	isCommandStreamResponse_Payload()
+}
+
+type CommandStreamResponse_Command struct {
+	Command *Command `protobuf:"bytes,1,opt,name=command,proto3,oneof"` // deploy command to execute
+}
+
+type CommandStreamResponse_SessionEvent struct {
+	SessionEvent *SessionEvent `protobuf:"bytes,2,opt,name=session_event,json=sessionEvent,proto3,oneof"` // session lifecycle event
+}
+
+func (*CommandStreamResponse_Command) isCommandStreamResponse_Payload() {}
+
+func (*CommandStreamResponse_SessionEvent) isCommandStreamResponse_Payload() {}
+
+// Command is a deploy directive sent to the operator.
+type Command struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OutboxId      string                 `protobuf:"bytes,1,opt,name=outbox_id,json=outboxId,proto3" json:"outbox_id,omitempty"`
+	CommandId     string                 `protobuf:"bytes,2,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	OperationId   string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	OperationType string                 `protobuf:"bytes,4,opt,name=operation_type,json=operationType,proto3" json:"operation_type,omitempty"`
+	Bundle        *v1.ReleaseBundle      `protobuf:"bytes,5,opt,name=bundle,proto3" json:"bundle,omitempty"`
+	Values        []byte                 `protobuf:"bytes,6,opt,name=values,proto3" json:"values,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Command) Reset() {
+	*x = Command{}
+	mi := &file_operator_v1_operator_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Command) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Command) ProtoMessage() {}
+
+func (x *Command) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Command.ProtoReflect.Descriptor instead.
+func (*Command) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *Command) GetOutboxId() string {
+	if x != nil {
+		return x.OutboxId
+	}
+	return ""
+}
+
+func (x *Command) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *Command) GetOperationId() string {
 	if x != nil {
 		return x.OperationId
 	}
 	return ""
 }
 
-func (x *CommandStreamResponse) GetBundle() *v1.ReleaseBundle {
+func (x *Command) GetOperationType() string {
+	if x != nil {
+		return x.OperationType
+	}
+	return ""
+}
+
+func (x *Command) GetBundle() *v1.ReleaseBundle {
 	if x != nil {
 		return x.Bundle
 	}
 	return nil
 }
 
-func (x *CommandStreamResponse) GetValues() []byte {
+func (x *Command) GetValues() []byte {
 	if x != nil {
 		return x.Values
 	}
 	return nil
 }
 
+// SessionEvent signals a session lifecycle change.
+type SessionEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"` // "suspect", "offline", "replaced"
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionEvent) Reset() {
+	*x = SessionEvent{}
+	mi := &file_operator_v1_operator_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionEvent) ProtoMessage() {}
+
+func (x *SessionEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionEvent.ProtoReflect.Descriptor instead.
+func (*SessionEvent) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *SessionEvent) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *SessionEvent) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
 var File_operator_v1_operator_proto protoreflect.FileDescriptor
 
 const file_operator_v1_operator_proto_rawDesc = "" +
 	"\n" +
-	"\x1aoperator/v1/operator.proto\x12\voperator.v1\x1a\x16common/v1/domain.proto\"\xe2\x01\n" +
-	"\rEnrollRequest\x12\x1f\n" +
-	"\voperator_id\x18\x01 \x01(\tR\n" +
-	"operatorId\x12\x1d\n" +
+	"\x1aoperator/v1/operator.proto\x12\voperator.v1\x1a\x16common/v1/domain.proto\"\xc7\x02\n" +
+	"\rEnrollRequest\x12)\n" +
+	"\x10enrollment_token\x18\x01 \x01(\tR\x0fenrollmentToken\x12\x1f\n" +
+	"\vcustomer_id\x18\x02 \x01(\tR\n" +
+	"customerId\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x02 \x01(\tR\tclusterId\x12P\n" +
-	"\fcapabilities\x18\x03 \x03(\v2,.operator.v1.EnrollRequest.CapabilitiesEntryR\fcapabilities\x1a?\n" +
+	"cluster_id\x18\x03 \x01(\tR\tclusterId\x12\x1f\n" +
+	"\voperator_id\x18\x04 \x01(\tR\n" +
+	"operatorId\x12\x17\n" +
+	"\acsr_pem\x18\x05 \x01(\fR\x06csrPem\x12P\n" +
+	"\fcapabilities\x18\x06 \x03(\v2,.operator.v1.EnrollRequest.CapabilitiesEntryR\fcapabilities\x1a?\n" +
 	"\x11CapabilitiesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"P\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"y\n" +
 	"\x0eEnrollResponse\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
 	"\vttl_seconds\x18\x02 \x01(\x03R\n" +
-	"ttlSeconds\"k\n" +
-	"\x14CommandStreamRequest\x12!\n" +
-	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x16\n" +
-	"\x06status\x18\x02 \x01(\tR\x06status\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"\x84\x01\n" +
-	"\x15CommandStreamResponse\x12!\n" +
-	"\foperation_id\x18\x01 \x01(\tR\voperationId\x120\n" +
-	"\x06bundle\x18\x02 \x01(\v2\x18.common.v1.ReleaseBundleR\x06bundle\x12\x16\n" +
-	"\x06values\x18\x03 \x01(\fR\x06values2\xb0\x01\n" +
+	"ttlSeconds\x12'\n" +
+	"\x0fcertificate_pem\x18\x03 \x01(\fR\x0ecertificatePem\"\xda\x01\n" +
+	"\x14CommandStreamRequest\x12*\n" +
+	"\x05hello\x18\x01 \x01(\v2\x12.operator.v1.HelloH\x00R\x05hello\x12$\n" +
+	"\x03ack\x18\x02 \x01(\v2\x10.operator.v1.AckH\x00R\x03ack\x126\n" +
+	"\theartbeat\x18\x03 \x01(\v2\x16.operator.v1.HeartbeatH\x00R\theartbeat\x12-\n" +
+	"\x06result\x18\x04 \x01(\v2\x13.operator.v1.ResultH\x00R\x06resultB\t\n" +
+	"\apayload\"G\n" +
+	"\x05Hello\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
+	"\voperator_id\x18\x02 \x01(\tR\n" +
+	"operatorId\"A\n" +
+	"\x03Ack\x12\x1b\n" +
+	"\toutbox_id\x18\x01 \x01(\tR\boutboxId\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x02 \x01(\tR\tcommandId\"*\n" +
+	"\tHeartbeat\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\"\x8e\x01\n" +
+	"\x06Result\x12\x1b\n" +
+	"\toutbox_id\x18\x01 \x01(\tR\boutboxId\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x02 \x01(\tR\tcommandId\x12\x16\n" +
+	"\x06status\x18\x03 \x01(\tR\x06status\x12\x18\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\x12\x16\n" +
+	"\x06output\x18\x05 \x01(\fR\x06output\"\x96\x01\n" +
+	"\x15CommandStreamResponse\x120\n" +
+	"\acommand\x18\x01 \x01(\v2\x14.operator.v1.CommandH\x00R\acommand\x12@\n" +
+	"\rsession_event\x18\x02 \x01(\v2\x19.operator.v1.SessionEventH\x00R\fsessionEventB\t\n" +
+	"\apayload\"\xd9\x01\n" +
+	"\aCommand\x12\x1b\n" +
+	"\toutbox_id\x18\x01 \x01(\tR\boutboxId\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x02 \x01(\tR\tcommandId\x12!\n" +
+	"\foperation_id\x18\x03 \x01(\tR\voperationId\x12%\n" +
+	"\x0eoperation_type\x18\x04 \x01(\tR\roperationType\x120\n" +
+	"\x06bundle\x18\x05 \x01(\v2\x18.common.v1.ReleaseBundleR\x06bundle\x12\x16\n" +
+	"\x06values\x18\x06 \x01(\fR\x06values\"<\n" +
+	"\fSessionEvent\x12\x12\n" +
+	"\x04type\x18\x01 \x01(\tR\x04type\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage2\xb0\x01\n" +
 	"\x0fOperatorService\x12A\n" +
 	"\x06Enroll\x12\x1a.operator.v1.EnrollRequest\x1a\x1b.operator.v1.EnrollResponse\x12Z\n" +
 	"\rCommandStream\x12!.operator.v1.CommandStreamRequest\x1a\".operator.v1.CommandStreamResponse(\x010\x01BBZ@github.com/ndzuki/release-manager/api/gen/operator/v1;operatorv1b\x06proto3"
@@ -301,27 +812,39 @@ func file_operator_v1_operator_proto_rawDescGZIP() []byte {
 	return file_operator_v1_operator_proto_rawDescData
 }
 
-var file_operator_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_operator_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_operator_v1_operator_proto_goTypes = []any{
 	(*EnrollRequest)(nil),         // 0: operator.v1.EnrollRequest
 	(*EnrollResponse)(nil),        // 1: operator.v1.EnrollResponse
 	(*CommandStreamRequest)(nil),  // 2: operator.v1.CommandStreamRequest
-	(*CommandStreamResponse)(nil), // 3: operator.v1.CommandStreamResponse
-	nil,                           // 4: operator.v1.EnrollRequest.CapabilitiesEntry
-	(*v1.ReleaseBundle)(nil),      // 5: common.v1.ReleaseBundle
+	(*Hello)(nil),                 // 3: operator.v1.Hello
+	(*Ack)(nil),                   // 4: operator.v1.Ack
+	(*Heartbeat)(nil),             // 5: operator.v1.Heartbeat
+	(*Result)(nil),                // 6: operator.v1.Result
+	(*CommandStreamResponse)(nil), // 7: operator.v1.CommandStreamResponse
+	(*Command)(nil),               // 8: operator.v1.Command
+	(*SessionEvent)(nil),          // 9: operator.v1.SessionEvent
+	nil,                           // 10: operator.v1.EnrollRequest.CapabilitiesEntry
+	(*v1.ReleaseBundle)(nil),      // 11: common.v1.ReleaseBundle
 }
 var file_operator_v1_operator_proto_depIdxs = []int32{
-	4, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
-	5, // 1: operator.v1.CommandStreamResponse.bundle:type_name -> common.v1.ReleaseBundle
-	0, // 2: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
-	2, // 3: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
-	1, // 4: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
-	3, // 5: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
-	4, // [4:6] is the sub-list for method output_type
-	2, // [2:4] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	10, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
+	3,  // 1: operator.v1.CommandStreamRequest.hello:type_name -> operator.v1.Hello
+	4,  // 2: operator.v1.CommandStreamRequest.ack:type_name -> operator.v1.Ack
+	5,  // 3: operator.v1.CommandStreamRequest.heartbeat:type_name -> operator.v1.Heartbeat
+	6,  // 4: operator.v1.CommandStreamRequest.result:type_name -> operator.v1.Result
+	8,  // 5: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
+	9,  // 6: operator.v1.CommandStreamResponse.session_event:type_name -> operator.v1.SessionEvent
+	11, // 7: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
+	0,  // 8: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
+	2,  // 9: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
+	1,  // 10: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
+	7,  // 11: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
+	10, // [10:12] is the sub-list for method output_type
+	8,  // [8:10] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_operator_v1_operator_proto_init() }
@@ -329,13 +852,23 @@ func file_operator_v1_operator_proto_init() {
 	if File_operator_v1_operator_proto != nil {
 		return
 	}
+	file_operator_v1_operator_proto_msgTypes[2].OneofWrappers = []any{
+		(*CommandStreamRequest_Hello)(nil),
+		(*CommandStreamRequest_Ack)(nil),
+		(*CommandStreamRequest_Heartbeat)(nil),
+		(*CommandStreamRequest_Result)(nil),
+	}
+	file_operator_v1_operator_proto_msgTypes[7].OneofWrappers = []any{
+		(*CommandStreamResponse_Command)(nil),
+		(*CommandStreamResponse_SessionEvent)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_operator_v1_operator_proto_rawDesc), len(file_operator_v1_operator_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
