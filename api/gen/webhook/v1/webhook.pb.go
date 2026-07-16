@@ -22,6 +22,168 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// SubmitReleaseBundleRequest submits a complete release bundle from CI.
+type SubmitReleaseBundleRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	ChartRef      string                 `protobuf:"bytes,2,opt,name=chart_ref,json=chartRef,proto3" json:"chart_ref,omitempty"`
+	ChartVersion  string                 `protobuf:"bytes,3,opt,name=chart_version,json=chartVersion,proto3" json:"chart_version,omitempty"`
+	ChartDigest   string                 `protobuf:"bytes,4,opt,name=chart_digest,json=chartDigest,proto3" json:"chart_digest,omitempty"`
+	Images        []*v1.BundleImage      `protobuf:"bytes,5,rep,name=images,proto3" json:"images,omitempty"`
+	GitCommit     string                 `protobuf:"bytes,6,opt,name=git_commit,json=gitCommit,proto3" json:"git_commit,omitempty"`
+	PipelineId    string                 `protobuf:"bytes,7,opt,name=pipeline_id,json=pipelineId,proto3" json:"pipeline_id,omitempty"`
+	SignatureRef  string                 `protobuf:"bytes,8,opt,name=signature_ref,json=signatureRef,proto3" json:"signature_ref,omitempty"`
+	SbomRef       string                 `protobuf:"bytes,9,opt,name=sbom_ref,json=sbomRef,proto3" json:"sbom_ref,omitempty"`
+	ProvenanceRef string                 `protobuf:"bytes,10,opt,name=provenance_ref,json=provenanceRef,proto3" json:"provenance_ref,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubmitReleaseBundleRequest) Reset() {
+	*x = SubmitReleaseBundleRequest{}
+	mi := &file_webhook_v1_webhook_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmitReleaseBundleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmitReleaseBundleRequest) ProtoMessage() {}
+
+func (x *SubmitReleaseBundleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_webhook_v1_webhook_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmitReleaseBundleRequest.ProtoReflect.Descriptor instead.
+func (*SubmitReleaseBundleRequest) Descriptor() ([]byte, []int) {
+	return file_webhook_v1_webhook_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *SubmitReleaseBundleRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SubmitReleaseBundleRequest) GetChartRef() string {
+	if x != nil {
+		return x.ChartRef
+	}
+	return ""
+}
+
+func (x *SubmitReleaseBundleRequest) GetChartVersion() string {
+	if x != nil {
+		return x.ChartVersion
+	}
+	return ""
+}
+
+func (x *SubmitReleaseBundleRequest) GetChartDigest() string {
+	if x != nil {
+		return x.ChartDigest
+	}
+	return ""
+}
+
+func (x *SubmitReleaseBundleRequest) GetImages() []*v1.BundleImage {
+	if x != nil {
+		return x.Images
+	}
+	return nil
+}
+
+func (x *SubmitReleaseBundleRequest) GetGitCommit() string {
+	if x != nil {
+		return x.GitCommit
+	}
+	return ""
+}
+
+func (x *SubmitReleaseBundleRequest) GetPipelineId() string {
+	if x != nil {
+		return x.PipelineId
+	}
+	return ""
+}
+
+func (x *SubmitReleaseBundleRequest) GetSignatureRef() string {
+	if x != nil {
+		return x.SignatureRef
+	}
+	return ""
+}
+
+func (x *SubmitReleaseBundleRequest) GetSbomRef() string {
+	if x != nil {
+		return x.SbomRef
+	}
+	return ""
+}
+
+func (x *SubmitReleaseBundleRequest) GetProvenanceRef() string {
+	if x != nil {
+		return x.ProvenanceRef
+	}
+	return ""
+}
+
+// SubmitReleaseBundleResponse returns the created or existing ReleaseBundle.
+type SubmitReleaseBundleResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Bundle        *v1.ReleaseBundle      `protobuf:"bytes,1,opt,name=bundle,proto3" json:"bundle,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubmitReleaseBundleResponse) Reset() {
+	*x = SubmitReleaseBundleResponse{}
+	mi := &file_webhook_v1_webhook_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmitReleaseBundleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmitReleaseBundleResponse) ProtoMessage() {}
+
+func (x *SubmitReleaseBundleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_webhook_v1_webhook_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmitReleaseBundleResponse.ProtoReflect.Descriptor instead.
+func (*SubmitReleaseBundleResponse) Descriptor() ([]byte, []int) {
+	return file_webhook_v1_webhook_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *SubmitReleaseBundleResponse) GetBundle() *v1.ReleaseBundle {
+	if x != nil {
+		return x.Bundle
+	}
+	return nil
+}
+
 // IngestArtifactRequest carries an external artifact reference for ingestion.
 type IngestArtifactRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -36,7 +198,7 @@ type IngestArtifactRequest struct {
 
 func (x *IngestArtifactRequest) Reset() {
 	*x = IngestArtifactRequest{}
-	mi := &file_webhook_v1_webhook_proto_msgTypes[0]
+	mi := &file_webhook_v1_webhook_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -48,7 +210,7 @@ func (x *IngestArtifactRequest) String() string {
 func (*IngestArtifactRequest) ProtoMessage() {}
 
 func (x *IngestArtifactRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_webhook_v1_webhook_proto_msgTypes[0]
+	mi := &file_webhook_v1_webhook_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -61,7 +223,7 @@ func (x *IngestArtifactRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestArtifactRequest.ProtoReflect.Descriptor instead.
 func (*IngestArtifactRequest) Descriptor() ([]byte, []int) {
-	return file_webhook_v1_webhook_proto_rawDescGZIP(), []int{0}
+	return file_webhook_v1_webhook_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *IngestArtifactRequest) GetSource() string {
@@ -110,7 +272,7 @@ type IngestArtifactResponse struct {
 
 func (x *IngestArtifactResponse) Reset() {
 	*x = IngestArtifactResponse{}
-	mi := &file_webhook_v1_webhook_proto_msgTypes[1]
+	mi := &file_webhook_v1_webhook_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -122,7 +284,7 @@ func (x *IngestArtifactResponse) String() string {
 func (*IngestArtifactResponse) ProtoMessage() {}
 
 func (x *IngestArtifactResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_webhook_v1_webhook_proto_msgTypes[1]
+	mi := &file_webhook_v1_webhook_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -135,7 +297,7 @@ func (x *IngestArtifactResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestArtifactResponse.ProtoReflect.Descriptor instead.
 func (*IngestArtifactResponse) Descriptor() ([]byte, []int) {
-	return file_webhook_v1_webhook_proto_rawDescGZIP(), []int{1}
+	return file_webhook_v1_webhook_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *IngestArtifactResponse) GetBundle() *v1.ReleaseBundle {
@@ -157,7 +319,23 @@ var File_webhook_v1_webhook_proto protoreflect.FileDescriptor
 const file_webhook_v1_webhook_proto_rawDesc = "" +
 	"\n" +
 	"\x18webhook/v1/webhook.proto\x12\n" +
-	"webhook.v1\x1a\x16common/v1/domain.proto\x1a\x15common/v1/trust.proto\"\xbf\x02\n" +
+	"webhook.v1\x1a\x16common/v1/domain.proto\x1a\x15common/v1/trust.proto\"\xec\x02\n" +
+	"\x1aSubmitReleaseBundleRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
+	"\tchart_ref\x18\x02 \x01(\tR\bchartRef\x12#\n" +
+	"\rchart_version\x18\x03 \x01(\tR\fchartVersion\x12!\n" +
+	"\fchart_digest\x18\x04 \x01(\tR\vchartDigest\x12.\n" +
+	"\x06images\x18\x05 \x03(\v2\x16.common.v1.BundleImageR\x06images\x12\x1d\n" +
+	"\n" +
+	"git_commit\x18\x06 \x01(\tR\tgitCommit\x12\x1f\n" +
+	"\vpipeline_id\x18\a \x01(\tR\n" +
+	"pipelineId\x12#\n" +
+	"\rsignature_ref\x18\b \x01(\tR\fsignatureRef\x12\x19\n" +
+	"\bsbom_ref\x18\t \x01(\tR\asbomRef\x12%\n" +
+	"\x0eprovenance_ref\x18\n" +
+	" \x01(\tR\rprovenanceRef\"O\n" +
+	"\x1bSubmitReleaseBundleResponse\x120\n" +
+	"\x06bundle\x18\x01 \x01(\v2\x18.common.v1.ReleaseBundleR\x06bundle\"\xbf\x02\n" +
 	"\x15IngestArtifactRequest\x12\x16\n" +
 	"\x06source\x18\x01 \x01(\tR\x06source\x12!\n" +
 	"\fartifact_url\x18\x02 \x01(\tR\vartifactUrl\x12#\n" +
@@ -169,8 +347,9 @@ const file_webhook_v1_webhook_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9a\x01\n" +
 	"\x16IngestArtifactResponse\x120\n" +
 	"\x06bundle\x18\x01 \x01(\v2\x18.common.v1.ReleaseBundleR\x06bundle\x12N\n" +
-	"\x13verification_result\x18\x02 \x01(\x0e2\x1d.common.v1.VerificationResultR\x12verificationResult2i\n" +
-	"\x0eWebhookService\x12W\n" +
+	"\x13verification_result\x18\x02 \x01(\x0e2\x1d.common.v1.VerificationResultR\x12verificationResult2\xd1\x01\n" +
+	"\x0eWebhookService\x12f\n" +
+	"\x13SubmitReleaseBundle\x12&.webhook.v1.SubmitReleaseBundleRequest\x1a'.webhook.v1.SubmitReleaseBundleResponse\x12W\n" +
 	"\x0eIngestArtifact\x12!.webhook.v1.IngestArtifactRequest\x1a\".webhook.v1.IngestArtifactResponseB@Z>github.com/ndzuki/release-manager/api/gen/webhook/v1;webhookv1b\x06proto3"
 
 var (
@@ -185,27 +364,34 @@ func file_webhook_v1_webhook_proto_rawDescGZIP() []byte {
 	return file_webhook_v1_webhook_proto_rawDescData
 }
 
-var file_webhook_v1_webhook_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_webhook_v1_webhook_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_webhook_v1_webhook_proto_goTypes = []any{
-	(*IngestArtifactRequest)(nil),  // 0: webhook.v1.IngestArtifactRequest
-	(*IngestArtifactResponse)(nil), // 1: webhook.v1.IngestArtifactResponse
-	nil,                            // 2: webhook.v1.IngestArtifactRequest.MetadataEntry
-	(*v1.SignatureRef)(nil),        // 3: common.v1.SignatureRef
-	(*v1.ReleaseBundle)(nil),       // 4: common.v1.ReleaseBundle
-	(v1.VerificationResult)(0),     // 5: common.v1.VerificationResult
+	(*SubmitReleaseBundleRequest)(nil),  // 0: webhook.v1.SubmitReleaseBundleRequest
+	(*SubmitReleaseBundleResponse)(nil), // 1: webhook.v1.SubmitReleaseBundleResponse
+	(*IngestArtifactRequest)(nil),       // 2: webhook.v1.IngestArtifactRequest
+	(*IngestArtifactResponse)(nil),      // 3: webhook.v1.IngestArtifactResponse
+	nil,                                 // 4: webhook.v1.IngestArtifactRequest.MetadataEntry
+	(*v1.BundleImage)(nil),              // 5: common.v1.BundleImage
+	(*v1.ReleaseBundle)(nil),            // 6: common.v1.ReleaseBundle
+	(*v1.SignatureRef)(nil),             // 7: common.v1.SignatureRef
+	(v1.VerificationResult)(0),          // 8: common.v1.VerificationResult
 }
 var file_webhook_v1_webhook_proto_depIdxs = []int32{
-	2, // 0: webhook.v1.IngestArtifactRequest.metadata:type_name -> webhook.v1.IngestArtifactRequest.MetadataEntry
-	3, // 1: webhook.v1.IngestArtifactRequest.signature_ref:type_name -> common.v1.SignatureRef
-	4, // 2: webhook.v1.IngestArtifactResponse.bundle:type_name -> common.v1.ReleaseBundle
-	5, // 3: webhook.v1.IngestArtifactResponse.verification_result:type_name -> common.v1.VerificationResult
-	0, // 4: webhook.v1.WebhookService.IngestArtifact:input_type -> webhook.v1.IngestArtifactRequest
-	1, // 5: webhook.v1.WebhookService.IngestArtifact:output_type -> webhook.v1.IngestArtifactResponse
-	5, // [5:6] is the sub-list for method output_type
-	4, // [4:5] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	5, // 0: webhook.v1.SubmitReleaseBundleRequest.images:type_name -> common.v1.BundleImage
+	6, // 1: webhook.v1.SubmitReleaseBundleResponse.bundle:type_name -> common.v1.ReleaseBundle
+	4, // 2: webhook.v1.IngestArtifactRequest.metadata:type_name -> webhook.v1.IngestArtifactRequest.MetadataEntry
+	7, // 3: webhook.v1.IngestArtifactRequest.signature_ref:type_name -> common.v1.SignatureRef
+	6, // 4: webhook.v1.IngestArtifactResponse.bundle:type_name -> common.v1.ReleaseBundle
+	8, // 5: webhook.v1.IngestArtifactResponse.verification_result:type_name -> common.v1.VerificationResult
+	0, // 6: webhook.v1.WebhookService.SubmitReleaseBundle:input_type -> webhook.v1.SubmitReleaseBundleRequest
+	2, // 7: webhook.v1.WebhookService.IngestArtifact:input_type -> webhook.v1.IngestArtifactRequest
+	1, // 8: webhook.v1.WebhookService.SubmitReleaseBundle:output_type -> webhook.v1.SubmitReleaseBundleResponse
+	3, // 9: webhook.v1.WebhookService.IngestArtifact:output_type -> webhook.v1.IngestArtifactResponse
+	8, // [8:10] is the sub-list for method output_type
+	6, // [6:8] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_webhook_v1_webhook_proto_init() }
@@ -219,7 +405,7 @@ func file_webhook_v1_webhook_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_webhook_v1_webhook_proto_rawDesc), len(file_webhook_v1_webhook_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

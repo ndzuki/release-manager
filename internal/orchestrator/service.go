@@ -195,14 +195,28 @@ func (s *Service) PublishRelease(
 ) (*connect.Response[orchestratorv1.PublishReleaseResponse], error) {
 	msg := req.Msg
 
-	// Skeleton: verify the definition exists and return not-yet-implemented status.
-	_, err := s.store.Definitions().Get(ctx, msg.ReleaseDefinitionId)
+	// Skeleton: verify the definition exists and cluster is active.
+	def, err := s.store.Definitions().Get(ctx, msg.ReleaseDefinitionId)
 	if err == store.ErrNotFound {
 		return nil, connect.NewError(connect.CodeNotFound,
 			fmt.Errorf("release_definition not found: %s", msg.ReleaseDefinitionId))
 	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
+	}
+
+	// AC-014-04: disabled cluster cannot be a release target.
+	cluster, err := s.store.Clusters().Get(ctx, def.ClusterID)
+	if err == store.ErrNotFound {
+		return nil, connect.NewError(connect.CodeNotFound,
+			fmt.Errorf("cluster %q not found for definition %s", def.ClusterID, msg.ReleaseDefinitionId))
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("cluster lookup: %w", err))
+	}
+	if cluster.Status == store.ClusterDisabled {
+		return nil, connect.NewError(connect.CodePermissionDenied,
+			fmt.Errorf("cluster %q is disabled, cannot publish", cluster.ID))
 	}
 
 	s.logger.Info("publish release requested (skeleton)", "definition", msg.ReleaseDefinitionId)
@@ -236,7 +250,6 @@ func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
 	h := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("%x", h)
 }
-
 
 // Compile-time check: Service implements the Connect handler interface.
 var _ orchestratorv1connect.OrchestratorServiceHandler = (*Service)(nil)

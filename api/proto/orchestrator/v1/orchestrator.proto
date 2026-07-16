@@ -139,6 +139,60 @@ message CreateEnrollmentTokenResponse {
   string expires_at = 2;
 }
 
+// ── Cluster Artifact Routing (REQ-014) ────────────────────────────
+
+// ArtifactType classifies the kind of artifact routed to a cluster.
+enum ArtifactType {
+  ARTIFACT_TYPE_UNSPECIFIED = 0;
+  ARTIFACT_TYPE_IMAGE = 1;
+  ARTIFACT_TYPE_CHART = 2;
+}
+
+// ArtifactMode describes how the cluster obtains the artifact.
+enum ArtifactMode {
+  ARTIFACT_MODE_UNSPECIFIED = 0;
+  ARTIFACT_MODE_DIRECT = 1;
+  ARTIFACT_MODE_PULL_THROUGH_CACHE = 2;
+  ARTIFACT_MODE_REPLICATED = 3;
+}
+
+// ClusterRoute defines a prefix-based routing rule per artifact type.
+message ClusterRoute {
+  string id = 1;
+  string cluster_id = 2;
+  ArtifactType artifact_type = 3;
+  ArtifactMode mode = 4;
+  string source_prefix = 5;
+  string target_prefix = 6;
+}
+
+message ConfigureClusterRouteRequest {
+  string id = 1;
+  string cluster_id = 2;
+  ArtifactType artifact_type = 3;
+  ArtifactMode mode = 4;
+  string source_prefix = 5;
+  string target_prefix = 6;
+}
+
+message ConfigureClusterRouteResponse {
+  ClusterRoute route = 1;
+}
+
+message GetClusterRoutesRequest {
+  string cluster_id = 1;
+}
+
+message GetClusterRoutesResponse {
+  repeated ClusterRoute routes = 1;
+}
+
+message DeleteClusterRouteRequest {
+  string route_id = 1;
+}
+
+message DeleteClusterRouteResponse {}
+
 service OrchestratorService {
   // Release pipeline
   rpc CreateOperation(CreateOperationRequest) returns (CreateOperationResponse);
@@ -162,6 +216,14 @@ service OrchestratorService {
 
   // Emergency change (REQ-032)
   rpc EmergencyChange(EmergencyChangeRequest) returns (EmergencyChangeResponse);
+
+  // Cluster artifact routing (REQ-014)
+  rpc ConfigureClusterRoute(ConfigureClusterRouteRequest) returns (ConfigureClusterRouteResponse);
+  rpc GetClusterRoutes(GetClusterRoutesRequest) returns (GetClusterRoutesResponse);
+  rpc DeleteClusterRoute(DeleteClusterRouteRequest) returns (DeleteClusterRouteResponse);
+
+  // Inventory sync (REQ-017)
+  rpc SyncInventory(SyncInventoryRequest) returns (SyncInventoryResponse);
 }
 
 // ── Emergency Change (REQ-032) ────────────────────────────────────
@@ -199,4 +261,46 @@ message EmergencyChangeResponse {
   string operation_id = 1;
   string status = 2;
   EmergencyConvergence convergence = 3;
+}
+
+// ── Inventory Sync (REQ-017) ───────────────────────────────────────
+
+// InventoryItem represents a single Helm release in a cluster inventory snapshot.
+// It carries only metadata and a values digest — NEVER raw Secret values.
+message InventoryItem {
+  string namespace = 1;
+  string name = 2;
+  string chart = 3;
+  string chart_version = 4;
+  int32 revision = 5;
+  string status = 6;
+  string values_digest = 7;  // SHA-256 of canonical values, not the values themselves
+}
+
+// SyncInventoryRequest is a full snapshot from an operator.
+message SyncInventoryRequest {
+  string operator_id = 1;
+  string cluster_id = 2;
+  string customer_id = 3;
+  string sync_id = 4;             // unique per snapshot, used for idempotency
+  repeated InventoryItem items = 5;
+  bool full_snapshot = 6;         // true = full sync, false = targeted update
+}
+
+// SyncInventoryResponse returns the application result.
+message SyncInventoryResponse {
+  int32 accepted_count = 1;
+  int32 missing_marked_count = 2;
+  int64 snapshot_version = 3;
+  string status = 4;              // "applied", "duplicate", "stale"
+}
+
+// TargetedInventoryUpdate is sent after a single operation completes.
+message TargetedInventoryUpdate {
+  string operator_id = 1;
+  string cluster_id = 2;
+  string customer_id = 3;
+  string sync_id = 4;
+  InventoryItem item = 5;         // the single release that changed
+  string triggered_by_operation = 6;  // operation_id that triggered this update
 }
