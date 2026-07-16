@@ -558,6 +558,23 @@ type VerificationRecord struct {
 	CreatedAt      time.Time
 }
 
+// PreflightCacheKey identifies an artifact preflight result.
+type PreflightCacheKey struct {
+	OperationID        string
+	RoutingVersion     string
+	BundleDigest       string
+	TrustPolicyVersion string
+	SBOMPolicyVersion  string
+}
+
+// PreflightRecord stores the serialized result for an idempotent preflight key.
+type PreflightRecord struct {
+	ID         string
+	Key        PreflightCacheKey
+	ResultJSON []byte
+	CreatedAt  time.Time
+}
+
 // ── Inventory domain types (REQ-017) ───────────────────────────────
 
 // InventoryStatus is the lifecycle state of a release in the inventory cache.
@@ -776,6 +793,12 @@ type VerificationStore interface {
 	GetByDigestAndPolicy(ctx context.Context, artifactDigest, policyVersion string) (*VerificationRecord, error)
 }
 
+// PreflightStore defines the persistence contract for artifact preflight results.
+type PreflightStore interface {
+	Create(ctx context.Context, rec *PreflightRecord) error
+	GetByKey(ctx context.Context, key PreflightCacheKey) (*PreflightRecord, error)
+}
+
 // --- Cluster artifact routing domain types (REQ-014) ---
 
 // ArtifactType classifies the kind of artifact routed to a cluster.
@@ -867,6 +890,7 @@ type Store interface {
 	Notifications() NotificationStore
 	Bundles() BundleStore
 	Verifications() VerificationStore
+	PreflightResults() PreflightStore
 	CustomerEvents() CustomerEventStore
 	ClusterRoutes() ClusterRouteStore
 	Inventories() InventoryStore

@@ -10,6 +10,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/orchestrator"
+	"github.com/ndzuki/release-manager/internal/preflight"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 	"github.com/ndzuki/release-manager/internal/trust"
 )
@@ -42,7 +43,14 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		logger,
 	)
 
-	svc := orchestrator.NewService(st, verifier, s.targetEnv, logger)
+	runner := preflight.New(
+		st.PreflightResults(),
+		verifier,
+		preflight.NewOCIResolver(http.DefaultClient),
+		logger,
+	)
+
+	svc := orchestrator.NewService(st, verifier, runner, s.targetEnv, logger)
 	path, h := orchestratorv1connect.NewOrchestratorServiceHandler(svc)
 	mux.Handle(path, h)
 	return nil
