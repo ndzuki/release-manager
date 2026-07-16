@@ -87,4 +87,17 @@ message SessionEvent {
 service OperatorService {
   rpc Enroll(EnrollRequest) returns (EnrollResponse);
   rpc CommandStream(stream CommandStreamRequest) returns (stream CommandStreamResponse);
+  rpc RevokeOperator(RevokeOperatorRequest) returns (RevokeOperatorResponse);
+}
+
+// RevokeOperatorRequest revokes an operator and closes its active sessions.
+message RevokeOperatorRequest {
+  string operator_id = 1;
+  string reason = 2;
+}
+
+// RevokeOperatorResponse confirms operator revocation.
+message RevokeOperatorResponse {
+  string operator_id = 1;
+  string status = 2;   // "revoked" or "already_revoked"
 }

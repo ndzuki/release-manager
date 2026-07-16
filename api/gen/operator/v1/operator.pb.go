@@ -732,6 +732,112 @@ func (x *SessionEvent) GetMessage() string {
 	return ""
 }
 
+// RevokeOperatorRequest revokes an operator and closes its active sessions.
+type RevokeOperatorRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OperatorId    string                 `protobuf:"bytes,1,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeOperatorRequest) Reset() {
+	*x = RevokeOperatorRequest{}
+	mi := &file_operator_v1_operator_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeOperatorRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeOperatorRequest) ProtoMessage() {}
+
+func (x *RevokeOperatorRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeOperatorRequest.ProtoReflect.Descriptor instead.
+func (*RevokeOperatorRequest) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *RevokeOperatorRequest) GetOperatorId() string {
+	if x != nil {
+		return x.OperatorId
+	}
+	return ""
+}
+
+func (x *RevokeOperatorRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+// RevokeOperatorResponse confirms operator revocation.
+type RevokeOperatorResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OperatorId    string                 `protobuf:"bytes,1,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
+	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"` // "revoked" or "already_revoked"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeOperatorResponse) Reset() {
+	*x = RevokeOperatorResponse{}
+	mi := &file_operator_v1_operator_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeOperatorResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeOperatorResponse) ProtoMessage() {}
+
+func (x *RevokeOperatorResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeOperatorResponse.ProtoReflect.Descriptor instead.
+func (*RevokeOperatorResponse) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *RevokeOperatorResponse) GetOperatorId() string {
+	if x != nil {
+		return x.OperatorId
+	}
+	return ""
+}
+
+func (x *RevokeOperatorResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
 var File_operator_v1_operator_proto protoreflect.FileDescriptor
 
 const file_operator_v1_operator_proto_rawDesc = "" +
@@ -795,10 +901,19 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x06values\x18\x06 \x01(\fR\x06values\"<\n" +
 	"\fSessionEvent\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage2\xb0\x01\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"P\n" +
+	"\x15RevokeOperatorRequest\x12\x1f\n" +
+	"\voperator_id\x18\x01 \x01(\tR\n" +
+	"operatorId\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"Q\n" +
+	"\x16RevokeOperatorResponse\x12\x1f\n" +
+	"\voperator_id\x18\x01 \x01(\tR\n" +
+	"operatorId\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status2\x8b\x02\n" +
 	"\x0fOperatorService\x12A\n" +
 	"\x06Enroll\x12\x1a.operator.v1.EnrollRequest\x1a\x1b.operator.v1.EnrollResponse\x12Z\n" +
-	"\rCommandStream\x12!.operator.v1.CommandStreamRequest\x1a\".operator.v1.CommandStreamResponse(\x010\x01BBZ@github.com/ndzuki/release-manager/api/gen/operator/v1;operatorv1b\x06proto3"
+	"\rCommandStream\x12!.operator.v1.CommandStreamRequest\x1a\".operator.v1.CommandStreamResponse(\x010\x01\x12Y\n" +
+	"\x0eRevokeOperator\x12\".operator.v1.RevokeOperatorRequest\x1a#.operator.v1.RevokeOperatorResponseBBZ@github.com/ndzuki/release-manager/api/gen/operator/v1;operatorv1b\x06proto3"
 
 var (
 	file_operator_v1_operator_proto_rawDescOnce sync.Once
@@ -812,36 +927,40 @@ func file_operator_v1_operator_proto_rawDescGZIP() []byte {
 	return file_operator_v1_operator_proto_rawDescData
 }
 
-var file_operator_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_operator_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_operator_v1_operator_proto_goTypes = []any{
-	(*EnrollRequest)(nil),         // 0: operator.v1.EnrollRequest
-	(*EnrollResponse)(nil),        // 1: operator.v1.EnrollResponse
-	(*CommandStreamRequest)(nil),  // 2: operator.v1.CommandStreamRequest
-	(*Hello)(nil),                 // 3: operator.v1.Hello
-	(*Ack)(nil),                   // 4: operator.v1.Ack
-	(*Heartbeat)(nil),             // 5: operator.v1.Heartbeat
-	(*Result)(nil),                // 6: operator.v1.Result
-	(*CommandStreamResponse)(nil), // 7: operator.v1.CommandStreamResponse
-	(*Command)(nil),               // 8: operator.v1.Command
-	(*SessionEvent)(nil),          // 9: operator.v1.SessionEvent
-	nil,                           // 10: operator.v1.EnrollRequest.CapabilitiesEntry
-	(*v1.ReleaseBundle)(nil),      // 11: common.v1.ReleaseBundle
+	(*EnrollRequest)(nil),          // 0: operator.v1.EnrollRequest
+	(*EnrollResponse)(nil),         // 1: operator.v1.EnrollResponse
+	(*CommandStreamRequest)(nil),   // 2: operator.v1.CommandStreamRequest
+	(*Hello)(nil),                  // 3: operator.v1.Hello
+	(*Ack)(nil),                    // 4: operator.v1.Ack
+	(*Heartbeat)(nil),              // 5: operator.v1.Heartbeat
+	(*Result)(nil),                 // 6: operator.v1.Result
+	(*CommandStreamResponse)(nil),  // 7: operator.v1.CommandStreamResponse
+	(*Command)(nil),                // 8: operator.v1.Command
+	(*SessionEvent)(nil),           // 9: operator.v1.SessionEvent
+	(*RevokeOperatorRequest)(nil),  // 10: operator.v1.RevokeOperatorRequest
+	(*RevokeOperatorResponse)(nil), // 11: operator.v1.RevokeOperatorResponse
+	nil,                            // 12: operator.v1.EnrollRequest.CapabilitiesEntry
+	(*v1.ReleaseBundle)(nil),       // 13: common.v1.ReleaseBundle
 }
 var file_operator_v1_operator_proto_depIdxs = []int32{
-	10, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
+	12, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
 	3,  // 1: operator.v1.CommandStreamRequest.hello:type_name -> operator.v1.Hello
 	4,  // 2: operator.v1.CommandStreamRequest.ack:type_name -> operator.v1.Ack
 	5,  // 3: operator.v1.CommandStreamRequest.heartbeat:type_name -> operator.v1.Heartbeat
 	6,  // 4: operator.v1.CommandStreamRequest.result:type_name -> operator.v1.Result
 	8,  // 5: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
 	9,  // 6: operator.v1.CommandStreamResponse.session_event:type_name -> operator.v1.SessionEvent
-	11, // 7: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
+	13, // 7: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
 	0,  // 8: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
 	2,  // 9: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
-	1,  // 10: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
-	7,  // 11: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
-	10, // [10:12] is the sub-list for method output_type
-	8,  // [8:10] is the sub-list for method input_type
+	10, // 10: operator.v1.OperatorService.RevokeOperator:input_type -> operator.v1.RevokeOperatorRequest
+	1,  // 11: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
+	7,  // 12: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
+	11, // 13: operator.v1.OperatorService.RevokeOperator:output_type -> operator.v1.RevokeOperatorResponse
+	11, // [11:14] is the sub-list for method output_type
+	8,  // [8:11] is the sub-list for method input_type
 	8,  // [8:8] is the sub-list for extension type_name
 	8,  // [8:8] is the sub-list for extension extendee
 	0,  // [0:8] is the sub-list for field type_name
@@ -868,7 +987,7 @@ func file_operator_v1_operator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_operator_v1_operator_proto_rawDesc), len(file_operator_v1_operator_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   11,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

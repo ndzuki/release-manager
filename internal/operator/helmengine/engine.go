@@ -21,6 +21,18 @@ type Release struct {
 	Notes string `json:"notes"`
 }
 
+// ReleaseListItem is a lightweight inventory entry for listing releases.
+// It carries only metadata and a values digest — NEVER raw Secret values.
+type ReleaseListItem struct {
+	Namespace    string
+	Name         string
+	Chart        string
+	ChartVersion string
+	Revision     int
+	Status       string
+	ValuesDigest string // SHA-256 of canonical values, not the values themselves
+}
+
 // ReleaseHistoryEntry represents one entry in the release history.
 type ReleaseHistoryEntry struct {
 	Revision    int    `json:"revision"`
@@ -64,6 +76,10 @@ type Engine interface {
 
 	// GetValues returns the current values for a release.
 	GetValues(ctx context.Context, opts GetValuesOptions) (map[string]interface{}, error)
+
+	// List returns all releases in a namespace. Used for inventory sync.
+	// The returned ReleaseListItem MUST NOT contain raw Secret values.
+	List(ctx context.Context, namespace string) ([]*ReleaseListItem, error)
 }
 
 // InstallOptions holds parameters for Install.

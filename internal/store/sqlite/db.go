@@ -5,33 +5,36 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
 	"github.com/ndzuki/release-manager/internal/store"
+	_ "modernc.org/sqlite"
 )
 
 // Store implements store.Store backed by SQLite.
 type Store struct {
-	db          *sql.DB
-	ops         *operationStore
-	defs        *definitionStore
-	vals        *valuesStore
-	customers   *customerStore
-	clusters    *clusterStore
-	tokens      *enrollmentTokenStore
-	operators   *operatorStore
-	sessions    *sessionStore
-	outbox      *outboxStore
-	users       *userStore
-	authSess    *authSessionStore
-	orgs        *organizationStore
-	orgMembers  *organizationMemberStore
-	bindings    *bindingStore
-	audit       *auditEventStore
-	notif       *notificationStore
-	verifs      *verificationStore
-	routes      *clusterRouteStore
+	db         *sql.DB
+	ops        *operationStore
+	defs       *definitionStore
+	vals       *valuesStore
+	customers  *customerStore
+	clusters   *clusterStore
+	tokens     *enrollmentTokenStore
+	operators  *operatorStore
+	sessions   *sessionStore
+	outbox     *outboxStore
+	users      *userStore
+	authSess   *authSessionStore
+	orgs       *organizationStore
+	orgMembers *organizationMemberStore
+	bindings   *bindingStore
+	audit      *auditEventStore
+	notif      *notificationStore
+	bundles    *bundleStore
+	verifs     *verificationStore
+	routes     *clusterRouteStore
+	invs       *inventoryStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -73,6 +76,10 @@ func Open(dsn string) (*Store, error) {
 	s.orgs = &organizationStore{db: db}
 	s.orgMembers = &organizationMemberStore{db: db}
 	s.bindings = &bindingStore{db: db}
+	s.notif = &notificationStore{db: db}
+	s.audit = &auditEventStore{db: db}
+	s.bundles = &bundleStore{db: db}
+	s.invs = &inventoryStore{db: db}
 	s.verifs = &verificationStore{db: db}
 	s.routes = &clusterRouteStore{db: db}
 	return s, nil
@@ -123,6 +130,9 @@ func (s *Store) Bindings() store.BindingStore { return s.bindings }
 // AuditEvents returns the AuditEventStore.
 func (s *Store) AuditEvents() store.AuditEventStore { return s.audit }
 
+// Bundles returns the BundleStore.
+func (s *Store) Bundles() store.BundleStore { return s.bundles }
+
 // Notifications returns the NotificationStore.
 func (s *Store) Notifications() store.NotificationStore { return s.notif }
 
@@ -131,6 +141,9 @@ func (s *Store) Verifications() store.VerificationStore { return s.verifs }
 
 // ClusterRoutes returns the ClusterRouteStore.
 func (s *Store) ClusterRoutes() store.ClusterRouteStore { return s.routes }
+
+// Inventories returns the InventoryStore.
+func (s *Store) Inventories() store.InventoryStore { return s.invs }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
@@ -148,6 +161,11 @@ func migrate(db *sql.DB) error {
 
 	for _, stmt := range migrationStatements {
 		if _, err := tx.ExecContext(context.Background(), stmt); err != nil {
+			// Allow ALTER TABLE ADD COLUMN to retry idempotently — skip
+			// "duplicate column name" errors from SQLite.
+			if strings.Contains(err.Error(), "duplicate column name") {
+				continue
+			}
 			return fmt.Errorf("migration statement: %w\nstmt: %s", err, stmt)
 		}
 	}
@@ -245,10 +263,14 @@ var migrationStatements = []string{
 		operator_id TEXT NOT NULL DEFAULT ''
 	)`,
 
+	// REQ-015: token_hash column for enrollment token security
+	`ALTER TABLE enrollment_tokens ADD COLUMN token_hash TEXT NOT NULL DEFAULT ''`,
+
 	`CREATE TABLE IF NOT EXISTS operators (
 		id            TEXT PRIMARY KEY,
 		customer_id   TEXT NOT NULL,
 		cluster_id    TEXT NOT NULL,
+		operator_name TEXT NOT NULL DEFAULT '',
 		cert_serial   TEXT NOT NULL,
 		status        TEXT NOT NULL DEFAULT 'active',
 		superseded_by TEXT NOT NULL DEFAULT '',
@@ -258,6 +280,11 @@ var migrationStatements = []string{
 	)`,
 
 	`CREATE INDEX IF NOT EXISTS idx_operators_cert ON operators(cert_serial)`,
+	`CREATE INDEX IF NOT EXISTS idx_operators_name ON operators(operator_name)`,
+	`CREATE INDEX IF NOT EXISTS idx_operators_cluster ON operators(cluster_id, status)`,
+
+	// REQ-015: operator_name column for existing databases
+	`ALTER TABLE operators ADD COLUMN operator_name TEXT NOT NULL DEFAULT ''`,
 
 	`CREATE TABLE IF NOT EXISTS sessions (
 		id             TEXT PRIMARY KEY,
@@ -371,7 +398,6 @@ var migrationStatements = []string{
 		status         TEXT NOT NULL DEFAULT 'pending',
 		retry_count    INTEGER NOT NULL DEFAULT 0,
 		max_retries    INTEGER NOT NULL DEFAULT 3,
-		next_retry_at  TEXT,
 		last_error     TEXT NOT NULL DEFAULT '',
 		dead_letter_at TEXT,
 		metadata       TEXT NOT NULL DEFAULT '{}',
@@ -407,7 +433,58 @@ var migrationStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_cluster_routes_cluster ON cluster_routes(cluster_id, artifact_type)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_cluster_routes_unique ON cluster_routes(cluster_id, artifact_type, source_prefix)`,
+
+	// Release inventory sync (REQ-017)
+	`CREATE TABLE IF NOT EXISTS release_inventory (
+		customer_id      TEXT NOT NULL,
+		cluster_id       TEXT NOT NULL,
+		namespace        TEXT NOT NULL DEFAULT '',
+		release_name     TEXT NOT NULL,
+		chart            TEXT NOT NULL DEFAULT '',
+		chart_version    TEXT NOT NULL DEFAULT '',
+		revision         INTEGER NOT NULL DEFAULT 0,
+		status           TEXT NOT NULL DEFAULT '',
+		values_digest    TEXT NOT NULL DEFAULT '',
+		inventory_status TEXT NOT NULL DEFAULT 'active',
+		last_sync_id     TEXT NOT NULL DEFAULT '',
+		snapshot_version INTEGER NOT NULL DEFAULT 0,
+		created_at       TEXT NOT NULL,
+		updated_at       TEXT NOT NULL,
+		UNIQUE(customer_id, cluster_id, namespace, release_name)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_inventory_cluster ON release_inventory(customer_id, cluster_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_inventory_status ON release_inventory(inventory_status)`,
+
+	`CREATE TABLE IF NOT EXISTS inventory_sync_log (
+		sync_id          TEXT PRIMARY KEY,
+		customer_id      TEXT NOT NULL,
+		cluster_id       TEXT NOT NULL,
+		is_full_snapshot INTEGER NOT NULL DEFAULT 0,
+		accepted_count   INTEGER NOT NULL DEFAULT 0,
+		missing_count    INTEGER NOT NULL DEFAULT 0,
+		snapshot_version INTEGER NOT NULL DEFAULT 0,
+		created_at       TEXT NOT NULL
+	)`,
+
+	// Release bundles (REQ-011)
+	`CREATE TABLE IF NOT EXISTS release_bundles (
+		id             TEXT PRIMARY KEY,
+		name           TEXT NOT NULL DEFAULT '',
+		digest_alg     TEXT NOT NULL DEFAULT 'sha256',
+		digest_value   TEXT NOT NULL DEFAULT '',
+		status         TEXT NOT NULL DEFAULT 'received',
+		chart_ref      TEXT NOT NULL DEFAULT '',
+		chart_version  TEXT NOT NULL DEFAULT '',
+		chart_digest   TEXT NOT NULL DEFAULT '',
+		images         TEXT NOT NULL DEFAULT '[]',
+		git_commit     TEXT NOT NULL DEFAULT '',
+		pipeline_id    TEXT NOT NULL DEFAULT '',
+		signature_ref  TEXT NOT NULL DEFAULT '',
+		sbom_ref       TEXT NOT NULL DEFAULT '',
+		provenance_ref TEXT NOT NULL DEFAULT '',
+		created_at     TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_release_bundles_digest ON release_bundles(digest_alg, digest_value)`,
 }
 
-// nowUTC returns the current time in UTC as an RFC3339 string for SQLite storage.
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }

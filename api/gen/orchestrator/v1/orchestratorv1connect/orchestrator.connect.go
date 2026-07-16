@@ -81,6 +81,9 @@ const (
 	// OrchestratorServiceDeleteClusterRouteProcedure is the fully-qualified name of the
 	// OrchestratorService's DeleteClusterRoute RPC.
 	OrchestratorServiceDeleteClusterRouteProcedure = "/orchestrator.v1.OrchestratorService/DeleteClusterRoute"
+	// OrchestratorServiceSyncInventoryProcedure is the fully-qualified name of the
+	// OrchestratorService's SyncInventory RPC.
+	OrchestratorServiceSyncInventoryProcedure = "/orchestrator.v1.OrchestratorService/SyncInventory"
 )
 
 // OrchestratorServiceClient is a client for the orchestrator.v1.OrchestratorService service.
@@ -107,6 +110,8 @@ type OrchestratorServiceClient interface {
 	ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error)
 	GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error)
 	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
+	// Inventory sync (REQ-017)
+	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
 
 // NewOrchestratorServiceClient constructs a client for the orchestrator.v1.OrchestratorService
@@ -216,6 +221,12 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("DeleteClusterRoute")),
 			connect.WithClientOptions(opts...),
 		),
+		syncInventory: connect.NewClient[v1.SyncInventoryRequest, v1.SyncInventoryResponse](
+			httpClient,
+			baseURL+OrchestratorServiceSyncInventoryProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("SyncInventory")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -237,6 +248,7 @@ type orchestratorServiceClient struct {
 	configureClusterRoute *connect.Client[v1.ConfigureClusterRouteRequest, v1.ConfigureClusterRouteResponse]
 	getClusterRoutes      *connect.Client[v1.GetClusterRoutesRequest, v1.GetClusterRoutesResponse]
 	deleteClusterRoute    *connect.Client[v1.DeleteClusterRouteRequest, v1.DeleteClusterRouteResponse]
+	syncInventory         *connect.Client[v1.SyncInventoryRequest, v1.SyncInventoryResponse]
 }
 
 // CreateOperation calls orchestrator.v1.OrchestratorService.CreateOperation.
@@ -319,6 +331,11 @@ func (c *orchestratorServiceClient) DeleteClusterRoute(ctx context.Context, req 
 	return c.deleteClusterRoute.CallUnary(ctx, req)
 }
 
+// SyncInventory calls orchestrator.v1.OrchestratorService.SyncInventory.
+func (c *orchestratorServiceClient) SyncInventory(ctx context.Context, req *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error) {
+	return c.syncInventory.CallUnary(ctx, req)
+}
+
 // OrchestratorServiceHandler is an implementation of the orchestrator.v1.OrchestratorService
 // service.
 type OrchestratorServiceHandler interface {
@@ -344,6 +361,8 @@ type OrchestratorServiceHandler interface {
 	ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error)
 	GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error)
 	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
+	// Inventory sync (REQ-017)
+	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
 
 // NewOrchestratorServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -449,6 +468,12 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("DeleteClusterRoute")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orchestratorServiceSyncInventoryHandler := connect.NewUnaryHandler(
+		OrchestratorServiceSyncInventoryProcedure,
+		svc.SyncInventory,
+		connect.WithSchema(orchestratorServiceMethods.ByName("SyncInventory")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/orchestrator.v1.OrchestratorService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case OrchestratorServiceCreateOperationProcedure:
@@ -483,6 +508,8 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceGetClusterRoutesHandler.ServeHTTP(w, r)
 		case OrchestratorServiceDeleteClusterRouteProcedure:
 			orchestratorServiceDeleteClusterRouteHandler.ServeHTTP(w, r)
+		case OrchestratorServiceSyncInventoryProcedure:
+			orchestratorServiceSyncInventoryHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -554,4 +581,8 @@ func (UnimplementedOrchestratorServiceHandler) GetClusterRoutes(context.Context,
 
 func (UnimplementedOrchestratorServiceHandler) DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.DeleteClusterRoute is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.SyncInventory is not implemented"))
 }
