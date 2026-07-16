@@ -9,10 +9,11 @@ option go_package = "github.com/ndzuki/release-manager/api/gen/audit/v1;auditv1"
 // ActorKind classifies the principal that performed an action.
 enum ActorKind {
   ACTOR_KIND_UNSPECIFIED = 0;
-  ACTOR_KIND_USER = 1;
-  ACTOR_KIND_SERVICE = 2;
-  ACTOR_KIND_API_KEY = 3;
-  ACTOR_KIND_SYSTEM = 4;
+  ACTOR_KIND_ANONYMOUS = 1;
+  ACTOR_KIND_USER = 2;
+  ACTOR_KIND_SERVICE = 3;
+  ACTOR_KIND_API_KEY = 4;
+  ACTOR_KIND_SYSTEM = 5;
 }
 
 // AuditActor identifies the principal that performed an audited action.
@@ -47,6 +48,8 @@ message EmitAuditRequest {
 message EmitAuditResponse {
   int32 accepted = 1;
   int32 rejected = 2;
+  repeated string audit_event_ids = 3;
+  repeated string rejection_codes = 4;
 }
 
 // AuditService collects audit events from other services.

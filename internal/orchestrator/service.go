@@ -15,6 +15,7 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
+	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/store"
 	"github.com/ndzuki/release-manager/internal/trust"
@@ -26,11 +27,16 @@ type Service struct {
 	verifier  trust.Verifier
 	targetEnv string
 	logger    *slog.Logger
+	audit     audit.Sink
 }
 
 // NewService creates a new orchestrator Connect service.
-func NewService(st store.Store, verifier trust.Verifier, targetEnv string, logger *slog.Logger) *Service {
-	return &Service{store: st, verifier: verifier, targetEnv: targetEnv, logger: logger}
+func NewService(st store.Store, verifier trust.Verifier, targetEnv string, logger *slog.Logger, auditSink ...audit.Sink) *Service {
+	service := &Service{store: st, verifier: verifier, targetEnv: targetEnv, logger: logger}
+	if len(auditSink) > 0 {
+		service.audit = auditSink[0]
+	}
+	return service
 }
 
 // CreateOperation creates a new release operation from the given request.
@@ -183,6 +189,19 @@ func (s *Service) CreateOperation(
 		"type", op.OperationType,
 		"definition", op.ReleaseDefinitionID,
 	)
+	actorKind, actorID := auditActor(op.Actor)
+	s.emitAudit(audit.NewEvent(
+		actorKind,
+		actorID,
+		op.Actor.Organization,
+		"",
+		"operation",
+		op.ID,
+		"create",
+		"accepted",
+		"release operation created",
+		map[string]string{"operation_type": string(op.OperationType), "release_definition_id": op.ReleaseDefinitionID},
+	))
 
 	return connect.NewResponse(&orchestratorv1.CreateOperationResponse{
 		OperationId:        op.ID,
@@ -228,6 +247,18 @@ func (s *Service) PublishRelease(
 	}
 
 	s.logger.Info("publish release requested (skeleton)", "definition", msg.ReleaseDefinitionId)
+	s.emitAudit(audit.NewEvent(
+		store.AuditActorAnonymous,
+		"",
+		"",
+		"",
+		"release_definition",
+		msg.ReleaseDefinitionId,
+		"publish",
+		"requested",
+		"publish release requested",
+		nil,
+	))
 	return connect.NewResponse(&orchestratorv1.PublishReleaseResponse{
 		OperationId: "",
 		Status:      "not_implemented",
@@ -257,6 +288,23 @@ func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
 	)
 	h := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("%x", h)
+}
+
+func auditActor(actor store.ActorContext) (store.AuditActorKind, string) {
+	if actor.UserID == "" {
+		return store.AuditActorAnonymous, ""
+	}
+	return store.AuditActorUser, actor.UserID
+}
+
+func (s *Service) emitAudit(event *store.AuditEvent) {
+	if s.audit == nil {
+		return
+	}
+	result := s.audit.Emit(event)
+	if !result.Accepted {
+		s.logger.Warn("audit event rejected", "event_id", result.EventID, "code", result.Code)
+	}
 }
 
 // checkCustomerNotDisabled verifies the customer is not disabled.

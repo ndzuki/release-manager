@@ -385,10 +385,11 @@ type OrgCustomerBinding struct {
 type AuditActorKind string
 
 const (
-	AuditActorUser    AuditActorKind = "user"
-	AuditActorService AuditActorKind = "service"
-	AuditActorAPIKey  AuditActorKind = "api_key"
-	AuditActorSystem  AuditActorKind = "system"
+	AuditActorAnonymous AuditActorKind = "anonymous"
+	AuditActorUser      AuditActorKind = "user"
+	AuditActorService   AuditActorKind = "service"
+	AuditActorAPIKey    AuditActorKind = "api_key"
+	AuditActorSystem    AuditActorKind = "system"
 )
 
 // AuditEvent represents a single audit trail entry.
@@ -612,6 +613,7 @@ type DefinitionStore interface {
 	Create(ctx context.Context, def *ReleaseDefinition) error
 	Get(ctx context.Context, id string) (*ReleaseDefinition, error)
 }
+
 // ValuesStore defines the persistence contract for values revisions.
 // For Create, the caller MUST populate Revision via GetNextRevisionNumber
 // and Digest via the values package before calling.

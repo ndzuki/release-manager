@@ -18,6 +18,11 @@ import (
 	"github.com/ndzuki/release-manager/internal/handler"
 )
 
+// Shutdowner releases resources after the HTTP server stops accepting requests.
+type Shutdowner interface {
+	Shutdown(ctx context.Context) error
+}
+
 // Service is the interface each microservice must satisfy.
 type Service interface {
 	Name() string
@@ -78,6 +83,11 @@ func Run(configPath string, svc Service) {
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("shutdown error", "error", err)
+	}
+	if shutdowner, ok := svc.(Shutdowner); ok {
+		if err := shutdowner.Shutdown(shutdownCtx); err != nil {
+			logger.Error("service shutdown error", "error", err)
+		}
 	}
 
 	logger.Info(svc.Name() + " stopped")
