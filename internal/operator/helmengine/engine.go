@@ -6,6 +6,9 @@ package helmengine
 import (
 	"context"
 	"errors"
+	"time"
+
+	"helm.sh/helm/v3/pkg/chart"
 )
 
 // Release represents the result of a Helm operation.
@@ -84,18 +87,24 @@ type Engine interface {
 
 // InstallOptions holds parameters for Install.
 type InstallOptions struct {
-	Namespace   string
-	ReleaseName string
-	ChartPath   string
-	Values      map[string]interface{}
+	Namespace       string
+	ReleaseName     string
+	Chart           *chart.Chart
+	Values          map[string]interface{}
+	Atomic          bool
+	CreateNamespace bool
+	Timeout         time.Duration
 }
 
 // UpgradeOptions holds parameters for Upgrade.
 type UpgradeOptions struct {
 	Namespace   string
 	ReleaseName string
-	ChartPath   string
+	Chart       *chart.Chart
 	Values      map[string]interface{}
+	Atomic      bool
+	MaxHistory  int
+	Timeout     time.Duration
 }
 
 // RollbackOptions holds parameters for Rollback.
@@ -103,6 +112,7 @@ type RollbackOptions struct {
 	Namespace      string
 	ReleaseName    string
 	TargetRevision int
+	Timeout        time.Duration
 }
 
 // StatusOptions holds parameters for Status.
@@ -113,8 +123,8 @@ type StatusOptions struct {
 
 // HistoryOptions holds parameters for History.
 type HistoryOptions struct {
-	Namespace   string
-	ReleaseName string
+	Namespace    string
+	ReleaseName  string
 	MaxRevisions int
 }
 
@@ -122,4 +132,6 @@ type HistoryOptions struct {
 type GetValuesOptions struct {
 	Namespace   string
 	ReleaseName string
+	AllValues   bool
+	Version     int
 }

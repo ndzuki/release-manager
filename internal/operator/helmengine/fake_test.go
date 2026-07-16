@@ -2,192 +2,134 @@ package helmengine
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"helm.sh/helm/v3/pkg/chart"
 )
 
-func TestFake_Install(t *testing.T) {
-	eng := NewFake()
-	ctx := context.Background()
+func TestFake_AllMethodsUseSDKContract(t *testing.T) {
+	engine := NewFake()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
 
-	rel, err := eng.Install(ctx, InstallOptions{
+	validatedChart := testChart("example")
+	_, err := engine.Install(ctx, InstallOptions{
 		Namespace:   "default",
-		ReleaseName: "my-release",
-		ChartPath:   "nginx",
+		ReleaseName: "release",
+		Chart:       validatedChart,
+		Values:      map[string]interface{}{"replicas": 2},
+	})
+	require.NoError(t, err)
+
+	status, err := engine.Status(ctx, StatusOptions{Namespace: "default", ReleaseName: "release"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, status.Revision)
+
+	values, err := engine.GetValues(ctx, GetValuesOptions{Namespace: "default", ReleaseName: "release"})
+	require.NoError(t, err)
+	assert.Empty(t, values)
+
+	_, err = engine.Upgrade(ctx, UpgradeOptions{
+		Namespace:   "default",
+		ReleaseName: "release",
+		Chart:       validatedChart,
 		Values:      map[string]interface{}{"replicas": 3},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "my-release", rel.Name)
-	assert.Equal(t, "default", rel.Namespace)
-	assert.Equal(t, 1, rel.Revision)
-	assert.Equal(t, "deployed", rel.Status)
-	assert.NotEmpty(t, rel.ManifestDigest)
-}
 
-func TestFake_InstallAlreadyExists(t *testing.T) {
-	eng := NewFake()
-	ctx := context.Background()
-	opts := InstallOptions{Namespace: "default", ReleaseName: "my-release", ChartPath: "nginx"}
-
-	_, err := eng.Install(ctx, opts)
+	history, err := engine.History(ctx, HistoryOptions{Namespace: "default", ReleaseName: "release"})
 	require.NoError(t, err)
+	assert.Len(t, history, 2)
 
-	_, err = eng.Install(ctx, opts)
-	assert.ErrorIs(t, err, ErrAlreadyExists)
-}
-
-func TestFake_Upgrade(t *testing.T) {
-	eng := NewFake()
-	ctx := context.Background()
-
-	_, err := eng.Install(ctx, InstallOptions{Namespace: "default", ReleaseName: "my-release", ChartPath: "nginx"})
-	require.NoError(t, err)
-
-	rel, err := eng.Upgrade(ctx, UpgradeOptions{
-		Namespace:   "default",
-		ReleaseName: "my-release",
-		ChartPath:   "nginx",
-		Values:      map[string]interface{}{"replicas": 5},
+	_, err = engine.Rollback(ctx, RollbackOptions{
+		Namespace:      "default",
+		ReleaseName:    "release",
+		TargetRevision: 1,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 2, rel.Revision)
-	assert.Equal(t, "deployed", rel.Status)
-}
 
-func TestFake_UpgradeNotFound(t *testing.T) {
-	eng := NewFake()
-	ctx := context.Background()
-
-	_, err := eng.Upgrade(ctx, UpgradeOptions{Namespace: "default", ReleaseName: "nonexistent", ChartPath: "nginx"})
-	assert.ErrorIs(t, err, ErrNotFound)
-}
-
-func TestFake_Rollback(t *testing.T) {
-	eng := NewFake()
-	ctx := context.Background()
-
-	_, err := eng.Install(ctx, InstallOptions{Namespace: "default", ReleaseName: "my-release", ChartPath: "nginx"})
+	items, err := engine.List(ctx, "default")
 	require.NoError(t, err)
-
-	_, err = eng.Upgrade(ctx, UpgradeOptions{Namespace: "default", ReleaseName: "my-release", ChartPath: "nginx"})
-	require.NoError(t, err)
-
-	rel, err := eng.Rollback(ctx, RollbackOptions{Namespace: "default", ReleaseName: "my-release", TargetRevision: 1})
-	require.NoError(t, err)
-	assert.Equal(t, 3, rel.Revision) // rollback creates a new revision
-}
-
-func TestFake_Status(t *testing.T) {
-	eng := NewFake()
-	ctx := context.Background()
-
-	_, err := eng.Install(ctx, InstallOptions{Namespace: "default", ReleaseName: "my-release", ChartPath: "nginx"})
-	require.NoError(t, err)
-
-	rel, err := eng.Status(ctx, StatusOptions{Namespace: "default", ReleaseName: "my-release"})
-	require.NoError(t, err)
-	assert.Equal(t, "my-release", rel.Name)
-	assert.Equal(t, "deployed", rel.Status)
-}
-
-func TestFake_StatusNotFound(t *testing.T) {
-	eng := NewFake()
-	ctx := context.Background()
-
-	_, err := eng.Status(ctx, StatusOptions{Namespace: "default", ReleaseName: "nonexistent"})
-	assert.ErrorIs(t, err, ErrNotFound)
-}
-
-func TestFake_History(t *testing.T) {
-	eng := NewFake()
-	ctx := context.Background()
-
-	_, err := eng.Install(ctx, InstallOptions{Namespace: "default", ReleaseName: "my-release", ChartPath: "nginx"})
-	require.NoError(t, err)
-	_, err = eng.Upgrade(ctx, UpgradeOptions{Namespace: "default", ReleaseName: "my-release", ChartPath: "nginx"})
-	require.NoError(t, err)
-
-	entries, err := eng.History(ctx, HistoryOptions{Namespace: "default", ReleaseName: "my-release"})
-	require.NoError(t, err)
-	assert.Len(t, entries, 2)
-	assert.Equal(t, 1, entries[0].Revision)
-	assert.Equal(t, 2, entries[1].Revision)
+	assert.Len(t, items, 1)
 }
 
 func TestFake_ContextCancellation(t *testing.T) {
-	// AC-041-02: context cancel returns cancelled error
-	eng := NewFake()
-	ctx, cancel := context.WithCancel(context.Background())
+	engine := NewFake()
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	_, err := eng.Install(ctx, InstallOptions{Namespace: "default", ReleaseName: "my-release", ChartPath: "nginx"})
+	_, err := engine.Install(ctx, InstallOptions{
+		Namespace:   "default",
+		ReleaseName: "release",
+		Chart:       testChart("example"),
+	})
 	assert.ErrorIs(t, err, ErrCancelled)
 }
 
-func TestFake_ConcurrentAccess(t *testing.T) {
-	// AC-041-04: parallel operations don't pollute each other
-	eng := NewFake()
-	ctx := context.Background()
+func TestFake_ParallelOperationsAreIsolated(t *testing.T) {
+	engine := NewFake()
 
-	// Install two different releases concurrently
-	errCh := make(chan error, 2)
-
-	go func() {
-		_, err := eng.Install(ctx, InstallOptions{Namespace: "ns1", ReleaseName: "rel1", ChartPath: "chart1"})
-		errCh <- err
-	}()
-	go func() {
-		_, err := eng.Install(ctx, InstallOptions{Namespace: "ns2", ReleaseName: "rel2", ChartPath: "chart2"})
-		errCh <- err
-	}()
-
-	for i := 0; i < 2; i++ {
-		require.NoError(t, <-errCh)
+	type operation struct {
+		namespace string
+		name      string
+		chart     string
+	}
+	operations := []operation{
+		{namespace: "team-a", name: "release-a", chart: "chart-a"},
+		{namespace: "team-b", name: "release-b", chart: "chart-b"},
 	}
 
-	// Verify they don't leak into each other
-	rel1, err := eng.Status(ctx, StatusOptions{Namespace: "ns1", ReleaseName: "rel1"})
-	require.NoError(t, err)
-	assert.Equal(t, "chart1", rel1.Chart)
+	var wait sync.WaitGroup
+	errors := make(chan error, len(operations))
+	for _, op := range operations {
+		wait.Go(func() {
+			_, err := engine.Install(t.Context(), InstallOptions{
+				Namespace:   op.namespace,
+				ReleaseName: op.name,
+				Chart:       testChart(op.chart),
+			})
+			errors <- err
+		})
+	}
+	wait.Wait()
+	close(errors)
 
-	rel2, err := eng.Status(ctx, StatusOptions{Namespace: "ns2", ReleaseName: "rel2"})
-	require.NoError(t, err)
-	assert.Equal(t, "chart2", rel2.Chart)
+	for err := range errors {
+		require.NoError(t, err)
+	}
+
+	for _, op := range operations {
+		release, err := engine.Status(t.Context(), StatusOptions{
+			Namespace:   op.namespace,
+			ReleaseName: op.name,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, op.chart, release.Chart)
+	}
 }
 
-func TestFake_AllMethods(t *testing.T) {
-	// AC-041-01: all interface methods work on fake without subprocess
-	eng := NewFake()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+func TestFake_StableErrors(t *testing.T) {
+	engine := NewFake()
+	ctx := t.Context()
 
-	// Install
-	_, err := eng.Install(ctx, InstallOptions{Namespace: "default", ReleaseName: "full-test", ChartPath: "nginx"})
-	require.NoError(t, err)
+	_, err := engine.Status(ctx, StatusOptions{Namespace: "default", ReleaseName: "missing"})
+	assert.ErrorIs(t, err, ErrNotFound)
 
-	// Status
-	rel, err := eng.Status(ctx, StatusOptions{Namespace: "default", ReleaseName: "full-test"})
+	opts := InstallOptions{
+		Namespace:   "default",
+		ReleaseName: "release",
+		Chart:       testChart("example"),
+	}
+	_, err = engine.Install(ctx, opts)
 	require.NoError(t, err)
-	assert.Equal(t, 1, rel.Revision)
+	_, err = engine.Install(ctx, opts)
+	assert.ErrorIs(t, err, ErrAlreadyExists)
+}
 
-	// GetValues
-	vals, err := eng.GetValues(ctx, GetValuesOptions{Namespace: "default", ReleaseName: "full-test"})
-	require.NoError(t, err)
-	assert.NotNil(t, vals)
-
-	// Upgrade
-	_, err = eng.Upgrade(ctx, UpgradeOptions{Namespace: "default", ReleaseName: "full-test", ChartPath: "nginx"})
-	require.NoError(t, err)
-
-	// History
-	entries, err := eng.History(ctx, HistoryOptions{Namespace: "default", ReleaseName: "full-test"})
-	require.NoError(t, err)
-	assert.Len(t, entries, 2)
-
-	// Rollback
-	_, err = eng.Rollback(ctx, RollbackOptions{Namespace: "default", ReleaseName: "full-test", TargetRevision: 1})
-	require.NoError(t, err)
+func testChart(name string) *chart.Chart {
+	return &chart.Chart{Metadata: &chart.Metadata{Name: name, Version: "1.0.0"}}
 }

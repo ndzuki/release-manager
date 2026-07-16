@@ -43,12 +43,16 @@ func (f *Fake) Install(ctx context.Context, opts InstallOptions) (*Release, erro
 	}
 
 	f.counter++
+	chartName := ""
+	if opts.Chart != nil && opts.Chart.Metadata != nil {
+		chartName = opts.Chart.Metadata.Name
+	}
 	rel := &Release{
 		Name:           opts.ReleaseName,
 		Namespace:      opts.Namespace,
 		Revision:       1,
 		Status:         "deployed",
-		Chart:          opts.ChartPath,
+		Chart:          chartName,
 		ManifestDigest: fmt.Sprintf("fake-digest-%d", f.counter),
 		Notes:          fmt.Sprintf("installed %s/%s rev=1", opts.Namespace, opts.ReleaseName),
 	}
@@ -56,7 +60,7 @@ func (f *Fake) Install(ctx context.Context, opts InstallOptions) (*Release, erro
 	f.history[key] = append(f.history[key], ReleaseHistoryEntry{
 		Revision:    1,
 		Status:      "deployed",
-		Chart:       opts.ChartPath,
+		Chart:       chartName,
 		Description: "Install complete",
 	})
 	return rel, nil
@@ -79,12 +83,16 @@ func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, erro
 
 	f.counter++
 	newRev := existing.Revision + 1
+	chartName := existing.Chart
+	if opts.Chart != nil && opts.Chart.Metadata != nil {
+		chartName = opts.Chart.Metadata.Name
+	}
 	rel := &Release{
 		Name:           opts.ReleaseName,
 		Namespace:      opts.Namespace,
 		Revision:       newRev,
 		Status:         "deployed",
-		Chart:          opts.ChartPath,
+		Chart:          chartName,
 		ManifestDigest: fmt.Sprintf("fake-digest-%d", f.counter),
 		Notes:          fmt.Sprintf("upgraded %s/%s rev=%d", opts.Namespace, opts.ReleaseName, newRev),
 	}
@@ -92,7 +100,7 @@ func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, erro
 	f.history[key] = append(f.history[key], ReleaseHistoryEntry{
 		Revision:    newRev,
 		Status:      "deployed",
-		Chart:       opts.ChartPath,
+		Chart:       chartName,
 		Description: "Upgrade complete",
 	})
 	return rel, nil
@@ -188,7 +196,6 @@ func (f *Fake) GetValues(ctx context.Context, opts GetValuesOptions) (map[string
 	return map[string]interface{}{}, nil
 }
 
-
 // List returns all releases in a namespace.
 func (f *Fake) List(ctx context.Context, namespace string) ([]*ReleaseListItem, error) {
 	if err := ctx.Err(); err != nil {
@@ -206,7 +213,7 @@ func (f *Fake) List(ctx context.Context, namespace string) ([]*ReleaseListItem, 
 				Namespace:    rel.Namespace,
 				Name:         rel.Name,
 				Chart:        rel.Chart,
-				ChartVersion: rel.Chart,  // Fake stores chart name only; version not tracked
+				ChartVersion: rel.Chart, // Fake stores chart name only; version not tracked
 				Revision:     rel.Revision,
 				Status:       rel.Status,
 				ValuesDigest: "",
@@ -215,5 +222,6 @@ func (f *Fake) List(ctx context.Context, namespace string) ([]*ReleaseListItem, 
 	}
 	return items, nil
 }
+
 // Compile-time interface check.
 var _ Engine = (*Fake)(nil)
