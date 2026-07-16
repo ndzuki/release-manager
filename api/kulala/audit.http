@@ -1,55 +1,69 @@
 # =============================================================================
-# Release Manager — Audit & Notification APIs
-# Environment: dev (Manager :8081)
+# Release Manager — Audit Query & Export APIs
+# Environment: release-api :8087
 # =============================================================================
 
-### List Audit Logs
-# @name ListAuditLogs
-GET {{BASE_URL}}/api/v1/audit-logs?page=1&page_size=20
-Authorization: Bearer {{token}}
+@BASE_URL = http://localhost:8087
+@AUDIT_CONNECT = {{BASE_URL}}/audit.v1.AuditService
 
-### Get Audit Log Detail
-# @name GetAuditLog
-GET {{BASE_URL}}/api/v1/audit-logs/{{audit_log_id}}
-Authorization: Bearer {{token}}
-
-### Export Audit Logs
-# @name ExportAuditLogs
-POST {{BASE_URL}}/api/v1/audit-logs/exports
+### Query Audit Events
+# @name QueryAuditEvents
+POST {{AUDIT_CONNECT}}/QueryAuditEvents
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
 {
-  "from": "2026-07-01T00:00:00Z",
-  "to": "2026-07-15T00:00:00Z",
-  "format": "jsonl"
+  "filter": {
+    "resource_type": "release_operation",
+    "action": "create",
+    "time_range": {
+      "start": "2026-07-01T00:00:00Z",
+      "end": "2026-07-15T00:00:00Z"
+    }
+  },
+  "pagination": {
+    "page_size": 20,
+    "page_token": ""
+  }
 }
 
-### List Notification Jobs
-# @name ListNotificationJobs
-GET {{BASE_URL}}/api/v1/notification-jobs
-Authorization: Bearer {{token}}
-
-### Retry Notification Job
-# @name RetryNotificationJob
-POST {{BASE_URL}}/api/v1/notification-jobs/{{job_id}}/retry
-Authorization: Bearer {{token}}
-
-### Send Test Notification
-# @name SendTestNotification
-POST {{BASE_URL}}/api/v1/notification-settings/test
+### Export Audit Events
+# @name ExportAuditEvents
+POST {{AUDIT_CONNECT}}/ExportAuditEvents
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
 {
-  "channel": "dingtalk",
-  "recipient": "{{DINGTALK_WEBHOOK_URL}}"
+  "filter": {
+    "time_range": {
+      "start": "2026-07-01T00:00:00Z",
+      "end": "2026-07-15T00:00:00Z"
+    }
+  }
 }
 
-# =============================================================================
-# Metrics (Layer 6)
-# =============================================================================
+### Emit Audit Event
+# @name EmitAuditEvent
+POST {{AUDIT_CONNECT}}/Emit
+Content-Type: application/json
+Authorization: Bearer {{token}}
 
-### Prometheus Metrics
-# @name Metrics
-GET {{BASE_URL}}/metrics
+{
+  "events": [
+    {
+      "actor": {
+        "kind": "ACTOR_KIND_USER",
+        "id": "user-001",
+        "organization_id": "org-001",
+        "role": "release_admin"
+      },
+      "resource_type": "release_operation",
+      "resource_id": "operation-001",
+      "action": "create",
+      "status": "accepted",
+      "metadata": {
+        "source": "kulala"
+      }
+    }
+  ]
+}

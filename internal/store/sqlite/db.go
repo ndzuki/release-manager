@@ -14,28 +14,29 @@ import (
 
 // Store implements store.Store backed by SQLite.
 type Store struct {
-	db         *sql.DB
-	ops        *operationStore
-	defs       *definitionStore
-	vals       *valuesStore
-	customers  *customerStore
-	clusters   *clusterStore
-	tokens     *enrollmentTokenStore
-	operators  *operatorStore
-	sessions   *sessionStore
-	outbox     *outboxStore
-	users      *userStore
-	authSess   *authSessionStore
-	orgs       *organizationStore
-	orgMembers *organizationMemberStore
-	bindings   *bindingStore
-	audit      *auditEventStore
-	notif      *notificationStore
-	bundles    *bundleStore
-	verifs     *verificationStore
-	routes     *clusterRouteStore
-	invs       *inventoryStore
-	custEvents *customerEventStore
+	db           *sql.DB
+	ops          *operationStore
+	defs         *definitionStore
+	vals         *valuesStore
+	customers    *customerStore
+	clusters     *clusterStore
+	tokens       *enrollmentTokenStore
+	operators    *operatorStore
+	sessions     *sessionStore
+	outbox       *outboxStore
+	users        *userStore
+	authSess     *authSessionStore
+	orgs         *organizationStore
+	orgMembers   *organizationMemberStore
+	bindings     *bindingStore
+	audit        *auditEventStore
+	auditExports *auditExportStore
+	notif        *notificationStore
+	bundles      *bundleStore
+	verifs       *verificationStore
+	routes       *clusterRouteStore
+	invs         *inventoryStore
+	custEvents   *customerEventStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -79,6 +80,7 @@ func Open(dsn string) (*Store, error) {
 	s.bindings = &bindingStore{db: db}
 	s.notif = &notificationStore{db: db}
 	s.audit = &auditEventStore{db: db}
+	s.auditExports = &auditExportStore{db: db}
 	s.bundles = &bundleStore{db: db}
 	s.invs = &inventoryStore{db: db}
 	s.verifs = &verificationStore{db: db}
@@ -131,6 +133,9 @@ func (s *Store) Bindings() store.BindingStore { return s.bindings }
 
 // AuditEvents returns the AuditEventStore.
 func (s *Store) AuditEvents() store.AuditEventStore { return s.audit }
+
+// AuditExports returns the AuditExportStore.
+func (s *Store) AuditExports() store.AuditExportStore { return s.auditExports }
 
 // Bundles returns the BundleStore.
 func (s *Store) Bundles() store.BundleStore { return s.bundles }
@@ -417,6 +422,17 @@ var migrationStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON audit_events(actor_kind, actor_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_audit_events_resource ON audit_events(resource_type, resource_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at)`,
+	`CREATE INDEX IF NOT EXISTS idx_audit_events_org_created ON audit_events(organization_id, created_at DESC, id DESC)`,
+
+	`CREATE TABLE IF NOT EXISTS audit_exports (
+		id               TEXT PRIMARY KEY,
+		organization_id  TEXT NOT NULL,
+		since            TEXT NOT NULL,
+		until            TEXT NOT NULL,
+		status           TEXT NOT NULL DEFAULT 'pending',
+		created_at       TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_audit_exports_org_created ON audit_exports(organization_id, created_at DESC)`,
 
 	// Notification jobs (REQ-031)
 	`CREATE TABLE IF NOT EXISTS notification_jobs (

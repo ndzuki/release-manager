@@ -3,6 +3,7 @@ syntax = "proto3";
 package audit.v1;
 
 import "google/protobuf/timestamp.proto";
+import "common/v1/types.proto";
 
 option go_package = "github.com/ndzuki/release-manager/api/gen/audit/v1;auditv1";
 
@@ -49,7 +50,43 @@ message EmitAuditResponse {
   int32 rejected = 2;
 }
 
-// AuditService collects audit events from other services.
+// AuditQueryFilter restricts audit events returned by a query or export.
+message AuditQueryFilter {
+  string organization_id = 1;
+  string resource_type = 2;
+  string resource_id = 3;
+  string actor_id = 4;
+  string action = 5;
+  string status = 6;
+  common.v1.TimestampRange time_range = 7;
+}
+
+// QueryAuditEventsRequest queries organization-scoped audit events.
+message QueryAuditEventsRequest {
+  AuditQueryFilter filter = 1;
+  common.v1.Pagination pagination = 2;
+}
+
+// QueryAuditEventsResponse returns a stable cursor-paginated result.
+message QueryAuditEventsResponse {
+  repeated AuditEvent events = 1;
+  common.v1.PaginationResponse pagination = 2;
+}
+
+// ExportAuditEventsRequest creates an asynchronous audit export job.
+message ExportAuditEventsRequest {
+  AuditQueryFilter filter = 1;
+}
+
+// ExportAuditEventsResponse identifies the accepted export job.
+message ExportAuditEventsResponse {
+  string export_id = 1;
+  string status = 2;
+}
+
+// AuditService collects and queries audit events.
 service AuditService {
   rpc Emit(EmitAuditRequest) returns (EmitAuditResponse);
+  rpc QueryAuditEvents(QueryAuditEventsRequest) returns (QueryAuditEventsResponse);
+  rpc ExportAuditEvents(ExportAuditEventsRequest) returns (ExportAuditEventsResponse);
 }

@@ -24,6 +24,7 @@ var (
 	ErrNotFound       = errors.New("store: not found")
 	ErrOptimisticLock = errors.New("store: optimistic lock conflict")
 	ErrDuplicateKey   = errors.New("store: duplicate key")
+	ErrInvalidCursor  = errors.New("store: invalid cursor")
 )
 
 // OperationType classifies the kind of release operation.
@@ -408,6 +409,35 @@ type AuditEvent struct {
 	CreatedAt      time.Time
 }
 
+// AuditEventFilter describes optional filters for audit event queries.
+type AuditEventFilter struct {
+	OrganizationID string
+	ResourceType   string
+	ResourceID     string
+	ActorID        string
+	Action         string
+	Status         string
+	Since          *time.Time
+	Until          *time.Time
+}
+
+// AuditEventPage is a stable cursor-paginated audit result.
+type AuditEventPage struct {
+	Events     []*AuditEvent
+	NextCursor string
+	HasMore    bool
+}
+
+// AuditExport represents an accepted asynchronous audit export job.
+type AuditExport struct {
+	ID             string
+	OrganizationID string
+	Since          time.Time
+	Until          time.Time
+	Status         string
+	CreatedAt      time.Time
+}
+
 // NotificationChannel is the delivery channel for a notification.
 type NotificationChannel string
 
@@ -612,6 +642,7 @@ type DefinitionStore interface {
 	Create(ctx context.Context, def *ReleaseDefinition) error
 	Get(ctx context.Context, id string) (*ReleaseDefinition, error)
 }
+
 // ValuesStore defines the persistence contract for values revisions.
 // For Create, the caller MUST populate Revision via GetNextRevisionNumber
 // and Digest via the values package before calling.
@@ -749,10 +780,18 @@ type BindingStore interface {
 	Update(ctx context.Context, b *OrgCustomerBinding) error
 }
 
-// AuditEventStore defines the persistence contract for audit events (REQ-050).
+// AuditEventStore defines the persistence contract for audit events (REQ-050, REQ-029).
 type AuditEventStore interface {
 	Create(ctx context.Context, e *AuditEvent) error
 	CreateBatch(ctx context.Context, events []*AuditEvent) error
+	Query(ctx context.Context, filter AuditEventFilter, cursor string, limit int) (*AuditEventPage, error)
+	GetByID(ctx context.Context, id string) (*AuditEvent, error)
+	Count(ctx context.Context, filter AuditEventFilter) (int64, error)
+}
+
+// AuditExportStore defines the persistence contract for audit export jobs.
+type AuditExportStore interface {
+	CreateWithEvent(ctx context.Context, export *AuditExport, event *AuditEvent) error
 }
 
 // NotificationStore defines the persistence contract for notification jobs (REQ-031).
@@ -858,6 +897,7 @@ type Store interface {
 	OrgMembers() OrganizationMemberStore
 	Bindings() BindingStore
 	AuditEvents() AuditEventStore
+	AuditExports() AuditExportStore
 	Notifications() NotificationStore
 	Bundles() BundleStore
 	Verifications() VerificationStore

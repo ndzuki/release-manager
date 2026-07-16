@@ -18,6 +18,10 @@ import (
 	"github.com/ndzuki/release-manager/internal/handler"
 )
 
+type closer interface {
+	Close(context.Context) error
+}
+
 // Service is the interface each microservice must satisfy.
 type Service interface {
 	Name() string
@@ -78,6 +82,11 @@ func Run(configPath string, svc Service) {
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("shutdown error", "error", err)
+	}
+	if svcCloser, ok := svc.(closer); ok {
+		if err := svcCloser.Close(shutdownCtx); err != nil {
+			logger.Error("service close error", "error", err)
+		}
 	}
 
 	logger.Info(svc.Name() + " stopped")
