@@ -30,6 +30,7 @@ type Store struct {
 	bindings    *bindingStore
 	audit       *auditEventStore
 	notif       *notificationStore
+	idem        *idempotencyStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -73,6 +74,7 @@ func Open(dsn string) (*Store, error) {
 	s.bindings = &bindingStore{db: db}
 	s.audit = &auditEventStore{db: db}
 	s.notif = &notificationStore{db: db}
+	s.idem = &idempotencyStore{db: db}
 	return s, nil
 }
 
@@ -123,6 +125,9 @@ func (s *Store) AuditEvents() store.AuditEventStore { return s.audit }
 
 // Notifications returns the NotificationStore.
 func (s *Store) Notifications() store.NotificationStore { return s.notif }
+
+// Idempotency returns the IdempotencyStore.
+func (s *Store) Idempotency() store.IdempotencyStore { return s.idem }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
@@ -372,6 +377,19 @@ var migrationStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_notification_jobs_status ON notification_jobs(status)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_jobs_dedup ON notification_jobs(operation_id, channel, recipient)`,
+
+	// Idempotency records (REQ-010)
+	`CREATE TABLE IF NOT EXISTS idempotency_records (
+		id           TEXT PRIMARY KEY,
+		scope        TEXT NOT NULL,
+		key          TEXT NOT NULL,
+		request_hash TEXT NOT NULL,
+		response_ref BLOB NOT NULL DEFAULT (x''),
+		created_at   TEXT NOT NULL,
+		expires_at   TEXT NOT NULL,
+		UNIQUE(scope, key)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_idempotency_expires ON idempotency_records(expires_at)`,
 }
 
 // nowUTC returns the current time in UTC as an RFC3339 string for SQLite storage.

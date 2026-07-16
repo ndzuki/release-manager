@@ -10,9 +10,10 @@ import (
 
 // Sentinel errors for store operations.
 var (
-	ErrNotFound        = errors.New("store: not found")
-	ErrOptimisticLock  = errors.New("store: optimistic lock conflict")
-	ErrDuplicateKey    = errors.New("store: duplicate key")
+	ErrNotFound             = errors.New("store: not found")
+	ErrOptimisticLock       = errors.New("store: optimistic lock conflict")
+	ErrDuplicateKey         = errors.New("store: duplicate key")
+	ErrIdempotencyConflict  = errors.New("store: idempotency key conflict — different request hash")
 )
 
 // OperationType classifies the kind of release operation.
@@ -461,6 +462,28 @@ type EmergencyPayload struct {
 	Convergence EmergencyConvergence
 }
 
+// IdempotencyRecord captures the result of an idempotent write for replay.
+type IdempotencyRecord struct {
+	ID          string
+	Scope       string
+	Key         string
+	RequestHash string
+	ResponseRef []byte
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
+}
+
+// IdempotencyStore defines the persistence contract for idempotency records.
+type IdempotencyStore interface {
+	// CreateOrGet inserts a new record or returns the existing one if scope+key matches.
+	// Returns (record, true, nil) when created; (record, false, nil) when idempotent replay.
+	// Returns (nil, false, ErrIdempotencyConflict) when scope+key exists with a different request_hash.
+	CreateOrGet(ctx context.Context, record *IdempotencyRecord) (*IdempotencyRecord, bool, error)
+	// DeleteExpired removes records whose expires_at is before the given time.
+	// Returns the number of deleted rows.
+	DeleteExpired(ctx context.Context, before time.Time) (int64, error)
+}
+
 // OperationStore defines the persistence contract for operations.
 type OperationStore interface {
 	Create(ctx context.Context, op *Operation) error
@@ -619,5 +642,6 @@ type Store interface {
 	Bindings() BindingStore
 	AuditEvents() AuditEventStore
 	Notifications() NotificationStore
+	Idempotency() IdempotencyStore
 	Close() error
 }
