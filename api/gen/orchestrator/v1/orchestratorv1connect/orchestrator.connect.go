@@ -72,6 +72,9 @@ const (
 	// OrchestratorServiceEmergencyChangeProcedure is the fully-qualified name of the
 	// OrchestratorService's EmergencyChange RPC.
 	OrchestratorServiceEmergencyChangeProcedure = "/orchestrator.v1.OrchestratorService/EmergencyChange"
+	// OrchestratorServiceSyncInventoryProcedure is the fully-qualified name of the
+	// OrchestratorService's SyncInventory RPC.
+	OrchestratorServiceSyncInventoryProcedure = "/orchestrator.v1.OrchestratorService/SyncInventory"
 )
 
 // OrchestratorServiceClient is a client for the orchestrator.v1.OrchestratorService service.
@@ -94,6 +97,8 @@ type OrchestratorServiceClient interface {
 	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
 	// Emergency change (REQ-032)
 	EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error)
+	// Inventory sync (REQ-017)
+	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
 
 // NewOrchestratorServiceClient constructs a client for the orchestrator.v1.OrchestratorService
@@ -185,6 +190,12 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("EmergencyChange")),
 			connect.WithClientOptions(opts...),
 		),
+		syncInventory: connect.NewClient[v1.SyncInventoryRequest, v1.SyncInventoryResponse](
+			httpClient,
+			baseURL+OrchestratorServiceSyncInventoryProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("SyncInventory")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -203,6 +214,7 @@ type orchestratorServiceClient struct {
 	disableCluster        *connect.Client[v1.DisableClusterRequest, v1.DisableClusterResponse]
 	createEnrollmentToken *connect.Client[v1.CreateEnrollmentTokenRequest, v1.CreateEnrollmentTokenResponse]
 	emergencyChange       *connect.Client[v1.EmergencyChangeRequest, v1.EmergencyChangeResponse]
+	syncInventory         *connect.Client[v1.SyncInventoryRequest, v1.SyncInventoryResponse]
 }
 
 // CreateOperation calls orchestrator.v1.OrchestratorService.CreateOperation.
@@ -270,6 +282,11 @@ func (c *orchestratorServiceClient) EmergencyChange(ctx context.Context, req *co
 	return c.emergencyChange.CallUnary(ctx, req)
 }
 
+// SyncInventory calls orchestrator.v1.OrchestratorService.SyncInventory.
+func (c *orchestratorServiceClient) SyncInventory(ctx context.Context, req *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error) {
+	return c.syncInventory.CallUnary(ctx, req)
+}
+
 // OrchestratorServiceHandler is an implementation of the orchestrator.v1.OrchestratorService
 // service.
 type OrchestratorServiceHandler interface {
@@ -291,6 +308,8 @@ type OrchestratorServiceHandler interface {
 	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
 	// Emergency change (REQ-032)
 	EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error)
+	// Inventory sync (REQ-017)
+	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
 
 // NewOrchestratorServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -378,6 +397,12 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("EmergencyChange")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orchestratorServiceSyncInventoryHandler := connect.NewUnaryHandler(
+		OrchestratorServiceSyncInventoryProcedure,
+		svc.SyncInventory,
+		connect.WithSchema(orchestratorServiceMethods.ByName("SyncInventory")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/orchestrator.v1.OrchestratorService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case OrchestratorServiceCreateOperationProcedure:
@@ -406,6 +431,8 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceCreateEnrollmentTokenHandler.ServeHTTP(w, r)
 		case OrchestratorServiceEmergencyChangeProcedure:
 			orchestratorServiceEmergencyChangeHandler.ServeHTTP(w, r)
+		case OrchestratorServiceSyncInventoryProcedure:
+			orchestratorServiceSyncInventoryHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -465,4 +492,8 @@ func (UnimplementedOrchestratorServiceHandler) CreateEnrollmentToken(context.Con
 
 func (UnimplementedOrchestratorServiceHandler) EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.EmergencyChange is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.SyncInventory is not implemented"))
 }

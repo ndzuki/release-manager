@@ -1556,6 +1556,339 @@ func (x *EmergencyChangeResponse) GetConvergence() EmergencyConvergence {
 	return EmergencyConvergence_EMERGENCY_CONVERGENCE_UNSPECIFIED
 }
 
+// InventoryItem represents a single Helm release in a cluster inventory snapshot.
+// It carries only metadata and a values digest — NEVER raw Secret values.
+type InventoryItem struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Chart         string                 `protobuf:"bytes,3,opt,name=chart,proto3" json:"chart,omitempty"`
+	ChartVersion  string                 `protobuf:"bytes,4,opt,name=chart_version,json=chartVersion,proto3" json:"chart_version,omitempty"`
+	Revision      int32                  `protobuf:"varint,5,opt,name=revision,proto3" json:"revision,omitempty"`
+	Status        string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
+	ValuesDigest  string                 `protobuf:"bytes,7,opt,name=values_digest,json=valuesDigest,proto3" json:"values_digest,omitempty"` // SHA-256 of canonical values, not the values themselves
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InventoryItem) Reset() {
+	*x = InventoryItem{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InventoryItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InventoryItem) ProtoMessage() {}
+
+func (x *InventoryItem) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InventoryItem.ProtoReflect.Descriptor instead.
+func (*InventoryItem) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *InventoryItem) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *InventoryItem) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *InventoryItem) GetChart() string {
+	if x != nil {
+		return x.Chart
+	}
+	return ""
+}
+
+func (x *InventoryItem) GetChartVersion() string {
+	if x != nil {
+		return x.ChartVersion
+	}
+	return ""
+}
+
+func (x *InventoryItem) GetRevision() int32 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *InventoryItem) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *InventoryItem) GetValuesDigest() string {
+	if x != nil {
+		return x.ValuesDigest
+	}
+	return ""
+}
+
+// SyncInventoryRequest is a full snapshot from an operator.
+type SyncInventoryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OperatorId    string                 `protobuf:"bytes,1,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
+	ClusterId     string                 `protobuf:"bytes,2,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	CustomerId    string                 `protobuf:"bytes,3,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	SyncId        string                 `protobuf:"bytes,4,opt,name=sync_id,json=syncId,proto3" json:"sync_id,omitempty"` // unique per snapshot, used for idempotency
+	Items         []*InventoryItem       `protobuf:"bytes,5,rep,name=items,proto3" json:"items,omitempty"`
+	FullSnapshot  bool                   `protobuf:"varint,6,opt,name=full_snapshot,json=fullSnapshot,proto3" json:"full_snapshot,omitempty"` // true = full sync, false = targeted update
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncInventoryRequest) Reset() {
+	*x = SyncInventoryRequest{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncInventoryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncInventoryRequest) ProtoMessage() {}
+
+func (x *SyncInventoryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncInventoryRequest.ProtoReflect.Descriptor instead.
+func (*SyncInventoryRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *SyncInventoryRequest) GetOperatorId() string {
+	if x != nil {
+		return x.OperatorId
+	}
+	return ""
+}
+
+func (x *SyncInventoryRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *SyncInventoryRequest) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+func (x *SyncInventoryRequest) GetSyncId() string {
+	if x != nil {
+		return x.SyncId
+	}
+	return ""
+}
+
+func (x *SyncInventoryRequest) GetItems() []*InventoryItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+func (x *SyncInventoryRequest) GetFullSnapshot() bool {
+	if x != nil {
+		return x.FullSnapshot
+	}
+	return false
+}
+
+// SyncInventoryResponse returns the application result.
+type SyncInventoryResponse struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	AcceptedCount      int32                  `protobuf:"varint,1,opt,name=accepted_count,json=acceptedCount,proto3" json:"accepted_count,omitempty"`
+	MissingMarkedCount int32                  `protobuf:"varint,2,opt,name=missing_marked_count,json=missingMarkedCount,proto3" json:"missing_marked_count,omitempty"`
+	SnapshotVersion    int64                  `protobuf:"varint,3,opt,name=snapshot_version,json=snapshotVersion,proto3" json:"snapshot_version,omitempty"`
+	Status             string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"` // "applied", "duplicate", "stale"
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *SyncInventoryResponse) Reset() {
+	*x = SyncInventoryResponse{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncInventoryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncInventoryResponse) ProtoMessage() {}
+
+func (x *SyncInventoryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncInventoryResponse.ProtoReflect.Descriptor instead.
+func (*SyncInventoryResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *SyncInventoryResponse) GetAcceptedCount() int32 {
+	if x != nil {
+		return x.AcceptedCount
+	}
+	return 0
+}
+
+func (x *SyncInventoryResponse) GetMissingMarkedCount() int32 {
+	if x != nil {
+		return x.MissingMarkedCount
+	}
+	return 0
+}
+
+func (x *SyncInventoryResponse) GetSnapshotVersion() int64 {
+	if x != nil {
+		return x.SnapshotVersion
+	}
+	return 0
+}
+
+func (x *SyncInventoryResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+// TargetedInventoryUpdate is sent after a single operation completes.
+type TargetedInventoryUpdate struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	OperatorId           string                 `protobuf:"bytes,1,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
+	ClusterId            string                 `protobuf:"bytes,2,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	CustomerId           string                 `protobuf:"bytes,3,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	SyncId               string                 `protobuf:"bytes,4,opt,name=sync_id,json=syncId,proto3" json:"sync_id,omitempty"`
+	Item                 *InventoryItem         `protobuf:"bytes,5,opt,name=item,proto3" json:"item,omitempty"`                                                               // the single release that changed
+	TriggeredByOperation string                 `protobuf:"bytes,6,opt,name=triggered_by_operation,json=triggeredByOperation,proto3" json:"triggered_by_operation,omitempty"` // operation_id that triggered this update
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *TargetedInventoryUpdate) Reset() {
+	*x = TargetedInventoryUpdate{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TargetedInventoryUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TargetedInventoryUpdate) ProtoMessage() {}
+
+func (x *TargetedInventoryUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TargetedInventoryUpdate.ProtoReflect.Descriptor instead.
+func (*TargetedInventoryUpdate) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *TargetedInventoryUpdate) GetOperatorId() string {
+	if x != nil {
+		return x.OperatorId
+	}
+	return ""
+}
+
+func (x *TargetedInventoryUpdate) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *TargetedInventoryUpdate) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+func (x *TargetedInventoryUpdate) GetSyncId() string {
+	if x != nil {
+		return x.SyncId
+	}
+	return ""
+}
+
+func (x *TargetedInventoryUpdate) GetItem() *InventoryItem {
+	if x != nil {
+		return x.Item
+	}
+	return nil
+}
+
+func (x *TargetedInventoryUpdate) GetTriggeredByOperation() string {
+	if x != nil {
+		return x.TriggeredByOperation
+	}
+	return ""
+}
+
 var File_orchestrator_v1_orchestrator_proto protoreflect.FileDescriptor
 
 const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
@@ -1654,7 +1987,40 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\x17EmergencyChangeResponse\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12G\n" +
-	"\vconvergence\x18\x03 \x01(\x0e2%.orchestrator.v1.EmergencyConvergenceR\vconvergence*\xae\x01\n" +
+	"\vconvergence\x18\x03 \x01(\x0e2%.orchestrator.v1.EmergencyConvergenceR\vconvergence\"\xd5\x01\n" +
+	"\rInventoryItem\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
+	"\x05chart\x18\x03 \x01(\tR\x05chart\x12#\n" +
+	"\rchart_version\x18\x04 \x01(\tR\fchartVersion\x12\x1a\n" +
+	"\brevision\x18\x05 \x01(\x05R\brevision\x12\x16\n" +
+	"\x06status\x18\x06 \x01(\tR\x06status\x12#\n" +
+	"\rvalues_digest\x18\a \x01(\tR\fvaluesDigest\"\xeb\x01\n" +
+	"\x14SyncInventoryRequest\x12\x1f\n" +
+	"\voperator_id\x18\x01 \x01(\tR\n" +
+	"operatorId\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x02 \x01(\tR\tclusterId\x12\x1f\n" +
+	"\vcustomer_id\x18\x03 \x01(\tR\n" +
+	"customerId\x12\x17\n" +
+	"\async_id\x18\x04 \x01(\tR\x06syncId\x124\n" +
+	"\x05items\x18\x05 \x03(\v2\x1e.orchestrator.v1.InventoryItemR\x05items\x12#\n" +
+	"\rfull_snapshot\x18\x06 \x01(\bR\ffullSnapshot\"\xb3\x01\n" +
+	"\x15SyncInventoryResponse\x12%\n" +
+	"\x0eaccepted_count\x18\x01 \x01(\x05R\racceptedCount\x120\n" +
+	"\x14missing_marked_count\x18\x02 \x01(\x05R\x12missingMarkedCount\x12)\n" +
+	"\x10snapshot_version\x18\x03 \x01(\x03R\x0fsnapshotVersion\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\"\xfd\x01\n" +
+	"\x17TargetedInventoryUpdate\x12\x1f\n" +
+	"\voperator_id\x18\x01 \x01(\tR\n" +
+	"operatorId\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x02 \x01(\tR\tclusterId\x12\x1f\n" +
+	"\vcustomer_id\x18\x03 \x01(\tR\n" +
+	"customerId\x12\x17\n" +
+	"\async_id\x18\x04 \x01(\tR\x06syncId\x122\n" +
+	"\x04item\x18\x05 \x01(\v2\x1e.orchestrator.v1.InventoryItemR\x04item\x124\n" +
+	"\x16triggered_by_operation\x18\x06 \x01(\tR\x14triggeredByOperation*\xae\x01\n" +
 	"\x0fEmergencyAction\x12 \n" +
 	"\x1cEMERGENCY_ACTION_UNSPECIFIED\x10\x00\x12(\n" +
 	"$EMERGENCY_ACTION_SET_CONTAINER_IMAGE\x10\x01\x12!\n" +
@@ -1663,7 +2029,7 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\x14EmergencyConvergence\x12%\n" +
 	"!EMERGENCY_CONVERGENCE_UNSPECIFIED\x10\x00\x12+\n" +
 	"'EMERGENCY_CONVERGENCE_REQUIRE_PROMOTION\x10\x01\x122\n" +
-	".EMERGENCY_CONVERGENCE_REVERT_ON_NEXT_RECONCILE\x10\x022\x99\n" +
+	".EMERGENCY_CONVERGENCE_REVERT_ON_NEXT_RECONCILE\x10\x022\xf9\n" +
 	"\n" +
 	"\x13OrchestratorService\x12d\n" +
 	"\x0fCreateOperation\x12'.orchestrator.v1.CreateOperationRequest\x1a(.orchestrator.v1.CreateOperationResponse\x12a\n" +
@@ -1679,7 +2045,8 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\fListClusters\x12$.orchestrator.v1.ListClustersRequest\x1a%.orchestrator.v1.ListClustersResponse\x12a\n" +
 	"\x0eDisableCluster\x12&.orchestrator.v1.DisableClusterRequest\x1a'.orchestrator.v1.DisableClusterResponse\x12v\n" +
 	"\x15CreateEnrollmentToken\x12-.orchestrator.v1.CreateEnrollmentTokenRequest\x1a..orchestrator.v1.CreateEnrollmentTokenResponse\x12d\n" +
-	"\x0fEmergencyChange\x12'.orchestrator.v1.EmergencyChangeRequest\x1a(.orchestrator.v1.EmergencyChangeResponseBJZHgithub.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1b\x06proto3"
+	"\x0fEmergencyChange\x12'.orchestrator.v1.EmergencyChangeRequest\x1a(.orchestrator.v1.EmergencyChangeResponse\x12^\n" +
+	"\rSyncInventory\x12%.orchestrator.v1.SyncInventoryRequest\x1a&.orchestrator.v1.SyncInventoryResponseBJZHgithub.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1b\x06proto3"
 
 var (
 	file_orchestrator_v1_orchestrator_proto_rawDescOnce sync.Once
@@ -1694,7 +2061,7 @@ func file_orchestrator_v1_orchestrator_proto_rawDescGZIP() []byte {
 }
 
 var file_orchestrator_v1_orchestrator_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_orchestrator_v1_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
+var file_orchestrator_v1_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
 var file_orchestrator_v1_orchestrator_proto_goTypes = []any{
 	(EmergencyAction)(0),                  // 0: orchestrator.v1.EmergencyAction
 	(EmergencyConvergence)(0),             // 1: orchestrator.v1.EmergencyConvergence
@@ -1725,62 +2092,70 @@ var file_orchestrator_v1_orchestrator_proto_goTypes = []any{
 	(*CreateEnrollmentTokenResponse)(nil), // 26: orchestrator.v1.CreateEnrollmentTokenResponse
 	(*EmergencyChangeRequest)(nil),        // 27: orchestrator.v1.EmergencyChangeRequest
 	(*EmergencyChangeResponse)(nil),       // 28: orchestrator.v1.EmergencyChangeResponse
-	(*v1.ActorContext)(nil),               // 29: common.v1.ActorContext
-	(*v1.SignatureRef)(nil),               // 30: common.v1.SignatureRef
-	(*timestamppb.Timestamp)(nil),         // 31: google.protobuf.Timestamp
-	(v1.VerificationResult)(0),            // 32: common.v1.VerificationResult
-	(*v1.ReleaseDigest)(nil),              // 33: common.v1.ReleaseDigest
-	(*v1.Customer)(nil),                   // 34: common.v1.Customer
-	(*v1.Cluster)(nil),                    // 35: common.v1.Cluster
+	(*InventoryItem)(nil),                 // 29: orchestrator.v1.InventoryItem
+	(*SyncInventoryRequest)(nil),          // 30: orchestrator.v1.SyncInventoryRequest
+	(*SyncInventoryResponse)(nil),         // 31: orchestrator.v1.SyncInventoryResponse
+	(*TargetedInventoryUpdate)(nil),       // 32: orchestrator.v1.TargetedInventoryUpdate
+	(*v1.ActorContext)(nil),               // 33: common.v1.ActorContext
+	(*v1.SignatureRef)(nil),               // 34: common.v1.SignatureRef
+	(*timestamppb.Timestamp)(nil),         // 35: google.protobuf.Timestamp
+	(v1.VerificationResult)(0),            // 36: common.v1.VerificationResult
+	(*v1.ReleaseDigest)(nil),              // 37: common.v1.ReleaseDigest
+	(*v1.Customer)(nil),                   // 38: common.v1.Customer
+	(*v1.Cluster)(nil),                    // 39: common.v1.Cluster
 }
 var file_orchestrator_v1_orchestrator_proto_depIdxs = []int32{
-	29, // 0: orchestrator.v1.CreateOperationRequest.actor:type_name -> common.v1.ActorContext
-	30, // 1: orchestrator.v1.CreateOperationRequest.signature_ref:type_name -> common.v1.SignatureRef
-	31, // 2: orchestrator.v1.CreateOperationResponse.accepted_at:type_name -> google.protobuf.Timestamp
-	32, // 3: orchestrator.v1.CreateOperationResponse.verification_result:type_name -> common.v1.VerificationResult
-	33, // 4: orchestrator.v1.ReleaseOperation.digest:type_name -> common.v1.ReleaseDigest
-	34, // 5: orchestrator.v1.CreateCustomerResponse.customer:type_name -> common.v1.Customer
-	34, // 6: orchestrator.v1.GetCustomerResponse.customer:type_name -> common.v1.Customer
-	34, // 7: orchestrator.v1.ListCustomersResponse.customers:type_name -> common.v1.Customer
-	34, // 8: orchestrator.v1.UpdateCustomerResponse.customer:type_name -> common.v1.Customer
-	35, // 9: orchestrator.v1.CreateClusterResponse.cluster:type_name -> common.v1.Cluster
-	35, // 10: orchestrator.v1.GetClusterResponse.cluster:type_name -> common.v1.Cluster
-	35, // 11: orchestrator.v1.ListClustersResponse.clusters:type_name -> common.v1.Cluster
+	33, // 0: orchestrator.v1.CreateOperationRequest.actor:type_name -> common.v1.ActorContext
+	34, // 1: orchestrator.v1.CreateOperationRequest.signature_ref:type_name -> common.v1.SignatureRef
+	35, // 2: orchestrator.v1.CreateOperationResponse.accepted_at:type_name -> google.protobuf.Timestamp
+	36, // 3: orchestrator.v1.CreateOperationResponse.verification_result:type_name -> common.v1.VerificationResult
+	37, // 4: orchestrator.v1.ReleaseOperation.digest:type_name -> common.v1.ReleaseDigest
+	38, // 5: orchestrator.v1.CreateCustomerResponse.customer:type_name -> common.v1.Customer
+	38, // 6: orchestrator.v1.GetCustomerResponse.customer:type_name -> common.v1.Customer
+	38, // 7: orchestrator.v1.ListCustomersResponse.customers:type_name -> common.v1.Customer
+	38, // 8: orchestrator.v1.UpdateCustomerResponse.customer:type_name -> common.v1.Customer
+	39, // 9: orchestrator.v1.CreateClusterResponse.cluster:type_name -> common.v1.Cluster
+	39, // 10: orchestrator.v1.GetClusterResponse.cluster:type_name -> common.v1.Cluster
+	39, // 11: orchestrator.v1.ListClustersResponse.clusters:type_name -> common.v1.Cluster
 	0,  // 12: orchestrator.v1.EmergencyChangeRequest.action:type_name -> orchestrator.v1.EmergencyAction
 	1,  // 13: orchestrator.v1.EmergencyChangeRequest.convergence:type_name -> orchestrator.v1.EmergencyConvergence
-	29, // 14: orchestrator.v1.EmergencyChangeRequest.actor:type_name -> common.v1.ActorContext
+	33, // 14: orchestrator.v1.EmergencyChangeRequest.actor:type_name -> common.v1.ActorContext
 	1,  // 15: orchestrator.v1.EmergencyChangeResponse.convergence:type_name -> orchestrator.v1.EmergencyConvergence
-	2,  // 16: orchestrator.v1.OrchestratorService.CreateOperation:input_type -> orchestrator.v1.CreateOperationRequest
-	4,  // 17: orchestrator.v1.OrchestratorService.PublishRelease:input_type -> orchestrator.v1.PublishReleaseRequest
-	7,  // 18: orchestrator.v1.OrchestratorService.CreateCustomer:input_type -> orchestrator.v1.CreateCustomerRequest
-	9,  // 19: orchestrator.v1.OrchestratorService.GetCustomer:input_type -> orchestrator.v1.GetCustomerRequest
-	11, // 20: orchestrator.v1.OrchestratorService.ListCustomers:input_type -> orchestrator.v1.ListCustomersRequest
-	13, // 21: orchestrator.v1.OrchestratorService.UpdateCustomer:input_type -> orchestrator.v1.UpdateCustomerRequest
-	15, // 22: orchestrator.v1.OrchestratorService.DisableCustomer:input_type -> orchestrator.v1.DisableCustomerRequest
-	17, // 23: orchestrator.v1.OrchestratorService.CreateCluster:input_type -> orchestrator.v1.CreateClusterRequest
-	19, // 24: orchestrator.v1.OrchestratorService.GetCluster:input_type -> orchestrator.v1.GetClusterRequest
-	21, // 25: orchestrator.v1.OrchestratorService.ListClusters:input_type -> orchestrator.v1.ListClustersRequest
-	23, // 26: orchestrator.v1.OrchestratorService.DisableCluster:input_type -> orchestrator.v1.DisableClusterRequest
-	25, // 27: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:input_type -> orchestrator.v1.CreateEnrollmentTokenRequest
-	27, // 28: orchestrator.v1.OrchestratorService.EmergencyChange:input_type -> orchestrator.v1.EmergencyChangeRequest
-	3,  // 29: orchestrator.v1.OrchestratorService.CreateOperation:output_type -> orchestrator.v1.CreateOperationResponse
-	5,  // 30: orchestrator.v1.OrchestratorService.PublishRelease:output_type -> orchestrator.v1.PublishReleaseResponse
-	8,  // 31: orchestrator.v1.OrchestratorService.CreateCustomer:output_type -> orchestrator.v1.CreateCustomerResponse
-	10, // 32: orchestrator.v1.OrchestratorService.GetCustomer:output_type -> orchestrator.v1.GetCustomerResponse
-	12, // 33: orchestrator.v1.OrchestratorService.ListCustomers:output_type -> orchestrator.v1.ListCustomersResponse
-	14, // 34: orchestrator.v1.OrchestratorService.UpdateCustomer:output_type -> orchestrator.v1.UpdateCustomerResponse
-	16, // 35: orchestrator.v1.OrchestratorService.DisableCustomer:output_type -> orchestrator.v1.DisableCustomerResponse
-	18, // 36: orchestrator.v1.OrchestratorService.CreateCluster:output_type -> orchestrator.v1.CreateClusterResponse
-	20, // 37: orchestrator.v1.OrchestratorService.GetCluster:output_type -> orchestrator.v1.GetClusterResponse
-	22, // 38: orchestrator.v1.OrchestratorService.ListClusters:output_type -> orchestrator.v1.ListClustersResponse
-	24, // 39: orchestrator.v1.OrchestratorService.DisableCluster:output_type -> orchestrator.v1.DisableClusterResponse
-	26, // 40: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:output_type -> orchestrator.v1.CreateEnrollmentTokenResponse
-	28, // 41: orchestrator.v1.OrchestratorService.EmergencyChange:output_type -> orchestrator.v1.EmergencyChangeResponse
-	29, // [29:42] is the sub-list for method output_type
-	16, // [16:29] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	29, // 16: orchestrator.v1.SyncInventoryRequest.items:type_name -> orchestrator.v1.InventoryItem
+	29, // 17: orchestrator.v1.TargetedInventoryUpdate.item:type_name -> orchestrator.v1.InventoryItem
+	2,  // 18: orchestrator.v1.OrchestratorService.CreateOperation:input_type -> orchestrator.v1.CreateOperationRequest
+	4,  // 19: orchestrator.v1.OrchestratorService.PublishRelease:input_type -> orchestrator.v1.PublishReleaseRequest
+	7,  // 20: orchestrator.v1.OrchestratorService.CreateCustomer:input_type -> orchestrator.v1.CreateCustomerRequest
+	9,  // 21: orchestrator.v1.OrchestratorService.GetCustomer:input_type -> orchestrator.v1.GetCustomerRequest
+	11, // 22: orchestrator.v1.OrchestratorService.ListCustomers:input_type -> orchestrator.v1.ListCustomersRequest
+	13, // 23: orchestrator.v1.OrchestratorService.UpdateCustomer:input_type -> orchestrator.v1.UpdateCustomerRequest
+	15, // 24: orchestrator.v1.OrchestratorService.DisableCustomer:input_type -> orchestrator.v1.DisableCustomerRequest
+	17, // 25: orchestrator.v1.OrchestratorService.CreateCluster:input_type -> orchestrator.v1.CreateClusterRequest
+	19, // 26: orchestrator.v1.OrchestratorService.GetCluster:input_type -> orchestrator.v1.GetClusterRequest
+	21, // 27: orchestrator.v1.OrchestratorService.ListClusters:input_type -> orchestrator.v1.ListClustersRequest
+	23, // 28: orchestrator.v1.OrchestratorService.DisableCluster:input_type -> orchestrator.v1.DisableClusterRequest
+	25, // 29: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:input_type -> orchestrator.v1.CreateEnrollmentTokenRequest
+	27, // 30: orchestrator.v1.OrchestratorService.EmergencyChange:input_type -> orchestrator.v1.EmergencyChangeRequest
+	30, // 31: orchestrator.v1.OrchestratorService.SyncInventory:input_type -> orchestrator.v1.SyncInventoryRequest
+	3,  // 32: orchestrator.v1.OrchestratorService.CreateOperation:output_type -> orchestrator.v1.CreateOperationResponse
+	5,  // 33: orchestrator.v1.OrchestratorService.PublishRelease:output_type -> orchestrator.v1.PublishReleaseResponse
+	8,  // 34: orchestrator.v1.OrchestratorService.CreateCustomer:output_type -> orchestrator.v1.CreateCustomerResponse
+	10, // 35: orchestrator.v1.OrchestratorService.GetCustomer:output_type -> orchestrator.v1.GetCustomerResponse
+	12, // 36: orchestrator.v1.OrchestratorService.ListCustomers:output_type -> orchestrator.v1.ListCustomersResponse
+	14, // 37: orchestrator.v1.OrchestratorService.UpdateCustomer:output_type -> orchestrator.v1.UpdateCustomerResponse
+	16, // 38: orchestrator.v1.OrchestratorService.DisableCustomer:output_type -> orchestrator.v1.DisableCustomerResponse
+	18, // 39: orchestrator.v1.OrchestratorService.CreateCluster:output_type -> orchestrator.v1.CreateClusterResponse
+	20, // 40: orchestrator.v1.OrchestratorService.GetCluster:output_type -> orchestrator.v1.GetClusterResponse
+	22, // 41: orchestrator.v1.OrchestratorService.ListClusters:output_type -> orchestrator.v1.ListClustersResponse
+	24, // 42: orchestrator.v1.OrchestratorService.DisableCluster:output_type -> orchestrator.v1.DisableClusterResponse
+	26, // 43: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:output_type -> orchestrator.v1.CreateEnrollmentTokenResponse
+	28, // 44: orchestrator.v1.OrchestratorService.EmergencyChange:output_type -> orchestrator.v1.EmergencyChangeResponse
+	31, // 45: orchestrator.v1.OrchestratorService.SyncInventory:output_type -> orchestrator.v1.SyncInventoryResponse
+	32, // [32:46] is the sub-list for method output_type
+	18, // [18:32] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_orchestrator_v1_orchestrator_proto_init() }
@@ -1794,7 +2169,7 @@ func file_orchestrator_v1_orchestrator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_orchestrator_v1_orchestrator_proto_rawDesc), len(file_orchestrator_v1_orchestrator_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   27,
+			NumMessages:   31,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
