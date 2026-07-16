@@ -191,6 +191,7 @@ type IngestArtifactRequest struct {
 	ArtifactUrl   string                 `protobuf:"bytes,2,opt,name=artifact_url,json=artifactUrl,proto3" json:"artifact_url,omitempty"`
 	ArtifactType  string                 `protobuf:"bytes,3,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"`
 	Metadata      map[string]string      `protobuf:"bytes,4,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	SignatureRef  *v1.SignatureRef       `protobuf:"bytes,5,opt,name=signature_ref,json=signatureRef,proto3" json:"signature_ref,omitempty"` // optional: for trust verification
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -253,12 +254,20 @@ func (x *IngestArtifactRequest) GetMetadata() map[string]string {
 	return nil
 }
 
+func (x *IngestArtifactRequest) GetSignatureRef() *v1.SignatureRef {
+	if x != nil {
+		return x.SignatureRef
+	}
+	return nil
+}
+
 // IngestArtifactResponse returns the resulting ReleaseBundle.
 type IngestArtifactResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Bundle        *v1.ReleaseBundle      `protobuf:"bytes,1,opt,name=bundle,proto3" json:"bundle,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Bundle             *v1.ReleaseBundle      `protobuf:"bytes,1,opt,name=bundle,proto3" json:"bundle,omitempty"`
+	VerificationResult v1.VerificationResult  `protobuf:"varint,2,opt,name=verification_result,json=verificationResult,proto3,enum=common.v1.VerificationResult" json:"verification_result,omitempty"` // trust verification outcome
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *IngestArtifactResponse) Reset() {
@@ -298,12 +307,19 @@ func (x *IngestArtifactResponse) GetBundle() *v1.ReleaseBundle {
 	return nil
 }
 
+func (x *IngestArtifactResponse) GetVerificationResult() v1.VerificationResult {
+	if x != nil {
+		return x.VerificationResult
+	}
+	return v1.VerificationResult(0)
+}
+
 var File_webhook_v1_webhook_proto protoreflect.FileDescriptor
 
 const file_webhook_v1_webhook_proto_rawDesc = "" +
 	"\n" +
 	"\x18webhook/v1/webhook.proto\x12\n" +
-	"webhook.v1\x1a\x16common/v1/domain.proto\"\xec\x02\n" +
+	"webhook.v1\x1a\x16common/v1/domain.proto\x1a\x15common/v1/trust.proto\"\xec\x02\n" +
 	"\x1aSubmitReleaseBundleRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
 	"\tchart_ref\x18\x02 \x01(\tR\bchartRef\x12#\n" +
@@ -319,17 +335,19 @@ const file_webhook_v1_webhook_proto_rawDesc = "" +
 	"\x0eprovenance_ref\x18\n" +
 	" \x01(\tR\rprovenanceRef\"O\n" +
 	"\x1bSubmitReleaseBundleResponse\x120\n" +
-	"\x06bundle\x18\x01 \x01(\v2\x18.common.v1.ReleaseBundleR\x06bundle\"\x81\x02\n" +
+	"\x06bundle\x18\x01 \x01(\v2\x18.common.v1.ReleaseBundleR\x06bundle\"\xbf\x02\n" +
 	"\x15IngestArtifactRequest\x12\x16\n" +
 	"\x06source\x18\x01 \x01(\tR\x06source\x12!\n" +
 	"\fartifact_url\x18\x02 \x01(\tR\vartifactUrl\x12#\n" +
 	"\rartifact_type\x18\x03 \x01(\tR\fartifactType\x12K\n" +
-	"\bmetadata\x18\x04 \x03(\v2/.webhook.v1.IngestArtifactRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\x04 \x03(\v2/.webhook.v1.IngestArtifactRequest.MetadataEntryR\bmetadata\x12<\n" +
+	"\rsignature_ref\x18\x05 \x01(\v2\x17.common.v1.SignatureRefR\fsignatureRef\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"J\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9a\x01\n" +
 	"\x16IngestArtifactResponse\x120\n" +
-	"\x06bundle\x18\x01 \x01(\v2\x18.common.v1.ReleaseBundleR\x06bundle2\xd1\x01\n" +
+	"\x06bundle\x18\x01 \x01(\v2\x18.common.v1.ReleaseBundleR\x06bundle\x12N\n" +
+	"\x13verification_result\x18\x02 \x01(\x0e2\x1d.common.v1.VerificationResultR\x12verificationResult2\xd1\x01\n" +
 	"\x0eWebhookService\x12f\n" +
 	"\x13SubmitReleaseBundle\x12&.webhook.v1.SubmitReleaseBundleRequest\x1a'.webhook.v1.SubmitReleaseBundleResponse\x12W\n" +
 	"\x0eIngestArtifact\x12!.webhook.v1.IngestArtifactRequest\x1a\".webhook.v1.IngestArtifactResponseB@Z>github.com/ndzuki/release-manager/api/gen/webhook/v1;webhookv1b\x06proto3"
@@ -355,21 +373,25 @@ var file_webhook_v1_webhook_proto_goTypes = []any{
 	nil,                                 // 4: webhook.v1.IngestArtifactRequest.MetadataEntry
 	(*v1.BundleImage)(nil),              // 5: common.v1.BundleImage
 	(*v1.ReleaseBundle)(nil),            // 6: common.v1.ReleaseBundle
+	(*v1.SignatureRef)(nil),             // 7: common.v1.SignatureRef
+	(v1.VerificationResult)(0),          // 8: common.v1.VerificationResult
 }
 var file_webhook_v1_webhook_proto_depIdxs = []int32{
 	5, // 0: webhook.v1.SubmitReleaseBundleRequest.images:type_name -> common.v1.BundleImage
 	6, // 1: webhook.v1.SubmitReleaseBundleResponse.bundle:type_name -> common.v1.ReleaseBundle
 	4, // 2: webhook.v1.IngestArtifactRequest.metadata:type_name -> webhook.v1.IngestArtifactRequest.MetadataEntry
-	6, // 3: webhook.v1.IngestArtifactResponse.bundle:type_name -> common.v1.ReleaseBundle
-	0, // 4: webhook.v1.WebhookService.SubmitReleaseBundle:input_type -> webhook.v1.SubmitReleaseBundleRequest
-	2, // 5: webhook.v1.WebhookService.IngestArtifact:input_type -> webhook.v1.IngestArtifactRequest
-	1, // 6: webhook.v1.WebhookService.SubmitReleaseBundle:output_type -> webhook.v1.SubmitReleaseBundleResponse
-	3, // 7: webhook.v1.WebhookService.IngestArtifact:output_type -> webhook.v1.IngestArtifactResponse
-	6, // [6:8] is the sub-list for method output_type
-	4, // [4:6] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	7, // 3: webhook.v1.IngestArtifactRequest.signature_ref:type_name -> common.v1.SignatureRef
+	6, // 4: webhook.v1.IngestArtifactResponse.bundle:type_name -> common.v1.ReleaseBundle
+	8, // 5: webhook.v1.IngestArtifactResponse.verification_result:type_name -> common.v1.VerificationResult
+	0, // 6: webhook.v1.WebhookService.SubmitReleaseBundle:input_type -> webhook.v1.SubmitReleaseBundleRequest
+	2, // 7: webhook.v1.WebhookService.IngestArtifact:input_type -> webhook.v1.IngestArtifactRequest
+	1, // 8: webhook.v1.WebhookService.SubmitReleaseBundle:output_type -> webhook.v1.SubmitReleaseBundleResponse
+	3, // 9: webhook.v1.WebhookService.IngestArtifact:output_type -> webhook.v1.IngestArtifactResponse
+	8, // [8:10] is the sub-list for method output_type
+	6, // [6:8] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_webhook_v1_webhook_proto_init() }

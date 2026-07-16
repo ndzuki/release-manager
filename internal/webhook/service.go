@@ -19,17 +19,19 @@ import (
 	webhookv1 "github.com/ndzuki/release-manager/api/gen/webhook/v1"
 	webhookv1connect "github.com/ndzuki/release-manager/api/gen/webhook/v1/webhookv1connect"
 	"github.com/ndzuki/release-manager/internal/store"
+	"github.com/ndzuki/release-manager/internal/trust"
 )
 
 // Service implements the WebhookServiceHandler Connect interface.
 type Service struct {
-	store  store.Store
-	logger *slog.Logger
+	store    store.Store
+	verifier trust.Verifier
+	logger   *slog.Logger
 }
 
 // NewService creates a new webhook Connect service.
-func NewService(st store.Store, logger *slog.Logger) *Service {
-	return &Service{store: st, logger: logger}
+func NewService(st store.Store, verifier trust.Verifier, logger *slog.Logger) *Service {
+	return &Service{store: st, verifier: verifier, logger: logger}
 }
 
 // SubmitReleaseBundle validates and persists a release bundle from CI.

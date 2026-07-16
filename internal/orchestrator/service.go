@@ -12,21 +12,25 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/store"
+	"github.com/ndzuki/release-manager/internal/trust"
 )
 
 // Service implements the OrchestratorServiceHandler Connect interface.
 type Service struct {
-	store  store.Store
-	logger *slog.Logger
+	store     store.Store
+	verifier  trust.Verifier
+	targetEnv string
+	logger    *slog.Logger
 }
 
 // NewService creates a new orchestrator Connect service.
-func NewService(st store.Store, logger *slog.Logger) *Service {
-	return &Service{store: st, logger: logger}
+func NewService(st store.Store, verifier trust.Verifier, targetEnv string, logger *slog.Logger) *Service {
+	return &Service{store: st, verifier: verifier, targetEnv: targetEnv, logger: logger}
 }
 
 // CreateOperation creates a new release operation from the given request.
@@ -96,6 +100,33 @@ func (s *Service) CreateOperation(
 			fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
 	}
 
+	// 4.5. Trust verification (REQ-012)
+	var verifyResult commonv1.VerificationResult
+	if msg.SignatureRef != nil && s.verifier != nil {
+		policy := trust.DefaultPolicy(s.targetEnv)
+		digest := fmt.Sprintf("%x", sha256.Sum256([]byte(msg.BundleId+"|"+def.ID)))
+
+		out, err := s.verifier.Verify(ctx, trust.Input{
+			Digest:       digest,
+			SignatureRef: msg.SignatureRef,
+			Policy:       policy,
+		})
+		if err != nil {
+			if policy.FailClosed {
+				return nil, connect.NewError(connect.CodeUnavailable,
+					fmt.Errorf("verification_unavailable: %w", err))
+			}
+			s.logger.Warn("verification backend unavailable, policy_warning", "err", err)
+			verifyResult = commonv1.VerificationResult_VERIFICATION_RESULT_VERIFICATION_UNAVAILABLE
+		} else {
+			verifyResult = trust.StatusToProto(out.Status)
+			if out.Status == store.VerificationRejected {
+				return nil, connect.NewError(connect.CodeFailedPrecondition,
+					fmt.Errorf("artifact trust rejected: %s", out.Summary))
+			}
+		}
+	}
+
 	// 5. Build operation request hash for idempotency
 	reqHash := hashRequest(msg)
 
@@ -148,7 +179,13 @@ func (s *Service) CreateOperation(
 		"definition", op.ReleaseDefinitionID,
 	)
 
-	return connect.NewResponse(s.toResponse(op)), nil
+	return connect.NewResponse(&orchestratorv1.CreateOperationResponse{
+		OperationId:        op.ID,
+		State:              string(op.Status),
+		PreflightId:        op.ID,
+		AcceptedAt:         timestamppb.New(op.CreatedAt),
+		VerificationResult: verifyResult,
+	}), nil
 }
 
 // PublishRelease triggers the release pipeline for a definition (skeleton).
@@ -199,6 +236,7 @@ func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
 	h := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("%x", h)
 }
+
 
 // Compile-time check: Service implements the Connect handler interface.
 var _ orchestratorv1connect.OrchestratorServiceHandler = (*Service)(nil)

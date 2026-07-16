@@ -13,6 +13,7 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	webhookv1 "github.com/ndzuki/release-manager/api/gen/webhook/v1"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
+	"github.com/ndzuki/release-manager/internal/trust"
 )
 
 func setupService(t *testing.T) *Service {
@@ -22,7 +23,7 @@ func setupService(t *testing.T) *Service {
 	t.Cleanup(func() { st.Close() })
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	return NewService(st, logger)
+	return NewService(st, trust.NewStubVerifier(st.Verifications(), logger), logger)
 }
 
 func TestSubmitReleaseBundle_Success(t *testing.T) {
