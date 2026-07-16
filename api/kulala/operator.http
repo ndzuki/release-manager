@@ -9,7 +9,7 @@
 
 ### Operator — Connect Session (bidirectional stream)
 # @name OperatorConnect
-GRPC grpc://{{GRPC_HOST}}:{{GRPC_PORT}}/release.v1.ReleaseNotificationService/Connect
+GRPC {{GRPC_HOST}}:{{GRPC_PORT}} release.v1.ReleaseNotificationService/Connect
 Content-Type: application/grpc
 Authorization: Bearer {{operator_token}}
 
@@ -17,7 +17,7 @@ Authorization: Bearer {{operator_token}}
 
 ### Operator — Notify Release
 # @name NotifyRelease
-GRPC grpc://{{GRPC_HOST}}:{{GRPC_PORT}}/release.v1.ReleaseNotificationService/NotifyRelease
+GRPC {{GRPC_HOST}}:{{GRPC_PORT}} release.v1.ReleaseNotificationService/NotifyRelease
 Content-Type: application/grpc
 
 {
@@ -33,7 +33,7 @@ Content-Type: application/grpc
 
 ### Operator — Report Status
 # @name ReportStatus
-GRPC grpc://{{GRPC_HOST}}:{{GRPC_PORT}}/release.v1.StatusReportService/ReportStatus
+GRPC {{GRPC_HOST}}:{{GRPC_PORT}} release.v1.StatusReportService/ReportStatus
 Content-Type: application/grpc
 
 {
@@ -47,14 +47,14 @@ Content-Type: application/grpc
 
 ### Operator — List Installed Releases
 # @name ListHelmReleases
-GRPC grpc://{{GRPC_HOST}}:{{GRPC_PORT}}/release.v1.ReleaseNotificationService/ListHelmReleases
+GRPC {{GRPC_HOST}}:{{GRPC_PORT}} release.v1.ReleaseNotificationService/ListHelmReleases
 Content-Type: application/grpc
 
 {}
 
 ### Operator — Preflight check
 # @name PreflightCheck
-GRPC grpc://{{GRPC_HOST}}:{{GRPC_PORT}}/release.v1.ReleaseNotificationService/Preflight
+GRPC {{GRPC_HOST}}:{{GRPC_PORT}} release.v1.ReleaseNotificationService/Preflight
 Content-Type: application/grpc
 
 {
@@ -67,7 +67,7 @@ Content-Type: application/grpc
 
 ### Operator — Check Health
 # @name CheckOperatorHealth
-GRPC grpc://{{GRPC_HOST}}:{{GRPC_PORT}}/grpc.health.v1.Health/Check
+GRPC {{GRPC_HOST}}:{{GRPC_PORT}} grpc.health.v1.Health/Check
 Content-Type: application/grpc
 
 {}
