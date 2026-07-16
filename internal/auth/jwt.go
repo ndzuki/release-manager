@@ -36,8 +36,8 @@ type Claims struct {
 	OrgID  string   `json:"org_id,omitempty"`
 }
 
-// GenerateAccessToken creates a signed HS256 JWT for the given user.
-func (m *JWTManager) GenerateAccessToken(userID string, roles []string) (string, time.Time, error) {
+// GenerateAccessToken creates a signed HS256 JWT for the given user within an organization.
+func (m *JWTManager) GenerateAccessToken(userID, orgID string, roles []string) (string, time.Time, error) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(m.accessTTL)
 
@@ -50,6 +50,7 @@ func (m *JWTManager) GenerateAccessToken(userID string, roles []string) (string,
 		},
 		UserID: userID,
 		Roles:  roles,
+		OrgID:  orgID,
 	}
 
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(m.signingKey)
@@ -61,7 +62,8 @@ func (m *JWTManager) GenerateAccessToken(userID string, roles []string) (string,
 
 // ValidateAccessToken parses and validates an access token, returning its claims.
 func (m *JWTManager) ValidateAccessToken(tokenStr string) (*Claims, error) {
-	token, err := jwt.ParseWithClaims(tokenStr, &Claims{},
+	token, err := jwt.ParseWithClaims(
+		tokenStr, &Claims{},
 		func(t *jwt.Token) (interface{}, error) {
 			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
@@ -82,7 +84,7 @@ func (m *JWTManager) ValidateAccessToken(tokenStr string) (*Claims, error) {
 
 // GenerateRefreshToken creates a cryptographically random refresh token string
 // and its SHA-256 hash for storage. Returns (raw token, token family ID, hash).
-func (m *JWTManager) GenerateRefreshToken() (string, string, string, error) {
+func (m *JWTManager) GenerateRefreshToken() (rawToken, familyID, tokenHash string, err error) {
 	b := make([]byte, m.refreshBytes)
 	if _, err := rand.Read(b); err != nil {
 		return "", "", "", fmt.Errorf("generate refresh token: %w", err)

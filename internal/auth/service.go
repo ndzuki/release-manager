@@ -13,6 +13,7 @@ import (
 )
 
 // AuthService implements the AuthService Connect handler (REQ-025).
+//
 //nolint:revive // AuthService is the canonical name matching the proto service
 type AuthService struct {
 	store   store.Store
@@ -50,9 +51,9 @@ func (s *AuthService) Login(
 		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid credentials"))
 	}
 
-	roles := s.userRoles(ctx, u.ID)
+	orgID, roles := s.userAuthorizationContext(ctx, u.ID)
 
-	accessToken, accessExp, err := s.jwt.GenerateAccessToken(u.ID, roles)
+	accessToken, accessExp, err := s.jwt.GenerateAccessToken(u.ID, orgID, roles)
 	if err != nil {
 		s.logger.Error("generate access token failed", "error", err)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("token generation failed"))
@@ -97,7 +98,7 @@ func (s *AuthService) Logout(
 		ss, err := s.store.AuthSessions().GetByRefreshHash(ctx, refreshHash)
 		if err != nil {
 			// Token not found — idempotent logout (nilerr: intentional).
-			return connect.NewResponse(&authv1.LogoutResponse{}), nil //nolint:nilerr
+			return connect.NewResponse(&authv1.LogoutResponse{}), nil //nolint:nilerr // Logout is idempotent for unknown refresh tokens.
 		}
 		if err := s.store.AuthSessions().RevokeFamily(ctx, ss.TokenFamily); err != nil {
 			s.logger.Error("revoke family failed", "error", err)
@@ -133,7 +134,7 @@ func (s *AuthService) RefreshToken(
 
 	if ss.Revoked {
 		// AC-025-02: Refresh token replay — revoke the entire family.
-		_ = s.store.AuthSessions().RevokeFamily(ctx, ss.TokenFamily) //nolint:errcheck
+		_ = s.store.AuthSessions().RevokeFamily(ctx, ss.TokenFamily) //nolint:errcheck // Best-effort family revocation before returning replay denial.
 		s.logger.Warn("refresh token replay detected", "user_id", ss.UserID, "family", ss.TokenFamily)
 		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("refresh token has been revoked"))
 	}
@@ -144,9 +145,9 @@ func (s *AuthService) RefreshToken(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("token rotation failed"))
 	}
 
-	roles := s.userRoles(ctx, ss.UserID)
+	orgID, roles := s.userAuthorizationContext(ctx, ss.UserID)
 
-	accessToken, accessExp, err := s.jwt.GenerateAccessToken(ss.UserID, roles)
+	accessToken, accessExp, err := s.jwt.GenerateAccessToken(ss.UserID, orgID, roles)
 	if err != nil {
 		s.logger.Error("generate access token failed", "error", err)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("token generation failed"))
@@ -180,7 +181,7 @@ func (s *AuthService) RefreshToken(
 
 // ValidateToken validates an access token and returns the associated principal.
 func (s *AuthService) ValidateToken(
-	ctx context.Context,
+	_ context.Context,
 	req *connect.Request[authv1.ValidateTokenRequest],
 ) (*connect.Response[authv1.ValidateTokenResponse], error) {
 	claims, err := s.jwt.ValidateAccessToken(req.Msg.GetToken())
@@ -234,22 +235,25 @@ func (s *AuthService) ChangePassword(
 	return connect.NewResponse(&authv1.ChangePasswordResponse{}), nil
 }
 
-// userRoles returns the roles for a user from their organization memberships.
-func (s *AuthService) userRoles(ctx context.Context, userID string) []string {
+// userAuthorizationContext returns the user's primary organization and unique roles.
+func (s *AuthService) userAuthorizationContext(ctx context.Context, userID string) (orgID string, roles []string) {
 	members, err := s.store.OrgMembers().ListByUser(ctx, userID)
 	if err != nil || len(members) == 0 {
-		return []string{}
+		return "", []string{}
 	}
-	seen := make(map[string]bool)
-	var roles []string
-	for _, m := range members {
-		r := string(m.Role)
-		if !seen[r] {
-			seen[r] = true
-			roles = append(roles, r)
+
+	orgID = members[0].OrgID
+	roles = make([]string, 0, len(members))
+	seen := make(map[string]struct{}, len(members))
+	for _, member := range members {
+		role := string(member.Role)
+		if _, ok := seen[role]; ok {
+			continue
 		}
+		seen[role] = struct{}{}
+		roles = append(roles, role)
 	}
-	return roles
+	return orgID, roles
 }
 
 // userIDFromCtx extracts the authenticated user ID from context.

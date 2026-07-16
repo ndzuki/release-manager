@@ -58,7 +58,7 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	authPath, authHandler := authv1connect.NewAuthServiceHandler(authSvc, interceptorOpt)
 	mux.Handle(authPath, authHandler)
 
-	orgSvc := auth.NewOrgService(st, logger)
+	orgSvc := auth.NewOrgService(st, logger, enforcer)
 	orgPath, orgHandler := authv1connect.NewOrganizationServiceHandler(orgSvc, interceptorOpt)
 	mux.Handle(orgPath, orgHandler)
 
