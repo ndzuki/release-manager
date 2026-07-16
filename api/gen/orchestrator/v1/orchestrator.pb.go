@@ -676,9 +676,12 @@ func (x *GetCustomerResponse) GetCustomer() *v1.Customer {
 }
 
 type ListCustomersRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// include_disabled includes disabled customers in the response.
+	// Defaults to false (only active customers are returned).
+	IncludeDisabled bool `protobuf:"varint,1,opt,name=include_disabled,json=includeDisabled,proto3" json:"include_disabled,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ListCustomersRequest) Reset() {
@@ -709,6 +712,13 @@ func (x *ListCustomersRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ListCustomersRequest.ProtoReflect.Descriptor instead.
 func (*ListCustomersRequest) Descriptor() ([]byte, []int) {
 	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ListCustomersRequest) GetIncludeDisabled() bool {
+	if x != nil {
+		return x.IncludeDisabled
+	}
+	return false
 }
 
 type ListCustomersResponse struct {
@@ -1598,8 +1608,9 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\vcustomer_id\x18\x01 \x01(\tR\n" +
 	"customerId\"F\n" +
 	"\x13GetCustomerResponse\x12/\n" +
-	"\bcustomer\x18\x01 \x01(\v2\x13.common.v1.CustomerR\bcustomer\"\x16\n" +
-	"\x14ListCustomersRequest\"J\n" +
+	"\bcustomer\x18\x01 \x01(\v2\x13.common.v1.CustomerR\bcustomer\"A\n" +
+	"\x14ListCustomersRequest\x12)\n" +
+	"\x10include_disabled\x18\x01 \x01(\bR\x0fincludeDisabled\"J\n" +
 	"\x15ListCustomersResponse\x121\n" +
 	"\tcustomers\x18\x01 \x03(\v2\x13.common.v1.CustomerR\tcustomers\"`\n" +
 	"\x15UpdateCustomerRequest\x12\x1f\n" +

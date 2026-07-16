@@ -31,6 +31,7 @@ type Store struct {
 	audit       *auditEventStore
 	notif       *notificationStore
 	verifs      *verificationStore
+	custEvents  *customerEventStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -74,6 +75,7 @@ func Open(dsn string) (*Store, error) {
 	s.bindings = &bindingStore{db: db}
 	s.notif = &notificationStore{db: db}
 	s.verifs = &verificationStore{db: db}
+	s.custEvents = &customerEventStore{db: db}
 	return s, nil
 }
 
@@ -127,6 +129,9 @@ func (s *Store) Notifications() store.NotificationStore { return s.notif }
 
 // Verifications returns the VerificationStore.
 func (s *Store) Verifications() store.VerificationStore { return s.verifs }
+
+// CustomerEvents returns the CustomerEventStore.
+func (s *Store) CustomerEvents() store.CustomerEventStore { return s.custEvents }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
@@ -389,6 +394,15 @@ var migrationStatements = []string{
 		created_at      TEXT NOT NULL
 	)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_records_digest_policy ON verification_records(artifact_digest, policy_version, created_at)`,
+
+	// Customer domain events (REQ-013)
+	`CREATE TABLE IF NOT EXISTS customer_events (
+		id          TEXT PRIMARY KEY,
+		customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+		event_type  TEXT NOT NULL,
+		created_at  TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_customer_events_customer ON customer_events(customer_id, event_type)`,
 }
 
 // nowUTC returns the current time in UTC as an RFC3339 string for SQLite storage.

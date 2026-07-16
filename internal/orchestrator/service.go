@@ -77,6 +77,11 @@ func (s *Service) CreateOperation(
 			fmt.Errorf("release_definition %s is %s", def.ID, def.Status))
 	}
 
+	// AC-013-02: Reject operations for disabled customers.
+	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
+		return nil, connect.NewError(connect.CodePermissionDenied, err)
+	}
+
 	// AC-032-06: Reject standard operations when a running EMERGENCY exists for
 	// the same definition.
 	if opType.IsStandard() {
@@ -195,14 +200,17 @@ func (s *Service) PublishRelease(
 ) (*connect.Response[orchestratorv1.PublishReleaseResponse], error) {
 	msg := req.Msg
 
-	// Skeleton: verify the definition exists and return not-yet-implemented status.
-	_, err := s.store.Definitions().Get(ctx, msg.ReleaseDefinitionId)
+	// AC-013-02: Verify the definition exists and customer is not disabled.
+	def, err := s.store.Definitions().Get(ctx, msg.ReleaseDefinitionId)
 	if err == store.ErrNotFound {
 		return nil, connect.NewError(connect.CodeNotFound,
 			fmt.Errorf("release_definition not found: %s", msg.ReleaseDefinitionId))
 	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
+	}
+	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
+		return nil, connect.NewError(connect.CodePermissionDenied, err)
 	}
 
 	s.logger.Info("publish release requested (skeleton)", "definition", msg.ReleaseDefinitionId)
@@ -238,5 +246,17 @@ func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
 }
 
 
+// checkCustomerNotDisabled verifies the customer is not disabled.
+// Returns PermissionDenied if the customer is disabled.
+func (s *Service) checkCustomerNotDisabled(ctx context.Context, customerID string) error {
+	cust, err := s.store.Customers().Get(ctx, customerID)
+	if err != nil {
+		return fmt.Errorf("customer lookup: %w", err)
+	}
+	if cust.Status == store.CustomerDisabled {
+		return fmt.Errorf("customer %s is disabled", customerID)
+	}
+	return nil
+}
 // Compile-time check: Service implements the Connect handler interface.
 var _ orchestratorv1connect.OrchestratorServiceHandler = (*Service)(nil)

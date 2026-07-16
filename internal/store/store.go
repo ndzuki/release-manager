@@ -525,7 +525,20 @@ type CustomerStore interface {
 	Get(ctx context.Context, id string) (*Customer, error)
 	GetBySlug(ctx context.Context, slug string) (*Customer, error)
 	Update(ctx context.Context, c *Customer) error
-	List(ctx context.Context) ([]*Customer, error)
+	List(ctx context.Context, includeDisabled bool) ([]*Customer, error)
+}
+
+// CustomerEvent is a domain event emitted for customer lifecycle changes.
+type CustomerEvent struct {
+	ID         string    `json:"id"`
+	CustomerID string    `json:"customer_id"`
+	EventType  string    `json:"event_type"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// CustomerEventStore defines the persistence contract for customer events.
+type CustomerEventStore interface {
+	Create(ctx context.Context, ev *CustomerEvent) error
 }
 
 // ClusterStore defines the persistence contract for clusters.
@@ -656,5 +669,6 @@ type Store interface {
 	AuditEvents() AuditEventStore
 	Notifications() NotificationStore
 	Verifications() VerificationStore
+	CustomerEvents() CustomerEventStore
 	Close() error
 }

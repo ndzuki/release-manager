@@ -67,11 +67,15 @@ WHERE id=?
 	return nil
 }
 
-func (s *customerStore) List(ctx context.Context) ([]*store.Customer, error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT id, name, slug, status, created_at, updated_at
-FROM customers ORDER BY created_at DESC
-`)
+func (s *customerStore) List(ctx context.Context, includeDisabled bool) ([]*store.Customer, error) {
+	query := `SELECT id, name, slug, status, created_at, updated_at
+FROM customers`
+	if !includeDisabled {
+		query += ` WHERE status = 'active'`
+	}
+	query += ` ORDER BY created_at DESC`
+
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("list customers: %w", err)
 	}

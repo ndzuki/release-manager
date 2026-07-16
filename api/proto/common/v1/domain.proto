@@ -51,7 +51,17 @@ message Customer {
   string id = 1;
   string name = 2;
   string slug = 3;
+  string status = 5;
   google.protobuf.Timestamp created_at = 4;
+}
+
+// CustomerDisabledEvent is emitted when a customer is disabled.
+// Receivers (downstream services) use this to trigger cascading cleanup.
+// The event MUST be idempotent — emitting it for an already-disabled
+// customer is a no-op at the consumer side.
+message CustomerDisabledEvent {
+  string customer_id = 1;
+  google.protobuf.Timestamp disabled_at = 2;
 }
 
 // Cluster represents a target cluster within a customer.

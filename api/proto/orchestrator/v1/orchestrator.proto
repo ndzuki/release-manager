@@ -70,7 +70,11 @@ message GetCustomerResponse {
   common.v1.Customer customer = 1;
 }
 
-message ListCustomersRequest {}
+message ListCustomersRequest {
+  // include_disabled includes disabled customers in the response.
+  // Defaults to false (only active customers are returned).
+  bool include_disabled = 1;
+}
 
 message ListCustomersResponse {
   repeated common.v1.Customer customers = 1;
