@@ -93,6 +93,8 @@ func mapServiceToObject(service string) string {
 		return "auth"
 	case strings.Contains(service, "Orchestrator"):
 		return "release"
+	case strings.Contains(service, "Trust"):
+		return "trust"
 	default:
 		return "*"
 	}

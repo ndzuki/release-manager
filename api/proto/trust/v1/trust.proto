@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package trust.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/ndzuki/release-manager/api/gen/trust/v1;trustv1";
+
+enum TrustRootState {
+  TRUST_ROOT_STATE_UNSPECIFIED = 0;
+  TRUST_ROOT_STATE_PENDING = 1;
+  TRUST_ROOT_STATE_ACTIVE = 2;
+  TRUST_ROOT_STATE_GRACE = 3;
+  TRUST_ROOT_STATE_RETIRED = 4;
+  TRUST_ROOT_STATE_REVOKED = 5;
+}
+
+message TrustRoot {
+  string id = 1;
+  string environment = 2;
+  string key_id = 3;
+  string public_key_pem = 4;
+  string issuer = 5;
+  string subject_pattern = 6;
+  TrustRootState state = 7;
+  google.protobuf.Timestamp valid_from = 8;
+  google.protobuf.Timestamp grace_until = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+  google.protobuf.Timestamp revoked_at = 12;
+}
+
+message TrustPolicy {
+  string environment = 1;
+  int64 version = 2;
+  int64 revocation_epoch = 3;
+  repeated TrustRoot roots = 4;
+}
+
+message CreateTrustRootRequest {
+  string environment = 1;
+  string key_id = 2;
+  string public_key_pem = 3;
+  string issuer = 4;
+  string subject_pattern = 5;
+  google.protobuf.Timestamp valid_from = 6;
+  string operator = 7;
+}
+
+message CreateTrustRootResponse {
+  TrustPolicy policy = 1;
+  TrustRoot root = 2;
+}
+
+message RotateTrustRootRequest {
+  string environment = 1;
+  string old_root_id = 2;
+  string key_id = 3;
+  string public_key_pem = 4;
+  string issuer = 5;
+  string subject_pattern = 6;
+  google.protobuf.Timestamp valid_from = 7;
+  google.protobuf.Timestamp grace_until = 8;
+  string operator = 9;
+}
+
+message RotateTrustRootResponse {
+  TrustPolicy policy = 1;
+  TrustRoot old_root = 2;
+  TrustRoot new_root = 3;
+}
+
+message EndGraceRequest {
+  string environment = 1;
+  string root_id = 2;
+  string operator = 3;
+}
+
+message EndGraceResponse {
+  TrustPolicy policy = 1;
+  TrustRoot root = 2;
+}
+
+message RetireTrustRootRequest {
+  string environment = 1;
+  string root_id = 2;
+  string operator = 3;
+}
+
+message RetireTrustRootResponse {
+  TrustPolicy policy = 1;
+  TrustRoot root = 2;
+}
+
+message RevokeTrustRootRequest {
+  string environment = 1;
+  string root_id = 2;
+  string operator = 3;
+}
+
+message RevokeTrustRootResponse {
+  TrustPolicy policy = 1;
+  TrustRoot root = 2;
+}
+
+message GetTrustPolicyRequest {
+  string environment = 1;
+}
+
+message GetTrustPolicyResponse {
+  TrustPolicy policy = 1;
+}
+
+service TrustService {
+  rpc CreateTrustRoot(CreateTrustRootRequest) returns (CreateTrustRootResponse);
+  rpc RotateTrustRoot(RotateTrustRootRequest) returns (RotateTrustRootResponse);
+  rpc EndGrace(EndGraceRequest) returns (EndGraceResponse);
+  rpc RetireTrustRoot(RetireTrustRootRequest) returns (RetireTrustRootResponse);
+  rpc RevokeTrustRoot(RevokeTrustRootRequest) returns (RevokeTrustRootResponse);
+  rpc GetTrustPolicy(GetTrustPolicyRequest) returns (GetTrustPolicyResponse);
+}

@@ -2,6 +2,7 @@
 package main
 
 import (
+	trustv1connect "github.com/ndzuki/release-manager/api/gen/trust/v1/trustv1connect"
 	"context"
 	"flag"
 	"log/slog"
@@ -55,7 +56,7 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	interceptor := auth.NewAuthInterceptor(jwtManager, enforcer, map[string]bool{}, logger)
 
 	verifier := trust.NewStoreVerifier(
-		trust.NewStubVerifier(st.Verifications(), logger),
+		trust.NewStubVerifier(st.Verifications(), trust.NewStoreResolver(st.TrustRoots()), logger),
 		st.Verifications(),
 		logger,
 	)
@@ -66,6 +67,14 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		connect.WithInterceptors(interceptor),
 	)
 	mux.Handle(path, h)
+
+	// Trust root management API (REQ-043)
+	trustSvc := trust.NewTrustService(st.TrustRoots(), s.auditEmitter, logger)
+	trustPath, trustH := trustv1connect.NewTrustServiceHandler(trustSvc,
+		connect.WithInterceptors(interceptor),
+	)
+	mux.Handle(trustPath, trustH)
+
 	return nil
 }
 

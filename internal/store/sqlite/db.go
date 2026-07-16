@@ -36,6 +36,7 @@ type Store struct {
 	routes     *clusterRouteStore
 	invs       *inventoryStore
 	custEvents *customerEventStore
+	trustRoots *trustRootStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -82,8 +83,8 @@ func Open(dsn string) (*Store, error) {
 	s.bundles = &bundleStore{db: db}
 	s.invs = &inventoryStore{db: db}
 	s.verifs = &verificationStore{db: db}
-	s.custEvents = &customerEventStore{db: db}
 	s.routes = &clusterRouteStore{db: db}
+	s.trustRoots = &trustRootStore{db: db}
 	return s, nil
 }
 
@@ -149,6 +150,9 @@ func (s *Store) ClusterRoutes() store.ClusterRouteStore { return s.routes }
 
 // Inventories returns the InventoryStore.
 func (s *Store) Inventories() store.InventoryStore { return s.invs }
+
+// TrustRoots returns the TrustRootStore.
+func (s *Store) TrustRoots() store.TrustRootStore { return s.trustRoots }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
@@ -452,9 +456,17 @@ var migrationStatements = []string{
 		issuer          TEXT NOT NULL DEFAULT '',
 		subject         TEXT NOT NULL DEFAULT '',
 		summary         TEXT NOT NULL DEFAULT '',
-		created_at      TEXT NOT NULL
+		created_at      TEXT NOT NULL,
+		root_id         TEXT NOT NULL DEFAULT '',
+		key_id          TEXT NOT NULL DEFAULT '',
+		revocation_epoch INTEGER NOT NULL DEFAULT 0
 	)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_records_digest_policy ON verification_records(artifact_digest, policy_version, created_at)`,
+
+	// REQ-043: add root identity and revocation epoch columns.
+	`ALTER TABLE verification_records ADD COLUMN root_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE verification_records ADD COLUMN key_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE verification_records ADD COLUMN revocation_epoch INTEGER NOT NULL DEFAULT 0`,
 
 	// Customer domain events (REQ-013)
 	`CREATE TABLE IF NOT EXISTS customer_events (
@@ -530,6 +542,30 @@ var migrationStatements = []string{
 		created_at     TEXT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_release_bundles_digest ON release_bundles(digest_alg, digest_value)`,
+
+	// Trust root rotation (REQ-043)
+	`CREATE TABLE IF NOT EXISTS trust_roots (
+		id               TEXT PRIMARY KEY,
+		environment      TEXT NOT NULL,
+		key_id           TEXT NOT NULL,
+		public_key_pem   TEXT NOT NULL DEFAULT '',
+		issuer           TEXT NOT NULL,
+		subject_pattern  TEXT NOT NULL DEFAULT '',
+		state            TEXT NOT NULL DEFAULT 'pending',
+		valid_from       TEXT NOT NULL,
+		grace_until      TEXT,
+		created_at       TEXT NOT NULL,
+		updated_at       TEXT NOT NULL,
+		revoked_at       TEXT
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_trust_roots_env_state ON trust_roots(environment, state)`,
+
+	`CREATE TABLE IF NOT EXISTS trust_policies (
+		environment      TEXT PRIMARY KEY,
+		version          INTEGER NOT NULL DEFAULT 1,
+		revocation_epoch INTEGER NOT NULL DEFAULT 0,
+		updated_at       TEXT NOT NULL
+	)`,
 }
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }

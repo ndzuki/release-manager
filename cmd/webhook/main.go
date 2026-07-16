@@ -27,7 +27,7 @@ func (s *webhookSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	logger.Info("store opened", "db", s.dbPath)
 
 	verifier := trust.NewStoreVerifier(
-		trust.NewStubVerifier(st.Verifications(), logger),
+		trust.NewStubVerifier(st.Verifications(), trust.NewStoreResolver(st.TrustRoots()), logger),
 		st.Verifications(),
 		logger,
 	)

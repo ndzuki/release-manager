@@ -547,14 +547,17 @@ type TrustPolicy struct {
 
 // VerificationRecord captures the result of an artifact trust verification.
 type VerificationRecord struct {
-	ID             string
-	ArtifactDigest string
-	PolicyVersion  string
-	Status         VerificationStatus
-	Issuer         string
-	Subject        string
-	Summary        string
-	CreatedAt      time.Time
+	ID              string
+	ArtifactDigest  string
+	PolicyVersion   string
+	Status          VerificationStatus
+	Issuer          string
+	Subject         string
+	Summary         string
+	RootID          string
+	KeyID           string
+	RevocationEpoch int64
+	CreatedAt       time.Time
 }
 
 // ── Inventory domain types (REQ-017) ───────────────────────────────
@@ -779,6 +782,66 @@ type VerificationStore interface {
 	GetByDigestAndPolicy(ctx context.Context, artifactDigest, policyVersion string) (*VerificationRecord, error)
 }
 
+// --- Trust root domain types (REQ-043) ---
+
+// TrustRootState is the lifecycle state of a trust root.
+type TrustRootState string
+
+const (
+	TrustRootPending TrustRootState = "pending"
+	TrustRootActive  TrustRootState = "active"
+	TrustRootGrace   TrustRootState = "grace"
+	TrustRootRetired TrustRootState = "retired"
+	TrustRootRevoked TrustRootState = "revoked"
+)
+
+// Valid returns true if the trust root state is a recognized value.
+func (s TrustRootState) Valid() bool {
+	switch s {
+	case TrustRootPending, TrustRootActive, TrustRootGrace, TrustRootRetired, TrustRootRevoked:
+		return true
+	}
+	return false
+}
+
+// TrustRoot represents a trust root entry.
+type TrustRoot struct {
+	ID             string
+	Environment    string
+	KeyID          string
+	PublicKeyPEM   string
+	Issuer         string
+	SubjectPattern string
+	State          TrustRootState
+	ValidFrom      time.Time
+	GraceUntil     *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	RevokedAt      *time.Time
+}
+
+// TrustPolicyMeta holds environment-level trust policy metadata.
+type TrustPolicyMeta struct {
+	Environment     string
+	Version         int64
+	RevocationEpoch int64
+}
+
+// TrustRootStore defines the persistence contract for trust roots.
+type TrustRootStore interface {
+	Create(ctx context.Context, r *TrustRoot) error
+	Get(ctx context.Context, id string) (*TrustRoot, error)
+	ListByEnvironment(ctx context.Context, env string) ([]*TrustRoot, error)
+	GetActiveByEnvironment(ctx context.Context, env string, at time.Time) ([]*TrustRoot, error)
+	Update(ctx context.Context, r *TrustRoot) error
+	GetPolicy(ctx context.Context, env string) (*TrustPolicyMeta, error)
+	// BumpPolicy atomically increments the policy version for an environment.
+	// Returns the new (version, epoch) pair.
+	BumpPolicy(ctx context.Context, env string) (version int64, epoch int64, err error)
+	// BumpRevocationEpoch atomically increments the revocation epoch.
+	BumpRevocationEpoch(ctx context.Context, env string) (int64, error)
+}
+
 // --- Cluster artifact routing domain types (REQ-014) ---
 
 // ArtifactType classifies the kind of artifact routed to a cluster.
@@ -873,5 +936,6 @@ type Store interface {
 	CustomerEvents() CustomerEventStore
 	ClusterRoutes() ClusterRouteStore
 	Inventories() InventoryStore
+	TrustRoots() TrustRootStore
 	Close() error
 }
