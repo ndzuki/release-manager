@@ -216,6 +216,7 @@ type EnrollmentToken struct {
 	CustomerID   string     `json:"customer_id"`
 	ClusterID    string     `json:"cluster_id"`
 	Token        string     `json:"token"`
+	TokenHash    string     `json:"token_hash"`
 	CreatedAt    time.Time  `json:"created_at"`
 	ExpiresAt    time.Time  `json:"expires_at"`
 	Used         bool       `json:"used"`
@@ -226,6 +227,7 @@ type EnrollmentToken struct {
 // Operator represents a registered operator agent in a cluster.
 type Operator struct {
 	ID              string         `json:"id"`
+	Name            string         `json:"name"`
 	CustomerID      string         `json:"customer_id"`
 	ClusterID       string         `json:"cluster_id"`
 	CertSerial      string         `json:"cert_serial"`
@@ -595,14 +597,21 @@ type EnrollmentTokenStore interface {
 	Create(ctx context.Context, t *EnrollmentToken) error
 	GetByToken(ctx context.Context, token string) (*EnrollmentToken, error)
 	MarkUsed(ctx context.Context, id, operatorID string) error
+	Revoke(ctx context.Context, id string) error
+	ListByCustomer(ctx context.Context, customerID string) ([]*EnrollmentToken, error)
+	ListByCluster(ctx context.Context, clusterID string) ([]*EnrollmentToken, error)
 }
 
-// OperatorStore defines the persistence contract for operators.
 type OperatorStore interface {
 	Create(ctx context.Context, op *Operator) error
 	Get(ctx context.Context, id string) (*Operator, error)
 	GetByCertSerial(ctx context.Context, serial string) (*Operator, error)
+	GetByClusterID(ctx context.Context, clusterID string) (*Operator, error)
+	GetByName(ctx context.Context, name string) (*Operator, error)
 	Update(ctx context.Context, op *Operator) error
+	Revoke(ctx context.Context, id string) error
+	ListByCustomer(ctx context.Context, customerID string) ([]*Operator, error)
+	ListByCluster(ctx context.Context, clusterID string) ([]*Operator, error)
 }
 
 // SessionStore defines the persistence contract for operator sessions.
