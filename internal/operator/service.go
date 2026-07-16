@@ -24,6 +24,7 @@ type Service struct {
 	sessionTTL      time.Duration
 	heartbeatMaxAge time.Duration
 	suspectAfter    time.Duration
+	inventorySyncer *InventorySyncer
 }
 
 // NewService creates a new operator Connect service.
@@ -35,6 +36,11 @@ func NewService(st store.Store, logger *slog.Logger) *Service {
 		heartbeatMaxAge: 30 * time.Second,
 		suspectAfter:    60 * time.Second,
 	}
+}
+
+// SetInventorySyncer attaches an inventory syncer for release inventory sync (REQ-017).
+func (s *Service) SetInventorySyncer(syncer *InventorySyncer) {
+	s.inventorySyncer = syncer
 }
 
 // Enroll validates a single-use enrollment token, creates an operator record,

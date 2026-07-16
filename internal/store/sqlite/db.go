@@ -31,6 +31,7 @@ type Store struct {
 	audit       *auditEventStore
 	notif       *notificationStore
 	verifs      *verificationStore
+	invs        *inventoryStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -73,6 +74,7 @@ func Open(dsn string) (*Store, error) {
 	s.orgMembers = &organizationMemberStore{db: db}
 	s.bindings = &bindingStore{db: db}
 	s.notif = &notificationStore{db: db}
+	s.invs = &inventoryStore{db: db}
 	s.verifs = &verificationStore{db: db}
 	return s, nil
 }
@@ -127,6 +129,9 @@ func (s *Store) Notifications() store.NotificationStore { return s.notif }
 
 // Verifications returns the VerificationStore.
 func (s *Store) Verifications() store.VerificationStore { return s.verifs }
+
+// Inventories returns the InventoryStore.
+func (s *Store) Inventories() store.InventoryStore { return s.invs }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
@@ -389,6 +394,38 @@ var migrationStatements = []string{
 		created_at      TEXT NOT NULL
 	)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_records_digest_policy ON verification_records(artifact_digest, policy_version, created_at)`,
+
+	// Release inventory sync (REQ-017)
+	`CREATE TABLE IF NOT EXISTS release_inventory (
+		customer_id      TEXT NOT NULL,
+		cluster_id       TEXT NOT NULL,
+		namespace        TEXT NOT NULL DEFAULT '',
+		release_name     TEXT NOT NULL,
+		chart            TEXT NOT NULL DEFAULT '',
+		chart_version    TEXT NOT NULL DEFAULT '',
+		revision         INTEGER NOT NULL DEFAULT 0,
+		status           TEXT NOT NULL DEFAULT '',
+		values_digest    TEXT NOT NULL DEFAULT '',
+		inventory_status TEXT NOT NULL DEFAULT 'active',
+		last_sync_id     TEXT NOT NULL DEFAULT '',
+		snapshot_version INTEGER NOT NULL DEFAULT 0,
+		created_at       TEXT NOT NULL,
+		updated_at       TEXT NOT NULL,
+		UNIQUE(customer_id, cluster_id, namespace, release_name)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_inventory_cluster ON release_inventory(customer_id, cluster_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_inventory_status ON release_inventory(inventory_status)`,
+
+	`CREATE TABLE IF NOT EXISTS inventory_sync_log (
+		sync_id          TEXT PRIMARY KEY,
+		customer_id      TEXT NOT NULL,
+		cluster_id       TEXT NOT NULL,
+		is_full_snapshot INTEGER NOT NULL DEFAULT 0,
+		accepted_count   INTEGER NOT NULL DEFAULT 0,
+		missing_count    INTEGER NOT NULL DEFAULT 0,
+		snapshot_version INTEGER NOT NULL DEFAULT 0,
+		created_at       TEXT NOT NULL
+	)`,
 }
 
 // nowUTC returns the current time in UTC as an RFC3339 string for SQLite storage.

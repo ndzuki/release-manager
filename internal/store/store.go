@@ -491,6 +491,48 @@ type VerificationRecord struct {
 	CreatedAt      time.Time
 }
 
+// ── Inventory domain types (REQ-017) ───────────────────────────────
+
+// InventoryStatus is the lifecycle state of a release in the inventory cache.
+type InventoryStatus string
+
+const (
+	InventoryActive    InventoryStatus = "active"
+	InventoryMissing   InventoryStatus = "missing"
+	InventoryOutOfSync InventoryStatus = "out_of_sync" // reserved for future use
+)
+
+// ReleaseInventory represents a cached release snapshot in the orchestrator's observation store.
+// Unique key: (customer_id, cluster_id, namespace, release_name).
+type ReleaseInventory struct {
+	CustomerID     string
+	ClusterID      string
+	Namespace      string
+	ReleaseName    string
+	Chart          string
+	ChartVersion   string
+	Revision       int
+	Status         string
+	ValuesDigest   string
+	InventoryStatus InventoryStatus
+	LastSyncID     string
+	SnapshotVersion int64
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// InventorySyncLog records the application of a sync snapshot for idempotency.
+type InventorySyncLog struct {
+	SyncID          string
+	CustomerID      string
+	ClusterID       string
+	IsFullSnapshot  bool
+	AcceptedCount   int
+	MissingCount    int
+	SnapshotVersion int64
+	CreatedAt       time.Time
+}
+
 // OperationStore defines the persistence contract for operations.
 type OperationStore interface {
 	Create(ctx context.Context, op *Operation) error
@@ -637,6 +679,26 @@ type VerificationStore interface {
 	GetByDigestAndPolicy(ctx context.Context, artifactDigest, policyVersion string) (*VerificationRecord, error)
 }
 
+// InventoryStore defines the persistence contract for release inventory sync (REQ-017).
+type InventoryStore interface {
+	// Upsert inserts or updates an inventory row by unique key.
+	Upsert(ctx context.Context, item *ReleaseInventory) error
+
+	// ListByCluster returns all inventory rows for a cluster.
+	ListByCluster(ctx context.Context, customerID, clusterID string) ([]*ReleaseInventory, error)
+
+	// MarkMissing sets InventoryMissing for all rows in a cluster not present in the given set.
+	// Returns the count of rows marked missing.
+	MarkMissing(ctx context.Context, customerID, clusterID string, presentKeys []string) (int, error)
+
+	// CreateSyncLog records a sync attempt for idempotency.
+	// Returns true if inserted (first time), false if already exists.
+	CreateSyncLog(ctx context.Context, log *InventorySyncLog) (bool, error)
+
+	// GetBySyncID checks whether a sync_id has already been applied.
+	GetBySyncID(ctx context.Context, syncID string) (*InventorySyncLog, error)
+}
+
 // Store is the top-level persistence abstraction.
 type Store interface {
 	Operations() OperationStore
@@ -656,5 +718,6 @@ type Store interface {
 	AuditEvents() AuditEventStore
 	Notifications() NotificationStore
 	Verifications() VerificationStore
+	Inventories() InventoryStore
 	Close() error
 }
