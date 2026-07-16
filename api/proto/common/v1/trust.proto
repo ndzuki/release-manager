@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package common.v1;
+
+option go_package = "github.com/ndzuki/release-manager/api/gen/common/v1;commonv1";
+
+// VerificationResult captures the outcome of an artifact trust verification.
+enum VerificationResult {
+  VERIFICATION_RESULT_UNSPECIFIED = 0;
+  VERIFICATION_RESULT_TRUSTED = 1;
+  VERIFICATION_RESULT_REJECTED = 2;
+  VERIFICATION_RESULT_POLICY_WARNING = 3;
+  VERIFICATION_RESULT_SIGNATURE_MISSING = 4;
+  VERIFICATION_RESULT_VERIFICATION_UNAVAILABLE = 5;
+}
+
+// SignatureRef identifies a cryptographic signature for an artifact.
+message SignatureRef {
+  string digest = 1;
+  string signature = 2;
+  string issuer = 3;
+  string subject = 4;
+}
+
+// TrustPolicy defines the verification rules for an environment.
+message TrustPolicy {
+  string policy_version = 1;
+  bool fail_closed = 2;
+  repeated string trusted_issuers = 3;
+}

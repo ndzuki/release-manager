@@ -15,6 +15,7 @@ import (
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
+	"github.com/ndzuki/release-manager/internal/trust"
 )
 
 func setupService(t *testing.T) (*Service, store.Store, func()) {
@@ -24,7 +25,8 @@ func setupService(t *testing.T) (*Service, store.Store, func()) {
 	require.NoError(t, err)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	svc := NewService(st, logger)
+	verifier := trust.NewStubVerifier(st.Verifications(), logger)
+	svc := NewService(st, verifier, "staging", logger)
 
 	return svc, st, func() { st.Close() }
 }
@@ -166,4 +168,54 @@ func TestCreateOperation_InvalidType(t *testing.T) {
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// REQ-012 AC-012-01: Digest mismatch → rejected, operation not created.
+func TestCreateOperation_VerificationRejected_DigestMismatch(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	ctx := context.Background()
+	_, err := svc.CreateOperation(ctx, connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-001",
+		ReleaseDefinitionId: "def-001",
+		IdempotencyKey:      "idem-verify-001",
+		SignatureRef: &commonv1.SignatureRef{
+			Digest:    "sha256:wrong",
+			Signature: "MEUCIQD...",
+			Issuer:    "evil-ci",
+			Subject:   "release-manager/v1.0.0",
+		},
+		Actor: &commonv1.ActorContext{
+			UserId:       "user-001",
+			Organization: "org-001",
+		},
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "artifact trust rejected")
+}
+
+// REQ-012: No signature_ref → verification skipped, operation created normally.
+func TestCreateOperation_NoSignatureRef_SkipsVerification(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	ctx := context.Background()
+	resp, err := svc.CreateOperation(ctx, connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-001",
+		ReleaseDefinitionId: "def-001",
+		IdempotencyKey:      "idem-verify-002",
+		Actor: &commonv1.ActorContext{
+			UserId:       "user-001",
+			Organization: "org-001",
+		},
+	}))
+	require.NoError(t, err)
+	assert.NotEmpty(t, resp.Msg.OperationId)
+	assert.Equal(t, commonv1.VerificationResult_VERIFICATION_RESULT_UNSPECIFIED, resp.Msg.VerificationResult)
 }
