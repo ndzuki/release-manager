@@ -6,10 +6,25 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/ndzuki/release-manager/api/gen/common/v1;commonv1";
 
+// BundleStatus is the lifecycle state of a ReleaseBundle.
+enum BundleStatus {
+  BUNDLE_STATUS_UNSPECIFIED = 0;
+  BUNDLE_STATUS_RECEIVED = 1;
+  BUNDLE_STATUS_VALIDATED = 2;
+  BUNDLE_STATUS_REJECTED = 3;
+}
+
 // ReleaseDigest is an immutable content-addressable identifier for a ReleaseBundle.
 message ReleaseDigest {
   string algorithm = 1;
   string value = 2;
+}
+
+// BundleImage maps a container image to its Helm values path.
+message BundleImage {
+  string ref = 1;
+  string digest = 2;
+  string values_path = 3;
 }
 
 // ReleaseBundle is the atomic unit of a release — immutable once published.
@@ -17,7 +32,17 @@ message ReleaseBundle {
   string id = 1;
   string name = 2;
   ReleaseDigest digest = 3;
-  google.protobuf.Timestamp created_at = 4;
+  BundleStatus status = 4;
+  string chart_ref = 5;
+  string chart_version = 6;
+  string chart_digest = 7;
+  repeated BundleImage images = 8;
+  string git_commit = 9;
+  string pipeline_id = 10;
+  string signature_ref = 11;
+  string sbom_ref = 12;
+  string provenance_ref = 13;
+  google.protobuf.Timestamp created_at = 14;
 }
 
 // ReleaseDefinition decouples the install preflight cycle from artifact ingestion.
