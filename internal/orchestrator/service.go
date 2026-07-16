@@ -16,21 +16,29 @@ import (
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
+	"github.com/ndzuki/release-manager/internal/orchestrator/preflight"
 	"github.com/ndzuki/release-manager/internal/store"
 	"github.com/ndzuki/release-manager/internal/trust"
 )
 
 // Service implements the OrchestratorServiceHandler Connect interface.
 type Service struct {
-	store     store.Store
-	verifier  trust.Verifier
-	targetEnv string
-	logger    *slog.Logger
+	store       store.Store
+	verifier    trust.Verifier
+	targetEnv   string
+	coordinator *preflight.Coordinator
+	logger      *slog.Logger
 }
 
 // NewService creates a new orchestrator Connect service.
 func NewService(st store.Store, verifier trust.Verifier, targetEnv string, logger *slog.Logger) *Service {
-	return &Service{store: st, verifier: verifier, targetEnv: targetEnv, logger: logger}
+	return &Service{
+		store:       st,
+		verifier:    verifier,
+		targetEnv:   targetEnv,
+		coordinator: preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), logger),
+		logger:      logger,
+	}
 }
 
 // CreateOperation creates a new release operation from the given request.
@@ -161,8 +169,8 @@ func (s *Service) CreateOperation(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create operation: %w", err))
 	}
 
-	// 8. Trigger preflight transition (async in production; synchronous for now)
-	//    Standard ops go pending->preflight, EMERGENCY goes pending->queued
+	// 8. Trigger preflight transition and launch coordinator
+	//    Standard ops go pending→preflight, EMERGENCY goes pending→queued
 	if opType.IsStandard() {
 		next, err := operation.Transition(op.Status, operation.EventStartPreflight)
 		if err != nil {
@@ -174,6 +182,12 @@ func (s *Service) CreateOperation(
 			} else {
 				op.Status = next
 				op.StateVersion++
+
+				// Launch preflight coordinator in background.
+				// Use WithoutCancel so the coordinator outlives the HTTP request.
+				bgCtx := context.WithoutCancel(ctx)
+				go s.coordinator.Run(bgCtx, op)
+				s.logger.Info("preflight coordinator launched", "op_id", op.ID)
 			}
 		}
 	}
