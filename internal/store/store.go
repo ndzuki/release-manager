@@ -787,6 +787,13 @@ type AuditEventStore interface {
 	Query(ctx context.Context, filter AuditEventFilter, cursor string, limit int) (*AuditEventPage, error)
 	GetByID(ctx context.Context, id string) (*AuditEvent, error)
 	Count(ctx context.Context, filter AuditEventFilter) (int64, error)
+
+	// ListOlderThan returns events with created_at < cutoff, ordered ASC (REQ-030).
+	ListOlderThan(ctx context.Context, cutoff time.Time, batchSize int) ([]*AuditEvent, error)
+
+	// DeleteByIDs deletes events by their IDs in a single transaction (REQ-030).
+	// Returns the count of deleted rows.
+	DeleteByIDs(ctx context.Context, ids []string) (int64, error)
 }
 
 // AuditExportStore defines the persistence contract for audit export jobs.

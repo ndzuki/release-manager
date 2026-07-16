@@ -30,6 +30,14 @@ type Service interface {
 	Register(mux *http.ServeMux, logger *slog.Logger) error
 }
 
+// BackgroundService is an optional interface for services that need
+// background work (e.g., periodic archiving). The worker runs until
+// ctx is cancelled (on SIGINT/SIGTERM).
+type BackgroundService interface {
+	Service
+	RunBackground(ctx context.Context, logger *slog.Logger)
+}
+
 // Run starts a service with config loading, signal handling, and graceful shutdown.
 func Run(configPath string, svc Service) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -53,14 +61,19 @@ func Run(configPath string, svc Service) {
 		os.Exit(1)
 	}
 
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	// Start background workers (e.g. archive worker).
+	if bg, ok := svc.(BackgroundService); ok {
+		go bg.RunBackground(ctx, logger)
+	}
+
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
 
 	errCh := make(chan error, 1)
 	go func() {
