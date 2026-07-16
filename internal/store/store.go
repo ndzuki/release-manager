@@ -612,6 +612,7 @@ type DefinitionStore interface {
 	Create(ctx context.Context, def *ReleaseDefinition) error
 	Get(ctx context.Context, id string) (*ReleaseDefinition, error)
 }
+
 // ValuesStore defines the persistence contract for values revisions.
 // For Create, the caller MUST populate Revision via GetNextRevisionNumber
 // and Digest via the values package before calling.
@@ -718,6 +719,7 @@ type AuthSessionStore interface {
 	GetByRefreshHash(ctx context.Context, hash string) (*AuthSession, error)
 	GetByTokenFamily(ctx context.Context, family string) ([]*AuthSession, error)
 	RevokeFamily(ctx context.Context, family string) error
+	HasActiveByUserID(ctx context.Context, userID string) (bool, error)
 	RevokeByUserID(ctx context.Context, userID string) error
 	DeleteExpired(ctx context.Context) (int64, error)
 }

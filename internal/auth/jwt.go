@@ -81,16 +81,23 @@ func (m *JWTManager) ValidateAccessToken(tokenStr string) (*Claims, error) {
 }
 
 // GenerateRefreshToken creates a cryptographically random refresh token string
-// and its SHA-256 hash for storage. Returns (raw token, token family ID, hash).
-func (m *JWTManager) GenerateRefreshToken() (string, string, string, error) {
+// and its SHA-256 hash for storage. It starts a new token family and returns
+// (raw token, token family ID, hash).
+func (m *JWTManager) GenerateRefreshToken() (raw, family, hash string, err error) {
+	raw, hash, err = m.generateRefreshToken()
+	if err != nil {
+		return "", "", "", err
+	}
+	return raw, newID(), hash, nil
+}
+
+func (m *JWTManager) generateRefreshToken() (raw, hash string, err error) {
 	b := make([]byte, m.refreshBytes)
 	if _, err := rand.Read(b); err != nil {
-		return "", "", "", fmt.Errorf("generate refresh token: %w", err)
+		return "", "", fmt.Errorf("generate refresh token: %w", err)
 	}
-	raw := base64.RawURLEncoding.EncodeToString(b)
-	family := newID()
-	hash := hashToken(raw)
-	return raw, family, hash, nil
+	raw = base64.RawURLEncoding.EncodeToString(b)
+	return raw, hashToken(raw), nil
 }
 
 // HashRefreshToken returns the SHA-256 hash of a raw refresh token.
