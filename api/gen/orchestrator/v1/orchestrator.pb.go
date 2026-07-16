@@ -23,6 +23,113 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// EmergencyAction is a typed operation whitelisted for emergency changes.
+type EmergencyAction int32
+
+const (
+	EmergencyAction_EMERGENCY_ACTION_UNSPECIFIED             EmergencyAction = 0
+	EmergencyAction_EMERGENCY_ACTION_SET_CONTAINER_IMAGE     EmergencyAction = 1
+	EmergencyAction_EMERGENCY_ACTION_SET_REPLICAS            EmergencyAction = 2
+	EmergencyAction_EMERGENCY_ACTION_SET_APPROVED_ANNOTATION EmergencyAction = 3
+)
+
+// Enum value maps for EmergencyAction.
+var (
+	EmergencyAction_name = map[int32]string{
+		0: "EMERGENCY_ACTION_UNSPECIFIED",
+		1: "EMERGENCY_ACTION_SET_CONTAINER_IMAGE",
+		2: "EMERGENCY_ACTION_SET_REPLICAS",
+		3: "EMERGENCY_ACTION_SET_APPROVED_ANNOTATION",
+	}
+	EmergencyAction_value = map[string]int32{
+		"EMERGENCY_ACTION_UNSPECIFIED":             0,
+		"EMERGENCY_ACTION_SET_CONTAINER_IMAGE":     1,
+		"EMERGENCY_ACTION_SET_REPLICAS":            2,
+		"EMERGENCY_ACTION_SET_APPROVED_ANNOTATION": 3,
+	}
+)
+
+func (x EmergencyAction) Enum() *EmergencyAction {
+	p := new(EmergencyAction)
+	*p = x
+	return p
+}
+
+func (x EmergencyAction) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (EmergencyAction) Descriptor() protoreflect.EnumDescriptor {
+	return file_orchestrator_v1_orchestrator_proto_enumTypes[0].Descriptor()
+}
+
+func (EmergencyAction) Type() protoreflect.EnumType {
+	return &file_orchestrator_v1_orchestrator_proto_enumTypes[0]
+}
+
+func (x EmergencyAction) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use EmergencyAction.Descriptor instead.
+func (EmergencyAction) EnumDescriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{0}
+}
+
+// EmergencyConvergence controls how the system returns to normal state.
+type EmergencyConvergence int32
+
+const (
+	EmergencyConvergence_EMERGENCY_CONVERGENCE_UNSPECIFIED EmergencyConvergence = 0
+	// REQUIRE_PROMOTION means the emergency change must be promoted to a
+	// standard ValuesRevision and go through the normal Helm pipeline.
+	EmergencyConvergence_EMERGENCY_CONVERGENCE_REQUIRE_PROMOTION EmergencyConvergence = 1
+	// REVERT_ON_NEXT_RECONCILE means the emergency change will be reverted
+	// on the next reconciliation cycle.
+	EmergencyConvergence_EMERGENCY_CONVERGENCE_REVERT_ON_NEXT_RECONCILE EmergencyConvergence = 2
+)
+
+// Enum value maps for EmergencyConvergence.
+var (
+	EmergencyConvergence_name = map[int32]string{
+		0: "EMERGENCY_CONVERGENCE_UNSPECIFIED",
+		1: "EMERGENCY_CONVERGENCE_REQUIRE_PROMOTION",
+		2: "EMERGENCY_CONVERGENCE_REVERT_ON_NEXT_RECONCILE",
+	}
+	EmergencyConvergence_value = map[string]int32{
+		"EMERGENCY_CONVERGENCE_UNSPECIFIED":              0,
+		"EMERGENCY_CONVERGENCE_REQUIRE_PROMOTION":        1,
+		"EMERGENCY_CONVERGENCE_REVERT_ON_NEXT_RECONCILE": 2,
+	}
+)
+
+func (x EmergencyConvergence) Enum() *EmergencyConvergence {
+	p := new(EmergencyConvergence)
+	*p = x
+	return p
+}
+
+func (x EmergencyConvergence) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (EmergencyConvergence) Descriptor() protoreflect.EnumDescriptor {
+	return file_orchestrator_v1_orchestrator_proto_enumTypes[1].Descriptor()
+}
+
+func (EmergencyConvergence) Type() protoreflect.EnumType {
+	return &file_orchestrator_v1_orchestrator_proto_enumTypes[1]
+}
+
+func (x EmergencyConvergence) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use EmergencyConvergence.Descriptor instead.
+func (EmergencyConvergence) EnumDescriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{1}
+}
+
 // CreateOperationRequest submits a new release operation for orchestration.
 type CreateOperationRequest struct {
 	state                   protoimpl.MessageState `protogen:"open.v1"`
@@ -1288,6 +1395,151 @@ func (x *CreateEnrollmentTokenResponse) GetExpiresAt() string {
 	return ""
 }
 
+type EmergencyChangeRequest struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	ReleaseDefinitionId string                 `protobuf:"bytes,1,opt,name=release_definition_id,json=releaseDefinitionId,proto3" json:"release_definition_id,omitempty"`
+	Action              EmergencyAction        `protobuf:"varint,2,opt,name=action,proto3,enum=orchestrator.v1.EmergencyAction" json:"action,omitempty"`
+	// payload is serialized JSON containing action-specific parameters.
+	Payload       string               `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"`
+	Reason        string               `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+	Convergence   EmergencyConvergence `protobuf:"varint,5,opt,name=convergence,proto3,enum=orchestrator.v1.EmergencyConvergence" json:"convergence,omitempty"`
+	Actor         *v1.ActorContext     `protobuf:"bytes,6,opt,name=actor,proto3" json:"actor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EmergencyChangeRequest) Reset() {
+	*x = EmergencyChangeRequest{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmergencyChangeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmergencyChangeRequest) ProtoMessage() {}
+
+func (x *EmergencyChangeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmergencyChangeRequest.ProtoReflect.Descriptor instead.
+func (*EmergencyChangeRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *EmergencyChangeRequest) GetReleaseDefinitionId() string {
+	if x != nil {
+		return x.ReleaseDefinitionId
+	}
+	return ""
+}
+
+func (x *EmergencyChangeRequest) GetAction() EmergencyAction {
+	if x != nil {
+		return x.Action
+	}
+	return EmergencyAction_EMERGENCY_ACTION_UNSPECIFIED
+}
+
+func (x *EmergencyChangeRequest) GetPayload() string {
+	if x != nil {
+		return x.Payload
+	}
+	return ""
+}
+
+func (x *EmergencyChangeRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *EmergencyChangeRequest) GetConvergence() EmergencyConvergence {
+	if x != nil {
+		return x.Convergence
+	}
+	return EmergencyConvergence_EMERGENCY_CONVERGENCE_UNSPECIFIED
+}
+
+func (x *EmergencyChangeRequest) GetActor() *v1.ActorContext {
+	if x != nil {
+		return x.Actor
+	}
+	return nil
+}
+
+type EmergencyChangeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	Convergence   EmergencyConvergence   `protobuf:"varint,3,opt,name=convergence,proto3,enum=orchestrator.v1.EmergencyConvergence" json:"convergence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EmergencyChangeResponse) Reset() {
+	*x = EmergencyChangeResponse{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmergencyChangeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmergencyChangeResponse) ProtoMessage() {}
+
+func (x *EmergencyChangeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmergencyChangeResponse.ProtoReflect.Descriptor instead.
+func (*EmergencyChangeResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *EmergencyChangeResponse) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *EmergencyChangeResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *EmergencyChangeResponse) GetConvergence() EmergencyConvergence {
+	if x != nil {
+		return x.Convergence
+	}
+	return EmergencyConvergence_EMERGENCY_CONVERGENCE_UNSPECIFIED
+}
+
 var File_orchestrator_v1_orchestrator_proto protoreflect.FileDescriptor
 
 const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
@@ -1373,7 +1625,28 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\x1dCreateEnrollmentTokenResponse\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1d\n" +
 	"\n" +
-	"expires_at\x18\x02 \x01(\tR\texpiresAt2\xb3\t\n" +
+	"expires_at\x18\x02 \x01(\tR\texpiresAt\"\xb0\x02\n" +
+	"\x16EmergencyChangeRequest\x122\n" +
+	"\x15release_definition_id\x18\x01 \x01(\tR\x13releaseDefinitionId\x128\n" +
+	"\x06action\x18\x02 \x01(\x0e2 .orchestrator.v1.EmergencyActionR\x06action\x12\x18\n" +
+	"\apayload\x18\x03 \x01(\tR\apayload\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\x12G\n" +
+	"\vconvergence\x18\x05 \x01(\x0e2%.orchestrator.v1.EmergencyConvergenceR\vconvergence\x12-\n" +
+	"\x05actor\x18\x06 \x01(\v2\x17.common.v1.ActorContextR\x05actor\"\x9d\x01\n" +
+	"\x17EmergencyChangeResponse\x12!\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\x12G\n" +
+	"\vconvergence\x18\x03 \x01(\x0e2%.orchestrator.v1.EmergencyConvergenceR\vconvergence*\xae\x01\n" +
+	"\x0fEmergencyAction\x12 \n" +
+	"\x1cEMERGENCY_ACTION_UNSPECIFIED\x10\x00\x12(\n" +
+	"$EMERGENCY_ACTION_SET_CONTAINER_IMAGE\x10\x01\x12!\n" +
+	"\x1dEMERGENCY_ACTION_SET_REPLICAS\x10\x02\x12,\n" +
+	"(EMERGENCY_ACTION_SET_APPROVED_ANNOTATION\x10\x03*\x9e\x01\n" +
+	"\x14EmergencyConvergence\x12%\n" +
+	"!EMERGENCY_CONVERGENCE_UNSPECIFIED\x10\x00\x12+\n" +
+	"'EMERGENCY_CONVERGENCE_REQUIRE_PROMOTION\x10\x01\x122\n" +
+	".EMERGENCY_CONVERGENCE_REVERT_ON_NEXT_RECONCILE\x10\x022\x99\n" +
+	"\n" +
 	"\x13OrchestratorService\x12d\n" +
 	"\x0fCreateOperation\x12'.orchestrator.v1.CreateOperationRequest\x1a(.orchestrator.v1.CreateOperationResponse\x12a\n" +
 	"\x0ePublishRelease\x12&.orchestrator.v1.PublishReleaseRequest\x1a'.orchestrator.v1.PublishReleaseResponse\x12a\n" +
@@ -1387,7 +1660,8 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"GetCluster\x12\".orchestrator.v1.GetClusterRequest\x1a#.orchestrator.v1.GetClusterResponse\x12[\n" +
 	"\fListClusters\x12$.orchestrator.v1.ListClustersRequest\x1a%.orchestrator.v1.ListClustersResponse\x12a\n" +
 	"\x0eDisableCluster\x12&.orchestrator.v1.DisableClusterRequest\x1a'.orchestrator.v1.DisableClusterResponse\x12v\n" +
-	"\x15CreateEnrollmentToken\x12-.orchestrator.v1.CreateEnrollmentTokenRequest\x1a..orchestrator.v1.CreateEnrollmentTokenResponseBJZHgithub.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1b\x06proto3"
+	"\x15CreateEnrollmentToken\x12-.orchestrator.v1.CreateEnrollmentTokenRequest\x1a..orchestrator.v1.CreateEnrollmentTokenResponse\x12d\n" +
+	"\x0fEmergencyChange\x12'.orchestrator.v1.EmergencyChangeRequest\x1a(.orchestrator.v1.EmergencyChangeResponseBJZHgithub.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1b\x06proto3"
 
 var (
 	file_orchestrator_v1_orchestrator_proto_rawDescOnce sync.Once
@@ -1401,79 +1675,90 @@ func file_orchestrator_v1_orchestrator_proto_rawDescGZIP() []byte {
 	return file_orchestrator_v1_orchestrator_proto_rawDescData
 }
 
-var file_orchestrator_v1_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_orchestrator_v1_orchestrator_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_orchestrator_v1_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_orchestrator_v1_orchestrator_proto_goTypes = []any{
-	(*CreateOperationRequest)(nil),        // 0: orchestrator.v1.CreateOperationRequest
-	(*CreateOperationResponse)(nil),       // 1: orchestrator.v1.CreateOperationResponse
-	(*PublishReleaseRequest)(nil),         // 2: orchestrator.v1.PublishReleaseRequest
-	(*PublishReleaseResponse)(nil),        // 3: orchestrator.v1.PublishReleaseResponse
-	(*ReleaseOperation)(nil),              // 4: orchestrator.v1.ReleaseOperation
-	(*CreateCustomerRequest)(nil),         // 5: orchestrator.v1.CreateCustomerRequest
-	(*CreateCustomerResponse)(nil),        // 6: orchestrator.v1.CreateCustomerResponse
-	(*GetCustomerRequest)(nil),            // 7: orchestrator.v1.GetCustomerRequest
-	(*GetCustomerResponse)(nil),           // 8: orchestrator.v1.GetCustomerResponse
-	(*ListCustomersRequest)(nil),          // 9: orchestrator.v1.ListCustomersRequest
-	(*ListCustomersResponse)(nil),         // 10: orchestrator.v1.ListCustomersResponse
-	(*UpdateCustomerRequest)(nil),         // 11: orchestrator.v1.UpdateCustomerRequest
-	(*UpdateCustomerResponse)(nil),        // 12: orchestrator.v1.UpdateCustomerResponse
-	(*DisableCustomerRequest)(nil),        // 13: orchestrator.v1.DisableCustomerRequest
-	(*DisableCustomerResponse)(nil),       // 14: orchestrator.v1.DisableCustomerResponse
-	(*CreateClusterRequest)(nil),          // 15: orchestrator.v1.CreateClusterRequest
-	(*CreateClusterResponse)(nil),         // 16: orchestrator.v1.CreateClusterResponse
-	(*GetClusterRequest)(nil),             // 17: orchestrator.v1.GetClusterRequest
-	(*GetClusterResponse)(nil),            // 18: orchestrator.v1.GetClusterResponse
-	(*ListClustersRequest)(nil),           // 19: orchestrator.v1.ListClustersRequest
-	(*ListClustersResponse)(nil),          // 20: orchestrator.v1.ListClustersResponse
-	(*DisableClusterRequest)(nil),         // 21: orchestrator.v1.DisableClusterRequest
-	(*DisableClusterResponse)(nil),        // 22: orchestrator.v1.DisableClusterResponse
-	(*CreateEnrollmentTokenRequest)(nil),  // 23: orchestrator.v1.CreateEnrollmentTokenRequest
-	(*CreateEnrollmentTokenResponse)(nil), // 24: orchestrator.v1.CreateEnrollmentTokenResponse
-	(*v1.ActorContext)(nil),               // 25: common.v1.ActorContext
-	(*timestamppb.Timestamp)(nil),         // 26: google.protobuf.Timestamp
-	(*v1.ReleaseDigest)(nil),              // 27: common.v1.ReleaseDigest
-	(*v1.Customer)(nil),                   // 28: common.v1.Customer
-	(*v1.Cluster)(nil),                    // 29: common.v1.Cluster
+	(EmergencyAction)(0),                  // 0: orchestrator.v1.EmergencyAction
+	(EmergencyConvergence)(0),             // 1: orchestrator.v1.EmergencyConvergence
+	(*CreateOperationRequest)(nil),        // 2: orchestrator.v1.CreateOperationRequest
+	(*CreateOperationResponse)(nil),       // 3: orchestrator.v1.CreateOperationResponse
+	(*PublishReleaseRequest)(nil),         // 4: orchestrator.v1.PublishReleaseRequest
+	(*PublishReleaseResponse)(nil),        // 5: orchestrator.v1.PublishReleaseResponse
+	(*ReleaseOperation)(nil),              // 6: orchestrator.v1.ReleaseOperation
+	(*CreateCustomerRequest)(nil),         // 7: orchestrator.v1.CreateCustomerRequest
+	(*CreateCustomerResponse)(nil),        // 8: orchestrator.v1.CreateCustomerResponse
+	(*GetCustomerRequest)(nil),            // 9: orchestrator.v1.GetCustomerRequest
+	(*GetCustomerResponse)(nil),           // 10: orchestrator.v1.GetCustomerResponse
+	(*ListCustomersRequest)(nil),          // 11: orchestrator.v1.ListCustomersRequest
+	(*ListCustomersResponse)(nil),         // 12: orchestrator.v1.ListCustomersResponse
+	(*UpdateCustomerRequest)(nil),         // 13: orchestrator.v1.UpdateCustomerRequest
+	(*UpdateCustomerResponse)(nil),        // 14: orchestrator.v1.UpdateCustomerResponse
+	(*DisableCustomerRequest)(nil),        // 15: orchestrator.v1.DisableCustomerRequest
+	(*DisableCustomerResponse)(nil),       // 16: orchestrator.v1.DisableCustomerResponse
+	(*CreateClusterRequest)(nil),          // 17: orchestrator.v1.CreateClusterRequest
+	(*CreateClusterResponse)(nil),         // 18: orchestrator.v1.CreateClusterResponse
+	(*GetClusterRequest)(nil),             // 19: orchestrator.v1.GetClusterRequest
+	(*GetClusterResponse)(nil),            // 20: orchestrator.v1.GetClusterResponse
+	(*ListClustersRequest)(nil),           // 21: orchestrator.v1.ListClustersRequest
+	(*ListClustersResponse)(nil),          // 22: orchestrator.v1.ListClustersResponse
+	(*DisableClusterRequest)(nil),         // 23: orchestrator.v1.DisableClusterRequest
+	(*DisableClusterResponse)(nil),        // 24: orchestrator.v1.DisableClusterResponse
+	(*CreateEnrollmentTokenRequest)(nil),  // 25: orchestrator.v1.CreateEnrollmentTokenRequest
+	(*CreateEnrollmentTokenResponse)(nil), // 26: orchestrator.v1.CreateEnrollmentTokenResponse
+	(*EmergencyChangeRequest)(nil),        // 27: orchestrator.v1.EmergencyChangeRequest
+	(*EmergencyChangeResponse)(nil),       // 28: orchestrator.v1.EmergencyChangeResponse
+	(*v1.ActorContext)(nil),               // 29: common.v1.ActorContext
+	(*timestamppb.Timestamp)(nil),         // 30: google.protobuf.Timestamp
+	(*v1.ReleaseDigest)(nil),              // 31: common.v1.ReleaseDigest
+	(*v1.Customer)(nil),                   // 32: common.v1.Customer
+	(*v1.Cluster)(nil),                    // 33: common.v1.Cluster
 }
 var file_orchestrator_v1_orchestrator_proto_depIdxs = []int32{
-	25, // 0: orchestrator.v1.CreateOperationRequest.actor:type_name -> common.v1.ActorContext
-	26, // 1: orchestrator.v1.CreateOperationResponse.accepted_at:type_name -> google.protobuf.Timestamp
-	27, // 2: orchestrator.v1.ReleaseOperation.digest:type_name -> common.v1.ReleaseDigest
-	28, // 3: orchestrator.v1.CreateCustomerResponse.customer:type_name -> common.v1.Customer
-	28, // 4: orchestrator.v1.GetCustomerResponse.customer:type_name -> common.v1.Customer
-	28, // 5: orchestrator.v1.ListCustomersResponse.customers:type_name -> common.v1.Customer
-	28, // 6: orchestrator.v1.UpdateCustomerResponse.customer:type_name -> common.v1.Customer
-	29, // 7: orchestrator.v1.CreateClusterResponse.cluster:type_name -> common.v1.Cluster
-	29, // 8: orchestrator.v1.GetClusterResponse.cluster:type_name -> common.v1.Cluster
-	29, // 9: orchestrator.v1.ListClustersResponse.clusters:type_name -> common.v1.Cluster
-	0,  // 10: orchestrator.v1.OrchestratorService.CreateOperation:input_type -> orchestrator.v1.CreateOperationRequest
-	2,  // 11: orchestrator.v1.OrchestratorService.PublishRelease:input_type -> orchestrator.v1.PublishReleaseRequest
-	5,  // 12: orchestrator.v1.OrchestratorService.CreateCustomer:input_type -> orchestrator.v1.CreateCustomerRequest
-	7,  // 13: orchestrator.v1.OrchestratorService.GetCustomer:input_type -> orchestrator.v1.GetCustomerRequest
-	9,  // 14: orchestrator.v1.OrchestratorService.ListCustomers:input_type -> orchestrator.v1.ListCustomersRequest
-	11, // 15: orchestrator.v1.OrchestratorService.UpdateCustomer:input_type -> orchestrator.v1.UpdateCustomerRequest
-	13, // 16: orchestrator.v1.OrchestratorService.DisableCustomer:input_type -> orchestrator.v1.DisableCustomerRequest
-	15, // 17: orchestrator.v1.OrchestratorService.CreateCluster:input_type -> orchestrator.v1.CreateClusterRequest
-	17, // 18: orchestrator.v1.OrchestratorService.GetCluster:input_type -> orchestrator.v1.GetClusterRequest
-	19, // 19: orchestrator.v1.OrchestratorService.ListClusters:input_type -> orchestrator.v1.ListClustersRequest
-	21, // 20: orchestrator.v1.OrchestratorService.DisableCluster:input_type -> orchestrator.v1.DisableClusterRequest
-	23, // 21: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:input_type -> orchestrator.v1.CreateEnrollmentTokenRequest
-	1,  // 22: orchestrator.v1.OrchestratorService.CreateOperation:output_type -> orchestrator.v1.CreateOperationResponse
-	3,  // 23: orchestrator.v1.OrchestratorService.PublishRelease:output_type -> orchestrator.v1.PublishReleaseResponse
-	6,  // 24: orchestrator.v1.OrchestratorService.CreateCustomer:output_type -> orchestrator.v1.CreateCustomerResponse
-	8,  // 25: orchestrator.v1.OrchestratorService.GetCustomer:output_type -> orchestrator.v1.GetCustomerResponse
-	10, // 26: orchestrator.v1.OrchestratorService.ListCustomers:output_type -> orchestrator.v1.ListCustomersResponse
-	12, // 27: orchestrator.v1.OrchestratorService.UpdateCustomer:output_type -> orchestrator.v1.UpdateCustomerResponse
-	14, // 28: orchestrator.v1.OrchestratorService.DisableCustomer:output_type -> orchestrator.v1.DisableCustomerResponse
-	16, // 29: orchestrator.v1.OrchestratorService.CreateCluster:output_type -> orchestrator.v1.CreateClusterResponse
-	18, // 30: orchestrator.v1.OrchestratorService.GetCluster:output_type -> orchestrator.v1.GetClusterResponse
-	20, // 31: orchestrator.v1.OrchestratorService.ListClusters:output_type -> orchestrator.v1.ListClustersResponse
-	22, // 32: orchestrator.v1.OrchestratorService.DisableCluster:output_type -> orchestrator.v1.DisableClusterResponse
-	24, // 33: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:output_type -> orchestrator.v1.CreateEnrollmentTokenResponse
-	22, // [22:34] is the sub-list for method output_type
-	10, // [10:22] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	29, // 0: orchestrator.v1.CreateOperationRequest.actor:type_name -> common.v1.ActorContext
+	30, // 1: orchestrator.v1.CreateOperationResponse.accepted_at:type_name -> google.protobuf.Timestamp
+	31, // 2: orchestrator.v1.ReleaseOperation.digest:type_name -> common.v1.ReleaseDigest
+	32, // 3: orchestrator.v1.CreateCustomerResponse.customer:type_name -> common.v1.Customer
+	32, // 4: orchestrator.v1.GetCustomerResponse.customer:type_name -> common.v1.Customer
+	32, // 5: orchestrator.v1.ListCustomersResponse.customers:type_name -> common.v1.Customer
+	32, // 6: orchestrator.v1.UpdateCustomerResponse.customer:type_name -> common.v1.Customer
+	33, // 7: orchestrator.v1.CreateClusterResponse.cluster:type_name -> common.v1.Cluster
+	33, // 8: orchestrator.v1.GetClusterResponse.cluster:type_name -> common.v1.Cluster
+	33, // 9: orchestrator.v1.ListClustersResponse.clusters:type_name -> common.v1.Cluster
+	0,  // 10: orchestrator.v1.EmergencyChangeRequest.action:type_name -> orchestrator.v1.EmergencyAction
+	1,  // 11: orchestrator.v1.EmergencyChangeRequest.convergence:type_name -> orchestrator.v1.EmergencyConvergence
+	29, // 12: orchestrator.v1.EmergencyChangeRequest.actor:type_name -> common.v1.ActorContext
+	1,  // 13: orchestrator.v1.EmergencyChangeResponse.convergence:type_name -> orchestrator.v1.EmergencyConvergence
+	2,  // 14: orchestrator.v1.OrchestratorService.CreateOperation:input_type -> orchestrator.v1.CreateOperationRequest
+	4,  // 15: orchestrator.v1.OrchestratorService.PublishRelease:input_type -> orchestrator.v1.PublishReleaseRequest
+	7,  // 16: orchestrator.v1.OrchestratorService.CreateCustomer:input_type -> orchestrator.v1.CreateCustomerRequest
+	9,  // 17: orchestrator.v1.OrchestratorService.GetCustomer:input_type -> orchestrator.v1.GetCustomerRequest
+	11, // 18: orchestrator.v1.OrchestratorService.ListCustomers:input_type -> orchestrator.v1.ListCustomersRequest
+	13, // 19: orchestrator.v1.OrchestratorService.UpdateCustomer:input_type -> orchestrator.v1.UpdateCustomerRequest
+	15, // 20: orchestrator.v1.OrchestratorService.DisableCustomer:input_type -> orchestrator.v1.DisableCustomerRequest
+	17, // 21: orchestrator.v1.OrchestratorService.CreateCluster:input_type -> orchestrator.v1.CreateClusterRequest
+	19, // 22: orchestrator.v1.OrchestratorService.GetCluster:input_type -> orchestrator.v1.GetClusterRequest
+	21, // 23: orchestrator.v1.OrchestratorService.ListClusters:input_type -> orchestrator.v1.ListClustersRequest
+	23, // 24: orchestrator.v1.OrchestratorService.DisableCluster:input_type -> orchestrator.v1.DisableClusterRequest
+	25, // 25: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:input_type -> orchestrator.v1.CreateEnrollmentTokenRequest
+	27, // 26: orchestrator.v1.OrchestratorService.EmergencyChange:input_type -> orchestrator.v1.EmergencyChangeRequest
+	3,  // 27: orchestrator.v1.OrchestratorService.CreateOperation:output_type -> orchestrator.v1.CreateOperationResponse
+	5,  // 28: orchestrator.v1.OrchestratorService.PublishRelease:output_type -> orchestrator.v1.PublishReleaseResponse
+	8,  // 29: orchestrator.v1.OrchestratorService.CreateCustomer:output_type -> orchestrator.v1.CreateCustomerResponse
+	10, // 30: orchestrator.v1.OrchestratorService.GetCustomer:output_type -> orchestrator.v1.GetCustomerResponse
+	12, // 31: orchestrator.v1.OrchestratorService.ListCustomers:output_type -> orchestrator.v1.ListCustomersResponse
+	14, // 32: orchestrator.v1.OrchestratorService.UpdateCustomer:output_type -> orchestrator.v1.UpdateCustomerResponse
+	16, // 33: orchestrator.v1.OrchestratorService.DisableCustomer:output_type -> orchestrator.v1.DisableCustomerResponse
+	18, // 34: orchestrator.v1.OrchestratorService.CreateCluster:output_type -> orchestrator.v1.CreateClusterResponse
+	20, // 35: orchestrator.v1.OrchestratorService.GetCluster:output_type -> orchestrator.v1.GetClusterResponse
+	22, // 36: orchestrator.v1.OrchestratorService.ListClusters:output_type -> orchestrator.v1.ListClustersResponse
+	24, // 37: orchestrator.v1.OrchestratorService.DisableCluster:output_type -> orchestrator.v1.DisableClusterResponse
+	26, // 38: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:output_type -> orchestrator.v1.CreateEnrollmentTokenResponse
+	28, // 39: orchestrator.v1.OrchestratorService.EmergencyChange:output_type -> orchestrator.v1.EmergencyChangeResponse
+	27, // [27:40] is the sub-list for method output_type
+	14, // [14:27] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_orchestrator_v1_orchestrator_proto_init() }
@@ -1486,13 +1771,14 @@ func file_orchestrator_v1_orchestrator_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_orchestrator_v1_orchestrator_proto_rawDesc), len(file_orchestrator_v1_orchestrator_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   25,
+			NumEnums:      2,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_orchestrator_v1_orchestrator_proto_goTypes,
 		DependencyIndexes: file_orchestrator_v1_orchestrator_proto_depIdxs,
+		EnumInfos:         file_orchestrator_v1_orchestrator_proto_enumTypes,
 		MessageInfos:      file_orchestrator_v1_orchestrator_proto_msgTypes,
 	}.Build()
 	File_orchestrator_v1_orchestrator_proto = out.File

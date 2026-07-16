@@ -2,23 +2,59 @@ syntax = "proto3";
 
 package notifier.v1;
 
+import "google/protobuf/timestamp.proto";
+
 option go_package = "github.com/ndzuki/release-manager/api/gen/notifier/v1;notifierv1";
 
-// NotifyRequest carries a notification payload.
-message NotifyRequest {
-  string event_type = 1;
-  string target = 2;
-  string payload = 3;
+// NotificationChannel is the delivery channel for a notification.
+enum NotificationChannel {
+  NOTIFICATION_CHANNEL_UNSPECIFIED = 0;
+  NOTIFICATION_CHANNEL_WEBHOOK = 1;
+  NOTIFICATION_CHANNEL_EMAIL = 2;
+  NOTIFICATION_CHANNEL_SLACK = 3;
+}
+
+// NotificationStatus tracks the delivery lifecycle of a notification job.
+enum NotificationStatus {
+  NOTIFICATION_STATUS_UNSPECIFIED = 0;
+  NOTIFICATION_STATUS_PENDING = 1;
+  NOTIFICATION_STATUS_SENDING = 2;
+  NOTIFICATION_STATUS_DELIVERED = 3;
+  NOTIFICATION_STATUS_FAILED = 4;
+  NOTIFICATION_STATUS_DEAD_LETTER = 5;
+}
+
+// SendNotificationRequest triggers delivery for a terminal operation event.
+message SendNotificationRequest {
+  string operation_id = 1;
+  NotificationChannel channel = 2;
+  string recipient = 3;
   map<string, string> metadata = 4;
 }
 
-// NotifyResponse acknowledges notification delivery.
-message NotifyResponse {
-  string notification_id = 1;
-  string status = 2;
+// SendNotificationResponse acknowledges the notification job was created.
+message SendNotificationResponse {
+  string job_id = 1;
+  NotificationStatus status = 2;
 }
 
-// NotifierService dispatches notifications about release events.
+// GetNotificationStatusRequest fetches the current state of a notification job.
+message GetNotificationStatusRequest {
+  string job_id = 1;
+}
+
+// GetNotificationStatusResponse returns the job status plus retry info.
+message GetNotificationStatusResponse {
+  string job_id = 1;
+  NotificationStatus status = 2;
+  int32 retry_count = 3;
+  string last_error = 4;
+  google.protobuf.Timestamp next_retry_at = 5;
+}
+
+// NotifierService dispatches notifications about release events with retry
+// and dead-letter queue support.
 service NotifierService {
-  rpc Notify(NotifyRequest) returns (NotifyResponse);
+  rpc Send(SendNotificationRequest) returns (SendNotificationResponse);
+  rpc GetStatus(GetNotificationStatusRequest) returns (GetNotificationStatusResponse);
 }

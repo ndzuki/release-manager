@@ -28,6 +28,8 @@ type Store struct {
 	orgs        *organizationStore
 	orgMembers  *organizationMemberStore
 	bindings    *bindingStore
+	audit       *auditEventStore
+	notif       *notificationStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -69,6 +71,8 @@ func Open(dsn string) (*Store, error) {
 	s.orgs = &organizationStore{db: db}
 	s.orgMembers = &organizationMemberStore{db: db}
 	s.bindings = &bindingStore{db: db}
+	s.audit = &auditEventStore{db: db}
+	s.notif = &notificationStore{db: db}
 	return s, nil
 }
 
@@ -113,6 +117,12 @@ func (s *Store) OrgMembers() store.OrganizationMemberStore { return s.orgMembers
 
 // Bindings returns the BindingStore.
 func (s *Store) Bindings() store.BindingStore { return s.bindings }
+
+// AuditEvents returns the AuditEventStore.
+func (s *Store) AuditEvents() store.AuditEventStore { return s.audit }
+
+// Notifications returns the NotificationStore.
+func (s *Store) Notifications() store.NotificationStore { return s.notif }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
@@ -323,6 +333,45 @@ var migrationStatements = []string{
 	)`,
 
 	`CREATE INDEX IF NOT EXISTS idx_bindings_org ON org_customer_bindings(org_id)`,
+
+	// Audit events (REQ-050)
+	`CREATE TABLE IF NOT EXISTS audit_events (
+		id               TEXT PRIMARY KEY,
+		actor_kind       TEXT NOT NULL DEFAULT 'system',
+		actor_id         TEXT NOT NULL DEFAULT '',
+		organization_id  TEXT NOT NULL DEFAULT '',
+		role             TEXT NOT NULL DEFAULT '',
+		resource_type    TEXT NOT NULL DEFAULT '',
+		resource_id      TEXT NOT NULL DEFAULT '',
+		action           TEXT NOT NULL DEFAULT '',
+		status           TEXT NOT NULL DEFAULT '',
+		duration_ms      INTEGER NOT NULL DEFAULT 0,
+		change_summary   TEXT NOT NULL DEFAULT '',
+		metadata         TEXT NOT NULL DEFAULT '{}',
+		created_at       TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON audit_events(actor_kind, actor_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_audit_events_resource ON audit_events(resource_type, resource_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at)`,
+
+	// Notification jobs (REQ-031)
+	`CREATE TABLE IF NOT EXISTS notification_jobs (
+		id             TEXT PRIMARY KEY,
+		operation_id   TEXT NOT NULL DEFAULT '',
+		channel        TEXT NOT NULL DEFAULT 'webhook',
+		recipient      TEXT NOT NULL DEFAULT '',
+		status         TEXT NOT NULL DEFAULT 'pending',
+		retry_count    INTEGER NOT NULL DEFAULT 0,
+		max_retries    INTEGER NOT NULL DEFAULT 3,
+		next_retry_at  TEXT,
+		last_error     TEXT NOT NULL DEFAULT '',
+		dead_letter_at TEXT,
+		metadata       TEXT NOT NULL DEFAULT '{}',
+		created_at     TEXT NOT NULL,
+		updated_at     TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_notification_jobs_status ON notification_jobs(status)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_jobs_dedup ON notification_jobs(operation_id, channel, recipient)`,
 }
 
 // nowUTC returns the current time in UTC as an RFC3339 string for SQLite storage.

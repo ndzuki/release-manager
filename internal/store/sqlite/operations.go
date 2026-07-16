@@ -105,6 +105,22 @@ func (s *operationStore) HasActiveForDefinition(ctx context.Context, definitionI
 	return count > 0, nil
 }
 
+// HasActiveEmergencyForDefinition returns true if there is an active EMERGENCY operation
+// for the given definition. Used for AC-032-06 conflict detection.
+func (s *operationStore) HasActiveEmergencyForDefinition(ctx context.Context, definitionID string) (bool, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM operations
+		WHERE release_definition_id = ?
+		  AND operation_type = 'EMERGENCY'
+		  AND status NOT IN ('succeeded','failed','cancelled','timeout')
+	`, definitionID)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return false, fmt.Errorf("count active emergency operations: %w", err)
+	}
+	return count > 0, nil
+}
+
 func (s *operationStore) List(ctx context.Context, definitionID string) ([]*store.Operation, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, operation_type, status, release_definition_id,

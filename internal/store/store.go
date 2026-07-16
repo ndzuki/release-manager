@@ -359,6 +359,108 @@ type OrgCustomerBinding struct {
 	UpdatedAt         time.Time
 }
 
+// --- Audit & Notification domain types (REQ-050, REQ-031) ---
+
+// AuditActorKind classifies the principal that performed an action.
+type AuditActorKind string
+
+const (
+	AuditActorUser    AuditActorKind = "user"
+	AuditActorService AuditActorKind = "service"
+	AuditActorAPIKey  AuditActorKind = "api_key"
+	AuditActorSystem  AuditActorKind = "system"
+)
+
+// AuditEvent represents a single audit trail entry.
+type AuditEvent struct {
+	ID             string
+	ActorKind      AuditActorKind
+	ActorID        string
+	OrganizationID string
+	Role           string
+	ResourceType   string
+	ResourceID     string
+	Action         string
+	Status         string
+	DurationMs     int64
+	ChangeSummary  string
+	Metadata       map[string]string
+	CreatedAt      time.Time
+}
+
+// NotificationChannel is the delivery channel for a notification.
+type NotificationChannel string
+
+const (
+	NotificationChannelWebhook NotificationChannel = "webhook"
+	NotificationChannelEmail   NotificationChannel = "email"
+	NotificationChannelSlack   NotificationChannel = "slack"
+)
+
+// NotificationStatus is the delivery lifecycle state.
+type NotificationStatus string
+
+const (
+	NotificationPending    NotificationStatus = "pending"
+	NotificationSending    NotificationStatus = "sending"
+	NotificationDelivered  NotificationStatus = "delivered"
+	NotificationFailed     NotificationStatus = "failed"
+	NotificationDeadLetter NotificationStatus = "dead_letter"
+)
+
+// NotificationJob tracks a notification delivery attempt.
+type NotificationJob struct {
+	ID          string
+	OperationID string
+	Channel     NotificationChannel
+	Recipient   string
+	Status      NotificationStatus
+	RetryCount  int
+	MaxRetries  int
+	NextRetryAt *time.Time
+	LastError   string
+	DeadLetterAt *time.Time
+	Metadata    map[string]string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// --- Emergency change domain types (REQ-032) ---
+
+// EmergencyAction is a typed operation whitelisted for emergency changes.
+type EmergencyAction string
+
+const (
+	EmergencySetContainerImage     EmergencyAction = "set_container_image"
+	EmergencySetReplicas           EmergencyAction = "set_replicas"
+	EmergencySetApprovedAnnotation EmergencyAction = "set_approved_annotation"
+)
+
+// Valid returns true if the emergency action is a recognized value.
+func (a EmergencyAction) Valid() bool {
+	switch a {
+	case EmergencySetContainerImage, EmergencySetReplicas, EmergencySetApprovedAnnotation:
+		return true
+	}
+	return false
+}
+
+// EmergencyConvergence controls how the system returns to normal state.
+type EmergencyConvergence string
+
+const (
+	EmergencyRequirePromotion    EmergencyConvergence = "require_promotion"
+	EmergencyRevertOnNextReconcile EmergencyConvergence = "revert_on_next_reconcile"
+)
+
+// EmergencyPayload carries the typed emergency change request data.
+type EmergencyPayload struct {
+	Action      EmergencyAction
+	Payload     string // JSON-encoded action-specific parameters
+	Reason      string
+	Convergence EmergencyConvergence
+}
+
 // OperationStore defines the persistence contract for operations.
 type OperationStore interface {
 	Create(ctx context.Context, op *Operation) error
@@ -366,6 +468,7 @@ type OperationStore interface {
 	GetByIdempotencyKey(ctx context.Context, key string) (*Operation, error)
 	UpdateStatus(ctx context.Context, id string, status OperationStatus, stateVersion int, lastError string) (*Operation, error)
 	HasActiveForDefinition(ctx context.Context, definitionID string) (bool, error)
+	HasActiveEmergencyForDefinition(ctx context.Context, definitionID string) (bool, error)
 	List(ctx context.Context, definitionID string) ([]*Operation, error)
 }
 
@@ -483,6 +586,21 @@ type BindingStore interface {
 	Update(ctx context.Context, b *OrgCustomerBinding) error
 }
 
+// AuditEventStore defines the persistence contract for audit events (REQ-050).
+type AuditEventStore interface {
+	Create(ctx context.Context, e *AuditEvent) error
+	CreateBatch(ctx context.Context, events []*AuditEvent) error
+}
+
+// NotificationStore defines the persistence contract for notification jobs (REQ-031).
+type NotificationStore interface {
+	Create(ctx context.Context, j *NotificationJob) error
+	Get(ctx context.Context, id string) (*NotificationJob, error)
+	GetPending(ctx context.Context, now time.Time, limit int) ([]*NotificationJob, error)
+	UpdateStatus(ctx context.Context, id string, status NotificationStatus, retryCount int, nextRetryAt *time.Time, lastError string) error
+	MarkDeadLetter(ctx context.Context, id string) error
+}
+
 // Store is the top-level persistence abstraction.
 type Store interface {
 	Operations() OperationStore
@@ -499,5 +617,7 @@ type Store interface {
 	Organizations() OrganizationStore
 	OrgMembers() OrganizationMemberStore
 	Bindings() BindingStore
+	AuditEvents() AuditEventStore
+	Notifications() NotificationStore
 	Close() error
 }
