@@ -33,6 +33,7 @@ type Store struct {
 	notif      *notificationStore
 	bundles    *bundleStore
 	verifs     *verificationStore
+	preflight  *preflightStore
 	routes     *clusterRouteStore
 	invs       *inventoryStore
 	custEvents *customerEventStore
@@ -82,6 +83,7 @@ func Open(dsn string) (*Store, error) {
 	s.bundles = &bundleStore{db: db}
 	s.invs = &inventoryStore{db: db}
 	s.verifs = &verificationStore{db: db}
+	s.preflight = &preflightStore{db: db}
 	s.custEvents = &customerEventStore{db: db}
 	s.routes = &clusterRouteStore{db: db}
 	return s, nil
@@ -140,6 +142,9 @@ func (s *Store) Notifications() store.NotificationStore { return s.notif }
 
 // Verifications returns the VerificationStore.
 func (s *Store) Verifications() store.VerificationStore { return s.verifs }
+
+// PreflightResults returns the PreflightStore.
+func (s *Store) PreflightResults() store.PreflightStore { return s.preflight }
 
 // CustomerEvents returns the CustomerEventStore.
 func (s *Store) CustomerEvents() store.CustomerEventStore { return s.custEvents }
@@ -523,6 +528,20 @@ var migrationStatements = []string{
 		created_at     TEXT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_release_bundles_digest ON release_bundles(digest_alg, digest_value)`,
+
+	// Artifact preflight cache (REQ-045)
+	`CREATE TABLE IF NOT EXISTS preflight_results (
+		id                   TEXT PRIMARY KEY,
+		operation_id         TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+		routing_version      TEXT NOT NULL,
+		bundle_digest        TEXT NOT NULL,
+		trust_policy_version TEXT NOT NULL DEFAULT '',
+		sbom_policy_version  TEXT NOT NULL DEFAULT '',
+		result_json          BLOB NOT NULL,
+		created_at           TEXT NOT NULL,
+		UNIQUE(operation_id, routing_version, bundle_digest, trust_policy_version, sbom_policy_version)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_preflight_results_operation ON preflight_results(operation_id, created_at)`,
 }
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }
