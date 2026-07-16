@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/reflection"
 )
 
 // GRPCServer wraps the gRPC server for the manager service.
@@ -25,6 +26,7 @@ func NewGRPC(port int, logger *slog.Logger) *GRPCServer {
 	hs := health.NewServer()
 	hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
 	grpc_health_v1.RegisterHealthServer(srv, hs)
+	reflection.Register(srv)
 
 	return &GRPCServer{
 		srv:    srv,
