@@ -164,9 +164,10 @@ func (a *storeAdapter) LoadPolicy(m model.Model) error {
 	return nil
 }
 
-func (a *storeAdapter) SavePolicy(_ model.Model) error { return nil }
-func (a *storeAdapter) AddPolicy(_, _ string, _ []string) error { return nil }
-func (a *storeAdapter) RemovePolicy(_, _ string, _ []string) error { return nil }
+func (a *storeAdapter) SavePolicy(_ model.Model) error                             { return nil }
+func (a *storeAdapter) AddPolicy(_, _ string, _ []string) error                    { return nil }
+func (a *storeAdapter) RemovePolicy(_, _ string, _ []string) error                 { return nil }
+func (a *storeAdapter) RemoveFilteredPolicy(_, _ string, _ int, _ ...string) error { return nil }
 func persistRoleBinding(m model.Model, ptype, v0, v1, v2 string) error {
 	_ = m.AddPolicy(ptype, ptype, []string{v0, v1, v2}) //nolint:errcheck
 	return nil

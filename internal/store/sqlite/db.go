@@ -352,6 +352,9 @@ var migrationStatements = []string{
 		created_at    TEXT NOT NULL,
 		updated_at    TEXT NOT NULL
 	)`,
+	`ALTER TABLE users ADD COLUMN provider TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE users ADD COLUMN subject TEXT NOT NULL DEFAULT ''`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_provider_subject ON users(provider, subject) WHERE provider != '' AND subject != ''`,
 
 	`CREATE TABLE IF NOT EXISTS auth_sessions (
 		id                 TEXT PRIMARY KEY,

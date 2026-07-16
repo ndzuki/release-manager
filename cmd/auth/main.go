@@ -17,8 +17,12 @@ import (
 )
 
 type authSvc struct {
-	dbPath     string
-	signingKey string
+	dbPath          string
+	signingKey      string
+	providers       map[string]auth.ExternalIdP
+	autoCreate      bool
+	requireApproval bool
+	organizationID  string
 }
 
 func (s *authSvc) Name() string { return "release-auth" }
@@ -65,6 +69,15 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	bindingSvc := auth.NewBindingService(st, resolver, logger)
 	bindingPath, bindingHandler := authv1connect.NewBindingServiceHandler(bindingSvc, interceptorOpt)
 	mux.Handle(bindingPath, bindingHandler)
+	externalSvc := auth.NewExternalIdentityService(st, jwtMgr, s.providers, auth.ExternalIdentityServiceConfig{
+		AutoCreate:      s.autoCreate,
+		RequireApproval: s.requireApproval,
+		OrganizationID:  s.organizationID,
+	}, logger)
+	externalPath, externalHandler := authv1connect.NewExternalIdentityServiceHandler(externalSvc)
+	mux.Handle(externalPath, externalHandler)
+	mux.HandleFunc("GET /auth/oidc/callback", externalSvc.OIDCCallback)
+	mux.HandleFunc("GET /auth/dingtalk/callback", externalSvc.DingTalkCallback)
 
 	return nil
 }
@@ -73,7 +86,59 @@ func main() {
 	configPath := flag.String("config", "configs/auth.dev.yaml", "path to config file")
 	dbPath := flag.String("db", "data/auth.db", "path to SQLite database")
 	signingKey := flag.String("signing-key", "change-me-in-production", "JWT signing key")
+	autoCreate := flag.Bool("external-auto-create", false, "automatically create users for external identities")
+	requireApproval := flag.Bool("external-require-approval", false, "create external users in pending approval state")
+	organizationID := flag.String("external-organization-id", "", "organization receiving mapped external roles")
+	oidcIssuer := flag.String("oidc-issuer", "", "OIDC issuer URL")
+	oidcClientID := flag.String("oidc-client-id", "", "OIDC client ID")
+	oidcClientSecret := flag.String("oidc-client-secret", "", "OIDC client secret")
+	oidcRedirectURL := flag.String("oidc-redirect-url", "", "OIDC callback URL")
+	ldapURL := flag.String("ldap-url", "", "LDAP server URL")
+	ldapBindDN := flag.String("ldap-bind-dn", "", "LDAP service account bind DN")
+	ldapBindPassword := flag.String("ldap-bind-password", "", "LDAP service account password")
+	ldapBaseDN := flag.String("ldap-base-dn", "", "LDAP search base DN")
+	ldapStartTLS := flag.Bool("ldap-starttls", false, "upgrade LDAP connection with StartTLS")
+	ldapProduction := flag.Bool("ldap-production", false, "reject plaintext LDAP binding")
+	dingTalkClientID := flag.String("dingtalk-client-id", "", "DingTalk client ID")
+	dingTalkClientSecret := flag.String("dingtalk-client-secret", "", "DingTalk client secret")
+	dingTalkRedirectURL := flag.String("dingtalk-redirect-url", "", "DingTalk callback URL")
 	flag.Parse()
 
-	app.Run(*configPath, &authSvc{dbPath: *dbPath, signingKey: *signingKey})
+	providers := make(map[string]auth.ExternalIdP)
+	if *oidcIssuer != "" {
+		provider, err := auth.NewOIDCProvider(context.Background(), auth.OIDCConfig{
+			IssuerURL: *oidcIssuer, ClientID: *oidcClientID, ClientSecret: *oidcClientSecret, RedirectURL: *oidcRedirectURL,
+		})
+		if err != nil {
+			slog.Error("initialize oidc provider", "error", err)
+			return
+		}
+		providers[auth.ProviderOIDC] = provider
+	}
+	if *ldapURL != "" {
+		provider := auth.NewLDAPProvider(auth.LDAPConfig{
+			URL: *ldapURL, BindDN: *ldapBindDN, BindPassword: *ldapBindPassword, BaseDN: *ldapBaseDN,
+			StartTLS: *ldapStartTLS, Production: *ldapProduction,
+		})
+		if err := provider.Validate(context.Background()); err != nil {
+			slog.Error("initialize ldap provider", "error", err)
+			return
+		}
+		providers[auth.ProviderLDAP] = provider
+	}
+	if *dingTalkClientID != "" {
+		provider := auth.NewDingTalkProvider(auth.DingTalkConfig{
+			ClientID: *dingTalkClientID, ClientSecret: *dingTalkClientSecret, RedirectURL: *dingTalkRedirectURL,
+		})
+		if err := provider.Validate(context.Background()); err != nil {
+			slog.Error("initialize dingtalk provider", "error", err)
+			return
+		}
+		providers[auth.ProviderDingTalk] = provider
+	}
+
+	app.Run(*configPath, &authSvc{
+		dbPath: *dbPath, signingKey: *signingKey, providers: providers,
+		autoCreate: *autoCreate, requireApproval: *requireApproval, organizationID: *organizationID,
+	})
 }
