@@ -17,6 +17,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/operator/ca"
 	"github.com/ndzuki/release-manager/internal/store"
 )
+
 // Service implements the OperatorServiceHandler Connect interface.
 type Service struct {
 	store           store.Store
@@ -51,6 +52,7 @@ func (s *Service) SetInventorySyncer(syncer *InventorySyncer) {
 
 // Enroll validates a single-use enrollment token, creates an operator record,
 // and establishes a new session for the operator agent.
+//
 //nolint:gocyclo // enrollment validation requires multiple sequential checks
 func (s *Service) Enroll(
 	ctx context.Context,
@@ -221,12 +223,16 @@ func (s *Service) Enroll(
 // It manages the outbox state machine:
 //
 //	pending → delivered → persisted → running → terminal (succeeded/failed)
+//
+// On reconnect, it detects sequence gaps, re-delivers unacknowledged commands,
+// and returns duplicate results for already-completed commands.
+//
 //nolint:gocyclo // bidirectional stream state machine inherently complex
 func (s *Service) CommandStream(
 	ctx context.Context,
 	stream *connect.BidiStream[operatorv1.CommandStreamRequest, operatorv1.CommandStreamResponse],
 ) error {
-	// Initial hello phase.
+	// ── Hello phase ──
 	req, err := stream.Receive()
 	if err != nil {
 		return err
@@ -239,6 +245,7 @@ func (s *Service) CommandStream(
 
 	sessionID := hello.GetSessionId()
 	operatorID := hello.GetOperatorId()
+	lastSeenSeq := hello.GetLastSeenSequence()
 
 	// Validate session.
 	sess, err := s.store.Sessions().Get(ctx, sessionID)
@@ -267,8 +274,17 @@ func (s *Service) CommandStream(
 		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator revoked"))
 	}
 
-	s.logger.Info("operator stream established", "operator_id", operatorID, "session_id", sessionID)
+	s.logger.Info("operator stream established",
+		"operator_id", operatorID, "session_id", sessionID,
+		"last_seen_sequence", lastSeenSeq,
+	)
 
+	// ── Reconnect: detect sequence gap and re-deliver ──
+	if err := s.handleReconnect(ctx, stream, operatorID, lastSeenSeq); err != nil {
+		return err
+	}
+
+	// ── Main loop ──
 	// Heartbeat ticker.
 	hbTicker := time.NewTicker(s.heartbeatMaxAge / 2)
 	defer hbTicker.Stop()
@@ -280,63 +296,30 @@ func (s *Service) CommandStream(
 
 	go s.deliverPending(ctx, operatorID, deliverCh, deliverDone)
 
-	// Main receive loop: process heartbeats, ACKs, and results.
 	for {
-		// Check for pending commands to deliver.
-		select {
-		case entry := <-deliverCh:
-			s.logger.Debug("delivering command", "outbox_id", entry.ID, "operation_id", entry.OperationID)
-			if err := stream.Send(&operatorv1.CommandStreamResponse{
-				Payload: &operatorv1.CommandStreamResponse_Command{
-					Command: &operatorv1.Command{
-						OutboxId:      entry.ID,
-						CommandId:     entry.OperationID,
-						OperationId:   entry.OperationID,
-						OperationType: "UPGRADE",
-					},
-				},
-			}); err != nil {
-				return err
-			}
-			if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandDelivered, ""); err != nil {
-				s.logger.Warn("failed to mark command delivered", "error", err)
-			}
-		default:
-		}
-
 		select {
 		case <-hbTicker.C:
 			if err := s.store.Sessions().Heartbeat(ctx, sessionID); err != nil {
 				s.logger.Warn("heartbeat failed", "error", err)
-				if err := s.store.Sessions().UpdateStatus(ctx, sessionID, store.SessionOffline); err != nil {
-					s.logger.Warn("failed to mark session offline on heartbeat timeout", "error", err)
-				}
+				_ = s.store.Sessions().UpdateStatus(ctx, sessionID, store.SessionOffline)
 				return nil
 			}
 
 		case entry := <-deliverCh:
-			s.logger.Debug("delivering command", "outbox_id", entry.ID)
-			if err := stream.Send(&operatorv1.CommandStreamResponse{
-				Payload: &operatorv1.CommandStreamResponse_Command{
-					Command: &operatorv1.Command{
-						OutboxId:      entry.ID,
-						CommandId:     entry.OperationID,
-						OperationId:   entry.OperationID,
-						OperationType: "UPGRADE",
-					},
-				},
-			}); err != nil {
+			s.logger.Debug("delivering command",
+				"outbox_id", entry.ID,
+				"command_id", entry.CommandID,
+				"sequence", entry.Sequence,
+			)
+			if err := s.sendCommand(stream, entry); err != nil {
 				return err
 			}
-			if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandDelivered, ""); err != nil {
-				s.logger.Warn("failed to mark command delivered", "error", err)
-			}
+			_ = s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandDelivered, "")
 
 		case <-ctx.Done():
 			return nil
 
 		default:
-			// Non-blocking receive.
 			req, err := stream.Receive()
 			if err != nil {
 				return err
@@ -344,36 +327,182 @@ func (s *Service) CommandStream(
 
 			switch {
 			case req.GetHeartbeat() != nil:
-				if err := s.store.Sessions().Heartbeat(ctx, sessionID); err != nil {
-					s.logger.Warn("heartbeat failed", "error", err)
-				}
+				_ = s.store.Sessions().Heartbeat(ctx, sessionID)
 
 			case req.GetAck() != nil:
 				ack := req.GetAck()
-				s.logger.Debug("command ack", "outbox_id", ack.GetOutboxId())
-				if err := s.store.Outbox().UpdateStatus(ctx, ack.GetOutboxId(), store.CommandPersisted, ""); err != nil {
-					s.logger.Warn("failed to mark command persisted", "error", err)
+				s.logger.Debug("command ack",
+					"outbox_id", ack.GetOutboxId(),
+					"sequence", ack.GetSequence(),
+					"ack_type", ack.GetAckType(),
+				)
+				// ACK_RECEIVED and ACK_PERSISTED both imply delivered,
+				// but only ACK_PERSISTED releases the orchestator from
+				// re-delivery responsibility.
+				if ack.GetAckType() == operatorv1.AckType_ACK_TYPE_PERSISTED {
+					_ = s.store.Outbox().UpdateStatus(ctx, ack.GetOutboxId(), store.CommandPersisted, "")
 				}
 
 			case req.GetResult() != nil:
 				result := req.GetResult()
+				s.logger.Info("command result",
+					"outbox_id", result.GetOutboxId(),
+					"command_id", result.GetCommandId(),
+					"status", result.GetStatus(),
+					"sequence", result.GetSequence(),
+				)
+
+				// Dedup: check if this command already reached terminal state.
+				existing, err := s.store.Outbox().GetByCommandID(ctx, result.GetCommandId())
+				if err != nil && err != store.ErrNotFound {
+					s.logger.Warn("failed to check command dedup", "error", err)
+				}
+				if existing != nil && (existing.Status == store.CommandSucceeded || existing.Status == store.CommandFailed) {
+					s.logger.Info("command already terminal, sending duplicate response",
+						"command_id", result.GetCommandId(),
+					)
+					if err := stream.Send(&operatorv1.CommandStreamResponse{
+						Payload: &operatorv1.CommandStreamResponse_DuplicateResponse{
+							DuplicateResponse: &operatorv1.DuplicateResponse{
+								CommandId:  result.GetCommandId(),
+								ResultJson: existing.ResultJSON,
+							},
+						},
+					}); err != nil {
+						return err
+					}
+					continue
+				}
+
 				status := store.CommandSucceeded
 				if result.GetStatus() == "failed" {
 					status = store.CommandFailed
 				}
-				s.logger.Info("command result",
-					"outbox_id", result.GetOutboxId(),
-					"status", result.GetStatus(),
-				)
-				if err := s.store.Outbox().UpdateStatus(ctx, result.GetOutboxId(), status, result.GetMessage()); err != nil {
-					s.logger.Warn("failed to mark command result", "error", err)
+				resultJSON := result.GetResultJson()
+				if resultJSON == "" {
+					resultJSON = result.GetMessage()
 				}
+				_ = s.store.Outbox().UpdateStatus(ctx, result.GetOutboxId(), status, resultJSON)
+
+			case req.GetResyncResponse() != nil:
+				rr := req.GetResyncResponse()
+				s.logger.Info("operator resync response",
+					"operator_last_sequence", rr.GetOperatorLastSequence(),
+				)
+				// After receiving resync response, re-deliver any unacked
+				// commands starting from the operator's last sequence.
+				_ = s.reDeliverFrom(ctx, stream, operatorID, rr.GetOperatorLastSequence())
 			}
 		}
 	}
 }
 
-// deliverPending polls for pending commands and sends them to the stream.
+// handleReconnect checks for sequence gaps and re-delivers unacknowledged commands
+// on session reconnect. It sends ResyncRequest for gaps and DuplicateResponse for
+// already-completed commands.
+func (s *Service) handleReconnect(
+	ctx context.Context,
+	stream *connect.BidiStream[operatorv1.CommandStreamRequest, operatorv1.CommandStreamResponse],
+	operatorID string,
+	lastSeenSeq int64,
+) error {
+	// Get the max sequence known to orchestrator.
+	maxSeq, err := s.store.Outbox().GetNextSequence(ctx)
+	if err != nil {
+		s.logger.Warn("failed to get next sequence", "error", err)
+		return nil // non-fatal on reconnect
+	}
+	// GetNextSequence returns max+1, so current max is maxSeq-1.
+	if maxSeq > 0 {
+		maxSeq-- // actual max known sequence
+	}
+
+	// Detect sequence gap: operator missed some commands.
+	if lastSeenSeq > 0 && lastSeenSeq < maxSeq {
+		s.logger.Warn("sequence gap detected",
+			"operator_last", lastSeenSeq,
+			"orchestrator_max", maxSeq,
+		)
+		if err := stream.Send(&operatorv1.CommandStreamResponse{
+			Payload: &operatorv1.CommandStreamResponse_ResyncRequest{
+				ResyncRequest: &operatorv1.ResyncRequest{
+					OrchestratorLastSequence: maxSeq,
+					Reason:                   fmt.Sprintf("gap: operator has %d, orchestrator has %d", lastSeenSeq, maxSeq),
+				},
+			},
+		}); err != nil {
+			return err
+		}
+		// Don't re-deliver yet — wait for operator's ResyncResponse.
+		return nil
+	}
+
+	// No gap: re-deliver delivered but not yet ACK_PERSISTED commands.
+	return s.reDeliverFrom(ctx, stream, operatorID, lastSeenSeq)
+}
+
+// reDeliverFrom sends all delivered-but-not-acked commands to the operator,
+// skipping commands already completed (sending DuplicateResponse instead).
+func (s *Service) reDeliverFrom(
+	ctx context.Context,
+	stream *connect.BidiStream[operatorv1.CommandStreamRequest, operatorv1.CommandStreamResponse],
+	operatorID string,
+	fromSeq int64,
+) error {
+	entries, err := s.store.Outbox().GetDeliveredNotAcked(ctx, operatorID)
+	if err != nil {
+		return fmt.Errorf("query delivered not acked: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.Sequence <= fromSeq {
+			continue
+		}
+
+		// If already terminal, send duplicate response instead.
+		if entry.Status == store.CommandSucceeded || entry.Status == store.CommandFailed {
+			if err := stream.Send(&operatorv1.CommandStreamResponse{
+				Payload: &operatorv1.CommandStreamResponse_DuplicateResponse{
+					DuplicateResponse: &operatorv1.DuplicateResponse{
+						CommandId:  entry.CommandID,
+						ResultJson: entry.ResultJSON,
+					},
+				},
+			}); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Re-deliver.
+		if err := s.sendCommand(stream, entry); err != nil {
+			return err
+		}
+		_ = s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandDelivered, "")
+	}
+	return nil
+}
+
+// sendCommand serializes an outbox entry into a CommandStreamResponse.
+func (s *Service) sendCommand(
+	stream *connect.BidiStream[operatorv1.CommandStreamRequest, operatorv1.CommandStreamResponse],
+	entry *store.OutboxEntry,
+) error {
+	return stream.Send(&operatorv1.CommandStreamResponse{
+		Payload: &operatorv1.CommandStreamResponse_Command{
+			Command: &operatorv1.Command{
+				OutboxId:      entry.ID,
+				CommandId:     entry.CommandID,
+				OperationId:   entry.OperationID,
+				OperationType: entry.OperationType,
+				Sequence:      entry.Sequence,
+			},
+		},
+	})
+}
+
+// deliverPending polls for pending commands and sends them to the delivery channel.
+// It enforces max_inflight by blocking when an inflight command exists.
 func (s *Service) deliverPending(
 	ctx context.Context,
 	operatorID string,
@@ -388,10 +517,34 @@ func (s *Service) deliverPending(
 		case <-done:
 			return
 		case <-ticker.C:
+			// Check for inflight command (max_inflight=1 enforcement).
+			inflight, err := s.store.Outbox().GetInflightForOperator(ctx, operatorID)
+			if err != nil && err != store.ErrNotFound {
+				s.logger.Warn("failed to check inflight", "error", err)
+				continue
+			}
+			if inflight != nil {
+				// An inflight command exists; skip this poll cycle.
+				continue
+			}
+
 			entry, err := s.store.Outbox().GetNextPending(ctx, operatorID)
 			if err != nil || entry == nil {
 				continue
 			}
+
+			// Assign sequence number to new pending entries.
+			if entry.Sequence == 0 {
+				seq, err := s.store.Outbox().GetNextSequence(ctx)
+				if err != nil {
+					s.logger.Warn("failed to get next sequence", "error", err)
+					continue
+				}
+				entry.Sequence = seq
+				// Update the sequence in the outbox.
+				_ = s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPending, "")
+			}
+
 			select {
 			case deliverCh <- entry:
 			case <-done:

@@ -250,17 +250,20 @@ type Session struct {
 
 // OutboxEntry holds a command pending delivery in the outbox.
 type OutboxEntry struct {
-	ID          string        `json:"id"`
-	OperationID string        `json:"operation_id"`
-	OperatorID  string        `json:"operator_id"`
-	Payload     []byte        `json:"payload"`
-	Status      CommandStatus `json:"status"`
-	MaxInFlight int           `json:"max_inflight"`
-	ResultJSON  string        `json:"result_json,omitempty"`
-	CreatedAt   time.Time     `json:"created_at"`
-	UpdatedAt   time.Time     `json:"updated_at"`
-	DeliveredAt *time.Time    `json:"delivered_at,omitempty"`
-	AckedAt     *time.Time    `json:"acked_at,omitempty"`
+	ID            string        `json:"id"`
+	CommandID     string        `json:"command_id"` // de-duplication key, independent of operation_id
+	OperationID   string        `json:"operation_id"`
+	OperationType string        `json:"operation_type"` // INSTALL, UPGRADE, ROLLBACK, etc.
+	OperatorID    string        `json:"operator_id"`
+	Payload       []byte        `json:"payload"`
+	Status        CommandStatus `json:"status"`
+	MaxInFlight   int           `json:"max_inflight"`
+	Sequence      int64         `json:"sequence"` // global monotonic sequence number
+	ResultJSON    string        `json:"result_json,omitempty"`
+	CreatedAt     time.Time     `json:"created_at"`
+	UpdatedAt     time.Time     `json:"updated_at"`
+	DeliveredAt   *time.Time    `json:"delivered_at,omitempty"`
+	AckedAt       *time.Time    `json:"acked_at,omitempty"`
 }
 
 // --- Auth domain types (REQ-025, REQ-026, REQ-049) ---
@@ -670,7 +673,11 @@ type SessionStore interface {
 type OutboxStore interface {
 	Create(ctx context.Context, e *OutboxEntry) error
 	Get(ctx context.Context, id string) (*OutboxEntry, error)
+	GetByCommandID(ctx context.Context, commandID string) (*OutboxEntry, error)
 	GetPendingForOperator(ctx context.Context, operatorID string) (*OutboxEntry, error)
+	GetDeliveredNotAcked(ctx context.Context, operatorID string) ([]*OutboxEntry, error)
+	GetInflightForOperator(ctx context.Context, operatorID string) (*OutboxEntry, error)
+	GetNextSequence(ctx context.Context) (int64, error)
 	UpdateStatus(ctx context.Context, id string, status CommandStatus, resultJSON string) error
 	GetNextPending(ctx context.Context, operatorID string) (*OutboxEntry, error)
 }
