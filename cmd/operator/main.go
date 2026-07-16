@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -30,7 +31,10 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	s.st = st
 	logger.Info("store opened", "db", s.dbPath)
 
-	svc := operator.NewService(st, logger)
+	svc, err := operator.NewService(st, logger)
+	if err != nil {
+		return fmt.Errorf("create operator service: %w", err)
+	}
 	path, h := operatorv1connect.NewOperatorServiceHandler(svc)
 	mux.Handle(path, h)
 

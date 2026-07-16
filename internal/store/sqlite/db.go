@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -144,6 +145,11 @@ func migrate(db *sql.DB) error {
 
 	for _, stmt := range migrationStatements {
 		if _, err := tx.ExecContext(context.Background(), stmt); err != nil {
+			// Allow ALTER TABLE ADD COLUMN to retry idempotently — skip
+			// "duplicate column name" errors from SQLite.
+			if strings.Contains(err.Error(), "duplicate column name") {
+				continue
+			}
 			return fmt.Errorf("migration statement: %w\nstmt: %s", err, stmt)
 		}
 	}
@@ -241,10 +247,14 @@ var migrationStatements = []string{
 		operator_id TEXT NOT NULL DEFAULT ''
 	)`,
 
+	// REQ-015: token_hash column for enrollment token security
+	`ALTER TABLE enrollment_tokens ADD COLUMN token_hash TEXT NOT NULL DEFAULT ''`,
+
 	`CREATE TABLE IF NOT EXISTS operators (
 		id            TEXT PRIMARY KEY,
 		customer_id   TEXT NOT NULL,
 		cluster_id    TEXT NOT NULL,
+		operator_name TEXT NOT NULL DEFAULT '',
 		cert_serial   TEXT NOT NULL,
 		status        TEXT NOT NULL DEFAULT 'active',
 		superseded_by TEXT NOT NULL DEFAULT '',
@@ -254,6 +264,11 @@ var migrationStatements = []string{
 	)`,
 
 	`CREATE INDEX IF NOT EXISTS idx_operators_cert ON operators(cert_serial)`,
+	`CREATE INDEX IF NOT EXISTS idx_operators_name ON operators(operator_name)`,
+	`CREATE INDEX IF NOT EXISTS idx_operators_cluster ON operators(cluster_id, status)`,
+
+	// REQ-015: operator_name column for existing databases
+	`ALTER TABLE operators ADD COLUMN operator_name TEXT NOT NULL DEFAULT ''`,
 
 	`CREATE TABLE IF NOT EXISTS sessions (
 		id             TEXT PRIMARY KEY,
