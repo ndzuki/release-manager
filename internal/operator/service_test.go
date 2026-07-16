@@ -35,7 +35,8 @@ func newTestSvc(t *testing.T) (*operator.Service, store.Store) {
 	require.NoError(t, st.Sessions().Create(ctx, sess))
 
 	logger := slog.New(slog.DiscardHandler)
-	svc := operator.NewService(st, logger)
+	svc, err := operator.NewService(st, logger)
+	require.NoError(t, err)
 	return svc, st
 }
 

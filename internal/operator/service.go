@@ -17,6 +17,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/operator/ca"
 	"github.com/ndzuki/release-manager/internal/store"
 )
+
 // Service implements the OperatorServiceHandler Connect interface.
 type Service struct {
 	store           store.Store
@@ -51,6 +52,7 @@ func (s *Service) SetInventorySyncer(syncer *InventorySyncer) {
 
 // Enroll validates a single-use enrollment token, creates an operator record,
 // and establishes a new session for the operator agent.
+//
 //nolint:gocyclo // enrollment validation requires multiple sequential checks
 func (s *Service) Enroll(
 	ctx context.Context,
@@ -224,6 +226,7 @@ func (s *Service) Enroll(
 //
 // On reconnect, it detects sequence gaps, re-delivers unacknowledged commands,
 // and returns duplicate results for already-completed commands.
+//
 //nolint:gocyclo // bidirectional stream state machine inherently complex
 func (s *Service) CommandStream(
 	ctx context.Context,

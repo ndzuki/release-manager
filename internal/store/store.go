@@ -251,14 +251,14 @@ type Session struct {
 // OutboxEntry holds a command pending delivery in the outbox.
 type OutboxEntry struct {
 	ID            string        `json:"id"`
-	CommandID     string        `json:"command_id"`   // de-duplication key, independent of operation_id
+	CommandID     string        `json:"command_id"` // de-duplication key, independent of operation_id
 	OperationID   string        `json:"operation_id"`
 	OperationType string        `json:"operation_type"` // INSTALL, UPGRADE, ROLLBACK, etc.
 	OperatorID    string        `json:"operator_id"`
 	Payload       []byte        `json:"payload"`
 	Status        CommandStatus `json:"status"`
 	MaxInFlight   int           `json:"max_inflight"`
-	Sequence      int64         `json:"sequence"`            // global monotonic sequence number
+	Sequence      int64         `json:"sequence"` // global monotonic sequence number
 	ResultJSON    string        `json:"result_json,omitempty"`
 	CreatedAt     time.Time     `json:"created_at"`
 	UpdatedAt     time.Time     `json:"updated_at"`
