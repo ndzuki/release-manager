@@ -77,6 +77,11 @@ func (s *Service) CreateOperation(
 			fmt.Errorf("release_definition %s is %s", def.ID, def.Status))
 	}
 
+	// AC-013-02: Reject operations for disabled customers.
+	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
+		return nil, connect.NewError(connect.CodePermissionDenied, err)
+	}
+
 	// AC-032-06: Reject standard operations when a running EMERGENCY exists for
 	// the same definition.
 	if opType.IsStandard() {
@@ -195,14 +200,31 @@ func (s *Service) PublishRelease(
 ) (*connect.Response[orchestratorv1.PublishReleaseResponse], error) {
 	msg := req.Msg
 
-	// Skeleton: verify the definition exists and return not-yet-implemented status.
-	_, err := s.store.Definitions().Get(ctx, msg.ReleaseDefinitionId)
+	// Verify the definition exists and both customer and cluster are active.
+	def, err := s.store.Definitions().Get(ctx, msg.ReleaseDefinitionId)
 	if err == store.ErrNotFound {
 		return nil, connect.NewError(connect.CodeNotFound,
 			fmt.Errorf("release_definition not found: %s", msg.ReleaseDefinitionId))
 	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
+	}
+	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
+		return nil, connect.NewError(connect.CodePermissionDenied, err)
+	}
+
+	// AC-014-04: disabled cluster cannot be a release target.
+	cluster, err := s.store.Clusters().Get(ctx, def.ClusterID)
+	if err == store.ErrNotFound {
+		return nil, connect.NewError(connect.CodeNotFound,
+			fmt.Errorf("cluster %q not found for definition %s", def.ClusterID, msg.ReleaseDefinitionId))
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("cluster lookup: %w", err))
+	}
+	if cluster.Status == store.ClusterDisabled {
+		return nil, connect.NewError(connect.CodePermissionDenied,
+			fmt.Errorf("cluster %q is disabled, cannot publish", cluster.ID))
 	}
 
 	s.logger.Info("publish release requested (skeleton)", "definition", msg.ReleaseDefinitionId)
@@ -237,6 +259,18 @@ func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
 	return fmt.Sprintf("%x", h)
 }
 
+// checkCustomerNotDisabled verifies the customer is not disabled.
+// Returns PermissionDenied if the customer is disabled.
+func (s *Service) checkCustomerNotDisabled(ctx context.Context, customerID string) error {
+	cust, err := s.store.Customers().Get(ctx, customerID)
+	if err != nil {
+		return fmt.Errorf("customer lookup: %w", err)
+	}
+	if cust.Status == store.CustomerDisabled {
+		return fmt.Errorf("customer %s is disabled", customerID)
+	}
+	return nil
+}
 
 // Compile-time check: Service implements the Connect handler interface.
 var _ orchestratorv1connect.OrchestratorServiceHandler = (*Service)(nil)

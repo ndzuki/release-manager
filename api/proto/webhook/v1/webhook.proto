@@ -7,6 +7,25 @@ import "common/v1/trust.proto";
 
 option go_package = "github.com/ndzuki/release-manager/api/gen/webhook/v1;webhookv1";
 
+// SubmitReleaseBundleRequest submits a complete release bundle from CI.
+message SubmitReleaseBundleRequest {
+  string name = 1;
+  string chart_ref = 2;
+  string chart_version = 3;
+  string chart_digest = 4;
+  repeated common.v1.BundleImage images = 5;
+  string git_commit = 6;
+  string pipeline_id = 7;
+  string signature_ref = 8;
+  string sbom_ref = 9;
+  string provenance_ref = 10;
+}
+
+// SubmitReleaseBundleResponse returns the created or existing ReleaseBundle.
+message SubmitReleaseBundleResponse {
+  common.v1.ReleaseBundle bundle = 1;
+}
+
 // IngestArtifactRequest carries an external artifact reference for ingestion.
 message IngestArtifactRequest {
   string source = 1;
@@ -24,5 +43,6 @@ message IngestArtifactResponse {
 
 // WebhookService handles artifact ingestion from external sources (e.g. Harbor).
 service WebhookService {
+  rpc SubmitReleaseBundle(SubmitReleaseBundleRequest) returns (SubmitReleaseBundleResponse);
   rpc IngestArtifact(IngestArtifactRequest) returns (IngestArtifactResponse);
 }

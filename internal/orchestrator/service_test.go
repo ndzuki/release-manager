@@ -33,6 +33,15 @@ func setupService(t *testing.T) (*Service, store.Store, func()) {
 
 func seedDefinition(t *testing.T, st store.Store) {
 	t.Helper()
+
+	// Ensure the customer exists (required for disabled checks).
+	cust := &store.Customer{
+		ID:   "cust-001",
+		Name: "Test Customer",
+		Slug: "test-customer",
+	}
+	require.NoError(t, st.Customers().Create(context.Background(), cust))
+
 	def := &store.ReleaseDefinition{
 		ID:          "def-001",
 		Name:        "my-release",

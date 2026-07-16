@@ -42,6 +42,11 @@ func (s *Service) EmergencyChange(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
+	// AC-013-02: Reject emergency changes for disabled customers.
+	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
+		return nil, connect.NewError(connect.CodePermissionDenied, err)
+	}
+
 	// AC-032-02: HPA detection stub — reject SetReplicas on HPA-managed workloads.
 	if action == store.EmergencySetReplicas && isHPAManaged(def) {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,

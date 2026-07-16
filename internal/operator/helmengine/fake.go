@@ -3,6 +3,7 @@ package helmengine
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -187,5 +188,32 @@ func (f *Fake) GetValues(ctx context.Context, opts GetValuesOptions) (map[string
 	return map[string]interface{}{}, nil
 }
 
+
+// List returns all releases in a namespace.
+func (f *Fake) List(ctx context.Context, namespace string) ([]*ReleaseListItem, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, ErrCancelled
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	prefix := namespace + "/"
+	var items []*ReleaseListItem
+	for key, rel := range f.releases {
+		if strings.HasPrefix(key, prefix) {
+			items = append(items, &ReleaseListItem{
+				Namespace:    rel.Namespace,
+				Name:         rel.Name,
+				Chart:        rel.Chart,
+				ChartVersion: rel.Chart,  // Fake stores chart name only; version not tracked
+				Revision:     rel.Revision,
+				Status:       rel.Status,
+				ValuesDigest: "",
+			})
+		}
+	}
+	return items, nil
+}
 // Compile-time interface check.
 var _ Engine = (*Fake)(nil)
