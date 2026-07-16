@@ -223,5 +223,10 @@ func (f *Fake) List(ctx context.Context, namespace string) ([]*ReleaseListItem, 
 	return items, nil
 }
 
+// Render performs the SDK-only offline preflight.
+func (f *Fake) Render(ctx context.Context, opts RenderOptions) (*RenderResult, error) {
+	return RenderPreflight(ctx, opts)
+}
+
 // Compile-time interface check.
 var _ Engine = (*Fake)(nil)

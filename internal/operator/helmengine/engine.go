@@ -62,6 +62,9 @@ var (
 // Each operation receives its own action.Configuration; mutable action state
 // MUST NOT be shared across concurrent operations.
 type Engine interface {
+	// Render performs an offline preflight using a verified chart and approved values.
+	// It MUST NOT contact Kubernetes or Helm release storage.
+	Render(ctx context.Context, opts RenderOptions) (*RenderResult, error)
 	// Install installs a chart. Returns ErrAlreadyExists if the release exists.
 	Install(ctx context.Context, opts InstallOptions) (*Release, error)
 

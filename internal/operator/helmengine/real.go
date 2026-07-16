@@ -296,6 +296,11 @@ func (r *RealEngine) List(ctx context.Context, namespace string) ([]*ReleaseList
 	return items, nil
 }
 
+// Render performs the SDK-only offline preflight without using the cluster config.
+func (r *RealEngine) Render(ctx context.Context, opts RenderOptions) (*RenderResult, error) {
+	return RenderPreflight(ctx, opts)
+}
+
 // Compile-time check: RealEngine implements Engine.
 var _ Engine = (*RealEngine)(nil)
 
