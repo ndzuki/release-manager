@@ -91,6 +91,11 @@ message Command {
   common.v1.ReleaseBundle bundle = 5;
   bytes values = 6;
   int64 sequence = 7;          // global monotonic sequence number
+  string definition_id = 8;
+  string namespace = 9;
+  string release_name = 10;
+  bool create_namespace = 11;
+  int64 timeout_seconds = 12;
 }
 
 // ResyncRequest asks the operator to report its last seen sequence for gap recovery.

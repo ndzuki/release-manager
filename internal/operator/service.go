@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -12,10 +13,13 @@ import (
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 
+	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	"github.com/ndzuki/release-manager/internal/operator/ca"
+	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/store"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // Service implements the OperatorServiceHandler Connect interface.
@@ -383,6 +387,9 @@ func (s *Service) CommandStream(
 					resultJSON = result.GetMessage()
 				}
 				_ = s.store.Outbox().UpdateStatus(ctx, result.GetOutboxId(), status, resultJSON)
+				if existing != nil {
+					s.FinishOperation(ctx, existing.OperationID, result.GetStatus(), resultJSON)
+				}
 
 			case req.GetResyncResponse() != nil:
 				rr := req.GetResyncResponse()
@@ -394,6 +401,42 @@ func (s *Service) CommandStream(
 				_ = s.reDeliverFrom(ctx, stream, operatorID, rr.GetOperatorLastSequence())
 			}
 		}
+	}
+}
+
+// FinishOperation advances a queued/running operation to its terminal result.
+func (s *Service) FinishOperation(ctx context.Context, operationID, resultStatus, resultJSON string) {
+	op, err := s.store.Operations().Get(ctx, operationID)
+	if err != nil {
+		s.logger.Warn("failed to load operation for command result", "operation_id", operationID, "error", err)
+		return
+	}
+
+	current := op.Status
+	if current == store.StatusQueued {
+		current, err = operation.Transition(current, operation.EventBegin)
+		if err == nil {
+			op, err = s.store.Operations().UpdateStatus(ctx, op.ID, current, op.StateVersion, "")
+		}
+		if err != nil {
+			s.logger.Warn("failed to begin operation", "operation_id", operationID, "error", err)
+			return
+		}
+	}
+
+	event := operation.EventComplete
+	lastError := ""
+	if resultStatus == "failed" {
+		event = operation.EventError
+		lastError = resultJSON
+	}
+	next, err := operation.Transition(current, event)
+	if err != nil {
+		s.logger.Warn("failed to transition operation result", "operation_id", operationID, "error", err)
+		return
+	}
+	if _, err := s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, lastError); err != nil {
+		s.logger.Warn("failed to persist operation result", "operation_id", operationID, "error", err)
 	}
 }
 
@@ -488,17 +531,57 @@ func (s *Service) sendCommand(
 	stream *connect.BidiStream[operatorv1.CommandStreamRequest, operatorv1.CommandStreamResponse],
 	entry *store.OutboxEntry,
 ) error {
+	command := &operatorv1.Command{
+		OutboxId:      entry.ID,
+		CommandId:     entry.CommandID,
+		OperationId:   entry.OperationID,
+		OperationType: entry.OperationType,
+		Sequence:      entry.Sequence,
+	}
+	if err := DecodeCommandPayload(entry.Payload, command); err != nil {
+		return fmt.Errorf("decode command payload %q: %w", entry.CommandID, err)
+	}
+
 	return stream.Send(&operatorv1.CommandStreamResponse{
-		Payload: &operatorv1.CommandStreamResponse_Command{
-			Command: &operatorv1.Command{
-				OutboxId:      entry.ID,
-				CommandId:     entry.CommandID,
-				OperationId:   entry.OperationID,
-				OperationType: entry.OperationType,
-				Sequence:      entry.Sequence,
-			},
-		},
+		Payload: &operatorv1.CommandStreamResponse_Command{Command: command},
 	})
+}
+
+type commandPayload struct {
+	DefinitionID    string                  `json:"definition_id"`
+	Namespace       string                  `json:"namespace"`
+	ReleaseName     string                  `json:"release_name"`
+	CreateNamespace bool                    `json:"create_namespace"`
+	TimeoutSeconds  int64                   `json:"timeout_seconds"`
+	Bundle          *commonv1.ReleaseBundle `json:"bundle"`
+	Values          json.RawMessage         `json:"values"`
+}
+
+// DecodeCommandPayload populates command fields from an outbox JSON payload.
+func DecodeCommandPayload(payload []byte, command *operatorv1.Command) error {
+	if len(payload) == 0 {
+		return nil
+	}
+
+	var envelope commandPayload
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return fmt.Errorf("unmarshal envelope: %w", err)
+	}
+	command.DefinitionId = envelope.DefinitionID
+	command.Namespace = envelope.Namespace
+	command.ReleaseName = envelope.ReleaseName
+	command.CreateNamespace = envelope.CreateNamespace
+	command.TimeoutSeconds = envelope.TimeoutSeconds
+	command.Bundle = envelope.Bundle
+	command.Values = envelope.Values
+
+	if envelope.Bundle == nil {
+		var bundle commonv1.ReleaseBundle
+		if err := protojson.Unmarshal(payload, &bundle); err == nil && bundle.GetChartRef() != "" {
+			command.Bundle = &bundle
+		}
+	}
+	return nil
 }
 
 // deliverPending polls for pending commands and sends them to the delivery channel.

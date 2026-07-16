@@ -57,6 +57,16 @@ func seedDefinition(t *testing.T, st store.Store) {
 	}
 	err := st.Definitions().Create(context.Background(), def)
 	require.NoError(t, err)
+
+	revision := &store.ValuesRevision{
+		ID:                  "vr-001",
+		ReleaseDefinitionID: def.ID,
+		Revision:            1,
+		Status:              store.ValuesStatusApproved,
+		Values:              []byte(`{"message":"hello"}`),
+		Digest:              "digest-vr-001",
+	}
+	require.NoError(t, st.Values().Create(context.Background(), revision))
 }
 
 func TestCreateOperation_Install_Success(t *testing.T) {
@@ -65,11 +75,11 @@ func TestCreateOperation_Install_Success(t *testing.T) {
 	seedDefinition(t, st)
 
 	resp, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
-		OperationType:          "INSTALL",
-		BundleId:               "bundle-001",
-		ReleaseDefinitionId:    "def-001",
-		ValuesRevisionId:       "vr-001",
-		IdempotencyKey:         "idem-001",
+		OperationType:           "INSTALL",
+		BundleId:                "bundle-001",
+		ReleaseDefinitionId:     "def-001",
+		ValuesRevisionId:        "vr-001",
+		IdempotencyKey:          "idem-001",
 		ExpectedCurrentRevision: 0,
 		Actor: &commonv1.ActorContext{
 			UserId:       "user-001",
@@ -218,6 +228,7 @@ func TestCreateOperation_NoSignatureRef_SkipsVerification(t *testing.T) {
 		OperationType:       "INSTALL",
 		BundleId:            "bundle-001",
 		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
 		IdempotencyKey:      "idem-verify-002",
 		Actor: &commonv1.ActorContext{
 			UserId:       "user-001",
@@ -227,4 +238,32 @@ func TestCreateOperation_NoSignatureRef_SkipsVerification(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, resp.Msg.OperationId)
 	assert.Equal(t, commonv1.VerificationResult_VERIFICATION_RESULT_UNSPECIFIED, resp.Msg.VerificationResult)
+}
+
+func TestCreateOperation_InstallRequiresApprovedRevision(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	draft := &store.ValuesRevision{
+		ID:                  "vr-draft",
+		ReleaseDefinitionID: "def-001",
+		Revision:            2,
+		Status:              store.ValuesStatusDraft,
+		Values:              []byte(`{}`),
+		Digest:              "digest-vr-draft",
+	}
+	require.NoError(t, st.Values().Create(context.Background(), draft))
+
+	_, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-001",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    draft.ID,
+		IdempotencyKey:      "idem-draft",
+		Actor:               &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "revision_not_approved")
 }
