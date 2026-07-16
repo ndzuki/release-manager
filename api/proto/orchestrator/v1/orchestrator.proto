@@ -47,7 +47,113 @@ message ReleaseOperation {
   common.v1.ReleaseDigest digest = 4;
 }
 
+// ── Customer Management ────────────────────────────────────────────
+
+message CreateCustomerRequest {
+  string id = 1;
+  string name = 2;
+  string slug = 3;
+}
+
+message CreateCustomerResponse {
+  common.v1.Customer customer = 1;
+}
+
+message GetCustomerRequest {
+  string customer_id = 1;
+}
+
+message GetCustomerResponse {
+  common.v1.Customer customer = 1;
+}
+
+message ListCustomersRequest {}
+
+message ListCustomersResponse {
+  repeated common.v1.Customer customers = 1;
+}
+
+message UpdateCustomerRequest {
+  string customer_id = 1;
+  string name = 2;
+  string slug = 3;
+}
+
+message UpdateCustomerResponse {
+  common.v1.Customer customer = 1;
+}
+
+message DisableCustomerRequest {
+  string customer_id = 1;
+}
+
+message DisableCustomerResponse {}
+
+// ── Cluster Management ────────────────────────────────────────────
+
+message CreateClusterRequest {
+  string id = 1;
+  string name = 2;
+  string customer_id = 3;
+  string kubeconfig_ref = 4;
+}
+
+message CreateClusterResponse {
+  common.v1.Cluster cluster = 1;
+}
+
+message GetClusterRequest {
+  string cluster_id = 1;
+}
+
+message GetClusterResponse {
+  common.v1.Cluster cluster = 1;
+}
+
+message ListClustersRequest {
+  string customer_id = 1;
+}
+
+message ListClustersResponse {
+  repeated common.v1.Cluster clusters = 1;
+}
+
+message DisableClusterRequest {
+  string cluster_id = 1;
+}
+
+message DisableClusterResponse {}
+
+// ── Enrollment Token Management ──────────────────────────────────
+
+message CreateEnrollmentTokenRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+}
+
+message CreateEnrollmentTokenResponse {
+  string token = 1;
+  string expires_at = 2;
+}
+
 service OrchestratorService {
+  // Release pipeline
   rpc CreateOperation(CreateOperationRequest) returns (CreateOperationResponse);
   rpc PublishRelease(PublishReleaseRequest) returns (PublishReleaseResponse);
+
+  // Customer management
+  rpc CreateCustomer(CreateCustomerRequest) returns (CreateCustomerResponse);
+  rpc GetCustomer(GetCustomerRequest) returns (GetCustomerResponse);
+  rpc ListCustomers(ListCustomersRequest) returns (ListCustomersResponse);
+  rpc UpdateCustomer(UpdateCustomerRequest) returns (UpdateCustomerResponse);
+  rpc DisableCustomer(DisableCustomerRequest) returns (DisableCustomerResponse);
+
+  // Cluster management
+  rpc CreateCluster(CreateClusterRequest) returns (CreateClusterResponse);
+  rpc GetCluster(GetClusterRequest) returns (GetClusterResponse);
+  rpc ListClusters(ListClustersRequest) returns (ListClustersResponse);
+  rpc DisableCluster(DisableClusterRequest) returns (DisableClusterResponse);
+
+  // Operator enrollment
+  rpc CreateEnrollmentToken(CreateEnrollmentTokenRequest) returns (CreateEnrollmentTokenResponse);
 }

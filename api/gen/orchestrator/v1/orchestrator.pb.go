@@ -360,6 +360,934 @@ func (x *ReleaseOperation) GetDigest() *v1.ReleaseDigest {
 	return nil
 }
 
+type CreateCustomerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Slug          string                 `protobuf:"bytes,3,opt,name=slug,proto3" json:"slug,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateCustomerRequest) Reset() {
+	*x = CreateCustomerRequest{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateCustomerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateCustomerRequest) ProtoMessage() {}
+
+func (x *CreateCustomerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateCustomerRequest.ProtoReflect.Descriptor instead.
+func (*CreateCustomerRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *CreateCustomerRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *CreateCustomerRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CreateCustomerRequest) GetSlug() string {
+	if x != nil {
+		return x.Slug
+	}
+	return ""
+}
+
+type CreateCustomerResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Customer      *v1.Customer           `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateCustomerResponse) Reset() {
+	*x = CreateCustomerResponse{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateCustomerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateCustomerResponse) ProtoMessage() {}
+
+func (x *CreateCustomerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateCustomerResponse.ProtoReflect.Descriptor instead.
+func (*CreateCustomerResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *CreateCustomerResponse) GetCustomer() *v1.Customer {
+	if x != nil {
+		return x.Customer
+	}
+	return nil
+}
+
+type GetCustomerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CustomerId    string                 `protobuf:"bytes,1,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCustomerRequest) Reset() {
+	*x = GetCustomerRequest{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCustomerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCustomerRequest) ProtoMessage() {}
+
+func (x *GetCustomerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCustomerRequest.ProtoReflect.Descriptor instead.
+func (*GetCustomerRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *GetCustomerRequest) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+type GetCustomerResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Customer      *v1.Customer           `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCustomerResponse) Reset() {
+	*x = GetCustomerResponse{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCustomerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCustomerResponse) ProtoMessage() {}
+
+func (x *GetCustomerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCustomerResponse.ProtoReflect.Descriptor instead.
+func (*GetCustomerResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *GetCustomerResponse) GetCustomer() *v1.Customer {
+	if x != nil {
+		return x.Customer
+	}
+	return nil
+}
+
+type ListCustomersRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListCustomersRequest) Reset() {
+	*x = ListCustomersRequest{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListCustomersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListCustomersRequest) ProtoMessage() {}
+
+func (x *ListCustomersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListCustomersRequest.ProtoReflect.Descriptor instead.
+func (*ListCustomersRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{9}
+}
+
+type ListCustomersResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Customers     []*v1.Customer         `protobuf:"bytes,1,rep,name=customers,proto3" json:"customers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListCustomersResponse) Reset() {
+	*x = ListCustomersResponse{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListCustomersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListCustomersResponse) ProtoMessage() {}
+
+func (x *ListCustomersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListCustomersResponse.ProtoReflect.Descriptor instead.
+func (*ListCustomersResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ListCustomersResponse) GetCustomers() []*v1.Customer {
+	if x != nil {
+		return x.Customers
+	}
+	return nil
+}
+
+type UpdateCustomerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CustomerId    string                 `protobuf:"bytes,1,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Slug          string                 `protobuf:"bytes,3,opt,name=slug,proto3" json:"slug,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateCustomerRequest) Reset() {
+	*x = UpdateCustomerRequest{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateCustomerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateCustomerRequest) ProtoMessage() {}
+
+func (x *UpdateCustomerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateCustomerRequest.ProtoReflect.Descriptor instead.
+func (*UpdateCustomerRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *UpdateCustomerRequest) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+func (x *UpdateCustomerRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *UpdateCustomerRequest) GetSlug() string {
+	if x != nil {
+		return x.Slug
+	}
+	return ""
+}
+
+type UpdateCustomerResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Customer      *v1.Customer           `protobuf:"bytes,1,opt,name=customer,proto3" json:"customer,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateCustomerResponse) Reset() {
+	*x = UpdateCustomerResponse{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateCustomerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateCustomerResponse) ProtoMessage() {}
+
+func (x *UpdateCustomerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateCustomerResponse.ProtoReflect.Descriptor instead.
+func (*UpdateCustomerResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *UpdateCustomerResponse) GetCustomer() *v1.Customer {
+	if x != nil {
+		return x.Customer
+	}
+	return nil
+}
+
+type DisableCustomerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CustomerId    string                 `protobuf:"bytes,1,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DisableCustomerRequest) Reset() {
+	*x = DisableCustomerRequest{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DisableCustomerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DisableCustomerRequest) ProtoMessage() {}
+
+func (x *DisableCustomerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DisableCustomerRequest.ProtoReflect.Descriptor instead.
+func (*DisableCustomerRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *DisableCustomerRequest) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+type DisableCustomerResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DisableCustomerResponse) Reset() {
+	*x = DisableCustomerResponse{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DisableCustomerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DisableCustomerResponse) ProtoMessage() {}
+
+func (x *DisableCustomerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DisableCustomerResponse.ProtoReflect.Descriptor instead.
+func (*DisableCustomerResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{14}
+}
+
+type CreateClusterRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	CustomerId    string                 `protobuf:"bytes,3,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	KubeconfigRef string                 `protobuf:"bytes,4,opt,name=kubeconfig_ref,json=kubeconfigRef,proto3" json:"kubeconfig_ref,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateClusterRequest) Reset() {
+	*x = CreateClusterRequest{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateClusterRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateClusterRequest) ProtoMessage() {}
+
+func (x *CreateClusterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateClusterRequest.ProtoReflect.Descriptor instead.
+func (*CreateClusterRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *CreateClusterRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *CreateClusterRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CreateClusterRequest) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+func (x *CreateClusterRequest) GetKubeconfigRef() string {
+	if x != nil {
+		return x.KubeconfigRef
+	}
+	return ""
+}
+
+type CreateClusterResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cluster       *v1.Cluster            `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateClusterResponse) Reset() {
+	*x = CreateClusterResponse{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateClusterResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateClusterResponse) ProtoMessage() {}
+
+func (x *CreateClusterResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateClusterResponse.ProtoReflect.Descriptor instead.
+func (*CreateClusterResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *CreateClusterResponse) GetCluster() *v1.Cluster {
+	if x != nil {
+		return x.Cluster
+	}
+	return nil
+}
+
+type GetClusterRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetClusterRequest) Reset() {
+	*x = GetClusterRequest{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetClusterRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetClusterRequest) ProtoMessage() {}
+
+func (x *GetClusterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetClusterRequest.ProtoReflect.Descriptor instead.
+func (*GetClusterRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *GetClusterRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+type GetClusterResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cluster       *v1.Cluster            `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetClusterResponse) Reset() {
+	*x = GetClusterResponse{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetClusterResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetClusterResponse) ProtoMessage() {}
+
+func (x *GetClusterResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetClusterResponse.ProtoReflect.Descriptor instead.
+func (*GetClusterResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *GetClusterResponse) GetCluster() *v1.Cluster {
+	if x != nil {
+		return x.Cluster
+	}
+	return nil
+}
+
+type ListClustersRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CustomerId    string                 `protobuf:"bytes,1,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListClustersRequest) Reset() {
+	*x = ListClustersRequest{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListClustersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListClustersRequest) ProtoMessage() {}
+
+func (x *ListClustersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListClustersRequest.ProtoReflect.Descriptor instead.
+func (*ListClustersRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ListClustersRequest) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+type ListClustersResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Clusters      []*v1.Cluster          `protobuf:"bytes,1,rep,name=clusters,proto3" json:"clusters,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListClustersResponse) Reset() {
+	*x = ListClustersResponse{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListClustersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListClustersResponse) ProtoMessage() {}
+
+func (x *ListClustersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListClustersResponse.ProtoReflect.Descriptor instead.
+func (*ListClustersResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ListClustersResponse) GetClusters() []*v1.Cluster {
+	if x != nil {
+		return x.Clusters
+	}
+	return nil
+}
+
+type DisableClusterRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DisableClusterRequest) Reset() {
+	*x = DisableClusterRequest{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DisableClusterRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DisableClusterRequest) ProtoMessage() {}
+
+func (x *DisableClusterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DisableClusterRequest.ProtoReflect.Descriptor instead.
+func (*DisableClusterRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *DisableClusterRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+type DisableClusterResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DisableClusterResponse) Reset() {
+	*x = DisableClusterResponse{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DisableClusterResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DisableClusterResponse) ProtoMessage() {}
+
+func (x *DisableClusterResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DisableClusterResponse.ProtoReflect.Descriptor instead.
+func (*DisableClusterResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{22}
+}
+
+type CreateEnrollmentTokenRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CustomerId    string                 `protobuf:"bytes,1,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	ClusterId     string                 `protobuf:"bytes,2,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateEnrollmentTokenRequest) Reset() {
+	*x = CreateEnrollmentTokenRequest{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateEnrollmentTokenRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateEnrollmentTokenRequest) ProtoMessage() {}
+
+func (x *CreateEnrollmentTokenRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateEnrollmentTokenRequest.ProtoReflect.Descriptor instead.
+func (*CreateEnrollmentTokenRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *CreateEnrollmentTokenRequest) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+func (x *CreateEnrollmentTokenRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+type CreateEnrollmentTokenResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	ExpiresAt     string                 `protobuf:"bytes,2,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateEnrollmentTokenResponse) Reset() {
+	*x = CreateEnrollmentTokenResponse{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateEnrollmentTokenResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateEnrollmentTokenResponse) ProtoMessage() {}
+
+func (x *CreateEnrollmentTokenResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateEnrollmentTokenResponse.ProtoReflect.Descriptor instead.
+func (*CreateEnrollmentTokenResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *CreateEnrollmentTokenResponse) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+func (x *CreateEnrollmentTokenResponse) GetExpiresAt() string {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return ""
+}
+
 var File_orchestrator_v1_orchestrator_proto protoreflect.FileDescriptor
 
 const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
@@ -389,10 +1317,77 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x122\n" +
 	"\x15release_definition_id\x18\x02 \x01(\tR\x13releaseDefinitionId\x12\x16\n" +
 	"\x06status\x18\x03 \x01(\tR\x06status\x120\n" +
-	"\x06digest\x18\x04 \x01(\v2\x18.common.v1.ReleaseDigestR\x06digest2\xde\x01\n" +
+	"\x06digest\x18\x04 \x01(\v2\x18.common.v1.ReleaseDigestR\x06digest\"O\n" +
+	"\x15CreateCustomerRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
+	"\x04slug\x18\x03 \x01(\tR\x04slug\"I\n" +
+	"\x16CreateCustomerResponse\x12/\n" +
+	"\bcustomer\x18\x01 \x01(\v2\x13.common.v1.CustomerR\bcustomer\"5\n" +
+	"\x12GetCustomerRequest\x12\x1f\n" +
+	"\vcustomer_id\x18\x01 \x01(\tR\n" +
+	"customerId\"F\n" +
+	"\x13GetCustomerResponse\x12/\n" +
+	"\bcustomer\x18\x01 \x01(\v2\x13.common.v1.CustomerR\bcustomer\"\x16\n" +
+	"\x14ListCustomersRequest\"J\n" +
+	"\x15ListCustomersResponse\x121\n" +
+	"\tcustomers\x18\x01 \x03(\v2\x13.common.v1.CustomerR\tcustomers\"`\n" +
+	"\x15UpdateCustomerRequest\x12\x1f\n" +
+	"\vcustomer_id\x18\x01 \x01(\tR\n" +
+	"customerId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
+	"\x04slug\x18\x03 \x01(\tR\x04slug\"I\n" +
+	"\x16UpdateCustomerResponse\x12/\n" +
+	"\bcustomer\x18\x01 \x01(\v2\x13.common.v1.CustomerR\bcustomer\"9\n" +
+	"\x16DisableCustomerRequest\x12\x1f\n" +
+	"\vcustomer_id\x18\x01 \x01(\tR\n" +
+	"customerId\"\x19\n" +
+	"\x17DisableCustomerResponse\"\x82\x01\n" +
+	"\x14CreateClusterRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1f\n" +
+	"\vcustomer_id\x18\x03 \x01(\tR\n" +
+	"customerId\x12%\n" +
+	"\x0ekubeconfig_ref\x18\x04 \x01(\tR\rkubeconfigRef\"E\n" +
+	"\x15CreateClusterResponse\x12,\n" +
+	"\acluster\x18\x01 \x01(\v2\x12.common.v1.ClusterR\acluster\"2\n" +
+	"\x11GetClusterRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\"B\n" +
+	"\x12GetClusterResponse\x12,\n" +
+	"\acluster\x18\x01 \x01(\v2\x12.common.v1.ClusterR\acluster\"6\n" +
+	"\x13ListClustersRequest\x12\x1f\n" +
+	"\vcustomer_id\x18\x01 \x01(\tR\n" +
+	"customerId\"F\n" +
+	"\x14ListClustersResponse\x12.\n" +
+	"\bclusters\x18\x01 \x03(\v2\x12.common.v1.ClusterR\bclusters\"6\n" +
+	"\x15DisableClusterRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\"\x18\n" +
+	"\x16DisableClusterResponse\"^\n" +
+	"\x1cCreateEnrollmentTokenRequest\x12\x1f\n" +
+	"\vcustomer_id\x18\x01 \x01(\tR\n" +
+	"customerId\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x02 \x01(\tR\tclusterId\"T\n" +
+	"\x1dCreateEnrollmentTokenResponse\x12\x14\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1d\n" +
+	"\n" +
+	"expires_at\x18\x02 \x01(\tR\texpiresAt2\xb3\t\n" +
 	"\x13OrchestratorService\x12d\n" +
 	"\x0fCreateOperation\x12'.orchestrator.v1.CreateOperationRequest\x1a(.orchestrator.v1.CreateOperationResponse\x12a\n" +
-	"\x0ePublishRelease\x12&.orchestrator.v1.PublishReleaseRequest\x1a'.orchestrator.v1.PublishReleaseResponseBJZHgithub.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1b\x06proto3"
+	"\x0ePublishRelease\x12&.orchestrator.v1.PublishReleaseRequest\x1a'.orchestrator.v1.PublishReleaseResponse\x12a\n" +
+	"\x0eCreateCustomer\x12&.orchestrator.v1.CreateCustomerRequest\x1a'.orchestrator.v1.CreateCustomerResponse\x12X\n" +
+	"\vGetCustomer\x12#.orchestrator.v1.GetCustomerRequest\x1a$.orchestrator.v1.GetCustomerResponse\x12^\n" +
+	"\rListCustomers\x12%.orchestrator.v1.ListCustomersRequest\x1a&.orchestrator.v1.ListCustomersResponse\x12a\n" +
+	"\x0eUpdateCustomer\x12&.orchestrator.v1.UpdateCustomerRequest\x1a'.orchestrator.v1.UpdateCustomerResponse\x12d\n" +
+	"\x0fDisableCustomer\x12'.orchestrator.v1.DisableCustomerRequest\x1a(.orchestrator.v1.DisableCustomerResponse\x12^\n" +
+	"\rCreateCluster\x12%.orchestrator.v1.CreateClusterRequest\x1a&.orchestrator.v1.CreateClusterResponse\x12U\n" +
+	"\n" +
+	"GetCluster\x12\".orchestrator.v1.GetClusterRequest\x1a#.orchestrator.v1.GetClusterResponse\x12[\n" +
+	"\fListClusters\x12$.orchestrator.v1.ListClustersRequest\x1a%.orchestrator.v1.ListClustersResponse\x12a\n" +
+	"\x0eDisableCluster\x12&.orchestrator.v1.DisableClusterRequest\x1a'.orchestrator.v1.DisableClusterResponse\x12v\n" +
+	"\x15CreateEnrollmentToken\x12-.orchestrator.v1.CreateEnrollmentTokenRequest\x1a..orchestrator.v1.CreateEnrollmentTokenResponseBJZHgithub.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1b\x06proto3"
 
 var (
 	file_orchestrator_v1_orchestrator_proto_rawDescOnce sync.Once
@@ -406,30 +1401,79 @@ func file_orchestrator_v1_orchestrator_proto_rawDescGZIP() []byte {
 	return file_orchestrator_v1_orchestrator_proto_rawDescData
 }
 
-var file_orchestrator_v1_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_orchestrator_v1_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_orchestrator_v1_orchestrator_proto_goTypes = []any{
-	(*CreateOperationRequest)(nil),  // 0: orchestrator.v1.CreateOperationRequest
-	(*CreateOperationResponse)(nil), // 1: orchestrator.v1.CreateOperationResponse
-	(*PublishReleaseRequest)(nil),   // 2: orchestrator.v1.PublishReleaseRequest
-	(*PublishReleaseResponse)(nil),  // 3: orchestrator.v1.PublishReleaseResponse
-	(*ReleaseOperation)(nil),        // 4: orchestrator.v1.ReleaseOperation
-	(*v1.ActorContext)(nil),         // 5: common.v1.ActorContext
-	(*timestamppb.Timestamp)(nil),   // 6: google.protobuf.Timestamp
-	(*v1.ReleaseDigest)(nil),        // 7: common.v1.ReleaseDigest
+	(*CreateOperationRequest)(nil),        // 0: orchestrator.v1.CreateOperationRequest
+	(*CreateOperationResponse)(nil),       // 1: orchestrator.v1.CreateOperationResponse
+	(*PublishReleaseRequest)(nil),         // 2: orchestrator.v1.PublishReleaseRequest
+	(*PublishReleaseResponse)(nil),        // 3: orchestrator.v1.PublishReleaseResponse
+	(*ReleaseOperation)(nil),              // 4: orchestrator.v1.ReleaseOperation
+	(*CreateCustomerRequest)(nil),         // 5: orchestrator.v1.CreateCustomerRequest
+	(*CreateCustomerResponse)(nil),        // 6: orchestrator.v1.CreateCustomerResponse
+	(*GetCustomerRequest)(nil),            // 7: orchestrator.v1.GetCustomerRequest
+	(*GetCustomerResponse)(nil),           // 8: orchestrator.v1.GetCustomerResponse
+	(*ListCustomersRequest)(nil),          // 9: orchestrator.v1.ListCustomersRequest
+	(*ListCustomersResponse)(nil),         // 10: orchestrator.v1.ListCustomersResponse
+	(*UpdateCustomerRequest)(nil),         // 11: orchestrator.v1.UpdateCustomerRequest
+	(*UpdateCustomerResponse)(nil),        // 12: orchestrator.v1.UpdateCustomerResponse
+	(*DisableCustomerRequest)(nil),        // 13: orchestrator.v1.DisableCustomerRequest
+	(*DisableCustomerResponse)(nil),       // 14: orchestrator.v1.DisableCustomerResponse
+	(*CreateClusterRequest)(nil),          // 15: orchestrator.v1.CreateClusterRequest
+	(*CreateClusterResponse)(nil),         // 16: orchestrator.v1.CreateClusterResponse
+	(*GetClusterRequest)(nil),             // 17: orchestrator.v1.GetClusterRequest
+	(*GetClusterResponse)(nil),            // 18: orchestrator.v1.GetClusterResponse
+	(*ListClustersRequest)(nil),           // 19: orchestrator.v1.ListClustersRequest
+	(*ListClustersResponse)(nil),          // 20: orchestrator.v1.ListClustersResponse
+	(*DisableClusterRequest)(nil),         // 21: orchestrator.v1.DisableClusterRequest
+	(*DisableClusterResponse)(nil),        // 22: orchestrator.v1.DisableClusterResponse
+	(*CreateEnrollmentTokenRequest)(nil),  // 23: orchestrator.v1.CreateEnrollmentTokenRequest
+	(*CreateEnrollmentTokenResponse)(nil), // 24: orchestrator.v1.CreateEnrollmentTokenResponse
+	(*v1.ActorContext)(nil),               // 25: common.v1.ActorContext
+	(*timestamppb.Timestamp)(nil),         // 26: google.protobuf.Timestamp
+	(*v1.ReleaseDigest)(nil),              // 27: common.v1.ReleaseDigest
+	(*v1.Customer)(nil),                   // 28: common.v1.Customer
+	(*v1.Cluster)(nil),                    // 29: common.v1.Cluster
 }
 var file_orchestrator_v1_orchestrator_proto_depIdxs = []int32{
-	5, // 0: orchestrator.v1.CreateOperationRequest.actor:type_name -> common.v1.ActorContext
-	6, // 1: orchestrator.v1.CreateOperationResponse.accepted_at:type_name -> google.protobuf.Timestamp
-	7, // 2: orchestrator.v1.ReleaseOperation.digest:type_name -> common.v1.ReleaseDigest
-	0, // 3: orchestrator.v1.OrchestratorService.CreateOperation:input_type -> orchestrator.v1.CreateOperationRequest
-	2, // 4: orchestrator.v1.OrchestratorService.PublishRelease:input_type -> orchestrator.v1.PublishReleaseRequest
-	1, // 5: orchestrator.v1.OrchestratorService.CreateOperation:output_type -> orchestrator.v1.CreateOperationResponse
-	3, // 6: orchestrator.v1.OrchestratorService.PublishRelease:output_type -> orchestrator.v1.PublishReleaseResponse
-	5, // [5:7] is the sub-list for method output_type
-	3, // [3:5] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	25, // 0: orchestrator.v1.CreateOperationRequest.actor:type_name -> common.v1.ActorContext
+	26, // 1: orchestrator.v1.CreateOperationResponse.accepted_at:type_name -> google.protobuf.Timestamp
+	27, // 2: orchestrator.v1.ReleaseOperation.digest:type_name -> common.v1.ReleaseDigest
+	28, // 3: orchestrator.v1.CreateCustomerResponse.customer:type_name -> common.v1.Customer
+	28, // 4: orchestrator.v1.GetCustomerResponse.customer:type_name -> common.v1.Customer
+	28, // 5: orchestrator.v1.ListCustomersResponse.customers:type_name -> common.v1.Customer
+	28, // 6: orchestrator.v1.UpdateCustomerResponse.customer:type_name -> common.v1.Customer
+	29, // 7: orchestrator.v1.CreateClusterResponse.cluster:type_name -> common.v1.Cluster
+	29, // 8: orchestrator.v1.GetClusterResponse.cluster:type_name -> common.v1.Cluster
+	29, // 9: orchestrator.v1.ListClustersResponse.clusters:type_name -> common.v1.Cluster
+	0,  // 10: orchestrator.v1.OrchestratorService.CreateOperation:input_type -> orchestrator.v1.CreateOperationRequest
+	2,  // 11: orchestrator.v1.OrchestratorService.PublishRelease:input_type -> orchestrator.v1.PublishReleaseRequest
+	5,  // 12: orchestrator.v1.OrchestratorService.CreateCustomer:input_type -> orchestrator.v1.CreateCustomerRequest
+	7,  // 13: orchestrator.v1.OrchestratorService.GetCustomer:input_type -> orchestrator.v1.GetCustomerRequest
+	9,  // 14: orchestrator.v1.OrchestratorService.ListCustomers:input_type -> orchestrator.v1.ListCustomersRequest
+	11, // 15: orchestrator.v1.OrchestratorService.UpdateCustomer:input_type -> orchestrator.v1.UpdateCustomerRequest
+	13, // 16: orchestrator.v1.OrchestratorService.DisableCustomer:input_type -> orchestrator.v1.DisableCustomerRequest
+	15, // 17: orchestrator.v1.OrchestratorService.CreateCluster:input_type -> orchestrator.v1.CreateClusterRequest
+	17, // 18: orchestrator.v1.OrchestratorService.GetCluster:input_type -> orchestrator.v1.GetClusterRequest
+	19, // 19: orchestrator.v1.OrchestratorService.ListClusters:input_type -> orchestrator.v1.ListClustersRequest
+	21, // 20: orchestrator.v1.OrchestratorService.DisableCluster:input_type -> orchestrator.v1.DisableClusterRequest
+	23, // 21: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:input_type -> orchestrator.v1.CreateEnrollmentTokenRequest
+	1,  // 22: orchestrator.v1.OrchestratorService.CreateOperation:output_type -> orchestrator.v1.CreateOperationResponse
+	3,  // 23: orchestrator.v1.OrchestratorService.PublishRelease:output_type -> orchestrator.v1.PublishReleaseResponse
+	6,  // 24: orchestrator.v1.OrchestratorService.CreateCustomer:output_type -> orchestrator.v1.CreateCustomerResponse
+	8,  // 25: orchestrator.v1.OrchestratorService.GetCustomer:output_type -> orchestrator.v1.GetCustomerResponse
+	10, // 26: orchestrator.v1.OrchestratorService.ListCustomers:output_type -> orchestrator.v1.ListCustomersResponse
+	12, // 27: orchestrator.v1.OrchestratorService.UpdateCustomer:output_type -> orchestrator.v1.UpdateCustomerResponse
+	14, // 28: orchestrator.v1.OrchestratorService.DisableCustomer:output_type -> orchestrator.v1.DisableCustomerResponse
+	16, // 29: orchestrator.v1.OrchestratorService.CreateCluster:output_type -> orchestrator.v1.CreateClusterResponse
+	18, // 30: orchestrator.v1.OrchestratorService.GetCluster:output_type -> orchestrator.v1.GetClusterResponse
+	20, // 31: orchestrator.v1.OrchestratorService.ListClusters:output_type -> orchestrator.v1.ListClustersResponse
+	22, // 32: orchestrator.v1.OrchestratorService.DisableCluster:output_type -> orchestrator.v1.DisableClusterResponse
+	24, // 33: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:output_type -> orchestrator.v1.CreateEnrollmentTokenResponse
+	22, // [22:34] is the sub-list for method output_type
+	10, // [10:22] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_orchestrator_v1_orchestrator_proto_init() }
@@ -443,7 +1487,7 @@ func file_orchestrator_v1_orchestrator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_orchestrator_v1_orchestrator_proto_rawDesc), len(file_orchestrator_v1_orchestrator_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

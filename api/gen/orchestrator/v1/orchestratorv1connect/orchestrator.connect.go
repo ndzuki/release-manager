@@ -39,12 +39,56 @@ const (
 	// OrchestratorServicePublishReleaseProcedure is the fully-qualified name of the
 	// OrchestratorService's PublishRelease RPC.
 	OrchestratorServicePublishReleaseProcedure = "/orchestrator.v1.OrchestratorService/PublishRelease"
+	// OrchestratorServiceCreateCustomerProcedure is the fully-qualified name of the
+	// OrchestratorService's CreateCustomer RPC.
+	OrchestratorServiceCreateCustomerProcedure = "/orchestrator.v1.OrchestratorService/CreateCustomer"
+	// OrchestratorServiceGetCustomerProcedure is the fully-qualified name of the OrchestratorService's
+	// GetCustomer RPC.
+	OrchestratorServiceGetCustomerProcedure = "/orchestrator.v1.OrchestratorService/GetCustomer"
+	// OrchestratorServiceListCustomersProcedure is the fully-qualified name of the
+	// OrchestratorService's ListCustomers RPC.
+	OrchestratorServiceListCustomersProcedure = "/orchestrator.v1.OrchestratorService/ListCustomers"
+	// OrchestratorServiceUpdateCustomerProcedure is the fully-qualified name of the
+	// OrchestratorService's UpdateCustomer RPC.
+	OrchestratorServiceUpdateCustomerProcedure = "/orchestrator.v1.OrchestratorService/UpdateCustomer"
+	// OrchestratorServiceDisableCustomerProcedure is the fully-qualified name of the
+	// OrchestratorService's DisableCustomer RPC.
+	OrchestratorServiceDisableCustomerProcedure = "/orchestrator.v1.OrchestratorService/DisableCustomer"
+	// OrchestratorServiceCreateClusterProcedure is the fully-qualified name of the
+	// OrchestratorService's CreateCluster RPC.
+	OrchestratorServiceCreateClusterProcedure = "/orchestrator.v1.OrchestratorService/CreateCluster"
+	// OrchestratorServiceGetClusterProcedure is the fully-qualified name of the OrchestratorService's
+	// GetCluster RPC.
+	OrchestratorServiceGetClusterProcedure = "/orchestrator.v1.OrchestratorService/GetCluster"
+	// OrchestratorServiceListClustersProcedure is the fully-qualified name of the OrchestratorService's
+	// ListClusters RPC.
+	OrchestratorServiceListClustersProcedure = "/orchestrator.v1.OrchestratorService/ListClusters"
+	// OrchestratorServiceDisableClusterProcedure is the fully-qualified name of the
+	// OrchestratorService's DisableCluster RPC.
+	OrchestratorServiceDisableClusterProcedure = "/orchestrator.v1.OrchestratorService/DisableCluster"
+	// OrchestratorServiceCreateEnrollmentTokenProcedure is the fully-qualified name of the
+	// OrchestratorService's CreateEnrollmentToken RPC.
+	OrchestratorServiceCreateEnrollmentTokenProcedure = "/orchestrator.v1.OrchestratorService/CreateEnrollmentToken"
 )
 
 // OrchestratorServiceClient is a client for the orchestrator.v1.OrchestratorService service.
 type OrchestratorServiceClient interface {
+	// Release pipeline
 	CreateOperation(context.Context, *connect.Request[v1.CreateOperationRequest]) (*connect.Response[v1.CreateOperationResponse], error)
 	PublishRelease(context.Context, *connect.Request[v1.PublishReleaseRequest]) (*connect.Response[v1.PublishReleaseResponse], error)
+	// Customer management
+	CreateCustomer(context.Context, *connect.Request[v1.CreateCustomerRequest]) (*connect.Response[v1.CreateCustomerResponse], error)
+	GetCustomer(context.Context, *connect.Request[v1.GetCustomerRequest]) (*connect.Response[v1.GetCustomerResponse], error)
+	ListCustomers(context.Context, *connect.Request[v1.ListCustomersRequest]) (*connect.Response[v1.ListCustomersResponse], error)
+	UpdateCustomer(context.Context, *connect.Request[v1.UpdateCustomerRequest]) (*connect.Response[v1.UpdateCustomerResponse], error)
+	DisableCustomer(context.Context, *connect.Request[v1.DisableCustomerRequest]) (*connect.Response[v1.DisableCustomerResponse], error)
+	// Cluster management
+	CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.CreateClusterResponse], error)
+	GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error)
+	ListClusters(context.Context, *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error)
+	DisableCluster(context.Context, *connect.Request[v1.DisableClusterRequest]) (*connect.Response[v1.DisableClusterResponse], error)
+	// Operator enrollment
+	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
 }
 
 // NewOrchestratorServiceClient constructs a client for the orchestrator.v1.OrchestratorService
@@ -70,13 +114,83 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("PublishRelease")),
 			connect.WithClientOptions(opts...),
 		),
+		createCustomer: connect.NewClient[v1.CreateCustomerRequest, v1.CreateCustomerResponse](
+			httpClient,
+			baseURL+OrchestratorServiceCreateCustomerProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("CreateCustomer")),
+			connect.WithClientOptions(opts...),
+		),
+		getCustomer: connect.NewClient[v1.GetCustomerRequest, v1.GetCustomerResponse](
+			httpClient,
+			baseURL+OrchestratorServiceGetCustomerProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("GetCustomer")),
+			connect.WithClientOptions(opts...),
+		),
+		listCustomers: connect.NewClient[v1.ListCustomersRequest, v1.ListCustomersResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListCustomersProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListCustomers")),
+			connect.WithClientOptions(opts...),
+		),
+		updateCustomer: connect.NewClient[v1.UpdateCustomerRequest, v1.UpdateCustomerResponse](
+			httpClient,
+			baseURL+OrchestratorServiceUpdateCustomerProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("UpdateCustomer")),
+			connect.WithClientOptions(opts...),
+		),
+		disableCustomer: connect.NewClient[v1.DisableCustomerRequest, v1.DisableCustomerResponse](
+			httpClient,
+			baseURL+OrchestratorServiceDisableCustomerProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("DisableCustomer")),
+			connect.WithClientOptions(opts...),
+		),
+		createCluster: connect.NewClient[v1.CreateClusterRequest, v1.CreateClusterResponse](
+			httpClient,
+			baseURL+OrchestratorServiceCreateClusterProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("CreateCluster")),
+			connect.WithClientOptions(opts...),
+		),
+		getCluster: connect.NewClient[v1.GetClusterRequest, v1.GetClusterResponse](
+			httpClient,
+			baseURL+OrchestratorServiceGetClusterProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("GetCluster")),
+			connect.WithClientOptions(opts...),
+		),
+		listClusters: connect.NewClient[v1.ListClustersRequest, v1.ListClustersResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListClustersProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListClusters")),
+			connect.WithClientOptions(opts...),
+		),
+		disableCluster: connect.NewClient[v1.DisableClusterRequest, v1.DisableClusterResponse](
+			httpClient,
+			baseURL+OrchestratorServiceDisableClusterProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("DisableCluster")),
+			connect.WithClientOptions(opts...),
+		),
+		createEnrollmentToken: connect.NewClient[v1.CreateEnrollmentTokenRequest, v1.CreateEnrollmentTokenResponse](
+			httpClient,
+			baseURL+OrchestratorServiceCreateEnrollmentTokenProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("CreateEnrollmentToken")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // orchestratorServiceClient implements OrchestratorServiceClient.
 type orchestratorServiceClient struct {
-	createOperation *connect.Client[v1.CreateOperationRequest, v1.CreateOperationResponse]
-	publishRelease  *connect.Client[v1.PublishReleaseRequest, v1.PublishReleaseResponse]
+	createOperation       *connect.Client[v1.CreateOperationRequest, v1.CreateOperationResponse]
+	publishRelease        *connect.Client[v1.PublishReleaseRequest, v1.PublishReleaseResponse]
+	createCustomer        *connect.Client[v1.CreateCustomerRequest, v1.CreateCustomerResponse]
+	getCustomer           *connect.Client[v1.GetCustomerRequest, v1.GetCustomerResponse]
+	listCustomers         *connect.Client[v1.ListCustomersRequest, v1.ListCustomersResponse]
+	updateCustomer        *connect.Client[v1.UpdateCustomerRequest, v1.UpdateCustomerResponse]
+	disableCustomer       *connect.Client[v1.DisableCustomerRequest, v1.DisableCustomerResponse]
+	createCluster         *connect.Client[v1.CreateClusterRequest, v1.CreateClusterResponse]
+	getCluster            *connect.Client[v1.GetClusterRequest, v1.GetClusterResponse]
+	listClusters          *connect.Client[v1.ListClustersRequest, v1.ListClustersResponse]
+	disableCluster        *connect.Client[v1.DisableClusterRequest, v1.DisableClusterResponse]
+	createEnrollmentToken *connect.Client[v1.CreateEnrollmentTokenRequest, v1.CreateEnrollmentTokenResponse]
 }
 
 // CreateOperation calls orchestrator.v1.OrchestratorService.CreateOperation.
@@ -89,11 +203,75 @@ func (c *orchestratorServiceClient) PublishRelease(ctx context.Context, req *con
 	return c.publishRelease.CallUnary(ctx, req)
 }
 
+// CreateCustomer calls orchestrator.v1.OrchestratorService.CreateCustomer.
+func (c *orchestratorServiceClient) CreateCustomer(ctx context.Context, req *connect.Request[v1.CreateCustomerRequest]) (*connect.Response[v1.CreateCustomerResponse], error) {
+	return c.createCustomer.CallUnary(ctx, req)
+}
+
+// GetCustomer calls orchestrator.v1.OrchestratorService.GetCustomer.
+func (c *orchestratorServiceClient) GetCustomer(ctx context.Context, req *connect.Request[v1.GetCustomerRequest]) (*connect.Response[v1.GetCustomerResponse], error) {
+	return c.getCustomer.CallUnary(ctx, req)
+}
+
+// ListCustomers calls orchestrator.v1.OrchestratorService.ListCustomers.
+func (c *orchestratorServiceClient) ListCustomers(ctx context.Context, req *connect.Request[v1.ListCustomersRequest]) (*connect.Response[v1.ListCustomersResponse], error) {
+	return c.listCustomers.CallUnary(ctx, req)
+}
+
+// UpdateCustomer calls orchestrator.v1.OrchestratorService.UpdateCustomer.
+func (c *orchestratorServiceClient) UpdateCustomer(ctx context.Context, req *connect.Request[v1.UpdateCustomerRequest]) (*connect.Response[v1.UpdateCustomerResponse], error) {
+	return c.updateCustomer.CallUnary(ctx, req)
+}
+
+// DisableCustomer calls orchestrator.v1.OrchestratorService.DisableCustomer.
+func (c *orchestratorServiceClient) DisableCustomer(ctx context.Context, req *connect.Request[v1.DisableCustomerRequest]) (*connect.Response[v1.DisableCustomerResponse], error) {
+	return c.disableCustomer.CallUnary(ctx, req)
+}
+
+// CreateCluster calls orchestrator.v1.OrchestratorService.CreateCluster.
+func (c *orchestratorServiceClient) CreateCluster(ctx context.Context, req *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.CreateClusterResponse], error) {
+	return c.createCluster.CallUnary(ctx, req)
+}
+
+// GetCluster calls orchestrator.v1.OrchestratorService.GetCluster.
+func (c *orchestratorServiceClient) GetCluster(ctx context.Context, req *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error) {
+	return c.getCluster.CallUnary(ctx, req)
+}
+
+// ListClusters calls orchestrator.v1.OrchestratorService.ListClusters.
+func (c *orchestratorServiceClient) ListClusters(ctx context.Context, req *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error) {
+	return c.listClusters.CallUnary(ctx, req)
+}
+
+// DisableCluster calls orchestrator.v1.OrchestratorService.DisableCluster.
+func (c *orchestratorServiceClient) DisableCluster(ctx context.Context, req *connect.Request[v1.DisableClusterRequest]) (*connect.Response[v1.DisableClusterResponse], error) {
+	return c.disableCluster.CallUnary(ctx, req)
+}
+
+// CreateEnrollmentToken calls orchestrator.v1.OrchestratorService.CreateEnrollmentToken.
+func (c *orchestratorServiceClient) CreateEnrollmentToken(ctx context.Context, req *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error) {
+	return c.createEnrollmentToken.CallUnary(ctx, req)
+}
+
 // OrchestratorServiceHandler is an implementation of the orchestrator.v1.OrchestratorService
 // service.
 type OrchestratorServiceHandler interface {
+	// Release pipeline
 	CreateOperation(context.Context, *connect.Request[v1.CreateOperationRequest]) (*connect.Response[v1.CreateOperationResponse], error)
 	PublishRelease(context.Context, *connect.Request[v1.PublishReleaseRequest]) (*connect.Response[v1.PublishReleaseResponse], error)
+	// Customer management
+	CreateCustomer(context.Context, *connect.Request[v1.CreateCustomerRequest]) (*connect.Response[v1.CreateCustomerResponse], error)
+	GetCustomer(context.Context, *connect.Request[v1.GetCustomerRequest]) (*connect.Response[v1.GetCustomerResponse], error)
+	ListCustomers(context.Context, *connect.Request[v1.ListCustomersRequest]) (*connect.Response[v1.ListCustomersResponse], error)
+	UpdateCustomer(context.Context, *connect.Request[v1.UpdateCustomerRequest]) (*connect.Response[v1.UpdateCustomerResponse], error)
+	DisableCustomer(context.Context, *connect.Request[v1.DisableCustomerRequest]) (*connect.Response[v1.DisableCustomerResponse], error)
+	// Cluster management
+	CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.CreateClusterResponse], error)
+	GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error)
+	ListClusters(context.Context, *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error)
+	DisableCluster(context.Context, *connect.Request[v1.DisableClusterRequest]) (*connect.Response[v1.DisableClusterResponse], error)
+	// Operator enrollment
+	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
 }
 
 // NewOrchestratorServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -115,12 +293,92 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("PublishRelease")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orchestratorServiceCreateCustomerHandler := connect.NewUnaryHandler(
+		OrchestratorServiceCreateCustomerProcedure,
+		svc.CreateCustomer,
+		connect.WithSchema(orchestratorServiceMethods.ByName("CreateCustomer")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceGetCustomerHandler := connect.NewUnaryHandler(
+		OrchestratorServiceGetCustomerProcedure,
+		svc.GetCustomer,
+		connect.WithSchema(orchestratorServiceMethods.ByName("GetCustomer")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceListCustomersHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListCustomersProcedure,
+		svc.ListCustomers,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListCustomers")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceUpdateCustomerHandler := connect.NewUnaryHandler(
+		OrchestratorServiceUpdateCustomerProcedure,
+		svc.UpdateCustomer,
+		connect.WithSchema(orchestratorServiceMethods.ByName("UpdateCustomer")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceDisableCustomerHandler := connect.NewUnaryHandler(
+		OrchestratorServiceDisableCustomerProcedure,
+		svc.DisableCustomer,
+		connect.WithSchema(orchestratorServiceMethods.ByName("DisableCustomer")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceCreateClusterHandler := connect.NewUnaryHandler(
+		OrchestratorServiceCreateClusterProcedure,
+		svc.CreateCluster,
+		connect.WithSchema(orchestratorServiceMethods.ByName("CreateCluster")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceGetClusterHandler := connect.NewUnaryHandler(
+		OrchestratorServiceGetClusterProcedure,
+		svc.GetCluster,
+		connect.WithSchema(orchestratorServiceMethods.ByName("GetCluster")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceListClustersHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListClustersProcedure,
+		svc.ListClusters,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListClusters")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceDisableClusterHandler := connect.NewUnaryHandler(
+		OrchestratorServiceDisableClusterProcedure,
+		svc.DisableCluster,
+		connect.WithSchema(orchestratorServiceMethods.ByName("DisableCluster")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceCreateEnrollmentTokenHandler := connect.NewUnaryHandler(
+		OrchestratorServiceCreateEnrollmentTokenProcedure,
+		svc.CreateEnrollmentToken,
+		connect.WithSchema(orchestratorServiceMethods.ByName("CreateEnrollmentToken")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/orchestrator.v1.OrchestratorService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case OrchestratorServiceCreateOperationProcedure:
 			orchestratorServiceCreateOperationHandler.ServeHTTP(w, r)
 		case OrchestratorServicePublishReleaseProcedure:
 			orchestratorServicePublishReleaseHandler.ServeHTTP(w, r)
+		case OrchestratorServiceCreateCustomerProcedure:
+			orchestratorServiceCreateCustomerHandler.ServeHTTP(w, r)
+		case OrchestratorServiceGetCustomerProcedure:
+			orchestratorServiceGetCustomerHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListCustomersProcedure:
+			orchestratorServiceListCustomersHandler.ServeHTTP(w, r)
+		case OrchestratorServiceUpdateCustomerProcedure:
+			orchestratorServiceUpdateCustomerHandler.ServeHTTP(w, r)
+		case OrchestratorServiceDisableCustomerProcedure:
+			orchestratorServiceDisableCustomerHandler.ServeHTTP(w, r)
+		case OrchestratorServiceCreateClusterProcedure:
+			orchestratorServiceCreateClusterHandler.ServeHTTP(w, r)
+		case OrchestratorServiceGetClusterProcedure:
+			orchestratorServiceGetClusterHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListClustersProcedure:
+			orchestratorServiceListClustersHandler.ServeHTTP(w, r)
+		case OrchestratorServiceDisableClusterProcedure:
+			orchestratorServiceDisableClusterHandler.ServeHTTP(w, r)
+		case OrchestratorServiceCreateEnrollmentTokenProcedure:
+			orchestratorServiceCreateEnrollmentTokenHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -136,4 +394,44 @@ func (UnimplementedOrchestratorServiceHandler) CreateOperation(context.Context, 
 
 func (UnimplementedOrchestratorServiceHandler) PublishRelease(context.Context, *connect.Request[v1.PublishReleaseRequest]) (*connect.Response[v1.PublishReleaseResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.PublishRelease is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) CreateCustomer(context.Context, *connect.Request[v1.CreateCustomerRequest]) (*connect.Response[v1.CreateCustomerResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.CreateCustomer is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) GetCustomer(context.Context, *connect.Request[v1.GetCustomerRequest]) (*connect.Response[v1.GetCustomerResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.GetCustomer is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListCustomers(context.Context, *connect.Request[v1.ListCustomersRequest]) (*connect.Response[v1.ListCustomersResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListCustomers is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) UpdateCustomer(context.Context, *connect.Request[v1.UpdateCustomerRequest]) (*connect.Response[v1.UpdateCustomerResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.UpdateCustomer is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) DisableCustomer(context.Context, *connect.Request[v1.DisableCustomerRequest]) (*connect.Response[v1.DisableCustomerResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.DisableCustomer is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.CreateClusterResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.CreateCluster is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.GetCluster is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListClusters(context.Context, *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListClusters is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) DisableCluster(context.Context, *connect.Request[v1.DisableClusterRequest]) (*connect.Response[v1.DisableClusterResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.DisableCluster is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.CreateEnrollmentToken is not implemented"))
 }
