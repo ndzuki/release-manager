@@ -23,6 +23,11 @@ type Store struct {
 	operators   *operatorStore
 	sessions    *sessionStore
 	outbox      *outboxStore
+	users       *userStore
+	authSess    *authSessionStore
+	orgs        *organizationStore
+	orgMembers  *organizationMemberStore
+	bindings    *bindingStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -59,6 +64,11 @@ func Open(dsn string) (*Store, error) {
 	s.operators = &operatorStore{db: db}
 	s.sessions = &sessionStore{db: db}
 	s.outbox = &outboxStore{db: db}
+	s.users = &userStore{db: db}
+	s.authSess = &authSessionStore{db: db}
+	s.orgs = &organizationStore{db: db}
+	s.orgMembers = &organizationMemberStore{db: db}
+	s.bindings = &bindingStore{db: db}
 	return s, nil
 }
 
@@ -88,6 +98,21 @@ func (s *Store) Definitions() store.DefinitionStore { return s.defs }
 
 // Values returns the ValuesStore.
 func (s *Store) Values() store.ValuesStore { return s.vals }
+
+// Users returns the UserStore.
+func (s *Store) Users() store.UserStore { return s.users }
+
+// AuthSessions returns the AuthSessionStore.
+func (s *Store) AuthSessions() store.AuthSessionStore { return s.authSess }
+
+// Organizations returns the OrganizationStore.
+func (s *Store) Organizations() store.OrganizationStore { return s.orgs }
+
+// OrgMembers returns the OrganizationMemberStore.
+func (s *Store) OrgMembers() store.OrganizationMemberStore { return s.orgMembers }
+
+// Bindings returns the BindingStore.
+func (s *Store) Bindings() store.BindingStore { return s.bindings }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
@@ -243,6 +268,61 @@ var migrationStatements = []string{
 	)`,
 
 	`CREATE INDEX IF NOT EXISTS idx_outbox_operator_status ON outbox(operator_id, status)`,
+
+	// Auth & RBAC — users, sessions, organizations, bindings (REQ-025, REQ-026, REQ-049)
+	`CREATE TABLE IF NOT EXISTS users (
+		id            TEXT PRIMARY KEY,
+		username      TEXT NOT NULL UNIQUE,
+		password_hash TEXT NOT NULL,
+		status        TEXT NOT NULL DEFAULT 'active',
+		created_at    TEXT NOT NULL,
+		updated_at    TEXT NOT NULL
+	)`,
+
+	`CREATE TABLE IF NOT EXISTS auth_sessions (
+		id                 TEXT PRIMARY KEY,
+		user_id            TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		token_family       TEXT NOT NULL,
+		refresh_token_hash TEXT NOT NULL,
+		expires_at         TEXT NOT NULL,
+		created_at         TEXT NOT NULL,
+		revoked            INTEGER NOT NULL DEFAULT 0
+	)`,
+
+	`CREATE INDEX IF NOT EXISTS idx_auth_sessions_family ON auth_sessions(token_family)`,
+	`CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id)`,
+
+	`CREATE TABLE IF NOT EXISTS organizations (
+		id                 TEXT PRIMARY KEY,
+		name               TEXT NOT NULL,
+		status             TEXT NOT NULL DEFAULT 'active',
+		optimistic_version INTEGER NOT NULL DEFAULT 0,
+		created_at         TEXT NOT NULL,
+		updated_at         TEXT NOT NULL
+	)`,
+
+	`CREATE TABLE IF NOT EXISTS organization_members (
+		org_id             TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+		user_id            TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		role               TEXT NOT NULL DEFAULT 'viewer',
+		optimistic_version INTEGER NOT NULL DEFAULT 0,
+		created_at         TEXT NOT NULL,
+		updated_at         TEXT NOT NULL,
+		PRIMARY KEY (org_id, user_id)
+	)`,
+
+	`CREATE TABLE IF NOT EXISTS org_customer_bindings (
+		id                 TEXT PRIMARY KEY,
+		org_id             TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+		customer_id        TEXT NOT NULL,
+		status             TEXT NOT NULL DEFAULT 'active',
+		optimistic_version INTEGER NOT NULL DEFAULT 0,
+		created_at         TEXT NOT NULL,
+		updated_at         TEXT NOT NULL,
+		UNIQUE(org_id, customer_id)
+	)`,
+
+	`CREATE INDEX IF NOT EXISTS idx_bindings_org ON org_customer_bindings(org_id)`,
 }
 
 // nowUTC returns the current time in UTC as an RFC3339 string for SQLite storage.

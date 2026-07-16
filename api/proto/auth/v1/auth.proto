@@ -4,32 +4,233 @@ package auth.v1;
 
 option go_package = "github.com/ndzuki/release-manager/api/gen/auth/v1;authv1";
 
-// LoginRequest carries user credentials.
+import "google/protobuf/timestamp.proto";
+
+// --- AuthService (REQ-025) ---
+
 message LoginRequest {
   string username = 1;
   string password = 2;
 }
 
-// LoginResponse returns a session token on success.
 message LoginResponse {
-  string token = 1;
-  int64 expires_at = 2;
+  string access_token = 1;
+  string refresh_token = 2;
+  int64 expires_at = 3;
+  string token_type = 4;
 }
 
-// ValidateTokenRequest checks if a token is still valid.
+message LogoutRequest {
+  string refresh_token = 1;
+}
+
+message LogoutResponse {}
+
+message RefreshTokenRequest {
+  string refresh_token = 1;
+}
+
+message RefreshTokenResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+  int64 expires_at = 3;
+  string token_type = 4;
+}
+
 message ValidateTokenRequest {
   string token = 1;
 }
 
-// ValidateTokenResponse returns the token's validity and associated principal.
 message ValidateTokenResponse {
   bool valid = 1;
   string user_id = 2;
   repeated string roles = 3;
+  string org_id = 4;
 }
 
-// AuthService handles authentication and token management.
+message ChangePasswordRequest {
+  string old_password = 1;
+  string new_password = 2;
+}
+
+message ChangePasswordResponse {}
+
 service AuthService {
   rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
   rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
+}
+
+// --- OrganizationService (REQ-026) ---
+
+message Organization {
+  string id = 1;
+  string name = 2;
+  string status = 3;
+  int64 optimistic_version = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message OrganizationMember {
+  string org_id = 1;
+  string user_id = 2;
+  string role = 3;
+  int64 optimistic_version = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message CreateOrganizationRequest {
+  string name = 1;
+}
+
+message CreateOrganizationResponse {
+  Organization organization = 1;
+}
+
+message GetOrganizationRequest {
+  string org_id = 1;
+}
+
+message GetOrganizationResponse {
+  Organization organization = 1;
+}
+
+message ListOrganizationsRequest {}
+
+message ListOrganizationsResponse {
+  repeated Organization organizations = 1;
+}
+
+message UpdateOrganizationRequest {
+  string org_id = 1;
+  string name = 2;
+  int64 expected_version = 3;
+}
+
+message UpdateOrganizationResponse {
+  Organization organization = 1;
+}
+
+message DisableOrganizationRequest {
+  string org_id = 1;
+  int64 expected_version = 2;
+}
+
+message DisableOrganizationResponse {
+  Organization organization = 1;
+}
+
+message AddMemberRequest {
+  string org_id = 1;
+  string user_id = 2;
+  string role = 3;
+}
+
+message AddMemberResponse {
+  OrganizationMember member = 1;
+}
+
+message RemoveMemberRequest {
+  string org_id = 1;
+  string user_id = 2;
+  int64 expected_version = 3;
+}
+
+message RemoveMemberResponse {}
+
+message ListMembersRequest {
+  string org_id = 1;
+}
+
+message ListMembersResponse {
+  repeated OrganizationMember members = 1;
+}
+
+message UpdateMemberRoleRequest {
+  string org_id = 1;
+  string user_id = 2;
+  string new_role = 3;
+  int64 expected_version = 4;
+}
+
+message UpdateMemberRoleResponse {
+  OrganizationMember member = 1;
+}
+
+service OrganizationService {
+  rpc CreateOrganization(CreateOrganizationRequest) returns (CreateOrganizationResponse);
+  rpc GetOrganization(GetOrganizationRequest) returns (GetOrganizationResponse);
+  rpc ListOrganizations(ListOrganizationsRequest) returns (ListOrganizationsResponse);
+  rpc UpdateOrganization(UpdateOrganizationRequest) returns (UpdateOrganizationResponse);
+  rpc DisableOrganization(DisableOrganizationRequest) returns (DisableOrganizationResponse);
+  rpc AddMember(AddMemberRequest) returns (AddMemberResponse);
+  rpc RemoveMember(RemoveMemberRequest) returns (RemoveMemberResponse);
+  rpc ListMembers(ListMembersRequest) returns (ListMembersResponse);
+  rpc UpdateMemberRole(UpdateMemberRoleRequest) returns (UpdateMemberRoleResponse);
+}
+
+// --- BindingService (REQ-049) ---
+
+message OrgCustomerBinding {
+  string id = 1;
+  string org_id = 2;
+  string customer_id = 3;
+  string status = 4;
+  int64 optimistic_version = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message CreateBindingRequest {
+  string org_id = 1;
+  string customer_id = 2;
+}
+
+message CreateBindingResponse {
+  OrgCustomerBinding binding = 1;
+}
+
+message GetBindingRequest {
+  string binding_id = 1;
+}
+
+message GetBindingResponse {
+  OrgCustomerBinding binding = 1;
+}
+
+message ListBindingsRequest {
+  string org_id = 1;
+}
+
+message ListBindingsResponse {
+  repeated OrgCustomerBinding bindings = 1;
+}
+
+message RevokeBindingRequest {
+  string binding_id = 1;
+  int64 expected_version = 2;
+}
+
+message RevokeBindingResponse {
+  OrgCustomerBinding binding = 1;
+}
+
+service BindingService {
+  rpc CreateBinding(CreateBindingRequest) returns (CreateBindingResponse);
+  rpc GetBinding(GetBindingRequest) returns (GetBindingResponse);
+  rpc ListBindings(ListBindingsRequest) returns (ListBindingsResponse);
+  rpc RevokeBinding(RevokeBindingRequest) returns (RevokeBindingResponse);
+}
+
+// --- External IdP (REQ-028) — P1 deferred, interface only ---
+
+message IdPConfig {
+  string provider = 1;   // oidc, ldap, dingtalk
+  string client_id = 2;
+  string issuer_url = 3;
+  map<string, string> role_mappings = 4;
 }
