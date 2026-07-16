@@ -35,13 +35,13 @@ func (s *operationStore) Create(ctx context.Context, op *store.Operation) error 
 		INSERT INTO operations (
 			id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
-			bundle_id, values_revision_id, expected_revision, values_patch,
+			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
 			actor, created_at, updated_at, deadline, last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		op.ID, string(op.OperationType), string(op.Status), op.ReleaseDefinitionID,
 		op.IdempotencyKey, op.RequestHash, op.StateVersion,
-		op.BundleID, op.ValuesRevisionID, op.ExpectedRevision, op.ValuesPatch,
+		op.BundleID, op.ValuesRevisionID, op.ExpectedRevision, op.TargetRevision, op.ValuesPatch,
 		string(actorJSON), op.CreatedAt.UTC().Format(time.RFC3339), op.UpdatedAt.UTC().Format(time.RFC3339),
 		deadline, op.LastError,
 	)
@@ -55,7 +55,7 @@ func (s *operationStore) Get(ctx context.Context, id string) (*store.Operation, 
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
-			bundle_id, values_revision_id, expected_revision, values_patch,
+			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
 			actor, created_at, updated_at, deadline, last_error
 		FROM operations WHERE id = ?
 	`, id)
@@ -66,7 +66,7 @@ func (s *operationStore) GetByIdempotencyKey(ctx context.Context, key string) (*
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
-			bundle_id, values_revision_id, expected_revision, values_patch,
+			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
 			actor, created_at, updated_at, deadline, last_error
 		FROM operations WHERE idempotency_key = ?
 	`, key)
@@ -125,7 +125,7 @@ func (s *operationStore) List(ctx context.Context, definitionID string) ([]*stor
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
-			bundle_id, values_revision_id, expected_revision, values_patch,
+			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
 			actor, created_at, updated_at, deadline, last_error
 		FROM operations
 		WHERE release_definition_id = ?
@@ -150,7 +150,7 @@ func (s *operationStore) List(ctx context.Context, definitionID string) ([]*stor
 func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operation, error) {
 	var (
 		id, opType, status, defID, idemKey, reqHash string
-		stateVer, expectedRev                         int
+		stateVer, expectedRev, targetRev              int
 		bundleID, valuesRevID                         string
 		valuesPatch                                   []byte
 		actorJSON                                     string
@@ -162,7 +162,7 @@ func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operatio
 	err := row.Scan(
 		&id, &opType, &status, &defID,
 		&idemKey, &reqHash, &stateVer,
-		&bundleID, &valuesRevID, &expectedRev, &valuesPatch,
+		&bundleID, &valuesRevID, &expectedRev, &targetRev, &valuesPatch,
 		&actorJSON, &createdAt, &updatedAt, &deadline, &lastError,
 	)
 	if err != nil {
@@ -173,14 +173,14 @@ func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operatio
 	}
 
 	return buildOperation(id, opType, status, defID, idemKey, reqHash,
-		stateVer, bundleID, valuesRevID, expectedRev, valuesPatch,
+		stateVer, bundleID, valuesRevID, expectedRev, targetRev, valuesPatch,
 		actorJSON, createdAt, updatedAt, deadline, lastError)
 }
 
 func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 	var (
 		id, opType, status, defID, idemKey, reqHash string
-		stateVer, expectedRev                         int
+		stateVer, expectedRev, targetRev              int
 		bundleID, valuesRevID                         string
 		valuesPatch                                   []byte
 		actorJSON                                     string
@@ -192,7 +192,7 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 	err := rows.Scan(
 		&id, &opType, &status, &defID,
 		&idemKey, &reqHash, &stateVer,
-		&bundleID, &valuesRevID, &expectedRev, &valuesPatch,
+		&bundleID, &valuesRevID, &expectedRev, &targetRev, &valuesPatch,
 		&actorJSON, &createdAt, &updatedAt, &deadline, &lastError,
 	)
 	if err != nil {
@@ -200,12 +200,12 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 	}
 
 	return buildOperation(id, opType, status, defID, idemKey, reqHash,
-		stateVer, bundleID, valuesRevID, expectedRev, valuesPatch,
+		stateVer, bundleID, valuesRevID, expectedRev, targetRev, valuesPatch,
 		actorJSON, createdAt, updatedAt, deadline, lastError)
 }
 
 func buildOperation(id, opType, status, defID, idemKey, reqHash string,
-	stateVer int, bundleID, valuesRevID string, expectedRev int,
+	stateVer int, bundleID, valuesRevID string, expectedRev, targetRev int,
 	valuesPatch []byte, actorJSON, createdAt, updatedAt string,
 	deadline *string, lastError string,
 ) (*store.Operation, error) {
@@ -243,6 +243,7 @@ func buildOperation(id, opType, status, defID, idemKey, reqHash string,
 		BundleID:            bundleID,
 		ValuesRevisionID:    valuesRevID,
 		ExpectedRevision:    expectedRev,
+		TargetRevision:      targetRev,
 		ValuesPatch:         valuesPatch,
 		Actor:               actor,
 		CreatedAt:           ct,

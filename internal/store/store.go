@@ -109,6 +109,7 @@ type Operation struct {
 	BundleID            string          `json:"bundle_id"`
 	ValuesRevisionID    string          `json:"values_revision_id"`
 	ExpectedRevision    int             `json:"expected_revision"`
+	TargetRevision      int             `json:"target_revision,omitempty"`
 	ValuesPatch         []byte          `json:"values_patch,omitempty"`
 	Actor               ActorContext    `json:"actor"`
 	CreatedAt           time.Time       `json:"created_at"`
