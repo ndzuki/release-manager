@@ -7,9 +7,10 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
-	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
+	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -68,9 +69,9 @@ func (s *Service) GetCustomer(
 // ListCustomers returns all customers.
 func (s *Service) ListCustomers(
 	ctx context.Context,
-	_ *connect.Request[orchestratorv1.ListCustomersRequest],
+	req *connect.Request[orchestratorv1.ListCustomersRequest],
 ) (*connect.Response[orchestratorv1.ListCustomersResponse], error) {
-	customers, err := s.store.Customers().List(ctx)
+	customers, err := s.store.Customers().List(ctx, req.Msg.GetIncludeDisabled())
 	if err != nil {
 		s.logger.Error("list customers failed", "error", err)
 		return nil, connect.NewError(connect.CodeInternal, err)
@@ -131,10 +132,31 @@ func (s *Service) DisableCustomer(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
+	// AC-013-04: Idempotent — already disabled is a no-op (still emit event
+	// for the first disable only).
+	if c.Status == store.CustomerDisabled {
+		s.logger.Info("customer already disabled", "id", c.ID)
+		return connect.NewResponse(&orchestratorv1.DisableCustomerResponse{}), nil
+	}
+
+	wasActive := c.Status != store.CustomerDisabled
 	c.Status = store.CustomerDisabled
 	if err := s.store.Customers().Update(ctx, c); err != nil {
 		s.logger.Error("disable customer failed", "error", err)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("disable customer: %w", err))
+	}
+
+	// Emit CustomerDisabled event for downstream cascading (AC-013-04).
+	if wasActive {
+		ev := &store.CustomerEvent{
+			ID:         uuid.New().String(),
+			CustomerID: c.ID,
+			EventType:  "customer_disabled",
+		}
+		if err := s.store.CustomerEvents().Create(ctx, ev); err != nil {
+			s.logger.Error("failed to persist CustomerDisabled event", "customer_id", c.ID, "error", err)
+			// Non-fatal: the disable succeeded; event persistence is best-effort.
+		}
 	}
 
 	// Cascade: revoke all enrollment tokens for this customer (AC-015-04).
@@ -168,7 +190,6 @@ func (s *Service) DisableCustomer(
 			}
 		}
 	}
-
 	s.logger.Warn("customer disabled", "id", c.ID, "name", c.Name)
 	return connect.NewResponse(&orchestratorv1.DisableCustomerResponse{}), nil
 }
@@ -176,8 +197,10 @@ func (s *Service) DisableCustomer(
 // toProtoCustomer converts a store.Customer to a commonv1.Customer proto message.
 func toProtoCustomer(c *store.Customer) *commonv1.Customer {
 	return &commonv1.Customer{
-		Id:   c.ID,
-		Name: c.Name,
-		Slug: c.Slug,
+		Id:        c.ID,
+		Name:      c.Name,
+		Slug:      c.Slug,
+		Status:    string(c.Status),
+		CreatedAt: timestamppb.New(c.CreatedAt),
 	}
 }

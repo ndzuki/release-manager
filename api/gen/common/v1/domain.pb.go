@@ -617,6 +617,7 @@ type Customer struct {
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Slug          string                 `protobuf:"bytes,3,opt,name=slug,proto3" json:"slug,omitempty"`
+	Status        string                 `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -673,9 +674,72 @@ func (x *Customer) GetSlug() string {
 	return ""
 }
 
+func (x *Customer) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
 func (x *Customer) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
+	}
+	return nil
+}
+
+// CustomerDisabledEvent is emitted when a customer is disabled.
+// Receivers (downstream services) use this to trigger cascading cleanup.
+// The event MUST be idempotent — emitting it for an already-disabled
+// customer is a no-op at the consumer side.
+type CustomerDisabledEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CustomerId    string                 `protobuf:"bytes,1,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	DisabledAt    *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=disabled_at,json=disabledAt,proto3" json:"disabled_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CustomerDisabledEvent) Reset() {
+	*x = CustomerDisabledEvent{}
+	mi := &file_common_v1_domain_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CustomerDisabledEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CustomerDisabledEvent) ProtoMessage() {}
+
+func (x *CustomerDisabledEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_common_v1_domain_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CustomerDisabledEvent.ProtoReflect.Descriptor instead.
+func (*CustomerDisabledEvent) Descriptor() ([]byte, []int) {
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *CustomerDisabledEvent) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+func (x *CustomerDisabledEvent) GetDisabledAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.DisabledAt
 	}
 	return nil
 }
@@ -695,7 +759,7 @@ type Cluster struct {
 
 func (x *Cluster) Reset() {
 	*x = Cluster{}
-	mi := &file_common_v1_domain_proto_msgTypes[7]
+	mi := &file_common_v1_domain_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -707,7 +771,7 @@ func (x *Cluster) String() string {
 func (*Cluster) ProtoMessage() {}
 
 func (x *Cluster) ProtoReflect() protoreflect.Message {
-	mi := &file_common_v1_domain_proto_msgTypes[7]
+	mi := &file_common_v1_domain_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -720,7 +784,7 @@ func (x *Cluster) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Cluster.ProtoReflect.Descriptor instead.
 func (*Cluster) Descriptor() ([]byte, []int) {
-	return file_common_v1_domain_proto_rawDescGZIP(), []int{7}
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Cluster) GetId() string {
@@ -776,7 +840,7 @@ type ActorContext struct {
 
 func (x *ActorContext) Reset() {
 	*x = ActorContext{}
-	mi := &file_common_v1_domain_proto_msgTypes[8]
+	mi := &file_common_v1_domain_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -788,7 +852,7 @@ func (x *ActorContext) String() string {
 func (*ActorContext) ProtoMessage() {}
 
 func (x *ActorContext) ProtoReflect() protoreflect.Message {
-	mi := &file_common_v1_domain_proto_msgTypes[8]
+	mi := &file_common_v1_domain_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -801,7 +865,7 @@ func (x *ActorContext) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActorContext.ProtoReflect.Descriptor instead.
 func (*ActorContext) Descriptor() ([]byte, []int) {
-	return file_common_v1_domain_proto_rawDescGZIP(), []int{8}
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ActorContext) GetUserId() string {
@@ -871,13 +935,19 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"\tSecretRef\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x10\n" +
-	"\x03key\x18\x03 \x01(\tR\x03key\"}\n" +
+	"\x03key\x18\x03 \x01(\tR\x03key\"\x95\x01\n" +
 	"\bCustomer\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
-	"\x04slug\x18\x03 \x01(\tR\x04slug\x129\n" +
+	"\x04slug\x18\x03 \x01(\tR\x04slug\x12\x16\n" +
+	"\x06status\x18\x05 \x01(\tR\x06status\x129\n" +
 	"\n" +
-	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xe2\x01\n" +
+	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"u\n" +
+	"\x15CustomerDisabledEvent\x12\x1f\n" +
+	"\vcustomer_id\x18\x01 \x01(\tR\n" +
+	"customerId\x12;\n" +
+	"\vdisabled_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"disabledAt\"\xe2\x01\n" +
 	"\aCluster\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1f\n" +
@@ -913,7 +983,7 @@ func file_common_v1_domain_proto_rawDescGZIP() []byte {
 }
 
 var file_common_v1_domain_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_common_v1_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_common_v1_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_common_v1_domain_proto_goTypes = []any{
 	(BundleStatus)(0),             // 0: common.v1.BundleStatus
 	(ClusterStatus)(0),            // 1: common.v1.ClusterStatus
@@ -924,26 +994,28 @@ var file_common_v1_domain_proto_goTypes = []any{
 	(*ValuesRevision)(nil),        // 6: common.v1.ValuesRevision
 	(*SecretRef)(nil),             // 7: common.v1.SecretRef
 	(*Customer)(nil),              // 8: common.v1.Customer
-	(*Cluster)(nil),               // 9: common.v1.Cluster
-	(*ActorContext)(nil),          // 10: common.v1.ActorContext
-	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
+	(*CustomerDisabledEvent)(nil), // 9: common.v1.CustomerDisabledEvent
+	(*Cluster)(nil),               // 10: common.v1.Cluster
+	(*ActorContext)(nil),          // 11: common.v1.ActorContext
+	(*timestamppb.Timestamp)(nil), // 12: google.protobuf.Timestamp
 }
 var file_common_v1_domain_proto_depIdxs = []int32{
 	2,  // 0: common.v1.ReleaseBundle.digest:type_name -> common.v1.ReleaseDigest
 	0,  // 1: common.v1.ReleaseBundle.status:type_name -> common.v1.BundleStatus
 	3,  // 2: common.v1.ReleaseBundle.images:type_name -> common.v1.BundleImage
-	11, // 3: common.v1.ReleaseBundle.created_at:type_name -> google.protobuf.Timestamp
-	11, // 4: common.v1.ReleaseDefinition.created_at:type_name -> google.protobuf.Timestamp
-	11, // 5: common.v1.ReleaseDefinition.updated_at:type_name -> google.protobuf.Timestamp
-	11, // 6: common.v1.ValuesRevision.created_at:type_name -> google.protobuf.Timestamp
-	11, // 7: common.v1.Customer.created_at:type_name -> google.protobuf.Timestamp
-	1,  // 8: common.v1.Cluster.status:type_name -> common.v1.ClusterStatus
-	11, // 9: common.v1.Cluster.created_at:type_name -> google.protobuf.Timestamp
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	12, // 3: common.v1.ReleaseBundle.created_at:type_name -> google.protobuf.Timestamp
+	12, // 4: common.v1.ReleaseDefinition.created_at:type_name -> google.protobuf.Timestamp
+	12, // 5: common.v1.ReleaseDefinition.updated_at:type_name -> google.protobuf.Timestamp
+	12, // 6: common.v1.ValuesRevision.created_at:type_name -> google.protobuf.Timestamp
+	12, // 7: common.v1.Customer.created_at:type_name -> google.protobuf.Timestamp
+	12, // 8: common.v1.CustomerDisabledEvent.disabled_at:type_name -> google.protobuf.Timestamp
+	1,  // 9: common.v1.Cluster.status:type_name -> common.v1.ClusterStatus
+	12, // 10: common.v1.Cluster.created_at:type_name -> google.protobuf.Timestamp
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_common_v1_domain_proto_init() }
@@ -957,7 +1029,7 @@ func file_common_v1_domain_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_common_v1_domain_proto_rawDesc), len(file_common_v1_domain_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

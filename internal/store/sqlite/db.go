@@ -35,6 +35,7 @@ type Store struct {
 	verifs     *verificationStore
 	routes     *clusterRouteStore
 	invs       *inventoryStore
+	custEvents *customerEventStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -81,6 +82,7 @@ func Open(dsn string) (*Store, error) {
 	s.bundles = &bundleStore{db: db}
 	s.invs = &inventoryStore{db: db}
 	s.verifs = &verificationStore{db: db}
+	s.custEvents = &customerEventStore{db: db}
 	s.routes = &clusterRouteStore{db: db}
 	return s, nil
 }
@@ -138,6 +140,9 @@ func (s *Store) Notifications() store.NotificationStore { return s.notif }
 
 // Verifications returns the VerificationStore.
 func (s *Store) Verifications() store.VerificationStore { return s.verifs }
+
+// CustomerEvents returns the CustomerEventStore.
+func (s *Store) CustomerEvents() store.CustomerEventStore { return s.custEvents }
 
 // ClusterRoutes returns the ClusterRouteStore.
 func (s *Store) ClusterRoutes() store.ClusterRouteStore { return s.routes }
@@ -428,6 +433,15 @@ var migrationStatements = []string{
 		created_at      TEXT NOT NULL
 	)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_records_digest_policy ON verification_records(artifact_digest, policy_version, created_at)`,
+
+	// Customer domain events (REQ-013)
+	`CREATE TABLE IF NOT EXISTS customer_events (
+		id          TEXT PRIMARY KEY,
+		customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+		event_type  TEXT NOT NULL,
+		created_at  TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_customer_events_customer ON customer_events(customer_id, event_type)`,
 
 	// Cluster artifact routing (REQ-014)
 	`CREATE TABLE IF NOT EXISTS cluster_routes (

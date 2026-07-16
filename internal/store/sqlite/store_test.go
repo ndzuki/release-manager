@@ -85,7 +85,7 @@ func TestCustomerList(t *testing.T) {
 	require.NoError(t, st.Customers().Create(ctx, c1))
 	require.NoError(t, st.Customers().Create(ctx, c2))
 
-	list, err := st.Customers().List(ctx)
+	list, err := st.Customers().List(ctx, false)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(list), 2)
 }
