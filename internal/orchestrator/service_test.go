@@ -55,7 +55,7 @@ func seedDefinition(t *testing.T, st store.Store) {
 		CreatedAt:   time.Now().UTC(),
 		UpdatedAt:   time.Now().UTC(),
 	}
-	err := st.Definitions().Create(context.Background(), def)
+	err := st.Definitions().Create(context.Background(), def, nil)
 	require.NoError(t, err)
 }
 

@@ -71,10 +71,9 @@ func (s *Service) CreateOperation(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
 	}
 
-	// Validate definition status
-	if def.Status != store.DefStatusActive {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("release_definition %s is %s", def.ID, def.Status))
+	// Validate definition is active (AC-040-03).
+	if err := checkDefinitionOperable(def); err != nil {
+		return nil, err
 	}
 
 	// AC-013-02: Reject operations for disabled customers.
@@ -209,6 +208,10 @@ func (s *Service) PublishRelease(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
 	}
+	if err := checkDefinitionOperable(def); err != nil {
+		return nil, err
+	}
+
 	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
 		return nil, connect.NewError(connect.CodePermissionDenied, err)
 	}
@@ -274,3 +277,15 @@ func (s *Service) checkCustomerNotDisabled(ctx context.Context, customerID strin
 
 // Compile-time check: Service implements the Connect handler interface.
 var _ orchestratorv1connect.OrchestratorServiceHandler = (*Service)(nil)
+
+// checkDefinitionOperable returns a stable release_definition_disabled error
+// if the definition is not in active state. Uses FailedPrecondition for both
+// draft and disabled; callers that want to differentiate can check the status
+// before calling this function.
+func checkDefinitionOperable(def *store.ReleaseDefinition) error {
+	if def.Status == store.DefStatusActive {
+		return nil
+	}
+	return connect.NewError(connect.CodeFailedPrecondition,
+		fmt.Errorf("release_definition_disabled: definition %s is %s", def.ID, def.Status))
+}
