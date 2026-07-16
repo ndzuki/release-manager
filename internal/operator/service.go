@@ -30,6 +30,7 @@ type Service struct {
 	configVersion     string
 	registry          *SessionRegistry
 	inventorySyncer   *InventorySyncer
+	commandExecutor   CommandExecutor
 }
 
 func NewService(st store.Store, logger *slog.Logger) (*Service, error) {
@@ -60,6 +61,10 @@ func NewService(st store.Store, logger *slog.Logger) (*Service, error) {
 // SetInventorySyncer attaches an inventory syncer for release inventory sync (REQ-017).
 func (s *Service) SetInventorySyncer(syncer *InventorySyncer) {
 	s.inventorySyncer = syncer
+}
+
+func (s *Service) SetCommandExecutor(executor CommandExecutor) {
+	s.commandExecutor = executor
 }
 
 // RunSessionMonitor advances persisted session states until ctx is canceled.
@@ -344,8 +349,12 @@ func (s *Service) CommandStream(
 				return fmt.Errorf("heartbeat session: %w", err)
 			}
 			s.registry.Heartbeat(sess.ID, time.Now().UTC())
-		case request.GetAck() != nil, request.GetResult() != nil, request.GetResyncResponse() != nil:
-			return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("command delivery is not supported"))
+		case request.GetAck() != nil:
+			return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("command acknowledgments are not supported"))
+		case request.GetResult() != nil:
+			return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("command results are not supported"))
+		case request.GetResyncResponse() != nil:
+			return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("resync responses are not supported"))
 		default:
 			return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unsupported session message"))
 		}

@@ -16,12 +16,18 @@ import (
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
+	"github.com/ndzuki/release-manager/internal/config"
 	"github.com/ndzuki/release-manager/internal/operator"
 	"github.com/ndzuki/release-manager/internal/operator/helmengine"
+	"github.com/ndzuki/release-manager/internal/operator/localstore"
+	operatorpreflight "github.com/ndzuki/release-manager/internal/operator/preflight"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 type operatorSvc struct {
+	configPath      string
 	dbPath          string
 	orchestratorURL string
 	clientConfig    operator.SessionClientConfig
@@ -32,6 +38,8 @@ type operatorSvc struct {
 	serverCertFile  string
 	serverKeyFile   string
 	clientCAFile    string
+	pullGC          *operatorpreflight.PullGC
+	pullExecutor    *operatorpreflight.RuntimePullExecutor
 }
 
 func (s *operatorSvc) Name() string { return "release-operator" }
@@ -109,6 +117,46 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 			return fmt.Errorf("create session client: %w", err)
 		}
 	}
+	serviceConfig, configErr := config.Load(s.configPath)
+	if configErr != nil {
+		return fmt.Errorf("load operator config: %w", configErr)
+	}
+	if kubeConfig, configErr := rest.InClusterConfig(); configErr == nil {
+		kubeClient, clientErr := kubernetes.NewForConfig(kubeConfig)
+		if clientErr != nil {
+			return fmt.Errorf("create kubernetes client: %w", clientErr)
+		}
+		pullConfig := serviceConfig.RuntimePullPreflight
+		s.pullExecutor = operatorpreflight.NewRuntimePullExecutor(
+			operatorpreflight.NewPullProber(kubeClient, logger),
+			operatorpreflight.RuntimePullConfig{
+				Enabled:        pullConfig.Enabled,
+				Namespace:      pullConfig.Namespace,
+				ServiceAccount: pullConfig.ServiceAccount,
+				Timeout:        pullConfig.Timeout,
+				CleanupPolicy:  operatorpreflight.CleanupPolicy(pullConfig.CleanupPolicy),
+				ProbeCommand:   append([]string(nil), pullConfig.ProbeCommand...),
+			},
+		)
+		s.pullGC = operatorpreflight.NewPullGC(kubeClient, pullConfig.Namespace, logger)
+		logger.Info("runtime pull preflight wired", "enabled", pullConfig.Enabled)
+	} else {
+		logger.Debug("runtime pull preflight disabled", "reason", configErr)
+	}
+
+	localStore, storeErr := localstore.OpenBolt("data/operator-commands.db")
+	if storeErr != nil {
+		return fmt.Errorf("open operator command store: %w", storeErr)
+	}
+	pullExecutor := s.pullExecutor
+	if pullExecutor == nil {
+		pullExecutor = operatorpreflight.NewRuntimePullExecutor(nil, operatorpreflight.RuntimePullConfig{})
+	}
+	executor := operator.NewRuntimeCommandExecutor(localStore, pullExecutor, logger)
+	s.svc.SetCommandExecutor(executor)
+	if s.sessionClient != nil {
+		s.sessionClient.SetCommandExecutor(executor)
+	}
 	return nil
 }
 
@@ -123,9 +171,14 @@ func (s *operatorSvc) Run(ctx context.Context) {
 			}
 		}()
 	}
+	if s.pullGC != nil {
+		go s.pullGC.Run(ctx)
+	}
 	if s.svc != nil {
 		s.svc.RunSessionMonitor(ctx)
+		return
 	}
+	<-ctx.Done()
 }
 
 func (s *operatorSvc) Close() error {
@@ -181,6 +234,7 @@ func main() {
 	}
 
 	app.Run(*configPath, &operatorSvc{
+		configPath:      *configPath,
 		dbPath:          *dbPath,
 		orchestratorURL: *orchestratorAddr,
 		serverCertFile:  *serverCertFile,
