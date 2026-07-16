@@ -47,3 +47,5 @@ data/
 # E2E test data (Helm chart tarballs)
 test/e2e/testdata/*.tgz
 release-*
+/sdkcheck
+/reqcheck
