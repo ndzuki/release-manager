@@ -17,8 +17,9 @@ import (
 )
 
 type authSvc struct {
-	dbPath     string
-	signingKey string
+	dbPath        string
+	signingKey    string
+	secureCookies bool
 }
 
 func (s *authSvc) Name() string { return "release-auth" }
@@ -47,14 +48,22 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	enforcer.StartPolicyReloader(context.TODO(), 30*time.Second)
 
 	publicMethods := map[string]bool{
-		authv1connect.AuthServiceLoginProcedure:        true,
-		authv1connect.AuthServiceRefreshTokenProcedure: true,
+		authv1connect.AuthServiceGetInitStatusProcedure:      true,
+		authv1connect.AuthServiceInitializeProcedure:         true,
+		authv1connect.AuthServiceLoginProcedure:              true,
+		authv1connect.AuthServiceRefreshTokenProcedure:       true,
+		authv1connect.AuthServiceValidateTokenProcedure:      true,
+		authv1connect.AuthServiceLogoutProcedure:             true,
+		authv1connect.AuthServiceSwitchOrganizationProcedure: true,
+		authv1connect.AuthServiceChangePasswordProcedure:     true,
 	}
 
 	interceptor := auth.NewAuthInterceptor(jwtMgr, enforcer, publicMethods, logger)
 	interceptorOpt := connect.WithInterceptors(interceptor)
 
-	authSvc := auth.NewAuthService(st, jwtMgr, limiter, logger)
+	authSvc := auth.NewAuthService(st, jwtMgr, limiter, logger, auth.BrowserSessionConfig{
+		SecureCookies: s.secureCookies,
+	})
 	authPath, authHandler := authv1connect.NewAuthServiceHandler(authSvc, interceptorOpt)
 	mux.Handle(authPath, authHandler)
 
@@ -73,7 +82,12 @@ func main() {
 	configPath := flag.String("config", "configs/auth.dev.yaml", "path to config file")
 	dbPath := flag.String("db", "data/auth.db", "path to SQLite database")
 	signingKey := flag.String("signing-key", "change-me-in-production", "JWT signing key")
+	secureCookies := flag.Bool("secure-cookies", true, "require HTTPS for browser session cookies")
 	flag.Parse()
 
-	app.Run(*configPath, &authSvc{dbPath: *dbPath, signingKey: *signingKey})
+	app.Run(*configPath, &authSvc{
+		dbPath:        *dbPath,
+		signingKey:    *signingKey,
+		secureCookies: *secureCookies,
+	})
 }

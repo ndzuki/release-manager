@@ -708,6 +708,7 @@ type UserStore interface {
 	Create(ctx context.Context, u *User) error
 	Get(ctx context.Context, id string) (*User, error)
 	GetByUsername(ctx context.Context, username string) (*User, error)
+	Count(ctx context.Context) (int64, error)
 	Update(ctx context.Context, u *User) error
 }
 

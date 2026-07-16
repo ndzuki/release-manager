@@ -36,8 +36,8 @@ type Claims struct {
 	OrgID  string   `json:"org_id,omitempty"`
 }
 
-// GenerateAccessToken creates a signed HS256 JWT for the given user.
-func (m *JWTManager) GenerateAccessToken(userID string, roles []string) (string, time.Time, error) {
+// GenerateAccessToken creates a signed HS256 JWT for the given user and organization context.
+func (m *JWTManager) GenerateAccessToken(userID string, roles []string, orgID string) (string, time.Time, error) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(m.accessTTL)
 
@@ -50,6 +50,7 @@ func (m *JWTManager) GenerateAccessToken(userID string, roles []string) (string,
 		},
 		UserID: userID,
 		Roles:  roles,
+		OrgID:  orgID,
 	}
 
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(m.signingKey)
@@ -82,14 +83,14 @@ func (m *JWTManager) ValidateAccessToken(tokenStr string) (*Claims, error) {
 
 // GenerateRefreshToken creates a cryptographically random refresh token string
 // and its SHA-256 hash for storage. Returns (raw token, token family ID, hash).
-func (m *JWTManager) GenerateRefreshToken() (string, string, string, error) {
+func (m *JWTManager) GenerateRefreshToken() (raw, family, hash string, err error) {
 	b := make([]byte, m.refreshBytes)
 	if _, err := rand.Read(b); err != nil {
 		return "", "", "", fmt.Errorf("generate refresh token: %w", err)
 	}
-	raw := base64.RawURLEncoding.EncodeToString(b)
-	family := newID()
-	hash := hashToken(raw)
+	raw = base64.RawURLEncoding.EncodeToString(b)
+	family = newID()
+	hash = hashToken(raw)
 	return raw, family, hash, nil
 }
 

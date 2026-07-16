@@ -1,29 +1,53 @@
-/**
- * Connect transport — configured with Vite dev proxy.
- *
- * All RPC calls go through this transport. Auth token is injected
- * from localStorage.
- *
- * When buf TypeScript codegen is wired up, swap manual fetch calls
- * in stores/services to typed PromiseClient instances.
- */
+import { Code, ConnectError, createClient, type Interceptor } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
-import type { Transport } from '@connectrpc/connect';
+import { AuthService, OrganizationService } from '@/gen/auth/v1/auth_pb';
 
-// Re-export for consumers
-export { createClient } from '@connectrpc/connect';
-export type { Transport } from '@connectrpc/connect';
+const csrfCookieName = 'rm_csrf';
+const csrfHeaderName = 'X-CSRF-Token';
 
-export const transport: Transport = createConnectTransport({
+export type AuthErrorHandler = (error: ConnectError) => void;
+
+let authErrorHandler: AuthErrorHandler | undefined;
+
+export function setAuthErrorHandler(handler: AuthErrorHandler | undefined): void {
+  authErrorHandler = handler;
+}
+
+export function readCookie(name: string): string | undefined {
+  const encodedName = `${encodeURIComponent(name)}=`;
+  for (const part of document.cookie.split(';')) {
+    const cookie = part.trim();
+    if (cookie.startsWith(encodedName)) {
+      return decodeURIComponent(cookie.slice(encodedName.length));
+    }
+  }
+  return undefined;
+}
+
+const sessionInterceptor: Interceptor = (next) => async (request) => {
+  const csrfToken = readCookie(csrfCookieName);
+  if (csrfToken) {
+    request.header.set(csrfHeaderName, csrfToken);
+  }
+
+  try {
+    return await next(request);
+  } catch (error) {
+    const connectError = ConnectError.from(error);
+    if (connectError.code === Code.Unauthenticated || connectError.code === Code.PermissionDenied) {
+      authErrorHandler?.(connectError);
+    }
+    throw connectError;
+  }
+};
+
+export const transport = createConnectTransport({
   baseUrl: import.meta.env.VITE_API_BASE ?? '',
   useBinaryFormat: true,
-  fetch: (input, init) => {
-    const token = localStorage.getItem('access_token');
-    if (token) {
-      const headers = new Headers(init?.headers);
-      headers.set('Authorization', `Bearer ${token}`);
-      return fetch(input, { ...init, headers });
-    }
-    return fetch(input, init);
-  },
+  fetch: (input, init) => fetch(input, { ...init, credentials: 'include' }),
+  interceptors: [sessionInterceptor],
 });
+
+export const authClient = createClient(AuthService, transport);
+export const organizationClient = createClient(OrganizationService, transport);
+
