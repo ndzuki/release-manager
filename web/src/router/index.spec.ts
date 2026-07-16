@@ -1,5 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory } from 'vue-router';
+import { Code, ConnectError } from '@connectrpc/connect';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createAppRouter, installAuthGuard } from './index';
 import { setForbiddenNavigator, useAuthStore } from '@/stores/auth';
@@ -48,7 +49,7 @@ describe('auth route guard', () => {
     expect(router.currentRoute.value.query.reason).toBe('expired');
   });
 
-  it('keeps an authenticated session on the forbidden page', async () => {
+  it('navigates permission denial to 403 while retaining the session', async () => {
     const auth = useAuthStore();
     auth.$patch({
       status: 'authenticated',
@@ -60,13 +61,12 @@ describe('auth route guard', () => {
         roles: ['viewer'],
         activeOrgId: 'org-1',
       },
-      forbiddenMessage: 'server denied the request',
     });
     const router = createAppRouter(createMemoryHistory());
     installAuthGuard(router);
+    await router.push({ name: 'Home' });
 
-    await router.push({ name: 'Forbidden' });
-    await router.isReady();
+    await auth.handleConnectError(new ConnectError('server denied the request', Code.PermissionDenied));
 
     expect(router.currentRoute.value.name).toBe('Forbidden');
     expect(auth.isAuthenticated).toBe(true);

@@ -41,9 +41,9 @@ export function createAppRouter(history: RouterHistory = createWebHistory()): Ro
 }
 
 export function installAuthGuard(router: Router): void {
-  setForbiddenNavigator(() => {
+  setForbiddenNavigator(async () => {
     if (router.currentRoute.value.name !== 'Forbidden') {
-      void router.push({ name: 'Forbidden' });
+      await router.push({ name: 'Forbidden' });
     }
   });
   router.beforeEach(async (to): Promise<RouteLocationRaw | boolean> => {

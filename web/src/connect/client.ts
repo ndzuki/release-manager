@@ -5,7 +5,7 @@ import { AuthService, OrganizationService } from '@/gen/auth/v1/auth_pb';
 const csrfCookieName = 'rm_csrf';
 const csrfHeaderName = 'X-CSRF-Token';
 
-export type AuthErrorHandler = (error: ConnectError) => void;
+export type AuthErrorHandler = (error: ConnectError) => void | Promise<void>;
 
 let authErrorHandler: AuthErrorHandler | undefined;
 
@@ -35,7 +35,7 @@ const sessionInterceptor: Interceptor = (next) => async (request) => {
   } catch (error) {
     const connectError = ConnectError.from(error);
     if (connectError.code === Code.Unauthenticated || connectError.code === Code.PermissionDenied) {
-      authErrorHandler?.(connectError);
+      await authErrorHandler?.(connectError);
     }
     throw connectError;
   }

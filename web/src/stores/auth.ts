@@ -12,9 +12,9 @@ interface SessionPayload {
   expiresAt: bigint;
 }
 
-let forbiddenNavigator: ((message: string) => void) | undefined;
+let forbiddenNavigator: ((message: string) => Promise<void>) | undefined;
 
-export function setForbiddenNavigator(navigator: ((message: string) => void) | undefined): void {
+export function setForbiddenNavigator(navigator: ((message: string) => Promise<void>) | undefined): void {
   forbiddenNavigator = navigator;
 }
 
@@ -117,7 +117,7 @@ export const useAuthStore = defineStore('auth', () => {
     applySession(session);
   }
 
-  function handleAuthError(error: ConnectError): void {
+  async function handleAuthError(error: ConnectError): Promise<void> {
     if (error.code === Code.Unauthenticated) {
       clearSession(status.value === 'authenticated' ? 'expired' : 'anonymous');
       return;
@@ -125,8 +125,12 @@ export const useAuthStore = defineStore('auth', () => {
     if (error.code === Code.PermissionDenied) {
       const message = error.rawMessage || 'You do not have permission to perform this action.';
       forbiddenMessage.value = message;
-      forbiddenNavigator?.(message);
+      await forbiddenNavigator?.(message);
     }
+  }
+
+  async function handleConnectError(error: ConnectError): Promise<void> {
+    await handleAuthError(error);
   }
 
   function setReturnUrl(url: string): void {
@@ -165,5 +169,6 @@ export const useAuthStore = defineStore('auth', () => {
     setReturnUrl,
     clearReturnUrl,
     consumeForbiddenMessage,
+    handleConnectError,
   };
 });
