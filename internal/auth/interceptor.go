@@ -43,10 +43,16 @@ func NewAuthInterceptor(jwt *JWTManager, enforcer *Enforcer, publicMethods map[s
 			ctx = context.WithValue(ctx, userIDKey, claims.UserID)
 			ctx = context.WithValue(ctx, rolesKey, claims.Roles)
 
+			// BindingService derives its organization from the request or stored binding.
+			// It performs the authoritative membership and role check in the handler.
+			if strings.Contains(procedure, ".BindingService/") {
+				return next(ctx, req)
+			}
+
 			// REQ-027: Enforce RBAC.
 			// Map procedure to (domain, obj, act).
-			dom, obj, act := mapProcedure(procedure)
-			if err := enforcer.Enforce(claims.UserID, dom, obj, act); err != nil {
+			obj, act := mapProcedure(procedure)
+			if err := enforcer.Enforce(claims.UserID, "*", obj, act); err != nil {
 				logger.Warn("access denied",
 					"user_id", claims.UserID,
 					"procedure", procedure,
@@ -68,23 +74,15 @@ func extractToken(authHeader string) string {
 	return strings.TrimPrefix(authHeader, "Bearer ")
 }
 
-// mapProcedure maps a Connect RPC procedure to Casbin (domain, obj, act).
-// Procedures follow the pattern: /package.Service/Method
-func mapProcedure(procedure string) (string, string, string) {
-	// Extract org_id from procedure? For now, use a default domain.
-	// In production, the org_id would be in the request body or URL.
+// mapProcedure maps a Connect RPC procedure to a Casbin object and action.
+// Procedures follow the pattern: /package.Service/Method.
+func mapProcedure(procedure string) (object, action string) {
 	parts := strings.Split(strings.TrimPrefix(procedure, "/"), "/")
-	if len(parts) < 2 {
-		return "*", "*", "*"
+	if len(parts) != 2 {
+		return "*", "*"
 	}
 
-	service := parts[1] // e.g., "OrganizationService"
-	method := parts[2]  // e.g., "CreateOrganization"
-
-	obj := mapServiceToObject(service)
-	act := mapMethodToAction(method)
-
-	return "*", obj, act
+	return mapServiceToObject(parts[0]), mapMethodToAction(parts[1])
 }
 
 func mapServiceToObject(service string) string {

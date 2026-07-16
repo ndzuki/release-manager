@@ -398,6 +398,18 @@ var migrationStatements = []string{
 
 	`CREATE INDEX IF NOT EXISTS idx_bindings_org ON org_customer_bindings(org_id)`,
 
+	`CREATE TABLE IF NOT EXISTS organization_customer_binding_events (
+		id                 TEXT PRIMARY KEY,
+		binding_id         TEXT NOT NULL REFERENCES org_customer_bindings(id) ON DELETE CASCADE,
+		org_id             TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+		customer_id        TEXT NOT NULL,
+		status             TEXT NOT NULL,
+		optimistic_version INTEGER NOT NULL,
+		changed_at         TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_binding_events_binding ON organization_customer_binding_events(binding_id, changed_at)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_binding_events_version ON organization_customer_binding_events(binding_id, optimistic_version)`,
+
 	// Audit events (REQ-050)
 	`CREATE TABLE IF NOT EXISTS audit_events (
 		id               TEXT PRIMARY KEY,

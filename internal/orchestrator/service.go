@@ -4,6 +4,7 @@ package orchestrator
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -61,25 +62,9 @@ func (s *Service) CreateOperation(
 			fmt.Errorf("invalid operation_type: %s", msg.OperationType))
 	}
 
-	// 3. Lookup release definition
-	def, err := s.store.Definitions().Get(ctx, msg.ReleaseDefinitionId)
-	if err == store.ErrNotFound {
-		return nil, connect.NewError(connect.CodeNotFound,
-			fmt.Errorf("release_definition not found: %s", msg.ReleaseDefinitionId))
-	}
+	def, err := s.authorizeOperationTarget(ctx, msg)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
-	}
-
-	// Validate definition status
-	if def.Status != store.DefStatusActive {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("release_definition %s is %s", def.ID, def.Status))
-	}
-
-	// AC-013-02: Reject operations for disabled customers.
-	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
-		return nil, connect.NewError(connect.CodePermissionDenied, err)
+		return nil, err
 	}
 
 	// AC-032-06: Reject standard operations when a running EMERGENCY exists for
@@ -261,6 +246,31 @@ func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
 
 // checkCustomerNotDisabled verifies the customer is not disabled.
 // Returns PermissionDenied if the customer is disabled.
+func (s *Service) authorizeOperationTarget(
+	ctx context.Context,
+	msg *orchestratorv1.CreateOperationRequest,
+) (*store.ReleaseDefinition, error) {
+	def, err := s.store.Definitions().Get(ctx, msg.GetReleaseDefinitionId())
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound,
+				fmt.Errorf("release_definition not found: %s", msg.GetReleaseDefinitionId()))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
+	}
+	if def.Status != store.DefStatusActive {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("release_definition %s is %s", def.ID, def.Status))
+	}
+	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
+		return nil, connect.NewError(connect.CodePermissionDenied, err)
+	}
+	if err := s.checkOrganizationCustomerBinding(ctx, msg.GetActor().GetOrganization(), def.CustomerID); err != nil {
+		return nil, err
+	}
+	return def, nil
+}
+
 func (s *Service) checkCustomerNotDisabled(ctx context.Context, customerID string) error {
 	cust, err := s.store.Customers().Get(ctx, customerID)
 	if err != nil {
@@ -268,6 +278,19 @@ func (s *Service) checkCustomerNotDisabled(ctx context.Context, customerID strin
 	}
 	if cust.Status == store.CustomerDisabled {
 		return fmt.Errorf("customer %s is disabled", customerID)
+	}
+	return nil
+}
+
+func (s *Service) checkOrganizationCustomerBinding(ctx context.Context, orgID, customerID string) error {
+	if orgID == "" {
+		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("permission_denied: organization is required"))
+	}
+	if err := s.store.Bindings().RequireActive(ctx, orgID, customerID); err != nil {
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrBindingRevoked) {
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("permission_denied: customer binding is not active"))
+		}
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("check customer binding: %w", err))
 	}
 	return nil
 }

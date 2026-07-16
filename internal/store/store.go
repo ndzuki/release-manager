@@ -24,6 +24,7 @@ var (
 	ErrNotFound       = errors.New("store: not found")
 	ErrOptimisticLock = errors.New("store: optimistic lock conflict")
 	ErrDuplicateKey   = errors.New("store: duplicate key")
+	ErrBindingRevoked = errors.New("store: binding revoked")
 )
 
 // OperationType classifies the kind of release operation.
@@ -612,6 +613,7 @@ type DefinitionStore interface {
 	Create(ctx context.Context, def *ReleaseDefinition) error
 	Get(ctx context.Context, id string) (*ReleaseDefinition, error)
 }
+
 // ValuesStore defines the persistence contract for values revisions.
 // For Create, the caller MUST populate Revision via GetNextRevisionNumber
 // and Digest via the values package before calling.
@@ -740,13 +742,14 @@ type OrganizationMemberStore interface {
 	Delete(ctx context.Context, orgID, userID string) error
 }
 
-// BindingStore defines the persistence contract for org-customer bindings (REQ-049).
+// BindingStore defines persistence and authorization lookup for org-customer bindings (REQ-049).
 type BindingStore interface {
-	Create(ctx context.Context, b *OrgCustomerBinding) error
+	Create(ctx context.Context, binding *OrgCustomerBinding) error
 	Get(ctx context.Context, id string) (*OrgCustomerBinding, error)
 	GetByOrgAndCustomer(ctx context.Context, orgID, customerID string) (*OrgCustomerBinding, error)
 	ListByOrg(ctx context.Context, orgID string) ([]*OrgCustomerBinding, error)
-	Update(ctx context.Context, b *OrgCustomerBinding) error
+	SetStatus(ctx context.Context, binding *OrgCustomerBinding, status BindingStatus) error
+	RequireActive(ctx context.Context, orgID, customerID string) error
 }
 
 // AuditEventStore defines the persistence contract for audit events (REQ-050).

@@ -447,3 +447,45 @@ func TestValuesRevisionNotFound(t *testing.T) {
 	_, err := st.Values().Get(ctx, "nonexistent")
 	assert.ErrorIs(t, err, store.ErrNotFound)
 }
+
+func TestBindingStoreUniqueLifecycleAndEvents(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	org := &store.Organization{ID: "org-binding-store", Name: "Binding Org"}
+	require.NoError(t, st.Organizations().Create(ctx, org))
+	binding := &store.OrgCustomerBinding{
+		ID:         "binding-store",
+		OrgID:      org.ID,
+		CustomerID: "customer-store",
+	}
+	require.NoError(t, st.Bindings().Create(ctx, binding))
+
+	duplicate := &store.OrgCustomerBinding{
+		ID:         "binding-store-duplicate",
+		OrgID:      org.ID,
+		CustomerID: binding.CustomerID,
+	}
+	assert.ErrorIs(t, st.Bindings().Create(ctx, duplicate), store.ErrDuplicateKey)
+
+	require.NoError(t, st.Bindings().SetStatus(ctx, binding, store.BindingRevoked))
+	assert.EqualValues(t, 1, binding.OptimisticVersion)
+
+	got, err := st.Bindings().GetByOrgAndCustomer(ctx, org.ID, binding.CustomerID)
+	require.NoError(t, err)
+	assert.Equal(t, store.BindingRevoked, got.Status)
+	assert.EqualValues(t, 1, got.OptimisticVersion)
+	assert.ErrorIs(t, st.Bindings().RequireActive(ctx, org.ID, binding.CustomerID), store.ErrBindingRevoked)
+
+	stale := *got
+	stale.OptimisticVersion = 0
+	assert.ErrorIs(t, st.Bindings().SetStatus(ctx, &stale, store.BindingActive), store.ErrOptimisticLock)
+
+	var eventCount int
+	err = st.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM organization_customer_binding_events
+		WHERE binding_id = ?`, binding.ID).Scan(&eventCount)
+	require.NoError(t, err)
+	assert.Equal(t, 2, eventCount)
+}

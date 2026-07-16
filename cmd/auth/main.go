@@ -11,14 +11,16 @@ import (
 	"connectrpc.com/connect"
 
 	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
+	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/auth"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
 
 type authSvc struct {
-	dbPath     string
-	signingKey string
+	dbPath          string
+	signingKey      string
+	orchestratorURL string
 }
 
 func (s *authSvc) Name() string { return "release-auth" }
@@ -34,7 +36,8 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 
 	jwtMgr := auth.NewJWTManager(signingKey, 15*time.Minute, 7*24*time.Hour)
 	limiter := auth.NewRateLimiter(5, time.Minute)
-	resolver := auth.StubResolver{}
+	orchestratorClient := orchestratorv1connect.NewOrchestratorServiceClient(http.DefaultClient, s.orchestratorURL)
+	resolver := auth.NewConnectCustomerResolver(orchestratorClient)
 
 	enforcer, err := auth.NewEnforcer(st, logger)
 	if err != nil {
@@ -73,7 +76,12 @@ func main() {
 	configPath := flag.String("config", "configs/auth.dev.yaml", "path to config file")
 	dbPath := flag.String("db", "data/auth.db", "path to SQLite database")
 	signingKey := flag.String("signing-key", "change-me-in-production", "JWT signing key")
+	orchestratorAddr := flag.String("orchestrator-addr", "http://localhost:8083", "orchestrator Connect URL")
 	flag.Parse()
 
-	app.Run(*configPath, &authSvc{dbPath: *dbPath, signingKey: *signingKey})
+	app.Run(*configPath, &authSvc{
+		dbPath:          *dbPath,
+		signingKey:      *signingKey,
+		orchestratorURL: *orchestratorAddr,
+	})
 }

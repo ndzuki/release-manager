@@ -118,8 +118,8 @@ func (e *Enforcer) StartPolicyReloader(ctx context.Context, interval time.Durati
 	}()
 }
 
-// storeAdapter implements casbin.Adapter backed by in-memory policy store.
-// Policies are loaded from members and bindings tables on demand.
+// storeAdapter implements casbin.Adapter backed by organization memberships.
+// Customer binding authorization is enforced by BindingService.
 type storeAdapter struct {
 	store store.Store
 }
@@ -155,25 +155,20 @@ func (a *storeAdapter) LoadPolicy(m model.Model) error {
 		}
 	}
 
-	// Load customer bindings as additional domain constraints.
-	bindings, err := a.store.Bindings().ListByOrg(ctx, "")
-	_ = bindings
-	_ = err
-	// Bindings are enforced in the interceptor via direct DB lookup.
-
 	return nil
 }
 
-func (a *storeAdapter) SavePolicy(_ model.Model) error { return nil }
-func (a *storeAdapter) AddPolicy(_, _ string, _ []string) error { return nil }
-func (a *storeAdapter) RemovePolicy(_, _ string, _ []string) error { return nil }
+func (a *storeAdapter) SavePolicy(_ model.Model) error                             { return nil }
+func (a *storeAdapter) AddPolicy(_, _ string, _ []string) error                    { return nil }
+func (a *storeAdapter) RemovePolicy(_, _ string, _ []string) error                 { return nil }
+func (a *storeAdapter) RemoveFilteredPolicy(_, _ string, _ int, _ ...string) error { return nil }
 func persistRoleBinding(m model.Model, ptype, v0, v1, v2 string) error {
-	_ = m.AddPolicy(ptype, ptype, []string{v0, v1, v2}) //nolint:errcheck
+	_ = m.AddPolicy(ptype, ptype, []string{v0, v1, v2}) //nolint:errcheck // Model insertion has no actionable failure path.
 	return nil
 }
 
 func persistPolicy(m model.Model, ptype string, rule []string) error {
-	_ = m.AddPolicy(ptype, ptype, rule) //nolint:errcheck
+	_ = m.AddPolicy(ptype, ptype, rule) //nolint:errcheck // Model insertion has no actionable failure path.
 	return nil
 }
 
