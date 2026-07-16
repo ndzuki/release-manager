@@ -12,7 +12,7 @@
 
 ### Orchestrator — Health Check
 # @name OrchestratorHealth
-GRPC grpc://{{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/grpc.health.v1.Health/Check
+GRPC grpc://localhost:8446/grpc.health.v1.Health/Check
 Content-Type: application/grpc
 
 {}
@@ -27,7 +27,7 @@ Content-Type: application/grpc
 
 ### Orchestrator — Create INSTALL Operation
 # @name CreateInstallOperation
-GRPC grpc://{{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/CreateOperation
+GRPC grpc://localhost:8446/orchestrator.v1.OrchestratorService/CreateOperation
 Content-Type: application/grpc
 
 {
@@ -40,7 +40,7 @@ Content-Type: application/grpc
 
 ### Orchestrator — Create UPGRADE Operation
 # @name CreateUpgradeOperation
-GRPC grpc://{{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/CreateOperation
+GRPC grpc://localhost:8446/orchestrator.v1.OrchestratorService/CreateOperation
 Content-Type: application/grpc
 
 {
@@ -55,7 +55,7 @@ Content-Type: application/grpc
 ### Orchestrator — Create EMERGENCY Operation
 # Emergency skips preflight and goes pending → queued.
 # @name CreateEmergencyOperation
-GRPC grpc://{{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/CreateOperation
+GRPC grpc://localhost:8446/orchestrator.v1.OrchestratorService/CreateOperation
 Content-Type: application/grpc
 
 {
@@ -69,7 +69,7 @@ Content-Type: application/grpc
 ### Orchestrator — Idempotency Check
 # Resend with same idempotency_key → must return same operation_id.
 # @name IdempotencyCheck
-GRPC grpc://{{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/CreateOperation
+GRPC grpc://localhost:8446/orchestrator.v1.OrchestratorService/CreateOperation
 Content-Type: application/grpc
 
 {
@@ -82,7 +82,7 @@ Content-Type: application/grpc
 
 ### Orchestrator — PublishRelease (skeleton)
 # @name PublishRelease
-GRPC grpc://{{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/PublishRelease
+GRPC grpc://localhost:8446/orchestrator.v1.OrchestratorService/PublishRelease
 Content-Type: application/grpc
 
 {
@@ -92,7 +92,7 @@ Content-Type: application/grpc
 ### Orchestrator — CreateOperation (missing definition)
 # Expected: NOT_FOUND error.
 # @name CreateOpMissingDef
-GRPC grpc://{{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/CreateOperation
+GRPC grpc://localhost:8446/orchestrator.v1.OrchestratorService/CreateOperation
 Content-Type: application/grpc
 
 {
@@ -105,7 +105,7 @@ Content-Type: application/grpc
 ### Orchestrator — CreateOperation (invalid type)
 # Expected: INVALID_ARGUMENT error.
 # @name CreateOpInvalidType
-GRPC grpc://{{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/CreateOperation
+GRPC grpc://localhost:8446/orchestrator.v1.OrchestratorService/CreateOperation
 Content-Type: application/grpc
 
 {
@@ -118,7 +118,7 @@ Content-Type: application/grpc
 ### Orchestrator — Release Busy (send two different ops for same definition)
 # First request:
 # @name ReleaseBusy1
-GRPC grpc://{{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/CreateOperation
+GRPC grpc://localhost:8446/orchestrator.v1.OrchestratorService/CreateOperation
 Content-Type: application/grpc
 
 {
@@ -131,7 +131,7 @@ Content-Type: application/grpc
 ### Orchestrator — Release Busy (second request, must fail)
 # Expected: FAILED_PRECONDITION / release_busy.
 # @name ReleaseBusy2
-GRPC grpc://{{ORCH_HOST}}:{{ORCH_GRPC_PORT}}/orchestrator.v1.OrchestratorService/CreateOperation
+GRPC grpc://localhost:8446/orchestrator.v1.OrchestratorService/CreateOperation
 Content-Type: application/grpc
 
 {
