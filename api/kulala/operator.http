@@ -2,9 +2,10 @@
 # Release Manager — gRPC endpoints (Kulala GRPC support)
 # Environment: dev (Operator :8444)
 #
+# @grpc-plaintext        ← REQUIRED: server has no TLS
+#
 # Kulala supports GRPC requests with protobuf descriptor references.
 # Place the generated descriptor set at api/gen/descriptor.pb
-# (buf build --as-file-descriptor-set).
 # =============================================================================
 
 ### Operator — Connect Session (bidirectional stream)

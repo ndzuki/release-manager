@@ -9,7 +9,10 @@
 #
 # gRPC service: orchestrator.v1.OrchestratorService
 # =============================================================================
-
+#
+# @grpc-plaintext        ← REQUIRED: server has no TLS
+#
+# =============================================================================
 ### Orchestrator — Health Check
 # @name OrchestratorHealth
 GRPC localhost:8446 grpc.health.v1.Health/Check
