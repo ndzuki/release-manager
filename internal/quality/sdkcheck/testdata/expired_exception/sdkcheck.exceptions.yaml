@@ -1,0 +1,7 @@
+version: "1"
+exceptions:
+  - owner: "ci-team"
+    reason: "approved for CI bootstrap — expires in the past to test AC-037-04"
+    expires_at: "2020-01-01"
+    path: "expired_exception.go"
+    rule: "forbidden_binary_invocation"

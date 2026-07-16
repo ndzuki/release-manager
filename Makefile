@@ -32,27 +32,27 @@ build-all: $(addprefix build-,$(SERVICES)) ## Build all microservices
 .PHONY: build-webhook
 build-webhook: proto ## Build release-webhook
 	@echo "$(BLUE)building release-webhook...$(NC)"
-	$(GO) build -o $(BIN_DIR)/release-webhook ./cmd/webhook/
+	$(GO) build -buildvcs=false -o $(BIN_DIR)/release-webhook ./cmd/webhook/
 
 .PHONY: build-orchestrator
 build-orchestrator: proto ## Build release-orchestrator
-	$(GO) build -o $(BIN_DIR)/release-orchestrator ./cmd/orchestrator/
+	$(GO) build -buildvcs=false -o $(BIN_DIR)/release-orchestrator ./cmd/orchestrator/
 
 .PHONY: build-operator
 build-operator: proto ## Build release-operator
-	$(GO) build -o $(BIN_DIR)/release-operator ./cmd/operator/
+	$(GO) build -buildvcs=false -o $(BIN_DIR)/release-operator ./cmd/operator/
 
 .PHONY: build-auth
 build-auth: proto ## Build release-auth
-	$(GO) build -o $(BIN_DIR)/release-auth ./cmd/auth/
+	$(GO) build -buildvcs=false -o $(BIN_DIR)/release-auth ./cmd/auth/
 
 .PHONY: build-notifier
 build-notifier: proto ## Build release-notifier
-	$(GO) build -o $(BIN_DIR)/release-notifier ./cmd/notifier/
+	$(GO) build -buildvcs=false -o $(BIN_DIR)/release-notifier ./cmd/notifier/
 
 .PHONY: build-api
 build-api: proto ## Build release-api
-	$(GO) build -o $(BIN_DIR)/release-api ./cmd/api/
+	$(GO) build -buildvcs=false -o $(BIN_DIR)/release-api ./cmd/api/
 
 .PHONY: run-webhook
 run-webhook: build-webhook ## Start release-webhook
@@ -243,13 +243,43 @@ dev-stage-full: proto ## All services (equivalent to old dev-manager)
 test: ## Run all tests
 	$(GO) test -race ./...
 
+.PHONY: test-coverage
+test-coverage: ## Run tests with coverage report
+	$(GO) test -race -coverprofile=coverage.out ./...
+	$(GO) tool cover -func=coverage.out
+	@printf "$(GREEN)Coverage report written to coverage.out$(NC)\n"
+
 .PHONY: lint
 lint: ## Run linters
 	golangci-lint run
 
+.PHONY: sdk-check
+sdk-check: build-sdkcheck ## Run SDK-only static gate (REQ-037)
+	$(GO) run ./cmd/sdkcheck/ -exceptions sdkcheck.exceptions.yaml ./...
+
+.PHONY: check-reqs
+check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
+	@REQS=$$(find . -path '*/Requirements/REQ-*.md' 2>/dev/null); \
+	if [ -n "$$REQS" ]; then \
+		$(GO) run ./cmd/reqcheck/ $$REQS; \
+	else \
+		printf "$(YELLOW)check-reqs: no REQ docs found in repo, skipping$(NC)\n"; \
+	fi
+
+.PHONY: quality
+quality: sdk-check test-coverage lint check-reqs ## Full quality gate run
+
+.PHONY: build-sdkcheck
+build-sdkcheck: proto ## Build sdkcheck
+	$(GO) build -buildvcs=false -o $(BIN_DIR)/sdkcheck ./cmd/sdkcheck/
+
+.PHONY: build-reqcheck
+build-reqcheck: proto ## Build reqcheck
+	$(GO) build -buildvcs=false -o $(BIN_DIR)/reqcheck ./cmd/reqcheck/
+
 .PHONY: clean
 clean: ## Remove build artifacts
-	rm -rf bin/
+	rm -rf bin/ coverage.out
 
 # ---------------------------------------------------------------------------
 # Help
