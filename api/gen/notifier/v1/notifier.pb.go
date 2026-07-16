@@ -9,6 +9,7 @@ package notifierv1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -21,31 +22,143 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// NotifyRequest carries a notification payload.
-type NotifyRequest struct {
+// NotificationChannel is the delivery channel for a notification.
+type NotificationChannel int32
+
+const (
+	NotificationChannel_NOTIFICATION_CHANNEL_UNSPECIFIED NotificationChannel = 0
+	NotificationChannel_NOTIFICATION_CHANNEL_WEBHOOK     NotificationChannel = 1
+	NotificationChannel_NOTIFICATION_CHANNEL_EMAIL       NotificationChannel = 2
+	NotificationChannel_NOTIFICATION_CHANNEL_SLACK       NotificationChannel = 3
+)
+
+// Enum value maps for NotificationChannel.
+var (
+	NotificationChannel_name = map[int32]string{
+		0: "NOTIFICATION_CHANNEL_UNSPECIFIED",
+		1: "NOTIFICATION_CHANNEL_WEBHOOK",
+		2: "NOTIFICATION_CHANNEL_EMAIL",
+		3: "NOTIFICATION_CHANNEL_SLACK",
+	}
+	NotificationChannel_value = map[string]int32{
+		"NOTIFICATION_CHANNEL_UNSPECIFIED": 0,
+		"NOTIFICATION_CHANNEL_WEBHOOK":     1,
+		"NOTIFICATION_CHANNEL_EMAIL":       2,
+		"NOTIFICATION_CHANNEL_SLACK":       3,
+	}
+)
+
+func (x NotificationChannel) Enum() *NotificationChannel {
+	p := new(NotificationChannel)
+	*p = x
+	return p
+}
+
+func (x NotificationChannel) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (NotificationChannel) Descriptor() protoreflect.EnumDescriptor {
+	return file_notifier_v1_notifier_proto_enumTypes[0].Descriptor()
+}
+
+func (NotificationChannel) Type() protoreflect.EnumType {
+	return &file_notifier_v1_notifier_proto_enumTypes[0]
+}
+
+func (x NotificationChannel) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use NotificationChannel.Descriptor instead.
+func (NotificationChannel) EnumDescriptor() ([]byte, []int) {
+	return file_notifier_v1_notifier_proto_rawDescGZIP(), []int{0}
+}
+
+// NotificationStatus tracks the delivery lifecycle of a notification job.
+type NotificationStatus int32
+
+const (
+	NotificationStatus_NOTIFICATION_STATUS_UNSPECIFIED NotificationStatus = 0
+	NotificationStatus_NOTIFICATION_STATUS_PENDING     NotificationStatus = 1
+	NotificationStatus_NOTIFICATION_STATUS_SENDING     NotificationStatus = 2
+	NotificationStatus_NOTIFICATION_STATUS_DELIVERED   NotificationStatus = 3
+	NotificationStatus_NOTIFICATION_STATUS_FAILED      NotificationStatus = 4
+	NotificationStatus_NOTIFICATION_STATUS_DEAD_LETTER NotificationStatus = 5
+)
+
+// Enum value maps for NotificationStatus.
+var (
+	NotificationStatus_name = map[int32]string{
+		0: "NOTIFICATION_STATUS_UNSPECIFIED",
+		1: "NOTIFICATION_STATUS_PENDING",
+		2: "NOTIFICATION_STATUS_SENDING",
+		3: "NOTIFICATION_STATUS_DELIVERED",
+		4: "NOTIFICATION_STATUS_FAILED",
+		5: "NOTIFICATION_STATUS_DEAD_LETTER",
+	}
+	NotificationStatus_value = map[string]int32{
+		"NOTIFICATION_STATUS_UNSPECIFIED": 0,
+		"NOTIFICATION_STATUS_PENDING":     1,
+		"NOTIFICATION_STATUS_SENDING":     2,
+		"NOTIFICATION_STATUS_DELIVERED":   3,
+		"NOTIFICATION_STATUS_FAILED":      4,
+		"NOTIFICATION_STATUS_DEAD_LETTER": 5,
+	}
+)
+
+func (x NotificationStatus) Enum() *NotificationStatus {
+	p := new(NotificationStatus)
+	*p = x
+	return p
+}
+
+func (x NotificationStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (NotificationStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_notifier_v1_notifier_proto_enumTypes[1].Descriptor()
+}
+
+func (NotificationStatus) Type() protoreflect.EnumType {
+	return &file_notifier_v1_notifier_proto_enumTypes[1]
+}
+
+func (x NotificationStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use NotificationStatus.Descriptor instead.
+func (NotificationStatus) EnumDescriptor() ([]byte, []int) {
+	return file_notifier_v1_notifier_proto_rawDescGZIP(), []int{1}
+}
+
+// SendNotificationRequest triggers delivery for a terminal operation event.
+type SendNotificationRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	EventType     string                 `protobuf:"bytes,1,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`
-	Target        string                 `protobuf:"bytes,2,opt,name=target,proto3" json:"target,omitempty"`
-	Payload       string                 `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"`
+	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	Channel       NotificationChannel    `protobuf:"varint,2,opt,name=channel,proto3,enum=notifier.v1.NotificationChannel" json:"channel,omitempty"`
+	Recipient     string                 `protobuf:"bytes,3,opt,name=recipient,proto3" json:"recipient,omitempty"`
 	Metadata      map[string]string      `protobuf:"bytes,4,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *NotifyRequest) Reset() {
-	*x = NotifyRequest{}
+func (x *SendNotificationRequest) Reset() {
+	*x = SendNotificationRequest{}
 	mi := &file_notifier_v1_notifier_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *NotifyRequest) String() string {
+func (x *SendNotificationRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*NotifyRequest) ProtoMessage() {}
+func (*SendNotificationRequest) ProtoMessage() {}
 
-func (x *NotifyRequest) ProtoReflect() protoreflect.Message {
+func (x *SendNotificationRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_notifier_v1_notifier_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -57,62 +170,62 @@ func (x *NotifyRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use NotifyRequest.ProtoReflect.Descriptor instead.
-func (*NotifyRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use SendNotificationRequest.ProtoReflect.Descriptor instead.
+func (*SendNotificationRequest) Descriptor() ([]byte, []int) {
 	return file_notifier_v1_notifier_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *NotifyRequest) GetEventType() string {
+func (x *SendNotificationRequest) GetOperationId() string {
 	if x != nil {
-		return x.EventType
+		return x.OperationId
 	}
 	return ""
 }
 
-func (x *NotifyRequest) GetTarget() string {
+func (x *SendNotificationRequest) GetChannel() NotificationChannel {
 	if x != nil {
-		return x.Target
+		return x.Channel
+	}
+	return NotificationChannel_NOTIFICATION_CHANNEL_UNSPECIFIED
+}
+
+func (x *SendNotificationRequest) GetRecipient() string {
+	if x != nil {
+		return x.Recipient
 	}
 	return ""
 }
 
-func (x *NotifyRequest) GetPayload() string {
-	if x != nil {
-		return x.Payload
-	}
-	return ""
-}
-
-func (x *NotifyRequest) GetMetadata() map[string]string {
+func (x *SendNotificationRequest) GetMetadata() map[string]string {
 	if x != nil {
 		return x.Metadata
 	}
 	return nil
 }
 
-// NotifyResponse acknowledges notification delivery.
-type NotifyResponse struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	NotificationId string                 `protobuf:"bytes,1,opt,name=notification_id,json=notificationId,proto3" json:"notification_id,omitempty"`
-	Status         string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+// SendNotificationResponse acknowledges the notification job was created.
+type SendNotificationResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	Status        NotificationStatus     `protobuf:"varint,2,opt,name=status,proto3,enum=notifier.v1.NotificationStatus" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *NotifyResponse) Reset() {
-	*x = NotifyResponse{}
+func (x *SendNotificationResponse) Reset() {
+	*x = SendNotificationResponse{}
 	mi := &file_notifier_v1_notifier_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *NotifyResponse) String() string {
+func (x *SendNotificationResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*NotifyResponse) ProtoMessage() {}
+func (*SendNotificationResponse) ProtoMessage() {}
 
-func (x *NotifyResponse) ProtoReflect() protoreflect.Message {
+func (x *SendNotificationResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_notifier_v1_notifier_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -124,44 +237,188 @@ func (x *NotifyResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use NotifyResponse.ProtoReflect.Descriptor instead.
-func (*NotifyResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use SendNotificationResponse.ProtoReflect.Descriptor instead.
+func (*SendNotificationResponse) Descriptor() ([]byte, []int) {
 	return file_notifier_v1_notifier_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *NotifyResponse) GetNotificationId() string {
+func (x *SendNotificationResponse) GetJobId() string {
 	if x != nil {
-		return x.NotificationId
+		return x.JobId
 	}
 	return ""
 }
 
-func (x *NotifyResponse) GetStatus() string {
+func (x *SendNotificationResponse) GetStatus() NotificationStatus {
 	if x != nil {
 		return x.Status
 	}
+	return NotificationStatus_NOTIFICATION_STATUS_UNSPECIFIED
+}
+
+// GetNotificationStatusRequest fetches the current state of a notification job.
+type GetNotificationStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetNotificationStatusRequest) Reset() {
+	*x = GetNotificationStatusRequest{}
+	mi := &file_notifier_v1_notifier_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetNotificationStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetNotificationStatusRequest) ProtoMessage() {}
+
+func (x *GetNotificationStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_notifier_v1_notifier_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetNotificationStatusRequest.ProtoReflect.Descriptor instead.
+func (*GetNotificationStatusRequest) Descriptor() ([]byte, []int) {
+	return file_notifier_v1_notifier_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *GetNotificationStatusRequest) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
 	return ""
+}
+
+// GetNotificationStatusResponse returns the job status plus retry info.
+type GetNotificationStatusResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	Status        NotificationStatus     `protobuf:"varint,2,opt,name=status,proto3,enum=notifier.v1.NotificationStatus" json:"status,omitempty"`
+	RetryCount    int32                  `protobuf:"varint,3,opt,name=retry_count,json=retryCount,proto3" json:"retry_count,omitempty"`
+	LastError     string                 `protobuf:"bytes,4,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
+	NextRetryAt   *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=next_retry_at,json=nextRetryAt,proto3" json:"next_retry_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetNotificationStatusResponse) Reset() {
+	*x = GetNotificationStatusResponse{}
+	mi := &file_notifier_v1_notifier_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetNotificationStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetNotificationStatusResponse) ProtoMessage() {}
+
+func (x *GetNotificationStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_notifier_v1_notifier_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetNotificationStatusResponse.ProtoReflect.Descriptor instead.
+func (*GetNotificationStatusResponse) Descriptor() ([]byte, []int) {
+	return file_notifier_v1_notifier_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *GetNotificationStatusResponse) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *GetNotificationStatusResponse) GetStatus() NotificationStatus {
+	if x != nil {
+		return x.Status
+	}
+	return NotificationStatus_NOTIFICATION_STATUS_UNSPECIFIED
+}
+
+func (x *GetNotificationStatusResponse) GetRetryCount() int32 {
+	if x != nil {
+		return x.RetryCount
+	}
+	return 0
+}
+
+func (x *GetNotificationStatusResponse) GetLastError() string {
+	if x != nil {
+		return x.LastError
+	}
+	return ""
+}
+
+func (x *GetNotificationStatusResponse) GetNextRetryAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.NextRetryAt
+	}
+	return nil
 }
 
 var File_notifier_v1_notifier_proto protoreflect.FileDescriptor
 
 const file_notifier_v1_notifier_proto_rawDesc = "" +
 	"\n" +
-	"\x1anotifier/v1/notifier.proto\x12\vnotifier.v1\"\xe3\x01\n" +
-	"\rNotifyRequest\x12\x1d\n" +
-	"\n" +
-	"event_type\x18\x01 \x01(\tR\teventType\x12\x16\n" +
-	"\x06target\x18\x02 \x01(\tR\x06target\x12\x18\n" +
-	"\apayload\x18\x03 \x01(\tR\apayload\x12D\n" +
-	"\bmetadata\x18\x04 \x03(\v2(.notifier.v1.NotifyRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\x1anotifier/v1/notifier.proto\x12\vnotifier.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa3\x02\n" +
+	"\x17SendNotificationRequest\x12!\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12:\n" +
+	"\achannel\x18\x02 \x01(\x0e2 .notifier.v1.NotificationChannelR\achannel\x12\x1c\n" +
+	"\trecipient\x18\x03 \x01(\tR\trecipient\x12N\n" +
+	"\bmetadata\x18\x04 \x03(\v22.notifier.v1.SendNotificationRequest.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"Q\n" +
-	"\x0eNotifyResponse\x12'\n" +
-	"\x0fnotification_id\x18\x01 \x01(\tR\x0enotificationId\x12\x16\n" +
-	"\x06status\x18\x02 \x01(\tR\x06status2T\n" +
-	"\x0fNotifierService\x12A\n" +
-	"\x06Notify\x12\x1a.notifier.v1.NotifyRequest\x1a\x1b.notifier.v1.NotifyResponseBBZ@github.com/ndzuki/release-manager/api/gen/notifier/v1;notifierv1b\x06proto3"
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"j\n" +
+	"\x18SendNotificationResponse\x12\x15\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x127\n" +
+	"\x06status\x18\x02 \x01(\x0e2\x1f.notifier.v1.NotificationStatusR\x06status\"5\n" +
+	"\x1cGetNotificationStatusRequest\x12\x15\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"\xef\x01\n" +
+	"\x1dGetNotificationStatusResponse\x12\x15\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x127\n" +
+	"\x06status\x18\x02 \x01(\x0e2\x1f.notifier.v1.NotificationStatusR\x06status\x12\x1f\n" +
+	"\vretry_count\x18\x03 \x01(\x05R\n" +
+	"retryCount\x12\x1d\n" +
+	"\n" +
+	"last_error\x18\x04 \x01(\tR\tlastError\x12>\n" +
+	"\rnext_retry_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vnextRetryAt*\x9d\x01\n" +
+	"\x13NotificationChannel\x12$\n" +
+	" NOTIFICATION_CHANNEL_UNSPECIFIED\x10\x00\x12 \n" +
+	"\x1cNOTIFICATION_CHANNEL_WEBHOOK\x10\x01\x12\x1e\n" +
+	"\x1aNOTIFICATION_CHANNEL_EMAIL\x10\x02\x12\x1e\n" +
+	"\x1aNOTIFICATION_CHANNEL_SLACK\x10\x03*\xe3\x01\n" +
+	"\x12NotificationStatus\x12#\n" +
+	"\x1fNOTIFICATION_STATUS_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bNOTIFICATION_STATUS_PENDING\x10\x01\x12\x1f\n" +
+	"\x1bNOTIFICATION_STATUS_SENDING\x10\x02\x12!\n" +
+	"\x1dNOTIFICATION_STATUS_DELIVERED\x10\x03\x12\x1e\n" +
+	"\x1aNOTIFICATION_STATUS_FAILED\x10\x04\x12#\n" +
+	"\x1fNOTIFICATION_STATUS_DEAD_LETTER\x10\x052\xca\x01\n" +
+	"\x0fNotifierService\x12S\n" +
+	"\x04Send\x12$.notifier.v1.SendNotificationRequest\x1a%.notifier.v1.SendNotificationResponse\x12b\n" +
+	"\tGetStatus\x12).notifier.v1.GetNotificationStatusRequest\x1a*.notifier.v1.GetNotificationStatusResponseBBZ@github.com/ndzuki/release-manager/api/gen/notifier/v1;notifierv1b\x06proto3"
 
 var (
 	file_notifier_v1_notifier_proto_rawDescOnce sync.Once
@@ -175,21 +432,33 @@ func file_notifier_v1_notifier_proto_rawDescGZIP() []byte {
 	return file_notifier_v1_notifier_proto_rawDescData
 }
 
-var file_notifier_v1_notifier_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_notifier_v1_notifier_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_notifier_v1_notifier_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_notifier_v1_notifier_proto_goTypes = []any{
-	(*NotifyRequest)(nil),  // 0: notifier.v1.NotifyRequest
-	(*NotifyResponse)(nil), // 1: notifier.v1.NotifyResponse
-	nil,                    // 2: notifier.v1.NotifyRequest.MetadataEntry
+	(NotificationChannel)(0),              // 0: notifier.v1.NotificationChannel
+	(NotificationStatus)(0),               // 1: notifier.v1.NotificationStatus
+	(*SendNotificationRequest)(nil),       // 2: notifier.v1.SendNotificationRequest
+	(*SendNotificationResponse)(nil),      // 3: notifier.v1.SendNotificationResponse
+	(*GetNotificationStatusRequest)(nil),  // 4: notifier.v1.GetNotificationStatusRequest
+	(*GetNotificationStatusResponse)(nil), // 5: notifier.v1.GetNotificationStatusResponse
+	nil,                                   // 6: notifier.v1.SendNotificationRequest.MetadataEntry
+	(*timestamppb.Timestamp)(nil),         // 7: google.protobuf.Timestamp
 }
 var file_notifier_v1_notifier_proto_depIdxs = []int32{
-	2, // 0: notifier.v1.NotifyRequest.metadata:type_name -> notifier.v1.NotifyRequest.MetadataEntry
-	0, // 1: notifier.v1.NotifierService.Notify:input_type -> notifier.v1.NotifyRequest
-	1, // 2: notifier.v1.NotifierService.Notify:output_type -> notifier.v1.NotifyResponse
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	0, // 0: notifier.v1.SendNotificationRequest.channel:type_name -> notifier.v1.NotificationChannel
+	6, // 1: notifier.v1.SendNotificationRequest.metadata:type_name -> notifier.v1.SendNotificationRequest.MetadataEntry
+	1, // 2: notifier.v1.SendNotificationResponse.status:type_name -> notifier.v1.NotificationStatus
+	1, // 3: notifier.v1.GetNotificationStatusResponse.status:type_name -> notifier.v1.NotificationStatus
+	7, // 4: notifier.v1.GetNotificationStatusResponse.next_retry_at:type_name -> google.protobuf.Timestamp
+	2, // 5: notifier.v1.NotifierService.Send:input_type -> notifier.v1.SendNotificationRequest
+	4, // 6: notifier.v1.NotifierService.GetStatus:input_type -> notifier.v1.GetNotificationStatusRequest
+	3, // 7: notifier.v1.NotifierService.Send:output_type -> notifier.v1.SendNotificationResponse
+	5, // 8: notifier.v1.NotifierService.GetStatus:output_type -> notifier.v1.GetNotificationStatusResponse
+	7, // [7:9] is the sub-list for method output_type
+	5, // [5:7] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_notifier_v1_notifier_proto_init() }
@@ -202,13 +471,14 @@ func file_notifier_v1_notifier_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_notifier_v1_notifier_proto_rawDesc), len(file_notifier_v1_notifier_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   3,
+			NumEnums:      2,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_notifier_v1_notifier_proto_goTypes,
 		DependencyIndexes: file_notifier_v1_notifier_proto_depIdxs,
+		EnumInfos:         file_notifier_v1_notifier_proto_enumTypes,
 		MessageInfos:      file_notifier_v1_notifier_proto_msgTypes,
 	}.Build()
 	File_notifier_v1_notifier_proto = out.File

@@ -33,13 +33,17 @@ const (
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
-	// NotifierServiceNotifyProcedure is the fully-qualified name of the NotifierService's Notify RPC.
-	NotifierServiceNotifyProcedure = "/notifier.v1.NotifierService/Notify"
+	// NotifierServiceSendProcedure is the fully-qualified name of the NotifierService's Send RPC.
+	NotifierServiceSendProcedure = "/notifier.v1.NotifierService/Send"
+	// NotifierServiceGetStatusProcedure is the fully-qualified name of the NotifierService's GetStatus
+	// RPC.
+	NotifierServiceGetStatusProcedure = "/notifier.v1.NotifierService/GetStatus"
 )
 
 // NotifierServiceClient is a client for the notifier.v1.NotifierService service.
 type NotifierServiceClient interface {
-	Notify(context.Context, *connect.Request[v1.NotifyRequest]) (*connect.Response[v1.NotifyResponse], error)
+	Send(context.Context, *connect.Request[v1.SendNotificationRequest]) (*connect.Response[v1.SendNotificationResponse], error)
+	GetStatus(context.Context, *connect.Request[v1.GetNotificationStatusRequest]) (*connect.Response[v1.GetNotificationStatusResponse], error)
 }
 
 // NewNotifierServiceClient constructs a client for the notifier.v1.NotifierService service. By
@@ -53,10 +57,16 @@ func NewNotifierServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 	baseURL = strings.TrimRight(baseURL, "/")
 	notifierServiceMethods := v1.File_notifier_v1_notifier_proto.Services().ByName("NotifierService").Methods()
 	return &notifierServiceClient{
-		notify: connect.NewClient[v1.NotifyRequest, v1.NotifyResponse](
+		send: connect.NewClient[v1.SendNotificationRequest, v1.SendNotificationResponse](
 			httpClient,
-			baseURL+NotifierServiceNotifyProcedure,
-			connect.WithSchema(notifierServiceMethods.ByName("Notify")),
+			baseURL+NotifierServiceSendProcedure,
+			connect.WithSchema(notifierServiceMethods.ByName("Send")),
+			connect.WithClientOptions(opts...),
+		),
+		getStatus: connect.NewClient[v1.GetNotificationStatusRequest, v1.GetNotificationStatusResponse](
+			httpClient,
+			baseURL+NotifierServiceGetStatusProcedure,
+			connect.WithSchema(notifierServiceMethods.ByName("GetStatus")),
 			connect.WithClientOptions(opts...),
 		),
 	}
@@ -64,17 +74,24 @@ func NewNotifierServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 
 // notifierServiceClient implements NotifierServiceClient.
 type notifierServiceClient struct {
-	notify *connect.Client[v1.NotifyRequest, v1.NotifyResponse]
+	send      *connect.Client[v1.SendNotificationRequest, v1.SendNotificationResponse]
+	getStatus *connect.Client[v1.GetNotificationStatusRequest, v1.GetNotificationStatusResponse]
 }
 
-// Notify calls notifier.v1.NotifierService.Notify.
-func (c *notifierServiceClient) Notify(ctx context.Context, req *connect.Request[v1.NotifyRequest]) (*connect.Response[v1.NotifyResponse], error) {
-	return c.notify.CallUnary(ctx, req)
+// Send calls notifier.v1.NotifierService.Send.
+func (c *notifierServiceClient) Send(ctx context.Context, req *connect.Request[v1.SendNotificationRequest]) (*connect.Response[v1.SendNotificationResponse], error) {
+	return c.send.CallUnary(ctx, req)
+}
+
+// GetStatus calls notifier.v1.NotifierService.GetStatus.
+func (c *notifierServiceClient) GetStatus(ctx context.Context, req *connect.Request[v1.GetNotificationStatusRequest]) (*connect.Response[v1.GetNotificationStatusResponse], error) {
+	return c.getStatus.CallUnary(ctx, req)
 }
 
 // NotifierServiceHandler is an implementation of the notifier.v1.NotifierService service.
 type NotifierServiceHandler interface {
-	Notify(context.Context, *connect.Request[v1.NotifyRequest]) (*connect.Response[v1.NotifyResponse], error)
+	Send(context.Context, *connect.Request[v1.SendNotificationRequest]) (*connect.Response[v1.SendNotificationResponse], error)
+	GetStatus(context.Context, *connect.Request[v1.GetNotificationStatusRequest]) (*connect.Response[v1.GetNotificationStatusResponse], error)
 }
 
 // NewNotifierServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -84,16 +101,24 @@ type NotifierServiceHandler interface {
 // and JSON codecs. They also support gzip compression.
 func NewNotifierServiceHandler(svc NotifierServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
 	notifierServiceMethods := v1.File_notifier_v1_notifier_proto.Services().ByName("NotifierService").Methods()
-	notifierServiceNotifyHandler := connect.NewUnaryHandler(
-		NotifierServiceNotifyProcedure,
-		svc.Notify,
-		connect.WithSchema(notifierServiceMethods.ByName("Notify")),
+	notifierServiceSendHandler := connect.NewUnaryHandler(
+		NotifierServiceSendProcedure,
+		svc.Send,
+		connect.WithSchema(notifierServiceMethods.ByName("Send")),
+		connect.WithHandlerOptions(opts...),
+	)
+	notifierServiceGetStatusHandler := connect.NewUnaryHandler(
+		NotifierServiceGetStatusProcedure,
+		svc.GetStatus,
+		connect.WithSchema(notifierServiceMethods.ByName("GetStatus")),
 		connect.WithHandlerOptions(opts...),
 	)
 	return "/notifier.v1.NotifierService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case NotifierServiceNotifyProcedure:
-			notifierServiceNotifyHandler.ServeHTTP(w, r)
+		case NotifierServiceSendProcedure:
+			notifierServiceSendHandler.ServeHTTP(w, r)
+		case NotifierServiceGetStatusProcedure:
+			notifierServiceGetStatusHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -103,6 +128,10 @@ func NewNotifierServiceHandler(svc NotifierServiceHandler, opts ...connect.Handl
 // UnimplementedNotifierServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedNotifierServiceHandler struct{}
 
-func (UnimplementedNotifierServiceHandler) Notify(context.Context, *connect.Request[v1.NotifyRequest]) (*connect.Response[v1.NotifyResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("notifier.v1.NotifierService.Notify is not implemented"))
+func (UnimplementedNotifierServiceHandler) Send(context.Context, *connect.Request[v1.SendNotificationRequest]) (*connect.Response[v1.SendNotificationResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("notifier.v1.NotifierService.Send is not implemented"))
+}
+
+func (UnimplementedNotifierServiceHandler) GetStatus(context.Context, *connect.Request[v1.GetNotificationStatusRequest]) (*connect.Response[v1.GetNotificationStatusResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("notifier.v1.NotifierService.GetStatus is not implemented"))
 }

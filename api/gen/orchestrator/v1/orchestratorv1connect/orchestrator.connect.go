@@ -69,6 +69,9 @@ const (
 	// OrchestratorServiceCreateEnrollmentTokenProcedure is the fully-qualified name of the
 	// OrchestratorService's CreateEnrollmentToken RPC.
 	OrchestratorServiceCreateEnrollmentTokenProcedure = "/orchestrator.v1.OrchestratorService/CreateEnrollmentToken"
+	// OrchestratorServiceEmergencyChangeProcedure is the fully-qualified name of the
+	// OrchestratorService's EmergencyChange RPC.
+	OrchestratorServiceEmergencyChangeProcedure = "/orchestrator.v1.OrchestratorService/EmergencyChange"
 )
 
 // OrchestratorServiceClient is a client for the orchestrator.v1.OrchestratorService service.
@@ -89,6 +92,8 @@ type OrchestratorServiceClient interface {
 	DisableCluster(context.Context, *connect.Request[v1.DisableClusterRequest]) (*connect.Response[v1.DisableClusterResponse], error)
 	// Operator enrollment
 	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
+	// Emergency change (REQ-032)
+	EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error)
 }
 
 // NewOrchestratorServiceClient constructs a client for the orchestrator.v1.OrchestratorService
@@ -174,6 +179,12 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("CreateEnrollmentToken")),
 			connect.WithClientOptions(opts...),
 		),
+		emergencyChange: connect.NewClient[v1.EmergencyChangeRequest, v1.EmergencyChangeResponse](
+			httpClient,
+			baseURL+OrchestratorServiceEmergencyChangeProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("EmergencyChange")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -191,6 +202,7 @@ type orchestratorServiceClient struct {
 	listClusters          *connect.Client[v1.ListClustersRequest, v1.ListClustersResponse]
 	disableCluster        *connect.Client[v1.DisableClusterRequest, v1.DisableClusterResponse]
 	createEnrollmentToken *connect.Client[v1.CreateEnrollmentTokenRequest, v1.CreateEnrollmentTokenResponse]
+	emergencyChange       *connect.Client[v1.EmergencyChangeRequest, v1.EmergencyChangeResponse]
 }
 
 // CreateOperation calls orchestrator.v1.OrchestratorService.CreateOperation.
@@ -253,6 +265,11 @@ func (c *orchestratorServiceClient) CreateEnrollmentToken(ctx context.Context, r
 	return c.createEnrollmentToken.CallUnary(ctx, req)
 }
 
+// EmergencyChange calls orchestrator.v1.OrchestratorService.EmergencyChange.
+func (c *orchestratorServiceClient) EmergencyChange(ctx context.Context, req *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error) {
+	return c.emergencyChange.CallUnary(ctx, req)
+}
+
 // OrchestratorServiceHandler is an implementation of the orchestrator.v1.OrchestratorService
 // service.
 type OrchestratorServiceHandler interface {
@@ -272,6 +289,8 @@ type OrchestratorServiceHandler interface {
 	DisableCluster(context.Context, *connect.Request[v1.DisableClusterRequest]) (*connect.Response[v1.DisableClusterResponse], error)
 	// Operator enrollment
 	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
+	// Emergency change (REQ-032)
+	EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error)
 }
 
 // NewOrchestratorServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -353,6 +372,12 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("CreateEnrollmentToken")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orchestratorServiceEmergencyChangeHandler := connect.NewUnaryHandler(
+		OrchestratorServiceEmergencyChangeProcedure,
+		svc.EmergencyChange,
+		connect.WithSchema(orchestratorServiceMethods.ByName("EmergencyChange")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/orchestrator.v1.OrchestratorService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case OrchestratorServiceCreateOperationProcedure:
@@ -379,6 +404,8 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceDisableClusterHandler.ServeHTTP(w, r)
 		case OrchestratorServiceCreateEnrollmentTokenProcedure:
 			orchestratorServiceCreateEnrollmentTokenHandler.ServeHTTP(w, r)
+		case OrchestratorServiceEmergencyChangeProcedure:
+			orchestratorServiceEmergencyChangeHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -434,4 +461,8 @@ func (UnimplementedOrchestratorServiceHandler) DisableCluster(context.Context, *
 
 func (UnimplementedOrchestratorServiceHandler) CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.CreateEnrollmentToken is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.EmergencyChange is not implemented"))
 }

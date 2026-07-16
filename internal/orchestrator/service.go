@@ -73,6 +73,19 @@ func (s *Service) CreateOperation(
 			fmt.Errorf("release_definition %s is %s", def.ID, def.Status))
 	}
 
+	// AC-032-06: Reject standard operations when a running EMERGENCY exists for
+	// the same definition.
+	if opType.IsStandard() {
+		activeEmergency, err := s.store.Operations().HasActiveEmergencyForDefinition(ctx, msg.ReleaseDefinitionId)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("emergency active check: %w", err))
+		}
+		if activeEmergency {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("definition %s has a running EMERGENCY operation; standard operations are denied", msg.ReleaseDefinitionId))
+		}
+	}
+
 	// 4. Release busy check (REQ-023 AC-023-03, AC-023-06, AC-023-07)
 	active, err := s.store.Operations().HasActiveForDefinition(ctx, msg.ReleaseDefinitionId)
 	if err != nil {

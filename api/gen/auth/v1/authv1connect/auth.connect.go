@@ -23,6 +23,10 @@ const _ = connect.IsAtLeastVersion1_13_0
 const (
 	// AuthServiceName is the fully-qualified name of the AuthService service.
 	AuthServiceName = "auth.v1.AuthService"
+	// OrganizationServiceName is the fully-qualified name of the OrganizationService service.
+	OrganizationServiceName = "auth.v1.OrganizationService"
+	// BindingServiceName is the fully-qualified name of the BindingService service.
+	BindingServiceName = "auth.v1.BindingService"
 )
 
 // These constants are the fully-qualified names of the RPCs defined in this package. They're
@@ -35,15 +39,65 @@ const (
 const (
 	// AuthServiceLoginProcedure is the fully-qualified name of the AuthService's Login RPC.
 	AuthServiceLoginProcedure = "/auth.v1.AuthService/Login"
+	// AuthServiceLogoutProcedure is the fully-qualified name of the AuthService's Logout RPC.
+	AuthServiceLogoutProcedure = "/auth.v1.AuthService/Logout"
+	// AuthServiceRefreshTokenProcedure is the fully-qualified name of the AuthService's RefreshToken
+	// RPC.
+	AuthServiceRefreshTokenProcedure = "/auth.v1.AuthService/RefreshToken"
 	// AuthServiceValidateTokenProcedure is the fully-qualified name of the AuthService's ValidateToken
 	// RPC.
 	AuthServiceValidateTokenProcedure = "/auth.v1.AuthService/ValidateToken"
+	// AuthServiceChangePasswordProcedure is the fully-qualified name of the AuthService's
+	// ChangePassword RPC.
+	AuthServiceChangePasswordProcedure = "/auth.v1.AuthService/ChangePassword"
+	// OrganizationServiceCreateOrganizationProcedure is the fully-qualified name of the
+	// OrganizationService's CreateOrganization RPC.
+	OrganizationServiceCreateOrganizationProcedure = "/auth.v1.OrganizationService/CreateOrganization"
+	// OrganizationServiceGetOrganizationProcedure is the fully-qualified name of the
+	// OrganizationService's GetOrganization RPC.
+	OrganizationServiceGetOrganizationProcedure = "/auth.v1.OrganizationService/GetOrganization"
+	// OrganizationServiceListOrganizationsProcedure is the fully-qualified name of the
+	// OrganizationService's ListOrganizations RPC.
+	OrganizationServiceListOrganizationsProcedure = "/auth.v1.OrganizationService/ListOrganizations"
+	// OrganizationServiceUpdateOrganizationProcedure is the fully-qualified name of the
+	// OrganizationService's UpdateOrganization RPC.
+	OrganizationServiceUpdateOrganizationProcedure = "/auth.v1.OrganizationService/UpdateOrganization"
+	// OrganizationServiceDisableOrganizationProcedure is the fully-qualified name of the
+	// OrganizationService's DisableOrganization RPC.
+	OrganizationServiceDisableOrganizationProcedure = "/auth.v1.OrganizationService/DisableOrganization"
+	// OrganizationServiceAddMemberProcedure is the fully-qualified name of the OrganizationService's
+	// AddMember RPC.
+	OrganizationServiceAddMemberProcedure = "/auth.v1.OrganizationService/AddMember"
+	// OrganizationServiceRemoveMemberProcedure is the fully-qualified name of the OrganizationService's
+	// RemoveMember RPC.
+	OrganizationServiceRemoveMemberProcedure = "/auth.v1.OrganizationService/RemoveMember"
+	// OrganizationServiceListMembersProcedure is the fully-qualified name of the OrganizationService's
+	// ListMembers RPC.
+	OrganizationServiceListMembersProcedure = "/auth.v1.OrganizationService/ListMembers"
+	// OrganizationServiceUpdateMemberRoleProcedure is the fully-qualified name of the
+	// OrganizationService's UpdateMemberRole RPC.
+	OrganizationServiceUpdateMemberRoleProcedure = "/auth.v1.OrganizationService/UpdateMemberRole"
+	// BindingServiceCreateBindingProcedure is the fully-qualified name of the BindingService's
+	// CreateBinding RPC.
+	BindingServiceCreateBindingProcedure = "/auth.v1.BindingService/CreateBinding"
+	// BindingServiceGetBindingProcedure is the fully-qualified name of the BindingService's GetBinding
+	// RPC.
+	BindingServiceGetBindingProcedure = "/auth.v1.BindingService/GetBinding"
+	// BindingServiceListBindingsProcedure is the fully-qualified name of the BindingService's
+	// ListBindings RPC.
+	BindingServiceListBindingsProcedure = "/auth.v1.BindingService/ListBindings"
+	// BindingServiceRevokeBindingProcedure is the fully-qualified name of the BindingService's
+	// RevokeBinding RPC.
+	BindingServiceRevokeBindingProcedure = "/auth.v1.BindingService/RevokeBinding"
 )
 
 // AuthServiceClient is a client for the auth.v1.AuthService service.
 type AuthServiceClient interface {
 	Login(context.Context, *connect.Request[v1.LoginRequest]) (*connect.Response[v1.LoginResponse], error)
+	Logout(context.Context, *connect.Request[v1.LogoutRequest]) (*connect.Response[v1.LogoutResponse], error)
+	RefreshToken(context.Context, *connect.Request[v1.RefreshTokenRequest]) (*connect.Response[v1.RefreshTokenResponse], error)
 	ValidateToken(context.Context, *connect.Request[v1.ValidateTokenRequest]) (*connect.Response[v1.ValidateTokenResponse], error)
+	ChangePassword(context.Context, *connect.Request[v1.ChangePasswordRequest]) (*connect.Response[v1.ChangePasswordResponse], error)
 }
 
 // NewAuthServiceClient constructs a client for the auth.v1.AuthService service. By default, it uses
@@ -63,10 +117,28 @@ func NewAuthServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 			connect.WithSchema(authServiceMethods.ByName("Login")),
 			connect.WithClientOptions(opts...),
 		),
+		logout: connect.NewClient[v1.LogoutRequest, v1.LogoutResponse](
+			httpClient,
+			baseURL+AuthServiceLogoutProcedure,
+			connect.WithSchema(authServiceMethods.ByName("Logout")),
+			connect.WithClientOptions(opts...),
+		),
+		refreshToken: connect.NewClient[v1.RefreshTokenRequest, v1.RefreshTokenResponse](
+			httpClient,
+			baseURL+AuthServiceRefreshTokenProcedure,
+			connect.WithSchema(authServiceMethods.ByName("RefreshToken")),
+			connect.WithClientOptions(opts...),
+		),
 		validateToken: connect.NewClient[v1.ValidateTokenRequest, v1.ValidateTokenResponse](
 			httpClient,
 			baseURL+AuthServiceValidateTokenProcedure,
 			connect.WithSchema(authServiceMethods.ByName("ValidateToken")),
+			connect.WithClientOptions(opts...),
+		),
+		changePassword: connect.NewClient[v1.ChangePasswordRequest, v1.ChangePasswordResponse](
+			httpClient,
+			baseURL+AuthServiceChangePasswordProcedure,
+			connect.WithSchema(authServiceMethods.ByName("ChangePassword")),
 			connect.WithClientOptions(opts...),
 		),
 	}
@@ -74,8 +146,11 @@ func NewAuthServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 
 // authServiceClient implements AuthServiceClient.
 type authServiceClient struct {
-	login         *connect.Client[v1.LoginRequest, v1.LoginResponse]
-	validateToken *connect.Client[v1.ValidateTokenRequest, v1.ValidateTokenResponse]
+	login          *connect.Client[v1.LoginRequest, v1.LoginResponse]
+	logout         *connect.Client[v1.LogoutRequest, v1.LogoutResponse]
+	refreshToken   *connect.Client[v1.RefreshTokenRequest, v1.RefreshTokenResponse]
+	validateToken  *connect.Client[v1.ValidateTokenRequest, v1.ValidateTokenResponse]
+	changePassword *connect.Client[v1.ChangePasswordRequest, v1.ChangePasswordResponse]
 }
 
 // Login calls auth.v1.AuthService.Login.
@@ -83,15 +158,33 @@ func (c *authServiceClient) Login(ctx context.Context, req *connect.Request[v1.L
 	return c.login.CallUnary(ctx, req)
 }
 
+// Logout calls auth.v1.AuthService.Logout.
+func (c *authServiceClient) Logout(ctx context.Context, req *connect.Request[v1.LogoutRequest]) (*connect.Response[v1.LogoutResponse], error) {
+	return c.logout.CallUnary(ctx, req)
+}
+
+// RefreshToken calls auth.v1.AuthService.RefreshToken.
+func (c *authServiceClient) RefreshToken(ctx context.Context, req *connect.Request[v1.RefreshTokenRequest]) (*connect.Response[v1.RefreshTokenResponse], error) {
+	return c.refreshToken.CallUnary(ctx, req)
+}
+
 // ValidateToken calls auth.v1.AuthService.ValidateToken.
 func (c *authServiceClient) ValidateToken(ctx context.Context, req *connect.Request[v1.ValidateTokenRequest]) (*connect.Response[v1.ValidateTokenResponse], error) {
 	return c.validateToken.CallUnary(ctx, req)
 }
 
+// ChangePassword calls auth.v1.AuthService.ChangePassword.
+func (c *authServiceClient) ChangePassword(ctx context.Context, req *connect.Request[v1.ChangePasswordRequest]) (*connect.Response[v1.ChangePasswordResponse], error) {
+	return c.changePassword.CallUnary(ctx, req)
+}
+
 // AuthServiceHandler is an implementation of the auth.v1.AuthService service.
 type AuthServiceHandler interface {
 	Login(context.Context, *connect.Request[v1.LoginRequest]) (*connect.Response[v1.LoginResponse], error)
+	Logout(context.Context, *connect.Request[v1.LogoutRequest]) (*connect.Response[v1.LogoutResponse], error)
+	RefreshToken(context.Context, *connect.Request[v1.RefreshTokenRequest]) (*connect.Response[v1.RefreshTokenResponse], error)
 	ValidateToken(context.Context, *connect.Request[v1.ValidateTokenRequest]) (*connect.Response[v1.ValidateTokenResponse], error)
+	ChangePassword(context.Context, *connect.Request[v1.ChangePasswordRequest]) (*connect.Response[v1.ChangePasswordResponse], error)
 }
 
 // NewAuthServiceHandler builds an HTTP handler from the service implementation. It returns the path
@@ -107,18 +200,42 @@ func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption
 		connect.WithSchema(authServiceMethods.ByName("Login")),
 		connect.WithHandlerOptions(opts...),
 	)
+	authServiceLogoutHandler := connect.NewUnaryHandler(
+		AuthServiceLogoutProcedure,
+		svc.Logout,
+		connect.WithSchema(authServiceMethods.ByName("Logout")),
+		connect.WithHandlerOptions(opts...),
+	)
+	authServiceRefreshTokenHandler := connect.NewUnaryHandler(
+		AuthServiceRefreshTokenProcedure,
+		svc.RefreshToken,
+		connect.WithSchema(authServiceMethods.ByName("RefreshToken")),
+		connect.WithHandlerOptions(opts...),
+	)
 	authServiceValidateTokenHandler := connect.NewUnaryHandler(
 		AuthServiceValidateTokenProcedure,
 		svc.ValidateToken,
 		connect.WithSchema(authServiceMethods.ByName("ValidateToken")),
 		connect.WithHandlerOptions(opts...),
 	)
+	authServiceChangePasswordHandler := connect.NewUnaryHandler(
+		AuthServiceChangePasswordProcedure,
+		svc.ChangePassword,
+		connect.WithSchema(authServiceMethods.ByName("ChangePassword")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/auth.v1.AuthService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case AuthServiceLoginProcedure:
 			authServiceLoginHandler.ServeHTTP(w, r)
+		case AuthServiceLogoutProcedure:
+			authServiceLogoutHandler.ServeHTTP(w, r)
+		case AuthServiceRefreshTokenProcedure:
+			authServiceRefreshTokenHandler.ServeHTTP(w, r)
 		case AuthServiceValidateTokenProcedure:
 			authServiceValidateTokenHandler.ServeHTTP(w, r)
+		case AuthServiceChangePasswordProcedure:
+			authServiceChangePasswordHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -132,6 +249,444 @@ func (UnimplementedAuthServiceHandler) Login(context.Context, *connect.Request[v
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.Login is not implemented"))
 }
 
+func (UnimplementedAuthServiceHandler) Logout(context.Context, *connect.Request[v1.LogoutRequest]) (*connect.Response[v1.LogoutResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.Logout is not implemented"))
+}
+
+func (UnimplementedAuthServiceHandler) RefreshToken(context.Context, *connect.Request[v1.RefreshTokenRequest]) (*connect.Response[v1.RefreshTokenResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.RefreshToken is not implemented"))
+}
+
 func (UnimplementedAuthServiceHandler) ValidateToken(context.Context, *connect.Request[v1.ValidateTokenRequest]) (*connect.Response[v1.ValidateTokenResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.ValidateToken is not implemented"))
+}
+
+func (UnimplementedAuthServiceHandler) ChangePassword(context.Context, *connect.Request[v1.ChangePasswordRequest]) (*connect.Response[v1.ChangePasswordResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.ChangePassword is not implemented"))
+}
+
+// OrganizationServiceClient is a client for the auth.v1.OrganizationService service.
+type OrganizationServiceClient interface {
+	CreateOrganization(context.Context, *connect.Request[v1.CreateOrganizationRequest]) (*connect.Response[v1.CreateOrganizationResponse], error)
+	GetOrganization(context.Context, *connect.Request[v1.GetOrganizationRequest]) (*connect.Response[v1.GetOrganizationResponse], error)
+	ListOrganizations(context.Context, *connect.Request[v1.ListOrganizationsRequest]) (*connect.Response[v1.ListOrganizationsResponse], error)
+	UpdateOrganization(context.Context, *connect.Request[v1.UpdateOrganizationRequest]) (*connect.Response[v1.UpdateOrganizationResponse], error)
+	DisableOrganization(context.Context, *connect.Request[v1.DisableOrganizationRequest]) (*connect.Response[v1.DisableOrganizationResponse], error)
+	AddMember(context.Context, *connect.Request[v1.AddMemberRequest]) (*connect.Response[v1.AddMemberResponse], error)
+	RemoveMember(context.Context, *connect.Request[v1.RemoveMemberRequest]) (*connect.Response[v1.RemoveMemberResponse], error)
+	ListMembers(context.Context, *connect.Request[v1.ListMembersRequest]) (*connect.Response[v1.ListMembersResponse], error)
+	UpdateMemberRole(context.Context, *connect.Request[v1.UpdateMemberRoleRequest]) (*connect.Response[v1.UpdateMemberRoleResponse], error)
+}
+
+// NewOrganizationServiceClient constructs a client for the auth.v1.OrganizationService service. By
+// default, it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses,
+// and sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the
+// connect.WithGRPC() or connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewOrganizationServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) OrganizationServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	organizationServiceMethods := v1.File_auth_v1_auth_proto.Services().ByName("OrganizationService").Methods()
+	return &organizationServiceClient{
+		createOrganization: connect.NewClient[v1.CreateOrganizationRequest, v1.CreateOrganizationResponse](
+			httpClient,
+			baseURL+OrganizationServiceCreateOrganizationProcedure,
+			connect.WithSchema(organizationServiceMethods.ByName("CreateOrganization")),
+			connect.WithClientOptions(opts...),
+		),
+		getOrganization: connect.NewClient[v1.GetOrganizationRequest, v1.GetOrganizationResponse](
+			httpClient,
+			baseURL+OrganizationServiceGetOrganizationProcedure,
+			connect.WithSchema(organizationServiceMethods.ByName("GetOrganization")),
+			connect.WithClientOptions(opts...),
+		),
+		listOrganizations: connect.NewClient[v1.ListOrganizationsRequest, v1.ListOrganizationsResponse](
+			httpClient,
+			baseURL+OrganizationServiceListOrganizationsProcedure,
+			connect.WithSchema(organizationServiceMethods.ByName("ListOrganizations")),
+			connect.WithClientOptions(opts...),
+		),
+		updateOrganization: connect.NewClient[v1.UpdateOrganizationRequest, v1.UpdateOrganizationResponse](
+			httpClient,
+			baseURL+OrganizationServiceUpdateOrganizationProcedure,
+			connect.WithSchema(organizationServiceMethods.ByName("UpdateOrganization")),
+			connect.WithClientOptions(opts...),
+		),
+		disableOrganization: connect.NewClient[v1.DisableOrganizationRequest, v1.DisableOrganizationResponse](
+			httpClient,
+			baseURL+OrganizationServiceDisableOrganizationProcedure,
+			connect.WithSchema(organizationServiceMethods.ByName("DisableOrganization")),
+			connect.WithClientOptions(opts...),
+		),
+		addMember: connect.NewClient[v1.AddMemberRequest, v1.AddMemberResponse](
+			httpClient,
+			baseURL+OrganizationServiceAddMemberProcedure,
+			connect.WithSchema(organizationServiceMethods.ByName("AddMember")),
+			connect.WithClientOptions(opts...),
+		),
+		removeMember: connect.NewClient[v1.RemoveMemberRequest, v1.RemoveMemberResponse](
+			httpClient,
+			baseURL+OrganizationServiceRemoveMemberProcedure,
+			connect.WithSchema(organizationServiceMethods.ByName("RemoveMember")),
+			connect.WithClientOptions(opts...),
+		),
+		listMembers: connect.NewClient[v1.ListMembersRequest, v1.ListMembersResponse](
+			httpClient,
+			baseURL+OrganizationServiceListMembersProcedure,
+			connect.WithSchema(organizationServiceMethods.ByName("ListMembers")),
+			connect.WithClientOptions(opts...),
+		),
+		updateMemberRole: connect.NewClient[v1.UpdateMemberRoleRequest, v1.UpdateMemberRoleResponse](
+			httpClient,
+			baseURL+OrganizationServiceUpdateMemberRoleProcedure,
+			connect.WithSchema(organizationServiceMethods.ByName("UpdateMemberRole")),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// organizationServiceClient implements OrganizationServiceClient.
+type organizationServiceClient struct {
+	createOrganization  *connect.Client[v1.CreateOrganizationRequest, v1.CreateOrganizationResponse]
+	getOrganization     *connect.Client[v1.GetOrganizationRequest, v1.GetOrganizationResponse]
+	listOrganizations   *connect.Client[v1.ListOrganizationsRequest, v1.ListOrganizationsResponse]
+	updateOrganization  *connect.Client[v1.UpdateOrganizationRequest, v1.UpdateOrganizationResponse]
+	disableOrganization *connect.Client[v1.DisableOrganizationRequest, v1.DisableOrganizationResponse]
+	addMember           *connect.Client[v1.AddMemberRequest, v1.AddMemberResponse]
+	removeMember        *connect.Client[v1.RemoveMemberRequest, v1.RemoveMemberResponse]
+	listMembers         *connect.Client[v1.ListMembersRequest, v1.ListMembersResponse]
+	updateMemberRole    *connect.Client[v1.UpdateMemberRoleRequest, v1.UpdateMemberRoleResponse]
+}
+
+// CreateOrganization calls auth.v1.OrganizationService.CreateOrganization.
+func (c *organizationServiceClient) CreateOrganization(ctx context.Context, req *connect.Request[v1.CreateOrganizationRequest]) (*connect.Response[v1.CreateOrganizationResponse], error) {
+	return c.createOrganization.CallUnary(ctx, req)
+}
+
+// GetOrganization calls auth.v1.OrganizationService.GetOrganization.
+func (c *organizationServiceClient) GetOrganization(ctx context.Context, req *connect.Request[v1.GetOrganizationRequest]) (*connect.Response[v1.GetOrganizationResponse], error) {
+	return c.getOrganization.CallUnary(ctx, req)
+}
+
+// ListOrganizations calls auth.v1.OrganizationService.ListOrganizations.
+func (c *organizationServiceClient) ListOrganizations(ctx context.Context, req *connect.Request[v1.ListOrganizationsRequest]) (*connect.Response[v1.ListOrganizationsResponse], error) {
+	return c.listOrganizations.CallUnary(ctx, req)
+}
+
+// UpdateOrganization calls auth.v1.OrganizationService.UpdateOrganization.
+func (c *organizationServiceClient) UpdateOrganization(ctx context.Context, req *connect.Request[v1.UpdateOrganizationRequest]) (*connect.Response[v1.UpdateOrganizationResponse], error) {
+	return c.updateOrganization.CallUnary(ctx, req)
+}
+
+// DisableOrganization calls auth.v1.OrganizationService.DisableOrganization.
+func (c *organizationServiceClient) DisableOrganization(ctx context.Context, req *connect.Request[v1.DisableOrganizationRequest]) (*connect.Response[v1.DisableOrganizationResponse], error) {
+	return c.disableOrganization.CallUnary(ctx, req)
+}
+
+// AddMember calls auth.v1.OrganizationService.AddMember.
+func (c *organizationServiceClient) AddMember(ctx context.Context, req *connect.Request[v1.AddMemberRequest]) (*connect.Response[v1.AddMemberResponse], error) {
+	return c.addMember.CallUnary(ctx, req)
+}
+
+// RemoveMember calls auth.v1.OrganizationService.RemoveMember.
+func (c *organizationServiceClient) RemoveMember(ctx context.Context, req *connect.Request[v1.RemoveMemberRequest]) (*connect.Response[v1.RemoveMemberResponse], error) {
+	return c.removeMember.CallUnary(ctx, req)
+}
+
+// ListMembers calls auth.v1.OrganizationService.ListMembers.
+func (c *organizationServiceClient) ListMembers(ctx context.Context, req *connect.Request[v1.ListMembersRequest]) (*connect.Response[v1.ListMembersResponse], error) {
+	return c.listMembers.CallUnary(ctx, req)
+}
+
+// UpdateMemberRole calls auth.v1.OrganizationService.UpdateMemberRole.
+func (c *organizationServiceClient) UpdateMemberRole(ctx context.Context, req *connect.Request[v1.UpdateMemberRoleRequest]) (*connect.Response[v1.UpdateMemberRoleResponse], error) {
+	return c.updateMemberRole.CallUnary(ctx, req)
+}
+
+// OrganizationServiceHandler is an implementation of the auth.v1.OrganizationService service.
+type OrganizationServiceHandler interface {
+	CreateOrganization(context.Context, *connect.Request[v1.CreateOrganizationRequest]) (*connect.Response[v1.CreateOrganizationResponse], error)
+	GetOrganization(context.Context, *connect.Request[v1.GetOrganizationRequest]) (*connect.Response[v1.GetOrganizationResponse], error)
+	ListOrganizations(context.Context, *connect.Request[v1.ListOrganizationsRequest]) (*connect.Response[v1.ListOrganizationsResponse], error)
+	UpdateOrganization(context.Context, *connect.Request[v1.UpdateOrganizationRequest]) (*connect.Response[v1.UpdateOrganizationResponse], error)
+	DisableOrganization(context.Context, *connect.Request[v1.DisableOrganizationRequest]) (*connect.Response[v1.DisableOrganizationResponse], error)
+	AddMember(context.Context, *connect.Request[v1.AddMemberRequest]) (*connect.Response[v1.AddMemberResponse], error)
+	RemoveMember(context.Context, *connect.Request[v1.RemoveMemberRequest]) (*connect.Response[v1.RemoveMemberResponse], error)
+	ListMembers(context.Context, *connect.Request[v1.ListMembersRequest]) (*connect.Response[v1.ListMembersResponse], error)
+	UpdateMemberRole(context.Context, *connect.Request[v1.UpdateMemberRoleRequest]) (*connect.Response[v1.UpdateMemberRoleResponse], error)
+}
+
+// NewOrganizationServiceHandler builds an HTTP handler from the service implementation. It returns
+// the path on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewOrganizationServiceHandler(svc OrganizationServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	organizationServiceMethods := v1.File_auth_v1_auth_proto.Services().ByName("OrganizationService").Methods()
+	organizationServiceCreateOrganizationHandler := connect.NewUnaryHandler(
+		OrganizationServiceCreateOrganizationProcedure,
+		svc.CreateOrganization,
+		connect.WithSchema(organizationServiceMethods.ByName("CreateOrganization")),
+		connect.WithHandlerOptions(opts...),
+	)
+	organizationServiceGetOrganizationHandler := connect.NewUnaryHandler(
+		OrganizationServiceGetOrganizationProcedure,
+		svc.GetOrganization,
+		connect.WithSchema(organizationServiceMethods.ByName("GetOrganization")),
+		connect.WithHandlerOptions(opts...),
+	)
+	organizationServiceListOrganizationsHandler := connect.NewUnaryHandler(
+		OrganizationServiceListOrganizationsProcedure,
+		svc.ListOrganizations,
+		connect.WithSchema(organizationServiceMethods.ByName("ListOrganizations")),
+		connect.WithHandlerOptions(opts...),
+	)
+	organizationServiceUpdateOrganizationHandler := connect.NewUnaryHandler(
+		OrganizationServiceUpdateOrganizationProcedure,
+		svc.UpdateOrganization,
+		connect.WithSchema(organizationServiceMethods.ByName("UpdateOrganization")),
+		connect.WithHandlerOptions(opts...),
+	)
+	organizationServiceDisableOrganizationHandler := connect.NewUnaryHandler(
+		OrganizationServiceDisableOrganizationProcedure,
+		svc.DisableOrganization,
+		connect.WithSchema(organizationServiceMethods.ByName("DisableOrganization")),
+		connect.WithHandlerOptions(opts...),
+	)
+	organizationServiceAddMemberHandler := connect.NewUnaryHandler(
+		OrganizationServiceAddMemberProcedure,
+		svc.AddMember,
+		connect.WithSchema(organizationServiceMethods.ByName("AddMember")),
+		connect.WithHandlerOptions(opts...),
+	)
+	organizationServiceRemoveMemberHandler := connect.NewUnaryHandler(
+		OrganizationServiceRemoveMemberProcedure,
+		svc.RemoveMember,
+		connect.WithSchema(organizationServiceMethods.ByName("RemoveMember")),
+		connect.WithHandlerOptions(opts...),
+	)
+	organizationServiceListMembersHandler := connect.NewUnaryHandler(
+		OrganizationServiceListMembersProcedure,
+		svc.ListMembers,
+		connect.WithSchema(organizationServiceMethods.ByName("ListMembers")),
+		connect.WithHandlerOptions(opts...),
+	)
+	organizationServiceUpdateMemberRoleHandler := connect.NewUnaryHandler(
+		OrganizationServiceUpdateMemberRoleProcedure,
+		svc.UpdateMemberRole,
+		connect.WithSchema(organizationServiceMethods.ByName("UpdateMemberRole")),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/auth.v1.OrganizationService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case OrganizationServiceCreateOrganizationProcedure:
+			organizationServiceCreateOrganizationHandler.ServeHTTP(w, r)
+		case OrganizationServiceGetOrganizationProcedure:
+			organizationServiceGetOrganizationHandler.ServeHTTP(w, r)
+		case OrganizationServiceListOrganizationsProcedure:
+			organizationServiceListOrganizationsHandler.ServeHTTP(w, r)
+		case OrganizationServiceUpdateOrganizationProcedure:
+			organizationServiceUpdateOrganizationHandler.ServeHTTP(w, r)
+		case OrganizationServiceDisableOrganizationProcedure:
+			organizationServiceDisableOrganizationHandler.ServeHTTP(w, r)
+		case OrganizationServiceAddMemberProcedure:
+			organizationServiceAddMemberHandler.ServeHTTP(w, r)
+		case OrganizationServiceRemoveMemberProcedure:
+			organizationServiceRemoveMemberHandler.ServeHTTP(w, r)
+		case OrganizationServiceListMembersProcedure:
+			organizationServiceListMembersHandler.ServeHTTP(w, r)
+		case OrganizationServiceUpdateMemberRoleProcedure:
+			organizationServiceUpdateMemberRoleHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedOrganizationServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedOrganizationServiceHandler struct{}
+
+func (UnimplementedOrganizationServiceHandler) CreateOrganization(context.Context, *connect.Request[v1.CreateOrganizationRequest]) (*connect.Response[v1.CreateOrganizationResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.OrganizationService.CreateOrganization is not implemented"))
+}
+
+func (UnimplementedOrganizationServiceHandler) GetOrganization(context.Context, *connect.Request[v1.GetOrganizationRequest]) (*connect.Response[v1.GetOrganizationResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.OrganizationService.GetOrganization is not implemented"))
+}
+
+func (UnimplementedOrganizationServiceHandler) ListOrganizations(context.Context, *connect.Request[v1.ListOrganizationsRequest]) (*connect.Response[v1.ListOrganizationsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.OrganizationService.ListOrganizations is not implemented"))
+}
+
+func (UnimplementedOrganizationServiceHandler) UpdateOrganization(context.Context, *connect.Request[v1.UpdateOrganizationRequest]) (*connect.Response[v1.UpdateOrganizationResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.OrganizationService.UpdateOrganization is not implemented"))
+}
+
+func (UnimplementedOrganizationServiceHandler) DisableOrganization(context.Context, *connect.Request[v1.DisableOrganizationRequest]) (*connect.Response[v1.DisableOrganizationResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.OrganizationService.DisableOrganization is not implemented"))
+}
+
+func (UnimplementedOrganizationServiceHandler) AddMember(context.Context, *connect.Request[v1.AddMemberRequest]) (*connect.Response[v1.AddMemberResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.OrganizationService.AddMember is not implemented"))
+}
+
+func (UnimplementedOrganizationServiceHandler) RemoveMember(context.Context, *connect.Request[v1.RemoveMemberRequest]) (*connect.Response[v1.RemoveMemberResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.OrganizationService.RemoveMember is not implemented"))
+}
+
+func (UnimplementedOrganizationServiceHandler) ListMembers(context.Context, *connect.Request[v1.ListMembersRequest]) (*connect.Response[v1.ListMembersResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.OrganizationService.ListMembers is not implemented"))
+}
+
+func (UnimplementedOrganizationServiceHandler) UpdateMemberRole(context.Context, *connect.Request[v1.UpdateMemberRoleRequest]) (*connect.Response[v1.UpdateMemberRoleResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.OrganizationService.UpdateMemberRole is not implemented"))
+}
+
+// BindingServiceClient is a client for the auth.v1.BindingService service.
+type BindingServiceClient interface {
+	CreateBinding(context.Context, *connect.Request[v1.CreateBindingRequest]) (*connect.Response[v1.CreateBindingResponse], error)
+	GetBinding(context.Context, *connect.Request[v1.GetBindingRequest]) (*connect.Response[v1.GetBindingResponse], error)
+	ListBindings(context.Context, *connect.Request[v1.ListBindingsRequest]) (*connect.Response[v1.ListBindingsResponse], error)
+	RevokeBinding(context.Context, *connect.Request[v1.RevokeBindingRequest]) (*connect.Response[v1.RevokeBindingResponse], error)
+}
+
+// NewBindingServiceClient constructs a client for the auth.v1.BindingService service. By default,
+// it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses, and
+// sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the connect.WithGRPC()
+// or connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewBindingServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) BindingServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	bindingServiceMethods := v1.File_auth_v1_auth_proto.Services().ByName("BindingService").Methods()
+	return &bindingServiceClient{
+		createBinding: connect.NewClient[v1.CreateBindingRequest, v1.CreateBindingResponse](
+			httpClient,
+			baseURL+BindingServiceCreateBindingProcedure,
+			connect.WithSchema(bindingServiceMethods.ByName("CreateBinding")),
+			connect.WithClientOptions(opts...),
+		),
+		getBinding: connect.NewClient[v1.GetBindingRequest, v1.GetBindingResponse](
+			httpClient,
+			baseURL+BindingServiceGetBindingProcedure,
+			connect.WithSchema(bindingServiceMethods.ByName("GetBinding")),
+			connect.WithClientOptions(opts...),
+		),
+		listBindings: connect.NewClient[v1.ListBindingsRequest, v1.ListBindingsResponse](
+			httpClient,
+			baseURL+BindingServiceListBindingsProcedure,
+			connect.WithSchema(bindingServiceMethods.ByName("ListBindings")),
+			connect.WithClientOptions(opts...),
+		),
+		revokeBinding: connect.NewClient[v1.RevokeBindingRequest, v1.RevokeBindingResponse](
+			httpClient,
+			baseURL+BindingServiceRevokeBindingProcedure,
+			connect.WithSchema(bindingServiceMethods.ByName("RevokeBinding")),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// bindingServiceClient implements BindingServiceClient.
+type bindingServiceClient struct {
+	createBinding *connect.Client[v1.CreateBindingRequest, v1.CreateBindingResponse]
+	getBinding    *connect.Client[v1.GetBindingRequest, v1.GetBindingResponse]
+	listBindings  *connect.Client[v1.ListBindingsRequest, v1.ListBindingsResponse]
+	revokeBinding *connect.Client[v1.RevokeBindingRequest, v1.RevokeBindingResponse]
+}
+
+// CreateBinding calls auth.v1.BindingService.CreateBinding.
+func (c *bindingServiceClient) CreateBinding(ctx context.Context, req *connect.Request[v1.CreateBindingRequest]) (*connect.Response[v1.CreateBindingResponse], error) {
+	return c.createBinding.CallUnary(ctx, req)
+}
+
+// GetBinding calls auth.v1.BindingService.GetBinding.
+func (c *bindingServiceClient) GetBinding(ctx context.Context, req *connect.Request[v1.GetBindingRequest]) (*connect.Response[v1.GetBindingResponse], error) {
+	return c.getBinding.CallUnary(ctx, req)
+}
+
+// ListBindings calls auth.v1.BindingService.ListBindings.
+func (c *bindingServiceClient) ListBindings(ctx context.Context, req *connect.Request[v1.ListBindingsRequest]) (*connect.Response[v1.ListBindingsResponse], error) {
+	return c.listBindings.CallUnary(ctx, req)
+}
+
+// RevokeBinding calls auth.v1.BindingService.RevokeBinding.
+func (c *bindingServiceClient) RevokeBinding(ctx context.Context, req *connect.Request[v1.RevokeBindingRequest]) (*connect.Response[v1.RevokeBindingResponse], error) {
+	return c.revokeBinding.CallUnary(ctx, req)
+}
+
+// BindingServiceHandler is an implementation of the auth.v1.BindingService service.
+type BindingServiceHandler interface {
+	CreateBinding(context.Context, *connect.Request[v1.CreateBindingRequest]) (*connect.Response[v1.CreateBindingResponse], error)
+	GetBinding(context.Context, *connect.Request[v1.GetBindingRequest]) (*connect.Response[v1.GetBindingResponse], error)
+	ListBindings(context.Context, *connect.Request[v1.ListBindingsRequest]) (*connect.Response[v1.ListBindingsResponse], error)
+	RevokeBinding(context.Context, *connect.Request[v1.RevokeBindingRequest]) (*connect.Response[v1.RevokeBindingResponse], error)
+}
+
+// NewBindingServiceHandler builds an HTTP handler from the service implementation. It returns the
+// path on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewBindingServiceHandler(svc BindingServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	bindingServiceMethods := v1.File_auth_v1_auth_proto.Services().ByName("BindingService").Methods()
+	bindingServiceCreateBindingHandler := connect.NewUnaryHandler(
+		BindingServiceCreateBindingProcedure,
+		svc.CreateBinding,
+		connect.WithSchema(bindingServiceMethods.ByName("CreateBinding")),
+		connect.WithHandlerOptions(opts...),
+	)
+	bindingServiceGetBindingHandler := connect.NewUnaryHandler(
+		BindingServiceGetBindingProcedure,
+		svc.GetBinding,
+		connect.WithSchema(bindingServiceMethods.ByName("GetBinding")),
+		connect.WithHandlerOptions(opts...),
+	)
+	bindingServiceListBindingsHandler := connect.NewUnaryHandler(
+		BindingServiceListBindingsProcedure,
+		svc.ListBindings,
+		connect.WithSchema(bindingServiceMethods.ByName("ListBindings")),
+		connect.WithHandlerOptions(opts...),
+	)
+	bindingServiceRevokeBindingHandler := connect.NewUnaryHandler(
+		BindingServiceRevokeBindingProcedure,
+		svc.RevokeBinding,
+		connect.WithSchema(bindingServiceMethods.ByName("RevokeBinding")),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/auth.v1.BindingService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case BindingServiceCreateBindingProcedure:
+			bindingServiceCreateBindingHandler.ServeHTTP(w, r)
+		case BindingServiceGetBindingProcedure:
+			bindingServiceGetBindingHandler.ServeHTTP(w, r)
+		case BindingServiceListBindingsProcedure:
+			bindingServiceListBindingsHandler.ServeHTTP(w, r)
+		case BindingServiceRevokeBindingProcedure:
+			bindingServiceRevokeBindingHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedBindingServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedBindingServiceHandler struct{}
+
+func (UnimplementedBindingServiceHandler) CreateBinding(context.Context, *connect.Request[v1.CreateBindingRequest]) (*connect.Response[v1.CreateBindingResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.BindingService.CreateBinding is not implemented"))
+}
+
+func (UnimplementedBindingServiceHandler) GetBinding(context.Context, *connect.Request[v1.GetBindingRequest]) (*connect.Response[v1.GetBindingResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.BindingService.GetBinding is not implemented"))
+}
+
+func (UnimplementedBindingServiceHandler) ListBindings(context.Context, *connect.Request[v1.ListBindingsRequest]) (*connect.Response[v1.ListBindingsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.BindingService.ListBindings is not implemented"))
+}
+
+func (UnimplementedBindingServiceHandler) RevokeBinding(context.Context, *connect.Request[v1.RevokeBindingRequest]) (*connect.Response[v1.RevokeBindingResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.BindingService.RevokeBinding is not implemented"))
 }

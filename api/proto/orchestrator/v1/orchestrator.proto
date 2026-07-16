@@ -156,4 +156,44 @@ service OrchestratorService {
 
   // Operator enrollment
   rpc CreateEnrollmentToken(CreateEnrollmentTokenRequest) returns (CreateEnrollmentTokenResponse);
+
+  // Emergency change (REQ-032)
+  rpc EmergencyChange(EmergencyChangeRequest) returns (EmergencyChangeResponse);
+}
+
+// ── Emergency Change (REQ-032) ────────────────────────────────────
+
+// EmergencyAction is a typed operation whitelisted for emergency changes.
+enum EmergencyAction {
+  EMERGENCY_ACTION_UNSPECIFIED = 0;
+  EMERGENCY_ACTION_SET_CONTAINER_IMAGE = 1;
+  EMERGENCY_ACTION_SET_REPLICAS = 2;
+  EMERGENCY_ACTION_SET_APPROVED_ANNOTATION = 3;
+}
+
+// EmergencyConvergence controls how the system returns to normal state.
+enum EmergencyConvergence {
+  EMERGENCY_CONVERGENCE_UNSPECIFIED = 0;
+  // REQUIRE_PROMOTION means the emergency change must be promoted to a
+  // standard ValuesRevision and go through the normal Helm pipeline.
+  EMERGENCY_CONVERGENCE_REQUIRE_PROMOTION = 1;
+  // REVERT_ON_NEXT_RECONCILE means the emergency change will be reverted
+  // on the next reconciliation cycle.
+  EMERGENCY_CONVERGENCE_REVERT_ON_NEXT_RECONCILE = 2;
+}
+
+message EmergencyChangeRequest {
+  string release_definition_id = 1;
+  EmergencyAction action = 2;
+  // payload is serialized JSON containing action-specific parameters.
+  string payload = 3;
+  string reason = 4;
+  EmergencyConvergence convergence = 5;
+  common.v1.ActorContext actor = 6;
+}
+
+message EmergencyChangeResponse {
+  string operation_id = 1;
+  string status = 2;
+  EmergencyConvergence convergence = 3;
 }

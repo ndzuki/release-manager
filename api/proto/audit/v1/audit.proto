@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package audit.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/ndzuki/release-manager/api/gen/audit/v1;auditv1";
+
+// ActorKind classifies the principal that performed an action.
+enum ActorKind {
+  ACTOR_KIND_UNSPECIFIED = 0;
+  ACTOR_KIND_USER = 1;
+  ACTOR_KIND_SERVICE = 2;
+  ACTOR_KIND_API_KEY = 3;
+  ACTOR_KIND_SYSTEM = 4;
+}
+
+// AuditActor identifies the principal that performed an audited action.
+message AuditActor {
+  ActorKind kind = 1;
+  string id = 2;
+  string organization_id = 3;
+  string role = 4;
+}
+
+// AuditEvent represents a single audit trail entry.
+message AuditEvent {
+  string id = 1;
+  AuditActor actor = 2;
+  string resource_type = 3;
+  string resource_id = 4;
+  string action = 5;
+  string status = 6;
+  int64 duration_ms = 7;
+  string change_summary = 8;
+  google.protobuf.Timestamp created_at = 9;
+  // Metadata carries optional key-value context.
+  map<string, string> metadata = 10;
+}
+
+// EmitAuditRequest submits one or more audit events for asynchronous persistence.
+message EmitAuditRequest {
+  repeated AuditEvent events = 1;
+}
+
+// EmitAuditResponse acknowledges receipt of audit events.
+message EmitAuditResponse {
+  int32 accepted = 1;
+  int32 rejected = 2;
+}
+
+// AuditService collects audit events from other services.
+service AuditService {
+  rpc Emit(EmitAuditRequest) returns (EmitAuditResponse);
+}
