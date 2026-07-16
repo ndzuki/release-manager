@@ -30,6 +30,14 @@ message ReleaseDefinition {
   google.protobuf.Timestamp updated_at = 6;
 }
 
+// ValuesStatus is the approval state of a values revision.
+enum ValuesStatus {
+  VALUES_STATUS_UNSPECIFIED = 0;
+  VALUES_STATUS_DRAFT = 1;
+  VALUES_STATUS_APPROVED = 2;
+  VALUES_STATUS_REJECTED = 3;
+}
+
 // ValuesRevision stores the desired configuration for a release target.
 message ValuesRevision {
   string id = 1;
@@ -37,6 +45,10 @@ message ValuesRevision {
   int32 revision = 3;
   bytes values = 4;
   google.protobuf.Timestamp created_at = 5;
+  ValuesStatus status = 6;
+  string digest = 7;
+  string parent_revision_id = 8;
+  repeated SecretRef secret_refs = 9;
 }
 
 // SecretRef holds a reference to a secret, never the secret value itself.

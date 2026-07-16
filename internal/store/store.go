@@ -86,8 +86,9 @@ const (
 type ValuesStatus string
 
 const (
-	ValuesStatusDraft   ValuesStatus = "draft"
+	ValuesStatusDraft    ValuesStatus = "draft"
 	ValuesStatusApproved ValuesStatus = "approved"
+	ValuesStatusRejected ValuesStatus = "rejected"
 )
 
 // ActorContext records who initiated an operation.
@@ -139,6 +140,9 @@ type ValuesRevision struct {
 	Revision            int          `json:"revision"`
 	Status              ValuesStatus `json:"status"`
 	Values              []byte       `json:"values"`
+	Digest              string       `json:"digest"`
+	ParentRevisionID    string       `json:"parent_revision_id"`
+	SecretRefs          []byte       `json:"secret_refs,omitempty"`
 	CreatedAt           time.Time    `json:"created_at"`
 	UpdatedAt           time.Time    `json:"updated_at"`
 }
@@ -506,16 +510,20 @@ type OperationStore interface {
 type DefinitionStore interface {
 	Create(ctx context.Context, def *ReleaseDefinition) error
 	Get(ctx context.Context, id string) (*ReleaseDefinition, error)
-	Update(ctx context.Context, def *ReleaseDefinition) error
-	List(ctx context.Context) ([]*ReleaseDefinition, error)
 }
-
 // ValuesStore defines the persistence contract for values revisions.
+// For Create, the caller MUST populate Revision via GetNextRevisionNumber
+// and Digest via the values package before calling.
 type ValuesStore interface {
 	Create(ctx context.Context, vr *ValuesRevision) error
 	Get(ctx context.Context, id string) (*ValuesRevision, error)
+	GetByDigest(ctx context.Context, definitionID, digest string) (*ValuesRevision, error)
 	GetLatestApproved(ctx context.Context, definitionID string) (*ValuesRevision, error)
+	GetNextRevisionNumber(ctx context.Context, definitionID string) (int, error)
 	List(ctx context.Context, definitionID string) ([]*ValuesRevision, error)
+	// Update persists status changes with optimistic locking on parent_revision_id.
+	// Returns ErrOptimisticLock if expectedParentRev doesn't match the stored value.
+	Update(ctx context.Context, vr *ValuesRevision, expectedParentRev string) error
 }
 
 

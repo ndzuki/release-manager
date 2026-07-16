@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -135,6 +136,8 @@ func (s *Store) Close() error { return s.db.Close() }
 func (s *Store) DB() *sql.DB { return s.db }
 
 // migrate runs the ordered migration steps against the database.
+// ALTER TABLE ADD COLUMN statements that fail because the column already
+// exists are silently skipped to keep migrations idempotent.
 func migrate(db *sql.DB) error {
 	tx, err := db.BeginTx(context.Background(), nil)
 	if err != nil {
@@ -144,6 +147,15 @@ func migrate(db *sql.DB) error {
 
 	for _, stmt := range migrationStatements {
 		if _, err := tx.ExecContext(context.Background(), stmt); err != nil {
+			// ALTER TABLE ADD COLUMN is not idempotent; skip if the
+			// column already exists (added by a prior migration run
+			// or by a CREATE TABLE that already includes it).
+			errStr := err.Error()
+			if strings.Contains(stmt, "ALTER TABLE") &&
+				strings.Contains(stmt, "ADD COLUMN") &&
+				strings.Contains(errStr, "duplicate column") {
+				continue
+			}
 			return fmt.Errorf("migration statement: %w\nstmt: %s", err, stmt)
 		}
 	}
@@ -179,9 +191,17 @@ var migrationStatements = []string{
 		revision              INTEGER NOT NULL DEFAULT 1,
 		status                TEXT NOT NULL DEFAULT 'draft',
 		"values"              BLOB NOT NULL,
+		digest                TEXT NOT NULL DEFAULT '',
+		parent_revision_id    TEXT NOT NULL DEFAULT '',
+		secret_refs           BLOB,
 		created_at            TEXT NOT NULL,
 		updated_at            TEXT NOT NULL
 	)`,
+
+	// Migration: add digest, parent_revision_id, secret_refs to existing tables.
+	`ALTER TABLE values_revisions ADD COLUMN digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE values_revisions ADD COLUMN parent_revision_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE values_revisions ADD COLUMN secret_refs BLOB`,
 
 	`CREATE TABLE IF NOT EXISTS operations (
 		id                   TEXT PRIMARY KEY,
@@ -205,6 +225,7 @@ var migrationStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_operations_definition ON operations(release_definition_id, status)`,
 	`CREATE INDEX IF NOT EXISTS idx_operations_idempotency ON operations(idempotency_key)`,
 	`CREATE INDEX IF NOT EXISTS idx_values_def ON values_revisions(release_definition_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_values_digest ON values_revisions(release_definition_id, digest)`,
 
 	// Tenancy — customers and clusters (REQ-013, REQ-014)
 	`CREATE TABLE IF NOT EXISTS customers (
