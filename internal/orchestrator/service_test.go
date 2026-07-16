@@ -59,17 +59,53 @@ func seedDefinition(t *testing.T, st store.Store) {
 	require.NoError(t, err)
 }
 
+func seedValuesRevision(
+	t *testing.T,
+	st store.Store,
+	id string,
+	definitionID string,
+	status store.ValuesStatus,
+) {
+	t.Helper()
+	now := time.Now().UTC()
+	require.NoError(t, st.Values().Create(context.Background(), &store.ValuesRevision{
+		ID:                  id,
+		ReleaseDefinitionID: definitionID,
+		Revision:            1,
+		Status:              status,
+		Values:              []byte(`{"replicas":2}`),
+		Digest:              "sha256:test",
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	}))
+}
+
+func upgradeRequest(valuesRevisionID string) *orchestratorv1.CreateOperationRequest {
+	return &orchestratorv1.CreateOperationRequest{
+		OperationType:           "UPGRADE",
+		BundleId:                "bundle-upgrade",
+		ReleaseDefinitionId:     "def-001",
+		ValuesRevisionId:        valuesRevisionID,
+		ExpectedCurrentRevision: 1,
+		IdempotencyKey:          "idem-upgrade-" + valuesRevisionID,
+		Actor: &commonv1.ActorContext{
+			UserId:       "user-001",
+			Organization: "org-001",
+		},
+	}
+}
+
 func TestCreateOperation_Install_Success(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
 
 	resp, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
-		OperationType:          "INSTALL",
-		BundleId:               "bundle-001",
-		ReleaseDefinitionId:    "def-001",
-		ValuesRevisionId:       "vr-001",
-		IdempotencyKey:         "idem-001",
+		OperationType:           "INSTALL",
+		BundleId:                "bundle-001",
+		ReleaseDefinitionId:     "def-001",
+		ValuesRevisionId:        "vr-001",
+		IdempotencyKey:          "idem-001",
 		ExpectedCurrentRevision: 0,
 		Actor: &commonv1.ActorContext{
 			UserId:       "user-001",
@@ -143,6 +179,144 @@ func TestCreateOperation_ReleaseBusy(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "release_busy")
+}
+
+func TestCreateOperation_UpgradeValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		prepare     func(*testing.T, store.Store)
+		mutate      func(*orchestratorv1.CreateOperationRequest)
+		wantCode    connect.Code
+		wantText    string
+		wantCreated bool
+	}{
+		{
+			name: "expected revision required",
+			prepare: func(t *testing.T, st store.Store) {
+				seedValuesRevision(t, st, "vr-approved", "def-001", store.ValuesStatusApproved)
+			},
+			mutate: func(req *orchestratorv1.CreateOperationRequest) {
+				req.ExpectedCurrentRevision = 0
+			},
+			wantCode: connect.CodeInvalidArgument,
+			wantText: "expected_current_revision",
+		},
+		{
+			name:     "values revision must exist",
+			wantCode: connect.CodeNotFound,
+			wantText: "values_revision not found",
+		},
+		{
+			name: "values revision must be approved",
+			prepare: func(t *testing.T, st store.Store) {
+				seedValuesRevision(t, st, "vr-draft", "def-001", store.ValuesStatusDraft)
+			},
+			wantCode: connect.CodeFailedPrecondition,
+			wantText: "must be approved",
+		},
+		{
+			name: "values revision must belong to definition",
+			prepare: func(t *testing.T, st store.Store) {
+				now := time.Now().UTC()
+				require.NoError(t, st.Definitions().Create(context.Background(), &store.ReleaseDefinition{
+					ID:          "def-other",
+					Name:        "other-release",
+					CustomerID:  "cust-001",
+					ClusterID:   "cls-other",
+					Namespace:   "other",
+					ReleaseName: "other-release",
+					ChartName:   "nginx",
+					Status:      store.DefStatusActive,
+					CreatedBy:   "test",
+					CreatedAt:   now,
+					UpdatedAt:   now,
+				}))
+				seedValuesRevision(t, st, "vr-other", "def-other", store.ValuesStatusApproved)
+			},
+			wantCode: connect.CodeInvalidArgument,
+			wantText: "belongs to release_definition",
+		},
+		{
+			name: "approved values creates operation",
+			prepare: func(t *testing.T, st store.Store) {
+				seedValuesRevision(t, st, "vr-approved", "def-001", store.ValuesStatusApproved)
+			},
+			wantCreated: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, st, cleanup := setupService(t)
+			defer cleanup()
+			seedDefinition(t, st)
+			if tt.prepare != nil {
+				tt.prepare(t, st)
+			}
+
+			valuesID := "vr-missing"
+			switch tt.name {
+			case "expected revision required", "approved values creates operation":
+				valuesID = "vr-approved"
+			case "values revision must be approved":
+				valuesID = "vr-draft"
+			case "values revision must belong to definition":
+				valuesID = "vr-other"
+			}
+			req := upgradeRequest(valuesID)
+			if tt.mutate != nil {
+				tt.mutate(req)
+			}
+
+			resp, err := svc.CreateOperation(context.Background(), connect.NewRequest(req))
+			if tt.wantCreated {
+				require.NoError(t, err)
+				assert.NotEmpty(t, resp.Msg.OperationId)
+				stored, getErr := st.Operations().Get(context.Background(), resp.Msg.OperationId)
+				require.NoError(t, getErr)
+				assert.Equal(t, 1, stored.ExpectedRevision)
+				assert.Equal(t, valuesID, stored.ValuesRevisionID)
+				return
+			}
+
+			require.Error(t, err)
+			assert.Equal(t, tt.wantCode, connect.CodeOf(err))
+			assert.Contains(t, err.Error(), tt.wantText)
+			operations, listErr := st.Operations().List(context.Background(), "def-001")
+			require.NoError(t, listErr)
+			assert.Empty(t, operations)
+		})
+	}
+}
+
+func TestCreateOperation_UpgradeDoesNotMutateOtherDefinition(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedValuesRevision(t, st, "vr-approved", "def-001", store.ValuesStatusApproved)
+
+	other := &store.ReleaseDefinition{
+		ID:          "def-other",
+		Name:        "other-release",
+		CustomerID:  "cust-001",
+		ClusterID:   "cls-other",
+		Namespace:   "other",
+		ReleaseName: "other-release",
+		ChartName:   "nginx",
+		Status:      store.DefStatusActive,
+		CreatedBy:   "test",
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+	require.NoError(t, st.Definitions().Create(context.Background(), other))
+
+	resp, err := svc.CreateOperation(context.Background(), connect.NewRequest(upgradeRequest("vr-approved")))
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	otherOperations, err := st.Operations().List(context.Background(), other.ID)
+	require.NoError(t, err)
+	assert.Empty(t, otherOperations)
 }
 
 func TestCreateOperation_DefinitionNotFound(t *testing.T) {

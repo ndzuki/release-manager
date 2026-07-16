@@ -13,15 +13,23 @@ import (
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/operator"
+	"github.com/ndzuki/release-manager/internal/operator/agent"
 	"github.com/ndzuki/release-manager/internal/operator/helmengine"
+	"github.com/ndzuki/release-manager/internal/operator/localstore"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
+	"k8s.io/client-go/rest"
 )
 
 type operatorSvc struct {
-	dbPath          string
-	orchestratorURL string
-	st              *sqlitestore.Store
+	dbPath           string
+	orchestratorURL  string
+	operatorURL      string
+	helmEngineMode   string
+	commandStorePath string
+	sessionID        string
+	operatorID       string
+	st               *sqlitestore.Store
 }
 
 func (s *operatorSvc) Name() string { return "release-operator" }
@@ -38,30 +46,63 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("create operator service: %w", err)
 	}
-	path, h := operatorv1connect.NewOperatorServiceHandler(svc)
-	mux.Handle(path, h)
+	path, handler := operatorv1connect.NewOperatorServiceHandler(svc)
+	mux.Handle(path, handler)
 
-	// Wire inventory syncer (REQ-017)
+	engine := helmengine.Engine(helmengine.NewFake())
+	if s.helmEngineMode == "real" {
+		engine = helmengine.NewRealEngine("", func() *rest.Config {
+			config, configErr := rest.InClusterConfig()
+			if configErr != nil {
+				logger.Warn("failed to load in-cluster kubernetes config", "error", configErr)
+				return nil
+			}
+			return config
+		})
+	}
+
+	var onComplete func(namespace, releaseName, operationID string)
 	if s.orchestratorURL != "" {
 		orchClient := orchestratorv1connect.NewOrchestratorServiceClient(
 			http.DefaultClient,
 			s.orchestratorURL,
 		)
-		engine := helmengine.NewFake()
-		syncer := operator.NewInventorySyncer(
-			engine, orchClient,
-			"", "", "", // operator_id, customer_id, cluster_id set on enrollment
-			logger,
-		)
+		syncer := operator.NewInventorySyncer(engine, orchClient, "", "", "", logger)
 		svc.SetInventorySyncer(syncer)
-		// Start syncer in background; it uses placeholder IDs until enrollment populates them.
+		onComplete = syncer.NotifyOperationComplete
 		go syncer.Start(context.Background())
-		logger.Info("inventory syncer wired", "orchestrator_url", s.orchestratorURL)
+		logger.Info("inventory syncer wired",
+			"orchestrator_url", s.orchestratorURL,
+			"helm_engine", s.helmEngineMode,
+		)
 	}
 
-	// Start session expiration goroutine.
-	go s.runSessionExpiry(context.Background(), logger)
+	if s.sessionID != "" && s.operatorID != "" {
+		commandStore, storeErr := localstore.OpenBolt(s.commandStorePath)
+		if storeErr != nil {
+			return fmt.Errorf("open command store: %w", storeErr)
+		}
+		cmdAgent, agentErr := agent.New(agent.Options{
+			Client:     operatorv1connect.NewOperatorServiceClient(http.DefaultClient, s.operatorURL),
+			Engine:     engine,
+			Store:      commandStore,
+			SessionID:  s.sessionID,
+			OperatorID: s.operatorID,
+			Logger:     logger,
+			OnComplete: onComplete,
+		})
+		if agentErr != nil {
+			return fmt.Errorf("create command agent: %w", agentErr)
+		}
+		go func() {
+			if runErr := cmdAgent.Run(context.Background()); runErr != nil {
+				logger.Error("command agent stopped", "error", runErr)
+			}
+		}()
+		logger.Info("command agent wired", "operator_id", s.operatorID)
+	}
 
+	go s.runSessionExpiry(context.Background(), logger)
 	return nil
 }
 
@@ -104,7 +145,20 @@ func main() {
 	configPath := flag.String("config", "configs/operator.dev.yaml", "path to config file")
 	dbPath := flag.String("db", "data/operator.db", "path to SQLite database")
 	orchestratorAddr := flag.String("orchestrator-addr", "http://localhost:8081", "orchestrator Connect URL")
+	operatorAddr := flag.String("operator-addr", "http://localhost:8084", "operator Connect URL")
+	helmEngineMode := flag.String("helm-engine", "fake", "Helm engine mode: fake or real")
+	commandStorePath := flag.String("command-store", "data/operator-commands.db", "path to the local command store")
+	sessionID := flag.String("session-id", "", "enrolled operator session ID")
+	operatorID := flag.String("operator-id", "", "enrolled operator ID")
 	flag.Parse()
 
-	app.Run(*configPath, &operatorSvc{dbPath: *dbPath, orchestratorURL: *orchestratorAddr})
+	app.Run(*configPath, &operatorSvc{
+		dbPath:           *dbPath,
+		orchestratorURL:  *orchestratorAddr,
+		operatorURL:      *operatorAddr,
+		helmEngineMode:   *helmEngineMode,
+		commandStorePath: *commandStorePath,
+		sessionID:        *sessionID,
+		operatorID:       *operatorID,
+	})
 }

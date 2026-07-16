@@ -92,10 +92,13 @@ type InstallOptions struct {
 
 // UpgradeOptions holds parameters for Upgrade.
 type UpgradeOptions struct {
-	Namespace   string
-	ReleaseName string
-	ChartPath   string
-	Values      map[string]interface{}
+	Namespace        string
+	ReleaseName      string
+	ChartPath        string
+	Values           map[string]interface{}
+	ExpectedRevision int  // if > 0, must match current revision (AC-021-02)
+	Atomic           bool // if true, rollback on failure (AC-021-04)
+	Timeout          int  // seconds; 0 uses default
 }
 
 // RollbackOptions holds parameters for Rollback.
@@ -113,8 +116,8 @@ type StatusOptions struct {
 
 // HistoryOptions holds parameters for History.
 type HistoryOptions struct {
-	Namespace   string
-	ReleaseName string
+	Namespace    string
+	ReleaseName  string
 	MaxRevisions int
 }
 

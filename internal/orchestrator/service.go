@@ -35,6 +35,8 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, logge
 
 // CreateOperation creates a new release operation from the given request.
 // Implements REQ-067 validation rules and REQ-023 idempotency.
+//
+//nolint:gocyclo // validation, tenancy, locking, trust verification, and persistence are intentionally ordered.
 func (s *Service) CreateOperation(
 	ctx context.Context,
 	req *connect.Request[orchestratorv1.CreateOperationRequest],
@@ -67,6 +69,7 @@ func (s *Service) CreateOperation(
 		return nil, connect.NewError(connect.CodeNotFound,
 			fmt.Errorf("release_definition not found: %s", msg.ReleaseDefinitionId))
 	}
+
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
 	}
@@ -103,6 +106,36 @@ func (s *Service) CreateOperation(
 	if active {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
+	}
+
+	// AC-021-02: UPGRADE requires a positive expected revision and an approved values revision.
+	if opType == store.OperationUpgrade {
+		if msg.ExpectedCurrentRevision < 1 {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("expected_current_revision must be >= 1 for %s, got %d", opType, msg.ExpectedCurrentRevision))
+		}
+
+		vr, err := s.store.Values().Get(ctx, msg.ValuesRevisionId)
+		if err == store.ErrNotFound {
+			return nil, connect.NewError(connect.CodeNotFound,
+				fmt.Errorf("values_revision not found: %s", msg.ValuesRevisionId))
+		}
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("values_revision lookup: %w", err))
+		}
+		if vr.ReleaseDefinitionID != def.ID {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("values_revision %s belongs to release_definition %s, not %s", vr.ID, vr.ReleaseDefinitionID, def.ID))
+		}
+		if vr.Status != store.ValuesStatusApproved {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("values_revision %s is %s, must be approved", vr.ID, vr.Status))
+		}
+	}
+
+	if opType == store.OperationRollback && msg.ExpectedCurrentRevision < 1 {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("expected_current_revision must be >= 1 for %s, got %d", opType, msg.ExpectedCurrentRevision))
 	}
 
 	// 4.5. Trust verification (REQ-012)
