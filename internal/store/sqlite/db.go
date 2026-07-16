@@ -31,6 +31,7 @@ type Store struct {
 	audit       *auditEventStore
 	notif       *notificationStore
 	verifs      *verificationStore
+	routes      *clusterRouteStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -72,8 +73,8 @@ func Open(dsn string) (*Store, error) {
 	s.orgs = &organizationStore{db: db}
 	s.orgMembers = &organizationMemberStore{db: db}
 	s.bindings = &bindingStore{db: db}
-	s.notif = &notificationStore{db: db}
 	s.verifs = &verificationStore{db: db}
+	s.routes = &clusterRouteStore{db: db}
 	return s, nil
 }
 
@@ -127,6 +128,9 @@ func (s *Store) Notifications() store.NotificationStore { return s.notif }
 
 // Verifications returns the VerificationStore.
 func (s *Store) Verifications() store.VerificationStore { return s.verifs }
+
+// ClusterRoutes returns the ClusterRouteStore.
+func (s *Store) ClusterRoutes() store.ClusterRouteStore { return s.routes }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
@@ -389,6 +393,20 @@ var migrationStatements = []string{
 		created_at      TEXT NOT NULL
 	)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_records_digest_policy ON verification_records(artifact_digest, policy_version, created_at)`,
+
+	// Cluster artifact routing (REQ-014)
+	`CREATE TABLE IF NOT EXISTS cluster_routes (
+		id            TEXT PRIMARY KEY,
+		cluster_id    TEXT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+		artifact_type TEXT NOT NULL,
+		mode          TEXT NOT NULL,
+		source_prefix TEXT NOT NULL DEFAULT '',
+		target_prefix TEXT NOT NULL DEFAULT '',
+		created_at    TEXT NOT NULL,
+		updated_at    TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_cluster_routes_cluster ON cluster_routes(cluster_id, artifact_type)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_cluster_routes_unique ON cluster_routes(cluster_id, artifact_type, source_prefix)`,
 }
 
 // nowUTC returns the current time in UTC as an RFC3339 string for SQLite storage.

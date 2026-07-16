@@ -637,6 +637,57 @@ type VerificationStore interface {
 	GetByDigestAndPolicy(ctx context.Context, artifactDigest, policyVersion string) (*VerificationRecord, error)
 }
 
+// --- Cluster artifact routing domain types (REQ-014) ---
+
+// ArtifactType classifies the kind of artifact routed to a cluster.
+type ArtifactType string
+
+const (
+	ArtifactImage ArtifactType = "image"
+	ArtifactChart ArtifactType = "chart"
+)
+
+// Valid returns true if the artifact type is a recognized value.
+func (t ArtifactType) Valid() bool {
+	return t == ArtifactImage || t == ArtifactChart
+}
+
+// ArtifactMode describes how the cluster obtains the artifact.
+type ArtifactMode string
+
+const (
+	ModeDirect           ArtifactMode = "direct"
+	ModePullThroughCache ArtifactMode = "pull_through_cache"
+	ModeReplicated       ArtifactMode = "replicated"
+)
+
+// Valid returns true if the artifact mode is a recognized value.
+func (m ArtifactMode) Valid() bool {
+	return m == ModeDirect || m == ModePullThroughCache || m == ModeReplicated
+}
+
+// ClusterRoute defines a prefix-based routing rule for a specific artifact type.
+type ClusterRoute struct {
+	ID           string       `json:"id"`
+	ClusterID    string       `json:"cluster_id"`
+	ArtifactType ArtifactType `json:"artifact_type"`
+	Mode         ArtifactMode `json:"mode"`
+	SourcePrefix string       `json:"source_prefix"`
+	TargetPrefix string       `json:"target_prefix"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
+}
+
+// ClusterRouteStore defines the persistence contract for cluster artifact routes.
+type ClusterRouteStore interface {
+	Create(ctx context.Context, r *ClusterRoute) error
+	Get(ctx context.Context, id string) (*ClusterRoute, error)
+	ListByCluster(ctx context.Context, clusterID string) ([]*ClusterRoute, error)
+	ListByClusterAndType(ctx context.Context, clusterID string, artifactType ArtifactType) ([]*ClusterRoute, error)
+	Update(ctx context.Context, r *ClusterRoute) error
+	Delete(ctx context.Context, id string) error
+}
+
 // Store is the top-level persistence abstraction.
 type Store interface {
 	Operations() OperationStore
@@ -656,5 +707,6 @@ type Store interface {
 	AuditEvents() AuditEventStore
 	Notifications() NotificationStore
 	Verifications() VerificationStore
+	ClusterRoutes() ClusterRouteStore
 	Close() error
 }

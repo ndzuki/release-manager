@@ -23,6 +23,109 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// ArtifactType classifies the kind of artifact routed to a cluster.
+type ArtifactType int32
+
+const (
+	ArtifactType_ARTIFACT_TYPE_UNSPECIFIED ArtifactType = 0
+	ArtifactType_ARTIFACT_TYPE_IMAGE       ArtifactType = 1
+	ArtifactType_ARTIFACT_TYPE_CHART       ArtifactType = 2
+)
+
+// Enum value maps for ArtifactType.
+var (
+	ArtifactType_name = map[int32]string{
+		0: "ARTIFACT_TYPE_UNSPECIFIED",
+		1: "ARTIFACT_TYPE_IMAGE",
+		2: "ARTIFACT_TYPE_CHART",
+	}
+	ArtifactType_value = map[string]int32{
+		"ARTIFACT_TYPE_UNSPECIFIED": 0,
+		"ARTIFACT_TYPE_IMAGE":       1,
+		"ARTIFACT_TYPE_CHART":       2,
+	}
+)
+
+func (x ArtifactType) Enum() *ArtifactType {
+	p := new(ArtifactType)
+	*p = x
+	return p
+}
+
+func (x ArtifactType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ArtifactType) Descriptor() protoreflect.EnumDescriptor {
+	return file_orchestrator_v1_orchestrator_proto_enumTypes[0].Descriptor()
+}
+
+func (ArtifactType) Type() protoreflect.EnumType {
+	return &file_orchestrator_v1_orchestrator_proto_enumTypes[0]
+}
+
+func (x ArtifactType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ArtifactType.Descriptor instead.
+func (ArtifactType) EnumDescriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{0}
+}
+
+// ArtifactMode describes how the cluster obtains the artifact.
+type ArtifactMode int32
+
+const (
+	ArtifactMode_ARTIFACT_MODE_UNSPECIFIED        ArtifactMode = 0
+	ArtifactMode_ARTIFACT_MODE_DIRECT             ArtifactMode = 1
+	ArtifactMode_ARTIFACT_MODE_PULL_THROUGH_CACHE ArtifactMode = 2
+	ArtifactMode_ARTIFACT_MODE_REPLICATED         ArtifactMode = 3
+)
+
+// Enum value maps for ArtifactMode.
+var (
+	ArtifactMode_name = map[int32]string{
+		0: "ARTIFACT_MODE_UNSPECIFIED",
+		1: "ARTIFACT_MODE_DIRECT",
+		2: "ARTIFACT_MODE_PULL_THROUGH_CACHE",
+		3: "ARTIFACT_MODE_REPLICATED",
+	}
+	ArtifactMode_value = map[string]int32{
+		"ARTIFACT_MODE_UNSPECIFIED":        0,
+		"ARTIFACT_MODE_DIRECT":             1,
+		"ARTIFACT_MODE_PULL_THROUGH_CACHE": 2,
+		"ARTIFACT_MODE_REPLICATED":         3,
+	}
+)
+
+func (x ArtifactMode) Enum() *ArtifactMode {
+	p := new(ArtifactMode)
+	*p = x
+	return p
+}
+
+func (x ArtifactMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ArtifactMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_orchestrator_v1_orchestrator_proto_enumTypes[1].Descriptor()
+}
+
+func (ArtifactMode) Type() protoreflect.EnumType {
+	return &file_orchestrator_v1_orchestrator_proto_enumTypes[1]
+}
+
+func (x ArtifactMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ArtifactMode.Descriptor instead.
+func (ArtifactMode) EnumDescriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{1}
+}
+
 // EmergencyAction is a typed operation whitelisted for emergency changes.
 type EmergencyAction int32
 
@@ -60,11 +163,11 @@ func (x EmergencyAction) String() string {
 }
 
 func (EmergencyAction) Descriptor() protoreflect.EnumDescriptor {
-	return file_orchestrator_v1_orchestrator_proto_enumTypes[0].Descriptor()
+	return file_orchestrator_v1_orchestrator_proto_enumTypes[2].Descriptor()
 }
 
 func (EmergencyAction) Type() protoreflect.EnumType {
-	return &file_orchestrator_v1_orchestrator_proto_enumTypes[0]
+	return &file_orchestrator_v1_orchestrator_proto_enumTypes[2]
 }
 
 func (x EmergencyAction) Number() protoreflect.EnumNumber {
@@ -73,7 +176,7 @@ func (x EmergencyAction) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use EmergencyAction.Descriptor instead.
 func (EmergencyAction) EnumDescriptor() ([]byte, []int) {
-	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{0}
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{2}
 }
 
 // EmergencyConvergence controls how the system returns to normal state.
@@ -114,11 +217,11 @@ func (x EmergencyConvergence) String() string {
 }
 
 func (EmergencyConvergence) Descriptor() protoreflect.EnumDescriptor {
-	return file_orchestrator_v1_orchestrator_proto_enumTypes[1].Descriptor()
+	return file_orchestrator_v1_orchestrator_proto_enumTypes[3].Descriptor()
 }
 
 func (EmergencyConvergence) Type() protoreflect.EnumType {
-	return &file_orchestrator_v1_orchestrator_proto_enumTypes[1]
+	return &file_orchestrator_v1_orchestrator_proto_enumTypes[3]
 }
 
 func (x EmergencyConvergence) Number() protoreflect.EnumNumber {
@@ -127,7 +230,7 @@ func (x EmergencyConvergence) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use EmergencyConvergence.Descriptor instead.
 func (EmergencyConvergence) EnumDescriptor() ([]byte, []int) {
-	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{1}
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{3}
 }
 
 // CreateOperationRequest submits a new release operation for orchestration.
@@ -1411,6 +1514,387 @@ func (x *CreateEnrollmentTokenResponse) GetExpiresAt() string {
 	return ""
 }
 
+// ClusterRoute defines a prefix-based routing rule per artifact type.
+type ClusterRoute struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	ClusterId     string                 `protobuf:"bytes,2,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	ArtifactType  ArtifactType           `protobuf:"varint,3,opt,name=artifact_type,json=artifactType,proto3,enum=orchestrator.v1.ArtifactType" json:"artifact_type,omitempty"`
+	Mode          ArtifactMode           `protobuf:"varint,4,opt,name=mode,proto3,enum=orchestrator.v1.ArtifactMode" json:"mode,omitempty"`
+	SourcePrefix  string                 `protobuf:"bytes,5,opt,name=source_prefix,json=sourcePrefix,proto3" json:"source_prefix,omitempty"`
+	TargetPrefix  string                 `protobuf:"bytes,6,opt,name=target_prefix,json=targetPrefix,proto3" json:"target_prefix,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClusterRoute) Reset() {
+	*x = ClusterRoute{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClusterRoute) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClusterRoute) ProtoMessage() {}
+
+func (x *ClusterRoute) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClusterRoute.ProtoReflect.Descriptor instead.
+func (*ClusterRoute) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *ClusterRoute) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ClusterRoute) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *ClusterRoute) GetArtifactType() ArtifactType {
+	if x != nil {
+		return x.ArtifactType
+	}
+	return ArtifactType_ARTIFACT_TYPE_UNSPECIFIED
+}
+
+func (x *ClusterRoute) GetMode() ArtifactMode {
+	if x != nil {
+		return x.Mode
+	}
+	return ArtifactMode_ARTIFACT_MODE_UNSPECIFIED
+}
+
+func (x *ClusterRoute) GetSourcePrefix() string {
+	if x != nil {
+		return x.SourcePrefix
+	}
+	return ""
+}
+
+func (x *ClusterRoute) GetTargetPrefix() string {
+	if x != nil {
+		return x.TargetPrefix
+	}
+	return ""
+}
+
+type ConfigureClusterRouteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	ClusterId     string                 `protobuf:"bytes,2,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	ArtifactType  ArtifactType           `protobuf:"varint,3,opt,name=artifact_type,json=artifactType,proto3,enum=orchestrator.v1.ArtifactType" json:"artifact_type,omitempty"`
+	Mode          ArtifactMode           `protobuf:"varint,4,opt,name=mode,proto3,enum=orchestrator.v1.ArtifactMode" json:"mode,omitempty"`
+	SourcePrefix  string                 `protobuf:"bytes,5,opt,name=source_prefix,json=sourcePrefix,proto3" json:"source_prefix,omitempty"`
+	TargetPrefix  string                 `protobuf:"bytes,6,opt,name=target_prefix,json=targetPrefix,proto3" json:"target_prefix,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigureClusterRouteRequest) Reset() {
+	*x = ConfigureClusterRouteRequest{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigureClusterRouteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigureClusterRouteRequest) ProtoMessage() {}
+
+func (x *ConfigureClusterRouteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigureClusterRouteRequest.ProtoReflect.Descriptor instead.
+func (*ConfigureClusterRouteRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *ConfigureClusterRouteRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ConfigureClusterRouteRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *ConfigureClusterRouteRequest) GetArtifactType() ArtifactType {
+	if x != nil {
+		return x.ArtifactType
+	}
+	return ArtifactType_ARTIFACT_TYPE_UNSPECIFIED
+}
+
+func (x *ConfigureClusterRouteRequest) GetMode() ArtifactMode {
+	if x != nil {
+		return x.Mode
+	}
+	return ArtifactMode_ARTIFACT_MODE_UNSPECIFIED
+}
+
+func (x *ConfigureClusterRouteRequest) GetSourcePrefix() string {
+	if x != nil {
+		return x.SourcePrefix
+	}
+	return ""
+}
+
+func (x *ConfigureClusterRouteRequest) GetTargetPrefix() string {
+	if x != nil {
+		return x.TargetPrefix
+	}
+	return ""
+}
+
+type ConfigureClusterRouteResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Route         *ClusterRoute          `protobuf:"bytes,1,opt,name=route,proto3" json:"route,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigureClusterRouteResponse) Reset() {
+	*x = ConfigureClusterRouteResponse{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigureClusterRouteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigureClusterRouteResponse) ProtoMessage() {}
+
+func (x *ConfigureClusterRouteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigureClusterRouteResponse.ProtoReflect.Descriptor instead.
+func (*ConfigureClusterRouteResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *ConfigureClusterRouteResponse) GetRoute() *ClusterRoute {
+	if x != nil {
+		return x.Route
+	}
+	return nil
+}
+
+type GetClusterRoutesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetClusterRoutesRequest) Reset() {
+	*x = GetClusterRoutesRequest{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetClusterRoutesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetClusterRoutesRequest) ProtoMessage() {}
+
+func (x *GetClusterRoutesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetClusterRoutesRequest.ProtoReflect.Descriptor instead.
+func (*GetClusterRoutesRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *GetClusterRoutesRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+type GetClusterRoutesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Routes        []*ClusterRoute        `protobuf:"bytes,1,rep,name=routes,proto3" json:"routes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetClusterRoutesResponse) Reset() {
+	*x = GetClusterRoutesResponse{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetClusterRoutesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetClusterRoutesResponse) ProtoMessage() {}
+
+func (x *GetClusterRoutesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetClusterRoutesResponse.ProtoReflect.Descriptor instead.
+func (*GetClusterRoutesResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *GetClusterRoutesResponse) GetRoutes() []*ClusterRoute {
+	if x != nil {
+		return x.Routes
+	}
+	return nil
+}
+
+type DeleteClusterRouteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RouteId       string                 `protobuf:"bytes,1,opt,name=route_id,json=routeId,proto3" json:"route_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteClusterRouteRequest) Reset() {
+	*x = DeleteClusterRouteRequest{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteClusterRouteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteClusterRouteRequest) ProtoMessage() {}
+
+func (x *DeleteClusterRouteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteClusterRouteRequest.ProtoReflect.Descriptor instead.
+func (*DeleteClusterRouteRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *DeleteClusterRouteRequest) GetRouteId() string {
+	if x != nil {
+		return x.RouteId
+	}
+	return ""
+}
+
+type DeleteClusterRouteResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteClusterRouteResponse) Reset() {
+	*x = DeleteClusterRouteResponse{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteClusterRouteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteClusterRouteResponse) ProtoMessage() {}
+
+func (x *DeleteClusterRouteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteClusterRouteResponse.ProtoReflect.Descriptor instead.
+func (*DeleteClusterRouteResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{31}
+}
+
 type EmergencyChangeRequest struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	ReleaseDefinitionId string                 `protobuf:"bytes,1,opt,name=release_definition_id,json=releaseDefinitionId,proto3" json:"release_definition_id,omitempty"`
@@ -1426,7 +1910,7 @@ type EmergencyChangeRequest struct {
 
 func (x *EmergencyChangeRequest) Reset() {
 	*x = EmergencyChangeRequest{}
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[25]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1438,7 +1922,7 @@ func (x *EmergencyChangeRequest) String() string {
 func (*EmergencyChangeRequest) ProtoMessage() {}
 
 func (x *EmergencyChangeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[25]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1451,7 +1935,7 @@ func (x *EmergencyChangeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmergencyChangeRequest.ProtoReflect.Descriptor instead.
 func (*EmergencyChangeRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{25}
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *EmergencyChangeRequest) GetReleaseDefinitionId() string {
@@ -1507,7 +1991,7 @@ type EmergencyChangeResponse struct {
 
 func (x *EmergencyChangeResponse) Reset() {
 	*x = EmergencyChangeResponse{}
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[26]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1519,7 +2003,7 @@ func (x *EmergencyChangeResponse) String() string {
 func (*EmergencyChangeResponse) ProtoMessage() {}
 
 func (x *EmergencyChangeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[26]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1532,7 +2016,7 @@ func (x *EmergencyChangeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmergencyChangeResponse.ProtoReflect.Descriptor instead.
 func (*EmergencyChangeResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{26}
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *EmergencyChangeResponse) GetOperationId() string {
@@ -1643,7 +2127,33 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\x1dCreateEnrollmentTokenResponse\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1d\n" +
 	"\n" +
-	"expires_at\x18\x02 \x01(\tR\texpiresAt\"\xb0\x02\n" +
+	"expires_at\x18\x02 \x01(\tR\texpiresAt\"\xfe\x01\n" +
+	"\fClusterRoute\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x02 \x01(\tR\tclusterId\x12B\n" +
+	"\rartifact_type\x18\x03 \x01(\x0e2\x1d.orchestrator.v1.ArtifactTypeR\fartifactType\x121\n" +
+	"\x04mode\x18\x04 \x01(\x0e2\x1d.orchestrator.v1.ArtifactModeR\x04mode\x12#\n" +
+	"\rsource_prefix\x18\x05 \x01(\tR\fsourcePrefix\x12#\n" +
+	"\rtarget_prefix\x18\x06 \x01(\tR\ftargetPrefix\"\x8e\x02\n" +
+	"\x1cConfigureClusterRouteRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x02 \x01(\tR\tclusterId\x12B\n" +
+	"\rartifact_type\x18\x03 \x01(\x0e2\x1d.orchestrator.v1.ArtifactTypeR\fartifactType\x121\n" +
+	"\x04mode\x18\x04 \x01(\x0e2\x1d.orchestrator.v1.ArtifactModeR\x04mode\x12#\n" +
+	"\rsource_prefix\x18\x05 \x01(\tR\fsourcePrefix\x12#\n" +
+	"\rtarget_prefix\x18\x06 \x01(\tR\ftargetPrefix\"T\n" +
+	"\x1dConfigureClusterRouteResponse\x123\n" +
+	"\x05route\x18\x01 \x01(\v2\x1d.orchestrator.v1.ClusterRouteR\x05route\"8\n" +
+	"\x17GetClusterRoutesRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\"Q\n" +
+	"\x18GetClusterRoutesResponse\x125\n" +
+	"\x06routes\x18\x01 \x03(\v2\x1d.orchestrator.v1.ClusterRouteR\x06routes\"6\n" +
+	"\x19DeleteClusterRouteRequest\x12\x19\n" +
+	"\broute_id\x18\x01 \x01(\tR\arouteId\"\x1c\n" +
+	"\x1aDeleteClusterRouteResponse\"\xb0\x02\n" +
 	"\x16EmergencyChangeRequest\x122\n" +
 	"\x15release_definition_id\x18\x01 \x01(\tR\x13releaseDefinitionId\x128\n" +
 	"\x06action\x18\x02 \x01(\x0e2 .orchestrator.v1.EmergencyActionR\x06action\x12\x18\n" +
@@ -1654,7 +2164,16 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\x17EmergencyChangeResponse\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12G\n" +
-	"\vconvergence\x18\x03 \x01(\x0e2%.orchestrator.v1.EmergencyConvergenceR\vconvergence*\xae\x01\n" +
+	"\vconvergence\x18\x03 \x01(\x0e2%.orchestrator.v1.EmergencyConvergenceR\vconvergence*_\n" +
+	"\fArtifactType\x12\x1d\n" +
+	"\x19ARTIFACT_TYPE_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13ARTIFACT_TYPE_IMAGE\x10\x01\x12\x17\n" +
+	"\x13ARTIFACT_TYPE_CHART\x10\x02*\x8b\x01\n" +
+	"\fArtifactMode\x12\x1d\n" +
+	"\x19ARTIFACT_MODE_UNSPECIFIED\x10\x00\x12\x18\n" +
+	"\x14ARTIFACT_MODE_DIRECT\x10\x01\x12$\n" +
+	" ARTIFACT_MODE_PULL_THROUGH_CACHE\x10\x02\x12\x1c\n" +
+	"\x18ARTIFACT_MODE_REPLICATED\x10\x03*\xae\x01\n" +
 	"\x0fEmergencyAction\x12 \n" +
 	"\x1cEMERGENCY_ACTION_UNSPECIFIED\x10\x00\x12(\n" +
 	"$EMERGENCY_ACTION_SET_CONTAINER_IMAGE\x10\x01\x12!\n" +
@@ -1663,8 +2182,7 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\x14EmergencyConvergence\x12%\n" +
 	"!EMERGENCY_CONVERGENCE_UNSPECIFIED\x10\x00\x12+\n" +
 	"'EMERGENCY_CONVERGENCE_REQUIRE_PROMOTION\x10\x01\x122\n" +
-	".EMERGENCY_CONVERGENCE_REVERT_ON_NEXT_RECONCILE\x10\x022\x99\n" +
-	"\n" +
+	".EMERGENCY_CONVERGENCE_REVERT_ON_NEXT_RECONCILE\x10\x022\xe9\f\n" +
 	"\x13OrchestratorService\x12d\n" +
 	"\x0fCreateOperation\x12'.orchestrator.v1.CreateOperationRequest\x1a(.orchestrator.v1.CreateOperationResponse\x12a\n" +
 	"\x0ePublishRelease\x12&.orchestrator.v1.PublishReleaseRequest\x1a'.orchestrator.v1.PublishReleaseResponse\x12a\n" +
@@ -1679,7 +2197,10 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\fListClusters\x12$.orchestrator.v1.ListClustersRequest\x1a%.orchestrator.v1.ListClustersResponse\x12a\n" +
 	"\x0eDisableCluster\x12&.orchestrator.v1.DisableClusterRequest\x1a'.orchestrator.v1.DisableClusterResponse\x12v\n" +
 	"\x15CreateEnrollmentToken\x12-.orchestrator.v1.CreateEnrollmentTokenRequest\x1a..orchestrator.v1.CreateEnrollmentTokenResponse\x12d\n" +
-	"\x0fEmergencyChange\x12'.orchestrator.v1.EmergencyChangeRequest\x1a(.orchestrator.v1.EmergencyChangeResponseBJZHgithub.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1b\x06proto3"
+	"\x0fEmergencyChange\x12'.orchestrator.v1.EmergencyChangeRequest\x1a(.orchestrator.v1.EmergencyChangeResponse\x12v\n" +
+	"\x15ConfigureClusterRoute\x12-.orchestrator.v1.ConfigureClusterRouteRequest\x1a..orchestrator.v1.ConfigureClusterRouteResponse\x12g\n" +
+	"\x10GetClusterRoutes\x12(.orchestrator.v1.GetClusterRoutesRequest\x1a).orchestrator.v1.GetClusterRoutesResponse\x12m\n" +
+	"\x12DeleteClusterRoute\x12*.orchestrator.v1.DeleteClusterRouteRequest\x1a+.orchestrator.v1.DeleteClusterRouteResponseBJZHgithub.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1b\x06proto3"
 
 var (
 	file_orchestrator_v1_orchestrator_proto_rawDescOnce sync.Once
@@ -1693,94 +2214,115 @@ func file_orchestrator_v1_orchestrator_proto_rawDescGZIP() []byte {
 	return file_orchestrator_v1_orchestrator_proto_rawDescData
 }
 
-var file_orchestrator_v1_orchestrator_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_orchestrator_v1_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
+var file_orchestrator_v1_orchestrator_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_orchestrator_v1_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
 var file_orchestrator_v1_orchestrator_proto_goTypes = []any{
-	(EmergencyAction)(0),                  // 0: orchestrator.v1.EmergencyAction
-	(EmergencyConvergence)(0),             // 1: orchestrator.v1.EmergencyConvergence
-	(*CreateOperationRequest)(nil),        // 2: orchestrator.v1.CreateOperationRequest
-	(*CreateOperationResponse)(nil),       // 3: orchestrator.v1.CreateOperationResponse
-	(*PublishReleaseRequest)(nil),         // 4: orchestrator.v1.PublishReleaseRequest
-	(*PublishReleaseResponse)(nil),        // 5: orchestrator.v1.PublishReleaseResponse
-	(*ReleaseOperation)(nil),              // 6: orchestrator.v1.ReleaseOperation
-	(*CreateCustomerRequest)(nil),         // 7: orchestrator.v1.CreateCustomerRequest
-	(*CreateCustomerResponse)(nil),        // 8: orchestrator.v1.CreateCustomerResponse
-	(*GetCustomerRequest)(nil),            // 9: orchestrator.v1.GetCustomerRequest
-	(*GetCustomerResponse)(nil),           // 10: orchestrator.v1.GetCustomerResponse
-	(*ListCustomersRequest)(nil),          // 11: orchestrator.v1.ListCustomersRequest
-	(*ListCustomersResponse)(nil),         // 12: orchestrator.v1.ListCustomersResponse
-	(*UpdateCustomerRequest)(nil),         // 13: orchestrator.v1.UpdateCustomerRequest
-	(*UpdateCustomerResponse)(nil),        // 14: orchestrator.v1.UpdateCustomerResponse
-	(*DisableCustomerRequest)(nil),        // 15: orchestrator.v1.DisableCustomerRequest
-	(*DisableCustomerResponse)(nil),       // 16: orchestrator.v1.DisableCustomerResponse
-	(*CreateClusterRequest)(nil),          // 17: orchestrator.v1.CreateClusterRequest
-	(*CreateClusterResponse)(nil),         // 18: orchestrator.v1.CreateClusterResponse
-	(*GetClusterRequest)(nil),             // 19: orchestrator.v1.GetClusterRequest
-	(*GetClusterResponse)(nil),            // 20: orchestrator.v1.GetClusterResponse
-	(*ListClustersRequest)(nil),           // 21: orchestrator.v1.ListClustersRequest
-	(*ListClustersResponse)(nil),          // 22: orchestrator.v1.ListClustersResponse
-	(*DisableClusterRequest)(nil),         // 23: orchestrator.v1.DisableClusterRequest
-	(*DisableClusterResponse)(nil),        // 24: orchestrator.v1.DisableClusterResponse
-	(*CreateEnrollmentTokenRequest)(nil),  // 25: orchestrator.v1.CreateEnrollmentTokenRequest
-	(*CreateEnrollmentTokenResponse)(nil), // 26: orchestrator.v1.CreateEnrollmentTokenResponse
-	(*EmergencyChangeRequest)(nil),        // 27: orchestrator.v1.EmergencyChangeRequest
-	(*EmergencyChangeResponse)(nil),       // 28: orchestrator.v1.EmergencyChangeResponse
-	(*v1.ActorContext)(nil),               // 29: common.v1.ActorContext
-	(*v1.SignatureRef)(nil),               // 30: common.v1.SignatureRef
-	(*timestamppb.Timestamp)(nil),         // 31: google.protobuf.Timestamp
-	(v1.VerificationResult)(0),            // 32: common.v1.VerificationResult
-	(*v1.ReleaseDigest)(nil),              // 33: common.v1.ReleaseDigest
-	(*v1.Customer)(nil),                   // 34: common.v1.Customer
-	(*v1.Cluster)(nil),                    // 35: common.v1.Cluster
+	(ArtifactType)(0),                     // 0: orchestrator.v1.ArtifactType
+	(ArtifactMode)(0),                     // 1: orchestrator.v1.ArtifactMode
+	(EmergencyAction)(0),                  // 2: orchestrator.v1.EmergencyAction
+	(EmergencyConvergence)(0),             // 3: orchestrator.v1.EmergencyConvergence
+	(*CreateOperationRequest)(nil),        // 4: orchestrator.v1.CreateOperationRequest
+	(*CreateOperationResponse)(nil),       // 5: orchestrator.v1.CreateOperationResponse
+	(*PublishReleaseRequest)(nil),         // 6: orchestrator.v1.PublishReleaseRequest
+	(*PublishReleaseResponse)(nil),        // 7: orchestrator.v1.PublishReleaseResponse
+	(*ReleaseOperation)(nil),              // 8: orchestrator.v1.ReleaseOperation
+	(*CreateCustomerRequest)(nil),         // 9: orchestrator.v1.CreateCustomerRequest
+	(*CreateCustomerResponse)(nil),        // 10: orchestrator.v1.CreateCustomerResponse
+	(*GetCustomerRequest)(nil),            // 11: orchestrator.v1.GetCustomerRequest
+	(*GetCustomerResponse)(nil),           // 12: orchestrator.v1.GetCustomerResponse
+	(*ListCustomersRequest)(nil),          // 13: orchestrator.v1.ListCustomersRequest
+	(*ListCustomersResponse)(nil),         // 14: orchestrator.v1.ListCustomersResponse
+	(*UpdateCustomerRequest)(nil),         // 15: orchestrator.v1.UpdateCustomerRequest
+	(*UpdateCustomerResponse)(nil),        // 16: orchestrator.v1.UpdateCustomerResponse
+	(*DisableCustomerRequest)(nil),        // 17: orchestrator.v1.DisableCustomerRequest
+	(*DisableCustomerResponse)(nil),       // 18: orchestrator.v1.DisableCustomerResponse
+	(*CreateClusterRequest)(nil),          // 19: orchestrator.v1.CreateClusterRequest
+	(*CreateClusterResponse)(nil),         // 20: orchestrator.v1.CreateClusterResponse
+	(*GetClusterRequest)(nil),             // 21: orchestrator.v1.GetClusterRequest
+	(*GetClusterResponse)(nil),            // 22: orchestrator.v1.GetClusterResponse
+	(*ListClustersRequest)(nil),           // 23: orchestrator.v1.ListClustersRequest
+	(*ListClustersResponse)(nil),          // 24: orchestrator.v1.ListClustersResponse
+	(*DisableClusterRequest)(nil),         // 25: orchestrator.v1.DisableClusterRequest
+	(*DisableClusterResponse)(nil),        // 26: orchestrator.v1.DisableClusterResponse
+	(*CreateEnrollmentTokenRequest)(nil),  // 27: orchestrator.v1.CreateEnrollmentTokenRequest
+	(*CreateEnrollmentTokenResponse)(nil), // 28: orchestrator.v1.CreateEnrollmentTokenResponse
+	(*ClusterRoute)(nil),                  // 29: orchestrator.v1.ClusterRoute
+	(*ConfigureClusterRouteRequest)(nil),  // 30: orchestrator.v1.ConfigureClusterRouteRequest
+	(*ConfigureClusterRouteResponse)(nil), // 31: orchestrator.v1.ConfigureClusterRouteResponse
+	(*GetClusterRoutesRequest)(nil),       // 32: orchestrator.v1.GetClusterRoutesRequest
+	(*GetClusterRoutesResponse)(nil),      // 33: orchestrator.v1.GetClusterRoutesResponse
+	(*DeleteClusterRouteRequest)(nil),     // 34: orchestrator.v1.DeleteClusterRouteRequest
+	(*DeleteClusterRouteResponse)(nil),    // 35: orchestrator.v1.DeleteClusterRouteResponse
+	(*EmergencyChangeRequest)(nil),        // 36: orchestrator.v1.EmergencyChangeRequest
+	(*EmergencyChangeResponse)(nil),       // 37: orchestrator.v1.EmergencyChangeResponse
+	(*v1.ActorContext)(nil),               // 38: common.v1.ActorContext
+	(*v1.SignatureRef)(nil),               // 39: common.v1.SignatureRef
+	(*timestamppb.Timestamp)(nil),         // 40: google.protobuf.Timestamp
+	(v1.VerificationResult)(0),            // 41: common.v1.VerificationResult
+	(*v1.ReleaseDigest)(nil),              // 42: common.v1.ReleaseDigest
+	(*v1.Customer)(nil),                   // 43: common.v1.Customer
+	(*v1.Cluster)(nil),                    // 44: common.v1.Cluster
 }
 var file_orchestrator_v1_orchestrator_proto_depIdxs = []int32{
-	29, // 0: orchestrator.v1.CreateOperationRequest.actor:type_name -> common.v1.ActorContext
-	30, // 1: orchestrator.v1.CreateOperationRequest.signature_ref:type_name -> common.v1.SignatureRef
-	31, // 2: orchestrator.v1.CreateOperationResponse.accepted_at:type_name -> google.protobuf.Timestamp
-	32, // 3: orchestrator.v1.CreateOperationResponse.verification_result:type_name -> common.v1.VerificationResult
-	33, // 4: orchestrator.v1.ReleaseOperation.digest:type_name -> common.v1.ReleaseDigest
-	34, // 5: orchestrator.v1.CreateCustomerResponse.customer:type_name -> common.v1.Customer
-	34, // 6: orchestrator.v1.GetCustomerResponse.customer:type_name -> common.v1.Customer
-	34, // 7: orchestrator.v1.ListCustomersResponse.customers:type_name -> common.v1.Customer
-	34, // 8: orchestrator.v1.UpdateCustomerResponse.customer:type_name -> common.v1.Customer
-	35, // 9: orchestrator.v1.CreateClusterResponse.cluster:type_name -> common.v1.Cluster
-	35, // 10: orchestrator.v1.GetClusterResponse.cluster:type_name -> common.v1.Cluster
-	35, // 11: orchestrator.v1.ListClustersResponse.clusters:type_name -> common.v1.Cluster
-	0,  // 12: orchestrator.v1.EmergencyChangeRequest.action:type_name -> orchestrator.v1.EmergencyAction
-	1,  // 13: orchestrator.v1.EmergencyChangeRequest.convergence:type_name -> orchestrator.v1.EmergencyConvergence
-	29, // 14: orchestrator.v1.EmergencyChangeRequest.actor:type_name -> common.v1.ActorContext
-	1,  // 15: orchestrator.v1.EmergencyChangeResponse.convergence:type_name -> orchestrator.v1.EmergencyConvergence
-	2,  // 16: orchestrator.v1.OrchestratorService.CreateOperation:input_type -> orchestrator.v1.CreateOperationRequest
-	4,  // 17: orchestrator.v1.OrchestratorService.PublishRelease:input_type -> orchestrator.v1.PublishReleaseRequest
-	7,  // 18: orchestrator.v1.OrchestratorService.CreateCustomer:input_type -> orchestrator.v1.CreateCustomerRequest
-	9,  // 19: orchestrator.v1.OrchestratorService.GetCustomer:input_type -> orchestrator.v1.GetCustomerRequest
-	11, // 20: orchestrator.v1.OrchestratorService.ListCustomers:input_type -> orchestrator.v1.ListCustomersRequest
-	13, // 21: orchestrator.v1.OrchestratorService.UpdateCustomer:input_type -> orchestrator.v1.UpdateCustomerRequest
-	15, // 22: orchestrator.v1.OrchestratorService.DisableCustomer:input_type -> orchestrator.v1.DisableCustomerRequest
-	17, // 23: orchestrator.v1.OrchestratorService.CreateCluster:input_type -> orchestrator.v1.CreateClusterRequest
-	19, // 24: orchestrator.v1.OrchestratorService.GetCluster:input_type -> orchestrator.v1.GetClusterRequest
-	21, // 25: orchestrator.v1.OrchestratorService.ListClusters:input_type -> orchestrator.v1.ListClustersRequest
-	23, // 26: orchestrator.v1.OrchestratorService.DisableCluster:input_type -> orchestrator.v1.DisableClusterRequest
-	25, // 27: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:input_type -> orchestrator.v1.CreateEnrollmentTokenRequest
-	27, // 28: orchestrator.v1.OrchestratorService.EmergencyChange:input_type -> orchestrator.v1.EmergencyChangeRequest
-	3,  // 29: orchestrator.v1.OrchestratorService.CreateOperation:output_type -> orchestrator.v1.CreateOperationResponse
-	5,  // 30: orchestrator.v1.OrchestratorService.PublishRelease:output_type -> orchestrator.v1.PublishReleaseResponse
-	8,  // 31: orchestrator.v1.OrchestratorService.CreateCustomer:output_type -> orchestrator.v1.CreateCustomerResponse
-	10, // 32: orchestrator.v1.OrchestratorService.GetCustomer:output_type -> orchestrator.v1.GetCustomerResponse
-	12, // 33: orchestrator.v1.OrchestratorService.ListCustomers:output_type -> orchestrator.v1.ListCustomersResponse
-	14, // 34: orchestrator.v1.OrchestratorService.UpdateCustomer:output_type -> orchestrator.v1.UpdateCustomerResponse
-	16, // 35: orchestrator.v1.OrchestratorService.DisableCustomer:output_type -> orchestrator.v1.DisableCustomerResponse
-	18, // 36: orchestrator.v1.OrchestratorService.CreateCluster:output_type -> orchestrator.v1.CreateClusterResponse
-	20, // 37: orchestrator.v1.OrchestratorService.GetCluster:output_type -> orchestrator.v1.GetClusterResponse
-	22, // 38: orchestrator.v1.OrchestratorService.ListClusters:output_type -> orchestrator.v1.ListClustersResponse
-	24, // 39: orchestrator.v1.OrchestratorService.DisableCluster:output_type -> orchestrator.v1.DisableClusterResponse
-	26, // 40: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:output_type -> orchestrator.v1.CreateEnrollmentTokenResponse
-	28, // 41: orchestrator.v1.OrchestratorService.EmergencyChange:output_type -> orchestrator.v1.EmergencyChangeResponse
-	29, // [29:42] is the sub-list for method output_type
-	16, // [16:29] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	38, // 0: orchestrator.v1.CreateOperationRequest.actor:type_name -> common.v1.ActorContext
+	39, // 1: orchestrator.v1.CreateOperationRequest.signature_ref:type_name -> common.v1.SignatureRef
+	40, // 2: orchestrator.v1.CreateOperationResponse.accepted_at:type_name -> google.protobuf.Timestamp
+	41, // 3: orchestrator.v1.CreateOperationResponse.verification_result:type_name -> common.v1.VerificationResult
+	42, // 4: orchestrator.v1.ReleaseOperation.digest:type_name -> common.v1.ReleaseDigest
+	43, // 5: orchestrator.v1.CreateCustomerResponse.customer:type_name -> common.v1.Customer
+	43, // 6: orchestrator.v1.GetCustomerResponse.customer:type_name -> common.v1.Customer
+	43, // 7: orchestrator.v1.ListCustomersResponse.customers:type_name -> common.v1.Customer
+	43, // 8: orchestrator.v1.UpdateCustomerResponse.customer:type_name -> common.v1.Customer
+	44, // 9: orchestrator.v1.CreateClusterResponse.cluster:type_name -> common.v1.Cluster
+	44, // 10: orchestrator.v1.GetClusterResponse.cluster:type_name -> common.v1.Cluster
+	44, // 11: orchestrator.v1.ListClustersResponse.clusters:type_name -> common.v1.Cluster
+	0,  // 12: orchestrator.v1.ClusterRoute.artifact_type:type_name -> orchestrator.v1.ArtifactType
+	1,  // 13: orchestrator.v1.ClusterRoute.mode:type_name -> orchestrator.v1.ArtifactMode
+	0,  // 14: orchestrator.v1.ConfigureClusterRouteRequest.artifact_type:type_name -> orchestrator.v1.ArtifactType
+	1,  // 15: orchestrator.v1.ConfigureClusterRouteRequest.mode:type_name -> orchestrator.v1.ArtifactMode
+	29, // 16: orchestrator.v1.ConfigureClusterRouteResponse.route:type_name -> orchestrator.v1.ClusterRoute
+	29, // 17: orchestrator.v1.GetClusterRoutesResponse.routes:type_name -> orchestrator.v1.ClusterRoute
+	2,  // 18: orchestrator.v1.EmergencyChangeRequest.action:type_name -> orchestrator.v1.EmergencyAction
+	3,  // 19: orchestrator.v1.EmergencyChangeRequest.convergence:type_name -> orchestrator.v1.EmergencyConvergence
+	38, // 20: orchestrator.v1.EmergencyChangeRequest.actor:type_name -> common.v1.ActorContext
+	3,  // 21: orchestrator.v1.EmergencyChangeResponse.convergence:type_name -> orchestrator.v1.EmergencyConvergence
+	4,  // 22: orchestrator.v1.OrchestratorService.CreateOperation:input_type -> orchestrator.v1.CreateOperationRequest
+	6,  // 23: orchestrator.v1.OrchestratorService.PublishRelease:input_type -> orchestrator.v1.PublishReleaseRequest
+	9,  // 24: orchestrator.v1.OrchestratorService.CreateCustomer:input_type -> orchestrator.v1.CreateCustomerRequest
+	11, // 25: orchestrator.v1.OrchestratorService.GetCustomer:input_type -> orchestrator.v1.GetCustomerRequest
+	13, // 26: orchestrator.v1.OrchestratorService.ListCustomers:input_type -> orchestrator.v1.ListCustomersRequest
+	15, // 27: orchestrator.v1.OrchestratorService.UpdateCustomer:input_type -> orchestrator.v1.UpdateCustomerRequest
+	17, // 28: orchestrator.v1.OrchestratorService.DisableCustomer:input_type -> orchestrator.v1.DisableCustomerRequest
+	19, // 29: orchestrator.v1.OrchestratorService.CreateCluster:input_type -> orchestrator.v1.CreateClusterRequest
+	21, // 30: orchestrator.v1.OrchestratorService.GetCluster:input_type -> orchestrator.v1.GetClusterRequest
+	23, // 31: orchestrator.v1.OrchestratorService.ListClusters:input_type -> orchestrator.v1.ListClustersRequest
+	25, // 32: orchestrator.v1.OrchestratorService.DisableCluster:input_type -> orchestrator.v1.DisableClusterRequest
+	27, // 33: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:input_type -> orchestrator.v1.CreateEnrollmentTokenRequest
+	36, // 34: orchestrator.v1.OrchestratorService.EmergencyChange:input_type -> orchestrator.v1.EmergencyChangeRequest
+	30, // 35: orchestrator.v1.OrchestratorService.ConfigureClusterRoute:input_type -> orchestrator.v1.ConfigureClusterRouteRequest
+	32, // 36: orchestrator.v1.OrchestratorService.GetClusterRoutes:input_type -> orchestrator.v1.GetClusterRoutesRequest
+	34, // 37: orchestrator.v1.OrchestratorService.DeleteClusterRoute:input_type -> orchestrator.v1.DeleteClusterRouteRequest
+	5,  // 38: orchestrator.v1.OrchestratorService.CreateOperation:output_type -> orchestrator.v1.CreateOperationResponse
+	7,  // 39: orchestrator.v1.OrchestratorService.PublishRelease:output_type -> orchestrator.v1.PublishReleaseResponse
+	10, // 40: orchestrator.v1.OrchestratorService.CreateCustomer:output_type -> orchestrator.v1.CreateCustomerResponse
+	12, // 41: orchestrator.v1.OrchestratorService.GetCustomer:output_type -> orchestrator.v1.GetCustomerResponse
+	14, // 42: orchestrator.v1.OrchestratorService.ListCustomers:output_type -> orchestrator.v1.ListCustomersResponse
+	16, // 43: orchestrator.v1.OrchestratorService.UpdateCustomer:output_type -> orchestrator.v1.UpdateCustomerResponse
+	18, // 44: orchestrator.v1.OrchestratorService.DisableCustomer:output_type -> orchestrator.v1.DisableCustomerResponse
+	20, // 45: orchestrator.v1.OrchestratorService.CreateCluster:output_type -> orchestrator.v1.CreateClusterResponse
+	22, // 46: orchestrator.v1.OrchestratorService.GetCluster:output_type -> orchestrator.v1.GetClusterResponse
+	24, // 47: orchestrator.v1.OrchestratorService.ListClusters:output_type -> orchestrator.v1.ListClustersResponse
+	26, // 48: orchestrator.v1.OrchestratorService.DisableCluster:output_type -> orchestrator.v1.DisableClusterResponse
+	28, // 49: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:output_type -> orchestrator.v1.CreateEnrollmentTokenResponse
+	37, // 50: orchestrator.v1.OrchestratorService.EmergencyChange:output_type -> orchestrator.v1.EmergencyChangeResponse
+	31, // 51: orchestrator.v1.OrchestratorService.ConfigureClusterRoute:output_type -> orchestrator.v1.ConfigureClusterRouteResponse
+	33, // 52: orchestrator.v1.OrchestratorService.GetClusterRoutes:output_type -> orchestrator.v1.GetClusterRoutesResponse
+	35, // 53: orchestrator.v1.OrchestratorService.DeleteClusterRoute:output_type -> orchestrator.v1.DeleteClusterRouteResponse
+	38, // [38:54] is the sub-list for method output_type
+	22, // [22:38] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_orchestrator_v1_orchestrator_proto_init() }
@@ -1793,8 +2335,8 @@ func file_orchestrator_v1_orchestrator_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_orchestrator_v1_orchestrator_proto_rawDesc), len(file_orchestrator_v1_orchestrator_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   27,
+			NumEnums:      4,
+			NumMessages:   34,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

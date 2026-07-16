@@ -54,12 +54,20 @@ message Customer {
   google.protobuf.Timestamp created_at = 4;
 }
 
+// ClusterStatus represents the lifecycle state of a cluster.
+enum ClusterStatus {
+  CLUSTER_STATUS_UNSPECIFIED = 0;
+  CLUSTER_STATUS_ACTIVE = 1;
+  CLUSTER_STATUS_DISABLED = 2;
+}
+
 // Cluster represents a target cluster within a customer.
 message Cluster {
   string id = 1;
   string name = 2;
   string customer_id = 3;
   string kubeconfig_ref = 4;
+  ClusterStatus status = 6;
   google.protobuf.Timestamp created_at = 5;
 }
 
