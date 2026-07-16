@@ -1,3 +1,2 @@
 http_port: 8082
-grpc_port: 8445
 log_level: debug

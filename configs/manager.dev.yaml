@@ -1,4 +1,3 @@
 manager:
   http_port: 8081
-  grpc_port: 8444
   log_level: debug

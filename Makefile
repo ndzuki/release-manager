@@ -1,5 +1,7 @@
 # Release Manager — Development Makefile
 # =============================================================================
+# Framework: Connect (connectrpc.com/connect)
+# Single-port HTTP — serves gRPC, gRPC-Web, and Connect (JSON) from one handler.
 
 GO          := go
 BUF         := $(shell which buf 2>/dev/null || echo buf)
@@ -17,7 +19,6 @@ NC          := $(ESC)[0m
 
 # Ports
 MANAGER_PORT := 8081
-GRPC_PORT    := 8444
 
 # ---------------------------------------------------------------------------
 # Multi-service build & run
@@ -90,21 +91,21 @@ dev: proto build-all ## Start all 6 microservices in background
 	@./$(BIN_DIR)/release-api --config configs/api.dev.yaml > data/api.log 2>&1 & echo $$! > data/api.pid
 	@sleep 1
 	@echo ""
-	@echo "$(GREEN)All 6 services started.$(NC)"
-	@echo "$(BLUE)  webhook:       HTTP :8080  | gRPC :8443$(NC)"
-	@echo "$(BLUE)  orchestrator:  HTTP :8083  | gRPC :8446$(NC)"
-	@echo "$(BLUE)  operator:      HTTP :8084  | gRPC :8447$(NC)"
-	@echo "$(BLUE)  auth:          HTTP :8085  | gRPC :8448$(NC)"
-	@echo "$(BLUE)  notifier:      HTTP :8086  | gRPC :8449$(NC)"
-	@echo "$(BLUE)  api:           HTTP :8082  | gRPC :8445$(NC)"
+	@echo "$(GREEN)All 6 services started.$(NC)  Connect: gRPC + gRPC-Web + JSON on one port"
+	@echo "$(BLUE)  webhook:       :8080$(NC)"
+	@echo "$(BLUE)  orchestrator:  :8083$(NC)"
+	@echo "$(BLUE)  operator:      :8084$(NC)"
+	@echo "$(BLUE)  auth:          :8085$(NC)"
+	@echo "$(BLUE)  notifier:      :8086$(NC)"
+	@echo "$(BLUE)  api:           :8082$(NC)"
 	@echo ""
 	@echo "$(YELLOW)Kulala shortcuts:$(NC)"
-	@echo "  make api-orchestrator  → CreateOperation / PublishRelease"
-	@echo "  make api-manager       → REST APIs (Customers / Clusters / Releases)"
-	@echo "  make api-operator      → Operator gRPC"
-	@echo "  make api-auth          → Auth / Login"
-	@echo "  make api-webhook       → Webhook simulation"
-	@echo "  make api-audit         → Audit / Notifications"
+	@echo "  make api-orchestrator  -> CreateOperation / PublishRelease"
+	@echo "  make api-manager       -> REST APIs (Customers / Clusters / Releases)"
+	@echo "  make api-operator      -> Operator gRPC"
+	@echo "  make api-auth          -> Auth / Login"
+	@echo "  make api-webhook       -> Webhook simulation"
+	@echo "  make api-audit         -> Audit / Notifications"
 	@echo ""
 	@echo "$(YELLOW)Stop all:$(NC)  make stop-all"
 	@echo "$(YELLOW)View logs:$(NC) tail -f data/*.log"
@@ -115,52 +116,52 @@ stop-all: ## Stop all background microservices
 	@for pidf in data/*.pid; do \
 		[ -f "$$pidf" ] && kill $$(cat "$$pidf") 2>/dev/null && rm "$$pidf" || true; \
 	done
-	@for port in 8080 8082 8083 8084 8085 8086 8443 8445 8446 8447 8448 8449; do \
+	@for port in 8080 8082 8083 8084 8085 8086; do \
 		fuser -k $$port/tcp 2>/dev/null || true; \
 	done
 	@echo "$(GREEN)All services stopped$(NC)"
+
 # ---------------------------------------------------------------------------
 # Kulala integration — open .http files directly in Neovim
 # ---------------------------------------------------------------------------
 KULALA_DIR := api/kulala
 
 .PHONY: api-auth
-api-auth: ## 打开 Auth API 集合 (Kulala)
+api-auth: ## Open Auth API collection (Kulala)
 	@nvim $(KULALA_DIR)/auth.http
 
 .PHONY: api-manager
-api-manager: ## 打开 Manager API 集合 (Kulala)
+api-manager: ## Open Manager API collection (Kulala)
 	@nvim $(KULALA_DIR)/manager.http
 
 .PHONY: api-webhook
-api-webhook: ## 打开 Webhook 模拟集合 (Kulala)
+api-webhook: ## Open Webhook simulation collection (Kulala)
 	@nvim $(KULALA_DIR)/webhook.http
 
 .PHONY: api-operator
-api-operator: ## 打开 Operator gRPC 集合 (Kulala)
+api-operator: ## Open Operator gRPC collection (Kulala)
 	@nvim $(KULALA_DIR)/operator.http
 
 .PHONY: api-orchestrator
-api-orchestrator: ## 打开 Orchestrator gRPC 集合 (Kulala)
+api-orchestrator: ## Open Orchestrator gRPC collection (Kulala)
 	@nvim $(KULALA_DIR)/orchestrator.http
 
 .PHONY: api-audit
-api-audit: ## 打开 Audit/Notification 集合 (Kulala)
+api-audit: ## Open Audit/Notification collection (Kulala)
 	@nvim $(KULALA_DIR)/audit.http
 
 # ---------------------------------------------------------------------------
 # Proto generation
 # ---------------------------------------------------------------------------
 .PHONY: proto
-proto: ## Generate protobuf code and lint
+proto: ## Generate protobuf code (Connect + protobuf-go)
 	@command -v buf >/dev/null 2>&1 || { go install github.com/bufbuild/buf/cmd/buf@latest && export PATH="$(GOBIN):$$PATH"; }; \
-	echo "$(YELLOW)Generating protobuf code...$(NC)"; \
-	cd $(PROTO_DIR) && buf generate; \
+	echo "$(YELLOW)Generating Connect + protobuf code...$(NC)"; \
+	buf generate --template $(PROTO_DIR)/buf.gen.yaml; \
 	echo "$(GREEN)Proto code generated$(NC)"
+
 # ---------------------------------------------------------------------------
 # Stage-by-stage local deployment
-# Each stage starts only the services needed for its atomic requirements.
-# After starting, use the matching Kulala .http file to verify.
 # ---------------------------------------------------------------------------
 
 .PHONY: dev-stage-shared
@@ -172,77 +173,68 @@ dev-stage-shared: proto ## REQ-009,010,039 — Shared contracts
 .PHONY: dev-stage-artifact
 dev-stage-artifact: proto ## REQ-011,012 — Artifact ingestion
 	@echo "$(YELLOW)Stage: Artifact$(NC)"
-	@echo "$(BLUE)  Manager: http://localhost:$(MANAGER_PORT)/health$(NC)"
+	@echo "$(BLUE)  webhook: http://localhost:8080/health$(NC)"
 	@echo "$(BLUE)  ▸ api/webhook.http$(NC)"
-	@fuser -k $(MANAGER_PORT)/tcp 2>/dev/null || true
-	$(GO) build -o bin/release-manager ./cmd/release-manager/
-	./bin/release-manager --config configs/manager.dev.yaml
+	@fuser -k 8080/tcp 2>/dev/null || true
+	$(GO) run ./cmd/webhook/ --config configs/webhook.dev.yaml
 
 .PHONY: dev-stage-tenancy
 dev-stage-tenancy: proto ## REQ-013,014 — Customer & Cluster
 	@echo "$(YELLOW)Stage: Tenancy$(NC)"
 	@echo "$(BLUE)  Manager: http://localhost:$(MANAGER_PORT)/health$(NC)"
-	@echo "$(BLUE)  ▸ api/manager.http → Customers / Clusters$(NC)"
+	@echo "$(BLUE)  ▸ api/manager.http -> Customers / Clusters$(NC)"
 	@fuser -k $(MANAGER_PORT)/tcp 2>/dev/null || true
-	$(GO) build -o bin/release-manager ./cmd/release-manager/
-	./bin/release-manager --config configs/manager.dev.yaml
+	$(GO) run ./cmd/release-manager/ --config configs/manager.dev.yaml
 
 .PHONY: dev-stage-operator
 dev-stage-operator: proto ## REQ-015,044,016 — Operator control
 	@echo "$(YELLOW)Stage: Operator$(NC)"
-	@echo "$(BLUE)  Manager: http://localhost:$(MANAGER_PORT)/health$(NC)"
-	@echo "$(BLUE)  ▸ api/manager.http → Operator Enrollment$(NC)"
-	@echo "$(BLUE)  ▸ api/operator.http → gRPC calls$(NC)"
-	@fuser -k $(MANAGER_PORT)/tcp $(GRPC_PORT)/tcp 2>/dev/null || true
-	$(GO) build -o bin/release-manager ./cmd/release-manager/
-	./bin/release-manager --config configs/manager.dev.yaml
+	@echo "$(BLUE)  Operator: http://localhost:8084/health$(NC)"
+	@echo "$(BLUE)  ▸ api/operator.http$(NC)"
+	@fuser -k 8084/tcp 2>/dev/null || true
+	$(GO) run ./cmd/operator/ --config configs/operator.dev.yaml
 
 .PHONY: dev-stage-config
 dev-stage-config: proto ## REQ-040,018,068 — ReleaseDefinition & ValuesRevision
 	@echo "$(YELLOW)Stage: Release Config$(NC)"
 	@echo "$(BLUE)  Manager: http://localhost:$(MANAGER_PORT)/health$(NC)"
-	@echo "$(BLUE)  ▸ api/manager.http → Release Definitions / ValuesRevision$(NC)"
+	@echo "$(BLUE)  ▸ api/manager.http -> Release Definitions / ValuesRevision$(NC)"
 	@fuser -k $(MANAGER_PORT)/tcp 2>/dev/null || true
-	$(GO) build -o bin/release-manager ./cmd/release-manager/
-	./bin/release-manager --config configs/manager.dev.yaml
+	$(GO) run ./cmd/release-manager/ --config configs/manager.dev.yaml
 
 .PHONY: dev-stage-publish
-dev-stage-publish: proto build-orchestrator ## REQ-023,067 — Core pipeline CreateOperation
-	@echo "$(YELLOW)Stage: Core Pipeline — Orchestrator$(NC)"
-	@echo "$(BLUE)  Orchestrator gRPC: localhost:8446$(NC)"
-	@echo "$(BLUE)  ▸ api/kulala/orchestrator.http → CreateOperation / PublishRelease$(NC)"
-	@echo "$(BLUE)  ▸ Health: grpc.health.v1.Health/Check$(NC)"
+dev-stage-publish: proto ## REQ-023,067 — Core pipeline CreateOperation
+	@echo "$(YELLOW)Stage: Core Pipeline — Orchestrator (Connect)$(NC)"
+	@echo "$(BLUE)  Orchestrator: http://localhost:8083/health$(NC)"
+	@echo "$(BLUE)  ▸ Connect/JSON: POST http://localhost:8083/orchestrator.v1.OrchestratorService/CreateOperation$(NC)"
+	@echo "$(BLUE)  ▸ api/kulala/orchestrator.http$(NC)"
 	@mkdir -p data
-	@fuser -k 8446/tcp 2>/dev/null || true
-	./$(BIN_DIR)/release-orchestrator --config configs/orchestrator.dev.yaml --db data/orchestrator.db
+	@fuser -k 8083/tcp 2>/dev/null || true
+	$(GO) run ./cmd/orchestrator/ --config configs/orchestrator.dev.yaml --db data/orchestrator.db
 
 .PHONY: dev-stage-auth
 dev-stage-auth: proto ## REQ-025,026,049,027 — Auth & RBAC
 	@echo "$(YELLOW)Stage: Auth & RBAC$(NC)"
-	@echo "$(BLUE)  Manager: http://localhost:$(MANAGER_PORT)/health$(NC)"
-	@echo "$(BLUE)  ▸ api/auth.http → Login / Orgs / Users$(NC)"
-	@fuser -k $(MANAGER_PORT)/tcp 2>/dev/null || true
-	$(GO) build -o bin/release-manager ./cmd/release-manager/
-	./bin/release-manager --config configs/manager.dev.yaml
+	@echo "$(BLUE)  Auth: http://localhost:8085/health$(NC)"
+	@echo "$(BLUE)  ▸ api/auth.http -> Login / Orgs / Users$(NC)"
+	@fuser -k 8085/tcp 2>/dev/null || true
+	$(GO) run ./cmd/auth/ --config configs/auth.dev.yaml
 
 .PHONY: dev-stage-audit
 dev-stage-audit: proto ## REQ-050,029 — Audit
 	@echo "$(YELLOW)Stage: Audit$(NC)"
 	@echo "$(BLUE)  Manager: http://localhost:$(MANAGER_PORT)/health$(NC)"
-	@echo "$(BLUE)  ▸ api/audit.http → Audit Logs$(NC)"
+	@echo "$(BLUE)  ▸ api/audit.http -> Audit Logs$(NC)"
 	@fuser -k $(MANAGER_PORT)/tcp 2>/dev/null || true
-	$(GO) build -o bin/release-manager ./cmd/release-manager/
-	./bin/release-manager --config configs/manager.dev.yaml
+	$(GO) run ./cmd/release-manager/ --config configs/manager.dev.yaml
 
 .PHONY: dev-stage-full
 dev-stage-full: proto ## All services (equivalent to old dev-manager)
 	@echo "$(YELLOW)Stage: Full$(NC)"
 	@echo "$(BLUE)  Manager: http://localhost:$(MANAGER_PORT)/health$(NC)"
-	@echo "$(BLUE)  gRPC: localhost:$(GRPC_PORT)$(NC)"
 	@echo "$(BLUE)  ▸ api/*.http — all collections$(NC)"
-	@fuser -k $(MANAGER_PORT)/tcp $(GRPC_PORT)/tcp 2>/dev/null || true
-	$(GO) build -o bin/release-manager ./cmd/release-manager/
-	./bin/release-manager --config configs/manager.dev.yaml
+	@fuser -k $(MANAGER_PORT)/tcp 2>/dev/null || true
+	$(GO) run ./cmd/release-manager/ --config configs/manager.dev.yaml
 
 # ---------------------------------------------------------------------------
 # Quality
@@ -264,6 +256,6 @@ clean: ## Remove build artifacts
 # ---------------------------------------------------------------------------
 .PHONY: help
 help: ## Show this help
-	@echo "$(YELLOW)Release Manager — Dev Targets$(NC)"
+	@echo "$(YELLOW)Release Manager — Dev Targets (Connect framework)$(NC)"
 	@echo ""
 	@grep -E '^[a-zA-Z_.-]+:.*?## .*$$' $(lastword $(MAKEFILE_LIST)) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "$(BLUE)%-25s$(NC) %s\n", $$1, $$2}'

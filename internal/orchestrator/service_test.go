@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -52,24 +53,22 @@ func TestCreateOperation_Install_Success(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 
-	req := &orchestratorv1.CreateOperationRequest{
-		OperationType:         "INSTALL",
-		BundleId:              "bundle-001",
-		ReleaseDefinitionId:   "def-001",
-		ValuesRevisionId:      "vr-001",
-		IdempotencyKey:        "idem-001",
+	resp, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:          "INSTALL",
+		BundleId:               "bundle-001",
+		ReleaseDefinitionId:    "def-001",
+		ValuesRevisionId:       "vr-001",
+		IdempotencyKey:         "idem-001",
 		ExpectedCurrentRevision: 0,
 		Actor: &commonv1.ActorContext{
 			UserId:       "user-001",
 			Organization: "org-001",
 		},
-	}
-
-	resp, err := svc.CreateOperation(context.Background(), req)
+	}))
 	require.NoError(t, err)
-	assert.NotEmpty(t, resp.OperationId)
-	assert.Equal(t, "preflight", resp.State) // standard ops enter preflight
-	assert.NotNil(t, resp.AcceptedAt)
+	assert.NotEmpty(t, resp.Msg.OperationId)
+	assert.Equal(t, "preflight", resp.Msg.State) // standard ops enter preflight
+	assert.NotNil(t, resp.Msg.AcceptedAt)
 }
 
 func TestCreateOperation_Idempotency(t *testing.T) {
@@ -78,7 +77,7 @@ func TestCreateOperation_Idempotency(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 
-	req := &orchestratorv1.CreateOperationRequest{
+	msg := &orchestratorv1.CreateOperationRequest{
 		OperationType:       "INSTALL",
 		BundleId:            "bundle-001",
 		ReleaseDefinitionId: "def-001",
@@ -90,22 +89,22 @@ func TestCreateOperation_Idempotency(t *testing.T) {
 		},
 	}
 
-	resp1, err := svc.CreateOperation(context.Background(), req)
+	resp1, err := svc.CreateOperation(context.Background(), connect.NewRequest(msg))
 	require.NoError(t, err)
 
-	resp2, err := svc.CreateOperation(context.Background(), req)
+	resp2, err := svc.CreateOperation(context.Background(), connect.NewRequest(msg))
 	require.NoError(t, err)
 
-	assert.Equal(t, resp1.OperationId, resp2.OperationId, "idempotent requests must return same operation")
+	assert.Equal(t, resp1.Msg.OperationId, resp2.Msg.OperationId, "idempotent requests must return same operation")
 }
 
 func TestCreateOperation_ReleaseBusy(t *testing.T) {
-	// AC-003-04: same definition, non-terminal operation → release_busy
+	// AC-003-04: same definition, non-terminal operation -> release_busy
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
 
-	req := &orchestratorv1.CreateOperationRequest{
+	_, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INSTALL",
 		BundleId:            "bundle-001",
 		ReleaseDefinitionId: "def-001",
@@ -115,13 +114,11 @@ func TestCreateOperation_ReleaseBusy(t *testing.T) {
 			UserId:       "user-001",
 			Organization: "org-001",
 		},
-	}
-
-	_, err := svc.CreateOperation(context.Background(), req)
+	}))
 	require.NoError(t, err)
 
-	// Second request with different idempotency key → release_busy
-	req2 := &orchestratorv1.CreateOperationRequest{
+	// Second request with different idempotency key -> release_busy
+	_, err = svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "UPGRADE",
 		BundleId:            "bundle-002",
 		ReleaseDefinitionId: "def-001",
@@ -131,10 +128,9 @@ func TestCreateOperation_ReleaseBusy(t *testing.T) {
 			UserId:       "user-001",
 			Organization: "org-001",
 		},
-	}
-
-	_, err = svc.CreateOperation(context.Background(), req2)
+	}))
 	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "release_busy")
 }
 
@@ -142,7 +138,7 @@ func TestCreateOperation_DefinitionNotFound(t *testing.T) {
 	svc, _, cleanup := setupService(t)
 	defer cleanup()
 
-	req := &orchestratorv1.CreateOperationRequest{
+	_, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INSTALL",
 		ReleaseDefinitionId: "nonexistent",
 		IdempotencyKey:      "idem-004",
@@ -150,18 +146,16 @@ func TestCreateOperation_DefinitionNotFound(t *testing.T) {
 			UserId:       "user-001",
 			Organization: "org-001",
 		},
-	}
-
-	_, err := svc.CreateOperation(context.Background(), req)
+	}))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
 }
 
 func TestCreateOperation_InvalidType(t *testing.T) {
 	svc, _, cleanup := setupService(t)
 	defer cleanup()
 
-	req := &orchestratorv1.CreateOperationRequest{
+	_, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INVALID",
 		ReleaseDefinitionId: "def-001",
 		IdempotencyKey:      "idem-005",
@@ -169,9 +163,7 @@ func TestCreateOperation_InvalidType(t *testing.T) {
 			UserId:       "user-001",
 			Organization: "org-001",
 		},
-	}
-
-	_, err := svc.CreateOperation(context.Background(), req)
+	}))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid operation_type")
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }

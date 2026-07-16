@@ -7,15 +7,9 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Config holds the manager service configuration.
+// Config holds the service configuration.
 type Config struct {
-	Manager ManagerConfig `mapstructure:"manager"`
-}
-
-// ManagerConfig holds manager-level settings.
-type ManagerConfig struct {
 	HTTPPort int    `mapstructure:"http_port"`
-	GRPCPort int    `mapstructure:"grpc_port"`
 	LogLevel string `mapstructure:"log_level"`
 }
 
@@ -40,7 +34,6 @@ func Load(path string) (*Config, error) {
 // ServiceConfig holds flat configuration for individual microservices.
 type ServiceConfig struct {
 	HTTPPort int    `mapstructure:"http_port"`
-	GRPCPort int    `mapstructure:"grpc_port"`
 	LogLevel string `mapstructure:"log_level"`
 }
 

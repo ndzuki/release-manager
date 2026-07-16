@@ -1,83 +1,90 @@
-// Package orchestrator implements the release orchestration gRPC service.
+// Package orchestrator implements the release orchestration Connect service.
 package orchestrator
 
 import (
 	"context"
 	"crypto/sha256"
-
 	"fmt"
 	"log/slog"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/google/uuid"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
-// Service implements the OrchestratorService gRPC server.
+// Service implements the OrchestratorServiceHandler Connect interface.
 type Service struct {
-	orchestratorv1.UnimplementedOrchestratorServiceServer
 	store  store.Store
 	logger *slog.Logger
 }
 
-// NewService creates a new orchestrator gRPC service.
+// NewService creates a new orchestrator Connect service.
 func NewService(st store.Store, logger *slog.Logger) *Service {
 	return &Service{store: st, logger: logger}
 }
 
 // CreateOperation creates a new release operation from the given request.
 // Implements REQ-067 validation rules and REQ-023 idempotency.
-func (s *Service) CreateOperation(ctx context.Context, req *orchestratorv1.CreateOperationRequest) (*orchestratorv1.CreateOperationResponse, error) {
+func (s *Service) CreateOperation(
+	ctx context.Context,
+	req *connect.Request[orchestratorv1.CreateOperationRequest],
+) (*connect.Response[orchestratorv1.CreateOperationResponse], error) {
+	msg := req.Msg
+
 	// 1. Idempotency check (REQ-023 AC-023-02)
-	if req.IdempotencyKey != "" {
-		existing, err := s.store.Operations().GetByIdempotencyKey(ctx, req.IdempotencyKey)
+	if msg.IdempotencyKey != "" {
+		existing, err := s.store.Operations().GetByIdempotencyKey(ctx, msg.IdempotencyKey)
 		if err == nil {
-			s.logger.Info("idempotent operation found", "key", req.IdempotencyKey, "op_id", existing.ID)
-			return s.toResponse(existing), nil
+			s.logger.Info("idempotent operation found", "key", msg.IdempotencyKey, "op_id", existing.ID)
+			return connect.NewResponse(s.toResponse(existing)), nil
 		}
 		if err != store.ErrNotFound {
-			return nil, status.Errorf(codes.Internal, "idempotency lookup: %v", err)
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("idempotency lookup: %w", err))
 		}
-		// not found → proceed
+		// not found -> proceed
 	}
 
 	// 2. Validate operation type
-	opType := store.OperationType(req.OperationType)
+	opType := store.OperationType(msg.OperationType)
 	if !opType.Valid() {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid operation_type: %s", req.OperationType)
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("invalid operation_type: %s", msg.OperationType))
 	}
 
 	// 3. Lookup release definition
-	def, err := s.store.Definitions().Get(ctx, req.ReleaseDefinitionId)
+	def, err := s.store.Definitions().Get(ctx, msg.ReleaseDefinitionId)
 	if err == store.ErrNotFound {
-		return nil, status.Errorf(codes.NotFound, "release_definition not found: %s", req.ReleaseDefinitionId)
+		return nil, connect.NewError(connect.CodeNotFound,
+			fmt.Errorf("release_definition not found: %s", msg.ReleaseDefinitionId))
 	}
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "definition lookup: %v", err)
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
 	}
 
 	// Validate definition status
 	if def.Status != store.DefStatusActive {
-		return nil, status.Errorf(codes.FailedPrecondition, "release_definition %s is %s", def.ID, def.Status)
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("release_definition %s is %s", def.ID, def.Status))
 	}
 
 	// 4. Release busy check (REQ-023 AC-023-03, AC-023-06, AC-023-07)
-	active, err := s.store.Operations().HasActiveForDefinition(ctx, req.ReleaseDefinitionId)
+	active, err := s.store.Operations().HasActiveForDefinition(ctx, msg.ReleaseDefinitionId)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "active check: %v", err)
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("active check: %w", err))
 	}
 	if active {
-		return nil, status.Errorf(codes.FailedPrecondition, "release_busy: definition %s has active operation", req.ReleaseDefinitionId)
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
 	}
 
 	// 5. Build operation request hash for idempotency
-	reqHash := hashRequest(req)
+	reqHash := hashRequest(msg)
 
 	// 6. Build domain Operation
 	now := time.Now().UTC()
@@ -85,16 +92,16 @@ func (s *Service) CreateOperation(ctx context.Context, req *orchestratorv1.Creat
 		ID:                  uuid.New().String(),
 		OperationType:       opType,
 		Status:              operation.InitialStatus(),
-		ReleaseDefinitionID: req.ReleaseDefinitionId,
-		IdempotencyKey:      req.IdempotencyKey,
+		ReleaseDefinitionID: msg.ReleaseDefinitionId,
+		IdempotencyKey:      msg.IdempotencyKey,
 		RequestHash:         reqHash,
-		BundleID:            req.BundleId,
-		ValuesRevisionID:    req.ValuesRevisionId,
-		ExpectedRevision:    int(req.ExpectedCurrentRevision),
-		ValuesPatch:         []byte(req.ValuesPatch),
+		BundleID:            msg.BundleId,
+		ValuesRevisionID:    msg.ValuesRevisionId,
+		ExpectedRevision:    int(msg.ExpectedCurrentRevision),
+		ValuesPatch:         []byte(msg.ValuesPatch),
 		Actor: store.ActorContext{
-			UserID:       req.Actor.GetUserId(),
-			Organization: req.Actor.GetOrganization(),
+			UserID:       msg.Actor.GetUserId(),
+			Organization: msg.Actor.GetOrganization(),
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -102,11 +109,11 @@ func (s *Service) CreateOperation(ctx context.Context, req *orchestratorv1.Creat
 
 	// 7. Persist
 	if err := s.store.Operations().Create(ctx, op); err != nil {
-		return nil, status.Errorf(codes.Internal, "create operation: %v", err)
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create operation: %w", err))
 	}
 
 	// 8. Trigger preflight transition (async in production; synchronous for now)
-	//    Standard ops go pending→preflight, EMERGENCY goes pending→queued
+	//    Standard ops go pending->preflight, EMERGENCY goes pending->queued
 	if opType.IsStandard() {
 		next, err := operation.Transition(op.Status, operation.EventStartPreflight)
 		if err != nil {
@@ -128,25 +135,31 @@ func (s *Service) CreateOperation(ctx context.Context, req *orchestratorv1.Creat
 		"definition", op.ReleaseDefinitionID,
 	)
 
-	return s.toResponse(op), nil
+	return connect.NewResponse(s.toResponse(op)), nil
 }
 
 // PublishRelease triggers the release pipeline for a definition (skeleton).
-func (s *Service) PublishRelease(ctx context.Context, req *orchestratorv1.PublishReleaseRequest) (*orchestratorv1.PublishReleaseResponse, error) {
+func (s *Service) PublishRelease(
+	ctx context.Context,
+	req *connect.Request[orchestratorv1.PublishReleaseRequest],
+) (*connect.Response[orchestratorv1.PublishReleaseResponse], error) {
+	msg := req.Msg
+
 	// Skeleton: verify the definition exists and return not-yet-implemented status.
-	_, err := s.store.Definitions().Get(ctx, req.ReleaseDefinitionId)
+	_, err := s.store.Definitions().Get(ctx, msg.ReleaseDefinitionId)
 	if err == store.ErrNotFound {
-		return nil, status.Errorf(codes.NotFound, "release_definition not found: %s", req.ReleaseDefinitionId)
+		return nil, connect.NewError(connect.CodeNotFound,
+			fmt.Errorf("release_definition not found: %s", msg.ReleaseDefinitionId))
 	}
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "definition lookup: %v", err)
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
 	}
 
-	s.logger.Info("publish release requested (skeleton)", "definition", req.ReleaseDefinitionId)
-	return &orchestratorv1.PublishReleaseResponse{
+	s.logger.Info("publish release requested (skeleton)", "definition", msg.ReleaseDefinitionId)
+	return connect.NewResponse(&orchestratorv1.PublishReleaseResponse{
 		OperationId: "",
 		Status:      "not_implemented",
-	}, nil
+	}), nil
 }
 
 func (s *Service) toResponse(op *store.Operation) *orchestratorv1.CreateOperationResponse {
@@ -160,7 +173,6 @@ func (s *Service) toResponse(op *store.Operation) *orchestratorv1.CreateOperatio
 
 // hashRequest computes a deterministic hash of the request for idempotency.
 func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
-	// Hash the structured fields that form the request identity.
 	payload := fmt.Sprintf("%s|%s|%s|%s|%s|%d|%s|%s",
 		req.OperationType,
 		req.BundleId,
@@ -175,5 +187,5 @@ func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
 	return fmt.Sprintf("%x", h)
 }
 
-// Compile-time check: Service implements the gRPC server interface.
-var _ orchestratorv1.OrchestratorServiceServer = (*Service)(nil)
+// Compile-time check: Service implements the Connect handler interface.
+var _ orchestratorv1connect.OrchestratorServiceHandler = (*Service)(nil)

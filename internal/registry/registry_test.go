@@ -7,7 +7,7 @@ import (
 )
 
 func TestServicesCount(t *testing.T) {
-	assert.Len(t, Services(), 7, "should have 7 registered services per REQ-002")
+	assert.Len(t, Services(), 6, "should have 6 registered services per REQ-002")
 }
 
 func TestServiceNamesUnique(t *testing.T) {
@@ -27,7 +27,6 @@ func TestRequirementsFor(t *testing.T) {
 		{"release-orchestrator", 28},
 		{"release-operator", 19},
 		{"release-auth", 7},
-		{"release-api", 1},
 		{"release-notifier", 1},
 		{"web", 11},
 		{"unknown", 0},

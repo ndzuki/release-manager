@@ -8,8 +8,8 @@ type ServiceDescriptor struct {
 	Name string
 	// Description is a human-readable summary.
 	Description string
-	// GRPCService is the fully-qualified gRPC service name (optional).
-	GRPCService string
+	// ConnectService is the fully-qualified Connect service name (optional).
+	ConnectService string
 	// Requirements lists the atomic requirement IDs owned by this service.
 	Requirements []string
 }
@@ -20,13 +20,13 @@ func Services() []ServiceDescriptor {
 		{
 			Name:         "release-webhook",
 			Description:  "Handles artifact ingestion from external sources (e.g. Harbor).",
-			GRPCService:  "webhook.v1.WebhookService",
+			ConnectService:  "webhook.v1.WebhookService",
 			Requirements: []string{"010", "011", "012"},
 		},
 		{
 			Name:        "release-orchestrator",
 			Description: "Coordinates release publish workflows across services.",
-			GRPCService: "orchestrator.v1.OrchestratorService",
+			ConnectService: "orchestrator.v1.OrchestratorService",
 			Requirements: []string{
 				"013", "014", "015", "016", "017", "018", "019",
 				"020", "021", "022", "023", "024", "027", "029",
@@ -37,7 +37,7 @@ func Services() []ServiceDescriptor {
 		{
 			Name:        "release-operator",
 			Description: "Manages bidirectional gRPC streams with operator agents.",
-			GRPCService: "operator.v1.OperatorService",
+			ConnectService: "operator.v1.OperatorService",
 			Requirements: []string{
 				"015", "016", "017", "018", "019", "020", "021",
 				"022", "023", "024", "032", "041", "042", "043",
@@ -47,21 +47,15 @@ func Services() []ServiceDescriptor {
 		{
 			Name:        "release-auth",
 			Description: "Handles authentication, authorization, and token management.",
-			GRPCService: "auth.v1.AuthService",
+			ConnectService: "auth.v1.AuthService",
 			Requirements: []string{
 				"025", "026", "027", "028", "029", "049", "050",
 			},
 		},
 		{
-			Name:        "release-api",
-			Description: "Exposes HTTP-friendly read operations across all domains.",
-			GRPCService: "api.v1.APIService",
-			Requirements: []string{"010"},
-		},
-		{
 			Name:        "release-notifier",
 			Description: "Dispatches notifications about release events.",
-			GRPCService: "notifier.v1.NotifierService",
+			ConnectService: "notifier.v1.NotifierService",
 			Requirements: []string{"031"},
 		},
 		{
