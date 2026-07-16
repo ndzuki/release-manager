@@ -26,9 +26,10 @@ func setupService(t *testing.T) (*Service, store.Store, func()) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	verifier := trust.NewStubVerifier(st.Verifications(), logger)
-	svc := NewService(st, verifier, "staging", nil, logger)
+	svc := NewService(st, verifier, nil, "staging", nil, logger)
 
 	return svc, st, func() { st.Close() }
+
 }
 
 func seedDefinition(t *testing.T, st store.Store) {

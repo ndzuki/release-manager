@@ -557,6 +557,64 @@ type VerificationRecord struct {
 	CreatedAt      time.Time
 }
 
+// PreflightCacheKey identifies an artifact preflight result.
+type PreflightCacheKey struct {
+	OperationID        string
+	RoutingVersion     string
+	BundleDigest       string
+	TrustPolicyVersion string
+	SBOMPolicyVersion  string
+}
+
+// PreflightRecord stores the serialized result for an idempotent preflight key.
+type PreflightRecord struct {
+	ID         string
+	Key        PreflightCacheKey
+	ResultJSON []byte
+	CreatedAt  time.Time
+}
+
+// ── Vulnerability assessment domain types (REQ-042) ─────────────────
+
+// ScanResultRecord is the serializable domain type for a vulnerability scan result.
+// It mirrors vulnerability.ScannerResult but belongs to the store package
+// so SQLite remains the single persistence boundary.
+type ScanResultRecord struct {
+	ID             string
+	ArtifactDigest string
+	SBOMRef        string
+	Scanner        string
+	ResultVersion  string
+	SeverityJSON   []byte // serialized vulnerability.SeverityCounts
+	FindingsJSON   []byte // serialized vulnerability.Finding slice
+	ScannedAt      time.Time
+	CreatedAt      time.Time
+}
+
+// VulnerabilityExceptionRecord is the serializable domain type for a time-bounded exception.
+type VulnerabilityExceptionRecord struct {
+	ID             string
+	FindingID      string
+	ArtifactDigest string
+	Actor          string
+	Reason         string
+	ExpiresAt      time.Time
+	CreatedAt      time.Time
+}
+
+// ScanResultStore defines the persistence contract for vulnerability scan results.
+type ScanResultStore interface {
+	Create(ctx context.Context, rec *ScanResultRecord) error
+	GetLatest(ctx context.Context, artifactDigest, scanner string) (*ScanResultRecord, error)
+}
+
+// VulnerabilityExceptionStore defines the persistence contract for vulnerability exceptions.
+type VulnerabilityExceptionStore interface {
+	Create(ctx context.Context, exc *VulnerabilityExceptionRecord) error
+	ListByArtifact(ctx context.Context, artifactDigest string) ([]*VulnerabilityExceptionRecord, error)
+	Get(ctx context.Context, id string) (*VulnerabilityExceptionRecord, error)
+}
+
 // ── Inventory domain types (REQ-017) ───────────────────────────────
 
 // InventoryStatus is the lifecycle state of a release in the inventory cache.
@@ -779,6 +837,12 @@ type VerificationStore interface {
 	GetByDigestAndPolicy(ctx context.Context, artifactDigest, policyVersion string) (*VerificationRecord, error)
 }
 
+// PreflightStore defines the persistence contract for artifact preflight results.
+type PreflightStore interface {
+	Create(ctx context.Context, rec *PreflightRecord) error
+	GetByKey(ctx context.Context, key PreflightCacheKey) (*PreflightRecord, error)
+}
+
 // --- Cluster artifact routing domain types (REQ-014) ---
 
 // ArtifactType classifies the kind of artifact routed to a cluster.
@@ -870,8 +934,11 @@ type Store interface {
 	Notifications() NotificationStore
 	Bundles() BundleStore
 	Verifications() VerificationStore
+	PreflightResults() PreflightStore
 	CustomerEvents() CustomerEventStore
 	ClusterRoutes() ClusterRouteStore
 	Inventories() InventoryStore
+	ScanResults() ScanResultStore
+	VulnerabilityExceptions() VulnerabilityExceptionStore
 	Close() error
 }

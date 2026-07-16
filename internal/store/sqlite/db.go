@@ -14,28 +14,31 @@ import (
 
 // Store implements store.Store backed by SQLite.
 type Store struct {
-	db         *sql.DB
-	ops        *operationStore
-	defs       *definitionStore
-	vals       *valuesStore
-	customers  *customerStore
-	clusters   *clusterStore
-	tokens     *enrollmentTokenStore
-	operators  *operatorStore
-	sessions   *sessionStore
-	outbox     *outboxStore
-	users      *userStore
-	authSess   *authSessionStore
-	orgs       *organizationStore
-	orgMembers *organizationMemberStore
-	bindings   *bindingStore
-	audit      *auditEventStore
-	notif      *notificationStore
-	bundles    *bundleStore
-	verifs     *verificationStore
-	routes     *clusterRouteStore
-	invs       *inventoryStore
-	custEvents *customerEventStore
+	db          *sql.DB
+	ops         *operationStore
+	defs        *definitionStore
+	vals        *valuesStore
+	customers   *customerStore
+	clusters    *clusterStore
+	tokens      *enrollmentTokenStore
+	operators   *operatorStore
+	sessions    *sessionStore
+	outbox      *outboxStore
+	users       *userStore
+	authSess    *authSessionStore
+	orgs        *organizationStore
+	orgMembers  *organizationMemberStore
+	bindings    *bindingStore
+	audit       *auditEventStore
+	notif       *notificationStore
+	bundles     *bundleStore
+	verifs      *verificationStore
+	preflight   *preflightStore
+	scanResults *scanResultStore
+	vulnExcepts *vulnerabilityExceptionStore
+	routes      *clusterRouteStore
+	invs        *inventoryStore
+	custEvents  *customerEventStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -82,8 +85,11 @@ func Open(dsn string) (*Store, error) {
 	s.bundles = &bundleStore{db: db}
 	s.invs = &inventoryStore{db: db}
 	s.verifs = &verificationStore{db: db}
-	s.custEvents = &customerEventStore{db: db}
+	s.preflight = &preflightStore{db: db}
+	s.scanResults = &scanResultStore{db: db}
+	s.vulnExcepts = &vulnerabilityExceptionStore{db: db}
 	s.routes = &clusterRouteStore{db: db}
+	s.custEvents = &customerEventStore{db: db}
 	return s, nil
 }
 
@@ -141,11 +147,20 @@ func (s *Store) Notifications() store.NotificationStore { return s.notif }
 // Verifications returns the VerificationStore.
 func (s *Store) Verifications() store.VerificationStore { return s.verifs }
 
+// PreflightResults returns the PreflightStore.
+func (s *Store) PreflightResults() store.PreflightStore { return s.preflight }
+
 // CustomerEvents returns the CustomerEventStore.
 func (s *Store) CustomerEvents() store.CustomerEventStore { return s.custEvents }
 
 // ClusterRoutes returns the ClusterRouteStore.
 func (s *Store) ClusterRoutes() store.ClusterRouteStore { return s.routes }
+
+// ScanResults returns the ScanResultStore.
+func (s *Store) ScanResults() store.ScanResultStore { return s.scanResults }
+
+// VulnerabilityExceptions returns the VulnerabilityExceptionStore.
+func (s *Store) VulnerabilityExceptions() store.VulnerabilityExceptionStore { return s.vulnExcepts }
 
 // Inventories returns the InventoryStore.
 func (s *Store) Inventories() store.InventoryStore { return s.invs }
@@ -530,6 +545,46 @@ var migrationStatements = []string{
 		created_at     TEXT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_release_bundles_digest ON release_bundles(digest_alg, digest_value)`,
+
+	// Artifact preflight cache (REQ-045)
+	`CREATE TABLE IF NOT EXISTS preflight_results (
+		id                   TEXT PRIMARY KEY,
+		operation_id         TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+		routing_version      TEXT NOT NULL,
+		bundle_digest        TEXT NOT NULL,
+		trust_policy_version TEXT NOT NULL DEFAULT '',
+		sbom_policy_version  TEXT NOT NULL DEFAULT '',
+		result_json          BLOB NOT NULL,
+		created_at           TEXT NOT NULL,
+		UNIQUE(operation_id, routing_version, bundle_digest, trust_policy_version, sbom_policy_version)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_preflight_results_operation ON preflight_results(operation_id, created_at)`,
+
+	// Vulnerability scan results (REQ-042)
+	`CREATE TABLE IF NOT EXISTS scan_results (
+		id              TEXT PRIMARY KEY,
+		artifact_digest TEXT NOT NULL,
+		sbom_ref        TEXT NOT NULL DEFAULT '',
+		scanner         TEXT NOT NULL DEFAULT '',
+		result_version  TEXT NOT NULL DEFAULT '',
+		severity_json   TEXT NOT NULL DEFAULT '{}',
+		findings_json   TEXT NOT NULL DEFAULT '[]',
+		scanned_at      TEXT NOT NULL,
+		created_at      TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_scan_results_digest_scanner ON scan_results(artifact_digest, scanner, created_at DESC)`,
+
+	// Vulnerability exceptions (REQ-042)
+	`CREATE TABLE IF NOT EXISTS vulnerability_exceptions (
+		id              TEXT PRIMARY KEY,
+		finding_id      TEXT NOT NULL DEFAULT '',
+		artifact_digest TEXT NOT NULL,
+		actor           TEXT NOT NULL DEFAULT '',
+		reason          TEXT NOT NULL DEFAULT '',
+		expires_at      TEXT NOT NULL,
+		created_at      TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_vuln_exceptions_artifact ON vulnerability_exceptions(artifact_digest)`,
 }
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }

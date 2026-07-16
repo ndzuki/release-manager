@@ -17,14 +17,18 @@ import (
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
+	preflight "github.com/ndzuki/release-manager/internal/preflight"
 	"github.com/ndzuki/release-manager/internal/store"
 	"github.com/ndzuki/release-manager/internal/trust"
+	"github.com/ndzuki/release-manager/internal/vulnerability"
 )
 
 // Service implements the OrchestratorServiceHandler Connect interface.
 type Service struct {
 	store     store.Store
 	verifier  trust.Verifier
+	preflight preflight.Runner
+	vulnEval  *vulnerability.Evaluator
 	targetEnv string
 	audit     *audit.Emitter
 	logger    *slog.Logger
@@ -34,11 +38,19 @@ type Service struct {
 func NewService(
 	st store.Store,
 	verifier trust.Verifier,
+	runner preflight.Runner,
 	targetEnv string,
 	emitter *audit.Emitter,
 	logger *slog.Logger,
 ) *Service {
-	return &Service{store: st, verifier: verifier, targetEnv: targetEnv, audit: emitter, logger: logger}
+	return &Service{
+		store:     st,
+		verifier:  verifier,
+		preflight: runner,
+		targetEnv: targetEnv,
+		audit:     emitter,
+		logger:    logger,
+	}
 }
 
 // CreateOperation creates a new release operation from the given request.
@@ -175,19 +187,44 @@ func (s *Service) CreateOperation(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create operation: %w", err))
 	}
 
-	// 8. Trigger preflight transition (async in production; synchronous for now)
+	// 8. Trigger preflight transition and execute artifact preflight synchronously.
 	//    Standard ops go pending->preflight, EMERGENCY goes pending->queued
 	if opType.IsStandard() {
 		next, err := operation.Transition(op.Status, operation.EventStartPreflight)
 		if err != nil {
 			s.logger.Error("preflight transition failed", "op_id", op.ID, "err", err)
 		} else {
-			_, err = s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, "")
+			updated, err := s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, "")
 			if err != nil {
 				s.logger.Error("preflight status update failed", "op_id", op.ID, "err", err)
 			} else {
-				op.Status = next
-				op.StateVersion++
+				op.Status = updated.Status
+				op.StateVersion = updated.StateVersion
+
+				// Execute artifact preflight if a bundle is specified and runner is available.
+				if s.preflight != nil && msg.BundleId != "" {
+					if preflightErr := s.runPreflight(ctx, op, def, msg); preflightErr != nil {
+						s.logger.Warn("artifact preflight failed", "op_id", op.ID, "err", preflightErr)
+						if _, uerr := s.store.Operations().UpdateStatus(
+							ctx, op.ID, op.Status, op.StateVersion, preflightErr.Error(),
+						); uerr != nil {
+							s.logger.Error("preflight error update failed", "op_id", op.ID, "err", uerr)
+						}
+					} else {
+						passed, perr := operation.Transition(op.Status, operation.EventPreflightPassed)
+						if perr != nil {
+							s.logger.Error("preflight passed transition failed", "op_id", op.ID, "err", perr)
+						} else {
+							updated2, uerr := s.store.Operations().UpdateStatus(ctx, op.ID, passed, op.StateVersion, "")
+							if uerr != nil {
+								s.logger.Error("preflight passed update failed", "op_id", op.ID, "err", uerr)
+							} else {
+								op.Status = updated2.Status
+								op.StateVersion = updated2.StateVersion
+							}
+						}
+					}
+				}
 			}
 		}
 	}
@@ -313,6 +350,53 @@ func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
 	)
 	h := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("%x", h)
+}
+
+// runPreflight executes artifact preflight for the given operation and bundle.
+// Returns nil on success; a descriptive error if preflight failed.
+func (s *Service) runPreflight(
+	ctx context.Context,
+	op *store.Operation,
+	def *store.ReleaseDefinition,
+	msg *orchestratorv1.CreateOperationRequest,
+) error {
+	bundle, err := s.store.Bundles().Get(ctx, msg.BundleId)
+	if err != nil {
+		return fmt.Errorf("fetch bundle %s: %w", msg.BundleId, err)
+	}
+
+	routes, err := s.store.ClusterRoutes().ListByCluster(ctx, def.ClusterID)
+	if err != nil {
+		return fmt.Errorf("fetch cluster routes: %w", err)
+	}
+
+	sbomPolicyVersion := ""
+	if s.vulnEval != nil {
+		sbomPolicyVersion = "v1"
+	}
+
+	out, err := s.preflight.Run(ctx, preflight.Input{
+		OperationID:       op.ID,
+		ClusterID:         def.ClusterID,
+		Bundle:            bundle,
+		Routes:            routes,
+		TrustPolicy:       trust.DefaultPolicy(s.targetEnv),
+		SBOMPolicyVersion: sbomPolicyVersion,
+		SignatureRef:      msg.SignatureRef,
+	})
+	if err != nil {
+		return fmt.Errorf("preflight run: %w", err)
+	}
+	if !out.Passed {
+		return fmt.Errorf("preflight failed: %s", out.FailureSummary())
+	}
+
+	// Vulnerability assessment after artifact preflight passes.
+	if err := s.EvaluateArtifactVulnerability(ctx, bundle.DigestAlg+":"+bundle.DigestValue, bundle.SBOMRef); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // checkCustomerNotDisabled verifies the customer is not disabled.

@@ -14,8 +14,10 @@ import (
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/auth"
 	"github.com/ndzuki/release-manager/internal/orchestrator"
+	"github.com/ndzuki/release-manager/internal/preflight"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 	"github.com/ndzuki/release-manager/internal/trust"
+	"github.com/ndzuki/release-manager/internal/vulnerability"
 )
 
 type orchSvc struct {
@@ -60,7 +62,33 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		logger,
 	)
 
-	svc := orchestrator.NewService(st, verifier, s.targetEnv, s.auditEmitter, logger)
+	runner := preflight.New(
+		st.PreflightResults(),
+		verifier,
+		preflight.NewOCIResolver(http.DefaultClient),
+		logger,
+	)
+
+	svc := orchestrator.NewService(
+		st,
+		verifier,
+		runner,
+		s.targetEnv,
+		s.auditEmitter,
+		logger,
+	)
+
+	// Wire vulnerability evaluator for SBOM-based admission.
+	resultStore := &vulnerability.StoreResultStore{
+		ScanStore:      st.ScanResults(),
+		ExceptionStore: st.VulnerabilityExceptions(),
+	}
+	vulnEval := vulnerability.NewEvaluator(
+		resultStore,
+		vulnerability.NewNoopScanner("trivy"),
+		vulnerability.DefaultProductionPolicy(),
+	)
+	svc.SetVulnerabilityEvaluator(vulnEval)
 	path, h := orchestratorv1connect.NewOrchestratorServiceHandler(
 		svc,
 		connect.WithInterceptors(interceptor),
