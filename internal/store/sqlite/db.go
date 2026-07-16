@@ -30,6 +30,7 @@ type Store struct {
 	bindings    *bindingStore
 	audit       *auditEventStore
 	notif       *notificationStore
+	bundles     *bundleStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -73,6 +74,7 @@ func Open(dsn string) (*Store, error) {
 	s.bindings = &bindingStore{db: db}
 	s.audit = &auditEventStore{db: db}
 	s.notif = &notificationStore{db: db}
+	s.bundles = &bundleStore{db: db}
 	return s, nil
 }
 
@@ -120,13 +122,14 @@ func (s *Store) Bindings() store.BindingStore { return s.bindings }
 
 // AuditEvents returns the AuditEventStore.
 func (s *Store) AuditEvents() store.AuditEventStore { return s.audit }
+// Bundles returns the BundleStore.
+func (s *Store) Bundles() store.BundleStore { return s.bundles }
 
 // Notifications returns the NotificationStore.
 func (s *Store) Notifications() store.NotificationStore { return s.notif }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
-
 // DB exposes the underlying *sql.DB for testing.
 func (s *Store) DB() *sql.DB { return s.db }
 
@@ -363,7 +366,6 @@ var migrationStatements = []string{
 		status         TEXT NOT NULL DEFAULT 'pending',
 		retry_count    INTEGER NOT NULL DEFAULT 0,
 		max_retries    INTEGER NOT NULL DEFAULT 3,
-		next_retry_at  TEXT,
 		last_error     TEXT NOT NULL DEFAULT '',
 		dead_letter_at TEXT,
 		metadata       TEXT NOT NULL DEFAULT '{}',
@@ -372,7 +374,25 @@ var migrationStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_notification_jobs_status ON notification_jobs(status)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_jobs_dedup ON notification_jobs(operation_id, channel, recipient)`,
-}
 
-// nowUTC returns the current time in UTC as an RFC3339 string for SQLite storage.
+	// Release bundles (REQ-011)
+	`CREATE TABLE IF NOT EXISTS release_bundles (
+		id             TEXT PRIMARY KEY,
+		name           TEXT NOT NULL DEFAULT '',
+		digest_alg     TEXT NOT NULL DEFAULT 'sha256',
+		digest_value   TEXT NOT NULL DEFAULT '',
+		status         TEXT NOT NULL DEFAULT 'received',
+		chart_ref      TEXT NOT NULL DEFAULT '',
+		chart_version  TEXT NOT NULL DEFAULT '',
+		chart_digest   TEXT NOT NULL DEFAULT '',
+		images         TEXT NOT NULL DEFAULT '[]',
+		git_commit     TEXT NOT NULL DEFAULT '',
+		pipeline_id    TEXT NOT NULL DEFAULT '',
+		signature_ref  TEXT NOT NULL DEFAULT '',
+		sbom_ref       TEXT NOT NULL DEFAULT '',
+		provenance_ref TEXT NOT NULL DEFAULT '',
+		created_at     TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_release_bundles_digest ON release_bundles(digest_alg, digest_value)`,
+}
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }

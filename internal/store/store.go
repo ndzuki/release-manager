@@ -460,6 +460,59 @@ type EmergencyPayload struct {
 	Reason      string
 	Convergence EmergencyConvergence
 }
+// --- Bundle domain types (REQ-011) ---
+
+// BundleStatus is the lifecycle state of a ReleaseBundle.
+type BundleStatus string
+
+const (
+	BundleReceived  BundleStatus = "received"
+	BundleValidated BundleStatus = "validated"
+	BundleRejected  BundleStatus = "rejected"
+)
+
+// Valid returns true if the status is a recognized value.
+func (s BundleStatus) Valid() bool {
+	switch s {
+	case BundleReceived, BundleValidated, BundleRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+// BundleImage maps a container image to its Helm values path.
+type BundleImage struct {
+	Ref        string
+	Digest     string
+	ValuesPath string
+}
+
+// ReleaseBundle represents an immutable release artifact bundle.
+type ReleaseBundle struct {
+	ID            string
+	Name          string
+	DigestAlg     string
+	DigestValue   string
+	Status        BundleStatus
+	ChartRef      string
+	ChartVersion  string
+	ChartDigest   string
+	Images        []BundleImage
+	GitCommit     string
+	PipelineID    string
+	SignatureRef  string
+	SBOMRef       string
+	ProvenanceRef string
+	CreatedAt     time.Time
+}
+
+// BundleStore defines the persistence contract for release bundles.
+type BundleStore interface {
+	Create(ctx context.Context, b *ReleaseBundle) error
+	Get(ctx context.Context, id string) (*ReleaseBundle, error)
+	GetByDigest(ctx context.Context, alg, value string) (*ReleaseBundle, error)
+}
 
 // OperationStore defines the persistence contract for operations.
 type OperationStore interface {
@@ -619,5 +672,6 @@ type Store interface {
 	Bindings() BindingStore
 	AuditEvents() AuditEventStore
 	Notifications() NotificationStore
+	Bundles() BundleStore
 	Close() error
 }
