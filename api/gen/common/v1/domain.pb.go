@@ -75,6 +75,56 @@ func (BundleStatus) EnumDescriptor() ([]byte, []int) {
 	return file_common_v1_domain_proto_rawDescGZIP(), []int{0}
 }
 
+// ClusterStatus represents the lifecycle state of a cluster.
+type ClusterStatus int32
+
+const (
+	ClusterStatus_CLUSTER_STATUS_UNSPECIFIED ClusterStatus = 0
+	ClusterStatus_CLUSTER_STATUS_ACTIVE      ClusterStatus = 1
+	ClusterStatus_CLUSTER_STATUS_DISABLED    ClusterStatus = 2
+)
+
+// Enum value maps for ClusterStatus.
+var (
+	ClusterStatus_name = map[int32]string{
+		0: "CLUSTER_STATUS_UNSPECIFIED",
+		1: "CLUSTER_STATUS_ACTIVE",
+		2: "CLUSTER_STATUS_DISABLED",
+	}
+	ClusterStatus_value = map[string]int32{
+		"CLUSTER_STATUS_UNSPECIFIED": 0,
+		"CLUSTER_STATUS_ACTIVE":      1,
+		"CLUSTER_STATUS_DISABLED":    2,
+	}
+)
+
+func (x ClusterStatus) Enum() *ClusterStatus {
+	p := new(ClusterStatus)
+	*p = x
+	return p
+}
+
+func (x ClusterStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ClusterStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_v1_domain_proto_enumTypes[1].Descriptor()
+}
+
+func (ClusterStatus) Type() protoreflect.EnumType {
+	return &file_common_v1_domain_proto_enumTypes[1]
+}
+
+func (x ClusterStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ClusterStatus.Descriptor instead.
+func (ClusterStatus) EnumDescriptor() ([]byte, []int) {
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{1}
+}
+
 // ReleaseDigest is an immutable content-addressable identifier for a ReleaseBundle.
 type ReleaseDigest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -637,6 +687,7 @@ type Cluster struct {
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	CustomerId    string                 `protobuf:"bytes,3,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
 	KubeconfigRef string                 `protobuf:"bytes,4,opt,name=kubeconfig_ref,json=kubeconfigRef,proto3" json:"kubeconfig_ref,omitempty"`
+	Status        ClusterStatus          `protobuf:"varint,6,opt,name=status,proto3,enum=common.v1.ClusterStatus" json:"status,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -698,6 +749,13 @@ func (x *Cluster) GetKubeconfigRef() string {
 		return x.KubeconfigRef
 	}
 	return ""
+}
+
+func (x *Cluster) GetStatus() ClusterStatus {
+	if x != nil {
+		return x.Status
+	}
+	return ClusterStatus_CLUSTER_STATUS_UNSPECIFIED
 }
 
 func (x *Cluster) GetCreatedAt() *timestamppb.Timestamp {
@@ -819,13 +877,14 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
 	"\x04slug\x18\x03 \x01(\tR\x04slug\x129\n" +
 	"\n" +
-	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xb0\x01\n" +
+	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xe2\x01\n" +
 	"\aCluster\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1f\n" +
 	"\vcustomer_id\x18\x03 \x01(\tR\n" +
 	"customerId\x12%\n" +
-	"\x0ekubeconfig_ref\x18\x04 \x01(\tR\rkubeconfigRef\x129\n" +
+	"\x0ekubeconfig_ref\x18\x04 \x01(\tR\rkubeconfigRef\x120\n" +
+	"\x06status\x18\x06 \x01(\x0e2\x18.common.v1.ClusterStatusR\x06status\x129\n" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"K\n" +
 	"\fActorContext\x12\x17\n" +
@@ -835,7 +894,11 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"\x19BUNDLE_STATUS_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16BUNDLE_STATUS_RECEIVED\x10\x01\x12\x1b\n" +
 	"\x17BUNDLE_STATUS_VALIDATED\x10\x02\x12\x1a\n" +
-	"\x16BUNDLE_STATUS_REJECTED\x10\x03B>Z<github.com/ndzuki/release-manager/api/gen/common/v1;commonv1b\x06proto3"
+	"\x16BUNDLE_STATUS_REJECTED\x10\x03*g\n" +
+	"\rClusterStatus\x12\x1e\n" +
+	"\x1aCLUSTER_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15CLUSTER_STATUS_ACTIVE\x10\x01\x12\x1b\n" +
+	"\x17CLUSTER_STATUS_DISABLED\x10\x02B>Z<github.com/ndzuki/release-manager/api/gen/common/v1;commonv1b\x06proto3"
 
 var (
 	file_common_v1_domain_proto_rawDescOnce sync.Once
@@ -849,36 +912,38 @@ func file_common_v1_domain_proto_rawDescGZIP() []byte {
 	return file_common_v1_domain_proto_rawDescData
 }
 
-var file_common_v1_domain_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_common_v1_domain_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_common_v1_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_common_v1_domain_proto_goTypes = []any{
 	(BundleStatus)(0),             // 0: common.v1.BundleStatus
-	(*ReleaseDigest)(nil),         // 1: common.v1.ReleaseDigest
-	(*BundleImage)(nil),           // 2: common.v1.BundleImage
-	(*ReleaseBundle)(nil),         // 3: common.v1.ReleaseBundle
-	(*ReleaseDefinition)(nil),     // 4: common.v1.ReleaseDefinition
-	(*ValuesRevision)(nil),        // 5: common.v1.ValuesRevision
-	(*SecretRef)(nil),             // 6: common.v1.SecretRef
-	(*Customer)(nil),              // 7: common.v1.Customer
-	(*Cluster)(nil),               // 8: common.v1.Cluster
-	(*ActorContext)(nil),          // 9: common.v1.ActorContext
-	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
+	(ClusterStatus)(0),            // 1: common.v1.ClusterStatus
+	(*ReleaseDigest)(nil),         // 2: common.v1.ReleaseDigest
+	(*BundleImage)(nil),           // 3: common.v1.BundleImage
+	(*ReleaseBundle)(nil),         // 4: common.v1.ReleaseBundle
+	(*ReleaseDefinition)(nil),     // 5: common.v1.ReleaseDefinition
+	(*ValuesRevision)(nil),        // 6: common.v1.ValuesRevision
+	(*SecretRef)(nil),             // 7: common.v1.SecretRef
+	(*Customer)(nil),              // 8: common.v1.Customer
+	(*Cluster)(nil),               // 9: common.v1.Cluster
+	(*ActorContext)(nil),          // 10: common.v1.ActorContext
+	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
 }
 var file_common_v1_domain_proto_depIdxs = []int32{
-	1,  // 0: common.v1.ReleaseBundle.digest:type_name -> common.v1.ReleaseDigest
+	2,  // 0: common.v1.ReleaseBundle.digest:type_name -> common.v1.ReleaseDigest
 	0,  // 1: common.v1.ReleaseBundle.status:type_name -> common.v1.BundleStatus
-	2,  // 2: common.v1.ReleaseBundle.images:type_name -> common.v1.BundleImage
-	10, // 3: common.v1.ReleaseBundle.created_at:type_name -> google.protobuf.Timestamp
-	10, // 4: common.v1.ReleaseDefinition.created_at:type_name -> google.protobuf.Timestamp
-	10, // 5: common.v1.ReleaseDefinition.updated_at:type_name -> google.protobuf.Timestamp
-	10, // 6: common.v1.ValuesRevision.created_at:type_name -> google.protobuf.Timestamp
-	10, // 7: common.v1.Customer.created_at:type_name -> google.protobuf.Timestamp
-	10, // 8: common.v1.Cluster.created_at:type_name -> google.protobuf.Timestamp
-	9,  // [9:9] is the sub-list for method output_type
-	9,  // [9:9] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	3,  // 2: common.v1.ReleaseBundle.images:type_name -> common.v1.BundleImage
+	11, // 3: common.v1.ReleaseBundle.created_at:type_name -> google.protobuf.Timestamp
+	11, // 4: common.v1.ReleaseDefinition.created_at:type_name -> google.protobuf.Timestamp
+	11, // 5: common.v1.ReleaseDefinition.updated_at:type_name -> google.protobuf.Timestamp
+	11, // 6: common.v1.ValuesRevision.created_at:type_name -> google.protobuf.Timestamp
+	11, // 7: common.v1.Customer.created_at:type_name -> google.protobuf.Timestamp
+	1,  // 8: common.v1.Cluster.status:type_name -> common.v1.ClusterStatus
+	11, // 9: common.v1.Cluster.created_at:type_name -> google.protobuf.Timestamp
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_common_v1_domain_proto_init() }
@@ -891,7 +956,7 @@ func file_common_v1_domain_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_common_v1_domain_proto_rawDesc), len(file_common_v1_domain_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      2,
 			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,

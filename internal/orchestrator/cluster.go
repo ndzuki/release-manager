@@ -7,6 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
@@ -166,5 +167,18 @@ func toProtoCluster(c *store.Cluster) *commonv1.Cluster {
 		Name:          c.Name,
 		CustomerId:    c.CustomerID,
 		KubeconfigRef: c.KubeconfigRef,
+		Status:        clusterStatusToProto(c.Status),
+		CreatedAt:     timestamppb.New(c.CreatedAt),
+	}
+}
+
+func clusterStatusToProto(s store.ClusterStatus) commonv1.ClusterStatus {
+	switch s {
+	case store.ClusterActive:
+		return commonv1.ClusterStatus_CLUSTER_STATUS_ACTIVE
+	case store.ClusterDisabled:
+		return commonv1.ClusterStatus_CLUSTER_STATUS_DISABLED
+	default:
+		return commonv1.ClusterStatus_CLUSTER_STATUS_UNSPECIFIED
 	}
 }

@@ -8,32 +8,33 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
 	"github.com/ndzuki/release-manager/internal/store"
+	_ "modernc.org/sqlite"
 )
 
 // Store implements store.Store backed by SQLite.
 type Store struct {
-	db          *sql.DB
-	ops         *operationStore
-	defs        *definitionStore
-	vals        *valuesStore
-	customers   *customerStore
-	clusters    *clusterStore
-	tokens      *enrollmentTokenStore
-	operators   *operatorStore
-	sessions    *sessionStore
-	outbox      *outboxStore
-	users       *userStore
-	authSess    *authSessionStore
-	orgs        *organizationStore
-	orgMembers  *organizationMemberStore
-	bindings    *bindingStore
-	audit       *auditEventStore
-	notif       *notificationStore
-	bundles     *bundleStore
-	verifs      *verificationStore
-	invs        *inventoryStore
+	db         *sql.DB
+	ops        *operationStore
+	defs       *definitionStore
+	vals       *valuesStore
+	customers  *customerStore
+	clusters   *clusterStore
+	tokens     *enrollmentTokenStore
+	operators  *operatorStore
+	sessions   *sessionStore
+	outbox     *outboxStore
+	users      *userStore
+	authSess   *authSessionStore
+	orgs       *organizationStore
+	orgMembers *organizationMemberStore
+	bindings   *bindingStore
+	audit      *auditEventStore
+	notif      *notificationStore
+	bundles    *bundleStore
+	verifs     *verificationStore
+	routes     *clusterRouteStore
+	invs       *inventoryStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -80,6 +81,7 @@ func Open(dsn string) (*Store, error) {
 	s.bundles = &bundleStore{db: db}
 	s.invs = &inventoryStore{db: db}
 	s.verifs = &verificationStore{db: db}
+	s.routes = &clusterRouteStore{db: db}
 	return s, nil
 }
 
@@ -127,6 +129,7 @@ func (s *Store) Bindings() store.BindingStore { return s.bindings }
 
 // AuditEvents returns the AuditEventStore.
 func (s *Store) AuditEvents() store.AuditEventStore { return s.audit }
+
 // Bundles returns the BundleStore.
 func (s *Store) Bundles() store.BundleStore { return s.bundles }
 
@@ -136,11 +139,15 @@ func (s *Store) Notifications() store.NotificationStore { return s.notif }
 // Verifications returns the VerificationStore.
 func (s *Store) Verifications() store.VerificationStore { return s.verifs }
 
+// ClusterRoutes returns the ClusterRouteStore.
+func (s *Store) ClusterRoutes() store.ClusterRouteStore { return s.routes }
+
 // Inventories returns the InventoryStore.
 func (s *Store) Inventories() store.InventoryStore { return s.invs }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
+
 // DB exposes the underlying *sql.DB for testing.
 func (s *Store) DB() *sql.DB { return s.db }
 
@@ -412,10 +419,20 @@ var migrationStatements = []string{
 		created_at      TEXT NOT NULL
 	)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_records_digest_policy ON verification_records(artifact_digest, policy_version, created_at)`,
-<<<<<<< HEAD
-||||||| 4ad92b3
-}
-=======
+
+	// Cluster artifact routing (REQ-014)
+	`CREATE TABLE IF NOT EXISTS cluster_routes (
+		id            TEXT PRIMARY KEY,
+		cluster_id    TEXT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+		artifact_type TEXT NOT NULL,
+		mode          TEXT NOT NULL,
+		source_prefix TEXT NOT NULL DEFAULT '',
+		target_prefix TEXT NOT NULL DEFAULT '',
+		created_at    TEXT NOT NULL,
+		updated_at    TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_cluster_routes_cluster ON cluster_routes(cluster_id, artifact_type)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_cluster_routes_unique ON cluster_routes(cluster_id, artifact_type, source_prefix)`,
 
 	// Release inventory sync (REQ-017)
 	`CREATE TABLE IF NOT EXISTS release_inventory (
@@ -448,8 +465,6 @@ var migrationStatements = []string{
 		snapshot_version INTEGER NOT NULL DEFAULT 0,
 		created_at       TEXT NOT NULL
 	)`,
-}
->>>>>>> task/017-release-inventory-sync
 
 	// Release bundles (REQ-011)
 	`CREATE TABLE IF NOT EXISTS release_bundles (
@@ -471,4 +486,5 @@ var migrationStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_release_bundles_digest ON release_bundles(digest_alg, digest_value)`,
 }
+
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }

@@ -72,6 +72,15 @@ const (
 	// OrchestratorServiceEmergencyChangeProcedure is the fully-qualified name of the
 	// OrchestratorService's EmergencyChange RPC.
 	OrchestratorServiceEmergencyChangeProcedure = "/orchestrator.v1.OrchestratorService/EmergencyChange"
+	// OrchestratorServiceConfigureClusterRouteProcedure is the fully-qualified name of the
+	// OrchestratorService's ConfigureClusterRoute RPC.
+	OrchestratorServiceConfigureClusterRouteProcedure = "/orchestrator.v1.OrchestratorService/ConfigureClusterRoute"
+	// OrchestratorServiceGetClusterRoutesProcedure is the fully-qualified name of the
+	// OrchestratorService's GetClusterRoutes RPC.
+	OrchestratorServiceGetClusterRoutesProcedure = "/orchestrator.v1.OrchestratorService/GetClusterRoutes"
+	// OrchestratorServiceDeleteClusterRouteProcedure is the fully-qualified name of the
+	// OrchestratorService's DeleteClusterRoute RPC.
+	OrchestratorServiceDeleteClusterRouteProcedure = "/orchestrator.v1.OrchestratorService/DeleteClusterRoute"
 	// OrchestratorServiceSyncInventoryProcedure is the fully-qualified name of the
 	// OrchestratorService's SyncInventory RPC.
 	OrchestratorServiceSyncInventoryProcedure = "/orchestrator.v1.OrchestratorService/SyncInventory"
@@ -97,6 +106,10 @@ type OrchestratorServiceClient interface {
 	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
 	// Emergency change (REQ-032)
 	EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error)
+	// Cluster artifact routing (REQ-014)
+	ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error)
+	GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error)
+	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
 	// Inventory sync (REQ-017)
 	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
@@ -190,6 +203,24 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("EmergencyChange")),
 			connect.WithClientOptions(opts...),
 		),
+		configureClusterRoute: connect.NewClient[v1.ConfigureClusterRouteRequest, v1.ConfigureClusterRouteResponse](
+			httpClient,
+			baseURL+OrchestratorServiceConfigureClusterRouteProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ConfigureClusterRoute")),
+			connect.WithClientOptions(opts...),
+		),
+		getClusterRoutes: connect.NewClient[v1.GetClusterRoutesRequest, v1.GetClusterRoutesResponse](
+			httpClient,
+			baseURL+OrchestratorServiceGetClusterRoutesProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("GetClusterRoutes")),
+			connect.WithClientOptions(opts...),
+		),
+		deleteClusterRoute: connect.NewClient[v1.DeleteClusterRouteRequest, v1.DeleteClusterRouteResponse](
+			httpClient,
+			baseURL+OrchestratorServiceDeleteClusterRouteProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("DeleteClusterRoute")),
+			connect.WithClientOptions(opts...),
+		),
 		syncInventory: connect.NewClient[v1.SyncInventoryRequest, v1.SyncInventoryResponse](
 			httpClient,
 			baseURL+OrchestratorServiceSyncInventoryProcedure,
@@ -214,6 +245,9 @@ type orchestratorServiceClient struct {
 	disableCluster        *connect.Client[v1.DisableClusterRequest, v1.DisableClusterResponse]
 	createEnrollmentToken *connect.Client[v1.CreateEnrollmentTokenRequest, v1.CreateEnrollmentTokenResponse]
 	emergencyChange       *connect.Client[v1.EmergencyChangeRequest, v1.EmergencyChangeResponse]
+	configureClusterRoute *connect.Client[v1.ConfigureClusterRouteRequest, v1.ConfigureClusterRouteResponse]
+	getClusterRoutes      *connect.Client[v1.GetClusterRoutesRequest, v1.GetClusterRoutesResponse]
+	deleteClusterRoute    *connect.Client[v1.DeleteClusterRouteRequest, v1.DeleteClusterRouteResponse]
 	syncInventory         *connect.Client[v1.SyncInventoryRequest, v1.SyncInventoryResponse]
 }
 
@@ -282,6 +316,21 @@ func (c *orchestratorServiceClient) EmergencyChange(ctx context.Context, req *co
 	return c.emergencyChange.CallUnary(ctx, req)
 }
 
+// ConfigureClusterRoute calls orchestrator.v1.OrchestratorService.ConfigureClusterRoute.
+func (c *orchestratorServiceClient) ConfigureClusterRoute(ctx context.Context, req *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error) {
+	return c.configureClusterRoute.CallUnary(ctx, req)
+}
+
+// GetClusterRoutes calls orchestrator.v1.OrchestratorService.GetClusterRoutes.
+func (c *orchestratorServiceClient) GetClusterRoutes(ctx context.Context, req *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error) {
+	return c.getClusterRoutes.CallUnary(ctx, req)
+}
+
+// DeleteClusterRoute calls orchestrator.v1.OrchestratorService.DeleteClusterRoute.
+func (c *orchestratorServiceClient) DeleteClusterRoute(ctx context.Context, req *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error) {
+	return c.deleteClusterRoute.CallUnary(ctx, req)
+}
+
 // SyncInventory calls orchestrator.v1.OrchestratorService.SyncInventory.
 func (c *orchestratorServiceClient) SyncInventory(ctx context.Context, req *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error) {
 	return c.syncInventory.CallUnary(ctx, req)
@@ -308,6 +357,10 @@ type OrchestratorServiceHandler interface {
 	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
 	// Emergency change (REQ-032)
 	EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error)
+	// Cluster artifact routing (REQ-014)
+	ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error)
+	GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error)
+	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
 	// Inventory sync (REQ-017)
 	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
@@ -397,6 +450,24 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("EmergencyChange")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orchestratorServiceConfigureClusterRouteHandler := connect.NewUnaryHandler(
+		OrchestratorServiceConfigureClusterRouteProcedure,
+		svc.ConfigureClusterRoute,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ConfigureClusterRoute")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceGetClusterRoutesHandler := connect.NewUnaryHandler(
+		OrchestratorServiceGetClusterRoutesProcedure,
+		svc.GetClusterRoutes,
+		connect.WithSchema(orchestratorServiceMethods.ByName("GetClusterRoutes")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceDeleteClusterRouteHandler := connect.NewUnaryHandler(
+		OrchestratorServiceDeleteClusterRouteProcedure,
+		svc.DeleteClusterRoute,
+		connect.WithSchema(orchestratorServiceMethods.ByName("DeleteClusterRoute")),
+		connect.WithHandlerOptions(opts...),
+	)
 	orchestratorServiceSyncInventoryHandler := connect.NewUnaryHandler(
 		OrchestratorServiceSyncInventoryProcedure,
 		svc.SyncInventory,
@@ -431,6 +502,12 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceCreateEnrollmentTokenHandler.ServeHTTP(w, r)
 		case OrchestratorServiceEmergencyChangeProcedure:
 			orchestratorServiceEmergencyChangeHandler.ServeHTTP(w, r)
+		case OrchestratorServiceConfigureClusterRouteProcedure:
+			orchestratorServiceConfigureClusterRouteHandler.ServeHTTP(w, r)
+		case OrchestratorServiceGetClusterRoutesProcedure:
+			orchestratorServiceGetClusterRoutesHandler.ServeHTTP(w, r)
+		case OrchestratorServiceDeleteClusterRouteProcedure:
+			orchestratorServiceDeleteClusterRouteHandler.ServeHTTP(w, r)
 		case OrchestratorServiceSyncInventoryProcedure:
 			orchestratorServiceSyncInventoryHandler.ServeHTTP(w, r)
 		default:
@@ -492,6 +569,18 @@ func (UnimplementedOrchestratorServiceHandler) CreateEnrollmentToken(context.Con
 
 func (UnimplementedOrchestratorServiceHandler) EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.EmergencyChange is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ConfigureClusterRoute is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.GetClusterRoutes is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.DeleteClusterRoute is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error) {
