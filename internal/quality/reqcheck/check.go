@@ -51,9 +51,12 @@ type Result struct {
 }
 
 var (
-	sectionRe    = regexp.MustCompile(`^##\s+(.+)$`)
-	naRe         = regexp.MustCompile(`^不适用\s*(?:[：:—-]\s*)?(.*)$`)
-	acceptanceRe = regexp.MustCompile(`^-\s*\[[ xX]\]\s+AC-\d{3}-\d{2}(?:\s|$)`)
+	sectionRe          = regexp.MustCompile(`^##\s+(.+)$`)
+	naRe               = regexp.MustCompile(`^不适用(?:$|[ \t：:，,。；;—-]+(.*)$)`)
+	acceptanceRe       = regexp.MustCompile(`^-\s*\[[ xX]\]\s+AC-\d{3}-\d{2}(?:\s|$)`)
+	acceptanceMarkerRe = regexp.MustCompile(`(?i)AC-[A-Z0-9-]+`)
+	checkboxRe         = regexp.MustCompile(`^(?:[-*+]\s*)?\[[ xX]\]`)
+	givenWhenThenRe    = regexp.MustCompile(`(?is)\bgiven\b.*\bwhen\b.*\bthen\b`)
 )
 
 // Check validates a single requirement document.
@@ -73,7 +76,7 @@ func Check(path string) (*Result, error) {
 	scanner := bufio.NewScanner(f)
 	currentSec := ""
 	acceptanceACs := 0
-
+	acceptanceItems := 0
 	for lineNum := 1; scanner.Scan(); lineNum++ {
 		trimmed := strings.TrimSpace(scanner.Text())
 
@@ -89,8 +92,13 @@ func Check(path string) (*Result, error) {
 
 		validateNA(result, currentSec, trimmed, lineNum)
 
-		if currentSec == "验收标准" && validateAcceptance(result, trimmed, lineNum) {
-			acceptanceACs++
+		if currentSec == "验收标准" {
+			if validateAcceptance(result, trimmed, lineNum) {
+				acceptanceACs++
+			}
+			if isAcceptanceCandidate(trimmed) {
+				acceptanceItems++
+			}
 		}
 	}
 
@@ -99,7 +107,7 @@ func Check(path string) (*Result, error) {
 	}
 
 	validateRequiredSections(result)
-	validateAcceptanceSection(result, acceptanceACs)
+	validateAcceptanceSection(result, acceptanceACs, acceptanceItems)
 
 	return result, nil
 }
@@ -111,7 +119,11 @@ func validateNA(result *Result, section, line string, lineNum int) {
 	}
 
 	result.NA[section] = true
-	if strings.TrimSpace(matches[1]) != "" {
+	reason := ""
+	if len(matches) > 1 {
+		reason = strings.Trim(matches[1], " \t：:—-。.;；")
+	}
+	if reason != "" {
 		return
 	}
 
@@ -125,6 +137,14 @@ func validateNA(result *Result, section, line string, lineNum int) {
 
 func validateAcceptance(result *Result, line string, lineNum int) bool {
 	if !acceptanceRe.MatchString(line) {
+		if isAcceptanceCandidate(line) {
+			result.Violations = append(result.Violations, Violation{
+				File:    result.File,
+				Line:    lineNum,
+				CheckID: "CHK-03",
+				Message: fmt.Sprintf("acceptance criterion must be an AC-XXX-NN checklist item: %q", line),
+			})
+		}
 		return false
 	}
 
@@ -148,6 +168,10 @@ func validateAcceptance(result *Result, line string, lineNum int) bool {
 	return true
 }
 
+func isAcceptanceCandidate(line string) bool {
+	return acceptanceMarkerRe.MatchString(line) || checkboxRe.MatchString(line)
+}
+
 func validateRequiredSections(result *Result) {
 	for _, section := range RequiredSections {
 		if result.Sections[section] {
@@ -165,8 +189,8 @@ func validateRequiredSections(result *Result) {
 	}
 }
 
-func validateAcceptanceSection(result *Result, acceptanceACs int) {
-	if !result.Sections["验收标准"] || acceptanceACs > 0 {
+func validateAcceptanceSection(result *Result, acceptanceACs, acceptanceItems int) {
+	if !result.Sections["验收标准"] || result.NA["验收标准"] || acceptanceACs > 0 || acceptanceItems > 0 {
 		return
 	}
 
@@ -178,22 +202,16 @@ func validateAcceptanceSection(result *Result, acceptanceACs int) {
 }
 
 func containsGivenWhenThen(s string) bool {
-	lower := strings.ToLower(s)
-	return strings.Contains(lower, "given") &&
-		strings.Contains(lower, "when") &&
-		strings.Contains(lower, "then")
+	return givenWhenThenRe.MatchString(s)
 }
 
 func dependsOnManualInterpretation(s string) bool {
 	manualTerms := []string{
-		"人工检查",
-		"人工确认",
-		"人工解释",
-		"手动检查",
-		"手动确认",
-		"manual inspection",
-		"manual verification",
-		"manual review",
+		"人工检查", "人工确认", "人工解释", "人工审核", "人工审阅", "人工验证", "人工判断",
+		"手动检查", "手动确认", "手动解释", "手动审核", "手动审阅", "手动验证", "手动判断",
+		"检查内部实现", "确认内部实现", "解释内部实现", "审核内部实现", "审阅内部实现", "验证内部实现", "判断内部实现",
+		"manual inspection", "manual check", "manual confirmation", "manual explanation", "manual verification", "manual review", "manual judgment",
+		"inspect internal implementation", "check internal implementation", "verify internal implementation", "review internal implementation", "explain internal implementation",
 	}
 	lower := strings.ToLower(s)
 	for _, term := range manualTerms {
@@ -207,6 +225,17 @@ func dependsOnManualInterpretation(s string) bool {
 }
 
 func isManualInterpretationExempt(s, term string) bool {
+	termIndex := strings.Index(s, term)
+	if termIndex < 0 {
+		return false
+	}
+
+	if strings.Contains(s, "不依赖"+term) || strings.Contains(s, "不依赖 "+term) {
+		return true
+	}
+
+	contextStart := max(0, termIndex-24)
+	context := strings.TrimSpace(s[contextStart:termIndex])
 	for _, prefix := range []string{
 		"不依赖",
 		"无需",
@@ -214,7 +243,7 @@ func isManualInterpretationExempt(s, term string) bool {
 		"without",
 		"does not require",
 	} {
-		if strings.Contains(s, prefix+term) || strings.Contains(s, prefix+" "+term) {
+		if strings.HasSuffix(context, prefix) || strings.HasSuffix(context, prefix+"人工") || strings.HasSuffix(context, prefix+"手动") {
 			return true
 		}
 	}
