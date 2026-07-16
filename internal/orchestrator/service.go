@@ -41,143 +41,41 @@ func (s *Service) CreateOperation(
 ) (*connect.Response[orchestratorv1.CreateOperationResponse], error) {
 	msg := req.Msg
 
-	// 1. Idempotency check (REQ-023 AC-023-02)
-	if msg.IdempotencyKey != "" {
-		existing, err := s.store.Operations().GetByIdempotencyKey(ctx, msg.IdempotencyKey)
-		if err == nil {
-			s.logger.Info("idempotent operation found", "key", msg.IdempotencyKey, "op_id", existing.ID)
-			return connect.NewResponse(s.toResponse(existing)), nil
-		}
-		if err != store.ErrNotFound {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("idempotency lookup: %w", err))
-		}
-		// not found -> proceed
+	existing, err := s.findIdempotentOperation(ctx, msg)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		s.logger.Info("idempotent operation found", "key", msg.IdempotencyKey, "op_id", existing.ID)
+		return connect.NewResponse(s.toResponse(existing)), nil
 	}
 
-	// 2. Validate operation type
 	opType := store.OperationType(msg.OperationType)
 	if !opType.Valid() {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			fmt.Errorf("invalid operation_type: %s", msg.OperationType))
 	}
 
-	// 3. Lookup release definition
-	def, err := s.store.Definitions().Get(ctx, msg.ReleaseDefinitionId)
-	if err == store.ErrNotFound {
-		return nil, connect.NewError(connect.CodeNotFound,
-			fmt.Errorf("release_definition not found: %s", msg.ReleaseDefinitionId))
-	}
+	def, err := s.validateOperationDefinition(ctx, msg.ReleaseDefinitionId, opType)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
+		return nil, err
 	}
 
-	// Validate definition status
-	if def.Status != store.DefStatusActive {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("release_definition %s is %s", def.ID, def.Status))
+	verifyResult, err := s.verifyOperation(ctx, msg, def)
+	if err != nil {
+		return nil, err
 	}
 
-	// AC-013-02: Reject operations for disabled customers.
-	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
-		return nil, connect.NewError(connect.CodePermissionDenied, err)
-	}
-
-	// AC-032-06: Reject standard operations when a running EMERGENCY exists for
-	// the same definition.
-	if opType.IsStandard() {
-		activeEmergency, err := s.store.Operations().HasActiveEmergencyForDefinition(ctx, msg.ReleaseDefinitionId)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("emergency active check: %w", err))
-		}
-		if activeEmergency {
+	op := newOperation(msg, opType)
+	if err := s.store.Operations().CreateIfAvailable(ctx, op); err != nil {
+		if err == store.ErrReleaseBusy {
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("definition %s has a running EMERGENCY operation; standard operations are denied", msg.ReleaseDefinitionId))
+				fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
 		}
-	}
-
-	// 4. Release busy check (REQ-023 AC-023-03, AC-023-06, AC-023-07)
-	active, err := s.store.Operations().HasActiveForDefinition(ctx, msg.ReleaseDefinitionId)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("active check: %w", err))
-	}
-	if active {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
-	}
-
-	// 4.5. Trust verification (REQ-012)
-	var verifyResult commonv1.VerificationResult
-	if msg.SignatureRef != nil && s.verifier != nil {
-		policy := trust.DefaultPolicy(s.targetEnv)
-		digest := fmt.Sprintf("%x", sha256.Sum256([]byte(msg.BundleId+"|"+def.ID)))
-
-		out, err := s.verifier.Verify(ctx, trust.Input{
-			Digest:       digest,
-			SignatureRef: msg.SignatureRef,
-			Policy:       policy,
-		})
-		if err != nil {
-			if policy.FailClosed {
-				return nil, connect.NewError(connect.CodeUnavailable,
-					fmt.Errorf("verification_unavailable: %w", err))
-			}
-			s.logger.Warn("verification backend unavailable, policy_warning", "err", err)
-			verifyResult = commonv1.VerificationResult_VERIFICATION_RESULT_VERIFICATION_UNAVAILABLE
-		} else {
-			verifyResult = trust.StatusToProto(out.Status)
-			if out.Status == store.VerificationRejected {
-				return nil, connect.NewError(connect.CodeFailedPrecondition,
-					fmt.Errorf("artifact trust rejected: %s", out.Summary))
-			}
-		}
-	}
-
-	// 5. Build operation request hash for idempotency
-	reqHash := hashRequest(msg)
-
-	// 6. Build domain Operation
-	now := time.Now().UTC()
-	op := &store.Operation{
-		ID:                  uuid.New().String(),
-		OperationType:       opType,
-		Status:              operation.InitialStatus(),
-		ReleaseDefinitionID: msg.ReleaseDefinitionId,
-		IdempotencyKey:      msg.IdempotencyKey,
-		RequestHash:         reqHash,
-		BundleID:            msg.BundleId,
-		ValuesRevisionID:    msg.ValuesRevisionId,
-		ExpectedRevision:    int(msg.ExpectedCurrentRevision),
-		ValuesPatch:         []byte(msg.ValuesPatch),
-		Actor: store.ActorContext{
-			UserID:       msg.Actor.GetUserId(),
-			Organization: msg.Actor.GetOrganization(),
-		},
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	// 7. Persist
-	if err := s.store.Operations().Create(ctx, op); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create operation: %w", err))
 	}
 
-	// 8. Trigger preflight transition (async in production; synchronous for now)
-	//    Standard ops go pending->preflight, EMERGENCY goes pending->queued
-	if opType.IsStandard() {
-		next, err := operation.Transition(op.Status, operation.EventStartPreflight)
-		if err != nil {
-			s.logger.Error("preflight transition failed", "op_id", op.ID, "err", err)
-		} else {
-			_, err = s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, "")
-			if err != nil {
-				s.logger.Error("preflight status update failed", "op_id", op.ID, "err", err)
-			} else {
-				op.Status = next
-				op.StateVersion++
-			}
-		}
-	}
-
+	s.startPreflight(ctx, op, opType)
 	s.logger.Info("operation created",
 		"op_id", op.ID,
 		"type", op.OperationType,
@@ -191,6 +89,132 @@ func (s *Service) CreateOperation(
 		AcceptedAt:         timestamppb.New(op.CreatedAt),
 		VerificationResult: verifyResult,
 	}), nil
+}
+
+func (s *Service) findIdempotentOperation(
+	ctx context.Context,
+	msg *orchestratorv1.CreateOperationRequest,
+) (*store.Operation, error) {
+	if msg.IdempotencyKey == "" {
+		return nil, nil
+	}
+
+	existing, err := s.store.Operations().GetByIdempotencyKey(ctx, msg.IdempotencyKey)
+	if err == store.ErrNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("idempotency lookup: %w", err))
+	}
+	if existing.RequestHash != hashRequest(msg) {
+		return nil, connect.NewError(connect.CodeAlreadyExists,
+			fmt.Errorf("idempotency_conflict: key %s already used with different request", msg.IdempotencyKey))
+	}
+	return existing, nil
+}
+
+func (s *Service) validateOperationDefinition(
+	ctx context.Context,
+	definitionID string,
+	opType store.OperationType,
+) (*store.ReleaseDefinition, error) {
+	def, err := s.store.Definitions().Get(ctx, definitionID)
+	if err == store.ErrNotFound {
+		return nil, connect.NewError(connect.CodeNotFound,
+			fmt.Errorf("release_definition not found: %s", definitionID))
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
+	}
+	if def.Status != store.DefStatusActive {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("release_definition %s is %s", def.ID, def.Status))
+	}
+	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
+		return nil, connect.NewError(connect.CodePermissionDenied, err)
+	}
+	if opType.IsStandard() {
+		activeEmergency, err := s.store.Operations().HasActiveEmergencyForDefinition(ctx, definitionID)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("emergency active check: %w", err))
+		}
+		if activeEmergency {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("release_busy: definition %s has a running EMERGENCY operation", definitionID))
+		}
+	}
+	return def, nil
+}
+
+func (s *Service) verifyOperation(
+	ctx context.Context,
+	msg *orchestratorv1.CreateOperationRequest,
+	def *store.ReleaseDefinition,
+) (commonv1.VerificationResult, error) {
+	if msg.SignatureRef == nil || s.verifier == nil {
+		return commonv1.VerificationResult(0), nil
+	}
+
+	policy := trust.DefaultPolicy(s.targetEnv)
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(msg.BundleId+"|"+def.ID)))
+	out, err := s.verifier.Verify(ctx, trust.Input{
+		Digest:       digest,
+		SignatureRef: msg.SignatureRef,
+		Policy:       policy,
+	})
+	if err != nil {
+		if policy.FailClosed {
+			return 0, connect.NewError(connect.CodeUnavailable,
+				fmt.Errorf("verification_unavailable: %w", err))
+		}
+		s.logger.Warn("verification backend unavailable, policy_warning", "err", err)
+		return commonv1.VerificationResult_VERIFICATION_RESULT_VERIFICATION_UNAVAILABLE, nil
+	}
+	if out.Status == store.VerificationRejected {
+		return 0, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("artifact trust rejected: %s", out.Summary))
+	}
+	return trust.StatusToProto(out.Status), nil
+}
+
+func newOperation(msg *orchestratorv1.CreateOperationRequest, opType store.OperationType) *store.Operation {
+	now := time.Now().UTC()
+	return &store.Operation{
+		ID:                  uuid.New().String(),
+		OperationType:       opType,
+		Status:              operation.InitialStatus(),
+		ReleaseDefinitionID: msg.ReleaseDefinitionId,
+		IdempotencyKey:      msg.IdempotencyKey,
+		RequestHash:         hashRequest(msg),
+		BundleID:            msg.BundleId,
+		ValuesRevisionID:    msg.ValuesRevisionId,
+		ExpectedRevision:    int(msg.ExpectedCurrentRevision),
+		ValuesPatch:         []byte(msg.ValuesPatch),
+		Actor: store.ActorContext{
+			UserID:       msg.Actor.GetUserId(),
+			Organization: msg.Actor.GetOrganization(),
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+}
+
+func (s *Service) startPreflight(ctx context.Context, op *store.Operation, opType store.OperationType) {
+	if !opType.IsStandard() {
+		return
+	}
+
+	next, err := operation.Transition(op.Status, operation.EventStartPreflight)
+	if err != nil {
+		s.logger.Error("preflight transition failed", "op_id", op.ID, "err", err)
+		return
+	}
+	updated, err := s.store.Operations().Transition(ctx, op.ID, next, op.StateVersion, "")
+	if err != nil {
+		s.logger.Error("preflight status update failed", "op_id", op.ID, "err", err)
+		return
+	}
+	*op = *updated
 }
 
 // PublishRelease triggers the release pipeline for a definition (skeleton).

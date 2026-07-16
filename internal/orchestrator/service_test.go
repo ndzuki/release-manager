@@ -65,11 +65,11 @@ func TestCreateOperation_Install_Success(t *testing.T) {
 	seedDefinition(t, st)
 
 	resp, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
-		OperationType:          "INSTALL",
-		BundleId:               "bundle-001",
-		ReleaseDefinitionId:    "def-001",
-		ValuesRevisionId:       "vr-001",
-		IdempotencyKey:         "idem-001",
+		OperationType:           "INSTALL",
+		BundleId:                "bundle-001",
+		ReleaseDefinitionId:     "def-001",
+		ValuesRevisionId:        "vr-001",
+		IdempotencyKey:          "idem-001",
 		ExpectedCurrentRevision: 0,
 		Actor: &commonv1.ActorContext{
 			UserId:       "user-001",
@@ -107,6 +107,36 @@ func TestCreateOperation_Idempotency(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, resp1.Msg.OperationId, resp2.Msg.OperationId, "idempotent requests must return same operation")
+}
+
+func TestCreateOperation_IdempotencyConflict(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	first := &orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-001",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+		IdempotencyKey:      "idem-conflict",
+		Actor:               &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
+	}
+	_, err := svc.CreateOperation(context.Background(), connect.NewRequest(first))
+	require.NoError(t, err)
+
+	conflicting := &orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-002",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+		IdempotencyKey:      "idem-conflict",
+		Actor:               &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
+	}
+	_, err = svc.CreateOperation(context.Background(), connect.NewRequest(conflicting))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+	assert.ErrorContains(t, err, "idempotency_conflict")
 }
 
 func TestCreateOperation_ReleaseBusy(t *testing.T) {
