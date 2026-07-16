@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -144,6 +145,11 @@ func migrate(db *sql.DB) error {
 
 	for _, stmt := range migrationStatements {
 		if _, err := tx.ExecContext(context.Background(), stmt); err != nil {
+			// ALTER TABLE ADD COLUMN is not idempotent in SQLite; tolerate
+			// "duplicate column name" errors on re-runs.
+			if strings.Contains(err.Error(), "duplicate column name") {
+				continue
+			}
 			return fmt.Errorf("migration statement: %w\nstmt: %s", err, stmt)
 		}
 	}
@@ -268,21 +274,30 @@ var migrationStatements = []string{
 
 	// Command outbox (REQ-016)
 	`CREATE TABLE IF NOT EXISTS outbox (
-		id           TEXT PRIMARY KEY,
-		operation_id TEXT NOT NULL DEFAULT '',
-		operator_id  TEXT NOT NULL,
-		payload      BLOB NOT NULL DEFAULT (x''),
-		status       TEXT NOT NULL DEFAULT 'pending',
-		max_inflight INTEGER NOT NULL DEFAULT 1,
-		result_json  TEXT NOT NULL DEFAULT '',
-		created_at   TEXT NOT NULL,
-		updated_at   TEXT NOT NULL,
-		delivered_at TEXT,
-		acked_at     TEXT
+		id             TEXT PRIMARY KEY,
+		command_id     TEXT NOT NULL DEFAULT '',
+		operation_id   TEXT NOT NULL DEFAULT '',
+		operation_type TEXT NOT NULL DEFAULT '',
+		operator_id    TEXT NOT NULL,
+		payload        BLOB NOT NULL DEFAULT (x''),
+		status         TEXT NOT NULL DEFAULT 'pending',
+		max_inflight   INTEGER NOT NULL DEFAULT 1,
+		sequence       INTEGER NOT NULL DEFAULT 0,
+		result_json    TEXT NOT NULL DEFAULT '',
+		created_at     TEXT NOT NULL,
+		updated_at     TEXT NOT NULL,
+		delivered_at   TEXT,
+		acked_at       TEXT
 	)`,
 
 	`CREATE INDEX IF NOT EXISTS idx_outbox_operator_status ON outbox(operator_id, status)`,
+	`CREATE INDEX IF NOT EXISTS idx_outbox_sequence ON outbox(sequence)`,
+	`CREATE INDEX IF NOT EXISTS idx_outbox_command_id ON outbox(command_id)`,
 
+	// Migration: add new columns to existing outbox tables.
+	`ALTER TABLE outbox ADD COLUMN command_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE outbox ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE outbox ADD COLUMN operation_type TEXT NOT NULL DEFAULT ''`,
 	// Auth & RBAC — users, sessions, organizations, bindings (REQ-025, REQ-026, REQ-049)
 	`CREATE TABLE IF NOT EXISTS users (
 		id            TEXT PRIMARY KEY,
