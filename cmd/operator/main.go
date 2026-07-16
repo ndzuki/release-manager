@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	"github.com/ndzuki/release-manager/internal/config"
 	"github.com/ndzuki/release-manager/internal/server"
 )
@@ -36,6 +37,7 @@ func main() {
 
 	httpSrv := server.NewHTTP(cfg.HTTPPort, readinessChecks, logger)
 	grpcSrv := server.NewGRPC(cfg.GRPCPort, logger)
+	operatorv1.RegisterOperatorServiceServer(grpcSrv.Server(), &operatorv1.UnimplementedOperatorServiceServer{})
 
 	errCh := make(chan error, 2)
 
