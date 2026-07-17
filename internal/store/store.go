@@ -632,8 +632,23 @@ type OperationEventStore interface {
 
 // DefinitionStore defines the persistence contract for release definitions.
 type DefinitionStore interface {
-	Create(ctx context.Context, def *ReleaseDefinition) error
+	Create(ctx context.Context, def *ReleaseDefinition, event *ReleaseDefinitionEvent) error
 	Get(ctx context.Context, id string) (*ReleaseDefinition, error)
+	Update(ctx context.Context, def *ReleaseDefinition, event *ReleaseDefinitionEvent) (*ReleaseDefinition, error)
+	List(ctx context.Context, customerID, clusterID string, includeDisabled bool) ([]*ReleaseDefinition, error)
+}
+
+// ReleaseDefinitionEvent is emitted for release definition lifecycle changes.
+type ReleaseDefinitionEvent struct {
+	ID           string    `json:"id"`
+	DefinitionID string    `json:"definition_id"`
+	EventType    string    `json:"event_type"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// DefinitionEventStore provides read access to persisted definition events.
+type DefinitionEventStore interface {
+	List(ctx context.Context, definitionID string) ([]*ReleaseDefinitionEvent, error)
 }
 
 // ValuesStore defines the persistence contract for values revisions.
@@ -871,6 +886,7 @@ type Store interface {
 	Operations() OperationStore
 	OperationEvents() OperationEventStore
 	Definitions() DefinitionStore
+	DefinitionEvents() DefinitionEventStore
 	Values() ValuesStore
 	Customers() CustomerStore
 	Clusters() ClusterStore

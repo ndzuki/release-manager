@@ -55,7 +55,7 @@ func seedDefinition(t *testing.T, st store.Store) {
 		CreatedAt:   time.Now().UTC(),
 		UpdatedAt:   time.Now().UTC(),
 	}
-	err := st.Definitions().Create(context.Background(), def)
+	err := st.Definitions().Create(context.Background(), def, nil)
 	require.NoError(t, err)
 
 	revision := &store.ValuesRevision{
@@ -270,7 +270,7 @@ func TestCreateOperation_UpgradeValidation(t *testing.T) {
 					CreatedBy:   "test",
 					CreatedAt:   now,
 					UpdatedAt:   now,
-				}))
+				}, nil))
 				seedValuesRevision(t, st, "vr-other", "def-other", store.ValuesStatusApproved)
 			},
 			wantCode: connect.CodeInvalidArgument,
@@ -348,7 +348,7 @@ func TestCreateOperation_UpgradeDoesNotMutateOtherDefinition(t *testing.T) {
 		CreatedAt:   time.Now().UTC(),
 		UpdatedAt:   time.Now().UTC(),
 	}
-	require.NoError(t, st.Definitions().Create(context.Background(), other))
+	require.NoError(t, st.Definitions().Create(context.Background(), other, nil))
 
 	resp, err := svc.CreateOperation(context.Background(), connect.NewRequest(upgradeRequest("vr-approved")))
 	require.NoError(t, err)

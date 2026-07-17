@@ -392,7 +392,7 @@ func createTestDefinition(t *testing.T, st *sqlitestore.Store) *store.ReleaseDef
 		ClusterID:  uuid.New().String(),
 		Status:     store.DefStatusDraft,
 	}
-	require.NoError(t, st.Definitions().Create(ctx, def))
+	require.NoError(t, st.Definitions().Create(ctx, def, nil))
 	return def
 }
 
@@ -527,6 +527,171 @@ func TestValuesRevisionNotFound(t *testing.T) {
 
 	_, err := st.Values().Get(ctx, "nonexistent")
 	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
+// ── ReleaseDefinition store tests ───────────────────────────────
+
+func TestDefinitionCreateDuplicateKey(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	def1 := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "dup-def",
+		CustomerID:        "cust-dup",
+		ClusterID:         "cls-dup",
+		Namespace:         "default",
+		ReleaseName:       "same-name",
+		ChartName:         "nginx",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def1, nil))
+
+	def2 := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "dup-def-2",
+		CustomerID:        "cust-dup",
+		ClusterID:         "cls-dup",
+		Namespace:         "default",
+		ReleaseName:       "same-name",
+		ChartName:         "nginx",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	err := st.Definitions().Create(ctx, def2, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrDuplicateKey)
+}
+
+func TestDefinitionUpdateOptimisticLock(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	def := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "lock-def",
+		CustomerID:        uuid.New().String(),
+		ClusterID:         uuid.New().String(),
+		Namespace:         "ns",
+		ReleaseName:       "lock-rel",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def, nil))
+
+	// Update with correct version succeeds.
+	def.ReleaseName = "lock-rel-v2"
+	updated, err := st.Definitions().Update(ctx, def, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, updated.OptimisticVersion)
+
+	// Update with old version fails.
+	def.OptimisticVersion = 1 // stale
+	_, err = st.Definitions().Update(ctx, def, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrOptimisticLock)
+}
+
+func TestDefinitionUpdateDuplicateKey(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	def1 := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "key-def-1",
+		CustomerID:        "cust-key",
+		ClusterID:         "cls-key",
+		Namespace:         "ns",
+		ReleaseName:       "rel-a",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def1, nil))
+
+	def2 := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "key-def-2",
+		CustomerID:        "cust-key",
+		ClusterID:         "cls-key",
+		Namespace:         "ns",
+		ReleaseName:       "rel-b",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def2, nil))
+
+	// Try to update def2 to collide with def1's unique key.
+	def2.ReleaseName = "rel-a"
+	_, err := st.Definitions().Update(ctx, def2, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrDuplicateKey)
+}
+
+func TestDefinitionListFiltering(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	seed := func(custID, clsID, ns, rel string, status store.DefinitionStatus) {
+		require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+			ID:                uuid.New().String(),
+			Name:              rel,
+			CustomerID:        custID,
+			ClusterID:         clsID,
+			Namespace:         ns,
+			ReleaseName:       rel,
+			Status:            status,
+			OptimisticVersion: 1,
+		}, nil))
+	}
+
+	seed("cust-A", "cls-A", "ns1", "rel-1", store.DefStatusActive)
+	seed("cust-A", "cls-A", "ns2", "rel-2", store.DefStatusActive)
+	seed("cust-B", "cls-B", "ns1", "rel-3", store.DefStatusDisabled)
+
+	// List by customer.
+	defs, err := st.Definitions().List(ctx, "cust-A", "", false)
+	require.NoError(t, err)
+	assert.Len(t, defs, 2)
+
+	// List all including disabled.
+	defs, err = st.Definitions().List(ctx, "", "", true)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(defs), 3)
+
+	// Normal list excludes disabled.
+	defs, err = st.Definitions().List(ctx, "", "", false)
+	require.NoError(t, err)
+	for _, d := range defs {
+		assert.NotEqual(t, store.DefStatusDisabled, d.Status)
+	}
+}
+
+func TestDefinitionEventPersistence(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	def := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "evt-def",
+		CustomerID:        uuid.New().String(),
+		ClusterID:         uuid.New().String(),
+		ReleaseName:       "evt-rel",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	event := &store.ReleaseDefinitionEvent{
+		ID:           uuid.New().String(),
+		DefinitionID: def.ID,
+		EventType:    "definition_created",
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def, event))
+
+	events, err := st.DefinitionEvents().List(ctx, def.ID)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "definition_created", events[0].EventType)
+	assert.Equal(t, def.ID, events[0].DefinitionID)
 }
 
 func TestInventoryDefinitionAssociation(t *testing.T) {

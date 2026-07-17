@@ -297,7 +297,7 @@ func TestFinishOperation(t *testing.T) {
 				ChartName:   "example",
 				Status:      store.DefStatusActive,
 			}
-			require.NoError(t, st.Definitions().Create(ctx, def))
+			require.NoError(t, st.Definitions().Create(ctx, def, nil), nil)
 			op := &store.Operation{
 				ID:                  "operation-" + test.name,
 				OperationType:       store.OperationInstall,

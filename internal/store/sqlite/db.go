@@ -37,6 +37,7 @@ type Store struct {
 	routes          *clusterRouteStore
 	invs            *inventoryStore
 	custEvents      *customerEventStore
+	defEvents       *definitionEventStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -67,6 +68,7 @@ func Open(dsn string) (*Store, error) {
 	s.ops = &operationStore{db: db}
 	s.operationEvents = &operationEventStore{db: db}
 	s.defs = &definitionStore{db: db}
+	s.defEvents = &definitionEventStore{db: db}
 	s.vals = &valuesStore{db: db}
 	s.customers = &customerStore{db: db}
 	s.clusters = &clusterStore{db: db}
@@ -115,6 +117,9 @@ func (s *Store) Outbox() store.OutboxStore { return s.outbox }
 
 // Definitions returns the DefinitionStore.
 func (s *Store) Definitions() store.DefinitionStore { return s.defs }
+
+// DefinitionEvents returns the DefinitionEventStore.
+func (s *Store) DefinitionEvents() store.DefinitionEventStore { return s.defEvents }
 
 // Values returns the ValuesStore.
 func (s *Store) Values() store.ValuesStore { return s.vals }
@@ -210,6 +215,14 @@ var migrationStatements = []string{
 		updated_at          TEXT NOT NULL,
 		UNIQUE(customer_id, cluster_id, namespace, release_name)
 	)`,
+
+	`CREATE TABLE IF NOT EXISTS release_definition_events (
+		id            TEXT PRIMARY KEY,
+		definition_id TEXT NOT NULL REFERENCES release_definitions(id),
+		event_type    TEXT NOT NULL,
+		created_at    TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_release_definition_events_definition ON release_definition_events(definition_id, created_at)`,
 
 	`CREATE TABLE IF NOT EXISTS values_revisions (
 		id                    TEXT PRIMARY KEY,

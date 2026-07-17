@@ -42,6 +42,10 @@ func (s *Service) EmergencyChange(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
+	if err := checkDefinitionOperable(def); err != nil {
+		return nil, err
+	}
+
 	// AC-013-02: Reject emergency changes for disabled customers.
 	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
 		return nil, connect.NewError(connect.CodePermissionDenied, err)
