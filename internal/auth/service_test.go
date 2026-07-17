@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -17,7 +18,39 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
+func TestAuthService_LoginAndRefreshPreserveOrganization(t *testing.T) {
+	_, st := setupEnforcer(t)
+	ctx := context.Background()
+	passwordHash, err := HashPassword("password")
+	require.NoError(t, err)
+	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: "org-1", Name: "Org 1"}))
+	require.NoError(t, st.Users().Create(ctx, &store.User{
+		ID: "user-1", Username: "alice", PasswordHash: passwordHash,
+	}))
+	require.NoError(t, st.OrgMembers().Create(ctx, &store.OrganizationMember{
+		OrgID: "org-1", UserID: "user-1", Role: store.RoleViewer,
+	}))
 
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	jwtManager := NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour)
+	service := NewAuthService(st, jwtManager, NewRateLimiter(10, time.Minute), logger)
+
+	login, err := service.Login(ctx, connect.NewRequest(&authv1.LoginRequest{
+		Username: "alice", Password: "password",
+	}))
+	require.NoError(t, err)
+	loginClaims, err := jwtManager.ValidateAccessToken(login.Msg.GetAccessToken())
+	require.NoError(t, err)
+	assert.Equal(t, "org-1", loginClaims.OrgID)
+
+	refresh, err := service.RefreshToken(ctx, connect.NewRequest(&authv1.RefreshTokenRequest{
+		RefreshToken: login.Msg.GetRefreshToken(),
+	}))
+	require.NoError(t, err)
+	refreshClaims, err := jwtManager.ValidateAccessToken(refresh.Msg.GetAccessToken())
+	require.NoError(t, err)
+	assert.Equal(t, "org-1", refreshClaims.OrgID)
+}
 func TestAuthService_LoginErrorsAreUniform(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -280,6 +313,15 @@ func TestAuthInterceptor_RejectsAccessTokenAfterSessionRevocation(t *testing.T) 
 			st := openAuthStore(t)
 			ctx := context.Background()
 			createAuthUser(t, st, "alice", "correct-password", store.UserActive)
+			// Seed RBAC: the user must pass Casbin enforcement to reach session validation.
+			require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: "org-1", Name: "Org 1"}))
+			require.NoError(t, st.OrgMembers().Create(ctx, &store.OrganizationMember{
+				OrgID: "org-1", UserID: "alice-id", Role: store.RolePlatformAdmin,
+			}))
+			enf, err := NewEnforcer(st, slog.New(slog.DiscardHandler))
+			require.NoError(t, err)
+			require.NoError(t, enf.LoadPolicies(ctx))
+
 			svc := newAuthService(st)
 			login, err := svc.Login(ctx, connect.NewRequest(&authv1.LoginRequest{
 				Username: "alice",
@@ -289,7 +331,7 @@ func TestAuthInterceptor_RejectsAccessTokenAfterSessionRevocation(t *testing.T) 
 
 			tt.revoke(t, ctx, st, svc)
 
-			interceptor := NewAuthInterceptor(svc.jwt, st, nil, map[string]bool{}, slog.New(slog.DiscardHandler))
+			interceptor := NewAuthInterceptor(svc.jwt, st, enf, map[string]bool{}, slog.New(slog.DiscardHandler))
 			req := connect.NewRequest(&authv1.ValidateTokenRequest{})
 			req.Header().Set("Authorization", "Bearer "+login.Msg.GetAccessToken())
 			_, err = interceptor(func(context.Context, connect.AnyRequest) (connect.AnyResponse, error) {
@@ -297,7 +339,7 @@ func TestAuthInterceptor_RejectsAccessTokenAfterSessionRevocation(t *testing.T) 
 			})(ctx, req)
 
 			require.Error(t, err)
-			assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
+			assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 		})
 	}
 }
