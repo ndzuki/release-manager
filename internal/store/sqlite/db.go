@@ -14,29 +14,31 @@ import (
 
 // Store implements store.Store backed by SQLite.
 type Store struct {
-	db         *sql.DB
-	ops        *operationStore
-	defs       *definitionStore
-	vals       *valuesStore
-	customers  *customerStore
-	clusters   *clusterStore
-	tokens     *enrollmentTokenStore
-	operators  *operatorStore
-	sessions   *sessionStore
-	outbox     *outboxStore
-	users      *userStore
-	authSess   *authSessionStore
-	orgs       *organizationStore
-	orgMembers *organizationMemberStore
-	bindings   *bindingStore
-	audit      *auditEventStore
-	notif      *notificationStore
-	bundles    *bundleStore
-	verifs     *verificationStore
-	preflight  *preflightStore
-	routes     *clusterRouteStore
-	invs       *inventoryStore
-	custEvents *customerEventStore
+	db              *sql.DB
+	ops             *operationStore
+	operationEvents *operationEventStore
+	defs            *definitionStore
+	vals            *valuesStore
+	customers       *customerStore
+	clusters        *clusterStore
+	tokens          *enrollmentTokenStore
+	operators       *operatorStore
+	sessions        *sessionStore
+	outbox          *outboxStore
+	users           *userStore
+	authSess        *authSessionStore
+	orgs            *organizationStore
+	orgMembers      *organizationMemberStore
+	bindings        *bindingStore
+	audit           *auditEventStore
+	notif           *notificationStore
+	bundles         *bundleStore
+	verifs          *verificationStore
+	routes          *clusterRouteStore
+	invs            *inventoryStore
+	custEvents      *customerEventStore
+	defEvents       *definitionEventStore
+	preflight       *preflightStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -65,7 +67,10 @@ func Open(dsn string) (*Store, error) {
 
 	s := &Store{db: db}
 	s.ops = &operationStore{db: db}
+	s.operationEvents = &operationEventStore{db: db}
 	s.defs = &definitionStore{db: db}
+	s.defEvents = &definitionEventStore{db: db}
+	s.preflight = &preflightStore{db: db}
 	s.vals = &valuesStore{db: db}
 	s.customers = &customerStore{db: db}
 	s.clusters = &clusterStore{db: db}
@@ -83,7 +88,6 @@ func Open(dsn string) (*Store, error) {
 	s.bundles = &bundleStore{db: db}
 	s.invs = &inventoryStore{db: db}
 	s.verifs = &verificationStore{db: db}
-	s.preflight = &preflightStore{db: db}
 	s.custEvents = &customerEventStore{db: db}
 	s.routes = &clusterRouteStore{db: db}
 	return s, nil
@@ -91,6 +95,9 @@ func Open(dsn string) (*Store, error) {
 
 // Operations returns the OperationStore.
 func (s *Store) Operations() store.OperationStore { return s.ops }
+
+// OperationEvents returns the operation state event store.
+func (s *Store) OperationEvents() store.OperationEventStore { return s.operationEvents }
 
 // Customers returns the CustomerStore.
 func (s *Store) Customers() store.CustomerStore { return s.customers }
@@ -112,6 +119,12 @@ func (s *Store) Outbox() store.OutboxStore { return s.outbox }
 
 // Definitions returns the DefinitionStore.
 func (s *Store) Definitions() store.DefinitionStore { return s.defs }
+
+// DefinitionEvents returns the DefinitionEventStore.
+func (s *Store) DefinitionEvents() store.DefinitionEventStore { return s.defEvents }
+
+// PreflightResults returns the PreflightStore.
+func (s *Store) PreflightResults() store.PreflightStore { return s.preflight }
 
 // Values returns the ValuesStore.
 func (s *Store) Values() store.ValuesStore { return s.vals }
@@ -142,9 +155,6 @@ func (s *Store) Notifications() store.NotificationStore { return s.notif }
 
 // Verifications returns the VerificationStore.
 func (s *Store) Verifications() store.VerificationStore { return s.verifs }
-
-// PreflightResults returns the PreflightStore.
-func (s *Store) PreflightResults() store.PreflightStore { return s.preflight }
 
 // CustomerEvents returns the CustomerEventStore.
 func (s *Store) CustomerEvents() store.CustomerEventStore { return s.custEvents }
@@ -210,6 +220,14 @@ var migrationStatements = []string{
 		updated_at          TEXT NOT NULL,
 		UNIQUE(customer_id, cluster_id, namespace, release_name)
 	)`,
+
+	`CREATE TABLE IF NOT EXISTS release_definition_events (
+		id            TEXT PRIMARY KEY,
+		definition_id TEXT NOT NULL REFERENCES release_definitions(id),
+		event_type    TEXT NOT NULL,
+		created_at    TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_release_definition_events_definition ON release_definition_events(definition_id, created_at)`,
 
 	`CREATE TABLE IF NOT EXISTS values_revisions (
 		id                    TEXT PRIMARY KEY,
@@ -319,6 +337,13 @@ var migrationStatements = []string{
 		last_heartbeat TEXT NOT NULL,
 		expires_at     TEXT NOT NULL
 	)`,
+
+	`ALTER TABLE sessions ADD COLUMN instance_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE sessions ADD COLUMN version TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE sessions ADD COLUMN capabilities TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE sessions ADD COLUMN active_config_version TEXT NOT NULL DEFAULT ''`,
+	`CREATE INDEX IF NOT EXISTS idx_sessions_instance ON sessions(operator_id, instance_id)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_one_active_operator ON sessions(operator_id) WHERE status IN ('online', 'suspect')`,
 
 	`CREATE INDEX IF NOT EXISTS idx_sessions_operator ON sessions(operator_id, status)`,
 
@@ -463,6 +488,19 @@ var migrationStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_customer_events_customer ON customer_events(customer_id, event_type)`,
 
+	// Operation state change events (REQ-023)
+	`CREATE TABLE IF NOT EXISTS operation_events (
+		id                    TEXT PRIMARY KEY,
+		operation_id          TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+		operation_type        TEXT NOT NULL,
+		release_definition_id TEXT NOT NULL,
+		old_status            TEXT NOT NULL,
+		new_status            TEXT NOT NULL,
+		state_version         INTEGER NOT NULL,
+		created_at            TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_operation_events_operation ON operation_events(operation_id)`,
+
 	// Cluster artifact routing (REQ-014)
 	`CREATE TABLE IF NOT EXISTS cluster_routes (
 		id            TEXT PRIMARY KEY,
@@ -481,6 +519,7 @@ var migrationStatements = []string{
 	`CREATE TABLE IF NOT EXISTS release_inventory (
 		customer_id      TEXT NOT NULL,
 		cluster_id       TEXT NOT NULL,
+		release_definition_id TEXT NOT NULL DEFAULT '',
 		namespace        TEXT NOT NULL DEFAULT '',
 		release_name     TEXT NOT NULL,
 		chart            TEXT NOT NULL DEFAULT '',
@@ -495,6 +534,7 @@ var migrationStatements = []string{
 		updated_at       TEXT NOT NULL,
 		UNIQUE(customer_id, cluster_id, namespace, release_name)
 	)`,
+	`ALTER TABLE release_inventory ADD COLUMN release_definition_id TEXT NOT NULL DEFAULT ''`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_cluster ON release_inventory(customer_id, cluster_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_status ON release_inventory(inventory_status)`,
 
@@ -529,19 +569,18 @@ var migrationStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_release_bundles_digest ON release_bundles(digest_alg, digest_value)`,
 
-	// Artifact preflight cache (REQ-045)
+	// Artifact preflight results (REQ-045)
 	`CREATE TABLE IF NOT EXISTS preflight_results (
-		id                   TEXT PRIMARY KEY,
-		operation_id         TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
-		routing_version      TEXT NOT NULL,
-		bundle_digest        TEXT NOT NULL,
+		id                  TEXT PRIMARY KEY,
+		operation_id        TEXT NOT NULL,
+		routing_version     TEXT NOT NULL DEFAULT '',
+		bundle_digest       TEXT NOT NULL,
 		trust_policy_version TEXT NOT NULL DEFAULT '',
-		sbom_policy_version  TEXT NOT NULL DEFAULT '',
-		result_json          BLOB NOT NULL,
-		created_at           TEXT NOT NULL,
-		UNIQUE(operation_id, routing_version, bundle_digest, trust_policy_version, sbom_policy_version)
+		sbom_policy_version TEXT NOT NULL DEFAULT '',
+		result_json         BLOB NOT NULL,
+		created_at          TEXT NOT NULL
 	)`,
-	`CREATE INDEX IF NOT EXISTS idx_preflight_results_operation ON preflight_results(operation_id, created_at)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_preflight_results_key ON preflight_results(operation_id, routing_version, bundle_digest, trust_policy_version, sbom_policy_version)`,
 }
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }

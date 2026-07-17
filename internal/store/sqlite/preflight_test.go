@@ -33,7 +33,7 @@ func setupPreflightFixture(t *testing.T, st *sqlitestore.Store) (customerID, ope
 		CreatedAt:   time.Now().UTC(),
 		UpdatedAt:   time.Now().UTC(),
 	}
-	require.NoError(t, st.Definitions().Create(ctx, def))
+	require.NoError(t, st.Definitions().Create(ctx, def, nil))
 
 	op := &store.Operation{
 		ID:                  uuid.New().String(),

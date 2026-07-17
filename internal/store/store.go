@@ -24,6 +24,7 @@ var (
 	ErrNotFound       = errors.New("store: not found")
 	ErrOptimisticLock = errors.New("store: optimistic lock conflict")
 	ErrDuplicateKey   = errors.New("store: duplicate key")
+	ErrReleaseBusy    = errors.New("store: release busy")
 )
 
 // OperationType classifies the kind of release operation.
@@ -244,12 +245,16 @@ type Operator struct {
 
 // Session tracks a live operator connection.
 type Session struct {
-	ID            string        `json:"id"`
-	OperatorID    string        `json:"operator_id"`
-	Status        SessionStatus `json:"status"`
-	StartedAt     time.Time     `json:"started_at"`
-	LastHeartbeat time.Time     `json:"last_heartbeat"`
-	ExpiresAt     time.Time     `json:"expires_at"`
+	ID                  string            `json:"id"`
+	OperatorID          string            `json:"operator_id"`
+	Status              SessionStatus     `json:"status"`
+	InstanceID          string            `json:"instance_id"`
+	Version             string            `json:"version"`
+	Capabilities        map[string]string `json:"capabilities"`
+	ActiveConfigVersion string            `json:"active_config_version"`
+	StartedAt           time.Time         `json:"started_at"`
+	LastHeartbeat       time.Time         `json:"last_heartbeat"`
+	ExpiresAt           time.Time         `json:"expires_at"`
 }
 
 // OutboxEntry holds a command pending delivery in the outbox.
@@ -585,20 +590,21 @@ const (
 // ReleaseInventory represents a cached release snapshot in the orchestrator's observation store.
 // Unique key: (customer_id, cluster_id, namespace, release_name).
 type ReleaseInventory struct {
-	CustomerID      string
-	ClusterID       string
-	Namespace       string
-	ReleaseName     string
-	Chart           string
-	ChartVersion    string
-	Revision        int
-	Status          string
-	ValuesDigest    string
-	InventoryStatus InventoryStatus
-	LastSyncID      string
-	SnapshotVersion int64
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ReleaseDefinitionID string
+	CustomerID          string
+	ClusterID           string
+	Namespace           string
+	ReleaseName         string
+	Chart               string
+	ChartVersion        string
+	Revision            int
+	Status              string
+	ValuesDigest        string
+	InventoryStatus     InventoryStatus
+	LastSyncID          string
+	SnapshotVersion     int64
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // InventorySyncLog records the application of a sync snapshot for idempotency.
@@ -616,20 +622,56 @@ type InventorySyncLog struct {
 // OperationStore defines the persistence contract for operations.
 type OperationStore interface {
 	Create(ctx context.Context, op *Operation) error
+	CreateIfAvailable(ctx context.Context, op *Operation) error
 	Get(ctx context.Context, id string) (*Operation, error)
 	GetByIdempotencyKey(ctx context.Context, key string) (*Operation, error)
 	UpdateStatus(ctx context.Context, id string, status OperationStatus, stateVersion int, lastError string) (*Operation, error)
+	Transition(ctx context.Context, id string, status OperationStatus, stateVersion int, lastError string) (*Operation, error)
 	HasActiveForDefinition(ctx context.Context, definitionID string) (bool, error)
 	HasActiveEmergencyForDefinition(ctx context.Context, definitionID string) (bool, error)
 	List(ctx context.Context, definitionID string) ([]*Operation, error)
+	ListNonTerminal(ctx context.Context) ([]*Operation, error)
+}
+
+// OperationStateChangedEvent is emitted when an operation's status changes (REQ-023).
+// It intentionally excludes values and Secret material.
+type OperationStateChangedEvent struct {
+	ID            string          `json:"id"`
+	OperationID   string          `json:"operation_id"`
+	OperationType OperationType   `json:"operation_type"`
+	DefinitionID  string          `json:"release_definition_id"`
+	OldStatus     OperationStatus `json:"old_status"`
+	NewStatus     OperationStatus `json:"new_status"`
+	StateVersion  int             `json:"state_version"`
+	CreatedAt     time.Time       `json:"created_at"`
+}
+
+// OperationEventStore persists operation state change events.
+type OperationEventStore interface {
+	Create(ctx context.Context, ev *OperationStateChangedEvent) error
 }
 
 // DefinitionStore defines the persistence contract for release definitions.
 type DefinitionStore interface {
-	Create(ctx context.Context, def *ReleaseDefinition) error
+	Create(ctx context.Context, def *ReleaseDefinition, event *ReleaseDefinitionEvent) error
 	Get(ctx context.Context, id string) (*ReleaseDefinition, error)
+	Update(ctx context.Context, def *ReleaseDefinition, event *ReleaseDefinitionEvent) (*ReleaseDefinition, error)
+	List(ctx context.Context, customerID, clusterID string, includeDisabled bool) ([]*ReleaseDefinition, error)
 }
 
+
+// ReleaseDefinitionEvent is emitted for release definition lifecycle changes.
+type ReleaseDefinitionEvent struct {
+	ID           string    `json:"id"`
+	DefinitionID string    `json:"definition_id"`
+	EventType    string    `json:"event_type"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// DefinitionEventStore provides read access to persisted definition events.
+type DefinitionEventStore interface {
+	List(ctx context.Context, definitionID string) ([]*ReleaseDefinitionEvent, error)
+}
 // ValuesStore defines the persistence contract for values revisions.
 // For Create, the caller MUST populate Revision via GetNextRevisionNumber
 // and Digest via the values package before calling.
@@ -701,6 +743,7 @@ type OperatorStore interface {
 // SessionStore defines the persistence contract for operator sessions.
 type SessionStore interface {
 	Create(ctx context.Context, s *Session) error
+	Establish(ctx context.Context, s *Session) error
 	Get(ctx context.Context, id string) (*Session, error)
 	Heartbeat(ctx context.Context, id string) error
 	UpdateStatus(ctx context.Context, id string, status SessionStatus) error
@@ -736,6 +779,7 @@ type AuthSessionStore interface {
 	GetByRefreshHash(ctx context.Context, hash string) (*AuthSession, error)
 	GetByTokenFamily(ctx context.Context, family string) ([]*AuthSession, error)
 	RevokeFamily(ctx context.Context, family string) error
+	HasActiveByUserID(ctx context.Context, userID string) (bool, error)
 	RevokeByUserID(ctx context.Context, userID string) error
 	DeleteExpired(ctx context.Context) (int64, error)
 }
@@ -868,7 +912,9 @@ type InventoryStore interface {
 // Store is the top-level persistence abstraction.
 type Store interface {
 	Operations() OperationStore
+	OperationEvents() OperationEventStore
 	Definitions() DefinitionStore
+	DefinitionEvents() DefinitionEventStore
 	Values() ValuesStore
 	Customers() CustomerStore
 	Clusters() ClusterStore

@@ -10,6 +10,7 @@ import (
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	"github.com/ndzuki/release-manager/internal/store"
 )
+
 // maxInventoryPayload is the maximum number of items allowed in a single sync request.
 const maxInventoryPayload = 10000
 
@@ -60,8 +61,8 @@ func (s *Service) SyncInventory(
 			"missing", existing.MissingCount,
 		)
 		return connect.NewResponse(&orchestratorv1.SyncInventoryResponse{
-			AcceptedCount:      int32(existing.AcceptedCount),  //nolint:gosec // inventory count bounded below int32 max
-			MissingMarkedCount: int32(existing.MissingCount),   //nolint:gosec // inventory count bounded
+			AcceptedCount:      int32(existing.AcceptedCount), //nolint:gosec // inventory count bounded below int32 max
+			MissingMarkedCount: int32(existing.MissingCount),  //nolint:gosec // inventory count bounded
 			SnapshotVersion:    existing.SnapshotVersion,
 			Status:             "duplicate",
 		}), nil
@@ -80,18 +81,19 @@ func (s *Service) SyncInventory(
 		)
 
 		inventory := &store.ReleaseInventory{
-			CustomerID:      msg.CustomerId,
-			ClusterID:       msg.ClusterId,
-			Namespace:       item.Namespace,
-			ReleaseName:     item.Name,
-			Chart:           item.Chart,
-			ChartVersion:    item.ChartVersion,
-			Revision:        int(item.Revision),
-			Status:          item.Status,
-			ValuesDigest:    item.ValuesDigest,
-			InventoryStatus: store.InventoryActive,
-			LastSyncID:      msg.SyncId,
-			SnapshotVersion: 0, // set below after sync log
+			CustomerID:          msg.CustomerId,
+			ClusterID:           msg.ClusterId,
+			Namespace:           item.Namespace,
+			ReleaseDefinitionID: item.DefinitionId,
+			ReleaseName:         item.Name,
+			Chart:               item.Chart,
+			ChartVersion:        item.ChartVersion,
+			Revision:            int(item.Revision),
+			Status:              item.Status,
+			ValuesDigest:        item.ValuesDigest,
+			InventoryStatus:     store.InventoryActive,
+			LastSyncID:          msg.SyncId,
+			SnapshotVersion:     0, // set below after sync log
 		}
 
 		if err := s.store.Inventories().Upsert(ctx, inventory); err != nil {
@@ -148,10 +150,9 @@ func (s *Service) SyncInventory(
 	)
 
 	return connect.NewResponse(&orchestratorv1.SyncInventoryResponse{
-		AcceptedCount:      int32(acceptedCount),       //nolint:gosec // inventory count bounded below int32 max
-		MissingMarkedCount: int32(missingCount),         //nolint:gosec // inventory count bounded
+		AcceptedCount:      int32(acceptedCount), //nolint:gosec // inventory count bounded below int32 max
+		MissingMarkedCount: int32(missingCount),  //nolint:gosec // inventory count bounded
 		SnapshotVersion:    snapshotVersion,
 		Status:             "applied",
 	}), nil
 }
-
