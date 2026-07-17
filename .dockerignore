@@ -1,0 +1,11 @@
+.git
+.github
+.vscode
+.idea
+bin
+data
+coverage.out
+web/node_modules
+test/e2e/testdata
+*.log
+*.pid
