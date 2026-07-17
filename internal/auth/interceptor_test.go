@@ -52,7 +52,7 @@ func TestAuthInterceptor_HTTPContracts(t *testing.T) {
 			service := NewOrgService(st, logger)
 			path, handler := authv1connect.NewOrganizationServiceHandler(
 				service,
-				connect.WithInterceptors(NewAuthInterceptor(jwtManager, e, map[string]bool{}, logger)),
+		connect.WithInterceptors(NewAuthInterceptor(jwtManager, nil, e, map[string]bool{}, logger)),
 			)
 			mux := http.NewServeMux()
 			mux.Handle(path, handler)
@@ -85,7 +85,7 @@ func TestAuthInterceptor_BindingMissing(t *testing.T) {
 	service := NewBindingService(st, StubResolver{}, logger)
 	path, handler := authv1connect.NewBindingServiceHandler(
 		service,
-		connect.WithInterceptors(NewAuthInterceptor(jwtManager, e, map[string]bool{}, logger)),
+		connect.WithInterceptors(NewAuthInterceptor(jwtManager, nil, e, map[string]bool{}, logger)),
 	)
 	mux := http.NewServeMux()
 	mux.Handle(path, handler)

@@ -40,7 +40,7 @@ func TestRBACSmoke_NextRequestUsesUpdatedPolicy(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	jwtManager := NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour)
-	interceptor := NewAuthInterceptor(jwtManager, enforcer, map[string]bool{
+	interceptor := NewAuthInterceptor(jwtManager, st, enforcer, map[string]bool{
 		authv1connect.AuthServiceLoginProcedure: true,
 	}, logger)
 	mux := http.NewServeMux()

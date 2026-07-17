@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -70,7 +71,7 @@ func (s *AuthService) Login(
 		UserID:           u.ID,
 		TokenFamily:      family,
 		RefreshTokenHash: refreshHash,
-		ExpiresAt:        accessExp.Add(s.jwt.RefreshTTL()),
+		ExpiresAt:        time.Now().UTC().Add(s.jwt.RefreshTTL()),
 	}
 	if err := s.store.AuthSessions().Create(ctx, ss); err != nil {
 		s.logger.Error("create session failed", "error", err)
@@ -132,11 +133,27 @@ func (s *AuthService) RefreshToken(
 		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid refresh token"))
 	}
 
+	user, err := s.store.Users().Get(ctx, ss.UserID)
+	if err != nil || user.Status != store.UserActive {
+		if revokeErr := s.store.AuthSessions().RevokeFamily(ctx, ss.TokenFamily); revokeErr != nil {
+			s.logger.Error("revoke disabled user session failed", "error", revokeErr)
+		}
+		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid refresh token"))
+	}
+
 	if ss.Revoked {
 		// AC-025-02: Refresh token replay — revoke the entire family.
-		_ = s.store.AuthSessions().RevokeFamily(ctx, ss.TokenFamily) //nolint:errcheck // Best-effort family revocation before returning replay denial.
+		if err := s.store.AuthSessions().RevokeFamily(ctx, ss.TokenFamily); err != nil {
+			s.logger.Error("revoke replayed family failed", "error", err)
+		}
 		s.logger.Warn("refresh token replay detected", "user_id", ss.UserID, "family", ss.TokenFamily)
 		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("refresh token has been revoked"))
+	}
+	if !ss.ExpiresAt.After(time.Now().UTC()) {
+		if err := s.store.AuthSessions().RevokeFamily(ctx, ss.TokenFamily); err != nil {
+			s.logger.Error("revoke expired family failed", "error", err)
+		}
+		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("refresh token has expired"))
 	}
 
 	// Revoke the existing token family (rotation).
@@ -153,7 +170,7 @@ func (s *AuthService) RefreshToken(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("token generation failed"))
 	}
 
-	refreshRaw, family, refreshHash2, err := s.jwt.GenerateRefreshToken()
+	refreshRaw, refreshHash2, err := s.jwt.generateRefreshToken()
 	if err != nil {
 		s.logger.Error("generate refresh token failed", "error", err)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("token generation failed"))
@@ -162,9 +179,9 @@ func (s *AuthService) RefreshToken(
 	newSS := &store.AuthSession{
 		ID:               newID(),
 		UserID:           ss.UserID,
-		TokenFamily:      family,
+		TokenFamily:      ss.TokenFamily,
 		RefreshTokenHash: refreshHash2,
-		ExpiresAt:        accessExp.Add(s.jwt.RefreshTTL()),
+		ExpiresAt:        time.Now().UTC().Add(s.jwt.RefreshTTL()),
 	}
 	if err := s.store.AuthSessions().Create(ctx, newSS); err != nil {
 		s.logger.Error("create new session failed", "error", err)
@@ -227,9 +244,10 @@ func (s *AuthService) ChangePassword(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update password failed"))
 	}
 
-	// AC-025-03: Revoke all sessions after password change.
+	// AC-025-03: Password changes fail closed if session revocation fails.
 	if err := s.store.AuthSessions().RevokeByUserID(ctx, userID); err != nil {
 		s.logger.Error("revoke sessions after password change failed", "error", err)
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("revoke sessions failed"))
 	}
 
 	return connect.NewResponse(&authv1.ChangePasswordResponse{}), nil
@@ -245,13 +263,13 @@ func (s *AuthService) userAuthorizationContext(ctx context.Context, userID strin
 	orgID = members[0].OrgID
 	roles = make([]string, 0, len(members))
 	seen := make(map[string]struct{}, len(members))
-	for _, member := range members {
-		role := string(member.Role)
-		if _, ok := seen[role]; ok {
+	for _, m := range members {
+		r := string(m.Role)
+		if _, ok := seen[r]; ok {
 			continue
 		}
-		seen[role] = struct{}{}
-		roles = append(roles, role)
+		seen[r] = struct{}{}
+		roles = append(roles, r)
 	}
 	return orgID, roles
 }
