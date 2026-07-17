@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
+	"github.com/ndzuki/release-manager/internal/operator"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
@@ -281,7 +283,9 @@ func TestFinishOperation(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			svc, st := newTestSvc(t)
+			st := newTestSvc(t)
+			svc, err := operator.NewService(st, nil)
+			require.NoError(t, err)
 			ctx := context.Background()
 			def := &store.ReleaseDefinition{
 				ID:          "definition-" + test.name,
