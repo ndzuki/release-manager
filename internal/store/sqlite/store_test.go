@@ -447,3 +447,28 @@ func TestValuesRevisionNotFound(t *testing.T) {
 	_, err := st.Values().Get(ctx, "nonexistent")
 	assert.ErrorIs(t, err, store.ErrNotFound)
 }
+
+func TestInventoryDefinitionAssociation(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	item := &store.ReleaseInventory{
+		ReleaseDefinitionID: "definition-1",
+		CustomerID:          "customer-1",
+		ClusterID:           "cluster-1",
+		Namespace:           "apps",
+		ReleaseName:         "example",
+		Chart:               "example-chart",
+		ChartVersion:        "1.0.0",
+		Revision:            1,
+		Status:              "deployed",
+		InventoryStatus:     store.InventoryActive,
+		LastSyncID:          "sync-1",
+	}
+	require.NoError(t, st.Inventories().Upsert(ctx, item))
+
+	items, err := st.Inventories().ListByCluster(ctx, "customer-1", "cluster-1")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "definition-1", items[0].ReleaseDefinitionID)
+}

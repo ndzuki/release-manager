@@ -2,191 +2,193 @@ package helmengine
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chartutil"
-	"helm.sh/helm/v3/pkg/kube"
 	kubefake "helm.sh/helm/v3/pkg/kube/fake"
 	"helm.sh/helm/v3/pkg/registry"
-	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage"
 	"helm.sh/helm/v3/pkg/storage/driver"
-	"k8s.io/client-go/rest"
 )
 
-func TestRealEngine_Upgrade(t *testing.T) {
+func TestRealEngine_Install(t *testing.T) {
+	engine, _ := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	})
+	chartPath := writeTestChart(t)
+
+	release, err := engine.Install(t.Context(), InstallOptions{
+		Namespace:   "default",
+		ReleaseName: "example",
+		ChartPath:   chartPath,
+		Values:      map[string]interface{}{"message": "hello"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "example", release.Name)
+	assert.Equal(t, "default", release.Namespace)
+	assert.Equal(t, 1, release.Revision)
+	assert.Equal(t, "deployed", release.Status)
+	assert.Equal(t, "example-chart-0.1.0", release.Chart)
+	assert.NotEmpty(t, release.ManifestDigest)
+}
+
+func TestRealEngine_InstallAlreadyExists(t *testing.T) {
+	engine, _ := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	})
+	opts := InstallOptions{
+		Namespace:   "default",
+		ReleaseName: "example",
+		ChartPath:   writeTestChart(t),
+	}
+
+	_, err := engine.Install(t.Context(), opts)
+	require.NoError(t, err)
+
+	_, err = engine.Install(t.Context(), opts)
+	assert.ErrorIs(t, err, ErrAlreadyExists)
+}
+
+func TestRealEngine_InstallAtomicFailureRemovesRelease(t *testing.T) {
+	engine, releases := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+		WaitError:          errors.New("hook failed"),
+	})
+
+	_, err := engine.Install(t.Context(), InstallOptions{
+		Namespace:   "default",
+		ReleaseName: "atomic-example",
+		ChartPath:   writeTestChart(t),
+		Atomic:      true,
+		Timeout:     time.Second,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrActionFailed)
+
+	_, storageErr := releases.Get("atomic-example", 1)
+	assert.ErrorIs(t, storageErr, driver.ErrReleaseNotFound)
+}
+
+func TestRealEngine_InstallContextErrors(t *testing.T) {
+	engine, _ := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	})
+
 	tests := []struct {
-		name             string
-		expectedRevision int
-		configure        func(*action.Configuration, *kubefake.FailingKubeClient)
-		wantRevision     int
-		wantErr          error
-		wantHistory      int
+		name    string
+		ctx     context.Context
+		wantErr error
 	}{
 		{
-			name:             "release not found",
-			expectedRevision: 1,
-			wantErr:          ErrNotFound,
-			wantHistory:      0,
+			name:    "cancelled",
+			ctx:     cancelledContext(),
+			wantErr: ErrCancelled,
 		},
 		{
-			name:             "revision conflict has no write",
-			expectedRevision: 2,
-			wantErr:          ErrConflict,
-			wantHistory:      1,
-		},
-		{
-			name:             "successful upgrade",
-			expectedRevision: 1,
-			wantRevision:     2,
-			wantHistory:      2,
-		},
-		{
-			name:             "atomic failure rolls back",
-			expectedRevision: 1,
-			configure: func(cfg *action.Configuration, client *kubefake.FailingKubeClient) {
-				cfg.KubeClient = &failOnceUpdateClient{
-					FailingKubeClient: client,
-					err:               fmt.Errorf("upgrade failed"),
-				}
-			},
-			wantErr:     ErrActionFailed,
-			wantHistory: 3,
+			name:    "deadline exceeded",
+			ctx:     expiredContext(t),
+			wantErr: ErrTimeout,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			chartPath := writeTestChart(t)
-			cfg, kubeClient := newTestActionConfiguration(t)
-			if tt.configure != nil {
-				tt.configure(cfg, kubeClient)
-			}
-			if tt.name != "release not found" {
-				require.NoError(t, cfg.Releases.Create(testRelease("my-release", "default", chartPath)))
-			}
-
-			engine := newRealEngineWithConfig("default", func(string) (*action.Configuration, error) {
-				return cfg, nil
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := engine.Install(test.ctx, InstallOptions{
+				Namespace:   "default",
+				ReleaseName: "context-example",
+				ChartPath:   writeTestChart(t),
 			})
-			rel, err := engine.Upgrade(context.Background(), UpgradeOptions{
-				Namespace:        "default",
-				ReleaseName:      "my-release",
-				ChartPath:        chartPath,
-				Values:           map[string]interface{}{"replicas": 2},
-				ExpectedRevision: tt.expectedRevision,
-				Atomic:           tt.name == "atomic failure rolls back",
-				Timeout:          1,
-			})
-
-			if tt.wantErr != nil {
-				require.ErrorIs(t, err, tt.wantErr)
-			} else {
-				require.NoError(t, err)
-				require.NotNil(t, rel)
-				assert.Equal(t, tt.wantRevision, rel.Revision)
-			}
-
-			history, historyErr := cfg.Releases.History("my-release")
-			if tt.wantHistory == 0 {
-				require.ErrorIs(t, historyErr, driver.ErrReleaseNotFound)
-				return
-			}
-			require.NoError(t, historyErr)
-			assert.Len(t, history, tt.wantHistory)
-			if tt.name == "revision conflict has no write" {
-				assert.Equal(t, 1, history[0].Version)
-				assert.Equal(t, release.StatusDeployed, history[0].Info.Status)
-			}
-			if tt.name == "atomic failure rolls back" {
-				rolledBack, getErr := cfg.Releases.Get("my-release", 3)
-				require.NoError(t, getErr)
-				assert.Equal(t, release.StatusDeployed, rolledBack.Info.Status)
-				original, getErr := cfg.Releases.Get("my-release", 1)
-				require.NoError(t, getErr)
-				assert.Equal(t, release.StatusSuperseded, original.Info.Status)
-			}
+			assert.ErrorIs(t, err, test.wantErr)
 		})
 	}
 }
 
-func TestNewActionConfiguration_RequiresRESTConfig(t *testing.T) {
-	_, err := newActionConfiguration("default", func() *rest.Config { return nil })
-	require.ErrorContains(t, err, "kubernetes rest config is required")
-}
-
-type failOnceUpdateClient struct {
-	*kubefake.FailingKubeClient
-	err error
-}
-
-func (c *failOnceUpdateClient) Update(
-	original kube.ResourceList,
-	modified kube.ResourceList,
-	force bool,
-) (*kube.Result, error) {
-	if c.err != nil {
-		err := c.err
-		c.err = nil
-		return &kube.Result{}, err
+func TestDigestValuesDeterministic(t *testing.T) {
+	left := map[string]interface{}{
+		"replicas": 2,
+		"image": map[string]interface{}{
+			"repository": "example/app",
+			"tag":        "1.0.0",
+		},
 	}
-	return c.FailingKubeClient.Update(original, modified, force)
+	right := map[string]interface{}{
+		"image": map[string]interface{}{
+			"tag":        "1.0.0",
+			"repository": "example/app",
+		},
+		"replicas": 2,
+	}
+
+	assert.Equal(t, digestValues(left), digestValues(right))
 }
 
-func newTestActionConfiguration(t *testing.T) (*action.Configuration, *kubefake.FailingKubeClient) {
+func newTestRealEngine(t *testing.T, kubeClient *kubefake.FailingKubeClient) (*RealEngine, *storage.Storage) {
 	t.Helper()
 
+	releases := storage.Init(driver.NewMemory())
 	registryClient, err := registry.NewClient()
 	require.NoError(t, err)
-	kubeClient := &kubefake.FailingKubeClient{
-		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard, LogOutput: io.Discard},
-	}
-	return &action.Configuration{
-		Releases:       storage.Init(driver.NewMemory()),
-		KubeClient:     kubeClient,
-		Capabilities:   chartutil.DefaultCapabilities,
-		RegistryClient: registryClient,
-		Log:            func(string, ...interface{}) {},
-	}, kubeClient
-}
 
-func testRelease(name, namespace, chartPath string) *release.Release {
-	return &release.Release{
-		Name:      name,
-		Namespace: namespace,
-		Chart: &chart.Chart{Metadata: &chart.Metadata{
-			APIVersion: "v2",
-			Name:       filepath.Base(chartPath),
-			Version:    "0.1.0",
-		}},
-		Config:   map[string]interface{}{"replicas": 1},
-		Manifest: "",
-		Info: &release.Info{
-			Status:      release.StatusDeployed,
-			Description: "seed release",
-		},
-		Version: 1,
+	engine := NewRealEngine("", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	engine.releaseStorage = releases
+	engine.configFactory = func(namespace string) (*action.Configuration, error) {
+		driver, ok := releases.Driver.(*driver.Memory)
+		if ok {
+			driver.SetNamespace(namespace)
+		}
+
+		return &action.Configuration{
+			Releases:       releases,
+			KubeClient:     kubeClient,
+			Capabilities:   chartutil.DefaultCapabilities.Copy(),
+			RegistryClient: registryClient,
+			Log:            engine.helmLog,
+		}, nil
 	}
+
+	return engine, releases
 }
 
 func writeTestChart(t *testing.T) string {
 	t.Helper()
 
-	dir := t.TempDir()
-	chartYAML := []byte("apiVersion: v2\nname: upgrade-test\nversion: 0.1.0\n")
-	require.NoError(t, writeFile(filepath.Join(dir, "Chart.yaml"), chartYAML))
-	require.NoError(t, writeFile(filepath.Join(dir, "values.yaml"), []byte("replicas: 1\n")))
-	return dir
+	chartDir := filepath.Join(t.TempDir(), "example-chart")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(chartDir, "templates"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(chartDir, "Chart.yaml"), []byte(`apiVersion: v2
+name: example-chart
+version: 0.1.0
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(chartDir, "values.yaml"), []byte("message: default\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(chartDir, "templates", "configmap.yaml"), []byte(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}
+data:
+  message: {{ .Values.message | quote }}
+`), 0o644))
+
+	return chartDir
 }
 
-func writeFile(path string, data []byte) error {
-	return os.WriteFile(path, data, 0o600)
+func cancelledContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
+func expiredContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	t.Cleanup(cancel)
+	return ctx
 }

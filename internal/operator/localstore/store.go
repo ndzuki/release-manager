@@ -8,13 +8,14 @@ import "context"
 
 // CommandEntry is a locally persisted command record.
 type CommandEntry struct {
-	CommandID   string `json:"command_id"`
-	OutboxID    string `json:"outbox_id"`
-	OperationID string `json:"operation_id"`
-	Sequence    int64  `json:"sequence"`
-	Payload     []byte `json:"payload"`
-	Status      string `json:"status"` // pending, running, succeeded, failed
-	ResultJSON  string `json:"result_json,omitempty"`
+	CommandID     string `json:"command_id"`
+	OutboxID      string `json:"outbox_id"`
+	OperationID   string `json:"operation_id"`
+	OperationType string `json:"operation_type"`
+	Sequence      int64  `json:"sequence"`
+	Payload       []byte `json:"payload"`
+	Status        string `json:"status"` // pending, running, succeeded, failed
+	ResultJSON    string `json:"result_json,omitempty"`
 }
 
 // Status values for locally stored commands.

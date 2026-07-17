@@ -1,4 +1,4 @@
-// Package agent executes commands delivered by the operator CommandStream.
+// Package agent executes commands received from the operator control stream.
 package agent
 
 import (
@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
@@ -16,222 +15,370 @@ import (
 	"github.com/ndzuki/release-manager/internal/operator/localstore"
 )
 
-const defaultRetryDelay = time.Second
+const defaultInstallTimeout = 5 * time.Minute
 
-// CommandStream is the subset of the generated Connect stream used by Agent.
-// It keeps command execution tests independent from a live HTTP server.
-type CommandStream interface {
+// Stream is the operator-side command stream contract used by Agent.
+type Stream interface {
 	Send(*operatorv1.CommandStreamRequest) error
 	Receive() (*operatorv1.CommandStreamResponse, error)
 	CloseRequest() error
 	CloseResponse() error
 }
 
-// Options configures an Agent.
-type Options struct {
-	Client        operatorv1connect.OperatorServiceClient
-	Engine        helmengine.Engine
-	Store         localstore.Store
-	SessionID     string
-	OperatorID    string
-	Logger        *slog.Logger
-	RetryDelay    time.Duration
-	StreamFactory func(context.Context) CommandStream
-	OnComplete    func(namespace, releaseName, operationID string)
+// StreamClient creates operator command streams.
+type StreamClient interface {
+	CommandStream(context.Context) Stream
 }
 
-// Agent receives and executes commands from an orchestrator.
+// InventoryNotifier schedules a targeted inventory update after a successful operation.
+type InventoryNotifier interface {
+	NotifyOperationComplete(namespace, releaseName, operationID, definitionID string)
+}
+
+// Agent receives durable commands, executes Helm operations, and returns cached results on redelivery.
 type Agent struct {
-	engine        helmengine.Engine
-	store         localstore.Store
-	sessionID     string
-	operatorID    string
-	logger        *slog.Logger
-	retryDelay    time.Duration
-	streamFactory func(context.Context) CommandStream
-	onComplete    func(namespace, releaseName, operationID string)
+	client       StreamClient
+	engine       helmengine.Engine
+	store        localstore.Store
+	notifier     InventoryNotifier
+	sessionID    string
+	operatorID   string
+	logger       *slog.Logger
+	installFlags InstallFlags
 }
 
-// New creates an Agent with durable command de-duplication.
-func New(opts Options) (*Agent, error) {
-	if opts.Engine == nil {
-		return nil, errors.New("helm engine is required")
-	}
-	if opts.Store == nil {
-		return nil, errors.New("local command store is required")
-	}
-	if opts.SessionID == "" {
-		return nil, errors.New("session id is required")
-	}
-	if opts.OperatorID == "" {
-		return nil, errors.New("operator id is required")
-	}
-	if opts.StreamFactory == nil && opts.Client == nil {
-		return nil, errors.New("operator service client is required")
-	}
-	if opts.Logger == nil {
-		opts.Logger = slog.Default()
-	}
-	if opts.RetryDelay <= 0 {
-		opts.RetryDelay = defaultRetryDelay
+// InstallFlags contains operator-wide defaults for INSTALL commands.
+type InstallFlags struct {
+	Atomic  bool
+	Timeout time.Duration
+}
+
+// Config contains Agent dependencies and session identity.
+type Config struct {
+	Client       StreamClient
+	Engine       helmengine.Engine
+	Store        localstore.Store
+	Notifier     InventoryNotifier
+	SessionID    string
+	OperatorID   string
+	Logger       *slog.Logger
+	InstallFlags InstallFlags
+}
+
+// Result is persisted locally and sent to the orchestrator for idempotent replay.
+type Result struct {
+	OperationID     string              `json:"operation_id"`
+	CommandID       string              `json:"command_id"`
+	DefinitionID    string              `json:"definition_id"`
+	Status          string              `json:"status"`
+	Code            string              `json:"code,omitempty"`
+	Message         string              `json:"message,omitempty"`
+	Release         *helmengine.Release `json:"release,omitempty"`
+	InventorySync   bool                `json:"inventory_sync_hint"`
+	ResourceSummary ResourceSummary     `json:"resource_summary"`
+}
+
+// ResourceSummary contains non-sensitive output metadata.
+type ResourceSummary struct {
+	ManifestDigest string `json:"manifest_digest,omitempty"`
+}
+
+// New creates an Agent.
+func New(cfg Config) (*Agent, error) {
+	switch {
+	case cfg.Client == nil:
+		return nil, errors.New("agent client is required")
+	case cfg.Engine == nil:
+		return nil, errors.New("agent engine is required")
+	case cfg.Store == nil:
+		return nil, errors.New("agent store is required")
+	case cfg.SessionID == "":
+		return nil, errors.New("agent session_id is required")
+	case cfg.OperatorID == "":
+		return nil, errors.New("agent operator_id is required")
 	}
 
-	factory := opts.StreamFactory
-	if factory == nil {
-		factory = func(ctx context.Context) CommandStream {
-			return opts.Client.CommandStream(ctx)
-		}
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if cfg.InstallFlags.Timeout <= 0 {
+		cfg.InstallFlags.Timeout = defaultInstallTimeout
 	}
 
 	return &Agent{
-		engine:        opts.Engine,
-		store:         opts.Store,
-		sessionID:     opts.SessionID,
-		operatorID:    opts.OperatorID,
-		logger:        opts.Logger,
-		retryDelay:    opts.RetryDelay,
-		streamFactory: factory,
-		onComplete:    opts.OnComplete,
+		client:       cfg.Client,
+		engine:       cfg.Engine,
+		store:        cfg.Store,
+		notifier:     cfg.Notifier,
+		sessionID:    cfg.SessionID,
+		operatorID:   cfg.OperatorID,
+		logger:       logger,
+		installFlags: cfg.InstallFlags,
 	}, nil
 }
 
-// Run maintains the CommandStream connection until ctx is cancelled.
+// Run connects to CommandStream and processes commands until the context is cancelled.
 func (a *Agent) Run(ctx context.Context) error {
-	for {
-		err := a.runStream(ctx)
-		if ctx.Err() != nil {
-			//nolint:nilerr // context cancellation is a clean agent shutdown.
-			return nil
-		}
-		if err != nil {
-			a.logger.Warn("operator command stream disconnected", "error", err)
-		}
-
-		timer := time.NewTimer(a.retryDelay)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return nil
-		case <-timer.C:
-		}
+	lastSequence, err := a.store.LastSequence(ctx)
+	if err != nil {
+		return fmt.Errorf("load last command sequence: %w", err)
 	}
-}
 
-func (a *Agent) runStream(ctx context.Context) error {
-	stream := a.streamFactory(ctx)
-	if stream == nil {
-		return errors.New("command stream is nil")
-	}
-	defer func() {
-		if err := stream.CloseRequest(); err != nil {
-			a.logger.Warn("failed to close command request stream", "error", err)
-		}
-		if err := stream.CloseResponse(); err != nil {
-			a.logger.Warn("failed to close command response stream", "error", err)
-		}
-	}()
+	stream := a.client.CommandStream(ctx)
+	defer stream.CloseResponse() //nolint:errcheck // stream is already terminating
+
 	if err := stream.Send(&operatorv1.CommandStreamRequest{
 		Payload: &operatorv1.CommandStreamRequest_Hello{
 			Hello: &operatorv1.Hello{
 				SessionId:        a.sessionID,
 				OperatorId:       a.operatorID,
-				LastSeenSequence: a.lastSeenSequence(ctx),
+				LastSeenSequence: lastSequence,
 			},
 		},
 	}); err != nil {
-		return fmt.Errorf("send command stream hello: %w", err)
+		return fmt.Errorf("send operator hello: %w", err)
+	}
+
+	if err := a.replayActive(ctx, stream); err != nil {
+		return err
 	}
 
 	for {
 		response, err := stream.Receive()
 		if err != nil {
-			return err
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("receive operator command: %w", err)
 		}
-		command := response.GetCommand()
-		if command == nil {
-			continue
-		}
-		if err := a.handleCommand(ctx, stream, command); err != nil {
-			return err
+
+		switch {
+		case response.GetCommand() != nil:
+			if err := a.handleCommand(ctx, stream, response.GetCommand()); err != nil {
+				return err
+			}
+		case response.GetResyncRequest() != nil:
+			lastSequence, err := a.store.LastSequence(ctx)
+			if err != nil {
+				return fmt.Errorf("load sequence for resync: %w", err)
+			}
+			if err := stream.Send(&operatorv1.CommandStreamRequest{
+				Payload: &operatorv1.CommandStreamRequest_ResyncResponse{
+					ResyncResponse: &operatorv1.ResyncResponse{OperatorLastSequence: lastSequence},
+				},
+			}); err != nil {
+				return fmt.Errorf("send resync response: %w", err)
+			}
+		case response.GetDuplicateResponse() != nil:
+			a.logger.Debug("received duplicate command result",
+				"command_id", response.GetDuplicateResponse().GetCommandId(),
+			)
+		case response.GetSessionEvent() != nil:
+			return fmt.Errorf("operator session %s: %s",
+				response.GetSessionEvent().GetType(),
+				response.GetSessionEvent().GetMessage(),
+			)
 		}
 	}
 }
 
-func (a *Agent) lastSeenSequence(ctx context.Context) int64 {
-	sequence, err := a.store.LastSequence(ctx)
+func (a *Agent) replayActive(ctx context.Context, stream Stream) error {
+	entries, err := a.store.ListActive(ctx)
 	if err != nil {
-		a.logger.Warn("failed to read last command sequence", "error", err)
-		return 0
+		return fmt.Errorf("list active commands: %w", err)
 	}
-	return sequence
+	for _, entry := range entries {
+		if err := a.executeEntry(ctx, stream, entry); err != nil {
+			return fmt.Errorf("replay command %q: %w", entry.CommandID, err)
+		}
+	}
+	return nil
 }
 
-//nolint:gocyclo // command lifecycle combines durable deduplication, ACKs, execution, and result delivery.
-func (a *Agent) handleCommand(
-	ctx context.Context,
-	stream CommandStream,
-	command *operatorv1.Command,
-) error {
+func (a *Agent) handleCommand(ctx context.Context, stream Stream, command *operatorv1.Command) error {
 	if command.GetCommandId() == "" {
-		return errors.New("command id is required")
+		return errors.New("received command without command_id")
 	}
 
 	existing, err := a.store.Get(ctx, command.GetCommandId())
-	if err != nil && !errors.Is(err, localstore.ErrNotFound) {
-		return fmt.Errorf("load command %s: %w", command.GetCommandId(), err)
+	if err == nil {
+		if localstore.IsTerminal(existing.Status) {
+			return a.sendCachedResult(stream, command, existing.ResultJSON)
+		}
+		return a.executeEntry(ctx, stream, existing)
 	}
-	if existing != nil && localstore.IsTerminal(existing.Status) {
-		return a.sendCachedResult(stream, command, existing)
+	if !errors.Is(err, localstore.ErrNotFound) {
+		return fmt.Errorf("lookup command %q: %w", command.GetCommandId(), err)
 	}
 
 	payload, err := json.Marshal(command)
 	if err != nil {
-		return fmt.Errorf("marshal command %s: %w", command.GetCommandId(), err)
+		return fmt.Errorf("marshal command %q: %w", command.GetCommandId(), err)
 	}
 	entry := &localstore.CommandEntry{
-		CommandID:   command.GetCommandId(),
-		OutboxID:    command.GetOutboxId(),
-		OperationID: command.GetOperationId(),
-		Sequence:    command.GetSequence(),
-		Payload:     payload,
-		Status:      localstore.StatusPending,
+		CommandID:     command.GetCommandId(),
+		OutboxID:      command.GetOutboxId(),
+		OperationID:   command.GetOperationId(),
+		OperationType: command.GetOperationType(),
+		Sequence:      command.GetSequence(),
+		Payload:       payload,
+		Status:        localstore.StatusPending,
 	}
-	if existing == nil {
-		if err := a.store.Save(ctx, entry); err != nil {
-			return fmt.Errorf("persist command %s: %w", command.GetCommandId(), err)
+	if err := a.store.Save(ctx, entry); err != nil {
+		return fmt.Errorf("persist command %q: %w", command.GetCommandId(), err)
+	}
+
+	if err := stream.Send(ackRequest(command, operatorv1.AckType_ACK_TYPE_PERSISTED)); err != nil {
+		return fmt.Errorf("ack persisted command %q: %w", command.GetCommandId(), err)
+	}
+	return a.executeEntry(ctx, stream, entry)
+}
+
+func (a *Agent) executeEntry(ctx context.Context, stream Stream, entry *localstore.CommandEntry) error {
+	var command operatorv1.Command
+	if err := json.Unmarshal(entry.Payload, &command); err != nil {
+		return a.finishFailure(ctx, stream, entry, Result{
+			OperationID: entry.OperationID,
+			CommandID:   entry.CommandID,
+			Status:      "failed",
+			Code:        "invalid_command",
+			Message:     "invalid command payload",
+		})
+	}
+
+	if err := a.store.UpdateStatus(ctx, entry.CommandID, localstore.StatusRunning, ""); err != nil {
+		return fmt.Errorf("mark command %q running: %w", entry.CommandID, err)
+	}
+
+	result := a.execute(ctx, &command)
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("marshal command result %q: %w", entry.CommandID, err)
+	}
+
+	localStatus := localstore.StatusSucceeded
+	if result.Status == "failed" {
+		localStatus = localstore.StatusFailed
+	}
+	if err := a.store.UpdateStatus(ctx, entry.CommandID, localStatus, string(resultJSON)); err != nil {
+		return fmt.Errorf("persist command result %q: %w", entry.CommandID, err)
+	}
+
+	if result.Status == "succeeded" && result.Release != nil && a.notifier != nil {
+		a.notifier.NotifyOperationComplete(
+			result.Release.Namespace,
+			result.Release.Name,
+			result.OperationID,
+			result.DefinitionID,
+		)
+	}
+
+	return stream.Send(resultRequest(&command, result, resultJSON))
+}
+
+func (a *Agent) execute(ctx context.Context, command *operatorv1.Command) Result {
+	result := Result{
+		OperationID:  command.GetOperationId(),
+		CommandID:    command.GetCommandId(),
+		Status:       "failed",
+		DefinitionID: command.GetDefinitionId(),
+	}
+
+	if command.GetOperationType() != "INSTALL" {
+		result.Code = "unsupported_command"
+		result.Message = fmt.Sprintf("unsupported command type %q", command.GetOperationType())
+		return result
+	}
+	if command.GetBundle() == nil || command.GetBundle().GetChartRef() == "" {
+		result.Code = "invalid_command"
+		result.Message = "chart_ref is required"
+		return result
+	}
+	if command.GetNamespace() == "" || command.GetReleaseName() == "" {
+		result.Code = "invalid_command"
+		result.Message = "namespace and release_name are required"
+		return result
+	}
+
+	values := map[string]interface{}{}
+	if len(command.GetValues()) > 0 {
+		if err := json.Unmarshal(command.GetValues(), &values); err != nil {
+			result.Code = "invalid_command"
+			result.Message = "values must be canonical JSON"
+			return result
 		}
 	}
 
-	if err := a.sendAck(stream, command, operatorv1.AckType_ACK_TYPE_RECEIVED); err != nil {
-		return err
-	}
-	if err := a.sendAck(stream, command, operatorv1.AckType_ACK_TYPE_PERSISTED); err != nil {
-		return err
-	}
-	if err := a.store.UpdateStatus(ctx, command.GetCommandId(), localstore.StatusRunning, ""); err != nil {
-		return fmt.Errorf("mark command %s running: %w", command.GetCommandId(), err)
+	timeout := a.installFlags.Timeout
+	if command.GetTimeoutSeconds() > 0 {
+		timeout = time.Duration(command.GetTimeoutSeconds()) * time.Second
 	}
 
-	result := a.execute(ctx, command)
+	release, err := a.engine.Install(ctx, helmengine.InstallOptions{
+		Namespace:       command.GetNamespace(),
+		ReleaseName:     command.GetReleaseName(),
+		ChartPath:       command.GetBundle().GetChartRef(),
+		ChartVersion:    command.GetBundle().GetChartVersion(),
+		Values:          values,
+		Atomic:          a.installFlags.Atomic,
+		CreateNamespace: command.GetCreateNamespace(),
+		Timeout:         timeout,
+	})
+	if err != nil {
+		result.Code = installErrorCode(err)
+		result.Message = err.Error()
+		return result
+	}
+
+	result.Status = "succeeded"
+	result.Release = release
+	result.InventorySync = true
+	result.ResourceSummary.ManifestDigest = release.ManifestDigest
+	return result
+}
+
+func (a *Agent) finishFailure(ctx context.Context, stream Stream, entry *localstore.CommandEntry, result Result) error {
 	resultJSON, err := json.Marshal(result)
 	if err != nil {
-		return fmt.Errorf("marshal command result %s: %w", command.GetCommandId(), err)
+		return fmt.Errorf("marshal failure result: %w", err)
+	}
+	if err := a.store.UpdateStatus(ctx, entry.CommandID, localstore.StatusFailed, string(resultJSON)); err != nil {
+		return fmt.Errorf("persist failure result: %w", err)
 	}
 
-	status := localstore.StatusSucceeded
-	if result.Status == "failed" {
-		status = localstore.StatusFailed
+	command := &operatorv1.Command{
+		OutboxId:    entry.OutboxID,
+		CommandId:   entry.CommandID,
+		OperationId: entry.OperationID,
+		Sequence:    entry.Sequence,
 	}
-	if err := a.store.UpdateStatus(ctx, command.GetCommandId(), status, string(resultJSON)); err != nil {
-		return fmt.Errorf("persist command result %s: %w", command.GetCommandId(), err)
-	}
-	if result.Status == "succeeded" && a.onComplete != nil {
-		a.onComplete(result.Namespace, result.ReleaseName, command.GetOperationId())
-	}
+	return stream.Send(resultRequest(command, result, resultJSON))
+}
 
-	return stream.Send(&operatorv1.CommandStreamRequest{
+func (a *Agent) sendCachedResult(stream Stream, command *operatorv1.Command, resultJSON string) error {
+	var result Result
+	if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
+		return fmt.Errorf("decode cached result for %q: %w", command.GetCommandId(), err)
+	}
+	return stream.Send(resultRequest(command, result, []byte(resultJSON)))
+}
+
+func ackRequest(command *operatorv1.Command, ackType operatorv1.AckType) *operatorv1.CommandStreamRequest {
+	return &operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Ack{
+			Ack: &operatorv1.Ack{
+				OutboxId:  command.GetOutboxId(),
+				CommandId: command.GetCommandId(),
+				Sequence:  command.GetSequence(),
+				AckType:   ackType,
+			},
+		},
+	}
+}
+
+func resultRequest(command *operatorv1.Command, result Result, resultJSON []byte) *operatorv1.CommandStreamRequest {
+	return &operatorv1.CommandStreamRequest{
 		Payload: &operatorv1.CommandStreamRequest_Result{
 			Result: &operatorv1.Result{
 				OutboxId:   command.GetOutboxId(),
@@ -243,174 +390,30 @@ func (a *Agent) handleCommand(
 				ResultJson: string(resultJSON),
 			},
 		},
-	})
+	}
 }
 
-func (a *Agent) sendAck(
-	stream CommandStream,
-	command *operatorv1.Command,
-	ackType operatorv1.AckType,
-) error {
-	return stream.Send(&operatorv1.CommandStreamRequest{
-		Payload: &operatorv1.CommandStreamRequest_Ack{
-			Ack: &operatorv1.Ack{
-				OutboxId:  command.GetOutboxId(),
-				CommandId: command.GetCommandId(),
-				Sequence:  command.GetSequence(),
-				AckType:   ackType,
-			},
-		},
-	})
-}
-
-func (a *Agent) sendCachedResult(
-	stream CommandStream,
-	command *operatorv1.Command,
-	entry *localstore.CommandEntry,
-) error {
-	var cached commandResult
-	if err := json.Unmarshal([]byte(entry.ResultJSON), &cached); err != nil {
-		return fmt.Errorf("decode cached result %s: %w", command.GetCommandId(), err)
-	}
-	return stream.Send(&operatorv1.CommandStreamRequest{
-		Payload: &operatorv1.CommandStreamRequest_Result{
-			Result: &operatorv1.Result{
-				OutboxId:   command.GetOutboxId(),
-				CommandId:  command.GetCommandId(),
-				Status:     cached.Status,
-				Message:    cached.Message,
-				Output:     []byte(entry.ResultJSON),
-				Sequence:   command.GetSequence(),
-				ResultJson: entry.ResultJSON,
-			},
-		},
-	})
-}
-
-type commandPayload struct {
-	Namespace        string                 `json:"namespace"`
-	ReleaseName      string                 `json:"release_name"`
-	ChartPath        string                 `json:"chart_path"`
-	Values           map[string]interface{} `json:"values"`
-	ExpectedRevision int                    `json:"expected_revision"`
-	Atomic           bool                   `json:"atomic"`
-	Timeout          int                    `json:"timeout"`
-}
-
-type commandResult struct {
-	Status      string              `json:"status"`
-	Message     string              `json:"message,omitempty"`
-	ErrorCode   string              `json:"error_code,omitempty"`
-	OperationID string              `json:"operation_id"`
-	Namespace   string              `json:"namespace,omitempty"`
-	ReleaseName string              `json:"release_name,omitempty"`
-	Release     *helmengine.Release `json:"release,omitempty"`
-}
-
-func (a *Agent) execute(ctx context.Context, command *operatorv1.Command) commandResult {
-	payload, err := decodePayload(command)
-	result := commandResult{
-		OperationID: command.GetOperationId(),
-		Status:      "failed",
-	}
-	if err != nil {
-		result.ErrorCode = "invalid_command"
-		result.Message = err.Error()
-		return result
-	}
-	result.Namespace = payload.Namespace
-	result.ReleaseName = payload.ReleaseName
-
-	opCtx := ctx
-	cancel := func() {}
-	if payload.Timeout > 0 {
-		opCtx, cancel = context.WithTimeout(ctx, time.Duration(payload.Timeout)*time.Second)
-	}
-	defer cancel()
-
-	switch strings.ToUpper(command.GetOperationType()) {
-	case "INSTALL":
-		release, execErr := a.engine.Install(opCtx, helmengine.InstallOptions{
-			Namespace:   payload.Namespace,
-			ReleaseName: payload.ReleaseName,
-			ChartPath:   payload.ChartPath,
-			Values:      payload.Values,
-		})
-		if execErr != nil {
-			result.ErrorCode = errorCode(execErr, "helm_install_failed")
-			result.Message = execErr.Error()
-			return result
-		}
-		result.Status = "succeeded"
-		result.Release = release
-	case "UPGRADE":
-		release, execErr := a.engine.Upgrade(opCtx, helmengine.UpgradeOptions{
-			Namespace:        payload.Namespace,
-			ReleaseName:      payload.ReleaseName,
-			ChartPath:        payload.ChartPath,
-			Values:           payload.Values,
-			ExpectedRevision: payload.ExpectedRevision,
-			Atomic:           payload.Atomic,
-			Timeout:          payload.Timeout,
-		})
-		if execErr != nil {
-			result.ErrorCode = errorCode(execErr, "helm_upgrade_failed")
-			result.Message = execErr.Error()
-			return result
-		}
-		result.Status = "succeeded"
-		result.Release = release
-	case "ROLLBACK":
-		release, execErr := a.engine.Rollback(opCtx, helmengine.RollbackOptions{
-			Namespace:      payload.Namespace,
-			ReleaseName:    payload.ReleaseName,
-			TargetRevision: payload.ExpectedRevision,
-		})
-		if execErr != nil {
-			result.ErrorCode = errorCode(execErr, "helm_rollback_failed")
-			result.Message = execErr.Error()
-			return result
-		}
-		result.Status = "succeeded"
-		result.Release = release
-	default:
-		result.ErrorCode = "unsupported_operation"
-		result.Message = fmt.Sprintf("unsupported operation type: %s", command.GetOperationType())
-	}
-	return result
-}
-
-func decodePayload(command *operatorv1.Command) (commandPayload, error) {
-	if len(command.GetValues()) == 0 {
-		return commandPayload{}, errors.New("command values payload is required")
-	}
-	var payload commandPayload
-	if err := json.Unmarshal(command.GetValues(), &payload); err != nil {
-		return commandPayload{}, fmt.Errorf("decode command values: %w", err)
-	}
-	if payload.ChartPath == "" && command.GetBundle() != nil {
-		payload.ChartPath = command.GetBundle().GetChartRef()
-	}
-	if payload.Namespace == "" || payload.ReleaseName == "" || payload.ChartPath == "" {
-		return commandPayload{}, errors.New("command payload requires namespace, release_name, and chart_path")
-	}
-	if payload.Values == nil {
-		payload.Values = map[string]interface{}{}
-	}
-	return payload, nil
-}
-
-func errorCode(err error, fallback string) string {
+func installErrorCode(err error) string {
 	switch {
-	case errors.Is(err, helmengine.ErrNotFound):
-		return "release_not_found"
-	case errors.Is(err, helmengine.ErrConflict):
-		return "revision_conflict"
 	case errors.Is(err, helmengine.ErrAlreadyExists):
 		return "release_already_exists"
+	case errors.Is(err, helmengine.ErrForbidden):
+		return "forbidden"
 	case errors.Is(err, helmengine.ErrTimeout):
 		return "timeout"
+	case errors.Is(err, helmengine.ErrCancelled):
+		return "cancelled"
 	default:
-		return fallback
+		return "helm_install_failed"
 	}
+}
+
+// ConnectClient adapts the generated Connect client to StreamClient.
+type ConnectClient struct {
+	Client operatorv1connect.OperatorServiceClient
+}
+
+// CommandStream opens a generated Connect bidirectional stream.
+func (c ConnectClient) CommandStream(ctx context.Context) Stream {
+	return c.Client.CommandStream(ctx)
 }

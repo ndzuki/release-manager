@@ -3,347 +3,385 @@ package helmengine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
+	"log/slog"
+	"strings"
 
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/release"
+	"helm.sh/helm/v3/pkg/storage"
 	"helm.sh/helm/v3/pkg/storage/driver"
-	"k8s.io/client-go/rest"
 )
 
-// RealEngine implements Engine using the Helm Go SDK.
-// It never makes os/exec or subprocess calls.
+// RealEngine implements Engine using the Helm Go SDK (helm.sh/helm/v3/pkg/action).
+// It never shells out to the helm CLI binary.
 type RealEngine struct {
-	namespace string
-	newConfig func(namespace string) (*action.Configuration, error)
+	settings       *cli.EnvSettings
+	logger         *slog.Logger
+	configFactory  func(namespace string) (*action.Configuration, error)
+	releaseStorage *storage.Storage
 }
 
-// NewRealEngine creates a RealEngine connected to the given cluster.
-// The restGetter is called on each operation to create a fresh
-// action.Configuration, ensuring no mutable state leaks across concurrent operations.
-func NewRealEngine(namespace string, restGetter func() *rest.Config) *RealEngine {
+// NewRealEngine creates a new RealEngine.
+// kubeConfig is the path to a kubeconfig file; if empty, in-cluster config is used.
+func NewRealEngine(kubeConfig string, logger *slog.Logger) *RealEngine {
+	settings := cli.New()
+	if kubeConfig != "" {
+		settings.KubeConfig = kubeConfig
+	}
+
 	return &RealEngine{
-		namespace: namespace,
-		newConfig: func(operationNamespace string) (*action.Configuration, error) {
-			return newActionConfiguration(operationNamespace, restGetter)
-		},
+		settings: settings,
+		logger:   logger,
 	}
 }
 
-func newRealEngineWithConfig(
-	namespace string,
-	newConfig func(namespace string) (*action.Configuration, error),
-) *RealEngine {
-	return &RealEngine{namespace: namespace, newConfig: newConfig}
-}
+// actionConfig creates a new action.Configuration for a single operation.
+// Production uses a Kubernetes Secret driver. Tests may inject an isolated
+// configuration factory while preserving the same Helm SDK action path.
+func (r *RealEngine) actionConfig(namespace string) (*action.Configuration, error) {
+	if r.configFactory != nil {
+		return r.configFactory(namespace)
+	}
 
-func newActionConfiguration(
-	namespace string,
-	restGetter func() *rest.Config,
-) (*action.Configuration, error) {
+	configFlags := r.settings.RESTClientGetter()
+
 	cfg := new(action.Configuration)
-	rc := restGetter()
-	if rc == nil {
-		return nil, errors.New("kubernetes rest config is required")
+	if err := cfg.Init(configFlags, namespace, "secret", r.helmLog); err != nil {
+		return nil, fmt.Errorf("initialize Helm action configuration: %w", err)
 	}
-	if err := cfg.Init(
-		NewRESTClientGetter(rc, namespace),
-		namespace,
-		"secret",
-		func(string, ...interface{}) {},
-	); err != nil {
-		return nil, fmt.Errorf("helm config init: %w", err)
+
+	registryClient, err := registry.NewClient(
+		registry.ClientOptCredentialsFile(r.settings.RegistryConfig),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initialize Helm registry client: %w", err)
 	}
+	cfg.RegistryClient = registryClient
+	if r.releaseStorage != nil {
+		cfg.Releases = r.releaseStorage
+	}
+
 	return cfg, nil
 }
 
-// Install installs a chart. Returns ErrAlreadyExists if the release exists.
-func (e *RealEngine) Install(ctx context.Context, opts InstallOptions) (*Release, error) {
-	ns := e.resolveNS(opts.Namespace)
-	cfg, err := e.newConfig(ns)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrActionFailed, err)
+// helmLog bridges Helm SDK logging to slog.
+func (r *RealEngine) helmLog(format string, args ...interface{}) {
+	if r.logger != nil {
+		r.logger.Debug(fmt.Sprintf(format, args...))
+	}
+}
+
+// Install installs a chart and returns the release.
+// Returns ErrAlreadyExists if the release exists.
+func (r *RealEngine) Install(ctx context.Context, opts InstallOptions) (*Release, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
 	}
 
-	client := action.NewInstall(cfg)
-	client.Namespace = ns
-	client.ReleaseName = opts.ReleaseName
-	client.CreateNamespace = false
-	client.Timeout = 300 * time.Second
-
-	chartPath, err := client.LocateChart(opts.ChartPath, cli.New())
+	cfg, err := r.actionConfig(opts.Namespace)
 	if err != nil {
-		return nil, fmt.Errorf("%w: locate chart: %w", ErrActionFailed, err)
+		return nil, fmt.Errorf("initialize Helm install: %w", err)
+	}
+	install := action.NewInstall(cfg)
+	install.Version = opts.ChartVersion
+	chartPath, err := install.LocateChart(opts.ChartPath, r.settings)
+	if err != nil {
+		return nil, fmt.Errorf("locate Helm chart %q: %w", opts.ChartPath, err)
 	}
 
-	ch, err := loader.Load(chartPath)
+	chrt, err := loader.Load(chartPath)
 	if err != nil {
-		return nil, fmt.Errorf("%w: load chart: %w", ErrActionFailed, err)
+		return nil, fmt.Errorf("load Helm chart %q: %w", chartPath, err)
 	}
 
-	rel, err := client.RunWithContext(ctx, ch, opts.Values)
-	if err != nil {
-		if errors.Is(ctx.Err(), context.Canceled) {
-			return nil, ErrCancelled
-		}
-		if isReleaseExists(err) {
-			return nil, fmt.Errorf("%w: %w", ErrAlreadyExists, err)
-		}
-		return nil, fmt.Errorf("%w: %w", ErrActionFailed, err)
+	install.Namespace = opts.Namespace
+	install.ReleaseName = opts.ReleaseName
+	install.Atomic = opts.Atomic
+	install.CreateNamespace = opts.CreateNamespace
+	install.Wait = opts.Atomic
+	if opts.Timeout > 0 {
+		install.Timeout = opts.Timeout
 	}
 
-	return toRelease(rel), nil
+	rel, err := install.RunWithContext(ctx, chrt, opts.Values)
+	if err != nil {
+		return nil, mapActionError(ctx, "install Helm release", err)
+	}
+	return toEngineRelease(rel), nil
 }
 
 // Upgrade upgrades an existing release.
-// If opts.ExpectedRevision > 0, it must match the current revision (AC-021-02).
-// If opts.Atomic is true, a failed upgrade rolls back automatically (AC-021-04).
-func (e *RealEngine) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, error) {
-	ns := e.resolveNS(opts.Namespace)
-	cfg, err := e.newConfig(ns)
+func (r *RealEngine) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+
+	cfg, err := r.actionConfig(opts.Namespace)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrActionFailed, err)
+		return nil, fmt.Errorf("initialize Helm upgrade: %w", err)
+	}
+	upgrade := action.NewUpgrade(cfg)
+	upgrade.Version = opts.ChartVersion
+	chartPath, err := upgrade.LocateChart(opts.ChartPath, r.settings)
+	if err != nil {
+		return nil, fmt.Errorf("locate Helm chart %q: %w", opts.ChartPath, err)
 	}
 
-	// AC-021-02: check expected revision before touching anything
-	if opts.ExpectedRevision > 0 {
-		statusClient := action.NewStatus(cfg)
-		rel, err := statusClient.Run(opts.ReleaseName)
-		if err != nil {
-			if isReleaseNotFound(err) {
-				return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
-			}
-			return nil, fmt.Errorf("%w: status check: %w", ErrActionFailed, err)
-		}
-		if rel.Version != opts.ExpectedRevision {
-			return nil, fmt.Errorf("%w: expected revision %d, got %d",
-				ErrConflict, opts.ExpectedRevision, rel.Version)
-		}
+	chrt, err := loader.Load(chartPath)
+	if err != nil {
+		return nil, fmt.Errorf("load Helm chart %q: %w", chartPath, err)
 	}
 
-	client := action.NewUpgrade(cfg)
-	client.Namespace = ns
-	client.Atomic = opts.Atomic
+	upgrade.Namespace = opts.Namespace
+	upgrade.Atomic = opts.Atomic
+	if opts.MaxHistory > 0 {
+		upgrade.MaxHistory = opts.MaxHistory
+	}
 	if opts.Timeout > 0 {
-		client.Timeout = time.Duration(opts.Timeout) * time.Second
-	} else {
-		client.Timeout = 300 * time.Second
+		upgrade.Timeout = opts.Timeout
 	}
 
-	chartPath, err := client.LocateChart(opts.ChartPath, cli.New())
+	rel, err := upgrade.RunWithContext(ctx, opts.ReleaseName, chrt, opts.Values)
 	if err != nil {
-		return nil, fmt.Errorf("%w: locate chart: %w", ErrActionFailed, err)
+		return nil, mapActionError(ctx, "upgrade Helm release", err)
 	}
-
-	ch, err := loader.Load(chartPath)
-	if err != nil {
-		return nil, fmt.Errorf("%w: load chart: %w", ErrActionFailed, err)
-	}
-
-	vals := opts.Values
-	if vals == nil {
-		vals = map[string]interface{}{}
-	}
-
-	rel, err := client.RunWithContext(ctx, opts.ReleaseName, ch, vals)
-	if err != nil {
-		if errors.Is(ctx.Err(), context.Canceled) {
-			return nil, ErrCancelled
-		}
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("%w: %w", ErrTimeout, err)
-		}
-		if isReleaseNotFound(err) {
-			return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
-		}
-		return nil, fmt.Errorf("%w: %w", ErrActionFailed, err)
-	}
-
-	return toRelease(rel), nil
+	return toEngineRelease(rel), nil
 }
 
 // Rollback rolls back a release to a target revision.
-func (e *RealEngine) Rollback(ctx context.Context, opts RollbackOptions) (*Release, error) {
-	ns := e.resolveNS(opts.Namespace)
-	cfg, err := e.newConfig(ns)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrActionFailed, err)
+func (r *RealEngine) Rollback(ctx context.Context, opts RollbackOptions) (*Release, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
 	}
 
-	client := action.NewRollback(cfg)
-	client.Version = opts.TargetRevision
-	client.Timeout = 300 * time.Second
-
-	err = client.Run(opts.ReleaseName)
+	cfg, err := r.actionConfig(opts.Namespace)
 	if err != nil {
-		if isReleaseNotFound(err) {
-			return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
-		}
-		return nil, fmt.Errorf("%w: %w", ErrActionFailed, err)
+		return nil, fmt.Errorf("initialize Helm rollback: %w", err)
 	}
 
-	// After rollback, get the current state
-	return e.Status(ctx, StatusOptions{Namespace: opts.Namespace, ReleaseName: opts.ReleaseName})
+	rollback := action.NewRollback(cfg)
+	rollback.Version = opts.TargetRevision
+	if opts.Timeout > 0 {
+		rollback.Timeout = opts.Timeout
+	}
+
+	if err := rollback.Run(opts.ReleaseName); err != nil {
+		return nil, mapActionError(ctx, "roll back Helm release", err)
+	}
+	return statusWithConfig(ctx, cfg, opts.Namespace, opts.ReleaseName)
 }
 
-//nolint:revive // Engine keeps context in every operation signature for interface consistency.
-func (e *RealEngine) Status(_ context.Context, opts StatusOptions) (*Release, error) {
-	ns := e.resolveNS(opts.Namespace)
-	cfg, err := e.newConfig(ns)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrActionFailed, err)
+// Status returns the current status of a release.
+func (r *RealEngine) Status(ctx context.Context, opts StatusOptions) (*Release, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
 	}
 
-	client := action.NewStatus(cfg)
-	rel, err := client.Run(opts.ReleaseName)
+	cfg, err := r.actionConfig(opts.Namespace)
 	if err != nil {
-		if isReleaseNotFound(err) {
-			return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
-		}
-		return nil, fmt.Errorf("%w: %w", ErrActionFailed, err)
+		return nil, fmt.Errorf("initialize Helm status: %w", err)
 	}
-
-	return toRelease(rel), nil
+	return statusWithConfig(ctx, cfg, opts.Namespace, opts.ReleaseName)
 }
 
-//nolint:revive // Engine keeps context in every operation signature for interface consistency.
-func (e *RealEngine) History(_ context.Context, opts HistoryOptions) ([]ReleaseHistoryEntry, error) {
-	ns := e.resolveNS(opts.Namespace)
-	cfg, err := e.newConfig(ns)
+func statusWithConfig(
+	ctx context.Context,
+	cfg *action.Configuration,
+	namespace string,
+	releaseName string,
+) (*Release, error) {
+	status := action.NewStatus(cfg)
+	rel, err := status.Run(releaseName)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrActionFailed, err)
+		return nil, mapActionError(ctx, "get Helm release status", err)
+	}
+	if rel.Namespace == "" {
+		rel.Namespace = namespace
+	}
+	return toEngineRelease(rel), nil
+}
+
+// History returns the revision history for a release.
+func (r *RealEngine) History(ctx context.Context, opts HistoryOptions) ([]ReleaseHistoryEntry, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
 	}
 
-	client := action.NewHistory(cfg)
+	cfg, err := r.actionConfig(opts.Namespace)
+	if err != nil {
+		return nil, fmt.Errorf("initialize Helm history: %w", err)
+	}
+
+	history := action.NewHistory(cfg)
 	if opts.MaxRevisions > 0 {
-		client.Max = opts.MaxRevisions
+		history.Max = opts.MaxRevisions
 	}
 
-	rels, err := client.Run(opts.ReleaseName)
+	rels, err := history.Run(opts.ReleaseName)
 	if err != nil {
-		if isReleaseNotFound(err) {
-			return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
-		}
-		return nil, fmt.Errorf("%w: %w", ErrActionFailed, err)
+		return nil, mapActionError(ctx, "get Helm release history", err)
 	}
 
 	entries := make([]ReleaseHistoryEntry, len(rels))
-	for i, r := range rels {
+	for i, rel := range rels {
+		chartRef := ""
+		if rel.Chart != nil && rel.Chart.Metadata != nil {
+			chartRef = rel.Chart.Metadata.Name + "-" + rel.Chart.Metadata.Version
+		}
 		entries[i] = ReleaseHistoryEntry{
-			Revision:    r.Version,
-			Status:      r.Info.Status.String(),
-			Chart:       r.Chart.Metadata.Name,
-			Description: r.Info.Description,
+			Revision:    rel.Version,
+			Status:      rel.Info.Status.String(),
+			Chart:       chartRef,
+			Description: rel.Info.Description,
 		}
 	}
 	return entries, nil
 }
 
-//nolint:revive // Engine keeps context in every operation signature for interface consistency.
-func (e *RealEngine) GetValues(_ context.Context, opts GetValuesOptions) (map[string]interface{}, error) {
-	ns := e.resolveNS(opts.Namespace)
-	cfg, err := e.newConfig(ns)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrActionFailed, err)
+// GetValues returns the current values for a release.
+func (r *RealEngine) GetValues(ctx context.Context, opts GetValuesOptions) (map[string]interface{}, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
 	}
 
-	client := action.NewGetValues(cfg)
-	client.AllValues = false // only user-supplied values, not defaults
-
-	vals, err := client.Run(opts.ReleaseName)
+	cfg, err := r.actionConfig(opts.Namespace)
 	if err != nil {
-		if isReleaseNotFound(err) {
-			return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
-		}
-		return nil, fmt.Errorf("%w: %w", ErrActionFailed, err)
+		return nil, fmt.Errorf("initialize Helm get values: %w", err)
 	}
 
+	getValues := action.NewGetValues(cfg)
+	getValues.AllValues = opts.AllValues
+	if opts.Version > 0 {
+		getValues.Version = opts.Version
+	}
+
+	vals, err := getValues.Run(opts.ReleaseName)
+	if err != nil {
+		return nil, mapActionError(ctx, "get Helm release values", err)
+	}
 	return vals, nil
 }
 
-//nolint:revive // Engine keeps context in every operation signature for interface consistency.
-func (e *RealEngine) List(_ context.Context, namespace string) ([]*ReleaseListItem, error) {
-	ns := e.resolveNS(namespace)
-	cfg, err := e.newConfig(ns)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrActionFailed, err)
+// List returns all releases in a namespace.
+func (r *RealEngine) List(ctx context.Context, namespace string) ([]*ReleaseListItem, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
 	}
 
-	client := action.NewList(cfg)
-	rels, err := client.Run()
+	cfg, err := r.actionConfig(namespace)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrActionFailed, err)
+		return nil, fmt.Errorf("initialize Helm list: %w", err)
+	}
+
+	list := action.NewList(cfg)
+	list.All = true
+	list.AllNamespaces = namespace == ""
+
+	rels, err := list.Run()
+	if err != nil {
+		return nil, mapActionError(ctx, "list Helm releases", err)
 	}
 
 	items := make([]*ReleaseListItem, len(rels))
-	for i, r := range rels {
+	for i, rel := range rels {
+		chartName := ""
+		chartVersion := ""
+		if rel.Chart != nil && rel.Chart.Metadata != nil {
+			chartName = rel.Chart.Metadata.Name
+			chartVersion = rel.Chart.Metadata.Version
+		}
 		items[i] = &ReleaseListItem{
-			Namespace:    r.Namespace,
-			Name:         r.Name,
-			Chart:        r.Chart.Metadata.Name,
-			ChartVersion: r.Chart.Metadata.Version,
-			Revision:     r.Version,
-			Status:       r.Info.Status.String(),
-			ValuesDigest: "", // not available from Helm SDK list
+			Namespace:    rel.Namespace,
+			Name:         rel.Name,
+			Chart:        chartName,
+			ChartVersion: chartVersion,
+			Revision:     rel.Version,
+			Status:       rel.Info.Status.String(),
+			ValuesDigest: digestValues(rel.Config),
 		}
 	}
 	return items, nil
 }
 
-func (e *RealEngine) resolveNS(ns string) string {
-	if ns == "" {
-		return e.namespace
-	}
-	return ns
-}
-
-// toRelease converts a Helm release to our Release type.
-func toRelease(rel *release.Release) *Release {
-	return &Release{
-		Name:      rel.Name,
-		Namespace: rel.Namespace,
-		Revision:  rel.Version,
-		Status:    rel.Info.Status.String(),
-		Chart:     rel.Chart.Metadata.Name,
-		// ManifestDigest and Notes are populated by the caller when needed.
-		ManifestDigest: "",
-		Notes:          rel.Info.Notes,
-	}
-}
-
-func isReleaseNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	return errors.Is(err, driver.ErrReleaseNotFound) ||
-		errors.Is(err, driver.ErrNoDeployedReleases) ||
-		hasSubstring(err.Error(), "not found")
-}
-
-func isReleaseExists(err error) bool {
-	if err == nil {
-		return false
-	}
-	return hasSubstring(err.Error(), "already exists") ||
-		hasSubstring(err.Error(), "already installed")
-}
-
-func hasSubstring(s, substr string) bool {
-	return len(s) >= len(substr) && containsSubstring(s, substr)
-}
-
-func containsSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
-// Compile-time interface check.
+// Compile-time check: RealEngine implements Engine.
 var _ Engine = (*RealEngine)(nil)
+
+// toEngineRelease converts a Helm SDK release.Release to our Release type.
+// ManifestDigest is computed from the rendered manifest. Callers must treat it
+// as sensitive metadata because rendered manifests can include Secret data.
+func toEngineRelease(rel *release.Release) *Release {
+	chartRef := ""
+	if rel.Chart != nil && rel.Chart.Metadata != nil {
+		chartRef = rel.Chart.Metadata.Name + "-" + rel.Chart.Metadata.Version
+	}
+
+	status := ""
+	notes := ""
+	if rel.Info != nil {
+		status = rel.Info.Status.String()
+		notes = rel.Info.Notes
+	}
+
+	return &Release{
+		Name:           rel.Name,
+		Namespace:      rel.Namespace,
+		Revision:       rel.Version,
+		Status:         status,
+		Chart:          chartRef,
+		ManifestDigest: digestString(rel.Manifest),
+		Notes:          notes,
+	}
+}
+
+func digestString(value string) string {
+	if value == "" {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("%x", hash)
+}
+
+func digestValues(vals map[string]interface{}) string {
+	if vals == nil {
+		return ""
+	}
+
+	encoded, err := json.Marshal(vals)
+	if err != nil {
+		return ""
+	}
+	return digestString(string(encoded))
+}
+
+func contextError(ctx context.Context) error {
+	switch ctx.Err() {
+	case context.Canceled:
+		return ErrCancelled
+	case context.DeadlineExceeded:
+		return ErrTimeout
+	default:
+		return nil
+	}
+}
+
+func mapActionError(ctx context.Context, operation string, err error) error {
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("%s: %w", operation, ErrTimeout)
+	case errors.Is(ctx.Err(), context.Canceled), errors.Is(err, context.Canceled):
+		return fmt.Errorf("%s: %w", operation, ErrCancelled)
+	case errors.Is(err, driver.ErrReleaseExists), strings.Contains(err.Error(), "cannot re-use a name that is still in use"):
+		return fmt.Errorf("%s: %w", operation, ErrAlreadyExists)
+	case errors.Is(err, driver.ErrReleaseNotFound), errors.Is(err, driver.ErrNoDeployedReleases):
+		return fmt.Errorf("%s: %w", operation, ErrNotFound)
+	default:
+		return fmt.Errorf("%s: %w: %v", operation, ErrActionFailed, err)
+	}
+}

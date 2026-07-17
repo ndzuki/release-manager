@@ -568,20 +568,21 @@ const (
 // ReleaseInventory represents a cached release snapshot in the orchestrator's observation store.
 // Unique key: (customer_id, cluster_id, namespace, release_name).
 type ReleaseInventory struct {
-	CustomerID      string
-	ClusterID       string
-	Namespace       string
-	ReleaseName     string
-	Chart           string
-	ChartVersion    string
-	Revision        int
-	Status          string
-	ValuesDigest    string
-	InventoryStatus InventoryStatus
-	LastSyncID      string
-	SnapshotVersion int64
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ReleaseDefinitionID string
+	CustomerID          string
+	ClusterID           string
+	Namespace           string
+	ReleaseName         string
+	Chart               string
+	ChartVersion        string
+	Revision            int
+	Status              string
+	ValuesDigest        string
+	InventoryStatus     InventoryStatus
+	LastSyncID          string
+	SnapshotVersion     int64
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // InventorySyncLog records the application of a sync snapshot for idempotency.
@@ -612,6 +613,7 @@ type DefinitionStore interface {
 	Create(ctx context.Context, def *ReleaseDefinition) error
 	Get(ctx context.Context, id string) (*ReleaseDefinition, error)
 }
+
 // ValuesStore defines the persistence contract for values revisions.
 // For Create, the caller MUST populate Revision via GetNextRevisionNumber
 // and Digest via the values package before calling.
