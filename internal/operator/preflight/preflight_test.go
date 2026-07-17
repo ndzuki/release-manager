@@ -122,38 +122,10 @@ func TestErrorCodeFromAPIError_Forbidden(t *testing.T) {
 func TestErrorCodeFromAPIError_NamespaceNotFound(t *testing.T) {
 	err := &apierrors.StatusError{
 		ErrStatus: metav1.Status{
-			Status:  metav1.StatusFailure,
-			Code:    http.StatusNotFound,
-			Reason:  metav1.StatusReasonNotFound,
+			Status: metav1.StatusFailure,
+			Code:   http.StatusNotFound,
+			Reason: metav1.StatusReasonNotFound,
 
-### Round 2 · 2026-07-16
-> 计划版本: v1
-> 分支: task/047-cluster-dryrun-preflight
->
-> #### Step 1: DryRun 契约与安全结果模型
-> - 创建/修改: `internal/operator/preflight/types.go` (新增，208 行)
-> - 测试结果: PASS — 类型定义通过编译，稳定错误码已声明
->
-> #### Step 2: Manifest 流解析与 API capability 映射
-> - 创建/修改: `internal/operator/preflight/manifest.go`, `internal/operator/preflight/mapper.go` (新增，约 160 行)
-> - 测试结果: PASS — manifest 解码、空文档跳过、GVK→GVR 映射通过
->
-> #### Step 3: client-go Dynamic DryRunAll 执行器
-> - 创建/修改: `internal/operator/preflight/dryrun.go`, `internal/operator/preflight/cache.go`, `go.mod`, `go.sum` (新增/修改，约 400 行)
-> - 测试结果: PASS — DryRunOne/DryRunAll 与 fake dynamic client 集成通过
->
-> #### Step 4: 错误分类、Secret 脱敏与 fail-closed 汇总
-> - 创建/修改: `internal/operator/preflight/classify.go`, `internal/operator/preflight/classify_helpers.go`, `internal/operator/preflight/sanitize.go` (新增，约 180 行)
-> - 测试结果: PASS — 6 种稳定错误分类、Secret data/stringData 删除、ConfigMap data 保留
->
-> #### Step 5: 缓存与 operation 执行门禁
-> - 创建/修改: `internal/operator/preflight/cache.go` 内 Cache/Orchestrator/Gate (约 215 行)
-> - 测试结果: PASS — 幂等缓存命中、capability version 变化清除、Gate nil/失败/通过全路径
->
-> #### Step 6: Fake API 验收与全链路回归
-> - 创建/修改: `internal/operator/preflight/preflight_test.go` (新增，约 670 行)
-> - 测试结果: PASS — 21 个测试覆盖 AC-047-01 至 AC-047-04；全量 race PASS、定向 lint 0 issues
-> - 验证请求包含 `dryRun=All`、拒绝路径零 Helm 执行调用、Secret 序列化结果不含 data/stringData
 			Message: `namespaces "missing-ns" not found`,
 		},
 	}
@@ -265,6 +237,7 @@ func TestSanitizeResource_NonSecretPreserved(t *testing.T) {
 // ── DRY-RUN EXECUTION TESTS ──
 
 // makeUnstructured creates an unstructured object from GVK, name, namespace.
+//
 //nolint:unparam // test helper always uses "default" namespace
 func makeUnstructured(gvk schema.GroupVersionKind, name, namespace string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
@@ -554,7 +527,6 @@ func TestCache_HitAndMiss(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "op-1", got.OperationID)
 }
-
 
 func TestCache_Invalidate(t *testing.T) {
 	c := NewCache()
