@@ -569,20 +569,21 @@ const (
 // ReleaseInventory represents a cached release snapshot in the orchestrator's observation store.
 // Unique key: (customer_id, cluster_id, namespace, release_name).
 type ReleaseInventory struct {
-	CustomerID      string
-	ClusterID       string
-	Namespace       string
-	ReleaseName     string
-	Chart           string
-	ChartVersion    string
-	Revision        int
-	Status          string
-	ValuesDigest    string
-	InventoryStatus InventoryStatus
-	LastSyncID      string
-	SnapshotVersion int64
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ReleaseDefinitionID string
+	CustomerID          string
+	ClusterID           string
+	Namespace           string
+	ReleaseName         string
+	Chart               string
+	ChartVersion        string
+	Revision            int
+	Status              string
+	ValuesDigest        string
+	InventoryStatus     InventoryStatus
+	LastSyncID          string
+	SnapshotVersion     int64
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // InventorySyncLog records the application of a sync snapshot for idempotency.
@@ -741,6 +742,7 @@ type AuthSessionStore interface {
 	GetByRefreshHash(ctx context.Context, hash string) (*AuthSession, error)
 	GetByTokenFamily(ctx context.Context, family string) ([]*AuthSession, error)
 	RevokeFamily(ctx context.Context, family string) error
+	HasActiveByUserID(ctx context.Context, userID string) (bool, error)
 	RevokeByUserID(ctx context.Context, userID string) error
 	DeleteExpired(ctx context.Context) (int64, error)
 }

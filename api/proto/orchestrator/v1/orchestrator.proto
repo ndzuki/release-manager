@@ -279,6 +279,7 @@ message InventoryItem {
   int32 revision = 5;
   string status = 6;
   string values_digest = 7;  // SHA-256 of canonical values, not the values themselves
+  string definition_id = 8;
 }
 
 // SyncInventoryRequest is a full snapshot from an operator.

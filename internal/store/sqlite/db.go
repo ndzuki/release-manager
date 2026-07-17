@@ -494,6 +494,7 @@ var migrationStatements = []string{
 	`CREATE TABLE IF NOT EXISTS release_inventory (
 		customer_id      TEXT NOT NULL,
 		cluster_id       TEXT NOT NULL,
+		release_definition_id TEXT NOT NULL DEFAULT '',
 		namespace        TEXT NOT NULL DEFAULT '',
 		release_name     TEXT NOT NULL,
 		chart            TEXT NOT NULL DEFAULT '',
@@ -508,6 +509,7 @@ var migrationStatements = []string{
 		updated_at       TEXT NOT NULL,
 		UNIQUE(customer_id, cluster_id, namespace, release_name)
 	)`,
+	`ALTER TABLE release_inventory ADD COLUMN release_definition_id TEXT NOT NULL DEFAULT ''`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_cluster ON release_inventory(customer_id, cluster_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_status ON release_inventory(inventory_status)`,
 
