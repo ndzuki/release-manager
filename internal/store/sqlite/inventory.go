@@ -24,9 +24,9 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 	item.UpdatedAt = time.Now().UTC()
 
 	const stmt = `INSERT INTO release_inventory
-		(customer_id, cluster_id, namespace, release_name, chart, chart_version, revision, status,
+		(customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version, revision, status,
 		 values_digest, inventory_status, last_sync_id, snapshot_version, created_at, updated_at)
-	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	 ON CONFLICT(customer_id, cluster_id, namespace, release_name) DO UPDATE SET
 		chart = excluded.chart,
 		chart_version = excluded.chart_version,
@@ -39,7 +39,7 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 		updated_at = excluded.updated_at`
 
 	_, err := s.db.ExecContext(ctx, stmt,
-		item.CustomerID, item.ClusterID, item.Namespace, item.ReleaseName,
+		item.CustomerID, item.ClusterID, item.ReleaseDefinitionID, item.Namespace, item.ReleaseName,
 		item.Chart, item.ChartVersion, item.Revision, item.Status,
 		item.ValuesDigest, string(item.InventoryStatus),
 		item.LastSyncID, item.SnapshotVersion,
@@ -51,7 +51,7 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 // ListByCluster returns all inventory rows for a cluster.
 func (s *inventoryStore) ListByCluster(ctx context.Context, customerID, clusterID string) ([]*store.ReleaseInventory, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT customer_id, cluster_id, namespace, release_name, chart, chart_version,
+		`SELECT customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version,
 		        revision, status, values_digest, inventory_status, last_sync_id,
 		        snapshot_version, created_at, updated_at
 		 FROM release_inventory
@@ -69,7 +69,7 @@ func (s *inventoryStore) ListByCluster(ctx context.Context, customerID, clusterI
 		var item store.ReleaseInventory
 		var createdAt, updatedAt string
 		if err := rows.Scan(
-			&item.CustomerID, &item.ClusterID, &item.Namespace, &item.ReleaseName,
+			&item.CustomerID, &item.ClusterID, &item.ReleaseDefinitionID, &item.Namespace, &item.ReleaseName,
 			&item.Chart, &item.ChartVersion, &item.Revision, &item.Status,
 			&item.ValuesDigest, &item.InventoryStatus, &item.LastSyncID,
 			&item.SnapshotVersion, &createdAt, &updatedAt,
