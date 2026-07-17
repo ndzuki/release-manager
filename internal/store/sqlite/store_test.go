@@ -3,6 +3,7 @@ package sqlite_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -234,6 +235,67 @@ func TestSessionLifecycle(t *testing.T) {
 	got, err = st.Sessions().Get(ctx, sess.ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.SessionOffline, got.Status)
+}
+
+func TestSessionEstablish(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	cust := &store.Customer{ID: uuid.New().String(), Name: "Session Reconnect", Slug: "session-reconnect"}
+	require.NoError(t, st.Customers().Create(ctx, cust))
+	cl := &store.Cluster{ID: uuid.New().String(), Name: "c", CustomerID: cust.ID}
+	require.NoError(t, st.Clusters().Create(ctx, cl))
+	op := &store.Operator{ID: uuid.New().String(), CustomerID: cust.ID, ClusterID: cl.ID, CertSerial: "SESSION-ESTABLISH"}
+	require.NoError(t, st.Operators().Create(ctx, op))
+
+	first := &store.Session{
+		ID:                  uuid.New().String(),
+		OperatorID:          op.ID,
+		InstanceID:          "instance-1",
+		Version:             "1.0.0",
+		Capabilities:        map[string]string{"helm": "true"},
+		ActiveConfigVersion: "config-v1",
+		ExpiresAt:           time.Now().Add(time.Hour),
+	}
+	require.NoError(t, st.Sessions().Establish(ctx, first))
+
+	got, err := st.Sessions().GetActiveByOperator(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, first.ID, got.ID)
+	assert.Equal(t, first.InstanceID, got.InstanceID)
+	assert.Equal(t, first.Capabilities, got.Capabilities)
+
+	reconnect := &store.Session{
+		ID:                  uuid.New().String(),
+		OperatorID:          op.ID,
+		InstanceID:          "instance-1",
+		Version:             "1.0.1",
+		Capabilities:        map[string]string{"helm": "true", "inventory": "true"},
+		ActiveConfigVersion: "config-v2",
+		ExpiresAt:           time.Now().Add(time.Hour),
+	}
+	require.NoError(t, st.Sessions().Establish(ctx, reconnect))
+
+	old, err := st.Sessions().Get(ctx, first.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.SessionOffline, old.Status)
+	got, err = st.Sessions().GetActiveByOperator(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, reconnect.ID, got.ID)
+	assert.Equal(t, "1.0.1", got.Version)
+	assert.Equal(t, "config-v2", got.ActiveConfigVersion)
+
+	duplicate := &store.Session{
+		ID:         uuid.New().String(),
+		OperatorID: op.ID,
+		InstanceID: "instance-2",
+		ExpiresAt:  time.Now().Add(time.Hour),
+	}
+	assert.ErrorIs(t, st.Sessions().Establish(ctx, duplicate), store.ErrDuplicateKey)
+
+	got, err = st.Sessions().GetActiveByOperator(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, reconnect.ID, got.ID)
 }
 
 func TestOutboxStateMachine(t *testing.T) {

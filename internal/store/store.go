@@ -245,12 +245,16 @@ type Operator struct {
 
 // Session tracks a live operator connection.
 type Session struct {
-	ID            string        `json:"id"`
-	OperatorID    string        `json:"operator_id"`
-	Status        SessionStatus `json:"status"`
-	StartedAt     time.Time     `json:"started_at"`
-	LastHeartbeat time.Time     `json:"last_heartbeat"`
-	ExpiresAt     time.Time     `json:"expires_at"`
+	ID                  string            `json:"id"`
+	OperatorID          string            `json:"operator_id"`
+	Status              SessionStatus     `json:"status"`
+	InstanceID          string            `json:"instance_id"`
+	Version             string            `json:"version"`
+	Capabilities        map[string]string `json:"capabilities"`
+	ActiveConfigVersion string            `json:"active_config_version"`
+	StartedAt           time.Time         `json:"started_at"`
+	LastHeartbeat       time.Time         `json:"last_heartbeat"`
+	ExpiresAt           time.Time         `json:"expires_at"`
 }
 
 // OutboxEntry holds a command pending delivery in the outbox.
@@ -722,6 +726,7 @@ type OperatorStore interface {
 // SessionStore defines the persistence contract for operator sessions.
 type SessionStore interface {
 	Create(ctx context.Context, s *Session) error
+	Establish(ctx context.Context, s *Session) error
 	Get(ctx context.Context, id string) (*Session, error)
 	Heartbeat(ctx context.Context, id string) error
 	UpdateStatus(ctx context.Context, id string, status SessionStatus) error

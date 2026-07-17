@@ -333,6 +333,13 @@ var migrationStatements = []string{
 		expires_at     TEXT NOT NULL
 	)`,
 
+	`ALTER TABLE sessions ADD COLUMN instance_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE sessions ADD COLUMN version TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE sessions ADD COLUMN capabilities TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE sessions ADD COLUMN active_config_version TEXT NOT NULL DEFAULT ''`,
+	`CREATE INDEX IF NOT EXISTS idx_sessions_instance ON sessions(operator_id, instance_id)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_one_active_operator ON sessions(operator_id) WHERE status IN ('online', 'suspect')`,
+
 	`CREATE INDEX IF NOT EXISTS idx_sessions_operator ON sessions(operator_id, status)`,
 
 	// Command outbox (REQ-016)
