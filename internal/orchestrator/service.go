@@ -76,6 +76,42 @@ func (s *Service) CreateOperation(
 		return nil, err
 	}
 
+	// AC-013-02: Reject operations for disabled customers.
+	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
+		return nil, connect.NewError(connect.CodePermissionDenied, err)
+	}
+
+	// 4. Release busy check (REQ-023 AC-023-03, AC-023-06, AC-023-07)
+	active, err := s.store.Operations().HasActiveForDefinition(ctx, msg.ReleaseDefinitionId)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("active check: %w", err))
+	}
+	if active {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
+	}
+
+	// EMERGENCY ↔ standard mutual exclusion (REQ-023 AC-023-06, AC-023-07).
+	if opType.IsStandard() {
+		hasEmergency, err := s.store.Operations().HasActiveEmergencyForDefinition(ctx, msg.ReleaseDefinitionId)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("emergency check: %w", err))
+		}
+		if hasEmergency {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("release_busy: definition %s has a running EMERGENCY", msg.ReleaseDefinitionId))
+		}
+	}
+	if opType == store.OperationEmergency {
+		hasStandard, err := s.store.Operations().HasActiveForDefinition(ctx, msg.ReleaseDefinitionId)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("standard check: %w", err))
+		}
+		if hasStandard {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("release_busy: definition %s has an active standard operation", msg.ReleaseDefinitionId))
+		}
+	}
 	// AC-021-02: UPGRADE requires a positive expected revision and an approved values revision.
 	if opType == store.OperationUpgrade {
 		if msg.ExpectedCurrentRevision < 1 {
