@@ -18,7 +18,6 @@ import (
 	"github.com/ndzuki/release-manager/internal/operator/localstore"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
-	"k8s.io/client-go/rest"
 )
 
 type operatorSvc struct {
@@ -103,31 +102,6 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		}
 
 		logger.Info("operator runtime wired", "orchestrator_url", s.orchestratorURL)
-	}
-
-	if s.sessionID != "" && s.operatorID != "" {
-		commandStore, storeErr := localstore.OpenBolt(s.commandStorePath)
-		if storeErr != nil {
-			return fmt.Errorf("open command store: %w", storeErr)
-		}
-		cmdAgent, agentErr := agent.New(agent.Options{
-			Client:     operatorv1connect.NewOperatorServiceClient(http.DefaultClient, s.operatorURL),
-			Engine:     engine,
-			Store:      commandStore,
-			SessionID:  s.sessionID,
-			OperatorID: s.operatorID,
-			Logger:     logger,
-			OnComplete: onComplete,
-		})
-		if agentErr != nil {
-			return fmt.Errorf("create command agent: %w", agentErr)
-		}
-		go func() {
-			if runErr := cmdAgent.Run(context.Background()); runErr != nil {
-				logger.Error("command agent stopped", "error", runErr)
-			}
-		}()
-		logger.Info("command agent wired", "operator_id", s.operatorID)
 	}
 
 	go s.runSessionExpiry(context.Background(), logger)
