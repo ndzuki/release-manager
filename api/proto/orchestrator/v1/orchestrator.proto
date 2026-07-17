@@ -50,6 +50,61 @@ message ReleaseOperation {
   common.v1.ReleaseDigest digest = 4;
 }
 
+// ── Release Definition Management ────────────────────────────────
+
+message CreateReleaseDefinitionRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+  string namespace = 3;
+  string release_name = 4;
+  string chart_name = 5;
+  bool enabled = 6;
+  common.v1.ActorContext actor = 7;
+}
+
+message CreateReleaseDefinitionResponse {
+  common.v1.ReleaseDefinition definition = 1;
+}
+
+message GetReleaseDefinitionRequest {
+  string definition_id = 1;
+}
+
+message GetReleaseDefinitionResponse {
+  common.v1.ReleaseDefinition definition = 1;
+}
+
+message ListReleaseDefinitionsRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+  bool include_disabled = 3;
+}
+
+message ListReleaseDefinitionsResponse {
+  repeated common.v1.ReleaseDefinition definitions = 1;
+}
+
+message UpdateReleaseDefinitionRequest {
+  string definition_id = 1;
+  string namespace = 2;
+  string release_name = 3;
+  string chart_name = 4;
+  int64 expected_version = 5;
+}
+
+message UpdateReleaseDefinitionResponse {
+  common.v1.ReleaseDefinition definition = 1;
+}
+
+message DisableReleaseDefinitionRequest {
+  string definition_id = 1;
+  int64 expected_version = 2;
+}
+
+message DisableReleaseDefinitionResponse {
+  common.v1.ReleaseDefinition definition = 1;
+}
+
 // ── Customer Management ────────────────────────────────────────────
 
 message CreateCustomerRequest {
@@ -202,6 +257,13 @@ service OrchestratorService {
   rpc CreateOperation(CreateOperationRequest) returns (CreateOperationResponse);
   rpc PublishRelease(PublishReleaseRequest) returns (PublishReleaseResponse);
 
+  // Release definition management
+  rpc CreateReleaseDefinition(CreateReleaseDefinitionRequest) returns (CreateReleaseDefinitionResponse);
+  rpc GetReleaseDefinition(GetReleaseDefinitionRequest) returns (GetReleaseDefinitionResponse);
+  rpc ListReleaseDefinitions(ListReleaseDefinitionsRequest) returns (ListReleaseDefinitionsResponse);
+  rpc UpdateReleaseDefinition(UpdateReleaseDefinitionRequest) returns (UpdateReleaseDefinitionResponse);
+  rpc DisableReleaseDefinition(DisableReleaseDefinitionRequest) returns (DisableReleaseDefinitionResponse);
+
   // Customer management
   rpc CreateCustomer(CreateCustomerRequest) returns (CreateCustomerResponse);
   rpc GetCustomer(GetCustomerRequest) returns (GetCustomerResponse);
@@ -279,6 +341,7 @@ message InventoryItem {
   int32 revision = 5;
   string status = 6;
   string values_digest = 7;  // SHA-256 of canonical values, not the values themselves
+  string definition_id = 8;
 }
 
 // SyncInventoryRequest is a full snapshot from an operator.

@@ -19,6 +19,16 @@ func writeTemp(t *testing.T, content string) string {
 	return path
 }
 
+func hasViolation(result *Result, checkID string) bool {
+	for _, violation := range result.Violations {
+		if violation.CheckID == checkID {
+			return true
+		}
+	}
+
+	return false
+}
+
 func TestCheck_AllSectionsPresent(t *testing.T) {
 	t.Parallel()
 
@@ -136,6 +146,109 @@ func TestCheck_SectionWithNA(t *testing.T) {
 	assert.True(t, result.NA["状态与数据"])
 }
 
+func TestCheck_RejectsNAOutsideSection(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, `# 某需求
+
+不适用 — 不能替代缺失章节。
+
+## 目标
+做了个事。
+
+## 影响服务
+无。
+`)
+
+	result, err := Check(path)
+	require.NoError(t, err)
+	assert.False(t, result.NA[""], "N/A outside a section must not satisfy a section")
+	assert.True(t, hasViolation(result, "CHK-01"))
+}
+
+func TestCheck_RejectsNAWithoutReasonAfterPunctuation(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, `# 某需求
+
+## 目标
+做了个事。
+
+## 影响服务
+无。
+
+## 输入契约
+无。
+
+## 输出契约
+无。
+
+## 状态与数据
+不适用 —
+
+## 错误模型
+无。
+
+## 安全边界
+无。
+
+## 验收标准
+- [ ] AC-040-09 Given X，When Y，Then Z。
+
+## 非目标
+无。
+
+## 回滚方式
+无。
+`)
+
+	result, err := Check(path)
+	require.NoError(t, err)
+	assert.True(t, hasViolation(result, "CHK-02"))
+}
+
+func TestCheck_AcceptanceSectionCanBeNAWithReason(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, `# 某需求
+
+## 目标
+做了个事。
+
+## 影响服务
+无。
+
+## 输入契约
+无。
+
+## 输出契约
+无。
+
+## 状态与数据
+无。
+
+## 错误模型
+无。
+
+## 安全边界
+无。
+
+## 验收标准
+不适用 — 本需求仅记录已废弃的历史决策，不产生可执行行为。
+
+## 非目标
+无。
+
+## 回滚方式
+无。
+`)
+
+	result, err := Check(path)
+	require.NoError(t, err)
+	assert.Empty(t, result.Violations)
+	assert.True(t, result.NA["验收标准"])
+}
+
 func TestCheck_MissingGivenWhenThen(t *testing.T) {
 	// CHK-03: AC items must have Given/When/Then.
 	t.Parallel()
@@ -235,6 +348,252 @@ func TestCheck_EmptyAcceptanceSection(t *testing.T) {
 		}
 	}
 	assert.True(t, hasCHK03, "expected CHK-03 violation for empty acceptance section")
+}
+
+func TestCheck_NARequiresReason(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, `# 某需求
+
+## 目标
+做了个事。
+
+## 影响服务
+无。
+
+## 输入契约
+无。
+
+## 输出契约
+无。
+
+## 状态与数据
+不适用
+
+## 错误模型
+无。
+
+## 安全边界
+无。
+
+## 验收标准
+- [ ] AC-040-05 Given X，When Y，Then Z。
+
+## 非目标
+无。
+
+## 回滚方式
+无。
+`)
+
+	result, err := Check(path)
+	require.NoError(t, err)
+	assert.True(t, hasViolation(result, "CHK-02"))
+}
+
+func TestCheck_AcMustBeChecklistItem(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, `# 某需求
+
+## 目标
+做了个事。
+
+## 影响服务
+无。
+
+## 输入契约
+无。
+
+## 输出契约
+无。
+
+## 状态与数据
+无。
+
+## 错误模型
+无。
+
+## 安全边界
+无。
+
+## 验收标准
+正文示例：AC-040-06 Given X，When Y，Then Z。
+
+## 非目标
+无。
+
+## 回滚方式
+无。
+`)
+
+	result, err := Check(path)
+	require.NoError(t, err)
+	assert.True(t, hasViolation(result, "CHK-03"))
+}
+
+func TestCheck_RejectsMalformedAcceptanceID(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, `# 某需求
+
+## 目标
+做了个事。
+
+## 影响服务
+无。
+
+## 输入契约
+无。
+
+## 输出契约
+无。
+
+## 状态与数据
+无。
+
+## 错误模型
+无。
+
+## 安全边界
+无。
+
+## 验收标准
+- [ ] AC-40-1 Given X，When Y，Then Z。
+
+## 非目标
+无。
+
+## 回滚方式
+无。
+`)
+
+	result, err := Check(path)
+	require.NoError(t, err)
+	assert.True(t, hasViolation(result, "CHK-03"))
+}
+
+func TestCheck_RejectsGivenWhenThenOutOfOrder(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, `# 某需求
+
+## 目标
+做了个事。
+
+## 影响服务
+无。
+
+## 输入契约
+无。
+
+## 输出契约
+无。
+
+## 状态与数据
+无。
+
+## 错误模型
+无。
+
+## 安全边界
+无。
+
+## 验收标准
+- [ ] AC-040-10 Then Z，When Y，Given X。
+
+## 非目标
+无。
+
+## 回滚方式
+无。
+`)
+
+	result, err := Check(path)
+	require.NoError(t, err)
+	assert.True(t, hasViolation(result, "CHK-03"))
+}
+
+func TestCheck_RejectsManualImplementationInterpretation(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, `# 某需求
+
+## 目标
+做了个事。
+
+## 影响服务
+无。
+
+## 输入契约
+无。
+
+## 输出契约
+无。
+
+## 状态与数据
+无。
+
+## 错误模型
+无。
+
+## 安全边界
+无。
+
+## 验收标准
+- [ ] AC-040-07 Given X，When Y，Then 需要人工检查内部实现。
+
+## 非目标
+无。
+
+## 回滚方式
+无。
+`)
+
+	result, err := Check(path)
+	require.NoError(t, err)
+	assert.True(t, hasViolation(result, "CHK-04"))
+}
+
+func TestCheck_AcCanExplicitlyRejectManualInterpretation(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, `# 某需求
+
+## 目标
+做了个事。
+
+## 影响服务
+无。
+
+## 输入契约
+无。
+
+## 输出契约
+无。
+
+## 状态与数据
+无。
+
+## 错误模型
+无。
+
+## 安全边界
+无。
+
+## 验收标准
+- [ ] AC-040-08 Given X，When Y，Then 结果不依赖人工解释内部实现。
+
+## 非目标
+无。
+
+## 回滚方式
+无。
+`)
+
+	result, err := Check(path)
+	require.NoError(t, err)
+	assert.Empty(t, result.Violations)
 }
 
 func TestCheck_FileNotFound(t *testing.T) {
