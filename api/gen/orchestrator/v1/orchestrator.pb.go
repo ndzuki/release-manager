@@ -2061,6 +2061,7 @@ type InventoryItem struct {
 	Revision      int32                  `protobuf:"varint,5,opt,name=revision,proto3" json:"revision,omitempty"`
 	Status        string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
 	ValuesDigest  string                 `protobuf:"bytes,7,opt,name=values_digest,json=valuesDigest,proto3" json:"values_digest,omitempty"` // SHA-256 of canonical values, not the values themselves
+	DefinitionId  string                 `protobuf:"bytes,8,opt,name=definition_id,json=definitionId,proto3" json:"definition_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2140,6 +2141,13 @@ func (x *InventoryItem) GetStatus() string {
 func (x *InventoryItem) GetValuesDigest() string {
 	if x != nil {
 		return x.ValuesDigest
+	}
+	return ""
+}
+
+func (x *InventoryItem) GetDefinitionId() string {
+	if x != nil {
+		return x.DefinitionId
 	}
 	return ""
 }
@@ -2508,7 +2516,7 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\x17EmergencyChangeResponse\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12G\n" +
-	"\vconvergence\x18\x03 \x01(\x0e2%.orchestrator.v1.EmergencyConvergenceR\vconvergence\"\xd5\x01\n" +
+	"\vconvergence\x18\x03 \x01(\x0e2%.orchestrator.v1.EmergencyConvergenceR\vconvergence\"\xfa\x01\n" +
 	"\rInventoryItem\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
@@ -2516,7 +2524,8 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\rchart_version\x18\x04 \x01(\tR\fchartVersion\x12\x1a\n" +
 	"\brevision\x18\x05 \x01(\x05R\brevision\x12\x16\n" +
 	"\x06status\x18\x06 \x01(\tR\x06status\x12#\n" +
-	"\rvalues_digest\x18\a \x01(\tR\fvaluesDigest\"\xeb\x01\n" +
+	"\rvalues_digest\x18\a \x01(\tR\fvaluesDigest\x12#\n" +
+	"\rdefinition_id\x18\b \x01(\tR\fdefinitionId\"\xeb\x01\n" +
 	"\x14SyncInventoryRequest\x12\x1f\n" +
 	"\voperator_id\x18\x01 \x01(\tR\n" +
 	"operatorId\x12\x1d\n" +

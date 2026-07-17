@@ -1,6 +1,7 @@
 package localstore
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,14 +17,14 @@ type boltStore struct {
 
 // bucket names
 var (
-	commandsBucket   = []byte("commands")
-	byOutboxBucket   = []byte("by_outbox")
-	sequenceKey      = []byte("__last_sequence__")
+	commandsBucket = []byte("commands")
+	byOutboxBucket = []byte("by_outbox")
+	sequenceKey    = []byte("__last_sequence__")
 )
 
 // OpenBolt opens (or creates) a BoltDB-backed command store at the given path.
 func OpenBolt(path string) (Store, error) {
-	db, err := bolt.Open(path, 0600, nil)
+	db, err := bolt.Open(path, 0o600, nil)
 	if err != nil {
 		return nil, fmt.Errorf("open bbolt store: %w", err)
 	}
@@ -47,7 +48,7 @@ func OpenBolt(path string) (Store, error) {
 }
 
 // Save persists a command entry with fsync.
-func (s *boltStore) Save(ctx context.Context, e *CommandEntry) error {
+func (s *boltStore) Save(_ context.Context, e *CommandEntry) error {
 	data, err := json.Marshal(e)
 	if err != nil {
 		return fmt.Errorf("marshal command entry: %w", err)
@@ -80,7 +81,7 @@ func (s *boltStore) Save(ctx context.Context, e *CommandEntry) error {
 }
 
 // Get retrieves a command by command_id.
-func (s *boltStore) Get(ctx context.Context, commandID string) (*CommandEntry, error) {
+func (s *boltStore) Get(_ context.Context, commandID string) (*CommandEntry, error) {
 	var e *CommandEntry
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(commandsBucket)
@@ -121,7 +122,7 @@ func (s *boltStore) GetByOutboxID(ctx context.Context, outboxID string) (*Comman
 }
 
 // UpdateStatus updates the status and result of a command.
-func (s *boltStore) UpdateStatus(ctx context.Context, commandID string, status string, resultJSON string) error {
+func (s *boltStore) UpdateStatus(_ context.Context, commandID, status, resultJSON string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(commandsBucket)
 		data := b.Get([]byte(commandID))
@@ -149,14 +150,14 @@ func (s *boltStore) UpdateStatus(ctx context.Context, commandID string, status s
 }
 
 // ListActive returns all non-terminal commands.
-func (s *boltStore) ListActive(ctx context.Context) ([]*CommandEntry, error) {
+func (s *boltStore) ListActive(_ context.Context) ([]*CommandEntry, error) {
 	var entries []*CommandEntry
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(commandsBucket)
 		c := b.Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			// Skip the sequence metadata key.
-			if string(k) == string(sequenceKey) {
+			if bytes.Equal(k, sequenceKey) {
 				continue
 			}
 
@@ -178,7 +179,7 @@ func (s *boltStore) ListActive(ctx context.Context) ([]*CommandEntry, error) {
 }
 
 // LastSequence returns the highest stored sequence number.
-func (s *boltStore) LastSequence(ctx context.Context) (int64, error) {
+func (s *boltStore) LastSequence(_ context.Context) (int64, error) {
 	var seq int64
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(commandsBucket)
