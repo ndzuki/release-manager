@@ -4,6 +4,7 @@ package orchestrator
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -42,7 +43,8 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, logge
 }
 
 // CreateOperation creates a new release operation from the given request.
-// Implements REQ-067 validation rules and REQ-023 idempotency.
+//
+//nolint:gocyclo // operation creation validates multiple independent policy gates
 func (s *Service) CreateOperation(
 	ctx context.Context,
 	req *connect.Request[orchestratorv1.CreateOperationRequest],
@@ -137,6 +139,25 @@ func (s *Service) CreateOperation(
 				return nil, connect.NewError(connect.CodeFailedPrecondition,
 					fmt.Errorf("artifact trust rejected: %s", out.Summary))
 			}
+		}
+	}
+
+	if opType == store.OperationInstall {
+		if msg.GetValuesRevisionId() == "" {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				errors.New("revision_not_approved: values_revision_id is required"))
+		}
+		revision, err := s.store.Values().Get(ctx, msg.GetValuesRevisionId())
+		if err == store.ErrNotFound {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				errors.New("revision_not_approved: values revision not found"))
+		}
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("values revision lookup: %w", err))
+		}
+		if revision.ReleaseDefinitionID != def.ID || revision.Status != store.ValuesStatusApproved {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				errors.New("revision_not_approved: values revision must be approved for the target definition"))
 		}
 	}
 

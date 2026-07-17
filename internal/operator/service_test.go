@@ -292,3 +292,71 @@ func TestSequenceAssignment(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), got.Sequence)
 }
+
+func TestDecodeCommandPayload(t *testing.T) {
+	payload := []byte(`{
+		"definition_id":"definition-1",
+		"namespace":"apps",
+		"release_name":"example",
+		"create_namespace":true,
+		"timeout_seconds":45,
+		"bundle":{"name":"example-bundle","chart_ref":"oci://registry.example.com/charts/example","chart_version":"1.0.0"},
+		"values":{"message":"hello"}
+	}`)
+	command := new(operatorv1.Command)
+
+	require.NoError(t, operator.DecodeCommandPayload(payload, command))
+	assert.Equal(t, "definition-1", command.GetDefinitionId())
+	assert.Equal(t, "apps", command.GetNamespace())
+	assert.Equal(t, "example", command.GetReleaseName())
+	assert.True(t, command.GetCreateNamespace())
+	assert.Equal(t, int64(45), command.GetTimeoutSeconds())
+	assert.Equal(t, "oci://registry.example.com/charts/example", command.GetBundle().GetChartRef())
+	assert.JSONEq(t, `{"message":"hello"}`, string(command.GetValues()))
+}
+
+func TestFinishOperation(t *testing.T) {
+	tests := []struct {
+		name       string
+		result     string
+		wantStatus store.OperationStatus
+		wantError  string
+	}{
+		{name: "succeeded", result: "succeeded", wantStatus: store.StatusSucceeded},
+		{name: "failed", result: "failed", wantStatus: store.StatusFailed, wantError: `{"code":"helm_install_failed"}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			svc, st := newTestSvc(t)
+			ctx := context.Background()
+			def := &store.ReleaseDefinition{
+				ID:          "definition-" + test.name,
+				Name:        "definition",
+				CustomerID:  "cust-1",
+				ClusterID:   "clus-1",
+				Namespace:   "apps",
+				ReleaseName: "example",
+				ChartName:   "example",
+				Status:      store.DefStatusActive,
+			}
+			require.NoError(t, st.Definitions().Create(ctx, def))
+			op := &store.Operation{
+				ID:                  "operation-" + test.name,
+				OperationType:       store.OperationInstall,
+				Status:              store.StatusQueued,
+				ReleaseDefinitionID: def.ID,
+				IdempotencyKey:      "idempotency-" + test.name,
+				RequestHash:         "hash",
+			}
+			require.NoError(t, st.Operations().Create(ctx, op))
+
+			svc.FinishOperation(ctx, op.ID, test.result, test.wantError)
+
+			got, err := st.Operations().Get(ctx, op.ID)
+			require.NoError(t, err)
+			assert.Equal(t, test.wantStatus, got.Status)
+			assert.Equal(t, test.wantError, got.LastError)
+		})
+	}
+}
