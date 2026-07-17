@@ -277,6 +277,87 @@ func TestOutboxStateMachine(t *testing.T) {
 	assert.Equal(t, `{"release":"v1.2.3"}`, got.ResultJSON)
 }
 
+func TestOperationTransition_OptimisticLockAndEvent(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "operation-transition",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "operation-transition-key",
+		RequestHash:         "request-hash",
+		StateVersion:        4,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	updated, err := st.Operations().Transition(ctx, op.ID, store.StatusSucceeded, op.StateVersion, "")
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, updated.Status)
+	assert.Equal(t, 5, updated.StateVersion)
+
+	var oldStatus, newStatus string
+	var stateVersion int
+	var operationType, definitionID string
+	err = st.DB().QueryRowContext(ctx, `
+		SELECT operation_type, release_definition_id, old_status, new_status, state_version
+		FROM operation_events
+		WHERE operation_id = ?
+	`, op.ID).Scan(&operationType, &definitionID, &oldStatus, &newStatus, &stateVersion)
+	require.NoError(t, err)
+	assert.Equal(t, string(store.OperationInstall), operationType)
+	assert.Equal(t, def.ID, definitionID)
+	assert.Equal(t, string(store.StatusRunning), oldStatus)
+	assert.Equal(t, string(store.StatusSucceeded), newStatus)
+	assert.Equal(t, 5, stateVersion)
+
+	rows, err := st.DB().QueryContext(ctx, `SELECT * FROM operation_events LIMIT 0`)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rows.Close()) })
+	columns, err := rows.Columns()
+	require.NoError(t, err)
+	assert.NotContains(t, columns, "values_patch")
+	assert.NotContains(t, columns, "actor")
+
+	persisted, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, persisted.Status)
+	assert.Equal(t, 5, persisted.StateVersion)
+}
+
+func TestOperationCreateIfAvailable_AllowsEmergencyPeers(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+
+	first := &store.Operation{
+		ID:                  "emergency-one",
+		OperationType:       store.OperationEmergency,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "emergency-one-key",
+	}
+	second := &store.Operation{
+		ID:                  "emergency-two",
+		OperationType:       store.OperationEmergency,
+		Status:              store.StatusPending,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "emergency-two-key",
+	}
+	require.NoError(t, st.Operations().CreateIfAvailable(ctx, first))
+	require.NoError(t, st.Operations().CreateIfAvailable(ctx, second))
+
+	standard := &store.Operation{
+		ID:                  "standard-blocked",
+		OperationType:       store.OperationUpgrade,
+		Status:              store.StatusPending,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "standard-blocked-key",
+	}
+	assert.ErrorIs(t, st.Operations().CreateIfAvailable(ctx, standard), store.ErrReleaseBusy)
+}
+
 func TestGetNextPendingMaxInflight(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()

@@ -14,28 +14,29 @@ import (
 
 // Store implements store.Store backed by SQLite.
 type Store struct {
-	db         *sql.DB
-	ops        *operationStore
-	defs       *definitionStore
-	vals       *valuesStore
-	customers  *customerStore
-	clusters   *clusterStore
-	tokens     *enrollmentTokenStore
-	operators  *operatorStore
-	sessions   *sessionStore
-	outbox     *outboxStore
-	users      *userStore
-	authSess   *authSessionStore
-	orgs       *organizationStore
-	orgMembers *organizationMemberStore
-	bindings   *bindingStore
-	audit      *auditEventStore
-	notif      *notificationStore
-	bundles    *bundleStore
-	verifs     *verificationStore
-	routes     *clusterRouteStore
-	invs       *inventoryStore
-	custEvents *customerEventStore
+	db              *sql.DB
+	ops             *operationStore
+	operationEvents *operationEventStore
+	defs            *definitionStore
+	vals            *valuesStore
+	customers       *customerStore
+	clusters        *clusterStore
+	tokens          *enrollmentTokenStore
+	operators       *operatorStore
+	sessions        *sessionStore
+	outbox          *outboxStore
+	users           *userStore
+	authSess        *authSessionStore
+	orgs            *organizationStore
+	orgMembers      *organizationMemberStore
+	bindings        *bindingStore
+	audit           *auditEventStore
+	notif           *notificationStore
+	bundles         *bundleStore
+	verifs          *verificationStore
+	routes          *clusterRouteStore
+	invs            *inventoryStore
+	custEvents      *customerEventStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -64,6 +65,7 @@ func Open(dsn string) (*Store, error) {
 
 	s := &Store{db: db}
 	s.ops = &operationStore{db: db}
+	s.operationEvents = &operationEventStore{db: db}
 	s.defs = &definitionStore{db: db}
 	s.vals = &valuesStore{db: db}
 	s.customers = &customerStore{db: db}
@@ -89,6 +91,9 @@ func Open(dsn string) (*Store, error) {
 
 // Operations returns the OperationStore.
 func (s *Store) Operations() store.OperationStore { return s.ops }
+
+// OperationEvents returns the operation state event store.
+func (s *Store) OperationEvents() store.OperationEventStore { return s.operationEvents }
 
 // Customers returns the CustomerStore.
 func (s *Store) Customers() store.CustomerStore { return s.customers }
@@ -457,6 +462,19 @@ var migrationStatements = []string{
 		created_at  TEXT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_customer_events_customer ON customer_events(customer_id, event_type)`,
+
+	// Operation state change events (REQ-023)
+	`CREATE TABLE IF NOT EXISTS operation_events (
+		id                    TEXT PRIMARY KEY,
+		operation_id          TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+		operation_type        TEXT NOT NULL,
+		release_definition_id TEXT NOT NULL,
+		old_status            TEXT NOT NULL,
+		new_status            TEXT NOT NULL,
+		state_version         INTEGER NOT NULL,
+		created_at            TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_operation_events_operation ON operation_events(operation_id)`,
 
 	// Cluster artifact routing (REQ-014)
 	`CREATE TABLE IF NOT EXISTS cluster_routes (

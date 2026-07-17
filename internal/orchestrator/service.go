@@ -51,20 +51,15 @@ func (s *Service) CreateOperation(
 ) (*connect.Response[orchestratorv1.CreateOperationResponse], error) {
 	msg := req.Msg
 
-	// 1. Idempotency check (REQ-023 AC-023-02)
-	if msg.IdempotencyKey != "" {
-		existing, err := s.store.Operations().GetByIdempotencyKey(ctx, msg.IdempotencyKey)
-		if err == nil {
-			s.logger.Info("idempotent operation found", "key", msg.IdempotencyKey, "op_id", existing.ID)
-			return connect.NewResponse(s.toResponse(existing)), nil
-		}
-		if err != store.ErrNotFound {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("idempotency lookup: %w", err))
-		}
-		// not found -> proceed
+	existing, err := s.findIdempotentOperation(ctx, msg)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		s.logger.Info("idempotent operation found", "key", msg.IdempotencyKey, "op_id", existing.ID)
+		return connect.NewResponse(s.toResponse(existing)), nil
 	}
 
-	// 2. Validate operation type
 	opType := store.OperationType(msg.OperationType)
 	if !opType.Valid() {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
@@ -77,33 +72,13 @@ func (s *Service) CreateOperation(
 		return nil, connect.NewError(connect.CodeNotFound,
 			fmt.Errorf("release_definition not found: %s", msg.ReleaseDefinitionId))
 	}
-
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
-	}
-
-	// Validate definition status
-	if def.Status != store.DefStatusActive {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("release_definition %s is %s", def.ID, def.Status))
+		return nil, err
 	}
 
 	// AC-013-02: Reject operations for disabled customers.
 	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
 		return nil, connect.NewError(connect.CodePermissionDenied, err)
-	}
-
-	// AC-032-06: Reject standard operations when a running EMERGENCY exists for
-	// the same definition.
-	if opType.IsStandard() {
-		activeEmergency, err := s.store.Operations().HasActiveEmergencyForDefinition(ctx, msg.ReleaseDefinitionId)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("emergency active check: %w", err))
-		}
-		if activeEmergency {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("definition %s has a running EMERGENCY operation; standard operations are denied", msg.ReleaseDefinitionId))
-		}
 	}
 
 	// 4. Release busy check (REQ-023 AC-023-03, AC-023-06, AC-023-07)
@@ -116,6 +91,27 @@ func (s *Service) CreateOperation(
 			fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
 	}
 
+	// EMERGENCY ↔ standard mutual exclusion (REQ-023 AC-023-06, AC-023-07).
+	if opType.IsStandard() {
+		hasEmergency, err := s.store.Operations().HasActiveEmergencyForDefinition(ctx, msg.ReleaseDefinitionId)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("emergency check: %w", err))
+		}
+		if hasEmergency {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("release_busy: definition %s has a running EMERGENCY", msg.ReleaseDefinitionId))
+		}
+	}
+	if opType == store.OperationEmergency {
+		hasStandard, err := s.store.Operations().HasActiveForDefinition(ctx, msg.ReleaseDefinitionId)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("standard check: %w", err))
+		}
+		if hasStandard {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("release_busy: definition %s has an active standard operation", msg.ReleaseDefinitionId))
+		}
+	}
 	// AC-021-02: UPGRADE requires a positive expected revision and an approved values revision.
 	if opType == store.OperationUpgrade {
 		if msg.ExpectedCurrentRevision < 1 {
@@ -243,7 +239,6 @@ func (s *Service) CreateOperation(
 			}
 		}
 	}
-
 	s.logger.Info("operation created",
 		"op_id", op.ID,
 		"type", op.OperationType,
@@ -257,6 +252,28 @@ func (s *Service) CreateOperation(
 		AcceptedAt:         timestamppb.New(op.CreatedAt),
 		VerificationResult: verifyResult,
 	}), nil
+}
+
+func (s *Service) findIdempotentOperation(
+	ctx context.Context,
+	msg *orchestratorv1.CreateOperationRequest,
+) (*store.Operation, error) {
+	if msg.IdempotencyKey == "" {
+		return nil, nil
+	}
+
+	existing, err := s.store.Operations().GetByIdempotencyKey(ctx, msg.IdempotencyKey)
+	if err == store.ErrNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("idempotency lookup: %w", err))
+	}
+	if existing.RequestHash != hashRequest(msg) {
+		return nil, connect.NewError(connect.CodeAlreadyExists,
+			fmt.Errorf("idempotency_conflict: key %s already used with different request", msg.IdempotencyKey))
+	}
+	return existing, nil
 }
 
 // PublishRelease triggers the release pipeline for a definition (skeleton).

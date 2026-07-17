@@ -24,6 +24,7 @@ var (
 	ErrNotFound       = errors.New("store: not found")
 	ErrOptimisticLock = errors.New("store: optimistic lock conflict")
 	ErrDuplicateKey   = errors.New("store: duplicate key")
+	ErrReleaseBusy    = errors.New("store: release busy")
 )
 
 // OperationType classifies the kind of release operation.
@@ -600,12 +601,33 @@ type InventorySyncLog struct {
 // OperationStore defines the persistence contract for operations.
 type OperationStore interface {
 	Create(ctx context.Context, op *Operation) error
+	CreateIfAvailable(ctx context.Context, op *Operation) error
 	Get(ctx context.Context, id string) (*Operation, error)
 	GetByIdempotencyKey(ctx context.Context, key string) (*Operation, error)
 	UpdateStatus(ctx context.Context, id string, status OperationStatus, stateVersion int, lastError string) (*Operation, error)
+	Transition(ctx context.Context, id string, status OperationStatus, stateVersion int, lastError string) (*Operation, error)
 	HasActiveForDefinition(ctx context.Context, definitionID string) (bool, error)
 	HasActiveEmergencyForDefinition(ctx context.Context, definitionID string) (bool, error)
 	List(ctx context.Context, definitionID string) ([]*Operation, error)
+	ListNonTerminal(ctx context.Context) ([]*Operation, error)
+}
+
+// OperationStateChangedEvent is emitted when an operation's status changes (REQ-023).
+// It intentionally excludes values and Secret material.
+type OperationStateChangedEvent struct {
+	ID            string          `json:"id"`
+	OperationID   string          `json:"operation_id"`
+	OperationType OperationType   `json:"operation_type"`
+	DefinitionID  string          `json:"release_definition_id"`
+	OldStatus     OperationStatus `json:"old_status"`
+	NewStatus     OperationStatus `json:"new_status"`
+	StateVersion  int             `json:"state_version"`
+	CreatedAt     time.Time       `json:"created_at"`
+}
+
+// OperationEventStore persists operation state change events.
+type OperationEventStore interface {
+	Create(ctx context.Context, ev *OperationStateChangedEvent) error
 }
 
 // DefinitionStore defines the persistence contract for release definitions.
@@ -847,6 +869,7 @@ type InventoryStore interface {
 // Store is the top-level persistence abstraction.
 type Store interface {
 	Operations() OperationStore
+	OperationEvents() OperationEventStore
 	Definitions() DefinitionStore
 	Values() ValuesStore
 	Customers() CustomerStore
