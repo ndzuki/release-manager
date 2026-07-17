@@ -38,6 +38,7 @@ type Store struct {
 	invs            *inventoryStore
 	custEvents      *customerEventStore
 	defEvents       *definitionEventStore
+	preflight       *preflightStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -69,6 +70,7 @@ func Open(dsn string) (*Store, error) {
 	s.operationEvents = &operationEventStore{db: db}
 	s.defs = &definitionStore{db: db}
 	s.defEvents = &definitionEventStore{db: db}
+	s.preflight = &preflightStore{db: db}
 	s.vals = &valuesStore{db: db}
 	s.customers = &customerStore{db: db}
 	s.clusters = &clusterStore{db: db}
@@ -120,6 +122,9 @@ func (s *Store) Definitions() store.DefinitionStore { return s.defs }
 
 // DefinitionEvents returns the DefinitionEventStore.
 func (s *Store) DefinitionEvents() store.DefinitionEventStore { return s.defEvents }
+
+// PreflightResults returns the PreflightStore.
+func (s *Store) PreflightResults() store.PreflightStore { return s.preflight }
 
 // Values returns the ValuesStore.
 func (s *Store) Values() store.ValuesStore { return s.vals }
@@ -563,6 +568,19 @@ var migrationStatements = []string{
 		created_at     TEXT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_release_bundles_digest ON release_bundles(digest_alg, digest_value)`,
+
+	// Artifact preflight results (REQ-045)
+	`CREATE TABLE IF NOT EXISTS preflight_results (
+		id                  TEXT PRIMARY KEY,
+		operation_id        TEXT NOT NULL,
+		routing_version     TEXT NOT NULL DEFAULT '',
+		bundle_digest       TEXT NOT NULL,
+		trust_policy_version TEXT NOT NULL DEFAULT '',
+		sbom_policy_version TEXT NOT NULL DEFAULT '',
+		result_json         BLOB NOT NULL,
+		created_at          TEXT NOT NULL
+	)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_preflight_results_key ON preflight_results(operation_id, routing_version, bundle_digest, trust_policy_version, sbom_policy_version)`,
 }
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }
