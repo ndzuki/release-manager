@@ -7,13 +7,16 @@ import (
 	"strings"
 
 	"connectrpc.com/connect"
+
+	"github.com/ndzuki/release-manager/internal/store"
 )
 
 // NewAuthInterceptor creates a Connect interceptor that:
 // 1. Extracts and validates the JWT access token from Authorization header
-// 2. Injects user ID into context
-// 3. Enforces Casbin RBAC for protected procedures
-func NewAuthInterceptor(jwt *JWTManager, enforcer *Enforcer, publicMethods map[string]bool, logger *slog.Logger) connect.UnaryInterceptorFunc {
+// 2. Verifies the user is active and still has a non-revoked persistent session
+// 3. Injects user ID into context
+// 4. Enforces Casbin RBAC for protected procedures
+func NewAuthInterceptor(jwt *JWTManager, st store.Store, enforcer *Enforcer, publicMethods map[string]bool, logger *slog.Logger) connect.UnaryInterceptorFunc {
 	interceptor := func(next connect.UnaryFunc) connect.UnaryFunc {
 		return connect.UnaryFunc(func(
 			ctx context.Context,
@@ -39,6 +42,19 @@ func NewAuthInterceptor(jwt *JWTManager, enforcer *Enforcer, publicMethods map[s
 					fmt.Errorf("invalid token: %w", err))
 			}
 
+			user, err := st.Users().Get(ctx, claims.UserID)
+			if err != nil || user.Status != store.UserActive {
+				return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("session revoked"))
+			}
+			active, err := hasActiveSession(ctx, st.AuthSessions(), claims.UserID)
+			if err != nil {
+				logger.Error("check active auth session failed", "error", err)
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("session validation failed"))
+			}
+			if !active {
+				return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("session revoked"))
+			}
+
 			// Inject user ID into context.
 			ctx = context.WithValue(ctx, userIDKey, claims.UserID)
 			ctx = context.WithValue(ctx, rolesKey, claims.Roles)
@@ -59,6 +75,10 @@ func NewAuthInterceptor(jwt *JWTManager, enforcer *Enforcer, publicMethods map[s
 		})
 	}
 	return connect.UnaryInterceptorFunc(interceptor)
+}
+
+func hasActiveSession(ctx context.Context, sessions store.AuthSessionStore, userID string) (bool, error) {
+	return sessions.HasActiveByUserID(ctx, userID)
 }
 
 func extractToken(authHeader string) string {
