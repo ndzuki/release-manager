@@ -14,20 +14,27 @@ import (
 )
 
 type notifierSvc struct {
-	dbPath string
-
-	// consumer lifecycle
-	consumer       *notifier.Consumer
-	consumerCancel context.CancelFunc
+	dbPath       string
+	store        *sqlitestore.Store
+	consumer     *notifier.Consumer
+	consumerDone chan struct{}
 }
 
 func (s *notifierSvc) Name() string { return "release-notifier" }
 
-func (s *notifierSvc) Shutdown(ctx context.Context) error {
-	if s.consumerCancel != nil {
-		s.consumerCancel()
+func (s *notifierSvc) Close() error {
+	if s.consumerDone != nil {
+		<-s.consumerDone
 	}
-	return nil
+	if s.store == nil {
+		return nil
+	}
+	return s.store.Close()
+}
+
+func (s *notifierSvc) Run(ctx context.Context) {
+	defer close(s.consumerDone)
+	s.consumer.Run(ctx)
 }
 
 func (s *notifierSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
@@ -35,15 +42,15 @@ func (s *notifierSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	s.store = st
+	s.consumerDone = make(chan struct{})
 	logger.Info("store opened", "db", s.dbPath)
 
 	svc := notifier.NewService(st, logger)
 	path, h := notifierv1connect.NewNotifierServiceHandler(svc)
 	mux.Handle(path, h)
 
-	// Build sender. In production this would use a real SecretResolver.
-	// For now, webhook sender without secret resolution; unconfigured
-	// channels are rejected at Send time.
+	// Unconfigured channels are rejected during delivery.
 	sender := notifier.NewWebhookSender(nil)
 
 	consumerCfg := notifier.DefaultConsumerConfig()
@@ -53,11 +60,6 @@ func (s *notifierSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		logger,
 		consumerCfg,
 	)
-
-	// Consumer runs within app.Run lifecycle; cancellation triggers clean shutdown.
-	ctx, cancel := context.WithCancel(context.Background())
-	s.consumerCancel = cancel
-	go s.consumer.Run(ctx)
 
 	return nil
 }

@@ -22,7 +22,9 @@ func TestWebhookSender_Success(t *testing.T) {
 		capturedMethod = r.Method
 		capturedContentType = r.Header.Get("Content-Type")
 		capturedIdempotency = r.Header.Get("Idempotency-Key")
-		capturedBody, _ = io.ReadAll(r.Body)
+		var err error
+		capturedBody, err = io.ReadAll(r.Body)
+		require.NoError(t, err)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -48,7 +50,7 @@ func TestWebhookSender_Success(t *testing.T) {
 
 func TestWebhookSender_429RateLimited(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.Copy(io.Discard, r.Body)
+		require.NoError(t, drainRequest(r))
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer srv.Close()
@@ -70,7 +72,7 @@ func TestWebhookSender_5xxRetryable(t *testing.T) {
 	for _, code := range []int{500, 502, 503} {
 		t.Run(http.StatusText(code), func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				io.Copy(io.Discard, r.Body)
+				require.NoError(t, drainRequest(r))
 				w.WriteHeader(code)
 			}))
 			defer srv.Close()
@@ -94,7 +96,7 @@ func TestWebhookSender_401403DeadLetter(t *testing.T) {
 	for _, code := range []int{401, 403} {
 		t.Run(http.StatusText(code), func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				io.Copy(io.Discard, r.Body)
+				require.NoError(t, drainRequest(r))
 				w.WriteHeader(code)
 			}))
 			defer srv.Close()
@@ -108,7 +110,7 @@ func TestWebhookSender_401403DeadLetter(t *testing.T) {
 
 			errCode, is4xx, err := sender.Send(context.Background(), job)
 			require.Error(t, err)
-			assert.Equal(t, notifier.ErrCodeCredentialInvalid, errCode)
+			assert.Equal(t, notifier.ErrCodeCredentialError, errCode)
 			assert.True(t, is4xx, "401/403 should be non-retryable dead-letter")
 		})
 	}
@@ -116,7 +118,7 @@ func TestWebhookSender_401403DeadLetter(t *testing.T) {
 
 func TestWebhookSender_400InvalidRecipient(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.Copy(io.Discard, r.Body)
+		require.NoError(t, drainRequest(r))
 		w.WriteHeader(http.StatusBadRequest)
 	}))
 	defer srv.Close()
@@ -149,7 +151,7 @@ func TestWebhookSender_InvalidURL(t *testing.T) {
 }
 
 func TestWebhookSender_Timeout(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		time.Sleep(2 * time.Second)
 	}))
 	defer srv.Close()
@@ -180,4 +182,9 @@ func TestWebhookSender_WrongChannel(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, notifier.ErrCodeInvalidRecipient, errCode)
 	assert.True(t, is4xx, "unsupported channel should dead-letter")
+}
+
+func drainRequest(r *http.Request) error {
+	_, err := io.Copy(io.Discard, r.Body)
+	return err
 }

@@ -30,7 +30,11 @@ type stubResult struct {
 	err       error
 }
 
-func (s *stubSender) Send(ctx context.Context, job *store.NotificationJob) (string, bool, error) {
+func (s *stubSender) Send(_ context.Context, _ *store.NotificationJob) (
+	errorCode string,
+	is4xx bool,
+	err error,
+) {
 	s.mu.Lock()
 	idx := int(s.calls.Add(1)) - 1
 	var r stubResult

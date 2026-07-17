@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -99,7 +100,11 @@ func (s *notificationStore) ClaimNext(ctx context.Context, now time.Time) (*stor
 	if err != nil {
 		return nil, fmt.Errorf("begin claim tx: %w", err)
 	}
-	defer tx.Rollback() //nolint:errcheck
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			return
+		}
+	}()
 
 	nowStr := now.UTC().Format(time.RFC3339)
 
@@ -164,7 +169,7 @@ func (s *notificationStore) UpdateStatus(ctx context.Context, id string, status 
 	return nil
 }
 
-func (s *notificationStore) MarkDeadLetter(ctx context.Context, id string, errorCode, lastError string) error {
+func (s *notificationStore) MarkDeadLetter(ctx context.Context, id, errorCode, lastError string) error {
 	now := nowUTC()
 	nowStr := now
 	_, err := s.db.ExecContext(ctx, `
@@ -200,8 +205,8 @@ func scanNotificationJob(row interface{ Scan(...interface{}) error }) (*store.No
 	var (
 		id, opID, channel, recipient, status, errorCode, lastError, metaJSON string
 		attempts, retryCount, maxRetries                                     int
-		nextRetryStr, sentAtStr, deadLetterStr                              *string
-		createdStr, updatedStr                                              string
+		nextRetryStr, sentAtStr, deadLetterStr                               *string
+		createdStr, updatedStr                                               string
 	)
 	err := row.Scan(&id, &opID, &channel, &recipient, &status, &attempts,
 		&retryCount, &maxRetries, &errorCode, &nextRetryStr, &lastError,
@@ -222,8 +227,8 @@ func scanNotificationJobFromRows(rows *sql.Rows) (*store.NotificationJob, error)
 	var (
 		id, opID, channel, recipient, status, errorCode, lastError, metaJSON string
 		attempts, retryCount, maxRetries                                     int
-		nextRetryStr, sentAtStr, deadLetterStr                              *string
-		createdStr, updatedStr                                              string
+		nextRetryStr, sentAtStr, deadLetterStr                               *string
+		createdStr, updatedStr                                               string
 	)
 	err := rows.Scan(&id, &opID, &channel, &recipient, &status, &attempts,
 		&retryCount, &maxRetries, &errorCode, &nextRetryStr, &lastError,

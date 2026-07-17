@@ -19,9 +19,9 @@ const (
 	ErrCodeRateLimited      = "rate_limited"
 	ErrCodeNetworkError     = "network_error"
 	ErrCodeInvalidRecipient = "invalid_recipient"
-	ErrCodeCredentialInvalid = "credential_invalid"
-	ErrCodeTimeout           = "timeout"
-	ErrCodeInternal          = "internal"
+	ErrCodeCredentialError  = "credential_invalid" //nolint:gosec // stable error code, not a credential
+	ErrCodeTimeout          = "timeout"
+	ErrCodeInternal         = "internal"
 )
 
 // webhookSender delivers notifications via HTTP POST (JSON).
@@ -67,7 +67,11 @@ type webhookPayload struct {
 
 // Send delivers the notification via HTTP POST with an Idempotency-Key header.
 // Returns: error_code, is4xx, error.
-func (s *webhookSender) Send(ctx context.Context, job *store.NotificationJob) (string, bool, error) {
+func (s *webhookSender) Send(ctx context.Context, job *store.NotificationJob) (
+	errorCode string,
+	is4xx bool,
+	err error,
+) {
 	if job.Channel != store.NotificationChannelWebhook {
 		return ErrCodeInvalidRecipient, true,
 			fmt.Errorf("channel %s not supported by webhook sender", job.Channel)
@@ -100,7 +104,7 @@ func (s *webhookSender) Send(ctx context.Context, job *store.NotificationJob) (s
 	if s.resolver != nil && s.secretKey != "" {
 		secret, err := s.resolver.Resolve(ctx, s.secretKey)
 		if err != nil {
-			return ErrCodeCredentialInvalid, true,
+			return ErrCodeCredentialError, true,
 				fmt.Errorf("resolve webhook secret: %w", err)
 		}
 		req.Header.Set("Authorization", "Bearer "+secret)
@@ -108,18 +112,20 @@ func (s *webhookSender) Send(ctx context.Context, job *store.NotificationJob) (s
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return classifyNetworkError(err)
+		errorCode, classifiedErr := classifyNetworkError(err)
+		return errorCode, false, classifiedErr
 	}
 	defer resp.Body.Close()
 
-	// Drain body to reuse connection.
-	_, _ = io.Copy(io.Discard, resp.Body)
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return ErrCodeNetworkError, false, fmt.Errorf("drain webhook response: %w", err)
+	}
 
 	return classifyHTTPStatus(resp.StatusCode)
 }
 
 // classifyHTTPStatus maps HTTP status codes to stable error codes.
-func classifyHTTPStatus(code int) (string, bool, error) {
+func classifyHTTPStatus(code int) (errorCode string, is4xx bool, err error) {
 	switch {
 	case code >= 200 && code < 300:
 		return ErrCodeDelivered, false, nil
@@ -130,7 +136,7 @@ func classifyHTTPStatus(code int) (string, bool, error) {
 		return ErrCodeNetworkError, false,
 			fmt.Errorf("webhook server error (HTTP %d)", code)
 	case code == 401 || code == 403:
-		return ErrCodeCredentialInvalid, true,
+		return ErrCodeCredentialError, true,
 			fmt.Errorf("webhook auth failed (HTTP %d)", code)
 	case code == 404 || code == 400:
 		return ErrCodeInvalidRecipient, true,
@@ -143,14 +149,14 @@ func classifyHTTPStatus(code int) (string, bool, error) {
 }
 
 // classifyNetworkError maps transport errors to stable error codes.
-func classifyNetworkError(err error) (string, bool, error) {
+func classifyNetworkError(err error) (errorCode string, classifiedErr error) {
 	errStr := err.Error()
 	switch {
 	case strings.Contains(errStr, "timeout") ||
 		strings.Contains(errStr, "deadline exceeded") ||
 		strings.Contains(errStr, "context deadline exceeded"):
-		return ErrCodeTimeout, false, fmt.Errorf("webhook timeout: %w", err)
+		return ErrCodeTimeout, fmt.Errorf("webhook timeout: %w", err)
 	default:
-		return ErrCodeNetworkError, false, fmt.Errorf("webhook network error: %w", err)
+		return ErrCodeNetworkError, fmt.Errorf("webhook network error: %w", err)
 	}
 }
