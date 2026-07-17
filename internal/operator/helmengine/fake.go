@@ -14,6 +14,10 @@ type Fake struct {
 	releases map[string]*Release // key: namespace/releaseName
 	history  map[string][]ReleaseHistoryEntry
 	counter  int
+
+	// UpgradeError, if set, causes Upgrade to fail with this error.
+	// Used to test Atomic rollback (AC-021-04).
+	UpgradeError error
 }
 
 // NewFake creates a new Fake engine.
@@ -43,16 +47,12 @@ func (f *Fake) Install(ctx context.Context, opts InstallOptions) (*Release, erro
 	}
 
 	f.counter++
-	chartName := ""
-	if opts.Chart != nil && opts.Chart.Metadata != nil {
-		chartName = opts.Chart.Metadata.Name
-	}
 	rel := &Release{
 		Name:           opts.ReleaseName,
 		Namespace:      opts.Namespace,
 		Revision:       1,
 		Status:         "deployed",
-		Chart:          chartName,
+		Chart:          opts.ChartPath,
 		ManifestDigest: fmt.Sprintf("fake-digest-%d", f.counter),
 		Notes:          fmt.Sprintf("installed %s/%s rev=1", opts.Namespace, opts.ReleaseName),
 	}
@@ -60,13 +60,16 @@ func (f *Fake) Install(ctx context.Context, opts InstallOptions) (*Release, erro
 	f.history[key] = append(f.history[key], ReleaseHistoryEntry{
 		Revision:    1,
 		Status:      "deployed",
-		Chart:       chartName,
+		Chart:       opts.ChartPath,
 		Description: "Install complete",
 	})
 	return rel, nil
 }
 
 // Upgrade increments the release revision.
+// If opts.ExpectedRevision > 0, it must match the current revision (AC-021-02).
+// If opts.Atomic is true and the upgrade fails (UpgradeError set), the release is
+// rolled back to its previous revision (AC-021-04).
 func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, ErrCancelled
@@ -81,18 +84,22 @@ func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, erro
 		return nil, ErrNotFound
 	}
 
+	// AC-021-02: ExpectedRevision mismatch → ErrConflict, no mutation
+	if opts.ExpectedRevision > 0 && existing.Revision != opts.ExpectedRevision {
+		return nil, fmt.Errorf("%w: expected revision %d, got %d", ErrConflict, opts.ExpectedRevision, existing.Revision)
+	}
+
+	// Capture pre-upgrade state for Atomic rollback.
+	prevRelease := *existing
+
 	f.counter++
 	newRev := existing.Revision + 1
-	chartName := existing.Chart
-	if opts.Chart != nil && opts.Chart.Metadata != nil {
-		chartName = opts.Chart.Metadata.Name
-	}
 	rel := &Release{
 		Name:           opts.ReleaseName,
 		Namespace:      opts.Namespace,
 		Revision:       newRev,
 		Status:         "deployed",
-		Chart:          chartName,
+		Chart:          opts.ChartPath,
 		ManifestDigest: fmt.Sprintf("fake-digest-%d", f.counter),
 		Notes:          fmt.Sprintf("upgraded %s/%s rev=%d", opts.Namespace, opts.ReleaseName, newRev),
 	}
@@ -100,9 +107,23 @@ func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, erro
 	f.history[key] = append(f.history[key], ReleaseHistoryEntry{
 		Revision:    newRev,
 		Status:      "deployed",
-		Chart:       chartName,
+		Chart:       opts.ChartPath,
 		Description: "Upgrade complete",
 	})
+
+	// AC-021-04: simulate failure with optional Atomic rollback
+	if f.UpgradeError != nil {
+		err := f.UpgradeError
+		f.UpgradeError = nil // one-shot
+		if opts.Atomic {
+			// Rollback: restore pre-upgrade release state and mark history as failed
+			f.releases[key] = &prevRelease
+			f.history[key][len(f.history[key])-1].Status = "failed"
+			f.history[key][len(f.history[key])-1].Description = "Upgrade failed, rolled back"
+		}
+		return nil, err
+	}
+
 	return rel, nil
 }
 

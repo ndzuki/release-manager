@@ -11,65 +11,64 @@ import (
 	"strings"
 
 	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/chartutil"
-	"helm.sh/helm/v3/pkg/kube"
+	"helm.sh/helm/v3/pkg/chart/loader"
+	"helm.sh/helm/v3/pkg/cli"
 	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage"
 	"helm.sh/helm/v3/pkg/storage/driver"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 )
 
 // RealEngine implements Engine using the Helm Go SDK (helm.sh/helm/v3/pkg/action).
 // It never shells out to the helm CLI binary.
 type RealEngine struct {
-	config        *rest.Config
-	logger        *slog.Logger
-	configFactory func(namespace string) (*action.Configuration, error)
+	settings       *cli.EnvSettings
+	logger         *slog.Logger
+	configFactory  func(namespace string) (*action.Configuration, error)
+	releaseStorage *storage.Storage
 }
 
-// NewRealEngine creates a Helm SDK engine for a Kubernetes cluster.
-// A fresh action.Configuration is initialized for every operation.
-func NewRealEngine(config *rest.Config, logger *slog.Logger) *RealEngine {
-	engine := &RealEngine{logger: logger}
-	if config != nil {
-		engine.config = rest.CopyConfig(config)
+// NewRealEngine creates a new RealEngine.
+// kubeConfig is the path to a kubeconfig file; if empty, in-cluster config is used.
+func NewRealEngine(kubeConfig string, logger *slog.Logger) *RealEngine {
+	settings := cli.New()
+	if kubeConfig != "" {
+		settings.KubeConfig = kubeConfig
 	}
-	return engine
+
+	return &RealEngine{
+		settings: settings,
+		logger:   logger,
+	}
 }
 
-// actionConfig creates isolated mutable Helm action state for one operation.
-// The production release storage uses Kubernetes Secrets in the operation namespace.
-func (r *RealEngine) actionConfig(ctx context.Context, namespace string) (*action.Configuration, error) {
+// actionConfig creates a new action.Configuration for a single operation.
+// Production uses a Kubernetes Secret driver. Tests may inject an isolated
+// configuration factory while preserving the same Helm SDK action path.
+func (r *RealEngine) actionConfig(namespace string) (*action.Configuration, error) {
 	if r.configFactory != nil {
 		return r.configFactory(namespace)
 	}
-	if r.config == nil {
-		return nil, errors.New("kubernetes REST config is required")
+
+	configFlags := r.settings.RESTClientGetter()
+
+	cfg := new(action.Configuration)
+	if err := cfg.Init(configFlags, namespace, "secret", r.helmLog); err != nil {
+		return nil, fmt.Errorf("initialize Helm action configuration: %w", err)
 	}
 
-	restConfig := withRequestContext(ctx, r.config)
-	getter := newRESTClientGetter(restConfig, namespace)
-	clientset, err := kubernetes.NewForConfig(restConfig)
-	if err != nil {
-		return nil, mapActionError(ctx, "create Kubernetes client", err)
-	}
-
-	registryClient, err := registry.NewClient()
+	registryClient, err := registry.NewClient(
+		registry.ClientOptCredentialsFile(r.settings.RegistryConfig),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("initialize Helm registry client: %w", err)
 	}
+	cfg.RegistryClient = registryClient
+	if r.releaseStorage != nil {
+		cfg.Releases = r.releaseStorage
+	}
 
-	return &action.Configuration{
-		RESTClientGetter: getter,
-		Releases:         storage.Init(driver.NewSecrets(clientset.CoreV1().Secrets(namespace))),
-		KubeClient:       kube.New(getter),
-		Capabilities:     chartutil.DefaultCapabilities.Copy(),
-		RegistryClient:   registryClient,
-		Log:              r.helmLog,
-	}, nil
+	return cfg, nil
 }
 
 // helmLog bridges Helm SDK logging to slog.
@@ -79,21 +78,29 @@ func (r *RealEngine) helmLog(format string, args ...interface{}) {
 	}
 }
 
-// Install installs a validated chart and returns the release.
+// Install installs a chart and returns the release.
+// Returns ErrAlreadyExists if the release exists.
 func (r *RealEngine) Install(ctx context.Context, opts InstallOptions) (*Release, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
 
-	cfg, err := r.actionConfig(ctx, opts.Namespace)
+	cfg, err := r.actionConfig(opts.Namespace)
 	if err != nil {
 		return nil, fmt.Errorf("initialize Helm install: %w", err)
 	}
-	if opts.Chart == nil {
-		return nil, fmt.Errorf("install Helm release: %w", ErrRenderFailed)
+	install := action.NewInstall(cfg)
+	install.Version = opts.ChartVersion
+	chartPath, err := install.LocateChart(opts.ChartPath, r.settings)
+	if err != nil {
+		return nil, fmt.Errorf("locate Helm chart %q: %w", opts.ChartPath, err)
 	}
 
-	install := action.NewInstall(cfg)
+	chrt, err := loader.Load(chartPath)
+	if err != nil {
+		return nil, fmt.Errorf("load Helm chart %q: %w", chartPath, err)
+	}
+
 	install.Namespace = opts.Namespace
 	install.ReleaseName = opts.ReleaseName
 	install.Atomic = opts.Atomic
@@ -103,28 +110,35 @@ func (r *RealEngine) Install(ctx context.Context, opts InstallOptions) (*Release
 		install.Timeout = opts.Timeout
 	}
 
-	rel, err := install.RunWithContext(ctx, opts.Chart, opts.Values)
+	rel, err := install.RunWithContext(ctx, chrt, opts.Values)
 	if err != nil {
 		return nil, mapActionError(ctx, "install Helm release", err)
 	}
 	return toEngineRelease(rel), nil
 }
 
-// Upgrade upgrades an existing release with a validated chart.
+// Upgrade upgrades an existing release.
 func (r *RealEngine) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
 
-	cfg, err := r.actionConfig(ctx, opts.Namespace)
+	cfg, err := r.actionConfig(opts.Namespace)
 	if err != nil {
 		return nil, fmt.Errorf("initialize Helm upgrade: %w", err)
 	}
-	if opts.Chart == nil {
-		return nil, fmt.Errorf("upgrade Helm release: %w", ErrRenderFailed)
+	upgrade := action.NewUpgrade(cfg)
+	upgrade.Version = opts.ChartVersion
+	chartPath, err := upgrade.LocateChart(opts.ChartPath, r.settings)
+	if err != nil {
+		return nil, fmt.Errorf("locate Helm chart %q: %w", opts.ChartPath, err)
 	}
 
-	upgrade := action.NewUpgrade(cfg)
+	chrt, err := loader.Load(chartPath)
+	if err != nil {
+		return nil, fmt.Errorf("load Helm chart %q: %w", chartPath, err)
+	}
+
 	upgrade.Namespace = opts.Namespace
 	upgrade.Atomic = opts.Atomic
 	if opts.MaxHistory > 0 {
@@ -134,7 +148,7 @@ func (r *RealEngine) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release
 		upgrade.Timeout = opts.Timeout
 	}
 
-	rel, err := upgrade.RunWithContext(ctx, opts.ReleaseName, opts.Chart, opts.Values)
+	rel, err := upgrade.RunWithContext(ctx, opts.ReleaseName, chrt, opts.Values)
 	if err != nil {
 		return nil, mapActionError(ctx, "upgrade Helm release", err)
 	}
@@ -147,7 +161,7 @@ func (r *RealEngine) Rollback(ctx context.Context, opts RollbackOptions) (*Relea
 		return nil, err
 	}
 
-	cfg, err := r.actionConfig(ctx, opts.Namespace)
+	cfg, err := r.actionConfig(opts.Namespace)
 	if err != nil {
 		return nil, fmt.Errorf("initialize Helm rollback: %w", err)
 	}
@@ -170,7 +184,7 @@ func (r *RealEngine) Status(ctx context.Context, opts StatusOptions) (*Release, 
 		return nil, err
 	}
 
-	cfg, err := r.actionConfig(ctx, opts.Namespace)
+	cfg, err := r.actionConfig(opts.Namespace)
 	if err != nil {
 		return nil, fmt.Errorf("initialize Helm status: %w", err)
 	}
@@ -200,7 +214,7 @@ func (r *RealEngine) History(ctx context.Context, opts HistoryOptions) ([]Releas
 		return nil, err
 	}
 
-	cfg, err := r.actionConfig(ctx, opts.Namespace)
+	cfg, err := r.actionConfig(opts.Namespace)
 	if err != nil {
 		return nil, fmt.Errorf("initialize Helm history: %w", err)
 	}
@@ -237,7 +251,7 @@ func (r *RealEngine) GetValues(ctx context.Context, opts GetValuesOptions) (map[
 		return nil, err
 	}
 
-	cfg, err := r.actionConfig(ctx, opts.Namespace)
+	cfg, err := r.actionConfig(opts.Namespace)
 	if err != nil {
 		return nil, fmt.Errorf("initialize Helm get values: %w", err)
 	}
@@ -261,7 +275,7 @@ func (r *RealEngine) List(ctx context.Context, namespace string) ([]*ReleaseList
 		return nil, err
 	}
 
-	cfg, err := r.actionConfig(ctx, namespace)
+	cfg, err := r.actionConfig(namespace)
 	if err != nil {
 		return nil, fmt.Errorf("initialize Helm list: %w", err)
 	}
@@ -359,17 +373,13 @@ func contextError(ctx context.Context) error {
 
 func mapActionError(ctx context.Context, operation string, err error) error {
 	switch {
-	case errors.Is(ctx.Err(), context.DeadlineExceeded), errors.Is(err, context.DeadlineExceeded), k8serrors.IsTimeout(err):
+	case errors.Is(ctx.Err(), context.DeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
 		return fmt.Errorf("%s: %w", operation, ErrTimeout)
 	case errors.Is(ctx.Err(), context.Canceled), errors.Is(err, context.Canceled):
 		return fmt.Errorf("%s: %w", operation, ErrCancelled)
-	case k8serrors.IsForbidden(err):
-		return fmt.Errorf("%s: %w", operation, ErrForbidden)
-	case k8serrors.IsConflict(err):
-		return fmt.Errorf("%s: %w", operation, ErrConflict)
 	case errors.Is(err, driver.ErrReleaseExists), strings.Contains(err.Error(), "cannot re-use a name that is still in use"):
 		return fmt.Errorf("%s: %w", operation, ErrAlreadyExists)
-	case errors.Is(err, driver.ErrReleaseNotFound), errors.Is(err, driver.ErrNoDeployedReleases), k8serrors.IsNotFound(err):
+	case errors.Is(err, driver.ErrReleaseNotFound), errors.Is(err, driver.ErrNoDeployedReleases):
 		return fmt.Errorf("%s: %w", operation, ErrNotFound)
 	default:
 		return fmt.Errorf("%s: %w: %v", operation, ErrActionFailed, err)
