@@ -129,6 +129,7 @@ type ReleaseDefinition struct {
 	ChartName         string           `json:"chart_name"`
 	Status            DefinitionStatus `json:"status"`
 	OptimisticVersion int              `json:"optimistic_version"`
+	CurrentBundleID   *string          `json:"current_bundle_id,omitempty"`
 	CreatedBy         string           `json:"created_by"`
 	CreatedAt         time.Time        `json:"created_at"`
 	UpdatedAt         time.Time        `json:"updated_at"`
@@ -495,6 +496,7 @@ const (
 	BundleReceived  BundleStatus = "received"
 	BundleValidated BundleStatus = "validated"
 	BundleRejected  BundleStatus = "rejected"
+	BundleArchived  BundleStatus = "archived"
 )
 
 // Valid returns true if the status is a recognized value.
@@ -530,6 +532,7 @@ type ReleaseBundle struct {
 	SignatureRef  string
 	SBOMRef       string
 	ProvenanceRef string
+	ArchivedAt    *time.Time
 	CreatedAt     time.Time
 }
 
@@ -538,6 +541,10 @@ type BundleStore interface {
 	Create(ctx context.Context, b *ReleaseBundle) error
 	Get(ctx context.Context, id string) (*ReleaseBundle, error)
 	GetByDigest(ctx context.Context, alg, value string) (*ReleaseBundle, error)
+	ListForArchive(ctx context.Context, retentionDays int, terminalStates []OperationStatus) ([]string, error)
+	Archive(ctx context.Context, ids []string) (int64, error)
+	DeleteBefore(ctx context.Context, cutoff time.Time) (int64, error)
+	Unarchive(ctx context.Context, id string) error
 }
 
 // TrustPolicy defines the verification rules for an environment.
@@ -574,6 +581,45 @@ type PreflightRecord struct {
 	Key        PreflightCacheKey
 	ResultJSON []byte
 	CreatedAt  time.Time
+}
+
+// ── Artifact lifecycle domain types (REQ-069) ──────────────────────
+
+// CandidateArtifact records a raw artifact event from external sources
+// (e.g. Harbor webhook) before it is associated with a ReleaseBundle.
+type CandidateArtifact struct {
+	ID           string
+	ArtifactType ArtifactType
+	Ref          string
+	Digest       string
+	BundleID     *string
+	CreatedAt    time.Time
+}
+
+// CandidateArtifactStore defines the persistence contract for candidate artifacts.
+type CandidateArtifactStore interface {
+	Create(ctx context.Context, ca *CandidateArtifact) error
+	LinkToBundle(ctx context.Context, artifactID string, bundleID string) error
+	DeleteOrphanBefore(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+// PreflightLifecycle records the result of a preflight pipeline run
+// with lifecycle awareness for GC.
+type PreflightLifecycle struct {
+	ID                  string
+	OperationID         *string
+	OperationTerminalAt *time.Time
+	Stages              []byte // JSON array of StageResult
+	Overall             string // "passed" | "failed" | "timeout"
+	ErrorCode           string
+	CreatedAt           time.Time
+}
+
+// PreflightLifecycleStore defines the persistence contract for lifecycle-aware preflight results.
+type PreflightLifecycleStore interface {
+	Create(ctx context.Context, pl *PreflightLifecycle) error
+	SetOperationTerminal(ctx context.Context, operationID string, terminalAt time.Time) error
+	DeleteExpired(ctx context.Context, ttl time.Duration) (int64, error)
 }
 
 // ── Inventory domain types (REQ-017) ───────────────────────────────
@@ -657,6 +703,7 @@ type DefinitionStore interface {
 	Get(ctx context.Context, id string) (*ReleaseDefinition, error)
 	Update(ctx context.Context, def *ReleaseDefinition, event *ReleaseDefinitionEvent) (*ReleaseDefinition, error)
 	List(ctx context.Context, customerID, clusterID string, includeDisabled bool) ([]*ReleaseDefinition, error)
+	SetCurrentBundle(ctx context.Context, defID string, bundleID string) (unarchived bool, err error)
 }
 
 
@@ -935,5 +982,7 @@ type Store interface {
 	CustomerEvents() CustomerEventStore
 	ClusterRoutes() ClusterRouteStore
 	Inventories() InventoryStore
+	CandidateArtifacts() CandidateArtifactStore
+	PreflightLifecycles() PreflightLifecycleStore
 	Close() error
 }

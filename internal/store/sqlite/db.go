@@ -39,6 +39,8 @@ type Store struct {
 	custEvents      *customerEventStore
 	defEvents       *definitionEventStore
 	preflight       *preflightStore
+	candidateArts   *candidateArtifactStore
+	preflightCycles *preflightLifecycleStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -90,6 +92,13 @@ func Open(dsn string) (*Store, error) {
 	s.verifs = &verificationStore{db: db}
 	s.custEvents = &customerEventStore{db: db}
 	s.routes = &clusterRouteStore{db: db}
+	s.candidateArts = &candidateArtifactStore{db: db}
+	s.preflightCycles = &preflightLifecycleStore{db: db}
+
+	// REQ-069: Wire operation store → preflight lifecycle store so terminal
+	// operation transitions automatically record operation_terminal_at.
+	s.ops.pl = s.preflightCycles
+
 	return s, nil
 }
 
@@ -164,6 +173,12 @@ func (s *Store) ClusterRoutes() store.ClusterRouteStore { return s.routes }
 
 // Inventories returns the InventoryStore.
 func (s *Store) Inventories() store.InventoryStore { return s.invs }
+
+// CandidateArtifacts returns the CandidateArtifactStore.
+func (s *Store) CandidateArtifacts() store.CandidateArtifactStore { return s.candidateArts }
+
+// PreflightLifecycles returns the PreflightLifecycleStore.
+func (s *Store) PreflightLifecycles() store.PreflightLifecycleStore { return s.preflightCycles }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
@@ -581,6 +596,34 @@ var migrationStatements = []string{
 		created_at          TEXT NOT NULL
 	)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_preflight_results_key ON preflight_results(operation_id, routing_version, bundle_digest, trust_policy_version, sbom_policy_version)`,
+
+	// Artifact lifecycle (REQ-069) — ALTER TABLEs are idempotent (migrate() skips "duplicate column").
+	`ALTER TABLE release_bundles ADD COLUMN archived_at TEXT`,
+	`ALTER TABLE release_definitions ADD COLUMN current_bundle_id TEXT`,
+
+	// Candidate artifacts (REQ-069)
+	`CREATE TABLE IF NOT EXISTS candidate_artifacts (
+		id            TEXT PRIMARY KEY,
+		artifact_type TEXT NOT NULL CHECK (artifact_type IN ('image', 'chart')),
+		ref           TEXT NOT NULL,
+		digest        TEXT NOT NULL,
+		bundle_id     TEXT,
+		created_at    TEXT NOT NULL,
+		UNIQUE(digest, artifact_type)
+	)`,
+
+	// Preflight lifecycle results (REQ-069) — distinct from the cache-based preflight_results table.
+	`CREATE TABLE IF NOT EXISTS preflight_lifecycles (
+		id                    TEXT PRIMARY KEY,
+		operation_id          TEXT,
+		operation_terminal_at TEXT,
+		stages                TEXT NOT NULL DEFAULT '[]',
+		overall               TEXT NOT NULL DEFAULT '',
+		error_code            TEXT NOT NULL DEFAULT '',
+		created_at            TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_preflight_lifecycles_operation ON preflight_lifecycles(operation_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_preflight_lifecycles_terminal ON preflight_lifecycles(operation_terminal_at)`,
 }
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }

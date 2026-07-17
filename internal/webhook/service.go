@@ -134,17 +134,33 @@ func (s *Service) IngestArtifact(
 		// Non-fatal: we still return OK so the webhook doesn't retry.
 	}
 
-	s.logger.Info("artifact event recorded",
-		"source", msg.Source,
-		"type", msg.ArtifactType,
-		"url", msg.ArtifactUrl,
-	)
+	// Record as CandidateArtifact for lifecycle GC (REQ-069).
+	caType := store.ArtifactImage
+	if msg.ArtifactType != "" {
+		switch strings.ToLower(msg.ArtifactType) {
+		case "chart":
+			caType = store.ArtifactChart
+		case "image":
+			caType = store.ArtifactImage
+		}
+	}
+	// Use artifact_url + digest as the candidate ref/digest.
+	// Use artifact_url as the digest (no explicit digest field in IngestArtifactRequest).
+	ca := &store.CandidateArtifact{
+		ArtifactType: caType,
+		Ref:          msg.ArtifactUrl,
+		Digest:       fmt.Sprintf("%x", sha256.Sum256([]byte(msg.ArtifactUrl))),
+		CreatedAt:    now,
+	}
+	if err := s.store.CandidateArtifacts().Create(ctx, ca); err != nil {
+		s.logger.Warn("failed to record candidate artifact", "err", err, "url", msg.ArtifactUrl)
+	}
 
-	// IngestArtifact does NOT create an Operation or trigger PublishRelease.
-	// It only records the raw event for audit purposes.
-	return connect.NewResponse(&webhookv1.IngestArtifactResponse{
-		Bundle: nil,
-	}), nil
+	s.logger.Info("artifact event recorded",
+		"url", msg.ArtifactUrl,
+		"candidate_id", ca.ID,
+	)
+	return connect.NewResponse(&webhookv1.IngestArtifactResponse{}), nil
 }
 
 // validateSubmitRequest performs schema-level validation.
