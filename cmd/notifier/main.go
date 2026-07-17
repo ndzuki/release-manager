@@ -15,9 +15,20 @@ import (
 
 type notifierSvc struct {
 	dbPath string
+
+	// consumer lifecycle
+	consumer       *notifier.Consumer
+	consumerCancel context.CancelFunc
 }
 
 func (s *notifierSvc) Name() string { return "release-notifier" }
+
+func (s *notifierSvc) Shutdown(ctx context.Context) error {
+	if s.consumerCancel != nil {
+		s.consumerCancel()
+	}
+	return nil
+}
 
 func (s *notifierSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	st, err := sqlitestore.Open(s.dbPath)
@@ -30,11 +41,23 @@ func (s *notifierSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	path, h := notifierv1connect.NewNotifierServiceHandler(svc)
 	mux.Handle(path, h)
 
-	// Start notification consumer goroutine.
+	// Build sender. In production this would use a real SecretResolver.
+	// For now, webhook sender without secret resolution; unconfigured
+	// channels are rejected at Send time.
+	sender := notifier.NewWebhookSender(nil)
+
 	consumerCfg := notifier.DefaultConsumerConfig()
-	consumer := notifier.NewConsumer(st, logger, consumerCfg)
-	// Consumer.Run is blocking; run it in a goroutine tied to the process lifetime.
-	go consumer.Run(context.Background())
+	s.consumer = notifier.NewConsumer(
+		st.Notifications(),
+		sender,
+		logger,
+		consumerCfg,
+	)
+
+	// Consumer runs within app.Run lifecycle; cancellation triggers clean shutdown.
+	ctx, cancel := context.WithCancel(context.Background())
+	s.consumerCancel = cancel
+	go s.consumer.Run(ctx)
 
 	return nil
 }

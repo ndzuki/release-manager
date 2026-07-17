@@ -9,16 +9,12 @@ import (
 type RetryConfig struct {
 	// InitialBackoff is the starting delay between retries.
 	InitialBackoff time.Duration
-
 	// MaxBackoff is the maximum backoff delay (capped at this value).
 	MaxBackoff time.Duration
-
 	// Multiplier is the exponential backoff factor.
 	Multiplier float64
-
 	// MaxRetries is the maximum number of retry attempts before dead-letter.
 	MaxRetries int
-
 	// DeadlineAfter is how long a job can stay in retry state before dead-letter.
 	// 0 means no deadline.
 	DeadlineAfter time.Duration
@@ -43,6 +39,15 @@ func ComputeNextRetry(retryCount int, cfg RetryConfig) time.Time {
 		delay = float64(cfg.MaxBackoff)
 	}
 	return time.Now().UTC().Add(time.Duration(delay))
+}
+
+// ComputeNextRetryWithClock calculates the next retry time using the given clock.
+func ComputeNextRetryWithClock(clk Clock, retryCount int, cfg RetryConfig) time.Time {
+	delay := float64(cfg.InitialBackoff) * math.Pow(cfg.Multiplier, float64(retryCount))
+	if delay > float64(cfg.MaxBackoff) {
+		delay = float64(cfg.MaxBackoff)
+	}
+	return clk.Now().Add(time.Duration(delay))
 }
 
 // ShouldDeadLetter determines if a job should be moved to the dead-letter queue.

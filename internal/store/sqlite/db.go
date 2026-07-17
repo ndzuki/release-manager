@@ -171,6 +171,17 @@ func (s *Store) Close() error { return s.db.Close() }
 // DB exposes the underlying *sql.DB for testing.
 func (s *Store) DB() *sql.DB { return s.db }
 
+// OpenTest creates a Store backed by an in-memory SQLite database for testing.
+// The caller is responsible for closing the store via t.Cleanup.
+func OpenTest(t interface{ Cleanup(func()) }) *Store {
+	st, err := Open("file::memory:?cache=shared")
+	if err != nil {
+		panic("sqlite OpenTest: " + err.Error())
+	}
+	t.Cleanup(func() { st.Close() })
+	return st
+}
+
 // migrate runs the ordered migration steps against the database.
 // ALTER TABLE ADD COLUMN statements that fail because the column already
 // exists are silently skipped to keep migrations idempotent.
@@ -455,9 +466,13 @@ var migrationStatements = []string{
 		channel        TEXT NOT NULL DEFAULT 'webhook',
 		recipient      TEXT NOT NULL DEFAULT '',
 		status         TEXT NOT NULL DEFAULT 'pending',
+		attempts       INTEGER NOT NULL DEFAULT 0,
 		retry_count    INTEGER NOT NULL DEFAULT 0,
 		max_retries    INTEGER NOT NULL DEFAULT 3,
+		error_code     TEXT NOT NULL DEFAULT '',
+		next_retry_at  TEXT,
 		last_error     TEXT NOT NULL DEFAULT '',
+		sent_at        TEXT,
 		dead_letter_at TEXT,
 		metadata       TEXT NOT NULL DEFAULT '{}',
 		created_at     TEXT NOT NULL,
@@ -466,6 +481,12 @@ var migrationStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_notification_jobs_status ON notification_jobs(status)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_jobs_dedup ON notification_jobs(operation_id, channel, recipient)`,
 
+	// REQ-031: Add columns that may be missing from existing DBs (idempotent ALTER TABLE).
+	`ALTER TABLE notification_jobs ADD COLUMN next_retry_at TEXT`,
+	`ALTER TABLE notification_jobs ADD COLUMN dead_letter_at TEXT`,
+	`ALTER TABLE notification_jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE notification_jobs ADD COLUMN error_code TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE notification_jobs ADD COLUMN sent_at TEXT`,
 	// Artifact trust verification (REQ-012)
 	`CREATE TABLE IF NOT EXISTS verification_records (
 		id              TEXT PRIMARY KEY,
