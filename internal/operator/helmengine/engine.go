@@ -95,16 +95,17 @@ type InstallOptions struct {
 	Timeout         time.Duration // helm install timeout
 }
 
-// UpgradeOptions holds parameters for Upgrade.
+// UpgradeOptions holds parameters for the Helm SDK Upgrade method.
 type UpgradeOptions struct {
-	Namespace    string
-	ReleaseName  string
-	ChartPath    string
-	ChartVersion string
-	Values       map[string]interface{}
-	Atomic       bool          // rollback on failure
-	MaxHistory   int           // max history to keep
-	Timeout      time.Duration // helm upgrade timeout
+	Namespace        string
+	ReleaseName      string
+	ChartPath        string
+	ChartVersion     string
+	Values           map[string]interface{}
+	ExpectedRevision int           // if > 0, must match current revision (AC-021-02)
+	Atomic           bool          // rollback on failure
+	MaxHistory       int           // max history to keep
+	Timeout          time.Duration // helm upgrade timeout
 }
 
 // RollbackOptions holds parameters for Rollback.

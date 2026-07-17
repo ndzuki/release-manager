@@ -49,8 +49,8 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("create operator service: %w", err)
 	}
-	path, h := operatorv1connect.NewOperatorServiceHandler(svc)
-	mux.Handle(path, h)
+	path, handler := operatorv1connect.NewOperatorServiceHandler(svc)
+	mux.Handle(path, handler)
 
 	engine := helmengine.NewRealEngine(s.kubeConfig, logger)
 	if s.orchestratorURL != "" {
@@ -104,9 +104,7 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		logger.Info("operator runtime wired", "orchestrator_url", s.orchestratorURL)
 	}
 
-	// Start session expiration goroutine.
 	go s.runSessionExpiry(context.Background(), logger)
-
 	return nil
 }
 

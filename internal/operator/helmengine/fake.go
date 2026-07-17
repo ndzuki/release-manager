@@ -14,6 +14,10 @@ type Fake struct {
 	releases map[string]*Release // key: namespace/releaseName
 	history  map[string][]ReleaseHistoryEntry
 	counter  int
+
+	// UpgradeError, if set, causes Upgrade to fail with this error.
+	// Used to test Atomic rollback (AC-021-04).
+	UpgradeError error
 }
 
 // NewFake creates a new Fake engine.
@@ -63,6 +67,9 @@ func (f *Fake) Install(ctx context.Context, opts InstallOptions) (*Release, erro
 }
 
 // Upgrade increments the release revision.
+// If opts.ExpectedRevision > 0, it must match the current revision (AC-021-02).
+// If opts.Atomic is true and the upgrade fails (UpgradeError set), the release is
+// rolled back to its previous revision (AC-021-04).
 func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, ErrCancelled
@@ -76,6 +83,14 @@ func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, erro
 	if !exists {
 		return nil, ErrNotFound
 	}
+
+	// AC-021-02: ExpectedRevision mismatch → ErrConflict, no mutation
+	if opts.ExpectedRevision > 0 && existing.Revision != opts.ExpectedRevision {
+		return nil, fmt.Errorf("%w: expected revision %d, got %d", ErrConflict, opts.ExpectedRevision, existing.Revision)
+	}
+
+	// Capture pre-upgrade state for Atomic rollback.
+	prevRelease := *existing
 
 	f.counter++
 	newRev := existing.Revision + 1
@@ -95,6 +110,20 @@ func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, erro
 		Chart:       opts.ChartPath,
 		Description: "Upgrade complete",
 	})
+
+	// AC-021-04: simulate failure with optional Atomic rollback
+	if f.UpgradeError != nil {
+		err := f.UpgradeError
+		f.UpgradeError = nil // one-shot
+		if opts.Atomic {
+			// Rollback: restore pre-upgrade release state and mark history as failed
+			f.releases[key] = &prevRelease
+			f.history[key][len(f.history[key])-1].Status = "failed"
+			f.history[key][len(f.history[key])-1].Description = "Upgrade failed, rolled back"
+		}
+		return nil, err
+	}
+
 	return rel, nil
 }
 
@@ -188,7 +217,6 @@ func (f *Fake) GetValues(ctx context.Context, opts GetValuesOptions) (map[string
 	return map[string]interface{}{}, nil
 }
 
-
 // List returns all releases in a namespace.
 func (f *Fake) List(ctx context.Context, namespace string) ([]*ReleaseListItem, error) {
 	if err := ctx.Err(); err != nil {
@@ -206,7 +234,7 @@ func (f *Fake) List(ctx context.Context, namespace string) ([]*ReleaseListItem, 
 				Namespace:    rel.Namespace,
 				Name:         rel.Name,
 				Chart:        rel.Chart,
-				ChartVersion: rel.Chart,  // Fake stores chart name only; version not tracked
+				ChartVersion: rel.Chart, // Fake stores chart name only; version not tracked
 				Revision:     rel.Revision,
 				Status:       rel.Status,
 				ValuesDigest: "",
@@ -215,5 +243,6 @@ func (f *Fake) List(ctx context.Context, namespace string) ([]*ReleaseListItem, 
 	}
 	return items, nil
 }
+
 // Compile-time interface check.
 var _ Engine = (*Fake)(nil)

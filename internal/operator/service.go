@@ -305,7 +305,9 @@ func (s *Service) CommandStream(
 		case <-hbTicker.C:
 			if err := s.store.Sessions().Heartbeat(ctx, sessionID); err != nil {
 				s.logger.Warn("heartbeat failed", "error", err)
-				_ = s.store.Sessions().UpdateStatus(ctx, sessionID, store.SessionOffline)
+				if statusErr := s.store.Sessions().UpdateStatus(ctx, sessionID, store.SessionOffline); statusErr != nil {
+					s.logger.Warn("failed to mark session offline", "error", statusErr)
+				}
 				return nil
 			}
 
@@ -318,8 +320,9 @@ func (s *Service) CommandStream(
 			if err := s.sendCommand(stream, entry); err != nil {
 				return err
 			}
-			_ = s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandDelivered, "")
-
+			if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandDelivered, ""); err != nil {
+				return fmt.Errorf("mark command delivered: %w", err)
+			}
 		case <-ctx.Done():
 			return nil
 
@@ -331,7 +334,9 @@ func (s *Service) CommandStream(
 
 			switch {
 			case req.GetHeartbeat() != nil:
-				_ = s.store.Sessions().Heartbeat(ctx, sessionID)
+				if err := s.store.Sessions().Heartbeat(ctx, sessionID); err != nil {
+					s.logger.Warn("heartbeat update failed", "error", err)
+				}
 
 			case req.GetAck() != nil:
 				ack := req.GetAck()
@@ -344,7 +349,9 @@ func (s *Service) CommandStream(
 				// but only ACK_PERSISTED releases the orchestator from
 				// re-delivery responsibility.
 				if ack.GetAckType() == operatorv1.AckType_ACK_TYPE_PERSISTED {
-					_ = s.store.Outbox().UpdateStatus(ctx, ack.GetOutboxId(), store.CommandPersisted, "")
+					if err := s.store.Outbox().UpdateStatus(ctx, ack.GetOutboxId(), store.CommandPersisted, ""); err != nil {
+						s.logger.Warn("failed to mark command persisted", "error", err)
+					}
 				}
 
 			case req.GetResult() != nil:
@@ -396,9 +403,9 @@ func (s *Service) CommandStream(
 				s.logger.Info("operator resync response",
 					"operator_last_sequence", rr.GetOperatorLastSequence(),
 				)
-				// After receiving resync response, re-deliver any unacked
-				// commands starting from the operator's last sequence.
-				_ = s.reDeliverFrom(ctx, stream, operatorID, rr.GetOperatorLastSequence())
+				if err := s.reDeliverFrom(ctx, stream, operatorID, rr.GetOperatorLastSequence()); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -521,7 +528,9 @@ func (s *Service) reDeliverFrom(
 		if err := s.sendCommand(stream, entry); err != nil {
 			return err
 		}
-		_ = s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandDelivered, "")
+		if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandDelivered, ""); err != nil {
+			return fmt.Errorf("mark re-delivered command: %w", err)
+		}
 	}
 	return nil
 }
@@ -541,7 +550,6 @@ func (s *Service) sendCommand(
 	if err := DecodeCommandPayload(entry.Payload, command); err != nil {
 		return fmt.Errorf("decode command payload %q: %w", entry.CommandID, err)
 	}
-
 	return stream.Send(&operatorv1.CommandStreamResponse{
 		Payload: &operatorv1.CommandStreamResponse_Command{Command: command},
 	})
@@ -624,8 +632,10 @@ func (s *Service) deliverPending(
 					continue
 				}
 				entry.Sequence = seq
-				// Update the sequence in the outbox.
-				_ = s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPending, "")
+				if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPending, ""); err != nil {
+					s.logger.Warn("failed to persist command sequence", "error", err)
+					continue
+				}
 			}
 
 			select {

@@ -120,6 +120,8 @@ func (s *Service) UpdateCustomer(
 }
 
 // DisableCustomer disables a customer by ID. Disabled customers reject write operations.
+//
+//nolint:gocyclo // idempotent disable cascades across customer, tokens, operators, sessions, and events.
 func (s *Service) DisableCustomer(
 	ctx context.Context,
 	req *connect.Request[orchestratorv1.DisableCustomerRequest],
