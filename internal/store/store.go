@@ -440,10 +440,13 @@ type NotificationJob struct {
 	Channel      NotificationChannel
 	Recipient    string
 	Status       NotificationStatus
+	Attempts     int
 	RetryCount   int
 	MaxRetries   int
+	ErrorCode    string
 	NextRetryAt  *time.Time
 	LastError    string
+	SentAt       *time.Time
 	DeadLetterAt *time.Time
 	Metadata     map[string]string
 	CreatedAt    time.Time
@@ -822,8 +825,10 @@ type NotificationStore interface {
 	Create(ctx context.Context, j *NotificationJob) error
 	Get(ctx context.Context, id string) (*NotificationJob, error)
 	GetPending(ctx context.Context, now time.Time, limit int) ([]*NotificationJob, error)
-	UpdateStatus(ctx context.Context, id string, status NotificationStatus, retryCount int, nextRetryAt *time.Time, lastError string) error
-	MarkDeadLetter(ctx context.Context, id string) error
+	UpdateStatus(ctx context.Context, id string, status NotificationStatus, attempts int, retryCount int, errorCode string, nextRetryAt *time.Time, lastError string, sentAt *time.Time) error
+	MarkDeadLetter(ctx context.Context, id string, errorCode, lastError string) error
+	ClaimNext(ctx context.Context, now time.Time) (*NotificationJob, error)
+	DeleteDeadLetterBefore(ctx context.Context, before time.Time) (int64, error)
 }
 
 // VerificationStore defines the persistence contract for verification records.
