@@ -720,6 +720,7 @@ type AuthSessionStore interface {
 	GetByRefreshHash(ctx context.Context, hash string) (*AuthSession, error)
 	GetByTokenFamily(ctx context.Context, family string) ([]*AuthSession, error)
 	RevokeFamily(ctx context.Context, family string) error
+	HasActiveByUserID(ctx context.Context, userID string) (bool, error)
 	RevokeByUserID(ctx context.Context, userID string) error
 	DeleteExpired(ctx context.Context) (int64, error)
 }

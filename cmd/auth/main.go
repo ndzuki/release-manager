@@ -6,6 +6,8 @@ import (
 	"flag"
 	"log/slog"
 	"net/http"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"connectrpc.com/connect"
@@ -17,11 +19,20 @@ import (
 )
 
 type authSvc struct {
+	ctx        context.Context
 	dbPath     string
 	signingKey string
+	closeStore func() error
 }
 
 func (s *authSvc) Name() string { return "release-auth" }
+
+func (s *authSvc) Close() error {
+	if s.closeStore == nil {
+		return nil
+	}
+	return s.closeStore()
+}
 
 func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	st, err := sqlitestore.Open(s.dbPath)
@@ -29,12 +40,14 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		return err
 	}
 	logger.Info("store opened", "db", s.dbPath)
+	s.closeStore = st.Close
 
 	signingKey := []byte(s.signingKey)
 
 	jwtMgr := auth.NewJWTManager(signingKey, 15*time.Minute, 7*24*time.Hour)
 	limiter := auth.NewRateLimiter(5, time.Minute)
 	resolver := auth.StubResolver{}
+	auth.StartSessionCleanup(s.ctx, st.AuthSessions(), time.Hour, logger)
 
 	enforcer, err := auth.NewEnforcer(st, logger)
 	if err != nil {
@@ -44,14 +57,14 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if err := enforcer.LoadPolicies(context.TODO()); err != nil {
 		logger.Error("initial policy load failed", "error", err)
 	}
-	enforcer.StartPolicyReloader(context.TODO(), 30*time.Second)
+	enforcer.StartPolicyReloader(s.ctx, 30*time.Second)
 
 	publicMethods := map[string]bool{
 		authv1connect.AuthServiceLoginProcedure:        true,
 		authv1connect.AuthServiceRefreshTokenProcedure: true,
 	}
 
-	interceptor := auth.NewAuthInterceptor(jwtMgr, enforcer, publicMethods, logger)
+	interceptor := auth.NewAuthInterceptor(jwtMgr, st, enforcer, publicMethods, logger)
 	interceptorOpt := connect.WithInterceptors(interceptor)
 
 	authSvc := auth.NewAuthService(st, jwtMgr, limiter, logger)
@@ -75,5 +88,14 @@ func main() {
 	signingKey := flag.String("signing-key", "change-me-in-production", "JWT signing key")
 	flag.Parse()
 
-	app.Run(*configPath, &authSvc{dbPath: *dbPath, signingKey: *signingKey})
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	svc := &authSvc{ctx: ctx, dbPath: *dbPath, signingKey: *signingKey}
+	defer func() {
+		if err := svc.Close(); err != nil {
+			slog.Error("close auth store", "error", err)
+		}
+	}()
+	app.Run(*configPath, svc)
 }
