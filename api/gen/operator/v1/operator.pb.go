@@ -734,16 +734,21 @@ func (*CommandStreamResponse_DuplicateResponse) isCommandStreamResponse_Payload(
 
 // Command is a deploy directive sent to the operator.
 type Command struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	OutboxId      string                 `protobuf:"bytes,1,opt,name=outbox_id,json=outboxId,proto3" json:"outbox_id,omitempty"`
-	CommandId     string                 `protobuf:"bytes,2,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
-	OperationId   string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
-	OperationType string                 `protobuf:"bytes,4,opt,name=operation_type,json=operationType,proto3" json:"operation_type,omitempty"`
-	Bundle        *v1.ReleaseBundle      `protobuf:"bytes,5,opt,name=bundle,proto3" json:"bundle,omitempty"`
-	Values        []byte                 `protobuf:"bytes,6,opt,name=values,proto3" json:"values,omitempty"`
-	Sequence      int64                  `protobuf:"varint,7,opt,name=sequence,proto3" json:"sequence,omitempty"` // global monotonic sequence number
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	OutboxId        string                 `protobuf:"bytes,1,opt,name=outbox_id,json=outboxId,proto3" json:"outbox_id,omitempty"`
+	CommandId       string                 `protobuf:"bytes,2,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	OperationId     string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	OperationType   string                 `protobuf:"bytes,4,opt,name=operation_type,json=operationType,proto3" json:"operation_type,omitempty"`
+	Bundle          *v1.ReleaseBundle      `protobuf:"bytes,5,opt,name=bundle,proto3" json:"bundle,omitempty"`
+	Values          []byte                 `protobuf:"bytes,6,opt,name=values,proto3" json:"values,omitempty"`
+	Sequence        int64                  `protobuf:"varint,7,opt,name=sequence,proto3" json:"sequence,omitempty"` // global monotonic sequence number
+	DefinitionId    string                 `protobuf:"bytes,8,opt,name=definition_id,json=definitionId,proto3" json:"definition_id,omitempty"`
+	Namespace       string                 `protobuf:"bytes,9,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	ReleaseName     string                 `protobuf:"bytes,10,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
+	CreateNamespace bool                   `protobuf:"varint,11,opt,name=create_namespace,json=createNamespace,proto3" json:"create_namespace,omitempty"`
+	TimeoutSeconds  int64                  `protobuf:"varint,12,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *Command) Reset() {
@@ -821,6 +826,41 @@ func (x *Command) GetValues() []byte {
 func (x *Command) GetSequence() int64 {
 	if x != nil {
 		return x.Sequence
+	}
+	return 0
+}
+
+func (x *Command) GetDefinitionId() string {
+	if x != nil {
+		return x.DefinitionId
+	}
+	return ""
+}
+
+func (x *Command) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *Command) GetReleaseName() string {
+	if x != nil {
+		return x.ReleaseName
+	}
+	return ""
+}
+
+func (x *Command) GetCreateNamespace() bool {
+	if x != nil {
+		return x.CreateNamespace
+	}
+	return false
+}
+
+func (x *Command) GetTimeoutSeconds() int64 {
+	if x != nil {
+		return x.TimeoutSeconds
 	}
 	return 0
 }
@@ -1196,7 +1236,7 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\rsession_event\x18\x02 \x01(\v2\x19.operator.v1.SessionEventH\x00R\fsessionEvent\x12C\n" +
 	"\x0eresync_request\x18\x03 \x01(\v2\x1a.operator.v1.ResyncRequestH\x00R\rresyncRequest\x12O\n" +
 	"\x12duplicate_response\x18\x04 \x01(\v2\x1e.operator.v1.DuplicateResponseH\x00R\x11duplicateResponseB\t\n" +
-	"\apayload\"\xf5\x01\n" +
+	"\apayload\"\xaf\x03\n" +
 	"\aCommand\x12\x1b\n" +
 	"\toutbox_id\x18\x01 \x01(\tR\boutboxId\x12\x1d\n" +
 	"\n" +
@@ -1205,7 +1245,13 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x0eoperation_type\x18\x04 \x01(\tR\roperationType\x120\n" +
 	"\x06bundle\x18\x05 \x01(\v2\x18.common.v1.ReleaseBundleR\x06bundle\x12\x16\n" +
 	"\x06values\x18\x06 \x01(\fR\x06values\x12\x1a\n" +
-	"\bsequence\x18\a \x01(\x03R\bsequence\"e\n" +
+	"\bsequence\x18\a \x01(\x03R\bsequence\x12#\n" +
+	"\rdefinition_id\x18\b \x01(\tR\fdefinitionId\x12\x1c\n" +
+	"\tnamespace\x18\t \x01(\tR\tnamespace\x12!\n" +
+	"\frelease_name\x18\n" +
+	" \x01(\tR\vreleaseName\x12)\n" +
+	"\x10create_namespace\x18\v \x01(\bR\x0fcreateNamespace\x12'\n" +
+	"\x0ftimeout_seconds\x18\f \x01(\x03R\x0etimeoutSeconds\"e\n" +
 	"\rResyncRequest\x12<\n" +
 	"\x1aorchestrator_last_sequence\x18\x01 \x01(\x03R\x18orchestratorLastSequence\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"F\n" +

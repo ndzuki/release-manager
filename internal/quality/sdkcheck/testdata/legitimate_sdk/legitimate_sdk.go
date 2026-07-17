@@ -1,18 +1,10 @@
-// Package legitimate_sdk uses only the Go standard library — no os/exec.
-// This should NOT trigger any sdkcheck rule (AC-037-03).
+// Package legitimate_sdk uses the approved Helm Go SDK and must not trigger
+// any SDK-only analyzer rule (AC-037-03).
 package legitimate_sdk
 
-import (
-	"fmt"
-	"net/http"
-)
+import "helm.sh/helm/v3/pkg/action"
 
-// HealthCheck uses net/http — legitimate, no os/exec involved.
-func HealthCheck() error {
-	resp, err := http.Get("http://localhost:8080/health")
-	if err != nil {
-		return fmt.Errorf("health check: %w", err)
-	}
-	defer resp.Body.Close()
-	return nil
+// NewInstallAction constructs a Helm SDK action without starting a subprocess.
+func NewInstallAction() *action.Install {
+	return action.NewInstall(&action.Configuration{})
 }

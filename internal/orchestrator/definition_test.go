@@ -457,11 +457,14 @@ func TestCreateOperation_ValidationFlow(t *testing.T) {
 	require.NoError(t, err)
 	defID := createDefResp.Msg.Definition.Id
 
+	// Seed approved values revision for INSTALL validation.
+	seedValuesRevision(t, st, "vr-flow", defID, store.ValuesStatusApproved)
 	createOpResp, err := svc.CreateOperation(ctx, connect.NewRequest(
 		&orchestratorv1.CreateOperationRequest{
 			OperationType:       "INSTALL",
 			ReleaseDefinitionId: defID,
 			BundleId:            "bundle-flow",
+			ValuesRevisionId:    "vr-flow",
 			IdempotencyKey:      "flow-key",
 			Actor:               &commonv1.ActorContext{UserId: "actor-1"},
 		},
