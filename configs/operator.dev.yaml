@@ -1,2 +1,10 @@
 http_port: 8084
 log_level: debug
+runtime_pull_preflight:
+  enabled: false
+  namespace: ""
+  service_account: ""
+  timeout: 2m
+  cleanup_policy: always
+  probe_command:
+    - /bin/true

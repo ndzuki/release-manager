@@ -80,21 +80,21 @@ const (
 
 // Classification of API server responses into stable error codes.
 const (
-	ErrKubernetesForbidden   = "kubernetes_forbidden"
-	ErrAdmissionRejected     = "admission_rejected"
-	ErrQuotaExceeded         = "quota_exceeded"
-	ErrAPINotSupported       = "api_not_supported"
-	ErrNamespaceMissing      = "namespace_missing"
-	ErrDryRunUnavailable     = "dryrun_unavailable"
-	ErrUnknown               = "preflight_unknown"
+	ErrKubernetesForbidden = "kubernetes_forbidden"
+	ErrAdmissionRejected   = "admission_rejected"
+	ErrQuotaExceeded       = "quota_exceeded"
+	ErrAPINotSupported     = "api_not_supported"
+	ErrNamespaceMissing    = "namespace_missing"
+	ErrDryRunUnavailable   = "dryrun_unavailable"
+	ErrUnknown             = "preflight_unknown"
 )
 
 // Sentinel errors for the preflight package.
 var (
-	ErrEmptyManifest       = errSentinel("manifest stream is empty")
-	ErrOverSizedManifest   = errSentinel("manifest stream exceeds size limit")
-	ErrTooManyResources    = errSentinel("too many resources in manifest")
-	ErrPreflightCancelled  = errSentinel("preflight cancelled")
+	ErrEmptyManifest      = errSentinel("manifest stream is empty")
+	ErrOverSizedManifest  = errSentinel("manifest stream exceeds size limit")
+	ErrTooManyResources   = errSentinel("too many resources in manifest")
+	ErrPreflightCancelled = errSentinel("preflight cancelled")
 )
 
 type errSentinel string
@@ -153,10 +153,10 @@ var AllowedGVKList = []schema.GroupVersionKind{
 
 // ParseTimeouts for individual resource and total batch.
 const (
-	DefaultResourceTimeout  = 10 * time.Second
-	DefaultBatchTimeout     = 5 * time.Minute
-	MaxManifestBytes        = 50 * 1024 * 1024 // 50 MiB
-	MaxResourceDocs         = 500
+	DefaultResourceTimeout = 10 * time.Second
+	DefaultBatchTimeout    = 5 * time.Minute
+	MaxManifestBytes       = 50 * 1024 * 1024 // 50 MiB
+	MaxResourceDocs        = 500
 )
 
 // well-known legacy group alias: extensions/v1beta1 etc. — always treat as api_not_supported.
@@ -175,7 +175,6 @@ var unsupportedGroupVersions = map[string]bool{
 func IsUnsupportedGroupVersion(gvr schema.GroupVersionResource) bool {
 	return unsupportedGroupVersions[gvr.GroupVersion().String()]
 }
-
 
 // DryRunAll constant used in API requests.
 const dryRunAll = metav1.DryRunAll
