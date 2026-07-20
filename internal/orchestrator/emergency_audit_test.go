@@ -31,8 +31,7 @@ func TestEmergencyChange_AuditsSuccessAndFailure(t *testing.T) {
 	})
 	svc := NewService(
 		st,
-		trust.NewStubVerifier(st.Verifications(), logger),
-		nil,
+		trust.NewStubVerifier(st.Verifications(), nil, logger),
 		"staging",
 		emitter,
 		logger,
@@ -87,7 +86,7 @@ func TestEmergencyChange_AuditDoesNotPersistRawPayload(t *testing.T) {
 		BatchSize:     4,
 		SpoolPath:     t.TempDir() + "/audit.jsonl",
 	})
-	svc := NewService(st, trust.NewStubVerifier(st.Verifications(), logger), nil, "staging", emitter, logger)
+	svc := NewService(st, trust.NewStubVerifier(st.Verifications(), nil, logger), "staging", emitter, logger)
 
 	resp, err := svc.EmergencyChange(context.Background(), connect.NewRequest(&orchestratorv1.EmergencyChangeRequest{
 		ReleaseDefinitionId: "def-001",
