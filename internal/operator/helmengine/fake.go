@@ -18,6 +18,10 @@ type Fake struct {
 	// UpgradeError, if set, causes Upgrade to fail with this error.
 	// Used to test Atomic rollback (AC-021-04).
 	UpgradeError error
+
+	// RollbackError, if set, causes Rollback to fail with this error.
+	// Used to test rollback failure safety (AC-063-03).
+	RollbackError error
 }
 
 // NewFake creates a new Fake engine.
@@ -126,8 +130,9 @@ func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, erro
 
 	return rel, nil
 }
-
 // Rollback reverts to a previous revision.
+// If RollbackError is set, the rollback fails before mutating state,
+// preserving the original release (AC-063-03).
 func (f *Fake) Rollback(ctx context.Context, opts RollbackOptions) (*Release, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, ErrCancelled
@@ -139,6 +144,15 @@ func (f *Fake) Rollback(ctx context.Context, opts RollbackOptions) (*Release, er
 	key := f.key(opts.Namespace, opts.ReleaseName)
 	if _, exists := f.releases[key]; !exists {
 		return nil, ErrNotFound
+	}
+
+	// AC-063-03: simulate rollback failure before state mutation.
+	// Unlike Upgrade, real Helm Rollback has no --atomic flag; the SDK
+	// returning an error means the revision was not created.
+	if f.RollbackError != nil {
+		err := f.RollbackError
+		f.RollbackError = nil // one-shot
+		return nil, err
 	}
 
 	f.counter++
