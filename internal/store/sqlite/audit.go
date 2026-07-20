@@ -285,3 +285,66 @@ func decodeAuditCursor(cursor string) (time.Time, string, error) {
 	}
 	return parsed, id, nil
 }
+
+// ListOlderThan returns events with created_at < cutoff, ordered ASC.
+func (s *auditEventStore) ListOlderThan(ctx context.Context, cutoff time.Time, batchSize int) ([]*store.AuditEvent, error) {
+	if batchSize <= 0 {
+		batchSize = 1000
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT `+auditEventColumns+` FROM audit_events
+		WHERE created_at < ?
+		ORDER BY created_at ASC, id ASC
+		LIMIT ?
+	`, cutoff.UTC().Format(time.RFC3339Nano), batchSize)
+	if err != nil {
+		return nil, fmt.Errorf("list older than: %w", err)
+	}
+	defer rows.Close()
+
+	events := make([]*store.AuditEvent, 0, batchSize)
+	for rows.Next() {
+		event, err := scanAuditEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate older events: %w", err)
+	}
+	return events, nil
+}
+
+// DeleteByIDs deletes events by their IDs in a single transaction.
+// Returns the count of deleted rows. An empty ids slice is a no-op.
+func (s *auditEventStore) DeleteByIDs(ctx context.Context, ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin delete tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after a successful Commit.
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := `DELETE FROM audit_events WHERE id IN (` + strings.Join(placeholders, ",") + `)` //nolint:gosec // placeholders are all "?" — no user input
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("delete audit events: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit delete: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+	return n, nil
+}

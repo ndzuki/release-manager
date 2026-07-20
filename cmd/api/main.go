@@ -16,17 +16,20 @@ import (
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/auth"
+	"github.com/ndzuki/release-manager/internal/config"
 	"github.com/ndzuki/release-manager/internal/handler"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
 
 type apiSvc struct {
-	dbPath     string
-	signingKey string
-	store      *sqlitestore.Store
-	emitter    *audit.Emitter
-	closeOnce  sync.Once
-	closeErr   error
+	dbPath        string
+	signingKey    string
+	configPath    string
+	store         *sqlitestore.Store
+	emitter       *audit.Emitter
+	archiveWorker *audit.ArchiveWorker
+	closeOnce     sync.Once
+	closeErr      error
 }
 
 func (s *apiSvc) Name() string { return "release-api" }
@@ -51,7 +54,23 @@ func (s *apiSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	)
 	mux.Handle(auditPath, auditHandler)
 
+	// Wire archive worker.
+	svcCfg, loadErr := config.LoadService(s.configPath)
+	if loadErr != nil {
+		logger.Warn("cannot load config for archive worker, using defaults", "error", loadErr)
+	}
+	archCfg := archiveConfigFromService(svcCfg)
+	sink := audit.NewFileSystemSink()
+	archiver := audit.NewArchiver(st.AuditEvents(), sink)
+	s.archiveWorker = audit.NewArchiveWorker(archiver, archCfg, logger)
+
 	return nil
+}
+
+func (s *apiSvc) RunBackground(ctx context.Context, _ *slog.Logger) {
+	if s.archiveWorker != nil {
+		s.archiveWorker.Run(ctx)
+	}
 }
 
 func (s *apiSvc) Close(ctx context.Context) error {
@@ -72,11 +91,29 @@ func (s *apiSvc) Close(ctx context.Context) error {
 	return s.closeErr
 }
 
+func archiveConfigFromService(cfg *config.ServiceConfig) audit.ArchiveConfig {
+	if cfg == nil {
+		return audit.DefaultArchiveConfig()
+	}
+	return audit.ArchiveConfig{
+		RetentionDays:     cfg.Audit.Archive.RetentionDays,
+		PollInterval:      cfg.Audit.Archive.PollInterval,
+		BatchSize:         cfg.Audit.Archive.BatchSize,
+		ArchiveDir:        cfg.Audit.Archive.ArchiveDir,
+		Compression:       cfg.Audit.Archive.Compression,
+		ChecksumAlgorithm: cfg.Audit.Archive.ChecksumAlgorithm,
+	}
+}
+
 func main() {
 	configPath := flag.String("config", "configs/api.dev.yaml", "path to config file")
 	dbPath := flag.String("db", "data/api.db", "path to SQLite database")
 	signingKey := flag.String("signing-key", "change-me-in-production", "JWT signing key")
 	flag.Parse()
 
-	app.Run(*configPath, &apiSvc{dbPath: *dbPath, signingKey: *signingKey})
+	app.Run(*configPath, &apiSvc{
+		dbPath:     *dbPath,
+		signingKey: *signingKey,
+		configPath: *configPath,
+	})
 }
