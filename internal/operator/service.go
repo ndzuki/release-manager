@@ -31,6 +31,7 @@ type Service struct {
 	heartbeatMaxAge time.Duration
 	suspectAfter    time.Duration
 	inventorySyncer *InventorySyncer
+	commandExecutor CommandExecutor
 }
 
 // NewService creates a new operator Connect service with a self-signed CA.
@@ -52,6 +53,11 @@ func NewService(st store.Store, logger *slog.Logger) (*Service, error) {
 // SetInventorySyncer attaches an inventory syncer for release inventory sync (REQ-017).
 func (s *Service) SetInventorySyncer(syncer *InventorySyncer) {
 	s.inventorySyncer = syncer
+}
+
+// SetCommandExecutor attaches a runtime command executor for preflight execution (REQ-048).
+func (s *Service) SetCommandExecutor(executor CommandExecutor) {
+	s.commandExecutor = executor
 }
 
 // Enroll validates a single-use enrollment token, creates an operator record,

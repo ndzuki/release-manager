@@ -277,11 +277,38 @@ service BindingService {
   rpc RevokeBinding(RevokeBindingRequest) returns (RevokeBindingResponse);
 }
 
-// --- External IdP (REQ-028) — P1 deferred, interface only ---
+// --- External IdP (REQ-028) ---
 
 message IdPConfig {
-  string provider = 1;   // oidc, ldap, dingtalk
+  string provider = 1;
   string client_id = 2;
   string issuer_url = 3;
   map<string, string> role_mappings = 4;
+}
+
+message AuthenticateLDAPRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message AuthenticateLDAPResponse {
+  LoginResponse session = 1;
+}
+
+message GetOIDCAuthURLRequest {}
+
+message GetOIDCAuthURLResponse {
+  string url = 1;
+}
+
+message GetDingTalkAuthURLRequest {}
+
+message GetDingTalkAuthURLResponse {
+  string url = 1;
+}
+
+service ExternalIdentityService {
+  rpc AuthenticateLDAP(AuthenticateLDAPRequest) returns (AuthenticateLDAPResponse);
+  rpc GetOIDCAuthURL(GetOIDCAuthURLRequest) returns (GetOIDCAuthURLResponse);
+  rpc GetDingTalkAuthURL(GetDingTalkAuthURLRequest) returns (GetDingTalkAuthURLResponse);
 }

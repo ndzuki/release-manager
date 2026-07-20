@@ -30,6 +30,13 @@ func TestSanitize_PrivateKeyPEM(t *testing.T) {
 	assert.Contains(t, result, "****REDACTED PRIVATE KEY****")
 }
 
+func TestSanitize_CertificatePEM(t *testing.T) {
+	input := "-----BEGIN CERTIFICATE-----\nMIIC..."
+	result, redacted := Sanitize(input)
+	assert.True(t, redacted)
+	assert.Contains(t, result, "****REDACTED CERTIFICATE****")
+}
+
 func TestSanitize_CleanInput(t *testing.T) {
 	input := `{"user": "admin", "action": "deploy"}`
 	result, redacted := Sanitize(input)

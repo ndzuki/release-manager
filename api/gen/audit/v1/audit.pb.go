@@ -27,27 +27,30 @@ type ActorKind int32
 
 const (
 	ActorKind_ACTOR_KIND_UNSPECIFIED ActorKind = 0
-	ActorKind_ACTOR_KIND_USER        ActorKind = 1
-	ActorKind_ACTOR_KIND_SERVICE     ActorKind = 2
-	ActorKind_ACTOR_KIND_API_KEY     ActorKind = 3
-	ActorKind_ACTOR_KIND_SYSTEM      ActorKind = 4
+	ActorKind_ACTOR_KIND_ANONYMOUS   ActorKind = 1
+	ActorKind_ACTOR_KIND_USER        ActorKind = 2
+	ActorKind_ACTOR_KIND_SERVICE     ActorKind = 3
+	ActorKind_ACTOR_KIND_API_KEY     ActorKind = 4
+	ActorKind_ACTOR_KIND_SYSTEM      ActorKind = 5
 )
 
 // Enum value maps for ActorKind.
 var (
 	ActorKind_name = map[int32]string{
 		0: "ACTOR_KIND_UNSPECIFIED",
-		1: "ACTOR_KIND_USER",
-		2: "ACTOR_KIND_SERVICE",
-		3: "ACTOR_KIND_API_KEY",
-		4: "ACTOR_KIND_SYSTEM",
+		1: "ACTOR_KIND_ANONYMOUS",
+		2: "ACTOR_KIND_USER",
+		3: "ACTOR_KIND_SERVICE",
+		4: "ACTOR_KIND_API_KEY",
+		5: "ACTOR_KIND_SYSTEM",
 	}
 	ActorKind_value = map[string]int32{
 		"ACTOR_KIND_UNSPECIFIED": 0,
-		"ACTOR_KIND_USER":        1,
-		"ACTOR_KIND_SERVICE":     2,
-		"ACTOR_KIND_API_KEY":     3,
-		"ACTOR_KIND_SYSTEM":      4,
+		"ACTOR_KIND_ANONYMOUS":   1,
+		"ACTOR_KIND_USER":        2,
+		"ACTOR_KIND_SERVICE":     3,
+		"ACTOR_KIND_API_KEY":     4,
+		"ACTOR_KIND_SYSTEM":      5,
 	}
 )
 
@@ -312,11 +315,13 @@ func (x *EmitAuditRequest) GetEvents() []*AuditEvent {
 
 // EmitAuditResponse acknowledges receipt of audit events.
 type EmitAuditResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Accepted      int32                  `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
-	Rejected      int32                  `protobuf:"varint,2,opt,name=rejected,proto3" json:"rejected,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Accepted       int32                  `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	Rejected       int32                  `protobuf:"varint,2,opt,name=rejected,proto3" json:"rejected,omitempty"`
+	AuditEventIds  []string               `protobuf:"bytes,3,rep,name=audit_event_ids,json=auditEventIds,proto3" json:"audit_event_ids,omitempty"`
+	RejectionCodes []string               `protobuf:"bytes,4,rep,name=rejection_codes,json=rejectionCodes,proto3" json:"rejection_codes,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *EmitAuditResponse) Reset() {
@@ -363,6 +368,20 @@ func (x *EmitAuditResponse) GetRejected() int32 {
 	return 0
 }
 
+func (x *EmitAuditResponse) GetAuditEventIds() []string {
+	if x != nil {
+		return x.AuditEventIds
+	}
+	return nil
+}
+
+func (x *EmitAuditResponse) GetRejectionCodes() []string {
+	if x != nil {
+		return x.RejectionCodes
+	}
+	return nil
+}
+
 var File_audit_v1_audit_proto protoreflect.FileDescriptor
 
 const file_audit_v1_audit_proto_rawDesc = "" +
@@ -394,16 +413,19 @@ const file_audit_v1_audit_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"@\n" +
 	"\x10EmitAuditRequest\x12,\n" +
-	"\x06events\x18\x01 \x03(\v2\x14.audit.v1.AuditEventR\x06events\"K\n" +
+	"\x06events\x18\x01 \x03(\v2\x14.audit.v1.AuditEventR\x06events\"\x9c\x01\n" +
 	"\x11EmitAuditResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\x05R\baccepted\x12\x1a\n" +
-	"\brejected\x18\x02 \x01(\x05R\brejected*\x83\x01\n" +
+	"\brejected\x18\x02 \x01(\x05R\brejected\x12&\n" +
+	"\x0faudit_event_ids\x18\x03 \x03(\tR\rauditEventIds\x12'\n" +
+	"\x0frejection_codes\x18\x04 \x03(\tR\x0erejectionCodes*\x9d\x01\n" +
 	"\tActorKind\x12\x1a\n" +
-	"\x16ACTOR_KIND_UNSPECIFIED\x10\x00\x12\x13\n" +
-	"\x0fACTOR_KIND_USER\x10\x01\x12\x16\n" +
-	"\x12ACTOR_KIND_SERVICE\x10\x02\x12\x16\n" +
-	"\x12ACTOR_KIND_API_KEY\x10\x03\x12\x15\n" +
-	"\x11ACTOR_KIND_SYSTEM\x10\x042O\n" +
+	"\x16ACTOR_KIND_UNSPECIFIED\x10\x00\x12\x18\n" +
+	"\x14ACTOR_KIND_ANONYMOUS\x10\x01\x12\x13\n" +
+	"\x0fACTOR_KIND_USER\x10\x02\x12\x16\n" +
+	"\x12ACTOR_KIND_SERVICE\x10\x03\x12\x16\n" +
+	"\x12ACTOR_KIND_API_KEY\x10\x04\x12\x15\n" +
+	"\x11ACTOR_KIND_SYSTEM\x10\x052O\n" +
 	"\fAuditService\x12?\n" +
 	"\x04Emit\x12\x1a.audit.v1.EmitAuditRequest\x1a\x1b.audit.v1.EmitAuditResponseB<Z:github.com/ndzuki/release-manager/api/gen/audit/v1;auditv1b\x06proto3"
 
