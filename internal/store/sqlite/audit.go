@@ -40,6 +40,49 @@ func (s *auditEventStore) Create(ctx context.Context, e *store.AuditEvent) error
 	return nil
 }
 
+func (s *auditEventStore) ListByResource(
+	ctx context.Context,
+	resourceType, resourceID string,
+) ([]*store.AuditEvent, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, actor_kind, actor_id, organization_id, role,
+			resource_type, resource_id, action, status, duration_ms,
+			change_summary, metadata, created_at
+		FROM audit_events
+		WHERE resource_type = ? AND resource_id = ?
+		ORDER BY created_at ASC
+	`, resourceType, resourceID)
+	if err != nil {
+		return nil, fmt.Errorf("list audit events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []*store.AuditEvent
+	for rows.Next() {
+		var event store.AuditEvent
+		var actorKind, metadataJSON, createdAt string
+		if err := rows.Scan(
+			&event.ID, &actorKind, &event.ActorID, &event.OrganizationID, &event.Role,
+			&event.ResourceType, &event.ResourceID, &event.Action, &event.Status,
+			&event.DurationMs, &event.ChangeSummary, &metadataJSON, &createdAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan audit event: %w", err)
+		}
+		event.ActorKind = store.AuditActorKind(actorKind)
+		if err := json.Unmarshal([]byte(metadataJSON), &event.Metadata); err != nil {
+			return nil, fmt.Errorf("unmarshal audit metadata: %w", err)
+		}
+		event.CreatedAt, err = time.Parse(time.RFC3339, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse audit created_at: %w", err)
+		}
+		events = append(events, &event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate audit events: %w", err)
+	}
+	return events, nil
+}
 func (s *auditEventStore) CreateBatch(ctx context.Context, events []*store.AuditEvent) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
