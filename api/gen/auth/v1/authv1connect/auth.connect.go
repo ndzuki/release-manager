@@ -27,6 +27,8 @@ const (
 	OrganizationServiceName = "auth.v1.OrganizationService"
 	// BindingServiceName is the fully-qualified name of the BindingService service.
 	BindingServiceName = "auth.v1.BindingService"
+	// ExternalIdentityServiceName is the fully-qualified name of the ExternalIdentityService service.
+	ExternalIdentityServiceName = "auth.v1.ExternalIdentityService"
 )
 
 // These constants are the fully-qualified names of the RPCs defined in this package. They're
@@ -89,6 +91,15 @@ const (
 	// BindingServiceRevokeBindingProcedure is the fully-qualified name of the BindingService's
 	// RevokeBinding RPC.
 	BindingServiceRevokeBindingProcedure = "/auth.v1.BindingService/RevokeBinding"
+	// ExternalIdentityServiceAuthenticateLDAPProcedure is the fully-qualified name of the
+	// ExternalIdentityService's AuthenticateLDAP RPC.
+	ExternalIdentityServiceAuthenticateLDAPProcedure = "/auth.v1.ExternalIdentityService/AuthenticateLDAP"
+	// ExternalIdentityServiceGetOIDCAuthURLProcedure is the fully-qualified name of the
+	// ExternalIdentityService's GetOIDCAuthURL RPC.
+	ExternalIdentityServiceGetOIDCAuthURLProcedure = "/auth.v1.ExternalIdentityService/GetOIDCAuthURL"
+	// ExternalIdentityServiceGetDingTalkAuthURLProcedure is the fully-qualified name of the
+	// ExternalIdentityService's GetDingTalkAuthURL RPC.
+	ExternalIdentityServiceGetDingTalkAuthURLProcedure = "/auth.v1.ExternalIdentityService/GetDingTalkAuthURL"
 )
 
 // AuthServiceClient is a client for the auth.v1.AuthService service.
@@ -689,4 +700,127 @@ func (UnimplementedBindingServiceHandler) ListBindings(context.Context, *connect
 
 func (UnimplementedBindingServiceHandler) RevokeBinding(context.Context, *connect.Request[v1.RevokeBindingRequest]) (*connect.Response[v1.RevokeBindingResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.BindingService.RevokeBinding is not implemented"))
+}
+
+// ExternalIdentityServiceClient is a client for the auth.v1.ExternalIdentityService service.
+type ExternalIdentityServiceClient interface {
+	AuthenticateLDAP(context.Context, *connect.Request[v1.AuthenticateLDAPRequest]) (*connect.Response[v1.AuthenticateLDAPResponse], error)
+	GetOIDCAuthURL(context.Context, *connect.Request[v1.GetOIDCAuthURLRequest]) (*connect.Response[v1.GetOIDCAuthURLResponse], error)
+	GetDingTalkAuthURL(context.Context, *connect.Request[v1.GetDingTalkAuthURLRequest]) (*connect.Response[v1.GetDingTalkAuthURLResponse], error)
+}
+
+// NewExternalIdentityServiceClient constructs a client for the auth.v1.ExternalIdentityService
+// service. By default, it uses the Connect protocol with the binary Protobuf Codec, asks for
+// gzipped responses, and sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply
+// the connect.WithGRPC() or connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewExternalIdentityServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) ExternalIdentityServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	externalIdentityServiceMethods := v1.File_auth_v1_auth_proto.Services().ByName("ExternalIdentityService").Methods()
+	return &externalIdentityServiceClient{
+		authenticateLDAP: connect.NewClient[v1.AuthenticateLDAPRequest, v1.AuthenticateLDAPResponse](
+			httpClient,
+			baseURL+ExternalIdentityServiceAuthenticateLDAPProcedure,
+			connect.WithSchema(externalIdentityServiceMethods.ByName("AuthenticateLDAP")),
+			connect.WithClientOptions(opts...),
+		),
+		getOIDCAuthURL: connect.NewClient[v1.GetOIDCAuthURLRequest, v1.GetOIDCAuthURLResponse](
+			httpClient,
+			baseURL+ExternalIdentityServiceGetOIDCAuthURLProcedure,
+			connect.WithSchema(externalIdentityServiceMethods.ByName("GetOIDCAuthURL")),
+			connect.WithClientOptions(opts...),
+		),
+		getDingTalkAuthURL: connect.NewClient[v1.GetDingTalkAuthURLRequest, v1.GetDingTalkAuthURLResponse](
+			httpClient,
+			baseURL+ExternalIdentityServiceGetDingTalkAuthURLProcedure,
+			connect.WithSchema(externalIdentityServiceMethods.ByName("GetDingTalkAuthURL")),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// externalIdentityServiceClient implements ExternalIdentityServiceClient.
+type externalIdentityServiceClient struct {
+	authenticateLDAP   *connect.Client[v1.AuthenticateLDAPRequest, v1.AuthenticateLDAPResponse]
+	getOIDCAuthURL     *connect.Client[v1.GetOIDCAuthURLRequest, v1.GetOIDCAuthURLResponse]
+	getDingTalkAuthURL *connect.Client[v1.GetDingTalkAuthURLRequest, v1.GetDingTalkAuthURLResponse]
+}
+
+// AuthenticateLDAP calls auth.v1.ExternalIdentityService.AuthenticateLDAP.
+func (c *externalIdentityServiceClient) AuthenticateLDAP(ctx context.Context, req *connect.Request[v1.AuthenticateLDAPRequest]) (*connect.Response[v1.AuthenticateLDAPResponse], error) {
+	return c.authenticateLDAP.CallUnary(ctx, req)
+}
+
+// GetOIDCAuthURL calls auth.v1.ExternalIdentityService.GetOIDCAuthURL.
+func (c *externalIdentityServiceClient) GetOIDCAuthURL(ctx context.Context, req *connect.Request[v1.GetOIDCAuthURLRequest]) (*connect.Response[v1.GetOIDCAuthURLResponse], error) {
+	return c.getOIDCAuthURL.CallUnary(ctx, req)
+}
+
+// GetDingTalkAuthURL calls auth.v1.ExternalIdentityService.GetDingTalkAuthURL.
+func (c *externalIdentityServiceClient) GetDingTalkAuthURL(ctx context.Context, req *connect.Request[v1.GetDingTalkAuthURLRequest]) (*connect.Response[v1.GetDingTalkAuthURLResponse], error) {
+	return c.getDingTalkAuthURL.CallUnary(ctx, req)
+}
+
+// ExternalIdentityServiceHandler is an implementation of the auth.v1.ExternalIdentityService
+// service.
+type ExternalIdentityServiceHandler interface {
+	AuthenticateLDAP(context.Context, *connect.Request[v1.AuthenticateLDAPRequest]) (*connect.Response[v1.AuthenticateLDAPResponse], error)
+	GetOIDCAuthURL(context.Context, *connect.Request[v1.GetOIDCAuthURLRequest]) (*connect.Response[v1.GetOIDCAuthURLResponse], error)
+	GetDingTalkAuthURL(context.Context, *connect.Request[v1.GetDingTalkAuthURLRequest]) (*connect.Response[v1.GetDingTalkAuthURLResponse], error)
+}
+
+// NewExternalIdentityServiceHandler builds an HTTP handler from the service implementation. It
+// returns the path on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewExternalIdentityServiceHandler(svc ExternalIdentityServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	externalIdentityServiceMethods := v1.File_auth_v1_auth_proto.Services().ByName("ExternalIdentityService").Methods()
+	externalIdentityServiceAuthenticateLDAPHandler := connect.NewUnaryHandler(
+		ExternalIdentityServiceAuthenticateLDAPProcedure,
+		svc.AuthenticateLDAP,
+		connect.WithSchema(externalIdentityServiceMethods.ByName("AuthenticateLDAP")),
+		connect.WithHandlerOptions(opts...),
+	)
+	externalIdentityServiceGetOIDCAuthURLHandler := connect.NewUnaryHandler(
+		ExternalIdentityServiceGetOIDCAuthURLProcedure,
+		svc.GetOIDCAuthURL,
+		connect.WithSchema(externalIdentityServiceMethods.ByName("GetOIDCAuthURL")),
+		connect.WithHandlerOptions(opts...),
+	)
+	externalIdentityServiceGetDingTalkAuthURLHandler := connect.NewUnaryHandler(
+		ExternalIdentityServiceGetDingTalkAuthURLProcedure,
+		svc.GetDingTalkAuthURL,
+		connect.WithSchema(externalIdentityServiceMethods.ByName("GetDingTalkAuthURL")),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/auth.v1.ExternalIdentityService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case ExternalIdentityServiceAuthenticateLDAPProcedure:
+			externalIdentityServiceAuthenticateLDAPHandler.ServeHTTP(w, r)
+		case ExternalIdentityServiceGetOIDCAuthURLProcedure:
+			externalIdentityServiceGetOIDCAuthURLHandler.ServeHTTP(w, r)
+		case ExternalIdentityServiceGetDingTalkAuthURLProcedure:
+			externalIdentityServiceGetDingTalkAuthURLHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedExternalIdentityServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedExternalIdentityServiceHandler struct{}
+
+func (UnimplementedExternalIdentityServiceHandler) AuthenticateLDAP(context.Context, *connect.Request[v1.AuthenticateLDAPRequest]) (*connect.Response[v1.AuthenticateLDAPResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.ExternalIdentityService.AuthenticateLDAP is not implemented"))
+}
+
+func (UnimplementedExternalIdentityServiceHandler) GetOIDCAuthURL(context.Context, *connect.Request[v1.GetOIDCAuthURLRequest]) (*connect.Response[v1.GetOIDCAuthURLResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.ExternalIdentityService.GetOIDCAuthURL is not implemented"))
+}
+
+func (UnimplementedExternalIdentityServiceHandler) GetDingTalkAuthURL(context.Context, *connect.Request[v1.GetDingTalkAuthURLRequest]) (*connect.Response[v1.GetDingTalkAuthURLResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.ExternalIdentityService.GetDingTalkAuthURL is not implemented"))
 }

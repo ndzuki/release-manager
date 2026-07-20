@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -97,7 +98,20 @@ func (s *Service) EmergencyChange(
 		"action", action,
 		"convergence", convergence,
 	)
-
+	summary, _ := audit.Sanitize(msg.Reason)
+	actorKind, actorID := auditActor(op.Actor)
+	s.emitAudit(audit.NewEvent(
+		actorKind,
+		actorID,
+		op.Actor.Organization,
+		"",
+		"release_definition",
+		defID,
+		"emergency_change",
+		"accepted",
+		summary,
+		map[string]string{"action": string(action), "convergence": string(convergence)},
+	))
 	return connect.NewResponse(&orchestratorv1.EmergencyChangeResponse{
 		OperationId: op.ID,
 		Status:      string(op.Status),

@@ -39,6 +39,9 @@ const (
 	// OrchestratorServicePublishReleaseProcedure is the fully-qualified name of the
 	// OrchestratorService's PublishRelease RPC.
 	OrchestratorServicePublishReleaseProcedure = "/orchestrator.v1.OrchestratorService/PublishRelease"
+	// OrchestratorServiceRollbackReleaseProcedure is the fully-qualified name of the
+	// OrchestratorService's RollbackRelease RPC.
+	OrchestratorServiceRollbackReleaseProcedure = "/orchestrator.v1.OrchestratorService/RollbackRelease"
 	// OrchestratorServiceCreateReleaseDefinitionProcedure is the fully-qualified name of the
 	// OrchestratorService's CreateReleaseDefinition RPC.
 	OrchestratorServiceCreateReleaseDefinitionProcedure = "/orchestrator.v1.OrchestratorService/CreateReleaseDefinition"
@@ -106,6 +109,7 @@ type OrchestratorServiceClient interface {
 	// Release pipeline
 	CreateOperation(context.Context, *connect.Request[v1.CreateOperationRequest]) (*connect.Response[v1.CreateOperationResponse], error)
 	PublishRelease(context.Context, *connect.Request[v1.PublishReleaseRequest]) (*connect.Response[v1.PublishReleaseResponse], error)
+	RollbackRelease(context.Context, *connect.Request[v1.RollbackReleaseRequest]) (*connect.Response[v1.RollbackReleaseResponse], error)
 	// Release definition management
 	CreateReleaseDefinition(context.Context, *connect.Request[v1.CreateReleaseDefinitionRequest]) (*connect.Response[v1.CreateReleaseDefinitionResponse], error)
 	GetReleaseDefinition(context.Context, *connect.Request[v1.GetReleaseDefinitionRequest]) (*connect.Response[v1.GetReleaseDefinitionResponse], error)
@@ -156,6 +160,12 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			httpClient,
 			baseURL+OrchestratorServicePublishReleaseProcedure,
 			connect.WithSchema(orchestratorServiceMethods.ByName("PublishRelease")),
+			connect.WithClientOptions(opts...),
+		),
+		rollbackRelease: connect.NewClient[v1.RollbackReleaseRequest, v1.RollbackReleaseResponse](
+			httpClient,
+			baseURL+OrchestratorServiceRollbackReleaseProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("RollbackRelease")),
 			connect.WithClientOptions(opts...),
 		),
 		createReleaseDefinition: connect.NewClient[v1.CreateReleaseDefinitionRequest, v1.CreateReleaseDefinitionResponse](
@@ -285,6 +295,7 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 type orchestratorServiceClient struct {
 	createOperation          *connect.Client[v1.CreateOperationRequest, v1.CreateOperationResponse]
 	publishRelease           *connect.Client[v1.PublishReleaseRequest, v1.PublishReleaseResponse]
+	rollbackRelease          *connect.Client[v1.RollbackReleaseRequest, v1.RollbackReleaseResponse]
 	createReleaseDefinition  *connect.Client[v1.CreateReleaseDefinitionRequest, v1.CreateReleaseDefinitionResponse]
 	getReleaseDefinition     *connect.Client[v1.GetReleaseDefinitionRequest, v1.GetReleaseDefinitionResponse]
 	listReleaseDefinitions   *connect.Client[v1.ListReleaseDefinitionsRequest, v1.ListReleaseDefinitionsResponse]
@@ -315,6 +326,11 @@ func (c *orchestratorServiceClient) CreateOperation(ctx context.Context, req *co
 // PublishRelease calls orchestrator.v1.OrchestratorService.PublishRelease.
 func (c *orchestratorServiceClient) PublishRelease(ctx context.Context, req *connect.Request[v1.PublishReleaseRequest]) (*connect.Response[v1.PublishReleaseResponse], error) {
 	return c.publishRelease.CallUnary(ctx, req)
+}
+
+// RollbackRelease calls orchestrator.v1.OrchestratorService.RollbackRelease.
+func (c *orchestratorServiceClient) RollbackRelease(ctx context.Context, req *connect.Request[v1.RollbackReleaseRequest]) (*connect.Response[v1.RollbackReleaseResponse], error) {
+	return c.rollbackRelease.CallUnary(ctx, req)
 }
 
 // CreateReleaseDefinition calls orchestrator.v1.OrchestratorService.CreateReleaseDefinition.
@@ -423,6 +439,7 @@ type OrchestratorServiceHandler interface {
 	// Release pipeline
 	CreateOperation(context.Context, *connect.Request[v1.CreateOperationRequest]) (*connect.Response[v1.CreateOperationResponse], error)
 	PublishRelease(context.Context, *connect.Request[v1.PublishReleaseRequest]) (*connect.Response[v1.PublishReleaseResponse], error)
+	RollbackRelease(context.Context, *connect.Request[v1.RollbackReleaseRequest]) (*connect.Response[v1.RollbackReleaseResponse], error)
 	// Release definition management
 	CreateReleaseDefinition(context.Context, *connect.Request[v1.CreateReleaseDefinitionRequest]) (*connect.Response[v1.CreateReleaseDefinitionResponse], error)
 	GetReleaseDefinition(context.Context, *connect.Request[v1.GetReleaseDefinitionRequest]) (*connect.Response[v1.GetReleaseDefinitionResponse], error)
@@ -469,6 +486,12 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		OrchestratorServicePublishReleaseProcedure,
 		svc.PublishRelease,
 		connect.WithSchema(orchestratorServiceMethods.ByName("PublishRelease")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceRollbackReleaseHandler := connect.NewUnaryHandler(
+		OrchestratorServiceRollbackReleaseProcedure,
+		svc.RollbackRelease,
+		connect.WithSchema(orchestratorServiceMethods.ByName("RollbackRelease")),
 		connect.WithHandlerOptions(opts...),
 	)
 	orchestratorServiceCreateReleaseDefinitionHandler := connect.NewUnaryHandler(
@@ -597,6 +620,8 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceCreateOperationHandler.ServeHTTP(w, r)
 		case OrchestratorServicePublishReleaseProcedure:
 			orchestratorServicePublishReleaseHandler.ServeHTTP(w, r)
+		case OrchestratorServiceRollbackReleaseProcedure:
+			orchestratorServiceRollbackReleaseHandler.ServeHTTP(w, r)
 		case OrchestratorServiceCreateReleaseDefinitionProcedure:
 			orchestratorServiceCreateReleaseDefinitionHandler.ServeHTTP(w, r)
 		case OrchestratorServiceGetReleaseDefinitionProcedure:
@@ -652,6 +677,10 @@ func (UnimplementedOrchestratorServiceHandler) CreateOperation(context.Context, 
 
 func (UnimplementedOrchestratorServiceHandler) PublishRelease(context.Context, *connect.Request[v1.PublishReleaseRequest]) (*connect.Response[v1.PublishReleaseResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.PublishRelease is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) RollbackRelease(context.Context, *connect.Request[v1.RollbackReleaseRequest]) (*connect.Response[v1.RollbackReleaseResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.RollbackRelease is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) CreateReleaseDefinition(context.Context, *connect.Request[v1.CreateReleaseDefinitionRequest]) (*connect.Response[v1.CreateReleaseDefinitionResponse], error) {

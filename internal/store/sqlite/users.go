@@ -23,12 +23,15 @@ func (s *userStore) Create(ctx context.Context, u *store.User) error {
 	}
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO users (id, username, password_hash, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		u.ID, u.Username, u.PasswordHash, string(u.Status),
+		INSERT INTO users (id, username, password_hash, provider, subject, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		u.ID, u.Username, u.PasswordHash, u.Provider, u.Subject, string(u.Status),
 		u.CreatedAt.UTC().Format(time.RFC3339), u.UpdatedAt.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
+		if isUniqueConstraint(err) {
+			return store.ErrDuplicateKey
+		}
 		return fmt.Errorf("insert user: %w", err)
 	}
 	return nil
@@ -36,15 +39,22 @@ func (s *userStore) Create(ctx context.Context, u *store.User) error {
 
 func (s *userStore) Get(ctx context.Context, id string) (*store.User, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, username, password_hash, status, created_at, updated_at
+		SELECT id, username, password_hash, provider, subject, status, created_at, updated_at
 		FROM users WHERE id = ?`, id)
 	return scanUser(row)
 }
 
 func (s *userStore) GetByUsername(ctx context.Context, username string) (*store.User, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, username, password_hash, status, created_at, updated_at
+		SELECT id, username, password_hash, provider, subject, status, created_at, updated_at
 		FROM users WHERE username = ?`, username)
+	return scanUser(row)
+}
+
+func (s *userStore) GetByProviderSubject(ctx context.Context, provider, subject string) (*store.User, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, username, password_hash, provider, subject, status, created_at, updated_at
+		FROM users WHERE provider = ? AND subject = ?`, provider, subject)
 	return scanUser(row)
 }
 
@@ -82,7 +92,8 @@ func scanUser(row interface{ Scan(...interface{}) error }) (*store.User, error) 
 		createdAtStr string
 		updatedAtStr string
 	)
-	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &status, &createdAtStr, &updatedAtStr); err != nil {
+	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Provider, &u.Subject,
+		&status, &createdAtStr, &updatedAtStr); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, store.ErrNotFound
 		}

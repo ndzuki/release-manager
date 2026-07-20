@@ -7,231 +7,194 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
 // Emitter buffers and asynchronously persists audit events.
-// It implements graceful shutdown with spool-to-file fallback.
 type Emitter struct {
-	store      store.AuditEventStore
-	logger     *slog.Logger
-	buffer     chan *store.AuditEvent
-	bufferSize int
+	store         store.AuditEventStore
+	logger        *slog.Logger
+	buffer        chan *store.AuditEvent
+	batchSize     int
+	flushInterval time.Duration
+	spoolPath     string
+	metrics       metrics
 
-	// Prometheus-compatible counters (simple int64 gauges).
-	// These can be exposed via expvar or a /metrics endpoint.
-	EventsReceived  int64
-	EventsPersisted int64
-	EventsDropped   int64
-	BufferFullCount int64
-
-	spoolPath string
-
-	mu     sync.Mutex
-	closed bool
-	wg     sync.WaitGroup
+	mu           sync.Mutex
+	closed       bool
+	shutdownOnce sync.Once
+	shutdownDone chan struct{}
+	shutdownErr  error
+	workerWG     sync.WaitGroup
 }
 
-// EmitterConfig configures the AuditEmitter.
+// EmitterConfig configures the audit emitter.
 type EmitterConfig struct {
-	// BufferSize is the max number of pending events before the channel blocks.
-	BufferSize int
-
-	// FlushInterval is how often the emitter flushes buffered events to SQLite.
+	BufferSize    int
 	FlushInterval time.Duration
-
-	// BatchSize is the max number of events per SQLite insert batch.
-	BatchSize int
-
-	// SpoolPath is the path to the spool file for graceful shutdown drain.
-	SpoolPath string
+	BatchSize     int
+	SpoolPath     string
 }
 
-// DefaultConfig returns a production-sane default configuration.
+// DefaultConfig returns production defaults.
 func DefaultConfig() EmitterConfig {
-	return EmitterConfig{
-		BufferSize:    4096,
-		FlushInterval: 5 * time.Second,
-		BatchSize:     200,
-		SpoolPath:     "data/audit_spool.jsonl",
-	}
+	return EmitterConfig{BufferSize: 4096, FlushInterval: 5 * time.Second, BatchSize: 200, SpoolPath: "data/audit_spool.jsonl"}
 }
 
-// NewEmitter creates an AuditEmitter and starts the background flush goroutine.
+// NewEmitter creates an emitter and starts its single persistence worker.
 func NewEmitter(st store.AuditEventStore, logger *slog.Logger, cfg EmitterConfig) *Emitter {
-	e := &Emitter{
-		store:      st,
-		logger:     logger,
-		buffer:     make(chan *store.AuditEvent, cfg.BufferSize),
-		bufferSize: cfg.BufferSize,
-		spoolPath:  cfg.SpoolPath,
+	if cfg.BufferSize <= 0 {
+		cfg.BufferSize = 1
 	}
-	e.wg.Add(1)
-	go e.flushLoop(cfg.FlushInterval, cfg.BatchSize)
+	if cfg.FlushInterval <= 0 {
+		cfg.FlushInterval = time.Second
+	}
+	if cfg.BatchSize <= 0 {
+		cfg.BatchSize = 1
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	e := &Emitter{store: st, logger: logger, buffer: make(chan *store.AuditEvent, cfg.BufferSize), batchSize: cfg.BatchSize, flushInterval: cfg.FlushInterval, spoolPath: cfg.SpoolPath, shutdownDone: make(chan struct{})}
+	e.workerWG.Add(1)
+	go e.worker()
 	return e
 }
 
-// Emit enqueues an audit event for asynchronous persistence.
-// Returns false if the buffer is full (event dropped).
-// AC-050-03: buffer full increments BufferFullCount counter.
-func (e *Emitter) Emit(event *store.AuditEvent) bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.closed {
-		return false
+// Emit validates and queues an event without blocking the caller.
+func (e *Emitter) Emit(event *store.AuditEvent) Result {
+	e.metrics.received.Add(1)
+	normalized, err := Normalize(event)
+	if err != nil {
+		e.metrics.rejected.Add(1)
+		id := ""
+		if event != nil {
+			id = event.ID
+		}
+		return Result{EventID: id, Code: ErrorInvalidEvent, Err: &EventError{Code: ErrorInvalidEvent, ID: id, Err: err}}
 	}
-
-	if event.ID == "" {
-		event.ID = uuid.New().String()
-	}
-	if event.CreatedAt.IsZero() {
-		event.CreatedAt = time.Now().UTC()
-	}
-	if event.Metadata == nil {
-		event.Metadata = make(map[string]string)
-	}
-
-	select {
-	case e.buffer <- event:
-		e.EventsReceived++
-		return true
-	default:
-		e.BufferFullCount++
-		e.EventsDropped++
-		e.logger.Warn("audit buffer full, event dropped",
-			"event_id", event.ID,
-			"resource_type", event.ResourceType,
-			"action", event.Action,
-		)
-		return false
-	}
-}
-
-// Shutdown gracefully drains the buffer.
-// First attempts to persist remaining events to SQLite.
-// On failure, spools events to a JSONL file for later recovery.
-// Returns when all events are drained or context is cancelled.
-func (e *Emitter) Shutdown(ctx context.Context) error {
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()
-		return nil
+		e.metrics.rejected.Add(1)
+		return Result{EventID: normalized.ID, Code: ErrorStoreUnavailable, Err: &EventError{Code: ErrorStoreUnavailable, ID: normalized.ID, Err: ErrEmitterClosed}}
 	}
-	e.closed = true
-	close(e.buffer)
-	e.mu.Unlock()
-	done := make(chan struct{})
-	var shutdownErr error
-	go func() {
-		defer close(done)
-		shutdownErr = e.drainRemaining(ctx)
-		e.wg.Wait()
-	}()
-
 	select {
-	case <-done:
-		return shutdownErr
-	case <-ctx.Done():
-		return fmt.Errorf("audit emitter shutdown timed out: %w", ctx.Err())
+	case e.buffer <- normalized:
+		e.mu.Unlock()
+		e.metrics.accepted.Add(1)
+		return Result{EventID: normalized.ID, Accepted: true}
+	default:
+		e.mu.Unlock()
+		e.metrics.rejected.Add(1)
+		e.metrics.bufferFull.Add(1)
+		e.logger.Warn("audit buffer full", "event_id", normalized.ID, "resource_type", normalized.ResourceType, "action", normalized.Action)
+		return Result{EventID: normalized.ID, Code: ErrorBufferFull, Err: &EventError{Code: ErrorBufferFull, ID: normalized.ID, Err: ErrBufferFull}}
 	}
 }
 
-func (e *Emitter) flushLoop(interval time.Duration, batchSize int) {
-	defer e.wg.Done()
+// Metrics returns a race-safe counter snapshot.
+func (e *Emitter) Metrics() MetricsSnapshot { return e.metrics.snapshot() }
 
-	var batch []*store.AuditEvent
-	ticker := time.NewTicker(interval)
+// Shutdown is idempotent and waits for the worker to finish draining.
+func (e *Emitter) Shutdown(ctx context.Context) error {
+	e.shutdownOnce.Do(func() {
+		e.mu.Lock()
+		e.closed = true
+		close(e.buffer)
+		e.mu.Unlock()
+		go func() {
+			e.workerWG.Wait()
+			close(e.shutdownDone)
+		}()
+	})
+	select {
+	case <-e.shutdownDone:
+		return e.shutdownErr
+	case <-ctx.Done():
+		return fmt.Errorf("audit emitter shutdown: %w", ctx.Err())
+	}
+}
+
+func (e *Emitter) worker() {
+	defer e.workerWG.Done()
+	ticker := time.NewTicker(e.flushInterval)
 	defer ticker.Stop()
-
+	batch := make([]*store.AuditEvent, 0, e.batchSize)
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		pending := batch
+		batch = make([]*store.AuditEvent, 0, e.batchSize)
+		if err := e.persist(context.Background(), pending); err != nil {
+			e.logger.Error("audit batch persistence failed", "count", len(pending), "error", err)
+			batch = append(pending, batch...)
+		}
+	}
 	for {
 		select {
 		case event, ok := <-e.buffer:
 			if !ok {
-				// Channel closed; flush remaining.
+				flush()
 				if len(batch) > 0 {
-					e.flushBatch(batch)
+					e.shutdownErr = e.spool(batch)
 				}
 				return
 			}
 			batch = append(batch, event)
-			if len(batch) >= batchSize {
-				e.flushBatch(batch)
-				batch = batch[:0]
+			if len(batch) >= e.batchSize {
+				flush()
 			}
 		case <-ticker.C:
-			if len(batch) > 0 {
-				e.flushBatch(batch)
-				batch = batch[:0]
-			}
+			flush()
 		}
 	}
 }
 
-func (e *Emitter) flushBatch(batch []*store.AuditEvent) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := e.store.CreateBatch(ctx, batch); err != nil {
-		e.logger.Error("failed to persist audit batch",
-			"count", len(batch),
-			"error", err,
-		)
-		return
+func (e *Emitter) persist(ctx context.Context, events []*store.AuditEvent) error {
+	if err := e.store.CreateBatch(ctx, events); err != nil {
+		e.metrics.storeFailure.Add(1)
+		return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 	}
-	e.mu.Lock()
-	e.EventsPersisted += int64(len(batch))
-	e.mu.Unlock()
+	e.metrics.persisted.Add(uint64(len(events)))
+	return nil
 }
 
-// drainRemaining collects any remaining events from the closed channel and
-// attempts to persist them. On failure, spools to file.
-func (e *Emitter) drainRemaining(ctx context.Context) error {
-	var remaining []*store.AuditEvent
-	for event := range e.buffer {
-		remaining = append(remaining, event)
-	}
-
-	if len(remaining) == 0 {
+func (e *Emitter) spool(events []*store.AuditEvent) error {
+	if len(events) == 0 {
 		return nil
 	}
-
-	persistCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	if err := e.store.CreateBatch(persistCtx, remaining); err != nil {
-		e.logger.Error("failed to persist remaining audit events during shutdown, spooling to file",
-			"count", len(remaining),
-			"path", e.spoolPath,
-			"error", err,
-		)
-		if spoolErr := e.spoolToFile(remaining); spoolErr != nil {
-			return fmt.Errorf("persist failed (%w) and spool failed (%w)", err, spoolErr)
+	if dir := filepath.Dir(e.spoolPath); dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			e.metrics.storeFailure.Add(1)
+			return fmt.Errorf("%w: create spool directory: %w", ErrSpoolFailed, err)
 		}
-		return fmt.Errorf("persist failed, events spooled to %s: %w", e.spoolPath, err)
 	}
-	e.mu.Lock()
-	e.EventsPersisted += int64(len(remaining))
-	e.mu.Unlock()
-	return nil
-}
-
-// spoolToFile writes audit events to a JSONL file for later recovery (AC-050-04).
-func (e *Emitter) spoolToFile(events []*store.AuditEvent) error {
-	f, err := os.OpenFile(e.spoolPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+	f, err := os.OpenFile(e.spoolPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
-		return fmt.Errorf("open spool file: %w", err)
+		return fmt.Errorf("%w: open spool file: %w", ErrSpoolFailed, err)
 	}
-	defer f.Close()
-
-	enc := json.NewEncoder(f)
-	for _, ev := range events {
-		if err := enc.Encode(ev); err != nil {
-			return fmt.Errorf("spool encode event %s: %w", ev.ID, err)
+	encoder := json.NewEncoder(f)
+	for _, event := range events {
+		if err := encoder.Encode(event); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("%w: encode event %s: %w", ErrSpoolFailed, event.ID, err)
 		}
 	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("%w: sync spool file: %w", ErrSpoolFailed, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("%w: close spool file: %w", ErrSpoolFailed, err)
+	}
+	e.metrics.spooled.Add(uint64(len(events)))
 	return nil
 }
+
+func (e *Emitter) SpoolPath() string { return e.spoolPath }
