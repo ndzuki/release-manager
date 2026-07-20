@@ -58,13 +58,27 @@ func (s *userStore) Count(ctx context.Context) (int64, error) {
 
 func (s *userStore) Update(ctx context.Context, u *store.User) error {
 	u.UpdatedAt = time.Now().UTC()
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin update user: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
+
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE users SET password_hash = ?, status = ?, updated_at = ?
 		WHERE id = ?`,
 		u.PasswordHash, string(u.Status), u.UpdatedAt.UTC().Format(time.RFC3339), u.ID,
-	)
-	if err != nil {
+	); err != nil {
 		return fmt.Errorf("update user: %w", err)
+	}
+	if u.Status == store.UserDisabled {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE auth_sessions SET revoked = 1 WHERE user_id = ?`, u.ID); err != nil {
+			return fmt.Errorf("revoke disabled user sessions: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit update user: %w", err)
 	}
 	return nil
 }

@@ -24,27 +24,42 @@ message LoginResponse {
   SessionUser user = 1;
   repeated Organization organizations = 2;
   int64 expires_at = 3;
+  string access_token = 4;
+  string refresh_token = 5;
+  string token_type = 6;
 }
 
-message LogoutRequest {}
+message LogoutRequest {
+  string refresh_token = 1;
+}
 
 message LogoutResponse {}
 
-message RefreshTokenRequest {}
+message RefreshTokenRequest {
+  string refresh_token = 1;
+}
 
 message RefreshTokenResponse {
   SessionUser user = 1;
   repeated Organization organizations = 2;
   int64 expires_at = 3;
+  string access_token = 4;
+  string refresh_token = 5;
+  string token_type = 6;
 }
 
-message ValidateTokenRequest {}
+message ValidateTokenRequest {
+  string token = 1;
+}
 
 message ValidateTokenResponse {
   bool valid = 1;
   SessionUser user = 2;
   repeated Organization organizations = 3;
   int64 expires_at = 4;
+  string user_id = 5;
+  repeated string roles = 6;
+  string org_id = 7;
 }
 
 message GetInitStatusRequest {}
@@ -63,6 +78,9 @@ message InitializeResponse {
   SessionUser user = 1;
   repeated Organization organizations = 2;
   int64 expires_at = 3;
+  string access_token = 4;
+  string refresh_token = 5;
+  string token_type = 6;
 }
 
 message SwitchOrganizationRequest {
@@ -73,6 +91,9 @@ message SwitchOrganizationResponse {
   SessionUser user = 1;
   repeated Organization organizations = 2;
   int64 expires_at = 3;
+  string access_token = 4;
+  string refresh_token = 5;
+  string token_type = 6;
 }
 
 message ChangePasswordRequest {

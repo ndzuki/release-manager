@@ -36,8 +36,8 @@ type Claims struct {
 	OrgID  string   `json:"org_id,omitempty"`
 }
 
-// GenerateAccessToken creates a signed HS256 JWT for the given user and organization context.
-func (m *JWTManager) GenerateAccessToken(userID string, roles []string, orgID string) (string, time.Time, error) {
+// GenerateAccessToken creates a signed HS256 JWT for the given user within an organization.
+func (m *JWTManager) GenerateAccessToken(userID, orgID string, roles []string) (string, time.Time, error) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(m.accessTTL)
 
@@ -62,7 +62,8 @@ func (m *JWTManager) GenerateAccessToken(userID string, roles []string, orgID st
 
 // ValidateAccessToken parses and validates an access token, returning its claims.
 func (m *JWTManager) ValidateAccessToken(tokenStr string) (*Claims, error) {
-	token, err := jwt.ParseWithClaims(tokenStr, &Claims{},
+	token, err := jwt.ParseWithClaims(
+		tokenStr, &Claims{},
 		func(t *jwt.Token) (interface{}, error) {
 			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
@@ -82,16 +83,23 @@ func (m *JWTManager) ValidateAccessToken(tokenStr string) (*Claims, error) {
 }
 
 // GenerateRefreshToken creates a cryptographically random refresh token string
-// and its SHA-256 hash for storage. Returns (raw token, token family ID, hash).
+// and its SHA-256 hash for storage. It starts a new token family and returns
+// (raw token, token family ID, hash).
 func (m *JWTManager) GenerateRefreshToken() (raw, family, hash string, err error) {
+	raw, hash, err = m.generateRefreshToken()
+	if err != nil {
+		return "", "", "", err
+	}
+	return raw, newID(), hash, nil
+}
+
+func (m *JWTManager) generateRefreshToken() (raw, hash string, err error) {
 	b := make([]byte, m.refreshBytes)
 	if _, err := rand.Read(b); err != nil {
-		return "", "", "", fmt.Errorf("generate refresh token: %w", err)
+		return "", "", fmt.Errorf("generate refresh token: %w", err)
 	}
 	raw = base64.RawURLEncoding.EncodeToString(b)
-	family = newID()
-	hash = hashToken(raw)
-	return raw, family, hash, nil
+	return raw, hashToken(raw), nil
 }
 
 // HashRefreshToken returns the SHA-256 hash of a raw refresh token.

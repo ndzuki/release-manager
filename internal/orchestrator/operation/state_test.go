@@ -61,6 +61,11 @@ func TestTransition_FailAndTimeout(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusTimeout, next)
 
+	// preflight → failed (AC-019-01)
+	next, err = Transition(store.StatusPreflight, EventError)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusFailed, next)
+
 	// preflight → timeout
 	next, err = Transition(store.StatusPreflight, EventTimeout)
 	require.NoError(t, err)
