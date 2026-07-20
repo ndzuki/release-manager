@@ -1,0 +1,14 @@
+FROM golang:1.26.4 AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/release-webhook ./cmd/webhook
+
+FROM gcr.io/distroless/static-debian13:nonroot
+USER nonroot:nonroot
+WORKDIR /data
+COPY --from=builder /out/release-webhook /release-webhook
+COPY configs/webhook.dev.yaml /configs/webhook.dev.yaml
+EXPOSE 8082
+ENTRYPOINT ["/release-webhook", "--config", "/configs/webhook.dev.yaml", "--db", "/data/webhook.db"]
