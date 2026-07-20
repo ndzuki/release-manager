@@ -85,6 +85,18 @@ func (s *authSessionStore) RevokeByUserID(ctx context.Context, userID string) er
 	return nil
 }
 
+func (s *authSessionStore) HasActiveByUserID(ctx context.Context, userID string) (bool, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM auth_sessions
+		WHERE user_id = ? AND revoked = 0 AND expires_at > ?`,
+		userID, time.Now().UTC().Format(time.RFC3339),
+	).Scan(&count); err != nil {
+		return false, fmt.Errorf("count active auth sessions: %w", err)
+	}
+	return count > 0, nil
+}
+
 func (s *authSessionStore) DeleteExpired(ctx context.Context) (int64, error) {
 	result, err := s.db.ExecContext(ctx, `
 		DELETE FROM auth_sessions WHERE expires_at < ?`,
@@ -114,6 +126,7 @@ func scanAuthSession(row interface{ Scan(...interface{}) error }) (*store.AuthSe
 		return nil, fmt.Errorf("parse auth session expires_at: %w", err)
 	}
 	ss.ExpiresAt = expiresAt
+	ss.Revoked = revoked != 0
 	createdAt, err := time.Parse(time.RFC3339, createdAtStr)
 	if err != nil {
 		return nil, fmt.Errorf("parse auth session created_at: %w", err)
