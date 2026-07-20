@@ -2020,7 +2020,7 @@ func (x *RevokeBindingResponse) GetBinding() *OrgCustomerBinding {
 
 type IdPConfig struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Provider      string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"` // oidc, ldap, dingtalk
+	Provider      string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
 	ClientId      string                 `protobuf:"bytes,2,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
 	IssuerUrl     string                 `protobuf:"bytes,3,opt,name=issuer_url,json=issuerUrl,proto3" json:"issuer_url,omitempty"`
 	RoleMappings  map[string]string      `protobuf:"bytes,4,rep,name=role_mappings,json=roleMappings,proto3" json:"role_mappings,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
@@ -2084,6 +2084,262 @@ func (x *IdPConfig) GetRoleMappings() map[string]string {
 		return x.RoleMappings
 	}
 	return nil
+}
+
+type AuthenticateLDAPRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
+	Password      string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuthenticateLDAPRequest) Reset() {
+	*x = AuthenticateLDAPRequest{}
+	mi := &file_auth_v1_auth_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuthenticateLDAPRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuthenticateLDAPRequest) ProtoMessage() {}
+
+func (x *AuthenticateLDAPRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_v1_auth_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuthenticateLDAPRequest.ProtoReflect.Descriptor instead.
+func (*AuthenticateLDAPRequest) Descriptor() ([]byte, []int) {
+	return file_auth_v1_auth_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *AuthenticateLDAPRequest) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *AuthenticateLDAPRequest) GetPassword() string {
+	if x != nil {
+		return x.Password
+	}
+	return ""
+}
+
+type AuthenticateLDAPResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Session       *LoginResponse         `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuthenticateLDAPResponse) Reset() {
+	*x = AuthenticateLDAPResponse{}
+	mi := &file_auth_v1_auth_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuthenticateLDAPResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuthenticateLDAPResponse) ProtoMessage() {}
+
+func (x *AuthenticateLDAPResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_v1_auth_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuthenticateLDAPResponse.ProtoReflect.Descriptor instead.
+func (*AuthenticateLDAPResponse) Descriptor() ([]byte, []int) {
+	return file_auth_v1_auth_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *AuthenticateLDAPResponse) GetSession() *LoginResponse {
+	if x != nil {
+		return x.Session
+	}
+	return nil
+}
+
+type GetOIDCAuthURLRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetOIDCAuthURLRequest) Reset() {
+	*x = GetOIDCAuthURLRequest{}
+	mi := &file_auth_v1_auth_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetOIDCAuthURLRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetOIDCAuthURLRequest) ProtoMessage() {}
+
+func (x *GetOIDCAuthURLRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_v1_auth_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetOIDCAuthURLRequest.ProtoReflect.Descriptor instead.
+func (*GetOIDCAuthURLRequest) Descriptor() ([]byte, []int) {
+	return file_auth_v1_auth_proto_rawDescGZIP(), []int{42}
+}
+
+type GetOIDCAuthURLResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Url           string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetOIDCAuthURLResponse) Reset() {
+	*x = GetOIDCAuthURLResponse{}
+	mi := &file_auth_v1_auth_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetOIDCAuthURLResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetOIDCAuthURLResponse) ProtoMessage() {}
+
+func (x *GetOIDCAuthURLResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_v1_auth_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetOIDCAuthURLResponse.ProtoReflect.Descriptor instead.
+func (*GetOIDCAuthURLResponse) Descriptor() ([]byte, []int) {
+	return file_auth_v1_auth_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *GetOIDCAuthURLResponse) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+type GetDingTalkAuthURLRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetDingTalkAuthURLRequest) Reset() {
+	*x = GetDingTalkAuthURLRequest{}
+	mi := &file_auth_v1_auth_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetDingTalkAuthURLRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetDingTalkAuthURLRequest) ProtoMessage() {}
+
+func (x *GetDingTalkAuthURLRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_v1_auth_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetDingTalkAuthURLRequest.ProtoReflect.Descriptor instead.
+func (*GetDingTalkAuthURLRequest) Descriptor() ([]byte, []int) {
+	return file_auth_v1_auth_proto_rawDescGZIP(), []int{44}
+}
+
+type GetDingTalkAuthURLResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Url           string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetDingTalkAuthURLResponse) Reset() {
+	*x = GetDingTalkAuthURLResponse{}
+	mi := &file_auth_v1_auth_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetDingTalkAuthURLResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetDingTalkAuthURLResponse) ProtoMessage() {}
+
+func (x *GetDingTalkAuthURLResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_v1_auth_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetDingTalkAuthURLResponse.ProtoReflect.Descriptor instead.
+func (*GetDingTalkAuthURLResponse) Descriptor() ([]byte, []int) {
+	return file_auth_v1_auth_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *GetDingTalkAuthURLResponse) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
 }
 
 var File_auth_v1_auth_proto protoreflect.FileDescriptor
@@ -2226,7 +2482,18 @@ const file_auth_v1_auth_proto_rawDesc = "" +
 	"\rrole_mappings\x18\x04 \x03(\v2$.auth.v1.IdPConfig.RoleMappingsEntryR\froleMappings\x1a?\n" +
 	"\x11RoleMappingsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x012\xf0\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"Q\n" +
+	"\x17AuthenticateLDAPRequest\x12\x1a\n" +
+	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
+	"\bpassword\x18\x02 \x01(\tR\bpassword\"L\n" +
+	"\x18AuthenticateLDAPResponse\x120\n" +
+	"\asession\x18\x01 \x01(\v2\x16.auth.v1.LoginResponseR\asession\"\x17\n" +
+	"\x15GetOIDCAuthURLRequest\"*\n" +
+	"\x16GetOIDCAuthURLResponse\x12\x10\n" +
+	"\x03url\x18\x01 \x01(\tR\x03url\"\x1b\n" +
+	"\x19GetDingTalkAuthURLRequest\".\n" +
+	"\x1aGetDingTalkAuthURLResponse\x12\x10\n" +
+	"\x03url\x18\x01 \x01(\tR\x03url2\xf0\x02\n" +
 	"\vAuthService\x126\n" +
 	"\x05Login\x12\x15.auth.v1.LoginRequest\x1a\x16.auth.v1.LoginResponse\x129\n" +
 	"\x06Logout\x12\x16.auth.v1.LogoutRequest\x1a\x17.auth.v1.LogoutResponse\x12K\n" +
@@ -2248,7 +2515,11 @@ const file_auth_v1_auth_proto_rawDesc = "" +
 	"\n" +
 	"GetBinding\x12\x1a.auth.v1.GetBindingRequest\x1a\x1b.auth.v1.GetBindingResponse\x12K\n" +
 	"\fListBindings\x12\x1c.auth.v1.ListBindingsRequest\x1a\x1d.auth.v1.ListBindingsResponse\x12N\n" +
-	"\rRevokeBinding\x12\x1d.auth.v1.RevokeBindingRequest\x1a\x1e.auth.v1.RevokeBindingResponseB:Z8github.com/ndzuki/release-manager/api/gen/auth/v1;authv1b\x06proto3"
+	"\rRevokeBinding\x12\x1d.auth.v1.RevokeBindingRequest\x1a\x1e.auth.v1.RevokeBindingResponse2\xa4\x02\n" +
+	"\x17ExternalIdentityService\x12W\n" +
+	"\x10AuthenticateLDAP\x12 .auth.v1.AuthenticateLDAPRequest\x1a!.auth.v1.AuthenticateLDAPResponse\x12Q\n" +
+	"\x0eGetOIDCAuthURL\x12\x1e.auth.v1.GetOIDCAuthURLRequest\x1a\x1f.auth.v1.GetOIDCAuthURLResponse\x12]\n" +
+	"\x12GetDingTalkAuthURL\x12\".auth.v1.GetDingTalkAuthURLRequest\x1a#.auth.v1.GetDingTalkAuthURLResponseB:Z8github.com/ndzuki/release-manager/api/gen/auth/v1;authv1b\x06proto3"
 
 var (
 	file_auth_v1_auth_proto_rawDescOnce sync.Once
@@ -2262,7 +2533,7 @@ func file_auth_v1_auth_proto_rawDescGZIP() []byte {
 	return file_auth_v1_auth_proto_rawDescData
 }
 
-var file_auth_v1_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
+var file_auth_v1_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
 var file_auth_v1_auth_proto_goTypes = []any{
 	(*LoginRequest)(nil),                // 0: auth.v1.LoginRequest
 	(*LoginResponse)(nil),               // 1: auth.v1.LoginResponse
@@ -2304,14 +2575,20 @@ var file_auth_v1_auth_proto_goTypes = []any{
 	(*RevokeBindingRequest)(nil),        // 37: auth.v1.RevokeBindingRequest
 	(*RevokeBindingResponse)(nil),       // 38: auth.v1.RevokeBindingResponse
 	(*IdPConfig)(nil),                   // 39: auth.v1.IdPConfig
-	nil,                                 // 40: auth.v1.IdPConfig.RoleMappingsEntry
-	(*timestamppb.Timestamp)(nil),       // 41: google.protobuf.Timestamp
+	(*AuthenticateLDAPRequest)(nil),     // 40: auth.v1.AuthenticateLDAPRequest
+	(*AuthenticateLDAPResponse)(nil),    // 41: auth.v1.AuthenticateLDAPResponse
+	(*GetOIDCAuthURLRequest)(nil),       // 42: auth.v1.GetOIDCAuthURLRequest
+	(*GetOIDCAuthURLResponse)(nil),      // 43: auth.v1.GetOIDCAuthURLResponse
+	(*GetDingTalkAuthURLRequest)(nil),   // 44: auth.v1.GetDingTalkAuthURLRequest
+	(*GetDingTalkAuthURLResponse)(nil),  // 45: auth.v1.GetDingTalkAuthURLResponse
+	nil,                                 // 46: auth.v1.IdPConfig.RoleMappingsEntry
+	(*timestamppb.Timestamp)(nil),       // 47: google.protobuf.Timestamp
 }
 var file_auth_v1_auth_proto_depIdxs = []int32{
-	41, // 0: auth.v1.Organization.created_at:type_name -> google.protobuf.Timestamp
-	41, // 1: auth.v1.Organization.updated_at:type_name -> google.protobuf.Timestamp
-	41, // 2: auth.v1.OrganizationMember.created_at:type_name -> google.protobuf.Timestamp
-	41, // 3: auth.v1.OrganizationMember.updated_at:type_name -> google.protobuf.Timestamp
+	47, // 0: auth.v1.Organization.created_at:type_name -> google.protobuf.Timestamp
+	47, // 1: auth.v1.Organization.updated_at:type_name -> google.protobuf.Timestamp
+	47, // 2: auth.v1.OrganizationMember.created_at:type_name -> google.protobuf.Timestamp
+	47, // 3: auth.v1.OrganizationMember.updated_at:type_name -> google.protobuf.Timestamp
 	10, // 4: auth.v1.CreateOrganizationResponse.organization:type_name -> auth.v1.Organization
 	10, // 5: auth.v1.GetOrganizationResponse.organization:type_name -> auth.v1.Organization
 	10, // 6: auth.v1.ListOrganizationsResponse.organizations:type_name -> auth.v1.Organization
@@ -2320,54 +2597,61 @@ var file_auth_v1_auth_proto_depIdxs = []int32{
 	11, // 9: auth.v1.AddMemberResponse.member:type_name -> auth.v1.OrganizationMember
 	11, // 10: auth.v1.ListMembersResponse.members:type_name -> auth.v1.OrganizationMember
 	11, // 11: auth.v1.UpdateMemberRoleResponse.member:type_name -> auth.v1.OrganizationMember
-	41, // 12: auth.v1.OrgCustomerBinding.created_at:type_name -> google.protobuf.Timestamp
-	41, // 13: auth.v1.OrgCustomerBinding.updated_at:type_name -> google.protobuf.Timestamp
+	47, // 12: auth.v1.OrgCustomerBinding.created_at:type_name -> google.protobuf.Timestamp
+	47, // 13: auth.v1.OrgCustomerBinding.updated_at:type_name -> google.protobuf.Timestamp
 	30, // 14: auth.v1.CreateBindingResponse.binding:type_name -> auth.v1.OrgCustomerBinding
 	30, // 15: auth.v1.GetBindingResponse.binding:type_name -> auth.v1.OrgCustomerBinding
 	30, // 16: auth.v1.ListBindingsResponse.bindings:type_name -> auth.v1.OrgCustomerBinding
 	30, // 17: auth.v1.RevokeBindingResponse.binding:type_name -> auth.v1.OrgCustomerBinding
-	40, // 18: auth.v1.IdPConfig.role_mappings:type_name -> auth.v1.IdPConfig.RoleMappingsEntry
-	0,  // 19: auth.v1.AuthService.Login:input_type -> auth.v1.LoginRequest
-	2,  // 20: auth.v1.AuthService.Logout:input_type -> auth.v1.LogoutRequest
-	4,  // 21: auth.v1.AuthService.RefreshToken:input_type -> auth.v1.RefreshTokenRequest
-	6,  // 22: auth.v1.AuthService.ValidateToken:input_type -> auth.v1.ValidateTokenRequest
-	8,  // 23: auth.v1.AuthService.ChangePassword:input_type -> auth.v1.ChangePasswordRequest
-	12, // 24: auth.v1.OrganizationService.CreateOrganization:input_type -> auth.v1.CreateOrganizationRequest
-	14, // 25: auth.v1.OrganizationService.GetOrganization:input_type -> auth.v1.GetOrganizationRequest
-	16, // 26: auth.v1.OrganizationService.ListOrganizations:input_type -> auth.v1.ListOrganizationsRequest
-	18, // 27: auth.v1.OrganizationService.UpdateOrganization:input_type -> auth.v1.UpdateOrganizationRequest
-	20, // 28: auth.v1.OrganizationService.DisableOrganization:input_type -> auth.v1.DisableOrganizationRequest
-	22, // 29: auth.v1.OrganizationService.AddMember:input_type -> auth.v1.AddMemberRequest
-	24, // 30: auth.v1.OrganizationService.RemoveMember:input_type -> auth.v1.RemoveMemberRequest
-	26, // 31: auth.v1.OrganizationService.ListMembers:input_type -> auth.v1.ListMembersRequest
-	28, // 32: auth.v1.OrganizationService.UpdateMemberRole:input_type -> auth.v1.UpdateMemberRoleRequest
-	31, // 33: auth.v1.BindingService.CreateBinding:input_type -> auth.v1.CreateBindingRequest
-	33, // 34: auth.v1.BindingService.GetBinding:input_type -> auth.v1.GetBindingRequest
-	35, // 35: auth.v1.BindingService.ListBindings:input_type -> auth.v1.ListBindingsRequest
-	37, // 36: auth.v1.BindingService.RevokeBinding:input_type -> auth.v1.RevokeBindingRequest
-	1,  // 37: auth.v1.AuthService.Login:output_type -> auth.v1.LoginResponse
-	3,  // 38: auth.v1.AuthService.Logout:output_type -> auth.v1.LogoutResponse
-	5,  // 39: auth.v1.AuthService.RefreshToken:output_type -> auth.v1.RefreshTokenResponse
-	7,  // 40: auth.v1.AuthService.ValidateToken:output_type -> auth.v1.ValidateTokenResponse
-	9,  // 41: auth.v1.AuthService.ChangePassword:output_type -> auth.v1.ChangePasswordResponse
-	13, // 42: auth.v1.OrganizationService.CreateOrganization:output_type -> auth.v1.CreateOrganizationResponse
-	15, // 43: auth.v1.OrganizationService.GetOrganization:output_type -> auth.v1.GetOrganizationResponse
-	17, // 44: auth.v1.OrganizationService.ListOrganizations:output_type -> auth.v1.ListOrganizationsResponse
-	19, // 45: auth.v1.OrganizationService.UpdateOrganization:output_type -> auth.v1.UpdateOrganizationResponse
-	21, // 46: auth.v1.OrganizationService.DisableOrganization:output_type -> auth.v1.DisableOrganizationResponse
-	23, // 47: auth.v1.OrganizationService.AddMember:output_type -> auth.v1.AddMemberResponse
-	25, // 48: auth.v1.OrganizationService.RemoveMember:output_type -> auth.v1.RemoveMemberResponse
-	27, // 49: auth.v1.OrganizationService.ListMembers:output_type -> auth.v1.ListMembersResponse
-	29, // 50: auth.v1.OrganizationService.UpdateMemberRole:output_type -> auth.v1.UpdateMemberRoleResponse
-	32, // 51: auth.v1.BindingService.CreateBinding:output_type -> auth.v1.CreateBindingResponse
-	34, // 52: auth.v1.BindingService.GetBinding:output_type -> auth.v1.GetBindingResponse
-	36, // 53: auth.v1.BindingService.ListBindings:output_type -> auth.v1.ListBindingsResponse
-	38, // 54: auth.v1.BindingService.RevokeBinding:output_type -> auth.v1.RevokeBindingResponse
-	37, // [37:55] is the sub-list for method output_type
-	19, // [19:37] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	46, // 18: auth.v1.IdPConfig.role_mappings:type_name -> auth.v1.IdPConfig.RoleMappingsEntry
+	1,  // 19: auth.v1.AuthenticateLDAPResponse.session:type_name -> auth.v1.LoginResponse
+	0,  // 20: auth.v1.AuthService.Login:input_type -> auth.v1.LoginRequest
+	2,  // 21: auth.v1.AuthService.Logout:input_type -> auth.v1.LogoutRequest
+	4,  // 22: auth.v1.AuthService.RefreshToken:input_type -> auth.v1.RefreshTokenRequest
+	6,  // 23: auth.v1.AuthService.ValidateToken:input_type -> auth.v1.ValidateTokenRequest
+	8,  // 24: auth.v1.AuthService.ChangePassword:input_type -> auth.v1.ChangePasswordRequest
+	12, // 25: auth.v1.OrganizationService.CreateOrganization:input_type -> auth.v1.CreateOrganizationRequest
+	14, // 26: auth.v1.OrganizationService.GetOrganization:input_type -> auth.v1.GetOrganizationRequest
+	16, // 27: auth.v1.OrganizationService.ListOrganizations:input_type -> auth.v1.ListOrganizationsRequest
+	18, // 28: auth.v1.OrganizationService.UpdateOrganization:input_type -> auth.v1.UpdateOrganizationRequest
+	20, // 29: auth.v1.OrganizationService.DisableOrganization:input_type -> auth.v1.DisableOrganizationRequest
+	22, // 30: auth.v1.OrganizationService.AddMember:input_type -> auth.v1.AddMemberRequest
+	24, // 31: auth.v1.OrganizationService.RemoveMember:input_type -> auth.v1.RemoveMemberRequest
+	26, // 32: auth.v1.OrganizationService.ListMembers:input_type -> auth.v1.ListMembersRequest
+	28, // 33: auth.v1.OrganizationService.UpdateMemberRole:input_type -> auth.v1.UpdateMemberRoleRequest
+	31, // 34: auth.v1.BindingService.CreateBinding:input_type -> auth.v1.CreateBindingRequest
+	33, // 35: auth.v1.BindingService.GetBinding:input_type -> auth.v1.GetBindingRequest
+	35, // 36: auth.v1.BindingService.ListBindings:input_type -> auth.v1.ListBindingsRequest
+	37, // 37: auth.v1.BindingService.RevokeBinding:input_type -> auth.v1.RevokeBindingRequest
+	40, // 38: auth.v1.ExternalIdentityService.AuthenticateLDAP:input_type -> auth.v1.AuthenticateLDAPRequest
+	42, // 39: auth.v1.ExternalIdentityService.GetOIDCAuthURL:input_type -> auth.v1.GetOIDCAuthURLRequest
+	44, // 40: auth.v1.ExternalIdentityService.GetDingTalkAuthURL:input_type -> auth.v1.GetDingTalkAuthURLRequest
+	1,  // 41: auth.v1.AuthService.Login:output_type -> auth.v1.LoginResponse
+	3,  // 42: auth.v1.AuthService.Logout:output_type -> auth.v1.LogoutResponse
+	5,  // 43: auth.v1.AuthService.RefreshToken:output_type -> auth.v1.RefreshTokenResponse
+	7,  // 44: auth.v1.AuthService.ValidateToken:output_type -> auth.v1.ValidateTokenResponse
+	9,  // 45: auth.v1.AuthService.ChangePassword:output_type -> auth.v1.ChangePasswordResponse
+	13, // 46: auth.v1.OrganizationService.CreateOrganization:output_type -> auth.v1.CreateOrganizationResponse
+	15, // 47: auth.v1.OrganizationService.GetOrganization:output_type -> auth.v1.GetOrganizationResponse
+	17, // 48: auth.v1.OrganizationService.ListOrganizations:output_type -> auth.v1.ListOrganizationsResponse
+	19, // 49: auth.v1.OrganizationService.UpdateOrganization:output_type -> auth.v1.UpdateOrganizationResponse
+	21, // 50: auth.v1.OrganizationService.DisableOrganization:output_type -> auth.v1.DisableOrganizationResponse
+	23, // 51: auth.v1.OrganizationService.AddMember:output_type -> auth.v1.AddMemberResponse
+	25, // 52: auth.v1.OrganizationService.RemoveMember:output_type -> auth.v1.RemoveMemberResponse
+	27, // 53: auth.v1.OrganizationService.ListMembers:output_type -> auth.v1.ListMembersResponse
+	29, // 54: auth.v1.OrganizationService.UpdateMemberRole:output_type -> auth.v1.UpdateMemberRoleResponse
+	32, // 55: auth.v1.BindingService.CreateBinding:output_type -> auth.v1.CreateBindingResponse
+	34, // 56: auth.v1.BindingService.GetBinding:output_type -> auth.v1.GetBindingResponse
+	36, // 57: auth.v1.BindingService.ListBindings:output_type -> auth.v1.ListBindingsResponse
+	38, // 58: auth.v1.BindingService.RevokeBinding:output_type -> auth.v1.RevokeBindingResponse
+	41, // 59: auth.v1.ExternalIdentityService.AuthenticateLDAP:output_type -> auth.v1.AuthenticateLDAPResponse
+	43, // 60: auth.v1.ExternalIdentityService.GetOIDCAuthURL:output_type -> auth.v1.GetOIDCAuthURLResponse
+	45, // 61: auth.v1.ExternalIdentityService.GetDingTalkAuthURL:output_type -> auth.v1.GetDingTalkAuthURLResponse
+	41, // [41:62] is the sub-list for method output_type
+	20, // [20:41] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_auth_v1_auth_proto_init() }
@@ -2381,9 +2665,9 @@ func file_auth_v1_auth_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_auth_v1_auth_proto_rawDesc), len(file_auth_v1_auth_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   41,
+			NumMessages:   47,
 			NumExtensions: 0,
-			NumServices:   3,
+			NumServices:   4,
 		},
 		GoTypes:           file_auth_v1_auth_proto_goTypes,
 		DependencyIndexes: file_auth_v1_auth_proto_depIdxs,

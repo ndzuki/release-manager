@@ -283,6 +283,7 @@ type UserStatus string
 
 const (
 	UserActive   UserStatus = "active"
+	UserPending  UserStatus = "pending"
 	UserDisabled UserStatus = "disabled"
 )
 
@@ -338,6 +339,8 @@ type User struct {
 	ID           string
 	Username     string
 	PasswordHash string
+	Provider     string
+	Subject      string
 	Status       UserStatus
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
@@ -770,11 +773,12 @@ type OutboxStore interface {
 	GetNextPending(ctx context.Context, operatorID string) (*OutboxEntry, error)
 }
 
-// UserStore defines the persistence contract for local user accounts (REQ-025).
+// UserStore defines the persistence contract for local and external user accounts (REQ-025, REQ-028).
 type UserStore interface {
 	Create(ctx context.Context, u *User) error
 	Get(ctx context.Context, id string) (*User, error)
 	GetByUsername(ctx context.Context, username string) (*User, error)
+	GetByProviderSubject(ctx context.Context, provider, subject string) (*User, error)
 	Update(ctx context.Context, u *User) error
 }
 
