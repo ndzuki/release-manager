@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
-	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/operator/helmengine"
 )
 
@@ -20,30 +19,38 @@ const (
 	defaultOrchestratorTimeout = 10 * time.Second
 )
 
+type inventoryClient interface {
+	SyncInventory(
+		context.Context,
+		*connect.Request[orchestratorv1.SyncInventoryRequest],
+	) (*connect.Response[orchestratorv1.SyncInventoryResponse], error)
+}
+
 // InventorySyncer manages periodic full snapshots and targeted updates
 // of Helm release inventory to the orchestrator.
 type InventorySyncer struct {
-	engine          helmengine.Engine
-	orchClient      orchestratorv1connect.OrchestratorServiceClient
-	operatorID      string
-	customerID      string
-	clusterID       string
-	syncInterval    time.Duration
-	logger          *slog.Logger
-	stopCh          chan struct{}
-	targetedCh      chan targetedUpdateRequest
+	engine       helmengine.Engine
+	orchClient   inventoryClient
+	operatorID   string
+	customerID   string
+	clusterID    string
+	syncInterval time.Duration
+	logger       *slog.Logger
+	stopCh       chan struct{}
+	targetedCh   chan targetedUpdateRequest
 }
 
 type targetedUpdateRequest struct {
 	Namespace    string
 	ReleaseName  string
+	DefinitionID string
 	OperationID  string
 }
 
 // NewInventorySyncer creates a new inventory syncer.
 func NewInventorySyncer(
 	engine helmengine.Engine,
-	orchClient orchestratorv1connect.OrchestratorServiceClient,
+	orchClient inventoryClient,
 	operatorID, customerID, clusterID string,
 	logger *slog.Logger,
 ) *InventorySyncer {
@@ -76,13 +83,13 @@ func (s *InventorySyncer) Stop() {
 }
 
 // NotifyOperationComplete queues a targeted inventory update for a release
-// that just completed an operation. Must be called within 30s of operation completion.
-func (s *InventorySyncer) NotifyOperationComplete(namespace, releaseName, operationID string) {
+func (s *InventorySyncer) NotifyOperationComplete(namespace, releaseName, operationID, definitionID string) {
 	select {
 	case s.targetedCh <- targetedUpdateRequest{
-		Namespace:   namespace,
-		ReleaseName: releaseName,
-		OperationID: operationID,
+		Namespace:    namespace,
+		ReleaseName:  releaseName,
+		OperationID:  operationID,
+		DefinitionID: definitionID,
 	}:
 	default:
 		s.logger.Warn("targeted update channel full, dropping update",
@@ -155,7 +162,7 @@ func (s *InventorySyncer) doSync(ctx context.Context, fullSnapshot bool) {
 			Name:         item.Name,
 			Chart:        item.Chart,
 			ChartVersion: item.ChartVersion,
-			Revision:     int32(item.Revision),  //nolint:gosec // Helm revision bounded
+			Revision:     int32(item.Revision), //nolint:gosec // Helm revision bounded
 			Status:       item.Status,
 			ValuesDigest: item.ValuesDigest,
 		})
@@ -220,9 +227,10 @@ func (s *InventorySyncer) doTargetedUpdate(ctx context.Context, req targetedUpda
 		Items: []*orchestratorv1.InventoryItem{{
 			Namespace:    rel.Namespace,
 			Name:         rel.Name,
+			DefinitionId: req.DefinitionID,
 			Chart:        rel.Chart,
 			ChartVersion: rel.Chart,
-			Revision:     int32(rel.Revision),  //nolint:gosec // Helm revision bounded
+			Revision:     int32(rel.Revision), //nolint:gosec // Helm revision bounded
 			Status:       rel.Status,
 			ValuesDigest: rel.ManifestDigest,
 		}},

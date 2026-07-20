@@ -1,5 +1,5 @@
-// Package sdkcheck provides a static analyzer that detects os/exec calls
-// to Helm and kubectl binaries, enforcing the SDK-only policy.
+// Package sdkcheck provides a static analyzer that detects process execution
+// paths which could invoke Helm, kubectl, or other forbidden command-line tools.
 //
 // REQ-037: SDK-only static quality gate — prevents runtime CLI code from
 // entering the repository before any Helm business logic is implemented.
@@ -8,36 +8,42 @@ package sdkcheck
 import (
 	"fmt"
 	"go/ast"
+	"go/constant"
+	"go/token"
 	"go/types"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/inspector"
 	"gopkg.in/yaml.v3"
 )
 
-// Forbidden binaries that must not be invoked via os/exec.
-var forbiddenBinaries = map[string]string{
-	"helm":      "helm",
-	"kubectl":   "kubectl",
-	"istioctl":  "istioctl",
-	"argocd":    "argocd",
-	"flux":      "flux",
-	"terraform": "terraform",
-	"tofu":      "tofu",
+// Forbidden binaries that must not be invoked via a process execution API.
+var forbiddenBinaries = map[string]struct{}{
+	"helm":      {},
+	"kubectl":   {},
+	"istioctl":  {},
+	"argocd":    {},
+	"flux":      {},
+	"terraform": {},
+	"tofu":      {},
 }
 
 // RuleID enumerates the detection rules.
 type RuleID string
 
 const (
-	RuleOSExecImport           RuleID = "os_exec_import"
-	RuleForkExec               RuleID = "fork_exec"
-	RuleShellWrapper           RuleID = "shell_wrapper"
-	RuleForbiddenBinary        RuleID = "forbidden_binary_invocation"
-	RuleExpiredException       RuleID = "expired_exception"
+	RuleOSExecImport     RuleID = "os_exec_import"
+	RuleForkExec         RuleID = "fork_exec"
+	RuleShellWrapper     RuleID = "shell_wrapper"
+	RuleForbiddenBinary  RuleID = "forbidden_binary_invocation"
+	RuleExpiredException RuleID = "expired_exception"
 )
 
 // Exception represents an allowed exception to the SDK-only rule.
@@ -45,8 +51,8 @@ type Exception struct {
 	Owner     string `yaml:"owner"`
 	Reason    string `yaml:"reason"`
 	ExpiresAt string `yaml:"expires_at"` // YYYY-MM-DD
-	Path      string `yaml:"path"`        // file path pattern (doublestar)
-	Rule      string `yaml:"rule"`        // rule ID to suppress
+	Path      string `yaml:"path"`       // file path pattern (doublestar)
+	Rule      string `yaml:"rule"`       // rule ID to suppress
 }
 
 // ExceptionsFile is the top-level structure of the exceptions YAML.
@@ -57,33 +63,87 @@ type ExceptionsFile struct {
 
 // LoadExceptions reads and validates an exceptions YAML file.
 func LoadExceptions(path string) ([]Exception, error) {
+	if path == "" {
+		return []Exception{}, nil
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil // no exceptions is valid
+			return nil, fmt.Errorf("exceptions file does not exist: %w", err)
 		}
 		return nil, fmt.Errorf("read exceptions: %w", err)
 	}
-	var ef ExceptionsFile
-	if err := yaml.Unmarshal(data, &ef); err != nil {
+
+	var exceptionsFile ExceptionsFile
+	if err := yaml.Unmarshal(data, &exceptionsFile); err != nil {
 		return nil, fmt.Errorf("parse exceptions: %w", err)
 	}
-	if ef.Version == "" {
+	if strings.TrimSpace(exceptionsFile.Version) == "" {
 		return nil, fmt.Errorf("exceptions file missing version field")
 	}
-	return ef.Exceptions, nil
+	if exceptionsFile.Version != "1" {
+		return nil, fmt.Errorf("unsupported exceptions file version %q", exceptionsFile.Version)
+	}
+
+	for index, exception := range exceptionsFile.Exceptions {
+		if err := validateException(exception); err != nil {
+			return nil, fmt.Errorf("validate exception %d: %w", index+1, err)
+		}
+	}
+
+	return exceptionsFile.Exceptions, nil
+}
+
+func validateException(exception Exception) error {
+	requiredFields := []struct {
+		name  string
+		value string
+	}{
+		{name: "owner", value: exception.Owner},
+		{name: "reason", value: exception.Reason},
+		{name: "expires_at", value: exception.ExpiresAt},
+		{name: "path", value: exception.Path},
+		{name: "rule", value: exception.Rule},
+	}
+	for _, field := range requiredFields {
+		if strings.TrimSpace(field.value) == "" {
+			return fmt.Errorf("missing %s field", field.name)
+		}
+	}
+	if !validRule(exception.Rule) {
+		return fmt.Errorf("unknown rule %q", exception.Rule)
+	}
+	if _, err := time.Parse(time.DateOnly, exception.ExpiresAt); err != nil {
+		return fmt.Errorf("parse expires_at %q: %w", exception.ExpiresAt, err)
+	}
+	if isExpired(exception.ExpiresAt) {
+		return fmt.Errorf("[%s] exception expired at %s", RuleExpiredException, exception.ExpiresAt)
+	}
+	if _, err := doublestar.Match(filepath.ToSlash(exception.Path), "sdkcheck-validation.go"); err != nil {
+		return fmt.Errorf("parse path pattern %q: %w", exception.Path, err)
+	}
+	return nil
+}
+
+func validRule(rule string) bool {
+	switch RuleID(rule) {
+	case RuleOSExecImport, RuleForkExec, RuleShellWrapper, RuleForbiddenBinary:
+		return true
+	default:
+		return false
+	}
 }
 
 // isExpired checks whether an exception has passed its expiry date.
 func isExpired(expiresAt string) bool {
-	if expiresAt == "" {
-		return false // never expires
-	}
-	t, err := time.Parse("2006-01-02", expiresAt)
+	expiresOn, err := time.Parse(time.DateOnly, expiresAt)
 	if err != nil {
-		return true // unparseable = treat as expired
+		return true
 	}
-	return time.Now().After(t)
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	return expiresOn.Before(today)
 }
 
 // NewAnalyzer creates the SDK-only static gate analyzer.
@@ -94,15 +154,14 @@ func NewAnalyzer(exceptionsPath string) (*analysis.Analyzer, error) {
 		return nil, fmt.Errorf("sdkcheck: %w", err)
 	}
 
-	// Index exceptions by file path for O(1) lookup.
-	exceptionMap := make(map[string][]Exception)
-	for _, ex := range exceptions {
-		exceptionMap[ex.Path] = append(exceptionMap[ex.Path], ex)
+	exceptionMap := make(map[string][]Exception, len(exceptions))
+	for _, exception := range exceptions {
+		exceptionMap[exception.Path] = append(exceptionMap[exception.Path], exception)
 	}
 
 	return &analysis.Analyzer{
 		Name:     "sdkcheck",
-		Doc:      "detects os/exec calls to Helm/kubectl/istioctl enforcing SDK-only policy (REQ-037)",
+		Doc:      "detects process execution paths that violate the SDK-only policy (REQ-037)",
 		Requires: []*analysis.Analyzer{inspect.Analyzer},
 		Run: func(pass *analysis.Pass) (interface{}, error) {
 			runAnalyzer(pass, exceptionMap)
@@ -113,37 +172,33 @@ func NewAnalyzer(exceptionsPath string) (*analysis.Analyzer, error) {
 
 // runAnalyzer performs the AST inspection for a single package.
 func runAnalyzer(pass *analysis.Pass, exceptionMap map[string][]Exception) {
-	insp, ok := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
+	in, ok := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 	if !ok {
 		panic("sdkcheck: inspect.Analyzer result not available")
 	}
-	nodeFilter := []ast.Node{
-		(*ast.ImportSpec)(nil),
-		(*ast.CallExpr)(nil),
-	}
 
-	insp.WithStack(nodeFilter, func(n ast.Node, push bool, stack []ast.Node) bool {
+	nodeFilter := []ast.Node{(*ast.ImportSpec)(nil), (*ast.CallExpr)(nil)}
+	in.WithStack(nodeFilter, func(node ast.Node, push bool, stack []ast.Node) bool {
 		if !push {
 			return true
 		}
-		switch node := n.(type) {
+		switch typedNode := node.(type) {
 		case *ast.ImportSpec:
-			checkOSExecImport(pass, node, exceptionMap)
+			checkOSExecImport(pass, typedNode, exceptionMap)
 		case *ast.CallExpr:
-			checkForbiddenCall(pass, node, stack, exceptionMap)
+			checkProcessLaunch(pass, typedNode, stack, exceptionMap)
 		}
 		return true
 	})
 }
 
-// checkOSExecImport flags bare os/exec imports (RuleOSExecImport).
+// checkOSExecImport flags bare os/exec imports.
 func checkOSExecImport(pass *analysis.Pass, imp *ast.ImportSpec, exceptionMap map[string][]Exception) {
-	path := importPath(imp)
-	if path != "os/exec" {
+	if importPath(imp) != "os/exec" {
 		return
 	}
 	file := pass.Fset.File(imp.Pos()).Name()
-	if hasException(exceptionMap, file, string(RuleOSExecImport)) {
+	if hasException(exceptionMap, file, RuleOSExecImport) {
 		return
 	}
 	pass.Report(analysis.Diagnostic{
@@ -152,113 +207,109 @@ func checkOSExecImport(pass *analysis.Pass, imp *ast.ImportSpec, exceptionMap ma
 	})
 }
 
-// checkForbiddenCall detects exec.Command("helm"|"kubectl"|...) and shell wrappers.
-func checkForbiddenCall(pass *analysis.Pass, call *ast.CallExpr, stack []ast.Node, exceptionMap map[string][]Exception) {
+// checkProcessLaunch detects direct forbidden binaries, shell wrappers, and fork APIs.
+func checkProcessLaunch(pass *analysis.Pass, call *ast.CallExpr, stack []ast.Node, exceptionMap map[string][]Exception) {
 	file := pass.Fset.File(call.Pos()).Name()
-
-	// Match: exec.Command("helm", ...) or similar
-	if isExecCommand(call, pass.TypesInfo) {
-		bin := extractBinaryName(call)
-		if _, forbidden := forbiddenBinaries[bin]; forbidden {
-			if hasException(exceptionMap, file, string(RuleForbiddenBinary)) {
-				return
-			}
+	if isForkExec(call, pass.TypesInfo) {
+		if !hasException(exceptionMap, file, RuleForkExec) {
 			pass.Report(analysis.Diagnostic{
 				Pos:     call.Pos(),
-				Message: fmt.Sprintf("[%s] exec.Command(%q, ...) is forbidden; use Go SDK instead", RuleForbiddenBinary, bin),
+				Message: fmt.Sprintf("[%s] process fork/exec is forbidden; use the approved Go SDK instead", RuleForkExec),
 			})
-			return
 		}
+		return
+	}
+	if !isExecCommand(call, pass.TypesInfo) {
+		return
 	}
 
-	// Check for hidden shell wrappers: functions that call exec.Command with
-	// "sh" or "bash" and pass a command string that references forbidden binaries.
-	if isShellWrapper(pass, stack, call, pass.TypesInfo) {
-		if hasException(exceptionMap, file, string(RuleShellWrapper)) {
+	bin, ok := constantString(call.Args, 0, pass.TypesInfo)
+	if !ok {
+		return
+	}
+	if isForbiddenBinary(bin) {
+		if hasException(exceptionMap, file, RuleForbiddenBinary) {
 			return
 		}
+		position := pass.Fset.Position(call.Pos())
 		pass.Report(analysis.Diagnostic{
 			Pos:     call.Pos(),
-			Message: fmt.Sprintf("[%s] potential shell wrapper: %s", RuleShellWrapper, describeCaller(stack)),
+			Message: fmt.Sprintf("[%s] exec.Command(%q, ...) is forbidden at %s; use Go SDK instead", RuleForbiddenBinary, bin, position),
 		})
+		return
 	}
+	if !isShellWrapper(call, pass.TypesInfo) || hasException(exceptionMap, file, RuleShellWrapper) {
+		return
+	}
+	position := pass.Fset.Position(call.Pos())
+	pass.Report(analysis.Diagnostic{
+		Pos:     call.Pos(),
+		Message: fmt.Sprintf("[%s] potential shell wrapper at %s: %s", RuleShellWrapper, position, describeCaller(stack)),
+	})
 }
 
-// isExecCommand checks if the call is exec.Command(...).
 func isExecCommand(call *ast.CallExpr, info *types.Info) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "Command" {
 		return false
 	}
-	pkg, ok := sel.X.(*ast.Ident)
-	if !ok {
-		return false
-	}
-	if pkg.Name != "exec" || sel.Sel.Name != "Command" {
-		return false
-	}
-	// Confirm the package object is os/exec.
-	if obj, ok := info.Uses[pkg]; ok {
-		if pkgObj, ok := obj.(*types.PkgName); ok {
-			return pkgObj.Imported().Path() == "os/exec"
-		}
-	}
-	return false
+	function, ok := info.Uses[selector.Sel].(*types.Func)
+	return ok && function.Pkg() != nil && function.Pkg().Path() == "os/exec"
 }
 
-// extractBinaryName extracts the first argument from exec.Command("binary", ...).
-func extractBinaryName(call *ast.CallExpr) string {
-	if len(call.Args) == 0 {
-		return ""
-	}
-	lit, ok := call.Args[0].(*ast.BasicLit)
-	if !ok || lit.Kind.String() != "STRING" {
-		return ""
-	}
-	// Strip surrounding quotes.
-	s := lit.Value
-	if len(s) >= 2 {
-		return s[1 : len(s)-1]
-	}
-	return s
-}
-
-// isShellWrapper checks if any ancestor function in the call stack
-// ultimately wraps an exec.Command("sh"/"bash") with a forbidden binary in the args.
-func isShellWrapper(pass *analysis.Pass, stack []ast.Node, call *ast.CallExpr, info *types.Info) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
+func isForkExec(call *ast.CallExpr, info *types.Info) bool {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return false
 	}
-	pkg, ok := sel.X.(*ast.Ident)
-	if !ok || pkg.Name != "exec" || sel.Sel.Name != "Command" {
+	switch selector.Sel.Name {
+	case "ForkExec", "Exec", "StartProcess":
+	default:
 		return false
 	}
-	if obj, ok := info.Uses[pkg]; ok {
-		if pkgObj, ok := obj.(*types.PkgName); ok {
-			if pkgObj.Imported().Path() != "os/exec" {
-				return false
-			}
-		}
-	}
+	function, ok := info.Uses[selector.Sel].(*types.Func)
+	return ok && function.Pkg() != nil && function.Pkg().Path() == "syscall"
+}
 
-	bin := extractBinaryName(call)
+func constantString(arguments []ast.Expr, index int, info *types.Info) (string, bool) {
+	if index >= len(arguments) {
+		return "", false
+	}
+	if typeAndValue, ok := info.Types[arguments[index]]; ok && typeAndValue.Value != nil && typeAndValue.Value.Kind() == constant.String {
+		return constant.StringVal(typeAndValue.Value), true
+	}
+	literal, ok := arguments[index].(*ast.BasicLit)
+	if !ok || literal.Kind != token.STRING {
+		return "", false
+	}
+	text, err := strconv.Unquote(literal.Value)
+	if err != nil {
+		return "", false
+	}
+	return text, true
+}
+
+func isForbiddenBinary(command string) bool {
+	_, forbidden := forbiddenBinaries[filepath.Base(command)]
+	return forbidden
+}
+
+func isShellWrapper(call *ast.CallExpr, info *types.Info) bool {
+	bin, ok := constantString(call.Args, 0, info)
+	if !ok {
+		return false
+	}
+	bin = filepath.Base(bin)
 	if bin != "sh" && bin != "bash" {
 		return false
 	}
-	// Check remaining args for forbidden binary references.
-	for i := 1; i < len(call.Args); i++ {
-		lit, ok := call.Args[i].(*ast.BasicLit)
-		if !ok || lit.Kind.String() != "STRING" {
+	for index := 1; index < len(call.Args); index++ {
+		argument, ok := constantString(call.Args, index, info)
+		if !ok {
 			continue
 		}
-		s := lit.Value
-		if len(s) < 2 {
-			continue
-		}
-		s = s[1 : len(s)-1] // unquote
-		for _, fb := range forbiddenBinaries {
-			if containsWord(s, fb) {
+		for forbidden := range forbiddenBinaries {
+			if containsWord(argument, forbidden) {
 				return true
 			}
 		}
@@ -266,92 +317,67 @@ func isShellWrapper(pass *analysis.Pass, stack []ast.Node, call *ast.CallExpr, i
 	return false
 }
 
-// describeCaller builds a human-readable function name from the call stack.
 func describeCaller(stack []ast.Node) string {
-	// Walk stack from the top (most recent) to find enclosing function.
-	for i := len(stack) - 1; i >= 0; i-- {
-		if fd, ok := stack[i].(*ast.FuncDecl); ok {
-			return fmt.Sprintf("func %s calls exec.Command", fd.Name.Name)
-		}
-		if fl, ok := stack[i].(*ast.FuncLit); ok {
-			return fmt.Sprintf("anonymous func at %v calls exec.Command", fl.Pos())
+	for index := len(stack) - 1; index >= 0; index-- {
+		switch node := stack[index].(type) {
+		case *ast.FuncDecl:
+			return fmt.Sprintf("func %s calls exec.Command", node.Name.Name)
+		case *ast.FuncLit:
+			return fmt.Sprintf("anonymous func at %v calls exec.Command", node.Pos())
 		}
 	}
 	return "exec.Command call"
 }
 
-// containsWord checks whether s contains word as a standalone token
-// (not as a substring of a larger word).
 func containsWord(s, word string) bool {
-	// Simple check: the word appears with word boundaries.
-	for i := 0; i <= len(s)-len(word); i++ {
-		if s[i:i+len(word)] == word {
-			before := i == 0 || isBoundary(s[i-1])
-			after := i+len(word) == len(s) || isBoundary(s[i+len(word)])
-			if before && after {
-				return true
-			}
+	for index := 0; index <= len(s)-len(word); index++ {
+		if s[index:index+len(word)] != word {
+			continue
+		}
+		before := index == 0 || isBoundary(s[index-1])
+		after := index+len(word) == len(s) || isBoundary(s[index+len(word)])
+		if before && after {
+			return true
 		}
 	}
 	return false
 }
 
-func isBoundary(b byte) bool {
-	return b == ' ' || b == '\t' || b == '\n' || b == ';' || b == '|' || b == '&' || b == '"' || b == '\''
+func isBoundary(char byte) bool {
+	return strings.ContainsRune(" \t\n;|&\"'", rune(char))
 }
 
-// importPath extracts the import path string from an ImportSpec.
-func importPath(is *ast.ImportSpec) string {
-	if is.Path == nil {
+func importPath(imp *ast.ImportSpec) string {
+	if imp.Path == nil {
 		return ""
 	}
-	val := is.Path.Value
-	if len(val) >= 2 {
-		return val[1 : len(val)-1]
+	value := imp.Path.Value
+	if len(value) >= 2 {
+		return value[1 : len(value)-1]
 	}
-	return val
+	return value
 }
 
-// hasException checks whether the given file+rule has a valid (non-expired) exception.
-func hasException(exceptionMap map[string][]Exception, file, rule string) bool {
-	// Check exact path match.
-	if exs, ok := exceptionMap[file]; ok {
-		for _, ex := range exs {
-			if ex.Rule == rule && !isExpired(ex.ExpiresAt) {
-				return true
-			}
-		}
+func hasException(exceptionMap map[string][]Exception, file string, rule RuleID) bool {
+	file = filepath.ToSlash(filepath.Clean(file))
+	candidates := []string{file, filepath.Base(file)}
+	parts := strings.Split(file, "/")
+	for index := range parts {
+		candidates = append(candidates, strings.Join(parts[index:], "/"))
 	}
-	// Also check glob patterns (basic prefix/suffix matching).
-	for pattern, exs := range exceptionMap {
-		if matchSimplePattern(pattern, file) {
-			for _, ex := range exs {
-				if ex.Rule == rule && !isExpired(ex.ExpiresAt) {
+
+	for pattern, exceptions := range exceptionMap {
+		pattern = filepath.ToSlash(filepath.Clean(pattern))
+		for _, candidate := range candidates {
+			matched, err := doublestar.Match(pattern, candidate)
+			if err != nil || !matched {
+				continue
+			}
+			for _, exception := range exceptions {
+				if exception.Rule == string(rule) && !isExpired(exception.ExpiresAt) {
 					return true
 				}
 			}
-		}
-	}
-	return false
-}
-
-// matchSimplePattern does basic glob matching without importing doublestar.
-// Supports * as a wildcard and ** for recursive matching.
-func matchSimplePattern(pattern, path string) bool {
-	if pattern == path {
-		return true
-	}
-	// Simple suffix match: "*.go" matches "foo.go"
-	if len(pattern) > 1 && pattern[0] == '*' && !stringsContains(path[:len(path)-len(pattern)+1], "/") {
-		return len(path) >= len(pattern)-1 && path[len(path)-len(pattern)+1:] == pattern[1:]
-	}
-	return false
-}
-
-func stringsContains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
 		}
 	}
 	return false

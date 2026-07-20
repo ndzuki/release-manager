@@ -18,10 +18,6 @@ import (
 	"github.com/ndzuki/release-manager/internal/handler"
 )
 
-type closer interface {
-	Close(context.Context) error
-}
-
 // Service is the interface each microservice must satisfy.
 type Service interface {
 	Name() string
@@ -30,12 +26,20 @@ type Service interface {
 	Register(mux *http.ServeMux, logger *slog.Logger) error
 }
 
-// BackgroundService is an optional interface for services that need
-// background work (e.g., periodic archiving). The worker runs until
-// ctx is cancelled (on SIGINT/SIGTERM).
-type BackgroundService interface {
-	Service
-	RunBackground(ctx context.Context, logger *slog.Logger)
+type serverConfigurer interface {
+	ConfigureServer(*http.Server) error
+}
+
+type backgroundService interface {
+	Run(context.Context)
+}
+
+type closeService interface {
+	Close() error
+}
+
+type tlsService interface {
+	TLSCertificateFiles() (certFile string, keyFile string, enabled bool)
 }
 
 // Run starts a service with config loading, signal handling, and graceful shutdown.
@@ -61,25 +65,40 @@ func Run(configPath string, svc Service) {
 		os.Exit(1)
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-
-	// Start background workers (e.g. archive worker).
-	if bg, ok := svc.(BackgroundService); ok {
-		go bg.RunBackground(ctx, logger)
-	}
-
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	if configurer, ok := svc.(serverConfigurer); ok {
+		if err := configurer.ConfigureServer(srv); err != nil {
+			logger.Error("failed to configure server", "error", err)
+			return
+		}
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	if background, ok := svc.(backgroundService); ok {
+		go background.Run(ctx)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
 		logger.Info(svc.Name()+" started", "http_port", cfg.HTTPPort)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errCh <- fmt.Errorf("server: %w", err)
+		var serveErr error
+		if tlsConfig, ok := svc.(tlsService); ok {
+			certFile, keyFile, enabled := tlsConfig.TLSCertificateFiles()
+			if enabled {
+				serveErr = srv.ListenAndServeTLS(certFile, keyFile)
+			} else {
+				serveErr = srv.ListenAndServe()
+			}
+		} else {
+			serveErr = srv.ListenAndServe()
+		}
+		if serveErr != nil && serveErr != http.ErrServerClosed {
+			errCh <- fmt.Errorf("server: %w", serveErr)
 		}
 	}()
 
@@ -96,11 +115,11 @@ func Run(configPath string, svc Service) {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("shutdown error", "error", err)
 	}
-	if svcCloser, ok := svc.(closer); ok {
-		if err := svcCloser.Close(shutdownCtx); err != nil {
+
+	if closer, ok := svc.(closeService); ok {
+		if err := closer.Close(); err != nil {
 			logger.Error("service close error", "error", err)
 		}
 	}
-
 	logger.Info(svc.Name() + " stopped")
 }
