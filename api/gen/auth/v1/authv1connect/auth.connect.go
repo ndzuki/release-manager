@@ -27,6 +27,8 @@ const (
 	OrganizationServiceName = "auth.v1.OrganizationService"
 	// BindingServiceName is the fully-qualified name of the BindingService service.
 	BindingServiceName = "auth.v1.BindingService"
+	// ExternalIdentityServiceName is the fully-qualified name of the ExternalIdentityService service.
+	ExternalIdentityServiceName = "auth.v1.ExternalIdentityService"
 )
 
 // These constants are the fully-qualified names of the RPCs defined in this package. They're
@@ -37,6 +39,11 @@ const (
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
+	// AuthServiceGetInitStatusProcedure is the fully-qualified name of the AuthService's GetInitStatus
+	// RPC.
+	AuthServiceGetInitStatusProcedure = "/auth.v1.AuthService/GetInitStatus"
+	// AuthServiceInitializeProcedure is the fully-qualified name of the AuthService's Initialize RPC.
+	AuthServiceInitializeProcedure = "/auth.v1.AuthService/Initialize"
 	// AuthServiceLoginProcedure is the fully-qualified name of the AuthService's Login RPC.
 	AuthServiceLoginProcedure = "/auth.v1.AuthService/Login"
 	// AuthServiceLogoutProcedure is the fully-qualified name of the AuthService's Logout RPC.
@@ -47,6 +54,9 @@ const (
 	// AuthServiceValidateTokenProcedure is the fully-qualified name of the AuthService's ValidateToken
 	// RPC.
 	AuthServiceValidateTokenProcedure = "/auth.v1.AuthService/ValidateToken"
+	// AuthServiceSwitchOrganizationProcedure is the fully-qualified name of the AuthService's
+	// SwitchOrganization RPC.
+	AuthServiceSwitchOrganizationProcedure = "/auth.v1.AuthService/SwitchOrganization"
 	// AuthServiceChangePasswordProcedure is the fully-qualified name of the AuthService's
 	// ChangePassword RPC.
 	AuthServiceChangePasswordProcedure = "/auth.v1.AuthService/ChangePassword"
@@ -89,14 +99,26 @@ const (
 	// BindingServiceRevokeBindingProcedure is the fully-qualified name of the BindingService's
 	// RevokeBinding RPC.
 	BindingServiceRevokeBindingProcedure = "/auth.v1.BindingService/RevokeBinding"
+	// ExternalIdentityServiceAuthenticateLDAPProcedure is the fully-qualified name of the
+	// ExternalIdentityService's AuthenticateLDAP RPC.
+	ExternalIdentityServiceAuthenticateLDAPProcedure = "/auth.v1.ExternalIdentityService/AuthenticateLDAP"
+	// ExternalIdentityServiceGetOIDCAuthURLProcedure is the fully-qualified name of the
+	// ExternalIdentityService's GetOIDCAuthURL RPC.
+	ExternalIdentityServiceGetOIDCAuthURLProcedure = "/auth.v1.ExternalIdentityService/GetOIDCAuthURL"
+	// ExternalIdentityServiceGetDingTalkAuthURLProcedure is the fully-qualified name of the
+	// ExternalIdentityService's GetDingTalkAuthURL RPC.
+	ExternalIdentityServiceGetDingTalkAuthURLProcedure = "/auth.v1.ExternalIdentityService/GetDingTalkAuthURL"
 )
 
 // AuthServiceClient is a client for the auth.v1.AuthService service.
 type AuthServiceClient interface {
+	GetInitStatus(context.Context, *connect.Request[v1.GetInitStatusRequest]) (*connect.Response[v1.GetInitStatusResponse], error)
+	Initialize(context.Context, *connect.Request[v1.InitializeRequest]) (*connect.Response[v1.InitializeResponse], error)
 	Login(context.Context, *connect.Request[v1.LoginRequest]) (*connect.Response[v1.LoginResponse], error)
 	Logout(context.Context, *connect.Request[v1.LogoutRequest]) (*connect.Response[v1.LogoutResponse], error)
 	RefreshToken(context.Context, *connect.Request[v1.RefreshTokenRequest]) (*connect.Response[v1.RefreshTokenResponse], error)
 	ValidateToken(context.Context, *connect.Request[v1.ValidateTokenRequest]) (*connect.Response[v1.ValidateTokenResponse], error)
+	SwitchOrganization(context.Context, *connect.Request[v1.SwitchOrganizationRequest]) (*connect.Response[v1.SwitchOrganizationResponse], error)
 	ChangePassword(context.Context, *connect.Request[v1.ChangePasswordRequest]) (*connect.Response[v1.ChangePasswordResponse], error)
 }
 
@@ -111,6 +133,18 @@ func NewAuthServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 	baseURL = strings.TrimRight(baseURL, "/")
 	authServiceMethods := v1.File_auth_v1_auth_proto.Services().ByName("AuthService").Methods()
 	return &authServiceClient{
+		getInitStatus: connect.NewClient[v1.GetInitStatusRequest, v1.GetInitStatusResponse](
+			httpClient,
+			baseURL+AuthServiceGetInitStatusProcedure,
+			connect.WithSchema(authServiceMethods.ByName("GetInitStatus")),
+			connect.WithClientOptions(opts...),
+		),
+		initialize: connect.NewClient[v1.InitializeRequest, v1.InitializeResponse](
+			httpClient,
+			baseURL+AuthServiceInitializeProcedure,
+			connect.WithSchema(authServiceMethods.ByName("Initialize")),
+			connect.WithClientOptions(opts...),
+		),
 		login: connect.NewClient[v1.LoginRequest, v1.LoginResponse](
 			httpClient,
 			baseURL+AuthServiceLoginProcedure,
@@ -135,6 +169,12 @@ func NewAuthServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 			connect.WithSchema(authServiceMethods.ByName("ValidateToken")),
 			connect.WithClientOptions(opts...),
 		),
+		switchOrganization: connect.NewClient[v1.SwitchOrganizationRequest, v1.SwitchOrganizationResponse](
+			httpClient,
+			baseURL+AuthServiceSwitchOrganizationProcedure,
+			connect.WithSchema(authServiceMethods.ByName("SwitchOrganization")),
+			connect.WithClientOptions(opts...),
+		),
 		changePassword: connect.NewClient[v1.ChangePasswordRequest, v1.ChangePasswordResponse](
 			httpClient,
 			baseURL+AuthServiceChangePasswordProcedure,
@@ -146,11 +186,24 @@ func NewAuthServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 
 // authServiceClient implements AuthServiceClient.
 type authServiceClient struct {
-	login          *connect.Client[v1.LoginRequest, v1.LoginResponse]
-	logout         *connect.Client[v1.LogoutRequest, v1.LogoutResponse]
-	refreshToken   *connect.Client[v1.RefreshTokenRequest, v1.RefreshTokenResponse]
-	validateToken  *connect.Client[v1.ValidateTokenRequest, v1.ValidateTokenResponse]
-	changePassword *connect.Client[v1.ChangePasswordRequest, v1.ChangePasswordResponse]
+	getInitStatus      *connect.Client[v1.GetInitStatusRequest, v1.GetInitStatusResponse]
+	initialize         *connect.Client[v1.InitializeRequest, v1.InitializeResponse]
+	login              *connect.Client[v1.LoginRequest, v1.LoginResponse]
+	logout             *connect.Client[v1.LogoutRequest, v1.LogoutResponse]
+	refreshToken       *connect.Client[v1.RefreshTokenRequest, v1.RefreshTokenResponse]
+	validateToken      *connect.Client[v1.ValidateTokenRequest, v1.ValidateTokenResponse]
+	switchOrganization *connect.Client[v1.SwitchOrganizationRequest, v1.SwitchOrganizationResponse]
+	changePassword     *connect.Client[v1.ChangePasswordRequest, v1.ChangePasswordResponse]
+}
+
+// GetInitStatus calls auth.v1.AuthService.GetInitStatus.
+func (c *authServiceClient) GetInitStatus(ctx context.Context, req *connect.Request[v1.GetInitStatusRequest]) (*connect.Response[v1.GetInitStatusResponse], error) {
+	return c.getInitStatus.CallUnary(ctx, req)
+}
+
+// Initialize calls auth.v1.AuthService.Initialize.
+func (c *authServiceClient) Initialize(ctx context.Context, req *connect.Request[v1.InitializeRequest]) (*connect.Response[v1.InitializeResponse], error) {
+	return c.initialize.CallUnary(ctx, req)
 }
 
 // Login calls auth.v1.AuthService.Login.
@@ -173,6 +226,11 @@ func (c *authServiceClient) ValidateToken(ctx context.Context, req *connect.Requ
 	return c.validateToken.CallUnary(ctx, req)
 }
 
+// SwitchOrganization calls auth.v1.AuthService.SwitchOrganization.
+func (c *authServiceClient) SwitchOrganization(ctx context.Context, req *connect.Request[v1.SwitchOrganizationRequest]) (*connect.Response[v1.SwitchOrganizationResponse], error) {
+	return c.switchOrganization.CallUnary(ctx, req)
+}
+
 // ChangePassword calls auth.v1.AuthService.ChangePassword.
 func (c *authServiceClient) ChangePassword(ctx context.Context, req *connect.Request[v1.ChangePasswordRequest]) (*connect.Response[v1.ChangePasswordResponse], error) {
 	return c.changePassword.CallUnary(ctx, req)
@@ -180,10 +238,13 @@ func (c *authServiceClient) ChangePassword(ctx context.Context, req *connect.Req
 
 // AuthServiceHandler is an implementation of the auth.v1.AuthService service.
 type AuthServiceHandler interface {
+	GetInitStatus(context.Context, *connect.Request[v1.GetInitStatusRequest]) (*connect.Response[v1.GetInitStatusResponse], error)
+	Initialize(context.Context, *connect.Request[v1.InitializeRequest]) (*connect.Response[v1.InitializeResponse], error)
 	Login(context.Context, *connect.Request[v1.LoginRequest]) (*connect.Response[v1.LoginResponse], error)
 	Logout(context.Context, *connect.Request[v1.LogoutRequest]) (*connect.Response[v1.LogoutResponse], error)
 	RefreshToken(context.Context, *connect.Request[v1.RefreshTokenRequest]) (*connect.Response[v1.RefreshTokenResponse], error)
 	ValidateToken(context.Context, *connect.Request[v1.ValidateTokenRequest]) (*connect.Response[v1.ValidateTokenResponse], error)
+	SwitchOrganization(context.Context, *connect.Request[v1.SwitchOrganizationRequest]) (*connect.Response[v1.SwitchOrganizationResponse], error)
 	ChangePassword(context.Context, *connect.Request[v1.ChangePasswordRequest]) (*connect.Response[v1.ChangePasswordResponse], error)
 }
 
@@ -194,6 +255,18 @@ type AuthServiceHandler interface {
 // and JSON codecs. They also support gzip compression.
 func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
 	authServiceMethods := v1.File_auth_v1_auth_proto.Services().ByName("AuthService").Methods()
+	authServiceGetInitStatusHandler := connect.NewUnaryHandler(
+		AuthServiceGetInitStatusProcedure,
+		svc.GetInitStatus,
+		connect.WithSchema(authServiceMethods.ByName("GetInitStatus")),
+		connect.WithHandlerOptions(opts...),
+	)
+	authServiceInitializeHandler := connect.NewUnaryHandler(
+		AuthServiceInitializeProcedure,
+		svc.Initialize,
+		connect.WithSchema(authServiceMethods.ByName("Initialize")),
+		connect.WithHandlerOptions(opts...),
+	)
 	authServiceLoginHandler := connect.NewUnaryHandler(
 		AuthServiceLoginProcedure,
 		svc.Login,
@@ -218,6 +291,12 @@ func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption
 		connect.WithSchema(authServiceMethods.ByName("ValidateToken")),
 		connect.WithHandlerOptions(opts...),
 	)
+	authServiceSwitchOrganizationHandler := connect.NewUnaryHandler(
+		AuthServiceSwitchOrganizationProcedure,
+		svc.SwitchOrganization,
+		connect.WithSchema(authServiceMethods.ByName("SwitchOrganization")),
+		connect.WithHandlerOptions(opts...),
+	)
 	authServiceChangePasswordHandler := connect.NewUnaryHandler(
 		AuthServiceChangePasswordProcedure,
 		svc.ChangePassword,
@@ -226,6 +305,10 @@ func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption
 	)
 	return "/auth.v1.AuthService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case AuthServiceGetInitStatusProcedure:
+			authServiceGetInitStatusHandler.ServeHTTP(w, r)
+		case AuthServiceInitializeProcedure:
+			authServiceInitializeHandler.ServeHTTP(w, r)
 		case AuthServiceLoginProcedure:
 			authServiceLoginHandler.ServeHTTP(w, r)
 		case AuthServiceLogoutProcedure:
@@ -234,6 +317,8 @@ func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption
 			authServiceRefreshTokenHandler.ServeHTTP(w, r)
 		case AuthServiceValidateTokenProcedure:
 			authServiceValidateTokenHandler.ServeHTTP(w, r)
+		case AuthServiceSwitchOrganizationProcedure:
+			authServiceSwitchOrganizationHandler.ServeHTTP(w, r)
 		case AuthServiceChangePasswordProcedure:
 			authServiceChangePasswordHandler.ServeHTTP(w, r)
 		default:
@@ -244,6 +329,14 @@ func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption
 
 // UnimplementedAuthServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedAuthServiceHandler struct{}
+
+func (UnimplementedAuthServiceHandler) GetInitStatus(context.Context, *connect.Request[v1.GetInitStatusRequest]) (*connect.Response[v1.GetInitStatusResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.GetInitStatus is not implemented"))
+}
+
+func (UnimplementedAuthServiceHandler) Initialize(context.Context, *connect.Request[v1.InitializeRequest]) (*connect.Response[v1.InitializeResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.Initialize is not implemented"))
+}
 
 func (UnimplementedAuthServiceHandler) Login(context.Context, *connect.Request[v1.LoginRequest]) (*connect.Response[v1.LoginResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.Login is not implemented"))
@@ -259,6 +352,10 @@ func (UnimplementedAuthServiceHandler) RefreshToken(context.Context, *connect.Re
 
 func (UnimplementedAuthServiceHandler) ValidateToken(context.Context, *connect.Request[v1.ValidateTokenRequest]) (*connect.Response[v1.ValidateTokenResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.ValidateToken is not implemented"))
+}
+
+func (UnimplementedAuthServiceHandler) SwitchOrganization(context.Context, *connect.Request[v1.SwitchOrganizationRequest]) (*connect.Response[v1.SwitchOrganizationResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.SwitchOrganization is not implemented"))
 }
 
 func (UnimplementedAuthServiceHandler) ChangePassword(context.Context, *connect.Request[v1.ChangePasswordRequest]) (*connect.Response[v1.ChangePasswordResponse], error) {
@@ -689,4 +786,127 @@ func (UnimplementedBindingServiceHandler) ListBindings(context.Context, *connect
 
 func (UnimplementedBindingServiceHandler) RevokeBinding(context.Context, *connect.Request[v1.RevokeBindingRequest]) (*connect.Response[v1.RevokeBindingResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.BindingService.RevokeBinding is not implemented"))
+}
+
+// ExternalIdentityServiceClient is a client for the auth.v1.ExternalIdentityService service.
+type ExternalIdentityServiceClient interface {
+	AuthenticateLDAP(context.Context, *connect.Request[v1.AuthenticateLDAPRequest]) (*connect.Response[v1.AuthenticateLDAPResponse], error)
+	GetOIDCAuthURL(context.Context, *connect.Request[v1.GetOIDCAuthURLRequest]) (*connect.Response[v1.GetOIDCAuthURLResponse], error)
+	GetDingTalkAuthURL(context.Context, *connect.Request[v1.GetDingTalkAuthURLRequest]) (*connect.Response[v1.GetDingTalkAuthURLResponse], error)
+}
+
+// NewExternalIdentityServiceClient constructs a client for the auth.v1.ExternalIdentityService
+// service. By default, it uses the Connect protocol with the binary Protobuf Codec, asks for
+// gzipped responses, and sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply
+// the connect.WithGRPC() or connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewExternalIdentityServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) ExternalIdentityServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	externalIdentityServiceMethods := v1.File_auth_v1_auth_proto.Services().ByName("ExternalIdentityService").Methods()
+	return &externalIdentityServiceClient{
+		authenticateLDAP: connect.NewClient[v1.AuthenticateLDAPRequest, v1.AuthenticateLDAPResponse](
+			httpClient,
+			baseURL+ExternalIdentityServiceAuthenticateLDAPProcedure,
+			connect.WithSchema(externalIdentityServiceMethods.ByName("AuthenticateLDAP")),
+			connect.WithClientOptions(opts...),
+		),
+		getOIDCAuthURL: connect.NewClient[v1.GetOIDCAuthURLRequest, v1.GetOIDCAuthURLResponse](
+			httpClient,
+			baseURL+ExternalIdentityServiceGetOIDCAuthURLProcedure,
+			connect.WithSchema(externalIdentityServiceMethods.ByName("GetOIDCAuthURL")),
+			connect.WithClientOptions(opts...),
+		),
+		getDingTalkAuthURL: connect.NewClient[v1.GetDingTalkAuthURLRequest, v1.GetDingTalkAuthURLResponse](
+			httpClient,
+			baseURL+ExternalIdentityServiceGetDingTalkAuthURLProcedure,
+			connect.WithSchema(externalIdentityServiceMethods.ByName("GetDingTalkAuthURL")),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// externalIdentityServiceClient implements ExternalIdentityServiceClient.
+type externalIdentityServiceClient struct {
+	authenticateLDAP   *connect.Client[v1.AuthenticateLDAPRequest, v1.AuthenticateLDAPResponse]
+	getOIDCAuthURL     *connect.Client[v1.GetOIDCAuthURLRequest, v1.GetOIDCAuthURLResponse]
+	getDingTalkAuthURL *connect.Client[v1.GetDingTalkAuthURLRequest, v1.GetDingTalkAuthURLResponse]
+}
+
+// AuthenticateLDAP calls auth.v1.ExternalIdentityService.AuthenticateLDAP.
+func (c *externalIdentityServiceClient) AuthenticateLDAP(ctx context.Context, req *connect.Request[v1.AuthenticateLDAPRequest]) (*connect.Response[v1.AuthenticateLDAPResponse], error) {
+	return c.authenticateLDAP.CallUnary(ctx, req)
+}
+
+// GetOIDCAuthURL calls auth.v1.ExternalIdentityService.GetOIDCAuthURL.
+func (c *externalIdentityServiceClient) GetOIDCAuthURL(ctx context.Context, req *connect.Request[v1.GetOIDCAuthURLRequest]) (*connect.Response[v1.GetOIDCAuthURLResponse], error) {
+	return c.getOIDCAuthURL.CallUnary(ctx, req)
+}
+
+// GetDingTalkAuthURL calls auth.v1.ExternalIdentityService.GetDingTalkAuthURL.
+func (c *externalIdentityServiceClient) GetDingTalkAuthURL(ctx context.Context, req *connect.Request[v1.GetDingTalkAuthURLRequest]) (*connect.Response[v1.GetDingTalkAuthURLResponse], error) {
+	return c.getDingTalkAuthURL.CallUnary(ctx, req)
+}
+
+// ExternalIdentityServiceHandler is an implementation of the auth.v1.ExternalIdentityService
+// service.
+type ExternalIdentityServiceHandler interface {
+	AuthenticateLDAP(context.Context, *connect.Request[v1.AuthenticateLDAPRequest]) (*connect.Response[v1.AuthenticateLDAPResponse], error)
+	GetOIDCAuthURL(context.Context, *connect.Request[v1.GetOIDCAuthURLRequest]) (*connect.Response[v1.GetOIDCAuthURLResponse], error)
+	GetDingTalkAuthURL(context.Context, *connect.Request[v1.GetDingTalkAuthURLRequest]) (*connect.Response[v1.GetDingTalkAuthURLResponse], error)
+}
+
+// NewExternalIdentityServiceHandler builds an HTTP handler from the service implementation. It
+// returns the path on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewExternalIdentityServiceHandler(svc ExternalIdentityServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	externalIdentityServiceMethods := v1.File_auth_v1_auth_proto.Services().ByName("ExternalIdentityService").Methods()
+	externalIdentityServiceAuthenticateLDAPHandler := connect.NewUnaryHandler(
+		ExternalIdentityServiceAuthenticateLDAPProcedure,
+		svc.AuthenticateLDAP,
+		connect.WithSchema(externalIdentityServiceMethods.ByName("AuthenticateLDAP")),
+		connect.WithHandlerOptions(opts...),
+	)
+	externalIdentityServiceGetOIDCAuthURLHandler := connect.NewUnaryHandler(
+		ExternalIdentityServiceGetOIDCAuthURLProcedure,
+		svc.GetOIDCAuthURL,
+		connect.WithSchema(externalIdentityServiceMethods.ByName("GetOIDCAuthURL")),
+		connect.WithHandlerOptions(opts...),
+	)
+	externalIdentityServiceGetDingTalkAuthURLHandler := connect.NewUnaryHandler(
+		ExternalIdentityServiceGetDingTalkAuthURLProcedure,
+		svc.GetDingTalkAuthURL,
+		connect.WithSchema(externalIdentityServiceMethods.ByName("GetDingTalkAuthURL")),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/auth.v1.ExternalIdentityService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case ExternalIdentityServiceAuthenticateLDAPProcedure:
+			externalIdentityServiceAuthenticateLDAPHandler.ServeHTTP(w, r)
+		case ExternalIdentityServiceGetOIDCAuthURLProcedure:
+			externalIdentityServiceGetOIDCAuthURLHandler.ServeHTTP(w, r)
+		case ExternalIdentityServiceGetDingTalkAuthURLProcedure:
+			externalIdentityServiceGetDingTalkAuthURLHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedExternalIdentityServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedExternalIdentityServiceHandler struct{}
+
+func (UnimplementedExternalIdentityServiceHandler) AuthenticateLDAP(context.Context, *connect.Request[v1.AuthenticateLDAPRequest]) (*connect.Response[v1.AuthenticateLDAPResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.ExternalIdentityService.AuthenticateLDAP is not implemented"))
+}
+
+func (UnimplementedExternalIdentityServiceHandler) GetOIDCAuthURL(context.Context, *connect.Request[v1.GetOIDCAuthURLRequest]) (*connect.Response[v1.GetOIDCAuthURLResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.ExternalIdentityService.GetOIDCAuthURL is not implemented"))
+}
+
+func (UnimplementedExternalIdentityServiceHandler) GetDingTalkAuthURL(context.Context, *connect.Request[v1.GetDingTalkAuthURLRequest]) (*connect.Response[v1.GetDingTalkAuthURLResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.ExternalIdentityService.GetDingTalkAuthURL is not implemented"))
 }

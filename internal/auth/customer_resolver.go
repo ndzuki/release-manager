@@ -1,17 +1,53 @@
 package auth
 
-import "context"
+import (
+	"context"
+	"fmt"
 
-// CustomerResolver verifies that a customer exists. The real implementation
-// calls the orchestrator service via Connect. For now, a stub allows auth
-// service testing without a running orchestrator (TASK-004 dependency).
+	"connectrpc.com/connect"
+
+	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
+	"github.com/ndzuki/release-manager/internal/store"
+)
+
+// CustomerResolver loads customer lifecycle state from the tenancy service.
 type CustomerResolver interface {
-	// Exists returns true if the customer exists and is active.
-	Exists(ctx context.Context, customerID string) (bool, error)
+	Resolve(ctx context.Context, customerID string) (*store.Customer, error)
 }
 
-// StubResolver is a no-op resolver that always returns true.
-// Replace with a real Connect client after TASK-004 completes.
-type StubResolver struct{}
+// ConnectCustomerResolver resolves customers through release-orchestrator.
+type ConnectCustomerResolver struct {
+	client orchestratorv1connect.OrchestratorServiceClient
+}
 
-func (StubResolver) Exists(_ context.Context, _ string) (bool, error) { return true, nil }
+// NewConnectCustomerResolver creates a customer resolver backed by a Connect client.
+func NewConnectCustomerResolver(client orchestratorv1connect.OrchestratorServiceClient) *ConnectCustomerResolver {
+	return &ConnectCustomerResolver{client: client}
+}
+
+// Resolve returns the customer, including disabled lifecycle state.
+func (r *ConnectCustomerResolver) Resolve(ctx context.Context, customerID string) (*store.Customer, error) {
+	resp, err := r.client.GetCustomer(ctx, connect.NewRequest(&orchestratorv1.GetCustomerRequest{
+		CustomerId: customerID,
+	}))
+	if err != nil {
+		if connect.CodeOf(err) == connect.CodeNotFound {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("get customer: %w", err)
+	}
+
+	customer := resp.Msg.GetCustomer()
+	if customer == nil {
+		return nil, fmt.Errorf("get customer: empty response")
+	}
+	return &store.Customer{
+		ID:     customer.GetId(),
+		Name:   customer.GetName(),
+		Slug:   customer.GetSlug(),
+		Status: store.CustomerStatus(customer.GetStatus()),
+	}, nil
+}
+
+var _ CustomerResolver = (*ConnectCustomerResolver)(nil)

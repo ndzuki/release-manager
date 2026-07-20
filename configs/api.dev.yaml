@@ -1,2 +1,10 @@
 http_port: 8087
 log_level: debug
+audit:
+  archive:
+    retention_days: 90
+    poll_interval: 6h
+    batch_size: 1000
+    archive_dir: data/archives
+    compression: gzip_jsonl
+    checksum_algorithm: sha256

@@ -14,27 +14,52 @@ import (
 )
 
 type notifierSvc struct {
-	dbPath string
+	dbPath       string
+	store        *sqlitestore.Store
+	consumer     *notifier.Consumer
+	consumerDone chan struct{}
 }
 
 func (s *notifierSvc) Name() string { return "release-notifier" }
+
+func (s *notifierSvc) Close() error {
+	if s.consumerDone != nil {
+		<-s.consumerDone
+	}
+	if s.store == nil {
+		return nil
+	}
+	return s.store.Close()
+}
+
+func (s *notifierSvc) Run(ctx context.Context) {
+	defer close(s.consumerDone)
+	s.consumer.Run(ctx)
+}
 
 func (s *notifierSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	st, err := sqlitestore.Open(s.dbPath)
 	if err != nil {
 		return err
 	}
+	s.store = st
+	s.consumerDone = make(chan struct{})
 	logger.Info("store opened", "db", s.dbPath)
 
 	svc := notifier.NewService(st, logger)
 	path, h := notifierv1connect.NewNotifierServiceHandler(svc)
 	mux.Handle(path, h)
 
-	// Start notification consumer goroutine.
+	// Unconfigured channels are rejected during delivery.
+	sender := notifier.NewWebhookSender(nil)
+
 	consumerCfg := notifier.DefaultConsumerConfig()
-	consumer := notifier.NewConsumer(st, logger, consumerCfg)
-	// Consumer.Run is blocking; run it in a goroutine tied to the process lifetime.
-	go consumer.Run(context.Background())
+	s.consumer = notifier.NewConsumer(
+		st.Notifications(),
+		sender,
+		logger,
+		consumerCfg,
+	)
 
 	return nil
 }

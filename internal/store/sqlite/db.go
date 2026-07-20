@@ -171,6 +171,17 @@ func (s *Store) Close() error { return s.db.Close() }
 // DB exposes the underlying *sql.DB for testing.
 func (s *Store) DB() *sql.DB { return s.db }
 
+// OpenTest creates a Store backed by an in-memory SQLite database for testing.
+// The caller is responsible for closing the store via t.Cleanup.
+func OpenTest(t interface{ Cleanup(func()) }) *Store {
+	st, err := Open("file::memory:?cache=shared")
+	if err != nil {
+		panic("sqlite OpenTest: " + err.Error())
+	}
+	t.Cleanup(func() { st.Close() })
+	return st
+}
+
 // migrate runs the ordered migration steps against the database.
 // ALTER TABLE ADD COLUMN statements that fail because the column already
 // exists are silently skipped to keep migrations idempotent.
@@ -265,6 +276,8 @@ var migrationStatements = []string{
 		deadline             TEXT,
 		last_error           TEXT NOT NULL DEFAULT ''
 	)`,
+	// Migration: add target_revision for ROLLBACK operations.
+	`ALTER TABLE operations ADD COLUMN target_revision INTEGER NOT NULL DEFAULT 0`,
 
 	`CREATE INDEX IF NOT EXISTS idx_operations_definition ON operations(release_definition_id, status)`,
 	`CREATE INDEX IF NOT EXISTS idx_operations_idempotency ON operations(idempotency_key)`,
@@ -382,6 +395,9 @@ var migrationStatements = []string{
 		created_at    TEXT NOT NULL,
 		updated_at    TEXT NOT NULL
 	)`,
+	`ALTER TABLE users ADD COLUMN provider TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE users ADD COLUMN subject TEXT NOT NULL DEFAULT ''`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_provider_subject ON users(provider, subject) WHERE provider != '' AND subject != ''`,
 
 	`CREATE TABLE IF NOT EXISTS auth_sessions (
 		id                 TEXT PRIMARY KEY,
@@ -428,6 +444,18 @@ var migrationStatements = []string{
 
 	`CREATE INDEX IF NOT EXISTS idx_bindings_org ON org_customer_bindings(org_id)`,
 
+	`CREATE TABLE IF NOT EXISTS organization_customer_binding_events (
+		id                 TEXT PRIMARY KEY,
+		binding_id         TEXT NOT NULL REFERENCES org_customer_bindings(id) ON DELETE CASCADE,
+		org_id             TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+		customer_id        TEXT NOT NULL,
+		status             TEXT NOT NULL,
+		optimistic_version INTEGER NOT NULL,
+		changed_at         TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_binding_events_binding ON organization_customer_binding_events(binding_id, changed_at)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_binding_events_version ON organization_customer_binding_events(binding_id, optimistic_version)`,
+
 	// Audit events (REQ-050)
 	`CREATE TABLE IF NOT EXISTS audit_events (
 		id               TEXT PRIMARY KEY,
@@ -455,9 +483,13 @@ var migrationStatements = []string{
 		channel        TEXT NOT NULL DEFAULT 'webhook',
 		recipient      TEXT NOT NULL DEFAULT '',
 		status         TEXT NOT NULL DEFAULT 'pending',
+		attempts       INTEGER NOT NULL DEFAULT 0,
 		retry_count    INTEGER NOT NULL DEFAULT 0,
 		max_retries    INTEGER NOT NULL DEFAULT 3,
+		error_code     TEXT NOT NULL DEFAULT '',
+		next_retry_at  TEXT,
 		last_error     TEXT NOT NULL DEFAULT '',
+		sent_at        TEXT,
 		dead_letter_at TEXT,
 		metadata       TEXT NOT NULL DEFAULT '{}',
 		created_at     TEXT NOT NULL,
@@ -466,6 +498,12 @@ var migrationStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_notification_jobs_status ON notification_jobs(status)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_jobs_dedup ON notification_jobs(operation_id, channel, recipient)`,
 
+	// REQ-031: Add columns that may be missing from existing DBs (idempotent ALTER TABLE).
+	`ALTER TABLE notification_jobs ADD COLUMN next_retry_at TEXT`,
+	`ALTER TABLE notification_jobs ADD COLUMN dead_letter_at TEXT`,
+	`ALTER TABLE notification_jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE notification_jobs ADD COLUMN error_code TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE notification_jobs ADD COLUMN sent_at TEXT`,
 	// Artifact trust verification (REQ-012)
 	`CREATE TABLE IF NOT EXISTS verification_records (
 		id              TEXT PRIMARY KEY,

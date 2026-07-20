@@ -23,7 +23,7 @@ func setupService(t *testing.T) *Service {
 	t.Cleanup(func() { st.Close() })
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	return NewService(st, trust.NewStubVerifier(st.Verifications(), logger), logger)
+	return NewService(st, trust.NewStubVerifier(st.Verifications(), nil, logger), logger)
 }
 
 func TestSubmitReleaseBundle_Success(t *testing.T) {
