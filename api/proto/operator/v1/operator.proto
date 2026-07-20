@@ -36,11 +36,21 @@ message CommandStreamRequest {
 
 // Hello is sent by the operator to establish a session after enrollment.
 message Hello {
-  string session_id = 1;
+  string session_id = 1;       // optional legacy enrollment session
   string operator_id = 2;
   int64 last_seen_sequence = 3; // last sequence number the operator has seen
+  string instance_id = 4;
+  string version = 5;
+  map<string, string> capabilities = 6;
 }
 
+// SessionEstablished confirms a validated operator session.
+message SessionEstablished {
+  string session_id = 1;
+  int64 heartbeat_interval_seconds = 2;
+  int64 heartbeat_timeout_seconds = 3;
+  string active_config_version = 4;
+}
 // AckType classifies the acknowledgment level.
 enum AckType {
   ACK_TYPE_UNSPECIFIED = 0;
@@ -72,13 +82,14 @@ message Result {
   string result_json = 7;      // JSON-encoded result for duplicate detection
 }
 
-// CommandStreamResponse delivers commands and session events.
+// CommandStreamResponse delivers session lifecycle responses.
 message CommandStreamResponse {
   oneof payload {
-    Command command = 1;       // deploy command to execute
+    Command command = 1;       // legacy command delivery
     SessionEvent session_event = 2;  // session lifecycle event
-    ResyncRequest resync_request = 3;  // gap detected, request full resync
-    DuplicateResponse duplicate_response = 4;  // command already completed
+    ResyncRequest resync_request = 3;  // legacy gap recovery
+    DuplicateResponse duplicate_response = 4;  // legacy duplicate result
+    SessionEstablished session_established = 5;
   }
 }
 
@@ -91,6 +102,11 @@ message Command {
   common.v1.ReleaseBundle bundle = 5;
   bytes values = 6;
   int64 sequence = 7;          // global monotonic sequence number
+  string definition_id = 8;
+  string namespace = 9;
+  string release_name = 10;
+  bool create_namespace = 11;
+  int64 timeout_seconds = 12;
 }
 
 // ResyncRequest asks the operator to report its last seen sequence for gap recovery.

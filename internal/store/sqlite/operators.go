@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -300,20 +301,29 @@ func scanOperator(row interface{ Scan(...interface{}) error }) (*store.Operator,
 type sessionStore struct{ db *sql.DB }
 
 func (s *sessionStore) Create(ctx context.Context, sess *store.Session) error {
-	if sess.StartedAt.IsZero() {
-		sess.StartedAt = time.Now().UTC()
-	}
-	if sess.LastHeartbeat.IsZero() {
-		sess.LastHeartbeat = sess.StartedAt
+	prepareSession(sess)
+	capabilities, err := json.Marshal(sess.Capabilities)
+	if err != nil {
+		return fmt.Errorf("marshal session capabilities: %w", err)
 	}
 
-	_, err := s.db.ExecContext(ctx, `
-INSERT INTO sessions (id, operator_id, status, started_at, last_heartbeat, expires_at)
-VALUES (?, ?, ?, ?, ?, ?)
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO sessions (
+	id, operator_id, instance_id, version, capabilities, active_config_version,
+	status, started_at, last_heartbeat, expires_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `,
-		sess.ID, sess.OperatorID, string(sess.Status),
-		sess.StartedAt.UTC().Format(time.RFC3339), sess.LastHeartbeat.UTC().Format(time.RFC3339),
-		sess.ExpiresAt.UTC().Format(time.RFC3339),
+		sess.ID,
+		sess.OperatorID,
+		sess.InstanceID,
+		sess.Version,
+		string(capabilities),
+		sess.ActiveConfigVersion,
+		string(sess.Status),
+		sess.StartedAt.UTC().Format(time.RFC3339Nano),
+		sess.LastHeartbeat.UTC().Format(time.RFC3339Nano),
+		sess.ExpiresAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return fmt.Errorf("insert session: %w", err)
@@ -321,19 +331,79 @@ VALUES (?, ?, ?, ?, ?, ?)
 	return nil
 }
 
+func (s *sessionStore) Establish(ctx context.Context, sess *store.Session) error {
+	prepareSession(sess)
+	capabilities, err := json.Marshal(sess.Capabilities)
+	if err != nil {
+		return fmt.Errorf("marshal session capabilities: %w", err)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin establish session: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
+
+	var activeInstanceID string
+	err = tx.QueryRowContext(ctx, `
+SELECT instance_id
+FROM sessions
+WHERE operator_id = ? AND status IN ('online', 'suspect')
+ORDER BY started_at DESC
+LIMIT 1
+`, sess.OperatorID).Scan(&activeInstanceID)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("query active session: %w", err)
+	}
+	if err == nil && activeInstanceID != sess.InstanceID {
+		return store.ErrDuplicateKey
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+UPDATE sessions
+SET status = ?
+WHERE operator_id = ? AND status IN ('online', 'suspect')
+`, string(store.SessionOffline), sess.OperatorID); err != nil {
+		return fmt.Errorf("close active sessions: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO sessions (
+	id, operator_id, instance_id, version, capabilities, active_config_version,
+	status, started_at, last_heartbeat, expires_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`,
+		sess.ID,
+		sess.OperatorID,
+		sess.InstanceID,
+		sess.Version,
+		string(capabilities),
+		sess.ActiveConfigVersion,
+		string(sess.Status),
+		sess.StartedAt.UTC().Format(time.RFC3339Nano),
+		sess.LastHeartbeat.UTC().Format(time.RFC3339Nano),
+		sess.ExpiresAt.UTC().Format(time.RFC3339Nano),
+	); err != nil {
+		return fmt.Errorf("insert established session: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit establish session: %w", err)
+	}
+	return nil
+}
+
 func (s *sessionStore) Get(ctx context.Context, id string) (*store.Session, error) {
-	row := s.db.QueryRowContext(ctx, `
-SELECT id, operator_id, status, started_at, last_heartbeat, expires_at
-FROM sessions WHERE id = ?
-`, id)
+	row := s.db.QueryRowContext(ctx, sessionSelect+" WHERE id = ?", id)
 	return scanSession(row)
 }
 
 func (s *sessionStore) Heartbeat(ctx context.Context, id string) error {
 	now := time.Now().UTC()
 	result, err := s.db.ExecContext(ctx, `
-UPDATE sessions SET last_heartbeat=? WHERE id=?
-`, now.Format(time.RFC3339), id)
+UPDATE sessions SET last_heartbeat=?, status=? WHERE id=? AND status IN ('online', 'suspect')
+`, now.Format(time.RFC3339Nano), string(store.SessionOnline), id)
 	if err != nil {
 		return fmt.Errorf("heartbeat session: %w", err)
 	}
@@ -365,91 +435,104 @@ UPDATE sessions SET status=? WHERE id=?
 }
 
 func (s *sessionStore) GetActiveByOperator(ctx context.Context, operatorID string) (*store.Session, error) {
-	row := s.db.QueryRowContext(ctx, `
-SELECT id, operator_id, status, started_at, last_heartbeat, expires_at
-FROM sessions WHERE operator_id=? AND status='online' ORDER BY started_at DESC LIMIT 1
+	row := s.db.QueryRowContext(ctx, sessionSelect+`
+ WHERE operator_id=? AND status IN ('online', 'suspect')
+ ORDER BY started_at DESC LIMIT 1
 `, operatorID)
 	return scanSession(row)
 }
 
 func (s *sessionStore) ListExpiredSuspect(ctx context.Context, suspectAfter time.Duration) ([]*store.Session, error) {
-	threshold := time.Now().UTC().Add(-suspectAfter).Format(time.RFC3339)
-
-	rows, err := s.db.QueryContext(ctx, `
-SELECT id, operator_id, status, started_at, last_heartbeat, expires_at
-FROM sessions WHERE status IN ('online', 'suspect') AND last_heartbeat < ?
+	threshold := time.Now().UTC().Add(-suspectAfter).Format(time.RFC3339Nano)
+	rows, err := s.db.QueryContext(ctx, sessionSelect+`
+ WHERE status IN ('online', 'suspect') AND last_heartbeat < ?
 `, threshold)
 	if err != nil {
 		return nil, fmt.Errorf("list expired sessions: %w", err)
 	}
 	defer rows.Close()
 
-	var sessions []*store.Session
+	sessions := []*store.Session{}
 	for rows.Next() {
-		var (
-			id, operatorID, status, startedAt, lastHeartbeat, expiresAt string
-		)
-		if err := rows.Scan(&id, &operatorID, &status, &startedAt, &lastHeartbeat, &expiresAt); err != nil {
-			return nil, fmt.Errorf("scan expired session: %w", err)
-		}
-
-		st, err := time.Parse(time.RFC3339, startedAt)
+		sess, err := scanSession(rows)
 		if err != nil {
-			return nil, fmt.Errorf("parse session started_at: %w", err)
+			return nil, err
 		}
-		lh, err := time.Parse(time.RFC3339, lastHeartbeat)
-		if err != nil {
-			return nil, fmt.Errorf("parse session last_heartbeat: %w", err)
-		}
-		ex, err := time.Parse(time.RFC3339, expiresAt)
-		if err != nil {
-			return nil, fmt.Errorf("parse session expires_at: %w", err)
-		}
-
-		sessions = append(sessions, &store.Session{
-			ID:            id,
-			OperatorID:    operatorID,
-			Status:        store.SessionStatus(status),
-			StartedAt:     st,
-			LastHeartbeat: lh,
-			ExpiresAt:     ex,
-		})
+		sessions = append(sessions, sess)
 	}
-	return sessions, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate expired sessions: %w", err)
+	}
+	return sessions, nil
+}
+
+const sessionSelect = `
+SELECT id, operator_id, instance_id, version, capabilities, active_config_version,
+       status, started_at, last_heartbeat, expires_at
+FROM sessions`
+
+func prepareSession(sess *store.Session) {
+	now := time.Now().UTC()
+	if sess.Status == "" {
+		sess.Status = store.SessionOnline
+	}
+	if sess.StartedAt.IsZero() {
+		sess.StartedAt = now
+	}
+	if sess.LastHeartbeat.IsZero() {
+		sess.LastHeartbeat = sess.StartedAt
+	}
+	if sess.ExpiresAt.IsZero() {
+		sess.ExpiresAt = sess.StartedAt
+	}
+	if sess.Capabilities == nil {
+		sess.Capabilities = map[string]string{}
+	}
 }
 
 func scanSession(row interface{ Scan(...interface{}) error }) (*store.Session, error) {
 	var (
-		id, operatorID, status, startedAt, lastHeartbeat, expiresAt string
+		sess                                store.Session
+		capabilities, status                string
+		startedAt, lastHeartbeat, expiresAt string
 	)
-	if err := row.Scan(&id, &operatorID, &status, &startedAt, &lastHeartbeat, &expiresAt); err != nil {
+	if err := row.Scan(
+		&sess.ID,
+		&sess.OperatorID,
+		&sess.InstanceID,
+		&sess.Version,
+		&capabilities,
+		&sess.ActiveConfigVersion,
+		&status,
+		&startedAt,
+		&lastHeartbeat,
+		&expiresAt,
+	); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, store.ErrNotFound
 		}
 		return nil, fmt.Errorf("scan session: %w", err)
 	}
 
-	st, err := time.Parse(time.RFC3339, startedAt)
+	sess.Status = store.SessionStatus(status)
+	if err := json.Unmarshal([]byte(capabilities), &sess.Capabilities); err != nil {
+		return nil, fmt.Errorf("unmarshal session capabilities: %w", err)
+	}
+
+	var err error
+	sess.StartedAt, err = time.Parse(time.RFC3339Nano, startedAt)
 	if err != nil {
 		return nil, fmt.Errorf("parse session started_at: %w", err)
 	}
-	lh, err := time.Parse(time.RFC3339, lastHeartbeat)
+	sess.LastHeartbeat, err = time.Parse(time.RFC3339Nano, lastHeartbeat)
 	if err != nil {
 		return nil, fmt.Errorf("parse session last_heartbeat: %w", err)
 	}
-	ex, err := time.Parse(time.RFC3339, expiresAt)
+	sess.ExpiresAt, err = time.Parse(time.RFC3339Nano, expiresAt)
 	if err != nil {
 		return nil, fmt.Errorf("parse session expires_at: %w", err)
 	}
-
-	return &store.Session{
-		ID:            id,
-		OperatorID:    operatorID,
-		Status:        store.SessionStatus(status),
-		StartedAt:     st,
-		LastHeartbeat: lh,
-		ExpiresAt:     ex,
-	}, nil
+	return &sess, nil
 }
 
 // sha256Hex returns a hex-encoded SHA-256 hash of the input string.

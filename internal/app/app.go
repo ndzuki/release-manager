@@ -31,6 +31,22 @@ type Service interface {
 	Register(mux *http.ServeMux, logger *slog.Logger) error
 }
 
+type serverConfigurer interface {
+	ConfigureServer(*http.Server) error
+}
+
+type backgroundService interface {
+	Run(context.Context)
+}
+
+type closeService interface {
+	Close() error
+}
+
+type tlsService interface {
+	TLSCertificateFiles() (certFile string, keyFile string, enabled bool)
+}
+
 // Run starts a service with config loading, signal handling, and graceful shutdown.
 func Run(configPath string, svc Service) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -59,15 +75,35 @@ func Run(configPath string, svc Service) {
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	if configurer, ok := svc.(serverConfigurer); ok {
+		if err := configurer.ConfigureServer(srv); err != nil {
+			logger.Error("failed to configure server", "error", err)
+			return
+		}
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	if background, ok := svc.(backgroundService); ok {
+		go background.Run(ctx)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
 		logger.Info(svc.Name()+" started", "http_port", cfg.HTTPPort)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errCh <- fmt.Errorf("server: %w", err)
+		var serveErr error
+		if tlsConfig, ok := svc.(tlsService); ok {
+			certFile, keyFile, enabled := tlsConfig.TLSCertificateFiles()
+			if enabled {
+				serveErr = srv.ListenAndServeTLS(certFile, keyFile)
+			} else {
+				serveErr = srv.ListenAndServe()
+			}
+		} else {
+			serveErr = srv.ListenAndServe()
+		}
+		if serveErr != nil && serveErr != http.ErrServerClosed {
+			errCh <- fmt.Errorf("server: %w", serveErr)
 		}
 	}()
 
@@ -90,5 +126,10 @@ func Run(configPath string, svc Service) {
 		}
 	}
 
+	if closer, ok := svc.(closeService); ok {
+		if err := closer.Close(); err != nil {
+			logger.Error("service close error", "error", err)
+		}
+	}
 	logger.Info(svc.Name() + " stopped")
 }
