@@ -39,6 +39,7 @@ var validTransitions = map[store.OperationStatus]map[Event]store.OperationStatus
 	},
 	store.StatusPreflight: {
 		EventPreflightPassed: store.StatusQueued,
+		EventError:           store.StatusFailed,
 		EventCancel:          store.StatusCancelled,
 		EventTimeout:         store.StatusTimeout,
 	},
