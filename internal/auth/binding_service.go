@@ -99,6 +99,8 @@ func (s *BindingService) GetBinding(
 }
 
 // ListBindings lists all bindings for an organization.
+//
+//nolint:dupl // Connect list handlers intentionally share the project response pattern.
 func (s *BindingService) ListBindings(
 	ctx context.Context,
 	req *connect.Request[authv1.ListBindingsRequest],
@@ -115,6 +117,8 @@ func (s *BindingService) ListBindings(
 }
 
 // RevokeBinding revokes a binding (AC-049-02).
+//
+//nolint:dupl // Connect update handlers intentionally share optimistic-lock mapping.
 func (s *BindingService) RevokeBinding(
 	ctx context.Context,
 	req *connect.Request[authv1.RevokeBindingRequest],

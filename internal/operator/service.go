@@ -3,7 +3,9 @@ package operator
 
 import (
 	"context"
-	"crypto/x509"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -11,51 +13,41 @@ import (
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 
+	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	"github.com/ndzuki/release-manager/internal/operator/ca"
+	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/store"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // Service implements the OperatorServiceHandler Connect interface.
 type Service struct {
-	store             store.Store
-	ca                *ca.CA
-	logger            *slog.Logger
-	sessionTTL        time.Duration
-	heartbeatInterval time.Duration
-	heartbeatTimeout  time.Duration
-	suspectAfter      time.Duration
-	offlineAfter      time.Duration
-	configVersion     string
-	registry          *SessionRegistry
-	inventorySyncer   *InventorySyncer
-	commandExecutor   CommandExecutor
+	store           store.Store
+	ca              *ca.CA
+	logger          *slog.Logger
+	sessionTTL      time.Duration
+	heartbeatMaxAge time.Duration
+	suspectAfter    time.Duration
+	inventorySyncer *InventorySyncer
+	commandExecutor CommandExecutor
 }
 
+// NewService creates a new operator Connect service with a self-signed CA.
 func NewService(st store.Store, logger *slog.Logger) (*Service, error) {
 	caInst, err := ca.New(ca.Config{TTL: 7 * 24 * time.Hour})
 	if err != nil {
 		return nil, fmt.Errorf("create CA: %w", err)
 	}
-	service := &Service{
-		store:             st,
-		ca:                caInst,
-		logger:            logger,
-		sessionTTL:        15 * time.Minute,
-		heartbeatInterval: 10 * time.Second,
-		heartbeatTimeout:  30 * time.Second,
-		suspectAfter:      30 * time.Second,
-		offlineAfter:      60 * time.Second,
-		configVersion:     "dev",
-	}
-	service.registry = NewSessionRegistry(
-		st.Sessions(),
-		service.suspectAfter,
-		service.offlineAfter,
-		logger,
-	)
-	return service, nil
+	return &Service{
+		store:           st,
+		ca:              caInst,
+		logger:          logger,
+		sessionTTL:      15 * time.Minute,
+		heartbeatMaxAge: 30 * time.Second,
+		suspectAfter:    60 * time.Second,
+	}, nil
 }
 
 // SetInventorySyncer attaches an inventory syncer for release inventory sync (REQ-017).
@@ -63,19 +55,15 @@ func (s *Service) SetInventorySyncer(syncer *InventorySyncer) {
 	s.inventorySyncer = syncer
 }
 
+// SetCommandExecutor attaches a runtime command executor for preflight execution (REQ-048).
 func (s *Service) SetCommandExecutor(executor CommandExecutor) {
 	s.commandExecutor = executor
 }
 
-// RunSessionMonitor advances persisted session states until ctx is canceled.
-func (s *Service) RunSessionMonitor(ctx context.Context) {
-	s.registry.Run(ctx)
-}
-
-// Enroll validates a single-use enrollment token and creates an operator record.
-// The operator establishes its online session separately through CommandStream.
+// Enroll validates a single-use enrollment token, creates an operator record,
+// and establishes a new session for the operator agent.
 //
-//nolint:gocyclo // enrollment validation is intentionally sequential and fail-closed.
+//nolint:gocyclo // enrollment validation requires multiple sequential checks
 func (s *Service) Enroll(
 	ctx context.Context,
 	req *connect.Request[operatorv1.EnrollRequest],
@@ -171,12 +159,11 @@ func (s *Service) Enroll(
 	}
 	certPEM := ca.CertDERToPEM(certDER)
 
-	// Persist the X.509 certificate serial for mTLS identity lookup.
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("parse signed certificate: %w", err))
+	// Generate operator ID and cert serial.
+	certSerial := hashBytes(certDER)
+	if len(certSerial) > 10 {
+		certSerial = certSerial[:10]
 	}
-	certSerial := cert.SerialNumber.String()
 
 	operatorID := msg.GetOperatorId()
 	if operatorID == "" {
@@ -212,17 +199,19 @@ func (s *Service) Enroll(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("mark token: %w", err))
 	}
 
-	// Keep the legacy session identifier offline; online state is established by Hello.
+	// Create session.
 	now := time.Now().UTC()
 	session := &store.Session{
-		ID:         uuid.New().String(),
-		OperatorID: operatorID,
-		Status:     store.SessionOffline,
-		StartedAt:  now,
-		ExpiresAt:  now.Add(s.sessionTTL),
+		ID:            uuid.New().String(),
+		OperatorID:    operatorID,
+		Status:        store.SessionOnline,
+		StartedAt:     now,
+		LastHeartbeat: now,
+		ExpiresAt:     now.Add(s.sessionTTL),
 	}
 	if err := s.store.Sessions().Create(ctx, session); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create enrollment session: %w", err))
+		s.logger.Error("create session failed", "error", err)
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create session: %w", err))
 	}
 
 	s.logger.Info("operator enrolled",
@@ -253,21 +242,34 @@ func (s *Service) CommandStream(
 	ctx context.Context,
 	stream *connect.BidiStream[operatorv1.CommandStreamRequest, operatorv1.CommandStreamResponse],
 ) error {
+	// ── Hello phase ──
 	req, err := stream.Receive()
 	if err != nil {
 		return err
 	}
+
 	hello := req.GetHello()
 	if hello == nil {
-		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("first message must be hello"))
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("first message must be Hello"))
 	}
 
-	identity, err := certificateIdentityFromContext(ctx)
-	if err != nil {
-		return connect.NewError(connect.CodeUnauthenticated, err)
-	}
-
+	sessionID := hello.GetSessionId()
 	operatorID := hello.GetOperatorId()
+	lastSeenSeq := hello.GetLastSeenSequence()
+
+	// Validate session.
+	sess, err := s.store.Sessions().Get(ctx, sessionID)
+	if err != nil {
+		return connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid session: %w", err))
+	}
+	if sess.OperatorID != operatorID {
+		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("session operator mismatch"))
+	}
+	if sess.Status != store.SessionOnline {
+		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("session is %s, not online", sess.Status))
+	}
+
+	// Check operator is still active (AC-015-03).
 	op, err := s.store.Operators().Get(ctx, operatorID)
 	if err != nil {
 		if err == store.ErrNotFound {
@@ -275,88 +277,378 @@ func (s *Service) CommandStream(
 		}
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("get operator: %w", err))
 	}
-	if op.CertSerial != identity.Serial {
-		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("identity_mismatch"))
-	}
 	switch op.Status {
 	case store.OperatorSuperseded:
-		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("superseded"))
+		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator superseded: re-enroll required"))
 	case store.OperatorRevoked:
-		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("certificate_revoked"))
-	}
-	if hello.GetInstanceId() == "" {
-		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("instance_id is required"))
-	}
-	if hello.GetVersion() == "" {
-		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("version is required"))
+		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator revoked"))
 	}
 
-	now := time.Now().UTC()
-	sess := &store.Session{
-		ID:                  hello.GetSessionId(),
-		OperatorID:          operatorID,
-		InstanceID:          hello.GetInstanceId(),
-		Version:             hello.GetVersion(),
-		Capabilities:        hello.GetCapabilities(),
-		ActiveConfigVersion: s.configVersion,
-		Status:              store.SessionOnline,
-		StartedAt:           now,
-		LastHeartbeat:       now,
-		ExpiresAt:           now.Add(s.sessionTTL),
-	}
-	if sess.ID == "" {
-		sess.ID = uuid.New().String()
-	}
-	if err := s.store.Sessions().Establish(ctx, sess); err != nil {
-		if err == store.ErrDuplicateKey {
-			return connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("duplicate_session"))
-		}
-		return connect.NewError(connect.CodeInternal, fmt.Errorf("establish session: %w", err))
-	}
-	s.registry.Register(sess.ID, now)
-	defer func() {
-		s.registry.Unregister(sess.ID)
-		if err := s.store.Sessions().UpdateStatus(
-			context.WithoutCancel(ctx),
-			sess.ID,
-			store.SessionOffline,
-		); err != nil {
-			s.logger.Warn("mark session offline", "session_id", sess.ID, "error", err)
-		}
-	}()
+	s.logger.Info("operator stream established",
+		"operator_id", operatorID, "session_id", sessionID,
+		"last_seen_sequence", lastSeenSeq,
+	)
 
-	if err := stream.Send(&operatorv1.CommandStreamResponse{
-		Payload: &operatorv1.CommandStreamResponse_SessionEstablished{
-			SessionEstablished: &operatorv1.SessionEstablished{
-				SessionId:                sess.ID,
-				HeartbeatIntervalSeconds: int64(s.heartbeatInterval.Seconds()),
-				HeartbeatTimeoutSeconds:  int64(s.heartbeatTimeout.Seconds()),
-				ActiveConfigVersion:      s.configVersion,
-			},
-		},
-	}); err != nil {
+	// ── Reconnect: detect sequence gap and re-deliver ──
+	if err := s.handleReconnect(ctx, stream, operatorID, lastSeenSeq); err != nil {
 		return err
 	}
 
+	// ── Main loop ──
+	// Heartbeat ticker.
+	hbTicker := time.NewTicker(s.heartbeatMaxAge / 2)
+	defer hbTicker.Stop()
+
+	// Deliver pending commands in a background goroutine.
+	deliverCh := make(chan *store.OutboxEntry, 16)
+	deliverDone := make(chan struct{})
+	defer close(deliverDone)
+
+	go s.deliverPending(ctx, operatorID, deliverCh, deliverDone)
+
 	for {
-		request, err := stream.Receive()
+		select {
+		case <-hbTicker.C:
+			if err := s.store.Sessions().Heartbeat(ctx, sessionID); err != nil {
+				s.logger.Warn("heartbeat failed", "error", err)
+				if statusErr := s.store.Sessions().UpdateStatus(ctx, sessionID, store.SessionOffline); statusErr != nil {
+					s.logger.Warn("failed to mark session offline", "error", statusErr)
+				}
+				return nil
+			}
+
+		case entry := <-deliverCh:
+			s.logger.Debug("delivering command",
+				"outbox_id", entry.ID,
+				"command_id", entry.CommandID,
+				"sequence", entry.Sequence,
+			)
+			if err := s.sendCommand(stream, entry); err != nil {
+				return err
+			}
+			if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandDelivered, ""); err != nil {
+				return fmt.Errorf("mark command delivered: %w", err)
+			}
+		case <-ctx.Done():
+			return nil
+
+		default:
+			req, err := stream.Receive()
+			if err != nil {
+				return err
+			}
+
+			switch {
+			case req.GetHeartbeat() != nil:
+				if err := s.store.Sessions().Heartbeat(ctx, sessionID); err != nil {
+					s.logger.Warn("heartbeat update failed", "error", err)
+				}
+
+			case req.GetAck() != nil:
+				ack := req.GetAck()
+				s.logger.Debug("command ack",
+					"outbox_id", ack.GetOutboxId(),
+					"sequence", ack.GetSequence(),
+					"ack_type", ack.GetAckType(),
+				)
+				// ACK_RECEIVED and ACK_PERSISTED both imply delivered,
+				// but only ACK_PERSISTED releases the orchestator from
+				// re-delivery responsibility.
+				if ack.GetAckType() == operatorv1.AckType_ACK_TYPE_PERSISTED {
+					if err := s.store.Outbox().UpdateStatus(ctx, ack.GetOutboxId(), store.CommandPersisted, ""); err != nil {
+						s.logger.Warn("failed to mark command persisted", "error", err)
+					}
+				}
+
+			case req.GetResult() != nil:
+				result := req.GetResult()
+				s.logger.Info("command result",
+					"outbox_id", result.GetOutboxId(),
+					"command_id", result.GetCommandId(),
+					"status", result.GetStatus(),
+					"sequence", result.GetSequence(),
+				)
+
+				// Dedup: check if this command already reached terminal state.
+				existing, err := s.store.Outbox().GetByCommandID(ctx, result.GetCommandId())
+				if err != nil && err != store.ErrNotFound {
+					s.logger.Warn("failed to check command dedup", "error", err)
+				}
+				if existing != nil && (existing.Status == store.CommandSucceeded || existing.Status == store.CommandFailed) {
+					s.logger.Info("command already terminal, sending duplicate response",
+						"command_id", result.GetCommandId(),
+					)
+					if err := stream.Send(&operatorv1.CommandStreamResponse{
+						Payload: &operatorv1.CommandStreamResponse_DuplicateResponse{
+							DuplicateResponse: &operatorv1.DuplicateResponse{
+								CommandId:  result.GetCommandId(),
+								ResultJson: existing.ResultJSON,
+							},
+						},
+					}); err != nil {
+						return err
+					}
+					continue
+				}
+
+				status := store.CommandSucceeded
+				if result.GetStatus() == "failed" {
+					status = store.CommandFailed
+				}
+				resultJSON := result.GetResultJson()
+				if resultJSON == "" {
+					resultJSON = result.GetMessage()
+				}
+				_ = s.store.Outbox().UpdateStatus(ctx, result.GetOutboxId(), status, resultJSON)
+				if existing != nil {
+					s.FinishOperation(ctx, existing.OperationID, result.GetStatus(), resultJSON)
+				}
+
+			case req.GetResyncResponse() != nil:
+				rr := req.GetResyncResponse()
+				s.logger.Info("operator resync response",
+					"operator_last_sequence", rr.GetOperatorLastSequence(),
+				)
+				if err := s.reDeliverFrom(ctx, stream, operatorID, rr.GetOperatorLastSequence()); err != nil {
+					return err
+				}
+			}
+		}
+	}
+}
+
+// FinishOperation advances a queued/running operation to its terminal result.
+func (s *Service) FinishOperation(ctx context.Context, operationID, resultStatus, resultJSON string) {
+	op, err := s.store.Operations().Get(ctx, operationID)
+	if err != nil {
+		s.logger.Warn("failed to load operation for command result", "operation_id", operationID, "error", err)
+		return
+	}
+
+	current := op.Status
+	if current == store.StatusQueued {
+		current, err = operation.Transition(current, operation.EventBegin)
+		if err == nil {
+			op, err = s.store.Operations().UpdateStatus(ctx, op.ID, current, op.StateVersion, "")
+		}
 		if err != nil {
+			s.logger.Warn("failed to begin operation", "operation_id", operationID, "error", err)
+			return
+		}
+	}
+
+	event := operation.EventComplete
+	lastError := ""
+	if resultStatus == "failed" {
+		event = operation.EventError
+		lastError = resultJSON
+	}
+	next, err := operation.Transition(current, event)
+	if err != nil {
+		s.logger.Warn("failed to transition operation result", "operation_id", operationID, "error", err)
+		return
+	}
+	if _, err := s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, lastError); err != nil {
+		s.logger.Warn("failed to persist operation result", "operation_id", operationID, "error", err)
+	}
+}
+
+// handleReconnect checks for sequence gaps and re-delivers unacknowledged commands
+// on session reconnect. It sends ResyncRequest for gaps and DuplicateResponse for
+// already-completed commands.
+func (s *Service) handleReconnect(
+	ctx context.Context,
+	stream *connect.BidiStream[operatorv1.CommandStreamRequest, operatorv1.CommandStreamResponse],
+	operatorID string,
+	lastSeenSeq int64,
+) error {
+	// Get the max sequence known to orchestrator.
+	maxSeq, err := s.store.Outbox().GetNextSequence(ctx)
+	if err != nil {
+		s.logger.Warn("failed to get next sequence", "error", err)
+		return nil // non-fatal on reconnect
+	}
+	// GetNextSequence returns max+1, so current max is maxSeq-1.
+	if maxSeq > 0 {
+		maxSeq-- // actual max known sequence
+	}
+
+	// Detect sequence gap: operator missed some commands.
+	if lastSeenSeq > 0 && lastSeenSeq < maxSeq {
+		s.logger.Warn("sequence gap detected",
+			"operator_last", lastSeenSeq,
+			"orchestrator_max", maxSeq,
+		)
+		if err := stream.Send(&operatorv1.CommandStreamResponse{
+			Payload: &operatorv1.CommandStreamResponse_ResyncRequest{
+				ResyncRequest: &operatorv1.ResyncRequest{
+					OrchestratorLastSequence: maxSeq,
+					Reason:                   fmt.Sprintf("gap: operator has %d, orchestrator has %d", lastSeenSeq, maxSeq),
+				},
+			},
+		}); err != nil {
 			return err
 		}
-		switch {
-		case request.GetHeartbeat() != nil:
-			if err := s.store.Sessions().Heartbeat(ctx, sess.ID); err != nil {
-				return fmt.Errorf("heartbeat session: %w", err)
+		// Don't re-deliver yet — wait for operator's ResyncResponse.
+		return nil
+	}
+
+	// No gap: re-deliver delivered but not yet ACK_PERSISTED commands.
+	return s.reDeliverFrom(ctx, stream, operatorID, lastSeenSeq)
+}
+
+// reDeliverFrom sends all delivered-but-not-acked commands to the operator,
+// skipping commands already completed (sending DuplicateResponse instead).
+func (s *Service) reDeliverFrom(
+	ctx context.Context,
+	stream *connect.BidiStream[operatorv1.CommandStreamRequest, operatorv1.CommandStreamResponse],
+	operatorID string,
+	fromSeq int64,
+) error {
+	entries, err := s.store.Outbox().GetDeliveredNotAcked(ctx, operatorID)
+	if err != nil {
+		return fmt.Errorf("query delivered not acked: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.Sequence <= fromSeq {
+			continue
+		}
+
+		// If already terminal, send duplicate response instead.
+		if entry.Status == store.CommandSucceeded || entry.Status == store.CommandFailed {
+			if err := stream.Send(&operatorv1.CommandStreamResponse{
+				Payload: &operatorv1.CommandStreamResponse_DuplicateResponse{
+					DuplicateResponse: &operatorv1.DuplicateResponse{
+						CommandId:  entry.CommandID,
+						ResultJson: entry.ResultJSON,
+					},
+				},
+			}); err != nil {
+				return err
 			}
-			s.registry.Heartbeat(sess.ID, time.Now().UTC())
-		case request.GetAck() != nil:
-			return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("command acknowledgments are not supported"))
-		case request.GetResult() != nil:
-			return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("command results are not supported"))
-		case request.GetResyncResponse() != nil:
-			return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("resync responses are not supported"))
-		default:
-			return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unsupported session message"))
+			continue
+		}
+
+		// Re-deliver.
+		if err := s.sendCommand(stream, entry); err != nil {
+			return err
+		}
+		if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandDelivered, ""); err != nil {
+			return fmt.Errorf("mark re-delivered command: %w", err)
+		}
+	}
+	return nil
+}
+
+// sendCommand serializes an outbox entry into a CommandStreamResponse.
+func (s *Service) sendCommand(
+	stream *connect.BidiStream[operatorv1.CommandStreamRequest, operatorv1.CommandStreamResponse],
+	entry *store.OutboxEntry,
+) error {
+	command := &operatorv1.Command{
+		OutboxId:      entry.ID,
+		CommandId:     entry.CommandID,
+		OperationId:   entry.OperationID,
+		OperationType: entry.OperationType,
+		Sequence:      entry.Sequence,
+	}
+	if err := DecodeCommandPayload(entry.Payload, command); err != nil {
+		return fmt.Errorf("decode command payload %q: %w", entry.CommandID, err)
+	}
+	return stream.Send(&operatorv1.CommandStreamResponse{
+		Payload: &operatorv1.CommandStreamResponse_Command{Command: command},
+	})
+}
+
+type commandPayload struct {
+	DefinitionID    string                  `json:"definition_id"`
+	Namespace       string                  `json:"namespace"`
+	ReleaseName     string                  `json:"release_name"`
+	CreateNamespace bool                    `json:"create_namespace"`
+	TimeoutSeconds  int64                   `json:"timeout_seconds"`
+	Bundle          *commonv1.ReleaseBundle `json:"bundle"`
+	Values          json.RawMessage         `json:"values"`
+}
+
+// DecodeCommandPayload populates command fields from an outbox JSON payload.
+func DecodeCommandPayload(payload []byte, command *operatorv1.Command) error {
+	if len(payload) == 0 {
+		return nil
+	}
+
+	var envelope commandPayload
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return fmt.Errorf("unmarshal envelope: %w", err)
+	}
+	command.DefinitionId = envelope.DefinitionID
+	command.Namespace = envelope.Namespace
+	command.ReleaseName = envelope.ReleaseName
+	command.CreateNamespace = envelope.CreateNamespace
+	command.TimeoutSeconds = envelope.TimeoutSeconds
+	command.Bundle = envelope.Bundle
+	command.Values = envelope.Values
+
+	if envelope.Bundle == nil {
+		var bundle commonv1.ReleaseBundle
+		if err := protojson.Unmarshal(payload, &bundle); err == nil && bundle.GetChartRef() != "" {
+			command.Bundle = &bundle
+		}
+	}
+	return nil
+}
+
+// deliverPending polls for pending commands and sends them to the delivery channel.
+// It enforces max_inflight by blocking when an inflight command exists.
+func (s *Service) deliverPending(
+	ctx context.Context,
+	operatorID string,
+	deliverCh chan<- *store.OutboxEntry,
+	done <-chan struct{},
+) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			// Check for inflight command (max_inflight=1 enforcement).
+			inflight, err := s.store.Outbox().GetInflightForOperator(ctx, operatorID)
+			if err != nil && err != store.ErrNotFound {
+				s.logger.Warn("failed to check inflight", "error", err)
+				continue
+			}
+			if inflight != nil {
+				// An inflight command exists; skip this poll cycle.
+				continue
+			}
+
+			entry, err := s.store.Outbox().GetNextPending(ctx, operatorID)
+			if err != nil || entry == nil {
+				continue
+			}
+
+			// Assign sequence number to new pending entries.
+			if entry.Sequence == 0 {
+				seq, err := s.store.Outbox().GetNextSequence(ctx)
+				if err != nil {
+					s.logger.Warn("failed to get next sequence", "error", err)
+					continue
+				}
+				entry.Sequence = seq
+				if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPending, ""); err != nil {
+					s.logger.Warn("failed to persist command sequence", "error", err)
+					continue
+				}
+			}
+
+			select {
+			case deliverCh <- entry:
+			case <-done:
+				return
+			}
 		}
 	}
 }
@@ -400,6 +692,12 @@ func (s *Service) RevokeOperator(
 		OperatorId: op.ID,
 		Status:     "revoked",
 	}), nil
+}
+
+// hashBytes returns a hex-encoded SHA-256 of the input.
+func hashBytes(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
 }
 
 // Compile-time check: Service implements the Connect handler interface.
