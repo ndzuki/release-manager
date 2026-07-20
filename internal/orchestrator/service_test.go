@@ -42,6 +42,15 @@ func seedDefinition(t *testing.T, st store.Store) {
 	}
 	require.NoError(t, st.Customers().Create(context.Background(), cust))
 
+	org := &store.Organization{ID: "org-001", Name: "Test Organization"}
+	require.NoError(t, st.Organizations().Create(context.Background(), org))
+	binding := &store.OrgCustomerBinding{
+		ID:         "binding-001",
+		OrgID:      org.ID,
+		CustomerID: cust.ID,
+	}
+	require.NoError(t, st.Bindings().Create(context.Background(), binding))
+
 	def := &store.ReleaseDefinition{
 		ID:          "def-001",
 		Name:        "my-release",
@@ -126,6 +135,30 @@ func TestCreateOperation_Install_Success(t *testing.T) {
 	assert.NotEmpty(t, resp.Msg.OperationId)
 	assert.Equal(t, "preflight", resp.Msg.State) // standard ops enter preflight
 	assert.NotNil(t, resp.Msg.AcceptedAt)
+}
+
+func TestCreateOperation_RejectedForRevokedCustomerBinding(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	binding, err := st.Bindings().GetByOrgAndCustomer(context.Background(), "org-001", "cust-001")
+	require.NoError(t, err)
+	require.NoError(t, st.Bindings().SetStatus(context.Background(), binding, store.BindingRevoked))
+
+	_, err = svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-001",
+		ReleaseDefinitionId: "def-001",
+		IdempotencyKey:      "revoked-binding",
+		Actor: &commonv1.ActorContext{
+			UserId:       "user-001",
+			Organization: "org-001",
+		},
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+	assert.ErrorContains(t, err, "customer binding is not active")
 }
 
 func TestCreateOperation_Idempotency(t *testing.T) {

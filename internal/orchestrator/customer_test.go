@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	"github.com/ndzuki/release-manager/internal/store"
 )
@@ -26,11 +27,12 @@ func TestCreateOperation_RejectedForDisabledCustomer(t *testing.T) {
 	require.NoError(t, st.Customers().Update(context.Background(), cust))
 
 	_, err = svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
-		OperationType:          "INSTALL",
-		BundleId:               "bundle-001",
-		ReleaseDefinitionId:    "def-001",
-		IdempotencyKey:         "disabled-test",
+		OperationType:           "INSTALL",
+		BundleId:                "bundle-001",
+		ReleaseDefinitionId:     "def-001",
+		IdempotencyKey:          "disabled-test",
 		ExpectedCurrentRevision: 0,
+		Actor:                   &commonv1.ActorContext{Organization: "org-001"},
 	}))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "is disabled")

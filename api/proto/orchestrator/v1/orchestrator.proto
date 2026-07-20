@@ -42,12 +42,26 @@ message PublishReleaseResponse {
   string status = 2;
 }
 
+// RollbackReleaseRequest rolls back a release to a specific Helm revision.
+message RollbackReleaseRequest {
+  string release_definition_id = 1;
+  int32 target_revision = 2;             // revision to rollback TO
+  int32 expected_current_revision = 3;   // current revision (optimistic lock)
+  string reason = 4;                     // required
+  common.v1.ActorContext actor = 5;
+  string idempotency_key = 6;            // optional: for idempotent retry
+}
+
+// RollbackReleaseResponse returns the created rollback operation.
+message RollbackReleaseResponse {
+  string operation_id = 1;
+  int32 from_revision = 2;
+  int32 to_revision = 3;
+  string state = 4;
+}
+
 // ReleaseOperation represents a single publish operation.
 message ReleaseOperation {
-  string id = 1;
-  string release_definition_id = 2;
-  string status = 3;
-  common.v1.ReleaseDigest digest = 4;
 }
 
 // ── Release Definition Management ────────────────────────────────
@@ -256,6 +270,7 @@ service OrchestratorService {
   // Release pipeline
   rpc CreateOperation(CreateOperationRequest) returns (CreateOperationResponse);
   rpc PublishRelease(PublishReleaseRequest) returns (PublishReleaseResponse);
+  rpc RollbackRelease(RollbackReleaseRequest) returns (RollbackReleaseResponse);
 
   // Release definition management
   rpc CreateReleaseDefinition(CreateReleaseDefinitionRequest) returns (CreateReleaseDefinitionResponse);

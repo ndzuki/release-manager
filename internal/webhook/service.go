@@ -18,6 +18,7 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	webhookv1 "github.com/ndzuki/release-manager/api/gen/webhook/v1"
 	webhookv1connect "github.com/ndzuki/release-manager/api/gen/webhook/v1/webhookv1connect"
+	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/store"
 	"github.com/ndzuki/release-manager/internal/trust"
 )
@@ -27,11 +28,16 @@ type Service struct {
 	store    store.Store
 	verifier trust.Verifier
 	logger   *slog.Logger
+	audit    audit.Sink
 }
 
 // NewService creates a new webhook Connect service.
-func NewService(st store.Store, verifier trust.Verifier, logger *slog.Logger) *Service {
-	return &Service{store: st, verifier: verifier, logger: logger}
+func NewService(st store.Store, verifier trust.Verifier, logger *slog.Logger, auditSink ...audit.Sink) *Service {
+	service := &Service{store: st, verifier: verifier, logger: logger}
+	if len(auditSink) > 0 {
+		service.audit = auditSink[0]
+	}
+	return service
 }
 
 // SubmitReleaseBundle validates and persists a release bundle from CI.
@@ -106,32 +112,27 @@ func (s *Service) SubmitReleaseBundle(
 // IngestArtifact records a raw artifact event (e.g. Harbor webhook) without
 // triggering any release pipeline.
 func (s *Service) IngestArtifact(
-	ctx context.Context,
+	_ context.Context,
 	req *connect.Request[webhookv1.IngestArtifactRequest],
 ) (*connect.Response[webhookv1.IngestArtifactResponse], error) {
 	msg := req.Msg
-
-	now := time.Now().UTC()
-
-	audit := &store.AuditEvent{
-		ID:             uuid.New().String(),
-		ActorKind:      store.AuditActorSystem,
-		ActorID:        "harbor-webhook",
-		OrganizationID: "",
-		Role:           "",
-		ResourceType:   "artifact",
-		ResourceID:     msg.ArtifactUrl,
-		Action:         "ingest",
-		Status:         "recorded",
-		DurationMs:     0,
-		ChangeSummary: fmt.Sprintf("source=%s type=%s", msg.Source, msg.ArtifactType),
-		Metadata:       msg.Metadata,
-		CreatedAt:      now,
-	}
-
-	if err := s.store.AuditEvents().Create(ctx, audit); err != nil {
-		s.logger.Error("failed to record artifact event", "err", err)
-		// Non-fatal: we still return OK so the webhook doesn't retry.
+	event := audit.NewEvent(
+		store.AuditActorService,
+		"harbor-webhook",
+		"",
+		"",
+		"artifact",
+		msg.ArtifactUrl,
+		"ingest",
+		"recorded",
+		fmt.Sprintf("source=%s type=%s", msg.Source, msg.ArtifactType),
+		msg.Metadata,
+	)
+	if s.audit != nil {
+		result := s.audit.Emit(event)
+		if !result.Accepted {
+			s.logger.Warn("audit event rejected", "event_id", result.EventID, "code", result.Code)
+		}
 	}
 
 	s.logger.Info("artifact event recorded",
@@ -140,11 +141,7 @@ func (s *Service) IngestArtifact(
 		"url", msg.ArtifactUrl,
 	)
 
-	// IngestArtifact does NOT create an Operation or trigger PublishRelease.
-	// It only records the raw event for audit purposes.
-	return connect.NewResponse(&webhookv1.IngestArtifactResponse{
-		Bundle: nil,
-	}), nil
+	return connect.NewResponse(&webhookv1.IngestArtifactResponse{Bundle: nil}), nil
 }
 
 // validateSubmitRequest performs schema-level validation.
