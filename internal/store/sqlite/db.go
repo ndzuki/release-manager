@@ -44,7 +44,7 @@ type Store struct {
 // Open creates a new SQLite-backed Store, running migrations on the database.
 // The DSN must be a valid modernc.org/sqlite connection string.
 func Open(dsn string) (*Store, error) {
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite", dsn+"&_pragma=busy_timeout(5000)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("sqlite open: %w", err)
 	}

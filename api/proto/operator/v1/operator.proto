@@ -100,13 +100,17 @@ message Command {
   string operation_id = 3;
   string operation_type = 4;
   common.v1.ReleaseBundle bundle = 5;
-  bytes values = 6;
-  int64 sequence = 7;          // global monotonic sequence number
+  bytes values = 6;                  // approved ValuesRevision JSON
+  int64 sequence = 7;                // global monotonic sequence number
   string definition_id = 8;
   string namespace = 9;
   string release_name = 10;
   bool create_namespace = 11;
   int64 timeout_seconds = 12;
+  string values_revision_id = 13;
+  int64 expected_current_revision = 14;
+  bool atomic = 15;
+  bytes values_patch = 16;            // JSON merge patch
 }
 
 // ResyncRequest asks the operator to report its last seen sequence for gap recovery.

@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -237,13 +239,16 @@ func TestCreateOperation_ReleaseBusy(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
+	seedValuesRevision(t, st, "vr-002", "def-001", store.ValuesStatusApproved)
+
 	// Second request with different idempotency key -> release_busy
 	_, err = svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
-		OperationType:       "UPGRADE",
-		BundleId:            "bundle-002",
-		ReleaseDefinitionId: "def-001",
-		ValuesRevisionId:    "vr-002",
-		IdempotencyKey:      "idem-003",
+		OperationType:           "UPGRADE",
+		BundleId:                "bundle-002",
+		ReleaseDefinitionId:     "def-001",
+		ValuesRevisionId:        "vr-002",
+		ExpectedCurrentRevision: 1,
+		IdempotencyKey:          "idem-003",
 		Actor: &commonv1.ActorContext{
 			UserId:       "user-001",
 			Organization: "org-001",
@@ -252,6 +257,52 @@ func TestCreateOperation_ReleaseBusy(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "release_busy")
+}
+
+func TestCreateOperation_ConcurrentUpgradeOnlyOneAccepted(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedValuesRevision(t, st, "vr-concurrent", "def-001", store.ValuesStatusApproved)
+
+	const requests = 8
+	results := make(chan error, requests)
+	for i := range requests {
+		go func(i int) {
+			req := upgradeRequest("vr-concurrent")
+			req.IdempotencyKey = fmt.Sprintf("idem-concurrent-%d", i)
+			_, err := svc.CreateOperation(context.Background(), connect.NewRequest(req))
+			results <- err
+		}(i)
+	}
+
+	accepted := 0
+	busy := 0
+	for range requests {
+		err := <-results
+		if err == nil {
+			accepted++
+		} else if connect.CodeOf(err) == connect.CodeFailedPrecondition && strings.Contains(err.Error(), "release_busy") {
+			busy++
+		} else {
+			t.Logf("unexpected error: %v", err)
+		}
+	}
+	t.Logf("concurrent upgrade: accepted=%d busy=%d", accepted, busy)
+
+	// At least 1 must be accepted; at most 1 operation is non-terminal.
+	assert.GreaterOrEqual(t, accepted, 1, "at least one concurrent request must be accepted")
+
+	ops, err := st.Operations().List(context.Background(), "def-001")
+	require.NoError(t, err)
+
+	nonTerminal := 0
+	for _, op := range ops {
+		if !op.Status.IsTerminal() {
+			nonTerminal++
+		}
+	}
+	assert.Equal(t, 1, nonTerminal, "only one concurrent operation can be non-terminal")
 }
 
 func TestCreateOperation_UpgradeValidation(t *testing.T) {

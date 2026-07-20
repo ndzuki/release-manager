@@ -86,15 +86,6 @@ func (s *Service) CreateOperation(
 		return nil, connect.NewError(connect.CodePermissionDenied, err)
 	}
 
-	// 4. Release busy check (REQ-023 AC-023-03, AC-023-06, AC-023-07)
-	active, err := s.store.Operations().HasActiveForDefinition(ctx, msg.ReleaseDefinitionId)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("active check: %w", err))
-	}
-	if active {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
-	}
 
 	// EMERGENCY ↔ standard mutual exclusion (REQ-023 AC-023-06, AC-023-07).
 	if opType.IsStandard() {
@@ -217,8 +208,16 @@ func (s *Service) CreateOperation(
 		UpdatedAt: now,
 	}
 
-	// 7. Persist
-	if err := s.store.Operations().Create(ctx, op); err != nil {
+	// 7. Persist with atomic availability check (AC-062-01).
+	if err := s.store.Operations().CreateIfAvailable(ctx, op); err != nil {
+		if errors.Is(err, store.ErrReleaseBusy) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
+		}
+		if errors.Is(err, store.ErrDuplicateKey) {
+			return nil, connect.NewError(connect.CodeAlreadyExists,
+				fmt.Errorf("idempotency_key %s already used", msg.IdempotencyKey))
+		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create operation: %w", err))
 	}
 

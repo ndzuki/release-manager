@@ -57,6 +57,59 @@ func TestRealEngine_InstallAlreadyExists(t *testing.T) {
 	_, err = engine.Install(t.Context(), opts)
 	assert.ErrorIs(t, err, ErrAlreadyExists)
 }
+func TestRealEngine_UpgradeExpectedRevisionConflictDoesNotWrite(t *testing.T) {
+	engine, releases := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	})
+	chartPath := writeTestChart(t)
+	_, err := engine.Install(t.Context(), InstallOptions{
+		Namespace:   "default",
+		ReleaseName: "upgrade-conflict",
+		ChartPath:   chartPath,
+	})
+	require.NoError(t, err)
+
+	_, err = engine.Upgrade(t.Context(), UpgradeOptions{
+		Namespace:        "default",
+		ReleaseName:     "upgrade-conflict",
+		ChartPath:       chartPath,
+		ExpectedRevision: 9,
+	})
+	require.ErrorIs(t, err, ErrConflict)
+
+	stored, getErr := releases.Get("upgrade-conflict", 1)
+	require.NoError(t, getErr)
+	assert.Equal(t, 1, stored.Version)
+}
+
+func TestRealEngine_UpgradeAtomicFailureRestoresRelease(t *testing.T) {
+	kubeClient := &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	}
+	engine, releases := newTestRealEngine(t, kubeClient)
+	chartPath := writeTestChart(t)
+	_, err := engine.Install(t.Context(), InstallOptions{
+		Namespace:   "default",
+		ReleaseName: "upgrade-atomic",
+		ChartPath:   chartPath,
+	})
+	require.NoError(t, err)
+
+	kubeClient.WaitError = errors.New("upgrade hook failed")
+	_, err = engine.Upgrade(t.Context(), UpgradeOptions{
+		Namespace:        "default",
+		ReleaseName:     "upgrade-atomic",
+		ChartPath:       chartPath,
+		ExpectedRevision: 1,
+		Atomic:           true,
+		Timeout:          time.Second,
+	})
+	require.Error(t, err)
+
+	stored, getErr := releases.Get("upgrade-atomic", 1)
+	require.NoError(t, getErr)
+	assert.Equal(t, 1, stored.Version)
+}
 
 func TestRealEngine_InstallAtomicFailureRemovesRelease(t *testing.T) {
 	engine, releases := newTestRealEngine(t, &kubefake.FailingKubeClient{

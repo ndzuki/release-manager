@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,7 +20,11 @@ func (s *operationStore) Create(ctx context.Context, op *store.Operation) error 
 }
 
 func (s *operationStore) CreateIfAvailable(ctx context.Context, op *store.Operation) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	return retryBusy(ctx, func() error { return createIfAvailable(ctx, s.db, op) })
+}
+
+func createIfAvailable(ctx context.Context, db *sql.DB, op *store.Operation) error {
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin create operation: %w", err)
 	}
@@ -49,6 +54,29 @@ func (s *operationStore) CreateIfAvailable(ctx context.Context, op *store.Operat
 		return fmt.Errorf("commit create operation: %w", err)
 	}
 	return nil
+}
+
+// retryBusy retries fn up to 10 times with exponential backoff when
+// the error indicates a SQLite busy condition (concurrent write in WAL mode).
+func retryBusy(ctx context.Context, fn func() error) error {
+	const maxRetries = 10
+	var backoff time.Duration = time.Millisecond
+	var lastErr error
+	for range maxRetries + 1 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		lastErr = fn()
+		if lastErr == nil {
+			return nil
+		}
+		if !strings.Contains(lastErr.Error(), "database is locked") {
+			return lastErr
+		}
+		time.Sleep(backoff)
+		backoff *= 2
+	}
+	return lastErr
 }
 
 type operationExecer interface {
