@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 	"time"
+
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -236,6 +237,67 @@ func TestSessionLifecycle(t *testing.T) {
 	assert.Equal(t, store.SessionOffline, got.Status)
 }
 
+func TestSessionEstablish(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	cust := &store.Customer{ID: uuid.New().String(), Name: "Session Reconnect", Slug: "session-reconnect"}
+	require.NoError(t, st.Customers().Create(ctx, cust))
+	cl := &store.Cluster{ID: uuid.New().String(), Name: "c", CustomerID: cust.ID}
+	require.NoError(t, st.Clusters().Create(ctx, cl))
+	op := &store.Operator{ID: uuid.New().String(), CustomerID: cust.ID, ClusterID: cl.ID, CertSerial: "SESSION-ESTABLISH"}
+	require.NoError(t, st.Operators().Create(ctx, op))
+
+	first := &store.Session{
+		ID:                  uuid.New().String(),
+		OperatorID:          op.ID,
+		InstanceID:          "instance-1",
+		Version:             "1.0.0",
+		Capabilities:        map[string]string{"helm": "true"},
+		ActiveConfigVersion: "config-v1",
+		ExpiresAt:           time.Now().Add(time.Hour),
+	}
+	require.NoError(t, st.Sessions().Establish(ctx, first))
+
+	got, err := st.Sessions().GetActiveByOperator(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, first.ID, got.ID)
+	assert.Equal(t, first.InstanceID, got.InstanceID)
+	assert.Equal(t, first.Capabilities, got.Capabilities)
+
+	reconnect := &store.Session{
+		ID:                  uuid.New().String(),
+		OperatorID:          op.ID,
+		InstanceID:          "instance-1",
+		Version:             "1.0.1",
+		Capabilities:        map[string]string{"helm": "true", "inventory": "true"},
+		ActiveConfigVersion: "config-v2",
+		ExpiresAt:           time.Now().Add(time.Hour),
+	}
+	require.NoError(t, st.Sessions().Establish(ctx, reconnect))
+
+	old, err := st.Sessions().Get(ctx, first.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.SessionOffline, old.Status)
+	got, err = st.Sessions().GetActiveByOperator(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, reconnect.ID, got.ID)
+	assert.Equal(t, "1.0.1", got.Version)
+	assert.Equal(t, "config-v2", got.ActiveConfigVersion)
+
+	duplicate := &store.Session{
+		ID:         uuid.New().String(),
+		OperatorID: op.ID,
+		InstanceID: "instance-2",
+		ExpiresAt:  time.Now().Add(time.Hour),
+	}
+	assert.ErrorIs(t, st.Sessions().Establish(ctx, duplicate), store.ErrDuplicateKey)
+
+	got, err = st.Sessions().GetActiveByOperator(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, reconnect.ID, got.ID)
+}
+
 func TestOutboxStateMachine(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
@@ -277,6 +339,87 @@ func TestOutboxStateMachine(t *testing.T) {
 	assert.Equal(t, `{"release":"v1.2.3"}`, got.ResultJSON)
 }
 
+func TestOperationTransition_OptimisticLockAndEvent(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "operation-transition",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "operation-transition-key",
+		RequestHash:         "request-hash",
+		StateVersion:        4,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	updated, err := st.Operations().Transition(ctx, op.ID, store.StatusSucceeded, op.StateVersion, "")
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, updated.Status)
+	assert.Equal(t, 5, updated.StateVersion)
+
+	var oldStatus, newStatus string
+	var stateVersion int
+	var operationType, definitionID string
+	err = st.DB().QueryRowContext(ctx, `
+		SELECT operation_type, release_definition_id, old_status, new_status, state_version
+		FROM operation_events
+		WHERE operation_id = ?
+	`, op.ID).Scan(&operationType, &definitionID, &oldStatus, &newStatus, &stateVersion)
+	require.NoError(t, err)
+	assert.Equal(t, string(store.OperationInstall), operationType)
+	assert.Equal(t, def.ID, definitionID)
+	assert.Equal(t, string(store.StatusRunning), oldStatus)
+	assert.Equal(t, string(store.StatusSucceeded), newStatus)
+	assert.Equal(t, 5, stateVersion)
+
+	rows, err := st.DB().QueryContext(ctx, `SELECT * FROM operation_events LIMIT 0`)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rows.Close()) })
+	columns, err := rows.Columns()
+	require.NoError(t, err)
+	assert.NotContains(t, columns, "values_patch")
+	assert.NotContains(t, columns, "actor")
+
+	persisted, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, persisted.Status)
+	assert.Equal(t, 5, persisted.StateVersion)
+}
+
+func TestOperationCreateIfAvailable_AllowsEmergencyPeers(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+
+	first := &store.Operation{
+		ID:                  "emergency-one",
+		OperationType:       store.OperationEmergency,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "emergency-one-key",
+	}
+	second := &store.Operation{
+		ID:                  "emergency-two",
+		OperationType:       store.OperationEmergency,
+		Status:              store.StatusPending,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "emergency-two-key",
+	}
+	require.NoError(t, st.Operations().CreateIfAvailable(ctx, first))
+	require.NoError(t, st.Operations().CreateIfAvailable(ctx, second))
+
+	standard := &store.Operation{
+		ID:                  "standard-blocked",
+		OperationType:       store.OperationUpgrade,
+		Status:              store.StatusPending,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "standard-blocked-key",
+	}
+	assert.ErrorIs(t, st.Operations().CreateIfAvailable(ctx, standard), store.ErrReleaseBusy)
+}
+
 func TestGetNextPendingMaxInflight(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
@@ -311,7 +454,7 @@ func createTestDefinition(t *testing.T, st *sqlitestore.Store) *store.ReleaseDef
 		ClusterID:  uuid.New().String(),
 		Status:     store.DefStatusDraft,
 	}
-	require.NoError(t, st.Definitions().Create(ctx, def))
+	require.NoError(t, st.Definitions().Create(ctx, def, nil))
 	return def
 }
 
@@ -448,158 +591,192 @@ func TestValuesRevisionNotFound(t *testing.T) {
 	assert.ErrorIs(t, err, store.ErrNotFound)
 }
 
-// --- TrustRootStore tests (REQ-043) ---
+// ── ReleaseDefinition store tests ───────────────────────────────
 
-func TestTrustRootCreateAndGet(t *testing.T) {
+func TestDefinitionCreateDuplicateKey(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
-	now := time.Now().UTC()
 
-	root := &store.TrustRoot{
-		ID:           "root-001",
-		Environment:  "staging",
-		KeyID:        "k1",
-		PublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAtest\n-----END PUBLIC KEY-----",
-		Issuer:       "release-manager-ci",
-		State:        store.TrustRootActive,
-		ValidFrom:    now,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+	def1 := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "dup-def",
+		CustomerID:        "cust-dup",
+		ClusterID:         "cls-dup",
+		Namespace:         "default",
+		ReleaseName:       "same-name",
+		ChartName:         "nginx",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def1, nil))
+
+	def2 := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "dup-def-2",
+		CustomerID:        "cust-dup",
+		ClusterID:         "cls-dup",
+		Namespace:         "default",
+		ReleaseName:       "same-name",
+		ChartName:         "nginx",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	err := st.Definitions().Create(ctx, def2, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrDuplicateKey)
+}
+
+func TestDefinitionUpdateOptimisticLock(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	def := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "lock-def",
+		CustomerID:        uuid.New().String(),
+		ClusterID:         uuid.New().String(),
+		Namespace:         "ns",
+		ReleaseName:       "lock-rel",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def, nil))
+
+	// Update with correct version succeeds.
+	def.ReleaseName = "lock-rel-v2"
+	updated, err := st.Definitions().Update(ctx, def, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, updated.OptimisticVersion)
+
+	// Update with old version fails.
+	def.OptimisticVersion = 1 // stale
+	_, err = st.Definitions().Update(ctx, def, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrOptimisticLock)
+}
+
+func TestDefinitionUpdateDuplicateKey(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	def1 := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "key-def-1",
+		CustomerID:        "cust-key",
+		ClusterID:         "cls-key",
+		Namespace:         "ns",
+		ReleaseName:       "rel-a",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def1, nil))
+
+	def2 := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "key-def-2",
+		CustomerID:        "cust-key",
+		ClusterID:         "cls-key",
+		Namespace:         "ns",
+		ReleaseName:       "rel-b",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def2, nil))
+
+	// Try to update def2 to collide with def1's unique key.
+	def2.ReleaseName = "rel-a"
+	_, err := st.Definitions().Update(ctx, def2, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrDuplicateKey)
+}
+
+func TestDefinitionListFiltering(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	seed := func(custID, clsID, ns, rel string, status store.DefinitionStatus) {
+		require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+			ID:                uuid.New().String(),
+			Name:              rel,
+			CustomerID:        custID,
+			ClusterID:         clsID,
+			Namespace:         ns,
+			ReleaseName:       rel,
+			Status:            status,
+			OptimisticVersion: 1,
+		}, nil))
 	}
 
-	require.NoError(t, st.TrustRoots().Create(ctx, root))
+	seed("cust-A", "cls-A", "ns1", "rel-1", store.DefStatusActive)
+	seed("cust-A", "cls-A", "ns2", "rel-2", store.DefStatusActive)
+	seed("cust-B", "cls-B", "ns1", "rel-3", store.DefStatusDisabled)
 
-	got, err := st.TrustRoots().Get(ctx, "root-001")
+	// List by customer.
+	defs, err := st.Definitions().List(ctx, "cust-A", "", false)
 	require.NoError(t, err)
-	assert.Equal(t, root.ID, got.ID)
-	assert.Equal(t, store.TrustRootActive, got.State)
-	assert.Equal(t, "release-manager-ci", got.Issuer)
-}
+	assert.Len(t, defs, 2)
 
-func TestTrustRootGetNotFound(t *testing.T) {
-	st := setupStore(t)
-	ctx := context.Background()
+	// List all including disabled.
+	defs, err = st.Definitions().List(ctx, "", "", true)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(defs), 3)
 
-	_, err := st.TrustRoots().Get(ctx, "nonexistent")
-	assert.ErrorIs(t, err, store.ErrNotFound)
-}
-
-func TestTrustRootListByEnvironment(t *testing.T) {
-	st := setupStore(t)
-	ctx := context.Background()
-	now := time.Now().UTC()
-
-	for _, id := range []string{"r1", "r2", "r3"} {
-		require.NoError(t, st.TrustRoots().Create(ctx, &store.TrustRoot{
-			ID: id, Environment: "staging", KeyID: id, Issuer: "ci-" + id,
-			State: store.TrustRootActive, ValidFrom: now,
-			CreatedAt: now, UpdatedAt: now,
-		}))
+	// Normal list excludes disabled.
+	defs, err = st.Definitions().List(ctx, "", "", false)
+	require.NoError(t, err)
+	for _, d := range defs {
+		assert.NotEqual(t, store.DefStatusDisabled, d.Status)
 	}
-	// different environment
-	require.NoError(t, st.TrustRoots().Create(ctx, &store.TrustRoot{
-		ID: "r4", Environment: "production", KeyID: "k4", Issuer: "ci-prod",
-		State: store.TrustRootActive, ValidFrom: now,
-		CreatedAt: now, UpdatedAt: now,
-	}))
-
-	roots, err := st.TrustRoots().ListByEnvironment(ctx, "staging")
-	require.NoError(t, err)
-	assert.Len(t, roots, 3)
-
-	roots, err = st.TrustRoots().ListByEnvironment(ctx, "production")
-	require.NoError(t, err)
-	assert.Len(t, roots, 1)
 }
 
-func TestTrustRootGetActiveByEnvironment(t *testing.T) {
-	st := setupStore(t)
-	ctx := context.Background()
-	now := time.Now().UTC()
-	past := now.Add(-1 * time.Hour)
-
-	// Active root
-	require.NoError(t, st.TrustRoots().Create(ctx, &store.TrustRoot{
-		ID: "active-1", Environment: "staging", KeyID: "k1", Issuer: "ci-1",
-		State: store.TrustRootActive, ValidFrom: past,
-		CreatedAt: now, UpdatedAt: now,
-	}))
-	// Grace root
-	graceUntil := now.Add(1 * time.Hour)
-	require.NoError(t, st.TrustRoots().Create(ctx, &store.TrustRoot{
-		ID: "grace-1", Environment: "staging", KeyID: "k2", Issuer: "ci-2",
-		State: store.TrustRootGrace, ValidFrom: past, GraceUntil: &graceUntil,
-		CreatedAt: now, UpdatedAt: now,
-	}))
-	// Retired root — should not appear
-	require.NoError(t, st.TrustRoots().Create(ctx, &store.TrustRoot{
-		ID: "retired-1", Environment: "staging", KeyID: "k3", Issuer: "ci-3",
-		State: store.TrustRootRetired, ValidFrom: past,
-		CreatedAt: now, UpdatedAt: now,
-	}))
-
-	active, err := st.TrustRoots().GetActiveByEnvironment(ctx, "staging", now)
-	require.NoError(t, err)
-	assert.Len(t, active, 2) // active + grace
-}
-
-func TestTrustRootUpdate(t *testing.T) {
-	st := setupStore(t)
-	ctx := context.Background()
-	now := time.Now().UTC()
-
-	require.NoError(t, st.TrustRoots().Create(ctx, &store.TrustRoot{
-		ID: "root-upd", Environment: "staging", KeyID: "k1", Issuer: "ci-1",
-		State: store.TrustRootPending, ValidFrom: now,
-		CreatedAt: now, UpdatedAt: now,
-	}))
-
-	root, err := st.TrustRoots().Get(ctx, "root-upd")
-	require.NoError(t, err)
-	root.State = store.TrustRootActive
-	require.NoError(t, st.TrustRoots().Update(ctx, root))
-
-	got, err := st.TrustRoots().Get(ctx, "root-upd")
-	require.NoError(t, err)
-	assert.Equal(t, store.TrustRootActive, got.State)
-}
-
-func TestTrustRootBumpPolicy(t *testing.T) {
+func TestDefinitionEventPersistence(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
 
-	// First bump initializes policy.
-	ver, epoch, err := st.TrustRoots().BumpPolicy(ctx, "staging")
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), ver)
-	assert.Equal(t, int64(0), epoch)
+	def := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "evt-def",
+		CustomerID:        uuid.New().String(),
+		ClusterID:         uuid.New().String(),
+		ReleaseName:       "evt-rel",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	event := &store.ReleaseDefinitionEvent{
+		ID:           uuid.New().String(),
+		DefinitionID: def.ID,
+		EventType:    "definition_created",
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def, event))
 
-	// Second bump increments.
-	ver, epoch, err = st.TrustRoots().BumpPolicy(ctx, "staging")
+	events, err := st.DefinitionEvents().List(ctx, def.ID)
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), ver)
+	require.Len(t, events, 1)
+	assert.Equal(t, "definition_created", events[0].EventType)
+	assert.Equal(t, def.ID, events[0].DefinitionID)
 }
 
-func TestTrustRootBumpRevocationEpoch(t *testing.T) {
+func TestInventoryDefinitionAssociation(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
 
-	epoch, err := st.TrustRoots().BumpRevocationEpoch(ctx, "production")
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), epoch)
+	item := &store.ReleaseInventory{
+		ReleaseDefinitionID: "definition-1",
+		CustomerID:          "customer-1",
+		ClusterID:           "cluster-1",
+		Namespace:           "apps",
+		ReleaseName:         "example",
+		Chart:               "example-chart",
+		ChartVersion:        "1.0.0",
+		Revision:            1,
+		Status:              "deployed",
+		InventoryStatus:     store.InventoryActive,
+		LastSyncID:          "sync-1",
+	}
+	require.NoError(t, st.Inventories().Upsert(ctx, item))
 
-	epoch, err = st.TrustRoots().BumpRevocationEpoch(ctx, "production")
+	items, err := st.Inventories().ListByCluster(ctx, "customer-1", "cluster-1")
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), epoch)
-}
-
-func TestTrustRootGetPolicyDefault(t *testing.T) {
-	st := setupStore(t)
-	ctx := context.Background()
-
-	// No policy row yet → returns defaults.
-	meta, err := st.TrustRoots().GetPolicy(ctx, "unknown-env")
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), meta.Version)
-	assert.Equal(t, int64(0), meta.RevocationEpoch)
+	require.Len(t, items, 1)
+	assert.Equal(t, "definition-1", items[0].ReleaseDefinitionID)
 }

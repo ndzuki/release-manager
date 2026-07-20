@@ -14,29 +14,31 @@ import (
 
 // Store implements store.Store backed by SQLite.
 type Store struct {
-	db         *sql.DB
-	ops        *operationStore
-	defs       *definitionStore
-	vals       *valuesStore
-	customers  *customerStore
-	clusters   *clusterStore
-	tokens     *enrollmentTokenStore
-	operators  *operatorStore
-	sessions   *sessionStore
-	outbox     *outboxStore
-	users      *userStore
-	authSess   *authSessionStore
-	orgs       *organizationStore
-	orgMembers *organizationMemberStore
-	bindings   *bindingStore
-	audit      *auditEventStore
-	notif      *notificationStore
-	bundles    *bundleStore
-	verifs     *verificationStore
-	routes     *clusterRouteStore
-	invs       *inventoryStore
-	custEvents *customerEventStore
-	trustRoots *trustRootStore
+	db              *sql.DB
+	ops             *operationStore
+	operationEvents *operationEventStore
+	defs            *definitionStore
+	vals            *valuesStore
+	customers       *customerStore
+	clusters        *clusterStore
+	tokens          *enrollmentTokenStore
+	operators       *operatorStore
+	sessions        *sessionStore
+	outbox          *outboxStore
+	users           *userStore
+	authSess        *authSessionStore
+	orgs            *organizationStore
+	orgMembers      *organizationMemberStore
+	bindings        *bindingStore
+	audit           *auditEventStore
+	notif           *notificationStore
+	bundles         *bundleStore
+	verifs          *verificationStore
+	routes          *clusterRouteStore
+	invs            *inventoryStore
+	custEvents      *customerEventStore
+	defEvents       *definitionEventStore
+	preflight       *preflightStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -65,7 +67,10 @@ func Open(dsn string) (*Store, error) {
 
 	s := &Store{db: db}
 	s.ops = &operationStore{db: db}
+	s.operationEvents = &operationEventStore{db: db}
 	s.defs = &definitionStore{db: db}
+	s.defEvents = &definitionEventStore{db: db}
+	s.preflight = &preflightStore{db: db}
 	s.vals = &valuesStore{db: db}
 	s.customers = &customerStore{db: db}
 	s.clusters = &clusterStore{db: db}
@@ -83,13 +88,16 @@ func Open(dsn string) (*Store, error) {
 	s.bundles = &bundleStore{db: db}
 	s.invs = &inventoryStore{db: db}
 	s.verifs = &verificationStore{db: db}
+	s.custEvents = &customerEventStore{db: db}
 	s.routes = &clusterRouteStore{db: db}
-	s.trustRoots = &trustRootStore{db: db}
 	return s, nil
 }
 
 // Operations returns the OperationStore.
 func (s *Store) Operations() store.OperationStore { return s.ops }
+
+// OperationEvents returns the operation state event store.
+func (s *Store) OperationEvents() store.OperationEventStore { return s.operationEvents }
 
 // Customers returns the CustomerStore.
 func (s *Store) Customers() store.CustomerStore { return s.customers }
@@ -111,6 +119,12 @@ func (s *Store) Outbox() store.OutboxStore { return s.outbox }
 
 // Definitions returns the DefinitionStore.
 func (s *Store) Definitions() store.DefinitionStore { return s.defs }
+
+// DefinitionEvents returns the DefinitionEventStore.
+func (s *Store) DefinitionEvents() store.DefinitionEventStore { return s.defEvents }
+
+// PreflightResults returns the PreflightStore.
+func (s *Store) PreflightResults() store.PreflightStore { return s.preflight }
 
 // Values returns the ValuesStore.
 func (s *Store) Values() store.ValuesStore { return s.vals }
@@ -151,14 +165,22 @@ func (s *Store) ClusterRoutes() store.ClusterRouteStore { return s.routes }
 // Inventories returns the InventoryStore.
 func (s *Store) Inventories() store.InventoryStore { return s.invs }
 
-// TrustRoots returns the TrustRootStore.
-func (s *Store) TrustRoots() store.TrustRootStore { return s.trustRoots }
-
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
 
 // DB exposes the underlying *sql.DB for testing.
 func (s *Store) DB() *sql.DB { return s.db }
+
+// OpenTest creates a Store backed by an in-memory SQLite database for testing.
+// The caller is responsible for closing the store via t.Cleanup.
+func OpenTest(t interface{ Cleanup(func()) }) *Store {
+	st, err := Open("file::memory:?cache=shared")
+	if err != nil {
+		panic("sqlite OpenTest: " + err.Error())
+	}
+	t.Cleanup(func() { st.Close() })
+	return st
+}
 
 // migrate runs the ordered migration steps against the database.
 // ALTER TABLE ADD COLUMN statements that fail because the column already
@@ -210,8 +232,13 @@ var migrationStatements = []string{
 		UNIQUE(customer_id, cluster_id, namespace, release_name)
 	)`,
 
-	// REQ-032: metadata-driven HPA safety gate for SetReplicas.
-	`ALTER TABLE release_definitions ADD COLUMN hpa_managed INTEGER NOT NULL DEFAULT 0`,
+	`CREATE TABLE IF NOT EXISTS release_definition_events (
+		id            TEXT PRIMARY KEY,
+		definition_id TEXT NOT NULL REFERENCES release_definitions(id),
+		event_type    TEXT NOT NULL,
+		created_at    TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_release_definition_events_definition ON release_definition_events(definition_id, created_at)`,
 
 	`CREATE TABLE IF NOT EXISTS values_revisions (
 		id                    TEXT PRIMARY KEY,
@@ -249,10 +276,6 @@ var migrationStatements = []string{
 		deadline             TEXT,
 		last_error           TEXT NOT NULL DEFAULT ''
 	)`,
-
-	// REQ-032: typed emergency metadata and Helm convergence policy.
-	`ALTER TABLE operations ADD COLUMN emergency_action TEXT NOT NULL DEFAULT ''`,
-	`ALTER TABLE operations ADD COLUMN convergence TEXT NOT NULL DEFAULT ''`,
 
 	`CREATE INDEX IF NOT EXISTS idx_operations_definition ON operations(release_definition_id, status)`,
 	`CREATE INDEX IF NOT EXISTS idx_operations_idempotency ON operations(idempotency_key)`,
@@ -325,6 +348,13 @@ var migrationStatements = []string{
 		last_heartbeat TEXT NOT NULL,
 		expires_at     TEXT NOT NULL
 	)`,
+
+	`ALTER TABLE sessions ADD COLUMN instance_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE sessions ADD COLUMN version TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE sessions ADD COLUMN capabilities TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE sessions ADD COLUMN active_config_version TEXT NOT NULL DEFAULT ''`,
+	`CREATE INDEX IF NOT EXISTS idx_sessions_instance ON sessions(operator_id, instance_id)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_one_active_operator ON sessions(operator_id) WHERE status IN ('online', 'suspect')`,
 
 	`CREATE INDEX IF NOT EXISTS idx_sessions_operator ON sessions(operator_id, status)`,
 
@@ -436,9 +466,13 @@ var migrationStatements = []string{
 		channel        TEXT NOT NULL DEFAULT 'webhook',
 		recipient      TEXT NOT NULL DEFAULT '',
 		status         TEXT NOT NULL DEFAULT 'pending',
+		attempts       INTEGER NOT NULL DEFAULT 0,
 		retry_count    INTEGER NOT NULL DEFAULT 0,
 		max_retries    INTEGER NOT NULL DEFAULT 3,
+		error_code     TEXT NOT NULL DEFAULT '',
+		next_retry_at  TEXT,
 		last_error     TEXT NOT NULL DEFAULT '',
+		sent_at        TEXT,
 		dead_letter_at TEXT,
 		metadata       TEXT NOT NULL DEFAULT '{}',
 		created_at     TEXT NOT NULL,
@@ -447,6 +481,12 @@ var migrationStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_notification_jobs_status ON notification_jobs(status)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_jobs_dedup ON notification_jobs(operation_id, channel, recipient)`,
 
+	// REQ-031: Add columns that may be missing from existing DBs (idempotent ALTER TABLE).
+	`ALTER TABLE notification_jobs ADD COLUMN next_retry_at TEXT`,
+	`ALTER TABLE notification_jobs ADD COLUMN dead_letter_at TEXT`,
+	`ALTER TABLE notification_jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE notification_jobs ADD COLUMN error_code TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE notification_jobs ADD COLUMN sent_at TEXT`,
 	// Artifact trust verification (REQ-012)
 	`CREATE TABLE IF NOT EXISTS verification_records (
 		id              TEXT PRIMARY KEY,
@@ -456,17 +496,9 @@ var migrationStatements = []string{
 		issuer          TEXT NOT NULL DEFAULT '',
 		subject         TEXT NOT NULL DEFAULT '',
 		summary         TEXT NOT NULL DEFAULT '',
-		created_at      TEXT NOT NULL,
-		root_id         TEXT NOT NULL DEFAULT '',
-		key_id          TEXT NOT NULL DEFAULT '',
-		revocation_epoch INTEGER NOT NULL DEFAULT 0
+		created_at      TEXT NOT NULL
 	)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_records_digest_policy ON verification_records(artifact_digest, policy_version, created_at)`,
-
-	// REQ-043: add root identity and revocation epoch columns.
-	`ALTER TABLE verification_records ADD COLUMN root_id TEXT NOT NULL DEFAULT ''`,
-	`ALTER TABLE verification_records ADD COLUMN key_id TEXT NOT NULL DEFAULT ''`,
-	`ALTER TABLE verification_records ADD COLUMN revocation_epoch INTEGER NOT NULL DEFAULT 0`,
 
 	// Customer domain events (REQ-013)
 	`CREATE TABLE IF NOT EXISTS customer_events (
@@ -476,6 +508,19 @@ var migrationStatements = []string{
 		created_at  TEXT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_customer_events_customer ON customer_events(customer_id, event_type)`,
+
+	// Operation state change events (REQ-023)
+	`CREATE TABLE IF NOT EXISTS operation_events (
+		id                    TEXT PRIMARY KEY,
+		operation_id          TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+		operation_type        TEXT NOT NULL,
+		release_definition_id TEXT NOT NULL,
+		old_status            TEXT NOT NULL,
+		new_status            TEXT NOT NULL,
+		state_version         INTEGER NOT NULL,
+		created_at            TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_operation_events_operation ON operation_events(operation_id)`,
 
 	// Cluster artifact routing (REQ-014)
 	`CREATE TABLE IF NOT EXISTS cluster_routes (
@@ -495,6 +540,7 @@ var migrationStatements = []string{
 	`CREATE TABLE IF NOT EXISTS release_inventory (
 		customer_id      TEXT NOT NULL,
 		cluster_id       TEXT NOT NULL,
+		release_definition_id TEXT NOT NULL DEFAULT '',
 		namespace        TEXT NOT NULL DEFAULT '',
 		release_name     TEXT NOT NULL,
 		chart            TEXT NOT NULL DEFAULT '',
@@ -509,6 +555,7 @@ var migrationStatements = []string{
 		updated_at       TEXT NOT NULL,
 		UNIQUE(customer_id, cluster_id, namespace, release_name)
 	)`,
+	`ALTER TABLE release_inventory ADD COLUMN release_definition_id TEXT NOT NULL DEFAULT ''`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_cluster ON release_inventory(customer_id, cluster_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_status ON release_inventory(inventory_status)`,
 
@@ -543,29 +590,18 @@ var migrationStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_release_bundles_digest ON release_bundles(digest_alg, digest_value)`,
 
-	// Trust root rotation (REQ-043)
-	`CREATE TABLE IF NOT EXISTS trust_roots (
-		id               TEXT PRIMARY KEY,
-		environment      TEXT NOT NULL,
-		key_id           TEXT NOT NULL,
-		public_key_pem   TEXT NOT NULL DEFAULT '',
-		issuer           TEXT NOT NULL,
-		subject_pattern  TEXT NOT NULL DEFAULT '',
-		state            TEXT NOT NULL DEFAULT 'pending',
-		valid_from       TEXT NOT NULL,
-		grace_until      TEXT,
-		created_at       TEXT NOT NULL,
-		updated_at       TEXT NOT NULL,
-		revoked_at       TEXT
+	// Artifact preflight results (REQ-045)
+	`CREATE TABLE IF NOT EXISTS preflight_results (
+		id                  TEXT PRIMARY KEY,
+		operation_id        TEXT NOT NULL,
+		routing_version     TEXT NOT NULL DEFAULT '',
+		bundle_digest       TEXT NOT NULL,
+		trust_policy_version TEXT NOT NULL DEFAULT '',
+		sbom_policy_version TEXT NOT NULL DEFAULT '',
+		result_json         BLOB NOT NULL,
+		created_at          TEXT NOT NULL
 	)`,
-	`CREATE INDEX IF NOT EXISTS idx_trust_roots_env_state ON trust_roots(environment, state)`,
-
-	`CREATE TABLE IF NOT EXISTS trust_policies (
-		environment      TEXT PRIMARY KEY,
-		version          INTEGER NOT NULL DEFAULT 1,
-		revocation_epoch INTEGER NOT NULL DEFAULT 0,
-		updated_at       TEXT NOT NULL
-	)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_preflight_results_key ON preflight_results(operation_id, routing_version, bundle_digest, trust_policy_version, sbom_policy_version)`,
 }
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }

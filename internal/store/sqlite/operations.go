@@ -7,12 +7,55 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
 type operationStore struct{ db *sql.DB }
 
 func (s *operationStore) Create(ctx context.Context, op *store.Operation) error {
+	return createOperation(ctx, s.db, op)
+}
+
+func (s *operationStore) CreateIfAvailable(ctx context.Context, op *store.Operation) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin create operation: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit
+
+	query := `
+		SELECT COUNT(*) FROM operations
+		WHERE release_definition_id = ?
+		  AND status NOT IN ('succeeded','failed','cancelled','timeout')
+	`
+	if op.OperationType == store.OperationEmergency {
+		query += " AND operation_type != 'EMERGENCY'"
+	}
+
+	var count int
+	if err := tx.QueryRowContext(ctx, query, op.ReleaseDefinitionID).Scan(&count); err != nil {
+		return fmt.Errorf("count conflicting operations: %w", err)
+	}
+	if count > 0 {
+		return store.ErrReleaseBusy
+	}
+
+	if err := createOperation(ctx, tx, op); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit create operation: %w", err)
+	}
+	return nil
+}
+
+type operationExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func createOperation(ctx context.Context, execer operationExecer, op *store.Operation) error {
 	actorJSON, err := json.Marshal(op.Actor)
 	if err != nil {
 		return fmt.Errorf("marshal actor: %w", err)
@@ -31,23 +74,24 @@ func (s *operationStore) Create(ctx context.Context, op *store.Operation) error 
 		deadline = &d
 	}
 
-	_, err = s.db.ExecContext(ctx, `
+	_, err = execer.ExecContext(ctx, `
 		INSERT INTO operations (
 			id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
 			bundle_id, values_revision_id, expected_revision, values_patch,
-			emergency_action, convergence,
 			actor, created_at, updated_at, deadline, last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		op.ID, string(op.OperationType), string(op.Status), op.ReleaseDefinitionID,
 		op.IdempotencyKey, op.RequestHash, op.StateVersion,
 		op.BundleID, op.ValuesRevisionID, op.ExpectedRevision, op.ValuesPatch,
-		string(op.EmergencyAction), string(op.Convergence),
 		string(actorJSON), op.CreatedAt.UTC().Format(time.RFC3339), op.UpdatedAt.UTC().Format(time.RFC3339),
 		deadline, op.LastError,
 	)
 	if err != nil {
+		if isUniqueConstraint(err) {
+			return store.ErrDuplicateKey
+		}
 		return fmt.Errorf("insert operation: %w", err)
 	}
 	return nil
@@ -58,7 +102,6 @@ func (s *operationStore) Get(ctx context.Context, id string) (*store.Operation, 
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
 			bundle_id, values_revision_id, expected_revision, values_patch,
-			emergency_action, convergence,
 			actor, created_at, updated_at, deadline, last_error
 		FROM operations WHERE id = ?
 	`, id)
@@ -70,7 +113,6 @@ func (s *operationStore) GetByIdempotencyKey(ctx context.Context, key string) (*
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
 			bundle_id, values_revision_id, expected_revision, values_patch,
-			emergency_action, convergence,
 			actor, created_at, updated_at, deadline, last_error
 		FROM operations WHERE idempotency_key = ?
 	`, key)
@@ -78,8 +120,42 @@ func (s *operationStore) GetByIdempotencyKey(ctx context.Context, key string) (*
 }
 
 func (s *operationStore) UpdateStatus(ctx context.Context, id string, status store.OperationStatus, stateVersion int, lastError string) (*store.Operation, error) {
+	return s.transition(ctx, id, status, stateVersion, lastError)
+}
+
+func (s *operationStore) Transition(
+	ctx context.Context,
+	id string,
+	status store.OperationStatus,
+	stateVersion int,
+	lastError string,
+) (*store.Operation, error) {
+	return s.transition(ctx, id, status, stateVersion, lastError)
+}
+
+func (s *operationStore) transition(
+	ctx context.Context,
+	id string,
+	status store.OperationStatus,
+	stateVersion int,
+	lastError string,
+) (*store.Operation, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin operation transition: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
+
+	current, err := getOperation(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if current.StateVersion != stateVersion {
+		return nil, store.ErrOptimisticLock
+	}
+
 	now := nowUTC()
-	result, err := s.db.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		UPDATE operations
 		SET status = ?, state_version = state_version + 1, last_error = ?, updated_at = ?
 		WHERE id = ? AND state_version = ?
@@ -94,50 +170,46 @@ func (s *operationStore) UpdateStatus(ctx context.Context, id string, status sto
 	if rows == 0 {
 		return nil, store.ErrOptimisticLock
 	}
-	return s.Get(ctx, id)
+
+	updated := *current
+	updated.Status = status
+	updated.StateVersion++
+	updated.LastError = lastError
+	updated.UpdatedAt, err = time.Parse(time.RFC3339, now)
+	if err != nil {
+		return nil, fmt.Errorf("parse transition time: %w", err)
+	}
+
+	ev := &store.OperationStateChangedEvent{
+		ID:            uuid.New().String(),
+		OperationID:   updated.ID,
+		OperationType: updated.OperationType,
+		DefinitionID:  updated.ReleaseDefinitionID,
+		OldStatus:     current.Status,
+		NewStatus:     updated.Status,
+		StateVersion:  updated.StateVersion,
+		CreatedAt:     updated.UpdatedAt,
+	}
+	if err := insertOperationEvent(ctx, tx, ev); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit operation transition: %w", err)
+	}
+	return &updated, nil
 }
 
 func (s *operationStore) HasActiveForDefinition(ctx context.Context, definitionID string) (bool, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM operations
-		WHERE release_definition_id = ? AND status NOT IN ('succeeded','failed','cancelled','timeout')
-	`, definitionID)
-	var count int
-	if err := row.Scan(&count); err != nil {
-		return false, fmt.Errorf("count active operations: %w", err)
-	}
-	return count > 0, nil
-}
-
-// HasActiveStandardForDefinition returns true if a standard operation is active.
-func (s *operationStore) HasActiveStandardForDefinition(ctx context.Context, definitionID string) (bool, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM operations
 		WHERE release_definition_id = ?
-		  AND operation_type IN ('INSTALL','UPGRADE','ROLLBACK')
+		  AND operation_type != 'EMERGENCY'
 		  AND status NOT IN ('succeeded','failed','cancelled','timeout')
 	`, definitionID)
 	var count int
 	if err := row.Scan(&count); err != nil {
-		return false, fmt.Errorf("count active standard operations: %w", err)
-	}
-	return count > 0, nil
-}
-
-// HasPendingPromotionForDefinition returns true when Helm must wait for a
-// promoted ValuesRevision after a successful emergency change.
-func (s *operationStore) HasPendingPromotionForDefinition(ctx context.Context, definitionID string) (bool, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM operations
-		WHERE release_definition_id = ?
-		  AND operation_type = 'EMERGENCY'
-		  AND status = 'succeeded'
-		  AND convergence = 'require_promotion'
-		  AND values_revision_id = ''
-	`, definitionID)
-	var count int
-	if err := row.Scan(&count); err != nil {
-		return false, fmt.Errorf("count pending emergency promotions: %w", err)
+		return false, fmt.Errorf("count active operations: %w", err)
 	}
 	return count > 0, nil
 }
@@ -163,7 +235,6 @@ func (s *operationStore) List(ctx context.Context, definitionID string) ([]*stor
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
 			bundle_id, values_revision_id, expected_revision, values_patch,
-			emergency_action, convergence,
 			actor, created_at, updated_at, deadline, last_error
 		FROM operations
 		WHERE release_definition_id = ?
@@ -185,13 +256,54 @@ func (s *operationStore) List(ctx context.Context, definitionID string) ([]*stor
 	return ops, rows.Err()
 }
 
+// ListNonTerminal returns all operations that are not in a terminal state.
+// Used for recovery on service restart (REQ-023 AC-023-05).
+func (s *operationStore) ListNonTerminal(ctx context.Context) ([]*store.Operation, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, operation_type, status, release_definition_id,
+			idempotency_key, request_hash, state_version,
+			bundle_id, values_revision_id, expected_revision, values_patch,
+			actor, created_at, updated_at, deadline, last_error
+		FROM operations
+		WHERE status NOT IN ('succeeded','failed','cancelled','timeout')
+		ORDER BY created_at ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list non-terminal operations: %w", err)
+	}
+	defer rows.Close()
+
+	var ops []*store.Operation
+	for rows.Next() {
+		op, err := scanOperationFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		ops = append(ops, op)
+	}
+	return ops, rows.Err()
+}
+
+type operationQueryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func getOperation(ctx context.Context, queryer operationQueryer, id string) (*store.Operation, error) {
+	row := queryer.QueryRowContext(ctx, `
+		SELECT id, operation_type, status, release_definition_id,
+			idempotency_key, request_hash, state_version,
+			bundle_id, values_revision_id, expected_revision, values_patch,
+			actor, created_at, updated_at, deadline, last_error
+		FROM operations WHERE id = ?
+	`, id)
+	return scanOperation(row)
+}
 func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operation, error) {
 	var (
 		id, opType, status, defID, idemKey, reqHash string
 		stateVer, expectedRev                       int
 		bundleID, valuesRevID                       string
 		valuesPatch                                 []byte
-		emergencyAction, convergence                string
 		actorJSON                                   string
 		createdAt, updatedAt                        string
 		deadline                                    *string
@@ -202,7 +314,6 @@ func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operatio
 		&id, &opType, &status, &defID,
 		&idemKey, &reqHash, &stateVer,
 		&bundleID, &valuesRevID, &expectedRev, &valuesPatch,
-		&emergencyAction, &convergence,
 		&actorJSON, &createdAt, &updatedAt, &deadline, &lastError,
 	)
 	if err != nil {
@@ -214,7 +325,7 @@ func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operatio
 
 	return buildOperation(id, opType, status, defID, idemKey, reqHash,
 		stateVer, bundleID, valuesRevID, expectedRev, valuesPatch,
-		emergencyAction, convergence, actorJSON, createdAt, updatedAt, deadline, lastError)
+		actorJSON, createdAt, updatedAt, deadline, lastError)
 }
 
 func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
@@ -223,7 +334,6 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 		stateVer, expectedRev                       int
 		bundleID, valuesRevID                       string
 		valuesPatch                                 []byte
-		emergencyAction, convergence                string
 		actorJSON                                   string
 		createdAt, updatedAt                        string
 		deadline                                    *string
@@ -234,7 +344,6 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 		&id, &opType, &status, &defID,
 		&idemKey, &reqHash, &stateVer,
 		&bundleID, &valuesRevID, &expectedRev, &valuesPatch,
-		&emergencyAction, &convergence,
 		&actorJSON, &createdAt, &updatedAt, &deadline, &lastError,
 	)
 	if err != nil {
@@ -243,18 +352,13 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 
 	return buildOperation(id, opType, status, defID, idemKey, reqHash,
 		stateVer, bundleID, valuesRevID, expectedRev, valuesPatch,
-		emergencyAction, convergence, actorJSON, createdAt, updatedAt, deadline, lastError)
+		actorJSON, createdAt, updatedAt, deadline, lastError)
 }
 
-func buildOperation(
-	id, opType, status, defID, idemKey, reqHash string,
-	stateVer int,
-	bundleID, valuesRevID string,
-	expectedRev int,
-	valuesPatch []byte,
-	emergencyAction, convergence, actorJSON, createdAt, updatedAt string,
-	deadline *string,
-	lastError string,
+func buildOperation(id, opType, status, defID, idemKey, reqHash string,
+	stateVer int, bundleID, valuesRevID string, expectedRev int,
+	valuesPatch []byte, actorJSON, createdAt, updatedAt string,
+	deadline *string, lastError string,
 ) (*store.Operation, error) {
 	var actor store.ActorContext
 	if err := json.Unmarshal([]byte(actorJSON), &actor); err != nil {
@@ -291,8 +395,6 @@ func buildOperation(
 		ValuesRevisionID:    valuesRevID,
 		ExpectedRevision:    expectedRev,
 		ValuesPatch:         valuesPatch,
-		EmergencyAction:     store.EmergencyAction(emergencyAction),
-		Convergence:         store.EmergencyConvergence(convergence),
 		Actor:               actor,
 		CreatedAt:           ct,
 		UpdatedAt:           ut,
