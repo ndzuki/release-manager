@@ -25,8 +25,8 @@ func setupService(t *testing.T) (*Service, store.Store, func()) {
 	require.NoError(t, err)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	verifier := trust.NewStubVerifier(st.Verifications(), logger)
-	svc := NewService(st, verifier, "staging", logger)
+	verifier := trust.NewStubVerifier(st.Verifications(), nil, logger)
+	svc := NewService(st, verifier, "staging", nil, logger)
 
 	return svc, st, func() { st.Close() }
 }

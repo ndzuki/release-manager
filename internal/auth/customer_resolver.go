@@ -50,13 +50,4 @@ func (r *ConnectCustomerResolver) Resolve(ctx context.Context, customerID string
 	}, nil
 }
 
-// StubCustomerResolver always returns ErrNotFound for use when no orchestrator is available.
-type StubCustomerResolver struct{}
-
-// Resolve returns ErrNotFound for every lookup.
-func (StubCustomerResolver) Resolve(_ context.Context, _ string) (*store.Customer, error) {
-	return nil, store.ErrNotFound
-}
-
-var _ CustomerResolver = StubCustomerResolver{}
 var _ CustomerResolver = (*ConnectCustomerResolver)(nil)

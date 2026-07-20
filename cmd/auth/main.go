@@ -46,7 +46,7 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 
 	jwtMgr := auth.NewJWTManager(signingKey, 15*time.Minute, 7*24*time.Hour)
 	limiter := auth.NewRateLimiter(5, time.Minute)
-	resolver := auth.StubCustomerResolver{}
+	resolver := auth.StubResolver{}
 	auth.StartSessionCleanup(s.ctx, st.AuthSessions(), time.Hour, logger)
 
 	enforcer, err := auth.NewEnforcer(st, logger)

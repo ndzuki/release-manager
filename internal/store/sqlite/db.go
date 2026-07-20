@@ -39,8 +39,6 @@ type Store struct {
 	custEvents      *customerEventStore
 	defEvents       *definitionEventStore
 	preflight       *preflightStore
-	scanResults     *scanResultStore
-	vulnExcs        *vulnerabilityExceptionStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -92,8 +90,6 @@ func Open(dsn string) (*Store, error) {
 	s.verifs = &verificationStore{db: db}
 	s.custEvents = &customerEventStore{db: db}
 	s.routes = &clusterRouteStore{db: db}
-	s.scanResults = &scanResultStore{db: db}
-	s.vulnExcs = &vulnerabilityExceptionStore{db: db}
 	return s, nil
 }
 
@@ -169,12 +165,6 @@ func (s *Store) ClusterRoutes() store.ClusterRouteStore { return s.routes }
 // Inventories returns the InventoryStore.
 func (s *Store) Inventories() store.InventoryStore { return s.invs }
 
-
-// ScanResults returns the ScanResultStore.
-func (s *Store) ScanResults() store.ScanResultStore { return s.scanResults }
-
-// VulnerabilityExceptions returns the VulnerabilityExceptionStore.
-func (s *Store) VulnerabilityExceptions() store.VulnerabilityExceptionStore { return s.vulnExcs }
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
 
