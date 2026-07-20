@@ -3,6 +3,7 @@ package sqlite_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -236,6 +237,67 @@ func TestSessionLifecycle(t *testing.T) {
 	assert.Equal(t, store.SessionOffline, got.Status)
 }
 
+func TestSessionEstablish(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	cust := &store.Customer{ID: uuid.New().String(), Name: "Session Reconnect", Slug: "session-reconnect"}
+	require.NoError(t, st.Customers().Create(ctx, cust))
+	cl := &store.Cluster{ID: uuid.New().String(), Name: "c", CustomerID: cust.ID}
+	require.NoError(t, st.Clusters().Create(ctx, cl))
+	op := &store.Operator{ID: uuid.New().String(), CustomerID: cust.ID, ClusterID: cl.ID, CertSerial: "SESSION-ESTABLISH"}
+	require.NoError(t, st.Operators().Create(ctx, op))
+
+	first := &store.Session{
+		ID:                  uuid.New().String(),
+		OperatorID:          op.ID,
+		InstanceID:          "instance-1",
+		Version:             "1.0.0",
+		Capabilities:        map[string]string{"helm": "true"},
+		ActiveConfigVersion: "config-v1",
+		ExpiresAt:           time.Now().Add(time.Hour),
+	}
+	require.NoError(t, st.Sessions().Establish(ctx, first))
+
+	got, err := st.Sessions().GetActiveByOperator(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, first.ID, got.ID)
+	assert.Equal(t, first.InstanceID, got.InstanceID)
+	assert.Equal(t, first.Capabilities, got.Capabilities)
+
+	reconnect := &store.Session{
+		ID:                  uuid.New().String(),
+		OperatorID:          op.ID,
+		InstanceID:          "instance-1",
+		Version:             "1.0.1",
+		Capabilities:        map[string]string{"helm": "true", "inventory": "true"},
+		ActiveConfigVersion: "config-v2",
+		ExpiresAt:           time.Now().Add(time.Hour),
+	}
+	require.NoError(t, st.Sessions().Establish(ctx, reconnect))
+
+	old, err := st.Sessions().Get(ctx, first.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.SessionOffline, old.Status)
+	got, err = st.Sessions().GetActiveByOperator(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, reconnect.ID, got.ID)
+	assert.Equal(t, "1.0.1", got.Version)
+	assert.Equal(t, "config-v2", got.ActiveConfigVersion)
+
+	duplicate := &store.Session{
+		ID:         uuid.New().String(),
+		OperatorID: op.ID,
+		InstanceID: "instance-2",
+		ExpiresAt:  time.Now().Add(time.Hour),
+	}
+	assert.ErrorIs(t, st.Sessions().Establish(ctx, duplicate), store.ErrDuplicateKey)
+
+	got, err = st.Sessions().GetActiveByOperator(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, reconnect.ID, got.ID)
+}
+
 func TestOutboxStateMachine(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
@@ -277,6 +339,87 @@ func TestOutboxStateMachine(t *testing.T) {
 	assert.Equal(t, `{"release":"v1.2.3"}`, got.ResultJSON)
 }
 
+func TestOperationTransition_OptimisticLockAndEvent(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "operation-transition",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "operation-transition-key",
+		RequestHash:         "request-hash",
+		StateVersion:        4,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	updated, err := st.Operations().Transition(ctx, op.ID, store.StatusSucceeded, op.StateVersion, "")
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, updated.Status)
+	assert.Equal(t, 5, updated.StateVersion)
+
+	var oldStatus, newStatus string
+	var stateVersion int
+	var operationType, definitionID string
+	err = st.DB().QueryRowContext(ctx, `
+		SELECT operation_type, release_definition_id, old_status, new_status, state_version
+		FROM operation_events
+		WHERE operation_id = ?
+	`, op.ID).Scan(&operationType, &definitionID, &oldStatus, &newStatus, &stateVersion)
+	require.NoError(t, err)
+	assert.Equal(t, string(store.OperationInstall), operationType)
+	assert.Equal(t, def.ID, definitionID)
+	assert.Equal(t, string(store.StatusRunning), oldStatus)
+	assert.Equal(t, string(store.StatusSucceeded), newStatus)
+	assert.Equal(t, 5, stateVersion)
+
+	rows, err := st.DB().QueryContext(ctx, `SELECT * FROM operation_events LIMIT 0`)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rows.Close()) })
+	columns, err := rows.Columns()
+	require.NoError(t, err)
+	assert.NotContains(t, columns, "values_patch")
+	assert.NotContains(t, columns, "actor")
+
+	persisted, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, persisted.Status)
+	assert.Equal(t, 5, persisted.StateVersion)
+}
+
+func TestOperationCreateIfAvailable_AllowsEmergencyPeers(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+
+	first := &store.Operation{
+		ID:                  "emergency-one",
+		OperationType:       store.OperationEmergency,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "emergency-one-key",
+	}
+	second := &store.Operation{
+		ID:                  "emergency-two",
+		OperationType:       store.OperationEmergency,
+		Status:              store.StatusPending,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "emergency-two-key",
+	}
+	require.NoError(t, st.Operations().CreateIfAvailable(ctx, first))
+	require.NoError(t, st.Operations().CreateIfAvailable(ctx, second))
+
+	standard := &store.Operation{
+		ID:                  "standard-blocked",
+		OperationType:       store.OperationUpgrade,
+		Status:              store.StatusPending,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "standard-blocked-key",
+	}
+	assert.ErrorIs(t, st.Operations().CreateIfAvailable(ctx, standard), store.ErrReleaseBusy)
+}
+
 func TestGetNextPendingMaxInflight(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
@@ -311,7 +454,7 @@ func createTestDefinition(t *testing.T, st *sqlitestore.Store) *store.ReleaseDef
 		ClusterID:  uuid.New().String(),
 		Status:     store.DefStatusDraft,
 	}
-	require.NoError(t, st.Definitions().Create(ctx, def))
+	require.NoError(t, st.Definitions().Create(ctx, def, nil))
 	return def
 }
 
@@ -446,4 +589,194 @@ func TestValuesRevisionNotFound(t *testing.T) {
 
 	_, err := st.Values().Get(ctx, "nonexistent")
 	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
+// ── ReleaseDefinition store tests ───────────────────────────────
+
+func TestDefinitionCreateDuplicateKey(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	def1 := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "dup-def",
+		CustomerID:        "cust-dup",
+		ClusterID:         "cls-dup",
+		Namespace:         "default",
+		ReleaseName:       "same-name",
+		ChartName:         "nginx",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def1, nil))
+
+	def2 := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "dup-def-2",
+		CustomerID:        "cust-dup",
+		ClusterID:         "cls-dup",
+		Namespace:         "default",
+		ReleaseName:       "same-name",
+		ChartName:         "nginx",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	err := st.Definitions().Create(ctx, def2, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrDuplicateKey)
+}
+
+func TestDefinitionUpdateOptimisticLock(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	def := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "lock-def",
+		CustomerID:        uuid.New().String(),
+		ClusterID:         uuid.New().String(),
+		Namespace:         "ns",
+		ReleaseName:       "lock-rel",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def, nil))
+
+	// Update with correct version succeeds.
+	def.ReleaseName = "lock-rel-v2"
+	updated, err := st.Definitions().Update(ctx, def, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, updated.OptimisticVersion)
+
+	// Update with old version fails.
+	def.OptimisticVersion = 1 // stale
+	_, err = st.Definitions().Update(ctx, def, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrOptimisticLock)
+}
+
+func TestDefinitionUpdateDuplicateKey(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	def1 := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "key-def-1",
+		CustomerID:        "cust-key",
+		ClusterID:         "cls-key",
+		Namespace:         "ns",
+		ReleaseName:       "rel-a",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def1, nil))
+
+	def2 := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "key-def-2",
+		CustomerID:        "cust-key",
+		ClusterID:         "cls-key",
+		Namespace:         "ns",
+		ReleaseName:       "rel-b",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def2, nil))
+
+	// Try to update def2 to collide with def1's unique key.
+	def2.ReleaseName = "rel-a"
+	_, err := st.Definitions().Update(ctx, def2, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrDuplicateKey)
+}
+
+func TestDefinitionListFiltering(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	seed := func(custID, clsID, ns, rel string, status store.DefinitionStatus) {
+		require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+			ID:                uuid.New().String(),
+			Name:              rel,
+			CustomerID:        custID,
+			ClusterID:         clsID,
+			Namespace:         ns,
+			ReleaseName:       rel,
+			Status:            status,
+			OptimisticVersion: 1,
+		}, nil))
+	}
+
+	seed("cust-A", "cls-A", "ns1", "rel-1", store.DefStatusActive)
+	seed("cust-A", "cls-A", "ns2", "rel-2", store.DefStatusActive)
+	seed("cust-B", "cls-B", "ns1", "rel-3", store.DefStatusDisabled)
+
+	// List by customer.
+	defs, err := st.Definitions().List(ctx, "cust-A", "", false)
+	require.NoError(t, err)
+	assert.Len(t, defs, 2)
+
+	// List all including disabled.
+	defs, err = st.Definitions().List(ctx, "", "", true)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(defs), 3)
+
+	// Normal list excludes disabled.
+	defs, err = st.Definitions().List(ctx, "", "", false)
+	require.NoError(t, err)
+	for _, d := range defs {
+		assert.NotEqual(t, store.DefStatusDisabled, d.Status)
+	}
+}
+
+func TestDefinitionEventPersistence(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	def := &store.ReleaseDefinition{
+		ID:                uuid.New().String(),
+		Name:              "evt-def",
+		CustomerID:        uuid.New().String(),
+		ClusterID:         uuid.New().String(),
+		ReleaseName:       "evt-rel",
+		Status:            store.DefStatusActive,
+		OptimisticVersion: 1,
+	}
+	event := &store.ReleaseDefinitionEvent{
+		ID:           uuid.New().String(),
+		DefinitionID: def.ID,
+		EventType:    "definition_created",
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def, event))
+
+	events, err := st.DefinitionEvents().List(ctx, def.ID)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "definition_created", events[0].EventType)
+	assert.Equal(t, def.ID, events[0].DefinitionID)
+}
+
+func TestInventoryDefinitionAssociation(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	item := &store.ReleaseInventory{
+		ReleaseDefinitionID: "definition-1",
+		CustomerID:          "customer-1",
+		ClusterID:           "cluster-1",
+		Namespace:           "apps",
+		ReleaseName:         "example",
+		Chart:               "example-chart",
+		ChartVersion:        "1.0.0",
+		Revision:            1,
+		Status:              "deployed",
+		InventoryStatus:     store.InventoryActive,
+		LastSyncID:          "sync-1",
+	}
+	require.NoError(t, st.Inventories().Upsert(ctx, item))
+
+	items, err := st.Inventories().ListByCluster(ctx, "customer-1", "cluster-1")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "definition-1", items[0].ReleaseDefinitionID)
 }
