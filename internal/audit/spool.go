@@ -33,7 +33,7 @@ func (r *SpoolRecoverer) Recover(ctx context.Context, spoolPath string) (int, er
 		}
 		return 0, fmt.Errorf("open spool file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var events []*store.AuditEvent
 	scanner := bufio.NewScanner(f)
@@ -48,21 +48,23 @@ func (r *SpoolRecoverer) Recover(ctx context.Context, spoolPath string) (int, er
 		}
 		var ev store.AuditEvent
 		if err := json.Unmarshal(line, &ev); err != nil {
-			r.logger.Warn("skipping corrupt spool line",
-				"line", lineNo,
-				"error", err,
-			)
-			continue
+			r.logger.Warn("corrupt audit spool line retained", "line", lineNo, "error", err)
+			return 0, fmt.Errorf("decode spool line %d: %w", lineNo, err)
 		}
-		events = append(events, &ev)
+		normalized, err := Normalize(&ev)
+		if err != nil {
+			return 0, fmt.Errorf("normalize spool line %d: %w", lineNo, err)
+		}
+		events = append(events, normalized)
 	}
 	if err := scanner.Err(); err != nil {
 		return 0, fmt.Errorf("scan spool file: %w", err)
 	}
 
 	if len(events) == 0 {
-		// Remove empty spool file.
-		_ = os.Remove(spoolPath)
+		if err := os.Remove(spoolPath); err != nil && !os.IsNotExist(err) {
+			return 0, fmt.Errorf("remove empty spool file: %w", err)
+		}
 		return 0, nil
 	}
 
@@ -71,10 +73,7 @@ func (r *SpoolRecoverer) Recover(ctx context.Context, spoolPath string) (int, er
 	}
 
 	if err := os.Remove(spoolPath); err != nil {
-		r.logger.Warn("failed to remove spool file after successful recovery",
-			"path", spoolPath,
-			"error", err,
-		)
+		return len(events), fmt.Errorf("remove recovered spool file: %w", err)
 	}
 	r.logger.Info("spool recovery complete",
 		"events", len(events),

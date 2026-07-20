@@ -1,69 +1,43 @@
 # =============================================================================
-# Release Manager — Audit Query & Export APIs
-# Environment: release-api :8087
+# Release Manager — Audit Collection API
+# Environment: orchestrator :8083
 # =============================================================================
 
-@BASE_URL = http://localhost:8087
-@AUDIT_CONNECT = {{BASE_URL}}/audit.v1.AuditService
-
-### Query Audit Events
-# @name QueryAuditEvents
-POST {{AUDIT_CONNECT}}/QueryAuditEvents
+### Emit API key and service audit events
+# @name EmitAudit
+POST http://localhost:8083/audit.v1.AuditService/Emit
 Content-Type: application/json
-Authorization: Bearer {{token}}
-
-{
-  "filter": {
-    "resource_type": "release_operation",
-    "action": "create",
-    "time_range": {
-      "start": "2026-07-01T00:00:00Z",
-      "end": "2026-07-15T00:00:00Z"
-    }
-  },
-  "pagination": {
-    "page_size": 20,
-    "page_token": ""
-  }
-}
-
-### Export Audit Events
-# @name ExportAuditEvents
-POST {{AUDIT_CONNECT}}/ExportAuditEvents
-Content-Type: application/json
-Authorization: Bearer {{token}}
-
-{
-  "filter": {
-    "time_range": {
-      "start": "2026-07-01T00:00:00Z",
-      "end": "2026-07-15T00:00:00Z"
-    }
-  }
-}
-
-### Emit Audit Event
-# @name EmitAuditEvent
-POST {{AUDIT_CONNECT}}/Emit
-Content-Type: application/json
-Authorization: Bearer {{token}}
 
 {
   "events": [
     {
       "actor": {
-        "kind": "ACTOR_KIND_USER",
-        "id": "user-001",
-        "organization_id": "org-001",
-        "role": "release_admin"
+        "kind": "ACTOR_KIND_API_KEY",
+        "id": "key-ci-release",
+        "organizationId": "org-001"
       },
-      "resource_type": "release_operation",
-      "resource_id": "operation-001",
-      "action": "create",
+      "resourceType": "release",
+      "resourceId": "release-001",
+      "action": "update",
       "status": "accepted",
+      "changeSummary": "password=must-not-persist",
       "metadata": {
-        "source": "kulala"
+        "token": "must-not-persist",
+        "request_id": "req-001"
       }
+    },
+    {
+      "actor": {
+        "kind": "ACTOR_KIND_SERVICE",
+        "id": "release-orchestrator"
+      },
+      "resourceType": "operation",
+      "resourceId": "op-001",
+      "action": "create",
+      "status": "accepted"
     }
   ]
 }
+
+### Health
+GET http://localhost:8083/health
