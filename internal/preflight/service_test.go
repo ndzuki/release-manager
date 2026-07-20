@@ -180,6 +180,7 @@ func TestRun_IdempotentReuse(t *testing.T) {
 	assert.True(t, out2.Reused, "second call must reuse cached result")
 	assert.Equal(t, out1.Passed, out2.Passed)
 }
+
 // AC-045-01: Digest mismatch → digest_mismatch.
 func TestRun_DigestMismatch(t *testing.T) {
 	bundle := bundleFixture(nil) // chart-only, expected digest sha256:abc123
@@ -357,9 +358,9 @@ func TestRun_RoutingVersionInvalidatesCache(t *testing.T) {
 
 	// Change routes — routing version must differ.
 	in2 := Input{
-		OperationID:       "op-008",
-		ClusterID:         "cls-001",
-		Bundle:            bundle,
+		OperationID: "op-008",
+		ClusterID:   "cls-001",
+		Bundle:      bundle,
 		Routes: []*store.ClusterRoute{{
 			ID:           "r-other",
 			ClusterID:    "cls-001",

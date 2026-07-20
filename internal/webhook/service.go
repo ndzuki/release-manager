@@ -18,6 +18,7 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	webhookv1 "github.com/ndzuki/release-manager/api/gen/webhook/v1"
 	webhookv1connect "github.com/ndzuki/release-manager/api/gen/webhook/v1/webhookv1connect"
+	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/store"
 	"github.com/ndzuki/release-manager/internal/trust"
 )
@@ -27,11 +28,16 @@ type Service struct {
 	store    store.Store
 	verifier trust.Verifier
 	logger   *slog.Logger
+	audit    audit.Sink
 }
 
 // NewService creates a new webhook Connect service.
-func NewService(st store.Store, verifier trust.Verifier, logger *slog.Logger) *Service {
-	return &Service{store: st, verifier: verifier, logger: logger}
+func NewService(st store.Store, verifier trust.Verifier, logger *slog.Logger, auditSink ...audit.Sink) *Service {
+	service := &Service{store: st, verifier: verifier, logger: logger}
+	if len(auditSink) > 0 {
+		service.audit = auditSink[0]
+	}
+	return service
 }
 
 // SubmitReleaseBundle validates and persists a release bundle from CI.
@@ -106,61 +112,36 @@ func (s *Service) SubmitReleaseBundle(
 // IngestArtifact records a raw artifact event (e.g. Harbor webhook) without
 // triggering any release pipeline.
 func (s *Service) IngestArtifact(
-	ctx context.Context,
+	_ context.Context,
 	req *connect.Request[webhookv1.IngestArtifactRequest],
 ) (*connect.Response[webhookv1.IngestArtifactResponse], error) {
 	msg := req.Msg
-
-	now := time.Now().UTC()
-
-	audit := &store.AuditEvent{
-		ID:             uuid.New().String(),
-		ActorKind:      store.AuditActorSystem,
-		ActorID:        "harbor-webhook",
-		OrganizationID: "",
-		Role:           "",
-		ResourceType:   "artifact",
-		ResourceID:     msg.ArtifactUrl,
-		Action:         "ingest",
-		Status:         "recorded",
-		DurationMs:     0,
-		ChangeSummary: fmt.Sprintf("source=%s type=%s", msg.Source, msg.ArtifactType),
-		Metadata:       msg.Metadata,
-		CreatedAt:      now,
-	}
-
-	if err := s.store.AuditEvents().Create(ctx, audit); err != nil {
-		s.logger.Error("failed to record artifact event", "err", err)
-		// Non-fatal: we still return OK so the webhook doesn't retry.
-	}
-
-	// Record as CandidateArtifact for lifecycle GC (REQ-069).
-	caType := store.ArtifactImage
-	if msg.ArtifactType != "" {
-		switch strings.ToLower(msg.ArtifactType) {
-		case "chart":
-			caType = store.ArtifactChart
-		case "image":
-			caType = store.ArtifactImage
+	event := audit.NewEvent(
+		store.AuditActorService,
+		"harbor-webhook",
+		"",
+		"",
+		"artifact",
+		msg.ArtifactUrl,
+		"ingest",
+		"recorded",
+		fmt.Sprintf("source=%s type=%s", msg.Source, msg.ArtifactType),
+		msg.Metadata,
+	)
+	if s.audit != nil {
+		result := s.audit.Emit(event)
+		if !result.Accepted {
+			s.logger.Warn("audit event rejected", "event_id", result.EventID, "code", result.Code)
 		}
-	}
-	// Use artifact_url + digest as the candidate ref/digest.
-	// Use artifact_url as the digest (no explicit digest field in IngestArtifactRequest).
-	ca := &store.CandidateArtifact{
-		ArtifactType: caType,
-		Ref:          msg.ArtifactUrl,
-		Digest:       fmt.Sprintf("%x", sha256.Sum256([]byte(msg.ArtifactUrl))),
-		CreatedAt:    now,
-	}
-	if err := s.store.CandidateArtifacts().Create(ctx, ca); err != nil {
-		s.logger.Warn("failed to record candidate artifact", "err", err, "url", msg.ArtifactUrl)
 	}
 
 	s.logger.Info("artifact event recorded",
+		"source", msg.Source,
+		"type", msg.ArtifactType,
 		"url", msg.ArtifactUrl,
-		"candidate_id", ca.ID,
 	)
-	return connect.NewResponse(&webhookv1.IngestArtifactResponse{}), nil
+
+	return connect.NewResponse(&webhookv1.IngestArtifactResponse{Bundle: nil}), nil
 }
 
 // validateSubmitRequest performs schema-level validation.

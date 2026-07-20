@@ -13,11 +13,20 @@ message LoginRequest {
   string password = 2;
 }
 
+message SessionUser {
+  string id = 1;
+  string username = 2;
+  repeated string roles = 3;
+  string active_org_id = 4;
+}
+
 message LoginResponse {
-  string access_token = 1;
-  string refresh_token = 2;
+  SessionUser user = 1;
+  repeated Organization organizations = 2;
   int64 expires_at = 3;
-  string token_type = 4;
+  string access_token = 4;
+  string refresh_token = 5;
+  string token_type = 6;
 }
 
 message LogoutRequest {
@@ -31,10 +40,12 @@ message RefreshTokenRequest {
 }
 
 message RefreshTokenResponse {
-  string access_token = 1;
-  string refresh_token = 2;
+  SessionUser user = 1;
+  repeated Organization organizations = 2;
   int64 expires_at = 3;
-  string token_type = 4;
+  string access_token = 4;
+  string refresh_token = 5;
+  string token_type = 6;
 }
 
 message ValidateTokenRequest {
@@ -43,9 +54,46 @@ message ValidateTokenRequest {
 
 message ValidateTokenResponse {
   bool valid = 1;
-  string user_id = 2;
-  repeated string roles = 3;
-  string org_id = 4;
+  SessionUser user = 2;
+  repeated Organization organizations = 3;
+  int64 expires_at = 4;
+  string user_id = 5;
+  repeated string roles = 6;
+  string org_id = 7;
+}
+
+message GetInitStatusRequest {}
+
+message GetInitStatusResponse {
+  bool initialized = 1;
+}
+
+message InitializeRequest {
+  string username = 1;
+  string password = 2;
+  string organization_name = 3;
+}
+
+message InitializeResponse {
+  SessionUser user = 1;
+  repeated Organization organizations = 2;
+  int64 expires_at = 3;
+  string access_token = 4;
+  string refresh_token = 5;
+  string token_type = 6;
+}
+
+message SwitchOrganizationRequest {
+  string org_id = 1;
+}
+
+message SwitchOrganizationResponse {
+  SessionUser user = 1;
+  repeated Organization organizations = 2;
+  int64 expires_at = 3;
+  string access_token = 4;
+  string refresh_token = 5;
+  string token_type = 6;
 }
 
 message ChangePasswordRequest {
@@ -56,10 +104,13 @@ message ChangePasswordRequest {
 message ChangePasswordResponse {}
 
 service AuthService {
+  rpc GetInitStatus(GetInitStatusRequest) returns (GetInitStatusResponse);
+  rpc Initialize(InitializeRequest) returns (InitializeResponse);
   rpc Login(LoginRequest) returns (LoginResponse);
   rpc Logout(LogoutRequest) returns (LogoutResponse);
   rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
   rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+  rpc SwitchOrganization(SwitchOrganizationRequest) returns (SwitchOrganizationResponse);
   rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
 }
 
@@ -226,11 +277,38 @@ service BindingService {
   rpc RevokeBinding(RevokeBindingRequest) returns (RevokeBindingResponse);
 }
 
-// --- External IdP (REQ-028) — P1 deferred, interface only ---
+// --- External IdP (REQ-028) ---
 
 message IdPConfig {
-  string provider = 1;   // oidc, ldap, dingtalk
+  string provider = 1;
   string client_id = 2;
   string issuer_url = 3;
   map<string, string> role_mappings = 4;
+}
+
+message AuthenticateLDAPRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message AuthenticateLDAPResponse {
+  LoginResponse session = 1;
+}
+
+message GetOIDCAuthURLRequest {}
+
+message GetOIDCAuthURLResponse {
+  string url = 1;
+}
+
+message GetDingTalkAuthURLRequest {}
+
+message GetDingTalkAuthURLResponse {
+  string url = 1;
+}
+
+service ExternalIdentityService {
+  rpc AuthenticateLDAP(AuthenticateLDAPRequest) returns (AuthenticateLDAPResponse);
+  rpc GetOIDCAuthURL(GetOIDCAuthURLRequest) returns (GetOIDCAuthURLResponse);
+  rpc GetDingTalkAuthURL(GetDingTalkAuthURLRequest) returns (GetDingTalkAuthURLResponse);
 }
