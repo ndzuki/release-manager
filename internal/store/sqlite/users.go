@@ -112,3 +112,9 @@ func scanUser(row interface{ Scan(...interface{}) error }) (*store.User, error) 
 	u.UpdatedAt = updatedAt
 	return &u, nil
 }
+
+func (s *userStore) Count(ctx context.Context, orgID string) (int64, error) {
+	var count int64
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE id IN (SELECT user_id FROM organization_members WHERE organization_id = ?)`, orgID).Scan(&count)
+	return count, err
+}

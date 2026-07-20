@@ -25,6 +25,8 @@ var (
 	ErrOptimisticLock = errors.New("store: optimistic lock conflict")
 	ErrDuplicateKey   = errors.New("store: duplicate key")
 	ErrReleaseBusy    = errors.New("store: release busy")
+	ErrInvalidCursor  = errors.New("store: invalid cursor")
+	ErrBindingRevoked = errors.New("store: binding revoked")
 )
 
 // OperationType classifies the kind of release operation.
@@ -418,6 +420,36 @@ type AuditEvent struct {
 	CreatedAt      time.Time
 }
 
+
+// AuditEventFilter narrows audit event queries by optional criteria.
+type AuditEventFilter struct {
+	OrganizationID string
+	ResourceType   string
+	ResourceID     string
+	ActorID        string
+	Action         string
+	Status         string
+	Since          *time.Time
+	Until          *time.Time
+}
+
+// AuditEventPage is a cursor-based page of audit events.
+type AuditEventPage struct {
+	Events     []*AuditEvent
+	HasMore    bool
+	NextCursor string
+}
+
+// AuditExport represents a requested audit export job.
+type AuditExport struct {
+	ID             string
+	OrganizationID string
+	Since          time.Time
+	Until          time.Time
+	Status         string
+	CreatedAt      time.Time
+}
+
 // NotificationChannel is the delivery channel for a notification.
 type NotificationChannel string
 
@@ -494,6 +526,60 @@ type EmergencyPayload struct {
 	Convergence EmergencyConvergence
 }
 
+
+// --- Trust root domain types (REQ-043) ---
+
+// TrustRootState is the lifecycle state of a trust root.
+type TrustRootState string
+
+const (
+	TrustRootPending TrustRootState = "pending"
+	TrustRootActive  TrustRootState = "active"
+	TrustRootGrace   TrustRootState = "grace"
+	TrustRootRetired TrustRootState = "retired"
+	TrustRootRevoked TrustRootState = "revoked"
+)
+
+func (s TrustRootState) Valid() bool {
+	switch s {
+	case TrustRootPending, TrustRootActive, TrustRootGrace, TrustRootRetired, TrustRootRevoked:
+		return true
+	}
+	return false
+}
+
+type TrustRoot struct {
+	ID             string
+	Environment    string
+	KeyID          string
+	PublicKeyPEM   string
+	Issuer         string
+	SubjectPattern string
+	State          TrustRootState
+	ValidFrom      time.Time
+	GraceUntil     *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	RevokedAt      *time.Time
+}
+
+type TrustPolicyMeta struct {
+	Environment     string
+	Version         int64
+	RevocationEpoch int64
+}
+
+type TrustRootStore interface {
+	Create(ctx context.Context, r *TrustRoot) error
+	Get(ctx context.Context, id string) (*TrustRoot, error)
+	ListByEnvironment(ctx context.Context, env string) ([]*TrustRoot, error)
+	GetActiveByEnvironment(ctx context.Context, env string, at time.Time) ([]*TrustRoot, error)
+	Update(ctx context.Context, r *TrustRoot) error
+	GetPolicy(ctx context.Context, env string) (*TrustPolicyMeta, error)
+	BumpPolicy(ctx context.Context, env string) (version int64, epoch int64, err error)
+	BumpRevocationEpoch(ctx context.Context, env string) (int64, error)
+}
+
 // --- Bundle domain types (REQ-011) ---
 
 // BundleStatus is the lifecycle state of a ReleaseBundle.
@@ -557,14 +643,17 @@ type TrustPolicy struct {
 
 // VerificationRecord captures the result of an artifact trust verification.
 type VerificationRecord struct {
-	ID             string
-	ArtifactDigest string
-	PolicyVersion  string
-	Status         VerificationStatus
-	Issuer         string
-	Subject        string
-	Summary        string
-	CreatedAt      time.Time
+	ID              string
+	ArtifactDigest  string
+	PolicyVersion   string
+	Status          VerificationStatus
+	RootID          string
+	KeyID           string
+	RevocationEpoch int64
+	Issuer          string
+	Subject         string
+	Summary         string
+	CreatedAt       time.Time
 }
 
 // PreflightCacheKey identifies an artifact preflight result.
@@ -582,6 +671,31 @@ type PreflightRecord struct {
 	Key        PreflightCacheKey
 	ResultJSON []byte
 	CreatedAt  time.Time
+}
+
+
+// ScanResultRecord is the serializable domain type for a vulnerability scan result.
+type ScanResultRecord struct {
+	ID             string
+	ArtifactDigest string
+	SBOMRef        string
+	Scanner        string
+	ResultVersion  string
+	SeverityJSON   []byte
+	FindingsJSON   []byte
+	ScannedAt      time.Time
+	CreatedAt      time.Time
+}
+
+// VulnerabilityExceptionRecord is the serializable domain type for a time-bounded exception.
+type VulnerabilityExceptionRecord struct {
+	ID             string
+	FindingID      string
+	ArtifactDigest string
+	Actor          string
+	Reason         string
+	ExpiresAt      time.Time
+	CreatedAt      time.Time
 }
 
 // ── Inventory domain types (REQ-017) ───────────────────────────────
@@ -780,6 +894,7 @@ type UserStore interface {
 	GetByUsername(ctx context.Context, username string) (*User, error)
 	GetByProviderSubject(ctx context.Context, provider, subject string) (*User, error)
 	Update(ctx context.Context, u *User) error
+	Count(ctx context.Context, orgID string) (int64, error)
 }
 
 // AuthSessionStore defines the persistence contract for auth sessions (REQ-025).
@@ -809,7 +924,6 @@ type OrganizationMemberStore interface {
 	ListByOrg(ctx context.Context, orgID string) ([]*OrganizationMember, error)
 	ListByUser(ctx context.Context, userID string) ([]*OrganizationMember, error)
 	Update(ctx context.Context, m *OrganizationMember) error
-	Delete(ctx context.Context, orgID, userID string) error
 }
 
 // BindingStore defines the persistence contract for org-customer bindings (REQ-049).
@@ -818,13 +932,23 @@ type BindingStore interface {
 	Get(ctx context.Context, id string) (*OrgCustomerBinding, error)
 	GetByOrgAndCustomer(ctx context.Context, orgID, customerID string) (*OrgCustomerBinding, error)
 	ListByOrg(ctx context.Context, orgID string) ([]*OrgCustomerBinding, error)
+	ListByCustomer(ctx context.Context, customerID string) ([]*OrgCustomerBinding, error)
 	Update(ctx context.Context, b *OrgCustomerBinding) error
+	SetStatus(ctx context.Context, id string, s BindingStatus) error
+	RequireActive(ctx context.Context, orgID, customerID string) error
 }
 
 // AuditEventStore defines the persistence contract for audit events (REQ-050).
 type AuditEventStore interface {
 	Create(ctx context.Context, e *AuditEvent) error
 	CreateBatch(ctx context.Context, events []*AuditEvent) error
+	Query(ctx context.Context, filter AuditEventFilter, cursor string, limit int) (*AuditEventPage, error)
+	GetByID(ctx context.Context, id string) (*AuditEvent, error)
+	Count(ctx context.Context, filter AuditEventFilter) (int64, error)
+}
+
+type AuditExportStore interface {
+	CreateWithEvent(ctx context.Context, exportRecord *AuditExport, event *AuditEvent) error
 }
 
 // NotificationStore defines the persistence contract for notification jobs (REQ-031).
@@ -848,6 +972,20 @@ type VerificationStore interface {
 type PreflightStore interface {
 	Create(ctx context.Context, rec *PreflightRecord) error
 	GetByKey(ctx context.Context, key PreflightCacheKey) (*PreflightRecord, error)
+}
+
+
+// ScanResultStore defines the persistence contract for vulnerability scan results.
+type ScanResultStore interface {
+	Create(ctx context.Context, rec *ScanResultRecord) error
+	GetLatest(ctx context.Context, artifactDigest, scanner string) (*ScanResultRecord, error)
+}
+
+// VulnerabilityExceptionStore defines the persistence contract for vulnerability exceptions.
+type VulnerabilityExceptionStore interface {
+	Create(ctx context.Context, exc *VulnerabilityExceptionRecord) error
+	ListByArtifact(ctx context.Context, artifactDigest string) ([]*VulnerabilityExceptionRecord, error)
+	Get(ctx context.Context, id string) (*VulnerabilityExceptionRecord, error)
 }
 
 // --- Cluster artifact routing domain types (REQ-014) ---
@@ -940,8 +1078,12 @@ type Store interface {
 	OrgMembers() OrganizationMemberStore
 	Bindings() BindingStore
 	AuditEvents() AuditEventStore
+	AuditExports() AuditExportStore
+	TrustRoots() TrustRootStore
 	Notifications() NotificationStore
 	Bundles() BundleStore
+	ScanResults() ScanResultStore
+	VulnerabilityExceptions() VulnerabilityExceptionStore
 	Verifications() VerificationStore
 	PreflightResults() PreflightStore
 	CustomerEvents() CustomerEventStore
