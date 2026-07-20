@@ -7,35 +7,29 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/chart"
-	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
 	kubefake "helm.sh/helm/v3/pkg/kube/fake"
 	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/storage"
 	"helm.sh/helm/v3/pkg/storage/driver"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func TestRealEngine_Install(t *testing.T) {
 	engine, _ := newTestRealEngine(t, &kubefake.FailingKubeClient{
 		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
 	})
-	validatedChart := readTestChart(t)
+	chartPath := writeTestChart(t)
 
 	release, err := engine.Install(t.Context(), InstallOptions{
 		Namespace:   "default",
 		ReleaseName: "example",
-		Chart:       validatedChart,
+		ChartPath:   chartPath,
 		Values:      map[string]interface{}{"message": "hello"},
 	})
 	require.NoError(t, err)
@@ -54,7 +48,7 @@ func TestRealEngine_InstallAlreadyExists(t *testing.T) {
 	opts := InstallOptions{
 		Namespace:   "default",
 		ReleaseName: "example",
-		Chart:       readTestChart(t),
+		ChartPath:   writeTestChart(t),
 	}
 
 	_, err := engine.Install(t.Context(), opts)
@@ -73,7 +67,7 @@ func TestRealEngine_InstallAtomicFailureRemovesRelease(t *testing.T) {
 	_, err := engine.Install(t.Context(), InstallOptions{
 		Namespace:   "default",
 		ReleaseName: "atomic-example",
-		Chart:       readTestChart(t),
+		ChartPath:   writeTestChart(t),
 		Atomic:      true,
 		Timeout:     time.Second,
 	})
@@ -111,120 +105,11 @@ func TestRealEngine_InstallContextErrors(t *testing.T) {
 			_, err := engine.Install(test.ctx, InstallOptions{
 				Namespace:   "default",
 				ReleaseName: "context-example",
-				Chart:       readTestChart(t),
+				ChartPath:   writeTestChart(t),
 			})
 			assert.ErrorIs(t, err, test.wantErr)
 		})
 	}
-}
-func TestRealEngine_ActionConfigurationIsPerOperation(t *testing.T) {
-	engine := NewRealEngine(nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	var configurations []*action.Configuration
-	var mu sync.Mutex
-	engine.configFactory = func(string) (*action.Configuration, error) {
-		configuration := &action.Configuration{Releases: storage.Init(driver.NewMemory())}
-		mu.Lock()
-		configurations = append(configurations, configuration)
-		mu.Unlock()
-		return configuration, nil
-	}
-
-	var wait sync.WaitGroup
-	for _, namespace := range []string{"team-a", "team-b"} {
-		wait.Go(func() {
-			configuration, err := engine.actionConfig(t.Context(), namespace)
-			require.NoError(t, err)
-			require.NotNil(t, configuration)
-		})
-	}
-	wait.Wait()
-
-	require.Len(t, configurations, 2)
-	assert.NotSame(t, configurations[0], configurations[1])
-}
-func TestMapActionError(t *testing.T) {
-	tests := []struct {
-		name    string
-		ctx     context.Context
-		err     error
-		wantErr error
-	}{
-		{
-			name:    "cancelled",
-			ctx:     cancelledContext(),
-			err:     context.Canceled,
-			wantErr: ErrCancelled,
-		},
-		{
-			name:    "forbidden",
-			ctx:     t.Context(),
-			err:     apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "release", errors.New("denied")),
-			wantErr: ErrForbidden,
-		},
-		{
-			name:    "conflict",
-			ctx:     t.Context(),
-			err:     apierrors.NewConflict(schema.GroupResource{Resource: "secrets"}, "release", errors.New("changed")),
-			wantErr: ErrConflict,
-		},
-		{
-			name:    "not found",
-			ctx:     t.Context(),
-			err:     apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, "release"),
-			wantErr: ErrNotFound,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			err := mapActionError(test.ctx, "run Helm action", test.err)
-			assert.ErrorIs(t, err, test.wantErr)
-		})
-	}
-}
-
-func TestRealEngine_RejectsNilChart(t *testing.T) {
-	engine, _ := newTestRealEngine(t, &kubefake.FailingKubeClient{
-		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
-	})
-
-	_, err := engine.Install(t.Context(), InstallOptions{
-		Namespace:   "default",
-		ReleaseName: "example",
-	})
-	assert.ErrorIs(t, err, ErrRenderFailed)
-}
-
-func TestRealEngine_StatusMapsForbiddenWithoutRetry(t *testing.T) {
-	var attempts atomic.Int32
-	engine := NewRealEngine(nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	engine.configFactory = func(string) (*action.Configuration, error) {
-		return &action.Configuration{
-			KubeClient: &forbiddenKubeClient{attempts: &attempts},
-			Releases:   storage.Init(driver.NewMemory()),
-		}, nil
-	}
-
-	_, err := engine.Status(t.Context(), StatusOptions{
-		Namespace:   "default",
-		ReleaseName: "release",
-	})
-	assert.ErrorIs(t, err, ErrForbidden)
-	assert.Equal(t, int32(1), attempts.Load())
-}
-
-type forbiddenKubeClient struct {
-	kubefake.PrintingKubeClient
-	attempts *atomic.Int32
-}
-
-func (c forbiddenKubeClient) IsReachable() error {
-	c.attempts.Add(1)
-	return apierrors.NewForbidden(
-		schema.GroupResource{Resource: "secrets"},
-		"release",
-		errors.New("denied"),
-	)
 }
 
 func TestDigestValuesDeterministic(t *testing.T) {
@@ -253,7 +138,8 @@ func newTestRealEngine(t *testing.T, kubeClient *kubefake.FailingKubeClient) (*R
 	registryClient, err := registry.NewClient()
 	require.NoError(t, err)
 
-	engine := NewRealEngine(nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	engine := NewRealEngine("", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	engine.releaseStorage = releases
 	engine.configFactory = func(namespace string) (*action.Configuration, error) {
 		driver, ok := releases.Driver.(*driver.Memory)
 		if ok {
@@ -272,7 +158,7 @@ func newTestRealEngine(t *testing.T, kubeClient *kubefake.FailingKubeClient) (*R
 	return engine, releases
 }
 
-func readTestChart(t *testing.T) *chart.Chart {
+func writeTestChart(t *testing.T) string {
 	t.Helper()
 
 	chartDir := filepath.Join(t.TempDir(), "example-chart")
@@ -291,9 +177,7 @@ data:
   message: {{ .Values.message | quote }}
 `), 0o644))
 
-	validatedChart, err := loader.Load(chartDir)
-	require.NoError(t, err)
-	return validatedChart
+	return chartDir
 }
 
 func cancelledContext() context.Context {

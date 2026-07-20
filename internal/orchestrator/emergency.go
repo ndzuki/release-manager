@@ -42,6 +42,10 @@ func (s *Service) EmergencyChange(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
+	if err := checkDefinitionOperable(def); err != nil {
+		return nil, err
+	}
+
 	// AC-013-02: Reject emergency changes for disabled customers.
 	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
 		return nil, connect.NewError(connect.CodePermissionDenied, err)
@@ -53,15 +57,7 @@ func (s *Service) EmergencyChange(
 			fmt.Errorf("HPA managed workload: SetReplicas is denied for definition %s", defID))
 	}
 
-	// AC-032-05: conflicting standard operation → reject EMERGENCY.
-	hasActive, err := s.store.Operations().HasActiveForDefinition(ctx, defID)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-	if hasActive {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("definition %s has a running standard operation; EMERGENCY operation is denied", defID))
-	}
+	// Release availability is enforced atomically by CreateIfAvailable below.
 
 	convergence := emergencyConvergenceFromProto(msg.Convergence)
 
@@ -86,7 +82,11 @@ func (s *Service) EmergencyChange(
 	// REQUIRE_PROMOTION → ValuesRevision approval before Helm takes over (AC-032-03).
 	_ = convergence // convergence is attached to the operation context for later processing.
 
-	if err := s.store.Operations().Create(ctx, op); err != nil {
+	if err := s.store.Operations().CreateIfAvailable(ctx, op); err != nil {
+		if err == store.ErrReleaseBusy {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("release_busy: definition %s has a running standard operation", defID))
+		}
 		return nil, connect.NewError(connect.CodeInternal,
 			fmt.Errorf("create emergency operation: %w", err))
 	}
