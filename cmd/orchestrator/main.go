@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/orchestrator"
+	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 	"github.com/ndzuki/release-manager/internal/trust"
 )
@@ -27,6 +29,12 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		return err
 	}
 	logger.Info("store opened", "db", s.dbPath)
+
+	// Recover non-terminal operations from previous run (REQ-023 AC-023-05).
+	recovered := operation.RecoverNonTerminal(context.Background(), st, logger, operation.DefaultRecoverOptions())
+	if recovered > 0 {
+		logger.Warn("operations recovered on restart", "count", recovered)
+	}
 
 	// Initialize audit emitter for async audit event persistence.
 	auditCfg := audit.DefaultConfig()

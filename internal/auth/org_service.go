@@ -15,13 +15,18 @@ import (
 
 // OrgService implements the OrganizationService Connect handler (REQ-026).
 type OrgService struct {
-	store  store.Store
-	logger *slog.Logger
+	store    store.Store
+	logger   *slog.Logger
+	enforcer *Enforcer
 }
 
 // NewOrgService creates a new OrgService.
-func NewOrgService(st store.Store, logger *slog.Logger) *OrgService {
-	return &OrgService{store: st, logger: logger}
+func NewOrgService(st store.Store, logger *slog.Logger, enforcer ...*Enforcer) *OrgService {
+	service := &OrgService{store: st, logger: logger}
+	if len(enforcer) > 0 {
+		service.enforcer = enforcer[0]
+	}
+	return service
 }
 
 // CreateOrganization creates a new organization. Only platform_admin can create.
@@ -56,6 +61,9 @@ func (s *OrgService) CreateOrganization(
 		s.logger.Error("add creator as platform_admin failed", "error", err)
 		// Org is created but member add failed — log and continue.
 	}
+	if err := s.refreshPolicies(ctx); err != nil {
+		return nil, err
+	}
 
 	s.logger.Info("organization created", "org_id", org.ID, "name", org.Name)
 	return connect.NewResponse(&authv1.CreateOrganizationResponse{
@@ -63,8 +71,9 @@ func (s *OrgService) CreateOrganization(
 	}), nil
 }
 
-//nolint:dupl
 // GetOrganization retrieves an organization by ID.
+//
+//nolint:dupl // Connect CRUD handlers intentionally share the project response pattern.
 func (s *OrgService) GetOrganization(
 	ctx context.Context,
 	req *connect.Request[authv1.GetOrganizationRequest],
@@ -78,8 +87,9 @@ func (s *OrgService) GetOrganization(
 	}), nil
 }
 
-//nolint:dupl
 // ListOrganizations lists all organizations.
+//
+//nolint:dupl // Connect list handlers intentionally share the project response pattern.
 func (s *OrgService) ListOrganizations(
 	ctx context.Context,
 	_ *connect.Request[authv1.ListOrganizationsRequest],
@@ -95,8 +105,9 @@ func (s *OrgService) ListOrganizations(
 	return connect.NewResponse(resp), nil
 }
 
-//nolint:dupl
 // UpdateOrganization updates an organization name with optimistic locking.
+//
+//nolint:dupl // Connect update handlers intentionally share optimistic-lock mapping.
 func (s *OrgService) UpdateOrganization(
 	ctx context.Context,
 	req *connect.Request[authv1.UpdateOrganizationRequest],
@@ -123,8 +134,9 @@ func (s *OrgService) UpdateOrganization(
 	}), nil
 }
 
-//nolint:dupl
 // DisableOrganization disables an organization (AC-026-03).
+//
+//nolint:dupl // Connect update handlers intentionally share optimistic-lock mapping.
 func (s *OrgService) DisableOrganization(
 	ctx context.Context,
 	req *connect.Request[authv1.DisableOrganizationRequest],
@@ -194,6 +206,9 @@ func (s *OrgService) AddMember(
 		s.logger.Error("add member failed", "error", err)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("add member: %w", err))
 	}
+	if err := s.refreshPolicies(ctx); err != nil {
+		return nil, err
+	}
 
 	s.logger.Info("member added", "org_id", member.OrgID, "user_id", member.UserID, "role", member.Role)
 	return connect.NewResponse(&authv1.AddMemberResponse{
@@ -238,11 +253,15 @@ func (s *OrgService) RemoveMember(
 	if err := s.store.OrgMembers().Delete(ctx, msg.GetOrgId(), msg.GetUserId()); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("remove member: %w", err))
 	}
+	if err := s.refreshPolicies(ctx); err != nil {
+		return nil, err
+	}
 	return connect.NewResponse(&authv1.RemoveMemberResponse{}), nil
 }
 
-//nolint:dupl
 // ListMembers lists all members of an organization.
+//
+//nolint:dupl // Connect list handlers intentionally share the project response pattern.
 func (s *OrgService) ListMembers(
 	ctx context.Context,
 	req *connect.Request[authv1.ListMembersRequest],
@@ -318,6 +337,9 @@ func (s *OrgService) UpdateMemberRole(
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update member role: %w", err))
 	}
+	if err := s.refreshPolicies(ctx); err != nil {
+		return nil, err
+	}
 	return connect.NewResponse(&authv1.UpdateMemberRoleResponse{
 		Member: toProtoMember(targetMember),
 	}), nil
@@ -341,6 +363,16 @@ func (s *OrgService) requireRole(ctx context.Context, required store.Role) error
 	return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("requires role %s", required))
 }
 
+func (s *OrgService) refreshPolicies(ctx context.Context) error {
+	if s.enforcer == nil {
+		return nil
+	}
+	if _, err := s.enforcer.RefreshPolicies(ctx); err != nil {
+		return connect.NewError(connect.CodeUnavailable, fmt.Errorf("refresh authorization policy: %w", err))
+	}
+	return nil
+}
+
 func (s *OrgService) userID(ctx context.Context) (string, error) {
 	uid, ok := ctx.Value(userIDKey).(string)
 	if !ok || uid == "" {
@@ -349,7 +381,7 @@ func (s *OrgService) userID(ctx context.Context) (string, error) {
 	return uid, nil
 }
 
-//nolint:dupl
+//nolint:dupl // Proto conversion helpers intentionally share timestamp field mapping.
 func toProtoOrg(o *store.Organization) *authv1.Organization {
 	return &authv1.Organization{
 		Id:                o.ID,
@@ -361,7 +393,7 @@ func toProtoOrg(o *store.Organization) *authv1.Organization {
 	}
 }
 
-//nolint:dupl
+//nolint:dupl // Proto conversion helpers intentionally share timestamp field mapping.
 func toProtoMember(m *store.OrganizationMember) *authv1.OrganizationMember {
 	return &authv1.OrganizationMember{
 		OrgId:             m.OrgID,

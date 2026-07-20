@@ -3,110 +3,57 @@ package sdkcheck
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/analysis/analysistest"
 )
 
-func TestAnalyzer_ExecCommandHelm(t *testing.T) {
-	// AC-037-01: Given exec.Command("helm"), When CI, Then 失败并定位
-	testdata := filepath.Join("testdata", "exec_helm")
-	a, err := NewAnalyzer("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	results := analysistest.Run(t, testdata, a, "exec_helm")
-	if len(results) == 0 {
-		t.Error("expected diagnostic for exec.Command(\"helm\")")
-	}
-	for _, r := range results {
-		if r.Pass.Analyzer.Name != "sdkcheck" {
-			continue
-		}
-		if len(r.Diagnostics) == 0 {
-			t.Error("expected diagnostics, got none")
-		}
-		for _, d := range r.Diagnostics {
-			if d.Message == "" {
-				t.Error("diagnostic message is empty")
-			}
-			t.Logf("diagnostic: %s at %v", d.Message, d.Pos)
-		}
-	}
-}
+func TestAnalyzer_AcceptanceFixtures(t *testing.T) {
+	t.Parallel()
 
-func TestAnalyzer_ShellWrapper(t *testing.T) {
-	// AC-037-02: Given 隐藏 shell wrapper, When analyzer, Then 规则命中
-	testdata := filepath.Join("testdata", "shell_wrapper")
-	a, err := NewAnalyzer("")
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name           string
+		fixture        string
+		exceptionsPath string
+	}{
+		{name: "AC-037-01 direct Helm invocation fails with location", fixture: "exec_helm"},
+		{name: "AC-037-02 shell wrapper is detected", fixture: "shell_wrapper"},
+		{name: "AC-037-03 Helm SDK is accepted", fixture: "legitimate_sdk"},
 	}
-	results := analysistest.Run(t, testdata, a, "shell_wrapper")
-	found := false
-	for _, r := range results {
-		if r.Pass.Analyzer.Name != "sdkcheck" {
-			continue
-		}
-		for _, d := range r.Diagnostics {
-			if containsRule(d.Message, string(RuleShellWrapper)) {
-				found = true
-			}
-			t.Logf("diagnostic: %s", d.Message)
-		}
-	}
-	if !found {
-		t.Error("expected shell_wrapper diagnostic, got none")
-	}
-}
-
-func TestAnalyzer_LegitimateSDK(t *testing.T) {
-	// AC-037-03: Given 合法 SDK client, When CI, Then 不误报
-	testdata := filepath.Join("testdata", "legitimate_sdk")
-	a, err := NewAnalyzer("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	results := analysistest.Run(t, testdata, a, "legitimate_sdk")
-	for _, r := range results {
-		if r.Pass.Analyzer.Name != "sdkcheck" {
-			continue
-		}
-		if len(r.Diagnostics) > 0 {
-			for _, d := range r.Diagnostics {
-				t.Errorf("unexpected diagnostic in legitimate SDK package: %s", d.Message)
-			}
-		}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			testAnalyzerFixture(t, testCase.fixture, testCase.exceptionsPath)
+		})
 	}
 }
 
 func TestAnalyzer_ExpiredException(t *testing.T) {
-	// AC-037-04: Given 过期例外, When CI, Then 失败
-	testdata := filepath.Join("testdata", "expired_exception")
-	exceptionsPath := filepath.Join(testdata, "sdkcheck.exceptions.yaml")
-	a, err := NewAnalyzer(exceptionsPath)
+	t.Parallel()
+
+	exceptionsPath := filepath.Join("testdata", "expired_exception", "sdkcheck.exceptions.yaml")
+	_, err := NewAnalyzer(exceptionsPath)
+	if err == nil || !containsRule(err.Error(), string(RuleExpiredException)) {
+		t.Fatalf("expected expired_exception error, got %v", err)
+	}
+}
+
+func testAnalyzerFixture(t *testing.T, fixture, exceptionsPath string) {
+	t.Helper()
+
+	analyzer, err := NewAnalyzer(exceptionsPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	results := analysistest.Run(t, testdata, a, "expired_exception")
-	found := false
-	for _, r := range results {
-		if r.Pass.Analyzer.Name != "sdkcheck" {
-			continue
-		}
-		for _, d := range r.Diagnostics {
-			if containsRule(d.Message, string(RuleForbiddenBinary)) {
-				found = true
-			}
-			t.Logf("diagnostic: %s", d.Message)
-		}
-	}
-	if !found {
-		t.Error("expected forbidden_binary_invocation diagnostic for expired exception, got none")
+	results := analysistest.Run(t, filepath.Join("testdata", fixture), analyzer, fixture)
+	if len(results) == 0 {
+		t.Fatalf("fixture %q produced no analysis result", fixture)
 	}
 }
 
 func TestLoadExceptions_Valid(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "exceptions.yaml")
 	data := `version: "1"
@@ -120,21 +67,63 @@ exceptions:
 	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	exs, err := LoadExceptions(path)
+	exceptions, err := LoadExceptions(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(exs) != 1 {
-		t.Fatalf("expected 1 exception, got %d", len(exs))
+	if len(exceptions) != 1 || exceptions[0].Owner != "ci-team" {
+		t.Fatalf("unexpected exceptions: %#v", exceptions)
 	}
-	if exs[0].Owner != "ci-team" {
-		t.Errorf("expected owner 'ci-team', got %q", exs[0].Owner)
+}
+
+func TestLoadExceptions_RejectsInvalidEntries(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		data string
+	}{
+		{
+			name: "unsupported version",
+			data: "version: '2'\nexceptions: []\n",
+		},
+		{
+			name: "missing owner",
+			data: "version: '1'\nexceptions:\n- reason: x\n  expires_at: '2099-12-31'\n  path: '*.go'\n  rule: os_exec_import\n",
+		},
+		{
+			name: "missing expiry",
+			data: "version: '1'\nexceptions:\n- owner: x\n  reason: x\n  path: '*.go'\n  rule: os_exec_import\n",
+		},
+		{
+			name: "unknown rule",
+			data: "version: '1'\nexceptions:\n- owner: x\n  reason: x\n  expires_at: '2099-12-31'\n  path: '*.go'\n  rule: unknown\n",
+		},
+		{
+			name: "invalid expiry",
+			data: "version: '1'\nexceptions:\n- owner: x\n  reason: x\n  expires_at: never\n  path: '*.go'\n  rule: os_exec_import\n",
+		},
+		{
+			name: "invalid glob",
+			data: "version: '1'\nexceptions:\n- owner: x\n  reason: x\n  expires_at: '2099-12-31'\n  path: '[.go'\n  rule: os_exec_import\n",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "exceptions.yaml")
+			if err := os.WriteFile(path, []byte(testCase.data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadExceptions(path); err == nil {
+				t.Fatal("LoadExceptions() succeeded for invalid entry")
+			}
+		})
 	}
 }
 
 func TestLoadExceptions_Expired(t *testing.T) {
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "exceptions.yaml")
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "exceptions.yaml")
 	data := `version: "1"
 exceptions:
   - owner: "dev"
@@ -146,25 +135,16 @@ exceptions:
 	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	exs, err := LoadExceptions(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(exs) != 1 {
-		t.Fatalf("expected 1 exception, got %d", len(exs))
-	}
-	if !isExpired(exs[0].ExpiresAt) {
-		t.Error("expected exception to be expired")
+	_, err := LoadExceptions(path)
+	if err == nil || !containsRule(err.Error(), string(RuleExpiredException)) {
+		t.Fatalf("expected expired exception error, got %v", err)
 	}
 }
 
 func TestLoadExceptions_Missing(t *testing.T) {
-	exs, err := LoadExceptions("/nonexistent/path.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if exs != nil {
-		t.Error("expected nil exceptions for missing file")
+	exceptions, err := LoadExceptions("/nonexistent/path.yaml")
+	if err == nil || exceptions != nil {
+		t.Fatalf("expected missing file error, got exceptions=%#v err=%v", exceptions, err)
 	}
 }
 
@@ -174,12 +154,18 @@ func TestLoadExceptions_InvalidYAML(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not: [valid: yaml"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := LoadExceptions(path)
-	if err == nil {
-		t.Error("expected error for invalid YAML")
+	if _, err := LoadExceptions(path); err == nil {
+		t.Fatal("expected error for invalid YAML")
 	}
 }
 
-func containsRule(msg, rule string) bool {
-	return len(msg) >= len(rule)+2 && msg[0] == '[' && msg[1:len(rule)+1] == rule
+func TestLoadExceptions_EmptyPath(t *testing.T) {
+	exceptions, err := LoadExceptions("")
+	if err != nil || exceptions == nil {
+		t.Fatalf("expected empty exception set, got exceptions=%#v err=%v", exceptions, err)
+	}
+}
+
+func containsRule(message, rule string) bool {
+	return strings.Contains(message, "["+rule+"]")
 }

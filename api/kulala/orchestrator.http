@@ -144,3 +144,87 @@ Content-Type: application/grpc
   "release_definition_id": "{{DEFINITION_ID}}",
   "idempotency_key": "busy-test-2"
 }
+
+###
+# =============================================================================
+# Release Definition management (TASK-040)
+# =============================================================================
+
+### Orchestrator — CreateReleaseDefinition (active)
+# @name CreateActiveDefinition
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/CreateReleaseDefinition
+Content-Type: application/grpc
+
+{
+  "customer_id": "{{CUSTOMER_ID}}",
+  "cluster_id": "{{CLUSTER_ID}}",
+  "namespace": "default",
+  "release_name": "nginx-stable",
+  "chart_name": "nginx",
+  "enabled": true
+}
+
+### Orchestrator — CreateReleaseDefinition (draft)
+# @name CreateDraftDefinition
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/CreateReleaseDefinition
+Content-Type: application/grpc
+
+{
+  "customer_id": "{{CUSTOMER_ID}}",
+  "cluster_id": "{{CLUSTER_ID}}",
+  "namespace": "staging",
+  "release_name": "nginx-canary",
+  "chart_name": "nginx",
+  "enabled": false
+}
+
+### Orchestrator — GetReleaseDefinition
+# @name GetDefinition
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/GetReleaseDefinition
+Content-Type: application/grpc
+
+{
+  "definition_id": "{{DEFINITION_ID}}"
+}
+
+### Orchestrator — ListReleaseDefinitions (by customer)
+# @name ListDefinitionsByCustomer
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/ListReleaseDefinitions
+Content-Type: application/grpc
+
+{
+  "customer_id": "{{CUSTOMER_ID}}",
+  "include_disabled": false
+}
+
+### Orchestrator — UpdateReleaseDefinition
+# @name UpdateDefinition
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/UpdateReleaseDefinition
+Content-Type: application/grpc
+
+{
+  "definition_id": "{{DEFINITION_ID}}",
+  "namespace": "production",
+  "expected_version": 1
+}
+
+### Orchestrator — DisableReleaseDefinition
+# @name DisableDefinition
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/DisableReleaseDefinition
+Content-Type: application/grpc
+
+{
+  "definition_id": "{{DEFINITION_ID}}"
+}
+
+### Orchestrator — CreateOperation on disabled definition (must fail)
+# @name CreateOpOnDisabledDef
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/CreateOperation
+Content-Type: application/grpc
+
+{
+  "operation_type": "INSTALL",
+  "bundle_id": "bundle-001",
+  "release_definition_id": "{{DEFINITION_ID}}",
+  "idempotency_key": "disabled-def-test"
+}
