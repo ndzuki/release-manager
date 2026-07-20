@@ -4,7 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"errors"
+
+	"connectrpc.com/connect"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -28,9 +29,15 @@ type SessionClientConfig struct {
 }
 
 type SessionClient struct {
-	config SessionClientConfig
-	client operatorv1connect.OperatorServiceClient
-	logger *slog.Logger
+	config   SessionClientConfig
+	client   operatorv1connect.OperatorServiceClient
+	logger   *slog.Logger
+	executor CommandExecutor
+}
+
+// SetCommandExecutor configures command execution for delivered operator commands.
+func (c *SessionClient) SetCommandExecutor(executor CommandExecutor) {
+	c.executor = executor
 }
 
 func NewSessionClient(config SessionClientConfig, logger *slog.Logger) (*SessionClient, error) {
@@ -128,6 +135,7 @@ func (c *SessionClient) runSession(ctx context.Context) error {
 		"active_config_version", established.GetActiveConfigVersion(),
 	)
 
+	responses := receiveResponses(ctx, stream)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -140,11 +148,72 @@ func (c *SessionClient) runSession(ctx context.Context) error {
 					Heartbeat: &operatorv1.Heartbeat{SessionId: established.GetSessionId()},
 				},
 			}); err != nil {
-				if errors.Is(err, context.Canceled) {
-					return err
-				}
-				return fmt.Errorf("send heartbeat: %w", err)
+				return fmt.Errorf("send session heartbeat: %w", err)
+			}
+		case response, ok := <-responses:
+			if !ok {
+				return fmt.Errorf("command stream closed")
+			}
+			if err := c.handleCommand(ctx, stream, response); err != nil {
+				return err
 			}
 		}
 	}
+}
+func (c *SessionClient) handleCommand(
+	ctx context.Context,
+	stream *connect.BidiStreamForClient[operatorv1.CommandStreamRequest, operatorv1.CommandStreamResponse],
+	response *operatorv1.CommandStreamResponse,
+) error {
+	command := response.GetCommand()
+	if command == nil {
+		return nil
+	}
+	if err := stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Ack{Ack: &operatorv1.Ack{
+			OutboxId: command.GetOutboxId(), CommandId: command.GetCommandId(), Sequence: command.GetSequence(), AckType: operatorv1.AckType_ACK_TYPE_RECEIVED,
+		}},
+	}); err != nil {
+		return fmt.Errorf("ack command received: %w", err)
+	}
+	if c.executor == nil {
+		return fmt.Errorf("operator command executor is required")
+	}
+	resultJSON, execErr := c.executor.Execute(ctx, command)
+	status := "succeeded"
+	message := ""
+	if execErr != nil {
+		status = "failed"
+		message = execErr.Error()
+	}
+	if err := stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Result{Result: &operatorv1.Result{
+			OutboxId: command.GetOutboxId(), CommandId: command.GetCommandId(), Status: status, Message: message, ResultJson: resultJSON, Sequence: command.GetSequence(),
+		}},
+	}); err != nil {
+		return fmt.Errorf("send command result: %w", err)
+	}
+	return nil
+}
+
+func receiveResponses(
+	ctx context.Context,
+	stream *connect.BidiStreamForClient[operatorv1.CommandStreamRequest, operatorv1.CommandStreamResponse],
+) <-chan *operatorv1.CommandStreamResponse {
+	responses := make(chan *operatorv1.CommandStreamResponse)
+	go func() {
+		defer close(responses)
+		for {
+			response, err := stream.Receive()
+			if err != nil {
+				return
+			}
+			select {
+			case responses <- response:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return responses
 }
