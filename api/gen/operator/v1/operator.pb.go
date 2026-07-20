@@ -352,9 +352,12 @@ func (*CommandStreamRequest_ResyncResponse) isCommandStreamRequest_Payload() {}
 // Hello is sent by the operator to establish a session after enrollment.
 type Hello struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
-	SessionId        string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	SessionId        string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"` // optional legacy enrollment session
 	OperatorId       string                 `protobuf:"bytes,2,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
 	LastSeenSequence int64                  `protobuf:"varint,3,opt,name=last_seen_sequence,json=lastSeenSequence,proto3" json:"last_seen_sequence,omitempty"` // last sequence number the operator has seen
+	InstanceId       string                 `protobuf:"bytes,4,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	Version          string                 `protobuf:"bytes,5,opt,name=version,proto3" json:"version,omitempty"`
+	Capabilities     map[string]string      `protobuf:"bytes,6,rep,name=capabilities,proto3" json:"capabilities,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -410,6 +413,96 @@ func (x *Hello) GetLastSeenSequence() int64 {
 	return 0
 }
 
+func (x *Hello) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
+}
+
+func (x *Hello) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *Hello) GetCapabilities() map[string]string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
+// SessionEstablished confirms a validated operator session.
+type SessionEstablished struct {
+	state                    protoimpl.MessageState `protogen:"open.v1"`
+	SessionId                string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	HeartbeatIntervalSeconds int64                  `protobuf:"varint,2,opt,name=heartbeat_interval_seconds,json=heartbeatIntervalSeconds,proto3" json:"heartbeat_interval_seconds,omitempty"`
+	HeartbeatTimeoutSeconds  int64                  `protobuf:"varint,3,opt,name=heartbeat_timeout_seconds,json=heartbeatTimeoutSeconds,proto3" json:"heartbeat_timeout_seconds,omitempty"`
+	ActiveConfigVersion      string                 `protobuf:"bytes,4,opt,name=active_config_version,json=activeConfigVersion,proto3" json:"active_config_version,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
+}
+
+func (x *SessionEstablished) Reset() {
+	*x = SessionEstablished{}
+	mi := &file_operator_v1_operator_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionEstablished) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionEstablished) ProtoMessage() {}
+
+func (x *SessionEstablished) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionEstablished.ProtoReflect.Descriptor instead.
+func (*SessionEstablished) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *SessionEstablished) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SessionEstablished) GetHeartbeatIntervalSeconds() int64 {
+	if x != nil {
+		return x.HeartbeatIntervalSeconds
+	}
+	return 0
+}
+
+func (x *SessionEstablished) GetHeartbeatTimeoutSeconds() int64 {
+	if x != nil {
+		return x.HeartbeatTimeoutSeconds
+	}
+	return 0
+}
+
+func (x *SessionEstablished) GetActiveConfigVersion() string {
+	if x != nil {
+		return x.ActiveConfigVersion
+	}
+	return ""
+}
+
 // Ack acknowledges receipt of a command delivered to the operator.
 type Ack struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -423,7 +516,7 @@ type Ack struct {
 
 func (x *Ack) Reset() {
 	*x = Ack{}
-	mi := &file_operator_v1_operator_proto_msgTypes[4]
+	mi := &file_operator_v1_operator_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -435,7 +528,7 @@ func (x *Ack) String() string {
 func (*Ack) ProtoMessage() {}
 
 func (x *Ack) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[4]
+	mi := &file_operator_v1_operator_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -448,7 +541,7 @@ func (x *Ack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ack.ProtoReflect.Descriptor instead.
 func (*Ack) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{4}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Ack) GetOutboxId() string {
@@ -489,7 +582,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_operator_v1_operator_proto_msgTypes[5]
+	mi := &file_operator_v1_operator_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -501,7 +594,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[5]
+	mi := &file_operator_v1_operator_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -514,7 +607,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{5}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Heartbeat) GetSessionId() string {
@@ -540,7 +633,7 @@ type Result struct {
 
 func (x *Result) Reset() {
 	*x = Result{}
-	mi := &file_operator_v1_operator_proto_msgTypes[6]
+	mi := &file_operator_v1_operator_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -552,7 +645,7 @@ func (x *Result) String() string {
 func (*Result) ProtoMessage() {}
 
 func (x *Result) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[6]
+	mi := &file_operator_v1_operator_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -565,7 +658,7 @@ func (x *Result) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Result.ProtoReflect.Descriptor instead.
 func (*Result) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{6}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Result) GetOutboxId() string {
@@ -617,7 +710,7 @@ func (x *Result) GetResultJson() string {
 	return ""
 }
 
-// CommandStreamResponse delivers commands and session events.
+// CommandStreamResponse delivers session lifecycle responses.
 type CommandStreamResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Payload:
@@ -626,6 +719,7 @@ type CommandStreamResponse struct {
 	//	*CommandStreamResponse_SessionEvent
 	//	*CommandStreamResponse_ResyncRequest
 	//	*CommandStreamResponse_DuplicateResponse
+	//	*CommandStreamResponse_SessionEstablished
 	Payload       isCommandStreamResponse_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -633,7 +727,7 @@ type CommandStreamResponse struct {
 
 func (x *CommandStreamResponse) Reset() {
 	*x = CommandStreamResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[7]
+	mi := &file_operator_v1_operator_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -645,7 +739,7 @@ func (x *CommandStreamResponse) String() string {
 func (*CommandStreamResponse) ProtoMessage() {}
 
 func (x *CommandStreamResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[7]
+	mi := &file_operator_v1_operator_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -658,7 +752,7 @@ func (x *CommandStreamResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandStreamResponse.ProtoReflect.Descriptor instead.
 func (*CommandStreamResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{7}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CommandStreamResponse) GetPayload() isCommandStreamResponse_Payload {
@@ -704,12 +798,21 @@ func (x *CommandStreamResponse) GetDuplicateResponse() *DuplicateResponse {
 	return nil
 }
 
+func (x *CommandStreamResponse) GetSessionEstablished() *SessionEstablished {
+	if x != nil {
+		if x, ok := x.Payload.(*CommandStreamResponse_SessionEstablished); ok {
+			return x.SessionEstablished
+		}
+	}
+	return nil
+}
+
 type isCommandStreamResponse_Payload interface {
 	isCommandStreamResponse_Payload()
 }
 
 type CommandStreamResponse_Command struct {
-	Command *Command `protobuf:"bytes,1,opt,name=command,proto3,oneof"` // deploy command to execute
+	Command *Command `protobuf:"bytes,1,opt,name=command,proto3,oneof"` // legacy command delivery
 }
 
 type CommandStreamResponse_SessionEvent struct {
@@ -717,11 +820,15 @@ type CommandStreamResponse_SessionEvent struct {
 }
 
 type CommandStreamResponse_ResyncRequest struct {
-	ResyncRequest *ResyncRequest `protobuf:"bytes,3,opt,name=resync_request,json=resyncRequest,proto3,oneof"` // gap detected, request full resync
+	ResyncRequest *ResyncRequest `protobuf:"bytes,3,opt,name=resync_request,json=resyncRequest,proto3,oneof"` // legacy gap recovery
 }
 
 type CommandStreamResponse_DuplicateResponse struct {
-	DuplicateResponse *DuplicateResponse `protobuf:"bytes,4,opt,name=duplicate_response,json=duplicateResponse,proto3,oneof"` // command already completed
+	DuplicateResponse *DuplicateResponse `protobuf:"bytes,4,opt,name=duplicate_response,json=duplicateResponse,proto3,oneof"` // legacy duplicate result
+}
+
+type CommandStreamResponse_SessionEstablished struct {
+	SessionEstablished *SessionEstablished `protobuf:"bytes,5,opt,name=session_established,json=sessionEstablished,proto3,oneof"`
 }
 
 func (*CommandStreamResponse_Command) isCommandStreamResponse_Payload() {}
@@ -732,23 +839,30 @@ func (*CommandStreamResponse_ResyncRequest) isCommandStreamResponse_Payload() {}
 
 func (*CommandStreamResponse_DuplicateResponse) isCommandStreamResponse_Payload() {}
 
+func (*CommandStreamResponse_SessionEstablished) isCommandStreamResponse_Payload() {}
+
 // Command is a deploy directive sent to the operator.
 type Command struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	OutboxId      string                 `protobuf:"bytes,1,opt,name=outbox_id,json=outboxId,proto3" json:"outbox_id,omitempty"`
-	CommandId     string                 `protobuf:"bytes,2,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
-	OperationId   string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
-	OperationType string                 `protobuf:"bytes,4,opt,name=operation_type,json=operationType,proto3" json:"operation_type,omitempty"`
-	Bundle        *v1.ReleaseBundle      `protobuf:"bytes,5,opt,name=bundle,proto3" json:"bundle,omitempty"`
-	Values        []byte                 `protobuf:"bytes,6,opt,name=values,proto3" json:"values,omitempty"`
-	Sequence      int64                  `protobuf:"varint,7,opt,name=sequence,proto3" json:"sequence,omitempty"` // global monotonic sequence number
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	OutboxId        string                 `protobuf:"bytes,1,opt,name=outbox_id,json=outboxId,proto3" json:"outbox_id,omitempty"`
+	CommandId       string                 `protobuf:"bytes,2,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	OperationId     string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	OperationType   string                 `protobuf:"bytes,4,opt,name=operation_type,json=operationType,proto3" json:"operation_type,omitempty"`
+	Bundle          *v1.ReleaseBundle      `protobuf:"bytes,5,opt,name=bundle,proto3" json:"bundle,omitempty"`
+	Values          []byte                 `protobuf:"bytes,6,opt,name=values,proto3" json:"values,omitempty"`
+	Sequence        int64                  `protobuf:"varint,7,opt,name=sequence,proto3" json:"sequence,omitempty"` // global monotonic sequence number
+	DefinitionId    string                 `protobuf:"bytes,8,opt,name=definition_id,json=definitionId,proto3" json:"definition_id,omitempty"`
+	Namespace       string                 `protobuf:"bytes,9,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	ReleaseName     string                 `protobuf:"bytes,10,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
+	CreateNamespace bool                   `protobuf:"varint,11,opt,name=create_namespace,json=createNamespace,proto3" json:"create_namespace,omitempty"`
+	TimeoutSeconds  int64                  `protobuf:"varint,12,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *Command) Reset() {
 	*x = Command{}
-	mi := &file_operator_v1_operator_proto_msgTypes[8]
+	mi := &file_operator_v1_operator_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -760,7 +874,7 @@ func (x *Command) String() string {
 func (*Command) ProtoMessage() {}
 
 func (x *Command) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[8]
+	mi := &file_operator_v1_operator_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -773,7 +887,7 @@ func (x *Command) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Command.ProtoReflect.Descriptor instead.
 func (*Command) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{8}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Command) GetOutboxId() string {
@@ -825,6 +939,41 @@ func (x *Command) GetSequence() int64 {
 	return 0
 }
 
+func (x *Command) GetDefinitionId() string {
+	if x != nil {
+		return x.DefinitionId
+	}
+	return ""
+}
+
+func (x *Command) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *Command) GetReleaseName() string {
+	if x != nil {
+		return x.ReleaseName
+	}
+	return ""
+}
+
+func (x *Command) GetCreateNamespace() bool {
+	if x != nil {
+		return x.CreateNamespace
+	}
+	return false
+}
+
+func (x *Command) GetTimeoutSeconds() int64 {
+	if x != nil {
+		return x.TimeoutSeconds
+	}
+	return 0
+}
+
 // ResyncRequest asks the operator to report its last seen sequence for gap recovery.
 type ResyncRequest struct {
 	state                    protoimpl.MessageState `protogen:"open.v1"`
@@ -836,7 +985,7 @@ type ResyncRequest struct {
 
 func (x *ResyncRequest) Reset() {
 	*x = ResyncRequest{}
-	mi := &file_operator_v1_operator_proto_msgTypes[9]
+	mi := &file_operator_v1_operator_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -848,7 +997,7 @@ func (x *ResyncRequest) String() string {
 func (*ResyncRequest) ProtoMessage() {}
 
 func (x *ResyncRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[9]
+	mi := &file_operator_v1_operator_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -861,7 +1010,7 @@ func (x *ResyncRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResyncRequest.ProtoReflect.Descriptor instead.
 func (*ResyncRequest) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{9}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ResyncRequest) GetOrchestratorLastSequence() int64 {
@@ -888,7 +1037,7 @@ type ResyncResponse struct {
 
 func (x *ResyncResponse) Reset() {
 	*x = ResyncResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[10]
+	mi := &file_operator_v1_operator_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -900,7 +1049,7 @@ func (x *ResyncResponse) String() string {
 func (*ResyncResponse) ProtoMessage() {}
 
 func (x *ResyncResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[10]
+	mi := &file_operator_v1_operator_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -913,7 +1062,7 @@ func (x *ResyncResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResyncResponse.ProtoReflect.Descriptor instead.
 func (*ResyncResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{10}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ResyncResponse) GetOperatorLastSequence() int64 {
@@ -934,7 +1083,7 @@ type DuplicateResponse struct {
 
 func (x *DuplicateResponse) Reset() {
 	*x = DuplicateResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[11]
+	mi := &file_operator_v1_operator_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -946,7 +1095,7 @@ func (x *DuplicateResponse) String() string {
 func (*DuplicateResponse) ProtoMessage() {}
 
 func (x *DuplicateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[11]
+	mi := &file_operator_v1_operator_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -959,7 +1108,7 @@ func (x *DuplicateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DuplicateResponse.ProtoReflect.Descriptor instead.
 func (*DuplicateResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{11}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *DuplicateResponse) GetCommandId() string {
@@ -987,7 +1136,7 @@ type SessionEvent struct {
 
 func (x *SessionEvent) Reset() {
 	*x = SessionEvent{}
-	mi := &file_operator_v1_operator_proto_msgTypes[12]
+	mi := &file_operator_v1_operator_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -999,7 +1148,7 @@ func (x *SessionEvent) String() string {
 func (*SessionEvent) ProtoMessage() {}
 
 func (x *SessionEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[12]
+	mi := &file_operator_v1_operator_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1012,7 +1161,7 @@ func (x *SessionEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionEvent.ProtoReflect.Descriptor instead.
 func (*SessionEvent) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{12}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *SessionEvent) GetType() string {
@@ -1040,7 +1189,7 @@ type RevokeOperatorRequest struct {
 
 func (x *RevokeOperatorRequest) Reset() {
 	*x = RevokeOperatorRequest{}
-	mi := &file_operator_v1_operator_proto_msgTypes[13]
+	mi := &file_operator_v1_operator_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1052,7 +1201,7 @@ func (x *RevokeOperatorRequest) String() string {
 func (*RevokeOperatorRequest) ProtoMessage() {}
 
 func (x *RevokeOperatorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[13]
+	mi := &file_operator_v1_operator_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1065,7 +1214,7 @@ func (x *RevokeOperatorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeOperatorRequest.ProtoReflect.Descriptor instead.
 func (*RevokeOperatorRequest) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{13}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *RevokeOperatorRequest) GetOperatorId() string {
@@ -1093,7 +1242,7 @@ type RevokeOperatorResponse struct {
 
 func (x *RevokeOperatorResponse) Reset() {
 	*x = RevokeOperatorResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[14]
+	mi := &file_operator_v1_operator_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1105,7 +1254,7 @@ func (x *RevokeOperatorResponse) String() string {
 func (*RevokeOperatorResponse) ProtoMessage() {}
 
 func (x *RevokeOperatorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[14]
+	mi := &file_operator_v1_operator_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1118,7 +1267,7 @@ func (x *RevokeOperatorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeOperatorResponse.ProtoReflect.Descriptor instead.
 func (*RevokeOperatorResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{14}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *RevokeOperatorResponse) GetOperatorId() string {
@@ -1165,13 +1314,26 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\theartbeat\x18\x03 \x01(\v2\x16.operator.v1.HeartbeatH\x00R\theartbeat\x12-\n" +
 	"\x06result\x18\x04 \x01(\v2\x13.operator.v1.ResultH\x00R\x06result\x12F\n" +
 	"\x0fresync_response\x18\x05 \x01(\v2\x1b.operator.v1.ResyncResponseH\x00R\x0eresyncResponseB\t\n" +
-	"\apayload\"u\n" +
+	"\apayload\"\xbb\x02\n" +
 	"\x05Hello\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
 	"\voperator_id\x18\x02 \x01(\tR\n" +
 	"operatorId\x12,\n" +
-	"\x12last_seen_sequence\x18\x03 \x01(\x03R\x10lastSeenSequence\"\x8e\x01\n" +
+	"\x12last_seen_sequence\x18\x03 \x01(\x03R\x10lastSeenSequence\x12\x1f\n" +
+	"\vinstance_id\x18\x04 \x01(\tR\n" +
+	"instanceId\x12\x18\n" +
+	"\aversion\x18\x05 \x01(\tR\aversion\x12H\n" +
+	"\fcapabilities\x18\x06 \x03(\v2$.operator.v1.Hello.CapabilitiesEntryR\fcapabilities\x1a?\n" +
+	"\x11CapabilitiesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe1\x01\n" +
+	"\x12SessionEstablished\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12<\n" +
+	"\x1aheartbeat_interval_seconds\x18\x02 \x01(\x03R\x18heartbeatIntervalSeconds\x12:\n" +
+	"\x19heartbeat_timeout_seconds\x18\x03 \x01(\x03R\x17heartbeatTimeoutSeconds\x122\n" +
+	"\x15active_config_version\x18\x04 \x01(\tR\x13activeConfigVersion\"\x8e\x01\n" +
 	"\x03Ack\x12\x1b\n" +
 	"\toutbox_id\x18\x01 \x01(\tR\boutboxId\x12\x1d\n" +
 	"\n" +
@@ -1190,13 +1352,14 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x06output\x18\x05 \x01(\fR\x06output\x12\x1a\n" +
 	"\bsequence\x18\x06 \x01(\x03R\bsequence\x12\x1f\n" +
 	"\vresult_json\x18\a \x01(\tR\n" +
-	"resultJson\"\xac\x02\n" +
+	"resultJson\"\x80\x03\n" +
 	"\x15CommandStreamResponse\x120\n" +
 	"\acommand\x18\x01 \x01(\v2\x14.operator.v1.CommandH\x00R\acommand\x12@\n" +
 	"\rsession_event\x18\x02 \x01(\v2\x19.operator.v1.SessionEventH\x00R\fsessionEvent\x12C\n" +
 	"\x0eresync_request\x18\x03 \x01(\v2\x1a.operator.v1.ResyncRequestH\x00R\rresyncRequest\x12O\n" +
-	"\x12duplicate_response\x18\x04 \x01(\v2\x1e.operator.v1.DuplicateResponseH\x00R\x11duplicateResponseB\t\n" +
-	"\apayload\"\xf5\x01\n" +
+	"\x12duplicate_response\x18\x04 \x01(\v2\x1e.operator.v1.DuplicateResponseH\x00R\x11duplicateResponse\x12R\n" +
+	"\x13session_established\x18\x05 \x01(\v2\x1f.operator.v1.SessionEstablishedH\x00R\x12sessionEstablishedB\t\n" +
+	"\apayload\"\xaf\x03\n" +
 	"\aCommand\x12\x1b\n" +
 	"\toutbox_id\x18\x01 \x01(\tR\boutboxId\x12\x1d\n" +
 	"\n" +
@@ -1205,7 +1368,13 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x0eoperation_type\x18\x04 \x01(\tR\roperationType\x120\n" +
 	"\x06bundle\x18\x05 \x01(\v2\x18.common.v1.ReleaseBundleR\x06bundle\x12\x16\n" +
 	"\x06values\x18\x06 \x01(\fR\x06values\x12\x1a\n" +
-	"\bsequence\x18\a \x01(\x03R\bsequence\"e\n" +
+	"\bsequence\x18\a \x01(\x03R\bsequence\x12#\n" +
+	"\rdefinition_id\x18\b \x01(\tR\fdefinitionId\x12\x1c\n" +
+	"\tnamespace\x18\t \x01(\tR\tnamespace\x12!\n" +
+	"\frelease_name\x18\n" +
+	" \x01(\tR\vreleaseName\x12)\n" +
+	"\x10create_namespace\x18\v \x01(\bR\x0fcreateNamespace\x12'\n" +
+	"\x0ftimeout_seconds\x18\f \x01(\x03R\x0etimeoutSeconds\"e\n" +
 	"\rResyncRequest\x12<\n" +
 	"\x1aorchestrator_last_sequence\x18\x01 \x01(\x03R\x18orchestratorLastSequence\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"F\n" +
@@ -1249,51 +1418,55 @@ func file_operator_v1_operator_proto_rawDescGZIP() []byte {
 }
 
 var file_operator_v1_operator_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_operator_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_operator_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_operator_v1_operator_proto_goTypes = []any{
 	(AckType)(0),                   // 0: operator.v1.AckType
 	(*EnrollRequest)(nil),          // 1: operator.v1.EnrollRequest
 	(*EnrollResponse)(nil),         // 2: operator.v1.EnrollResponse
 	(*CommandStreamRequest)(nil),   // 3: operator.v1.CommandStreamRequest
 	(*Hello)(nil),                  // 4: operator.v1.Hello
-	(*Ack)(nil),                    // 5: operator.v1.Ack
-	(*Heartbeat)(nil),              // 6: operator.v1.Heartbeat
-	(*Result)(nil),                 // 7: operator.v1.Result
-	(*CommandStreamResponse)(nil),  // 8: operator.v1.CommandStreamResponse
-	(*Command)(nil),                // 9: operator.v1.Command
-	(*ResyncRequest)(nil),          // 10: operator.v1.ResyncRequest
-	(*ResyncResponse)(nil),         // 11: operator.v1.ResyncResponse
-	(*DuplicateResponse)(nil),      // 12: operator.v1.DuplicateResponse
-	(*SessionEvent)(nil),           // 13: operator.v1.SessionEvent
-	(*RevokeOperatorRequest)(nil),  // 14: operator.v1.RevokeOperatorRequest
-	(*RevokeOperatorResponse)(nil), // 15: operator.v1.RevokeOperatorResponse
-	nil,                            // 16: operator.v1.EnrollRequest.CapabilitiesEntry
-	(*v1.ReleaseBundle)(nil),       // 17: common.v1.ReleaseBundle
+	(*SessionEstablished)(nil),     // 5: operator.v1.SessionEstablished
+	(*Ack)(nil),                    // 6: operator.v1.Ack
+	(*Heartbeat)(nil),              // 7: operator.v1.Heartbeat
+	(*Result)(nil),                 // 8: operator.v1.Result
+	(*CommandStreamResponse)(nil),  // 9: operator.v1.CommandStreamResponse
+	(*Command)(nil),                // 10: operator.v1.Command
+	(*ResyncRequest)(nil),          // 11: operator.v1.ResyncRequest
+	(*ResyncResponse)(nil),         // 12: operator.v1.ResyncResponse
+	(*DuplicateResponse)(nil),      // 13: operator.v1.DuplicateResponse
+	(*SessionEvent)(nil),           // 14: operator.v1.SessionEvent
+	(*RevokeOperatorRequest)(nil),  // 15: operator.v1.RevokeOperatorRequest
+	(*RevokeOperatorResponse)(nil), // 16: operator.v1.RevokeOperatorResponse
+	nil,                            // 17: operator.v1.EnrollRequest.CapabilitiesEntry
+	nil,                            // 18: operator.v1.Hello.CapabilitiesEntry
+	(*v1.ReleaseBundle)(nil),       // 19: common.v1.ReleaseBundle
 }
 var file_operator_v1_operator_proto_depIdxs = []int32{
-	16, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
+	17, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
 	4,  // 1: operator.v1.CommandStreamRequest.hello:type_name -> operator.v1.Hello
-	5,  // 2: operator.v1.CommandStreamRequest.ack:type_name -> operator.v1.Ack
-	6,  // 3: operator.v1.CommandStreamRequest.heartbeat:type_name -> operator.v1.Heartbeat
-	7,  // 4: operator.v1.CommandStreamRequest.result:type_name -> operator.v1.Result
-	11, // 5: operator.v1.CommandStreamRequest.resync_response:type_name -> operator.v1.ResyncResponse
-	0,  // 6: operator.v1.Ack.ack_type:type_name -> operator.v1.AckType
-	9,  // 7: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
-	13, // 8: operator.v1.CommandStreamResponse.session_event:type_name -> operator.v1.SessionEvent
-	10, // 9: operator.v1.CommandStreamResponse.resync_request:type_name -> operator.v1.ResyncRequest
-	12, // 10: operator.v1.CommandStreamResponse.duplicate_response:type_name -> operator.v1.DuplicateResponse
-	17, // 11: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
-	1,  // 12: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
-	3,  // 13: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
-	14, // 14: operator.v1.OperatorService.RevokeOperator:input_type -> operator.v1.RevokeOperatorRequest
-	2,  // 15: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
-	8,  // 16: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
-	15, // 17: operator.v1.OperatorService.RevokeOperator:output_type -> operator.v1.RevokeOperatorResponse
-	15, // [15:18] is the sub-list for method output_type
-	12, // [12:15] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	6,  // 2: operator.v1.CommandStreamRequest.ack:type_name -> operator.v1.Ack
+	7,  // 3: operator.v1.CommandStreamRequest.heartbeat:type_name -> operator.v1.Heartbeat
+	8,  // 4: operator.v1.CommandStreamRequest.result:type_name -> operator.v1.Result
+	12, // 5: operator.v1.CommandStreamRequest.resync_response:type_name -> operator.v1.ResyncResponse
+	18, // 6: operator.v1.Hello.capabilities:type_name -> operator.v1.Hello.CapabilitiesEntry
+	0,  // 7: operator.v1.Ack.ack_type:type_name -> operator.v1.AckType
+	10, // 8: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
+	14, // 9: operator.v1.CommandStreamResponse.session_event:type_name -> operator.v1.SessionEvent
+	11, // 10: operator.v1.CommandStreamResponse.resync_request:type_name -> operator.v1.ResyncRequest
+	13, // 11: operator.v1.CommandStreamResponse.duplicate_response:type_name -> operator.v1.DuplicateResponse
+	5,  // 12: operator.v1.CommandStreamResponse.session_established:type_name -> operator.v1.SessionEstablished
+	19, // 13: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
+	1,  // 14: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
+	3,  // 15: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
+	15, // 16: operator.v1.OperatorService.RevokeOperator:input_type -> operator.v1.RevokeOperatorRequest
+	2,  // 17: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
+	9,  // 18: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
+	16, // 19: operator.v1.OperatorService.RevokeOperator:output_type -> operator.v1.RevokeOperatorResponse
+	17, // [17:20] is the sub-list for method output_type
+	14, // [14:17] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_operator_v1_operator_proto_init() }
@@ -1308,11 +1481,12 @@ func file_operator_v1_operator_proto_init() {
 		(*CommandStreamRequest_Result)(nil),
 		(*CommandStreamRequest_ResyncResponse)(nil),
 	}
-	file_operator_v1_operator_proto_msgTypes[7].OneofWrappers = []any{
+	file_operator_v1_operator_proto_msgTypes[8].OneofWrappers = []any{
 		(*CommandStreamResponse_Command)(nil),
 		(*CommandStreamResponse_SessionEvent)(nil),
 		(*CommandStreamResponse_ResyncRequest)(nil),
 		(*CommandStreamResponse_DuplicateResponse)(nil),
+		(*CommandStreamResponse_SessionEstablished)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1320,7 +1494,7 @@ func file_operator_v1_operator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_operator_v1_operator_proto_rawDesc), len(file_operator_v1_operator_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   16,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

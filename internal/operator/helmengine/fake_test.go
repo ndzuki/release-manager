@@ -158,6 +158,44 @@ func TestFake_ConcurrentAccess(t *testing.T) {
 	assert.Equal(t, "chart2", rel2.Chart)
 }
 
+func TestFake_UpgradeIsolatesNamespaceAndRelease(t *testing.T) {
+	eng := NewFake()
+	ctx := context.Background()
+
+	for _, opts := range []InstallOptions{
+		{Namespace: "customer-a", ReleaseName: "release-a", ChartPath: "chart-a"},
+		{Namespace: "customer-b", ReleaseName: "release-b", ChartPath: "chart-b"},
+		{Namespace: "customer-a", ReleaseName: "other-release", ChartPath: "chart-other"},
+	} {
+		_, err := eng.Install(ctx, opts)
+		require.NoError(t, err)
+	}
+
+	_, err := eng.Upgrade(ctx, UpgradeOptions{
+		Namespace:        "customer-a",
+		ReleaseName:      "release-a",
+		ChartPath:        "chart-a-v2",
+		ExpectedRevision: 1,
+	})
+	require.NoError(t, err)
+
+	unchanged := []StatusOptions{
+		{Namespace: "customer-b", ReleaseName: "release-b"},
+		{Namespace: "customer-a", ReleaseName: "other-release"},
+	}
+	for _, opts := range unchanged {
+		rel, statusErr := eng.Status(ctx, opts)
+		require.NoError(t, statusErr)
+		assert.Equal(t, 1, rel.Revision)
+		assert.NotEqual(t, "chart-a-v2", rel.Chart)
+	}
+
+	updated, err := eng.Status(ctx, StatusOptions{Namespace: "customer-a", ReleaseName: "release-a"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, updated.Revision)
+	assert.Equal(t, "chart-a-v2", updated.Chart)
+}
+
 func TestFake_AllMethods(t *testing.T) {
 	// AC-041-01: all interface methods work on fake without subprocess
 	eng := NewFake()

@@ -4,6 +4,7 @@ package orchestrator
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -15,66 +16,52 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
-	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
-	preflight "github.com/ndzuki/release-manager/internal/preflight"
+	"github.com/ndzuki/release-manager/internal/orchestrator/preflight"
 	"github.com/ndzuki/release-manager/internal/store"
-	"github.com/ndzuki/release-manager/internal/trust"
 	"github.com/ndzuki/release-manager/internal/vulnerability"
+	"github.com/ndzuki/release-manager/internal/trust"
 )
 
 // Service implements the OrchestratorServiceHandler Connect interface.
 type Service struct {
-	store     store.Store
-	verifier  trust.Verifier
-	preflight preflight.Runner
-	vulnEval  *vulnerability.Evaluator
-	targetEnv string
-	audit     *audit.Emitter
-	logger    *slog.Logger
+	store       store.Store
+	verifier    trust.Verifier
+	targetEnv   string
+	coordinator *preflight.Coordinator
+	logger      *slog.Logger
+	vulnEval    *vulnerability.Evaluator
 }
 
 // NewService creates a new orchestrator Connect service.
-func NewService(
-	st store.Store,
-	verifier trust.Verifier,
-	runner preflight.Runner,
-	targetEnv string,
-	emitter *audit.Emitter,
-	logger *slog.Logger,
-) *Service {
+func NewService(st store.Store, verifier trust.Verifier, targetEnv string, logger *slog.Logger) *Service {
 	return &Service{
-		store:     st,
-		verifier:  verifier,
-		preflight: runner,
-		targetEnv: targetEnv,
-		audit:     emitter,
-		logger:    logger,
+		store:       st,
+		verifier:    verifier,
+		targetEnv:   targetEnv,
+		coordinator: preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), logger),
+		logger:      logger,
 	}
 }
 
 // CreateOperation creates a new release operation from the given request.
-// Implements REQ-067 validation rules and REQ-023 idempotency.
+//
+//nolint:gocyclo // operation creation validates multiple independent policy gates
 func (s *Service) CreateOperation(
 	ctx context.Context,
 	req *connect.Request[orchestratorv1.CreateOperationRequest],
 ) (*connect.Response[orchestratorv1.CreateOperationResponse], error) {
 	msg := req.Msg
 
-	// 1. Idempotency check (REQ-023 AC-023-02)
-	if msg.IdempotencyKey != "" {
-		existing, err := s.store.Operations().GetByIdempotencyKey(ctx, msg.IdempotencyKey)
-		if err == nil {
-			s.logger.Info("idempotent operation found", "key", msg.IdempotencyKey, "op_id", existing.ID)
-			return connect.NewResponse(s.toResponse(existing)), nil
-		}
-		if err != store.ErrNotFound {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("idempotency lookup: %w", err))
-		}
-		// not found -> proceed
+	existing, err := s.findIdempotentOperation(ctx, msg)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		s.logger.Info("idempotent operation found", "key", msg.IdempotencyKey, "op_id", existing.ID)
+		return connect.NewResponse(s.toResponse(existing)), nil
 	}
 
-	// 2. Validate operation type
 	opType := store.OperationType(msg.OperationType)
 	if !opType.Valid() {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
@@ -91,34 +78,14 @@ func (s *Service) CreateOperation(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
 	}
 
-	// Validate definition status
-	if def.Status != store.DefStatusActive {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("release_definition %s is %s", def.ID, def.Status))
+	// Validate definition is active (AC-040-03).
+	if err := checkDefinitionOperable(def); err != nil {
+		return nil, err
 	}
 
 	// AC-013-02: Reject operations for disabled customers.
 	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
 		return nil, connect.NewError(connect.CodePermissionDenied, err)
-	}
-
-	// AC-032-06: Reject standard operations when a running EMERGENCY exists for
-	// the same definition.
-	if opType.IsStandard() {
-		activeEmergency, err := s.store.Operations().HasActiveEmergencyForDefinition(ctx, msg.ReleaseDefinitionId)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("emergency active check: %w", err))
-		}
-		if activeEmergency {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("definition %s has a running EMERGENCY operation; standard operations are denied", msg.ReleaseDefinitionId))
-		}
-	}
-
-	if opType.IsStandard() {
-		if err := s.checkEmergencyConvergence(ctx, msg.ReleaseDefinitionId, msg.ValuesRevisionId); err != nil {
-			return nil, err
-		}
 	}
 
 	// 4. Release busy check (REQ-023 AC-023-03, AC-023-06, AC-023-07)
@@ -129,6 +96,57 @@ func (s *Service) CreateOperation(
 	if active {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
+	}
+
+	// EMERGENCY ↔ standard mutual exclusion (REQ-023 AC-023-06, AC-023-07).
+	if opType.IsStandard() {
+		hasEmergency, err := s.store.Operations().HasActiveEmergencyForDefinition(ctx, msg.ReleaseDefinitionId)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("emergency check: %w", err))
+		}
+		if hasEmergency {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("release_busy: definition %s has a running EMERGENCY", msg.ReleaseDefinitionId))
+		}
+	}
+	if opType == store.OperationEmergency {
+		hasStandard, err := s.store.Operations().HasActiveForDefinition(ctx, msg.ReleaseDefinitionId)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("standard check: %w", err))
+		}
+		if hasStandard {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("release_busy: definition %s has an active standard operation", msg.ReleaseDefinitionId))
+		}
+	}
+	// AC-021-02: UPGRADE requires a positive expected revision and an approved values revision.
+	if opType == store.OperationUpgrade {
+		if msg.ExpectedCurrentRevision < 1 {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("expected_current_revision must be >= 1 for %s, got %d", opType, msg.ExpectedCurrentRevision))
+		}
+
+		vr, err := s.store.Values().Get(ctx, msg.ValuesRevisionId)
+		if err == store.ErrNotFound {
+			return nil, connect.NewError(connect.CodeNotFound,
+				fmt.Errorf("values_revision not found: %s", msg.ValuesRevisionId))
+		}
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("values_revision lookup: %w", err))
+		}
+		if vr.ReleaseDefinitionID != def.ID {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("values_revision %s belongs to release_definition %s, not %s", vr.ID, vr.ReleaseDefinitionID, def.ID))
+		}
+		if vr.Status != store.ValuesStatusApproved {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("values_revision %s is %s, must be approved", vr.ID, vr.Status))
+		}
+	}
+
+	if opType == store.OperationRollback && msg.ExpectedCurrentRevision < 1 {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("expected_current_revision must be >= 1 for %s, got %d", opType, msg.ExpectedCurrentRevision))
 	}
 
 	// 4.5. Trust verification (REQ-012)
@@ -155,6 +173,25 @@ func (s *Service) CreateOperation(
 				return nil, connect.NewError(connect.CodeFailedPrecondition,
 					fmt.Errorf("artifact trust rejected: %s", out.Summary))
 			}
+		}
+	}
+
+	if opType == store.OperationInstall {
+		if msg.GetValuesRevisionId() == "" {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				errors.New("revision_not_approved: values_revision_id is required"))
+		}
+		revision, err := s.store.Values().Get(ctx, msg.GetValuesRevisionId())
+		if err == store.ErrNotFound {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				errors.New("revision_not_approved: values revision not found"))
+		}
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("values revision lookup: %w", err))
+		}
+		if revision.ReleaseDefinitionID != def.ID || revision.Status != store.ValuesStatusApproved {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				errors.New("revision_not_approved: values revision must be approved for the target definition"))
 		}
 	}
 
@@ -187,48 +224,28 @@ func (s *Service) CreateOperation(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create operation: %w", err))
 	}
 
-	// 8. Trigger preflight transition and execute artifact preflight synchronously.
-	//    Standard ops go pending->preflight, EMERGENCY goes pending->queued
+	// 8. Trigger preflight transition and launch coordinator
+	//    Standard ops go pending→preflight, EMERGENCY goes pending→queued
 	if opType.IsStandard() {
 		next, err := operation.Transition(op.Status, operation.EventStartPreflight)
 		if err != nil {
 			s.logger.Error("preflight transition failed", "op_id", op.ID, "err", err)
 		} else {
-			updated, err := s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, "")
+			_, err = s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, "")
 			if err != nil {
 				s.logger.Error("preflight status update failed", "op_id", op.ID, "err", err)
 			} else {
-				op.Status = updated.Status
-				op.StateVersion = updated.StateVersion
+				op.Status = next
+				op.StateVersion++
 
-				// Execute artifact preflight if a bundle is specified and runner is available.
-				if s.preflight != nil && msg.BundleId != "" {
-					if preflightErr := s.runPreflight(ctx, op, def, msg); preflightErr != nil {
-						s.logger.Warn("artifact preflight failed", "op_id", op.ID, "err", preflightErr)
-						if _, uerr := s.store.Operations().UpdateStatus(
-							ctx, op.ID, op.Status, op.StateVersion, preflightErr.Error(),
-						); uerr != nil {
-							s.logger.Error("preflight error update failed", "op_id", op.ID, "err", uerr)
-						}
-					} else {
-						passed, perr := operation.Transition(op.Status, operation.EventPreflightPassed)
-						if perr != nil {
-							s.logger.Error("preflight passed transition failed", "op_id", op.ID, "err", perr)
-						} else {
-							updated2, uerr := s.store.Operations().UpdateStatus(ctx, op.ID, passed, op.StateVersion, "")
-							if uerr != nil {
-								s.logger.Error("preflight passed update failed", "op_id", op.ID, "err", uerr)
-							} else {
-								op.Status = updated2.Status
-								op.StateVersion = updated2.StateVersion
-							}
-						}
-					}
-				}
+				// Launch preflight coordinator in background.
+				// Use WithoutCancel so the coordinator outlives the HTTP request.
+				bgCtx := context.WithoutCancel(ctx)
+				go s.coordinator.Run(bgCtx, op)
+				s.logger.Info("preflight coordinator launched", "op_id", op.ID)
 			}
 		}
 	}
-
 	s.logger.Info("operation created",
 		"op_id", op.ID,
 		"type", op.OperationType,
@@ -242,6 +259,28 @@ func (s *Service) CreateOperation(
 		AcceptedAt:         timestamppb.New(op.CreatedAt),
 		VerificationResult: verifyResult,
 	}), nil
+}
+
+func (s *Service) findIdempotentOperation(
+	ctx context.Context,
+	msg *orchestratorv1.CreateOperationRequest,
+) (*store.Operation, error) {
+	if msg.IdempotencyKey == "" {
+		return nil, nil
+	}
+
+	existing, err := s.store.Operations().GetByIdempotencyKey(ctx, msg.IdempotencyKey)
+	if err == store.ErrNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("idempotency lookup: %w", err))
+	}
+	if existing.RequestHash != hashRequest(msg) {
+		return nil, connect.NewError(connect.CodeAlreadyExists,
+			fmt.Errorf("idempotency_conflict: key %s already used with different request", msg.IdempotencyKey))
+	}
+	return existing, nil
 }
 
 // PublishRelease triggers the release pipeline for a definition (skeleton).
@@ -260,11 +299,12 @@ func (s *Service) PublishRelease(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
 	}
+	if err := checkDefinitionOperable(def); err != nil {
+		return nil, err
+	}
+
 	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
 		return nil, connect.NewError(connect.CodePermissionDenied, err)
-	}
-	if err := s.checkEmergencyConvergence(ctx, msg.ReleaseDefinitionId, ""); err != nil {
-		return nil, err
 	}
 
 	// AC-014-04: disabled cluster cannot be a release target.
@@ -286,45 +326,6 @@ func (s *Service) PublishRelease(
 		OperationId: "",
 		Status:      "not_implemented",
 	}), nil
-}
-
-func (s *Service) checkEmergencyConvergence(
-	ctx context.Context,
-	definitionID string,
-	valuesRevisionID string,
-) error {
-	pending, err := s.store.Operations().HasPendingPromotionForDefinition(ctx, definitionID)
-	if err != nil {
-		return connect.NewError(connect.CodeInternal, fmt.Errorf("emergency convergence check: %w", err))
-	}
-	if !pending {
-		return nil
-	}
-	if valuesRevisionID == "" {
-		return convergenceRequiredError(definitionID)
-	}
-
-	revision, err := s.store.Values().Get(ctx, valuesRevisionID)
-	if err != nil {
-		if err == store.ErrNotFound {
-			return connect.NewError(connect.CodeNotFound,
-				fmt.Errorf("values_revision not found: %s", valuesRevisionID))
-		}
-		return connect.NewError(connect.CodeInternal, fmt.Errorf("values revision lookup: %w", err))
-	}
-	if revision.ReleaseDefinitionID != definitionID || revision.Status != store.ValuesStatusApproved {
-		return convergenceRequiredError(definitionID)
-	}
-
-	return nil
-}
-
-func convergenceRequiredError(definitionID string) error {
-	err := connect.NewError(connect.CodeFailedPrecondition,
-		fmt.Errorf("convergence_required: definition %s requires an approved ValuesRevision before Helm operations resume", definitionID))
-	err.Meta().Set("X-Reason-Code", "convergence_required")
-	err.Meta().Set("X-Remediation", "create and approve a ValuesRevision, then retry with values_revision_id")
-	return err
 }
 
 func (s *Service) toResponse(op *store.Operation) *orchestratorv1.CreateOperationResponse {
@@ -352,53 +353,6 @@ func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
 	return fmt.Sprintf("%x", h)
 }
 
-// runPreflight executes artifact preflight for the given operation and bundle.
-// Returns nil on success; a descriptive error if preflight failed.
-func (s *Service) runPreflight(
-	ctx context.Context,
-	op *store.Operation,
-	def *store.ReleaseDefinition,
-	msg *orchestratorv1.CreateOperationRequest,
-) error {
-	bundle, err := s.store.Bundles().Get(ctx, msg.BundleId)
-	if err != nil {
-		return fmt.Errorf("fetch bundle %s: %w", msg.BundleId, err)
-	}
-
-	routes, err := s.store.ClusterRoutes().ListByCluster(ctx, def.ClusterID)
-	if err != nil {
-		return fmt.Errorf("fetch cluster routes: %w", err)
-	}
-
-	sbomPolicyVersion := ""
-	if s.vulnEval != nil {
-		sbomPolicyVersion = "v1"
-	}
-
-	out, err := s.preflight.Run(ctx, preflight.Input{
-		OperationID:       op.ID,
-		ClusterID:         def.ClusterID,
-		Bundle:            bundle,
-		Routes:            routes,
-		TrustPolicy:       trust.DefaultPolicy(s.targetEnv),
-		SBOMPolicyVersion: sbomPolicyVersion,
-		SignatureRef:      msg.SignatureRef,
-	})
-	if err != nil {
-		return fmt.Errorf("preflight run: %w", err)
-	}
-	if !out.Passed {
-		return fmt.Errorf("preflight failed: %s", out.FailureSummary())
-	}
-
-	// Vulnerability assessment after artifact preflight passes.
-	if err := s.EvaluateArtifactVulnerability(ctx, bundle.DigestAlg+":"+bundle.DigestValue, bundle.SBOMRef); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // checkCustomerNotDisabled verifies the customer is not disabled.
 // Returns PermissionDenied if the customer is disabled.
 func (s *Service) checkCustomerNotDisabled(ctx context.Context, customerID string) error {
@@ -414,3 +368,15 @@ func (s *Service) checkCustomerNotDisabled(ctx context.Context, customerID strin
 
 // Compile-time check: Service implements the Connect handler interface.
 var _ orchestratorv1connect.OrchestratorServiceHandler = (*Service)(nil)
+
+// checkDefinitionOperable returns a stable release_definition_disabled error
+// if the definition is not in active state. Uses FailedPrecondition for both
+// draft and disabled; callers that want to differentiate can check the status
+// before calling this function.
+func checkDefinitionOperable(def *store.ReleaseDefinition) error {
+	if def.Status == store.DefStatusActive {
+		return nil
+	}
+	return connect.NewError(connect.CodeFailedPrecondition,
+		fmt.Errorf("release_definition_disabled: definition %s is %s", def.ID, def.Status))
+}

@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -11,28 +12,50 @@ import (
 
 type definitionStore struct{ db *sql.DB }
 
-func (s *definitionStore) Create(ctx context.Context, def *store.ReleaseDefinition) error {
+func (s *definitionStore) Create(
+	ctx context.Context,
+	def *store.ReleaseDefinition,
+	event *store.ReleaseDefinitionEvent,
+) error {
 	if def.CreatedAt.IsZero() {
 		def.CreatedAt = time.Now().UTC()
 	}
 	if def.UpdatedAt.IsZero() {
 		def.UpdatedAt = def.CreatedAt
 	}
+	if def.OptimisticVersion == 0 {
+		def.OptimisticVersion = 1
+	}
 
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin create definition: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
+
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO release_definitions (
 			id, name, customer_id, cluster_id, namespace, release_name,
-			chart_name, hpa_managed, status, optimistic_version, created_by,
+			chart_name, status, optimistic_version, created_by,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		def.ID, def.Name, def.CustomerID, def.ClusterID,
-		def.Namespace, def.ReleaseName, def.ChartName, def.HPAManaged,
+		def.Namespace, def.ReleaseName, def.ChartName,
 		string(def.Status), def.OptimisticVersion, def.CreatedBy,
-		def.CreatedAt.UTC().Format(time.RFC3339), def.UpdatedAt.UTC().Format(time.RFC3339),
+		def.CreatedAt.UTC().Format(time.RFC3339Nano), def.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
+		if isUniqueConstraint(err) {
+			return store.ErrDuplicateKey
+		}
 		return fmt.Errorf("insert definition: %w", err)
+	}
+	if err := insertDefinitionEvent(ctx, tx, event); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit create definition: %w", err)
 	}
 	return nil
 }
@@ -40,56 +63,91 @@ func (s *definitionStore) Create(ctx context.Context, def *store.ReleaseDefiniti
 func (s *definitionStore) Get(ctx context.Context, id string) (*store.ReleaseDefinition, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, customer_id, cluster_id, namespace, release_name,
-			chart_name, hpa_managed, status, optimistic_version, created_by,
+			chart_name, status, optimistic_version, created_by,
 			created_at, updated_at
 		FROM release_definitions WHERE id = ?
 	`, id)
 	return scanDefinition(row)
 }
 
-func (s *definitionStore) Update(ctx context.Context, def *store.ReleaseDefinition) error {
-	now := nowUTC()
-	def.UpdatedAt = time.Now().UTC()
+func (s *definitionStore) Update(
+	ctx context.Context,
+	def *store.ReleaseDefinition,
+	event *store.ReleaseDefinitionEvent,
+) (*store.ReleaseDefinition, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin update definition: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
 
-	result, err := s.db.ExecContext(ctx, `
+	updatedAt := time.Now().UTC()
+	result, err := tx.ExecContext(ctx, `
 		UPDATE release_definitions
 		SET name = ?, customer_id = ?, cluster_id = ?, namespace = ?,
-		    release_name = ?, chart_name = ?, hpa_managed = ?, status = ?,
+		    release_name = ?, chart_name = ?, status = ?,
 		    optimistic_version = optimistic_version + 1,
 		    updated_at = ?
 		WHERE id = ? AND optimistic_version = ?
 	`,
 		def.Name, def.CustomerID, def.ClusterID,
-		def.Namespace, def.ReleaseName, def.ChartName, def.HPAManaged,
-		string(def.Status), now, def.ID, def.OptimisticVersion,
+		def.Namespace, def.ReleaseName, def.ChartName,
+		string(def.Status), updatedAt.Format(time.RFC3339Nano), def.ID, def.OptimisticVersion,
 	)
 	if err != nil {
-		return fmt.Errorf("update definition: %w", err)
+		if isUniqueConstraint(err) {
+			return nil, store.ErrDuplicateKey
+		}
+		return nil, fmt.Errorf("update definition: %w", err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
+		return nil, fmt.Errorf("definition rows affected: %w", err)
 	}
 	if rows == 0 {
-		return store.ErrOptimisticLock
+		return nil, store.ErrOptimisticLock
 	}
-	return nil
+	if err := insertDefinitionEvent(ctx, tx, event); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit update definition: %w", err)
+	}
+	return s.Get(ctx, def.ID)
 }
 
-func (s *definitionStore) List(ctx context.Context) ([]*store.ReleaseDefinition, error) {
-	rows, err := s.db.QueryContext(ctx, `
+func (s *definitionStore) List(
+	ctx context.Context,
+	customerID, clusterID string,
+	includeDisabled bool,
+) ([]*store.ReleaseDefinition, error) {
+	query := `
 		SELECT id, name, customer_id, cluster_id, namespace, release_name,
-			chart_name, hpa_managed, status, optimistic_version, created_by,
+			chart_name, status, optimistic_version, created_by,
 			created_at, updated_at
 		FROM release_definitions
-		ORDER BY created_at DESC
-	`)
+		WHERE 1 = 1`
+	args := make([]any, 0, 2)
+	if customerID != "" {
+		query += ` AND customer_id = ?`
+		args = append(args, customerID)
+	}
+	if clusterID != "" {
+		query += ` AND cluster_id = ?`
+		args = append(args, clusterID)
+	}
+	if !includeDisabled {
+		query += ` AND status != 'disabled'`
+	}
+	query += ` ORDER BY created_at DESC`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list definitions: %w", err)
 	}
 	defer rows.Close()
 
-	var defs []*store.ReleaseDefinition
+	defs := make([]*store.ReleaseDefinition, 0)
 	for rows.Next() {
 		def, err := scanDefinition(rows)
 		if err != nil {
@@ -97,13 +155,37 @@ func (s *definitionStore) List(ctx context.Context) ([]*store.ReleaseDefinition,
 		}
 		defs = append(defs, def)
 	}
-	return defs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate definitions: %w", err)
+	}
+	return defs, nil
 }
+
+func insertDefinitionEvent(
+	ctx context.Context,
+	tx *sql.Tx,
+	event *store.ReleaseDefinitionEvent,
+) error {
+	if event == nil {
+		return nil
+	}
+	if event.CreatedAt.IsZero() {
+		event.CreatedAt = time.Now().UTC()
+	}
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO release_definition_events (id, definition_id, event_type, created_at)
+		VALUES (?, ?, ?, ?)
+	`, event.ID, event.DefinitionID, event.EventType, event.CreatedAt.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("insert definition event: %w", err)
+	}
+	return nil
+}
+
 
 func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.ReleaseDefinition, error) {
 	var (
 		id, name, customerID, clusterID, namespace, releaseName, chartName string
-		hpaManaged                                                         bool
 		status                                                             string
 		optimisticVersion                                                  int
 		createdBy                                                          string
@@ -112,21 +194,21 @@ func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.Release
 
 	err := row.Scan(
 		&id, &name, &customerID, &clusterID, &namespace, &releaseName,
-		&chartName, &hpaManaged, &status, &optimisticVersion, &createdBy,
+		&chartName, &status, &optimisticVersion, &createdBy,
 		&createdAt, &updatedAt,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
 		return nil, fmt.Errorf("scan definition: %w", err)
 	}
 
-	ct, err := time.Parse(time.RFC3339, createdAt)
+	ct, err := time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
 		return nil, fmt.Errorf("parse created_at: %w", err)
 	}
-	ut, err := time.Parse(time.RFC3339, updatedAt)
+	ut, err := time.Parse(time.RFC3339Nano, updatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("parse updated_at: %w", err)
 	}
@@ -139,7 +221,6 @@ func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.Release
 		Namespace:         namespace,
 		ReleaseName:       releaseName,
 		ChartName:         chartName,
-		HPAManaged:        hpaManaged,
 		Status:            store.DefinitionStatus(status),
 		OptimisticVersion: optimisticVersion,
 		CreatedBy:         createdBy,
