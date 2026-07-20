@@ -110,6 +110,7 @@ type Operation struct {
 	BundleID            string          `json:"bundle_id"`
 	ValuesRevisionID    string          `json:"values_revision_id"`
 	ExpectedRevision    int             `json:"expected_revision"`
+	TargetRevision      int             `json:"target_revision,omitempty"`
 	ValuesPatch         []byte          `json:"values_patch,omitempty"`
 	Actor               ActorContext    `json:"actor"`
 	CreatedAt           time.Time       `json:"created_at"`
@@ -282,6 +283,7 @@ type UserStatus string
 
 const (
 	UserActive   UserStatus = "active"
+	UserPending  UserStatus = "pending"
 	UserDisabled UserStatus = "disabled"
 )
 
@@ -337,6 +339,8 @@ type User struct {
 	ID           string
 	Username     string
 	PasswordHash string
+	Provider     string
+	Subject      string
 	Status       UserStatus
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
@@ -390,10 +394,11 @@ type OrgCustomerBinding struct {
 type AuditActorKind string
 
 const (
-	AuditActorUser    AuditActorKind = "user"
-	AuditActorService AuditActorKind = "service"
-	AuditActorAPIKey  AuditActorKind = "api_key"
-	AuditActorSystem  AuditActorKind = "system"
+	AuditActorAnonymous AuditActorKind = "anonymous"
+	AuditActorUser      AuditActorKind = "user"
+	AuditActorService   AuditActorKind = "service"
+	AuditActorAPIKey    AuditActorKind = "api_key"
+	AuditActorSystem    AuditActorKind = "system"
 )
 
 // AuditEvent represents a single audit trail entry.
@@ -717,6 +722,7 @@ type ReleaseDefinitionEvent struct {
 type DefinitionEventStore interface {
 	List(ctx context.Context, definitionID string) ([]*ReleaseDefinitionEvent, error)
 }
+
 // ValuesStore defines the persistence contract for values revisions.
 // For Create, the caller MUST populate Revision via GetNextRevisionNumber
 // and Digest via the values package before calling.
@@ -809,11 +815,12 @@ type OutboxStore interface {
 	GetNextPending(ctx context.Context, operatorID string) (*OutboxEntry, error)
 }
 
-// UserStore defines the persistence contract for local user accounts (REQ-025).
+// UserStore defines the persistence contract for local and external user accounts (REQ-025, REQ-028).
 type UserStore interface {
 	Create(ctx context.Context, u *User) error
 	Get(ctx context.Context, id string) (*User, error)
 	GetByUsername(ctx context.Context, username string) (*User, error)
+	GetByProviderSubject(ctx context.Context, provider, subject string) (*User, error)
 	Update(ctx context.Context, u *User) error
 }
 

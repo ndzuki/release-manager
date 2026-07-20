@@ -114,7 +114,7 @@ func TestCreateOperation_RejectedByActiveEmergency(t *testing.T) {
 		ReleaseDefinitionId: "def-001",
 		OperationType:       "UPGRADE",
 		IdempotencyKey:      "idem-standard",
-		Actor:               &commonv1.ActorContext{UserId: "user-1"},
+		Actor:               &commonv1.ActorContext{UserId: "user-1", Organization: "org-001"},
 	})
 
 	_, err := svc.CreateOperation(context.Background(), req)

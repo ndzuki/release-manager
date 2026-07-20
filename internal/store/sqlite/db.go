@@ -286,6 +286,8 @@ var migrationStatements = []string{
 		deadline             TEXT,
 		last_error           TEXT NOT NULL DEFAULT ''
 	)`,
+	// Migration: add target_revision for ROLLBACK operations.
+	`ALTER TABLE operations ADD COLUMN target_revision INTEGER NOT NULL DEFAULT 0`,
 
 	`CREATE INDEX IF NOT EXISTS idx_operations_definition ON operations(release_definition_id, status)`,
 	`CREATE INDEX IF NOT EXISTS idx_operations_idempotency ON operations(idempotency_key)`,
@@ -403,6 +405,9 @@ var migrationStatements = []string{
 		created_at    TEXT NOT NULL,
 		updated_at    TEXT NOT NULL
 	)`,
+	`ALTER TABLE users ADD COLUMN provider TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE users ADD COLUMN subject TEXT NOT NULL DEFAULT ''`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_provider_subject ON users(provider, subject) WHERE provider != '' AND subject != ''`,
 
 	`CREATE TABLE IF NOT EXISTS auth_sessions (
 		id                 TEXT PRIMARY KEY,
@@ -448,6 +453,18 @@ var migrationStatements = []string{
 	)`,
 
 	`CREATE INDEX IF NOT EXISTS idx_bindings_org ON org_customer_bindings(org_id)`,
+
+	`CREATE TABLE IF NOT EXISTS organization_customer_binding_events (
+		id                 TEXT PRIMARY KEY,
+		binding_id         TEXT NOT NULL REFERENCES org_customer_bindings(id) ON DELETE CASCADE,
+		org_id             TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+		customer_id        TEXT NOT NULL,
+		status             TEXT NOT NULL,
+		optimistic_version INTEGER NOT NULL,
+		changed_at         TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_binding_events_binding ON organization_customer_binding_events(binding_id, changed_at)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_binding_events_version ON organization_customer_binding_events(binding_id, optimistic_version)`,
 
 	// Audit events (REQ-050)
 	`CREATE TABLE IF NOT EXISTS audit_events (
