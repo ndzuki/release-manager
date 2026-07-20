@@ -46,15 +46,14 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	// Initialize audit emitter for async audit event persistence.
 	auditCfg := audit.DefaultConfig()
 	auditEmitter := audit.NewEmitter(st.AuditEvents(), logger, auditCfg)
-	_ = auditEmitter
 
 	verifier := trust.NewStoreVerifier(
-		trust.NewStubVerifier(st.Verifications(), logger),
+		trust.NewStubVerifier(st.Verifications(), nil, logger),
 		st.Verifications(),
 		logger,
 	)
 
-	svc := orchestrator.NewService(st, verifier, s.targetEnv, logger)
+	svc := orchestrator.NewService(st, verifier, s.targetEnv, auditEmitter, logger)
 	path, h := orchestratorv1connect.NewOrchestratorServiceHandler(svc)
 	mux.Handle(path, h)
 

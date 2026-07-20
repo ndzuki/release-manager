@@ -146,7 +146,7 @@ func TestCreateOperation_RejectedForRevokedCustomerBinding(t *testing.T) {
 
 	binding, err := st.Bindings().GetByOrgAndCustomer(context.Background(), "org-001", "cust-001")
 	require.NoError(t, err)
-	require.NoError(t, st.Bindings().SetStatus(context.Background(), binding, store.BindingRevoked))
+	require.NoError(t, st.Bindings().SetStatus(context.Background(), binding.ID, store.BindingRevoked))
 
 	_, err = svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INSTALL",

@@ -505,7 +505,7 @@ func (s *TrustService) emitTrustAudit(operator, action, rootID, issuer, env stri
 		Metadata:       map[string]string{"environment": env, "issuer": issuer},
 		CreatedAt:      time.Now().UTC(),
 	}
-	if !s.audit.Emit(ev) {
+	if !s.audit.Emit(ev).Accepted {
 		s.logger.Warn("trust audit event rejected", "action", action, "root_id", rootID)
 	}
 }

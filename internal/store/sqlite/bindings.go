@@ -86,6 +86,18 @@ func (s *bindingStore) ListByOrg(ctx context.Context, orgID string) ([]*store.Or
 	return bindings, rows.Err()
 }
 
+
+func (s *bindingStore) Update(ctx context.Context, b *store.OrgCustomerBinding) error {
+	b.UpdatedAt = time.Now().UTC()
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE org_customer_bindings
+		SET status = ?, optimistic_version = ?, updated_at = ?
+		WHERE id = ? AND optimistic_version = ?`,
+		string(b.Status), b.OptimisticVersion, b.UpdatedAt.UTC().Format(time.RFC3339),
+		b.ID, b.OptimisticVersion-1,
+	)
+	return err
+}
 func (s *bindingStore) SetStatus(ctx context.Context, id string, status store.BindingStatus) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE org_customer_bindings SET status = ?, updated_at = ? WHERE id = ?`,
 		string(status), time.Now().UTC().Format(time.RFC3339), id)

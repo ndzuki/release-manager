@@ -99,7 +99,7 @@ func (s *Service) EmergencyChange(
 		"convergence", convergence,
 	)
 	summary, _ := audit.Sanitize(msg.Reason)
-	actorKind, actorID := auditActor(op.Actor)
+	actorKind, actorID := auditActor(&op.Actor)
 	s.emitAudit(audit.NewEvent(
 		actorKind,
 		actorID,

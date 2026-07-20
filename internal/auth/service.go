@@ -294,7 +294,7 @@ func (s *AuthService) GetInitStatus(
 	ctx context.Context,
 	_ *connect.Request[authv1.GetInitStatusRequest],
 ) (*connect.Response[authv1.GetInitStatusResponse], error) {
-	count, err := s.store.Users().Count(ctx)
+	count, err := s.store.Users().Count(ctx, "")
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check init status"))
 	}
@@ -311,7 +311,7 @@ func (s *AuthService) Initialize(
 ) (*connect.Response[authv1.InitializeResponse], error) {
 	msg := req.Msg
 
-	count, err := s.store.Users().Count(ctx)
+	count, err := s.store.Users().Count(ctx, "")
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check init status"))
 	}

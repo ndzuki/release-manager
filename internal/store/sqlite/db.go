@@ -34,6 +34,9 @@ type Store struct {
 	notif           *notificationStore
 	bundles         *bundleStore
 	verifs          *verificationStore
+	scanResults     *scanResultStore
+	vulnExceptions  *vulnerabilityExceptionStore
+	trustRoots      *trustRootStore
 	routes          *clusterRouteStore
 	invs            *inventoryStore
 	custEvents      *customerEventStore
@@ -41,6 +44,7 @@ type Store struct {
 	preflight       *preflightStore
 	candidateArts   *candidateArtifactStore
 	preflightCycles *preflightLifecycleStore
+	auditExports    *auditExportStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -87,6 +91,10 @@ func Open(dsn string) (*Store, error) {
 	s.bindings = &bindingStore{db: db}
 	s.notif = &notificationStore{db: db}
 	s.audit = &auditEventStore{db: db}
+	s.trustRoots = &trustRootStore{db: db}
+	s.vulnExceptions = &vulnerabilityExceptionStore{db: db}
+	s.scanResults = &scanResultStore{db: db}
+	s.auditExports = &auditExportStore{db: db}
 	s.bundles = &bundleStore{db: db}
 	s.invs = &inventoryStore{db: db}
 	s.verifs = &verificationStore{db: db}
@@ -156,6 +164,9 @@ func (s *Store) Bindings() store.BindingStore { return s.bindings }
 // AuditEvents returns the AuditEventStore.
 func (s *Store) AuditEvents() store.AuditEventStore { return s.audit }
 
+// AuditExports returns the AuditExportStore.
+func (s *Store) AuditExports() store.AuditExportStore { return s.auditExports }
+
 // Bundles returns the BundleStore.
 func (s *Store) Bundles() store.BundleStore { return s.bundles }
 
@@ -164,6 +175,15 @@ func (s *Store) Notifications() store.NotificationStore { return s.notif }
 
 // Verifications returns the VerificationStore.
 func (s *Store) Verifications() store.VerificationStore { return s.verifs }
+
+// TrustRoots returns the TrustRootStore.
+func (s *Store) TrustRoots() store.TrustRootStore { return s.trustRoots }
+
+// ScanResults returns the ScanResultStore.
+func (s *Store) ScanResults() store.ScanResultStore { return s.scanResults }
+
+// VulnerabilityExceptions returns the VulnerabilityExceptionStore.
+func (s *Store) VulnerabilityExceptions() store.VulnerabilityExceptionStore { return s.vulnExceptions }
 
 // CustomerEvents returns the CustomerEventStore.
 func (s *Store) CustomerEvents() store.CustomerEventStore { return s.custEvents }

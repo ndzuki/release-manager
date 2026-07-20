@@ -247,7 +247,7 @@ func TestRollbackRelease_DefinitionNotActive(t *testing.T) {
 		Status:      store.DefStatusDraft,
 		CreatedBy:   "test",
 	}
-	require.NoError(t, st.Definitions().Create(context.Background(), def))
+	require.NoError(t, st.Definitions().Create(context.Background(), def, nil))
 
 	_, err := svc.RollbackRelease(context.Background(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
 		ReleaseDefinitionId:     "def-draft",

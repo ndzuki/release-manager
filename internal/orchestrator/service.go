@@ -16,29 +16,32 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
+	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/orchestrator/preflight"
 	"github.com/ndzuki/release-manager/internal/store"
 	"github.com/ndzuki/release-manager/internal/trust"
+	"github.com/ndzuki/release-manager/internal/vulnerability"
 )
 
 // Service implements the OrchestratorServiceHandler Connect interface.
 type Service struct {
-	store       store.Store
-	verifier    trust.Verifier
-	targetEnv   string
-	coordinator *preflight.Coordinator
-	logger      *slog.Logger
+	store        store.Store
+	verifier     trust.Verifier
+	targetEnv    string
+	coordinator  *preflight.Coordinator
+	vulnEval     *vulnerability.Evaluator
+	auditEmitter audit.Sink
+	logger       *slog.Logger
 }
-
-// NewService creates a new orchestrator Connect service.
-func NewService(st store.Store, verifier trust.Verifier, targetEnv string, logger *slog.Logger) *Service {
+func NewService(st store.Store, verifier trust.Verifier, targetEnv string, auditEmitter audit.Sink, logger *slog.Logger) *Service {
 	return &Service{
-		store:       st,
-		verifier:    verifier,
-		targetEnv:   targetEnv,
-		coordinator: preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.PreflightLifecycles(), logger),
-		logger:      logger,
+		store:        st,
+		verifier:     verifier,
+		targetEnv:    targetEnv,
+		coordinator:  preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.PreflightLifecycles(), logger),
+		auditEmitter: auditEmitter,
+		logger:       logger,
 	}
 }
 
@@ -376,4 +379,27 @@ func checkDefinitionOperable(def *store.ReleaseDefinition) error {
 	}
 	return connect.NewError(connect.CodeFailedPrecondition,
 		fmt.Errorf("release_definition_disabled: definition %s is %s", def.ID, def.Status))
+}
+
+// emitAudit emits an audit event through the configured sink, if any.
+func (s *Service) emitAudit(ev *store.AuditEvent) {
+	if s.auditEmitter == nil {
+		return
+	}
+	result := s.auditEmitter.Emit(ev)
+	if !result.Accepted {
+		s.logger.Warn("audit event rejected",
+			"code", string(result.Code),
+			"resource_type", ev.ResourceType,
+			"action", ev.Action,
+		)
+	}
+}
+
+// auditActor converts an ActorContext to audit actor kind and ID.
+func auditActor(actor *store.ActorContext) (store.AuditActorKind, string) {
+	if actor == nil || actor.UserID == "" {
+		return store.AuditActorSystem, "system"
+	}
+	return store.AuditActorUser, actor.UserID
 }

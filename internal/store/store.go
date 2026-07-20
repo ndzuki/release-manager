@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -132,6 +133,7 @@ type ReleaseDefinition struct {
 	ChartName         string           `json:"chart_name"`
 	Status            DefinitionStatus `json:"status"`
 	OptimisticVersion int              `json:"optimistic_version"`
+	CurrentBundleID   *string          `json:"current_bundle_id,omitempty"`
 	CreatedBy         string           `json:"created_by"`
 	CreatedAt         time.Time        `json:"created_at"`
 	UpdatedAt         time.Time        `json:"updated_at"`
@@ -589,6 +591,7 @@ const (
 	BundleReceived  BundleStatus = "received"
 	BundleValidated BundleStatus = "validated"
 	BundleRejected  BundleStatus = "rejected"
+	BundleArchived  BundleStatus = "archived"
 )
 
 // Valid returns true if the status is a recognized value.
@@ -624,6 +627,7 @@ type ReleaseBundle struct {
 	SignatureRef  string
 	SBOMRef       string
 	ProvenanceRef string
+	ArchivedAt    *time.Time
 	CreatedAt     time.Time
 }
 
@@ -632,6 +636,10 @@ type BundleStore interface {
 	Create(ctx context.Context, b *ReleaseBundle) error
 	Get(ctx context.Context, id string) (*ReleaseBundle, error)
 	GetByDigest(ctx context.Context, alg, value string) (*ReleaseBundle, error)
+	ListForArchive(ctx context.Context, retentionDays int, terminalStates []OperationStatus) ([]string, error)
+	Archive(ctx context.Context, ids []string) (int64, error)
+	Unarchive(ctx context.Context, id string) error
+	DeleteBefore(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 // TrustPolicy defines the verification rules for an environment.
@@ -779,6 +787,7 @@ type DefinitionStore interface {
 	Get(ctx context.Context, id string) (*ReleaseDefinition, error)
 	Update(ctx context.Context, def *ReleaseDefinition, event *ReleaseDefinitionEvent) (*ReleaseDefinition, error)
 	List(ctx context.Context, customerID, clusterID string, includeDisabled bool) ([]*ReleaseDefinition, error)
+	SetCurrentBundle(ctx context.Context, defID string, bundleID string) (bool, error)
 }
 
 
@@ -916,14 +925,13 @@ type OrganizationStore interface {
 	List(ctx context.Context) ([]*Organization, error)
 	Update(ctx context.Context, o *Organization) error
 }
-
-// OrganizationMemberStore defines the persistence contract for org members (REQ-026).
 type OrganizationMemberStore interface {
 	Create(ctx context.Context, m *OrganizationMember) error
 	Get(ctx context.Context, orgID, userID string) (*OrganizationMember, error)
 	ListByOrg(ctx context.Context, orgID string) ([]*OrganizationMember, error)
 	ListByUser(ctx context.Context, userID string) ([]*OrganizationMember, error)
 	Update(ctx context.Context, m *OrganizationMember) error
+	Delete(ctx context.Context, orgID, userID string) error
 }
 
 // BindingStore defines the persistence contract for org-customer bindings (REQ-049).
@@ -945,6 +953,9 @@ type AuditEventStore interface {
 	Query(ctx context.Context, filter AuditEventFilter, cursor string, limit int) (*AuditEventPage, error)
 	GetByID(ctx context.Context, id string) (*AuditEvent, error)
 	Count(ctx context.Context, filter AuditEventFilter) (int64, error)
+	ListByResource(ctx context.Context, resourceType, resourceID string) ([]*AuditEvent, error)
+	ListOlderThan(ctx context.Context, cutoff time.Time, batchSize int) ([]*AuditEvent, error)
+	DeleteByIDs(ctx context.Context, ids []string) (int64, error)
 }
 
 type AuditExportStore interface {
@@ -1059,6 +1070,45 @@ type InventoryStore interface {
 	GetBySyncID(ctx context.Context, syncID string) (*InventorySyncLog, error)
 }
 
+
+// ── Candidate artifact domain types (REQ-XXX) ──────────────────────
+
+// CandidateArtifact represents a build artifact awaiting bundle assignment.
+type CandidateArtifact struct {
+	ID           string
+	ArtifactType ArtifactType
+	Ref          string
+	Digest       string
+	BundleID     *string
+	CreatedAt    time.Time
+}
+
+// CandidateArtifactStore defines the persistence contract for candidate artifacts.
+type CandidateArtifactStore interface {
+	Create(ctx context.Context, ca *CandidateArtifact) error
+	LinkToBundle(ctx context.Context, artifactID, bundleID string) error
+	DeleteOrphanBefore(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+// ── Preflight lifecycle domain types (REQ-069) ─────────────────────
+
+// PreflightLifecycle records the lifecycle of a preflight check for GC.
+type PreflightLifecycle struct {
+	ID                  string
+	OperationID         *string
+	OperationTerminalAt *time.Time
+	Stages              json.RawMessage
+	Overall             string
+	ErrorCode           string
+	CreatedAt           time.Time
+}
+
+// PreflightLifecycleStore defines the persistence contract for preflight lifecycles.
+type PreflightLifecycleStore interface {
+	Create(ctx context.Context, pl *PreflightLifecycle) error
+	SetOperationTerminal(ctx context.Context, operationID string, terminalAt time.Time) error
+	DeleteExpired(ctx context.Context, ttl time.Duration) (int64, error)
+}
 // Store is the top-level persistence abstraction.
 type Store interface {
 	Operations() OperationStore
@@ -1089,5 +1139,7 @@ type Store interface {
 	CustomerEvents() CustomerEventStore
 	ClusterRoutes() ClusterRouteStore
 	Inventories() InventoryStore
+	CandidateArtifacts() CandidateArtifactStore
+	PreflightLifecycles() PreflightLifecycleStore
 	Close() error
 }
