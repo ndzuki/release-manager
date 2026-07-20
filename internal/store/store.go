@@ -25,6 +25,8 @@ var (
 	ErrOptimisticLock = errors.New("store: optimistic lock conflict")
 	ErrDuplicateKey   = errors.New("store: duplicate key")
 	ErrReleaseBusy    = errors.New("store: release busy")
+	ErrInvalidCursor  = errors.New("store: invalid cursor")
+	ErrBindingRevoked = errors.New("store: binding revoked")
 )
 
 // OperationType classifies the kind of release operation.
@@ -415,6 +417,36 @@ type AuditEvent struct {
 	DurationMs     int64
 	ChangeSummary  string
 	Metadata       map[string]string
+	CreatedAt      time.Time
+}
+
+// AuditEventFilter narrows audit event queries by optional criteria.
+// Zero fields are ignored; pointer fields test only when non-nil.
+type AuditEventFilter struct {
+	OrganizationID string
+	ResourceType   string
+	ResourceID     string
+	ActorID        string
+	Action         string
+	Status         string
+	Since          *time.Time
+	Until          *time.Time
+}
+
+// AuditEventPage is a cursor-based page of audit events.
+type AuditEventPage struct {
+	Events     []*AuditEvent
+	HasMore    bool
+	NextCursor string
+}
+
+// AuditExport represents an audit event export job.
+type AuditExport struct {
+	ID             string
+	OrganizationID string
+	Since          time.Time
+	Until          time.Time
+	Status         string
 	CreatedAt      time.Time
 }
 
@@ -822,6 +854,7 @@ type UserStore interface {
 	GetByUsername(ctx context.Context, username string) (*User, error)
 	GetByProviderSubject(ctx context.Context, provider, subject string) (*User, error)
 	Update(ctx context.Context, u *User) error
+	Count(ctx context.Context) (int64, error)
 }
 
 // AuthSessionStore defines the persistence contract for auth sessions (REQ-025).
@@ -861,12 +894,18 @@ type BindingStore interface {
 	GetByOrgAndCustomer(ctx context.Context, orgID, customerID string) (*OrgCustomerBinding, error)
 	ListByOrg(ctx context.Context, orgID string) ([]*OrgCustomerBinding, error)
 	Update(ctx context.Context, b *OrgCustomerBinding) error
+	SetStatus(ctx context.Context, binding *OrgCustomerBinding, status BindingStatus) error
+	RequireActive(ctx context.Context, orgID, customerID string) error
 }
 
 // AuditEventStore defines the persistence contract for audit events (REQ-050).
 type AuditEventStore interface {
 	Create(ctx context.Context, e *AuditEvent) error
 	CreateBatch(ctx context.Context, events []*AuditEvent) error
+	ListByResource(ctx context.Context, resourceType, resourceID string) ([]*AuditEvent, error)
+	Query(ctx context.Context, filter AuditEventFilter, cursor string, limit int) (*AuditEventPage, error)
+	GetByID(ctx context.Context, id string) (*AuditEvent, error)
+	Count(ctx context.Context, filter AuditEventFilter) (int64, error)
 }
 
 // NotificationStore defines the persistence contract for notification jobs (REQ-031).

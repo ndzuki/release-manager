@@ -85,6 +85,14 @@ func (s *userStore) Update(ctx context.Context, u *store.User) error {
 	return nil
 }
 
+func (s *userStore) Count(ctx context.Context) (int64, error) {
+	var count int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count users: %w", err)
+	}
+	return count, nil
+}
+
 func scanUser(row interface{ Scan(...interface{}) error }) (*store.User, error) {
 	var (
 		u            store.User

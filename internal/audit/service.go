@@ -13,7 +13,10 @@ import (
 )
 
 // Service implements the audit collection Connect service.
-type Service struct{ emitter Sink }
+type Service struct{
+	auditv1connect.UnimplementedAuditServiceHandler
+	emitter Sink
+}
 
 // NewService creates an audit collection service.
 func NewService(emitter Sink) *Service { return &Service{emitter: emitter} }
@@ -70,4 +73,4 @@ func actorKindFromProto(kind auditv1.ActorKind) store.AuditActorKind {
 	}
 }
 
-var _ auditv1connect.AuditServiceHandler = (*Service)(nil)
+// Interface compliance is ensured by embedding UnimplementedAuditServiceHandler.

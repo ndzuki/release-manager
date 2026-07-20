@@ -240,7 +240,7 @@ func (s *ExternalIdentityService) userRoles(ctx context.Context, userID string) 
 }
 
 func (s *ExternalIdentityService) issueSession(ctx context.Context, userID string, roles []string) (*authv1.LoginResponse, error) {
-	accessToken, accessExp, err := s.jwt.GenerateAccessToken(userID, roles)
+	accessToken, accessExp, err := s.jwt.GenerateAccessToken(userID, "", roles)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("token generation failed"))
 	}

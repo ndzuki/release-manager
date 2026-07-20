@@ -16,11 +16,12 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
+	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/orchestrator/preflight"
 	"github.com/ndzuki/release-manager/internal/store"
-	"github.com/ndzuki/release-manager/internal/vulnerability"
 	"github.com/ndzuki/release-manager/internal/trust"
+	"github.com/ndzuki/release-manager/internal/vulnerability"
 )
 
 // Service implements the OrchestratorServiceHandler Connect interface.
@@ -29,18 +30,42 @@ type Service struct {
 	verifier    trust.Verifier
 	targetEnv   string
 	coordinator *preflight.Coordinator
-	logger      *slog.Logger
 	vulnEval    *vulnerability.Evaluator
+	audit       audit.Sink
+	logger      *slog.Logger
 }
 
 // NewService creates a new orchestrator Connect service.
-func NewService(st store.Store, verifier trust.Verifier, targetEnv string, logger *slog.Logger) *Service {
-	return &Service{
+func NewService(st store.Store, verifier trust.Verifier, targetEnv string, logger *slog.Logger, auditSink ...audit.Sink) *Service {
+	svc := &Service{
 		store:       st,
 		verifier:    verifier,
 		targetEnv:   targetEnv,
 		coordinator: preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), logger),
 		logger:      logger,
+	}
+	if len(auditSink) > 0 {
+		svc.audit = auditSink[0]
+	}
+	return svc
+}
+
+// auditActor extracts the actor kind and ID from an operation's actor context.
+func auditActor(actor store.ActorContext) (store.AuditActorKind, string) {
+	if actor.UserID == "" {
+		return store.AuditActorAnonymous, ""
+	}
+	return store.AuditActorUser, actor.UserID
+}
+
+// emitAudit dispatches an audit event through the configured sink.
+func (s *Service) emitAudit(event *store.AuditEvent) {
+	if s.audit == nil {
+		return
+	}
+	result := s.audit.Emit(event)
+	if !result.Accepted {
+		s.logger.Warn("audit event rejected", "event_id", result.EventID, "code", result.Code)
 	}
 }
 

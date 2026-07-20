@@ -86,6 +86,31 @@ func (s *bindingStore) ListByOrg(ctx context.Context, orgID string) ([]*store.Or
 	return bindings, rows.Err()
 }
 
+
+// Update performs an optimistic update of the binding's mutable fields.
+func (s *bindingStore) Update(ctx context.Context, b *store.OrgCustomerBinding) error {
+	updatedAt := time.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE org_customer_bindings
+		SET status = ?, optimistic_version = optimistic_version + 1, updated_at = ?
+		WHERE id = ? AND optimistic_version = ?`,
+		string(b.Status), updatedAt.UTC().Format(time.RFC3339), b.ID, b.OptimisticVersion,
+	)
+	if err != nil {
+		return fmt.Errorf("update binding: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rows == 0 {
+		return store.ErrOptimisticLock
+	}
+	b.UpdatedAt = updatedAt
+	b.OptimisticVersion++
+	return nil
+}
+
 func (s *bindingStore) SetStatus(
 	ctx context.Context,
 	binding *store.OrgCustomerBinding,
