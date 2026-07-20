@@ -37,7 +37,7 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, logge
 		store:       st,
 		verifier:    verifier,
 		targetEnv:   targetEnv,
-		coordinator: preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), logger),
+		coordinator: preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.PreflightLifecycles(), logger),
 		logger:      logger,
 	}
 }

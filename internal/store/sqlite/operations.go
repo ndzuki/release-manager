@@ -13,7 +13,10 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
-type operationStore struct{ db *sql.DB }
+type operationStore struct {
+	db *sql.DB
+	pl *preflightLifecycleStore // best-effort preflight lifecycle GC integration
+}
 
 func (s *operationStore) Create(ctx context.Context, op *store.Operation) error {
 	return createOperation(ctx, s.db, op)
@@ -225,6 +228,13 @@ func (s *operationStore) transition(
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit operation transition: %w", err)
 	}
+
+	// REQ-069: When an operation reaches a terminal state, update the associated
+	// preflight lifecycle record's operation_terminal_at so GC can evaluate it.
+	if status.IsTerminal() {
+		s.maybeSetPreflightTerminal(ctx, id, updated.UpdatedAt)
+	}
+
 	return &updated, nil
 }
 
@@ -429,4 +439,18 @@ func buildOperation(id, opType, status, defID, idemKey, reqHash string,
 		Deadline:            dl,
 		LastError:           lastError,
 	}, nil
+}
+
+// maybeSetPreflightTerminal updates the preflight lifecycle record's
+// operation_terminal_at when the operation reaches a terminal state.
+// This is best-effort — failures are silently ignored since the operation
+// transition already succeeded and GC will re-evaluate on the next cycle.
+func (s *operationStore) maybeSetPreflightTerminal(ctx context.Context, operationID string, terminalAt time.Time) {
+	if s.pl == nil {
+		return
+	}
+	if err := s.pl.SetOperationTerminal(ctx, operationID, terminalAt); err != nil {
+		// Best-effort: the operation already committed successfully.
+		// Preflight GC will re-evaluate created_at on the next cycle.
+	}
 }
