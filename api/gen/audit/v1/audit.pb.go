@@ -7,7 +7,6 @@
 package auditv1
 
 import (
-	v1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
@@ -28,27 +27,30 @@ type ActorKind int32
 
 const (
 	ActorKind_ACTOR_KIND_UNSPECIFIED ActorKind = 0
-	ActorKind_ACTOR_KIND_USER        ActorKind = 1
-	ActorKind_ACTOR_KIND_SERVICE     ActorKind = 2
-	ActorKind_ACTOR_KIND_API_KEY     ActorKind = 3
-	ActorKind_ACTOR_KIND_SYSTEM      ActorKind = 4
+	ActorKind_ACTOR_KIND_ANONYMOUS   ActorKind = 1
+	ActorKind_ACTOR_KIND_USER        ActorKind = 2
+	ActorKind_ACTOR_KIND_SERVICE     ActorKind = 3
+	ActorKind_ACTOR_KIND_API_KEY     ActorKind = 4
+	ActorKind_ACTOR_KIND_SYSTEM      ActorKind = 5
 )
 
 // Enum value maps for ActorKind.
 var (
 	ActorKind_name = map[int32]string{
 		0: "ACTOR_KIND_UNSPECIFIED",
-		1: "ACTOR_KIND_USER",
-		2: "ACTOR_KIND_SERVICE",
-		3: "ACTOR_KIND_API_KEY",
-		4: "ACTOR_KIND_SYSTEM",
+		1: "ACTOR_KIND_ANONYMOUS",
+		2: "ACTOR_KIND_USER",
+		3: "ACTOR_KIND_SERVICE",
+		4: "ACTOR_KIND_API_KEY",
+		5: "ACTOR_KIND_SYSTEM",
 	}
 	ActorKind_value = map[string]int32{
 		"ACTOR_KIND_UNSPECIFIED": 0,
-		"ACTOR_KIND_USER":        1,
-		"ACTOR_KIND_SERVICE":     2,
-		"ACTOR_KIND_API_KEY":     3,
-		"ACTOR_KIND_SYSTEM":      4,
+		"ACTOR_KIND_ANONYMOUS":   1,
+		"ACTOR_KIND_USER":        2,
+		"ACTOR_KIND_SERVICE":     3,
+		"ACTOR_KIND_API_KEY":     4,
+		"ACTOR_KIND_SYSTEM":      5,
 	}
 )
 
@@ -313,11 +315,13 @@ func (x *EmitAuditRequest) GetEvents() []*AuditEvent {
 
 // EmitAuditResponse acknowledges receipt of audit events.
 type EmitAuditResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Accepted      int32                  `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
-	Rejected      int32                  `protobuf:"varint,2,opt,name=rejected,proto3" json:"rejected,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Accepted       int32                  `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	Rejected       int32                  `protobuf:"varint,2,opt,name=rejected,proto3" json:"rejected,omitempty"`
+	AuditEventIds  []string               `protobuf:"bytes,3,rep,name=audit_event_ids,json=auditEventIds,proto3" json:"audit_event_ids,omitempty"`
+	RejectionCodes []string               `protobuf:"bytes,4,rep,name=rejection_codes,json=rejectionCodes,proto3" json:"rejection_codes,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *EmitAuditResponse) Reset() {
@@ -364,308 +368,25 @@ func (x *EmitAuditResponse) GetRejected() int32 {
 	return 0
 }
 
-// AuditQueryFilter restricts audit events returned by a query or export.
-type AuditQueryFilter struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
-	ResourceType   string                 `protobuf:"bytes,2,opt,name=resource_type,json=resourceType,proto3" json:"resource_type,omitempty"`
-	ResourceId     string                 `protobuf:"bytes,3,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"`
-	ActorId        string                 `protobuf:"bytes,4,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
-	Action         string                 `protobuf:"bytes,5,opt,name=action,proto3" json:"action,omitempty"`
-	Status         string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
-	TimeRange      *v1.TimestampRange     `protobuf:"bytes,7,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *AuditQueryFilter) Reset() {
-	*x = AuditQueryFilter{}
-	mi := &file_audit_v1_audit_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *AuditQueryFilter) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*AuditQueryFilter) ProtoMessage() {}
-
-func (x *AuditQueryFilter) ProtoReflect() protoreflect.Message {
-	mi := &file_audit_v1_audit_proto_msgTypes[4]
+func (x *EmitAuditResponse) GetAuditEventIds() []string {
 	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use AuditQueryFilter.ProtoReflect.Descriptor instead.
-func (*AuditQueryFilter) Descriptor() ([]byte, []int) {
-	return file_audit_v1_audit_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *AuditQueryFilter) GetOrganizationId() string {
-	if x != nil {
-		return x.OrganizationId
-	}
-	return ""
-}
-
-func (x *AuditQueryFilter) GetResourceType() string {
-	if x != nil {
-		return x.ResourceType
-	}
-	return ""
-}
-
-func (x *AuditQueryFilter) GetResourceId() string {
-	if x != nil {
-		return x.ResourceId
-	}
-	return ""
-}
-
-func (x *AuditQueryFilter) GetActorId() string {
-	if x != nil {
-		return x.ActorId
-	}
-	return ""
-}
-
-func (x *AuditQueryFilter) GetAction() string {
-	if x != nil {
-		return x.Action
-	}
-	return ""
-}
-
-func (x *AuditQueryFilter) GetStatus() string {
-	if x != nil {
-		return x.Status
-	}
-	return ""
-}
-
-func (x *AuditQueryFilter) GetTimeRange() *v1.TimestampRange {
-	if x != nil {
-		return x.TimeRange
+		return x.AuditEventIds
 	}
 	return nil
 }
 
-// QueryAuditEventsRequest queries organization-scoped audit events.
-type QueryAuditEventsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Filter        *AuditQueryFilter      `protobuf:"bytes,1,opt,name=filter,proto3" json:"filter,omitempty"`
-	Pagination    *v1.Pagination         `protobuf:"bytes,2,opt,name=pagination,proto3" json:"pagination,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *QueryAuditEventsRequest) Reset() {
-	*x = QueryAuditEventsRequest{}
-	mi := &file_audit_v1_audit_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *QueryAuditEventsRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*QueryAuditEventsRequest) ProtoMessage() {}
-
-func (x *QueryAuditEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_audit_v1_audit_proto_msgTypes[5]
+func (x *EmitAuditResponse) GetRejectionCodes() []string {
 	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use QueryAuditEventsRequest.ProtoReflect.Descriptor instead.
-func (*QueryAuditEventsRequest) Descriptor() ([]byte, []int) {
-	return file_audit_v1_audit_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *QueryAuditEventsRequest) GetFilter() *AuditQueryFilter {
-	if x != nil {
-		return x.Filter
+		return x.RejectionCodes
 	}
 	return nil
-}
-
-func (x *QueryAuditEventsRequest) GetPagination() *v1.Pagination {
-	if x != nil {
-		return x.Pagination
-	}
-	return nil
-}
-
-// QueryAuditEventsResponse returns a stable cursor-paginated result.
-type QueryAuditEventsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Events        []*AuditEvent          `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
-	Pagination    *v1.PaginationResponse `protobuf:"bytes,2,opt,name=pagination,proto3" json:"pagination,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *QueryAuditEventsResponse) Reset() {
-	*x = QueryAuditEventsResponse{}
-	mi := &file_audit_v1_audit_proto_msgTypes[6]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *QueryAuditEventsResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*QueryAuditEventsResponse) ProtoMessage() {}
-
-func (x *QueryAuditEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_audit_v1_audit_proto_msgTypes[6]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use QueryAuditEventsResponse.ProtoReflect.Descriptor instead.
-func (*QueryAuditEventsResponse) Descriptor() ([]byte, []int) {
-	return file_audit_v1_audit_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *QueryAuditEventsResponse) GetEvents() []*AuditEvent {
-	if x != nil {
-		return x.Events
-	}
-	return nil
-}
-
-func (x *QueryAuditEventsResponse) GetPagination() *v1.PaginationResponse {
-	if x != nil {
-		return x.Pagination
-	}
-	return nil
-}
-
-// ExportAuditEventsRequest creates an asynchronous audit export job.
-type ExportAuditEventsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Filter        *AuditQueryFilter      `protobuf:"bytes,1,opt,name=filter,proto3" json:"filter,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ExportAuditEventsRequest) Reset() {
-	*x = ExportAuditEventsRequest{}
-	mi := &file_audit_v1_audit_proto_msgTypes[7]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ExportAuditEventsRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ExportAuditEventsRequest) ProtoMessage() {}
-
-func (x *ExportAuditEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_audit_v1_audit_proto_msgTypes[7]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ExportAuditEventsRequest.ProtoReflect.Descriptor instead.
-func (*ExportAuditEventsRequest) Descriptor() ([]byte, []int) {
-	return file_audit_v1_audit_proto_rawDescGZIP(), []int{7}
-}
-
-func (x *ExportAuditEventsRequest) GetFilter() *AuditQueryFilter {
-	if x != nil {
-		return x.Filter
-	}
-	return nil
-}
-
-// ExportAuditEventsResponse identifies the accepted export job.
-type ExportAuditEventsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ExportId      string                 `protobuf:"bytes,1,opt,name=export_id,json=exportId,proto3" json:"export_id,omitempty"`
-	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ExportAuditEventsResponse) Reset() {
-	*x = ExportAuditEventsResponse{}
-	mi := &file_audit_v1_audit_proto_msgTypes[8]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ExportAuditEventsResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ExportAuditEventsResponse) ProtoMessage() {}
-
-func (x *ExportAuditEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_audit_v1_audit_proto_msgTypes[8]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ExportAuditEventsResponse.ProtoReflect.Descriptor instead.
-func (*ExportAuditEventsResponse) Descriptor() ([]byte, []int) {
-	return file_audit_v1_audit_proto_rawDescGZIP(), []int{8}
-}
-
-func (x *ExportAuditEventsResponse) GetExportId() string {
-	if x != nil {
-		return x.ExportId
-	}
-	return ""
-}
-
-func (x *ExportAuditEventsResponse) GetStatus() string {
-	if x != nil {
-		return x.Status
-	}
-	return ""
 }
 
 var File_audit_v1_audit_proto protoreflect.FileDescriptor
 
 const file_audit_v1_audit_proto_rawDesc = "" +
 	"\n" +
-	"\x14audit/v1/audit.proto\x12\baudit.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x15common/v1/types.proto\"\x82\x01\n" +
+	"\x14audit/v1/audit.proto\x12\baudit.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x82\x01\n" +
 	"\n" +
 	"AuditActor\x12'\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x13.audit.v1.ActorKindR\x04kind\x12\x0e\n" +
@@ -692,45 +413,21 @@ const file_audit_v1_audit_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"@\n" +
 	"\x10EmitAuditRequest\x12,\n" +
-	"\x06events\x18\x01 \x03(\v2\x14.audit.v1.AuditEventR\x06events\"K\n" +
+	"\x06events\x18\x01 \x03(\v2\x14.audit.v1.AuditEventR\x06events\"\x9c\x01\n" +
 	"\x11EmitAuditResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\x05R\baccepted\x12\x1a\n" +
-	"\brejected\x18\x02 \x01(\x05R\brejected\"\x86\x02\n" +
-	"\x10AuditQueryFilter\x12'\n" +
-	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12#\n" +
-	"\rresource_type\x18\x02 \x01(\tR\fresourceType\x12\x1f\n" +
-	"\vresource_id\x18\x03 \x01(\tR\n" +
-	"resourceId\x12\x19\n" +
-	"\bactor_id\x18\x04 \x01(\tR\aactorId\x12\x16\n" +
-	"\x06action\x18\x05 \x01(\tR\x06action\x12\x16\n" +
-	"\x06status\x18\x06 \x01(\tR\x06status\x128\n" +
-	"\n" +
-	"time_range\x18\a \x01(\v2\x19.common.v1.TimestampRangeR\ttimeRange\"\x84\x01\n" +
-	"\x17QueryAuditEventsRequest\x122\n" +
-	"\x06filter\x18\x01 \x01(\v2\x1a.audit.v1.AuditQueryFilterR\x06filter\x125\n" +
-	"\n" +
-	"pagination\x18\x02 \x01(\v2\x15.common.v1.PaginationR\n" +
-	"pagination\"\x87\x01\n" +
-	"\x18QueryAuditEventsResponse\x12,\n" +
-	"\x06events\x18\x01 \x03(\v2\x14.audit.v1.AuditEventR\x06events\x12=\n" +
-	"\n" +
-	"pagination\x18\x02 \x01(\v2\x1d.common.v1.PaginationResponseR\n" +
-	"pagination\"N\n" +
-	"\x18ExportAuditEventsRequest\x122\n" +
-	"\x06filter\x18\x01 \x01(\v2\x1a.audit.v1.AuditQueryFilterR\x06filter\"P\n" +
-	"\x19ExportAuditEventsResponse\x12\x1b\n" +
-	"\texport_id\x18\x01 \x01(\tR\bexportId\x12\x16\n" +
-	"\x06status\x18\x02 \x01(\tR\x06status*\x83\x01\n" +
+	"\brejected\x18\x02 \x01(\x05R\brejected\x12&\n" +
+	"\x0faudit_event_ids\x18\x03 \x03(\tR\rauditEventIds\x12'\n" +
+	"\x0frejection_codes\x18\x04 \x03(\tR\x0erejectionCodes*\x9d\x01\n" +
 	"\tActorKind\x12\x1a\n" +
-	"\x16ACTOR_KIND_UNSPECIFIED\x10\x00\x12\x13\n" +
-	"\x0fACTOR_KIND_USER\x10\x01\x12\x16\n" +
-	"\x12ACTOR_KIND_SERVICE\x10\x02\x12\x16\n" +
-	"\x12ACTOR_KIND_API_KEY\x10\x03\x12\x15\n" +
-	"\x11ACTOR_KIND_SYSTEM\x10\x042\x88\x02\n" +
+	"\x16ACTOR_KIND_UNSPECIFIED\x10\x00\x12\x18\n" +
+	"\x14ACTOR_KIND_ANONYMOUS\x10\x01\x12\x13\n" +
+	"\x0fACTOR_KIND_USER\x10\x02\x12\x16\n" +
+	"\x12ACTOR_KIND_SERVICE\x10\x03\x12\x16\n" +
+	"\x12ACTOR_KIND_API_KEY\x10\x04\x12\x15\n" +
+	"\x11ACTOR_KIND_SYSTEM\x10\x052O\n" +
 	"\fAuditService\x12?\n" +
-	"\x04Emit\x12\x1a.audit.v1.EmitAuditRequest\x1a\x1b.audit.v1.EmitAuditResponse\x12Y\n" +
-	"\x10QueryAuditEvents\x12!.audit.v1.QueryAuditEventsRequest\x1a\".audit.v1.QueryAuditEventsResponse\x12\\\n" +
-	"\x11ExportAuditEvents\x12\".audit.v1.ExportAuditEventsRequest\x1a#.audit.v1.ExportAuditEventsResponseB<Z:github.com/ndzuki/release-manager/api/gen/audit/v1;auditv1b\x06proto3"
+	"\x04Emit\x12\x1a.audit.v1.EmitAuditRequest\x1a\x1b.audit.v1.EmitAuditResponseB<Z:github.com/ndzuki/release-manager/api/gen/audit/v1;auditv1b\x06proto3"
 
 var (
 	file_audit_v1_audit_proto_rawDescOnce sync.Once
@@ -745,47 +442,29 @@ func file_audit_v1_audit_proto_rawDescGZIP() []byte {
 }
 
 var file_audit_v1_audit_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_audit_v1_audit_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_audit_v1_audit_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_audit_v1_audit_proto_goTypes = []any{
-	(ActorKind)(0),                    // 0: audit.v1.ActorKind
-	(*AuditActor)(nil),                // 1: audit.v1.AuditActor
-	(*AuditEvent)(nil),                // 2: audit.v1.AuditEvent
-	(*EmitAuditRequest)(nil),          // 3: audit.v1.EmitAuditRequest
-	(*EmitAuditResponse)(nil),         // 4: audit.v1.EmitAuditResponse
-	(*AuditQueryFilter)(nil),          // 5: audit.v1.AuditQueryFilter
-	(*QueryAuditEventsRequest)(nil),   // 6: audit.v1.QueryAuditEventsRequest
-	(*QueryAuditEventsResponse)(nil),  // 7: audit.v1.QueryAuditEventsResponse
-	(*ExportAuditEventsRequest)(nil),  // 8: audit.v1.ExportAuditEventsRequest
-	(*ExportAuditEventsResponse)(nil), // 9: audit.v1.ExportAuditEventsResponse
-	nil,                               // 10: audit.v1.AuditEvent.MetadataEntry
-	(*timestamppb.Timestamp)(nil),     // 11: google.protobuf.Timestamp
-	(*v1.TimestampRange)(nil),         // 12: common.v1.TimestampRange
-	(*v1.Pagination)(nil),             // 13: common.v1.Pagination
-	(*v1.PaginationResponse)(nil),     // 14: common.v1.PaginationResponse
+	(ActorKind)(0),                // 0: audit.v1.ActorKind
+	(*AuditActor)(nil),            // 1: audit.v1.AuditActor
+	(*AuditEvent)(nil),            // 2: audit.v1.AuditEvent
+	(*EmitAuditRequest)(nil),      // 3: audit.v1.EmitAuditRequest
+	(*EmitAuditResponse)(nil),     // 4: audit.v1.EmitAuditResponse
+	nil,                           // 5: audit.v1.AuditEvent.MetadataEntry
+	(*timestamppb.Timestamp)(nil), // 6: google.protobuf.Timestamp
 }
 var file_audit_v1_audit_proto_depIdxs = []int32{
-	0,  // 0: audit.v1.AuditActor.kind:type_name -> audit.v1.ActorKind
-	1,  // 1: audit.v1.AuditEvent.actor:type_name -> audit.v1.AuditActor
-	11, // 2: audit.v1.AuditEvent.created_at:type_name -> google.protobuf.Timestamp
-	10, // 3: audit.v1.AuditEvent.metadata:type_name -> audit.v1.AuditEvent.MetadataEntry
-	2,  // 4: audit.v1.EmitAuditRequest.events:type_name -> audit.v1.AuditEvent
-	12, // 5: audit.v1.AuditQueryFilter.time_range:type_name -> common.v1.TimestampRange
-	5,  // 6: audit.v1.QueryAuditEventsRequest.filter:type_name -> audit.v1.AuditQueryFilter
-	13, // 7: audit.v1.QueryAuditEventsRequest.pagination:type_name -> common.v1.Pagination
-	2,  // 8: audit.v1.QueryAuditEventsResponse.events:type_name -> audit.v1.AuditEvent
-	14, // 9: audit.v1.QueryAuditEventsResponse.pagination:type_name -> common.v1.PaginationResponse
-	5,  // 10: audit.v1.ExportAuditEventsRequest.filter:type_name -> audit.v1.AuditQueryFilter
-	3,  // 11: audit.v1.AuditService.Emit:input_type -> audit.v1.EmitAuditRequest
-	6,  // 12: audit.v1.AuditService.QueryAuditEvents:input_type -> audit.v1.QueryAuditEventsRequest
-	8,  // 13: audit.v1.AuditService.ExportAuditEvents:input_type -> audit.v1.ExportAuditEventsRequest
-	4,  // 14: audit.v1.AuditService.Emit:output_type -> audit.v1.EmitAuditResponse
-	7,  // 15: audit.v1.AuditService.QueryAuditEvents:output_type -> audit.v1.QueryAuditEventsResponse
-	9,  // 16: audit.v1.AuditService.ExportAuditEvents:output_type -> audit.v1.ExportAuditEventsResponse
-	14, // [14:17] is the sub-list for method output_type
-	11, // [11:14] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	0, // 0: audit.v1.AuditActor.kind:type_name -> audit.v1.ActorKind
+	1, // 1: audit.v1.AuditEvent.actor:type_name -> audit.v1.AuditActor
+	6, // 2: audit.v1.AuditEvent.created_at:type_name -> google.protobuf.Timestamp
+	5, // 3: audit.v1.AuditEvent.metadata:type_name -> audit.v1.AuditEvent.MetadataEntry
+	2, // 4: audit.v1.EmitAuditRequest.events:type_name -> audit.v1.AuditEvent
+	3, // 5: audit.v1.AuditService.Emit:input_type -> audit.v1.EmitAuditRequest
+	4, // 6: audit.v1.AuditService.Emit:output_type -> audit.v1.EmitAuditResponse
+	6, // [6:7] is the sub-list for method output_type
+	5, // [5:6] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_audit_v1_audit_proto_init() }
@@ -799,7 +478,7 @@ func file_audit_v1_audit_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_audit_v1_audit_proto_rawDesc), len(file_audit_v1_audit_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   10,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

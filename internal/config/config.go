@@ -11,8 +11,18 @@ import (
 
 // Config holds the service configuration.
 type Config struct {
-	HTTPPort int    `mapstructure:"http_port"`
-	LogLevel string `mapstructure:"log_level"`
+	HTTPPort             int               `mapstructure:"http_port"`
+	LogLevel             string            `mapstructure:"log_level"`
+	RuntimePullPreflight RuntimePullConfig `mapstructure:"runtime_pull_preflight"`
+}
+
+type RuntimePullConfig struct {
+	Enabled        bool          `mapstructure:"enabled"`
+	Namespace      string        `mapstructure:"namespace"`
+	ServiceAccount string        `mapstructure:"service_account"`
+	Timeout        time.Duration `mapstructure:"timeout"`
+	CleanupPolicy  string        `mapstructure:"cleanup_policy"`
+	ProbeCommand   []string      `mapstructure:"probe_command"`
 }
 
 // Load reads the configuration from the given path.
