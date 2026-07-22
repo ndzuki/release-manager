@@ -7,6 +7,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -213,6 +214,22 @@ func (o *Observer) resource(ref ResourceRef, expectedGeneration int64) (resource
 			},
 		)
 
+	case JobGVR:
+		client := o.client.BatchV1().Jobs(ref.Namespace)
+		return newResourceSource(
+			client.List,
+			client.Watch,
+			func(list *batchv1.JobList) (*batchv1.Job, bool) {
+				if len(list.Items) == 0 {
+					return nil, false
+				}
+				return &list.Items[0], true
+			},
+			func(job *batchv1.Job) (WatchResult, bool, error) {
+				return jobResult(ref, expectedGeneration, job)
+			},
+		)
+
 	default:
 		return resourceSource{}, fmt.Errorf("%w: %s", ErrUnsupportedResource, ref.GVR.String())
 	}
@@ -315,6 +332,26 @@ func daemonSetResult(ref ResourceRef, expectedGeneration int64, daemonSet *appsv
 		}
 	}
 	result := WatchResult{Resource: ref, Ready: generationReached(daemonSet.Generation, daemonSet.Status.ObservedGeneration, expectedGeneration) && daemonSet.Status.UpdatedNumberScheduled == daemonSet.Status.DesiredNumberScheduled && daemonSet.Status.NumberAvailable == daemonSet.Status.DesiredNumberScheduled && daemonSet.Status.NumberUnavailable == 0, Failed: failed, ObservedGeneration: daemonSet.Status.ObservedGeneration, ResourceVersion: daemonSet.ResourceVersion, Conditions: conditions}
+	if failed {
+		return result, false, &RolloutError{Kind: ErrWorkloadUnavailable, Last: result}
+	}
+	return result, result.Ready, nil
+}
+
+func jobResult(ref ResourceRef, expectedGeneration int64, job *batchv1.Job) (WatchResult, bool, error) {
+	conditions := make([]Condition, 0, len(job.Status.Conditions))
+	complete := false
+	failed := false
+	for _, condition := range job.Status.Conditions {
+		conditions = append(conditions, Condition{Type: string(condition.Type), Status: string(condition.Status), Reason: condition.Reason, Message: condition.Message})
+		if condition.Type == batchv1.JobComplete && condition.Status == corev1.ConditionTrue {
+			complete = true
+		}
+		if condition.Type == batchv1.JobFailed && condition.Status == corev1.ConditionTrue {
+			failed = true
+		}
+	}
+	result := WatchResult{Resource: ref, Ready: generationReached(job.Generation, job.Generation, expectedGeneration) && complete, Failed: failed, ObservedGeneration: job.Generation, ResourceVersion: job.ResourceVersion, Conditions: conditions}
 	if failed {
 		return result, false, &RolloutError{Kind: ErrWorkloadUnavailable, Last: result}
 	}

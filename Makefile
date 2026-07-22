@@ -243,6 +243,10 @@ dev-stage-full: proto ## All services (equivalent to old dev-manager)
 test: ## Run all tests
 	$(GO) test -race ./...
 
+.PHONY: test-rollout-watch
+test-rollout-watch: ## Run rollout watch tests against the active Kubernetes API server
+	$(GO) test -race -tags=integration -count=1 ./test/integration -run '^TestRolloutWatch'
+
 .PHONY: test-coverage
 test-coverage: ## Run tests with coverage report
 	$(GO) test -race -coverprofile=coverage.out ./...

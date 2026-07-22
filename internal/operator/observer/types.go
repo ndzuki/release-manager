@@ -20,6 +20,7 @@ var (
 	DeploymentGVR  = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	StatefulSetGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}
 	DaemonSetGVR   = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "daemonsets"}
+	JobGVR         = schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}
 )
 
 type ResourceRef struct {
