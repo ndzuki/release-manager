@@ -591,6 +591,90 @@ func TestValuesRevisionNotFound(t *testing.T) {
 	assert.ErrorIs(t, err, store.ErrNotFound)
 }
 
+func TestValuesRevisionApproveSupersedesPreviousApproved(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	previous := &store.ValuesRevision{
+		ID:                  uuid.New().String(),
+		ReleaseDefinitionID: def.ID,
+		Revision:            1,
+		Version:             1,
+		Status:              store.ValuesStatusApproved,
+		Values:              []byte(`{"key":"old"}`),
+		Digest:              "sha256:old",
+		CreatedBy:           "creator-old",
+	}
+	next := &store.ValuesRevision{
+		ID:                  uuid.New().String(),
+		ReleaseDefinitionID: def.ID,
+		Revision:            2,
+		Version:             1,
+		Status:              store.ValuesStatusDraft,
+		Values:              []byte(`{"key":"new"}`),
+		Digest:              "sha256:new",
+		CreatedBy:           "creator-new",
+	}
+	require.NoError(t, st.Values().Create(ctx, previous))
+	require.NoError(t, st.Values().Create(ctx, next))
+
+	approved, superseded, err := st.Values().Approve(ctx, next.ID, 1, "approver-1")
+	require.NoError(t, err)
+	require.NotNil(t, superseded)
+	assert.Equal(t, next.ID, approved.ID)
+	assert.Equal(t, store.ValuesStatusApproved, approved.Status)
+	assert.Equal(t, 2, approved.Version)
+	assert.Equal(t, "approver-1", approved.ApprovedBy)
+	assert.NotNil(t, approved.ApprovedAt)
+	assert.Equal(t, previous.ID, superseded.ID)
+	assert.Equal(t, store.ValuesStatusSuperseded, superseded.Status)
+
+	persistedPrevious, err := st.Values().Get(ctx, previous.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.ValuesStatusSuperseded, persistedPrevious.Status)
+}
+
+func TestValuesRevisionApproveRejectOptimisticLock(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	approval := &store.ValuesRevision{
+		ID:                  uuid.New().String(),
+		ReleaseDefinitionID: def.ID,
+		Revision:            1,
+		Status:              store.ValuesStatusDraft,
+		Values:              []byte(`{"key":"approve"}`),
+		Digest:              "sha256:approve",
+		CreatedBy:           "creator-approve",
+	}
+	rejection := &store.ValuesRevision{
+		ID:                  uuid.New().String(),
+		ReleaseDefinitionID: def.ID,
+		Revision:            2,
+		Status:              store.ValuesStatusDraft,
+		Values:              []byte(`{"key":"reject"}`),
+		Digest:              "sha256:reject",
+		CreatedBy:           "creator-reject",
+	}
+	require.NoError(t, st.Values().Create(ctx, approval))
+	require.NoError(t, st.Values().Create(ctx, rejection))
+
+	approved, _, err := st.Values().Approve(ctx, approval.ID, 1, "approver-1")
+	require.NoError(t, err)
+	assert.Equal(t, 2, approved.Version)
+	_, _, err = st.Values().Approve(ctx, approval.ID, 1, "approver-2")
+	assert.ErrorIs(t, err, store.ErrOptimisticLock)
+
+	rejected, err := st.Values().Reject(ctx, rejection.ID, 1, "rejector-1", "needs changes")
+	require.NoError(t, err)
+	assert.Equal(t, store.ValuesStatusRejected, rejected.Status)
+	assert.Equal(t, 2, rejected.Version)
+	assert.Equal(t, "rejector-1", rejected.RejectedBy)
+	assert.Equal(t, "needs changes", rejected.RejectionReason)
+	_, err = st.Values().Reject(ctx, rejection.ID, 1, "rejector-2", "stale")
+	assert.ErrorIs(t, err, store.ErrOptimisticLock)
+}
+
 // ── ReleaseDefinition store tests ───────────────────────────────
 
 func TestDefinitionCreateDuplicateKey(t *testing.T) {

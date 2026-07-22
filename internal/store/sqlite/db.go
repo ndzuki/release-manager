@@ -279,19 +279,31 @@ var migrationStatements = []string{
 		id                    TEXT PRIMARY KEY,
 		release_definition_id TEXT NOT NULL REFERENCES release_definitions(id) ON DELETE CASCADE,
 		revision              INTEGER NOT NULL DEFAULT 1,
+		version               INTEGER NOT NULL DEFAULT 1,
 		status                TEXT NOT NULL DEFAULT 'draft',
 		"values"              BLOB NOT NULL,
 		digest                TEXT NOT NULL DEFAULT '',
 		parent_revision_id    TEXT NOT NULL DEFAULT '',
 		secret_refs           BLOB,
+		created_by            TEXT NOT NULL DEFAULT '',
+		approved_by           TEXT NOT NULL DEFAULT '',
+		approved_at           TEXT,
+		rejected_by           TEXT NOT NULL DEFAULT '',
+		rejection_reason      TEXT NOT NULL DEFAULT '',
 		created_at            TEXT NOT NULL,
 		updated_at            TEXT NOT NULL
 	)`,
 
-	// Migration: add digest, parent_revision_id, secret_refs to existing tables.
+	// Migration: add approval workflow columns to existing values revisions.
 	`ALTER TABLE values_revisions ADD COLUMN digest TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE values_revisions ADD COLUMN parent_revision_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE values_revisions ADD COLUMN secret_refs BLOB`,
+	`ALTER TABLE values_revisions ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
+	`ALTER TABLE values_revisions ADD COLUMN created_by TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE values_revisions ADD COLUMN approved_by TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE values_revisions ADD COLUMN approved_at TEXT`,
+	`ALTER TABLE values_revisions ADD COLUMN rejected_by TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE values_revisions ADD COLUMN rejection_reason TEXT NOT NULL DEFAULT ''`,
 
 	`CREATE TABLE IF NOT EXISTS operations (
 		id                   TEXT PRIMARY KEY,
@@ -509,6 +521,15 @@ var migrationStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON audit_events(actor_kind, actor_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_audit_events_resource ON audit_events(resource_type, resource_id)`,
+	`CREATE TABLE IF NOT EXISTS audit_exports (
+	id              TEXT PRIMARY KEY,
+	organization_id TEXT NOT NULL DEFAULT '',
+	since           TEXT NOT NULL,
+	until           TEXT NOT NULL,
+	status          TEXT NOT NULL DEFAULT 'pending',
+	created_at      TEXT NOT NULL
+)`,
+	`CREATE INDEX IF NOT EXISTS idx_audit_exports_organization ON audit_exports(organization_id, created_at)`,
 	`CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at)`,
 
 	// Notification jobs (REQ-031)

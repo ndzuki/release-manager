@@ -41,7 +41,7 @@ func (s *apiSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	}
 	logger.Info("store opened", "db", s.dbPath)
 
-	valsHandler := handler.NewValuesHandler(st.Values(), 0, logger)
+	valsHandler := handler.NewValuesHandler(st, 0, logger)
 	valsHandler.Register(mux)
 
 	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)

@@ -7,9 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/ndzuki/release-manager/internal/store"
+	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
+	"github.com/stretchr/testify/require"
 	"log/slog"
 )
 
@@ -94,8 +97,95 @@ func (s *stubValuesStore) Update(_ context.Context, vr *store.ValuesRevision, ex
 	return nil
 }
 
+func (s *stubValuesStore) Approve(_ context.Context, id string, expectedVersion int, approvedBy string) (approvedRevision, supersededRevision *store.ValuesRevision, err error) {
+	vr, ok := s.items[id]
+	if !ok {
+		return nil, nil, store.ErrNotFound
+	}
+	if vr.Version != expectedVersion || vr.Status != store.ValuesStatusDraft {
+		return nil, nil, store.ErrOptimisticLock
+	}
+	vr.Status = store.ValuesStatusApproved
+	vr.Version++
+	vr.ApprovedBy = approvedBy
+	now := time.Now().UTC()
+	vr.ApprovedAt = &now
+	return vr, nil, nil
+}
+
+func (s *stubValuesStore) Reject(_ context.Context, id string, expectedVersion int, rejectedBy, reason string) (*store.ValuesRevision, error) {
+	vr, ok := s.items[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if vr.Version != expectedVersion || vr.Status != store.ValuesStatusDraft {
+		return nil, store.ErrOptimisticLock
+	}
+	vr.Status = store.ValuesStatusRejected
+	vr.Version++
+	vr.RejectedBy = rejectedBy
+	vr.RejectionReason = reason
+	return vr, nil
+}
+
 func newTestHandler() *ValuesHandler {
-	return NewValuesHandler(newStubValuesStore(), 0, slog.Default())
+	return newValuesHandlerFromValuesStore(newStubValuesStore(), 0, slog.Default())
+}
+
+type approvalFixture struct {
+	handler      *ValuesHandler
+	st           *sqlitestore.Store
+	definitionID string
+	customerID   string
+	organization string
+	creatorID    string
+	approverID   string
+	revisionID   string
+}
+
+func newApprovalFixture(t *testing.T, role store.Role) approvalFixture {
+	t.Helper()
+	st := sqlitestore.OpenTest(t)
+	ctx := context.Background()
+	customerID := "customer-068"
+	definitionID := "definition-068"
+	organizationID := "org-068"
+	creatorID := "creator-068"
+	approverID := "approver-068"
+	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Customer 068", Slug: "customer-068"}))
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: definitionID, Name: "definition-068", CustomerID: customerID, ClusterID: "cluster-068", ReleaseName: "release-068",
+	}, nil))
+	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Organization 068"}))
+	require.NoError(t, st.Users().Create(ctx, &store.User{ID: creatorID, Username: creatorID, PasswordHash: "hash"}))
+	require.NoError(t, st.Users().Create(ctx, &store.User{ID: approverID, Username: approverID, PasswordHash: "hash"}))
+	require.NoError(t, st.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: organizationID, UserID: approverID, Role: role}))
+	require.NoError(t, st.Bindings().Create(ctx, &store.OrgCustomerBinding{ID: "binding-068", OrgID: organizationID, CustomerID: customerID}))
+
+	revision := &store.ValuesRevision{
+		ID: "revision-068", ReleaseDefinitionID: definitionID, Revision: 1, Version: 1,
+		Status: store.ValuesStatusDraft, Values: []byte(`{"key":"value"}`), Digest: "sha256:revision-068", CreatedBy: creatorID,
+	}
+	require.NoError(t, st.Values().Create(ctx, revision))
+	h := NewValuesHandler(st, 0, slog.Default())
+	return approvalFixture{handler: h, st: st, definitionID: definitionID, customerID: customerID, organization: organizationID, creatorID: creatorID, approverID: approverID, revisionID: revision.ID}
+}
+
+func approvalRequestBody(t *testing.T, actor store.ActorContext, reason string) *bytes.Reader {
+	t.Helper()
+	body := map[string]any{"expected_version": 1, "actor": actor, "comment": reason, "reason": reason}
+	return bytes.NewReader(mustMarshal(t, body))
+}
+
+func serveApprovalRequest(t *testing.T, h *ValuesHandler, path string, body *bytes.Reader) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux := http.NewServeMux()
+	h.Register(mux)
+	mux.ServeHTTP(rec, req)
+	return rec
 }
 
 func mustMarshal(t *testing.T, v any) []byte {
@@ -271,126 +361,179 @@ func TestListValuesRevision(t *testing.T) {
 	}
 }
 
-func TestApproveValuesRevision(t *testing.T) {
-	h := newTestHandler()
-	mux := http.NewServeMux()
-	h.Register(mux)
-
-	defID := uuid.New().String()
-	body := map[string]any{
-		"release_definition_id": defID,
-		"values":                "key: value",
+func TestValuesApprovalWorkflow(t *testing.T) {
+	tests := []struct {
+		name     string
+		role     store.Role
+		actor    func(approvalFixture) store.ActorContext
+		action   string
+		expected int
+		error    string
+	}{
+		{
+			name: "self approval forbidden",
+			role: store.RoleReleaseAdmin,
+			actor: func(f approvalFixture) store.ActorContext {
+				return store.ActorContext{UserID: f.creatorID, Organization: f.organization}
+			},
+			action: "approve", expected: http.StatusForbidden, error: errSelfApproval.Error(),
+		},
+		{
+			name: "deployer not authorized",
+			role: store.RoleDeployer,
+			actor: func(f approvalFixture) store.ActorContext {
+				return store.ActorContext{UserID: f.approverID, Organization: f.organization}
+			},
+			action: "approve", expected: http.StatusForbidden, error: errNotAuthorized.Error(),
+		},
+		{
+			name: "cross organization not authorized",
+			role: store.RoleReleaseAdmin,
+			actor: func(f approvalFixture) store.ActorContext {
+				return store.ActorContext{UserID: f.approverID, Organization: "other-org"}
+			},
+			action: "approve", expected: http.StatusForbidden, error: errNotAuthorized.Error(),
+		},
 	}
 
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/values-revisions", bytes.NewReader(mustMarshal(t, body)))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	created := mustUnmarshal[valuesResponse](t, rec.Body.Bytes())
-
-	req2 := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/values-revisions/"+created.ID+"/approve", http.NoBody)
-	rec2 := httptest.NewRecorder()
-	mux.ServeHTTP(rec2, req2)
-
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec2.Code, rec2.Body.String())
-	}
-
-	approved := mustUnmarshal[valuesResponse](t, rec2.Body.Bytes())
-	if approved.Status != string(store.ValuesStatusApproved) {
-		t.Errorf("expected approved, got %s", approved.Status)
-	}
-}
-
-func TestApproveValuesRevision_NotDraft(t *testing.T) {
-	h := newTestHandler()
-	mux := http.NewServeMux()
-	h.Register(mux)
-
-	defID := uuid.New().String()
-	body := map[string]any{
-		"release_definition_id": defID,
-		"values":                "key: value",
-	}
-
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/values-revisions", bytes.NewReader(mustMarshal(t, body)))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	created := mustUnmarshal[valuesResponse](t, rec.Body.Bytes())
-
-	req2 := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/values-revisions/"+created.ID+"/approve", http.NoBody)
-	rec2 := httptest.NewRecorder()
-	mux.ServeHTTP(rec2, req2)
-
-	req3 := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/values-revisions/"+created.ID+"/approve", http.NoBody)
-	rec3 := httptest.NewRecorder()
-	mux.ServeHTTP(rec3, req3)
-
-	if rec3.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for double approve, got %d", rec3.Code)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newApprovalFixture(t, tt.role)
+			actor := tt.actor(fixture)
+			response := serveApprovalRequest(t, fixture.handler, "/api/v1/values-revisions/"+fixture.revisionID+"/"+tt.action, approvalRequestBody(t, actor, "changes"))
+			require.Equal(t, tt.expected, response.Code, response.Body.String())
+			require.JSONEq(t, `{"error":"`+tt.error+`"}`, response.Body.String())
+		})
 	}
 }
 
-func TestRejectValuesRevision(t *testing.T) {
-	h := newTestHandler()
+func TestValuesApprovalWorkflow_RejectAndRecreateParent(t *testing.T) {
+	fixture := newApprovalFixture(t, store.RoleReleaseAdmin)
+	actor := store.ActorContext{UserID: fixture.approverID, Organization: fixture.organization}
+	response := serveApprovalRequest(t, fixture.handler, "/api/v1/values-revisions/"+fixture.revisionID+"/reject", approvalRequestBody(t, actor, "needs changes"))
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+
+	rejected, err := fixture.st.Values().Get(context.Background(), fixture.revisionID)
+	require.NoError(t, err)
+	require.Equal(t, store.ValuesStatusRejected, rejected.Status)
+	require.Equal(t, "needs changes", rejected.RejectionReason)
+
+	createBody := map[string]any{
+		"release_definition_id": fixture.definitionID,
+		"parent_revision_id":    rejected.ID,
+		"values":                "key: revised",
+		"actor":                 store.ActorContext{UserID: fixture.creatorID, Organization: fixture.organization},
+	}
+	createReq := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"/api/v1/values-revisions",
+		bytes.NewReader(mustMarshal(t, createBody)),
+	)
+	createRec := httptest.NewRecorder()
 	mux := http.NewServeMux()
-	h.Register(mux)
+	fixture.handler.Register(mux)
+	mux.ServeHTTP(createRec, createReq)
+	require.Equal(t, http.StatusCreated, createRec.Code, createRec.Body.String())
 
-	defID := uuid.New().String()
-	body := map[string]any{
-		"release_definition_id": defID,
-		"values":                "key: value",
+	created := mustUnmarshal[valuesResponse](t, createRec.Body.Bytes())
+	persisted, err := fixture.st.Values().Get(context.Background(), created.ID)
+	require.NoError(t, err)
+	require.Equal(t, store.ValuesStatusDraft, persisted.Status)
+	require.Equal(t, rejected.ID, persisted.ParentRevisionID)
+}
+
+func TestValuesApprovalWorkflow_ConcurrentVersionConflict(t *testing.T) {
+	fixture := newApprovalFixture(t, store.RoleReleaseAdmin)
+	actor := store.ActorContext{UserID: fixture.approverID, Organization: fixture.organization}
+	first := serveApprovalRequest(t, fixture.handler, "/api/v1/values-revisions/"+fixture.revisionID+"/approve", approvalRequestBody(t, actor, ""))
+	require.Equal(t, http.StatusOK, first.Code, first.Body.String())
+
+	second := serveApprovalRequest(t, fixture.handler, "/api/v1/values-revisions/"+fixture.revisionID+"/approve", approvalRequestBody(t, actor, ""))
+	require.Equal(t, http.StatusConflict, second.Code, second.Body.String())
+	require.JSONEq(t, `{"error":"optimistic_lock_conflict"}`, second.Body.String())
+}
+
+func TestValuesApprovalWorkflow_AuditEvent(t *testing.T) {
+	fixture := newApprovalFixture(t, store.RoleReleaseAdmin)
+	actor := store.ActorContext{UserID: fixture.approverID, Organization: fixture.organization}
+	response := serveApprovalRequest(t, fixture.handler, "/api/v1/values-revisions/"+fixture.revisionID+"/approve", approvalRequestBody(t, actor, "approved"))
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+
+	events, err := fixture.st.AuditEvents().ListByResource(context.Background(), "values_revision", fixture.revisionID)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Equal(t, store.AuditActorUser, events[0].ActorKind)
+	require.Equal(t, fixture.approverID, events[0].ActorID)
+	require.Equal(t, fixture.organization, events[0].OrganizationID)
+	require.Equal(t, string(store.RoleReleaseAdmin), events[0].Role)
+	require.Equal(t, "values_revision", events[0].ResourceType)
+	require.Equal(t, fixture.revisionID, events[0].ResourceID)
+	require.Equal(t, "approved", events[0].Action)
+	require.Equal(t, "succeeded", events[0].Status)
+	require.Equal(t, "approved", events[0].ChangeSummary)
+}
+
+func TestRejectValuesRevision_RequiresReason(t *testing.T) {
+	fixture := newApprovalFixture(t, store.RoleReleaseAdmin)
+	actor := store.ActorContext{UserID: fixture.approverID, Organization: fixture.organization}
+	response := serveApprovalRequest(t, fixture.handler, "/api/v1/values-revisions/"+fixture.revisionID+"/reject", approvalRequestBody(t, actor, ""))
+	require.Equal(t, http.StatusBadRequest, response.Code)
+	require.JSONEq(t, `{"error":"reason is required"}`, response.Body.String())
+}
+
+func TestValuesApprovalWorkflow_TerminalStateErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     store.ValuesStatus
+		wantStatus int
+		wantError  string
+	}{
+		{name: "approved revision", status: store.ValuesStatusApproved, wantStatus: http.StatusBadRequest, wantError: errAlreadyApproved.Error()},
+		{name: "rejected revision", status: store.ValuesStatusRejected, wantStatus: http.StatusBadRequest, wantError: errAlreadyRejected.Error()},
 	}
 
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/values-revisions", bytes.NewReader(mustMarshal(t, body)))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newApprovalFixture(t, store.RoleReleaseAdmin)
+			revision, err := fixture.st.Values().Get(context.Background(), fixture.revisionID)
+			require.NoError(t, err)
+			revision.Status = tt.status
+			require.NoError(t, fixture.st.Values().Update(context.Background(), revision, revision.ParentRevisionID))
 
-	created := mustUnmarshal[valuesResponse](t, rec.Body.Bytes())
-
-	req2 := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/values-revisions/"+created.ID+"/reject", http.NoBody)
-	rec2 := httptest.NewRecorder()
-	mux.ServeHTTP(rec2, req2)
-
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec2.Code)
+			actor := store.ActorContext{UserID: fixture.approverID, Organization: fixture.organization}
+			response := serveApprovalRequest(t, fixture.handler, "/api/v1/values-revisions/"+fixture.revisionID+"/approve", approvalRequestBody(t, actor, ""))
+			require.Equal(t, tt.wantStatus, response.Code, response.Body.String())
+			require.JSONEq(t, `{"error":"`+tt.wantError+`"}`, response.Body.String())
+		})
 	}
+}
 
-	rejected := mustUnmarshal[valuesResponse](t, rec2.Body.Bytes())
-	if rejected.Status != string(store.ValuesStatusRejected) {
-		t.Errorf("expected rejected, got %s", rejected.Status)
+func TestValuesApprovalWorkflow_SupersedesPreviousApproved(t *testing.T) {
+	fixture := newApprovalFixture(t, store.RoleReleaseAdmin)
+	ctx := context.Background()
+	previous := &store.ValuesRevision{
+		ID: "revision-068-previous", ReleaseDefinitionID: fixture.definitionID, Revision: 0, Version: 1,
+		Status: store.ValuesStatusApproved, Values: []byte(`{"key":"old"}`), Digest: "sha256:old", CreatedBy: fixture.creatorID,
 	}
+	require.NoError(t, fixture.st.Values().Create(ctx, previous))
+	actor := store.ActorContext{UserID: fixture.approverID, Organization: fixture.organization}
+	response := serveApprovalRequest(t, fixture.handler, "/api/v1/values-revisions/"+fixture.revisionID+"/approve", approvalRequestBody(t, actor, ""))
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	result := mustUnmarshal[approvalResponse](t, response.Body.Bytes())
+	require.Equal(t, previous.ID, result.PreviousApprovedSuperseded)
+	persisted, err := fixture.st.Values().Get(ctx, previous.ID)
+	require.NoError(t, err)
+	require.Equal(t, store.ValuesStatusSuperseded, persisted.Status)
 }
 
 func TestUpdate_OptimisticLock(t *testing.T) {
 	st := newStubValuesStore()
-	h := NewValuesHandler(st, 0, slog.Default())
-	mux := http.NewServeMux()
-	h.Register(mux)
-
 	defID := uuid.New().String()
-
-	vr := &store.ValuesRevision{
-		ID:                  uuid.New().String(),
-		ReleaseDefinitionID: defID,
-		Revision:            1,
-		Status:              store.ValuesStatusDraft,
-		Values:              []byte(`{"key":"value"}`),
-		Digest:              "abc123",
-		ParentRevisionID:    "original-parent",
-	}
-	if err := st.Create(context.Background(), vr); err != nil {
-		t.Fatal(err)
-	}
-
+	vr := &store.ValuesRevision{ID: uuid.New().String(), ReleaseDefinitionID: defID, Revision: 1, Status: store.ValuesStatusDraft, Values: []byte(`{"key":"value"}`), Digest: "abc123", ParentRevisionID: "original-parent"}
+	require.NoError(t, st.Create(context.Background(), vr))
 	vr2 := *vr
 	vr2.Status = store.ValuesStatusApproved
 	err := st.Update(context.Background(), &vr2, "wrong-parent")
-	if err != store.ErrOptimisticLock {
-		t.Errorf("expected ErrOptimisticLock, got %v", err)
-	}
+	require.ErrorIs(t, err, store.ErrOptimisticLock)
 }

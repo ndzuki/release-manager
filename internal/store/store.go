@@ -90,9 +90,10 @@ const (
 type ValuesStatus string
 
 const (
-	ValuesStatusDraft    ValuesStatus = "draft"
-	ValuesStatusApproved ValuesStatus = "approved"
-	ValuesStatusRejected ValuesStatus = "rejected"
+	ValuesStatusDraft      ValuesStatus = "draft"
+	ValuesStatusApproved   ValuesStatus = "approved"
+	ValuesStatusRejected   ValuesStatus = "rejected"
+	ValuesStatusSuperseded ValuesStatus = "superseded"
 )
 
 // ActorContext records who initiated an operation.
@@ -144,11 +145,17 @@ type ValuesRevision struct {
 	ID                  string       `json:"id"`
 	ReleaseDefinitionID string       `json:"release_definition_id"`
 	Revision            int          `json:"revision"`
+	Version             int          `json:"version"`
 	Status              ValuesStatus `json:"status"`
 	Values              []byte       `json:"values"`
 	Digest              string       `json:"digest"`
 	ParentRevisionID    string       `json:"parent_revision_id"`
 	SecretRefs          []byte       `json:"secret_refs,omitempty"`
+	CreatedBy           string       `json:"created_by"`
+	ApprovedBy          string       `json:"approved_by,omitempty"`
+	ApprovedAt          *time.Time   `json:"approved_at,omitempty"`
+	RejectedBy          string       `json:"rejected_by,omitempty"`
+	RejectionReason     string       `json:"rejection_reason,omitempty"`
 	CreatedAt           time.Time    `json:"created_at"`
 	UpdatedAt           time.Time    `json:"updated_at"`
 }
@@ -422,7 +429,6 @@ type AuditEvent struct {
 	CreatedAt      time.Time
 }
 
-
 // AuditEventFilter narrows audit event queries by optional criteria.
 type AuditEventFilter struct {
 	OrganizationID string
@@ -527,7 +533,6 @@ type EmergencyPayload struct {
 	Reason      string
 	Convergence EmergencyConvergence
 }
-
 
 // --- Trust root domain types (REQ-043) ---
 
@@ -681,7 +686,6 @@ type PreflightRecord struct {
 	CreatedAt  time.Time
 }
 
-
 // ScanResultRecord is the serializable domain type for a vulnerability scan result.
 type ScanResultRecord struct {
 	ID             string
@@ -790,7 +794,6 @@ type DefinitionStore interface {
 	SetCurrentBundle(ctx context.Context, defID string, bundleID string) (bool, error)
 }
 
-
 // ReleaseDefinitionEvent is emitted for release definition lifecycle changes.
 type ReleaseDefinitionEvent struct {
 	ID           string    `json:"id"`
@@ -814,6 +817,8 @@ type ValuesStore interface {
 	GetLatestApproved(ctx context.Context, definitionID string) (*ValuesRevision, error)
 	GetNextRevisionNumber(ctx context.Context, definitionID string) (int, error)
 	List(ctx context.Context, definitionID string) ([]*ValuesRevision, error)
+	Approve(ctx context.Context, id string, expectedVersion int, approvedBy string) (*ValuesRevision, *ValuesRevision, error)
+	Reject(ctx context.Context, id string, expectedVersion int, rejectedBy, reason string) (*ValuesRevision, error)
 	// Update persists status changes with optimistic locking on parent_revision_id.
 	// Returns ErrOptimisticLock if expectedParentRev doesn't match the stored value.
 	Update(ctx context.Context, vr *ValuesRevision, expectedParentRev string) error
@@ -985,7 +990,6 @@ type PreflightStore interface {
 	GetByKey(ctx context.Context, key PreflightCacheKey) (*PreflightRecord, error)
 }
 
-
 // ScanResultStore defines the persistence contract for vulnerability scan results.
 type ScanResultStore interface {
 	Create(ctx context.Context, rec *ScanResultRecord) error
@@ -1070,7 +1074,6 @@ type InventoryStore interface {
 	GetBySyncID(ctx context.Context, syncID string) (*InventorySyncLog, error)
 }
 
-
 // ── Candidate artifact domain types (REQ-XXX) ──────────────────────
 
 // CandidateArtifact represents a build artifact awaiting bundle assignment.
@@ -1109,6 +1112,7 @@ type PreflightLifecycleStore interface {
 	SetOperationTerminal(ctx context.Context, operationID string, terminalAt time.Time) error
 	DeleteExpired(ctx context.Context, ttl time.Duration) (int64, error)
 }
+
 // Store is the top-level persistence abstraction.
 type Store interface {
 	Operations() OperationStore
