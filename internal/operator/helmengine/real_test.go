@@ -3,6 +3,7 @@ package helmengine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -18,6 +19,8 @@ import (
 	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/storage"
 	"helm.sh/helm/v3/pkg/storage/driver"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func TestRealEngine_Install(t *testing.T) {
@@ -110,6 +113,17 @@ func TestRealEngine_InstallContextErrors(t *testing.T) {
 			assert.ErrorIs(t, err, test.wantErr)
 		})
 	}
+}
+
+func TestMapActionError_Forbidden(t *testing.T) {
+	wrapped := fmt.Errorf(
+		"validate install resources: %w",
+		apierrors.NewForbidden(schema.GroupResource{Resource: "configmaps"}, "example", errors.New("denied")),
+	)
+
+	err := mapActionError(t.Context(), "install Helm release", wrapped)
+	assert.ErrorIs(t, err, ErrForbidden)
+	assert.Contains(t, err.Error(), "configmaps \"example\" is forbidden")
 }
 
 func TestDigestValuesDeterministic(t *testing.T) {

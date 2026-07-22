@@ -17,6 +17,7 @@ import (
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage"
 	"helm.sh/helm/v3/pkg/storage/driver"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // RealEngine implements Engine using the Helm Go SDK (helm.sh/helm/v3/pkg/action).
@@ -377,6 +378,8 @@ func mapActionError(ctx context.Context, operation string, err error) error {
 		return fmt.Errorf("%s: %w", operation, ErrTimeout)
 	case errors.Is(ctx.Err(), context.Canceled), errors.Is(err, context.Canceled):
 		return fmt.Errorf("%s: %w", operation, ErrCancelled)
+	case apierrors.IsForbidden(err):
+		return fmt.Errorf("%s: %w: %v", operation, ErrForbidden, err)
 	case errors.Is(err, driver.ErrReleaseExists), strings.Contains(err.Error(), "cannot re-use a name that is still in use"):
 		return fmt.Errorf("%s: %w", operation, ErrAlreadyExists)
 	case errors.Is(err, driver.ErrReleaseNotFound), errors.Is(err, driver.ErrNoDeployedReleases):

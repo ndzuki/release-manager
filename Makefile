@@ -16,6 +16,10 @@ YELLOW      := $(ESC)[33m
 BLUE        := $(ESC)[34m
 RED         := $(ESC)[31m
 NC          := $(ESC)[0m
+KIND        ?= kind
+INSTALL_SDK_CLUSTER ?= rm-install-sdk
+INSTALL_SDK_KUBECONFIG ?= $(CURDIR)/.tmp-install-sdk-kubeconfig
+INSTALL_SDK_PATH ?= $(CURDIR)/.tmp-install-sdk-path
 
 # Ports
 MANAGER_PORT := 8081
@@ -256,6 +260,19 @@ lint: ## Run linters
 .PHONY: sdk-check
 sdk-check: build-sdkcheck ## Run SDK-only static gate (REQ-037)
 	$(GO) run ./cmd/sdkcheck/ -exceptions sdkcheck.exceptions.yaml ./...
+
+.PHONY: test-install-sdk
+test-install-sdk: ## Run Helm Install SDK integration gate in an isolated kind cluster
+	@command -v $(KIND) >/dev/null 2>&1 || { printf "$(RED)kind is required$(NC)\n"; exit 1; }
+	@set -eu; \
+		cleanup() { $(KIND) delete cluster --name "$(INSTALL_SDK_CLUSTER)" >/dev/null; rm -f "$(INSTALL_SDK_PATH)/go" "$(INSTALL_SDK_KUBECONFIG)"; rmdir "$(INSTALL_SDK_PATH)" 2>/dev/null || true; }; \
+		trap cleanup EXIT INT TERM; \
+		cleanup; \
+		$(KIND) create cluster --name "$(INSTALL_SDK_CLUSTER)" --kubeconfig "$(INSTALL_SDK_KUBECONFIG)" --wait 120s; \
+		mkdir -p "$(INSTALL_SDK_PATH)"; \
+		ln -s "$$(command -v $(GO))" "$(INSTALL_SDK_PATH)/go"; \
+		PATH="$(INSTALL_SDK_PATH)" KUBECONFIG="$(INSTALL_SDK_KUBECONFIG)" CGO_ENABLED=0 \
+			$(GO) test -tags=integration -count=1 -v ./test/integration
 
 .PHONY: check-reqs
 check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
