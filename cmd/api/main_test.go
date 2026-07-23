@@ -41,7 +41,7 @@ func TestAPISvcAuditConnectEndToEnd(t *testing.T) {
 	client := auditv1connect.NewAuditServiceClient(http.DefaultClient, server.URL)
 	now := time.Now().UTC()
 
-	emitRequest := connect.NewRequest(&auditv1.EmitAuditRequest{Events: []*auditv1.AuditEvent{{
+	emitRequest := connect.NewRequest(&auditv1.EmitRequest{Events: []*auditv1.AuditEvent{{
 		Id: "event-001",
 		Actor: &auditv1.AuditActor{
 			Kind:           auditv1.ActorKind_ACTOR_KIND_USER,
@@ -96,17 +96,16 @@ func TestAPISvcCloseDrainsAuditEmitter(t *testing.T) {
 	svc := &apiSvc{dbPath: dbPath, signingKey: signingKey}
 	require.NoError(t, svc.Register(mux, slog.Default()))
 
-	result := svc.emitter.Emit(&store.AuditEvent{
+	emitResult := svc.emitter.Emit(&store.AuditEvent{
 		ID:             "event-close",
 		ActorKind:      store.AuditActorSystem,
 		OrganizationID: "org-001",
-		ResourceType:   "api_service",
-		ResourceID:     "release-api",
-		Action:         "close",
-		Status:         "accepted",
+		ResourceType:   "operation",
+		Action:         "update",
+		Status:         "success",
 		Metadata:       map[string]string{},
 	})
-	require.True(t, result.Accepted)
+	require.True(t, emitResult.Accepted)
 	require.NoError(t, svc.Close(context.Background()))
 
 	st, err := sqlitestore.Open(dbPath)

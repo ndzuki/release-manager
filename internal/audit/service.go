@@ -24,12 +24,11 @@ type Service struct {
 func NewService(emitter Sink) *Service { return &Service{emitter: emitter} }
 
 // Emit accepts valid events and reports per-event rejection codes.
-//nolint:dupl // The lightweight collector intentionally mirrors the full audit handler response contract.
-func (s *Service) Emit(_ context.Context, req *connect.Request[auditv1.EmitAuditRequest]) (*connect.Response[auditv1.EmitAuditResponse], error) {
+func (s *Service) Emit(_ context.Context, req *connect.Request[auditv1.EmitRequest]) (*connect.Response[auditv1.EmitResponse], error) {
 	if req.Msg == nil || len(req.Msg.GetEvents()) == 0 {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%s: events are required", ErrorInvalidEvent))
 	}
-	response := &auditv1.EmitAuditResponse{}
+	response := &auditv1.EmitResponse{}
 	for _, protoEvent := range req.Msg.GetEvents() {
 		result := s.emitter.Emit(fromProto(protoEvent))
 		if result.Accepted {
@@ -53,9 +52,10 @@ func fromProto(event *auditv1.AuditEvent) *store.AuditEvent {
 	}
 	actor := event.GetActor()
 	return &store.AuditEvent{
-		ID: event.GetId(), ActorKind: actorKindFromProto(actor.GetKind()), ActorID: actor.GetId(), OrganizationID: actor.GetOrganizationId(), Role: actor.GetRole(),
-		ResourceType: event.GetResourceType(), ResourceID: event.GetResourceId(), Action: event.GetAction(), Status: event.GetStatus(), DurationMs: event.GetDurationMs(),
-		ChangeSummary: event.GetChangeSummary(), Metadata: event.GetMetadata(), CreatedAt: createdAt,
+		ID: event.GetId(), ActorKind: actorKindFromProto(actor.GetKind()), ActorID: actor.GetId(), ActorName: actor.GetDisplayName(),
+		OrganizationID: actor.GetOrganizationId(), Role: actor.GetRole(), ResourceType: event.GetResourceType(), ResourceID: event.GetResourceId(),
+		Action: event.GetAction(), Status: event.GetStatus(), OperationID: event.GetOperationId(), RequestID: event.GetRequestId(),
+		DurationMs: event.GetDurationMs(), ChangeSummary: event.GetChangeSummary(), Metadata: event.GetMetadata(), CreatedAt: createdAt,
 	}
 }
 

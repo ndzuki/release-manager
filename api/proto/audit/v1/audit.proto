@@ -17,12 +17,56 @@ enum ActorKind {
   ACTOR_KIND_SYSTEM = 5;
 }
 
+// ResourceType identifies the resource family targeted by an audit event.
+enum ResourceType {
+  RESOURCE_TYPE_UNSPECIFIED = 0;
+  RESOURCE_TYPE_CLUSTER = 1;
+  RESOURCE_TYPE_RELEASE_DEFINITION = 2;
+  RESOURCE_TYPE_OPERATION = 3;
+  RESOURCE_TYPE_VALUES_REVISION = 4;
+  RESOURCE_TYPE_OPERATOR = 5;
+  RESOURCE_TYPE_TRUST_ROOT = 6;
+  RESOURCE_TYPE_TRUST_POLICY = 7;
+  RESOURCE_TYPE_CUSTOMER = 8;
+}
+
+// ActionType identifies the operation performed by an audit event.
+enum ActionType {
+  ACTION_TYPE_UNSPECIFIED = 0;
+  ACTION_TYPE_CREATE = 1;
+  ACTION_TYPE_UPDATE = 2;
+  ACTION_TYPE_DELETE = 3;
+  ACTION_TYPE_APPROVE = 4;
+  ACTION_TYPE_REJECT = 5;
+  ACTION_TYPE_INSTALL = 6;
+  ACTION_TYPE_UPGRADE = 7;
+  ACTION_TYPE_ROLLBACK = 8;
+  ACTION_TYPE_EMERGENCY = 9;
+  ACTION_TYPE_EXPORT = 10;
+  ACTION_TYPE_LOGIN = 11;
+  ACTION_TYPE_LOGOUT = 12;
+}
+
+// StatusType identifies the outcome of an audit event.
+enum StatusType {
+  STATUS_TYPE_UNSPECIFIED = 0;
+  STATUS_TYPE_SUCCESS = 1;
+  STATUS_TYPE_FAILURE = 2;
+}
+
+// ExportFormat identifies the supported export encoding.
+enum ExportFormat {
+  EXPORT_FORMAT_UNSPECIFIED = 0;
+  EXPORT_FORMAT_CSV = 1;
+}
+
 // AuditActor identifies the principal that performed an audited action.
 message AuditActor {
   ActorKind kind = 1;
   string id = 2;
   string organization_id = 3;
   string role = 4;
+  string display_name = 5;
 }
 
 // AuditEvent represents a single audit trail entry.
@@ -38,15 +82,17 @@ message AuditEvent {
   google.protobuf.Timestamp created_at = 9;
   // Metadata carries optional key-value context.
   map<string, string> metadata = 10;
+  string operation_id = 11;
+  string request_id = 12;
 }
 
-// EmitAuditRequest submits one or more audit events for asynchronous persistence.
-message EmitAuditRequest {
+// EmitRequest submits one or more audit events for asynchronous persistence.
+message EmitRequest {
   repeated AuditEvent events = 1;
 }
 
-// EmitAuditResponse acknowledges receipt of audit events.
-message EmitAuditResponse {
+// EmitResponse acknowledges receipt of audit events.
+message EmitResponse {
   int32 accepted = 1;
   int32 rejected = 2;
   repeated string audit_event_ids = 3;
@@ -62,6 +108,10 @@ message AuditQueryFilter {
   string action = 5;
   string status = 6;
   common.v1.TimestampRange time_range = 7;
+  repeated ActionType actions = 8;
+  repeated StatusType statuses = 9;
+  string operation_id = 10;
+  ResourceType resource_type_enum = 11;
 }
 
 // QueryAuditEventsRequest queries organization-scoped audit events.
@@ -76,20 +126,44 @@ message QueryAuditEventsResponse {
   common.v1.PaginationResponse pagination = 2;
 }
 
-// ExportAuditEventsRequest creates an asynchronous audit export job.
+// ExportAuditEventsRequest creates an asynchronous export job.
 message ExportAuditEventsRequest {
   AuditQueryFilter filter = 1;
+  ExportFormat format = 2;
+  int32 max_rows = 3;
 }
 
 // ExportAuditEventsResponse identifies the accepted export job.
 message ExportAuditEventsResponse {
   string export_id = 1;
   string status = 2;
+  string task_id = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message GetAuditExportStatusRequest {
+  string task_id = 1;
+}
+
+message GetAuditExportStatusResponse {
+  string task_id = 1;
+  string status = 2;
+  string download_url = 3;
+  string error_message = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp completed_at = 6;
+}
+
+message AuditErrorDetail {
+  string reason = 1;
+  int32 max_range_days = 2;
+  string retry_after = 3;
 }
 
 // AuditService collects and queries audit events.
 service AuditService {
-  rpc Emit(EmitAuditRequest) returns (EmitAuditResponse);
+  rpc Emit(EmitRequest) returns (EmitResponse);
   rpc QueryAuditEvents(QueryAuditEventsRequest) returns (QueryAuditEventsResponse);
   rpc ExportAuditEvents(ExportAuditEventsRequest) returns (ExportAuditEventsResponse);
+  rpc GetAuditExportStatus(GetAuditExportStatusRequest) returns (GetAuditExportStatusResponse);
 }

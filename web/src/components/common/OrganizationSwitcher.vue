@@ -8,6 +8,9 @@ const router = useRouter();
 const switching = shallowRef(false);
 const errorMessage = shallowRef('');
 
+const canSwitchOrganizations = computed(
+  () => (auth.user?.roles.includes('platform_admin') ?? false) && auth.organizations.length > 1,
+);
 const selectedOrganizationId = computed({
   get: () => auth.user?.activeOrgId ?? '',
   set: (organizationId: string) => {
@@ -31,7 +34,7 @@ async function selectOrganization(organizationId: string): Promise<void> {
 </script>
 
 <template>
-  <div class="organization-switcher">
+  <div v-if="canSwitchOrganizations" class="organization-switcher">
     <label class="organization-switcher__label" for="active-organization">Organization</label>
     <select
       id="active-organization"

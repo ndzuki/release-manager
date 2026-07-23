@@ -25,13 +25,13 @@ func (s *auditEventStore) Create(ctx context.Context, e *store.AuditEvent) error
 	}
 
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO audit_events (id, actor_kind, actor_id, organization_id, role,
-			resource_type, resource_id, action, status, duration_ms,
+		INSERT INTO audit_events (id, actor_kind, actor_id, actor_name, organization_id, role,
+			resource_type, resource_id, action, status, operation_id, request_id, duration_ms,
 			change_summary, metadata, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		e.ID, string(e.ActorKind), e.ActorID, e.OrganizationID, e.Role,
-		e.ResourceType, e.ResourceID, e.Action, e.Status, e.DurationMs,
+		e.ID, string(e.ActorKind), e.ActorID, e.ActorName, e.OrganizationID, e.Role,
+		e.ResourceType, e.ResourceID, e.Action, e.Status, e.OperationID, e.RequestID, e.DurationMs,
 		e.ChangeSummary, string(metaJSON), e.CreatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -45,9 +45,7 @@ func (s *auditEventStore) ListByResource(
 	resourceType, resourceID string,
 ) ([]*store.AuditEvent, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, actor_kind, actor_id, organization_id, role,
-			resource_type, resource_id, action, status, duration_ms,
-			change_summary, metadata, created_at
+		SELECT `+auditEventColumns+`
 		FROM audit_events
 		WHERE resource_type = ? AND resource_id = ?
 		ORDER BY created_at ASC
@@ -62,9 +60,9 @@ func (s *auditEventStore) ListByResource(
 		var event store.AuditEvent
 		var actorKind, metadataJSON, createdAt string
 		if err := rows.Scan(
-			&event.ID, &actorKind, &event.ActorID, &event.OrganizationID, &event.Role,
+			&event.ID, &actorKind, &event.ActorID, &event.ActorName, &event.OrganizationID, &event.Role,
 			&event.ResourceType, &event.ResourceID, &event.Action, &event.Status,
-			&event.DurationMs, &event.ChangeSummary, &metadataJSON, &createdAt,
+			&event.OperationID, &event.RequestID, &event.DurationMs, &event.ChangeSummary, &metadataJSON, &createdAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan audit event: %w", err)
 		}
@@ -91,10 +89,10 @@ func (s *auditEventStore) CreateBatch(ctx context.Context, events []*store.Audit
 	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO audit_events (id, actor_kind, actor_id, organization_id, role,
-			resource_type, resource_id, action, status, duration_ms,
+		INSERT INTO audit_events (id, actor_kind, actor_id, actor_name, organization_id, role,
+			resource_type, resource_id, action, status, operation_id, request_id, duration_ms,
 			change_summary, metadata, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare batch insert: %w", err)
@@ -111,8 +109,8 @@ func (s *auditEventStore) CreateBatch(ctx context.Context, events []*store.Audit
 			return fmt.Errorf("marshal audit metadata for %s: %w", e.ID, err)
 		}
 		if _, err := stmt.ExecContext(ctx,
-			e.ID, string(e.ActorKind), e.ActorID, e.OrganizationID, e.Role,
-			e.ResourceType, e.ResourceID, e.Action, e.Status, e.DurationMs,
+			e.ID, string(e.ActorKind), e.ActorID, e.ActorName, e.OrganizationID, e.Role,
+			e.ResourceType, e.ResourceID, e.Action, e.Status, e.OperationID, e.RequestID, e.DurationMs,
 			e.ChangeSummary, string(metaJSON), e.CreatedAt.UTC().Format(time.RFC3339Nano),
 		); err != nil {
 			return fmt.Errorf("batch insert audit event %s: %w", e.ID, err)
@@ -125,8 +123,8 @@ func (s *auditEventStore) CreateBatch(ctx context.Context, events []*store.Audit
 	return nil
 }
 
-const auditEventColumns = `id, actor_kind, actor_id, organization_id, role,
-	resource_type, resource_id, action, status, duration_ms,
+const auditEventColumns = `id, actor_kind, actor_id, actor_name, organization_id, role,
+	resource_type, resource_id, action, status, operation_id, request_id, duration_ms,
 	change_summary, metadata, created_at`
 
 // Query returns audit events in descending (created_at, id) order.
@@ -208,8 +206,8 @@ func (s *auditEventStore) Count(ctx context.Context, filter store.AuditEventFilt
 }
 
 func buildAuditWhere(filter store.AuditEventFilter) (where []string, args []any) {
-	where = make([]string, 0, 8)
-	args = make([]any, 0, 8)
+	where = make([]string, 0, 10)
+	args = make([]any, 0, 16)
 	addString := func(column, value string) {
 		if value == "" {
 			return
@@ -217,13 +215,24 @@ func buildAuditWhere(filter store.AuditEventFilter) (where []string, args []any)
 		where = append(where, column+` = ?`)
 		args = append(args, value)
 	}
+	addStrings := func(column string, values []string) {
+		if len(values) == 0 {
+			return
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(values)), ",")
+		where = append(where, column+` IN (`+placeholders+`)`)
+		for _, value := range values {
+			args = append(args, value)
+		}
+	}
 
 	addString("organization_id", filter.OrganizationID)
 	addString("resource_type", filter.ResourceType)
 	addString("resource_id", filter.ResourceID)
 	addString("actor_id", filter.ActorID)
-	addString("action", filter.Action)
-	addString("status", filter.Status)
+	addStrings("action", filter.Actions)
+	addStrings("status", filter.Statuses)
+	addString("operation_id", filter.OperationID)
 	if filter.Since != nil {
 		where = append(where, `created_at >= ?`)
 		args = append(args, filter.Since.UTC().Format(time.RFC3339Nano))
@@ -243,9 +252,9 @@ func scanAuditEvent(row interface{ Scan(...any) error }) (*store.AuditEvent, err
 		createdAt    string
 	)
 	if err := row.Scan(
-		&event.ID, &actorKind, &event.ActorID, &event.OrganizationID, &event.Role,
-		&event.ResourceType, &event.ResourceID, &event.Action, &event.Status, &event.DurationMs,
-		&event.ChangeSummary, &metadataJSON, &createdAt,
+		&event.ID, &actorKind, &event.ActorID, &event.ActorName, &event.OrganizationID, &event.Role,
+		&event.ResourceType, &event.ResourceID, &event.Action, &event.Status,
+		&event.OperationID, &event.RequestID, &event.DurationMs, &event.ChangeSummary, &metadataJSON, &createdAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
