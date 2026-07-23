@@ -175,6 +175,8 @@ func TestAgent_RollbackErrorMapping(t *testing.T) {
 		wantCode string
 	}{
 		{"release not found", helmengine.ErrNotFound, "release_not_found"},
+		{"target revision not found", helmengine.ErrRevisionNotFound, "target_revision_not_found"},
+		{"artifact unavailable", helmengine.ErrArtifactUnavailable, "historical_artifact_unavailable"},
 		{"timeout", helmengine.ErrTimeout, "timeout"},
 		{"cancelled", helmengine.ErrCancelled, "cancelled"},
 		{"generic failure", errors.New("something went wrong"), "helm_rollback_failed"},

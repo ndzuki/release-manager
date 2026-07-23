@@ -572,6 +572,10 @@ func rollbackErrorCode(err error) string {
 	switch {
 	case errors.Is(err, helmengine.ErrNotFound):
 		return "release_not_found"
+	case errors.Is(err, helmengine.ErrRevisionNotFound):
+		return "target_revision_not_found"
+	case errors.Is(err, helmengine.ErrArtifactUnavailable):
+		return "historical_artifact_unavailable"
 	case errors.Is(err, helmengine.ErrTimeout):
 		return "timeout"
 	case errors.Is(err, helmengine.ErrCancelled):
