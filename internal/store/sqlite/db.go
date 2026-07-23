@@ -834,6 +834,7 @@ var migrationStatements = []string{
 
 	// Artifact lifecycle (REQ-069) — ALTER TABLEs are idempotent (migrate() skips "duplicate column").
 	`ALTER TABLE release_bundles ADD COLUMN archived_at TEXT`,
+	`ALTER TABLE release_bundles ADD COLUMN archived_from_status TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE release_definitions ADD COLUMN current_bundle_id TEXT`,
 
 	// Candidate artifacts (REQ-069)
@@ -846,6 +847,15 @@ var migrationStatements = []string{
 		created_at    TEXT NOT NULL,
 		UNIQUE(digest, artifact_type)
 	)`,
+	`ALTER TABLE candidate_artifacts ADD COLUMN orphaned_at TEXT`,
+	`CREATE TABLE IF NOT EXISTS bundle_candidate_artifacts (
+		bundle_id   TEXT NOT NULL REFERENCES release_bundles(id) ON DELETE CASCADE,
+		artifact_id TEXT NOT NULL REFERENCES candidate_artifacts(id) ON DELETE CASCADE,
+		linked_at   TEXT NOT NULL,
+		orphaned_at TEXT,
+		PRIMARY KEY (bundle_id, artifact_id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_bundle_candidate_artifacts_artifact ON bundle_candidate_artifacts(artifact_id)`,
 
 	// Preflight lifecycle results (REQ-069) — distinct from the cache-based preflight_results table.
 	`CREATE TABLE IF NOT EXISTS preflight_lifecycles (

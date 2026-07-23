@@ -22,49 +22,15 @@ const (
 
 // Sentinel errors for store operations.
 var (
-	ErrNotFound                  = errors.New("store: not found")
-	ErrOptimisticLock            = errors.New("store: optimistic lock conflict")
-	ErrDuplicateKey              = errors.New("store: duplicate key")
-	ErrReleaseBusy               = errors.New("store: release busy")
-	ErrInvalidCursor             = errors.New("store: invalid cursor")
-	ErrBindingRevoked            = errors.New("store: binding revoked")
-	ErrApprovalPending           = errors.New("store: another approval is pending")
-	ErrIdempotencyConflict       = errors.New("store: idempotency conflict")
-	ErrInvalidState              = errors.New("store: invalid values revision state")
-	ErrDefinitionOwnerUnresolved = errors.New("store: definition owner unresolved")
-	ErrNotAuthorized             = errors.New("store: approval command not authorized")
+	ErrNotFound       = errors.New("store: not found")
+	ErrOptimisticLock = errors.New("store: optimistic lock conflict")
+	ErrDuplicateKey   = errors.New("store: duplicate key")
+	ErrReleaseBusy    = errors.New("store: release busy")
+	ErrInvalidCursor  = errors.New("store: invalid cursor")
+	ErrBindingRevoked = errors.New("store: binding revoked")
+	ErrBundleNotReady = errors.New("store: bundle not ready")
+	ErrBundleRejected = errors.New("store: bundle rejected")
 )
-
-// StateVersionConflictError reports the current revision version after a failed CAS.
-type StateVersionConflictError struct {
-	Expected int64
-	Current  int64
-}
-
-func (e *StateVersionConflictError) Error() string {
-	return "store: values revision state version conflict"
-}
-
-func (e *StateVersionConflictError) Unwrap() error { return ErrOptimisticLock }
-
-// InvalidValuesStateError reports a state-machine precondition failure.
-type InvalidValuesStateError struct {
-	Actual   ValuesStatus
-	Expected ValuesStatus
-}
-
-func (e *InvalidValuesStateError) Error() string { return "store: invalid values revision state" }
-
-func (e *InvalidValuesStateError) Unwrap() error { return ErrInvalidState }
-
-// ApprovalPendingError reports the definition whose pending slot is occupied.
-type ApprovalPendingError struct {
-	DefinitionID string
-}
-
-func (e *ApprovalPendingError) Error() string { return "store: another approval is pending" }
-
-func (e *ApprovalPendingError) Unwrap() error { return ErrApprovalPending }
 
 // OperationType classifies the kind of release operation.
 type OperationType string
@@ -126,11 +92,9 @@ const (
 type ValuesStatus string
 
 const (
-	ValuesStatusDraft           ValuesStatus = "draft"
-	ValuesStatusPendingApproval ValuesStatus = "pending_approval"
-	ValuesStatusApproved        ValuesStatus = "approved"
-	ValuesStatusRejected        ValuesStatus = "rejected"
-	ValuesStatusSuperseded      ValuesStatus = "superseded"
+	ValuesStatusDraft    ValuesStatus = "draft"
+	ValuesStatusApproved ValuesStatus = "approved"
+	ValuesStatusRejected ValuesStatus = "rejected"
 )
 
 // ActorContext records who initiated an operation.
@@ -141,42 +105,71 @@ type ActorContext struct {
 
 // Operation is the core domain object representing a release operation.
 type Operation struct {
-	ID                  string          `json:"id"`
-	OperationType       OperationType   `json:"operation_type"`
-	Status              OperationStatus `json:"status"`
-	ReleaseDefinitionID string          `json:"release_definition_id"`
-	IdempotencyKey      string          `json:"idempotency_key"`
-	RequestHash         string          `json:"request_hash"`
-	StateVersion        int             `json:"state_version"`
-	BundleID            string          `json:"bundle_id"`
-	ValuesRevisionID    string          `json:"values_revision_id"`
-	ExpectedRevision    int             `json:"expected_revision"`
-	TargetRevision      int             `json:"target_revision,omitempty"`
-	ValuesPatch         []byte          `json:"values_patch,omitempty"`
-	Actor               ActorContext    `json:"actor"`
-	CreatedAt           time.Time       `json:"created_at"`
-	UpdatedAt           time.Time       `json:"updated_at"`
-	Deadline            *time.Time      `json:"deadline,omitempty"`
-	LastError           string          `json:"last_error,omitempty"`
+	ID                    string          `json:"id"`
+	OperationType         OperationType   `json:"operation_type"`
+	Status                OperationStatus `json:"status"`
+	ReleaseDefinitionID   string          `json:"release_definition_id"`
+	IdempotencyKey        string          `json:"idempotency_key"`
+	IdempotencyScope      string          `json:"idempotency_scope"`
+	RequestHash           string          `json:"request_hash"`
+	StateVersion          int             `json:"state_version"`
+	BundleID              string          `json:"bundle_id"`
+	BundleChartRef        string          `json:"bundle_chart_ref,omitempty"`
+	BundleChartDigest     string          `json:"bundle_chart_digest,omitempty"`
+	ImageRefsJSON         []byte          `json:"image_refs_json,omitempty"`
+	ImageDigestsJSON      []byte          `json:"image_digests_json,omitempty"`
+	PolicyVersion         string          `json:"policy_version,omitempty"`
+	ValuesRevisionID      string          `json:"values_revision_id"`
+	ExpectedRevision      int             `json:"expected_revision"`
+	TargetRevision        int             `json:"target_revision,omitempty"`
+	ValuesPatch           []byte          `json:"values_patch,omitempty"`
+	PatchDigest           string          `json:"patch_digest,omitempty"`
+	EffectiveValuesDigest string          `json:"effective_values_digest,omitempty"`
+	Reason                string          `json:"reason,omitempty"`
+	Actor                 ActorContext    `json:"actor"`
+	CreatedAt             time.Time       `json:"created_at"`
+	UpdatedAt             time.Time       `json:"updated_at"`
+	Deadline              *time.Time      `json:"deadline,omitempty"`
+	LastError             string          `json:"last_error,omitempty"`
 }
+
+// OperationCreationRequest contains the durable records and artifact links that
+// must be committed atomically when a standard operation is created.
+type OperationCreationRequest struct {
+	Operation                *Operation
+	Dispatch                 *OutboxEntry
+	CandidateArtifactDigests []string
+}
+
+// OperationCreationResult reports the records affected by operation creation.
+type OperationCreationResult struct {
+	Operation            *Operation
+	BundleRestored       bool
+	LinkedCandidateCount int64
+}
+
+// OperationCreationUnitOfWork atomically creates an operation, persists its
+// preflight dispatch, selects its bundle, and links candidate artifacts.
+type OperationCreationUnitOfWork func(
+	ctx context.Context,
+	req OperationCreationRequest,
+) (*OperationCreationResult, error)
 
 // ReleaseDefinition represents a Helm release target configuration.
 type ReleaseDefinition struct {
-	ID                  string           `json:"id"`
-	Name                string           `json:"name"`
-	CustomerID          string           `json:"customer_id"`
-	ClusterID           string           `json:"cluster_id"`
-	Namespace           string           `json:"namespace"`
-	ReleaseName         string           `json:"release_name"`
-	ChartName           string           `json:"chart_name"`
-	Status              DefinitionStatus `json:"status"`
-	OptimisticVersion   int              `json:"optimistic_version"`
-	CurrentBundleID     *string          `json:"current_bundle_id,omitempty"`
-	CreatedBy           string           `json:"created_by"`
-	OwnerOrganizationID *string          `json:"owner_organization_id,omitempty"`
-	ApprovedRevisionID  *string          `json:"approved_revision_id,omitempty"`
-	CreatedAt           time.Time        `json:"created_at"`
-	UpdatedAt           time.Time        `json:"updated_at"`
+	ID                string           `json:"id"`
+	Name              string           `json:"name"`
+	CustomerID        string           `json:"customer_id"`
+	ClusterID         string           `json:"cluster_id"`
+	Namespace         string           `json:"namespace"`
+	ReleaseName       string           `json:"release_name"`
+	ChartName         string           `json:"chart_name"`
+	Status            DefinitionStatus `json:"status"`
+	OptimisticVersion int              `json:"optimistic_version"`
+	CurrentBundleID   *string          `json:"current_bundle_id,omitempty"`
+	CreatedBy         string           `json:"created_by"`
+	CreatedAt         time.Time        `json:"created_at"`
+	UpdatedAt         time.Time        `json:"updated_at"`
 }
 
 // ValuesRevision stores the desired configuration for a release target.
@@ -184,80 +177,13 @@ type ValuesRevision struct {
 	ID                  string       `json:"id"`
 	ReleaseDefinitionID string       `json:"release_definition_id"`
 	Revision            int          `json:"revision"`
-	StateVersion        int64        `json:"state_version"`
 	Status              ValuesStatus `json:"status"`
 	Values              []byte       `json:"values"`
 	Digest              string       `json:"digest"`
 	ParentRevisionID    string       `json:"parent_revision_id"`
 	SecretRefs          []byte       `json:"secret_refs,omitempty"`
-	CreatedByUserID     string       `json:"created_by_user_id"`
-	SubmittedAt         *time.Time   `json:"submitted_at,omitempty"`
-	DecidedAt           *time.Time   `json:"decided_at,omitempty"`
 	CreatedAt           time.Time    `json:"created_at"`
 	UpdatedAt           time.Time    `json:"updated_at"`
-}
-
-// ValuesDecisionAction identifies a durable approval workflow transition.
-type ValuesDecisionAction string
-
-const (
-	ValuesDecisionSubmitted ValuesDecisionAction = "submitted"
-	ValuesDecisionApproved  ValuesDecisionAction = "approved"
-	ValuesDecisionRejected  ValuesDecisionAction = "rejected"
-)
-
-// ValuesRevisionDecision is an immutable state transition record.
-type ValuesRevisionDecision struct {
-	ID                  string               `json:"id"`
-	RevisionID          string               `json:"revision_id"`
-	ReleaseDefinitionID string               `json:"release_definition_id"`
-	Action              ValuesDecisionAction `json:"action"`
-	FromState           ValuesStatus         `json:"from_state"`
-	ToState             ValuesStatus         `json:"to_state"`
-	ActorUserID         string               `json:"actor_user_id"`
-	ActorOrgID          string               `json:"actor_org_id"`
-	ActorRole           Role                 `json:"actor_role"`
-	Comment             *string              `json:"comment,omitempty"`
-	Reason              string               `json:"reason,omitempty"`
-	RequestID           string               `json:"request_id,omitempty"`
-	IdempotencyKeyHash  string               `json:"idempotency_key_hash,omitempty"`
-	CreatedAt           time.Time            `json:"created_at"`
-}
-
-// ApprovalOutboxEntry is a durable audit or notification event.
-type ApprovalOutboxEntry struct {
-	ID          string     `json:"id"`
-	EventType   string     `json:"event_type"`
-	PayloadJSON []byte     `json:"payload_json"`
-	CreatedAt   time.Time  `json:"created_at"`
-	Delivered   bool       `json:"delivered"`
-	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
-}
-
-// ValuesApprovalCommand contains the trusted authorization and idempotency snapshot.
-type ValuesApprovalCommand struct {
-	RevisionID           string
-	ExpectedStateVersion int64
-	ActorUserID          string
-	ActorOrgID           string
-	ActorRole            Role
-	Authorized           bool
-	Comment              *string
-	Reason               string
-	RequestID            string
-	IdempotencyScope     string
-	IdempotencyKeyHash   string
-	RequestHash          string
-}
-
-// ValuesApprovalResult is the committed or replayed transition result.
-type ValuesApprovalResult struct {
-	Revision              *ValuesRevision
-	PreviousState         ValuesStatus
-	NewState              ValuesStatus
-	DecidedAt             time.Time
-	SupersededRevisionIDs []string
-	Replayed              bool
 }
 
 // CustomerStatus is the lifecycle state of a customer tenant.
@@ -325,7 +251,6 @@ type Cluster struct {
 	Status        ClusterStatus `json:"status"`
 	CreatedAt     time.Time     `json:"created_at"`
 	UpdatedAt     time.Time     `json:"updated_at"`
-	Version       int64         `json:"version"`
 }
 
 // EnrollmentToken is a single-use token for operator registration.
@@ -703,7 +628,7 @@ const (
 // Valid returns true if the status is a recognized value.
 func (s BundleStatus) Valid() bool {
 	switch s {
-	case BundleReceived, BundleValidated, BundleRejected:
+	case BundleReceived, BundleValidated, BundleRejected, BundleArchived:
 		return true
 	default:
 		return false
@@ -719,22 +644,23 @@ type BundleImage struct {
 
 // ReleaseBundle represents an immutable release artifact bundle.
 type ReleaseBundle struct {
-	ID            string
-	Name          string
-	DigestAlg     string
-	DigestValue   string
-	Status        BundleStatus
-	ChartRef      string
-	ChartVersion  string
-	ChartDigest   string
-	Images        []BundleImage
-	GitCommit     string
-	PipelineID    string
-	SignatureRef  string
-	SBOMRef       string
-	ProvenanceRef string
-	ArchivedAt    *time.Time
-	CreatedAt     time.Time
+	ID                 string
+	Name               string
+	DigestAlg          string
+	DigestValue        string
+	Status             BundleStatus
+	ChartRef           string
+	ChartVersion       string
+	ChartDigest        string
+	Images             []BundleImage
+	GitCommit          string
+	PipelineID         string
+	SignatureRef       string
+	SBOMRef            string
+	ProvenanceRef      string
+	ArchivedAt         *time.Time
+	ArchivedFromStatus BundleStatus
+	CreatedAt          time.Time
 }
 
 // BundleStore defines the persistence contract for release bundles.
@@ -854,62 +780,13 @@ type InventorySyncLog struct {
 	CreatedAt       time.Time
 }
 
-type InventorySyncRequestStatus string
-
-const (
-	InventorySyncPending   InventorySyncRequestStatus = "pending"
-	InventorySyncRunning   InventorySyncRequestStatus = "running"
-	InventorySyncSucceeded InventorySyncRequestStatus = "succeeded"
-	InventorySyncFailed    InventorySyncRequestStatus = "failed"
-)
-
-func (s InventorySyncRequestStatus) IsTerminal() bool {
-	return s == InventorySyncSucceeded || s == InventorySyncFailed
-}
-
-type InventorySyncRequest struct {
-	ID         string
-	CustomerID string
-	ClusterID  string
-	OperatorID string
-	CommandID  string
-	Status     InventorySyncRequestStatus
-	LastError  string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-}
-
-type InventorySyncRequestStore interface {
-	CreateIfAvailable(ctx context.Context, request *InventorySyncRequest, outbox *OutboxEntry) (*InventorySyncRequest, bool, error)
-	Get(ctx context.Context, id string) (*InventorySyncRequest, error)
-	GetActiveByCluster(ctx context.Context, customerID, clusterID string) (*InventorySyncRequest, error)
-	UpdateStatus(ctx context.Context, id string, status InventorySyncRequestStatus, lastError string) error
-}
-
-// InventoryQuery describes a stable page over one customer and cluster scope.
-type InventoryQuery struct {
-	CustomerID string
-	ClusterID  string
-	Status     InventoryStatus
-	NameSearch string
-	PageSize   int
-	Cursor     string
-}
-
-// InventoryPage is one stable page of release inventory results.
-type InventoryPage struct {
-	Items      []*ReleaseInventory
-	NextCursor string
-	TotalCount int
-	LastSyncAt time.Time
-}
-
 // OperationStore defines the persistence contract for operations.
 type OperationStore interface {
 	Create(ctx context.Context, op *Operation) error
 	CreateIfAvailable(ctx context.Context, op *Operation) error
+	CreateIfAvailableWithDispatch(ctx context.Context, op *Operation, dispatch *OutboxEntry) error
 	Get(ctx context.Context, id string) (*Operation, error)
-	GetByIdempotencyKey(ctx context.Context, key string) (*Operation, error)
+	GetByIdempotencyScopeAndKey(ctx context.Context, scope, key string) (*Operation, error)
 	UpdateStatus(ctx context.Context, id string, status OperationStatus, stateVersion int, lastError string) (*Operation, error)
 	Transition(ctx context.Context, id string, status OperationStatus, stateVersion int, lastError string) (*Operation, error)
 	HasActiveForDefinition(ctx context.Context, definitionID string) (bool, error)
@@ -958,21 +835,6 @@ type DefinitionEventStore interface {
 	List(ctx context.Context, definitionID string) ([]*ReleaseDefinitionEvent, error)
 }
 
-// ValuesApprovalStore executes complete approval transitions atomically.
-type ValuesApprovalStore interface {
-	Submit(ctx context.Context, command ValuesApprovalCommand) (*ValuesApprovalResult, error)
-	Approve(ctx context.Context, command ValuesApprovalCommand) (*ValuesApprovalResult, error)
-	Reject(ctx context.Context, command ValuesApprovalCommand) (*ValuesApprovalResult, error)
-	RecordAttempt(ctx context.Context, entry *ApprovalOutboxEntry) error
-}
-
-// ValuesApprovalReader exposes immutable workflow evidence.
-type ValuesApprovalReader interface {
-	ListDecisions(ctx context.Context, revisionID string) ([]*ValuesRevisionDecision, error)
-	ListAuditOutbox(ctx context.Context, revisionID string) ([]*ApprovalOutboxEntry, error)
-	ListNotificationOutbox(ctx context.Context, revisionID string) ([]*ApprovalOutboxEntry, error)
-}
-
 // ValuesStore defines the persistence contract for values revisions.
 // For Create, the caller MUST populate Revision via GetNextRevisionNumber
 // and Digest via the values package before calling.
@@ -983,6 +845,9 @@ type ValuesStore interface {
 	GetLatestApproved(ctx context.Context, definitionID string) (*ValuesRevision, error)
 	GetNextRevisionNumber(ctx context.Context, definitionID string) (int, error)
 	List(ctx context.Context, definitionID string) ([]*ValuesRevision, error)
+	// Update persists status changes with optimistic locking on parent_revision_id.
+	// Returns ErrOptimisticLock if expectedParentRev doesn't match the stored value.
+	Update(ctx context.Context, vr *ValuesRevision, expectedParentRev string) error
 }
 
 // CustomerStore defines the persistence contract for customers.
@@ -1011,7 +876,7 @@ type CustomerEventStore interface {
 type ClusterStore interface {
 	Create(ctx context.Context, c *Cluster) error
 	Get(ctx context.Context, id string) (*Cluster, error)
-	Update(ctx context.Context, c *Cluster, expectedVersion int64) error
+	Update(ctx context.Context, c *Cluster) error
 	List(ctx context.Context, customerID string) ([]*Cluster, error)
 	ListAll(ctx context.Context) ([]*Cluster, error)
 }
@@ -1055,10 +920,11 @@ type OutboxStore interface {
 	Get(ctx context.Context, id string) (*OutboxEntry, error)
 	GetByCommandID(ctx context.Context, commandID string) (*OutboxEntry, error)
 	GetPendingForOperator(ctx context.Context, operatorID string) (*OutboxEntry, error)
+	GetNextUnassigned(ctx context.Context, clusterID string) (*OutboxEntry, error)
+	AssignOperator(ctx context.Context, id, operatorID string) error
 	GetDeliveredNotAcked(ctx context.Context, operatorID string) ([]*OutboxEntry, error)
 	GetInflightForOperator(ctx context.Context, operatorID string) (*OutboxEntry, error)
 	GetNextSequence(ctx context.Context) (int64, error)
-	UpdateSequence(ctx context.Context, id string, sequence int64) error
 	UpdateStatus(ctx context.Context, id string, status CommandStatus, resultJSON string) error
 	GetNextPending(ctx context.Context, operatorID string) (*OutboxEntry, error)
 }
@@ -1101,7 +967,6 @@ type OrganizationMemberStore interface {
 	Delete(ctx context.Context, orgID, userID string) error
 }
 
-// BindingStore defines the persistence contract for org-customer bindings (REQ-049).
 type BindingStore interface {
 	Create(ctx context.Context, b *OrgCustomerBinding) error
 	Get(ctx context.Context, id string) (*OrgCustomerBinding, error)
@@ -1215,8 +1080,6 @@ type ClusterRouteStore interface {
 	Update(ctx context.Context, r *ClusterRoute) error
 	Delete(ctx context.Context, id string) error
 }
-
-// InventoryStore defines the persistence contract for release inventory sync (REQ-017).
 type InventoryStore interface {
 	// Upsert inserts or updates an inventory row by unique key.
 	Upsert(ctx context.Context, item *ReleaseInventory) error
@@ -1224,9 +1087,9 @@ type InventoryStore interface {
 	// ListByCluster returns all inventory rows for a cluster.
 	ListByCluster(ctx context.Context, customerID, clusterID string) ([]*ReleaseInventory, error)
 
-	// Query returns one filtered page and validates that an opaque cursor still
-	// belongs to the same scope, filters, and inventory snapshot.
-	Query(ctx context.Context, query InventoryQuery) (*InventoryPage, error)
+	// GetByDefinition returns the inventory row for a release definition, if one exists.
+	// Returns ErrNotFound if no installed release has been synced for this definition.
+	GetByDefinition(ctx context.Context, definitionID string) (*ReleaseInventory, error)
 
 	// MarkMissing sets InventoryMissing for all rows in a cluster not present in the given set.
 	// Returns the count of rows marked missing.
@@ -1256,6 +1119,7 @@ type CandidateArtifact struct {
 type CandidateArtifactStore interface {
 	Create(ctx context.Context, ca *CandidateArtifact) error
 	LinkToBundle(ctx context.Context, artifactID, bundleID string) error
+	LinkCandidateArtifacts(ctx context.Context, bundleID string, digests []string) (int64, error)
 	DeleteOrphanBefore(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
@@ -1286,8 +1150,6 @@ type Store interface {
 	Definitions() DefinitionStore
 	DefinitionEvents() DefinitionEventStore
 	Values() ValuesStore
-	ValuesApproval() ValuesApprovalStore
-	ValuesApprovalEvidence() ValuesApprovalReader
 	Customers() CustomerStore
 	Clusters() ClusterStore
 	EnrollmentTokens() EnrollmentTokenStore
@@ -1311,7 +1173,6 @@ type Store interface {
 	CustomerEvents() CustomerEventStore
 	ClusterRoutes() ClusterRouteStore
 	Inventories() InventoryStore
-	InventorySyncRequests() InventorySyncRequestStore
 	CandidateArtifacts() CandidateArtifactStore
 	PreflightLifecycles() PreflightLifecycleStore
 	Close() error

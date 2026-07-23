@@ -10,6 +10,7 @@ import (
 
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	"github.com/ndzuki/release-manager/internal/orchestrator/preflight"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -17,12 +18,12 @@ func TestRollbackRelease_Success(t *testing.T) {
 	// AC-022-03: successful rollback creates operation and returns from/to revision
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
-	seedDefinition(t, st)
+	seedInstalledDefinition(t, st, 2)
 
 	resp, err := svc.RollbackRelease(context.Background(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
 		ReleaseDefinitionId:     "def-001",
 		TargetRevision:          1,
-		ExpectedCurrentRevision: 3,
+		ExpectedCurrentRevision: 2,
 		Reason:                  "rolling back due to config error",
 		IdempotencyKey:          "idem-rb-001",
 		Actor: &commonv1.ActorContext{
@@ -32,17 +33,26 @@ func TestRollbackRelease_Success(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	assert.NotEmpty(t, resp.Msg.OperationId)
-	assert.Equal(t, int32(3), resp.Msg.FromRevision)
-	assert.Equal(t, int32(4), resp.Msg.ToRevision) // rollback creates rev 4
-	assert.Equal(t, "preflight", resp.Msg.State)
+	assert.Equal(t, int32(2), resp.Msg.FromRevision)
+	assert.Equal(t, int32(3), resp.Msg.ToRevision) // rollback creates rev 3
+	assert.Equal(t, "pending", resp.Msg.State)
 
 	// Verify operation persisted correctly
 	op, err := st.Operations().Get(context.Background(), resp.Msg.OperationId)
 	require.NoError(t, err)
 	assert.Equal(t, store.OperationRollback, op.OperationType)
-	assert.Equal(t, 3, op.ExpectedRevision)
+	assert.Equal(t, 2, op.ExpectedRevision)
 	assert.Equal(t, 1, op.TargetRevision)
-	assert.Equal(t, store.StatusPreflight, op.Status)
+	assert.Equal(t, store.StatusPending, op.Status)
+	dispatch, err := st.Outbox().GetByCommandID(context.Background(), resp.Msg.OperationId+":artifact")
+	require.NoError(t, err)
+	payload, err := preflight.UnmarshalCommandPayload(dispatch.Payload)
+	require.NoError(t, err)
+	assert.Equal(t, "def-001", payload.DefinitionID)
+	assert.Equal(t, "default", payload.Namespace)
+	assert.Equal(t, "my-release", payload.ReleaseName)
+	assert.Equal(t, 2, payload.ExpectedCurrentRevision)
+	assert.Equal(t, 1, payload.TargetRevision)
 }
 
 func TestRollbackRelease_TargetRevisionInvalid(t *testing.T) {
@@ -137,7 +147,7 @@ func TestRollbackRelease_ReleaseBusy(t *testing.T) {
 	// AC-022-03: concurrent operation → release_busy
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
-	seedDefinition(t, st)
+	seedInstalledDefinition(t, st, 3)
 
 	// First rollback succeeds
 	_, err := svc.RollbackRelease(context.Background(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
@@ -193,7 +203,7 @@ func TestRollbackRelease_MissingReason(t *testing.T) {
 func TestRollbackRelease_Idempotency(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
-	seedDefinition(t, st)
+	seedInstalledDefinition(t, st, 3)
 
 	req := &orchestratorv1.RollbackReleaseRequest{
 		ReleaseDefinitionId:     "def-001",
@@ -291,4 +301,53 @@ func TestRollbackRelease_CustomerDisabled(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "disabled")
+}
+
+func TestRollbackRelease_RevisionConflict(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedInstalledDefinition(t, st, 2)
+
+	_, err := svc.RollbackRelease(t.Context(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
+		ReleaseDefinitionId: "def-001", TargetRevision: 1, ExpectedCurrentRevision: 3,
+		Reason: "stale current revision", IdempotencyKey: "idem-rb-conflict",
+		Actor: &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.ErrorContains(t, err, "revision_conflict")
+	ops, listErr := st.Operations().List(t.Context(), "def-001")
+	require.NoError(t, listErr)
+	assert.Empty(t, ops)
+}
+
+func TestRollbackRelease_ValuesNotAllowed(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedInstalledDefinition(t, st, 2)
+
+	tests := []struct {
+		name             string
+		valuesRevisionID string
+		valuesPatch      string
+	}{
+		{name: "values revision", valuesRevisionID: "vr-001"},
+		{name: "values patch", valuesPatch: `{"replicas":2}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := svc.RollbackRelease(t.Context(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
+				ReleaseDefinitionId: "def-001", TargetRevision: 1, ExpectedCurrentRevision: 2,
+				Reason: "rollback without values", IdempotencyKey: "idem-rb-values-" + tt.name,
+				ValuesRevisionId: tt.valuesRevisionID, ValuesPatch: tt.valuesPatch,
+				Actor: &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
+			}))
+			require.Error(t, err)
+			assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+			assert.ErrorContains(t, err, "rollback_values_not_allowed")
+		})
+	}
+	ops, err := st.Operations().List(t.Context(), "def-001")
+	require.NoError(t, err)
+	assert.Empty(t, ops)
 }

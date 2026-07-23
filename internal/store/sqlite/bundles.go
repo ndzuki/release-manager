@@ -52,7 +52,7 @@ func (s *bundleStore) Get(ctx context.Context, id string) (*store.ReleaseBundle,
 			images,
 			git_commit, pipeline_id,
 			signature_ref, sbom_ref, provenance_ref,
-			archived_at, created_at
+			archived_at, archived_from_status, created_at
 		FROM release_bundles WHERE id = ?
 	`, id)
 	return scanBundle(row)
@@ -65,7 +65,7 @@ func (s *bundleStore) GetByDigest(ctx context.Context, alg, value string) (*stor
 			images,
 			git_commit, pipeline_id,
 			signature_ref, sbom_ref, provenance_ref,
-			archived_at, created_at
+			archived_at, archived_from_status, created_at
 		FROM release_bundles WHERE digest_alg = ? AND digest_value = ?
 	`, alg, value)
 	return scanBundle(row)
@@ -78,7 +78,7 @@ func scanBundle(row interface{ Scan(...interface{}) error }) (*store.ReleaseBund
 		imagesJSON                               string
 		gitCommit, pipelineID                    string
 		sigRef, sbomRef, provRef                 string
-		archivedAt                               *string
+		archivedAt, archivedFromStatus           *string
 		createdAt                                string
 	)
 
@@ -88,7 +88,7 @@ func scanBundle(row interface{ Scan(...interface{}) error }) (*store.ReleaseBund
 		&imagesJSON,
 		&gitCommit, &pipelineID,
 		&sigRef, &sbomRef, &provRef,
-		&archivedAt,
+		&archivedAt, &archivedFromStatus,
 		&createdAt,
 	); err != nil {
 		if err == sql.ErrNoRows {
@@ -117,24 +117,29 @@ func scanBundle(row interface{ Scan(...interface{}) error }) (*store.ReleaseBund
 		}
 		archived = &at
 	}
+	var archivedFrom store.BundleStatus
+	if archivedFromStatus != nil {
+		archivedFrom = store.BundleStatus(*archivedFromStatus)
+	}
 
 	return &store.ReleaseBundle{
-		ID:            id,
-		Name:          name,
-		DigestAlg:     digestAlg,
-		DigestValue:   digestValue,
-		Status:        store.BundleStatus(status),
-		ChartRef:      chartRef,
-		ChartVersion:  chartVersion,
-		ChartDigest:   chartDigest,
-		Images:        images,
-		GitCommit:     gitCommit,
-		PipelineID:    pipelineID,
-		SignatureRef:  sigRef,
-		SBOMRef:       sbomRef,
-		ProvenanceRef: provRef,
-		ArchivedAt:    archived,
-		CreatedAt:     ts,
+		ID:                 id,
+		Name:               name,
+		DigestAlg:          digestAlg,
+		DigestValue:        digestValue,
+		Status:             store.BundleStatus(status),
+		ChartRef:           chartRef,
+		ChartVersion:       chartVersion,
+		ChartDigest:        chartDigest,
+		Images:             images,
+		GitCommit:          gitCommit,
+		PipelineID:         pipelineID,
+		SignatureRef:       sigRef,
+		SBOMRef:            sbomRef,
+		ProvenanceRef:      provRef,
+		ArchivedAt:         archived,
+		ArchivedFromStatus: archivedFrom,
+		CreatedAt:          ts,
 	}, nil
 }
 
@@ -149,7 +154,7 @@ func (s *bundleStore) ListForArchive(ctx context.Context, retentionDays int, ter
 		terminal[i] = string(s)
 	}
 
-	//nolint:gosec // Placeholder count derives from an internal status slice; all values remain bound parameters.
+	//nolint:gosec // only generated placeholders are concatenated; terminal states remain bound parameters
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT b.id FROM release_bundles b
 		WHERE b.status IN ('received','validated')
@@ -189,12 +194,13 @@ func (s *bundleStore) Archive(ctx context.Context, ids []string) (int64, error) 
 	if err != nil {
 		return 0, fmt.Errorf("begin archive: %w", err)
 	}
-	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
+	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	//nolint:gosec // Placeholder count derives from the internal ID slice; all IDs remain bound parameters.
+	//nolint:gosec // only generated placeholders are concatenated; bundle IDs remain bound parameters
 	result, err := tx.ExecContext(ctx, `
-		UPDATE release_bundles SET status = 'archived', archived_at = ?
+		UPDATE release_bundles
+		SET archived_from_status = status, status = 'archived', archived_at = ?
 		WHERE id IN (`+placeholders(len(ids))+`) AND status IN ('received','validated')
 	`, append([]any{now}, stringsToAny(ids)...)...)
 	if err != nil {
@@ -225,8 +231,9 @@ func (s *bundleStore) DeleteBefore(ctx context.Context, cutoff time.Time) (int64
 // Unarchive transitions a bundle from archived back to validated.
 func (s *bundleStore) Unarchive(ctx context.Context, id string) error {
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE release_bundles SET status = 'validated', archived_at = NULL
-		WHERE id = ? AND status = 'archived'
+		UPDATE release_bundles
+		SET status = archived_from_status, archived_at = NULL, archived_from_status = ''
+		WHERE id = ? AND status = 'archived' AND archived_from_status != ''
 	`, id)
 	if err != nil {
 		return fmt.Errorf("unarchive bundle %s: %w", id, err)

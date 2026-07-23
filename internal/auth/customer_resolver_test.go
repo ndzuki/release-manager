@@ -32,7 +32,7 @@ func TestConnectCustomerResolver_ResolveIncludesDisabledStatus(t *testing.T) {
 	require.NoError(t, st.Customers().Create(context.Background(), customer))
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := orchestrator.NewService(st, nil, "staging", nil, logger)
+	svc := orchestrator.NewService(st, st.OperationCreationUnitOfWork(), nil, "staging", nil, logger)
 	path, handler := orchestratorv1connect.NewOrchestratorServiceHandler(svc)
 	mux := http.NewServeMux()
 	mux.Handle(path, handler)

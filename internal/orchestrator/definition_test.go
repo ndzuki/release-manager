@@ -471,5 +471,5 @@ func TestCreateOperation_ValidationFlow(t *testing.T) {
 	))
 	require.NoError(t, err)
 	assert.NotEmpty(t, createOpResp.Msg.OperationId)
-	assert.Equal(t, "preflight", createOpResp.Msg.State)
+	assert.Equal(t, "pending", createOpResp.Msg.State)
 }

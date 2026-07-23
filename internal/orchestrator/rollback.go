@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -24,25 +25,17 @@ func (s *Service) RollbackRelease(
 ) (*connect.Response[orchestratorv1.RollbackReleaseResponse], error) {
 	msg := req.Msg
 
-	// 1. Idempotency check
-	if msg.IdempotencyKey != "" {
-		existing, err := s.store.Operations().GetByIdempotencyKey(ctx, msg.IdempotencyKey)
-		if err == nil {
-			s.logger.Info("idempotent rollback operation found", "key", msg.IdempotencyKey, "op_id", existing.ID)
-			return connect.NewResponse(&orchestratorv1.RollbackReleaseResponse{
-			OperationId:  existing.ID,
-			//nolint:gosec // Helm revisions are bounded well below int32 max
-			FromRevision: int32(existing.ExpectedRevision),
-			//nolint:gosec // Helm revisions are bounded well below int32 max
-			ToRevision:   int32(existing.ExpectedRevision + 1), // rollback creates a new revision
-			State:        string(existing.Status),
-			}), nil
-		}
-		if err != store.ErrNotFound {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("idempotency lookup: %w", err))
-		}
+	// 1. Validate actor before any idempotency lookup.
+	if msg.Actor.GetOrganization() == "" || msg.Actor.GetUserId() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("actor organization and user_id are required"))
+	}
+	if msg.IdempotencyKey == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("idempotency_key is required"))
 	}
 
+	if msg.GetValuesRevisionId() != "" || msg.GetValuesPatch() != "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("rollback_values_not_allowed"))
+	}
 	// 2. Validate required fields
 	if msg.Reason == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
@@ -78,81 +71,65 @@ func (s *Service) RollbackRelease(
 			fmt.Errorf("release_definition %s is %s", def.ID, def.Status))
 	}
 
-	// 4. Customer not disabled
+	// 4. Authorize the actor against the customer binding and organization role.
 	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
-		return nil, connect.NewError(connect.CodePermissionDenied, err)
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("customer_disabled: %w", err))
+	}
+	if err := s.authorizeOperationActor(ctx, msg.Actor.GetOrganization(), msg.Actor.GetUserId(), def.CustomerID); err != nil {
+		return nil, err
 	}
 
-	// 5. Release busy check — no active operation for this definition
-	active, err := s.store.Operations().HasActiveForDefinition(ctx, msg.ReleaseDefinitionId)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("active check: %w", err))
+	requestHash := s.rollbackRequestHash(msg)
+	scope := idempotencyScope(msg.Actor.GetOrganization(), msg.ReleaseDefinitionId)
+	existing, err := s.store.Operations().GetByIdempotencyScopeAndKey(ctx, scope, msg.IdempotencyKey)
+	if err == nil {
+		if existing.RequestHash != requestHash {
+			return nil, connect.NewError(connect.CodeAlreadyExists, errors.New("idempotency_conflict"))
+		}
+		return connect.NewResponse(s.rollbackResponse(existing)), nil
 	}
-	if active {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
-	}
-
-	// Always reject standard operations during emergency (parity with CreateOperation).
-	activeEmergency, err := s.store.Operations().HasActiveEmergencyForDefinition(ctx, msg.ReleaseDefinitionId)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("emergency active check: %w", err))
-	}
-	if activeEmergency {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("definition %s has a running EMERGENCY operation; rollback is denied", msg.ReleaseDefinitionId))
+	if !errors.Is(err, store.ErrNotFound) {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("idempotency lookup: %w", err))
 	}
 
-	// 6. Build domain Operation
+	if err := s.checkReleaseState(ctx, def, store.OperationRollback, int(msg.ExpectedCurrentRevision)); err != nil {
+		return nil, err
+	}
+
+	// 5. Build and persist the rollback operation.
 	now := time.Now().UTC()
 	op := &store.Operation{
-		ID:                  uuid.New().String(),
-		OperationType:       store.OperationRollback,
-		Status:              operation.InitialStatus(),
-		ReleaseDefinitionID: msg.ReleaseDefinitionId,
-		IdempotencyKey:      msg.IdempotencyKey,
-		ExpectedRevision:    int(msg.ExpectedCurrentRevision),
-		TargetRevision:      int(msg.TargetRevision),
-		Actor: store.ActorContext{
-			UserID:       msg.Actor.GetUserId(),
-			Organization: msg.Actor.GetOrganization(),
-		},
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID: uuid.New().String(), OperationType: store.OperationRollback, Status: operation.InitialStatus(),
+		ReleaseDefinitionID: msg.ReleaseDefinitionId, IdempotencyKey: msg.IdempotencyKey,
+		IdempotencyScope: scope, RequestHash: requestHash,
+		ExpectedRevision: int(msg.ExpectedCurrentRevision), TargetRevision: int(msg.TargetRevision), Reason: msg.Reason,
+		Actor:     store.ActorContext{UserID: msg.Actor.GetUserId(), Organization: msg.Actor.GetOrganization()},
+		CreatedAt: now, UpdatedAt: now,
 	}
-
-	// 7. Persist
-	if err := s.store.Operations().Create(ctx, op); err != nil {
+	if err := s.store.Operations().CreateIfAvailable(ctx, op); err != nil {
+		if errors.Is(err, store.ErrReleaseBusy) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("release_busy"))
+		}
+		if errors.Is(err, store.ErrDuplicateKey) {
+			return nil, connect.NewError(connect.CodeAlreadyExists, errors.New("idempotency_conflict"))
+		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create rollback operation: %w", err))
 	}
 
-	// 8. Transition to preflight (AC-022-02: historical artifact check happens during preflight in operator)
-	next, err := operation.Transition(op.Status, operation.EventStartPreflight)
-	if err != nil {
-		s.logger.Error("rollback preflight transition failed", "op_id", op.ID, "err", err)
-	} else {
-		updated, err := s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, "")
-		if err != nil {
-			s.logger.Error("rollback preflight status update failed", "op_id", op.ID, "err", err)
-		} else {
-			op.Status = updated.Status
-			op.StateVersion = updated.StateVersion
-		}
+	if err := s.coordinator.Enqueue(ctx, op); err != nil {
+		s.logger.Warn("rollback preflight dispatch deferred", "op_id", op.ID, "err", err)
 	}
 
-	s.logger.Info("rollback operation created",
-		"op_id", op.ID,
-		"definition", op.ReleaseDefinitionID,
-		"from_rev", op.ExpectedRevision,
-		"to_rev", op.TargetRevision,
-	)
+	return connect.NewResponse(s.rollbackResponse(op)), nil
+}
 
-	return connect.NewResponse(&orchestratorv1.RollbackReleaseResponse{
-		OperationId:  op.ID,
+func (s *Service) rollbackResponse(op *store.Operation) *orchestratorv1.RollbackReleaseResponse {
+	return &orchestratorv1.RollbackReleaseResponse{
+		OperationId: op.ID,
 		//nolint:gosec // Helm revisions are bounded well below int32 max
 		FromRevision: int32(op.ExpectedRevision),
 		//nolint:gosec // Helm revisions are bounded well below int32 max
-		ToRevision:   int32(op.ExpectedRevision + 1), // rollback creates a new revision
-		State:        string(op.Status),
-	}), nil
+		ToRevision: int32(op.ExpectedRevision + 1),
+		State:      string(op.Status),
+	}
 }

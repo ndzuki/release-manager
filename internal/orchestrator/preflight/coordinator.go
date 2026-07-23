@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/store"
 )
@@ -16,37 +18,30 @@ import (
 // It dispatches PRECHECK commands via the outbox, polls for results, and CAS the
 // operation to queued (all passed) or failed (any required stage failed).
 type Coordinator struct {
-	outbox         store.OutboxStore
-	ops            store.OperationStore
-	opers          store.OperatorStore
-	defs           store.DefinitionStore
-	values         store.ValuesStore
-	bundles        store.BundleStore
-	pl             store.PreflightLifecycleStore
-	logger         *slog.Logger
-	timeoutSeconds int64
+	outbox store.OutboxStore
+	ops    store.OperationStore
+	opers  store.OperatorStore
+	defs   store.DefinitionStore
+	pl     store.PreflightLifecycleStore
+	logger *slog.Logger
 }
+
 // NewCoordinator creates a preflight coordinator with the required store dependencies.
 func NewCoordinator(
 	outbox store.OutboxStore,
 	ops store.OperationStore,
 	opers store.OperatorStore,
 	defs store.DefinitionStore,
-	values store.ValuesStore,
-	bundles store.BundleStore,
 	pl store.PreflightLifecycleStore,
 	logger *slog.Logger,
 ) *Coordinator {
 	return &Coordinator{
-		outbox:         outbox,
-		ops:            ops,
-		opers:          opers,
-		defs:           defs,
-		values:         values,
-		bundles:        bundles,
-		pl:             pl,
-		logger:         logger,
-		timeoutSeconds: int64((5 * time.Minute) / time.Second),
+		outbox: outbox,
+		ops:    ops,
+		opers:  opers,
+		defs:   defs,
+		pl:     pl,
+		logger: logger,
 	}
 }
 
@@ -54,12 +49,46 @@ func NewCoordinator(
 // It blocks until all stages complete or a required stage fails.
 // The caller should invoke this in a goroutine with a background context
 // derived from the request context (so cancellation propagates).
+// Dispatch builds the first durable preflight command for an operation.
+// Returns errNoOperator when no operator is available; the caller should persist
+// the dispatch record for later assignment.
+var errNoOperator = fmt.Errorf("no operator available")
+
+func (c *Coordinator) Dispatch(ctx context.Context, op *store.Operation, bundle *commonv1.ReleaseBundle, values []byte) (*store.OutboxEntry, error) {
+	stage := ProductionStages()[0]
+	operatorID, dispatchErr := c.resolveOperator(ctx, op)
+	if dispatchErr != nil {
+		operatorID = ""
+		dispatchErr = errNoOperator
+	}
+	payload, err := c.commandPayload(ctx, op, stage.Name, bundle, values)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := payload.Marshal()
+	if err != nil {
+		return nil, fmt.Errorf("marshal payload: %w", err)
+	}
+	return &store.OutboxEntry{
+		ID: uuid.New().String(), CommandID: fmt.Sprintf("%s:%s", op.ID, stage.Name),
+		OperationID: op.ID, OperationType: string(op.OperationType), OperatorID: operatorID, Payload: encoded,
+	}, dispatchErr
+}
+
+// Enqueue persists the first preflight command before the API returns.
+func (c *Coordinator) Enqueue(ctx context.Context, op *store.Operation) error {
+	entry, err := c.Dispatch(ctx, op, nil, nil)
+	if err != nil {
+		return err
+	}
+	return c.outbox.Create(ctx, entry)
+}
+
 func (c *Coordinator) Run(ctx context.Context, op *store.Operation) {
 	c.logger.Info("preflight coordinator started",
 		"op_id", op.ID,
 		"type", op.OperationType,
 	)
-
 	stages := ProductionStages()
 	results := make([]StageResult, 0, len(stages))
 
@@ -116,6 +145,7 @@ func (c *Coordinator) Run(ctx context.Context, op *store.Operation) {
 	// Record lifecycle result for GC (REQ-069).
 	c.recordLifecycle(ctx, op.ID, results, string(StagePassed), "")
 }
+
 // runStage dispatches a PRECHECK command for one stage and polls for its result.
 func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage StageDef) (StageResult, error) {
 	emptyResult := StageResult{Stage: stage.Name, Status: StageFailed}
@@ -131,9 +161,8 @@ func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage S
 		}, err
 	}
 
-	// Build and dispatch command.
 	commandID := fmt.Sprintf("%s:%s", op.ID, stage.Name)
-	payload, err := c.commandPayload(ctx, op, stage)
+	payload, err := c.commandPayload(ctx, op, stage.Name, nil, nil)
 	if err != nil {
 		return emptyResult, err
 	}
@@ -146,7 +175,7 @@ func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage S
 		ID:            uuid.New().String(),
 		CommandID:     commandID,
 		OperationID:   op.ID,
-		OperationType: CommandType(stage.Name),
+		OperationType: string(op.OperationType),
 		OperatorID:    operatorID,
 		Payload:       encoded,
 	}
@@ -172,27 +201,20 @@ func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage S
 func (c *Coordinator) commandPayload(
 	ctx context.Context,
 	op *store.Operation,
-	stage StageDef,
+	stage StageName,
+	bundle *commonv1.ReleaseBundle,
+	values []byte,
 ) (*CommandPayload, error) {
 	def, err := c.defs.Get(ctx, op.ReleaseDefinitionID)
 	if err != nil {
 		return nil, fmt.Errorf("definition lookup for command: %w", err)
 	}
-	payload := &CommandPayload{
-		Stage:                   stage.Name,
-		OperationID:             op.ID,
-		BundleID:                op.BundleID,
-		DefinitionID:            def.ID,
-		Namespace:               def.Namespace,
-		ReleaseName:             def.ReleaseName,
-		TimeoutSeconds:          c.timeoutSeconds,
-		ValuesRevisionID:        op.ValuesRevisionID,
-		ExpectedCurrentRevision: int64(op.ExpectedRevision),
-		TargetRevision:          int64(op.TargetRevision),
-		Atomic:                  op.OperationType == store.OperationInstall || op.OperationType == store.OperationUpgrade,
-		ValuesPatch:             op.ValuesPatch,
-	}
-	return payload, nil
+	return &CommandPayload{
+		Stage: stage, OperationID: op.ID, BundleID: op.BundleID, DefinitionID: def.ID,
+		Bundle: bundle, Namespace: def.Namespace, ReleaseName: def.ReleaseName, Values: values,
+		ValuesRevisionID: op.ValuesRevisionID, ValuesPatch: op.ValuesPatch,
+		ExpectedCurrentRevision: op.ExpectedRevision, TargetRevision: op.TargetRevision,
+	}, nil
 }
 
 // pollStage waits for the operator to persist the stage result.

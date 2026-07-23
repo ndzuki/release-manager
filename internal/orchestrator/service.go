@@ -4,9 +4,11 @@ package orchestrator
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -26,33 +28,32 @@ import (
 
 // Service implements the OrchestratorServiceHandler Connect interface.
 type Service struct {
-	store        store.Store
-	verifier     trust.Verifier
-	targetEnv    string
-	coordinator  *preflight.Coordinator
-	vulnEval     *vulnerability.Evaluator
-	auditEmitter audit.Sink
-	logger       *slog.Logger
+	store           store.Store
+	createOperation OperationCreationUnitOfWork
+	verifier        trust.Verifier
+	targetEnv       string
+	coordinator     *preflight.Coordinator
+	vulnEval        *vulnerability.Evaluator
+	auditEmitter    audit.Sink
+	logger          *slog.Logger
 }
 
-func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args ...any) *Service {
-	var auditEmitter audit.Sink
-	logger := slog.Default()
-	for _, arg := range args {
-		switch value := arg.(type) {
-		case audit.Sink:
-			auditEmitter = value
-		case *slog.Logger:
-			logger = value
-		}
-	}
+func NewService(
+	st store.Store,
+	createOperation OperationCreationUnitOfWork,
+	verifier trust.Verifier,
+	targetEnv string,
+	auditEmitter audit.Sink,
+	logger *slog.Logger,
+) *Service {
 	return &Service{
-		store:        st,
-		verifier:     verifier,
-		targetEnv:    targetEnv,
-		coordinator:  preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.Values(), st.Bundles(), st.PreflightLifecycles(), logger),
-		auditEmitter: auditEmitter,
-		logger:       logger,
+		store:           st,
+		createOperation: createOperation,
+		verifier:        verifier,
+		targetEnv:       targetEnv,
+		coordinator:     preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.PreflightLifecycles(), logger),
+		auditEmitter:    auditEmitter,
+		logger:          logger,
 	}
 }
 
@@ -64,242 +65,209 @@ func (s *Service) CreateOperation(
 	req *connect.Request[orchestratorv1.CreateOperationRequest],
 ) (*connect.Response[orchestratorv1.CreateOperationResponse], error) {
 	msg := req.Msg
+	opType := store.OperationType(msg.GetOperationType())
+	if opType != store.OperationInstall && opType != store.OperationUpgrade {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			errors.New("invalid_operation_type: only INSTALL and UPGRADE are accepted"))
+	}
+	if msg.GetIdempotencyKey() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("idempotency_key is required"))
+	}
+
+	def, err := s.store.Definitions().Get(ctx, msg.GetReleaseDefinitionId())
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, connect.NewError(connect.CodeNotFound,
+			fmt.Errorf("definition_not_found: %s", msg.GetReleaseDefinitionId()))
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
+	}
+	if err := checkDefinitionOperable(def); err != nil {
+		return nil, err
+	}
+	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("customer_disabled: %w", err))
+	}
+	if msg.GetActor().GetOrganization() == "" || msg.GetActor().GetUserId() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("actor organization and user_id are required"))
+	}
+	if err := s.authorizeOperationActor(ctx, msg.GetActor().GetOrganization(), msg.GetActor().GetUserId(), def.CustomerID); err != nil {
+		return nil, err
+	}
 
 	existing, err := s.findIdempotentOperation(ctx, msg)
 	if err != nil {
 		return nil, err
 	}
 	if existing != nil {
-		s.logger.Info("idempotent operation found", "key", msg.IdempotencyKey, "op_id", existing.ID)
+		s.logger.Info("idempotent operation found", "key", msg.GetIdempotencyKey(), "op_id", existing.ID)
 		return connect.NewResponse(s.toResponse(existing)), nil
 	}
 
-	opType := store.OperationType(msg.OperationType)
-	if !opType.Valid() {
-		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("invalid operation_type: %s", msg.OperationType))
+	active, err := s.store.Operations().HasActiveForDefinition(ctx, msg.GetReleaseDefinitionId())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("active check: %w", err))
+	}
+	if active {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("release_busy: definition %s has active operation", msg.GetReleaseDefinitionId()))
+	}
+	activeEmergency, err := s.store.Operations().HasActiveEmergencyForDefinition(ctx, msg.GetReleaseDefinitionId())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("emergency check: %w", err))
+	}
+	if activeEmergency {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("release_busy: running EMERGENCY operation"))
 	}
 
-	// 3. Lookup release definition
-	def, err := s.store.Definitions().Get(ctx, msg.ReleaseDefinitionId)
-	if err == store.ErrNotFound {
-		return nil, connect.NewError(connect.CodeNotFound,
-			fmt.Errorf("release_definition not found: %s", msg.ReleaseDefinitionId))
+	bundle, err := s.store.Bundles().Get(ctx, msg.GetBundleId())
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("bundle_not_found: %s", msg.GetBundleId()))
 	}
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("bundle lookup: %w", err))
 	}
-
-	// Validate definition is active (AC-040-03).
-	if err := checkDefinitionOperable(def); err != nil {
-		return nil, err
+	switch bundle.Status {
+	case store.BundleReceived:
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("bundle_not_ready"))
+	case store.BundleRejected:
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("bundle_rejected"))
+	case store.BundleValidated:
+	case store.BundleArchived:
+		switch bundle.ArchivedFromStatus {
+		case store.BundleValidated:
+		case store.BundleRejected:
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("bundle_rejected"))
+		default:
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("bundle_not_ready"))
+		}
+	default:
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("bundle_not_ready"))
 	}
-
-	// AC-013-02: Reject operations for disabled customers.
-	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
-		return nil, connect.NewError(connect.CodePermissionDenied, err)
-	}
-
-	// When a caller supplies an organization, it must have an active customer binding.
-	// Legacy in-process callers without organization context remain compatible.
-	if organizationID := msg.Actor.GetOrganization(); organizationID != "" {
-		if err := s.store.Bindings().RequireActive(ctx, organizationID, def.CustomerID); err != nil {
-			if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrBindingRevoked) {
-				return nil, connect.NewError(connect.CodePermissionDenied,
-					errors.New("customer binding is not active"))
-			}
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("binding check: %w", err))
-		}
-	}
-	// EMERGENCY ↔ standard mutual exclusion (REQ-023 AC-023-06, AC-023-07).
-	if opType.IsStandard() {
-		hasEmergency, err := s.store.Operations().HasActiveEmergencyForDefinition(ctx, msg.ReleaseDefinitionId)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("emergency check: %w", err))
-		}
-		if hasEmergency {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("release_busy: definition %s has a running EMERGENCY", msg.ReleaseDefinitionId))
-		}
-	}
-	if opType == store.OperationEmergency {
-		hasStandard, err := s.store.Operations().HasActiveForDefinition(ctx, msg.ReleaseDefinitionId)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("standard check: %w", err))
-		}
-		if hasStandard {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("release_busy: definition %s has an active standard operation", msg.ReleaseDefinitionId))
-		}
-	}
-	// AC-021-02: UPGRADE requires a positive expected revision and an approved values revision.
-	if opType == store.OperationUpgrade {
-		if msg.ExpectedCurrentRevision < 1 {
-			return nil, connect.NewError(connect.CodeInvalidArgument,
-				fmt.Errorf("expected_current_revision must be >= 1 for %s, got %d", opType, msg.ExpectedCurrentRevision))
-		}
-
-		vr, err := s.store.Values().Get(ctx, msg.ValuesRevisionId)
-		if err == store.ErrNotFound {
-			return nil, connect.NewError(connect.CodeNotFound,
-				fmt.Errorf("values_revision not found: %s", msg.ValuesRevisionId))
-		}
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("values_revision lookup: %w", err))
-		}
-		if vr.ReleaseDefinitionID != def.ID {
-			return nil, connect.NewError(connect.CodeInvalidArgument,
-				fmt.Errorf("values_revision %s belongs to release_definition %s, not %s", vr.ID, vr.ReleaseDefinitionID, def.ID))
-		}
-		if vr.Status != store.ValuesStatusApproved {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("values_revision %s is %s, must be approved", vr.ID, vr.Status))
-		}
-	}
-
-	if opType == store.OperationRollback && msg.ExpectedCurrentRevision < 1 {
+	if !chartNameMatches(bundle.ChartRef, def.ChartName) {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("expected_current_revision must be >= 1 for %s, got %d", opType, msg.ExpectedCurrentRevision))
+			fmt.Errorf("chart_mismatch: bundle chart_ref %q does not match definition chart_name %q", bundle.ChartRef, def.ChartName))
 	}
 
-	// 4.5. Trust verification (REQ-012)
 	var verifyResult commonv1.VerificationResult
 	if msg.SignatureRef != nil && s.verifier != nil {
 		policy := trust.DefaultPolicy(s.targetEnv)
-		digest := fmt.Sprintf("%x", sha256.Sum256([]byte(msg.BundleId+"|"+def.ID)))
-
-		out, err := s.verifier.Verify(ctx, trust.Input{
-			Digest:       digest,
-			SignatureRef: msg.SignatureRef,
-			Policy:       policy,
-		})
+		digest := bundle.ChartDigest
+		if digest == "" {
+			digest = fmt.Sprintf("%x", sha256.Sum256([]byte(msg.GetBundleId()+"|"+def.ID)))
+		}
+		out, err := s.verifier.Verify(ctx, trust.Input{Digest: digest, SignatureRef: msg.SignatureRef, Policy: policy})
 		if err != nil {
 			if policy.FailClosed {
-				return nil, connect.NewError(connect.CodeUnavailable,
-					fmt.Errorf("verification_unavailable: %w", err))
+				return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("verification_unavailable: %w", err))
 			}
-			s.logger.Warn("verification backend unavailable, policy_warning", "err", err)
 			verifyResult = commonv1.VerificationResult_VERIFICATION_RESULT_VERIFICATION_UNAVAILABLE
 		} else {
 			verifyResult = trust.StatusToProto(out.Status)
 			if out.Status == store.VerificationRejected {
-				return nil, connect.NewError(connect.CodeFailedPrecondition,
-					fmt.Errorf("artifact trust rejected: %s", out.Summary))
+				return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("artifact trust rejected: %s", out.Summary))
 			}
 		}
 	}
 
-	if opType == store.OperationInstall {
-		if msg.GetValuesRevisionId() == "" {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				errors.New("revision_not_approved: values_revision_id is required"))
+	revision, err := s.checkValuesRevision(ctx, def, msg.GetValuesRevisionId())
+	if err != nil {
+		return nil, err
+	}
+	if err := s.checkReleaseState(ctx, def, opType, int(msg.GetExpectedCurrentRevision())); err != nil {
+		return nil, err
+	}
+	merged, err := prepareValues(revision, msg.GetValuesPatch())
+	if err != nil {
+		if errors.Is(err, errSecretLiteralForbidden) {
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("secret_literal_forbidden"))
 		}
-		revision, err := s.store.Values().Get(ctx, msg.GetValuesRevisionId())
-		if err == store.ErrNotFound {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				errors.New("revision_not_approved: values revision not found"))
-		}
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("values revision lookup: %w", err))
-		}
-		if revision.ReleaseDefinitionID != def.ID || revision.Status != store.ValuesStatusApproved {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				errors.New("revision_not_approved: values revision must be approved for the target definition"))
-		}
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
-	// 5. Build operation request hash for idempotency
-	reqHash := hashRequest(msg)
-
-	// 6. Build domain Operation
 	now := time.Now().UTC()
+	policyVersion := trust.DefaultPolicy(s.targetEnv).PolicyVersion
+	imageRefsJSON, imageDigestsJSON, err := bundleImageDigests(bundle.Images)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("marshal bundle image digests: %w", err))
+	}
 	op := &store.Operation{
-		ID:                  uuid.New().String(),
-		OperationType:       opType,
-		Status:              operation.InitialStatus(),
-		ReleaseDefinitionID: msg.ReleaseDefinitionId,
-		IdempotencyKey:      msg.IdempotencyKey,
-		RequestHash:         reqHash,
-		BundleID:            msg.BundleId,
-		ValuesRevisionID:    msg.ValuesRevisionId,
-		ExpectedRevision:    int(msg.ExpectedCurrentRevision),
-		ValuesPatch:         []byte(msg.ValuesPatch),
-		Actor: store.ActorContext{
-			UserID:       msg.Actor.GetUserId(),
-			Organization: msg.Actor.GetOrganization(),
-		},
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID: uuid.New().String(), OperationType: opType, Status: operation.InitialStatus(),
+		ReleaseDefinitionID: msg.GetReleaseDefinitionId(), IdempotencyKey: msg.GetIdempotencyKey(),
+		IdempotencyScope: idempotencyScope(msg.GetActor().GetOrganization(), msg.GetReleaseDefinitionId()),
+		RequestHash:      hashRequest(msg, string(merged.patch)), BundleID: msg.GetBundleId(),
+		BundleChartRef: bundle.ChartRef, BundleChartDigest: bundle.ChartDigest,
+		ImageRefsJSON: imageRefsJSON, ImageDigestsJSON: imageDigestsJSON, PolicyVersion: policyVersion,
+		ValuesRevisionID: msg.GetValuesRevisionId(), ExpectedRevision: int(msg.GetExpectedCurrentRevision()),
+		ValuesPatch: merged.patch, PatchDigest: merged.patchDigest, EffectiveValuesDigest: merged.effectiveDigest,
+		Actor:     store.ActorContext{UserID: msg.GetActor().GetUserId(), Organization: msg.GetActor().GetOrganization()},
+		CreatedAt: now, UpdatedAt: now,
 	}
-
-	// 7. Persist with atomic availability check (AC-062-01).
-	if err := s.store.Operations().CreateIfAvailable(ctx, op); err != nil {
-		if errors.Is(err, store.ErrReleaseBusy) {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
+	dispatch, dispatchErr := s.coordinator.Dispatch(ctx, op, bundleToProto(bundle), merged.effective)
+	if dispatchErr != nil {
+		payload, marshalErr := (&preflight.CommandPayload{
+			Stage: preflight.StageArtifact, OperationID: op.ID, BundleID: op.BundleID, DefinitionID: def.ID,
+			Bundle: bundleToProto(bundle), Namespace: def.Namespace, ReleaseName: def.ReleaseName, Values: merged.effective,
+			ValuesRevisionID: op.ValuesRevisionID, ValuesPatch: op.ValuesPatch,
+			ExpectedCurrentRevision: op.ExpectedRevision, TargetRevision: op.TargetRevision,
+		}).Marshal()
+		if marshalErr != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("marshal deferred dispatch: %w", marshalErr))
 		}
-		if errors.Is(err, store.ErrDuplicateKey) {
-			return nil, connect.NewError(connect.CodeAlreadyExists,
-				fmt.Errorf("idempotency_key %s already used", msg.IdempotencyKey))
-		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create operation: %w", err))
-	}
-
-	// 8. Trigger preflight transition and launch coordinator
-	//    Standard ops go pending→preflight, EMERGENCY goes pending→queued
-	if opType.IsStandard() {
-		next, err := operation.Transition(op.Status, operation.EventStartPreflight)
-		if err != nil {
-			s.logger.Error("preflight transition failed", "op_id", op.ID, "err", err)
-		} else {
-			_, err = s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, "")
-			if err != nil {
-				s.logger.Error("preflight status update failed", "op_id", op.ID, "err", err)
-			} else {
-				op.Status = next
-				op.StateVersion++
-
-				// Launch preflight coordinator in background.
-				// Use WithoutCancel so the coordinator outlives the HTTP request.
-				bgCtx := context.WithoutCancel(ctx)
-				go s.coordinator.Run(bgCtx, op)
-				s.logger.Info("preflight coordinator launched", "op_id", op.ID)
-			}
+		dispatch = &store.OutboxEntry{
+			ID: uuid.New().String(), CommandID: fmt.Sprintf("%s:artifact", op.ID),
+			OperationID: op.ID, OperationType: string(op.OperationType), Payload: payload,
 		}
 	}
-	s.logger.Info("operation created",
-		"op_id", op.ID,
-		"type", op.OperationType,
-		"definition", op.ReleaseDefinitionID,
-	)
+	if s.createOperation == nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("operation creation unit of work is not configured"))
+	}
+	artifactDigests := make([]string, 0, len(bundle.Images)+1)
+	if bundle.ChartDigest != "" {
+		artifactDigests = append(artifactDigests, bundle.ChartDigest)
+	}
+	for _, image := range bundle.Images {
+		if image.Digest != "" {
+			artifactDigests = append(artifactDigests, image.Digest)
+		}
+	}
+	if _, err := s.createOperation(ctx, CreateOperationRequest{
+		Operation: op, Dispatch: dispatch, CandidateArtifactDigests: artifactDigests,
+	}); err != nil {
+		switch {
+		case errors.Is(err, store.ErrReleaseBusy):
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("release_busy"))
+		case errors.Is(err, store.ErrDuplicateKey):
+			return nil, connect.NewError(connect.CodeAlreadyExists, errors.New("idempotency_conflict"))
+		case errors.Is(err, store.ErrBundleNotReady):
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("bundle_not_ready"))
+		case errors.Is(err, store.ErrBundleRejected):
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("bundle_rejected"))
+		default:
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create operation: %w", err))
+		}
+	}
+	if dispatchErr != nil {
+		s.logger.Warn("preflight dispatch deferred", "op_id", op.ID, "err", dispatchErr)
+	}
 
 	return connect.NewResponse(&orchestratorv1.CreateOperationResponse{
-		OperationId:        op.ID,
-		State:              string(op.Status),
-		PreflightId:        op.ID,
-		AcceptedAt:         timestamppb.New(op.CreatedAt),
-		VerificationResult: verifyResult,
+		OperationId: op.ID, State: string(op.Status), PreflightId: op.ID,
+		AcceptedAt: timestamppb.New(op.CreatedAt), VerificationResult: verifyResult,
 	}), nil
 }
 
-func (s *Service) findIdempotentOperation(
-	ctx context.Context,
-	msg *orchestratorv1.CreateOperationRequest,
-) (*store.Operation, error) {
-	if msg.IdempotencyKey == "" {
-		return nil, nil
-	}
-
-	existing, err := s.store.Operations().GetByIdempotencyKey(ctx, msg.IdempotencyKey)
-	if err == store.ErrNotFound {
+func (s *Service) findIdempotentOperation(ctx context.Context, msg *orchestratorv1.CreateOperationRequest) (*store.Operation, error) {
+	scope := idempotencyScope(msg.GetActor().GetOrganization(), msg.GetReleaseDefinitionId())
+	existing, err := s.store.Operations().GetByIdempotencyScopeAndKey(ctx, scope, msg.GetIdempotencyKey())
+	if errors.Is(err, store.ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("idempotency lookup: %w", err))
 	}
-	if existing.RequestHash != hashRequest(msg) {
-		return nil, connect.NewError(connect.CodeAlreadyExists,
-			fmt.Errorf("idempotency_conflict: key %s already used with different request", msg.IdempotencyKey))
+	if existing.RequestHash != hashRequest(msg, canonicalPatchForHash(msg.GetValuesPatch())) {
+		return nil, connect.NewError(connect.CodeAlreadyExists, errors.New("idempotency_conflict"))
 	}
 	return existing, nil
 }
@@ -358,20 +326,116 @@ func (s *Service) toResponse(op *store.Operation) *orchestratorv1.CreateOperatio
 	}
 }
 
-// hashRequest computes a deterministic hash of the request for idempotency.
-func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
-	payload := fmt.Sprintf("%s|%s|%s|%s|%s|%d|%s|%s",
-		req.OperationType,
-		req.BundleId,
-		req.ReleaseDefinitionId,
-		req.ValuesRevisionId,
-		req.ValuesPatch,
-		req.ExpectedCurrentRevision,
-		req.Actor.GetUserId(),
-		req.Actor.GetOrganization(),
-	)
+// bundleImageDigests converts bundle images to JSON byte arrays for storage.
+func bundleImageDigests(images []store.BundleImage) (refsJSON, digestsJSON []byte, err error) {
+	if len(images) == 0 {
+		return nil, nil, nil
+	}
+	refs := make([]string, len(images))
+	digests := make([]string, len(images))
+	for i, img := range images {
+		refs[i] = img.Ref
+		digests[i] = img.Digest
+	}
+	refsJSON, err = json.Marshal(refs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal image refs: %w", err)
+	}
+	digestsJSON, err = json.Marshal(digests)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal image digests: %w", err)
+	}
+	return refsJSON, digestsJSON, nil
+}
+
+func bundleToProto(bundle *store.ReleaseBundle) *commonv1.ReleaseBundle {
+	images := make([]*commonv1.BundleImage, 0, len(bundle.Images))
+	for _, image := range bundle.Images {
+		images = append(images, &commonv1.BundleImage{
+			Ref: image.Ref, Digest: image.Digest, ValuesPath: image.ValuesPath,
+		})
+	}
+	return &commonv1.ReleaseBundle{
+		Id: bundle.ID, Name: bundle.Name,
+		Digest:   &commonv1.ReleaseDigest{Algorithm: bundle.DigestAlg, Value: bundle.DigestValue},
+		Status:   commonv1.BundleStatus(commonv1.BundleStatus_value["BUNDLE_STATUS_"+strings.ToUpper(string(bundle.Status))]),
+		ChartRef: bundle.ChartRef, ChartVersion: bundle.ChartVersion, ChartDigest: bundle.ChartDigest,
+		Images: images, GitCommit: bundle.GitCommit, PipelineId: bundle.PipelineID,
+		SignatureRef: bundle.SignatureRef, SbomRef: bundle.SBOMRef, ProvenanceRef: bundle.ProvenanceRef,
+		CreatedAt: timestamppb.New(bundle.CreatedAt),
+	}
+}
+
+// hashRequest computes a deterministic hash of the canonical request payload.
+func hashRequest(req *orchestratorv1.CreateOperationRequest, canonicalPatch string) string {
+	return hashOperationRequest(store.OperationType(req.GetOperationType()), req.GetBundleId(), req.GetReleaseDefinitionId(),
+		req.GetValuesRevisionId(), canonicalPatch, int(req.GetExpectedCurrentRevision()), 0, "")
+}
+
+func hashOperationRequest(opType store.OperationType, bundleID, definitionID, valuesRevisionID, canonicalPatch string, expectedRevision, targetRevision int, reason string) string {
+	payload := fmt.Sprintf(`{"operation_type":%q,"bundle_id":%q,"release_definition_id":%q,"values_revision_id":%q,"values_patch":%s,"expected_current_revision":%d,"target_revision":%d,"reason":%q}`,
+		string(opType), bundleID, definitionID, valuesRevisionID, canonicalPatch, expectedRevision, targetRevision, reason)
 	h := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("%x", h)
+}
+
+func (s *Service) authorizeOperationActor(ctx context.Context, orgID, userID, customerID string) error {
+	if err := s.store.Bindings().RequireActive(ctx, orgID, customerID); err != nil {
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrBindingRevoked) {
+			return connect.NewError(connect.CodePermissionDenied, errors.New("permission_denied"))
+		}
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("binding check: %w", err))
+	}
+	member, err := s.store.OrgMembers().Get(ctx, orgID, userID)
+	if errors.Is(err, store.ErrNotFound) {
+		return connect.NewError(connect.CodePermissionDenied, errors.New("permission_denied"))
+	}
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("organization member lookup: %w", err))
+	}
+	if member.Role != store.RoleReleaseAdmin && member.Role != store.RolePlatformAdmin {
+		return connect.NewError(connect.CodePermissionDenied, errors.New("permission_denied"))
+	}
+	return nil
+}
+
+func (s *Service) rollbackRequestHash(msg *orchestratorv1.RollbackReleaseRequest) string {
+	return hashOperationRequest(store.OperationRollback, "", msg.GetReleaseDefinitionId(), "", "{}",
+		int(msg.GetExpectedCurrentRevision()), int(msg.GetTargetRevision()), msg.GetReason())
+}
+
+func canonicalPatchForHash(raw string) string {
+	merged, err := prepareValues(&store.ValuesRevision{Values: []byte(`{}`)}, raw)
+	if err != nil {
+		return `{}`
+	}
+	return string(merged.patch)
+}
+
+func idempotencyScope(orgID, definitionID string) string {
+	return orgID + ":" + definitionID
+}
+
+func (s *Service) checkValuesRevision(ctx context.Context, def *store.ReleaseDefinition, revisionID string) (*store.ValuesRevision, error) {
+	if revisionID == "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("revision_not_approved"))
+	}
+	revision, err := s.store.Values().Get(ctx, revisionID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("revision_mismatch: values_revision not found: %s", revisionID))
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("values revision lookup: %w", err))
+	}
+	if revision.ReleaseDefinitionID != def.ID {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("values_revision %s belongs to release_definition %s", revision.ID, revision.ReleaseDefinitionID))
+	}
+	if revision.Status != store.ValuesStatusApproved {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("revision_not_approved: values_revision %s must be approved", revision.ID))
+	}
+	return revision, nil
 }
 
 // checkCustomerNotDisabled verifies the customer is not disabled.
@@ -385,6 +449,63 @@ func (s *Service) checkCustomerNotDisabled(ctx context.Context, customerID strin
 		return fmt.Errorf("customer %s is disabled", customerID)
 	}
 	return nil
+}
+
+func (s *Service) checkReleaseState(
+	ctx context.Context,
+	def *store.ReleaseDefinition,
+	opType store.OperationType,
+	expected int,
+) error {
+	installed, err := s.store.Inventories().GetByDefinition(ctx, def.ID)
+	if opType == store.OperationInstall {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return connect.NewError(connect.CodeInternal, fmt.Errorf("inventory lookup: %w", err))
+		}
+		if installed.InventoryStatus == store.InventoryActive {
+			return connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("release_already_exists: installed release exists for definition %s", def.ID))
+		}
+		return nil
+	}
+
+	if expected < 1 {
+		return connect.NewError(connect.CodeInvalidArgument, errors.New("expected_current_revision must be >= 1"))
+	}
+	if errors.Is(err, store.ErrNotFound) || (err == nil && installed.InventoryStatus != store.InventoryActive) {
+		return connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("release_not_found: no installed release for definition %s", def.ID))
+	}
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("inventory lookup: %w", err))
+	}
+	if installed.Revision != expected {
+		return connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("revision_conflict: expected revision %d, but current revision is %d", expected, installed.Revision))
+	}
+	return nil
+}
+
+// chartNameMatches performs a loose match between a chart reference and a chart name.
+// Registry host prefixes (e.g., "registry.example.com/") are stripped from both
+// before comparison (AC-067-03).
+func chartNameMatches(chartRef, chartName string) bool {
+	ref := extractChartName(chartRef)
+	name := extractChartName(chartName)
+	return ref == name
+}
+
+// extractChartName strips the registry host prefix from a chart reference.
+// "registry.example.com/nginx" → "nginx"
+// "nginx" → "nginx"
+func extractChartName(ref string) string {
+	if idx := strings.LastIndex(ref, "/"); idx >= 0 {
+		return ref[idx+1:]
+	}
+	return ref
 }
 
 // Compile-time check: Service implements the Connect handler interface.

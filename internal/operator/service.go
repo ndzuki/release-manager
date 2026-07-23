@@ -43,11 +43,18 @@ func NewService(st store.Store, logger *slog.Logger) (*Service, error) {
 	return &Service{
 		store:           st,
 		ca:              caInst,
-		logger:          logger,
+		logger:          loggerOrDefault(logger),
 		sessionTTL:      15 * time.Minute,
 		heartbeatMaxAge: 30 * time.Second,
 		suspectAfter:    60 * time.Second,
 	}, nil
+}
+
+func loggerOrDefault(logger *slog.Logger) *slog.Logger {
+	if logger != nil {
+		return logger
+	}
+	return slog.Default()
 }
 
 // SetInventorySyncer attaches an inventory syncer for release inventory sync (REQ-017).
@@ -358,11 +365,6 @@ func (s *Service) CommandStream(
 					if err := s.store.Outbox().UpdateStatus(ctx, ack.GetOutboxId(), store.CommandPersisted, ""); err != nil {
 						s.logger.Warn("failed to mark command persisted", "error", err)
 					}
-					if entry, getErr := s.store.Outbox().Get(ctx, ack.GetOutboxId()); getErr == nil && entry.OperationType == "INVENTORY_SYNC" {
-						if updateErr := s.store.InventorySyncRequests().UpdateStatus(ctx, entry.OperationID, store.InventorySyncRunning, ""); updateErr != nil {
-							s.logger.Warn("failed to mark inventory sync running", "error", updateErr)
-						}
-					}
 				}
 
 			case req.GetResult() != nil:
@@ -397,23 +399,15 @@ func (s *Service) CommandStream(
 				}
 
 				status := store.CommandSucceeded
-				requestStatus := store.InventorySyncSucceeded
 				if result.GetStatus() == "failed" {
 					status = store.CommandFailed
-					requestStatus = store.InventorySyncFailed
 				}
 				resultJSON := result.GetResultJson()
 				if resultJSON == "" {
 					resultJSON = result.GetMessage()
 				}
-				if err := s.store.Outbox().UpdateStatus(ctx, result.GetOutboxId(), status, resultJSON); err != nil {
-					s.logger.Warn("failed to persist command result", "error", err)
-				}
-				if existing != nil && existing.OperationType == "INVENTORY_SYNC" {
-					if err := s.store.InventorySyncRequests().UpdateStatus(ctx, existing.OperationID, requestStatus, result.GetMessage()); err != nil {
-						s.logger.Warn("failed to persist inventory sync result", "error", err)
-					}
-				} else if existing != nil {
+				_ = s.store.Outbox().UpdateStatus(ctx, result.GetOutboxId(), status, resultJSON)
+				if existing != nil {
 					s.FinishOperation(ctx, existing.OperationID, result.GetStatus(), resultJSON)
 				}
 
@@ -439,6 +433,16 @@ func (s *Service) FinishOperation(ctx context.Context, operationID, resultStatus
 	}
 
 	current := op.Status
+	if current == store.StatusPending {
+		if resultStatus == "failed" {
+			if _, err := s.store.Operations().UpdateStatus(ctx, op.ID, store.StatusFailed, op.StateVersion, resultJSON); err != nil {
+				s.logger.Warn("failed to persist pending preflight failure", "operation_id", operationID, "error", err)
+			}
+			return
+		}
+		s.logger.Warn("ignoring successful command result for pending operation", "operation_id", operationID)
+		return
+	}
 	if current == store.StatusQueued {
 		current, err = operation.Transition(current, operation.EventBegin)
 		if err == nil {
@@ -586,7 +590,7 @@ type commandPayload struct {
 	ExpectedCurrentRevision int64                   `json:"expected_current_revision"`
 	TargetRevision          int64                   `json:"target_revision"`
 	Atomic                  bool                    `json:"atomic"`
-	ValuesPatch             []byte                  `json:"values_patch"`
+	ValuesPatch             json.RawMessage         `json:"values_patch"`
 }
 
 // DecodeCommandPayload populates command fields from an outbox JSON payload.
@@ -661,7 +665,7 @@ func (s *Service) deliverPending(
 					continue
 				}
 				entry.Sequence = seq
-				if err := s.store.Outbox().UpdateSequence(ctx, entry.ID, seq); err != nil {
+				if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPending, ""); err != nil {
 					s.logger.Warn("failed to persist command sequence", "error", err)
 					continue
 				}

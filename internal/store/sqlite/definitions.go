@@ -37,13 +37,12 @@ func (s *definitionStore) Create(
 		INSERT INTO release_definitions (
 			id, name, customer_id, cluster_id, namespace, release_name,
 			chart_name, status, optimistic_version, created_by,
-			owner_organization_id, approved_revision_id, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		def.ID, def.Name, def.CustomerID, def.ClusterID,
 		def.Namespace, def.ReleaseName, def.ChartName,
 		string(def.Status), def.OptimisticVersion, def.CreatedBy,
-		def.OwnerOrganizationID, def.ApprovedRevisionID,
 		def.CreatedAt.UTC().Format(time.RFC3339Nano), def.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -65,7 +64,7 @@ func (s *definitionStore) Get(ctx context.Context, id string) (*store.ReleaseDef
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, customer_id, cluster_id, namespace, release_name,
 			chart_name, status, optimistic_version, current_bundle_id, created_by,
-			owner_organization_id, approved_revision_id, created_at, updated_at
+			created_at, updated_at
 		FROM release_definitions WHERE id = ?
 	`, id)
 	return scanDefinition(row)
@@ -125,7 +124,7 @@ func (s *definitionStore) List(
 	query := `
 		SELECT id, name, customer_id, cluster_id, namespace, release_name,
 			chart_name, status, optimistic_version, current_bundle_id, created_by,
-			owner_organization_id, approved_revision_id, created_at, updated_at
+			created_at, updated_at
 		FROM release_definitions
 		WHERE 1 = 1`
 	args := make([]any, 0, 2)
@@ -188,7 +187,7 @@ func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.Release
 		id, name, customerID, clusterID, namespace, releaseName, chartName string
 		status                                                             string
 		optimisticVersion                                                  int
-		currentBundleID, ownerOrganizationID, approvedRevisionID           *string
+		currentBundleID                                                    *string
 		createdBy                                                          string
 		createdAt, updatedAt                                               string
 	)
@@ -196,7 +195,7 @@ func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.Release
 	err := row.Scan(
 		&id, &name, &customerID, &clusterID, &namespace, &releaseName,
 		&chartName, &status, &optimisticVersion, &currentBundleID, &createdBy,
-		&ownerOrganizationID, &approvedRevisionID, &createdAt, &updatedAt,
+		&createdAt, &updatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -215,21 +214,19 @@ func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.Release
 	}
 
 	return &store.ReleaseDefinition{
-		ID:                  id,
-		Name:                name,
-		CustomerID:          customerID,
-		ClusterID:           clusterID,
-		Namespace:           namespace,
-		ReleaseName:         releaseName,
-		ChartName:           chartName,
-		Status:              store.DefinitionStatus(status),
-		OptimisticVersion:   optimisticVersion,
-		CurrentBundleID:     currentBundleID,
-		CreatedBy:           createdBy,
-		OwnerOrganizationID: ownerOrganizationID,
-		ApprovedRevisionID:  approvedRevisionID,
-		CreatedAt:           ct,
-		UpdatedAt:           ut,
+		ID:                id,
+		Name:              name,
+		CustomerID:        customerID,
+		ClusterID:         clusterID,
+		Namespace:         namespace,
+		ReleaseName:       releaseName,
+		ChartName:         chartName,
+		Status:            store.DefinitionStatus(status),
+		OptimisticVersion: optimisticVersion,
+		CurrentBundleID:   currentBundleID,
+		CreatedBy:         createdBy,
+		CreatedAt:         ct,
+		UpdatedAt:         ut,
 	}, nil
 }
 
@@ -237,42 +234,98 @@ func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.Release
 // If the bundle is archived, it is unarchived in the same transaction.
 // Returns true if the bundle was unarchived.
 func (s *definitionStore) SetCurrentBundle(ctx context.Context, defID, bundleID string) (bool, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, fmt.Errorf("begin set current bundle: %w", err)
+	var restored bool
+	err := retryBusy(ctx, func() error {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin set current bundle: %w", err)
+		}
+		defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
+
+		restored, err = setCurrentBundle(ctx, tx, defID, bundleID)
+		if err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit set current bundle: %w", err)
+		}
+		return nil
+	})
+	return restored, err
+}
+
+//nolint:gocyclo // bundle state restoration and definition update form one transactional state machine
+func setCurrentBundle(ctx context.Context, tx *sql.Tx, defID, bundleID string) (bool, error) {
+	var status string
+	var archivedFromStatus sql.NullString
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status, archived_from_status
+		FROM release_bundles
+		WHERE id = ?
+	`, bundleID).Scan(&status, &archivedFromStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, fmt.Errorf("bundle %s: %w", bundleID, store.ErrNotFound)
+		}
+		return false, fmt.Errorf("query bundle state: %w", err)
 	}
-	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
+
+	restored := false
+	switch store.BundleStatus(status) {
+	case store.BundleValidated:
+	case store.BundleReceived:
+		return false, store.ErrBundleNotReady
+	case store.BundleRejected:
+		return false, store.ErrBundleRejected
+	case store.BundleArchived:
+		switch store.BundleStatus(archivedFromStatus.String) {
+		case store.BundleValidated:
+			result, err := tx.ExecContext(ctx, `
+				UPDATE release_bundles
+				SET status = 'validated', archived_at = NULL, archived_from_status = ''
+				WHERE id = ? AND status = 'archived' AND archived_from_status = 'validated'
+			`, bundleID)
+			if err != nil {
+				return false, fmt.Errorf("restore archived bundle %s: %w", bundleID, err)
+			}
+			rows, err := result.RowsAffected()
+			if err != nil {
+				return false, fmt.Errorf("restore archived bundle rows affected: %w", err)
+			}
+			if rows != 1 {
+				return false, store.ErrOptimisticLock
+			}
+			restored = true
+		case store.BundleReceived:
+			return false, store.ErrBundleNotReady
+		case store.BundleRejected:
+			return false, store.ErrBundleRejected
+		default:
+			return false, store.ErrBundleNotReady
+		}
+	default:
+		return false, store.ErrBundleNotReady
+	}
 
 	result, err := tx.ExecContext(ctx, `
-		UPDATE release_definitions SET current_bundle_id = ?
-		WHERE id = ?
-	`, bundleID, defID)
+		UPDATE release_definitions
+		SET current_bundle_id = ?
+		WHERE id = ? AND (current_bundle_id IS NULL OR current_bundle_id != ?)
+	`, bundleID, defID, bundleID)
 	if err != nil {
 		return false, fmt.Errorf("update definition current_bundle_id: %w", err)
 	}
-	n, err := result.RowsAffected()
+	rows, err := result.RowsAffected()
 	if err != nil {
 		return false, fmt.Errorf("definition rows affected: %w", err)
 	}
-	if n == 0 {
-		return false, fmt.Errorf("definition %s: %w", defID, store.ErrNotFound)
+	if rows == 0 {
+		var exists int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM release_definitions WHERE id = ?`, defID).Scan(&exists); err != nil {
+			return false, fmt.Errorf("check definition existence: %w", err)
+		}
+		if exists == 0 {
+			return false, fmt.Errorf("definition %s: %w", defID, store.ErrNotFound)
+		}
 	}
-
-	// If the referenced bundle is archived, unarchive it.
-	ur, err := tx.ExecContext(ctx, `
-		UPDATE release_bundles SET status = 'validated', archived_at = NULL
-		WHERE id = ? AND status = 'archived'
-	`, bundleID)
-	if err != nil {
-		return false, fmt.Errorf("unarchive bundle %s: %w", bundleID, err)
-	}
-	unarchived, err := ur.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("unarchive bundle rows affected: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit set current bundle: %w", err)
-	}
-	return unarchived > 0, nil
+	return restored, nil
 }
