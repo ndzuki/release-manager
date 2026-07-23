@@ -2,7 +2,10 @@ import { createMemoryHistory, createRouter, createWebHistory } from 'vue-router'
 import type { Router, RouterHistory, RouteLocationRaw } from 'vue-router';
 import { setForbiddenNavigator, useAuthStore } from '@/stores/auth';
 
-export function createAppRouter(history: RouterHistory = createWebHistory()): Router {
+export function createAppRouter(
+	history: RouterHistory = createWebHistory(),
+	releaseInventoryEnabled = import.meta.env.VITE_ENABLE_RELEASE_INVENTORY !== 'false',
+): Router {
   return createRouter({
     history,
     routes: [
@@ -24,6 +27,14 @@ export function createAppRouter(history: RouterHistory = createWebHistory()): Ro
         component: () => import('@/pages/ForbiddenPage.vue'),
         meta: { requiresAuth: true },
       },
+      ...(releaseInventoryEnabled
+        ? [{
+            path: '/customers/:customerId/clusters/:clusterId/releases',
+            name: 'ReleaseInventory',
+            component: () => import('@/pages/ReleaseInventoryPage.vue'),
+            meta: { requiresAuth: true },
+          }]
+        : []),
       {
         path: '/',
         name: 'Home',

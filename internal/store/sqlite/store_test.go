@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -868,4 +869,174 @@ func TestInventoryDefinitionAssociation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	assert.Equal(t, "definition-1", items[0].ReleaseDefinitionID)
+}
+
+func TestInventoryQueryUsesDefaultPageSizeAndSyncLogTimestamp(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	syncedAt := time.Date(2026, time.July, 22, 9, 30, 0, 0, time.UTC)
+
+	for i := range 51 {
+		releaseName := fmt.Sprintf("release-%02d", i)
+		require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+			CustomerID:      "customer-default-page",
+			ClusterID:       "cluster-default-page",
+			Namespace:       "apps",
+			ReleaseName:     releaseName,
+			InventoryStatus: store.InventoryActive,
+			LastSyncID:      "sync-default-page",
+			SnapshotVersion: 9,
+		}))
+	}
+	inserted, err := st.Inventories().CreateSyncLog(ctx, &store.InventorySyncLog{
+		SyncID:          "sync-default-page",
+		CustomerID:      "customer-default-page",
+		ClusterID:       "cluster-default-page",
+		IsFullSnapshot:  true,
+		AcceptedCount:   51,
+		SnapshotVersion: 9,
+		CreatedAt:       syncedAt,
+	})
+	require.NoError(t, err)
+	require.True(t, inserted)
+
+	page, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-default-page",
+		ClusterID:  "cluster-default-page",
+	})
+	require.NoError(t, err)
+	assert.Len(t, page.Items, 50)
+	assert.Equal(t, 51, page.TotalCount)
+	assert.NotEmpty(t, page.NextCursor)
+	assert.Equal(t, syncedAt, page.LastSyncAt)
+
+	next, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-default-page",
+		ClusterID:  "cluster-default-page",
+		Cursor:     page.NextCursor,
+	})
+	require.NoError(t, err)
+	assert.Len(t, next.Items, 1)
+}
+
+func TestInventoryQueryPaginationFilteringAndConsistency(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	baseTime := time.Date(2026, time.July, 22, 8, 0, 0, 0, time.UTC)
+
+	items := []*store.ReleaseInventory{
+		{
+			ReleaseDefinitionID: "definition-active",
+			CustomerID:          "customer-1",
+			ClusterID:           "cluster-1",
+			Namespace:           "apps",
+			ReleaseName:         "api",
+			Chart:               "api",
+			ChartVersion:        "1.0.0",
+			Revision:            3,
+			ValuesDigest:        "sha256:approved",
+			InventoryStatus:     store.InventoryActive,
+			LastSyncID:          "sync-1",
+			SnapshotVersion:     7,
+			CreatedAt:           baseTime,
+		},
+		{
+			ReleaseDefinitionID: "definition-drifted",
+			CustomerID:          "customer-1",
+			ClusterID:           "cluster-1",
+			Namespace:           "other",
+			ReleaseName:         "api",
+			Chart:               "api",
+			ChartVersion:        "1.1.0",
+			Revision:            4,
+			ValuesDigest:        "sha256:actual",
+			InventoryStatus:     store.InventoryActive,
+			LastSyncID:          "sync-1",
+			SnapshotVersion:     7,
+			CreatedAt:           baseTime.Add(time.Second),
+		},
+		{
+			CustomerID:      "customer-1",
+			ClusterID:       "cluster-1",
+			Namespace:       "system",
+			ReleaseName:     "metrics",
+			Chart:           "metrics",
+			ChartVersion:    "2.0.0",
+			Revision:        1,
+			ValuesDigest:    "sha256:metrics",
+			InventoryStatus: store.InventoryMissing,
+			LastSyncID:      "sync-1",
+			SnapshotVersion: 7,
+			CreatedAt:       baseTime.Add(2 * time.Second),
+		},
+	}
+	for _, item := range items {
+		require.NoError(t, st.Inventories().Upsert(ctx, item))
+	}
+
+	activeDefinition := &store.ReleaseDefinition{
+		ID: "definition-active", Name: "active", CustomerID: "customer-1", ClusterID: "cluster-1",
+		Namespace: "apps", ReleaseName: "api", Status: store.DefStatusActive,
+	}
+	driftedDefinition := &store.ReleaseDefinition{
+		ID: "definition-drifted", Name: "drifted", CustomerID: "customer-1", ClusterID: "cluster-1",
+		Namespace: "other", ReleaseName: "api", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, activeDefinition, nil))
+	require.NoError(t, st.Definitions().Create(ctx, driftedDefinition, nil))
+	require.NoError(t, st.Values().Create(ctx, &store.ValuesRevision{
+		ID: "values-active", ReleaseDefinitionID: activeDefinition.ID, Revision: 1,
+		Status: store.ValuesStatusApproved, Values: []byte(`{}`), Digest: "sha256:approved",
+	}))
+	require.NoError(t, st.Values().Create(ctx, &store.ValuesRevision{
+		ID: "values-drifted", ReleaseDefinitionID: driftedDefinition.ID, Revision: 1,
+		Status: store.ValuesStatusApproved, Values: []byte(`{}`), Digest: "sha256:desired",
+	}))
+
+	page, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-1",
+		ClusterID:  "cluster-1",
+		NameSearch: "api",
+		PageSize:   1,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, store.InventoryActive, page.Items[0].InventoryStatus)
+	assert.Equal(t, 2, page.TotalCount)
+	assert.NotEmpty(t, page.NextCursor)
+
+	next, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-1",
+		ClusterID:  "cluster-1",
+		NameSearch: "api",
+		PageSize:   1,
+		Cursor:     page.NextCursor,
+	})
+	require.NoError(t, err)
+	require.Len(t, next.Items, 1)
+	assert.Equal(t, store.InventoryOutOfSync, next.Items[0].InventoryStatus)
+	assert.Empty(t, next.NextCursor)
+
+	missing, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-1",
+		ClusterID:  "cluster-1",
+		Status:     store.InventoryMissing,
+		PageSize:   50,
+	})
+	require.NoError(t, err)
+	require.Len(t, missing.Items, 1)
+	assert.Equal(t, "metrics", missing.Items[0].ReleaseName)
+
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		CustomerID: "customer-1", ClusterID: "cluster-1", Namespace: "apps", ReleaseName: "worker",
+		InventoryStatus: store.InventoryActive, LastSyncID: "sync-2", SnapshotVersion: 8,
+	}))
+	_, err = st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-1",
+		ClusterID:  "cluster-1",
+		NameSearch: "api",
+		PageSize:   1,
+		Cursor:     page.NextCursor,
+	})
+	assert.ErrorIs(t, err, store.ErrInvalidCursor)
 }

@@ -854,6 +854,56 @@ type InventorySyncLog struct {
 	CreatedAt       time.Time
 }
 
+type InventorySyncRequestStatus string
+
+const (
+	InventorySyncPending   InventorySyncRequestStatus = "pending"
+	InventorySyncRunning   InventorySyncRequestStatus = "running"
+	InventorySyncSucceeded InventorySyncRequestStatus = "succeeded"
+	InventorySyncFailed    InventorySyncRequestStatus = "failed"
+)
+
+func (s InventorySyncRequestStatus) IsTerminal() bool {
+	return s == InventorySyncSucceeded || s == InventorySyncFailed
+}
+
+type InventorySyncRequest struct {
+	ID         string
+	CustomerID string
+	ClusterID  string
+	OperatorID string
+	CommandID  string
+	Status     InventorySyncRequestStatus
+	LastError  string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+type InventorySyncRequestStore interface {
+	CreateIfAvailable(ctx context.Context, request *InventorySyncRequest, outbox *OutboxEntry) (*InventorySyncRequest, bool, error)
+	Get(ctx context.Context, id string) (*InventorySyncRequest, error)
+	GetActiveByCluster(ctx context.Context, customerID, clusterID string) (*InventorySyncRequest, error)
+	UpdateStatus(ctx context.Context, id string, status InventorySyncRequestStatus, lastError string) error
+}
+
+// InventoryQuery describes a stable page over one customer and cluster scope.
+type InventoryQuery struct {
+	CustomerID string
+	ClusterID  string
+	Status     InventoryStatus
+	NameSearch string
+	PageSize   int
+	Cursor     string
+}
+
+// InventoryPage is one stable page of release inventory results.
+type InventoryPage struct {
+	Items      []*ReleaseInventory
+	NextCursor string
+	TotalCount int
+	LastSyncAt time.Time
+}
+
 // OperationStore defines the persistence contract for operations.
 type OperationStore interface {
 	Create(ctx context.Context, op *Operation) error
@@ -1008,6 +1058,7 @@ type OutboxStore interface {
 	GetDeliveredNotAcked(ctx context.Context, operatorID string) ([]*OutboxEntry, error)
 	GetInflightForOperator(ctx context.Context, operatorID string) (*OutboxEntry, error)
 	GetNextSequence(ctx context.Context) (int64, error)
+	UpdateSequence(ctx context.Context, id string, sequence int64) error
 	UpdateStatus(ctx context.Context, id string, status CommandStatus, resultJSON string) error
 	GetNextPending(ctx context.Context, operatorID string) (*OutboxEntry, error)
 }
@@ -1173,6 +1224,10 @@ type InventoryStore interface {
 	// ListByCluster returns all inventory rows for a cluster.
 	ListByCluster(ctx context.Context, customerID, clusterID string) ([]*ReleaseInventory, error)
 
+	// Query returns one filtered page and validates that an opaque cursor still
+	// belongs to the same scope, filters, and inventory snapshot.
+	Query(ctx context.Context, query InventoryQuery) (*InventoryPage, error)
+
 	// MarkMissing sets InventoryMissing for all rows in a cluster not present in the given set.
 	// Returns the count of rows marked missing.
 	MarkMissing(ctx context.Context, customerID, clusterID string, presentKeys []string) (int, error)
@@ -1256,6 +1311,7 @@ type Store interface {
 	CustomerEvents() CustomerEventStore
 	ClusterRoutes() ClusterRouteStore
 	Inventories() InventoryStore
+	InventorySyncRequests() InventorySyncRequestStore
 	CandidateArtifacts() CandidateArtifactStore
 	PreflightLifecycles() PreflightLifecycleStore
 	Close() error

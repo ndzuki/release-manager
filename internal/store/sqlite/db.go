@@ -41,6 +41,7 @@ type Store struct {
 	trustRoots      *trustRootStore
 	routes          *clusterRouteStore
 	invs            *inventoryStore
+	syncRequests    *inventorySyncRequestStore
 	custEvents      *customerEventStore
 	defEvents       *definitionEventStore
 	preflight       *preflightStore
@@ -104,6 +105,7 @@ func Open(dsn string) (*Store, error) {
 	s.auditExports = &auditExportStore{db: db}
 	s.bundles = &bundleStore{db: db}
 	s.invs = &inventoryStore{db: db}
+	s.syncRequests = &inventorySyncRequestStore{db: db}
 	s.verifs = &verificationStore{db: db}
 	s.custEvents = &customerEventStore{db: db}
 	s.routes = &clusterRouteStore{db: db}
@@ -206,6 +208,9 @@ func (s *Store) ClusterRoutes() store.ClusterRouteStore { return s.routes }
 
 // Inventories returns the InventoryStore.
 func (s *Store) Inventories() store.InventoryStore { return s.invs }
+
+// InventorySyncRequests returns the persistent manual inventory sync request store.
+func (s *Store) InventorySyncRequests() store.InventorySyncRequestStore { return s.syncRequests }
 
 // CandidateArtifacts returns the CandidateArtifactStore.
 func (s *Store) CandidateArtifacts() store.CandidateArtifactStore { return s.candidateArts }
@@ -731,6 +736,23 @@ var migrationStatements = []string{
 		snapshot_version INTEGER NOT NULL DEFAULT 0,
 		created_at       TEXT NOT NULL
 	)`,
+
+	`CREATE TABLE IF NOT EXISTS inventory_sync_requests (
+		id          TEXT PRIMARY KEY,
+		customer_id TEXT NOT NULL,
+		cluster_id  TEXT NOT NULL,
+		operator_id TEXT NOT NULL,
+		command_id  TEXT NOT NULL UNIQUE,
+		status      TEXT NOT NULL DEFAULT 'pending',
+		last_error  TEXT NOT NULL DEFAULT '',
+		created_at  TEXT NOT NULL,
+		updated_at  TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_inventory_sync_requests_cluster
+	 ON inventory_sync_requests(customer_id, cluster_id, status)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_sync_requests_active_cluster
+	 ON inventory_sync_requests(customer_id, cluster_id)
+	 WHERE status IN ('pending', 'running')`,
 
 	// Release bundles (REQ-011)
 	`CREATE TABLE IF NOT EXISTS release_bundles (

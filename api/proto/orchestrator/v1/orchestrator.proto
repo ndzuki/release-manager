@@ -325,6 +325,49 @@ message ValuesRevisionDecisionResponse {
   repeated string superseded_revision_ids = 5;
 }
 
+// ── Release Inventory Query and Manual Sync (REQ-054) ────────────
+
+enum ReleaseInventoryStatus {
+  RELEASE_INVENTORY_STATUS_UNSPECIFIED = 0;
+  RELEASE_INVENTORY_STATUS_ACTIVE = 1;
+  RELEASE_INVENTORY_STATUS_MISSING = 2;
+  RELEASE_INVENTORY_STATUS_OUT_OF_SYNC = 3;
+}
+
+message ReleaseSummary {
+  string namespace = 1;
+  string name = 2;
+  string chart = 3;
+  string chart_version = 4;
+  int32 revision = 5;
+  ReleaseInventoryStatus status = 6;
+  string values_digest = 7;
+  google.protobuf.Timestamp last_sync_at = 8;
+}
+
+message ListReleasesRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+  ReleaseInventoryStatus status_filter = 3;
+  string name_search = 4;
+  int32 page_size = 5;
+  string cursor = 6;
+}
+
+message ListReleasesResponse {
+  repeated ReleaseSummary releases = 1;
+  string next_cursor = 2;
+  int32 total_count = 3;
+}
+
+message TriggerInventorySyncRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+}
+
+message TriggerInventorySyncResponse {
+  string sync_request_id = 1;
+}
 service OrchestratorService {
   // Release pipeline
   rpc CreateOperation(CreateOperationRequest) returns (CreateOperationResponse);
@@ -367,6 +410,10 @@ service OrchestratorService {
   rpc ConfigureClusterRoute(ConfigureClusterRouteRequest) returns (ConfigureClusterRouteResponse);
   rpc GetClusterRoutes(GetClusterRoutesRequest) returns (GetClusterRoutesResponse);
   rpc DeleteClusterRoute(DeleteClusterRouteRequest) returns (DeleteClusterRouteResponse);
+
+  // Release inventory query and manual sync (REQ-054)
+  rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
+  rpc TriggerInventorySync(TriggerInventorySyncRequest) returns (TriggerInventorySyncResponse);
 
   // Inventory sync (REQ-017)
   rpc SyncInventory(SyncInventoryRequest) returns (SyncInventoryResponse);
