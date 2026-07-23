@@ -345,6 +345,11 @@ check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
 		printf "$(YELLOW)check-reqs: no REQ docs found in repo, skipping$(NC)\n"; \
 	fi
 
+
+.PHONY: test-rollback-sdk
+test-rollback-sdk: ## Run Rollback SDK quality gate (REQ-063)
+	$(GO) test -race -tags=integration -count=1 ./test/integration/ -run 'TestRollbackSDK'
+
 .PHONY: quality
 quality: sdk-check test-coverage lint check-reqs ## Full quality gate run
 
