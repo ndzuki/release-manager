@@ -1,49 +1,52 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, shallowRef } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import ErrorState from '@/components/common/ErrorState.vue';
 
+const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 
-const username = ref('');
-const password = ref('');
-const error = ref('');
-const loading = ref(false);
+const username = shallowRef('');
+const password = shallowRef('');
+const errorMessage = shallowRef('');
+const submitting = shallowRef(false);
+const sessionExpired = computed(() => route.query.reason === 'expired');
 
-async function handleSubmit() {
-  error.value = '';
-  loading.value = true;
+async function handleSubmit(): Promise<void> {
+  errorMessage.value = '';
+  submitting.value = true;
   try {
     await auth.login(username.value, password.value);
-    const returnUrl = auth.returnUrl ?? '/';
+    const destination = auth.returnUrl ?? '/';
     auth.clearReturnUrl();
-    router.push(returnUrl);
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Login failed';
+    await router.replace(destination);
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'Unable to sign in.';
   } finally {
-    loading.value = false;
+    submitting.value = false;
   }
 }
 </script>
 
 <template>
-  <div class="login-page">
+  <main class="login-page">
     <form class="login-page__form" @submit.prevent="handleSubmit">
-      <h1 class="login-page__title">Release Manager</h1>
+      <div>
+        <p class="login-page__eyebrow">Release Manager</p>
+        <h1 class="login-page__title">Sign in</h1>
+        <p class="login-page__description">Use your server-managed session to continue.</p>
+      </div>
 
-      <ErrorState v-if="error" :message="error" />
+      <p v-if="sessionExpired" class="login-page__notice" role="status">
+        Your session expired. Sign in again to return to your previous page.
+      </p>
+      <ErrorState v-if="errorMessage" title="Sign in failed" :message="errorMessage" />
 
       <label class="login-page__field">
         <span>Username</span>
-        <input
-          v-model="username"
-          type="text"
-          autocomplete="username"
-          required
-          :disabled="loading"
-        />
+        <input v-model="username" autocomplete="username" required :disabled="submitting" />
       </label>
 
       <label class="login-page__field">
@@ -53,77 +56,88 @@ async function handleSubmit() {
           type="password"
           autocomplete="current-password"
           required
-          :disabled="loading"
+          :disabled="submitting"
         />
       </label>
 
-      <button type="submit" :disabled="loading" class="login-page__submit">
-        {{ loading ? 'Signing in…' : 'Sign in' }}
+      <button type="submit" :disabled="submitting" class="login-page__submit">
+        {{ submitting ? 'Signing in…' : 'Sign in' }}
       </button>
     </form>
-  </div>
+  </main>
 </template>
 
 <style scoped>
 .login-page {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
   min-height: 100vh;
+  place-items: center;
+  padding: 1.5rem;
   background: var(--color-bg, #f8fafc);
 }
 
 .login-page__form {
-  width: 100%;
-  max-width: 24rem;
-  padding: 2rem;
-  background: var(--color-surface, #fff);
-  border-radius: 0.5rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  width: min(100%, 26rem);
   gap: 1rem;
+  padding: 2rem;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 0.75rem;
+  background: var(--color-surface, #fff);
+  box-shadow: 0 0.75rem 2rem rgb(15 23 42 / 8%);
+}
+
+.login-page__eyebrow,
+.login-page__description {
+  margin: 0;
+  color: var(--color-muted, #64748b);
+}
+
+.login-page__eyebrow {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .login-page__title {
-  text-align: center;
-  font-size: 1.25rem;
-  font-weight: 600;
+  margin: 0.25rem 0;
+  font-size: 1.5rem;
+}
+
+.login-page__notice {
+  margin: 0;
+  padding: 0.75rem;
+  border-radius: 0.375rem;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 0.875rem;
 }
 
 .login-page__field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+  display: grid;
+  gap: 0.35rem;
   font-size: 0.875rem;
 }
 
 .login-page__field input {
-  padding: 0.5rem 0.75rem;
+  padding: 0.65rem 0.75rem;
   border: 1px solid var(--color-border, #cbd5e1);
   border-radius: 0.375rem;
-  font-size: 0.9375rem;
-}
-
-.login-page__field input:focus {
-  outline: none;
-  border-color: var(--color-primary, #3b82f6);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
 }
 
 .login-page__submit {
-  padding: 0.625rem;
-  background: var(--color-primary, #3b82f6);
-  color: #fff;
-  border: none;
+  padding: 0.7rem 1rem;
+  border: 0;
   border-radius: 0.375rem;
-  font-size: 0.9375rem;
-  font-weight: 500;
+  background: var(--color-primary, #2563eb);
+  color: #fff;
+  font-weight: 600;
   cursor: pointer;
 }
 
 .login-page__submit:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+  cursor: wait;
+  opacity: 0.65;
 }
 </style>

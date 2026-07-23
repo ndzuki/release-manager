@@ -288,3 +288,200 @@ type contextKey string
 const userIDKey contextKey = "userID"
 
 var _ authv1connect.AuthServiceHandler = (*AuthService)(nil)
+
+// GetInitStatus reports whether the system has been initialized (at least one admin user exists).
+func (s *AuthService) GetInitStatus(
+	ctx context.Context,
+	_ *connect.Request[authv1.GetInitStatusRequest],
+) (*connect.Response[authv1.GetInitStatusResponse], error) {
+	count, err := s.store.Users().Count(ctx, "")
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check init status"))
+	}
+	return connect.NewResponse(&authv1.GetInitStatusResponse{
+		Initialized: count > 0,
+	}), nil
+}
+
+// Initialize bootstraps the system with a platform admin user and organization.
+// It is idempotent: returns an error if the system is already initialized.
+func (s *AuthService) Initialize(
+	ctx context.Context,
+	req *connect.Request[authv1.InitializeRequest],
+) (*connect.Response[authv1.InitializeResponse], error) {
+	msg := req.Msg
+
+	count, err := s.store.Users().Count(ctx, "")
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check init status"))
+	}
+	if count > 0 {
+		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("system already initialized"))
+	}
+
+	orgID := newID()
+	org := &store.Organization{
+		ID:     orgID,
+		Name:   msg.GetOrganizationName(),
+		Status: store.OrgActive,
+	}
+	if err := s.store.Organizations().Create(ctx, org); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create organization"))
+	}
+
+	hash, err := HashPassword(msg.GetPassword())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to hash password"))
+	}
+
+	userID := newID()
+	user := &store.User{
+		ID:           userID,
+		Username:     msg.GetUsername(),
+		PasswordHash: hash,
+		Status:       store.UserActive,
+	}
+	if err := s.store.Users().Create(ctx, user); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create user"))
+	}
+
+	member := &store.OrganizationMember{
+		OrgID:  orgID,
+		UserID: userID,
+		Role:   store.RolePlatformAdmin,
+	}
+	if err := s.store.OrgMembers().Create(ctx, member); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to add member"))
+	}
+
+	orgID2, roles := s.userAuthorizationContext(ctx, userID)
+
+	accessToken, accessExp, err := s.jwt.GenerateAccessToken(userID, orgID2, roles)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("token generation failed"))
+	}
+
+	refreshRaw, family, refreshHash, err := s.jwt.GenerateRefreshToken()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("token generation failed"))
+	}
+
+	ss := &store.AuthSession{
+		ID:               newID(),
+		UserID:           userID,
+		TokenFamily:      family,
+		RefreshTokenHash: refreshHash,
+		ExpiresAt:        time.Now().UTC().Add(s.jwt.RefreshTTL()),
+	}
+	if err := s.store.AuthSessions().Create(ctx, ss); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("session creation failed"))
+	}
+
+	orgs, err := s.store.Organizations().List(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list organizations"))
+	}
+	orgProtos := make([]*authv1.Organization, 0, len(orgs))
+	for _, o := range orgs {
+		orgProtos = append(orgProtos, &authv1.Organization{
+			Id:     o.ID,
+			Name:   o.Name,
+			Status: string(o.Status),
+		})
+	}
+
+	respUser := &authv1.SessionUser{
+		Id:          userID,
+		Username:    msg.GetUsername(),
+		Roles:       roles,
+		ActiveOrgId: orgID2,
+	}
+
+	return connect.NewResponse(&authv1.InitializeResponse{
+		User:          respUser,
+		Organizations: orgProtos,
+		ExpiresAt:     accessExp.Unix(),
+		AccessToken:   accessToken,
+		RefreshToken:  refreshRaw,
+		TokenType:     "Bearer",
+	}), nil
+}
+
+// SwitchOrganization switches the active organization for the authenticated user (REQ-025).
+func (s *AuthService) SwitchOrganization(
+	ctx context.Context,
+	req *connect.Request[authv1.SwitchOrganizationRequest],
+) (*connect.Response[authv1.SwitchOrganizationResponse], error) {
+	userID, err := s.userIDFromCtx(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, err)
+	}
+
+	msg := req.Msg
+	targetOrgID := msg.GetOrgId()
+
+	// Verify the user is a member of the target organization.
+	members, err := s.store.OrgMembers().ListByUser(ctx, userID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list memberships"))
+	}
+
+	found := false
+	var roles []string
+	for _, m := range members {
+		if m.OrgID == targetOrgID {
+			found = true
+		}
+		r := string(m.Role)
+		seen := false
+		for _, existing := range roles {
+			if existing == r {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			roles = append(roles, r)
+		}
+	}
+	if !found {
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("not a member of the organization"))
+	}
+
+	u, err := s.store.Users().Get(ctx, userID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("user not found"))
+	}
+
+	accessToken, accessExp, err := s.jwt.GenerateAccessToken(userID, targetOrgID, roles)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("token generation failed"))
+	}
+
+	orgs, err := s.store.Organizations().List(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list organizations"))
+	}
+	orgProtos := make([]*authv1.Organization, 0, len(orgs))
+	for _, o := range orgs {
+		orgProtos = append(orgProtos, &authv1.Organization{
+			Id:     o.ID,
+			Name:   o.Name,
+			Status: string(o.Status),
+		})
+	}
+
+	respUser := &authv1.SessionUser{
+		Id:          userID,
+		Username:    u.Username,
+		Roles:       roles,
+		ActiveOrgId: targetOrgID,
+	}
+
+	return connect.NewResponse(&authv1.SwitchOrganizationResponse{
+		User:        respUser,
+		ExpiresAt:   accessExp.Unix(),
+		AccessToken: accessToken,
+		TokenType:   "Bearer",
+	}), nil
+}

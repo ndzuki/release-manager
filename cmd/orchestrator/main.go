@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/spf13/viper"
+
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/audit"
@@ -19,6 +21,10 @@ import (
 type orchSvc struct {
 	dbPath    string
 	targetEnv string
+	configPath string
+
+	st      *sqlitestore.Store
+	cleanup *orchestrator.CleanupService
 }
 
 func (s *orchSvc) Name() string { return "release-orchestrator" }
@@ -28,6 +34,7 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	s.st = st
 	logger.Info("store opened", "db", s.dbPath)
 
 	// Recover non-terminal operations from previous run (REQ-023 AC-023-05).
@@ -39,20 +46,55 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	// Initialize audit emitter for async audit event persistence.
 	auditCfg := audit.DefaultConfig()
 	auditEmitter := audit.NewEmitter(st.AuditEvents(), logger, auditCfg)
-	_ = auditEmitter // Ready for injection into orchestrator handlers.
-
-	// TODO: Inject auditEmitter into orchestrator.Service to record audit events
-	// on CreateOperation, PublishRelease, and EmergencyChange.
 
 	verifier := trust.NewStoreVerifier(
-		trust.NewStubVerifier(st.Verifications(), logger),
+		trust.NewStubVerifier(st.Verifications(), nil, logger),
 		st.Verifications(),
 		logger,
 	)
 
-	svc := orchestrator.NewService(st, verifier, s.targetEnv, logger)
+	svc := orchestrator.NewService(st, verifier, s.targetEnv, auditEmitter, logger)
 	path, h := orchestratorv1connect.NewOrchestratorServiceHandler(svc)
 	mux.Handle(path, h)
+
+	// Load retention config for GC.
+	retCfg := orchestrator.DefaultRetentionConfig()
+	if s.configPath != "" {
+		v := viper.New()
+		v.SetConfigFile(s.configPath)
+		v.SetConfigType("yaml")
+		if err := v.ReadInConfig(); err == nil {
+			if err := v.UnmarshalKey("retention", &retCfg); err != nil {
+				logger.Warn("failed to parse retention config, using defaults", "err", err)
+			}
+		}
+	}
+	if err := retCfg.Validate(); err != nil {
+		logger.Error("invalid retention config", "err", err)
+		return err
+	}
+
+	// Register CleanupService.
+	s.cleanup = orchestrator.NewCleanupService(st, retCfg, logger)
+	cpath, ch := orchestratorv1connect.NewCleanupServiceHandler(s.cleanup)
+	mux.Handle(cpath, ch)
+	logger.Info("cleanup service registered", "gc_interval_hours", retCfg.GCIntervalHours)
+
+	return nil
+}
+
+// Run starts the GC ticker. Called by app.Run as a backgroundService.
+func (s *orchSvc) Run(ctx context.Context) {
+	if s.cleanup != nil {
+		s.cleanup.StartTicker(ctx)
+	}
+}
+
+// Close cleans up resources.
+func (s *orchSvc) Close() error {
+	if s.st != nil {
+		return s.st.Close()
+	}
 	return nil
 }
 
@@ -62,5 +104,5 @@ func main() {
 	targetEnv := flag.String("target-env", "staging", "target environment (production, staging)")
 	flag.Parse()
 
-	app.Run(*configPath, &orchSvc{dbPath: *dbPath, targetEnv: *targetEnv})
+	app.Run(*configPath, &orchSvc{dbPath: *dbPath, targetEnv: *targetEnv, configPath: *configPath})
 }

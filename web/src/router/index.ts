@@ -1,98 +1,108 @@
-import { createRouter, createWebHistory, type NavigationGuardNext, type RouteLocationNormalized } from 'vue-router';
-import { useAuthStore } from '@/stores/auth';
+import { createMemoryHistory, createRouter, createWebHistory } from 'vue-router';
+import type { Router, RouterHistory, RouteLocationRaw } from 'vue-router';
+import { setForbiddenNavigator, useAuthStore } from '@/stores/auth';
 
-// ---------------------------------------------------------------------------
-// Route definitions
-//
-// Page components are lazy-loaded. New feature modules add their routes here.
-// ---------------------------------------------------------------------------
+export function createAppRouter(history: RouterHistory = createWebHistory()): Router {
+  return createRouter({
+    history,
+    routes: [
+      {
+        path: '/init',
+        name: 'Init',
+        component: () => import('@/pages/InitPage.vue'),
+        meta: { public: true },
+      },
+      {
+        path: '/login',
+        name: 'Login',
+        component: () => import('@/pages/LoginPage.vue'),
+        meta: { public: true },
+      },
+      {
+        path: '/forbidden',
+        name: 'Forbidden',
+        component: () => import('@/pages/ForbiddenPage.vue'),
+        meta: { requiresAuth: true },
+      },
+      {
+        path: '/',
+        name: 'Home',
+        component: () => import('@/pages/HomePage.vue'),
+        meta: { requiresAuth: true },
+      },
+      {
+        path: '/customers/:customerId/clusters',
+        name: 'ClusterList',
+        component: () => import('@/pages/ClusterListPage.vue'),
+        meta: { requiresAuth: true, feature: 'clusterRouting' },
+      },
+      {
+        path: '/customers/:customerId/clusters/new',
+        name: 'ClusterNew',
+        component: () => import('@/pages/ClusterEditPage.vue'),
+        meta: { requiresAuth: true, feature: 'clusterRouting', requiresWrite: true },
+      },
+      {
+        path: '/customers/:customerId/clusters/:clusterId',
+        name: 'ClusterDetail',
+        component: () => import('@/pages/ClusterDetailPage.vue'),
+        meta: { requiresAuth: true, feature: 'clusterRouting' },
+      },
+      {
+        path: '/customers/:customerId/clusters/:clusterId/edit',
+        name: 'ClusterEdit',
+        component: () => import('@/pages/ClusterEditPage.vue'),
+        meta: { requiresAuth: true, feature: 'clusterRouting', requiresWrite: true },
+      },
+      {
+        path: '/:pathMatch(.*)*',
+        name: 'NotFound',
+        component: () => import('@/pages/NotFoundPage.vue'),
+        meta: { public: true },
+      },
+    ],
+  });
+}
 
-const routes = [
-  {
-    path: '/login',
-    name: 'Login',
-    component: () => import('@/pages/LoginPage.vue'),
-    meta: { requiresAuth: false },
-  },
-  {
-    path: '/',
-    name: 'Home',
-    component: () => import('@/pages/HomePage.vue'),
-    meta: { requiresAuth: true },
-  },
-  {
-    path: '/customers/:customerId/clusters',
-    name: 'ClusterList',
-    component: () => import('@/pages/ClusterListPage.vue'),
-    meta: { requiresAuth: true, feature: 'clusterRouting' },
-  },
-  {
-    path: '/customers/:customerId/clusters/new',
-    name: 'ClusterNew',
-    component: () => import('@/pages/ClusterEditPage.vue'),
-    meta: { requiresAuth: true, feature: 'clusterRouting', requiresWrite: true },
-  },
-  {
-    path: '/customers/:customerId/clusters/:clusterId',
-    name: 'ClusterDetail',
-    component: () => import('@/pages/ClusterDetailPage.vue'),
-    meta: { requiresAuth: true, feature: 'clusterRouting' },
-  },
-  {
-    path: '/customers/:customerId/clusters/:clusterId/edit',
-    name: 'ClusterEdit',
-    component: () => import('@/pages/ClusterEditPage.vue'),
-    meta: { requiresAuth: true, feature: 'clusterRouting', requiresWrite: true },
-  },
-  {
-    // Catch-all: 404
-    path: '/:pathMatch(.*)*',
-    name: 'NotFound',
-    component: () => import('@/pages/NotFoundPage.vue'),
-    meta: { requiresAuth: false },
-  },
-];
-
-const router = createRouter({
-  history: createWebHistory(),
-  routes,
-});
-
-// ---------------------------------------------------------------------------
-// Global navigation guard
-//
-// 1. Pages with `requiresAuth: true` → redirect to /login if not authenticated.
-// 2. `/login` when already authenticated → redirect to /.
-// 3. `returnUrl` is preserved so we can redirect back after login.
-// ---------------------------------------------------------------------------
-
-router.beforeEach(
-  (to: RouteLocationNormalized, _from: RouteLocationNormalized, next: NavigationGuardNext) => {
+export function installAuthGuard(router: Router): void {
+  setForbiddenNavigator(async () => {
+    if (router.currentRoute.value.name !== 'Forbidden') {
+      await router.push({ name: 'Forbidden' });
+    }
+  });
+  router.beforeEach(async (to): Promise<RouteLocationRaw | boolean> => {
     const auth = useAuthStore();
+    if (auth.status === 'idle') {
+      await auth.initialize();
+    }
 
-    if (to.meta.requiresAuth !== false && !auth.isAuthenticated) {
-      auth.setReturnUrl(to.fullPath);
-      next({ name: 'Login' });
-      return;
+    if (auth.initialized === false && to.name !== 'Init') {
+      return { name: 'Init' };
+    }
+    if (auth.initialized === true && to.name === 'Init') {
+      return auth.isAuthenticated ? { name: 'Home' } : { name: 'Login' };
     }
 
     if (to.meta.requiresWrite && !auth.canWrite) {
-      next({ name: 'ClusterList', params: { customerId: to.params.customerId } });
-      return;
+      return { name: 'ClusterList', params: { customerId: to.params.customerId } };
     }
 
     if (to.meta.feature === 'clusterRouting' && import.meta.env.VITE_FEATURE_CLUSTER_ROUTING === 'false') {
-      next({ name: 'NotFound' });
-      return;
+      return { name: 'NotFound' };
     }
-
     if (to.name === 'Login' && auth.isAuthenticated) {
-      next({ name: 'Home' });
-      return;
+      return { name: 'Home' };
+    }
+    if (to.meta.requiresAuth && !auth.isAuthenticated) {
+      auth.setReturnUrl(to.fullPath);
+      return { name: 'Login', query: auth.status === 'expired' ? { reason: 'expired' } : undefined };
     }
 
-    next();
-  },
-);
+    return true;
+  });
+}
+
+const router = createAppRouter(import.meta.env.MODE === 'test' ? createMemoryHistory() : createWebHistory());
+installAuthGuard(router);
 
 export default router;

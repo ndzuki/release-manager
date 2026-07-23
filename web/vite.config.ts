@@ -1,5 +1,6 @@
-import { defineConfig } from 'vitest/config';
+
 import vue from '@vitejs/plugin-vue';
+import { defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
@@ -10,7 +11,9 @@ export default defineConfig({
     },
   },
   test: {
-    environment: 'jsdom',
+    environment: 'happy-dom',
+    globals: true,
+    restoreMocks: true,
   },
   server: {
     port: 5173,

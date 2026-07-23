@@ -3,6 +3,8 @@ package audit
 import (
 	"regexp"
 	"strings"
+
+	"github.com/ndzuki/release-manager/internal/store"
 )
 
 // sensitivePatterns defines regex patterns for sensitive field detection.
@@ -59,4 +61,21 @@ func RedactSensitive(fieldName, value string) string {
 		return "****REDACTED****"
 	}
 	return value
+}
+
+// sanitizeAuditEvent returns a copy of ev with ChangeSummary and Metadata values
+// redacted for export.
+func sanitizeAuditEvent(ev *store.AuditEvent) *store.AuditEvent {
+	if ev == nil {
+		return nil
+	}
+	out := *ev
+	out.ChangeSummary, _ = Sanitize(ev.ChangeSummary)
+	if ev.Metadata != nil {
+		out.Metadata = make(map[string]string, len(ev.Metadata))
+		for k, v := range ev.Metadata {
+			out.Metadata[k] = RedactSensitive(k, v)
+		}
+	}
+	return &out
 }

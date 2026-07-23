@@ -20,15 +20,16 @@ type Coordinator struct {
 	ops    store.OperationStore
 	opers  store.OperatorStore
 	defs   store.DefinitionStore
+	pl     store.PreflightLifecycleStore
 	logger *slog.Logger
 }
-
 // NewCoordinator creates a preflight coordinator with the required store dependencies.
 func NewCoordinator(
 	outbox store.OutboxStore,
 	ops store.OperationStore,
 	opers store.OperatorStore,
 	defs store.DefinitionStore,
+	pl store.PreflightLifecycleStore,
 	logger *slog.Logger,
 ) *Coordinator {
 	return &Coordinator{
@@ -36,6 +37,7 @@ func NewCoordinator(
 		ops:    ops,
 		opers:  opers,
 		defs:   defs,
+		pl:     pl,
 		logger: logger,
 	}
 }
@@ -80,34 +82,32 @@ func (c *Coordinator) Run(ctx context.Context, op *store.Operation) {
 		results = append(results, result)
 
 		if result.Status == StageFailed || result.Status == StageTimeout {
-			if stage.Required {
-				// AC-019-01: artifact/stage fail → operation failed
-				errorCode := "stage_failed"
-				if result.Status == StageTimeout {
-					errorCode = "stage_timeout"
-				}
-				c.casFailed(ctx, op, AggregateResult{
-					OperationID: op.ID,
-					Overall:     StageFailed,
-					FailedStage: stage.Name,
-					Stages:      results,
-					ErrorCode:   errorCode,
-				})
-				return
-			}
-			// Optional stage failure → skip, continue (policy recorded)
-			c.logger.Info("optional stage skipped", "op_id", op.ID, "stage", stage.Name)
+			errorCode := errorCodeFromStatus(result)
+			c.casFailed(ctx, op, AggregateResult{
+				OperationID: op.ID,
+				Overall:     StageFailed,
+				FailedStage: stage.Name,
+				Stages:      results,
+				ErrorCode:   errorCode,
+			})
+			// Record lifecycle result for GC (REQ-069).
+			c.recordLifecycle(ctx, op.ID, results, string(StageFailed), errorCode)
+			return
 		}
+		// Optional stage failure → skip, continue (policy recorded)
+		c.logger.Info("optional stage skipped", "op_id", op.ID, "stage", stage.Name)
 	}
 
-	// AC-019-04: all stages passed → CAS to queued
-	c.casQueued(ctx, op, AggregateResult{
+	// All stages passed → CAS to queued.
+	result := AggregateResult{
 		OperationID: op.ID,
 		Overall:     StagePassed,
 		Stages:      results,
-	})
+	}
+	c.casQueued(ctx, op, result)
+	// Record lifecycle result for GC (REQ-069).
+	c.recordLifecycle(ctx, op.ID, results, string(StagePassed), "")
 }
-
 // runStage dispatches a PRECHECK command for one stage and polls for its result.
 func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage StageDef) (StageResult, error) {
 	emptyResult := StageResult{Stage: stage.Name, Status: StageFailed}
@@ -280,5 +280,42 @@ func (c *Coordinator) casQueued(ctx context.Context, op *store.Operation, _ Aggr
 	_, err = c.ops.UpdateStatus(ctx, op.ID, next, op.StateVersion, "")
 	if err != nil {
 		c.logger.Error("CAS queued transition failed", "op_id", op.ID, "err", err)
+	}
+}
+
+// recordLifecycle persists a PreflightLifecycle record for GC (REQ-069).
+// This is best-effort — failures are logged but not propagated.
+func (c *Coordinator) recordLifecycle(ctx context.Context, operationID string, stages []StageResult, overall, errorCode string) {
+	if c.pl == nil {
+		return
+	}
+
+	stagesJSON, err := json.Marshal(stages)
+	if err != nil {
+		c.logger.Warn("failed to marshal preflight stages for lifecycle", "op_id", operationID, "err", err)
+		return
+	}
+
+	opID := &operationID
+	pl := &store.PreflightLifecycle{
+		OperationID: opID,
+		Stages:      stagesJSON,
+		Overall:     overall,
+		ErrorCode:   errorCode,
+	}
+	if err := c.pl.Create(ctx, pl); err != nil {
+		c.logger.Warn("failed to record preflight lifecycle", "op_id", operationID, "err", err)
+	}
+}
+
+// errorCodeFromStatus maps a stage result status to a preflight error code.
+func errorCodeFromStatus(result StageResult) string {
+	switch result.Status {
+	case StageFailed:
+		return string(StageFailed)
+	case StageTimeout:
+		return string(StageTimeout)
+	default:
+		return result.Detail
 	}
 }

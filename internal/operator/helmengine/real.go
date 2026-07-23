@@ -127,6 +127,18 @@ func (r *RealEngine) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release
 	if err != nil {
 		return nil, fmt.Errorf("initialize Helm upgrade: %w", err)
 	}
+
+	// AC-021-02 / AC-062-02: validate ExpectedRevision before running the upgrade.
+	if opts.ExpectedRevision > 0 {
+		current, statusErr := statusWithConfig(ctx, cfg, opts.Namespace, opts.ReleaseName)
+		if statusErr != nil {
+			return nil, fmt.Errorf("check current revision for %s/%s: %w", opts.Namespace, opts.ReleaseName, statusErr)
+		}
+		if current.Revision != opts.ExpectedRevision {
+			return nil, fmt.Errorf("%w: expected revision %d, got %d", ErrConflict, opts.ExpectedRevision, current.Revision)
+		}
+	}
+
 	upgrade := action.NewUpgrade(cfg)
 	upgrade.Version = opts.ChartVersion
 	chartPath, err := upgrade.LocateChart(opts.ChartPath, r.settings)

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -97,12 +98,20 @@ func (s *Service) EmergencyChange(
 		"action", action,
 		"convergence", convergence,
 	)
-	actorKind, actorID := auditActorFromContext(op.Actor)
-	s.logger.Warn("emergency audit not wired",
-		"operation_id", op.ID,
-		"actor_kind", actorKind,
-		"actor_id", actorID,
-	)
+	summary, _ := audit.Sanitize(msg.Reason)
+	actorKind, actorID := auditActor(&op.Actor)
+	s.emitAudit(audit.NewEvent(
+		actorKind,
+		actorID,
+		op.Actor.Organization,
+		"",
+		"release_definition",
+		defID,
+		"emergency_change",
+		"accepted",
+		summary,
+		map[string]string{"action": string(action), "convergence": string(convergence)},
+	))
 	return connect.NewResponse(&orchestratorv1.EmergencyChangeResponse{
 		OperationId: op.ID,
 		Status:      string(op.Status),
@@ -117,11 +126,4 @@ func isHPAManaged(_ *store.ReleaseDefinition) bool {
 	// Stub: not yet implemented. In production, this would check the
 	// definition's cluster for an HPA targeting the same workload.
 	return false
-}
-
-func auditActorFromContext(actor store.ActorContext) (store.AuditActorKind, string) {
-	if actor.UserID != "" {
-		return store.AuditActorUser, actor.UserID
-	}
-	return store.AuditActorSystem, "emergency-system"
 }

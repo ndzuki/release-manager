@@ -1,0 +1,11 @@
+version: v2
+plugins:
+  - remote: buf.build/bufbuild/es
+    out: web/src/gen
+    opt:
+      - target=ts
+      - import_extension=none
+inputs:
+  - directory: api/proto
+    paths:
+      - api/proto/auth/v1/auth.proto
