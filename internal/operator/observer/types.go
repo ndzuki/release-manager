@@ -2,12 +2,13 @@ package observer
 
 import (
 	"errors"
-	"fmt"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 var (
+	ErrInvalidArgument        = errors.New("invalid_argument")
 	ErrWatchDisconnected      = errors.New("watch_disconnected")
 	ErrResourceVersionExpired = errors.New("resource_version_expired")
 	ErrRolloutTimeout         = errors.New("rollout_timeout")
@@ -21,6 +22,17 @@ var (
 	StatefulSetGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}
 	DaemonSetGVR   = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "daemonsets"}
 	JobGVR         = schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}
+)
+
+type ErrorCode string
+
+const (
+	ErrorCodeInvalidArgument     ErrorCode = "invalid_argument"
+	ErrorCodeUnsupportedResource ErrorCode = "unsupported_resource"
+	ErrorCodeWorkloadUnavailable ErrorCode = "workload_unavailable"
+	ErrorCodeRolloutTimeout      ErrorCode = "rollout_timeout"
+	ErrorCodeCancelled           ErrorCode = "cancelled"
+	ErrorCodeWatchDisconnected   ErrorCode = "watch_disconnected"
 )
 
 type ResourceRef struct {
@@ -38,10 +50,12 @@ type Condition struct {
 
 type WatchResult struct {
 	Resource           ResourceRef
-	Ready              bool
-	Failed             bool
+	ResourceUID        types.UID
+	Generation         int64
 	ObservedGeneration int64
 	ResourceVersion    string
+	Ready              bool
+	Failed             bool
 	Conditions         []Condition
 }
 
@@ -52,15 +66,39 @@ type RolloutError struct {
 }
 
 func (e *RolloutError) Error() string {
+	if e == nil {
+		return ""
+	}
 	if e.Err == nil {
 		return e.Kind.Error()
 	}
-	return fmt.Sprintf("%s: %v", e.Kind, e.Err)
+	return e.Err.Error()
 }
 
 func (e *RolloutError) Unwrap() error {
 	return e.Kind
 }
+
 func (e *RolloutError) Cause() error {
 	return e.Err
+}
+
+func (e *RolloutError) Code() ErrorCode {
+	if e == nil {
+		return ""
+	}
+	switch {
+	case errors.Is(e.Kind, ErrInvalidArgument):
+		return ErrorCodeInvalidArgument
+	case errors.Is(e.Kind, ErrUnsupportedResource):
+		return ErrorCodeUnsupportedResource
+	case errors.Is(e.Kind, ErrWorkloadUnavailable):
+		return ErrorCodeWorkloadUnavailable
+	case errors.Is(e.Kind, ErrRolloutTimeout):
+		return ErrorCodeRolloutTimeout
+	case errors.Is(e.Kind, ErrCancelled):
+		return ErrorCodeCancelled
+	default:
+		return ErrorCodeWatchDisconnected
+	}
 }

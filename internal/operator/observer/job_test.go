@@ -18,6 +18,7 @@ func TestObserver_JobReady(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "migrate",
 			Namespace:       "default",
+			UID:             "job-uid",
 			Generation:      3,
 			ResourceVersion: "31",
 		},
@@ -29,37 +30,28 @@ func TestObserver_JobReady(t *testing.T) {
 		},
 	}
 
-	result, err := New(fake.NewSimpleClientset(job)).Observe(t.Context(), jobRef(), 3, time.Second)
+	result, err := New(fake.NewSimpleClientset(job)).Observe(t.Context(), jobRef(), 0, time.Second)
 
 	require.NoError(t, err)
 	assert.True(t, result.Ready)
-	assert.Equal(t, int64(3), result.ObservedGeneration)
+	assert.False(t, result.Failed)
+	assert.Equal(t, job.UID, result.ResourceUID)
+	assert.Equal(t, int64(3), result.Generation)
+	assert.Zero(t, result.ObservedGeneration)
 	assert.Equal(t, "31", result.ResourceVersion)
 	require.Len(t, result.Conditions, 1)
 	assert.Equal(t, "Complete", result.Conditions[0].Type)
 }
 
-func TestObserver_JobWaitsForExpectedGeneration(t *testing.T) {
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            "migrate",
-			Namespace:       "default",
-			Generation:      2,
-			ResourceVersion: "32",
-		},
-		Status: batchv1.JobStatus{
-			Conditions: []batchv1.JobCondition{{
-				Type:   batchv1.JobComplete,
-				Status: corev1.ConditionTrue,
-			}},
-		},
-	}
+func TestObserver_JobRejectsExpectedGeneration(t *testing.T) {
+	client := fake.NewSimpleClientset()
 
-	result, err := New(fake.NewSimpleClientset(job)).Observe(t.Context(), jobRef(), 3, 20*time.Millisecond)
+	result, err := New(client).Observe(t.Context(), jobRef(), 1, time.Second)
 
-	assert.ErrorIs(t, err, ErrRolloutTimeout)
-	assert.False(t, result.Ready)
-	assert.Equal(t, int64(2), result.ObservedGeneration)
+	assert.ErrorIs(t, err, ErrInvalidArgument)
+	assert.Equal(t, ErrorCodeInvalidArgument, rolloutErrorCode(t, err))
+	assert.Equal(t, jobRef(), result.Resource)
+	assert.Empty(t, client.Actions())
 }
 
 func TestObserver_JobFailed(t *testing.T) {
@@ -67,6 +59,7 @@ func TestObserver_JobFailed(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "migrate",
 			Namespace:       "default",
+			UID:             "job-uid",
 			Generation:      4,
 			ResourceVersion: "33",
 		},
@@ -80,13 +73,18 @@ func TestObserver_JobFailed(t *testing.T) {
 		},
 	}
 
-	result, err := New(fake.NewSimpleClientset(job)).Observe(t.Context(), jobRef(), 4, time.Second)
+	result, err := New(fake.NewSimpleClientset(job)).Observe(t.Context(), jobRef(), 0, time.Second)
 
 	assert.ErrorIs(t, err, ErrWorkloadUnavailable)
+	assert.Equal(t, ErrorCodeWorkloadUnavailable, rolloutErrorCode(t, err))
 	assert.False(t, result.Ready)
 	assert.True(t, result.Failed)
+	assert.Equal(t, job.UID, result.ResourceUID)
+	assert.Equal(t, int64(4), result.Generation)
+	assert.Zero(t, result.ObservedGeneration)
 	require.Len(t, result.Conditions, 1)
 	assert.Equal(t, "BackoffLimitExceeded", result.Conditions[0].Reason)
+	assertRolloutLast(t, result, err)
 }
 
 func jobRef() ResourceRef {

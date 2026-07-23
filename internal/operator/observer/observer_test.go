@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
@@ -45,6 +46,161 @@ func TestObserver_DeploymentWaitsForObservedGeneration(t *testing.T) {
 	assert.ErrorIs(t, err, ErrRolloutTimeout)
 	assert.False(t, result.Ready)
 	assert.Equal(t, int64(3), result.ObservedGeneration)
+}
+
+func TestObserver_DeploymentRequiresAllReadyCounters(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*appsv1.Deployment)
+	}{
+		{
+			name: "updated replicas lag",
+			mutate: func(deployment *appsv1.Deployment) {
+				deployment.Status.UpdatedReplicas = 0
+			},
+		},
+		{
+			name: "available replicas lag",
+			mutate: func(deployment *appsv1.Deployment) {
+				deployment.Status.AvailableReplicas = 0
+			},
+		},
+		{
+			name: "unavailable replicas remain",
+			mutate: func(deployment *appsv1.Deployment) {
+				deployment.Status.UnavailableReplicas = 1
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deployment := readyDeployment(4, "12")
+			tt.mutate(deployment)
+
+			result, err := New(fake.NewSimpleClientset(deployment)).Observe(t.Context(), deploymentRef(), 4, 20*time.Millisecond)
+
+			assert.ErrorIs(t, err, ErrRolloutTimeout)
+			assert.False(t, result.Ready)
+			assertRolloutLast(t, result, err)
+		})
+	}
+}
+
+func TestObserver_ValidatesInputWithoutAPIRequests(t *testing.T) {
+	cancelledCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	unsupportedRef := ResourceRef{
+		GVR:       schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"},
+		Namespace: "default",
+		Name:      "widget",
+	}
+	tests := []struct {
+		name               string
+		ctx                context.Context
+		ref                ResourceRef
+		expectedGeneration int64
+		timeout            time.Duration
+		wantKind           error
+		wantCode           ErrorCode
+		wantMessage        string
+	}{
+		{
+			name:               "nil context",
+			ctx:                nil,
+			ref:                deploymentRef(),
+			expectedGeneration: 1,
+			timeout:            time.Second,
+			wantKind:           ErrInvalidArgument,
+			wantCode:           ErrorCodeInvalidArgument,
+			wantMessage:        "invalid rollout watch argument: context: must not be nil",
+		},
+		{
+			name:               "cancelled context",
+			ctx:                cancelledCtx,
+			ref:                deploymentRef(),
+			expectedGeneration: 1,
+			timeout:            time.Second,
+			wantKind:           ErrCancelled,
+			wantCode:           ErrorCodeCancelled,
+			wantMessage:        "rollout watch cancelled: default/web",
+		},
+		{
+			name:               "empty namespace",
+			ctx:                t.Context(),
+			ref:                ResourceRef{GVR: DeploymentGVR, Name: "web"},
+			expectedGeneration: 1,
+			timeout:            time.Second,
+			wantKind:           ErrInvalidArgument,
+			wantCode:           ErrorCodeInvalidArgument,
+			wantMessage:        "invalid rollout watch argument: namespace: must not be empty",
+		},
+		{
+			name:               "empty name",
+			ctx:                t.Context(),
+			ref:                ResourceRef{GVR: DeploymentGVR, Namespace: "default"},
+			expectedGeneration: 1,
+			timeout:            time.Second,
+			wantKind:           ErrInvalidArgument,
+			wantCode:           ErrorCodeInvalidArgument,
+			wantMessage:        "invalid rollout watch argument: name: must not be empty",
+		},
+		{
+			name:               "invalid apps generation",
+			ctx:                t.Context(),
+			ref:                deploymentRef(),
+			expectedGeneration: 0,
+			timeout:            time.Second,
+			wantKind:           ErrInvalidArgument,
+			wantCode:           ErrorCodeInvalidArgument,
+			wantMessage:        "invalid rollout watch argument: expectedGeneration: must be greater than zero for apps workloads",
+		},
+		{
+			name:               "invalid job generation",
+			ctx:                t.Context(),
+			ref:                jobRef(),
+			expectedGeneration: 1,
+			timeout:            time.Second,
+			wantKind:           ErrInvalidArgument,
+			wantCode:           ErrorCodeInvalidArgument,
+			wantMessage:        "invalid rollout watch argument: expectedGeneration: must be zero for jobs",
+		},
+		{
+			name:               "invalid timeout",
+			ctx:                t.Context(),
+			ref:                deploymentRef(),
+			expectedGeneration: 1,
+			timeout:            0,
+			wantKind:           ErrInvalidArgument,
+			wantCode:           ErrorCodeInvalidArgument,
+			wantMessage:        "invalid rollout watch argument: timeout: must be greater than zero",
+		},
+		{
+			name:               "unsupported resource",
+			ctx:                t.Context(),
+			ref:                unsupportedRef,
+			expectedGeneration: 0,
+			timeout:            time.Second,
+			wantKind:           ErrUnsupportedResource,
+			wantCode:           ErrorCodeUnsupportedResource,
+			wantMessage:        "unsupported rollout resource: example.io/v1, Resource=widgets",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := fake.NewSimpleClientset()
+
+			result, err := New(client).Observe(tt.ctx, tt.ref, tt.expectedGeneration, tt.timeout)
+
+			assert.ErrorIs(t, err, tt.wantKind)
+			assert.Equal(t, tt.wantCode, rolloutErrorCode(t, err))
+			assert.EqualError(t, err, tt.wantMessage)
+			assert.Equal(t, tt.ref, result.Resource)
+			assert.Empty(t, client.Actions())
+			assertRolloutLast(t, result, err)
+		})
+	}
 }
 
 func TestObserver_ReListsAfterWatchDisconnect(t *testing.T) {
@@ -115,6 +271,199 @@ func TestObserver_ReListsAfterWatchDisconnect(t *testing.T) {
 	assert.GreaterOrEqual(t, listCalls, 2)
 	assert.GreaterOrEqual(t, watchCalls, 1)
 }
+func TestObserver_ReListRejectsReplacementUID(t *testing.T) {
+	pending := readyDeployment(1, "1")
+	pending.Generation = 2
+	pending.UID = "original-uid"
+	replacement := readyDeployment(2, "2")
+	replacement.UID = "replacement-uid"
+	client := fake.NewSimpleClientset(pending)
+	firstWatch := watch.NewRaceFreeFake()
+
+	var mu sync.Mutex
+	listCalls := 0
+	client.PrependReactor("list", "deployments", func(_ clienttesting.Action) (bool, runtime.Object, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		listCalls++
+		if listCalls == 1 {
+			return true, &appsv1.DeploymentList{ListMeta: metav1.ListMeta{ResourceVersion: "1"}, Items: []appsv1.Deployment{*pending.DeepCopy()}}, nil
+		}
+		return true, &appsv1.DeploymentList{ListMeta: metav1.ListMeta{ResourceVersion: "2"}, Items: []appsv1.Deployment{*replacement.DeepCopy()}}, nil
+	})
+	client.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
+		return true, firstWatch, nil
+	})
+
+	resultCh := make(chan WatchResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := New(client).Observe(t.Context(), deploymentRef(), 2, time.Second)
+		resultCh <- result
+		errCh <- err
+	}()
+
+	require.Eventually(t, func() bool { return !firstWatch.IsStopped() }, time.Second, time.Millisecond)
+	firstWatch.Stop()
+
+	select {
+	case err := <-errCh:
+		result := <-resultCh
+		assert.ErrorIs(t, err, ErrWorkloadUnavailable)
+		assert.Equal(t, pending.UID, result.ResourceUID)
+		assert.Equal(t, ErrorCodeWorkloadUnavailable, rolloutErrorCode(t, err))
+		assertRolloutLast(t, result, err)
+	case <-time.After(time.Second):
+		t.Fatal("observer followed replacement UID")
+	}
+}
+
+func TestObserver_WatchRejectsReplacementUID(t *testing.T) {
+	pending := readyDeployment(1, "1")
+	pending.Generation = 2
+	pending.UID = "original-uid"
+	replacement := readyDeployment(2, "2")
+	replacement.UID = "replacement-uid"
+	client := fake.NewSimpleClientset(pending)
+	watcher := watch.NewRaceFreeFake()
+	client.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
+		return true, watcher, nil
+	})
+
+	resultCh := make(chan WatchResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := New(client).Observe(t.Context(), deploymentRef(), 2, time.Second)
+		resultCh <- result
+		errCh <- err
+	}()
+
+	require.Eventually(t, func() bool { return len(client.Actions()) >= 2 }, time.Second, time.Millisecond)
+	watcher.Modify(replacement)
+
+	select {
+	case err := <-errCh:
+		result := <-resultCh
+		assert.ErrorIs(t, err, ErrWorkloadUnavailable)
+		assert.Equal(t, pending.UID, result.ResourceUID)
+		assertRolloutLast(t, result, err)
+	case <-time.After(time.Second):
+		t.Fatal("observer followed replacement UID")
+	}
+}
+
+func TestObserver_DeletedPreservesLockedUID(t *testing.T) {
+	pending := readyDeployment(1, "1")
+	pending.Generation = 2
+	pending.UID = "original-uid"
+	client := fake.NewSimpleClientset(pending)
+	watcher := watch.NewRaceFreeFake()
+	client.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
+		return true, watcher, nil
+	})
+
+	resultCh := make(chan WatchResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := New(client).Observe(t.Context(), deploymentRef(), 2, time.Second)
+		resultCh <- result
+		errCh <- err
+	}()
+
+	require.Eventually(t, func() bool { return len(client.Actions()) >= 2 }, time.Second, time.Millisecond)
+	watcher.Delete(pending.DeepCopy())
+
+	select {
+	case err := <-errCh:
+		result := <-resultCh
+		assert.ErrorIs(t, err, ErrWorkloadUnavailable)
+		assert.Equal(t, pending.UID, result.ResourceUID)
+		assertRolloutLast(t, result, err)
+	case <-time.After(time.Second):
+		t.Fatal("observer did not stop after deletion")
+	}
+}
+
+func TestObserver_ParentCancellationWinsTimeout(t *testing.T) {
+	for range 20 {
+		pending := readyDeployment(1, "1")
+		pending.Generation = 2
+		client := fake.NewSimpleClientset(pending)
+		watcher := watch.NewRaceFreeFake()
+		client.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
+			return true, watcher, nil
+		})
+		ctx, cancel := context.WithCancel(t.Context())
+		resultCh := make(chan WatchResult, 1)
+		errCh := make(chan error, 1)
+		go func() {
+			result, err := New(client).Observe(ctx, deploymentRef(), 2, 10*time.Millisecond)
+			resultCh <- result
+			errCh <- err
+		}()
+
+		require.Eventually(t, func() bool { return len(client.Actions()) >= 2 }, time.Second, time.Millisecond)
+		cancel()
+
+		select {
+		case err := <-errCh:
+			result := <-resultCh
+			assert.ErrorIs(t, err, ErrCancelled)
+			assert.Equal(t, ErrorCodeCancelled, rolloutErrorCode(t, err))
+			assertRolloutLast(t, result, err)
+		case <-time.After(time.Second):
+			t.Fatal("observer did not stop after parent cancellation")
+		}
+	}
+}
+
+func TestObserver_ConcurrentCallsAreIsolated(t *testing.T) {
+	pending := readyDeployment(1, "1")
+	pending.Generation = 2
+	pending.UID = "deployment-uid"
+	ready := readyDeployment(2, "2")
+	ready.UID = pending.UID
+	client := fake.NewSimpleClientset(pending)
+	watchers := make(chan *watch.RaceFreeFakeWatcher, 2)
+	client.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
+		watcher := watch.NewRaceFreeFake()
+		watchers <- watcher
+		return true, watcher, nil
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	firstResultCh := make(chan WatchResult, 1)
+	firstErrCh := make(chan error, 1)
+	secondResultCh := make(chan WatchResult, 1)
+	secondErrCh := make(chan error, 1)
+	go func() {
+		result, err := New(client).Observe(ctx, deploymentRef(), 2, time.Second)
+		firstResultCh <- result
+		firstErrCh <- err
+	}()
+	go func() {
+		result, err := New(client).Observe(t.Context(), deploymentRef(), 2, time.Second)
+		secondResultCh <- result
+		secondErrCh <- err
+	}()
+
+	firstWatcher := <-watchers
+	secondWatcher := <-watchers
+	cancel()
+	secondWatcher.Modify(ready)
+	firstWatcher.Modify(ready)
+
+	firstErr := <-firstErrCh
+	firstResult := <-firstResultCh
+	secondErr := <-secondErrCh
+	secondResult := <-secondResultCh
+	assert.ErrorIs(t, firstErr, ErrCancelled)
+	assert.False(t, firstResult.Ready)
+	require.NoError(t, secondErr)
+	assert.True(t, secondResult.Ready)
+	assert.Equal(t, pending.UID, secondResult.ResourceUID)
+}
+
 
 func TestObserver_RolloutTimeoutIncludesLastState(t *testing.T) {
 	pending := readyDeployment(6, "21")
@@ -301,6 +650,7 @@ func deploymentRef() ResourceRef {
 }
 
 func readyDeployment(generation int64, resourceVersion string) *appsv1.Deployment {
+	replicas := int32(1)
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "web",
@@ -308,8 +658,14 @@ func readyDeployment(generation int64, resourceVersion string) *appsv1.Deploymen
 			Generation:      generation,
 			ResourceVersion: resourceVersion,
 		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+		},
 		Status: appsv1.DeploymentStatus{
-			ObservedGeneration: generation,
+			ObservedGeneration:  generation,
+			UpdatedReplicas:     replicas,
+			AvailableReplicas:   replicas,
+			UnavailableReplicas: 0,
 			Conditions: []appsv1.DeploymentCondition{
 				{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
 			},

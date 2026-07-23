@@ -8,6 +8,14 @@ BUF         := $(shell which buf 2>/dev/null || echo buf)
 PROTO_DIR   := api/proto
 GEN_DIR     := api/gen
 GOBIN       := $(shell go env GOBIN 2>/dev/null || echo $(HOME)/go/bin)
+KIND        ?= kind
+DOCKER      ?= docker
+KIND_CLUSTER ?= rm-rollout-watch
+KIND_VERSION ?= v0.32.0
+KIND_NODE_IMAGE ?= kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
+WORKLOAD_IMAGE ?= busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+WORKLOAD_IMAGE_DIGEST ?= sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+
 
 # Colors (via printf for portable escape)
 ESC         := $(shell printf '\e')
@@ -244,9 +252,21 @@ test: ## Run all tests
 	$(GO) test -race ./...
 
 .PHONY: test-rollout-watch
-test-rollout-watch: ## Run rollout watch tests against the active Kubernetes API server
-	$(GO) test -race -tags=integration -count=1 ./test/integration -run '^TestRolloutWatch'
-
+test-rollout-watch: ## Create a kind cluster, run integration tests, and tear down
+	@set -eu; \
+	KUBECONFIG=$$(mktemp); \
+	STARTED_AT=$$(date +%s); \
+	export KUBECONFIG; \
+	trap '$(KIND) delete cluster --name "$(KIND_CLUSTER)" --kubeconfig "$$KUBECONFIG" >/dev/null 2>&1 || true; rm -f "$$KUBECONFIG"' EXIT INT TERM; \
+	$(KIND) delete cluster --name "$(KIND_CLUSTER)" --kubeconfig "$$KUBECONFIG" >/dev/null 2>&1 || true; \
+	$(KIND) create cluster --name "$(KIND_CLUSTER)" --image "$(KIND_NODE_IMAGE)" --kubeconfig "$$KUBECONFIG" --wait 5m; \
+	$(DOCKER) pull "$(WORKLOAD_IMAGE)"; \
+	$(KIND) load docker-image "$(WORKLOAD_IMAGE)" --name "$(KIND_CLUSTER)"; \
+	$(DOCKER) exec "$(KIND_CLUSTER)-control-plane" ctr -n k8s.io images tag "$$( $(DOCKER) image inspect "$(WORKLOAD_IMAGE)" --format '{{.Id}}' )" "docker.io/library/busybox@$(WORKLOAD_IMAGE_DIGEST)" >/dev/null; \
+	$(GO) run ./cmd/sdkcheck/ -exceptions sdkcheck.exceptions.yaml -build-tags integration ./internal/operator/observer ./test/integration; \
+	$(GO) test -race -tags=integration -count=1 ./test/integration -run '^TestRolloutWatch' -timeout 10m; \
+	ELAPSED=$$(($$(date +%s) - $$STARTED_AT)); \
+	printf "$(GREEN)test-rollout-watch pass (%ss)$(NC)\n" "$$ELAPSED"
 .PHONY: test-coverage
 test-coverage: ## Run tests with coverage report
 	$(GO) test -race -coverprofile=coverage.out ./...
