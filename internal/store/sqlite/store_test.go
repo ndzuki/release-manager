@@ -142,7 +142,7 @@ func TestClusterDisable(t *testing.T) {
 	require.NoError(t, st.Clusters().Create(ctx, cl))
 
 	cl.Status = store.ClusterDisabled
-	require.NoError(t, st.Clusters().Update(ctx, cl))
+	require.NoError(t, st.Clusters().Update(ctx, cl, cl.Version))
 
 	got, err := st.Clusters().Get(ctx, cl.ID)
 	require.NoError(t, err)

@@ -28,7 +28,7 @@ func TestRecoverNonTerminal(t *testing.T) {
 		Status:            store.DefStatusActive,
 		OptimisticVersion: 1,
 	}
-	require.NoError(t, st.Definitions().Create(ctx, def, nil), nil)
+	require.NoError(t, st.Definitions().Create(ctx, def, nil))
 
 	now := time.Now().UTC()
 	deadline := now.Add(-time.Minute)

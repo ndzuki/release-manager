@@ -86,6 +86,7 @@ export const useAuthStore = defineStore('auth', () => {
   const returnUrl = ref<string | null>(null);
 
   const isAuthenticated = computed(() => user.value !== null);
+  const canWrite = computed(() => !user.value?.roles.some((role) => role.toLowerCase() === 'viewer'));
 
   function persistTokens(access: string, refresh: string) {
     localStorage.setItem('access_token', access);
@@ -151,6 +152,7 @@ export const useAuthStore = defineStore('auth', () => {
     user,
     returnUrl,
     isAuthenticated,
+    canWrite,
     login,
     logout,
     refreshAccessToken,

@@ -21,6 +21,30 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/customers/:customerId/clusters',
+    name: 'ClusterList',
+    component: () => import('@/pages/ClusterListPage.vue'),
+    meta: { requiresAuth: true, feature: 'clusterRouting' },
+  },
+  {
+    path: '/customers/:customerId/clusters/new',
+    name: 'ClusterNew',
+    component: () => import('@/pages/ClusterEditPage.vue'),
+    meta: { requiresAuth: true, feature: 'clusterRouting', requiresWrite: true },
+  },
+  {
+    path: '/customers/:customerId/clusters/:clusterId',
+    name: 'ClusterDetail',
+    component: () => import('@/pages/ClusterDetailPage.vue'),
+    meta: { requiresAuth: true, feature: 'clusterRouting' },
+  },
+  {
+    path: '/customers/:customerId/clusters/:clusterId/edit',
+    name: 'ClusterEdit',
+    component: () => import('@/pages/ClusterEditPage.vue'),
+    meta: { requiresAuth: true, feature: 'clusterRouting', requiresWrite: true },
+  },
+  {
     // Catch-all: 404
     path: '/:pathMatch(.*)*',
     name: 'NotFound',
@@ -49,6 +73,16 @@ router.beforeEach(
     if (to.meta.requiresAuth !== false && !auth.isAuthenticated) {
       auth.setReturnUrl(to.fullPath);
       next({ name: 'Login' });
+      return;
+    }
+
+    if (to.meta.requiresWrite && !auth.canWrite) {
+      next({ name: 'ClusterList', params: { customerId: to.params.customerId } });
+      return;
+    }
+
+    if (to.meta.feature === 'clusterRouting' && import.meta.env.VITE_FEATURE_CLUSTER_ROUTING === 'false') {
+      next({ name: 'NotFound' });
       return;
     }
 

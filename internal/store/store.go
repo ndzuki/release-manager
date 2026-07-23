@@ -25,6 +25,7 @@ var (
 	ErrOptimisticLock = errors.New("store: optimistic lock conflict")
 	ErrDuplicateKey   = errors.New("store: duplicate key")
 	ErrReleaseBusy    = errors.New("store: release busy")
+	ErrBindingRevoked = errors.New("store: binding revoked")
 )
 
 // OperationType classifies the kind of release operation.
@@ -214,6 +215,7 @@ type Cluster struct {
 	Status        ClusterStatus `json:"status"`
 	CreatedAt     time.Time     `json:"created_at"`
 	UpdatedAt     time.Time     `json:"updated_at"`
+	Version       int64         `json:"version"`
 }
 
 // EnrollmentToken is a single-use token for operator registration.
@@ -722,7 +724,7 @@ type CustomerEventStore interface {
 type ClusterStore interface {
 	Create(ctx context.Context, c *Cluster) error
 	Get(ctx context.Context, id string) (*Cluster, error)
-	Update(ctx context.Context, c *Cluster) error
+	Update(ctx context.Context, c *Cluster, expectedVersion int64) error
 	List(ctx context.Context, customerID string) ([]*Cluster, error)
 	ListAll(ctx context.Context) ([]*Cluster, error)
 }
@@ -818,7 +820,8 @@ type BindingStore interface {
 	Get(ctx context.Context, id string) (*OrgCustomerBinding, error)
 	GetByOrgAndCustomer(ctx context.Context, orgID, customerID string) (*OrgCustomerBinding, error)
 	ListByOrg(ctx context.Context, orgID string) ([]*OrgCustomerBinding, error)
-	Update(ctx context.Context, b *OrgCustomerBinding) error
+	SetStatus(ctx context.Context, binding *OrgCustomerBinding, status BindingStatus) error
+	RequireActive(ctx context.Context, orgID, customerID string) error
 }
 
 // AuditEventStore defines the persistence contract for audit events (REQ-050).

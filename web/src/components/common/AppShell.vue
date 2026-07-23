@@ -1,10 +1,10 @@
 <script setup lang="ts">
-/**
- * AppShell — the persistent layout wrapper for all authenticated pages.
- *
- * Placeholder for now; will be extended with navigation sidebar, top bar,
- * user avatar, and notification bell in subsequent atomic tasks.
- */
+import { computed } from 'vue';
+import { useRoute } from 'vue-router';
+
+const route = useRoute();
+const customerId = computed(() => typeof route.params.customerId === 'string' ? route.params.customerId : '');
+const clusterRoutingEnabled = import.meta.env.VITE_FEATURE_CLUSTER_ROUTING !== 'false';
 </script>
 
 <template>
@@ -12,6 +12,7 @@
     <header class="app-shell__header">
       <h1 class="app-shell__title">Release Manager</h1>
       <nav class="app-shell__nav">
+        <RouterLink v-if="clusterRoutingEnabled && customerId" :to="{ name: 'ClusterList', params: { customerId } }">Clusters</RouterLink>
         <slot name="nav" />
       </nav>
     </header>
