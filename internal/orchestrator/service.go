@@ -34,6 +34,7 @@ import (
 // Service implements the OrchestratorServiceHandler Connect interface.
 type Service struct {
 	store               store.Store
+	createOperation     OperationCreationUnitOfWork
 	verifier            trust.Verifier
 	targetEnv           string
 	coordinator         *preflight.Coordinator
@@ -54,6 +55,7 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 	var auditEmitter audit.Sink
 	var dispatcher emergencyDispatcher
 	var streamRevoker OperatorStreamRevoker
+	var createOperation OperationCreationUnitOfWork
 	operatorEndpoint := "http://operator:8084"
 	logger := slog.Default()
 	var authorizer authorization.Authorizer
@@ -65,6 +67,8 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 			dispatcher = value
 		case OperatorStreamRevoker:
 			streamRevoker = value
+		case OperationCreationUnitOfWork:
+			createOperation = value
 		case string:
 			if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
 				operatorEndpoint = strings.TrimRight(value, "/")
@@ -77,6 +81,7 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 	}
 	return &Service{
 		store:               st,
+		createOperation:     createOperation,
 		verifier:            verifier,
 		emergencyDispatcher: dispatcher,
 		targetEnv:           targetEnv,
@@ -362,6 +367,7 @@ func (s *Service) CreateOperation(
 
 	return connect.NewResponse(s.toResponse(op, &verifyResult)), nil
 }
+
 
 
 // PublishRelease triggers the release pipeline for a definition (skeleton).
@@ -1055,6 +1061,49 @@ func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
 	return fmt.Sprintf("%x", h)
 }
 
+func (s *Service) authorizeOperationActor(ctx context.Context, orgID, userID, customerID string) error {
+	if err := s.store.Bindings().RequireActive(ctx, orgID, customerID); err != nil {
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrBindingRevoked) {
+			return connect.NewError(connect.CodePermissionDenied, errors.New("permission_denied"))
+		}
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("binding check: %w", err))
+	}
+	member, err := s.store.OrgMembers().Get(ctx, orgID, userID)
+	if errors.Is(err, store.ErrNotFound) {
+		return connect.NewError(connect.CodePermissionDenied, errors.New("permission_denied"))
+	}
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("organization member lookup: %w", err))
+	}
+	if member.Role != store.RoleReleaseAdmin && member.Role != store.RolePlatformAdmin {
+		return connect.NewError(connect.CodePermissionDenied, errors.New("permission_denied"))
+	}
+	return nil
+}
+
+
+func (s *Service) checkValuesRevision(ctx context.Context, def *store.ReleaseDefinition, revisionID string) (*store.ValuesRevision, error) {
+	if revisionID == "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("revision_not_approved"))
+	}
+	revision, err := s.store.Values().Get(ctx, revisionID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("revision_mismatch: values_revision not found: %s", revisionID))
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("values revision lookup: %w", err))
+	}
+	if revision.ReleaseDefinitionID != def.ID {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("values_revision %s belongs to release_definition %s", revision.ID, revision.ReleaseDefinitionID))
+	}
+	if revision.Status != store.ValuesStatusApproved {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("revision_not_approved: values_revision %s must be approved", revision.ID))
+	}
+	return revision, nil
+}
+
 // checkCustomerNotDisabled verifies the customer is not disabled.
 // Returns PermissionDenied if the customer is disabled.
 func (s *Service) checkCustomerNotDisabled(ctx context.Context, customerID string) error {
@@ -1119,6 +1168,62 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	}
 }
 
+func (s *Service) checkReleaseState(
+	ctx context.Context,
+	def *store.ReleaseDefinition,
+	opType store.OperationType,
+	expected int,
+) error {
+	installed, err := s.store.Inventories().GetByDefinition(ctx, def.ID)
+	if opType == store.OperationInstall {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return connect.NewError(connect.CodeInternal, fmt.Errorf("inventory lookup: %w", err))
+		}
+		if installed.InventoryStatus == store.InventoryActive {
+			return connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("release_already_exists: installed release exists for definition %s", def.ID))
+		}
+		return nil
+	}
+
+	if expected < 1 {
+		return connect.NewError(connect.CodeInvalidArgument, errors.New("expected_current_revision must be >= 1"))
+	}
+	if errors.Is(err, store.ErrNotFound) || (err == nil && installed.InventoryStatus != store.InventoryActive) {
+		return connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("release_not_found: no installed release for definition %s", def.ID))
+	}
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("inventory lookup: %w", err))
+	}
+	if installed.Revision != expected {
+		return connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("revision_conflict: expected revision %d, but current revision is %d", expected, installed.Revision))
+	}
+	return nil
+}
+
+// chartNameMatches performs a loose match between a chart reference and a chart name.
+// Registry host prefixes (e.g., "registry.example.com/") are stripped from both
+// before comparison (AC-067-03).
+func chartNameMatches(chartRef, chartName string) bool {
+	ref := extractChartName(chartRef)
+	name := extractChartName(chartName)
+	return ref == name
+}
+
+// extractChartName strips the registry host prefix from a chart reference.
+// "registry.example.com/nginx" → "nginx"
+// "nginx" → "nginx"
+func extractChartName(ref string) string {
+	if idx := strings.LastIndex(ref, "/"); idx >= 0 {
+		return ref[idx+1:]
+	}
+	return ref
+}
 // Compile-time check: Service implements the Connect handler interface.
 var _ orchestratorv1connect.OrchestratorServiceHandler = (*Service)(nil)
 

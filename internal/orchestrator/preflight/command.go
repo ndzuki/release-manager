@@ -31,7 +31,7 @@ type CommandPayload struct {
 	ExpectedCurrentRevision int64                      `json:"expected_current_revision,omitempty"`
 	TargetRevision          int64                      `json:"target_revision,omitempty"`
 	Atomic                  bool                       `json:"atomic,omitempty"`
-	ValuesPatch             []byte                     `json:"values_patch,omitempty"`
+	ValuesPatch             json.RawMessage            `json:"values_patch,omitempty"`
 }
 
 // Marshal serializes the payload to JSON bytes.

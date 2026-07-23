@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"strings"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -205,6 +206,21 @@ func (s *operationStore) GetByIdempotencyKey(ctx context.Context, key string) (*
 			actor, created_at, updated_at, terminal_at, deadline, last_error
 		FROM operations WHERE idempotency_key = ?
 	`, key)
+	return scanOperation(row)
+}
+
+// GetByIdempotencyScopeAndKey resolves an operation by idempotency scope and key.
+// Scope is "<orgID>:<definitionID>" (ADR-009); a definition belongs to exactly
+// one organization, so the definitionID segment is the relational key.
+func (s *operationStore) GetByIdempotencyScopeAndKey(ctx context.Context, scope, key string) (*store.Operation, error) {
+	_, defID, _ := strings.Cut(scope, ":")
+	row := s.gorm.QueryRowContext(ctx, `
+		SELECT id, operation_type, status, release_definition_id,
+			idempotency_key, request_hash, state_version,
+			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
+			actor, created_at, updated_at, terminal_at, deadline, last_error
+		FROM operations WHERE release_definition_id = ? AND idempotency_key = ?
+	`, defID, key)
 	return scanOperation(row)
 }
 

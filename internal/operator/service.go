@@ -99,6 +99,13 @@ func WithStreamRegistry(registry *StreamRegistry) Option {
 	}
 }
 
+func loggerOrDefault(logger *slog.Logger) *slog.Logger {
+	if logger != nil {
+		return logger
+	}
+	return slog.Default()
+}
+
 // SetInventorySyncer attaches an inventory syncer for release inventory sync (REQ-017).
 func (s *Service) SetInventorySyncer(syncer *InventorySyncer) {
 	s.inventorySyncer = syncer
@@ -526,11 +533,6 @@ func (s *Service) CommandStream(
 					if err := s.store.Outbox().UpdateStatus(ctx, ack.GetOutboxId(), store.CommandPersisted, ""); err != nil {
 						s.logger.Warn("failed to mark command persisted", "error", err)
 					}
-					if entry, getErr := s.store.Outbox().Get(ctx, ack.GetOutboxId()); getErr == nil && entry.OperationType == "INVENTORY_SYNC" {
-						if updateErr := s.store.InventorySyncRequests().UpdateStatus(ctx, entry.OperationID, store.InventorySyncRunning, ""); updateErr != nil {
-							s.logger.Warn("failed to mark inventory sync running", "error", updateErr)
-						}
-					}
 				}
 
 			case req.GetEmergencyAck() != nil:
@@ -748,6 +750,16 @@ func (s *Service) FinishOperation(ctx context.Context, operationID, resultStatus
 	}
 
 	current := op.Status
+	if current == store.StatusPending {
+		if resultStatus == "failed" {
+			if _, err := s.store.Operations().UpdateStatus(ctx, op.ID, store.StatusFailed, op.StateVersion, resultJSON); err != nil {
+				s.logger.Warn("failed to persist pending preflight failure", "operation_id", operationID, "error", err)
+			}
+			return
+		}
+		s.logger.Warn("ignoring successful command result for pending operation", "operation_id", operationID)
+		return
+	}
 	if current == store.StatusQueued {
 		current, err = operation.Transition(current, operation.EventBegin)
 		if err == nil {
@@ -974,7 +986,7 @@ type commandPayload struct {
 	ExpectedCurrentRevision int64                      `json:"expected_current_revision"`
 	TargetRevision          int64                      `json:"target_revision"`
 	Atomic                  bool                       `json:"atomic"`
-	ValuesPatch             []byte                     `json:"values_patch"`
+	ValuesPatch             json.RawMessage            `json:"values_patch"`
 	PayloadVersion          uint32                     `json:"payload_version"`
 	Upgrade                 *operatorv1.UpgradeCommand `json:"upgrade"`
 }
@@ -1000,7 +1012,7 @@ func DecodeCommandPayload(payload []byte, command *operatorv1.Command) error {
 	command.ExpectedCurrentRevision = envelope.ExpectedCurrentRevision
 	command.TargetRevision = envelope.TargetRevision
 	command.Atomic = envelope.Atomic
-	command.ValuesPatch = envelope.ValuesPatch
+	command.ValuesPatch = []byte(envelope.ValuesPatch)
 	command.PayloadVersion = envelope.PayloadVersion
 	if envelope.Upgrade != nil {
 		command.TypedPayload = &operatorv1.Command_Upgrade{Upgrade: envelope.Upgrade}
@@ -1055,7 +1067,7 @@ func (s *Service) deliverPending(
 					continue
 				}
 				entry.Sequence = seq
-				if err := s.store.Outbox().UpdateSequence(ctx, entry.ID, seq); err != nil {
+				if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPending, ""); err != nil {
 					s.logger.Warn("failed to persist command sequence", "error", err)
 					continue
 				}

@@ -26,6 +26,16 @@ func (s *Service) RollbackRelease(
 	req *connect.Request[orchestratorv1.RollbackReleaseRequest],
 ) (*connect.Response[orchestratorv1.RollbackReleaseResponse], error) {
 	msg := req.Msg
+
+	// 1. Validate actor before any idempotency lookup.
+	if msg.Actor.GetOrganization() == "" || msg.Actor.GetUserId() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("actor organization and user_id are required"))
+	}
+	if msg.IdempotencyKey == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("idempotency_key is required"))
+	}
+
+	// 2. Validate required fields
 	if msg.Reason == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			fmt.Errorf("reason is required for rollback"))
@@ -63,8 +73,10 @@ func (s *Service) RollbackRelease(
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("release_definition %s is %s", def.ID, def.Status))
 	}
+
+	// 4. Authorize the actor against the customer binding and organization role.
 	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
-		return nil, connect.NewError(connect.CodePermissionDenied, err)
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("customer_disabled: %w", err))
 	}
 	if organizationID := msg.Actor.GetOrganization(); organizationID != "" {
 		if err := s.store.Bindings().RequireActive(ctx, organizationID, def.CustomerID); err != nil {
@@ -78,20 +90,12 @@ func (s *Service) RollbackRelease(
 	// 3. Build and persist through the same atomic idempotency gate as create.
 	now := time.Now().UTC()
 	op := &store.Operation{
-		ID:                  uuid.New().String(),
-		OperationType:       store.OperationRollback,
-		Status:              operation.InitialStatus(),
-		ReleaseDefinitionID: msg.ReleaseDefinitionId,
-		IdempotencyKey:      operationIdempotencyKey(operationScope, msg.IdempotencyKey),
-		RequestHash:         requestHash,
-		ExpectedRevision:    int(msg.ExpectedCurrentRevision),
-		TargetRevision:      int(msg.TargetRevision),
-		Actor: store.ActorContext{
-			UserID:       msg.Actor.GetUserId(),
-			Organization: msg.Actor.GetOrganization(),
-		},
-		CreatedAt: now,
-		UpdatedAt: now,
+	ID: uuid.New().String(), OperationType: store.OperationRollback, Status: operation.InitialStatus(),
+	ReleaseDefinitionID: msg.ReleaseDefinitionId, IdempotencyKey: msg.IdempotencyKey,
+	IdempotencyScope: operationScope, RequestHash: requestHash,
+	ExpectedRevision: int(msg.ExpectedCurrentRevision), TargetRevision: int(msg.TargetRevision), Reason: msg.Reason,
+	Actor:     store.ActorContext{UserID: msg.Actor.GetUserId(), Organization: msg.Actor.GetOrganization()},
+	CreatedAt: now, UpdatedAt: now,
 	}
 	createResult, err := s.store.Operations().CreateIdempotent(ctx, store.OperationCreateCommand{
 		Operation: op,

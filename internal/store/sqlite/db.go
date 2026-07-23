@@ -473,10 +473,19 @@ var migrationStatements = []string{
 		deadline             TEXT,
 		last_error           TEXT NOT NULL DEFAULT ''
 	)`,
-	// Migration: add target_revision for ROLLBACK operations.
+	// Migration: add ROLLBACK and summary columns (superset of v3 branch contract).
 	`ALTER TABLE operations ADD COLUMN target_revision INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE operations ADD COLUMN target_operation_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE operations ADD COLUMN terminal_at TEXT`,
+	`ALTER TABLE operations ADD COLUMN idempotency_scope TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE operations ADD COLUMN bundle_chart_ref TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE operations ADD COLUMN bundle_chart_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE operations ADD COLUMN image_refs_json BLOB NOT NULL DEFAULT '[]'`,
+	`ALTER TABLE operations ADD COLUMN image_digests_json BLOB NOT NULL DEFAULT '[]'`,
+	`ALTER TABLE operations ADD COLUMN policy_version TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE operations ADD COLUMN patch_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE operations ADD COLUMN effective_values_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE operations ADD COLUMN reason TEXT NOT NULL DEFAULT ''`,
 	`UPDATE operations
 	 SET terminal_at = updated_at
 	 WHERE status IN ('succeeded', 'failed', 'cancelled', 'timeout') AND terminal_at IS NULL`,
@@ -971,6 +980,7 @@ var migrationStatements = []string{
 
 	// Artifact lifecycle (REQ-069) — ALTER TABLEs are idempotent (migrate() skips "duplicate column").
 	`ALTER TABLE release_bundles ADD COLUMN archived_at TEXT`,
+	`ALTER TABLE release_bundles ADD COLUMN archived_from_status TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE release_definitions ADD COLUMN current_bundle_id TEXT`,
 
 	// Candidate artifacts (REQ-069)
@@ -985,6 +995,15 @@ var migrationStatements = []string{
 	)`,
 	`ALTER TABLE candidate_artifacts ADD COLUMN validated_at TEXT`,
 	`ALTER TABLE candidate_artifacts ADD COLUMN source_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE candidate_artifacts ADD COLUMN orphaned_at TEXT`,
+	`CREATE TABLE IF NOT EXISTS bundle_candidate_artifacts (
+		bundle_id   TEXT NOT NULL REFERENCES release_bundles(id) ON DELETE CASCADE,
+		artifact_id TEXT NOT NULL REFERENCES candidate_artifacts(id) ON DELETE CASCADE,
+		linked_at   TEXT NOT NULL,
+		orphaned_at TEXT,
+		PRIMARY KEY (bundle_id, artifact_id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_bundle_candidate_artifacts_artifact ON bundle_candidate_artifacts(artifact_id)`,
 
 	// Emergency changes and explicit convergence (REQ-032).
 	`CREATE TABLE IF NOT EXISTS emergency_intents (

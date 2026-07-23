@@ -44,6 +44,8 @@ var (
 	ErrAuditUnavailable          = errors.New("store: audit unavailable")
 	ErrEmergencyConflict         = errors.New("store: conflicting emergency target")
 	ErrAuthorizationStale        = errors.New("store: authorization source version changed")
+	ErrBundleNotReady            = errors.New("store: bundle not ready")
+	ErrBundleRejected            = errors.New("store: bundle rejected")
 )
 
 // StateVersionConflictError reports the current revision version after a failed CAS.
@@ -142,7 +144,7 @@ func (s OperationStatus) IsTerminal() bool {
 func (s OperationStatus) CanTransitionTo(target OperationStatus) bool {
 	switch s {
 	case StatusPending:
-		return target == StatusPreflight || target == StatusQueued || target == StatusCancelled || target == StatusTimeout
+		return target == StatusPreflight || target == StatusQueued || target == StatusFailed || target == StatusCancelled || target == StatusTimeout
 	case StatusPreflight:
 		return target == StatusQueued || target == StatusFailed || target == StatusCancelled || target == StatusTimeout
 	case StatusQueued:
@@ -183,26 +185,57 @@ type ActorContext struct {
 }
 
 type Operation struct {
-	ID                  string          `json:"id"`
-	OperationType       OperationType   `json:"operation_type"`
-	Status              OperationStatus `json:"status"`
-	ReleaseDefinitionID string          `json:"release_definition_id"`
-	IdempotencyKey      string          `json:"idempotency_key"`
-	RequestHash         string          `json:"request_hash"`
-	StateVersion        int             `json:"state_version"`
-	BundleID            string          `json:"bundle_id"`
-	ValuesRevisionID    string          `json:"values_revision_id"`
-	ExpectedRevision    int             `json:"expected_revision"`
-	TargetRevision      int             `json:"target_revision,omitempty"`
-	TargetOperationID   string          `json:"target_operation_id,omitempty"`
-	ValuesPatch         []byte          `json:"values_patch,omitempty"`
-	Actor               ActorContext    `json:"actor"`
-	CreatedAt           time.Time       `json:"created_at"`
-	UpdatedAt           time.Time       `json:"updated_at"`
-	Deadline            *time.Time      `json:"deadline,omitempty"`
-	TerminalAt          *time.Time      `json:"terminal_at,omitempty"`
-	LastError           string          `json:"last_error,omitempty"`
+	ID                    string          `json:"id"`
+	OperationType         OperationType   `json:"operation_type"`
+	Status                OperationStatus `json:"status"`
+	ReleaseDefinitionID   string          `json:"release_definition_id"`
+	IdempotencyKey        string          `json:"idempotency_key"`
+	IdempotencyScope      string          `json:"idempotency_scope"`
+	RequestHash           string          `json:"request_hash"`
+	StateVersion          int             `json:"state_version"`
+	BundleID              string          `json:"bundle_id"`
+	BundleChartRef        string          `json:"bundle_chart_ref,omitempty"`
+	BundleChartDigest     string          `json:"bundle_chart_digest,omitempty"`
+	ImageRefsJSON         []byte          `json:"image_refs_json,omitempty"`
+	ImageDigestsJSON      []byte          `json:"image_digests_json,omitempty"`
+	PolicyVersion         string          `json:"policy_version,omitempty"`
+	ValuesRevisionID      string          `json:"values_revision_id"`
+	ExpectedRevision      int             `json:"expected_revision"`
+	TargetRevision        int             `json:"target_revision,omitempty"`
+	TargetOperationID     string          `json:"target_operation_id,omitempty"`
+	ValuesPatch           []byte          `json:"values_patch,omitempty"`
+	PatchDigest           string          `json:"patch_digest,omitempty"`
+	EffectiveValuesDigest string          `json:"effective_values_digest,omitempty"`
+	Reason                string          `json:"reason,omitempty"`
+	Actor                 ActorContext    `json:"actor"`
+	CreatedAt             time.Time       `json:"created_at"`
+	UpdatedAt             time.Time       `json:"updated_at"`
+	Deadline              *time.Time      `json:"deadline,omitempty"`
+	TerminalAt            *time.Time      `json:"terminal_at,omitempty"`
+	LastError             string          `json:"last_error,omitempty"`
 }
+
+// OperationCreationRequest contains the durable records and artifact links that
+// must be committed atomically when a standard operation is created.
+type OperationCreationRequest struct {
+	Operation                *Operation
+	Dispatch                 *OutboxEntry
+	CandidateArtifactDigests []string
+}
+
+// OperationCreationResult reports the records affected by operation creation.
+type OperationCreationResult struct {
+	Operation            *Operation
+	BundleRestored       bool
+	LinkedCandidateCount int64
+}
+
+// OperationCreationUnitOfWork atomically creates an operation, persists its
+// preflight dispatch, selects its bundle, and links candidate artifacts.
+type OperationCreationUnitOfWork func(
+	ctx context.Context,
+	req OperationCreationRequest,
+) (*OperationCreationResult, error)
 
 // OperationCreateCommand contains one atomic operation creation and idempotency intent.
 type OperationCreateCommand struct {
@@ -1440,6 +1473,7 @@ type OperationStore interface {
 	CreateIdempotent(ctx context.Context, command OperationCreateCommand) (*OperationCreateResult, error)
 	Get(ctx context.Context, id string) (*Operation, error)
 	GetByIdempotencyKey(ctx context.Context, key string) (*Operation, error)
+	GetByIdempotencyScopeAndKey(ctx context.Context, scope, key string) (*Operation, error)
 	UpdateStatus(ctx context.Context, id string, status OperationStatus, stateVersion int, lastError string) (*Operation, error)
 	Transition(ctx context.Context, id string, status OperationStatus, stateVersion int, lastError string) (*Operation, error)
 	GetCancelReplay(ctx context.Context, query OperationCancelReplayQuery) (*OperationCancelResult, error)
@@ -1995,6 +2029,7 @@ type CandidateArtifactStore interface {
 	UpsertLocationTx(tx *gorm.DB, artifactID, ref, sourceID string, now time.Time) error
 	LinkToBundleTx(tx *gorm.DB, bundleID string, digests []ArtifactDigest) error
 	DeleteOrphanBefore(ctx context.Context, cutoff time.Time, limit ...int) (int64, error)
+	LinkCandidateArtifacts(ctx context.Context, bundleID string, digests []string) (int64, error)
 }
 
 // ArtifactEventStore persists externally observed artifact events.
