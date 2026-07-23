@@ -218,6 +218,7 @@ type Cluster struct {
 	Status        ClusterStatus `json:"status"`
 	CreatedAt     time.Time     `json:"created_at"`
 	UpdatedAt     time.Time     `json:"updated_at"`
+	Version       int64         `json:"version"`
 }
 
 // EnrollmentToken is a single-use token for operator registration.
@@ -845,7 +846,7 @@ type CustomerEventStore interface {
 type ClusterStore interface {
 	Create(ctx context.Context, c *Cluster) error
 	Get(ctx context.Context, id string) (*Cluster, error)
-	Update(ctx context.Context, c *Cluster) error
+	Update(ctx context.Context, c *Cluster, expectedVersion int64) error
 	List(ctx context.Context, customerID string) ([]*Cluster, error)
 	ListAll(ctx context.Context) ([]*Cluster, error)
 }

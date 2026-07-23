@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { useRouter } from 'vue-router';
+import { computed } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import OrganizationSwitcher from './OrganizationSwitcher.vue';
 
+const route = useRoute();
 const auth = useAuthStore();
 const router = useRouter();
+const customerId = computed(() => typeof route.params.customerId === 'string' ? route.params.customerId : '');
+const clusterRoutingEnabled = import.meta.env.VITE_FEATURE_CLUSTER_ROUTING !== 'false';
 
 async function handleLogout(): Promise<void> {
   await auth.logout();
@@ -18,6 +22,8 @@ async function handleLogout(): Promise<void> {
       <RouterLink class="app-shell__brand" :to="{ name: 'Home' }">Release Manager</RouterLink>
       <nav class="app-shell__nav" aria-label="Primary navigation">
         <RouterLink :to="{ name: 'Home' }">Home</RouterLink>
+        <RouterLink v-if="clusterRoutingEnabled && customerId" :to="{ name: 'ClusterList', params: { customerId } }">Clusters</RouterLink>
+        <slot name="nav" />
       </nav>
       <div class="app-shell__session">
         <OrganizationSwitcher />

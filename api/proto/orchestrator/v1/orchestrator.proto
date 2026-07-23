@@ -178,6 +178,19 @@ message CreateClusterResponse {
   common.v1.Cluster cluster = 1;
 }
 
+message UpdateClusterRequest {
+  string cluster_id = 1;
+  string name = 2;
+  bool enabled = 3;
+  int64 version = 4;
+  repeated ClusterRouteInput routes = 5;
+}
+
+message UpdateClusterResponse {
+  common.v1.Cluster cluster = 1;
+  repeated ClusterRoute routes = 2;
+}
+
 message GetClusterRequest {
   string cluster_id = 1;
 }
@@ -239,6 +252,22 @@ message ClusterRoute {
   string target_prefix = 6;
 }
 
+message ClusterRouteInput {
+  string id = 1;
+  ArtifactType artifact_type = 2;
+  ArtifactMode mode = 3;
+  string source_prefix = 4;
+  string target_prefix = 5;
+  string provider = 6;
+}
+
+message RouteValidationDetail {
+  string error_code = 1;
+  string field = 2;
+  string description = 3;
+  string conflicting_rule_id = 4;
+}
+
 message ConfigureClusterRouteRequest {
   string id = 1;
   string cluster_id = 2;
@@ -288,6 +317,7 @@ service OrchestratorService {
 
   // Cluster management
   rpc CreateCluster(CreateClusterRequest) returns (CreateClusterResponse);
+  rpc UpdateCluster(UpdateClusterRequest) returns (UpdateClusterResponse);
   rpc GetCluster(GetClusterRequest) returns (GetClusterResponse);
   rpc ListClusters(ListClustersRequest) returns (ListClustersResponse);
   rpc DisableCluster(DisableClusterRequest) returns (DisableClusterResponse);

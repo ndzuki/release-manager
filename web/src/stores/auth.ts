@@ -31,6 +31,7 @@ export const useAuthStore = defineStore('auth', () => {
   const activeOrganization = computed(
     () => organizations.value.find((organization) => organization.id === user.value?.activeOrgId) ?? null,
   );
+  const canWrite = computed(() => !user.value?.roles.some((role) => role.toLowerCase() === 'viewer'));
 
   function applySession(payload: SessionPayload): void {
     if (!payload.user) {
@@ -159,6 +160,7 @@ export const useAuthStore = defineStore('auth', () => {
     forbiddenMessage,
     isAuthenticated,
     activeOrganization,
+    canWrite,
     initialize,
     initializeSystem,
     login,

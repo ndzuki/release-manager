@@ -75,6 +75,9 @@ const (
 	// OrchestratorServiceCreateClusterProcedure is the fully-qualified name of the
 	// OrchestratorService's CreateCluster RPC.
 	OrchestratorServiceCreateClusterProcedure = "/orchestrator.v1.OrchestratorService/CreateCluster"
+	// OrchestratorServiceUpdateClusterProcedure is the fully-qualified name of the
+	// OrchestratorService's UpdateCluster RPC.
+	OrchestratorServiceUpdateClusterProcedure = "/orchestrator.v1.OrchestratorService/UpdateCluster"
 	// OrchestratorServiceGetClusterProcedure is the fully-qualified name of the OrchestratorService's
 	// GetCluster RPC.
 	OrchestratorServiceGetClusterProcedure = "/orchestrator.v1.OrchestratorService/GetCluster"
@@ -124,6 +127,7 @@ type OrchestratorServiceClient interface {
 	DisableCustomer(context.Context, *connect.Request[v1.DisableCustomerRequest]) (*connect.Response[v1.DisableCustomerResponse], error)
 	// Cluster management
 	CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.CreateClusterResponse], error)
+	UpdateCluster(context.Context, *connect.Request[v1.UpdateClusterRequest]) (*connect.Response[v1.UpdateClusterResponse], error)
 	GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error)
 	ListClusters(context.Context, *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error)
 	DisableCluster(context.Context, *connect.Request[v1.DisableClusterRequest]) (*connect.Response[v1.DisableClusterResponse], error)
@@ -234,6 +238,12 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("CreateCluster")),
 			connect.WithClientOptions(opts...),
 		),
+		updateCluster: connect.NewClient[v1.UpdateClusterRequest, v1.UpdateClusterResponse](
+			httpClient,
+			baseURL+OrchestratorServiceUpdateClusterProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("UpdateCluster")),
+			connect.WithClientOptions(opts...),
+		),
 		getCluster: connect.NewClient[v1.GetClusterRequest, v1.GetClusterResponse](
 			httpClient,
 			baseURL+OrchestratorServiceGetClusterProcedure,
@@ -307,6 +317,7 @@ type orchestratorServiceClient struct {
 	updateCustomer           *connect.Client[v1.UpdateCustomerRequest, v1.UpdateCustomerResponse]
 	disableCustomer          *connect.Client[v1.DisableCustomerRequest, v1.DisableCustomerResponse]
 	createCluster            *connect.Client[v1.CreateClusterRequest, v1.CreateClusterResponse]
+	updateCluster            *connect.Client[v1.UpdateClusterRequest, v1.UpdateClusterResponse]
 	getCluster               *connect.Client[v1.GetClusterRequest, v1.GetClusterResponse]
 	listClusters             *connect.Client[v1.ListClustersRequest, v1.ListClustersResponse]
 	disableCluster           *connect.Client[v1.DisableClusterRequest, v1.DisableClusterResponse]
@@ -388,6 +399,11 @@ func (c *orchestratorServiceClient) CreateCluster(ctx context.Context, req *conn
 	return c.createCluster.CallUnary(ctx, req)
 }
 
+// UpdateCluster calls orchestrator.v1.OrchestratorService.UpdateCluster.
+func (c *orchestratorServiceClient) UpdateCluster(ctx context.Context, req *connect.Request[v1.UpdateClusterRequest]) (*connect.Response[v1.UpdateClusterResponse], error) {
+	return c.updateCluster.CallUnary(ctx, req)
+}
+
 // GetCluster calls orchestrator.v1.OrchestratorService.GetCluster.
 func (c *orchestratorServiceClient) GetCluster(ctx context.Context, req *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error) {
 	return c.getCluster.CallUnary(ctx, req)
@@ -454,6 +470,7 @@ type OrchestratorServiceHandler interface {
 	DisableCustomer(context.Context, *connect.Request[v1.DisableCustomerRequest]) (*connect.Response[v1.DisableCustomerResponse], error)
 	// Cluster management
 	CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.CreateClusterResponse], error)
+	UpdateCluster(context.Context, *connect.Request[v1.UpdateClusterRequest]) (*connect.Response[v1.UpdateClusterResponse], error)
 	GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error)
 	ListClusters(context.Context, *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error)
 	DisableCluster(context.Context, *connect.Request[v1.DisableClusterRequest]) (*connect.Response[v1.DisableClusterResponse], error)
@@ -560,6 +577,12 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("CreateCluster")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orchestratorServiceUpdateClusterHandler := connect.NewUnaryHandler(
+		OrchestratorServiceUpdateClusterProcedure,
+		svc.UpdateCluster,
+		connect.WithSchema(orchestratorServiceMethods.ByName("UpdateCluster")),
+		connect.WithHandlerOptions(opts...),
+	)
 	orchestratorServiceGetClusterHandler := connect.NewUnaryHandler(
 		OrchestratorServiceGetClusterProcedure,
 		svc.GetCluster,
@@ -644,6 +667,8 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceDisableCustomerHandler.ServeHTTP(w, r)
 		case OrchestratorServiceCreateClusterProcedure:
 			orchestratorServiceCreateClusterHandler.ServeHTTP(w, r)
+		case OrchestratorServiceUpdateClusterProcedure:
+			orchestratorServiceUpdateClusterHandler.ServeHTTP(w, r)
 		case OrchestratorServiceGetClusterProcedure:
 			orchestratorServiceGetClusterHandler.ServeHTTP(w, r)
 		case OrchestratorServiceListClustersProcedure:
@@ -725,6 +750,10 @@ func (UnimplementedOrchestratorServiceHandler) DisableCustomer(context.Context, 
 
 func (UnimplementedOrchestratorServiceHandler) CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.CreateClusterResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.CreateCluster is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) UpdateCluster(context.Context, *connect.Request[v1.UpdateClusterRequest]) (*connect.Response[v1.UpdateClusterResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.UpdateCluster is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error) {
