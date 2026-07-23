@@ -34,7 +34,9 @@ onMounted(() => store.loadList(customerId));
       <button type="button" @click="store.loadList(customerId)">Retry</button>
     </ErrorState>
     <EmptyState v-else-if="!store.hasClusters" message="No clusters are configured for this customer.">
-      <RouterLink v-if="auth.canWrite" :to="{ name: 'ClusterNew', params: { customerId } }" class="primary">Create the first cluster</RouterLink>
+      <template #action>
+        <RouterLink v-if="auth.canWrite" :to="{ name: 'ClusterNew', params: { customerId } }" class="primary">Create the first cluster</RouterLink>
+      </template>
     </EmptyState>
 
     <div v-else class="cluster-content">
