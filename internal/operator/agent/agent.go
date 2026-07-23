@@ -14,11 +14,13 @@ import (
 
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
+	"github.com/ndzuki/release-manager/internal/operator/commandtype"
 	"github.com/ndzuki/release-manager/internal/operator/helmengine"
 	operatork8s "github.com/ndzuki/release-manager/internal/operator/k8s"
 	"github.com/ndzuki/release-manager/internal/operator/localstore"
 	"google.golang.org/protobuf/encoding/protojson"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+	"github.com/ndzuki/release-manager/internal/operator/secretmetadata"
 )
 
 const defaultInstallTimeout = 5 * time.Minute
@@ -60,6 +62,7 @@ type Agent struct {
 	syncExecutor      InventorySyncExecutor
 	secrets           corev1client.CoreV1Interface
 	emergencyExecutor EmergencyExecutor
+	secretLister      secretmetadata.Lister
 	sessionID         string
 	operatorID        string
 	logger            *slog.Logger
@@ -81,6 +84,7 @@ type Config struct {
 	SyncExecutor      InventorySyncExecutor
 	Secrets           corev1client.CoreV1Interface
 	EmergencyExecutor EmergencyExecutor
+	SecretLister      secretmetadata.Lister
 	SessionID         string
 	OperatorID        string
 	Logger            *slog.Logger
@@ -97,6 +101,7 @@ type Result struct {
 	Code            string                    `json:"code,omitempty"`
 	Message         string                    `json:"message,omitempty"`
 	Release         *helmengine.Release       `json:"release,omitempty"`
+	Secrets         []secretmetadata.Secret   `json:"secrets,omitempty"`
 	InventorySync   bool                      `json:"inventory_sync_hint"`
 	ResourceSummary ResourceSummary           `json:"resource_summary"`
 }
@@ -137,6 +142,7 @@ func New(cfg Config) (*Agent, error) {
 		syncExecutor:      cfg.SyncExecutor,
 		secrets:           cfg.Secrets,
 		emergencyExecutor: cfg.EmergencyExecutor,
+		secretLister:      cfg.SecretLister,
 		sessionID:         cfg.SessionID,
 		operatorID:        cfg.OperatorID,
 		logger:            logger,
@@ -436,6 +442,8 @@ func (a *Agent) execute(ctx context.Context, command *operatorv1.Command) Result
 		return a.executeRollback(ctx, command)
 	case "INVENTORY_SYNC":
 		return a.executeInventorySync(ctx, command)
+	case commandtype.SecretMetadataList:
+		return a.executeSecretMetadataList(ctx, command)
 	default:
 		result.Code = "unsupported_command"
 		result.Message = fmt.Sprintf("unsupported command type %q", command.GetOperationType())
@@ -461,6 +469,29 @@ func (a *Agent) executeInventorySync(ctx context.Context, command *operatorv1.Co
 	}
 	result.Status = "succeeded"
 	result.InventorySync = true
+	return result
+}
+
+func (a *Agent) executeSecretMetadataList(ctx context.Context, command *operatorv1.Command) Result {
+	result := Result{
+		OperationID:  command.GetOperationId(),
+		CommandID:    command.GetCommandId(),
+		DefinitionID: command.GetDefinitionId(),
+		Status:       "failed",
+	}
+	if a.secretLister == nil {
+		result.Code = "secret_metadata_unavailable"
+		result.Message = "secret metadata lister is unavailable"
+		return result
+	}
+	secrets, err := a.secretLister.List(ctx, command.GetNamespace())
+	if err != nil {
+		result.Code = "secret_metadata_list_failed"
+		result.Message = err.Error()
+		return result
+	}
+	result.Status = "succeeded"
+	result.Secrets = secrets
 	return result
 }
 
@@ -693,6 +724,27 @@ func (a *Agent) executeRollback(ctx context.Context, command *operatorv1.Command
 	return result
 }
 
+// mergeValues applies a JSON merge patch to base values in-place.
+func mergeValues(base, patch map[string]interface{}) {
+	for k, v := range patch {
+		if v == nil {
+			delete(base, k)
+			continue
+		}
+		existing, ok := base[k]
+		if !ok || existing == nil {
+			base[k] = v
+			continue
+		}
+		if srcMap, ok := v.(map[string]interface{}); ok {
+			if dstMap, ok := existing.(map[string]interface{}); ok {
+				mergeValues(dstMap, srcMap)
+				continue
+			}
+		}
+		base[k] = v
+	}
+}
 func (a *Agent) finishFailure(ctx context.Context, stream Stream, entry *localstore.CommandEntry, result Result) error {
 	resultJSON, err := json.Marshal(result)
 	if err != nil {
@@ -886,7 +938,6 @@ func rollbackErrorCode(err error) string {
 		return "helm_rollback_failed"
 	}
 }
-
 // ConnectClient adapts the generated Connect client to StreamClient.
 type ConnectClient struct {
 	Client operatorv1connect.OperatorServiceClient

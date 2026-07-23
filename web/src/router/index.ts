@@ -3,8 +3,9 @@ import type { Router, RouterHistory, RouteLocationRaw } from 'vue-router';
 import { setForbiddenNavigator, useAuthStore } from '@/stores/auth';
 
 export function createAppRouter(
-	history: RouterHistory = createWebHistory(),
-	releaseInventoryEnabled = import.meta.env.VITE_ENABLE_RELEASE_INVENTORY !== 'false',
+  history: RouterHistory = createWebHistory(),
+  releaseInventoryEnabled = import.meta.env.VITE_ENABLE_RELEASE_INVENTORY !== 'false',
+  valuesRevisionEnabled = import.meta.env.VITE_ENABLE_VALUES_REVISION !== 'false',
 ): Router {
   return createRouter({
     history,
@@ -32,6 +33,14 @@ export function createAppRouter(
             path: '/customers/:customerId/clusters/:clusterId/releases',
             name: 'ReleaseInventory',
             component: () => import('@/pages/ReleaseInventoryPage.vue'),
+            meta: { requiresAuth: true },
+          }]
+        : []),
+      ...(releaseInventoryEnabled && valuesRevisionEnabled
+        ? [{
+            path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/values',
+            name: 'ValuesEditor',
+            component: () => import('@/pages/ValuesEditorPage.vue'),
             meta: { requiresAuth: true },
           }]
         : []),

@@ -599,6 +599,51 @@ func TestValuesRevisionCreateAndGet(t *testing.T) {
 	assert.Equal(t, 1, got.Revision)
 }
 
+func TestValuesRevisionCreateIfParentVersionPersistsMetadataAndRejectsSiblingDraft(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	parent := &store.ValuesRevision{
+		ID: uuid.NewString(), ReleaseDefinitionID: def.ID, Revision: 1, Version: 3,
+		Status: store.ValuesStatusApproved, Values: []byte(`{"key":"parent"}`), Digest: "sha256:parent",
+	}
+	require.NoError(t, st.Values().Create(ctx, parent))
+
+	first := &store.ValuesRevision{
+		ID: uuid.NewString(), ReleaseDefinitionID: def.ID, Status: store.ValuesStatusDraft,
+		Values: []byte(`{"key":"draft"}`), Digest: "sha256:draft", ParentRevisionID: parent.ID,
+		SecretRefs: []byte(`[{"path":".database.password","name":"database","key":"password"}]`), CreatedBy: "creator-1",
+	}
+	require.NoError(t, st.Values().CreateIfParentVersion(ctx, first, parent.Version))
+	assert.Equal(t, 2, first.Revision)
+	assert.Equal(t, 1, first.Version)
+	persisted, err := st.Values().Get(ctx, first.ID)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(first.SecretRefs), string(persisted.SecretRefs))
+
+	second := &store.ValuesRevision{
+		ID: uuid.NewString(), ReleaseDefinitionID: def.ID, Status: store.ValuesStatusDraft,
+		Values: []byte(`{"key":"other"}`), Digest: "sha256:other", ParentRevisionID: parent.ID,
+	}
+	err = st.Values().CreateIfParentVersion(ctx, second, parent.Version)
+	assert.ErrorIs(t, err, store.ErrOptimisticLock)
+}
+
+func TestValuesRevisionGetLatestApproved(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	for revision, status := range []store.ValuesStatus{store.ValuesStatusApproved, store.ValuesStatusDraft, store.ValuesStatusApproved} {
+		require.NoError(t, st.Values().Create(ctx, &store.ValuesRevision{
+			ID: uuid.NewString(), ReleaseDefinitionID: def.ID, Revision: revision + 1,
+			Status: status, Values: []byte(`{}`), Digest: fmt.Sprintf("sha256:%d", revision+1),
+		}))
+	}
+	latest, err := st.Values().GetLatestApproved(ctx, def.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 3, latest.Revision)
+}
+
 func TestValuesRevisionGetByDigest(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()

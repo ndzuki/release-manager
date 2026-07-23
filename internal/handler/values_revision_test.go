@@ -29,6 +29,28 @@ func (s *stubValuesStore) Create(_ context.Context, vr *store.ValuesRevision) er
 	return nil
 }
 
+func (s *stubValuesStore) CreateIfParentVersion(_ context.Context, vr *store.ValuesRevision, expectedParentVersion int) error {
+	if vr.ParentRevisionID != "" {
+		parent, ok := s.items[vr.ParentRevisionID]
+		if !ok || (expectedParentVersion > 0 && parent.Version != expectedParentVersion) {
+			return store.ErrOptimisticLock
+		}
+	} else if expectedParentVersion != 0 {
+		return store.ErrOptimisticLock
+	}
+	if vr.Version == 0 {
+		vr.Version = 1
+	}
+	vr.Revision = 1
+	for _, item := range s.items {
+		if item.ReleaseDefinitionID == vr.ReleaseDefinitionID && item.Revision >= vr.Revision {
+			vr.Revision = item.Revision + 1
+		}
+	}
+	s.items[vr.ID] = vr
+	return nil
+}
+
 func (s *stubValuesStore) Get(_ context.Context, id string) (*store.ValuesRevision, error) {
 	vr, ok := s.items[id]
 	if !ok {

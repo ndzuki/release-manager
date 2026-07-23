@@ -138,11 +138,11 @@ func (s *BindingService) RevokeBinding(
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("revoke binding: %w", err))
 	}
-	binding, err = s.getBinding(ctx, binding.ID)
+	updated, err := s.getBinding(ctx, binding.ID)
 	if err != nil {
 		return nil, err
 	}
-	return connect.NewResponse(&authv1.RevokeBindingResponse{Binding: toProtoBinding(binding)}), nil
+	return connect.NewResponse(&authv1.RevokeBindingResponse{Binding: toProtoBinding(updated)}), nil
 }
 
 func (s *BindingService) validateWritableTarget(ctx context.Context, orgID, customerID string) error {
@@ -184,11 +184,11 @@ func (s *BindingService) handleExistingBinding(
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("reactivate binding: %w", err))
 	}
-	binding, err := s.getBinding(ctx, binding.ID)
+	updated, err := s.getBinding(ctx, binding.ID)
 	if err != nil {
 		return nil, err
 	}
-	return connect.NewResponse(&authv1.CreateBindingResponse{Binding: toProtoBinding(binding)}), nil
+	return connect.NewResponse(&authv1.CreateBindingResponse{Binding: toProtoBinding(updated)}), nil
 }
 
 func (s *BindingService) getBinding(ctx context.Context, bindingID string) (*store.OrgCustomerBinding, error) {

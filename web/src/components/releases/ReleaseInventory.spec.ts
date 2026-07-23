@@ -18,9 +18,11 @@ describe('release inventory presentation', () => {
     const wrapper = mount(ReleaseInventoryTable, {
       props: {
         releases: [
-          { namespace: 'apps', name: 'api', chart: 'api', chartVersion: '1.0.0', revision: 1, status: 'active', valuesDigest: 'sha256:a', lastSyncAt: null },
-          { namespace: 'system', name: 'api', chart: 'api', chartVersion: '1.0.0', revision: 2, status: 'missing', valuesDigest: 'sha256:b', lastSyncAt: null },
+          { releaseDefinitionId: 'definition-a', namespace: 'apps', name: 'api', chart: 'api', chartVersion: '1.0.0', revision: 1, status: 'active', valuesDigest: 'sha256:a', lastSyncAt: null },
+          { releaseDefinitionId: 'definition-b', namespace: 'system', name: 'api', chart: 'api', chartVersion: '1.0.0', revision: 2, status: 'missing', valuesDigest: 'sha256:b', lastSyncAt: null },
         ],
+        customerId: 'customer-1',
+        clusterId: 'cluster-1',
       },
     });
 

@@ -20,6 +20,7 @@ import (
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/operator/ca"
+	"github.com/ndzuki/release-manager/internal/operator/commandtype"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/store"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -496,11 +497,11 @@ func (s *Service) CommandStream(
 				if err := s.store.Outbox().UpdateStatus(ctx, result.GetOutboxId(), status, resultJSON); err != nil {
 					s.logger.Warn("failed to persist command result", "error", err)
 				}
-				if existing != nil && existing.OperationType == "INVENTORY_SYNC" {
+				if existing != nil && existing.OperationType == commandtype.InventorySync {
 					if err := s.store.InventorySyncRequests().UpdateStatus(ctx, existing.OperationID, requestStatus, result.GetMessage()); err != nil {
 						s.logger.Warn("failed to persist inventory sync result", "error", err)
 					}
-				} else if existing != nil {
+				} else if existing != nil && existing.OperationType != commandtype.SecretMetadataList {
 					s.FinishOperation(ctx, existing.OperationID, result.GetStatus(), resultJSON)
 				}
 

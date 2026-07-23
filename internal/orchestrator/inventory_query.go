@@ -12,14 +12,14 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	"github.com/ndzuki/release-manager/internal/operator/commandtype"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
 const (
-	defaultReleasePageSize     = 50
-	maxReleasePageSize         = 200
-	maxReleaseNameSearch       = 253
-	inventorySyncOperationType = "INVENTORY_SYNC"
+	defaultReleasePageSize = 50
+	maxReleasePageSize     = 200
+	maxReleaseNameSearch   = 253
 )
 
 type inventorySyncCommandPayload struct {
@@ -94,13 +94,14 @@ func (s *Service) ListReleases(
 	}
 	for _, item := range page.Items {
 		summary := &orchestratorv1.ReleaseSummary{
-			Namespace:    item.Namespace,
-			Name:         item.ReleaseName,
-			Chart:        item.Chart,
-			ChartVersion: item.ChartVersion,
-			Revision:     int32(item.Revision), //nolint:gosec // Helm revisions are bounded integers
-			Status:       inventoryStatusToProto(item.InventoryStatus),
-			ValuesDigest: item.ValuesDigest,
+			ReleaseDefinitionId: item.ReleaseDefinitionID,
+			Namespace:           item.Namespace,
+			Name:                item.ReleaseName,
+			Chart:               item.Chart,
+			ChartVersion:        item.ChartVersion,
+			Revision:            int32(item.Revision), //nolint:gosec // Helm revisions are bounded integers
+			Status:              inventoryStatusToProto(item.InventoryStatus),
+			ValuesDigest:        item.ValuesDigest,
 		}
 		if !page.LastSyncAt.IsZero() {
 			summary.LastSyncAt = timestamppb.New(page.LastSyncAt)
@@ -174,7 +175,7 @@ func (s *Service) TriggerInventorySync(
 		ID:            outboxID,
 		CommandID:     commandID,
 		OperationID:   requestID,
-		OperationType: inventorySyncOperationType,
+		OperationType: commandtype.InventorySync,
 		OperatorID:    operator.ID,
 		Payload:       payload,
 		MaxInFlight:   1,

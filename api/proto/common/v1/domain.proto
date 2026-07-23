@@ -117,6 +117,7 @@ enum ValuesStatus {
   VALUES_STATUS_REJECTED = 3;
   VALUES_STATUS_PENDING_APPROVAL = 4;
   VALUES_STATUS_SUPERSEDED = 5;
+||||||| parent of 92a0d2b (feat: ValuesRevision edit/approve frontend and backend (TASK-055))
 }
 
 // ValuesRevision stores the desired configuration for a release target.
@@ -134,6 +135,7 @@ message ValuesRevision {
   string created_by_user_id = 11;
   google.protobuf.Timestamp submitted_at = 12;
   google.protobuf.Timestamp decided_at = 13;
+||||||| parent of 92a0d2b (feat: ValuesRevision edit/approve frontend and backend (TASK-055))
 }
 
 // SecretRef holds a reference to a secret, never the secret value itself.
@@ -141,6 +143,7 @@ message SecretRef {
   string name = 1;
   string namespace = 2;
   string key = 3;
+  string path = 4;
 }
 
 // Customer represents a tenant in the release manager.

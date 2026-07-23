@@ -11,12 +11,15 @@ describe('auth route guard', () => {
     setActivePinia(createPinia());
   });
 
-  it('registers and disables the release inventory feature route', () => {
-    const enabled = createAppRouter(createMemoryHistory(), true);
-    const disabled = createAppRouter(createMemoryHistory(), false);
+  it('registers and disables release feature routes', () => {
+    const enabled = createAppRouter(createMemoryHistory(), true, true);
+    const inventoryDisabled = createAppRouter(createMemoryHistory(), false, true);
+    const valuesDisabled = createAppRouter(createMemoryHistory(), true, false);
 
     expect(enabled.resolve('/customers/customer-1/clusters/cluster-1/releases').name).toBe('ReleaseInventory');
-    expect(disabled.resolve('/customers/customer-1/clusters/cluster-1/releases').name).toBe('NotFound');
+    expect(enabled.resolve('/customers/customer-1/clusters/cluster-1/releases/definition-1/values').name).toBe('ValuesEditor');
+    expect(inventoryDisabled.resolve('/customers/customer-1/clusters/cluster-1/releases').name).toBe('NotFound');
+    expect(valuesDisabled.resolve('/customers/customer-1/clusters/cluster-1/releases/definition-1/values').name).toBe('NotFound');
   });
 
   it('routes an uninitialized installation to first-time setup', async () => {

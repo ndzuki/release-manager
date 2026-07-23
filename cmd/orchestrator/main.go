@@ -85,6 +85,7 @@ func (s *orchSvc) ReadinessChecks() map[string]func() error {
 	}
 }
 
+||||||| parent of 92a0d2b (feat: ValuesRevision edit/approve frontend and backend (TASK-055))
 func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if err := s.openStore(); err != nil {
 		return err
@@ -160,6 +161,24 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		connect.WithInterceptors(
 			app.MaintenanceInterceptor(s.cfg.Maintenance, nil, logger),
 		),
+||||||| parent of 92a0d2b (feat: ValuesRevision edit/approve frontend and backend (TASK-055))
+	s.st = st
+	logger.Info("store opened", "db", s.dbPath)
+
+	// Recover non-terminal operations from previous run (REQ-023 AC-023-05).
+	recovered := operation.RecoverNonTerminal(context.Background(), st, logger, operation.DefaultRecoverOptions())
+	if recovered > 0 {
+		logger.Warn("operations recovered on restart", "count", recovered)
+	}
+
+	// Initialize audit emitter for async audit event persistence.
+	auditCfg := audit.DefaultConfig()
+	auditEmitter := audit.NewEmitter(st.AuditEvents(), logger, auditCfg)
+
+	verifier := trust.NewStoreVerifier(
+		trust.NewStubVerifier(st.Verifications(), nil, logger),
+		st.Verifications(),
+		logger,
 	)
 	mux.Handle(cleanupPath, cleanupHandler)
 	logger.Info("cleanup service registered", "gc_interval_hours", retention.GCIntervalHours)
@@ -186,6 +205,7 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 
 	return nil
 }
+||||||| parent of 92a0d2b (feat: ValuesRevision edit/approve frontend and backend (TASK-055))
 
 func (s *orchSvc) openStore() error {
 	if err := s.cfg.Database.Validate(); err != nil {
@@ -209,6 +229,10 @@ func (s *orchSvc) openStore() error {
 	}
 	return nil
 }
+||||||| parent of 92a0d2b (feat: ValuesRevision edit/approve frontend and backend (TASK-055))
+	svc := orchestrator.NewService(st, verifier, s.targetEnv, auditEmitter, logger)
+	path, h := orchestratorv1connect.NewOrchestratorServiceHandler(svc)
+	mux.Handle(path, h)
 
 func (s *orchSvc) loadRetentionConfig() (orchestrator.RetentionConfig, error) {
 	retention := orchestrator.DefaultRetentionConfig()
@@ -279,9 +303,13 @@ func loadSourceRegistries(logger *slog.Logger) []orchestrator.SourceRegistry {
 
 func main() {
 	configPath := flag.String("config", "configs/orchestrator.dev.yaml", "path to config file")
+||||||| parent of 92a0d2b (feat: ValuesRevision edit/approve frontend and backend (TASK-055))
+	dbPath := flag.String("db", "data/orchestrator.db", "path to SQLite database")
 	targetEnv := flag.String("target-env", "staging", "target environment (production, staging)")
 	signingKey := flag.String("signing-key", "change-me-in-production", "JWT signing key")
 	flag.Parse()
 
 	app.Run(*configPath, &orchSvc{targetEnv: *targetEnv, configPath: *configPath, signingKey: *signingKey})
+||||||| parent of 92a0d2b (feat: ValuesRevision edit/approve frontend and backend (TASK-055))
+	app.Run(*configPath, &orchSvc{dbPath: *dbPath, targetEnv: *targetEnv, configPath: *configPath})
 }
