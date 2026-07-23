@@ -13,19 +13,38 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
+const (
+	AccessCookieName  = "rm_access"
+	RefreshCookieName = "rm_refresh"
+	CSRFCookieName    = "rm_csrf"
+	CSRFHeaderName    = "X-CSRF-Token"
+)
+
+// BrowserSessionConfig controls browser cookie security.
+type BrowserSessionConfig struct {
+	SecureCookies bool
+}
+
 // AuthService implements the AuthService Connect handler (REQ-025).
 //
 //nolint:revive // AuthService is the canonical name matching the proto service
 type AuthService struct {
-	store   store.Store
-	jwt     *JWTManager
-	limiter *RateLimiter
-	logger  *slog.Logger
+	store          store.Store
+	jwt            *JWTManager
+	limiter        *RateLimiter
+	logger         *slog.Logger
+	browser        BrowserSessionConfig
+	browserEnabled bool
 }
 
 // NewAuthService creates a new AuthService.
-func NewAuthService(st store.Store, jwt *JWTManager, limiter *RateLimiter, logger *slog.Logger) *AuthService {
-	return &AuthService{store: st, jwt: jwt, limiter: limiter, logger: logger}
+func NewAuthService(st store.Store, jwt *JWTManager, limiter *RateLimiter, logger *slog.Logger, browser ...BrowserSessionConfig) *AuthService {
+	config := BrowserSessionConfig{SecureCookies: true}
+	enabled := len(browser) > 0
+	if enabled {
+		config = browser[0]
+	}
+	return &AuthService{store: st, jwt: jwt, limiter: limiter, logger: logger, browser: config, browserEnabled: enabled}
 }
 
 // Login authenticates a user with username + password, returning tokens.
@@ -34,6 +53,9 @@ func (s *AuthService) Login(
 	ctx context.Context,
 	req *connect.Request[authv1.LoginRequest],
 ) (*connect.Response[authv1.LoginResponse], error) {
+	if s.browserEnabled {
+		return s.loginBrowserSession(ctx, req)
+	}
 	msg := req.Msg
 
 	// Rate limit by username.
@@ -93,6 +115,17 @@ func (s *AuthService) Logout(
 	ctx context.Context,
 	req *connect.Request[authv1.LogoutRequest],
 ) (*connect.Response[authv1.LogoutResponse], error) {
+	if s.browserEnabled {
+		if err := s.validateCSRF(req.Header()); err != nil {
+			return nil, err
+		}
+		if err := s.revokeRefreshCookie(ctx, req.Header()); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("logout failed: %w", err))
+		}
+		response := connect.NewResponse(&authv1.LogoutResponse{})
+		setResponseCookies(response.Header(), s.clearBrowserCookies())
+		return response, nil
+	}
 	// If a refresh token is provided, revoke its token family.
 	if rt := req.Msg.GetRefreshToken(); rt != "" {
 		refreshHash := s.jwt.HashRefreshToken(rt)
@@ -125,6 +158,9 @@ func (s *AuthService) RefreshToken(
 	ctx context.Context,
 	req *connect.Request[authv1.RefreshTokenRequest],
 ) (*connect.Response[authv1.RefreshTokenResponse], error) {
+	if s.browserEnabled {
+		return s.refreshBrowserSession(ctx, req)
+	}
 	msg := req.Msg
 	refreshHash := s.jwt.HashRefreshToken(msg.GetRefreshToken())
 
@@ -198,9 +234,12 @@ func (s *AuthService) RefreshToken(
 
 // ValidateToken validates an access token and returns the associated principal.
 func (s *AuthService) ValidateToken(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[authv1.ValidateTokenRequest],
 ) (*connect.Response[authv1.ValidateTokenResponse], error) {
+	if s.browserEnabled {
+		return s.validateBrowserSession(ctx, req)
+	}
 	claims, err := s.jwt.ValidateAccessToken(req.Msg.GetToken())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid token"))
@@ -354,6 +393,17 @@ func (s *AuthService) Initialize(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to add member"))
 	}
 
+	if s.browserEnabled {
+		principal, organizations, expiresAt, cookies, sessionErr := s.issueBrowserSession(ctx, user, orgID)
+		if sessionErr != nil {
+			return nil, sessionErr
+		}
+		response := connect.NewResponse(&authv1.InitializeResponse{
+			User: principal, Organizations: organizations, ExpiresAt: expiresAt.Unix(),
+		})
+		setResponseCookies(response.Header(), cookies)
+		return response, nil
+	}
 	orgID2, roles := s.userAuthorizationContext(ctx, userID)
 
 	accessToken, accessExp, err := s.jwt.GenerateAccessToken(userID, orgID2, roles)
@@ -412,6 +462,9 @@ func (s *AuthService) SwitchOrganization(
 	ctx context.Context,
 	req *connect.Request[authv1.SwitchOrganizationRequest],
 ) (*connect.Response[authv1.SwitchOrganizationResponse], error) {
+	if s.browserEnabled {
+		return s.switchBrowserOrganization(ctx, req)
+	}
 	userID, err := s.userIDFromCtx(ctx)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, err)
@@ -479,9 +532,10 @@ func (s *AuthService) SwitchOrganization(
 	}
 
 	return connect.NewResponse(&authv1.SwitchOrganizationResponse{
-		User:        respUser,
-		ExpiresAt:   accessExp.Unix(),
-		AccessToken: accessToken,
-		TokenType:   "Bearer",
+		User:          respUser,
+		Organizations: orgProtos,
+		ExpiresAt:     accessExp.Unix(),
+		AccessToken:   accessToken,
+		TokenType:     "Bearer",
 	}), nil
 }

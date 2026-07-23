@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ndzuki/release-manager/internal/store"
@@ -19,6 +20,7 @@ type Store struct {
 	operationEvents *operationEventStore
 	defs            *definitionStore
 	vals            *valuesStore
+	valuesApproval  *valuesApprovalStore
 	customers       *customerStore
 	clusters        *clusterStore
 	tokens          *enrollmentTokenStore
@@ -50,7 +52,11 @@ type Store struct {
 // Open creates a new SQLite-backed Store, running migrations on the database.
 // The DSN must be a valid modernc.org/sqlite connection string.
 func Open(dsn string) (*Store, error) {
-	db, err := sql.Open("sqlite", dsn+"&_pragma=busy_timeout(5000)&_txlock=immediate")
+	separator := "?"
+	if strings.Contains(dsn, "?") {
+		separator = "&"
+	}
+	db, err := sql.Open("sqlite", dsn+separator+"_pragma=busy_timeout(5000)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("sqlite open: %w", err)
 	}
@@ -78,6 +84,7 @@ func Open(dsn string) (*Store, error) {
 	s.defEvents = &definitionEventStore{db: db}
 	s.preflight = &preflightStore{db: db}
 	s.vals = &valuesStore{db: db}
+	s.valuesApproval = &valuesApprovalStore{db: db}
 	s.customers = &customerStore{db: db}
 	s.clusters = &clusterStore{db: db}
 	s.tokens = &enrollmentTokenStore{db: db}
@@ -146,6 +153,12 @@ func (s *Store) PreflightResults() store.PreflightStore { return s.preflight }
 // Values returns the ValuesStore.
 func (s *Store) Values() store.ValuesStore { return s.vals }
 
+// ValuesApproval returns the atomic approval workflow store.
+func (s *Store) ValuesApproval() store.ValuesApprovalStore { return s.valuesApproval }
+
+// ValuesApprovalEvidence returns immutable workflow evidence readers.
+func (s *Store) ValuesApprovalEvidence() store.ValuesApprovalReader { return s.valuesApproval }
+
 // Users returns the UserStore.
 func (s *Store) Users() store.UserStore { return s.users }
 
@@ -206,10 +219,13 @@ func (s *Store) Close() error { return s.db.Close() }
 // DB exposes the underlying *sql.DB for testing.
 func (s *Store) DB() *sql.DB { return s.db }
 
+var testDatabaseSequence atomic.Uint64
+
 // OpenTest creates a Store backed by an in-memory SQLite database for testing.
 // The caller is responsible for closing the store via t.Cleanup.
 func OpenTest(t interface{ Cleanup(func()) }) *Store {
-	st, err := Open("file::memory:?cache=shared")
+	dsn := fmt.Sprintf("file:release-manager-test-%d?mode=memory&cache=shared", testDatabaseSequence.Add(1))
+	st, err := Open(dsn)
 	if err != nil {
 		panic("sqlite OpenTest: " + err.Error())
 	}
@@ -304,6 +320,74 @@ var migrationStatements = []string{
 	`ALTER TABLE values_revisions ADD COLUMN approved_at TEXT`,
 	`ALTER TABLE values_revisions ADD COLUMN rejected_by TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE values_revisions ADD COLUMN rejection_reason TEXT NOT NULL DEFAULT ''`,
+	// Values approval workflow (REQ-068).
+	`ALTER TABLE values_revisions ADD COLUMN state_version INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE values_revisions ADD COLUMN created_by_user_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE values_revisions ADD COLUMN submitted_at TEXT`,
+	`ALTER TABLE values_revisions ADD COLUMN decided_at TEXT`,
+	`UPDATE values_revisions SET state_version = CASE WHEN version > 0 THEN version ELSE 1 END WHERE state_version = 0`,
+	`UPDATE values_revisions SET created_by_user_id = created_by WHERE created_by_user_id = ''`,
+	`ALTER TABLE release_definitions ADD COLUMN owner_organization_id TEXT`,
+	`ALTER TABLE release_definitions ADD COLUMN approved_revision_id TEXT`,
+
+	`CREATE TABLE IF NOT EXISTS values_revision_decisions (
+		id                    TEXT PRIMARY KEY,
+		revision_id           TEXT NOT NULL REFERENCES values_revisions(id) ON DELETE RESTRICT,
+		release_definition_id TEXT NOT NULL,
+		action                TEXT NOT NULL CHECK (action IN ('submitted', 'approved', 'rejected')),
+		from_state            TEXT NOT NULL,
+		to_state              TEXT NOT NULL,
+		actor_user_id         TEXT NOT NULL,
+		actor_org_id          TEXT NOT NULL,
+		actor_role            TEXT NOT NULL DEFAULT '',
+		comment               TEXT,
+		reason                TEXT NOT NULL DEFAULT '',
+		request_id            TEXT NOT NULL DEFAULT '',
+		idempotency_key_hash  TEXT NOT NULL DEFAULT '',
+		created_at            TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_values_revision_decisions_revision ON values_revision_decisions(revision_id, created_at)`,
+
+	`CREATE TABLE IF NOT EXISTS idempotency_records (
+		scope         TEXT NOT NULL,
+		text_key      TEXT NOT NULL,
+		request_hash  TEXT NOT NULL,
+		response_ref  BLOB NOT NULL,
+		expires_at    TEXT NOT NULL,
+		PRIMARY KEY(scope, text_key)
+	)`,
+
+	`CREATE TABLE IF NOT EXISTS audit_outbox (
+		id            TEXT PRIMARY KEY,
+		event_type    TEXT NOT NULL,
+		payload_json  BLOB NOT NULL,
+		created_at    TEXT NOT NULL,
+		delivered     INTEGER NOT NULL DEFAULT 0,
+		delivered_at  TEXT
+	)`,
+	`CREATE TABLE IF NOT EXISTS notification_outbox (
+		id            TEXT PRIMARY KEY,
+		event_type    TEXT NOT NULL,
+		payload_json  BLOB NOT NULL,
+		created_at    TEXT NOT NULL,
+		delivered     INTEGER NOT NULL DEFAULT 0,
+		delivered_at  TEXT
+	)`,
+
+	// Normalize legacy duplicate approved rows before installing the invariant.
+	`UPDATE values_revisions AS current
+	 SET status = 'superseded', state_version = state_version + 1, updated_at = CURRENT_TIMESTAMP
+	 WHERE status = 'approved'
+	   AND EXISTS (
+		SELECT 1 FROM values_revisions AS newer
+		WHERE newer.release_definition_id = current.release_definition_id
+		  AND newer.status = 'approved'
+		  AND (newer.revision > current.revision OR (newer.revision = current.revision AND newer.id > current.id))
+	 )`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_vr_one_approved_per_def
+	 ON values_revisions(release_definition_id) WHERE status = 'approved'`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_vr_one_pending_per_def
+	 ON values_revisions(release_definition_id) WHERE status = 'pending_approval'`,
 
 	`CREATE TABLE IF NOT EXISTS operations (
 		id                   TEXT PRIMARY KEY,
@@ -571,6 +655,9 @@ var migrationStatements = []string{
 		summary         TEXT NOT NULL DEFAULT '',
 		created_at      TEXT NOT NULL
 	)`,
+	`ALTER TABLE verification_records ADD COLUMN root_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE verification_records ADD COLUMN key_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE verification_records ADD COLUMN revocation_epoch INTEGER NOT NULL DEFAULT 0`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_records_digest_policy ON verification_records(artifact_digest, policy_version, created_at)`,
 
 	// Customer domain events (REQ-013)

@@ -34,7 +34,18 @@ type Service struct {
 	auditEmitter audit.Sink
 	logger       *slog.Logger
 }
-func NewService(st store.Store, verifier trust.Verifier, targetEnv string, auditEmitter audit.Sink, logger *slog.Logger) *Service {
+
+func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args ...any) *Service {
+	var auditEmitter audit.Sink
+	logger := slog.Default()
+	for _, arg := range args {
+		switch value := arg.(type) {
+		case audit.Sink:
+			auditEmitter = value
+		case *slog.Logger:
+			logger = value
+		}
+	}
 	return &Service{
 		store:        st,
 		verifier:     verifier,
@@ -89,7 +100,17 @@ func (s *Service) CreateOperation(
 		return nil, connect.NewError(connect.CodePermissionDenied, err)
 	}
 
-
+	// When a caller supplies an organization, it must have an active customer binding.
+	// Legacy in-process callers without organization context remain compatible.
+	if organizationID := msg.Actor.GetOrganization(); organizationID != "" {
+		if err := s.store.Bindings().RequireActive(ctx, organizationID, def.CustomerID); err != nil {
+			if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrBindingRevoked) {
+				return nil, connect.NewError(connect.CodePermissionDenied,
+					errors.New("customer binding is not active"))
+			}
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("binding check: %w", err))
+		}
+	}
 	// EMERGENCY ↔ standard mutual exclusion (REQ-023 AC-023-06, AC-023-07).
 	if opType.IsStandard() {
 		hasEmergency, err := s.store.Operations().HasActiveEmergencyForDefinition(ctx, msg.ReleaseDefinitionId)
@@ -397,7 +418,7 @@ func (s *Service) emitAudit(ev *store.AuditEvent) {
 }
 
 // auditActor converts an ActorContext to audit actor kind and ID.
-func auditActor(actor *store.ActorContext) (store.AuditActorKind, string) {
+func auditActor(actor *store.ActorContext) (kind store.AuditActorKind, actorID string) {
 	if actor == nil || actor.UserID == "" {
 		return store.AuditActorSystem, "system"
 	}

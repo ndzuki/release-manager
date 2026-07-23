@@ -4,14 +4,18 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 
 	"github.com/spf13/viper"
+	"time"
 
+	"connectrpc.com/connect"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/audit"
+	"github.com/ndzuki/release-manager/internal/auth"
 	"github.com/ndzuki/release-manager/internal/orchestrator"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
@@ -19,8 +23,9 @@ import (
 )
 
 type orchSvc struct {
-	dbPath    string
-	targetEnv string
+	dbPath     string
+	targetEnv  string
+	signingKey string
 	configPath string
 
 	st      *sqlitestore.Store
@@ -54,7 +59,19 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	)
 
 	svc := orchestrator.NewService(st, verifier, s.targetEnv, auditEmitter, logger)
-	path, h := orchestratorv1connect.NewOrchestratorServiceHandler(svc)
+	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)
+	enforcer, err := auth.NewEnforcer(st, logger)
+	if err != nil {
+		return fmt.Errorf("create orchestrator enforcer: %w", err)
+	}
+	if err := enforcer.LoadPolicies(context.Background()); err != nil {
+		return fmt.Errorf("load orchestrator policies: %w", err)
+	}
+	interceptor := auth.NewAuthInterceptor(jwtMgr, st, enforcer, map[string]bool{}, logger)
+	path, h := orchestratorv1connect.NewOrchestratorServiceHandler(
+		svc,
+		connect.WithInterceptors(interceptor),
+	)
 	mux.Handle(path, h)
 
 	// Load retention config for GC.
@@ -102,7 +119,8 @@ func main() {
 	configPath := flag.String("config", "configs/orchestrator.dev.yaml", "path to config file")
 	dbPath := flag.String("db", "data/orchestrator.db", "path to SQLite database")
 	targetEnv := flag.String("target-env", "staging", "target environment (production, staging)")
+	signingKey := flag.String("signing-key", "change-me-in-production", "JWT signing key")
 	flag.Parse()
 
-	app.Run(*configPath, &orchSvc{dbPath: *dbPath, targetEnv: *targetEnv, configPath: *configPath})
+	app.Run(*configPath, &orchSvc{dbPath: *dbPath, targetEnv: *targetEnv, configPath: *configPath, signingKey: *signingKey})
 }

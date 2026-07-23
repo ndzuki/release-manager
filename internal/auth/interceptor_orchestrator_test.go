@@ -37,6 +37,10 @@ func TestAuthInterceptor_OrchestratorEmergencyChange(t *testing.T) {
 			Username:     userID,
 			PasswordHash: "unused",
 		}))
+		require.NoError(t, st.AuthSessions().Create(ctx, &store.AuthSession{
+			ID: userID + "-session", UserID: userID, TokenFamily: userID + "-family",
+			RefreshTokenHash: userID + "-refresh", ExpiresAt: time.Now().UTC().Add(time.Hour),
+		}))
 	}
 	for _, member := range []*store.OrganizationMember{
 		{OrgID: organizationID, UserID: allowedUserID, Role: store.RoleReleaseAdmin},
@@ -50,7 +54,7 @@ func TestAuthInterceptor_OrchestratorEmergencyChange(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, enforcer.LoadPolicies(ctx))
 	jwtManager := NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour)
-	interceptor := NewAuthInterceptor(jwtManager, enforcer, map[string]bool{}, logger)
+	interceptor := NewAuthInterceptor(jwtManager, st, enforcer, map[string]bool{}, logger)
 	call := interceptor(func(_ context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
 		return connect.NewResponse(&orchestratorv1.EmergencyChangeResponse{}), nil
 	})
@@ -69,8 +73,8 @@ func TestAuthInterceptor_OrchestratorEmergencyChange(t *testing.T) {
 	t.Run("viewer denied", func(t *testing.T) {
 		token, _, err := jwtManager.GenerateAccessToken(
 			viewerUserID,
-			[]string{string(store.RoleViewer)},
 			organizationID,
+			[]string{string(store.RoleViewer)},
 		)
 		require.NoError(t, err)
 		request := newRequest()
@@ -83,8 +87,8 @@ func TestAuthInterceptor_OrchestratorEmergencyChange(t *testing.T) {
 	t.Run("release admin allowed", func(t *testing.T) {
 		token, _, err := jwtManager.GenerateAccessToken(
 			allowedUserID,
-			[]string{string(store.RoleReleaseAdmin)},
 			organizationID,
+			[]string{string(store.RoleReleaseAdmin)},
 		)
 		require.NoError(t, err)
 		request := newRequest()

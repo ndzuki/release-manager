@@ -44,27 +44,27 @@ func (s *memoryStore) CreateBatch(ctx context.Context, events []*store.AuditEven
 	return nil
 }
 
-func (s *memoryStore) Query(ctx context.Context, filter store.AuditEventFilter, cursor string, limit int) (*store.AuditEventPage, error) {
+func (s *memoryStore) Query(_ context.Context, _ store.AuditEventFilter, _ string, _ int) (*store.AuditEventPage, error) {
 	return &store.AuditEventPage{}, nil
 }
 
-func (s *memoryStore) GetByID(ctx context.Context, id string) (*store.AuditEvent, error) {
+func (s *memoryStore) GetByID(_ context.Context, _ string) (*store.AuditEvent, error) {
 	return nil, store.ErrNotFound
 }
 
-func (s *memoryStore) Count(ctx context.Context, filter store.AuditEventFilter) (int64, error) {
+func (s *memoryStore) Count(_ context.Context, _ store.AuditEventFilter) (int64, error) {
 	return 0, nil
 }
 
-func (s *memoryStore) ListByResource(ctx context.Context, resourceType, resourceID string) ([]*store.AuditEvent, error) {
+func (s *memoryStore) ListByResource(_ context.Context, _, _ string) ([]*store.AuditEvent, error) {
 	return nil, nil
 }
 
-func (s *memoryStore) ListOlderThan(ctx context.Context, cutoff time.Time, batchSize int) ([]*store.AuditEvent, error) {
+func (s *memoryStore) ListOlderThan(_ context.Context, _ time.Time, _ int) ([]*store.AuditEvent, error) {
 	return nil, nil
 }
 
-func (s *memoryStore) DeleteByIDs(ctx context.Context, ids []string) (int64, error) {
+func (s *memoryStore) DeleteByIDs(_ context.Context, _ []string) (int64, error) {
 	return 0, nil
 }
 

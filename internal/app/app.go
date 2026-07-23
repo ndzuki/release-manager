@@ -48,6 +48,7 @@ type tlsService interface {
 }
 
 // Run starts a service with config loading, signal handling, and graceful shutdown.
+//nolint:gocyclo // Service startup keeps lifecycle and shutdown gates explicit in one owner.
 func Run(configPath string, svc Service) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 

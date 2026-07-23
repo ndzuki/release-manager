@@ -266,11 +266,46 @@ message DeleteClusterRouteRequest {
 
 message DeleteClusterRouteResponse {}
 
+// SubmitValuesRevisionRequest moves a draft revision into pending approval.
+message SubmitValuesRevisionRequest {
+  string revision_id = 1;
+  int64 expected_state_version = 2;
+  string comment = 3;
+}
+
+// ApproveValuesRevisionRequest approves a pending values revision.
+message ApproveValuesRevisionRequest {
+  string revision_id = 1;
+  int64 expected_state_version = 2;
+  string comment = 3;
+}
+
+// RejectValuesRevisionRequest rejects a pending values revision.
+message RejectValuesRevisionRequest {
+  string revision_id = 1;
+  int64 expected_state_version = 2;
+  string reason = 3;
+}
+
+// ValuesRevisionDecisionResponse reports the committed state transition.
+message ValuesRevisionDecisionResponse {
+  common.v1.ValuesRevision revision = 1;
+  common.v1.ValuesStatus previous_state = 2;
+  common.v1.ValuesStatus new_state = 3;
+  google.protobuf.Timestamp decided_at = 4;
+  repeated string superseded_revision_ids = 5;
+}
+
 service OrchestratorService {
   // Release pipeline
   rpc CreateOperation(CreateOperationRequest) returns (CreateOperationResponse);
   rpc PublishRelease(PublishReleaseRequest) returns (PublishReleaseResponse);
   rpc RollbackRelease(RollbackReleaseRequest) returns (RollbackReleaseResponse);
+
+  // Values revision approval workflow
+  rpc SubmitValuesRevision(SubmitValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
+  rpc ApproveValuesRevision(ApproveValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
+  rpc RejectValuesRevision(RejectValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
 
   // Release definition management
   rpc CreateReleaseDefinition(CreateReleaseDefinitionRequest) returns (CreateReleaseDefinitionResponse);

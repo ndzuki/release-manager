@@ -40,7 +40,7 @@ func (s *candidateArtifactStore) Create(ctx context.Context, ca *store.Candidate
 	return nil
 }
 
-func (s *candidateArtifactStore) LinkToBundle(ctx context.Context, artifactID string, bundleID string) error {
+func (s *candidateArtifactStore) LinkToBundle(ctx context.Context, artifactID, bundleID string) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE candidate_artifacts SET bundle_id = ? WHERE id = ?
 	`, bundleID, artifactID)

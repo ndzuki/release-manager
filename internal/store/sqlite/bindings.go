@@ -99,9 +99,43 @@ func (s *bindingStore) Update(ctx context.Context, b *store.OrgCustomerBinding) 
 	return err
 }
 func (s *bindingStore) SetStatus(ctx context.Context, id string, status store.BindingStatus) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE org_customer_bindings SET status = ?, updated_at = ? WHERE id = ?`,
-		string(status), time.Now().UTC().Format(time.RFC3339), id)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin binding status update: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
+
+	now := time.Now().UTC()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE org_customer_bindings
+		SET status = ?, optimistic_version = optimistic_version + 1, updated_at = ?
+		WHERE id = ?`,
+		string(status), now.Format(time.RFC3339), id,
+	)
+	if err != nil {
+		return fmt.Errorf("update binding status: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("binding status rows affected: %w", err)
+	}
+	if rows != 1 {
+		return store.ErrNotFound
+	}
+
+	binding, err := scanBinding(tx.QueryRowContext(ctx, `
+		SELECT id, org_id, customer_id, status, optimistic_version, created_at, updated_at
+		FROM org_customer_bindings WHERE id = ?`, id))
+	if err != nil {
+		return err
+	}
+	if err := insertBindingEvent(ctx, tx, binding); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit binding status update: %w", err)
+	}
+	return nil
 }
 
 func (s *bindingStore) RequireActive(ctx context.Context, orgID, customerID string) error {

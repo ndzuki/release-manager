@@ -79,10 +79,12 @@ func (BundleStatus) EnumDescriptor() ([]byte, []int) {
 type ValuesStatus int32
 
 const (
-	ValuesStatus_VALUES_STATUS_UNSPECIFIED ValuesStatus = 0
-	ValuesStatus_VALUES_STATUS_DRAFT       ValuesStatus = 1
-	ValuesStatus_VALUES_STATUS_APPROVED    ValuesStatus = 2
-	ValuesStatus_VALUES_STATUS_REJECTED    ValuesStatus = 3
+	ValuesStatus_VALUES_STATUS_UNSPECIFIED      ValuesStatus = 0
+	ValuesStatus_VALUES_STATUS_DRAFT            ValuesStatus = 1
+	ValuesStatus_VALUES_STATUS_APPROVED         ValuesStatus = 2
+	ValuesStatus_VALUES_STATUS_REJECTED         ValuesStatus = 3
+	ValuesStatus_VALUES_STATUS_PENDING_APPROVAL ValuesStatus = 4
+	ValuesStatus_VALUES_STATUS_SUPERSEDED       ValuesStatus = 5
 )
 
 // Enum value maps for ValuesStatus.
@@ -92,12 +94,16 @@ var (
 		1: "VALUES_STATUS_DRAFT",
 		2: "VALUES_STATUS_APPROVED",
 		3: "VALUES_STATUS_REJECTED",
+		4: "VALUES_STATUS_PENDING_APPROVAL",
+		5: "VALUES_STATUS_SUPERSEDED",
 	}
 	ValuesStatus_value = map[string]int32{
-		"VALUES_STATUS_UNSPECIFIED": 0,
-		"VALUES_STATUS_DRAFT":       1,
-		"VALUES_STATUS_APPROVED":    2,
-		"VALUES_STATUS_REJECTED":    3,
+		"VALUES_STATUS_UNSPECIFIED":      0,
+		"VALUES_STATUS_DRAFT":            1,
+		"VALUES_STATUS_APPROVED":         2,
+		"VALUES_STATUS_REJECTED":         3,
+		"VALUES_STATUS_PENDING_APPROVAL": 4,
+		"VALUES_STATUS_SUPERSEDED":       5,
 	}
 )
 
@@ -586,6 +592,10 @@ type ValuesRevision struct {
 	Digest              string                 `protobuf:"bytes,7,opt,name=digest,proto3" json:"digest,omitempty"`
 	ParentRevisionId    string                 `protobuf:"bytes,8,opt,name=parent_revision_id,json=parentRevisionId,proto3" json:"parent_revision_id,omitempty"`
 	SecretRefs          []*SecretRef           `protobuf:"bytes,9,rep,name=secret_refs,json=secretRefs,proto3" json:"secret_refs,omitempty"`
+	StateVersion        int64                  `protobuf:"varint,10,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
+	CreatedByUserId     string                 `protobuf:"bytes,11,opt,name=created_by_user_id,json=createdByUserId,proto3" json:"created_by_user_id,omitempty"`
+	SubmittedAt         *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=submitted_at,json=submittedAt,proto3" json:"submitted_at,omitempty"`
+	DecidedAt           *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=decided_at,json=decidedAt,proto3" json:"decided_at,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -679,6 +689,34 @@ func (x *ValuesRevision) GetParentRevisionId() string {
 func (x *ValuesRevision) GetSecretRefs() []*SecretRef {
 	if x != nil {
 		return x.SecretRefs
+	}
+	return nil
+}
+
+func (x *ValuesRevision) GetStateVersion() int64 {
+	if x != nil {
+		return x.StateVersion
+	}
+	return 0
+}
+
+func (x *ValuesRevision) GetCreatedByUserId() string {
+	if x != nil {
+		return x.CreatedByUserId
+	}
+	return ""
+}
+
+func (x *ValuesRevision) GetSubmittedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.SubmittedAt
+	}
+	return nil
+}
+
+func (x *ValuesRevision) GetDecidedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.DecidedAt
 	}
 	return nil
 }
@@ -1066,7 +1104,7 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xf1\x02\n" +
+	"updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xbd\x04\n" +
 	"\x0eValuesRevision\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x122\n" +
 	"\x15release_definition_id\x18\x02 \x01(\tR\x13releaseDefinitionId\x12\x1a\n" +
@@ -1078,7 +1116,13 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"\x06digest\x18\a \x01(\tR\x06digest\x12,\n" +
 	"\x12parent_revision_id\x18\b \x01(\tR\x10parentRevisionId\x125\n" +
 	"\vsecret_refs\x18\t \x03(\v2\x14.common.v1.SecretRefR\n" +
-	"secretRefs\"O\n" +
+	"secretRefs\x12#\n" +
+	"\rstate_version\x18\n" +
+	" \x01(\x03R\fstateVersion\x12+\n" +
+	"\x12created_by_user_id\x18\v \x01(\tR\x0fcreatedByUserId\x12=\n" +
+	"\fsubmitted_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\vsubmittedAt\x129\n" +
+	"\n" +
+	"decided_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tdecidedAt\"O\n" +
 	"\tSecretRef\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x10\n" +
@@ -1111,12 +1155,14 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"\x19BUNDLE_STATUS_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16BUNDLE_STATUS_RECEIVED\x10\x01\x12\x1b\n" +
 	"\x17BUNDLE_STATUS_VALIDATED\x10\x02\x12\x1a\n" +
-	"\x16BUNDLE_STATUS_REJECTED\x10\x03*~\n" +
+	"\x16BUNDLE_STATUS_REJECTED\x10\x03*\xc0\x01\n" +
 	"\fValuesStatus\x12\x1d\n" +
 	"\x19VALUES_STATUS_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13VALUES_STATUS_DRAFT\x10\x01\x12\x1a\n" +
 	"\x16VALUES_STATUS_APPROVED\x10\x02\x12\x1a\n" +
-	"\x16VALUES_STATUS_REJECTED\x10\x03*g\n" +
+	"\x16VALUES_STATUS_REJECTED\x10\x03\x12\"\n" +
+	"\x1eVALUES_STATUS_PENDING_APPROVAL\x10\x04\x12\x1c\n" +
+	"\x18VALUES_STATUS_SUPERSEDED\x10\x05*g\n" +
 	"\rClusterStatus\x12\x1e\n" +
 	"\x1aCLUSTER_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15CLUSTER_STATUS_ACTIVE\x10\x01\x12\x1b\n" +
@@ -1162,15 +1208,17 @@ var file_common_v1_domain_proto_depIdxs = []int32{
 	13, // 6: common.v1.ValuesRevision.created_at:type_name -> google.protobuf.Timestamp
 	1,  // 7: common.v1.ValuesRevision.status:type_name -> common.v1.ValuesStatus
 	8,  // 8: common.v1.ValuesRevision.secret_refs:type_name -> common.v1.SecretRef
-	13, // 9: common.v1.Customer.created_at:type_name -> google.protobuf.Timestamp
-	13, // 10: common.v1.CustomerDisabledEvent.disabled_at:type_name -> google.protobuf.Timestamp
-	2,  // 11: common.v1.Cluster.status:type_name -> common.v1.ClusterStatus
-	13, // 12: common.v1.Cluster.created_at:type_name -> google.protobuf.Timestamp
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	13, // 9: common.v1.ValuesRevision.submitted_at:type_name -> google.protobuf.Timestamp
+	13, // 10: common.v1.ValuesRevision.decided_at:type_name -> google.protobuf.Timestamp
+	13, // 11: common.v1.Customer.created_at:type_name -> google.protobuf.Timestamp
+	13, // 12: common.v1.CustomerDisabledEvent.disabled_at:type_name -> google.protobuf.Timestamp
+	2,  // 13: common.v1.Cluster.status:type_name -> common.v1.ClusterStatus
+	13, // 14: common.v1.Cluster.created_at:type_name -> google.protobuf.Timestamp
+	15, // [15:15] is the sub-list for method output_type
+	15, // [15:15] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_common_v1_domain_proto_init() }

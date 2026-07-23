@@ -31,7 +31,8 @@ func NewAuditServiceHandler(st store.Store, emitter Sink, logger *slog.Logger) a
 }
 
 // Emit delegates to the underlying emitter.
-func (h *auditServiceHandler) Emit(ctx context.Context, req *connect.Request[auditv1.EmitAuditRequest]) (*connect.Response[auditv1.EmitAuditResponse], error) {
+//nolint:dupl // This full handler intentionally mirrors the lightweight collector response contract.
+func (h *auditServiceHandler) Emit(_ context.Context, req *connect.Request[auditv1.EmitAuditRequest]) (*connect.Response[auditv1.EmitAuditResponse], error) {
 	if req.Msg == nil || len(req.Msg.GetEvents()) == 0 {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%s: events are required", ErrorInvalidEvent))
 	}
@@ -102,7 +103,7 @@ func (h *auditServiceHandler) QueryAuditEvents(ctx context.Context, req *connect
 		Events: events,
 		Pagination: &commonv1.PaginationResponse{
 			NextPageToken: page.NextCursor,
-			TotalSize:     int32(total),
+			TotalSize:     boundedAuditCount(total),
 		},
 	}), nil
 }
@@ -170,4 +171,15 @@ func toProtoAuditEvent(ev *store.AuditEvent) *auditv1.AuditEvent {
 		Status:     ev.Status,
 		DurationMs: ev.DurationMs,
 	}
+}
+
+func boundedAuditCount(total int64) int32 {
+	if total <= 0 {
+		return 0
+	}
+	const maxInt32 = int64(1<<31 - 1)
+	if total > maxInt32 {
+		return int32(maxInt32)
+	}
+	return int32(total) //nolint:gosec // Value is explicitly bounded to the int32 range.
 }

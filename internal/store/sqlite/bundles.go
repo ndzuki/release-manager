@@ -149,6 +149,7 @@ func (s *bundleStore) ListForArchive(ctx context.Context, retentionDays int, ter
 		terminal[i] = string(s)
 	}
 
+	//nolint:gosec // Placeholder count derives from an internal status slice; all values remain bound parameters.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT b.id FROM release_bundles b
 		WHERE b.status IN ('received','validated')
@@ -188,9 +189,10 @@ func (s *bundleStore) Archive(ctx context.Context, ids []string) (int64, error) 
 	if err != nil {
 		return 0, fmt.Errorf("begin archive: %w", err)
 	}
-	defer tx.Rollback() //nolint:errcheck
+	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
 
 	now := time.Now().UTC().Format(time.RFC3339)
+	//nolint:gosec // Placeholder count derives from the internal ID slice; all IDs remain bound parameters.
 	result, err := tx.ExecContext(ctx, `
 		UPDATE release_bundles SET status = 'archived', archived_at = ?
 		WHERE id IN (`+placeholders(len(ids))+`) AND status IN ('received','validated')
