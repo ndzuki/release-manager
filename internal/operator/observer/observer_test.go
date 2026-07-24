@@ -645,6 +645,29 @@ func TestRolloutError_UnwrapsKind(t *testing.T) {
 	assert.Equal(t, context.DeadlineExceeded, err.Cause())
 }
 
+func TestRolloutError_CodeReturnsStableValues(t *testing.T) {
+	tests := []struct {
+		name string
+		kind error
+		want ErrorCode
+	}{
+		{name: "invalid argument", kind: ErrInvalidArgument, want: ErrorCodeInvalidArgument},
+		{name: "unsupported resource", kind: ErrUnsupportedResource, want: ErrorCodeUnsupportedResource},
+		{name: "workload unavailable", kind: ErrWorkloadUnavailable, want: ErrorCodeWorkloadUnavailable},
+		{name: "rollout timeout", kind: ErrRolloutTimeout, want: ErrorCodeRolloutTimeout},
+		{name: "cancelled", kind: ErrCancelled, want: ErrorCodeCancelled},
+		{name: "watch disconnected", kind: ErrWatchDisconnected, want: ErrorCodeWatchDisconnected},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := &RolloutError{Kind: tt.kind}
+
+			assert.Equal(t, tt.want, err.Code())
+		})
+	}
+}
+
 func deploymentRef() ResourceRef {
 	return ResourceRef{GVR: DeploymentGVR, Namespace: "default", Name: "web"}
 }
