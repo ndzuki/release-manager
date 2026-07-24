@@ -127,6 +127,9 @@ message Cluster {
   string kubeconfig_ref = 4;
   ClusterStatus status = 6;
   google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 7;
+  int64 version = 8;
+  int32 route_count = 9;
 }
 
 // ActorContext identifies the initiating principal for audit and authorization.

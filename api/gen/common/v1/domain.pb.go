@@ -924,6 +924,9 @@ type Cluster struct {
 	KubeconfigRef string                 `protobuf:"bytes,4,opt,name=kubeconfig_ref,json=kubeconfigRef,proto3" json:"kubeconfig_ref,omitempty"`
 	Status        ClusterStatus          `protobuf:"varint,6,opt,name=status,proto3,enum=common.v1.ClusterStatus" json:"status,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	Version       int64                  `protobuf:"varint,8,opt,name=version,proto3" json:"version,omitempty"`
+	RouteCount    int32                  `protobuf:"varint,9,opt,name=route_count,json=routeCount,proto3" json:"route_count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -998,6 +1001,27 @@ func (x *Cluster) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *Cluster) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *Cluster) GetVersion() int64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *Cluster) GetRouteCount() int32 {
+	if x != nil {
+		return x.RouteCount
+	}
+	return 0
 }
 
 // ActorContext identifies the initiating principal for audit and authorization.
@@ -1138,7 +1162,7 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"\vcustomer_id\x18\x01 \x01(\tR\n" +
 	"customerId\x12;\n" +
 	"\vdisabled_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"disabledAt\"\xe2\x01\n" +
+	"disabledAt\"\xd8\x02\n" +
 	"\aCluster\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1f\n" +
@@ -1147,7 +1171,12 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"\x0ekubeconfig_ref\x18\x04 \x01(\tR\rkubeconfigRef\x120\n" +
 	"\x06status\x18\x06 \x01(\x0e2\x18.common.v1.ClusterStatusR\x06status\x129\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"K\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"updated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x18\n" +
+	"\aversion\x18\b \x01(\x03R\aversion\x12\x1f\n" +
+	"\vroute_count\x18\t \x01(\x05R\n" +
+	"routeCount\"K\n" +
 	"\fActorContext\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\"\n" +
 	"\forganization\x18\x02 \x01(\tR\forganization*\x82\x01\n" +
@@ -1214,11 +1243,12 @@ var file_common_v1_domain_proto_depIdxs = []int32{
 	13, // 12: common.v1.CustomerDisabledEvent.disabled_at:type_name -> google.protobuf.Timestamp
 	2,  // 13: common.v1.Cluster.status:type_name -> common.v1.ClusterStatus
 	13, // 14: common.v1.Cluster.created_at:type_name -> google.protobuf.Timestamp
-	15, // [15:15] is the sub-list for method output_type
-	15, // [15:15] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	13, // 15: common.v1.Cluster.updated_at:type_name -> google.protobuf.Timestamp
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_common_v1_domain_proto_init() }

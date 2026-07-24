@@ -435,6 +435,8 @@ var migrationStatements = []string{
 		updated_at     TEXT NOT NULL
 	)`,
 
+	`ALTER TABLE clusters ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
+
 	`CREATE INDEX IF NOT EXISTS idx_clusters_customer ON clusters(customer_id)`,
 
 	// Operator enrollment and session management (REQ-015, REQ-044)

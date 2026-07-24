@@ -31,6 +31,30 @@ export function createAppRouter(history: RouterHistory = createWebHistory()): Ro
         meta: { requiresAuth: true },
       },
       {
+        path: '/customers/:customerId/clusters',
+        name: 'ClusterList',
+        component: () => import('@/pages/ClusterListPage.vue'),
+        meta: { requiresAuth: true, feature: 'clusterRouting' },
+      },
+      {
+        path: '/customers/:customerId/clusters/new',
+        name: 'ClusterNew',
+        component: () => import('@/pages/ClusterEditPage.vue'),
+        meta: { requiresAuth: true, feature: 'clusterRouting', requiresWrite: true },
+      },
+      {
+        path: '/customers/:customerId/clusters/:clusterId',
+        name: 'ClusterDetail',
+        component: () => import('@/pages/ClusterDetailPage.vue'),
+        meta: { requiresAuth: true, feature: 'clusterRouting' },
+      },
+      {
+        path: '/customers/:customerId/clusters/:clusterId/edit',
+        name: 'ClusterEdit',
+        component: () => import('@/pages/ClusterEditPage.vue'),
+        meta: { requiresAuth: true, feature: 'clusterRouting', requiresWrite: true },
+      },
+      {
         path: '/:pathMatch(.*)*',
         name: 'NotFound',
         component: () => import('@/pages/NotFoundPage.vue'),
@@ -57,6 +81,14 @@ export function installAuthGuard(router: Router): void {
     }
     if (auth.initialized === true && to.name === 'Init') {
       return auth.isAuthenticated ? { name: 'Home' } : { name: 'Login' };
+    }
+
+    if (to.meta.requiresWrite && !auth.canWrite) {
+      return { name: 'ClusterList', params: { customerId: to.params.customerId } };
+    }
+
+    if (to.meta.feature === 'clusterRouting' && import.meta.env.VITE_FEATURE_CLUSTER_ROUTING === 'false') {
+      return { name: 'NotFound' };
     }
     if (to.name === 'Login' && auth.isAuthenticated) {
       return { name: 'Home' };

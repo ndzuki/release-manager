@@ -564,13 +564,18 @@ func (s *Service) sendCommand(
 }
 
 type commandPayload struct {
-	DefinitionID    string                  `json:"definition_id"`
-	Namespace       string                  `json:"namespace"`
-	ReleaseName     string                  `json:"release_name"`
-	CreateNamespace bool                    `json:"create_namespace"`
-	TimeoutSeconds  int64                   `json:"timeout_seconds"`
-	Bundle          *commonv1.ReleaseBundle `json:"bundle"`
-	Values          json.RawMessage         `json:"values"`
+	DefinitionID            string                  `json:"definition_id"`
+	Namespace               string                  `json:"namespace"`
+	ReleaseName             string                  `json:"release_name"`
+	CreateNamespace         bool                    `json:"create_namespace"`
+	TimeoutSeconds          int64                   `json:"timeout_seconds"`
+	Bundle                  *commonv1.ReleaseBundle `json:"bundle"`
+	Values                  json.RawMessage         `json:"values"`
+	ValuesRevisionID        string                  `json:"values_revision_id"`
+	ExpectedCurrentRevision int64                   `json:"expected_current_revision"`
+	TargetRevision          int64                   `json:"target_revision"`
+	Atomic                  bool                    `json:"atomic"`
+	ValuesPatch             []byte                  `json:"values_patch"`
 }
 
 // DecodeCommandPayload populates command fields from an outbox JSON payload.
@@ -590,6 +595,11 @@ func DecodeCommandPayload(payload []byte, command *operatorv1.Command) error {
 	command.TimeoutSeconds = envelope.TimeoutSeconds
 	command.Bundle = envelope.Bundle
 	command.Values = envelope.Values
+	command.ValuesRevisionId = envelope.ValuesRevisionID
+	command.ExpectedCurrentRevision = envelope.ExpectedCurrentRevision
+	command.TargetRevision = envelope.TargetRevision
+	command.Atomic = envelope.Atomic
+	command.ValuesPatch = envelope.ValuesPatch
 
 	if envelope.Bundle == nil {
 		var bundle commonv1.ReleaseBundle

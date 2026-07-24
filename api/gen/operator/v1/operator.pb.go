@@ -859,7 +859,8 @@ type Command struct {
 	ValuesRevisionId        string                 `protobuf:"bytes,13,opt,name=values_revision_id,json=valuesRevisionId,proto3" json:"values_revision_id,omitempty"`
 	ExpectedCurrentRevision int64                  `protobuf:"varint,14,opt,name=expected_current_revision,json=expectedCurrentRevision,proto3" json:"expected_current_revision,omitempty"`
 	Atomic                  bool                   `protobuf:"varint,15,opt,name=atomic,proto3" json:"atomic,omitempty"`
-	ValuesPatch             []byte                 `protobuf:"bytes,16,opt,name=values_patch,json=valuesPatch,proto3" json:"values_patch,omitempty"` // JSON merge patch
+	ValuesPatch             []byte                 `protobuf:"bytes,16,opt,name=values_patch,json=valuesPatch,proto3" json:"values_patch,omitempty"`           // JSON merge patch
+	TargetRevision          int64                  `protobuf:"varint,17,opt,name=target_revision,json=targetRevision,proto3" json:"target_revision,omitempty"` // target revision for ROLLBACK
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -1004,6 +1005,13 @@ func (x *Command) GetValuesPatch() []byte {
 		return x.ValuesPatch
 	}
 	return nil
+}
+
+func (x *Command) GetTargetRevision() int64 {
+	if x != nil {
+		return x.TargetRevision
+	}
+	return 0
 }
 
 // ResyncRequest asks the operator to report its last seen sequence for gap recovery.
@@ -1391,7 +1399,7 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x0eresync_request\x18\x03 \x01(\v2\x1a.operator.v1.ResyncRequestH\x00R\rresyncRequest\x12O\n" +
 	"\x12duplicate_response\x18\x04 \x01(\v2\x1e.operator.v1.DuplicateResponseH\x00R\x11duplicateResponse\x12R\n" +
 	"\x13session_established\x18\x05 \x01(\v2\x1f.operator.v1.SessionEstablishedH\x00R\x12sessionEstablishedB\t\n" +
-	"\apayload\"\xd4\x04\n" +
+	"\apayload\"\xfd\x04\n" +
 	"\aCommand\x12\x1b\n" +
 	"\toutbox_id\x18\x01 \x01(\tR\boutboxId\x12\x1d\n" +
 	"\n" +
@@ -1410,7 +1418,8 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x12values_revision_id\x18\r \x01(\tR\x10valuesRevisionId\x12:\n" +
 	"\x19expected_current_revision\x18\x0e \x01(\x03R\x17expectedCurrentRevision\x12\x16\n" +
 	"\x06atomic\x18\x0f \x01(\bR\x06atomic\x12!\n" +
-	"\fvalues_patch\x18\x10 \x01(\fR\vvaluesPatch\"e\n" +
+	"\fvalues_patch\x18\x10 \x01(\fR\vvaluesPatch\x12'\n" +
+	"\x0ftarget_revision\x18\x11 \x01(\x03R\x0etargetRevision\"e\n" +
 	"\rResyncRequest\x12<\n" +
 	"\x1aorchestrator_last_sequence\x18\x01 \x01(\x03R\x18orchestratorLastSequence\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"F\n" +

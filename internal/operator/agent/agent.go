@@ -290,6 +290,8 @@ func (a *Agent) execute(ctx context.Context, command *operatorv1.Command) Result
 		return a.executeInstall(ctx, command)
 	case "UPGRADE":
 		return a.executeUpgrade(ctx, command)
+	case "ROLLBACK":
+		return a.executeRollback(ctx, command)
 	default:
 		result.Code = "unsupported_command"
 		result.Message = fmt.Sprintf("unsupported command type %q", command.GetOperationType())
@@ -417,6 +419,48 @@ func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command)
 	return result
 }
 
+func (a *Agent) executeRollback(ctx context.Context, command *operatorv1.Command) Result {
+	result := Result{
+		OperationID:  command.GetOperationId(),
+		CommandID:    command.GetCommandId(),
+		Status:       "failed",
+		DefinitionID: command.GetDefinitionId(),
+	}
+	if command.GetTargetRevision() <= 0 {
+		result.Code = "invalid_command"
+		result.Message = "target_revision is required for rollback"
+		return result
+	}
+	if command.GetNamespace() == "" || command.GetReleaseName() == "" {
+		result.Code = "invalid_command"
+		result.Message = "namespace and release_name are required"
+		return result
+	}
+
+	timeout := a.installFlags.Timeout
+	if command.GetTimeoutSeconds() > 0 {
+		timeout = time.Duration(command.GetTimeoutSeconds()) * time.Second
+	}
+
+	release, err := a.engine.Rollback(ctx, helmengine.RollbackOptions{
+		Namespace:      command.GetNamespace(),
+		ReleaseName:    command.GetReleaseName(),
+		TargetRevision: int(command.GetTargetRevision()),
+		Timeout:        timeout,
+	})
+	if err != nil {
+		result.Code = rollbackErrorCode(err)
+		result.Message = err.Error()
+		return result
+	}
+
+	result.Status = "succeeded"
+	result.Release = release
+	result.InventorySync = true
+	result.ResourceSummary.ManifestDigest = release.ManifestDigest
+	return result
+}
+
 // mergeValues applies a JSON merge patch to base values in-place.
 func mergeValues(base, patch map[string]interface{}) {
 	for k, v := range patch {
@@ -521,6 +565,23 @@ func upgradeErrorCode(err error) string {
 		return "cancelled"
 	default:
 		return "helm_upgrade_failed"
+	}
+}
+
+func rollbackErrorCode(err error) string {
+	switch {
+	case errors.Is(err, helmengine.ErrNotFound):
+		return "release_not_found"
+	case errors.Is(err, helmengine.ErrRevisionNotFound):
+		return "target_revision_not_found"
+	case errors.Is(err, helmengine.ErrArtifactUnavailable):
+		return "historical_artifact_unavailable"
+	case errors.Is(err, helmengine.ErrTimeout):
+		return "timeout"
+	case errors.Is(err, helmengine.ErrCancelled):
+		return "cancelled"
+	default:
+		return "helm_rollback_failed"
 	}
 }
 

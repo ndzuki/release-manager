@@ -111,6 +111,7 @@ message Command {
   int64 expected_current_revision = 14;
   bool atomic = 15;
   bytes values_patch = 16;            // JSON merge patch
+  int64 target_revision = 17;         // target revision for ROLLBACK
 }
 
 // ResyncRequest asks the operator to report its last seen sequence for gap recovery.

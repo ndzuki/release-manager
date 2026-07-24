@@ -48,6 +48,15 @@ func TestAuthInterceptor_OrchestratorEmergencyChange(t *testing.T) {
 	} {
 		require.NoError(t, st.OrgMembers().Create(ctx, member))
 	}
+	for _, userID := range []string{allowedUserID, viewerUserID} {
+		require.NoError(t, st.AuthSessions().Create(ctx, &store.AuthSession{
+			ID:               "session-" + userID,
+			UserID:           userID,
+			TokenFamily:      "family-" + userID,
+			RefreshTokenHash: "refresh-" + userID,
+			ExpiresAt:        time.Now().UTC().Add(time.Hour),
+		}))
+	}
 
 	logger := slog.New(slog.DiscardHandler)
 	enforcer, err := NewEnforcer(st, logger)

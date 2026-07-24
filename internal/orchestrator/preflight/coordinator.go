@@ -16,12 +16,15 @@ import (
 // It dispatches PRECHECK commands via the outbox, polls for results, and CAS the
 // operation to queued (all passed) or failed (any required stage failed).
 type Coordinator struct {
-	outbox store.OutboxStore
-	ops    store.OperationStore
-	opers  store.OperatorStore
-	defs   store.DefinitionStore
-	pl     store.PreflightLifecycleStore
-	logger *slog.Logger
+	outbox         store.OutboxStore
+	ops            store.OperationStore
+	opers          store.OperatorStore
+	defs           store.DefinitionStore
+	values         store.ValuesStore
+	bundles        store.BundleStore
+	pl             store.PreflightLifecycleStore
+	logger         *slog.Logger
+	timeoutSeconds int64
 }
 // NewCoordinator creates a preflight coordinator with the required store dependencies.
 func NewCoordinator(
@@ -29,16 +32,21 @@ func NewCoordinator(
 	ops store.OperationStore,
 	opers store.OperatorStore,
 	defs store.DefinitionStore,
+	values store.ValuesStore,
+	bundles store.BundleStore,
 	pl store.PreflightLifecycleStore,
 	logger *slog.Logger,
 ) *Coordinator {
 	return &Coordinator{
-		outbox: outbox,
-		ops:    ops,
-		opers:  opers,
-		defs:   defs,
-		pl:     pl,
-		logger: logger,
+		outbox:         outbox,
+		ops:            ops,
+		opers:          opers,
+		defs:           defs,
+		values:         values,
+		bundles:        bundles,
+		pl:             pl,
+		logger:         logger,
+		timeoutSeconds: int64((5 * time.Minute) / time.Second),
 	}
 }
 
@@ -123,13 +131,13 @@ func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage S
 		}, err
 	}
 
-	// Build and dispatch command
+	// Build and dispatch command.
 	commandID := fmt.Sprintf("%s:%s", op.ID, stage.Name)
-	payload, err := (&CommandPayload{
-		Stage:       stage.Name,
-		OperationID: op.ID,
-		BundleID:    op.BundleID,
-	}).Marshal()
+	payload, err := c.commandPayload(ctx, op, stage)
+	if err != nil {
+		return emptyResult, err
+	}
+	encoded, err := payload.Marshal()
 	if err != nil {
 		return emptyResult, fmt.Errorf("marshal payload: %w", err)
 	}
@@ -138,9 +146,9 @@ func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage S
 		ID:            uuid.New().String(),
 		CommandID:     commandID,
 		OperationID:   op.ID,
-		OperationType: string(op.OperationType),
+		OperationType: CommandType(stage.Name),
 		OperatorID:    operatorID,
-		Payload:       payload,
+		Payload:       encoded,
 	}
 
 	if err := c.outbox.Create(ctx, entry); err != nil {
@@ -159,6 +167,32 @@ func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage S
 
 	// Poll for result with stage-level timeout
 	return c.pollStage(ctx, commandID, stage)
+}
+
+func (c *Coordinator) commandPayload(
+	ctx context.Context,
+	op *store.Operation,
+	stage StageDef,
+) (*CommandPayload, error) {
+	def, err := c.defs.Get(ctx, op.ReleaseDefinitionID)
+	if err != nil {
+		return nil, fmt.Errorf("definition lookup for command: %w", err)
+	}
+	payload := &CommandPayload{
+		Stage:                   stage.Name,
+		OperationID:             op.ID,
+		BundleID:                op.BundleID,
+		DefinitionID:            def.ID,
+		Namespace:               def.Namespace,
+		ReleaseName:             def.ReleaseName,
+		TimeoutSeconds:          c.timeoutSeconds,
+		ValuesRevisionID:        op.ValuesRevisionID,
+		ExpectedCurrentRevision: int64(op.ExpectedRevision),
+		TargetRevision:          int64(op.TargetRevision),
+		Atomic:                  op.OperationType == store.OperationInstall || op.OperationType == store.OperationUpgrade,
+		ValuesPatch:             op.ValuesPatch,
+	}
+	return payload, nil
 }
 
 // pollStage waits for the operator to persist the stage result.

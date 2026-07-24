@@ -194,7 +194,7 @@ func TestClusterRouteCascadeDelete(t *testing.T) {
 	cl, err := st.Clusters().Get(ctx, clusterID)
 	require.NoError(t, err)
 	cl.Status = store.ClusterDisabled
-	require.NoError(t, st.Clusters().Update(ctx, cl))
+	require.NoError(t, st.Clusters().Update(ctx, cl, cl.Version))
 
 	// Route should still exist on disabled cluster.
 	got, err := st.ClusterRoutes().Get(ctx, r.ID)
