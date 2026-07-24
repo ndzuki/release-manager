@@ -89,16 +89,28 @@ func seedValuesRevision(
 ) {
 	t.Helper()
 	now := time.Now().UTC()
-	require.NoError(t, st.Values().Create(context.Background(), &store.ValuesRevision{
+	initialStatus := status
+	if status == store.ValuesStatusApproved {
+		initialStatus = store.ValuesStatusPendingApproval
+	}
+	revision := &store.ValuesRevision{
 		ID:                  id,
 		ReleaseDefinitionID: definitionID,
 		Revision:            1,
-		Status:              status,
+		StateVersion:        1,
+		Status:              initialStatus,
 		Values:              []byte(`{"replicas":2}`),
 		Digest:              "sha256:test",
 		CreatedAt:           now,
 		UpdatedAt:           now,
-	}))
+	}
+	require.NoError(t, st.Values().Create(context.Background(), revision))
+	if status == store.ValuesStatusApproved {
+		_, err := st.ValuesApproval().Approve(context.Background(), store.ValuesApprovalCommand{
+			RevisionID: id, ExpectedStateVersion: 1, ActorUserID: "test-approver", Authorized: true,
+		})
+		require.NoError(t, err)
+	}
 }
 
 func upgradeRequest(valuesRevisionID string) *orchestratorv1.CreateOperationRequest {
@@ -226,23 +238,18 @@ func TestCreateOperation_ReleaseBusy(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 
-	_, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
-		OperationType:       "INSTALL",
-		BundleId:            "bundle-001",
-		ReleaseDefinitionId: "def-001",
-		ValuesRevisionId:    "vr-001",
+	require.NoError(t, st.Operations().Create(context.Background(), &store.Operation{
+		ID:                  "op-busy",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: "def-001",
 		IdempotencyKey:      "idem-002",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
 	}))
-	require.NoError(t, err)
 
 	seedValuesRevision(t, st, "vr-002", "def-001", store.ValuesStatusApproved)
 
 	// Second request with different idempotency key -> release_busy
-	_, err = svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+	_, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:           "UPGRADE",
 		BundleId:                "bundle-002",
 		ReleaseDefinitionId:     "def-001",
@@ -280,11 +287,12 @@ func TestCreateOperation_ConcurrentUpgradeOnlyOneAccepted(t *testing.T) {
 	busy := 0
 	for range requests {
 		err := <-results
-		if err == nil {
+		switch {
+		case err == nil:
 			accepted++
-		} else if connect.CodeOf(err) == connect.CodeFailedPrecondition && strings.Contains(err.Error(), "release_busy") {
+		case connect.CodeOf(err) == connect.CodeFailedPrecondition && strings.Contains(err.Error(), "release_busy"):
 			busy++
-		} else {
+		default:
 			t.Logf("unexpected error: %v", err)
 		}
 	}

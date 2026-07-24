@@ -11,6 +11,7 @@ import (
 
 type organizationStore struct{ db *sql.DB }
 
+//nolint:dupl // Organization and membership stores intentionally share timestamped CRUD structure.
 func (s *organizationStore) Create(ctx context.Context, o *store.Organization) error {
 	if o.CreatedAt.IsZero() {
 		o.CreatedAt = time.Now().UTC()
@@ -83,6 +84,7 @@ func (s *organizationStore) Update(ctx context.Context, o *store.Organization) e
 	return nil
 }
 
+//nolint:dupl // Organization and membership scanners intentionally share status/time decoding structure.
 func scanOrganization(row interface{ Scan(...interface{}) error }) (*store.Organization, error) {
 	var (
 		o            store.Organization

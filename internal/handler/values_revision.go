@@ -15,26 +15,35 @@ import (
 // DefaultMaxValuesSize is the default input size limit for values documents (1 MiB).
 const DefaultMaxValuesSize = 1 << 20
 
-// ValuesHandler handles CRUD and approval for values revisions.
+// ValuesHandler handles ValuesRevision CRUD.
 type ValuesHandler struct {
-	store   store.ValuesStore
+	values  store.ValuesStore
 	maxSize int64
 	logger  *slog.Logger
 }
 
-// NewValuesHandler creates a ValuesHandler with the given store and size limit.
-func NewValuesHandler(st store.ValuesStore, maxSize int64, logger *slog.Logger) *ValuesHandler {
+// NewValuesHandler creates a ValuesHandler with the complete persistence store.
+func NewValuesHandler(st store.Store, maxSize int64, logger *slog.Logger) *ValuesHandler {
+	return newValuesHandlerFromValuesStore(st.Values(), maxSize, logger)
+}
+
+// newValuesHandlerFromValuesStore keeps unit tests independent from the aggregate store.
+func newValuesHandlerFromValuesStore(valuesStore store.ValuesStore, maxSize int64, logger *slog.Logger) *ValuesHandler {
 	if maxSize <= 0 {
 		maxSize = DefaultMaxValuesSize
 	}
-	return &ValuesHandler{store: st, maxSize: maxSize, logger: logger}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &ValuesHandler{values: valuesStore, maxSize: maxSize, logger: logger}
 }
 
 // createRequest is the JSON body for POST /api/v1/values-revisions.
 type createRequest struct {
-	ReleaseDefinitionID string `json:"release_definition_id"`
-	ParentRevisionID    string `json:"parent_revision_id,omitempty"`
-	Values              string `json:"values"`
+	ReleaseDefinitionID string             `json:"release_definition_id"`
+	ParentRevisionID    string             `json:"parent_revision_id,omitempty"`
+	Values              string             `json:"values"`
+	Actor               store.ActorContext `json:"actor"`
 }
 
 // Create handles POST /api/v1/values-revisions.
@@ -69,7 +78,7 @@ func (h *ValuesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get next revision number.
-	nextRev, err := h.store.GetNextRevisionNumber(r.Context(), req.ReleaseDefinitionID)
+	nextRev, err := h.values.GetNextRevisionNumber(r.Context(), req.ReleaseDefinitionID)
 	if err != nil {
 		h.logger.Error("get next revision", "error", err)
 		writeJSON(w, http.StatusInternalServerError, errResp("failed to get next revision number"))
@@ -84,11 +93,13 @@ func (h *ValuesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Values:              result.Canonical,
 		Digest:              result.Digest,
 		ParentRevisionID:    req.ParentRevisionID,
+		StateVersion:        1,
+		CreatedByUserID:     req.Actor.UserID,
 		CreatedAt:           time.Now().UTC(),
 		UpdatedAt:           time.Now().UTC(),
 	}
 
-	if err := h.store.Create(r.Context(), vr); err != nil {
+	if err := h.values.Create(r.Context(), vr); err != nil {
 		h.logger.Error("create values revision", "error", err)
 		writeJSON(w, http.StatusInternalServerError, errResp("failed to create values revision"))
 		return
@@ -105,7 +116,7 @@ func (h *ValuesHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vr, err := h.store.Get(r.Context(), id)
+	vr, err := h.values.Get(r.Context(), id)
 	if err != nil {
 		if err == store.ErrNotFound {
 			writeJSON(w, http.StatusNotFound, errResp("not found"))
@@ -127,7 +138,7 @@ func (h *ValuesHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	revs, err := h.store.List(r.Context(), defID)
+	revs, err := h.values.List(r.Context(), defID)
 	if err != nil {
 		h.logger.Error("list values revisions", "error", err)
 		writeJSON(w, http.StatusInternalServerError, errResp("failed to list values revisions"))
@@ -144,63 +155,11 @@ func (h *ValuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// transitionStatus fetches a draft revision, applies a status transition,
-// and persists it with optimistic locking.
-func (h *ValuesHandler) transitionStatus(w http.ResponseWriter, r *http.Request, targetStatus store.ValuesStatus, action string) {
-	id := r.PathValue("id")
-	if id == "" {
-		writeJSON(w, http.StatusBadRequest, errResp("id is required"))
-		return
-	}
-
-	vr, err := h.store.Get(r.Context(), id)
-	if err != nil {
-		if err == store.ErrNotFound {
-			writeJSON(w, http.StatusNotFound, errResp("not found"))
-			return
-		}
-		h.logger.Error("get values revision for "+action, "error", err)
-		writeJSON(w, http.StatusInternalServerError, errResp("failed to get values revision"))
-		return
-	}
-
-	if vr.Status != store.ValuesStatusDraft {
-		writeJSON(w, http.StatusBadRequest, errResp("only draft revisions can be "+action+"d"))
-		return
-	}
-
-	vr.Status = targetStatus
-
-	if err := h.store.Update(r.Context(), vr, vr.ParentRevisionID); err != nil {
-		if err == store.ErrOptimisticLock {
-			writeJSON(w, http.StatusConflict, errResp("parent_conflict: revision was modified concurrently"))
-			return
-		}
-		h.logger.Error(action+" values revision", "error", err)
-		writeJSON(w, http.StatusInternalServerError, errResp("failed to "+action+" values revision"))
-		return
-	}
-
-	writeJSON(w, http.StatusOK, toResponse(vr))
-}
-
-// Approve handles POST /api/v1/values-revisions/{id}/approve.
-func (h *ValuesHandler) Approve(w http.ResponseWriter, r *http.Request) {
-	h.transitionStatus(w, r, store.ValuesStatusApproved, "approve")
-}
-
-// Reject handles POST /api/v1/values-revisions/{id}/reject.
-func (h *ValuesHandler) Reject(w http.ResponseWriter, r *http.Request) {
-	h.transitionStatus(w, r, store.ValuesStatusRejected, "reject")
-}
-
-// Register mounts all values revision routes on the given mux.
+// Register mounts ValuesRevision CRUD routes on the given mux.
 func (h *ValuesHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/values-revisions", h.Create)
 	mux.HandleFunc("GET /api/v1/values-revisions/{id}", h.Get)
 	mux.HandleFunc("GET /api/v1/values-revisions", h.List)
-	mux.HandleFunc("POST /api/v1/values-revisions/{id}/approve", h.Approve)
-	mux.HandleFunc("POST /api/v1/values-revisions/{id}/reject", h.Reject)
 }
 
 // --- response helpers ---
@@ -247,4 +206,3 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 		slog.Error("write json", "error", err)
 	}
 }
-

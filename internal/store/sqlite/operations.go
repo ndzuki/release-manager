@@ -63,7 +63,7 @@ func createIfAvailable(ctx context.Context, db *sql.DB, op *store.Operation) err
 // the error indicates a SQLite busy condition (concurrent write in WAL mode).
 func retryBusy(ctx context.Context, fn func() error) error {
 	const maxRetries = 10
-	var backoff time.Duration = time.Millisecond
+	backoff := time.Millisecond
 	var lastErr error
 	for range maxRetries + 1 {
 		if err := ctx.Err(); err != nil {
@@ -97,6 +97,9 @@ func createOperation(ctx context.Context, execer operationExecer, op *store.Oper
 	}
 	if op.UpdatedAt.IsZero() {
 		op.UpdatedAt = op.CreatedAt
+	}
+	if op.StateVersion == 0 {
+		op.StateVersion = 1
 	}
 
 	var deadline *string
@@ -450,8 +453,5 @@ func (s *operationStore) maybeSetPreflightTerminal(ctx context.Context, operatio
 	if s.pl == nil {
 		return
 	}
-	if err := s.pl.SetOperationTerminal(ctx, operationID, terminalAt); err != nil {
-		// Best-effort: the operation already committed successfully.
-		// Preflight GC will re-evaluate created_at on the next cycle.
-	}
+	_ = s.pl.SetOperationTerminal(ctx, operationID, terminalAt) //nolint:errcheck // Best-effort GC metadata after the operation commit.
 }

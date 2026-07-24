@@ -100,9 +100,9 @@ func TestAPISvcCloseDrainsAuditEmitter(t *testing.T) {
 		ID:             "event-close",
 		ActorKind:      store.AuditActorSystem,
 		OrganizationID: "org-001",
-		ResourceType:   "release_operation",
-		ResourceID:     "operation-close",
-		Action:         "create",
+		ResourceType:   "api_service",
+		ResourceID:     "release-api",
+		Action:         "close",
 		Status:         "accepted",
 		Metadata:       map[string]string{},
 	})

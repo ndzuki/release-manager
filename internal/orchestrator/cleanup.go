@@ -107,7 +107,7 @@ func (s *CleanupService) RunCleanup(
 	}()
 
 	start := time.Now()
-	resp, errs := s.runGC(ctx, key)
+	resp, errs := s.runGC(ctx)
 	duration := time.Since(start)
 
 	// Cache result for idempotency.
@@ -135,9 +135,8 @@ func (s *CleanupService) RunCleanup(
 }
 
 // runGC executes the 4-phase garbage collection.
-func (s *CleanupService) runGC(ctx context.Context, key string) (*orchestratorv1.RunCleanupResponse, []string) {
-	resp := &orchestratorv1.RunCleanupResponse{}
-	var errs []string
+func (s *CleanupService) runGC(ctx context.Context) (resp *orchestratorv1.RunCleanupResponse, errs []string) {
+	resp = &orchestratorv1.RunCleanupResponse{}
 
 	// Phase 1: Archive eligible bundles.
 	terminalStates := []store.OperationStatus{
@@ -163,7 +162,7 @@ func (s *CleanupService) runGC(ctx context.Context, key string) (*orchestratorv1
 	if err != nil {
 		errs = append(errs, fmt.Sprintf("phase2 delete bundles: %v", err))
 	} else {
-		resp.DeletedBundles = int32(n)
+		resp.DeletedBundles = boundedCleanupCount(n)
 		s.logger.Info("gc_phase2_deleted_bundles", "count", n)
 	}
 
@@ -173,7 +172,7 @@ func (s *CleanupService) runGC(ctx context.Context, key string) (*orchestratorv1
 	if err != nil {
 		errs = append(errs, fmt.Sprintf("phase3 delete candidates: %v", err))
 	} else {
-		resp.DeletedCandidates = int32(n)
+		resp.DeletedCandidates = boundedCleanupCount(n)
 		s.logger.Info("gc_phase3_deleted_candidates", "count", n)
 	}
 
@@ -183,12 +182,23 @@ func (s *CleanupService) runGC(ctx context.Context, key string) (*orchestratorv1
 	if err != nil {
 		errs = append(errs, fmt.Sprintf("phase4 delete preflights: %v", err))
 	} else {
-		resp.DeletedPreflights = int32(n)
+		resp.DeletedPreflights = boundedCleanupCount(n)
 		s.logger.Info("gc_phase4_deleted_preflights", "count", n)
 	}
 
 	resp.Errors = errs
 	return resp, errs
+}
+
+func boundedCleanupCount(count int64) int32 {
+	if count <= 0 {
+		return 0
+	}
+	const maxInt32 = int64(1<<31 - 1)
+	if count > maxInt32 {
+		return int32(maxInt32)
+	}
+	return int32(count) //nolint:gosec // Value is explicitly bounded to the int32 range.
 }
 
 // StartTicker runs the GC on a periodic timer. Runs until ctx is canceled.
@@ -211,7 +221,7 @@ func (s *CleanupService) StartTicker(ctx context.Context) {
 		s.logger.Info("gc_ticker_start", "key", key)
 
 		start := time.Now()
-		resp, errs := s.runGC(ctx, key)
+		resp, errs := s.runGC(ctx)
 		duration := time.Since(start)
 
 		s.logger.Info("cleanup_completed",

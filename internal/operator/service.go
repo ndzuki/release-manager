@@ -399,7 +399,9 @@ func (s *Service) CommandStream(
 				if resultJSON == "" {
 					resultJSON = result.GetMessage()
 				}
-				_ = s.store.Outbox().UpdateStatus(ctx, result.GetOutboxId(), status, resultJSON)
+				if err := s.store.Outbox().UpdateStatus(ctx, result.GetOutboxId(), status, resultJSON); err != nil {
+					return fmt.Errorf("update command result: %w", err)
+				}
 				if existing != nil {
 					s.FinishOperation(ctx, existing.OperationID, result.GetStatus(), resultJSON)
 				}

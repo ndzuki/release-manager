@@ -529,38 +529,6 @@ func TestValuesRevisionGetNextRevisionNumber(t *testing.T) {
 	assert.Equal(t, 2, n)
 }
 
-func TestValuesRevisionUpdateOptimisticLock(t *testing.T) {
-	st := setupStore(t)
-	ctx := context.Background()
-	def := createTestDefinition(t, st)
-
-	vr := &store.ValuesRevision{
-		ID:                  uuid.New().String(),
-		ReleaseDefinitionID: def.ID,
-		Revision:            1,
-		Status:              store.ValuesStatusDraft,
-		Values:              []byte(`{"key":"v1"}`),
-		Digest:              "sha256:abc",
-		ParentRevisionID:    "parent-rev-1",
-	}
-	require.NoError(t, st.Values().Create(ctx, vr))
-
-	// Update with correct parent — should succeed
-	vr.Status = store.ValuesStatusApproved
-	err := st.Values().Update(ctx, vr, "parent-rev-1")
-	require.NoError(t, err)
-
-	// Verify
-	got, err := st.Values().Get(ctx, vr.ID)
-	require.NoError(t, err)
-	assert.Equal(t, store.ValuesStatusApproved, got.Status)
-
-	// Update with wrong parent — should get optimistic lock error
-	vr.Status = store.ValuesStatusRejected
-	err = st.Values().Update(ctx, vr, "wrong-parent")
-	assert.ErrorIs(t, err, store.ErrOptimisticLock)
-}
-
 func TestValuesRevisionList(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
@@ -589,6 +557,127 @@ func TestValuesRevisionNotFound(t *testing.T) {
 
 	_, err := st.Values().Get(ctx, "nonexistent")
 	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
+func TestValuesRevisionApproveSupersedesPreviousApproved(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	previous := &store.ValuesRevision{
+		ID:                  uuid.New().String(),
+		ReleaseDefinitionID: def.ID,
+		Revision:            1,
+		StateVersion:        1,
+		Status:              store.ValuesStatusApproved,
+		Values:              []byte(`{"key":"old"}`),
+		Digest:              "sha256:old",
+		CreatedByUserID:     "creator-old",
+	}
+	next := &store.ValuesRevision{
+		ID:                  uuid.New().String(),
+		ReleaseDefinitionID: def.ID,
+		Revision:            2,
+		StateVersion:        1,
+		Status:              store.ValuesStatusPendingApproval,
+		Values:              []byte(`{"key":"new"}`),
+		Digest:              "sha256:new",
+		CreatedByUserID:     "creator-new",
+	}
+	require.NoError(t, st.Values().Create(ctx, previous))
+	require.NoError(t, st.Values().Create(ctx, next))
+
+	approvedResult, err := st.ValuesApproval().Approve(ctx, store.ValuesApprovalCommand{
+		RevisionID: next.ID, ExpectedStateVersion: 1, ActorUserID: "approver-1", Authorized: true,
+	})
+	require.NoError(t, err)
+	approved := approvedResult.Revision
+	assert.Equal(t, next.ID, approved.ID)
+	assert.Equal(t, store.ValuesStatusApproved, approved.Status)
+	assert.EqualValues(t, 2, approved.StateVersion)
+	assert.Equal(t, []string{previous.ID}, approvedResult.SupersededRevisionIDs)
+
+	persistedPrevious, err := st.Values().Get(ctx, previous.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.ValuesStatusSuperseded, persistedPrevious.Status)
+}
+
+func TestValuesApprovalRejectsUnauthorizedCommand(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	revision := &store.ValuesRevision{
+		ID: uuid.New().String(), ReleaseDefinitionID: def.ID, Revision: 1,
+		StateVersion: 1, Status: store.ValuesStatusPendingApproval,
+		Values: []byte(`{"key":"value"}`), Digest: "sha256:unauthorized",
+		CreatedByUserID: "creator",
+	}
+	require.NoError(t, st.Values().Create(ctx, revision))
+
+	_, err := st.ValuesApproval().Approve(ctx, store.ValuesApprovalCommand{
+		RevisionID: revision.ID, ExpectedStateVersion: 1, ActorUserID: "approver",
+	})
+	require.ErrorIs(t, err, store.ErrNotAuthorized)
+	persisted, err := st.Values().Get(ctx, revision.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.ValuesStatusPendingApproval, persisted.Status)
+	decisions, err := st.ValuesApprovalEvidence().ListDecisions(ctx, revision.ID)
+	require.NoError(t, err)
+	assert.Empty(t, decisions)
+}
+
+func TestValuesRevisionApproveRejectOptimisticLock(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	approval := &store.ValuesRevision{
+		ID:                  uuid.New().String(),
+		ReleaseDefinitionID: def.ID,
+		Revision:            1,
+		StateVersion:        1,
+		Status:              store.ValuesStatusPendingApproval,
+		Values:              []byte(`{"key":"approve"}`),
+		Digest:              "sha256:approve",
+		CreatedByUserID:     "creator-approve",
+	}
+	rejection := &store.ValuesRevision{
+		ID:                  uuid.New().String(),
+		ReleaseDefinitionID: def.ID,
+		Revision:            2,
+		StateVersion:        1,
+		Status:              store.ValuesStatusDraft,
+		Values:              []byte(`{"key":"reject"}`),
+		Digest:              "sha256:reject",
+		CreatedByUserID:     "creator-reject",
+	}
+	require.NoError(t, st.Values().Create(ctx, approval))
+	require.NoError(t, st.Values().Create(ctx, rejection))
+
+	approvedResult, err := st.ValuesApproval().Approve(ctx, store.ValuesApprovalCommand{
+		RevisionID: approval.ID, ExpectedStateVersion: 1, ActorUserID: "approver-1", Authorized: true,
+	})
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, approvedResult.Revision.StateVersion)
+	_, err = st.ValuesApproval().Approve(ctx, store.ValuesApprovalCommand{
+		RevisionID: approval.ID, ExpectedStateVersion: 1, ActorUserID: "approver-2", Authorized: true,
+	})
+	assert.ErrorIs(t, err, store.ErrOptimisticLock)
+
+	pendingResult, err := st.ValuesApproval().Submit(ctx, store.ValuesApprovalCommand{
+		RevisionID: rejection.ID, ExpectedStateVersion: 1, ActorUserID: "creator-reject", Authorized: true,
+	})
+	require.NoError(t, err)
+	rejectedResult, err := st.ValuesApproval().Reject(ctx, store.ValuesApprovalCommand{
+		RevisionID: rejection.ID, ExpectedStateVersion: pendingResult.Revision.StateVersion,
+		ActorUserID: "rejector-1", Reason: "needs changes", Authorized: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, store.ValuesStatusRejected, rejectedResult.Revision.Status)
+	assert.EqualValues(t, 3, rejectedResult.Revision.StateVersion)
+	_, err = st.ValuesApproval().Reject(ctx, store.ValuesApprovalCommand{
+		RevisionID: rejection.ID, ExpectedStateVersion: pendingResult.Revision.StateVersion,
+		ActorUserID: "rejector-2", Reason: "stale", Authorized: true,
+	})
+	assert.ErrorIs(t, err, store.ErrOptimisticLock)
 }
 
 // ── ReleaseDefinition store tests ───────────────────────────────

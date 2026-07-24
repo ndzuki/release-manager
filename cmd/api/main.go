@@ -15,9 +15,9 @@ import (
 	auditv1connect "github.com/ndzuki/release-manager/api/gen/audit/v1/auditv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/audit"
-	"github.com/ndzuki/release-manager/internal/auth"
 	"github.com/ndzuki/release-manager/internal/config"
 	"github.com/ndzuki/release-manager/internal/handler"
+	"github.com/ndzuki/release-manager/internal/jwtauth"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
 
@@ -41,10 +41,10 @@ func (s *apiSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	}
 	logger.Info("store opened", "db", s.dbPath)
 
-	valsHandler := handler.NewValuesHandler(st.Values(), 0, logger)
+	valsHandler := handler.NewValuesHandler(st, 0, logger)
 	valsHandler.Register(mux)
 
-	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)
+	jwtMgr := jwtauth.New([]byte(s.signingKey), 15*time.Minute)
 	s.store = st
 	s.emitter = audit.NewEmitter(st.AuditEvents(), logger, audit.DefaultConfig())
 	auditSvc := audit.NewAuditServiceHandler(st, s.emitter, logger)

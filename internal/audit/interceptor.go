@@ -7,7 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/ndzuki/release-manager/internal/auth"
+	"github.com/ndzuki/release-manager/internal/jwtauth"
 )
 
 type principalContextKey struct{}
@@ -20,7 +20,7 @@ type Principal struct {
 }
 
 // NewJWTInterceptor validates access tokens and injects the audit principal.
-func NewJWTInterceptor(jwt *auth.JWTManager) connect.UnaryInterceptorFunc {
+func NewJWTInterceptor(jwt *jwtauth.Manager) connect.UnaryInterceptorFunc {
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
 			value := req.Header().Get("Authorization")
@@ -43,7 +43,8 @@ func NewJWTInterceptor(jwt *auth.JWTManager) connect.UnaryInterceptorFunc {
 	}
 }
 
-func principalFromContext(ctx context.Context) (Principal, bool) {
+// PrincipalFromContext returns the authenticated audit principal.
+func PrincipalFromContext(ctx context.Context) (Principal, bool) {
 	principal, ok := ctx.Value(principalContextKey{}).(Principal)
 	return principal, ok
 }

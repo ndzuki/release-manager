@@ -138,6 +138,10 @@ func (s *BindingService) RevokeBinding(
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("revoke binding: %w", err))
 	}
+	binding, err = s.getBinding(ctx, binding.ID)
+	if err != nil {
+		return nil, err
+	}
 	return connect.NewResponse(&authv1.RevokeBindingResponse{Binding: toProtoBinding(binding)}), nil
 }
 
@@ -179,6 +183,10 @@ func (s *BindingService) handleExistingBinding(
 			return nil, connect.NewError(connect.CodeAborted, errors.New("optimistic_lock_conflict"))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("reactivate binding: %w", err))
+	}
+	binding, err := s.getBinding(ctx, binding.ID)
+	if err != nil {
+		return nil, err
 	}
 	return connect.NewResponse(&authv1.CreateBindingResponse{Binding: toProtoBinding(binding)}), nil
 }

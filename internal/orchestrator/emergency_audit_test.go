@@ -97,6 +97,7 @@ func TestEmergencyChange_AuditDoesNotPersistRawPayload(t *testing.T) {
 		Action:              orchestratorv1.EmergencyAction_EMERGENCY_ACTION_SET_CONTAINER_IMAGE,
 		Payload:             `{"workload":"deployment/nginx","container":"nginx","image":"registry.example/nginx@sha256:deadbeef"}`,
 		Reason:              "patch CVE",
+		Actor:               &commonv1.ActorContext{UserId: "release-admin", Organization: "org-1"},
 	}))
 	require.NoError(t, err)
 	require.NoError(t, emitter.Shutdown(context.Background()))

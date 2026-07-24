@@ -22,13 +22,49 @@ const (
 
 // Sentinel errors for store operations.
 var (
-	ErrNotFound       = errors.New("store: not found")
-	ErrOptimisticLock = errors.New("store: optimistic lock conflict")
-	ErrDuplicateKey   = errors.New("store: duplicate key")
-	ErrReleaseBusy    = errors.New("store: release busy")
-	ErrInvalidCursor  = errors.New("store: invalid cursor")
-	ErrBindingRevoked = errors.New("store: binding revoked")
+	ErrNotFound                  = errors.New("store: not found")
+	ErrOptimisticLock            = errors.New("store: optimistic lock conflict")
+	ErrDuplicateKey              = errors.New("store: duplicate key")
+	ErrReleaseBusy               = errors.New("store: release busy")
+	ErrInvalidCursor             = errors.New("store: invalid cursor")
+	ErrBindingRevoked            = errors.New("store: binding revoked")
+	ErrApprovalPending           = errors.New("store: another approval is pending")
+	ErrIdempotencyConflict       = errors.New("store: idempotency conflict")
+	ErrInvalidState              = errors.New("store: invalid values revision state")
+	ErrDefinitionOwnerUnresolved = errors.New("store: definition owner unresolved")
+	ErrNotAuthorized             = errors.New("store: approval command not authorized")
 )
+
+// StateVersionConflictError reports the current revision version after a failed CAS.
+type StateVersionConflictError struct {
+	Expected int64
+	Current  int64
+}
+
+func (e *StateVersionConflictError) Error() string {
+	return "store: values revision state version conflict"
+}
+
+func (e *StateVersionConflictError) Unwrap() error { return ErrOptimisticLock }
+
+// InvalidValuesStateError reports a state-machine precondition failure.
+type InvalidValuesStateError struct {
+	Actual   ValuesStatus
+	Expected ValuesStatus
+}
+
+func (e *InvalidValuesStateError) Error() string { return "store: invalid values revision state" }
+
+func (e *InvalidValuesStateError) Unwrap() error { return ErrInvalidState }
+
+// ApprovalPendingError reports the definition whose pending slot is occupied.
+type ApprovalPendingError struct {
+	DefinitionID string
+}
+
+func (e *ApprovalPendingError) Error() string { return "store: another approval is pending" }
+
+func (e *ApprovalPendingError) Unwrap() error { return ErrApprovalPending }
 
 // OperationType classifies the kind of release operation.
 type OperationType string
@@ -90,9 +126,11 @@ const (
 type ValuesStatus string
 
 const (
-	ValuesStatusDraft    ValuesStatus = "draft"
-	ValuesStatusApproved ValuesStatus = "approved"
-	ValuesStatusRejected ValuesStatus = "rejected"
+	ValuesStatusDraft           ValuesStatus = "draft"
+	ValuesStatusPendingApproval ValuesStatus = "pending_approval"
+	ValuesStatusApproved        ValuesStatus = "approved"
+	ValuesStatusRejected        ValuesStatus = "rejected"
+	ValuesStatusSuperseded      ValuesStatus = "superseded"
 )
 
 // ActorContext records who initiated an operation.
@@ -124,19 +162,21 @@ type Operation struct {
 
 // ReleaseDefinition represents a Helm release target configuration.
 type ReleaseDefinition struct {
-	ID                string           `json:"id"`
-	Name              string           `json:"name"`
-	CustomerID        string           `json:"customer_id"`
-	ClusterID         string           `json:"cluster_id"`
-	Namespace         string           `json:"namespace"`
-	ReleaseName       string           `json:"release_name"`
-	ChartName         string           `json:"chart_name"`
-	Status            DefinitionStatus `json:"status"`
-	OptimisticVersion int              `json:"optimistic_version"`
-	CurrentBundleID   *string          `json:"current_bundle_id,omitempty"`
-	CreatedBy         string           `json:"created_by"`
-	CreatedAt         time.Time        `json:"created_at"`
-	UpdatedAt         time.Time        `json:"updated_at"`
+	ID                  string           `json:"id"`
+	Name                string           `json:"name"`
+	CustomerID          string           `json:"customer_id"`
+	ClusterID           string           `json:"cluster_id"`
+	Namespace           string           `json:"namespace"`
+	ReleaseName         string           `json:"release_name"`
+	ChartName           string           `json:"chart_name"`
+	Status              DefinitionStatus `json:"status"`
+	OptimisticVersion   int              `json:"optimistic_version"`
+	CurrentBundleID     *string          `json:"current_bundle_id,omitempty"`
+	CreatedBy           string           `json:"created_by"`
+	OwnerOrganizationID *string          `json:"owner_organization_id,omitempty"`
+	ApprovedRevisionID  *string          `json:"approved_revision_id,omitempty"`
+	CreatedAt           time.Time        `json:"created_at"`
+	UpdatedAt           time.Time        `json:"updated_at"`
 }
 
 // ValuesRevision stores the desired configuration for a release target.
@@ -144,13 +184,80 @@ type ValuesRevision struct {
 	ID                  string       `json:"id"`
 	ReleaseDefinitionID string       `json:"release_definition_id"`
 	Revision            int          `json:"revision"`
+	StateVersion        int64        `json:"state_version"`
 	Status              ValuesStatus `json:"status"`
 	Values              []byte       `json:"values"`
 	Digest              string       `json:"digest"`
 	ParentRevisionID    string       `json:"parent_revision_id"`
 	SecretRefs          []byte       `json:"secret_refs,omitempty"`
+	CreatedByUserID     string       `json:"created_by_user_id"`
+	SubmittedAt         *time.Time   `json:"submitted_at,omitempty"`
+	DecidedAt           *time.Time   `json:"decided_at,omitempty"`
 	CreatedAt           time.Time    `json:"created_at"`
 	UpdatedAt           time.Time    `json:"updated_at"`
+}
+
+// ValuesDecisionAction identifies a durable approval workflow transition.
+type ValuesDecisionAction string
+
+const (
+	ValuesDecisionSubmitted ValuesDecisionAction = "submitted"
+	ValuesDecisionApproved  ValuesDecisionAction = "approved"
+	ValuesDecisionRejected  ValuesDecisionAction = "rejected"
+)
+
+// ValuesRevisionDecision is an immutable state transition record.
+type ValuesRevisionDecision struct {
+	ID                  string               `json:"id"`
+	RevisionID          string               `json:"revision_id"`
+	ReleaseDefinitionID string               `json:"release_definition_id"`
+	Action              ValuesDecisionAction `json:"action"`
+	FromState           ValuesStatus         `json:"from_state"`
+	ToState             ValuesStatus         `json:"to_state"`
+	ActorUserID         string               `json:"actor_user_id"`
+	ActorOrgID          string               `json:"actor_org_id"`
+	ActorRole           Role                 `json:"actor_role"`
+	Comment             *string              `json:"comment,omitempty"`
+	Reason              string               `json:"reason,omitempty"`
+	RequestID           string               `json:"request_id,omitempty"`
+	IdempotencyKeyHash  string               `json:"idempotency_key_hash,omitempty"`
+	CreatedAt           time.Time            `json:"created_at"`
+}
+
+// ApprovalOutboxEntry is a durable audit or notification event.
+type ApprovalOutboxEntry struct {
+	ID          string     `json:"id"`
+	EventType   string     `json:"event_type"`
+	PayloadJSON []byte     `json:"payload_json"`
+	CreatedAt   time.Time  `json:"created_at"`
+	Delivered   bool       `json:"delivered"`
+	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
+}
+
+// ValuesApprovalCommand contains the trusted authorization and idempotency snapshot.
+type ValuesApprovalCommand struct {
+	RevisionID           string
+	ExpectedStateVersion int64
+	ActorUserID          string
+	ActorOrgID           string
+	ActorRole            Role
+	Authorized           bool
+	Comment              *string
+	Reason               string
+	RequestID            string
+	IdempotencyScope     string
+	IdempotencyKeyHash   string
+	RequestHash          string
+}
+
+// ValuesApprovalResult is the committed or replayed transition result.
+type ValuesApprovalResult struct {
+	Revision              *ValuesRevision
+	PreviousState         ValuesStatus
+	NewState              ValuesStatus
+	DecidedAt             time.Time
+	SupersededRevisionIDs []string
+	Replayed              bool
 }
 
 // CustomerStatus is the lifecycle state of a customer tenant.
@@ -423,7 +530,6 @@ type AuditEvent struct {
 	CreatedAt      time.Time
 }
 
-
 // AuditEventFilter narrows audit event queries by optional criteria.
 type AuditEventFilter struct {
 	OrganizationID string
@@ -528,7 +634,6 @@ type EmergencyPayload struct {
 	Reason      string
 	Convergence EmergencyConvergence
 }
-
 
 // --- Trust root domain types (REQ-043) ---
 
@@ -682,7 +787,6 @@ type PreflightRecord struct {
 	CreatedAt  time.Time
 }
 
-
 // ScanResultRecord is the serializable domain type for a vulnerability scan result.
 type ScanResultRecord struct {
 	ID             string
@@ -791,7 +895,6 @@ type DefinitionStore interface {
 	SetCurrentBundle(ctx context.Context, defID string, bundleID string) (bool, error)
 }
 
-
 // ReleaseDefinitionEvent is emitted for release definition lifecycle changes.
 type ReleaseDefinitionEvent struct {
 	ID           string    `json:"id"`
@@ -805,6 +908,21 @@ type DefinitionEventStore interface {
 	List(ctx context.Context, definitionID string) ([]*ReleaseDefinitionEvent, error)
 }
 
+// ValuesApprovalStore executes complete approval transitions atomically.
+type ValuesApprovalStore interface {
+	Submit(ctx context.Context, command ValuesApprovalCommand) (*ValuesApprovalResult, error)
+	Approve(ctx context.Context, command ValuesApprovalCommand) (*ValuesApprovalResult, error)
+	Reject(ctx context.Context, command ValuesApprovalCommand) (*ValuesApprovalResult, error)
+	RecordAttempt(ctx context.Context, entry *ApprovalOutboxEntry) error
+}
+
+// ValuesApprovalReader exposes immutable workflow evidence.
+type ValuesApprovalReader interface {
+	ListDecisions(ctx context.Context, revisionID string) ([]*ValuesRevisionDecision, error)
+	ListAuditOutbox(ctx context.Context, revisionID string) ([]*ApprovalOutboxEntry, error)
+	ListNotificationOutbox(ctx context.Context, revisionID string) ([]*ApprovalOutboxEntry, error)
+}
+
 // ValuesStore defines the persistence contract for values revisions.
 // For Create, the caller MUST populate Revision via GetNextRevisionNumber
 // and Digest via the values package before calling.
@@ -815,9 +933,6 @@ type ValuesStore interface {
 	GetLatestApproved(ctx context.Context, definitionID string) (*ValuesRevision, error)
 	GetNextRevisionNumber(ctx context.Context, definitionID string) (int, error)
 	List(ctx context.Context, definitionID string) ([]*ValuesRevision, error)
-	// Update persists status changes with optimistic locking on parent_revision_id.
-	// Returns ErrOptimisticLock if expectedParentRev doesn't match the stored value.
-	Update(ctx context.Context, vr *ValuesRevision, expectedParentRev string) error
 }
 
 // CustomerStore defines the persistence contract for customers.
@@ -986,7 +1101,6 @@ type PreflightStore interface {
 	GetByKey(ctx context.Context, key PreflightCacheKey) (*PreflightRecord, error)
 }
 
-
 // ScanResultStore defines the persistence contract for vulnerability scan results.
 type ScanResultStore interface {
 	Create(ctx context.Context, rec *ScanResultRecord) error
@@ -1071,7 +1185,6 @@ type InventoryStore interface {
 	GetBySyncID(ctx context.Context, syncID string) (*InventorySyncLog, error)
 }
 
-
 // ── Candidate artifact domain types (REQ-XXX) ──────────────────────
 
 // CandidateArtifact represents a build artifact awaiting bundle assignment.
@@ -1110,6 +1223,7 @@ type PreflightLifecycleStore interface {
 	SetOperationTerminal(ctx context.Context, operationID string, terminalAt time.Time) error
 	DeleteExpired(ctx context.Context, ttl time.Duration) (int64, error)
 }
+
 // Store is the top-level persistence abstraction.
 type Store interface {
 	Operations() OperationStore
@@ -1117,6 +1231,8 @@ type Store interface {
 	Definitions() DefinitionStore
 	DefinitionEvents() DefinitionEventStore
 	Values() ValuesStore
+	ValuesApproval() ValuesApprovalStore
+	ValuesApprovalEvidence() ValuesApprovalReader
 	Customers() CustomerStore
 	Clusters() ClusterStore
 	EnrollmentTokens() EnrollmentTokenStore

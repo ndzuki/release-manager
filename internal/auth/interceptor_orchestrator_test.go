@@ -37,6 +37,10 @@ func TestAuthInterceptor_OrchestratorEmergencyChange(t *testing.T) {
 			Username:     userID,
 			PasswordHash: "unused",
 		}))
+		require.NoError(t, st.AuthSessions().Create(ctx, &store.AuthSession{
+			ID: userID + "-session", UserID: userID, TokenFamily: userID + "-family",
+			RefreshTokenHash: userID + "-refresh", ExpiresAt: time.Now().UTC().Add(time.Hour),
+		}))
 	}
 	for _, member := range []*store.OrganizationMember{
 		{OrgID: organizationID, UserID: allowedUserID, Role: store.RoleReleaseAdmin},

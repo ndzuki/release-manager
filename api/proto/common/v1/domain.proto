@@ -67,6 +67,8 @@ enum ValuesStatus {
   VALUES_STATUS_DRAFT = 1;
   VALUES_STATUS_APPROVED = 2;
   VALUES_STATUS_REJECTED = 3;
+  VALUES_STATUS_PENDING_APPROVAL = 4;
+  VALUES_STATUS_SUPERSEDED = 5;
 }
 
 // ValuesRevision stores the desired configuration for a release target.
@@ -80,6 +82,10 @@ message ValuesRevision {
   string digest = 7;
   string parent_revision_id = 8;
   repeated SecretRef secret_refs = 9;
+  int64 state_version = 10;
+  string created_by_user_id = 11;
+  google.protobuf.Timestamp submitted_at = 12;
+  google.protobuf.Timestamp decided_at = 13;
 }
 
 // SecretRef holds a reference to a secret, never the secret value itself.
