@@ -2,9 +2,14 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,8 +21,12 @@ import (
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/auth"
+	"github.com/ndzuki/release-manager/internal/config"
+	"github.com/ndzuki/release-manager/internal/postgres"
 	"github.com/ndzuki/release-manager/internal/store"
+	postgresstore "github.com/ndzuki/release-manager/internal/store/postgres"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
+	"github.com/ndzuki/release-manager/migrations"
 )
 
 func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
@@ -81,7 +90,8 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 	require.NoError(t, seedStore.Close())
 
 	mux := http.NewServeMux()
-	svc := &orchSvc{dbPath: dbPath, targetEnv: "staging", signingKey: signingKey}
+	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey}
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 	server := httptest.NewServer(mux)
@@ -110,10 +120,10 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 	assert.ErrorContains(t, err, "insufficient for submit")
-	viewerAudit, err := svc.st.ValuesApprovalEvidence().ListAuditOutbox(ctx, viewerRevisionID)
+	viewerAudit, err := svc.store.ValuesApprovalEvidence().ListAuditOutbox(ctx, viewerRevisionID)
 	require.NoError(t, err)
 	require.Len(t, viewerAudit, 1)
-	viewerRevision, err := svc.st.Values().Get(ctx, viewerRevisionID)
+	viewerRevision, err := svc.store.Values().Get(ctx, viewerRevisionID)
 	require.NoError(t, err)
 	assert.Equal(t, store.ValuesStatusDraft, viewerRevision.Status)
 
@@ -142,4 +152,117 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, legacyResponse.Body.Close()) })
 	assert.Equal(t, http.StatusNotFound, legacyResponse.StatusCode)
+}
+
+func TestOrchestratorPostgreSQLCutoverAuthority(t *testing.T) {
+	baseDSN := os.Getenv("POSTGRES_TEST_DSN")
+	if baseDSN == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	ctx := t.Context()
+	dsn := orchestratorTestSchema(ctx, t, baseDSN)
+	database, err := postgres.Open(ctx, config.DatabaseConfig{Driver: "postgres", DSN: dsn})
+	require.NoError(t, err)
+	require.NoError(t, postgres.RunMigrations(ctx, database.SQLDB(), migrations.FS))
+	seedStore, err := postgresstore.New(database.SQLDB(), database.GORM())
+	require.NoError(t, err)
+	const (
+		signingKey     = "postgres-cutover-signing-key"
+		organizationID = "org-070-cutover"
+		userID         = "user-070-cutover"
+		customerID     = "customer-070-cutover"
+	)
+	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Cutover Org"}))
+	require.NoError(t, seedStore.Users().Create(ctx, &store.User{ID: userID, Username: userID, PasswordHash: "unused"}))
+	require.NoError(t, seedStore.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: organizationID, UserID: userID, Role: store.RolePlatformAdmin}))
+	require.NoError(t, seedStore.AuthSessions().Create(ctx, &store.AuthSession{
+		ID: uuid.NewString(), UserID: userID, TokenFamily: uuid.NewString(), RefreshTokenHash: uuid.NewString(), ExpiresAt: time.Now().UTC().Add(time.Hour),
+	}))
+	require.NoError(t, seedStore.Close())
+
+	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey}
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "postgres", DSN: dsn}})
+	mux := http.NewServeMux()
+	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	token, _, err := jwtManager.GenerateAccessToken(userID, organizationID, []string{string(store.RolePlatformAdmin)})
+	require.NoError(t, err)
+	request := connect.NewRequest(&orchestratorv1.CreateCustomerRequest{Id: customerID, Name: "PostgreSQL Customer", Slug: "postgresql-customer"})
+	request.Header().Set("Authorization", "Bearer "+token)
+	client := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
+	_, err = client.CreateCustomer(ctx, request)
+	require.NoError(t, err)
+	assert.IsType(t, &postgresstore.Store{}, svc.store)
+	created, err := svc.store.Customers().Get(ctx, customerID)
+	require.NoError(t, err)
+	assert.Equal(t, "PostgreSQL Customer", created.Name)
+
+	sqlitePath := t.TempDir() + "/rollback.db"
+	rollback, err := sqlitestore.Open(sqlitePath)
+	require.NoError(t, err)
+	require.NoError(t, rollback.Customers().Create(ctx, &store.Customer{ID: "sqlite-before-cutover", Name: "SQLite Snapshot", Slug: "sqlite-snapshot"}))
+	require.NoError(t, rollback.Close())
+	before, err := os.ReadFile(sqlitePath)
+	require.NoError(t, err)
+	require.NoError(t, svc.store.Customers().Create(ctx, &store.Customer{ID: "postgres-after-cutover", Name: "PostgreSQL Only", Slug: "postgres-only"}))
+	after, err := os.ReadFile(sqlitePath)
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "PostgreSQL writes must not modify the SQLite rollback snapshot")
+
+	rollback, err = sqlitestore.Open(sqlitePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rollback.Close()) })
+	_, err = rollback.Customers().Get(ctx, "sqlite-before-cutover")
+	require.NoError(t, err)
+	_, err = rollback.Customers().Get(ctx, "postgres-after-cutover")
+	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
+func orchestratorTestSchema(ctx context.Context, t *testing.T, baseDSN string) string {
+	t.Helper()
+	schema := "task070_orchestrator_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	db, err := sql.Open("pgx", baseDSN)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, fmt.Sprintf(`CREATE SCHEMA %q`, schema)) //nolint:gosec // schema is generated from a UUID.
+	require.NoError(t, err)
+	cleanupCtx := context.WithoutCancel(ctx)
+	t.Cleanup(func() {
+		_, dropErr := db.ExecContext(cleanupCtx, fmt.Sprintf(`DROP SCHEMA %q CASCADE`, schema)) //nolint:gosec // schema is generated from a UUID.
+		require.NoError(t, dropErr)
+		require.NoError(t, db.Close())
+	})
+	parsed, err := url.Parse(baseDSN)
+	require.NoError(t, err)
+	query := parsed.Query()
+	query.Set("search_path", schema)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func TestOrchestratorReadOnlyProcedures(t *testing.T) {
+	readOnly := orchestratorReadOnlyProcedures()
+	for _, procedure := range []string{
+		orchestratorv1connect.OrchestratorServiceGetReleaseDefinitionProcedure,
+		orchestratorv1connect.OrchestratorServiceListReleaseDefinitionsProcedure,
+		orchestratorv1connect.OrchestratorServiceGetCustomerProcedure,
+		orchestratorv1connect.OrchestratorServiceListCustomersProcedure,
+		orchestratorv1connect.OrchestratorServiceGetClusterProcedure,
+		orchestratorv1connect.OrchestratorServiceListClustersProcedure,
+		orchestratorv1connect.OrchestratorServiceGetClusterRoutesProcedure,
+	} {
+		assert.Contains(t, readOnly, procedure)
+	}
+	for _, procedure := range []string{
+		orchestratorv1connect.OrchestratorServiceCreateOperationProcedure,
+		orchestratorv1connect.OrchestratorServiceCreateEnrollmentTokenProcedure,
+		orchestratorv1connect.OrchestratorServiceEmergencyChangeProcedure,
+		orchestratorv1connect.OrchestratorServiceSyncInventoryProcedure,
+		orchestratorv1connect.OrchestratorServiceConfigureClusterRouteProcedure,
+	} {
+		assert.NotContains(t, readOnly, procedure)
+	}
 }

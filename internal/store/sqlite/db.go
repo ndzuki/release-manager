@@ -765,6 +765,51 @@ var migrationStatements = []string{
 	)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_preflight_results_key ON preflight_results(operation_id, routing_version, bundle_digest, trust_policy_version, sbom_policy_version)`,
 
+	// Trust, scan, and exception state must remain available during the SQLite rollback window.
+	`CREATE TABLE IF NOT EXISTS trust_roots (
+		id              TEXT PRIMARY KEY,
+		environment     TEXT NOT NULL,
+		key_id          TEXT NOT NULL DEFAULT '',
+		public_key_pem  TEXT NOT NULL DEFAULT '',
+		issuer          TEXT NOT NULL DEFAULT '',
+		subject_pattern TEXT NOT NULL DEFAULT '',
+		state           TEXT NOT NULL,
+		valid_from      TEXT NOT NULL,
+		grace_until     TEXT,
+		created_at      TEXT NOT NULL,
+		updated_at      TEXT NOT NULL,
+		revoked_at      TEXT
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_trust_roots_environment ON trust_roots(environment, created_at)`,
+	`CREATE TABLE IF NOT EXISTS trust_policies (
+		environment      TEXT PRIMARY KEY,
+		version          INTEGER NOT NULL DEFAULT 0,
+		revocation_epoch INTEGER NOT NULL DEFAULT 0,
+		updated_at       TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS scan_results (
+		id              TEXT PRIMARY KEY,
+		artifact_digest TEXT NOT NULL,
+		sbom_ref        TEXT NOT NULL DEFAULT '',
+		scanner         TEXT NOT NULL DEFAULT '',
+		result_version  TEXT NOT NULL DEFAULT '',
+		severity_json   BLOB NOT NULL,
+		findings_json   BLOB NOT NULL,
+		scanned_at      TEXT NOT NULL,
+		created_at      TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_scan_results_artifact_scanner ON scan_results(artifact_digest, scanner, created_at DESC)`,
+	`CREATE TABLE IF NOT EXISTS vulnerability_exceptions (
+		id              TEXT PRIMARY KEY,
+		finding_id      TEXT NOT NULL DEFAULT '',
+		artifact_digest TEXT NOT NULL DEFAULT '',
+		actor           TEXT NOT NULL DEFAULT '',
+		reason          TEXT NOT NULL DEFAULT '',
+		expires_at      TEXT NOT NULL,
+		created_at      TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_vulnerability_exceptions_artifact ON vulnerability_exceptions(artifact_digest, created_at DESC)`,
+
 	// Artifact lifecycle (REQ-069) — ALTER TABLEs are idempotent (migrate() skips "duplicate column").
 	`ALTER TABLE release_bundles ADD COLUMN archived_at TEXT`,
 	`ALTER TABLE release_definitions ADD COLUMN current_bundle_id TEXT`,

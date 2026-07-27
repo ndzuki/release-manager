@@ -214,8 +214,12 @@ func mapMethodToAction(method string) string {
 		strings.HasPrefix(method, "Update"), strings.HasPrefix(method, "Disable"),
 		strings.HasPrefix(method, "Remove"), strings.HasPrefix(method, "Revoke"),
 		strings.HasPrefix(method, "Delete"), strings.HasPrefix(method, "Change"),
-		method == "EmergencyChange", strings.HasPrefix(method, "Submit"),
-		strings.HasPrefix(method, "Approve"), strings.HasPrefix(method, "Reject"):
+		strings.HasPrefix(method, "Emergency"), strings.HasPrefix(method, "Publish"),
+		strings.HasPrefix(method, "Rollback"), strings.HasPrefix(method, "Configure"),
+		strings.HasPrefix(method, "Sync"), strings.HasPrefix(method, "Logout"),
+		strings.HasPrefix(method, "Refresh"), strings.HasPrefix(method, "Authenticate"),
+		strings.HasPrefix(method, "Submit"), strings.HasPrefix(method, "Approve"),
+		strings.HasPrefix(method, "Reject"):
 		return "write"
 	default:
 		return ""

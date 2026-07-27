@@ -1,6 +1,9 @@
 http_port: 8083
 log_level: debug
-
+database:
+  driver: sqlite
+  dsn: data/orchestrator.db
+maintenance: false
 retention:
   bundle_days: 90
   candidate_artifact_days: 30

@@ -61,7 +61,7 @@ run-webhook: build-webhook ## Start release-webhook
 .PHONY: run-orchestrator
 run-orchestrator: build-orchestrator ## Start release-orchestrator
 	@mkdir -p data
-	./$(BIN_DIR)/release-orchestrator --config configs/orchestrator.dev.yaml --db data/orchestrator.db
+	./$(BIN_DIR)/release-orchestrator --config configs/orchestrator.dev.yaml
 
 .PHONY: run-operator
 run-operator: build-operator ## Start release-operator
@@ -84,7 +84,7 @@ dev: proto build-all ## Start all 6 microservices in background
 	@mkdir -p data
 	@echo "$(YELLOW)Starting all services in background...$(NC)"
 	@./$(BIN_DIR)/release-webhook --config configs/webhook.dev.yaml > data/webhook.log 2>&1 & echo $$! > data/webhook.pid
-	@./$(BIN_DIR)/release-orchestrator --config configs/orchestrator.dev.yaml --db data/orchestrator.db > data/orchestrator.log 2>&1 & echo $$! > data/orchestrator.pid
+	@./$(BIN_DIR)/release-orchestrator --config configs/orchestrator.dev.yaml > data/orchestrator.log 2>&1 & echo $$! > data/orchestrator.pid
 	@./$(BIN_DIR)/release-operator --config configs/operator.dev.yaml > data/operator.log 2>&1 & echo $$! > data/operator.pid
 	@./$(BIN_DIR)/release-auth --config configs/auth.dev.yaml > data/auth.log 2>&1 & echo $$! > data/auth.pid
 	@./$(BIN_DIR)/release-notifier --config configs/notifier.dev.yaml > data/notifier.log 2>&1 & echo $$! > data/notifier.pid
@@ -288,7 +288,7 @@ dev-stage-publish: proto ## REQ-023,067 — Core pipeline CreateOperation
 	@echo "$(BLUE)  ▸ api/kulala/orchestrator.http$(NC)"
 	@mkdir -p data
 	@fuser -k 8083/tcp 2>/dev/null || true
-	$(GO) run ./cmd/orchestrator/ --config configs/orchestrator.dev.yaml --db data/orchestrator.db
+	$(GO) run ./cmd/orchestrator/ --config configs/orchestrator.dev.yaml
 
 .PHONY: dev-stage-auth
 dev-stage-auth: proto ## REQ-025,026,049,027 — Auth & RBAC
