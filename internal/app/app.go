@@ -30,6 +30,9 @@ type Service interface {
 	// /health and /readyz are already registered by app.Run.
 	Register(mux *http.ServeMux, logger *slog.Logger) error
 }
+type configAwareService interface {
+	Configure(*config.ServiceConfig)
+}
 
 type serverConfigurer interface {
 	ConfigureServer(*http.Server) error
@@ -43,11 +46,18 @@ type closeService interface {
 	Close() error
 }
 
+// readinessContributor is an optional interface services can implement
+// to supply dependency readiness checks for /readyz.
+type readinessContributor interface {
+	ReadinessChecks() map[string]func() error
+}
+
 type tlsService interface {
 	TLSCertificateFiles() (certFile string, keyFile string, enabled bool)
 }
 
 // Run starts a service with config loading, signal handling, and graceful shutdown.
+//
 //nolint:gocyclo // Service startup keeps lifecycle and shutdown gates explicit in one owner.
 func Run(configPath string, svc Service) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -57,6 +67,9 @@ func Run(configPath string, svc Service) {
 		logger.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
+	if aware, ok := svc.(configAwareService); ok {
+		aware.Configure(cfg)
+	}
 
 	readinessChecks := map[string]func() error{
 		"noop": func() error { return nil },
@@ -64,12 +77,20 @@ func Run(configPath string, svc Service) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handler.Health())
-	mux.HandleFunc("GET /readyz", handler.Ready(readinessChecks))
 
 	if err := svc.Register(mux, logger); err != nil {
 		logger.Error("failed to register service", "error", err)
 		os.Exit(1)
 	}
+
+	// Collect readiness checks from the service after Register (store is open).
+	if checker, ok := svc.(readinessContributor); ok {
+		for k, v := range checker.ReadinessChecks() {
+			readinessChecks[k] = v
+		}
+	}
+
+	mux.HandleFunc("GET /readyz", handler.Ready(readinessChecks))
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),

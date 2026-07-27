@@ -23,7 +23,10 @@ spec:
         - name: orchestrator
           image: localhost:5001/release-orchestrator:dev
           imagePullPolicy: IfNotPresent
-          args: ["--config", "/configs/orchestrator.dev.yaml", "--db", "/data/release-manager.db", "--target-env", "staging"]
+          args: ["--config", "/configs/orchestrator.dev.yaml", "--target-env", "staging"]
+          envFrom:
+            - secretRef:
+                name: release-manager-dev-credentials
           ports:
             - name: http
               containerPort: 8083

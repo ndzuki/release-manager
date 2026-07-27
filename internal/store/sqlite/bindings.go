@@ -86,18 +86,28 @@ func (s *bindingStore) ListByOrg(ctx context.Context, orgID string) ([]*store.Or
 	return bindings, rows.Err()
 }
 
-
-func (s *bindingStore) Update(ctx context.Context, b *store.OrgCustomerBinding) error {
-	b.UpdatedAt = time.Now().UTC()
-	_, err := s.db.ExecContext(ctx, `
+func (s *bindingStore) Update(ctx context.Context, binding *store.OrgCustomerBinding) error {
+	binding.UpdatedAt = time.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `
 		UPDATE org_customer_bindings
 		SET status = ?, optimistic_version = ?, updated_at = ?
 		WHERE id = ? AND optimistic_version = ?`,
-		string(b.Status), b.OptimisticVersion, b.UpdatedAt.UTC().Format(time.RFC3339),
-		b.ID, b.OptimisticVersion-1,
+		string(binding.Status), binding.OptimisticVersion, binding.UpdatedAt.UTC().Format(time.RFC3339),
+		binding.ID, binding.OptimisticVersion-1,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("update binding: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("binding update rows affected: %w", err)
+	}
+	if rows != 1 {
+		return store.ErrOptimisticLock
+	}
+	return nil
 }
+
 func (s *bindingStore) SetStatus(ctx context.Context, id string, status store.BindingStatus) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
