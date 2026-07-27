@@ -532,7 +532,13 @@ func (t *expiredTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 			Request:    req,
 		}, nil
 	}
-	return t.trackingTransport.RoundTrip(req)
+	response, err := t.base.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	t.activeWatches.Add(1)
+	response.Body = &trackedBody{ReadCloser: response.Body, active: &t.activeWatches}
+	return response, nil
 }
 
 func (t *expiredTransport) setBase(base http.RoundTripper) {
