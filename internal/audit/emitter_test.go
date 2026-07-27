@@ -44,6 +44,37 @@ func (s *memoryStore) CreateBatch(ctx context.Context, events []*store.AuditEven
 	return nil
 }
 
+func (s *memoryStore) Query(_ context.Context, _ store.AuditEventFilter, _ string, _ int) (*store.AuditEventPage, error) {
+	return &store.AuditEventPage{}, nil
+}
+
+func (s *memoryStore) GetByID(_ context.Context, _ string) (*store.AuditEvent, error) {
+	return nil, store.ErrNotFound
+}
+
+func (s *memoryStore) Count(_ context.Context, _ store.AuditEventFilter) (int64, error) {
+	return 0, nil
+}
+
+func (s *memoryStore) ListByResource(_ context.Context, resourceType, resourceID string) ([]*store.AuditEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var matched []*store.AuditEvent
+	for _, event := range s.events {
+		if event.ResourceType == resourceType && event.ResourceID == resourceID {
+			matched = append(matched, event)
+		}
+	}
+	return matched, nil
+}
+
+func (s *memoryStore) ListOlderThan(_ context.Context, _ time.Time, _ int) ([]*store.AuditEvent, error) {
+	return nil, nil
+}
+
+func (s *memoryStore) DeleteByIDs(_ context.Context, _ []string) (int64, error) {
+	return 0, nil
+}
 func testEvent(kind store.AuditActorKind, id string) *store.AuditEvent {
 	return &store.AuditEvent{
 		ActorKind:    kind,

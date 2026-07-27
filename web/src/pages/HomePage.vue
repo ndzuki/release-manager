@@ -1,38 +1,46 @@
 <script setup lang="ts">
+import { shallowRef } from 'vue';
+import EmptyState from '@/components/common/EmptyState.vue';
 import { useAuthStore } from '@/stores/auth';
-import { useRouter } from 'vue-router';
 
 const auth = useAuthStore();
-const router = useRouter();
-
-async function handleLogout() {
-  await auth.logout();
-  router.push({ name: 'Login' });
-}
+const showWelcome = shallowRef(true);
 </script>
 
 <template>
-  <div class="home-page">
-    <p>Welcome to Release Manager.</p>
-    <p v-if="auth.user">Signed in as <strong>{{ auth.user.userId }}</strong>.</p>
-    <button class="home-page__logout" @click="handleLogout">Sign out</button>
-  </div>
+  <section class="home-page">
+    <header>
+      <p class="home-page__eyebrow">Active organization</p>
+      <h1>{{ auth.activeOrganization?.name ?? 'Release Manager' }}</h1>
+      <p>Signed in as <strong>{{ auth.user?.username }}</strong>.</p>
+    </header>
+
+    <EmptyState
+      v-if="showWelcome"
+      title="No release activity yet"
+      message="Release activity for this organization will appear here."
+      action-label="Dismiss"
+      @action="showWelcome = false"
+    />
+  </section>
 </template>
 
 <style scoped>
 .home-page {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+  display: grid;
+  gap: 1.5rem;
 }
 
-.home-page__logout {
-  align-self: flex-start;
-  padding: 0.375rem 0.75rem;
-  border: 1px solid var(--color-border, #cbd5e1);
-  border-radius: 0.375rem;
-  background: var(--color-surface, #fff);
-  cursor: pointer;
-  font-size: 0.8125rem;
+.home-page h1,
+.home-page p {
+  margin: 0;
+}
+
+.home-page__eyebrow {
+  color: var(--color-muted, #64748b);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 </style>

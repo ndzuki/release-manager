@@ -119,7 +119,7 @@ func TestConfigureClusterRoute_DisabledCluster(t *testing.T) {
 	cl, err := st.Clusters().Get(ctx, clusterID)
 	require.NoError(t, err)
 	cl.Status = store.ClusterDisabled
-	require.NoError(t, st.Clusters().Update(ctx, cl))
+	require.NoError(t, st.Clusters().Update(ctx, cl, cl.Version))
 
 	_, err = svc.ConfigureClusterRoute(ctx, connect.NewRequest(&orchestratorv1.ConfigureClusterRouteRequest{
 		ClusterId:    clusterID,

@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,7 +27,7 @@ func setupService(t *testing.T) (*Service, store.Store, func()) {
 	require.NoError(t, err)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	verifier := trust.NewStubVerifier(st.Verifications(), logger)
+	verifier := trust.NewStubVerifier(st.Verifications(), nil, logger)
 	svc := NewService(st, verifier, "staging", nil, logger)
 
 	return svc, st, func() { st.Close() }
@@ -87,16 +89,28 @@ func seedValuesRevision(
 ) {
 	t.Helper()
 	now := time.Now().UTC()
-	require.NoError(t, st.Values().Create(context.Background(), &store.ValuesRevision{
+	initialStatus := status
+	if status == store.ValuesStatusApproved {
+		initialStatus = store.ValuesStatusPendingApproval
+	}
+	revision := &store.ValuesRevision{
 		ID:                  id,
 		ReleaseDefinitionID: definitionID,
 		Revision:            1,
-		Status:              status,
+		StateVersion:        1,
+		Status:              initialStatus,
 		Values:              []byte(`{"replicas":2}`),
 		Digest:              "sha256:test",
 		CreatedAt:           now,
 		UpdatedAt:           now,
-	}))
+	}
+	require.NoError(t, st.Values().Create(context.Background(), revision))
+	if status == store.ValuesStatusApproved {
+		_, err := st.ValuesApproval().Approve(context.Background(), store.ValuesApprovalCommand{
+			RevisionID: id, ExpectedStateVersion: 1, ActorUserID: "test-approver", Authorized: true,
+		})
+		require.NoError(t, err)
+	}
 }
 
 func upgradeRequest(valuesRevisionID string) *orchestratorv1.CreateOperationRequest {
@@ -144,7 +158,7 @@ func TestCreateOperation_RejectedForRevokedCustomerBinding(t *testing.T) {
 
 	binding, err := st.Bindings().GetByOrgAndCustomer(context.Background(), "org-001", "cust-001")
 	require.NoError(t, err)
-	require.NoError(t, st.Bindings().SetStatus(context.Background(), binding, store.BindingRevoked))
+	require.NoError(t, st.Bindings().SetStatus(context.Background(), binding.ID, store.BindingRevoked))
 
 	_, err = svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INSTALL",
@@ -224,26 +238,24 @@ func TestCreateOperation_ReleaseBusy(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 
-	_, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
-		OperationType:       "INSTALL",
-		BundleId:            "bundle-001",
-		ReleaseDefinitionId: "def-001",
-		ValuesRevisionId:    "vr-001",
+	require.NoError(t, st.Operations().Create(context.Background(), &store.Operation{
+		ID:                  "op-busy",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: "def-001",
 		IdempotencyKey:      "idem-002",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
 	}))
-	require.NoError(t, err)
+
+	seedValuesRevision(t, st, "vr-002", "def-001", store.ValuesStatusApproved)
 
 	// Second request with different idempotency key -> release_busy
-	_, err = svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
-		OperationType:       "UPGRADE",
-		BundleId:            "bundle-002",
-		ReleaseDefinitionId: "def-001",
-		ValuesRevisionId:    "vr-002",
-		IdempotencyKey:      "idem-003",
+	_, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:           "UPGRADE",
+		BundleId:                "bundle-002",
+		ReleaseDefinitionId:     "def-001",
+		ValuesRevisionId:        "vr-002",
+		ExpectedCurrentRevision: 1,
+		IdempotencyKey:          "idem-003",
 		Actor: &commonv1.ActorContext{
 			UserId:       "user-001",
 			Organization: "org-001",
@@ -252,6 +264,53 @@ func TestCreateOperation_ReleaseBusy(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "release_busy")
+}
+
+func TestCreateOperation_ConcurrentUpgradeOnlyOneAccepted(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedValuesRevision(t, st, "vr-concurrent", "def-001", store.ValuesStatusApproved)
+
+	const requests = 8
+	results := make(chan error, requests)
+	for i := range requests {
+		go func(i int) {
+			req := upgradeRequest("vr-concurrent")
+			req.IdempotencyKey = fmt.Sprintf("idem-concurrent-%d", i)
+			_, err := svc.CreateOperation(context.Background(), connect.NewRequest(req))
+			results <- err
+		}(i)
+	}
+
+	accepted := 0
+	busy := 0
+	for range requests {
+		err := <-results
+		switch {
+		case err == nil:
+			accepted++
+		case connect.CodeOf(err) == connect.CodeFailedPrecondition && strings.Contains(err.Error(), "release_busy"):
+			busy++
+		default:
+			t.Logf("unexpected error: %v", err)
+		}
+	}
+	t.Logf("concurrent upgrade: accepted=%d busy=%d", accepted, busy)
+
+	// At least 1 must be accepted; at most 1 operation is non-terminal.
+	assert.GreaterOrEqual(t, accepted, 1, "at least one concurrent request must be accepted")
+
+	ops, err := st.Operations().List(context.Background(), "def-001")
+	require.NoError(t, err)
+
+	nonTerminal := 0
+	for _, op := range ops {
+		if !op.Status.IsTerminal() {
+			nonTerminal++
+		}
+	}
+	assert.Equal(t, 1, nonTerminal, "only one concurrent operation can be non-terminal")
 }
 
 func TestCreateOperation_UpgradeValidation(t *testing.T) {

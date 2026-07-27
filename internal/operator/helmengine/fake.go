@@ -18,13 +18,26 @@ type Fake struct {
 	// UpgradeError, if set, causes Upgrade to fail with this error.
 	// Used to test Atomic rollback (AC-021-04).
 	UpgradeError error
+
+	// RollbackError, if set, causes Rollback to fail with this error
+	// BEFORE mutating state (AC-063-03).
+	RollbackError error
+
+	// HistoryError, if set, causes History to fail with this error.
+	HistoryError error
+
+	// ArtifactUnavailableRevisions is a set of revisions whose historical
+	// chart artifacts are unavailable. Rollback to these revisions returns
+	// ErrArtifactUnavailable (AC-063-02).
+	ArtifactUnavailableRevisions map[int]bool
 }
 
 // NewFake creates a new Fake engine.
 func NewFake() *Fake {
 	return &Fake{
-		releases: make(map[string]*Release),
-		history:  make(map[string][]ReleaseHistoryEntry),
+		releases:                    make(map[string]*Release),
+		history:                     make(map[string][]ReleaseHistoryEntry),
+		ArtifactUnavailableRevisions: make(map[int]bool),
 	}
 }
 
@@ -128,6 +141,8 @@ func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, erro
 }
 
 // Rollback reverts to a previous revision.
+// Validates that the target revision exists in history before executing.
+// If RollbackError is set, fails before mutating state (AC-063-03).
 func (f *Fake) Rollback(ctx context.Context, opts RollbackOptions) (*Release, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, ErrCancelled
@@ -137,8 +152,34 @@ func (f *Fake) Rollback(ctx context.Context, opts RollbackOptions) (*Release, er
 	defer f.mu.Unlock()
 
 	key := f.key(opts.Namespace, opts.ReleaseName)
-	if _, exists := f.releases[key]; !exists {
+	_, exists := f.releases[key]
+	if !exists {
 		return nil, ErrNotFound
+	}
+
+	// Validate target revision exists in history.
+	hist := f.history[key]
+	targetFound := false
+	for _, e := range hist {
+		if e.Revision == opts.TargetRevision {
+			targetFound = true
+			break
+		}
+	}
+	if !targetFound {
+		return nil, ErrRevisionNotFound
+	}
+
+	// Check if historical artifact is unavailable for target revision (AC-063-02).
+	if f.ArtifactUnavailableRevisions[opts.TargetRevision] {
+		return nil, ErrArtifactUnavailable
+	}
+
+	// AC-063-03: simulate rollback failure before state mutation.
+	if f.RollbackError != nil {
+		err := f.RollbackError
+		f.RollbackError = nil // one-shot
+		return nil, err
 	}
 
 	f.counter++
@@ -189,6 +230,12 @@ func (f *Fake) History(ctx context.Context, opts HistoryOptions) ([]ReleaseHisto
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	if f.HistoryError != nil {
+		err := f.HistoryError
+		f.HistoryError = nil // one-shot
+		return nil, err
+	}
 
 	key := f.key(opts.Namespace, opts.ReleaseName)
 	entries := f.history[key]

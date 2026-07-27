@@ -34,7 +34,7 @@ func (s *Service) RollbackRelease(
 			//nolint:gosec // Helm revisions are bounded well below int32 max
 			FromRevision: int32(existing.ExpectedRevision),
 			//nolint:gosec // Helm revisions are bounded well below int32 max
-			ToRevision:   int32(existing.TargetRevision),
+			ToRevision:   int32(existing.ExpectedRevision + 1), // rollback creates a new revision
 			State:        string(existing.Status),
 			}), nil
 		}

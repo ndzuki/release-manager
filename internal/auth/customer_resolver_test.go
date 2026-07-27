@@ -1,4 +1,4 @@
-package auth
+package auth_test
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
+	"github.com/ndzuki/release-manager/internal/auth"
 	"github.com/ndzuki/release-manager/internal/orchestrator"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
@@ -31,7 +32,7 @@ func TestConnectCustomerResolver_ResolveIncludesDisabledStatus(t *testing.T) {
 	require.NoError(t, st.Customers().Create(context.Background(), customer))
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := orchestrator.NewService(st, nil, "staging", logger)
+	svc := orchestrator.NewService(st, nil, "staging", nil, logger)
 	path, handler := orchestratorv1connect.NewOrchestratorServiceHandler(svc)
 	mux := http.NewServeMux()
 	mux.Handle(path, handler)
@@ -39,7 +40,7 @@ func TestConnectCustomerResolver_ResolveIncludesDisabledStatus(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	client := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
-	resolver := NewConnectCustomerResolver(client)
+	resolver := auth.NewConnectCustomerResolver(client)
 	resolved, err := resolver.Resolve(context.Background(), customer.ID)
 	require.NoError(t, err)
 	assert.Equal(t, customer.ID, resolved.ID)

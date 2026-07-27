@@ -42,6 +42,15 @@ const (
 	// OrchestratorServiceRollbackReleaseProcedure is the fully-qualified name of the
 	// OrchestratorService's RollbackRelease RPC.
 	OrchestratorServiceRollbackReleaseProcedure = "/orchestrator.v1.OrchestratorService/RollbackRelease"
+	// OrchestratorServiceSubmitValuesRevisionProcedure is the fully-qualified name of the
+	// OrchestratorService's SubmitValuesRevision RPC.
+	OrchestratorServiceSubmitValuesRevisionProcedure = "/orchestrator.v1.OrchestratorService/SubmitValuesRevision"
+	// OrchestratorServiceApproveValuesRevisionProcedure is the fully-qualified name of the
+	// OrchestratorService's ApproveValuesRevision RPC.
+	OrchestratorServiceApproveValuesRevisionProcedure = "/orchestrator.v1.OrchestratorService/ApproveValuesRevision"
+	// OrchestratorServiceRejectValuesRevisionProcedure is the fully-qualified name of the
+	// OrchestratorService's RejectValuesRevision RPC.
+	OrchestratorServiceRejectValuesRevisionProcedure = "/orchestrator.v1.OrchestratorService/RejectValuesRevision"
 	// OrchestratorServiceCreateReleaseDefinitionProcedure is the fully-qualified name of the
 	// OrchestratorService's CreateReleaseDefinition RPC.
 	OrchestratorServiceCreateReleaseDefinitionProcedure = "/orchestrator.v1.OrchestratorService/CreateReleaseDefinition"
@@ -75,6 +84,9 @@ const (
 	// OrchestratorServiceCreateClusterProcedure is the fully-qualified name of the
 	// OrchestratorService's CreateCluster RPC.
 	OrchestratorServiceCreateClusterProcedure = "/orchestrator.v1.OrchestratorService/CreateCluster"
+	// OrchestratorServiceUpdateClusterProcedure is the fully-qualified name of the
+	// OrchestratorService's UpdateCluster RPC.
+	OrchestratorServiceUpdateClusterProcedure = "/orchestrator.v1.OrchestratorService/UpdateCluster"
 	// OrchestratorServiceGetClusterProcedure is the fully-qualified name of the OrchestratorService's
 	// GetCluster RPC.
 	OrchestratorServiceGetClusterProcedure = "/orchestrator.v1.OrchestratorService/GetCluster"
@@ -99,6 +111,12 @@ const (
 	// OrchestratorServiceDeleteClusterRouteProcedure is the fully-qualified name of the
 	// OrchestratorService's DeleteClusterRoute RPC.
 	OrchestratorServiceDeleteClusterRouteProcedure = "/orchestrator.v1.OrchestratorService/DeleteClusterRoute"
+	// OrchestratorServiceListReleasesProcedure is the fully-qualified name of the OrchestratorService's
+	// ListReleases RPC.
+	OrchestratorServiceListReleasesProcedure = "/orchestrator.v1.OrchestratorService/ListReleases"
+	// OrchestratorServiceTriggerInventorySyncProcedure is the fully-qualified name of the
+	// OrchestratorService's TriggerInventorySync RPC.
+	OrchestratorServiceTriggerInventorySyncProcedure = "/orchestrator.v1.OrchestratorService/TriggerInventorySync"
 	// OrchestratorServiceSyncInventoryProcedure is the fully-qualified name of the
 	// OrchestratorService's SyncInventory RPC.
 	OrchestratorServiceSyncInventoryProcedure = "/orchestrator.v1.OrchestratorService/SyncInventory"
@@ -110,6 +128,10 @@ type OrchestratorServiceClient interface {
 	CreateOperation(context.Context, *connect.Request[v1.CreateOperationRequest]) (*connect.Response[v1.CreateOperationResponse], error)
 	PublishRelease(context.Context, *connect.Request[v1.PublishReleaseRequest]) (*connect.Response[v1.PublishReleaseResponse], error)
 	RollbackRelease(context.Context, *connect.Request[v1.RollbackReleaseRequest]) (*connect.Response[v1.RollbackReleaseResponse], error)
+	// Values revision approval workflow
+	SubmitValuesRevision(context.Context, *connect.Request[v1.SubmitValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
+	ApproveValuesRevision(context.Context, *connect.Request[v1.ApproveValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
+	RejectValuesRevision(context.Context, *connect.Request[v1.RejectValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
 	// Release definition management
 	CreateReleaseDefinition(context.Context, *connect.Request[v1.CreateReleaseDefinitionRequest]) (*connect.Response[v1.CreateReleaseDefinitionResponse], error)
 	GetReleaseDefinition(context.Context, *connect.Request[v1.GetReleaseDefinitionRequest]) (*connect.Response[v1.GetReleaseDefinitionResponse], error)
@@ -124,6 +146,7 @@ type OrchestratorServiceClient interface {
 	DisableCustomer(context.Context, *connect.Request[v1.DisableCustomerRequest]) (*connect.Response[v1.DisableCustomerResponse], error)
 	// Cluster management
 	CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.CreateClusterResponse], error)
+	UpdateCluster(context.Context, *connect.Request[v1.UpdateClusterRequest]) (*connect.Response[v1.UpdateClusterResponse], error)
 	GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error)
 	ListClusters(context.Context, *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error)
 	DisableCluster(context.Context, *connect.Request[v1.DisableClusterRequest]) (*connect.Response[v1.DisableClusterResponse], error)
@@ -135,6 +158,9 @@ type OrchestratorServiceClient interface {
 	ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error)
 	GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error)
 	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
+	// Release inventory query and manual sync (REQ-054)
+	ListReleases(context.Context, *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error)
+	TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error)
 	// Inventory sync (REQ-017)
 	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
@@ -166,6 +192,24 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			httpClient,
 			baseURL+OrchestratorServiceRollbackReleaseProcedure,
 			connect.WithSchema(orchestratorServiceMethods.ByName("RollbackRelease")),
+			connect.WithClientOptions(opts...),
+		),
+		submitValuesRevision: connect.NewClient[v1.SubmitValuesRevisionRequest, v1.ValuesRevisionDecisionResponse](
+			httpClient,
+			baseURL+OrchestratorServiceSubmitValuesRevisionProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("SubmitValuesRevision")),
+			connect.WithClientOptions(opts...),
+		),
+		approveValuesRevision: connect.NewClient[v1.ApproveValuesRevisionRequest, v1.ValuesRevisionDecisionResponse](
+			httpClient,
+			baseURL+OrchestratorServiceApproveValuesRevisionProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ApproveValuesRevision")),
+			connect.WithClientOptions(opts...),
+		),
+		rejectValuesRevision: connect.NewClient[v1.RejectValuesRevisionRequest, v1.ValuesRevisionDecisionResponse](
+			httpClient,
+			baseURL+OrchestratorServiceRejectValuesRevisionProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("RejectValuesRevision")),
 			connect.WithClientOptions(opts...),
 		),
 		createReleaseDefinition: connect.NewClient[v1.CreateReleaseDefinitionRequest, v1.CreateReleaseDefinitionResponse](
@@ -234,6 +278,12 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("CreateCluster")),
 			connect.WithClientOptions(opts...),
 		),
+		updateCluster: connect.NewClient[v1.UpdateClusterRequest, v1.UpdateClusterResponse](
+			httpClient,
+			baseURL+OrchestratorServiceUpdateClusterProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("UpdateCluster")),
+			connect.WithClientOptions(opts...),
+		),
 		getCluster: connect.NewClient[v1.GetClusterRequest, v1.GetClusterResponse](
 			httpClient,
 			baseURL+OrchestratorServiceGetClusterProcedure,
@@ -282,6 +332,18 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("DeleteClusterRoute")),
 			connect.WithClientOptions(opts...),
 		),
+		listReleases: connect.NewClient[v1.ListReleasesRequest, v1.ListReleasesResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListReleasesProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListReleases")),
+			connect.WithClientOptions(opts...),
+		),
+		triggerInventorySync: connect.NewClient[v1.TriggerInventorySyncRequest, v1.TriggerInventorySyncResponse](
+			httpClient,
+			baseURL+OrchestratorServiceTriggerInventorySyncProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("TriggerInventorySync")),
+			connect.WithClientOptions(opts...),
+		),
 		syncInventory: connect.NewClient[v1.SyncInventoryRequest, v1.SyncInventoryResponse](
 			httpClient,
 			baseURL+OrchestratorServiceSyncInventoryProcedure,
@@ -296,6 +358,9 @@ type orchestratorServiceClient struct {
 	createOperation          *connect.Client[v1.CreateOperationRequest, v1.CreateOperationResponse]
 	publishRelease           *connect.Client[v1.PublishReleaseRequest, v1.PublishReleaseResponse]
 	rollbackRelease          *connect.Client[v1.RollbackReleaseRequest, v1.RollbackReleaseResponse]
+	submitValuesRevision     *connect.Client[v1.SubmitValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
+	approveValuesRevision    *connect.Client[v1.ApproveValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
+	rejectValuesRevision     *connect.Client[v1.RejectValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
 	createReleaseDefinition  *connect.Client[v1.CreateReleaseDefinitionRequest, v1.CreateReleaseDefinitionResponse]
 	getReleaseDefinition     *connect.Client[v1.GetReleaseDefinitionRequest, v1.GetReleaseDefinitionResponse]
 	listReleaseDefinitions   *connect.Client[v1.ListReleaseDefinitionsRequest, v1.ListReleaseDefinitionsResponse]
@@ -307,6 +372,7 @@ type orchestratorServiceClient struct {
 	updateCustomer           *connect.Client[v1.UpdateCustomerRequest, v1.UpdateCustomerResponse]
 	disableCustomer          *connect.Client[v1.DisableCustomerRequest, v1.DisableCustomerResponse]
 	createCluster            *connect.Client[v1.CreateClusterRequest, v1.CreateClusterResponse]
+	updateCluster            *connect.Client[v1.UpdateClusterRequest, v1.UpdateClusterResponse]
 	getCluster               *connect.Client[v1.GetClusterRequest, v1.GetClusterResponse]
 	listClusters             *connect.Client[v1.ListClustersRequest, v1.ListClustersResponse]
 	disableCluster           *connect.Client[v1.DisableClusterRequest, v1.DisableClusterResponse]
@@ -315,6 +381,8 @@ type orchestratorServiceClient struct {
 	configureClusterRoute    *connect.Client[v1.ConfigureClusterRouteRequest, v1.ConfigureClusterRouteResponse]
 	getClusterRoutes         *connect.Client[v1.GetClusterRoutesRequest, v1.GetClusterRoutesResponse]
 	deleteClusterRoute       *connect.Client[v1.DeleteClusterRouteRequest, v1.DeleteClusterRouteResponse]
+	listReleases             *connect.Client[v1.ListReleasesRequest, v1.ListReleasesResponse]
+	triggerInventorySync     *connect.Client[v1.TriggerInventorySyncRequest, v1.TriggerInventorySyncResponse]
 	syncInventory            *connect.Client[v1.SyncInventoryRequest, v1.SyncInventoryResponse]
 }
 
@@ -331,6 +399,21 @@ func (c *orchestratorServiceClient) PublishRelease(ctx context.Context, req *con
 // RollbackRelease calls orchestrator.v1.OrchestratorService.RollbackRelease.
 func (c *orchestratorServiceClient) RollbackRelease(ctx context.Context, req *connect.Request[v1.RollbackReleaseRequest]) (*connect.Response[v1.RollbackReleaseResponse], error) {
 	return c.rollbackRelease.CallUnary(ctx, req)
+}
+
+// SubmitValuesRevision calls orchestrator.v1.OrchestratorService.SubmitValuesRevision.
+func (c *orchestratorServiceClient) SubmitValuesRevision(ctx context.Context, req *connect.Request[v1.SubmitValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error) {
+	return c.submitValuesRevision.CallUnary(ctx, req)
+}
+
+// ApproveValuesRevision calls orchestrator.v1.OrchestratorService.ApproveValuesRevision.
+func (c *orchestratorServiceClient) ApproveValuesRevision(ctx context.Context, req *connect.Request[v1.ApproveValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error) {
+	return c.approveValuesRevision.CallUnary(ctx, req)
+}
+
+// RejectValuesRevision calls orchestrator.v1.OrchestratorService.RejectValuesRevision.
+func (c *orchestratorServiceClient) RejectValuesRevision(ctx context.Context, req *connect.Request[v1.RejectValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error) {
+	return c.rejectValuesRevision.CallUnary(ctx, req)
 }
 
 // CreateReleaseDefinition calls orchestrator.v1.OrchestratorService.CreateReleaseDefinition.
@@ -388,6 +471,11 @@ func (c *orchestratorServiceClient) CreateCluster(ctx context.Context, req *conn
 	return c.createCluster.CallUnary(ctx, req)
 }
 
+// UpdateCluster calls orchestrator.v1.OrchestratorService.UpdateCluster.
+func (c *orchestratorServiceClient) UpdateCluster(ctx context.Context, req *connect.Request[v1.UpdateClusterRequest]) (*connect.Response[v1.UpdateClusterResponse], error) {
+	return c.updateCluster.CallUnary(ctx, req)
+}
+
 // GetCluster calls orchestrator.v1.OrchestratorService.GetCluster.
 func (c *orchestratorServiceClient) GetCluster(ctx context.Context, req *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error) {
 	return c.getCluster.CallUnary(ctx, req)
@@ -428,6 +516,16 @@ func (c *orchestratorServiceClient) DeleteClusterRoute(ctx context.Context, req 
 	return c.deleteClusterRoute.CallUnary(ctx, req)
 }
 
+// ListReleases calls orchestrator.v1.OrchestratorService.ListReleases.
+func (c *orchestratorServiceClient) ListReleases(ctx context.Context, req *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error) {
+	return c.listReleases.CallUnary(ctx, req)
+}
+
+// TriggerInventorySync calls orchestrator.v1.OrchestratorService.TriggerInventorySync.
+func (c *orchestratorServiceClient) TriggerInventorySync(ctx context.Context, req *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error) {
+	return c.triggerInventorySync.CallUnary(ctx, req)
+}
+
 // SyncInventory calls orchestrator.v1.OrchestratorService.SyncInventory.
 func (c *orchestratorServiceClient) SyncInventory(ctx context.Context, req *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error) {
 	return c.syncInventory.CallUnary(ctx, req)
@@ -440,6 +538,10 @@ type OrchestratorServiceHandler interface {
 	CreateOperation(context.Context, *connect.Request[v1.CreateOperationRequest]) (*connect.Response[v1.CreateOperationResponse], error)
 	PublishRelease(context.Context, *connect.Request[v1.PublishReleaseRequest]) (*connect.Response[v1.PublishReleaseResponse], error)
 	RollbackRelease(context.Context, *connect.Request[v1.RollbackReleaseRequest]) (*connect.Response[v1.RollbackReleaseResponse], error)
+	// Values revision approval workflow
+	SubmitValuesRevision(context.Context, *connect.Request[v1.SubmitValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
+	ApproveValuesRevision(context.Context, *connect.Request[v1.ApproveValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
+	RejectValuesRevision(context.Context, *connect.Request[v1.RejectValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
 	// Release definition management
 	CreateReleaseDefinition(context.Context, *connect.Request[v1.CreateReleaseDefinitionRequest]) (*connect.Response[v1.CreateReleaseDefinitionResponse], error)
 	GetReleaseDefinition(context.Context, *connect.Request[v1.GetReleaseDefinitionRequest]) (*connect.Response[v1.GetReleaseDefinitionResponse], error)
@@ -454,6 +556,7 @@ type OrchestratorServiceHandler interface {
 	DisableCustomer(context.Context, *connect.Request[v1.DisableCustomerRequest]) (*connect.Response[v1.DisableCustomerResponse], error)
 	// Cluster management
 	CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.CreateClusterResponse], error)
+	UpdateCluster(context.Context, *connect.Request[v1.UpdateClusterRequest]) (*connect.Response[v1.UpdateClusterResponse], error)
 	GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error)
 	ListClusters(context.Context, *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error)
 	DisableCluster(context.Context, *connect.Request[v1.DisableClusterRequest]) (*connect.Response[v1.DisableClusterResponse], error)
@@ -465,6 +568,9 @@ type OrchestratorServiceHandler interface {
 	ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error)
 	GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error)
 	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
+	// Release inventory query and manual sync (REQ-054)
+	ListReleases(context.Context, *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error)
+	TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error)
 	// Inventory sync (REQ-017)
 	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
@@ -492,6 +598,24 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		OrchestratorServiceRollbackReleaseProcedure,
 		svc.RollbackRelease,
 		connect.WithSchema(orchestratorServiceMethods.ByName("RollbackRelease")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceSubmitValuesRevisionHandler := connect.NewUnaryHandler(
+		OrchestratorServiceSubmitValuesRevisionProcedure,
+		svc.SubmitValuesRevision,
+		connect.WithSchema(orchestratorServiceMethods.ByName("SubmitValuesRevision")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceApproveValuesRevisionHandler := connect.NewUnaryHandler(
+		OrchestratorServiceApproveValuesRevisionProcedure,
+		svc.ApproveValuesRevision,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ApproveValuesRevision")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceRejectValuesRevisionHandler := connect.NewUnaryHandler(
+		OrchestratorServiceRejectValuesRevisionProcedure,
+		svc.RejectValuesRevision,
+		connect.WithSchema(orchestratorServiceMethods.ByName("RejectValuesRevision")),
 		connect.WithHandlerOptions(opts...),
 	)
 	orchestratorServiceCreateReleaseDefinitionHandler := connect.NewUnaryHandler(
@@ -560,6 +684,12 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("CreateCluster")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orchestratorServiceUpdateClusterHandler := connect.NewUnaryHandler(
+		OrchestratorServiceUpdateClusterProcedure,
+		svc.UpdateCluster,
+		connect.WithSchema(orchestratorServiceMethods.ByName("UpdateCluster")),
+		connect.WithHandlerOptions(opts...),
+	)
 	orchestratorServiceGetClusterHandler := connect.NewUnaryHandler(
 		OrchestratorServiceGetClusterProcedure,
 		svc.GetCluster,
@@ -608,6 +738,18 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("DeleteClusterRoute")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orchestratorServiceListReleasesHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListReleasesProcedure,
+		svc.ListReleases,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListReleases")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceTriggerInventorySyncHandler := connect.NewUnaryHandler(
+		OrchestratorServiceTriggerInventorySyncProcedure,
+		svc.TriggerInventorySync,
+		connect.WithSchema(orchestratorServiceMethods.ByName("TriggerInventorySync")),
+		connect.WithHandlerOptions(opts...),
+	)
 	orchestratorServiceSyncInventoryHandler := connect.NewUnaryHandler(
 		OrchestratorServiceSyncInventoryProcedure,
 		svc.SyncInventory,
@@ -622,6 +764,12 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServicePublishReleaseHandler.ServeHTTP(w, r)
 		case OrchestratorServiceRollbackReleaseProcedure:
 			orchestratorServiceRollbackReleaseHandler.ServeHTTP(w, r)
+		case OrchestratorServiceSubmitValuesRevisionProcedure:
+			orchestratorServiceSubmitValuesRevisionHandler.ServeHTTP(w, r)
+		case OrchestratorServiceApproveValuesRevisionProcedure:
+			orchestratorServiceApproveValuesRevisionHandler.ServeHTTP(w, r)
+		case OrchestratorServiceRejectValuesRevisionProcedure:
+			orchestratorServiceRejectValuesRevisionHandler.ServeHTTP(w, r)
 		case OrchestratorServiceCreateReleaseDefinitionProcedure:
 			orchestratorServiceCreateReleaseDefinitionHandler.ServeHTTP(w, r)
 		case OrchestratorServiceGetReleaseDefinitionProcedure:
@@ -644,6 +792,8 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceDisableCustomerHandler.ServeHTTP(w, r)
 		case OrchestratorServiceCreateClusterProcedure:
 			orchestratorServiceCreateClusterHandler.ServeHTTP(w, r)
+		case OrchestratorServiceUpdateClusterProcedure:
+			orchestratorServiceUpdateClusterHandler.ServeHTTP(w, r)
 		case OrchestratorServiceGetClusterProcedure:
 			orchestratorServiceGetClusterHandler.ServeHTTP(w, r)
 		case OrchestratorServiceListClustersProcedure:
@@ -660,6 +810,10 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceGetClusterRoutesHandler.ServeHTTP(w, r)
 		case OrchestratorServiceDeleteClusterRouteProcedure:
 			orchestratorServiceDeleteClusterRouteHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListReleasesProcedure:
+			orchestratorServiceListReleasesHandler.ServeHTTP(w, r)
+		case OrchestratorServiceTriggerInventorySyncProcedure:
+			orchestratorServiceTriggerInventorySyncHandler.ServeHTTP(w, r)
 		case OrchestratorServiceSyncInventoryProcedure:
 			orchestratorServiceSyncInventoryHandler.ServeHTTP(w, r)
 		default:
@@ -681,6 +835,18 @@ func (UnimplementedOrchestratorServiceHandler) PublishRelease(context.Context, *
 
 func (UnimplementedOrchestratorServiceHandler) RollbackRelease(context.Context, *connect.Request[v1.RollbackReleaseRequest]) (*connect.Response[v1.RollbackReleaseResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.RollbackRelease is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) SubmitValuesRevision(context.Context, *connect.Request[v1.SubmitValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.SubmitValuesRevision is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ApproveValuesRevision(context.Context, *connect.Request[v1.ApproveValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ApproveValuesRevision is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) RejectValuesRevision(context.Context, *connect.Request[v1.RejectValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.RejectValuesRevision is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) CreateReleaseDefinition(context.Context, *connect.Request[v1.CreateReleaseDefinitionRequest]) (*connect.Response[v1.CreateReleaseDefinitionResponse], error) {
@@ -727,6 +893,10 @@ func (UnimplementedOrchestratorServiceHandler) CreateCluster(context.Context, *c
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.CreateCluster is not implemented"))
 }
 
+func (UnimplementedOrchestratorServiceHandler) UpdateCluster(context.Context, *connect.Request[v1.UpdateClusterRequest]) (*connect.Response[v1.UpdateClusterResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.UpdateCluster is not implemented"))
+}
+
 func (UnimplementedOrchestratorServiceHandler) GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.GetCluster is not implemented"))
 }
@@ -757,6 +927,14 @@ func (UnimplementedOrchestratorServiceHandler) GetClusterRoutes(context.Context,
 
 func (UnimplementedOrchestratorServiceHandler) DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.DeleteClusterRoute is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListReleases(context.Context, *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListReleases is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.TriggerInventorySync is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error) {

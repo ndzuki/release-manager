@@ -51,3 +51,14 @@ func (r *ConnectCustomerResolver) Resolve(ctx context.Context, customerID string
 }
 
 var _ CustomerResolver = (*ConnectCustomerResolver)(nil)
+
+// StubResolver is a no-op CustomerResolver that returns ErrNotFound.
+// It is used when no remote orchestrator is available for customer resolution.
+type StubResolver struct{}
+
+// Resolve always returns ErrNotFound.
+func (StubResolver) Resolve(_ context.Context, _ string) (*store.Customer, error) {
+	return nil, store.ErrNotFound
+}
+
+var _ CustomerResolver = StubResolver{}

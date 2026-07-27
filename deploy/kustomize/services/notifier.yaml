@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notifier
+  namespace: release-manager-dev
+  labels:
+    app.kubernetes.io/name: notifier
+    app.kubernetes.io/part-of: release-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: notifier
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: notifier
+        app.kubernetes.io/part-of: release-manager
+    spec:
+      securityContext:
+        fsGroup: 65532
+      containers:
+        - name: notifier
+          image: localhost:5001/release-notifier:dev
+          imagePullPolicy: IfNotPresent
+          args: ["--config", "/configs/notifier.dev.yaml", "--db", "/data/release-manager.db"]
+          ports:
+            - name: http
+              containerPort: 8086
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: release-manager-dev-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notifier
+  namespace: release-manager-dev
+spec:
+  selector:
+    app.kubernetes.io/name: notifier
+  ports:
+    - name: http
+      port: 8086
+      targetPort: http

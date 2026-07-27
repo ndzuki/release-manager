@@ -21,7 +21,7 @@ func TestEmergencyChange_Success(t *testing.T) {
 	req := connect.NewRequest(&orchestratorv1.EmergencyChangeRequest{
 		ReleaseDefinitionId: "def-001",
 		Action:              orchestratorv1.EmergencyAction_EMERGENCY_ACTION_SET_CONTAINER_IMAGE,
-		Payload:             `{"image":"nginx:1.25.0"}`,
+		Payload:             `{"workload":"deployment/nginx","container":"nginx","image":"nginx:1.25.0"}`,
 		Reason:              "Critical CVE-2024-0001",
 		Convergence:         orchestratorv1.EmergencyConvergence_EMERGENCY_CONVERGENCE_REQUIRE_PROMOTION,
 		Actor:               &commonv1.ActorContext{UserId: "user-1", Organization: "org-1"},
@@ -85,7 +85,7 @@ func TestEmergencyChange_ConflictWithActiveOperation(t *testing.T) {
 	req := connect.NewRequest(&orchestratorv1.EmergencyChangeRequest{
 		ReleaseDefinitionId: "def-001",
 		Action:              orchestratorv1.EmergencyAction_EMERGENCY_ACTION_SET_CONTAINER_IMAGE,
-		Payload:             `{}`,
+		Payload:             `{"workload":"deployment/nginx","container":"nginx","image":"nginx:1.25.0"}`,
 		Reason:              "test",
 	})
 
@@ -137,9 +137,9 @@ func TestEmergencyChange_AllowsConcurrentEmergency(t *testing.T) {
 		})
 	}
 
-	first, err := svc.EmergencyChange(context.Background(), request(`{"image":"nginx:1.25.1"}`))
+	first, err := svc.EmergencyChange(context.Background(), request(`{"workload":"deployment/nginx","container":"nginx","image":"nginx:1.25.1"}`))
 	require.NoError(t, err)
-	second, err := svc.EmergencyChange(context.Background(), request(`{"image":"nginx:1.25.2"}`))
+	second, err := svc.EmergencyChange(context.Background(), request(`{"workload":"deployment/nginx","container":"nginx","image":"nginx:1.25.2"}`))
 	require.NoError(t, err)
 	assert.NotEqual(t, first.Msg.OperationId, second.Msg.OperationId)
 }

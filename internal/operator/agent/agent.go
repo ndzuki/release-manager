@@ -35,12 +35,18 @@ type InventoryNotifier interface {
 	NotifyOperationComplete(namespace, releaseName, operationID, definitionID string)
 }
 
+// InventorySyncExecutor performs one full inventory snapshot on demand.
+type InventorySyncExecutor interface {
+	SyncNow(context.Context) error
+}
+
 // Agent receives durable commands, executes Helm operations, and returns cached results on redelivery.
 type Agent struct {
 	client       StreamClient
 	engine       helmengine.Engine
 	store        localstore.Store
 	notifier     InventoryNotifier
+	syncExecutor InventorySyncExecutor
 	sessionID    string
 	operatorID   string
 	logger       *slog.Logger
@@ -59,6 +65,7 @@ type Config struct {
 	Engine       helmengine.Engine
 	Store        localstore.Store
 	Notifier     InventoryNotifier
+	SyncExecutor InventorySyncExecutor
 	SessionID    string
 	OperatorID   string
 	Logger       *slog.Logger
@@ -111,6 +118,7 @@ func New(cfg Config) (*Agent, error) {
 		engine:       cfg.Engine,
 		store:        cfg.Store,
 		notifier:     cfg.Notifier,
+		syncExecutor: cfg.SyncExecutor,
 		sessionID:    cfg.SessionID,
 		operatorID:   cfg.OperatorID,
 		logger:       logger,
@@ -285,10 +293,49 @@ func (a *Agent) execute(ctx context.Context, command *operatorv1.Command) Result
 		DefinitionID: command.GetDefinitionId(),
 	}
 
-	if command.GetOperationType() != "INSTALL" {
+	switch command.GetOperationType() {
+	case "INSTALL":
+		return a.executeInstall(ctx, command)
+	case "UPGRADE":
+		return a.executeUpgrade(ctx, command)
+	case "ROLLBACK":
+		return a.executeRollback(ctx, command)
+	case "INVENTORY_SYNC":
+		return a.executeInventorySync(ctx, command)
+	default:
 		result.Code = "unsupported_command"
 		result.Message = fmt.Sprintf("unsupported command type %q", command.GetOperationType())
 		return result
+	}
+}
+
+func (a *Agent) executeInventorySync(ctx context.Context, command *operatorv1.Command) Result {
+	result := Result{
+		OperationID: command.GetOperationId(),
+		CommandID:   command.GetCommandId(),
+		Status:      "failed",
+	}
+	if a.syncExecutor == nil {
+		result.Code = "inventory_sync_unavailable"
+		result.Message = "inventory sync executor is unavailable"
+		return result
+	}
+	if err := a.syncExecutor.SyncNow(ctx); err != nil {
+		result.Code = "inventory_sync_failed"
+		result.Message = err.Error()
+		return result
+	}
+	result.Status = "succeeded"
+	result.InventorySync = true
+	return result
+}
+
+func (a *Agent) executeInstall(ctx context.Context, command *operatorv1.Command) Result {
+	result := Result{
+		OperationID:  command.GetOperationId(),
+		CommandID:    command.GetCommandId(),
+		Status:       "failed",
+		DefinitionID: command.GetDefinitionId(),
 	}
 	if command.GetBundle() == nil || command.GetBundle().GetChartRef() == "" {
 		result.Code = "invalid_command"
@@ -336,6 +383,135 @@ func (a *Agent) execute(ctx context.Context, command *operatorv1.Command) Result
 	result.InventorySync = true
 	result.ResourceSummary.ManifestDigest = release.ManifestDigest
 	return result
+}
+
+func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command) Result {
+	result := Result{
+		OperationID:  command.GetOperationId(),
+		CommandID:    command.GetCommandId(),
+		Status:       "failed",
+		DefinitionID: command.GetDefinitionId(),
+	}
+	if command.GetBundle() == nil || command.GetBundle().GetChartRef() == "" {
+		result.Code = "invalid_command"
+		result.Message = "chart_ref is required"
+		return result
+	}
+	if command.GetNamespace() == "" || command.GetReleaseName() == "" {
+		result.Code = "invalid_command"
+		result.Message = "namespace and release_name are required"
+		return result
+	}
+
+	// AC-062: merge approved ValuesRevision with optional JSON merge patch.
+	values := map[string]interface{}{}
+	if len(command.GetValues()) > 0 {
+		if err := json.Unmarshal(command.GetValues(), &values); err != nil {
+			result.Code = "invalid_command"
+			result.Message = "values must be canonical JSON"
+			return result
+		}
+	}
+	if len(command.GetValuesPatch()) > 0 {
+		patch := map[string]interface{}{}
+		if err := json.Unmarshal(command.GetValuesPatch(), &patch); err != nil {
+			result.Code = "invalid_command"
+			result.Message = "values_patch must be canonical JSON"
+			return result
+		}
+		mergeValues(values, patch)
+	}
+
+	timeout := a.installFlags.Timeout
+	if command.GetTimeoutSeconds() > 0 {
+		timeout = time.Duration(command.GetTimeoutSeconds()) * time.Second
+	}
+
+	release, err := a.engine.Upgrade(ctx, helmengine.UpgradeOptions{
+		Namespace:        command.GetNamespace(),
+		ReleaseName:      command.GetReleaseName(),
+		ChartPath:        command.GetBundle().GetChartRef(),
+		ChartVersion:     command.GetBundle().GetChartVersion(),
+		Values:           values,
+		ExpectedRevision: int(command.GetExpectedCurrentRevision()),
+		Atomic:           command.GetAtomic(),
+		Timeout:          timeout,
+	})
+	if err != nil {
+		result.Code = upgradeErrorCode(err)
+		result.Message = err.Error()
+		return result
+	}
+
+	result.Status = "succeeded"
+	result.Release = release
+	result.InventorySync = true
+	result.ResourceSummary.ManifestDigest = release.ManifestDigest
+	return result
+}
+
+func (a *Agent) executeRollback(ctx context.Context, command *operatorv1.Command) Result {
+	result := Result{
+		OperationID:  command.GetOperationId(),
+		CommandID:    command.GetCommandId(),
+		Status:       "failed",
+		DefinitionID: command.GetDefinitionId(),
+	}
+	if command.GetTargetRevision() <= 0 {
+		result.Code = "invalid_command"
+		result.Message = "target_revision is required for rollback"
+		return result
+	}
+	if command.GetNamespace() == "" || command.GetReleaseName() == "" {
+		result.Code = "invalid_command"
+		result.Message = "namespace and release_name are required"
+		return result
+	}
+
+	timeout := a.installFlags.Timeout
+	if command.GetTimeoutSeconds() > 0 {
+		timeout = time.Duration(command.GetTimeoutSeconds()) * time.Second
+	}
+
+	release, err := a.engine.Rollback(ctx, helmengine.RollbackOptions{
+		Namespace:      command.GetNamespace(),
+		ReleaseName:    command.GetReleaseName(),
+		TargetRevision: int(command.GetTargetRevision()),
+		Timeout:        timeout,
+	})
+	if err != nil {
+		result.Code = rollbackErrorCode(err)
+		result.Message = err.Error()
+		return result
+	}
+
+	result.Status = "succeeded"
+	result.Release = release
+	result.InventorySync = true
+	result.ResourceSummary.ManifestDigest = release.ManifestDigest
+	return result
+}
+
+// mergeValues applies a JSON merge patch to base values in-place.
+func mergeValues(base, patch map[string]interface{}) {
+	for k, v := range patch {
+		if v == nil {
+			delete(base, k)
+			continue
+		}
+		existing, ok := base[k]
+		if !ok || existing == nil {
+			base[k] = v
+			continue
+		}
+		if srcMap, ok := v.(map[string]interface{}); ok {
+			if dstMap, ok := existing.(map[string]interface{}); ok {
+				mergeValues(dstMap, srcMap)
+				continue
+			}
+		}
+		base[k] = v
+	}
 }
 
 func (a *Agent) finishFailure(ctx context.Context, stream Stream, entry *localstore.CommandEntry, result Result) error {
@@ -405,6 +581,38 @@ func installErrorCode(err error) string {
 		return "cancelled"
 	default:
 		return "helm_install_failed"
+	}
+}
+
+func upgradeErrorCode(err error) string {
+	switch {
+	case errors.Is(err, helmengine.ErrConflict):
+		return "revision_conflict"
+	case errors.Is(err, helmengine.ErrNotFound):
+		return "release_not_found"
+	case errors.Is(err, helmengine.ErrTimeout):
+		return "timeout"
+	case errors.Is(err, helmengine.ErrCancelled):
+		return "cancelled"
+	default:
+		return "helm_upgrade_failed"
+	}
+}
+
+func rollbackErrorCode(err error) string {
+	switch {
+	case errors.Is(err, helmengine.ErrNotFound):
+		return "release_not_found"
+	case errors.Is(err, helmengine.ErrRevisionNotFound):
+		return "target_revision_not_found"
+	case errors.Is(err, helmengine.ErrArtifactUnavailable):
+		return "historical_artifact_unavailable"
+	case errors.Is(err, helmengine.ErrTimeout):
+		return "timeout"
+	case errors.Is(err, helmengine.ErrCancelled):
+		return "cancelled"
+	default:
+		return "helm_rollback_failed"
 	}
 }
 

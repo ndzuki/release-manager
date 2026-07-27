@@ -86,43 +86,64 @@ func (s *bindingStore) ListByOrg(ctx context.Context, orgID string) ([]*store.Or
 	return bindings, rows.Err()
 }
 
-func (s *bindingStore) SetStatus(
-	ctx context.Context,
-	binding *store.OrgCustomerBinding,
-	status store.BindingStatus,
-) error {
-	updatedAt := time.Now().UTC()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin update binding: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
-
-	result, err := tx.ExecContext(ctx, `
+func (s *bindingStore) Update(ctx context.Context, binding *store.OrgCustomerBinding) error {
+	binding.UpdatedAt = time.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `
 		UPDATE org_customer_bindings
-		SET status = ?, optimistic_version = optimistic_version + 1, updated_at = ?
+		SET status = ?, optimistic_version = ?, updated_at = ?
 		WHERE id = ? AND optimistic_version = ?`,
-		string(status), updatedAt.UTC().Format(time.RFC3339), binding.ID, binding.OptimisticVersion,
+		string(binding.Status), binding.OptimisticVersion, binding.UpdatedAt.UTC().Format(time.RFC3339),
+		binding.ID, binding.OptimisticVersion-1,
 	)
 	if err != nil {
 		return fmt.Errorf("update binding: %w", err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
+		return fmt.Errorf("binding update rows affected: %w", err)
 	}
-	if rows == 0 {
+	if rows != 1 {
 		return store.ErrOptimisticLock
 	}
+	return nil
+}
 
-	binding.Status = status
-	binding.UpdatedAt = updatedAt
-	binding.OptimisticVersion++
+func (s *bindingStore) SetStatus(ctx context.Context, id string, status store.BindingStatus) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin binding status update: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
+
+	now := time.Now().UTC()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE org_customer_bindings
+		SET status = ?, optimistic_version = optimistic_version + 1, updated_at = ?
+		WHERE id = ?`,
+		string(status), now.Format(time.RFC3339), id,
+	)
+	if err != nil {
+		return fmt.Errorf("update binding status: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("binding status rows affected: %w", err)
+	}
+	if rows != 1 {
+		return store.ErrNotFound
+	}
+
+	binding, err := scanBinding(tx.QueryRowContext(ctx, `
+		SELECT id, org_id, customer_id, status, optimistic_version, created_at, updated_at
+		FROM org_customer_bindings WHERE id = ?`, id))
+	if err != nil {
+		return err
+	}
 	if err := insertBindingEvent(ctx, tx, binding); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit update binding: %w", err)
+		return fmt.Errorf("commit binding status update: %w", err)
 	}
 	return nil
 }
@@ -196,4 +217,23 @@ func scanBinding(row interface{ Scan(...interface{}) error }) (*store.OrgCustome
 	}
 	binding.UpdatedAt = parsedUpdatedAt
 	return &binding, nil
+}
+
+func (s *bindingStore) ListByCustomer(ctx context.Context, customerID string) ([]*store.OrgCustomerBinding, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, organization_id, customer_id, status, created_at, updated_at
+		FROM org_customer_bindings WHERE customer_id = ?`, customerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var bindings []*store.OrgCustomerBinding
+	for rows.Next() {
+		b := &store.OrgCustomerBinding{}
+		if err := rows.Scan(&b.ID, &b.OrgID, &b.CustomerID, &b.Status, &b.CreatedAt, &b.UpdatedAt); err != nil {
+			return nil, err
+		}
+		bindings = append(bindings, b)
+	}
+	return bindings, rows.Err()
 }

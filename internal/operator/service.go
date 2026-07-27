@@ -358,6 +358,11 @@ func (s *Service) CommandStream(
 					if err := s.store.Outbox().UpdateStatus(ctx, ack.GetOutboxId(), store.CommandPersisted, ""); err != nil {
 						s.logger.Warn("failed to mark command persisted", "error", err)
 					}
+					if entry, getErr := s.store.Outbox().Get(ctx, ack.GetOutboxId()); getErr == nil && entry.OperationType == "INVENTORY_SYNC" {
+						if updateErr := s.store.InventorySyncRequests().UpdateStatus(ctx, entry.OperationID, store.InventorySyncRunning, ""); updateErr != nil {
+							s.logger.Warn("failed to mark inventory sync running", "error", updateErr)
+						}
+					}
 				}
 
 			case req.GetResult() != nil:
@@ -392,15 +397,23 @@ func (s *Service) CommandStream(
 				}
 
 				status := store.CommandSucceeded
+				requestStatus := store.InventorySyncSucceeded
 				if result.GetStatus() == "failed" {
 					status = store.CommandFailed
+					requestStatus = store.InventorySyncFailed
 				}
 				resultJSON := result.GetResultJson()
 				if resultJSON == "" {
 					resultJSON = result.GetMessage()
 				}
-				_ = s.store.Outbox().UpdateStatus(ctx, result.GetOutboxId(), status, resultJSON)
-				if existing != nil {
+				if err := s.store.Outbox().UpdateStatus(ctx, result.GetOutboxId(), status, resultJSON); err != nil {
+					s.logger.Warn("failed to persist command result", "error", err)
+				}
+				if existing != nil && existing.OperationType == "INVENTORY_SYNC" {
+					if err := s.store.InventorySyncRequests().UpdateStatus(ctx, existing.OperationID, requestStatus, result.GetMessage()); err != nil {
+						s.logger.Warn("failed to persist inventory sync result", "error", err)
+					}
+				} else if existing != nil {
 					s.FinishOperation(ctx, existing.OperationID, result.GetStatus(), resultJSON)
 				}
 
@@ -562,13 +575,18 @@ func (s *Service) sendCommand(
 }
 
 type commandPayload struct {
-	DefinitionID    string                  `json:"definition_id"`
-	Namespace       string                  `json:"namespace"`
-	ReleaseName     string                  `json:"release_name"`
-	CreateNamespace bool                    `json:"create_namespace"`
-	TimeoutSeconds  int64                   `json:"timeout_seconds"`
-	Bundle          *commonv1.ReleaseBundle `json:"bundle"`
-	Values          json.RawMessage         `json:"values"`
+	DefinitionID            string                  `json:"definition_id"`
+	Namespace               string                  `json:"namespace"`
+	ReleaseName             string                  `json:"release_name"`
+	CreateNamespace         bool                    `json:"create_namespace"`
+	TimeoutSeconds          int64                   `json:"timeout_seconds"`
+	Bundle                  *commonv1.ReleaseBundle `json:"bundle"`
+	Values                  json.RawMessage         `json:"values"`
+	ValuesRevisionID        string                  `json:"values_revision_id"`
+	ExpectedCurrentRevision int64                   `json:"expected_current_revision"`
+	TargetRevision          int64                   `json:"target_revision"`
+	Atomic                  bool                    `json:"atomic"`
+	ValuesPatch             []byte                  `json:"values_patch"`
 }
 
 // DecodeCommandPayload populates command fields from an outbox JSON payload.
@@ -588,6 +606,11 @@ func DecodeCommandPayload(payload []byte, command *operatorv1.Command) error {
 	command.TimeoutSeconds = envelope.TimeoutSeconds
 	command.Bundle = envelope.Bundle
 	command.Values = envelope.Values
+	command.ValuesRevisionId = envelope.ValuesRevisionID
+	command.ExpectedCurrentRevision = envelope.ExpectedCurrentRevision
+	command.TargetRevision = envelope.TargetRevision
+	command.Atomic = envelope.Atomic
+	command.ValuesPatch = envelope.ValuesPatch
 
 	if envelope.Bundle == nil {
 		var bundle commonv1.ReleaseBundle
@@ -638,7 +661,7 @@ func (s *Service) deliverPending(
 					continue
 				}
 				entry.Sequence = seq
-				if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPending, ""); err != nil {
+				if err := s.store.Outbox().UpdateSequence(ctx, entry.ID, seq); err != nil {
 					s.logger.Warn("failed to persist command sequence", "error", err)
 					continue
 				}

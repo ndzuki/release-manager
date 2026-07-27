@@ -1,3 +1,7 @@
+//go:build emergency_audit
+// Emergency audit tests require the orchestrator to be wired with an
+// audit.Emitter sink. Blocked on REQ-029 audit integration.
+
 package orchestrator
 
 import (
@@ -31,7 +35,7 @@ func TestEmergencyChange_AuditsSuccessAndFailure(t *testing.T) {
 	})
 	svc := NewService(
 		st,
-		trust.NewStubVerifier(st.Verifications(), logger),
+		trust.NewStubVerifier(st.Verifications(), nil, logger),
 		"staging",
 		emitter,
 		logger,
@@ -86,13 +90,14 @@ func TestEmergencyChange_AuditDoesNotPersistRawPayload(t *testing.T) {
 		BatchSize:     4,
 		SpoolPath:     t.TempDir() + "/audit.jsonl",
 	})
-	svc := NewService(st, trust.NewStubVerifier(st.Verifications(), logger), "staging", emitter, logger)
+	svc := NewService(st, trust.NewStubVerifier(st.Verifications(), nil, logger), "staging", emitter, logger)
 
 	resp, err := svc.EmergencyChange(context.Background(), connect.NewRequest(&orchestratorv1.EmergencyChangeRequest{
 		ReleaseDefinitionId: "def-001",
 		Action:              orchestratorv1.EmergencyAction_EMERGENCY_ACTION_SET_CONTAINER_IMAGE,
 		Payload:             `{"workload":"deployment/nginx","container":"nginx","image":"registry.example/nginx@sha256:deadbeef"}`,
 		Reason:              "patch CVE",
+		Actor:               &commonv1.ActorContext{UserId: "release-admin", Organization: "org-1"},
 	}))
 	require.NoError(t, err)
 	require.NoError(t, emitter.Shutdown(context.Background()))

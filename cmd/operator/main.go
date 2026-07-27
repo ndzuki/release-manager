@@ -79,13 +79,14 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 				s.operatorURL,
 			)
 			agent, err := operatoragent.New(operatoragent.Config{
-				Client:     operatoragent.ConnectClient{Client: operatorClient},
-				Engine:     engine,
-				Store:      commandStore,
-				Notifier:   syncer,
-				SessionID:  s.sessionID,
-				OperatorID: s.operatorID,
-				Logger:     logger,
+				Client:       operatoragent.ConnectClient{Client: operatorClient},
+				Engine:       engine,
+				Store:        commandStore,
+				Notifier:     syncer,
+				SyncExecutor: syncer,
+				SessionID:    s.sessionID,
+				OperatorID:   s.operatorID,
+				Logger:       logger,
 				InstallFlags: operatoragent.InstallFlags{
 					Atomic:  s.installAtomic,
 					Timeout: s.installTimeout,

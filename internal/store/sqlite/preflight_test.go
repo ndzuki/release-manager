@@ -13,7 +13,7 @@ import (
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
 
-func setupPreflightFixture(t *testing.T, st *sqlitestore.Store) (customerID, operationID string) {
+func setupPreflightFixture(t *testing.T, st *sqlitestore.Store) string {
 	t.Helper()
 	ctx := context.Background()
 
@@ -46,13 +46,13 @@ func setupPreflightFixture(t *testing.T, st *sqlitestore.Store) (customerID, ope
 	}
 	require.NoError(t, st.Operations().Create(ctx, op))
 
-	return cust.ID, op.ID
+	return op.ID
 }
 
 func TestPreflightCreateAndGetByKey(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
-	_, opID := setupPreflightFixture(t, st)
+	opID := setupPreflightFixture(t, st)
 
 	key := store.PreflightCacheKey{
 		OperationID:        opID,
@@ -82,7 +82,7 @@ func TestPreflightCreateAndGetByKey(t *testing.T) {
 func TestPreflightCreateIdempotent(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
-	_, opID := setupPreflightFixture(t, st)
+	opID := setupPreflightFixture(t, st)
 
 	key := store.PreflightCacheKey{
 		OperationID:        opID,
@@ -128,7 +128,7 @@ func TestPreflightGetByKeyNotFound(t *testing.T) {
 func TestPreflightDifferentVersionsProduceDistinctRows(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
-	_, opID := setupPreflightFixture(t, st)
+	opID := setupPreflightFixture(t, st)
 
 	key1 := store.PreflightCacheKey{
 		OperationID:        opID,

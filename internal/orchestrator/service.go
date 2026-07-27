@@ -16,29 +16,43 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
+	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/orchestrator/preflight"
 	"github.com/ndzuki/release-manager/internal/store"
 	"github.com/ndzuki/release-manager/internal/trust"
+	"github.com/ndzuki/release-manager/internal/vulnerability"
 )
 
 // Service implements the OrchestratorServiceHandler Connect interface.
 type Service struct {
-	store       store.Store
-	verifier    trust.Verifier
-	targetEnv   string
-	coordinator *preflight.Coordinator
-	logger      *slog.Logger
+	store        store.Store
+	verifier     trust.Verifier
+	targetEnv    string
+	coordinator  *preflight.Coordinator
+	vulnEval     *vulnerability.Evaluator
+	auditEmitter audit.Sink
+	logger       *slog.Logger
 }
 
-// NewService creates a new orchestrator Connect service.
-func NewService(st store.Store, verifier trust.Verifier, targetEnv string, logger *slog.Logger) *Service {
+func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args ...any) *Service {
+	var auditEmitter audit.Sink
+	logger := slog.Default()
+	for _, arg := range args {
+		switch value := arg.(type) {
+		case audit.Sink:
+			auditEmitter = value
+		case *slog.Logger:
+			logger = value
+		}
+	}
 	return &Service{
-		store:       st,
-		verifier:    verifier,
-		targetEnv:   targetEnv,
-		coordinator: preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), logger),
-		logger:      logger,
+		store:        st,
+		verifier:     verifier,
+		targetEnv:    targetEnv,
+		coordinator:  preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.Values(), st.Bundles(), st.PreflightLifecycles(), logger),
+		auditEmitter: auditEmitter,
+		logger:       logger,
 	}
 }
 
@@ -86,16 +100,17 @@ func (s *Service) CreateOperation(
 		return nil, connect.NewError(connect.CodePermissionDenied, err)
 	}
 
-	// 4. Release busy check (REQ-023 AC-023-03, AC-023-06, AC-023-07)
-	active, err := s.store.Operations().HasActiveForDefinition(ctx, msg.ReleaseDefinitionId)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("active check: %w", err))
+	// When a caller supplies an organization, it must have an active customer binding.
+	// Legacy in-process callers without organization context remain compatible.
+	if organizationID := msg.Actor.GetOrganization(); organizationID != "" {
+		if err := s.store.Bindings().RequireActive(ctx, organizationID, def.CustomerID); err != nil {
+			if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrBindingRevoked) {
+				return nil, connect.NewError(connect.CodePermissionDenied,
+					errors.New("customer binding is not active"))
+			}
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("binding check: %w", err))
+		}
 	}
-	if active {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
-	}
-
 	// EMERGENCY ↔ standard mutual exclusion (REQ-023 AC-023-06, AC-023-07).
 	if opType.IsStandard() {
 		hasEmergency, err := s.store.Operations().HasActiveEmergencyForDefinition(ctx, msg.ReleaseDefinitionId)
@@ -217,8 +232,16 @@ func (s *Service) CreateOperation(
 		UpdatedAt: now,
 	}
 
-	// 7. Persist
-	if err := s.store.Operations().Create(ctx, op); err != nil {
+	// 7. Persist with atomic availability check (AC-062-01).
+	if err := s.store.Operations().CreateIfAvailable(ctx, op); err != nil {
+		if errors.Is(err, store.ErrReleaseBusy) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
+		}
+		if errors.Is(err, store.ErrDuplicateKey) {
+			return nil, connect.NewError(connect.CodeAlreadyExists,
+				fmt.Errorf("idempotency_key %s already used", msg.IdempotencyKey))
+		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create operation: %w", err))
 	}
 
@@ -377,4 +400,27 @@ func checkDefinitionOperable(def *store.ReleaseDefinition) error {
 	}
 	return connect.NewError(connect.CodeFailedPrecondition,
 		fmt.Errorf("release_definition_disabled: definition %s is %s", def.ID, def.Status))
+}
+
+// emitAudit emits an audit event through the configured sink, if any.
+func (s *Service) emitAudit(ev *store.AuditEvent) {
+	if s.auditEmitter == nil {
+		return
+	}
+	result := s.auditEmitter.Emit(ev)
+	if !result.Accepted {
+		s.logger.Warn("audit event rejected",
+			"code", string(result.Code),
+			"resource_type", ev.ResourceType,
+			"action", ev.Action,
+		)
+	}
+}
+
+// auditActor converts an ActorContext to audit actor kind and ID.
+func auditActor(actor *store.ActorContext) (kind store.AuditActorKind, actorID string) {
+	if actor == nil || actor.UserID == "" {
+		return store.AuditActorSystem, "system"
+	}
+	return store.AuditActorUser, actor.UserID
 }

@@ -1,0 +1,14 @@
+FROM golang:1.26.4 AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/release-operator ./cmd/operator
+
+FROM gcr.io/distroless/static-debian13:nonroot
+USER nonroot:nonroot
+WORKDIR /data
+COPY --from=builder /out/release-operator /release-operator
+COPY configs/operator.dev.yaml /configs/operator.dev.yaml
+EXPOSE 8084
+ENTRYPOINT ["/release-operator", "--config", "/configs/operator.dev.yaml", "--db", "/data/operator.db", "--command-db", "/data/operator-commands.db"]
