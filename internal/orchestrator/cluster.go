@@ -10,8 +10,8 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
+	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -59,6 +59,8 @@ func (s *Service) CreateCluster(
 }
 
 // UpdateCluster atomically validates and saves cluster metadata and routes.
+//
+//nolint:gocyclo // Route updates keep validation, optimistic locking, and atomic persistence gates explicit.
 func (s *Service) UpdateCluster(
 	ctx context.Context,
 	req *connect.Request[orchestratorv1.UpdateClusterRequest],
@@ -92,7 +94,7 @@ func (s *Service) UpdateCluster(
 	}
 
 	name := msg.GetName()
-	if len(name) == 0 || len(name) > 253 {
+	if name == "" || len(name) > 253 {
 		return nil, newRouteValidationError(
 			connect.CodeInvalidArgument,
 			"invalid_name",
@@ -278,7 +280,7 @@ func (s *Service) DisableCluster(
 		s.logger.Warn("listing tokens for cascade revoke", "error", err)
 	}
 	for _, t := range tokens {
-		if !t.Used {
+		if t.State == store.TokenStatePending {
 			if err := s.store.EnrollmentTokens().Revoke(ctx, t.ID); err != nil {
 				s.logger.Warn("cascade revoke token", "token_id", t.ID, "error", err)
 			}
@@ -289,21 +291,15 @@ func (s *Service) DisableCluster(
 	operators, err := s.store.Operators().ListByCluster(ctx, c.ID)
 	if err != nil {
 		s.logger.Warn("listing operators for cascade revoke", "error", err)
-	}
-	for _, op := range operators {
-		if op.Status == store.OperatorActive {
-			if err := s.store.Operators().Revoke(ctx, op.ID); err != nil {
-				s.logger.Warn("cascade revoke operator", "operator_id", op.ID, "error", err)
-			}
-			// Close active sessions.
-			if sess, err := s.store.Sessions().GetActiveByOperator(ctx, op.ID); err == nil {
-				if err := s.store.Sessions().UpdateStatus(ctx, sess.ID, store.SessionOffline); err != nil {
-					s.logger.Warn("cascade close session", "session_id", sess.ID, "error", err)
+	} else {
+		for _, op := range operators {
+			if op.Status == store.OperatorActive {
+				if _, revokeErr := s.store.OperatorManagement().RevokeOperator(ctx, c.CustomerID, c.ID, op.ID, "cluster disabled", nil); revokeErr != nil {
+					s.logger.Warn("cascade revoke operator", "operator_id", op.ID, "error", revokeErr)
 				}
 			}
 		}
 	}
-
 	s.logger.Warn("cluster disabled", "id", c.ID, "customer_id", c.CustomerID)
 	return connect.NewResponse(&orchestratorv1.DisableClusterResponse{}), nil
 }
@@ -323,7 +319,7 @@ func toProtoClusterWithRouteCount(c *store.Cluster, routeCount int) *commonv1.Cl
 		CreatedAt:     timestamppb.New(c.CreatedAt),
 		UpdatedAt:     timestamppb.New(c.UpdatedAt),
 		Version:       c.Version,
-		RouteCount:    int32(routeCount),
+		RouteCount:    int32(routeCount), //nolint:gosec // Route count is an in-memory slice length bounded by process memory.
 	}
 }
 
@@ -390,4 +386,3 @@ func routesToProto(routes []*store.ClusterRoute) []*orchestratorv1.ClusterRoute 
 	}
 	return result
 }
-

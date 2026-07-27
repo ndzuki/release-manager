@@ -32,6 +32,10 @@ export const useAuthStore = defineStore('auth', () => {
     () => organizations.value.find((organization) => organization.id === user.value?.activeOrgId) ?? null,
   );
   const canWrite = computed(() => !user.value?.roles.some((role) => role.toLowerCase() === 'viewer'));
+  const roleNames = computed(() => user.value?.roles.map((role) => role.toLowerCase()) ?? []);
+  const canReadOperators = computed(() => isAuthenticated.value);
+  const canEnrollOperators = computed(() => roleNames.value.some((role) => role === 'platform_admin' || role === 'release_admin'));
+  const canRevokeOperators = computed(() => roleNames.value.some((role) => role === 'platform_admin' || role === 'release_admin'));
 
   function applySession(payload: SessionPayload): void {
     if (!payload.user) {
@@ -161,6 +165,9 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated,
     activeOrganization,
     canWrite,
+    canReadOperators,
+    canEnrollOperators,
+    canRevokeOperators,
     initialize,
     initializeSystem,
     login,

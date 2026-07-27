@@ -73,7 +73,7 @@ func retryBusy(ctx context.Context, fn func() error) error {
 		if lastErr == nil {
 			return nil
 		}
-		if !strings.Contains(lastErr.Error(), "database is locked") {
+		if !strings.Contains(lastErr.Error(), "database is locked") && !strings.Contains(lastErr.Error(), "database table is locked") {
 			return lastErr
 		}
 		time.Sleep(backoff)

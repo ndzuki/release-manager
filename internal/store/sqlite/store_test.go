@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -170,14 +171,14 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 
 	got, err := st.EnrollmentTokens().GetByToken(ctx, "test-token-abc")
 	require.NoError(t, err)
-	assert.False(t, got.Used)
+	assert.Equal(t, store.TokenStatePending, got.State)
 
 	// Mark used.
 	require.NoError(t, st.EnrollmentTokens().MarkUsed(ctx, tok.ID, "op-001"))
 
 	got, err = st.EnrollmentTokens().GetByToken(ctx, "test-token-abc")
 	require.NoError(t, err)
-	assert.True(t, got.Used)
+	assert.Equal(t, store.TokenStateUsed, got.State)
 	assert.Equal(t, "op-001", got.OperatorID)
 }
 
@@ -281,6 +282,9 @@ func TestSessionEstablish(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.SessionOffline, old.Status)
 	got, err = st.Sessions().GetActiveByOperator(ctx, op.ID)
+	require.NotNil(t, old.StatusReason)
+	assert.Equal(t, store.SessionReasonSessionReplaced, *old.StatusReason)
+	require.NotNil(t, old.ClosedAt)
 	require.NoError(t, err)
 	assert.Equal(t, reconnect.ID, got.ID)
 	assert.Equal(t, "1.0.1", got.Version)
@@ -871,172 +875,288 @@ func TestInventoryDefinitionAssociation(t *testing.T) {
 	assert.Equal(t, "definition-1", items[0].ReleaseDefinitionID)
 }
 
-func TestInventoryQueryUsesDefaultPageSizeAndSyncLogTimestamp(t *testing.T) {
+func TestOperatorManagement_CreateEnrollmentTokenAtomic(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
-	syncedAt := time.Date(2026, time.July, 22, 9, 30, 0, 0, time.UTC)
+	customerID, clusterID := seedOperatorManagementScope(t, st)
 
-	for i := range 51 {
-		releaseName := fmt.Sprintf("release-%02d", i)
-		require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
-			CustomerID:      "customer-default-page",
-			ClusterID:       "cluster-default-page",
-			Namespace:       "apps",
-			ReleaseName:     releaseName,
-			InventoryStatus: store.InventoryActive,
-			LastSyncID:      "sync-default-page",
-			SnapshotVersion: 9,
-		}))
+	first := &store.EnrollmentToken{
+		ID:                   "token-first",
+		CustomerID:           customerID,
+		ClusterID:            clusterID,
+		OperatorName:         "operator-a",
+		Token:                "plaintext-first",
+		CreatedByDisplayName: "admin",
+		ExpiresAt:            time.Now().UTC().Add(time.Hour),
 	}
-	inserted, err := st.Inventories().CreateSyncLog(ctx, &store.InventorySyncLog{
-		SyncID:          "sync-default-page",
-		CustomerID:      "customer-default-page",
-		ClusterID:       "cluster-default-page",
-		IsFullSnapshot:  true,
-		AcceptedCount:   51,
-		SnapshotVersion: 9,
-		CreatedAt:       syncedAt,
-	})
+	_, err := st.OperatorManagement().CreateEnrollmentToken(ctx, first, false, operatorAuditEvent("audit-create-first", clusterID, "operator.enrollment_token.created"))
 	require.NoError(t, err)
-	require.True(t, inserted)
+	assert.NotEmpty(t, first.TokenHash)
 
-	page, err := st.Inventories().Query(ctx, store.InventoryQuery{
-		CustomerID: "customer-default-page",
-		ClusterID:  "cluster-default-page",
-	})
-	require.NoError(t, err)
-	assert.Len(t, page.Items, 50)
-	assert.Equal(t, 51, page.TotalCount)
-	assert.NotEmpty(t, page.NextCursor)
-	assert.Equal(t, syncedAt, page.LastSyncAt)
+	var persistedToken string
+	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT token FROM enrollment_tokens WHERE id = ?`, first.ID).Scan(&persistedToken))
+	assert.NotEqual(t, first.Token, persistedToken)
+	assert.Equal(t, first.TokenHash, persistedToken)
 
-	next, err := st.Inventories().Query(ctx, store.InventoryQuery{
-		CustomerID: "customer-default-page",
-		ClusterID:  "cluster-default-page",
-		Cursor:     page.NextCursor,
-	})
+	second := &store.EnrollmentToken{
+		ID:                   "token-second",
+		CustomerID:           customerID,
+		ClusterID:            clusterID,
+		OperatorName:         "operator-a",
+		Token:                "plaintext-second",
+		CreatedByDisplayName: "admin",
+		ExpiresAt:            time.Now().UTC().Add(time.Hour),
+	}
+	_, err = st.OperatorManagement().CreateEnrollmentToken(ctx, second, false, operatorAuditEvent("audit-create-conflict", clusterID, "operator.enrollment_token.created"))
+	assert.ErrorIs(t, err, store.ErrPendingTokenExists)
+
+	failedReplacement := &store.EnrollmentToken{
+		ID:                   "token-failed-replacement",
+		CustomerID:           customerID,
+		ClusterID:            clusterID,
+		OperatorName:         "operator-a",
+		Token:                "plaintext-failed-replacement",
+		CreatedByDisplayName: "admin",
+		ExpiresAt:            time.Now().UTC().Add(time.Hour),
+	}
+	_, err = st.OperatorManagement().CreateEnrollmentToken(ctx, failedReplacement, true, &store.AuditEvent{ID: "invalid-audit"})
+	assert.ErrorIs(t, err, store.ErrAuditUnavailable)
+	unchanged, err := st.EnrollmentTokens().ListByCluster(ctx, clusterID)
 	require.NoError(t, err)
-	assert.Len(t, next.Items, 1)
+	require.Len(t, unchanged, 1)
+	assert.Equal(t, first.ID, unchanged[0].ID)
+	assert.Equal(t, store.TokenStatePending, unchanged[0].State)
+
+	replaced, err := st.OperatorManagement().CreateEnrollmentToken(ctx, second, true, operatorAuditEvent("audit-replace", clusterID, "operator.enrollment_token.replaced"))
+	require.NoError(t, err)
+	assert.Equal(t, first.ID, replaced.PreviousID)
+
+	old, err := st.EnrollmentTokens().ListByCluster(ctx, clusterID)
+	require.NoError(t, err)
+	require.Len(t, old, 2)
+	assert.Equal(t, store.TokenStateRevoked, old[0].State)
+	assert.Equal(t, second.ID, old[0].ReplacedByID)
 }
 
-func TestInventoryQueryPaginationFilteringAndConsistency(t *testing.T) {
+func TestOperatorManagement_CreateEnrollmentTokenConcurrent(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
-	baseTime := time.Date(2026, time.July, 22, 8, 0, 0, 0, time.UTC)
+	customerID, clusterID := seedOperatorManagementScope(t, st)
+	start := make(chan struct{})
+	results := make(chan error, 2)
 
-	items := []*store.ReleaseInventory{
-		{
-			ReleaseDefinitionID: "definition-active",
-			CustomerID:          "customer-1",
-			ClusterID:           "cluster-1",
-			Namespace:           "apps",
-			ReleaseName:         "api",
-			Chart:               "api",
-			ChartVersion:        "1.0.0",
-			Revision:            3,
-			ValuesDigest:        "sha256:approved",
-			InventoryStatus:     store.InventoryActive,
-			LastSyncID:          "sync-1",
-			SnapshotVersion:     7,
-			CreatedAt:           baseTime,
-		},
-		{
-			ReleaseDefinitionID: "definition-drifted",
-			CustomerID:          "customer-1",
-			ClusterID:           "cluster-1",
-			Namespace:           "other",
-			ReleaseName:         "api",
-			Chart:               "api",
-			ChartVersion:        "1.1.0",
-			Revision:            4,
-			ValuesDigest:        "sha256:actual",
-			InventoryStatus:     store.InventoryActive,
-			LastSyncID:          "sync-1",
-			SnapshotVersion:     7,
-			CreatedAt:           baseTime.Add(time.Second),
-		},
-		{
-			CustomerID:      "customer-1",
-			ClusterID:       "cluster-1",
-			Namespace:       "system",
-			ReleaseName:     "metrics",
-			Chart:           "metrics",
-			ChartVersion:    "2.0.0",
-			Revision:        1,
-			ValuesDigest:    "sha256:metrics",
-			InventoryStatus: store.InventoryMissing,
-			LastSyncID:      "sync-1",
-			SnapshotVersion: 7,
-			CreatedAt:       baseTime.Add(2 * time.Second),
-		},
+	for index := range 2 {
+		go func(index int) {
+			<-start
+			token := &store.EnrollmentToken{
+				ID:                   fmt.Sprintf("token-concurrent-%d", index),
+				CustomerID:           customerID,
+				ClusterID:            clusterID,
+				OperatorName:         fmt.Sprintf("operator-%d", index),
+				Token:                fmt.Sprintf("plaintext-%d", index),
+				CreatedByDisplayName: "admin",
+				ExpiresAt:            time.Now().UTC().Add(time.Hour),
+			}
+			_, err := st.OperatorManagement().CreateEnrollmentToken(ctx, token, false, operatorAuditEvent(fmt.Sprintf("audit-concurrent-%d", index), clusterID, "operator.enrollment_token.created"))
+			results <- err
+		}(index)
 	}
-	for _, item := range items {
-		require.NoError(t, st.Inventories().Upsert(ctx, item))
-	}
+	close(start)
 
-	activeDefinition := &store.ReleaseDefinition{
-		ID: "definition-active", Name: "active", CustomerID: "customer-1", ClusterID: "cluster-1",
-		Namespace: "apps", ReleaseName: "api", Status: store.DefStatusActive,
+	var succeeded, conflicted int
+	for range 2 {
+		err := <-results
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, store.ErrPendingTokenExists):
+			conflicted++
+		default:
+			require.NoErrorf(t, err, "unexpected concurrent create error: %T %v", err, err)
+		}
 	}
-	driftedDefinition := &store.ReleaseDefinition{
-		ID: "definition-drifted", Name: "drifted", CustomerID: "customer-1", ClusterID: "cluster-1",
-		Namespace: "other", ReleaseName: "api", Status: store.DefStatusActive,
-	}
-	require.NoError(t, st.Definitions().Create(ctx, activeDefinition, nil))
-	require.NoError(t, st.Definitions().Create(ctx, driftedDefinition, nil))
-	require.NoError(t, st.Values().Create(ctx, &store.ValuesRevision{
-		ID: "values-active", ReleaseDefinitionID: activeDefinition.ID, Revision: 1,
-		Status: store.ValuesStatusApproved, Values: []byte(`{}`), Digest: "sha256:approved",
-	}))
-	require.NoError(t, st.Values().Create(ctx, &store.ValuesRevision{
-		ID: "values-drifted", ReleaseDefinitionID: driftedDefinition.ID, Revision: 1,
-		Status: store.ValuesStatusApproved, Values: []byte(`{}`), Digest: "sha256:desired",
-	}))
+	assert.Equal(t, 1, succeeded)
+	assert.Equal(t, 1, conflicted)
 
-	page, err := st.Inventories().Query(ctx, store.InventoryQuery{
-		CustomerID: "customer-1",
-		ClusterID:  "cluster-1",
-		NameSearch: "api",
-		PageSize:   1,
-	})
+	tokens, err := st.EnrollmentTokens().ListByCluster(ctx, clusterID)
 	require.NoError(t, err)
-	require.Len(t, page.Items, 1)
-	assert.Equal(t, store.InventoryActive, page.Items[0].InventoryStatus)
-	assert.Equal(t, 2, page.TotalCount)
-	assert.NotEmpty(t, page.NextCursor)
+	var pending int
+	for _, token := range tokens {
+		if token.State == store.TokenStatePending {
+			pending++
+		}
+	}
+	assert.Equal(t, 1, pending)
+}
 
-	next, err := st.Inventories().Query(ctx, store.InventoryQuery{
-		CustomerID: "customer-1",
-		ClusterID:  "cluster-1",
-		NameSearch: "api",
-		PageSize:   1,
-		Cursor:     page.NextCursor,
-	})
+func TestOperatorManagement_EnrollOperatorAtomic(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	customerID, clusterID := seedOperatorManagementScope(t, st)
+	old := &store.Operator{ID: "operator-old", Name: "operator-old", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-old"}
+	require.NoError(t, st.Operators().Create(ctx, old))
+	require.NoError(t, st.Sessions().Create(ctx, &store.Session{ID: "session-old", OperatorID: old.ID, CustomerID: customerID, ClusterID: clusterID, Status: store.SessionOnline}))
+	token := &store.EnrollmentToken{
+		ID: "token-enroll", CustomerID: customerID, ClusterID: clusterID, OperatorName: "operator-new",
+		Token: "plaintext-enroll", ExpiresAt: time.Now().UTC().Add(time.Hour),
+	}
+	require.NoError(t, st.EnrollmentTokens().Create(ctx, token))
+	next := &store.Operator{ID: "operator-new", Name: "operator-new", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-new"}
+	session := &store.Session{ID: "session-new", Status: store.SessionOnline, Capabilities: map[string]string{"helm": "true"}, ExpiresAt: time.Now().UTC().Add(time.Hour)}
+
+	result, err := st.OperatorManagement().EnrollOperator(ctx, token.ID, next, session)
 	require.NoError(t, err)
-	require.Len(t, next.Items, 1)
-	assert.Equal(t, store.InventoryOutOfSync, next.Items[0].InventoryStatus)
-	assert.Empty(t, next.NextCursor)
+	assert.Equal(t, old.ID, result.SupersededOperatorID)
+	assert.Equal(t, customerID, result.Session.CustomerID)
+	assert.Equal(t, clusterID, result.Session.ClusterID)
 
-	missing, err := st.Inventories().Query(ctx, store.InventoryQuery{
-		CustomerID: "customer-1",
-		ClusterID:  "cluster-1",
-		Status:     store.InventoryMissing,
-		PageSize:   50,
-	})
+	used, err := st.EnrollmentTokens().GetByToken(ctx, token.Token)
 	require.NoError(t, err)
-	require.Len(t, missing.Items, 1)
-	assert.Equal(t, "metrics", missing.Items[0].ReleaseName)
+	assert.Equal(t, store.TokenStateUsed, used.State)
+	oldAfter, err := st.Operators().Get(ctx, old.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.OperatorSuperseded, oldAfter.Status)
+	oldSession, err := st.Sessions().Get(ctx, "session-old")
+	require.NoError(t, err)
+	assert.Equal(t, store.SessionRevoked, oldSession.Status)
+	require.NotNil(t, oldSession.StatusReason)
+	assert.Equal(t, store.SessionReasonOperatorSuperseded, *oldSession.StatusReason)
+}
 
-	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
-		CustomerID: "customer-1", ClusterID: "cluster-1", Namespace: "apps", ReleaseName: "worker",
-		InventoryStatus: store.InventoryActive, LastSyncID: "sync-2", SnapshotVersion: 8,
+func TestOperatorStore_GetActiveByNameUsesCustomerScope(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	firstCustomer, firstCluster := seedOperatorManagementScope(t, st)
+	secondCustomer, secondCluster := seedOperatorManagementScope(t, st)
+	require.NoError(t, st.Operators().Create(ctx, &store.Operator{ID: "operator-first", Name: "shared-name", CustomerID: firstCustomer, ClusterID: firstCluster, CertSerial: "serial-first"}))
+	require.NoError(t, st.Operators().Create(ctx, &store.Operator{ID: "operator-second", Name: "shared-name", CustomerID: secondCustomer, ClusterID: secondCluster, CertSerial: "serial-second"}))
+
+	got, err := st.Operators().GetActiveByName(ctx, secondCustomer, "shared-name")
+	require.NoError(t, err)
+	assert.Equal(t, "operator-second", got.ID)
+}
+func TestOperatorStore_ListByClusterFilterNoSession(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	customerID, clusterID := seedOperatorManagementScope(t, st)
+	require.NoError(t, st.Operators().Create(ctx, &store.Operator{ID: "operator-without-session", Name: "without-session", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-no-session"}))
+	otherCustomerID, otherClusterID := seedOperatorManagementScope(t, st)
+	withSession := &store.Operator{ID: "operator-with-session", Name: "with-session", CustomerID: otherCustomerID, ClusterID: otherClusterID, CertSerial: "serial-session"}
+	require.NoError(t, st.Operators().Create(ctx, withSession))
+	require.NoError(t, st.Sessions().Create(ctx, &store.Session{ID: "session-filter", OperatorID: withSession.ID, CustomerID: otherCustomerID, ClusterID: otherClusterID, Status: store.SessionOffline}))
+
+	page, err := st.Operators().ListByClusterFilter(ctx, customerID, clusterID, store.OperatorListFilter{NoSession: true}, 20, nil)
+	require.NoError(t, err)
+	require.Len(t, page.Operators, 1)
+	assert.Equal(t, "operator-without-session", page.Operators[0].ID)
+}
+
+func TestOperatorStore_ListByClusterFilterUsesLatestSession(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	customerID, clusterID := seedOperatorManagementScope(t, st)
+	op := &store.Operator{ID: "operator-latest-session", Name: "latest-session", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-latest-session"}
+	require.NoError(t, st.Operators().Create(ctx, op))
+	startedAt := time.Now().UTC().Add(-time.Minute)
+	require.NoError(t, st.Sessions().Create(ctx, &store.Session{
+		ID: "session-old-offline", OperatorID: op.ID, CustomerID: customerID, ClusterID: clusterID,
+		Status: store.SessionOffline, StartedAt: startedAt, LastHeartbeat: startedAt,
 	}))
-	_, err = st.Inventories().Query(ctx, store.InventoryQuery{
-		CustomerID: "customer-1",
-		ClusterID:  "cluster-1",
-		NameSearch: "api",
-		PageSize:   1,
-		Cursor:     page.NextCursor,
-	})
-	assert.ErrorIs(t, err, store.ErrInvalidCursor)
+	require.NoError(t, st.Sessions().Create(ctx, &store.Session{
+		ID: "session-new-online", OperatorID: op.ID, CustomerID: customerID, ClusterID: clusterID,
+		Status: store.SessionOnline, StartedAt: startedAt.Add(time.Second), LastHeartbeat: startedAt.Add(time.Second),
+	}))
+
+	offline := store.SessionOffline
+	offlinePage, err := st.Operators().ListByClusterFilter(ctx, customerID, clusterID, store.OperatorListFilter{SessionStatus: &offline}, 20, nil)
+	require.NoError(t, err)
+	assert.Empty(t, offlinePage.Operators)
+
+	online := store.SessionOnline
+	onlinePage, err := st.Operators().ListByClusterFilter(ctx, customerID, clusterID, store.OperatorListFilter{SessionStatus: &online}, 20, nil)
+	require.NoError(t, err)
+	require.Len(t, onlinePage.Operators, 1)
+	assert.Equal(t, op.ID, onlinePage.Operators[0].ID)
+}
+
+func TestOperatorStore_ListByClusterFilterPaginatesSameTimestamp(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	customerID, clusterID := seedOperatorManagementScope(t, st)
+	registeredAt := time.Date(2026, time.July, 27, 6, 0, 0, 123456789, time.UTC)
+	for _, id := range []string{"operator-c", "operator-b", "operator-a"} {
+		require.NoError(t, st.Operators().Create(ctx, &store.Operator{
+			ID: id, Name: id, CustomerID: customerID, ClusterID: clusterID,
+			CertSerial: "serial-" + id, Status: store.OperatorSuperseded,
+			RegisteredAt: registeredAt, UpdatedAt: registeredAt,
+		}))
+	}
+
+	first, err := st.Operators().ListByClusterFilter(ctx, customerID, clusterID, store.OperatorListFilter{}, 1, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"operator-c"}, []string{first.Operators[0].ID})
+	require.NotNil(t, first.NextPageCursor)
+
+	second, err := st.Operators().ListByClusterFilter(ctx, customerID, clusterID, store.OperatorListFilter{}, 1, first.NextPageCursor)
+	require.NoError(t, err)
+	require.Equal(t, []string{"operator-b"}, []string{second.Operators[0].ID})
+	require.NotNil(t, second.NextPageCursor)
+
+	third, err := st.Operators().ListByClusterFilter(ctx, customerID, clusterID, store.OperatorListFilter{}, 1, second.NextPageCursor)
+	require.NoError(t, err)
+	require.Equal(t, []string{"operator-a"}, []string{third.Operators[0].ID})
+	assert.Nil(t, third.NextPageCursor)
+}
+
+func TestOperatorManagement_RevokeOperatorAtomicAndIdempotent(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	customerID, clusterID := seedOperatorManagementScope(t, st)
+	op := &store.Operator{ID: "operator-revoke", Name: "operator-revoke", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-revoke"}
+	require.NoError(t, st.Operators().Create(ctx, op))
+	session := &store.Session{ID: "session-revoke", OperatorID: op.ID, CustomerID: customerID, ClusterID: clusterID, Status: store.SessionOnline}
+	require.NoError(t, st.Sessions().Create(ctx, session))
+
+	result, err := st.OperatorManagement().RevokeOperator(ctx, customerID, clusterID, op.ID, "security incident", operatorAuditEvent("audit-revoke", op.ID, "operator.revoked"))
+	require.NoError(t, err)
+	assert.True(t, result.Changed)
+	assert.Equal(t, store.OperatorRevoked, result.Operator.Status)
+	assert.Equal(t, "security incident", result.Operator.RevokeReason)
+	require.NotNil(t, result.Session)
+	assert.Equal(t, store.SessionRevoked, result.Session.Status)
+
+	secondAudit := operatorAuditEvent("audit-revoke-repeat", op.ID, "operator.revoked")
+	again, err := st.OperatorManagement().RevokeOperator(ctx, customerID, clusterID, op.ID, "must not overwrite", secondAudit)
+	require.NoError(t, err)
+	assert.False(t, again.Changed)
+	assert.Equal(t, "security incident", again.Operator.RevokeReason)
+	assert.Equal(t, result.Operator.RevokedAt, again.Operator.RevokedAt)
+	events, err := st.AuditEvents().ListByResource(ctx, "operator", op.ID)
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	assert.Equal(t, secondAudit.ID, events[1].ID)
+}
+
+func seedOperatorManagementScope(t *testing.T, st *sqlitestore.Store) (customerID, clusterID string) {
+	t.Helper()
+	ctx := context.Background()
+	customerID = uuid.NewString()
+	clusterID = uuid.NewString()
+	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Operator customer", Slug: customerID}))
+	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: clusterID, Name: "Operator cluster", CustomerID: customerID}))
+	return customerID, clusterID
+}
+
+func operatorAuditEvent(id, resourceID, action string) *store.AuditEvent {
+	return &store.AuditEvent{
+		ID:             id,
+		ActorKind:      store.AuditActorUser,
+		ActorID:        "user-1",
+		OrganizationID: "org-1",
+		Role:           string(store.RoleReleaseAdmin),
+		ResourceType:   "operator",
+		ResourceID:     resourceID,
+		Action:         action,
+		Status:         "succeeded",
+	}
 }

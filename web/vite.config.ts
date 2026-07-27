@@ -19,25 +19,25 @@ export default defineConfig({
     port: 5173,
     proxy: {
       // Proxy all Connect API calls to the backend services.
-      // The auth service runs on :8080 by default.
+      // Auth service Connect endpoint.
       '/auth.v1.AuthService': {
-        target: 'http://127.0.0.1:8080',
+        target: 'http://127.0.0.1:8085',
         changeOrigin: true,
       },
       '/auth.v1.OrganizationService': {
-        target: 'http://127.0.0.1:8080',
+        target: 'http://127.0.0.1:8085',
         changeOrigin: true,
       },
       '/auth.v1.BindingService': {
-        target: 'http://127.0.0.1:8080',
+        target: 'http://127.0.0.1:8085',
         changeOrigin: true,
       },
       '/orchestrator.v1.OrchestratorService': {
-        target: 'http://127.0.0.1:8081',
+        target: 'http://127.0.0.1:8083',
         changeOrigin: true,
       },
       '/operator.v1.OperatorService': {
-        target: 'http://127.0.0.1:8083',
+        target: 'http://127.0.0.1:8084',
         changeOrigin: true,
       },
       '/audit.v1.AuditService': {

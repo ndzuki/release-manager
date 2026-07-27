@@ -96,9 +96,24 @@ const (
 	// OrchestratorServiceDisableClusterProcedure is the fully-qualified name of the
 	// OrchestratorService's DisableCluster RPC.
 	OrchestratorServiceDisableClusterProcedure = "/orchestrator.v1.OrchestratorService/DisableCluster"
+	// OrchestratorServiceListOperatorsProcedure is the fully-qualified name of the
+	// OrchestratorService's ListOperators RPC.
+	OrchestratorServiceListOperatorsProcedure = "/orchestrator.v1.OrchestratorService/ListOperators"
+	// OrchestratorServiceGetOperatorProcedure is the fully-qualified name of the OrchestratorService's
+	// GetOperator RPC.
+	OrchestratorServiceGetOperatorProcedure = "/orchestrator.v1.OrchestratorService/GetOperator"
+	// OrchestratorServiceRevokeOperatorProcedure is the fully-qualified name of the
+	// OrchestratorService's RevokeOperator RPC.
+	OrchestratorServiceRevokeOperatorProcedure = "/orchestrator.v1.OrchestratorService/RevokeOperator"
 	// OrchestratorServiceCreateEnrollmentTokenProcedure is the fully-qualified name of the
 	// OrchestratorService's CreateEnrollmentToken RPC.
 	OrchestratorServiceCreateEnrollmentTokenProcedure = "/orchestrator.v1.OrchestratorService/CreateEnrollmentToken"
+	// OrchestratorServiceGetEnrollmentTokenStatusProcedure is the fully-qualified name of the
+	// OrchestratorService's GetEnrollmentTokenStatus RPC.
+	OrchestratorServiceGetEnrollmentTokenStatusProcedure = "/orchestrator.v1.OrchestratorService/GetEnrollmentTokenStatus"
+	// OrchestratorServiceRevokePendingEnrollmentTokenProcedure is the fully-qualified name of the
+	// OrchestratorService's RevokePendingEnrollmentToken RPC.
+	OrchestratorServiceRevokePendingEnrollmentTokenProcedure = "/orchestrator.v1.OrchestratorService/RevokePendingEnrollmentToken"
 	// OrchestratorServiceEmergencyChangeProcedure is the fully-qualified name of the
 	// OrchestratorService's EmergencyChange RPC.
 	OrchestratorServiceEmergencyChangeProcedure = "/orchestrator.v1.OrchestratorService/EmergencyChange"
@@ -111,12 +126,6 @@ const (
 	// OrchestratorServiceDeleteClusterRouteProcedure is the fully-qualified name of the
 	// OrchestratorService's DeleteClusterRoute RPC.
 	OrchestratorServiceDeleteClusterRouteProcedure = "/orchestrator.v1.OrchestratorService/DeleteClusterRoute"
-	// OrchestratorServiceListReleasesProcedure is the fully-qualified name of the OrchestratorService's
-	// ListReleases RPC.
-	OrchestratorServiceListReleasesProcedure = "/orchestrator.v1.OrchestratorService/ListReleases"
-	// OrchestratorServiceTriggerInventorySyncProcedure is the fully-qualified name of the
-	// OrchestratorService's TriggerInventorySync RPC.
-	OrchestratorServiceTriggerInventorySyncProcedure = "/orchestrator.v1.OrchestratorService/TriggerInventorySync"
 	// OrchestratorServiceSyncInventoryProcedure is the fully-qualified name of the
 	// OrchestratorService's SyncInventory RPC.
 	OrchestratorServiceSyncInventoryProcedure = "/orchestrator.v1.OrchestratorService/SyncInventory"
@@ -150,17 +159,19 @@ type OrchestratorServiceClient interface {
 	GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error)
 	ListClusters(context.Context, *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error)
 	DisableCluster(context.Context, *connect.Request[v1.DisableClusterRequest]) (*connect.Response[v1.DisableClusterResponse], error)
-	// Operator enrollment
+	// Operator management (REQ-053)
+	ListOperators(context.Context, *connect.Request[v1.ListOperatorsRequest]) (*connect.Response[v1.ListOperatorsResponse], error)
+	GetOperator(context.Context, *connect.Request[v1.GetOperatorRequest]) (*connect.Response[v1.GetOperatorResponse], error)
+	RevokeOperator(context.Context, *connect.Request[v1.RevokeOperatorRequest]) (*connect.Response[v1.RevokeOperatorResponse], error)
 	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
+	GetEnrollmentTokenStatus(context.Context, *connect.Request[v1.GetEnrollmentTokenStatusRequest]) (*connect.Response[v1.GetEnrollmentTokenStatusResponse], error)
+	RevokePendingEnrollmentToken(context.Context, *connect.Request[v1.RevokePendingEnrollmentTokenRequest]) (*connect.Response[v1.RevokePendingEnrollmentTokenResponse], error)
 	// Emergency change (REQ-032)
 	EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error)
 	// Cluster artifact routing (REQ-014)
 	ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error)
 	GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error)
 	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
-	// Release inventory query and manual sync (REQ-054)
-	ListReleases(context.Context, *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error)
-	TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error)
 	// Inventory sync (REQ-017)
 	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
@@ -302,10 +313,40 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("DisableCluster")),
 			connect.WithClientOptions(opts...),
 		),
+		listOperators: connect.NewClient[v1.ListOperatorsRequest, v1.ListOperatorsResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListOperatorsProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListOperators")),
+			connect.WithClientOptions(opts...),
+		),
+		getOperator: connect.NewClient[v1.GetOperatorRequest, v1.GetOperatorResponse](
+			httpClient,
+			baseURL+OrchestratorServiceGetOperatorProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("GetOperator")),
+			connect.WithClientOptions(opts...),
+		),
+		revokeOperator: connect.NewClient[v1.RevokeOperatorRequest, v1.RevokeOperatorResponse](
+			httpClient,
+			baseURL+OrchestratorServiceRevokeOperatorProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("RevokeOperator")),
+			connect.WithClientOptions(opts...),
+		),
 		createEnrollmentToken: connect.NewClient[v1.CreateEnrollmentTokenRequest, v1.CreateEnrollmentTokenResponse](
 			httpClient,
 			baseURL+OrchestratorServiceCreateEnrollmentTokenProcedure,
 			connect.WithSchema(orchestratorServiceMethods.ByName("CreateEnrollmentToken")),
+			connect.WithClientOptions(opts...),
+		),
+		getEnrollmentTokenStatus: connect.NewClient[v1.GetEnrollmentTokenStatusRequest, v1.GetEnrollmentTokenStatusResponse](
+			httpClient,
+			baseURL+OrchestratorServiceGetEnrollmentTokenStatusProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("GetEnrollmentTokenStatus")),
+			connect.WithClientOptions(opts...),
+		),
+		revokePendingEnrollmentToken: connect.NewClient[v1.RevokePendingEnrollmentTokenRequest, v1.RevokePendingEnrollmentTokenResponse](
+			httpClient,
+			baseURL+OrchestratorServiceRevokePendingEnrollmentTokenProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("RevokePendingEnrollmentToken")),
 			connect.WithClientOptions(opts...),
 		),
 		emergencyChange: connect.NewClient[v1.EmergencyChangeRequest, v1.EmergencyChangeResponse](
@@ -332,18 +373,6 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("DeleteClusterRoute")),
 			connect.WithClientOptions(opts...),
 		),
-		listReleases: connect.NewClient[v1.ListReleasesRequest, v1.ListReleasesResponse](
-			httpClient,
-			baseURL+OrchestratorServiceListReleasesProcedure,
-			connect.WithSchema(orchestratorServiceMethods.ByName("ListReleases")),
-			connect.WithClientOptions(opts...),
-		),
-		triggerInventorySync: connect.NewClient[v1.TriggerInventorySyncRequest, v1.TriggerInventorySyncResponse](
-			httpClient,
-			baseURL+OrchestratorServiceTriggerInventorySyncProcedure,
-			connect.WithSchema(orchestratorServiceMethods.ByName("TriggerInventorySync")),
-			connect.WithClientOptions(opts...),
-		),
 		syncInventory: connect.NewClient[v1.SyncInventoryRequest, v1.SyncInventoryResponse](
 			httpClient,
 			baseURL+OrchestratorServiceSyncInventoryProcedure,
@@ -355,35 +384,38 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 
 // orchestratorServiceClient implements OrchestratorServiceClient.
 type orchestratorServiceClient struct {
-	createOperation          *connect.Client[v1.CreateOperationRequest, v1.CreateOperationResponse]
-	publishRelease           *connect.Client[v1.PublishReleaseRequest, v1.PublishReleaseResponse]
-	rollbackRelease          *connect.Client[v1.RollbackReleaseRequest, v1.RollbackReleaseResponse]
-	submitValuesRevision     *connect.Client[v1.SubmitValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
-	approveValuesRevision    *connect.Client[v1.ApproveValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
-	rejectValuesRevision     *connect.Client[v1.RejectValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
-	createReleaseDefinition  *connect.Client[v1.CreateReleaseDefinitionRequest, v1.CreateReleaseDefinitionResponse]
-	getReleaseDefinition     *connect.Client[v1.GetReleaseDefinitionRequest, v1.GetReleaseDefinitionResponse]
-	listReleaseDefinitions   *connect.Client[v1.ListReleaseDefinitionsRequest, v1.ListReleaseDefinitionsResponse]
-	updateReleaseDefinition  *connect.Client[v1.UpdateReleaseDefinitionRequest, v1.UpdateReleaseDefinitionResponse]
-	disableReleaseDefinition *connect.Client[v1.DisableReleaseDefinitionRequest, v1.DisableReleaseDefinitionResponse]
-	createCustomer           *connect.Client[v1.CreateCustomerRequest, v1.CreateCustomerResponse]
-	getCustomer              *connect.Client[v1.GetCustomerRequest, v1.GetCustomerResponse]
-	listCustomers            *connect.Client[v1.ListCustomersRequest, v1.ListCustomersResponse]
-	updateCustomer           *connect.Client[v1.UpdateCustomerRequest, v1.UpdateCustomerResponse]
-	disableCustomer          *connect.Client[v1.DisableCustomerRequest, v1.DisableCustomerResponse]
-	createCluster            *connect.Client[v1.CreateClusterRequest, v1.CreateClusterResponse]
-	updateCluster            *connect.Client[v1.UpdateClusterRequest, v1.UpdateClusterResponse]
-	getCluster               *connect.Client[v1.GetClusterRequest, v1.GetClusterResponse]
-	listClusters             *connect.Client[v1.ListClustersRequest, v1.ListClustersResponse]
-	disableCluster           *connect.Client[v1.DisableClusterRequest, v1.DisableClusterResponse]
-	createEnrollmentToken    *connect.Client[v1.CreateEnrollmentTokenRequest, v1.CreateEnrollmentTokenResponse]
-	emergencyChange          *connect.Client[v1.EmergencyChangeRequest, v1.EmergencyChangeResponse]
-	configureClusterRoute    *connect.Client[v1.ConfigureClusterRouteRequest, v1.ConfigureClusterRouteResponse]
-	getClusterRoutes         *connect.Client[v1.GetClusterRoutesRequest, v1.GetClusterRoutesResponse]
-	deleteClusterRoute       *connect.Client[v1.DeleteClusterRouteRequest, v1.DeleteClusterRouteResponse]
-	listReleases             *connect.Client[v1.ListReleasesRequest, v1.ListReleasesResponse]
-	triggerInventorySync     *connect.Client[v1.TriggerInventorySyncRequest, v1.TriggerInventorySyncResponse]
-	syncInventory            *connect.Client[v1.SyncInventoryRequest, v1.SyncInventoryResponse]
+	createOperation              *connect.Client[v1.CreateOperationRequest, v1.CreateOperationResponse]
+	publishRelease               *connect.Client[v1.PublishReleaseRequest, v1.PublishReleaseResponse]
+	rollbackRelease              *connect.Client[v1.RollbackReleaseRequest, v1.RollbackReleaseResponse]
+	submitValuesRevision         *connect.Client[v1.SubmitValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
+	approveValuesRevision        *connect.Client[v1.ApproveValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
+	rejectValuesRevision         *connect.Client[v1.RejectValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
+	createReleaseDefinition      *connect.Client[v1.CreateReleaseDefinitionRequest, v1.CreateReleaseDefinitionResponse]
+	getReleaseDefinition         *connect.Client[v1.GetReleaseDefinitionRequest, v1.GetReleaseDefinitionResponse]
+	listReleaseDefinitions       *connect.Client[v1.ListReleaseDefinitionsRequest, v1.ListReleaseDefinitionsResponse]
+	updateReleaseDefinition      *connect.Client[v1.UpdateReleaseDefinitionRequest, v1.UpdateReleaseDefinitionResponse]
+	disableReleaseDefinition     *connect.Client[v1.DisableReleaseDefinitionRequest, v1.DisableReleaseDefinitionResponse]
+	createCustomer               *connect.Client[v1.CreateCustomerRequest, v1.CreateCustomerResponse]
+	getCustomer                  *connect.Client[v1.GetCustomerRequest, v1.GetCustomerResponse]
+	listCustomers                *connect.Client[v1.ListCustomersRequest, v1.ListCustomersResponse]
+	updateCustomer               *connect.Client[v1.UpdateCustomerRequest, v1.UpdateCustomerResponse]
+	disableCustomer              *connect.Client[v1.DisableCustomerRequest, v1.DisableCustomerResponse]
+	createCluster                *connect.Client[v1.CreateClusterRequest, v1.CreateClusterResponse]
+	updateCluster                *connect.Client[v1.UpdateClusterRequest, v1.UpdateClusterResponse]
+	getCluster                   *connect.Client[v1.GetClusterRequest, v1.GetClusterResponse]
+	listClusters                 *connect.Client[v1.ListClustersRequest, v1.ListClustersResponse]
+	disableCluster               *connect.Client[v1.DisableClusterRequest, v1.DisableClusterResponse]
+	listOperators                *connect.Client[v1.ListOperatorsRequest, v1.ListOperatorsResponse]
+	getOperator                  *connect.Client[v1.GetOperatorRequest, v1.GetOperatorResponse]
+	revokeOperator               *connect.Client[v1.RevokeOperatorRequest, v1.RevokeOperatorResponse]
+	createEnrollmentToken        *connect.Client[v1.CreateEnrollmentTokenRequest, v1.CreateEnrollmentTokenResponse]
+	getEnrollmentTokenStatus     *connect.Client[v1.GetEnrollmentTokenStatusRequest, v1.GetEnrollmentTokenStatusResponse]
+	revokePendingEnrollmentToken *connect.Client[v1.RevokePendingEnrollmentTokenRequest, v1.RevokePendingEnrollmentTokenResponse]
+	emergencyChange              *connect.Client[v1.EmergencyChangeRequest, v1.EmergencyChangeResponse]
+	configureClusterRoute        *connect.Client[v1.ConfigureClusterRouteRequest, v1.ConfigureClusterRouteResponse]
+	getClusterRoutes             *connect.Client[v1.GetClusterRoutesRequest, v1.GetClusterRoutesResponse]
+	deleteClusterRoute           *connect.Client[v1.DeleteClusterRouteRequest, v1.DeleteClusterRouteResponse]
+	syncInventory                *connect.Client[v1.SyncInventoryRequest, v1.SyncInventoryResponse]
 }
 
 // CreateOperation calls orchestrator.v1.OrchestratorService.CreateOperation.
@@ -491,9 +523,35 @@ func (c *orchestratorServiceClient) DisableCluster(ctx context.Context, req *con
 	return c.disableCluster.CallUnary(ctx, req)
 }
 
+// ListOperators calls orchestrator.v1.OrchestratorService.ListOperators.
+func (c *orchestratorServiceClient) ListOperators(ctx context.Context, req *connect.Request[v1.ListOperatorsRequest]) (*connect.Response[v1.ListOperatorsResponse], error) {
+	return c.listOperators.CallUnary(ctx, req)
+}
+
+// GetOperator calls orchestrator.v1.OrchestratorService.GetOperator.
+func (c *orchestratorServiceClient) GetOperator(ctx context.Context, req *connect.Request[v1.GetOperatorRequest]) (*connect.Response[v1.GetOperatorResponse], error) {
+	return c.getOperator.CallUnary(ctx, req)
+}
+
+// RevokeOperator calls orchestrator.v1.OrchestratorService.RevokeOperator.
+func (c *orchestratorServiceClient) RevokeOperator(ctx context.Context, req *connect.Request[v1.RevokeOperatorRequest]) (*connect.Response[v1.RevokeOperatorResponse], error) {
+	return c.revokeOperator.CallUnary(ctx, req)
+}
+
 // CreateEnrollmentToken calls orchestrator.v1.OrchestratorService.CreateEnrollmentToken.
 func (c *orchestratorServiceClient) CreateEnrollmentToken(ctx context.Context, req *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error) {
 	return c.createEnrollmentToken.CallUnary(ctx, req)
+}
+
+// GetEnrollmentTokenStatus calls orchestrator.v1.OrchestratorService.GetEnrollmentTokenStatus.
+func (c *orchestratorServiceClient) GetEnrollmentTokenStatus(ctx context.Context, req *connect.Request[v1.GetEnrollmentTokenStatusRequest]) (*connect.Response[v1.GetEnrollmentTokenStatusResponse], error) {
+	return c.getEnrollmentTokenStatus.CallUnary(ctx, req)
+}
+
+// RevokePendingEnrollmentToken calls
+// orchestrator.v1.OrchestratorService.RevokePendingEnrollmentToken.
+func (c *orchestratorServiceClient) RevokePendingEnrollmentToken(ctx context.Context, req *connect.Request[v1.RevokePendingEnrollmentTokenRequest]) (*connect.Response[v1.RevokePendingEnrollmentTokenResponse], error) {
+	return c.revokePendingEnrollmentToken.CallUnary(ctx, req)
 }
 
 // EmergencyChange calls orchestrator.v1.OrchestratorService.EmergencyChange.
@@ -514,16 +572,6 @@ func (c *orchestratorServiceClient) GetClusterRoutes(ctx context.Context, req *c
 // DeleteClusterRoute calls orchestrator.v1.OrchestratorService.DeleteClusterRoute.
 func (c *orchestratorServiceClient) DeleteClusterRoute(ctx context.Context, req *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error) {
 	return c.deleteClusterRoute.CallUnary(ctx, req)
-}
-
-// ListReleases calls orchestrator.v1.OrchestratorService.ListReleases.
-func (c *orchestratorServiceClient) ListReleases(ctx context.Context, req *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error) {
-	return c.listReleases.CallUnary(ctx, req)
-}
-
-// TriggerInventorySync calls orchestrator.v1.OrchestratorService.TriggerInventorySync.
-func (c *orchestratorServiceClient) TriggerInventorySync(ctx context.Context, req *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error) {
-	return c.triggerInventorySync.CallUnary(ctx, req)
 }
 
 // SyncInventory calls orchestrator.v1.OrchestratorService.SyncInventory.
@@ -560,17 +608,19 @@ type OrchestratorServiceHandler interface {
 	GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error)
 	ListClusters(context.Context, *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error)
 	DisableCluster(context.Context, *connect.Request[v1.DisableClusterRequest]) (*connect.Response[v1.DisableClusterResponse], error)
-	// Operator enrollment
+	// Operator management (REQ-053)
+	ListOperators(context.Context, *connect.Request[v1.ListOperatorsRequest]) (*connect.Response[v1.ListOperatorsResponse], error)
+	GetOperator(context.Context, *connect.Request[v1.GetOperatorRequest]) (*connect.Response[v1.GetOperatorResponse], error)
+	RevokeOperator(context.Context, *connect.Request[v1.RevokeOperatorRequest]) (*connect.Response[v1.RevokeOperatorResponse], error)
 	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
+	GetEnrollmentTokenStatus(context.Context, *connect.Request[v1.GetEnrollmentTokenStatusRequest]) (*connect.Response[v1.GetEnrollmentTokenStatusResponse], error)
+	RevokePendingEnrollmentToken(context.Context, *connect.Request[v1.RevokePendingEnrollmentTokenRequest]) (*connect.Response[v1.RevokePendingEnrollmentTokenResponse], error)
 	// Emergency change (REQ-032)
 	EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error)
 	// Cluster artifact routing (REQ-014)
 	ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error)
 	GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error)
 	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
-	// Release inventory query and manual sync (REQ-054)
-	ListReleases(context.Context, *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error)
-	TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error)
 	// Inventory sync (REQ-017)
 	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
@@ -708,10 +758,40 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("DisableCluster")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orchestratorServiceListOperatorsHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListOperatorsProcedure,
+		svc.ListOperators,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListOperators")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceGetOperatorHandler := connect.NewUnaryHandler(
+		OrchestratorServiceGetOperatorProcedure,
+		svc.GetOperator,
+		connect.WithSchema(orchestratorServiceMethods.ByName("GetOperator")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceRevokeOperatorHandler := connect.NewUnaryHandler(
+		OrchestratorServiceRevokeOperatorProcedure,
+		svc.RevokeOperator,
+		connect.WithSchema(orchestratorServiceMethods.ByName("RevokeOperator")),
+		connect.WithHandlerOptions(opts...),
+	)
 	orchestratorServiceCreateEnrollmentTokenHandler := connect.NewUnaryHandler(
 		OrchestratorServiceCreateEnrollmentTokenProcedure,
 		svc.CreateEnrollmentToken,
 		connect.WithSchema(orchestratorServiceMethods.ByName("CreateEnrollmentToken")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceGetEnrollmentTokenStatusHandler := connect.NewUnaryHandler(
+		OrchestratorServiceGetEnrollmentTokenStatusProcedure,
+		svc.GetEnrollmentTokenStatus,
+		connect.WithSchema(orchestratorServiceMethods.ByName("GetEnrollmentTokenStatus")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceRevokePendingEnrollmentTokenHandler := connect.NewUnaryHandler(
+		OrchestratorServiceRevokePendingEnrollmentTokenProcedure,
+		svc.RevokePendingEnrollmentToken,
+		connect.WithSchema(orchestratorServiceMethods.ByName("RevokePendingEnrollmentToken")),
 		connect.WithHandlerOptions(opts...),
 	)
 	orchestratorServiceEmergencyChangeHandler := connect.NewUnaryHandler(
@@ -736,18 +816,6 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		OrchestratorServiceDeleteClusterRouteProcedure,
 		svc.DeleteClusterRoute,
 		connect.WithSchema(orchestratorServiceMethods.ByName("DeleteClusterRoute")),
-		connect.WithHandlerOptions(opts...),
-	)
-	orchestratorServiceListReleasesHandler := connect.NewUnaryHandler(
-		OrchestratorServiceListReleasesProcedure,
-		svc.ListReleases,
-		connect.WithSchema(orchestratorServiceMethods.ByName("ListReleases")),
-		connect.WithHandlerOptions(opts...),
-	)
-	orchestratorServiceTriggerInventorySyncHandler := connect.NewUnaryHandler(
-		OrchestratorServiceTriggerInventorySyncProcedure,
-		svc.TriggerInventorySync,
-		connect.WithSchema(orchestratorServiceMethods.ByName("TriggerInventorySync")),
 		connect.WithHandlerOptions(opts...),
 	)
 	orchestratorServiceSyncInventoryHandler := connect.NewUnaryHandler(
@@ -800,8 +868,18 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceListClustersHandler.ServeHTTP(w, r)
 		case OrchestratorServiceDisableClusterProcedure:
 			orchestratorServiceDisableClusterHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListOperatorsProcedure:
+			orchestratorServiceListOperatorsHandler.ServeHTTP(w, r)
+		case OrchestratorServiceGetOperatorProcedure:
+			orchestratorServiceGetOperatorHandler.ServeHTTP(w, r)
+		case OrchestratorServiceRevokeOperatorProcedure:
+			orchestratorServiceRevokeOperatorHandler.ServeHTTP(w, r)
 		case OrchestratorServiceCreateEnrollmentTokenProcedure:
 			orchestratorServiceCreateEnrollmentTokenHandler.ServeHTTP(w, r)
+		case OrchestratorServiceGetEnrollmentTokenStatusProcedure:
+			orchestratorServiceGetEnrollmentTokenStatusHandler.ServeHTTP(w, r)
+		case OrchestratorServiceRevokePendingEnrollmentTokenProcedure:
+			orchestratorServiceRevokePendingEnrollmentTokenHandler.ServeHTTP(w, r)
 		case OrchestratorServiceEmergencyChangeProcedure:
 			orchestratorServiceEmergencyChangeHandler.ServeHTTP(w, r)
 		case OrchestratorServiceConfigureClusterRouteProcedure:
@@ -810,10 +888,6 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceGetClusterRoutesHandler.ServeHTTP(w, r)
 		case OrchestratorServiceDeleteClusterRouteProcedure:
 			orchestratorServiceDeleteClusterRouteHandler.ServeHTTP(w, r)
-		case OrchestratorServiceListReleasesProcedure:
-			orchestratorServiceListReleasesHandler.ServeHTTP(w, r)
-		case OrchestratorServiceTriggerInventorySyncProcedure:
-			orchestratorServiceTriggerInventorySyncHandler.ServeHTTP(w, r)
 		case OrchestratorServiceSyncInventoryProcedure:
 			orchestratorServiceSyncInventoryHandler.ServeHTTP(w, r)
 		default:
@@ -909,8 +983,28 @@ func (UnimplementedOrchestratorServiceHandler) DisableCluster(context.Context, *
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.DisableCluster is not implemented"))
 }
 
+func (UnimplementedOrchestratorServiceHandler) ListOperators(context.Context, *connect.Request[v1.ListOperatorsRequest]) (*connect.Response[v1.ListOperatorsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListOperators is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) GetOperator(context.Context, *connect.Request[v1.GetOperatorRequest]) (*connect.Response[v1.GetOperatorResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.GetOperator is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) RevokeOperator(context.Context, *connect.Request[v1.RevokeOperatorRequest]) (*connect.Response[v1.RevokeOperatorResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.RevokeOperator is not implemented"))
+}
+
 func (UnimplementedOrchestratorServiceHandler) CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.CreateEnrollmentToken is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) GetEnrollmentTokenStatus(context.Context, *connect.Request[v1.GetEnrollmentTokenStatusRequest]) (*connect.Response[v1.GetEnrollmentTokenStatusResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.GetEnrollmentTokenStatus is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) RevokePendingEnrollmentToken(context.Context, *connect.Request[v1.RevokePendingEnrollmentTokenRequest]) (*connect.Response[v1.RevokePendingEnrollmentTokenResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.RevokePendingEnrollmentToken is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error) {
@@ -927,14 +1021,6 @@ func (UnimplementedOrchestratorServiceHandler) GetClusterRoutes(context.Context,
 
 func (UnimplementedOrchestratorServiceHandler) DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.DeleteClusterRoute is not implemented"))
-}
-
-func (UnimplementedOrchestratorServiceHandler) ListReleases(context.Context, *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListReleases is not implemented"))
-}
-
-func (UnimplementedOrchestratorServiceHandler) TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.TriggerInventorySync is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error) {

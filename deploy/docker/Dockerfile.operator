@@ -11,4 +11,4 @@ WORKDIR /data
 COPY --from=builder /out/release-operator /release-operator
 COPY configs/operator.dev.yaml /configs/operator.dev.yaml
 EXPOSE 8084
-ENTRYPOINT ["/release-operator", "--config", "/configs/operator.dev.yaml", "--db", "/data/operator.db", "--command-db", "/data/operator-commands.db"]
+ENTRYPOINT ["/release-operator", "--config", "/configs/operator.dev.yaml", "--db", "/data/release-manager.db", "--command-db", "/data/operator-commands.db"]

@@ -17,6 +17,7 @@ declare module '*.vue' {
 
 interface ImportMetaEnv {
   readonly VITE_FEATURE_CLUSTER_ROUTING?: string;
+  readonly VITE_FEATURE_OPERATOR_MANAGEMENT?: string;
   readonly VITE_ARTIFACT_CACHE_ENDPOINT?: string;
   readonly VITE_ARTIFACT_REGISTRY_ENDPOINT?: string;
 }

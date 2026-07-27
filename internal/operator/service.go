@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -32,13 +34,20 @@ type Service struct {
 	suspectAfter    time.Duration
 	inventorySyncer *InventorySyncer
 	commandExecutor CommandExecutor
+	streams         *StreamRegistry
 }
 
 // NewService creates a new operator Connect service with a self-signed CA.
-func NewService(st store.Store, logger *slog.Logger) (*Service, error) {
+func NewService(st store.Store, logger *slog.Logger, args ...any) (*Service, error) {
 	caInst, err := ca.New(ca.Config{TTL: 7 * 24 * time.Hour})
 	if err != nil {
 		return nil, fmt.Errorf("create CA: %w", err)
+	}
+	streams := NewStreamRegistry()
+	for _, arg := range args {
+		if registry, ok := arg.(*StreamRegistry); ok && registry != nil {
+			streams = registry
+		}
 	}
 	return &Service{
 		store:           st,
@@ -46,6 +55,7 @@ func NewService(st store.Store, logger *slog.Logger) (*Service, error) {
 		logger:          logger,
 		sessionTTL:      15 * time.Minute,
 		heartbeatMaxAge: 30 * time.Second,
+		streams:         streams,
 		suspectAfter:    60 * time.Second,
 	}, nil
 }
@@ -59,6 +69,9 @@ func (s *Service) SetInventorySyncer(syncer *InventorySyncer) {
 func (s *Service) SetCommandExecutor(executor CommandExecutor) {
 	s.commandExecutor = executor
 }
+
+// StreamRegistry returns the active command stream registry.
+func (s *Service) StreamRegistry() *StreamRegistry { return s.streams }
 
 // Enroll validates a single-use enrollment token, creates an operator record,
 // and establishes a new session for the operator agent.
@@ -79,7 +92,7 @@ func (s *Service) Enroll(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	if token.Used {
+	if token.State != store.TokenStatePending {
 		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("enrollment token already used"))
 	}
 
@@ -125,29 +138,10 @@ func (s *Service) Enroll(
 	}
 
 	// Check operator_name is not already used by another cluster (AC-015-02).
-	if existingByName, err := s.store.Operators().GetByName(ctx, operatorName); err == nil {
+	if existingByName, err := s.store.Operators().GetActiveByName(ctx, msg.GetCustomerId(), operatorName); err == nil {
 		if existingByName.ClusterID != msg.GetClusterId() {
 			return nil, connect.NewError(connect.CodePermissionDenied,
 				fmt.Errorf("operator_name %q already registered on cluster %q", operatorName, existingByName.ClusterID))
-		}
-	}
-
-	// Check for existing active operator on this cluster — supersede it (AC-015-02).
-	existingOp, err := s.store.Operators().GetByClusterID(ctx, msg.GetClusterId())
-	if err != nil && err != store.ErrNotFound {
-		s.logger.Warn("checking existing operator on cluster", "error", err)
-	}
-	if existingOp != nil {
-		s.logger.Warn("superseding existing operator", "old_id", existingOp.ID, "cluster_id", msg.GetClusterId())
-		existingOp.Status = store.OperatorSuperseded
-		if err := s.store.Operators().Update(ctx, existingOp); err != nil {
-			s.logger.Warn("failed to supersede operator", "error", err)
-		}
-		// Mark old active sessions offline.
-		if oldSess, err := s.store.Sessions().GetActiveByOperator(ctx, existingOp.ID); err == nil {
-			if err := s.store.Sessions().UpdateStatus(ctx, oldSess.ID, store.SessionOffline); err != nil {
-				s.logger.Warn("failed to mark old session offline after supersede", "error", err)
-			}
 		}
 	}
 
@@ -180,38 +174,26 @@ func (s *Service) Enroll(
 		Status:     store.OperatorActive,
 	}
 
-	// Check if operator with this cert serial already exists; replace if superseded.
-	if existingBySerial, err := s.store.Operators().GetByCertSerial(ctx, certSerial); err == nil {
-		existingBySerial.Status = store.OperatorSuperseded
-		existingBySerial.SupersededBy = operatorID
-		if err := s.store.Operators().Update(ctx, existingBySerial); err != nil {
-			s.logger.Warn("failed to supersede operator by cert serial", "error", err)
-		}
-	}
-	if err := s.store.Operators().Create(ctx, op); err != nil {
-		s.logger.Error("create operator failed", "error", err)
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create operator: %w", err))
-	}
-
-	// Mark token used.
-	if err := s.store.EnrollmentTokens().MarkUsed(ctx, token.ID, operatorID); err != nil {
-		s.logger.Error("mark token used failed", "error", err)
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("mark token: %w", err))
-	}
-
-	// Create session.
+	// Atomically consume the token, supersede any active identity, create the
+	// new Operator, and establish its Session in the shared control-plane Store.
 	now := time.Now().UTC()
 	session := &store.Session{
 		ID:            uuid.New().String(),
 		OperatorID:    operatorID,
+		CustomerID:    msg.GetCustomerId(),
+		ClusterID:     msg.GetClusterId(),
 		Status:        store.SessionOnline,
 		StartedAt:     now,
 		LastHeartbeat: now,
 		ExpiresAt:     now.Add(s.sessionTTL),
+		Capabilities:  msg.GetCapabilities(),
 	}
-	if err := s.store.Sessions().Create(ctx, session); err != nil {
-		s.logger.Error("create session failed", "error", err)
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create session: %w", err))
+	enrollment, err := s.store.OperatorManagement().EnrollOperator(ctx, token.ID, op, session)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("commit operator enrollment: %w", err))
+	}
+	if enrollment.SupersededOperatorID != "" {
+		s.streams.Revoke(enrollment.SupersededOperatorID, "operator superseded")
 	}
 
 	s.logger.Info("operator enrolled",
@@ -288,6 +270,10 @@ func (s *Service) CommandStream(
 		"operator_id", operatorID, "session_id", sessionID,
 		"last_seen_sequence", lastSeenSeq,
 	)
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	unregisterStream := s.streams.Register(operatorID, sessionID, cancelStream)
+	defer unregisterStream()
+	ctx = streamCtx
 
 	// ── Reconnect: detect sequence gap and re-deliver ──
 	if err := s.handleReconnect(ctx, stream, operatorID, lastSeenSeq); err != nil {
@@ -329,7 +315,11 @@ func (s *Service) CommandStream(
 			if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandDelivered, ""); err != nil {
 				return fmt.Errorf("mark command delivered: %w", err)
 			}
+
 		case <-ctx.Done():
+			if op, err := s.store.Operators().Get(context.WithoutCancel(ctx), operatorID); err == nil && op.Status == store.OperatorRevoked {
+				return connect.NewError(connect.CodePermissionDenied, errors.New("operator revoked"))
+			}
 			return nil
 
 		default:
@@ -351,9 +341,6 @@ func (s *Service) CommandStream(
 					"sequence", ack.GetSequence(),
 					"ack_type", ack.GetAckType(),
 				)
-				// ACK_RECEIVED and ACK_PERSISTED both imply delivered,
-				// but only ACK_PERSISTED releases the orchestator from
-				// re-delivery responsibility.
 				if ack.GetAckType() == operatorv1.AckType_ACK_TYPE_PERSISTED {
 					if err := s.store.Outbox().UpdateStatus(ctx, ack.GetOutboxId(), store.CommandPersisted, ""); err != nil {
 						s.logger.Warn("failed to mark command persisted", "error", err)
@@ -373,29 +360,20 @@ func (s *Service) CommandStream(
 					"status", result.GetStatus(),
 					"sequence", result.GetSequence(),
 				)
-
-				// Dedup: check if this command already reached terminal state.
 				existing, err := s.store.Outbox().GetByCommandID(ctx, result.GetCommandId())
 				if err != nil && err != store.ErrNotFound {
 					s.logger.Warn("failed to check command dedup", "error", err)
 				}
 				if existing != nil && (existing.Status == store.CommandSucceeded || existing.Status == store.CommandFailed) {
-					s.logger.Info("command already terminal, sending duplicate response",
-						"command_id", result.GetCommandId(),
-					)
 					if err := stream.Send(&operatorv1.CommandStreamResponse{
 						Payload: &operatorv1.CommandStreamResponse_DuplicateResponse{
-							DuplicateResponse: &operatorv1.DuplicateResponse{
-								CommandId:  result.GetCommandId(),
-								ResultJson: existing.ResultJSON,
-							},
+							DuplicateResponse: &operatorv1.DuplicateResponse{CommandId: result.GetCommandId(), ResultJson: existing.ResultJSON},
 						},
 					}); err != nil {
 						return err
 					}
 					continue
 				}
-
 				status := store.CommandSucceeded
 				requestStatus := store.InventorySyncSucceeded
 				if result.GetStatus() == "failed" {
@@ -419,9 +397,6 @@ func (s *Service) CommandStream(
 
 			case req.GetResyncResponse() != nil:
 				rr := req.GetResyncResponse()
-				s.logger.Info("operator resync response",
-					"operator_last_sequence", rr.GetOperatorLastSequence(),
-				)
 				if err := s.reDeliverFrom(ctx, stream, operatorID, rr.GetOperatorLastSequence()); err != nil {
 					return err
 				}
@@ -691,29 +666,18 @@ func (s *Service) RevokeOperator(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	if op.Status == store.OperatorRevoked {
-		return connect.NewResponse(&operatorv1.RevokeOperatorResponse{
-			OperatorId: op.ID,
-			Status:     "already_revoked",
-		}), nil
-	}
-
-	if err := s.store.Operators().Revoke(ctx, op.ID); err != nil {
-		s.logger.Error("revoke operator failed", "error", err)
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("revoke operator: %w", err))
-	}
-
-	// Close active sessions for this operator.
-	if activeSess, err := s.store.Sessions().GetActiveByOperator(ctx, op.ID); err == nil {
-		if err := s.store.Sessions().UpdateStatus(ctx, activeSess.ID, store.SessionOffline); err != nil {
-			s.logger.Warn("failed to close session after revoke", "error", err)
+	status := "already_revoked"
+	if op.Status != store.OperatorRevoked {
+		if _, err := s.store.OperatorManagement().RevokeOperator(ctx, op.CustomerID, op.ClusterID, op.ID, msg.GetReason(), nil); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("revoke operator: %w", err))
 		}
+		status = "revoked"
 	}
-
-	s.logger.Warn("operator revoked", "operator_id", op.ID, "reason", msg.GetReason())
+	s.streams.Revoke(op.ID, "operator revoked")
+	s.logger.Warn("operator revoked", "operator_id", op.ID, "reason_provided", strings.TrimSpace(msg.GetReason()) != "")
 	return connect.NewResponse(&operatorv1.RevokeOperatorResponse{
 		OperatorId: op.ID,
-		Status:     "revoked",
+		Status:     status,
 	}), nil
 }
 

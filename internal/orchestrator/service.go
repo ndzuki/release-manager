@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -26,33 +28,50 @@ import (
 
 // Service implements the OrchestratorServiceHandler Connect interface.
 type Service struct {
-	store        store.Store
-	verifier     trust.Verifier
-	targetEnv    string
-	coordinator  *preflight.Coordinator
-	vulnEval     *vulnerability.Evaluator
-	auditEmitter audit.Sink
-	logger       *slog.Logger
+	store            store.Store
+	verifier         trust.Verifier
+	targetEnv        string
+	operatorEndpoint string
+	coordinator      *preflight.Coordinator
+	vulnEval         *vulnerability.Evaluator
+	auditEmitter     audit.Sink
+	streamRevoker    OperatorStreamRevoker
+	logger           *slog.Logger
+	preflightMu      sync.Mutex
+	preflightWG      sync.WaitGroup
+	preflightClosed  bool
+	preflightCancels map[string]context.CancelFunc
 }
 
 func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args ...any) *Service {
 	var auditEmitter audit.Sink
+	var streamRevoker OperatorStreamRevoker
 	logger := slog.Default()
+	operatorEndpoint := "http://operator:8084"
 	for _, arg := range args {
 		switch value := arg.(type) {
 		case audit.Sink:
 			auditEmitter = value
+		case OperatorStreamRevoker:
+			streamRevoker = value
+		case string:
+			if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+				operatorEndpoint = strings.TrimRight(value, "/")
+			}
 		case *slog.Logger:
 			logger = value
 		}
 	}
 	return &Service{
-		store:        st,
-		verifier:     verifier,
-		targetEnv:    targetEnv,
-		coordinator:  preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.Values(), st.Bundles(), st.PreflightLifecycles(), logger),
-		auditEmitter: auditEmitter,
-		logger:       logger,
+		store:            st,
+		verifier:         verifier,
+		targetEnv:        targetEnv,
+		operatorEndpoint: operatorEndpoint,
+		coordinator:      preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.Values(), st.Bundles(), st.PreflightLifecycles(), logger),
+		auditEmitter:     auditEmitter,
+		streamRevoker:    streamRevoker,
+		logger:           logger,
+		preflightCancels: make(map[string]context.CancelFunc),
 	}
 }
 
@@ -259,10 +278,7 @@ func (s *Service) CreateOperation(
 				op.Status = next
 				op.StateVersion++
 
-				// Launch preflight coordinator in background.
-				// Use WithoutCancel so the coordinator outlives the HTTP request.
-				bgCtx := context.WithoutCancel(ctx)
-				go s.coordinator.Run(bgCtx, op)
+				s.startPreflight(ctx, op)
 				s.logger.Info("preflight coordinator launched", "op_id", op.ID)
 			}
 		}
@@ -385,6 +401,57 @@ func (s *Service) checkCustomerNotDisabled(ctx context.Context, customerID strin
 		return fmt.Errorf("customer %s is disabled", customerID)
 	}
 	return nil
+}
+
+func (s *Service) startPreflight(ctx context.Context, op *store.Operation) {
+	preflightCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	s.preflightMu.Lock()
+	if s.preflightClosed {
+		s.preflightMu.Unlock()
+		cancel()
+		s.logger.Warn("preflight coordinator rejected during shutdown", "op_id", op.ID)
+		return
+	}
+	s.preflightCancels[op.ID] = cancel
+	s.preflightWG.Add(1)
+	s.preflightMu.Unlock()
+
+	go func() {
+		defer s.preflightWG.Done()
+		defer cancel()
+		defer func() {
+			s.preflightMu.Lock()
+			delete(s.preflightCancels, op.ID)
+			s.preflightMu.Unlock()
+		}()
+		s.coordinator.Run(preflightCtx, op)
+	}()
+}
+
+// Shutdown cancels and joins all preflight coordinators before the Store closes.
+func (s *Service) Shutdown(ctx context.Context) error {
+	s.preflightMu.Lock()
+	s.preflightClosed = true
+	cancels := make([]context.CancelFunc, 0, len(s.preflightCancels))
+	for _, cancel := range s.preflightCancels {
+		cancels = append(cancels, cancel)
+	}
+	s.preflightMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		s.preflightWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("wait for preflight coordinators: %w", ctx.Err())
+	}
 }
 
 // Compile-time check: Service implements the Connect handler interface.

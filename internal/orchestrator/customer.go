@@ -167,7 +167,7 @@ func (s *Service) DisableCustomer(
 		s.logger.Warn("listing tokens for cascade revoke", "error", err)
 	}
 	for _, t := range tokens {
-		if !t.Used {
+		if t.State == store.TokenStatePending {
 			if err := s.store.EnrollmentTokens().Revoke(ctx, t.ID); err != nil {
 				s.logger.Warn("cascade revoke token", "token_id", t.ID, "error", err)
 			}
@@ -181,14 +181,8 @@ func (s *Service) DisableCustomer(
 	}
 	for _, op := range operators {
 		if op.Status == store.OperatorActive {
-			if err := s.store.Operators().Revoke(ctx, op.ID); err != nil {
+			if _, err := s.store.OperatorManagement().RevokeOperator(ctx, c.ID, op.ClusterID, op.ID, "customer disabled", nil); err != nil {
 				s.logger.Warn("cascade revoke operator", "operator_id", op.ID, "error", err)
-			}
-			// Close active sessions.
-			if sess, err := s.store.Sessions().GetActiveByOperator(ctx, op.ID); err == nil {
-				if err := s.store.Sessions().UpdateStatus(ctx, sess.ID, store.SessionOffline); err != nil {
-					s.logger.Warn("cascade close session", "session_id", sess.ID, "error", err)
-				}
 			}
 		}
 	}

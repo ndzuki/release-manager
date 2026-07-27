@@ -72,7 +72,7 @@ func (e *Enforcer) Enforce(sub, dom, obj, act string) error {
 		e.logger.Error("casbin enforce error", "error", err)
 		return newPolicyUnavailable(sub, dom, obj, act, err)
 	}
-	if !healthy && act == "write" {
+	if !healthy && act != "read" {
 		return newPolicyUnavailable(sub, dom, obj, act, errors.New("policy snapshot is unhealthy"))
 	}
 	if !allowed {
@@ -262,12 +262,16 @@ func roleRules(role, domain string) [][]string {
 			{role, domain, "binding", "write"},
 			{role, domain, "release", "read"},
 			{role, domain, "release", "write"},
+			{role, domain, "operator", "read"},
+			{role, domain, "operator", "enroll"},
+			{role, domain, "operator", "revoke"},
 			{role, domain, "customer", "read"},
 		}
 	case store.RoleDeployer:
 		return [][]string{
 			{role, domain, "release", "read"},
 			{role, domain, "release", "write"},
+			{role, domain, "operator", "read"},
 			{role, domain, "customer", "read"},
 		}
 	case store.RoleViewer:
@@ -275,6 +279,7 @@ func roleRules(role, domain string) [][]string {
 			{role, domain, "organization", "read"},
 			{role, domain, "member", "read"},
 			{role, domain, "release", "read"},
+			{role, domain, "operator", "read"},
 			{role, domain, "customer", "read"},
 		}
 	}

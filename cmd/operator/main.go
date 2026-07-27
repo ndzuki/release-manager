@@ -45,7 +45,7 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	s.st = st
 	logger.Info("store opened", "db", s.dbPath)
 
-	svc, err := operator.NewService(st, logger)
+	svc, err := operator.NewService(st, logger, operator.ProcessStreamRegistry())
 	if err != nil {
 		return fmt.Errorf("create operator service: %w", err)
 	}
@@ -146,7 +146,7 @@ func (s *operatorSvc) runSessionExpiry(ctx context.Context, logger *slog.Logger)
 
 func main() {
 	configPath := flag.String("config", "configs/operator.dev.yaml", "path to config file")
-	dbPath := flag.String("db", "data/operator.db", "path to SQLite database")
+	dbPath := flag.String("db", "data/release-manager.db", "path to the shared control-plane SQLite database")
 	commandDBPath := flag.String("command-db", "data/operator-commands.db", "path to durable command database")
 	orchestratorAddr := flag.String("orchestrator-addr", "http://localhost:8083", "orchestrator Connect URL")
 	operatorAddr := flag.String("operator-addr", "http://localhost:8084", "operator Connect URL")

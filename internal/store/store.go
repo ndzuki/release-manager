@@ -33,6 +33,12 @@ var (
 	ErrInvalidState              = errors.New("store: invalid values revision state")
 	ErrDefinitionOwnerUnresolved = errors.New("store: definition owner unresolved")
 	ErrNotAuthorized             = errors.New("store: approval command not authorized")
+	ErrPendingTokenExists        = errors.New("store: pending enrollment token already exists")
+	ErrDuplicateOperatorName     = errors.New("store: duplicate active operator name")
+	ErrOperatorNotFound          = errors.New("store: operator not found")
+	ErrTokenReplaceConflict      = errors.New("store: token replace conflict")
+	ErrOperatorStateConflict     = errors.New("store: operator state conflict")
+	ErrAuditUnavailable          = errors.New("store: audit unavailable")
 )
 
 // StateVersionConflictError reports the current revision version after a failed CAS.
@@ -292,6 +298,20 @@ const (
 	SessionOnline  SessionStatus = "online"
 	SessionSuspect SessionStatus = "suspect"
 	SessionOffline SessionStatus = "offline"
+	SessionRevoked SessionStatus = "revoked"
+)
+
+// SessionStatusReason explains why a session is in its current state.
+type SessionStatusReason string
+
+const (
+	SessionReasonNoSession          SessionStatusReason = "no_session"
+	SessionReasonHeartbeatTimeout   SessionStatusReason = "heartbeat_timeout"
+	SessionReasonHeartbeatDelayed   SessionStatusReason = "heartbeat_delayed"
+	SessionReasonCertRevoked        SessionStatusReason = "certificate_revoked"
+	SessionReasonOperatorSuperseded SessionStatusReason = "operator_superseded"
+	SessionReasonSessionReplaced    SessionStatusReason = "session_replaced"
+	SessionReasonUnknown            SessionStatusReason = "unknown"
 )
 
 // CommandStatus is the outbox delivery and execution state.
@@ -328,18 +348,32 @@ type Cluster struct {
 	Version       int64         `json:"version"`
 }
 
+// EnrollmentTokenState is the lifecycle state of an enrollment token.
+type EnrollmentTokenState string
+
+const (
+	TokenStatePending EnrollmentTokenState = "pending"
+	TokenStateUsed    EnrollmentTokenState = "used"
+	TokenStateExpired EnrollmentTokenState = "expired"
+	TokenStateRevoked EnrollmentTokenState = "revoked"
+)
+
 // EnrollmentToken is a single-use token for operator registration.
 type EnrollmentToken struct {
-	ID         string     `json:"id"`
-	CustomerID string     `json:"customer_id"`
-	ClusterID  string     `json:"cluster_id"`
-	Token      string     `json:"token"`
-	TokenHash  string     `json:"token_hash"`
-	CreatedAt  time.Time  `json:"created_at"`
-	ExpiresAt  time.Time  `json:"expires_at"`
-	Used       bool       `json:"used"`
-	UsedAt     *time.Time `json:"used_at,omitempty"`
-	OperatorID string     `json:"operator_id,omitempty"`
+	ID                   string               `json:"id"`
+	CustomerID           string               `json:"customer_id"`
+	ClusterID            string               `json:"cluster_id"`
+	OperatorName         string               `json:"operator_name"`
+	Token                string               `json:"token,omitempty"`
+	TokenHash            string               `json:"token_hash"`
+	State                EnrollmentTokenState `json:"state"`
+	CreatedByDisplayName string               `json:"created_by_display_name"`
+	CreatedAt            time.Time            `json:"created_at"`
+	ExpiresAt            time.Time            `json:"expires_at"`
+	UsedAt               *time.Time           `json:"used_at,omitempty"`
+	OperatorID           string               `json:"operator_id,omitempty"`
+	RevokedAt            *time.Time           `json:"revoked_at,omitempty"`
+	ReplacedByID         string               `json:"replaced_by_id,omitempty"`
 }
 
 // Operator represents a registered operator agent in a cluster.
@@ -351,23 +385,29 @@ type Operator struct {
 	CertSerial   string         `json:"cert_serial"`
 	Status       OperatorStatus `json:"status"`
 	SupersededBy string         `json:"superseded_by,omitempty"`
+	SupersededAt *time.Time     `json:"superseded_at,omitempty"`
 	RevokedAt    *time.Time     `json:"revoked_at,omitempty"`
-	CreatedAt    time.Time      `json:"created_at"`
+	RevokeReason string         `json:"revoke_reason,omitempty"`
+	RegisteredAt time.Time      `json:"registered_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
 // Session tracks a live operator connection.
 type Session struct {
-	ID                  string            `json:"id"`
-	OperatorID          string            `json:"operator_id"`
-	Status              SessionStatus     `json:"status"`
-	InstanceID          string            `json:"instance_id"`
-	Version             string            `json:"version"`
-	Capabilities        map[string]string `json:"capabilities"`
-	ActiveConfigVersion string            `json:"active_config_version"`
-	StartedAt           time.Time         `json:"started_at"`
-	LastHeartbeat       time.Time         `json:"last_heartbeat"`
-	ExpiresAt           time.Time         `json:"expires_at"`
+	ID                  string               `json:"id"`
+	OperatorID          string               `json:"operator_id"`
+	CustomerID          string               `json:"customer_id"`
+	ClusterID           string               `json:"cluster_id"`
+	Status              SessionStatus        `json:"status"`
+	StatusReason        *SessionStatusReason `json:"status_reason,omitempty"`
+	InstanceID          string               `json:"instance_id"`
+	Version             string               `json:"version"`
+	Capabilities        map[string]string    `json:"capabilities"`
+	ActiveConfigVersion string               `json:"active_config_version"`
+	StartedAt           time.Time            `json:"started_at"`
+	LastHeartbeat       time.Time            `json:"last_heartbeat"`
+	ExpiresAt           time.Time            `json:"expires_at"`
+	ClosedAt            *time.Time           `json:"closed_at,omitempty"`
 }
 
 // OutboxEntry holds a command pending delivery in the outbox.
@@ -1016,14 +1056,68 @@ type ClusterStore interface {
 	ListAll(ctx context.Context) ([]*Cluster, error)
 }
 
+type OperatorListFilter struct {
+	LifecycleStatus *OperatorStatus
+	SessionStatus   *SessionStatus
+	NoSession       bool
+}
+
+// OperatorCursor binds pagination to the requested scope, filters, and ordering version.
+type OperatorCursor struct {
+	CustomerID      string
+	ClusterID       string
+	LifecycleStatus *OperatorStatus
+	SessionStatus   *SessionStatus
+	NoSession       bool
+	RegisteredAt    time.Time
+	OperatorID      string
+}
+
+// EnrollmentTokenMutation records an atomic pending-token state transition.
+type EnrollmentTokenMutation struct {
+	Token      *EnrollmentToken
+	PreviousID string
+	Changed    bool
+}
+
+// OperatorRevocation records the atomic Operator and Session revocation result.
+type OperatorRevocation struct {
+	Operator *Operator
+	Session  *Session
+	Changed  bool
+}
+
+// OperatorEnrollment records the committed enrollment and any superseded identity.
+type OperatorEnrollment struct {
+	Operator             *Operator
+	Session              *Session
+	SupersededOperatorID string
+}
+
+// OperatorManagementStore owns multi-record Operator management transactions.
+type OperatorManagementStore interface {
+	CreateEnrollmentToken(ctx context.Context, token *EnrollmentToken, replacePending bool, auditEvent *AuditEvent) (*EnrollmentTokenMutation, error)
+	RevokePendingEnrollmentToken(ctx context.Context, customerID, clusterID string, auditEvent *AuditEvent) (*EnrollmentTokenMutation, error)
+	EnrollOperator(ctx context.Context, tokenID string, operator *Operator, session *Session) (*OperatorEnrollment, error)
+	RevokeOperator(ctx context.Context, customerID, clusterID, operatorID, reason string, auditEvent *AuditEvent) (*OperatorRevocation, error)
+}
+
 // EnrollmentTokenStore defines the persistence contract for enrollment tokens.
 type EnrollmentTokenStore interface {
 	Create(ctx context.Context, t *EnrollmentToken) error
 	GetByToken(ctx context.Context, token string) (*EnrollmentToken, error)
 	MarkUsed(ctx context.Context, id, operatorID string) error
 	Revoke(ctx context.Context, id string) error
+	GetPendingByCluster(ctx context.Context, customerID, clusterID string) (*EnrollmentToken, error)
 	ListByCustomer(ctx context.Context, customerID string) ([]*EnrollmentToken, error)
 	ListByCluster(ctx context.Context, clusterID string) ([]*EnrollmentToken, error)
+}
+
+// OperatorPage is a cursor-based page of operators.
+type OperatorPage struct {
+	Operators      []*Operator
+	NextPageCursor *OperatorCursor
+	TotalCount     int32
 }
 
 type OperatorStore interface {
@@ -1031,9 +1125,9 @@ type OperatorStore interface {
 	Get(ctx context.Context, id string) (*Operator, error)
 	GetByCertSerial(ctx context.Context, serial string) (*Operator, error)
 	GetByClusterID(ctx context.Context, clusterID string) (*Operator, error)
-	GetByName(ctx context.Context, name string) (*Operator, error)
+	GetActiveByName(ctx context.Context, customerID, name string) (*Operator, error)
 	Update(ctx context.Context, op *Operator) error
-	Revoke(ctx context.Context, id string) error
+	ListByClusterFilter(ctx context.Context, customerID, clusterID string, filter OperatorListFilter, pageSize int32, cursor *OperatorCursor) (*OperatorPage, error)
 	ListByCustomer(ctx context.Context, customerID string) ([]*Operator, error)
 	ListByCluster(ctx context.Context, clusterID string) ([]*Operator, error)
 }
@@ -1045,7 +1139,9 @@ type SessionStore interface {
 	Get(ctx context.Context, id string) (*Session, error)
 	Heartbeat(ctx context.Context, id string) error
 	UpdateStatus(ctx context.Context, id string, status SessionStatus) error
+	UpdateStatusReason(ctx context.Context, id string, status SessionStatus, reason SessionStatusReason) error
 	GetActiveByOperator(ctx context.Context, operatorID string) (*Session, error)
+	GetLatestByOperator(ctx context.Context, operatorID string) (*Session, error)
 	ListExpiredSuspect(ctx context.Context, suspectAfter time.Duration) ([]*Session, error)
 }
 
@@ -1290,6 +1386,7 @@ type Store interface {
 	ValuesApprovalEvidence() ValuesApprovalReader
 	Customers() CustomerStore
 	Clusters() ClusterStore
+	OperatorManagement() OperatorManagementStore
 	EnrollmentTokens() EnrollmentTokenStore
 	Operators() OperatorStore
 	Sessions() SessionStore
