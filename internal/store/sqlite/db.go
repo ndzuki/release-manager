@@ -112,10 +112,6 @@ func Open(dsn string) (*Store, error) {
 	s.candidateArts = &candidateArtifactStore{db: db}
 	s.preflightCycles = &preflightLifecycleStore{db: db}
 
-	// REQ-069: Wire operation store → preflight lifecycle store so terminal
-	// operation transitions automatically record operation_terminal_at.
-	s.ops.pl = s.preflightCycles
-
 	return s, nil
 }
 
@@ -414,6 +410,10 @@ var migrationStatements = []string{
 	)`,
 	// Migration: add target_revision for ROLLBACK operations.
 	`ALTER TABLE operations ADD COLUMN target_revision INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE operations ADD COLUMN terminal_at TEXT`,
+	`UPDATE operations
+	 SET terminal_at = updated_at
+	 WHERE status IN ('succeeded', 'failed', 'cancelled', 'timeout') AND terminal_at IS NULL`,
 
 	`CREATE INDEX IF NOT EXISTS idx_operations_definition ON operations(release_definition_id, status)`,
 	`CREATE INDEX IF NOT EXISTS idx_operations_idempotency ON operations(idempotency_key)`,
