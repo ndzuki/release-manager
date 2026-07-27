@@ -133,67 +133,36 @@ func TestAgent_UpgradeConflictErrorMapping(t *testing.T) {
 	assert.Contains(t, stream.sent[1].GetResult().GetResultJson(), `"code":"revision_conflict"`)
 }
 
-func TestAgent_RollbackCommand(t *testing.T) {
-	engine := &recordingEngine{
-		release: &helmengine.Release{
-			Name:      "example",
-			Namespace: "apps",
-			Revision:  3,
-			Status:    "deployed",
-		},
-	}
-	agent := newTestAgent(t, engine, newMemoryStore(), nil)
+func TestAgent_InventorySyncCommandExecutesFullSync(t *testing.T) {
+	executor := new(recordingSyncExecutor)
+	agent, err := New(Config{
+		Client: noopClient{}, Engine: new(recordingEngine), Store: newMemoryStore(),
+		SyncExecutor: executor, SessionID: "session-1", OperatorID: "operator-1",
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	require.NoError(t, err)
 	stream := newTestStream()
-	command := rollbackCommand("cmd-rollback")
+	command := &operatorv1.Command{
+		OutboxId: "outbox-sync", CommandId: "command-sync", OperationId: "request-sync",
+		OperationType: "INVENTORY_SYNC", Sequence: 9,
+	}
 
 	require.NoError(t, agent.handleCommand(t.Context(), stream, command))
 	require.Len(t, stream.sent, 2)
+	assert.Equal(t, 1, executor.calls)
 	assert.Equal(t, "succeeded", stream.sent[1].GetResult().GetStatus())
-	assert.Equal(t, 1, engine.rollbackCalls)
-	assert.Equal(t, 1, engine.lastRollback.TargetRevision)
-	assert.Equal(t, "apps", engine.lastRollback.Namespace)
-	assert.Equal(t, "example", engine.lastRollback.ReleaseName)
+	assert.Contains(t, stream.sent[1].GetResult().GetResultJson(), `"inventory_sync_hint":true`)
 }
 
-func TestAgent_RollbackMissingTargetRevision(t *testing.T) {
-	engine := &recordingEngine{}
-	agent := newTestAgent(t, engine, newMemoryStore(), nil)
-	stream := newTestStream()
-	command := rollbackCommand("cmd-no-target")
-	command.TargetRevision = 0
-
-	require.NoError(t, agent.handleCommand(t.Context(), stream, command))
-	require.Len(t, stream.sent, 2)
-	assert.Contains(t, stream.sent[1].GetResult().GetResultJson(), `"code":"invalid_command"`)
-	assert.Equal(t, 0, engine.rollbackCalls)
+type recordingSyncExecutor struct {
+	calls int
+	err   error
 }
 
-func TestAgent_RollbackErrorMapping(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      error
-		wantCode string
-	}{
-		{"release not found", helmengine.ErrNotFound, "release_not_found"},
-		{"target revision not found", helmengine.ErrRevisionNotFound, "target_revision_not_found"},
-		{"artifact unavailable", helmengine.ErrArtifactUnavailable, "historical_artifact_unavailable"},
-		{"timeout", helmengine.ErrTimeout, "timeout"},
-		{"cancelled", helmengine.ErrCancelled, "cancelled"},
-		{"generic failure", errors.New("something went wrong"), "helm_rollback_failed"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			engine := &recordingEngine{err: tt.err}
-			agent := newTestAgent(t, engine, newMemoryStore(), nil)
-			stream := newTestStream()
-
-			require.NoError(t, agent.handleCommand(t.Context(), stream, rollbackCommand("cmd-err")))
-			require.Len(t, stream.sent, 2)
-			assert.Contains(t, stream.sent[1].GetResult().GetResultJson(), fmt.Sprintf(`"code":"%s"`, tt.wantCode))
-		})
-	}
+func (e *recordingSyncExecutor) SyncNow(context.Context) error {
+	e.calls++
+	return e.err
 }
-
 func newTestAgent(
 	t *testing.T,
 	engine helmengine.Engine,
@@ -242,19 +211,19 @@ func installCommand(commandID string) *operatorv1.Command {
 
 func upgradeCommand(commandID string) *operatorv1.Command {
 	return &operatorv1.Command{
-		OutboxId:               "outbox-upgrade",
-		CommandId:              commandID,
-		OperationId:            "op-upgrade",
-		OperationType:          "UPGRADE",
-		Bundle:                 &commonv1.ReleaseBundle{ChartRef: "chart", ChartVersion: "1.0.0"},
-		Values:                 []byte(`{"replicas":2,"image":{"tag":"v1"}}`),
-		ValuesPatch:            []byte(`{"replicas":3,"image":{"tag":"v2"}}`),
+		OutboxId:                "outbox-upgrade",
+		CommandId:               commandID,
+		OperationId:             "op-upgrade",
+		OperationType:           "UPGRADE",
+		Bundle:                  &commonv1.ReleaseBundle{ChartRef: "chart", ChartVersion: "1.0.0"},
+		Values:                  []byte(`{"replicas":2,"image":{"tag":"v1"}}`),
+		ValuesPatch:             []byte(`{"replicas":3,"image":{"tag":"v2"}}`),
 		ExpectedCurrentRevision: 1,
-		Atomic:                 true,
-		DefinitionId:           "definition-upgrade",
-		Namespace:              "apps",
-		ReleaseName:            "example",
-		TimeoutSeconds:         45,
+		Atomic:                  true,
+		DefinitionId:            "definition-upgrade",
+		Namespace:               "apps",
+		ReleaseName:             "example",
+		TimeoutSeconds:          45,
 	}
 }
 

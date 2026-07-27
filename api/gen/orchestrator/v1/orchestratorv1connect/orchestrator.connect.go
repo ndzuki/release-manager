@@ -111,6 +111,12 @@ const (
 	// OrchestratorServiceDeleteClusterRouteProcedure is the fully-qualified name of the
 	// OrchestratorService's DeleteClusterRoute RPC.
 	OrchestratorServiceDeleteClusterRouteProcedure = "/orchestrator.v1.OrchestratorService/DeleteClusterRoute"
+	// OrchestratorServiceListReleasesProcedure is the fully-qualified name of the OrchestratorService's
+	// ListReleases RPC.
+	OrchestratorServiceListReleasesProcedure = "/orchestrator.v1.OrchestratorService/ListReleases"
+	// OrchestratorServiceTriggerInventorySyncProcedure is the fully-qualified name of the
+	// OrchestratorService's TriggerInventorySync RPC.
+	OrchestratorServiceTriggerInventorySyncProcedure = "/orchestrator.v1.OrchestratorService/TriggerInventorySync"
 	// OrchestratorServiceSyncInventoryProcedure is the fully-qualified name of the
 	// OrchestratorService's SyncInventory RPC.
 	OrchestratorServiceSyncInventoryProcedure = "/orchestrator.v1.OrchestratorService/SyncInventory"
@@ -152,6 +158,9 @@ type OrchestratorServiceClient interface {
 	ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error)
 	GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error)
 	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
+	// Release inventory query and manual sync (REQ-054)
+	ListReleases(context.Context, *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error)
+	TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error)
 	// Inventory sync (REQ-017)
 	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
@@ -323,6 +332,18 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("DeleteClusterRoute")),
 			connect.WithClientOptions(opts...),
 		),
+		listReleases: connect.NewClient[v1.ListReleasesRequest, v1.ListReleasesResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListReleasesProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListReleases")),
+			connect.WithClientOptions(opts...),
+		),
+		triggerInventorySync: connect.NewClient[v1.TriggerInventorySyncRequest, v1.TriggerInventorySyncResponse](
+			httpClient,
+			baseURL+OrchestratorServiceTriggerInventorySyncProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("TriggerInventorySync")),
+			connect.WithClientOptions(opts...),
+		),
 		syncInventory: connect.NewClient[v1.SyncInventoryRequest, v1.SyncInventoryResponse](
 			httpClient,
 			baseURL+OrchestratorServiceSyncInventoryProcedure,
@@ -360,6 +381,8 @@ type orchestratorServiceClient struct {
 	configureClusterRoute    *connect.Client[v1.ConfigureClusterRouteRequest, v1.ConfigureClusterRouteResponse]
 	getClusterRoutes         *connect.Client[v1.GetClusterRoutesRequest, v1.GetClusterRoutesResponse]
 	deleteClusterRoute       *connect.Client[v1.DeleteClusterRouteRequest, v1.DeleteClusterRouteResponse]
+	listReleases             *connect.Client[v1.ListReleasesRequest, v1.ListReleasesResponse]
+	triggerInventorySync     *connect.Client[v1.TriggerInventorySyncRequest, v1.TriggerInventorySyncResponse]
 	syncInventory            *connect.Client[v1.SyncInventoryRequest, v1.SyncInventoryResponse]
 }
 
@@ -493,6 +516,16 @@ func (c *orchestratorServiceClient) DeleteClusterRoute(ctx context.Context, req 
 	return c.deleteClusterRoute.CallUnary(ctx, req)
 }
 
+// ListReleases calls orchestrator.v1.OrchestratorService.ListReleases.
+func (c *orchestratorServiceClient) ListReleases(ctx context.Context, req *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error) {
+	return c.listReleases.CallUnary(ctx, req)
+}
+
+// TriggerInventorySync calls orchestrator.v1.OrchestratorService.TriggerInventorySync.
+func (c *orchestratorServiceClient) TriggerInventorySync(ctx context.Context, req *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error) {
+	return c.triggerInventorySync.CallUnary(ctx, req)
+}
+
 // SyncInventory calls orchestrator.v1.OrchestratorService.SyncInventory.
 func (c *orchestratorServiceClient) SyncInventory(ctx context.Context, req *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error) {
 	return c.syncInventory.CallUnary(ctx, req)
@@ -535,6 +568,9 @@ type OrchestratorServiceHandler interface {
 	ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error)
 	GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error)
 	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
+	// Release inventory query and manual sync (REQ-054)
+	ListReleases(context.Context, *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error)
+	TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error)
 	// Inventory sync (REQ-017)
 	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
@@ -702,6 +738,18 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("DeleteClusterRoute")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orchestratorServiceListReleasesHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListReleasesProcedure,
+		svc.ListReleases,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListReleases")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceTriggerInventorySyncHandler := connect.NewUnaryHandler(
+		OrchestratorServiceTriggerInventorySyncProcedure,
+		svc.TriggerInventorySync,
+		connect.WithSchema(orchestratorServiceMethods.ByName("TriggerInventorySync")),
+		connect.WithHandlerOptions(opts...),
+	)
 	orchestratorServiceSyncInventoryHandler := connect.NewUnaryHandler(
 		OrchestratorServiceSyncInventoryProcedure,
 		svc.SyncInventory,
@@ -762,6 +810,10 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceGetClusterRoutesHandler.ServeHTTP(w, r)
 		case OrchestratorServiceDeleteClusterRouteProcedure:
 			orchestratorServiceDeleteClusterRouteHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListReleasesProcedure:
+			orchestratorServiceListReleasesHandler.ServeHTTP(w, r)
+		case OrchestratorServiceTriggerInventorySyncProcedure:
+			orchestratorServiceTriggerInventorySyncHandler.ServeHTTP(w, r)
 		case OrchestratorServiceSyncInventoryProcedure:
 			orchestratorServiceSyncInventoryHandler.ServeHTTP(w, r)
 		default:
@@ -875,6 +927,14 @@ func (UnimplementedOrchestratorServiceHandler) GetClusterRoutes(context.Context,
 
 func (UnimplementedOrchestratorServiceHandler) DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.DeleteClusterRoute is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListReleases(context.Context, *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListReleases is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.TriggerInventorySync is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error) {

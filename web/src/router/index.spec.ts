@@ -11,6 +11,14 @@ describe('auth route guard', () => {
     setActivePinia(createPinia());
   });
 
+  it('registers and disables the release inventory feature route', () => {
+    const enabled = createAppRouter(createMemoryHistory(), true);
+    const disabled = createAppRouter(createMemoryHistory(), false);
+
+    expect(enabled.resolve('/customers/customer-1/clusters/cluster-1/releases').name).toBe('ReleaseInventory');
+    expect(disabled.resolve('/customers/customer-1/clusters/cluster-1/releases').name).toBe('NotFound');
+  });
+
   it('routes an uninitialized installation to first-time setup', async () => {
     const auth = useAuthStore();
     auth.$patch({ status: 'anonymous', initialized: false });

@@ -9,3 +9,6 @@ inputs:
   - directory: api/proto
     paths:
       - api/proto/auth/v1/auth.proto
+      - api/proto/common/v1/domain.proto
+      - api/proto/common/v1/trust.proto
+      - api/proto/orchestrator/v1/orchestrator.proto

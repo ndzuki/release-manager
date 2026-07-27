@@ -358,6 +358,11 @@ func (s *Service) CommandStream(
 					if err := s.store.Outbox().UpdateStatus(ctx, ack.GetOutboxId(), store.CommandPersisted, ""); err != nil {
 						s.logger.Warn("failed to mark command persisted", "error", err)
 					}
+					if entry, getErr := s.store.Outbox().Get(ctx, ack.GetOutboxId()); getErr == nil && entry.OperationType == "INVENTORY_SYNC" {
+						if updateErr := s.store.InventorySyncRequests().UpdateStatus(ctx, entry.OperationID, store.InventorySyncRunning, ""); updateErr != nil {
+							s.logger.Warn("failed to mark inventory sync running", "error", updateErr)
+						}
+					}
 				}
 
 			case req.GetResult() != nil:
@@ -392,17 +397,23 @@ func (s *Service) CommandStream(
 				}
 
 				status := store.CommandSucceeded
+				requestStatus := store.InventorySyncSucceeded
 				if result.GetStatus() == "failed" {
 					status = store.CommandFailed
+					requestStatus = store.InventorySyncFailed
 				}
 				resultJSON := result.GetResultJson()
 				if resultJSON == "" {
 					resultJSON = result.GetMessage()
 				}
 				if err := s.store.Outbox().UpdateStatus(ctx, result.GetOutboxId(), status, resultJSON); err != nil {
-					return fmt.Errorf("update command result: %w", err)
+					s.logger.Warn("failed to persist command result", "error", err)
 				}
-				if existing != nil {
+				if existing != nil && existing.OperationType == "INVENTORY_SYNC" {
+					if err := s.store.InventorySyncRequests().UpdateStatus(ctx, existing.OperationID, requestStatus, result.GetMessage()); err != nil {
+						s.logger.Warn("failed to persist inventory sync result", "error", err)
+					}
+				} else if existing != nil {
 					s.FinishOperation(ctx, existing.OperationID, result.GetStatus(), resultJSON)
 				}
 
@@ -650,7 +661,7 @@ func (s *Service) deliverPending(
 					continue
 				}
 				entry.Sequence = seq
-				if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPending, ""); err != nil {
+				if err := s.store.Outbox().UpdateSequence(ctx, entry.ID, seq); err != nil {
 					s.logger.Warn("failed to persist command sequence", "error", err)
 					continue
 				}
