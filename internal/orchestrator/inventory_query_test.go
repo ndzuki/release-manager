@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
-	"github.com/ndzuki/release-manager/internal/operator/commandtype"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -78,7 +77,6 @@ func TestListReleasesFiltersAndPaginates(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, next.Msg.GetReleases(), 1)
 	assert.Equal(t, orchestratorv1.ReleaseInventoryStatus_RELEASE_INVENTORY_STATUS_OUT_OF_SYNC, next.Msg.GetReleases()[0].GetStatus())
-	assert.Equal(t, "definition-drifted", next.Msg.GetReleases()[0].GetReleaseDefinitionId())
 }
 
 func TestListReleasesValidatesScopeAndCursor(t *testing.T) {
@@ -139,7 +137,7 @@ func TestTriggerInventorySyncCreatesOneDurableCommand(t *testing.T) {
 	assert.Equal(t, store.InventorySyncPending, request.Status)
 	outbox, err := st.Outbox().GetByCommandID(ctx, request.CommandID)
 	require.NoError(t, err)
-	assert.Equal(t, commandtype.InventorySync, outbox.OperationType)
+	assert.Equal(t, inventorySyncOperationType, outbox.OperationType)
 	assert.Contains(t, string(outbox.Payload), first.Msg.GetSyncRequestId())
 
 	_, err = svc.TriggerInventorySync(ctx, connect.NewRequest(&orchestratorv1.TriggerInventorySyncRequest{

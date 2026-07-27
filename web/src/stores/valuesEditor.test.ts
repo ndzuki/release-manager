@@ -4,35 +4,31 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useValuesEditorStore } from './valuesEditor';
 import type { ValuesRevision } from '@/types/valuesRevision';
 import {
-  approveValuesRevision,
   createValuesRevision,
   listSecrets,
   listValuesRevisions,
-  rejectValuesRevision,
 } from '@/connect/values-revision';
 
 vi.mock('@/connect/values-revision', async (importOriginal) => {
   const original = await importOriginal<typeof import('@/connect/values-revision')>();
   return {
     ...original,
-    approveValuesRevision: vi.fn(),
     createValuesRevision: vi.fn(),
     listSecrets: vi.fn(),
     listValuesRevisions: vi.fn(),
-    rejectValuesRevision: vi.fn(),
   };
 });
 
 const parent: ValuesRevision = {
-  id: 'parent-1', releaseDefinitionId: 'definition-1', revision: 1, version: 3,
+  id: 'parent-1', releaseDefinitionId: 'definition-1', revision: 1, stateVersion: '3',
   document: '{"replicas":1}', valuesDigest: 'sha256:parent', status: 'approved', parentRevisionId: null,
-  secretRefs: [], createdBy: 'creator-1', createdAt: '2026-07-23T00:00:00Z',
+  secretRefs: [], createdByUserId: 'creator-1', createdAt: '2026-07-23T00:00:00Z',
 };
 
 const draft: ValuesRevision = {
   ...parent,
-  id: 'draft-1', revision: 2, version: 1, document: '{"replicas":2}', valuesDigest: 'sha256:draft',
-  status: 'draft', parentRevisionId: parent.id, createdBy: 'creator-2',
+  id: 'draft-1', revision: 2, stateVersion: '1', document: '{"replicas":2}', valuesDigest: 'sha256:draft',
+  status: 'draft', parentRevisionId: parent.id, createdByUserId: 'creator-2',
 };
 
 const draftStorage = new Map<string, string>();
@@ -55,8 +51,6 @@ describe('values editor store', () => {
     vi.mocked(listValuesRevisions).mockResolvedValue([draft, parent]);
     vi.mocked(listSecrets).mockResolvedValue([{ name: 'database', keys: ['password'] }]);
     vi.mocked(createValuesRevision).mockReset();
-    vi.mocked(approveValuesRevision).mockReset();
-    vi.mocked(rejectValuesRevision).mockReset();
   });
 
   it('restores a safe local draft and recomputes its diff', async () => {
@@ -141,20 +135,4 @@ describe('values editor store', () => {
     expect(createValuesRevision).not.toHaveBeenCalled();
   });
 
-  it('locks duplicate approval requests', async () => {
-    const deferredApproval = Promise.withResolvers<ValuesRevision>();
-    vi.mocked(approveValuesRevision).mockReturnValue(deferredApproval.promise);
-    const store = useValuesEditorStore();
-    store.resetScope('definition-1', 'cluster-1');
-    await store.load();
-
-    const first = store.approve();
-    const second = await store.approve();
-    deferredApproval.resolve({ ...draft, status: 'approved', version: 2, approvedBy: 'admin-1', approvedAt: '2026-07-23T01:00:00Z' });
-    await first;
-
-    expect(second).toBe(false);
-    expect(approveValuesRevision).toHaveBeenCalledTimes(1);
-    expect(store.currentRevision?.status).toBe('approved');
-  });
 });

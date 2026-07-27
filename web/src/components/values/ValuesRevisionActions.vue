@@ -15,7 +15,7 @@ const props = defineProps<{
 const emit = defineEmits<{ save: []; approve: []; reject: [] }>();
 
 const statusLabel = computed(() => ({
-  draft: 'Draft', approved: 'Approved', rejected: 'Rejected', superseded: 'Superseded',
+  draft: 'Draft', pending_approval: 'Pending Approval', approved: 'Approved', rejected: 'Rejected', superseded: 'Superseded',
 } satisfies Record<RevisionStatus, string>)[props.revision?.status ?? 'draft']);
 
 function formatTimestamp(value?: string): string {
@@ -32,18 +32,17 @@ function formatTimestamp(value?: string): string {
         <span :class="['status', `status--${revision.status}`]">{{ statusLabel }}</span>
         <code>{{ revision.valuesDigest }}</code>
       </p>
-      <p v-if="revision?.status === 'rejected'" class="rejection">
-        {{ revision.reason || '未提供拒绝原因' }}
-        <span v-if="revision.rejectedAt">· {{ formatTimestamp(revision.rejectedAt) }}</span>
+      <p v-if="revision?.status === 'rejected' && revision.decidedAt" class="rejection">
+        拒绝时间 · {{ formatTimestamp(revision.decidedAt) }}
       </p>
-      <p v-if="selfApproval && revision?.status === 'draft'" class="hint">不可审批自己创建的 Revision。</p>
+      <p v-if="selfApproval && revision?.status === 'pending_approval'" class="hint">不可审批自己创建的 Revision。</p>
     </div>
 
     <div class="revision-actions__buttons">
       <button v-if="!readOnly" type="button" class="primary" :disabled="saveDisabled" @click="emit('save')">
         {{ saving ? '保存中…' : '保存为 Draft' }}
       </button>
-      <template v-if="canApprove && revision?.status === 'draft'">
+      <template v-if="canApprove && revision?.status === 'pending_approval'">
         <button type="button" class="success" :disabled="approving" @click="emit('approve')">
           {{ approving ? '审批中…' : 'Approve' }}
         </button>
@@ -61,6 +60,7 @@ h2, p { margin: 0; }
 .status-line code { color: #64748b; font-size: 0.75rem; overflow-wrap: anywhere; }
 .status { padding: 0.2rem 0.45rem; border-radius: 999px; font-size: 0.7rem; font-weight: 800; }
 .status--draft { background: #e0f2fe; color: #075985; }
+.status--pending_approval { background: #fef3c7; color: #92400e; }
 .status--approved { background: #dcfce7; color: #166534; }
 .status--rejected { background: #fee2e2; color: #991b1b; }
 .status--superseded { background: #e2e8f0; color: #475569; }

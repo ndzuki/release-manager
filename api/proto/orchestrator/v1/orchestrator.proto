@@ -575,7 +575,12 @@ message ListReleasesResponse {
   int32 total_count = 3;
 }
 
-// ── ValuesRevision editing and approval (REQ-055) ─────────────────
+message TriggerInventorySyncRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+}
+
+// ── ValuesRevision CRUD and secret metadata (REQ-055) ─────────────
 message CreateValuesRevisionRequest {
   string release_definition_id = 1;
   string parent_revision_id = 2;
@@ -606,25 +611,6 @@ message ListValuesRevisionsResponse {
   repeated common.v1.ValuesRevision revisions = 1;
 }
 
-message ApproveValuesRevisionRequest {
-  string revision_id = 1;
-  int32 expected_version = 2;
-}
-
-message ApproveValuesRevisionResponse {
-  common.v1.ValuesRevision revision = 1;
-}
-
-message RejectValuesRevisionRequest {
-  string revision_id = 1;
-  int32 expected_version = 2;
-  string reason = 3;
-}
-
-message RejectValuesRevisionResponse {
-  common.v1.ValuesRevision revision = 1;
-}
-
 message ListSecretsRequest {
   string cluster_id = 1;
   string release_definition_id = 2;
@@ -637,11 +623,6 @@ message SecretOption {
 
 message ListSecretsResponse {
   repeated SecretOption secrets = 1;
-}
-
-message TriggerInventorySyncRequest {
-  string customer_id = 1;
-  string cluster_id = 2;
 }
 
 message TriggerInventorySyncResponse {
@@ -657,6 +638,13 @@ service OrchestratorService {
   rpc SubmitValuesRevision(SubmitValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
   rpc ApproveValuesRevision(ApproveValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
   rpc RejectValuesRevision(RejectValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
+  // ValuesRevision CRUD and secret metadata (REQ-055)
+  rpc CreateValuesRevision(CreateValuesRevisionRequest) returns (CreateValuesRevisionResponse);
+  rpc GetValuesRevision(GetValuesRevisionRequest) returns (GetValuesRevisionResponse);
+  rpc ListValuesRevisions(ListValuesRevisionsRequest) returns (ListValuesRevisionsResponse);
+  rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse);
+
+  // Release definition management
   rpc CreateReleaseDefinition(CreateReleaseDefinitionRequest) returns (CreateReleaseDefinitionResponse);
   rpc GetReleaseDefinition(GetReleaseDefinitionRequest) returns (GetReleaseDefinitionResponse);
   rpc ListReleaseDefinitions(ListReleaseDefinitionsRequest) returns (ListReleaseDefinitionsResponse);
@@ -683,14 +671,6 @@ service OrchestratorService {
   rpc DeleteClusterRoute(DeleteClusterRouteRequest) returns (DeleteClusterRouteResponse);
   rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
   rpc TriggerInventorySync(TriggerInventorySyncRequest) returns (TriggerInventorySyncResponse);
-
-  // ValuesRevision editing and approval (REQ-055)
-  rpc CreateValuesRevision(CreateValuesRevisionRequest) returns (CreateValuesRevisionResponse);
-  rpc GetValuesRevision(GetValuesRevisionRequest) returns (GetValuesRevisionResponse);
-  rpc ListValuesRevisions(ListValuesRevisionsRequest) returns (ListValuesRevisionsResponse);
-  rpc ApproveValuesRevision(ApproveValuesRevisionRequest) returns (ApproveValuesRevisionResponse);
-  rpc RejectValuesRevision(RejectValuesRevisionRequest) returns (RejectValuesRevisionResponse);
-  rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse);
 
   // Inventory sync (REQ-017)
   rpc SyncInventory(SyncInventoryRequest) returns (SyncInventoryResponse);

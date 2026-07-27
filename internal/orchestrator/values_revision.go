@@ -12,12 +12,10 @@ import (
 	"github.com/google/uuid"
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
-	"github.com/ndzuki/release-manager/internal/audit"
-	"github.com/ndzuki/release-manager/internal/auth"
+	"github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/operator/commandtype"
 	"github.com/ndzuki/release-manager/internal/store"
 	"github.com/ndzuki/release-manager/internal/values"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -47,11 +45,11 @@ func valuesReasonError(code connect.Code, reason, message string) *connect.Error
 }
 
 func (s *Service) requireDefinitionAccess(ctx context.Context, definition *store.ReleaseDefinition) error {
-	organizationID, ok := auth.OrganizationIDFromContext(ctx)
-	if !ok || organizationID == "" {
+	actor, ok := authctx.ActorFromContext(ctx)
+	if !ok || actor.OrganizationID == "" {
 		return valuesReasonError(connect.CodeUnauthenticated, "authentication_required", "authenticated organization is required")
 	}
-	if err := s.store.Bindings().RequireActive(ctx, organizationID, definition.CustomerID); err != nil {
+	if err := s.store.Bindings().RequireActive(ctx, actor.OrganizationID, definition.CustomerID); err != nil {
 		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrBindingRevoked) {
 			return valuesReasonError(connect.CodePermissionDenied, "permission_denied", "organization cannot access the release definition")
 		}
@@ -63,7 +61,6 @@ func (s *Service) requireDefinitionAccess(ctx context.Context, definition *store
 // requestSecretMetadata dispatches a durable operator command and polls its persisted result.
 //nolint:gocyclo // Independent offline, result, and timeout branches make the control flow explicit.
 func (s *Service) requestSecretMetadata(ctx context.Context, definition *store.ReleaseDefinition) ([]*orchestratorv1.SecretOption, error) {
-
 	operator, err := s.store.Operators().GetByClusterID(ctx, definition.ClusterID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, valuesReasonError(connect.CodeUnavailable, "operator_offline", "operator is offline")
@@ -139,95 +136,139 @@ func valuesConnectError(err error) error {
 	}
 }
 
-func valuesStatusToProto(status store.ValuesStatus) commonv1.ValuesStatus {
-	switch status {
-	case store.ValuesStatusDraft:
-		return commonv1.ValuesStatus_VALUES_STATUS_DRAFT
-	case store.ValuesStatusApproved:
-		return commonv1.ValuesStatus_VALUES_STATUS_APPROVED
-	case store.ValuesStatusRejected:
-		return commonv1.ValuesStatus_VALUES_STATUS_REJECTED
-	case store.ValuesStatusSuperseded:
-		return commonv1.ValuesStatus_VALUES_STATUS_SUPERSEDED
-	default:
-		return commonv1.ValuesStatus_VALUES_STATUS_UNSPECIFIED
+// CreateValuesRevision creates a new draft values revision.
+func (s *Service) CreateValuesRevision(ctx context.Context, req *connect.Request[orchestratorv1.CreateValuesRevisionRequest]) (*connect.Response[orchestratorv1.CreateValuesRevisionResponse], error) {
+	msg := req.Msg
+	if msg.GetReleaseDefinitionId() == "" {
+		return nil, valuesReasonError(connect.CodeInvalidArgument, "release_definition_id_required", "release_definition_id is required")
 	}
-}
-
-func toProtoValuesRevision(revision *store.ValuesRevision) *commonv1.ValuesRevision {
-	if revision == nil {
-		return nil
+	if len(msg.GetDocument()) > 1<<20 {
+		return nil, valuesReasonError(connect.CodeInvalidArgument, "size_exceeded", "document exceeds 1 MiB")
 	}
-	message := &commonv1.ValuesRevision{
-		Id:                  revision.ID,
-		ReleaseDefinitionId: revision.ReleaseDefinitionID,
-		Revision:            int32(revision.Revision), //nolint:gosec // Persisted revision numbers are positive and bounded by SQLite INTEGER usage.
-
-		Values:           append([]byte(nil), revision.Values...),
-		CreatedAt:        timestamppb.New(revision.CreatedAt),
-		Status:           valuesStatusToProto(revision.Status),
-		Digest:           revision.Digest,
-		ParentRevisionId: revision.ParentRevisionID,
-		Version:          int32(revision.Version), //nolint:gosec // Optimistic versions are positive and bounded by persisted revisions.
-
-		CreatedBy:  revision.CreatedBy,
-		ApprovedBy: revision.ApprovedBy,
-		RejectedBy: revision.RejectedBy,
-		Reason:     revision.RejectionReason,
-	}
-	if revision.ApprovedAt != nil {
-		message.ApprovedAt = timestamppb.New(*revision.ApprovedAt)
-	}
-	if revision.RejectedAt != nil {
-		message.RejectedAt = timestamppb.New(*revision.RejectedAt)
-	}
-	if len(revision.SecretRefs) > 0 {
-		// Invalid persisted metadata is omitted rather than exposing malformed references.
-		if refs, err := decodeSecretRefs(revision.SecretRefs); err == nil {
-			message.SecretRefs = refs
+	for index, ref := range msg.GetSecretRefs() {
+		if ref.GetName() == "" || ref.GetKey() == "" {
+			return nil, valuesReasonError(connect.CodeInvalidArgument, "invalid_secret_ref", fmt.Sprintf("secret_refs[%d] requires path, name, and key", index))
 		}
 	}
-
-	return message
-}
-
-func decodeSecretRefs(data []byte) ([]*commonv1.SecretRef, error) {
-	if len(data) == 0 {
-		return nil, nil
+	definition, err := s.store.Definitions().Get(ctx, msg.GetReleaseDefinitionId())
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, valuesReasonError(connect.CodeNotFound, "release_definition_not_found", "release definition not found")
 	}
-	var refs []*commonv1.SecretRef
-	if err := json.Unmarshal(data, &refs); err != nil {
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get release definition: %w", err))
+	}
+	if err := s.requireDefinitionAccess(ctx, definition); err != nil {
 		return nil, err
 	}
-	return refs, nil
-}
-
-func canApprove(ctx context.Context, st store.Store, releaseDefinitionID string) bool {
-	userID, userOK := auth.UserIDFromContext(ctx)
-	organizationID, organizationOK := auth.OrganizationIDFromContext(ctx)
-	if !userOK || !organizationOK || userID == "" || organizationID == "" {
-		return false
-	}
-	definition, err := st.Definitions().Get(ctx, releaseDefinitionID)
-	if err != nil || st.Bindings().RequireActive(ctx, organizationID, definition.CustomerID) != nil {
-		return false
-	}
-	member, err := st.OrgMembers().Get(ctx, organizationID, userID)
+	canonical, err := values.Validate(msg.GetDocument(), 1<<20)
 	if err != nil {
-		return false
+		return nil, valuesConnectError(err)
 	}
-	return member.Role == store.RoleReleaseAdmin || member.Role == store.RolePlatformAdmin
+	actor, ok := authctx.ActorFromContext(ctx)
+	if !ok || actor.UserID == "" {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authenticated user is required"))
+	}
+	secretRefs, err := json.Marshal(msg.GetSecretRefs())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("marshal secret references: %w", err))
+	}
+	revision := &store.ValuesRevision{
+		ID:                  uuid.NewString(),
+		ReleaseDefinitionID: definition.ID,
+		Status:              store.ValuesStatusDraft,
+		Values:              canonical.Canonical,
+		Digest:              "sha256:" + canonical.Digest,
+		ParentRevisionID:    msg.GetParentRevisionId(),
+		SecretRefs:          secretRefs,
+		CreatedByUserID:     actor.UserID,
+		CreatedAt:           time.Now().UTC(),
+		UpdatedAt:           time.Now().UTC(),
+	}
+	if err := s.store.Values().Create(ctx, revision); err != nil {
+		if errors.Is(err, store.ErrDuplicateKey) {
+			return nil, valuesReasonError(connect.CodeAlreadyExists, "revision_exists", "a revision already exists")
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create values revision: %w", err))
+	}
+	return connect.NewResponse(&orchestratorv1.CreateValuesRevisionResponse{Revision: toProtoValuesRevision(revision)}), nil
 }
 
-func (s *Service) emitValuesAudit(ctx context.Context, revision *store.ValuesRevision, action, summary string) {
-	userID, _ := auth.UserIDFromContext(ctx)
-	organizationID, _ := auth.OrganizationIDFromContext(ctx)
-	role := ""
-	if member, err := s.store.OrgMembers().Get(ctx, organizationID, userID); err == nil {
-		role = string(member.Role)
+// GetValuesRevision returns a single values revision by ID.
+func (s *Service) GetValuesRevision(ctx context.Context, req *connect.Request[orchestratorv1.GetValuesRevisionRequest]) (*connect.Response[orchestratorv1.GetValuesRevisionResponse], error) {
+	if req.Msg.GetRevisionId() == "" {
+		return nil, valuesReasonError(connect.CodeInvalidArgument, "revision_id_required", "revision_id is required")
 	}
-	s.emitAudit(audit.NewEvent(
-		store.AuditActorUser, userID, organizationID, role,
-		"values_revision", revision.ID, action, "succeeded", summary, nil,
-	))
+	revision, err := s.store.Values().Get(ctx, req.Msg.GetRevisionId())
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, valuesReasonError(connect.CodeNotFound, "revision_not_found", "revision not found")
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get values revision: %w", err))
+	}
+	definition, err := s.store.Definitions().Get(ctx, revision.ReleaseDefinitionID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get values revision definition: %w", err))
+	}
+	if err := s.requireDefinitionAccess(ctx, definition); err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&orchestratorv1.GetValuesRevisionResponse{Revision: toProtoValuesRevision(revision)}), nil
+}
+
+// ListValuesRevisions returns revisions for a release definition.
+func (s *Service) ListValuesRevisions(ctx context.Context, req *connect.Request[orchestratorv1.ListValuesRevisionsRequest]) (*connect.Response[orchestratorv1.ListValuesRevisionsResponse], error) {
+	if req.Msg.GetReleaseDefinitionId() == "" {
+		return nil, valuesReasonError(connect.CodeInvalidArgument, "release_definition_id_required", "release_definition_id is required")
+	}
+	definition, err := s.store.Definitions().Get(ctx, req.Msg.GetReleaseDefinitionId())
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, valuesReasonError(connect.CodeNotFound, "release_definition_not_found", "release definition not found")
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get values revision definition: %w", err))
+	}
+	if err := s.requireDefinitionAccess(ctx, definition); err != nil {
+		return nil, err
+	}
+	revisions, err := s.store.Values().List(ctx, definition.ID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list values revisions: %w", err))
+	}
+	limit := int(req.Msg.GetLimit())
+	if limit <= 0 {
+		limit = 50
+	} else if limit > 50 {
+		limit = 50
+	}
+	result := make([]*commonv1.ValuesRevision, 0, min(limit, len(revisions)))
+	for _, revision := range revisions {
+		result = append(result, toProtoValuesRevision(revision))
+		if len(result) == limit {
+			break
+		}
+	}
+	return connect.NewResponse(&orchestratorv1.ListValuesRevisionsResponse{Revisions: result}), nil
+}
+
+// ListSecrets returns available Kubernetes Secret metadata for the release definition's namespace.
+func (s *Service) ListSecrets(ctx context.Context, req *connect.Request[orchestratorv1.ListSecretsRequest]) (*connect.Response[orchestratorv1.ListSecretsResponse], error) {
+	msg := req.Msg
+	if msg.GetClusterId() == "" || msg.GetReleaseDefinitionId() == "" {
+		return nil, valuesReasonError(connect.CodeInvalidArgument, "scope_required", "cluster_id and release_definition_id are required")
+	}
+	definition, err := s.store.Definitions().Get(ctx, msg.GetReleaseDefinitionId())
+	if errors.Is(err, store.ErrNotFound) || (err == nil && definition.ClusterID != msg.GetClusterId()) {
+		return nil, valuesReasonError(connect.CodeNotFound, "release_definition_not_found", "release definition not found")
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get secret metadata release definition: %w", err))
+	}
+	if err := s.requireDefinitionAccess(ctx, definition); err != nil {
+		return nil, err
+	}
+	secrets, err := s.requestSecretMetadata(ctx, definition)
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&orchestratorv1.ListSecretsResponse{Secrets: secrets}), nil
 }

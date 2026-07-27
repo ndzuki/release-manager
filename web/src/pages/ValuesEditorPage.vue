@@ -2,13 +2,11 @@
 import { computed, onBeforeUnmount, shallowRef, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import ErrorState from '@/components/common/ErrorState.vue';
-import RejectRevisionDialog from '@/components/values/RejectRevisionDialog.vue';
 import SecretRefEditor from '@/components/values/SecretRefEditor.vue';
 import ValuesCodeEditor from '@/components/values/ValuesCodeEditor.vue';
 import ValuesConflictDialog from '@/components/values/ValuesConflictDialog.vue';
 import ValuesDiffPanel from '@/components/values/ValuesDiffPanel.vue';
 import ValuesEditorSkeleton from '@/components/values/ValuesEditorSkeleton.vue';
-import ValuesRevisionActions from '@/components/values/ValuesRevisionActions.vue';
 import { useAuthStore } from '@/stores/auth';
 import { useValuesEditorStore } from '@/stores/valuesEditor';
 import type { EditorLanguage, SecretRef } from '@/types/valuesRevision';
@@ -16,7 +14,6 @@ import type { EditorLanguage, SecretRef } from '@/types/valuesRevision';
 const route = useRoute();
 const auth = useAuthStore();
 const editor = useValuesEditorStore();
-const showRejectDialog = shallowRef(false);
 const reloadingParent = shallowRef(false);
 
 const customerId = computed(() => String(route.params.customerId ?? ''));
@@ -27,9 +24,6 @@ const clusterName = computed(() => String(route.query.clusterName ?? clusterId.v
 const releaseName = computed(() => String(route.query.releaseName ?? releaseDefinitionId.value));
 const roles = computed(() => auth.user?.roles.map((role) => role.toLowerCase()) ?? []);
 const canWrite = computed(() => roles.value.some((role) => ['platform_admin', 'release_admin', 'deployer'].includes(role)));
-const hasApprovalRole = computed(() => roles.value.some((role) => ['platform_admin', 'release_admin'].includes(role)));
-const selfApproval = computed(() => editor.currentRevision?.createdBy === auth.user?.id);
-const canApprove = computed(() => hasApprovalRole.value && !selfApproval.value && editor.canApprove);
 const firstRevision = computed(() => !editor.currentRevision && !editor.parentRevision);
 const readOnly = computed(() => !canWrite.value || !editor.canEdit);
 
@@ -60,10 +54,6 @@ async function reloadParent(): Promise<void> {
   }
 }
 
-async function reject(reason: string): Promise<void> {
-  if (await editor.reject(reason)) showRejectDialog.value = false;
-}
-
 onBeforeUnmount(() => editor.dispose());
 </script>
 
@@ -80,7 +70,7 @@ onBeforeUnmount(() => editor.dispose());
       <div>
         <p class="eyebrow">ValuesRevision editor</p>
         <h1>{{ releaseName }} Values</h1>
-        <p>编辑 canonical values、检查结构化 diff，并通过 SecretRef 引用集群 Secret。</p>
+        <p>编辑 canonical values 并通过 SecretRef 引用集群 Secret。</p>
       </div>
       <label class="language-select">
         Language
@@ -93,7 +83,7 @@ onBeforeUnmount(() => editor.dispose());
 
     <div v-if="editor.toast" class="notice" role="status">{{ editor.toast }}</div>
     <div v-if="editor.restoredDraft" class="notice notice--warning" role="status">已恢复未保存的编辑</div>
-    <div v-if="firstRevision && !editor.loading" class="notice">创建首个配置 Revision。不会拉取 chart 默认 values.yaml。</div>
+    <div v-if="firstRevision && !editor.loading" class="notice">创建首个配置 Revision。</div>
     <div v-if="!canWrite" class="notice notice--warning">当前角色为只读。服务端仍会独立执行授权。</div>
 
     <ValuesEditorSkeleton v-if="editor.loading && !editor.currentRevision && !editor.parentRevision" />
@@ -134,18 +124,15 @@ onBeforeUnmount(() => editor.dispose());
         @update="updateSecretRef"
       />
 
-      <ValuesRevisionActions
-        :revision="editor.currentRevision"
-        :saving="editor.saving"
-        :approving="editor.approving"
-        :save-disabled="editor.saveDisabled"
-        :can-approve="canApprove"
-        :self-approval="selfApproval"
-        :read-only="!canWrite"
-        @save="editor.save"
-        @approve="editor.approve"
-        @reject="showRejectDialog = true"
-      />
+      <div v-if="!readOnly" class="save-bar">
+        <p v-if="editor.currentRevision" class="status-line">
+          <span :class="['status', `status--${editor.currentRevision.status}`]">{{ editor.currentRevision.status }}</span>
+          <code>{{ editor.currentRevision.valuesDigest }}</code>
+        </p>
+        <button type="button" class="primary" :disabled="editor.saveDisabled" @click="editor.save">
+          {{ editor.saving ? '保存中…' : '保存为 Draft' }}
+        </button>
+      </div>
     </template>
 
     <ValuesConflictDialog
@@ -153,12 +140,6 @@ onBeforeUnmount(() => editor.dispose());
       :loading="reloadingParent"
       @reload="reloadParent"
       @close="editor.showConflictDialog = false"
-    />
-    <RejectRevisionDialog
-      v-if="showRejectDialog"
-      :submitting="editor.approving"
-      @submit="reject"
-      @close="showRejectDialog = false"
     />
   </section>
 </template>
@@ -172,13 +153,24 @@ onBeforeUnmount(() => editor.dispose());
 .values-page__header > div > p:last-child { color: #64748b; }
 .eyebrow { color: #2563eb; font-size: 0.75rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
 .language-select { display: grid; gap: 0.35rem; color: #475569; font-size: 0.75rem; font-weight: 700; }
-.language-select select, .notice button { min-height: 2.4rem; padding: 0.45rem 0.65rem; border: 1px solid #cbd5e1; border-radius: 0.4rem; background: #fff; }
+.language-select select, .notice button, .save-bar button { min-height: 2.4rem; padding: 0.45rem 0.65rem; border: 1px solid #cbd5e1; border-radius: 0.4rem; background: #fff; }
+.save-bar button.primary { border-color: #2563eb; background: #2563eb; color: #fff; }
+.save-bar button:disabled { cursor: not-allowed; opacity: 0.6; }
 .editor-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(22rem, 0.65fr); gap: 1rem; align-items: start; }
 .editor-column { display: grid; gap: 0.55rem; }
 .validation-message { margin: 0; padding: 0.65rem 0.8rem; border-left: 3px solid #dc2626; background: #fef2f2; color: #991b1b; font-size: 0.85rem; }
 .notice { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.75rem 0.9rem; border: 1px solid #93c5fd; border-radius: 0.5rem; background: #eff6ff; color: #1e3a8a; }
 .notice--warning { border-color: #fbbf24; background: #fffbeb; color: #92400e; }
 .notice--error { border-color: #fca5a5; background: #fef2f2; color: #991b1b; }
+.save-bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; border: 1px solid #e2e8f0; border-radius: 0.75rem; background: #fff; }
+.status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin: 0; }
+.status-line code { color: #64748b; font-size: 0.75rem; overflow-wrap: anywhere; }
+.status { padding: 0.2rem 0.45rem; border-radius: 999px; font-size: 0.7rem; font-weight: 800; }
+.status--draft { background: #e0f2fe; color: #075985; }
+.status--approved { background: #dcfce7; color: #166534; }
+.status--rejected { background: #fee2e2; color: #991b1b; }
+.status--superseded { background: #e2e8f0; color: #475569; }
+.status--pending_approval { background: #fef3c7; color: #92400e; }
 @media (max-width: 72rem) { .editor-grid { grid-template-columns: 1fr; } }
-@media (max-width: 48rem) { .values-page__header { flex-direction: column; } }
+@media (max-width: 48rem) { .values-page__header, .save-bar { flex-direction: column; } }
 </style>

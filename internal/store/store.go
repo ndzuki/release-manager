@@ -162,10 +162,11 @@ const (
 type ValuesStatus string
 
 const (
-	ValuesStatusDraft      ValuesStatus = "draft"
-	ValuesStatusApproved   ValuesStatus = "approved"
-	ValuesStatusRejected   ValuesStatus = "rejected"
-	ValuesStatusSuperseded ValuesStatus = "superseded"
+	ValuesStatusDraft           ValuesStatus = "draft"
+	ValuesStatusPendingApproval ValuesStatus = "pending_approval"
+	ValuesStatusApproved        ValuesStatus = "approved"
+	ValuesStatusRejected        ValuesStatus = "rejected"
+	ValuesStatusSuperseded      ValuesStatus = "superseded"
 )
 
 // ActorContext records who initiated an operation.
@@ -320,18 +321,15 @@ type ValuesRevision struct {
 	ID                  string       `json:"id"`
 	ReleaseDefinitionID string       `json:"release_definition_id"`
 	Revision            int          `json:"revision"`
-	Version             int          `json:"version"`
+	StateVersion        int64        `json:"state_version"`
 	Status              ValuesStatus `json:"status"`
 	Values              []byte       `json:"values"`
 	Digest              string       `json:"digest"`
 	ParentRevisionID    string       `json:"parent_revision_id"`
 	SecretRefs          []byte       `json:"secret_refs,omitempty"`
-	CreatedBy           string       `json:"created_by"`
-	ApprovedBy          string       `json:"approved_by,omitempty"`
-	ApprovedAt          *time.Time   `json:"approved_at,omitempty"`
-	RejectedBy          string       `json:"rejected_by,omitempty"`
-	RejectedAt          *time.Time   `json:"rejected_at,omitempty"`
-	RejectionReason     string       `json:"rejection_reason,omitempty"`
+	CreatedByUserID     string       `json:"created_by_user_id"`
+	SubmittedAt         *time.Time   `json:"submitted_at,omitempty"`
+	DecidedAt           *time.Time   `json:"decided_at,omitempty"`
 	CreatedAt           time.Time    `json:"created_at"`
 	UpdatedAt           time.Time    `json:"updated_at"`
 }
@@ -1413,24 +1411,31 @@ type DefinitionEventStore interface {
 	List(ctx context.Context, definitionID string) ([]*ReleaseDefinitionEvent, error)
 }
 
+// ValuesApprovalStore executes complete approval transitions atomically.
+type ValuesApprovalStore interface {
+	Submit(ctx context.Context, command ValuesApprovalCommand) (*ValuesApprovalResult, error)
+	Approve(ctx context.Context, command ValuesApprovalCommand) (*ValuesApprovalResult, error)
+	Reject(ctx context.Context, command ValuesApprovalCommand) (*ValuesApprovalResult, error)
+	RecordAttempt(ctx context.Context, entry *ApprovalOutboxEntry) error
+}
+
+// ValuesApprovalReader exposes immutable workflow evidence.
+type ValuesApprovalReader interface {
+	ListDecisions(ctx context.Context, revisionID string) ([]*ValuesRevisionDecision, error)
+	ListAuditOutbox(ctx context.Context, revisionID string) ([]*ApprovalOutboxEntry, error)
+	ListNotificationOutbox(ctx context.Context, revisionID string) ([]*ApprovalOutboxEntry, error)
+}
+
 // ValuesStore defines the persistence contract for values revisions.
 // For Create, the caller MUST populate Revision via GetNextRevisionNumber
 // and Digest via the values package before calling.
 type ValuesStore interface {
 	Create(ctx context.Context, vr *ValuesRevision) error
-	// CreateIfParentVersion atomically validates the parent version, allocates
-	// the next revision number, and persists the draft.
-	CreateIfParentVersion(ctx context.Context, vr *ValuesRevision, expectedParentVersion int) error
 	Get(ctx context.Context, id string) (*ValuesRevision, error)
 	GetByDigest(ctx context.Context, definitionID, digest string) (*ValuesRevision, error)
 	GetLatestApproved(ctx context.Context, definitionID string) (*ValuesRevision, error)
 	GetNextRevisionNumber(ctx context.Context, definitionID string) (int, error)
 	List(ctx context.Context, definitionID string) ([]*ValuesRevision, error)
-	Approve(ctx context.Context, id string, expectedVersion int, approvedBy string) (*ValuesRevision, *ValuesRevision, error)
-	Reject(ctx context.Context, id string, expectedVersion int, rejectedBy, reason string) (*ValuesRevision, error)
-	// Update persists status changes with optimistic locking on parent_revision_id.
-	// Returns ErrOptimisticLock if expectedParentRev doesn't match the stored value.
-	Update(ctx context.Context, vr *ValuesRevision, expectedParentRev string) error
 }
 
 // CustomerStore defines the persistence contract for customers.
@@ -1866,6 +1871,8 @@ type Store interface {
 	Definitions() DefinitionStore
 	DefinitionEvents() DefinitionEventStore
 	Values() ValuesStore
+	ValuesApproval() ValuesApprovalStore
+	ValuesApprovalEvidence() ValuesApprovalReader
 	Customers() CustomerStore
 	Clusters() ClusterStore
 	EnrollmentTokens() EnrollmentTokenStore

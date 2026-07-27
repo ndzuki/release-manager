@@ -6,9 +6,9 @@ import ValuesRevisionActions from './ValuesRevisionActions.vue';
 import type { ValuesRevision } from '@/types/valuesRevision';
 
 const draft: ValuesRevision = {
-  id: 'draft-1', releaseDefinitionId: 'definition-1', revision: 2, version: 1,
-  document: '{"replicas":2}', valuesDigest: 'sha256:draft', status: 'draft', parentRevisionId: 'parent-1',
-  secretRefs: [], createdBy: 'creator-1', createdAt: '2026-07-23T00:00:00Z',
+  id: 'draft-1', releaseDefinitionId: 'definition-1', revision: 2, stateVersion: '1',
+  document: '{"replicas":2}', valuesDigest: 'sha256:draft', status: 'pending_approval', parentRevisionId: 'parent-1',
+  secretRefs: [], createdByUserId: 'creator-1', createdAt: '2026-07-23T00:00:00Z',
 };
 
 describe('values editor presentation', () => {
@@ -54,14 +54,13 @@ describe('values editor presentation', () => {
     expect(wrapper.text()).toContain('Approve');
     expect(wrapper.text()).toContain('Reject');
   });
-  it('renders rejected status with its reason and timestamp', () => {
+  it('renders rejected status with its decision timestamp', () => {
     const wrapper = mount(ValuesRevisionActions, {
       props: {
         revision: {
           ...draft,
           status: 'rejected',
-          reason: 'increase the replica count',
-          rejectedAt: '2026-07-23T01:00:00Z',
+          decidedAt: '2026-07-23T01:00:00Z',
         },
         saving: false,
         approving: false,
@@ -73,7 +72,6 @@ describe('values editor presentation', () => {
     });
 
     expect(wrapper.text()).toContain('Rejected');
-    expect(wrapper.text()).toContain('increase the replica count');
     expect(wrapper.text()).toContain('2026');
   });
 

@@ -97,6 +97,9 @@ func createOperation(ctx context.Context, execer operationExecer, op *store.Oper
 	if op.UpdatedAt.IsZero() {
 		op.UpdatedAt = op.CreatedAt
 	}
+	if op.StateVersion == 0 {
+		op.StateVersion = 1
+	}
 
 	var deadline *string
 	if op.Deadline != nil {
@@ -694,13 +697,6 @@ func (s *operationStore) ListNonTerminal(ctx context.Context) ([]*store.Operatio
 type operationQueryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
-
-const operationSelect = `
-	SELECT id, operation_type, status, release_definition_id,
-		idempotency_key, request_hash, state_version,
-		bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
-		actor, created_at, updated_at, deadline, last_error
-	FROM operations`
 
 func getOperation(ctx context.Context, queryer operationQueryer, id string) (*store.Operation, error) {
 	row := queryer.QueryRowContext(ctx, `

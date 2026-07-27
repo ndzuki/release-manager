@@ -30,7 +30,7 @@ export function validateValuesDocument(document: string): { canonical: ReturnTyp
 
 export function validateSecretRefs(items: SecretRefFormItem[], available: SecretOption[]): string | null {
   for (const item of items) {
-    if (!item.path.trim() || !item.name.trim() || !item.key.trim()) return '请完成 SecretRef 配置';
+    if (!(item.path ?? '').trim() || !item.name.trim() || !item.key.trim()) return '请完成 SecretRef 配置';
     const option = available.find((candidate) => candidate.name === item.name);
     if (!option || !option.keys.includes(item.key)) return '请选择有效的 Secret 名称和 Key';
   }

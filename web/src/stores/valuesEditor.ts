@@ -1,11 +1,9 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import {
-  approveValuesRevision,
   createValuesRevision,
   listSecrets,
   listValuesRevisions,
-  rejectValuesRevision,
   valuesError,
 } from '@/connect/values-revision';
 import type {
@@ -57,7 +55,6 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
   const availableSecrets = ref<SecretOption[]>([]);
   const loading = ref(false);
   const saving = ref(false);
-  const approving = ref(false);
   const error = ref<string | null>(null);
   const conflictDetected = ref(false);
   const showConflictDialog = ref(false);
@@ -71,7 +68,6 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
   const secretRefsError = computed(() => validateSecretRefs(secretRefs.value, availableSecrets.value));
   const validationError = computed(() => validationIssue.value?.message ?? null);
   const canEdit = computed(() => currentRevision.value?.status !== 'approved' && currentRevision.value?.status !== 'superseded');
-  const canApprove = computed(() => currentRevision.value?.status === 'draft');
   const editable = ref(true);
   const saveDisabled = computed(() => saving.value || !editable.value || !canEdit.value || Boolean(validationError.value) || Boolean(secretRefsError.value));
 
@@ -204,12 +200,13 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
     saving.value = true;
     error.value = null;
     try {
+      const stateVer = parentRevision.value?.stateVersion;
       const result = await createValuesRevision({
         releaseDefinitionId: releaseDefinitionId.value,
         parentRevisionId: parentRevision.value?.id ?? '',
         document: editorContent.value,
-        secretRefs: secretRefs.value.map((item) => ({ path: item.path, name: item.name, key: item.key, namespace: item.namespace })),
-        expectedParentVersion: parentRevision.value?.version ?? 0,
+        secretRefs: secretRefs.value.map((item) => ({ name: item.name, key: item.key, namespace: item.namespace })),
+        expectedParentVersion: stateVer ? Number(stateVer) : 0,
       });
       currentRevision.value = result;
       storage.removeItem(draftKeyValue.value);
@@ -227,38 +224,6 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
       return false;
     } finally {
       saving.value = false;
-    }
-  }
-
-  async function approve(): Promise<boolean> {
-    if (!currentRevision.value || approving.value || !canApprove.value) return false;
-    approving.value = true;
-    error.value = null;
-    try {
-      currentRevision.value = await approveValuesRevision(currentRevision.value.id, currentRevision.value.version);
-      toast.value = '已审批通过';
-      return true;
-    } catch (requestError) {
-      error.value = valuesError(requestError).message;
-      return false;
-    } finally {
-      approving.value = false;
-    }
-  }
-
-  async function reject(reason: string): Promise<boolean> {
-    if (!currentRevision.value || approving.value || !canApprove.value || reason.length > 1000) return false;
-    approving.value = true;
-    error.value = null;
-    try {
-      currentRevision.value = await rejectValuesRevision(currentRevision.value.id, currentRevision.value.version, reason);
-      toast.value = '已拒绝该 Revision';
-      return true;
-    } catch (requestError) {
-      error.value = valuesError(requestError).message;
-      return false;
-    } finally {
-      approving.value = false;
     }
   }
 
@@ -280,7 +245,6 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
     availableSecrets,
     loading,
     saving,
-    approving,
     error,
     conflictDetected,
     showConflictDialog,
@@ -291,7 +255,6 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
     secretRefsError,
     validationError,
     canEdit,
-    canApprove,
     editable,
     saveDisabled,
     resetScope,
@@ -304,8 +267,6 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
     removeSecretRef,
     updateSecretRef,
     save,
-    approve,
-    reject,
     dispose,
   };
 });

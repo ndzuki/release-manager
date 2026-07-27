@@ -354,4 +354,3 @@ func TestOrchestratorReadOnlyProcedures(t *testing.T) {
 		assert.NotContains(t, readOnly, procedure)
 	}
 }
-||||||| parent of 92a0d2b (feat: ValuesRevision edit/approve frontend and backend (TASK-055))

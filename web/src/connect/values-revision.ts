@@ -22,7 +22,7 @@ function timestampToISO(value: Timestamp | undefined): string | undefined {
 }
 
 function mapSecretRef(ref: ProtoSecretRef): SecretRef {
-  return { path: ref.path, name: ref.name, key: ref.key, namespace: ref.namespace || undefined };
+  return { name: ref.name, key: ref.key, namespace: ref.namespace || undefined };
 }
 
 export function mapValuesRevision(revision: ProtoValuesRevision): ValuesRevision {
@@ -30,19 +30,16 @@ export function mapValuesRevision(revision: ProtoValuesRevision): ValuesRevision
     id: revision.id,
     releaseDefinitionId: revision.releaseDefinitionId,
     revision: revision.revision,
-    version: revision.version,
+    stateVersion: revision.stateVersion.toString(),
     document: new TextDecoder().decode(revision.values),
     valuesDigest: revision.digest,
     status: statusFromProto(revision.status),
     parentRevisionId: revision.parentRevisionId || null,
     secretRefs: revision.secretRefs.map(mapSecretRef),
-    createdBy: revision.createdBy,
+    createdByUserId: revision.createdByUserId,
     createdAt: timestampToISO(revision.createdAt) ?? '',
-    approvedBy: revision.approvedBy || undefined,
-    approvedAt: timestampToISO(revision.approvedAt),
-    rejectedBy: revision.rejectedBy || undefined,
-    rejectedAt: timestampToISO(revision.rejectedAt),
-    reason: revision.reason || undefined,
+    submittedAt: timestampToISO(revision.submittedAt),
+    decidedAt: timestampToISO(revision.decidedAt),
   };
 }
 
@@ -77,18 +74,6 @@ export async function createValuesRevision(input: {
   });
   const response = await orchestratorClient.createValuesRevision(request);
   if (!response.revision) throw new ConnectError('create response is missing', Code.Internal);
-  return mapValuesRevision(response.revision);
-}
-
-export async function approveValuesRevision(revisionId: string, expectedVersion: number): Promise<ValuesRevision> {
-  const response = await orchestratorClient.approveValuesRevision({ revisionId, expectedVersion });
-  if (!response.revision) throw new ConnectError('approve response is missing', Code.Internal);
-  return mapValuesRevision(response.revision);
-}
-
-export async function rejectValuesRevision(revisionId: string, expectedVersion: number, reason: string): Promise<ValuesRevision> {
-  const response = await orchestratorClient.rejectValuesRevision({ revisionId, expectedVersion, reason });
-  if (!response.revision) throw new ConnectError('reject response is missing', Code.Internal);
   return mapValuesRevision(response.revision);
 }
 

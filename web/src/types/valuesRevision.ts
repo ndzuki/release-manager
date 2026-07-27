@@ -1,10 +1,10 @@
 import type { ValuesStatus } from '@/gen/common/v1/domain_pb';
 
 export type EditorLanguage = 'yaml' | 'json';
-export type RevisionStatus = 'draft' | 'approved' | 'rejected' | 'superseded';
+export type RevisionStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'superseded';
 
 export interface SecretRef {
-  path: string;
+  path?: string;
   name: string;
   key: string;
   namespace?: string;
@@ -24,19 +24,16 @@ export interface ValuesRevision {
   id: string;
   releaseDefinitionId: string;
   revision: number;
-  version: number;
+  stateVersion: string;
   document: string;
   valuesDigest: string;
   status: RevisionStatus;
   parentRevisionId: string | null;
   secretRefs: SecretRef[];
-  createdBy: string;
+  createdByUserId: string;
   createdAt: string;
-  approvedBy?: string;
-  approvedAt?: string;
-  rejectedBy?: string;
-  rejectedAt?: string;
-  reason?: string;
+  submittedAt?: string;
+  decidedAt?: string;
 }
 
 export interface DiffChange {
@@ -75,6 +72,8 @@ export function statusFromProto(status: ValuesStatus): RevisionStatus {
     case 3:
       return 'rejected';
     case 4:
+      return 'pending_approval';
+    case 5:
       return 'superseded';
     default:
       return 'draft';

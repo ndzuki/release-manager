@@ -12,14 +12,14 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
-	"github.com/ndzuki/release-manager/internal/operator/commandtype"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
 const (
-	defaultReleasePageSize = 50
-	maxReleasePageSize     = 200
-	maxReleaseNameSearch   = 253
+	defaultReleasePageSize     = 50
+	maxReleasePageSize         = 200
+	maxReleaseNameSearch       = 253
+	inventorySyncOperationType = "INVENTORY_SYNC"
 )
 
 type inventorySyncCommandPayload struct {
@@ -175,7 +175,7 @@ func (s *Service) TriggerInventorySync(
 		ID:            outboxID,
 		CommandID:     commandID,
 		OperationID:   requestID,
-		OperationType: commandtype.InventorySync,
+		OperationType: inventorySyncOperationType,
 		OperatorID:    operator.ID,
 		Payload:       payload,
 		MaxInFlight:   1,

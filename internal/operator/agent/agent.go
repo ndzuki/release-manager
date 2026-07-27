@@ -724,27 +724,6 @@ func (a *Agent) executeRollback(ctx context.Context, command *operatorv1.Command
 	return result
 }
 
-// mergeValues applies a JSON merge patch to base values in-place.
-func mergeValues(base, patch map[string]interface{}) {
-	for k, v := range patch {
-		if v == nil {
-			delete(base, k)
-			continue
-		}
-		existing, ok := base[k]
-		if !ok || existing == nil {
-			base[k] = v
-			continue
-		}
-		if srcMap, ok := v.(map[string]interface{}); ok {
-			if dstMap, ok := existing.(map[string]interface{}); ok {
-				mergeValues(dstMap, srcMap)
-				continue
-			}
-		}
-		base[k] = v
-	}
-}
 func (a *Agent) finishFailure(ctx context.Context, stream Stream, entry *localstore.CommandEntry, result Result) error {
 	resultJSON, err := json.Marshal(result)
 	if err != nil {

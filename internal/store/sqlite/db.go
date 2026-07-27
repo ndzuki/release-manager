@@ -352,12 +352,11 @@ var migrationStatements = []string{
 		created_by            TEXT NOT NULL DEFAULT '',
 		approved_by           TEXT NOT NULL DEFAULT '',
 		approved_at           TEXT,
-    rejected_by          TEXT NOT NULL DEFAULT '',
-    rejected_at          TEXT,
-    rejection_reason     TEXT NOT NULL DEFAULT '',
-    created_at            TEXT NOT NULL,
-    updated_at            TEXT NOT NULL
-  )`,
+		rejected_by           TEXT NOT NULL DEFAULT '',
+		rejection_reason      TEXT NOT NULL DEFAULT '',
+		created_at            TEXT NOT NULL,
+		updated_at            TEXT NOT NULL
+	)`,
 
 	// Migration: add approval workflow columns to existing values revisions.
 	`ALTER TABLE values_revisions ADD COLUMN digest TEXT NOT NULL DEFAULT ''`,
@@ -368,7 +367,6 @@ var migrationStatements = []string{
 	`ALTER TABLE values_revisions ADD COLUMN approved_by TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE values_revisions ADD COLUMN approved_at TEXT`,
 	`ALTER TABLE values_revisions ADD COLUMN rejected_by TEXT NOT NULL DEFAULT ''`,
-	`ALTER TABLE values_revisions ADD COLUMN rejected_at TEXT`,
 	`ALTER TABLE values_revisions ADD COLUMN rejection_reason TEXT NOT NULL DEFAULT ''`,
 	// Values approval workflow (REQ-068).
 	`ALTER TABLE values_revisions ADD COLUMN state_version INTEGER NOT NULL DEFAULT 0`,
