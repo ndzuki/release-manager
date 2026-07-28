@@ -228,6 +228,7 @@ type CommandStreamRequest struct {
 	//	*CommandStreamRequest_Heartbeat
 	//	*CommandStreamRequest_Result
 	//	*CommandStreamRequest_ResyncResponse
+	//	*CommandStreamRequest_CommandResult
 	Payload       isCommandStreamRequest_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -315,6 +316,15 @@ func (x *CommandStreamRequest) GetResyncResponse() *ResyncResponse {
 	return nil
 }
 
+func (x *CommandStreamRequest) GetCommandResult() *CommandResult {
+	if x != nil {
+		if x, ok := x.Payload.(*CommandStreamRequest_CommandResult); ok {
+			return x.CommandResult
+		}
+	}
+	return nil
+}
+
 type isCommandStreamRequest_Payload interface {
 	isCommandStreamRequest_Payload()
 }
@@ -339,6 +349,10 @@ type CommandStreamRequest_ResyncResponse struct {
 	ResyncResponse *ResyncResponse `protobuf:"bytes,5,opt,name=resync_response,json=resyncResponse,proto3,oneof"` // response to orchestrator resync request
 }
 
+type CommandStreamRequest_CommandResult struct {
+	CommandResult *CommandResult `protobuf:"bytes,6,opt,name=command_result,json=commandResult,proto3,oneof"` // typed terminal result for payload v2+
+}
+
 func (*CommandStreamRequest_Hello) isCommandStreamRequest_Payload() {}
 
 func (*CommandStreamRequest_Ack) isCommandStreamRequest_Payload() {}
@@ -348,6 +362,8 @@ func (*CommandStreamRequest_Heartbeat) isCommandStreamRequest_Payload() {}
 func (*CommandStreamRequest_Result) isCommandStreamRequest_Payload() {}
 
 func (*CommandStreamRequest_ResyncResponse) isCommandStreamRequest_Payload() {}
+
+func (*CommandStreamRequest_CommandResult) isCommandStreamRequest_Payload() {}
 
 // Hello is sent by the operator to establish a session after enrollment.
 type Hello struct {
@@ -861,8 +877,13 @@ type Command struct {
 	Atomic                  bool                   `protobuf:"varint,15,opt,name=atomic,proto3" json:"atomic,omitempty"`
 	ValuesPatch             []byte                 `protobuf:"bytes,16,opt,name=values_patch,json=valuesPatch,proto3" json:"values_patch,omitempty"`           // JSON merge patch
 	TargetRevision          int64                  `protobuf:"varint,17,opt,name=target_revision,json=targetRevision,proto3" json:"target_revision,omitempty"` // target revision for ROLLBACK
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	PayloadVersion          uint32                 `protobuf:"varint,18,opt,name=payload_version,json=payloadVersion,proto3" json:"payload_version,omitempty"`
+	// Types that are valid to be assigned to TypedPayload:
+	//
+	//	*Command_Upgrade
+	TypedPayload  isCommand_TypedPayload `protobuf_oneof:"typed_payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Command) Reset() {
@@ -1013,6 +1034,39 @@ func (x *Command) GetTargetRevision() int64 {
 	}
 	return 0
 }
+
+func (x *Command) GetPayloadVersion() uint32 {
+	if x != nil {
+		return x.PayloadVersion
+	}
+	return 0
+}
+
+func (x *Command) GetTypedPayload() isCommand_TypedPayload {
+	if x != nil {
+		return x.TypedPayload
+	}
+	return nil
+}
+
+func (x *Command) GetUpgrade() *UpgradeCommand {
+	if x != nil {
+		if x, ok := x.TypedPayload.(*Command_Upgrade); ok {
+			return x.Upgrade
+		}
+	}
+	return nil
+}
+
+type isCommand_TypedPayload interface {
+	isCommand_TypedPayload()
+}
+
+type Command_Upgrade struct {
+	Upgrade *UpgradeCommand `protobuf:"bytes,20,opt,name=upgrade,proto3,oneof"`
+}
+
+func (*Command_Upgrade) isCommand_TypedPayload() {}
 
 // ResyncRequest asks the operator to report its last seen sequence for gap recovery.
 type ResyncRequest struct {
@@ -1328,7 +1382,7 @@ var File_operator_v1_operator_proto protoreflect.FileDescriptor
 
 const file_operator_v1_operator_proto_rawDesc = "" +
 	"\n" +
-	"\x1aoperator/v1/operator.proto\x12\voperator.v1\x1a\x16common/v1/domain.proto\"\xc7\x02\n" +
+	"\x1aoperator/v1/operator.proto\x12\voperator.v1\x1a\x16common/v1/domain.proto\x1a operator/v1/upgrade_result.proto\"\xc7\x02\n" +
 	"\rEnrollRequest\x12)\n" +
 	"\x10enrollment_token\x18\x01 \x01(\tR\x0fenrollmentToken\x12\x1f\n" +
 	"\vcustomer_id\x18\x02 \x01(\tR\n" +
@@ -1347,13 +1401,14 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
 	"\vttl_seconds\x18\x02 \x01(\x03R\n" +
 	"ttlSeconds\x12'\n" +
-	"\x0fcertificate_pem\x18\x03 \x01(\fR\x0ecertificatePem\"\xa2\x02\n" +
+	"\x0fcertificate_pem\x18\x03 \x01(\fR\x0ecertificatePem\"\xe7\x02\n" +
 	"\x14CommandStreamRequest\x12*\n" +
 	"\x05hello\x18\x01 \x01(\v2\x12.operator.v1.HelloH\x00R\x05hello\x12$\n" +
 	"\x03ack\x18\x02 \x01(\v2\x10.operator.v1.AckH\x00R\x03ack\x126\n" +
 	"\theartbeat\x18\x03 \x01(\v2\x16.operator.v1.HeartbeatH\x00R\theartbeat\x12-\n" +
 	"\x06result\x18\x04 \x01(\v2\x13.operator.v1.ResultH\x00R\x06result\x12F\n" +
-	"\x0fresync_response\x18\x05 \x01(\v2\x1b.operator.v1.ResyncResponseH\x00R\x0eresyncResponseB\t\n" +
+	"\x0fresync_response\x18\x05 \x01(\v2\x1b.operator.v1.ResyncResponseH\x00R\x0eresyncResponse\x12C\n" +
+	"\x0ecommand_result\x18\x06 \x01(\v2\x1a.operator.v1.CommandResultH\x00R\rcommandResultB\t\n" +
 	"\apayload\"\xbb\x02\n" +
 	"\x05Hello\x12\x1d\n" +
 	"\n" +
@@ -1399,7 +1454,7 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x0eresync_request\x18\x03 \x01(\v2\x1a.operator.v1.ResyncRequestH\x00R\rresyncRequest\x12O\n" +
 	"\x12duplicate_response\x18\x04 \x01(\v2\x1e.operator.v1.DuplicateResponseH\x00R\x11duplicateResponse\x12R\n" +
 	"\x13session_established\x18\x05 \x01(\v2\x1f.operator.v1.SessionEstablishedH\x00R\x12sessionEstablishedB\t\n" +
-	"\apayload\"\xfd\x04\n" +
+	"\apayload\"\xf0\x05\n" +
 	"\aCommand\x12\x1b\n" +
 	"\toutbox_id\x18\x01 \x01(\tR\boutboxId\x12\x1d\n" +
 	"\n" +
@@ -1419,7 +1474,10 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x19expected_current_revision\x18\x0e \x01(\x03R\x17expectedCurrentRevision\x12\x16\n" +
 	"\x06atomic\x18\x0f \x01(\bR\x06atomic\x12!\n" +
 	"\fvalues_patch\x18\x10 \x01(\fR\vvaluesPatch\x12'\n" +
-	"\x0ftarget_revision\x18\x11 \x01(\x03R\x0etargetRevision\"e\n" +
+	"\x0ftarget_revision\x18\x11 \x01(\x03R\x0etargetRevision\x12'\n" +
+	"\x0fpayload_version\x18\x12 \x01(\rR\x0epayloadVersion\x127\n" +
+	"\aupgrade\x18\x14 \x01(\v2\x1b.operator.v1.UpgradeCommandH\x00R\aupgradeB\x0f\n" +
+	"\rtyped_payload\"e\n" +
 	"\rResyncRequest\x12<\n" +
 	"\x1aorchestrator_last_sequence\x18\x01 \x01(\x03R\x18orchestratorLastSequence\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"F\n" +
@@ -1484,7 +1542,9 @@ var file_operator_v1_operator_proto_goTypes = []any{
 	(*RevokeOperatorResponse)(nil), // 16: operator.v1.RevokeOperatorResponse
 	nil,                            // 17: operator.v1.EnrollRequest.CapabilitiesEntry
 	nil,                            // 18: operator.v1.Hello.CapabilitiesEntry
-	(*v1.ReleaseBundle)(nil),       // 19: common.v1.ReleaseBundle
+	(*CommandResult)(nil),          // 19: operator.v1.CommandResult
+	(*v1.ReleaseBundle)(nil),       // 20: common.v1.ReleaseBundle
+	(*UpgradeCommand)(nil),         // 21: operator.v1.UpgradeCommand
 }
 var file_operator_v1_operator_proto_depIdxs = []int32{
 	17, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
@@ -1493,25 +1553,27 @@ var file_operator_v1_operator_proto_depIdxs = []int32{
 	7,  // 3: operator.v1.CommandStreamRequest.heartbeat:type_name -> operator.v1.Heartbeat
 	8,  // 4: operator.v1.CommandStreamRequest.result:type_name -> operator.v1.Result
 	12, // 5: operator.v1.CommandStreamRequest.resync_response:type_name -> operator.v1.ResyncResponse
-	18, // 6: operator.v1.Hello.capabilities:type_name -> operator.v1.Hello.CapabilitiesEntry
-	0,  // 7: operator.v1.Ack.ack_type:type_name -> operator.v1.AckType
-	10, // 8: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
-	14, // 9: operator.v1.CommandStreamResponse.session_event:type_name -> operator.v1.SessionEvent
-	11, // 10: operator.v1.CommandStreamResponse.resync_request:type_name -> operator.v1.ResyncRequest
-	13, // 11: operator.v1.CommandStreamResponse.duplicate_response:type_name -> operator.v1.DuplicateResponse
-	5,  // 12: operator.v1.CommandStreamResponse.session_established:type_name -> operator.v1.SessionEstablished
-	19, // 13: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
-	1,  // 14: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
-	3,  // 15: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
-	15, // 16: operator.v1.OperatorService.RevokeOperator:input_type -> operator.v1.RevokeOperatorRequest
-	2,  // 17: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
-	9,  // 18: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
-	16, // 19: operator.v1.OperatorService.RevokeOperator:output_type -> operator.v1.RevokeOperatorResponse
-	17, // [17:20] is the sub-list for method output_type
-	14, // [14:17] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	19, // 6: operator.v1.CommandStreamRequest.command_result:type_name -> operator.v1.CommandResult
+	18, // 7: operator.v1.Hello.capabilities:type_name -> operator.v1.Hello.CapabilitiesEntry
+	0,  // 8: operator.v1.Ack.ack_type:type_name -> operator.v1.AckType
+	10, // 9: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
+	14, // 10: operator.v1.CommandStreamResponse.session_event:type_name -> operator.v1.SessionEvent
+	11, // 11: operator.v1.CommandStreamResponse.resync_request:type_name -> operator.v1.ResyncRequest
+	13, // 12: operator.v1.CommandStreamResponse.duplicate_response:type_name -> operator.v1.DuplicateResponse
+	5,  // 13: operator.v1.CommandStreamResponse.session_established:type_name -> operator.v1.SessionEstablished
+	20, // 14: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
+	21, // 15: operator.v1.Command.upgrade:type_name -> operator.v1.UpgradeCommand
+	1,  // 16: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
+	3,  // 17: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
+	15, // 18: operator.v1.OperatorService.RevokeOperator:input_type -> operator.v1.RevokeOperatorRequest
+	2,  // 19: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
+	9,  // 20: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
+	16, // 21: operator.v1.OperatorService.RevokeOperator:output_type -> operator.v1.RevokeOperatorResponse
+	19, // [19:22] is the sub-list for method output_type
+	16, // [16:19] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_operator_v1_operator_proto_init() }
@@ -1519,12 +1581,14 @@ func file_operator_v1_operator_proto_init() {
 	if File_operator_v1_operator_proto != nil {
 		return
 	}
+	file_operator_v1_upgrade_result_proto_init()
 	file_operator_v1_operator_proto_msgTypes[2].OneofWrappers = []any{
 		(*CommandStreamRequest_Hello)(nil),
 		(*CommandStreamRequest_Ack)(nil),
 		(*CommandStreamRequest_Heartbeat)(nil),
 		(*CommandStreamRequest_Result)(nil),
 		(*CommandStreamRequest_ResyncResponse)(nil),
+		(*CommandStreamRequest_CommandResult)(nil),
 	}
 	file_operator_v1_operator_proto_msgTypes[8].OneofWrappers = []any{
 		(*CommandStreamResponse_Command)(nil),
@@ -1532,6 +1596,9 @@ func file_operator_v1_operator_proto_init() {
 		(*CommandStreamResponse_ResyncRequest)(nil),
 		(*CommandStreamResponse_DuplicateResponse)(nil),
 		(*CommandStreamResponse_SessionEstablished)(nil),
+	}
+	file_operator_v1_operator_proto_msgTypes[9].OneofWrappers = []any{
+		(*Command_Upgrade)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

@@ -354,6 +354,102 @@ func insertOperationCancelIdempotency(
 	return nil
 }
 
+// FinalizeUpgrade atomically persists a typed result, terminal CAS, inventory, rollout, and timeline event.
+//
+//nolint:gocyclo // One transaction intentionally applies every terminal projection atomically.
+func (s *operationStore) FinalizeUpgrade(ctx context.Context, input *store.UpgradeTerminalInput) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin upgrade terminal transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after commit
+
+	var existing int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM operation_execution_results WHERE operation_id = ?`,
+		input.OperationID,
+	).Scan(&existing); err != nil {
+		return fmt.Errorf("check upgrade result idempotency: %w", err)
+	}
+	if existing > 0 {
+		return nil
+	}
+
+	now := nowUTC()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO operation_execution_results (operation_id, result_type, result_payload, created_at)
+		VALUES (?, 'upgrade', ?, ?)
+	`, input.OperationID, input.ResultPayload, now); err != nil {
+		return fmt.Errorf("insert upgrade result: %w", err)
+	}
+
+	result, err := tx.ExecContext(ctx, `
+		UPDATE operations
+		SET status = ?, state_version = state_version + 1, terminal_at = ?, last_error = ?, updated_at = ?
+		WHERE id = ? AND state_version = ?
+	`, string(input.Status), now, input.LastError, now, input.OperationID, input.ExpectedStateVersion)
+	if err != nil {
+		return fmt.Errorf("terminal operation CAS: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("terminal operation rows affected: %w", err)
+	}
+	if rows == 0 {
+		return store.ErrOptimisticLock
+	}
+
+	if input.UpdateInventory {
+		result, err = tx.ExecContext(ctx, `
+			UPDATE release_inventory
+			SET revision = ?, values_digest = ?, observed_bundle_digest = ?, observed_chart_digest = ?,
+			    observed_effective_values_digest = ?, observed_manifest_digest = ?, last_operation_id = ?,
+			    inventory_status = ?, updated_at = ?
+			WHERE release_definition_id = ?
+		`, input.Revision, input.ObservedEffectiveValuesDigest, input.ObservedBundleDigest,
+			input.ObservedChartDigest, input.ObservedEffectiveValuesDigest, input.ObservedManifestDigest,
+			input.OperationID, string(input.InventoryStatus), now, input.ReleaseDefinitionID)
+		if err != nil {
+			return fmt.Errorf("update upgrade inventory: %w", err)
+		}
+		rows, err = result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("upgrade inventory rows affected: %w", err)
+		}
+		if rows == 0 {
+			return fmt.Errorf("update upgrade inventory: %w", store.ErrNotFound)
+		}
+	}
+
+	if input.Status == store.StatusSucceeded {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO rollout_trackings
+				(operation_id, status, resource_count, ready_count, failed_count, last_error, created_at, updated_at)
+			VALUES (?, 'pending', ?, 0, 0, '', ?, ?)
+			ON CONFLICT(operation_id) DO NOTHING
+		`, input.OperationID, input.ResourceCount, now, now); err != nil {
+			return fmt.Errorf("insert rollout tracking: %w", err)
+		}
+	}
+
+	if err := insertOperationEvent(ctx, tx, &store.OperationStateChangedEvent{
+		ID:            uuid.NewString(),
+		OperationID:   input.OperationID,
+		OperationType: store.OperationUpgrade,
+		DefinitionID:  input.ReleaseDefinitionID,
+		NewStatus:     input.Status,
+		StateVersion:  input.ExpectedStateVersion + 1,
+		CreatedAt:     time.Now().UTC(),
+	}); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit upgrade terminal transaction: %w", err)
+	}
+	return nil
+}
+
 func (s *operationStore) UpdateStatus(ctx context.Context, id string, status store.OperationStatus, stateVersion int, lastError string) (*store.Operation, error) {
 	return s.transition(ctx, id, status, stateVersion, lastError)
 }

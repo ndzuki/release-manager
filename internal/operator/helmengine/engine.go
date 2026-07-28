@@ -19,7 +19,13 @@ type Release struct {
 	// ManifestDigest is the SHA-256 of the rendered manifest (never includes Secret values).
 	ManifestDigest string `json:"manifest_digest"`
 	// Notes are the Helm chart NOTES.txt output (never includes Secret values).
-	Notes string `json:"notes"`
+	Notes                 string            `json:"notes"`
+	Description           string            `json:"description,omitempty"`
+	Labels                map[string]string `json:"labels,omitempty"`
+	BundleDigest          string            `json:"bundle_digest,omitempty"`
+	ChartDigest           string            `json:"chart_digest,omitempty"`
+	EffectiveValuesDigest string            `json:"effective_values_digest,omitempty"`
+	Provenance            string            `json:"provenance,omitempty"`
 }
 
 // ReleaseListItem is a lightweight inventory entry for listing releases.
@@ -44,16 +50,21 @@ type ReleaseHistoryEntry struct {
 
 // Sentinel errors returned by HelmEngine operations.
 var (
-	ErrNotFound           = errors.New("helm: release not found")
-	ErrAlreadyExists      = errors.New("helm: release already exists")
-	ErrForbidden          = errors.New("helm: forbidden")
-	ErrConflict           = errors.New("helm: conflict")
-	ErrTimeout            = errors.New("helm: timeout")
-	ErrCancelled          = errors.New("helm: cancelled")
-	ErrRenderFailed       = errors.New("helm: render failed")
-	ErrActionFailed       = errors.New("helm: action failed")
-	ErrRevisionNotFound   = errors.New("helm: target revision not found in history")
-	ErrArtifactUnavailable = errors.New("helm: historical artifact unavailable")
+	ErrNotFound             = errors.New("helm: release not found")
+	ErrAlreadyExists        = errors.New("helm: release already exists")
+	ErrForbidden            = errors.New("helm: forbidden")
+	ErrConflict             = errors.New("helm: conflict")
+	ErrTimeout              = errors.New("helm: timeout")
+	ErrCancelled            = errors.New("helm: cancelled")
+	ErrRenderFailed         = errors.New("helm: render failed")
+	ErrActionFailed         = errors.New("helm: action failed")
+	ErrRevisionNotFound     = errors.New("helm: target revision not found in history")
+	ErrArtifactUnavailable  = errors.New("helm: historical artifact unavailable")
+	ErrDigestMismatch       = errors.New("helm: digest mismatch")
+	ErrSecretRefChanged     = errors.New("helm: secret ref changed")
+	ErrRenderDrift          = errors.New("helm: render drift")
+	ErrAtomicRollbackFailed = errors.New("helm: atomic rollback failed")
+	ErrSchemaFailed         = errors.New("helm: schema validation failed")
 )
 
 // Engine defines the contract for Helm SDK operations (REQ-041).
@@ -99,15 +110,27 @@ type InstallOptions struct {
 
 // UpgradeOptions holds parameters for the Helm SDK Upgrade method.
 type UpgradeOptions struct {
-	Namespace        string
-	ReleaseName      string
-	ChartPath        string
-	ChartVersion     string
-	Values           map[string]interface{}
-	ExpectedRevision int           // if > 0, must match current revision (AC-021-02)
-	Atomic           bool          // rollback on failure
-	MaxHistory       int           // max history to keep
-	Timeout          time.Duration // helm upgrade timeout
+	Namespace              string
+	ReleaseName            string
+	ChartPath              string
+	ChartVersion           string
+	Values                 map[string]interface{}
+	ExpectedRevision       int           // if > 0, must match current revision (AC-021-02)
+	Atomic                 bool          // rollback on failure
+	MaxHistory             int           // max history to keep
+	Timeout                time.Duration // helm upgrade timeout
+	OperationID            string
+	CommandID              string
+	BundleDigest           string
+	ChartDigest            string
+	EffectiveValuesDigest  string
+	SecretSnapshotDigest   string
+	ExpectedManifestDigest string
+	ResetValues            bool
+	ReuseValues            bool
+	CleanupOnFail          bool
+	WaitForJobs            bool
+	TakeOwnership          bool
 }
 
 // RollbackOptions holds parameters for Rollback.

@@ -1,5 +1,3 @@
-ALTER TABLE operations ADD COLUMN terminal_at TIMESTAMPTZ;
-
 ALTER TABLE release_inventory ADD COLUMN observed_bundle_digest TEXT NOT NULL DEFAULT '';
 ALTER TABLE release_inventory ADD COLUMN observed_chart_digest TEXT NOT NULL DEFAULT '';
 ALTER TABLE release_inventory ADD COLUMN observed_effective_values_digest TEXT NOT NULL DEFAULT '';
@@ -23,13 +21,3 @@ CREATE TABLE rollout_trackings (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-CREATE TABLE operation_events (
-    id TEXT PRIMARY KEY,
-    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
-    event_type TEXT NOT NULL,
-    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_operation_events_operation ON operation_events(operation_id, created_at);

@@ -86,6 +86,32 @@ func (s *inventoryStore) ListByCluster(ctx context.Context, customerID, clusterI
 	return items, rows.Err()
 }
 
+// GetByDefinition returns the inventory row linked to a release definition.
+func (s *inventoryStore) GetByDefinition(ctx context.Context, definitionID string) (*store.ReleaseInventory, error) {
+	row := s.gorm.QueryRowContext(ctx, `
+		SELECT customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version,
+		       revision, status, values_digest, observed_bundle_digest, observed_chart_digest,
+		       observed_effective_values_digest, observed_manifest_digest, last_operation_id,
+		       inventory_status, last_sync_id, snapshot_version, created_at, updated_at
+		FROM release_inventory
+		WHERE release_definition_id = ?
+	`, definitionID)
+	var item store.ReleaseInventory
+	if err := row.Scan(
+		&item.CustomerID, &item.ClusterID, &item.ReleaseDefinitionID, &item.Namespace, &item.ReleaseName,
+		&item.Chart, &item.ChartVersion, &item.Revision, &item.Status, &item.ValuesDigest,
+		&item.ObservedBundleDigest, &item.ObservedChartDigest, &item.ObservedEffectiveValuesDigest,
+		&item.ObservedManifestDigest, &item.LastOperationID, &item.InventoryStatus, &item.LastSyncID,
+		&item.SnapshotVersion, &item.CreatedAt, &item.UpdatedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("get inventory by definition: %w", err)
+	}
+	return &item, nil
+}
+
 // MarkMissing sets InventoryMissing for all rows in a cluster not present in the given set.
 func (s *inventoryStore) MarkMissing(ctx context.Context, customerID, clusterID string, presentKeys []string) (int, error) {
 	if len(presentKeys) == 0 {

@@ -91,6 +91,7 @@ func (s *inventoryStore) ListByCluster(ctx context.Context, customerID, clusterI
 	}
 	return items, rows.Err()
 }
+
 // GetByDefinition returns the inventory row linked to a release definition.
 func (s *inventoryStore) GetByDefinition(ctx context.Context, definitionID string) (*store.ReleaseInventory, error) {
 	row := s.db.QueryRowContext(ctx, `
@@ -120,7 +121,6 @@ func (s *inventoryStore) GetByDefinition(ctx context.Context, definitionID strin
 	item.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt) //nolint:errcheck // stored timestamps always valid RFC3339
 	return &item, nil
 }
-
 
 // MarkMissing sets InventoryMissing for all rows in a cluster not present in the given set.
 func (s *inventoryStore) MarkMissing(ctx context.Context, customerID, clusterID string, presentKeys []string) (int, error) {

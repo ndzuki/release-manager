@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -417,6 +418,27 @@ func (s *Service) CommandStream(
 					s.FinishOperation(ctx, existing.OperationID, result.GetStatus(), resultJSON)
 				}
 
+			case req.GetCommandResult() != nil:
+				result := req.GetCommandResult()
+				entry, err := s.store.Outbox().GetByCommandID(ctx, result.GetCommandId())
+				if err != nil {
+					return fmt.Errorf("load typed command result outbox: %w", err)
+				}
+				if err := s.HandleCommandResult(ctx, result); err != nil {
+					return err
+				}
+				payload, err := protojson.Marshal(result)
+				if err != nil {
+					return fmt.Errorf("marshal typed command result: %w", err)
+				}
+				status := store.CommandSucceeded
+				if result.GetStatus() != "succeeded" {
+					status = store.CommandFailed
+				}
+				if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, status, string(payload)); err != nil {
+					return fmt.Errorf("persist typed command result outbox: %w", err)
+				}
+
 			case req.GetResyncResponse() != nil:
 				rr := req.GetResyncResponse()
 				s.logger.Info("operator resync response",
@@ -464,6 +486,78 @@ func (s *Service) FinishOperation(ctx context.Context, operationID, resultStatus
 	if _, err := s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, lastError); err != nil {
 		s.logger.Warn("failed to persist operation result", "operation_id", operationID, "error", err)
 	}
+}
+
+// HandleCommandResult atomically applies one typed Upgrade result.
+func (s *Service) HandleCommandResult(ctx context.Context, result *operatorv1.CommandResult) error {
+	if result == nil || result.GetOperationId() == "" || result.GetCommandId() == "" {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("command_result identifiers are required"))
+	}
+	op, err := s.store.Operations().Get(ctx, result.GetOperationId())
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("load operation for result: %w", err))
+	}
+	if op.Status.IsTerminal() {
+		return nil
+	}
+	if op.Status == store.StatusQueued {
+		op, err = s.store.Operations().UpdateStatus(ctx, op.ID, store.StatusRunning, op.StateVersion, "")
+		if err != nil {
+			return connect.NewError(connect.CodeAborted, fmt.Errorf("begin operation: %w", err))
+		}
+	}
+	upgrade := result.GetUpgrade()
+	if upgrade == nil {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("upgrade result is required"))
+	}
+	active := upgrade.GetActive()
+	updateInventory := active != nil
+	if active == nil && result.GetStatus() == "succeeded" {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("successful upgrade result requires active snapshot"))
+	}
+	status, lastError, inventoryStatus := terminalMapping(result)
+	payload, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(upgrade)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("marshal upgrade result: %w", err))
+	}
+	if err := s.store.UpgradeResults().FinalizeUpgrade(ctx, &store.UpgradeTerminalInput{
+		OperationID:                   op.ID,
+		ExpectedStateVersion:          op.StateVersion,
+		Status:                        status,
+		LastError:                     lastError,
+		ResultPayload:                 payload,
+		ReleaseDefinitionID:           op.ReleaseDefinitionID,
+		UpdateInventory:               updateInventory,
+		Revision:                      int(active.GetHelmRevision()), //nolint:gosec // Helm revisions are bounded by the signed int used by the SDK and store.
+		ObservedBundleDigest:          active.GetBundleDigest(),
+		ObservedChartDigest:           active.GetChartDigest(),
+		ObservedEffectiveValuesDigest: active.GetEffectiveValuesDigest(),
+		ObservedManifestDigest:        active.GetManifestDigest(),
+		InventoryStatus:               inventoryStatus,
+		ResourceCount:                 int(upgrade.GetResourceSummary().GetResourceCount()),
+	}); err != nil {
+		if errors.Is(err, store.ErrOptimisticLock) {
+			return connect.NewError(connect.CodeAborted, err)
+		}
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("finalize upgrade result: %w", err))
+	}
+	return nil
+}
+
+func terminalMapping(result *operatorv1.CommandResult) (store.OperationStatus, string, store.InventoryStatus) {
+	if result.GetStatus() == "succeeded" {
+		return store.StatusSucceeded, "", store.InventoryActive
+	}
+	if result.GetError().GetCode() == "atomic_rollback_failed" {
+		return store.StatusFailed, result.GetError().GetCode(), store.InventoryOutOfSync
+	}
+	if result.GetError().GetCode() == "helm_cancelled" {
+		return store.StatusCancelled, result.GetError().GetCode(), store.InventoryActive
+	}
+	if result.GetError().GetCode() == "helm_timeout" {
+		return store.StatusTimeout, result.GetError().GetCode(), store.InventoryActive
+	}
+	return store.StatusFailed, result.GetError().GetCode(), store.InventoryActive
 }
 
 // handleReconnect checks for sequence gaps and re-delivers unacknowledged commands
@@ -575,18 +669,20 @@ func (s *Service) sendCommand(
 }
 
 type commandPayload struct {
-	DefinitionID            string                  `json:"definition_id"`
-	Namespace               string                  `json:"namespace"`
-	ReleaseName             string                  `json:"release_name"`
-	CreateNamespace         bool                    `json:"create_namespace"`
-	TimeoutSeconds          int64                   `json:"timeout_seconds"`
-	Bundle                  *commonv1.ReleaseBundle `json:"bundle"`
-	Values                  json.RawMessage         `json:"values"`
-	ValuesRevisionID        string                  `json:"values_revision_id"`
-	ExpectedCurrentRevision int64                   `json:"expected_current_revision"`
-	TargetRevision          int64                   `json:"target_revision"`
-	Atomic                  bool                    `json:"atomic"`
-	ValuesPatch             []byte                  `json:"values_patch"`
+	DefinitionID            string                     `json:"definition_id"`
+	Namespace               string                     `json:"namespace"`
+	ReleaseName             string                     `json:"release_name"`
+	CreateNamespace         bool                       `json:"create_namespace"`
+	TimeoutSeconds          int64                      `json:"timeout_seconds"`
+	Bundle                  *commonv1.ReleaseBundle    `json:"bundle"`
+	Values                  json.RawMessage            `json:"values"`
+	ValuesRevisionID        string                     `json:"values_revision_id"`
+	ExpectedCurrentRevision int64                      `json:"expected_current_revision"`
+	TargetRevision          int64                      `json:"target_revision"`
+	Atomic                  bool                       `json:"atomic"`
+	ValuesPatch             []byte                     `json:"values_patch"`
+	PayloadVersion          uint32                     `json:"payload_version"`
+	Upgrade                 *operatorv1.UpgradeCommand `json:"upgrade"`
 }
 
 // DecodeCommandPayload populates command fields from an outbox JSON payload.
@@ -611,6 +707,10 @@ func DecodeCommandPayload(payload []byte, command *operatorv1.Command) error {
 	command.TargetRevision = envelope.TargetRevision
 	command.Atomic = envelope.Atomic
 	command.ValuesPatch = envelope.ValuesPatch
+	command.PayloadVersion = envelope.PayloadVersion
+	if envelope.Upgrade != nil {
+		command.TypedPayload = &operatorv1.Command_Upgrade{Upgrade: envelope.Upgrade}
+	}
 
 	if envelope.Bundle == nil {
 		var bundle commonv1.ReleaseBundle

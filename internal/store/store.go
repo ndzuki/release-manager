@@ -125,8 +125,9 @@ func (s OperationStatus) IsTerminal() bool {
 	return false
 }
 
-//nolint:gocyclo // Exhaustive legal-transition table; simpler than a two-layered map.
 // CanTransitionTo reports whether an operation status may advance directly to target.
+//
+//nolint:gocyclo // Exhaustive legal-transition table; simpler than a two-layered map.
 func (s OperationStatus) CanTransitionTo(target OperationStatus) bool {
 	switch s {
 	case StatusPending:
@@ -882,24 +883,67 @@ const (
 	InventoryOutOfSync InventoryStatus = "out_of_sync" // reserved for future use
 )
 
+// OperationExecutionResult stores the typed terminal payload for one operation.
+type OperationExecutionResult struct {
+	OperationID   string
+	ResultType    string
+	ResultPayload []byte
+	CreatedAt     time.Time
+}
+
+// RolloutTracking records asynchronous rollout observation after a successful upgrade.
+type RolloutTracking struct {
+	OperationID   string
+	Status        string
+	ResourceCount int
+	ReadyCount    int
+	FailedCount   int
+	LastError     string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// UpgradeTerminalInput is applied atomically when a typed operator result arrives.
+type UpgradeTerminalInput struct {
+	OperationID                   string
+	ExpectedStateVersion          int
+	Status                        OperationStatus
+	LastError                     string
+	ResultPayload                 []byte
+	ReleaseDefinitionID           string
+	UpdateInventory               bool
+	Revision                      int
+	ObservedBundleDigest          string
+	ObservedChartDigest           string
+	ObservedEffectiveValuesDigest string
+	ObservedManifestDigest        string
+	InventoryStatus               InventoryStatus
+	ResourceCount                 int
+}
+
 // ReleaseInventory represents a cached release snapshot in the orchestrator's observation store.
 // Unique key: (customer_id, cluster_id, namespace, release_name).
 type ReleaseInventory struct {
-	ReleaseDefinitionID string
-	CustomerID          string
-	ClusterID           string
-	Namespace           string
-	ReleaseName         string
-	Chart               string
-	ChartVersion        string
-	Revision            int
-	Status              string
-	ValuesDigest        string
-	InventoryStatus     InventoryStatus
-	LastSyncID          string
-	SnapshotVersion     int64
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ReleaseDefinitionID           string
+	CustomerID                    string
+	ClusterID                     string
+	Namespace                     string
+	ReleaseName                   string
+	Chart                         string
+	ChartVersion                  string
+	Revision                      int
+	Status                        string
+	ValuesDigest                  string
+	ObservedBundleDigest          string
+	ObservedChartDigest           string
+	ObservedEffectiveValuesDigest string
+	ObservedManifestDigest        string
+	LastOperationID               string
+	InventoryStatus               InventoryStatus
+	LastSyncID                    string
+	SnapshotVersion               int64
+	CreatedAt                     time.Time
+	UpdatedAt                     time.Time
 }
 
 // InventorySyncLog records the application of a sync snapshot for idempotency.
@@ -1300,6 +1344,22 @@ type InventoryStore interface {
 
 	// GetBySyncID checks whether a sync_id has already been applied.
 	GetBySyncID(ctx context.Context, syncID string) (*InventorySyncLog, error)
+	GetByDefinition(ctx context.Context, definitionID string) (*ReleaseInventory, error)
+}
+
+// OperationExecutionResultStore provides typed result lookup.
+type OperationExecutionResultStore interface {
+	Get(ctx context.Context, operationID string) (*OperationExecutionResult, error)
+}
+
+// RolloutTrackingStore provides rollout tracking lookup.
+type RolloutTrackingStore interface {
+	Get(ctx context.Context, operationID string) (*RolloutTracking, error)
+}
+
+// UpgradeResultStore atomically persists typed upgrade terminal projections.
+type UpgradeResultStore interface {
+	FinalizeUpgrade(ctx context.Context, input *UpgradeTerminalInput) error
 }
 
 // ── Candidate artifact domain types (REQ-XXX) ──────────────────────
@@ -1374,6 +1434,9 @@ type Store interface {
 	ClusterRoutes() ClusterRouteStore
 	Inventories() InventoryStore
 	InventorySyncRequests() InventorySyncRequestStore
+	ExecutionResults() OperationExecutionResultStore
+	RolloutTrackings() RolloutTrackingStore
+	UpgradeResults() UpgradeResultStore
 	CandidateArtifacts() CandidateArtifactStore
 	PreflightLifecycles() PreflightLifecycleStore
 	Close() error

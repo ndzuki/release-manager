@@ -13,8 +13,6 @@ type operationExecutionResultStore struct{ db *sql.DB }
 
 type rolloutTrackingStore struct{ db *sql.DB }
 
-type operationEventStore struct{ db *sql.DB }
-
 func (s *operationExecutionResultStore) Get(ctx context.Context, operationID string) (*store.OperationExecutionResult, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT operation_id, result_type, result_payload, created_at
@@ -61,32 +59,4 @@ func (s *rolloutTrackingStore) Get(ctx context.Context, operationID string) (*st
 	tracking.CreatedAt, _ = time.Parse(time.RFC3339, createdAt) //nolint:errcheck // stored timestamps are RFC3339
 	tracking.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt) //nolint:errcheck // stored timestamps are RFC3339
 	return &tracking, nil
-}
-
-func (s *operationEventStore) List(ctx context.Context, operationID string) ([]*store.OperationEvent, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, operation_id, event_type, payload, created_at
-		FROM operation_events
-		WHERE operation_id = ?
-		ORDER BY created_at, id
-	`, operationID)
-	if err != nil {
-		return nil, fmt.Errorf("list operation events: %w", err)
-	}
-	defer rows.Close()
-
-	var events []*store.OperationEvent
-	for rows.Next() {
-		var event store.OperationEvent
-		var createdAt string
-		if err := rows.Scan(&event.ID, &event.OperationID, &event.EventType, &event.Payload, &createdAt); err != nil {
-			return nil, fmt.Errorf("scan operation event: %w", err)
-		}
-		event.CreatedAt, _ = time.Parse(time.RFC3339, createdAt) //nolint:errcheck // stored timestamps are RFC3339
-		events = append(events, &event)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate operation events: %w", err)
-	}
-	return events, nil
 }

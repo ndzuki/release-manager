@@ -97,11 +97,15 @@ func (s *Store) FinalizeUpgrade(ctx context.Context, input *store.UpgradeTermina
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO operation_events (id, operation_id, event_type, payload)
-		VALUES ($1, $2, $3, $4)
-	`, uuid.NewString(), input.OperationID, "operation."+string(input.Status), input.EventPayload); err != nil {
-		return fmt.Errorf("insert operation event: %w", err)
+	if err := insertOperationEvent(ctx, tx, &store.OperationStateChangedEvent{
+		ID:            uuid.NewString(),
+		OperationID:   input.OperationID,
+		OperationType: store.OperationUpgrade,
+		DefinitionID:  input.ReleaseDefinitionID,
+		NewStatus:     input.Status,
+		StateVersion:  input.ExpectedStateVersion + 1,
+	}); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {

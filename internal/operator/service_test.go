@@ -352,7 +352,7 @@ func TestHandleCommandResultFinalizesUpgrade(t *testing.T) {
 		ID: "definition-upgrade", Name: "example", CustomerID: "cust-1", ClusterID: "clus-1",
 		Namespace: "apps", ReleaseName: "example", Status: store.DefStatusActive,
 	}
-	require.NoError(t, st.Definitions().Create(ctx, definition))
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
 	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
 		ReleaseDefinitionID: definition.ID, CustomerID: "cust-1", ClusterID: "clus-1",
 		Namespace: "apps", ReleaseName: "example", Revision: 1, Status: "deployed",
@@ -388,9 +388,9 @@ func TestHandleCommandResultFinalizesUpgrade(t *testing.T) {
 	assert.Equal(t, 4, tracking.ResourceCount)
 
 	require.NoError(t, svc.HandleCommandResult(ctx, result))
-	events, err := st.OperationEvents().List(ctx, op.ID)
+	resultRecord, err := st.ExecutionResults().Get(ctx, op.ID)
 	require.NoError(t, err)
-	assert.Len(t, events, 1)
+	assert.Equal(t, "upgrade", resultRecord.ResultType)
 }
 
 func TestHandleCommandResultRollbackFailureMarksOutOfSync(t *testing.T) {
@@ -402,7 +402,7 @@ func TestHandleCommandResultRollbackFailureMarksOutOfSync(t *testing.T) {
 		ID: "definition-out-of-sync", Name: "example", CustomerID: "cust-1", ClusterID: "clus-1",
 		Namespace: "apps", ReleaseName: "example", Status: store.DefStatusActive,
 	}
-	require.NoError(t, st.Definitions().Create(ctx, definition))
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
 	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
 		ReleaseDefinitionID: definition.ID, CustomerID: "cust-1", ClusterID: "clus-1",
 		Namespace: "apps", ReleaseName: "example", Revision: 1, Status: "deployed",

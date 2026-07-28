@@ -112,43 +112,45 @@ type preflightLifecycleStore struct{ gorm *DB }
 
 // Store implements store.Store backed by PostgreSQL.
 type Store struct {
-	sqlDB           *sql.DB
-	db              *DB
-	gormDB          *gorm.DB
-	ops             *operationStore
-	operationEvents *operationEventStore
-	defs            *definitionStore
-	vals            *valuesStore
-	valuesApproval  *valuesApprovalStore
-	customers       *customerStore
-	clusters        *clusterStore
-	tokens          *enrollmentTokenStore
-	operators       *operatorStore
-	sessions        *sessionStore
-	outbox          *outboxStore
-	users           *userStore
-	authSess        *authSessionStore
-	orgs            *organizationStore
-	orgMembers      *organizationMemberStore
-	bindings        *bindingStore
-	audit           *auditEventStore
-	notif           *notificationStore
-	auditExports    *auditExportStore
-	bundles         *bundleStore
-	verifs          *verificationStore
-	routes          *clusterRouteStore
-	invs            *inventoryStore
-	invSyncReqs     *inventorySyncRequestStore
-	trustRoots      *trustRootStore
-	scanResults     *scanResultStore
-	vulnExceptions  *vulnerabilityExceptionStore
-	custEvents      *customerEventStore
-	defEvents       *definitionEventStore
-	preflight       *preflightStore
-	candidateArts   *candidateArtifactStore
-	preflightCycles *preflightLifecycleStore
-	closeOnce       sync.Once
-	closeErr        error
+	sqlDB            *sql.DB
+	db               *DB
+	gormDB           *gorm.DB
+	ops              *operationStore
+	operationEvents  *operationEventStore
+	defs             *definitionStore
+	vals             *valuesStore
+	valuesApproval   *valuesApprovalStore
+	customers        *customerStore
+	clusters         *clusterStore
+	tokens           *enrollmentTokenStore
+	operators        *operatorStore
+	sessions         *sessionStore
+	outbox           *outboxStore
+	users            *userStore
+	authSess         *authSessionStore
+	orgs             *organizationStore
+	orgMembers       *organizationMemberStore
+	bindings         *bindingStore
+	audit            *auditEventStore
+	notif            *notificationStore
+	auditExports     *auditExportStore
+	bundles          *bundleStore
+	verifs           *verificationStore
+	routes           *clusterRouteStore
+	invs             *inventoryStore
+	invSyncReqs      *inventorySyncRequestStore
+	trustRoots       *trustRootStore
+	scanResults      *scanResultStore
+	vulnExceptions   *vulnerabilityExceptionStore
+	custEvents       *customerEventStore
+	defEvents        *definitionEventStore
+	preflight        *preflightStore
+	candidateArts    *candidateArtifactStore
+	preflightCycles  *preflightLifecycleStore
+	executionResults *executionResultReader
+	rollouts         *rolloutTrackingReader
+	closeOnce        sync.Once
+	closeErr         error
 }
 
 // New constructs a Store over the supplied shared database/sql pool and GORM wrapper.
@@ -208,6 +210,8 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s.routes = &clusterRouteStore{gorm: s.db}
 	s.candidateArts = &candidateArtifactStore{gorm: s.db}
 	s.preflightCycles = &preflightLifecycleStore{gorm: s.db}
+	s.executionResults = &executionResultReader{s: s}
+	s.rollouts = &rolloutTrackingReader{s: s}
 	return s, nil
 }
 
@@ -224,8 +228,18 @@ var (
 	_ store.InventorySyncRequestStore   = (*inventorySyncRequestStore)(nil)
 )
 
-func (s *Store) Operations() store.OperationStore                           { return s.ops }
-func (s *Store) OperationEvents() store.OperationEventStore                 { return s.operationEvents }
+func (s *Store) Operations() store.OperationStore           { return s.ops }
+func (s *Store) OperationEvents() store.OperationEventStore { return s.operationEvents }
+
+// ExecutionResults returns typed operation result records.
+func (s *Store) ExecutionResults() store.OperationExecutionResultStore { return s.executionResults }
+
+// RolloutTrackings returns rollout observation records.
+func (s *Store) RolloutTrackings() store.RolloutTrackingStore { return s.rollouts }
+
+// UpgradeResults returns the atomic upgrade terminal writer.
+func (s *Store) UpgradeResults() store.UpgradeResultStore { return s }
+
 func (s *Store) Customers() store.CustomerStore                             { return s.customers }
 func (s *Store) Clusters() store.ClusterStore                               { return s.clusters }
 func (s *Store) EnrollmentTokens() store.EnrollmentTokenStore               { return s.tokens }
@@ -248,7 +262,7 @@ func (s *Store) Verifications() store.VerificationStore                     { re
 func (s *Store) CustomerEvents() store.CustomerEventStore                   { return s.custEvents }
 func (s *Store) ClusterRoutes() store.ClusterRouteStore                     { return s.routes }
 func (s *Store) Inventories() store.InventoryStore                          { return s.invs }
-func (s *Store) InventorySyncRequests() store.InventorySyncRequestStore       { return s.invSyncReqs }
+func (s *Store) InventorySyncRequests() store.InventorySyncRequestStore     { return s.invSyncReqs }
 func (s *Store) ValuesApproval() store.ValuesApprovalStore                  { return s.valuesApproval }
 func (s *Store) ValuesApprovalEvidence() store.ValuesApprovalReader         { return s.valuesApproval }
 func (s *Store) AuditExports() store.AuditExportStore                       { return s.auditExports }

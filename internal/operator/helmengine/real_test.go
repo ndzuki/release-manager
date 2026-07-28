@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"fmt"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -30,19 +30,19 @@ func TestRealEngine_Install(t *testing.T) {
 	})
 	chartPath := writeTestChart(t)
 
-	release, err := engine.Install(t.Context(), InstallOptions{
+	installed, err := engine.Install(t.Context(), InstallOptions{
 		Namespace:   "default",
 		ReleaseName: "example",
 		ChartPath:   chartPath,
 		Values:      map[string]interface{}{"message": "hello"},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "example", release.Name)
-	assert.Equal(t, "default", release.Namespace)
-	assert.Equal(t, 1, release.Revision)
-	assert.Equal(t, "deployed", release.Status)
-	assert.Equal(t, "example-chart-0.1.0", release.Chart)
-	assert.NotEmpty(t, release.ManifestDigest)
+	assert.Equal(t, "example", installed.Name)
+	assert.Equal(t, "default", installed.Namespace)
+	assert.Equal(t, 1, installed.Revision)
+	assert.Equal(t, "deployed", installed.Status)
+	assert.Equal(t, "example-chart-0.1.0", installed.Chart)
+	assert.NotEmpty(t, installed.ManifestDigest)
 }
 
 func TestRealEngine_InstallAlreadyExists(t *testing.T) {
@@ -75,8 +75,8 @@ func TestRealEngine_UpgradeExpectedRevisionConflictDoesNotWrite(t *testing.T) {
 
 	_, err = engine.Upgrade(t.Context(), UpgradeOptions{
 		Namespace:        "default",
-		ReleaseName:     "upgrade-conflict",
-		ChartPath:       chartPath,
+		ReleaseName:      "upgrade-conflict",
+		ChartPath:        chartPath,
 		ExpectedRevision: 9,
 	})
 	require.ErrorIs(t, err, ErrConflict)
@@ -102,8 +102,8 @@ func TestRealEngine_UpgradeAtomicFailureRestoresRelease(t *testing.T) {
 	kubeClient.WaitError = errors.New("upgrade hook failed")
 	_, err = engine.Upgrade(t.Context(), UpgradeOptions{
 		Namespace:        "default",
-		ReleaseName:     "upgrade-atomic",
-		ChartPath:       chartPath,
+		ReleaseName:      "upgrade-atomic",
+		ChartPath:        chartPath,
 		ExpectedRevision: 1,
 		Atomic:           true,
 		Timeout:          time.Second,
@@ -303,9 +303,9 @@ func TestRealEngine_Rollback(t *testing.T) {
 	// Upgrade to revision 2 with different values.
 	_, err = engine.Upgrade(ctx, UpgradeOptions{
 		Namespace:        "default",
-		ReleaseName:     "rollback-test",
-		ChartPath:       chartPath,
-		Values:          map[string]interface{}{"message": "v2"},
+		ReleaseName:      "rollback-test",
+		ChartPath:        chartPath,
+		Values:           map[string]interface{}{"message": "v2"},
 		ExpectedRevision: 1,
 	})
 	require.NoError(t, err)
@@ -384,9 +384,9 @@ func TestRealEngine_RollbackFailurePreservesRelease(t *testing.T) {
 	// Upgrade to build history.
 	_, err = engine.Upgrade(ctx, UpgradeOptions{
 		Namespace:        "default",
-		ReleaseName:     "rb-fail",
-		ChartPath:       chartPath,
-		Values:          map[string]interface{}{"message": "v2"},
+		ReleaseName:      "rb-fail",
+		ChartPath:        chartPath,
+		Values:           map[string]interface{}{"message": "v2"},
 		ExpectedRevision: 1,
 	})
 	require.NoError(t, err)
@@ -418,4 +418,3 @@ func TestRealEngine_RollbackFailurePreservesRelease(t *testing.T) {
 	assert.Equal(t, release.StatusFailed, failedRel.Info.Status,
 		"rollback target should be failed")
 }
-
