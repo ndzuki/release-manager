@@ -4,10 +4,13 @@ package orchestrator
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -17,6 +20,7 @@ import (
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/audit"
+	authctx "github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/orchestrator/preflight"
 	"github.com/ndzuki/release-manager/internal/store"
@@ -347,6 +351,318 @@ func (s *Service) PublishRelease(
 		OperationId: "",
 		Status:      "not_implemented",
 	}), nil
+}
+
+// GetOperation returns the safe public fields of an operation.
+// It intentionally excludes values_patch, idempotency_key, and request_hash.
+func (s *Service) GetOperation(
+	ctx context.Context,
+	req *connect.Request[orchestratorv1.GetOperationRequest],
+) (*connect.Response[orchestratorv1.GetOperationResponse], error) {
+	actor, ok := authctx.ActorFromContext(ctx)
+	if !ok {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
+	}
+	op, err := s.store.Operations().Get(ctx, req.Msg.OperationId)
+	if err == store.ErrNotFound {
+		return nil, connect.NewError(connect.CodeNotFound,
+			fmt.Errorf("operation not found: %s", req.Msg.OperationId))
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("operation lookup: %w", err))
+	}
+	if err := s.authorizeReadOperation(ctx, op, actor); err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&orchestratorv1.GetOperationResponse{
+		Operation: toProtoOperation(op),
+	}), nil
+}
+
+// CancelOperation requests cancellation of a non-terminal operation.
+// It checks CanCancel, authorizes via Casbin + definition→customer→binding chain,
+// applies CAS on state_version, and persists the transition with idempotency.
+//
+//nolint:gocyclo // Cancellation orchestrates state machine, authorization, and idempotency gates.
+func (s *Service) CancelOperation(
+	ctx context.Context,
+	req *connect.Request[orchestratorv1.CancelOperationRequest],
+) (*connect.Response[orchestratorv1.CancelOperationResponse], error) {
+	msg := req.Msg
+
+	actor, ok := authctx.ActorFromContext(ctx)
+	if !ok {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
+	}
+
+	if err := validateCancelInput(msg); err != nil {
+		return nil, err
+	}
+
+	op, err := s.store.Operations().Get(ctx, msg.OperationId)
+	if err == store.ErrNotFound {
+		return nil, connect.NewError(connect.CodeNotFound,
+			fmt.Errorf("operation not found: %s", msg.OperationId))
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("operation lookup: %w", err))
+	}
+
+	if err := s.authorizeCancelOperation(ctx, op, actor); err != nil {
+		return nil, err
+	}
+
+	if replayed, err := s.replayCancel(ctx, op, actor, msg); err != nil {
+		return nil, err
+	} else if replayed != nil {
+		return replayed, nil
+	}
+	if op.Status == store.StatusCancelling {
+		return nil, cancelOperationError(connect.CodeFailedPrecondition, "cancel_not_allowed",
+			fmt.Errorf("operation %s is cancelling and awaiting operator acknowledgment", op.ID))
+	}
+
+	if !operation.CanCancel(op.Status) {
+		return nil, cancelOperationError(connect.CodeFailedPrecondition, "cancel_not_allowed",
+			fmt.Errorf("operation %s is %s, cannot be cancelled", op.ID, op.Status))
+	}
+
+	targetStatus, err := operation.Transition(op.Status, operation.EventCancel)
+	if err != nil {
+		return nil, cancelOperationError(connect.CodeFailedPrecondition, "cancel_not_allowed", err)
+	}
+
+	// Use the computed target status for the cancel command.
+	return s.finishCancelWithTarget(ctx, op, actor, msg, targetStatus)
+}
+
+func (s *Service) finishCancelWithTarget(
+	ctx context.Context,
+	op *store.Operation,
+	actor authctx.Actor,
+	msg *orchestratorv1.CancelOperationRequest,
+	targetStatus store.OperationStatus,
+) (*connect.Response[orchestratorv1.CancelOperationResponse], error) {
+	requestID := uuid.New().String()
+	idempotencyKey := msg.IdempotencyKey
+	scope := operationCancelScope(op.ID, actor.UserID)
+	reqHash := hashCancelRequest(msg.OperationId, int(msg.ExpectedStateVersion), msg.Reason)
+	keyHash := hashIdempotencyKey(idempotencyKey)
+
+	result, err := s.store.Operations().Cancel(ctx, store.OperationCancelCommand{
+		OperationID:          op.ID,
+		ExpectedStateVersion: int(msg.ExpectedStateVersion),
+		TargetStatus:         targetStatus,
+		ActorUserID:          actor.UserID,
+		Reason:               msg.Reason,
+		RequestID:            requestID,
+		IdempotencyScope:     scope,
+		IdempotencyKeyHash:   keyHash,
+		RequestHash:          reqHash,
+	})
+	if err != nil {
+		var versionErr *store.OperationStateVersionConflictError
+		switch {
+		case errors.As(err, &versionErr):
+			return nil, cancelOperationError(connect.CodeAborted, "optimistic_lock_conflict",
+				fmt.Errorf("state version conflict: expected %d, current %d", versionErr.Expected, versionErr.Current))
+		case errors.Is(err, store.ErrIdempotencyConflict):
+			return nil, cancelOperationError(connect.CodeAlreadyExists, "idempotency_conflict",
+				errors.New("idempotency key conflict: different request for same scope and key"))
+		default:
+			return nil, cancelOperationError(connect.CodeInternal, "internal_error", fmt.Errorf("cancel operation: %w", err))
+		}
+	}
+
+	protoOp := toProtoOperation(result.Operation)
+	return connect.NewResponse(&orchestratorv1.CancelOperationResponse{
+		Operation: protoOp,
+		RequestId: result.RequestID,
+	}), nil
+}
+
+func (s *Service) replayCancel(
+	ctx context.Context,
+	op *store.Operation,
+	actor authctx.Actor,
+	msg *orchestratorv1.CancelOperationRequest,
+) (*connect.Response[orchestratorv1.CancelOperationResponse], error) {
+	result, err := s.store.Operations().GetCancelReplay(ctx, store.OperationCancelReplayQuery{
+		OperationID:        op.ID,
+		ActorUserID:        actor.UserID,
+		IdempotencyKeyHash: hashIdempotencyKey(msg.IdempotencyKey),
+		RequestHash:        hashCancelRequest(msg.OperationId, int(msg.ExpectedStateVersion), msg.Reason),
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if errors.Is(err, store.ErrIdempotencyConflict) {
+		return nil, cancelOperationError(connect.CodeAlreadyExists, "idempotency_conflict",
+			errors.New("idempotency key conflict: different request for same scope and key"))
+	}
+	if err != nil {
+		return nil, cancelOperationError(connect.CodeInternal, "internal_error", fmt.Errorf("replay cancel operation: %w", err))
+	}
+	return connect.NewResponse(&orchestratorv1.CancelOperationResponse{
+		Operation: toProtoOperation(result.Operation),
+		RequestId: result.RequestID,
+	}), nil
+}
+
+// authorizeCancelOperation verifies that the actor has a valid membership,
+// binding, and role for the operation's target customer.
+func (s *Service) authorizeReadOperation(ctx context.Context, op *store.Operation, actor authctx.Actor) error {
+	def, err := s.store.Definitions().Get(ctx, op.ReleaseDefinitionID)
+	if err != nil {
+		return cancelOperationError(connect.CodeInternal, "internal_error", fmt.Errorf("definition lookup: %w", err))
+	}
+	if err := s.store.Bindings().RequireActive(ctx, actor.OrganizationID, def.CustomerID); err != nil {
+		return cancelOperationError(connect.CodePermissionDenied, "binding_revoked", errors.New("organization-customer binding is revoked"))
+	}
+	if _, err := s.store.OrgMembers().Get(ctx, actor.OrganizationID, actor.UserID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return cancelOperationError(connect.CodePermissionDenied, "membership_inactive", errors.New("actor has no active membership"))
+		}
+		return cancelOperationError(connect.CodeInternal, "internal_error", fmt.Errorf("membership lookup: %w", err))
+	}
+	return nil
+}
+
+func (s *Service) authorizeCancelOperation(ctx context.Context, op *store.Operation, actor authctx.Actor) error {
+	def, err := s.store.Definitions().Get(ctx, op.ReleaseDefinitionID)
+	if err != nil {
+		return cancelOperationError(connect.CodeInternal, "internal_error", fmt.Errorf("definition lookup: %w", err))
+	}
+
+	customer, err := s.store.Customers().Get(ctx, def.CustomerID)
+	if err != nil {
+		return cancelOperationError(connect.CodeInternal, "internal_error", fmt.Errorf("customer lookup: %w", err))
+	}
+	if customer.Status != store.CustomerActive {
+		return cancelOperationError(connect.CodeFailedPrecondition, "customer_disabled", errors.New("customer is disabled"))
+	}
+
+	if err := s.store.Bindings().RequireActive(ctx, actor.OrganizationID, def.CustomerID); err != nil {
+		return cancelOperationError(connect.CodePermissionDenied, "binding_revoked", errors.New("organization-customer binding is revoked"))
+	}
+
+	member, err := s.store.OrgMembers().Get(ctx, actor.OrganizationID, actor.UserID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return cancelOperationError(connect.CodePermissionDenied, "membership_inactive", errors.New("actor has no active membership"))
+		}
+		return cancelOperationError(connect.CodeInternal, "internal_error", fmt.Errorf("membership lookup: %w", err))
+	}
+	if !canCancelOperation(member.Role) {
+		return cancelOperationError(connect.CodePermissionDenied, "role_insufficient",
+			fmt.Errorf("actor role %s is insufficient for cancel", member.Role))
+	}
+	return nil
+}
+
+func canCancelOperation(role store.Role) bool {
+	return role == store.RoleDeployer || role == store.RoleReleaseAdmin || role == store.RolePlatformAdmin
+}
+
+func validateCancelInput(msg *orchestratorv1.CancelOperationRequest) error {
+	if msg.OperationId == "" {
+		return cancelOperationError(connect.CodeInvalidArgument, "invalid_argument", errors.New("operation_id is required"))
+	}
+	if msg.ExpectedStateVersion < 1 {
+		return cancelOperationError(connect.CodeInvalidArgument, "invalid_argument", errors.New("expected_state_version must be >= 1"))
+	}
+	if msg.IdempotencyKey == "" {
+		return cancelOperationError(connect.CodeInvalidArgument, "invalid_argument", errors.New("idempotency_key is required"))
+	}
+	if len(msg.IdempotencyKey) > 64 {
+		return cancelOperationError(connect.CodeInvalidArgument, "invalid_argument", errors.New("idempotency key too large"))
+	}
+	if utf8.RuneCountInString(msg.Reason) > 500 {
+		return cancelOperationError(connect.CodeInvalidArgument, "invalid_argument", errors.New("reason exceeds 500 characters"))
+	}
+	if strings.TrimSpace(msg.Reason) == "" {
+		return cancelOperationError(connect.CodeInvalidArgument, "invalid_argument", errors.New("reason is required"))
+	}
+	return nil
+}
+
+func cancelOperationError(code connect.Code, reason string, err error) error {
+	connectErr := connect.NewError(code, fmt.Errorf("%s: %w", reason, err))
+	connectErr.Meta().Set("X-Reason-Code", reason)
+	return connectErr
+}
+
+// toProtoOperation converts a store.Operation to the safe public proto Operation.
+// It intentionally excludes values_patch, idempotency_key, and request_hash.
+func toProtoOperation(op *store.Operation) *orchestratorv1.Operation {
+	result := &orchestratorv1.Operation{
+		OperationId:         op.ID,
+		ReleaseDefinitionId: op.ReleaseDefinitionID,
+		OperationType:       string(op.OperationType),
+		State:               storeStatusToProto(op.Status),
+		StateVersion:        int64(op.StateVersion),
+		BundleId:            op.BundleID,
+		ValuesRevisionId:    op.ValuesRevisionID,
+		ExpectedRevision:    int32(op.ExpectedRevision), //nolint:gosec // Helm revisions bounded in practice
+		TargetRevision:      int32(op.TargetRevision),   //nolint:gosec // Helm revisions bounded in practice
+		Actor: &commonv1.ActorContext{
+			UserId:       op.Actor.UserID,
+			Organization: op.Actor.Organization,
+		},
+		CreatedAt: timestamppb.New(op.CreatedAt),
+		UpdatedAt: timestamppb.New(op.UpdatedAt),
+		LastError: op.LastError,
+	}
+	if op.TerminalAt != nil {
+		result.TerminalAt = timestamppb.New(*op.TerminalAt)
+	}
+	if op.Deadline != nil {
+		result.Deadline = timestamppb.New(*op.Deadline)
+	}
+	return result
+}
+
+func storeStatusToProto(s store.OperationStatus) orchestratorv1.OperationStatus {
+	switch s {
+	case store.StatusPending:
+		return orchestratorv1.OperationStatus_OPERATION_STATUS_PENDING
+	case store.StatusPreflight:
+		return orchestratorv1.OperationStatus_OPERATION_STATUS_PREFLIGHT
+	case store.StatusQueued:
+		return orchestratorv1.OperationStatus_OPERATION_STATUS_QUEUED
+	case store.StatusRunning:
+		return orchestratorv1.OperationStatus_OPERATION_STATUS_RUNNING
+	case store.StatusCancelling:
+		return orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLING
+	case store.StatusSucceeded:
+		return orchestratorv1.OperationStatus_OPERATION_STATUS_SUCCEEDED
+	case store.StatusFailed:
+		return orchestratorv1.OperationStatus_OPERATION_STATUS_FAILED
+	case store.StatusCancelled:
+		return orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLED
+	case store.StatusTimeout:
+		return orchestratorv1.OperationStatus_OPERATION_STATUS_TIMEOUT
+	default:
+		return orchestratorv1.OperationStatus_OPERATION_STATUS_UNSPECIFIED
+	}
+}
+
+func hashIdempotencyKey(key string) string {
+	if key == "" {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(hash[:])
+}
+
+func operationCancelScope(operationID, actorUserID string) string {
+	return operationID + ":" + actorUserID
+}
+
+func hashCancelRequest(operationID string, expectedStateVersion int, reason string) string {
+	payload := fmt.Sprintf("%s|%d|%s", operationID, expectedStateVersion, reason)
+	hash := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(hash[:])
 }
 
 func (s *Service) toResponse(op *store.Operation) *orchestratorv1.CreateOperationResponse {

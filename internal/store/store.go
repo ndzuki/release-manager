@@ -47,6 +47,18 @@ func (e *StateVersionConflictError) Error() string {
 
 func (e *StateVersionConflictError) Unwrap() error { return ErrOptimisticLock }
 
+// OperationStateVersionConflictError reports the current operation version after a failed CAS.
+type OperationStateVersionConflictError struct {
+	Expected int
+	Current  int
+}
+
+func (e *OperationStateVersionConflictError) Error() string {
+	return "store: operation state version conflict"
+}
+
+func (e *OperationStateVersionConflictError) Unwrap() error { return ErrOptimisticLock }
+
 // InvalidValuesStateError reports a state-machine precondition failure.
 type InvalidValuesStateError struct {
 	Actual   ValuesStatus
@@ -113,6 +125,25 @@ func (s OperationStatus) IsTerminal() bool {
 	return false
 }
 
+//nolint:gocyclo // Exhaustive legal-transition table; simpler than a two-layered map.
+// CanTransitionTo reports whether an operation status may advance directly to target.
+func (s OperationStatus) CanTransitionTo(target OperationStatus) bool {
+	switch s {
+	case StatusPending:
+		return target == StatusPreflight || target == StatusQueued || target == StatusCancelled || target == StatusTimeout
+	case StatusPreflight:
+		return target == StatusQueued || target == StatusFailed || target == StatusCancelled || target == StatusTimeout
+	case StatusQueued:
+		return target == StatusRunning || target == StatusCancelled || target == StatusTimeout
+	case StatusRunning:
+		return target == StatusSucceeded || target == StatusFailed || target == StatusCancelling || target == StatusTimeout
+	case StatusCancelling:
+		return target == StatusCancelled || target == StatusFailed || target == StatusTimeout
+	default:
+		return false
+	}
+}
+
 // DefinitionStatus is the lifecycle of a release definition.
 type DefinitionStatus string
 
@@ -157,7 +188,36 @@ type Operation struct {
 	CreatedAt           time.Time       `json:"created_at"`
 	UpdatedAt           time.Time       `json:"updated_at"`
 	Deadline            *time.Time      `json:"deadline,omitempty"`
+	TerminalAt          *time.Time      `json:"terminal_at,omitempty"`
 	LastError           string          `json:"last_error,omitempty"`
+}
+
+// OperationCancelCommand contains the trusted authorization and idempotency snapshot for cancellation.
+type OperationCancelCommand struct {
+	OperationID          string
+	ExpectedStateVersion int
+	TargetStatus         OperationStatus
+	ActorUserID          string
+	Reason               string
+	RequestID            string
+	IdempotencyScope     string
+	IdempotencyKeyHash   string
+	RequestHash          string
+}
+
+// OperationCancelReplayQuery identifies one authorized cancellation intent.
+type OperationCancelReplayQuery struct {
+	OperationID        string
+	ActorUserID        string
+	IdempotencyKeyHash string
+	RequestHash        string
+}
+
+// OperationCancelResult is the committed or replayed cancellation transition.
+type OperationCancelResult struct {
+	Operation *Operation `json:"operation"`
+	RequestID string     `json:"request_id"`
+	Replayed  bool       `json:"-"`
 }
 
 // ReleaseDefinition represents a Helm release target configuration.
@@ -912,6 +972,8 @@ type OperationStore interface {
 	GetByIdempotencyKey(ctx context.Context, key string) (*Operation, error)
 	UpdateStatus(ctx context.Context, id string, status OperationStatus, stateVersion int, lastError string) (*Operation, error)
 	Transition(ctx context.Context, id string, status OperationStatus, stateVersion int, lastError string) (*Operation, error)
+	GetCancelReplay(ctx context.Context, query OperationCancelReplayQuery) (*OperationCancelResult, error)
+	Cancel(ctx context.Context, command OperationCancelCommand) (*OperationCancelResult, error)
 	HasActiveForDefinition(ctx context.Context, definitionID string) (bool, error)
 	HasActiveEmergencyForDefinition(ctx context.Context, definitionID string) (bool, error)
 	List(ctx context.Context, definitionID string) ([]*Operation, error)

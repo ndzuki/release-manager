@@ -138,6 +138,7 @@ type Store struct {
 	verifs          *verificationStore
 	routes          *clusterRouteStore
 	invs            *inventoryStore
+	invSyncReqs     *inventorySyncRequestStore
 	trustRoots      *trustRootStore
 	scanResults     *scanResultStore
 	vulnExceptions  *vulnerabilityExceptionStore
@@ -198,6 +199,7 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s.bundles = &bundleStore{gorm: s.db}
 	s.auditExports = &auditExportStore{gorm: s.db}
 	s.invs = &inventoryStore{gorm: s.db}
+	s.invSyncReqs = &inventorySyncRequestStore{gorm: s.db}
 	s.verifs = &verificationStore{gorm: s.db}
 	s.custEvents = &customerEventStore{gorm: s.db}
 	s.trustRoots = &trustRootStore{gorm: s.db}
@@ -219,6 +221,7 @@ var (
 	_ store.VulnerabilityExceptionStore = (*vulnerabilityExceptionStore)(nil)
 	_ store.CandidateArtifactStore      = (*candidateArtifactStore)(nil)
 	_ store.PreflightLifecycleStore     = (*preflightLifecycleStore)(nil)
+	_ store.InventorySyncRequestStore   = (*inventorySyncRequestStore)(nil)
 )
 
 func (s *Store) Operations() store.OperationStore                           { return s.ops }
@@ -245,6 +248,7 @@ func (s *Store) Verifications() store.VerificationStore                     { re
 func (s *Store) CustomerEvents() store.CustomerEventStore                   { return s.custEvents }
 func (s *Store) ClusterRoutes() store.ClusterRouteStore                     { return s.routes }
 func (s *Store) Inventories() store.InventoryStore                          { return s.invs }
+func (s *Store) InventorySyncRequests() store.InventorySyncRequestStore       { return s.invSyncReqs }
 func (s *Store) ValuesApproval() store.ValuesApprovalStore                  { return s.valuesApproval }
 func (s *Store) ValuesApprovalEvidence() store.ValuesApprovalReader         { return s.valuesApproval }
 func (s *Store) AuditExports() store.AuditExportStore                       { return s.auditExports }

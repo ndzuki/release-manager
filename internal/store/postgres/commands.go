@@ -9,6 +9,10 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
+type outboxExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 type outboxStore struct{ gorm *DB }
 
 const outboxColumns = `id, command_id, operation_id, operation_type, operator_id, payload, status, max_inflight, sequence, result_json, created_at, updated_at, delivered_at, acked_at`
@@ -94,6 +98,23 @@ func (s *outboxStore) GetNextSequence(ctx context.Context) (int64, error) {
 	return 1, nil
 }
 
+func (s *outboxStore) UpdateSequence(ctx context.Context, id string, sequence int64) error {
+	result, err := s.gorm.ExecContext(ctx, `UPDATE outbox SET sequence=?, updated_at=? WHERE id=?`,
+		sequence, time.Now().UTC().Format(time.RFC3339), id,
+	)
+	if err != nil {
+		return fmt.Errorf("update outbox sequence: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("outbox sequence rows affected: %w", err)
+	}
+	if rows == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
 func (s *outboxStore) UpdateStatus(ctx context.Context, id string, status store.CommandStatus, resultJSON string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -125,6 +146,21 @@ func (s *outboxStore) UpdateStatus(ctx context.Context, id string, status store.
 func (s *outboxStore) GetNextPending(ctx context.Context, operatorID string) (*store.OutboxEntry, error) {
 	row := s.gorm.QueryRowContext(ctx, `SELECT `+outboxColumns+` FROM outbox WHERE operator_id=? AND status='pending' ORDER BY sequence ASC LIMIT 1`, operatorID)
 	return scanOutboxEntry(row)
+}
+
+func createOutboxEntry(ctx context.Context, execer outboxExecer, e *store.OutboxEntry) error {
+	_, err := execer.ExecContext(ctx, `
+INSERT INTO outbox (id, command_id, operation_id, operation_type, operator_id, payload, status, max_inflight, sequence, result_json, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`,
+		e.ID, e.CommandID, e.OperationID, e.OperationType, e.OperatorID, e.Payload, string(e.Status),
+		e.MaxInFlight, e.Sequence, e.ResultJSON,
+		e.CreatedAt.UTC().Format(time.RFC3339), e.UpdatedAt.UTC().Format(time.RFC3339),
+	)
+	if err != nil {
+		return fmt.Errorf("insert outbox entry: %w", err)
+	}
+	return nil
 }
 
 func scanOutboxEntry(row interface{ Scan(...interface{}) error }) (*store.OutboxEntry, error) {

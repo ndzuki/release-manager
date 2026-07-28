@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -30,12 +31,12 @@ func (s *Service) RollbackRelease(
 		if err == nil {
 			s.logger.Info("idempotent rollback operation found", "key", msg.IdempotencyKey, "op_id", existing.ID)
 			return connect.NewResponse(&orchestratorv1.RollbackReleaseResponse{
-			OperationId:  existing.ID,
-			//nolint:gosec // Helm revisions are bounded well below int32 max
-			FromRevision: int32(existing.ExpectedRevision),
-			//nolint:gosec // Helm revisions are bounded well below int32 max
-			ToRevision:   int32(existing.ExpectedRevision + 1), // rollback creates a new revision
-			State:        string(existing.Status),
+				OperationId: existing.ID,
+				//nolint:gosec // Helm revisions are bounded well below int32 max
+				FromRevision: int32(existing.ExpectedRevision),
+				//nolint:gosec // Helm revisions are bounded well below int32 max
+				ToRevision: int32(existing.ExpectedRevision + 1), // rollback creates a new revision
+				State:      string(existing.Status),
 			}), nil
 		}
 		if err != store.ErrNotFound {
@@ -121,8 +122,18 @@ func (s *Service) RollbackRelease(
 		UpdatedAt: now,
 	}
 
-	// 7. Persist
-	if err := s.store.Operations().Create(ctx, op); err != nil {
+	// 7. Persist with the same transactional availability gate as every other
+	// standard operation. The pre-checks above preserve precise errors; this
+	// gate closes the race between those checks and insertion.
+	if err := s.store.Operations().CreateIfAvailable(ctx, op); err != nil {
+		if errors.Is(err, store.ErrReleaseBusy) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
+		}
+		if errors.Is(err, store.ErrDuplicateKey) {
+			return nil, connect.NewError(connect.CodeAlreadyExists,
+				fmt.Errorf("idempotency_key %s already used", msg.IdempotencyKey))
+		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create rollback operation: %w", err))
 	}
 
@@ -148,11 +159,11 @@ func (s *Service) RollbackRelease(
 	)
 
 	return connect.NewResponse(&orchestratorv1.RollbackReleaseResponse{
-		OperationId:  op.ID,
+		OperationId: op.ID,
 		//nolint:gosec // Helm revisions are bounded well below int32 max
 		FromRevision: int32(op.ExpectedRevision),
 		//nolint:gosec // Helm revisions are bounded well below int32 max
-		ToRevision:   int32(op.ExpectedRevision + 1), // rollback creates a new revision
-		State:        string(op.Status),
+		ToRevision: int32(op.ExpectedRevision + 1), // rollback creates a new revision
+		State:      string(op.Status),
 	}), nil
 }
