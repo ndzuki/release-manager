@@ -15,8 +15,6 @@ import (
 	"github.com/ndzuki/release-manager/internal/operator/localstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 func TestAgent_InstallCommand(t *testing.T) {
@@ -102,103 +100,67 @@ func TestAgent_InstallErrorMapping(t *testing.T) {
 	}
 }
 
-func TestAgent_UpgradeCommand(t *testing.T) {
-	valuesJSON := []byte(`{"message":"hello"}`)
+func TestAgent_UpgradeCommandMergesValuesPatchAndChecksRevision(t *testing.T) {
 	engine := &recordingEngine{
-		status: &helmengine.Release{
-			Name:       "example",
-			Namespace:  "apps",
-			Revision:   1,
-			Status:     "deployed",
-			Provenance: "legacy",
-		},
 		release: &helmengine.Release{
-			Name:                  "example",
-			Namespace:             "apps",
-			Revision:              2,
-			Status:                "deployed",
-			ManifestDigest:        "manifest-v2",
-			BundleDigest:          "sha256:bundle",
-			ChartDigest:           "sha256:chart",
-			EffectiveValuesDigest: sha256Hex(valuesJSON),
-			Provenance:            "managed",
+			Name:      "example",
+			Namespace: "apps",
+			Revision:  2,
+			Status:    "deployed",
 		},
 	}
-	store := newMemoryStore()
-	notifier := new(recordingNotifier)
-	agent := newTestAgent(t, engine, store, notifier)
+	agent := newTestAgent(t, engine, newMemoryStore(), nil)
 	stream := newTestStream()
-	command := upgradeCommand("cmd-upgrade", valuesJSON, sha256Hex(valuesJSON))
+	command := upgradeCommand("cmd-upgrade")
 
 	require.NoError(t, agent.handleCommand(t.Context(), stream, command))
 	require.Len(t, stream.sent, 2)
-	assert.Equal(t, operatorv1.AckType_ACK_TYPE_PERSISTED, stream.sent[0].GetAck().GetAckType())
-	result := stream.sent[1].GetCommandResult()
-	require.NotNil(t, result)
-	assert.Equal(t, "succeeded", result.GetStatus())
-	assert.Equal(t, uint64(2), result.GetUpgrade().GetActive().GetHelmRevision())
-	assert.Equal(t, operatorv1.ReleaseProvenance_RELEASE_PROVENANCE_LEGACY, result.GetUpgrade().GetFrom().GetProvenance())
+	assert.Equal(t, "succeeded", stream.sent[1].GetResult().GetStatus())
 	assert.Equal(t, 1, engine.upgradeCalls)
-	assert.True(t, engine.lastUpgrade.ResetValues)
-	assert.False(t, engine.lastUpgrade.ReuseValues)
-	assert.Equal(t, 1, notifier.calls)
+	assert.Equal(t, 1, engine.lastUpgrade.ExpectedRevision)
+	assert.True(t, engine.lastUpgrade.Atomic)
+	assert.Equal(t, map[string]interface{}{"replicas": float64(3), "image": map[string]interface{}{"tag": "v2"}}, engine.lastUpgrade.Values)
 }
 
-func TestAgent_UpgradeDigestMismatchDoesNotCallHelm(t *testing.T) {
-	engine := new(recordingEngine)
+func TestAgent_UpgradeConflictErrorMapping(t *testing.T) {
+	engine := &recordingEngine{err: helmengine.ErrConflict}
 	agent := newTestAgent(t, engine, newMemoryStore(), nil)
 	stream := newTestStream()
-	command := upgradeCommand("cmd-digest", []byte(`{"message":"hello"}`), "wrong")
+
+	require.NoError(t, agent.handleCommand(t.Context(), stream, upgradeCommand("cmd-conflict")))
+	require.Len(t, stream.sent, 2)
+	assert.Contains(t, stream.sent[1].GetResult().GetResultJson(), `"code":"revision_conflict"`)
+}
+
+func TestAgent_InventorySyncCommandExecutesFullSync(t *testing.T) {
+	executor := new(recordingSyncExecutor)
+	agent, err := New(Config{
+		Client: noopClient{}, Engine: new(recordingEngine), Store: newMemoryStore(),
+		SyncExecutor: executor, SessionID: "session-1", OperatorID: "operator-1",
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	require.NoError(t, err)
+	stream := newTestStream()
+	command := &operatorv1.Command{
+		OutboxId: "outbox-sync", CommandId: "command-sync", OperationId: "request-sync",
+		OperationType: "INVENTORY_SYNC", Sequence: 9,
+	}
 
 	require.NoError(t, agent.handleCommand(t.Context(), stream, command))
 	require.Len(t, stream.sent, 2)
-	result := stream.sent[1].GetCommandResult()
-	require.NotNil(t, result)
-	assert.Equal(t, "digest_mismatch", result.GetError().GetCode())
-	assert.Zero(t, engine.upgradeCalls)
+	assert.Equal(t, 1, executor.calls)
+	assert.Equal(t, "succeeded", stream.sent[1].GetResult().GetStatus())
+	assert.Contains(t, stream.sent[1].GetResult().GetResultJson(), `"inventory_sync_hint":true`)
 }
 
-func TestAgent_UpgradeAtomicFailureReturnsActiveSnapshot(t *testing.T) {
-	active := &helmengine.Release{Name: "example", Namespace: "apps", Revision: 1, Status: "deployed", ManifestDigest: "manifest-v1"}
-	engine := &recordingEngine{status: active, release: active, upgradeErr: helmengine.ErrActionFailed}
-	agent := newTestAgent(t, engine, newMemoryStore(), nil)
-	stream := newTestStream()
-	valuesJSON := []byte(`{"message":"hello"}`)
-
-	require.NoError(t, agent.handleCommand(t.Context(), stream, upgradeCommand("cmd-atomic", valuesJSON, sha256Hex(valuesJSON))))
-	result := stream.sent[1].GetCommandResult()
-	require.NotNil(t, result)
-	assert.Equal(t, "failed", result.GetStatus())
-	assert.Equal(t, "helm_upgrade_failed", result.GetError().GetCode())
-	assert.True(t, result.GetUpgrade().GetRollbackSucceeded())
-	assert.Equal(t, uint64(1), result.GetUpgrade().GetActive().GetHelmRevision())
+type recordingSyncExecutor struct {
+	calls int
+	err   error
 }
 
-func upgradeCommand(commandID string, valuesJSON []byte, digest string) *operatorv1.Command {
-	return &operatorv1.Command{
-		OutboxId:      "outbox-upgrade",
-		CommandId:     commandID,
-		OperationId:   "operation-upgrade",
-		OperationType: "UPGRADE",
-		DefinitionId:  "definition-1",
-		Sequence:      8,
-		PayloadVersion: 2,
-		TypedPayload: &operatorv1.Command_Upgrade{Upgrade: &operatorv1.UpgradeCommand{
-			DefinitionId:          "definition-1",
-			Namespace:             "apps",
-			ReleaseName:           "example",
-			Bundle:                &operatorv1.ReleaseBundleSnapshot{BundleDigest: "sha256:bundle"},
-			Chart:                 &operatorv1.ChartReference{ResolvedUri: "chart.tgz", Version: "1.0.0", Digest: "sha256:chart"},
-			EffectiveValuesJson:   valuesJSON,
-			EffectiveValuesDigest: digest,
-			OperationId:           "operation-upgrade",
-			CommandId:             commandID,
-			ExpectedRevision:      1,
-			Atomic:                true,
-			Timeout:               durationpb.New(time.Minute),
-			MaxHistory:            10,
-		}},
-	}
+func (e *recordingSyncExecutor) SyncNow(context.Context) error {
+	e.calls++
+	return e.err
 }
 func newTestAgent(
 	t *testing.T,
@@ -246,6 +208,39 @@ func installCommand(commandID string) *operatorv1.Command {
 	}
 }
 
+func upgradeCommand(commandID string) *operatorv1.Command {
+	return &operatorv1.Command{
+		OutboxId:                "outbox-upgrade",
+		CommandId:               commandID,
+		OperationId:             "op-upgrade",
+		OperationType:           "UPGRADE",
+		Bundle:                  &commonv1.ReleaseBundle{ChartRef: "chart", ChartVersion: "1.0.0"},
+		Values:                  []byte(`{"replicas":2,"image":{"tag":"v1"}}`),
+		ValuesPatch:             []byte(`{"replicas":3,"image":{"tag":"v2"}}`),
+		ExpectedCurrentRevision: 1,
+		Atomic:                  true,
+		DefinitionId:            "definition-upgrade",
+		Namespace:               "apps",
+		ReleaseName:             "example",
+		TimeoutSeconds:          45,
+	}
+}
+
+//nolint:unused // Reserved for future rollback-command tests; intentionally kept.
+func rollbackCommand(commandID string) *operatorv1.Command {
+	return &operatorv1.Command{
+		OutboxId:       "outbox-rollback",
+		CommandId:      commandID,
+		OperationId:    "op-rollback",
+		OperationType:  "ROLLBACK",
+		TargetRevision: 1,
+		DefinitionId:   "definition-rollback",
+		Namespace:      "apps",
+		ReleaseName:    "example",
+		TimeoutSeconds: 45,
+	}
+}
+
 type noopClient struct{}
 
 func (noopClient) CommandStream(context.Context) Stream { return newTestStream() }
@@ -278,14 +273,14 @@ func (n *recordingNotifier) NotifyOperationComplete(_, _, _, definitionID string
 }
 
 type recordingEngine struct {
-	installCalls int
-	lastInstall  helmengine.InstallOptions
-	release      *helmengine.Release
-	err          error
-	upgradeCalls int
-	lastUpgrade  helmengine.UpgradeOptions
-	status       *helmengine.Release
-	upgradeErr   error
+	installCalls  int
+	upgradeCalls  int
+	rollbackCalls int
+	lastInstall   helmengine.InstallOptions
+	lastUpgrade   helmengine.UpgradeOptions
+	lastRollback  helmengine.RollbackOptions
+	release       *helmengine.Release
+	err           error
 }
 
 func (e *recordingEngine) Install(_ context.Context, opts helmengine.InstallOptions) (*helmengine.Release, error) {
@@ -293,19 +288,19 @@ func (e *recordingEngine) Install(_ context.Context, opts helmengine.InstallOpti
 	e.lastInstall = opts
 	return e.release, e.err
 }
+
 func (e *recordingEngine) Upgrade(_ context.Context, opts helmengine.UpgradeOptions) (*helmengine.Release, error) {
 	e.upgradeCalls++
 	e.lastUpgrade = opts
-	return e.release, e.upgradeErr
+	return e.release, e.err
 }
-func (*recordingEngine) Rollback(context.Context, helmengine.RollbackOptions) (*helmengine.Release, error) {
+func (e *recordingEngine) Rollback(_ context.Context, opts helmengine.RollbackOptions) (*helmengine.Release, error) {
+	e.rollbackCalls++
+	e.lastRollback = opts
+	return e.release, e.err
+}
+func (*recordingEngine) Status(context.Context, helmengine.StatusOptions) (*helmengine.Release, error) {
 	return nil, errors.New("not implemented")
-}
-func (e *recordingEngine) Status(context.Context, helmengine.StatusOptions) (*helmengine.Release, error) {
-	if e.status == nil {
-		return nil, helmengine.ErrNotFound
-	}
-	return e.status, nil
 }
 func (*recordingEngine) History(context.Context, helmengine.HistoryOptions) ([]helmengine.ReleaseHistoryEntry, error) {
 	return nil, errors.New("not implemented")
@@ -378,49 +373,3 @@ func (s *memoryStore) LastSequence(context.Context) (int64, error) {
 	return last, nil
 }
 func (*memoryStore) Close() error { return nil }
-
-func TestAgent_UpgradeReleaseNotFound(t *testing.T) {
-	engine := &recordingEngine{
-		upgradeErr: helmengine.ErrNotFound,
-	}
-	agent := newTestAgent(t, engine, newMemoryStore(), nil)
-	stream := newTestStream()
-	valuesJSON := []byte(`{"message":"hello"}`)
-
-	require.NoError(t, agent.handleCommand(t.Context(), stream, upgradeCommand("cmd-notfound", valuesJSON, sha256Hex(valuesJSON))))
-	require.Len(t, stream.sent, 2)
-	result := stream.sent[1].GetCommandResult()
-	require.NotNil(t, result)
-	assert.Equal(t, "failed", result.GetStatus())
-	assert.Equal(t, "release_not_found", result.GetError().GetCode())
-	assert.False(t, result.GetError().GetRetryable())
-}
-
-func TestAgent_UpgradeCachedResultRedelivery(t *testing.T) {
-	store := newMemoryStore()
-	agent := newTestAgent(t, new(recordingEngine), store, nil)
-	stream := newTestStream()
-	valuesJSON := []byte(`{"message":"hello"}`)
-	command := upgradeCommand("cmd-cached-upgrade", valuesJSON, sha256Hex(valuesJSON))
-	payload, err := protojson.Marshal(command)
-	require.NoError(t, err)
-	resultJSON := `{"operation_id":"operation-upgrade","command_id":"cmd-cached-upgrade","definition_id":"definition-1","status":"succeeded","upgrade":{"from":{"helm_revision":1,"bundle_digest":"sha256:bundle","chart_digest":"sha256:chart","effective_values_digest":"","manifest_digest":"","provenance":2},"attempted":{"helm_revision":2,"bundle_digest":"sha256:bundle","chart_digest":"sha256:chart","effective_values_digest":"","manifest_digest":"","provenance":1},"active":{"helm_revision":2,"bundle_digest":"sha256:bundle","chart_digest":"sha256:chart","effective_values_digest":"","manifest_digest":"","provenance":1}},"inventory_sync_hint":true,"resource_summary":{"manifest_digest":"sha256:manifest"}}`
-	require.NoError(t, store.Save(t.Context(), &localstore.CommandEntry{
-		CommandID:     command.GetCommandId(),
-		OutboxID:      command.GetOutboxId(),
-		OperationID:   command.GetOperationId(),
-		OperationType: command.GetOperationType(),
-		Sequence:      command.GetSequence(),
-		Payload:       payload,
-		Status:        localstore.StatusSucceeded,
-		ResultJSON:    resultJSON,
-	}))
-
-	require.NoError(t, agent.handleCommand(t.Context(), stream, command))
-	require.Len(t, stream.sent, 1)
-	cmdResult := stream.sent[0].GetCommandResult()
-	require.NotNil(t, cmdResult)
-	assert.Equal(t, "succeeded", cmdResult.GetStatus())
-	assert.Equal(t, "cmd-cached-upgrade", cmdResult.GetCommandId())
-	assert.Equal(t, uint64(2), cmdResult.GetUpgrade().GetActive().GetHelmRevision())
-}

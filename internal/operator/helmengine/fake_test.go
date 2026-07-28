@@ -2,6 +2,7 @@ package helmengine
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -186,6 +187,105 @@ func TestFake_Rollback(t *testing.T) {
 	rel, err := eng.Rollback(ctx, RollbackOptions{Namespace: "default", ReleaseName: "my-release", TargetRevision: 1})
 	require.NoError(t, err)
 	assert.Equal(t, 3, rel.Revision) // rollback creates a new revision
+}
+
+// AC-063-01: valid historical revision → new revision and operation recorded.
+func TestFake_RollbackCreatesNewOperation(t *testing.T) {
+	eng := NewFake()
+	ctx := context.Background()
+
+	_, err := eng.Install(ctx, InstallOptions{Namespace: "ns1", ReleaseName: "rel-a", ChartPath: "nginx"})
+	require.NoError(t, err)
+
+	_, err = eng.Upgrade(ctx, UpgradeOptions{Namespace: "ns1", ReleaseName: "rel-a", ChartPath: "nginx"})
+	require.NoError(t, err)
+
+	// Rollback to revision 1.
+	rel, err := eng.Rollback(ctx, RollbackOptions{Namespace: "ns1", ReleaseName: "rel-a", TargetRevision: 1})
+	require.NoError(t, err)
+	assert.Equal(t, 3, rel.Revision, "rollback creates a new revision")
+	assert.Equal(t, "deployed", rel.Status)
+
+	// Verify history contains the rollback entry.
+	history, err := eng.History(ctx, HistoryOptions{Namespace: "ns1", ReleaseName: "rel-a"})
+	require.NoError(t, err)
+	assert.Len(t, history, 3)
+	assert.Contains(t, history[2].Description, "Rollback")
+}
+
+// AC-063-02: release not found → ErrNotFound (no Helm release exists at all).
+func TestFake_RollbackReleaseNotFound(t *testing.T) {
+	eng := NewFake()
+	ctx := context.Background()
+
+	_, err := eng.Rollback(ctx, RollbackOptions{Namespace: "ns1", ReleaseName: "nonexistent", TargetRevision: 1})
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+// AC-063-02: target revision not found in history → ErrRevisionNotFound.
+func TestFake_RollbackTargetRevisionNotFound(t *testing.T) {
+	eng := NewFake()
+	ctx := context.Background()
+
+	_, err := eng.Install(ctx, InstallOptions{Namespace: "ns1", ReleaseName: "rel-a", ChartPath: "nginx"})
+	require.NoError(t, err)
+
+	// Revision 2 does not exist in history (only revision 1).
+	_, err = eng.Rollback(ctx, RollbackOptions{Namespace: "ns1", ReleaseName: "rel-a", TargetRevision: 2})
+	require.ErrorIs(t, err, ErrRevisionNotFound)
+
+	// Verify release state is unchanged.
+	rel, err := eng.Status(ctx, StatusOptions{Namespace: "ns1", ReleaseName: "rel-a"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, rel.Revision)
+}
+
+// AC-063-02: historical artifact unavailable → ErrArtifactUnavailable.
+func TestFake_RollbackHistoricalArtifactUnavailable(t *testing.T) {
+	eng := NewFake()
+	ctx := context.Background()
+
+	_, err := eng.Install(ctx, InstallOptions{Namespace: "ns1", ReleaseName: "rel-a", ChartPath: "nginx"})
+	require.NoError(t, err)
+	_, err = eng.Upgrade(ctx, UpgradeOptions{Namespace: "ns1", ReleaseName: "rel-a", ChartPath: "nginx"})
+	require.NoError(t, err)
+
+	// Mark revision 1's artifact as unavailable.
+	eng.ArtifactUnavailableRevisions[1] = true
+
+	_, err = eng.Rollback(ctx, RollbackOptions{Namespace: "ns1", ReleaseName: "rel-a", TargetRevision: 1})
+	require.ErrorIs(t, err, ErrArtifactUnavailable)
+
+	// Verify release state is unchanged.
+	rel, err := eng.Status(ctx, StatusOptions{Namespace: "ns1", ReleaseName: "rel-a"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, rel.Revision) // still at revision 2
+}
+
+// AC-063-03: rollback failure → original release state preserved.
+func TestFake_RollbackFailurePreservesRelease(t *testing.T) {
+	eng := NewFake()
+	ctx := context.Background()
+
+	_, err := eng.Install(ctx, InstallOptions{Namespace: "ns1", ReleaseName: "rel-a", ChartPath: "nginx"})
+	require.NoError(t, err)
+
+	// Capture pre-rollback state.
+	before, err := eng.Status(ctx, StatusOptions{Namespace: "ns1", ReleaseName: "rel-a"})
+	require.NoError(t, err)
+	beforeRevision := before.Revision
+
+	// Inject failure.
+	eng.RollbackError = errors.New("helm rollback failed")
+
+	_, err = eng.Rollback(ctx, RollbackOptions{Namespace: "ns1", ReleaseName: "rel-a", TargetRevision: 1})
+	require.Error(t, err)
+
+	// Verify release state is unchanged.
+	after, err := eng.Status(ctx, StatusOptions{Namespace: "ns1", ReleaseName: "rel-a"})
+	require.NoError(t, err)
+	assert.Equal(t, beforeRevision, after.Revision, "original release revision preserved after failed rollback")
+	assert.Equal(t, "deployed", after.Status)
 }
 
 func TestFake_Status(t *testing.T) {

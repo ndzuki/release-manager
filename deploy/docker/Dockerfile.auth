@@ -1,0 +1,14 @@
+FROM golang:1.26.4 AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/release-auth ./cmd/auth
+
+FROM gcr.io/distroless/static-debian13:nonroot
+USER nonroot:nonroot
+WORKDIR /data
+COPY --from=builder /out/release-auth /release-auth
+COPY configs/auth.dev.yaml /configs/auth.dev.yaml
+EXPOSE 8085
+ENTRYPOINT ["/release-auth", "--config", "/configs/auth.dev.yaml"]

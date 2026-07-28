@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,6 +13,9 @@ import (
 type valuesStore struct{ db *sql.DB }
 
 func (s *valuesStore) Create(ctx context.Context, vr *store.ValuesRevision) error {
+	if vr.StateVersion == 0 {
+		vr.StateVersion = 1
+	}
 	if vr.CreatedAt.IsZero() {
 		vr.CreatedAt = time.Now().UTC()
 	}
@@ -21,48 +25,40 @@ func (s *valuesStore) Create(ctx context.Context, vr *store.ValuesRevision) erro
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO values_revisions (
-			id, release_definition_id, revision, status, "values",
-			digest, parent_revision_id, secret_refs,
+			id, release_definition_id, revision, version, state_version, status, "values",
+			digest, parent_revision_id, secret_refs, created_by, created_by_user_id,
+			approved_by, approved_at, rejected_by, rejection_reason, submitted_at, decided_at,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', NULL, '', '', ?, ?, ?, ?)
 	`,
-		vr.ID, vr.ReleaseDefinitionID, vr.Revision, string(vr.Status), vr.Values,
-		vr.Digest, vr.ParentRevisionID, vr.SecretRefs,
-		vr.CreatedAt.UTC().Format(time.RFC3339), vr.UpdatedAt.UTC().Format(time.RFC3339),
+		vr.ID, vr.ReleaseDefinitionID, vr.Revision, vr.StateVersion, vr.StateVersion, string(vr.Status), vr.Values,
+		vr.Digest, vr.ParentRevisionID, vr.SecretRefs, vr.CreatedByUserID, vr.CreatedByUserID,
+		formatOptionalTime(vr.SubmittedAt), formatOptionalTime(vr.DecidedAt),
+		vr.CreatedAt.UTC().Format(time.RFC3339Nano), vr.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
+		if isUniqueConstraint(err) {
+			return store.ErrDuplicateKey
+		}
 		return fmt.Errorf("insert values revision: %w", err)
 	}
 	return nil
 }
 
 func (s *valuesStore) Get(ctx context.Context, id string) (*store.ValuesRevision, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT id, release_definition_id, revision, status, "values",
-			digest, parent_revision_id, secret_refs,
-			created_at, updated_at
-		FROM values_revisions WHERE id = ?
-	`, id)
+	row := s.db.QueryRowContext(ctx, valuesSelect+` WHERE id = ?`, id)
 	return scanValues(row)
 }
 
 func (s *valuesStore) GetByDigest(ctx context.Context, definitionID, digest string) (*store.ValuesRevision, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT id, release_definition_id, revision, status, "values",
-			digest, parent_revision_id, secret_refs,
-			created_at, updated_at
-		FROM values_revisions
+	row := s.db.QueryRowContext(ctx, valuesSelect+`
 		WHERE release_definition_id = ? AND digest = ?
 	`, definitionID, digest)
 	return scanValues(row)
 }
 
 func (s *valuesStore) GetLatestApproved(ctx context.Context, definitionID string) (*store.ValuesRevision, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT id, release_definition_id, revision, status, "values",
-			digest, parent_revision_id, secret_refs,
-			created_at, updated_at
-		FROM values_revisions
+	row := s.db.QueryRowContext(ctx, valuesSelect+`
 		WHERE release_definition_id = ? AND status = 'approved'
 		ORDER BY revision DESC
 		LIMIT 1
@@ -75,11 +71,7 @@ func (s *valuesStore) GetLatestApproved(ctx context.Context, definitionID string
 }
 
 func (s *valuesStore) List(ctx context.Context, definitionID string) ([]*store.ValuesRevision, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, release_definition_id, revision, status, "values",
-			digest, parent_revision_id, secret_refs,
-			created_at, updated_at
-		FROM values_revisions
+	rows, err := s.db.QueryContext(ctx, valuesSelect+`
 		WHERE release_definition_id = ?
 		ORDER BY revision DESC
 	`, definitionID)
@@ -115,73 +107,84 @@ func (s *valuesStore) GetNextRevisionNumber(ctx context.Context, definitionID st
 	return 1, nil
 }
 
-// Update persists status changes with optimistic locking on parent_revision_id.
-func (s *valuesStore) Update(ctx context.Context, vr *store.ValuesRevision, expectedParentRev string) error {
-	vr.UpdatedAt = time.Now().UTC()
+const valuesSelect = `
+	SELECT id, release_definition_id, revision, state_version, status, "values",
+		digest, parent_revision_id, secret_refs, created_by_user_id,
+		submitted_at, decided_at, created_at, updated_at
+	FROM values_revisions`
 
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE values_revisions
-		SET status = ?,
-		    digest = ?,
-		    secret_refs = ?,
-		    updated_at = ?
-		WHERE id = ? AND parent_revision_id = ?
-	`, string(vr.Status), vr.Digest, vr.SecretRefs,
-		vr.UpdatedAt.UTC().Format(time.RFC3339),
-		vr.ID, expectedParentRev)
-	if err != nil {
-		return fmt.Errorf("update values revision: %w", err)
-	}
-
-	n, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("update values revision rows: %w", err)
-	}
-	if n == 0 {
-		return store.ErrOptimisticLock
-	}
-	return nil
+func getValues(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, id string) (*store.ValuesRevision, error) {
+	return scanValues(q.QueryRowContext(ctx, valuesSelect+` WHERE id = ?`, id))
 }
 
 func scanValues(row interface{ Scan(...interface{}) error }) (*store.ValuesRevision, error) {
 	var (
-		id, defID, status        string
-		revision                 int
-		values                   []byte
-		digest, parentRevisionID string
-		secretRefs               []byte
-		createdAt, updatedAt     string
+		vr                     store.ValuesRevision
+		status                 string
+		submittedAt, decidedAt sql.NullString
+		createdAt, updatedAt   string
 	)
 
-	err := row.Scan(&id, &defID, &revision, &status, &values,
-		&digest, &parentRevisionID, &secretRefs,
-		&createdAt, &updatedAt)
+	err := row.Scan(
+		&vr.ID, &vr.ReleaseDefinitionID, &vr.Revision, &vr.StateVersion, &status, &vr.Values,
+		&vr.Digest, &vr.ParentRevisionID, &vr.SecretRefs, &vr.CreatedByUserID,
+		&submittedAt, &decidedAt, &createdAt, &updatedAt,
+	)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
 		return nil, fmt.Errorf("scan values: %w", err)
 	}
 
-	ct, err := time.Parse(time.RFC3339, createdAt)
-	if err != nil {
-		return nil, fmt.Errorf("parse created_at: %w", err)
+	vr.Status = store.ValuesStatus(status)
+	var parseErr error
+	if submittedAt.Valid {
+		vr.SubmittedAt, parseErr = parseOptionalTime(submittedAt.String)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse submitted_at: %w", parseErr)
+		}
 	}
-	ut, err := time.Parse(time.RFC3339, updatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("parse updated_at: %w", err)
+	if decidedAt.Valid {
+		vr.DecidedAt, parseErr = parseOptionalTime(decidedAt.String)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse decided_at: %w", parseErr)
+		}
 	}
+	vr.CreatedAt, parseErr = parseSQLiteTime(createdAt)
+	if parseErr != nil {
+		return nil, fmt.Errorf("parse created_at: %w", parseErr)
+	}
+	vr.UpdatedAt, parseErr = parseSQLiteTime(updatedAt)
+	if parseErr != nil {
+		return nil, fmt.Errorf("parse updated_at: %w", parseErr)
+	}
+	return &vr, nil
+}
 
-	return &store.ValuesRevision{
-		ID:                  id,
-		ReleaseDefinitionID: defID,
-		Revision:            revision,
-		Status:              store.ValuesStatus(status),
-		Values:              values,
-		Digest:              digest,
-		ParentRevisionID:    parentRevisionID,
-		SecretRefs:          secretRefs,
-		CreatedAt:           ct,
-		UpdatedAt:           ut,
-	}, nil
+func parseOptionalTime(value string) (*time.Time, error) {
+	parsed, err := parseSQLiteTime(value)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
+}
+
+func parseSQLiteTime(value string) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unsupported time value %q", value)
+}
+
+func formatOptionalTime(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+	return value.UTC().Format(time.RFC3339Nano)
 }

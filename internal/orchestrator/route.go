@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"connectrpc.com/connect"
@@ -70,6 +71,10 @@ func (s *Service) ConfigureClusterRoute(
 	}
 
 	if err := DetectConflictingRoutes(existing, newRoute); err != nil {
+		var conflict *RouteConflictError
+		if errors.As(err, &conflict) {
+			return nil, newRouteValidationError(connect.CodeAlreadyExists, "routing_conflict", "sourcePrefix", err.Error(), conflict.RuleID)
+		}
 		return nil, connect.NewError(connect.CodeAlreadyExists, err)
 	}
 

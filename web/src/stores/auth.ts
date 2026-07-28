@@ -1,160 +1,176 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { computed, shallowRef } from 'vue';
+import { Code, ConnectError } from '@connectrpc/connect';
+import { authClient, setAuthErrorHandler } from '@/connect/client';
+import type { Organization, SessionUser } from '@/gen/auth/v1/auth_pb';
 
-// ---------------------------------------------------------------------------
-// Types — mirror auth.v1.AuthService proto messages.
-// Replace with generated types when buf TypeScript codegen is wired.
-// ---------------------------------------------------------------------------
+export type AuthStatus = 'idle' | 'initializing' | 'anonymous' | 'authenticated' | 'expired';
 
-interface LoginRequest {
-  username: string;
-  password: string;
+interface SessionPayload {
+  user?: SessionUser;
+  organizations: Organization[];
+  expiresAt: bigint;
 }
 
-interface LoginResponse {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: string;
-  tokenType: string;
-}
+let forbiddenNavigator: ((message: string) => Promise<void>) | undefined;
 
-interface RefreshTokenRequest {
-  refreshToken: string;
-}
-
-interface RefreshTokenResponse {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: string;
-  tokenType: string;
-}
-
-// ---------------------------------------------------------------------------
-// Connect RPC helper
-//
-// Makes a unary Connect RPC call against the Vite-dev-proxied backend.
-// Connect unary POST path: /<fully-qualified-service>/<Method>
-// Body: JSON (or binary when useBinaryFormat is set in transport).
-// ---------------------------------------------------------------------------
-
-async function connectRpc<I, O>(
-  servicePath: string,
-  method: string,
-  input: I,
-): Promise<O> {
-  const token = localStorage.getItem('access_token');
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'Connect-Protocol-Version': '1',
-  };
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  const url = `/${servicePath}/${method}`;
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(input),
-  });
-
-  if (!resp.ok) {
-    // Try to parse a Connect error from the response body.
-    const contentType = resp.headers.get('Content-Type') ?? '';
-    if (contentType.includes('application/json')) {
-      const err = await resp.json();
-      throw new Error(err.message ?? err.code ?? `RPC error ${resp.status}`);
-    }
-    throw new Error(`RPC error ${resp.status}: ${resp.statusText}`);
-  }
-
-  return resp.json();
-}
-
-// ---------------------------------------------------------------------------
-// Auth Store
-// ---------------------------------------------------------------------------
-
-interface AuthUser {
-  userId: string;
-  roles: string[];
-  orgId: string;
+export function setForbiddenNavigator(navigator: ((message: string) => Promise<void>) | undefined): void {
+  forbiddenNavigator = navigator;
 }
 
 export const useAuthStore = defineStore('auth', () => {
-  const user = ref<AuthUser | null>(null);
-  const returnUrl = ref<string | null>(null);
+  const status = shallowRef<AuthStatus>('idle');
+  const initialized = shallowRef<boolean | null>(null);
+  const user = shallowRef<SessionUser | null>(null);
+  const organizations = shallowRef<Organization[]>([]);
+  const expiresAt = shallowRef<number | null>(null);
+  const returnUrl = shallowRef<string | null>(null);
+  const forbiddenMessage = shallowRef<string | null>(null);
 
-  const isAuthenticated = computed(() => user.value !== null);
+  const isAuthenticated = computed(() => status.value === 'authenticated' && user.value !== null);
+  const activeOrganization = computed(
+    () => organizations.value.find((organization) => organization.id === user.value?.activeOrgId) ?? null,
+  );
+  const canWrite = computed(() => !user.value?.roles.some((role) => role.toLowerCase() === 'viewer'));
 
-  function persistTokens(access: string, refresh: string) {
-    localStorage.setItem('access_token', access);
-    localStorage.setItem('refresh_token', refresh);
+  function applySession(payload: SessionPayload): void {
+    if (!payload.user) {
+      clearSession('anonymous');
+      return;
+    }
+    user.value = payload.user;
+    organizations.value = [...payload.organizations];
+    expiresAt.value = Number(payload.expiresAt);
+    status.value = 'authenticated';
+    forbiddenMessage.value = null;
   }
 
-  function clearTokens() {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
+  function clearSession(nextStatus: AuthStatus = 'anonymous'): void {
+    user.value = null;
+    organizations.value = [];
+    expiresAt.value = null;
+    status.value = nextStatus;
+  }
+
+  async function initialize(): Promise<void> {
+    if (status.value !== 'idle') return;
+    status.value = 'initializing';
+
+    const initStatus = await authClient.getInitStatus({});
+    initialized.value = initStatus.initialized;
+    if (!initStatus.initialized) {
+      clearSession('anonymous');
+      return;
+    }
+
+    try {
+      const session = await authClient.validateToken({});
+      applySession(session);
+    } catch (error) {
+      if (ConnectError.from(error).code !== Code.Unauthenticated) throw error;
+      try {
+        const refreshed = await authClient.refreshToken({});
+        applySession(refreshed);
+      } catch (refreshError) {
+        if (ConnectError.from(refreshError).code !== Code.Unauthenticated) throw refreshError;
+        clearSession('anonymous');
+      }
+    }
+  }
+
+  async function initializeSystem(
+    username: string,
+    password: string,
+    organizationName: string,
+  ): Promise<void> {
+    const session = await authClient.initialize({ username, password, organizationName });
+    initialized.value = true;
+    applySession(session);
   }
 
   async function login(username: string, password: string): Promise<void> {
-    const resp = await connectRpc<LoginRequest, LoginResponse>(
-      'auth.v1.AuthService',
-      'Login',
-      { username, password },
-    );
-    persistTokens(resp.accessToken, resp.refreshToken);
-    user.value = { userId: username, roles: [], orgId: '' };
+    const session = await authClient.login({ username, password });
+    applySession(session);
   }
 
   async function logout(): Promise<void> {
     try {
-      const refresh = localStorage.getItem('refresh_token');
-      if (refresh) {
-        await connectRpc('auth.v1.AuthService', 'Logout', {
-          refreshToken: refresh,
-        });
-      }
+      await authClient.logout({});
     } finally {
-      clearTokens();
-      user.value = null;
+      clearSession('anonymous');
     }
   }
 
-  async function refreshAccessToken(): Promise<string | null> {
-    const refresh = localStorage.getItem('refresh_token');
-    if (!refresh) return null;
+  async function refreshSession(): Promise<boolean> {
     try {
-      const resp = await connectRpc<RefreshTokenRequest, RefreshTokenResponse>(
-        'auth.v1.AuthService',
-        'RefreshToken',
-        { refreshToken: refresh },
-      );
-      persistTokens(resp.accessToken, resp.refreshToken);
-      return resp.accessToken;
-    } catch {
-      clearTokens();
-      user.value = null;
-      return null;
+      const session = await authClient.refreshToken({});
+      applySession(session);
+      return true;
+    } catch (error) {
+      if (ConnectError.from(error).code !== Code.Unauthenticated) throw error;
+      clearSession('expired');
+      return false;
     }
   }
 
-  function setReturnUrl(url: string) {
+  async function switchOrganization(organizationId: string): Promise<void> {
+    const session = await authClient.switchOrganization({ orgId: organizationId });
+    applySession(session);
+  }
+
+  async function handleAuthError(error: ConnectError): Promise<void> {
+    if (error.code === Code.Unauthenticated) {
+      clearSession(status.value === 'authenticated' ? 'expired' : 'anonymous');
+      return;
+    }
+    if (error.code === Code.PermissionDenied) {
+      const message = error.rawMessage || 'You do not have permission to perform this action.';
+      forbiddenMessage.value = message;
+      await forbiddenNavigator?.(message);
+    }
+  }
+
+  async function handleConnectError(error: ConnectError): Promise<void> {
+    await handleAuthError(error);
+  }
+
+  function setReturnUrl(url: string): void {
     returnUrl.value = url;
   }
 
-  function clearReturnUrl() {
+  function clearReturnUrl(): void {
     returnUrl.value = null;
   }
 
+  function consumeForbiddenMessage(): string | null {
+    const message = forbiddenMessage.value;
+    forbiddenMessage.value = null;
+    return message;
+  }
+
+  setAuthErrorHandler(handleAuthError);
+
   return {
+    status,
+    initialized,
     user,
+    organizations,
+    expiresAt,
     returnUrl,
+    forbiddenMessage,
     isAuthenticated,
+    activeOrganization,
+    canWrite,
+    initialize,
+    initializeSystem,
     login,
     logout,
-    refreshAccessToken,
+    refreshSession,
+    switchOrganization,
+    clearSession,
     setReturnUrl,
     clearReturnUrl,
+    consumeForbiddenMessage,
+    handleConnectError,
   };
 });

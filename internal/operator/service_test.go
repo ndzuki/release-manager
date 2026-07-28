@@ -270,6 +270,31 @@ func TestDecodeCommandPayload(t *testing.T) {
 	assert.JSONEq(t, `{"message":"hello"}`, string(command.GetValues()))
 }
 
+func TestDecodeCommandPayload_RollbackFields(t *testing.T) {
+	payload := []byte(`{
+		"definition_id":"def-001",
+		"namespace":"apps",
+		"release_name":"example",
+		"timeout_seconds":120,
+		"values_revision_id":"vr-001",
+		"expected_current_revision":3,
+		"target_revision":1,
+		"atomic":false,
+		"values_patch":null
+	}`)
+	command := new(operatorv1.Command)
+
+	require.NoError(t, operator.DecodeCommandPayload(payload, command))
+	assert.Equal(t, "def-001", command.GetDefinitionId())
+	assert.Equal(t, "apps", command.GetNamespace())
+	assert.Equal(t, "example", command.GetReleaseName())
+	assert.Equal(t, int64(120), command.GetTimeoutSeconds())
+	assert.Equal(t, "vr-001", command.GetValuesRevisionId())
+	assert.Equal(t, int64(3), command.GetExpectedCurrentRevision())
+	assert.Equal(t, int64(1), command.GetTargetRevision())
+	assert.False(t, command.GetAtomic())
+}
+
 func TestFinishOperation(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -297,7 +322,7 @@ func TestFinishOperation(t *testing.T) {
 				ChartName:   "example",
 				Status:      store.DefStatusActive,
 			}
-			require.NoError(t, st.Definitions().Create(ctx, def))
+			require.NoError(t, st.Definitions().Create(ctx, def, nil), nil)
 			op := &store.Operation{
 				ID:                  "operation-" + test.name,
 				OperationType:       store.OperationInstall,

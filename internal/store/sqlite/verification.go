@@ -15,10 +15,11 @@ type verificationStore struct {
 // Create inserts a new verification record.
 func (s *verificationStore) Create(ctx context.Context, rec *store.VerificationRecord) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO verification_records (id, artifact_digest, policy_version, status, issuer, subject, summary, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO verification_records (id, artifact_digest, policy_version, status, issuer, subject, summary, root_id, key_id, revocation_epoch, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ID, rec.ArtifactDigest, rec.PolicyVersion, string(rec.Status),
-		rec.Issuer, rec.Subject, rec.Summary, rec.CreatedAt.Format(time.RFC3339),
+		rec.Issuer, rec.Subject, rec.Summary, rec.RootID, rec.KeyID, rec.RevocationEpoch,
+		rec.CreatedAt.Format(time.RFC3339),
 	)
 	return err
 }
@@ -26,7 +27,7 @@ func (s *verificationStore) Create(ctx context.Context, rec *store.VerificationR
 // GetByDigestAndPolicy retrieves the latest verification record for a given digest and policy version.
 func (s *verificationStore) GetByDigestAndPolicy(ctx context.Context, artifactDigest, policyVersion string) (*store.VerificationRecord, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, artifact_digest, policy_version, status, issuer, subject, summary, created_at
+		`SELECT id, artifact_digest, policy_version, status, issuer, subject, summary, root_id, key_id, revocation_epoch, created_at
 		 FROM verification_records
 		 WHERE artifact_digest = ? AND policy_version = ?
 		 ORDER BY created_at DESC
@@ -35,7 +36,7 @@ func (s *verificationStore) GetByDigestAndPolicy(ctx context.Context, artifactDi
 	)
 	rec := &store.VerificationRecord{}
 	var createdAt string
-	err := row.Scan(&rec.ID, &rec.ArtifactDigest, &rec.PolicyVersion, &rec.Status, &rec.Issuer, &rec.Subject, &rec.Summary, &createdAt)
+	err := row.Scan(&rec.ID, &rec.ArtifactDigest, &rec.PolicyVersion, &rec.Status, &rec.Issuer, &rec.Subject, &rec.Summary, &rec.RootID, &rec.KeyID, &rec.RevocationEpoch, &createdAt)
 	if err == sql.ErrNoRows {
 		return nil, store.ErrNotFound
 	}

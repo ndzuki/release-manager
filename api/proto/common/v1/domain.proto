@@ -51,8 +51,14 @@ message ReleaseDefinition {
   string name = 2;
   string customer_id = 3;
   string cluster_id = 4;
-  google.protobuf.Timestamp created_at = 5;
-  google.protobuf.Timestamp updated_at = 6;
+  string namespace = 5;
+  string release_name = 6;
+  string chart_name = 7;
+  string status = 8;
+  int64 version = 9;
+  string created_by = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
 }
 
 // ValuesStatus is the approval state of a values revision.
@@ -61,6 +67,8 @@ enum ValuesStatus {
   VALUES_STATUS_DRAFT = 1;
   VALUES_STATUS_APPROVED = 2;
   VALUES_STATUS_REJECTED = 3;
+  VALUES_STATUS_PENDING_APPROVAL = 4;
+  VALUES_STATUS_SUPERSEDED = 5;
 }
 
 // ValuesRevision stores the desired configuration for a release target.
@@ -74,6 +82,10 @@ message ValuesRevision {
   string digest = 7;
   string parent_revision_id = 8;
   repeated SecretRef secret_refs = 9;
+  int64 state_version = 10;
+  string created_by_user_id = 11;
+  google.protobuf.Timestamp submitted_at = 12;
+  google.protobuf.Timestamp decided_at = 13;
 }
 
 // SecretRef holds a reference to a secret, never the secret value itself.
@@ -115,6 +127,9 @@ message Cluster {
   string kubeconfig_ref = 4;
   ClusterStatus status = 6;
   google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 7;
+  int64 version = 8;
+  int32 route_count = 9;
 }
 
 // ActorContext identifies the initiating principal for audit and authorization.

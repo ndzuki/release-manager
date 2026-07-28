@@ -66,7 +66,7 @@ func (s *stubStore) GetByDigestAndPolicy(_ context.Context, artifactDigest, poli
 
 // AC-012-01: Digest mismatch → rejected.
 func TestVerify_DigestMismatch(t *testing.T) {
-	v := NewStubVerifier(newStubStore(), logger())
+	v := NewStubVerifier(newStubStore(), nil, logger())
 
 	in := Input{
 		Digest:       "sha256:xyz789",
@@ -82,7 +82,7 @@ func TestVerify_DigestMismatch(t *testing.T) {
 
 // AC-012-02: Unsigned → signature_missing.
 func TestVerify_SignatureMissing(t *testing.T) {
-	v := NewStubVerifier(newStubStore(), logger())
+	v := NewStubVerifier(newStubStore(), nil, logger())
 
 	in := Input{
 		Digest:       "sha256:abc123",
@@ -98,7 +98,7 @@ func TestVerify_SignatureMissing(t *testing.T) {
 
 // AC-012-02b: Empty signature → signature_missing.
 func TestVerify_EmptySignature(t *testing.T) {
-	v := NewStubVerifier(newStubStore(), logger())
+	v := NewStubVerifier(newStubStore(), nil, logger())
 
 	in := Input{
 		Digest: "sha256:abc123",
@@ -117,7 +117,7 @@ func TestVerify_EmptySignature(t *testing.T) {
 // AC-012-03: Idempotent reuse by policy_version.
 func TestVerify_IdempotentReuse(t *testing.T) {
 	st := newStubStore()
-	v := NewStubVerifier(st, logger())
+	v := NewStubVerifier(st, nil, logger())
 
 	in := Input{
 		Digest:       "sha256:abc123",
@@ -150,7 +150,7 @@ func TestVerify_IdempotentReuse(t *testing.T) {
 
 // Trusted issuer → trusted.
 func TestVerify_TrustedIssuer(t *testing.T) {
-	v := NewStubVerifier(newStubStore(), logger())
+	v := NewStubVerifier(newStubStore(), nil, logger())
 
 	in := Input{
 		Digest:       "sha256:abc123",
@@ -166,7 +166,7 @@ func TestVerify_TrustedIssuer(t *testing.T) {
 
 // Untrusted issuer → rejected.
 func TestVerify_UntrustedIssuer(t *testing.T) {
-	v := NewStubVerifier(newStubStore(), logger())
+	v := NewStubVerifier(newStubStore(), nil, logger())
 
 	in := Input{
 		Digest:       "sha256:abc123",
@@ -182,7 +182,7 @@ func TestVerify_UntrustedIssuer(t *testing.T) {
 
 // No trusted issuers configured → reject all.
 func TestVerify_EmptyTrustedIssuers(t *testing.T) {
-	v := NewStubVerifier(newStubStore(), logger())
+	v := NewStubVerifier(newStubStore(), nil, logger())
 
 	in := Input{
 		Digest:       "sha256:abc123",
@@ -197,7 +197,7 @@ func TestVerify_EmptyTrustedIssuers(t *testing.T) {
 
 // Digest match + trusted issuer → trusted.
 func TestVerify_DigestMatch(t *testing.T) {
-	v := NewStubVerifier(newStubStore(), logger())
+	v := NewStubVerifier(newStubStore(), nil, logger())
 
 	// Digest in signature_ref matches Input.Digest.
 	in := Input{
@@ -213,7 +213,7 @@ func TestVerify_DigestMatch(t *testing.T) {
 
 // Trusted issuer in multi-issuer list.
 func TestVerify_MultiIssuerList(t *testing.T) {
-	v := NewStubVerifier(newStubStore(), logger())
+	v := NewStubVerifier(newStubStore(), nil, logger())
 
 	policy := store.TrustPolicy{
 		PolicyVersion: "v1",

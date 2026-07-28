@@ -42,12 +42,130 @@ message PublishReleaseResponse {
   string status = 2;
 }
 
-// ReleaseOperation represents a single publish operation.
-message ReleaseOperation {
-  string id = 1;
+// RollbackReleaseRequest rolls back a release to a specific Helm revision.
+message RollbackReleaseRequest {
+  string release_definition_id = 1;
+  int32 target_revision = 2;             // revision to rollback TO
+  int32 expected_current_revision = 3;   // current revision (optimistic lock)
+  string reason = 4;                     // required
+  common.v1.ActorContext actor = 5;
+  string idempotency_key = 6;            // optional: for idempotent retry
+}
+
+// RollbackReleaseResponse returns the created rollback operation.
+message RollbackReleaseResponse {
+  string operation_id = 1;
+  int32 from_revision = 2;
+  int32 to_revision = 3;
+  string state = 4;
+}
+
+// OperationStatus is the authoritative lifecycle state of a release operation.
+enum OperationStatus {
+  OPERATION_STATUS_UNSPECIFIED = 0;
+  OPERATION_STATUS_PENDING = 1;
+  OPERATION_STATUS_PREFLIGHT = 2;
+  OPERATION_STATUS_QUEUED = 3;
+  OPERATION_STATUS_RUNNING = 4;
+  OPERATION_STATUS_CANCELLING = 5;
+  OPERATION_STATUS_SUCCEEDED = 6;
+  OPERATION_STATUS_FAILED = 7;
+  OPERATION_STATUS_CANCELLED = 8;
+  OPERATION_STATUS_TIMEOUT = 9;
+}
+
+// Operation exposes the safe, authoritative release-operation fields.
+message Operation {
+  string operation_id = 1;
   string release_definition_id = 2;
-  string status = 3;
-  common.v1.ReleaseDigest digest = 4;
+  string operation_type = 3;
+  OperationStatus state = 4;
+  int64 state_version = 5;
+  string bundle_id = 6;
+  string values_revision_id = 7;
+  int32 expected_revision = 8;
+  int32 target_revision = 9;
+  common.v1.ActorContext actor = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+  google.protobuf.Timestamp terminal_at = 13;
+  google.protobuf.Timestamp deadline = 14;
+  string last_error = 15;
+}
+
+message GetOperationRequest {
+  string operation_id = 1;
+}
+
+message GetOperationResponse {
+  Operation operation = 1;
+}
+
+message CancelOperationRequest {
+  string operation_id = 1;
+  string reason = 2;
+  int64 expected_state_version = 3;
+  string idempotency_key = 4;
+}
+
+message CancelOperationResponse {
+  Operation operation = 1;
+  string request_id = 2;
+}
+
+// ── Release Definition Management ────────────────────────────────
+
+message CreateReleaseDefinitionRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+  string namespace = 3;
+  string release_name = 4;
+  string chart_name = 5;
+  bool enabled = 6;
+  common.v1.ActorContext actor = 7;
+}
+
+message CreateReleaseDefinitionResponse {
+  common.v1.ReleaseDefinition definition = 1;
+}
+
+message GetReleaseDefinitionRequest {
+  string definition_id = 1;
+}
+
+message GetReleaseDefinitionResponse {
+  common.v1.ReleaseDefinition definition = 1;
+}
+
+message ListReleaseDefinitionsRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+  bool include_disabled = 3;
+}
+
+message ListReleaseDefinitionsResponse {
+  repeated common.v1.ReleaseDefinition definitions = 1;
+}
+
+message UpdateReleaseDefinitionRequest {
+  string definition_id = 1;
+  string namespace = 2;
+  string release_name = 3;
+  string chart_name = 4;
+  int64 expected_version = 5;
+}
+
+message UpdateReleaseDefinitionResponse {
+  common.v1.ReleaseDefinition definition = 1;
+}
+
+message DisableReleaseDefinitionRequest {
+  string definition_id = 1;
+  int64 expected_version = 2;
+}
+
+message DisableReleaseDefinitionResponse {
+  common.v1.ReleaseDefinition definition = 1;
 }
 
 // ── Customer Management ────────────────────────────────────────────
@@ -107,6 +225,19 @@ message CreateClusterRequest {
 
 message CreateClusterResponse {
   common.v1.Cluster cluster = 1;
+}
+
+message UpdateClusterRequest {
+  string cluster_id = 1;
+  string name = 2;
+  bool enabled = 3;
+  int64 version = 4;
+  repeated ClusterRouteInput routes = 5;
+}
+
+message UpdateClusterResponse {
+  common.v1.Cluster cluster = 1;
+  repeated ClusterRoute routes = 2;
 }
 
 message GetClusterRequest {
@@ -170,6 +301,22 @@ message ClusterRoute {
   string target_prefix = 6;
 }
 
+message ClusterRouteInput {
+  string id = 1;
+  ArtifactType artifact_type = 2;
+  ArtifactMode mode = 3;
+  string source_prefix = 4;
+  string target_prefix = 5;
+  string provider = 6;
+}
+
+message RouteValidationDetail {
+  string error_code = 1;
+  string field = 2;
+  string description = 3;
+  string conflicting_rule_id = 4;
+}
+
 message ConfigureClusterRouteRequest {
   string id = 1;
   string cluster_id = 2;
@@ -197,10 +344,98 @@ message DeleteClusterRouteRequest {
 
 message DeleteClusterRouteResponse {}
 
+// SubmitValuesRevisionRequest moves a draft revision into pending approval.
+message SubmitValuesRevisionRequest {
+  string revision_id = 1;
+  int64 expected_state_version = 2;
+  string comment = 3;
+}
+
+// ApproveValuesRevisionRequest approves a pending values revision.
+message ApproveValuesRevisionRequest {
+  string revision_id = 1;
+  int64 expected_state_version = 2;
+  string comment = 3;
+}
+
+// RejectValuesRevisionRequest rejects a pending values revision.
+message RejectValuesRevisionRequest {
+  string revision_id = 1;
+  int64 expected_state_version = 2;
+  string reason = 3;
+}
+
+// ValuesRevisionDecisionResponse reports the committed state transition.
+message ValuesRevisionDecisionResponse {
+  common.v1.ValuesRevision revision = 1;
+  common.v1.ValuesStatus previous_state = 2;
+  common.v1.ValuesStatus new_state = 3;
+  google.protobuf.Timestamp decided_at = 4;
+  repeated string superseded_revision_ids = 5;
+}
+
+// ── Release Inventory Query and Manual Sync (REQ-054) ────────────
+
+enum ReleaseInventoryStatus {
+  RELEASE_INVENTORY_STATUS_UNSPECIFIED = 0;
+  RELEASE_INVENTORY_STATUS_ACTIVE = 1;
+  RELEASE_INVENTORY_STATUS_MISSING = 2;
+  RELEASE_INVENTORY_STATUS_OUT_OF_SYNC = 3;
+}
+
+message ReleaseSummary {
+  string namespace = 1;
+  string name = 2;
+  string chart = 3;
+  string chart_version = 4;
+  int32 revision = 5;
+  ReleaseInventoryStatus status = 6;
+  string values_digest = 7;
+  google.protobuf.Timestamp last_sync_at = 8;
+}
+
+message ListReleasesRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+  ReleaseInventoryStatus status_filter = 3;
+  string name_search = 4;
+  int32 page_size = 5;
+  string cursor = 6;
+}
+
+message ListReleasesResponse {
+  repeated ReleaseSummary releases = 1;
+  string next_cursor = 2;
+  int32 total_count = 3;
+}
+
+message TriggerInventorySyncRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+}
+
+message TriggerInventorySyncResponse {
+  string sync_request_id = 1;
+}
 service OrchestratorService {
   // Release pipeline
   rpc CreateOperation(CreateOperationRequest) returns (CreateOperationResponse);
   rpc PublishRelease(PublishReleaseRequest) returns (PublishReleaseResponse);
+  rpc RollbackRelease(RollbackReleaseRequest) returns (RollbackReleaseResponse);
+  rpc GetOperation(GetOperationRequest) returns (GetOperationResponse);
+  rpc CancelOperation(CancelOperationRequest) returns (CancelOperationResponse);
+
+  // Values revision approval workflow
+  rpc SubmitValuesRevision(SubmitValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
+  rpc ApproveValuesRevision(ApproveValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
+  rpc RejectValuesRevision(RejectValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
+
+  // Release definition management
+  rpc CreateReleaseDefinition(CreateReleaseDefinitionRequest) returns (CreateReleaseDefinitionResponse);
+  rpc GetReleaseDefinition(GetReleaseDefinitionRequest) returns (GetReleaseDefinitionResponse);
+  rpc ListReleaseDefinitions(ListReleaseDefinitionsRequest) returns (ListReleaseDefinitionsResponse);
+  rpc UpdateReleaseDefinition(UpdateReleaseDefinitionRequest) returns (UpdateReleaseDefinitionResponse);
+  rpc DisableReleaseDefinition(DisableReleaseDefinitionRequest) returns (DisableReleaseDefinitionResponse);
 
   // Customer management
   rpc CreateCustomer(CreateCustomerRequest) returns (CreateCustomerResponse);
@@ -211,6 +446,7 @@ service OrchestratorService {
 
   // Cluster management
   rpc CreateCluster(CreateClusterRequest) returns (CreateClusterResponse);
+  rpc UpdateCluster(UpdateClusterRequest) returns (UpdateClusterResponse);
   rpc GetCluster(GetClusterRequest) returns (GetClusterResponse);
   rpc ListClusters(ListClustersRequest) returns (ListClustersResponse);
   rpc DisableCluster(DisableClusterRequest) returns (DisableClusterResponse);
@@ -225,6 +461,10 @@ service OrchestratorService {
   rpc ConfigureClusterRoute(ConfigureClusterRouteRequest) returns (ConfigureClusterRouteResponse);
   rpc GetClusterRoutes(GetClusterRoutesRequest) returns (GetClusterRoutesResponse);
   rpc DeleteClusterRoute(DeleteClusterRouteRequest) returns (DeleteClusterRouteResponse);
+
+  // Release inventory query and manual sync (REQ-054)
+  rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
+  rpc TriggerInventorySync(TriggerInventorySyncRequest) returns (TriggerInventorySyncResponse);
 
   // Inventory sync (REQ-017)
   rpc SyncInventory(SyncInventoryRequest) returns (SyncInventoryResponse);

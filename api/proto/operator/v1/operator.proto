@@ -3,7 +3,6 @@ syntax = "proto3";
 package operator.v1;
 
 import "common/v1/domain.proto";
-import "operator/v1/upgrade_result.proto";
 
 option go_package = "github.com/ndzuki/release-manager/api/gen/operator/v1;operatorv1";
 
@@ -13,7 +12,7 @@ message EnrollRequest {
   string customer_id = 2;
   string cluster_id = 3;
   string operator_id = 4;
-  bytes csr_pem = 5;
+  bytes csr_pem = 5;           // PEM-encoded certificate signing request
   map<string, string> capabilities = 6;
 }
 
@@ -21,39 +20,50 @@ message EnrollRequest {
 message EnrollResponse {
   string session_id = 1;
   int64 ttl_seconds = 2;
-  bytes certificate_pem = 3;
+  bytes certificate_pem = 3;   // signed client certificate (mTLS)
 }
+
+// CommandStreamRequest carries operator status updates and acknowledgments.
 message CommandStreamRequest {
   oneof payload {
-    Hello hello = 1;
-    Ack ack = 2;
-    Heartbeat heartbeat = 3;
-    Result result = 4;
-    ResyncResponse resync_response = 5;
-    CommandResult command_result = 6;
+    Hello hello = 1;           // initial session hello (after Enroll)
+    Ack ack = 2;               // command acknowledgment
+    Heartbeat heartbeat = 3;   // periodic liveness
+    Result result = 4;         // command completion result
+    ResyncResponse resync_response = 5;  // response to orchestrator resync request
   }
 }
 
 // Hello is sent by the operator to establish a session after enrollment.
 message Hello {
-  string session_id = 1;
+  string session_id = 1;       // optional legacy enrollment session
   string operator_id = 2;
-  int64 last_seen_sequence = 3;
+  int64 last_seen_sequence = 3; // last sequence number the operator has seen
+  string instance_id = 4;
+  string version = 5;
+  map<string, string> capabilities = 6;
 }
 
+// SessionEstablished confirms a validated operator session.
+message SessionEstablished {
+  string session_id = 1;
+  int64 heartbeat_interval_seconds = 2;
+  int64 heartbeat_timeout_seconds = 3;
+  string active_config_version = 4;
+}
 // AckType classifies the acknowledgment level.
 enum AckType {
   ACK_TYPE_UNSPECIFIED = 0;
-  ACK_TYPE_RECEIVED = 1;
-  ACK_TYPE_PERSISTED = 2;
+  ACK_TYPE_RECEIVED = 1;       // command received (delivered)
+  ACK_TYPE_PERSISTED = 2;      // command persisted to local store (fsynced)
 }
 
 // Ack acknowledges receipt of a command delivered to the operator.
 message Ack {
   string outbox_id = 1;
   string command_id = 2;
-  int64 sequence = 3;
-  AckType ack_type = 4;
+  int64 sequence = 3;          // sequence of the acknowledged command
+  AckType ack_type = 4;        // acknowledgment level
 }
 
 // Heartbeat signals operator liveness.
@@ -61,24 +71,25 @@ message Heartbeat {
   string session_id = 1;
 }
 
-// Result reports legacy command execution outcome.
+// Result reports command execution outcome.
 message Result {
   string outbox_id = 1;
   string command_id = 2;
-  string status = 3;
+  string status = 3;          // "succeeded" or "failed"
   string message = 4;
   bytes output = 5;
-  int64 sequence = 6;
-  string result_json = 7;
+  int64 sequence = 6;          // sequence of the completed command
+  string result_json = 7;      // JSON-encoded result for duplicate detection
 }
 
-// CommandStreamResponse delivers commands and session events.
+// CommandStreamResponse delivers session lifecycle responses.
 message CommandStreamResponse {
   oneof payload {
-    Command command = 1;
-    SessionEvent session_event = 2;
-    ResyncRequest resync_request = 3;
-    DuplicateResponse duplicate_response = 4;
+    Command command = 1;       // legacy command delivery
+    SessionEvent session_event = 2;  // session lifecycle event
+    ResyncRequest resync_request = 3;  // legacy gap recovery
+    DuplicateResponse duplicate_response = 4;  // legacy duplicate result
+    SessionEstablished session_established = 5;
   }
 }
 
@@ -89,39 +100,40 @@ message Command {
   string operation_id = 3;
   string operation_type = 4;
   common.v1.ReleaseBundle bundle = 5;
-  bytes values = 6;
-  int64 sequence = 7;
+  bytes values = 6;                  // approved ValuesRevision JSON
+  int64 sequence = 7;                // global monotonic sequence number
   string definition_id = 8;
   string namespace = 9;
   string release_name = 10;
   bool create_namespace = 11;
   int64 timeout_seconds = 12;
-  uint32 payload_version = 13;
-  oneof typed_payload {
-    UpgradeCommand upgrade = 20;
-  }
+  string values_revision_id = 13;
+  int64 expected_current_revision = 14;
+  bool atomic = 15;
+  bytes values_patch = 16;            // JSON merge patch
+  int64 target_revision = 17;         // target revision for ROLLBACK
 }
 
 // ResyncRequest asks the operator to report its last seen sequence for gap recovery.
 message ResyncRequest {
-  int64 orchestrator_last_sequence = 1;
-  string reason = 2;
+  int64 orchestrator_last_sequence = 1;  // the highest sequence known to orchestrator
+  string reason = 2;                      // human-readable gap description
 }
 
 // ResyncResponse is sent by the operator in response to a ResyncRequest.
 message ResyncResponse {
-  int64 operator_last_sequence = 1;
+  int64 operator_last_sequence = 1;       // the last sequence the operator has stored
 }
 
 // DuplicateResponse is sent when the operator receives a command it has already completed.
 message DuplicateResponse {
   string command_id = 1;
-  string result_json = 2;
+  string result_json = 2;                 // original result JSON
 }
 
 // SessionEvent signals a session lifecycle change.
 message SessionEvent {
-  string type = 1;
+  string type = 1;            // "suspect", "offline", "replaced"
   string message = 2;
 }
 
@@ -141,5 +153,5 @@ message RevokeOperatorRequest {
 // RevokeOperatorResponse confirms operator revocation.
 message RevokeOperatorResponse {
   string operator_id = 1;
-  string status = 2;
+  string status = 2;   // "revoked" or "already_revoked"
 }

@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+configMapGenerator:
+  - name: postgres-init
+    namespace: release-manager-dev
+    files:
+      - init.sql

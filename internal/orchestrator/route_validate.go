@@ -1,3 +1,4 @@
+
 package orchestrator
 
 import (
@@ -6,6 +7,15 @@ import (
 
 	"github.com/ndzuki/release-manager/internal/store"
 )
+
+// RouteConflictError identifies the existing route that conflicts with a save.
+type RouteConflictError struct {
+	RuleID string
+}
+
+func (e *RouteConflictError) Error() string {
+	return fmt.Sprintf("route source prefix conflicts with rule %q", e.RuleID)
+}
 
 // ValidateRouteConfig checks that a cluster route configuration is valid.
 // AC-014-02: image/chart routes are independently validated.
@@ -54,10 +64,7 @@ func DetectConflictingRoutes(existing []*store.ClusterRoute, newRoute *store.Clu
 			continue // Same route is being updated, not a conflict.
 		}
 		if r.ArtifactType == newRoute.ArtifactType && r.SourcePrefix == newRoute.SourcePrefix {
-			return fmt.Errorf(
-				"conflicting route: cluster %q already has a route for %q with source_prefix %q (route %q)",
-				newRoute.ClusterID, newRoute.ArtifactType, newRoute.SourcePrefix, r.ID,
-			)
+			return &RouteConflictError{RuleID: r.ID}
 		}
 	}
 	return nil

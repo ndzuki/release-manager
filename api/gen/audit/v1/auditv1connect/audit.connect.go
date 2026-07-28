@@ -35,11 +35,19 @@ const (
 const (
 	// AuditServiceEmitProcedure is the fully-qualified name of the AuditService's Emit RPC.
 	AuditServiceEmitProcedure = "/audit.v1.AuditService/Emit"
+	// AuditServiceQueryAuditEventsProcedure is the fully-qualified name of the AuditService's
+	// QueryAuditEvents RPC.
+	AuditServiceQueryAuditEventsProcedure = "/audit.v1.AuditService/QueryAuditEvents"
+	// AuditServiceExportAuditEventsProcedure is the fully-qualified name of the AuditService's
+	// ExportAuditEvents RPC.
+	AuditServiceExportAuditEventsProcedure = "/audit.v1.AuditService/ExportAuditEvents"
 )
 
 // AuditServiceClient is a client for the audit.v1.AuditService service.
 type AuditServiceClient interface {
 	Emit(context.Context, *connect.Request[v1.EmitAuditRequest]) (*connect.Response[v1.EmitAuditResponse], error)
+	QueryAuditEvents(context.Context, *connect.Request[v1.QueryAuditEventsRequest]) (*connect.Response[v1.QueryAuditEventsResponse], error)
+	ExportAuditEvents(context.Context, *connect.Request[v1.ExportAuditEventsRequest]) (*connect.Response[v1.ExportAuditEventsResponse], error)
 }
 
 // NewAuditServiceClient constructs a client for the audit.v1.AuditService service. By default, it
@@ -59,12 +67,26 @@ func NewAuditServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(auditServiceMethods.ByName("Emit")),
 			connect.WithClientOptions(opts...),
 		),
+		queryAuditEvents: connect.NewClient[v1.QueryAuditEventsRequest, v1.QueryAuditEventsResponse](
+			httpClient,
+			baseURL+AuditServiceQueryAuditEventsProcedure,
+			connect.WithSchema(auditServiceMethods.ByName("QueryAuditEvents")),
+			connect.WithClientOptions(opts...),
+		),
+		exportAuditEvents: connect.NewClient[v1.ExportAuditEventsRequest, v1.ExportAuditEventsResponse](
+			httpClient,
+			baseURL+AuditServiceExportAuditEventsProcedure,
+			connect.WithSchema(auditServiceMethods.ByName("ExportAuditEvents")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // auditServiceClient implements AuditServiceClient.
 type auditServiceClient struct {
-	emit *connect.Client[v1.EmitAuditRequest, v1.EmitAuditResponse]
+	emit              *connect.Client[v1.EmitAuditRequest, v1.EmitAuditResponse]
+	queryAuditEvents  *connect.Client[v1.QueryAuditEventsRequest, v1.QueryAuditEventsResponse]
+	exportAuditEvents *connect.Client[v1.ExportAuditEventsRequest, v1.ExportAuditEventsResponse]
 }
 
 // Emit calls audit.v1.AuditService.Emit.
@@ -72,9 +94,21 @@ func (c *auditServiceClient) Emit(ctx context.Context, req *connect.Request[v1.E
 	return c.emit.CallUnary(ctx, req)
 }
 
+// QueryAuditEvents calls audit.v1.AuditService.QueryAuditEvents.
+func (c *auditServiceClient) QueryAuditEvents(ctx context.Context, req *connect.Request[v1.QueryAuditEventsRequest]) (*connect.Response[v1.QueryAuditEventsResponse], error) {
+	return c.queryAuditEvents.CallUnary(ctx, req)
+}
+
+// ExportAuditEvents calls audit.v1.AuditService.ExportAuditEvents.
+func (c *auditServiceClient) ExportAuditEvents(ctx context.Context, req *connect.Request[v1.ExportAuditEventsRequest]) (*connect.Response[v1.ExportAuditEventsResponse], error) {
+	return c.exportAuditEvents.CallUnary(ctx, req)
+}
+
 // AuditServiceHandler is an implementation of the audit.v1.AuditService service.
 type AuditServiceHandler interface {
 	Emit(context.Context, *connect.Request[v1.EmitAuditRequest]) (*connect.Response[v1.EmitAuditResponse], error)
+	QueryAuditEvents(context.Context, *connect.Request[v1.QueryAuditEventsRequest]) (*connect.Response[v1.QueryAuditEventsResponse], error)
+	ExportAuditEvents(context.Context, *connect.Request[v1.ExportAuditEventsRequest]) (*connect.Response[v1.ExportAuditEventsResponse], error)
 }
 
 // NewAuditServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -90,10 +124,26 @@ func NewAuditServiceHandler(svc AuditServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(auditServiceMethods.ByName("Emit")),
 		connect.WithHandlerOptions(opts...),
 	)
+	auditServiceQueryAuditEventsHandler := connect.NewUnaryHandler(
+		AuditServiceQueryAuditEventsProcedure,
+		svc.QueryAuditEvents,
+		connect.WithSchema(auditServiceMethods.ByName("QueryAuditEvents")),
+		connect.WithHandlerOptions(opts...),
+	)
+	auditServiceExportAuditEventsHandler := connect.NewUnaryHandler(
+		AuditServiceExportAuditEventsProcedure,
+		svc.ExportAuditEvents,
+		connect.WithSchema(auditServiceMethods.ByName("ExportAuditEvents")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/audit.v1.AuditService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case AuditServiceEmitProcedure:
 			auditServiceEmitHandler.ServeHTTP(w, r)
+		case AuditServiceQueryAuditEventsProcedure:
+			auditServiceQueryAuditEventsHandler.ServeHTTP(w, r)
+		case AuditServiceExportAuditEventsProcedure:
+			auditServiceExportAuditEventsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -105,4 +155,12 @@ type UnimplementedAuditServiceHandler struct{}
 
 func (UnimplementedAuditServiceHandler) Emit(context.Context, *connect.Request[v1.EmitAuditRequest]) (*connect.Response[v1.EmitAuditResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("audit.v1.AuditService.Emit is not implemented"))
+}
+
+func (UnimplementedAuditServiceHandler) QueryAuditEvents(context.Context, *connect.Request[v1.QueryAuditEventsRequest]) (*connect.Response[v1.QueryAuditEventsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("audit.v1.AuditService.QueryAuditEvents is not implemented"))
+}
+
+func (UnimplementedAuditServiceHandler) ExportAuditEvents(context.Context, *connect.Request[v1.ExportAuditEventsRequest]) (*connect.Response[v1.ExportAuditEventsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("audit.v1.AuditService.ExportAuditEvents is not implemented"))
 }

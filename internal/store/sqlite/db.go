@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ndzuki/release-manager/internal/store"
@@ -14,37 +15,49 @@ import (
 
 // Store implements store.Store backed by SQLite.
 type Store struct {
-	db         *sql.DB
-	ops        *operationStore
-	defs       *definitionStore
-	vals       *valuesStore
-	customers  *customerStore
-	clusters   *clusterStore
-	tokens     *enrollmentTokenStore
-	operators  *operatorStore
-	sessions   *sessionStore
-	outbox     *outboxStore
-	users      *userStore
-	authSess   *authSessionStore
-	orgs       *organizationStore
-	orgMembers *organizationMemberStore
-	bindings   *bindingStore
-	audit      *auditEventStore
-	notif      *notificationStore
-	bundles    *bundleStore
-	verifs     *verificationStore
-	routes     *clusterRouteStore
-	invs       *inventoryStore
-	custEvents *customerEventStore
-	executionResults *operationExecutionResultStore
-	rollouts         *rolloutTrackingStore
-	events           *operationEventStore
+	db              *sql.DB
+	ops             *operationStore
+	operationEvents *operationEventStore
+	defs            *definitionStore
+	vals            *valuesStore
+	valuesApproval  *valuesApprovalStore
+	customers       *customerStore
+	clusters        *clusterStore
+	tokens          *enrollmentTokenStore
+	operators       *operatorStore
+	sessions        *sessionStore
+	outbox          *outboxStore
+	users           *userStore
+	authSess        *authSessionStore
+	orgs            *organizationStore
+	orgMembers      *organizationMemberStore
+	bindings        *bindingStore
+	audit           *auditEventStore
+	notif           *notificationStore
+	bundles         *bundleStore
+	verifs          *verificationStore
+	scanResults     *scanResultStore
+	vulnExceptions  *vulnerabilityExceptionStore
+	trustRoots      *trustRootStore
+	routes          *clusterRouteStore
+	invs            *inventoryStore
+	syncRequests    *inventorySyncRequestStore
+	custEvents      *customerEventStore
+	defEvents       *definitionEventStore
+	preflight       *preflightStore
+	candidateArts   *candidateArtifactStore
+	preflightCycles *preflightLifecycleStore
+	auditExports    *auditExportStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
 // The DSN must be a valid modernc.org/sqlite connection string.
 func Open(dsn string) (*Store, error) {
-	db, err := sql.Open("sqlite", dsn)
+	separator := "?"
+	if strings.Contains(dsn, "?") {
+		separator = "&"
+	}
+	db, err := sql.Open("sqlite", dsn+separator+"_pragma=busy_timeout(5000)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("sqlite open: %w", err)
 	}
@@ -67,8 +80,12 @@ func Open(dsn string) (*Store, error) {
 
 	s := &Store{db: db}
 	s.ops = &operationStore{db: db}
+	s.operationEvents = &operationEventStore{db: db}
 	s.defs = &definitionStore{db: db}
+	s.defEvents = &definitionEventStore{db: db}
+	s.preflight = &preflightStore{db: db}
 	s.vals = &valuesStore{db: db}
+	s.valuesApproval = &valuesApprovalStore{db: db}
 	s.customers = &customerStore{db: db}
 	s.clusters = &clusterStore{db: db}
 	s.tokens = &enrollmentTokenStore{db: db}
@@ -82,19 +99,27 @@ func Open(dsn string) (*Store, error) {
 	s.bindings = &bindingStore{db: db}
 	s.notif = &notificationStore{db: db}
 	s.audit = &auditEventStore{db: db}
+	s.trustRoots = &trustRootStore{db: db}
+	s.vulnExceptions = &vulnerabilityExceptionStore{db: db}
+	s.scanResults = &scanResultStore{db: db}
+	s.auditExports = &auditExportStore{db: db}
 	s.bundles = &bundleStore{db: db}
 	s.invs = &inventoryStore{db: db}
+	s.syncRequests = &inventorySyncRequestStore{db: db}
 	s.verifs = &verificationStore{db: db}
 	s.custEvents = &customerEventStore{db: db}
 	s.routes = &clusterRouteStore{db: db}
-	s.executionResults = &operationExecutionResultStore{db: db}
-	s.rollouts = &rolloutTrackingStore{db: db}
-	s.events = &operationEventStore{db: db}
+	s.candidateArts = &candidateArtifactStore{db: db}
+	s.preflightCycles = &preflightLifecycleStore{db: db}
+
 	return s, nil
 }
 
 // Operations returns the OperationStore.
 func (s *Store) Operations() store.OperationStore { return s.ops }
+
+// OperationEvents returns the operation state event store.
+func (s *Store) OperationEvents() store.OperationEventStore { return s.operationEvents }
 
 // Customers returns the CustomerStore.
 func (s *Store) Customers() store.CustomerStore { return s.customers }
@@ -117,8 +142,20 @@ func (s *Store) Outbox() store.OutboxStore { return s.outbox }
 // Definitions returns the DefinitionStore.
 func (s *Store) Definitions() store.DefinitionStore { return s.defs }
 
+// DefinitionEvents returns the DefinitionEventStore.
+func (s *Store) DefinitionEvents() store.DefinitionEventStore { return s.defEvents }
+
+// PreflightResults returns the PreflightStore.
+func (s *Store) PreflightResults() store.PreflightStore { return s.preflight }
+
 // Values returns the ValuesStore.
 func (s *Store) Values() store.ValuesStore { return s.vals }
+
+// ValuesApproval returns the atomic approval workflow store.
+func (s *Store) ValuesApproval() store.ValuesApprovalStore { return s.valuesApproval }
+
+// ValuesApprovalEvidence returns immutable workflow evidence readers.
+func (s *Store) ValuesApprovalEvidence() store.ValuesApprovalReader { return s.valuesApproval }
 
 // Users returns the UserStore.
 func (s *Store) Users() store.UserStore { return s.users }
@@ -138,6 +175,9 @@ func (s *Store) Bindings() store.BindingStore { return s.bindings }
 // AuditEvents returns the AuditEventStore.
 func (s *Store) AuditEvents() store.AuditEventStore { return s.audit }
 
+// AuditExports returns the AuditExportStore.
+func (s *Store) AuditExports() store.AuditExportStore { return s.auditExports }
+
 // Bundles returns the BundleStore.
 func (s *Store) Bundles() store.BundleStore { return s.bundles }
 
@@ -146,6 +186,15 @@ func (s *Store) Notifications() store.NotificationStore { return s.notif }
 
 // Verifications returns the VerificationStore.
 func (s *Store) Verifications() store.VerificationStore { return s.verifs }
+
+// TrustRoots returns the TrustRootStore.
+func (s *Store) TrustRoots() store.TrustRootStore { return s.trustRoots }
+
+// ScanResults returns the ScanResultStore.
+func (s *Store) ScanResults() store.ScanResultStore { return s.scanResults }
+
+// VulnerabilityExceptions returns the VulnerabilityExceptionStore.
+func (s *Store) VulnerabilityExceptions() store.VulnerabilityExceptionStore { return s.vulnExceptions }
 
 // CustomerEvents returns the CustomerEventStore.
 func (s *Store) CustomerEvents() store.CustomerEventStore { return s.custEvents }
@@ -156,23 +205,34 @@ func (s *Store) ClusterRoutes() store.ClusterRouteStore { return s.routes }
 // Inventories returns the InventoryStore.
 func (s *Store) Inventories() store.InventoryStore { return s.invs }
 
-// ExecutionResults returns the typed operation result store.
-func (s *Store) ExecutionResults() store.OperationExecutionResultStore { return s.executionResults }
+// InventorySyncRequests returns the persistent manual inventory sync request store.
+func (s *Store) InventorySyncRequests() store.InventorySyncRequestStore { return s.syncRequests }
 
-// RolloutTrackings returns the rollout tracking store.
-func (s *Store) RolloutTrackings() store.RolloutTrackingStore { return s.rollouts }
+// CandidateArtifacts returns the CandidateArtifactStore.
+func (s *Store) CandidateArtifacts() store.CandidateArtifactStore { return s.candidateArts }
 
-// OperationEvents returns the operation timeline store.
-func (s *Store) OperationEvents() store.OperationEventStore { return s.events }
-
-// UpgradeResults returns the atomic upgrade terminal writer.
-func (s *Store) UpgradeResults() store.UpgradeResultStore { return s.ops }
+// PreflightLifecycles returns the PreflightLifecycleStore.
+func (s *Store) PreflightLifecycles() store.PreflightLifecycleStore { return s.preflightCycles }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
 
 // DB exposes the underlying *sql.DB for testing.
 func (s *Store) DB() *sql.DB { return s.db }
+
+var testDatabaseSequence atomic.Uint64
+
+// OpenTest creates a Store backed by an in-memory SQLite database for testing.
+// The caller is responsible for closing the store via t.Cleanup.
+func OpenTest(t interface{ Cleanup(func()) }) *Store {
+	dsn := fmt.Sprintf("file:release-manager-test-%d?mode=memory&cache=shared", testDatabaseSequence.Add(1))
+	st, err := Open(dsn)
+	if err != nil {
+		panic("sqlite OpenTest: " + err.Error())
+	}
+	t.Cleanup(func() { st.Close() })
+	return st
+}
 
 // migrate runs the ordered migration steps against the database.
 // ALTER TABLE ADD COLUMN statements that fail because the column already
@@ -224,23 +284,111 @@ var migrationStatements = []string{
 		UNIQUE(customer_id, cluster_id, namespace, release_name)
 	)`,
 
+	`CREATE TABLE IF NOT EXISTS release_definition_events (
+		id            TEXT PRIMARY KEY,
+		definition_id TEXT NOT NULL REFERENCES release_definitions(id),
+		event_type    TEXT NOT NULL,
+		created_at    TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_release_definition_events_definition ON release_definition_events(definition_id, created_at)`,
+
 	`CREATE TABLE IF NOT EXISTS values_revisions (
 		id                    TEXT PRIMARY KEY,
 		release_definition_id TEXT NOT NULL REFERENCES release_definitions(id) ON DELETE CASCADE,
 		revision              INTEGER NOT NULL DEFAULT 1,
+		version               INTEGER NOT NULL DEFAULT 1,
 		status                TEXT NOT NULL DEFAULT 'draft',
 		"values"              BLOB NOT NULL,
 		digest                TEXT NOT NULL DEFAULT '',
 		parent_revision_id    TEXT NOT NULL DEFAULT '',
 		secret_refs           BLOB,
+		created_by            TEXT NOT NULL DEFAULT '',
+		approved_by           TEXT NOT NULL DEFAULT '',
+		approved_at           TEXT,
+		rejected_by           TEXT NOT NULL DEFAULT '',
+		rejection_reason      TEXT NOT NULL DEFAULT '',
 		created_at            TEXT NOT NULL,
 		updated_at            TEXT NOT NULL
 	)`,
 
-	// Migration: add digest, parent_revision_id, secret_refs to existing tables.
+	// Migration: add approval workflow columns to existing values revisions.
 	`ALTER TABLE values_revisions ADD COLUMN digest TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE values_revisions ADD COLUMN parent_revision_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE values_revisions ADD COLUMN secret_refs BLOB`,
+	`ALTER TABLE values_revisions ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
+	`ALTER TABLE values_revisions ADD COLUMN created_by TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE values_revisions ADD COLUMN approved_by TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE values_revisions ADD COLUMN approved_at TEXT`,
+	`ALTER TABLE values_revisions ADD COLUMN rejected_by TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE values_revisions ADD COLUMN rejection_reason TEXT NOT NULL DEFAULT ''`,
+	// Values approval workflow (REQ-068).
+	`ALTER TABLE values_revisions ADD COLUMN state_version INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE values_revisions ADD COLUMN created_by_user_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE values_revisions ADD COLUMN submitted_at TEXT`,
+	`ALTER TABLE values_revisions ADD COLUMN decided_at TEXT`,
+	`UPDATE values_revisions SET state_version = CASE WHEN version > 0 THEN version ELSE 1 END WHERE state_version = 0`,
+	`UPDATE values_revisions SET created_by_user_id = created_by WHERE created_by_user_id = ''`,
+	`ALTER TABLE release_definitions ADD COLUMN owner_organization_id TEXT`,
+	`ALTER TABLE release_definitions ADD COLUMN approved_revision_id TEXT`,
+
+	`CREATE TABLE IF NOT EXISTS values_revision_decisions (
+		id                    TEXT PRIMARY KEY,
+		revision_id           TEXT NOT NULL REFERENCES values_revisions(id) ON DELETE RESTRICT,
+		release_definition_id TEXT NOT NULL,
+		action                TEXT NOT NULL CHECK (action IN ('submitted', 'approved', 'rejected')),
+		from_state            TEXT NOT NULL,
+		to_state              TEXT NOT NULL,
+		actor_user_id         TEXT NOT NULL,
+		actor_org_id          TEXT NOT NULL,
+		actor_role            TEXT NOT NULL DEFAULT '',
+		comment               TEXT,
+		reason                TEXT NOT NULL DEFAULT '',
+		request_id            TEXT NOT NULL DEFAULT '',
+		idempotency_key_hash  TEXT NOT NULL DEFAULT '',
+		created_at            TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_values_revision_decisions_revision ON values_revision_decisions(revision_id, created_at)`,
+
+	`CREATE TABLE IF NOT EXISTS idempotency_records (
+		scope         TEXT NOT NULL,
+		text_key      TEXT NOT NULL,
+		request_hash  TEXT NOT NULL,
+		response_ref  BLOB NOT NULL,
+		expires_at    TEXT NOT NULL,
+		PRIMARY KEY(scope, text_key)
+	)`,
+
+	`CREATE TABLE IF NOT EXISTS audit_outbox (
+		id            TEXT PRIMARY KEY,
+		event_type    TEXT NOT NULL,
+		payload_json  BLOB NOT NULL,
+		created_at    TEXT NOT NULL,
+		delivered     INTEGER NOT NULL DEFAULT 0,
+		delivered_at  TEXT
+	)`,
+	`CREATE TABLE IF NOT EXISTS notification_outbox (
+		id            TEXT PRIMARY KEY,
+		event_type    TEXT NOT NULL,
+		payload_json  BLOB NOT NULL,
+		created_at    TEXT NOT NULL,
+		delivered     INTEGER NOT NULL DEFAULT 0,
+		delivered_at  TEXT
+	)`,
+
+	// Normalize legacy duplicate approved rows before installing the invariant.
+	`UPDATE values_revisions AS current
+	 SET status = 'superseded', state_version = state_version + 1, updated_at = CURRENT_TIMESTAMP
+	 WHERE status = 'approved'
+	   AND EXISTS (
+		SELECT 1 FROM values_revisions AS newer
+		WHERE newer.release_definition_id = current.release_definition_id
+		  AND newer.status = 'approved'
+		  AND (newer.revision > current.revision OR (newer.revision = current.revision AND newer.id > current.id))
+	 )`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_vr_one_approved_per_def
+	 ON values_revisions(release_definition_id) WHERE status = 'approved'`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_vr_one_pending_per_def
+	 ON values_revisions(release_definition_id) WHERE status = 'pending_approval'`,
 
 	`CREATE TABLE IF NOT EXISTS operations (
 		id                   TEXT PRIMARY KEY,
@@ -260,10 +408,12 @@ var migrationStatements = []string{
 		deadline             TEXT,
 		last_error           TEXT NOT NULL DEFAULT ''
 	)`,
+	// Migration: add target_revision for ROLLBACK operations.
+	`ALTER TABLE operations ADD COLUMN target_revision INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE operations ADD COLUMN terminal_at TEXT`,
-	`CREATE UNIQUE INDEX IF NOT EXISTS idx_operations_one_active_definition
-	 ON operations(release_definition_id)
-	 WHERE status NOT IN ('succeeded','failed','cancelled','timeout')`,
+	`UPDATE operations
+	 SET terminal_at = updated_at
+	 WHERE status IN ('succeeded', 'failed', 'cancelled', 'timeout') AND terminal_at IS NULL`,
 
 	`CREATE INDEX IF NOT EXISTS idx_operations_definition ON operations(release_definition_id, status)`,
 	`CREATE INDEX IF NOT EXISTS idx_operations_idempotency ON operations(idempotency_key)`,
@@ -289,6 +439,8 @@ var migrationStatements = []string{
 		created_at     TEXT NOT NULL,
 		updated_at     TEXT NOT NULL
 	)`,
+
+	`ALTER TABLE clusters ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
 
 	`CREATE INDEX IF NOT EXISTS idx_clusters_customer ON clusters(customer_id)`,
 
@@ -337,6 +489,13 @@ var migrationStatements = []string{
 		expires_at     TEXT NOT NULL
 	)`,
 
+	`ALTER TABLE sessions ADD COLUMN instance_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE sessions ADD COLUMN version TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE sessions ADD COLUMN capabilities TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE sessions ADD COLUMN active_config_version TEXT NOT NULL DEFAULT ''`,
+	`CREATE INDEX IF NOT EXISTS idx_sessions_instance ON sessions(operator_id, instance_id)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_one_active_operator ON sessions(operator_id) WHERE status IN ('online', 'suspect')`,
+
 	`CREATE INDEX IF NOT EXISTS idx_sessions_operator ON sessions(operator_id, status)`,
 
 	// Command outbox (REQ-016)
@@ -374,6 +533,9 @@ var migrationStatements = []string{
 		created_at    TEXT NOT NULL,
 		updated_at    TEXT NOT NULL
 	)`,
+	`ALTER TABLE users ADD COLUMN provider TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE users ADD COLUMN subject TEXT NOT NULL DEFAULT ''`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_provider_subject ON users(provider, subject) WHERE provider != '' AND subject != ''`,
 
 	`CREATE TABLE IF NOT EXISTS auth_sessions (
 		id                 TEXT PRIMARY KEY,
@@ -420,6 +582,18 @@ var migrationStatements = []string{
 
 	`CREATE INDEX IF NOT EXISTS idx_bindings_org ON org_customer_bindings(org_id)`,
 
+	`CREATE TABLE IF NOT EXISTS organization_customer_binding_events (
+		id                 TEXT PRIMARY KEY,
+		binding_id         TEXT NOT NULL REFERENCES org_customer_bindings(id) ON DELETE CASCADE,
+		org_id             TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+		customer_id        TEXT NOT NULL,
+		status             TEXT NOT NULL,
+		optimistic_version INTEGER NOT NULL,
+		changed_at         TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_binding_events_binding ON organization_customer_binding_events(binding_id, changed_at)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_binding_events_version ON organization_customer_binding_events(binding_id, optimistic_version)`,
+
 	// Audit events (REQ-050)
 	`CREATE TABLE IF NOT EXISTS audit_events (
 		id               TEXT PRIMARY KEY,
@@ -438,6 +612,15 @@ var migrationStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON audit_events(actor_kind, actor_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_audit_events_resource ON audit_events(resource_type, resource_id)`,
+	`CREATE TABLE IF NOT EXISTS audit_exports (
+	id              TEXT PRIMARY KEY,
+	organization_id TEXT NOT NULL DEFAULT '',
+	since           TEXT NOT NULL,
+	until           TEXT NOT NULL,
+	status          TEXT NOT NULL DEFAULT 'pending',
+	created_at      TEXT NOT NULL
+)`,
+	`CREATE INDEX IF NOT EXISTS idx_audit_exports_organization ON audit_exports(organization_id, created_at)`,
 	`CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at)`,
 
 	// Notification jobs (REQ-031)
@@ -447,9 +630,13 @@ var migrationStatements = []string{
 		channel        TEXT NOT NULL DEFAULT 'webhook',
 		recipient      TEXT NOT NULL DEFAULT '',
 		status         TEXT NOT NULL DEFAULT 'pending',
+		attempts       INTEGER NOT NULL DEFAULT 0,
 		retry_count    INTEGER NOT NULL DEFAULT 0,
 		max_retries    INTEGER NOT NULL DEFAULT 3,
+		error_code     TEXT NOT NULL DEFAULT '',
+		next_retry_at  TEXT,
 		last_error     TEXT NOT NULL DEFAULT '',
+		sent_at        TEXT,
 		dead_letter_at TEXT,
 		metadata       TEXT NOT NULL DEFAULT '{}',
 		created_at     TEXT NOT NULL,
@@ -458,6 +645,12 @@ var migrationStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_notification_jobs_status ON notification_jobs(status)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_jobs_dedup ON notification_jobs(operation_id, channel, recipient)`,
 
+	// REQ-031: Add columns that may be missing from existing DBs (idempotent ALTER TABLE).
+	`ALTER TABLE notification_jobs ADD COLUMN next_retry_at TEXT`,
+	`ALTER TABLE notification_jobs ADD COLUMN dead_letter_at TEXT`,
+	`ALTER TABLE notification_jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE notification_jobs ADD COLUMN error_code TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE notification_jobs ADD COLUMN sent_at TEXT`,
 	// Artifact trust verification (REQ-012)
 	`CREATE TABLE IF NOT EXISTS verification_records (
 		id              TEXT PRIMARY KEY,
@@ -469,6 +662,9 @@ var migrationStatements = []string{
 		summary         TEXT NOT NULL DEFAULT '',
 		created_at      TEXT NOT NULL
 	)`,
+	`ALTER TABLE verification_records ADD COLUMN root_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE verification_records ADD COLUMN key_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE verification_records ADD COLUMN revocation_epoch INTEGER NOT NULL DEFAULT 0`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_records_digest_policy ON verification_records(artifact_digest, policy_version, created_at)`,
 
 	// Customer domain events (REQ-013)
@@ -479,6 +675,19 @@ var migrationStatements = []string{
 		created_at  TEXT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_customer_events_customer ON customer_events(customer_id, event_type)`,
+
+	// Operation state change events (REQ-023)
+	`CREATE TABLE IF NOT EXISTS operation_events (
+		id                    TEXT PRIMARY KEY,
+		operation_id          TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+		operation_type        TEXT NOT NULL,
+		release_definition_id TEXT NOT NULL,
+		old_status            TEXT NOT NULL,
+		new_status            TEXT NOT NULL,
+		state_version         INTEGER NOT NULL,
+		created_at            TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_operation_events_operation ON operation_events(operation_id)`,
 
 	// Cluster artifact routing (REQ-014)
 	`CREATE TABLE IF NOT EXISTS cluster_routes (
@@ -513,38 +722,6 @@ var migrationStatements = []string{
 		updated_at       TEXT NOT NULL,
 		UNIQUE(customer_id, cluster_id, namespace, release_name)
 	)`,
-	`ALTER TABLE release_inventory ADD COLUMN observed_bundle_digest TEXT NOT NULL DEFAULT ''`,
-	`ALTER TABLE release_inventory ADD COLUMN observed_chart_digest TEXT NOT NULL DEFAULT ''`,
-	`ALTER TABLE release_inventory ADD COLUMN observed_effective_values_digest TEXT NOT NULL DEFAULT ''`,
-	`ALTER TABLE release_inventory ADD COLUMN observed_manifest_digest TEXT NOT NULL DEFAULT ''`,
-	`ALTER TABLE release_inventory ADD COLUMN last_operation_id TEXT NOT NULL DEFAULT ''`,
-
-	`CREATE TABLE IF NOT EXISTS operation_execution_results (
-		operation_id   TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE,
-		result_type    TEXT NOT NULL,
-		result_payload BLOB NOT NULL,
-		created_at     TEXT NOT NULL
-	)`,
-
-	`CREATE TABLE IF NOT EXISTS rollout_trackings (
-		operation_id   TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE,
-		status         TEXT NOT NULL DEFAULT 'pending',
-		resource_count INTEGER NOT NULL DEFAULT 0,
-		ready_count    INTEGER NOT NULL DEFAULT 0,
-		failed_count   INTEGER NOT NULL DEFAULT 0,
-		last_error     TEXT NOT NULL DEFAULT '',
-		created_at     TEXT NOT NULL,
-		updated_at     TEXT NOT NULL
-	)`,
-
-	`CREATE TABLE IF NOT EXISTS operation_events (
-		id           TEXT PRIMARY KEY,
-		operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
-		event_type   TEXT NOT NULL,
-		payload      BLOB NOT NULL DEFAULT (x'7b7d'),
-		created_at   TEXT NOT NULL
-	)`,
-	`CREATE INDEX IF NOT EXISTS idx_operation_events_operation ON operation_events(operation_id, created_at)`,
 	`ALTER TABLE release_inventory ADD COLUMN release_definition_id TEXT NOT NULL DEFAULT ''`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_cluster ON release_inventory(customer_id, cluster_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_status ON release_inventory(inventory_status)`,
@@ -559,6 +736,23 @@ var migrationStatements = []string{
 		snapshot_version INTEGER NOT NULL DEFAULT 0,
 		created_at       TEXT NOT NULL
 	)`,
+
+	`CREATE TABLE IF NOT EXISTS inventory_sync_requests (
+		id          TEXT PRIMARY KEY,
+		customer_id TEXT NOT NULL,
+		cluster_id  TEXT NOT NULL,
+		operator_id TEXT NOT NULL,
+		command_id  TEXT NOT NULL UNIQUE,
+		status      TEXT NOT NULL DEFAULT 'pending',
+		last_error  TEXT NOT NULL DEFAULT '',
+		created_at  TEXT NOT NULL,
+		updated_at  TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_inventory_sync_requests_cluster
+	 ON inventory_sync_requests(customer_id, cluster_id, status)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_sync_requests_active_cluster
+	 ON inventory_sync_requests(customer_id, cluster_id)
+	 WHERE status IN ('pending', 'running')`,
 
 	// Release bundles (REQ-011)
 	`CREATE TABLE IF NOT EXISTS release_bundles (
@@ -579,6 +773,92 @@ var migrationStatements = []string{
 		created_at     TEXT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_release_bundles_digest ON release_bundles(digest_alg, digest_value)`,
+
+	// Artifact preflight results (REQ-045)
+	`CREATE TABLE IF NOT EXISTS preflight_results (
+		id                  TEXT PRIMARY KEY,
+		operation_id        TEXT NOT NULL,
+		routing_version     TEXT NOT NULL DEFAULT '',
+		bundle_digest       TEXT NOT NULL,
+		trust_policy_version TEXT NOT NULL DEFAULT '',
+		sbom_policy_version TEXT NOT NULL DEFAULT '',
+		result_json         BLOB NOT NULL,
+		created_at          TEXT NOT NULL
+	)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_preflight_results_key ON preflight_results(operation_id, routing_version, bundle_digest, trust_policy_version, sbom_policy_version)`,
+
+	// Trust, scan, and exception state must remain available during the SQLite rollback window.
+	`CREATE TABLE IF NOT EXISTS trust_roots (
+		id              TEXT PRIMARY KEY,
+		environment     TEXT NOT NULL,
+		key_id          TEXT NOT NULL DEFAULT '',
+		public_key_pem  TEXT NOT NULL DEFAULT '',
+		issuer          TEXT NOT NULL DEFAULT '',
+		subject_pattern TEXT NOT NULL DEFAULT '',
+		state           TEXT NOT NULL,
+		valid_from      TEXT NOT NULL,
+		grace_until     TEXT,
+		created_at      TEXT NOT NULL,
+		updated_at      TEXT NOT NULL,
+		revoked_at      TEXT
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_trust_roots_environment ON trust_roots(environment, created_at)`,
+	`CREATE TABLE IF NOT EXISTS trust_policies (
+		environment      TEXT PRIMARY KEY,
+		version          INTEGER NOT NULL DEFAULT 0,
+		revocation_epoch INTEGER NOT NULL DEFAULT 0,
+		updated_at       TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS scan_results (
+		id              TEXT PRIMARY KEY,
+		artifact_digest TEXT NOT NULL,
+		sbom_ref        TEXT NOT NULL DEFAULT '',
+		scanner         TEXT NOT NULL DEFAULT '',
+		result_version  TEXT NOT NULL DEFAULT '',
+		severity_json   BLOB NOT NULL,
+		findings_json   BLOB NOT NULL,
+		scanned_at      TEXT NOT NULL,
+		created_at      TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_scan_results_artifact_scanner ON scan_results(artifact_digest, scanner, created_at DESC)`,
+	`CREATE TABLE IF NOT EXISTS vulnerability_exceptions (
+		id              TEXT PRIMARY KEY,
+		finding_id      TEXT NOT NULL DEFAULT '',
+		artifact_digest TEXT NOT NULL DEFAULT '',
+		actor           TEXT NOT NULL DEFAULT '',
+		reason          TEXT NOT NULL DEFAULT '',
+		expires_at      TEXT NOT NULL,
+		created_at      TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_vulnerability_exceptions_artifact ON vulnerability_exceptions(artifact_digest, created_at DESC)`,
+
+	// Artifact lifecycle (REQ-069) — ALTER TABLEs are idempotent (migrate() skips "duplicate column").
+	`ALTER TABLE release_bundles ADD COLUMN archived_at TEXT`,
+	`ALTER TABLE release_definitions ADD COLUMN current_bundle_id TEXT`,
+
+	// Candidate artifacts (REQ-069)
+	`CREATE TABLE IF NOT EXISTS candidate_artifacts (
+		id            TEXT PRIMARY KEY,
+		artifact_type TEXT NOT NULL CHECK (artifact_type IN ('image', 'chart')),
+		ref           TEXT NOT NULL,
+		digest        TEXT NOT NULL,
+		bundle_id     TEXT,
+		created_at    TEXT NOT NULL,
+		UNIQUE(digest, artifact_type)
+	)`,
+
+	// Preflight lifecycle results (REQ-069) — distinct from the cache-based preflight_results table.
+	`CREATE TABLE IF NOT EXISTS preflight_lifecycles (
+		id                    TEXT PRIMARY KEY,
+		operation_id          TEXT,
+		operation_terminal_at TEXT,
+		stages                TEXT NOT NULL DEFAULT '[]',
+		overall               TEXT NOT NULL DEFAULT '',
+		error_code            TEXT NOT NULL DEFAULT '',
+		created_at            TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_preflight_lifecycles_operation ON preflight_lifecycles(operation_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_preflight_lifecycles_terminal ON preflight_lifecycles(operation_terminal_at)`,
 }
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }
