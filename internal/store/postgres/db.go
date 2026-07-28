@@ -237,6 +237,7 @@ var (
 	_ store.BundleSubmissionStore        = (*bundleSubmissionStore)(nil)
 	_ store.ArtifactEventSubmissionStore = (*artifactEventSubmissionStore)(nil)
 	_ store.PreflightLifecycleStore      = (*preflightLifecycleStore)(nil)
+	_ store.InventorySyncRequestStore    = (*inventorySyncRequestStore)(nil)
 )
 
 func (s *Store) Operations() store.OperationStore                           { return s.ops }
@@ -263,7 +264,7 @@ func (s *Store) Verifications() store.VerificationStore                     { re
 func (s *Store) CustomerEvents() store.CustomerEventStore                   { return s.custEvents }
 func (s *Store) ClusterRoutes() store.ClusterRouteStore                     { return s.routes }
 func (s *Store) Inventories() store.InventoryStore                          { return s.invs }
-func (s *Store) InventorySyncRequests() store.InventorySyncRequestStore     { return s.syncRequests }
+func (s *Store) InventorySyncRequests() store.InventorySyncRequestStore      { return s.syncRequests }
 func (s *Store) ValuesApproval() store.ValuesApprovalStore                  { return s.valuesApproval }
 func (s *Store) ValuesApprovalEvidence() store.ValuesApprovalReader         { return s.valuesApproval }
 func (s *Store) AuditExports() store.AuditExportStore                       { return s.auditExports }

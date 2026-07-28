@@ -497,15 +497,51 @@ func TestOperationTransition_TerminalAt(t *testing.T) {
 		IdempotencyKey:      uuid.NewString(),
 	}
 	require.NoError(t, st.Operations().Create(ctx, op))
+	require.NoError(t, st.PreflightLifecycles().Create(ctx, &store.PreflightLifecycle{
+		OperationID: &op.ID,
+		Stages:      []byte(`[{"stage":"control-plane","status":"passed"}]`),
+		Overall:     "passed",
+	}))
 
-	_, err := st.Operations().Transition(ctx, op.ID, store.StatusSucceeded, op.StateVersion, "")
+	updated, err := st.Operations().Transition(ctx, op.ID, store.StatusSucceeded, op.StateVersion, "")
 	require.NoError(t, err)
+	require.NotNil(t, updated.TerminalAt)
 
-	var terminalAt time.Time
+	var operationTerminalAt time.Time
 	require.NoError(t, st.SQLDB().QueryRowContext(ctx,
 		`SELECT terminal_at FROM operations WHERE id = $1`, op.ID,
-	).Scan(&terminalAt))
-	assert.False(t, terminalAt.IsZero())
+	).Scan(&operationTerminalAt))
+	assert.False(t, operationTerminalAt.IsZero())
+
+	var lifecycleTerminalAt time.Time
+	require.NoError(t, st.SQLDB().QueryRowContext(ctx,
+		`SELECT operation_terminal_at FROM preflight_lifecycles WHERE operation_id = $1`, op.ID,
+	).Scan(&lifecycleTerminalAt))
+	assert.Equal(t, operationTerminalAt, lifecycleTerminalAt)
+}
+
+func TestOperationTransition_TerminalAtWithoutLifecycle(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  uuid.NewString(),
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      uuid.NewString(),
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	updated, err := st.Operations().Transition(ctx, op.ID, store.StatusSucceeded, op.StateVersion, "")
+	require.NoError(t, err)
+	require.NotNil(t, updated.TerminalAt)
+
+	var count int
+	require.NoError(t, st.SQLDB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM preflight_lifecycles WHERE operation_id = $1`, op.ID,
+	).Scan(&count))
+	assert.Zero(t, count)
 }
 
 func TestIdentityAndAuditAccessors(t *testing.T) {

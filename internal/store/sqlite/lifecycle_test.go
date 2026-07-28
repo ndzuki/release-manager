@@ -574,18 +574,23 @@ func TestOperationTransition_SetsPreflightTerminal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusSucceeded, updated.Status)
 
-	// Verify: SetOperationTerminal was triggered.
-	// We'll check by verifying the preflight lifecycle record was updated.
-	// We can verify indirectly: a DeleteExpired call with short TTL should
-	// delete the record (since terminal_at is now set and > TTL).
-	time.Sleep(10 * time.Millisecond) // ensure terminal_at < now
-	n, err := st.PreflightLifecycles().DeleteExpired(ctx, 1*time.Millisecond)
-	require.NoError(t, err)
-	// If terminal_at was set, the record will be deleted (created_at is now, but terminal_at < now).
-	// But we set terminal_at to now, and we wait 10ms, so 1ms TTL should be enough.
-	assert.Equal(t, int64(0), n) // record was just created, shouldn't be deleted
-	// Actually let's verify by querying directly.
-	// There's no GetByOperationID method, so we trust the callback ran.
+	// AC-023-08: operation.terminal_at is set in the same transaction.
+	require.NotNil(t, updated.TerminalAt, "returned Operation.TerminalAt must be non-nil")
+	assert.False(t, updated.TerminalAt.IsZero())
 
-	_ = updated
+	// Directly verify operations.terminal_at in the database (no sleep/indirection).
+	var opTerminalAt *string
+	err = st.DB().QueryRowContext(ctx, `SELECT terminal_at FROM operations WHERE id = ?`, opID).Scan(&opTerminalAt)
+	require.NoError(t, err)
+	require.NotNil(t, opTerminalAt, "operations.terminal_at must be non-nil after terminal transition")
+	assert.NotEmpty(t, *opTerminalAt)
+
+	// AC-023-09: preflight_lifecycles.operation_terminal_at is backfilled in the same transaction.
+	var plTerminalAt *string
+	err = st.DB().QueryRowContext(ctx, `SELECT operation_terminal_at FROM preflight_lifecycles WHERE operation_id = ?`, opID).Scan(&plTerminalAt)
+	require.NoError(t, err)
+	require.NotNil(t, plTerminalAt, "preflight_lifecycles.operation_terminal_at must be backfilled")
+	assert.NotEmpty(t, *plTerminalAt)
+	assert.Equal(t, *opTerminalAt, *plTerminalAt,
+		"preflight_lifecycles.operation_terminal_at must match operations.terminal_at (same transaction timestamp)")
 }

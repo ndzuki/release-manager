@@ -226,6 +226,7 @@ func upgradeCommand(commandID string) *operatorv1.Command {
 	}
 }
 
+//nolint:unused // Reserved for future rollback-command tests; intentionally kept.
 func rollbackCommand(commandID string) *operatorv1.Command {
 	return &operatorv1.Command{
 		OutboxId:       "outbox-rollback",

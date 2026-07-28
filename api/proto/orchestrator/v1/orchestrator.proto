@@ -161,8 +161,57 @@ message RollbackReleaseResponse {
   string state = 4;
 }
 
-// ReleaseOperation represents a single publish operation.
-message ReleaseOperation {
+// OperationStatus is the authoritative lifecycle state of a release operation.
+enum OperationStatus {
+  OPERATION_STATUS_UNSPECIFIED = 0;
+  OPERATION_STATUS_PENDING = 1;
+  OPERATION_STATUS_PREFLIGHT = 2;
+  OPERATION_STATUS_QUEUED = 3;
+  OPERATION_STATUS_RUNNING = 4;
+  OPERATION_STATUS_CANCELLING = 5;
+  OPERATION_STATUS_SUCCEEDED = 6;
+  OPERATION_STATUS_FAILED = 7;
+  OPERATION_STATUS_CANCELLED = 8;
+  OPERATION_STATUS_TIMEOUT = 9;
+}
+
+// Operation exposes the safe, authoritative release-operation fields.
+message Operation {
+  string operation_id = 1;
+  string release_definition_id = 2;
+  string operation_type = 3;
+  OperationStatus state = 4;
+  int64 state_version = 5;
+  string bundle_id = 6;
+  string values_revision_id = 7;
+  int32 expected_revision = 8;
+  int32 target_revision = 9;
+  common.v1.ActorContext actor = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+  google.protobuf.Timestamp terminal_at = 13;
+  google.protobuf.Timestamp deadline = 14;
+  string last_error = 15;
+}
+
+message GetOperationRequest {
+  string operation_id = 1;
+}
+
+message GetOperationResponse {
+  Operation operation = 1;
+}
+
+message CancelOperationRequest {
+  string operation_id = 1;
+  string reason = 2;
+  int64 expected_state_version = 3;
+  string idempotency_key = 4;
+}
+
+message CancelOperationResponse {
+  Operation operation = 1;
+  string request_id = 2;
 }
 
 // ── Release Definition Management ────────────────────────────────
@@ -474,6 +523,8 @@ service OrchestratorService {
   rpc CreateOperation(CreateOperationRequest) returns (CreateOperationResponse);
   rpc PublishRelease(PublishReleaseRequest) returns (PublishReleaseResponse);
   rpc RollbackRelease(RollbackReleaseRequest) returns (RollbackReleaseResponse);
+  rpc GetOperation(GetOperationRequest) returns (GetOperationResponse);
+  rpc CancelOperation(CancelOperationRequest) returns (CancelOperationResponse);
 
   // Values revision approval workflow
   rpc SubmitValuesRevision(SubmitValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);

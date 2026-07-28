@@ -189,6 +189,7 @@ func orchestratorReadOnlyProcedures() map[string]struct{} {
 		orchestratorv1connect.OrchestratorServiceGetClusterProcedure:             {},
 		orchestratorv1connect.OrchestratorServiceListClustersProcedure:           {},
 		orchestratorv1connect.OrchestratorServiceGetClusterRoutesProcedure:       {},
+		orchestratorv1connect.OrchestratorServiceGetOperationProcedure:           {},
 	}
 }
 
