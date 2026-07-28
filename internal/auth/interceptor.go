@@ -21,6 +21,7 @@ import (
 // 2. Verifies the user is active and still has a non-revoked persistent session
 // 3. Injects user ID into context
 // 4. Enforces Casbin RBAC for protected procedures
+//
 //nolint:gocyclo // Authentication, session validation, and authorization precedence are explicit policy gates.
 func NewAuthInterceptor(
 	jwt *JWTManager,

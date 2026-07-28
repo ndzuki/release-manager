@@ -44,15 +44,15 @@ type ReleaseHistoryEntry struct {
 
 // Sentinel errors returned by HelmEngine operations.
 var (
-	ErrNotFound           = errors.New("helm: release not found")
-	ErrAlreadyExists      = errors.New("helm: release already exists")
-	ErrForbidden          = errors.New("helm: forbidden")
-	ErrConflict           = errors.New("helm: conflict")
-	ErrTimeout            = errors.New("helm: timeout")
-	ErrCancelled          = errors.New("helm: cancelled")
-	ErrRenderFailed       = errors.New("helm: render failed")
-	ErrActionFailed       = errors.New("helm: action failed")
-	ErrRevisionNotFound   = errors.New("helm: target revision not found in history")
+	ErrNotFound            = errors.New("helm: release not found")
+	ErrAlreadyExists       = errors.New("helm: release already exists")
+	ErrForbidden           = errors.New("helm: forbidden")
+	ErrConflict            = errors.New("helm: conflict")
+	ErrTimeout             = errors.New("helm: timeout")
+	ErrCancelled           = errors.New("helm: cancelled")
+	ErrRenderFailed        = errors.New("helm: render failed")
+	ErrActionFailed        = errors.New("helm: action failed")
+	ErrRevisionNotFound    = errors.New("helm: target revision not found in history")
 	ErrArtifactUnavailable = errors.New("helm: historical artifact unavailable")
 )
 
