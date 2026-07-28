@@ -26,6 +26,7 @@ import (
 const (
 	maxEmergencyReasonBytes = 1000
 	maxAnnotationEntries    = 50
+	emergencyOperationTTL   = 30 * time.Second
 	workloadDeployment      = "DEPLOYMENT"
 	workloadStatefulSet     = "STATEFUL_SET"
 	workloadDaemonSet       = "DAEMON_SET"
@@ -73,26 +74,37 @@ func (s *Service) EmergencyChange(
 		s.emitEmergencyAttempt(&actor, msg, "", err, time.Since(started))
 		return nil, err
 	}
-	role, err := s.authorizeEmergency(ctx, actor, definition)
-	if err != nil {
+	if _, err := s.authorizeEmergency(ctx, actor, definition); err != nil {
 		s.emitEmergencyAttempt(&actor, msg, "", err, time.Since(started))
 		return nil, err
+	}
+	requestHash, err := hashEmergencyRequest(msg)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("hash emergency request: %w", err))
+	}
+	keyHash := hashEmergencyIdempotencyKey(msg.GetIdempotencyKey())
+	replay, err := s.store.EmergencyIntents().GetReplay(ctx, actor.OrganizationID+":"+definition.ID, keyHash, requestHash)
+	if err == nil {
+		return connect.NewResponse(emergencyResponse(replay, msg.GetConvergence())), nil
+	}
+	if errors.Is(err, store.ErrIdempotencyConflict) {
+		rpcErr := emergencyStoreError(err)
+		s.emitEmergencyAttempt(&actor, msg, "", rpcErr, time.Since(started))
+		return nil, rpcErr
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("lookup emergency replay: %w", err))
 	}
 
-	operatorID, err := s.onlineEmergencyOperator(ctx, definition)
-	if err != nil {
-		s.emitEmergencyAttempt(&actor, msg, "", err, time.Since(started))
-		return nil, err
-	}
 	resolved, err := s.resolveEmergencyChange(ctx, msg, definition)
 	if err != nil {
 		s.emitEmergencyAttempt(&actor, msg, "", err, time.Since(started))
 		return nil, err
 	}
 	if msg.GetConvergence() == orchestratorv1.EmergencyConvergence_EMERGENCY_CONVERGENCE_REQUIRE_PROMOTION {
-		blocked, err := s.store.ConvergenceTasks().HasPendingPromotionPath(ctx, definition.ID, resolved.promotionPaths)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("check pending promotion paths: %w", err))
+		blocked, checkErr := s.store.ConvergenceTasks().HasPendingPromotionPath(ctx, definition.ID, resolved.promotionPaths)
+		if checkErr != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("check pending promotion paths: %w", checkErr))
 		}
 		if blocked {
 			rpcErr := emergencyError(connect.CodeFailedPrecondition, "promotion_path_blocked", "promotion path already has a pending task")
@@ -102,6 +114,7 @@ func (s *Service) EmergencyChange(
 	}
 
 	now := time.Now().UTC()
+	deadline := now.Add(emergencyOperationTTL)
 	opID := uuid.NewString()
 	commandID := uuid.NewString()
 	convergence := emergencyConvergenceFromProto(msg.GetConvergence())
@@ -109,11 +122,6 @@ func (s *Service) EmergencyChange(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("encode promotion paths: %w", err))
 	}
-	requestHash, err := hashEmergencyRequest(msg)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("hash emergency request: %w", err))
-	}
-	keyHash := hashEmergencyIdempotencyKey(msg.GetIdempotencyKey())
 	intent := &store.EmergencyIntent{
 		ID: uuid.NewString(), ReleaseDefinitionID: definition.ID, OperationID: opID, CommandID: commandID,
 		Action: resolved.action, WorkloadKind: msg.GetWorkloadRef().GetKind(), WorkloadName: msg.GetWorkloadRef().GetName(),
@@ -126,8 +134,8 @@ func (s *Service) EmergencyChange(
 	op := &store.Operation{
 		ID: opID, OperationType: store.OperationEmergency, Status: store.StatusPending,
 		ReleaseDefinitionID: definition.ID, IdempotencyKey: keyHash, RequestHash: requestHash,
-		Actor:     store.ActorContext{UserID: actor.UserID, Organization: actor.OrganizationID},
-		CreatedAt: now, UpdatedAt: now,
+		Actor: store.ActorContext{UserID: actor.UserID, Organization: actor.OrganizationID},
+		CreatedAt: now, UpdatedAt: now, Deadline: &deadline,
 	}
 	var convergenceTask *store.ConvergenceTask
 	if convergence == store.EmergencyRequirePromotion {
@@ -139,7 +147,7 @@ func (s *Service) EmergencyChange(
 	}
 	created, err := s.store.EmergencyIntents().CreateIfAvailable(ctx, store.EmergencyCreateCommand{
 		Operation: op, Intent: intent, ConvergenceTask: convergenceTask,
-		IdempotencyScope:   actor.OrganizationID + ":" + definition.ID,
+		IdempotencyScope: actor.OrganizationID + ":" + definition.ID,
 		IdempotencyKeyHash: keyHash, RequestHash: requestHash, IdempotencyExpiresAt: now.Add(24 * time.Hour),
 	})
 	if err != nil {
@@ -148,33 +156,147 @@ func (s *Service) EmergencyChange(
 		return nil, rpcErr
 	}
 	if !created.Replayed {
+		operatorID, onlineErr := s.onlineEmergencyOperator(ctx, definition)
+		if onlineErr != nil {
+			return nil, s.failEmergencyDelivery(ctx, created, &actor, msg, onlineErr, time.Since(started))
+		}
 		command := emergencyCommandFromIntent(created.Intent)
 		if s.emergencyDispatcher == nil {
-			return nil, emergencyError(connect.CodeUnavailable, "delivery_failed", "emergency dispatcher is unavailable")
+			deliveryErr := emergencyError(connect.CodeUnavailable, "delivery_failed", "emergency dispatcher is unavailable")
+			return nil, s.failEmergencyDelivery(ctx, created, &actor, msg, deliveryErr, time.Since(started))
 		}
 		if err := s.emergencyDispatcher.DispatchEmergency(ctx, operatorID, command); err != nil {
-			return nil, emergencyError(connect.CodeUnavailable, "delivery_failed", "emergency command delivery failed")
+			deliveryErr := emergencyError(connect.CodeUnavailable, "delivery_failed", "emergency command delivery failed")
+			return nil, s.failEmergencyDelivery(ctx, created, &actor, msg, deliveryErr, time.Since(started))
 		}
 		if err := s.store.EmergencyIntents().UpdateDeliveryStatus(ctx, created.Intent.ID, "queued"); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("mark emergency queued: %w", err))
 		}
-		if transitioned, transitionErr := s.store.Operations().UpdateStatus(ctx, created.Operation.ID, store.StatusQueued, created.Operation.StateVersion, ""); transitionErr == nil {
-			created.Operation = transitioned
+		transitioned, transitionErr := s.store.Operations().UpdateStatus(ctx, created.Operation.ID, store.StatusQueued, created.Operation.StateVersion, "")
+		if transitionErr != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("mark emergency operation queued: %w", transitionErr))
 		}
+		created.Operation = transitioned
 	}
 
+	s.emitEmergencyAttempt(&actor, msg, created.Operation.ID, nil, time.Since(started))
 	s.logger.Info("emergency change accepted", "operation_id", created.Operation.ID, "definition_id", definition.ID,
 		"action", resolved.action, "convergence", convergence)
-	s.emitEmergencyAttempt(&actor, msg, created.Operation.ID, nil, time.Since(started))
-	response := &orchestratorv1.EmergencyChangeResponse{
-		OperationId: created.Operation.ID, Status: string(created.Operation.Status), Convergence: msg.GetConvergence(),
-		ImageReference: valueOrEmpty(created.Intent.ImageReference), AcceptedAt: timestamppb.New(created.Operation.CreatedAt),
+	return connect.NewResponse(emergencyResponse(created, msg.GetConvergence())), nil
+}
+
+// ExpireEmergencyOperations moves overdue emergency operations to timeout and emits audit evidence.
+func (s *Service) ExpireEmergencyOperations(ctx context.Context) int {
+	operations, err := s.store.Operations().ListNonTerminal(ctx)
+	if err != nil {
+		s.logger.Warn("failed to list emergency operations for timeout", "error", err)
+		return 0
 	}
+	now := time.Now().UTC()
+	expired := 0
+	for _, operation := range operations {
+		if operation.OperationType != store.OperationEmergency || operation.Deadline == nil || now.Before(*operation.Deadline) {
+			continue
+		}
+		intent, getErr := s.store.EmergencyIntents().GetByOperationID(ctx, operation.ID)
+		if getErr != nil {
+			s.logger.Warn("failed to load timed out emergency intent", "operation_id", operation.ID, "error", getErr)
+			continue
+		}
+		finished, finishErr := s.store.EmergencyIntents().Finish(
+			ctx, intent.ID, operation.ID, operation.StateVersion, store.StatusTimeout, "operation_timeout", nil, nil,
+		)
+		if finishErr != nil {
+			if !errors.Is(finishErr, store.ErrOptimisticLock) && !errors.Is(finishErr, store.ErrInvalidState) {
+				s.logger.Warn("failed to time out emergency operation", "operation_id", operation.ID, "error", finishErr)
+			}
+			continue
+		}
+		s.emitEmergencyTimeoutAudit(finished, intent)
+		expired++
+	}
+	return expired
+}
+
+func (s *Service) emitEmergencyTimeoutAudit(operation *store.Operation, intent *store.EmergencyIntent) {
+	if s.auditEmitter == nil || operation == nil || intent == nil {
+		return
+	}
+	event := audit.NewEvent(
+		store.AuditActorUser,
+		operation.Actor.UserID,
+		operation.Actor.Organization,
+		"",
+		"operation",
+		operation.ID,
+		"emergency_change",
+		"timeout",
+		fmt.Sprintf("action=%s convergence=%s", intent.Action, intent.Convergence),
+		map[string]string{
+			"definition_id": intent.ReleaseDefinitionID,
+			"payload_hash":  operation.RequestHash,
+			"error_code":    "operation_timeout",
+		},
+	)
+	if result := s.auditEmitter.Emit(event); !result.Accepted {
+		s.logger.Warn("emergency timeout audit event rejected", "operation_id", operation.ID, "code", result.Code)
+	}
+}
+
+func emergencyResponse(
+	created *store.EmergencyCreateResult,
+	convergence orchestratorv1.EmergencyConvergence,
+) *orchestratorv1.EmergencyChangeResponse {
+	response := &orchestratorv1.EmergencyChangeResponse{Convergence: convergence}
+	if created == nil || created.Operation == nil || created.Intent == nil {
+		return response
+	}
+	response.OperationId = created.Operation.ID
+	response.Status = string(created.Operation.Status)
+	response.ImageReference = valueOrEmpty(created.Intent.ImageReference)
+	response.AcceptedAt = timestamppb.New(created.Operation.CreatedAt)
 	if created.ConvergenceTask != nil {
 		response.ConvergenceTaskId = created.ConvergenceTask.ID
 	}
-	_ = role
-	return connect.NewResponse(response), nil
+	return response
+}
+
+func (s *Service) failEmergencyDelivery(
+	ctx context.Context,
+	created *store.EmergencyCreateResult,
+	actor *authctx.Actor,
+	msg *orchestratorv1.EmergencyChangeRequest,
+	deliveryErr error,
+	duration time.Duration,
+) error {
+	operationID := ""
+	if created != nil && created.Operation != nil && created.Intent != nil {
+		operationID = created.Operation.ID
+		if _, err := s.store.EmergencyIntents().Finish(
+			ctx,
+			created.Intent.ID,
+			created.Operation.ID,
+			created.Operation.StateVersion,
+			store.StatusFailed,
+			connectErrorReasonCode(deliveryErr),
+			nil,
+			nil,
+		); err != nil {
+			s.logger.Error("failed to mark emergency delivery terminal", "operation_id", operationID, "error", err)
+		}
+	}
+	s.emitEmergencyAttempt(actor, msg, operationID, deliveryErr, duration)
+	return deliveryErr
+}
+
+func connectErrorReasonCode(err error) string {
+	var connectErr *connect.Error
+	if errors.As(err, &connectErr) {
+		if reason := connectErr.Meta().Get("X-Reason-Code"); reason != "" {
+			return reason
+		}
+	}
+	return connect.CodeOf(err).String()
 }
 
 //nolint:gocyclo // Validation rules must execute in REQ-defined order.

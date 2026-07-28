@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -19,6 +21,20 @@ type emergencyReplayRef struct {
 	OperationID       string `json:"operation_id"`
 	IntentID          string `json:"intent_id"`
 	ConvergenceTaskID string `json:"convergence_task_id,omitempty"`
+}
+
+func (s *emergencyIntentStore) GetReplay(ctx context.Context, scope, keyHash, requestHash string) (*store.EmergencyCreateResult, error) {
+	command := store.EmergencyCreateCommand{
+		IdempotencyScope: scope, IdempotencyKeyHash: keyHash, RequestHash: requestHash,
+	}
+	result, err := lookupEmergencyReplay(ctx, s.db, command)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, store.ErrNotFound
+	}
+	return result, nil
 }
 
 func (s *emergencyIntentStore) CreateIfAvailable(ctx context.Context, command store.EmergencyCreateCommand) (*store.EmergencyCreateResult, error) {
@@ -120,10 +136,10 @@ func (s *emergencyIntentStore) createIfAvailable(ctx context.Context, command st
 	}, nil
 }
 
-func lookupEmergencyReplay(ctx context.Context, tx *sql.Tx, command store.EmergencyCreateCommand) (*store.EmergencyCreateResult, error) {
+func lookupEmergencyReplay(ctx context.Context, queryer operationQueryer, command store.EmergencyCreateCommand) (*store.EmergencyCreateResult, error) {
 	var requestHash string
 	var responseRef []byte
-	err := tx.QueryRowContext(ctx, `
+	err := queryer.QueryRowContext(ctx, `
 		SELECT request_hash, response_ref FROM idempotency_records
 		WHERE scope = ? AND text_key = ? AND expires_at > ?
 	`, command.IdempotencyScope, command.IdempotencyKeyHash, time.Now().UTC().Format(time.RFC3339Nano)).Scan(&requestHash, &responseRef)
@@ -140,17 +156,17 @@ func lookupEmergencyReplay(ctx context.Context, tx *sql.Tx, command store.Emerge
 	if err := json.Unmarshal(responseRef, &reference); err != nil {
 		return nil, fmt.Errorf("decode emergency replay reference: %w", err)
 	}
-	op, err := getOperation(ctx, tx, reference.OperationID)
+	op, err := getOperation(ctx, queryer, reference.OperationID)
 	if err != nil {
 		return nil, fmt.Errorf("load replay operation: %w", err)
 	}
-	intent, err := getEmergencyIntentByOperation(ctx, tx, reference.OperationID)
+	intent, err := getEmergencyIntentByOperation(ctx, queryer, reference.OperationID)
 	if err != nil {
 		return nil, fmt.Errorf("load replay emergency intent: %w", err)
 	}
 	var task *store.ConvergenceTask
 	if reference.ConvergenceTaskID != "" {
-		task, err = getConvergenceTaskByOperation(ctx, tx, reference.OperationID)
+		task, err = getConvergenceTaskByOperation(ctx, queryer, reference.OperationID)
 		if err != nil {
 			return nil, fmt.Errorf("load replay convergence task: %w", err)
 		}
@@ -267,21 +283,89 @@ func (s *emergencyIntentStore) UpdateDeliveryStatus(ctx context.Context, id, sta
 	return nil
 }
 
-func (s *emergencyIntentStore) UpdateResult(ctx context.Context, id string, beforeSnapshot, afterSnapshot json.RawMessage) error {
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE emergency_intents SET before_snapshot = ?, after_snapshot = ?, updated_at = ? WHERE id = ?
-	`, nullableJSON(beforeSnapshot), nullableJSON(afterSnapshot), time.Now().UTC().Format(time.RFC3339Nano), id)
+func (s *emergencyIntentStore) Finish(
+	ctx context.Context,
+	intentID, operationID string,
+	expectedStateVersion int,
+	status store.OperationStatus,
+	lastError string,
+	beforeSnapshot, afterSnapshot json.RawMessage,
+) (*store.Operation, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("update emergency result: %w", err)
+		return nil, fmt.Errorf("begin finish emergency: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
+
+	current, err := getOperation(ctx, tx, operationID)
+	if err != nil {
+		return nil, err
+	}
+	if current.StateVersion != expectedStateVersion {
+		return nil, store.ErrOptimisticLock
+	}
+	if !current.Status.CanTransitionTo(status) {
+		return nil, store.ErrInvalidState
+	}
+
+	now := nowUTC()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE operations
+		SET status = ?, state_version = state_version + 1, last_error = ?, updated_at = ?,
+		    terminal_at = CASE WHEN ? THEN ? ELSE terminal_at END
+		WHERE id = ? AND state_version = ?
+	`, string(status), lastError, now, status.IsTerminal(), now, operationID, expectedStateVersion)
+	if err != nil {
+		return nil, fmt.Errorf("finish emergency operation: %w", err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("emergency result rows affected: %w", err)
+		return nil, fmt.Errorf("finish emergency rows affected: %w", err)
 	}
 	if rows == 0 {
-		return store.ErrNotFound
+		return nil, store.ErrOptimisticLock
 	}
-	return nil
+
+	result, err = tx.ExecContext(ctx, `
+		UPDATE emergency_intents
+		SET before_snapshot = ?, after_snapshot = ?, updated_at = ?
+		WHERE id = ? AND operation_id = ?
+	`, nullableJSON(beforeSnapshot), nullableJSON(afterSnapshot), now, intentID, operationID)
+	if err != nil {
+		return nil, fmt.Errorf("finish emergency snapshots: %w", err)
+	}
+	rows, err = result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("finish emergency snapshot rows affected: %w", err)
+	}
+	if rows == 0 {
+		return nil, store.ErrNotFound
+	}
+
+	updated := *current
+	updated.Status = status
+	updated.StateVersion++
+	updated.LastError = lastError
+	updated.UpdatedAt, err = time.Parse(time.RFC3339, now)
+	if err != nil {
+		return nil, fmt.Errorf("parse emergency finish time: %w", err)
+	}
+	if status.IsTerminal() {
+		terminalAt := updated.UpdatedAt
+		updated.TerminalAt = &terminalAt
+	}
+	event := &store.OperationStateChangedEvent{
+		ID: uuid.NewString(), OperationID: updated.ID, OperationType: updated.OperationType,
+		DefinitionID: updated.ReleaseDefinitionID, OldStatus: current.Status, NewStatus: updated.Status,
+		StateVersion: updated.StateVersion, CreatedAt: updated.UpdatedAt,
+	}
+	if err := insertOperationEvent(ctx, tx, event); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit finish emergency: %w", err)
+	}
+	return &updated, nil
 }
 
 const emergencyIntentSelect = `

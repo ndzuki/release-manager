@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -136,6 +137,54 @@ func TestEmergencyChangeDefinitionNotFound(t *testing.T) {
 	_, err := svc.EmergencyChange(emergencyAdminContext(), req)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+}
+
+func TestExpireEmergencyOperationsTimesOutOverdueOperation(t *testing.T) {
+	svc, st, _ := emergencyTestService(t)
+	resp, err := svc.EmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("timeout-emergency", 3))
+	require.NoError(t, err)
+	_, err = st.Operations().UpdateStatus(t.Context(), resp.Msg.GetOperationId(), store.StatusRunning, 2, "")
+	require.NoError(t, err)
+	sqliteStore, ok := st.(interface{ DB() *sql.DB })
+	require.True(t, ok)
+	_, err = sqliteStore.DB().ExecContext(t.Context(), `UPDATE operations SET deadline = ? WHERE id = ?`,
+		time.Now().UTC().Add(-time.Second).Format(time.RFC3339), resp.Msg.GetOperationId())
+
+	assert.Equal(t, 1, svc.ExpireEmergencyOperations(t.Context()))
+	operation, err := st.Operations().Get(t.Context(), resp.Msg.GetOperationId())
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusTimeout, operation.Status)
+	assert.Equal(t, "operation_timeout", operation.LastError)
+}
+
+func TestGetOperationReturnsEmergencyResult(t *testing.T) {
+	svc, st, _ := emergencyTestService(t)
+	resp, err := svc.EmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("get-emergency", 3))
+	require.NoError(t, err)
+	intent, err := st.EmergencyIntents().GetByOperationID(t.Context(), resp.Msg.GetOperationId())
+	require.NoError(t, err)
+	op, err := st.Operations().Get(t.Context(), resp.Msg.GetOperationId())
+	require.NoError(t, err)
+	_, err = st.Operations().UpdateStatus(t.Context(), op.ID, store.StatusRunning, op.StateVersion, "")
+	require.NoError(t, err)
+	op, err = st.Operations().Get(t.Context(), op.ID)
+	require.NoError(t, err)
+	_, err = st.EmergencyIntents().Finish(
+		t.Context(), intent.ID, op.ID, op.StateVersion, store.StatusSucceeded, "",
+		[]byte(`{"workload_uid":"uid-api","replicas":2}`),
+		[]byte(`{"workload_uid":"uid-api","replicas":3}`),
+	)
+	require.NoError(t, err)
+
+	getResp, err := svc.GetOperation(emergencyAdminContext(), connect.NewRequest(&orchestratorv1.GetOperationRequest{
+		OperationId: op.ID,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, getResp.Msg.GetEmergencyResult())
+	assert.Equal(t, orchestratorv1.EmergencyAction_EMERGENCY_ACTION_SET_REPLICAS, getResp.Msg.GetEmergencyResult().GetOpType())
+	assert.Equal(t, int32(2), getResp.Msg.GetEmergencyResult().GetBefore().GetReplicasValues().GetReplicas())
+	assert.Equal(t, int32(3), getResp.Msg.GetEmergencyResult().GetAfter().GetReplicasValues().GetReplicas())
+	assert.Equal(t, "awaiting_standard_release", getResp.Msg.GetEmergencyResult().GetRevertStatus())
 }
 
 func connectErrorReason(err error) string {

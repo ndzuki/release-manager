@@ -188,19 +188,12 @@ message SessionEvent {
   string message = 2;
 }
 
-message DispatchEmergencyRequest {
-  string operator_id = 1;
-  EmergencyCommand command = 2;
-}
-
-message DispatchEmergencyResponse {}
 
 // OperatorService manages the bidirectional stream between orchestrator and operator agents.
 service OperatorService {
   rpc Enroll(EnrollRequest) returns (EnrollResponse);
   rpc CommandStream(stream CommandStreamRequest) returns (stream CommandStreamResponse);
   rpc RevokeOperator(RevokeOperatorRequest) returns (RevokeOperatorResponse);
-  rpc DispatchEmergency(DispatchEmergencyRequest) returns (DispatchEmergencyResponse);
 }
 
 // RevokeOperatorRequest revokes an operator and closes its active sessions.

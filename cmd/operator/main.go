@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
+	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/operator"
 	operatoragent "github.com/ndzuki/release-manager/internal/operator/agent"
@@ -24,7 +26,6 @@ type operatorSvc struct {
 	dbPath          string
 	commandDBPath   string
 	orchestratorURL string
-	operatorURL     string
 	kubeConfig      string
 	sessionID       string
 	operatorID      string
@@ -33,9 +34,51 @@ type operatorSvc struct {
 	installAtomic   bool
 	installTimeout  time.Duration
 	st              *sqlitestore.Store
+	syncer          *operator.InventorySyncer
+	agent           *operatoragent.Agent
+	commandStore    localstore.Store
+	auditEmitter    *audit.Emitter
 }
 
 func (s *operatorSvc) Name() string { return "release-operator" }
+
+func (s *operatorSvc) ConfigureServer(server *http.Server) error {
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	server.Protocols = protocols
+	return nil
+}
+
+func (s *operatorSvc) Run(ctx context.Context) {
+	if s.syncer != nil {
+		s.syncer.Start(ctx)
+	}
+	go s.runSessionExpiry(ctx, slog.Default())
+	if s.agent != nil {
+		if err := s.agent.Run(ctx); err != nil && ctx.Err() == nil {
+			slog.Error("operator agent stopped", "error", err)
+		}
+	}
+}
+
+func (s *operatorSvc) Shutdown(ctx context.Context) error {
+	if s.auditEmitter == nil {
+		return nil
+	}
+	return s.auditEmitter.Shutdown(ctx)
+}
+
+func (s *operatorSvc) Close() error {
+	var closeErr error
+	if s.commandStore != nil {
+		closeErr = errors.Join(closeErr, s.commandStore.Close())
+	}
+	if s.st != nil {
+		closeErr = errors.Join(closeErr, s.st.Close())
+	}
+	return closeErr
+}
 
 func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	st, err := sqlitestore.Open(s.dbPath)
@@ -45,7 +88,8 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	s.st = st
 	logger.Info("store opened", "db", s.dbPath)
 
-	svc, err := operator.NewService(st, logger)
+	s.auditEmitter = audit.NewEmitter(st.AuditEvents(), logger, audit.DefaultConfig())
+	svc, err := operator.NewService(st, logger, s.auditEmitter)
 	if err != nil {
 		return fmt.Errorf("create operator service: %w", err)
 	}
@@ -58,7 +102,7 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 			http.DefaultClient,
 			s.orchestratorURL,
 		)
-		syncer := operator.NewInventorySyncer(
+		s.syncer = operator.NewInventorySyncer(
 			engine,
 			orchClient,
 			s.operatorID,
@@ -66,27 +110,31 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 			s.clusterID,
 			logger,
 		)
-		svc.SetInventorySyncer(syncer)
-		syncer.Start(context.Background())
 
 		if s.sessionID != "" && s.operatorID != "" {
 			commandStore, err := localstore.OpenBolt(s.commandDBPath)
 			if err != nil {
 				return fmt.Errorf("open command store: %w", err)
 			}
+			s.commandStore = commandStore
+			kubernetesClient, err := operator.NewKubernetesClient(s.kubeConfig)
+			if err != nil {
+				return fmt.Errorf("create emergency Kubernetes client: %w", err)
+			}
 			operatorClient := operatorv1connect.NewOperatorServiceClient(
 				http.DefaultClient,
-				s.operatorURL,
+				s.orchestratorURL,
 			)
-			agent, err := operatoragent.New(operatoragent.Config{
-				Client:       operatoragent.ConnectClient{Client: operatorClient},
-				Engine:       engine,
-				Store:        commandStore,
-				Notifier:     syncer,
-				SyncExecutor: syncer,
-				SessionID:    s.sessionID,
-				OperatorID:   s.operatorID,
-				Logger:       logger,
+			s.agent, err = operatoragent.New(operatoragent.Config{
+				Client:            operatoragent.ConnectClient{Client: operatorClient},
+				Engine:            engine,
+				Store:             commandStore,
+				Notifier:          s.syncer,
+				SyncExecutor:      s.syncer,
+				EmergencyExecutor: operator.NewEmergencyCommandExecutor(kubernetesClient),
+				SessionID:         s.sessionID,
+				OperatorID:        s.operatorID,
+				Logger:            logger,
 				InstallFlags: operatoragent.InstallFlags{
 					Atomic:  s.installAtomic,
 					Timeout: s.installTimeout,
@@ -95,17 +143,11 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 			if err != nil {
 				return fmt.Errorf("create operator agent: %w", err)
 			}
-			go func() {
-				if err := agent.Run(context.Background()); err != nil {
-					logger.Error("operator agent stopped", "error", err)
-				}
-			}()
 		}
 
 		logger.Info("operator runtime wired", "orchestrator_url", s.orchestratorURL)
 	}
 
-	go s.runSessionExpiry(context.Background(), logger)
 	return nil
 }
 
@@ -149,7 +191,6 @@ func main() {
 	dbPath := flag.String("db", "data/operator.db", "path to SQLite database")
 	commandDBPath := flag.String("command-db", "data/operator-commands.db", "path to durable command database")
 	orchestratorAddr := flag.String("orchestrator-addr", "http://localhost:8083", "orchestrator Connect URL")
-	operatorAddr := flag.String("operator-addr", "http://localhost:8084", "operator Connect URL")
 	kubeConfig := flag.String("kubeconfig", "", "path to kubeconfig; empty uses in-cluster or default config")
 	sessionID := flag.String("session-id", "", "enrolled operator session ID")
 	operatorID := flag.String("operator-id", "", "enrolled operator ID")
@@ -163,7 +204,6 @@ func main() {
 		dbPath:          *dbPath,
 		commandDBPath:   *commandDBPath,
 		orchestratorURL: *orchestratorAddr,
-		operatorURL:     *operatorAddr,
 		kubeConfig:      *kubeConfig,
 		sessionID:       *sessionID,
 		operatorID:      *operatorID,

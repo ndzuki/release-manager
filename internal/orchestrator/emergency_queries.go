@@ -11,8 +11,30 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	"github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/store"
 )
+
+func (s *Service) authorizeEmergencyRead(ctx context.Context, definitionID, requestedOrganizationID string) error {
+	actor, ok := authctx.ActorFromContext(ctx)
+	if !ok {
+		return emergencyError(connect.CodeUnauthenticated, "authentication_required", "authentication required")
+	}
+	definition, err := s.store.Definitions().Get(ctx, definitionID)
+	if errors.Is(err, store.ErrNotFound) {
+		return emergencyError(connect.CodeNotFound, "definition_not_found", "release definition not found")
+	}
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("load emergency definition: %w", err))
+	}
+	if requestedOrganizationID != "" && requestedOrganizationID != actor.OrganizationID {
+		return emergencyError(connect.CodePermissionDenied, "permission_denied", "organization scope does not match actor")
+	}
+	if err := s.store.Bindings().RequireActive(ctx, actor.OrganizationID, definition.CustomerID); err != nil {
+		return emergencyError(connect.CodePermissionDenied, "permission_denied", "actor is not authorized for customer")
+	}
+	return nil
+}
 
 // ListEmergencyTargets returns unavailable until the workload manifest snapshot contract is implemented.
 func (s *Service) ListEmergencyTargets(
@@ -22,10 +44,8 @@ func (s *Service) ListEmergencyTargets(
 	if req.Msg.GetReleaseDefinitionId() == "" {
 		return nil, emergencyError(connect.CodeInvalidArgument, "release_definition_id_required", "release_definition_id is required")
 	}
-	if _, err := s.store.Definitions().Get(ctx, req.Msg.GetReleaseDefinitionId()); errors.Is(err, store.ErrNotFound) {
-		return nil, emergencyError(connect.CodeNotFound, "definition_not_found", "release definition not found")
-	} else if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("load emergency targets definition: %w", err))
+	if err := s.authorizeEmergencyRead(ctx, req.Msg.GetReleaseDefinitionId(), ""); err != nil {
+		return nil, err
 	}
 	return nil, emergencyError(connect.CodeUnavailable, "manifest_inventory_unavailable", "workload manifest inventory is unavailable")
 }
@@ -38,6 +58,9 @@ func (s *Service) CheckEmergencyConflict(
 	definitionID := req.Msg.GetReleaseDefinitionId()
 	if definitionID == "" {
 		return nil, emergencyError(connect.CodeInvalidArgument, "release_definition_id_required", "release_definition_id is required")
+	}
+	if err := s.authorizeEmergencyRead(ctx, definitionID, ""); err != nil {
+		return nil, err
 	}
 	operations, err := s.store.Operations().List(ctx, definitionID)
 	if err != nil {
@@ -62,12 +85,11 @@ func (s *Service) ListCandidateArtifacts(
 	ctx context.Context,
 	req *connect.Request[orchestratorv1.ListCandidateArtifactsRequest],
 ) (*connect.Response[orchestratorv1.ListCandidateArtifactsResponse], error) {
-	if req.Msg.GetReleaseDefinitionId() != "" {
-		if _, err := s.store.Definitions().Get(ctx, req.Msg.GetReleaseDefinitionId()); errors.Is(err, store.ErrNotFound) {
-			return nil, emergencyError(connect.CodeNotFound, "definition_not_found", "release definition not found")
-		} else if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("load candidate artifact definition: %w", err))
-		}
+	if req.Msg.GetReleaseDefinitionId() == "" {
+		return nil, emergencyError(connect.CodeInvalidArgument, "release_definition_id_required", "release_definition_id is required")
+	}
+	if err := s.authorizeEmergencyRead(ctx, req.Msg.GetReleaseDefinitionId(), req.Msg.GetOrganizationId()); err != nil {
+		return nil, err
 	}
 	artifacts, err := s.store.CandidateArtifacts().ListValidated(ctx)
 	if err != nil {
@@ -97,6 +119,9 @@ func (s *Service) ListConvergenceTasks(
 	}
 	if filter := req.Msg.GetStatusFilter(); filter != "" && filter != "pending_promotion" && filter != "converged" {
 		return nil, emergencyError(connect.CodeInvalidArgument, "invalid_status_filter", "status_filter is invalid")
+	}
+	if err := s.authorizeEmergencyRead(ctx, definitionID, ""); err != nil {
+		return nil, err
 	}
 	tasks, err := s.store.ConvergenceTasks().ListByDefinition(ctx, definitionID, req.Msg.GetStatusFilter())
 	if err != nil {

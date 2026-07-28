@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	"github.com/ndzuki/release-manager/internal/operator/helmengine"
@@ -152,6 +154,100 @@ func TestAgent_InventorySyncCommandExecutesFullSync(t *testing.T) {
 	assert.Equal(t, "succeeded", stream.sent[1].GetResult().GetStatus())
 	assert.Contains(t, stream.sent[1].GetResult().GetResultJson(), `"inventory_sync_hint":true`)
 }
+
+func TestAgent_EmergencyCommandPersistsAcknowledgesAndExecutes(t *testing.T) {
+	store := newMemoryStore()
+	executor := &recordingEmergencyExecutor{resultJSON: `{"before":{"replicas":2},"after":{"replicas":3}}`}
+	agent, err := New(Config{
+		Client: noopClient{}, Engine: new(recordingEngine), Store: store,
+		EmergencyExecutor: executor, SessionID: "session-1", OperatorID: "operator-1",
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	require.NoError(t, err)
+	stream := newTestStream()
+	command := &operatorv1.EmergencyCommand{
+		CommandId: "emergency-command", OperationId: "emergency-operation",
+		WorkloadKind: "DEPLOYMENT", WorkloadName: "api", WorkloadNamespace: "apps", WorkloadUid: "uid-api",
+		Change: &operatorv1.EmergencyCommand_SetReplicas{SetReplicas: &operatorv1.EmergencySetReplicas{Replicas: 3}},
+	}
+
+	require.NoError(t, agent.handleEmergencyCommand(t.Context(), stream, command))
+	require.Len(t, stream.sent, 2)
+	assert.Equal(t, operatorv1.AckType_ACK_TYPE_PERSISTED, stream.sent[0].GetEmergencyAck().GetAckType())
+	assert.Equal(t, "succeeded", stream.sent[1].GetEmergencyResult().GetStatus())
+	assert.Equal(t, executor.resultJSON, stream.sent[1].GetEmergencyResult().GetResultJson())
+	assert.Equal(t, 1, executor.calls)
+
+	require.NoError(t, agent.handleEmergencyCommand(t.Context(), stream, command))
+	require.Len(t, stream.sent, 3)
+	assert.Equal(t, "succeeded", stream.sent[2].GetEmergencyResult().GetStatus())
+	assert.Equal(t, 1, executor.calls)
+}
+
+func TestAgent_ReplayEmergencyPersistedWaitsForResult(t *testing.T) {
+	store := newMemoryStore()
+	executor := &recordingEmergencyExecutor{resultJSON: `{"before":{"replicas":2},"after":{"replicas":3}}`}
+	agent, err := New(Config{
+		Client: noopClient{}, Engine: new(recordingEngine), Store: store,
+		EmergencyExecutor: executor, SessionID: "session-1", OperatorID: "operator-1",
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	require.NoError(t, err)
+	command := &operatorv1.EmergencyCommand{
+		CommandId: "emergency-persisted", OperationId: "emergency-operation",
+		WorkloadKind: "DEPLOYMENT", WorkloadName: "api", WorkloadNamespace: "apps", WorkloadUid: "uid-api",
+		Change: &operatorv1.EmergencyCommand_SetReplicas{SetReplicas: &operatorv1.EmergencySetReplicas{Replicas: 3}},
+	}
+	payload, err := proto.Marshal(command)
+	require.NoError(t, err)
+	require.NoError(t, store.Save(t.Context(), &localstore.CommandEntry{
+		CommandID: command.GetCommandId(), OperationID: command.GetOperationId(), OperationType: "EMERGENCY",
+		Payload: payload, Status: localstore.StatusPending,
+	}))
+	stream := newTestStream()
+
+	require.NoError(t, agent.replayActive(t.Context(), stream))
+	require.Len(t, stream.sent, 1)
+	assert.Equal(t, operatorv1.AckType_ACK_TYPE_PERSISTED, stream.sent[0].GetEmergencyAck().GetAckType())
+	assert.Equal(t, 0, executor.calls)
+}
+
+func TestAgent_EmergencyCommandReturnsStableFailure(t *testing.T) {
+	executor := &recordingEmergencyExecutor{err: codedEmergencyError{code: "resource_version_conflict"}}
+	agent, err := New(Config{
+		Client: noopClient{}, Engine: new(recordingEngine), Store: newMemoryStore(),
+		EmergencyExecutor: executor, SessionID: "session-1", OperatorID: "operator-1",
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	require.NoError(t, err)
+	stream := newTestStream()
+	command := &operatorv1.EmergencyCommand{
+		CommandId: "emergency-failed", OperationId: "emergency-operation",
+		WorkloadKind: "DEPLOYMENT", WorkloadName: "api", WorkloadNamespace: "apps", WorkloadUid: "uid-api",
+		Change: &operatorv1.EmergencyCommand_SetReplicas{SetReplicas: &operatorv1.EmergencySetReplicas{Replicas: 3}},
+	}
+
+	require.NoError(t, agent.handleEmergencyCommand(t.Context(), stream, command))
+	require.Len(t, stream.sent, 2)
+	assert.Equal(t, "failed", stream.sent[1].GetEmergencyResult().GetStatus())
+	assert.Equal(t, "resource_version_conflict", stream.sent[1].GetEmergencyResult().GetErrorCode())
+}
+
+type recordingEmergencyExecutor struct {
+	calls      int
+	resultJSON string
+	err        error
+}
+
+func (e *recordingEmergencyExecutor) Execute(context.Context, *operatorv1.EmergencyCommand) (string, error) {
+	e.calls++
+	return e.resultJSON, e.err
+}
+
+type codedEmergencyError struct{ code string }
+
+func (e codedEmergencyError) Error() string     { return e.code }
+func (e codedEmergencyError) ErrorCode() string { return e.code }
 
 type recordingSyncExecutor struct {
 	calls int

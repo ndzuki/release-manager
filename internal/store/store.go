@@ -768,12 +768,13 @@ type EmergencyCreateResult struct {
 
 type EmergencyIntentStore interface {
 	CreateIfAvailable(ctx context.Context, command EmergencyCreateCommand) (*EmergencyCreateResult, error)
+	GetReplay(ctx context.Context, scope, keyHash, requestHash string) (*EmergencyCreateResult, error)
 	GetByOperationID(ctx context.Context, operationID string) (*EmergencyIntent, error)
 	GetByCommandID(ctx context.Context, commandID string) (*EmergencyIntent, error)
 	GetActiveLocksForDefinition(ctx context.Context, definitionID string) ([]*EmergencyIntent, error)
 	ListPendingDeliveryByDefinition(ctx context.Context, definitionID string) ([]*EmergencyIntent, error)
 	UpdateDeliveryStatus(ctx context.Context, id, status string) error
-	UpdateResult(ctx context.Context, id string, beforeSnapshot, afterSnapshot json.RawMessage) error
+	Finish(ctx context.Context, intentID, operationID string, expectedStateVersion int, status OperationStatus, lastError string, beforeSnapshot, afterSnapshot json.RawMessage) (*Operation, error)
 }
 
 type ConvergenceTaskStore interface {

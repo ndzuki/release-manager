@@ -99,6 +99,7 @@ message GetOperationRequest {
 
 message GetOperationResponse {
   Operation operation = 1;
+  EmergencyResult emergency_result = 2;
 }
 
 message CancelOperationRequest {
@@ -620,6 +621,42 @@ message EmergencyChangeResponse {
   string convergence_task_id = 4;
   string image_reference = 5;
   google.protobuf.Timestamp accepted_at = 6;
+}
+
+message EmergencyResult {
+  EmergencyAction op_type = 1;
+  EmergencyConvergence convergence_policy = 2;
+  EmergencyTypedValues before = 3;
+  EmergencyTypedValues after = 4;
+  repeated ConvergenceTaskSummary convergence_tasks = 5;
+  string revert_status = 6;
+  string reconciled_by_operation_id = 7;
+}
+
+message EmergencyTypedValues {
+  oneof values {
+    ImageRefValues image_ref_values = 1;
+    ReplicasValues replicas_values = 2;
+    AnnotationValues annotation_values = 3;
+  }
+}
+
+message ImageRefValues {
+  string container = 1;
+  string image_reference = 2;
+}
+
+message ReplicasValues {
+  int32 replicas = 1;
+}
+
+message AnnotationValues {
+  repeated AnnotationEntry annotations = 1;
+}
+
+message ConvergenceTaskSummary {
+  string task_id = 1;
+  string status = 2;
 }
 
 // ── Inventory Sync (REQ-017) ───────────────────────────────────────

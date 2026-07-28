@@ -996,10 +996,11 @@ func (x *GetOperationRequest) GetOperationId() string {
 }
 
 type GetOperationResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Operation     *Operation             `protobuf:"bytes,1,opt,name=operation,proto3" json:"operation,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Operation       *Operation             `protobuf:"bytes,1,opt,name=operation,proto3" json:"operation,omitempty"`
+	EmergencyResult *EmergencyResult       `protobuf:"bytes,2,opt,name=emergency_result,json=emergencyResult,proto3" json:"emergency_result,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *GetOperationResponse) Reset() {
@@ -1035,6 +1036,13 @@ func (*GetOperationResponse) Descriptor() ([]byte, []int) {
 func (x *GetOperationResponse) GetOperation() *Operation {
 	if x != nil {
 		return x.Operation
+	}
+	return nil
+}
+
+func (x *GetOperationResponse) GetEmergencyResult() *EmergencyResult {
+	if x != nil {
+		return x.EmergencyResult
 	}
 	return nil
 }
@@ -5344,6 +5352,388 @@ func (x *EmergencyChangeResponse) GetAcceptedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+type EmergencyResult struct {
+	state                   protoimpl.MessageState    `protogen:"open.v1"`
+	OpType                  EmergencyAction           `protobuf:"varint,1,opt,name=op_type,json=opType,proto3,enum=orchestrator.v1.EmergencyAction" json:"op_type,omitempty"`
+	ConvergencePolicy       EmergencyConvergence      `protobuf:"varint,2,opt,name=convergence_policy,json=convergencePolicy,proto3,enum=orchestrator.v1.EmergencyConvergence" json:"convergence_policy,omitempty"`
+	Before                  *EmergencyTypedValues     `protobuf:"bytes,3,opt,name=before,proto3" json:"before,omitempty"`
+	After                   *EmergencyTypedValues     `protobuf:"bytes,4,opt,name=after,proto3" json:"after,omitempty"`
+	ConvergenceTasks        []*ConvergenceTaskSummary `protobuf:"bytes,5,rep,name=convergence_tasks,json=convergenceTasks,proto3" json:"convergence_tasks,omitempty"`
+	RevertStatus            string                    `protobuf:"bytes,6,opt,name=revert_status,json=revertStatus,proto3" json:"revert_status,omitempty"`
+	ReconciledByOperationId string                    `protobuf:"bytes,7,opt,name=reconciled_by_operation_id,json=reconciledByOperationId,proto3" json:"reconciled_by_operation_id,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *EmergencyResult) Reset() {
+	*x = EmergencyResult{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[82]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmergencyResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmergencyResult) ProtoMessage() {}
+
+func (x *EmergencyResult) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[82]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmergencyResult.ProtoReflect.Descriptor instead.
+func (*EmergencyResult) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{82}
+}
+
+func (x *EmergencyResult) GetOpType() EmergencyAction {
+	if x != nil {
+		return x.OpType
+	}
+	return EmergencyAction_EMERGENCY_ACTION_UNSPECIFIED
+}
+
+func (x *EmergencyResult) GetConvergencePolicy() EmergencyConvergence {
+	if x != nil {
+		return x.ConvergencePolicy
+	}
+	return EmergencyConvergence_EMERGENCY_CONVERGENCE_UNSPECIFIED
+}
+
+func (x *EmergencyResult) GetBefore() *EmergencyTypedValues {
+	if x != nil {
+		return x.Before
+	}
+	return nil
+}
+
+func (x *EmergencyResult) GetAfter() *EmergencyTypedValues {
+	if x != nil {
+		return x.After
+	}
+	return nil
+}
+
+func (x *EmergencyResult) GetConvergenceTasks() []*ConvergenceTaskSummary {
+	if x != nil {
+		return x.ConvergenceTasks
+	}
+	return nil
+}
+
+func (x *EmergencyResult) GetRevertStatus() string {
+	if x != nil {
+		return x.RevertStatus
+	}
+	return ""
+}
+
+func (x *EmergencyResult) GetReconciledByOperationId() string {
+	if x != nil {
+		return x.ReconciledByOperationId
+	}
+	return ""
+}
+
+type EmergencyTypedValues struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Values:
+	//
+	//	*EmergencyTypedValues_ImageRefValues
+	//	*EmergencyTypedValues_ReplicasValues
+	//	*EmergencyTypedValues_AnnotationValues
+	Values        isEmergencyTypedValues_Values `protobuf_oneof:"values"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EmergencyTypedValues) Reset() {
+	*x = EmergencyTypedValues{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[83]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmergencyTypedValues) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmergencyTypedValues) ProtoMessage() {}
+
+func (x *EmergencyTypedValues) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[83]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmergencyTypedValues.ProtoReflect.Descriptor instead.
+func (*EmergencyTypedValues) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{83}
+}
+
+func (x *EmergencyTypedValues) GetValues() isEmergencyTypedValues_Values {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
+func (x *EmergencyTypedValues) GetImageRefValues() *ImageRefValues {
+	if x != nil {
+		if x, ok := x.Values.(*EmergencyTypedValues_ImageRefValues); ok {
+			return x.ImageRefValues
+		}
+	}
+	return nil
+}
+
+func (x *EmergencyTypedValues) GetReplicasValues() *ReplicasValues {
+	if x != nil {
+		if x, ok := x.Values.(*EmergencyTypedValues_ReplicasValues); ok {
+			return x.ReplicasValues
+		}
+	}
+	return nil
+}
+
+func (x *EmergencyTypedValues) GetAnnotationValues() *AnnotationValues {
+	if x != nil {
+		if x, ok := x.Values.(*EmergencyTypedValues_AnnotationValues); ok {
+			return x.AnnotationValues
+		}
+	}
+	return nil
+}
+
+type isEmergencyTypedValues_Values interface {
+	isEmergencyTypedValues_Values()
+}
+
+type EmergencyTypedValues_ImageRefValues struct {
+	ImageRefValues *ImageRefValues `protobuf:"bytes,1,opt,name=image_ref_values,json=imageRefValues,proto3,oneof"`
+}
+
+type EmergencyTypedValues_ReplicasValues struct {
+	ReplicasValues *ReplicasValues `protobuf:"bytes,2,opt,name=replicas_values,json=replicasValues,proto3,oneof"`
+}
+
+type EmergencyTypedValues_AnnotationValues struct {
+	AnnotationValues *AnnotationValues `protobuf:"bytes,3,opt,name=annotation_values,json=annotationValues,proto3,oneof"`
+}
+
+func (*EmergencyTypedValues_ImageRefValues) isEmergencyTypedValues_Values() {}
+
+func (*EmergencyTypedValues_ReplicasValues) isEmergencyTypedValues_Values() {}
+
+func (*EmergencyTypedValues_AnnotationValues) isEmergencyTypedValues_Values() {}
+
+type ImageRefValues struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Container      string                 `protobuf:"bytes,1,opt,name=container,proto3" json:"container,omitempty"`
+	ImageReference string                 `protobuf:"bytes,2,opt,name=image_reference,json=imageReference,proto3" json:"image_reference,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ImageRefValues) Reset() {
+	*x = ImageRefValues{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[84]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ImageRefValues) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ImageRefValues) ProtoMessage() {}
+
+func (x *ImageRefValues) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[84]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ImageRefValues.ProtoReflect.Descriptor instead.
+func (*ImageRefValues) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{84}
+}
+
+func (x *ImageRefValues) GetContainer() string {
+	if x != nil {
+		return x.Container
+	}
+	return ""
+}
+
+func (x *ImageRefValues) GetImageReference() string {
+	if x != nil {
+		return x.ImageReference
+	}
+	return ""
+}
+
+type ReplicasValues struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Replicas      int32                  `protobuf:"varint,1,opt,name=replicas,proto3" json:"replicas,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReplicasValues) Reset() {
+	*x = ReplicasValues{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[85]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReplicasValues) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReplicasValues) ProtoMessage() {}
+
+func (x *ReplicasValues) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[85]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReplicasValues.ProtoReflect.Descriptor instead.
+func (*ReplicasValues) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{85}
+}
+
+func (x *ReplicasValues) GetReplicas() int32 {
+	if x != nil {
+		return x.Replicas
+	}
+	return 0
+}
+
+type AnnotationValues struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Annotations   []*AnnotationEntry     `protobuf:"bytes,1,rep,name=annotations,proto3" json:"annotations,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AnnotationValues) Reset() {
+	*x = AnnotationValues{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[86]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AnnotationValues) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AnnotationValues) ProtoMessage() {}
+
+func (x *AnnotationValues) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[86]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AnnotationValues.ProtoReflect.Descriptor instead.
+func (*AnnotationValues) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{86}
+}
+
+func (x *AnnotationValues) GetAnnotations() []*AnnotationEntry {
+	if x != nil {
+		return x.Annotations
+	}
+	return nil
+}
+
+type ConvergenceTaskSummary struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConvergenceTaskSummary) Reset() {
+	*x = ConvergenceTaskSummary{}
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[87]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConvergenceTaskSummary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConvergenceTaskSummary) ProtoMessage() {}
+
+func (x *ConvergenceTaskSummary) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[87]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConvergenceTaskSummary.ProtoReflect.Descriptor instead.
+func (*ConvergenceTaskSummary) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{87}
+}
+
+func (x *ConvergenceTaskSummary) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *ConvergenceTaskSummary) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
 // InventoryItem represents a single Helm release in a cluster inventory snapshot.
 // It carries only metadata and a values digest — NEVER raw Secret values.
 type InventoryItem struct {
@@ -5362,7 +5752,7 @@ type InventoryItem struct {
 
 func (x *InventoryItem) Reset() {
 	*x = InventoryItem{}
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[82]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5374,7 +5764,7 @@ func (x *InventoryItem) String() string {
 func (*InventoryItem) ProtoMessage() {}
 
 func (x *InventoryItem) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[82]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5387,7 +5777,7 @@ func (x *InventoryItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InventoryItem.ProtoReflect.Descriptor instead.
 func (*InventoryItem) Descriptor() ([]byte, []int) {
-	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{82}
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *InventoryItem) GetNamespace() string {
@@ -5461,7 +5851,7 @@ type SyncInventoryRequest struct {
 
 func (x *SyncInventoryRequest) Reset() {
 	*x = SyncInventoryRequest{}
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[83]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5473,7 +5863,7 @@ func (x *SyncInventoryRequest) String() string {
 func (*SyncInventoryRequest) ProtoMessage() {}
 
 func (x *SyncInventoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[83]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5486,7 +5876,7 @@ func (x *SyncInventoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncInventoryRequest.ProtoReflect.Descriptor instead.
 func (*SyncInventoryRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{83}
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *SyncInventoryRequest) GetOperatorId() string {
@@ -5544,7 +5934,7 @@ type SyncInventoryResponse struct {
 
 func (x *SyncInventoryResponse) Reset() {
 	*x = SyncInventoryResponse{}
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[84]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5556,7 +5946,7 @@ func (x *SyncInventoryResponse) String() string {
 func (*SyncInventoryResponse) ProtoMessage() {}
 
 func (x *SyncInventoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[84]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5569,7 +5959,7 @@ func (x *SyncInventoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncInventoryResponse.ProtoReflect.Descriptor instead.
 func (*SyncInventoryResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{84}
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *SyncInventoryResponse) GetAcceptedCount() int32 {
@@ -5615,7 +6005,7 @@ type TargetedInventoryUpdate struct {
 
 func (x *TargetedInventoryUpdate) Reset() {
 	*x = TargetedInventoryUpdate{}
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[85]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5627,7 +6017,7 @@ func (x *TargetedInventoryUpdate) String() string {
 func (*TargetedInventoryUpdate) ProtoMessage() {}
 
 func (x *TargetedInventoryUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[85]
+	mi := &file_orchestrator_v1_orchestrator_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5640,7 +6030,7 @@ func (x *TargetedInventoryUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TargetedInventoryUpdate.ProtoReflect.Descriptor instead.
 func (*TargetedInventoryUpdate) Descriptor() ([]byte, []int) {
-	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{85}
+	return file_orchestrator_v1_orchestrator_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *TargetedInventoryUpdate) GetOperatorId() string {
@@ -5747,9 +6137,10 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\n" +
 	"last_error\x18\x0f \x01(\tR\tlastError\"8\n" +
 	"\x13GetOperationRequest\x12!\n" +
-	"\foperation_id\x18\x01 \x01(\tR\voperationId\"P\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\"\x9d\x01\n" +
 	"\x14GetOperationResponse\x128\n" +
-	"\toperation\x18\x01 \x01(\v2\x1a.orchestrator.v1.OperationR\toperation\"\xb2\x01\n" +
+	"\toperation\x18\x01 \x01(\v2\x1a.orchestrator.v1.OperationR\toperation\x12K\n" +
+	"\x10emergency_result\x18\x02 \x01(\v2 .orchestrator.v1.EmergencyResultR\x0femergencyResult\"\xb2\x01\n" +
 	"\x16CancelOperationRequest\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x124\n" +
@@ -6094,7 +6485,30 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\x13convergence_task_id\x18\x04 \x01(\tR\x11convergenceTaskId\x12'\n" +
 	"\x0fimage_reference\x18\x05 \x01(\tR\x0eimageReference\x12;\n" +
 	"\vaccepted_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"acceptedAt\"\xfa\x01\n" +
+	"acceptedAt\"\xd6\x03\n" +
+	"\x0fEmergencyResult\x129\n" +
+	"\aop_type\x18\x01 \x01(\x0e2 .orchestrator.v1.EmergencyActionR\x06opType\x12T\n" +
+	"\x12convergence_policy\x18\x02 \x01(\x0e2%.orchestrator.v1.EmergencyConvergenceR\x11convergencePolicy\x12=\n" +
+	"\x06before\x18\x03 \x01(\v2%.orchestrator.v1.EmergencyTypedValuesR\x06before\x12;\n" +
+	"\x05after\x18\x04 \x01(\v2%.orchestrator.v1.EmergencyTypedValuesR\x05after\x12T\n" +
+	"\x11convergence_tasks\x18\x05 \x03(\v2'.orchestrator.v1.ConvergenceTaskSummaryR\x10convergenceTasks\x12#\n" +
+	"\rrevert_status\x18\x06 \x01(\tR\frevertStatus\x12;\n" +
+	"\x1areconciled_by_operation_id\x18\a \x01(\tR\x17reconciledByOperationId\"\x8b\x02\n" +
+	"\x14EmergencyTypedValues\x12K\n" +
+	"\x10image_ref_values\x18\x01 \x01(\v2\x1f.orchestrator.v1.ImageRefValuesH\x00R\x0eimageRefValues\x12J\n" +
+	"\x0freplicas_values\x18\x02 \x01(\v2\x1f.orchestrator.v1.ReplicasValuesH\x00R\x0ereplicasValues\x12P\n" +
+	"\x11annotation_values\x18\x03 \x01(\v2!.orchestrator.v1.AnnotationValuesH\x00R\x10annotationValuesB\b\n" +
+	"\x06values\"W\n" +
+	"\x0eImageRefValues\x12\x1c\n" +
+	"\tcontainer\x18\x01 \x01(\tR\tcontainer\x12'\n" +
+	"\x0fimage_reference\x18\x02 \x01(\tR\x0eimageReference\",\n" +
+	"\x0eReplicasValues\x12\x1a\n" +
+	"\breplicas\x18\x01 \x01(\x05R\breplicas\"V\n" +
+	"\x10AnnotationValues\x12B\n" +
+	"\vannotations\x18\x01 \x03(\v2 .orchestrator.v1.AnnotationEntryR\vannotations\"I\n" +
+	"\x16ConvergenceTaskSummary\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\"\xfa\x01\n" +
 	"\rInventoryItem\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
@@ -6214,7 +6628,7 @@ func file_orchestrator_v1_orchestrator_proto_rawDescGZIP() []byte {
 }
 
 var file_orchestrator_v1_orchestrator_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_orchestrator_v1_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 88)
+var file_orchestrator_v1_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 94)
 var file_orchestrator_v1_orchestrator_proto_goTypes = []any{
 	(OperationStatus)(0),                     // 0: orchestrator.v1.OperationStatus
 	(ArtifactType)(0),                        // 1: orchestrator.v1.ArtifactType
@@ -6304,170 +6718,186 @@ var file_orchestrator_v1_orchestrator_proto_goTypes = []any{
 	(*ConvergenceTaskDetail)(nil),            // 85: orchestrator.v1.ConvergenceTaskDetail
 	(*EmergencyChangeRequest)(nil),           // 86: orchestrator.v1.EmergencyChangeRequest
 	(*EmergencyChangeResponse)(nil),          // 87: orchestrator.v1.EmergencyChangeResponse
-	(*InventoryItem)(nil),                    // 88: orchestrator.v1.InventoryItem
-	(*SyncInventoryRequest)(nil),             // 89: orchestrator.v1.SyncInventoryRequest
-	(*SyncInventoryResponse)(nil),            // 90: orchestrator.v1.SyncInventoryResponse
-	(*TargetedInventoryUpdate)(nil),          // 91: orchestrator.v1.TargetedInventoryUpdate
-	nil,                                      // 92: orchestrator.v1.EmergencyTarget.CurrentImageRefsEntry
-	nil,                                      // 93: orchestrator.v1.EmergencyTarget.CurrentAnnotationsEntry
-	(*v1.ActorContext)(nil),                  // 94: common.v1.ActorContext
-	(*v1.SignatureRef)(nil),                  // 95: common.v1.SignatureRef
-	(*timestamppb.Timestamp)(nil),            // 96: google.protobuf.Timestamp
-	(v1.VerificationResult)(0),               // 97: common.v1.VerificationResult
-	(*v1.ReleaseDefinition)(nil),             // 98: common.v1.ReleaseDefinition
-	(*v1.Customer)(nil),                      // 99: common.v1.Customer
-	(*v1.Cluster)(nil),                       // 100: common.v1.Cluster
-	(*v1.ValuesRevision)(nil),                // 101: common.v1.ValuesRevision
-	(v1.ValuesStatus)(0),                     // 102: common.v1.ValuesStatus
+	(*EmergencyResult)(nil),                  // 88: orchestrator.v1.EmergencyResult
+	(*EmergencyTypedValues)(nil),             // 89: orchestrator.v1.EmergencyTypedValues
+	(*ImageRefValues)(nil),                   // 90: orchestrator.v1.ImageRefValues
+	(*ReplicasValues)(nil),                   // 91: orchestrator.v1.ReplicasValues
+	(*AnnotationValues)(nil),                 // 92: orchestrator.v1.AnnotationValues
+	(*ConvergenceTaskSummary)(nil),           // 93: orchestrator.v1.ConvergenceTaskSummary
+	(*InventoryItem)(nil),                    // 94: orchestrator.v1.InventoryItem
+	(*SyncInventoryRequest)(nil),             // 95: orchestrator.v1.SyncInventoryRequest
+	(*SyncInventoryResponse)(nil),            // 96: orchestrator.v1.SyncInventoryResponse
+	(*TargetedInventoryUpdate)(nil),          // 97: orchestrator.v1.TargetedInventoryUpdate
+	nil,                                      // 98: orchestrator.v1.EmergencyTarget.CurrentImageRefsEntry
+	nil,                                      // 99: orchestrator.v1.EmergencyTarget.CurrentAnnotationsEntry
+	(*v1.ActorContext)(nil),                  // 100: common.v1.ActorContext
+	(*v1.SignatureRef)(nil),                  // 101: common.v1.SignatureRef
+	(*timestamppb.Timestamp)(nil),            // 102: google.protobuf.Timestamp
+	(v1.VerificationResult)(0),               // 103: common.v1.VerificationResult
+	(*v1.ReleaseDefinition)(nil),             // 104: common.v1.ReleaseDefinition
+	(*v1.Customer)(nil),                      // 105: common.v1.Customer
+	(*v1.Cluster)(nil),                       // 106: common.v1.Cluster
+	(*v1.ValuesRevision)(nil),                // 107: common.v1.ValuesRevision
+	(v1.ValuesStatus)(0),                     // 108: common.v1.ValuesStatus
 }
 var file_orchestrator_v1_orchestrator_proto_depIdxs = []int32{
-	94,  // 0: orchestrator.v1.CreateOperationRequest.actor:type_name -> common.v1.ActorContext
-	95,  // 1: orchestrator.v1.CreateOperationRequest.signature_ref:type_name -> common.v1.SignatureRef
-	96,  // 2: orchestrator.v1.CreateOperationResponse.accepted_at:type_name -> google.protobuf.Timestamp
-	97,  // 3: orchestrator.v1.CreateOperationResponse.verification_result:type_name -> common.v1.VerificationResult
-	94,  // 4: orchestrator.v1.RollbackReleaseRequest.actor:type_name -> common.v1.ActorContext
+	100, // 0: orchestrator.v1.CreateOperationRequest.actor:type_name -> common.v1.ActorContext
+	101, // 1: orchestrator.v1.CreateOperationRequest.signature_ref:type_name -> common.v1.SignatureRef
+	102, // 2: orchestrator.v1.CreateOperationResponse.accepted_at:type_name -> google.protobuf.Timestamp
+	103, // 3: orchestrator.v1.CreateOperationResponse.verification_result:type_name -> common.v1.VerificationResult
+	100, // 4: orchestrator.v1.RollbackReleaseRequest.actor:type_name -> common.v1.ActorContext
 	0,   // 5: orchestrator.v1.Operation.state:type_name -> orchestrator.v1.OperationStatus
-	94,  // 6: orchestrator.v1.Operation.actor:type_name -> common.v1.ActorContext
-	96,  // 7: orchestrator.v1.Operation.created_at:type_name -> google.protobuf.Timestamp
-	96,  // 8: orchestrator.v1.Operation.updated_at:type_name -> google.protobuf.Timestamp
-	96,  // 9: orchestrator.v1.Operation.terminal_at:type_name -> google.protobuf.Timestamp
-	96,  // 10: orchestrator.v1.Operation.deadline:type_name -> google.protobuf.Timestamp
+	100, // 6: orchestrator.v1.Operation.actor:type_name -> common.v1.ActorContext
+	102, // 7: orchestrator.v1.Operation.created_at:type_name -> google.protobuf.Timestamp
+	102, // 8: orchestrator.v1.Operation.updated_at:type_name -> google.protobuf.Timestamp
+	102, // 9: orchestrator.v1.Operation.terminal_at:type_name -> google.protobuf.Timestamp
+	102, // 10: orchestrator.v1.Operation.deadline:type_name -> google.protobuf.Timestamp
 	12,  // 11: orchestrator.v1.GetOperationResponse.operation:type_name -> orchestrator.v1.Operation
-	12,  // 12: orchestrator.v1.CancelOperationResponse.operation:type_name -> orchestrator.v1.Operation
-	94,  // 13: orchestrator.v1.CreateReleaseDefinitionRequest.actor:type_name -> common.v1.ActorContext
-	67,  // 14: orchestrator.v1.CreateReleaseDefinitionRequest.approved_annotation_keys:type_name -> orchestrator.v1.ApprovedAnnotationKey
-	68,  // 15: orchestrator.v1.CreateReleaseDefinitionRequest.promotion_mappings:type_name -> orchestrator.v1.PromotionMapping
-	98,  // 16: orchestrator.v1.CreateReleaseDefinitionResponse.definition:type_name -> common.v1.ReleaseDefinition
-	98,  // 17: orchestrator.v1.GetReleaseDefinitionResponse.definition:type_name -> common.v1.ReleaseDefinition
-	98,  // 18: orchestrator.v1.ListReleaseDefinitionsResponse.definitions:type_name -> common.v1.ReleaseDefinition
-	67,  // 19: orchestrator.v1.UpdateReleaseDefinitionRequest.approved_annotation_keys:type_name -> orchestrator.v1.ApprovedAnnotationKey
-	68,  // 20: orchestrator.v1.UpdateReleaseDefinitionRequest.promotion_mappings:type_name -> orchestrator.v1.PromotionMapping
-	98,  // 21: orchestrator.v1.UpdateReleaseDefinitionResponse.definition:type_name -> common.v1.ReleaseDefinition
-	98,  // 22: orchestrator.v1.DisableReleaseDefinitionResponse.definition:type_name -> common.v1.ReleaseDefinition
-	99,  // 23: orchestrator.v1.CreateCustomerResponse.customer:type_name -> common.v1.Customer
-	99,  // 24: orchestrator.v1.GetCustomerResponse.customer:type_name -> common.v1.Customer
-	99,  // 25: orchestrator.v1.ListCustomersResponse.customers:type_name -> common.v1.Customer
-	99,  // 26: orchestrator.v1.UpdateCustomerResponse.customer:type_name -> common.v1.Customer
-	100, // 27: orchestrator.v1.CreateClusterResponse.cluster:type_name -> common.v1.Cluster
-	50,  // 28: orchestrator.v1.UpdateClusterRequest.routes:type_name -> orchestrator.v1.ClusterRouteInput
-	100, // 29: orchestrator.v1.UpdateClusterResponse.cluster:type_name -> common.v1.Cluster
-	49,  // 30: orchestrator.v1.UpdateClusterResponse.routes:type_name -> orchestrator.v1.ClusterRoute
-	100, // 31: orchestrator.v1.GetClusterResponse.cluster:type_name -> common.v1.Cluster
-	100, // 32: orchestrator.v1.ListClustersResponse.clusters:type_name -> common.v1.Cluster
-	1,   // 33: orchestrator.v1.ClusterRoute.artifact_type:type_name -> orchestrator.v1.ArtifactType
-	2,   // 34: orchestrator.v1.ClusterRoute.mode:type_name -> orchestrator.v1.ArtifactMode
-	1,   // 35: orchestrator.v1.ClusterRouteInput.artifact_type:type_name -> orchestrator.v1.ArtifactType
-	2,   // 36: orchestrator.v1.ClusterRouteInput.mode:type_name -> orchestrator.v1.ArtifactMode
-	1,   // 37: orchestrator.v1.ConfigureClusterRouteRequest.artifact_type:type_name -> orchestrator.v1.ArtifactType
-	2,   // 38: orchestrator.v1.ConfigureClusterRouteRequest.mode:type_name -> orchestrator.v1.ArtifactMode
-	49,  // 39: orchestrator.v1.ConfigureClusterRouteResponse.route:type_name -> orchestrator.v1.ClusterRoute
-	49,  // 40: orchestrator.v1.GetClusterRoutesResponse.routes:type_name -> orchestrator.v1.ClusterRoute
-	101, // 41: orchestrator.v1.ValuesRevisionDecisionResponse.revision:type_name -> common.v1.ValuesRevision
-	102, // 42: orchestrator.v1.ValuesRevisionDecisionResponse.previous_state:type_name -> common.v1.ValuesStatus
-	102, // 43: orchestrator.v1.ValuesRevisionDecisionResponse.new_state:type_name -> common.v1.ValuesStatus
-	96,  // 44: orchestrator.v1.ValuesRevisionDecisionResponse.decided_at:type_name -> google.protobuf.Timestamp
-	3,   // 45: orchestrator.v1.ReleaseSummary.status:type_name -> orchestrator.v1.ReleaseInventoryStatus
-	96,  // 46: orchestrator.v1.ReleaseSummary.last_sync_at:type_name -> google.protobuf.Timestamp
-	3,   // 47: orchestrator.v1.ListReleasesRequest.status_filter:type_name -> orchestrator.v1.ReleaseInventoryStatus
-	62,  // 48: orchestrator.v1.ListReleasesResponse.releases:type_name -> orchestrator.v1.ReleaseSummary
-	73,  // 49: orchestrator.v1.SetApprovedAnnotations.entries:type_name -> orchestrator.v1.AnnotationEntry
-	76,  // 50: orchestrator.v1.ListEmergencyTargetsResponse.targets:type_name -> orchestrator.v1.EmergencyTarget
-	69,  // 51: orchestrator.v1.EmergencyTarget.workload_ref:type_name -> orchestrator.v1.WorkloadRef
-	4,   // 52: orchestrator.v1.EmergencyTarget.supported_operations:type_name -> orchestrator.v1.EmergencyAction
-	68,  // 53: orchestrator.v1.EmergencyTarget.promotions:type_name -> orchestrator.v1.PromotionMapping
-	92,  // 54: orchestrator.v1.EmergencyTarget.current_image_refs:type_name -> orchestrator.v1.EmergencyTarget.CurrentImageRefsEntry
-	93,  // 55: orchestrator.v1.EmergencyTarget.current_annotations:type_name -> orchestrator.v1.EmergencyTarget.CurrentAnnotationsEntry
-	79,  // 56: orchestrator.v1.CheckEmergencyConflictResponse.running_operation:type_name -> orchestrator.v1.RunningOperationDetail
-	96,  // 57: orchestrator.v1.RunningOperationDetail.started_at:type_name -> google.protobuf.Timestamp
-	82,  // 58: orchestrator.v1.ListCandidateArtifactsResponse.artifacts:type_name -> orchestrator.v1.CandidateArtifactSummary
-	96,  // 59: orchestrator.v1.CandidateArtifactSummary.validated_at:type_name -> google.protobuf.Timestamp
-	85,  // 60: orchestrator.v1.ListConvergenceTasksResponse.tasks:type_name -> orchestrator.v1.ConvergenceTaskDetail
-	4,   // 61: orchestrator.v1.ConvergenceTaskDetail.op_type:type_name -> orchestrator.v1.EmergencyAction
-	96,  // 62: orchestrator.v1.ConvergenceTaskDetail.submitted_at:type_name -> google.protobuf.Timestamp
-	69,  // 63: orchestrator.v1.EmergencyChangeRequest.workload_ref:type_name -> orchestrator.v1.WorkloadRef
-	70,  // 64: orchestrator.v1.EmergencyChangeRequest.set_container_image:type_name -> orchestrator.v1.SetContainerImage
-	71,  // 65: orchestrator.v1.EmergencyChangeRequest.set_replicas:type_name -> orchestrator.v1.SetReplicas
-	72,  // 66: orchestrator.v1.EmergencyChangeRequest.set_approved_annotations:type_name -> orchestrator.v1.SetApprovedAnnotations
-	5,   // 67: orchestrator.v1.EmergencyChangeRequest.convergence:type_name -> orchestrator.v1.EmergencyConvergence
-	5,   // 68: orchestrator.v1.EmergencyChangeResponse.convergence:type_name -> orchestrator.v1.EmergencyConvergence
-	96,  // 69: orchestrator.v1.EmergencyChangeResponse.accepted_at:type_name -> google.protobuf.Timestamp
-	88,  // 70: orchestrator.v1.SyncInventoryRequest.items:type_name -> orchestrator.v1.InventoryItem
-	88,  // 71: orchestrator.v1.TargetedInventoryUpdate.item:type_name -> orchestrator.v1.InventoryItem
-	6,   // 72: orchestrator.v1.OrchestratorService.CreateOperation:input_type -> orchestrator.v1.CreateOperationRequest
-	8,   // 73: orchestrator.v1.OrchestratorService.PublishRelease:input_type -> orchestrator.v1.PublishReleaseRequest
-	10,  // 74: orchestrator.v1.OrchestratorService.RollbackRelease:input_type -> orchestrator.v1.RollbackReleaseRequest
-	13,  // 75: orchestrator.v1.OrchestratorService.GetOperation:input_type -> orchestrator.v1.GetOperationRequest
-	15,  // 76: orchestrator.v1.OrchestratorService.CancelOperation:input_type -> orchestrator.v1.CancelOperationRequest
-	58,  // 77: orchestrator.v1.OrchestratorService.SubmitValuesRevision:input_type -> orchestrator.v1.SubmitValuesRevisionRequest
-	59,  // 78: orchestrator.v1.OrchestratorService.ApproveValuesRevision:input_type -> orchestrator.v1.ApproveValuesRevisionRequest
-	60,  // 79: orchestrator.v1.OrchestratorService.RejectValuesRevision:input_type -> orchestrator.v1.RejectValuesRevisionRequest
-	17,  // 80: orchestrator.v1.OrchestratorService.CreateReleaseDefinition:input_type -> orchestrator.v1.CreateReleaseDefinitionRequest
-	19,  // 81: orchestrator.v1.OrchestratorService.GetReleaseDefinition:input_type -> orchestrator.v1.GetReleaseDefinitionRequest
-	21,  // 82: orchestrator.v1.OrchestratorService.ListReleaseDefinitions:input_type -> orchestrator.v1.ListReleaseDefinitionsRequest
-	23,  // 83: orchestrator.v1.OrchestratorService.UpdateReleaseDefinition:input_type -> orchestrator.v1.UpdateReleaseDefinitionRequest
-	25,  // 84: orchestrator.v1.OrchestratorService.DisableReleaseDefinition:input_type -> orchestrator.v1.DisableReleaseDefinitionRequest
-	27,  // 85: orchestrator.v1.OrchestratorService.CreateCustomer:input_type -> orchestrator.v1.CreateCustomerRequest
-	29,  // 86: orchestrator.v1.OrchestratorService.GetCustomer:input_type -> orchestrator.v1.GetCustomerRequest
-	31,  // 87: orchestrator.v1.OrchestratorService.ListCustomers:input_type -> orchestrator.v1.ListCustomersRequest
-	33,  // 88: orchestrator.v1.OrchestratorService.UpdateCustomer:input_type -> orchestrator.v1.UpdateCustomerRequest
-	35,  // 89: orchestrator.v1.OrchestratorService.DisableCustomer:input_type -> orchestrator.v1.DisableCustomerRequest
-	37,  // 90: orchestrator.v1.OrchestratorService.CreateCluster:input_type -> orchestrator.v1.CreateClusterRequest
-	39,  // 91: orchestrator.v1.OrchestratorService.UpdateCluster:input_type -> orchestrator.v1.UpdateClusterRequest
-	41,  // 92: orchestrator.v1.OrchestratorService.GetCluster:input_type -> orchestrator.v1.GetClusterRequest
-	43,  // 93: orchestrator.v1.OrchestratorService.ListClusters:input_type -> orchestrator.v1.ListClustersRequest
-	45,  // 94: orchestrator.v1.OrchestratorService.DisableCluster:input_type -> orchestrator.v1.DisableClusterRequest
-	47,  // 95: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:input_type -> orchestrator.v1.CreateEnrollmentTokenRequest
-	86,  // 96: orchestrator.v1.OrchestratorService.EmergencyChange:input_type -> orchestrator.v1.EmergencyChangeRequest
-	74,  // 97: orchestrator.v1.OrchestratorService.ListEmergencyTargets:input_type -> orchestrator.v1.ListEmergencyTargetsRequest
-	77,  // 98: orchestrator.v1.OrchestratorService.CheckEmergencyConflict:input_type -> orchestrator.v1.CheckEmergencyConflictRequest
-	80,  // 99: orchestrator.v1.OrchestratorService.ListCandidateArtifacts:input_type -> orchestrator.v1.ListCandidateArtifactsRequest
-	83,  // 100: orchestrator.v1.OrchestratorService.ListConvergenceTasks:input_type -> orchestrator.v1.ListConvergenceTasksRequest
-	52,  // 101: orchestrator.v1.OrchestratorService.ConfigureClusterRoute:input_type -> orchestrator.v1.ConfigureClusterRouteRequest
-	54,  // 102: orchestrator.v1.OrchestratorService.GetClusterRoutes:input_type -> orchestrator.v1.GetClusterRoutesRequest
-	56,  // 103: orchestrator.v1.OrchestratorService.DeleteClusterRoute:input_type -> orchestrator.v1.DeleteClusterRouteRequest
-	63,  // 104: orchestrator.v1.OrchestratorService.ListReleases:input_type -> orchestrator.v1.ListReleasesRequest
-	65,  // 105: orchestrator.v1.OrchestratorService.TriggerInventorySync:input_type -> orchestrator.v1.TriggerInventorySyncRequest
-	89,  // 106: orchestrator.v1.OrchestratorService.SyncInventory:input_type -> orchestrator.v1.SyncInventoryRequest
-	7,   // 107: orchestrator.v1.OrchestratorService.CreateOperation:output_type -> orchestrator.v1.CreateOperationResponse
-	9,   // 108: orchestrator.v1.OrchestratorService.PublishRelease:output_type -> orchestrator.v1.PublishReleaseResponse
-	11,  // 109: orchestrator.v1.OrchestratorService.RollbackRelease:output_type -> orchestrator.v1.RollbackReleaseResponse
-	14,  // 110: orchestrator.v1.OrchestratorService.GetOperation:output_type -> orchestrator.v1.GetOperationResponse
-	16,  // 111: orchestrator.v1.OrchestratorService.CancelOperation:output_type -> orchestrator.v1.CancelOperationResponse
-	61,  // 112: orchestrator.v1.OrchestratorService.SubmitValuesRevision:output_type -> orchestrator.v1.ValuesRevisionDecisionResponse
-	61,  // 113: orchestrator.v1.OrchestratorService.ApproveValuesRevision:output_type -> orchestrator.v1.ValuesRevisionDecisionResponse
-	61,  // 114: orchestrator.v1.OrchestratorService.RejectValuesRevision:output_type -> orchestrator.v1.ValuesRevisionDecisionResponse
-	18,  // 115: orchestrator.v1.OrchestratorService.CreateReleaseDefinition:output_type -> orchestrator.v1.CreateReleaseDefinitionResponse
-	20,  // 116: orchestrator.v1.OrchestratorService.GetReleaseDefinition:output_type -> orchestrator.v1.GetReleaseDefinitionResponse
-	22,  // 117: orchestrator.v1.OrchestratorService.ListReleaseDefinitions:output_type -> orchestrator.v1.ListReleaseDefinitionsResponse
-	24,  // 118: orchestrator.v1.OrchestratorService.UpdateReleaseDefinition:output_type -> orchestrator.v1.UpdateReleaseDefinitionResponse
-	26,  // 119: orchestrator.v1.OrchestratorService.DisableReleaseDefinition:output_type -> orchestrator.v1.DisableReleaseDefinitionResponse
-	28,  // 120: orchestrator.v1.OrchestratorService.CreateCustomer:output_type -> orchestrator.v1.CreateCustomerResponse
-	30,  // 121: orchestrator.v1.OrchestratorService.GetCustomer:output_type -> orchestrator.v1.GetCustomerResponse
-	32,  // 122: orchestrator.v1.OrchestratorService.ListCustomers:output_type -> orchestrator.v1.ListCustomersResponse
-	34,  // 123: orchestrator.v1.OrchestratorService.UpdateCustomer:output_type -> orchestrator.v1.UpdateCustomerResponse
-	36,  // 124: orchestrator.v1.OrchestratorService.DisableCustomer:output_type -> orchestrator.v1.DisableCustomerResponse
-	38,  // 125: orchestrator.v1.OrchestratorService.CreateCluster:output_type -> orchestrator.v1.CreateClusterResponse
-	40,  // 126: orchestrator.v1.OrchestratorService.UpdateCluster:output_type -> orchestrator.v1.UpdateClusterResponse
-	42,  // 127: orchestrator.v1.OrchestratorService.GetCluster:output_type -> orchestrator.v1.GetClusterResponse
-	44,  // 128: orchestrator.v1.OrchestratorService.ListClusters:output_type -> orchestrator.v1.ListClustersResponse
-	46,  // 129: orchestrator.v1.OrchestratorService.DisableCluster:output_type -> orchestrator.v1.DisableClusterResponse
-	48,  // 130: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:output_type -> orchestrator.v1.CreateEnrollmentTokenResponse
-	87,  // 131: orchestrator.v1.OrchestratorService.EmergencyChange:output_type -> orchestrator.v1.EmergencyChangeResponse
-	75,  // 132: orchestrator.v1.OrchestratorService.ListEmergencyTargets:output_type -> orchestrator.v1.ListEmergencyTargetsResponse
-	78,  // 133: orchestrator.v1.OrchestratorService.CheckEmergencyConflict:output_type -> orchestrator.v1.CheckEmergencyConflictResponse
-	81,  // 134: orchestrator.v1.OrchestratorService.ListCandidateArtifacts:output_type -> orchestrator.v1.ListCandidateArtifactsResponse
-	84,  // 135: orchestrator.v1.OrchestratorService.ListConvergenceTasks:output_type -> orchestrator.v1.ListConvergenceTasksResponse
-	53,  // 136: orchestrator.v1.OrchestratorService.ConfigureClusterRoute:output_type -> orchestrator.v1.ConfigureClusterRouteResponse
-	55,  // 137: orchestrator.v1.OrchestratorService.GetClusterRoutes:output_type -> orchestrator.v1.GetClusterRoutesResponse
-	57,  // 138: orchestrator.v1.OrchestratorService.DeleteClusterRoute:output_type -> orchestrator.v1.DeleteClusterRouteResponse
-	64,  // 139: orchestrator.v1.OrchestratorService.ListReleases:output_type -> orchestrator.v1.ListReleasesResponse
-	66,  // 140: orchestrator.v1.OrchestratorService.TriggerInventorySync:output_type -> orchestrator.v1.TriggerInventorySyncResponse
-	90,  // 141: orchestrator.v1.OrchestratorService.SyncInventory:output_type -> orchestrator.v1.SyncInventoryResponse
-	107, // [107:142] is the sub-list for method output_type
-	72,  // [72:107] is the sub-list for method input_type
-	72,  // [72:72] is the sub-list for extension type_name
-	72,  // [72:72] is the sub-list for extension extendee
-	0,   // [0:72] is the sub-list for field type_name
+	88,  // 12: orchestrator.v1.GetOperationResponse.emergency_result:type_name -> orchestrator.v1.EmergencyResult
+	12,  // 13: orchestrator.v1.CancelOperationResponse.operation:type_name -> orchestrator.v1.Operation
+	100, // 14: orchestrator.v1.CreateReleaseDefinitionRequest.actor:type_name -> common.v1.ActorContext
+	67,  // 15: orchestrator.v1.CreateReleaseDefinitionRequest.approved_annotation_keys:type_name -> orchestrator.v1.ApprovedAnnotationKey
+	68,  // 16: orchestrator.v1.CreateReleaseDefinitionRequest.promotion_mappings:type_name -> orchestrator.v1.PromotionMapping
+	104, // 17: orchestrator.v1.CreateReleaseDefinitionResponse.definition:type_name -> common.v1.ReleaseDefinition
+	104, // 18: orchestrator.v1.GetReleaseDefinitionResponse.definition:type_name -> common.v1.ReleaseDefinition
+	104, // 19: orchestrator.v1.ListReleaseDefinitionsResponse.definitions:type_name -> common.v1.ReleaseDefinition
+	67,  // 20: orchestrator.v1.UpdateReleaseDefinitionRequest.approved_annotation_keys:type_name -> orchestrator.v1.ApprovedAnnotationKey
+	68,  // 21: orchestrator.v1.UpdateReleaseDefinitionRequest.promotion_mappings:type_name -> orchestrator.v1.PromotionMapping
+	104, // 22: orchestrator.v1.UpdateReleaseDefinitionResponse.definition:type_name -> common.v1.ReleaseDefinition
+	104, // 23: orchestrator.v1.DisableReleaseDefinitionResponse.definition:type_name -> common.v1.ReleaseDefinition
+	105, // 24: orchestrator.v1.CreateCustomerResponse.customer:type_name -> common.v1.Customer
+	105, // 25: orchestrator.v1.GetCustomerResponse.customer:type_name -> common.v1.Customer
+	105, // 26: orchestrator.v1.ListCustomersResponse.customers:type_name -> common.v1.Customer
+	105, // 27: orchestrator.v1.UpdateCustomerResponse.customer:type_name -> common.v1.Customer
+	106, // 28: orchestrator.v1.CreateClusterResponse.cluster:type_name -> common.v1.Cluster
+	50,  // 29: orchestrator.v1.UpdateClusterRequest.routes:type_name -> orchestrator.v1.ClusterRouteInput
+	106, // 30: orchestrator.v1.UpdateClusterResponse.cluster:type_name -> common.v1.Cluster
+	49,  // 31: orchestrator.v1.UpdateClusterResponse.routes:type_name -> orchestrator.v1.ClusterRoute
+	106, // 32: orchestrator.v1.GetClusterResponse.cluster:type_name -> common.v1.Cluster
+	106, // 33: orchestrator.v1.ListClustersResponse.clusters:type_name -> common.v1.Cluster
+	1,   // 34: orchestrator.v1.ClusterRoute.artifact_type:type_name -> orchestrator.v1.ArtifactType
+	2,   // 35: orchestrator.v1.ClusterRoute.mode:type_name -> orchestrator.v1.ArtifactMode
+	1,   // 36: orchestrator.v1.ClusterRouteInput.artifact_type:type_name -> orchestrator.v1.ArtifactType
+	2,   // 37: orchestrator.v1.ClusterRouteInput.mode:type_name -> orchestrator.v1.ArtifactMode
+	1,   // 38: orchestrator.v1.ConfigureClusterRouteRequest.artifact_type:type_name -> orchestrator.v1.ArtifactType
+	2,   // 39: orchestrator.v1.ConfigureClusterRouteRequest.mode:type_name -> orchestrator.v1.ArtifactMode
+	49,  // 40: orchestrator.v1.ConfigureClusterRouteResponse.route:type_name -> orchestrator.v1.ClusterRoute
+	49,  // 41: orchestrator.v1.GetClusterRoutesResponse.routes:type_name -> orchestrator.v1.ClusterRoute
+	107, // 42: orchestrator.v1.ValuesRevisionDecisionResponse.revision:type_name -> common.v1.ValuesRevision
+	108, // 43: orchestrator.v1.ValuesRevisionDecisionResponse.previous_state:type_name -> common.v1.ValuesStatus
+	108, // 44: orchestrator.v1.ValuesRevisionDecisionResponse.new_state:type_name -> common.v1.ValuesStatus
+	102, // 45: orchestrator.v1.ValuesRevisionDecisionResponse.decided_at:type_name -> google.protobuf.Timestamp
+	3,   // 46: orchestrator.v1.ReleaseSummary.status:type_name -> orchestrator.v1.ReleaseInventoryStatus
+	102, // 47: orchestrator.v1.ReleaseSummary.last_sync_at:type_name -> google.protobuf.Timestamp
+	3,   // 48: orchestrator.v1.ListReleasesRequest.status_filter:type_name -> orchestrator.v1.ReleaseInventoryStatus
+	62,  // 49: orchestrator.v1.ListReleasesResponse.releases:type_name -> orchestrator.v1.ReleaseSummary
+	73,  // 50: orchestrator.v1.SetApprovedAnnotations.entries:type_name -> orchestrator.v1.AnnotationEntry
+	76,  // 51: orchestrator.v1.ListEmergencyTargetsResponse.targets:type_name -> orchestrator.v1.EmergencyTarget
+	69,  // 52: orchestrator.v1.EmergencyTarget.workload_ref:type_name -> orchestrator.v1.WorkloadRef
+	4,   // 53: orchestrator.v1.EmergencyTarget.supported_operations:type_name -> orchestrator.v1.EmergencyAction
+	68,  // 54: orchestrator.v1.EmergencyTarget.promotions:type_name -> orchestrator.v1.PromotionMapping
+	98,  // 55: orchestrator.v1.EmergencyTarget.current_image_refs:type_name -> orchestrator.v1.EmergencyTarget.CurrentImageRefsEntry
+	99,  // 56: orchestrator.v1.EmergencyTarget.current_annotations:type_name -> orchestrator.v1.EmergencyTarget.CurrentAnnotationsEntry
+	79,  // 57: orchestrator.v1.CheckEmergencyConflictResponse.running_operation:type_name -> orchestrator.v1.RunningOperationDetail
+	102, // 58: orchestrator.v1.RunningOperationDetail.started_at:type_name -> google.protobuf.Timestamp
+	82,  // 59: orchestrator.v1.ListCandidateArtifactsResponse.artifacts:type_name -> orchestrator.v1.CandidateArtifactSummary
+	102, // 60: orchestrator.v1.CandidateArtifactSummary.validated_at:type_name -> google.protobuf.Timestamp
+	85,  // 61: orchestrator.v1.ListConvergenceTasksResponse.tasks:type_name -> orchestrator.v1.ConvergenceTaskDetail
+	4,   // 62: orchestrator.v1.ConvergenceTaskDetail.op_type:type_name -> orchestrator.v1.EmergencyAction
+	102, // 63: orchestrator.v1.ConvergenceTaskDetail.submitted_at:type_name -> google.protobuf.Timestamp
+	69,  // 64: orchestrator.v1.EmergencyChangeRequest.workload_ref:type_name -> orchestrator.v1.WorkloadRef
+	70,  // 65: orchestrator.v1.EmergencyChangeRequest.set_container_image:type_name -> orchestrator.v1.SetContainerImage
+	71,  // 66: orchestrator.v1.EmergencyChangeRequest.set_replicas:type_name -> orchestrator.v1.SetReplicas
+	72,  // 67: orchestrator.v1.EmergencyChangeRequest.set_approved_annotations:type_name -> orchestrator.v1.SetApprovedAnnotations
+	5,   // 68: orchestrator.v1.EmergencyChangeRequest.convergence:type_name -> orchestrator.v1.EmergencyConvergence
+	5,   // 69: orchestrator.v1.EmergencyChangeResponse.convergence:type_name -> orchestrator.v1.EmergencyConvergence
+	102, // 70: orchestrator.v1.EmergencyChangeResponse.accepted_at:type_name -> google.protobuf.Timestamp
+	4,   // 71: orchestrator.v1.EmergencyResult.op_type:type_name -> orchestrator.v1.EmergencyAction
+	5,   // 72: orchestrator.v1.EmergencyResult.convergence_policy:type_name -> orchestrator.v1.EmergencyConvergence
+	89,  // 73: orchestrator.v1.EmergencyResult.before:type_name -> orchestrator.v1.EmergencyTypedValues
+	89,  // 74: orchestrator.v1.EmergencyResult.after:type_name -> orchestrator.v1.EmergencyTypedValues
+	93,  // 75: orchestrator.v1.EmergencyResult.convergence_tasks:type_name -> orchestrator.v1.ConvergenceTaskSummary
+	90,  // 76: orchestrator.v1.EmergencyTypedValues.image_ref_values:type_name -> orchestrator.v1.ImageRefValues
+	91,  // 77: orchestrator.v1.EmergencyTypedValues.replicas_values:type_name -> orchestrator.v1.ReplicasValues
+	92,  // 78: orchestrator.v1.EmergencyTypedValues.annotation_values:type_name -> orchestrator.v1.AnnotationValues
+	73,  // 79: orchestrator.v1.AnnotationValues.annotations:type_name -> orchestrator.v1.AnnotationEntry
+	94,  // 80: orchestrator.v1.SyncInventoryRequest.items:type_name -> orchestrator.v1.InventoryItem
+	94,  // 81: orchestrator.v1.TargetedInventoryUpdate.item:type_name -> orchestrator.v1.InventoryItem
+	6,   // 82: orchestrator.v1.OrchestratorService.CreateOperation:input_type -> orchestrator.v1.CreateOperationRequest
+	8,   // 83: orchestrator.v1.OrchestratorService.PublishRelease:input_type -> orchestrator.v1.PublishReleaseRequest
+	10,  // 84: orchestrator.v1.OrchestratorService.RollbackRelease:input_type -> orchestrator.v1.RollbackReleaseRequest
+	13,  // 85: orchestrator.v1.OrchestratorService.GetOperation:input_type -> orchestrator.v1.GetOperationRequest
+	15,  // 86: orchestrator.v1.OrchestratorService.CancelOperation:input_type -> orchestrator.v1.CancelOperationRequest
+	58,  // 87: orchestrator.v1.OrchestratorService.SubmitValuesRevision:input_type -> orchestrator.v1.SubmitValuesRevisionRequest
+	59,  // 88: orchestrator.v1.OrchestratorService.ApproveValuesRevision:input_type -> orchestrator.v1.ApproveValuesRevisionRequest
+	60,  // 89: orchestrator.v1.OrchestratorService.RejectValuesRevision:input_type -> orchestrator.v1.RejectValuesRevisionRequest
+	17,  // 90: orchestrator.v1.OrchestratorService.CreateReleaseDefinition:input_type -> orchestrator.v1.CreateReleaseDefinitionRequest
+	19,  // 91: orchestrator.v1.OrchestratorService.GetReleaseDefinition:input_type -> orchestrator.v1.GetReleaseDefinitionRequest
+	21,  // 92: orchestrator.v1.OrchestratorService.ListReleaseDefinitions:input_type -> orchestrator.v1.ListReleaseDefinitionsRequest
+	23,  // 93: orchestrator.v1.OrchestratorService.UpdateReleaseDefinition:input_type -> orchestrator.v1.UpdateReleaseDefinitionRequest
+	25,  // 94: orchestrator.v1.OrchestratorService.DisableReleaseDefinition:input_type -> orchestrator.v1.DisableReleaseDefinitionRequest
+	27,  // 95: orchestrator.v1.OrchestratorService.CreateCustomer:input_type -> orchestrator.v1.CreateCustomerRequest
+	29,  // 96: orchestrator.v1.OrchestratorService.GetCustomer:input_type -> orchestrator.v1.GetCustomerRequest
+	31,  // 97: orchestrator.v1.OrchestratorService.ListCustomers:input_type -> orchestrator.v1.ListCustomersRequest
+	33,  // 98: orchestrator.v1.OrchestratorService.UpdateCustomer:input_type -> orchestrator.v1.UpdateCustomerRequest
+	35,  // 99: orchestrator.v1.OrchestratorService.DisableCustomer:input_type -> orchestrator.v1.DisableCustomerRequest
+	37,  // 100: orchestrator.v1.OrchestratorService.CreateCluster:input_type -> orchestrator.v1.CreateClusterRequest
+	39,  // 101: orchestrator.v1.OrchestratorService.UpdateCluster:input_type -> orchestrator.v1.UpdateClusterRequest
+	41,  // 102: orchestrator.v1.OrchestratorService.GetCluster:input_type -> orchestrator.v1.GetClusterRequest
+	43,  // 103: orchestrator.v1.OrchestratorService.ListClusters:input_type -> orchestrator.v1.ListClustersRequest
+	45,  // 104: orchestrator.v1.OrchestratorService.DisableCluster:input_type -> orchestrator.v1.DisableClusterRequest
+	47,  // 105: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:input_type -> orchestrator.v1.CreateEnrollmentTokenRequest
+	86,  // 106: orchestrator.v1.OrchestratorService.EmergencyChange:input_type -> orchestrator.v1.EmergencyChangeRequest
+	74,  // 107: orchestrator.v1.OrchestratorService.ListEmergencyTargets:input_type -> orchestrator.v1.ListEmergencyTargetsRequest
+	77,  // 108: orchestrator.v1.OrchestratorService.CheckEmergencyConflict:input_type -> orchestrator.v1.CheckEmergencyConflictRequest
+	80,  // 109: orchestrator.v1.OrchestratorService.ListCandidateArtifacts:input_type -> orchestrator.v1.ListCandidateArtifactsRequest
+	83,  // 110: orchestrator.v1.OrchestratorService.ListConvergenceTasks:input_type -> orchestrator.v1.ListConvergenceTasksRequest
+	52,  // 111: orchestrator.v1.OrchestratorService.ConfigureClusterRoute:input_type -> orchestrator.v1.ConfigureClusterRouteRequest
+	54,  // 112: orchestrator.v1.OrchestratorService.GetClusterRoutes:input_type -> orchestrator.v1.GetClusterRoutesRequest
+	56,  // 113: orchestrator.v1.OrchestratorService.DeleteClusterRoute:input_type -> orchestrator.v1.DeleteClusterRouteRequest
+	63,  // 114: orchestrator.v1.OrchestratorService.ListReleases:input_type -> orchestrator.v1.ListReleasesRequest
+	65,  // 115: orchestrator.v1.OrchestratorService.TriggerInventorySync:input_type -> orchestrator.v1.TriggerInventorySyncRequest
+	95,  // 116: orchestrator.v1.OrchestratorService.SyncInventory:input_type -> orchestrator.v1.SyncInventoryRequest
+	7,   // 117: orchestrator.v1.OrchestratorService.CreateOperation:output_type -> orchestrator.v1.CreateOperationResponse
+	9,   // 118: orchestrator.v1.OrchestratorService.PublishRelease:output_type -> orchestrator.v1.PublishReleaseResponse
+	11,  // 119: orchestrator.v1.OrchestratorService.RollbackRelease:output_type -> orchestrator.v1.RollbackReleaseResponse
+	14,  // 120: orchestrator.v1.OrchestratorService.GetOperation:output_type -> orchestrator.v1.GetOperationResponse
+	16,  // 121: orchestrator.v1.OrchestratorService.CancelOperation:output_type -> orchestrator.v1.CancelOperationResponse
+	61,  // 122: orchestrator.v1.OrchestratorService.SubmitValuesRevision:output_type -> orchestrator.v1.ValuesRevisionDecisionResponse
+	61,  // 123: orchestrator.v1.OrchestratorService.ApproveValuesRevision:output_type -> orchestrator.v1.ValuesRevisionDecisionResponse
+	61,  // 124: orchestrator.v1.OrchestratorService.RejectValuesRevision:output_type -> orchestrator.v1.ValuesRevisionDecisionResponse
+	18,  // 125: orchestrator.v1.OrchestratorService.CreateReleaseDefinition:output_type -> orchestrator.v1.CreateReleaseDefinitionResponse
+	20,  // 126: orchestrator.v1.OrchestratorService.GetReleaseDefinition:output_type -> orchestrator.v1.GetReleaseDefinitionResponse
+	22,  // 127: orchestrator.v1.OrchestratorService.ListReleaseDefinitions:output_type -> orchestrator.v1.ListReleaseDefinitionsResponse
+	24,  // 128: orchestrator.v1.OrchestratorService.UpdateReleaseDefinition:output_type -> orchestrator.v1.UpdateReleaseDefinitionResponse
+	26,  // 129: orchestrator.v1.OrchestratorService.DisableReleaseDefinition:output_type -> orchestrator.v1.DisableReleaseDefinitionResponse
+	28,  // 130: orchestrator.v1.OrchestratorService.CreateCustomer:output_type -> orchestrator.v1.CreateCustomerResponse
+	30,  // 131: orchestrator.v1.OrchestratorService.GetCustomer:output_type -> orchestrator.v1.GetCustomerResponse
+	32,  // 132: orchestrator.v1.OrchestratorService.ListCustomers:output_type -> orchestrator.v1.ListCustomersResponse
+	34,  // 133: orchestrator.v1.OrchestratorService.UpdateCustomer:output_type -> orchestrator.v1.UpdateCustomerResponse
+	36,  // 134: orchestrator.v1.OrchestratorService.DisableCustomer:output_type -> orchestrator.v1.DisableCustomerResponse
+	38,  // 135: orchestrator.v1.OrchestratorService.CreateCluster:output_type -> orchestrator.v1.CreateClusterResponse
+	40,  // 136: orchestrator.v1.OrchestratorService.UpdateCluster:output_type -> orchestrator.v1.UpdateClusterResponse
+	42,  // 137: orchestrator.v1.OrchestratorService.GetCluster:output_type -> orchestrator.v1.GetClusterResponse
+	44,  // 138: orchestrator.v1.OrchestratorService.ListClusters:output_type -> orchestrator.v1.ListClustersResponse
+	46,  // 139: orchestrator.v1.OrchestratorService.DisableCluster:output_type -> orchestrator.v1.DisableClusterResponse
+	48,  // 140: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:output_type -> orchestrator.v1.CreateEnrollmentTokenResponse
+	87,  // 141: orchestrator.v1.OrchestratorService.EmergencyChange:output_type -> orchestrator.v1.EmergencyChangeResponse
+	75,  // 142: orchestrator.v1.OrchestratorService.ListEmergencyTargets:output_type -> orchestrator.v1.ListEmergencyTargetsResponse
+	78,  // 143: orchestrator.v1.OrchestratorService.CheckEmergencyConflict:output_type -> orchestrator.v1.CheckEmergencyConflictResponse
+	81,  // 144: orchestrator.v1.OrchestratorService.ListCandidateArtifacts:output_type -> orchestrator.v1.ListCandidateArtifactsResponse
+	84,  // 145: orchestrator.v1.OrchestratorService.ListConvergenceTasks:output_type -> orchestrator.v1.ListConvergenceTasksResponse
+	53,  // 146: orchestrator.v1.OrchestratorService.ConfigureClusterRoute:output_type -> orchestrator.v1.ConfigureClusterRouteResponse
+	55,  // 147: orchestrator.v1.OrchestratorService.GetClusterRoutes:output_type -> orchestrator.v1.GetClusterRoutesResponse
+	57,  // 148: orchestrator.v1.OrchestratorService.DeleteClusterRoute:output_type -> orchestrator.v1.DeleteClusterRouteResponse
+	64,  // 149: orchestrator.v1.OrchestratorService.ListReleases:output_type -> orchestrator.v1.ListReleasesResponse
+	66,  // 150: orchestrator.v1.OrchestratorService.TriggerInventorySync:output_type -> orchestrator.v1.TriggerInventorySyncResponse
+	96,  // 151: orchestrator.v1.OrchestratorService.SyncInventory:output_type -> orchestrator.v1.SyncInventoryResponse
+	117, // [117:152] is the sub-list for method output_type
+	82,  // [82:117] is the sub-list for method input_type
+	82,  // [82:82] is the sub-list for extension type_name
+	82,  // [82:82] is the sub-list for extension extendee
+	0,   // [0:82] is the sub-list for field type_name
 }
 
 func init() { file_orchestrator_v1_orchestrator_proto_init() }
@@ -6481,13 +6911,18 @@ func file_orchestrator_v1_orchestrator_proto_init() {
 		(*EmergencyChangeRequest_SetReplicas)(nil),
 		(*EmergencyChangeRequest_SetApprovedAnnotations)(nil),
 	}
+	file_orchestrator_v1_orchestrator_proto_msgTypes[83].OneofWrappers = []any{
+		(*EmergencyTypedValues_ImageRefValues)(nil),
+		(*EmergencyTypedValues_ReplicasValues)(nil),
+		(*EmergencyTypedValues_AnnotationValues)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_orchestrator_v1_orchestrator_proto_rawDesc), len(file_orchestrator_v1_orchestrator_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   88,
+			NumMessages:   94,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -17,6 +17,7 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
+	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/operator/ca"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/store"
@@ -33,15 +34,23 @@ type Service struct {
 	suspectAfter     time.Duration
 	inventorySyncer  *InventorySyncer
 	commandExecutor  CommandExecutor
+	auditEmitter     audit.Sink
 	streamMu         sync.RWMutex
 	emergencyStreams map[string]chan *operatorv1.EmergencyCommand
 }
 
 // NewService creates a new operator Connect service with a self-signed CA.
-func NewService(st store.Store, logger *slog.Logger) (*Service, error) {
+func NewService(st store.Store, logger *slog.Logger, auditEmitter ...audit.Sink) (*Service, error) {
 	caInst, err := ca.New(ca.Config{TTL: 7 * 24 * time.Hour})
 	if err != nil {
 		return nil, fmt.Errorf("create CA: %w", err)
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	var sink audit.Sink
+	if len(auditEmitter) > 0 {
+		sink = auditEmitter[0]
 	}
 	return &Service{
 		store:            st,
@@ -50,6 +59,7 @@ func NewService(st store.Store, logger *slog.Logger) (*Service, error) {
 		sessionTTL:       15 * time.Minute,
 		heartbeatMaxAge:  30 * time.Second,
 		suspectAfter:     60 * time.Second,
+		auditEmitter:     sink,
 		emergencyStreams: make(map[string]chan *operatorv1.EmergencyCommand),
 	}, nil
 }
@@ -65,24 +75,21 @@ func (s *Service) SetCommandExecutor(executor CommandExecutor) {
 }
 
 // DispatchEmergency sends one validated emergency command to the active Operator stream.
-func (s *Service) DispatchEmergency(
-	ctx context.Context,
-	req *connect.Request[operatorv1.DispatchEmergencyRequest],
-) (*connect.Response[operatorv1.DispatchEmergencyResponse], error) {
-	if req.Msg.GetOperatorId() == "" || req.Msg.GetCommand() == nil || req.Msg.GetCommand().GetCommandId() == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("operator_id and emergency command are required"))
+func (s *Service) DispatchEmergency(ctx context.Context, operatorID string, command *operatorv1.EmergencyCommand) error {
+	if operatorID == "" || command == nil || command.GetCommandId() == "" {
+		return fmt.Errorf("operator_id and emergency command are required")
 	}
 	s.streamMu.RLock()
-	delivery := s.emergencyStreams[req.Msg.GetOperatorId()]
+	delivery := s.emergencyStreams[operatorID]
 	s.streamMu.RUnlock()
 	if delivery == nil {
-		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("operator stream is offline"))
+		return fmt.Errorf("operator stream is offline")
 	}
 	select {
-	case delivery <- req.Msg.GetCommand():
-		return connect.NewResponse(&operatorv1.DispatchEmergencyResponse{}), nil
+	case delivery <- command:
+		return nil
 	case <-ctx.Done():
-		return nil, connect.NewError(connect.CodeOf(ctx.Err()), ctx.Err())
+		return ctx.Err()
 	}
 }
 
@@ -339,6 +346,25 @@ func (s *Service) CommandStream(
 		s.streamMu.Unlock()
 	}()
 
+	requestCh := make(chan *operatorv1.CommandStreamRequest)
+	receiveErrCh := make(chan error, 1)
+	go func() {
+		defer close(requestCh)
+		for {
+			request, receiveErr := stream.Receive()
+			if receiveErr != nil {
+				receiveErrCh <- receiveErr
+				return
+			}
+			select {
+			case requestCh <- request:
+			case <-ctx.Done():
+				receiveErrCh <- ctx.Err()
+				return
+			}
+		}
+	}()
+
 	go s.deliverPending(ctx, operatorID, deliverCh, deliverDone)
 
 	for {
@@ -378,12 +404,10 @@ func (s *Service) CommandStream(
 		case <-ctx.Done():
 			return nil
 
-		default:
-			req, err := stream.Receive()
-			if err != nil {
-				return err
+		case req, ok := <-requestCh:
+			if !ok {
+				return <-receiveErrCh
 			}
-
 			switch {
 			case req.GetHeartbeat() != nil:
 				if err := s.store.Sessions().Heartbeat(ctx, sessionID); err != nil {
@@ -398,7 +422,7 @@ func (s *Service) CommandStream(
 					"ack_type", ack.GetAckType(),
 				)
 				// ACK_RECEIVED and ACK_PERSISTED both imply delivered,
-				// but only ACK_PERSISTED releases the orchestator from
+				// but only ACK_PERSISTED releases the orchestrator from
 				// re-delivery responsibility.
 				if ack.GetAckType() == operatorv1.AckType_ACK_TYPE_PERSISTED {
 					if err := s.store.Outbox().UpdateStatus(ctx, ack.GetOutboxId(), store.CommandPersisted, ""); err != nil {
@@ -488,6 +512,8 @@ func (s *Service) CommandStream(
 					return err
 				}
 			}
+		case receiveErr := <-receiveErrCh:
+			return receiveErr
 		}
 	}
 }
@@ -496,6 +522,15 @@ func (s *Service) finishEmergencyResult(ctx context.Context, result *operatorv1.
 	intent, err := s.store.EmergencyIntents().GetByCommandID(ctx, result.GetEmergencyCommandId())
 	if err != nil {
 		s.logger.Warn("failed to load emergency intent result", "command_id", result.GetEmergencyCommandId(), "error", err)
+		return
+	}
+	op, err := s.store.Operations().Get(ctx, intent.OperationID)
+	if err != nil {
+		s.logger.Warn("failed to load emergency operation result", "operation_id", intent.OperationID, "error", err)
+		return
+	}
+	if op.Status.IsTerminal() {
+		s.logger.Info("emergency operation already terminal", "operation_id", op.ID, "status", op.Status)
 		return
 	}
 	var snapshots struct {
@@ -507,14 +542,6 @@ func (s *Service) finishEmergencyResult(ctx context.Context, result *operatorv1.
 			s.logger.Warn("failed to decode emergency snapshots", "command_id", result.GetEmergencyCommandId(), "error", err)
 		}
 	}
-	if err := s.store.EmergencyIntents().UpdateResult(ctx, intent.ID, snapshots.Before, snapshots.After); err != nil {
-		s.logger.Warn("failed to persist emergency snapshots", "command_id", result.GetEmergencyCommandId(), "error", err)
-	}
-	op, err := s.store.Operations().Get(ctx, intent.OperationID)
-	if err != nil {
-		s.logger.Warn("failed to load emergency operation result", "operation_id", intent.OperationID, "error", err)
-		return
-	}
 	status := store.StatusSucceeded
 	lastError := ""
 	if result.GetStatus() == "failed" {
@@ -524,8 +551,65 @@ func (s *Service) finishEmergencyResult(ctx context.Context, result *operatorv1.
 			lastError = result.GetMessage()
 		}
 	}
-	if _, err := s.store.Operations().UpdateStatus(ctx, op.ID, status, op.StateVersion, lastError); err != nil {
+	finished, err := s.store.EmergencyIntents().Finish(
+		ctx,
+		intent.ID,
+		op.ID,
+		op.StateVersion,
+		status,
+		lastError,
+		snapshots.Before,
+		snapshots.After,
+	)
+	if err != nil {
 		s.logger.Warn("failed to finish emergency operation", "operation_id", op.ID, "error", err)
+		return
+	}
+	s.emitEmergencyTerminalAudit(finished, intent, snapshots.Before, snapshots.After, result.GetErrorCode())
+}
+
+func (s *Service) emitEmergencyTerminalAudit(
+	op *store.Operation,
+	intent *store.EmergencyIntent,
+	before, after json.RawMessage,
+	errorCode string,
+) {
+	if s.auditEmitter == nil || op == nil || intent == nil {
+		return
+	}
+	status := "succeeded"
+	if op.Status != store.StatusSucceeded {
+		status = string(op.Status)
+	}
+	changeSummary, err := json.Marshal(map[string]any{
+		"action": intent.Action,
+		"before": before,
+		"after":  after,
+	})
+	if err != nil {
+		s.logger.Warn("failed to encode emergency audit summary", "operation_id", op.ID, "error", err)
+		return
+	}
+	event := audit.NewEvent(
+		store.AuditActorUser,
+		op.Actor.UserID,
+		op.Actor.Organization,
+		"",
+		"operation",
+		op.ID,
+		"emergency_change",
+		status,
+		string(changeSummary),
+		map[string]string{
+			"definition_id": intent.ReleaseDefinitionID,
+			"payload_hash":  op.RequestHash,
+			"error_code":    errorCode,
+		},
+	)
+	if s.auditEmitter != nil {
+		if result := s.auditEmitter.Emit(event); !result.Accepted {
+			s.logger.Warn("emergency audit event rejected", "operation_id", op.ID, "code", result.Code)
+		}
 	}
 }
 

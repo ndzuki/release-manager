@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+	"google.golang.org/protobuf/proto"
 
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
@@ -40,17 +41,23 @@ type InventorySyncExecutor interface {
 	SyncNow(context.Context) error
 }
 
+// EmergencyExecutor applies one typed Kubernetes emergency command.
+type EmergencyExecutor interface {
+	Execute(context.Context, *operatorv1.EmergencyCommand) (string, error)
+}
+
 // Agent receives durable commands, executes Helm operations, and returns cached results on redelivery.
 type Agent struct {
-	client       StreamClient
-	engine       helmengine.Engine
-	store        localstore.Store
-	notifier     InventoryNotifier
-	syncExecutor InventorySyncExecutor
-	sessionID    string
-	operatorID   string
-	logger       *slog.Logger
-	installFlags InstallFlags
+	client            StreamClient
+	engine            helmengine.Engine
+	store             localstore.Store
+	notifier          InventoryNotifier
+	syncExecutor      InventorySyncExecutor
+	emergencyExecutor EmergencyExecutor
+	sessionID         string
+	operatorID        string
+	logger            *slog.Logger
+	installFlags      InstallFlags
 }
 
 // InstallFlags contains operator-wide defaults for INSTALL commands.
@@ -61,15 +68,16 @@ type InstallFlags struct {
 
 // Config contains Agent dependencies and session identity.
 type Config struct {
-	Client       StreamClient
-	Engine       helmengine.Engine
-	Store        localstore.Store
-	Notifier     InventoryNotifier
-	SyncExecutor InventorySyncExecutor
-	SessionID    string
-	OperatorID   string
-	Logger       *slog.Logger
-	InstallFlags InstallFlags
+	Client            StreamClient
+	Engine            helmengine.Engine
+	Store             localstore.Store
+	Notifier          InventoryNotifier
+	SyncExecutor      InventorySyncExecutor
+	EmergencyExecutor EmergencyExecutor
+	SessionID         string
+	OperatorID        string
+	Logger            *slog.Logger
+	InstallFlags      InstallFlags
 }
 
 // Result is persisted locally and sent to the orchestrator for idempotent replay.
@@ -114,15 +122,16 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	return &Agent{
-		client:       cfg.Client,
-		engine:       cfg.Engine,
-		store:        cfg.Store,
-		notifier:     cfg.Notifier,
-		syncExecutor: cfg.SyncExecutor,
-		sessionID:    cfg.SessionID,
-		operatorID:   cfg.OperatorID,
-		logger:       logger,
-		installFlags: cfg.InstallFlags,
+		client:            cfg.Client,
+		engine:            cfg.Engine,
+		store:             cfg.Store,
+		notifier:          cfg.Notifier,
+		syncExecutor:      cfg.SyncExecutor,
+		emergencyExecutor: cfg.EmergencyExecutor,
+		sessionID:         cfg.SessionID,
+		operatorID:        cfg.OperatorID,
+		logger:            logger,
+		installFlags:      cfg.InstallFlags,
 	}, nil
 }
 
@@ -166,6 +175,10 @@ func (a *Agent) Run(ctx context.Context) error {
 			if err := a.handleCommand(ctx, stream, response.GetCommand()); err != nil {
 				return err
 			}
+		case response.GetEmergencyCommand() != nil:
+			if err := a.handleEmergencyCommand(ctx, stream, response.GetEmergencyCommand()); err != nil {
+				return err
+			}
 		case response.GetResyncRequest() != nil:
 			lastSequence, err := a.store.LastSequence(ctx)
 			if err != nil {
@@ -197,11 +210,118 @@ func (a *Agent) replayActive(ctx context.Context, stream Stream) error {
 		return fmt.Errorf("list active commands: %w", err)
 	}
 	for _, entry := range entries {
-		if err := a.executeEntry(ctx, stream, entry); err != nil {
-			return fmt.Errorf("replay command %q: %w", entry.CommandID, err)
+		var executeErr error
+		if entry.OperationType == "EMERGENCY" {
+			executeErr = a.replayEmergencyEntry(ctx, stream, entry)
+		} else {
+			executeErr = a.executeEntry(ctx, stream, entry)
+		}
+		if executeErr != nil {
+			return fmt.Errorf("replay command %q: %w", entry.CommandID, executeErr)
 		}
 	}
 	return nil
+}
+
+func (a *Agent) replayEmergencyEntry(ctx context.Context, stream Stream, entry *localstore.CommandEntry) error {
+	var command operatorv1.EmergencyCommand
+	if err := proto.Unmarshal(entry.Payload, &command); err != nil {
+		return a.finishEmergencyFailure(ctx, stream, entry, "invalid_command", "invalid emergency command payload")
+	}
+	if entry.Status == localstore.StatusRunning {
+		return a.executeEmergencyEntry(ctx, stream, entry)
+	}
+	return stream.Send(emergencyAckRequest(command.GetCommandId(), operatorv1.AckType_ACK_TYPE_PERSISTED))
+}
+
+func (a *Agent) handleEmergencyCommand(ctx context.Context, stream Stream, command *operatorv1.EmergencyCommand) error {
+	if command == nil || command.GetCommandId() == "" {
+		return errors.New("received emergency command without command_id")
+	}
+	existing, err := a.store.Get(ctx, command.GetCommandId())
+	if err == nil {
+		if localstore.IsTerminal(existing.Status) {
+			return a.sendCachedEmergencyResult(stream, command, existing)
+		}
+		return a.executeEmergencyEntry(ctx, stream, existing)
+	}
+	if !errors.Is(err, localstore.ErrNotFound) {
+		return fmt.Errorf("lookup emergency command %q: %w", command.GetCommandId(), err)
+	}
+	payload, err := proto.Marshal(command)
+	if err != nil {
+		return fmt.Errorf("marshal emergency command %q: %w", command.GetCommandId(), err)
+	}
+	entry := &localstore.CommandEntry{
+		CommandID: command.GetCommandId(), OperationID: command.GetOperationId(),
+		OperationType: "EMERGENCY", Payload: payload, Status: localstore.StatusPending,
+	}
+	if err := a.store.Save(ctx, entry); err != nil {
+		return fmt.Errorf("persist emergency command %q: %w", command.GetCommandId(), err)
+	}
+	if err := stream.Send(emergencyAckRequest(command.GetCommandId(), operatorv1.AckType_ACK_TYPE_PERSISTED)); err != nil {
+		return fmt.Errorf("ack persisted emergency command %q: %w", command.GetCommandId(), err)
+	}
+	return a.executeEmergencyEntry(ctx, stream, entry)
+}
+
+func (a *Agent) executeEmergencyEntry(ctx context.Context, stream Stream, entry *localstore.CommandEntry) error {
+	var command operatorv1.EmergencyCommand
+	if err := proto.Unmarshal(entry.Payload, &command); err != nil {
+		return a.finishEmergencyFailure(ctx, stream, entry, "invalid_command", "invalid emergency command payload")
+	}
+	if err := a.store.UpdateStatus(ctx, entry.CommandID, localstore.StatusRunning, ""); err != nil {
+		return fmt.Errorf("mark emergency command %q running: %w", entry.CommandID, err)
+	}
+	if a.emergencyExecutor == nil {
+		return a.finishEmergencyFailure(ctx, stream, entry, "emergency_executor_unavailable", "emergency executor is unavailable")
+	}
+	resultJSON, execErr := a.emergencyExecutor.Execute(ctx, &command)
+	if execErr != nil {
+		return a.finishEmergencyFailure(ctx, stream, entry, emergencyErrorCode(execErr), execErr.Error())
+	}
+	if err := a.store.UpdateStatus(ctx, entry.CommandID, localstore.StatusSucceeded, resultJSON); err != nil {
+		return fmt.Errorf("persist emergency result %q: %w", entry.CommandID, err)
+	}
+	return stream.Send(emergencyResultRequest(&command, "succeeded", "", "", resultJSON))
+}
+
+func (a *Agent) finishEmergencyFailure(ctx context.Context, stream Stream, entry *localstore.CommandEntry, code, message string) error {
+	persisted := emergencyStoredResult{Status: "failed", ErrorCode: code, Message: message}
+	encoded, err := json.Marshal(persisted)
+	if err != nil {
+		return fmt.Errorf("marshal emergency failure: %w", err)
+	}
+	if err := a.store.UpdateStatus(ctx, entry.CommandID, localstore.StatusFailed, string(encoded)); err != nil {
+		return fmt.Errorf("persist emergency failure: %w", err)
+	}
+	command := &operatorv1.EmergencyCommand{CommandId: entry.CommandID, OperationId: entry.OperationID}
+	return stream.Send(emergencyResultRequest(command, "failed", code, message, ""))
+}
+
+func (a *Agent) sendCachedEmergencyResult(stream Stream, command *operatorv1.EmergencyCommand, entry *localstore.CommandEntry) error {
+	if entry.Status == localstore.StatusSucceeded {
+		return stream.Send(emergencyResultRequest(command, "succeeded", "", "", entry.ResultJSON))
+	}
+	var cached emergencyStoredResult
+	if err := json.Unmarshal([]byte(entry.ResultJSON), &cached); err != nil {
+		return fmt.Errorf("decode cached emergency result %q: %w", command.GetCommandId(), err)
+	}
+	return stream.Send(emergencyResultRequest(command, cached.Status, cached.ErrorCode, cached.Message, ""))
+}
+
+type emergencyStoredResult struct {
+	Status    string `json:"status"`
+	ErrorCode string `json:"error_code,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+func emergencyErrorCode(err error) string {
+	var coded interface{ ErrorCode() string }
+	if errors.As(err, &coded) {
+		return coded.ErrorCode()
+	}
+	return "emergency_update_failed"
 }
 
 func (a *Agent) handleCommand(ctx context.Context, stream Stream, command *operatorv1.Command) error {
@@ -550,6 +670,23 @@ func ackRequest(command *operatorv1.Command, ackType operatorv1.AckType) *operat
 				AckType:   ackType,
 			},
 		},
+	}
+}
+
+func emergencyAckRequest(commandID string, ackType operatorv1.AckType) *operatorv1.CommandStreamRequest {
+	return &operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_EmergencyAck{EmergencyAck: &operatorv1.EmergencyAck{
+			EmergencyCommandId: commandID, AckType: ackType,
+		}},
+	}
+}
+
+func emergencyResultRequest(command *operatorv1.EmergencyCommand, status, errorCode, message, resultJSON string) *operatorv1.CommandStreamRequest {
+	return &operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_EmergencyResult{EmergencyResult: &operatorv1.EmergencyResult{
+			EmergencyCommandId: command.GetCommandId(), OperationId: command.GetOperationId(), Status: status,
+			ErrorCode: errorCode, Message: message, ResultJson: resultJSON,
+		}},
 	}
 }
 
