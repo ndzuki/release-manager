@@ -14,6 +14,7 @@ import (
 )
 
 // stubValuesStore is a simple in-memory ValuesStore for handler tests.
+
 type stubValuesStore struct {
 	items map[string]*store.ValuesRevision
 }

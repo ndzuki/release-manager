@@ -472,3 +472,108 @@ func TestInventoryDefinitionAssociation(t *testing.T) {
 	require.Len(t, items, 1)
 	assert.Equal(t, "definition-1", items[0].ReleaseDefinitionID)
 }
+
+func TestFinalizeUpgradeAtomicTransaction(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	definition := createTestDefinition(t, st)
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: definition.ID,
+		CustomerID:          "customer-1",
+		ClusterID:           "cluster-1",
+		Namespace:           "apps",
+		ReleaseName:         "example",
+		Revision:            1,
+		Status:              "deployed",
+		InventoryStatus:     store.InventoryActive,
+	}))
+	op := &store.Operation{
+		ID:                  "operation-upgrade-success",
+		OperationType:       store.OperationUpgrade,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: definition.ID,
+		IdempotencyKey:      "idem-upgrade-success",
+		RequestHash:         "hash",
+		StateVersion:        1,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	err := st.UpgradeResults().FinalizeUpgrade(ctx, &store.UpgradeTerminalInput{
+		OperationID:                    op.ID,
+		ExpectedStateVersion:           1,
+		Status:                         store.StatusSucceeded,
+		ResultPayload:                  []byte(`{"active":{"helm_revision":2}}`),
+		UpdateInventory:                true,
+		ReleaseDefinitionID:            definition.ID,
+		Revision:                       2,
+		ObservedBundleDigest:           "sha256:bundle",
+		ObservedChartDigest:            "sha256:chart",
+		ObservedEffectiveValuesDigest: "sha256:values",
+		ObservedManifestDigest:         "sha256:manifest",
+		InventoryStatus:                store.InventoryActive,
+		ResourceCount:                  3,
+		EventPayload:                   []byte(`{"status":"succeeded"}`),
+	})
+	require.NoError(t, err)
+
+	updated, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, updated.Status)
+	assert.NotNil(t, updated.TerminalAt)
+	result, err := st.ExecutionResults().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "upgrade", result.ResultType)
+	inventory, err := st.Inventories().GetByDefinition(ctx, definition.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, inventory.Revision)
+	assert.Equal(t, "sha256:manifest", inventory.ObservedManifestDigest)
+	tracking, err := st.RolloutTrackings().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 3, tracking.ResourceCount)
+	events, err := st.OperationEvents().List(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Len(t, events, 1)
+
+	require.NoError(t, st.UpgradeResults().FinalizeUpgrade(ctx, &store.UpgradeTerminalInput{OperationID: op.ID}))
+	events, err = st.OperationEvents().List(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Len(t, events, 1)
+}
+
+func TestFinalizeUpgradeRollsBackOnInventoryFailure(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	definition := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "operation-upgrade-rollback",
+		OperationType:       store.OperationUpgrade,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: definition.ID,
+		IdempotencyKey:      "idem-upgrade-rollback",
+		RequestHash:         "hash",
+		StateVersion:        1,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	err := st.UpgradeResults().FinalizeUpgrade(ctx, &store.UpgradeTerminalInput{
+		OperationID:          op.ID,
+		ExpectedStateVersion: 1,
+		Status:               store.StatusFailed,
+		UpdateInventory:      true,
+		ResultPayload:        []byte(`{"active":{"helm_revision":1}}`),
+		ReleaseDefinitionID:  definition.ID,
+		Revision:             1,
+		InventoryStatus:      store.InventoryActive,
+		EventPayload:         []byte(`{"status":"failed"}`),
+	})
+	require.Error(t, err)
+
+	unchanged, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusRunning, unchanged.Status)
+	_, err = st.ExecutionResults().Get(ctx, op.ID)
+	assert.ErrorIs(t, err, store.ErrNotFound)
+	events, err := st.OperationEvents().List(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Empty(t, events)
+}

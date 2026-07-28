@@ -27,8 +27,8 @@ type AckType int32
 
 const (
 	AckType_ACK_TYPE_UNSPECIFIED AckType = 0
-	AckType_ACK_TYPE_RECEIVED    AckType = 1 // command received (delivered)
-	AckType_ACK_TYPE_PERSISTED   AckType = 2 // command persisted to local store (fsynced)
+	AckType_ACK_TYPE_RECEIVED    AckType = 1
+	AckType_ACK_TYPE_PERSISTED   AckType = 2
 )
 
 // Enum value maps for AckType.
@@ -79,7 +79,7 @@ type EnrollRequest struct {
 	CustomerId      string                 `protobuf:"bytes,2,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
 	ClusterId       string                 `protobuf:"bytes,3,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
 	OperatorId      string                 `protobuf:"bytes,4,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
-	CsrPem          []byte                 `protobuf:"bytes,5,opt,name=csr_pem,json=csrPem,proto3" json:"csr_pem,omitempty"` // PEM-encoded certificate signing request
+	CsrPem          []byte                 `protobuf:"bytes,5,opt,name=csr_pem,json=csrPem,proto3" json:"csr_pem,omitempty"`
 	Capabilities    map[string]string      `protobuf:"bytes,6,rep,name=capabilities,proto3" json:"capabilities,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -162,7 +162,7 @@ type EnrollResponse struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	SessionId      string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	TtlSeconds     int64                  `protobuf:"varint,2,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"`
-	CertificatePem []byte                 `protobuf:"bytes,3,opt,name=certificate_pem,json=certificatePem,proto3" json:"certificate_pem,omitempty"` // signed client certificate (mTLS)
+	CertificatePem []byte                 `protobuf:"bytes,3,opt,name=certificate_pem,json=certificatePem,proto3" json:"certificate_pem,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -218,7 +218,6 @@ func (x *EnrollResponse) GetCertificatePem() []byte {
 	return nil
 }
 
-// CommandStreamRequest carries operator status updates and acknowledgments.
 type CommandStreamRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Payload:
@@ -228,6 +227,7 @@ type CommandStreamRequest struct {
 	//	*CommandStreamRequest_Heartbeat
 	//	*CommandStreamRequest_Result
 	//	*CommandStreamRequest_ResyncResponse
+	//	*CommandStreamRequest_CommandResult
 	Payload       isCommandStreamRequest_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -315,28 +315,41 @@ func (x *CommandStreamRequest) GetResyncResponse() *ResyncResponse {
 	return nil
 }
 
+func (x *CommandStreamRequest) GetCommandResult() *CommandResult {
+	if x != nil {
+		if x, ok := x.Payload.(*CommandStreamRequest_CommandResult); ok {
+			return x.CommandResult
+		}
+	}
+	return nil
+}
+
 type isCommandStreamRequest_Payload interface {
 	isCommandStreamRequest_Payload()
 }
 
 type CommandStreamRequest_Hello struct {
-	Hello *Hello `protobuf:"bytes,1,opt,name=hello,proto3,oneof"` // initial session hello (after Enroll)
+	Hello *Hello `protobuf:"bytes,1,opt,name=hello,proto3,oneof"`
 }
 
 type CommandStreamRequest_Ack struct {
-	Ack *Ack `protobuf:"bytes,2,opt,name=ack,proto3,oneof"` // command acknowledgment
+	Ack *Ack `protobuf:"bytes,2,opt,name=ack,proto3,oneof"`
 }
 
 type CommandStreamRequest_Heartbeat struct {
-	Heartbeat *Heartbeat `protobuf:"bytes,3,opt,name=heartbeat,proto3,oneof"` // periodic liveness
+	Heartbeat *Heartbeat `protobuf:"bytes,3,opt,name=heartbeat,proto3,oneof"`
 }
 
 type CommandStreamRequest_Result struct {
-	Result *Result `protobuf:"bytes,4,opt,name=result,proto3,oneof"` // command completion result
+	Result *Result `protobuf:"bytes,4,opt,name=result,proto3,oneof"`
 }
 
 type CommandStreamRequest_ResyncResponse struct {
-	ResyncResponse *ResyncResponse `protobuf:"bytes,5,opt,name=resync_response,json=resyncResponse,proto3,oneof"` // response to orchestrator resync request
+	ResyncResponse *ResyncResponse `protobuf:"bytes,5,opt,name=resync_response,json=resyncResponse,proto3,oneof"`
+}
+
+type CommandStreamRequest_CommandResult struct {
+	CommandResult *CommandResult `protobuf:"bytes,6,opt,name=command_result,json=commandResult,proto3,oneof"`
 }
 
 func (*CommandStreamRequest_Hello) isCommandStreamRequest_Payload() {}
@@ -349,12 +362,14 @@ func (*CommandStreamRequest_Result) isCommandStreamRequest_Payload() {}
 
 func (*CommandStreamRequest_ResyncResponse) isCommandStreamRequest_Payload() {}
 
+func (*CommandStreamRequest_CommandResult) isCommandStreamRequest_Payload() {}
+
 // Hello is sent by the operator to establish a session after enrollment.
 type Hello struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	SessionId        string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	OperatorId       string                 `protobuf:"bytes,2,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
-	LastSeenSequence int64                  `protobuf:"varint,3,opt,name=last_seen_sequence,json=lastSeenSequence,proto3" json:"last_seen_sequence,omitempty"` // last sequence number the operator has seen
+	LastSeenSequence int64                  `protobuf:"varint,3,opt,name=last_seen_sequence,json=lastSeenSequence,proto3" json:"last_seen_sequence,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -415,8 +430,8 @@ type Ack struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	OutboxId      string                 `protobuf:"bytes,1,opt,name=outbox_id,json=outboxId,proto3" json:"outbox_id,omitempty"`
 	CommandId     string                 `protobuf:"bytes,2,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
-	Sequence      int64                  `protobuf:"varint,3,opt,name=sequence,proto3" json:"sequence,omitempty"`                                       // sequence of the acknowledged command
-	AckType       AckType                `protobuf:"varint,4,opt,name=ack_type,json=ackType,proto3,enum=operator.v1.AckType" json:"ack_type,omitempty"` // acknowledgment level
+	Sequence      int64                  `protobuf:"varint,3,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	AckType       AckType                `protobuf:"varint,4,opt,name=ack_type,json=ackType,proto3,enum=operator.v1.AckType" json:"ack_type,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -524,16 +539,16 @@ func (x *Heartbeat) GetSessionId() string {
 	return ""
 }
 
-// Result reports command execution outcome.
+// Result reports legacy command execution outcome.
 type Result struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	OutboxId      string                 `protobuf:"bytes,1,opt,name=outbox_id,json=outboxId,proto3" json:"outbox_id,omitempty"`
 	CommandId     string                 `protobuf:"bytes,2,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
-	Status        string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"` // "succeeded" or "failed"
+	Status        string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`
 	Message       string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
 	Output        []byte                 `protobuf:"bytes,5,opt,name=output,proto3" json:"output,omitempty"`
-	Sequence      int64                  `protobuf:"varint,6,opt,name=sequence,proto3" json:"sequence,omitempty"`                      // sequence of the completed command
-	ResultJson    string                 `protobuf:"bytes,7,opt,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"` // JSON-encoded result for duplicate detection
+	Sequence      int64                  `protobuf:"varint,6,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	ResultJson    string                 `protobuf:"bytes,7,opt,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -709,19 +724,19 @@ type isCommandStreamResponse_Payload interface {
 }
 
 type CommandStreamResponse_Command struct {
-	Command *Command `protobuf:"bytes,1,opt,name=command,proto3,oneof"` // deploy command to execute
+	Command *Command `protobuf:"bytes,1,opt,name=command,proto3,oneof"`
 }
 
 type CommandStreamResponse_SessionEvent struct {
-	SessionEvent *SessionEvent `protobuf:"bytes,2,opt,name=session_event,json=sessionEvent,proto3,oneof"` // session lifecycle event
+	SessionEvent *SessionEvent `protobuf:"bytes,2,opt,name=session_event,json=sessionEvent,proto3,oneof"`
 }
 
 type CommandStreamResponse_ResyncRequest struct {
-	ResyncRequest *ResyncRequest `protobuf:"bytes,3,opt,name=resync_request,json=resyncRequest,proto3,oneof"` // gap detected, request full resync
+	ResyncRequest *ResyncRequest `protobuf:"bytes,3,opt,name=resync_request,json=resyncRequest,proto3,oneof"`
 }
 
 type CommandStreamResponse_DuplicateResponse struct {
-	DuplicateResponse *DuplicateResponse `protobuf:"bytes,4,opt,name=duplicate_response,json=duplicateResponse,proto3,oneof"` // command already completed
+	DuplicateResponse *DuplicateResponse `protobuf:"bytes,4,opt,name=duplicate_response,json=duplicateResponse,proto3,oneof"`
 }
 
 func (*CommandStreamResponse_Command) isCommandStreamResponse_Payload() {}
@@ -741,14 +756,19 @@ type Command struct {
 	OperationType   string                 `protobuf:"bytes,4,opt,name=operation_type,json=operationType,proto3" json:"operation_type,omitempty"`
 	Bundle          *v1.ReleaseBundle      `protobuf:"bytes,5,opt,name=bundle,proto3" json:"bundle,omitempty"`
 	Values          []byte                 `protobuf:"bytes,6,opt,name=values,proto3" json:"values,omitempty"`
-	Sequence        int64                  `protobuf:"varint,7,opt,name=sequence,proto3" json:"sequence,omitempty"` // global monotonic sequence number
+	Sequence        int64                  `protobuf:"varint,7,opt,name=sequence,proto3" json:"sequence,omitempty"`
 	DefinitionId    string                 `protobuf:"bytes,8,opt,name=definition_id,json=definitionId,proto3" json:"definition_id,omitempty"`
 	Namespace       string                 `protobuf:"bytes,9,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	ReleaseName     string                 `protobuf:"bytes,10,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
 	CreateNamespace bool                   `protobuf:"varint,11,opt,name=create_namespace,json=createNamespace,proto3" json:"create_namespace,omitempty"`
 	TimeoutSeconds  int64                  `protobuf:"varint,12,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	PayloadVersion  uint32                 `protobuf:"varint,13,opt,name=payload_version,json=payloadVersion,proto3" json:"payload_version,omitempty"`
+	// Types that are valid to be assigned to TypedPayload:
+	//
+	//	*Command_Upgrade
+	TypedPayload  isCommand_TypedPayload `protobuf_oneof:"typed_payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Command) Reset() {
@@ -865,11 +885,44 @@ func (x *Command) GetTimeoutSeconds() int64 {
 	return 0
 }
 
+func (x *Command) GetPayloadVersion() uint32 {
+	if x != nil {
+		return x.PayloadVersion
+	}
+	return 0
+}
+
+func (x *Command) GetTypedPayload() isCommand_TypedPayload {
+	if x != nil {
+		return x.TypedPayload
+	}
+	return nil
+}
+
+func (x *Command) GetUpgrade() *UpgradeCommand {
+	if x != nil {
+		if x, ok := x.TypedPayload.(*Command_Upgrade); ok {
+			return x.Upgrade
+		}
+	}
+	return nil
+}
+
+type isCommand_TypedPayload interface {
+	isCommand_TypedPayload()
+}
+
+type Command_Upgrade struct {
+	Upgrade *UpgradeCommand `protobuf:"bytes,20,opt,name=upgrade,proto3,oneof"`
+}
+
+func (*Command_Upgrade) isCommand_TypedPayload() {}
+
 // ResyncRequest asks the operator to report its last seen sequence for gap recovery.
 type ResyncRequest struct {
 	state                    protoimpl.MessageState `protogen:"open.v1"`
-	OrchestratorLastSequence int64                  `protobuf:"varint,1,opt,name=orchestrator_last_sequence,json=orchestratorLastSequence,proto3" json:"orchestrator_last_sequence,omitempty"` // the highest sequence known to orchestrator
-	Reason                   string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`                                                                        // human-readable gap description
+	OrchestratorLastSequence int64                  `protobuf:"varint,1,opt,name=orchestrator_last_sequence,json=orchestratorLastSequence,proto3" json:"orchestrator_last_sequence,omitempty"`
+	Reason                   string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields            protoimpl.UnknownFields
 	sizeCache                protoimpl.SizeCache
 }
@@ -921,7 +974,7 @@ func (x *ResyncRequest) GetReason() string {
 // ResyncResponse is sent by the operator in response to a ResyncRequest.
 type ResyncResponse struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
-	OperatorLastSequence int64                  `protobuf:"varint,1,opt,name=operator_last_sequence,json=operatorLastSequence,proto3" json:"operator_last_sequence,omitempty"` // the last sequence the operator has stored
+	OperatorLastSequence int64                  `protobuf:"varint,1,opt,name=operator_last_sequence,json=operatorLastSequence,proto3" json:"operator_last_sequence,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -967,7 +1020,7 @@ func (x *ResyncResponse) GetOperatorLastSequence() int64 {
 type DuplicateResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CommandId     string                 `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
-	ResultJson    string                 `protobuf:"bytes,2,opt,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"` // original result JSON
+	ResultJson    string                 `protobuf:"bytes,2,opt,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1019,7 +1072,7 @@ func (x *DuplicateResponse) GetResultJson() string {
 // SessionEvent signals a session lifecycle change.
 type SessionEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"` // "suspect", "offline", "replaced"
+	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
 	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1126,7 +1179,7 @@ func (x *RevokeOperatorRequest) GetReason() string {
 type RevokeOperatorResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	OperatorId    string                 `protobuf:"bytes,1,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
-	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"` // "revoked" or "already_revoked"
+	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1179,7 +1232,7 @@ var File_operator_v1_operator_proto protoreflect.FileDescriptor
 
 const file_operator_v1_operator_proto_rawDesc = "" +
 	"\n" +
-	"\x1aoperator/v1/operator.proto\x12\voperator.v1\x1a\x16common/v1/domain.proto\"\xc7\x02\n" +
+	"\x1aoperator/v1/operator.proto\x12\voperator.v1\x1a\x16common/v1/domain.proto\x1a operator/v1/upgrade_result.proto\"\xc7\x02\n" +
 	"\rEnrollRequest\x12)\n" +
 	"\x10enrollment_token\x18\x01 \x01(\tR\x0fenrollmentToken\x12\x1f\n" +
 	"\vcustomer_id\x18\x02 \x01(\tR\n" +
@@ -1198,13 +1251,14 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
 	"\vttl_seconds\x18\x02 \x01(\x03R\n" +
 	"ttlSeconds\x12'\n" +
-	"\x0fcertificate_pem\x18\x03 \x01(\fR\x0ecertificatePem\"\xa2\x02\n" +
+	"\x0fcertificate_pem\x18\x03 \x01(\fR\x0ecertificatePem\"\xe7\x02\n" +
 	"\x14CommandStreamRequest\x12*\n" +
 	"\x05hello\x18\x01 \x01(\v2\x12.operator.v1.HelloH\x00R\x05hello\x12$\n" +
 	"\x03ack\x18\x02 \x01(\v2\x10.operator.v1.AckH\x00R\x03ack\x126\n" +
 	"\theartbeat\x18\x03 \x01(\v2\x16.operator.v1.HeartbeatH\x00R\theartbeat\x12-\n" +
 	"\x06result\x18\x04 \x01(\v2\x13.operator.v1.ResultH\x00R\x06result\x12F\n" +
-	"\x0fresync_response\x18\x05 \x01(\v2\x1b.operator.v1.ResyncResponseH\x00R\x0eresyncResponseB\t\n" +
+	"\x0fresync_response\x18\x05 \x01(\v2\x1b.operator.v1.ResyncResponseH\x00R\x0eresyncResponse\x12C\n" +
+	"\x0ecommand_result\x18\x06 \x01(\v2\x1a.operator.v1.CommandResultH\x00R\rcommandResultB\t\n" +
 	"\apayload\"u\n" +
 	"\x05Hello\x12\x1d\n" +
 	"\n" +
@@ -1236,7 +1290,7 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\rsession_event\x18\x02 \x01(\v2\x19.operator.v1.SessionEventH\x00R\fsessionEvent\x12C\n" +
 	"\x0eresync_request\x18\x03 \x01(\v2\x1a.operator.v1.ResyncRequestH\x00R\rresyncRequest\x12O\n" +
 	"\x12duplicate_response\x18\x04 \x01(\v2\x1e.operator.v1.DuplicateResponseH\x00R\x11duplicateResponseB\t\n" +
-	"\apayload\"\xaf\x03\n" +
+	"\apayload\"\xa2\x04\n" +
 	"\aCommand\x12\x1b\n" +
 	"\toutbox_id\x18\x01 \x01(\tR\boutboxId\x12\x1d\n" +
 	"\n" +
@@ -1251,7 +1305,10 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\frelease_name\x18\n" +
 	" \x01(\tR\vreleaseName\x12)\n" +
 	"\x10create_namespace\x18\v \x01(\bR\x0fcreateNamespace\x12'\n" +
-	"\x0ftimeout_seconds\x18\f \x01(\x03R\x0etimeoutSeconds\"e\n" +
+	"\x0ftimeout_seconds\x18\f \x01(\x03R\x0etimeoutSeconds\x12'\n" +
+	"\x0fpayload_version\x18\r \x01(\rR\x0epayloadVersion\x127\n" +
+	"\aupgrade\x18\x14 \x01(\v2\x1b.operator.v1.UpgradeCommandH\x00R\aupgradeB\x0f\n" +
+	"\rtyped_payload\"e\n" +
 	"\rResyncRequest\x12<\n" +
 	"\x1aorchestrator_last_sequence\x18\x01 \x01(\x03R\x18orchestratorLastSequence\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"F\n" +
@@ -1314,7 +1371,9 @@ var file_operator_v1_operator_proto_goTypes = []any{
 	(*RevokeOperatorRequest)(nil),  // 14: operator.v1.RevokeOperatorRequest
 	(*RevokeOperatorResponse)(nil), // 15: operator.v1.RevokeOperatorResponse
 	nil,                            // 16: operator.v1.EnrollRequest.CapabilitiesEntry
-	(*v1.ReleaseBundle)(nil),       // 17: common.v1.ReleaseBundle
+	(*CommandResult)(nil),          // 17: operator.v1.CommandResult
+	(*v1.ReleaseBundle)(nil),       // 18: common.v1.ReleaseBundle
+	(*UpgradeCommand)(nil),         // 19: operator.v1.UpgradeCommand
 }
 var file_operator_v1_operator_proto_depIdxs = []int32{
 	16, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
@@ -1323,23 +1382,25 @@ var file_operator_v1_operator_proto_depIdxs = []int32{
 	6,  // 3: operator.v1.CommandStreamRequest.heartbeat:type_name -> operator.v1.Heartbeat
 	7,  // 4: operator.v1.CommandStreamRequest.result:type_name -> operator.v1.Result
 	11, // 5: operator.v1.CommandStreamRequest.resync_response:type_name -> operator.v1.ResyncResponse
-	0,  // 6: operator.v1.Ack.ack_type:type_name -> operator.v1.AckType
-	9,  // 7: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
-	13, // 8: operator.v1.CommandStreamResponse.session_event:type_name -> operator.v1.SessionEvent
-	10, // 9: operator.v1.CommandStreamResponse.resync_request:type_name -> operator.v1.ResyncRequest
-	12, // 10: operator.v1.CommandStreamResponse.duplicate_response:type_name -> operator.v1.DuplicateResponse
-	17, // 11: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
-	1,  // 12: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
-	3,  // 13: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
-	14, // 14: operator.v1.OperatorService.RevokeOperator:input_type -> operator.v1.RevokeOperatorRequest
-	2,  // 15: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
-	8,  // 16: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
-	15, // 17: operator.v1.OperatorService.RevokeOperator:output_type -> operator.v1.RevokeOperatorResponse
-	15, // [15:18] is the sub-list for method output_type
-	12, // [12:15] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	17, // 6: operator.v1.CommandStreamRequest.command_result:type_name -> operator.v1.CommandResult
+	0,  // 7: operator.v1.Ack.ack_type:type_name -> operator.v1.AckType
+	9,  // 8: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
+	13, // 9: operator.v1.CommandStreamResponse.session_event:type_name -> operator.v1.SessionEvent
+	10, // 10: operator.v1.CommandStreamResponse.resync_request:type_name -> operator.v1.ResyncRequest
+	12, // 11: operator.v1.CommandStreamResponse.duplicate_response:type_name -> operator.v1.DuplicateResponse
+	18, // 12: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
+	19, // 13: operator.v1.Command.upgrade:type_name -> operator.v1.UpgradeCommand
+	1,  // 14: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
+	3,  // 15: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
+	14, // 16: operator.v1.OperatorService.RevokeOperator:input_type -> operator.v1.RevokeOperatorRequest
+	2,  // 17: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
+	8,  // 18: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
+	15, // 19: operator.v1.OperatorService.RevokeOperator:output_type -> operator.v1.RevokeOperatorResponse
+	17, // [17:20] is the sub-list for method output_type
+	14, // [14:17] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_operator_v1_operator_proto_init() }
@@ -1347,18 +1408,23 @@ func file_operator_v1_operator_proto_init() {
 	if File_operator_v1_operator_proto != nil {
 		return
 	}
+	file_operator_v1_upgrade_result_proto_init()
 	file_operator_v1_operator_proto_msgTypes[2].OneofWrappers = []any{
 		(*CommandStreamRequest_Hello)(nil),
 		(*CommandStreamRequest_Ack)(nil),
 		(*CommandStreamRequest_Heartbeat)(nil),
 		(*CommandStreamRequest_Result)(nil),
 		(*CommandStreamRequest_ResyncResponse)(nil),
+		(*CommandStreamRequest_CommandResult)(nil),
 	}
 	file_operator_v1_operator_proto_msgTypes[7].OneofWrappers = []any{
 		(*CommandStreamResponse_Command)(nil),
 		(*CommandStreamResponse_SessionEvent)(nil),
 		(*CommandStreamResponse_ResyncRequest)(nil),
 		(*CommandStreamResponse_DuplicateResponse)(nil),
+	}
+	file_operator_v1_operator_proto_msgTypes[8].OneofWrappers = []any{
+		(*Command_Upgrade)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

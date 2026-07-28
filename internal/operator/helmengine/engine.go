@@ -20,6 +20,12 @@ type Release struct {
 	ManifestDigest string `json:"manifest_digest"`
 	// Notes are the Helm chart NOTES.txt output (never includes Secret values).
 	Notes string `json:"notes"`
+	Description          string            `json:"description,omitempty"`
+	Labels               map[string]string `json:"labels,omitempty"`
+	BundleDigest         string            `json:"bundle_digest,omitempty"`
+	ChartDigest          string            `json:"chart_digest,omitempty"`
+	EffectiveValuesDigest string           `json:"effective_values_digest,omitempty"`
+	Provenance           string            `json:"provenance,omitempty"`
 }
 
 // ReleaseListItem is a lightweight inventory entry for listing releases.
@@ -42,6 +48,15 @@ type ReleaseHistoryEntry struct {
 	Description string `json:"description"`
 }
 
+// UpgradeResult captures the attempted and active Helm state after Atomic resolution.
+type UpgradeResult struct {
+	From              *Release
+	Attempted         *Release
+	Active            *Release
+	RollbackSucceeded bool
+	ResourceCount     int
+}
+
 // Sentinel errors returned by HelmEngine operations.
 var (
 	ErrNotFound      = errors.New("helm: release not found")
@@ -50,8 +65,13 @@ var (
 	ErrConflict      = errors.New("helm: conflict")
 	ErrTimeout       = errors.New("helm: timeout")
 	ErrCancelled     = errors.New("helm: cancelled")
-	ErrRenderFailed  = errors.New("helm: render failed")
-	ErrActionFailed  = errors.New("helm: action failed")
+	ErrRenderFailed         = errors.New("helm: render failed")
+	ErrActionFailed         = errors.New("helm: action failed")
+	ErrDigestMismatch       = errors.New("helm: digest mismatch")
+	ErrSecretRefChanged     = errors.New("helm: secret ref changed")
+	ErrRenderDrift          = errors.New("helm: render drift")
+	ErrAtomicRollbackFailed = errors.New("helm: atomic rollback failed")
+	ErrSchemaFailed         = errors.New("helm: schema validation failed")
 )
 
 // Engine defines the contract for Helm SDK operations (REQ-041).
@@ -106,6 +126,18 @@ type UpgradeOptions struct {
 	Atomic           bool          // rollback on failure
 	MaxHistory       int           // max history to keep
 	Timeout          time.Duration // helm upgrade timeout
+	OperationID          string
+	CommandID            string
+	BundleDigest         string
+	ChartDigest          string
+	EffectiveValuesDigest string
+	SecretSnapshotDigest string
+	ExpectedManifestDigest string
+	ResetValues          bool
+	ReuseValues          bool
+	CleanupOnFail        bool
+	WaitForJobs          bool
+	TakeOwnership        bool
 }
 
 // RollbackOptions holds parameters for Rollback.

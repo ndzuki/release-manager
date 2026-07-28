@@ -37,7 +37,10 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, logge
 		store:       st,
 		verifier:    verifier,
 		targetEnv:   targetEnv,
-		coordinator: preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), logger),
+		coordinator: preflight.NewCoordinator(
+			st.Outbox(), st.Operations(), st.Operators(), st.Definitions(),
+			st.Bundles(), st.Values(), st.Inventories(), logger,
+		),
 		logger:      logger,
 	}
 }
@@ -139,6 +142,21 @@ func (s *Service) CreateOperation(
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Errorf("values_revision %s is %s, must be approved", vr.ID, vr.Status))
 		}
+
+		inventory, err := s.store.Inventories().GetByDefinition(ctx, def.ID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("release_not_found"))
+		}
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("inventory lookup: %w", err))
+		}
+		if inventory.InventoryStatus != store.InventoryActive || inventory.Status != "deployed" {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("release_not_found"))
+		}
+		if inventory.Revision != int(msg.ExpectedCurrentRevision) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("revision_conflict: expected %d, observed %d", msg.ExpectedCurrentRevision, inventory.Revision))
+		}
 	}
 
 	if opType == store.OperationRollback && msg.ExpectedCurrentRevision < 1 {
@@ -218,6 +236,10 @@ func (s *Service) CreateOperation(
 
 	// 7. Persist
 	if err := s.store.Operations().Create(ctx, op); err != nil {
+		if errors.Is(err, store.ErrDuplicateKey) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
+		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create operation: %w", err))
 	}
 

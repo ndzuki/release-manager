@@ -3,8 +3,10 @@ package orchestrator
 import (
 	"context"
 	"log/slog"
+	"fmt"
 	"os"
 	"testing"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -67,6 +69,7 @@ func seedDefinition(t *testing.T, st store.Store) {
 		Digest:              "digest-vr-001",
 	}
 	require.NoError(t, st.Values().Create(context.Background(), revision))
+	seedUpgradeInventory(t, st, def)
 }
 
 func seedValuesRevision(
@@ -88,6 +91,24 @@ func seedValuesRevision(
 		CreatedAt:           now,
 		UpdatedAt:           now,
 	}))
+}
+
+func seedUpgradeInventory(t *testing.T, st store.Store, def *store.ReleaseDefinition) {
+	t.Helper()
+	revision := &store.ReleaseInventory{
+		ReleaseDefinitionID: def.ID,
+		CustomerID:          def.CustomerID,
+		ClusterID:           def.ClusterID,
+		Namespace:           def.Namespace,
+		ReleaseName:         def.ReleaseName,
+		Chart:               def.ChartName,
+		ChartVersion:        "1.0.0",
+		Revision:            1,
+		Status:              "deployed",
+		ValuesDigest:        "digest-vr-001",
+		InventoryStatus:     store.InventoryActive,
+	}
+	require.NoError(t, st.Inventories().Upsert(context.Background(), revision))
 }
 
 func upgradeRequest(valuesRevisionID string) *orchestratorv1.CreateOperationRequest {
@@ -174,7 +195,6 @@ func TestCreateOperation_ReleaseBusy(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
-	// Second request with different idempotency key -> release_busy
 	_, err = svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "UPGRADE",
 		BundleId:            "bundle-002",
@@ -189,6 +209,62 @@ func TestCreateOperation_ReleaseBusy(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "release_busy")
+}
+
+func TestCreateOperation_ConcurrentUpgradeOnlyOneActive(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedValuesRevision(t, st, "vr-concurrent", "def-001", store.ValuesStatusApproved)
+
+	require.NoError(t, st.Bundles().Create(context.Background(), &store.ReleaseBundle{
+		ID:           "bundle-upgrade",
+		DigestAlg:    "sha256",
+		DigestValue:  "bundle",
+		Status:       store.BundleValidated,
+		ChartRef:     "oci://registry.example.com/example",
+		ChartVersion: "1.0.0",
+		ChartDigest:  "sha256:chart",
+	}))
+	require.NoError(t, st.Operators().Create(context.Background(), &store.Operator{
+		ID:         "operator-concurrent",
+		CustomerID: "cust-001",
+		ClusterID:  "cls-001",
+		CertSerial: "cert-concurrent",
+		Status:     store.OperatorActive,
+		CreatedAt:  time.Now().UTC(),
+		UpdatedAt:  time.Now().UTC(),
+	}))
+	const attempts = 8
+	results := make(chan error, attempts)
+	for i := range attempts {
+		go func(index int) {
+			req := upgradeRequest("vr-concurrent")
+			req.IdempotencyKey = fmt.Sprintf("idem-concurrent-%d", index)
+			_, err := svc.CreateOperation(context.Background(), connect.NewRequest(req))
+			results <- err
+		}(i)
+	}
+
+	succeeded := 0
+	busy := 0
+	for range attempts {
+		err := <-results
+		if err == nil {
+			succeeded++
+			continue
+		}
+		if connect.CodeOf(err) == connect.CodeFailedPrecondition && strings.Contains(err.Error(), "release_busy") {
+			busy++
+			continue
+		}
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 1, succeeded)
+	assert.Equal(t, attempts-1, busy)
+	operations, err := st.Operations().List(context.Background(), "def-001")
+	require.NoError(t, err)
+	assert.Len(t, operations, 1)
 }
 
 func TestCreateOperation_UpgradeValidation(t *testing.T) {

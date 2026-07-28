@@ -317,3 +317,92 @@ func TestFinishOperation(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleCommandResultFinalizesUpgrade(t *testing.T) {
+	st := newTestSvc(t)
+	svc, err := operator.NewService(st, nil)
+	require.NoError(t, err)
+	ctx := t.Context()
+	definition := &store.ReleaseDefinition{
+		ID: "definition-upgrade", Name: "example", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition))
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: definition.ID, CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Revision: 1, Status: "deployed",
+		InventoryStatus: store.InventoryActive,
+	}))
+	op := &store.Operation{
+		ID: "operation-upgrade", OperationType: store.OperationUpgrade, Status: store.StatusQueued,
+		ReleaseDefinitionID: definition.ID, IdempotencyKey: "idem-upgrade", RequestHash: "hash",
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	result := &operatorv1.CommandResult{
+		CommandId: "command-upgrade", OperationId: op.ID, Status: "succeeded",
+		Result: &operatorv1.CommandResult_Upgrade{Upgrade: &operatorv1.UpgradeResult{
+			Active: &operatorv1.ReleaseSnapshot{
+				HelmRevision: 2, BundleDigest: "sha256:bundle", ChartDigest: "sha256:chart",
+				EffectiveValuesDigest: "sha256:values", ManifestDigest: "sha256:manifest",
+			},
+			ResourceSummary: &operatorv1.ResourceSummary{ResourceCount: 4, ManifestDigest: "sha256:manifest"},
+		}},
+	}
+
+	require.NoError(t, svc.HandleCommandResult(ctx, result))
+	updated, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, updated.Status)
+	inventory, err := st.Inventories().GetByDefinition(ctx, definition.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, inventory.Revision)
+	assert.Equal(t, "sha256:manifest", inventory.ObservedManifestDigest)
+	tracking, err := st.RolloutTrackings().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 4, tracking.ResourceCount)
+
+	require.NoError(t, svc.HandleCommandResult(ctx, result))
+	events, err := st.OperationEvents().List(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Len(t, events, 1)
+}
+
+func TestHandleCommandResultRollbackFailureMarksOutOfSync(t *testing.T) {
+	st := newTestSvc(t)
+	svc, err := operator.NewService(st, nil)
+	require.NoError(t, err)
+	ctx := t.Context()
+	definition := &store.ReleaseDefinition{
+		ID: "definition-out-of-sync", Name: "example", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition))
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: definition.ID, CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Revision: 1, Status: "deployed",
+		InventoryStatus: store.InventoryActive,
+	}))
+	op := &store.Operation{
+		ID: "operation-out-of-sync", OperationType: store.OperationUpgrade, Status: store.StatusRunning,
+		ReleaseDefinitionID: definition.ID, IdempotencyKey: "idem-out-of-sync", RequestHash: "hash",
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	result := &operatorv1.CommandResult{
+		CommandId: "command-out-of-sync", OperationId: op.ID, Status: "failed",
+		Error: &operatorv1.ExecutionError{Code: "atomic_rollback_failed", Message: "manual intervention required"},
+		Result: &operatorv1.CommandResult_Upgrade{Upgrade: &operatorv1.UpgradeResult{
+			Active: &operatorv1.ReleaseSnapshot{HelmRevision: 2, ManifestDigest: "sha256:failed"},
+		}},
+	}
+
+	require.NoError(t, svc.HandleCommandResult(ctx, result))
+	updated, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusFailed, updated.Status)
+	assert.Equal(t, "atomic_rollback_failed", updated.LastError)
+	inventory, err := st.Inventories().GetByDefinition(ctx, definition.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.InventoryOutOfSync, inventory.InventoryStatus)
+}

@@ -1,7 +1,10 @@
 package helmengine
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"errors"
 	"io"
 	"log/slog"
@@ -112,6 +115,37 @@ func TestRealEngine_InstallContextErrors(t *testing.T) {
 	}
 }
 
+func TestManifestGate(t *testing.T) {
+	manifest := []byte("apiVersion: v1\nkind: ConfigMap\n")
+	gate := &manifestGate{expectedDigest: fmt.Sprintf("%x", sha256.Sum256(manifest))}
+
+	output, err := gate.Run(bytes.NewBuffer(manifest))
+	require.NoError(t, err)
+	assert.Equal(t, manifest, output.Bytes())
+}
+
+func TestManifestGateRejectsDrift(t *testing.T) {
+	gate := &manifestGate{expectedDigest: "different"}
+
+	_, err := gate.Run(bytes.NewBufferString("manifest"))
+	require.ErrorIs(t, err, ErrRenderDrift)
+}
+
+func TestRealEngine_UpgradeRejectsRevisionConflict(t *testing.T) {
+	engine, _ := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	})
+	chartPath := writeTestChart(t)
+	_, err := engine.Install(t.Context(), InstallOptions{
+		Namespace: "default", ReleaseName: "upgrade-example", ChartPath: chartPath,
+	})
+	require.NoError(t, err)
+
+	_, err = engine.Upgrade(t.Context(), UpgradeOptions{
+		Namespace: "default", ReleaseName: "upgrade-example", ChartPath: chartPath, ExpectedRevision: 2,
+	})
+	require.ErrorIs(t, err, ErrConflict)
+}
 func TestDigestValuesDeterministic(t *testing.T) {
 	left := map[string]interface{}{
 		"replicas": 2,

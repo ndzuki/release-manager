@@ -36,6 +36,9 @@ type Store struct {
 	routes     *clusterRouteStore
 	invs       *inventoryStore
 	custEvents *customerEventStore
+	executionResults *operationExecutionResultStore
+	rollouts         *rolloutTrackingStore
+	events           *operationEventStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -84,6 +87,9 @@ func Open(dsn string) (*Store, error) {
 	s.verifs = &verificationStore{db: db}
 	s.custEvents = &customerEventStore{db: db}
 	s.routes = &clusterRouteStore{db: db}
+	s.executionResults = &operationExecutionResultStore{db: db}
+	s.rollouts = &rolloutTrackingStore{db: db}
+	s.events = &operationEventStore{db: db}
 	return s, nil
 }
 
@@ -149,6 +155,18 @@ func (s *Store) ClusterRoutes() store.ClusterRouteStore { return s.routes }
 
 // Inventories returns the InventoryStore.
 func (s *Store) Inventories() store.InventoryStore { return s.invs }
+
+// ExecutionResults returns the typed operation result store.
+func (s *Store) ExecutionResults() store.OperationExecutionResultStore { return s.executionResults }
+
+// RolloutTrackings returns the rollout tracking store.
+func (s *Store) RolloutTrackings() store.RolloutTrackingStore { return s.rollouts }
+
+// OperationEvents returns the operation timeline store.
+func (s *Store) OperationEvents() store.OperationEventStore { return s.events }
+
+// UpgradeResults returns the atomic upgrade terminal writer.
+func (s *Store) UpgradeResults() store.UpgradeResultStore { return s.ops }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
@@ -242,6 +260,10 @@ var migrationStatements = []string{
 		deadline             TEXT,
 		last_error           TEXT NOT NULL DEFAULT ''
 	)`,
+	`ALTER TABLE operations ADD COLUMN terminal_at TEXT`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_operations_one_active_definition
+	 ON operations(release_definition_id)
+	 WHERE status NOT IN ('succeeded','failed','cancelled','timeout')`,
 
 	`CREATE INDEX IF NOT EXISTS idx_operations_definition ON operations(release_definition_id, status)`,
 	`CREATE INDEX IF NOT EXISTS idx_operations_idempotency ON operations(idempotency_key)`,
@@ -491,6 +513,38 @@ var migrationStatements = []string{
 		updated_at       TEXT NOT NULL,
 		UNIQUE(customer_id, cluster_id, namespace, release_name)
 	)`,
+	`ALTER TABLE release_inventory ADD COLUMN observed_bundle_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN observed_chart_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN observed_effective_values_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN observed_manifest_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN last_operation_id TEXT NOT NULL DEFAULT ''`,
+
+	`CREATE TABLE IF NOT EXISTS operation_execution_results (
+		operation_id   TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE,
+		result_type    TEXT NOT NULL,
+		result_payload BLOB NOT NULL,
+		created_at     TEXT NOT NULL
+	)`,
+
+	`CREATE TABLE IF NOT EXISTS rollout_trackings (
+		operation_id   TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE,
+		status         TEXT NOT NULL DEFAULT 'pending',
+		resource_count INTEGER NOT NULL DEFAULT 0,
+		ready_count    INTEGER NOT NULL DEFAULT 0,
+		failed_count   INTEGER NOT NULL DEFAULT 0,
+		last_error     TEXT NOT NULL DEFAULT '',
+		created_at     TEXT NOT NULL,
+		updated_at     TEXT NOT NULL
+	)`,
+
+	`CREATE TABLE IF NOT EXISTS operation_events (
+		id           TEXT PRIMARY KEY,
+		operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+		event_type   TEXT NOT NULL,
+		payload      BLOB NOT NULL DEFAULT (x'7b7d'),
+		created_at   TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_operation_events_operation ON operation_events(operation_id, created_at)`,
 	`ALTER TABLE release_inventory ADD COLUMN release_definition_id TEXT NOT NULL DEFAULT ''`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_cluster ON release_inventory(customer_id, cluster_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_status ON release_inventory(inventory_status)`,

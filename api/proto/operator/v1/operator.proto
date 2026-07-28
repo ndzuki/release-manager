@@ -3,6 +3,7 @@ syntax = "proto3";
 package operator.v1;
 
 import "common/v1/domain.proto";
+import "operator/v1/upgrade_result.proto";
 
 option go_package = "github.com/ndzuki/release-manager/api/gen/operator/v1;operatorv1";
 
@@ -12,7 +13,7 @@ message EnrollRequest {
   string customer_id = 2;
   string cluster_id = 3;
   string operator_id = 4;
-  bytes csr_pem = 5;           // PEM-encoded certificate signing request
+  bytes csr_pem = 5;
   map<string, string> capabilities = 6;
 }
 
@@ -20,17 +21,16 @@ message EnrollRequest {
 message EnrollResponse {
   string session_id = 1;
   int64 ttl_seconds = 2;
-  bytes certificate_pem = 3;   // signed client certificate (mTLS)
+  bytes certificate_pem = 3;
 }
-
-// CommandStreamRequest carries operator status updates and acknowledgments.
 message CommandStreamRequest {
   oneof payload {
-    Hello hello = 1;           // initial session hello (after Enroll)
-    Ack ack = 2;               // command acknowledgment
-    Heartbeat heartbeat = 3;   // periodic liveness
-    Result result = 4;         // command completion result
-    ResyncResponse resync_response = 5;  // response to orchestrator resync request
+    Hello hello = 1;
+    Ack ack = 2;
+    Heartbeat heartbeat = 3;
+    Result result = 4;
+    ResyncResponse resync_response = 5;
+    CommandResult command_result = 6;
   }
 }
 
@@ -38,22 +38,22 @@ message CommandStreamRequest {
 message Hello {
   string session_id = 1;
   string operator_id = 2;
-  int64 last_seen_sequence = 3; // last sequence number the operator has seen
+  int64 last_seen_sequence = 3;
 }
 
 // AckType classifies the acknowledgment level.
 enum AckType {
   ACK_TYPE_UNSPECIFIED = 0;
-  ACK_TYPE_RECEIVED = 1;       // command received (delivered)
-  ACK_TYPE_PERSISTED = 2;      // command persisted to local store (fsynced)
+  ACK_TYPE_RECEIVED = 1;
+  ACK_TYPE_PERSISTED = 2;
 }
 
 // Ack acknowledges receipt of a command delivered to the operator.
 message Ack {
   string outbox_id = 1;
   string command_id = 2;
-  int64 sequence = 3;          // sequence of the acknowledged command
-  AckType ack_type = 4;        // acknowledgment level
+  int64 sequence = 3;
+  AckType ack_type = 4;
 }
 
 // Heartbeat signals operator liveness.
@@ -61,24 +61,24 @@ message Heartbeat {
   string session_id = 1;
 }
 
-// Result reports command execution outcome.
+// Result reports legacy command execution outcome.
 message Result {
   string outbox_id = 1;
   string command_id = 2;
-  string status = 3;          // "succeeded" or "failed"
+  string status = 3;
   string message = 4;
   bytes output = 5;
-  int64 sequence = 6;          // sequence of the completed command
-  string result_json = 7;      // JSON-encoded result for duplicate detection
+  int64 sequence = 6;
+  string result_json = 7;
 }
 
 // CommandStreamResponse delivers commands and session events.
 message CommandStreamResponse {
   oneof payload {
-    Command command = 1;       // deploy command to execute
-    SessionEvent session_event = 2;  // session lifecycle event
-    ResyncRequest resync_request = 3;  // gap detected, request full resync
-    DuplicateResponse duplicate_response = 4;  // command already completed
+    Command command = 1;
+    SessionEvent session_event = 2;
+    ResyncRequest resync_request = 3;
+    DuplicateResponse duplicate_response = 4;
   }
 }
 
@@ -90,34 +90,38 @@ message Command {
   string operation_type = 4;
   common.v1.ReleaseBundle bundle = 5;
   bytes values = 6;
-  int64 sequence = 7;          // global monotonic sequence number
+  int64 sequence = 7;
   string definition_id = 8;
   string namespace = 9;
   string release_name = 10;
   bool create_namespace = 11;
   int64 timeout_seconds = 12;
+  uint32 payload_version = 13;
+  oneof typed_payload {
+    UpgradeCommand upgrade = 20;
+  }
 }
 
 // ResyncRequest asks the operator to report its last seen sequence for gap recovery.
 message ResyncRequest {
-  int64 orchestrator_last_sequence = 1;  // the highest sequence known to orchestrator
-  string reason = 2;                      // human-readable gap description
+  int64 orchestrator_last_sequence = 1;
+  string reason = 2;
 }
 
 // ResyncResponse is sent by the operator in response to a ResyncRequest.
 message ResyncResponse {
-  int64 operator_last_sequence = 1;       // the last sequence the operator has stored
+  int64 operator_last_sequence = 1;
 }
 
 // DuplicateResponse is sent when the operator receives a command it has already completed.
 message DuplicateResponse {
   string command_id = 1;
-  string result_json = 2;                 // original result JSON
+  string result_json = 2;
 }
 
 // SessionEvent signals a session lifecycle change.
 message SessionEvent {
-  string type = 1;            // "suspect", "offline", "replaced"
+  string type = 1;
   string message = 2;
 }
 
@@ -137,5 +141,5 @@ message RevokeOperatorRequest {
 // RevokeOperatorResponse confirms operator revocation.
 message RevokeOperatorResponse {
   string operator_id = 1;
-  string status = 2;   // "revoked" or "already_revoked"
+  string status = 2;
 }

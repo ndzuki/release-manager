@@ -3,16 +3,21 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	"github.com/ndzuki/release-manager/internal/operator/helmengine"
+	operatork8s "github.com/ndzuki/release-manager/internal/operator/k8s"
 	"github.com/ndzuki/release-manager/internal/operator/localstore"
+	"google.golang.org/protobuf/encoding/protojson"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
 const defaultInstallTimeout = 5 * time.Minute
@@ -41,6 +46,7 @@ type Agent struct {
 	engine       helmengine.Engine
 	store        localstore.Store
 	notifier     InventoryNotifier
+	secrets      corev1client.CoreV1Interface
 	sessionID    string
 	operatorID   string
 	logger       *slog.Logger
@@ -58,6 +64,7 @@ type Config struct {
 	Client       StreamClient
 	Engine       helmengine.Engine
 	Store        localstore.Store
+	Secrets      corev1client.CoreV1Interface
 	Notifier     InventoryNotifier
 	SessionID    string
 	OperatorID   string
@@ -67,15 +74,16 @@ type Config struct {
 
 // Result is persisted locally and sent to the orchestrator for idempotent replay.
 type Result struct {
-	OperationID     string              `json:"operation_id"`
-	CommandID       string              `json:"command_id"`
-	DefinitionID    string              `json:"definition_id"`
-	Status          string              `json:"status"`
-	Code            string              `json:"code,omitempty"`
-	Message         string              `json:"message,omitempty"`
-	Release         *helmengine.Release `json:"release,omitempty"`
-	InventorySync   bool                `json:"inventory_sync_hint"`
-	ResourceSummary ResourceSummary     `json:"resource_summary"`
+	OperationID     string                    `json:"operation_id"`
+	CommandID       string                    `json:"command_id"`
+	DefinitionID    string                    `json:"definition_id"`
+	Status          string                    `json:"status"`
+	Upgrade         *operatorv1.UpgradeResult `json:"upgrade,omitempty"`
+	Code            string                    `json:"code,omitempty"`
+	Message         string                    `json:"message,omitempty"`
+	Release         *helmengine.Release       `json:"release,omitempty"`
+	InventorySync   bool                      `json:"inventory_sync_hint"`
+	ResourceSummary ResourceSummary           `json:"resource_summary"`
 }
 
 // ResourceSummary contains non-sensitive output metadata.
@@ -110,6 +118,7 @@ func New(cfg Config) (*Agent, error) {
 		client:       cfg.Client,
 		engine:       cfg.Engine,
 		store:        cfg.Store,
+		secrets:      cfg.Secrets,
 		notifier:     cfg.Notifier,
 		sessionID:    cfg.SessionID,
 		operatorID:   cfg.OperatorID,
@@ -211,8 +220,7 @@ func (a *Agent) handleCommand(ctx context.Context, stream Stream, command *opera
 	if !errors.Is(err, localstore.ErrNotFound) {
 		return fmt.Errorf("lookup command %q: %w", command.GetCommandId(), err)
 	}
-
-	payload, err := json.Marshal(command)
+	payload, err := protojson.Marshal(command)
 	if err != nil {
 		return fmt.Errorf("marshal command %q: %w", command.GetCommandId(), err)
 	}
@@ -237,14 +245,16 @@ func (a *Agent) handleCommand(ctx context.Context, stream Stream, command *opera
 
 func (a *Agent) executeEntry(ctx context.Context, stream Stream, entry *localstore.CommandEntry) error {
 	var command operatorv1.Command
-	if err := json.Unmarshal(entry.Payload, &command); err != nil {
-		return a.finishFailure(ctx, stream, entry, Result{
-			OperationID: entry.OperationID,
-			CommandID:   entry.CommandID,
-			Status:      "failed",
-			Code:        "invalid_command",
-			Message:     "invalid command payload",
-		})
+	if err := protojson.Unmarshal(entry.Payload, &command); err != nil {
+		if legacyErr := json.Unmarshal(entry.Payload, &command); legacyErr != nil {
+			return a.finishFailure(ctx, stream, entry, Result{
+				OperationID: entry.OperationID,
+				CommandID:   entry.CommandID,
+				Status:      "failed",
+				Code:        "invalid_command",
+				Message:     "invalid command payload",
+			})
+		}
 	}
 
 	if err := a.store.UpdateStatus(ctx, entry.CommandID, localstore.StatusRunning, ""); err != nil {
@@ -274,6 +284,9 @@ func (a *Agent) executeEntry(ctx context.Context, stream Stream, entry *localsto
 		)
 	}
 
+	if command.GetOperationType() == "UPGRADE" {
+		return stream.Send(commandResultRequest(&command, result))
+	}
 	return stream.Send(resultRequest(&command, result, resultJSON))
 }
 
@@ -285,11 +298,19 @@ func (a *Agent) execute(ctx context.Context, command *operatorv1.Command) Result
 		DefinitionID: command.GetDefinitionId(),
 	}
 
-	if command.GetOperationType() != "INSTALL" {
+	switch command.GetOperationType() {
+	case "INSTALL":
+		return a.executeInstall(ctx, command, result)
+	case "UPGRADE":
+		return a.executeUpgrade(ctx, command, result)
+	default:
 		result.Code = "unsupported_command"
 		result.Message = fmt.Sprintf("unsupported command type %q", command.GetOperationType())
 		return result
 	}
+}
+
+func (a *Agent) executeInstall(ctx context.Context, command *operatorv1.Command, result Result) Result {
 	if command.GetBundle() == nil || command.GetBundle().GetChartRef() == "" {
 		result.Code = "invalid_command"
 		result.Message = "chart_ref is required"
@@ -301,9 +322,9 @@ func (a *Agent) execute(ctx context.Context, command *operatorv1.Command) Result
 		return result
 	}
 
-	values := map[string]interface{}{}
+	valuesMap := map[string]interface{}{}
 	if len(command.GetValues()) > 0 {
-		if err := json.Unmarshal(command.GetValues(), &values); err != nil {
+		if err := json.Unmarshal(command.GetValues(), &valuesMap); err != nil {
 			result.Code = "invalid_command"
 			result.Message = "values must be canonical JSON"
 			return result
@@ -320,7 +341,7 @@ func (a *Agent) execute(ctx context.Context, command *operatorv1.Command) Result
 		ReleaseName:     command.GetReleaseName(),
 		ChartPath:       command.GetBundle().GetChartRef(),
 		ChartVersion:    command.GetBundle().GetChartVersion(),
-		Values:          values,
+		Values:          valuesMap,
 		Atomic:          a.installFlags.Atomic,
 		CreateNamespace: command.GetCreateNamespace(),
 		Timeout:         timeout,
@@ -338,6 +359,156 @@ func (a *Agent) execute(ctx context.Context, command *operatorv1.Command) Result
 	return result
 }
 
+func releaseSnapshot(release *helmengine.Release) *operatorv1.ReleaseSnapshot {
+	if release == nil {
+		return nil
+	}
+	provenance := operatorv1.ReleaseProvenance_RELEASE_PROVENANCE_LEGACY
+	if release.Provenance == "managed" {
+		provenance = operatorv1.ReleaseProvenance_RELEASE_PROVENANCE_MANAGED
+	}
+	return &operatorv1.ReleaseSnapshot{
+		HelmRevision:          uint64(release.Revision), //nolint:gosec // Helm revisions are positive SDK ints.
+		BundleDigest:          release.BundleDigest,
+		ChartDigest:           release.ChartDigest,
+		EffectiveValuesDigest: release.EffectiveValuesDigest,
+		ManifestDigest:        release.ManifestDigest,
+		Provenance:            provenance,
+	}
+}
+
+func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command, result Result) Result {
+	upgrade := command.GetUpgrade()
+	if command.GetPayloadVersion() != 2 || upgrade == nil {
+		result.Code = "unsupported_command_version"
+		result.Message = "upgrade payload_version 2 is required"
+		return result
+	}
+	valuesDigest := sha256Hex(upgrade.GetEffectiveValuesJson())
+	if valuesDigest != strings.TrimPrefix(upgrade.GetEffectiveValuesDigest(), "sha256:") {
+		result.Code = "digest_mismatch"
+		result.Message = "effective values digest mismatch"
+		return result
+	}
+	valuesMap := map[string]interface{}{}
+	if err := json.Unmarshal(upgrade.GetEffectiveValuesJson(), &valuesMap); err != nil {
+		result.Code = "invalid_command"
+		result.Message = "effective values must be canonical JSON"
+		return result
+	}
+	secretDigest, err := operatork8s.Resolve(ctx, a.secrets, upgrade.GetNamespace(), upgrade.GetSecretRefs(), valuesMap)
+	if err != nil {
+		result.Code = upgradeErrorCode(err)
+		result.Message = err.Error()
+		return result
+	}
+	fromRelease, statusErr := a.engine.Status(ctx, helmengine.StatusOptions{
+		Namespace:   upgrade.GetNamespace(),
+		ReleaseName: upgrade.GetReleaseName(),
+	})
+	if statusErr != nil && !errors.Is(statusErr, helmengine.ErrNotFound) {
+		result.Code = upgradeErrorCode(statusErr)
+		result.Message = statusErr.Error()
+		return result
+	}
+
+	timeout := 5 * time.Minute
+	if upgrade.GetTimeout() != nil {
+		timeout = upgrade.GetTimeout().AsDuration()
+	}
+	release, err := a.engine.Upgrade(ctx, helmengine.UpgradeOptions{
+		Namespace:              upgrade.GetNamespace(),
+		ReleaseName:            upgrade.GetReleaseName(),
+		ChartPath:              upgrade.GetChart().GetResolvedUri(),
+		ChartVersion:           upgrade.GetChart().GetVersion(),
+		Values:                 valuesMap,
+		ExpectedRevision:       int(upgrade.GetExpectedRevision()), //nolint:gosec // CreateOperation restricts revisions to positive SDK ints.
+		Atomic:                 true,
+		MaxHistory:             int(upgrade.GetMaxHistory()),
+		Timeout:                timeout,
+		OperationID:            upgrade.GetOperationId(),
+		CommandID:              upgrade.GetCommandId(),
+		BundleDigest:           upgrade.GetBundle().GetBundleDigest(),
+		ChartDigest:            upgrade.GetChart().GetDigest(),
+		EffectiveValuesDigest:  upgrade.GetEffectiveValuesDigest(),
+		SecretSnapshotDigest:   secretDigest,
+		ExpectedManifestDigest: upgrade.GetExpectedManifestDigest(),
+		ResetValues:            true,
+		ReuseValues:            false,
+		CleanupOnFail:          false,
+		WaitForJobs:            true,
+		TakeOwnership:          false,
+	})
+	if err != nil {
+		result.Code = upgradeErrorCode(err)
+		result.Message = err.Error()
+		result.Release = release
+		result.Upgrade = &operatorv1.UpgradeResult{
+			From:              releaseSnapshot(fromRelease),
+			Attempted:         releaseSnapshot(release),
+			Active:            releaseSnapshot(release),
+			RollbackSucceeded: release != nil && fromRelease != nil && release.Revision == fromRelease.Revision,
+			ResourceSummary: &operatorv1.ResourceSummary{
+				ManifestDigest: manifestDigest(release),
+			},
+		}
+		result.ResourceSummary.ManifestDigest = manifestDigest(release)
+		return result
+	}
+
+	result.Status = "succeeded"
+	result.Upgrade = &operatorv1.UpgradeResult{
+		From:               releaseSnapshot(fromRelease),
+		Attempted:          releaseSnapshot(release),
+		Active:             releaseSnapshot(release),
+		RollbackSucceeded:  false,
+		RolloutTrackingRef: upgrade.GetOperationId(),
+		ResourceSummary: &operatorv1.ResourceSummary{
+			ManifestDigest: release.ManifestDigest,
+		},
+	}
+	result.Release = release
+	result.InventorySync = true
+	result.ResourceSummary.ManifestDigest = release.ManifestDigest
+	return result
+}
+
+func manifestDigest(release *helmengine.Release) string {
+	if release == nil {
+		return ""
+	}
+	return release.ManifestDigest
+}
+func sha256Hex(data []byte) string {
+	digest := sha256.Sum256(data)
+	return fmt.Sprintf("%x", digest)
+}
+
+func upgradeErrorCode(err error) string {
+	switch {
+	case errors.Is(err, helmengine.ErrNotFound):
+		return "release_not_found"
+	case errors.Is(err, helmengine.ErrConflict):
+		return "revision_conflict"
+	case errors.Is(err, helmengine.ErrDigestMismatch):
+		return "digest_mismatch"
+	case errors.Is(err, helmengine.ErrSecretRefChanged), strings.Contains(err.Error(), "secret_ref_changed"):
+		return "secret_ref_changed"
+	case errors.Is(err, helmengine.ErrRenderDrift):
+		return "render_drift"
+	case errors.Is(err, helmengine.ErrRenderFailed), strings.Contains(err.Error(), "render_failed"):
+		return "render_failed"
+	case errors.Is(err, helmengine.ErrSchemaFailed), strings.Contains(err.Error(), "values don't meet"):
+		return "schema_failed"
+	case errors.Is(err, helmengine.ErrTimeout):
+		return "helm_timeout"
+	case errors.Is(err, helmengine.ErrCancelled):
+		return "helm_cancelled"
+	default:
+		return "helm_upgrade_failed"
+	}
+}
+
 func (a *Agent) finishFailure(ctx context.Context, stream Stream, entry *localstore.CommandEntry, result Result) error {
 	resultJSON, err := json.Marshal(result)
 	if err != nil {
@@ -348,18 +519,45 @@ func (a *Agent) finishFailure(ctx context.Context, stream Stream, entry *localst
 	}
 
 	command := &operatorv1.Command{
-		OutboxId:    entry.OutboxID,
-		CommandId:   entry.CommandID,
-		OperationId: entry.OperationID,
-		Sequence:    entry.Sequence,
+		OutboxId:      entry.OutboxID,
+		CommandId:     entry.CommandID,
+		OperationId:   entry.OperationID,
+		Sequence:      entry.Sequence,
+		OperationType: entry.OperationType,
+	}
+	if command.GetOperationType() == "UPGRADE" {
+		return stream.Send(commandResultRequest(command, result))
 	}
 	return stream.Send(resultRequest(command, result, resultJSON))
+}
+func commandResultRequest(command *operatorv1.Command, result Result) *operatorv1.CommandStreamRequest {
+	commandResult := &operatorv1.CommandResult{
+		CommandId:   command.GetCommandId(),
+		OperationId: command.GetOperationId(),
+		Status:      result.Status,
+	}
+	if result.Upgrade != nil {
+		commandResult.Result = &operatorv1.CommandResult_Upgrade{Upgrade: result.Upgrade}
+	}
+	if result.Code != "" {
+		commandResult.Error = &operatorv1.ExecutionError{
+			Code:      result.Code,
+			Message:   result.Message,
+			Retryable: result.Code == "revision_conflict" || result.Code == "release_busy",
+		}
+	}
+	return &operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_CommandResult{CommandResult: commandResult},
+	}
 }
 
 func (a *Agent) sendCachedResult(stream Stream, command *operatorv1.Command, resultJSON string) error {
 	var result Result
 	if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
 		return fmt.Errorf("decode cached result for %q: %w", command.GetCommandId(), err)
+	}
+	if command.GetOperationType() == "UPGRADE" {
+		return stream.Send(commandResultRequest(command, result))
 	}
 	return stream.Send(resultRequest(command, result, []byte(resultJSON)))
 }

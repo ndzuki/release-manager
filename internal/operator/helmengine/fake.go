@@ -3,6 +3,7 @@ package helmengine
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 )
@@ -18,6 +19,10 @@ type Fake struct {
 	// UpgradeError, if set, causes Upgrade to fail with this error.
 	// Used to test Atomic rollback (AC-021-04).
 	UpgradeError error
+	// RollbackError, if set, makes the simulated Atomic rollback fail.
+	RollbackError error
+	// RenderedManifestDigest overrides the next rendered manifest digest.
+	RenderedManifestDigest string
 }
 
 // NewFake creates a new Fake engine.
@@ -55,6 +60,7 @@ func (f *Fake) Install(ctx context.Context, opts InstallOptions) (*Release, erro
 		Chart:          opts.ChartPath,
 		ManifestDigest: fmt.Sprintf("fake-digest-%d", f.counter),
 		Notes:          fmt.Sprintf("installed %s/%s rev=1", opts.Namespace, opts.ReleaseName),
+		Provenance:     "legacy",
 	}
 	f.releases[key] = rel
 	f.history[key] = append(f.history[key], ReleaseHistoryEntry{
@@ -89,39 +95,72 @@ func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, erro
 		return nil, fmt.Errorf("%w: expected revision %d, got %d", ErrConflict, opts.ExpectedRevision, existing.Revision)
 	}
 
-	// Capture pre-upgrade state for Atomic rollback.
 	prevRelease := *existing
+	prevRelease.Labels = maps.Clone(existing.Labels)
+	inputDigest := digestString(strings.Join([]string{
+		opts.BundleDigest,
+		opts.ChartDigest,
+		opts.EffectiveValuesDigest,
+		opts.SecretSnapshotDigest,
+	}, "|"))
+	description := fmt.Sprintf("release-manager operation=%s command=%s", opts.OperationID, opts.CommandID)
+	if existing.Description == description && existing.Labels["rm_input_digest"] == inputDigest {
+		replayed := *existing
+		replayed.Labels = maps.Clone(existing.Labels)
+		return &replayed, nil
+	}
 
 	f.counter++
 	newRev := existing.Revision + 1
+	manifestDigest := fmt.Sprintf("fake-digest-%d", f.counter)
+	if f.RenderedManifestDigest != "" {
+		manifestDigest = f.RenderedManifestDigest
+		f.RenderedManifestDigest = ""
+	}
+	if opts.ExpectedManifestDigest != "" &&
+		strings.TrimPrefix(opts.ExpectedManifestDigest, "sha256:") != strings.TrimPrefix(manifestDigest, "sha256:") {
+		return nil, fmt.Errorf("manifest digest mismatch: %w", ErrRenderDrift)
+	}
 	rel := &Release{
-		Name:           opts.ReleaseName,
-		Namespace:      opts.Namespace,
-		Revision:       newRev,
-		Status:         "deployed",
-		Chart:          opts.ChartPath,
-		ManifestDigest: fmt.Sprintf("fake-digest-%d", f.counter),
-		Notes:          fmt.Sprintf("upgraded %s/%s rev=%d", opts.Namespace, opts.ReleaseName, newRev),
+		Name:                  opts.ReleaseName,
+		Namespace:             opts.Namespace,
+		Revision:              newRev,
+		Status:                "deployed",
+		Chart:                 opts.ChartPath,
+		ManifestDigest:        manifestDigest,
+		Notes:                 fmt.Sprintf("upgraded %s/%s rev=%d", opts.Namespace, opts.ReleaseName, newRev),
+		Description:           description,
+		Labels:                map[string]string{"rm_input_digest": inputDigest},
+		BundleDigest:          opts.BundleDigest,
+		ChartDigest:           opts.ChartDigest,
+		EffectiveValuesDigest: opts.EffectiveValuesDigest,
+		Provenance:            "managed",
 	}
 	f.releases[key] = rel
 	f.history[key] = append(f.history[key], ReleaseHistoryEntry{
 		Revision:    newRev,
 		Status:      "deployed",
 		Chart:       opts.ChartPath,
-		Description: "Upgrade complete",
+		Description: description,
 	})
 
-	// AC-021-04: simulate failure with optional Atomic rollback
 	if f.UpgradeError != nil {
 		err := f.UpgradeError
-		f.UpgradeError = nil // one-shot
+		f.UpgradeError = nil
+		f.history[key][len(f.history[key])-1].Status = "failed"
 		if opts.Atomic {
-			// Rollback: restore pre-upgrade release state and mark history as failed
+			if f.RollbackError != nil {
+				f.RollbackError = nil
+				rel.Status = "failed"
+				return rel, fmt.Errorf("rollback failed: %w", ErrAtomicRollbackFailed)
+			}
 			f.releases[key] = &prevRelease
-			f.history[key][len(f.history[key])-1].Status = "failed"
 			f.history[key][len(f.history[key])-1].Description = "Upgrade failed, rolled back"
+			rolledBack := prevRelease
+			rolledBack.Labels = maps.Clone(prevRelease.Labels)
+			return &rolledBack, err
 		}
-		return nil, err
+		return rel, err
 	}
 
 	return rel, nil
@@ -137,27 +176,34 @@ func (f *Fake) Rollback(ctx context.Context, opts RollbackOptions) (*Release, er
 	defer f.mu.Unlock()
 
 	key := f.key(opts.Namespace, opts.ReleaseName)
-	if _, exists := f.releases[key]; !exists {
+	existing, exists := f.releases[key]
+	if !exists {
 		return nil, ErrNotFound
 	}
 
 	f.counter++
-	newRev := f.releases[key].Revision + 1
+	newRev := existing.Revision + 1
 	rel := &Release{
-		Name:           opts.ReleaseName,
-		Namespace:      opts.Namespace,
-		Revision:       newRev,
-		Status:         "deployed",
-		Chart:          f.releases[key].Chart,
-		ManifestDigest: fmt.Sprintf("fake-digest-%d", f.counter),
-		Notes:          fmt.Sprintf("rolled back %s/%s to rev=%d", opts.Namespace, opts.ReleaseName, opts.TargetRevision),
+		Name:                  opts.ReleaseName,
+		Namespace:             opts.Namespace,
+		Revision:              newRev,
+		Status:                "deployed",
+		Chart:                 existing.Chart,
+		ManifestDigest:        fmt.Sprintf("fake-digest-%d", f.counter),
+		Notes:                 fmt.Sprintf("rolled back %s/%s to rev=%d", opts.Namespace, opts.ReleaseName, opts.TargetRevision),
+		Description:           fmt.Sprintf("Rollback to %d", opts.TargetRevision),
+		Labels:                maps.Clone(existing.Labels),
+		BundleDigest:          existing.BundleDigest,
+		ChartDigest:           existing.ChartDigest,
+		EffectiveValuesDigest: existing.EffectiveValuesDigest,
+		Provenance:            existing.Provenance,
 	}
 	f.releases[key] = rel
 	f.history[key] = append(f.history[key], ReleaseHistoryEntry{
 		Revision:    newRev,
 		Status:      "deployed",
 		Chart:       rel.Chart,
-		Description: fmt.Sprintf("Rollback to %d", opts.TargetRevision),
+		Description: rel.Description,
 	})
 	return rel, nil
 }
@@ -176,8 +222,8 @@ func (f *Fake) Status(ctx context.Context, opts StatusOptions) (*Release, error)
 	if !exists {
 		return nil, ErrNotFound
 	}
-	// Return a copy to avoid mutating stored state.
 	cp := *rel
+	cp.Labels = maps.Clone(rel.Labels)
 	return &cp, nil
 }
 

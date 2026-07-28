@@ -65,6 +65,114 @@ func TestFake_UpgradeNotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+func TestFake_UpgradeRevisionConflictDoesNotMutate(t *testing.T) {
+	eng := NewFake()
+	_, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+	require.NoError(t, err)
+
+	_, err = eng.Upgrade(t.Context(), UpgradeOptions{
+		Namespace:        "apps",
+		ReleaseName:      "example",
+		ChartPath:        "chart-v2",
+		ExpectedRevision: 2,
+	})
+	require.ErrorIs(t, err, ErrConflict)
+	active, statusErr := eng.Status(t.Context(), StatusOptions{Namespace: "apps", ReleaseName: "example"})
+	require.NoError(t, statusErr)
+	assert.Equal(t, 1, active.Revision)
+	assert.Equal(t, "chart-v1", active.Chart)
+}
+
+func TestFake_UpgradeAtomicRollback(t *testing.T) {
+	eng := NewFake()
+	_, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+	require.NoError(t, err)
+	eng.UpgradeError = ErrActionFailed
+
+	active, err := eng.Upgrade(t.Context(), UpgradeOptions{
+		Namespace:        "apps",
+		ReleaseName:      "example",
+		ChartPath:        "chart-v2",
+		ExpectedRevision: 1,
+		Atomic:           true,
+	})
+	require.ErrorIs(t, err, ErrActionFailed)
+	require.NotNil(t, active)
+	assert.Equal(t, 1, active.Revision)
+	status, statusErr := eng.Status(t.Context(), StatusOptions{Namespace: "apps", ReleaseName: "example"})
+	require.NoError(t, statusErr)
+	assert.Equal(t, 1, status.Revision)
+	assert.Equal(t, "chart-v1", status.Chart)
+}
+
+func TestFake_UpgradeAtomicRollbackFailure(t *testing.T) {
+	eng := NewFake()
+	_, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+	require.NoError(t, err)
+	eng.UpgradeError = ErrActionFailed
+	eng.RollbackError = ErrActionFailed
+
+	active, err := eng.Upgrade(t.Context(), UpgradeOptions{
+		Namespace:        "apps",
+		ReleaseName:      "example",
+		ChartPath:        "chart-v2",
+		ExpectedRevision: 1,
+		Atomic:           true,
+	})
+	require.ErrorIs(t, err, ErrAtomicRollbackFailed)
+	require.NotNil(t, active)
+	assert.Equal(t, "failed", active.Status)
+}
+
+func TestFake_UpgradeRenderDriftDoesNotMutate(t *testing.T) {
+	eng := NewFake()
+	_, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+	require.NoError(t, err)
+	eng.RenderedManifestDigest = "actual"
+
+	_, err = eng.Upgrade(t.Context(), UpgradeOptions{
+		Namespace:              "apps",
+		ReleaseName:            "example",
+		ChartPath:              "chart-v2",
+		ExpectedRevision:       1,
+		ExpectedManifestDigest: "expected",
+	})
+	require.ErrorIs(t, err, ErrRenderDrift)
+	active, statusErr := eng.Status(t.Context(), StatusOptions{Namespace: "apps", ReleaseName: "example"})
+	require.NoError(t, statusErr)
+	assert.Equal(t, 1, active.Revision)
+}
+
+func TestFake_UpgradeCrashReplayAndLegacyProvenance(t *testing.T) {
+	eng := NewFake()
+	installed, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+	require.NoError(t, err)
+	assert.Equal(t, "legacy", installed.Provenance)
+	opts := UpgradeOptions{
+		Namespace:             "apps",
+		ReleaseName:           "example",
+		ChartPath:             "chart-v2",
+		ExpectedRevision:      1,
+		Atomic:                true,
+		OperationID:           "operation-1",
+		CommandID:             "command-1",
+		BundleDigest:         "sha256:bundle",
+		ChartDigest:          "sha256:chart",
+		EffectiveValuesDigest: "sha256:values",
+	}
+
+	first, err := eng.Upgrade(t.Context(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, 2, first.Revision)
+	assert.Equal(t, "managed", first.Provenance)
+	opts.ExpectedRevision = 2
+	replayed, err := eng.Upgrade(t.Context(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, 2, replayed.Revision)
+	history, err := eng.History(t.Context(), HistoryOptions{Namespace: "apps", ReleaseName: "example"})
+	require.NoError(t, err)
+	assert.Len(t, history, 2)
+}
 func TestFake_Rollback(t *testing.T) {
 	eng := NewFake()
 	ctx := context.Background()
@@ -228,4 +336,24 @@ func TestFake_AllMethods(t *testing.T) {
 	// Rollback
 	_, err = eng.Rollback(ctx, RollbackOptions{Namespace: "default", ReleaseName: "full-test", TargetRevision: 1})
 	require.NoError(t, err)
+}
+
+func TestFake_UpgradeSchemaFailed(t *testing.T) {
+	eng := NewFake()
+	_, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+	require.NoError(t, err)
+	eng.UpgradeError = ErrSchemaFailed
+
+	_, err = eng.Upgrade(t.Context(), UpgradeOptions{
+		Namespace:        "apps",
+		ReleaseName:      "example",
+		ChartPath:        "chart-v2",
+		ExpectedRevision: 1,
+		Atomic:           true,
+	})
+	require.ErrorIs(t, err, ErrSchemaFailed)
+	active, statusErr := eng.Status(t.Context(), StatusOptions{Namespace: "apps", ReleaseName: "example"})
+	require.NoError(t, statusErr)
+	assert.Equal(t, 1, active.Revision)
+	assert.Equal(t, "chart-v1", active.Chart)
 }
