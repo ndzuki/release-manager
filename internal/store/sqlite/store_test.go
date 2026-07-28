@@ -490,6 +490,51 @@ func TestOperationCreateIfAvailable_AllowsEmergencyPeers(t *testing.T) {
 	assert.ErrorIs(t, st.Operations().CreateIfAvailable(ctx, standard), store.ErrReleaseBusy)
 }
 
+func TestFinalizeUpgradeRollsBackOnInventoryFailure(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID: "upgrade-transaction-rollback", OperationType: store.OperationUpgrade, Status: store.StatusRunning,
+		ReleaseDefinitionID: def.ID, IdempotencyKey: "upgrade-transaction-rollback-key", RequestHash: "hash",
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	input := &store.UpgradeTerminalInput{
+		OperationID: op.ID, ExpectedStateVersion: op.StateVersion, Status: store.StatusSucceeded,
+		ResultPayload: []byte(`{"active":{"helm_revision":2}}`), ReleaseDefinitionID: def.ID,
+		CustomerID: def.CustomerID, ClusterID: def.ClusterID, UpdateInventory: true,
+		Revision: 2, ObservedManifestDigest: "sha256:manifest", LiveStatus: "deployed",
+		InventoryStatus: store.InventoryActive, ResourceCount: 1,
+	}
+
+	err := st.UpgradeResults().FinalizeUpgrade(ctx, input)
+	require.ErrorIs(t, err, store.ErrNotFound)
+	persisted, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusRunning, persisted.Status)
+	assert.Equal(t, op.StateVersion, persisted.StateVersion)
+	_, err = st.ExecutionResults().Get(ctx, op.ID)
+	assert.ErrorIs(t, err, store.ErrNotFound)
+	_, err = st.RolloutTrackings().Get(ctx, op.ID)
+	assert.ErrorIs(t, err, store.ErrNotFound)
+	var eventCount int
+	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM operation_events WHERE operation_id = ?`, op.ID).Scan(&eventCount))
+	assert.Zero(t, eventCount)
+
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: def.ID, CustomerID: def.CustomerID, ClusterID: def.ClusterID,
+		Namespace: "apps", ReleaseName: "example", Revision: 1, Status: "deployed", InventoryStatus: store.InventoryActive,
+	}))
+	require.NoError(t, st.UpgradeResults().FinalizeUpgrade(ctx, input))
+	persisted, err = st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, persisted.Status)
+	result, err := st.ExecutionResults().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "upgrade", result.ResultType)
+}
+
 func TestGetNextPendingMaxInflight(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()

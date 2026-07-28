@@ -157,8 +157,8 @@ func TestFake_UpgradeCrashReplayAndLegacyProvenance(t *testing.T) {
 		Atomic:                true,
 		OperationID:           "operation-1",
 		CommandID:             "command-1",
-		BundleDigest:         "sha256:bundle",
-		ChartDigest:          "sha256:chart",
+		BundleDigest:          "sha256:bundle",
+		ChartDigest:           "sha256:chart",
 		EffectiveValuesDigest: "sha256:values",
 	}
 
@@ -166,10 +166,13 @@ func TestFake_UpgradeCrashReplayAndLegacyProvenance(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, first.Revision)
 	assert.Equal(t, "managed", first.Provenance)
-	opts.ExpectedRevision = 2
+	assert.Equal(t, "release-manager operation=operation-1 command=command-1", first.Description)
+	assert.NotEmpty(t, first.Labels["rm_input_digest"])
 	replayed, err := eng.Upgrade(t.Context(), opts)
 	require.NoError(t, err)
 	assert.Equal(t, 2, replayed.Revision)
+	assert.Equal(t, first.Description, replayed.Description)
+	assert.Equal(t, first.Labels["rm_input_digest"], replayed.Labels["rm_input_digest"])
 	history, err := eng.History(t.Context(), HistoryOptions{Namespace: "apps", ReleaseName: "example"})
 	require.NoError(t, err)
 	assert.Len(t, history, 2)

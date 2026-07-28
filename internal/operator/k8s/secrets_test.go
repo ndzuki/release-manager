@@ -1,7 +1,6 @@
 package k8s
 
 import (
-	"context"
 	"crypto/sha256"
 	"fmt"
 	"testing"
@@ -47,31 +46,57 @@ func TestResolveInjectsMatchingSecret(t *testing.T) {
 }
 
 func TestResolveRejectsChangedSecret(t *testing.T) {
-	client := kubernetesfake.NewClientset(&corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            "database",
-			Namespace:       "apps",
-			UID:             types.UID("uid-new"),
-			ResourceVersion: "8",
-		},
-		Data: map[string][]byte{"password": []byte("new")},
-	})
-	values := map[string]any{"database": map[string]any{}}
-	ref := &operatorv1.SecretRef{
-		Path:            "database.password",
-		Name:            "database",
-		Key:             "password",
-		Uid:             "uid-old",
-		ResourceVersion: "7",
-		ValueDigest:     digest([]byte("old")),
+	tests := []struct {
+		name            string
+		uid             string
+		resourceVersion string
+		valueDigest     string
+	}{
+		{name: "uid", uid: "uid-old", resourceVersion: "8", valueDigest: digest([]byte("new"))},
+		{name: "resource version", uid: "uid-new", resourceVersion: "7", valueDigest: digest([]byte("new"))},
+		{name: "value digest", uid: "uid-new", resourceVersion: "8", valueDigest: digest([]byte("old"))},
 	}
 
-	_, err := Resolve(context.Background(), client.CoreV1(), "apps", []*operatorv1.SecretRef{ref}, values)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := kubernetesfake.NewClientset(&corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:            "database",
+					Namespace:       "apps",
+					UID:             types.UID("uid-new"),
+					ResourceVersion: "8",
+				},
+				Data: map[string][]byte{"password": []byte("new")},
+			})
+			values := map[string]any{"database": map[string]any{}}
+			ref := &operatorv1.SecretRef{
+				Path:            "database.password",
+				Name:            "database",
+				Key:             "password",
+				Uid:             test.uid,
+				ResourceVersion: test.resourceVersion,
+				ValueDigest:     test.valueDigest,
+			}
+
+			_, err := Resolve(t.Context(), client.CoreV1(), "apps", []*operatorv1.SecretRef{ref}, values)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, helmengine.ErrSecretRefChanged)
+			database, ok := values["database"].(map[string]any)
+			require.True(t, ok)
+			assert.NotContains(t, database, "password")
+		})
+	}
+}
+
+func TestResolveSanitizesLookupError(t *testing.T) {
+	client := kubernetesfake.NewClientset()
+	values := map[string]any{"database": map[string]any{}}
+	ref := &operatorv1.SecretRef{Path: "database.password", Name: "private-secret", Key: "password"}
+
+	_, err := Resolve(t.Context(), client.CoreV1(), "apps", []*operatorv1.SecretRef{ref}, values)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, helmengine.ErrSecretRefChanged)
-	database, ok := values["database"].(map[string]any)
-	require.True(t, ok)
-	assert.NotContains(t, database, "password")
+	assert.NotContains(t, err.Error(), "private-secret")
 }
 
 func TestResolveSupportsArrayPath(t *testing.T) {

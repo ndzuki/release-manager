@@ -506,6 +506,10 @@ func (s *Service) HandleCommandResult(ctx context.Context, result *operatorv1.Co
 			return connect.NewError(connect.CodeAborted, fmt.Errorf("begin operation: %w", err))
 		}
 	}
+	definition, err := s.store.Definitions().Get(ctx, op.ReleaseDefinitionID)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("load release definition for result: %w", err))
+	}
 	upgrade := result.GetUpgrade()
 	if upgrade == nil {
 		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("upgrade result is required"))
@@ -527,12 +531,15 @@ func (s *Service) HandleCommandResult(ctx context.Context, result *operatorv1.Co
 		LastError:                     lastError,
 		ResultPayload:                 payload,
 		ReleaseDefinitionID:           op.ReleaseDefinitionID,
+		CustomerID:                    definition.CustomerID,
+		ClusterID:                     definition.ClusterID,
 		UpdateInventory:               updateInventory,
 		Revision:                      int(active.GetHelmRevision()), //nolint:gosec // Helm revisions are bounded by the signed int used by the SDK and store.
 		ObservedBundleDigest:          active.GetBundleDigest(),
 		ObservedChartDigest:           active.GetChartDigest(),
 		ObservedEffectiveValuesDigest: active.GetEffectiveValuesDigest(),
 		ObservedManifestDigest:        active.GetManifestDigest(),
+		LiveStatus:                    active.GetStatus(),
 		InventoryStatus:               inventoryStatus,
 		ResourceCount:                 int(upgrade.GetResourceSummary().GetResourceCount()),
 	}); err != nil {

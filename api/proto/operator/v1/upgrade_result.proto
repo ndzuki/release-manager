@@ -42,7 +42,6 @@ message UpgradeCommand {
   bytes effective_values_json = 6;
   string effective_values_digest = 7;
   repeated SecretRef secret_refs = 8;
-  string expected_manifest_digest = 9;
   string operation_id = 11;
   string command_id = 12;
   uint64 expected_revision = 20;
@@ -66,6 +65,7 @@ message ReleaseSnapshot {
   string effective_values_digest = 4;
   string manifest_digest = 5;
   ReleaseProvenance provenance = 6;
+  string status = 7;
 }
 
 // ResourceSummary summarizes rendered resources without returning manifests.

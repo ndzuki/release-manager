@@ -101,11 +101,6 @@ func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, erro
 		return nil, ErrNotFound
 	}
 
-	// AC-021-02: ExpectedRevision mismatch → ErrConflict, no mutation
-	if opts.ExpectedRevision > 0 && existing.Revision != opts.ExpectedRevision {
-		return nil, fmt.Errorf("%w: expected revision %d, got %d", ErrConflict, opts.ExpectedRevision, existing.Revision)
-	}
-
 	prevRelease := *existing
 	prevRelease.Labels = maps.Clone(existing.Labels)
 	inputDigest := digestString(strings.Join([]string{
@@ -119,6 +114,11 @@ func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, erro
 		replayed := *existing
 		replayed.Labels = maps.Clone(existing.Labels)
 		return &replayed, nil
+	}
+
+	// AC-021-02: ExpectedRevision mismatch → ErrConflict, no mutation.
+	if opts.ExpectedRevision > 0 && existing.Revision != opts.ExpectedRevision {
+		return nil, fmt.Errorf("%w: expected revision %d, got %d", ErrConflict, opts.ExpectedRevision, existing.Revision)
 	}
 
 	f.counter++

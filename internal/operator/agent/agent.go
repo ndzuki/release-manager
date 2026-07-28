@@ -414,6 +414,7 @@ func releaseSnapshot(release *helmengine.Release) *operatorv1.ReleaseSnapshot {
 		EffectiveValuesDigest: release.EffectiveValuesDigest,
 		ManifestDigest:        release.ManifestDigest,
 		Provenance:            provenance,
+		Status:                release.Status,
 	}
 }
 
@@ -436,19 +437,25 @@ func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command,
 		result.Message = "effective values must be canonical JSON"
 		return result
 	}
-	secretDigest, err := operatork8s.Resolve(ctx, a.secrets, upgrade.GetNamespace(), upgrade.GetSecretRefs(), valuesMap)
-	if err != nil {
-		result.Code = upgradeErrorCode(err)
-		result.Message = err.Error()
-		return result
-	}
 	fromRelease, statusErr := a.engine.Status(ctx, helmengine.StatusOptions{
 		Namespace:   upgrade.GetNamespace(),
 		ReleaseName: upgrade.GetReleaseName(),
 	})
 	if statusErr != nil {
 		result.Code = upgradeErrorCode(statusErr)
-		result.Message = statusErr.Error()
+		result.Message = upgradeErrorMessage(result.Code)
+		return result
+	}
+	if upgrade.GetExpectedRevision() > 0 && uint64(fromRelease.Revision) != upgrade.GetExpectedRevision() {
+		result.Code = "revision_conflict"
+		result.Message = upgradeErrorMessage(result.Code)
+		return result
+	}
+
+	secretDigest, err := operatork8s.Resolve(ctx, a.secrets, upgrade.GetNamespace(), upgrade.GetSecretRefs(), valuesMap)
+	if err != nil {
+		result.Code = upgradeErrorCode(err)
+		result.Message = upgradeErrorMessage(result.Code)
 		return result
 	}
 
@@ -457,31 +464,30 @@ func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command,
 		timeout = upgrade.GetTimeout().AsDuration()
 	}
 	release, err := a.engine.Upgrade(ctx, helmengine.UpgradeOptions{
-		Namespace:              upgrade.GetNamespace(),
-		ReleaseName:            upgrade.GetReleaseName(),
-		ChartPath:              upgrade.GetChart().GetResolvedUri(),
-		ChartVersion:           upgrade.GetChart().GetVersion(),
-		Values:                 valuesMap,
-		ExpectedRevision:       int(upgrade.GetExpectedRevision()), //nolint:gosec // validated positive SDK revision.
-		Atomic:                 true,
-		MaxHistory:             int(upgrade.GetMaxHistory()),
-		Timeout:                timeout,
-		OperationID:            upgrade.GetOperationId(),
-		CommandID:              upgrade.GetCommandId(),
-		BundleDigest:           upgrade.GetBundle().GetBundleDigest(),
-		ChartDigest:            upgrade.GetChart().GetDigest(),
-		EffectiveValuesDigest:  upgrade.GetEffectiveValuesDigest(),
-		SecretSnapshotDigest:   secretDigest,
-		ExpectedManifestDigest: upgrade.GetExpectedManifestDigest(),
-		ResetValues:            true,
-		ReuseValues:            false,
-		CleanupOnFail:          false,
-		WaitForJobs:            true,
-		TakeOwnership:          false,
+		Namespace:             upgrade.GetNamespace(),
+		ReleaseName:           upgrade.GetReleaseName(),
+		ChartPath:             upgrade.GetChart().GetResolvedUri(),
+		ChartVersion:          upgrade.GetChart().GetVersion(),
+		Values:                valuesMap,
+		ExpectedRevision:      int(upgrade.GetExpectedRevision()), //nolint:gosec // validated positive SDK revision.
+		Atomic:                true,
+		MaxHistory:            int(upgrade.GetMaxHistory()),
+		Timeout:               timeout,
+		OperationID:           upgrade.GetOperationId(),
+		CommandID:             upgrade.GetCommandId(),
+		BundleDigest:          upgrade.GetBundle().GetBundleDigest(),
+		ChartDigest:           upgrade.GetChart().GetDigest(),
+		EffectiveValuesDigest: upgrade.GetEffectiveValuesDigest(),
+		SecretSnapshotDigest:  secretDigest,
+		ResetValues:           true,
+		ReuseValues:           false,
+		CleanupOnFail:         false,
+		WaitForJobs:           true,
+		TakeOwnership:         false,
 	})
 	if err != nil {
 		result.Code = upgradeErrorCode(err)
-		result.Message = err.Error()
+		result.Message = upgradeErrorMessage(result.Code)
 		result.Release = release
 		result.Upgrade = &operatorv1.UpgradeResult{
 			From:              releaseSnapshot(fromRelease),
@@ -669,17 +675,21 @@ func upgradeErrorCode(err error) string {
 	switch {
 	case errors.Is(err, helmengine.ErrNotFound):
 		return "release_not_found"
+	case errors.Is(err, helmengine.ErrReleaseBusy):
+		return "release_busy"
+	case errors.Is(err, helmengine.ErrReleaseNotDeployed):
+		return "release_not_deployed"
 	case errors.Is(err, helmengine.ErrConflict):
 		return "revision_conflict"
 	case errors.Is(err, helmengine.ErrDigestMismatch):
 		return "digest_mismatch"
-	case errors.Is(err, helmengine.ErrSecretRefChanged), strings.Contains(err.Error(), "secret_ref_changed"):
+	case errors.Is(err, helmengine.ErrSecretRefChanged):
 		return "secret_ref_changed"
 	case errors.Is(err, helmengine.ErrRenderDrift):
 		return "render_drift"
-	case errors.Is(err, helmengine.ErrRenderFailed), strings.Contains(err.Error(), "render_failed"):
+	case errors.Is(err, helmengine.ErrRenderFailed):
 		return "render_failed"
-	case errors.Is(err, helmengine.ErrSchemaFailed), strings.Contains(err.Error(), "values don't meet"):
+	case errors.Is(err, helmengine.ErrSchemaFailed):
 		return "schema_failed"
 	case errors.Is(err, helmengine.ErrAtomicRollbackFailed):
 		return "atomic_rollback_failed"
@@ -689,6 +699,37 @@ func upgradeErrorCode(err error) string {
 		return "helm_cancelled"
 	default:
 		return "helm_upgrade_failed"
+	}
+}
+
+func upgradeErrorMessage(code string) string {
+	switch code {
+	case "release_not_found":
+		return "Helm release was not found"
+	case "release_busy":
+		return "Helm release has another operation in progress"
+	case "release_not_deployed":
+		return "Helm release is not deployed"
+	case "revision_conflict":
+		return "Helm release revision changed"
+	case "digest_mismatch":
+		return "frozen input digest does not match"
+	case "secret_ref_changed":
+		return "Secret reference changed after preflight"
+	case "render_drift":
+		return "rendered manifest changed after preflight"
+	case "render_failed":
+		return "effective values could not be rendered"
+	case "schema_failed":
+		return "effective values failed chart schema validation"
+	case "atomic_rollback_failed":
+		return "Helm upgrade and automatic rollback failed"
+	case "helm_timeout":
+		return "Helm upgrade timed out"
+	case "helm_cancelled":
+		return "Helm upgrade was cancelled"
+	default:
+		return "Helm upgrade failed"
 	}
 }
 

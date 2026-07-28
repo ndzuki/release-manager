@@ -135,8 +135,7 @@ func (c *Coordinator) runUpgrade(ctx context.Context, op *store.Operation) {
 		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "release_not_found"})
 		return
 	}
-	inventory, err := c.invs.GetByDefinition(ctx, op.ReleaseDefinitionID)
-	if err != nil {
+	if _, err := c.invs.GetByDefinition(ctx, op.ReleaseDefinitionID); err != nil {
 		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "release_not_found"})
 		return
 	}
@@ -151,7 +150,7 @@ func (c *Coordinator) runUpgrade(ctx context.Context, op *store.Operation) {
 		return
 	}
 	commandID := op.ID + ":execute"
-	payload, err := BuildUpgradePayload(op, definition, bundle, revision, commandID, inventory.ObservedManifestDigest)
+	payload, err := BuildUpgradePayload(op, definition, bundle, revision, commandID)
 	if err != nil {
 		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "render_failed"})
 		return

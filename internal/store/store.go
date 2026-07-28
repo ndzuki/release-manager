@@ -911,12 +911,15 @@ type UpgradeTerminalInput struct {
 	LastError                     string
 	ResultPayload                 []byte
 	ReleaseDefinitionID           string
+	CustomerID                    string
+	ClusterID                     string
 	UpdateInventory               bool
 	Revision                      int
 	ObservedBundleDigest          string
 	ObservedChartDigest           string
 	ObservedEffectiveValuesDigest string
 	ObservedManifestDigest        string
+	LiveStatus                    string
 	InventoryStatus               InventoryStatus
 	ResourceCount                 int
 }
@@ -938,6 +941,7 @@ type ReleaseInventory struct {
 	ObservedChartDigest           string
 	ObservedEffectiveValuesDigest string
 	ObservedManifestDigest        string
+	LiveStatus                    string
 	LastOperationID               string
 	InventoryStatus               InventoryStatus
 	LastSyncID                    string

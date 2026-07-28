@@ -26,8 +26,8 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 	const stmt = `INSERT INTO release_inventory
 		(customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version, revision, status,
 		 values_digest, observed_bundle_digest, observed_chart_digest, observed_effective_values_digest,
-		 observed_manifest_digest, last_operation_id, inventory_status, last_sync_id, snapshot_version, created_at, updated_at)
-	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 observed_manifest_digest, live_status, last_operation_id, inventory_status, last_sync_id, snapshot_version, created_at, updated_at)
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	 ON CONFLICT(customer_id, cluster_id, namespace, release_name) DO UPDATE SET
 		release_definition_id = excluded.release_definition_id,
 		chart = excluded.chart,
@@ -39,6 +39,7 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 		observed_chart_digest = excluded.observed_chart_digest,
 		observed_effective_values_digest = excluded.observed_effective_values_digest,
 		observed_manifest_digest = excluded.observed_manifest_digest,
+		live_status = excluded.live_status,
 		last_operation_id = excluded.last_operation_id,
 		inventory_status = excluded.inventory_status,
 		last_sync_id = excluded.last_sync_id,
@@ -49,7 +50,7 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 		item.CustomerID, item.ClusterID, item.ReleaseDefinitionID, item.Namespace, item.ReleaseName,
 		item.Chart, item.ChartVersion, item.Revision, item.Status, item.ValuesDigest,
 		item.ObservedBundleDigest, item.ObservedChartDigest, item.ObservedEffectiveValuesDigest,
-		item.ObservedManifestDigest, item.LastOperationID, string(item.InventoryStatus),
+		item.ObservedManifestDigest, item.LiveStatus, item.LastOperationID, string(item.InventoryStatus),
 		item.LastSyncID, item.SnapshotVersion, item.CreatedAt.UTC().Format(time.RFC3339), now,
 	)
 	return err
@@ -60,7 +61,7 @@ func (s *inventoryStore) ListByCluster(ctx context.Context, customerID, clusterI
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version,
 		        revision, status, values_digest, observed_bundle_digest, observed_chart_digest,
-		        observed_effective_values_digest, observed_manifest_digest, last_operation_id,
+		        observed_effective_values_digest, observed_manifest_digest, live_status, last_operation_id,
 		        inventory_status, last_sync_id, snapshot_version, created_at, updated_at
 		 FROM release_inventory
 		 WHERE customer_id = ? AND cluster_id = ?
@@ -80,7 +81,7 @@ func (s *inventoryStore) ListByCluster(ctx context.Context, customerID, clusterI
 			&item.CustomerID, &item.ClusterID, &item.ReleaseDefinitionID, &item.Namespace, &item.ReleaseName,
 			&item.Chart, &item.ChartVersion, &item.Revision, &item.Status, &item.ValuesDigest,
 			&item.ObservedBundleDigest, &item.ObservedChartDigest, &item.ObservedEffectiveValuesDigest,
-			&item.ObservedManifestDigest, &item.LastOperationID, &item.InventoryStatus, &item.LastSyncID,
+			&item.ObservedManifestDigest, &item.LiveStatus, &item.LastOperationID, &item.InventoryStatus, &item.LastSyncID,
 			&item.SnapshotVersion, &createdAt, &updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan inventory: %w", err)
@@ -97,7 +98,7 @@ func (s *inventoryStore) GetByDefinition(ctx context.Context, definitionID strin
 	row := s.db.QueryRowContext(ctx, `
 		SELECT customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version,
 		       revision, status, values_digest, observed_bundle_digest, observed_chart_digest,
-		       observed_effective_values_digest, observed_manifest_digest, last_operation_id,
+		       observed_effective_values_digest, observed_manifest_digest, live_status, last_operation_id,
 		       inventory_status, last_sync_id, snapshot_version, created_at, updated_at
 		FROM release_inventory
 		WHERE release_definition_id = ?
@@ -109,7 +110,7 @@ func (s *inventoryStore) GetByDefinition(ctx context.Context, definitionID strin
 		&item.CustomerID, &item.ClusterID, &item.ReleaseDefinitionID, &item.Namespace, &item.ReleaseName,
 		&item.Chart, &item.ChartVersion, &item.Revision, &item.Status, &item.ValuesDigest,
 		&item.ObservedBundleDigest, &item.ObservedChartDigest, &item.ObservedEffectiveValuesDigest,
-		&item.ObservedManifestDigest, &item.LastOperationID, &item.InventoryStatus, &item.LastSyncID,
+		&item.ObservedManifestDigest, &item.LiveStatus, &item.LastOperationID, &item.InventoryStatus, &item.LastSyncID,
 		&item.SnapshotVersion, &createdAt, &updatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

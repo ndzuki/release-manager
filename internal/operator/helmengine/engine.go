@@ -54,6 +54,8 @@ var (
 	ErrAlreadyExists        = errors.New("helm: release already exists")
 	ErrForbidden            = errors.New("helm: forbidden")
 	ErrConflict             = errors.New("helm: conflict")
+	ErrReleaseBusy          = errors.New("helm: release busy")
+	ErrReleaseNotDeployed   = errors.New("helm: release not deployed")
 	ErrTimeout              = errors.New("helm: timeout")
 	ErrCancelled            = errors.New("helm: cancelled")
 	ErrRenderFailed         = errors.New("helm: render failed")

@@ -69,12 +69,13 @@ func (s *Store) FinalizeUpgrade(ctx context.Context, input *store.UpgradeTermina
 		result, err = tx.ExecContext(ctx, `
 			UPDATE release_inventory
 			SET revision = $1, values_digest = $2, observed_bundle_digest = $3, observed_chart_digest = $4,
-			    observed_effective_values_digest = $5, observed_manifest_digest = $6, last_operation_id = $7,
-			    inventory_status = $8, updated_at = NOW()
-			WHERE release_definition_id = $9
+			    observed_effective_values_digest = $5, observed_manifest_digest = $6, live_status = $7,
+			    last_operation_id = $8, inventory_status = $9, updated_at = NOW()
+			WHERE release_definition_id = $10 AND customer_id = $11 AND cluster_id = $12
 		`, input.Revision, input.ObservedEffectiveValuesDigest, input.ObservedBundleDigest,
 			input.ObservedChartDigest, input.ObservedEffectiveValuesDigest, input.ObservedManifestDigest,
-			input.OperationID, string(input.InventoryStatus), input.ReleaseDefinitionID)
+			input.LiveStatus, input.OperationID, string(input.InventoryStatus), input.ReleaseDefinitionID,
+			input.CustomerID, input.ClusterID)
 		if err != nil {
 			return fmt.Errorf("update upgrade inventory: %w", err)
 		}

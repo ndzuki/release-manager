@@ -52,7 +52,6 @@ func BuildUpgradeCommand(
 	bundle *store.ReleaseBundle,
 	revision *store.ValuesRevision,
 	commandID string,
-	expectedManifestDigest string,
 ) (*operatorv1.UpgradeCommand, error) {
 	if op == nil || definition == nil || bundle == nil || revision == nil {
 		return nil, fmt.Errorf("upgrade command inputs are required")
@@ -87,7 +86,7 @@ func BuildUpgradeCommand(
 			ResolvedUri: bundle.ChartRef, Version: bundle.ChartVersion, Digest: bundle.ChartDigest,
 		},
 		EffectiveValuesJson: effectiveValues, EffectiveValuesDigest: values.Digest(effectiveValues),
-		SecretRefs: secretRefs, ExpectedManifestDigest: expectedManifestDigest,
+		SecretRefs:  secretRefs,
 		OperationId: op.ID, CommandId: commandID,
 		ExpectedRevision: uint64(op.ExpectedRevision), //nolint:gosec // UPGRADE validation requires a positive SDK revision.
 		Atomic:           true, Timeout: timeout, MaxHistory: 10,
@@ -101,9 +100,8 @@ func BuildUpgradePayload(
 	bundle *store.ReleaseBundle,
 	revision *store.ValuesRevision,
 	commandID string,
-	expectedManifestDigest string,
 ) (*CommandPayload, error) {
-	upgrade, err := BuildUpgradeCommand(op, definition, bundle, revision, commandID, expectedManifestDigest)
+	upgrade, err := BuildUpgradeCommand(op, definition, bundle, revision, commandID)
 	if err != nil {
 		return nil, err
 	}

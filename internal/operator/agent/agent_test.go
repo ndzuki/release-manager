@@ -174,6 +174,39 @@ func TestAgent_UpgradeAtomicFailureReturnsActiveSnapshot(t *testing.T) {
 	assert.Equal(t, uint64(1), result.GetUpgrade().GetActive().GetHelmRevision())
 }
 
+func TestAgent_UpgradeErrorMapping(t *testing.T) {
+	valuesJSON := []byte(`{"message":"hello"}`)
+	tests := []struct {
+		name       string
+		engineErr  error
+		wantCode   string
+		retryable  bool
+		wantStatus string
+	}{
+		{name: "revision conflict", engineErr: helmengine.ErrConflict, wantCode: "revision_conflict", retryable: true, wantStatus: "failed"},
+		{name: "release busy", engineErr: helmengine.ErrReleaseBusy, wantCode: "release_busy", retryable: true, wantStatus: "failed"},
+		{name: "not deployed", engineErr: helmengine.ErrReleaseNotDeployed, wantCode: "release_not_deployed", wantStatus: "failed"},
+		{name: "rollback failed", engineErr: helmengine.ErrAtomicRollbackFailed, wantCode: "atomic_rollback_failed", wantStatus: "failed"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			active := &helmengine.Release{Name: "example", Namespace: "apps", Revision: 1, Status: "deployed"}
+			engine := &recordingEngine{status: active, release: active, upgradeErr: test.engineErr}
+			agent := newTestAgent(t, engine, newMemoryStore(), nil)
+			stream := newTestStream()
+
+			require.NoError(t, agent.handleCommand(t.Context(), stream, upgradeCommand("cmd-"+test.wantCode, valuesJSON, sha256Hex(valuesJSON))))
+			result := stream.sent[1].GetCommandResult()
+			require.NotNil(t, result)
+			assert.Equal(t, test.wantStatus, result.GetStatus())
+			assert.Equal(t, test.wantCode, result.GetError().GetCode())
+			assert.Equal(t, test.retryable, result.GetError().GetRetryable())
+			assert.NotContains(t, result.GetError().GetMessage(), "example")
+		})
+	}
+}
+
 func TestAgent_InventorySyncCommandExecutesFullSync(t *testing.T) {
 	executor := new(recordingSyncExecutor)
 	agent, err := New(Config{
@@ -331,6 +364,7 @@ type recordingEngine struct {
 	upgradeCalls int
 	lastUpgrade  helmengine.UpgradeOptions
 	status       *helmengine.Release
+	statusErr    error
 	upgradeErr   error
 }
 
@@ -349,6 +383,9 @@ func (e *recordingEngine) Rollback(context.Context, helmengine.RollbackOptions) 
 	return nil, errors.New("not implemented")
 }
 func (e *recordingEngine) Status(context.Context, helmengine.StatusOptions) (*helmengine.Release, error) {
+	if e.statusErr != nil {
+		return nil, e.statusErr
+	}
 	if e.status == nil {
 		return nil, helmengine.ErrNotFound
 	}
@@ -427,7 +464,7 @@ func (s *memoryStore) LastSequence(context.Context) (int64, error) {
 func (*memoryStore) Close() error { return nil }
 
 func TestAgent_UpgradeReleaseNotFound(t *testing.T) {
-	engine := &recordingEngine{upgradeErr: helmengine.ErrNotFound}
+	engine := &recordingEngine{statusErr: helmengine.ErrNotFound}
 	agent := newTestAgent(t, engine, newMemoryStore(), nil)
 	stream := newTestStream()
 	valuesJSON := []byte(`{"message":"hello"}`)

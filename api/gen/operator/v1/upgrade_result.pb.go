@@ -297,24 +297,23 @@ func (x *SecretRef) GetValueDigest() string {
 
 // UpgradeCommand is the frozen, typed input for one Helm SDK upgrade.
 type UpgradeCommand struct {
-	state                  protoimpl.MessageState `protogen:"open.v1"`
-	DefinitionId           string                 `protobuf:"bytes,1,opt,name=definition_id,json=definitionId,proto3" json:"definition_id,omitempty"`
-	Namespace              string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	ReleaseName            string                 `protobuf:"bytes,3,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
-	Bundle                 *ReleaseBundleSnapshot `protobuf:"bytes,4,opt,name=bundle,proto3" json:"bundle,omitempty"`
-	Chart                  *ChartReference        `protobuf:"bytes,5,opt,name=chart,proto3" json:"chart,omitempty"`
-	EffectiveValuesJson    []byte                 `protobuf:"bytes,6,opt,name=effective_values_json,json=effectiveValuesJson,proto3" json:"effective_values_json,omitempty"`
-	EffectiveValuesDigest  string                 `protobuf:"bytes,7,opt,name=effective_values_digest,json=effectiveValuesDigest,proto3" json:"effective_values_digest,omitempty"`
-	SecretRefs             []*SecretRef           `protobuf:"bytes,8,rep,name=secret_refs,json=secretRefs,proto3" json:"secret_refs,omitempty"`
-	ExpectedManifestDigest string                 `protobuf:"bytes,9,opt,name=expected_manifest_digest,json=expectedManifestDigest,proto3" json:"expected_manifest_digest,omitempty"`
-	OperationId            string                 `protobuf:"bytes,11,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
-	CommandId              string                 `protobuf:"bytes,12,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
-	ExpectedRevision       uint64                 `protobuf:"varint,20,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
-	Atomic                 bool                   `protobuf:"varint,21,opt,name=atomic,proto3" json:"atomic,omitempty"`
-	Timeout                *durationpb.Duration   `protobuf:"bytes,22,opt,name=timeout,proto3" json:"timeout,omitempty"`
-	MaxHistory             int32                  `protobuf:"varint,23,opt,name=max_history,json=maxHistory,proto3" json:"max_history,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	DefinitionId          string                 `protobuf:"bytes,1,opt,name=definition_id,json=definitionId,proto3" json:"definition_id,omitempty"`
+	Namespace             string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	ReleaseName           string                 `protobuf:"bytes,3,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
+	Bundle                *ReleaseBundleSnapshot `protobuf:"bytes,4,opt,name=bundle,proto3" json:"bundle,omitempty"`
+	Chart                 *ChartReference        `protobuf:"bytes,5,opt,name=chart,proto3" json:"chart,omitempty"`
+	EffectiveValuesJson   []byte                 `protobuf:"bytes,6,opt,name=effective_values_json,json=effectiveValuesJson,proto3" json:"effective_values_json,omitempty"`
+	EffectiveValuesDigest string                 `protobuf:"bytes,7,opt,name=effective_values_digest,json=effectiveValuesDigest,proto3" json:"effective_values_digest,omitempty"`
+	SecretRefs            []*SecretRef           `protobuf:"bytes,8,rep,name=secret_refs,json=secretRefs,proto3" json:"secret_refs,omitempty"`
+	OperationId           string                 `protobuf:"bytes,11,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	CommandId             string                 `protobuf:"bytes,12,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	ExpectedRevision      uint64                 `protobuf:"varint,20,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
+	Atomic                bool                   `protobuf:"varint,21,opt,name=atomic,proto3" json:"atomic,omitempty"`
+	Timeout               *durationpb.Duration   `protobuf:"bytes,22,opt,name=timeout,proto3" json:"timeout,omitempty"`
+	MaxHistory            int32                  `protobuf:"varint,23,opt,name=max_history,json=maxHistory,proto3" json:"max_history,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *UpgradeCommand) Reset() {
@@ -403,13 +402,6 @@ func (x *UpgradeCommand) GetSecretRefs() []*SecretRef {
 	return nil
 }
 
-func (x *UpgradeCommand) GetExpectedManifestDigest() string {
-	if x != nil {
-		return x.ExpectedManifestDigest
-	}
-	return ""
-}
-
 func (x *UpgradeCommand) GetOperationId() string {
 	if x != nil {
 		return x.OperationId
@@ -461,6 +453,7 @@ type ReleaseSnapshot struct {
 	EffectiveValuesDigest string                 `protobuf:"bytes,4,opt,name=effective_values_digest,json=effectiveValuesDigest,proto3" json:"effective_values_digest,omitempty"`
 	ManifestDigest        string                 `protobuf:"bytes,5,opt,name=manifest_digest,json=manifestDigest,proto3" json:"manifest_digest,omitempty"`
 	Provenance            ReleaseProvenance      `protobuf:"varint,6,opt,name=provenance,proto3,enum=operator.v1.ReleaseProvenance" json:"provenance,omitempty"`
+	Status                string                 `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -535,6 +528,13 @@ func (x *ReleaseSnapshot) GetProvenance() ReleaseProvenance {
 		return x.Provenance
 	}
 	return ReleaseProvenance_RELEASE_PROVENANCE_UNSPECIFIED
+}
+
+func (x *ReleaseSnapshot) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
 }
 
 // ResourceSummary summarizes rendered resources without returning manifests.
@@ -856,7 +856,7 @@ const file_operator_v1_upgrade_result_proto_rawDesc = "" +
 	"\x03key\x18\x03 \x01(\tR\x03key\x12\x10\n" +
 	"\x03uid\x18\x04 \x01(\tR\x03uid\x12)\n" +
 	"\x10resource_version\x18\x05 \x01(\tR\x0fresourceVersion\x12!\n" +
-	"\fvalue_digest\x18\x06 \x01(\tR\vvalueDigest\"\xa1\x05\n" +
+	"\fvalue_digest\x18\x06 \x01(\tR\vvalueDigest\"\xe7\x04\n" +
 	"\x0eUpgradeCommand\x12#\n" +
 	"\rdefinition_id\x18\x01 \x01(\tR\fdefinitionId\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12!\n" +
@@ -866,8 +866,7 @@ const file_operator_v1_upgrade_result_proto_rawDesc = "" +
 	"\x15effective_values_json\x18\x06 \x01(\fR\x13effectiveValuesJson\x126\n" +
 	"\x17effective_values_digest\x18\a \x01(\tR\x15effectiveValuesDigest\x127\n" +
 	"\vsecret_refs\x18\b \x03(\v2\x16.operator.v1.SecretRefR\n" +
-	"secretRefs\x128\n" +
-	"\x18expected_manifest_digest\x18\t \x01(\tR\x16expectedManifestDigest\x12!\n" +
+	"secretRefs\x12!\n" +
 	"\foperation_id\x18\v \x01(\tR\voperationId\x12\x1d\n" +
 	"\n" +
 	"command_id\x18\f \x01(\tR\tcommandId\x12+\n" +
@@ -875,7 +874,7 @@ const file_operator_v1_upgrade_result_proto_rawDesc = "" +
 	"\x06atomic\x18\x15 \x01(\bR\x06atomic\x123\n" +
 	"\atimeout\x18\x16 \x01(\v2\x19.google.protobuf.DurationR\atimeout\x12\x1f\n" +
 	"\vmax_history\x18\x17 \x01(\x05R\n" +
-	"maxHistory\"\x9f\x02\n" +
+	"maxHistory\"\xb7\x02\n" +
 	"\x0fReleaseSnapshot\x12#\n" +
 	"\rhelm_revision\x18\x01 \x01(\x04R\fhelmRevision\x12#\n" +
 	"\rbundle_digest\x18\x02 \x01(\tR\fbundleDigest\x12!\n" +
@@ -884,7 +883,8 @@ const file_operator_v1_upgrade_result_proto_rawDesc = "" +
 	"\x0fmanifest_digest\x18\x05 \x01(\tR\x0emanifestDigest\x12>\n" +
 	"\n" +
 	"provenance\x18\x06 \x01(\x0e2\x1e.operator.v1.ReleaseProvenanceR\n" +
-	"provenance\"a\n" +
+	"provenance\x12\x16\n" +
+	"\x06status\x18\a \x01(\tR\x06status\"a\n" +
 	"\x0fResourceSummary\x12'\n" +
 	"\x0fmanifest_digest\x18\x01 \x01(\tR\x0emanifestDigest\x12%\n" +
 	"\x0eresource_count\x18\x02 \x01(\x05R\rresourceCount\"\xdd\x02\n" +

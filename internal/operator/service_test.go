@@ -369,7 +369,7 @@ func TestHandleCommandResultFinalizesUpgrade(t *testing.T) {
 		Result: &operatorv1.CommandResult_Upgrade{Upgrade: &operatorv1.UpgradeResult{
 			Active: &operatorv1.ReleaseSnapshot{
 				HelmRevision: 2, BundleDigest: "sha256:bundle", ChartDigest: "sha256:chart",
-				EffectiveValuesDigest: "sha256:values", ManifestDigest: "sha256:manifest",
+				EffectiveValuesDigest: "sha256:values", ManifestDigest: "sha256:manifest", Status: "deployed",
 			},
 			ResourceSummary: &operatorv1.ResourceSummary{ResourceCount: 4, ManifestDigest: "sha256:manifest"},
 		}},
@@ -386,11 +386,56 @@ func TestHandleCommandResultFinalizesUpgrade(t *testing.T) {
 	tracking, err := st.RolloutTrackings().Get(ctx, op.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 4, tracking.ResourceCount)
+	assert.Equal(t, "deployed", inventory.LiveStatus)
 
 	require.NoError(t, svc.HandleCommandResult(ctx, result))
 	resultRecord, err := st.ExecutionResults().Get(ctx, op.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "upgrade", resultRecord.ResultType)
+}
+
+func TestHandleCommandResultAtomicRollbackPersistsActiveRevision(t *testing.T) {
+	st := newTestSvc(t)
+	svc, err := operator.NewService(st, nil)
+	require.NoError(t, err)
+	ctx := t.Context()
+	definition := &store.ReleaseDefinition{
+		ID: "definition-rollback", Name: "example", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: definition.ID, CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Revision: 2, Status: "deployed",
+		InventoryStatus: store.InventoryActive,
+	}))
+	op := &store.Operation{
+		ID: "operation-rollback", OperationType: store.OperationUpgrade, Status: store.StatusRunning,
+		ReleaseDefinitionID: definition.ID, IdempotencyKey: "idem-rollback", RequestHash: "hash",
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	result := &operatorv1.CommandResult{
+		CommandId: "command-rollback", OperationId: op.ID, Status: "failed",
+		Error: &operatorv1.ExecutionError{Code: "helm_upgrade_failed", Message: "Helm upgrade failed"},
+		Result: &operatorv1.CommandResult_Upgrade{Upgrade: &operatorv1.UpgradeResult{
+			RollbackSucceeded: true,
+			Active: &operatorv1.ReleaseSnapshot{
+				HelmRevision: 1, BundleDigest: "sha256:old-bundle", ChartDigest: "sha256:old-chart",
+				EffectiveValuesDigest: "sha256:old-values", ManifestDigest: "sha256:old-manifest", Status: "deployed",
+			},
+		}},
+	}
+
+	require.NoError(t, svc.HandleCommandResult(ctx, result))
+	updated, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusFailed, updated.Status)
+	inventory, err := st.Inventories().GetByDefinition(ctx, definition.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, inventory.Revision)
+	assert.Equal(t, "sha256:old-manifest", inventory.ObservedManifestDigest)
+	assert.Equal(t, "deployed", inventory.LiveStatus)
 }
 
 func TestHandleCommandResultRollbackFailureMarksOutOfSync(t *testing.T) {
@@ -418,7 +463,7 @@ func TestHandleCommandResultRollbackFailureMarksOutOfSync(t *testing.T) {
 		CommandId: "command-out-of-sync", OperationId: op.ID, Status: "failed",
 		Error: &operatorv1.ExecutionError{Code: "atomic_rollback_failed", Message: "manual intervention required"},
 		Result: &operatorv1.CommandResult_Upgrade{Upgrade: &operatorv1.UpgradeResult{
-			Active: &operatorv1.ReleaseSnapshot{HelmRevision: 2, ManifestDigest: "sha256:failed"},
+			Active: &operatorv1.ReleaseSnapshot{HelmRevision: 2, ManifestDigest: "sha256:failed", Status: "failed"},
 		}},
 	}
 
@@ -430,4 +475,8 @@ func TestHandleCommandResultRollbackFailureMarksOutOfSync(t *testing.T) {
 	inventory, err := st.Inventories().GetByDefinition(ctx, definition.ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.InventoryOutOfSync, inventory.InventoryStatus)
+	assert.Equal(t, 2, inventory.Revision)
+	assert.Equal(t, "sha256:failed", inventory.ObservedManifestDigest)
+	assert.Equal(t, "failed", inventory.LiveStatus)
+	assert.False(t, result.GetError().GetRetryable())
 }

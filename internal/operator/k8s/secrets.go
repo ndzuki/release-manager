@@ -41,7 +41,7 @@ func Resolve(
 		}
 		secret, err := client.Secrets(namespace).Get(ctx, ref.GetName(), metav1.GetOptions{})
 		if err != nil {
-			return "", fmt.Errorf("%w: get: %w", helmengine.ErrSecretRefChanged, err)
+			return "", fmt.Errorf("%w: lookup failed", helmengine.ErrSecretRefChanged)
 		}
 		value, ok := secret.Data[ref.GetKey()]
 		if !ok {
@@ -58,7 +58,7 @@ func Resolve(
 			return "", fmt.Errorf("%w: value has changed", helmengine.ErrSecretRefChanged)
 		}
 		if err := setPath(values, ref.GetPath(), string(value)); err != nil {
-			return "", fmt.Errorf("render_failed: %w", err)
+			return "", fmt.Errorf("%w: invalid injection path", helmengine.ErrRenderFailed)
 		}
 		snapshots = append(snapshots, map[string]string{
 			"name":             ref.GetName(),
