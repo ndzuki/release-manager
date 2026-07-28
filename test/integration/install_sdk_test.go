@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,19 +29,20 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
-const installTimeout = 90 * time.Second
+const installTimeout = 30 * time.Second
 
 func TestInstallSDK(t *testing.T) {
 	t.Parallel()
 
-	adminKubeconfig, adminConfig, adminClient := loadCluster(t)
+	_, adminConfig, adminClient := loadCluster(t)
 	assertNoHelmOrKubectl(t)
 
 	t.Run("installs without helm or kubectl", func(t *testing.T) {
 		t.Parallel()
 
 		namespace, releaseName := isolatedTarget(t, adminClient, "success")
-		engine := newEngine(adminKubeconfig)
+		installerConfig := createMinimalInstaller(t, adminConfig, adminClient, namespace)
+		engine := newEngine(writeKubeconfig(t, installerConfig, "minimal"))
 
 		release, err := engine.Install(t.Context(), helmengine.InstallOptions{
 			Namespace:   namespace,
@@ -75,12 +77,14 @@ func TestInstallSDK(t *testing.T) {
 		t.Parallel()
 
 		namespace, releaseName := isolatedTarget(t, adminClient, "atomic")
-		engine := newEngine(adminKubeconfig)
+		installerConfig := createMinimalInstaller(t, adminConfig, adminClient, namespace)
+		engine := newEngine(writeKubeconfig(t, installerConfig, "atomic"))
 
 		_, err := engine.Install(t.Context(), helmengine.InstallOptions{
 			Namespace:   namespace,
 			ReleaseName: releaseName,
 			ChartPath:   chartPath(t, "install-failing-hook"),
+			Values:      map[string]interface{}{"message": "must-be-removed"},
 			Atomic:      true,
 			Timeout:     installTimeout,
 		})
@@ -97,6 +101,12 @@ func TestInstallSDK(t *testing.T) {
 		require.NoError(t, listErr)
 		assert.Empty(t, items)
 
+		secrets, secretErr := adminClient.CoreV1().Secrets(namespace).List(t.Context(), metav1.ListOptions{
+			LabelSelector: "owner=helm,name=" + releaseName,
+		})
+		require.NoError(t, secretErr)
+		assert.Empty(t, secrets.Items)
+
 		_, resourceErr := adminClient.CoreV1().ConfigMaps(namespace).Get(
 			t.Context(), releaseName+"-payload", metav1.GetOptions{},
 		)
@@ -109,9 +119,7 @@ func TestInstallSDK(t *testing.T) {
 		namespace, releaseName := isolatedTarget(t, adminClient, "forbidden")
 		restrictedConfig := createRestrictedIdentity(t, adminConfig, adminClient, namespace)
 		engine := newEngine(writeKubeconfig(t, restrictedConfig, "restricted"))
-
-		before, err := adminClient.RbacV1().ClusterRoleBindings().List(t.Context(), metav1.ListOptions{})
-		require.NoError(t, err)
+		before := captureRBACSnapshot(t, adminClient, namespace)
 
 		_, installErr := engine.Install(t.Context(), helmengine.InstallOptions{
 			Namespace:   namespace,
@@ -124,15 +132,76 @@ func TestInstallSDK(t *testing.T) {
 		assert.ErrorIs(t, installErr, helmengine.ErrForbidden)
 		assert.Contains(t, strings.ToLower(installErr.Error()), "forbidden")
 
-		after, err := adminClient.RbacV1().ClusterRoleBindings().List(t.Context(), metav1.ListOptions{})
-		require.NoError(t, err)
-		assert.Equal(t, clusterRoleBindingNames(before.Items), clusterRoleBindingNames(after.Items))
+		after := captureRBACSnapshot(t, adminClient, namespace)
+		assert.Equal(t, before, after)
 
 		secrets, err := adminClient.CoreV1().Secrets(namespace).List(t.Context(), metav1.ListOptions{
 			LabelSelector: "owner=helm,name=" + releaseName,
 		})
 		require.NoError(t, err)
 		assert.Empty(t, secrets.Items)
+
+		_, resourceErr := adminClient.CoreV1().ConfigMaps(namespace).Get(
+			t.Context(), releaseName+"-payload", metav1.GetOptions{},
+		)
+		assert.True(t, apierrors.IsNotFound(resourceErr), "payload ConfigMap exists after forbidden install: %v", resourceErr)
+	})
+
+	t.Run("concurrent installs remain isolated", func(t *testing.T) {
+		t.Parallel()
+
+		namespaceA, releaseA := isolatedTarget(t, adminClient, "conc-a")
+		namespaceB, releaseB := isolatedTarget(t, adminClient, "conc-b")
+		installerConfig := createMinimalInstaller(t, adminConfig, adminClient, namespaceA, namespaceB)
+		engine := newEngine(writeKubeconfig(t, installerConfig, "concurrent"))
+
+		cases := []struct {
+			namespace   string
+			releaseName string
+			message     string
+		}{
+			{namespace: namespaceA, releaseName: releaseA, message: "message-a"},
+			{namespace: namespaceB, releaseName: releaseB, message: "message-b"},
+		}
+		results := make([]struct {
+			release *helmengine.Release
+			err     error
+		}, len(cases))
+
+		var waitGroup sync.WaitGroup
+		for i, installCase := range cases {
+			waitGroup.Add(1)
+			go func() {
+				defer waitGroup.Done()
+				results[i].release, results[i].err = engine.Install(t.Context(), helmengine.InstallOptions{
+					Namespace:   installCase.namespace,
+					ReleaseName: installCase.releaseName,
+					ChartPath:   chartPath(t, "install-success"),
+					Values:      map[string]interface{}{"message": installCase.message},
+					Atomic:      true,
+					Timeout:     installTimeout,
+				})
+			}()
+		}
+		waitGroup.Wait()
+
+		for i, installCase := range cases {
+			require.NoError(t, results[i].err)
+			require.NotNil(t, results[i].release)
+			assert.Equal(t, 1, results[i].release.Revision)
+			assert.Equal(t, "deployed", results[i].release.Status)
+
+			configMap, err := adminClient.CoreV1().ConfigMaps(installCase.namespace).Get(
+				t.Context(), installCase.releaseName+"-payload", metav1.GetOptions{},
+			)
+			require.NoError(t, err)
+			assert.Equal(t, installCase.message, configMap.Data["message"])
+
+			items, err := engine.List(t.Context(), installCase.namespace)
+			require.NoError(t, err)
+			require.Len(t, items, 1)
+			assert.Equal(t, installCase.releaseName, items[0].Name)
+		}
 	})
 }
 
@@ -186,6 +255,24 @@ func isolatedTarget(t *testing.T, client kubernetes.Interface, suffix string) (s
 		defer cancel()
 		if cleanupErr := client.CoreV1().Namespaces().Delete(cleanupCtx, namespace, metav1.DeleteOptions{}); cleanupErr != nil && !apierrors.IsNotFound(cleanupErr) {
 			t.Errorf("delete namespace %s: %v", namespace, cleanupErr)
+			return
+		}
+
+		for {
+			_, getErr := client.CoreV1().Namespaces().Get(cleanupCtx, namespace, metav1.GetOptions{})
+			if apierrors.IsNotFound(getErr) {
+				return
+			}
+			if getErr != nil {
+				t.Errorf("verify namespace %s deletion: %v", namespace, getErr)
+				return
+			}
+			select {
+			case <-cleanupCtx.Done():
+				t.Errorf("namespace %s still exists after cleanup: %v", namespace, cleanupCtx.Err())
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
 		}
 	})
 
@@ -206,47 +293,86 @@ func createRestrictedIdentity(
 	namespace string,
 ) *rest.Config {
 	t.Helper()
+	return createInstallerIdentity(
+		t,
+		adminConfig,
+		adminClient,
+		"restricted-installer",
+		[]string{namespace},
+		[]string{"secrets"},
+	)
+}
 
-	const serviceAccountName = "restricted-installer"
-	_, err := adminClient.CoreV1().ServiceAccounts(namespace).Create(t.Context(), &corev1.ServiceAccount{
+func createMinimalInstaller(
+	t *testing.T,
+	adminConfig *rest.Config,
+	adminClient kubernetes.Interface,
+	namespaces ...string,
+) *rest.Config {
+	t.Helper()
+	return createInstallerIdentity(
+		t,
+		adminConfig,
+		adminClient,
+		"minimal-installer",
+		namespaces,
+		[]string{"secrets", "configmaps"},
+	)
+}
+
+func createInstallerIdentity(
+	t *testing.T,
+	adminConfig *rest.Config,
+	adminClient kubernetes.Interface,
+	serviceAccountName string,
+	namespaces []string,
+	resources []string,
+) *rest.Config {
+	t.Helper()
+	require.NotEmpty(t, namespaces)
+
+	identityNamespace := namespaces[0]
+	_, err := adminClient.CoreV1().ServiceAccounts(identityNamespace).Create(t.Context(), &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{Name: serviceAccountName},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
 
-	_, err = adminClient.RbacV1().Roles(namespace).Create(t.Context(), &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Name: serviceAccountName},
-		Rules: []rbacv1.PolicyRule{
-			{
-				APIGroups: []string{""},
-				Resources: []string{"secrets"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+	for _, namespace := range namespaces {
+		_, err = adminClient.RbacV1().Roles(namespace).Create(t.Context(), &rbacv1.Role{
+			ObjectMeta: metav1.ObjectMeta{Name: serviceAccountName},
+			Rules: []rbacv1.PolicyRule{
+				{
+					APIGroups: []string{""},
+					Resources: resources,
+					Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+				},
 			},
-		},
-	}, metav1.CreateOptions{})
-	require.NoError(t, err)
+		}, metav1.CreateOptions{})
+		require.NoError(t, err)
 
-	_, err = adminClient.RbacV1().RoleBindings(namespace).Create(t.Context(), &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: serviceAccountName},
-		Subjects: []rbacv1.Subject{
-			{Kind: "ServiceAccount", Name: serviceAccountName, Namespace: namespace},
-		},
-		RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: serviceAccountName},
-	}, metav1.CreateOptions{})
-	require.NoError(t, err)
+		_, err = adminClient.RbacV1().RoleBindings(namespace).Create(t.Context(), &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: serviceAccountName},
+			Subjects: []rbacv1.Subject{
+				{Kind: "ServiceAccount", Name: serviceAccountName, Namespace: identityNamespace},
+			},
+			RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: serviceAccountName},
+		}, metav1.CreateOptions{})
+		require.NoError(t, err)
+	}
 
-	token, err := adminClient.CoreV1().ServiceAccounts(namespace).CreateToken(
+	token, err := adminClient.CoreV1().ServiceAccounts(identityNamespace).CreateToken(
 		t.Context(), serviceAccountName, &authenticationv1.TokenRequest{}, metav1.CreateOptions{},
 	)
 	require.NoError(t, err)
 
-	restricted := rest.CopyConfig(adminConfig)
-	restricted.BearerToken = token.Status.Token
-	restricted.BearerTokenFile = ""
-	restricted.Username = ""
-	restricted.Password = ""
-	restricted.ExecProvider = nil
-	restricted.AuthProvider = nil
-	return restricted
+	installer := rest.CopyConfig(adminConfig)
+	installer.BearerToken = token.Status.Token
+	installer.BearerTokenFile = ""
+	installer.Username = ""
+	installer.Password = ""
+	installer.ExecProvider = nil
+	installer.AuthProvider = nil
+	return installer
 }
 
 func writeKubeconfig(t *testing.T, config *rest.Config, name string) string {
@@ -273,8 +399,19 @@ func writeKubeconfig(t *testing.T, config *rest.Config, name string) string {
 		CurrentContext: contextName,
 	}
 
-	path := filepath.Join(t.TempDir(), name+"-kubeconfig")
+	directory, err := os.MkdirTemp("", "install-sdk-"+name+"-")
+	require.NoError(t, err)
+	path := filepath.Join(directory, name+"-kubeconfig")
 	require.NoError(t, clientcmd.WriteToFile(kubeconfig, path))
+	t.Cleanup(func() {
+		if cleanupErr := os.RemoveAll(directory); cleanupErr != nil {
+			t.Errorf("remove kubeconfig directory %s: %v", directory, cleanupErr)
+			return
+		}
+		if _, statErr := os.Stat(directory); !os.IsNotExist(statErr) {
+			t.Errorf("kubeconfig directory %s remains after cleanup: %v", directory, statErr)
+		}
+	})
 	return path
 }
 
@@ -286,10 +423,41 @@ func chartPath(t *testing.T, name string) string {
 	return path
 }
 
-func clusterRoleBindingNames(items []rbacv1.ClusterRoleBinding) []string {
+type rbacSnapshot struct {
+	Roles               []string
+	RoleBindings        []string
+	ClusterRoles        []string
+	ClusterRoleBindings []string
+}
+
+func captureRBACSnapshot(
+	t *testing.T,
+	client kubernetes.Interface,
+	namespace string,
+) rbacSnapshot {
+	t.Helper()
+
+	roles, err := client.RbacV1().Roles(namespace).List(t.Context(), metav1.ListOptions{})
+	require.NoError(t, err)
+	roleBindings, err := client.RbacV1().RoleBindings(namespace).List(t.Context(), metav1.ListOptions{})
+	require.NoError(t, err)
+	clusterRoles, err := client.RbacV1().ClusterRoles().List(t.Context(), metav1.ListOptions{})
+	require.NoError(t, err)
+	clusterRoleBindings, err := client.RbacV1().ClusterRoleBindings().List(t.Context(), metav1.ListOptions{})
+	require.NoError(t, err)
+
+	return rbacSnapshot{
+		Roles:               objectNames(roles.Items, func(item rbacv1.Role) string { return item.Name }),
+		RoleBindings:        objectNames(roleBindings.Items, func(item rbacv1.RoleBinding) string { return item.Name }),
+		ClusterRoles:        objectNames(clusterRoles.Items, func(item rbacv1.ClusterRole) string { return item.Name }),
+		ClusterRoleBindings: objectNames(clusterRoleBindings.Items, func(item rbacv1.ClusterRoleBinding) string { return item.Name }),
+	}
+}
+
+func objectNames[T any](items []T, name func(T) string) []string {
 	names := make([]string, len(items))
-	for i := range items {
-		names[i] = items[i].Name
+	for i, item := range items {
+		names[i] = name(item)
 	}
 	sort.Strings(names)
 	return names

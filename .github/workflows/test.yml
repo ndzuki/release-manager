@@ -38,6 +38,18 @@ jobs:
       - name: Run Helm Install SDK integration gate
         run: make test-install-sdk
 
+  operator-image-sdk-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Run operator image SDK-only gate
+        run: make test-operator-image-sdk-only
+
   test:
     runs-on: ubuntu-latest
     steps:

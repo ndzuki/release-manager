@@ -367,6 +367,18 @@ check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
 test-rollback-sdk: ## Run Rollback SDK quality gate (REQ-063)
 	$(GO) test -race -tags=integration -count=1 ./test/integration/ -run 'TestRollbackSDK'
 
+
+.PHONY: docker-build-operator
+docker-build-operator: ## Build and save operator image as OCI tarball
+	docker build -f deploy/docker/Dockerfile.operator -t release-operator:local .
+	docker save release-operator:local -o /tmp/release-operator.tar
+
+.PHONY: test-operator-image-sdk-only
+test-operator-image-sdk-only: docker-build-operator ## Run operator image SDK-only gate (REQ-061)
+	go run ./cmd/imagecheck \
+		--archive /tmp/release-operator.tar \
+		--policy imagecheck.operator.yaml \
+		--dockerfile deploy/docker/Dockerfile.operator
 .PHONY: quality
 quality: sdk-check test-coverage lint check-reqs ## Full quality gate run
 
