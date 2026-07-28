@@ -13,6 +13,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kubernetesfake "k8s.io/client-go/kubernetes/fake"
+
+	"github.com/ndzuki/release-manager/internal/operator/helmengine"
 )
 
 func TestResolveInjectsMatchingSecret(t *testing.T) {
@@ -66,7 +68,7 @@ func TestResolveRejectsChangedSecret(t *testing.T) {
 
 	_, err := Resolve(context.Background(), client.CoreV1(), "apps", []*operatorv1.SecretRef{ref}, values)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "secret_ref_changed")
+	assert.ErrorIs(t, err, helmengine.ErrSecretRefChanged)
 	database, ok := values["database"].(map[string]any)
 	require.True(t, ok)
 	assert.NotContains(t, database, "password")

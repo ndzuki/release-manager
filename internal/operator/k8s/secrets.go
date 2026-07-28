@@ -13,6 +13,8 @@ import (
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+
+	"github.com/ndzuki/release-manager/internal/operator/helmengine"
 )
 
 var pathToken = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\[\d+\])?$`)
@@ -29,31 +31,31 @@ func Resolve(
 		return digestSnapshot(nil), nil
 	}
 	if client == nil {
-		return "", fmt.Errorf("secret_ref_changed: secret client is required")
+		return "", fmt.Errorf("%w: secret client is required", helmengine.ErrSecretRefChanged)
 	}
 
 	snapshots := make([]map[string]string, 0, len(refs))
 	for _, ref := range refs {
 		if ref == nil {
-			return "", fmt.Errorf("secret_ref_changed: nil secret reference")
+			return "", fmt.Errorf("%w: nil secret reference", helmengine.ErrSecretRefChanged)
 		}
 		secret, err := client.Secrets(namespace).Get(ctx, ref.GetName(), metav1.GetOptions{})
 		if err != nil {
-			return "", fmt.Errorf("secret_ref_changed: get %s: %w", ref.GetName(), err)
+			return "", fmt.Errorf("%w: get: %w", helmengine.ErrSecretRefChanged, err)
 		}
 		value, ok := secret.Data[ref.GetKey()]
 		if !ok {
-			return "", fmt.Errorf("secret_ref_changed: key %s missing", ref.GetKey())
+			return "", fmt.Errorf("%w: key not found", helmengine.ErrSecretRefChanged)
 		}
 		valueDigest := sha256Hex(value)
 		if ref.GetUid() != "" && ref.GetUid() != string(secret.UID) {
-			return "", fmt.Errorf("secret_ref_changed: uid changed for %s", ref.GetName())
+			return "", fmt.Errorf("%w: uid has changed", helmengine.ErrSecretRefChanged)
 		}
 		if ref.GetResourceVersion() != "" && ref.GetResourceVersion() != secret.ResourceVersion {
-			return "", fmt.Errorf("secret_ref_changed: resource_version changed for %s", ref.GetName())
+			return "", fmt.Errorf("%w: resource_version has changed", helmengine.ErrSecretRefChanged)
 		}
 		if ref.GetValueDigest() != "" && ref.GetValueDigest() != valueDigest {
-			return "", fmt.Errorf("secret_ref_changed: value changed for %s/%s", ref.GetName(), ref.GetKey())
+			return "", fmt.Errorf("%w: value has changed", helmengine.ErrSecretRefChanged)
 		}
 		if err := setPath(values, ref.GetPath(), string(value)); err != nil {
 			return "", fmt.Errorf("render_failed: %w", err)

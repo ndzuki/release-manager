@@ -446,7 +446,7 @@ func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command,
 		Namespace:   upgrade.GetNamespace(),
 		ReleaseName: upgrade.GetReleaseName(),
 	})
-	if statusErr != nil && !errors.Is(statusErr, helmengine.ErrNotFound) {
+	if statusErr != nil {
 		result.Code = upgradeErrorCode(statusErr)
 		result.Message = statusErr.Error()
 		return result

@@ -439,6 +439,7 @@ func TestAgent_UpgradeReleaseNotFound(t *testing.T) {
 	assert.Equal(t, "failed", result.GetStatus())
 	assert.Equal(t, "release_not_found", result.GetError().GetCode())
 	assert.False(t, result.GetError().GetRetryable())
+	assert.Zero(t, engine.upgradeCalls, "Status returned release_not_found, must not call engine.Upgrade")
 }
 
 func TestAgent_UpgradeCachedResultRedelivery(t *testing.T) {
