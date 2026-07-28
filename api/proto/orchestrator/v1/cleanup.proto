@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package orchestrator.v1;
+
+option go_package = "github.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1";
+
+// CleanupService handles artifact lifecycle GC operations.
+service CleanupService {
+    // RunCleanup triggers artifact lifecycle garbage collection.
+    // The idempotency_key ensures the same key returns the same result
+    // without re-executing the cleanup.
+    rpc RunCleanup(RunCleanupRequest) returns (RunCleanupResponse);
+}
+
+message RunCleanupRequest {
+    string idempotency_key = 1; // 1-64 characters
+}
+
+message RunCleanupResponse {
+    int32 deleted_bundles = 1;
+    int32 deleted_candidates = 2;
+    int32 deleted_preflights = 3;
+    repeated string errors = 4;
+}

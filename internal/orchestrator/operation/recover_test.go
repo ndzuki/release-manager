@@ -28,7 +28,7 @@ func TestRecoverNonTerminal(t *testing.T) {
 		Status:            store.DefStatusActive,
 		OptimisticVersion: 1,
 	}
-	require.NoError(t, st.Definitions().Create(ctx, def, nil), nil)
+	require.NoError(t, st.Definitions().Create(ctx, def, nil))
 
 	now := time.Now().UTC()
 	deadline := now.Add(-time.Minute)
@@ -95,4 +95,43 @@ func TestRecoverNonTerminal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusQueued, active.Status)
 	assert.Equal(t, 2, active.StateVersion)
+}
+
+func TestRecoverOne_SkipsStaleStateVersion(t *testing.T) {
+	st, err := sqlitestore.Open(t.TempDir() + "/recover-cas.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+
+	ctx := context.Background()
+	def := &store.ReleaseDefinition{
+		ID: "recover-cas-definition", Name: "recover-cas-definition",
+		CustomerID: "recover-cas-customer", ClusterID: "recover-cas-cluster",
+		Status: store.DefStatusActive, OptimisticVersion: 1,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def, nil))
+
+	now := time.Now().UTC()
+	deadline := now.Add(-time.Minute)
+	op := &store.Operation{
+		ID: "recover-cas-operation", OperationType: store.OperationUpgrade,
+		Status: store.StatusRunning, ReleaseDefinitionID: def.ID,
+		IdempotencyKey: "recover-cas-key", RequestHash: "recover-cas-hash",
+		StateVersion: 3, Deadline: &deadline,
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	stale, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	_, err = st.DB().ExecContext(ctx, `UPDATE operations SET state_version = 4 WHERE id = ?`, op.ID)
+	require.NoError(t, err)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	recovered := recoverOne(ctx, st, logger, stale, RecoverOptions{}, now)
+	assert.Zero(t, recovered)
+
+	persisted, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusRunning, persisted.Status)
+	assert.Equal(t, 4, persisted.StateVersion)
 }

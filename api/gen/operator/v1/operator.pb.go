@@ -843,21 +843,26 @@ func (*CommandStreamResponse_SessionEstablished) isCommandStreamResponse_Payload
 
 // Command is a deploy directive sent to the operator.
 type Command struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	OutboxId        string                 `protobuf:"bytes,1,opt,name=outbox_id,json=outboxId,proto3" json:"outbox_id,omitempty"`
-	CommandId       string                 `protobuf:"bytes,2,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
-	OperationId     string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
-	OperationType   string                 `protobuf:"bytes,4,opt,name=operation_type,json=operationType,proto3" json:"operation_type,omitempty"`
-	Bundle          *v1.ReleaseBundle      `protobuf:"bytes,5,opt,name=bundle,proto3" json:"bundle,omitempty"`
-	Values          []byte                 `protobuf:"bytes,6,opt,name=values,proto3" json:"values,omitempty"`
-	Sequence        int64                  `protobuf:"varint,7,opt,name=sequence,proto3" json:"sequence,omitempty"` // global monotonic sequence number
-	DefinitionId    string                 `protobuf:"bytes,8,opt,name=definition_id,json=definitionId,proto3" json:"definition_id,omitempty"`
-	Namespace       string                 `protobuf:"bytes,9,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	ReleaseName     string                 `protobuf:"bytes,10,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
-	CreateNamespace bool                   `protobuf:"varint,11,opt,name=create_namespace,json=createNamespace,proto3" json:"create_namespace,omitempty"`
-	TimeoutSeconds  int64                  `protobuf:"varint,12,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	OutboxId                string                 `protobuf:"bytes,1,opt,name=outbox_id,json=outboxId,proto3" json:"outbox_id,omitempty"`
+	CommandId               string                 `protobuf:"bytes,2,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	OperationId             string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	OperationType           string                 `protobuf:"bytes,4,opt,name=operation_type,json=operationType,proto3" json:"operation_type,omitempty"`
+	Bundle                  *v1.ReleaseBundle      `protobuf:"bytes,5,opt,name=bundle,proto3" json:"bundle,omitempty"`
+	Values                  []byte                 `protobuf:"bytes,6,opt,name=values,proto3" json:"values,omitempty"`      // approved ValuesRevision JSON
+	Sequence                int64                  `protobuf:"varint,7,opt,name=sequence,proto3" json:"sequence,omitempty"` // global monotonic sequence number
+	DefinitionId            string                 `protobuf:"bytes,8,opt,name=definition_id,json=definitionId,proto3" json:"definition_id,omitempty"`
+	Namespace               string                 `protobuf:"bytes,9,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	ReleaseName             string                 `protobuf:"bytes,10,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
+	CreateNamespace         bool                   `protobuf:"varint,11,opt,name=create_namespace,json=createNamespace,proto3" json:"create_namespace,omitempty"`
+	TimeoutSeconds          int64                  `protobuf:"varint,12,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
+	ValuesRevisionId        string                 `protobuf:"bytes,13,opt,name=values_revision_id,json=valuesRevisionId,proto3" json:"values_revision_id,omitempty"`
+	ExpectedCurrentRevision int64                  `protobuf:"varint,14,opt,name=expected_current_revision,json=expectedCurrentRevision,proto3" json:"expected_current_revision,omitempty"`
+	Atomic                  bool                   `protobuf:"varint,15,opt,name=atomic,proto3" json:"atomic,omitempty"`
+	ValuesPatch             []byte                 `protobuf:"bytes,16,opt,name=values_patch,json=valuesPatch,proto3" json:"values_patch,omitempty"`           // JSON merge patch
+	TargetRevision          int64                  `protobuf:"varint,17,opt,name=target_revision,json=targetRevision,proto3" json:"target_revision,omitempty"` // target revision for ROLLBACK
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *Command) Reset() {
@@ -970,6 +975,41 @@ func (x *Command) GetCreateNamespace() bool {
 func (x *Command) GetTimeoutSeconds() int64 {
 	if x != nil {
 		return x.TimeoutSeconds
+	}
+	return 0
+}
+
+func (x *Command) GetValuesRevisionId() string {
+	if x != nil {
+		return x.ValuesRevisionId
+	}
+	return ""
+}
+
+func (x *Command) GetExpectedCurrentRevision() int64 {
+	if x != nil {
+		return x.ExpectedCurrentRevision
+	}
+	return 0
+}
+
+func (x *Command) GetAtomic() bool {
+	if x != nil {
+		return x.Atomic
+	}
+	return false
+}
+
+func (x *Command) GetValuesPatch() []byte {
+	if x != nil {
+		return x.ValuesPatch
+	}
+	return nil
+}
+
+func (x *Command) GetTargetRevision() int64 {
+	if x != nil {
+		return x.TargetRevision
 	}
 	return 0
 }
@@ -1359,7 +1399,7 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x0eresync_request\x18\x03 \x01(\v2\x1a.operator.v1.ResyncRequestH\x00R\rresyncRequest\x12O\n" +
 	"\x12duplicate_response\x18\x04 \x01(\v2\x1e.operator.v1.DuplicateResponseH\x00R\x11duplicateResponse\x12R\n" +
 	"\x13session_established\x18\x05 \x01(\v2\x1f.operator.v1.SessionEstablishedH\x00R\x12sessionEstablishedB\t\n" +
-	"\apayload\"\xaf\x03\n" +
+	"\apayload\"\xfd\x04\n" +
 	"\aCommand\x12\x1b\n" +
 	"\toutbox_id\x18\x01 \x01(\tR\boutboxId\x12\x1d\n" +
 	"\n" +
@@ -1374,7 +1414,12 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\frelease_name\x18\n" +
 	" \x01(\tR\vreleaseName\x12)\n" +
 	"\x10create_namespace\x18\v \x01(\bR\x0fcreateNamespace\x12'\n" +
-	"\x0ftimeout_seconds\x18\f \x01(\x03R\x0etimeoutSeconds\"e\n" +
+	"\x0ftimeout_seconds\x18\f \x01(\x03R\x0etimeoutSeconds\x12,\n" +
+	"\x12values_revision_id\x18\r \x01(\tR\x10valuesRevisionId\x12:\n" +
+	"\x19expected_current_revision\x18\x0e \x01(\x03R\x17expectedCurrentRevision\x12\x16\n" +
+	"\x06atomic\x18\x0f \x01(\bR\x06atomic\x12!\n" +
+	"\fvalues_patch\x18\x10 \x01(\fR\vvaluesPatch\x12'\n" +
+	"\x0ftarget_revision\x18\x11 \x01(\x03R\x0etargetRevision\"e\n" +
 	"\rResyncRequest\x12<\n" +
 	"\x1aorchestrator_last_sequence\x18\x01 \x01(\x03R\x18orchestratorLastSequence\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"F\n" +

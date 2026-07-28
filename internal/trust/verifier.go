@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	"github.com/ndzuki/release-manager/internal/store"
@@ -20,13 +21,17 @@ type Input struct {
 	Digest       string
 	SignatureRef *commonv1.SignatureRef
 	Policy       store.TrustPolicy
+	Environment  string // if set, resolve live roots instead of static policy issuers
 }
 
 // Output captures the result of a trust verification.
 type Output struct {
-	Status  store.VerificationStatus
-	Summary string
-	Record  *store.VerificationRecord
+	Status          store.VerificationStatus
+	Summary         string
+	Record          *store.VerificationRecord
+	RootID          string
+	KeyID           string
+	RevocationEpoch int64
 }
 
 // Verifier is the interface for artifact trust verification.
@@ -40,14 +45,16 @@ type Verifier interface {
 // StubVerifier performs digest comparison and signature presence checks.
 // It does NOT validate actual cryptographic signatures — that is the
 // responsibility of CosignVerifier or similar external verifiers.
+// When a RootResolver is provided, it resolves trusted issuers from live roots
+// instead of the static TrustPolicy.TrustedIssuers list.
 type StubVerifier struct {
-	st     store.VerificationStore
-	logger *slog.Logger
+	st       store.VerificationStore
+	resolver RootResolver
+	logger   *slog.Logger
 }
-
 // NewStubVerifier creates a StubVerifier backed by the given store.
-func NewStubVerifier(st store.VerificationStore, logger *slog.Logger) *StubVerifier {
-	return &StubVerifier{st: st, logger: logger}
+func NewStubVerifier(st store.VerificationStore, r RootResolver, logger *slog.Logger) *StubVerifier {
+	return &StubVerifier{st: st, resolver: r, logger: logger}
 }
 
 // Verify checks artifact trust against the given policy.
@@ -63,6 +70,21 @@ func (v *StubVerifier) Verify(ctx context.Context, in Input) (*Output, error) {
 	// AC-012-03: Idempotent reuse — check store for existing record.
 	existing, err := v.st.GetByDigestAndPolicy(ctx, in.Digest, in.Policy.PolicyVersion)
 	if err == nil {
+		// REQ-043 AC-043-04: If a resolver is available, check whether the
+		// root that produced this cached record has been revoked since.
+		if v.resolver != nil && in.Environment != "" {
+			meta, metaErr := v.resolver.GetPolicyMeta(ctx, in.Environment)
+			if metaErr == nil && meta.RevocationEpoch > existing.RevocationEpoch {
+				v.logger.Debug("cached verification record invalidated by revocation epoch bump",
+					"digest", in.Digest,
+					"stored_epoch", existing.RevocationEpoch,
+					"current_epoch", meta.RevocationEpoch,
+				)
+				// Re-verify with live roots.
+				return v.verifyWithRoots(ctx, in)
+			}
+		}
+
 		v.logger.Debug("verification record reused",
 			"digest", in.Digest,
 			"policy_version", in.Policy.PolicyVersion,
@@ -79,13 +101,16 @@ func (v *StubVerifier) Verify(ctx context.Context, in Input) (*Output, error) {
 	}
 
 	// Not found — perform fresh verification.
+	if v.resolver != nil && in.Environment != "" {
+		return v.verifyWithRoots(ctx, in)
+	}
 	result := v.verify(in)
 	return result, nil
 }
 
+
 func (v *StubVerifier) verify(in Input) *Output {
 	// AC-012-01: Digest consistency check.
-	// If a signature reference is provided, its digest MUST match the computed digest.
 	if in.SignatureRef != nil && in.SignatureRef.Digest != "" {
 		if in.SignatureRef.Digest != in.Digest {
 			return &Output{
@@ -96,7 +121,6 @@ func (v *StubVerifier) verify(in Input) *Output {
 	}
 
 	// AC-012-02: Signature presence check.
-	// Production artifacts MUST carry a signature reference.
 	if in.SignatureRef == nil || in.SignatureRef.Signature == "" {
 		return &Output{
 			Status:  store.VerificationSignatureMissing,
@@ -104,8 +128,7 @@ func (v *StubVerifier) verify(in Input) *Output {
 		}
 	}
 
-	// Signature format check: basic validation that it's non-empty and well-formed.
-	// Stub verifier does not perform actual cryptographic validation.
+	// Signature format check.
 	if !isValidSignatureFormat(in.SignatureRef.Signature) {
 		return &Output{
 			Status:  store.VerificationRejected,
@@ -127,6 +150,69 @@ func (v *StubVerifier) verify(in Input) *Output {
 	}
 }
 
+// verifyWithRoots resolves live trust roots and checks issuer against them.
+// Active roots pass; grace roots within their window pass; revoked/retired roots fail.
+func (v *StubVerifier) verifyWithRoots(ctx context.Context, in Input) (*Output, error) {
+	// Digest consistency check.
+	if in.SignatureRef != nil && in.SignatureRef.Digest != "" {
+		if in.SignatureRef.Digest != in.Digest {
+			return &Output{
+				Status:  store.VerificationRejected,
+				Summary: "digest_mismatch: artifact digest does not match signed digest",
+			}, nil
+		}
+	}
+
+	// Signature presence check.
+	if in.SignatureRef == nil || in.SignatureRef.Signature == "" {
+		return &Output{
+			Status:  store.VerificationSignatureMissing,
+			Summary: "signature_missing: artifact has no attached signature",
+		}, nil
+	}
+
+	// Signature format check.
+	if !isValidSignatureFormat(in.SignatureRef.Signature) {
+		return &Output{
+			Status:  store.VerificationRejected,
+			Summary: "signature_invalid: signature format validation failed",
+		}, nil
+	}
+
+	// Resolve live roots and policy metadata.
+	roots, resolveErr := v.resolver.ResolveActive(ctx, in.Environment, time.Now())
+	if resolveErr != nil {
+		v.logger.Error("live root resolution failed", "env", in.Environment, "err", resolveErr)
+		return &Output{
+			Status:  store.VerificationRejected,
+			Summary: "verification_unavailable: cannot resolve live trust roots",
+		}, nil
+	}
+
+	meta, metaErr := v.resolver.GetPolicyMeta(ctx, in.Environment)
+	epoch := int64(0)
+	if metaErr == nil && meta != nil {
+		epoch = meta.RevocationEpoch
+	}
+
+	// Check if any root accepts this issuer.
+	for _, r := range roots {
+		if r.Issuer == in.SignatureRef.Issuer {
+			return &Output{
+				Status:          store.VerificationTrusted,
+				Summary:         fmt.Sprintf("trusted: issuer %q matched root %q", in.SignatureRef.Issuer, r.KeyID),
+				RootID:          r.ID,
+				KeyID:           r.KeyID,
+				RevocationEpoch: epoch,
+			}, nil
+		}
+	}
+
+	return &Output{
+		Status:  store.VerificationRejected,
+		Summary: fmt.Sprintf("untrusted_issuer: issuer %q is not in live trust roots", in.SignatureRef.Issuer),
+	}, nil
+}
 // isValidSignatureFormat performs basic format validation.
 // Actual cryptographic verification is deferred to CosignVerifier.
 func isValidSignatureFormat(sig string) bool {
@@ -173,12 +259,15 @@ func (v *StoreVerifier) Verify(ctx context.Context, in Input) (*Output, error) {
 	rec := out.Record
 	if rec == nil {
 		rec = &store.VerificationRecord{
-			ArtifactDigest: in.Digest,
-			PolicyVersion:  in.Policy.PolicyVersion,
-			Status:         out.Status,
-			Issuer:         issuerFromRef(in.SignatureRef),
-			Subject:        subjectFromRef(in.SignatureRef),
-			Summary:        out.Summary,
+			ArtifactDigest:  in.Digest,
+			PolicyVersion:   in.Policy.PolicyVersion,
+			Status:          out.Status,
+			Issuer:          issuerFromRef(in.SignatureRef),
+			Subject:         subjectFromRef(in.SignatureRef),
+			Summary:         out.Summary,
+			RootID:          out.RootID,
+			KeyID:           out.KeyID,
+			RevocationEpoch: out.RevocationEpoch,
 		}
 	}
 

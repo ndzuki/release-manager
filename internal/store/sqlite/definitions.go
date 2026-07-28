@@ -37,12 +37,13 @@ func (s *definitionStore) Create(
 		INSERT INTO release_definitions (
 			id, name, customer_id, cluster_id, namespace, release_name,
 			chart_name, status, optimistic_version, created_by,
-			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			owner_organization_id, approved_revision_id, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		def.ID, def.Name, def.CustomerID, def.ClusterID,
 		def.Namespace, def.ReleaseName, def.ChartName,
 		string(def.Status), def.OptimisticVersion, def.CreatedBy,
+		def.OwnerOrganizationID, def.ApprovedRevisionID,
 		def.CreatedAt.UTC().Format(time.RFC3339Nano), def.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -63,8 +64,8 @@ func (s *definitionStore) Create(
 func (s *definitionStore) Get(ctx context.Context, id string) (*store.ReleaseDefinition, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, customer_id, cluster_id, namespace, release_name,
-			chart_name, status, optimistic_version, created_by,
-			created_at, updated_at
+			chart_name, status, optimistic_version, current_bundle_id, created_by,
+			owner_organization_id, approved_revision_id, created_at, updated_at
 		FROM release_definitions WHERE id = ?
 	`, id)
 	return scanDefinition(row)
@@ -123,8 +124,8 @@ func (s *definitionStore) List(
 ) ([]*store.ReleaseDefinition, error) {
 	query := `
 		SELECT id, name, customer_id, cluster_id, namespace, release_name,
-			chart_name, status, optimistic_version, created_by,
-			created_at, updated_at
+			chart_name, status, optimistic_version, current_bundle_id, created_by,
+			owner_organization_id, approved_revision_id, created_at, updated_at
 		FROM release_definitions
 		WHERE 1 = 1`
 	args := make([]any, 0, 2)
@@ -182,20 +183,20 @@ func insertDefinitionEvent(
 	return nil
 }
 
-
 func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.ReleaseDefinition, error) {
 	var (
 		id, name, customerID, clusterID, namespace, releaseName, chartName string
 		status                                                             string
 		optimisticVersion                                                  int
+		currentBundleID, ownerOrganizationID, approvedRevisionID           *string
 		createdBy                                                          string
 		createdAt, updatedAt                                               string
 	)
 
 	err := row.Scan(
 		&id, &name, &customerID, &clusterID, &namespace, &releaseName,
-		&chartName, &status, &optimisticVersion, &createdBy,
-		&createdAt, &updatedAt,
+		&chartName, &status, &optimisticVersion, &currentBundleID, &createdBy,
+		&ownerOrganizationID, &approvedRevisionID, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -214,17 +215,64 @@ func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.Release
 	}
 
 	return &store.ReleaseDefinition{
-		ID:                id,
-		Name:              name,
-		CustomerID:        customerID,
-		ClusterID:         clusterID,
-		Namespace:         namespace,
-		ReleaseName:       releaseName,
-		ChartName:         chartName,
-		Status:            store.DefinitionStatus(status),
-		OptimisticVersion: optimisticVersion,
-		CreatedBy:         createdBy,
-		CreatedAt:         ct,
-		UpdatedAt:         ut,
+		ID:                  id,
+		Name:                name,
+		CustomerID:          customerID,
+		ClusterID:           clusterID,
+		Namespace:           namespace,
+		ReleaseName:         releaseName,
+		ChartName:           chartName,
+		Status:              store.DefinitionStatus(status),
+		OptimisticVersion:   optimisticVersion,
+		CurrentBundleID:     currentBundleID,
+		CreatedBy:           createdBy,
+		OwnerOrganizationID: ownerOrganizationID,
+		ApprovedRevisionID:  approvedRevisionID,
+		CreatedAt:           ct,
+		UpdatedAt:           ut,
 	}, nil
+}
+
+// SetCurrentBundle associates a bundle with a release definition.
+// If the bundle is archived, it is unarchived in the same transaction.
+// Returns true if the bundle was unarchived.
+func (s *definitionStore) SetCurrentBundle(ctx context.Context, defID, bundleID string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin set current bundle: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
+
+	result, err := tx.ExecContext(ctx, `
+		UPDATE release_definitions SET current_bundle_id = ?
+		WHERE id = ?
+	`, bundleID, defID)
+	if err != nil {
+		return false, fmt.Errorf("update definition current_bundle_id: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("definition rows affected: %w", err)
+	}
+	if n == 0 {
+		return false, fmt.Errorf("definition %s: %w", defID, store.ErrNotFound)
+	}
+
+	// If the referenced bundle is archived, unarchive it.
+	ur, err := tx.ExecContext(ctx, `
+		UPDATE release_bundles SET status = 'validated', archived_at = NULL
+		WHERE id = ? AND status = 'archived'
+	`, bundleID)
+	if err != nil {
+		return false, fmt.Errorf("unarchive bundle %s: %w", bundleID, err)
+	}
+	unarchived, err := ur.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("unarchive bundle rows affected: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit set current bundle: %w", err)
+	}
+	return unarchived > 0, nil
 }

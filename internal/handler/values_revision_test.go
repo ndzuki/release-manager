@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/ndzuki/release-manager/internal/store"
-	"log/slog"
+	"github.com/stretchr/testify/require"
 )
 
 // stubValuesStore is a simple in-memory ValuesStore for handler tests.
@@ -79,41 +80,22 @@ func (s *stubValuesStore) List(_ context.Context, defID string) ([]*store.Values
 	return revs, nil
 }
 
-func (s *stubValuesStore) Update(_ context.Context, vr *store.ValuesRevision, expectedParentRev string) error {
-	existing, ok := s.items[vr.ID]
-	if !ok {
-		return store.ErrNotFound
-	}
-	if existing.ParentRevisionID != expectedParentRev {
-		return store.ErrOptimisticLock
-	}
-	existing.Status = vr.Status
-	existing.UpdatedAt = vr.UpdatedAt
-	existing.Digest = vr.Digest
-	existing.SecretRefs = vr.SecretRefs
-	return nil
-}
-
 func newTestHandler() *ValuesHandler {
-	return NewValuesHandler(newStubValuesStore(), 0, slog.Default())
+	return newValuesHandlerFromValuesStore(newStubValuesStore(), 0, slog.Default())
 }
 
-func mustMarshal(t *testing.T, v any) []byte {
+func mustMarshal(t *testing.T, value any) []byte {
 	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
+	data, err := json.Marshal(value)
+	require.NoError(t, err)
+	return data
 }
 
 func mustUnmarshal[T any](t *testing.T, data []byte) T {
 	t.Helper()
-	var v T
-	if err := json.Unmarshal(data, &v); err != nil {
-		t.Fatal(err)
-	}
-	return v
+	var value T
+	require.NoError(t, json.Unmarshal(data, &value))
+	return value
 }
 
 func TestCreateValuesRevision_Success(t *testing.T) {
@@ -268,129 +250,5 @@ func TestListValuesRevision(t *testing.T) {
 	resp := mustUnmarshal[listResp](t, rec.Body.Bytes())
 	if len(resp.Revisions) != 2 {
 		t.Errorf("expected 2 revisions, got %d", len(resp.Revisions))
-	}
-}
-
-func TestApproveValuesRevision(t *testing.T) {
-	h := newTestHandler()
-	mux := http.NewServeMux()
-	h.Register(mux)
-
-	defID := uuid.New().String()
-	body := map[string]any{
-		"release_definition_id": defID,
-		"values":                "key: value",
-	}
-
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/values-revisions", bytes.NewReader(mustMarshal(t, body)))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	created := mustUnmarshal[valuesResponse](t, rec.Body.Bytes())
-
-	req2 := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/values-revisions/"+created.ID+"/approve", http.NoBody)
-	rec2 := httptest.NewRecorder()
-	mux.ServeHTTP(rec2, req2)
-
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec2.Code, rec2.Body.String())
-	}
-
-	approved := mustUnmarshal[valuesResponse](t, rec2.Body.Bytes())
-	if approved.Status != string(store.ValuesStatusApproved) {
-		t.Errorf("expected approved, got %s", approved.Status)
-	}
-}
-
-func TestApproveValuesRevision_NotDraft(t *testing.T) {
-	h := newTestHandler()
-	mux := http.NewServeMux()
-	h.Register(mux)
-
-	defID := uuid.New().String()
-	body := map[string]any{
-		"release_definition_id": defID,
-		"values":                "key: value",
-	}
-
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/values-revisions", bytes.NewReader(mustMarshal(t, body)))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	created := mustUnmarshal[valuesResponse](t, rec.Body.Bytes())
-
-	req2 := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/values-revisions/"+created.ID+"/approve", http.NoBody)
-	rec2 := httptest.NewRecorder()
-	mux.ServeHTTP(rec2, req2)
-
-	req3 := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/values-revisions/"+created.ID+"/approve", http.NoBody)
-	rec3 := httptest.NewRecorder()
-	mux.ServeHTTP(rec3, req3)
-
-	if rec3.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for double approve, got %d", rec3.Code)
-	}
-}
-
-func TestRejectValuesRevision(t *testing.T) {
-	h := newTestHandler()
-	mux := http.NewServeMux()
-	h.Register(mux)
-
-	defID := uuid.New().String()
-	body := map[string]any{
-		"release_definition_id": defID,
-		"values":                "key: value",
-	}
-
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/values-revisions", bytes.NewReader(mustMarshal(t, body)))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	created := mustUnmarshal[valuesResponse](t, rec.Body.Bytes())
-
-	req2 := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/values-revisions/"+created.ID+"/reject", http.NoBody)
-	rec2 := httptest.NewRecorder()
-	mux.ServeHTTP(rec2, req2)
-
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec2.Code)
-	}
-
-	rejected := mustUnmarshal[valuesResponse](t, rec2.Body.Bytes())
-	if rejected.Status != string(store.ValuesStatusRejected) {
-		t.Errorf("expected rejected, got %s", rejected.Status)
-	}
-}
-
-func TestUpdate_OptimisticLock(t *testing.T) {
-	st := newStubValuesStore()
-	h := NewValuesHandler(st, 0, slog.Default())
-	mux := http.NewServeMux()
-	h.Register(mux)
-
-	defID := uuid.New().String()
-
-	vr := &store.ValuesRevision{
-		ID:                  uuid.New().String(),
-		ReleaseDefinitionID: defID,
-		Revision:            1,
-		Status:              store.ValuesStatusDraft,
-		Values:              []byte(`{"key":"value"}`),
-		Digest:              "abc123",
-		ParentRevisionID:    "original-parent",
-	}
-	if err := st.Create(context.Background(), vr); err != nil {
-		t.Fatal(err)
-	}
-
-	vr2 := *vr
-	vr2.Status = store.ValuesStatusApproved
-	err := st.Update(context.Background(), &vr2, "wrong-parent")
-	if err != store.ErrOptimisticLock {
-		t.Errorf("expected ErrOptimisticLock, got %v", err)
 	}
 }

@@ -12,13 +12,19 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
-// Service implements the audit collection Connect service.
-type Service struct{ emitter Sink }
+// Service implements the audit collection Connect service for Emit only.
+// QueryAuditEvents and ExportAuditEvents return unimplemented; use
+// NewAuditServiceHandler for the full implementation.
+type Service struct {
+	auditv1connect.UnimplementedAuditServiceHandler
+	emitter Sink
+}
 
 // NewService creates an audit collection service.
 func NewService(emitter Sink) *Service { return &Service{emitter: emitter} }
 
 // Emit accepts valid events and reports per-event rejection codes.
+//nolint:dupl // The lightweight collector intentionally mirrors the full audit handler response contract.
 func (s *Service) Emit(_ context.Context, req *connect.Request[auditv1.EmitAuditRequest]) (*connect.Response[auditv1.EmitAuditResponse], error) {
 	if req.Msg == nil || len(req.Msg.GetEvents()) == 0 {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%s: events are required", ErrorInvalidEvent))

@@ -43,6 +43,19 @@ func NewRealEngine(kubeConfig string, logger *slog.Logger) *RealEngine {
 	}
 }
 
+// SetReleaseStorage injects an isolated release storage for testing.
+// Production code MUST NOT call this — the default Kubernetes Secret driver is used.
+func (r *RealEngine) SetReleaseStorage(s *storage.Storage) {
+	r.releaseStorage = s
+}
+
+// SetConfigFactory injects a custom action.Configuration factory for testing.
+// Production code MUST NOT call this — the default Kube client is used.
+func (r *RealEngine) SetConfigFactory(fn func(namespace string) (*action.Configuration, error)) {
+	r.configFactory = fn
+}
+
+
 // actionConfig creates a new action.Configuration for a single operation.
 // Production uses a Kubernetes Secret driver. Tests may inject an isolated
 // configuration factory while preserving the same Helm SDK action path.
@@ -128,6 +141,18 @@ func (r *RealEngine) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release
 	if err != nil {
 		return nil, fmt.Errorf("initialize Helm upgrade: %w", err)
 	}
+
+	// AC-021-02 / AC-062-02: validate ExpectedRevision before running the upgrade.
+	if opts.ExpectedRevision > 0 {
+		current, statusErr := statusWithConfig(ctx, cfg, opts.Namespace, opts.ReleaseName)
+		if statusErr != nil {
+			return nil, fmt.Errorf("check current revision for %s/%s: %w", opts.Namespace, opts.ReleaseName, statusErr)
+		}
+		if current.Revision != opts.ExpectedRevision {
+			return nil, fmt.Errorf("%w: expected revision %d, got %d", ErrConflict, opts.ExpectedRevision, current.Revision)
+		}
+	}
+
 	upgrade := action.NewUpgrade(cfg)
 	upgrade.Version = opts.ChartVersion
 	chartPath, err := upgrade.LocateChart(opts.ChartPath, r.settings)
@@ -157,6 +182,8 @@ func (r *RealEngine) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release
 }
 
 // Rollback rolls back a release to a target revision.
+// Performs pre-rollback validation: history check and historical artifact
+// availability check before delegating to the Helm SDK.
 func (r *RealEngine) Rollback(ctx context.Context, opts RollbackOptions) (*Release, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
@@ -167,11 +194,42 @@ func (r *RealEngine) Rollback(ctx context.Context, opts RollbackOptions) (*Relea
 		return nil, fmt.Errorf("initialize Helm rollback: %w", err)
 	}
 
+	// Pre-rollback: verify target revision exists in history (AC-063-02).
+	history := action.NewHistory(cfg)
+	rels, histErr := history.Run(opts.ReleaseName)
+	if histErr != nil {
+		if errors.Is(histErr, driver.ErrReleaseNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get Helm release history: %w", histErr)
+	}
+	targetFound := false
+	for _, rel := range rels {
+		if rel.Version == opts.TargetRevision {
+			targetFound = true
+			break
+		}
+	}
+	if !targetFound {
+		return nil, ErrRevisionNotFound
+	}
+
+	// Pre-rollback: verify historical artifact is still retrievable.
+	// If Helm storage cannot return the target release, the artifact is unavailable.
+	if _, getErr := cfg.Releases.Get(opts.ReleaseName, opts.TargetRevision); getErr != nil {
+		if errors.Is(getErr, driver.ErrReleaseNotFound) {
+			return nil, ErrArtifactUnavailable
+		}
+		return nil, fmt.Errorf("get historical release: %w", getErr)
+	}
+
 	rollback := action.NewRollback(cfg)
 	rollback.Version = opts.TargetRevision
 	if opts.Timeout > 0 {
 		rollback.Timeout = opts.Timeout
 	}
+	rollback.Wait = true                  // wait for resources to be ready
+	rollback.CleanupOnFail = false        // AC-063-03: preserve original release on failure
 
 	if err := rollback.Run(opts.ReleaseName); err != nil {
 		return nil, mapActionError(ctx, "roll back Helm release", err)

@@ -33,6 +33,7 @@ func NewRuntimeCommandExecutor(
 	return &RuntimeCommandExecutor{store: st, pull: pull, logger: logger}
 }
 
+//nolint:gocyclo // Command persistence, image validation, and runtime pull gates form one atomic execution path.
 func (e *RuntimeCommandExecutor) Execute(ctx context.Context, command *operatorv1.Command) (string, error) {
 	if e == nil || e.store == nil {
 		return "", fmt.Errorf("operator command store is required")

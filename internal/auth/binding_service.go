@@ -132,11 +132,15 @@ func (s *BindingService) RevokeBinding(
 		return nil, err
 	}
 
-	if err := s.store.Bindings().SetStatus(ctx, binding, store.BindingRevoked); err != nil {
+	if err := s.store.Bindings().SetStatus(ctx, binding.ID, store.BindingRevoked); err != nil {
 		if errors.Is(err, store.ErrOptimisticLock) {
 			return nil, connect.NewError(connect.CodeAborted, errors.New("optimistic_lock_conflict"))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("revoke binding: %w", err))
+	}
+	binding, err = s.getBinding(ctx, binding.ID)
+	if err != nil {
+		return nil, err
 	}
 	return connect.NewResponse(&authv1.RevokeBindingResponse{Binding: toProtoBinding(binding)}), nil
 }
@@ -174,11 +178,15 @@ func (s *BindingService) handleExistingBinding(
 		return nil, connect.NewError(connect.CodeAlreadyExists, errors.New("duplicate_binding"))
 	}
 
-	if err := s.store.Bindings().SetStatus(ctx, binding, store.BindingActive); err != nil {
+	if err := s.store.Bindings().SetStatus(ctx, binding.ID, store.BindingActive); err != nil {
 		if errors.Is(err, store.ErrOptimisticLock) {
 			return nil, connect.NewError(connect.CodeAborted, errors.New("optimistic_lock_conflict"))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("reactivate binding: %w", err))
+	}
+	binding, err := s.getBinding(ctx, binding.ID)
+	if err != nil {
+		return nil, err
 	}
 	return connect.NewResponse(&authv1.CreateBindingResponse{Binding: toProtoBinding(binding)}), nil
 }

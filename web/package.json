@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
+    "test": "vitest run",
     "preview": "vite preview",
-    "lint": "eslint . --ext .vue,.ts"
+    "lint": "eslint ."
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.2.5",
@@ -19,9 +20,22 @@
   },
   "devDependencies": {
     "@bufbuild/buf": "^1.50.1",
+    "@bufbuild/protoc-gen-es": "^2.13.0",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.1",
     "@vitejs/plugin-vue": "^5.2.3",
+    "@vue/test-utils": "^2.4.11",
+    "eslint": "^10.7.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-vue": "^10.10.0",
+    "globals": "^17.7.0",
+    "eslint-plugin-vue": "^10.9.2",
+    "globals": "^17.7.0",
+    "happy-dom": "^20.10.6",
     "typescript": "~5.8.3",
+    "typescript-eslint": "^8.65.0",
     "vite": "^6.3.5",
+    "vitest": "^4.1.10",
     "vue-tsc": "^2.2.10"
   }
 }

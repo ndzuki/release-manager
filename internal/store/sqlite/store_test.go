@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -142,7 +143,7 @@ func TestClusterDisable(t *testing.T) {
 	require.NoError(t, st.Clusters().Create(ctx, cl))
 
 	cl.Status = store.ClusterDisabled
-	require.NoError(t, st.Clusters().Update(ctx, cl))
+	require.NoError(t, st.Clusters().Update(ctx, cl, cl.Version))
 
 	got, err := st.Clusters().Get(ctx, cl.ID)
 	require.NoError(t, err)
@@ -388,6 +389,75 @@ func TestOperationTransition_OptimisticLockAndEvent(t *testing.T) {
 	assert.Equal(t, 5, persisted.StateVersion)
 }
 
+func TestOperationTransition_RejectsInvalidTarget(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "operation-invalid-transition",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "operation-invalid-transition-key",
+		RequestHash:         "request-hash",
+		StateVersion:        4,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	_, err := st.Operations().Transition(ctx, op.ID, store.StatusPreflight, op.StateVersion, "")
+	require.ErrorIs(t, err, store.ErrInvalidState)
+
+	persisted, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusRunning, persisted.Status)
+	assert.Equal(t, 4, persisted.StateVersion)
+}
+
+func TestOperationTransition_TerminalAt(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+
+	// No preflight lifecycle row — terminal transition must still succeed
+	// and terminal_at must be set (AC-023-08).
+	op := &store.Operation{
+		ID:                  "terminal-at-no-lifecycle",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "terminal-at-no-lifecycle-key",
+		RequestHash:         "hash",
+		StateVersion:        1,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	// Transition to succeeded (terminal).
+	updated, err := st.Operations().Transition(ctx, op.ID, store.StatusSucceeded, op.StateVersion, "")
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, updated.Status)
+	require.NotNil(t, updated.TerminalAt, "returned Operation.TerminalAt must be non-nil")
+	assert.False(t, updated.TerminalAt.IsZero())
+
+	// Direct SQL: operations.terminal_at is set.
+	var terminalAt *string
+	err = st.DB().QueryRowContext(ctx, `SELECT terminal_at FROM operations WHERE id = ?`, op.ID).Scan(&terminalAt)
+	require.NoError(t, err)
+	require.NotNil(t, terminalAt, "operations.terminal_at must be non-nil after terminal transition")
+	assert.NotEmpty(t, *terminalAt)
+
+	// Verify terminal_at matches updated_at (migration history backfill concept).
+	var updatedAtStr string
+	err = st.DB().QueryRowContext(ctx, `SELECT updated_at FROM operations WHERE id = ?`, op.ID).Scan(&updatedAtStr)
+	require.NoError(t, err)
+	assert.Equal(t, *terminalAt, updatedAtStr, "terminal_at should equal updated_at (migration terminal_at backfill)")
+
+	// Verify preflight_lifecycles was not affected (no row exists).
+	var count int
+	err = st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM preflight_lifecycles WHERE operation_id = ?`, op.ID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "no preflight lifecycle row should exist — transition handles missing lifecycle gracefully")
+}
+
 func TestOperationCreateIfAvailable_AllowsEmergencyPeers(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
@@ -529,38 +599,6 @@ func TestValuesRevisionGetNextRevisionNumber(t *testing.T) {
 	assert.Equal(t, 2, n)
 }
 
-func TestValuesRevisionUpdateOptimisticLock(t *testing.T) {
-	st := setupStore(t)
-	ctx := context.Background()
-	def := createTestDefinition(t, st)
-
-	vr := &store.ValuesRevision{
-		ID:                  uuid.New().String(),
-		ReleaseDefinitionID: def.ID,
-		Revision:            1,
-		Status:              store.ValuesStatusDraft,
-		Values:              []byte(`{"key":"v1"}`),
-		Digest:              "sha256:abc",
-		ParentRevisionID:    "parent-rev-1",
-	}
-	require.NoError(t, st.Values().Create(ctx, vr))
-
-	// Update with correct parent — should succeed
-	vr.Status = store.ValuesStatusApproved
-	err := st.Values().Update(ctx, vr, "parent-rev-1")
-	require.NoError(t, err)
-
-	// Verify
-	got, err := st.Values().Get(ctx, vr.ID)
-	require.NoError(t, err)
-	assert.Equal(t, store.ValuesStatusApproved, got.Status)
-
-	// Update with wrong parent — should get optimistic lock error
-	vr.Status = store.ValuesStatusRejected
-	err = st.Values().Update(ctx, vr, "wrong-parent")
-	assert.ErrorIs(t, err, store.ErrOptimisticLock)
-}
-
 func TestValuesRevisionList(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
@@ -589,6 +627,127 @@ func TestValuesRevisionNotFound(t *testing.T) {
 
 	_, err := st.Values().Get(ctx, "nonexistent")
 	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
+func TestValuesRevisionApproveSupersedesPreviousApproved(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	previous := &store.ValuesRevision{
+		ID:                  uuid.New().String(),
+		ReleaseDefinitionID: def.ID,
+		Revision:            1,
+		StateVersion:        1,
+		Status:              store.ValuesStatusApproved,
+		Values:              []byte(`{"key":"old"}`),
+		Digest:              "sha256:old",
+		CreatedByUserID:     "creator-old",
+	}
+	next := &store.ValuesRevision{
+		ID:                  uuid.New().String(),
+		ReleaseDefinitionID: def.ID,
+		Revision:            2,
+		StateVersion:        1,
+		Status:              store.ValuesStatusPendingApproval,
+		Values:              []byte(`{"key":"new"}`),
+		Digest:              "sha256:new",
+		CreatedByUserID:     "creator-new",
+	}
+	require.NoError(t, st.Values().Create(ctx, previous))
+	require.NoError(t, st.Values().Create(ctx, next))
+
+	approvedResult, err := st.ValuesApproval().Approve(ctx, store.ValuesApprovalCommand{
+		RevisionID: next.ID, ExpectedStateVersion: 1, ActorUserID: "approver-1", Authorized: true,
+	})
+	require.NoError(t, err)
+	approved := approvedResult.Revision
+	assert.Equal(t, next.ID, approved.ID)
+	assert.Equal(t, store.ValuesStatusApproved, approved.Status)
+	assert.EqualValues(t, 2, approved.StateVersion)
+	assert.Equal(t, []string{previous.ID}, approvedResult.SupersededRevisionIDs)
+
+	persistedPrevious, err := st.Values().Get(ctx, previous.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.ValuesStatusSuperseded, persistedPrevious.Status)
+}
+
+func TestValuesApprovalRejectsUnauthorizedCommand(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	revision := &store.ValuesRevision{
+		ID: uuid.New().String(), ReleaseDefinitionID: def.ID, Revision: 1,
+		StateVersion: 1, Status: store.ValuesStatusPendingApproval,
+		Values: []byte(`{"key":"value"}`), Digest: "sha256:unauthorized",
+		CreatedByUserID: "creator",
+	}
+	require.NoError(t, st.Values().Create(ctx, revision))
+
+	_, err := st.ValuesApproval().Approve(ctx, store.ValuesApprovalCommand{
+		RevisionID: revision.ID, ExpectedStateVersion: 1, ActorUserID: "approver",
+	})
+	require.ErrorIs(t, err, store.ErrNotAuthorized)
+	persisted, err := st.Values().Get(ctx, revision.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.ValuesStatusPendingApproval, persisted.Status)
+	decisions, err := st.ValuesApprovalEvidence().ListDecisions(ctx, revision.ID)
+	require.NoError(t, err)
+	assert.Empty(t, decisions)
+}
+
+func TestValuesRevisionApproveRejectOptimisticLock(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	approval := &store.ValuesRevision{
+		ID:                  uuid.New().String(),
+		ReleaseDefinitionID: def.ID,
+		Revision:            1,
+		StateVersion:        1,
+		Status:              store.ValuesStatusPendingApproval,
+		Values:              []byte(`{"key":"approve"}`),
+		Digest:              "sha256:approve",
+		CreatedByUserID:     "creator-approve",
+	}
+	rejection := &store.ValuesRevision{
+		ID:                  uuid.New().String(),
+		ReleaseDefinitionID: def.ID,
+		Revision:            2,
+		StateVersion:        1,
+		Status:              store.ValuesStatusDraft,
+		Values:              []byte(`{"key":"reject"}`),
+		Digest:              "sha256:reject",
+		CreatedByUserID:     "creator-reject",
+	}
+	require.NoError(t, st.Values().Create(ctx, approval))
+	require.NoError(t, st.Values().Create(ctx, rejection))
+
+	approvedResult, err := st.ValuesApproval().Approve(ctx, store.ValuesApprovalCommand{
+		RevisionID: approval.ID, ExpectedStateVersion: 1, ActorUserID: "approver-1", Authorized: true,
+	})
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, approvedResult.Revision.StateVersion)
+	_, err = st.ValuesApproval().Approve(ctx, store.ValuesApprovalCommand{
+		RevisionID: approval.ID, ExpectedStateVersion: 1, ActorUserID: "approver-2", Authorized: true,
+	})
+	assert.ErrorIs(t, err, store.ErrOptimisticLock)
+
+	pendingResult, err := st.ValuesApproval().Submit(ctx, store.ValuesApprovalCommand{
+		RevisionID: rejection.ID, ExpectedStateVersion: 1, ActorUserID: "creator-reject", Authorized: true,
+	})
+	require.NoError(t, err)
+	rejectedResult, err := st.ValuesApproval().Reject(ctx, store.ValuesApprovalCommand{
+		RevisionID: rejection.ID, ExpectedStateVersion: pendingResult.Revision.StateVersion,
+		ActorUserID: "rejector-1", Reason: "needs changes", Authorized: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, store.ValuesStatusRejected, rejectedResult.Revision.Status)
+	assert.EqualValues(t, 3, rejectedResult.Revision.StateVersion)
+	_, err = st.ValuesApproval().Reject(ctx, store.ValuesApprovalCommand{
+		RevisionID: rejection.ID, ExpectedStateVersion: pendingResult.Revision.StateVersion,
+		ActorUserID: "rejector-2", Reason: "stale", Authorized: true,
+	})
+	assert.ErrorIs(t, err, store.ErrOptimisticLock)
 }
 
 // ── ReleaseDefinition store tests ───────────────────────────────
@@ -779,4 +938,174 @@ func TestInventoryDefinitionAssociation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	assert.Equal(t, "definition-1", items[0].ReleaseDefinitionID)
+}
+
+func TestInventoryQueryUsesDefaultPageSizeAndSyncLogTimestamp(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	syncedAt := time.Date(2026, time.July, 22, 9, 30, 0, 0, time.UTC)
+
+	for i := range 51 {
+		releaseName := fmt.Sprintf("release-%02d", i)
+		require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+			CustomerID:      "customer-default-page",
+			ClusterID:       "cluster-default-page",
+			Namespace:       "apps",
+			ReleaseName:     releaseName,
+			InventoryStatus: store.InventoryActive,
+			LastSyncID:      "sync-default-page",
+			SnapshotVersion: 9,
+		}))
+	}
+	inserted, err := st.Inventories().CreateSyncLog(ctx, &store.InventorySyncLog{
+		SyncID:          "sync-default-page",
+		CustomerID:      "customer-default-page",
+		ClusterID:       "cluster-default-page",
+		IsFullSnapshot:  true,
+		AcceptedCount:   51,
+		SnapshotVersion: 9,
+		CreatedAt:       syncedAt,
+	})
+	require.NoError(t, err)
+	require.True(t, inserted)
+
+	page, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-default-page",
+		ClusterID:  "cluster-default-page",
+	})
+	require.NoError(t, err)
+	assert.Len(t, page.Items, 50)
+	assert.Equal(t, 51, page.TotalCount)
+	assert.NotEmpty(t, page.NextCursor)
+	assert.Equal(t, syncedAt, page.LastSyncAt)
+
+	next, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-default-page",
+		ClusterID:  "cluster-default-page",
+		Cursor:     page.NextCursor,
+	})
+	require.NoError(t, err)
+	assert.Len(t, next.Items, 1)
+}
+
+func TestInventoryQueryPaginationFilteringAndConsistency(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	baseTime := time.Date(2026, time.July, 22, 8, 0, 0, 0, time.UTC)
+
+	items := []*store.ReleaseInventory{
+		{
+			ReleaseDefinitionID: "definition-active",
+			CustomerID:          "customer-1",
+			ClusterID:           "cluster-1",
+			Namespace:           "apps",
+			ReleaseName:         "api",
+			Chart:               "api",
+			ChartVersion:        "1.0.0",
+			Revision:            3,
+			ValuesDigest:        "sha256:approved",
+			InventoryStatus:     store.InventoryActive,
+			LastSyncID:          "sync-1",
+			SnapshotVersion:     7,
+			CreatedAt:           baseTime,
+		},
+		{
+			ReleaseDefinitionID: "definition-drifted",
+			CustomerID:          "customer-1",
+			ClusterID:           "cluster-1",
+			Namespace:           "other",
+			ReleaseName:         "api",
+			Chart:               "api",
+			ChartVersion:        "1.1.0",
+			Revision:            4,
+			ValuesDigest:        "sha256:actual",
+			InventoryStatus:     store.InventoryActive,
+			LastSyncID:          "sync-1",
+			SnapshotVersion:     7,
+			CreatedAt:           baseTime.Add(time.Second),
+		},
+		{
+			CustomerID:      "customer-1",
+			ClusterID:       "cluster-1",
+			Namespace:       "system",
+			ReleaseName:     "metrics",
+			Chart:           "metrics",
+			ChartVersion:    "2.0.0",
+			Revision:        1,
+			ValuesDigest:    "sha256:metrics",
+			InventoryStatus: store.InventoryMissing,
+			LastSyncID:      "sync-1",
+			SnapshotVersion: 7,
+			CreatedAt:       baseTime.Add(2 * time.Second),
+		},
+	}
+	for _, item := range items {
+		require.NoError(t, st.Inventories().Upsert(ctx, item))
+	}
+
+	activeDefinition := &store.ReleaseDefinition{
+		ID: "definition-active", Name: "active", CustomerID: "customer-1", ClusterID: "cluster-1",
+		Namespace: "apps", ReleaseName: "api", Status: store.DefStatusActive,
+	}
+	driftedDefinition := &store.ReleaseDefinition{
+		ID: "definition-drifted", Name: "drifted", CustomerID: "customer-1", ClusterID: "cluster-1",
+		Namespace: "other", ReleaseName: "api", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, activeDefinition, nil))
+	require.NoError(t, st.Definitions().Create(ctx, driftedDefinition, nil))
+	require.NoError(t, st.Values().Create(ctx, &store.ValuesRevision{
+		ID: "values-active", ReleaseDefinitionID: activeDefinition.ID, Revision: 1,
+		Status: store.ValuesStatusApproved, Values: []byte(`{}`), Digest: "sha256:approved",
+	}))
+	require.NoError(t, st.Values().Create(ctx, &store.ValuesRevision{
+		ID: "values-drifted", ReleaseDefinitionID: driftedDefinition.ID, Revision: 1,
+		Status: store.ValuesStatusApproved, Values: []byte(`{}`), Digest: "sha256:desired",
+	}))
+
+	page, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-1",
+		ClusterID:  "cluster-1",
+		NameSearch: "api",
+		PageSize:   1,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, store.InventoryActive, page.Items[0].InventoryStatus)
+	assert.Equal(t, 2, page.TotalCount)
+	assert.NotEmpty(t, page.NextCursor)
+
+	next, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-1",
+		ClusterID:  "cluster-1",
+		NameSearch: "api",
+		PageSize:   1,
+		Cursor:     page.NextCursor,
+	})
+	require.NoError(t, err)
+	require.Len(t, next.Items, 1)
+	assert.Equal(t, store.InventoryOutOfSync, next.Items[0].InventoryStatus)
+	assert.Empty(t, next.NextCursor)
+
+	missing, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-1",
+		ClusterID:  "cluster-1",
+		Status:     store.InventoryMissing,
+		PageSize:   50,
+	})
+	require.NoError(t, err)
+	require.Len(t, missing.Items, 1)
+	assert.Equal(t, "metrics", missing.Items[0].ReleaseName)
+
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		CustomerID: "customer-1", ClusterID: "cluster-1", Namespace: "apps", ReleaseName: "worker",
+		InventoryStatus: store.InventoryActive, LastSyncID: "sync-2", SnapshotVersion: 8,
+	}))
+	_, err = st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-1",
+		ClusterID:  "cluster-1",
+		NameSearch: "api",
+		PageSize:   1,
+		Cursor:     page.NextCursor,
+	})
+	assert.ErrorIs(t, err, store.ErrInvalidCursor)
 }

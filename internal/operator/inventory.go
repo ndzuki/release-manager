@@ -3,6 +3,7 @@ package operator
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -99,6 +100,11 @@ func (s *InventorySyncer) NotifyOperationComplete(namespace, releaseName, operat
 	}
 }
 
+// SyncNow performs one full snapshot and returns its outcome to the command agent.
+func (s *InventorySyncer) SyncNow(ctx context.Context) error {
+	return s.doSync(ctx, true)
+}
+
 // fullSyncLoop periodically emits full snapshots.
 func (s *InventorySyncer) fullSyncLoop(ctx context.Context) {
 	ticker := time.NewTicker(s.syncInterval)
@@ -115,12 +121,16 @@ func (s *InventorySyncer) fullSyncLoop(ctx context.Context) {
 	}
 
 	// Run the first sync immediately.
-	s.doSync(ctx, true)
+	if err := s.doSync(ctx, true); err != nil {
+		s.logger.Error("initial inventory sync failed", "error", err)
+	}
 
 	for {
 		select {
 		case <-ticker.C:
-			s.doSync(ctx, true)
+			if err := s.doSync(ctx, true); err != nil {
+				s.logger.Error("periodic inventory sync failed", "error", err)
+			}
 		case <-s.stopCh:
 			return
 		case <-ctx.Done():
@@ -144,17 +154,15 @@ func (s *InventorySyncer) targetedUpdateLoop(ctx context.Context) {
 }
 
 // doSync sends a full snapshot to the orchestrator.
-func (s *InventorySyncer) doSync(ctx context.Context, fullSnapshot bool) {
+func (s *InventorySyncer) doSync(ctx context.Context, fullSnapshot bool) error {
 	syncCtx, cancel := context.WithTimeout(ctx, defaultOrchestratorTimeout)
 	defer cancel()
 
 	items, err := s.engine.List(syncCtx, "") // empty namespace = all namespaces
 	if err != nil {
-		s.logger.Error("failed to list releases for inventory sync", "error", err)
-		return
+		return fmt.Errorf("list releases for inventory sync: %w", err)
 	}
 
-	// Convert to proto items
 	pbItems := make([]*orchestratorv1.InventoryItem, 0, len(items))
 	for _, item := range items {
 		pbItems = append(pbItems, &orchestratorv1.InventoryItem{
@@ -169,24 +177,16 @@ func (s *InventorySyncer) doSync(ctx context.Context, fullSnapshot bool) {
 	}
 
 	syncID := uuid.New().String()
-
-	req := &orchestratorv1.SyncInventoryRequest{
+	resp, err := s.orchClient.SyncInventory(syncCtx, connect.NewRequest(&orchestratorv1.SyncInventoryRequest{
 		OperatorId:   s.operatorID,
 		ClusterId:    s.clusterID,
 		CustomerId:   s.customerID,
 		SyncId:       syncID,
 		Items:        pbItems,
 		FullSnapshot: fullSnapshot,
-	}
-
-	resp, err := s.orchClient.SyncInventory(syncCtx, connect.NewRequest(req))
+	}))
 	if err != nil {
-		s.logger.Error("inventory sync failed",
-			"sync_id", syncID,
-			"items", len(pbItems),
-			"error", err,
-		)
-		return
+		return fmt.Errorf("send inventory sync %s: %w", syncID, err)
 	}
 
 	s.logger.Info("inventory sync completed",
@@ -195,6 +195,7 @@ func (s *InventorySyncer) doSync(ctx context.Context, fullSnapshot bool) {
 		"missing", resp.Msg.MissingMarkedCount,
 		"status", resp.Msg.Status,
 	)
+	return nil
 }
 
 // doTargetedUpdate sends a single-release update to the orchestrator.

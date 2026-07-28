@@ -17,6 +17,7 @@ import (
 	"helm.sh/helm/v3/pkg/chartutil"
 	kubefake "helm.sh/helm/v3/pkg/kube/fake"
 	"helm.sh/helm/v3/pkg/registry"
+	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage"
 	"helm.sh/helm/v3/pkg/storage/driver"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -59,6 +60,59 @@ func TestRealEngine_InstallAlreadyExists(t *testing.T) {
 
 	_, err = engine.Install(t.Context(), opts)
 	assert.ErrorIs(t, err, ErrAlreadyExists)
+}
+func TestRealEngine_UpgradeExpectedRevisionConflictDoesNotWrite(t *testing.T) {
+	engine, releases := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	})
+	chartPath := writeTestChart(t)
+	_, err := engine.Install(t.Context(), InstallOptions{
+		Namespace:   "default",
+		ReleaseName: "upgrade-conflict",
+		ChartPath:   chartPath,
+	})
+	require.NoError(t, err)
+
+	_, err = engine.Upgrade(t.Context(), UpgradeOptions{
+		Namespace:        "default",
+		ReleaseName:     "upgrade-conflict",
+		ChartPath:       chartPath,
+		ExpectedRevision: 9,
+	})
+	require.ErrorIs(t, err, ErrConflict)
+
+	stored, getErr := releases.Get("upgrade-conflict", 1)
+	require.NoError(t, getErr)
+	assert.Equal(t, 1, stored.Version)
+}
+
+func TestRealEngine_UpgradeAtomicFailureRestoresRelease(t *testing.T) {
+	kubeClient := &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	}
+	engine, releases := newTestRealEngine(t, kubeClient)
+	chartPath := writeTestChart(t)
+	_, err := engine.Install(t.Context(), InstallOptions{
+		Namespace:   "default",
+		ReleaseName: "upgrade-atomic",
+		ChartPath:   chartPath,
+	})
+	require.NoError(t, err)
+
+	kubeClient.WaitError = errors.New("upgrade hook failed")
+	_, err = engine.Upgrade(t.Context(), UpgradeOptions{
+		Namespace:        "default",
+		ReleaseName:     "upgrade-atomic",
+		ChartPath:       chartPath,
+		ExpectedRevision: 1,
+		Atomic:           true,
+		Timeout:          time.Second,
+	})
+	require.Error(t, err)
+
+	stored, getErr := releases.Get("upgrade-atomic", 1)
+	require.NoError(t, getErr)
+	assert.Equal(t, 1, stored.Version)
 }
 
 func TestRealEngine_InstallAtomicFailureRemovesRelease(t *testing.T) {
@@ -206,3 +260,142 @@ func expiredContext(t *testing.T) context.Context {
 	t.Cleanup(cancel)
 	return ctx
 }
+
+// ── Rollback Tests ──
+
+// AC-063-01: successful rollback creates a new revision.
+func TestRealEngine_Rollback(t *testing.T) {
+	kubeClient := &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	}
+	engine, releases := newTestRealEngine(t, kubeClient)
+	chartPath := writeTestChart(t)
+	ctx := context.Background()
+
+	// Install at revision 1.
+	_, err := engine.Install(ctx, InstallOptions{
+		Namespace:   "default",
+		ReleaseName: "rollback-test",
+		ChartPath:   chartPath,
+	})
+	require.NoError(t, err)
+
+	// Upgrade to revision 2 with different values.
+	_, err = engine.Upgrade(ctx, UpgradeOptions{
+		Namespace:        "default",
+		ReleaseName:     "rollback-test",
+		ChartPath:       chartPath,
+		Values:          map[string]interface{}{"message": "v2"},
+		ExpectedRevision: 1,
+	})
+	require.NoError(t, err)
+
+	// Rollback to revision 1.
+	rel, err := engine.Rollback(ctx, RollbackOptions{
+		Namespace:      "default",
+		ReleaseName:    "rollback-test",
+		TargetRevision: 1,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 3, rel.Revision, "rollback creates a new revision")
+	assert.Equal(t, "deployed", rel.Status)
+
+	// Verify revision 3 exists in storage and is deployed.
+	stored, getErr := releases.Get("rollback-test", 3)
+	require.NoError(t, getErr)
+	assert.Equal(t, release.StatusDeployed, stored.Info.Status)
+	assert.Contains(t, stored.Info.Description, "Rollback to 1")
+}
+
+// AC-063-02: rollback to non-existent revision returns ErrRevisionNotFound.
+func TestRealEngine_RollbackRevisionNotFound(t *testing.T) {
+	engine, _ := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	})
+	chartPath := writeTestChart(t)
+	ctx := context.Background()
+
+	_, err := engine.Install(ctx, InstallOptions{
+		Namespace:   "default",
+		ReleaseName: "rb-rev-nf",
+		ChartPath:   chartPath,
+	})
+	require.NoError(t, err)
+
+	// Revision 99 does not exist in history.
+	_, err = engine.Rollback(ctx, RollbackOptions{
+		Namespace:      "default",
+		ReleaseName:    "rb-rev-nf",
+		TargetRevision: 99,
+	})
+	require.ErrorIs(t, err, ErrRevisionNotFound)
+}
+
+// AC-063-02: rollback for non-existent release returns ErrNotFound.
+func TestRealEngine_RollbackReleaseNotFound(t *testing.T) {
+	engine, _ := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	})
+
+	_, err := engine.Rollback(context.Background(), RollbackOptions{
+		Namespace:      "default",
+		ReleaseName:    "nonexistent",
+		TargetRevision: 1,
+	})
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+// AC-063-03: rollback failure preserves the original release.
+func TestRealEngine_RollbackFailurePreservesRelease(t *testing.T) {
+	kubeClient := &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	}
+	engine, releases := newTestRealEngine(t, kubeClient)
+	chartPath := writeTestChart(t)
+	ctx := context.Background()
+
+	_, err := engine.Install(ctx, InstallOptions{
+		Namespace:   "default",
+		ReleaseName: "rb-fail",
+		ChartPath:   chartPath,
+	})
+	require.NoError(t, err)
+
+	// Upgrade to build history.
+	_, err = engine.Upgrade(ctx, UpgradeOptions{
+		Namespace:        "default",
+		ReleaseName:     "rb-fail",
+		ChartPath:       chartPath,
+		Values:          map[string]interface{}{"message": "v2"},
+		ExpectedRevision: 1,
+	})
+	require.NoError(t, err)
+
+	// Inject a WaitError to cause the rollback to fail during wait.
+	// The rollback will run but when Wait is set it will fail, and Helm SDK
+	// records the failed target and superseded current release.
+	kubeClient.WaitError = errors.New("rollback wait hook failed")
+
+	_, err = engine.Rollback(ctx, RollbackOptions{
+		Namespace:      "default",
+		ReleaseName:    "rb-fail",
+		TargetRevision: 1,
+		Timeout:        time.Second,
+	})
+	require.Error(t, err)
+
+	// Verify original release (revision 2) still exists.
+	stored, getErr := releases.Get("rb-fail", 2)
+	require.NoError(t, getErr)
+	// After Helm SDK rollback Wait failure, original release remains deployed
+	// (the Helm SDK only supersedes on Update failure, not Wait failure).
+	assert.Equal(t, release.StatusDeployed, stored.Info.Status,
+		"original release should remain deployed after failed rollback")
+
+	// Verify the failed rollback revision (3) was created but is failed.
+	failedRel, getErr2 := releases.Get("rb-fail", 3)
+	require.NoError(t, getErr2)
+	assert.Equal(t, release.StatusFailed, failedRel.Info.Status,
+		"rollback target should be failed")
+}
+

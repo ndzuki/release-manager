@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -170,6 +172,57 @@ func TestRollbackRelease_ReleaseBusy(t *testing.T) {
 	assert.Contains(t, err.Error(), "release_busy")
 }
 
+func TestRollbackRelease_ConcurrentOnlyOneAccepted(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	const requests = 8
+	errorsCh := make(chan error, requests)
+	for i := range requests {
+		go func(i int) {
+			_, err := svc.RollbackRelease(context.Background(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
+				ReleaseDefinitionId:     "def-001",
+				TargetRevision:          1,
+				ExpectedCurrentRevision: 3,
+				Reason:                  "concurrent rollback",
+				IdempotencyKey:          fmt.Sprintf("idem-rb-concurrent-%d", i),
+				Actor: &commonv1.ActorContext{
+					UserId:       "user-001",
+					Organization: "org-001",
+				},
+			}))
+			errorsCh <- err
+		}(i)
+	}
+
+	accepted := 0
+	busy := 0
+	for range requests {
+		err := <-errorsCh
+		switch {
+		case err == nil:
+			accepted++
+		case connect.CodeOf(err) == connect.CodeFailedPrecondition && strings.Contains(err.Error(), "release_busy"):
+			busy++
+		default:
+			t.Fatalf("unexpected concurrent rollback error: %v", err)
+		}
+	}
+	assert.Equal(t, 1, accepted)
+	assert.Equal(t, requests-1, busy)
+
+	ops, err := st.Operations().List(context.Background(), "def-001")
+	require.NoError(t, err)
+	nonTerminal := 0
+	for _, op := range ops {
+		if !op.Status.IsTerminal() {
+			nonTerminal++
+		}
+	}
+	assert.Equal(t, 1, nonTerminal)
+}
+
 func TestRollbackRelease_MissingReason(t *testing.T) {
 	svc, _, cleanup := setupService(t)
 	defer cleanup()
@@ -247,7 +300,7 @@ func TestRollbackRelease_DefinitionNotActive(t *testing.T) {
 		Status:      store.DefStatusDraft,
 		CreatedBy:   "test",
 	}
-	require.NoError(t, st.Definitions().Create(context.Background(), def))
+	require.NoError(t, st.Definitions().Create(context.Background(), def, nil))
 
 	_, err := svc.RollbackRelease(context.Background(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
 		ReleaseDefinitionId:     "def-draft",

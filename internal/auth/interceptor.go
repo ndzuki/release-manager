@@ -11,6 +11,8 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
+	"github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -19,7 +21,25 @@ import (
 // 2. Verifies the user is active and still has a non-revoked persistent session
 // 3. Injects user ID into context
 // 4. Enforces Casbin RBAC for protected procedures
-func NewAuthInterceptor(jwt *JWTManager, st store.Store, enforcer *Enforcer, publicMethods map[string]bool, logger *slog.Logger) connect.UnaryInterceptorFunc {
+//
+//nolint:gocyclo // Authentication, session validation, and authorization precedence are explicit policy gates.
+func NewAuthInterceptor(
+	jwt *JWTManager,
+	st store.Store,
+	enforcer *Enforcer,
+	publicMethods map[string]bool,
+	logger *slog.Logger,
+) connect.UnaryInterceptorFunc {
+	if st == nil && enforcer != nil {
+		st = enforcer.store
+	}
+	if publicMethods == nil {
+		publicMethods = map[string]bool{}
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	interceptor := func(next connect.UnaryFunc) connect.UnaryFunc {
 		return connect.UnaryFunc(func(
 			ctx context.Context,
@@ -63,15 +83,17 @@ func NewAuthInterceptor(jwt *JWTManager, st store.Store, enforcer *Enforcer, pub
 				)
 				return nil, authorizationConnectError(err, enforcer.PolicyVersion())
 			}
-			if err := enforcer.Enforce(claims.UserID, domain, object, action); err != nil {
-				logger.Warn(
-					"access denied",
-					"user_id", claims.UserID,
-					"organization_id", domain,
-					"procedure", procedure,
-					"reason_code", authorizationReason(err),
-				)
-				return nil, authorizationConnectError(err, enforcer.PolicyVersion())
+			if !usesHandlerAuthorization(procedure) {
+				if err := enforcer.Enforce(claims.UserID, domain, object, action); err != nil {
+					logger.Warn(
+						"access denied",
+						"user_id", claims.UserID,
+						"organization_id", domain,
+						"procedure", procedure,
+						"reason_code", authorizationReason(err),
+					)
+					return nil, authorizationConnectError(err, enforcer.PolicyVersion())
+				}
 			}
 
 			user, err := st.Users().Get(ctx, claims.UserID)
@@ -91,10 +113,24 @@ func NewAuthInterceptor(jwt *JWTManager, st store.Store, enforcer *Enforcer, pub
 			ctx = context.WithValue(ctx, userIDKey, claims.UserID)
 			ctx = context.WithValue(ctx, rolesKey, claims.Roles)
 			ctx = context.WithValue(ctx, orgIDKey, domain)
+			ctx = authctx.WithActor(ctx, authctx.Actor{
+				UserID: claims.UserID, OrganizationID: domain, Roles: claims.Roles,
+			})
 			return next(ctx, req)
 		})
 	}
 	return interceptor
+}
+
+// Actor is the authenticated identity injected by NewAuthInterceptor.
+type Actor = authctx.Actor
+
+// ActorFromContext returns the authenticated actor snapshot.
+func ActorFromContext(ctx context.Context) (Actor, bool) { return authctx.ActorFromContext(ctx) }
+
+// ContextWithActor injects an authenticated actor for in-process callers and tests.
+func ContextWithActor(ctx context.Context, actor Actor) context.Context {
+	return authctx.WithActor(ctx, actor)
 }
 
 func hasActiveSession(ctx context.Context, sessions store.AuthSessionStore, userID string) (bool, error) {
@@ -178,10 +214,28 @@ func mapMethodToAction(method string) string {
 	case strings.HasPrefix(method, "Create"), strings.HasPrefix(method, "Add"),
 		strings.HasPrefix(method, "Update"), strings.HasPrefix(method, "Disable"),
 		strings.HasPrefix(method, "Remove"), strings.HasPrefix(method, "Revoke"),
-		strings.HasPrefix(method, "Delete"), strings.HasPrefix(method, "Change"):
+		strings.HasPrefix(method, "Delete"), strings.HasPrefix(method, "Change"),
+		strings.HasPrefix(method, "Emergency"), strings.HasPrefix(method, "Publish"),
+		strings.HasPrefix(method, "Rollback"), strings.HasPrefix(method, "Configure"),
+		strings.HasPrefix(method, "Sync"), strings.HasPrefix(method, "Logout"),
+		strings.HasPrefix(method, "Cancel"),
+		strings.HasPrefix(method, "Refresh"), strings.HasPrefix(method, "Authenticate"),
+		strings.HasPrefix(method, "Submit"), strings.HasPrefix(method, "Approve"),
+		strings.HasPrefix(method, "Reject"):
 		return "write"
 	default:
 		return ""
+	}
+}
+
+func usesHandlerAuthorization(procedure string) bool {
+	switch procedure {
+	case orchestratorv1connect.OrchestratorServiceSubmitValuesRevisionProcedure,
+		orchestratorv1connect.OrchestratorServiceApproveValuesRevisionProcedure,
+		orchestratorv1connect.OrchestratorServiceRejectValuesRevisionProcedure:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	authctx "github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 	"github.com/ndzuki/release-manager/internal/trust"
@@ -25,7 +28,7 @@ func setupService(t *testing.T) (*Service, store.Store, func()) {
 	require.NoError(t, err)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	verifier := trust.NewStubVerifier(st.Verifications(), logger)
+	verifier := trust.NewStubVerifier(st.Verifications(), nil, logger)
 	svc := NewService(st, verifier, "staging", nil, logger)
 
 	return svc, st, func() { st.Close() }
@@ -44,12 +47,22 @@ func seedDefinition(t *testing.T, st store.Store) {
 
 	org := &store.Organization{ID: "org-001", Name: "Test Organization"}
 	require.NoError(t, st.Organizations().Create(context.Background(), org))
+
+	require.NoError(t, st.Users().Create(context.Background(), &store.User{
+		ID: "user-001", Username: "user-001", Status: store.UserActive,
+	}))
+	require.NoError(t, st.Users().Create(context.Background(), &store.User{
+		ID: "user-viewer", Username: "user-viewer", Status: store.UserActive,
+	}))
+
 	binding := &store.OrgCustomerBinding{
-		ID:         "binding-001",
-		OrgID:      org.ID,
-		CustomerID: cust.ID,
+		ID: "binding-001", OrgID: org.ID, CustomerID: cust.ID,
 	}
 	require.NoError(t, st.Bindings().Create(context.Background(), binding))
+
+	require.NoError(t, st.OrgMembers().Create(context.Background(), &store.OrganizationMember{
+		OrgID: org.ID, UserID: "user-001", Role: store.RoleDeployer,
+	}))
 
 	def := &store.ReleaseDefinition{
 		ID:          "def-001",
@@ -87,16 +100,28 @@ func seedValuesRevision(
 ) {
 	t.Helper()
 	now := time.Now().UTC()
-	require.NoError(t, st.Values().Create(context.Background(), &store.ValuesRevision{
+	initialStatus := status
+	if status == store.ValuesStatusApproved {
+		initialStatus = store.ValuesStatusPendingApproval
+	}
+	revision := &store.ValuesRevision{
 		ID:                  id,
 		ReleaseDefinitionID: definitionID,
 		Revision:            1,
-		Status:              status,
+		StateVersion:        1,
+		Status:              initialStatus,
 		Values:              []byte(`{"replicas":2}`),
 		Digest:              "sha256:test",
 		CreatedAt:           now,
 		UpdatedAt:           now,
-	}))
+	}
+	require.NoError(t, st.Values().Create(context.Background(), revision))
+	if status == store.ValuesStatusApproved {
+		_, err := st.ValuesApproval().Approve(context.Background(), store.ValuesApprovalCommand{
+			RevisionID: id, ExpectedStateVersion: 1, ActorUserID: "test-approver", Authorized: true,
+		})
+		require.NoError(t, err)
+	}
 }
 
 func upgradeRequest(valuesRevisionID string) *orchestratorv1.CreateOperationRequest {
@@ -144,7 +169,7 @@ func TestCreateOperation_RejectedForRevokedCustomerBinding(t *testing.T) {
 
 	binding, err := st.Bindings().GetByOrgAndCustomer(context.Background(), "org-001", "cust-001")
 	require.NoError(t, err)
-	require.NoError(t, st.Bindings().SetStatus(context.Background(), binding, store.BindingRevoked))
+	require.NoError(t, st.Bindings().SetStatus(context.Background(), binding.ID, store.BindingRevoked))
 
 	_, err = svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INSTALL",
@@ -224,26 +249,24 @@ func TestCreateOperation_ReleaseBusy(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 
-	_, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
-		OperationType:       "INSTALL",
-		BundleId:            "bundle-001",
-		ReleaseDefinitionId: "def-001",
-		ValuesRevisionId:    "vr-001",
+	require.NoError(t, st.Operations().Create(context.Background(), &store.Operation{
+		ID:                  "op-busy",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: "def-001",
 		IdempotencyKey:      "idem-002",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
 	}))
-	require.NoError(t, err)
+
+	seedValuesRevision(t, st, "vr-002", "def-001", store.ValuesStatusApproved)
 
 	// Second request with different idempotency key -> release_busy
-	_, err = svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
-		OperationType:       "UPGRADE",
-		BundleId:            "bundle-002",
-		ReleaseDefinitionId: "def-001",
-		ValuesRevisionId:    "vr-002",
-		IdempotencyKey:      "idem-003",
+	_, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:           "UPGRADE",
+		BundleId:                "bundle-002",
+		ReleaseDefinitionId:     "def-001",
+		ValuesRevisionId:        "vr-002",
+		ExpectedCurrentRevision: 1,
+		IdempotencyKey:          "idem-003",
 		Actor: &commonv1.ActorContext{
 			UserId:       "user-001",
 			Organization: "org-001",
@@ -252,6 +275,53 @@ func TestCreateOperation_ReleaseBusy(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "release_busy")
+}
+
+func TestCreateOperation_ConcurrentUpgradeOnlyOneAccepted(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedValuesRevision(t, st, "vr-concurrent", "def-001", store.ValuesStatusApproved)
+
+	const requests = 8
+	results := make(chan error, requests)
+	for i := range requests {
+		go func(i int) {
+			req := upgradeRequest("vr-concurrent")
+			req.IdempotencyKey = fmt.Sprintf("idem-concurrent-%d", i)
+			_, err := svc.CreateOperation(context.Background(), connect.NewRequest(req))
+			results <- err
+		}(i)
+	}
+
+	accepted := 0
+	busy := 0
+	for range requests {
+		err := <-results
+		switch {
+		case err == nil:
+			accepted++
+		case connect.CodeOf(err) == connect.CodeFailedPrecondition && strings.Contains(err.Error(), "release_busy"):
+			busy++
+		default:
+			t.Logf("unexpected error: %v", err)
+		}
+	}
+	t.Logf("concurrent upgrade: accepted=%d busy=%d", accepted, busy)
+
+	// At least 1 must be accepted; at most 1 operation is non-terminal.
+	assert.GreaterOrEqual(t, accepted, 1, "at least one concurrent request must be accepted")
+
+	ops, err := st.Operations().List(context.Background(), "def-001")
+	require.NoError(t, err)
+
+	nonTerminal := 0
+	for _, op := range ops {
+		if !op.Status.IsTerminal() {
+			nonTerminal++
+		}
+	}
+	assert.Equal(t, 1, nonTerminal, "only one concurrent operation can be non-terminal")
 }
 
 func TestCreateOperation_UpgradeValidation(t *testing.T) {
@@ -503,4 +573,432 @@ func TestCreateOperation_InstallRequiresApprovedRevision(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "revision_not_approved")
+}
+
+// --- GetOperation tests ---
+
+func TestGetOperation_Success(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	require.NoError(t, st.Operations().Create(context.Background(), &store.Operation{
+		ID:                  "op-get-001",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: "def-001",
+		IdempotencyKey:      "get-001-key",
+		RequestHash:         "get-001-hash",
+		StateVersion:        3,
+		BundleID:            "bundle-get",
+		ValuesRevisionID:    "vr-001",
+		ExpectedRevision:    5,
+		ValuesPatch:         []byte(`{"secret":"x"}`),
+		Actor:               store.ActorContext{UserID: "user-001", Organization: "org-001"},
+		CreatedAt:           time.Now().UTC(),
+		UpdatedAt:           time.Now().UTC(),
+	}))
+
+	ctx := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-001", OrganizationID: "org-001", Roles: []string{string(store.RoleDeployer)},
+	})
+	resp, err := svc.GetOperation(ctx, connect.NewRequest(&orchestratorv1.GetOperationRequest{
+		OperationId: "op-get-001",
+	}))
+	require.NoError(t, err)
+	op := resp.Msg.Operation
+	assert.Equal(t, "op-get-001", op.OperationId)
+	assert.Equal(t, "INSTALL", op.OperationType)
+	assert.Equal(t, int64(3), op.StateVersion)
+	assert.Equal(t, "user-001", op.Actor.UserId)
+	assert.NotContains(t, op.String(), "get-001-key")
+	assert.NotContains(t, op.String(), "get-001-hash")
+	assert.NotContains(t, op.String(), "secret")
+}
+
+func TestGetOperation_NotFound(t *testing.T) {
+	svc, _, cleanup := setupService(t)
+	defer cleanup()
+
+	ctx := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-001", OrganizationID: "org-001", Roles: []string{string(store.RoleViewer)},
+	})
+	_, err := svc.GetOperation(ctx, connect.NewRequest(&orchestratorv1.GetOperationRequest{
+		OperationId: "nonexistent",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+}
+
+func TestGetOperation_CrossOrganizationDenied(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	require.NoError(t, st.Operations().Create(context.Background(), &store.Operation{
+		ID: "op-cross-org", OperationType: store.OperationInstall,
+		Status: store.StatusRunning, ReleaseDefinitionID: "def-001",
+		IdempotencyKey: "op-cross-org-key", RequestHash: "op-cross-org-hash", StateVersion: 1,
+	}))
+	require.NoError(t, st.Organizations().Create(context.Background(), &store.Organization{
+		ID: "org-other", Name: "Other Organization",
+	}))
+	require.NoError(t, st.Users().Create(context.Background(), &store.User{
+		ID: "user-other", Username: "user-other", Status: store.UserActive,
+	}))
+	require.NoError(t, st.OrgMembers().Create(context.Background(), &store.OrganizationMember{
+		OrgID: "org-other", UserID: "user-other", Role: store.RoleViewer,
+	}))
+
+	ctx := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-other", OrganizationID: "org-other", Roles: []string{string(store.RoleViewer)},
+	})
+	_, err := svc.GetOperation(ctx, connect.NewRequest(&orchestratorv1.GetOperationRequest{
+		OperationId: "op-cross-org",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+}
+
+func TestGetOperation_TerminalAtPresentAfterTransition(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	require.NoError(t, st.Operations().Create(context.Background(), &store.Operation{
+		ID: "op-term-001", OperationType: store.OperationInstall,
+		Status: store.StatusRunning, ReleaseDefinitionID: "def-001",
+		IdempotencyKey: "term-001-key", RequestHash: "term-001-hash", StateVersion: 1,
+	}))
+
+	_, err := st.Operations().Transition(context.Background(), "op-term-001", store.StatusSucceeded, 1, "")
+	require.NoError(t, err)
+
+	ctx := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-001", OrganizationID: "org-001", Roles: []string{string(store.RoleViewer)},
+	})
+	resp, err := svc.GetOperation(ctx, connect.NewRequest(&orchestratorv1.GetOperationRequest{
+		OperationId: "op-term-001",
+	}))
+	require.NoError(t, err)
+	assert.NotNil(t, resp.Msg.Operation.TerminalAt)
+}
+
+// --- CancelOperation tests ---
+
+func deployerCtx() context.Context {
+	return authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-001", OrganizationID: "org-001", Roles: []string{string(store.RoleDeployer)},
+	})
+}
+
+func seedCancelableOperation(t *testing.T, st store.Store, id string, status store.OperationStatus) {
+	t.Helper()
+	require.NoError(t, st.Operations().Create(context.Background(), &store.Operation{
+		ID: id, OperationType: store.OperationInstall, Status: status,
+		ReleaseDefinitionID: "def-001",
+		IdempotencyKey:      id + "-key", RequestHash: id + "-hash", StateVersion: 1,
+	}))
+}
+
+func TestCancelOperation_SuccessPending(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedCancelableOperation(t, st, "op-pending", store.StatusPending)
+
+	resp, err := svc.CancelOperation(deployerCtx(), connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: "op-pending", Reason: "no longer needed",
+		ExpectedStateVersion: 1, IdempotencyKey: "cancel-pending",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLED, resp.Msg.Operation.State)
+	assert.NotEmpty(t, resp.Msg.RequestId)
+}
+
+func TestCancelOperation_SuccessRunningToCancelling(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedCancelableOperation(t, st, "op-running", store.StatusRunning)
+
+	resp, err := svc.CancelOperation(deployerCtx(), connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: "op-running", Reason: "must rollback",
+		ExpectedStateVersion: 1, IdempotencyKey: "cancel-running",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLING, resp.Msg.Operation.State)
+	assert.Equal(t, int64(2), resp.Msg.Operation.StateVersion)
+}
+
+func TestCancelOperation_ConcurrentOnlyOneTransition(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedCancelableOperation(t, st, "op-concurrent-cancel", store.StatusRunning)
+
+	const requests = 8
+	errorsCh := make(chan error, requests)
+	for i := range requests {
+		go func(i int) {
+			_, err := svc.CancelOperation(deployerCtx(), connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+				OperationId: "op-concurrent-cancel", Reason: "concurrent cancel",
+				ExpectedStateVersion: 1, IdempotencyKey: fmt.Sprintf("cancel-concurrent-%d", i),
+			}))
+			errorsCh <- err
+		}(i)
+	}
+
+	accepted := 0
+	conflicts := 0
+	for range requests {
+		err := <-errorsCh
+		switch {
+		case err == nil:
+			accepted++
+		case connect.CodeOf(err) == connect.CodeAborted || connect.CodeOf(err) == connect.CodeFailedPrecondition:
+			conflicts++
+		default:
+			t.Fatalf("unexpected concurrent cancel error: %v", err)
+		}
+	}
+	assert.Equal(t, 1, accepted)
+	assert.Equal(t, requests-1, conflicts)
+
+	persisted, err := st.Operations().Get(context.Background(), "op-concurrent-cancel")
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusCancelling, persisted.Status)
+	assert.Equal(t, 2, persisted.StateVersion)
+}
+
+func TestCancelOperation_CancellingRejectsNewIntent(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedCancelableOperation(t, st, "op-cancelling", store.StatusRunning)
+
+	first, err := svc.CancelOperation(deployerCtx(), connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: "op-cancelling", Reason: "stop rollout",
+		ExpectedStateVersion: 1, IdempotencyKey: "cancel-cancelling-first",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLING, first.Msg.Operation.State)
+
+	_, err = svc.CancelOperation(deployerCtx(), connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: "op-cancelling", Reason: "second cancellation intent",
+		ExpectedStateVersion: 2, IdempotencyKey: "cancel-cancelling-second",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "cancel_not_allowed")
+
+	persisted, err := st.Operations().Get(context.Background(), "op-cancelling")
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusCancelling, persisted.Status)
+	assert.Equal(t, 2, persisted.StateVersion)
+}
+
+func TestCancelOperation_ReasonUsesUnicodeCharacters(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedCancelableOperation(t, st, "op-unicode-reason", store.StatusPending)
+
+	resp, err := svc.CancelOperation(deployerCtx(), connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: "op-unicode-reason", Reason: strings.Repeat("界", 500),
+		ExpectedStateVersion: 1, IdempotencyKey: "cancel-unicode-reason",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLED, resp.Msg.Operation.State)
+}
+
+func TestCancelOperation_RunningIdempotencyReplay(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedCancelableOperation(t, st, "op-running-idem", store.StatusRunning)
+
+	request := &orchestratorv1.CancelOperationRequest{
+		OperationId: "op-running-idem", Reason: "stop rollout",
+		ExpectedStateVersion: 1, IdempotencyKey: "cancel-running-idem",
+	}
+	first, err := svc.CancelOperation(deployerCtx(), connect.NewRequest(request))
+	require.NoError(t, err)
+
+	replayed, err := svc.CancelOperation(deployerCtx(), connect.NewRequest(request))
+	require.NoError(t, err)
+	assert.Equal(t, first.Msg.RequestId, replayed.Msg.RequestId)
+	assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLING, replayed.Msg.Operation.State)
+	assert.Equal(t, int64(2), replayed.Msg.Operation.StateVersion)
+}
+
+func TestCancelOperation_TerminalRejected(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedCancelableOperation(t, st, "op-term", store.StatusRunning)
+	updated, err := st.Operations().Transition(context.Background(), "op-term", store.StatusSucceeded, 1, "")
+	require.NoError(t, err)
+
+	_, err = svc.CancelOperation(deployerCtx(), connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: "op-term", Reason: "trying to cancel",
+		ExpectedStateVersion: int64(updated.StateVersion), IdempotencyKey: "cancel-term",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "cancel_not_allowed")
+}
+
+func TestCancelOperation_CASConflict(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedCancelableOperation(t, st, "op-cas", store.StatusRunning)
+
+	_, err := svc.CancelOperation(deployerCtx(), connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: "op-cas", Reason: "cancel cas test",
+		ExpectedStateVersion: 99, IdempotencyKey: "cancel-cas",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAborted, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "optimistic_lock_conflict")
+}
+
+func TestCancelOperation_Idempotency(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedCancelableOperation(t, st, "op-idem", store.StatusPending)
+
+	ctx := deployerCtx()
+	resp1, err := svc.CancelOperation(ctx, connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: "op-idem", Reason: "cancel idempotency",
+		ExpectedStateVersion: 1, IdempotencyKey: "cancel-idem-key",
+	}))
+	require.NoError(t, err)
+
+	resp2, err := svc.CancelOperation(ctx, connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: "op-idem", Reason: "cancel idempotency",
+		ExpectedStateVersion: 1, IdempotencyKey: "cancel-idem-key",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, resp1.Msg.Operation.State, resp2.Msg.Operation.State)
+	assert.Equal(t, resp1.Msg.RequestId, resp2.Msg.RequestId)
+}
+
+func TestCancelOperation_IdempotencyConflict(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedCancelableOperation(t, st, "op-conflict", store.StatusPending)
+
+	ctx := deployerCtx()
+	_, err := svc.CancelOperation(ctx, connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: "op-conflict", Reason: "first reason",
+		ExpectedStateVersion: 1, IdempotencyKey: "cancel-conflict-key",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.CancelOperation(ctx, connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: "op-conflict", Reason: "different reason",
+		ExpectedStateVersion: 1, IdempotencyKey: "cancel-conflict-key",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "idempotency_conflict")
+}
+
+func TestCancelOperation_Validation(t *testing.T) {
+	svc, _, cleanup := setupService(t)
+	defer cleanup()
+	ctx := deployerCtx()
+
+	tests := []struct {
+		name    string
+		req     *orchestratorv1.CancelOperationRequest
+		wantErr bool
+		wantMsg string
+	}{
+		{
+			name:    "missing idempotency_key",
+			req:     &orchestratorv1.CancelOperationRequest{OperationId: "op", Reason: "test", ExpectedStateVersion: 1},
+			wantErr: true, wantMsg: "idempotency",
+		},
+		{
+			name:    "missing operation_id",
+			req:     &orchestratorv1.CancelOperationRequest{Reason: "test", ExpectedStateVersion: 1, IdempotencyKey: "k1"},
+			wantErr: true, wantMsg: "operation_id",
+		},
+		{
+			name:    "missing reason",
+			req:     &orchestratorv1.CancelOperationRequest{OperationId: "op", ExpectedStateVersion: 1, IdempotencyKey: "k2"},
+			wantErr: true, wantMsg: "reason",
+		},
+		{
+			name:    "blank reason",
+			req:     &orchestratorv1.CancelOperationRequest{OperationId: "op", Reason: "   ", ExpectedStateVersion: 1, IdempotencyKey: "k3"},
+			wantErr: true, wantMsg: "reason",
+		},
+		{
+			name:    "invalid expected_state_version",
+			req:     &orchestratorv1.CancelOperationRequest{OperationId: "op", Reason: "test", ExpectedStateVersion: 0, IdempotencyKey: "k4"},
+			wantErr: true, wantMsg: "expected_state_version",
+		},
+		{
+			name:    "reason too long",
+			req:     &orchestratorv1.CancelOperationRequest{OperationId: "op", Reason: strings.Repeat("x", 501), ExpectedStateVersion: 1, IdempotencyKey: "k5"},
+			wantErr: true, wantMsg: "exceeds 500",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := svc.CancelOperation(ctx, connect.NewRequest(tt.req))
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantMsg)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestCancelOperation_ViewerDenied(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedCancelableOperation(t, st, "op-viewer", store.StatusPending)
+	require.NoError(t, st.OrgMembers().Create(context.Background(), &store.OrganizationMember{
+		OrgID: "org-001", UserID: "user-viewer", Role: store.RoleViewer,
+	}))
+
+	ctx := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-viewer", OrganizationID: "org-001", Roles: []string{string(store.RoleViewer)},
+	})
+	_, err := svc.CancelOperation(ctx, connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: "op-viewer", Reason: "try cancel",
+		ExpectedStateVersion: 1, IdempotencyKey: "cancel-viewer",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "role_insufficient")
+}
+
+func TestCancelOperation_PreflightLifecycleNullOnMissingLifecycle(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedCancelableOperation(t, st, "op-no-pl", store.StatusPending)
+
+	resp, err := svc.CancelOperation(deployerCtx(), connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: "op-no-pl", Reason: "cancel before preflight",
+		ExpectedStateVersion: 1, IdempotencyKey: "cancel-no-pl",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLED, resp.Msg.Operation.State)
+	assert.NotNil(t, resp.Msg.Operation.TerminalAt)
+
+	op, err := st.Operations().Get(context.Background(), "op-no-pl")
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusCancelled, op.Status)
+	assert.NotNil(t, op.TerminalAt)
 }
