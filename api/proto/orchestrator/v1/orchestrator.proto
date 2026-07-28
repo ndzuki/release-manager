@@ -123,6 +123,10 @@ message CreateReleaseDefinitionRequest {
   string chart_name = 5;
   bool enabled = 6;
   common.v1.ActorContext actor = 7;
+  bool hpa_managed = 8;
+  int32 max_emergency_replicas = 9;
+  repeated ApprovedAnnotationKey approved_annotation_keys = 10;
+  repeated PromotionMapping promotion_mappings = 11;
 }
 
 message CreateReleaseDefinitionResponse {
@@ -153,6 +157,10 @@ message UpdateReleaseDefinitionRequest {
   string release_name = 3;
   string chart_name = 4;
   int64 expected_version = 5;
+  optional bool hpa_managed = 6;
+  optional int32 max_emergency_replicas = 7;
+  repeated ApprovedAnnotationKey approved_annotation_keys = 8;
+  repeated PromotionMapping promotion_mappings = 9;
 }
 
 message UpdateReleaseDefinitionResponse {
@@ -418,55 +426,40 @@ message TriggerInventorySyncResponse {
   string sync_request_id = 1;
 }
 service OrchestratorService {
-  // Release pipeline
   rpc CreateOperation(CreateOperationRequest) returns (CreateOperationResponse);
   rpc PublishRelease(PublishReleaseRequest) returns (PublishReleaseResponse);
   rpc RollbackRelease(RollbackReleaseRequest) returns (RollbackReleaseResponse);
   rpc GetOperation(GetOperationRequest) returns (GetOperationResponse);
   rpc CancelOperation(CancelOperationRequest) returns (CancelOperationResponse);
-
-  // Values revision approval workflow
   rpc SubmitValuesRevision(SubmitValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
   rpc ApproveValuesRevision(ApproveValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
   rpc RejectValuesRevision(RejectValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
-
-  // Release definition management
   rpc CreateReleaseDefinition(CreateReleaseDefinitionRequest) returns (CreateReleaseDefinitionResponse);
   rpc GetReleaseDefinition(GetReleaseDefinitionRequest) returns (GetReleaseDefinitionResponse);
   rpc ListReleaseDefinitions(ListReleaseDefinitionsRequest) returns (ListReleaseDefinitionsResponse);
   rpc UpdateReleaseDefinition(UpdateReleaseDefinitionRequest) returns (UpdateReleaseDefinitionResponse);
   rpc DisableReleaseDefinition(DisableReleaseDefinitionRequest) returns (DisableReleaseDefinitionResponse);
-
-  // Customer management
   rpc CreateCustomer(CreateCustomerRequest) returns (CreateCustomerResponse);
   rpc GetCustomer(GetCustomerRequest) returns (GetCustomerResponse);
   rpc ListCustomers(ListCustomersRequest) returns (ListCustomersResponse);
   rpc UpdateCustomer(UpdateCustomerRequest) returns (UpdateCustomerResponse);
   rpc DisableCustomer(DisableCustomerRequest) returns (DisableCustomerResponse);
-
-  // Cluster management
   rpc CreateCluster(CreateClusterRequest) returns (CreateClusterResponse);
   rpc UpdateCluster(UpdateClusterRequest) returns (UpdateClusterResponse);
   rpc GetCluster(GetClusterRequest) returns (GetClusterResponse);
   rpc ListClusters(ListClustersRequest) returns (ListClustersResponse);
   rpc DisableCluster(DisableClusterRequest) returns (DisableClusterResponse);
-
-  // Operator enrollment
   rpc CreateEnrollmentToken(CreateEnrollmentTokenRequest) returns (CreateEnrollmentTokenResponse);
-
-  // Emergency change (REQ-032)
   rpc EmergencyChange(EmergencyChangeRequest) returns (EmergencyChangeResponse);
-
-  // Cluster artifact routing (REQ-014)
+  rpc ListEmergencyTargets(ListEmergencyTargetsRequest) returns (ListEmergencyTargetsResponse);
+  rpc CheckEmergencyConflict(CheckEmergencyConflictRequest) returns (CheckEmergencyConflictResponse);
+  rpc ListCandidateArtifacts(ListCandidateArtifactsRequest) returns (ListCandidateArtifactsResponse);
+  rpc ListConvergenceTasks(ListConvergenceTasksRequest) returns (ListConvergenceTasksResponse);
   rpc ConfigureClusterRoute(ConfigureClusterRouteRequest) returns (ConfigureClusterRouteResponse);
   rpc GetClusterRoutes(GetClusterRoutesRequest) returns (GetClusterRoutesResponse);
   rpc DeleteClusterRoute(DeleteClusterRouteRequest) returns (DeleteClusterRouteResponse);
-
-  // Release inventory query and manual sync (REQ-054)
   rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
   rpc TriggerInventorySync(TriggerInventorySyncRequest) returns (TriggerInventorySyncResponse);
-
-  // Inventory sync (REQ-017)
   rpc SyncInventory(SyncInventoryRequest) returns (SyncInventoryResponse);
 }
 
@@ -491,20 +484,142 @@ enum EmergencyConvergence {
   EMERGENCY_CONVERGENCE_REVERT_ON_NEXT_RECONCILE = 2;
 }
 
+message ApprovedAnnotationKey {
+  string key = 1;
+  string scope = 2;
+  string promotion_values_path = 3;
+}
+
+message PromotionMapping {
+  string workload_kind = 1;
+  string workload_name = 2;
+  string container = 3;
+  string field = 4;
+  string values_path = 5;
+}
+
+message WorkloadRef {
+  string kind = 1;
+  string name = 2;
+  string namespace = 3;
+  string uid = 4;
+}
+
+message SetContainerImage {
+  string container = 1;
+  string artifact_id = 2;
+}
+
+message SetReplicas {
+  int32 replicas = 1;
+}
+
+message SetApprovedAnnotations {
+  repeated AnnotationEntry entries = 1;
+}
+
+message AnnotationEntry {
+  string key = 1;
+  string value = 2;
+}
+
+message ListEmergencyTargetsRequest {
+  string release_definition_id = 1;
+}
+
+message ListEmergencyTargetsResponse {
+  repeated EmergencyTarget targets = 1;
+}
+
+message EmergencyTarget {
+  WorkloadRef workload_ref = 1;
+  repeated string containers = 2;
+  repeated EmergencyAction supported_operations = 3;
+  repeated PromotionMapping promotions = 4;
+  map<string, string> current_image_refs = 5;
+  int32 current_replicas = 6;
+  map<string, string> current_annotations = 7;
+  bool hpa_managed = 8;
+  int32 max_emergency_replicas = 9;
+}
+
+message CheckEmergencyConflictRequest {
+  string release_definition_id = 1;
+}
+
+message CheckEmergencyConflictResponse {
+  bool has_conflict = 1;
+  RunningOperationDetail running_operation = 2;
+}
+
+message RunningOperationDetail {
+  string operation_id = 1;
+  string type = 2;
+  string status = 3;
+  google.protobuf.Timestamp started_at = 4;
+}
+
+message ListCandidateArtifactsRequest {
+  string organization_id = 1;
+  string release_definition_id = 2;
+}
+
+message ListCandidateArtifactsResponse {
+  repeated CandidateArtifactSummary artifacts = 1;
+}
+
+message CandidateArtifactSummary {
+  string id = 1;
+  string repository = 2;
+  string digest = 3;
+  string ref = 4;
+  google.protobuf.Timestamp validated_at = 5;
+  string source_id = 6;
+}
+
+message ListConvergenceTasksRequest {
+  string release_definition_id = 1;
+  string status_filter = 2;
+}
+
+message ListConvergenceTasksResponse {
+  repeated ConvergenceTaskDetail tasks = 1;
+}
+
+message ConvergenceTaskDetail {
+  string task_id = 1;
+  string operation_id = 2;
+  EmergencyAction op_type = 3;
+  string target_summary = 4;
+  google.protobuf.Timestamp submitted_at = 5;
+  string reason = 6;
+  string active_revision_id = 7;
+  string active_revision_status = 8;
+  repeated string promotion_paths = 9;
+  bool selectable = 10;
+  string incompatibility_reason = 11;
+}
+
 message EmergencyChangeRequest {
   string release_definition_id = 1;
-  EmergencyAction action = 2;
-  // payload is serialized JSON containing action-specific parameters.
-  string payload = 3;
-  string reason = 4;
-  EmergencyConvergence convergence = 5;
-  common.v1.ActorContext actor = 6;
+  string idempotency_key = 2;
+  string reason = 3;
+  WorkloadRef workload_ref = 4;
+  oneof change {
+    SetContainerImage set_container_image = 5;
+    SetReplicas set_replicas = 6;
+    SetApprovedAnnotations set_approved_annotations = 7;
+  }
+  EmergencyConvergence convergence = 8;
 }
 
 message EmergencyChangeResponse {
   string operation_id = 1;
   string status = 2;
   EmergencyConvergence convergence = 3;
+  string convergence_task_id = 4;
+  string image_reference = 5;
+  google.protobuf.Timestamp accepted_at = 6;
 }
 
 // ── Inventory Sync (REQ-017) ───────────────────────────────────────

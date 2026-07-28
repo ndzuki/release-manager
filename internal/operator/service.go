@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -24,14 +25,16 @@ import (
 
 // Service implements the OperatorServiceHandler Connect interface.
 type Service struct {
-	store           store.Store
-	ca              *ca.CA
-	logger          *slog.Logger
-	sessionTTL      time.Duration
-	heartbeatMaxAge time.Duration
-	suspectAfter    time.Duration
-	inventorySyncer *InventorySyncer
-	commandExecutor CommandExecutor
+	store            store.Store
+	ca               *ca.CA
+	logger           *slog.Logger
+	sessionTTL       time.Duration
+	heartbeatMaxAge  time.Duration
+	suspectAfter     time.Duration
+	inventorySyncer  *InventorySyncer
+	commandExecutor  CommandExecutor
+	streamMu         sync.RWMutex
+	emergencyStreams map[string]chan *operatorv1.EmergencyCommand
 }
 
 // NewService creates a new operator Connect service with a self-signed CA.
@@ -41,12 +44,13 @@ func NewService(st store.Store, logger *slog.Logger) (*Service, error) {
 		return nil, fmt.Errorf("create CA: %w", err)
 	}
 	return &Service{
-		store:           st,
-		ca:              caInst,
-		logger:          logger,
-		sessionTTL:      15 * time.Minute,
-		heartbeatMaxAge: 30 * time.Second,
-		suspectAfter:    60 * time.Second,
+		store:            st,
+		ca:               caInst,
+		logger:           logger,
+		sessionTTL:       15 * time.Minute,
+		heartbeatMaxAge:  30 * time.Second,
+		suspectAfter:     60 * time.Second,
+		emergencyStreams: make(map[string]chan *operatorv1.EmergencyCommand),
 	}, nil
 }
 
@@ -58,6 +62,28 @@ func (s *Service) SetInventorySyncer(syncer *InventorySyncer) {
 // SetCommandExecutor attaches a runtime command executor for preflight execution (REQ-048).
 func (s *Service) SetCommandExecutor(executor CommandExecutor) {
 	s.commandExecutor = executor
+}
+
+// DispatchEmergency sends one validated emergency command to the active Operator stream.
+func (s *Service) DispatchEmergency(
+	ctx context.Context,
+	req *connect.Request[operatorv1.DispatchEmergencyRequest],
+) (*connect.Response[operatorv1.DispatchEmergencyResponse], error) {
+	if req.Msg.GetOperatorId() == "" || req.Msg.GetCommand() == nil || req.Msg.GetCommand().GetCommandId() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("operator_id and emergency command are required"))
+	}
+	s.streamMu.RLock()
+	delivery := s.emergencyStreams[req.Msg.GetOperatorId()]
+	s.streamMu.RUnlock()
+	if delivery == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("operator stream is offline"))
+	}
+	select {
+	case delivery <- req.Msg.GetCommand():
+		return connect.NewResponse(&operatorv1.DispatchEmergencyResponse{}), nil
+	case <-ctx.Done():
+		return nil, connect.NewError(connect.CodeOf(ctx.Err()), ctx.Err())
+	}
 }
 
 // Enroll validates a single-use enrollment token, creates an operator record,
@@ -303,6 +329,15 @@ func (s *Service) CommandStream(
 	deliverCh := make(chan *store.OutboxEntry, 16)
 	deliverDone := make(chan struct{})
 	defer close(deliverDone)
+	emergencyCh := make(chan *operatorv1.EmergencyCommand, 8)
+	s.streamMu.Lock()
+	s.emergencyStreams[operatorID] = emergencyCh
+	s.streamMu.Unlock()
+	defer func() {
+		s.streamMu.Lock()
+		delete(s.emergencyStreams, operatorID)
+		s.streamMu.Unlock()
+	}()
 
 	go s.deliverPending(ctx, operatorID, deliverCh, deliverDone)
 
@@ -317,6 +352,17 @@ func (s *Service) CommandStream(
 				return nil
 			}
 
+		case command := <-emergencyCh:
+			if err := stream.Send(&operatorv1.CommandStreamResponse{
+				Payload: &operatorv1.CommandStreamResponse_EmergencyCommand{EmergencyCommand: command},
+			}); err != nil {
+				return err
+			}
+			if intent, getErr := s.store.EmergencyIntents().GetByCommandID(ctx, command.GetCommandId()); getErr == nil {
+				if updateErr := s.store.EmergencyIntents().UpdateDeliveryStatus(ctx, intent.ID, "delivered"); updateErr != nil {
+					s.logger.Warn("failed to mark emergency delivered", "command_id", command.GetCommandId(), "error", updateErr)
+				}
+			}
 		case entry := <-deliverCh:
 			s.logger.Debug("delivering command",
 				"outbox_id", entry.ID,
@@ -365,6 +411,22 @@ func (s *Service) CommandStream(
 					}
 				}
 
+			case req.GetEmergencyAck() != nil:
+				ack := req.GetEmergencyAck()
+				if ack.GetAckType() == operatorv1.AckType_ACK_TYPE_PERSISTED {
+					if intent, getErr := s.store.EmergencyIntents().GetByCommandID(ctx, ack.GetEmergencyCommandId()); getErr == nil {
+						if updateErr := s.store.EmergencyIntents().UpdateDeliveryStatus(ctx, intent.ID, "persisted"); updateErr != nil {
+							s.logger.Warn("failed to mark emergency persisted", "command_id", ack.GetEmergencyCommandId(), "error", updateErr)
+						}
+						if op, opErr := s.store.Operations().Get(ctx, intent.OperationID); opErr == nil && op.Status == store.StatusQueued {
+							if _, updateErr := s.store.Operations().UpdateStatus(ctx, op.ID, store.StatusRunning, op.StateVersion, ""); updateErr != nil {
+								s.logger.Warn("failed to mark emergency running", "operation_id", op.ID, "error", updateErr)
+							}
+						}
+					}
+				}
+			case req.GetEmergencyResult() != nil:
+				s.finishEmergencyResult(ctx, req.GetEmergencyResult())
 			case req.GetResult() != nil:
 				result := req.GetResult()
 				s.logger.Info("command result",
@@ -427,6 +489,43 @@ func (s *Service) CommandStream(
 				}
 			}
 		}
+	}
+}
+
+func (s *Service) finishEmergencyResult(ctx context.Context, result *operatorv1.EmergencyResult) {
+	intent, err := s.store.EmergencyIntents().GetByCommandID(ctx, result.GetEmergencyCommandId())
+	if err != nil {
+		s.logger.Warn("failed to load emergency intent result", "command_id", result.GetEmergencyCommandId(), "error", err)
+		return
+	}
+	var snapshots struct {
+		Before json.RawMessage `json:"before"`
+		After  json.RawMessage `json:"after"`
+	}
+	if result.GetResultJson() != "" {
+		if err := json.Unmarshal([]byte(result.GetResultJson()), &snapshots); err != nil {
+			s.logger.Warn("failed to decode emergency snapshots", "command_id", result.GetEmergencyCommandId(), "error", err)
+		}
+	}
+	if err := s.store.EmergencyIntents().UpdateResult(ctx, intent.ID, snapshots.Before, snapshots.After); err != nil {
+		s.logger.Warn("failed to persist emergency snapshots", "command_id", result.GetEmergencyCommandId(), "error", err)
+	}
+	op, err := s.store.Operations().Get(ctx, intent.OperationID)
+	if err != nil {
+		s.logger.Warn("failed to load emergency operation result", "operation_id", intent.OperationID, "error", err)
+		return
+	}
+	status := store.StatusSucceeded
+	lastError := ""
+	if result.GetStatus() == "failed" {
+		status = store.StatusFailed
+		lastError = result.GetErrorCode()
+		if lastError == "" {
+			lastError = result.GetMessage()
+		}
+	}
+	if _, err := s.store.Operations().UpdateStatus(ctx, op.ID, status, op.StateVersion, lastError); err != nil {
+		s.logger.Warn("failed to finish emergency operation", "operation_id", op.ID, "error", err)
 	}
 }
 

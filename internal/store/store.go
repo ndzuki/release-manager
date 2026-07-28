@@ -33,6 +33,7 @@ var (
 	ErrInvalidState              = errors.New("store: invalid values revision state")
 	ErrDefinitionOwnerUnresolved = errors.New("store: definition owner unresolved")
 	ErrNotAuthorized             = errors.New("store: approval command not authorized")
+	ErrEmergencyConflict         = errors.New("store: conflicting emergency target")
 )
 
 // StateVersionConflictError reports the current revision version after a failed CAS.
@@ -125,8 +126,9 @@ func (s OperationStatus) IsTerminal() bool {
 	return false
 }
 
-//nolint:gocyclo // Exhaustive legal-transition table; simpler than a two-layered map.
 // CanTransitionTo reports whether an operation status may advance directly to target.
+//
+//nolint:gocyclo // Exhaustive legal-transition table; simpler than a two-layered map.
 func (s OperationStatus) CanTransitionTo(target OperationStatus) bool {
 	switch s {
 	case StatusPending:
@@ -222,21 +224,25 @@ type OperationCancelResult struct {
 
 // ReleaseDefinition represents a Helm release target configuration.
 type ReleaseDefinition struct {
-	ID                  string           `json:"id"`
-	Name                string           `json:"name"`
-	CustomerID          string           `json:"customer_id"`
-	ClusterID           string           `json:"cluster_id"`
-	Namespace           string           `json:"namespace"`
-	ReleaseName         string           `json:"release_name"`
-	ChartName           string           `json:"chart_name"`
-	Status              DefinitionStatus `json:"status"`
-	OptimisticVersion   int              `json:"optimistic_version"`
-	CurrentBundleID     *string          `json:"current_bundle_id,omitempty"`
-	CreatedBy           string           `json:"created_by"`
-	OwnerOrganizationID *string          `json:"owner_organization_id,omitempty"`
-	ApprovedRevisionID  *string          `json:"approved_revision_id,omitempty"`
-	CreatedAt           time.Time        `json:"created_at"`
-	UpdatedAt           time.Time        `json:"updated_at"`
+	ID                     string                  `json:"id"`
+	Name                   string                  `json:"name"`
+	CustomerID             string                  `json:"customer_id"`
+	ClusterID              string                  `json:"cluster_id"`
+	Namespace              string                  `json:"namespace"`
+	ReleaseName            string                  `json:"release_name"`
+	ChartName              string                  `json:"chart_name"`
+	Status                 DefinitionStatus        `json:"status"`
+	OptimisticVersion      int                     `json:"optimistic_version"`
+	CurrentBundleID        *string                 `json:"current_bundle_id,omitempty"`
+	CreatedBy              string                  `json:"created_by"`
+	OwnerOrganizationID    *string                 `json:"owner_organization_id,omitempty"`
+	ApprovedRevisionID     *string                 `json:"approved_revision_id,omitempty"`
+	HPAManaged             bool                    `json:"hpa_managed"`
+	MaxEmergencyReplicas   int32                   `json:"max_emergency_replicas"`
+	ApprovedAnnotationKeys []ApprovedAnnotationKey `json:"approved_annotation_keys"`
+	PromotionMappings      []PromotionMapping      `json:"promotion_mappings"`
+	CreatedAt              time.Time               `json:"created_at"`
+	UpdatedAt              time.Time               `json:"updated_at"`
 }
 
 // ValuesRevision stores the desired configuration for a release target.
@@ -660,20 +666,19 @@ type NotificationJob struct {
 }
 
 // --- Emergency change domain types (REQ-032) ---
-
 // EmergencyAction is a typed operation whitelisted for emergency changes.
 type EmergencyAction string
 
 const (
-	EmergencySetContainerImage     EmergencyAction = "set_container_image"
-	EmergencySetReplicas           EmergencyAction = "set_replicas"
-	EmergencySetApprovedAnnotation EmergencyAction = "set_approved_annotation"
+	EmergencySetContainerImage      EmergencyAction = "set_container_image"
+	EmergencySetReplicas            EmergencyAction = "set_replicas"
+	EmergencySetApprovedAnnotations EmergencyAction = "set_approved_annotation"
 )
 
 // Valid returns true if the emergency action is a recognized value.
 func (a EmergencyAction) Valid() bool {
 	switch a {
-	case EmergencySetContainerImage, EmergencySetReplicas, EmergencySetApprovedAnnotation:
+	case EmergencySetContainerImage, EmergencySetReplicas, EmergencySetApprovedAnnotations:
 		return true
 	}
 	return false
@@ -687,12 +692,98 @@ const (
 	EmergencyRevertOnNextReconcile EmergencyConvergence = "revert_on_next_reconcile"
 )
 
-// EmergencyPayload carries the typed emergency change request data.
-type EmergencyPayload struct {
-	Action      EmergencyAction
-	Payload     string // JSON-encoded action-specific parameters
-	Reason      string
-	Convergence EmergencyConvergence
+type ApprovedAnnotationKey struct {
+	Key                 string `json:"key"`
+	Scope               string `json:"scope"`
+	PromotionValuesPath string `json:"promotion_values_path,omitempty"`
+}
+
+type PromotionMapping struct {
+	WorkloadKind string `json:"workload_kind"`
+	WorkloadName string `json:"workload_name"`
+	Container    string `json:"container,omitempty"`
+	Field        string `json:"field"`
+	ValuesPath   string `json:"values_path"`
+}
+
+type EmergencyIntent struct {
+	ID                  string
+	ReleaseDefinitionID string
+	OperationID         string
+	CommandID           string
+	Action              EmergencyAction
+	WorkloadKind        string
+	WorkloadName        string
+	WorkloadNamespace   string
+	WorkloadUID         string
+	Container           *string
+	ArtifactID          *string
+	ImageReference      *string
+	TargetReplicas      *int32
+	AnnotationScope     *string
+	AnnotationEntries   json.RawMessage
+	Convergence         EmergencyConvergence
+	PromotionPaths      json.RawMessage
+	BeforeSnapshot      json.RawMessage
+	AfterSnapshot       json.RawMessage
+	DeliveryStatus      string
+	LastDeliveryAt      *time.Time
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+type ConvergenceTask struct {
+	ID                   string
+	OperationID          string
+	ReleaseDefinitionID  string
+	Action               EmergencyAction
+	TargetSummary        string
+	Reason               string
+	PromotionPaths       json.RawMessage
+	Status               string
+	ActiveRevisionID     *string
+	ActiveRevisionStatus *string
+	LastRejectionReason  *string
+	SubmittedAt          time.Time
+	ConvergedAt          *time.Time
+	CreatedAt            time.Time
+}
+
+type EmergencyCreateCommand struct {
+	Operation            *Operation
+	Intent               *EmergencyIntent
+	ConvergenceTask      *ConvergenceTask
+	IdempotencyScope     string
+	IdempotencyKeyHash   string
+	RequestHash          string
+	IdempotencyExpiresAt time.Time
+}
+
+type EmergencyCreateResult struct {
+	Operation       *Operation
+	Intent          *EmergencyIntent
+	ConvergenceTask *ConvergenceTask
+	Replayed        bool
+}
+
+type EmergencyIntentStore interface {
+	CreateIfAvailable(ctx context.Context, command EmergencyCreateCommand) (*EmergencyCreateResult, error)
+	GetByOperationID(ctx context.Context, operationID string) (*EmergencyIntent, error)
+	GetByCommandID(ctx context.Context, commandID string) (*EmergencyIntent, error)
+	GetActiveLocksForDefinition(ctx context.Context, definitionID string) ([]*EmergencyIntent, error)
+	ListPendingDeliveryByDefinition(ctx context.Context, definitionID string) ([]*EmergencyIntent, error)
+	UpdateDeliveryStatus(ctx context.Context, id, status string) error
+	UpdateResult(ctx context.Context, id string, beforeSnapshot, afterSnapshot json.RawMessage) error
+}
+
+type ConvergenceTaskStore interface {
+	Create(ctx context.Context, task *ConvergenceTask) error
+	ListByDefinition(ctx context.Context, definitionID, statusFilter string) ([]*ConvergenceTask, error)
+	GetByOperationID(ctx context.Context, operationID string) (*ConvergenceTask, error)
+	HasPendingPromotionForDefinition(ctx context.Context, definitionID string) (bool, error)
+	HasPendingPromotionPath(ctx context.Context, definitionID string, promotionPaths []string) (bool, error)
+	MarkConverged(ctx context.Context, id, revisionID string) error
+	BindRevision(ctx context.Context, id, revisionID, revisionStatus string) error
 }
 
 // --- Trust root domain types (REQ-043) ---
@@ -1312,11 +1403,15 @@ type CandidateArtifact struct {
 	Digest       string
 	BundleID     *string
 	CreatedAt    time.Time
+	ValidatedAt  *time.Time
+	SourceID     string
 }
 
 // CandidateArtifactStore defines the persistence contract for candidate artifacts.
 type CandidateArtifactStore interface {
 	Create(ctx context.Context, ca *CandidateArtifact) error
+	Get(ctx context.Context, id string) (*CandidateArtifact, error)
+	ListValidated(ctx context.Context) ([]*CandidateArtifact, error)
 	LinkToBundle(ctx context.Context, artifactID, bundleID string) error
 	DeleteOrphanBefore(ctx context.Context, cutoff time.Time) (int64, error)
 }
@@ -1376,5 +1471,7 @@ type Store interface {
 	InventorySyncRequests() InventorySyncRequestStore
 	CandidateArtifacts() CandidateArtifactStore
 	PreflightLifecycles() PreflightLifecycleStore
+	EmergencyIntents() EmergencyIntentStore
+	ConvergenceTasks() ConvergenceTaskStore
 	Close() error
 }

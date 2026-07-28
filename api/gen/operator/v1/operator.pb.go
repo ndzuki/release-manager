@@ -228,6 +228,8 @@ type CommandStreamRequest struct {
 	//	*CommandStreamRequest_Heartbeat
 	//	*CommandStreamRequest_Result
 	//	*CommandStreamRequest_ResyncResponse
+	//	*CommandStreamRequest_EmergencyAck
+	//	*CommandStreamRequest_EmergencyResult
 	Payload       isCommandStreamRequest_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -315,6 +317,24 @@ func (x *CommandStreamRequest) GetResyncResponse() *ResyncResponse {
 	return nil
 }
 
+func (x *CommandStreamRequest) GetEmergencyAck() *EmergencyAck {
+	if x != nil {
+		if x, ok := x.Payload.(*CommandStreamRequest_EmergencyAck); ok {
+			return x.EmergencyAck
+		}
+	}
+	return nil
+}
+
+func (x *CommandStreamRequest) GetEmergencyResult() *EmergencyResult {
+	if x != nil {
+		if x, ok := x.Payload.(*CommandStreamRequest_EmergencyResult); ok {
+			return x.EmergencyResult
+		}
+	}
+	return nil
+}
+
 type isCommandStreamRequest_Payload interface {
 	isCommandStreamRequest_Payload()
 }
@@ -339,6 +359,14 @@ type CommandStreamRequest_ResyncResponse struct {
 	ResyncResponse *ResyncResponse `protobuf:"bytes,5,opt,name=resync_response,json=resyncResponse,proto3,oneof"` // response to orchestrator resync request
 }
 
+type CommandStreamRequest_EmergencyAck struct {
+	EmergencyAck *EmergencyAck `protobuf:"bytes,6,opt,name=emergency_ack,json=emergencyAck,proto3,oneof"`
+}
+
+type CommandStreamRequest_EmergencyResult struct {
+	EmergencyResult *EmergencyResult `protobuf:"bytes,7,opt,name=emergency_result,json=emergencyResult,proto3,oneof"`
+}
+
 func (*CommandStreamRequest_Hello) isCommandStreamRequest_Payload() {}
 
 func (*CommandStreamRequest_Ack) isCommandStreamRequest_Payload() {}
@@ -348,6 +376,10 @@ func (*CommandStreamRequest_Heartbeat) isCommandStreamRequest_Payload() {}
 func (*CommandStreamRequest_Result) isCommandStreamRequest_Payload() {}
 
 func (*CommandStreamRequest_ResyncResponse) isCommandStreamRequest_Payload() {}
+
+func (*CommandStreamRequest_EmergencyAck) isCommandStreamRequest_Payload() {}
+
+func (*CommandStreamRequest_EmergencyResult) isCommandStreamRequest_Payload() {}
 
 // Hello is sent by the operator to establish a session after enrollment.
 type Hello struct {
@@ -710,6 +742,142 @@ func (x *Result) GetResultJson() string {
 	return ""
 }
 
+type EmergencyAck struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	EmergencyCommandId string                 `protobuf:"bytes,1,opt,name=emergency_command_id,json=emergencyCommandId,proto3" json:"emergency_command_id,omitempty"`
+	AckType            AckType                `protobuf:"varint,2,opt,name=ack_type,json=ackType,proto3,enum=operator.v1.AckType" json:"ack_type,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *EmergencyAck) Reset() {
+	*x = EmergencyAck{}
+	mi := &file_operator_v1_operator_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmergencyAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmergencyAck) ProtoMessage() {}
+
+func (x *EmergencyAck) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmergencyAck.ProtoReflect.Descriptor instead.
+func (*EmergencyAck) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *EmergencyAck) GetEmergencyCommandId() string {
+	if x != nil {
+		return x.EmergencyCommandId
+	}
+	return ""
+}
+
+func (x *EmergencyAck) GetAckType() AckType {
+	if x != nil {
+		return x.AckType
+	}
+	return AckType_ACK_TYPE_UNSPECIFIED
+}
+
+type EmergencyResult struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	EmergencyCommandId string                 `protobuf:"bytes,1,opt,name=emergency_command_id,json=emergencyCommandId,proto3" json:"emergency_command_id,omitempty"`
+	OperationId        string                 `protobuf:"bytes,2,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	Status             string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`
+	ErrorCode          string                 `protobuf:"bytes,4,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	Message            string                 `protobuf:"bytes,5,opt,name=message,proto3" json:"message,omitempty"`
+	ResultJson         string                 `protobuf:"bytes,6,opt,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *EmergencyResult) Reset() {
+	*x = EmergencyResult{}
+	mi := &file_operator_v1_operator_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmergencyResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmergencyResult) ProtoMessage() {}
+
+func (x *EmergencyResult) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmergencyResult.ProtoReflect.Descriptor instead.
+func (*EmergencyResult) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *EmergencyResult) GetEmergencyCommandId() string {
+	if x != nil {
+		return x.EmergencyCommandId
+	}
+	return ""
+}
+
+func (x *EmergencyResult) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *EmergencyResult) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *EmergencyResult) GetErrorCode() string {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return ""
+}
+
+func (x *EmergencyResult) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *EmergencyResult) GetResultJson() string {
+	if x != nil {
+		return x.ResultJson
+	}
+	return ""
+}
+
 // CommandStreamResponse delivers session lifecycle responses.
 type CommandStreamResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -720,6 +888,7 @@ type CommandStreamResponse struct {
 	//	*CommandStreamResponse_ResyncRequest
 	//	*CommandStreamResponse_DuplicateResponse
 	//	*CommandStreamResponse_SessionEstablished
+	//	*CommandStreamResponse_EmergencyCommand
 	Payload       isCommandStreamResponse_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -727,7 +896,7 @@ type CommandStreamResponse struct {
 
 func (x *CommandStreamResponse) Reset() {
 	*x = CommandStreamResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[8]
+	mi := &file_operator_v1_operator_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -739,7 +908,7 @@ func (x *CommandStreamResponse) String() string {
 func (*CommandStreamResponse) ProtoMessage() {}
 
 func (x *CommandStreamResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[8]
+	mi := &file_operator_v1_operator_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -752,7 +921,7 @@ func (x *CommandStreamResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandStreamResponse.ProtoReflect.Descriptor instead.
 func (*CommandStreamResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{8}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *CommandStreamResponse) GetPayload() isCommandStreamResponse_Payload {
@@ -807,6 +976,15 @@ func (x *CommandStreamResponse) GetSessionEstablished() *SessionEstablished {
 	return nil
 }
 
+func (x *CommandStreamResponse) GetEmergencyCommand() *EmergencyCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*CommandStreamResponse_EmergencyCommand); ok {
+			return x.EmergencyCommand
+		}
+	}
+	return nil
+}
+
 type isCommandStreamResponse_Payload interface {
 	isCommandStreamResponse_Payload()
 }
@@ -831,6 +1009,10 @@ type CommandStreamResponse_SessionEstablished struct {
 	SessionEstablished *SessionEstablished `protobuf:"bytes,5,opt,name=session_established,json=sessionEstablished,proto3,oneof"`
 }
 
+type CommandStreamResponse_EmergencyCommand struct {
+	EmergencyCommand *EmergencyCommand `protobuf:"bytes,6,opt,name=emergency_command,json=emergencyCommand,proto3,oneof"`
+}
+
 func (*CommandStreamResponse_Command) isCommandStreamResponse_Payload() {}
 
 func (*CommandStreamResponse_SessionEvent) isCommandStreamResponse_Payload() {}
@@ -840,6 +1022,8 @@ func (*CommandStreamResponse_ResyncRequest) isCommandStreamResponse_Payload() {}
 func (*CommandStreamResponse_DuplicateResponse) isCommandStreamResponse_Payload() {}
 
 func (*CommandStreamResponse_SessionEstablished) isCommandStreamResponse_Payload() {}
+
+func (*CommandStreamResponse_EmergencyCommand) isCommandStreamResponse_Payload() {}
 
 // Command is a deploy directive sent to the operator.
 type Command struct {
@@ -867,7 +1051,7 @@ type Command struct {
 
 func (x *Command) Reset() {
 	*x = Command{}
-	mi := &file_operator_v1_operator_proto_msgTypes[9]
+	mi := &file_operator_v1_operator_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -879,7 +1063,7 @@ func (x *Command) String() string {
 func (*Command) ProtoMessage() {}
 
 func (x *Command) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[9]
+	mi := &file_operator_v1_operator_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -892,7 +1076,7 @@ func (x *Command) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Command.ProtoReflect.Descriptor instead.
 func (*Command) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{9}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Command) GetOutboxId() string {
@@ -1014,6 +1198,360 @@ func (x *Command) GetTargetRevision() int64 {
 	return 0
 }
 
+type EmergencyCommand struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	CommandId         string                 `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	OperationId       string                 `protobuf:"bytes,2,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	Action            string                 `protobuf:"bytes,3,opt,name=action,proto3" json:"action,omitempty"`
+	WorkloadKind      string                 `protobuf:"bytes,4,opt,name=workload_kind,json=workloadKind,proto3" json:"workload_kind,omitempty"`
+	WorkloadName      string                 `protobuf:"bytes,5,opt,name=workload_name,json=workloadName,proto3" json:"workload_name,omitempty"`
+	WorkloadNamespace string                 `protobuf:"bytes,6,opt,name=workload_namespace,json=workloadNamespace,proto3" json:"workload_namespace,omitempty"`
+	WorkloadUid       string                 `protobuf:"bytes,7,opt,name=workload_uid,json=workloadUid,proto3" json:"workload_uid,omitempty"`
+	// Types that are valid to be assigned to Change:
+	//
+	//	*EmergencyCommand_SetContainerImage
+	//	*EmergencyCommand_SetReplicas
+	//	*EmergencyCommand_SetApprovedAnnotations
+	Change        isEmergencyCommand_Change `protobuf_oneof:"change"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EmergencyCommand) Reset() {
+	*x = EmergencyCommand{}
+	mi := &file_operator_v1_operator_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmergencyCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmergencyCommand) ProtoMessage() {}
+
+func (x *EmergencyCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmergencyCommand.ProtoReflect.Descriptor instead.
+func (*EmergencyCommand) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *EmergencyCommand) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *EmergencyCommand) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *EmergencyCommand) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *EmergencyCommand) GetWorkloadKind() string {
+	if x != nil {
+		return x.WorkloadKind
+	}
+	return ""
+}
+
+func (x *EmergencyCommand) GetWorkloadName() string {
+	if x != nil {
+		return x.WorkloadName
+	}
+	return ""
+}
+
+func (x *EmergencyCommand) GetWorkloadNamespace() string {
+	if x != nil {
+		return x.WorkloadNamespace
+	}
+	return ""
+}
+
+func (x *EmergencyCommand) GetWorkloadUid() string {
+	if x != nil {
+		return x.WorkloadUid
+	}
+	return ""
+}
+
+func (x *EmergencyCommand) GetChange() isEmergencyCommand_Change {
+	if x != nil {
+		return x.Change
+	}
+	return nil
+}
+
+func (x *EmergencyCommand) GetSetContainerImage() *EmergencySetContainerImage {
+	if x != nil {
+		if x, ok := x.Change.(*EmergencyCommand_SetContainerImage); ok {
+			return x.SetContainerImage
+		}
+	}
+	return nil
+}
+
+func (x *EmergencyCommand) GetSetReplicas() *EmergencySetReplicas {
+	if x != nil {
+		if x, ok := x.Change.(*EmergencyCommand_SetReplicas); ok {
+			return x.SetReplicas
+		}
+	}
+	return nil
+}
+
+func (x *EmergencyCommand) GetSetApprovedAnnotations() *EmergencySetApprovedAnnotations {
+	if x != nil {
+		if x, ok := x.Change.(*EmergencyCommand_SetApprovedAnnotations); ok {
+			return x.SetApprovedAnnotations
+		}
+	}
+	return nil
+}
+
+type isEmergencyCommand_Change interface {
+	isEmergencyCommand_Change()
+}
+
+type EmergencyCommand_SetContainerImage struct {
+	SetContainerImage *EmergencySetContainerImage `protobuf:"bytes,8,opt,name=set_container_image,json=setContainerImage,proto3,oneof"`
+}
+
+type EmergencyCommand_SetReplicas struct {
+	SetReplicas *EmergencySetReplicas `protobuf:"bytes,9,opt,name=set_replicas,json=setReplicas,proto3,oneof"`
+}
+
+type EmergencyCommand_SetApprovedAnnotations struct {
+	SetApprovedAnnotations *EmergencySetApprovedAnnotations `protobuf:"bytes,10,opt,name=set_approved_annotations,json=setApprovedAnnotations,proto3,oneof"`
+}
+
+func (*EmergencyCommand_SetContainerImage) isEmergencyCommand_Change() {}
+
+func (*EmergencyCommand_SetReplicas) isEmergencyCommand_Change() {}
+
+func (*EmergencyCommand_SetApprovedAnnotations) isEmergencyCommand_Change() {}
+
+type EmergencySetContainerImage struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Container      string                 `protobuf:"bytes,1,opt,name=container,proto3" json:"container,omitempty"`
+	ImageReference string                 `protobuf:"bytes,2,opt,name=image_reference,json=imageReference,proto3" json:"image_reference,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *EmergencySetContainerImage) Reset() {
+	*x = EmergencySetContainerImage{}
+	mi := &file_operator_v1_operator_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmergencySetContainerImage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmergencySetContainerImage) ProtoMessage() {}
+
+func (x *EmergencySetContainerImage) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmergencySetContainerImage.ProtoReflect.Descriptor instead.
+func (*EmergencySetContainerImage) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *EmergencySetContainerImage) GetContainer() string {
+	if x != nil {
+		return x.Container
+	}
+	return ""
+}
+
+func (x *EmergencySetContainerImage) GetImageReference() string {
+	if x != nil {
+		return x.ImageReference
+	}
+	return ""
+}
+
+type EmergencySetReplicas struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Replicas      int32                  `protobuf:"varint,1,opt,name=replicas,proto3" json:"replicas,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EmergencySetReplicas) Reset() {
+	*x = EmergencySetReplicas{}
+	mi := &file_operator_v1_operator_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmergencySetReplicas) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmergencySetReplicas) ProtoMessage() {}
+
+func (x *EmergencySetReplicas) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmergencySetReplicas.ProtoReflect.Descriptor instead.
+func (*EmergencySetReplicas) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *EmergencySetReplicas) GetReplicas() int32 {
+	if x != nil {
+		return x.Replicas
+	}
+	return 0
+}
+
+type EmergencySetApprovedAnnotations struct {
+	state         protoimpl.MessageState      `protogen:"open.v1"`
+	Entries       []*EmergencyAnnotationEntry `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	Scope         string                      `protobuf:"bytes,2,opt,name=scope,proto3" json:"scope,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EmergencySetApprovedAnnotations) Reset() {
+	*x = EmergencySetApprovedAnnotations{}
+	mi := &file_operator_v1_operator_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmergencySetApprovedAnnotations) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmergencySetApprovedAnnotations) ProtoMessage() {}
+
+func (x *EmergencySetApprovedAnnotations) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmergencySetApprovedAnnotations.ProtoReflect.Descriptor instead.
+func (*EmergencySetApprovedAnnotations) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *EmergencySetApprovedAnnotations) GetEntries() []*EmergencyAnnotationEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *EmergencySetApprovedAnnotations) GetScope() string {
+	if x != nil {
+		return x.Scope
+	}
+	return ""
+}
+
+type EmergencyAnnotationEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EmergencyAnnotationEntry) Reset() {
+	*x = EmergencyAnnotationEntry{}
+	mi := &file_operator_v1_operator_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmergencyAnnotationEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmergencyAnnotationEntry) ProtoMessage() {}
+
+func (x *EmergencyAnnotationEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmergencyAnnotationEntry.ProtoReflect.Descriptor instead.
+func (*EmergencyAnnotationEntry) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *EmergencyAnnotationEntry) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *EmergencyAnnotationEntry) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
 // ResyncRequest asks the operator to report its last seen sequence for gap recovery.
 type ResyncRequest struct {
 	state                    protoimpl.MessageState `protogen:"open.v1"`
@@ -1025,7 +1563,7 @@ type ResyncRequest struct {
 
 func (x *ResyncRequest) Reset() {
 	*x = ResyncRequest{}
-	mi := &file_operator_v1_operator_proto_msgTypes[10]
+	mi := &file_operator_v1_operator_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1037,7 +1575,7 @@ func (x *ResyncRequest) String() string {
 func (*ResyncRequest) ProtoMessage() {}
 
 func (x *ResyncRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[10]
+	mi := &file_operator_v1_operator_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1050,7 +1588,7 @@ func (x *ResyncRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResyncRequest.ProtoReflect.Descriptor instead.
 func (*ResyncRequest) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{10}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ResyncRequest) GetOrchestratorLastSequence() int64 {
@@ -1077,7 +1615,7 @@ type ResyncResponse struct {
 
 func (x *ResyncResponse) Reset() {
 	*x = ResyncResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[11]
+	mi := &file_operator_v1_operator_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1089,7 +1627,7 @@ func (x *ResyncResponse) String() string {
 func (*ResyncResponse) ProtoMessage() {}
 
 func (x *ResyncResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[11]
+	mi := &file_operator_v1_operator_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1102,7 +1640,7 @@ func (x *ResyncResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResyncResponse.ProtoReflect.Descriptor instead.
 func (*ResyncResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{11}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ResyncResponse) GetOperatorLastSequence() int64 {
@@ -1123,7 +1661,7 @@ type DuplicateResponse struct {
 
 func (x *DuplicateResponse) Reset() {
 	*x = DuplicateResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[12]
+	mi := &file_operator_v1_operator_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1135,7 +1673,7 @@ func (x *DuplicateResponse) String() string {
 func (*DuplicateResponse) ProtoMessage() {}
 
 func (x *DuplicateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[12]
+	mi := &file_operator_v1_operator_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1148,7 +1686,7 @@ func (x *DuplicateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DuplicateResponse.ProtoReflect.Descriptor instead.
 func (*DuplicateResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{12}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *DuplicateResponse) GetCommandId() string {
@@ -1176,7 +1714,7 @@ type SessionEvent struct {
 
 func (x *SessionEvent) Reset() {
 	*x = SessionEvent{}
-	mi := &file_operator_v1_operator_proto_msgTypes[13]
+	mi := &file_operator_v1_operator_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1188,7 +1726,7 @@ func (x *SessionEvent) String() string {
 func (*SessionEvent) ProtoMessage() {}
 
 func (x *SessionEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[13]
+	mi := &file_operator_v1_operator_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1201,7 +1739,7 @@ func (x *SessionEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionEvent.ProtoReflect.Descriptor instead.
 func (*SessionEvent) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{13}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *SessionEvent) GetType() string {
@@ -1218,6 +1756,94 @@ func (x *SessionEvent) GetMessage() string {
 	return ""
 }
 
+type DispatchEmergencyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OperatorId    string                 `protobuf:"bytes,1,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
+	Command       *EmergencyCommand      `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DispatchEmergencyRequest) Reset() {
+	*x = DispatchEmergencyRequest{}
+	mi := &file_operator_v1_operator_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DispatchEmergencyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DispatchEmergencyRequest) ProtoMessage() {}
+
+func (x *DispatchEmergencyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DispatchEmergencyRequest.ProtoReflect.Descriptor instead.
+func (*DispatchEmergencyRequest) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *DispatchEmergencyRequest) GetOperatorId() string {
+	if x != nil {
+		return x.OperatorId
+	}
+	return ""
+}
+
+func (x *DispatchEmergencyRequest) GetCommand() *EmergencyCommand {
+	if x != nil {
+		return x.Command
+	}
+	return nil
+}
+
+type DispatchEmergencyResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DispatchEmergencyResponse) Reset() {
+	*x = DispatchEmergencyResponse{}
+	mi := &file_operator_v1_operator_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DispatchEmergencyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DispatchEmergencyResponse) ProtoMessage() {}
+
+func (x *DispatchEmergencyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DispatchEmergencyResponse.ProtoReflect.Descriptor instead.
+func (*DispatchEmergencyResponse) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{22}
+}
+
 // RevokeOperatorRequest revokes an operator and closes its active sessions.
 type RevokeOperatorRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1229,7 +1855,7 @@ type RevokeOperatorRequest struct {
 
 func (x *RevokeOperatorRequest) Reset() {
 	*x = RevokeOperatorRequest{}
-	mi := &file_operator_v1_operator_proto_msgTypes[14]
+	mi := &file_operator_v1_operator_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1241,7 +1867,7 @@ func (x *RevokeOperatorRequest) String() string {
 func (*RevokeOperatorRequest) ProtoMessage() {}
 
 func (x *RevokeOperatorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[14]
+	mi := &file_operator_v1_operator_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1254,7 +1880,7 @@ func (x *RevokeOperatorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeOperatorRequest.ProtoReflect.Descriptor instead.
 func (*RevokeOperatorRequest) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{14}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *RevokeOperatorRequest) GetOperatorId() string {
@@ -1282,7 +1908,7 @@ type RevokeOperatorResponse struct {
 
 func (x *RevokeOperatorResponse) Reset() {
 	*x = RevokeOperatorResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[15]
+	mi := &file_operator_v1_operator_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1294,7 +1920,7 @@ func (x *RevokeOperatorResponse) String() string {
 func (*RevokeOperatorResponse) ProtoMessage() {}
 
 func (x *RevokeOperatorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[15]
+	mi := &file_operator_v1_operator_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1307,7 +1933,7 @@ func (x *RevokeOperatorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeOperatorResponse.ProtoReflect.Descriptor instead.
 func (*RevokeOperatorResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{15}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *RevokeOperatorResponse) GetOperatorId() string {
@@ -1347,13 +1973,15 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
 	"\vttl_seconds\x18\x02 \x01(\x03R\n" +
 	"ttlSeconds\x12'\n" +
-	"\x0fcertificate_pem\x18\x03 \x01(\fR\x0ecertificatePem\"\xa2\x02\n" +
+	"\x0fcertificate_pem\x18\x03 \x01(\fR\x0ecertificatePem\"\xaf\x03\n" +
 	"\x14CommandStreamRequest\x12*\n" +
 	"\x05hello\x18\x01 \x01(\v2\x12.operator.v1.HelloH\x00R\x05hello\x12$\n" +
 	"\x03ack\x18\x02 \x01(\v2\x10.operator.v1.AckH\x00R\x03ack\x126\n" +
 	"\theartbeat\x18\x03 \x01(\v2\x16.operator.v1.HeartbeatH\x00R\theartbeat\x12-\n" +
 	"\x06result\x18\x04 \x01(\v2\x13.operator.v1.ResultH\x00R\x06result\x12F\n" +
-	"\x0fresync_response\x18\x05 \x01(\v2\x1b.operator.v1.ResyncResponseH\x00R\x0eresyncResponseB\t\n" +
+	"\x0fresync_response\x18\x05 \x01(\v2\x1b.operator.v1.ResyncResponseH\x00R\x0eresyncResponse\x12@\n" +
+	"\remergency_ack\x18\x06 \x01(\v2\x19.operator.v1.EmergencyAckH\x00R\femergencyAck\x12I\n" +
+	"\x10emergency_result\x18\a \x01(\v2\x1c.operator.v1.EmergencyResultH\x00R\x0femergencyResultB\t\n" +
 	"\apayload\"\xbb\x02\n" +
 	"\x05Hello\x12\x1d\n" +
 	"\n" +
@@ -1392,13 +2020,26 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x06output\x18\x05 \x01(\fR\x06output\x12\x1a\n" +
 	"\bsequence\x18\x06 \x01(\x03R\bsequence\x12\x1f\n" +
 	"\vresult_json\x18\a \x01(\tR\n" +
-	"resultJson\"\x80\x03\n" +
+	"resultJson\"q\n" +
+	"\fEmergencyAck\x120\n" +
+	"\x14emergency_command_id\x18\x01 \x01(\tR\x12emergencyCommandId\x12/\n" +
+	"\back_type\x18\x02 \x01(\x0e2\x14.operator.v1.AckTypeR\aackType\"\xd8\x01\n" +
+	"\x0fEmergencyResult\x120\n" +
+	"\x14emergency_command_id\x18\x01 \x01(\tR\x12emergencyCommandId\x12!\n" +
+	"\foperation_id\x18\x02 \x01(\tR\voperationId\x12\x16\n" +
+	"\x06status\x18\x03 \x01(\tR\x06status\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\x04 \x01(\tR\terrorCode\x12\x18\n" +
+	"\amessage\x18\x05 \x01(\tR\amessage\x12\x1f\n" +
+	"\vresult_json\x18\x06 \x01(\tR\n" +
+	"resultJson\"\xce\x03\n" +
 	"\x15CommandStreamResponse\x120\n" +
 	"\acommand\x18\x01 \x01(\v2\x14.operator.v1.CommandH\x00R\acommand\x12@\n" +
 	"\rsession_event\x18\x02 \x01(\v2\x19.operator.v1.SessionEventH\x00R\fsessionEvent\x12C\n" +
 	"\x0eresync_request\x18\x03 \x01(\v2\x1a.operator.v1.ResyncRequestH\x00R\rresyncRequest\x12O\n" +
 	"\x12duplicate_response\x18\x04 \x01(\v2\x1e.operator.v1.DuplicateResponseH\x00R\x11duplicateResponse\x12R\n" +
-	"\x13session_established\x18\x05 \x01(\v2\x1f.operator.v1.SessionEstablishedH\x00R\x12sessionEstablishedB\t\n" +
+	"\x13session_established\x18\x05 \x01(\v2\x1f.operator.v1.SessionEstablishedH\x00R\x12sessionEstablished\x12L\n" +
+	"\x11emergency_command\x18\x06 \x01(\v2\x1d.operator.v1.EmergencyCommandH\x00R\x10emergencyCommandB\t\n" +
 	"\apayload\"\xfd\x04\n" +
 	"\aCommand\x12\x1b\n" +
 	"\toutbox_id\x18\x01 \x01(\tR\boutboxId\x12\x1d\n" +
@@ -1419,7 +2060,32 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x19expected_current_revision\x18\x0e \x01(\x03R\x17expectedCurrentRevision\x12\x16\n" +
 	"\x06atomic\x18\x0f \x01(\bR\x06atomic\x12!\n" +
 	"\fvalues_patch\x18\x10 \x01(\fR\vvaluesPatch\x12'\n" +
-	"\x0ftarget_revision\x18\x11 \x01(\x03R\x0etargetRevision\"e\n" +
+	"\x0ftarget_revision\x18\x11 \x01(\x03R\x0etargetRevision\"\x9f\x04\n" +
+	"\x10EmergencyCommand\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x01 \x01(\tR\tcommandId\x12!\n" +
+	"\foperation_id\x18\x02 \x01(\tR\voperationId\x12\x16\n" +
+	"\x06action\x18\x03 \x01(\tR\x06action\x12#\n" +
+	"\rworkload_kind\x18\x04 \x01(\tR\fworkloadKind\x12#\n" +
+	"\rworkload_name\x18\x05 \x01(\tR\fworkloadName\x12-\n" +
+	"\x12workload_namespace\x18\x06 \x01(\tR\x11workloadNamespace\x12!\n" +
+	"\fworkload_uid\x18\a \x01(\tR\vworkloadUid\x12Y\n" +
+	"\x13set_container_image\x18\b \x01(\v2'.operator.v1.EmergencySetContainerImageH\x00R\x11setContainerImage\x12F\n" +
+	"\fset_replicas\x18\t \x01(\v2!.operator.v1.EmergencySetReplicasH\x00R\vsetReplicas\x12h\n" +
+	"\x18set_approved_annotations\x18\n" +
+	" \x01(\v2,.operator.v1.EmergencySetApprovedAnnotationsH\x00R\x16setApprovedAnnotationsB\b\n" +
+	"\x06change\"c\n" +
+	"\x1aEmergencySetContainerImage\x12\x1c\n" +
+	"\tcontainer\x18\x01 \x01(\tR\tcontainer\x12'\n" +
+	"\x0fimage_reference\x18\x02 \x01(\tR\x0eimageReference\"2\n" +
+	"\x14EmergencySetReplicas\x12\x1a\n" +
+	"\breplicas\x18\x01 \x01(\x05R\breplicas\"x\n" +
+	"\x1fEmergencySetApprovedAnnotations\x12?\n" +
+	"\aentries\x18\x01 \x03(\v2%.operator.v1.EmergencyAnnotationEntryR\aentries\x12\x14\n" +
+	"\x05scope\x18\x02 \x01(\tR\x05scope\"B\n" +
+	"\x18EmergencyAnnotationEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"e\n" +
 	"\rResyncRequest\x12<\n" +
 	"\x1aorchestrator_last_sequence\x18\x01 \x01(\x03R\x18orchestratorLastSequence\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"F\n" +
@@ -1432,7 +2098,12 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"resultJson\"<\n" +
 	"\fSessionEvent\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"P\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"t\n" +
+	"\x18DispatchEmergencyRequest\x12\x1f\n" +
+	"\voperator_id\x18\x01 \x01(\tR\n" +
+	"operatorId\x127\n" +
+	"\acommand\x18\x02 \x01(\v2\x1d.operator.v1.EmergencyCommandR\acommand\"\x1b\n" +
+	"\x19DispatchEmergencyResponse\"P\n" +
 	"\x15RevokeOperatorRequest\x12\x1f\n" +
 	"\voperator_id\x18\x01 \x01(\tR\n" +
 	"operatorId\x12\x16\n" +
@@ -1444,11 +2115,12 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\aAckType\x12\x18\n" +
 	"\x14ACK_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11ACK_TYPE_RECEIVED\x10\x01\x12\x16\n" +
-	"\x12ACK_TYPE_PERSISTED\x10\x022\x8b\x02\n" +
+	"\x12ACK_TYPE_PERSISTED\x10\x022\xef\x02\n" +
 	"\x0fOperatorService\x12A\n" +
 	"\x06Enroll\x12\x1a.operator.v1.EnrollRequest\x1a\x1b.operator.v1.EnrollResponse\x12Z\n" +
 	"\rCommandStream\x12!.operator.v1.CommandStreamRequest\x1a\".operator.v1.CommandStreamResponse(\x010\x01\x12Y\n" +
-	"\x0eRevokeOperator\x12\".operator.v1.RevokeOperatorRequest\x1a#.operator.v1.RevokeOperatorResponseBBZ@github.com/ndzuki/release-manager/api/gen/operator/v1;operatorv1b\x06proto3"
+	"\x0eRevokeOperator\x12\".operator.v1.RevokeOperatorRequest\x1a#.operator.v1.RevokeOperatorResponse\x12b\n" +
+	"\x11DispatchEmergency\x12%.operator.v1.DispatchEmergencyRequest\x1a&.operator.v1.DispatchEmergencyResponseBBZ@github.com/ndzuki/release-manager/api/gen/operator/v1;operatorv1b\x06proto3"
 
 var (
 	file_operator_v1_operator_proto_rawDescOnce sync.Once
@@ -1463,55 +2135,75 @@ func file_operator_v1_operator_proto_rawDescGZIP() []byte {
 }
 
 var file_operator_v1_operator_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_operator_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_operator_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_operator_v1_operator_proto_goTypes = []any{
-	(AckType)(0),                   // 0: operator.v1.AckType
-	(*EnrollRequest)(nil),          // 1: operator.v1.EnrollRequest
-	(*EnrollResponse)(nil),         // 2: operator.v1.EnrollResponse
-	(*CommandStreamRequest)(nil),   // 3: operator.v1.CommandStreamRequest
-	(*Hello)(nil),                  // 4: operator.v1.Hello
-	(*SessionEstablished)(nil),     // 5: operator.v1.SessionEstablished
-	(*Ack)(nil),                    // 6: operator.v1.Ack
-	(*Heartbeat)(nil),              // 7: operator.v1.Heartbeat
-	(*Result)(nil),                 // 8: operator.v1.Result
-	(*CommandStreamResponse)(nil),  // 9: operator.v1.CommandStreamResponse
-	(*Command)(nil),                // 10: operator.v1.Command
-	(*ResyncRequest)(nil),          // 11: operator.v1.ResyncRequest
-	(*ResyncResponse)(nil),         // 12: operator.v1.ResyncResponse
-	(*DuplicateResponse)(nil),      // 13: operator.v1.DuplicateResponse
-	(*SessionEvent)(nil),           // 14: operator.v1.SessionEvent
-	(*RevokeOperatorRequest)(nil),  // 15: operator.v1.RevokeOperatorRequest
-	(*RevokeOperatorResponse)(nil), // 16: operator.v1.RevokeOperatorResponse
-	nil,                            // 17: operator.v1.EnrollRequest.CapabilitiesEntry
-	nil,                            // 18: operator.v1.Hello.CapabilitiesEntry
-	(*v1.ReleaseBundle)(nil),       // 19: common.v1.ReleaseBundle
+	(AckType)(0),                            // 0: operator.v1.AckType
+	(*EnrollRequest)(nil),                   // 1: operator.v1.EnrollRequest
+	(*EnrollResponse)(nil),                  // 2: operator.v1.EnrollResponse
+	(*CommandStreamRequest)(nil),            // 3: operator.v1.CommandStreamRequest
+	(*Hello)(nil),                           // 4: operator.v1.Hello
+	(*SessionEstablished)(nil),              // 5: operator.v1.SessionEstablished
+	(*Ack)(nil),                             // 6: operator.v1.Ack
+	(*Heartbeat)(nil),                       // 7: operator.v1.Heartbeat
+	(*Result)(nil),                          // 8: operator.v1.Result
+	(*EmergencyAck)(nil),                    // 9: operator.v1.EmergencyAck
+	(*EmergencyResult)(nil),                 // 10: operator.v1.EmergencyResult
+	(*CommandStreamResponse)(nil),           // 11: operator.v1.CommandStreamResponse
+	(*Command)(nil),                         // 12: operator.v1.Command
+	(*EmergencyCommand)(nil),                // 13: operator.v1.EmergencyCommand
+	(*EmergencySetContainerImage)(nil),      // 14: operator.v1.EmergencySetContainerImage
+	(*EmergencySetReplicas)(nil),            // 15: operator.v1.EmergencySetReplicas
+	(*EmergencySetApprovedAnnotations)(nil), // 16: operator.v1.EmergencySetApprovedAnnotations
+	(*EmergencyAnnotationEntry)(nil),        // 17: operator.v1.EmergencyAnnotationEntry
+	(*ResyncRequest)(nil),                   // 18: operator.v1.ResyncRequest
+	(*ResyncResponse)(nil),                  // 19: operator.v1.ResyncResponse
+	(*DuplicateResponse)(nil),               // 20: operator.v1.DuplicateResponse
+	(*SessionEvent)(nil),                    // 21: operator.v1.SessionEvent
+	(*DispatchEmergencyRequest)(nil),        // 22: operator.v1.DispatchEmergencyRequest
+	(*DispatchEmergencyResponse)(nil),       // 23: operator.v1.DispatchEmergencyResponse
+	(*RevokeOperatorRequest)(nil),           // 24: operator.v1.RevokeOperatorRequest
+	(*RevokeOperatorResponse)(nil),          // 25: operator.v1.RevokeOperatorResponse
+	nil,                                     // 26: operator.v1.EnrollRequest.CapabilitiesEntry
+	nil,                                     // 27: operator.v1.Hello.CapabilitiesEntry
+	(*v1.ReleaseBundle)(nil),                // 28: common.v1.ReleaseBundle
 }
 var file_operator_v1_operator_proto_depIdxs = []int32{
-	17, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
+	26, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
 	4,  // 1: operator.v1.CommandStreamRequest.hello:type_name -> operator.v1.Hello
 	6,  // 2: operator.v1.CommandStreamRequest.ack:type_name -> operator.v1.Ack
 	7,  // 3: operator.v1.CommandStreamRequest.heartbeat:type_name -> operator.v1.Heartbeat
 	8,  // 4: operator.v1.CommandStreamRequest.result:type_name -> operator.v1.Result
-	12, // 5: operator.v1.CommandStreamRequest.resync_response:type_name -> operator.v1.ResyncResponse
-	18, // 6: operator.v1.Hello.capabilities:type_name -> operator.v1.Hello.CapabilitiesEntry
-	0,  // 7: operator.v1.Ack.ack_type:type_name -> operator.v1.AckType
-	10, // 8: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
-	14, // 9: operator.v1.CommandStreamResponse.session_event:type_name -> operator.v1.SessionEvent
-	11, // 10: operator.v1.CommandStreamResponse.resync_request:type_name -> operator.v1.ResyncRequest
-	13, // 11: operator.v1.CommandStreamResponse.duplicate_response:type_name -> operator.v1.DuplicateResponse
-	5,  // 12: operator.v1.CommandStreamResponse.session_established:type_name -> operator.v1.SessionEstablished
-	19, // 13: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
-	1,  // 14: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
-	3,  // 15: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
-	15, // 16: operator.v1.OperatorService.RevokeOperator:input_type -> operator.v1.RevokeOperatorRequest
-	2,  // 17: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
-	9,  // 18: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
-	16, // 19: operator.v1.OperatorService.RevokeOperator:output_type -> operator.v1.RevokeOperatorResponse
-	17, // [17:20] is the sub-list for method output_type
-	14, // [14:17] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	19, // 5: operator.v1.CommandStreamRequest.resync_response:type_name -> operator.v1.ResyncResponse
+	9,  // 6: operator.v1.CommandStreamRequest.emergency_ack:type_name -> operator.v1.EmergencyAck
+	10, // 7: operator.v1.CommandStreamRequest.emergency_result:type_name -> operator.v1.EmergencyResult
+	27, // 8: operator.v1.Hello.capabilities:type_name -> operator.v1.Hello.CapabilitiesEntry
+	0,  // 9: operator.v1.Ack.ack_type:type_name -> operator.v1.AckType
+	0,  // 10: operator.v1.EmergencyAck.ack_type:type_name -> operator.v1.AckType
+	12, // 11: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
+	21, // 12: operator.v1.CommandStreamResponse.session_event:type_name -> operator.v1.SessionEvent
+	18, // 13: operator.v1.CommandStreamResponse.resync_request:type_name -> operator.v1.ResyncRequest
+	20, // 14: operator.v1.CommandStreamResponse.duplicate_response:type_name -> operator.v1.DuplicateResponse
+	5,  // 15: operator.v1.CommandStreamResponse.session_established:type_name -> operator.v1.SessionEstablished
+	13, // 16: operator.v1.CommandStreamResponse.emergency_command:type_name -> operator.v1.EmergencyCommand
+	28, // 17: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
+	14, // 18: operator.v1.EmergencyCommand.set_container_image:type_name -> operator.v1.EmergencySetContainerImage
+	15, // 19: operator.v1.EmergencyCommand.set_replicas:type_name -> operator.v1.EmergencySetReplicas
+	16, // 20: operator.v1.EmergencyCommand.set_approved_annotations:type_name -> operator.v1.EmergencySetApprovedAnnotations
+	17, // 21: operator.v1.EmergencySetApprovedAnnotations.entries:type_name -> operator.v1.EmergencyAnnotationEntry
+	13, // 22: operator.v1.DispatchEmergencyRequest.command:type_name -> operator.v1.EmergencyCommand
+	1,  // 23: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
+	3,  // 24: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
+	24, // 25: operator.v1.OperatorService.RevokeOperator:input_type -> operator.v1.RevokeOperatorRequest
+	22, // 26: operator.v1.OperatorService.DispatchEmergency:input_type -> operator.v1.DispatchEmergencyRequest
+	2,  // 27: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
+	11, // 28: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
+	25, // 29: operator.v1.OperatorService.RevokeOperator:output_type -> operator.v1.RevokeOperatorResponse
+	23, // 30: operator.v1.OperatorService.DispatchEmergency:output_type -> operator.v1.DispatchEmergencyResponse
+	27, // [27:31] is the sub-list for method output_type
+	23, // [23:27] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_operator_v1_operator_proto_init() }
@@ -1525,13 +2217,21 @@ func file_operator_v1_operator_proto_init() {
 		(*CommandStreamRequest_Heartbeat)(nil),
 		(*CommandStreamRequest_Result)(nil),
 		(*CommandStreamRequest_ResyncResponse)(nil),
+		(*CommandStreamRequest_EmergencyAck)(nil),
+		(*CommandStreamRequest_EmergencyResult)(nil),
 	}
-	file_operator_v1_operator_proto_msgTypes[8].OneofWrappers = []any{
+	file_operator_v1_operator_proto_msgTypes[10].OneofWrappers = []any{
 		(*CommandStreamResponse_Command)(nil),
 		(*CommandStreamResponse_SessionEvent)(nil),
 		(*CommandStreamResponse_ResyncRequest)(nil),
 		(*CommandStreamResponse_DuplicateResponse)(nil),
 		(*CommandStreamResponse_SessionEstablished)(nil),
+		(*CommandStreamResponse_EmergencyCommand)(nil),
+	}
+	file_operator_v1_operator_proto_msgTypes[12].OneofWrappers = []any{
+		(*EmergencyCommand_SetContainerImage)(nil),
+		(*EmergencyCommand_SetReplicas)(nil),
+		(*EmergencyCommand_SetApprovedAnnotations)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1539,7 +2239,7 @@ func file_operator_v1_operator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_operator_v1_operator_proto_rawDesc), len(file_operator_v1_operator_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   18,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

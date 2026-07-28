@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/viper"
 
 	"connectrpc.com/connect"
+	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/audit"
@@ -27,10 +28,11 @@ import (
 )
 
 type orchSvc struct {
-	cfg        config.ServiceConfig
-	targetEnv  string
-	signingKey string
-	configPath string
+	cfg         config.ServiceConfig
+	targetEnv   string
+	signingKey  string
+	operatorURL string
+	configPath  string
 
 	store   store.Store
 	cleanup *orchestrator.CleanupService
@@ -81,7 +83,8 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if !s.cfg.Maintenance {
 		auditEmitter = audit.NewEmitter(s.store.AuditEvents(), logger, audit.DefaultConfig())
 	}
-	svc := orchestrator.NewService(s.store, verifier, s.targetEnv, auditEmitter, logger)
+	emergencyDispatcher := orchestrator.NewEmergencyDispatcher(operatorv1connect.NewOperatorServiceClient(http.DefaultClient, s.operatorURL))
+	svc := orchestrator.NewService(s.store, verifier, s.targetEnv, auditEmitter, emergencyDispatcher, logger)
 	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)
 	enforcer, err := auth.NewEnforcer(s.store, logger)
 	if err != nil {
@@ -181,8 +184,9 @@ func (s *orchSvc) Run(ctx context.Context) {
 func main() {
 	configPath := flag.String("config", "configs/orchestrator.dev.yaml", "path to config file")
 	targetEnv := flag.String("target-env", "staging", "target environment (production, staging)")
+	operatorURL := flag.String("operator-url", "http://localhost:8084", "release-operator Connect URL")
 	signingKey := flag.String("signing-key", "change-me-in-production", "JWT signing key")
 	flag.Parse()
 
-	app.Run(*configPath, &orchSvc{targetEnv: *targetEnv, configPath: *configPath, signingKey: *signingKey})
+	app.Run(*configPath, &orchSvc{targetEnv: *targetEnv, configPath: *configPath, signingKey: *signingKey, operatorURL: *operatorURL})
 }

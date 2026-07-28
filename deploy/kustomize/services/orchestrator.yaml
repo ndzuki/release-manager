@@ -23,7 +23,7 @@ spec:
         - name: orchestrator
           image: localhost:5001/release-orchestrator:dev
           imagePullPolicy: IfNotPresent
-          args: ["--config", "/configs/orchestrator.dev.yaml", "--target-env", "staging"]
+          args: ["--config", "/configs/orchestrator.dev.yaml", "--target-env", "staging", "--operator-url", "http://operator:8084"]
           envFrom:
             - secretRef:
                 name: release-manager-dev-credentials

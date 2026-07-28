@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -25,20 +26,19 @@ func (s *candidateArtifactStore) Create(ctx context.Context, ca *store.Candidate
 	}
 
 	createdAt := ca.CreatedAt.UTC().Format(time.RFC3339)
-
 	var artifactID string
 	err := s.gorm.QueryRowContext(ctx, `
-		INSERT INTO candidate_artifacts (id, artifact_type, ref, digest, bundle_id, created_at, last_seen_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO candidate_artifacts (id, artifact_type, ref, digest, bundle_id, created_at, last_seen_at, validated_at, source_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(digest, artifact_type) DO UPDATE SET
 			ref = EXCLUDED.ref,
-			last_seen_at = EXCLUDED.last_seen_at
+			last_seen_at = EXCLUDED.last_seen_at,
+			validated_at = COALESCE(EXCLUDED.validated_at, candidate_artifacts.validated_at),
+			source_id = CASE WHEN EXCLUDED.source_id = '' THEN candidate_artifacts.source_id ELSE EXCLUDED.source_id END
 		RETURNING id
 	`,
 		ca.ID, string(ca.ArtifactType), ca.Ref, ca.Digest,
-		bundleID,
-		createdAt,
-		createdAt,
+		bundleID, createdAt, createdAt, ca.ValidatedAt, ca.SourceID,
 	).Scan(&artifactID)
 	if err != nil {
 		return fmt.Errorf("insert candidate artifact: %w", err)
@@ -57,6 +57,30 @@ func (s *candidateArtifactStore) Create(ctx context.Context, ca *store.Candidate
 	}
 
 	return nil
+}
+
+func (s *candidateArtifactStore) Get(ctx context.Context, id string) (*store.CandidateArtifact, error) {
+	return scanCandidateArtifact(s.gorm.QueryRowContext(ctx, candidateArtifactSelect+` WHERE id = ?`, id))
+}
+
+func (s *candidateArtifactStore) ListValidated(ctx context.Context) ([]*store.CandidateArtifact, error) {
+	rows, err := s.gorm.QueryContext(ctx, candidateArtifactSelect+` WHERE validated_at IS NOT NULL ORDER BY validated_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list validated candidate artifacts: %w", err)
+	}
+	defer rows.Close()
+	artifacts := make([]*store.CandidateArtifact, 0)
+	for rows.Next() {
+		artifact, err := scanCandidateArtifact(rows)
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate candidate artifacts: %w", err)
+	}
+	return artifacts, nil
 }
 
 // LinkToBundle associates a candidate artifact with a release bundle.
@@ -97,4 +121,31 @@ func (s *candidateArtifactStore) DeleteOrphanBefore(ctx context.Context, cutoff 
 		return 0, fmt.Errorf("delete orphan candidate artifacts: %w", err)
 	}
 	return result.RowsAffected()
+}
+
+const candidateArtifactSelect = `
+	SELECT id, artifact_type, ref, digest, bundle_id, created_at, validated_at, source_id
+	FROM candidate_artifacts`
+
+func scanCandidateArtifact(row interface{ Scan(...any) error }) (*store.CandidateArtifact, error) {
+	var artifact store.CandidateArtifact
+	var artifactType string
+	var bundleID sql.NullString
+	if err := row.Scan(&artifact.ID, &artifactType, &artifact.Ref, &artifact.Digest, &bundleID,
+		&artifact.CreatedAt, &artifact.ValidatedAt, &artifact.SourceID); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("scan candidate artifact: %w", err)
+	}
+	artifact.ArtifactType = store.ArtifactType(artifactType)
+	if bundleID.Valid {
+		artifact.BundleID = &bundleID.String
+	}
+	artifact.CreatedAt = artifact.CreatedAt.UTC()
+	if artifact.ValidatedAt != nil {
+		value := artifact.ValidatedAt.UTC()
+		artifact.ValidatedAt = &value
+	}
+	return &artifact, nil
 }

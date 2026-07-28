@@ -41,6 +41,9 @@ const (
 	// OperatorServiceRevokeOperatorProcedure is the fully-qualified name of the OperatorService's
 	// RevokeOperator RPC.
 	OperatorServiceRevokeOperatorProcedure = "/operator.v1.OperatorService/RevokeOperator"
+	// OperatorServiceDispatchEmergencyProcedure is the fully-qualified name of the OperatorService's
+	// DispatchEmergency RPC.
+	OperatorServiceDispatchEmergencyProcedure = "/operator.v1.OperatorService/DispatchEmergency"
 )
 
 // OperatorServiceClient is a client for the operator.v1.OperatorService service.
@@ -48,6 +51,7 @@ type OperatorServiceClient interface {
 	Enroll(context.Context, *connect.Request[v1.EnrollRequest]) (*connect.Response[v1.EnrollResponse], error)
 	CommandStream(context.Context) *connect.BidiStreamForClient[v1.CommandStreamRequest, v1.CommandStreamResponse]
 	RevokeOperator(context.Context, *connect.Request[v1.RevokeOperatorRequest]) (*connect.Response[v1.RevokeOperatorResponse], error)
+	DispatchEmergency(context.Context, *connect.Request[v1.DispatchEmergencyRequest]) (*connect.Response[v1.DispatchEmergencyResponse], error)
 }
 
 // NewOperatorServiceClient constructs a client for the operator.v1.OperatorService service. By
@@ -79,14 +83,21 @@ func NewOperatorServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(operatorServiceMethods.ByName("RevokeOperator")),
 			connect.WithClientOptions(opts...),
 		),
+		dispatchEmergency: connect.NewClient[v1.DispatchEmergencyRequest, v1.DispatchEmergencyResponse](
+			httpClient,
+			baseURL+OperatorServiceDispatchEmergencyProcedure,
+			connect.WithSchema(operatorServiceMethods.ByName("DispatchEmergency")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // operatorServiceClient implements OperatorServiceClient.
 type operatorServiceClient struct {
-	enroll         *connect.Client[v1.EnrollRequest, v1.EnrollResponse]
-	commandStream  *connect.Client[v1.CommandStreamRequest, v1.CommandStreamResponse]
-	revokeOperator *connect.Client[v1.RevokeOperatorRequest, v1.RevokeOperatorResponse]
+	enroll            *connect.Client[v1.EnrollRequest, v1.EnrollResponse]
+	commandStream     *connect.Client[v1.CommandStreamRequest, v1.CommandStreamResponse]
+	revokeOperator    *connect.Client[v1.RevokeOperatorRequest, v1.RevokeOperatorResponse]
+	dispatchEmergency *connect.Client[v1.DispatchEmergencyRequest, v1.DispatchEmergencyResponse]
 }
 
 // Enroll calls operator.v1.OperatorService.Enroll.
@@ -104,11 +115,17 @@ func (c *operatorServiceClient) RevokeOperator(ctx context.Context, req *connect
 	return c.revokeOperator.CallUnary(ctx, req)
 }
 
+// DispatchEmergency calls operator.v1.OperatorService.DispatchEmergency.
+func (c *operatorServiceClient) DispatchEmergency(ctx context.Context, req *connect.Request[v1.DispatchEmergencyRequest]) (*connect.Response[v1.DispatchEmergencyResponse], error) {
+	return c.dispatchEmergency.CallUnary(ctx, req)
+}
+
 // OperatorServiceHandler is an implementation of the operator.v1.OperatorService service.
 type OperatorServiceHandler interface {
 	Enroll(context.Context, *connect.Request[v1.EnrollRequest]) (*connect.Response[v1.EnrollResponse], error)
 	CommandStream(context.Context, *connect.BidiStream[v1.CommandStreamRequest, v1.CommandStreamResponse]) error
 	RevokeOperator(context.Context, *connect.Request[v1.RevokeOperatorRequest]) (*connect.Response[v1.RevokeOperatorResponse], error)
+	DispatchEmergency(context.Context, *connect.Request[v1.DispatchEmergencyRequest]) (*connect.Response[v1.DispatchEmergencyResponse], error)
 }
 
 // NewOperatorServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -136,6 +153,12 @@ func NewOperatorServiceHandler(svc OperatorServiceHandler, opts ...connect.Handl
 		connect.WithSchema(operatorServiceMethods.ByName("RevokeOperator")),
 		connect.WithHandlerOptions(opts...),
 	)
+	operatorServiceDispatchEmergencyHandler := connect.NewUnaryHandler(
+		OperatorServiceDispatchEmergencyProcedure,
+		svc.DispatchEmergency,
+		connect.WithSchema(operatorServiceMethods.ByName("DispatchEmergency")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/operator.v1.OperatorService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case OperatorServiceEnrollProcedure:
@@ -144,6 +167,8 @@ func NewOperatorServiceHandler(svc OperatorServiceHandler, opts ...connect.Handl
 			operatorServiceCommandStreamHandler.ServeHTTP(w, r)
 		case OperatorServiceRevokeOperatorProcedure:
 			operatorServiceRevokeOperatorHandler.ServeHTTP(w, r)
+		case OperatorServiceDispatchEmergencyProcedure:
+			operatorServiceDispatchEmergencyHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -163,4 +188,8 @@ func (UnimplementedOperatorServiceHandler) CommandStream(context.Context, *conne
 
 func (UnimplementedOperatorServiceHandler) RevokeOperator(context.Context, *connect.Request[v1.RevokeOperatorRequest]) (*connect.Response[v1.RevokeOperatorResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("operator.v1.OperatorService.RevokeOperator is not implemented"))
+}
+
+func (UnimplementedOperatorServiceHandler) DispatchEmergency(context.Context, *connect.Request[v1.DispatchEmergencyRequest]) (*connect.Response[v1.DispatchEmergencyResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("operator.v1.OperatorService.DispatchEmergency is not implemented"))
 }

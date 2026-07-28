@@ -59,6 +59,10 @@ message ReleaseDefinition {
   string created_by = 10;
   google.protobuf.Timestamp created_at = 11;
   google.protobuf.Timestamp updated_at = 12;
+  bool hpa_managed = 13;
+  int32 max_emergency_replicas = 14;
+  bytes approved_annotation_keys = 15;
+  bytes promotion_mappings = 16;
 }
 
 // ValuesStatus is the approval state of a values revision.

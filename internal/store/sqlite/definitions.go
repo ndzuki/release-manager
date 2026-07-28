@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -33,17 +34,29 @@ func (s *definitionStore) Create(
 	}
 	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
 
+	approvedKeys, err := json.Marshal(def.ApprovedAnnotationKeys)
+	if err != nil {
+		return fmt.Errorf("marshal approved annotation keys: %w", err)
+	}
+	promotionMappings, err := json.Marshal(def.PromotionMappings)
+	if err != nil {
+		return fmt.Errorf("marshal promotion mappings: %w", err)
+	}
+
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO release_definitions (
 			id, name, customer_id, cluster_id, namespace, release_name,
 			chart_name, status, optimistic_version, created_by,
-			owner_organization_id, approved_revision_id, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			owner_organization_id, approved_revision_id, hpa_managed,
+			max_emergency_replicas, approved_annotation_keys, promotion_mappings,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		def.ID, def.Name, def.CustomerID, def.ClusterID,
 		def.Namespace, def.ReleaseName, def.ChartName,
 		string(def.Status), def.OptimisticVersion, def.CreatedBy,
-		def.OwnerOrganizationID, def.ApprovedRevisionID,
+		def.OwnerOrganizationID, def.ApprovedRevisionID, def.HPAManaged,
+		def.MaxEmergencyReplicas, approvedKeys, promotionMappings,
 		def.CreatedAt.UTC().Format(time.RFC3339Nano), def.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -62,12 +75,7 @@ func (s *definitionStore) Create(
 }
 
 func (s *definitionStore) Get(ctx context.Context, id string) (*store.ReleaseDefinition, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, customer_id, cluster_id, namespace, release_name,
-			chart_name, status, optimistic_version, current_bundle_id, created_by,
-			owner_organization_id, approved_revision_id, created_at, updated_at
-		FROM release_definitions WHERE id = ?
-	`, id)
+	row := s.db.QueryRowContext(ctx, definitionSelect+` WHERE id = ?`, id)
 	return scanDefinition(row)
 }
 
@@ -82,18 +90,29 @@ func (s *definitionStore) Update(
 	}
 	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
 
+	approvedKeys, err := json.Marshal(def.ApprovedAnnotationKeys)
+	if err != nil {
+		return nil, fmt.Errorf("marshal approved annotation keys: %w", err)
+	}
+	promotionMappings, err := json.Marshal(def.PromotionMappings)
+	if err != nil {
+		return nil, fmt.Errorf("marshal promotion mappings: %w", err)
+	}
 	updatedAt := time.Now().UTC()
 	result, err := tx.ExecContext(ctx, `
 		UPDATE release_definitions
 		SET name = ?, customer_id = ?, cluster_id = ?, namespace = ?,
-		    release_name = ?, chart_name = ?, status = ?,
+		    release_name = ?, chart_name = ?, status = ?, hpa_managed = ?,
+		    max_emergency_replicas = ?, approved_annotation_keys = ?, promotion_mappings = ?,
 		    optimistic_version = optimistic_version + 1,
 		    updated_at = ?
 		WHERE id = ? AND optimistic_version = ?
 	`,
 		def.Name, def.CustomerID, def.ClusterID,
 		def.Namespace, def.ReleaseName, def.ChartName,
-		string(def.Status), updatedAt.Format(time.RFC3339Nano), def.ID, def.OptimisticVersion,
+		string(def.Status), def.HPAManaged, def.MaxEmergencyReplicas,
+		approvedKeys, promotionMappings, updatedAt.Format(time.RFC3339Nano),
+		def.ID, def.OptimisticVersion,
 	)
 	if err != nil {
 		if isUniqueConstraint(err) {
@@ -122,12 +141,7 @@ func (s *definitionStore) List(
 	customerID, clusterID string,
 	includeDisabled bool,
 ) ([]*store.ReleaseDefinition, error) {
-	query := `
-		SELECT id, name, customer_id, cluster_id, namespace, release_name,
-			chart_name, status, optimistic_version, current_bundle_id, created_by,
-			owner_organization_id, approved_revision_id, created_at, updated_at
-		FROM release_definitions
-		WHERE 1 = 1`
+	query := definitionSelect + ` WHERE 1 = 1`
 	args := make([]any, 0, 2)
 	if customerID != "" {
 		query += ` AND customer_id = ?`
@@ -183,54 +197,66 @@ func insertDefinitionEvent(
 	return nil
 }
 
-func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.ReleaseDefinition, error) {
-	var (
-		id, name, customerID, clusterID, namespace, releaseName, chartName string
-		status                                                             string
-		optimisticVersion                                                  int
-		currentBundleID, ownerOrganizationID, approvedRevisionID           *string
-		createdBy                                                          string
-		createdAt, updatedAt                                               string
-	)
+const definitionSelect = `
+	SELECT id, name, customer_id, cluster_id, namespace, release_name,
+		chart_name, status, optimistic_version, current_bundle_id, created_by,
+		owner_organization_id, approved_revision_id, hpa_managed,
+		max_emergency_replicas, approved_annotation_keys, promotion_mappings,
+		created_at, updated_at
+	FROM release_definitions`
 
-	err := row.Scan(
-		&id, &name, &customerID, &clusterID, &namespace, &releaseName,
-		&chartName, &status, &optimisticVersion, &currentBundleID, &createdBy,
-		&ownerOrganizationID, &approvedRevisionID, &createdAt, &updatedAt,
-	)
-	if err != nil {
+func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.ReleaseDefinition, error) {
+	var definition store.ReleaseDefinition
+	var status string
+	var currentBundleID, ownerOrganizationID, approvedRevisionID sql.NullString
+	var approvedKeys, promotionMappings []byte
+	var createdAt, updatedAt string
+	if err := row.Scan(
+		&definition.ID, &definition.Name, &definition.CustomerID, &definition.ClusterID,
+		&definition.Namespace, &definition.ReleaseName, &definition.ChartName, &status,
+		&definition.OptimisticVersion, &currentBundleID, &definition.CreatedBy,
+		&ownerOrganizationID, &approvedRevisionID, &definition.HPAManaged,
+		&definition.MaxEmergencyReplicas, &approvedKeys, &promotionMappings,
+		&createdAt, &updatedAt,
+	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
 		return nil, fmt.Errorf("scan definition: %w", err)
 	}
-
-	ct, err := time.Parse(time.RFC3339Nano, createdAt)
+	definition.Status = store.DefinitionStatus(status)
+	var err error
+	definition.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
-		return nil, fmt.Errorf("parse created_at: %w", err)
+		return nil, fmt.Errorf("parse definition created_at: %w", err)
 	}
-	ut, err := time.Parse(time.RFC3339Nano, updatedAt)
+	definition.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
 	if err != nil {
-		return nil, fmt.Errorf("parse updated_at: %w", err)
+		return nil, fmt.Errorf("parse definition updated_at: %w", err)
 	}
-
-	return &store.ReleaseDefinition{
-		ID:                  id,
-		Name:                name,
-		CustomerID:          customerID,
-		ClusterID:           clusterID,
-		Namespace:           namespace,
-		ReleaseName:         releaseName,
-		ChartName:           chartName,
-		Status:              store.DefinitionStatus(status),
-		OptimisticVersion:   optimisticVersion,
-		CurrentBundleID:     currentBundleID,
-		CreatedBy:           createdBy,
-		OwnerOrganizationID: ownerOrganizationID,
-		ApprovedRevisionID:  approvedRevisionID,
-		CreatedAt:           ct,
-		UpdatedAt:           ut,
-	}, nil
+	if currentBundleID.Valid {
+		value := currentBundleID.String
+		definition.CurrentBundleID = &value
+	}
+	if ownerOrganizationID.Valid {
+		value := ownerOrganizationID.String
+		definition.OwnerOrganizationID = &value
+	}
+	if approvedRevisionID.Valid {
+		value := approvedRevisionID.String
+		definition.ApprovedRevisionID = &value
+	}
+	if len(approvedKeys) > 0 {
+		if err := json.Unmarshal(approvedKeys, &definition.ApprovedAnnotationKeys); err != nil {
+			return nil, fmt.Errorf("decode approved annotation keys: %w", err)
+		}
+	}
+	if len(promotionMappings) > 0 {
+		if err := json.Unmarshal(promotionMappings, &definition.PromotionMappings); err != nil {
+			return nil, fmt.Errorf("decode promotion mappings: %w", err)
+		}
+	}
+	return &definition, nil
 }
 
 // SetCurrentBundle associates a bundle with a release definition.

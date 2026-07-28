@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -33,17 +34,29 @@ func (s *definitionStore) Create(
 	}
 	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
 
+	approvedKeys, err := json.Marshal(def.ApprovedAnnotationKeys)
+	if err != nil {
+		return fmt.Errorf("marshal approved annotation keys: %w", err)
+	}
+	promotionMappings, err := json.Marshal(def.PromotionMappings)
+	if err != nil {
+		return fmt.Errorf("marshal promotion mappings: %w", err)
+	}
+
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO release_definitions (
 			id, name, customer_id, cluster_id, namespace, release_name,
 			chart_name, status, optimistic_version, current_bundle_id, created_by,
-			owner_organization_id, approved_revision_id, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			owner_organization_id, approved_revision_id, hpa_managed,
+			max_emergency_replicas, approved_annotation_keys, promotion_mappings,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		def.ID, def.Name, def.CustomerID, def.ClusterID,
 		def.Namespace, def.ReleaseName, def.ChartName,
 		string(def.Status), def.OptimisticVersion, def.CurrentBundleID, def.CreatedBy,
-		def.OwnerOrganizationID, def.ApprovedRevisionID,
+		def.OwnerOrganizationID, def.ApprovedRevisionID, def.HPAManaged,
+		def.MaxEmergencyReplicas, approvedKeys, promotionMappings,
 		def.CreatedAt.UTC(), def.UpdatedAt.UTC(),
 	)
 	if err != nil {
@@ -76,18 +89,28 @@ func (s *definitionStore) Update(
 	}
 	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
 
+	approvedKeys, err := json.Marshal(def.ApprovedAnnotationKeys)
+	if err != nil {
+		return nil, fmt.Errorf("marshal approved annotation keys: %w", err)
+	}
+	promotionMappings, err := json.Marshal(def.PromotionMappings)
+	if err != nil {
+		return nil, fmt.Errorf("marshal promotion mappings: %w", err)
+	}
 	updatedAt := time.Now().UTC()
 	result, err := tx.ExecContext(ctx, `
 		UPDATE release_definitions
 		SET name = ?, customer_id = ?, cluster_id = ?, namespace = ?,
-		    release_name = ?, chart_name = ?, status = ?,
+		    release_name = ?, chart_name = ?, status = ?, hpa_managed = ?,
+		    max_emergency_replicas = ?, approved_annotation_keys = ?, promotion_mappings = ?,
 		    optimistic_version = optimistic_version + 1,
 		    updated_at = ?
 		WHERE id = ? AND optimistic_version = ?
 	`,
 		def.Name, def.CustomerID, def.ClusterID,
 		def.Namespace, def.ReleaseName, def.ChartName,
-		string(def.Status), updatedAt, def.ID, def.OptimisticVersion,
+		string(def.Status), def.HPAManaged, def.MaxEmergencyReplicas,
+		approvedKeys, promotionMappings, updatedAt, def.ID, def.OptimisticVersion,
 	)
 	if err != nil {
 		if isUniqueConstraint(err) {
@@ -170,18 +193,23 @@ func insertDefinitionEvent(ctx context.Context, tx *Tx, event *store.ReleaseDefi
 const definitionSelect = `
 	SELECT id, name, customer_id, cluster_id, namespace, release_name,
 		chart_name, status, optimistic_version, current_bundle_id, created_by,
-		owner_organization_id, approved_revision_id, created_at, updated_at
+		owner_organization_id, approved_revision_id, hpa_managed,
+		max_emergency_replicas, approved_annotation_keys, promotion_mappings,
+		created_at, updated_at
 	FROM release_definitions`
 
 func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.ReleaseDefinition, error) {
 	var definition store.ReleaseDefinition
 	var status string
 	var currentBundleID, ownerOrganizationID, approvedRevisionID sql.NullString
+	var approvedKeys, promotionMappings []byte
 	if err := row.Scan(
 		&definition.ID, &definition.Name, &definition.CustomerID, &definition.ClusterID,
 		&definition.Namespace, &definition.ReleaseName, &definition.ChartName, &status,
 		&definition.OptimisticVersion, &currentBundleID, &definition.CreatedBy,
-		&ownerOrganizationID, &approvedRevisionID, &definition.CreatedAt, &definition.UpdatedAt,
+		&ownerOrganizationID, &approvedRevisionID, &definition.HPAManaged,
+		&definition.MaxEmergencyReplicas, &approvedKeys, &promotionMappings,
+		&definition.CreatedAt, &definition.UpdatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -202,6 +230,16 @@ func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.Release
 	if approvedRevisionID.Valid {
 		value := approvedRevisionID.String
 		definition.ApprovedRevisionID = &value
+	}
+	if len(approvedKeys) > 0 {
+		if err := json.Unmarshal(approvedKeys, &definition.ApprovedAnnotationKeys); err != nil {
+			return nil, fmt.Errorf("decode approved annotation keys: %w", err)
+		}
+	}
+	if len(promotionMappings) > 0 {
+		if err := json.Unmarshal(promotionMappings, &definition.PromotionMappings); err != nil {
+			return nil, fmt.Errorf("decode promotion mappings: %w", err)
+		}
 	}
 	return &definition, nil
 }

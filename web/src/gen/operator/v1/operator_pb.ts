@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file operator/v1/operator.proto.
  */
 export const file_operator_v1_operator: GenFile = /*@__PURE__*/
-  fileDesc("ChpvcGVyYXRvci92MS9vcGVyYXRvci5wcm90bxILb3BlcmF0b3IudjEi8QEKDUVucm9sbFJlcXVlc3QSGAoQZW5yb2xsbWVudF90b2tlbhgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRISCgpjbHVzdGVyX2lkGAMgASgJEhMKC29wZXJhdG9yX2lkGAQgASgJEg8KB2Nzcl9wZW0YBSABKAwSQgoMY2FwYWJpbGl0aWVzGAYgAygLMiwub3BlcmF0b3IudjEuRW5yb2xsUmVxdWVzdC5DYXBhYmlsaXRpZXNFbnRyeRozChFDYXBhYmlsaXRpZXNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIlIKDkVucm9sbFJlc3BvbnNlEhIKCnNlc3Npb25faWQYASABKAkSEwoLdHRsX3NlY29uZHMYAiABKAMSFwoPY2VydGlmaWNhdGVfcGVtGAMgASgMIvMBChRDb21tYW5kU3RyZWFtUmVxdWVzdBIjCgVoZWxsbxgBIAEoCzISLm9wZXJhdG9yLnYxLkhlbGxvSAASHwoDYWNrGAIgASgLMhAub3BlcmF0b3IudjEuQWNrSAASKwoJaGVhcnRiZWF0GAMgASgLMhYub3BlcmF0b3IudjEuSGVhcnRiZWF0SAASJQoGcmVzdWx0GAQgASgLMhMub3BlcmF0b3IudjEuUmVzdWx0SAASNgoPcmVzeW5jX3Jlc3BvbnNlGAUgASgLMhsub3BlcmF0b3IudjEuUmVzeW5jUmVzcG9uc2VIAEIJCgdwYXlsb2FkIuMBCgVIZWxsbxISCgpzZXNzaW9uX2lkGAEgASgJEhMKC29wZXJhdG9yX2lkGAIgASgJEhoKEmxhc3Rfc2Vlbl9zZXF1ZW5jZRgDIAEoAxITCgtpbnN0YW5jZV9pZBgEIAEoCRIPCgd2ZXJzaW9uGAUgASgJEjoKDGNhcGFiaWxpdGllcxgGIAMoCzIkLm9wZXJhdG9yLnYxLkhlbGxvLkNhcGFiaWxpdGllc0VudHJ5GjMKEUNhcGFiaWxpdGllc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEijgEKElNlc3Npb25Fc3RhYmxpc2hlZBISCgpzZXNzaW9uX2lkGAEgASgJEiIKGmhlYXJ0YmVhdF9pbnRlcnZhbF9zZWNvbmRzGAIgASgDEiEKGWhlYXJ0YmVhdF90aW1lb3V0X3NlY29uZHMYAyABKAMSHQoVYWN0aXZlX2NvbmZpZ192ZXJzaW9uGAQgASgJImYKA0FjaxIRCglvdXRib3hfaWQYASABKAkSEgoKY29tbWFuZF9pZBgCIAEoCRIQCghzZXF1ZW5jZRgDIAEoAxImCghhY2tfdHlwZRgEIAEoDjIULm9wZXJhdG9yLnYxLkFja1R5cGUiHwoJSGVhcnRiZWF0EhIKCnNlc3Npb25faWQYASABKAkihwEKBlJlc3VsdBIRCglvdXRib3hfaWQYASABKAkSEgoKY29tbWFuZF9pZBgCIAEoCRIOCgZzdGF0dXMYAyABKAkSDwoHbWVzc2FnZRgEIAEoCRIOCgZvdXRwdXQYBSABKAwSEAoIc2VxdWVuY2UYBiABKAMSEwoLcmVzdWx0X2pzb24YByABKAkiswIKFUNvbW1hbmRTdHJlYW1SZXNwb25zZRInCgdjb21tYW5kGAEgASgLMhQub3BlcmF0b3IudjEuQ29tbWFuZEgAEjIKDXNlc3Npb25fZXZlbnQYAiABKAsyGS5vcGVyYXRvci52MS5TZXNzaW9uRXZlbnRIABI0Cg5yZXN5bmNfcmVxdWVzdBgDIAEoCzIaLm9wZXJhdG9yLnYxLlJlc3luY1JlcXVlc3RIABI8ChJkdXBsaWNhdGVfcmVzcG9uc2UYBCABKAsyHi5vcGVyYXRvci52MS5EdXBsaWNhdGVSZXNwb25zZUgAEj4KE3Nlc3Npb25fZXN0YWJsaXNoZWQYBSABKAsyHy5vcGVyYXRvci52MS5TZXNzaW9uRXN0YWJsaXNoZWRIAEIJCgdwYXlsb2FkIpsDCgdDb21tYW5kEhEKCW91dGJveF9pZBgBIAEoCRISCgpjb21tYW5kX2lkGAIgASgJEhQKDG9wZXJhdGlvbl9pZBgDIAEoCRIWCg5vcGVyYXRpb25fdHlwZRgEIAEoCRIoCgZidW5kbGUYBSABKAsyGC5jb21tb24udjEuUmVsZWFzZUJ1bmRsZRIOCgZ2YWx1ZXMYBiABKAwSEAoIc2VxdWVuY2UYByABKAMSFQoNZGVmaW5pdGlvbl9pZBgIIAEoCRIRCgluYW1lc3BhY2UYCSABKAkSFAoMcmVsZWFzZV9uYW1lGAogASgJEhgKEGNyZWF0ZV9uYW1lc3BhY2UYCyABKAgSFwoPdGltZW91dF9zZWNvbmRzGAwgASgDEhoKEnZhbHVlc19yZXZpc2lvbl9pZBgNIAEoCRIhChlleHBlY3RlZF9jdXJyZW50X3JldmlzaW9uGA4gASgDEg4KBmF0b21pYxgPIAEoCBIUCgx2YWx1ZXNfcGF0Y2gYECABKAwSFwoPdGFyZ2V0X3JldmlzaW9uGBEgASgDIkMKDVJlc3luY1JlcXVlc3QSIgoab3JjaGVzdHJhdG9yX2xhc3Rfc2VxdWVuY2UYASABKAMSDgoGcmVhc29uGAIgASgJIjAKDlJlc3luY1Jlc3BvbnNlEh4KFm9wZXJhdG9yX2xhc3Rfc2VxdWVuY2UYASABKAMiPAoRRHVwbGljYXRlUmVzcG9uc2USEgoKY29tbWFuZF9pZBgBIAEoCRITCgtyZXN1bHRfanNvbhgCIAEoCSItCgxTZXNzaW9uRXZlbnQSDAoEdHlwZRgBIAEoCRIPCgdtZXNzYWdlGAIgASgJIjwKFVJldm9rZU9wZXJhdG9yUmVxdWVzdBITCgtvcGVyYXRvcl9pZBgBIAEoCRIOCgZyZWFzb24YAiABKAkiPQoWUmV2b2tlT3BlcmF0b3JSZXNwb25zZRITCgtvcGVyYXRvcl9pZBgBIAEoCRIOCgZzdGF0dXMYAiABKAkqUgoHQWNrVHlwZRIYChRBQ0tfVFlQRV9VTlNQRUNJRklFRBAAEhUKEUFDS19UWVBFX1JFQ0VJVkVEEAESFgoSQUNLX1RZUEVfUEVSU0lTVEVEEAIyiwIKD09wZXJhdG9yU2VydmljZRJBCgZFbnJvbGwSGi5vcGVyYXRvci52MS5FbnJvbGxSZXF1ZXN0Ghsub3BlcmF0b3IudjEuRW5yb2xsUmVzcG9uc2USWgoNQ29tbWFuZFN0cmVhbRIhLm9wZXJhdG9yLnYxLkNvbW1hbmRTdHJlYW1SZXF1ZXN0GiIub3BlcmF0b3IudjEuQ29tbWFuZFN0cmVhbVJlc3BvbnNlKAEwARJZCg5SZXZva2VPcGVyYXRvchIiLm9wZXJhdG9yLnYxLlJldm9rZU9wZXJhdG9yUmVxdWVzdBojLm9wZXJhdG9yLnYxLlJldm9rZU9wZXJhdG9yUmVzcG9uc2VCQlpAZ2l0aHViLmNvbS9uZHp1a2kvcmVsZWFzZS1tYW5hZ2VyL2FwaS9nZW4vb3BlcmF0b3IvdjE7b3BlcmF0b3J2MWIGcHJvdG8z", [file_common_v1_domain]);
+  fileDesc("ChpvcGVyYXRvci92MS9vcGVyYXRvci5wcm90bxILb3BlcmF0b3IudjEi8QEKDUVucm9sbFJlcXVlc3QSGAoQZW5yb2xsbWVudF90b2tlbhgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRISCgpjbHVzdGVyX2lkGAMgASgJEhMKC29wZXJhdG9yX2lkGAQgASgJEg8KB2Nzcl9wZW0YBSABKAwSQgoMY2FwYWJpbGl0aWVzGAYgAygLMiwub3BlcmF0b3IudjEuRW5yb2xsUmVxdWVzdC5DYXBhYmlsaXRpZXNFbnRyeRozChFDYXBhYmlsaXRpZXNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIlIKDkVucm9sbFJlc3BvbnNlEhIKCnNlc3Npb25faWQYASABKAkSEwoLdHRsX3NlY29uZHMYAiABKAMSFwoPY2VydGlmaWNhdGVfcGVtGAMgASgMIuECChRDb21tYW5kU3RyZWFtUmVxdWVzdBIjCgVoZWxsbxgBIAEoCzISLm9wZXJhdG9yLnYxLkhlbGxvSAASHwoDYWNrGAIgASgLMhAub3BlcmF0b3IudjEuQWNrSAASKwoJaGVhcnRiZWF0GAMgASgLMhYub3BlcmF0b3IudjEuSGVhcnRiZWF0SAASJQoGcmVzdWx0GAQgASgLMhMub3BlcmF0b3IudjEuUmVzdWx0SAASNgoPcmVzeW5jX3Jlc3BvbnNlGAUgASgLMhsub3BlcmF0b3IudjEuUmVzeW5jUmVzcG9uc2VIABIyCg1lbWVyZ2VuY3lfYWNrGAYgASgLMhkub3BlcmF0b3IudjEuRW1lcmdlbmN5QWNrSAASOAoQZW1lcmdlbmN5X3Jlc3VsdBgHIAEoCzIcLm9wZXJhdG9yLnYxLkVtZXJnZW5jeVJlc3VsdEgAQgkKB3BheWxvYWQi4wEKBUhlbGxvEhIKCnNlc3Npb25faWQYASABKAkSEwoLb3BlcmF0b3JfaWQYAiABKAkSGgoSbGFzdF9zZWVuX3NlcXVlbmNlGAMgASgDEhMKC2luc3RhbmNlX2lkGAQgASgJEg8KB3ZlcnNpb24YBSABKAkSOgoMY2FwYWJpbGl0aWVzGAYgAygLMiQub3BlcmF0b3IudjEuSGVsbG8uQ2FwYWJpbGl0aWVzRW50cnkaMwoRQ2FwYWJpbGl0aWVzRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASKOAQoSU2Vzc2lvbkVzdGFibGlzaGVkEhIKCnNlc3Npb25faWQYASABKAkSIgoaaGVhcnRiZWF0X2ludGVydmFsX3NlY29uZHMYAiABKAMSIQoZaGVhcnRiZWF0X3RpbWVvdXRfc2Vjb25kcxgDIAEoAxIdChVhY3RpdmVfY29uZmlnX3ZlcnNpb24YBCABKAkiZgoDQWNrEhEKCW91dGJveF9pZBgBIAEoCRISCgpjb21tYW5kX2lkGAIgASgJEhAKCHNlcXVlbmNlGAMgASgDEiYKCGFja190eXBlGAQgASgOMhQub3BlcmF0b3IudjEuQWNrVHlwZSIfCglIZWFydGJlYXQSEgoKc2Vzc2lvbl9pZBgBIAEoCSKHAQoGUmVzdWx0EhEKCW91dGJveF9pZBgBIAEoCRISCgpjb21tYW5kX2lkGAIgASgJEg4KBnN0YXR1cxgDIAEoCRIPCgdtZXNzYWdlGAQgASgJEg4KBm91dHB1dBgFIAEoDBIQCghzZXF1ZW5jZRgGIAEoAxITCgtyZXN1bHRfanNvbhgHIAEoCSJUCgxFbWVyZ2VuY3lBY2sSHAoUZW1lcmdlbmN5X2NvbW1hbmRfaWQYASABKAkSJgoIYWNrX3R5cGUYAiABKA4yFC5vcGVyYXRvci52MS5BY2tUeXBlIo8BCg9FbWVyZ2VuY3lSZXN1bHQSHAoUZW1lcmdlbmN5X2NvbW1hbmRfaWQYASABKAkSFAoMb3BlcmF0aW9uX2lkGAIgASgJEg4KBnN0YXR1cxgDIAEoCRISCgplcnJvcl9jb2RlGAQgASgJEg8KB21lc3NhZ2UYBSABKAkSEwoLcmVzdWx0X2pzb24YBiABKAki7wIKFUNvbW1hbmRTdHJlYW1SZXNwb25zZRInCgdjb21tYW5kGAEgASgLMhQub3BlcmF0b3IudjEuQ29tbWFuZEgAEjIKDXNlc3Npb25fZXZlbnQYAiABKAsyGS5vcGVyYXRvci52MS5TZXNzaW9uRXZlbnRIABI0Cg5yZXN5bmNfcmVxdWVzdBgDIAEoCzIaLm9wZXJhdG9yLnYxLlJlc3luY1JlcXVlc3RIABI8ChJkdXBsaWNhdGVfcmVzcG9uc2UYBCABKAsyHi5vcGVyYXRvci52MS5EdXBsaWNhdGVSZXNwb25zZUgAEj4KE3Nlc3Npb25fZXN0YWJsaXNoZWQYBSABKAsyHy5vcGVyYXRvci52MS5TZXNzaW9uRXN0YWJsaXNoZWRIABI6ChFlbWVyZ2VuY3lfY29tbWFuZBgGIAEoCzIdLm9wZXJhdG9yLnYxLkVtZXJnZW5jeUNvbW1hbmRIAEIJCgdwYXlsb2FkIpsDCgdDb21tYW5kEhEKCW91dGJveF9pZBgBIAEoCRISCgpjb21tYW5kX2lkGAIgASgJEhQKDG9wZXJhdGlvbl9pZBgDIAEoCRIWCg5vcGVyYXRpb25fdHlwZRgEIAEoCRIoCgZidW5kbGUYBSABKAsyGC5jb21tb24udjEuUmVsZWFzZUJ1bmRsZRIOCgZ2YWx1ZXMYBiABKAwSEAoIc2VxdWVuY2UYByABKAMSFQoNZGVmaW5pdGlvbl9pZBgIIAEoCRIRCgluYW1lc3BhY2UYCSABKAkSFAoMcmVsZWFzZV9uYW1lGAogASgJEhgKEGNyZWF0ZV9uYW1lc3BhY2UYCyABKAgSFwoPdGltZW91dF9zZWNvbmRzGAwgASgDEhoKEnZhbHVlc19yZXZpc2lvbl9pZBgNIAEoCRIhChlleHBlY3RlZF9jdXJyZW50X3JldmlzaW9uGA4gASgDEg4KBmF0b21pYxgPIAEoCBIUCgx2YWx1ZXNfcGF0Y2gYECABKAwSFwoPdGFyZ2V0X3JldmlzaW9uGBEgASgDIosDChBFbWVyZ2VuY3lDb21tYW5kEhIKCmNvbW1hbmRfaWQYASABKAkSFAoMb3BlcmF0aW9uX2lkGAIgASgJEg4KBmFjdGlvbhgDIAEoCRIVCg13b3JrbG9hZF9raW5kGAQgASgJEhUKDXdvcmtsb2FkX25hbWUYBSABKAkSGgoSd29ya2xvYWRfbmFtZXNwYWNlGAYgASgJEhQKDHdvcmtsb2FkX3VpZBgHIAEoCRJGChNzZXRfY29udGFpbmVyX2ltYWdlGAggASgLMicub3BlcmF0b3IudjEuRW1lcmdlbmN5U2V0Q29udGFpbmVySW1hZ2VIABI5CgxzZXRfcmVwbGljYXMYCSABKAsyIS5vcGVyYXRvci52MS5FbWVyZ2VuY3lTZXRSZXBsaWNhc0gAElAKGHNldF9hcHByb3ZlZF9hbm5vdGF0aW9ucxgKIAEoCzIsLm9wZXJhdG9yLnYxLkVtZXJnZW5jeVNldEFwcHJvdmVkQW5ub3RhdGlvbnNIAEIICgZjaGFuZ2UiSAoaRW1lcmdlbmN5U2V0Q29udGFpbmVySW1hZ2USEQoJY29udGFpbmVyGAEgASgJEhcKD2ltYWdlX3JlZmVyZW5jZRgCIAEoCSIoChRFbWVyZ2VuY3lTZXRSZXBsaWNhcxIQCghyZXBsaWNhcxgBIAEoBSJoCh9FbWVyZ2VuY3lTZXRBcHByb3ZlZEFubm90YXRpb25zEjYKB2VudHJpZXMYASADKAsyJS5vcGVyYXRvci52MS5FbWVyZ2VuY3lBbm5vdGF0aW9uRW50cnkSDQoFc2NvcGUYAiABKAkiNgoYRW1lcmdlbmN5QW5ub3RhdGlvbkVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCSJDCg1SZXN5bmNSZXF1ZXN0EiIKGm9yY2hlc3RyYXRvcl9sYXN0X3NlcXVlbmNlGAEgASgDEg4KBnJlYXNvbhgCIAEoCSIwCg5SZXN5bmNSZXNwb25zZRIeChZvcGVyYXRvcl9sYXN0X3NlcXVlbmNlGAEgASgDIjwKEUR1cGxpY2F0ZVJlc3BvbnNlEhIKCmNvbW1hbmRfaWQYASABKAkSEwoLcmVzdWx0X2pzb24YAiABKAkiLQoMU2Vzc2lvbkV2ZW50EgwKBHR5cGUYASABKAkSDwoHbWVzc2FnZRgCIAEoCSJfChhEaXNwYXRjaEVtZXJnZW5jeVJlcXVlc3QSEwoLb3BlcmF0b3JfaWQYASABKAkSLgoHY29tbWFuZBgCIAEoCzIdLm9wZXJhdG9yLnYxLkVtZXJnZW5jeUNvbW1hbmQiGwoZRGlzcGF0Y2hFbWVyZ2VuY3lSZXNwb25zZSI8ChVSZXZva2VPcGVyYXRvclJlcXVlc3QSEwoLb3BlcmF0b3JfaWQYASABKAkSDgoGcmVhc29uGAIgASgJIj0KFlJldm9rZU9wZXJhdG9yUmVzcG9uc2USEwoLb3BlcmF0b3JfaWQYASABKAkSDgoGc3RhdHVzGAIgASgJKlIKB0Fja1R5cGUSGAoUQUNLX1RZUEVfVU5TUEVDSUZJRUQQABIVChFBQ0tfVFlQRV9SRUNFSVZFRBABEhYKEkFDS19UWVBFX1BFUlNJU1RFRBACMu8CCg9PcGVyYXRvclNlcnZpY2USQQoGRW5yb2xsEhoub3BlcmF0b3IudjEuRW5yb2xsUmVxdWVzdBobLm9wZXJhdG9yLnYxLkVucm9sbFJlc3BvbnNlEloKDUNvbW1hbmRTdHJlYW0SIS5vcGVyYXRvci52MS5Db21tYW5kU3RyZWFtUmVxdWVzdBoiLm9wZXJhdG9yLnYxLkNvbW1hbmRTdHJlYW1SZXNwb25zZSgBMAESWQoOUmV2b2tlT3BlcmF0b3ISIi5vcGVyYXRvci52MS5SZXZva2VPcGVyYXRvclJlcXVlc3QaIy5vcGVyYXRvci52MS5SZXZva2VPcGVyYXRvclJlc3BvbnNlEmIKEURpc3BhdGNoRW1lcmdlbmN5EiUub3BlcmF0b3IudjEuRGlzcGF0Y2hFbWVyZ2VuY3lSZXF1ZXN0GiYub3BlcmF0b3IudjEuRGlzcGF0Y2hFbWVyZ2VuY3lSZXNwb25zZUJCWkBnaXRodWIuY29tL25kenVraS9yZWxlYXNlLW1hbmFnZXIvYXBpL2dlbi9vcGVyYXRvci92MTtvcGVyYXRvcnYxYgZwcm90bzM", [file_common_v1_domain]);
 
 /**
  * EnrollRequest registers an operator agent with the orchestrator using a single-use token.
@@ -140,6 +140,18 @@ export type CommandStreamRequest = Message<"operator.v1.CommandStreamRequest"> &
      */
     value: ResyncResponse;
     case: "resyncResponse";
+  } | {
+    /**
+     * @generated from field: operator.v1.EmergencyAck emergency_ack = 6;
+     */
+    value: EmergencyAck;
+    case: "emergencyAck";
+  } | {
+    /**
+     * @generated from field: operator.v1.EmergencyResult emergency_result = 7;
+     */
+    value: EmergencyResult;
+    case: "emergencyResult";
   } | { case: undefined; value?: undefined };
 };
 
@@ -345,6 +357,70 @@ export const ResultSchema: GenMessage<Result> = /*@__PURE__*/
   messageDesc(file_operator_v1_operator, 7);
 
 /**
+ * @generated from message operator.v1.EmergencyAck
+ */
+export type EmergencyAck = Message<"operator.v1.EmergencyAck"> & {
+  /**
+   * @generated from field: string emergency_command_id = 1;
+   */
+  emergencyCommandId: string;
+
+  /**
+   * @generated from field: operator.v1.AckType ack_type = 2;
+   */
+  ackType: AckType;
+};
+
+/**
+ * Describes the message operator.v1.EmergencyAck.
+ * Use `create(EmergencyAckSchema)` to create a new message.
+ */
+export const EmergencyAckSchema: GenMessage<EmergencyAck> = /*@__PURE__*/
+  messageDesc(file_operator_v1_operator, 8);
+
+/**
+ * @generated from message operator.v1.EmergencyResult
+ */
+export type EmergencyResult = Message<"operator.v1.EmergencyResult"> & {
+  /**
+   * @generated from field: string emergency_command_id = 1;
+   */
+  emergencyCommandId: string;
+
+  /**
+   * @generated from field: string operation_id = 2;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: string status = 3;
+   */
+  status: string;
+
+  /**
+   * @generated from field: string error_code = 4;
+   */
+  errorCode: string;
+
+  /**
+   * @generated from field: string message = 5;
+   */
+  message: string;
+
+  /**
+   * @generated from field: string result_json = 6;
+   */
+  resultJson: string;
+};
+
+/**
+ * Describes the message operator.v1.EmergencyResult.
+ * Use `create(EmergencyResultSchema)` to create a new message.
+ */
+export const EmergencyResultSchema: GenMessage<EmergencyResult> = /*@__PURE__*/
+  messageDesc(file_operator_v1_operator, 9);
+
+/**
  * CommandStreamResponse delivers session lifecycle responses.
  *
  * @generated from message operator.v1.CommandStreamResponse
@@ -391,6 +467,12 @@ export type CommandStreamResponse = Message<"operator.v1.CommandStreamResponse">
      */
     value: SessionEstablished;
     case: "sessionEstablished";
+  } | {
+    /**
+     * @generated from field: operator.v1.EmergencyCommand emergency_command = 6;
+     */
+    value: EmergencyCommand;
+    case: "emergencyCommand";
   } | { case: undefined; value?: undefined };
 };
 
@@ -399,7 +481,7 @@ export type CommandStreamResponse = Message<"operator.v1.CommandStreamResponse">
  * Use `create(CommandStreamResponseSchema)` to create a new message.
  */
 export const CommandStreamResponseSchema: GenMessage<CommandStreamResponse> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 8);
+  messageDesc(file_operator_v1_operator, 10);
 
 /**
  * Command is a deploy directive sent to the operator.
@@ -506,7 +588,160 @@ export type Command = Message<"operator.v1.Command"> & {
  * Use `create(CommandSchema)` to create a new message.
  */
 export const CommandSchema: GenMessage<Command> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 9);
+  messageDesc(file_operator_v1_operator, 11);
+
+/**
+ * @generated from message operator.v1.EmergencyCommand
+ */
+export type EmergencyCommand = Message<"operator.v1.EmergencyCommand"> & {
+  /**
+   * @generated from field: string command_id = 1;
+   */
+  commandId: string;
+
+  /**
+   * @generated from field: string operation_id = 2;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: string action = 3;
+   */
+  action: string;
+
+  /**
+   * @generated from field: string workload_kind = 4;
+   */
+  workloadKind: string;
+
+  /**
+   * @generated from field: string workload_name = 5;
+   */
+  workloadName: string;
+
+  /**
+   * @generated from field: string workload_namespace = 6;
+   */
+  workloadNamespace: string;
+
+  /**
+   * @generated from field: string workload_uid = 7;
+   */
+  workloadUid: string;
+
+  /**
+   * @generated from oneof operator.v1.EmergencyCommand.change
+   */
+  change: {
+    /**
+     * @generated from field: operator.v1.EmergencySetContainerImage set_container_image = 8;
+     */
+    value: EmergencySetContainerImage;
+    case: "setContainerImage";
+  } | {
+    /**
+     * @generated from field: operator.v1.EmergencySetReplicas set_replicas = 9;
+     */
+    value: EmergencySetReplicas;
+    case: "setReplicas";
+  } | {
+    /**
+     * @generated from field: operator.v1.EmergencySetApprovedAnnotations set_approved_annotations = 10;
+     */
+    value: EmergencySetApprovedAnnotations;
+    case: "setApprovedAnnotations";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message operator.v1.EmergencyCommand.
+ * Use `create(EmergencyCommandSchema)` to create a new message.
+ */
+export const EmergencyCommandSchema: GenMessage<EmergencyCommand> = /*@__PURE__*/
+  messageDesc(file_operator_v1_operator, 12);
+
+/**
+ * @generated from message operator.v1.EmergencySetContainerImage
+ */
+export type EmergencySetContainerImage = Message<"operator.v1.EmergencySetContainerImage"> & {
+  /**
+   * @generated from field: string container = 1;
+   */
+  container: string;
+
+  /**
+   * @generated from field: string image_reference = 2;
+   */
+  imageReference: string;
+};
+
+/**
+ * Describes the message operator.v1.EmergencySetContainerImage.
+ * Use `create(EmergencySetContainerImageSchema)` to create a new message.
+ */
+export const EmergencySetContainerImageSchema: GenMessage<EmergencySetContainerImage> = /*@__PURE__*/
+  messageDesc(file_operator_v1_operator, 13);
+
+/**
+ * @generated from message operator.v1.EmergencySetReplicas
+ */
+export type EmergencySetReplicas = Message<"operator.v1.EmergencySetReplicas"> & {
+  /**
+   * @generated from field: int32 replicas = 1;
+   */
+  replicas: number;
+};
+
+/**
+ * Describes the message operator.v1.EmergencySetReplicas.
+ * Use `create(EmergencySetReplicasSchema)` to create a new message.
+ */
+export const EmergencySetReplicasSchema: GenMessage<EmergencySetReplicas> = /*@__PURE__*/
+  messageDesc(file_operator_v1_operator, 14);
+
+/**
+ * @generated from message operator.v1.EmergencySetApprovedAnnotations
+ */
+export type EmergencySetApprovedAnnotations = Message<"operator.v1.EmergencySetApprovedAnnotations"> & {
+  /**
+   * @generated from field: repeated operator.v1.EmergencyAnnotationEntry entries = 1;
+   */
+  entries: EmergencyAnnotationEntry[];
+
+  /**
+   * @generated from field: string scope = 2;
+   */
+  scope: string;
+};
+
+/**
+ * Describes the message operator.v1.EmergencySetApprovedAnnotations.
+ * Use `create(EmergencySetApprovedAnnotationsSchema)` to create a new message.
+ */
+export const EmergencySetApprovedAnnotationsSchema: GenMessage<EmergencySetApprovedAnnotations> = /*@__PURE__*/
+  messageDesc(file_operator_v1_operator, 15);
+
+/**
+ * @generated from message operator.v1.EmergencyAnnotationEntry
+ */
+export type EmergencyAnnotationEntry = Message<"operator.v1.EmergencyAnnotationEntry"> & {
+  /**
+   * @generated from field: string key = 1;
+   */
+  key: string;
+
+  /**
+   * @generated from field: string value = 2;
+   */
+  value: string;
+};
+
+/**
+ * Describes the message operator.v1.EmergencyAnnotationEntry.
+ * Use `create(EmergencyAnnotationEntrySchema)` to create a new message.
+ */
+export const EmergencyAnnotationEntrySchema: GenMessage<EmergencyAnnotationEntry> = /*@__PURE__*/
+  messageDesc(file_operator_v1_operator, 16);
 
 /**
  * ResyncRequest asks the operator to report its last seen sequence for gap recovery.
@@ -534,7 +769,7 @@ export type ResyncRequest = Message<"operator.v1.ResyncRequest"> & {
  * Use `create(ResyncRequestSchema)` to create a new message.
  */
 export const ResyncRequestSchema: GenMessage<ResyncRequest> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 10);
+  messageDesc(file_operator_v1_operator, 17);
 
 /**
  * ResyncResponse is sent by the operator in response to a ResyncRequest.
@@ -555,7 +790,7 @@ export type ResyncResponse = Message<"operator.v1.ResyncResponse"> & {
  * Use `create(ResyncResponseSchema)` to create a new message.
  */
 export const ResyncResponseSchema: GenMessage<ResyncResponse> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 11);
+  messageDesc(file_operator_v1_operator, 18);
 
 /**
  * DuplicateResponse is sent when the operator receives a command it has already completed.
@@ -581,7 +816,7 @@ export type DuplicateResponse = Message<"operator.v1.DuplicateResponse"> & {
  * Use `create(DuplicateResponseSchema)` to create a new message.
  */
 export const DuplicateResponseSchema: GenMessage<DuplicateResponse> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 12);
+  messageDesc(file_operator_v1_operator, 19);
 
 /**
  * SessionEvent signals a session lifecycle change.
@@ -607,7 +842,42 @@ export type SessionEvent = Message<"operator.v1.SessionEvent"> & {
  * Use `create(SessionEventSchema)` to create a new message.
  */
 export const SessionEventSchema: GenMessage<SessionEvent> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 13);
+  messageDesc(file_operator_v1_operator, 20);
+
+/**
+ * @generated from message operator.v1.DispatchEmergencyRequest
+ */
+export type DispatchEmergencyRequest = Message<"operator.v1.DispatchEmergencyRequest"> & {
+  /**
+   * @generated from field: string operator_id = 1;
+   */
+  operatorId: string;
+
+  /**
+   * @generated from field: operator.v1.EmergencyCommand command = 2;
+   */
+  command?: EmergencyCommand | undefined;
+};
+
+/**
+ * Describes the message operator.v1.DispatchEmergencyRequest.
+ * Use `create(DispatchEmergencyRequestSchema)` to create a new message.
+ */
+export const DispatchEmergencyRequestSchema: GenMessage<DispatchEmergencyRequest> = /*@__PURE__*/
+  messageDesc(file_operator_v1_operator, 21);
+
+/**
+ * @generated from message operator.v1.DispatchEmergencyResponse
+ */
+export type DispatchEmergencyResponse = Message<"operator.v1.DispatchEmergencyResponse"> & {
+};
+
+/**
+ * Describes the message operator.v1.DispatchEmergencyResponse.
+ * Use `create(DispatchEmergencyResponseSchema)` to create a new message.
+ */
+export const DispatchEmergencyResponseSchema: GenMessage<DispatchEmergencyResponse> = /*@__PURE__*/
+  messageDesc(file_operator_v1_operator, 22);
 
 /**
  * RevokeOperatorRequest revokes an operator and closes its active sessions.
@@ -631,7 +901,7 @@ export type RevokeOperatorRequest = Message<"operator.v1.RevokeOperatorRequest">
  * Use `create(RevokeOperatorRequestSchema)` to create a new message.
  */
 export const RevokeOperatorRequestSchema: GenMessage<RevokeOperatorRequest> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 14);
+  messageDesc(file_operator_v1_operator, 23);
 
 /**
  * RevokeOperatorResponse confirms operator revocation.
@@ -657,7 +927,7 @@ export type RevokeOperatorResponse = Message<"operator.v1.RevokeOperatorResponse
  * Use `create(RevokeOperatorResponseSchema)` to create a new message.
  */
 export const RevokeOperatorResponseSchema: GenMessage<RevokeOperatorResponse> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 15);
+  messageDesc(file_operator_v1_operator, 24);
 
 /**
  * AckType classifies the acknowledgment level.
@@ -720,6 +990,14 @@ export const OperatorService: GenService<{
     methodKind: "unary";
     input: typeof RevokeOperatorRequestSchema;
     output: typeof RevokeOperatorResponseSchema;
+  },
+  /**
+   * @generated from rpc operator.v1.OperatorService.DispatchEmergency
+   */
+  dispatchEmergency: {
+    methodKind: "unary";
+    input: typeof DispatchEmergencyRequestSchema;
+    output: typeof DispatchEmergencyResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_operator_v1_operator, 0);

@@ -449,21 +449,25 @@ func (x *ReleaseBundle) GetCreatedAt() *timestamppb.Timestamp {
 
 // ReleaseDefinition decouples the install preflight cycle from artifact ingestion.
 type ReleaseDefinition struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	CustomerId    string                 `protobuf:"bytes,3,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
-	ClusterId     string                 `protobuf:"bytes,4,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
-	Namespace     string                 `protobuf:"bytes,5,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	ReleaseName   string                 `protobuf:"bytes,6,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
-	ChartName     string                 `protobuf:"bytes,7,opt,name=chart_name,json=chartName,proto3" json:"chart_name,omitempty"`
-	Status        string                 `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
-	Version       int64                  `protobuf:"varint,9,opt,name=version,proto3" json:"version,omitempty"`
-	CreatedBy     string                 `protobuf:"bytes,10,opt,name=created_by,json=createdBy,proto3" json:"created_by,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	Id                     string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name                   string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	CustomerId             string                 `protobuf:"bytes,3,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	ClusterId              string                 `protobuf:"bytes,4,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	Namespace              string                 `protobuf:"bytes,5,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	ReleaseName            string                 `protobuf:"bytes,6,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
+	ChartName              string                 `protobuf:"bytes,7,opt,name=chart_name,json=chartName,proto3" json:"chart_name,omitempty"`
+	Status                 string                 `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
+	Version                int64                  `protobuf:"varint,9,opt,name=version,proto3" json:"version,omitempty"`
+	CreatedBy              string                 `protobuf:"bytes,10,opt,name=created_by,json=createdBy,proto3" json:"created_by,omitempty"`
+	CreatedAt              *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt              *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	HpaManaged             bool                   `protobuf:"varint,13,opt,name=hpa_managed,json=hpaManaged,proto3" json:"hpa_managed,omitempty"`
+	MaxEmergencyReplicas   int32                  `protobuf:"varint,14,opt,name=max_emergency_replicas,json=maxEmergencyReplicas,proto3" json:"max_emergency_replicas,omitempty"`
+	ApprovedAnnotationKeys []byte                 `protobuf:"bytes,15,opt,name=approved_annotation_keys,json=approvedAnnotationKeys,proto3" json:"approved_annotation_keys,omitempty"`
+	PromotionMappings      []byte                 `protobuf:"bytes,16,opt,name=promotion_mappings,json=promotionMappings,proto3" json:"promotion_mappings,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *ReleaseDefinition) Reset() {
@@ -576,6 +580,34 @@ func (x *ReleaseDefinition) GetCreatedAt() *timestamppb.Timestamp {
 func (x *ReleaseDefinition) GetUpdatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *ReleaseDefinition) GetHpaManaged() bool {
+	if x != nil {
+		return x.HpaManaged
+	}
+	return false
+}
+
+func (x *ReleaseDefinition) GetMaxEmergencyReplicas() int32 {
+	if x != nil {
+		return x.MaxEmergencyReplicas
+	}
+	return 0
+}
+
+func (x *ReleaseDefinition) GetApprovedAnnotationKeys() []byte {
+	if x != nil {
+		return x.ApprovedAnnotationKeys
+	}
+	return nil
+}
+
+func (x *ReleaseDefinition) GetPromotionMappings() []byte {
+	if x != nil {
+		return x.PromotionMappings
 	}
 	return nil
 }
@@ -1108,7 +1140,7 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"\bsbom_ref\x18\f \x01(\tR\asbomRef\x12%\n" +
 	"\x0eprovenance_ref\x18\r \x01(\tR\rprovenanceRef\x129\n" +
 	"\n" +
-	"created_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x9e\x03\n" +
+	"created_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xde\x04\n" +
 	"\x11ReleaseDefinition\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1f\n" +
@@ -1128,7 +1160,12 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xbd\x04\n" +
+	"updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1f\n" +
+	"\vhpa_managed\x18\r \x01(\bR\n" +
+	"hpaManaged\x124\n" +
+	"\x16max_emergency_replicas\x18\x0e \x01(\x05R\x14maxEmergencyReplicas\x128\n" +
+	"\x18approved_annotation_keys\x18\x0f \x01(\fR\x16approvedAnnotationKeys\x12-\n" +
+	"\x12promotion_mappings\x18\x10 \x01(\fR\x11promotionMappings\"\xbd\x04\n" +
 	"\x0eValuesRevision\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x122\n" +
 	"\x15release_definition_id\x18\x02 \x01(\tR\x13releaseDefinitionId\x12\x1a\n" +

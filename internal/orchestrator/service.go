@@ -30,33 +30,38 @@ import (
 
 // Service implements the OrchestratorServiceHandler Connect interface.
 type Service struct {
-	store        store.Store
-	verifier     trust.Verifier
-	targetEnv    string
-	coordinator  *preflight.Coordinator
-	vulnEval     *vulnerability.Evaluator
-	auditEmitter audit.Sink
-	logger       *slog.Logger
+	store               store.Store
+	verifier            trust.Verifier
+	targetEnv           string
+	coordinator         *preflight.Coordinator
+	vulnEval            *vulnerability.Evaluator
+	auditEmitter        audit.Sink
+	emergencyDispatcher emergencyDispatcher
+	logger              *slog.Logger
 }
 
 func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args ...any) *Service {
 	var auditEmitter audit.Sink
+	var dispatcher emergencyDispatcher
 	logger := slog.Default()
 	for _, arg := range args {
 		switch value := arg.(type) {
 		case audit.Sink:
 			auditEmitter = value
+		case emergencyDispatcher:
+			dispatcher = value
 		case *slog.Logger:
 			logger = value
 		}
 	}
 	return &Service{
-		store:        st,
-		verifier:     verifier,
-		targetEnv:    targetEnv,
-		coordinator:  preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.Values(), st.Bundles(), st.PreflightLifecycles(), logger),
-		auditEmitter: auditEmitter,
-		logger:       logger,
+		store:               st,
+		verifier:            verifier,
+		emergencyDispatcher: dispatcher,
+		targetEnv:           targetEnv,
+		coordinator:         preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.Values(), st.Bundles(), st.PreflightLifecycles(), logger),
+		auditEmitter:        auditEmitter,
+		logger:              logger,
 	}
 }
 

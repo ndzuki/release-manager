@@ -108,6 +108,18 @@ const (
 	// OrchestratorServiceEmergencyChangeProcedure is the fully-qualified name of the
 	// OrchestratorService's EmergencyChange RPC.
 	OrchestratorServiceEmergencyChangeProcedure = "/orchestrator.v1.OrchestratorService/EmergencyChange"
+	// OrchestratorServiceListEmergencyTargetsProcedure is the fully-qualified name of the
+	// OrchestratorService's ListEmergencyTargets RPC.
+	OrchestratorServiceListEmergencyTargetsProcedure = "/orchestrator.v1.OrchestratorService/ListEmergencyTargets"
+	// OrchestratorServiceCheckEmergencyConflictProcedure is the fully-qualified name of the
+	// OrchestratorService's CheckEmergencyConflict RPC.
+	OrchestratorServiceCheckEmergencyConflictProcedure = "/orchestrator.v1.OrchestratorService/CheckEmergencyConflict"
+	// OrchestratorServiceListCandidateArtifactsProcedure is the fully-qualified name of the
+	// OrchestratorService's ListCandidateArtifacts RPC.
+	OrchestratorServiceListCandidateArtifactsProcedure = "/orchestrator.v1.OrchestratorService/ListCandidateArtifacts"
+	// OrchestratorServiceListConvergenceTasksProcedure is the fully-qualified name of the
+	// OrchestratorService's ListConvergenceTasks RPC.
+	OrchestratorServiceListConvergenceTasksProcedure = "/orchestrator.v1.OrchestratorService/ListConvergenceTasks"
 	// OrchestratorServiceConfigureClusterRouteProcedure is the fully-qualified name of the
 	// OrchestratorService's ConfigureClusterRoute RPC.
 	OrchestratorServiceConfigureClusterRouteProcedure = "/orchestrator.v1.OrchestratorService/ConfigureClusterRoute"
@@ -130,46 +142,40 @@ const (
 
 // OrchestratorServiceClient is a client for the orchestrator.v1.OrchestratorService service.
 type OrchestratorServiceClient interface {
-	// Release pipeline
 	CreateOperation(context.Context, *connect.Request[v1.CreateOperationRequest]) (*connect.Response[v1.CreateOperationResponse], error)
 	PublishRelease(context.Context, *connect.Request[v1.PublishReleaseRequest]) (*connect.Response[v1.PublishReleaseResponse], error)
 	RollbackRelease(context.Context, *connect.Request[v1.RollbackReleaseRequest]) (*connect.Response[v1.RollbackReleaseResponse], error)
 	GetOperation(context.Context, *connect.Request[v1.GetOperationRequest]) (*connect.Response[v1.GetOperationResponse], error)
 	CancelOperation(context.Context, *connect.Request[v1.CancelOperationRequest]) (*connect.Response[v1.CancelOperationResponse], error)
-	// Values revision approval workflow
 	SubmitValuesRevision(context.Context, *connect.Request[v1.SubmitValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
 	ApproveValuesRevision(context.Context, *connect.Request[v1.ApproveValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
 	RejectValuesRevision(context.Context, *connect.Request[v1.RejectValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
-	// Release definition management
 	CreateReleaseDefinition(context.Context, *connect.Request[v1.CreateReleaseDefinitionRequest]) (*connect.Response[v1.CreateReleaseDefinitionResponse], error)
 	GetReleaseDefinition(context.Context, *connect.Request[v1.GetReleaseDefinitionRequest]) (*connect.Response[v1.GetReleaseDefinitionResponse], error)
 	ListReleaseDefinitions(context.Context, *connect.Request[v1.ListReleaseDefinitionsRequest]) (*connect.Response[v1.ListReleaseDefinitionsResponse], error)
 	UpdateReleaseDefinition(context.Context, *connect.Request[v1.UpdateReleaseDefinitionRequest]) (*connect.Response[v1.UpdateReleaseDefinitionResponse], error)
 	DisableReleaseDefinition(context.Context, *connect.Request[v1.DisableReleaseDefinitionRequest]) (*connect.Response[v1.DisableReleaseDefinitionResponse], error)
-	// Customer management
 	CreateCustomer(context.Context, *connect.Request[v1.CreateCustomerRequest]) (*connect.Response[v1.CreateCustomerResponse], error)
 	GetCustomer(context.Context, *connect.Request[v1.GetCustomerRequest]) (*connect.Response[v1.GetCustomerResponse], error)
 	ListCustomers(context.Context, *connect.Request[v1.ListCustomersRequest]) (*connect.Response[v1.ListCustomersResponse], error)
 	UpdateCustomer(context.Context, *connect.Request[v1.UpdateCustomerRequest]) (*connect.Response[v1.UpdateCustomerResponse], error)
 	DisableCustomer(context.Context, *connect.Request[v1.DisableCustomerRequest]) (*connect.Response[v1.DisableCustomerResponse], error)
-	// Cluster management
 	CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.CreateClusterResponse], error)
 	UpdateCluster(context.Context, *connect.Request[v1.UpdateClusterRequest]) (*connect.Response[v1.UpdateClusterResponse], error)
 	GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error)
 	ListClusters(context.Context, *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error)
 	DisableCluster(context.Context, *connect.Request[v1.DisableClusterRequest]) (*connect.Response[v1.DisableClusterResponse], error)
-	// Operator enrollment
 	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
-	// Emergency change (REQ-032)
 	EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error)
-	// Cluster artifact routing (REQ-014)
+	ListEmergencyTargets(context.Context, *connect.Request[v1.ListEmergencyTargetsRequest]) (*connect.Response[v1.ListEmergencyTargetsResponse], error)
+	CheckEmergencyConflict(context.Context, *connect.Request[v1.CheckEmergencyConflictRequest]) (*connect.Response[v1.CheckEmergencyConflictResponse], error)
+	ListCandidateArtifacts(context.Context, *connect.Request[v1.ListCandidateArtifactsRequest]) (*connect.Response[v1.ListCandidateArtifactsResponse], error)
+	ListConvergenceTasks(context.Context, *connect.Request[v1.ListConvergenceTasksRequest]) (*connect.Response[v1.ListConvergenceTasksResponse], error)
 	ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error)
 	GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error)
 	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
-	// Release inventory query and manual sync (REQ-054)
 	ListReleases(context.Context, *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error)
 	TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error)
-	// Inventory sync (REQ-017)
 	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
 
@@ -334,6 +340,30 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("EmergencyChange")),
 			connect.WithClientOptions(opts...),
 		),
+		listEmergencyTargets: connect.NewClient[v1.ListEmergencyTargetsRequest, v1.ListEmergencyTargetsResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListEmergencyTargetsProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListEmergencyTargets")),
+			connect.WithClientOptions(opts...),
+		),
+		checkEmergencyConflict: connect.NewClient[v1.CheckEmergencyConflictRequest, v1.CheckEmergencyConflictResponse](
+			httpClient,
+			baseURL+OrchestratorServiceCheckEmergencyConflictProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("CheckEmergencyConflict")),
+			connect.WithClientOptions(opts...),
+		),
+		listCandidateArtifacts: connect.NewClient[v1.ListCandidateArtifactsRequest, v1.ListCandidateArtifactsResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListCandidateArtifactsProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListCandidateArtifacts")),
+			connect.WithClientOptions(opts...),
+		),
+		listConvergenceTasks: connect.NewClient[v1.ListConvergenceTasksRequest, v1.ListConvergenceTasksResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListConvergenceTasksProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListConvergenceTasks")),
+			connect.WithClientOptions(opts...),
+		),
 		configureClusterRoute: connect.NewClient[v1.ConfigureClusterRouteRequest, v1.ConfigureClusterRouteResponse](
 			httpClient,
 			baseURL+OrchestratorServiceConfigureClusterRouteProcedure,
@@ -400,6 +430,10 @@ type orchestratorServiceClient struct {
 	disableCluster           *connect.Client[v1.DisableClusterRequest, v1.DisableClusterResponse]
 	createEnrollmentToken    *connect.Client[v1.CreateEnrollmentTokenRequest, v1.CreateEnrollmentTokenResponse]
 	emergencyChange          *connect.Client[v1.EmergencyChangeRequest, v1.EmergencyChangeResponse]
+	listEmergencyTargets     *connect.Client[v1.ListEmergencyTargetsRequest, v1.ListEmergencyTargetsResponse]
+	checkEmergencyConflict   *connect.Client[v1.CheckEmergencyConflictRequest, v1.CheckEmergencyConflictResponse]
+	listCandidateArtifacts   *connect.Client[v1.ListCandidateArtifactsRequest, v1.ListCandidateArtifactsResponse]
+	listConvergenceTasks     *connect.Client[v1.ListConvergenceTasksRequest, v1.ListConvergenceTasksResponse]
 	configureClusterRoute    *connect.Client[v1.ConfigureClusterRouteRequest, v1.ConfigureClusterRouteResponse]
 	getClusterRoutes         *connect.Client[v1.GetClusterRoutesRequest, v1.GetClusterRoutesResponse]
 	deleteClusterRoute       *connect.Client[v1.DeleteClusterRouteRequest, v1.DeleteClusterRouteResponse]
@@ -533,6 +567,26 @@ func (c *orchestratorServiceClient) EmergencyChange(ctx context.Context, req *co
 	return c.emergencyChange.CallUnary(ctx, req)
 }
 
+// ListEmergencyTargets calls orchestrator.v1.OrchestratorService.ListEmergencyTargets.
+func (c *orchestratorServiceClient) ListEmergencyTargets(ctx context.Context, req *connect.Request[v1.ListEmergencyTargetsRequest]) (*connect.Response[v1.ListEmergencyTargetsResponse], error) {
+	return c.listEmergencyTargets.CallUnary(ctx, req)
+}
+
+// CheckEmergencyConflict calls orchestrator.v1.OrchestratorService.CheckEmergencyConflict.
+func (c *orchestratorServiceClient) CheckEmergencyConflict(ctx context.Context, req *connect.Request[v1.CheckEmergencyConflictRequest]) (*connect.Response[v1.CheckEmergencyConflictResponse], error) {
+	return c.checkEmergencyConflict.CallUnary(ctx, req)
+}
+
+// ListCandidateArtifacts calls orchestrator.v1.OrchestratorService.ListCandidateArtifacts.
+func (c *orchestratorServiceClient) ListCandidateArtifacts(ctx context.Context, req *connect.Request[v1.ListCandidateArtifactsRequest]) (*connect.Response[v1.ListCandidateArtifactsResponse], error) {
+	return c.listCandidateArtifacts.CallUnary(ctx, req)
+}
+
+// ListConvergenceTasks calls orchestrator.v1.OrchestratorService.ListConvergenceTasks.
+func (c *orchestratorServiceClient) ListConvergenceTasks(ctx context.Context, req *connect.Request[v1.ListConvergenceTasksRequest]) (*connect.Response[v1.ListConvergenceTasksResponse], error) {
+	return c.listConvergenceTasks.CallUnary(ctx, req)
+}
+
 // ConfigureClusterRoute calls orchestrator.v1.OrchestratorService.ConfigureClusterRoute.
 func (c *orchestratorServiceClient) ConfigureClusterRoute(ctx context.Context, req *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error) {
 	return c.configureClusterRoute.CallUnary(ctx, req)
@@ -566,46 +620,40 @@ func (c *orchestratorServiceClient) SyncInventory(ctx context.Context, req *conn
 // OrchestratorServiceHandler is an implementation of the orchestrator.v1.OrchestratorService
 // service.
 type OrchestratorServiceHandler interface {
-	// Release pipeline
 	CreateOperation(context.Context, *connect.Request[v1.CreateOperationRequest]) (*connect.Response[v1.CreateOperationResponse], error)
 	PublishRelease(context.Context, *connect.Request[v1.PublishReleaseRequest]) (*connect.Response[v1.PublishReleaseResponse], error)
 	RollbackRelease(context.Context, *connect.Request[v1.RollbackReleaseRequest]) (*connect.Response[v1.RollbackReleaseResponse], error)
 	GetOperation(context.Context, *connect.Request[v1.GetOperationRequest]) (*connect.Response[v1.GetOperationResponse], error)
 	CancelOperation(context.Context, *connect.Request[v1.CancelOperationRequest]) (*connect.Response[v1.CancelOperationResponse], error)
-	// Values revision approval workflow
 	SubmitValuesRevision(context.Context, *connect.Request[v1.SubmitValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
 	ApproveValuesRevision(context.Context, *connect.Request[v1.ApproveValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
 	RejectValuesRevision(context.Context, *connect.Request[v1.RejectValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
-	// Release definition management
 	CreateReleaseDefinition(context.Context, *connect.Request[v1.CreateReleaseDefinitionRequest]) (*connect.Response[v1.CreateReleaseDefinitionResponse], error)
 	GetReleaseDefinition(context.Context, *connect.Request[v1.GetReleaseDefinitionRequest]) (*connect.Response[v1.GetReleaseDefinitionResponse], error)
 	ListReleaseDefinitions(context.Context, *connect.Request[v1.ListReleaseDefinitionsRequest]) (*connect.Response[v1.ListReleaseDefinitionsResponse], error)
 	UpdateReleaseDefinition(context.Context, *connect.Request[v1.UpdateReleaseDefinitionRequest]) (*connect.Response[v1.UpdateReleaseDefinitionResponse], error)
 	DisableReleaseDefinition(context.Context, *connect.Request[v1.DisableReleaseDefinitionRequest]) (*connect.Response[v1.DisableReleaseDefinitionResponse], error)
-	// Customer management
 	CreateCustomer(context.Context, *connect.Request[v1.CreateCustomerRequest]) (*connect.Response[v1.CreateCustomerResponse], error)
 	GetCustomer(context.Context, *connect.Request[v1.GetCustomerRequest]) (*connect.Response[v1.GetCustomerResponse], error)
 	ListCustomers(context.Context, *connect.Request[v1.ListCustomersRequest]) (*connect.Response[v1.ListCustomersResponse], error)
 	UpdateCustomer(context.Context, *connect.Request[v1.UpdateCustomerRequest]) (*connect.Response[v1.UpdateCustomerResponse], error)
 	DisableCustomer(context.Context, *connect.Request[v1.DisableCustomerRequest]) (*connect.Response[v1.DisableCustomerResponse], error)
-	// Cluster management
 	CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.CreateClusterResponse], error)
 	UpdateCluster(context.Context, *connect.Request[v1.UpdateClusterRequest]) (*connect.Response[v1.UpdateClusterResponse], error)
 	GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error)
 	ListClusters(context.Context, *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error)
 	DisableCluster(context.Context, *connect.Request[v1.DisableClusterRequest]) (*connect.Response[v1.DisableClusterResponse], error)
-	// Operator enrollment
 	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
-	// Emergency change (REQ-032)
 	EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error)
-	// Cluster artifact routing (REQ-014)
+	ListEmergencyTargets(context.Context, *connect.Request[v1.ListEmergencyTargetsRequest]) (*connect.Response[v1.ListEmergencyTargetsResponse], error)
+	CheckEmergencyConflict(context.Context, *connect.Request[v1.CheckEmergencyConflictRequest]) (*connect.Response[v1.CheckEmergencyConflictResponse], error)
+	ListCandidateArtifacts(context.Context, *connect.Request[v1.ListCandidateArtifactsRequest]) (*connect.Response[v1.ListCandidateArtifactsResponse], error)
+	ListConvergenceTasks(context.Context, *connect.Request[v1.ListConvergenceTasksRequest]) (*connect.Response[v1.ListConvergenceTasksResponse], error)
 	ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error)
 	GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error)
 	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
-	// Release inventory query and manual sync (REQ-054)
 	ListReleases(context.Context, *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error)
 	TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error)
-	// Inventory sync (REQ-017)
 	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
 
@@ -766,6 +814,30 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("EmergencyChange")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orchestratorServiceListEmergencyTargetsHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListEmergencyTargetsProcedure,
+		svc.ListEmergencyTargets,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListEmergencyTargets")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceCheckEmergencyConflictHandler := connect.NewUnaryHandler(
+		OrchestratorServiceCheckEmergencyConflictProcedure,
+		svc.CheckEmergencyConflict,
+		connect.WithSchema(orchestratorServiceMethods.ByName("CheckEmergencyConflict")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceListCandidateArtifactsHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListCandidateArtifactsProcedure,
+		svc.ListCandidateArtifacts,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListCandidateArtifacts")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceListConvergenceTasksHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListConvergenceTasksProcedure,
+		svc.ListConvergenceTasks,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListConvergenceTasks")),
+		connect.WithHandlerOptions(opts...),
+	)
 	orchestratorServiceConfigureClusterRouteHandler := connect.NewUnaryHandler(
 		OrchestratorServiceConfigureClusterRouteProcedure,
 		svc.ConfigureClusterRoute,
@@ -854,6 +926,14 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceCreateEnrollmentTokenHandler.ServeHTTP(w, r)
 		case OrchestratorServiceEmergencyChangeProcedure:
 			orchestratorServiceEmergencyChangeHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListEmergencyTargetsProcedure:
+			orchestratorServiceListEmergencyTargetsHandler.ServeHTTP(w, r)
+		case OrchestratorServiceCheckEmergencyConflictProcedure:
+			orchestratorServiceCheckEmergencyConflictHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListCandidateArtifactsProcedure:
+			orchestratorServiceListCandidateArtifactsHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListConvergenceTasksProcedure:
+			orchestratorServiceListConvergenceTasksHandler.ServeHTTP(w, r)
 		case OrchestratorServiceConfigureClusterRouteProcedure:
 			orchestratorServiceConfigureClusterRouteHandler.ServeHTTP(w, r)
 		case OrchestratorServiceGetClusterRoutesProcedure:
@@ -973,6 +1053,22 @@ func (UnimplementedOrchestratorServiceHandler) CreateEnrollmentToken(context.Con
 
 func (UnimplementedOrchestratorServiceHandler) EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.EmergencyChange is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListEmergencyTargets(context.Context, *connect.Request[v1.ListEmergencyTargetsRequest]) (*connect.Response[v1.ListEmergencyTargetsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListEmergencyTargets is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) CheckEmergencyConflict(context.Context, *connect.Request[v1.CheckEmergencyConflictRequest]) (*connect.Response[v1.CheckEmergencyConflictResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.CheckEmergencyConflict is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListCandidateArtifacts(context.Context, *connect.Request[v1.ListCandidateArtifactsRequest]) (*connect.Response[v1.ListCandidateArtifactsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListCandidateArtifacts is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListConvergenceTasks(context.Context, *connect.Request[v1.ListConvergenceTasksRequest]) (*connect.Response[v1.ListConvergenceTasksResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListConvergenceTasks is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error) {
