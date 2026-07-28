@@ -9,7 +9,7 @@ type StageName string
 const (
 	StageArtifact    StageName = "artifact"
 	StageRender      StageName = "render"
-	StageCluster     StageName = "cluster"
+	StageCluster     StageName = "dryrun"
 	StageRuntimePull StageName = "runtime_pull"
 )
 

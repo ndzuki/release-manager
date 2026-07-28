@@ -77,6 +77,10 @@ func Open(dsn string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("sqlite migrate: %w", err)
 	}
+	if err := migratePreflightLifecycles(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sqlite migrate preflight lifecycles: %w", err)
+	}
 
 	s := &Store{db: db}
 	s.ops = &operationStore{db: db}
@@ -847,7 +851,8 @@ var migrationStatements = []string{
 		UNIQUE(digest, artifact_type)
 	)`,
 
-	// Preflight lifecycle results (REQ-069) — distinct from the cache-based preflight_results table.
+	// Legacy preflight lifecycle schema. migratePreflightLifecycles performs the
+	// clean cutover to the REQ-019 two-phase shape after ordered migrations run.
 	`CREATE TABLE IF NOT EXISTS preflight_lifecycles (
 		id                    TEXT PRIMARY KEY,
 		operation_id          TEXT,
@@ -858,7 +863,90 @@ var migrationStatements = []string{
 		created_at            TEXT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_preflight_lifecycles_operation ON preflight_lifecycles(operation_id)`,
-	`CREATE INDEX IF NOT EXISTS idx_preflight_lifecycles_terminal ON preflight_lifecycles(operation_terminal_at)`,
+}
+
+func migratePreflightLifecycles(db *sql.DB) error {
+	rows, err := db.QueryContext(context.Background(), `PRAGMA table_info(preflight_lifecycles)`)
+	if err != nil {
+		return fmt.Errorf("read preflight lifecycle schema: %w", err)
+	}
+	defer rows.Close()
+
+	columns := make(map[string]struct{})
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return fmt.Errorf("scan preflight lifecycle schema: %w", err)
+		}
+		columns[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate preflight lifecycle schema: %w", err)
+	}
+	if _, ok := columns["updated_at"]; ok {
+		return nil
+	}
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fmt.Errorf("begin preflight lifecycle migration: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
+
+	statements := []string{
+		`ALTER TABLE preflight_lifecycles RENAME TO preflight_lifecycles_legacy`,
+		`CREATE TABLE preflight_lifecycles (
+			id                    TEXT PRIMARY KEY,
+			operation_id          TEXT UNIQUE,
+			operation_terminal_at TEXT,
+			stages                TEXT NOT NULL DEFAULT '',
+			overall               TEXT NOT NULL DEFAULT 'running' CHECK (overall IN ('running', 'passed', 'failed', 'cancelled')),
+			created_at            TEXT NOT NULL,
+			updated_at            TEXT NOT NULL
+		)`,
+		`INSERT INTO preflight_lifecycles (
+			id, operation_id, operation_terminal_at, stages, overall, created_at, updated_at
+		)
+		SELECT id, operation_id, operation_terminal_at,
+			CASE
+				WHEN stages = '' OR stages = '[]' THEN ''
+				WHEN json_valid(stages) AND json_type(stages) = 'array' THEN COALESCE((
+					SELECT group_concat(json_extract(value, '$.stage'), ',')
+					FROM json_each(stages)
+					WHERE json_extract(value, '$.stage') IS NOT NULL
+				), '')
+				ELSE stages
+			END,
+			CASE
+				WHEN overall = 'timeout' THEN 'cancelled'
+				WHEN overall IN ('running', 'passed', 'failed', 'cancelled') THEN overall
+				ELSE 'failed'
+			END,
+			created_at, created_at
+		FROM preflight_lifecycles_legacy AS legacy
+		WHERE operation_id IS NULL OR id = (
+			SELECT candidate.id
+			FROM preflight_lifecycles_legacy AS candidate
+			WHERE candidate.operation_id = legacy.operation_id
+			ORDER BY COALESCE(candidate.operation_terminal_at, '') DESC, candidate.created_at DESC, candidate.id DESC
+			LIMIT 1
+		)`,
+		`DROP TABLE preflight_lifecycles_legacy`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_preflight_lifecycles_operation
+		 ON preflight_lifecycles(operation_id) WHERE operation_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_preflight_lifecycles_terminal ON preflight_lifecycles(operation_terminal_at)`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.ExecContext(context.Background(), stmt); err != nil {
+			return fmt.Errorf("preflight lifecycle migration statement: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit preflight lifecycle migration: %w", err)
+	}
+	return nil
 }
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }

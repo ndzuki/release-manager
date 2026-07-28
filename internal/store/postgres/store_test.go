@@ -497,11 +497,7 @@ func TestOperationTransition_TerminalAt(t *testing.T) {
 		IdempotencyKey:      uuid.NewString(),
 	}
 	require.NoError(t, st.Operations().Create(ctx, op))
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, &store.PreflightLifecycle{
-		OperationID: &op.ID,
-		Stages:      []byte(`[{"stage":"control-plane","status":"passed"}]`),
-		Overall:     "passed",
-	}))
+	require.NoError(t, st.PreflightLifecycles().CreateOrReset(ctx, op.ID))
 
 	updated, err := st.Operations().Transition(ctx, op.ID, store.StatusSucceeded, op.StateVersion, "")
 	require.NoError(t, err)
@@ -1065,10 +1061,13 @@ func TestAuthSessionLifecycle(t *testing.T) {
 
 func TestPreflightLifecycleRetention(t *testing.T) {
 	st := setupStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	now := time.Now().UTC().Truncate(time.Second)
-	exploratory := &store.PreflightLifecycle{Stages: []byte(`[]`), Overall: "passed", CreatedAt: now.Add(-8 * 24 * time.Hour)}
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, exploratory))
+
+	_, err := st.SQLDB().ExecContext(ctx, `
+		INSERT INTO preflight_lifecycles (id, operation_id, stages, overall, created_at, updated_at)
+		VALUES ($1, NULL, '', 'passed', $2, $2)`, uuid.NewString(), now.Add(-8*24*time.Hour))
+	require.NoError(t, err)
 
 	definition := createTestDefinition(t, st)
 	operationID := uuid.NewString()
@@ -1076,10 +1075,11 @@ func TestPreflightLifecycleRetention(t *testing.T) {
 		ID: operationID, OperationType: store.OperationInstall, Status: store.StatusRunning,
 		ReleaseDefinitionID: definition.ID, IdempotencyKey: uuid.NewString(), RequestHash: "preflight-retention",
 	}))
-	linked := &store.PreflightLifecycle{OperationID: &operationID, Stages: []byte(`[]`), Overall: "passed", CreatedAt: now.Add(-8 * 24 * time.Hour)}
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, linked))
-	require.NoError(t, st.PreflightLifecycles().SetOperationTerminal(ctx, operationID, now.Add(-8*24*time.Hour)))
-	require.NoError(t, st.PreflightLifecycles().SetOperationTerminal(ctx, operationID, now))
+	require.NoError(t, st.PreflightLifecycles().CreateOrReset(ctx, operationID))
+	_, err = st.SQLDB().ExecContext(ctx, `
+		UPDATE preflight_lifecycles SET operation_terminal_at = $1 WHERE operation_id = $2`,
+		now.Add(-8*24*time.Hour), operationID)
+	require.NoError(t, err)
 
 	deleted, err := st.PreflightLifecycles().DeleteExpired(ctx, 7*24*time.Hour)
 	require.NoError(t, err)

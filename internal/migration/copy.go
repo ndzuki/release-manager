@@ -177,11 +177,20 @@ func appendTargetColumns(table string, cols []string) ([]string, []columnDefault
 	if len(defaults) == 0 {
 		return cols, nil
 	}
-	targetCols := append([]string(nil), cols...)
-	for _, column := range defaults {
-		targetCols = append(targetCols, column.name)
+	present := make(map[string]struct{}, len(cols))
+	for _, column := range cols {
+		present[column] = struct{}{}
 	}
-	return targetCols, defaults
+	targetCols := append([]string(nil), cols...)
+	applied := make([]columnDefault, 0, len(defaults))
+	for _, column := range defaults {
+		if _, exists := present[column.name]; exists {
+			continue
+		}
+		targetCols = append(targetCols, column.name)
+		applied = append(applied, column)
+	}
+	return targetCols, applied
 }
 
 // isTimeColumn returns true if the column name indicates a timestamp.
@@ -310,15 +319,14 @@ func convertSQLiteValue(table, column string, value any, timeColumn, blobColumn 
 }
 
 var jsonColumns = map[string]map[string]struct{}{
-	"audit_outbox":         {"payload_json": {}},
-	"notification_outbox":  {"payload_json": {}},
-	"operations":           {"actor": {}},
-	"sessions":             {"capabilities": {}},
-	"audit_events":         {"metadata": {}},
-	"notification_jobs":    {"metadata": {}},
-	"release_bundles":      {"images": {}},
-	"preflight_lifecycles": {"stages": {}},
-	"scan_results":         {"severity_json": {}, "findings_json": {}},
+	"audit_outbox":        {"payload_json": {}},
+	"notification_outbox": {"payload_json": {}},
+	"operations":          {"actor": {}},
+	"sessions":            {"capabilities": {}},
+	"audit_events":        {"metadata": {}},
+	"notification_jobs":   {"metadata": {}},
+	"release_bundles":     {"images": {}},
+	"scan_results":        {"severity_json": {}, "findings_json": {}},
 }
 
 func isJSONColumn(table, column string) bool {

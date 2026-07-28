@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	authctx "github.com/ndzuki/release-manager/internal/authctx"
+	"github.com/ndzuki/release-manager/internal/orchestrator/preflight"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 	"github.com/ndzuki/release-manager/internal/trust"
@@ -31,7 +33,10 @@ func setupService(t *testing.T) (*Service, store.Store, func()) {
 	verifier := trust.NewStubVerifier(st.Verifications(), nil, logger)
 	svc := NewService(st, verifier, "staging", nil, logger)
 
-	return svc, st, func() { st.Close() }
+	return svc, st, func() {
+		svc.Close()
+		require.NoError(t, st.Close())
+	}
 }
 
 func seedDefinition(t *testing.T, st store.Store) {
@@ -160,6 +165,43 @@ func TestCreateOperation_Install_Success(t *testing.T) {
 	assert.NotEmpty(t, resp.Msg.OperationId)
 	assert.Equal(t, "preflight", resp.Msg.State) // standard ops enter preflight
 	assert.NotNil(t, resp.Msg.AcceptedAt)
+}
+
+func TestResumePreflightsRestartsExistingOperation(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	require.NoError(t, st.Operators().Create(t.Context(), &store.Operator{
+		ID: "operator-preflight-resume", CustomerID: "cust-001", ClusterID: "cls-001",
+		Name: "operator-preflight-resume", CertSerial: "cert-preflight-resume", Status: store.OperatorActive,
+	}))
+	seedCancelableOperation(t, st, "op-preflight-resume", store.StatusPreflight)
+	started := make(chan struct{})
+	svc.coordinator = preflight.NewCoordinator(
+		&blockingOutboxStore{OutboxStore: st.Outbox(), started: started},
+		st.Operations(), st.Operators(), st.Definitions(), st.PreflightLifecycles(),
+		slog.New(slog.DiscardHandler),
+	)
+
+	require.NoError(t, svc.ResumePreflights(t.Context()))
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("preflight resume did not restart the coordinator")
+	}
+	assert.True(t, svc.preflights.Active("op-preflight-resume"))
+	require.NoError(t, svc.ResumePreflights(t.Context()))
+	svc.preflights.Cancel("op-preflight-resume")
+	require.True(t, svc.preflights.Wait(t.Context(), "op-preflight-resume"))
+
+	var count int
+	sqliteStore, ok := st.(*sqlitestore.Store)
+	require.True(t, ok)
+	row := sqliteStore.DB().QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM preflight_lifecycles WHERE operation_id = ?`, "op-preflight-resume")
+	err := row.Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
 }
 
 func TestCreateOperation_RejectedForRevokedCustomerBinding(t *testing.T) {
@@ -713,6 +755,62 @@ func TestCancelOperation_SuccessPending(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLED, resp.Msg.Operation.State)
 	assert.NotEmpty(t, resp.Msg.RequestId)
+}
+
+func TestCancelOperationPreflightStopsRunner(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedCancelableOperation(t, st, "op-preflight-cancel", store.StatusPreflight)
+	require.NoError(t, st.Operators().Create(t.Context(), &store.Operator{
+		ID: "operator-preflight-cancel", CustomerID: "cust-001", ClusterID: "cls-001",
+		Name: "operator-preflight-cancel", CertSerial: "cert-preflight-cancel", Status: store.OperatorActive,
+	}))
+	require.NoError(t, st.PreflightLifecycles().CreateOrReset(t.Context(), "op-preflight-cancel"))
+	started := make(chan struct{})
+	svc.coordinator = preflight.NewCoordinator(
+		&blockingOutboxStore{OutboxStore: st.Outbox(), started: started},
+		st.Operations(), st.Operators(), st.Definitions(), st.PreflightLifecycles(),
+		slog.New(slog.DiscardHandler),
+	)
+	require.True(t, svc.startPreflight(t.Context(), &store.Operation{
+		ID: "op-preflight-cancel", OperationType: store.OperationInstall, Status: store.StatusPreflight,
+		ReleaseDefinitionID: "def-001", StateVersion: 1,
+	}))
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("preflight coordinator did not start")
+	}
+
+	resp, err := svc.CancelOperation(deployerCtx(), connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: "op-preflight-cancel", Reason: "stop preflight",
+		ExpectedStateVersion: 1, IdempotencyKey: "cancel-preflight",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLED, resp.Msg.Operation.State)
+	require.True(t, svc.preflights.Wait(t.Context(), "op-preflight-cancel"))
+
+	var overall string
+	sqliteStore, ok := st.(*sqlitestore.Store)
+	require.True(t, ok)
+	row := sqliteStore.DB().QueryRowContext(t.Context(),
+		`SELECT overall FROM preflight_lifecycles WHERE operation_id = ?`, "op-preflight-cancel")
+	err = row.Scan(&overall)
+	require.NoError(t, err)
+	assert.Equal(t, "cancelled", overall)
+}
+
+type blockingOutboxStore struct {
+	store.OutboxStore
+	started chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingOutboxStore) GetByCommandID(ctx context.Context, _ string) (*store.OutboxEntry, error) {
+	s.once.Do(func() { close(s.started) })
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 func TestCancelOperation_SuccessRunningToCancelling(t *testing.T) {

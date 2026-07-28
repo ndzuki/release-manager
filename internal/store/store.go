@@ -4,7 +4,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"time"
 )
@@ -125,8 +124,9 @@ func (s OperationStatus) IsTerminal() bool {
 	return false
 }
 
-//nolint:gocyclo // Exhaustive legal-transition table; simpler than a two-layered map.
 // CanTransitionTo reports whether an operation status may advance directly to target.
+//
+//nolint:gocyclo // Exhaustive legal-transition table; simpler than a two-layered map.
 func (s OperationStatus) CanTransitionTo(target OperationStatus) bool {
 	switch s {
 	case StatusPending:
@@ -1321,23 +1321,23 @@ type CandidateArtifactStore interface {
 	DeleteOrphanBefore(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
-// ── Preflight lifecycle domain types (REQ-069) ─────────────────────
+// ── Preflight lifecycle domain types (REQ-019, REQ-069) ───────────────
 
-// PreflightLifecycle records the lifecycle of a preflight check for GC.
+// PreflightLifecycle records one operation's preflight execution for retention and GC.
 type PreflightLifecycle struct {
 	ID                  string
 	OperationID         *string
 	OperationTerminalAt *time.Time
-	Stages              json.RawMessage
+	Stages              string
 	Overall             string
-	ErrorCode           string
 	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // PreflightLifecycleStore defines the persistence contract for preflight lifecycles.
 type PreflightLifecycleStore interface {
-	Create(ctx context.Context, pl *PreflightLifecycle) error
-	SetOperationTerminal(ctx context.Context, operationID string, terminalAt time.Time) error
+	CreateOrReset(ctx context.Context, operationID string) error
+	UpdateResult(ctx context.Context, operationID, overall, stages string) error
 	DeleteExpired(ctx context.Context, ttl time.Duration) (int64, error)
 }
 

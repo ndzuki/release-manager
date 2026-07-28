@@ -67,7 +67,7 @@ func TestRunMigratesCurrentSQLiteSchemaEndToEnd(t *testing.T) {
 
 	var preflightUpdated, preflightCreated time.Time
 	require.NoError(t, targetDB.QueryRowContext(ctx,
-		`SELECT updated_at, created_at FROM preflight_lifecycles WHERE id = 'preflight-migrate'`,
+		`SELECT updated_at, created_at FROM preflight_lifecycles WHERE operation_id = 'preflight-migrate'`,
 	).Scan(&preflightUpdated, &preflightCreated))
 	assert.True(t, preflightUpdated.Equal(preflightCreated))
 
@@ -167,9 +167,12 @@ func createMigrationSource(ctx context.Context, t *testing.T) string {
 	require.NoError(t, st.CandidateArtifacts().Create(ctx, &store.CandidateArtifact{
 		ID: "candidate-migrate", ArtifactType: store.ArtifactImage, Ref: "registry/app:v1", Digest: "sha256:candidate", BundleID: &bundleID,
 	}))
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, &store.PreflightLifecycle{
-		ID: "preflight-migrate", Stages: json.RawMessage(`[{"stage":"verify","status":"passed"}]`), Overall: "passed", CreatedAt: now,
+	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+		ID: "preflight-migrate", OperationType: store.OperationInstall, Status: store.StatusPreflight,
+		ReleaseDefinitionID: "definition-migrate", IdempotencyKey: "preflight-migrate-key", RequestHash: "preflight-migrate-hash",
 	}))
+	require.NoError(t, st.PreflightLifecycles().CreateOrReset(ctx, "preflight-migrate"))
+	require.NoError(t, st.PreflightLifecycles().UpdateResult(ctx, "preflight-migrate", "passed", "verify"))
 
 	require.NoError(t, st.Users().Create(ctx, &store.User{ID: "user-migrate", Username: "migration-user", PasswordHash: "hash"}))
 	require.NoError(t, st.AuthSessions().Create(ctx, &store.AuthSession{

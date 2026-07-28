@@ -456,141 +456,141 @@ func TestCandidateArtifactDeleteOrphan(t *testing.T) {
 	assert.Equal(t, int64(1), n) // only old orphan deleted
 }
 
-// ── Preflight Lifecycle (AC-069-09, AC-069-10) ──────────────────
+// ── Preflight Lifecycle (AC-019-05, AC-019-06, AC-069-10) ──────
 
-func TestPreflightLifecycleCRUD(t *testing.T) {
+func TestPreflightLifecycleCreateOrReset(t *testing.T) {
 	st := setupStore(t)
-	ctx := context.Background()
-
-	opID := uuid.New().String()
-	pl := &store.PreflightLifecycle{
-		OperationID: &opID,
-		Stages:      []byte(`[{"stage":"control-plane","status":"passed"},{"stage":"inventory","status":"passed"}]`),
-		Overall:     "passed",
+	ctx := t.Context()
+	def := &store.ReleaseDefinition{
+		ID: "preflight-lifecycle-def", Name: "Preflight Lifecycle", CustomerID: "cust-preflight",
+		ClusterID: "cluster-preflight", ReleaseName: "release-preflight", Status: store.DefStatusActive,
 	}
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, pl))
-	assert.NotEmpty(t, pl.ID)
+	require.NoError(t, st.Definitions().Create(ctx, def, nil))
+	op := &store.Operation{
+		ID: "preflight-lifecycle-op", OperationType: store.OperationInstall, Status: store.StatusPreflight,
+		ReleaseDefinitionID: def.ID, IdempotencyKey: "preflight-lifecycle-key", RequestHash: "hash",
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
 
-	// Set operation terminal.
-	terminalAt := time.Now().UTC()
-	require.NoError(t, st.PreflightLifecycles().SetOperationTerminal(ctx, opID, terminalAt))
+	require.NoError(t, st.PreflightLifecycles().CreateOrReset(ctx, op.ID))
+	var firstID, stages, overall, createdAt, updatedAt string
+	var terminalAt *string
+	require.NoError(t, st.DB().QueryRowContext(ctx, `
+		SELECT id, operation_terminal_at, stages, overall, created_at, updated_at
+		FROM preflight_lifecycles WHERE operation_id = ?`, op.ID,
+	).Scan(&firstID, &terminalAt, &stages, &overall, &createdAt, &updatedAt))
+	assert.Nil(t, terminalAt)
+	assert.Empty(t, stages)
+	assert.Equal(t, "running", overall)
+	assert.Equal(t, createdAt, updatedAt)
 
-	// Second call is no-op (already set).
-	require.NoError(t, st.PreflightLifecycles().SetOperationTerminal(ctx, opID, terminalAt.Add(time.Hour)))
+	require.NoError(t, st.PreflightLifecycles().UpdateResult(ctx, op.ID, "failed", "artifact,render"))
+	require.NoError(t, st.PreflightLifecycles().CreateOrReset(ctx, op.ID))
+	var resetID string
+	require.NoError(t, st.DB().QueryRowContext(ctx, `
+		SELECT id, stages, overall FROM preflight_lifecycles WHERE operation_id = ?`, op.ID,
+	).Scan(&resetID, &stages, &overall))
+	assert.Equal(t, firstID, resetID)
+	assert.Empty(t, stages)
+	assert.Equal(t, "running", overall)
+}
+
+func TestPreflightLifecycleCreateOrResetPreservesTerminalAt(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	def := &store.ReleaseDefinition{
+		ID: "preflight-terminal-def", Name: "Preflight Terminal", CustomerID: "cust-terminal",
+		ClusterID: "cluster-terminal", ReleaseName: "release-terminal", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def, nil))
+	op := &store.Operation{
+		ID: "preflight-terminal-op", OperationType: store.OperationInstall, Status: store.StatusPreflight,
+		ReleaseDefinitionID: def.ID, IdempotencyKey: "preflight-terminal-key", RequestHash: "hash",
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	require.NoError(t, st.PreflightLifecycles().CreateOrReset(ctx, op.ID))
+	updated, err := st.Operations().Transition(ctx, op.ID, store.StatusCancelled, op.StateVersion, "cancelled")
+	require.NoError(t, err)
+	require.NotNil(t, updated.TerminalAt)
+	require.NoError(t, st.PreflightLifecycles().CreateOrReset(ctx, op.ID))
+
+	var terminalAt string
+	require.NoError(t, st.DB().QueryRowContext(ctx,
+		`SELECT operation_terminal_at FROM preflight_lifecycles WHERE operation_id = ?`, op.ID,
+	).Scan(&terminalAt))
+	assert.Equal(t, updated.TerminalAt.UTC().Format(time.RFC3339), terminalAt)
+}
+
+func TestPreflightLifecycleUpdateResult(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	opID := "preflight-result-op"
+	require.NoError(t, st.PreflightLifecycles().CreateOrReset(ctx, opID))
+	require.NoError(t, st.PreflightLifecycles().UpdateResult(ctx, opID, "passed", "artifact,render,dryrun"))
+
+	var stages, overall string
+	require.NoError(t, st.DB().QueryRowContext(ctx,
+		`SELECT stages, overall FROM preflight_lifecycles WHERE operation_id = ?`, opID,
+	).Scan(&stages, &overall))
+	assert.Equal(t, "artifact,render,dryrun", stages)
+	assert.Equal(t, "passed", overall)
 }
 
 func TestPreflightLifecycleDeleteExpired(t *testing.T) {
 	st := setupStore(t)
-	ctx := context.Background()
-
+	ctx := t.Context()
 	now := time.Now().UTC()
 
-	// Exploratory preflight (no operation) — old → deleted (AC-069-09).
-	exploratory := &store.PreflightLifecycle{
-		OperationID: nil,
-		Stages:      []byte(`[]`),
-		Overall:     "passed",
-	}
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, exploratory))
-
-	_, err := st.DB().ExecContext(ctx,
-		`UPDATE preflight_lifecycles SET created_at=? WHERE id=?`,
-		now.Add(-8*24*time.Hour).Format(time.RFC3339), exploratory.ID)
+	oldExploratoryID := uuid.NewString()
+	_, err := st.DB().ExecContext(ctx, `
+		INSERT INTO preflight_lifecycles (id, operation_id, stages, overall, created_at, updated_at)
+		VALUES (?, NULL, '', 'passed', ?, ?)`,
+		oldExploratoryID, now.Add(-8*24*time.Hour).Format(time.RFC3339), now.Add(-8*24*time.Hour).Format(time.RFC3339),
+	)
 	require.NoError(t, err)
 
-	// Preflight without terminal_at — should survive (AC-069-10).
-	opID := uuid.New().String()
-	noTerminal := &store.PreflightLifecycle{
-		OperationID: &opID,
-		Stages:      []byte(`[]`),
-		Overall:     "passed",
-	}
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, noTerminal))
-
-	_, err = st.DB().ExecContext(ctx,
-		`UPDATE preflight_lifecycles SET created_at=? WHERE id=?`,
-		now.Add(-8*24*time.Hour).Format(time.RFC3339), noTerminal.ID)
+	activeOperationID := "preflight-active-op"
+	require.NoError(t, st.PreflightLifecycles().CreateOrReset(ctx, activeOperationID))
+	_, err = st.DB().ExecContext(ctx, `UPDATE preflight_lifecycles SET created_at = ?, updated_at = ? WHERE operation_id = ?`,
+		now.Add(-8*24*time.Hour).Format(time.RFC3339), now.Add(-8*24*time.Hour).Format(time.RFC3339), activeOperationID)
 	require.NoError(t, err)
 
-	// Preflight with terminal_at set — old → deleted.
-	opID2 := uuid.New().String()
-	terminal := &store.PreflightLifecycle{
-		OperationID: &opID2,
-		Stages:      []byte(`[]`),
-		Overall:     "failed",
-	}
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, terminal))
-
-	terminalAt := now.Add(-8 * 24 * time.Hour)
-	require.NoError(t, st.PreflightLifecycles().SetOperationTerminal(ctx, opID2, terminalAt))
-
-	// GC: TTL = 7 days.
-	n, err := st.PreflightLifecycles().DeleteExpired(ctx, 7*24*time.Hour)
+	terminalOperationID := "preflight-terminal-gc-op"
+	require.NoError(t, st.PreflightLifecycles().CreateOrReset(ctx, terminalOperationID))
+	_, err = st.DB().ExecContext(ctx, `UPDATE preflight_lifecycles SET operation_terminal_at = ? WHERE operation_id = ?`,
+		now.Add(-8*24*time.Hour).Format(time.RFC3339), terminalOperationID)
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), n) // exploratory + terminal (both > 7d)
+
+	deleted, err := st.PreflightLifecycles().DeleteExpired(ctx, 7*24*time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), deleted)
 }
 
-// ── Operation Terminal Callback (REQ-069 integration) ───────────
-
-func TestOperationTransition_SetsPreflightTerminal(t *testing.T) {
+func TestOperationTransitionSetsPreflightTerminal(t *testing.T) {
 	st := setupStore(t)
-	ctx := context.Background()
-
-	// Create a preflight lifecycle record first.
-	opID := uuid.New().String()
-	pl := &store.PreflightLifecycle{
-		OperationID: &opID,
-		Stages:      []byte(`[{"stage":"control-plane","status":"passed"}]`),
-		Overall:     "passed",
-	}
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, pl))
-
-	// Create an operation in running state.
+	ctx := t.Context()
+	opID := uuid.NewString()
+	require.NoError(t, st.PreflightLifecycles().CreateOrReset(ctx, opID))
 	def := &store.ReleaseDefinition{
-		ID:                uuid.New().String(),
-		Name:              "term-cb-def",
-		CustomerID:        "cust-6",
-		ClusterID:         "cls-6",
-		ReleaseName:       "term-cb-rel",
-		Status:            store.DefStatusActive,
-		OptimisticVersion: 1,
+		ID: uuid.NewString(), Name: "term-cb-def", CustomerID: "cust-6", ClusterID: "cls-6",
+		ReleaseName: "term-cb-rel", Status: store.DefStatusActive, OptimisticVersion: 1,
 	}
 	require.NoError(t, st.Definitions().Create(ctx, def, nil))
-
 	op := &store.Operation{
-		ID:                  opID,
-		OperationType:       store.OperationInstall,
-		Status:              store.StatusRunning,
-		ReleaseDefinitionID: def.ID,
-		IdempotencyKey:      uuid.New().String(),
-		RequestHash:         "hash",
-		BundleID:            "",
-		StateVersion:        3,
+		ID: opID, OperationType: store.OperationInstall, Status: store.StatusRunning,
+		ReleaseDefinitionID: def.ID, IdempotencyKey: uuid.NewString(), RequestHash: "hash", StateVersion: 3,
 	}
 	require.NoError(t, st.Operations().Create(ctx, op))
 
-	// Transition to succeeded (terminal).
 	updated, err := st.Operations().Transition(ctx, op.ID, store.StatusSucceeded, op.StateVersion, "")
 	require.NoError(t, err)
-	assert.Equal(t, store.StatusSucceeded, updated.Status)
+	require.NotNil(t, updated.TerminalAt)
 
-	// AC-023-08: operation.terminal_at is set in the same transaction.
-	require.NotNil(t, updated.TerminalAt, "returned Operation.TerminalAt must be non-nil")
-	assert.False(t, updated.TerminalAt.IsZero())
-
-	// Directly verify operations.terminal_at in the database (no sleep/indirection).
-	var opTerminalAt *string
-	err = st.DB().QueryRowContext(ctx, `SELECT terminal_at FROM operations WHERE id = ?`, opID).Scan(&opTerminalAt)
-	require.NoError(t, err)
-	require.NotNil(t, opTerminalAt, "operations.terminal_at must be non-nil after terminal transition")
-	assert.NotEmpty(t, *opTerminalAt)
-
-	// AC-023-09: preflight_lifecycles.operation_terminal_at is backfilled in the same transaction.
-	var plTerminalAt *string
-	err = st.DB().QueryRowContext(ctx, `SELECT operation_terminal_at FROM preflight_lifecycles WHERE operation_id = ?`, opID).Scan(&plTerminalAt)
-	require.NoError(t, err)
-	require.NotNil(t, plTerminalAt, "preflight_lifecycles.operation_terminal_at must be backfilled")
-	assert.NotEmpty(t, *plTerminalAt)
-	assert.Equal(t, *opTerminalAt, *plTerminalAt,
-		"preflight_lifecycles.operation_terminal_at must match operations.terminal_at (same transaction timestamp)")
+	var operationTerminalAt, lifecycleTerminalAt string
+	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT terminal_at FROM operations WHERE id = ?`, opID).Scan(&operationTerminalAt))
+	require.NoError(t, st.DB().QueryRowContext(ctx,
+		`SELECT operation_terminal_at FROM preflight_lifecycles WHERE operation_id = ?`, opID,
+	).Scan(&lifecycleTerminalAt))
+	assert.Equal(t, operationTerminalAt, lifecycleTerminalAt)
 }

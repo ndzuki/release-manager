@@ -35,6 +35,7 @@ type orchSvc struct {
 	store   store.Store
 	cleanup *orchestrator.CleanupService
 	pingDB  func(context.Context) error
+	service *orchestrator.Service
 }
 
 func (s *orchSvc) Name() string { return "release-orchestrator" }
@@ -42,6 +43,9 @@ func (s *orchSvc) Name() string { return "release-orchestrator" }
 func (s *orchSvc) Configure(cfg *config.ServiceConfig) { s.cfg = *cfg }
 
 func (s *orchSvc) Close() error {
+	if s.service != nil {
+		s.service.Close()
+	}
 	if s.store == nil {
 		return nil
 	}
@@ -81,7 +85,13 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if !s.cfg.Maintenance {
 		auditEmitter = audit.NewEmitter(s.store.AuditEvents(), logger, audit.DefaultConfig())
 	}
-	svc := orchestrator.NewService(s.store, verifier, s.targetEnv, auditEmitter, logger)
+	s.service = orchestrator.NewService(s.store, verifier, s.targetEnv, auditEmitter, logger)
+	svc := s.service
+	if !s.cfg.Maintenance {
+		if err := s.service.ResumePreflights(context.Background()); err != nil {
+			return fmt.Errorf("resume preflight operations: %w", err)
+		}
+	}
 	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)
 	enforcer, err := auth.NewEnforcer(s.store, logger)
 	if err != nil {

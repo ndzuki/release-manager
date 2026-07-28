@@ -34,6 +34,7 @@ type Service struct {
 	verifier     trust.Verifier
 	targetEnv    string
 	coordinator  *preflight.Coordinator
+	preflights   *preflight.Runner
 	vulnEval     *vulnerability.Evaluator
 	auditEmitter audit.Sink
 	logger       *slog.Logger
@@ -54,10 +55,44 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 		store:        st,
 		verifier:     verifier,
 		targetEnv:    targetEnv,
-		coordinator:  preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.Values(), st.Bundles(), st.PreflightLifecycles(), logger),
+		coordinator:  preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.PreflightLifecycles(), logger),
+		preflights:   preflight.NewRunner(),
 		auditEmitter: auditEmitter,
 		logger:       logger,
 	}
+}
+
+// Close stops operation-scoped background work owned by the service.
+func (s *Service) Close() {
+	if s.preflights != nil {
+		s.preflights.StopAll()
+	}
+}
+
+// ResumePreflights restarts preflight operations after process recovery.
+// It is idempotent per operation while the service is running.
+func (s *Service) ResumePreflights(ctx context.Context) error {
+	ops, err := s.store.Operations().ListNonTerminal(ctx)
+	if err != nil {
+		return fmt.Errorf("list operations for preflight resume: %w", err)
+	}
+	for _, op := range ops {
+		if op.Status != store.StatusPreflight || !op.OperationType.IsStandard() {
+			continue
+		}
+		if !s.startPreflight(ctx, op) {
+			s.logger.Debug("preflight already active during resume", "op_id", op.ID)
+		}
+	}
+	return nil
+}
+
+func (s *Service) startPreflight(ctx context.Context, op *store.Operation) bool {
+	return s.preflights.Start(context.WithoutCancel(ctx), op.ID, func(runCtx context.Context) {
+		if err := s.coordinator.Run(runCtx, op); err != nil && !errors.Is(err, context.Canceled) {
+			s.logger.Error("preflight coordinator stopped", "op_id", op.ID, "err", err)
+		}
+	})
 }
 
 // CreateOperation creates a new release operation from the given request.
@@ -254,22 +289,19 @@ func (s *Service) CreateOperation(
 	if opType.IsStandard() {
 		next, err := operation.Transition(op.Status, operation.EventStartPreflight)
 		if err != nil {
-			s.logger.Error("preflight transition failed", "op_id", op.ID, "err", err)
-		} else {
-			_, err = s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, "")
-			if err != nil {
-				s.logger.Error("preflight status update failed", "op_id", op.ID, "err", err)
-			} else {
-				op.Status = next
-				op.StateVersion++
-
-				// Launch preflight coordinator in background.
-				// Use WithoutCancel so the coordinator outlives the HTTP request.
-				bgCtx := context.WithoutCancel(ctx)
-				go s.coordinator.Run(bgCtx, op)
-				s.logger.Info("preflight coordinator launched", "op_id", op.ID)
-			}
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("preflight transition: %w", err))
 		}
+		if _, err = s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, ""); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("start preflight: %w", err))
+		}
+		op.Status = next
+		op.StateVersion++
+
+		if !s.startPreflight(ctx, op) {
+			return nil, connect.NewError(connect.CodeInternal,
+				fmt.Errorf("start preflight: operation %s already active", op.ID))
+		}
+		s.logger.Info("preflight coordinator launched", "op_id", op.ID)
 	}
 	s.logger.Info("operation created",
 		"op_id", op.ID,
@@ -472,6 +504,9 @@ func (s *Service) finishCancelWithTarget(
 		default:
 			return nil, cancelOperationError(connect.CodeInternal, "internal_error", fmt.Errorf("cancel operation: %w", err))
 		}
+	}
+	if result.Operation.Status == store.StatusCancelled {
+		s.preflights.Cancel(result.Operation.ID)
 	}
 
 	protoOp := toProtoOperation(result.Operation)

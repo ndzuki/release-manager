@@ -7,62 +7,50 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/ndzuki/release-manager/internal/store"
 )
 
 type preflightLifecycleStore struct{ db *sql.DB }
 
-func (s *preflightLifecycleStore) Create(ctx context.Context, pl *store.PreflightLifecycle) error {
-	if pl.ID == "" {
-		pl.ID = uuid.New().String()
-	}
-	if pl.CreatedAt.IsZero() {
-		pl.CreatedAt = time.Now().UTC()
-	}
-
-	var opID, opTerminalAt *string
-	if pl.OperationID != nil {
-		opID = pl.OperationID
-	}
-	if pl.OperationTerminalAt != nil {
-		t := pl.OperationTerminalAt.UTC().Format(time.RFC3339)
-		opTerminalAt = &t
-	}
-
-	stages := string(pl.Stages)
-	if stages == "" {
-		stages = "[]"
-	}
-
+func (s *preflightLifecycleStore) CreateOrReset(ctx context.Context, operationID string) error {
+	now := nowUTC()
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`,
-		pl.ID, opID, opTerminalAt,
-		stages, pl.Overall, pl.ErrorCode,
-		pl.CreatedAt.UTC().Format(time.RFC3339),
-	)
+		INSERT INTO preflight_lifecycles (
+			id, operation_id, operation_terminal_at, stages, overall, created_at, updated_at
+		)
+		VALUES (?, ?, (SELECT terminal_at FROM operations WHERE id = ?), '', 'running', ?, ?)
+		ON CONFLICT(operation_id) DO UPDATE SET
+			stages = '',
+			overall = 'running',
+			updated_at = excluded.updated_at,
+			operation_terminal_at = COALESCE(
+				preflight_lifecycles.operation_terminal_at,
+				excluded.operation_terminal_at
+			)
+	`, uuid.NewString(), operationID, operationID, now, now)
 	if err != nil {
-		return fmt.Errorf("insert preflight lifecycle: %w", err)
+		return fmt.Errorf("create or reset preflight lifecycle: %w", err)
 	}
 	return nil
 }
 
-func (s *preflightLifecycleStore) SetOperationTerminal(ctx context.Context, operationID string, terminalAt time.Time) error {
+func (s *preflightLifecycleStore) UpdateResult(
+	ctx context.Context,
+	operationID, overall, stages string,
+) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE preflight_lifecycles
-		SET operation_terminal_at = ?
-		WHERE operation_id = ? AND operation_terminal_at IS NULL
-	`, terminalAt.UTC().Format(time.RFC3339), operationID)
+		SET overall = ?, stages = ?, updated_at = ?
+		WHERE operation_id = ?
+	`, overall, stages, nowUTC(), operationID)
 	if err != nil {
-		return fmt.Errorf("set preflight operation terminal: %w", err)
+		return fmt.Errorf("update preflight lifecycle result: %w", err)
 	}
-	n, err := result.RowsAffected()
+	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("terminal rows affected: %w", err)
+		return fmt.Errorf("preflight lifecycle result rows affected: %w", err)
 	}
-	if n == 0 {
-		return nil // no rows to update — not an error
+	if rows == 0 {
+		return fmt.Errorf("update preflight lifecycle result: operation %s not found", operationID)
 	}
 	return nil
 }

@@ -327,7 +327,7 @@ func TestAppendTargetColumns(t *testing.T) {
 		wantExtra int
 	}{
 		{name: "candidate last seen", table: "candidate_artifacts", columns: []string{"id", "created_at"}, want: []string{"id", "created_at", "last_seen_at"}, wantExtra: 1},
-		{name: "preflight updated at", table: "preflight_lifecycles", columns: []string{"id", "created_at"}, want: []string{"id", "created_at", "updated_at"}, wantExtra: 1},
+		{name: "preflight updated at", table: "preflight_lifecycles", columns: []string{"id", "created_at", "stages"}, want: []string{"id", "created_at", "stages", "updated_at"}, wantExtra: 1},
 		{name: "unchanged", table: "customers", columns: []string{"id"}, want: []string{"id"}},
 	}
 	for _, tt := range tests {
