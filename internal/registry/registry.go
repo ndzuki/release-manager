@@ -18,14 +18,14 @@ type ServiceDescriptor struct {
 func Services() []ServiceDescriptor {
 	return []ServiceDescriptor{
 		{
-			Name:         "release-webhook",
-			Description:  "Handles artifact ingestion from external sources (e.g. Harbor).",
-			ConnectService:  "webhook.v1.WebhookService",
-			Requirements: []string{"010", "011", "012"},
+			Name:           "release-webhook",
+			Description:    "Handles artifact ingestion from external sources (e.g. Harbor).",
+			ConnectService: "webhook.v1.WebhookService",
+			Requirements:   []string{"010", "011", "012"},
 		},
 		{
-			Name:        "release-orchestrator",
-			Description: "Coordinates release publish workflows across services.",
+			Name:           "release-orchestrator",
+			Description:    "Coordinates release publish workflows across services.",
 			ConnectService: "orchestrator.v1.OrchestratorService",
 			Requirements: []string{
 				"013", "014", "015", "016", "017", "018", "019",
@@ -35,8 +35,8 @@ func Services() []ServiceDescriptor {
 			},
 		},
 		{
-			Name:        "release-operator",
-			Description: "Manages bidirectional gRPC streams with operator agents.",
+			Name:           "release-operator",
+			Description:    "Manages bidirectional gRPC streams with operator agents.",
 			ConnectService: "operator.v1.OperatorService",
 			Requirements: []string{
 				"015", "016", "017", "018", "019", "020", "021",
@@ -45,18 +45,18 @@ func Services() []ServiceDescriptor {
 			},
 		},
 		{
-			Name:        "release-auth",
-			Description: "Handles authentication, authorization, and token management.",
+			Name:           "release-auth",
+			Description:    "Handles authentication, authorization, and token management.",
 			ConnectService: "auth.v1.AuthService",
 			Requirements: []string{
 				"025", "026", "027", "028", "029", "049", "050",
 			},
 		},
 		{
-			Name:        "release-notifier",
-			Description: "Dispatches notifications about release events.",
+			Name:           "release-notifier",
+			Description:    "Dispatches notifications about release events.",
 			ConnectService: "notifier.v1.NotifierService",
-			Requirements: []string{"031"},
+			Requirements:   []string{"031"},
 		},
 		{
 			Name:        "web",

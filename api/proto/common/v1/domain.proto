@@ -12,6 +12,7 @@ enum BundleStatus {
   BUNDLE_STATUS_RECEIVED = 1;
   BUNDLE_STATUS_VALIDATED = 2;
   BUNDLE_STATUS_REJECTED = 3;
+  BUNDLE_STATUS_ARCHIVED = 4;
 }
 
 // ReleaseDigest is an immutable content-addressable identifier for a ReleaseBundle.
@@ -20,11 +21,51 @@ message ReleaseDigest {
   string value = 2;
 }
 
+// ImageValueKind describes which Helm value a binding replaces.
+enum ImageValueKind {
+  IMAGE_VALUE_KIND_UNSPECIFIED = 0;
+  IMAGE_VALUE_KIND_FULL_REFERENCE = 1;
+  IMAGE_VALUE_KIND_REPOSITORY = 2;
+  IMAGE_VALUE_KIND_TAG = 3;
+  IMAGE_VALUE_KIND_DIGEST = 4;
+}
+
+// ArtifactType classifies a globally indexed candidate artifact.
+enum ArtifactType {
+  ARTIFACT_TYPE_UNSPECIFIED = 0;
+  ARTIFACT_TYPE_IMAGE = 1;
+  ARTIFACT_TYPE_CHART = 2;
+  ARTIFACT_TYPE_SBOM = 3;
+  ARTIFACT_TYPE_PROVENANCE = 4;
+  ARTIFACT_TYPE_SIGNATURE = 5;
+}
+
 // BundleImage maps a container image to its Helm values path.
 message BundleImage {
   string ref = 1;
   string digest = 2;
   string values_path = 3;
+  ImageValueKind value_kind = 4;
+}
+
+// ArtifactReference identifies immutable evidence stored outside the service.
+message ArtifactReference {
+  string ref = 1;
+  string digest = 2;
+}
+
+// CandidateArtifact describes an additional artifact observed with a bundle.
+message CandidateArtifact {
+  ArtifactType artifact_type = 1;
+  string ref = 2;
+  string digest = 3;
+}
+
+// EventResource is one artifact resource carried by an external event.
+message EventResource {
+  string digest = 1;
+  string ref = 2;
+  string tag = 3;
 }
 
 // ReleaseBundle is the atomic unit of a release — immutable once published.
@@ -43,6 +84,9 @@ message ReleaseBundle {
   string sbom_ref = 12;
   string provenance_ref = 13;
   google.protobuf.Timestamp created_at = 14;
+  string signature_digest = 15;
+  string sbom_digest = 16;
+  string provenance_digest = 17;
 }
 
 // ReleaseDefinition decouples the install preflight cycle from artifact ingestion.

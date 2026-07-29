@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // VerificationStatus is the outcome of an artifact trust verification.
@@ -125,8 +127,9 @@ func (s OperationStatus) IsTerminal() bool {
 	return false
 }
 
-//nolint:gocyclo // Exhaustive legal-transition table; simpler than a two-layered map.
 // CanTransitionTo reports whether an operation status may advance directly to target.
+//
+//nolint:gocyclo // Exhaustive legal-transition table; simpler than a two-layered map.
 func (s OperationStatus) CanTransitionTo(target OperationStatus) bool {
 	switch s {
 	case StatusPending:
@@ -763,7 +766,27 @@ const (
 // Valid returns true if the status is a recognized value.
 func (s BundleStatus) Valid() bool {
 	switch s {
-	case BundleReceived, BundleValidated, BundleRejected:
+	case BundleReceived, BundleValidated, BundleRejected, BundleArchived:
+		return true
+	default:
+		return false
+	}
+}
+
+// ImageValueKind describes which Helm value a binding replaces.
+type ImageValueKind string
+
+const (
+	ImageValueFullReference ImageValueKind = "FULL_REFERENCE"
+	ImageValueRepository    ImageValueKind = "REPOSITORY"
+	ImageValueTag           ImageValueKind = "TAG"
+	ImageValueDigest        ImageValueKind = "DIGEST"
+)
+
+// Valid returns true if the value kind is recognized.
+func (k ImageValueKind) Valid() bool {
+	switch k {
+	case ImageValueFullReference, ImageValueRepository, ImageValueTag, ImageValueDigest:
 		return true
 	default:
 		return false
@@ -775,33 +798,64 @@ type BundleImage struct {
 	Ref        string
 	Digest     string
 	ValuesPath string
+	ValueKind  ImageValueKind
+}
+
+// ArtifactReference identifies immutable evidence stored outside the service.
+type ArtifactReference struct {
+	Ref    string
+	Digest string
 }
 
 // ReleaseBundle represents an immutable release artifact bundle.
 type ReleaseBundle struct {
-	ID            string
-	Name          string
-	DigestAlg     string
-	DigestValue   string
-	Status        BundleStatus
-	ChartRef      string
-	ChartVersion  string
-	ChartDigest   string
-	Images        []BundleImage
-	GitCommit     string
-	PipelineID    string
-	SignatureRef  string
-	SBOMRef       string
-	ProvenanceRef string
-	ArchivedAt    *time.Time
-	CreatedAt     time.Time
+	ID                 string
+	Name               string
+	DigestAlg          string
+	DigestValue        string
+	Status             BundleStatus
+	ChartRef           string
+	ChartVersion       string
+	ChartDigest        string
+	Images             []BundleImage
+	GitCommit          string
+	PipelineID         string
+	SignatureRef       string
+	SignatureDigest    string
+	SBOMRef            string
+	SBOMDigest         string
+	ProvenanceRef      string
+	ProvenanceDigest   string
+	ArchivedAt         *time.Time
+	ArchivedFromStatus *BundleStatus
+	CreatedAt          time.Time
+}
+
+// BundleListFilter narrows bundle queries and binds opaque pagination tokens.
+type BundleListFilter struct {
+	ReleaseDefinitionID string
+	Statuses            []BundleStatus
+	ChartName           string
+	PageSize            int
+	PageToken           string
+}
+
+// BundlePage is one stable page of ReleaseBundles.
+type BundlePage struct {
+	Bundles       []*ReleaseBundle
+	NextPageToken string
+	TotalSize     int32
 }
 
 // BundleStore defines the persistence contract for release bundles.
 type BundleStore interface {
 	Create(ctx context.Context, b *ReleaseBundle) error
+	CreateTx(tx *gorm.DB, b *ReleaseBundle) error
 	Get(ctx context.Context, id string) (*ReleaseBundle, error)
 	GetByDigest(ctx context.Context, alg, value string) (*ReleaseBundle, error)
+	GetByAlias(ctx context.Context, alias string) (*ReleaseBundle, error)
+	List(ctx context.Context, filter BundleListFilter) (*BundlePage, error)
+	UpdateStatusTx(tx *gorm.DB, id string, from, to BundleStatus, validationErr string) error
 	ListForArchive(ctx context.Context, retentionDays int, terminalStates []OperationStatus) ([]string, error)
 	Archive(ctx context.Context, ids []string) (int64, error)
 	Unarchive(ctx context.Context, id string) error
@@ -882,24 +936,71 @@ const (
 	InventoryOutOfSync InventoryStatus = "out_of_sync" // reserved for future use
 )
 
+// OperationExecutionResult stores the typed terminal payload for one operation.
+type OperationExecutionResult struct {
+	OperationID   string
+	ResultType    string
+	ResultPayload []byte
+	CreatedAt     time.Time
+}
+
+// RolloutTracking records asynchronous rollout observation after a successful upgrade.
+type RolloutTracking struct {
+	OperationID   string
+	Status        string
+	ResourceCount int
+	ReadyCount    int
+	FailedCount   int
+	LastError     string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// UpgradeTerminalInput is applied atomically when a typed operator result arrives.
+type UpgradeTerminalInput struct {
+	OperationID                   string
+	ExpectedStateVersion          int
+	Status                        OperationStatus
+	LastError                     string
+	ResultPayload                 []byte
+	ReleaseDefinitionID           string
+	CustomerID                    string
+	ClusterID                     string
+	UpdateInventory               bool
+	Revision                      int
+	ObservedBundleDigest          string
+	ObservedChartDigest           string
+	ObservedEffectiveValuesDigest string
+	ObservedManifestDigest        string
+	LiveStatus                    string
+	InventoryStatus               InventoryStatus
+	ResourceCount                 int
+}
+
 // ReleaseInventory represents a cached release snapshot in the orchestrator's observation store.
 // Unique key: (customer_id, cluster_id, namespace, release_name).
 type ReleaseInventory struct {
-	ReleaseDefinitionID string
-	CustomerID          string
-	ClusterID           string
-	Namespace           string
-	ReleaseName         string
-	Chart               string
-	ChartVersion        string
-	Revision            int
-	Status              string
-	ValuesDigest        string
-	InventoryStatus     InventoryStatus
-	LastSyncID          string
-	SnapshotVersion     int64
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ReleaseDefinitionID           string
+	CustomerID                    string
+	ClusterID                     string
+	Namespace                     string
+	ReleaseName                   string
+	Chart                         string
+	ChartVersion                  string
+	Revision                      int
+	Status                        string
+	ValuesDigest                  string
+	ObservedBundleDigest          string
+	ObservedChartDigest           string
+	ObservedEffectiveValuesDigest string
+	ObservedManifestDigest        string
+	LiveStatus                    string
+	LastOperationID               string
+	InventoryStatus               InventoryStatus
+	LastSyncID                    string
+	SnapshotVersion               int64
+	CreatedAt                     time.Time
+	UpdatedAt                     time.Time
 }
 
 // InventorySyncLog records the application of a sync snapshot for idempotency.
@@ -1229,17 +1330,25 @@ type VulnerabilityExceptionStore interface {
 
 // --- Cluster artifact routing domain types (REQ-014) ---
 
-// ArtifactType classifies the kind of artifact routed to a cluster.
+// ArtifactType classifies the kind of artifact routed or indexed by the service.
 type ArtifactType string
 
 const (
-	ArtifactImage ArtifactType = "image"
-	ArtifactChart ArtifactType = "chart"
+	ArtifactImage      ArtifactType = "image"
+	ArtifactChart      ArtifactType = "chart"
+	ArtifactSBOM       ArtifactType = "sbom"
+	ArtifactProvenance ArtifactType = "provenance"
+	ArtifactSignature  ArtifactType = "signature"
 )
 
 // Valid returns true if the artifact type is a recognized value.
 func (t ArtifactType) Valid() bool {
-	return t == ArtifactImage || t == ArtifactChart
+	switch t {
+	case ArtifactImage, ArtifactChart, ArtifactSBOM, ArtifactProvenance, ArtifactSignature:
+		return true
+	default:
+		return false
+	}
 }
 
 // ArtifactMode describes how the cluster obtains the artifact.
@@ -1300,25 +1409,144 @@ type InventoryStore interface {
 
 	// GetBySyncID checks whether a sync_id has already been applied.
 	GetBySyncID(ctx context.Context, syncID string) (*InventorySyncLog, error)
+	GetByDefinition(ctx context.Context, definitionID string) (*ReleaseInventory, error)
 }
 
-// ── Candidate artifact domain types (REQ-XXX) ──────────────────────
+// OperationExecutionResultStore provides typed result lookup.
+type OperationExecutionResultStore interface {
+	Get(ctx context.Context, operationID string) (*OperationExecutionResult, error)
+}
 
-// CandidateArtifact represents a build artifact awaiting bundle assignment.
+// RolloutTrackingStore provides rollout tracking lookup.
+type RolloutTrackingStore interface {
+	Get(ctx context.Context, operationID string) (*RolloutTracking, error)
+}
+
+// UpgradeResultStore atomically persists typed upgrade terminal projections.
+type UpgradeResultStore interface {
+	FinalizeUpgrade(ctx context.Context, input *UpgradeTerminalInput) error
+}
+
+// ── Candidate artifact and ingestion domain types (REQ-011) ───────
+
+// CandidateArtifact represents a globally unique immutable artifact identity.
 type CandidateArtifact struct {
 	ID           string
 	ArtifactType ArtifactType
 	Ref          string
 	Digest       string
-	BundleID     *string
 	CreatedAt    time.Time
+	LastSeenAt   time.Time
+	OrphanedAt   *time.Time
+	BundleID     *string // legacy SQLite compatibility; PostgreSQL uses bundle_candidate_artifacts
+}
+
+// ArtifactDigest identifies one globally unique candidate artifact.
+type ArtifactDigest struct {
+	Digest       string
+	ArtifactType ArtifactType
+}
+
+// IdempotencyRecord stores a replayable response for a scoped request key.
+type IdempotencyRecord struct {
+	Scope       string
+	Key         string
+	RequestHash string
+	ResponseRef json.RawMessage
+	ExpiresAt   time.Time
+}
+
+// BundleSubmission is the atomic input for a new bundle and its derived records.
+type BundleSubmission struct {
+	Bundle          *ReleaseBundle
+	Candidates      []*CandidateArtifact
+	Idempotency     *IdempotencyRecord
+	Audit           *ApprovalOutboxEntry
+	ValidationEntry *ValidationOutboxEntry
+}
+
+// ArtifactEvent is the immutable record of an external artifact observation.
+type ArtifactEvent struct {
+	ID            string
+	SourceID      string
+	EventID       string
+	EventType     string
+	OccurredAt    time.Time
+	ReceivedAt    time.Time
+	RawPayload    string
+	PayloadSHA256 string
+	ArtifactType  ArtifactType
+	Repository    string
+}
+
+// ValidationOutboxStatus is the durable validation worker state.
+type ValidationOutboxStatus string
+
+const (
+	ValidationPending   ValidationOutboxStatus = "pending"
+	ValidationRunning   ValidationOutboxStatus = "running"
+	ValidationFailed    ValidationOutboxStatus = "failed"
+	ValidationCompleted ValidationOutboxStatus = "completed"
+)
+
+// ValidationOutboxEntry schedules source registry validation for a bundle.
+type ValidationOutboxEntry struct {
+	ID            string
+	BundleID      string
+	Status        ValidationOutboxStatus
+	Attempts      int
+	LastErrorCode string
+	NextAttemptAt time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// BundleSubmissionStore executes one complete SubmitBundle transaction.
+type BundleSubmissionStore interface {
+	Submit(ctx context.Context, submission BundleSubmission) (bundle *ReleaseBundle, created bool, err error)
+}
+
+// ArtifactEventSubmission atomically records one event and its candidate locations.
+type ArtifactEventSubmission struct {
+	Event      *ArtifactEvent
+	Candidates []*CandidateArtifact
+	Audit      *ApprovalOutboxEntry
+}
+
+// ArtifactEventSubmissionResult reports event and candidate idempotency effects.
+type ArtifactEventSubmissionResult struct {
+	Event            *ArtifactEvent
+	Created          bool
+	NewCandidates    int32
+	UpdatedLocations int32
+}
+
+// ArtifactEventSubmissionStore executes one complete RecordArtifactEvent transaction.
+type ArtifactEventSubmissionStore interface {
+	Record(ctx context.Context, submission ArtifactEventSubmission) (*ArtifactEventSubmissionResult, error)
 }
 
 // CandidateArtifactStore defines the persistence contract for candidate artifacts.
 type CandidateArtifactStore interface {
 	Create(ctx context.Context, ca *CandidateArtifact) error
 	LinkToBundle(ctx context.Context, artifactID, bundleID string) error
-	DeleteOrphanBefore(ctx context.Context, cutoff time.Time) (int64, error)
+	UpsertTx(tx *gorm.DB, ca *CandidateArtifact) error
+	UpsertLocationTx(tx *gorm.DB, artifactID, ref, sourceID string, now time.Time) error
+	LinkToBundleTx(tx *gorm.DB, bundleID string, digests []ArtifactDigest) error
+	DeleteOrphanBefore(ctx context.Context, cutoff time.Time, limit ...int) (int64, error)
+}
+
+// ArtifactEventStore persists externally observed artifact events.
+type ArtifactEventStore interface {
+	CreateTx(tx *gorm.DB, event *ArtifactEvent) error
+	GetBySourceAndEvent(ctx context.Context, sourceID, eventID string) (*ArtifactEvent, error)
+}
+
+// ValidationOutboxStore persists and claims bundle validation work.
+type ValidationOutboxStore interface {
+	CreateTx(tx *gorm.DB, entry *ValidationOutboxEntry) error
+	ClaimPending(ctx context.Context, now time.Time, limit int) ([]ValidationOutboxEntry, error)
+	UpdateTx(tx *gorm.DB, entry *ValidationOutboxEntry) error
 }
 
 // ── Preflight lifecycle domain types (REQ-069) ─────────────────────
@@ -1374,7 +1602,14 @@ type Store interface {
 	ClusterRoutes() ClusterRouteStore
 	Inventories() InventoryStore
 	InventorySyncRequests() InventorySyncRequestStore
+	ExecutionResults() OperationExecutionResultStore
+	RolloutTrackings() RolloutTrackingStore
+	UpgradeResults() UpgradeResultStore
 	CandidateArtifacts() CandidateArtifactStore
+	ArtifactEvents() ArtifactEventStore
+	ValidationOutbox() ValidationOutboxStore
+	BundleSubmissions() BundleSubmissionStore
+	ArtifactEventSubmissions() ArtifactEventSubmissionStore
 	PreflightLifecycles() PreflightLifecycleStore
 	Close() error
 }

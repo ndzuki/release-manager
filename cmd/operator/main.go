@@ -9,6 +9,10 @@ import (
 	"net/http"
 	"time"
 
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
@@ -53,6 +57,10 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	mux.Handle(path, handler)
 
 	engine := helmengine.NewRealEngine(s.kubeConfig, logger)
+	secretClient, err := newSecretClient(s.kubeConfig)
+	if err != nil {
+		return fmt.Errorf("create Kubernetes secret client: %w", err)
+	}
 	if s.orchestratorURL != "" {
 		orchClient := orchestratorv1connect.NewOrchestratorServiceClient(
 			http.DefaultClient,
@@ -82,6 +90,7 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 				Client:       operatoragent.ConnectClient{Client: operatorClient},
 				Engine:       engine,
 				Store:        commandStore,
+				Secrets:      secretClient.CoreV1(),
 				Notifier:     syncer,
 				SyncExecutor: syncer,
 				SessionID:    s.sessionID,
@@ -142,6 +151,26 @@ func (s *operatorSvc) runSessionExpiry(ctx context.Context, logger *slog.Logger)
 			}
 		}
 	}
+}
+
+func newSecretClient(kubeConfig string) (kubernetes.Interface, error) {
+	var (
+		config *rest.Config
+		err    error
+	)
+	if kubeConfig != "" {
+		config, err = clientcmd.BuildConfigFromFlags("", kubeConfig)
+	} else {
+		config, err = rest.InClusterConfig()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load Kubernetes REST config: %w", err)
+	}
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("initialize Kubernetes clientset: %w", err)
+	}
+	return client, nil
 }
 
 func main() {

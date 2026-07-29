@@ -3,6 +3,7 @@ syntax = "proto3";
 package operator.v1;
 
 import "common/v1/domain.proto";
+import "operator/v1/upgrade_result.proto";
 
 option go_package = "github.com/ndzuki/release-manager/api/gen/operator/v1;operatorv1";
 
@@ -31,6 +32,7 @@ message CommandStreamRequest {
     Heartbeat heartbeat = 3;   // periodic liveness
     Result result = 4;         // command completion result
     ResyncResponse resync_response = 5;  // response to orchestrator resync request
+    CommandResult command_result = 6;  // typed terminal result for payload v2+
   }
 }
 
@@ -112,6 +114,10 @@ message Command {
   bool atomic = 15;
   bytes values_patch = 16;            // JSON merge patch
   int64 target_revision = 17;         // target revision for ROLLBACK
+  uint32 payload_version = 18;
+  oneof typed_payload {
+    UpgradeCommand upgrade = 20;
+  }
 }
 
 // ResyncRequest asks the operator to report its last seen sequence for gap recovery.

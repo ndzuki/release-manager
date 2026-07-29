@@ -18,6 +18,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
+
 func TestAuthService_LoginAndRefreshPreserveOrganization(t *testing.T) {
 	_, st := setupEnforcer(t)
 	ctx := context.Background()
