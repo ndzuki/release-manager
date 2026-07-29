@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -418,9 +419,9 @@ func writeKubeconfig(t *testing.T, config *rest.Config, name string) string {
 func chartPath(t *testing.T, name string) string {
 	t.Helper()
 
-	path, err := filepath.Abs(filepath.Join("testdata", name))
-	require.NoError(t, err)
-	return path
+	_, sourceFile, _, ok := runtime.Caller(0)
+	require.True(t, ok, "locate integration test source")
+	return filepath.Join(filepath.Dir(sourceFile), "testdata", name)
 }
 
 type rbacSnapshot struct {

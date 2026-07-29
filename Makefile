@@ -20,6 +20,11 @@ KIND        ?= kind
 INSTALL_SDK_CLUSTER ?= rm-install-sdk
 INSTALL_SDK_KUBECONFIG ?= $(CURDIR)/.tmp-install-sdk-kubeconfig
 INSTALL_SDK_PATH ?= $(CURDIR)/.tmp-install-sdk-path
+INSTALL_SDK_BINARY ?= $(CURDIR)/.tmp-install-sdk.test
+INSTALL_SDK_HOME ?= $(CURDIR)/.tmp-install-sdk-home
+INSTALL_SDK_QUARANTINE ?= $(CURDIR)/install-sdk.quarantine.yaml
+OPERATOR_IMAGE ?= release-operator:local
+OPERATOR_IMAGE_ARCHIVE ?= $(CURDIR)/.tmp-release-operator.tar
 
 # Ports
 MANAGER_PORT := 8081
@@ -342,16 +347,33 @@ sdk-check: build-sdkcheck ## Run SDK-only static gate (REQ-037)
 
 .PHONY: test-install-sdk
 test-install-sdk: ## Run Helm Install SDK integration gate in an isolated kind cluster
-	@command -v $(KIND) >/dev/null 2>&1 || { printf "$(RED)kind is required$(NC)\n"; exit 1; }
 	@set -eu; \
-		cleanup() { $(KIND) delete cluster --name "$(INSTALL_SDK_CLUSTER)" >/dev/null; rm -f "$(INSTALL_SDK_PATH)/go" "$(INSTALL_SDK_KUBECONFIG)"; rmdir "$(INSTALL_SDK_PATH)" 2>/dev/null || true; }; \
+		cleanup() { \
+			$(KIND) delete cluster --name "$(INSTALL_SDK_CLUSTER)" >/dev/null 2>&1 || true; \
+			rm -rf "$(INSTALL_SDK_BINARY)" "$(INSTALL_SDK_KUBECONFIG)" "$(INSTALL_SDK_PATH)" "$(INSTALL_SDK_HOME)"; \
+		}; \
 		trap cleanup EXIT INT TERM; \
 		cleanup; \
-		$(KIND) create cluster --name "$(INSTALL_SDK_CLUSTER)" --kubeconfig "$(INSTALL_SDK_KUBECONFIG)" --wait 120s; \
-		mkdir -p "$(INSTALL_SDK_PATH)"; \
-		ln -s "$$(command -v $(GO))" "$(INSTALL_SDK_PATH)/go"; \
-		PATH="$(INSTALL_SDK_PATH)" KUBECONFIG="$(INSTALL_SDK_KUBECONFIG)" CGO_ENABLED=0 \
-			$(GO) test -tags=integration -count=1 -v ./test/integration
+		if ! command -v $(KIND) >/dev/null 2>&1; then \
+			$(GO) run ./cmd/installgate \
+				--quarantine "$(INSTALL_SDK_QUARANTINE)" \
+				--scenario cluster-readiness \
+				--rule-id cluster_unavailable \
+				--message "kind is required"; \
+			exit 0; \
+		fi; \
+		if ! $(KIND) create cluster --name "$(INSTALL_SDK_CLUSTER)" --kubeconfig "$(INSTALL_SDK_KUBECONFIG)" --wait 120s; then \
+			$(GO) run ./cmd/installgate \
+				--quarantine "$(INSTALL_SDK_QUARANTINE)" \
+				--scenario cluster-readiness \
+				--rule-id cluster_unavailable \
+				--message "kind cluster creation failed"; \
+			exit 0; \
+		fi; \
+		$(GO) test -c -race -tags=integration -o "$(INSTALL_SDK_BINARY)" ./test/integration/; \
+		mkdir -p "$(INSTALL_SDK_PATH)" "$(INSTALL_SDK_HOME)"; \
+		PATH="$(INSTALL_SDK_PATH)" HOME="$(INSTALL_SDK_HOME)" KUBECONFIG="$(INSTALL_SDK_KUBECONFIG)" \
+			"$(INSTALL_SDK_BINARY)" -test.v -test.count=1 -test.run '^TestInstallSDK$$'
 
 .PHONY: check-reqs
 check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
@@ -369,16 +391,26 @@ test-rollback-sdk: ## Run Rollback SDK quality gate (REQ-063)
 
 
 .PHONY: docker-build-operator
-docker-build-operator: ## Build and save operator image as OCI tarball
-	docker build -f deploy/docker/Dockerfile.operator -t release-operator:local .
-	docker save release-operator:local -o /tmp/release-operator.tar
+docker-build-operator: ## Build and save operator image as Docker tarball
+	@rm -f "$(OPERATOR_IMAGE_ARCHIVE)"; \
+		docker build -f deploy/docker/Dockerfile.operator -t "$(OPERATOR_IMAGE)" .; \
+		docker save "$(OPERATOR_IMAGE)" -o "$(OPERATOR_IMAGE_ARCHIVE)"
 
 .PHONY: test-operator-image-sdk-only
-test-operator-image-sdk-only: docker-build-operator ## Run operator image SDK-only gate (REQ-061)
-	go run ./cmd/imagecheck \
-		--archive /tmp/release-operator.tar \
-		--policy imagecheck.operator.yaml \
-		--dockerfile deploy/docker/Dockerfile.operator
+test-operator-image-sdk-only: ## Run operator image SDK-only gate (REQ-061)
+	@set -eu; \
+		image_existed=false; \
+		if docker image inspect "$(OPERATOR_IMAGE)" >/dev/null 2>&1; then image_existed=true; fi; \
+		cleanup() { \
+			rm -f "$(OPERATOR_IMAGE_ARCHIVE)"; \
+			if [ "$$image_existed" = false ]; then docker image rm "$(OPERATOR_IMAGE)" >/dev/null 2>&1 || true; fi; \
+		}; \
+		trap cleanup EXIT INT TERM; \
+		$(MAKE) docker-build-operator; \
+		$(GO) run ./cmd/imagecheck \
+			--archive "$(OPERATOR_IMAGE_ARCHIVE)" \
+			--policy imagecheck.operator.yaml \
+			--dockerfile deploy/docker/Dockerfile.operator
 .PHONY: quality
 quality: sdk-check test-coverage lint check-reqs ## Full quality gate run
 

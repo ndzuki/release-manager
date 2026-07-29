@@ -46,6 +46,35 @@ func TestAnalyze_WhiteoutRemovesForbiddenBinary(t *testing.T) {
 	assert.True(t, result.Passed())
 }
 
+func TestAnalyze_AcceptsRootDirectoryEntries(t *testing.T) {
+	policy := testPolicy()
+	dockerfile := writeDockerfile(t, policy.BaseImage)
+	archive := buildDockerArchive(t, imageConfigInput{
+		Entrypoint: []string{"/release-operator"},
+	}, []layerEntry{
+		{Name: "./", Mode: 0o755, Type: tar.TypeDir},
+		{Name: "release-operator", Mode: 0o755},
+	})
+
+	result, err := Analyze(bytes.NewReader(archive), dockerfile, policy)
+	require.NoError(t, err)
+	assert.True(t, result.Passed())
+}
+
+func TestAnalyze_RejectsArchivePathTraversal(t *testing.T) {
+	policy := testPolicy()
+	dockerfile := writeDockerfile(t, policy.BaseImage)
+	archive := buildDockerArchive(t, imageConfigInput{
+		Entrypoint: []string{"/release-operator"},
+	}, []layerEntry{
+		{Name: "../../release-operator", Mode: 0o755},
+	})
+
+	_, err := Analyze(bytes.NewReader(archive), dockerfile, policy)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "invalid archive path")
+}
+
 func TestAnalyze_ReportsCompositionViolations(t *testing.T) {
 	policy := testPolicy()
 	dockerfile := writeDockerfile(t, "gcr.io/distroless/static-debian13:nonroot")
@@ -70,13 +99,14 @@ func TestAnalyze_ReportsCompositionViolations(t *testing.T) {
 
 func TestLoadPolicy_RejectsForbiddenAllowlistEntry(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(`version: "1"
-gate: operator-image-sdk-only
-base_image: "gcr.io/distroless/static-debian13:nonroot@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-required_entrypoint: ["/release-operator"]
-allowed_executables: ["/usr/bin/kubectl"]
-forbidden_basenames: ["helm", "kubectl"]
-`), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(`{
+  "version": "1",
+  "gate": "operator-image-sdk-only",
+  "base_image": "gcr.io/distroless/static-debian13:nonroot@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "required_entrypoint": ["/release-operator"],
+  "allowed_executables": ["/usr/bin/kubectl"],
+  "forbidden_basenames": ["helm", "kubectl"]
+}`), 0o644))
 
 	_, err := LoadPolicy(path)
 	require.Error(t, err)
@@ -189,7 +219,7 @@ func writeTarFile(
 	linkname string,
 ) {
 	t.Helper()
-	if typeFlag == tar.TypeSymlink || typeFlag == tar.TypeLink {
+	if typeFlag == tar.TypeSymlink || typeFlag == tar.TypeLink || typeFlag == tar.TypeDir {
 		data = nil
 	}
 	require.NoError(t, writer.WriteHeader(&tar.Header{

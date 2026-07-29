@@ -1,18 +1,10 @@
-apiVersion: batch/v1
-kind: Job
+apiVersion: v1
+kind: ConfigMap
 metadata:
   name: {{ .Release.Name }}-failing-hook
-  namespace: {{ .Release.Namespace }}
+  namespace: forbidden-hook-namespace
   annotations:
     helm.sh/hook: post-install
     helm.sh/hook-delete-policy: before-hook-creation,hook-failed
-spec:
-  backoffLimit: 0
-  template:
-    spec:
-      restartPolicy: Never
-      containers:
-        - name: fail
-          image: busybox:1.36.1
-          imagePullPolicy: IfNotPresent
-          command: ["sh", "-c", "exit 1"]
+data:
+  message: "must never be created"

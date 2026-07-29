@@ -3,6 +3,7 @@ package imagecheck
 
 import (
 	"archive/tar"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,8 +13,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // Stable rule identifiers emitted by the image gate.
@@ -28,21 +27,21 @@ const (
 
 // Policy defines the final image composition contract.
 type Policy struct {
-	Version              string      `yaml:"version"`
-	Gate                 string      `yaml:"gate"`
-	BaseImage            string      `yaml:"base_image"`
-	RequiredEntrypoint   []string    `yaml:"required_entrypoint"`
-	AllowedExecutables   []string    `yaml:"allowed_executables"`
-	ForbiddenBasenames   []string    `yaml:"forbidden_basenames"`
-	AdditionalPathChecks []PathCheck `yaml:"additional_path_checks"`
+	Version              string      `json:"version"`
+	Gate                 string      `json:"gate"`
+	BaseImage            string      `json:"base_image"`
+	RequiredEntrypoint   []string    `json:"required_entrypoint"`
+	AllowedExecutables   []string    `json:"allowed_executables"`
+	ForbiddenBasenames   []string    `json:"forbidden_basenames"`
+	AdditionalPathChecks []PathCheck `json:"additional_path_checks"`
 }
 
 // PathCheck defines an explicit filesystem assertion.
 type PathCheck struct {
-	Path         string `yaml:"path"`
-	MustExist    bool   `yaml:"must_exist"`
-	MustNotExist bool   `yaml:"must_not_exist"`
-	ExpectedType string `yaml:"expected_type"`
+	Path         string `json:"path"`
+	MustExist    bool   `json:"must_exist"`
+	MustNotExist bool   `json:"must_not_exist"`
+	ExpectedType string `json:"expected_type"`
 }
 
 // Violation is one stable JSONL diagnostic.
@@ -70,9 +69,9 @@ func LoadPolicy(policyPath string) (Policy, error) {
 	if err != nil {
 		return Policy{}, fmt.Errorf("read policy: %w", err)
 	}
-
 	var policy Policy
-	if err := yaml.Unmarshal(data, &policy); err != nil {
+
+	if err := json.Unmarshal(data, &policy); err != nil {
 		return Policy{}, fmt.Errorf("parse policy: %w", err)
 	}
 	if err := validatePolicy(policy); err != nil {
@@ -208,6 +207,11 @@ func validateConfig(config imageConfig, policy Policy) []Violation {
 }
 
 func validateRootFS(rootFS map[string]fileEntry, policy Policy) []Violation {
+	violations := validateExecutables(rootFS, policy)
+	return append(violations, validateAdditionalPaths(rootFS, policy)...)
+}
+
+func validateExecutables(rootFS map[string]fileEntry, policy Policy) []Violation {
 	violations := []Violation{}
 	allowed := stringSet(policy.AllowedExecutables)
 	forbidden := stringSet(policy.ForbiddenBasenames)
@@ -242,9 +246,17 @@ func validateRootFS(rootFS map[string]fileEntry, policy Policy) []Violation {
 			Message: "executable file is not in policy allowed_executables",
 		})
 	}
+	return violations
+}
 
+func validateAdditionalPaths(rootFS map[string]fileEntry, policy Policy) []Violation {
+	violations := []Violation{}
 	for _, check := range policy.AdditionalPathChecks {
-		filePath, _ := normalizeAbsolute(check.Path)
+		filePath, err := normalizeAbsolute(check.Path)
+		if err != nil {
+			violations = append(violations, pathViolation(policy, check.Path, err.Error()))
+			continue
+		}
 		entry, found := rootFS[filePath]
 		switch {
 		case check.MustExist && !found:
@@ -309,7 +321,7 @@ func readDockerArchive(reader io.Reader) (imageArchive, error) {
 		if err != nil {
 			return imageArchive{}, fmt.Errorf("read image archive: %w", err)
 		}
-		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+		if header.Typeflag != tar.TypeReg {
 			continue
 		}
 		data, err := io.ReadAll(tarReader)
@@ -354,7 +366,7 @@ func readDockerArchive(reader io.Reader) (imageArchive, error) {
 }
 
 func applyLayer(rootFS map[string]fileEntry, data []byte, layerName string) error {
-	tarReader := tar.NewReader(strings.NewReader(string(data)))
+	tarReader := tar.NewReader(bytes.NewReader(data))
 	for {
 		header, err := tarReader.Next()
 		if errors.Is(err, io.EOF) {
@@ -367,6 +379,12 @@ func applyLayer(rootFS map[string]fileEntry, data []byte, layerName string) erro
 		filePath, err := normalizeArchivePath(header.Name)
 		if err != nil {
 			return fmt.Errorf("layer %q path %q: %w", layerName, header.Name, err)
+		}
+		if filePath == "/" {
+			if header.Typeflag == tar.TypeDir {
+				continue
+			}
+			return fmt.Errorf("layer %q path %q: root entry must be a directory", layerName, header.Name)
 		}
 		basename := path.Base(filePath)
 		directory := path.Dir(filePath)
@@ -419,7 +437,7 @@ func isExecutablePath(
 		return false
 	}
 	switch entry.Type {
-	case tar.TypeReg, tar.TypeRegA:
+	case tar.TypeReg:
 		return entry.Mode&0o111 != 0
 	case tar.TypeSymlink, tar.TypeLink:
 		target := entry.Linkname
@@ -437,11 +455,19 @@ func isExecutablePath(
 }
 
 func normalizeArchivePath(value string) (string, error) {
-	cleaned := path.Clean("/" + strings.TrimPrefix(value, "./"))
-	if cleaned == "/" || strings.HasPrefix(cleaned, "/../") {
+	trimmed := strings.TrimPrefix(value, "./")
+	if trimmed == "" || trimmed == "." {
+		return "/", nil
+	}
+	if strings.HasPrefix(trimmed, "/") || trimmed == ".." || strings.HasPrefix(trimmed, "../") {
 		return "", fmt.Errorf("invalid archive path")
 	}
-	return cleaned, nil
+
+	cleaned := path.Clean(trimmed)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", fmt.Errorf("invalid archive path")
+	}
+	return "/" + cleaned, nil
 }
 
 func normalizeAbsolute(value string) (string, error) {

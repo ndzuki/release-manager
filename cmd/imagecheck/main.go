@@ -18,54 +18,57 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	dockerfileFlag := flag.String("dockerfile", "deploy/docker/Dockerfile.operator", "path to Dockerfile")
 	policyFlag := flag.String("policy", "imagecheck.operator.yaml", "path to policy YAML file")
 	archiveFlag := flag.String("archive", "-", "path to docker image save tarball (\"-\" for stdin)")
 	flag.Parse()
 
 	if *archiveFlag == "" {
-		fmt.Fprintf(os.Stderr, "imagecheck: --archive is required\n")
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "imagecheck: --archive is required")
+		return 2
 	}
 	if *dockerfileFlag == "" {
-		fmt.Fprintf(os.Stderr, "imagecheck: --dockerfile is required\n")
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "imagecheck: --dockerfile is required")
+		return 2
 	}
 	if *policyFlag == "" {
-		fmt.Fprintf(os.Stderr, "imagecheck: --policy is required\n")
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "imagecheck: --policy is required")
+		return 2
 	}
 
 	policy, err := imagecheck.LoadPolicy(*policyFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "imagecheck: %v\n", err)
-		os.Exit(2)
+		return 2
 	}
 
 	readerCloser, err := imagecheck.ArchiveFile(*archiveFlag, os.Stdin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "imagecheck: open archive: %v\n", err)
-		os.Exit(2)
+		return 2
 	}
 	defer readerCloser.Close()
 
 	result, err := imagecheck.Analyze(readerCloser, *dockerfileFlag, policy)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "imagecheck: %v\n", err)
-		os.Exit(2)
+		return 2
 	}
-
 	if result.Passed() {
-		return
+		return 0
 	}
 
 	for _, violation := range result.Violations {
 		data, err := imagecheck.MarshalViolation(violation)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "imagecheck: marshal violation: %v\n", err)
-			os.Exit(2)
+			return 2
 		}
-		fmt.Println(string(data))
+		fmt.Fprintln(os.Stderr, string(data))
 	}
-	os.Exit(1)
+	return 1
 }
