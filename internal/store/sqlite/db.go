@@ -15,39 +15,41 @@ import (
 
 // Store implements store.Store backed by SQLite.
 type Store struct {
-	db              *sql.DB
-	ops             *operationStore
-	operationEvents *operationEventStore
-	defs            *definitionStore
-	vals            *valuesStore
-	valuesApproval  *valuesApprovalStore
-	customers       *customerStore
-	clusters        *clusterStore
-	tokens          *enrollmentTokenStore
-	operators       *operatorStore
-	sessions        *sessionStore
-	outbox          *outboxStore
-	users           *userStore
-	authSess        *authSessionStore
-	orgs            *organizationStore
-	orgMembers      *organizationMemberStore
-	bindings        *bindingStore
-	audit           *auditEventStore
-	notif           *notificationStore
-	bundles         *bundleStore
-	verifs          *verificationStore
-	scanResults     *scanResultStore
-	vulnExceptions  *vulnerabilityExceptionStore
-	trustRoots      *trustRootStore
-	routes          *clusterRouteStore
-	invs            *inventoryStore
-	syncRequests    *inventorySyncRequestStore
-	custEvents      *customerEventStore
-	defEvents       *definitionEventStore
-	preflight       *preflightStore
-	candidateArts   *candidateArtifactStore
-	preflightCycles *preflightLifecycleStore
-	auditExports    *auditExportStore
+	db               *sql.DB
+	ops              *operationStore
+	operationEvents  *operationEventStore
+	defs             *definitionStore
+	vals             *valuesStore
+	valuesApproval   *valuesApprovalStore
+	customers        *customerStore
+	clusters         *clusterStore
+	tokens           *enrollmentTokenStore
+	operators        *operatorStore
+	sessions         *sessionStore
+	outbox           *outboxStore
+	users            *userStore
+	authSess         *authSessionStore
+	orgs             *organizationStore
+	orgMembers       *organizationMemberStore
+	bindings         *bindingStore
+	audit            *auditEventStore
+	notif            *notificationStore
+	bundles          *bundleStore
+	verifs           *verificationStore
+	scanResults      *scanResultStore
+	vulnExceptions   *vulnerabilityExceptionStore
+	trustRoots       *trustRootStore
+	routes           *clusterRouteStore
+	invs             *inventoryStore
+	syncRequests     *inventorySyncRequestStore
+	custEvents       *customerEventStore
+	defEvents        *definitionEventStore
+	preflight        *preflightStore
+	candidateArts    *candidateArtifactStore
+	preflightCycles  *preflightLifecycleStore
+	auditExports     *auditExportStore
+	executionResults *operationExecutionResultStore
+	rollouts         *rolloutTrackingStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -111,6 +113,8 @@ func Open(dsn string) (*Store, error) {
 	s.routes = &clusterRouteStore{db: db}
 	s.candidateArts = &candidateArtifactStore{db: db}
 	s.preflightCycles = &preflightLifecycleStore{db: db}
+	s.executionResults = &operationExecutionResultStore{db: db}
+	s.rollouts = &rolloutTrackingStore{db: db}
 
 	return s, nil
 }
@@ -120,6 +124,15 @@ func (s *Store) Operations() store.OperationStore { return s.ops }
 
 // OperationEvents returns the operation state event store.
 func (s *Store) OperationEvents() store.OperationEventStore { return s.operationEvents }
+
+// ExecutionResults returns typed operation result records.
+func (s *Store) ExecutionResults() store.OperationExecutionResultStore { return s.executionResults }
+
+// RolloutTrackings returns rollout observation records.
+func (s *Store) RolloutTrackings() store.RolloutTrackingStore { return s.rollouts }
+
+// UpgradeResults returns the atomic upgrade terminal writer.
+func (s *Store) UpgradeResults() store.UpgradeResultStore { return s.ops }
 
 // Customers returns the CustomerStore.
 func (s *Store) Customers() store.CustomerStore { return s.customers }
@@ -538,6 +551,25 @@ var migrationStatements = []string{
 	`ALTER TABLE outbox ADD COLUMN command_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE outbox ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE outbox ADD COLUMN operation_type TEXT NOT NULL DEFAULT ''`,
+
+	`CREATE TABLE IF NOT EXISTS operation_execution_results (
+		operation_id   TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE,
+		result_type    TEXT NOT NULL,
+		result_payload BLOB NOT NULL,
+		created_at     TEXT NOT NULL
+	)`,
+
+	`CREATE TABLE IF NOT EXISTS rollout_trackings (
+		operation_id   TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE,
+		status         TEXT NOT NULL DEFAULT 'pending',
+		resource_count INTEGER NOT NULL DEFAULT 0,
+		ready_count    INTEGER NOT NULL DEFAULT 0,
+		failed_count   INTEGER NOT NULL DEFAULT 0,
+		last_error     TEXT NOT NULL DEFAULT '',
+		created_at     TEXT NOT NULL,
+		updated_at     TEXT NOT NULL
+	)`,
+
 	// Auth & RBAC — users, sessions, organizations, bindings (REQ-025, REQ-026, REQ-049)
 	`CREATE TABLE IF NOT EXISTS users (
 		id            TEXT PRIMARY KEY,
@@ -736,6 +768,12 @@ var migrationStatements = []string{
 		updated_at       TEXT NOT NULL,
 		UNIQUE(customer_id, cluster_id, namespace, release_name)
 	)`,
+	`ALTER TABLE release_inventory ADD COLUMN observed_bundle_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN observed_chart_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN observed_effective_values_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN observed_manifest_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN live_status TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN last_operation_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE release_inventory ADD COLUMN release_definition_id TEXT NOT NULL DEFAULT ''`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_cluster ON release_inventory(customer_id, cluster_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_status ON release_inventory(inventory_status)`,

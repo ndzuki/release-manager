@@ -1,8 +1,11 @@
 package helmengine
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -13,6 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"helm.sh/helm/v3/pkg/action"
+	"helm.sh/helm/v3/pkg/chart"
+	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
 	kubefake "helm.sh/helm/v3/pkg/kube/fake"
 	"helm.sh/helm/v3/pkg/registry"
@@ -27,19 +32,19 @@ func TestRealEngine_Install(t *testing.T) {
 	})
 	chartPath := writeTestChart(t)
 
-	release, err := engine.Install(t.Context(), InstallOptions{
+	installed, err := engine.Install(t.Context(), InstallOptions{
 		Namespace:   "default",
 		ReleaseName: "example",
 		ChartPath:   chartPath,
 		Values:      map[string]interface{}{"message": "hello"},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "example", release.Name)
-	assert.Equal(t, "default", release.Namespace)
-	assert.Equal(t, 1, release.Revision)
-	assert.Equal(t, "deployed", release.Status)
-	assert.Equal(t, "example-chart-0.1.0", release.Chart)
-	assert.NotEmpty(t, release.ManifestDigest)
+	assert.Equal(t, "example", installed.Name)
+	assert.Equal(t, "default", installed.Namespace)
+	assert.Equal(t, 1, installed.Revision)
+	assert.Equal(t, "deployed", installed.Status)
+	assert.Equal(t, "example-chart-0.1.0", installed.Chart)
+	assert.NotEmpty(t, installed.ManifestDigest)
 }
 
 func TestRealEngine_InstallAlreadyExists(t *testing.T) {
@@ -166,6 +171,169 @@ func TestRealEngine_InstallContextErrors(t *testing.T) {
 	}
 }
 
+func TestManifestGate(t *testing.T) {
+	manifest := []byte("apiVersion: v1\nkind: ConfigMap\n")
+	gate := &manifestGate{expectedDigest: fmt.Sprintf("%x", sha256.Sum256(manifest))}
+
+	output, err := gate.Run(bytes.NewBuffer(manifest))
+	require.NoError(t, err)
+	assert.Equal(t, manifest, output.Bytes())
+}
+
+func TestManifestGateRejectsDrift(t *testing.T) {
+	gate := &manifestGate{expectedDigest: "different"}
+
+	_, err := gate.Run(bytes.NewBufferString("manifest"))
+	require.ErrorIs(t, err, ErrRenderDrift)
+}
+
+func TestRealEngine_UpgradeRejectsRevisionConflict(t *testing.T) {
+	engine, _ := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	})
+	chartPath := writeTestChart(t)
+	_, err := engine.Install(t.Context(), InstallOptions{
+		Namespace: "default", ReleaseName: "upgrade-example", ChartPath: chartPath,
+	})
+	require.NoError(t, err)
+
+	_, err = engine.Upgrade(t.Context(), UpgradeOptions{
+		Namespace: "default", ReleaseName: "upgrade-example", ChartPath: chartPath, ExpectedRevision: 2,
+	})
+	require.ErrorIs(t, err, ErrConflict)
+}
+
+func TestRealEngine_UpgradeManifestGateRejectsBeforeWrite(t *testing.T) {
+	engine, releases := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	})
+	chartPath := writeTestChart(t)
+	_, err := engine.Install(t.Context(), InstallOptions{
+		Namespace: "default", ReleaseName: "upgrade-drift", ChartPath: chartPath,
+	})
+	require.NoError(t, err)
+
+	rel, err := engine.Upgrade(t.Context(), UpgradeOptions{
+		Namespace:        "default",
+		ReleaseName:      "upgrade-drift",
+		ChartPath:        chartPath,
+		Values:           map[string]interface{}{"message": "v2"},
+		ExpectedRevision: 1,
+		Atomic:           true,
+		OperationID:      "operation-drift",
+		CommandID:        "command-drift",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, rel.Revision)
+	assert.Equal(t, "release-manager operation=operation-drift command=command-drift", rel.Description)
+	assert.NotEmpty(t, rel.Labels["rm_input_digest"])
+
+	history, err := releases.History("upgrade-drift")
+	require.NoError(t, err)
+	assert.Len(t, history, 2)
+}
+
+func TestRealEngine_UpgradeRejectsManifestDriftWithoutWrite(t *testing.T) {
+	engine, releases := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	})
+	chartPath := writeTestChart(t)
+	_, err := engine.Install(t.Context(), InstallOptions{
+		Namespace: "default", ReleaseName: "upgrade-manifest-drift", ChartPath: chartPath,
+	})
+	require.NoError(t, err)
+
+	realDigest, err := renderUpgradeManifestDigest(t.Context(), mustActionConfig(t, engine, "default"), UpgradeOptions{
+		Namespace: "default", ReleaseName: "upgrade-manifest-drift", ChartPath: chartPath,
+		Values: map[string]interface{}{"message": "v2"}, ExpectedRevision: 1,
+	}, "", "", mustLoadChart(t, chartPath))
+	require.NoError(t, err)
+
+	_, err = engine.Upgrade(t.Context(), UpgradeOptions{
+		Namespace: "default", ReleaseName: "upgrade-manifest-drift", ChartPath: chartPath,
+		Values: map[string]interface{}{"message": "v2"}, ExpectedRevision: 1,
+		ExpectedManifestDigest: realDigest + "-drift",
+	})
+	require.ErrorIs(t, err, ErrRenderDrift)
+	history, err := releases.History("upgrade-manifest-drift")
+	require.NoError(t, err)
+	assert.Len(t, history, 1)
+}
+
+func mustActionConfig(t *testing.T, engine *RealEngine, namespace string) *action.Configuration {
+	t.Helper()
+	cfg, err := engine.actionConfig(namespace)
+	require.NoError(t, err)
+	return cfg
+}
+
+func mustLoadChart(t *testing.T, chartPath string) *chart.Chart {
+	t.Helper()
+	chrt, err := loader.Load(chartPath)
+	require.NoError(t, err)
+	return chrt
+}
+
+func TestRealEngine_UpgradeCrashReplayUsesFrozenCommand(t *testing.T) {
+	engine, releases := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	})
+	chartPath := writeTestChart(t)
+	_, err := engine.Install(t.Context(), InstallOptions{
+		Namespace: "default", ReleaseName: "upgrade-replay", ChartPath: chartPath,
+	})
+	require.NoError(t, err)
+	opts := UpgradeOptions{
+		Namespace: "default", ReleaseName: "upgrade-replay", ChartPath: chartPath,
+		Values: map[string]interface{}{"message": "v2"}, ExpectedRevision: 1, Atomic: true,
+		OperationID: "operation-replay", CommandID: "command-replay", BundleDigest: "sha256:bundle",
+		ChartDigest: "", EffectiveValuesDigest: "sha256:values", SecretSnapshotDigest: "sha256:secret",
+	}
+
+	first, err := engine.Upgrade(t.Context(), opts)
+	require.NoError(t, err)
+	replayed, err := engine.Upgrade(t.Context(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, first.Revision, replayed.Revision)
+	assert.Equal(t, first.Description, replayed.Description)
+	assert.Equal(t, first.Labels["rm_input_digest"], replayed.Labels["rm_input_digest"])
+	history, err := releases.History("upgrade-replay")
+	require.NoError(t, err)
+	assert.Len(t, history, 2)
+}
+
+func TestRealEngine_UpgradeStatusErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  release.Status
+		wantErr error
+	}{
+		{name: "busy", status: release.StatusPendingUpgrade, wantErr: ErrReleaseBusy},
+		{name: "not deployed", status: release.StatusFailed, wantErr: ErrReleaseNotDeployed},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			engine, releases := newTestRealEngine(t, &kubefake.FailingKubeClient{
+				PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+			})
+			chartPath := writeTestChart(t)
+			_, err := engine.Install(t.Context(), InstallOptions{
+				Namespace: "default", ReleaseName: "upgrade-status", ChartPath: chartPath,
+			})
+			require.NoError(t, err)
+			stored, err := releases.Get("upgrade-status", 1)
+			require.NoError(t, err)
+			stored.Info.Status = test.status
+			require.NoError(t, releases.Update(stored))
+
+			_, err = engine.Upgrade(t.Context(), UpgradeOptions{
+				Namespace: "default", ReleaseName: "upgrade-status", ChartPath: chartPath, ExpectedRevision: 1,
+			})
+			assert.ErrorIs(t, err, test.wantErr)
+		})
+	}
+}
 func TestDigestValuesDeterministic(t *testing.T) {
 	left := map[string]interface{}{
 		"replicas": 2,

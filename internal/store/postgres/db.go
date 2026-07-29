@@ -151,6 +151,8 @@ type Store struct {
 	bundleSubmissions *bundleSubmissionStore
 	eventSubmissions  *artifactEventSubmissionStore
 	preflightCycles   *preflightLifecycleStore
+	executionResults  *executionResultReader
+	rollouts          *rolloutTrackingReader
 	closeOnce         sync.Once
 	closeErr          error
 }
@@ -220,6 +222,8 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 		gorm: gormDB, events: s.artifactEvents, candidates: s.candidateArts,
 	}
 	s.preflightCycles = &preflightLifecycleStore{gorm: s.db}
+	s.executionResults = &executionResultReader{s: s}
+	s.rollouts = &rolloutTrackingReader{s: s}
 	return s, nil
 }
 
@@ -240,8 +244,18 @@ var (
 	_ store.InventorySyncRequestStore    = (*inventorySyncRequestStore)(nil)
 )
 
-func (s *Store) Operations() store.OperationStore                           { return s.ops }
-func (s *Store) OperationEvents() store.OperationEventStore                 { return s.operationEvents }
+func (s *Store) Operations() store.OperationStore           { return s.ops }
+func (s *Store) OperationEvents() store.OperationEventStore { return s.operationEvents }
+
+// ExecutionResults returns typed operation result records.
+func (s *Store) ExecutionResults() store.OperationExecutionResultStore { return s.executionResults }
+
+// RolloutTrackings returns rollout observation records.
+func (s *Store) RolloutTrackings() store.RolloutTrackingStore { return s.rollouts }
+
+// UpgradeResults returns the atomic upgrade terminal writer.
+func (s *Store) UpgradeResults() store.UpgradeResultStore { return s }
+
 func (s *Store) Customers() store.CustomerStore                             { return s.customers }
 func (s *Store) Clusters() store.ClusterStore                               { return s.clusters }
 func (s *Store) EnrollmentTokens() store.EnrollmentTokenStore               { return s.tokens }
@@ -264,7 +278,7 @@ func (s *Store) Verifications() store.VerificationStore                     { re
 func (s *Store) CustomerEvents() store.CustomerEventStore                   { return s.custEvents }
 func (s *Store) ClusterRoutes() store.ClusterRouteStore                     { return s.routes }
 func (s *Store) Inventories() store.InventoryStore                          { return s.invs }
-func (s *Store) InventorySyncRequests() store.InventorySyncRequestStore      { return s.syncRequests }
+func (s *Store) InventorySyncRequests() store.InventorySyncRequestStore     { return s.syncRequests }
 func (s *Store) ValuesApproval() store.ValuesApprovalStore                  { return s.valuesApproval }
 func (s *Store) ValuesApprovalEvidence() store.ValuesApprovalReader         { return s.valuesApproval }
 func (s *Store) AuditExports() store.AuditExportStore                       { return s.auditExports }
