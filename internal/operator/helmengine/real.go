@@ -54,7 +54,6 @@ func (r *RealEngine) SetConfigFactory(fn func(namespace string) (*action.Configu
 	r.configFactory = fn
 }
 
-
 // actionConfig creates a new action.Configuration for a single operation.
 // Production uses a Kubernetes Secret driver. Tests may inject an isolated
 // configuration factory while preserving the same Helm SDK action path.
@@ -227,8 +226,8 @@ func (r *RealEngine) Rollback(ctx context.Context, opts RollbackOptions) (*Relea
 	if opts.Timeout > 0 {
 		rollback.Timeout = opts.Timeout
 	}
-	rollback.Wait = true                  // wait for resources to be ready
-	rollback.CleanupOnFail = false        // AC-063-03: preserve original release on failure
+	rollback.Wait = true           // wait for resources to be ready
+	rollback.CleanupOnFail = false // AC-063-03: preserve original release on failure
 
 	if err := rollback.Run(opts.ReleaseName); err != nil {
 		return nil, mapActionError(ctx, "roll back Helm release", err)

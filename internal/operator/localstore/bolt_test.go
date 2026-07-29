@@ -132,11 +132,11 @@ func TestBoltStore_Reopen(t *testing.T) {
 	store1, err := OpenBolt(path)
 	require.NoError(t, err)
 	require.NoError(t, store1.Save(ctx, &CommandEntry{
-		CommandID:   "cmd-r",
-		OutboxID:    "out-r",
-		Sequence:    10,
-		Payload:     []byte(`{"type":"INSTALL"}`),
-		Status:      StatusPending,
+		CommandID: "cmd-r",
+		OutboxID:  "out-r",
+		Sequence:  10,
+		Payload:   []byte(`{"type":"INSTALL"}`),
+		Status:    StatusPending,
 	}))
 	require.NoError(t, store1.Close())
 

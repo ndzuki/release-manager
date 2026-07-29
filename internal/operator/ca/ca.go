@@ -1,5 +1,6 @@
 // Package ca provides a self-signed certificate authority for operator mTLS.
 package ca
+
 import (
 	"crypto/ed25519"
 	"crypto/rand"

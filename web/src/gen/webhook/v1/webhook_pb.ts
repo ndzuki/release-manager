@@ -4,17 +4,17 @@
 
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
-import type { BundleImage, ReleaseBundle } from "../../common/v1/domain_pb";
+import type { ArtifactReference, BundleImage, CandidateArtifact } from "../../common/v1/domain_pb";
 import { file_common_v1_domain } from "../../common/v1/domain_pb";
-import type { SignatureRef, VerificationResult } from "../../common/v1/trust_pb";
-import { file_common_v1_trust } from "../../common/v1/trust_pb";
+import type { BundleSummary } from "../../orchestrator/v1/orchestrator_pb";
+import { file_orchestrator_v1_orchestrator } from "../../orchestrator/v1/orchestrator_pb";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file webhook/v1/webhook.proto.
  */
 export const file_webhook_v1_webhook: GenFile = /*@__PURE__*/
-  fileDesc("Chh3ZWJob29rL3YxL3dlYmhvb2sucHJvdG8SCndlYmhvb2sudjEi/AEKGlN1Ym1pdFJlbGVhc2VCdW5kbGVSZXF1ZXN0EgwKBG5hbWUYASABKAkSEQoJY2hhcnRfcmVmGAIgASgJEhUKDWNoYXJ0X3ZlcnNpb24YAyABKAkSFAoMY2hhcnRfZGlnZXN0GAQgASgJEiYKBmltYWdlcxgFIAMoCzIWLmNvbW1vbi52MS5CdW5kbGVJbWFnZRISCgpnaXRfY29tbWl0GAYgASgJEhMKC3BpcGVsaW5lX2lkGAcgASgJEhUKDXNpZ25hdHVyZV9yZWYYCCABKAkSEAoIc2JvbV9yZWYYCSABKAkSFgoOcHJvdmVuYW5jZV9yZWYYCiABKAkiRwobU3VibWl0UmVsZWFzZUJ1bmRsZVJlc3BvbnNlEigKBmJ1bmRsZRgBIAEoCzIYLmNvbW1vbi52MS5SZWxlYXNlQnVuZGxlIvgBChVJbmdlc3RBcnRpZmFjdFJlcXVlc3QSDgoGc291cmNlGAEgASgJEhQKDGFydGlmYWN0X3VybBgCIAEoCRIVCg1hcnRpZmFjdF90eXBlGAMgASgJEkEKCG1ldGFkYXRhGAQgAygLMi8ud2ViaG9vay52MS5Jbmdlc3RBcnRpZmFjdFJlcXVlc3QuTWV0YWRhdGFFbnRyeRIuCg1zaWduYXR1cmVfcmVmGAUgASgLMhcuY29tbW9uLnYxLlNpZ25hdHVyZVJlZhovCg1NZXRhZGF0YUVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEifgoWSW5nZXN0QXJ0aWZhY3RSZXNwb25zZRIoCgZidW5kbGUYASABKAsyGC5jb21tb24udjEuUmVsZWFzZUJ1bmRsZRI6ChN2ZXJpZmljYXRpb25fcmVzdWx0GAIgASgOMh0uY29tbW9uLnYxLlZlcmlmaWNhdGlvblJlc3VsdDLRAQoOV2ViaG9va1NlcnZpY2USZgoTU3VibWl0UmVsZWFzZUJ1bmRsZRImLndlYmhvb2sudjEuU3VibWl0UmVsZWFzZUJ1bmRsZVJlcXVlc3QaJy53ZWJob29rLnYxLlN1Ym1pdFJlbGVhc2VCdW5kbGVSZXNwb25zZRJXCg5Jbmdlc3RBcnRpZmFjdBIhLndlYmhvb2sudjEuSW5nZXN0QXJ0aWZhY3RSZXF1ZXN0GiIud2ViaG9vay52MS5Jbmdlc3RBcnRpZmFjdFJlc3BvbnNlQkBaPmdpdGh1Yi5jb20vbmR6dWtpL3JlbGVhc2UtbWFuYWdlci9hcGkvZ2VuL3dlYmhvb2svdjE7d2ViaG9va3YxYgZwcm90bzM", [file_common_v1_domain, file_common_v1_trust]);
+  fileDesc("Chh3ZWJob29rL3YxL3dlYmhvb2sucHJvdG8SCndlYmhvb2sudjEi+wIKGlN1Ym1pdFJlbGVhc2VCdW5kbGVSZXF1ZXN0EgwKBG5hbWUYASABKAkSEQoJY2hhcnRfcmVmGAIgASgJEhUKDWNoYXJ0X3ZlcnNpb24YAyABKAkSFAoMY2hhcnRfZGlnZXN0GAQgASgJEiYKBmltYWdlcxgFIAMoCzIWLmNvbW1vbi52MS5CdW5kbGVJbWFnZRISCgpnaXRfY29tbWl0GAYgASgJEhMKC3BpcGVsaW5lX2lkGAcgASgJEi8KCXNpZ25hdHVyZRgIIAEoCzIcLmNvbW1vbi52MS5BcnRpZmFjdFJlZmVyZW5jZRIqCgRzYm9tGAkgASgLMhwuY29tbW9uLnYxLkFydGlmYWN0UmVmZXJlbmNlEjAKCnByb3ZlbmFuY2UYCiABKAsyHC5jb21tb24udjEuQXJ0aWZhY3RSZWZlcmVuY2USLwoJYXJ0aWZhY3RzGBQgAygLMhwuY29tbW9uLnYxLkNhbmRpZGF0ZUFydGlmYWN0Il4KG1N1Ym1pdFJlbGVhc2VCdW5kbGVSZXNwb25zZRIuCgZidW5kbGUYASABKAsyHi5vcmNoZXN0cmF0b3IudjEuQnVuZGxlU3VtbWFyeRIPCgdjcmVhdGVkGAIgASgIMngKDldlYmhvb2tTZXJ2aWNlEmYKE1N1Ym1pdFJlbGVhc2VCdW5kbGUSJi53ZWJob29rLnYxLlN1Ym1pdFJlbGVhc2VCdW5kbGVSZXF1ZXN0Gicud2ViaG9vay52MS5TdWJtaXRSZWxlYXNlQnVuZGxlUmVzcG9uc2VCQFo+Z2l0aHViLmNvbS9uZHp1a2kvcmVsZWFzZS1tYW5hZ2VyL2FwaS9nZW4vd2ViaG9vay92MTt3ZWJob29rdjFiBnByb3RvMw", [file_common_v1_domain, file_orchestrator_v1_orchestrator]);
 
 /**
  * SubmitReleaseBundleRequest submits a complete release bundle from CI.
@@ -58,19 +58,24 @@ export type SubmitReleaseBundleRequest = Message<"webhook.v1.SubmitReleaseBundle
   pipelineId: string;
 
   /**
-   * @generated from field: string signature_ref = 8;
+   * @generated from field: common.v1.ArtifactReference signature = 8;
    */
-  signatureRef: string;
+  signature?: ArtifactReference | undefined;
 
   /**
-   * @generated from field: string sbom_ref = 9;
+   * @generated from field: common.v1.ArtifactReference sbom = 9;
    */
-  sbomRef: string;
+  sbom?: ArtifactReference | undefined;
 
   /**
-   * @generated from field: string provenance_ref = 10;
+   * @generated from field: common.v1.ArtifactReference provenance = 10;
    */
-  provenanceRef: string;
+  provenance?: ArtifactReference | undefined;
+
+  /**
+   * @generated from field: repeated common.v1.CandidateArtifact artifacts = 20;
+   */
+  artifacts: CandidateArtifact[];
 };
 
 /**
@@ -81,15 +86,20 @@ export const SubmitReleaseBundleRequestSchema: GenMessage<SubmitReleaseBundleReq
   messageDesc(file_webhook_v1_webhook, 0);
 
 /**
- * SubmitReleaseBundleResponse returns the created or existing ReleaseBundle.
+ * SubmitReleaseBundleResponse returns the canonical orchestrator Bundle result.
  *
  * @generated from message webhook.v1.SubmitReleaseBundleResponse
  */
 export type SubmitReleaseBundleResponse = Message<"webhook.v1.SubmitReleaseBundleResponse"> & {
   /**
-   * @generated from field: common.v1.ReleaseBundle bundle = 1;
+   * @generated from field: orchestrator.v1.BundleSummary bundle = 1;
    */
-  bundle?: ReleaseBundle | undefined;
+  bundle?: BundleSummary | undefined;
+
+  /**
+   * @generated from field: bool created = 2;
+   */
+  created: boolean;
 };
 
 /**
@@ -100,74 +110,7 @@ export const SubmitReleaseBundleResponseSchema: GenMessage<SubmitReleaseBundleRe
   messageDesc(file_webhook_v1_webhook, 1);
 
 /**
- * IngestArtifactRequest carries an external artifact reference for ingestion.
- *
- * @generated from message webhook.v1.IngestArtifactRequest
- */
-export type IngestArtifactRequest = Message<"webhook.v1.IngestArtifactRequest"> & {
-  /**
-   * @generated from field: string source = 1;
-   */
-  source: string;
-
-  /**
-   * @generated from field: string artifact_url = 2;
-   */
-  artifactUrl: string;
-
-  /**
-   * @generated from field: string artifact_type = 3;
-   */
-  artifactType: string;
-
-  /**
-   * @generated from field: map<string, string> metadata = 4;
-   */
-  metadata: { [key: string]: string };
-
-  /**
-   * optional: for trust verification
-   *
-   * @generated from field: common.v1.SignatureRef signature_ref = 5;
-   */
-  signatureRef?: SignatureRef | undefined;
-};
-
-/**
- * Describes the message webhook.v1.IngestArtifactRequest.
- * Use `create(IngestArtifactRequestSchema)` to create a new message.
- */
-export const IngestArtifactRequestSchema: GenMessage<IngestArtifactRequest> = /*@__PURE__*/
-  messageDesc(file_webhook_v1_webhook, 2);
-
-/**
- * IngestArtifactResponse returns the resulting ReleaseBundle.
- *
- * @generated from message webhook.v1.IngestArtifactResponse
- */
-export type IngestArtifactResponse = Message<"webhook.v1.IngestArtifactResponse"> & {
-  /**
-   * @generated from field: common.v1.ReleaseBundle bundle = 1;
-   */
-  bundle?: ReleaseBundle | undefined;
-
-  /**
-   * trust verification outcome
-   *
-   * @generated from field: common.v1.VerificationResult verification_result = 2;
-   */
-  verificationResult: VerificationResult;
-};
-
-/**
- * Describes the message webhook.v1.IngestArtifactResponse.
- * Use `create(IngestArtifactResponseSchema)` to create a new message.
- */
-export const IngestArtifactResponseSchema: GenMessage<IngestArtifactResponse> = /*@__PURE__*/
-  messageDesc(file_webhook_v1_webhook, 3);
-
-/**
- * WebhookService handles artifact ingestion from external sources (e.g. Harbor).
+ * WebhookService authenticates and forwards CI bundle submissions.
  *
  * @generated from service webhook.v1.WebhookService
  */
@@ -179,14 +122,6 @@ export const WebhookService: GenService<{
     methodKind: "unary";
     input: typeof SubmitReleaseBundleRequestSchema;
     output: typeof SubmitReleaseBundleResponseSchema;
-  },
-  /**
-   * @generated from rpc webhook.v1.WebhookService.IngestArtifact
-   */
-  ingestArtifact: {
-    methodKind: "unary";
-    input: typeof IngestArtifactRequestSchema;
-    output: typeof IngestArtifactResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_webhook_v1_webhook, 0);

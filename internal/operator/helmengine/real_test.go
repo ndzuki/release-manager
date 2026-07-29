@@ -72,8 +72,8 @@ func TestRealEngine_UpgradeExpectedRevisionConflictDoesNotWrite(t *testing.T) {
 
 	_, err = engine.Upgrade(t.Context(), UpgradeOptions{
 		Namespace:        "default",
-		ReleaseName:     "upgrade-conflict",
-		ChartPath:       chartPath,
+		ReleaseName:      "upgrade-conflict",
+		ChartPath:        chartPath,
 		ExpectedRevision: 9,
 	})
 	require.ErrorIs(t, err, ErrConflict)
@@ -99,8 +99,8 @@ func TestRealEngine_UpgradeAtomicFailureRestoresRelease(t *testing.T) {
 	kubeClient.WaitError = errors.New("upgrade hook failed")
 	_, err = engine.Upgrade(t.Context(), UpgradeOptions{
 		Namespace:        "default",
-		ReleaseName:     "upgrade-atomic",
-		ChartPath:       chartPath,
+		ReleaseName:      "upgrade-atomic",
+		ChartPath:        chartPath,
 		ExpectedRevision: 1,
 		Atomic:           true,
 		Timeout:          time.Second,
@@ -269,9 +269,9 @@ func TestRealEngine_Rollback(t *testing.T) {
 	// Upgrade to revision 2 with different values.
 	_, err = engine.Upgrade(ctx, UpgradeOptions{
 		Namespace:        "default",
-		ReleaseName:     "rollback-test",
-		ChartPath:       chartPath,
-		Values:          map[string]interface{}{"message": "v2"},
+		ReleaseName:      "rollback-test",
+		ChartPath:        chartPath,
+		Values:           map[string]interface{}{"message": "v2"},
 		ExpectedRevision: 1,
 	})
 	require.NoError(t, err)
@@ -350,9 +350,9 @@ func TestRealEngine_RollbackFailurePreservesRelease(t *testing.T) {
 	// Upgrade to build history.
 	_, err = engine.Upgrade(ctx, UpgradeOptions{
 		Namespace:        "default",
-		ReleaseName:     "rb-fail",
-		ChartPath:       chartPath,
-		Values:          map[string]interface{}{"message": "v2"},
+		ReleaseName:      "rb-fail",
+		ChartPath:        chartPath,
+		Values:           map[string]interface{}{"message": "v2"},
 		ExpectedRevision: 1,
 	})
 	require.NoError(t, err)
@@ -384,4 +384,3 @@ func TestRealEngine_RollbackFailurePreservesRelease(t *testing.T) {
 	assert.Equal(t, release.StatusFailed, failedRel.Info.Status,
 		"rollback target should be failed")
 }
-

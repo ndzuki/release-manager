@@ -107,6 +107,7 @@ func (s *Service) CreateReleaseDefinition(
 }
 
 // GetReleaseDefinition retrieves a release definition by ID.
+//
 //nolint:dupl // Resource Get handlers intentionally share the project-wide Connect error mapping.
 func (s *Service) GetReleaseDefinition(
 	ctx context.Context,

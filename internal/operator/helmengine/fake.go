@@ -35,8 +35,8 @@ type Fake struct {
 // NewFake creates a new Fake engine.
 func NewFake() *Fake {
 	return &Fake{
-		releases:                    make(map[string]*Release),
-		history:                     make(map[string][]ReleaseHistoryEntry),
+		releases:                     make(map[string]*Release),
+		history:                      make(map[string][]ReleaseHistoryEntry),
 		ArtifactUnavailableRevisions: make(map[int]bool),
 	}
 }

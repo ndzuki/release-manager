@@ -215,6 +215,20 @@ func (s *Store) InventorySyncRequests() store.InventorySyncRequestStore { return
 // CandidateArtifacts returns the CandidateArtifactStore.
 func (s *Store) CandidateArtifacts() store.CandidateArtifactStore { return s.candidateArts }
 
+func (s *Store) ArtifactEvents() store.ArtifactEventStore { return unsupportedArtifactEventStore{} }
+
+func (s *Store) ValidationOutbox() store.ValidationOutboxStore {
+	return unsupportedValidationOutboxStore{}
+}
+
+func (s *Store) BundleSubmissions() store.BundleSubmissionStore {
+	return unsupportedBundleSubmissionStore{}
+}
+
+func (s *Store) ArtifactEventSubmissions() store.ArtifactEventSubmissionStore {
+	return unsupportedArtifactEventSubmissionStore{}
+}
+
 // PreflightLifecycles returns the PreflightLifecycleStore.
 func (s *Store) PreflightLifecycles() store.PreflightLifecycleStore { return s.preflightCycles }
 

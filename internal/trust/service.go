@@ -17,6 +17,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/store"
 )
+
 // TrustService implements the TrustServiceHandler Connect interface.
 //
 //nolint:revive // Name matches Connect convention TrustServiceHandler.
@@ -141,9 +142,9 @@ func (s *TrustService) RotateTrustRoot(
 	s.emitTrustAudit(msg.GetOperator(), "rotate_root", newRoot.ID, newRoot.Issuer, newRoot.Environment)
 
 	return connect.NewResponse(&trustv1.RotateTrustRootResponse{
-		Policy:   policy,
-		OldRoot:  toProtoRoot(fromStoreRoot(old)),
-		NewRoot:  toProtoRoot(newRoot),
+		Policy:  policy,
+		OldRoot: toProtoRoot(fromStoreRoot(old)),
+		NewRoot: toProtoRoot(newRoot),
 	}), nil
 }
 
@@ -486,7 +487,6 @@ func rootStateToProto(s RootState) trustv1.TrustRootState {
 	}
 }
 
-
 func (s *TrustService) emitTrustAudit(operator, action, rootID, issuer, env string) {
 	if s.audit == nil {
 		return
@@ -509,5 +509,6 @@ func (s *TrustService) emitTrustAudit(operator, action, rootID, issuer, env stri
 		s.logger.Warn("trust audit event rejected", "action", action, "root_id", rootID)
 	}
 }
+
 // Compile-time check: TrustService implements the Connect handler interface.
 var _ trustv1connect.TrustServiceHandler = (*TrustService)(nil)
