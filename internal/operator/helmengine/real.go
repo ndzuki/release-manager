@@ -561,7 +561,6 @@ func contextError(ctx context.Context) error {
 	default:
 		return nil
 	}
-
 }
 func mapActionError(ctx context.Context, operation string, err error) error {
 	switch {

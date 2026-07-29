@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	"github.com/ndzuki/release-manager/internal/store"
 	"github.com/ndzuki/release-manager/internal/values"
@@ -24,6 +25,8 @@ type CommandPayload struct {
 	Namespace               string                     `json:"namespace,omitempty"`
 	ReleaseName             string                     `json:"release_name,omitempty"`
 	TimeoutSeconds          int64                      `json:"timeout_seconds,omitempty"`
+	Bundle                  *commonv1.ReleaseBundle    `json:"bundle,omitempty"`
+	Values                  json.RawMessage            `json:"values,omitempty"`
 	ValuesRevisionID        string                     `json:"values_revision_id,omitempty"`
 	ExpectedCurrentRevision int64                      `json:"expected_current_revision,omitempty"`
 	TargetRevision          int64                      `json:"target_revision,omitempty"`

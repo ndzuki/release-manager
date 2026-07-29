@@ -64,8 +64,14 @@ func (s *inventorySyncRequestStore) CreateIfAvailable(
 			string(request.Status), request.LastError, request.CreatedAt, request.UpdatedAt).Error; err != nil {
 			return fmt.Errorf("insert inventory sync request: %w", err)
 		}
-		outboxStore := &outboxStore{gorm: &DB{gorm: tx}}
-		if err := outboxStore.Create(ctx, outbox); err != nil {
+		if err := tx.Exec(`
+			INSERT INTO outbox
+				(id, command_id, operation_id, operation_type, operator_id, payload, status,
+				 max_inflight, sequence, result_json, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, outbox.ID, outbox.CommandID, outbox.OperationID, outbox.OperationType,
+			outbox.OperatorID, outbox.Payload, string(outbox.Status), outbox.MaxInFlight,
+			outbox.Sequence, outbox.ResultJSON, outbox.CreatedAt, outbox.UpdatedAt).Error; err != nil {
 			return fmt.Errorf("insert inventory sync outbox: %w", err)
 		}
 		return nil

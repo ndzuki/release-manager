@@ -17,10 +17,10 @@ import (
 
 // RetentionConfig holds configurable GC retention parameters.
 type RetentionConfig struct {
-	BundleDays           int `mapstructure:"bundle_days"`            // default 90, min 7
+	BundleDays            int `mapstructure:"bundle_days"`             // default 90, min 7
 	CandidateArtifactDays int `mapstructure:"candidate_artifact_days"` // default 30, min 1
-	PreflightResultHours int `mapstructure:"preflight_result_hours"`  // default 168 (7d), min 1
-	GCIntervalHours       int `mapstructure:"gc_interval_hours"`      // default 6, min 1
+	PreflightResultHours  int `mapstructure:"preflight_result_hours"`  // default 168 (7d), min 1
+	GCIntervalHours       int `mapstructure:"gc_interval_hours"`       // default 6, min 1
 }
 
 // DefaultRetentionConfig returns safe defaults.
@@ -56,9 +56,9 @@ type CleanupService struct {
 	config RetentionConfig
 	logger *slog.Logger
 
-	mu       sync.Mutex
-	active   map[string]struct{} // in-flight idempotency keys
-	results  map[string]*orchestratorv1.RunCleanupResponse
+	mu      sync.Mutex
+	active  map[string]struct{} // in-flight idempotency keys
+	results map[string]*orchestratorv1.RunCleanupResponse
 }
 
 // NewCleanupService creates a new CleanupService.

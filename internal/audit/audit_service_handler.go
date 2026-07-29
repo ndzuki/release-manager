@@ -31,6 +31,7 @@ func NewAuditServiceHandler(st store.Store, emitter Sink, logger *slog.Logger) a
 }
 
 // Emit delegates to the underlying emitter.
+//
 //nolint:dupl // This full handler intentionally mirrors the lightweight collector response contract.
 func (h *auditServiceHandler) Emit(_ context.Context, req *connect.Request[auditv1.EmitAuditRequest]) (*connect.Response[auditv1.EmitAuditResponse], error) {
 	if req.Msg == nil || len(req.Msg.GetEvents()) == 0 {
@@ -140,14 +141,14 @@ func (h *auditServiceHandler) ExportAuditEvents(ctx context.Context, req *connec
 	}
 
 	event := &store.AuditEvent{
-		ID:             uuid.New().String(),
-		ActorKind:      store.AuditActorSystem,
-		ActorID:        "system",
-		ResourceType:   "audit_export",
-		ResourceID:     export.ID,
-		Action:         "export.created",
-		Status:         "success",
-		CreatedAt:      now,
+		ID:           uuid.New().String(),
+		ActorKind:    store.AuditActorSystem,
+		ActorID:      "system",
+		ResourceType: "audit_export",
+		ResourceID:   export.ID,
+		Action:       "export.created",
+		Status:       "success",
+		CreatedAt:    now,
 	}
 
 	if err := h.store.AuditExports().CreateWithEvent(ctx, export, event); err != nil {

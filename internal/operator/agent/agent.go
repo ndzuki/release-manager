@@ -446,7 +446,7 @@ func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command,
 		result.Message = upgradeErrorMessage(result.Code)
 		return result
 	}
-	if upgrade.GetExpectedRevision() > 0 && uint64(fromRelease.Revision) != upgrade.GetExpectedRevision() {
+	if upgrade.GetExpectedRevision() > 0 && uint64(fromRelease.Revision) != upgrade.GetExpectedRevision() { //nolint:gosec // Helm revisions are positive SDK ints.
 		result.Code = "revision_conflict"
 		result.Message = upgradeErrorMessage(result.Code)
 		return result

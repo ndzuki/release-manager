@@ -10,8 +10,8 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
+	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -390,4 +390,3 @@ func routesToProto(routes []*store.ClusterRoute) []*orchestratorv1.ClusterRoute 
 	}
 	return result
 }
-
