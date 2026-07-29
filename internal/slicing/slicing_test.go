@@ -33,10 +33,10 @@ func makeStateMachines(n int) []string {
 
 func TestValidate(t *testing.T) {
 	tests := []struct {
-		name    string
-		req     *Requirement
-		wantErr bool
-		wantCode ValidationErrorCode
+		name        string
+		req         *Requirement
+		wantErr     bool
+		wantCode    ValidationErrorCode
 		wantReasons int // expected number of reasons
 	}{
 		{
@@ -49,8 +49,8 @@ func TestValidate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "empty requirement",
-			req:  &Requirement{},
+			name:    "empty requirement",
+			req:     &Requirement{},
 			wantErr: false,
 		},
 		{
@@ -69,8 +69,8 @@ func TestValidate(t *testing.T) {
 				Services:      []string{"svc"},
 				StateMachines: []string{"fsm"},
 			},
-			wantErr:  true,
-			wantCode: ErrRequirementTooLarge,
+			wantErr:     true,
+			wantCode:    ErrRequirementTooLarge,
 			wantReasons: 1,
 		},
 		{
@@ -89,8 +89,8 @@ func TestValidate(t *testing.T) {
 				Services:      makeServices(MaxServices + 1),
 				StateMachines: []string{"fsm"},
 			},
-			wantErr:  true,
-			wantCode: ErrRequirementTooLarge,
+			wantErr:     true,
+			wantCode:    ErrRequirementTooLarge,
 			wantReasons: 1,
 		},
 		{
@@ -109,8 +109,8 @@ func TestValidate(t *testing.T) {
 				Services:      []string{"svc"},
 				StateMachines: makeStateMachines(MaxStateMachines + 1),
 			},
-			wantErr:  true,
-			wantCode: ErrRequirementTooLarge,
+			wantErr:     true,
+			wantCode:    ErrRequirementTooLarge,
 			wantReasons: 1,
 		},
 		{
@@ -120,8 +120,8 @@ func TestValidate(t *testing.T) {
 				Services:      makeServices(5),
 				StateMachines: makeStateMachines(3),
 			},
-			wantErr:  true,
-			wantCode: ErrRequirementTooLarge,
+			wantErr:     true,
+			wantCode:    ErrRequirementTooLarge,
 			wantReasons: 3,
 		},
 		{
@@ -131,8 +131,8 @@ func TestValidate(t *testing.T) {
 				Services:      []string{"svc"},
 				StateMachines: []string{"fsm"},
 			},
-			wantErr:  true,
-			wantCode: ErrRequirementTooLarge,
+			wantErr:     true,
+			wantCode:    ErrRequirementTooLarge,
 			wantReasons: 1,
 		},
 		{
@@ -142,8 +142,8 @@ func TestValidate(t *testing.T) {
 				Services:      makeServices(4),
 				StateMachines: []string{"fsm"},
 			},
-			wantErr:  true,
-			wantCode: ErrRequirementTooLarge,
+			wantErr:     true,
+			wantCode:    ErrRequirementTooLarge,
 			wantReasons: 1,
 		},
 		{
@@ -153,8 +153,8 @@ func TestValidate(t *testing.T) {
 				Services:      []string{"svc"},
 				StateMachines: makeStateMachines(2),
 			},
-			wantErr:  true,
-			wantCode: ErrRequirementTooLarge,
+			wantErr:     true,
+			wantCode:    ErrRequirementTooLarge,
 			wantReasons: 1,
 		},
 	}
@@ -179,10 +179,10 @@ func TestValidate(t *testing.T) {
 
 func TestValidateDeferred(t *testing.T) {
 	tests := []struct {
-		name      string
-		deferred  []string
-		wantErr   bool
-		wantCode  ValidationErrorCode
+		name     string
+		deferred []string
+		wantErr  bool
+		wantCode ValidationErrorCode
 	}{
 		{
 			name:     "empty deferred list",

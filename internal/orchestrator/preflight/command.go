@@ -16,8 +16,8 @@ type CommandPayload struct {
 	Namespace               string                  `json:"namespace"`
 	ReleaseName             string                  `json:"release_name"`
 	TimeoutSeconds          int64                   `json:"timeout_seconds,omitempty"`
-	Bundle                   *commonv1.ReleaseBundle `json:"bundle,omitempty"`
-	Values                   json.RawMessage         `json:"values,omitempty"`
+	Bundle                  *commonv1.ReleaseBundle `json:"bundle,omitempty"`
+	Values                  json.RawMessage         `json:"values,omitempty"`
 	ValuesRevisionID        string                  `json:"values_revision_id,omitempty"`
 	ExpectedCurrentRevision int64                   `json:"expected_current_revision,omitempty"`
 	TargetRevision          int64                   `json:"target_revision,omitempty"`

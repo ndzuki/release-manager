@@ -52,6 +52,7 @@ type StubVerifier struct {
 	resolver RootResolver
 	logger   *slog.Logger
 }
+
 // NewStubVerifier creates a StubVerifier backed by the given store.
 func NewStubVerifier(st store.VerificationStore, r RootResolver, logger *slog.Logger) *StubVerifier {
 	return &StubVerifier{st: st, resolver: r, logger: logger}
@@ -107,7 +108,6 @@ func (v *StubVerifier) Verify(ctx context.Context, in Input) (*Output, error) {
 	result := v.verify(in)
 	return result, nil
 }
-
 
 func (v *StubVerifier) verify(in Input) *Output {
 	// AC-012-01: Digest consistency check.
@@ -213,6 +213,7 @@ func (v *StubVerifier) verifyWithRoots(ctx context.Context, in Input) (*Output, 
 		Summary: fmt.Sprintf("untrusted_issuer: issuer %q is not in live trust roots", in.SignatureRef.Issuer),
 	}, nil
 }
+
 // isValidSignatureFormat performs basic format validation.
 // Actual cryptographic verification is deferred to CosignVerifier.
 func isValidSignatureFormat(sig string) bool {

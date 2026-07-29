@@ -1,4 +1,5 @@
 //go:build emergency_audit
+
 // Emergency audit tests require the orchestrator to be wired with an
 // audit.Emitter sink. Blocked on REQ-029 audit integration.
 

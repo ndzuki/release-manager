@@ -21,6 +21,8 @@ import (
 const _ = connect.IsAtLeastVersion1_13_0
 
 const (
+	// BundleServiceName is the fully-qualified name of the BundleService service.
+	BundleServiceName = "orchestrator.v1.BundleService"
 	// OrchestratorServiceName is the fully-qualified name of the OrchestratorService service.
 	OrchestratorServiceName = "orchestrator.v1.OrchestratorService"
 )
@@ -33,6 +35,17 @@ const (
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
+	// BundleServiceSubmitBundleProcedure is the fully-qualified name of the BundleService's
+	// SubmitBundle RPC.
+	BundleServiceSubmitBundleProcedure = "/orchestrator.v1.BundleService/SubmitBundle"
+	// BundleServiceRecordArtifactEventProcedure is the fully-qualified name of the BundleService's
+	// RecordArtifactEvent RPC.
+	BundleServiceRecordArtifactEventProcedure = "/orchestrator.v1.BundleService/RecordArtifactEvent"
+	// BundleServiceListBundlesProcedure is the fully-qualified name of the BundleService's ListBundles
+	// RPC.
+	BundleServiceListBundlesProcedure = "/orchestrator.v1.BundleService/ListBundles"
+	// BundleServiceGetBundleProcedure is the fully-qualified name of the BundleService's GetBundle RPC.
+	BundleServiceGetBundleProcedure = "/orchestrator.v1.BundleService/GetBundle"
 	// OrchestratorServiceCreateOperationProcedure is the fully-qualified name of the
 	// OrchestratorService's CreateOperation RPC.
 	OrchestratorServiceCreateOperationProcedure = "/orchestrator.v1.OrchestratorService/CreateOperation"
@@ -127,6 +140,154 @@ const (
 	// OrchestratorService's SyncInventory RPC.
 	OrchestratorServiceSyncInventoryProcedure = "/orchestrator.v1.OrchestratorService/SyncInventory"
 )
+
+// BundleServiceClient is a client for the orchestrator.v1.BundleService service.
+type BundleServiceClient interface {
+	SubmitBundle(context.Context, *connect.Request[v1.SubmitBundleRequest]) (*connect.Response[v1.SubmitBundleResponse], error)
+	RecordArtifactEvent(context.Context, *connect.Request[v1.RecordArtifactEventRequest]) (*connect.Response[v1.RecordArtifactEventResponse], error)
+	ListBundles(context.Context, *connect.Request[v1.ListBundlesRequest]) (*connect.Response[v1.ListBundlesResponse], error)
+	GetBundle(context.Context, *connect.Request[v1.GetBundleRequest]) (*connect.Response[v1.GetBundleResponse], error)
+}
+
+// NewBundleServiceClient constructs a client for the orchestrator.v1.BundleService service. By
+// default, it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses,
+// and sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the
+// connect.WithGRPC() or connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewBundleServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) BundleServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	bundleServiceMethods := v1.File_orchestrator_v1_orchestrator_proto.Services().ByName("BundleService").Methods()
+	return &bundleServiceClient{
+		submitBundle: connect.NewClient[v1.SubmitBundleRequest, v1.SubmitBundleResponse](
+			httpClient,
+			baseURL+BundleServiceSubmitBundleProcedure,
+			connect.WithSchema(bundleServiceMethods.ByName("SubmitBundle")),
+			connect.WithClientOptions(opts...),
+		),
+		recordArtifactEvent: connect.NewClient[v1.RecordArtifactEventRequest, v1.RecordArtifactEventResponse](
+			httpClient,
+			baseURL+BundleServiceRecordArtifactEventProcedure,
+			connect.WithSchema(bundleServiceMethods.ByName("RecordArtifactEvent")),
+			connect.WithClientOptions(opts...),
+		),
+		listBundles: connect.NewClient[v1.ListBundlesRequest, v1.ListBundlesResponse](
+			httpClient,
+			baseURL+BundleServiceListBundlesProcedure,
+			connect.WithSchema(bundleServiceMethods.ByName("ListBundles")),
+			connect.WithClientOptions(opts...),
+		),
+		getBundle: connect.NewClient[v1.GetBundleRequest, v1.GetBundleResponse](
+			httpClient,
+			baseURL+BundleServiceGetBundleProcedure,
+			connect.WithSchema(bundleServiceMethods.ByName("GetBundle")),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// bundleServiceClient implements BundleServiceClient.
+type bundleServiceClient struct {
+	submitBundle        *connect.Client[v1.SubmitBundleRequest, v1.SubmitBundleResponse]
+	recordArtifactEvent *connect.Client[v1.RecordArtifactEventRequest, v1.RecordArtifactEventResponse]
+	listBundles         *connect.Client[v1.ListBundlesRequest, v1.ListBundlesResponse]
+	getBundle           *connect.Client[v1.GetBundleRequest, v1.GetBundleResponse]
+}
+
+// SubmitBundle calls orchestrator.v1.BundleService.SubmitBundle.
+func (c *bundleServiceClient) SubmitBundle(ctx context.Context, req *connect.Request[v1.SubmitBundleRequest]) (*connect.Response[v1.SubmitBundleResponse], error) {
+	return c.submitBundle.CallUnary(ctx, req)
+}
+
+// RecordArtifactEvent calls orchestrator.v1.BundleService.RecordArtifactEvent.
+func (c *bundleServiceClient) RecordArtifactEvent(ctx context.Context, req *connect.Request[v1.RecordArtifactEventRequest]) (*connect.Response[v1.RecordArtifactEventResponse], error) {
+	return c.recordArtifactEvent.CallUnary(ctx, req)
+}
+
+// ListBundles calls orchestrator.v1.BundleService.ListBundles.
+func (c *bundleServiceClient) ListBundles(ctx context.Context, req *connect.Request[v1.ListBundlesRequest]) (*connect.Response[v1.ListBundlesResponse], error) {
+	return c.listBundles.CallUnary(ctx, req)
+}
+
+// GetBundle calls orchestrator.v1.BundleService.GetBundle.
+func (c *bundleServiceClient) GetBundle(ctx context.Context, req *connect.Request[v1.GetBundleRequest]) (*connect.Response[v1.GetBundleResponse], error) {
+	return c.getBundle.CallUnary(ctx, req)
+}
+
+// BundleServiceHandler is an implementation of the orchestrator.v1.BundleService service.
+type BundleServiceHandler interface {
+	SubmitBundle(context.Context, *connect.Request[v1.SubmitBundleRequest]) (*connect.Response[v1.SubmitBundleResponse], error)
+	RecordArtifactEvent(context.Context, *connect.Request[v1.RecordArtifactEventRequest]) (*connect.Response[v1.RecordArtifactEventResponse], error)
+	ListBundles(context.Context, *connect.Request[v1.ListBundlesRequest]) (*connect.Response[v1.ListBundlesResponse], error)
+	GetBundle(context.Context, *connect.Request[v1.GetBundleRequest]) (*connect.Response[v1.GetBundleResponse], error)
+}
+
+// NewBundleServiceHandler builds an HTTP handler from the service implementation. It returns the
+// path on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewBundleServiceHandler(svc BundleServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	bundleServiceMethods := v1.File_orchestrator_v1_orchestrator_proto.Services().ByName("BundleService").Methods()
+	bundleServiceSubmitBundleHandler := connect.NewUnaryHandler(
+		BundleServiceSubmitBundleProcedure,
+		svc.SubmitBundle,
+		connect.WithSchema(bundleServiceMethods.ByName("SubmitBundle")),
+		connect.WithHandlerOptions(opts...),
+	)
+	bundleServiceRecordArtifactEventHandler := connect.NewUnaryHandler(
+		BundleServiceRecordArtifactEventProcedure,
+		svc.RecordArtifactEvent,
+		connect.WithSchema(bundleServiceMethods.ByName("RecordArtifactEvent")),
+		connect.WithHandlerOptions(opts...),
+	)
+	bundleServiceListBundlesHandler := connect.NewUnaryHandler(
+		BundleServiceListBundlesProcedure,
+		svc.ListBundles,
+		connect.WithSchema(bundleServiceMethods.ByName("ListBundles")),
+		connect.WithHandlerOptions(opts...),
+	)
+	bundleServiceGetBundleHandler := connect.NewUnaryHandler(
+		BundleServiceGetBundleProcedure,
+		svc.GetBundle,
+		connect.WithSchema(bundleServiceMethods.ByName("GetBundle")),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/orchestrator.v1.BundleService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case BundleServiceSubmitBundleProcedure:
+			bundleServiceSubmitBundleHandler.ServeHTTP(w, r)
+		case BundleServiceRecordArtifactEventProcedure:
+			bundleServiceRecordArtifactEventHandler.ServeHTTP(w, r)
+		case BundleServiceListBundlesProcedure:
+			bundleServiceListBundlesHandler.ServeHTTP(w, r)
+		case BundleServiceGetBundleProcedure:
+			bundleServiceGetBundleHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedBundleServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedBundleServiceHandler struct{}
+
+func (UnimplementedBundleServiceHandler) SubmitBundle(context.Context, *connect.Request[v1.SubmitBundleRequest]) (*connect.Response[v1.SubmitBundleResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.BundleService.SubmitBundle is not implemented"))
+}
+
+func (UnimplementedBundleServiceHandler) RecordArtifactEvent(context.Context, *connect.Request[v1.RecordArtifactEventRequest]) (*connect.Response[v1.RecordArtifactEventResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.BundleService.RecordArtifactEvent is not implemented"))
+}
+
+func (UnimplementedBundleServiceHandler) ListBundles(context.Context, *connect.Request[v1.ListBundlesRequest]) (*connect.Response[v1.ListBundlesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.BundleService.ListBundles is not implemented"))
+}
+
+func (UnimplementedBundleServiceHandler) GetBundle(context.Context, *connect.Request[v1.GetBundleRequest]) (*connect.Response[v1.GetBundleResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.BundleService.GetBundle is not implemented"))
+}
 
 // OrchestratorServiceClient is a client for the orchestrator.v1.OrchestratorService service.
 type OrchestratorServiceClient interface {

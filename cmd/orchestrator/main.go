@@ -32,9 +32,11 @@ type orchSvc struct {
 	signingKey string
 	configPath string
 
-	store   store.Store
-	cleanup *orchestrator.CleanupService
-	pingDB  func(context.Context) error
+	store      store.Store
+	cleanup    *orchestrator.CleanupService
+	pingDB     func(context.Context) error
+	bundleSvc  *orchestrator.BundleService
+	validation *orchestrator.ValidationWorker
 }
 
 func (s *orchSvc) Name() string { return "release-orchestrator" }
@@ -113,6 +115,27 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	)
 	mux.Handle(cleanupPath, cleanupHandler)
 	logger.Info("cleanup service registered", "gc_interval_hours", retention.GCIntervalHours)
+
+	sourceRegistries := loadSourceRegistries(logger)
+	bundleSvc := orchestrator.NewBundleService(s.store, logger, sourceRegistries)
+	s.bundleSvc = bundleSvc
+	bundlePath, bundleHandler := orchestratorv1connect.NewBundleServiceHandler(bundleSvc,
+		connect.WithInterceptors(
+			auth.TryAllInterceptor(logger,
+				auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, map[string]bool{}, logger),
+				auth.ServiceTokenInterceptor(s.serviceTokens(), logger),
+			),
+		),
+	)
+	mux.Handle(bundlePath, bundleHandler)
+	logger.Info("bundle service registered")
+
+	if pgStore, ok := s.store.(*postgresstore.Store); ok {
+		s.validation = orchestrator.NewValidationWorker(s.store, pgStore.GORM(), logger, orchestrator.DefaultValidationWorkerConfig())
+	} else {
+		s.validation = orchestrator.NewValidationWorker(s.store, nil, logger, orchestrator.DefaultValidationWorkerConfig())
+	}
+
 	return nil
 }
 
@@ -172,10 +195,20 @@ func orchestratorReadOnlyProcedures() map[string]struct{} {
 
 // Run starts the GC ticker. Called by app.Run as a backgroundService.
 func (s *orchSvc) Run(ctx context.Context) {
+	if s.validation != nil {
+		go s.validation.Run(ctx)
+	}
 	if s.cfg.Maintenance || s.cleanup == nil {
 		return
 	}
 	s.cleanup.StartTicker(ctx)
+}
+
+func (s *orchSvc) serviceTokens() []string { return nil }
+
+func loadSourceRegistries(logger *slog.Logger) []orchestrator.SourceRegistry {
+	_ = logger
+	return nil
 }
 
 func main() {

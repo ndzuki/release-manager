@@ -37,11 +37,11 @@ func TestRunMigrationsUpAndNoChange(t *testing.T) {
 	var version int
 	var dirty bool
 	require.NoError(t, database.SQLDB().QueryRowContext(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty))
-	require.Equal(t, 5, version)
+	require.Equal(t, 6, version)
 	require.False(t, dirty)
 	require.NoError(t, RunMigrations(ctx, database.SQLDB(), migrationFS))
 	require.NoError(t, database.SQLDB().QueryRowContext(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty))
-	require.Equal(t, 6, version)
+	require.Equal(t, 7, version)
 	require.False(t, dirty)
 
 	var nonTZCount int

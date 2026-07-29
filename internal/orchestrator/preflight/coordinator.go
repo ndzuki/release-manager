@@ -26,6 +26,7 @@ type Coordinator struct {
 	logger         *slog.Logger
 	timeoutSeconds int64
 }
+
 // NewCoordinator creates a preflight coordinator with the required store dependencies.
 func NewCoordinator(
 	outbox store.OutboxStore,
@@ -116,6 +117,7 @@ func (c *Coordinator) Run(ctx context.Context, op *store.Operation) {
 	// Record lifecycle result for GC (REQ-069).
 	c.recordLifecycle(ctx, op.ID, results, string(StagePassed), "")
 }
+
 // runStage dispatches a PRECHECK command for one stage and polls for its result.
 func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage StageDef) (StageResult, error) {
 	emptyResult := StageResult{Stage: stage.Name, Status: StageFailed}
