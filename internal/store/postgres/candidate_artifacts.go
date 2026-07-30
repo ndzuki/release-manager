@@ -116,45 +116,6 @@ func (s *candidateArtifactStore) ListValidated(ctx context.Context) ([]*store.Ca
 	}
 	return artifacts, nil
 }
-	}
-	now := time.Now().UTC()
-	if candidate.ID == "" {
-		candidate.ID = uuid.NewString()
-	}
-	if candidate.CreatedAt.IsZero() {
-		candidate.CreatedAt = now
-	}
-	if candidate.LastSeenAt.IsZero() {
-		candidate.LastSeenAt = now
-	}
-
-	type candidateRow struct {
-		ID           string     `gorm:"column:id"`
-		ArtifactType string     `gorm:"column:artifact_type"`
-		Digest       string     `gorm:"column:digest"`
-		CreatedAt    time.Time  `gorm:"column:created_at"`
-		LastSeenAt   time.Time  `gorm:"column:last_seen_at"`
-		OrphanedAt   *time.Time `gorm:"column:orphaned_at"`
-	}
-	row := candidateRow{
-		ID: candidate.ID, ArtifactType: string(candidate.ArtifactType), Digest: candidate.Digest,
-		CreatedAt: candidate.CreatedAt.UTC(), LastSeenAt: candidate.LastSeenAt.UTC(), OrphanedAt: candidate.OrphanedAt,
-	}
-	if err := tx.Clauses(
-		clause.OnConflict{
-			Columns:   []clause.Column{{Name: "digest"}, {Name: "artifact_type"}},
-			DoUpdates: clause.Assignments(map[string]any{"last_seen_at": candidate.LastSeenAt.UTC(), "orphaned_at": nil}),
-		},
-		clause.Returning{},
-	).Table("candidate_artifacts").Create(&row).Error; err != nil {
-		return fmt.Errorf("upsert candidate artifact: %w", err)
-	}
-	candidate.ID = row.ID
-	candidate.CreatedAt = row.CreatedAt
-	candidate.LastSeenAt = row.LastSeenAt
-	candidate.OrphanedAt = row.OrphanedAt
-	return nil
-}
 
 func (s *candidateArtifactStore) UpsertLocationTx(tx *gorm.DB, artifactID, ref, sourceID string, now time.Time) error {
 	if tx == nil {

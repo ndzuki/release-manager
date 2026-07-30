@@ -155,47 +155,10 @@ type Store struct {
 	preflightCycles   *preflightLifecycleStore
 	executionResults  *executionResultReader
 	rollouts          *rolloutTrackingReader
+	emergencyIntents  *emergencyIntentStore
+	convergenceTasks  *convergenceTaskStore
 	closeOnce         sync.Once
 	closeErr          error
-	sqlDB            *sql.DB
-	db               *DB
-	gormDB           *gorm.DB
-	ops              *operationStore
-	operationEvents  *operationEventStore
-	defs             *definitionStore
-	vals             *valuesStore
-	valuesApproval   *valuesApprovalStore
-	customers        *customerStore
-	clusters         *clusterStore
-	tokens           *enrollmentTokenStore
-	operators        *operatorStore
-	sessions         *sessionStore
-	outbox           *outboxStore
-	users            *userStore
-	authSess         *authSessionStore
-	orgs             *organizationStore
-	orgMembers       *organizationMemberStore
-	bindings         *bindingStore
-	audit            *auditEventStore
-	notif            *notificationStore
-	auditExports     *auditExportStore
-	bundles          *bundleStore
-	verifs           *verificationStore
-	routes           *clusterRouteStore
-	invs             *inventoryStore
-	invSyncReqs      *inventorySyncRequestStore
-	trustRoots       *trustRootStore
-	scanResults      *scanResultStore
-	vulnExceptions   *vulnerabilityExceptionStore
-	custEvents       *customerEventStore
-	defEvents        *definitionEventStore
-	preflight        *preflightStore
-	candidateArts    *candidateArtifactStore
-	preflightCycles  *preflightLifecycleStore
-	emergencyIntents *emergencyIntentStore
-	convergenceTasks *convergenceTaskStore
-	closeOnce        sync.Once
-	closeErr         error
 }
 
 // New constructs a Store over the supplied shared database/sql pool and GORM wrapper.
@@ -347,7 +310,6 @@ func (s *Store) ArtifactEventSubmissions() store.ArtifactEventSubmissionStore {
 	return s.eventSubmissions
 }
 func (s *Store) PreflightLifecycles() store.PreflightLifecycleStore { return s.preflightCycles }
-func (s *Store) PreflightLifecycles() store.PreflightLifecycleStore         { return s.preflightCycles }
 func (s *Store) EmergencyIntents() store.EmergencyIntentStore               { return s.emergencyIntents }
 func (s *Store) ConvergenceTasks() store.ConvergenceTaskStore               { return s.convergenceTasks }
 

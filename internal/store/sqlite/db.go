@@ -50,39 +50,6 @@ type Store struct {
 	auditExports     *auditExportStore
 	executionResults *operationExecutionResultStore
 	rollouts         *rolloutTrackingStore
-	db               *sql.DB
-	ops              *operationStore
-	operationEvents  *operationEventStore
-	defs             *definitionStore
-	vals             *valuesStore
-	valuesApproval   *valuesApprovalStore
-	customers        *customerStore
-	clusters         *clusterStore
-	tokens           *enrollmentTokenStore
-	operators        *operatorStore
-	sessions         *sessionStore
-	outbox           *outboxStore
-	users            *userStore
-	authSess         *authSessionStore
-	orgs             *organizationStore
-	orgMembers       *organizationMemberStore
-	bindings         *bindingStore
-	audit            *auditEventStore
-	notif            *notificationStore
-	bundles          *bundleStore
-	verifs           *verificationStore
-	scanResults      *scanResultStore
-	vulnExceptions   *vulnerabilityExceptionStore
-	trustRoots       *trustRootStore
-	routes           *clusterRouteStore
-	invs             *inventoryStore
-	syncRequests     *inventorySyncRequestStore
-	custEvents       *customerEventStore
-	defEvents        *definitionEventStore
-	preflight        *preflightStore
-	candidateArts    *candidateArtifactStore
-	preflightCycles  *preflightLifecycleStore
-	auditExports     *auditExportStore
 	emergencyIntents *emergencyIntentStore
 	convergenceTasks *convergenceTaskStore
 }
