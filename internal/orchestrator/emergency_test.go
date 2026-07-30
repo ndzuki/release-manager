@@ -170,7 +170,7 @@ func TestGetOperationReturnsEmergencyResult(t *testing.T) {
 	op, err = st.Operations().Get(t.Context(), op.ID)
 	require.NoError(t, err)
 	_, err = st.EmergencyIntents().Finish(
-		t.Context(), intent.ID, op.ID, op.StateVersion, store.StatusSucceeded, "",
+		t.Context(), intent.ID, op.ID, op.StateVersion, store.StatusSucceeded, store.EmergencyEffectApplied, "",
 		[]byte(`{"workload_uid":"uid-api","replicas":2}`),
 		[]byte(`{"workload_uid":"uid-api","replicas":3}`),
 	)
@@ -185,6 +185,75 @@ func TestGetOperationReturnsEmergencyResult(t *testing.T) {
 	assert.Equal(t, int32(2), getResp.Msg.GetEmergencyResult().GetBefore().GetReplicasValues().GetReplicas())
 	assert.Equal(t, int32(3), getResp.Msg.GetEmergencyResult().GetAfter().GetReplicasValues().GetReplicas())
 	assert.Equal(t, "awaiting_standard_release", getResp.Msg.GetEmergencyResult().GetRevertStatus())
+}
+
+// AC-023-13: running EMERGENCY → cancel_not_allowed
+func TestCancelOperation_EmergencyRunningRejected(t *testing.T) {
+	svc, st, _ := emergencyTestService(t)
+	resp, err := svc.EmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("cancel-em-running", 3))
+	require.NoError(t, err)
+	opID := resp.Msg.GetOperationId()
+	op, err := st.Operations().Get(t.Context(), opID)
+	require.NoError(t, err)
+	_, err = st.Operations().UpdateStatus(t.Context(), opID, store.StatusRunning, op.StateVersion, "")
+	require.NoError(t, err)
+
+	req := connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: opID, Reason: "attempt cancel", ExpectedStateVersion: int64(op.StateVersion + 1),
+	})
+	req.Header().Set("Idempotency-Key", "cancel-em-running-key")
+	_, cancelErr := svc.CancelOperation(emergencyAdminContext(), req)
+	require.Error(t, cancelErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(cancelErr))
+	assert.Contains(t, cancelErr.Error(), "cancel_not_allowed")
+}
+
+// AC-023-13: pending EMERGENCY → cancelled
+func TestCancelOperation_EmergencyPendingSucceeds(t *testing.T) {
+	svc, st, _ := emergencyTestService(t)
+	// EmergencyChange with working dispatcher → operation is created and queued.
+	// queued EMERGENCY is cancellable (AC-023-13: pending/queued EMERGENCY → cancelled).
+	resp, err := svc.EmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("cancel-em-pending", 3))
+	require.NoError(t, err)
+	opID := resp.Msg.GetOperationId()
+
+	// Operation should be queued (dispatched successfully).
+	opCheck, err := st.Operations().Get(t.Context(), opID)
+	require.NoError(t, err)
+	require.Equal(t, store.StatusQueued, opCheck.Status)
+
+	req := connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: opID, Reason: "cancelling queued emergency", ExpectedStateVersion: int64(opCheck.StateVersion),
+	})
+	req.Header().Set("Idempotency-Key", "cancel-em-queued-key")
+	cancelResp, cancelErr := svc.CancelOperation(emergencyAdminContext(), req)
+	require.NoError(t, cancelErr)
+	assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLED, cancelResp.Msg.Operation.State)
+}
+
+// AC-023-13: queued undelivered EMERGENCY → cancelled + NOT_APPLIED
+func TestCancelOperation_EmergencyQueuedUndelivered(t *testing.T) {
+	svc, st, _ := emergencyTestService(t)
+	resp, err := svc.EmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("cancel-em-queued", 3))
+	require.NoError(t, err)
+	opID := resp.Msg.GetOperationId()
+	intent, err := st.EmergencyIntents().GetByOperationID(t.Context(), opID)
+	require.NoError(t, err)
+	op, err := st.Operations().Get(t.Context(), opID)
+	require.NoError(t, err)
+	require.NoError(t, st.EmergencyIntents().UpdateDeliveryStatus(t.Context(), intent.ID, "pending"))
+
+	req := connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: opID, Reason: "cancelling queued undelivered", ExpectedStateVersion: int64(op.StateVersion),
+	})
+	req.Header().Set("Idempotency-Key", "cancel-em-queued-key")
+	cancelResp, cancelErr := svc.CancelOperation(emergencyAdminContext(), req)
+	require.NoError(t, cancelErr)
+	assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLED, cancelResp.Msg.Operation.State)
+
+	updatedIntent, err := st.EmergencyIntents().GetByOperationID(t.Context(), opID)
+	require.NoError(t, err)
+	assert.Equal(t, store.EmergencyEffectNotApplied, updatedIntent.EffectStatus)
 }
 
 func connectErrorReason(err error) string {

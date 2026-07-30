@@ -403,6 +403,154 @@ func (s *Service) GetOperation(
 	return connect.NewResponse(response), nil
 }
 
+const (
+	operationWatchPollInterval = 50 * time.Millisecond
+	operationWatchHeartbeat    = 30 * time.Second
+)
+
+// WatchOperation streams a consistent snapshot, retained replay, live entries, and heartbeats.
+func (s *Service) WatchOperation(
+	ctx context.Context,
+	req *connect.Request[orchestratorv1.WatchOperationRequest],
+	stream *connect.ServerStream[orchestratorv1.WatchOperationResponse],
+) error {
+	actor, ok := authctx.ActorFromContext(ctx)
+	if !ok {
+		return connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
+	}
+	if req.Msg.GetOperationId() == "" || req.Msg.GetAfterSequence() < 0 {
+		return connect.NewError(connect.CodeInvalidArgument, errors.New("operation_id is required and after_sequence must be non-negative"))
+	}
+	snapshot, err := s.store.Timeline().Snapshot(ctx, req.Msg.GetOperationId())
+	if errors.Is(err, store.ErrNotFound) {
+		return connect.NewError(connect.CodeNotFound, fmt.Errorf("operation not found: %s", req.Msg.GetOperationId()))
+	}
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("operation timeline snapshot: %w", err))
+	}
+	if err := s.authorizeReadOperation(ctx, snapshot.Operation, actor); err != nil {
+		return err
+	}
+	if snapshot.RetainedFromSequence > 0 && req.Msg.GetAfterSequence() < snapshot.RetainedFromSequence-1 {
+		return operationCursorExpiredError(snapshot)
+	}
+	requestID := uuid.NewString()
+	if err := stream.Send(&orchestratorv1.WatchOperationResponse{
+		Payload: &orchestratorv1.WatchOperationResponse_Snapshot{Snapshot: toProtoOperationSnapshot(snapshot)},
+	}); err != nil {
+		return err
+	}
+	entries, err := s.store.Timeline().List(ctx, snapshot.Operation.ID, req.Msg.GetAfterSequence(), snapshot.SnapshotSequence)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("operation timeline replay: %w", err))
+	}
+	lastSequence := req.Msg.GetAfterSequence()
+	for _, entry := range entries {
+		if err := stream.Send(&orchestratorv1.WatchOperationResponse{
+			Payload: &orchestratorv1.WatchOperationResponse_Entry{Entry: toProtoTimelineEntry(entry)},
+		}); err != nil {
+			return err
+		}
+		lastSequence = entry.Sequence
+	}
+	if lastSequence < snapshot.SnapshotSequence {
+		lastSequence = snapshot.SnapshotSequence
+	}
+
+	pollTicker := time.NewTicker(operationWatchPollInterval)
+	defer pollTicker.Stop()
+	heartbeatTicker := time.NewTicker(operationWatchHeartbeat)
+	defer heartbeatTicker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-pollTicker.C:
+			latest, listErr := s.store.Timeline().List(ctx, snapshot.Operation.ID, lastSequence, 0)
+			if listErr != nil {
+				return connect.NewError(connect.CodeInternal, fmt.Errorf("operation timeline live read: %w", listErr))
+			}
+			for _, entry := range latest {
+				if err := stream.Send(&orchestratorv1.WatchOperationResponse{
+					Payload: &orchestratorv1.WatchOperationResponse_Entry{Entry: toProtoTimelineEntry(entry)},
+				}); err != nil {
+					return err
+				}
+				lastSequence = entry.Sequence
+			}
+		case sentAt := <-heartbeatTicker.C:
+			latestSequence, latestErr := s.store.Timeline().LatestSequence(ctx, snapshot.Operation.ID)
+			if latestErr != nil {
+				return connect.NewError(connect.CodeInternal, fmt.Errorf("operation timeline heartbeat: %w", latestErr))
+			}
+			if err := stream.Send(&orchestratorv1.WatchOperationResponse{
+				Payload: &orchestratorv1.WatchOperationResponse_Heartbeat{Heartbeat: &orchestratorv1.Heartbeat{
+					LatestSequence: latestSequence, RequestId: requestID, SentAt: timestamppb.New(sentAt.UTC()),
+				}},
+			}); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func operationCursorExpiredError(snapshot *store.TimelineSnapshot) error {
+	err := connect.NewError(connect.CodeOutOfRange, errors.New("cursor_expired: retained timeline no longer includes the requested sequence"))
+	err.Meta().Set("X-Reason-Code", "cursor_expired")
+	err.Meta().Set("X-Snapshot-Sequence", fmt.Sprintf("%d", snapshot.SnapshotSequence))
+	err.Meta().Set("X-Retained-From-Sequence", fmt.Sprintf("%d", snapshot.RetainedFromSequence))
+	return err
+}
+
+func toProtoOperationSnapshot(snapshot *store.TimelineSnapshot) *orchestratorv1.OperationSnapshot {
+	return &orchestratorv1.OperationSnapshot{
+		Operation: toProtoOperation(snapshot.Operation), SnapshotSequence: snapshot.SnapshotSequence,
+		RetainedFromSequence: snapshot.RetainedFromSequence,
+	}
+}
+
+func toProtoTimelineEntry(entry *store.OperationTimelineEntry) *orchestratorv1.TimelineEntry {
+	result := &orchestratorv1.TimelineEntry{
+		Id: entry.ID, OperationId: entry.OperationID, Sequence: entry.Sequence,
+		OperationStateVersion: int64(entry.OperationStateVersion), Timestamp: timestamppb.New(entry.CreatedAt),
+	}
+	switch store.OperationTimelineEntryKind(entry.Kind) {
+	case store.TimelineEntryStateTransition:
+		result.Kind = orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_STATE_TRANSITION
+		var data store.StateTransitionTimelineData
+		if json.Unmarshal(entry.Data, &data) == nil {
+			result.RequestId = data.RequestID
+			result.FromState = data.FromState
+			result.ToState = data.ToState
+			result.ErrorCode = data.ErrorCode
+		}
+	case store.TimelineEntryEmergencyEffectResolved:
+		result.Kind = orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_EMERGENCY_EFFECT_RESOLVED
+		var data store.EmergencyEffectTimelineData
+		if json.Unmarshal(entry.Data, &data) == nil {
+			result.RequestId = data.RequestID
+			result.EffectFrom = data.EffectFrom
+			result.EffectTo = data.EffectTo
+		}
+	default:
+		result.Kind = orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_UNSPECIFIED
+	}
+	return result
+}
+
+func emergencyEffectToProto(value store.EmergencyEffectStatus) orchestratorv1.EmergencyEffectStatus {
+	switch value {
+	case store.EmergencyEffectApplied:
+		return orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_APPLIED
+	case store.EmergencyEffectNotApplied:
+		return orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_NOT_APPLIED
+	case store.EmergencyEffectUnknown:
+		return orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_UNKNOWN
+	default:
+		return orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_UNSPECIFIED
+	}
+}
+
 func (s *Service) emergencyOperationResult(ctx context.Context, op *store.Operation) (*orchestratorv1.EmergencyResult, error) {
 	intent, err := s.store.EmergencyIntents().GetByOperationID(ctx, op.ID)
 	if err != nil {
@@ -412,6 +560,7 @@ func (s *Service) emergencyOperationResult(ctx context.Context, op *store.Operat
 		OpType:            emergencyActionToProto(intent.Action),
 		ConvergencePolicy: emergencyConvergenceToProto(intent.Convergence),
 	}
+	result.EffectStatus = emergencyEffectToProto(intent.EffectStatus)
 	result.Before, err = emergencyTypedValues(intent.Action, intent.BeforeSnapshot)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("decode emergency before snapshot: %w", err))
@@ -499,13 +648,14 @@ func (s *Service) CancelOperation(
 	req *connect.Request[orchestratorv1.CancelOperationRequest],
 ) (*connect.Response[orchestratorv1.CancelOperationResponse], error) {
 	msg := req.Msg
+	idempotencyKey := req.Header().Get("Idempotency-Key")
 
 	actor, ok := authctx.ActorFromContext(ctx)
 	if !ok {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
 
-	if err := validateCancelInput(msg); err != nil {
+	if err := validateCancelInput(msg, idempotencyKey); err != nil {
 		return nil, err
 	}
 
@@ -522,10 +672,14 @@ func (s *Service) CancelOperation(
 		return nil, err
 	}
 
-	if replayed, err := s.replayCancel(ctx, op, actor, msg); err != nil {
+	if replayed, err := s.replayCancel(ctx, op, actor, msg, idempotencyKey); err != nil {
 		return nil, err
 	} else if replayed != nil {
 		return replayed, nil
+	}
+	if op.OperationType == store.OperationEmergency && op.Status == store.StatusRunning {
+		return nil, cancelOperationError(connect.CodeFailedPrecondition, "cancel_not_allowed",
+			fmt.Errorf("running EMERGENCY operation %s cannot be cancelled", op.ID))
 	}
 	if op.Status == store.StatusCancelling {
 		return nil, cancelOperationError(connect.CodeFailedPrecondition, "cancel_not_allowed",
@@ -543,7 +697,7 @@ func (s *Service) CancelOperation(
 	}
 
 	// Use the computed target status for the cancel command.
-	return s.finishCancelWithTarget(ctx, op, actor, msg, targetStatus)
+	return s.finishCancelWithTarget(ctx, op, actor, msg, idempotencyKey, targetStatus)
 }
 
 func (s *Service) finishCancelWithTarget(
@@ -551,14 +705,18 @@ func (s *Service) finishCancelWithTarget(
 	op *store.Operation,
 	actor authctx.Actor,
 	msg *orchestratorv1.CancelOperationRequest,
+	idempotencyKey string,
 	targetStatus store.OperationStatus,
 ) (*connect.Response[orchestratorv1.CancelOperationResponse], error) {
 	requestID := uuid.New().String()
-	idempotencyKey := msg.IdempotencyKey
 	scope := operationCancelScope(op.ID, actor.UserID)
 	reqHash := hashCancelRequest(msg.OperationId, int(msg.ExpectedStateVersion), msg.Reason)
 	keyHash := hashIdempotencyKey(idempotencyKey)
 
+	deliveryStatus, err := s.cancelDeliveryStatus(ctx, op)
+	if err != nil {
+		return nil, err
+	}
 	result, err := s.store.Operations().Cancel(ctx, store.OperationCancelCommand{
 		OperationID:          op.ID,
 		ExpectedStateVersion: int(msg.ExpectedStateVersion),
@@ -569,6 +727,7 @@ func (s *Service) finishCancelWithTarget(
 		IdempotencyScope:     scope,
 		IdempotencyKeyHash:   keyHash,
 		RequestHash:          reqHash,
+		DeliveryStatus:       deliveryStatus,
 	})
 	if err != nil {
 		var versionErr *store.OperationStateVersionConflictError
@@ -596,11 +755,12 @@ func (s *Service) replayCancel(
 	op *store.Operation,
 	actor authctx.Actor,
 	msg *orchestratorv1.CancelOperationRequest,
+	idempotencyKey string,
 ) (*connect.Response[orchestratorv1.CancelOperationResponse], error) {
 	result, err := s.store.Operations().GetCancelReplay(ctx, store.OperationCancelReplayQuery{
 		OperationID:        op.ID,
 		ActorUserID:        actor.UserID,
-		IdempotencyKeyHash: hashIdempotencyKey(msg.IdempotencyKey),
+		IdempotencyKeyHash: hashIdempotencyKey(idempotencyKey),
 		RequestHash:        hashCancelRequest(msg.OperationId, int(msg.ExpectedStateVersion), msg.Reason),
 	})
 	if errors.Is(err, store.ErrNotFound) {
@@ -617,6 +777,27 @@ func (s *Service) replayCancel(
 		Operation: toProtoOperation(result.Operation),
 		RequestId: result.RequestID,
 	}), nil
+}
+
+func (s *Service) cancelDeliveryStatus(ctx context.Context, op *store.Operation) (store.OperationDeliveryStatus, error) {
+	if op.OperationType != store.OperationEmergency {
+		return "", nil
+	}
+	intent, err := s.store.EmergencyIntents().GetByOperationID(ctx, op.ID)
+	if err != nil {
+		return "", cancelOperationError(connect.CodeInternal, "internal_error", fmt.Errorf("load emergency delivery status: %w", err))
+	}
+	switch intent.DeliveryStatus {
+	case "pending":
+		return store.DeliveryUndelivered, nil
+	case "queued":
+		return store.DeliveryUnknown, nil
+	case "delivered", "persisted":
+		return store.DeliveryDelivered, nil
+	default:
+		return "", cancelOperationError(connect.CodeInternal, "internal_error",
+			fmt.Errorf("unknown emergency delivery status %q", intent.DeliveryStatus))
+	}
 }
 
 // authorizeCancelOperation verifies that the actor has a valid membership,
@@ -674,17 +855,17 @@ func canCancelOperation(role store.Role) bool {
 	return role == store.RoleDeployer || role == store.RoleReleaseAdmin || role == store.RolePlatformAdmin
 }
 
-func validateCancelInput(msg *orchestratorv1.CancelOperationRequest) error {
+func validateCancelInput(msg *orchestratorv1.CancelOperationRequest, idempotencyKey string) error {
 	if msg.OperationId == "" {
 		return cancelOperationError(connect.CodeInvalidArgument, "invalid_argument", errors.New("operation_id is required"))
 	}
 	if msg.ExpectedStateVersion < 1 {
 		return cancelOperationError(connect.CodeInvalidArgument, "invalid_argument", errors.New("expected_state_version must be >= 1"))
 	}
-	if msg.IdempotencyKey == "" {
-		return cancelOperationError(connect.CodeInvalidArgument, "invalid_argument", errors.New("idempotency_key is required"))
+	if idempotencyKey == "" {
+		return cancelOperationError(connect.CodeInvalidArgument, "invalid_argument", errors.New("Idempotency-Key header is required"))
 	}
-	if len(msg.IdempotencyKey) > 64 {
+	if len(idempotencyKey) > 64 {
 		return cancelOperationError(connect.CodeInvalidArgument, "invalid_argument", errors.New("idempotency key too large"))
 	}
 	if utf8.RuneCountInString(msg.Reason) > 500 {

@@ -207,12 +207,67 @@ message CancelOperationRequest {
   string operation_id = 1;
   string reason = 2;
   int64 expected_state_version = 3;
-  string idempotency_key = 4;
+  reserved 4;
+  reserved "idempotency_key";
 }
 
 message CancelOperationResponse {
   Operation operation = 1;
   string request_id = 2;
+}
+
+message WatchOperationRequest {
+  string operation_id = 1;
+  int64 after_sequence = 2;
+}
+
+message WatchOperationResponse {
+  oneof payload {
+    OperationSnapshot snapshot = 1;
+    TimelineEntry entry = 2;
+    Heartbeat heartbeat = 3;
+  }
+}
+
+message OperationSnapshot {
+  Operation operation = 1;
+  int64 snapshot_sequence = 2;
+  int64 retained_from_sequence = 3;
+}
+
+enum TimelineEntryKind {
+  TIMELINE_ENTRY_KIND_UNSPECIFIED = 0;
+  TIMELINE_ENTRY_KIND_STATE_TRANSITION = 1;
+  TIMELINE_ENTRY_KIND_ACK = 2;
+  TIMELINE_ENTRY_KIND_ROLLOUT_PROGRESS = 3;
+  TIMELINE_ENTRY_KIND_ERROR = 4;
+  TIMELINE_ENTRY_KIND_EMERGENCY_EFFECT_RESOLVED = 5;
+}
+
+message TimelineEntry {
+  string id = 1;
+  string operation_id = 2;
+  int64 sequence = 3;
+  int64 operation_state_version = 4;
+  google.protobuf.Timestamp timestamp = 5;
+  TimelineEntryKind kind = 6;
+  string request_id = 7;
+  string error_code = 8;
+  string error_message = 9;
+  string ack_stage = 10;
+  string from_state = 11;
+  string to_state = 12;
+  string workload_ref = 13;
+  int32 ready = 14;
+  int32 desired = 15;
+  string effect_from = 16;
+  string effect_to = 17;
+}
+
+message Heartbeat {
+  int64 latest_sequence = 1;
+  string request_id = 2;
+  google.protobuf.Timestamp sent_at = 3;
 }
 
 // ── Release Definition Management ────────────────────────────────
@@ -532,6 +587,7 @@ service OrchestratorService {
   rpc PublishRelease(PublishReleaseRequest) returns (PublishReleaseResponse);
   rpc RollbackRelease(RollbackReleaseRequest) returns (RollbackReleaseResponse);
   rpc GetOperation(GetOperationRequest) returns (GetOperationResponse);
+  rpc WatchOperation(WatchOperationRequest) returns (stream WatchOperationResponse);
   rpc CancelOperation(CancelOperationRequest) returns (CancelOperationResponse);
   rpc SubmitValuesRevision(SubmitValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
   rpc ApproveValuesRevision(ApproveValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
@@ -724,6 +780,13 @@ message EmergencyChangeResponse {
   google.protobuf.Timestamp accepted_at = 6;
 }
 
+enum EmergencyEffectStatus {
+  EMERGENCY_EFFECT_STATUS_UNSPECIFIED = 0;
+  EMERGENCY_EFFECT_STATUS_UNKNOWN = 1;
+  EMERGENCY_EFFECT_STATUS_APPLIED = 2;
+  EMERGENCY_EFFECT_STATUS_NOT_APPLIED = 3;
+}
+
 message EmergencyResult {
   EmergencyAction op_type = 1;
   EmergencyConvergence convergence_policy = 2;
@@ -732,6 +795,7 @@ message EmergencyResult {
   repeated ConvergenceTaskSummary convergence_tasks = 5;
   string revert_status = 6;
   string reconciled_by_operation_id = 7;
+  EmergencyEffectStatus effect_status = 8;
 }
 
 message EmergencyTypedValues {

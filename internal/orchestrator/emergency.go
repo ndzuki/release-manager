@@ -134,7 +134,7 @@ func (s *Service) EmergencyChange(
 	op := &store.Operation{
 		ID: opID, OperationType: store.OperationEmergency, Status: store.StatusPending,
 		ReleaseDefinitionID: definition.ID, IdempotencyKey: keyHash, RequestHash: requestHash,
-		Actor: store.ActorContext{UserID: actor.UserID, Organization: actor.OrganizationID},
+		Actor:     store.ActorContext{UserID: actor.UserID, Organization: actor.OrganizationID},
 		CreatedAt: now, UpdatedAt: now, Deadline: &deadline,
 	}
 	var convergenceTask *store.ConvergenceTask
@@ -147,7 +147,7 @@ func (s *Service) EmergencyChange(
 	}
 	created, err := s.store.EmergencyIntents().CreateIfAvailable(ctx, store.EmergencyCreateCommand{
 		Operation: op, Intent: intent, ConvergenceTask: convergenceTask,
-		IdempotencyScope: actor.OrganizationID + ":" + definition.ID,
+		IdempotencyScope:   actor.OrganizationID + ":" + definition.ID,
 		IdempotencyKeyHash: keyHash, RequestHash: requestHash, IdempotencyExpiresAt: now.Add(24 * time.Hour),
 	})
 	if err != nil {
@@ -204,7 +204,8 @@ func (s *Service) ExpireEmergencyOperations(ctx context.Context) int {
 			continue
 		}
 		finished, finishErr := s.store.EmergencyIntents().Finish(
-			ctx, intent.ID, operation.ID, operation.StateVersion, store.StatusTimeout, "operation_timeout", nil, nil,
+			ctx, intent.ID, operation.ID, operation.StateVersion, store.StatusTimeout,
+			store.EmergencyEffectUnknown, "operation_timeout", nil, nil,
 		)
 		if finishErr != nil {
 			if !errors.Is(finishErr, store.ErrOptimisticLock) && !errors.Is(finishErr, store.ErrInvalidState) {
@@ -278,6 +279,7 @@ func (s *Service) failEmergencyDelivery(
 			created.Operation.ID,
 			created.Operation.StateVersion,
 			store.StatusFailed,
+			store.EmergencyEffectNotApplied,
 			connectErrorReasonCode(deliveryErr),
 			nil,
 			nil,
