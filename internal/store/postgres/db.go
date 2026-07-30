@@ -109,6 +109,8 @@ type scanResultStore struct{ gorm *DB }
 type vulnerabilityExceptionStore struct{ gorm *DB }
 type candidateArtifactStore struct{ gorm *DB }
 type preflightLifecycleStore struct{ gorm *DB }
+type emergencyIntentStore struct{ gorm *DB }
+type convergenceTaskStore struct{ gorm *DB }
 
 // Store implements store.Store backed by PostgreSQL.
 type Store struct {
@@ -155,6 +157,45 @@ type Store struct {
 	rollouts          *rolloutTrackingReader
 	closeOnce         sync.Once
 	closeErr          error
+	sqlDB            *sql.DB
+	db               *DB
+	gormDB           *gorm.DB
+	ops              *operationStore
+	operationEvents  *operationEventStore
+	defs             *definitionStore
+	vals             *valuesStore
+	valuesApproval   *valuesApprovalStore
+	customers        *customerStore
+	clusters         *clusterStore
+	tokens           *enrollmentTokenStore
+	operators        *operatorStore
+	sessions         *sessionStore
+	outbox           *outboxStore
+	users            *userStore
+	authSess         *authSessionStore
+	orgs             *organizationStore
+	orgMembers       *organizationMemberStore
+	bindings         *bindingStore
+	audit            *auditEventStore
+	notif            *notificationStore
+	auditExports     *auditExportStore
+	bundles          *bundleStore
+	verifs           *verificationStore
+	routes           *clusterRouteStore
+	invs             *inventoryStore
+	invSyncReqs      *inventorySyncRequestStore
+	trustRoots       *trustRootStore
+	scanResults      *scanResultStore
+	vulnExceptions   *vulnerabilityExceptionStore
+	custEvents       *customerEventStore
+	defEvents        *definitionEventStore
+	preflight        *preflightStore
+	candidateArts    *candidateArtifactStore
+	preflightCycles  *preflightLifecycleStore
+	emergencyIntents *emergencyIntentStore
+	convergenceTasks *convergenceTaskStore
+	closeOnce        sync.Once
+	closeErr         error
 }
 
 // New constructs a Store over the supplied shared database/sql pool and GORM wrapper.
@@ -224,6 +265,8 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s.preflightCycles = &preflightLifecycleStore{gorm: s.db}
 	s.executionResults = &executionResultReader{s: s}
 	s.rollouts = &rolloutTrackingReader{s: s}
+	s.emergencyIntents = &emergencyIntentStore{gorm: s.db}
+	s.convergenceTasks = &convergenceTaskStore{gorm: s.db}
 	return s, nil
 }
 
@@ -242,6 +285,17 @@ var (
 	_ store.ArtifactEventSubmissionStore = (*artifactEventSubmissionStore)(nil)
 	_ store.PreflightLifecycleStore      = (*preflightLifecycleStore)(nil)
 	_ store.InventorySyncRequestStore    = (*inventorySyncRequestStore)(nil)
+	_ store.ValuesApprovalStore         = (*valuesApprovalStore)(nil)
+	_ store.ValuesApprovalReader        = (*valuesApprovalStore)(nil)
+	_ store.AuditExportStore            = (*auditExportStore)(nil)
+	_ store.TrustRootStore              = (*trustRootStore)(nil)
+	_ store.ScanResultStore             = (*scanResultStore)(nil)
+	_ store.VulnerabilityExceptionStore = (*vulnerabilityExceptionStore)(nil)
+	_ store.CandidateArtifactStore      = (*candidateArtifactStore)(nil)
+	_ store.PreflightLifecycleStore     = (*preflightLifecycleStore)(nil)
+	_ store.InventorySyncRequestStore   = (*inventorySyncRequestStore)(nil)
+	_ store.EmergencyIntentStore        = (*emergencyIntentStore)(nil)
+	_ store.ConvergenceTaskStore        = (*convergenceTaskStore)(nil)
 )
 
 func (s *Store) Operations() store.OperationStore           { return s.ops }
@@ -293,6 +347,9 @@ func (s *Store) ArtifactEventSubmissions() store.ArtifactEventSubmissionStore {
 	return s.eventSubmissions
 }
 func (s *Store) PreflightLifecycles() store.PreflightLifecycleStore { return s.preflightCycles }
+func (s *Store) PreflightLifecycles() store.PreflightLifecycleStore         { return s.preflightCycles }
+func (s *Store) EmergencyIntents() store.EmergencyIntentStore               { return s.emergencyIntents }
+func (s *Store) ConvergenceTasks() store.ConvergenceTaskStore               { return s.convergenceTasks }
 
 func (s *Store) Close() error {
 	if s == nil || s.sqlDB == nil {

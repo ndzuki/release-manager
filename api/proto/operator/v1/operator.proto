@@ -32,7 +32,9 @@ message CommandStreamRequest {
     Heartbeat heartbeat = 3;   // periodic liveness
     Result result = 4;         // command completion result
     ResyncResponse resync_response = 5;  // response to orchestrator resync request
-    CommandResult command_result = 6;  // typed terminal result for payload v2+
+    EmergencyAck emergency_ack = 6;
+    EmergencyResult emergency_result = 7;
+    CommandResult command_result = 8;  // typed terminal result for payload v2+
   }
 }
 
@@ -84,6 +86,20 @@ message Result {
   string result_json = 7;      // JSON-encoded result for duplicate detection
 }
 
+message EmergencyAck {
+  string emergency_command_id = 1;
+  AckType ack_type = 2;
+}
+
+message EmergencyResult {
+  string emergency_command_id = 1;
+  string operation_id = 2;
+  string status = 3;
+  string error_code = 4;
+  string message = 5;
+  string result_json = 6;
+}
+
 // CommandStreamResponse delivers session lifecycle responses.
 message CommandStreamResponse {
   oneof payload {
@@ -92,6 +108,7 @@ message CommandStreamResponse {
     ResyncRequest resync_request = 3;  // legacy gap recovery
     DuplicateResponse duplicate_response = 4;  // legacy duplicate result
     SessionEstablished session_established = 5;
+    EmergencyCommand emergency_command = 6;
   }
 }
 
@@ -120,6 +137,40 @@ message Command {
   }
 }
 
+message EmergencyCommand {
+  string command_id = 1;
+  string operation_id = 2;
+  string action = 3;
+  string workload_kind = 4;
+  string workload_name = 5;
+  string workload_namespace = 6;
+  string workload_uid = 7;
+  oneof change {
+    EmergencySetContainerImage set_container_image = 8;
+    EmergencySetReplicas set_replicas = 9;
+    EmergencySetApprovedAnnotations set_approved_annotations = 10;
+  }
+}
+
+message EmergencySetContainerImage {
+  string container = 1;
+  string image_reference = 2;
+}
+
+message EmergencySetReplicas {
+  int32 replicas = 1;
+}
+
+message EmergencySetApprovedAnnotations {
+  repeated EmergencyAnnotationEntry entries = 1;
+  string scope = 2;
+}
+
+message EmergencyAnnotationEntry {
+  string key = 1;
+  string value = 2;
+}
+
 // ResyncRequest asks the operator to report its last seen sequence for gap recovery.
 message ResyncRequest {
   int64 orchestrator_last_sequence = 1;  // the highest sequence known to orchestrator
@@ -142,6 +193,7 @@ message SessionEvent {
   string type = 1;            // "suspect", "offline", "replaced"
   string message = 2;
 }
+
 
 // OperatorService manages the bidirectional stream between orchestrator and operator agents.
 service OperatorService {

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -49,6 +50,72 @@ func (s *candidateArtifactStore) LinkToBundle(ctx context.Context, artifactID, b
 func (s *candidateArtifactStore) UpsertTx(tx *gorm.DB, candidate *store.CandidateArtifact) error {
 	if tx == nil {
 		return fmt.Errorf("upsert candidate artifact: nil transaction")
+	}
+	now := time.Now().UTC()
+	if candidate.ID == "" {
+		candidate.ID = uuid.NewString()
+	}
+	if candidate.CreatedAt.IsZero() {
+		candidate.CreatedAt = now
+	}
+	if candidate.LastSeenAt.IsZero() {
+		candidate.LastSeenAt = now
+	}
+
+	type candidateRow struct {
+		ID           string     `gorm:"column:id"`
+		ArtifactType string     `gorm:"column:artifact_type"`
+		Digest       string     `gorm:"column:digest"`
+		CreatedAt    time.Time  `gorm:"column:created_at"`
+		LastSeenAt   time.Time  `gorm:"column:last_seen_at"`
+		OrphanedAt   *time.Time `gorm:"column:orphaned_at"`
+		ValidatedAt  *time.Time `gorm:"column:validated_at"`
+		SourceID     string     `gorm:"column:source_id"`
+	}
+	row := candidateRow{
+		ID: candidate.ID, ArtifactType: string(candidate.ArtifactType), Digest: candidate.Digest,
+		CreatedAt: candidate.CreatedAt.UTC(), LastSeenAt: candidate.LastSeenAt.UTC(), OrphanedAt: candidate.OrphanedAt,
+		ValidatedAt: candidate.ValidatedAt, SourceID: candidate.SourceID,
+	}
+	if err := tx.Clauses(
+		clause.OnConflict{
+			Columns:   []clause.Column{{Name: "digest"}, {Name: "artifact_type"}},
+			DoUpdates: clause.Assignments(map[string]any{"last_seen_at": candidate.LastSeenAt.UTC(), "orphaned_at": nil}),
+		},
+		clause.Returning{},
+	).Table("candidate_artifacts").Create(&row).Error; err != nil {
+		return fmt.Errorf("upsert candidate artifact: %w", err)
+	}
+	candidate.ID = row.ID
+	candidate.CreatedAt = row.CreatedAt
+	candidate.LastSeenAt = row.LastSeenAt
+	candidate.OrphanedAt = row.OrphanedAt
+	return nil
+}
+
+func (s *candidateArtifactStore) Get(ctx context.Context, id string) (*store.CandidateArtifact, error) {
+	return scanCandidateArtifact(s.gorm.QueryRowContext(ctx, candidateArtifactSelect+` WHERE id = ?`, id))
+}
+
+func (s *candidateArtifactStore) ListValidated(ctx context.Context) ([]*store.CandidateArtifact, error) {
+	rows, err := s.gorm.QueryContext(ctx, candidateArtifactSelect+` WHERE validated_at IS NOT NULL ORDER BY validated_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list validated candidate artifacts: %w", err)
+	}
+	defer rows.Close()
+	artifacts := make([]*store.CandidateArtifact, 0)
+	for rows.Next() {
+		artifact, err := scanCandidateArtifact(rows)
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate candidate artifacts: %w", err)
+	}
+	return artifacts, nil
+}
 	}
 	now := time.Now().UTC()
 	if candidate.ID == "" {
@@ -165,4 +232,31 @@ func (s *candidateArtifactStore) DeleteOrphanBefore(ctx context.Context, cutoff 
 		return 0, fmt.Errorf("delete orphan candidate artifacts: %w", result.Error)
 	}
 	return result.RowsAffected, nil
+}
+
+const candidateArtifactSelect = `
+	SELECT id, artifact_type, ref, digest, bundle_id, created_at, validated_at, source_id
+	FROM candidate_artifacts`
+
+func scanCandidateArtifact(row interface{ Scan(...any) error }) (*store.CandidateArtifact, error) {
+	var artifact store.CandidateArtifact
+	var artifactType string
+	var bundleID sql.NullString
+	if err := row.Scan(&artifact.ID, &artifactType, &artifact.Ref, &artifact.Digest, &bundleID,
+		&artifact.CreatedAt, &artifact.ValidatedAt, &artifact.SourceID); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("scan candidate artifact: %w", err)
+	}
+	artifact.ArtifactType = store.ArtifactType(artifactType)
+	if bundleID.Valid {
+		artifact.BundleID = &bundleID.String
+	}
+	artifact.CreatedAt = artifact.CreatedAt.UTC()
+	if artifact.ValidatedAt != nil {
+		value := artifact.ValidatedAt.UTC()
+		artifact.ValidatedAt = &value
+	}
+	return &artifact, nil
 }

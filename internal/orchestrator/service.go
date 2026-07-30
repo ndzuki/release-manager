@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -30,33 +31,38 @@ import (
 
 // Service implements the OrchestratorServiceHandler Connect interface.
 type Service struct {
-	store        store.Store
-	verifier     trust.Verifier
-	targetEnv    string
-	coordinator  *preflight.Coordinator
-	vulnEval     *vulnerability.Evaluator
-	auditEmitter audit.Sink
-	logger       *slog.Logger
+	store               store.Store
+	verifier            trust.Verifier
+	targetEnv           string
+	coordinator         *preflight.Coordinator
+	vulnEval            *vulnerability.Evaluator
+	auditEmitter        audit.Sink
+	emergencyDispatcher emergencyDispatcher
+	logger              *slog.Logger
 }
 
 func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args ...any) *Service {
 	var auditEmitter audit.Sink
+	var dispatcher emergencyDispatcher
 	logger := slog.Default()
 	for _, arg := range args {
 		switch value := arg.(type) {
 		case audit.Sink:
 			auditEmitter = value
+		case emergencyDispatcher:
+			dispatcher = value
 		case *slog.Logger:
 			logger = value
 		}
 	}
 	return &Service{
-		store:        st,
-		verifier:     verifier,
-		targetEnv:    targetEnv,
-		coordinator:  preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.Values(), st.Bundles(), st.PreflightLifecycles(), st.Inventories(), logger),
-		auditEmitter: auditEmitter,
-		logger:       logger,
+		store:               st,
+		verifier:            verifier,
+		emergencyDispatcher: dispatcher,
+		targetEnv:           targetEnv,
+		coordinator:         preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.Values(), st.Bundles(), st.PreflightLifecycles(), st.Inventories(), logger),
+		auditEmitter:        auditEmitter,
+		logger:              logger,
 	}
 }
 
@@ -134,6 +140,18 @@ func (s *Service) CreateOperation(
 		if hasStandard {
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Errorf("release_busy: definition %s has an active standard operation", msg.ReleaseDefinitionId))
+		}
+	}
+	if opType.IsStandard() {
+		hasPendingPromotion, err := s.store.ConvergenceTasks().HasPendingPromotionForDefinition(ctx, msg.ReleaseDefinitionId)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("emergency convergence check: %w", err))
+		}
+		if hasPendingPromotion {
+			promotionErr := connect.NewError(connect.CodeFailedPrecondition, errors.New("promotion_required: emergency change must be promoted before standard release"))
+			promotionErr.Meta().Set("X-Reason-Code", "promotion_required")
+			promotionErr.Meta().Set("X-Remediation", "create and approve a ValuesRevision that absorbs the pending emergency change")
+			return nil, promotionErr
 		}
 	}
 	// AC-021-02: UPGRADE requires a positive expected revision and an approved values revision.
@@ -374,9 +392,101 @@ func (s *Service) GetOperation(
 	if err := s.authorizeReadOperation(ctx, op, actor); err != nil {
 		return nil, err
 	}
-	return connect.NewResponse(&orchestratorv1.GetOperationResponse{
-		Operation: toProtoOperation(op),
-	}), nil
+	response := &orchestratorv1.GetOperationResponse{Operation: toProtoOperation(op)}
+	if op.OperationType == store.OperationEmergency {
+		emergencyResult, resultErr := s.emergencyOperationResult(ctx, op)
+		if resultErr != nil {
+			return nil, resultErr
+		}
+		response.EmergencyResult = emergencyResult
+	}
+	return connect.NewResponse(response), nil
+}
+
+func (s *Service) emergencyOperationResult(ctx context.Context, op *store.Operation) (*orchestratorv1.EmergencyResult, error) {
+	intent, err := s.store.EmergencyIntents().GetByOperationID(ctx, op.ID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("load emergency operation result: %w", err))
+	}
+	result := &orchestratorv1.EmergencyResult{
+		OpType:            emergencyActionToProto(intent.Action),
+		ConvergencePolicy: emergencyConvergenceToProto(intent.Convergence),
+	}
+	result.Before, err = emergencyTypedValues(intent.Action, intent.BeforeSnapshot)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("decode emergency before snapshot: %w", err))
+	}
+	result.After, err = emergencyTypedValues(intent.Action, intent.AfterSnapshot)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("decode emergency after snapshot: %w", err))
+	}
+	if intent.Convergence == store.EmergencyRequirePromotion {
+		task, taskErr := s.store.ConvergenceTasks().GetByOperationID(ctx, op.ID)
+		if taskErr != nil && !errors.Is(taskErr, store.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("load emergency convergence task: %w", taskErr))
+		}
+		if task != nil {
+			result.ConvergenceTasks = []*orchestratorv1.ConvergenceTaskSummary{{TaskId: task.ID, Status: task.Status}}
+		}
+	} else {
+		result.RevertStatus = "awaiting_standard_release"
+	}
+	return result, nil
+}
+
+func emergencyTypedValues(action store.EmergencyAction, snapshot json.RawMessage) (*orchestratorv1.EmergencyTypedValues, error) {
+	if len(snapshot) == 0 {
+		return nil, nil
+	}
+	switch action {
+	case store.EmergencySetContainerImage:
+		var value struct {
+			Container      string `json:"container"`
+			ImageReference string `json:"image_reference"`
+		}
+		if err := json.Unmarshal(snapshot, &value); err != nil {
+			return nil, err
+		}
+		return &orchestratorv1.EmergencyTypedValues{Values: &orchestratorv1.EmergencyTypedValues_ImageRefValues{
+			ImageRefValues: &orchestratorv1.ImageRefValues{Container: value.Container, ImageReference: value.ImageReference},
+		}}, nil
+	case store.EmergencySetReplicas:
+		var value struct {
+			Replicas int32 `json:"replicas"`
+		}
+		if err := json.Unmarshal(snapshot, &value); err != nil {
+			return nil, err
+		}
+		return &orchestratorv1.EmergencyTypedValues{Values: &orchestratorv1.EmergencyTypedValues_ReplicasValues{
+			ReplicasValues: &orchestratorv1.ReplicasValues{Replicas: value.Replicas},
+		}}, nil
+	case store.EmergencySetApprovedAnnotations:
+		var value struct {
+			Annotations []struct {
+				Key   string `json:"key"`
+				Value string `json:"value"`
+			} `json:"annotations"`
+		}
+		if err := json.Unmarshal(snapshot, &value); err != nil {
+			return nil, err
+		}
+		entries := make([]*orchestratorv1.AnnotationEntry, 0, len(value.Annotations))
+		for _, annotation := range value.Annotations {
+			entries = append(entries, &orchestratorv1.AnnotationEntry{Key: annotation.Key, Value: annotation.Value})
+		}
+		return &orchestratorv1.EmergencyTypedValues{Values: &orchestratorv1.EmergencyTypedValues_AnnotationValues{
+			AnnotationValues: &orchestratorv1.AnnotationValues{Annotations: entries},
+		}}, nil
+	default:
+		return nil, nil
+	}
+}
+
+func emergencyConvergenceToProto(value store.EmergencyConvergence) orchestratorv1.EmergencyConvergence {
+	if value == store.EmergencyRevertOnNextReconcile {
+		return orchestratorv1.EmergencyConvergence_EMERGENCY_CONVERGENCE_REVERT_ON_NEXT_RECONCILE
+	}
+	return orchestratorv1.EmergencyConvergence_EMERGENCY_CONVERGENCE_REQUIRE_PROMOTION
 }
 
 // CancelOperation requests cancellation of a non-terminal operation.
