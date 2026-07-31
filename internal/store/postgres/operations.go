@@ -198,6 +198,12 @@ func (s *operationStore) Cancel(ctx context.Context, command store.OperationCanc
 	if current.Status.IsTerminal() {
 		return nil, store.ErrInvalidState
 	}
+	if !current.Status.CanTransitionTo(command.TargetStatus) {
+		return nil, store.ErrInvalidState
+	}
+	if current.OperationType == store.OperationEmergency && current.Status == store.StatusRunning {
+		return nil, store.ErrInvalidState
+	}
 
 	now := nowUTC()
 	terminal := command.TargetStatus.IsTerminal()
@@ -242,6 +248,37 @@ func (s *operationStore) Cancel(ctx context.Context, command store.OperationCanc
 		CreatedAt:     updated.UpdatedAt,
 	}
 	if err := insertOperationEvent(ctx, tx, event); err != nil {
+		return nil, err
+	}
+	if current.OperationType == store.OperationEmergency && terminal {
+		effectStatus := store.EmergencyEffectUnknown
+		if command.DeliveryStatus == store.DeliveryUndelivered {
+			effectStatus = store.EmergencyEffectNotApplied
+		}
+		effectResult, err := tx.ExecContext(ctx, `
+			UPDATE emergency_intents SET effect_status = ?, updated_at = ? WHERE operation_id = ?
+		`, string(effectStatus), now, command.OperationID)
+		if err != nil {
+			return nil, fmt.Errorf("set cancelled emergency effect: %w", err)
+		}
+		effectRows, rowsErr := effectResult.RowsAffected()
+		if rowsErr != nil {
+			return nil, fmt.Errorf("cancelled emergency effect rows: %w", rowsErr)
+		}
+		if effectRows != 1 {
+			return nil, store.ErrNotFound
+		}
+	}
+	timelineData, err := json.Marshal(store.StateTransitionTimelineData{
+		RequestID: command.RequestID, FromState: string(current.Status), ToState: string(updated.Status),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode cancel timeline: %w", err)
+	}
+	if _, err := appendTimelineEntry(ctx, tx, &store.OperationTimelineEntry{
+		OperationID: updated.ID, OperationStateVersion: updated.StateVersion,
+		Kind: string(store.TimelineEntryStateTransition), Data: timelineData, CreatedAt: updated.UpdatedAt,
+	}); err != nil {
 		return nil, err
 	}
 	if terminal {
@@ -417,6 +454,18 @@ func (s *operationStore) transition(
 		`, now, id); err != nil {
 			return nil, fmt.Errorf("set preflight operation terminal: %w", err)
 		}
+	}
+	timelineData, err := json.Marshal(store.StateTransitionTimelineData{
+		FromState: string(current.Status), ToState: string(updated.Status), ErrorCode: lastError,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode operation transition timeline: %w", err)
+	}
+	if _, err := appendTimelineEntry(ctx, tx, &store.OperationTimelineEntry{
+		OperationID: updated.ID, OperationStateVersion: updated.StateVersion,
+		Kind: string(store.TimelineEntryStateTransition), Data: timelineData, CreatedAt: updated.UpdatedAt,
+	}); err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit operation transition: %w", err)

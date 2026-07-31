@@ -29,10 +29,10 @@ import (
 )
 
 type orchSvc struct {
-	cfg         config.ServiceConfig
-	targetEnv   string
-	signingKey  string
-	configPath  string
+	cfg        config.ServiceConfig
+	targetEnv  string
+	signingKey string
+	configPath string
 
 	store        store.Store
 	cleanup      *orchestrator.CleanupService
@@ -46,7 +46,6 @@ type orchSvc struct {
 func (s *orchSvc) Name() string { return "release-orchestrator" }
 
 func (s *orchSvc) Configure(cfg *config.ServiceConfig) { s.cfg = *cfg }
-
 
 func (s *orchSvc) Shutdown(ctx context.Context) error {
 	if emitter, ok := s.auditEmitter.(interface{ Shutdown(context.Context) error }); ok {
@@ -117,6 +116,7 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		connect.WithInterceptors(
 			app.MaintenanceInterceptor(s.cfg.Maintenance, orchestratorReadOnlyProcedures(), logger),
 			auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, map[string]bool{}, logger),
+			auth.NewAuthStreamInterceptor(jwtMgr, s.store, enforcer, map[string]bool{}, logger),
 		),
 	)
 	mux.Handle(path, handler)

@@ -551,10 +551,6 @@ func (s *Service) finishEmergencyResult(ctx context.Context, result *operatorv1.
 		s.logger.Warn("failed to load emergency operation result", "operation_id", intent.OperationID, "error", err)
 		return
 	}
-	if op.Status.IsTerminal() {
-		s.logger.Info("emergency operation already terminal", "operation_id", op.ID, "status", op.Status)
-		return
-	}
 	var snapshots struct {
 		Before json.RawMessage `json:"before"`
 		After  json.RawMessage `json:"after"`
@@ -563,6 +559,24 @@ func (s *Service) finishEmergencyResult(ctx context.Context, result *operatorv1.
 		if err := json.Unmarshal([]byte(result.GetResultJson()), &snapshots); err != nil {
 			s.logger.Warn("failed to decode emergency snapshots", "command_id", result.GetEmergencyCommandId(), "error", err)
 		}
+	}
+	if op.Status.IsTerminal() {
+		effectStatus := store.EmergencyEffectApplied
+		if result.GetStatus() == "failed" {
+			effectStatus = store.EmergencyEffectNotApplied
+		}
+		resolved, resolveErr := s.store.EmergencyIntents().ResolveEmergencyEffect(ctx, store.ResolveEmergencyEffectCommand{
+			OperationID: op.ID, ExpectedStateVersion: op.StateVersion, EffectStatus: effectStatus,
+			BeforeSnapshot: snapshots.Before, AfterSnapshot: snapshots.After, RequestID: result.GetEmergencyCommandId(),
+		})
+		if resolveErr != nil {
+			s.logger.Warn("failed to resolve late emergency effect", "operation_id", op.ID, "error", resolveErr)
+			return
+		}
+		if resolved.Resolved {
+			s.logger.Info("resolved late emergency effect", "operation_id", op.ID, "effect_status", effectStatus)
+		}
+		return
 	}
 	status := store.StatusSucceeded
 	lastError := ""
@@ -573,12 +587,17 @@ func (s *Service) finishEmergencyResult(ctx context.Context, result *operatorv1.
 			lastError = result.GetMessage()
 		}
 	}
+	effectStatus := store.EmergencyEffectApplied
+	if status == store.StatusFailed {
+		effectStatus = store.EmergencyEffectNotApplied
+	}
 	finished, err := s.store.EmergencyIntents().Finish(
 		ctx,
 		intent.ID,
 		op.ID,
 		op.StateVersion,
 		status,
+		effectStatus,
 		lastError,
 		snapshots.Before,
 		snapshots.After,

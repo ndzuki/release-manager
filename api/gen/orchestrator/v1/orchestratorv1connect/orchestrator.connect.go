@@ -58,6 +58,9 @@ const (
 	// OrchestratorServiceGetOperationProcedure is the fully-qualified name of the OrchestratorService's
 	// GetOperation RPC.
 	OrchestratorServiceGetOperationProcedure = "/orchestrator.v1.OrchestratorService/GetOperation"
+	// OrchestratorServiceWatchOperationProcedure is the fully-qualified name of the
+	// OrchestratorService's WatchOperation RPC.
+	OrchestratorServiceWatchOperationProcedure = "/orchestrator.v1.OrchestratorService/WatchOperation"
 	// OrchestratorServiceCancelOperationProcedure is the fully-qualified name of the
 	// OrchestratorService's CancelOperation RPC.
 	OrchestratorServiceCancelOperationProcedure = "/orchestrator.v1.OrchestratorService/CancelOperation"
@@ -307,6 +310,7 @@ type OrchestratorServiceClient interface {
 	PublishRelease(context.Context, *connect.Request[v1.PublishReleaseRequest]) (*connect.Response[v1.PublishReleaseResponse], error)
 	RollbackRelease(context.Context, *connect.Request[v1.RollbackReleaseRequest]) (*connect.Response[v1.RollbackReleaseResponse], error)
 	GetOperation(context.Context, *connect.Request[v1.GetOperationRequest]) (*connect.Response[v1.GetOperationResponse], error)
+	WatchOperation(context.Context, *connect.Request[v1.WatchOperationRequest]) (*connect.ServerStreamForClient[v1.WatchOperationResponse], error)
 	CancelOperation(context.Context, *connect.Request[v1.CancelOperationRequest]) (*connect.Response[v1.CancelOperationResponse], error)
 	SubmitValuesRevision(context.Context, *connect.Request[v1.SubmitValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
 	ApproveValuesRevision(context.Context, *connect.Request[v1.ApproveValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
@@ -373,6 +377,12 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			httpClient,
 			baseURL+OrchestratorServiceGetOperationProcedure,
 			connect.WithSchema(orchestratorServiceMethods.ByName("GetOperation")),
+			connect.WithClientOptions(opts...),
+		),
+		watchOperation: connect.NewClient[v1.WatchOperationRequest, v1.WatchOperationResponse](
+			httpClient,
+			baseURL+OrchestratorServiceWatchOperationProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("WatchOperation")),
 			connect.WithClientOptions(opts...),
 		),
 		cancelOperation: connect.NewClient[v1.CancelOperationRequest, v1.CancelOperationResponse](
@@ -570,6 +580,7 @@ type orchestratorServiceClient struct {
 	publishRelease           *connect.Client[v1.PublishReleaseRequest, v1.PublishReleaseResponse]
 	rollbackRelease          *connect.Client[v1.RollbackReleaseRequest, v1.RollbackReleaseResponse]
 	getOperation             *connect.Client[v1.GetOperationRequest, v1.GetOperationResponse]
+	watchOperation           *connect.Client[v1.WatchOperationRequest, v1.WatchOperationResponse]
 	cancelOperation          *connect.Client[v1.CancelOperationRequest, v1.CancelOperationResponse]
 	submitValuesRevision     *connect.Client[v1.SubmitValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
 	approveValuesRevision    *connect.Client[v1.ApproveValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
@@ -621,6 +632,11 @@ func (c *orchestratorServiceClient) RollbackRelease(ctx context.Context, req *co
 // GetOperation calls orchestrator.v1.OrchestratorService.GetOperation.
 func (c *orchestratorServiceClient) GetOperation(ctx context.Context, req *connect.Request[v1.GetOperationRequest]) (*connect.Response[v1.GetOperationResponse], error) {
 	return c.getOperation.CallUnary(ctx, req)
+}
+
+// WatchOperation calls orchestrator.v1.OrchestratorService.WatchOperation.
+func (c *orchestratorServiceClient) WatchOperation(ctx context.Context, req *connect.Request[v1.WatchOperationRequest]) (*connect.ServerStreamForClient[v1.WatchOperationResponse], error) {
+	return c.watchOperation.CallServerStream(ctx, req)
 }
 
 // CancelOperation calls orchestrator.v1.OrchestratorService.CancelOperation.
@@ -785,6 +801,7 @@ type OrchestratorServiceHandler interface {
 	PublishRelease(context.Context, *connect.Request[v1.PublishReleaseRequest]) (*connect.Response[v1.PublishReleaseResponse], error)
 	RollbackRelease(context.Context, *connect.Request[v1.RollbackReleaseRequest]) (*connect.Response[v1.RollbackReleaseResponse], error)
 	GetOperation(context.Context, *connect.Request[v1.GetOperationRequest]) (*connect.Response[v1.GetOperationResponse], error)
+	WatchOperation(context.Context, *connect.Request[v1.WatchOperationRequest], *connect.ServerStream[v1.WatchOperationResponse]) error
 	CancelOperation(context.Context, *connect.Request[v1.CancelOperationRequest]) (*connect.Response[v1.CancelOperationResponse], error)
 	SubmitValuesRevision(context.Context, *connect.Request[v1.SubmitValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
 	ApproveValuesRevision(context.Context, *connect.Request[v1.ApproveValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
@@ -847,6 +864,12 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		OrchestratorServiceGetOperationProcedure,
 		svc.GetOperation,
 		connect.WithSchema(orchestratorServiceMethods.ByName("GetOperation")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceWatchOperationHandler := connect.NewServerStreamHandler(
+		OrchestratorServiceWatchOperationProcedure,
+		svc.WatchOperation,
+		connect.WithSchema(orchestratorServiceMethods.ByName("WatchOperation")),
 		connect.WithHandlerOptions(opts...),
 	)
 	orchestratorServiceCancelOperationHandler := connect.NewUnaryHandler(
@@ -1045,6 +1068,8 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceRollbackReleaseHandler.ServeHTTP(w, r)
 		case OrchestratorServiceGetOperationProcedure:
 			orchestratorServiceGetOperationHandler.ServeHTTP(w, r)
+		case OrchestratorServiceWatchOperationProcedure:
+			orchestratorServiceWatchOperationHandler.ServeHTTP(w, r)
 		case OrchestratorServiceCancelOperationProcedure:
 			orchestratorServiceCancelOperationHandler.ServeHTTP(w, r)
 		case OrchestratorServiceSubmitValuesRevisionProcedure:
@@ -1130,6 +1155,10 @@ func (UnimplementedOrchestratorServiceHandler) RollbackRelease(context.Context, 
 
 func (UnimplementedOrchestratorServiceHandler) GetOperation(context.Context, *connect.Request[v1.GetOperationRequest]) (*connect.Response[v1.GetOperationResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.GetOperation is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) WatchOperation(context.Context, *connect.Request[v1.WatchOperationRequest], *connect.ServerStream[v1.WatchOperationResponse]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.WatchOperation is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) CancelOperation(context.Context, *connect.Request[v1.CancelOperationRequest]) (*connect.Response[v1.CancelOperationResponse], error) {

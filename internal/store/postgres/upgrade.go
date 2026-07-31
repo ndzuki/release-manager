@@ -3,7 +3,9 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -40,6 +42,10 @@ func (s *Store) FinalizeUpgrade(ctx context.Context, input *store.UpgradeTermina
 	}
 	if exists {
 		return nil
+	}
+	current, err := getOperation(ctx, tx, input.OperationID)
+	if err != nil {
+		return err
 	}
 
 	if _, err := tx.ExecContext(ctx, `
@@ -109,6 +115,19 @@ func (s *Store) FinalizeUpgrade(ctx context.Context, input *store.UpgradeTermina
 		return err
 	}
 
+	now := time.Now().UTC()
+	timelineData, err := json.Marshal(store.StateTransitionTimelineData{
+		FromState: string(current.Status), ToState: string(input.Status), ErrorCode: input.LastError,
+	})
+	if err != nil {
+		return fmt.Errorf("encode upgrade timeline: %w", err)
+	}
+	if _, err := appendTimelineEntry(ctx, tx, &store.OperationTimelineEntry{
+		OperationID: input.OperationID, OperationStateVersion: input.ExpectedStateVersion + 1,
+		Kind: string(store.TimelineEntryStateTransition), Data: timelineData, CreatedAt: now,
+	}); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit upgrade terminal transaction: %w", err)
 	}

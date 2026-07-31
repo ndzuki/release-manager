@@ -18,6 +18,7 @@ type Store struct {
 	db               *sql.DB
 	ops              *operationStore
 	operationEvents  *operationEventStore
+	timeline         *timelineStore
 	defs             *definitionStore
 	vals             *valuesStore
 	valuesApproval   *valuesApprovalStore
@@ -85,6 +86,7 @@ func Open(dsn string) (*Store, error) {
 	s := &Store{db: db}
 	s.ops = &operationStore{db: db}
 	s.operationEvents = &operationEventStore{db: db}
+	s.timeline = &timelineStore{db: db}
 	s.defs = &definitionStore{db: db}
 	s.defEvents = &definitionEventStore{db: db}
 	s.preflight = &preflightStore{db: db}
@@ -128,6 +130,9 @@ func (s *Store) Operations() store.OperationStore { return s.ops }
 
 // OperationEvents returns the operation state event store.
 func (s *Store) OperationEvents() store.OperationEventStore { return s.operationEvents }
+
+// Timeline returns the ordered Operation timeline store.
+func (s *Store) Timeline() store.TimelineStore { return s.timeline }
 
 // ExecutionResults returns typed operation result records.
 func (s *Store) ExecutionResults() store.OperationExecutionResultStore { return s.executionResults }
@@ -748,6 +753,17 @@ var migrationStatements = []string{
 		created_at            TEXT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_operation_events_operation ON operation_events(operation_id)`,
+	`CREATE TABLE IF NOT EXISTS operation_timeline (
+		id            TEXT PRIMARY KEY,
+		operation_id  TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+		sequence      INTEGER NOT NULL,
+		entry_type    TEXT NOT NULL,
+		state_version INTEGER NOT NULL,
+		data          BLOB NOT NULL DEFAULT '{}',
+		created_at    TEXT NOT NULL,
+		UNIQUE(operation_id, sequence)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_operation_timeline_operation ON operation_timeline(operation_id, sequence)`,
 
 	// Cluster artifact routing (REQ-014)
 	`CREATE TABLE IF NOT EXISTS cluster_routes (
@@ -937,14 +953,17 @@ var migrationStatements = []string{
 		before_snapshot       BLOB,
 		after_snapshot        BLOB,
 		delivery_status       TEXT NOT NULL DEFAULT 'pending' CHECK (delivery_status IN ('pending','queued','delivered','persisted')),
+		effect_status         TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK (effect_status IN ('UNKNOWN','APPLIED','NOT_APPLIED')),
 		last_delivery_at      TEXT,
 		created_at            TEXT NOT NULL,
 		updated_at            TEXT NOT NULL
 	)`,
+	`ALTER TABLE emergency_intents ADD COLUMN effect_status TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK (effect_status IN ('UNKNOWN','APPLIED','NOT_APPLIED'))`,
 	`CREATE INDEX IF NOT EXISTS idx_ei_operation ON emergency_intents(operation_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_ei_command ON emergency_intents(command_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_ei_definition ON emergency_intents(release_definition_id, created_at DESC)`,
-	`CREATE INDEX IF NOT EXISTS idx_ei_active_locks ON emergency_intents(release_definition_id, workload_kind, workload_name) WHERE delivery_status != 'persisted'`,
+	`DROP INDEX IF EXISTS idx_ei_active_locks`,
+	`CREATE INDEX IF NOT EXISTS idx_ei_active_locks ON emergency_intents(release_definition_id, workload_kind, workload_name) WHERE effect_status = 'UNKNOWN'`,
 	`CREATE TABLE IF NOT EXISTS convergence_tasks (
 		id                     TEXT PRIMARY KEY,
 		operation_id           TEXT NOT NULL UNIQUE REFERENCES operations(id) ON DELETE RESTRICT,

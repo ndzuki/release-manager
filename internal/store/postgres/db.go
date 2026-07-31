@@ -111,6 +111,7 @@ type candidateArtifactStore struct{ gorm *DB }
 type preflightLifecycleStore struct{ gorm *DB }
 type emergencyIntentStore struct{ gorm *DB }
 type convergenceTaskStore struct{ gorm *DB }
+type timelineStore struct{ gorm *DB }
 
 // Store implements store.Store backed by PostgreSQL.
 type Store struct {
@@ -119,6 +120,7 @@ type Store struct {
 	gormDB            *gorm.DB
 	ops               *operationStore
 	operationEvents   *operationEventStore
+	timeline          *timelineStore
 	defs              *definitionStore
 	vals              *valuesStore
 	valuesApproval    *valuesApprovalStore
@@ -188,6 +190,7 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s := &Store{sqlDB: sqlDB, db: &DB{gorm: gormDB}, gormDB: gormDB}
 	s.ops = &operationStore{gorm: s.db}
 	s.operationEvents = &operationEventStore{gorm: s.db}
+	s.timeline = &timelineStore{gorm: s.db}
 	s.defs = &definitionStore{gorm: s.db}
 	s.defEvents = &definitionEventStore{gorm: s.db}
 	s.preflight = &preflightStore{gorm: s.db}
@@ -258,11 +261,13 @@ var (
 	_ store.PreflightLifecycleStore     = (*preflightLifecycleStore)(nil)
 	_ store.InventorySyncRequestStore   = (*inventorySyncRequestStore)(nil)
 	_ store.EmergencyIntentStore        = (*emergencyIntentStore)(nil)
+	_ store.TimelineStore               = (*timelineStore)(nil)
 	_ store.ConvergenceTaskStore        = (*convergenceTaskStore)(nil)
 )
 
 func (s *Store) Operations() store.OperationStore           { return s.ops }
 func (s *Store) OperationEvents() store.OperationEventStore { return s.operationEvents }
+func (s *Store) Timeline() store.TimelineStore               { return s.timeline }
 
 // ExecutionResults returns typed operation result records.
 func (s *Store) ExecutionResults() store.OperationExecutionResultStore { return s.executionResults }
