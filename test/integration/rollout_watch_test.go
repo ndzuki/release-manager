@@ -699,6 +699,42 @@ func updateJobStatus(
 	})
 }
 
+func updateStatefulSetStatus(
+	t *testing.T,
+	client kubernetes.Interface,
+	namespace, name string,
+	mutate func(*appsv1.StatefulSet),
+) error {
+	t.Helper()
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		statefulSet, err := client.AppsV1().StatefulSets(namespace).Get(t.Context(), name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		mutate(statefulSet)
+		_, err = client.AppsV1().StatefulSets(namespace).UpdateStatus(t.Context(), statefulSet, metav1.UpdateOptions{})
+		return err
+	})
+}
+
+func updateDaemonSetStatus(
+	t *testing.T,
+	client kubernetes.Interface,
+	namespace, name string,
+	mutate func(*appsv1.DaemonSet),
+) error {
+	t.Helper()
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		daemonSet, err := client.AppsV1().DaemonSets(namespace).Get(t.Context(), name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		mutate(daemonSet)
+		_, err = client.AppsV1().DaemonSets(namespace).UpdateStatus(t.Context(), daemonSet, metav1.UpdateOptions{})
+		return err
+	})
+}
+
 func assertRolloutLast(t *testing.T, result observer.WatchResult, err error) {
 	t.Helper()
 	var rolloutErr *observer.RolloutError
@@ -753,36 +789,54 @@ func testLabels(testID, workload string) map[string]string {
 // ─── Test Matrix ───────────────────────────────────────────────────────────
 
 func TestRolloutWatchReadyWorkloads(t *testing.T) {
-	fx := setupRolloutFixture(t, t.Name())
-	obs := observer.New(fx.observerClient(t))
-
-	deployment := fx.createDeployment(t, "deployment")
-	statefulSet := fx.createStatefulSet(t, "statefulset")
-	daemonSet := fx.createDaemonSet(t, "daemonset")
-	job := fx.createJob(t, "job")
-
-	readyTests := []struct {
-		name string
-		ref  observer.ResourceRef
-		gen  int64
+	tests := []struct {
+		name   string
+		create func(*rolloutFixture, *testing.T) (observer.ResourceRef, int64)
 	}{
-		{name: "deployment", ref: fx.deploymentRef(deployment.Name), gen: deployment.Generation},
-		{name: "statefulset", ref: fx.statefulSetRef(statefulSet.Name), gen: statefulSet.Generation},
-		{name: "daemonset", ref: fx.daemonSetRef(daemonSet.Name), gen: daemonSet.Generation},
-		{name: "job", ref: fx.jobRef(job.Name), gen: 0},
+		{
+			name: "deployment",
+			create: func(fx *rolloutFixture, t *testing.T) (observer.ResourceRef, int64) {
+				deployment := fx.createDeployment(t, "deployment")
+				return fx.deploymentRef(deployment.Name), deployment.Generation
+			},
+		},
+		{
+			name: "statefulset",
+			create: func(fx *rolloutFixture, t *testing.T) (observer.ResourceRef, int64) {
+				statefulSet := fx.createStatefulSet(t, "statefulset")
+				return fx.statefulSetRef(statefulSet.Name), statefulSet.Generation
+			},
+		},
+		{
+			name: "daemonset",
+			create: func(fx *rolloutFixture, t *testing.T) (observer.ResourceRef, int64) {
+				daemonSet := fx.createDaemonSet(t, "daemonset")
+				return fx.daemonSetRef(daemonSet.Name), daemonSet.Generation
+			},
+		},
+		{
+			name: "job",
+			create: func(fx *rolloutFixture, t *testing.T) (observer.ResourceRef, int64) {
+				job := fx.createJob(t, "job")
+				return fx.jobRef(job.Name), 0
+			},
+		},
 	}
-	for _, test := range readyTests {
+	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result, err := obs.Observe(t.Context(), test.ref, test.gen, defaultSceneTimeout)
+			fx := setupRolloutFixture(t, t.Name())
+			ref, generation := test.create(fx, t)
+
+			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), ref, generation, defaultSceneTimeout)
+
 			require.NoError(t, err)
 			assert.True(t, result.Ready)
 			assert.False(t, result.Failed)
 			assert.NotEmpty(t, result.ResourceUID)
 			assert.NotEmpty(t, result.ResourceVersion)
+			fx.assertClean(t)
 		})
 	}
-
-	fx.assertClean(t)
 }
 
 func TestRolloutWatchAppsObservedGenerationGate(t *testing.T) {
@@ -810,54 +864,54 @@ func TestRolloutWatchAppsObservedGenerationGate(t *testing.T) {
 	fx.assertClean(t)
 }
 func TestRolloutWatchValidatesBeforeAPI(t *testing.T) {
-	fx := setupRolloutFixture(t, t.Name())
-	client := fx.observerClient(t)
-	obs := observer.New(client)
-	unsupported := observer.ResourceRef{
-		GVR:       schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"},
-		Namespace: fx.namespace,
-		Name:      "widget",
-	}
 	tests := []struct {
 		name       string
-		ref        observer.ResourceRef
+		ref        func(*rolloutFixture) observer.ResourceRef
 		generation int64
 		timeout    time.Duration
 		wantCode   observer.ErrorCode
 	}{
-		{name: "empty namespace", ref: observer.ResourceRef{GVR: observer.DeploymentGVR, Name: "deployment"}, generation: 1, timeout: time.Second, wantCode: observer.ErrorCodeInvalidArgument},
-		{name: "empty name", ref: observer.ResourceRef{GVR: observer.DeploymentGVR, Namespace: fx.namespace}, generation: 1, timeout: time.Second, wantCode: observer.ErrorCodeInvalidArgument},
-		{name: "invalid apps generation", ref: fx.deploymentRef("deployment"), generation: 0, timeout: time.Second, wantCode: observer.ErrorCodeInvalidArgument},
-		{name: "invalid job generation", ref: fx.jobRef("job"), generation: 1, timeout: time.Second, wantCode: observer.ErrorCodeInvalidArgument},
-		{name: "invalid timeout", ref: fx.deploymentRef("deployment"), generation: 1, timeout: 0, wantCode: observer.ErrorCodeInvalidArgument},
-		{name: "unsupported resource", ref: unsupported, generation: 0, timeout: time.Second, wantCode: observer.ErrorCodeUnsupportedResource},
+		{name: "empty namespace", ref: func(*rolloutFixture) observer.ResourceRef {
+			return observer.ResourceRef{GVR: observer.DeploymentGVR, Name: "deployment"}
+		}, generation: 1, timeout: time.Second, wantCode: observer.ErrorCodeInvalidArgument},
+		{name: "empty name", ref: func(fx *rolloutFixture) observer.ResourceRef {
+			return observer.ResourceRef{GVR: observer.DeploymentGVR, Namespace: fx.namespace}
+		}, generation: 1, timeout: time.Second, wantCode: observer.ErrorCodeInvalidArgument},
+		{name: "invalid apps generation", ref: func(fx *rolloutFixture) observer.ResourceRef { return fx.deploymentRef("deployment") }, generation: 0, timeout: time.Second, wantCode: observer.ErrorCodeInvalidArgument},
+		{name: "invalid job generation", ref: func(fx *rolloutFixture) observer.ResourceRef { return fx.jobRef("job") }, generation: 1, timeout: time.Second, wantCode: observer.ErrorCodeInvalidArgument},
+		{name: "invalid timeout", ref: func(fx *rolloutFixture) observer.ResourceRef { return fx.deploymentRef("deployment") }, generation: 1, timeout: 0, wantCode: observer.ErrorCodeInvalidArgument},
+		{name: "unsupported resource", ref: func(fx *rolloutFixture) observer.ResourceRef {
+			return observer.ResourceRef{GVR: schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}, Namespace: fx.namespace, Name: "widget"}
+		}, generation: 0, timeout: time.Second, wantCode: observer.ErrorCodeUnsupportedResource},
 	}
-	for _, test := range tests {
+	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			fx := setupRolloutFixture(t, fmt.Sprintf("validate-%02d-%s", index, test.name))
+			ref := test.ref(fx)
 			beforeLists := fx.transport.listCalls.Load()
 			beforeWatches := fx.transport.watchCalls.Load()
-			result, err := obs.Observe(t.Context(), test.ref, test.generation, test.timeout)
+
+			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), ref, test.generation, test.timeout)
+
 			require.Error(t, err)
 			assert.Equal(t, test.wantCode, observerCode(t, err))
-			assert.Equal(t, test.ref, result.Resource)
+			assert.Equal(t, ref, result.Resource)
 			assertRolloutLast(t, result, err)
 			assert.Equal(t, beforeLists, fx.transport.listCalls.Load())
 			assert.Equal(t, beforeWatches, fx.transport.watchCalls.Load())
+			fx.assertClean(t)
 		})
 	}
-	fx.assertClean(t)
 }
 
 func TestRolloutWatchWorkloadFailures(t *testing.T) {
-	fx := setupRolloutFixture(t, t.Name())
-	obs := observer.New(fx.observerClient(t))
-
 	t.Run("deployment terminal failure", func(t *testing.T) {
+		fx := setupRolloutFixture(t, t.Name())
 		deployment := fx.createDeployment(t, "deployment-failed")
 		resultCh := make(chan observer.WatchResult, 1)
 		errCh := make(chan error, 1)
 		go func() {
-			result, err := obs.Observe(t.Context(), fx.deploymentRef(deployment.Name), deployment.Generation+1, defaultSceneTimeout)
+			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), fx.deploymentRef(deployment.Name), deployment.Generation+1, defaultSceneTimeout)
 			resultCh <- result
 			errCh <- err
 		}()
@@ -873,14 +927,16 @@ func TestRolloutWatchWorkloadFailures(t *testing.T) {
 		assert.ErrorIs(t, err, observer.ErrWorkloadUnavailable)
 		assert.True(t, result.Failed)
 		assertRolloutLast(t, result, err)
+		fx.assertClean(t)
 	})
 
 	t.Run("job terminal failure", func(t *testing.T) {
+		fx := setupRolloutFixture(t, t.Name())
 		job := fx.createPendingJob(t, "job-failed")
 		resultCh := make(chan observer.WatchResult, 1)
 		errCh := make(chan error, 1)
 		go func() {
-			result, err := obs.Observe(t.Context(), fx.jobRef(job.Name), 0, defaultSceneTimeout)
+			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), fx.jobRef(job.Name), 0, defaultSceneTimeout)
 			resultCh <- result
 			errCh <- err
 		}()
@@ -891,6 +947,9 @@ func TestRolloutWatchWorkloadFailures(t *testing.T) {
 				{Type: batchv1.JobFailureTarget, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"},
 				{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"},
 			}
+			if current.Status.StartTime == nil {
+				current.Status.StartTime = &metav1.Time{Time: time.Now()}
+			}
 		})
 		require.NoError(t, err)
 		result := <-resultCh
@@ -898,22 +957,53 @@ func TestRolloutWatchWorkloadFailures(t *testing.T) {
 		assert.ErrorIs(t, err, observer.ErrWorkloadUnavailable)
 		assert.True(t, result.Failed)
 		assertRolloutLast(t, result, err)
+		fx.assertClean(t)
 	})
 
 	t.Run("statefulset non-terminal condition does not fail", func(t *testing.T) {
-		ss := fx.createStatefulSet(t, "ss-pending")
-		result, err := obs.Observe(t.Context(), fx.statefulSetRef(ss.Name), ss.Generation+100, time.Second)
+		fx := setupRolloutFixture(t, t.Name())
+		statefulSet := fx.createStatefulSet(t, "statefulset-pending")
+		resultCh := make(chan observer.WatchResult, 1)
+		errCh := make(chan error, 1)
+		go func() {
+			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), fx.statefulSetRef(statefulSet.Name), statefulSet.Generation+100, 3*time.Second)
+			resultCh <- result
+			errCh <- err
+		}()
+		require.Eventually(t, func() bool { return fx.transport.activeWatches.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
+		err := updateStatefulSetStatus(t, fx.adminClient, fx.namespace, statefulSet.Name, func(current *appsv1.StatefulSet) {
+			current.Status.Conditions = []appsv1.StatefulSetCondition{{Type: "Progressing", Status: corev1.ConditionFalse, Reason: "RolloutPending"}}
+		})
+		require.NoError(t, err)
+		result := <-resultCh
+		err = <-errCh
 		assert.ErrorIs(t, err, observer.ErrRolloutTimeout)
 		assert.False(t, errors.Is(err, observer.ErrWorkloadUnavailable))
 		assertRolloutLast(t, result, err)
+		fx.assertClean(t)
 	})
 
 	t.Run("daemonset non-terminal condition does not fail", func(t *testing.T) {
-		ds := fx.createDaemonSet(t, "ds-pending")
-		result, err := obs.Observe(t.Context(), fx.daemonSetRef(ds.Name), ds.Generation+100, time.Second)
+		fx := setupRolloutFixture(t, t.Name())
+		daemonSet := fx.createDaemonSet(t, "daemonset-pending")
+		resultCh := make(chan observer.WatchResult, 1)
+		errCh := make(chan error, 1)
+		go func() {
+			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), fx.daemonSetRef(daemonSet.Name), daemonSet.Generation+100, 3*time.Second)
+			resultCh <- result
+			errCh <- err
+		}()
+		require.Eventually(t, func() bool { return fx.transport.activeWatches.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
+		err := updateDaemonSetStatus(t, fx.adminClient, fx.namespace, daemonSet.Name, func(current *appsv1.DaemonSet) {
+			current.Status.Conditions = []appsv1.DaemonSetCondition{{Type: "Progressing", Status: corev1.ConditionFalse, Reason: "RolloutPending"}}
+		})
+		require.NoError(t, err)
+		result := <-resultCh
+		err = <-errCh
 		assert.ErrorIs(t, err, observer.ErrRolloutTimeout)
 		assert.False(t, errors.Is(err, observer.ErrWorkloadUnavailable))
 		assertRolloutLast(t, result, err)
+		fx.assertClean(t)
 	})
 }
 
@@ -1051,16 +1141,14 @@ func TestRolloutWatchParentCancelWinsTimeout(t *testing.T) {
 }
 
 func TestRolloutWatchDeleteAndReplace(t *testing.T) {
-	fx := setupRolloutFixture(t, t.Name())
-	obs := observer.New(fx.observerClient(t))
-
 	t.Run("deleted object returns workload_unavailable", func(t *testing.T) {
+		fx := setupRolloutFixture(t, t.Name())
 		deployment := fx.createDeployment(t, "delete")
 		ref := fx.deploymentRef(deployment.Name)
 		resultCh := make(chan observer.WatchResult, 1)
 		errCh := make(chan error, 1)
 		go func() {
-			result, err := obs.Observe(t.Context(), ref, deployment.Generation+1, defaultSceneTimeout)
+			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), ref, deployment.Generation+1, defaultSceneTimeout)
 			resultCh <- result
 			errCh <- err
 		}()
@@ -1071,15 +1159,17 @@ func TestRolloutWatchDeleteAndReplace(t *testing.T) {
 		assert.ErrorIs(t, err, observer.ErrWorkloadUnavailable)
 		assert.Equal(t, deployment.UID, result.ResourceUID)
 		assertRolloutLast(t, result, err)
+		fx.assertClean(t)
 	})
 
 	t.Run("replacement UID is rejected", func(t *testing.T) {
+		fx := setupRolloutFixture(t, t.Name())
 		deployment := fx.createDeployment(t, "replace")
 		ref := fx.deploymentRef(deployment.Name)
 		resultCh := make(chan observer.WatchResult, 1)
 		errCh := make(chan error, 1)
 		go func() {
-			result, err := obs.Observe(t.Context(), ref, deployment.Generation+1, defaultSceneTimeout)
+			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), ref, deployment.Generation+1, defaultSceneTimeout)
 			resultCh <- result
 			errCh <- err
 		}()
@@ -1097,6 +1187,7 @@ func TestRolloutWatchDeleteAndReplace(t *testing.T) {
 		assert.Equal(t, deployment.UID, result.ResourceUID)
 		assert.NotEqual(t, replacement.UID, result.ResourceUID)
 		assertRolloutLast(t, result, err)
+		fx.assertClean(t)
 	})
 }
 

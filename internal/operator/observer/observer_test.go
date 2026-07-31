@@ -104,6 +104,7 @@ func TestObserver_ValidatesInputWithoutAPIRequests(t *testing.T) {
 		wantKind           error
 		wantCode           ErrorCode
 		wantMessage        string
+		wantCause          error
 	}{
 		{
 			name:               "nil context",
@@ -124,6 +125,7 @@ func TestObserver_ValidatesInputWithoutAPIRequests(t *testing.T) {
 			wantKind:           ErrCancelled,
 			wantCode:           ErrorCodeCancelled,
 			wantMessage:        "rollout watch cancelled: default/web",
+			wantCause:          context.Canceled,
 		},
 		{
 			name:               "empty namespace",
@@ -199,6 +201,11 @@ func TestObserver_ValidatesInputWithoutAPIRequests(t *testing.T) {
 			assert.Equal(t, tt.ref, result.Resource)
 			assert.Empty(t, client.Actions())
 			assertRolloutLast(t, result, err)
+			if tt.wantCause != nil {
+				var rolloutErr *RolloutError
+				require.ErrorAs(t, err, &rolloutErr)
+				assert.ErrorIs(t, rolloutErr.Cause(), tt.wantCause)
+			}
 		})
 	}
 }
@@ -397,7 +404,7 @@ func TestObserver_ParentCancellationWinsTimeout(t *testing.T) {
 		resultCh := make(chan WatchResult, 1)
 		errCh := make(chan error, 1)
 		go func() {
-			result, err := New(client).Observe(ctx, deploymentRef(), 2, 10*time.Millisecond)
+			result, err := New(client).Observe(ctx, deploymentRef(), 2, time.Second)
 			resultCh <- result
 			errCh <- err
 		}()
@@ -423,12 +430,16 @@ func TestObserver_ConcurrentCallsAreIsolated(t *testing.T) {
 	pending.UID = "deployment-uid"
 	ready := readyDeployment(2, "2")
 	ready.UID = pending.UID
-	client := fake.NewSimpleClientset(pending)
-	watchers := make(chan *watch.RaceFreeFakeWatcher, 2)
-	client.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
-		watcher := watch.NewRaceFreeFake()
-		watchers <- watcher
-		return true, watcher, nil
+
+	firstClient := fake.NewSimpleClientset(pending.DeepCopy())
+	firstWatcher := watch.NewRaceFreeFake()
+	firstClient.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
+		return true, firstWatcher, nil
+	})
+	secondClient := fake.NewSimpleClientset(pending.DeepCopy())
+	secondWatcher := watch.NewRaceFreeFake()
+	secondClient.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
+		return true, secondWatcher, nil
 	})
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -437,33 +448,32 @@ func TestObserver_ConcurrentCallsAreIsolated(t *testing.T) {
 	secondResultCh := make(chan WatchResult, 1)
 	secondErrCh := make(chan error, 1)
 	go func() {
-		result, err := New(client).Observe(ctx, deploymentRef(), 2, time.Second)
+		result, err := New(firstClient).Observe(ctx, deploymentRef(), 2, time.Second)
 		firstResultCh <- result
 		firstErrCh <- err
 	}()
 	go func() {
-		result, err := New(client).Observe(t.Context(), deploymentRef(), 2, time.Second)
+		result, err := New(secondClient).Observe(t.Context(), deploymentRef(), 2, time.Second)
 		secondResultCh <- result
 		secondErrCh <- err
 	}()
 
-	firstWatcher := <-watchers
-	secondWatcher := <-watchers
+	require.Eventually(t, func() bool { return len(firstClient.Actions()) >= 2 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return len(secondClient.Actions()) >= 2 }, time.Second, time.Millisecond)
 	cancel()
-	secondWatcher.Modify(ready)
-	firstWatcher.Modify(ready)
 
 	firstErr := <-firstErrCh
 	firstResult := <-firstResultCh
-	secondErr := <-secondErrCh
-	secondResult := <-secondResultCh
 	assert.ErrorIs(t, firstErr, ErrCancelled)
 	assert.False(t, firstResult.Ready)
+
+	secondWatcher.Modify(ready)
+	secondErr := <-secondErrCh
+	secondResult := <-secondResultCh
 	require.NoError(t, secondErr)
 	assert.True(t, secondResult.Ready)
 	assert.Equal(t, pending.UID, secondResult.ResourceUID)
 }
-
 
 func TestObserver_RolloutTimeoutIncludesLastState(t *testing.T) {
 	pending := readyDeployment(6, "21")
@@ -513,7 +523,7 @@ func TestObserver_ContextCancelStopsWatch(t *testing.T) {
 func TestStatefulSetReady(t *testing.T) {
 	replicas := int32(3)
 	statefulSet := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "default", Generation: 5, ResourceVersion: "15"},
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "default", UID: "statefulset-uid", Generation: 5, ResourceVersion: "15"},
 		Spec:       appsv1.StatefulSetSpec{Replicas: &replicas},
 		Status: appsv1.StatefulSetStatus{
 			ObservedGeneration: 5,
@@ -534,11 +544,16 @@ func TestStatefulSetReady(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, result.Ready)
+	assert.False(t, result.Failed)
+	assert.Equal(t, statefulSet.UID, result.ResourceUID)
+	assert.Equal(t, statefulSet.Generation, result.Generation)
+	assert.Equal(t, statefulSet.Status.ObservedGeneration, result.ObservedGeneration)
+	assert.Equal(t, statefulSet.ResourceVersion, result.ResourceVersion)
 }
 
 func TestDaemonSetReady(t *testing.T) {
 	daemonSet := &appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "default", Generation: 8, ResourceVersion: "22"},
+		ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "default", UID: "daemonset-uid", Generation: 8, ResourceVersion: "22"},
 		Status: appsv1.DaemonSetStatus{
 			ObservedGeneration:     8,
 			DesiredNumberScheduled: 4,
@@ -558,6 +573,11 @@ func TestDaemonSetReady(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, result.Ready)
+	assert.False(t, result.Failed)
+	assert.Equal(t, daemonSet.UID, result.ResourceUID)
+	assert.Equal(t, daemonSet.Generation, result.Generation)
+	assert.Equal(t, daemonSet.Status.ObservedGeneration, result.ObservedGeneration)
+	assert.Equal(t, daemonSet.ResourceVersion, result.ResourceVersion)
 }
 
 func TestObserver_DeploymentUnavailable(t *testing.T) {
@@ -576,6 +596,7 @@ func TestObserver_DeploymentUnavailable(t *testing.T) {
 
 	assert.ErrorIs(t, err, ErrWorkloadUnavailable)
 	assert.True(t, result.Failed)
+	assertRolloutLast(t, result, err)
 }
 
 func TestFakeObserver(t *testing.T) {
@@ -643,6 +664,24 @@ func TestRolloutError_UnwrapsKind(t *testing.T) {
 	err := &RolloutError{Kind: ErrRolloutTimeout, Err: context.DeadlineExceeded}
 	assert.True(t, errors.Is(err, ErrRolloutTimeout))
 	assert.Equal(t, context.DeadlineExceeded, err.Cause())
+}
+
+func TestObserver_WatchErrorPreservesCause(t *testing.T) {
+	pending := readyDeployment(1, "1")
+	pending.Generation = 2
+	cause := errors.New("watch request failed")
+	client := fake.NewSimpleClientset(pending)
+	client.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
+		return true, nil, cause
+	})
+
+	result, err := New(client).Observe(t.Context(), deploymentRef(), 2, time.Second)
+
+	assert.ErrorIs(t, err, ErrWatchDisconnected)
+	var rolloutErr *RolloutError
+	require.ErrorAs(t, err, &rolloutErr)
+	assert.ErrorIs(t, rolloutErr.Cause(), cause)
+	assertRolloutLast(t, result, err)
 }
 
 func TestRolloutError_CodeReturnsStableValues(t *testing.T) {

@@ -60,9 +60,10 @@ type WatchResult struct {
 }
 
 type RolloutError struct {
-	Kind error
-	Last WatchResult
-	Err  error
+	Kind  error
+	Last  WatchResult
+	Err   error
+	cause error
 }
 
 func (e *RolloutError) Error() string {
@@ -80,6 +81,9 @@ func (e *RolloutError) Unwrap() error {
 }
 
 func (e *RolloutError) Cause() error {
+	if e.cause != nil {
+		return e.cause
+	}
 	return e.Err
 }
 

@@ -312,9 +312,10 @@ func validateObserveInput(ctx context.Context, ref ResourceRef, expectedGenerati
 	}
 	if ctx.Err() != nil {
 		return &RolloutError{
-			Kind: ErrCancelled,
-			Last: WatchResult{Resource: ref},
-			Err:  fmt.Errorf("rollout watch cancelled: %s/%s", ref.Namespace, ref.Name),
+			Kind:  ErrCancelled,
+			Last:  WatchResult{Resource: ref},
+			Err:   fmt.Errorf("rollout watch cancelled: %s/%s", ref.Namespace, ref.Name),
+			cause: ctx.Err(),
 		}
 	}
 	if ref.Namespace == "" {
@@ -466,16 +467,18 @@ func generationReached(metadataGeneration, observedGeneration, expectedGeneratio
 func classifyError(parentCtx, observeCtx context.Context, last WatchResult, err error) error {
 	if parentCtx.Err() != nil {
 		return &RolloutError{
-			Kind: ErrCancelled,
-			Last: last,
-			Err:  fmt.Errorf("rollout watch cancelled: %s/%s", last.Resource.Namespace, last.Resource.Name),
+			Kind:  ErrCancelled,
+			Last:  last,
+			Err:   fmt.Errorf("rollout watch cancelled: %s/%s", last.Resource.Namespace, last.Resource.Name),
+			cause: parentCtx.Err(),
 		}
 	}
 	if errors.Is(observeCtx.Err(), context.DeadlineExceeded) {
 		return &RolloutError{
-			Kind: ErrRolloutTimeout,
-			Last: last,
-			Err:  fmt.Errorf("rollout watch timed out: %s/%s", last.Resource.Namespace, last.Resource.Name),
+			Kind:  ErrRolloutTimeout,
+			Last:  last,
+			Err:   fmt.Errorf("rollout watch timed out: %s/%s", last.Resource.Namespace, last.Resource.Name),
+			cause: observeCtx.Err(),
 		}
 	}
 	if apierrors.IsResourceExpired(err) || apierrors.IsGone(err) {
@@ -489,9 +492,10 @@ func classifyError(parentCtx, observeCtx context.Context, last WatchResult, err 
 		return unavailableError(last, err.Error())
 	}
 	return &RolloutError{
-		Kind: ErrWatchDisconnected,
-		Last: last,
-		Err:  fmt.Errorf("rollout watch failed: %s/%s: %v", last.Resource.Namespace, last.Resource.Name, err),
+		Kind:  ErrWatchDisconnected,
+		Last:  last,
+		Err:   fmt.Errorf("rollout watch failed: %s/%s: %v", last.Resource.Namespace, last.Resource.Name, err),
+		cause: err,
 	}
 }
 
