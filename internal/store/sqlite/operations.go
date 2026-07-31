@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,10 +14,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
-type operationStore struct {
-	db *sql.DB
-	pl *preflightLifecycleStore // best-effort preflight lifecycle GC integration
-}
+type operationStore struct{ db *sql.DB }
 
 func (s *operationStore) Create(ctx context.Context, op *store.Operation) error {
 	return createOperation(ctx, s.db, op)
@@ -107,20 +105,25 @@ func createOperation(ctx context.Context, execer operationExecer, op *store.Oper
 		d := op.Deadline.UTC().Format(time.RFC3339)
 		deadline = &d
 	}
+	var terminalAt *string
+	if op.TerminalAt != nil {
+		t := op.TerminalAt.UTC().Format(time.RFC3339)
+		terminalAt = &t
+	}
 
 	_, err = execer.ExecContext(ctx, `
 		INSERT INTO operations (
 			id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
 			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
-			actor, created_at, updated_at, deadline, last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			actor, created_at, updated_at, terminal_at, deadline, last_error
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		op.ID, string(op.OperationType), string(op.Status), op.ReleaseDefinitionID,
 		op.IdempotencyKey, op.RequestHash, op.StateVersion,
 		op.BundleID, op.ValuesRevisionID, op.ExpectedRevision, op.TargetRevision, op.ValuesPatch,
 		string(actorJSON), op.CreatedAt.UTC().Format(time.RFC3339), op.UpdatedAt.UTC().Format(time.RFC3339),
-		deadline, op.LastError,
+		terminalAt, deadline, op.LastError,
 	)
 	if err != nil {
 		if isUniqueConstraint(err) {
@@ -136,7 +139,7 @@ func (s *operationStore) Get(ctx context.Context, id string) (*store.Operation, 
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
 			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
-			actor, created_at, updated_at, deadline, last_error
+			actor, created_at, updated_at, terminal_at, deadline, last_error
 		FROM operations WHERE id = ?
 	`, id)
 	return scanOperation(row)
@@ -147,10 +150,357 @@ func (s *operationStore) GetByIdempotencyKey(ctx context.Context, key string) (*
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
 			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
-			actor, created_at, updated_at, deadline, last_error
+			actor, created_at, updated_at, terminal_at, deadline, last_error
 		FROM operations WHERE idempotency_key = ?
 	`, key)
 	return scanOperation(row)
+}
+
+func (s *operationStore) GetCancelReplay(
+	ctx context.Context,
+	query store.OperationCancelReplayQuery,
+) (*store.OperationCancelResult, error) {
+	if query.IdempotencyKeyHash == "" {
+		return nil, store.ErrNotFound
+	}
+	scope := operationCancelIdempotencyScope(query.OperationID, query.ActorUserID)
+	var requestHash string
+	var responseRef []byte
+	err := s.db.QueryRowContext(ctx, `
+		SELECT request_hash, response_ref FROM idempotency_records
+		WHERE scope = ? AND text_key = ? AND expires_at > ?
+	`, scope, query.IdempotencyKeyHash, time.Now().UTC().Format(time.RFC3339Nano)).Scan(
+		&requestHash,
+		&responseRef,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lookup operation cancel replay: %w", err)
+	}
+	if requestHash != query.RequestHash {
+		return nil, store.ErrIdempotencyConflict
+	}
+	var result store.OperationCancelResult
+	if err := json.Unmarshal(responseRef, &result); err != nil {
+		return nil, fmt.Errorf("decode operation cancel replay: %w", err)
+	}
+	result.Replayed = true
+	return &result, nil
+}
+
+func operationCancelIdempotencyScope(operationID, actorUserID string) string {
+	return operationID + ":" + actorUserID
+}
+
+const operationCancelIdempotencyTTL = 24 * time.Hour
+
+//nolint:gocyclo // Cancel transaction orchestrates idempotency, CAS, event, and lifecycle updates.
+func (s *operationStore) Cancel(ctx context.Context, command store.OperationCancelCommand) (*store.OperationCancelResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin cancel operation: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
+
+	replay, err := lookupOperationCancelIdempotency(ctx, tx, command)
+	if err != nil {
+		return nil, err
+	}
+	if replay != nil {
+		replay.Replayed = true
+		return replay, nil
+	}
+
+	current, err := getOperation(ctx, tx, command.OperationID)
+	if err != nil {
+		return nil, err
+	}
+	if current.StateVersion != command.ExpectedStateVersion {
+		return nil, &store.OperationStateVersionConflictError{
+			Expected: command.ExpectedStateVersion,
+			Current:  current.StateVersion,
+		}
+	}
+	if current.Status.IsTerminal() {
+		return nil, store.ErrInvalidState
+	}
+	if !current.Status.CanTransitionTo(command.TargetStatus) {
+		return nil, store.ErrInvalidState
+	}
+	if current.OperationType == store.OperationEmergency && current.Status == store.StatusRunning {
+		return nil, store.ErrInvalidState
+	}
+
+	now := nowUTC()
+	terminal := command.TargetStatus.IsTerminal()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE operations
+		SET status = ?, state_version = state_version + 1, last_error = ?, updated_at = ?,
+		    terminal_at = CASE WHEN ? THEN ? ELSE terminal_at END
+		WHERE id = ? AND state_version = ?
+	`, string(command.TargetStatus), command.Reason, now, terminal, now, command.OperationID, command.ExpectedStateVersion)
+	if err != nil {
+		return nil, fmt.Errorf("cancel operation: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("cancel rows affected: %w", err)
+	}
+	if rows == 0 {
+		return nil, store.ErrOptimisticLock
+	}
+
+	updated := *current
+	updated.Status = command.TargetStatus
+	updated.StateVersion++
+	updated.LastError = command.Reason
+	updated.UpdatedAt, err = time.Parse(time.RFC3339, now)
+	if err != nil {
+		return nil, fmt.Errorf("parse cancel time: %w", err)
+	}
+	if terminal {
+		terminalAt := updated.UpdatedAt
+		updated.TerminalAt = &terminalAt
+	}
+
+	event := &store.OperationStateChangedEvent{
+		ID:            uuid.NewString(),
+		OperationID:   updated.ID,
+		OperationType: updated.OperationType,
+		DefinitionID:  updated.ReleaseDefinitionID,
+		OldStatus:     current.Status,
+		NewStatus:     updated.Status,
+		StateVersion:  updated.StateVersion,
+		CreatedAt:     updated.UpdatedAt,
+	}
+	if err := insertOperationEvent(ctx, tx, event); err != nil {
+		return nil, err
+	}
+	if current.OperationType == store.OperationEmergency && terminal {
+		effectStatus := store.EmergencyEffectUnknown
+		if command.DeliveryStatus == store.DeliveryUndelivered {
+			effectStatus = store.EmergencyEffectNotApplied
+		}
+		effectResult, err := tx.ExecContext(ctx, `
+			UPDATE emergency_intents SET effect_status = ?, updated_at = ? WHERE operation_id = ?
+		`, string(effectStatus), now, command.OperationID)
+		if err != nil {
+			return nil, fmt.Errorf("set cancelled emergency effect: %w", err)
+		}
+		effectRows, rowsErr := effectResult.RowsAffected()
+		if rowsErr != nil {
+			return nil, fmt.Errorf("cancelled emergency effect rows: %w", rowsErr)
+		}
+		if effectRows != 1 {
+			return nil, store.ErrNotFound
+		}
+	}
+	timelineData, err := json.Marshal(store.StateTransitionTimelineData{
+		RequestID: command.RequestID, FromState: string(current.Status), ToState: string(updated.Status),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode cancel timeline: %w", err)
+	}
+	if _, err := appendTimelineEntry(ctx, tx, &store.OperationTimelineEntry{
+		OperationID: updated.ID, OperationStateVersion: updated.StateVersion,
+		Kind: string(store.TimelineEntryStateTransition), Data: timelineData, CreatedAt: updated.UpdatedAt,
+	}); err != nil {
+		return nil, err
+	}
+	if terminal {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE preflight_lifecycles
+			SET operation_terminal_at = ?
+			WHERE operation_id = ? AND operation_terminal_at IS NULL
+		`, now, command.OperationID); err != nil {
+			return nil, fmt.Errorf("set preflight operation terminal: %w", err)
+		}
+	}
+
+	cancelResult := &store.OperationCancelResult{Operation: &updated, RequestID: command.RequestID}
+	if err := insertOperationCancelIdempotency(ctx, tx, command, cancelResult, time.Now().UTC().Add(operationCancelIdempotencyTTL)); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit cancel operation: %w", err)
+	}
+	return cancelResult, nil
+}
+
+//nolint:dupl // Operation cancellation mirrors the shared transactional idempotency record protocol.
+func lookupOperationCancelIdempotency(
+	ctx context.Context,
+	tx *sql.Tx,
+	command store.OperationCancelCommand,
+) (*store.OperationCancelResult, error) {
+	if command.IdempotencyKeyHash == "" {
+		return nil, nil
+	}
+	var requestHash string
+	var responseRef []byte
+	err := tx.QueryRowContext(ctx, `
+		SELECT request_hash, response_ref FROM idempotency_records
+		WHERE scope = ? AND text_key = ? AND expires_at > ?
+	`, command.IdempotencyScope, command.IdempotencyKeyHash, time.Now().UTC().Format(time.RFC3339Nano)).Scan(
+		&requestHash,
+		&responseRef,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lookup operation cancel idempotency: %w", err)
+	}
+	if requestHash != command.RequestHash {
+		return nil, store.ErrIdempotencyConflict
+	}
+	var result store.OperationCancelResult
+	if err := json.Unmarshal(responseRef, &result); err != nil {
+		return nil, fmt.Errorf("decode operation cancel replay: %w", err)
+	}
+	return &result, nil
+}
+
+//nolint:dupl // Operation cancellation mirrors the shared transactional idempotency record protocol.
+func insertOperationCancelIdempotency(
+	ctx context.Context,
+	tx *sql.Tx,
+	command store.OperationCancelCommand,
+	result *store.OperationCancelResult,
+	expiresAt time.Time,
+) error {
+	if command.IdempotencyKeyHash == "" {
+		return nil
+	}
+	responseRef, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("encode operation cancel response: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO idempotency_records (scope, text_key, request_hash, response_ref, expires_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, command.IdempotencyScope, command.IdempotencyKeyHash, command.RequestHash, responseRef, expiresAt.Format(time.RFC3339Nano))
+	if err != nil {
+		if isUniqueConstraint(err) {
+			return store.ErrIdempotencyConflict
+		}
+		return fmt.Errorf("insert operation cancel idempotency: %w", err)
+	}
+	return nil
+}
+
+// FinalizeUpgrade atomically persists a typed result, terminal CAS, inventory, rollout, and timeline event.
+//
+//nolint:gocyclo // One transaction intentionally applies every terminal projection atomically.
+func (s *operationStore) FinalizeUpgrade(ctx context.Context, input *store.UpgradeTerminalInput) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin upgrade terminal transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after commit
+
+	var existing int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM operation_execution_results WHERE operation_id = ?`,
+		input.OperationID,
+	).Scan(&existing); err != nil {
+		return fmt.Errorf("check upgrade result idempotency: %w", err)
+	}
+	if existing > 0 {
+		return nil
+	}
+	current, err := getOperation(ctx, tx, input.OperationID)
+	if err != nil {
+		return err
+	}
+
+	now := nowUTC()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO operation_execution_results (operation_id, result_type, result_payload, created_at)
+		VALUES (?, 'upgrade', ?, ?)
+	`, input.OperationID, input.ResultPayload, now); err != nil {
+		return fmt.Errorf("insert upgrade result: %w", err)
+	}
+
+	result, err := tx.ExecContext(ctx, `
+		UPDATE operations
+		SET status = ?, state_version = state_version + 1, terminal_at = ?, last_error = ?, updated_at = ?
+		WHERE id = ? AND state_version = ?
+	`, string(input.Status), now, input.LastError, now, input.OperationID, input.ExpectedStateVersion)
+	if err != nil {
+		return fmt.Errorf("terminal operation CAS: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("terminal operation rows affected: %w", err)
+	}
+	if rows == 0 {
+		return store.ErrOptimisticLock
+	}
+
+	if input.UpdateInventory {
+		result, err = tx.ExecContext(ctx, `
+			UPDATE release_inventory
+			SET revision = ?, values_digest = ?, observed_bundle_digest = ?, observed_chart_digest = ?,
+			    observed_effective_values_digest = ?, observed_manifest_digest = ?, live_status = ?, last_operation_id = ?,
+			    inventory_status = ?, updated_at = ?
+			WHERE release_definition_id = ? AND customer_id = ? AND cluster_id = ?
+		`, input.Revision, input.ObservedEffectiveValuesDigest, input.ObservedBundleDigest,
+			input.ObservedChartDigest, input.ObservedEffectiveValuesDigest, input.ObservedManifestDigest,
+			input.LiveStatus, input.OperationID, string(input.InventoryStatus), now, input.ReleaseDefinitionID,
+			input.CustomerID, input.ClusterID)
+		if err != nil {
+			return fmt.Errorf("update upgrade inventory: %w", err)
+		}
+		rows, err = result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("upgrade inventory rows affected: %w", err)
+		}
+		if rows == 0 {
+			return fmt.Errorf("update upgrade inventory: %w", store.ErrNotFound)
+		}
+	}
+
+	if input.Status == store.StatusSucceeded {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO rollout_trackings
+				(operation_id, status, resource_count, ready_count, failed_count, last_error, created_at, updated_at)
+			VALUES (?, 'pending', ?, 0, 0, '', ?, ?)
+			ON CONFLICT(operation_id) DO NOTHING
+		`, input.OperationID, input.ResourceCount, now, now); err != nil {
+			return fmt.Errorf("insert rollout tracking: %w", err)
+		}
+	}
+
+	createdAt, err := time.Parse(time.RFC3339, now)
+	if err != nil {
+		return fmt.Errorf("parse upgrade terminal time: %w", err)
+	}
+	if err := insertOperationEvent(ctx, tx, &store.OperationStateChangedEvent{
+		ID: uuid.NewString(), OperationID: input.OperationID, OperationType: store.OperationUpgrade,
+		DefinitionID: input.ReleaseDefinitionID, OldStatus: current.Status, NewStatus: input.Status,
+		StateVersion: input.ExpectedStateVersion + 1, CreatedAt: createdAt,
+	}); err != nil {
+		return err
+	}
+	timelineData, err := json.Marshal(store.StateTransitionTimelineData{
+		FromState: string(current.Status), ToState: string(input.Status), ErrorCode: input.LastError,
+	})
+	if err != nil {
+		return fmt.Errorf("encode upgrade timeline: %w", err)
+	}
+	if _, err := appendTimelineEntry(ctx, tx, &store.OperationTimelineEntry{
+		OperationID: input.OperationID, OperationStateVersion: input.ExpectedStateVersion + 1,
+		Kind: string(store.TimelineEntryStateTransition), Data: timelineData, CreatedAt: createdAt,
+	}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit upgrade terminal transaction: %w", err)
+	}
+	return nil
 }
 
 func (s *operationStore) UpdateStatus(ctx context.Context, id string, status store.OperationStatus, stateVersion int, lastError string) (*store.Operation, error) {
@@ -187,13 +537,17 @@ func (s *operationStore) transition(
 	if current.StateVersion != stateVersion {
 		return nil, store.ErrOptimisticLock
 	}
+	if !current.Status.CanTransitionTo(status) {
+		return nil, store.ErrInvalidState
+	}
 
 	now := nowUTC()
 	result, err := tx.ExecContext(ctx, `
 		UPDATE operations
-		SET status = ?, state_version = state_version + 1, last_error = ?, updated_at = ?
+		SET status = ?, state_version = state_version + 1, last_error = ?, updated_at = ?,
+		    terminal_at = CASE WHEN ? THEN ? ELSE terminal_at END
 		WHERE id = ? AND state_version = ?
-	`, string(status), lastError, now, id, stateVersion)
+	`, string(status), lastError, now, status.IsTerminal(), now, id, stateVersion)
 	if err != nil {
 		return nil, fmt.Errorf("update operation status: %w", err)
 	}
@@ -213,31 +567,42 @@ func (s *operationStore) transition(
 	if err != nil {
 		return nil, fmt.Errorf("parse transition time: %w", err)
 	}
-
-	ev := &store.OperationStateChangedEvent{
-		ID:            uuid.New().String(),
-		OperationID:   updated.ID,
-		OperationType: updated.OperationType,
-		DefinitionID:  updated.ReleaseDefinitionID,
-		OldStatus:     current.Status,
-		NewStatus:     updated.Status,
-		StateVersion:  updated.StateVersion,
-		CreatedAt:     updated.UpdatedAt,
+	if status.IsTerminal() {
+		terminalAt := updated.UpdatedAt
+		updated.TerminalAt = &terminalAt
 	}
-	if err := insertOperationEvent(ctx, tx, ev); err != nil {
+
+	if err := insertOperationEvent(ctx, tx, &store.OperationStateChangedEvent{
+		ID: uuid.NewString(), OperationID: updated.ID, OperationType: updated.OperationType,
+		DefinitionID: updated.ReleaseDefinitionID, OldStatus: current.Status, NewStatus: updated.Status,
+		StateVersion: updated.StateVersion, CreatedAt: updated.UpdatedAt,
+	}); err != nil {
 		return nil, err
 	}
-
+	if status.IsTerminal() {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE preflight_lifecycles
+			SET operation_terminal_at = ?
+			WHERE operation_id = ? AND operation_terminal_at IS NULL
+		`, now, id); err != nil {
+			return nil, fmt.Errorf("set preflight operation terminal: %w", err)
+		}
+	}
+	timelineData, err := json.Marshal(store.StateTransitionTimelineData{
+		FromState: string(current.Status), ToState: string(updated.Status), ErrorCode: lastError,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode operation transition timeline: %w", err)
+	}
+	if _, err := appendTimelineEntry(ctx, tx, &store.OperationTimelineEntry{
+		OperationID: updated.ID, OperationStateVersion: updated.StateVersion,
+		Kind: string(store.TimelineEntryStateTransition), Data: timelineData, CreatedAt: updated.UpdatedAt,
+	}); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit operation transition: %w", err)
 	}
-
-	// REQ-069: When an operation reaches a terminal state, update the associated
-	// preflight lifecycle record's operation_terminal_at so GC can evaluate it.
-	if status.IsTerminal() {
-		s.maybeSetPreflightTerminal(ctx, id, updated.UpdatedAt)
-	}
-
 	return &updated, nil
 }
 
@@ -276,7 +641,7 @@ func (s *operationStore) List(ctx context.Context, definitionID string) ([]*stor
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
 			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
-			actor, created_at, updated_at, deadline, last_error
+			actor, created_at, updated_at, terminal_at, deadline, last_error
 		FROM operations
 		WHERE release_definition_id = ?
 		ORDER BY created_at DESC
@@ -304,7 +669,7 @@ func (s *operationStore) ListNonTerminal(ctx context.Context) ([]*store.Operatio
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
 			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
-			actor, created_at, updated_at, deadline, last_error
+			actor, created_at, updated_at, terminal_at, deadline, last_error
 		FROM operations
 		WHERE status NOT IN ('succeeded','failed','cancelled','timeout')
 		ORDER BY created_at ASC
@@ -334,7 +699,7 @@ func getOperation(ctx context.Context, queryer operationQueryer, id string) (*st
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
 			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
-			actor, created_at, updated_at, deadline, last_error
+			actor, created_at, updated_at, terminal_at, deadline, last_error
 		FROM operations WHERE id = ?
 	`, id)
 	return scanOperation(row)
@@ -347,7 +712,7 @@ func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operatio
 		valuesPatch                                 []byte
 		actorJSON                                   string
 		createdAt, updatedAt                        string
-		deadline                                    *string
+		terminalAt, deadline                        *string
 		lastError                                   string
 	)
 
@@ -355,7 +720,7 @@ func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operatio
 		&id, &opType, &status, &defID,
 		&idemKey, &reqHash, &stateVer,
 		&bundleID, &valuesRevID, &expectedRev, &targetRev, &valuesPatch,
-		&actorJSON, &createdAt, &updatedAt, &deadline, &lastError,
+		&actorJSON, &createdAt, &updatedAt, &terminalAt, &deadline, &lastError,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -366,7 +731,7 @@ func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operatio
 
 	return buildOperation(id, opType, status, defID, idemKey, reqHash,
 		stateVer, bundleID, valuesRevID, expectedRev, targetRev, valuesPatch,
-		actorJSON, createdAt, updatedAt, deadline, lastError)
+		actorJSON, createdAt, updatedAt, terminalAt, deadline, lastError)
 }
 
 func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
@@ -377,7 +742,7 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 		valuesPatch                                 []byte
 		actorJSON                                   string
 		createdAt, updatedAt                        string
-		deadline                                    *string
+		terminalAt, deadline                        *string
 		lastError                                   string
 	)
 
@@ -385,7 +750,7 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 		&id, &opType, &status, &defID,
 		&idemKey, &reqHash, &stateVer,
 		&bundleID, &valuesRevID, &expectedRev, &targetRev, &valuesPatch,
-		&actorJSON, &createdAt, &updatedAt, &deadline, &lastError,
+		&actorJSON, &createdAt, &updatedAt, &terminalAt, &deadline, &lastError,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan operation row: %w", err)
@@ -393,13 +758,13 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 
 	return buildOperation(id, opType, status, defID, idemKey, reqHash,
 		stateVer, bundleID, valuesRevID, expectedRev, targetRev, valuesPatch,
-		actorJSON, createdAt, updatedAt, deadline, lastError)
+		actorJSON, createdAt, updatedAt, terminalAt, deadline, lastError)
 }
 
 func buildOperation(id, opType, status, defID, idemKey, reqHash string,
 	stateVer int, bundleID, valuesRevID string, expectedRev, targetRev int,
 	valuesPatch []byte, actorJSON, createdAt, updatedAt string,
-	deadline *string, lastError string,
+	terminalAt, deadline *string, lastError string,
 ) (*store.Operation, error) {
 	var actor store.ActorContext
 	if err := json.Unmarshal([]byte(actorJSON), &actor); err != nil {
@@ -413,6 +778,15 @@ func buildOperation(id, opType, status, defID, idemKey, reqHash string,
 	ut, err := time.Parse(time.RFC3339, updatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("parse updated_at: %w", err)
+	}
+
+	var terminal *time.Time
+	if terminalAt != nil && *terminalAt != "" {
+		t, err := time.Parse(time.RFC3339, *terminalAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse terminal_at: %w", err)
+		}
+		terminal = &t
 	}
 
 	var dl *time.Time
@@ -441,17 +815,7 @@ func buildOperation(id, opType, status, defID, idemKey, reqHash string,
 		CreatedAt:           ct,
 		UpdatedAt:           ut,
 		Deadline:            dl,
+		TerminalAt:          terminal,
 		LastError:           lastError,
 	}, nil
-}
-
-// maybeSetPreflightTerminal updates the preflight lifecycle record's
-// operation_terminal_at when the operation reaches a terminal state.
-// This is best-effort — failures are silently ignored since the operation
-// transition already succeeded and GC will re-evaluate on the next cycle.
-func (s *operationStore) maybeSetPreflightTerminal(ctx context.Context, operationID string, terminalAt time.Time) {
-	if s.pl == nil {
-		return
-	}
-	_ = s.pl.SetOperationTerminal(ctx, operationID, terminalAt) //nolint:errcheck // Best-effort GC metadata after the operation commit.
 }

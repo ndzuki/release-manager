@@ -15,6 +15,7 @@ import (
 
 	authv1 "github.com/ndzuki/release-manager/api/gen/auth/v1"
 	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
+	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 )
 
 func TestAuthInterceptor_HTTPContracts(t *testing.T) {
@@ -52,7 +53,7 @@ func TestAuthInterceptor_HTTPContracts(t *testing.T) {
 			service := NewOrgService(st, logger)
 			path, handler := authv1connect.NewOrganizationServiceHandler(
 				service,
-		connect.WithInterceptors(NewAuthInterceptor(jwtManager, nil, e, map[string]bool{}, logger)),
+				connect.WithInterceptors(NewAuthInterceptor(jwtManager, nil, e, map[string]bool{}, logger)),
 			)
 			mux := http.NewServeMux()
 			mux.Handle(path, handler)
@@ -103,9 +104,23 @@ func TestAuthInterceptor_BindingMissing(t *testing.T) {
 }
 
 func TestMapProcedure(t *testing.T) {
-	object, action := mapProcedure(authv1connect.OrganizationServiceUpdateOrganizationProcedure)
-	assert.Equal(t, "organization", object)
-	assert.Equal(t, "write", action)
+	t.Run("organization update", func(t *testing.T) {
+		object, action := mapProcedure(authv1connect.OrganizationServiceUpdateOrganizationProcedure)
+		assert.Equal(t, "organization", object)
+		assert.Equal(t, "write", action)
+	})
+
+	t.Run("orchestrator get operation", func(t *testing.T) {
+		object, action := mapProcedure(orchestratorv1connect.OrchestratorServiceGetOperationProcedure)
+		assert.Equal(t, "release", object)
+		assert.Equal(t, "read", action)
+	})
+
+	t.Run("orchestrator cancel operation", func(t *testing.T) {
+		object, action := mapProcedure(orchestratorv1connect.OrchestratorServiceCancelOperationProcedure)
+		assert.Equal(t, "release", object)
+		assert.Equal(t, "write", action)
+	})
 }
 
 func reasonFromConnectError(t *testing.T, err error) string {

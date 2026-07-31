@@ -15,39 +15,44 @@ import (
 
 // Store implements store.Store backed by SQLite.
 type Store struct {
-	db              *sql.DB
-	ops             *operationStore
-	operationEvents *operationEventStore
-	defs            *definitionStore
-	vals            *valuesStore
-	valuesApproval  *valuesApprovalStore
-	customers       *customerStore
-	clusters        *clusterStore
-	tokens          *enrollmentTokenStore
-	operators       *operatorStore
-	sessions        *sessionStore
-	outbox          *outboxStore
-	users           *userStore
-	authSess        *authSessionStore
-	orgs            *organizationStore
-	orgMembers      *organizationMemberStore
-	bindings        *bindingStore
-	audit           *auditEventStore
-	notif           *notificationStore
-	bundles         *bundleStore
-	verifs          *verificationStore
-	scanResults     *scanResultStore
-	vulnExceptions  *vulnerabilityExceptionStore
-	trustRoots      *trustRootStore
-	routes          *clusterRouteStore
-	invs            *inventoryStore
-	syncRequests    *inventorySyncRequestStore
-	custEvents      *customerEventStore
-	defEvents       *definitionEventStore
-	preflight       *preflightStore
-	candidateArts   *candidateArtifactStore
-	preflightCycles *preflightLifecycleStore
-	auditExports    *auditExportStore
+	db               *sql.DB
+	ops              *operationStore
+	operationEvents  *operationEventStore
+	timeline         *timelineStore
+	defs             *definitionStore
+	vals             *valuesStore
+	valuesApproval   *valuesApprovalStore
+	customers        *customerStore
+	clusters         *clusterStore
+	tokens           *enrollmentTokenStore
+	operators        *operatorStore
+	sessions         *sessionStore
+	outbox           *outboxStore
+	users            *userStore
+	authSess         *authSessionStore
+	orgs             *organizationStore
+	orgMembers       *organizationMemberStore
+	bindings         *bindingStore
+	audit            *auditEventStore
+	notif            *notificationStore
+	bundles          *bundleStore
+	verifs           *verificationStore
+	scanResults      *scanResultStore
+	vulnExceptions   *vulnerabilityExceptionStore
+	trustRoots       *trustRootStore
+	routes           *clusterRouteStore
+	invs             *inventoryStore
+	syncRequests     *inventorySyncRequestStore
+	custEvents       *customerEventStore
+	defEvents        *definitionEventStore
+	preflight        *preflightStore
+	candidateArts    *candidateArtifactStore
+	preflightCycles  *preflightLifecycleStore
+	auditExports     *auditExportStore
+	executionResults *operationExecutionResultStore
+	rollouts         *rolloutTrackingStore
+	emergencyIntents *emergencyIntentStore
+	convergenceTasks *convergenceTaskStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -81,6 +86,7 @@ func Open(dsn string) (*Store, error) {
 	s := &Store{db: db}
 	s.ops = &operationStore{db: db}
 	s.operationEvents = &operationEventStore{db: db}
+	s.timeline = &timelineStore{db: db}
 	s.defs = &definitionStore{db: db}
 	s.defEvents = &definitionEventStore{db: db}
 	s.preflight = &preflightStore{db: db}
@@ -111,10 +117,10 @@ func Open(dsn string) (*Store, error) {
 	s.routes = &clusterRouteStore{db: db}
 	s.candidateArts = &candidateArtifactStore{db: db}
 	s.preflightCycles = &preflightLifecycleStore{db: db}
-
-	// REQ-069: Wire operation store → preflight lifecycle store so terminal
-	// operation transitions automatically record operation_terminal_at.
-	s.ops.pl = s.preflightCycles
+	s.executionResults = &operationExecutionResultStore{db: db}
+	s.rollouts = &rolloutTrackingStore{db: db}
+	s.emergencyIntents = &emergencyIntentStore{db: db}
+	s.convergenceTasks = &convergenceTaskStore{db: db}
 
 	return s, nil
 }
@@ -124,6 +130,18 @@ func (s *Store) Operations() store.OperationStore { return s.ops }
 
 // OperationEvents returns the operation state event store.
 func (s *Store) OperationEvents() store.OperationEventStore { return s.operationEvents }
+
+// Timeline returns the ordered Operation timeline store.
+func (s *Store) Timeline() store.TimelineStore { return s.timeline }
+
+// ExecutionResults returns typed operation result records.
+func (s *Store) ExecutionResults() store.OperationExecutionResultStore { return s.executionResults }
+
+// RolloutTrackings returns rollout observation records.
+func (s *Store) RolloutTrackings() store.RolloutTrackingStore { return s.rollouts }
+
+// UpgradeResults returns the atomic upgrade terminal writer.
+func (s *Store) UpgradeResults() store.UpgradeResultStore { return s.ops }
 
 // Customers returns the CustomerStore.
 func (s *Store) Customers() store.CustomerStore { return s.customers }
@@ -215,8 +233,28 @@ func (s *Store) InventorySyncRequests() store.InventorySyncRequestStore { return
 // CandidateArtifacts returns the CandidateArtifactStore.
 func (s *Store) CandidateArtifacts() store.CandidateArtifactStore { return s.candidateArts }
 
+func (s *Store) ArtifactEvents() store.ArtifactEventStore { return unsupportedArtifactEventStore{} }
+
+func (s *Store) ValidationOutbox() store.ValidationOutboxStore {
+	return unsupportedValidationOutboxStore{}
+}
+
+func (s *Store) BundleSubmissions() store.BundleSubmissionStore {
+	return unsupportedBundleSubmissionStore{}
+}
+
+func (s *Store) ArtifactEventSubmissions() store.ArtifactEventSubmissionStore {
+	return unsupportedArtifactEventSubmissionStore{}
+}
+
 // PreflightLifecycles returns the PreflightLifecycleStore.
 func (s *Store) PreflightLifecycles() store.PreflightLifecycleStore { return s.preflightCycles }
+
+// EmergencyIntents returns the EmergencyIntentStore.
+func (s *Store) EmergencyIntents() store.EmergencyIntentStore { return s.emergencyIntents }
+
+// ConvergenceTasks returns the ConvergenceTaskStore.
+func (s *Store) ConvergenceTasks() store.ConvergenceTaskStore { return s.convergenceTasks }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
@@ -334,6 +372,10 @@ var migrationStatements = []string{
 	`UPDATE values_revisions SET created_by_user_id = created_by WHERE created_by_user_id = ''`,
 	`ALTER TABLE release_definitions ADD COLUMN owner_organization_id TEXT`,
 	`ALTER TABLE release_definitions ADD COLUMN approved_revision_id TEXT`,
+	`ALTER TABLE release_definitions ADD COLUMN hpa_managed INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE release_definitions ADD COLUMN max_emergency_replicas INTEGER NOT NULL DEFAULT 100`,
+	`ALTER TABLE release_definitions ADD COLUMN approved_annotation_keys BLOB NOT NULL DEFAULT '[]'`,
+	`ALTER TABLE release_definitions ADD COLUMN promotion_mappings BLOB NOT NULL DEFAULT '[]'`,
 
 	`CREATE TABLE IF NOT EXISTS values_revision_decisions (
 		id                    TEXT PRIMARY KEY,
@@ -414,6 +456,10 @@ var migrationStatements = []string{
 	)`,
 	// Migration: add target_revision for ROLLBACK operations.
 	`ALTER TABLE operations ADD COLUMN target_revision INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE operations ADD COLUMN terminal_at TEXT`,
+	`UPDATE operations
+	 SET terminal_at = updated_at
+	 WHERE status IN ('succeeded', 'failed', 'cancelled', 'timeout') AND terminal_at IS NULL`,
 
 	`CREATE INDEX IF NOT EXISTS idx_operations_definition ON operations(release_definition_id, status)`,
 	`CREATE INDEX IF NOT EXISTS idx_operations_idempotency ON operations(idempotency_key)`,
@@ -524,6 +570,25 @@ var migrationStatements = []string{
 	`ALTER TABLE outbox ADD COLUMN command_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE outbox ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE outbox ADD COLUMN operation_type TEXT NOT NULL DEFAULT ''`,
+
+	`CREATE TABLE IF NOT EXISTS operation_execution_results (
+		operation_id   TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE,
+		result_type    TEXT NOT NULL,
+		result_payload BLOB NOT NULL,
+		created_at     TEXT NOT NULL
+	)`,
+
+	`CREATE TABLE IF NOT EXISTS rollout_trackings (
+		operation_id   TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE,
+		status         TEXT NOT NULL DEFAULT 'pending',
+		resource_count INTEGER NOT NULL DEFAULT 0,
+		ready_count    INTEGER NOT NULL DEFAULT 0,
+		failed_count   INTEGER NOT NULL DEFAULT 0,
+		last_error     TEXT NOT NULL DEFAULT '',
+		created_at     TEXT NOT NULL,
+		updated_at     TEXT NOT NULL
+	)`,
+
 	// Auth & RBAC — users, sessions, organizations, bindings (REQ-025, REQ-026, REQ-049)
 	`CREATE TABLE IF NOT EXISTS users (
 		id            TEXT PRIMARY KEY,
@@ -688,6 +753,17 @@ var migrationStatements = []string{
 		created_at            TEXT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_operation_events_operation ON operation_events(operation_id)`,
+	`CREATE TABLE IF NOT EXISTS operation_timeline (
+		id            TEXT PRIMARY KEY,
+		operation_id  TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+		sequence      INTEGER NOT NULL,
+		entry_type    TEXT NOT NULL,
+		state_version INTEGER NOT NULL,
+		data          BLOB NOT NULL DEFAULT '{}',
+		created_at    TEXT NOT NULL,
+		UNIQUE(operation_id, sequence)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_operation_timeline_operation ON operation_timeline(operation_id, sequence)`,
 
 	// Cluster artifact routing (REQ-014)
 	`CREATE TABLE IF NOT EXISTS cluster_routes (
@@ -722,6 +798,12 @@ var migrationStatements = []string{
 		updated_at       TEXT NOT NULL,
 		UNIQUE(customer_id, cluster_id, namespace, release_name)
 	)`,
+	`ALTER TABLE release_inventory ADD COLUMN observed_bundle_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN observed_chart_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN observed_effective_values_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN observed_manifest_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN live_status TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN last_operation_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE release_inventory ADD COLUMN release_definition_id TEXT NOT NULL DEFAULT ''`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_cluster ON release_inventory(customer_id, cluster_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_status ON release_inventory(inventory_status)`,
@@ -846,7 +928,60 @@ var migrationStatements = []string{
 		created_at    TEXT NOT NULL,
 		UNIQUE(digest, artifact_type)
 	)`,
+	`ALTER TABLE candidate_artifacts ADD COLUMN validated_at TEXT`,
+	`ALTER TABLE candidate_artifacts ADD COLUMN source_id TEXT NOT NULL DEFAULT ''`,
 
+	// Emergency changes and explicit convergence (REQ-032).
+	`CREATE TABLE IF NOT EXISTS emergency_intents (
+		id                    TEXT PRIMARY KEY,
+		release_definition_id TEXT NOT NULL REFERENCES release_definitions(id) ON DELETE RESTRICT,
+		operation_id          TEXT NOT NULL UNIQUE REFERENCES operations(id) ON DELETE RESTRICT,
+		command_id            TEXT NOT NULL UNIQUE,
+		action                TEXT NOT NULL CHECK (action IN ('set_container_image','set_replicas','set_approved_annotation')),
+		workload_kind         TEXT NOT NULL,
+		workload_name         TEXT NOT NULL,
+		workload_namespace    TEXT NOT NULL,
+		workload_uid          TEXT NOT NULL,
+		container             TEXT,
+		artifact_id           TEXT,
+		image_reference       TEXT,
+		target_replicas       INTEGER,
+		annotation_scope      TEXT,
+		annotation_entries    BLOB,
+		convergence           TEXT NOT NULL DEFAULT 'require_promotion' CHECK (convergence IN ('require_promotion','revert_on_next_reconcile')),
+		promotion_paths       BLOB,
+		before_snapshot       BLOB,
+		after_snapshot        BLOB,
+		delivery_status       TEXT NOT NULL DEFAULT 'pending' CHECK (delivery_status IN ('pending','queued','delivered','persisted')),
+		effect_status         TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK (effect_status IN ('UNKNOWN','APPLIED','NOT_APPLIED')),
+		last_delivery_at      TEXT,
+		created_at            TEXT NOT NULL,
+		updated_at            TEXT NOT NULL
+	)`,
+	`ALTER TABLE emergency_intents ADD COLUMN effect_status TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK (effect_status IN ('UNKNOWN','APPLIED','NOT_APPLIED'))`,
+	`CREATE INDEX IF NOT EXISTS idx_ei_operation ON emergency_intents(operation_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_ei_command ON emergency_intents(command_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_ei_definition ON emergency_intents(release_definition_id, created_at DESC)`,
+	`DROP INDEX IF EXISTS idx_ei_active_locks`,
+	`CREATE INDEX IF NOT EXISTS idx_ei_active_locks ON emergency_intents(release_definition_id, workload_kind, workload_name) WHERE effect_status = 'UNKNOWN'`,
+	`CREATE TABLE IF NOT EXISTS convergence_tasks (
+		id                     TEXT PRIMARY KEY,
+		operation_id           TEXT NOT NULL UNIQUE REFERENCES operations(id) ON DELETE RESTRICT,
+		release_definition_id  TEXT NOT NULL REFERENCES release_definitions(id) ON DELETE RESTRICT,
+		action                 TEXT NOT NULL,
+		target_summary         TEXT NOT NULL,
+		reason                 TEXT NOT NULL,
+		promotion_paths        BLOB NOT NULL,
+		status                 TEXT NOT NULL DEFAULT 'pending_promotion' CHECK (status IN ('pending_promotion','converged')),
+		active_revision_id     TEXT,
+		active_revision_status TEXT,
+		last_rejection_reason  TEXT,
+		submitted_at           TEXT NOT NULL,
+		converged_at           TEXT,
+		created_at             TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_ct_definition ON convergence_tasks(release_definition_id, status)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_ct_op ON convergence_tasks(operation_id)`,
 	// Preflight lifecycle results (REQ-069) — distinct from the cache-based preflight_results table.
 	`CREATE TABLE IF NOT EXISTS preflight_lifecycles (
 		id                    TEXT PRIMARY KEY,

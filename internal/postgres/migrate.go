@@ -53,6 +53,9 @@ func runMigrations(ctx context.Context, db *sql.DB, migrationFS fs.FS, apply fun
 	if err := validateMigrationNames(entries); err != nil {
 		return err
 	}
+	if err := repairHistoricalMigrationVersion(ctx, db); err != nil {
+		return err
+	}
 	source, err := iofs.New(migrationFS, ".")
 	if err != nil {
 		return fmt.Errorf("migration_failed: initialize migration source: %w", err)
@@ -77,6 +80,78 @@ func runMigrations(ctx context.Context, db *sql.DB, migrationFS fs.FS, apply fun
 		return fmt.Errorf("migration_failed: apply migrations: %w", err)
 	}
 	return nil
+}
+
+type migrationFeatures struct {
+	bundle    bool
+	emergency bool
+	upgrade   bool
+	timeline  bool
+}
+
+// repairHistoricalMigrationVersion handles the period where independently
+// developed migrations reused versions 7 and 8. golang-migrate stores only an
+// integer version, so the schema itself is the authority for selecting the
+// earliest safe replay point. Replayed migrations are intentionally made
+// idempotent (IF NOT EXISTS, ADD COLUMN IF NOT EXISTS).
+func repairHistoricalMigrationVersion(ctx context.Context, db *sql.DB) error {
+	var version int
+	var dirty bool
+	err := db.QueryRowContext(ctx, `SELECT version, dirty FROM schema_migrations LIMIT 1`).Scan(&version, &dirty)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil && strings.Contains(err.Error(), `relation "schema_migrations" does not exist`) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("migration_failed: inspect current version: %w", err)
+	}
+	if dirty || version < 7 {
+		return nil
+	}
+	features, err := inspectMigrationFeatures(ctx, db)
+	if err != nil {
+		return err
+	}
+	rewind := historicalMigrationRewind(version, features)
+	if rewind >= version {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE schema_migrations SET version = $1, dirty = FALSE`, rewind); err != nil {
+		return fmt.Errorf("migration_failed: repair historical version %d to %d: %w", version, rewind, err)
+	}
+	return nil
+}
+
+func inspectMigrationFeatures(ctx context.Context, db *sql.DB) (migrationFeatures, error) {
+	var features migrationFeatures
+	err := db.QueryRowContext(ctx, `
+		SELECT
+			to_regclass('release_bundle_image_bindings') IS NOT NULL,
+			to_regclass('emergency_intents') IS NOT NULL,
+			to_regclass('operation_execution_results') IS NOT NULL,
+			to_regclass('operation_timeline') IS NOT NULL
+	`).Scan(&features.bundle, &features.emergency, &features.upgrade, &features.timeline)
+	if err != nil {
+		return migrationFeatures{}, fmt.Errorf("migration_failed: inspect historical schema: %w", err)
+	}
+	return features, nil
+}
+
+func historicalMigrationRewind(version int, features migrationFeatures) int {
+	switch {
+	case version >= 7 && !features.bundle:
+		return 6
+	case version >= 8 && !features.emergency:
+		return 7
+	case version >= 9 && !features.upgrade:
+		return 8
+	case version >= 10 && !features.timeline:
+		return 9
+	default:
+		return version
+	}
 }
 
 //nolint:gocyclo // Filename validation keeps duplicate, pairing, and contiguity errors distinct.

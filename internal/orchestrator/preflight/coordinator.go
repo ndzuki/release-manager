@@ -23,9 +23,11 @@ type Coordinator struct {
 	values         store.ValuesStore
 	bundles        store.BundleStore
 	pl             store.PreflightLifecycleStore
+	invs           store.InventoryStore
 	logger         *slog.Logger
 	timeoutSeconds int64
 }
+
 // NewCoordinator creates a preflight coordinator with the required store dependencies.
 func NewCoordinator(
 	outbox store.OutboxStore,
@@ -35,6 +37,7 @@ func NewCoordinator(
 	values store.ValuesStore,
 	bundles store.BundleStore,
 	pl store.PreflightLifecycleStore,
+	invs store.InventoryStore,
 	logger *slog.Logger,
 ) *Coordinator {
 	return &Coordinator{
@@ -45,6 +48,7 @@ func NewCoordinator(
 		values:         values,
 		bundles:        bundles,
 		pl:             pl,
+		invs:           invs,
 		logger:         logger,
 		timeoutSeconds: int64((5 * time.Minute) / time.Second),
 	}
@@ -59,6 +63,10 @@ func (c *Coordinator) Run(ctx context.Context, op *store.Operation) {
 		"op_id", op.ID,
 		"type", op.OperationType,
 	)
+	if op.OperationType == store.OperationUpgrade {
+		c.runUpgrade(ctx, op)
+		return
+	}
 
 	stages := ProductionStages()
 	results := make([]StageResult, 0, len(stages))
@@ -116,6 +124,52 @@ func (c *Coordinator) Run(ctx context.Context, op *store.Operation) {
 	// Record lifecycle result for GC (REQ-069).
 	c.recordLifecycle(ctx, op.ID, results, string(StagePassed), "")
 }
+func (c *Coordinator) runUpgrade(ctx context.Context, op *store.Operation) {
+	operatorID, err := c.resolveOperator(ctx, op)
+	if err != nil {
+		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "stage_unavailable"})
+		return
+	}
+	definition, err := c.defs.Get(ctx, op.ReleaseDefinitionID)
+	if err != nil {
+		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "release_not_found"})
+		return
+	}
+	if _, err := c.invs.GetByDefinition(ctx, op.ReleaseDefinitionID); err != nil {
+		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "release_not_found"})
+		return
+	}
+	bundle, err := c.bundles.Get(ctx, op.BundleID)
+	if err != nil {
+		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "bundle_not_found"})
+		return
+	}
+	revision, err := c.values.Get(ctx, op.ValuesRevisionID)
+	if err != nil {
+		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "revision_not_approved"})
+		return
+	}
+	commandID := op.ID + ":execute"
+	payload, err := BuildUpgradePayload(op, definition, bundle, revision, commandID)
+	if err != nil {
+		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "render_failed"})
+		return
+	}
+	encoded, err := payload.Marshal()
+	if err != nil {
+		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "invalid_command"})
+		return
+	}
+	if err := c.outbox.Create(ctx, &store.OutboxEntry{
+		ID: uuid.NewString(), CommandID: commandID, OperationID: op.ID,
+		OperationType: string(store.OperationUpgrade), OperatorID: operatorID, Payload: encoded,
+	}); err != nil {
+		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "dispatch_failed"})
+		return
+	}
+	c.casQueued(ctx, op, AggregateResult{OperationID: op.ID, Overall: StagePassed})
+}
+
 // runStage dispatches a PRECHECK command for one stage and polls for its result.
 func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage StageDef) (StageResult, error) {
 	emptyResult := StageResult{Stage: stage.Name, Status: StageFailed}

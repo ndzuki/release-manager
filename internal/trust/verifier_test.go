@@ -15,8 +15,8 @@ import (
 
 func trustedPolicy() store.TrustPolicy {
 	return store.TrustPolicy{
-		PolicyVersion: "v1",
-		FailClosed:    true,
+		PolicyVersion:  "v1",
+		FailClosed:     true,
 		TrustedIssuers: []string{"release-manager-ci"},
 	}
 }

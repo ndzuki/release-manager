@@ -1,0 +1,4 @@
+apiVersion: v2
+name: install-failing-hook
+version: 0.1.0
+type: application

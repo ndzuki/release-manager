@@ -13,9 +13,9 @@ import (
 
 // Errors returned by validation.
 var (
-	ErrInvalidYAML      = fmt.Errorf("invalid YAML")
-	ErrSizeExceeded     = fmt.Errorf("size exceeded")
-	ErrSecretLiteral    = fmt.Errorf("secret literal forbidden")
+	ErrInvalidYAML   = fmt.Errorf("invalid YAML")
+	ErrSizeExceeded  = fmt.Errorf("size exceeded")
+	ErrSecretLiteral = fmt.Errorf("secret literal forbidden")
 )
 
 // CanonicalResult holds the output of a successful validation pass.

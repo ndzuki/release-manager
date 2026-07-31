@@ -12,11 +12,13 @@ import (
 	"github.com/spf13/viper"
 
 	"connectrpc.com/connect"
+	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/auth"
 	"github.com/ndzuki/release-manager/internal/config"
+	"github.com/ndzuki/release-manager/internal/operator"
 	"github.com/ndzuki/release-manager/internal/orchestrator"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/store"
@@ -32,14 +34,25 @@ type orchSvc struct {
 	signingKey string
 	configPath string
 
-	store   store.Store
-	cleanup *orchestrator.CleanupService
-	pingDB  func(context.Context) error
+	store        store.Store
+	cleanup      *orchestrator.CleanupService
+	emergency    *orchestrator.Service
+	pingDB       func(context.Context) error
+	bundleSvc    *orchestrator.BundleService
+	validation   *orchestrator.ValidationWorker
+	auditEmitter audit.Sink
 }
 
 func (s *orchSvc) Name() string { return "release-orchestrator" }
 
 func (s *orchSvc) Configure(cfg *config.ServiceConfig) { s.cfg = *cfg }
+
+func (s *orchSvc) Shutdown(ctx context.Context) error {
+	if emitter, ok := s.auditEmitter.(interface{ Shutdown(context.Context) error }); ok {
+		return emitter.Shutdown(ctx)
+	}
+	return nil
+}
 
 func (s *orchSvc) Close() error {
 	if s.store == nil {
@@ -77,11 +90,18 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		s.store.Verifications(),
 		logger,
 	)
-	var auditEmitter audit.Sink
 	if !s.cfg.Maintenance {
-		auditEmitter = audit.NewEmitter(s.store.AuditEvents(), logger, audit.DefaultConfig())
+		s.auditEmitter = audit.NewEmitter(s.store.AuditEvents(), logger, audit.DefaultConfig())
 	}
-	svc := orchestrator.NewService(s.store, verifier, s.targetEnv, auditEmitter, logger)
+	operatorService, err := operator.NewService(s.store, logger, s.auditEmitter)
+	if err != nil {
+		return fmt.Errorf("create operator control service: %w", err)
+	}
+	operatorPath, operatorHandler := operatorv1connect.NewOperatorServiceHandler(operatorService)
+	mux.Handle(operatorPath, operatorHandler)
+	emergencyDispatcher := orchestrator.NewEmergencyDispatcher(operatorService)
+	svc := orchestrator.NewService(s.store, verifier, s.targetEnv, s.auditEmitter, emergencyDispatcher, logger)
+	s.emergency = svc
 	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)
 	enforcer, err := auth.NewEnforcer(s.store, logger)
 	if err != nil {
@@ -96,6 +116,7 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		connect.WithInterceptors(
 			app.MaintenanceInterceptor(s.cfg.Maintenance, orchestratorReadOnlyProcedures(), logger),
 			auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, map[string]bool{}, logger),
+			auth.NewAuthStreamInterceptor(jwtMgr, s.store, enforcer, map[string]bool{}, logger),
 		),
 	)
 	mux.Handle(path, handler)
@@ -113,6 +134,27 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	)
 	mux.Handle(cleanupPath, cleanupHandler)
 	logger.Info("cleanup service registered", "gc_interval_hours", retention.GCIntervalHours)
+
+	sourceRegistries := loadSourceRegistries(logger)
+	bundleSvc := orchestrator.NewBundleService(s.store, logger, sourceRegistries)
+	s.bundleSvc = bundleSvc
+	bundlePath, bundleHandler := orchestratorv1connect.NewBundleServiceHandler(bundleSvc,
+		connect.WithInterceptors(
+			auth.TryAllInterceptor(logger,
+				auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, map[string]bool{}, logger),
+				auth.ServiceTokenInterceptor(s.serviceTokens(), logger),
+			),
+		),
+	)
+	mux.Handle(bundlePath, bundleHandler)
+	logger.Info("bundle service registered")
+
+	if pgStore, ok := s.store.(*postgresstore.Store); ok {
+		s.validation = orchestrator.NewValidationWorker(s.store, pgStore.GORM(), logger, orchestrator.DefaultValidationWorkerConfig())
+	} else {
+		s.validation = orchestrator.NewValidationWorker(s.store, nil, logger, orchestrator.DefaultValidationWorkerConfig())
+	}
+
 	return nil
 }
 
@@ -166,15 +208,41 @@ func orchestratorReadOnlyProcedures() map[string]struct{} {
 		orchestratorv1connect.OrchestratorServiceGetClusterProcedure:             {},
 		orchestratorv1connect.OrchestratorServiceListClustersProcedure:           {},
 		orchestratorv1connect.OrchestratorServiceGetClusterRoutesProcedure:       {},
+		orchestratorv1connect.OrchestratorServiceGetOperationProcedure:           {},
 	}
 }
 
-// Run starts the GC ticker. Called by app.Run as a backgroundService.
+// Run starts background cleanup and emergency timeout scanning.
 func (s *orchSvc) Run(ctx context.Context) {
+	if s.validation != nil {
+		go s.validation.Run(ctx)
+	}
 	if s.cfg.Maintenance || s.cleanup == nil {
 		return
 	}
-	s.cleanup.StartTicker(ctx)
+	if s.cleanup != nil {
+		go s.cleanup.StartTicker(ctx)
+	}
+	if s.emergency == nil {
+		return
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.emergency.ExpireEmergencyOperations(ctx)
+		}
+	}
+}
+
+func (s *orchSvc) serviceTokens() []string { return nil }
+
+func loadSourceRegistries(logger *slog.Logger) []orchestrator.SourceRegistry {
+	_ = logger
+	return nil
 }
 
 func main() {
