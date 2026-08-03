@@ -12,9 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -422,7 +420,8 @@ func deleteTestResources(ctx context.Context, client kubernetes.Interface, testI
 	}
 	for index := range deployments.Items {
 		item := &deployments.Items[index]
-		if err := client.AppsV1().Deployments(item.Namespace).Delete(ctx, item.Name, deleteOptions); err != nil && !apierrors.IsNotFound(err) {
+		err := client.AppsV1().Deployments(item.Namespace).Delete(ctx, item.Name, deleteOptions)
+		if err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete deployment %s/%s: %w", item.Namespace, item.Name, err)
 		}
 	}
@@ -433,7 +432,8 @@ func deleteTestResources(ctx context.Context, client kubernetes.Interface, testI
 	}
 	for index := range statefulSets.Items {
 		item := &statefulSets.Items[index]
-		if err := client.AppsV1().StatefulSets(item.Namespace).Delete(ctx, item.Name, deleteOptions); err != nil && !apierrors.IsNotFound(err) {
+		err := client.AppsV1().StatefulSets(item.Namespace).Delete(ctx, item.Name, deleteOptions)
+		if err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete statefulset %s/%s: %w", item.Namespace, item.Name, err)
 		}
 	}
@@ -444,7 +444,8 @@ func deleteTestResources(ctx context.Context, client kubernetes.Interface, testI
 	}
 	for index := range daemonSets.Items {
 		item := &daemonSets.Items[index]
-		if err := client.AppsV1().DaemonSets(item.Namespace).Delete(ctx, item.Name, deleteOptions); err != nil && !apierrors.IsNotFound(err) {
+		err := client.AppsV1().DaemonSets(item.Namespace).Delete(ctx, item.Name, deleteOptions)
+		if err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete daemonset %s/%s: %w", item.Namespace, item.Name, err)
 		}
 	}
@@ -455,7 +456,8 @@ func deleteTestResources(ctx context.Context, client kubernetes.Interface, testI
 	}
 	for index := range jobs.Items {
 		item := &jobs.Items[index]
-		if err := client.BatchV1().Jobs(item.Namespace).Delete(ctx, item.Name, deleteOptions); err != nil && !apierrors.IsNotFound(err) {
+		err := client.BatchV1().Jobs(item.Namespace).Delete(ctx, item.Name, deleteOptions)
+		if err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete job %s/%s: %w", item.Namespace, item.Name, err)
 		}
 	}
@@ -466,7 +468,8 @@ func deleteTestResources(ctx context.Context, client kubernetes.Interface, testI
 	}
 	for index := range pods.Items {
 		item := &pods.Items[index]
-		if err := client.CoreV1().Pods(item.Namespace).Delete(ctx, item.Name, deleteOptions); err != nil && !apierrors.IsNotFound(err) {
+		err := client.CoreV1().Pods(item.Namespace).Delete(ctx, item.Name, deleteOptions)
+		if err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete pod %s/%s: %w", item.Namespace, item.Name, err)
 		}
 	}
@@ -477,7 +480,8 @@ func deleteTestResources(ctx context.Context, client kubernetes.Interface, testI
 	}
 	for index := range services.Items {
 		item := &services.Items[index]
-		if err := client.CoreV1().Services(item.Namespace).Delete(ctx, item.Name, deleteOptions); err != nil && !apierrors.IsNotFound(err) {
+		err := client.CoreV1().Services(item.Namespace).Delete(ctx, item.Name, deleteOptions)
+		if err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete service %s/%s: %w", item.Namespace, item.Name, err)
 		}
 	}
@@ -488,7 +492,8 @@ func deleteTestResources(ctx context.Context, client kubernetes.Interface, testI
 	}
 	for index := range serviceAccounts.Items {
 		item := &serviceAccounts.Items[index]
-		if err := client.CoreV1().ServiceAccounts(item.Namespace).Delete(ctx, item.Name, deleteOptions); err != nil && !apierrors.IsNotFound(err) {
+		err := client.CoreV1().ServiceAccounts(item.Namespace).Delete(ctx, item.Name, deleteOptions)
+		if err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete serviceaccount %s/%s: %w", item.Namespace, item.Name, err)
 		}
 	}
@@ -499,7 +504,8 @@ func deleteTestResources(ctx context.Context, client kubernetes.Interface, testI
 	}
 	for index := range roles.Items {
 		item := &roles.Items[index]
-		if err := client.RbacV1().Roles(item.Namespace).Delete(ctx, item.Name, deleteOptions); err != nil && !apierrors.IsNotFound(err) {
+		err := client.RbacV1().Roles(item.Namespace).Delete(ctx, item.Name, deleteOptions)
+		if err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete role %s/%s: %w", item.Namespace, item.Name, err)
 		}
 	}
@@ -510,7 +516,8 @@ func deleteTestResources(ctx context.Context, client kubernetes.Interface, testI
 	}
 	for index := range roleBindings.Items {
 		item := &roleBindings.Items[index]
-		if err := client.RbacV1().RoleBindings(item.Namespace).Delete(ctx, item.Name, deleteOptions); err != nil && !apierrors.IsNotFound(err) {
+		err := client.RbacV1().RoleBindings(item.Namespace).Delete(ctx, item.Name, deleteOptions)
+		if err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete rolebinding %s/%s: %w", item.Namespace, item.Name, err)
 		}
 	}
@@ -673,18 +680,18 @@ func (t *watchEventBarrierTransport) setBase(base http.RoundTripper) {
 // watchEventBarrierBody forwards complete watch-event lines, then blocks after
 // the configured marker until the observer closes the response body.
 type watchEventBarrierBody struct {
-	source            io.ReadCloser
-	reader            *bufio.Reader
-	ctx               context.Context
-	marker            []byte
-	matched           chan struct{}
-	closed            chan struct{}
-	pending           []byte
-	pendingErr        error
-	blockAfterPending bool
-	blocked           bool
-	matchOnce         sync.Once
-	closeOnce         sync.Once
+	source          io.ReadCloser
+	reader          *bufio.Reader
+	ctx             context.Context
+	marker          []byte
+	matched         chan struct{}
+	closed          chan struct{}
+	pending         []byte
+	pendingErr      error
+	hasPendingBlock bool
+	isBlocked       bool
+	matchOnce       sync.Once
+	closeOnce       sync.Once
 }
 
 func newWatchEventBarrierBody(
@@ -705,7 +712,7 @@ func newWatchEventBarrierBody(
 
 func (b *watchEventBarrierBody) Read(p []byte) (int, error) {
 	for len(b.pending) == 0 {
-		if b.blocked {
+		if b.isBlocked {
 			if b.pendingErr != nil {
 				err := b.pendingErr
 				b.pendingErr = nil
@@ -729,14 +736,14 @@ func (b *watchEventBarrierBody) Read(p []byte) (int, error) {
 		}
 		b.pending = line
 		b.pendingErr = err
-		b.blockAfterPending = bytes.Contains(line, b.marker)
+		b.hasPendingBlock = bytes.Contains(line, b.marker)
 	}
 
 	n := copy(p, b.pending)
 	b.pending = b.pending[n:]
-	if len(b.pending) == 0 && b.blockAfterPending {
-		b.blockAfterPending = false
-		b.blocked = true
+	if len(b.pending) == 0 && b.hasPendingBlock {
+		b.hasPendingBlock = false
+		b.isBlocked = true
 		b.matchOnce.Do(func() { close(b.matched) })
 	}
 	return n, nil
@@ -757,9 +764,9 @@ func isSecretReq(req *http.Request) bool {
 
 type disconnectingTransport struct {
 	trackingTransport
-	disconnectFirstWatch bool
-	mu                   sync.Mutex
-	watchVersions        []string
+	isFirstWatchDisconnectEnabled bool
+	mu                            sync.Mutex
+	watchVersions                 []string
 }
 
 func (t *disconnectingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -774,7 +781,7 @@ func (t *disconnectingTransport) RoundTrip(req *http.Request) (*http.Response, e
 	t.watchVersions = append(t.watchVersions, req.URL.Query().Get("resourceVersion"))
 	watchNum := len(t.watchVersions)
 	t.mu.Unlock()
-	if t.disconnectFirstWatch && watchNum == 1 {
+	if t.isFirstWatchDisconnectEnabled && watchNum == 1 {
 		response.Body = &disconnectingBody{ReadCloser: response.Body}
 	}
 	return response, nil
@@ -921,9 +928,7 @@ func (b *trackedBody) Close() error {
 func integrationClient(t *testing.T) (*kubernetes.Clientset, *rest.Config) {
 	t.Helper()
 	kubeconfig := os.Getenv("KUBECONFIG")
-	if kubeconfig == "" {
-		kubeconfig = filepath.Join(os.Getenv("HOME"), ".kube", "config")
-	}
+	require.NotEmpty(t, kubeconfig, "KUBECONFIG must point to the temporary kind kubeconfig")
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	require.NoError(t, err, "build integration kubeconfig")
 	config.ContentType = "application/json"
@@ -965,18 +970,13 @@ func assertRecoveryResourceVersions(t *testing.T, watchVersions, listVersions []
 	require.GreaterOrEqual(t, len(listVersions), 2)
 	for index := range 2 {
 		require.NotEmpty(t, listVersions[index])
-		assert.Equal(t, listVersions[index], watchVersions[index],
-			"watch %d must start from its preceding fresh list resourceVersion", index+1)
-	}
-
-	parsed := make([]int64, 0, len(watchVersions))
-	for _, version := range watchVersions {
-		value, err := strconv.ParseInt(version, 10, 64)
-		require.NoError(t, err)
-		parsed = append(parsed, value)
-	}
-	for index := 1; index < len(parsed); index++ {
-		assert.GreaterOrEqual(t, parsed[index], parsed[index-1])
+		assert.Equal(
+			t,
+			listVersions[index],
+			watchVersions[index],
+			"watch %d must start from its preceding fresh list resourceVersion",
+			index+1,
+		)
 	}
 }
 
@@ -985,23 +985,26 @@ func updateDeploymentTemplateAnnotation(
 	client kubernetes.Interface,
 	namespace, name, value string,
 ) (*appsv1.Deployment, error) {
-	var lastErr error
-	for range 10 {
-		deployment, err := client.AppsV1().Deployments(namespace).Get(t.Context(), name, metav1.GetOptions{})
+	t.Helper()
+	var updated *appsv1.Deployment
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		deployment, err := client.AppsV1().Deployments(namespace).Get(
+			t.Context(),
+			name,
+			metav1.GetOptions{},
+		)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		deployment.Spec.Template.Annotations = map[string]string{"rollout-watch": value}
-		updated, err := client.AppsV1().Deployments(namespace).Update(t.Context(), deployment, metav1.UpdateOptions{})
-		if err == nil {
-			return updated, nil
-		}
-		if !apierrors.IsConflict(err) {
-			return nil, err
-		}
-		lastErr = err
-	}
-	return nil, fmt.Errorf("update deployment %s/%s after conflicts: %w", namespace, name, lastErr)
+		updated, err = client.AppsV1().Deployments(namespace).Update(
+			t.Context(),
+			deployment,
+			metav1.UpdateOptions{},
+		)
+		return err
+	})
+	return updated, err
 }
 
 func updateDeploymentStatus(
@@ -1009,17 +1012,27 @@ func updateDeploymentStatus(
 	client kubernetes.Interface,
 	namespace, name string,
 	mutate func(*appsv1.Deployment),
-) error {
+) (*appsv1.Deployment, error) {
 	t.Helper()
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		deployment, err := client.AppsV1().Deployments(namespace).Get(t.Context(), name, metav1.GetOptions{})
+	var updated *appsv1.Deployment
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		deployment, err := client.AppsV1().Deployments(namespace).Get(
+			t.Context(),
+			name,
+			metav1.GetOptions{},
+		)
 		if err != nil {
 			return err
 		}
 		mutate(deployment)
-		_, err = client.AppsV1().Deployments(namespace).UpdateStatus(t.Context(), deployment, metav1.UpdateOptions{})
+		updated, err = client.AppsV1().Deployments(namespace).UpdateStatus(
+			t.Context(),
+			deployment,
+			metav1.UpdateOptions{},
+		)
 		return err
 	})
+	return updated, err
 }
 func resumeJob(
 	t *testing.T,
@@ -1028,7 +1041,7 @@ func resumeJob(
 ) (*batchv1.Job, error) {
 	t.Helper()
 	var updated *batchv1.Job
-	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		current, err := client.BatchV1().Jobs(namespace).Get(t.Context(), name, metav1.GetOptions{})
 		if err != nil {
 			return err
@@ -1045,17 +1058,27 @@ func updateJobStatus(
 	client kubernetes.Interface,
 	namespace, name string,
 	mutate func(*batchv1.Job),
-) error {
+) (*batchv1.Job, error) {
 	t.Helper()
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		job, err := client.BatchV1().Jobs(namespace).Get(t.Context(), name, metav1.GetOptions{})
+	var updated *batchv1.Job
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		job, err := client.BatchV1().Jobs(namespace).Get(
+			t.Context(),
+			name,
+			metav1.GetOptions{},
+		)
 		if err != nil {
 			return err
 		}
 		mutate(job)
-		_, err = client.BatchV1().Jobs(namespace).UpdateStatus(t.Context(), job, metav1.UpdateOptions{})
+		updated, err = client.BatchV1().Jobs(namespace).UpdateStatus(
+			t.Context(),
+			job,
+			metav1.UpdateOptions{},
+		)
 		return err
 	})
+	return updated, err
 }
 
 func updateStatefulSetStatus(
@@ -1096,6 +1119,71 @@ func updateDaemonSetStatus(
 		return err
 	})
 	return updated, err
+}
+
+type observeOutcome struct {
+	result observer.WatchResult
+	err    error
+}
+
+type observeCall struct {
+	outcome <-chan observeOutcome
+	done    <-chan struct{}
+	cancel  context.CancelFunc
+}
+
+func startObserve(
+	parent context.Context,
+	t *testing.T,
+	rolloutObserver observer.RolloutObserver,
+	ref observer.ResourceRef,
+	expectedGeneration int64,
+	timeout time.Duration,
+) observeCall {
+	t.Helper()
+	ctx, cancel := context.WithCancel(parent)
+	outcomes := make(chan observeOutcome, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		result, err := rolloutObserver.Observe(ctx, ref, expectedGeneration, timeout)
+		outcomes <- observeOutcome{result: result, err: err}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Errorf("Observe goroutine did not exit during cleanup")
+		}
+	})
+	return observeCall{outcome: outcomes, done: done, cancel: cancel}
+}
+
+func awaitObserve(t *testing.T, call observeCall, timeout time.Duration) observeOutcome {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	var outcome observeOutcome
+	select {
+	case outcome = <-call.outcome:
+	case <-timer.C:
+		call.cancel()
+		select {
+		case <-call.done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Observe goroutine did not exit after cancellation")
+		}
+		t.Fatalf("Observe did not return within %s", timeout)
+	}
+
+	select {
+	case <-call.done:
+	case <-time.After(time.Second):
+		t.Fatal("Observe goroutine did not exit after returning a result")
+	}
+	return outcome
 }
 
 func assertRolloutLast(t *testing.T, result observer.WatchResult, err error) {
@@ -1202,40 +1290,37 @@ func TestRolloutWatchJobCompletesAfterWatch(t *testing.T) {
 	job := fx.createJob(t, "job")
 	ref := fx.jobRef(job.Name)
 
-	resultCh := make(chan observer.WatchResult, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), ref, 0, defaultSceneTimeout)
-		resultCh <- result
-		errCh <- err
-	}()
+	obs := observer.New(fx.observerClient(t))
+	call := startObserve(t.Context(), t, obs, ref, 0, defaultSceneTimeout)
 
-	require.Eventually(t, func() bool { return fx.transport.activeWatches.Load() == 1 }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(
+		t,
+		func() bool { return fx.transport.activeWatches.Load() == 1 },
+		5*time.Second,
+		10*time.Millisecond,
+	)
 	resumed, err := resumeJob(t, fx.adminClient, fx.namespace, job.Name)
 	require.NoError(t, err)
 
-	select {
-	case err := <-errCh:
-		result := <-resultCh
-		require.NoError(t, err)
-		assert.Equal(t, ref, result.Resource)
-		assert.True(t, result.Ready)
-		assert.False(t, result.Failed)
-		assert.Equal(t, job.UID, result.ResourceUID)
-		assert.Equal(t, resumed.Generation, result.Generation)
-		assert.Zero(t, result.ObservedGeneration)
-		assert.NotEmpty(t, result.ResourceVersion)
-		require.Condition(t, func() bool {
-			for _, condition := range result.Conditions {
-				if condition.Type == string(batchv1.JobComplete) && condition.Status == string(corev1.ConditionTrue) {
-					return true
-				}
+	outcome := awaitObserve(t, call, defaultSceneTimeout)
+	require.NoError(t, outcome.err)
+	result := outcome.result
+	assert.Equal(t, ref, result.Resource)
+	assert.True(t, result.Ready)
+	assert.False(t, result.Failed)
+	assert.Equal(t, job.UID, result.ResourceUID)
+	assert.Equal(t, resumed.Generation, result.Generation)
+	assert.Zero(t, result.ObservedGeneration)
+	assert.NotEmpty(t, result.ResourceVersion)
+	require.Condition(t, func() bool {
+		for _, condition := range result.Conditions {
+			if condition.Type == string(batchv1.JobComplete) &&
+				condition.Status == string(corev1.ConditionTrue) {
+				return true
 			}
-			return false
-		}, "Job controller did not report Complete=True")
-	case <-time.After(defaultSceneTimeout):
-		t.Fatal("observer did not receive the Job completion event")
-	}
+		}
+		return false
+	}, "Job controller did not report Complete=True")
 
 	fx.assertClean(t)
 }
@@ -1251,18 +1336,16 @@ func TestRolloutWatchAppsObservedGenerationGate(t *testing.T) {
 	obs := observer.New(fx.observerClient(t))
 	deployment := fx.createDeployment(t, "deployment")
 
-	resultCh := make(chan observer.WatchResult, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		result, err := obs.Observe(t.Context(), fx.deploymentRef(deployment.Name), deployment.Generation+1, defaultSceneTimeout)
-		resultCh <- result
-		errCh <- err
-	}()
+	call := startObserve(t.Context(), t, obs,
+		fx.deploymentRef(deployment.Name),
+		deployment.Generation+1,
+		defaultSceneTimeout)
 	require.Eventually(t, func() bool { return fx.transport.activeWatches.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
 	updated, err := updateDeploymentTemplateAnnotation(t, fx.adminClient, fx.namespace, deployment.Name, "next-generation")
 	require.NoError(t, err)
-	result := <-resultCh
-	err = <-errCh
+	outcome := awaitObserve(t, call, defaultSceneTimeout)
+	result := outcome.result
+	err = outcome.err
 	require.NoError(t, err)
 	assert.True(t, result.Ready)
 	assert.GreaterOrEqual(t, result.Generation, updated.Generation)
@@ -1278,18 +1361,68 @@ func TestRolloutWatchValidatesBeforeAPI(t *testing.T) {
 		timeout    time.Duration
 		wantCode   observer.ErrorCode
 	}{
-		{name: "empty namespace", ref: func(*rolloutFixture) observer.ResourceRef {
-			return observer.ResourceRef{GVR: observer.DeploymentGVR, Name: "deployment"}
-		}, generation: 1, timeout: time.Second, wantCode: observer.ErrorCodeInvalidArgument},
-		{name: "empty name", ref: func(fx *rolloutFixture) observer.ResourceRef {
-			return observer.ResourceRef{GVR: observer.DeploymentGVR, Namespace: fx.namespace}
-		}, generation: 1, timeout: time.Second, wantCode: observer.ErrorCodeInvalidArgument},
-		{name: "invalid apps generation", ref: func(fx *rolloutFixture) observer.ResourceRef { return fx.deploymentRef("deployment") }, generation: 0, timeout: time.Second, wantCode: observer.ErrorCodeInvalidArgument},
-		{name: "invalid job generation", ref: func(fx *rolloutFixture) observer.ResourceRef { return fx.jobRef("job") }, generation: 1, timeout: time.Second, wantCode: observer.ErrorCodeInvalidArgument},
-		{name: "invalid timeout", ref: func(fx *rolloutFixture) observer.ResourceRef { return fx.deploymentRef("deployment") }, generation: 1, timeout: 0, wantCode: observer.ErrorCodeInvalidArgument},
-		{name: "unsupported resource", ref: func(fx *rolloutFixture) observer.ResourceRef {
-			return observer.ResourceRef{GVR: schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}, Namespace: fx.namespace, Name: "widget"}
-		}, generation: 0, timeout: time.Second, wantCode: observer.ErrorCodeUnsupportedResource},
+		{
+			name: "empty namespace",
+			ref: func(*rolloutFixture) observer.ResourceRef {
+				return observer.ResourceRef{GVR: observer.DeploymentGVR, Name: "deployment"}
+			},
+			generation: 1,
+			timeout:    time.Second,
+			wantCode:   observer.ErrorCodeInvalidArgument,
+		},
+		{
+			name: "empty name",
+			ref: func(fx *rolloutFixture) observer.ResourceRef {
+				return observer.ResourceRef{GVR: observer.DeploymentGVR, Namespace: fx.namespace}
+			},
+			generation: 1,
+			timeout:    time.Second,
+			wantCode:   observer.ErrorCodeInvalidArgument,
+		},
+		{
+			name: "invalid apps generation",
+			ref: func(fx *rolloutFixture) observer.ResourceRef {
+				return fx.deploymentRef("deployment")
+			},
+			generation: 0,
+			timeout:    time.Second,
+			wantCode:   observer.ErrorCodeInvalidArgument,
+		},
+		{
+			name: "invalid job generation",
+			ref: func(fx *rolloutFixture) observer.ResourceRef {
+				return fx.jobRef("job")
+			},
+			generation: 1,
+			timeout:    time.Second,
+			wantCode:   observer.ErrorCodeInvalidArgument,
+		},
+		{
+			name: "invalid timeout",
+			ref: func(fx *rolloutFixture) observer.ResourceRef {
+				return fx.deploymentRef("deployment")
+			},
+			generation: 1,
+			timeout:    0,
+			wantCode:   observer.ErrorCodeInvalidArgument,
+		},
+		{
+			name: "unsupported resource",
+			ref: func(fx *rolloutFixture) observer.ResourceRef {
+				return observer.ResourceRef{
+					GVR: schema.GroupVersionResource{
+						Group:    "example.io",
+						Version:  "v1",
+						Resource: "widgets",
+					},
+					Namespace: fx.namespace,
+					Name:      "widget",
+				}
+			},
+			generation: 0,
+			timeout:    time.Second,
+			wantCode:   observer.ErrorCodeUnsupportedResource,
+		},
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1315,24 +1448,50 @@ func TestRolloutWatchWorkloadFailures(t *testing.T) {
 	t.Run("deployment terminal failure", func(t *testing.T) {
 		fx := setupRolloutFixture(t, t.Name())
 		deployment := fx.createDeployment(t, "deployment-failed")
-		resultCh := make(chan observer.WatchResult, 1)
-		errCh := make(chan error, 1)
-		go func() {
-			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), fx.deploymentRef(deployment.Name), deployment.Generation+1, defaultSceneTimeout)
-			resultCh <- result
-			errCh <- err
-		}()
-		require.Eventually(t, func() bool { return fx.transport.activeWatches.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
-		err := updateDeploymentStatus(t, fx.adminClient, fx.namespace, deployment.Name, func(current *appsv1.Deployment) {
-			current.Status.Conditions = []appsv1.DeploymentCondition{{
-				Type: appsv1.DeploymentReplicaFailure, Status: corev1.ConditionTrue, Reason: "FailedCreate",
-			}}
-		})
+		obs := observer.New(fx.observerClient(t))
+		ref := fx.deploymentRef(deployment.Name)
+		call := startObserve(t.Context(), t, obs,
+			ref,
+			deployment.Generation+1,
+			defaultSceneTimeout)
+		require.Eventually(
+			t,
+			func() bool { return fx.transport.activeWatches.Load() > 0 },
+			5*time.Second,
+			10*time.Millisecond,
+		)
+		updated, err := updateDeploymentStatus(
+			t,
+			fx.adminClient,
+			fx.namespace,
+			deployment.Name,
+			func(current *appsv1.Deployment) {
+				current.Status.Conditions = []appsv1.DeploymentCondition{{
+					Type:    appsv1.DeploymentReplicaFailure,
+					Status:  corev1.ConditionTrue,
+					Reason:  "FailedCreate",
+					Message: "replica creation failed",
+				}}
+			},
+		)
 		require.NoError(t, err)
-		result := <-resultCh
-		err = <-errCh
+		outcome := awaitObserve(t, call, defaultSceneTimeout)
+		result := outcome.result
+		err = outcome.err
 		assert.ErrorIs(t, err, observer.ErrWorkloadUnavailable)
+		assert.Equal(t, observer.ErrorCodeWorkloadUnavailable, observerCode(t, err))
+		assert.Equal(t, ref, result.Resource)
+		assert.Equal(t, deployment.UID, result.ResourceUID)
+		assert.Equal(t, updated.Generation, result.Generation)
+		assert.Equal(t, updated.Status.ObservedGeneration, result.ObservedGeneration)
+		assert.Equal(t, updated.ResourceVersion, result.ResourceVersion)
+		assert.False(t, result.Ready)
 		assert.True(t, result.Failed)
+		require.Len(t, result.Conditions, 1)
+		assert.Equal(t, string(appsv1.DeploymentReplicaFailure), result.Conditions[0].Type)
+		assert.Equal(t, string(corev1.ConditionTrue), result.Conditions[0].Status)
+		assert.Equal(t, "FailedCreate", result.Conditions[0].Reason)
+		assert.Equal(t, "replica creation failed", result.Conditions[0].Message)
 		assertRolloutLast(t, result, err)
 		fx.assertClean(t)
 	})
@@ -1340,29 +1499,60 @@ func TestRolloutWatchWorkloadFailures(t *testing.T) {
 	t.Run("job terminal failure", func(t *testing.T) {
 		fx := setupRolloutFixture(t, t.Name())
 		job := fx.createPendingJob(t, "job-failed")
-		resultCh := make(chan observer.WatchResult, 1)
-		errCh := make(chan error, 1)
-		go func() {
-			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), fx.jobRef(job.Name), 0, defaultSceneTimeout)
-			resultCh <- result
-			errCh <- err
-		}()
-		require.Eventually(t, func() bool { return fx.transport.activeWatches.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
-		err := updateJobStatus(t, fx.adminClient, fx.namespace, job.Name, func(current *batchv1.Job) {
-			current.Status.Active = 0
-			current.Status.Conditions = []batchv1.JobCondition{
-				{Type: batchv1.JobFailureTarget, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"},
-				{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"},
-			}
-			if current.Status.StartTime == nil {
-				current.Status.StartTime = &metav1.Time{Time: time.Now()}
-			}
-		})
+		obs := observer.New(fx.observerClient(t))
+		ref := fx.jobRef(job.Name)
+		call := startObserve(t.Context(), t, obs, ref, 0, defaultSceneTimeout)
+		require.Eventually(
+			t,
+			func() bool { return fx.transport.activeWatches.Load() > 0 },
+			5*time.Second,
+			10*time.Millisecond,
+		)
+		updated, err := updateJobStatus(
+			t,
+			fx.adminClient,
+			fx.namespace,
+			job.Name,
+			func(current *batchv1.Job) {
+				current.Status.Active = 0
+				current.Status.Conditions = []batchv1.JobCondition{
+					{
+						Type:    batchv1.JobFailureTarget,
+						Status:  corev1.ConditionTrue,
+						Reason:  "BackoffLimitExceeded",
+						Message: "job reached the backoff limit",
+					},
+					{
+						Type:    batchv1.JobFailed,
+						Status:  corev1.ConditionTrue,
+						Reason:  "BackoffLimitExceeded",
+						Message: "job reached the backoff limit",
+					},
+				}
+				if current.Status.StartTime == nil {
+					current.Status.StartTime = &metav1.Time{Time: time.Now()}
+				}
+			},
+		)
 		require.NoError(t, err)
-		result := <-resultCh
-		err = <-errCh
+		outcome := awaitObserve(t, call, defaultSceneTimeout)
+		result := outcome.result
+		err = outcome.err
 		assert.ErrorIs(t, err, observer.ErrWorkloadUnavailable)
+		assert.Equal(t, observer.ErrorCodeWorkloadUnavailable, observerCode(t, err))
+		assert.Equal(t, ref, result.Resource)
+		assert.Equal(t, job.UID, result.ResourceUID)
+		assert.Equal(t, updated.Generation, result.Generation)
+		assert.Zero(t, result.ObservedGeneration)
+		assert.Equal(t, updated.ResourceVersion, result.ResourceVersion)
+		assert.False(t, result.Ready)
 		assert.True(t, result.Failed)
+		require.Len(t, result.Conditions, 2)
+		failed := result.Conditions[1]
+		assert.Equal(t, string(batchv1.JobFailed), failed.Type)
+		assert.Equal(t, string(corev1.ConditionTrue), failed.Status)
+		assert.Equal(t, "BackoffLimitExceeded", failed.Reason)
+		assert.Equal(t, "job reached the backoff limit", failed.Message)
 		assertRolloutLast(t, result, err)
 		fx.assertClean(t)
 	})
@@ -1372,25 +1562,34 @@ func TestRolloutWatchWorkloadFailures(t *testing.T) {
 		statefulSet := fx.createStatefulSet(t, "statefulset-pending")
 		transport := newWatchEventBarrierTransport(`"reason":"RolloutPending"`)
 		obs := observer.New(clientWithTransport(t, fx.observerCfg, transport))
-		resultCh := make(chan observer.WatchResult, 1)
-		errCh := make(chan error, 1)
-		go func() {
-			result, err := obs.Observe(t.Context(), fx.statefulSetRef(statefulSet.Name), statefulSet.Generation+100, 3*time.Second)
-			resultCh <- result
-			errCh <- err
-		}()
+		ref := fx.statefulSetRef(statefulSet.Name)
+		call := startObserve(t.Context(), t, obs,
+			ref,
+			statefulSet.Generation+100,
+			3*time.Second)
 		require.Eventually(t, func() bool { return transport.activeWatches.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
-		updated, err := updateStatefulSetStatus(t, fx.adminClient, fx.namespace, statefulSet.Name, func(current *appsv1.StatefulSet) {
-			current.Status.Conditions = []appsv1.StatefulSetCondition{{Type: "Progressing", Status: corev1.ConditionFalse, Reason: "RolloutPending"}}
-		})
+		updated, err := updateStatefulSetStatus(
+			t,
+			fx.adminClient,
+			fx.namespace,
+			statefulSet.Name,
+			func(current *appsv1.StatefulSet) {
+				current.Status.Conditions = []appsv1.StatefulSetCondition{{
+					Type:   "Progressing",
+					Status: corev1.ConditionFalse,
+					Reason: "RolloutPending",
+				}}
+			},
+		)
 		require.NoError(t, err)
 		select {
 		case <-transport.matched:
 		case <-time.After(2 * time.Second):
 			t.Fatal("observer watch did not receive the StatefulSet non-terminal condition")
 		}
-		result := <-resultCh
-		err = <-errCh
+		outcome := awaitObserve(t, call, 5*time.Second)
+		result := outcome.result
+		err = outcome.err
 		assert.ErrorIs(t, err, observer.ErrRolloutTimeout)
 		assert.False(t, errors.Is(err, observer.ErrWorkloadUnavailable))
 		assertRolloutLast(t, result, err)
@@ -1408,25 +1607,34 @@ func TestRolloutWatchWorkloadFailures(t *testing.T) {
 		daemonSet := fx.createDaemonSet(t, "daemonset-pending")
 		transport := newWatchEventBarrierTransport(`"reason":"RolloutPending"`)
 		obs := observer.New(clientWithTransport(t, fx.observerCfg, transport))
-		resultCh := make(chan observer.WatchResult, 1)
-		errCh := make(chan error, 1)
-		go func() {
-			result, err := obs.Observe(t.Context(), fx.daemonSetRef(daemonSet.Name), daemonSet.Generation+100, 3*time.Second)
-			resultCh <- result
-			errCh <- err
-		}()
+		ref := fx.daemonSetRef(daemonSet.Name)
+		call := startObserve(t.Context(), t, obs,
+			ref,
+			daemonSet.Generation+100,
+			3*time.Second)
 		require.Eventually(t, func() bool { return transport.activeWatches.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
-		updated, err := updateDaemonSetStatus(t, fx.adminClient, fx.namespace, daemonSet.Name, func(current *appsv1.DaemonSet) {
-			current.Status.Conditions = []appsv1.DaemonSetCondition{{Type: "Progressing", Status: corev1.ConditionFalse, Reason: "RolloutPending"}}
-		})
+		updated, err := updateDaemonSetStatus(
+			t,
+			fx.adminClient,
+			fx.namespace,
+			daemonSet.Name,
+			func(current *appsv1.DaemonSet) {
+				current.Status.Conditions = []appsv1.DaemonSetCondition{{
+					Type:   "Progressing",
+					Status: corev1.ConditionFalse,
+					Reason: "RolloutPending",
+				}}
+			},
+		)
 		require.NoError(t, err)
 		select {
 		case <-transport.matched:
 		case <-time.After(2 * time.Second):
 			t.Fatal("observer watch did not receive the DaemonSet non-terminal condition")
 		}
-		result := <-resultCh
-		err = <-errCh
+		outcome := awaitObserve(t, call, 5*time.Second)
+		result := outcome.result
+		err = outcome.err
 		assert.ErrorIs(t, err, observer.ErrRolloutTimeout)
 		assert.False(t, errors.Is(err, observer.ErrWorkloadUnavailable))
 		assertRolloutLast(t, result, err)
@@ -1445,35 +1653,28 @@ func TestRolloutWatchTransportDisconnect(t *testing.T) {
 	deployment := fx.createDeployment(t, "reconnect")
 	ref := fx.deploymentRef(deployment.Name)
 
-	transport := &disconnectingTransport{disconnectFirstWatch: true}
+	transport := &disconnectingTransport{isFirstWatchDisconnectEnabled: true}
 	client := clientWithTransport(t, fx.observerCfg, transport)
 	obs := observer.New(client)
 
-	resultCh := make(chan observer.WatchResult, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		result, err := obs.Observe(t.Context(), ref, deployment.Generation+1, defaultSceneTimeout)
-		resultCh <- result
-		errCh <- err
-	}()
+	call := startObserve(t.Context(), t, obs,
+		ref,
+		deployment.Generation+1,
+		defaultSceneTimeout)
 
 	require.Eventually(t, func() bool { return transport.watchCalls.Load() >= 1 }, 5*time.Second, 10*time.Millisecond)
 	updated, err := updateDeploymentTemplateAnnotation(t, fx.adminClient, fx.namespace, deployment.Name, "ready")
 	require.NoError(t, err)
 
-	select {
-	case err := <-errCh:
-		result := <-resultCh
-		require.NoError(t, err)
-		assert.True(t, result.Ready)
-		assert.GreaterOrEqual(t, result.ObservedGeneration, updated.Generation)
-		assert.NotEmpty(t, result.ResourceVersion)
-		assert.GreaterOrEqual(t, transport.listCalls.Load(), int64(2))
-		assert.GreaterOrEqual(t, transport.watchCalls.Load(), int64(2))
-		assertRecoveryResourceVersions(t, transport.resourceVersions(), transport.listResourceVersions())
-	case <-time.After(defaultSceneTimeout):
-		t.Fatal("observer did not recover after transport disconnect")
-	}
+	outcome := awaitObserve(t, call, defaultSceneTimeout)
+	result := outcome.result
+	require.NoError(t, outcome.err)
+	assert.True(t, result.Ready)
+	assert.GreaterOrEqual(t, result.ObservedGeneration, updated.Generation)
+	assert.NotEmpty(t, result.ResourceVersion)
+	assert.GreaterOrEqual(t, transport.listCalls.Load(), int64(2))
+	assert.GreaterOrEqual(t, transport.watchCalls.Load(), int64(2))
+	assertRecoveryResourceVersions(t, transport.resourceVersions(), transport.listResourceVersions())
 
 	assertTransportClean(t, &transport.trackingTransport)
 	fx.assertClean(t)
@@ -1488,30 +1689,29 @@ func TestRolloutWatchResourceVersionExpired(t *testing.T) {
 	client := clientWithTransport(t, fx.observerCfg, transport)
 	obs := observer.New(client)
 
-	resultCh := make(chan observer.WatchResult, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		result, err := obs.Observe(t.Context(), ref, deployment.Generation+1, defaultSceneTimeout)
-		resultCh <- result
-		errCh <- err
-	}()
+	call := startObserve(t.Context(), t, obs,
+		ref,
+		deployment.Generation+1,
+		defaultSceneTimeout)
 
 	require.Eventually(t, func() bool { return transport.watchCalls.Load() >= 2 }, 5*time.Second, 10*time.Millisecond)
-	updated, err := updateDeploymentTemplateAnnotation(t, fx.adminClient, fx.namespace, deployment.Name, "expired-recovery")
+	updated, err := updateDeploymentTemplateAnnotation(
+		t,
+		fx.adminClient,
+		fx.namespace,
+		deployment.Name,
+		"expired-recovery",
+	)
 	require.NoError(t, err)
 
-	select {
-	case err := <-errCh:
-		result := <-resultCh
-		require.NoError(t, err)
-		assert.True(t, result.Ready)
-		assert.NotEmpty(t, result.ResourceVersion)
-		assert.GreaterOrEqual(t, transport.listCalls.Load(), int64(2))
-		assert.GreaterOrEqual(t, result.ObservedGeneration, updated.Generation)
-		assertRecoveryResourceVersions(t, transport.resourceVersions(), transport.listResourceVersions())
-	case <-time.After(defaultSceneTimeout):
-		t.Fatal("observer did not recover after resource version expiration")
-	}
+	outcome := awaitObserve(t, call, defaultSceneTimeout)
+	result := outcome.result
+	require.NoError(t, outcome.err)
+	assert.True(t, result.Ready)
+	assert.NotEmpty(t, result.ResourceVersion)
+	assert.GreaterOrEqual(t, transport.listCalls.Load(), int64(2))
+	assert.GreaterOrEqual(t, result.ObservedGeneration, updated.Generation)
+	assertRecoveryResourceVersions(t, transport.resourceVersions(), transport.listResourceVersions())
 
 	assertTransportClean(t, &transport.trackingTransport)
 	fx.assertClean(t)
@@ -1554,29 +1754,23 @@ func TestRolloutWatchParentCancelWinsTimeout(t *testing.T) {
 			require.NoError(t, err)
 
 			startedAt := time.Now()
-			resultCh := make(chan observer.WatchResult, 1)
-			errCh := make(chan error, 1)
-			go func() {
-				result, err := observer.New(client).Observe(ctx, fx.deploymentRef(deployment.Name), deployment.Generation+100, boundaryTimeout)
-				resultCh <- result
-				errCh <- err
-			}()
+			call := startObserve(ctx, t, observer.New(client),
+				fx.deploymentRef(deployment.Name),
+				deployment.Generation+100,
+				boundaryTimeout)
 
 			require.Eventually(t, func() bool { return transport.activeWatches.Load() == 1 }, time.Second, 10*time.Millisecond)
 
-			select {
-			case err := <-errCh:
-				result := <-resultCh
-				assert.GreaterOrEqual(t, time.Since(startedAt), boundaryTimeout-250*time.Millisecond)
-				assert.ErrorIs(t, err, observer.ErrCancelled)
-				assert.Equal(t, observer.ErrorCodeCancelled, observerCode(t, err))
-				assertRolloutLast(t, result, err)
-				assert.Equal(t, deployment.UID, result.ResourceUID)
-				assert.Equal(t, deployment.Generation, result.Generation)
-				assert.NotEmpty(t, result.ResourceVersion)
-			case <-time.After(boundaryTimeout + 5*time.Second):
-				t.Fatal("observer did not stop at the parent deadline boundary")
-			}
+			outcome := awaitObserve(t, call, boundaryTimeout+5*time.Second)
+			result := outcome.result
+			err = outcome.err
+			assert.GreaterOrEqual(t, time.Since(startedAt), boundaryTimeout-250*time.Millisecond)
+			assert.ErrorIs(t, err, observer.ErrCancelled)
+			assert.Equal(t, observer.ErrorCodeCancelled, observerCode(t, err))
+			assertRolloutLast(t, result, err)
+			assert.Equal(t, deployment.UID, result.ResourceUID)
+			assert.Equal(t, deployment.Generation, result.Generation)
+			assert.NotEmpty(t, result.ResourceVersion)
 			assert.Eventually(t, func() bool { return transport.activeWatches.Load() == 0 }, 5*time.Second, 100*time.Millisecond)
 		})
 	}
@@ -1589,17 +1783,26 @@ func TestRolloutWatchDeleteAndReplace(t *testing.T) {
 		fx := setupRolloutFixture(t, t.Name())
 		deployment := fx.createDeployment(t, "delete")
 		ref := fx.deploymentRef(deployment.Name)
-		resultCh := make(chan observer.WatchResult, 1)
-		errCh := make(chan error, 1)
-		go func() {
-			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), ref, deployment.Generation+1, defaultSceneTimeout)
-			resultCh <- result
-			errCh <- err
-		}()
-		require.Eventually(t, func() bool { return fx.transport.activeWatches.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
-		require.NoError(t, fx.adminClient.AppsV1().Deployments(fx.namespace).Delete(t.Context(), deployment.Name, metav1.DeleteOptions{}))
-		result := <-resultCh
-		err := <-errCh
+		obs := observer.New(fx.observerClient(t))
+		call := startObserve(t.Context(), t, obs,
+			ref,
+			deployment.Generation+1,
+			defaultSceneTimeout)
+		require.Eventually(
+			t,
+			func() bool { return fx.transport.activeWatches.Load() > 0 },
+			5*time.Second,
+			10*time.Millisecond,
+		)
+		err := fx.adminClient.AppsV1().Deployments(fx.namespace).Delete(
+			t.Context(),
+			deployment.Name,
+			metav1.DeleteOptions{},
+		)
+		require.NoError(t, err)
+		outcome := awaitObserve(t, call, defaultSceneTimeout)
+		result := outcome.result
+		err = outcome.err
 		assert.ErrorIs(t, err, observer.ErrWorkloadUnavailable)
 		assert.Equal(t, deployment.UID, result.ResourceUID)
 		assertRolloutLast(t, result, err)
@@ -1613,13 +1816,11 @@ func TestRolloutWatchDeleteAndReplace(t *testing.T) {
 		transport := newRelistBarrierTransport()
 		t.Cleanup(transport.release)
 		client := clientWithTransport(t, fx.observerCfg, transport)
-		resultCh := make(chan observer.WatchResult, 1)
-		errCh := make(chan error, 1)
-		go func() {
-			result, err := observer.New(client).Observe(t.Context(), ref, deployment.Generation+1, defaultSceneTimeout)
-			resultCh <- result
-			errCh <- err
-		}()
+		obs := observer.New(client)
+		call := startObserve(t.Context(), t, obs,
+			ref,
+			deployment.Generation+1,
+			defaultSceneTimeout)
 
 		select {
 		case <-transport.relistStarted:
@@ -1629,7 +1830,12 @@ func TestRolloutWatchDeleteAndReplace(t *testing.T) {
 		require.Eventually(t, func() bool { return transport.activeWatches.Load() == 0 }, 5*time.Second, 10*time.Millisecond)
 
 		propagation := metav1.DeletePropagationForeground
-		require.NoError(t, fx.adminClient.AppsV1().Deployments(fx.namespace).Delete(t.Context(), deployment.Name, metav1.DeleteOptions{PropagationPolicy: &propagation}))
+		err := fx.adminClient.AppsV1().Deployments(fx.namespace).Delete(
+			t.Context(),
+			deployment.Name,
+			metav1.DeleteOptions{PropagationPolicy: &propagation},
+		)
+		require.NoError(t, err)
 		require.Eventually(t, func() bool {
 			_, err := fx.adminClient.AppsV1().Deployments(fx.namespace).Get(t.Context(), deployment.Name, metav1.GetOptions{})
 			return apierrors.IsNotFound(err)
@@ -1637,16 +1843,13 @@ func TestRolloutWatchDeleteAndReplace(t *testing.T) {
 		replacement := fx.createDeployment(t, deployment.Name)
 		transport.release()
 
-		select {
-		case err := <-errCh:
-			result := <-resultCh
-			assert.ErrorIs(t, err, observer.ErrWorkloadUnavailable)
-			assert.Equal(t, deployment.UID, result.ResourceUID)
-			assert.NotEqual(t, replacement.UID, result.ResourceUID)
-			assertRolloutLast(t, result, err)
-		case <-time.After(defaultSceneTimeout):
-			t.Fatal("observer did not reject the replacement UID after fresh list")
-		}
+		outcome := awaitObserve(t, call, defaultSceneTimeout)
+		result := outcome.result
+		err = outcome.err
+		assert.ErrorIs(t, err, observer.ErrWorkloadUnavailable)
+		assert.Equal(t, deployment.UID, result.ResourceUID)
+		assert.NotEqual(t, replacement.UID, result.ResourceUID)
+		assertRolloutLast(t, result, err)
 		assert.GreaterOrEqual(t, transport.listCalls.Load(), int64(2))
 		assert.Equal(t, int64(1), transport.watchCalls.Load())
 		assertTransportClean(t, &transport.trackingTransport)
@@ -1681,40 +1884,41 @@ func TestRolloutWatchConcurrentIsolation(t *testing.T) {
 	ref := fx.deploymentRef(deployment.Name)
 
 	ctx, cancel := context.WithCancel(t.Context())
-
+	defer cancel()
 	obs := observer.New(fx.observerClient(t))
+	firstCall := startObserve(ctx, t, obs,
+		ref,
+		deployment.Generation+100,
+		defaultSceneTimeout)
+	secondCall := startObserve(t.Context(), t, obs,
+		ref,
+		deployment.Generation+1,
+		defaultSceneTimeout)
 
-	firstResultCh := make(chan observer.WatchResult, 1)
-	firstErrCh := make(chan error, 1)
-	secondResultCh := make(chan observer.WatchResult, 1)
-	secondErrCh := make(chan error, 1)
-	go func() {
-		result, err := obs.Observe(ctx, ref, deployment.Generation+100, defaultSceneTimeout)
-		firstResultCh <- result
-		firstErrCh <- err
-	}()
-	go func() {
-		result, err := obs.Observe(t.Context(), ref, deployment.Generation+1, defaultSceneTimeout)
-		secondResultCh <- result
-		secondErrCh <- err
-	}()
-
-	require.Eventually(t, func() bool { return fx.transport.activeWatches.Load() == 2 }, 5*time.Second, 10*time.Millisecond)
-	updated, err := updateDeploymentTemplateAnnotation(t, fx.adminClient, fx.namespace, deployment.Name, "concurrent-ready")
+	require.Eventually(
+		t,
+		func() bool { return fx.transport.activeWatches.Load() == 2 },
+		5*time.Second,
+		10*time.Millisecond,
+	)
+	updated, err := updateDeploymentTemplateAnnotation(
+		t,
+		fx.adminClient,
+		fx.namespace,
+		deployment.Name,
+		"concurrent-ready",
+	)
 	require.NoError(t, err)
 
 	cancel()
 
-	firstErr := <-firstErrCh
-	firstResult := <-firstResultCh
-	secondErr := <-secondErrCh
-	secondResult := <-secondResultCh
-
-	assert.ErrorIs(t, firstErr, observer.ErrCancelled)
-	assert.False(t, firstResult.Ready)
-	require.NoError(t, secondErr)
-	assert.True(t, secondResult.Ready)
-	assert.GreaterOrEqual(t, secondResult.ObservedGeneration, updated.Generation)
+	firstOutcome := awaitObserve(t, firstCall, defaultSceneTimeout)
+	secondOutcome := awaitObserve(t, secondCall, defaultSceneTimeout)
+	assert.ErrorIs(t, firstOutcome.err, observer.ErrCancelled)
+	assert.False(t, firstOutcome.result.Ready)
+	require.NoError(t, secondOutcome.err)
+	assert.True(t, secondOutcome.result.Ready)
+	assert.GreaterOrEqual(t, secondOutcome.result.ObservedGeneration, updated.Generation)
 
 	fx.assertClean(t)
 }

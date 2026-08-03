@@ -354,17 +354,30 @@ func invalidArgument(ref ResourceRef, field, reason string) error {
 	}
 }
 
-func deploymentResult(ref ResourceRef, expectedGeneration int64, deployment *appsv1.Deployment) (WatchResult, bool, error) {
+func deploymentResult(
+	ref ResourceRef,
+	expectedGeneration int64,
+	deployment *appsv1.Deployment,
+) (WatchResult, bool, error) {
 	conditions := make([]Condition, 0, len(deployment.Status.Conditions))
 	available := false
 	failed := false
 	for _, condition := range deployment.Status.Conditions {
-		conditions = append(conditions, Condition{Type: string(condition.Type), Status: string(condition.Status), Reason: condition.Reason, Message: condition.Message})
+		conditions = append(conditions, rolloutCondition(
+			string(condition.Type),
+			string(condition.Status),
+			condition.Reason,
+			condition.Message,
+		))
 		if condition.Type == appsv1.DeploymentAvailable && condition.Status == corev1.ConditionTrue {
 			available = true
 		}
-		if (condition.Type == appsv1.DeploymentReplicaFailure && condition.Status == corev1.ConditionTrue) ||
-			(condition.Type == appsv1.DeploymentProgressing && condition.Status == corev1.ConditionFalse && condition.Reason == "ProgressDeadlineExceeded") {
+		replicaFailure := condition.Type == appsv1.DeploymentReplicaFailure &&
+			condition.Status == corev1.ConditionTrue
+		progressDeadlineExceeded := condition.Type == appsv1.DeploymentProgressing &&
+			condition.Status == corev1.ConditionFalse &&
+			condition.Reason == "ProgressDeadlineExceeded"
+		if replicaFailure || progressDeadlineExceeded {
 			failed = true
 		}
 	}
@@ -392,40 +405,74 @@ func deploymentResult(ref ResourceRef, expectedGeneration int64, deployment *app
 	return result, result.Ready, nil
 }
 
-func statefulSetResult(ref ResourceRef, expectedGeneration int64, statefulSet *appsv1.StatefulSet) (WatchResult, bool, error) {
+func statefulSetResult(
+	ref ResourceRef,
+	expectedGeneration int64,
+	statefulSet *appsv1.StatefulSet,
+) (WatchResult, bool, error) {
 	conditions := make([]Condition, 0, len(statefulSet.Status.Conditions))
 	for _, condition := range statefulSet.Status.Conditions {
-		conditions = append(conditions, Condition{Type: string(condition.Type), Status: string(condition.Status), Reason: condition.Reason, Message: condition.Message})
+		conditions = append(conditions, rolloutCondition(
+			string(condition.Type),
+			string(condition.Status),
+			condition.Reason,
+			condition.Message,
+		))
 	}
 	desired := int32(1)
 	if statefulSet.Spec.Replicas != nil {
 		desired = *statefulSet.Spec.Replicas
 	}
+	generationReady := generationReached(
+		statefulSet.Generation,
+		statefulSet.Status.ObservedGeneration,
+		expectedGeneration,
+	)
+	replicasReady := statefulSet.Status.UpdatedReplicas == desired &&
+		statefulSet.Status.ReadyReplicas == desired
+	revisionsMatch := statefulSet.Status.CurrentRevision == statefulSet.Status.UpdateRevision
 	result := WatchResult{
 		Resource:           ref,
 		ResourceUID:        statefulSet.UID,
 		Generation:         statefulSet.Generation,
 		ObservedGeneration: statefulSet.Status.ObservedGeneration,
 		ResourceVersion:    statefulSet.ResourceVersion,
-		Ready:              generationReached(statefulSet.Generation, statefulSet.Status.ObservedGeneration, expectedGeneration) && statefulSet.Status.UpdatedReplicas == desired && statefulSet.Status.ReadyReplicas == desired && statefulSet.Status.CurrentRevision == statefulSet.Status.UpdateRevision,
+		Ready:              generationReady && replicasReady && revisionsMatch,
 		Failed:             false,
 		Conditions:         conditions,
 	}
 	return result, result.Ready, nil
 }
 
-func daemonSetResult(ref ResourceRef, expectedGeneration int64, daemonSet *appsv1.DaemonSet) (WatchResult, bool, error) {
+func daemonSetResult(
+	ref ResourceRef,
+	expectedGeneration int64,
+	daemonSet *appsv1.DaemonSet,
+) (WatchResult, bool, error) {
 	conditions := make([]Condition, 0, len(daemonSet.Status.Conditions))
 	for _, condition := range daemonSet.Status.Conditions {
-		conditions = append(conditions, Condition{Type: string(condition.Type), Status: string(condition.Status), Reason: condition.Reason, Message: condition.Message})
+		conditions = append(conditions, rolloutCondition(
+			string(condition.Type),
+			string(condition.Status),
+			condition.Reason,
+			condition.Message,
+		))
 	}
+	generationReady := generationReached(
+		daemonSet.Generation,
+		daemonSet.Status.ObservedGeneration,
+		expectedGeneration,
+	)
+	scheduledReady := daemonSet.Status.UpdatedNumberScheduled == daemonSet.Status.DesiredNumberScheduled
+	availabilityReady := daemonSet.Status.NumberAvailable == daemonSet.Status.DesiredNumberScheduled &&
+		daemonSet.Status.NumberUnavailable == 0
 	result := WatchResult{
 		Resource:           ref,
 		ResourceUID:        daemonSet.UID,
 		Generation:         daemonSet.Generation,
 		ObservedGeneration: daemonSet.Status.ObservedGeneration,
 		ResourceVersion:    daemonSet.ResourceVersion,
-		Ready:              generationReached(daemonSet.Generation, daemonSet.Status.ObservedGeneration, expectedGeneration) && daemonSet.Status.UpdatedNumberScheduled == daemonSet.Status.DesiredNumberScheduled && daemonSet.Status.NumberAvailable == daemonSet.Status.DesiredNumberScheduled && daemonSet.Status.NumberUnavailable == 0,
+		Ready:              generationReady && scheduledReady && availabilityReady,
 		Failed:             false,
 		Conditions:         conditions,
 	}
@@ -436,7 +483,12 @@ func jobResult(ref ResourceRef, _ int64, job *batchv1.Job) (WatchResult, bool, e
 	complete := false
 	failed := false
 	for _, condition := range job.Status.Conditions {
-		conditions = append(conditions, Condition{Type: string(condition.Type), Status: string(condition.Status), Reason: condition.Reason, Message: condition.Message})
+		conditions = append(conditions, rolloutCondition(
+			string(condition.Type),
+			string(condition.Status),
+			condition.Reason,
+			condition.Message,
+		))
 		if condition.Type == batchv1.JobComplete && condition.Status == corev1.ConditionTrue {
 			complete = true
 		}
@@ -458,6 +510,15 @@ func jobResult(ref ResourceRef, _ int64, job *batchv1.Job) (WatchResult, bool, e
 		return result, false, unavailableError(result, "job reported terminal failure")
 	}
 	return result, result.Ready, nil
+}
+
+func rolloutCondition(conditionType, status, reason, message string) Condition {
+	return Condition{
+		Type:    conditionType,
+		Status:  status,
+		Reason:  reason,
+		Message: message,
+	}
 }
 
 func generationReached(metadataGeneration, observedGeneration, expectedGeneration int64) bool {

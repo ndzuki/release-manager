@@ -24,7 +24,6 @@ YELLOW      := $(ESC)[33m
 BLUE        := $(ESC)[34m
 RED         := $(ESC)[31m
 NC          := $(ESC)[0m
-KIND        ?= kind
 INSTALL_SDK_CLUSTER ?= rm-install-sdk
 INSTALL_SDK_KUBECONFIG ?= $(CURDIR)/.tmp-install-sdk-kubeconfig
 INSTALL_SDK_PATH ?= $(CURDIR)/.tmp-install-sdk-path

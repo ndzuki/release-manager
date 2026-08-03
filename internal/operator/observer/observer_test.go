@@ -162,7 +162,8 @@ func TestObserver_ValidatesInputWithoutAPIRequests(t *testing.T) {
 			timeout:            time.Second,
 			wantKind:           ErrInvalidArgument,
 			wantCode:           ErrorCodeInvalidArgument,
-			wantMessage:        "invalid rollout watch argument: expectedGeneration: must be greater than zero for apps workloads",
+			wantMessage: "invalid rollout watch argument: expectedGeneration: " +
+				"must be greater than zero for apps workloads",
 		},
 		{
 			name:               "invalid job generation",
@@ -266,7 +267,9 @@ func TestObserver_ReListsAfterWatchDisconnect(t *testing.T) {
 	})
 	client.PrependWatchReactor("deployments", func(action clienttesting.Action) (bool, watch.Interface, error) {
 		watchAction, ok := action.(clienttesting.WatchAction)
-		require.True(t, ok)
+		if !ok {
+			return true, nil, errors.New("unexpected watch action type")
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		watchVersions = append(watchVersions, watchAction.GetWatchRestrictions().ResourceVersion)
@@ -395,9 +398,15 @@ func TestObserver_ReListRejectsReplacementUID(t *testing.T) {
 		defer mu.Unlock()
 		listCalls++
 		if listCalls == 1 {
-			return true, &appsv1.DeploymentList{ListMeta: metav1.ListMeta{ResourceVersion: "1"}, Items: []appsv1.Deployment{*pending.DeepCopy()}}, nil
+			return true, &appsv1.DeploymentList{
+				ListMeta: metav1.ListMeta{ResourceVersion: "1"},
+				Items:    []appsv1.Deployment{*pending.DeepCopy()},
+			}, nil
 		}
-		return true, &appsv1.DeploymentList{ListMeta: metav1.ListMeta{ResourceVersion: "2"}, Items: []appsv1.Deployment{*replacement.DeepCopy()}}, nil
+		return true, &appsv1.DeploymentList{
+			ListMeta: metav1.ListMeta{ResourceVersion: "2"},
+			Items:    []appsv1.Deployment{*replacement.DeepCopy()},
+		}, nil
 	})
 	client.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
 		return true, firstWatch, nil
@@ -705,7 +714,12 @@ func TestStatefulSetRequiresAllReadySignals(t *testing.T) {
 			statefulSet := readyStatefulSet()
 			tt.mutate(statefulSet)
 
-			result, err := New(fake.NewSimpleClientset(statefulSet)).Observe(t.Context(), statefulSetRef(), 5, 20*time.Millisecond)
+			result, err := New(fake.NewSimpleClientset(statefulSet)).Observe(
+				t.Context(),
+				statefulSetRef(),
+				5,
+				20*time.Millisecond,
+			)
 
 			assert.ErrorIs(t, err, ErrRolloutTimeout)
 			assert.False(t, result.Ready)
@@ -913,8 +927,14 @@ func daemonSetRef() ResourceRef {
 func readyStatefulSet() *appsv1.StatefulSet {
 	replicas := int32(3)
 	return &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "default", UID: "statefulset-uid", Generation: 5, ResourceVersion: "15"},
-		Spec:       appsv1.StatefulSetSpec{Replicas: &replicas},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "db",
+			Namespace:       "default",
+			UID:             "statefulset-uid",
+			Generation:      5,
+			ResourceVersion: "15",
+		},
+		Spec: appsv1.StatefulSetSpec{Replicas: &replicas},
 		Status: appsv1.StatefulSetStatus{
 			ObservedGeneration: 5,
 			ReadyReplicas:      3,
@@ -927,7 +947,13 @@ func readyStatefulSet() *appsv1.StatefulSet {
 
 func readyDaemonSet() *appsv1.DaemonSet {
 	return &appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "default", UID: "daemonset-uid", Generation: 8, ResourceVersion: "22"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "agent",
+			Namespace:       "default",
+			UID:             "daemonset-uid",
+			Generation:      8,
+			ResourceVersion: "22",
+		},
 		Status: appsv1.DaemonSetStatus{
 			ObservedGeneration:     8,
 			DesiredNumberScheduled: 4,

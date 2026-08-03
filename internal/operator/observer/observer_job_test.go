@@ -40,7 +40,8 @@ func TestObserver_JobReady(t *testing.T) {
 	assert.Zero(t, result.ObservedGeneration)
 	assert.Equal(t, "31", result.ResourceVersion)
 	require.Len(t, result.Conditions, 1)
-	assert.Equal(t, "Complete", result.Conditions[0].Type)
+	assert.Equal(t, string(batchv1.JobComplete), result.Conditions[0].Type)
+	assert.Equal(t, string(corev1.ConditionTrue), result.Conditions[0].Status)
 }
 
 func TestObserver_JobRejectsExpectedGeneration(t *testing.T) {
@@ -83,6 +84,8 @@ func TestObserver_JobFailed(t *testing.T) {
 	assert.Equal(t, int64(4), result.Generation)
 	assert.Zero(t, result.ObservedGeneration)
 	require.Len(t, result.Conditions, 1)
+	assert.Equal(t, string(batchv1.JobFailed), result.Conditions[0].Type)
+	assert.Equal(t, string(corev1.ConditionTrue), result.Conditions[0].Status)
 	assert.Equal(t, "BackoffLimitExceeded", result.Conditions[0].Reason)
 	assert.Equal(t, "job has reached the specified backoff limit", result.Conditions[0].Message)
 	assertRolloutLast(t, result, err)
