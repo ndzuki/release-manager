@@ -410,7 +410,7 @@ func TestObserver_ReListRejectsReplacementUID(t *testing.T) {
 		errCh <- err
 	}()
 
-	require.Eventually(t, func() bool { return !firstWatch.IsStopped() }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return len(client.Actions()) >= 2 }, time.Second, time.Millisecond)
 	firstWatch.Stop()
 
 	select {
@@ -486,6 +486,7 @@ func TestObserver_DeletedPreservesLockedUID(t *testing.T) {
 		assert.ErrorIs(t, err, ErrWorkloadUnavailable)
 		assert.Equal(t, pending.UID, result.ResourceUID)
 		assertRolloutLast(t, result, err)
+		assert.True(t, watcher.IsStopped())
 	case <-time.After(time.Second):
 		t.Fatal("observer did not stop after deletion")
 	}
@@ -494,6 +495,7 @@ func TestObserver_DeletedPreservesLockedUID(t *testing.T) {
 func TestObserver_ParentCancellationWinsTimeout(t *testing.T) {
 	for range 20 {
 		pending := readyDeployment(1, "1")
+		pending.UID = "deployment-uid"
 		pending.Generation = 2
 		client := fake.NewSimpleClientset(pending)
 		watcher := watch.NewRaceFreeFake()
@@ -518,6 +520,9 @@ func TestObserver_ParentCancellationWinsTimeout(t *testing.T) {
 			assert.ErrorIs(t, err, ErrCancelled)
 			assert.Equal(t, ErrorCodeCancelled, rolloutErrorCode(t, err))
 			assertRolloutLast(t, result, err)
+			assert.NotEmpty(t, result.ResourceUID)
+			assert.NotEmpty(t, result.ResourceVersion)
+			assert.True(t, watcher.IsStopped())
 		case <-time.After(time.Second):
 			t.Fatal("observer did not stop after parent cancellation")
 		}

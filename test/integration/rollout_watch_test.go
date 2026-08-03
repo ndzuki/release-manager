@@ -1225,6 +1225,9 @@ func TestRolloutWatchTimeout(t *testing.T) {
 	assert.ErrorIs(t, err, observer.ErrRolloutTimeout)
 	assert.False(t, result.Ready)
 	assertRolloutLast(t, result, err)
+	assert.Equal(t, deployment.UID, result.ResourceUID)
+	assert.Equal(t, deployment.Generation, result.Generation)
+	assert.NotEmpty(t, result.ResourceVersion)
 	fx.assertClean(t)
 }
 
@@ -1262,6 +1265,9 @@ func TestRolloutWatchParentCancelWinsTimeout(t *testing.T) {
 				assert.ErrorIs(t, err, observer.ErrCancelled)
 				assert.Equal(t, observer.ErrorCodeCancelled, observerCode(t, err))
 				assertRolloutLast(t, result, err)
+				assert.Equal(t, deployment.UID, result.ResourceUID)
+				assert.Equal(t, deployment.Generation, result.Generation)
+				assert.NotEmpty(t, result.ResourceVersion)
 			case <-time.After(5 * time.Second):
 				t.Fatal("observer did not stop after parent cancellation")
 			}
