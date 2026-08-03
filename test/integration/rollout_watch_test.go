@@ -25,6 +25,7 @@ import (
 	authorizationv1 "k8s.io/api/authorization/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -429,6 +430,11 @@ func TestRolloutWatchCleanupRemovesControllerOwnedResources(t *testing.T) {
 		&appsv1.ControllerRevision{
 			ObjectMeta: metav1.ObjectMeta{Name: "controller-revision", Namespace: name, Labels: labels},
 		},
+		//nolint:staticcheck // Kubernetes still creates legacy Endpoints; cleanup must verify both endpoint APIs.
+		&corev1.Endpoints{ObjectMeta: metav1.ObjectMeta{Name: "endpoints", Namespace: name, Labels: labels}},
+		&discoveryv1.EndpointSlice{
+			ObjectMeta: metav1.ObjectMeta{Name: "endpoint-slice", Namespace: name, Labels: labels},
+		},
 	)
 	client.PrependReactor("delete", "namespaces", func(clienttesting.Action) (bool, runtime.Object, error) {
 		return true, nil, nil
@@ -445,6 +451,12 @@ func TestRolloutWatchCleanupRemovesControllerOwnedResources(t *testing.T) {
 	controllerRevisions, err := client.AppsV1().ControllerRevisions(name).List(t.Context(), listOptions)
 	require.NoError(t, err)
 	assert.Empty(t, controllerRevisions.Items)
+	endpoints, err := client.CoreV1().Endpoints(name).List(t.Context(), listOptions)
+	require.NoError(t, err)
+	assert.Empty(t, endpoints.Items)
+	endpointSlices, err := client.DiscoveryV1().EndpointSlices(name).List(t.Context(), listOptions)
+	require.NoError(t, err)
+	assert.Empty(t, endpointSlices.Items)
 }
 
 func deleteTestResources(ctx context.Context, client kubernetes.Interface, testID string) error {
@@ -552,6 +564,30 @@ func deleteTestResources(ctx context.Context, client kubernetes.Interface, testI
 		}
 	}
 
+	endpoints, err := client.CoreV1().Endpoints("").List(ctx, listOptions)
+	if err != nil {
+		return fmt.Errorf("list endpoints: %w", err)
+	}
+	for index := range endpoints.Items {
+		item := &endpoints.Items[index]
+		err := client.CoreV1().Endpoints(item.Namespace).Delete(ctx, item.Name, deleteOptions)
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete endpoints %s/%s: %w", item.Namespace, item.Name, err)
+		}
+	}
+
+	endpointSlices, err := client.DiscoveryV1().EndpointSlices("").List(ctx, listOptions)
+	if err != nil {
+		return fmt.Errorf("list endpointslices: %w", err)
+	}
+	for index := range endpointSlices.Items {
+		item := &endpointSlices.Items[index]
+		err := client.DiscoveryV1().EndpointSlices(item.Namespace).Delete(ctx, item.Name, deleteOptions)
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete endpointslice %s/%s: %w", item.Namespace, item.Name, err)
+		}
+	}
+
 	serviceAccounts, err := client.CoreV1().ServiceAccounts("").List(ctx, listOptions)
 	if err != nil {
 		return fmt.Errorf("list serviceaccounts: %w", err)
@@ -625,6 +661,14 @@ func testResourcesGone(ctx context.Context, client kubernetes.Interface, testID 
 	if err != nil {
 		return false, fmt.Errorf("list controllerrevisions: %w", err)
 	}
+	endpoints, err := client.CoreV1().Endpoints("").List(ctx, listOptions)
+	if err != nil {
+		return false, fmt.Errorf("list endpoints: %w", err)
+	}
+	endpointSlices, err := client.DiscoveryV1().EndpointSlices("").List(ctx, listOptions)
+	if err != nil {
+		return false, fmt.Errorf("list endpointslices: %w", err)
+	}
 	serviceAccounts, err := client.CoreV1().ServiceAccounts("").List(ctx, listOptions)
 	if err != nil {
 		return false, fmt.Errorf("list serviceaccounts: %w", err)
@@ -645,6 +689,8 @@ func testResourcesGone(ctx context.Context, client kubernetes.Interface, testID 
 		len(jobs.Items) == 0 &&
 		len(pods.Items) == 0 &&
 		len(services.Items) == 0 &&
+		len(endpoints.Items) == 0 &&
+		len(endpointSlices.Items) == 0 &&
 		len(serviceAccounts.Items) == 0 &&
 		len(roles.Items) == 0 &&
 		len(roleBindings.Items) == 0, nil
