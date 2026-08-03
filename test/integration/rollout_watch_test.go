@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -21,11 +22,13 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
@@ -42,26 +45,29 @@ import (
 )
 
 const (
-	defaultWorkloadImage = "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
-	defaultSceneTimeout  = 30 * time.Second
-	defaultJobCommand    = "/bin/true"
-	jobFailureDelay      = 10
+	workloadImageEnv    = "ROLLOUT_WATCH_WORKLOAD_IMAGE"
+	defaultSceneTimeout = 30 * time.Second
+	defaultJobCommand   = "/bin/true"
+	jobFailureDelay     = 10
 )
 
 // ─── Fixture ───────────────────────────────────────────────────────────────
 
 type rolloutFixture struct {
-	adminClient kubernetes.Interface
-	observerCfg *rest.Config
-	namespace   string
-	testID      string
-	transport   *trackingTransport
+	adminClient   kubernetes.Interface
+	observerCfg   *rest.Config
+	namespace     string
+	testID        string
+	workloadImage string
+	transport     *trackingTransport
 }
 
 func setupRolloutFixture(t *testing.T, testID string) *rolloutFixture {
 	t.Helper()
 
 	testID = normalizeTestID(testID)
+	workloadImage := os.Getenv(workloadImageEnv)
+	require.NotEmpty(t, workloadImage, workloadImageEnv+" must be set by make test-rollout-watch")
 	adminClient, adminCfg := integrationClient(t)
 	namespace := createTestNamespace(t, adminClient, testID)
 
@@ -80,11 +86,12 @@ func setupRolloutFixture(t *testing.T, testID string) *rolloutFixture {
 	}
 
 	fixture := &rolloutFixture{
-		adminClient: adminClient,
-		observerCfg: obsCfg,
-		namespace:   namespace,
-		testID:      testID,
-		transport:   transport,
+		adminClient:   adminClient,
+		observerCfg:   obsCfg,
+		namespace:     namespace,
+		testID:        testID,
+		workloadImage: workloadImage,
+		transport:     transport,
 	}
 	t.Cleanup(func() { fixture.assertClean(t) })
 	return fixture
@@ -98,7 +105,7 @@ func (f *rolloutFixture) createDeployment(t *testing.T, name string) *appsv1.Dep
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr.To(int32(1)),
 			Selector: &metav1.LabelSelector{MatchLabels: selector},
-			Template: workloadPodTemplate(name, selector),
+			Template: workloadPodTemplate(name, selector, f.workloadImage),
 		},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
@@ -125,7 +132,7 @@ func (f *rolloutFixture) createStatefulSet(t *testing.T, name string) *appsv1.St
 			ServiceName: name,
 			Replicas:    ptr.To(int32(1)),
 			Selector:    &metav1.LabelSelector{MatchLabels: selector},
-			Template:    workloadPodTemplate(name, selector),
+			Template:    workloadPodTemplate(name, selector, f.workloadImage),
 		},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
@@ -139,7 +146,7 @@ func (f *rolloutFixture) createDaemonSet(t *testing.T, name string) *appsv1.Daem
 		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: selector},
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &metav1.LabelSelector{MatchLabels: selector},
-			Template: workloadPodTemplate(name, selector),
+			Template: workloadPodTemplate(name, selector, f.workloadImage),
 		},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
@@ -149,7 +156,7 @@ func (f *rolloutFixture) createDaemonSet(t *testing.T, name string) *appsv1.Daem
 func (f *rolloutFixture) createJob(t *testing.T, name string) *batchv1.Job {
 	t.Helper()
 	selector := testLabels(f.testID, name)
-	template := workloadPodTemplate(name, selector)
+	template := workloadPodTemplate(name, selector, f.workloadImage)
 	template.Spec.RestartPolicy = corev1.RestartPolicyNever
 	template.Spec.Containers[0].Command = []string{defaultJobCommand}
 	job, err := f.adminClient.BatchV1().Jobs(f.namespace).Create(t.Context(), &batchv1.Job{
@@ -166,7 +173,7 @@ func (f *rolloutFixture) createJob(t *testing.T, name string) *batchv1.Job {
 func (f *rolloutFixture) createPendingJob(t *testing.T, name string) *batchv1.Job {
 	t.Helper()
 	selector := testLabels(f.testID, name)
-	template := workloadPodTemplate(name, selector)
+	template := workloadPodTemplate(name, selector, f.workloadImage)
 	template.Spec.RestartPolicy = corev1.RestartPolicyNever
 	template.Spec.Containers[0].Command = []string{"/bin/sh", "-c", "sleep 3600"}
 	job, err := f.adminClient.BatchV1().Jobs(f.namespace).Create(t.Context(), &batchv1.Job{
@@ -584,6 +591,8 @@ type trackingTransport struct {
 	secretCalls   atomic.Int64
 	mu            sync.Mutex
 	listVersions  []string
+	listQueries   []string
+	watchQueries  []string
 }
 
 func (t *trackingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -597,9 +606,11 @@ func (t *trackingTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	if req.URL.Query().Get("watch") == "true" {
 		t.activeWatches.Add(1)
 		t.watchCalls.Add(1)
+		t.recordWatchQuery(req.URL.RawQuery)
 		response.Body = &trackedBody{ReadCloser: response.Body, active: &t.activeWatches}
 	} else if !isSecretReq(req) {
 		t.listCalls.Add(1)
+		t.recordListQuery(req.URL.RawQuery)
 		if err := t.recordListResourceVersion(response); err != nil {
 			return nil, err
 		}
@@ -646,6 +657,24 @@ func (t *trackingTransport) listResourceVersions() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return slices.Clone(t.listVersions)
+}
+
+func (t *trackingTransport) recordListQuery(rawQuery string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.listQueries = append(t.listQueries, rawQuery)
+}
+
+func (t *trackingTransport) recordWatchQuery(rawQuery string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.watchQueries = append(t.watchQueries, rawQuery)
+}
+
+func (t *trackingTransport) queries() (listQueries, watchQueries []string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return slices.Clone(t.listQueries), slices.Clone(t.watchQueries)
 }
 
 type watchEventBarrierTransport struct {
@@ -913,6 +942,7 @@ func (t *expiredTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	if req.URL.Query().Get("watch") != "true" {
 		return t.trackingTransport.RoundTrip(req)
 	}
+	t.recordWatchQuery(req.URL.RawQuery)
 	t.mu.Lock()
 	t.watchVersions = append(t.watchVersions, req.URL.Query().Get("resourceVersion"))
 	watchNum := t.watchCalls.Add(1)
@@ -1024,6 +1054,28 @@ func clientWithTransport(t *testing.T, config *rest.Config, transport roundTripp
 	client, err := kubernetes.NewForConfig(wrapper)
 	require.NoError(t, err)
 	return client
+}
+
+func assertRolloutRequestOptions(t *testing.T, transport *trackingTransport, workloadName string) {
+	t.Helper()
+	listQueries, watchQueries := transport.queries()
+	require.NotEmpty(t, listQueries)
+	require.NotEmpty(t, watchQueries)
+	expectedSelector := fields.OneTermEqualSelector("metadata.name", workloadName).String()
+	for _, rawQuery := range listQueries {
+		query, err := url.ParseQuery(rawQuery)
+		require.NoError(t, err)
+		assert.Equal(t, expectedSelector, query.Get("fieldSelector"))
+		assert.Empty(t, query.Get("watch"))
+	}
+	for _, rawQuery := range watchQueries {
+		query, err := url.ParseQuery(rawQuery)
+		require.NoError(t, err)
+		assert.Equal(t, expectedSelector, query.Get("fieldSelector"))
+		assert.Equal(t, "true", query.Get("watch"))
+		assert.Equal(t, "true", query.Get("allowWatchBookmarks"))
+		assert.NotEmpty(t, query.Get("resourceVersion"))
+	}
 }
 
 func assertRecoveryResourceVersions(t *testing.T, watchVersions, listVersions []string) {
@@ -1293,14 +1345,14 @@ func assertRolloutLast(t *testing.T, result observer.WatchResult, err error) {
 	assert.Equal(t, result, rolloutErr.Last)
 }
 
-func workloadPodTemplate(name string, selector map[string]string) corev1.PodTemplateSpec {
+func workloadPodTemplate(name string, selector map[string]string, image string) corev1.PodTemplateSpec {
 	return corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: selector},
 		Spec: corev1.PodSpec{
 			TerminationGracePeriodSeconds: ptr.To[int64](0),
 			Containers: []corev1.Container{{
 				Name:            name,
-				Image:           defaultWorkloadImage,
+				Image:           image,
 				ImagePullPolicy: corev1.PullIfNotPresent,
 				Command:         []string{"/bin/sh", "-c", "sleep 3600"},
 			}},
@@ -1916,6 +1968,7 @@ func TestRolloutWatchTransportDisconnect(t *testing.T) {
 	assert.GreaterOrEqual(t, transport.listCalls.Load(), int64(2))
 	assert.GreaterOrEqual(t, transport.watchCalls.Load(), int64(2))
 	assertRecoveryResourceVersions(t, transport.resourceVersions(), transport.listResourceVersions())
+	assertRolloutRequestOptions(t, &transport.trackingTransport, deployment.Name)
 
 	assertTransportClean(t, &transport.trackingTransport)
 	fx.assertClean(t)
@@ -1953,6 +2006,7 @@ func TestRolloutWatchResourceVersionExpired(t *testing.T) {
 	assert.GreaterOrEqual(t, transport.listCalls.Load(), int64(2))
 	assert.GreaterOrEqual(t, result.ObservedGeneration, updated.Generation)
 	assertRecoveryResourceVersions(t, transport.resourceVersions(), transport.listResourceVersions())
+	assertRolloutRequestOptions(t, &transport.trackingTransport, deployment.Name)
 
 	assertTransportClean(t, &transport.trackingTransport)
 	fx.assertClean(t)
@@ -2165,14 +2219,59 @@ func TestRolloutWatchConcurrentIsolation(t *testing.T) {
 func TestRolloutWatchRBACSecretProbe(t *testing.T) {
 	fx := setupRolloutFixture(t, t.Name())
 	deployment := fx.createDeployment(t, "rbac")
-	obs := observer.New(fx.observerClient(t))
+	observerClient := fx.observerClient(t)
+	obs := observer.New(observerClient)
 
 	result, err := obs.Observe(t.Context(), fx.deploymentRef(deployment.Name), deployment.Generation, defaultSceneTimeout)
 	require.NoError(t, err)
 	assert.True(t, result.Ready)
 
+	probeConfig := rest.CopyConfig(fx.observerCfg)
+	probeConfig.WrapTransport = nil
+	probeClient, err := kubernetes.NewForConfig(probeConfig)
+	require.NoError(t, err)
+	assertSelfAccess(t, probeClient, authorizationv1.ResourceAttributes{
+		Namespace: fx.namespace,
+		Verb:      "list",
+		Group:     "apps",
+		Resource:  "deployments",
+	}, true)
+	assertSelfAccess(t, probeClient, authorizationv1.ResourceAttributes{
+		Namespace: fx.namespace,
+		Verb:      "list",
+		Resource:  "secrets",
+	}, false)
+	assertSelfAccess(t, probeClient, authorizationv1.ResourceAttributes{
+		Namespace: fx.namespace,
+		Verb:      "list",
+		Resource:  "configmaps",
+	}, false)
+	assertSelfAccess(t, probeClient, authorizationv1.ResourceAttributes{
+		Namespace: fx.namespace,
+		Verb:      "create",
+		Group:     "apps",
+		Resource:  "deployments",
+	}, false)
 	fx.assertNoSecrets(t)
 	fx.assertClean(t)
+}
+
+func assertSelfAccess(
+	t *testing.T,
+	client kubernetes.Interface,
+	attributes authorizationv1.ResourceAttributes,
+	wantAllowed bool,
+) {
+	t.Helper()
+	review, err := client.AuthorizationV1().SelfSubjectAccessReviews().Create(
+		t.Context(),
+		&authorizationv1.SelfSubjectAccessReview{
+			Spec: authorizationv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &attributes},
+		},
+		metav1.CreateOptions{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, wantAllowed, review.Status.Allowed, review.Status.Reason)
 }
 
 func observerCode(t *testing.T, err error) observer.ErrorCode {

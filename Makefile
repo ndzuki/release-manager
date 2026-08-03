@@ -10,10 +10,8 @@ GEN_DIR     := api/gen
 GOBIN       := $(shell go env GOBIN 2>/dev/null || echo $(HOME)/go/bin)
 KIND        ?= kind
 DOCKER      ?= docker
-KIND_CLUSTER ?= rm-rollout-watch
-KIND_NODE_IMAGE ?= kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
-WORKLOAD_IMAGE ?= busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
-WORKLOAD_IMAGE_DIGEST ?= sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+KIND_NODE_IMAGE := kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
+WORKLOAD_IMAGE := busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
 ROLLOUT_WATCH_MAX_SECONDS ?= 120
 
 
@@ -341,15 +339,27 @@ test: ## Run all tests
 .PHONY: test-rollout-watch
 test-rollout-watch: ## Create a kind cluster, run integration tests, and tear down
 	@set -eu; \
+	CLUSTER_NAME="rm-rollout-watch-$$(date +%s)-$$$$"; \
+	WORKLOAD_IMAGE="$(WORKLOAD_IMAGE)"; \
+	WORKLOAD_IMAGE_DIGEST=$${WORKLOAD_IMAGE##*@}; \
+	export ROLLOUT_WATCH_WORKLOAD_IMAGE="$$WORKLOAD_IMAGE"; \
 	KUBECONFIG=$$(mktemp); \
 	export KUBECONFIG; \
-	trap '$(KIND) delete cluster --name "$(KIND_CLUSTER)" --kubeconfig "$$KUBECONFIG" >/dev/null 2>&1 || true; rm -f "$$KUBECONFIG"' EXIT INT TERM; \
-	$(KIND) delete cluster --name "$(KIND_CLUSTER)" --kubeconfig "$$KUBECONFIG" >/dev/null 2>&1 || true; \
+	owned=false; \
+	cleanup() { \
+		if [ "$$owned" = true ]; then $(KIND) delete cluster --name "$$CLUSTER_NAME" --kubeconfig "$$KUBECONFIG" >/dev/null 2>&1 || true; fi; \
+		rm -f "$$KUBECONFIG"; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	for existing in $$($(KIND) get clusters); do \
+		if [ "$$existing" = "$$CLUSTER_NAME" ]; then printf "$(RED)refusing to reuse existing kind cluster %s$(NC)\n" "$$CLUSTER_NAME" >&2; exit 1; fi; \
+	done; \
+	owned=true; \
 	STARTED_AT=$$(date +%s); \
-	$(KIND) create cluster --name "$(KIND_CLUSTER)" --image "$(KIND_NODE_IMAGE)" --kubeconfig "$$KUBECONFIG" --wait 5m; \
-	$(DOCKER) pull "$(WORKLOAD_IMAGE)"; \
-	$(KIND) load docker-image "$(WORKLOAD_IMAGE)" --name "$(KIND_CLUSTER)"; \
-	$(DOCKER) exec "$(KIND_CLUSTER)-control-plane" ctr -n k8s.io images tag "$$( $(DOCKER) image inspect "$(WORKLOAD_IMAGE)" --format '{{.Id}}' )" "docker.io/library/busybox@$(WORKLOAD_IMAGE_DIGEST)" >/dev/null; \
+	$(KIND) create cluster --name "$$CLUSTER_NAME" --image "$(KIND_NODE_IMAGE)" --kubeconfig "$$KUBECONFIG" --wait 5m; \
+	$(DOCKER) pull "$$WORKLOAD_IMAGE"; \
+	$(KIND) load docker-image "$$WORKLOAD_IMAGE" --name "$$CLUSTER_NAME"; \
+	$(DOCKER) exec "$$CLUSTER_NAME-control-plane" ctr -n k8s.io images tag "$$( $(DOCKER) image inspect "$$WORKLOAD_IMAGE" --format '{{.Id}}' )" "docker.io/library/busybox@$$WORKLOAD_IMAGE_DIGEST" >/dev/null; \
 	$(GO) run ./cmd/sdkcheck/ -exceptions sdkcheck.exceptions.yaml -build-tags integration ./internal/operator/observer ./test/integration; \
 	$(GO) test -race -tags=integration -count=1 ./test/integration -run '^TestRolloutWatch' -timeout 10m; \
 	ELAPSED=$$(($$(date +%s) - $$STARTED_AT)); \

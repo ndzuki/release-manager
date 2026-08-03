@@ -249,11 +249,18 @@ func TestObserver_ReListsAfterWatchDisconnect(t *testing.T) {
 
 	var mu sync.Mutex
 	listCalls := 0
+	listSelectors := make([]string, 0, 2)
 	watchVersions := make([]string, 0, 2)
-	client.PrependReactor("list", "deployments", func(_ clienttesting.Action) (bool, runtime.Object, error) {
+	watchSelectors := make([]string, 0, 2)
+	client.PrependReactor("list", "deployments", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		listAction, ok := action.(clienttesting.ListAction)
+		if !ok {
+			return true, nil, errors.New("unexpected list action type")
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		listCalls++
+		listSelectors = append(listSelectors, listAction.GetListRestrictions().Fields.String())
 		if listCalls == 1 {
 			return true, &appsv1.DeploymentList{
 				ListMeta: metav1.ListMeta{ResourceVersion: "1"},
@@ -273,6 +280,7 @@ func TestObserver_ReListsAfterWatchDisconnect(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		watchVersions = append(watchVersions, watchAction.GetWatchRestrictions().ResourceVersion)
+		watchSelectors = append(watchSelectors, watchAction.GetWatchRestrictions().Fields.String())
 		if len(watchVersions) == 1 {
 			return true, firstWatch, nil
 		}
@@ -315,7 +323,9 @@ func TestObserver_ReListsAfterWatchDisconnect(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	assert.GreaterOrEqual(t, listCalls, 2)
+	assert.Equal(t, []string{"metadata.name=web", "metadata.name=web"}, listSelectors)
 	assert.Equal(t, []string{"1", "2"}, watchVersions)
+	assert.Equal(t, []string{"metadata.name=web", "metadata.name=web"}, watchSelectors)
 }
 
 func TestObserver_IgnoresBookmarksUntilReady(t *testing.T) {

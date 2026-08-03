@@ -49,7 +49,7 @@ func (o *Observer) Observe(
 		return WatchResult{Resource: ref}, err
 	}
 
-	observeCtx, cancel := contextWithOptionalTimeout(ctx, timeout)
+	observeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	source, err := o.resource(ref, expectedGeneration)
@@ -190,13 +190,6 @@ func isRecoverableWatchError(err error) bool {
 
 func isResourceVersionExpired(err error) bool {
 	return apierrors.IsResourceExpired(err) || apierrors.IsGone(err)
-}
-
-func contextWithOptionalTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if timeout <= 0 {
-		return context.WithCancel(parent)
-	}
-	return context.WithTimeout(parent, timeout)
 }
 
 func (o *Observer) resource(ref ResourceRef, expectedGeneration int64) (resourceSource, error) {
