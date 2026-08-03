@@ -650,14 +650,19 @@ func (t *trackingTransport) listResourceVersions() []string {
 
 type watchEventBarrierTransport struct {
 	trackingTransport
-	marker  []byte
-	matched chan struct{}
+	marker      []byte
+	matched     chan struct{}
+	waiting     chan struct{}
+	releaseRead chan struct{}
+	releaseOnce sync.Once
 }
 
 func newWatchEventBarrierTransport(marker string) *watchEventBarrierTransport {
 	return &watchEventBarrierTransport{
-		marker:  []byte(marker),
-		matched: make(chan struct{}),
+		marker:      []byte(marker),
+		matched:     make(chan struct{}),
+		waiting:     make(chan struct{}),
+		releaseRead: make(chan struct{}),
 	}
 }
 
@@ -669,12 +674,23 @@ func (t *watchEventBarrierTransport) RoundTrip(req *http.Request) (*http.Respons
 	if req.URL.Query().Get("watch") != "true" {
 		return response, nil
 	}
-	response.Body = newWatchEventBarrierBody(req.Context(), response.Body, t.marker, t.matched)
+	response.Body = newWatchEventBarrierBody(
+		req.Context(),
+		response.Body,
+		t.marker,
+		t.matched,
+		t.waiting,
+		t.releaseRead,
+	)
 	return response, nil
 }
 
 func (t *watchEventBarrierTransport) setBase(base http.RoundTripper) {
 	t.trackingTransport.setBase(base)
+}
+
+func (t *watchEventBarrierTransport) release() {
+	t.releaseOnce.Do(func() { close(t.releaseRead) })
 }
 
 // watchEventBarrierBody forwards complete watch-event lines, then blocks after
@@ -685,12 +701,15 @@ type watchEventBarrierBody struct {
 	ctx             context.Context
 	marker          []byte
 	matched         chan struct{}
+	waiting         chan struct{}
+	releaseRead     <-chan struct{}
 	closed          chan struct{}
 	pending         []byte
 	pendingErr      error
 	hasPendingBlock bool
 	isBlocked       bool
 	matchOnce       sync.Once
+	waitOnce        sync.Once
 	closeOnce       sync.Once
 }
 
@@ -699,20 +718,25 @@ func newWatchEventBarrierBody(
 	source io.ReadCloser,
 	marker []byte,
 	matched chan struct{},
+	waiting chan struct{},
+	releaseRead <-chan struct{},
 ) *watchEventBarrierBody {
 	return &watchEventBarrierBody{
-		source:  source,
-		reader:  bufio.NewReader(source),
-		ctx:     ctx,
-		marker:  marker,
-		matched: matched,
-		closed:  make(chan struct{}),
+		source:      source,
+		reader:      bufio.NewReader(source),
+		ctx:         ctx,
+		marker:      marker,
+		matched:     matched,
+		waiting:     waiting,
+		releaseRead: releaseRead,
+		closed:      make(chan struct{}),
 	}
 }
 
 func (b *watchEventBarrierBody) Read(p []byte) (int, error) {
 	for len(b.pending) == 0 {
 		if b.isBlocked {
+			b.waitOnce.Do(func() { close(b.waiting) })
 			if b.pendingErr != nil {
 				err := b.pendingErr
 				b.pendingErr = nil
@@ -723,6 +747,9 @@ func (b *watchEventBarrierBody) Read(p []byte) (int, error) {
 				return 0, b.ctx.Err()
 			case <-b.closed:
 				return 0, io.EOF
+			case <-b.releaseRead:
+				b.isBlocked = false
+				continue
 			}
 		}
 		if b.pendingErr != nil {
@@ -765,6 +792,12 @@ func isSecretReq(req *http.Request) bool {
 type disconnectingTransport struct {
 	trackingTransport
 	isFirstWatchDisconnectEnabled bool
+	disconnectOnce                sync.Once
+	secondListOnce                sync.Once
+	releaseSecondListOnce         sync.Once
+	disconnected                  chan struct{}
+	secondListReady               chan struct{}
+	releaseSecondList             chan struct{}
 	mu                            sync.Mutex
 	watchVersions                 []string
 }
@@ -775,6 +808,15 @@ func (t *disconnectingTransport) RoundTrip(req *http.Request) (*http.Response, e
 		return nil, err
 	}
 	if req.URL.Query().Get("watch") != "true" {
+		if t.listCalls.Load() == 2 && t.secondListReady != nil {
+			t.secondListOnce.Do(func() { close(t.secondListReady) })
+			select {
+			case <-t.releaseSecondList:
+			case <-req.Context().Done():
+				_ = response.Body.Close()
+				return nil, req.Context().Err()
+			}
+		}
 		return response, nil
 	}
 	t.mu.Lock()
@@ -782,7 +824,15 @@ func (t *disconnectingTransport) RoundTrip(req *http.Request) (*http.Response, e
 	watchNum := len(t.watchVersions)
 	t.mu.Unlock()
 	if t.isFirstWatchDisconnectEnabled && watchNum == 1 {
-		response.Body = &disconnectingBody{ReadCloser: response.Body}
+		disconnected := t.disconnected
+		response.Body = &disconnectingBody{
+			ReadCloser: response.Body,
+			onDisconnect: func() {
+				if disconnected != nil {
+					t.disconnectOnce.Do(func() { close(disconnected) })
+				}
+			},
+		}
 	}
 	return response, nil
 }
@@ -795,6 +845,12 @@ func (t *disconnectingTransport) resourceVersions() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return slices.Clone(t.watchVersions)
+}
+
+func (t *disconnectingTransport) releaseRelist() {
+	if t.releaseSecondList != nil {
+		t.releaseSecondListOnce.Do(func() { close(t.releaseSecondList) })
+	}
 }
 
 type relistBarrierTransport struct {
@@ -900,11 +956,17 @@ func (t *expiredTransport) resourceVersions() []string {
 
 type disconnectingBody struct {
 	io.ReadCloser
-	once sync.Once
+	onDisconnect func()
+	once         sync.Once
 }
 
 func (b *disconnectingBody) Read(_ []byte) (int, error) {
-	b.once.Do(func() { _ = b.Close() })
+	b.once.Do(func() {
+		if b.onDisconnect != nil {
+			b.onDisconnect()
+		}
+		_ = b.Close()
+	})
 	return 0, io.EOF
 }
 
@@ -1002,6 +1064,44 @@ func updateDeploymentTemplateAnnotation(
 			deployment,
 			metav1.UpdateOptions{},
 		)
+		return err
+	})
+	return updated, err
+}
+
+func updateStatefulSetTemplateAnnotation(
+	t *testing.T,
+	client kubernetes.Interface,
+	namespace, name, value string,
+) (*appsv1.StatefulSet, error) {
+	t.Helper()
+	var updated *appsv1.StatefulSet
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		statefulSet, err := client.AppsV1().StatefulSets(namespace).Get(t.Context(), name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		statefulSet.Spec.Template.Annotations = map[string]string{"rollout-watch": value}
+		updated, err = client.AppsV1().StatefulSets(namespace).Update(t.Context(), statefulSet, metav1.UpdateOptions{})
+		return err
+	})
+	return updated, err
+}
+
+func updateDaemonSetTemplateAnnotation(
+	t *testing.T,
+	client kubernetes.Interface,
+	namespace, name, value string,
+) (*appsv1.DaemonSet, error) {
+	t.Helper()
+	var updated *appsv1.DaemonSet
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		daemonSet, err := client.AppsV1().DaemonSets(namespace).Get(t.Context(), name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		daemonSet.Spec.Template.Annotations = map[string]string{"rollout-watch": value}
+		updated, err = client.AppsV1().DaemonSets(namespace).Update(t.Context(), daemonSet, metav1.UpdateOptions{})
 		return err
 	})
 	return updated, err
@@ -1197,6 +1297,7 @@ func workloadPodTemplate(name string, selector map[string]string) corev1.PodTemp
 	return corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: selector},
 		Spec: corev1.PodSpec{
+			TerminationGracePeriodSeconds: ptr.To[int64](0),
 			Containers: []corev1.Container{{
 				Name:            name,
 				Image:           defaultWorkloadImage,
@@ -1332,26 +1433,115 @@ func assertAppsReadyGeneration(t *testing.T, result observer.WatchResult, expect
 }
 
 func TestRolloutWatchAppsObservedGenerationGate(t *testing.T) {
-	fx := setupRolloutFixture(t, t.Name())
-	obs := observer.New(fx.observerClient(t))
-	deployment := fx.createDeployment(t, "deployment")
+	type generationSnapshot struct {
+		generation         int64
+		observedGeneration int64
+	}
+	tests := []struct {
+		name   string
+		create func(*rolloutFixture, *testing.T) (observer.ResourceRef, int64)
+		update func(*rolloutFixture, *testing.T) (generationSnapshot, error)
+	}{
+		{
+			name: "deployment",
+			create: func(fx *rolloutFixture, t *testing.T) (observer.ResourceRef, int64) {
+				deployment := fx.createDeployment(t, "deployment-generation")
+				return fx.deploymentRef(deployment.Name), deployment.Generation + 1
+			},
+			update: func(fx *rolloutFixture, t *testing.T) (generationSnapshot, error) {
+				updated, err := updateDeploymentTemplateAnnotation(
+					t, fx.adminClient, fx.namespace, "deployment-generation", "next-generation",
+				)
+				if err != nil {
+					return generationSnapshot{}, err
+				}
+				return generationSnapshot{updated.Generation, updated.Status.ObservedGeneration}, nil
+			},
+		},
+		{
+			name: "statefulset",
+			create: func(fx *rolloutFixture, t *testing.T) (observer.ResourceRef, int64) {
+				statefulSet := fx.createStatefulSet(t, "statefulset-generation")
+				return fx.statefulSetRef(statefulSet.Name), statefulSet.Generation + 1
+			},
+			update: func(fx *rolloutFixture, t *testing.T) (generationSnapshot, error) {
+				updated, err := updateStatefulSetTemplateAnnotation(
+					t, fx.adminClient, fx.namespace, "statefulset-generation", "next-generation",
+				)
+				if err != nil {
+					return generationSnapshot{}, err
+				}
+				return generationSnapshot{updated.Generation, updated.Status.ObservedGeneration}, nil
+			},
+		},
+		{
+			name: "daemonset",
+			create: func(fx *rolloutFixture, t *testing.T) (observer.ResourceRef, int64) {
+				daemonSet := fx.createDaemonSet(t, "daemonset-generation")
+				return fx.daemonSetRef(daemonSet.Name), daemonSet.Generation + 1
+			},
+			update: func(fx *rolloutFixture, t *testing.T) (generationSnapshot, error) {
+				updated, err := updateDaemonSetTemplateAnnotation(
+					t, fx.adminClient, fx.namespace, "daemonset-generation", "next-generation",
+				)
+				if err != nil {
+					return generationSnapshot{}, err
+				}
+				return generationSnapshot{updated.Generation, updated.Status.ObservedGeneration}, nil
+			},
+		},
+	}
 
-	call := startObserve(t.Context(), t, obs,
-		fx.deploymentRef(deployment.Name),
-		deployment.Generation+1,
-		defaultSceneTimeout)
-	require.Eventually(t, func() bool { return fx.transport.activeWatches.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
-	updated, err := updateDeploymentTemplateAnnotation(t, fx.adminClient, fx.namespace, deployment.Name, "next-generation")
-	require.NoError(t, err)
-	outcome := awaitObserve(t, call, defaultSceneTimeout)
-	result := outcome.result
-	err = outcome.err
-	require.NoError(t, err)
-	assert.True(t, result.Ready)
-	assert.GreaterOrEqual(t, result.Generation, updated.Generation)
-	assert.GreaterOrEqual(t, result.ObservedGeneration, updated.Generation)
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fx := setupRolloutFixture(t, fmt.Sprintf("apps-generation-%02d", index))
+			ref, expectedGeneration := test.create(fx, t)
+			transport := newWatchEventBarrierTransport(`"rollout-watch":"next-generation"`)
+			t.Cleanup(transport.release)
+			call := startObserve(
+				t.Context(),
+				t,
+				observer.New(clientWithTransport(t, fx.observerCfg, transport)),
+				ref,
+				expectedGeneration,
+				defaultSceneTimeout,
+			)
+			require.Eventually(
+				t,
+				func() bool { return transport.activeWatches.Load() == 1 },
+				5*time.Second,
+				10*time.Millisecond,
+			)
 
-	fx.assertClean(t)
+			updated, err := test.update(fx, t)
+			require.NoError(t, err)
+			assert.Less(t, updated.observedGeneration, updated.generation)
+			select {
+			case <-transport.matched:
+			case <-time.After(5 * time.Second):
+				t.Fatal("observer watch did not receive the generation update")
+			}
+			select {
+			case <-transport.waiting:
+			case <-time.After(5 * time.Second):
+				t.Fatal("observer did not continue waiting after the stale observedGeneration event")
+			}
+			select {
+			case outcome := <-call.outcome:
+				t.Fatalf("observer returned before observedGeneration caught up: result=%+v err=%v", outcome.result, outcome.err)
+			default:
+			}
+
+			transport.release()
+			outcome := awaitObserve(t, call, defaultSceneTimeout)
+			require.NoError(t, outcome.err)
+			assert.True(t, outcome.result.Ready)
+			assert.GreaterOrEqual(t, outcome.result.Generation, updated.generation)
+			assert.GreaterOrEqual(t, outcome.result.ObservedGeneration, updated.generation)
+			assertTransportClean(t, &transport.trackingTransport)
+			fx.assertClean(t)
+		})
+	}
 }
 func TestRolloutWatchValidatesBeforeAPI(t *testing.T) {
 	tests := []struct {
@@ -1445,55 +1635,78 @@ func TestRolloutWatchValidatesBeforeAPI(t *testing.T) {
 }
 
 func TestRolloutWatchWorkloadFailures(t *testing.T) {
-	t.Run("deployment terminal failure", func(t *testing.T) {
-		fx := setupRolloutFixture(t, t.Name())
-		deployment := fx.createDeployment(t, "deployment-failed")
-		obs := observer.New(fx.observerClient(t))
-		ref := fx.deploymentRef(deployment.Name)
-		call := startObserve(t.Context(), t, obs,
-			ref,
-			deployment.Generation+1,
-			defaultSceneTimeout)
-		require.Eventually(
-			t,
-			func() bool { return fx.transport.activeWatches.Load() > 0 },
-			5*time.Second,
-			10*time.Millisecond,
-		)
-		updated, err := updateDeploymentStatus(
-			t,
-			fx.adminClient,
-			fx.namespace,
-			deployment.Name,
-			func(current *appsv1.Deployment) {
-				current.Status.Conditions = []appsv1.DeploymentCondition{{
+	t.Run("deployment terminal failures", func(t *testing.T) {
+		tests := []struct {
+			name      string
+			condition appsv1.DeploymentCondition
+		}{
+			{
+				name: "replica failure",
+				condition: appsv1.DeploymentCondition{
 					Type:    appsv1.DeploymentReplicaFailure,
 					Status:  corev1.ConditionTrue,
 					Reason:  "FailedCreate",
 					Message: "replica creation failed",
-				}}
+				},
 			},
-		)
-		require.NoError(t, err)
-		outcome := awaitObserve(t, call, defaultSceneTimeout)
-		result := outcome.result
-		err = outcome.err
-		assert.ErrorIs(t, err, observer.ErrWorkloadUnavailable)
-		assert.Equal(t, observer.ErrorCodeWorkloadUnavailable, observerCode(t, err))
-		assert.Equal(t, ref, result.Resource)
-		assert.Equal(t, deployment.UID, result.ResourceUID)
-		assert.Equal(t, updated.Generation, result.Generation)
-		assert.Equal(t, updated.Status.ObservedGeneration, result.ObservedGeneration)
-		assert.Equal(t, updated.ResourceVersion, result.ResourceVersion)
-		assert.False(t, result.Ready)
-		assert.True(t, result.Failed)
-		require.Len(t, result.Conditions, 1)
-		assert.Equal(t, string(appsv1.DeploymentReplicaFailure), result.Conditions[0].Type)
-		assert.Equal(t, string(corev1.ConditionTrue), result.Conditions[0].Status)
-		assert.Equal(t, "FailedCreate", result.Conditions[0].Reason)
-		assert.Equal(t, "replica creation failed", result.Conditions[0].Message)
-		assertRolloutLast(t, result, err)
-		fx.assertClean(t)
+			{
+				name: "progress deadline exceeded",
+				condition: appsv1.DeploymentCondition{
+					Type:    appsv1.DeploymentProgressing,
+					Status:  corev1.ConditionFalse,
+					Reason:  "ProgressDeadlineExceeded",
+					Message: "deployment exceeded its progress deadline",
+				},
+			},
+		}
+
+		for index, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				fx := setupRolloutFixture(t, fmt.Sprintf("deployment-failure-%02d", index))
+				deployment := fx.createDeployment(t, "deployment-failed")
+				obs := observer.New(fx.observerClient(t))
+				ref := fx.deploymentRef(deployment.Name)
+				call := startObserve(t.Context(), t, obs,
+					ref,
+					deployment.Generation+1,
+					defaultSceneTimeout)
+				require.Eventually(
+					t,
+					func() bool { return fx.transport.activeWatches.Load() > 0 },
+					5*time.Second,
+					10*time.Millisecond,
+				)
+				updated, err := updateDeploymentStatus(
+					t,
+					fx.adminClient,
+					fx.namespace,
+					deployment.Name,
+					func(current *appsv1.Deployment) {
+						current.Status.Conditions = []appsv1.DeploymentCondition{test.condition}
+					},
+				)
+				require.NoError(t, err)
+				outcome := awaitObserve(t, call, defaultSceneTimeout)
+				result := outcome.result
+				err = outcome.err
+				assert.ErrorIs(t, err, observer.ErrWorkloadUnavailable)
+				assert.Equal(t, observer.ErrorCodeWorkloadUnavailable, observerCode(t, err))
+				assert.Equal(t, ref, result.Resource)
+				assert.Equal(t, deployment.UID, result.ResourceUID)
+				assert.Equal(t, updated.Generation, result.Generation)
+				assert.Equal(t, updated.Status.ObservedGeneration, result.ObservedGeneration)
+				assert.Equal(t, updated.ResourceVersion, result.ResourceVersion)
+				assert.False(t, result.Ready)
+				assert.True(t, result.Failed)
+				require.Len(t, result.Conditions, 1)
+				assert.Equal(t, string(test.condition.Type), result.Conditions[0].Type)
+				assert.Equal(t, string(test.condition.Status), result.Conditions[0].Status)
+				assert.Equal(t, test.condition.Reason, result.Conditions[0].Reason)
+				assert.Equal(t, test.condition.Message, result.Conditions[0].Message)
+				assertRolloutLast(t, result, err)
+				fx.assertClean(t)
+			})
+		}
 	})
 
 	t.Run("job terminal failure", func(t *testing.T) {
@@ -1561,6 +1774,7 @@ func TestRolloutWatchWorkloadFailures(t *testing.T) {
 		fx := setupRolloutFixture(t, t.Name())
 		statefulSet := fx.createStatefulSet(t, "statefulset-pending")
 		transport := newWatchEventBarrierTransport(`"reason":"RolloutPending"`)
+		t.Cleanup(transport.release)
 		obs := observer.New(clientWithTransport(t, fx.observerCfg, transport))
 		ref := fx.statefulSetRef(statefulSet.Name)
 		call := startObserve(t.Context(), t, obs,
@@ -1587,6 +1801,11 @@ func TestRolloutWatchWorkloadFailures(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatal("observer watch did not receive the StatefulSet non-terminal condition")
 		}
+		select {
+		case <-transport.waiting:
+		case <-time.After(2 * time.Second):
+			t.Fatal("observer did not continue waiting after the StatefulSet non-terminal condition")
+		}
 		outcome := awaitObserve(t, call, 5*time.Second)
 		result := outcome.result
 		err = outcome.err
@@ -1606,6 +1825,7 @@ func TestRolloutWatchWorkloadFailures(t *testing.T) {
 		fx := setupRolloutFixture(t, t.Name())
 		daemonSet := fx.createDaemonSet(t, "daemonset-pending")
 		transport := newWatchEventBarrierTransport(`"reason":"RolloutPending"`)
+		t.Cleanup(transport.release)
 		obs := observer.New(clientWithTransport(t, fx.observerCfg, transport))
 		ref := fx.daemonSetRef(daemonSet.Name)
 		call := startObserve(t.Context(), t, obs,
@@ -1632,6 +1852,11 @@ func TestRolloutWatchWorkloadFailures(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatal("observer watch did not receive the DaemonSet non-terminal condition")
 		}
+		select {
+		case <-transport.waiting:
+		case <-time.After(2 * time.Second):
+			t.Fatal("observer did not continue waiting after the DaemonSet non-terminal condition")
+		}
 		outcome := awaitObserve(t, call, 5*time.Second)
 		result := outcome.result
 		err = outcome.err
@@ -1653,7 +1878,13 @@ func TestRolloutWatchTransportDisconnect(t *testing.T) {
 	deployment := fx.createDeployment(t, "reconnect")
 	ref := fx.deploymentRef(deployment.Name)
 
-	transport := &disconnectingTransport{isFirstWatchDisconnectEnabled: true}
+	transport := &disconnectingTransport{
+		isFirstWatchDisconnectEnabled: true,
+		disconnected:                  make(chan struct{}),
+		secondListReady:               make(chan struct{}),
+		releaseSecondList:             make(chan struct{}),
+	}
+	t.Cleanup(transport.releaseRelist)
 	client := clientWithTransport(t, fx.observerCfg, transport)
 	obs := observer.New(client)
 
@@ -1662,9 +1893,19 @@ func TestRolloutWatchTransportDisconnect(t *testing.T) {
 		deployment.Generation+1,
 		defaultSceneTimeout)
 
-	require.Eventually(t, func() bool { return transport.watchCalls.Load() >= 1 }, 5*time.Second, 10*time.Millisecond)
+	select {
+	case <-transport.disconnected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("observer did not consume the injected watch EOF")
+	}
+	select {
+	case <-transport.secondListReady:
+	case <-time.After(5 * time.Second):
+		t.Fatal("observer did not complete the fresh list after watch EOF")
+	}
 	updated, err := updateDeploymentTemplateAnnotation(t, fx.adminClient, fx.namespace, deployment.Name, "ready")
 	require.NoError(t, err)
+	transport.releaseRelist()
 
 	outcome := awaitObserve(t, call, defaultSceneTimeout)
 	result := outcome.result
