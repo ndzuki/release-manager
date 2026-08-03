@@ -52,6 +52,7 @@ type Store struct {
 	rollouts         *rolloutTrackingStore
 	emergencyIntents *emergencyIntentStore
 	convergenceTasks *convergenceTaskStore
+	authorization    *authorizationStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -119,6 +120,7 @@ func Open(dsn string) (*Store, error) {
 	s.rollouts = &rolloutTrackingStore{db: db}
 	s.emergencyIntents = &emergencyIntentStore{db: db}
 	s.convergenceTasks = &convergenceTaskStore{db: db}
+	s.authorization = &authorizationStore{db: db}
 
 	return s, nil
 }
@@ -250,6 +252,9 @@ func (s *Store) EmergencyIntents() store.EmergencyIntentStore { return s.emergen
 
 // ConvergenceTasks returns the ConvergenceTaskStore.
 func (s *Store) ConvergenceTasks() store.ConvergenceTaskStore { return s.convergenceTasks }
+
+// Authorization returns the durable authorization state module.
+func (s *Store) Authorization() store.AuthorizationStore { return s.authorization }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
@@ -975,6 +980,48 @@ var migrationStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_preflight_lifecycles_operation ON preflight_lifecycles(operation_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_preflight_lifecycles_terminal ON preflight_lifecycles(operation_terminal_at)`,
+	// Durable authorization source, policy, grants, rules, and consumer checkpoints (REQ-027).
+	`CREATE TABLE IF NOT EXISTS authorization_source_version (
+		id      INTEGER PRIMARY KEY CHECK (id = 1),
+		version INTEGER NOT NULL DEFAULT 0
+	)`,
+	`INSERT OR IGNORE INTO authorization_source_version (id, version) VALUES (1, 0)`,
+	`CREATE TABLE IF NOT EXISTS capability_grants (
+		organization_id TEXT NOT NULL,
+		subject         TEXT NOT NULL,
+		action          TEXT NOT NULL,
+		granted_by      TEXT NOT NULL,
+		revoked         INTEGER NOT NULL DEFAULT 0,
+		created_at      TEXT NOT NULL,
+		updated_at      TEXT NOT NULL,
+		PRIMARY KEY (organization_id, subject, action)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_capability_grants_active ON capability_grants(organization_id, subject, action) WHERE revoked = 0`,
+	`CREATE TABLE IF NOT EXISTS casbin_rule (
+		id    INTEGER PRIMARY KEY AUTOINCREMENT,
+		ptype TEXT NOT NULL,
+		v0    TEXT NOT NULL DEFAULT '',
+		v1    TEXT NOT NULL DEFAULT '',
+		v2    TEXT NOT NULL DEFAULT '',
+		v3    TEXT NOT NULL DEFAULT '',
+		v4    TEXT NOT NULL DEFAULT '',
+		v5    TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_casbin_rule_lookup ON casbin_rule(ptype, v0, v1, v2, v3)`,
+	`CREATE TABLE IF NOT EXISTS policy_version (
+		id      INTEGER PRIMARY KEY CHECK (id = 1),
+		version INTEGER NOT NULL DEFAULT 0
+	)`,
+	`INSERT OR IGNORE INTO policy_version (id, version) VALUES (1, 0)`,
+	`CREATE TABLE IF NOT EXISTS authorization_checkpoints (
+		organization_id TEXT NOT NULL,
+		customer_id     TEXT NOT NULL,
+		source_version  INTEGER NOT NULL DEFAULT 0,
+		policy_version  INTEGER NOT NULL DEFAULT 0,
+		fresh           INTEGER NOT NULL DEFAULT 0,
+		updated_at      TEXT NOT NULL,
+		PRIMARY KEY (organization_id, customer_id)
+	)`,
 }
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }

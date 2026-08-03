@@ -8,6 +8,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"hash"
 	"log/slog"
 	"sync"
@@ -117,9 +118,14 @@ func SHA256Hash(data []byte) string {
 }
 
 func hashBytes(data []byte) []byte {
-	h := sha256Pool.Get().(*sha256Hasher)
+	pooled := sha256Pool.Get()
+	h, ok := pooled.(*sha256Hasher)
+	if !ok {
+		panic(fmt.Sprintf("authorization token pool returned %T", pooled))
+	}
 	defer sha256Pool.Put(h)
 	h.sum.Reset()
+	//nolint:errcheck // hash.Hash.Write never returns an error for sha256.New; ignoring is safe.
 	h.sum.Write(data)
 	return h.sum.Sum(nil)
 }

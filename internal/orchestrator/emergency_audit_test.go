@@ -1,4 +1,3 @@
-
 package orchestrator
 
 import (
@@ -14,6 +13,7 @@ import (
 
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/authctx"
+	"github.com/ndzuki/release-manager/internal/authorization"
 	"github.com/ndzuki/release-manager/internal/store"
 	"github.com/ndzuki/release-manager/internal/trust"
 )
@@ -29,7 +29,7 @@ func TestEmergencyChange_AuditsSuccessAndFailure(t *testing.T) {
 		BufferSize: 16, FlushInterval: time.Hour, BatchSize: 16, SpoolPath: t.TempDir() + "/audit.jsonl",
 	})
 	dispatcher := &recordingEmergencyDispatcher{}
-	svc := NewService(st, trust.NewStubVerifier(st.Verifications(), nil, logger), "staging", emitter, dispatcher, logger)
+	svc := NewService(st, trust.NewStubVerifier(st.Verifications(), nil, logger), "staging", emitter, dispatcher, authorization.NewStoreAuthorizer(st), logger)
 	ctx := emergencyAuditContext()
 
 	successResp, err := svc.EmergencyChange(ctx, emergencyReplicasRequest("audit-success", 3))
@@ -87,7 +87,7 @@ func TestEmergencyChange_AuditDoesNotPersistRawPayload(t *testing.T) {
 	emitter := audit.NewEmitter(st.AuditEvents(), logger, audit.EmitterConfig{
 		BufferSize: 4, FlushInterval: time.Hour, BatchSize: 4, SpoolPath: t.TempDir() + "/audit.jsonl",
 	})
-	svc := NewService(st, trust.NewStubVerifier(st.Verifications(), nil, logger), "staging", emitter, &recordingEmergencyDispatcher{}, logger)
+	svc := NewService(st, trust.NewStubVerifier(st.Verifications(), nil, logger), "staging", emitter, &recordingEmergencyDispatcher{}, authorization.NewStoreAuthorizer(st), logger)
 	req := emergencyReplicasRequest("audit-redaction", 3)
 	req.Msg.Reason = "token=secret-value"
 	resp, err := svc.EmergencyChange(emergencyAuditContext(), req)

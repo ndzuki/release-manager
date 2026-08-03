@@ -9,14 +9,17 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/viper"
 
 	"connectrpc.com/connect"
+	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/auth"
+	"github.com/ndzuki/release-manager/internal/authorization"
 	"github.com/ndzuki/release-manager/internal/config"
 	"github.com/ndzuki/release-manager/internal/operator"
 	"github.com/ndzuki/release-manager/internal/orchestrator"
@@ -29,30 +32,38 @@ import (
 )
 
 type orchSvc struct {
-	cfg         config.ServiceConfig
-	targetEnv   string
-	signingKey  string
-	configPath  string
+	cfg        config.ServiceConfig
+	targetEnv  string
+	signingKey string
+	configPath string
+	authURL    string
 
-	store        store.Store
-	cleanup      *orchestrator.CleanupService
-	emergency    *orchestrator.Service
-	pingDB       func(context.Context) error
-	bundleSvc    *orchestrator.BundleService
-	validation   *orchestrator.ValidationWorker
-	auditEmitter audit.Sink
+	store         store.Store
+	cleanup       *orchestrator.CleanupService
+	emergency     *orchestrator.Service
+	pingDB        func(context.Context) error
+	bundleSvc     *orchestrator.BundleService
+	validation    *orchestrator.ValidationWorker
+	auditEmitter  audit.Sink
+	authorizer    *authorization.Module
+	traceShutdown func(context.Context) error
 }
 
 func (s *orchSvc) Name() string { return "release-orchestrator" }
 
 func (s *orchSvc) Configure(cfg *config.ServiceConfig) { s.cfg = *cfg }
 
-
 func (s *orchSvc) Shutdown(ctx context.Context) error {
+	var result error
 	if emitter, ok := s.auditEmitter.(interface{ Shutdown(context.Context) error }); ok {
-		return emitter.Shutdown(ctx)
+		result = emitter.Shutdown(ctx)
 	}
-	return nil
+	if s.traceShutdown != nil {
+		if err := s.traceShutdown(ctx); result == nil {
+			result = err
+		}
+	}
+	return result
 }
 
 func (s *orchSvc) Close() error {
@@ -79,6 +90,22 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		return err
 	}
 	logger.Info("store opened", "driver", s.cfg.Database.Driver)
+	metrics := authorization.NewMetrics(prometheus.NewRegistry())
+	mux.Handle("GET /metrics", metrics.Handler())
+	s.traceShutdown = authorization.InstallTracing()
+	authzConfig := s.cfg.Authorization.WithDefaults()
+	if s.authURL != "" {
+		authzConfig.AuthURL = s.authURL
+	}
+	authClient := authv1connect.NewAuthorizationServiceClient(
+		http.DefaultClient,
+		authzConfig.AuthURL,
+		connect.WithInterceptors(authorization.TraceInterceptor()),
+	)
+	s.authorizer = authorization.NewModule(
+		authClient, s.store.Authorization(), metrics, logger,
+		authzConfig.PullInterval, authzConfig.PullBackoffMax,
+	)
 	if !s.cfg.Maintenance {
 		recovered := operation.RecoverNonTerminal(context.Background(), s.store, logger, operation.DefaultRecoverOptions())
 		if recovered > 0 {
@@ -101,7 +128,7 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	operatorPath, operatorHandler := operatorv1connect.NewOperatorServiceHandler(operatorService)
 	mux.Handle(operatorPath, operatorHandler)
 	emergencyDispatcher := orchestrator.NewEmergencyDispatcher(operatorService)
-	svc := orchestrator.NewService(s.store, verifier, s.targetEnv, s.auditEmitter, emergencyDispatcher, logger)
+	svc := orchestrator.NewService(s.store, verifier, s.targetEnv, s.auditEmitter, emergencyDispatcher, s.authorizer, logger)
 	s.emergency = svc
 	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)
 	enforcer, err := auth.NewEnforcer(s.store, logger)
@@ -115,6 +142,7 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	path, handler := orchestratorv1connect.NewOrchestratorServiceHandler(
 		svc,
 		connect.WithInterceptors(
+			authorization.TraceInterceptor(),
 			app.MaintenanceInterceptor(s.cfg.Maintenance, orchestratorReadOnlyProcedures(), logger),
 			auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, map[string]bool{}, logger),
 		),
@@ -214,6 +242,9 @@ func orchestratorReadOnlyProcedures() map[string]struct{} {
 
 // Run starts background cleanup and emergency timeout scanning.
 func (s *orchSvc) Run(ctx context.Context) {
+	if s.authorizer != nil {
+		go s.authorizer.Run(ctx)
+	}
 	if s.validation != nil {
 		go s.validation.Run(ctx)
 	}

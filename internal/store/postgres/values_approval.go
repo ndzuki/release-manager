@@ -73,6 +73,9 @@ func (s *valuesApprovalStore) transition(
 		return nil, fmt.Errorf("begin values approval transition: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
+	if err := checkAuthorizationFence(ctx, tx, command.ExpectedAuthorizationVersion); err != nil {
+		return nil, err
+	}
 
 	if replay, err := lookupValuesApprovalIdempotency(ctx, tx, command); err != nil {
 		return nil, err
@@ -188,6 +191,9 @@ func (s *valuesApprovalStore) transition(
 		approvalResult,
 		now.Add(valuesApprovalIdempotencyTTL),
 	); err != nil {
+		return nil, err
+	}
+	if err := checkAuthorizationFence(ctx, tx, command.ExpectedAuthorizationVersion); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

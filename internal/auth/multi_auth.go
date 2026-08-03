@@ -11,10 +11,7 @@ import (
 // TryAllInterceptor tries each sub-interceptor in order until one succeeds
 // (returns nil error). Only auth errors (Unauthenticated, PermissionDenied)
 // trigger fallthrough to the next interceptor; other errors propagate immediately.
-func TryAllInterceptor(logger *slog.Logger, interceptors ...connect.UnaryInterceptorFunc) connect.UnaryInterceptorFunc {
-	if logger == nil {
-		logger = slog.Default()
-	}
+func TryAllInterceptor(_ *slog.Logger, interceptors ...connect.UnaryInterceptorFunc) connect.UnaryInterceptorFunc {
 	return connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
 		final := next
 		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {

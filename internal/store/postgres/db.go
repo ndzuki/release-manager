@@ -157,6 +157,7 @@ type Store struct {
 	rollouts          *rolloutTrackingReader
 	emergencyIntents  *emergencyIntentStore
 	convergenceTasks  *convergenceTaskStore
+	authorization     *authorizationStore
 	closeOnce         sync.Once
 	closeErr          error
 }
@@ -230,6 +231,7 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s.rollouts = &rolloutTrackingReader{s: s}
 	s.emergencyIntents = &emergencyIntentStore{gorm: s.db}
 	s.convergenceTasks = &convergenceTaskStore{gorm: s.db}
+	s.authorization = &authorizationStore{gorm: s.db}
 	return s, nil
 }
 
@@ -248,17 +250,17 @@ var (
 	_ store.ArtifactEventSubmissionStore = (*artifactEventSubmissionStore)(nil)
 	_ store.PreflightLifecycleStore      = (*preflightLifecycleStore)(nil)
 	_ store.InventorySyncRequestStore    = (*inventorySyncRequestStore)(nil)
-	_ store.ValuesApprovalStore         = (*valuesApprovalStore)(nil)
-	_ store.ValuesApprovalReader        = (*valuesApprovalStore)(nil)
-	_ store.AuditExportStore            = (*auditExportStore)(nil)
-	_ store.TrustRootStore              = (*trustRootStore)(nil)
-	_ store.ScanResultStore             = (*scanResultStore)(nil)
-	_ store.VulnerabilityExceptionStore = (*vulnerabilityExceptionStore)(nil)
-	_ store.CandidateArtifactStore      = (*candidateArtifactStore)(nil)
-	_ store.PreflightLifecycleStore     = (*preflightLifecycleStore)(nil)
-	_ store.InventorySyncRequestStore   = (*inventorySyncRequestStore)(nil)
-	_ store.EmergencyIntentStore        = (*emergencyIntentStore)(nil)
-	_ store.ConvergenceTaskStore        = (*convergenceTaskStore)(nil)
+	_ store.ValuesApprovalStore          = (*valuesApprovalStore)(nil)
+	_ store.ValuesApprovalReader         = (*valuesApprovalStore)(nil)
+	_ store.AuditExportStore             = (*auditExportStore)(nil)
+	_ store.TrustRootStore               = (*trustRootStore)(nil)
+	_ store.ScanResultStore              = (*scanResultStore)(nil)
+	_ store.VulnerabilityExceptionStore  = (*vulnerabilityExceptionStore)(nil)
+	_ store.CandidateArtifactStore       = (*candidateArtifactStore)(nil)
+	_ store.PreflightLifecycleStore      = (*preflightLifecycleStore)(nil)
+	_ store.InventorySyncRequestStore    = (*inventorySyncRequestStore)(nil)
+	_ store.EmergencyIntentStore         = (*emergencyIntentStore)(nil)
+	_ store.ConvergenceTaskStore         = (*convergenceTaskStore)(nil)
 )
 
 func (s *Store) Operations() store.OperationStore           { return s.ops }
@@ -310,8 +312,11 @@ func (s *Store) ArtifactEventSubmissions() store.ArtifactEventSubmissionStore {
 	return s.eventSubmissions
 }
 func (s *Store) PreflightLifecycles() store.PreflightLifecycleStore { return s.preflightCycles }
-func (s *Store) EmergencyIntents() store.EmergencyIntentStore               { return s.emergencyIntents }
-func (s *Store) ConvergenceTasks() store.ConvergenceTaskStore               { return s.convergenceTasks }
+func (s *Store) EmergencyIntents() store.EmergencyIntentStore       { return s.emergencyIntents }
+func (s *Store) ConvergenceTasks() store.ConvergenceTaskStore       { return s.convergenceTasks }
+
+// Authorization returns the durable authorization state module.
+func (s *Store) Authorization() store.AuthorizationStore { return s.authorization }
 
 func (s *Store) Close() error {
 	if s == nil || s.sqlDB == nil {

@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/prometheus/client_golang/prometheus"
 
 	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/auth"
+	"github.com/ndzuki/release-manager/internal/authorization"
 	"github.com/ndzuki/release-manager/internal/config"
 	"github.com/ndzuki/release-manager/internal/store"
 	postgresstore "github.com/ndzuki/release-manager/internal/store/postgres"
@@ -21,16 +23,24 @@ import (
 )
 
 type authSvc struct {
-	cfg        config.ServiceConfig
-	signingKey string
-	store      store.Store
-	pingDB     func(context.Context) error
-	cancel     context.CancelFunc
+	cfg           config.ServiceConfig
+	signingKey    string
+	store         store.Store
+	pingDB        func(context.Context) error
+	cancel        context.CancelFunc
+	traceShutdown func(context.Context) error
 }
 
 func (s *authSvc) Name() string { return "release-auth" }
 
 func (s *authSvc) Configure(cfg *config.ServiceConfig) { s.cfg = *cfg }
+
+func (s *authSvc) Shutdown(ctx context.Context) error {
+	if s.traceShutdown != nil {
+		return s.traceShutdown(ctx)
+	}
+	return nil
+}
 
 func (s *authSvc) Close() error {
 	if s.cancel != nil {
@@ -79,11 +89,15 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		s.pingDB = store.DB().PingContext
 	}
 
+	metrics := authorization.NewMetrics(prometheus.NewRegistry())
+	mux.Handle("GET /metrics", metrics.Handler())
+	s.traceShutdown = authorization.InstallTracing()
+	authzConfig := s.cfg.Authorization.WithDefaults()
 	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)
 	limiter := auth.NewRateLimiter(5, time.Minute)
 	resolver := auth.StubResolver{}
 
-	enforcer, err := auth.NewEnforcer(s.store, logger)
+	enforcer, err := auth.NewEnforcer(s.store, logger, metrics)
 	if err != nil {
 		return err
 	}
@@ -94,7 +108,7 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		s.cancel = cancel
 		auth.StartSessionCleanup(ctx, s.store.AuthSessions(), time.Hour, logger)
-		enforcer.StartPolicyReloader(ctx, 30*time.Second)
+		enforcer.StartPolicyReloader(ctx, authzConfig.PolicyReloadInterval)
 	}
 
 	// Login and refresh create/revoke auth session state, so maintenance mode
@@ -108,6 +122,7 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	}
 	readOnly := authReadOnlyProcedures()
 	interceptorOpt := connect.WithInterceptors(
+		authorization.TraceInterceptor(),
 		app.MaintenanceInterceptor(s.cfg.Maintenance, readOnly, logger),
 		auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, publicMethods, logger),
 	)
@@ -124,20 +139,25 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	bindingPath, bindingHandler := authv1connect.NewBindingServiceHandler(bindingSvc, interceptorOpt)
 	mux.Handle(bindingPath, bindingHandler)
 
+	authorizationSvc := auth.NewAuthorizationService(s.store, enforcer, metrics, logger)
+	authorizationPath, authorizationHandler := authv1connect.NewAuthorizationServiceHandler(authorizationSvc, interceptorOpt)
+	mux.Handle(authorizationPath, authorizationHandler)
+
 	return nil
 }
 
 func authReadOnlyProcedures() map[string]struct{} {
 	return map[string]struct{}{
-		authv1connect.AuthServiceGetInitStatusProcedure:                  {},
-		authv1connect.AuthServiceValidateTokenProcedure:                  {},
-		authv1connect.OrganizationServiceGetOrganizationProcedure:        {},
-		authv1connect.OrganizationServiceListOrganizationsProcedure:      {},
-		authv1connect.OrganizationServiceListMembersProcedure:            {},
-		authv1connect.BindingServiceGetBindingProcedure:                  {},
-		authv1connect.BindingServiceListBindingsProcedure:                {},
-		authv1connect.ExternalIdentityServiceGetOIDCAuthURLProcedure:     {},
-		authv1connect.ExternalIdentityServiceGetDingTalkAuthURLProcedure: {},
+		authv1connect.AuthServiceGetInitStatusProcedure:                     {},
+		authv1connect.AuthServiceValidateTokenProcedure:                     {},
+		authv1connect.OrganizationServiceGetOrganizationProcedure:           {},
+		authv1connect.OrganizationServiceListOrganizationsProcedure:         {},
+		authv1connect.OrganizationServiceListMembersProcedure:               {},
+		authv1connect.BindingServiceGetBindingProcedure:                     {},
+		authv1connect.BindingServiceListBindingsProcedure:                   {},
+		authv1connect.AuthorizationServiceGetAuthorizationSnapshotProcedure: {},
+		authv1connect.ExternalIdentityServiceGetOIDCAuthURLProcedure:        {},
+		authv1connect.ExternalIdentityServiceGetDingTalkAuthURLProcedure:    {},
 	}
 }
 func main() {

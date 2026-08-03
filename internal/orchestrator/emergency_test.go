@@ -111,6 +111,28 @@ func TestEmergencyChangeIdempotency(t *testing.T) {
 	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
 }
 
+func TestEmergencyChangeAuthorizationDenyHasNoWriteSideEffects(t *testing.T) {
+	svc, st, dispatcher := emergencyTestService(t)
+	deployerID := "emergency-deployer"
+	require.NoError(t, st.Users().Create(t.Context(), &store.User{ID: deployerID, Username: deployerID, Status: store.UserActive}))
+	require.NoError(t, st.OrgMembers().Create(t.Context(), &store.OrganizationMember{OrgID: "org-001", UserID: deployerID, Role: store.RoleDeployer}))
+	ctx := authctx.WithActor(context.Background(), authctx.Actor{UserID: deployerID, OrganizationID: "org-001"})
+	_, err := svc.EmergencyChange(ctx, emergencyReplicasRequest("deny-no-write", 3))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+	assert.Empty(t, dispatcher.commands)
+	var operations, intents, idempotency int
+	storeWithDB, storeHasDB := st.(interface{ DB() *sql.DB })
+	require.True(t, storeHasDB)
+	storeDB := storeWithDB.DB()
+	require.NoError(t, storeDB.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM operations`).Scan(&operations))
+	require.NoError(t, storeDB.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM emergency_intents`).Scan(&intents))
+	require.NoError(t, storeDB.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM idempotency_records`).Scan(&idempotency))
+	assert.Zero(t, operations)
+	assert.Zero(t, intents)
+	assert.Zero(t, idempotency)
+}
+
 func TestEmergencyChangeFieldLocks(t *testing.T) {
 	svc, _, _ := emergencyTestService(t)
 	_, err := svc.EmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("lock-1", 3))
@@ -149,6 +171,7 @@ func TestExpireEmergencyOperationsTimesOutOverdueOperation(t *testing.T) {
 	require.True(t, ok)
 	_, err = sqliteStore.DB().ExecContext(t.Context(), `UPDATE operations SET deadline = ? WHERE id = ?`,
 		time.Now().UTC().Add(-time.Second).Format(time.RFC3339), resp.Msg.GetOperationId())
+	require.NoError(t, err)
 
 	assert.Equal(t, 1, svc.ExpireEmergencyOperations(t.Context()))
 	operation, err := st.Operations().Get(t.Context(), resp.Msg.GetOperationId())

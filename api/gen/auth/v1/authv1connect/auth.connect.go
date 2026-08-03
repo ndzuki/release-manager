@@ -27,6 +27,8 @@ const (
 	OrganizationServiceName = "auth.v1.OrganizationService"
 	// BindingServiceName is the fully-qualified name of the BindingService service.
 	BindingServiceName = "auth.v1.BindingService"
+	// AuthorizationServiceName is the fully-qualified name of the AuthorizationService service.
+	AuthorizationServiceName = "auth.v1.AuthorizationService"
 	// ExternalIdentityServiceName is the fully-qualified name of the ExternalIdentityService service.
 	ExternalIdentityServiceName = "auth.v1.ExternalIdentityService"
 )
@@ -99,6 +101,12 @@ const (
 	// BindingServiceRevokeBindingProcedure is the fully-qualified name of the BindingService's
 	// RevokeBinding RPC.
 	BindingServiceRevokeBindingProcedure = "/auth.v1.BindingService/RevokeBinding"
+	// AuthorizationServiceGetAuthorizationSnapshotProcedure is the fully-qualified name of the
+	// AuthorizationService's GetAuthorizationSnapshot RPC.
+	AuthorizationServiceGetAuthorizationSnapshotProcedure = "/auth.v1.AuthorizationService/GetAuthorizationSnapshot"
+	// AuthorizationServiceSetCapabilityGrantProcedure is the fully-qualified name of the
+	// AuthorizationService's SetCapabilityGrant RPC.
+	AuthorizationServiceSetCapabilityGrantProcedure = "/auth.v1.AuthorizationService/SetCapabilityGrant"
 	// ExternalIdentityServiceAuthenticateLDAPProcedure is the fully-qualified name of the
 	// ExternalIdentityService's AuthenticateLDAP RPC.
 	ExternalIdentityServiceAuthenticateLDAPProcedure = "/auth.v1.ExternalIdentityService/AuthenticateLDAP"
@@ -786,6 +794,102 @@ func (UnimplementedBindingServiceHandler) ListBindings(context.Context, *connect
 
 func (UnimplementedBindingServiceHandler) RevokeBinding(context.Context, *connect.Request[v1.RevokeBindingRequest]) (*connect.Response[v1.RevokeBindingResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.BindingService.RevokeBinding is not implemented"))
+}
+
+// AuthorizationServiceClient is a client for the auth.v1.AuthorizationService service.
+type AuthorizationServiceClient interface {
+	GetAuthorizationSnapshot(context.Context, *connect.Request[v1.GetAuthorizationSnapshotRequest]) (*connect.Response[v1.GetAuthorizationSnapshotResponse], error)
+	SetCapabilityGrant(context.Context, *connect.Request[v1.SetCapabilityGrantRequest]) (*connect.Response[v1.SetCapabilityGrantResponse], error)
+}
+
+// NewAuthorizationServiceClient constructs a client for the auth.v1.AuthorizationService service.
+// By default, it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped
+// responses, and sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the
+// connect.WithGRPC() or connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewAuthorizationServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) AuthorizationServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	authorizationServiceMethods := v1.File_auth_v1_auth_proto.Services().ByName("AuthorizationService").Methods()
+	return &authorizationServiceClient{
+		getAuthorizationSnapshot: connect.NewClient[v1.GetAuthorizationSnapshotRequest, v1.GetAuthorizationSnapshotResponse](
+			httpClient,
+			baseURL+AuthorizationServiceGetAuthorizationSnapshotProcedure,
+			connect.WithSchema(authorizationServiceMethods.ByName("GetAuthorizationSnapshot")),
+			connect.WithClientOptions(opts...),
+		),
+		setCapabilityGrant: connect.NewClient[v1.SetCapabilityGrantRequest, v1.SetCapabilityGrantResponse](
+			httpClient,
+			baseURL+AuthorizationServiceSetCapabilityGrantProcedure,
+			connect.WithSchema(authorizationServiceMethods.ByName("SetCapabilityGrant")),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// authorizationServiceClient implements AuthorizationServiceClient.
+type authorizationServiceClient struct {
+	getAuthorizationSnapshot *connect.Client[v1.GetAuthorizationSnapshotRequest, v1.GetAuthorizationSnapshotResponse]
+	setCapabilityGrant       *connect.Client[v1.SetCapabilityGrantRequest, v1.SetCapabilityGrantResponse]
+}
+
+// GetAuthorizationSnapshot calls auth.v1.AuthorizationService.GetAuthorizationSnapshot.
+func (c *authorizationServiceClient) GetAuthorizationSnapshot(ctx context.Context, req *connect.Request[v1.GetAuthorizationSnapshotRequest]) (*connect.Response[v1.GetAuthorizationSnapshotResponse], error) {
+	return c.getAuthorizationSnapshot.CallUnary(ctx, req)
+}
+
+// SetCapabilityGrant calls auth.v1.AuthorizationService.SetCapabilityGrant.
+func (c *authorizationServiceClient) SetCapabilityGrant(ctx context.Context, req *connect.Request[v1.SetCapabilityGrantRequest]) (*connect.Response[v1.SetCapabilityGrantResponse], error) {
+	return c.setCapabilityGrant.CallUnary(ctx, req)
+}
+
+// AuthorizationServiceHandler is an implementation of the auth.v1.AuthorizationService service.
+type AuthorizationServiceHandler interface {
+	GetAuthorizationSnapshot(context.Context, *connect.Request[v1.GetAuthorizationSnapshotRequest]) (*connect.Response[v1.GetAuthorizationSnapshotResponse], error)
+	SetCapabilityGrant(context.Context, *connect.Request[v1.SetCapabilityGrantRequest]) (*connect.Response[v1.SetCapabilityGrantResponse], error)
+}
+
+// NewAuthorizationServiceHandler builds an HTTP handler from the service implementation. It returns
+// the path on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewAuthorizationServiceHandler(svc AuthorizationServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	authorizationServiceMethods := v1.File_auth_v1_auth_proto.Services().ByName("AuthorizationService").Methods()
+	authorizationServiceGetAuthorizationSnapshotHandler := connect.NewUnaryHandler(
+		AuthorizationServiceGetAuthorizationSnapshotProcedure,
+		svc.GetAuthorizationSnapshot,
+		connect.WithSchema(authorizationServiceMethods.ByName("GetAuthorizationSnapshot")),
+		connect.WithHandlerOptions(opts...),
+	)
+	authorizationServiceSetCapabilityGrantHandler := connect.NewUnaryHandler(
+		AuthorizationServiceSetCapabilityGrantProcedure,
+		svc.SetCapabilityGrant,
+		connect.WithSchema(authorizationServiceMethods.ByName("SetCapabilityGrant")),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/auth.v1.AuthorizationService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case AuthorizationServiceGetAuthorizationSnapshotProcedure:
+			authorizationServiceGetAuthorizationSnapshotHandler.ServeHTTP(w, r)
+		case AuthorizationServiceSetCapabilityGrantProcedure:
+			authorizationServiceSetCapabilityGrantHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedAuthorizationServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedAuthorizationServiceHandler struct{}
+
+func (UnimplementedAuthorizationServiceHandler) GetAuthorizationSnapshot(context.Context, *connect.Request[v1.GetAuthorizationSnapshotRequest]) (*connect.Response[v1.GetAuthorizationSnapshotResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthorizationService.GetAuthorizationSnapshot is not implemented"))
+}
+
+func (UnimplementedAuthorizationServiceHandler) SetCapabilityGrant(context.Context, *connect.Request[v1.SetCapabilityGrantRequest]) (*connect.Response[v1.SetCapabilityGrantResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthorizationService.SetCapabilityGrant is not implemented"))
 }
 
 // ExternalIdentityServiceClient is a client for the auth.v1.ExternalIdentityService service.
