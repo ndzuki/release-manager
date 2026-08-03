@@ -3,6 +3,7 @@
 package integration_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -520,6 +521,116 @@ func (t *trackingTransport) listResourceVersions() []string {
 	return slices.Clone(t.listVersions)
 }
 
+type watchEventBarrierTransport struct {
+	trackingTransport
+	marker  []byte
+	matched chan struct{}
+}
+
+func newWatchEventBarrierTransport(marker string) *watchEventBarrierTransport {
+	return &watchEventBarrierTransport{
+		marker:  []byte(marker),
+		matched: make(chan struct{}),
+	}
+}
+
+func (t *watchEventBarrierTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	response, err := t.trackingTransport.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	if req.URL.Query().Get("watch") != "true" {
+		return response, nil
+	}
+	response.Body = newWatchEventBarrierBody(req.Context(), response.Body, t.marker, t.matched)
+	return response, nil
+}
+
+func (t *watchEventBarrierTransport) setBase(base http.RoundTripper) {
+	t.trackingTransport.setBase(base)
+}
+
+// watchEventBarrierBody forwards complete watch-event lines, then blocks after
+// the configured marker until the observer closes the response body.
+type watchEventBarrierBody struct {
+	source            io.ReadCloser
+	reader            *bufio.Reader
+	ctx               context.Context
+	marker            []byte
+	matched           chan struct{}
+	closed            chan struct{}
+	pending           []byte
+	pendingErr        error
+	blockAfterPending bool
+	blocked           bool
+	matchOnce         sync.Once
+	closeOnce         sync.Once
+}
+
+func newWatchEventBarrierBody(
+	ctx context.Context,
+	source io.ReadCloser,
+	marker []byte,
+	matched chan struct{},
+) *watchEventBarrierBody {
+	return &watchEventBarrierBody{
+		source:  source,
+		reader:  bufio.NewReader(source),
+		ctx:     ctx,
+		marker:  marker,
+		matched: matched,
+		closed:  make(chan struct{}),
+	}
+}
+
+func (b *watchEventBarrierBody) Read(p []byte) (int, error) {
+	for len(b.pending) == 0 {
+		if b.blocked {
+			if b.pendingErr != nil {
+				err := b.pendingErr
+				b.pendingErr = nil
+				return 0, err
+			}
+			select {
+			case <-b.ctx.Done():
+				return 0, b.ctx.Err()
+			case <-b.closed:
+				return 0, io.EOF
+			}
+		}
+		if b.pendingErr != nil {
+			err := b.pendingErr
+			b.pendingErr = nil
+			return 0, err
+		}
+		line, err := b.reader.ReadBytes('\n')
+		if len(line) == 0 {
+			return 0, err
+		}
+		b.pending = line
+		b.pendingErr = err
+		b.blockAfterPending = bytes.Contains(line, b.marker)
+	}
+
+	n := copy(p, b.pending)
+	b.pending = b.pending[n:]
+	if len(b.pending) == 0 && b.blockAfterPending {
+		b.blockAfterPending = false
+		b.blocked = true
+		b.matchOnce.Do(func() { close(b.matched) })
+	}
+	return n, nil
+}
+
+func (b *watchEventBarrierBody) Close() error {
+	var err error
+	b.closeOnce.Do(func() {
+		close(b.closed)
+		err = b.source.Close()
+	})
+	return err
+}
+
 func isSecretReq(req *http.Request) bool {
 	return strings.Contains(req.URL.Path, "/secrets")
 }
@@ -814,17 +925,19 @@ func updateStatefulSetStatus(
 	client kubernetes.Interface,
 	namespace, name string,
 	mutate func(*appsv1.StatefulSet),
-) error {
+) (*appsv1.StatefulSet, error) {
 	t.Helper()
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	var updated *appsv1.StatefulSet
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		statefulSet, err := client.AppsV1().StatefulSets(namespace).Get(t.Context(), name, metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
 		mutate(statefulSet)
-		_, err = client.AppsV1().StatefulSets(namespace).UpdateStatus(t.Context(), statefulSet, metav1.UpdateOptions{})
+		updated, err = client.AppsV1().StatefulSets(namespace).UpdateStatus(t.Context(), statefulSet, metav1.UpdateOptions{})
 		return err
 	})
+	return updated, err
 }
 
 func updateDaemonSetStatus(
@@ -832,17 +945,19 @@ func updateDaemonSetStatus(
 	client kubernetes.Interface,
 	namespace, name string,
 	mutate func(*appsv1.DaemonSet),
-) error {
+) (*appsv1.DaemonSet, error) {
 	t.Helper()
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	var updated *appsv1.DaemonSet
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		daemonSet, err := client.AppsV1().DaemonSets(namespace).Get(t.Context(), name, metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
 		mutate(daemonSet)
-		_, err = client.AppsV1().DaemonSets(namespace).UpdateStatus(t.Context(), daemonSet, metav1.UpdateOptions{})
+		updated, err = client.AppsV1().DaemonSets(namespace).UpdateStatus(t.Context(), daemonSet, metav1.UpdateOptions{})
 		return err
 	})
+	return updated, err
 }
 
 func assertRolloutLast(t *testing.T, result observer.WatchResult, err error) {
@@ -1093,46 +1208,72 @@ func TestRolloutWatchWorkloadFailures(t *testing.T) {
 	t.Run("statefulset non-terminal condition does not fail", func(t *testing.T) {
 		fx := setupRolloutFixture(t, t.Name())
 		statefulSet := fx.createStatefulSet(t, "statefulset-pending")
+		transport := newWatchEventBarrierTransport(`"reason":"RolloutPending"`)
+		obs := observer.New(clientWithTransport(t, fx.observerCfg, transport))
 		resultCh := make(chan observer.WatchResult, 1)
 		errCh := make(chan error, 1)
 		go func() {
-			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), fx.statefulSetRef(statefulSet.Name), statefulSet.Generation+100, 3*time.Second)
+			result, err := obs.Observe(t.Context(), fx.statefulSetRef(statefulSet.Name), statefulSet.Generation+100, 3*time.Second)
 			resultCh <- result
 			errCh <- err
 		}()
-		require.Eventually(t, func() bool { return fx.transport.activeWatches.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
-		err := updateStatefulSetStatus(t, fx.adminClient, fx.namespace, statefulSet.Name, func(current *appsv1.StatefulSet) {
+		require.Eventually(t, func() bool { return transport.activeWatches.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
+		updated, err := updateStatefulSetStatus(t, fx.adminClient, fx.namespace, statefulSet.Name, func(current *appsv1.StatefulSet) {
 			current.Status.Conditions = []appsv1.StatefulSetCondition{{Type: "Progressing", Status: corev1.ConditionFalse, Reason: "RolloutPending"}}
 		})
 		require.NoError(t, err)
+		select {
+		case <-transport.matched:
+		case <-time.After(2 * time.Second):
+			t.Fatal("observer watch did not receive the StatefulSet non-terminal condition")
+		}
 		result := <-resultCh
 		err = <-errCh
 		assert.ErrorIs(t, err, observer.ErrRolloutTimeout)
 		assert.False(t, errors.Is(err, observer.ErrWorkloadUnavailable))
 		assertRolloutLast(t, result, err)
+		require.Len(t, result.Conditions, 1)
+		assert.Equal(t, "Progressing", result.Conditions[0].Type)
+		assert.Equal(t, string(corev1.ConditionFalse), result.Conditions[0].Status)
+		assert.Equal(t, "RolloutPending", result.Conditions[0].Reason)
+		assert.Equal(t, updated.ResourceVersion, result.ResourceVersion)
+		assertTransportClean(t, &transport.trackingTransport)
 		fx.assertClean(t)
 	})
 
 	t.Run("daemonset non-terminal condition does not fail", func(t *testing.T) {
 		fx := setupRolloutFixture(t, t.Name())
 		daemonSet := fx.createDaemonSet(t, "daemonset-pending")
+		transport := newWatchEventBarrierTransport(`"reason":"RolloutPending"`)
+		obs := observer.New(clientWithTransport(t, fx.observerCfg, transport))
 		resultCh := make(chan observer.WatchResult, 1)
 		errCh := make(chan error, 1)
 		go func() {
-			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), fx.daemonSetRef(daemonSet.Name), daemonSet.Generation+100, 3*time.Second)
+			result, err := obs.Observe(t.Context(), fx.daemonSetRef(daemonSet.Name), daemonSet.Generation+100, 3*time.Second)
 			resultCh <- result
 			errCh <- err
 		}()
-		require.Eventually(t, func() bool { return fx.transport.activeWatches.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
-		err := updateDaemonSetStatus(t, fx.adminClient, fx.namespace, daemonSet.Name, func(current *appsv1.DaemonSet) {
+		require.Eventually(t, func() bool { return transport.activeWatches.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
+		updated, err := updateDaemonSetStatus(t, fx.adminClient, fx.namespace, daemonSet.Name, func(current *appsv1.DaemonSet) {
 			current.Status.Conditions = []appsv1.DaemonSetCondition{{Type: "Progressing", Status: corev1.ConditionFalse, Reason: "RolloutPending"}}
 		})
 		require.NoError(t, err)
+		select {
+		case <-transport.matched:
+		case <-time.After(2 * time.Second):
+			t.Fatal("observer watch did not receive the DaemonSet non-terminal condition")
+		}
 		result := <-resultCh
 		err = <-errCh
 		assert.ErrorIs(t, err, observer.ErrRolloutTimeout)
 		assert.False(t, errors.Is(err, observer.ErrWorkloadUnavailable))
 		assertRolloutLast(t, result, err)
+		require.Len(t, result.Conditions, 1)
+		assert.Equal(t, "Progressing", result.Conditions[0].Type)
+		assert.Equal(t, string(corev1.ConditionFalse), result.Conditions[0].Status)
+		assert.Equal(t, "RolloutPending", result.Conditions[0].Reason)
+		assert.Equal(t, updated.ResourceVersion, result.ResourceVersion)
+		assertTransportClean(t, &transport.trackingTransport)
 		fx.assertClean(t)
 	})
 }
@@ -1376,20 +1517,19 @@ func TestRolloutWatchConcurrentIsolation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 
-	obs1 := observer.New(fx.observerClient(t))
-	obs2 := observer.New(fx.observerClient(t))
+	obs := observer.New(fx.observerClient(t))
 
 	firstResultCh := make(chan observer.WatchResult, 1)
 	firstErrCh := make(chan error, 1)
 	secondResultCh := make(chan observer.WatchResult, 1)
 	secondErrCh := make(chan error, 1)
 	go func() {
-		result, err := obs1.Observe(ctx, ref, deployment.Generation+100, defaultSceneTimeout)
+		result, err := obs.Observe(ctx, ref, deployment.Generation+100, defaultSceneTimeout)
 		firstResultCh <- result
 		firstErrCh <- err
 	}()
 	go func() {
-		result, err := obs2.Observe(t.Context(), ref, deployment.Generation+1, defaultSceneTimeout)
+		result, err := obs.Observe(t.Context(), ref, deployment.Generation+1, defaultSceneTimeout)
 		secondResultCh <- result
 		secondErrCh <- err
 	}()

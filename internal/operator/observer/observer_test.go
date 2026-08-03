@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -572,16 +573,17 @@ func TestObserver_ConcurrentCallsAreIsolated(t *testing.T) {
 	ready := readyDeployment(2, "2")
 	ready.UID = pending.UID
 
-	firstClient := fake.NewSimpleClientset(pending.DeepCopy())
+	client := fake.NewSimpleClientset(pending.DeepCopy())
 	firstWatcher := watch.NewRaceFreeFake()
-	firstClient.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
-		return true, firstWatcher, nil
-	})
-	secondClient := fake.NewSimpleClientset(pending.DeepCopy())
 	secondWatcher := watch.NewRaceFreeFake()
-	secondClient.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
+	var watchCalls atomic.Int64
+	client.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
+		if watchCalls.Add(1) == 1 {
+			return true, firstWatcher, nil
+		}
 		return true, secondWatcher, nil
 	})
+	observer := New(client)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	firstResultCh := make(chan WatchResult, 1)
@@ -589,18 +591,18 @@ func TestObserver_ConcurrentCallsAreIsolated(t *testing.T) {
 	secondResultCh := make(chan WatchResult, 1)
 	secondErrCh := make(chan error, 1)
 	go func() {
-		result, err := New(firstClient).Observe(ctx, deploymentRef(), 2, time.Second)
+		result, err := observer.Observe(ctx, deploymentRef(), 2, time.Second)
 		firstResultCh <- result
 		firstErrCh <- err
 	}()
+	require.Eventually(t, func() bool { return watchCalls.Load() == 1 }, time.Second, time.Millisecond)
 	go func() {
-		result, err := New(secondClient).Observe(t.Context(), deploymentRef(), 2, time.Second)
+		result, err := observer.Observe(t.Context(), deploymentRef(), 2, time.Second)
 		secondResultCh <- result
 		secondErrCh <- err
 	}()
 
-	require.Eventually(t, func() bool { return len(firstClient.Actions()) >= 2 }, time.Second, time.Millisecond)
-	require.Eventually(t, func() bool { return len(secondClient.Actions()) >= 2 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return watchCalls.Load() == 2 }, time.Second, time.Millisecond)
 	cancel()
 
 	firstErr := <-firstErrCh
@@ -614,6 +616,8 @@ func TestObserver_ConcurrentCallsAreIsolated(t *testing.T) {
 	require.NoError(t, secondErr)
 	assert.True(t, secondResult.Ready)
 	assert.Equal(t, pending.UID, secondResult.ResourceUID)
+	assert.True(t, firstWatcher.IsStopped())
+	assert.True(t, secondWatcher.IsStopped())
 }
 
 func TestObserver_RolloutTimeoutIncludesLastState(t *testing.T) {
