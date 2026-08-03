@@ -84,6 +84,7 @@ func TestObserver_JobFailed(t *testing.T) {
 	assert.Zero(t, result.ObservedGeneration)
 	require.Len(t, result.Conditions, 1)
 	assert.Equal(t, "BackoffLimitExceeded", result.Conditions[0].Reason)
+	assert.Equal(t, "job has reached the specified backoff limit", result.Conditions[0].Message)
 	assertRolloutLast(t, result, err)
 }
 

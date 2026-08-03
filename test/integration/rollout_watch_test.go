@@ -65,7 +65,7 @@ func setupRolloutFixture(t *testing.T, testID string) *rolloutFixture {
 	namespace := createTestNamespace(t, adminClient, testID)
 
 	saName := "observer"
-	createRBAC(t, adminClient, namespace, saName)
+	createRBAC(t, adminClient, namespace, saName, testID)
 	token := requestToken(t, adminClient, namespace, saName)
 
 	transport := &trackingTransport{}
@@ -155,6 +155,7 @@ func (f *rolloutFixture) createJob(t *testing.T, name string) *batchv1.Job {
 		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: selector},
 		Spec: batchv1.JobSpec{
 			BackoffLimit: ptr.To[int32](jobFailureDelay),
+			Suspend:      ptr.To(true),
 			Template:     template,
 		},
 	}, metav1.CreateOptions{})
@@ -221,16 +222,17 @@ func assertTransportClean(t *testing.T, transport *trackingTransport) {
 
 // ─── RBAC ──────────────────────────────────────────────────────────────────
 
-func createRBAC(t *testing.T, client kubernetes.Interface, namespace, saName string) {
+func createRBAC(t *testing.T, client kubernetes.Interface, namespace, saName, testID string) {
 	t.Helper()
+	labels := testLabels(testID, "observer-rbac")
 	_, err := client.CoreV1().ServiceAccounts(namespace).Create(t.Context(), &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{Name: saName},
+		ObjectMeta: metav1.ObjectMeta{Name: saName, Labels: labels},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
 
 	roleName := saName
 	_, err = client.RbacV1().Roles(namespace).Create(t.Context(), &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Name: roleName},
+		ObjectMeta: metav1.ObjectMeta{Name: roleName, Labels: labels},
 		Rules: []rbacv1.PolicyRule{
 			{
 				APIGroups: []string{"apps"},
@@ -247,7 +249,7 @@ func createRBAC(t *testing.T, client kubernetes.Interface, namespace, saName str
 	require.NoError(t, err)
 
 	_, err = client.RbacV1().RoleBindings(namespace).Create(t.Context(), &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: roleName},
+		ObjectMeta: metav1.ObjectMeta{Name: roleName, Labels: labels},
 		RoleRef: rbacv1.RoleRef{
 			APIGroup: "rbac.authorization.k8s.io",
 			Kind:     "Role",
@@ -314,19 +316,18 @@ func createTestNamespace(t *testing.T, client kubernetes.Interface, testID strin
 				t.Errorf("get namespace %s during cleanup: %v", name, err)
 				return
 			}
-
 			gone, listErr := testResourcesGone(ctx, client, testID)
 			if listErr == nil && gone {
 				return
 			}
 			if listErr != nil && ctx.Err() == nil {
-				t.Errorf("list workloads for test-id %s during cleanup: %v", testID, listErr)
+				t.Errorf("list resources for test-id %s during cleanup: %v", testID, listErr)
 				return
 			}
 
 			select {
 			case <-ctx.Done():
-				t.Errorf("namespace %s and labeled workloads were not cleaned before deadline", name)
+				t.Errorf("namespace %s was not deleted before deadline", name)
 				return
 			case <-ticker.C:
 			}
@@ -409,6 +410,39 @@ func deleteTestResources(ctx context.Context, client kubernetes.Interface, testI
 			return fmt.Errorf("delete service %s/%s: %w", item.Namespace, item.Name, err)
 		}
 	}
+
+	serviceAccounts, err := client.CoreV1().ServiceAccounts("").List(ctx, listOptions)
+	if err != nil {
+		return fmt.Errorf("list serviceaccounts: %w", err)
+	}
+	for index := range serviceAccounts.Items {
+		item := &serviceAccounts.Items[index]
+		if err := client.CoreV1().ServiceAccounts(item.Namespace).Delete(ctx, item.Name, deleteOptions); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete serviceaccount %s/%s: %w", item.Namespace, item.Name, err)
+		}
+	}
+
+	roles, err := client.RbacV1().Roles("").List(ctx, listOptions)
+	if err != nil {
+		return fmt.Errorf("list roles: %w", err)
+	}
+	for index := range roles.Items {
+		item := &roles.Items[index]
+		if err := client.RbacV1().Roles(item.Namespace).Delete(ctx, item.Name, deleteOptions); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete role %s/%s: %w", item.Namespace, item.Name, err)
+		}
+	}
+
+	roleBindings, err := client.RbacV1().RoleBindings("").List(ctx, listOptions)
+	if err != nil {
+		return fmt.Errorf("list rolebindings: %w", err)
+	}
+	for index := range roleBindings.Items {
+		item := &roleBindings.Items[index]
+		if err := client.RbacV1().RoleBindings(item.Namespace).Delete(ctx, item.Name, deleteOptions); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete rolebinding %s/%s: %w", item.Namespace, item.Name, err)
+		}
+	}
 	return nil
 }
 
@@ -439,12 +473,27 @@ func testResourcesGone(ctx context.Context, client kubernetes.Interface, testID 
 	if err != nil {
 		return false, fmt.Errorf("list services: %w", err)
 	}
+	serviceAccounts, err := client.CoreV1().ServiceAccounts("").List(ctx, listOptions)
+	if err != nil {
+		return false, fmt.Errorf("list serviceaccounts: %w", err)
+	}
+	roles, err := client.RbacV1().Roles("").List(ctx, listOptions)
+	if err != nil {
+		return false, fmt.Errorf("list roles: %w", err)
+	}
+	roleBindings, err := client.RbacV1().RoleBindings("").List(ctx, listOptions)
+	if err != nil {
+		return false, fmt.Errorf("list rolebindings: %w", err)
+	}
 	return len(deployments.Items) == 0 &&
 		len(statefulSets.Items) == 0 &&
 		len(daemonSets.Items) == 0 &&
 		len(jobs.Items) == 0 &&
 		len(pods.Items) == 0 &&
-		len(services.Items) == 0, nil
+		len(services.Items) == 0 &&
+		len(serviceAccounts.Items) == 0 &&
+		len(roles.Items) == 0 &&
+		len(roleBindings.Items) == 0, nil
 }
 
 // ─── Transport ─────────────────────────────────────────────────────────────
@@ -901,6 +950,24 @@ func updateDeploymentStatus(
 		return err
 	})
 }
+func resumeJob(
+	t *testing.T,
+	client kubernetes.Interface,
+	namespace, name string,
+) (*batchv1.Job, error) {
+	t.Helper()
+	var updated *batchv1.Job
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		current, err := client.BatchV1().Jobs(namespace).Get(t.Context(), name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		current.Spec.Suspend = ptr.To(false)
+		updated, err = client.BatchV1().Jobs(namespace).Update(t.Context(), current, metav1.UpdateOptions{})
+		return err
+	})
+	return updated, err
+}
 
 func updateJobStatus(
 	t *testing.T,
@@ -1017,7 +1084,6 @@ func TestRolloutWatchReadyWorkloads(t *testing.T) {
 	tests := []struct {
 		name   string
 		create func(*rolloutFixture, *testing.T) (observer.ResourceRef, int64)
-		assert func(*testing.T, observer.WatchResult, int64)
 	}{
 		{
 			name: "deployment",
@@ -1025,7 +1091,6 @@ func TestRolloutWatchReadyWorkloads(t *testing.T) {
 				deployment := fx.createDeployment(t, "deployment")
 				return fx.deploymentRef(deployment.Name), deployment.Generation
 			},
-			assert: assertAppsReadyGeneration,
 		},
 		{
 			name: "statefulset",
@@ -1033,7 +1098,6 @@ func TestRolloutWatchReadyWorkloads(t *testing.T) {
 				statefulSet := fx.createStatefulSet(t, "statefulset")
 				return fx.statefulSetRef(statefulSet.Name), statefulSet.Generation
 			},
-			assert: assertAppsReadyGeneration,
 		},
 		{
 			name: "daemonset",
@@ -1041,41 +1105,68 @@ func TestRolloutWatchReadyWorkloads(t *testing.T) {
 				daemonSet := fx.createDaemonSet(t, "daemonset")
 				return fx.daemonSetRef(daemonSet.Name), daemonSet.Generation
 			},
-			assert: assertAppsReadyGeneration,
-		},
-		{
-			name: "job",
-			create: func(fx *rolloutFixture, t *testing.T) (observer.ResourceRef, int64) {
-				job := fx.createJob(t, "job")
-				return fx.jobRef(job.Name), job.Generation
-			},
-			assert: func(t *testing.T, result observer.WatchResult, generation int64) {
-				t.Helper()
-				assert.Equal(t, generation, result.Generation)
-				assert.Zero(t, result.ObservedGeneration)
-			},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			fx := setupRolloutFixture(t, t.Name())
 			ref, generation := test.create(fx, t)
-			expectedGeneration := generation
-			if ref.GVR == observer.JobGVR {
-				expectedGeneration = 0
-			}
 
-			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), ref, expectedGeneration, defaultSceneTimeout)
+			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), ref, generation, defaultSceneTimeout)
 
 			require.NoError(t, err)
+			assert.Equal(t, ref, result.Resource)
 			assert.True(t, result.Ready)
 			assert.False(t, result.Failed)
 			assert.NotEmpty(t, result.ResourceUID)
 			assert.NotEmpty(t, result.ResourceVersion)
-			test.assert(t, result, generation)
+			assertAppsReadyGeneration(t, result, generation)
 			fx.assertClean(t)
 		})
 	}
+}
+
+func TestRolloutWatchJobCompletesAfterWatch(t *testing.T) {
+	fx := setupRolloutFixture(t, t.Name())
+	job := fx.createJob(t, "job")
+	ref := fx.jobRef(job.Name)
+
+	resultCh := make(chan observer.WatchResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), ref, 0, defaultSceneTimeout)
+		resultCh <- result
+		errCh <- err
+	}()
+
+	require.Eventually(t, func() bool { return fx.transport.activeWatches.Load() == 1 }, 5*time.Second, 10*time.Millisecond)
+	resumed, err := resumeJob(t, fx.adminClient, fx.namespace, job.Name)
+	require.NoError(t, err)
+
+	select {
+	case err := <-errCh:
+		result := <-resultCh
+		require.NoError(t, err)
+		assert.Equal(t, ref, result.Resource)
+		assert.True(t, result.Ready)
+		assert.False(t, result.Failed)
+		assert.Equal(t, job.UID, result.ResourceUID)
+		assert.Equal(t, resumed.Generation, result.Generation)
+		assert.Zero(t, result.ObservedGeneration)
+		assert.NotEmpty(t, result.ResourceVersion)
+		require.Condition(t, func() bool {
+			for _, condition := range result.Conditions {
+				if condition.Type == string(batchv1.JobComplete) && condition.Status == string(corev1.ConditionTrue) {
+					return true
+				}
+			}
+			return false
+		}, "Job controller did not report Complete=True")
+	case <-time.After(defaultSceneTimeout):
+		t.Fatal("observer did not receive the Job completion event")
+	}
+
+	fx.assertClean(t)
 }
 
 func assertAppsReadyGeneration(t *testing.T, result observer.WatchResult, expectedGeneration int64) {
@@ -1375,10 +1466,12 @@ func TestRolloutWatchTimeout(t *testing.T) {
 func TestRolloutWatchParentCancelWinsTimeout(t *testing.T) {
 	fx := setupRolloutFixture(t, t.Name())
 	deployment := fx.createDeployment(t, "cancel")
+	const boundaryTimeout = 2 * time.Second
 
-	for i := range 20 {
+	for i := range 3 {
 		t.Run(fmt.Sprintf("trial-%d", i), func(t *testing.T) {
-			ctx, cancel := context.WithCancel(t.Context())
+			ctx, cancel := context.WithTimeout(t.Context(), boundaryTimeout)
+			defer cancel()
 			transport := &trackingTransport{}
 			obsCfg := &rest.Config{}
 			*obsCfg = *fx.observerCfg
@@ -1389,28 +1482,29 @@ func TestRolloutWatchParentCancelWinsTimeout(t *testing.T) {
 			client, err := kubernetes.NewForConfig(obsCfg)
 			require.NoError(t, err)
 
+			startedAt := time.Now()
 			resultCh := make(chan observer.WatchResult, 1)
 			errCh := make(chan error, 1)
 			go func() {
-				result, err := observer.New(client).Observe(ctx, fx.deploymentRef(deployment.Name), deployment.Generation+100, 3*time.Second)
+				result, err := observer.New(client).Observe(ctx, fx.deploymentRef(deployment.Name), deployment.Generation+100, boundaryTimeout)
 				resultCh <- result
 				errCh <- err
 			}()
 
 			require.Eventually(t, func() bool { return transport.activeWatches.Load() == 1 }, time.Second, 10*time.Millisecond)
-			cancel()
 
 			select {
 			case err := <-errCh:
 				result := <-resultCh
+				assert.GreaterOrEqual(t, time.Since(startedAt), boundaryTimeout-250*time.Millisecond)
 				assert.ErrorIs(t, err, observer.ErrCancelled)
 				assert.Equal(t, observer.ErrorCodeCancelled, observerCode(t, err))
 				assertRolloutLast(t, result, err)
 				assert.Equal(t, deployment.UID, result.ResourceUID)
 				assert.Equal(t, deployment.Generation, result.Generation)
 				assert.NotEmpty(t, result.ResourceVersion)
-			case <-time.After(5 * time.Second):
-				t.Fatal("observer did not stop after parent cancellation")
+			case <-time.After(boundaryTimeout + 5*time.Second):
+				t.Fatal("observer did not stop at the parent deadline boundary")
 			}
 			assert.Eventually(t, func() bool { return transport.activeWatches.Load() == 0 }, 5*time.Second, 100*time.Millisecond)
 		})
