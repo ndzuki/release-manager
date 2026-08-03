@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -213,15 +214,16 @@ func TestObserver_ValidatesInputWithoutAPIRequests(t *testing.T) {
 func TestObserver_ReListsAfterWatchDisconnect(t *testing.T) {
 	pending := readyDeployment(1, "1")
 	pending.Generation = 2
-	ready := readyDeployment(2, "2")
-
+	relisted := pending.DeepCopy()
+	relisted.ResourceVersion = "2"
+	ready := readyDeployment(2, "3")
 	client := fake.NewSimpleClientset(pending)
 	firstWatch := watch.NewRaceFreeFake()
 	secondWatch := watch.NewRaceFreeFake()
 
 	var mu sync.Mutex
 	listCalls := 0
-	watchCalls := 0
+	watchVersions := make([]string, 0, 2)
 	client.PrependReactor("list", "deployments", func(_ clienttesting.Action) (bool, runtime.Object, error) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -234,14 +236,16 @@ func TestObserver_ReListsAfterWatchDisconnect(t *testing.T) {
 		}
 		return true, &appsv1.DeploymentList{
 			ListMeta: metav1.ListMeta{ResourceVersion: "2"},
-			Items:    []appsv1.Deployment{*ready.DeepCopy()},
+			Items:    []appsv1.Deployment{*relisted},
 		}, nil
 	})
-	client.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
+	client.PrependWatchReactor("deployments", func(action clienttesting.Action) (bool, watch.Interface, error) {
+		watchAction, ok := action.(clienttesting.WatchAction)
+		require.True(t, ok)
 		mu.Lock()
 		defer mu.Unlock()
-		watchCalls++
-		if watchCalls == 1 {
+		watchVersions = append(watchVersions, watchAction.GetWatchRestrictions().ResourceVersion)
+		if len(watchVersions) == 1 {
 			return true, firstWatch, nil
 		}
 		return true, secondWatch, nil
@@ -259,9 +263,15 @@ func TestObserver_ReListsAfterWatchDisconnect(t *testing.T) {
 	require.Eventually(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		return watchCalls >= 1
+		return len(watchVersions) >= 1
 	}, time.Second, time.Millisecond)
 	firstWatch.Stop()
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(watchVersions) >= 2
+	}, time.Second, time.Millisecond)
+	secondWatch.Modify(ready)
 
 	select {
 	case err := <-errCh:
@@ -269,6 +279,7 @@ func TestObserver_ReListsAfterWatchDisconnect(t *testing.T) {
 		result := <-resultCh
 		assert.True(t, result.Ready)
 		assert.Equal(t, int64(2), result.ObservedGeneration)
+		assert.Equal(t, "3", result.ResourceVersion)
 	case <-time.After(time.Second):
 		t.Fatal("observer did not recover after watch disconnect")
 	}
@@ -276,7 +287,7 @@ func TestObserver_ReListsAfterWatchDisconnect(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	assert.GreaterOrEqual(t, listCalls, 2)
-	assert.GreaterOrEqual(t, watchCalls, 1)
+	assert.Equal(t, []string{"1", "2"}, watchVersions)
 }
 func TestObserver_ReListRejectsReplacementUID(t *testing.T) {
 	pending := readyDeployment(1, "1")
@@ -421,6 +432,41 @@ func TestObserver_ParentCancellationWinsTimeout(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("observer did not stop after parent cancellation")
 		}
+	}
+}
+
+func TestObserver_ParentCancellationWinsAtDeadlineBoundary(t *testing.T) {
+	for range 100 {
+		synctest.Test(t, func(t *testing.T) {
+			pending := readyDeployment(1, "1")
+			pending.Generation = 2
+			client := fake.NewSimpleClientset(pending)
+			watcher := watch.NewRaceFreeFake()
+			client.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
+				return true, watcher, nil
+			})
+			ctx, cancel := context.WithCancel(t.Context())
+			resultCh := make(chan WatchResult, 1)
+			errCh := make(chan error, 1)
+			go func() {
+				result, err := New(client).Observe(ctx, deploymentRef(), 2, time.Second)
+				resultCh <- result
+				errCh <- err
+			}()
+
+			synctest.Wait()
+			time.Sleep(time.Second - time.Nanosecond)
+			cancel()
+			time.Sleep(time.Nanosecond)
+			synctest.Wait()
+
+			err := <-errCh
+			result := <-resultCh
+			assert.ErrorIs(t, err, ErrCancelled)
+			assert.Equal(t, ErrorCodeCancelled, rolloutErrorCode(t, err))
+			assertRolloutLast(t, result, err)
+			assert.True(t, watcher.IsStopped())
+		})
 	}
 }
 

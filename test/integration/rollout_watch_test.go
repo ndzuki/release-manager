@@ -3,6 +3,7 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -69,6 +70,8 @@ func setupRolloutFixture(t *testing.T, testID string) *rolloutFixture {
 
 	transport := &trackingTransport{}
 	obsCfg := rest.AnonymousClientConfig(adminCfg)
+	obsCfg.ContentType = "application/json"
+	obsCfg.AcceptContentTypes = "application/json"
 	obsCfg.BearerToken = token
 	obsCfg.WrapTransport = func(base http.RoundTripper) http.RoundTripper {
 		transport.base = base
@@ -207,8 +210,13 @@ func (f *rolloutFixture) assertNoSecrets(t *testing.T) {
 
 func (f *rolloutFixture) assertClean(t *testing.T) {
 	t.Helper()
-	f.assertNoSecrets(t)
-	assert.Eventually(t, func() bool { return f.transport.activeWatches.Load() == 0 }, 5*time.Second, 100*time.Millisecond,
+	assertTransportClean(t, f.transport)
+}
+
+func assertTransportClean(t *testing.T, transport *trackingTransport) {
+	t.Helper()
+	assert.Equal(t, int64(0), transport.secretCalls.Load(), "observer must not access Secret API")
+	assert.Eventually(t, func() bool { return transport.activeWatches.Load() == 0 }, 5*time.Second, 100*time.Millisecond,
 		"active watch requests did not return to zero")
 }
 
@@ -308,7 +316,7 @@ func createTestNamespace(t *testing.T, client kubernetes.Interface, testID strin
 				return
 			}
 
-			gone, listErr := testWorkloadsGone(ctx, client, testID)
+			gone, listErr := testResourcesGone(ctx, client, testID)
 			if listErr == nil && gone {
 				return
 			}
@@ -405,28 +413,39 @@ func deleteTestResources(ctx context.Context, client kubernetes.Interface, testI
 	return nil
 }
 
-func testWorkloadsGone(ctx context.Context, client kubernetes.Interface, testID string) (bool, error) {
+func testResourcesGone(ctx context.Context, client kubernetes.Interface, testID string) (bool, error) {
 	selector := fmt.Sprintf("release-manager.io/test-id=%s", testID)
-	deployments, err := client.AppsV1().Deployments("").List(ctx, metav1.ListOptions{LabelSelector: selector})
+	listOptions := metav1.ListOptions{LabelSelector: selector}
+	deployments, err := client.AppsV1().Deployments("").List(ctx, listOptions)
 	if err != nil {
 		return false, fmt.Errorf("list deployments: %w", err)
 	}
-	statefulSets, err := client.AppsV1().StatefulSets("").List(ctx, metav1.ListOptions{LabelSelector: selector})
+	statefulSets, err := client.AppsV1().StatefulSets("").List(ctx, listOptions)
 	if err != nil {
 		return false, fmt.Errorf("list statefulsets: %w", err)
 	}
-	daemonSets, err := client.AppsV1().DaemonSets("").List(ctx, metav1.ListOptions{LabelSelector: selector})
+	daemonSets, err := client.AppsV1().DaemonSets("").List(ctx, listOptions)
 	if err != nil {
 		return false, fmt.Errorf("list daemonsets: %w", err)
 	}
-	jobs, err := client.BatchV1().Jobs("").List(ctx, metav1.ListOptions{LabelSelector: selector})
+	jobs, err := client.BatchV1().Jobs("").List(ctx, listOptions)
 	if err != nil {
 		return false, fmt.Errorf("list jobs: %w", err)
+	}
+	pods, err := client.CoreV1().Pods("").List(ctx, listOptions)
+	if err != nil {
+		return false, fmt.Errorf("list pods: %w", err)
+	}
+	services, err := client.CoreV1().Services("").List(ctx, listOptions)
+	if err != nil {
+		return false, fmt.Errorf("list services: %w", err)
 	}
 	return len(deployments.Items) == 0 &&
 		len(statefulSets.Items) == 0 &&
 		len(daemonSets.Items) == 0 &&
-		len(jobs.Items) == 0, nil
+		len(jobs.Items) == 0 &&
+		len(pods.Items) == 0 &&
+		len(services.Items) == 0, nil
 }
 
 // ─── Transport ─────────────────────────────────────────────────────────────
@@ -437,6 +456,8 @@ type trackingTransport struct {
 	watchCalls    atomic.Int64
 	listCalls     atomic.Int64
 	secretCalls   atomic.Int64
+	mu            sync.Mutex
+	listVersions  []string
 }
 
 func (t *trackingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -453,12 +474,52 @@ func (t *trackingTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		response.Body = &trackedBody{ReadCloser: response.Body, active: &t.activeWatches}
 	} else if !isSecretReq(req) {
 		t.listCalls.Add(1)
+		if err := t.recordListResourceVersion(response); err != nil {
+			return nil, err
+		}
 	}
 	return response, nil
 }
 
 func (t *trackingTransport) setBase(base http.RoundTripper) {
 	t.base = base
+}
+
+func (t *trackingTransport) recordListResourceVersion(response *http.Response) error {
+	payload, err := io.ReadAll(response.Body)
+	if err != nil {
+		return fmt.Errorf("read list response: %w", err)
+	}
+	if err := response.Body.Close(); err != nil {
+		return fmt.Errorf("close list response: %w", err)
+	}
+	response.Body = io.NopCloser(bytes.NewReader(payload))
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil
+	}
+	if !strings.Contains(response.Header.Get("Content-Type"), "application/json") {
+		return nil
+	}
+	var list struct {
+		Metadata struct {
+			ResourceVersion string `json:"resourceVersion"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(payload, &list); err != nil {
+		return fmt.Errorf("decode list response: %w", err)
+	}
+	if list.Metadata.ResourceVersion != "" {
+		t.mu.Lock()
+		t.listVersions = append(t.listVersions, list.Metadata.ResourceVersion)
+		t.mu.Unlock()
+	}
+	return nil
+}
+
+func (t *trackingTransport) listResourceVersions() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return slices.Clone(t.listVersions)
 }
 
 func isSecretReq(req *http.Request) bool {
@@ -482,7 +543,7 @@ func (t *disconnectingTransport) RoundTrip(req *http.Request) (*http.Response, e
 	}
 	t.mu.Lock()
 	t.watchVersions = append(t.watchVersions, req.URL.Query().Get("resourceVersion"))
-	watchNum := t.watchCalls.Load()
+	watchNum := len(t.watchVersions)
 	t.mu.Unlock()
 	if t.disconnectFirstWatch && watchNum == 1 {
 		response.Body = &disconnectingBody{ReadCloser: response.Body}
@@ -586,6 +647,8 @@ func integrationClient(t *testing.T) (*kubernetes.Clientset, *rest.Config) {
 	}
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	require.NoError(t, err, "build integration kubeconfig")
+	config.ContentType = "application/json"
+	config.AcceptContentTypes = "application/json"
 	config.QPS = 100
 	config.Burst = 200
 	client, err := kubernetes.NewForConfig(config)
@@ -625,11 +688,18 @@ func clientWithExpiredTransport(t *testing.T, config *rest.Config, transport *ex
 	return client
 }
 
-func assertResourceVersionsDoNotRegress(t *testing.T, versions []string) {
+func assertRecoveryResourceVersions(t *testing.T, watchVersions, listVersions []string) {
 	t.Helper()
-	require.GreaterOrEqual(t, len(versions), 2)
-	parsed := make([]int64, 0, len(versions))
-	for _, version := range versions {
+	require.GreaterOrEqual(t, len(watchVersions), 2)
+	require.GreaterOrEqual(t, len(listVersions), 2)
+	for index := range 2 {
+		require.NotEmpty(t, listVersions[index])
+		assert.Equal(t, listVersions[index], watchVersions[index],
+			"watch %d must start from its preceding fresh list resourceVersion", index+1)
+	}
+
+	parsed := make([]int64, 0, len(watchVersions))
+	for _, version := range watchVersions {
 		value, err := strconv.ParseInt(version, 10, 64)
 		require.NoError(t, err)
 		parsed = append(parsed, value)
@@ -1037,11 +1107,12 @@ func TestRolloutWatchTransportDisconnect(t *testing.T) {
 		assert.NotEmpty(t, result.ResourceVersion)
 		assert.GreaterOrEqual(t, transport.listCalls.Load(), int64(2))
 		assert.GreaterOrEqual(t, transport.watchCalls.Load(), int64(2))
-		assertResourceVersionsDoNotRegress(t, transport.resourceVersions())
+		assertRecoveryResourceVersions(t, transport.resourceVersions(), transport.listResourceVersions())
 	case <-time.After(defaultSceneTimeout):
 		t.Fatal("observer did not recover after transport disconnect")
 	}
 
+	assertTransportClean(t, &transport.trackingTransport)
 	fx.assertClean(t)
 }
 
@@ -1074,11 +1145,12 @@ func TestRolloutWatchResourceVersionExpired(t *testing.T) {
 		assert.NotEmpty(t, result.ResourceVersion)
 		assert.GreaterOrEqual(t, transport.listCalls.Load(), int64(2))
 		assert.GreaterOrEqual(t, result.ObservedGeneration, updated.Generation)
-		assertResourceVersionsDoNotRegress(t, transport.resourceVersions())
+		assertRecoveryResourceVersions(t, transport.resourceVersions(), transport.listResourceVersions())
 	case <-time.After(defaultSceneTimeout):
 		t.Fatal("observer did not recover after resource version expiration")
 	}
 
+	assertTransportClean(t, &transport.trackingTransport)
 	fx.assertClean(t)
 }
 
@@ -1200,12 +1272,14 @@ func TestRolloutWatchRepeatedObserveIsIdempotent(t *testing.T) {
 	first, err := obs.Observe(t.Context(), ref, deployment.Generation, defaultSceneTimeout)
 	require.NoError(t, err)
 	assert.True(t, first.Ready)
+	firstListCalls := fx.transport.listCalls.Load()
 
 	second, err := obs.Observe(t.Context(), ref, deployment.Generation, defaultSceneTimeout)
 	require.NoError(t, err)
 	assert.True(t, second.Ready)
 	assert.Equal(t, first.ResourceUID, second.ResourceUID)
 	assert.Equal(t, first.Generation, second.Generation)
+	assert.Greater(t, fx.transport.listCalls.Load(), firstListCalls)
 
 	fx.assertClean(t)
 }
@@ -1230,10 +1304,14 @@ func TestRolloutWatchConcurrentIsolation(t *testing.T) {
 		firstErrCh <- err
 	}()
 	go func() {
-		result, err := obs2.Observe(t.Context(), ref, deployment.Generation, defaultSceneTimeout)
+		result, err := obs2.Observe(t.Context(), ref, deployment.Generation+1, defaultSceneTimeout)
 		secondResultCh <- result
 		secondErrCh <- err
 	}()
+
+	require.Eventually(t, func() bool { return fx.transport.activeWatches.Load() == 2 }, 5*time.Second, 10*time.Millisecond)
+	updated, err := updateDeploymentTemplateAnnotation(t, fx.adminClient, fx.namespace, deployment.Name, "concurrent-ready")
+	require.NoError(t, err)
 
 	cancel()
 
@@ -1246,6 +1324,7 @@ func TestRolloutWatchConcurrentIsolation(t *testing.T) {
 	assert.False(t, firstResult.Ready)
 	require.NoError(t, secondErr)
 	assert.True(t, secondResult.Ready)
+	assert.GreaterOrEqual(t, secondResult.ObservedGeneration, updated.Generation)
 
 	fx.assertClean(t)
 }
