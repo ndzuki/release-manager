@@ -814,6 +814,11 @@ func TestFakeObserver(t *testing.T) {
 			wantErr:  ErrWatchDisconnected,
 		},
 		{
+			name:     "injected nil error defaults to watch disconnected",
+			response: FakeResponse{Behavior: FakeError},
+			wantErr:  ErrWatchDisconnected,
+		},
+		{
 			name:     "context cancelled",
 			response: FakeResponse{Behavior: FakeDelayedReady, Delay: time.Second},
 			cancel:   true,
@@ -839,6 +844,7 @@ func TestFakeObserver(t *testing.T) {
 				require.NoError(t, err)
 			} else {
 				assert.ErrorIs(t, err, tt.wantErr)
+				assertRolloutLast(t, result, err)
 			}
 			assert.Equal(t, []ResourceRef{ref}, fakeObserver.Calls())
 		})

@@ -28,9 +28,12 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
+	kubernetesfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
@@ -291,49 +294,117 @@ func createTestNamespace(t *testing.T, client kubernetes.Interface, testID strin
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := deleteTestResources(ctx, client, testID); err != nil {
-			t.Errorf("delete resources for test-id %s: %v", testID, err)
-			return
-		}
-		grace := int64(0)
-		propagation := metav1.DeletePropagationBackground
-		if err := client.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{
-			GracePeriodSeconds: &grace,
-			PropagationPolicy:  &propagation,
-		}); err != nil && !apierrors.IsNotFound(err) {
-			t.Errorf("delete namespace %s: %v", name, err)
-			return
-		}
-
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			_, err := client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
-			if apierrors.IsNotFound(err) {
-				return
-			}
-			if err != nil && ctx.Err() == nil {
-				t.Errorf("get namespace %s during cleanup: %v", name, err)
-				return
-			}
-			gone, listErr := testResourcesGone(ctx, client, testID)
-			if listErr == nil && gone {
-				return
-			}
-			if listErr != nil && ctx.Err() == nil {
-				t.Errorf("list resources for test-id %s during cleanup: %v", testID, listErr)
-				return
-			}
-
-			select {
-			case <-ctx.Done():
-				t.Errorf("namespace %s was not deleted before deadline", name)
-				return
-			case <-ticker.C:
-			}
+		if err := cleanupTestNamespace(ctx, client, name, testID); err != nil {
+			t.Errorf("cleanup namespace %s: %v", name, err)
 		}
 	})
 	return name
+}
+
+func cleanupTestNamespace(
+	ctx context.Context,
+	client kubernetes.Interface,
+	name, testID string,
+) error {
+	var cleanupErr error
+	if err := deleteTestResources(ctx, client, testID); err != nil {
+		cleanupErr = errors.Join(
+			cleanupErr,
+			fmt.Errorf("delete resources for test-id %s: %w", testID, err),
+		)
+	}
+
+	grace := int64(0)
+	propagation := metav1.DeletePropagationBackground
+	if err := client.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{
+		GracePeriodSeconds: &grace,
+		PropagationPolicy:  &propagation,
+	}); err != nil && !apierrors.IsNotFound(err) {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete namespace %s: %w", name, err))
+	}
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var verificationErr error
+		_, err := client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return cleanupErr
+		}
+		if err != nil && ctx.Err() == nil {
+			verificationErr = fmt.Errorf("get namespace %s during cleanup: %w", name, err)
+		}
+
+		gone, listErr := testResourcesGone(ctx, client, testID)
+		if listErr == nil && gone {
+			return cleanupErr
+		}
+		if listErr != nil && ctx.Err() == nil {
+			verificationErr = errors.Join(
+				verificationErr,
+				fmt.Errorf("list resources for test-id %s during cleanup: %w", testID, listErr),
+			)
+		}
+
+		select {
+		case <-ctx.Done():
+			return errors.Join(
+				cleanupErr,
+				verificationErr,
+				fmt.Errorf("namespace %s was not deleted before deadline: %w", name, ctx.Err()),
+			)
+		case <-ticker.C:
+		}
+	}
+}
+
+func TestRolloutWatchCleanupDeletesNamespaceAfterResourceCleanupError(t *testing.T) {
+	const (
+		name   = "rm-rollout-watch-cleanup-error"
+		testID = "cleanup-error"
+	)
+	client := kubernetesfake.NewSimpleClientset(&corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: testLabels(testID, "namespace")},
+	})
+	client.PrependReactor("list", "deployments", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("injected deployment list failure")
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	err := cleanupTestNamespace(ctx, client, name, testID)
+
+	require.ErrorContains(t, err, "delete resources for test-id cleanup-error")
+	_, getErr := client.CoreV1().Namespaces().Get(t.Context(), name, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(getErr), "namespace must be deleted after resource cleanup failure")
+}
+
+func TestRolloutWatchCleanupRetriesTransientVerificationError(t *testing.T) {
+	const (
+		name   = "rm-rollout-watch-cleanup-retry"
+		testID = "cleanup-retry"
+	)
+	client := kubernetesfake.NewSimpleClientset(&corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: testLabels(testID, "namespace")},
+	})
+	client.PrependReactor("delete", "namespaces", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, nil
+	})
+	deploymentListCalls := 0
+	client.PrependReactor("list", "deployments", func(clienttesting.Action) (bool, runtime.Object, error) {
+		deploymentListCalls++
+		if deploymentListCalls == 2 {
+			return true, nil, errors.New("injected transient deployment list failure")
+		}
+		return false, nil, nil
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	err := cleanupTestNamespace(ctx, client, name, testID)
+
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, deploymentListCalls, 3, "cleanup must retry resource verification")
 }
 
 func deleteTestResources(ctx context.Context, client kubernetes.Interface, testID string) error {
