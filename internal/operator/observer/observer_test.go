@@ -520,8 +520,9 @@ func TestObserver_ParentCancellationWinsTimeout(t *testing.T) {
 			assert.ErrorIs(t, err, ErrCancelled)
 			assert.Equal(t, ErrorCodeCancelled, rolloutErrorCode(t, err))
 			assertRolloutLast(t, result, err)
-			assert.NotEmpty(t, result.ResourceUID)
-			assert.NotEmpty(t, result.ResourceVersion)
+			assert.Equal(t, pending.UID, result.ResourceUID)
+			assert.Equal(t, pending.Generation, result.Generation)
+			assert.Equal(t, pending.ResourceVersion, result.ResourceVersion)
 			assert.True(t, watcher.IsStopped())
 		case <-time.After(time.Second):
 			t.Fatal("observer did not stop after parent cancellation")
