@@ -561,6 +561,56 @@ func (t *disconnectingTransport) resourceVersions() []string {
 	return slices.Clone(t.watchVersions)
 }
 
+type relistBarrierTransport struct {
+	trackingTransport
+	listRequests   atomic.Int64
+	disconnectOnce sync.Once
+	relistOnce     sync.Once
+	releaseOnce    sync.Once
+	relistStarted  chan struct{}
+	releaseRelist  chan struct{}
+}
+
+func newRelistBarrierTransport() *relistBarrierTransport {
+	return &relistBarrierTransport{
+		relistStarted: make(chan struct{}),
+		releaseRelist: make(chan struct{}),
+	}
+}
+
+func (t *relistBarrierTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Query().Get("watch") == "true" {
+		response, err := t.trackingTransport.RoundTrip(req)
+		if err != nil {
+			return nil, err
+		}
+		disconnect := false
+		t.disconnectOnce.Do(func() { disconnect = true })
+		if disconnect {
+			response.Body = &disconnectingBody{ReadCloser: response.Body}
+		}
+		return response, nil
+	}
+
+	if t.listRequests.Add(1) == 2 {
+		t.relistOnce.Do(func() { close(t.relistStarted) })
+		select {
+		case <-t.releaseRelist:
+		case <-req.Context().Done():
+			return nil, req.Context().Err()
+		}
+	}
+	return t.trackingTransport.RoundTrip(req)
+}
+
+func (t *relistBarrierTransport) setBase(base http.RoundTripper) {
+	t.trackingTransport.setBase(base)
+}
+
+func (t *relistBarrierTransport) release() {
+	t.releaseOnce.Do(func() { close(t.releaseRelist) })
+}
+
 type expiredTransport struct {
 	trackingTransport
 	mu            sync.Mutex
@@ -672,15 +722,7 @@ func transportWrapper(config *rest.Config, transport roundTripperWrapper) *rest.
 	return wrapper
 }
 
-func clientWithDisconnectingTransport(t *testing.T, config *rest.Config, transport *disconnectingTransport) *kubernetes.Clientset {
-	t.Helper()
-	wrapper := transportWrapper(config, transport)
-	client, err := kubernetes.NewForConfig(wrapper)
-	require.NoError(t, err)
-	return client
-}
-
-func clientWithExpiredTransport(t *testing.T, config *rest.Config, transport *expiredTransport) *kubernetes.Clientset {
+func clientWithTransport(t *testing.T, config *rest.Config, transport roundTripperWrapper) *kubernetes.Clientset {
 	t.Helper()
 	wrapper := transportWrapper(config, transport)
 	client, err := kubernetes.NewForConfig(wrapper)
@@ -1083,7 +1125,7 @@ func TestRolloutWatchTransportDisconnect(t *testing.T) {
 	ref := fx.deploymentRef(deployment.Name)
 
 	transport := &disconnectingTransport{disconnectFirstWatch: true}
-	client := clientWithDisconnectingTransport(t, fx.observerCfg, transport)
+	client := clientWithTransport(t, fx.observerCfg, transport)
 	obs := observer.New(client)
 
 	resultCh := make(chan observer.WatchResult, 1)
@@ -1122,7 +1164,7 @@ func TestRolloutWatchResourceVersionExpired(t *testing.T) {
 	ref := fx.deploymentRef(deployment.Name)
 
 	transport := &expiredTransport{}
-	client := clientWithExpiredTransport(t, fx.observerCfg, transport)
+	client := clientWithTransport(t, fx.observerCfg, transport)
 	obs := observer.New(client)
 
 	resultCh := make(chan observer.WatchResult, 1)
@@ -1234,18 +1276,28 @@ func TestRolloutWatchDeleteAndReplace(t *testing.T) {
 		fx.assertClean(t)
 	})
 
-	t.Run("replacement UID is rejected", func(t *testing.T) {
+	t.Run("replacement UID is rejected after fresh list", func(t *testing.T) {
 		fx := setupRolloutFixture(t, t.Name())
 		deployment := fx.createDeployment(t, "replace")
 		ref := fx.deploymentRef(deployment.Name)
+		transport := newRelistBarrierTransport()
+		t.Cleanup(transport.release)
+		client := clientWithTransport(t, fx.observerCfg, transport)
 		resultCh := make(chan observer.WatchResult, 1)
 		errCh := make(chan error, 1)
 		go func() {
-			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), ref, deployment.Generation+1, defaultSceneTimeout)
+			result, err := observer.New(client).Observe(t.Context(), ref, deployment.Generation+1, defaultSceneTimeout)
 			resultCh <- result
 			errCh <- err
 		}()
-		require.Eventually(t, func() bool { return fx.transport.activeWatches.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
+
+		select {
+		case <-transport.relistStarted:
+		case <-time.After(5 * time.Second):
+			t.Fatal("observer did not start a fresh list after watch disconnect")
+		}
+		require.Eventually(t, func() bool { return transport.activeWatches.Load() == 0 }, 5*time.Second, 10*time.Millisecond)
+
 		propagation := metav1.DeletePropagationForeground
 		require.NoError(t, fx.adminClient.AppsV1().Deployments(fx.namespace).Delete(t.Context(), deployment.Name, metav1.DeleteOptions{PropagationPolicy: &propagation}))
 		require.Eventually(t, func() bool {
@@ -1253,12 +1305,21 @@ func TestRolloutWatchDeleteAndReplace(t *testing.T) {
 			return apierrors.IsNotFound(err)
 		}, 10*time.Second, 100*time.Millisecond)
 		replacement := fx.createDeployment(t, deployment.Name)
-		result := <-resultCh
-		err := <-errCh
-		assert.ErrorIs(t, err, observer.ErrWorkloadUnavailable)
-		assert.Equal(t, deployment.UID, result.ResourceUID)
-		assert.NotEqual(t, replacement.UID, result.ResourceUID)
-		assertRolloutLast(t, result, err)
+		transport.release()
+
+		select {
+		case err := <-errCh:
+			result := <-resultCh
+			assert.ErrorIs(t, err, observer.ErrWorkloadUnavailable)
+			assert.Equal(t, deployment.UID, result.ResourceUID)
+			assert.NotEqual(t, replacement.UID, result.ResourceUID)
+			assertRolloutLast(t, result, err)
+		case <-time.After(defaultSceneTimeout):
+			t.Fatal("observer did not reject the replacement UID after fresh list")
+		}
+		assert.GreaterOrEqual(t, transport.listCalls.Load(), int64(2))
+		assert.Equal(t, int64(1), transport.watchCalls.Load())
+		assertTransportClean(t, &transport.trackingTransport)
 		fx.assertClean(t)
 	})
 }
