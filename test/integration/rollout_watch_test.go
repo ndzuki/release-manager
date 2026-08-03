@@ -48,7 +48,7 @@ const (
 	workloadImageEnv    = "ROLLOUT_WATCH_WORKLOAD_IMAGE"
 	defaultSceneTimeout = 30 * time.Second
 	defaultJobCommand   = "/bin/true"
-	jobFailureDelay     = 10
+	jobBackoffLimit     = 10
 )
 
 // ─── Fixture ───────────────────────────────────────────────────────────────
@@ -162,7 +162,7 @@ func (f *rolloutFixture) createJob(t *testing.T, name string) *batchv1.Job {
 	job, err := f.adminClient.BatchV1().Jobs(f.namespace).Create(t.Context(), &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: selector},
 		Spec: batchv1.JobSpec{
-			BackoffLimit: ptr.To[int32](jobFailureDelay),
+			BackoffLimit: ptr.To[int32](jobBackoffLimit),
 			Suspend:      ptr.To(true),
 			Template:     template,
 		},
@@ -179,7 +179,7 @@ func (f *rolloutFixture) createPendingJob(t *testing.T, name string) *batchv1.Jo
 	job, err := f.adminClient.BatchV1().Jobs(f.namespace).Create(t.Context(), &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: selector},
 		Spec: batchv1.JobSpec{
-			BackoffLimit: ptr.To[int32](jobFailureDelay),
+			BackoffLimit: ptr.To[int32](jobBackoffLimit),
 			Template:     template,
 		},
 	}, metav1.CreateOptions{})
@@ -226,6 +226,11 @@ func assertTransportClean(t *testing.T, transport *trackingTransport) {
 	assert.Equal(t, int64(0), transport.secretCalls.Load(), "observer must not access Secret API")
 	assert.Eventually(t, func() bool { return transport.activeWatches.Load() == 0 }, 5*time.Second, 100*time.Millisecond,
 		"active watch requests did not return to zero")
+}
+
+func cleanupTrackedTransport(t *testing.T, transport *trackingTransport) {
+	t.Helper()
+	t.Cleanup(func() { assertTransportClean(t, transport) })
 }
 
 // ─── RBAC ──────────────────────────────────────────────────────────────────
@@ -412,6 +417,36 @@ func TestRolloutWatchCleanupRetriesTransientVerificationError(t *testing.T) {
 	assert.GreaterOrEqual(t, deploymentListCalls, 3, "cleanup must retry resource verification")
 }
 
+func TestRolloutWatchCleanupRemovesControllerOwnedResources(t *testing.T) {
+	const (
+		name   = "rm-rollout-watch-controller-resources"
+		testID = "controller-resources"
+	)
+	labels := testLabels(testID, "controller-owned")
+	client := kubernetesfake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: testLabels(testID, "namespace")}},
+		&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "replicaset", Namespace: name, Labels: labels}},
+		&appsv1.ControllerRevision{
+			ObjectMeta: metav1.ObjectMeta{Name: "controller-revision", Namespace: name, Labels: labels},
+		},
+	)
+	client.PrependReactor("delete", "namespaces", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, nil
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	require.NoError(t, cleanupTestNamespace(ctx, client, name, testID))
+
+	listOptions := metav1.ListOptions{LabelSelector: "release-manager.io/test-id=" + testID}
+	replicaSets, err := client.AppsV1().ReplicaSets(name).List(t.Context(), listOptions)
+	require.NoError(t, err)
+	assert.Empty(t, replicaSets.Items)
+	controllerRevisions, err := client.AppsV1().ControllerRevisions(name).List(t.Context(), listOptions)
+	require.NoError(t, err)
+	assert.Empty(t, controllerRevisions.Items)
+}
+
 func deleteTestResources(ctx context.Context, client kubernetes.Interface, testID string) error {
 	selector := fmt.Sprintf("release-manager.io/test-id=%s", testID)
 	grace := int64(0)
@@ -442,6 +477,30 @@ func deleteTestResources(ctx context.Context, client kubernetes.Interface, testI
 		err := client.AppsV1().StatefulSets(item.Namespace).Delete(ctx, item.Name, deleteOptions)
 		if err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete statefulset %s/%s: %w", item.Namespace, item.Name, err)
+		}
+	}
+
+	replicaSets, err := client.AppsV1().ReplicaSets("").List(ctx, listOptions)
+	if err != nil {
+		return fmt.Errorf("list replicasets: %w", err)
+	}
+	for index := range replicaSets.Items {
+		item := &replicaSets.Items[index]
+		err := client.AppsV1().ReplicaSets(item.Namespace).Delete(ctx, item.Name, deleteOptions)
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete replicaset %s/%s: %w", item.Namespace, item.Name, err)
+		}
+	}
+
+	controllerRevisions, err := client.AppsV1().ControllerRevisions("").List(ctx, listOptions)
+	if err != nil {
+		return fmt.Errorf("list controllerrevisions: %w", err)
+	}
+	for index := range controllerRevisions.Items {
+		item := &controllerRevisions.Items[index]
+		err := client.AppsV1().ControllerRevisions(item.Namespace).Delete(ctx, item.Name, deleteOptions)
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete controllerrevision %s/%s: %w", item.Namespace, item.Name, err)
 		}
 	}
 
@@ -558,6 +617,14 @@ func testResourcesGone(ctx context.Context, client kubernetes.Interface, testID 
 	if err != nil {
 		return false, fmt.Errorf("list services: %w", err)
 	}
+	replicaSets, err := client.AppsV1().ReplicaSets("").List(ctx, listOptions)
+	if err != nil {
+		return false, fmt.Errorf("list replicasets: %w", err)
+	}
+	controllerRevisions, err := client.AppsV1().ControllerRevisions("").List(ctx, listOptions)
+	if err != nil {
+		return false, fmt.Errorf("list controllerrevisions: %w", err)
+	}
 	serviceAccounts, err := client.CoreV1().ServiceAccounts("").List(ctx, listOptions)
 	if err != nil {
 		return false, fmt.Errorf("list serviceaccounts: %w", err)
@@ -573,6 +640,8 @@ func testResourcesGone(ctx context.Context, client kubernetes.Interface, testID 
 	return len(deployments.Items) == 0 &&
 		len(statefulSets.Items) == 0 &&
 		len(daemonSets.Items) == 0 &&
+		len(replicaSets.Items) == 0 &&
+		len(controllerRevisions.Items) == 0 &&
 		len(jobs.Items) == 0 &&
 		len(pods.Items) == 0 &&
 		len(services.Items) == 0 &&
@@ -1549,6 +1618,7 @@ func TestRolloutWatchAppsObservedGenerationGate(t *testing.T) {
 			fx := setupRolloutFixture(t, fmt.Sprintf("apps-generation-%02d", index))
 			ref, expectedGeneration := test.create(fx, t)
 			transport := newWatchEventBarrierTransport(`"rollout-watch":"next-generation"`)
+			cleanupTrackedTransport(t, &transport.trackingTransport)
 			t.Cleanup(transport.release)
 			call := startObserve(
 				t.Context(),
@@ -1826,6 +1896,7 @@ func TestRolloutWatchWorkloadFailures(t *testing.T) {
 		fx := setupRolloutFixture(t, t.Name())
 		statefulSet := fx.createStatefulSet(t, "statefulset-pending")
 		transport := newWatchEventBarrierTransport(`"reason":"RolloutPending"`)
+		cleanupTrackedTransport(t, &transport.trackingTransport)
 		t.Cleanup(transport.release)
 		obs := observer.New(clientWithTransport(t, fx.observerCfg, transport))
 		ref := fx.statefulSetRef(statefulSet.Name)
@@ -1877,6 +1948,7 @@ func TestRolloutWatchWorkloadFailures(t *testing.T) {
 		fx := setupRolloutFixture(t, t.Name())
 		daemonSet := fx.createDaemonSet(t, "daemonset-pending")
 		transport := newWatchEventBarrierTransport(`"reason":"RolloutPending"`)
+		cleanupTrackedTransport(t, &transport.trackingTransport)
 		t.Cleanup(transport.release)
 		obs := observer.New(clientWithTransport(t, fx.observerCfg, transport))
 		ref := fx.daemonSetRef(daemonSet.Name)
@@ -1936,6 +2008,7 @@ func TestRolloutWatchTransportDisconnect(t *testing.T) {
 		secondListReady:               make(chan struct{}),
 		releaseSecondList:             make(chan struct{}),
 	}
+	cleanupTrackedTransport(t, &transport.trackingTransport)
 	t.Cleanup(transport.releaseRelist)
 	client := clientWithTransport(t, fx.observerCfg, transport)
 	obs := observer.New(client)
@@ -1980,6 +2053,7 @@ func TestRolloutWatchResourceVersionExpired(t *testing.T) {
 	ref := fx.deploymentRef(deployment.Name)
 
 	transport := &expiredTransport{}
+	cleanupTrackedTransport(t, &transport.trackingTransport)
 	client := clientWithTransport(t, fx.observerCfg, transport)
 	obs := observer.New(client)
 
@@ -2039,6 +2113,7 @@ func TestRolloutWatchParentCancelWinsTimeout(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), boundaryTimeout)
 			defer cancel()
 			transport := &trackingTransport{}
+			cleanupTrackedTransport(t, transport)
 			obsCfg := &rest.Config{}
 			*obsCfg = *fx.observerCfg
 			obsCfg.WrapTransport = func(base http.RoundTripper) http.RoundTripper {
@@ -2107,6 +2182,7 @@ func TestRolloutWatchDeleteAndReplace(t *testing.T) {
 		deployment := fx.createDeployment(t, "replace")
 		ref := fx.deploymentRef(deployment.Name)
 		transport := newRelistBarrierTransport()
+		cleanupTrackedTransport(t, &transport.trackingTransport)
 		t.Cleanup(transport.release)
 		client := clientWithTransport(t, fx.observerCfg, transport)
 		obs := observer.New(client)
