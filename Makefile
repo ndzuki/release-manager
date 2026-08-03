@@ -11,7 +11,6 @@ GOBIN       := $(shell go env GOBIN 2>/dev/null || echo $(HOME)/go/bin)
 KIND        ?= kind
 DOCKER      ?= docker
 KIND_CLUSTER ?= rm-rollout-watch
-KIND_VERSION ?= v0.32.0
 KIND_NODE_IMAGE ?= kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
 WORKLOAD_IMAGE ?= busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
 WORKLOAD_IMAGE_DIGEST ?= sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662

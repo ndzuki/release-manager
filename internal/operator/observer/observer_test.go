@@ -10,6 +10,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -23,6 +24,7 @@ import (
 
 func TestObserver_DeploymentReady(t *testing.T) {
 	deployment := readyDeployment(4, "12")
+	deployment.UID = "deployment-uid"
 	client := fake.NewSimpleClientset(deployment)
 	observer := New(client)
 
@@ -30,6 +32,9 @@ func TestObserver_DeploymentReady(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, result.Ready)
+	assert.False(t, result.Failed)
+	assert.Equal(t, deployment.UID, result.ResourceUID)
+	assert.Equal(t, deployment.Generation, result.Generation)
 	assert.Equal(t, int64(4), result.ObservedGeneration)
 	assert.Equal(t, "12", result.ResourceVersion)
 	require.Len(t, result.Conditions, 1)
@@ -211,6 +216,25 @@ func TestObserver_ValidatesInputWithoutAPIRequests(t *testing.T) {
 	}
 }
 
+func TestObserver_MissingWorkloadReturnsUnavailableWithoutWatch(t *testing.T) {
+	client := fake.NewSimpleClientset()
+
+	result, err := New(client).Observe(t.Context(), deploymentRef(), 1, time.Second)
+
+	assert.ErrorIs(t, err, ErrWorkloadUnavailable)
+	assert.Equal(t, ErrorCodeWorkloadUnavailable, rolloutErrorCode(t, err))
+	assert.Equal(t, deploymentRef(), result.Resource)
+	assert.Empty(t, result.ResourceUID)
+	assert.Zero(t, result.Generation)
+	assert.Zero(t, result.ObservedGeneration)
+	assert.Empty(t, result.ResourceVersion)
+	assert.False(t, result.Ready)
+	assert.False(t, result.Failed)
+	assertRolloutLast(t, result, err)
+	require.Len(t, client.Actions(), 1)
+	assert.Equal(t, "list", client.Actions()[0].GetVerb())
+}
+
 func TestObserver_ReListsAfterWatchDisconnect(t *testing.T) {
 	pending := readyDeployment(1, "1")
 	pending.Generation = 2
@@ -289,6 +313,71 @@ func TestObserver_ReListsAfterWatchDisconnect(t *testing.T) {
 	assert.GreaterOrEqual(t, listCalls, 2)
 	assert.Equal(t, []string{"1", "2"}, watchVersions)
 }
+
+func TestObserver_IgnoresBookmarksUntilReady(t *testing.T) {
+	pending := readyDeployment(1, "1")
+	pending.Generation = 2
+	pending.UID = "deployment-uid"
+	ready := readyDeployment(2, "3")
+	ready.UID = pending.UID
+	client := fake.NewSimpleClientset(pending)
+	watcher := watch.NewRaceFreeFake()
+	client.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
+		return true, watcher, nil
+	})
+
+	resultCh := make(chan WatchResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := New(client).Observe(t.Context(), deploymentRef(), 2, time.Second)
+		resultCh <- result
+		errCh <- err
+	}()
+
+	require.Eventually(t, func() bool { return len(client.Actions()) >= 2 }, time.Second, time.Millisecond)
+	watcher.Action(watch.Bookmark, &metav1.PartialObjectMetadata{
+		ObjectMeta: metav1.ObjectMeta{ResourceVersion: "2"},
+	})
+	select {
+	case err := <-errCh:
+		t.Fatalf("observer returned after bookmark: %v", err)
+	default:
+	}
+	watcher.Modify(ready)
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+		result := <-resultCh
+		assert.True(t, result.Ready)
+		assert.Equal(t, ready.ResourceVersion, result.ResourceVersion)
+	case <-time.After(time.Second):
+		t.Fatal("observer did not continue after bookmark")
+	}
+}
+
+func TestObserver_ListResourceVersionExpiredDoesNotLeakInternalCode(t *testing.T) {
+	pending := readyDeployment(1, "1")
+	pending.Generation = 2
+	client := fake.NewSimpleClientset(pending)
+	cause := apierrors.NewResourceExpired("expired list resource version")
+	listCalls := 0
+	client.PrependReactor("list", "deployments", func(_ clienttesting.Action) (bool, runtime.Object, error) {
+		listCalls++
+		return true, nil, cause
+	})
+
+	result, err := New(client).Observe(t.Context(), deploymentRef(), 2, time.Second)
+
+	assert.ErrorIs(t, err, ErrWatchDisconnected)
+	assert.Equal(t, ErrorCodeWatchDisconnected, rolloutErrorCode(t, err))
+	var rolloutErr *RolloutError
+	require.ErrorAs(t, err, &rolloutErr)
+	assert.Same(t, cause, rolloutErr.Cause())
+	assert.Equal(t, 1, listCalls)
+	assertRolloutLast(t, result, err)
+}
+
 func TestObserver_ReListRejectsReplacementUID(t *testing.T) {
 	pending := readyDeployment(1, "1")
 	pending.Generation = 2
@@ -567,26 +656,11 @@ func TestObserver_ContextCancelStopsWatch(t *testing.T) {
 }
 
 func TestStatefulSetReady(t *testing.T) {
-	replicas := int32(3)
-	statefulSet := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "default", UID: "statefulset-uid", Generation: 5, ResourceVersion: "15"},
-		Spec:       appsv1.StatefulSetSpec{Replicas: &replicas},
-		Status: appsv1.StatefulSetStatus{
-			ObservedGeneration: 5,
-			ReadyReplicas:      3,
-			UpdatedReplicas:    3,
-			CurrentRevision:    "db-b",
-			UpdateRevision:     "db-b",
-		},
-	}
+	statefulSet := readyStatefulSet()
 	client := fake.NewSimpleClientset(statefulSet)
 	observer := New(client)
 
-	result, err := observer.Observe(t.Context(), ResourceRef{
-		GVR:       StatefulSetGVR,
-		Namespace: "default",
-		Name:      "db",
-	}, 5, time.Second)
+	result, err := observer.Observe(t.Context(), statefulSetRef(), 5, time.Second)
 
 	require.NoError(t, err)
 	assert.True(t, result.Ready)
@@ -597,25 +671,46 @@ func TestStatefulSetReady(t *testing.T) {
 	assert.Equal(t, statefulSet.ResourceVersion, result.ResourceVersion)
 }
 
-func TestDaemonSetReady(t *testing.T) {
-	daemonSet := &appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "default", UID: "daemonset-uid", Generation: 8, ResourceVersion: "22"},
-		Status: appsv1.DaemonSetStatus{
-			ObservedGeneration:     8,
-			DesiredNumberScheduled: 4,
-			UpdatedNumberScheduled: 4,
-			NumberAvailable:        4,
-			NumberUnavailable:      0,
-		},
+func TestStatefulSetRequiresAllReadySignals(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*appsv1.StatefulSet)
+	}{
+		{name: "observed generation lags", mutate: func(statefulSet *appsv1.StatefulSet) {
+			statefulSet.Status.ObservedGeneration--
+		}},
+		{name: "updated replicas lag", mutate: func(statefulSet *appsv1.StatefulSet) {
+			statefulSet.Status.UpdatedReplicas--
+		}},
+		{name: "ready replicas lag", mutate: func(statefulSet *appsv1.StatefulSet) {
+			statefulSet.Status.ReadyReplicas--
+		}},
+		{name: "revision mismatch", mutate: func(statefulSet *appsv1.StatefulSet) {
+			statefulSet.Status.CurrentRevision = "db-a"
+		}},
 	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			statefulSet := readyStatefulSet()
+			tt.mutate(statefulSet)
+
+			result, err := New(fake.NewSimpleClientset(statefulSet)).Observe(t.Context(), statefulSetRef(), 5, 20*time.Millisecond)
+
+			assert.ErrorIs(t, err, ErrRolloutTimeout)
+			assert.False(t, result.Ready)
+			assert.False(t, result.Failed)
+			assertRolloutLast(t, result, err)
+		})
+	}
+}
+
+func TestDaemonSetReady(t *testing.T) {
+	daemonSet := readyDaemonSet()
 	client := fake.NewSimpleClientset(daemonSet)
 	observer := New(client)
 
-	result, err := observer.Observe(t.Context(), ResourceRef{
-		GVR:       DaemonSetGVR,
-		Namespace: "default",
-		Name:      "agent",
-	}, 8, time.Second)
+	result, err := observer.Observe(t.Context(), daemonSetRef(), 8, time.Second)
 
 	require.NoError(t, err)
 	assert.True(t, result.Ready)
@@ -624,6 +719,40 @@ func TestDaemonSetReady(t *testing.T) {
 	assert.Equal(t, daemonSet.Generation, result.Generation)
 	assert.Equal(t, daemonSet.Status.ObservedGeneration, result.ObservedGeneration)
 	assert.Equal(t, daemonSet.ResourceVersion, result.ResourceVersion)
+}
+
+func TestDaemonSetRequiresAllReadySignals(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*appsv1.DaemonSet)
+	}{
+		{name: "observed generation lags", mutate: func(daemonSet *appsv1.DaemonSet) {
+			daemonSet.Status.ObservedGeneration--
+		}},
+		{name: "updated scheduled count lags", mutate: func(daemonSet *appsv1.DaemonSet) {
+			daemonSet.Status.UpdatedNumberScheduled--
+		}},
+		{name: "available count lags", mutate: func(daemonSet *appsv1.DaemonSet) {
+			daemonSet.Status.NumberAvailable--
+		}},
+		{name: "unavailable count remains", mutate: func(daemonSet *appsv1.DaemonSet) {
+			daemonSet.Status.NumberUnavailable = 1
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			daemonSet := readyDaemonSet()
+			tt.mutate(daemonSet)
+
+			result, err := New(fake.NewSimpleClientset(daemonSet)).Observe(t.Context(), daemonSetRef(), 8, 20*time.Millisecond)
+
+			assert.ErrorIs(t, err, ErrRolloutTimeout)
+			assert.False(t, result.Ready)
+			assert.False(t, result.Failed)
+			assertRolloutLast(t, result, err)
+		})
+	}
 }
 
 func TestObserver_DeploymentUnavailable(t *testing.T) {
@@ -755,6 +884,42 @@ func TestRolloutError_CodeReturnsStableValues(t *testing.T) {
 
 func deploymentRef() ResourceRef {
 	return ResourceRef{GVR: DeploymentGVR, Namespace: "default", Name: "web"}
+}
+
+func statefulSetRef() ResourceRef {
+	return ResourceRef{GVR: StatefulSetGVR, Namespace: "default", Name: "db"}
+}
+
+func daemonSetRef() ResourceRef {
+	return ResourceRef{GVR: DaemonSetGVR, Namespace: "default", Name: "agent"}
+}
+
+func readyStatefulSet() *appsv1.StatefulSet {
+	replicas := int32(3)
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "default", UID: "statefulset-uid", Generation: 5, ResourceVersion: "15"},
+		Spec:       appsv1.StatefulSetSpec{Replicas: &replicas},
+		Status: appsv1.StatefulSetStatus{
+			ObservedGeneration: 5,
+			ReadyReplicas:      3,
+			UpdatedReplicas:    3,
+			CurrentRevision:    "db-b",
+			UpdateRevision:     "db-b",
+		},
+	}
+}
+
+func readyDaemonSet() *appsv1.DaemonSet {
+	return &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "default", UID: "daemonset-uid", Generation: 8, ResourceVersion: "22"},
+		Status: appsv1.DaemonSetStatus{
+			ObservedGeneration:     8,
+			DesiredNumberScheduled: 4,
+			UpdatedNumberScheduled: 4,
+			NumberAvailable:        4,
+			NumberUnavailable:      0,
+		},
+	}
 }
 
 func readyDeployment(generation int64, resourceVersion string) *appsv1.Deployment {

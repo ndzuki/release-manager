@@ -8,13 +8,12 @@ import (
 )
 
 var (
-	ErrInvalidArgument        = errors.New("invalid_argument")
-	ErrWatchDisconnected      = errors.New("watch_disconnected")
-	ErrResourceVersionExpired = errors.New("resource_version_expired")
-	ErrRolloutTimeout         = errors.New("rollout_timeout")
-	ErrCancelled              = errors.New("cancelled")
-	ErrWorkloadUnavailable    = errors.New("workload_unavailable")
-	ErrUnsupportedResource    = errors.New("unsupported_resource")
+	ErrInvalidArgument     = errors.New("invalid_argument")
+	ErrWatchDisconnected   = errors.New("watch_disconnected")
+	ErrRolloutTimeout      = errors.New("rollout_timeout")
+	ErrCancelled           = errors.New("cancelled")
+	ErrWorkloadUnavailable = errors.New("workload_unavailable")
+	ErrUnsupportedResource = errors.New("unsupported_resource")
 )
 
 var (

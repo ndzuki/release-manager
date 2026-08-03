@@ -481,9 +481,6 @@ func classifyError(parentCtx, observeCtx context.Context, last WatchResult, err 
 			cause: observeCtx.Err(),
 		}
 	}
-	if apierrors.IsResourceExpired(err) || apierrors.IsGone(err) {
-		return &RolloutError{Kind: ErrResourceVersionExpired, Last: last, Err: err}
-	}
 	if errors.Is(err, ErrWorkloadUnavailable) {
 		var rolloutErr *RolloutError
 		if errors.As(err, &rolloutErr) {

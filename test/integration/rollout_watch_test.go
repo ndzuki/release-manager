@@ -50,7 +50,6 @@ const (
 
 type rolloutFixture struct {
 	adminClient kubernetes.Interface
-	adminConfig *rest.Config
 	observerCfg *rest.Config
 	namespace   string
 	testID      string
@@ -80,7 +79,6 @@ func setupRolloutFixture(t *testing.T, testID string) *rolloutFixture {
 
 	fixture := &rolloutFixture{
 		adminClient: adminClient,
-		adminConfig: adminCfg,
 		observerCfg: obsCfg,
 		namespace:   namespace,
 		testID:      testID,
@@ -904,6 +902,7 @@ func TestRolloutWatchReadyWorkloads(t *testing.T) {
 	tests := []struct {
 		name   string
 		create func(*rolloutFixture, *testing.T) (observer.ResourceRef, int64)
+		assert func(*testing.T, observer.WatchResult, int64)
 	}{
 		{
 			name: "deployment",
@@ -911,6 +910,7 @@ func TestRolloutWatchReadyWorkloads(t *testing.T) {
 				deployment := fx.createDeployment(t, "deployment")
 				return fx.deploymentRef(deployment.Name), deployment.Generation
 			},
+			assert: assertAppsReadyGeneration,
 		},
 		{
 			name: "statefulset",
@@ -918,6 +918,7 @@ func TestRolloutWatchReadyWorkloads(t *testing.T) {
 				statefulSet := fx.createStatefulSet(t, "statefulset")
 				return fx.statefulSetRef(statefulSet.Name), statefulSet.Generation
 			},
+			assert: assertAppsReadyGeneration,
 		},
 		{
 			name: "daemonset",
@@ -925,12 +926,18 @@ func TestRolloutWatchReadyWorkloads(t *testing.T) {
 				daemonSet := fx.createDaemonSet(t, "daemonset")
 				return fx.daemonSetRef(daemonSet.Name), daemonSet.Generation
 			},
+			assert: assertAppsReadyGeneration,
 		},
 		{
 			name: "job",
 			create: func(fx *rolloutFixture, t *testing.T) (observer.ResourceRef, int64) {
 				job := fx.createJob(t, "job")
-				return fx.jobRef(job.Name), 0
+				return fx.jobRef(job.Name), job.Generation
+			},
+			assert: func(t *testing.T, result observer.WatchResult, generation int64) {
+				t.Helper()
+				assert.Equal(t, generation, result.Generation)
+				assert.Zero(t, result.ObservedGeneration)
 			},
 		},
 	}
@@ -938,17 +945,28 @@ func TestRolloutWatchReadyWorkloads(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fx := setupRolloutFixture(t, t.Name())
 			ref, generation := test.create(fx, t)
+			expectedGeneration := generation
+			if ref.GVR == observer.JobGVR {
+				expectedGeneration = 0
+			}
 
-			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), ref, generation, defaultSceneTimeout)
+			result, err := observer.New(fx.observerClient(t)).Observe(t.Context(), ref, expectedGeneration, defaultSceneTimeout)
 
 			require.NoError(t, err)
 			assert.True(t, result.Ready)
 			assert.False(t, result.Failed)
 			assert.NotEmpty(t, result.ResourceUID)
 			assert.NotEmpty(t, result.ResourceVersion)
+			test.assert(t, result, generation)
 			fx.assertClean(t)
 		})
 	}
+}
+
+func assertAppsReadyGeneration(t *testing.T, result observer.WatchResult, expectedGeneration int64) {
+	t.Helper()
+	assert.GreaterOrEqual(t, result.Generation, expectedGeneration)
+	assert.GreaterOrEqual(t, result.ObservedGeneration, expectedGeneration)
 }
 
 func TestRolloutWatchAppsObservedGenerationGate(t *testing.T) {
