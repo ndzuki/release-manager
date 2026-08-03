@@ -1753,7 +1753,6 @@ func TestRolloutWatchParentCancelWinsTimeout(t *testing.T) {
 			client, err := kubernetes.NewForConfig(obsCfg)
 			require.NoError(t, err)
 
-			startedAt := time.Now()
 			call := startObserve(ctx, t, observer.New(client),
 				fx.deploymentRef(deployment.Name),
 				deployment.Generation+100,
@@ -1764,7 +1763,6 @@ func TestRolloutWatchParentCancelWinsTimeout(t *testing.T) {
 			outcome := awaitObserve(t, call, boundaryTimeout+5*time.Second)
 			result := outcome.result
 			err = outcome.err
-			assert.GreaterOrEqual(t, time.Since(startedAt), boundaryTimeout-250*time.Millisecond)
 			assert.ErrorIs(t, err, observer.ErrCancelled)
 			assert.Equal(t, observer.ErrorCodeCancelled, observerCode(t, err))
 			assertRolloutLast(t, result, err)

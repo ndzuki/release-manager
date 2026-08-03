@@ -562,6 +562,7 @@ func TestObserver_ParentCancellationWinsAtDeadlineBoundary(t *testing.T) {
 			synctest.Wait()
 			time.Sleep(time.Second - time.Nanosecond)
 			cancel()
+			synctest.Wait()
 			time.Sleep(time.Nanosecond)
 			synctest.Wait()
 
