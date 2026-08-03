@@ -111,3 +111,80 @@ func emergencyCreateCommand(t *testing.T, definitionID, idempotencyKey, requestH
 		RequestHash: requestHash, IdempotencyExpiresAt: now.Add(time.Hour),
 	}
 }
+
+func TestResolveEmergencyEffect_Applied(t *testing.T) {
+	st := OpenTest(t)
+	ctx := context.Background()
+	seedEmergencyDefinition(t, st, "def-resolve")
+	command := emergencyCreateCommand(t, "def-resolve", "idem-resolve", "hash-resolve", store.EmergencySetReplicas)
+	result, err := st.EmergencyIntents().CreateIfAvailable(ctx, command)
+	require.NoError(t, err)
+	require.NotNil(t, result.Operation)
+
+	t.Run("resolve_applied_idempotent", func(t *testing.T) {
+		opCurrent := result.Operation
+		// EMERGENCY path: pending → queued (via UpdateStatus) → running → failed
+		opCurrent, err := st.Operations().Get(ctx, opCurrent.ID)
+		require.NoError(t, err)
+		opCurrent, err = st.Operations().UpdateStatus(ctx, opCurrent.ID, store.StatusQueued, opCurrent.StateVersion, "")
+		require.NoError(t, err)
+		opCurrent, err = st.Operations().UpdateStatus(ctx, opCurrent.ID, store.StatusRunning, opCurrent.StateVersion, "")
+		require.NoError(t, err)
+		finished, err := st.EmergencyIntents().Finish(
+			ctx, result.Intent.ID, opCurrent.ID, opCurrent.StateVersion, store.StatusFailed,
+			store.EmergencyEffectUnknown, "execution_error", nil, nil,
+		)
+		require.NoError(t, err)
+		require.NotNil(t, finished.TerminalAt)
+		terminalAt := *finished.TerminalAt
+
+		resolveResult, err := st.EmergencyIntents().ResolveEmergencyEffect(ctx, store.ResolveEmergencyEffectCommand{
+			OperationID:          opCurrent.ID,
+			ExpectedStateVersion: finished.StateVersion,
+			EffectStatus:         store.EmergencyEffectApplied,
+			BeforeSnapshot:       json.RawMessage(`{"replicas":2}`),
+			AfterSnapshot:        json.RawMessage(`{"replicas":3}`),
+			RequestID:            "req-resolve-1",
+		})
+		require.NoError(t, err)
+		assert.True(t, resolveResult.Resolved)
+		assert.Equal(t, store.EmergencyEffectApplied, resolveResult.Intent.EffectStatus)
+		assert.Equal(t, store.StatusFailed, resolveResult.Operation.Status)
+		require.NotNil(t, resolveResult.Operation.TerminalAt)
+		assert.Equal(t, terminalAt, *resolveResult.Operation.TerminalAt)
+		assert.Equal(t, finished.StateVersion+1, resolveResult.Operation.StateVersion)
+		assert.NotNil(t, resolveResult.Timeline)
+		assert.Equal(t, string(store.TimelineEntryEmergencyEffectResolved), resolveResult.Timeline.Kind)
+
+		// Idempotent re-resolve.
+		idempotentResult, err := st.EmergencyIntents().ResolveEmergencyEffect(ctx, store.ResolveEmergencyEffectCommand{
+			OperationID:          opCurrent.ID,
+			ExpectedStateVersion: resolveResult.Operation.StateVersion,
+			EffectStatus:         store.EmergencyEffectApplied,
+			BeforeSnapshot:       json.RawMessage(`{"replicas":2}`),
+			AfterSnapshot:        json.RawMessage(`{"replicas":3}`),
+			RequestID:            "req-resolve-2",
+		})
+		require.NoError(t, err)
+		assert.False(t, idempotentResult.Resolved)
+		assert.Equal(t, store.EmergencyEffectApplied, idempotentResult.Intent.EffectStatus)
+	})
+}
+
+func TestResolveEmergencyEffect_RejectsInvalidState(t *testing.T) {
+	st := OpenTest(t)
+	ctx := context.Background()
+	seedEmergencyDefinition(t, st, "def-resolve-invalid")
+	cmd := emergencyCreateCommand(t, "def-resolve-invalid", "resolve-invalid-1", "hash-r1", store.EmergencySetReplicas)
+	createResult, err := st.EmergencyIntents().CreateIfAvailable(ctx, cmd)
+	require.NoError(t, err)
+
+	// Not terminal → ErrInvalidState.
+	_, err = st.EmergencyIntents().ResolveEmergencyEffect(ctx, store.ResolveEmergencyEffectCommand{
+		OperationID:          createResult.Operation.ID,
+		ExpectedStateVersion: createResult.Operation.StateVersion,
+		EffectStatus:         store.EmergencyEffectApplied,
+		RequestID:            "invalid-state",
+	})
+	assert.ErrorIs(t, err, store.ErrInvalidState)
+}

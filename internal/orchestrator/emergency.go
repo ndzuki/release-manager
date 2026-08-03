@@ -226,7 +226,8 @@ func (s *Service) ExpireEmergencyOperations(ctx context.Context) int {
 			continue
 		}
 		finished, finishErr := s.store.EmergencyIntents().Finish(
-			ctx, intent.ID, operation.ID, operation.StateVersion, store.StatusTimeout, "operation_timeout", nil, nil,
+			ctx, intent.ID, operation.ID, operation.StateVersion, store.StatusTimeout,
+			store.EmergencyEffectUnknown, "operation_timeout", nil, nil,
 		)
 		if finishErr != nil {
 			if !errors.Is(finishErr, store.ErrOptimisticLock) && !errors.Is(finishErr, store.ErrInvalidState) {
@@ -300,6 +301,7 @@ func (s *Service) failEmergencyDelivery(
 			created.Operation.ID,
 			created.Operation.StateVersion,
 			store.StatusFailed,
+			store.EmergencyEffectNotApplied,
 			connectErrorReasonCode(deliveryErr),
 			nil,
 			nil,

@@ -211,6 +211,12 @@ func insertEmergencyIntent(ctx context.Context, execer operationExecer, intent *
 	if intent.DeliveryStatus == "" {
 		intent.DeliveryStatus = "pending"
 	}
+	if intent.EffectStatus == "" {
+		intent.EffectStatus = store.EmergencyEffectUnknown
+	}
+	if !validEmergencyEffectStatus(intent.EffectStatus) {
+		return fmt.Errorf("insert emergency intent: invalid effect status %q", intent.EffectStatus)
+	}
 	var lastDeliveryAt *string
 	if intent.LastDeliveryAt != nil {
 		value := intent.LastDeliveryAt.UTC().Format(time.RFC3339Nano)
@@ -222,14 +228,14 @@ func insertEmergencyIntent(ctx context.Context, execer operationExecer, intent *
 			workload_kind, workload_name, workload_namespace, workload_uid,
 			container, artifact_id, image_reference, target_replicas,
 			annotation_scope, annotation_entries, convergence, promotion_paths,
-			before_snapshot, after_snapshot, delivery_status, last_delivery_at,
+			before_snapshot, after_snapshot, delivery_status, effect_status, last_delivery_at,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, intent.ID, intent.ReleaseDefinitionID, intent.OperationID, intent.CommandID, string(intent.Action),
 		intent.WorkloadKind, intent.WorkloadName, intent.WorkloadNamespace, intent.WorkloadUID,
 		intent.Container, intent.ArtifactID, intent.ImageReference, intent.TargetReplicas,
 		intent.AnnotationScope, nullableJSON(intent.AnnotationEntries), string(intent.Convergence), nullableJSON(intent.PromotionPaths),
-		nullableJSON(intent.BeforeSnapshot), nullableJSON(intent.AfterSnapshot), intent.DeliveryStatus, lastDeliveryAt,
+		nullableJSON(intent.BeforeSnapshot), nullableJSON(intent.AfterSnapshot), intent.DeliveryStatus, string(intent.EffectStatus), lastDeliveryAt,
 		intent.CreatedAt.UTC().Format(time.RFC3339Nano), intent.UpdatedAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		if isUniqueConstraint(err) {
@@ -269,7 +275,8 @@ func listActiveEmergencyIntents(ctx context.Context, queryer interface {
 	rows, err := queryer.QueryContext(ctx, emergencyIntentSelect+`
 		JOIN operations ON operations.id = emergency_intents.operation_id
 		WHERE emergency_intents.release_definition_id = ?
-		  AND operations.status NOT IN ('succeeded','failed','cancelled','timeout')
+		  AND (operations.status NOT IN ('succeeded','failed','cancelled','timeout')
+		       OR emergency_intents.effect_status = 'UNKNOWN')
 		ORDER BY emergency_intents.created_at ASC
 	`, definitionID)
 	if err != nil {
@@ -315,6 +322,7 @@ func (s *emergencyIntentStore) Finish(
 	intentID, operationID string,
 	expectedStateVersion int,
 	status store.OperationStatus,
+	effectStatus store.EmergencyEffectStatus,
 	lastError string,
 	beforeSnapshot, afterSnapshot json.RawMessage,
 ) (*store.Operation, error) {
@@ -335,6 +343,12 @@ func (s *emergencyIntentStore) Finish(
 		return nil, store.ErrInvalidState
 	}
 
+	if effectStatus == "" {
+		effectStatus = store.EmergencyEffectUnknown
+	}
+	if !validEmergencyEffectStatus(effectStatus) {
+		return nil, fmt.Errorf("finish emergency: invalid effect status %q", effectStatus)
+	}
 	now := nowUTC()
 	result, err := tx.ExecContext(ctx, `
 		UPDATE operations
@@ -355,9 +369,9 @@ func (s *emergencyIntentStore) Finish(
 
 	result, err = tx.ExecContext(ctx, `
 		UPDATE emergency_intents
-		SET before_snapshot = ?, after_snapshot = ?, updated_at = ?
+		SET before_snapshot = ?, after_snapshot = ?, effect_status = ?, updated_at = ?
 		WHERE id = ? AND operation_id = ?
-	`, nullableJSON(beforeSnapshot), nullableJSON(afterSnapshot), now, intentID, operationID)
+	`, nullableJSON(beforeSnapshot), nullableJSON(afterSnapshot), string(effectStatus), now, intentID, operationID)
 	if err != nil {
 		return nil, fmt.Errorf("finish emergency snapshots: %w", err)
 	}
@@ -389,10 +403,114 @@ func (s *emergencyIntentStore) Finish(
 	if err := insertOperationEvent(ctx, tx, event); err != nil {
 		return nil, err
 	}
+	timeline, err := json.Marshal(store.StateTransitionTimelineData{
+		FromState: string(current.Status), ToState: string(updated.Status), ErrorCode: lastError,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode emergency finish timeline: %w", err)
+	}
+	if _, err := appendTimelineEntry(ctx, tx, &store.OperationTimelineEntry{
+		OperationID: updated.ID, OperationStateVersion: updated.StateVersion,
+		Kind: string(store.TimelineEntryStateTransition), Data: timeline, CreatedAt: updated.UpdatedAt,
+	}); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit finish emergency: %w", err)
 	}
 	return &updated, nil
+}
+
+func (s *emergencyIntentStore) ResolveEmergencyEffect(ctx context.Context, command store.ResolveEmergencyEffectCommand) (*store.ResolveEmergencyEffectResult, error) {
+	if command.OperationID == "" || command.ExpectedStateVersion < 1 ||
+		(command.EffectStatus != store.EmergencyEffectApplied && command.EffectStatus != store.EmergencyEffectNotApplied) {
+		return nil, fmt.Errorf("resolve emergency effect: invalid command")
+	}
+	var resolved *store.ResolveEmergencyEffectResult
+	err := retryBusy(ctx, func() error {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin resolve emergency effect: %w", err)
+		}
+		defer tx.Rollback() //nolint:errcheck // no-op after commit
+		current, err := getOperation(ctx, tx, command.OperationID)
+		if err != nil {
+			return err
+		}
+		if current.OperationType != store.OperationEmergency || (current.Status != store.StatusFailed && current.Status != store.StatusCancelled && current.Status != store.StatusTimeout) {
+			return store.ErrInvalidState
+		}
+		intent, err := getEmergencyIntentByOperation(ctx, tx, command.OperationID)
+		if err != nil {
+			return err
+		}
+		if intent.EffectStatus != store.EmergencyEffectUnknown {
+			resolved = &store.ResolveEmergencyEffectResult{Operation: current, Intent: intent}
+			return nil
+		}
+		if current.StateVersion != command.ExpectedStateVersion {
+			return store.ErrOptimisticLock
+		}
+		now := time.Now().UTC()
+		result, err := tx.ExecContext(ctx, `
+			UPDATE operations SET state_version = state_version + 1, updated_at = ?
+			WHERE id = ? AND state_version = ?
+		`, now.Format(time.RFC3339Nano), current.ID, command.ExpectedStateVersion)
+		if err != nil {
+			return fmt.Errorf("resolve emergency operation effect: %w", err)
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("resolve emergency operation rows affected: %w", err)
+		}
+		if rows == 0 {
+			return store.ErrOptimisticLock
+		}
+		result, err = tx.ExecContext(ctx, `
+			UPDATE emergency_intents
+			SET before_snapshot = ?, after_snapshot = ?, effect_status = ?, updated_at = ?
+			WHERE operation_id = ? AND effect_status = 'UNKNOWN'
+		`, nullableJSON(command.BeforeSnapshot), nullableJSON(command.AfterSnapshot), string(command.EffectStatus), now.Format(time.RFC3339Nano), current.ID)
+		if err != nil {
+			return fmt.Errorf("resolve emergency intent effect: %w", err)
+		}
+		rows, err = result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("resolve emergency intent rows affected: %w", err)
+		}
+		if rows == 0 {
+			return store.ErrOptimisticLock
+		}
+		updatedOperation := *current
+		updatedOperation.StateVersion++
+		updatedOperation.UpdatedAt = now
+		updatedIntent := *intent
+		updatedIntent.EffectStatus = command.EffectStatus
+		updatedIntent.BeforeSnapshot = append(json.RawMessage(nil), command.BeforeSnapshot...)
+		updatedIntent.AfterSnapshot = append(json.RawMessage(nil), command.AfterSnapshot...)
+		updatedIntent.UpdatedAt = now
+		data, err := json.Marshal(store.EmergencyEffectTimelineData{
+			RequestID: command.RequestID, EffectFrom: string(store.EmergencyEffectUnknown), EffectTo: string(command.EffectStatus),
+		})
+		if err != nil {
+			return fmt.Errorf("encode emergency effect timeline: %w", err)
+		}
+		timeline, err := appendTimelineEntry(ctx, tx, &store.OperationTimelineEntry{
+			OperationID: updatedOperation.ID, OperationStateVersion: updatedOperation.StateVersion,
+			Kind: string(store.TimelineEntryEmergencyEffectResolved), Data: data, CreatedAt: now,
+		})
+		if err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit resolve emergency effect: %w", err)
+		}
+		resolved = &store.ResolveEmergencyEffectResult{
+			Operation: &updatedOperation, Intent: &updatedIntent, Timeline: timeline, Resolved: true,
+		}
+		return nil
+	})
+	return resolved, err
 }
 
 const emergencyIntentSelect = `
@@ -405,12 +523,13 @@ const emergencyIntentSelect = `
 		emergency_intents.annotation_entries, emergency_intents.convergence,
 		emergency_intents.promotion_paths, emergency_intents.before_snapshot,
 		emergency_intents.after_snapshot, emergency_intents.delivery_status,
-		emergency_intents.last_delivery_at, emergency_intents.created_at, emergency_intents.updated_at
+		emergency_intents.effect_status, emergency_intents.last_delivery_at,
+		emergency_intents.created_at, emergency_intents.updated_at
 	FROM emergency_intents`
 
 func scanEmergencyIntent(row interface{ Scan(...any) error }) (*store.EmergencyIntent, error) {
 	var intent store.EmergencyIntent
-	var action, convergence string
+	var action, convergence, effectStatus string
 	var container, artifactID, imageReference, annotationScope, lastDeliveryAt sql.NullString
 	var targetReplicas sql.NullInt64
 	var annotationEntries, promotionPaths, beforeSnapshot, afterSnapshot []byte
@@ -420,7 +539,7 @@ func scanEmergencyIntent(row interface{ Scan(...any) error }) (*store.EmergencyI
 		&intent.WorkloadKind, &intent.WorkloadName, &intent.WorkloadNamespace, &intent.WorkloadUID,
 		&container, &artifactID, &imageReference, &targetReplicas, &annotationScope,
 		&annotationEntries, &convergence, &promotionPaths, &beforeSnapshot, &afterSnapshot,
-		&intent.DeliveryStatus, &lastDeliveryAt, &createdAt, &updatedAt,
+		&intent.DeliveryStatus, &effectStatus, &lastDeliveryAt, &createdAt, &updatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -429,6 +548,10 @@ func scanEmergencyIntent(row interface{ Scan(...any) error }) (*store.EmergencyI
 	}
 	intent.Action = store.EmergencyAction(action)
 	intent.Convergence = store.EmergencyConvergence(convergence)
+	intent.EffectStatus = store.EmergencyEffectStatus(effectStatus)
+	if !validEmergencyEffectStatus(intent.EffectStatus) {
+		return nil, fmt.Errorf("scan emergency intent: invalid effect status %q", effectStatus)
+	}
 	intent.AnnotationEntries = append(json.RawMessage(nil), annotationEntries...)
 	intent.PromotionPaths = append(json.RawMessage(nil), promotionPaths...)
 	intent.BeforeSnapshot = append(json.RawMessage(nil), beforeSnapshot...)
@@ -469,6 +592,15 @@ func assignOptionalEmergencyFields(intent *store.EmergencyIntent, container, art
 	}
 	if annotationScope.Valid {
 		intent.AnnotationScope = &annotationScope.String
+	}
+}
+
+func validEmergencyEffectStatus(status store.EmergencyEffectStatus) bool {
+	switch status {
+	case store.EmergencyEffectUnknown, store.EmergencyEffectApplied, store.EmergencyEffectNotApplied:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -145,6 +145,7 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 			authorization.TraceInterceptor(),
 			app.MaintenanceInterceptor(s.cfg.Maintenance, orchestratorReadOnlyProcedures(), logger),
 			auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, map[string]bool{}, logger),
+			auth.NewAuthStreamInterceptor(jwtMgr, s.store, enforcer, map[string]bool{}, logger),
 		),
 	)
 	mux.Handle(path, handler)

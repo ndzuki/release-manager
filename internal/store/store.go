@@ -208,6 +208,7 @@ type OperationCancelCommand struct {
 	IdempotencyScope     string
 	IdempotencyKeyHash   string
 	RequestHash          string
+	DeliveryStatus       OperationDeliveryStatus
 }
 
 // OperationCancelReplayQuery identifies one authorized cancellation intent.
@@ -223,6 +224,73 @@ type OperationCancelResult struct {
 	Operation *Operation `json:"operation"`
 	RequestID string     `json:"request_id"`
 	Replayed  bool       `json:"-"`
+}
+
+// OperationDeliveryStatus describes whether an EMERGENCY command crossed the delivery boundary.
+type OperationDeliveryStatus string
+
+const (
+	DeliveryUndelivered OperationDeliveryStatus = "undelivered"
+	DeliveryDelivered   OperationDeliveryStatus = "delivered"
+	DeliveryUnknown     OperationDeliveryStatus = "unknown"
+)
+
+// EmergencyEffectStatus is the authoritative cluster effect of an EMERGENCY operation.
+type EmergencyEffectStatus string
+
+const (
+	EmergencyEffectUnknown    EmergencyEffectStatus = "UNKNOWN"
+	EmergencyEffectApplied    EmergencyEffectStatus = "APPLIED"
+	EmergencyEffectNotApplied EmergencyEffectStatus = "NOT_APPLIED"
+)
+
+// OperationTimelineEntryKind identifies sanitized Operation timeline payloads.
+type OperationTimelineEntryKind string
+
+const (
+	TimelineEntryStateTransition         OperationTimelineEntryKind = "STATE_TRANSITION"
+	TimelineEntryEmergencyEffectResolved OperationTimelineEntryKind = "EMERGENCY_EFFECT_RESOLVED"
+)
+
+// OperationTimelineEntry records one ordered, sanitized observation for an Operation.
+type OperationTimelineEntry struct {
+	ID                    string
+	OperationID           string
+	Sequence              int64
+	OperationStateVersion int
+	Kind                  string
+	Data                  json.RawMessage
+	CreatedAt             time.Time
+}
+
+// StateTransitionTimelineData is the sanitized payload for a state transition.
+type StateTransitionTimelineData struct {
+	RequestID string `json:"request_id,omitempty"`
+	FromState string `json:"from_state"`
+	ToState   string `json:"to_state"`
+	ErrorCode string `json:"error_code,omitempty"`
+}
+
+// EmergencyEffectTimelineData is the sanitized payload for a late effect resolution.
+type EmergencyEffectTimelineData struct {
+	RequestID  string `json:"request_id,omitempty"`
+	EffectFrom string `json:"effect_from"`
+	EffectTo   string `json:"effect_to"`
+}
+
+// TimelineSnapshot is an Operation and its committed Timeline sequence boundary.
+type TimelineSnapshot struct {
+	Operation            *Operation
+	SnapshotSequence     int64
+	RetainedFromSequence int64
+}
+
+// TimelineStore provides ordered persistence and snapshot boundaries for Operation watches.
+type TimelineStore interface {
+	Append(ctx context.Context, entry *OperationTimelineEntry) (*OperationTimelineEntry, error)
+	List(ctx context.Context, operationID string, afterSequence, throughSequence int64) ([]*OperationTimelineEntry, error)
+	LatestSequence(ctx context.Context, operationID string) (int64, error)
+	Snapshot(ctx context.Context, operationID string) (*TimelineSnapshot, error)
 }
 
 // ReleaseDefinition represents a Helm release target configuration.
@@ -840,9 +908,28 @@ type EmergencyIntent struct {
 	BeforeSnapshot      json.RawMessage
 	AfterSnapshot       json.RawMessage
 	DeliveryStatus      string
+	EffectStatus        EmergencyEffectStatus
 	LastDeliveryAt      *time.Time
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
+}
+
+// ResolveEmergencyEffectCommand carries one authoritative late EMERGENCY result.
+type ResolveEmergencyEffectCommand struct {
+	OperationID          string
+	ExpectedStateVersion int
+	EffectStatus         EmergencyEffectStatus
+	BeforeSnapshot       json.RawMessage
+	AfterSnapshot        json.RawMessage
+	RequestID            string
+}
+
+// ResolveEmergencyEffectResult reports whether a late result changed the aggregate.
+type ResolveEmergencyEffectResult struct {
+	Operation *Operation
+	Intent    *EmergencyIntent
+	Timeline  *OperationTimelineEntry
+	Resolved  bool
 }
 
 type ConvergenceTask struct {
@@ -888,7 +975,8 @@ type EmergencyIntentStore interface {
 	GetActiveLocksForDefinition(ctx context.Context, definitionID string) ([]*EmergencyIntent, error)
 	ListPendingDeliveryByDefinition(ctx context.Context, definitionID string) ([]*EmergencyIntent, error)
 	UpdateDeliveryStatus(ctx context.Context, id, status string) error
-	Finish(ctx context.Context, intentID, operationID string, expectedStateVersion int, status OperationStatus, lastError string, beforeSnapshot, afterSnapshot json.RawMessage) (*Operation, error)
+	Finish(ctx context.Context, intentID, operationID string, expectedStateVersion int, status OperationStatus, effectStatus EmergencyEffectStatus, lastError string, beforeSnapshot, afterSnapshot json.RawMessage) (*Operation, error)
+	ResolveEmergencyEffect(ctx context.Context, command ResolveEmergencyEffectCommand) (*ResolveEmergencyEffectResult, error)
 }
 
 type ConvergenceTaskStore interface {
@@ -1780,6 +1868,7 @@ type PreflightLifecycleStore interface {
 type Store interface {
 	Operations() OperationStore
 	OperationEvents() OperationEventStore
+	Timeline() TimelineStore
 	Definitions() DefinitionStore
 	DefinitionEvents() DefinitionEventStore
 	Values() ValuesStore
