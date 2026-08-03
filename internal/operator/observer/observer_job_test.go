@@ -91,6 +91,31 @@ func TestObserver_JobFailed(t *testing.T) {
 	assertRolloutLast(t, result, err)
 }
 
+func TestObserver_JobFailureOverridesComplete(t *testing.T) {
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "migrate",
+			Namespace:       "default",
+			UID:             "job-uid",
+			Generation:      5,
+			ResourceVersion: "34",
+		},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{
+				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+				{Type: batchv1.JobFailed, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+
+	result, err := New(fake.NewSimpleClientset(job)).Observe(t.Context(), jobRef(), 0, time.Second)
+
+	assert.ErrorIs(t, err, ErrWorkloadUnavailable)
+	assert.False(t, result.Ready)
+	assert.True(t, result.Failed)
+	assertRolloutLast(t, result, err)
+}
+
 func jobRef() ResourceRef {
 	return ResourceRef{GVR: JobGVR, Namespace: "default", Name: "migrate"}
 }

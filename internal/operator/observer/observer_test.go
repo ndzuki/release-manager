@@ -782,6 +782,7 @@ func TestDaemonSetRequiresAllReadySignals(t *testing.T) {
 func TestObserver_DeploymentUnavailable(t *testing.T) {
 	deployment := readyDeployment(2, "5")
 	deployment.Status.Conditions = []appsv1.DeploymentCondition{
+		{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
 		{
 			Type:   appsv1.DeploymentProgressing,
 			Status: corev1.ConditionFalse,
@@ -794,6 +795,7 @@ func TestObserver_DeploymentUnavailable(t *testing.T) {
 	result, err := observer.Observe(t.Context(), deploymentRef(), 2, time.Second)
 
 	assert.ErrorIs(t, err, ErrWorkloadUnavailable)
+	assert.False(t, result.Ready)
 	assert.True(t, result.Failed)
 	assertRolloutLast(t, result, err)
 }

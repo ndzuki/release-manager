@@ -369,16 +369,13 @@ func deploymentResult(
 			condition.Reason,
 			condition.Message,
 		))
-		if condition.Type == appsv1.DeploymentAvailable && condition.Status == corev1.ConditionTrue {
-			available = true
-		}
-		replicaFailure := condition.Type == appsv1.DeploymentReplicaFailure &&
-			condition.Status == corev1.ConditionTrue
-		progressDeadlineExceeded := condition.Type == appsv1.DeploymentProgressing &&
-			condition.Status == corev1.ConditionFalse &&
-			condition.Reason == "ProgressDeadlineExceeded"
-		if replicaFailure || progressDeadlineExceeded {
-			failed = true
+		switch condition.Type {
+		case appsv1.DeploymentAvailable:
+			available = condition.Status == corev1.ConditionTrue
+		case appsv1.DeploymentReplicaFailure:
+			failed = failed || condition.Status == corev1.ConditionTrue
+		case appsv1.DeploymentProgressing:
+			failed = failed || (condition.Status == corev1.ConditionFalse && condition.Reason == "ProgressDeadlineExceeded")
 		}
 	}
 	genReached := generationReached(deployment.Generation, deployment.Status.ObservedGeneration, expectedGeneration)
@@ -395,7 +392,7 @@ func deploymentResult(
 		Generation:         deployment.Generation,
 		ObservedGeneration: deployment.Status.ObservedGeneration,
 		ResourceVersion:    deployment.ResourceVersion,
-		Ready:              genReached && available && countersOK,
+		Ready:              genReached && available && countersOK && !failed,
 		Failed:             failed,
 		Conditions:         conditions,
 	}
@@ -502,7 +499,7 @@ func jobResult(ref ResourceRef, _ int64, job *batchv1.Job) (WatchResult, bool, e
 		Generation:         job.Generation,
 		ObservedGeneration: 0,
 		ResourceVersion:    job.ResourceVersion,
-		Ready:              complete,
+		Ready:              complete && !failed,
 		Failed:             failed,
 		Conditions:         conditions,
 	}
