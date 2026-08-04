@@ -89,6 +89,7 @@ func TestObserver_DeploymentRequiresAllReadyCounters(t *testing.T) {
 
 			assert.ErrorIs(t, err, ErrRolloutTimeout)
 			assert.False(t, result.Ready)
+			assert.False(t, result.Failed)
 			assertRolloutLast(t, result, err)
 		})
 	}
@@ -651,9 +652,7 @@ func TestObserver_RolloutTimeoutIncludesLastState(t *testing.T) {
 	assert.ErrorIs(t, err, ErrRolloutTimeout)
 	assert.Equal(t, int64(6), result.ObservedGeneration)
 	assert.Equal(t, "21", result.ResourceVersion)
-	var rolloutErr *RolloutError
-	require.ErrorAs(t, err, &rolloutErr)
-	assert.Equal(t, result, rolloutErr.Last)
+	assertRolloutLast(t, result, err)
 }
 
 func TestObserver_ContextCancelStopsWatch(t *testing.T) {
@@ -923,6 +922,13 @@ func TestRolloutError_CodeReturnsStableValues(t *testing.T) {
 			assert.Equal(t, tt.want, string(err.Code()))
 		})
 	}
+}
+
+func TestRolloutError_NilReceiverIsSafe(t *testing.T) {
+	var err *RolloutError
+
+	assert.Empty(t, err.Error())
+	assert.Empty(t, err.Code())
 }
 
 func deploymentRef() ResourceRef {
