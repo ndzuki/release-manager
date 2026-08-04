@@ -3,4 +3,6 @@ log_level: debug
 database:
   driver: sqlite
   dsn: data/auth.db
+authorization:
+  policy_reload_interval: 5s
 maintenance: false

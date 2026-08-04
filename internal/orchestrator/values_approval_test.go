@@ -17,6 +17,7 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	"github.com/ndzuki/release-manager/internal/authctx"
+	"github.com/ndzuki/release-manager/internal/authorization"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
@@ -33,6 +34,30 @@ type approvalFixture struct {
 	revisionID string
 }
 
+type advancingAuthorizer struct {
+	delegate authorization.Authorizer
+	store    store.Store
+}
+
+func (a *advancingAuthorizer) AuthorizeWrite(ctx context.Context, actor authctx.Actor, customerID string, action store.AuthorizationAction) error {
+	if err := a.delegate.AuthorizeWrite(ctx, actor, customerID, action); err != nil {
+		return err
+	}
+	snapshot, err := a.store.Authorization().Load(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = a.store.Authorization().Apply(ctx, store.AuthorizationApplyCommand{
+		ExpectedSourceVersion: snapshot.SourceVersion,
+		ExpectedPolicyVersion: snapshot.PolicyVersion,
+		Mutation:              store.AuthorizationMembershipChanged,
+	})
+	return err
+}
+
+func (a *advancingAuthorizer) Snapshot(ctx context.Context, organizationID, customerID string) (*authorization.Snapshot, error) {
+	return a.delegate.Snapshot(ctx, organizationID, customerID)
+}
 func newApprovalFixture(t *testing.T) approvalFixture {
 	t.Helper()
 	st := sqlitestore.OpenTest(t)
@@ -70,10 +95,25 @@ func newApprovalFixture(t *testing.T) approvalFixture {
 		CreatedByUserID: creatorID,
 	}))
 	return approvalFixture{
-		svc: NewService(st, nil, "staging", nil, slog.New(slog.DiscardHandler)), st: st, ctx: ctx,
+		svc: NewService(st, nil, "staging", nil, authorization.NewStoreAuthorizer(st), slog.New(slog.DiscardHandler)), st: st, ctx: ctx,
 		orgID: orgID, customerID: customerID, defID: defID, creatorID: creatorID, adminID: adminID,
 		revisionID: revisionID,
 	}
+}
+
+func TestValuesApprovalAuthorizationFenceRejectsVersionAdvance(t *testing.T) {
+	f := newApprovalFixture(t)
+	f.svc.authorizer = &advancingAuthorizer{delegate: authorization.NewStoreAuthorizer(f.st), store: f.st}
+	_, err := f.svc.SubmitValuesRevision(f.actorContext(f.creatorID, store.RoleDeployer), f.submitRequest("fence-stale"))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+	assert.Equal(t, "authorization_snapshot_stale", approvalReasonCode(t, err))
+	revision, getErr := f.st.Values().Get(f.ctx, f.revisionID)
+	require.NoError(t, getErr)
+	assert.Equal(t, store.ValuesStatusDraft, revision.Status)
+	decisions, listErr := f.st.ValuesApprovalEvidence().ListDecisions(f.ctx, f.revisionID)
+	require.NoError(t, listErr)
+	assert.Empty(t, decisions)
 }
 
 func (f approvalFixture) actorContext(userID string, roles ...store.Role) context.Context {

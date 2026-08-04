@@ -3,7 +3,10 @@ package authctx
 
 import "context"
 
-type actorKey struct{}
+type (
+	actorKey               struct{}
+	authorizationHeaderKey struct{}
+)
 
 // Actor is the verified identity snapshot for one request.
 type Actor struct {
@@ -31,4 +34,18 @@ func ActorFromContext(ctx context.Context) (Actor, bool) {
 		return Actor{}, false
 	}
 	return actor, true
+}
+
+// WithAuthorizationHeader keeps the verified inbound credential available to internal Connect clients.
+func WithAuthorizationHeader(ctx context.Context, value string) context.Context {
+	return context.WithValue(ctx, authorizationHeaderKey{}, value)
+}
+
+// AuthorizationHeaderFromContext returns the inbound Authorization header for internal forwarding.
+func AuthorizationHeaderFromContext(ctx context.Context) string {
+	value, ok := ctx.Value(authorizationHeaderKey{}).(string)
+	if !ok {
+		return ""
+	}
+	return value
 }

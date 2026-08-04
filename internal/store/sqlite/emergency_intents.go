@@ -61,6 +61,9 @@ func (s *emergencyIntentStore) createIfAvailable(ctx context.Context, command st
 	}
 	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
 
+	if err := checkAuthorizationFence(ctx, tx, command.ExpectedAuthorizationVersion); err != nil {
+		return nil, err
+	}
 	replayed, err := lookupEmergencyReplay(ctx, tx, command)
 	if err != nil || replayed != nil {
 		return replayed, err
@@ -126,6 +129,9 @@ func (s *emergencyIntentStore) createIfAvailable(ctx context.Context, command st
 		return nil, fmt.Errorf("insert emergency idempotency record: %w", err)
 	}
 
+	if err := checkAuthorizationFence(ctx, tx, command.ExpectedAuthorizationVersion); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit create emergency: %w", err)
 	}
@@ -134,6 +140,27 @@ func (s *emergencyIntentStore) createIfAvailable(ctx context.Context, command st
 		Intent:          command.Intent,
 		ConvergenceTask: command.ConvergenceTask,
 	}, nil
+}
+
+func checkAuthorizationFence(ctx context.Context, execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, expected uint64) error {
+	if expected == 0 {
+		return nil
+	}
+	result, err := execer.ExecContext(ctx,
+		`UPDATE authorization_source_version SET version = version WHERE id = 1 AND version = ?`, expected)
+	if err != nil {
+		return fmt.Errorf("check authorization source version: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check authorization source version rows affected: %w", err)
+	}
+	if rows != 1 {
+		return store.ErrAuthorizationStale
+	}
+	return nil
 }
 
 func lookupEmergencyReplay(ctx context.Context, queryer operationQueryer, command store.EmergencyCreateCommand) (*store.EmergencyCreateResult, error) {

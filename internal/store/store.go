@@ -36,6 +36,7 @@ var (
 	ErrDefinitionOwnerUnresolved = errors.New("store: definition owner unresolved")
 	ErrNotAuthorized             = errors.New("store: approval command not authorized")
 	ErrEmergencyConflict         = errors.New("store: conflicting emergency target")
+	ErrAuthorizationStale        = errors.New("store: authorization source version changed")
 )
 
 // StateVersionConflictError reports the current revision version after a failed CAS.
@@ -372,18 +373,19 @@ type ApprovalOutboxEntry struct {
 
 // ValuesApprovalCommand contains the trusted authorization and idempotency snapshot.
 type ValuesApprovalCommand struct {
-	RevisionID           string
-	ExpectedStateVersion int64
-	ActorUserID          string
-	ActorOrgID           string
-	ActorRole            Role
-	Authorized           bool
-	Comment              *string
-	Reason               string
-	RequestID            string
-	IdempotencyScope     string
-	IdempotencyKeyHash   string
-	RequestHash          string
+	RevisionID                   string
+	ExpectedStateVersion         int64
+	ExpectedAuthorizationVersion uint64
+	ActorUserID                  string
+	ActorOrgID                   string
+	ActorRole                    Role
+	Authorized                   bool
+	Comment                      *string
+	Reason                       string
+	RequestID                    string
+	IdempotencyScope             string
+	IdempotencyKeyHash           string
+	RequestHash                  string
 }
 
 // ValuesApprovalResult is the committed or replayed transition result.
@@ -636,6 +638,115 @@ type OrgCustomerBinding struct {
 	UpdatedAt         time.Time
 }
 
+// AuthorizationAction is a governance capability enforced by REQ-027.
+type AuthorizationAction string
+
+const (
+	AuthorizationExecuteEmergency AuthorizationAction = "release.emergency.execute"
+	AuthorizationResolveEmergency AuthorizationAction = "release.emergency.resolve"
+	AuthorizationCreateValues     AuthorizationAction = "release.values.create"
+	AuthorizationApproveValues    AuthorizationAction = "release.values.approve"
+)
+
+// Valid reports whether the action is part of the fixed authorization contract.
+func (a AuthorizationAction) Valid() bool {
+	switch a {
+	case AuthorizationExecuteEmergency, AuthorizationResolveEmergency,
+		AuthorizationCreateValues, AuthorizationApproveValues:
+		return true
+	}
+	return false
+}
+
+// CapabilityGrant is an explicit subject capability override.
+type CapabilityGrant struct {
+	OrganizationID string
+	Subject        string
+	Action         AuthorizationAction
+	GrantedBy      string
+	Revoked        bool
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// CasbinRule is one durable p/g rule consumed by the authorization enforcer.
+type CasbinRule struct {
+	PType string
+	V0    string
+	V1    string
+	V2    string
+	V3    string
+	V4    string
+	V5    string
+}
+
+// AuthorizationCheckpoint is the persisted consumer progress for one organization/customer scope.
+type AuthorizationCheckpoint struct {
+	OrganizationID string
+	CustomerID     string
+	SourceVersion  uint64
+	PolicyVersion  uint64
+	Fresh          bool
+	UpdatedAt      time.Time
+}
+
+// AuthorizationSnapshot is the durable authorization state restored by Auth and Orchestrator.
+type AuthorizationSnapshot struct {
+	SourceVersion uint64
+	PolicyVersion uint64
+	Grants        []CapabilityGrant
+	Rules         []CasbinRule
+	Checkpoints   []AuthorizationCheckpoint
+}
+
+// AuthorizationMutation identifies one source-version advancing change.
+type AuthorizationMutation string
+
+const (
+	AuthorizationMembershipChanged AuthorizationMutation = "membership_changed"
+	AuthorizationBindingChanged    AuthorizationMutation = "binding_changed"
+	AuthorizationGrantChanged      AuthorizationMutation = "grant_changed"
+	AuthorizationPolicyChanged     AuthorizationMutation = "policy_changed"
+)
+
+// AuthorizationApplyCommand atomically replaces durable rules and optional capability grants.
+type AuthorizationApplyCommand struct {
+	ExpectedSourceVersion uint64
+	ExpectedPolicyVersion uint64
+	Mutation              AuthorizationMutation
+	Grants                []CapabilityGrant
+	Rules                 []CasbinRule
+}
+
+// Validate enforces the mutation-to-payload contract that protects version fences.
+func (c AuthorizationApplyCommand) Validate() error {
+	switch c.Mutation {
+	case AuthorizationMembershipChanged, AuthorizationBindingChanged:
+		if c.Grants != nil || c.Rules != nil {
+			return errors.New("store: membership and binding mutations cannot replace authorization state")
+		}
+	case AuthorizationGrantChanged:
+		if c.Grants == nil || c.Rules == nil {
+			return errors.New("store: grant mutation requires grants and rules")
+		}
+	case AuthorizationPolicyChanged:
+		if c.Grants != nil || c.Rules == nil {
+			return errors.New("store: policy mutation requires rules only")
+		}
+	default:
+		return errors.New("store: invalid authorization mutation")
+	}
+	return nil
+}
+
+// AuthorizationStore owns the version guards, grants, rules, and consumer checkpoints.
+type AuthorizationStore interface {
+	Load(ctx context.Context) (*AuthorizationSnapshot, error)
+	Apply(ctx context.Context, command AuthorizationApplyCommand) (*AuthorizationSnapshot, error)
+	GetCheckpoint(ctx context.Context, organizationID, customerID string) (*AuthorizationCheckpoint, error)
+	SaveCheckpoint(ctx context.Context, checkpoint AuthorizationCheckpoint) error
+}
+
 // --- Audit & Notification domain types (REQ-050, REQ-031) ---
 
 // AuditActorKind classifies the principal that performed an action.
@@ -839,13 +950,14 @@ type ConvergenceTask struct {
 }
 
 type EmergencyCreateCommand struct {
-	Operation            *Operation
-	Intent               *EmergencyIntent
-	ConvergenceTask      *ConvergenceTask
-	IdempotencyScope     string
-	IdempotencyKeyHash   string
-	RequestHash          string
-	IdempotencyExpiresAt time.Time
+	Operation                    *Operation
+	Intent                       *EmergencyIntent
+	ConvergenceTask              *ConvergenceTask
+	ExpectedAuthorizationVersion uint64
+	IdempotencyScope             string
+	IdempotencyKeyHash           string
+	RequestHash                  string
+	IdempotencyExpiresAt         time.Time
 }
 
 type EmergencyCreateResult struct {
@@ -1797,5 +1909,6 @@ type Store interface {
 	PreflightLifecycles() PreflightLifecycleStore
 	EmergencyIntents() EmergencyIntentStore
 	ConvergenceTasks() ConvergenceTaskStore
+	Authorization() AuthorizationStore
 	Close() error
 }

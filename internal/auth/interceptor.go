@@ -11,6 +11,7 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/store"
@@ -116,6 +117,7 @@ func NewAuthInterceptor(
 			ctx = authctx.WithActor(ctx, authctx.Actor{
 				UserID: claims.UserID, OrganizationID: domain, Roles: claims.Roles,
 			})
+			ctx = authctx.WithAuthorizationHeader(ctx, req.Header().Get("Authorization"))
 			return next(ctx, req)
 		})
 	}
@@ -307,7 +309,9 @@ func mapMethodToAction(method string) string {
 
 func usesHandlerAuthorization(procedure string) bool {
 	switch procedure {
-	case orchestratorv1connect.OrchestratorServiceSubmitValuesRevisionProcedure,
+	case authv1connect.AuthorizationServiceGetAuthorizationSnapshotProcedure,
+		authv1connect.AuthorizationServiceSetCapabilityGrantProcedure,
+		orchestratorv1connect.OrchestratorServiceSubmitValuesRevisionProcedure,
 		orchestratorv1connect.OrchestratorServiceApproveValuesRevisionProcedure,
 		orchestratorv1connect.OrchestratorServiceRejectValuesRevisionProcedure:
 		return true

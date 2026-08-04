@@ -46,6 +46,9 @@ func (s *bindingStore) Create(ctx context.Context, binding *store.OrgCustomerBin
 	if err := insertBindingEvent(ctx, tx, binding); err != nil {
 		return err
 	}
+	if err := bumpAuthorizationSourceVersion(ctx, tx); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit create binding: %w", err)
 	}
@@ -120,6 +123,9 @@ func (s *bindingStore) SetStatus(ctx context.Context, id string, status store.Bi
 	if err := insertBindingEvent(ctx, tx, binding); err != nil {
 		return err
 	}
+	if err := bumpAuthorizationSourceVersion(ctx, tx); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit binding status update: %w", err)
 	}
@@ -129,14 +135,38 @@ func (s *bindingStore) SetStatus(ctx context.Context, id string, status store.Bi
 // Update persists binding changes with optimistic locking.
 func (s *bindingStore) Update(ctx context.Context, binding *store.OrgCustomerBinding) error {
 	binding.UpdatedAt = time.Now().UTC()
-	_, err := s.gorm.ExecContext(ctx, `
+	tx, err := s.gorm.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin update binding: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
+	result, err := tx.ExecContext(ctx, `
 		UPDATE org_customer_bindings
 		SET status = ?, optimistic_version = ?, updated_at = ?
 		WHERE id = ? AND optimistic_version = ?`,
 		string(binding.Status), binding.OptimisticVersion, binding.UpdatedAt.UTC().Format(time.RFC3339),
 		binding.ID, binding.OptimisticVersion-1,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("update binding: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("binding update rows affected: %w", err)
+	}
+	if rows != 1 {
+		return store.ErrOptimisticLock
+	}
+	if err := insertBindingEvent(ctx, tx, binding); err != nil {
+		return err
+	}
+	if err := bumpAuthorizationSourceVersion(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit update binding: %w", err)
+	}
+	return nil
 }
 
 // ListByCustomer returns all bindings for a given customer.

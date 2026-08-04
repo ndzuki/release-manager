@@ -22,6 +22,7 @@ import (
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/audit"
 	authctx "github.com/ndzuki/release-manager/internal/authctx"
+	"github.com/ndzuki/release-manager/internal/authorization"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/orchestrator/preflight"
 	"github.com/ndzuki/release-manager/internal/store"
@@ -39,18 +40,22 @@ type Service struct {
 	auditEmitter        audit.Sink
 	emergencyDispatcher emergencyDispatcher
 	logger              *slog.Logger
+	authorizer          authorization.Authorizer
 }
 
 func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args ...any) *Service {
 	var auditEmitter audit.Sink
 	var dispatcher emergencyDispatcher
 	logger := slog.Default()
+	var authorizer authorization.Authorizer
 	for _, arg := range args {
 		switch value := arg.(type) {
 		case audit.Sink:
 			auditEmitter = value
 		case emergencyDispatcher:
 			dispatcher = value
+		case authorization.Authorizer:
+			authorizer = value
 		case *slog.Logger:
 			logger = value
 		}
@@ -63,6 +68,7 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 		coordinator:         preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.Values(), st.Bundles(), st.PreflightLifecycles(), st.Inventories(), logger),
 		auditEmitter:        auditEmitter,
 		logger:              logger,
+		authorizer:          authorizer,
 	}
 }
 
@@ -1022,12 +1028,4 @@ func (s *Service) emitAudit(ev *store.AuditEvent) {
 			"action", ev.Action,
 		)
 	}
-}
-
-// auditActor converts an ActorContext to audit actor kind and ID.
-func auditActor(actor *store.ActorContext) (kind store.AuditActorKind, actorID string) {
-	if actor == nil || actor.UserID == "" {
-		return store.AuditActorSystem, "system"
-	}
-	return store.AuditActorUser, actor.UserID
 }
