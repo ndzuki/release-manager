@@ -3,6 +3,11 @@ log_level: debug
 database:
   driver: sqlite
   dsn: data/orchestrator.db
+authorization:
+  auth_url: http://localhost:8085
+  pull_interval: 1s
+  pull_backoff_max: 30s
+
 maintenance: false
 retention:
   bundle_days: 90

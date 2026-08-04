@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	authv1 "github.com/ndzuki/release-manager/api/gen/auth/v1"
+	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/auth"
@@ -37,8 +40,8 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 
 	const (
-		organizationID   = "org-068-smoke"
-		customerID       = "customer-068-smoke"
+		organizationID   = "1d4d2977-3a2a-4a63-b695-b19a241e7ba5"
+		customerID       = "5e62e848-b527-4a7a-b8b6-13937b6f1fa7"
 		definitionID     = "definition-068-smoke"
 		revisionID       = "revision-068-smoke"
 		viewerRevisionID = "revision-068-viewer"
@@ -90,7 +93,12 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 	require.NoError(t, seedStore.Close())
 
 	mux := http.NewServeMux()
-	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey}
+	authStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
+	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+
+	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
 	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
@@ -116,6 +124,10 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 	})
 	viewerRequest.Header().Set("Authorization", "Bearer "+viewerToken)
 	viewerRequest.Header().Set("Idempotency-Key", "submit-068-viewer")
+	_, err = client.SubmitValuesRevision(ctx, viewerRequest)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+	assert.ErrorContains(t, err, "authorization snapshot stale")
 	_, err = client.SubmitValuesRevision(ctx, viewerRequest)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
@@ -153,6 +165,82 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, legacyResponse.Body.Close()) })
 	assert.Equal(t, http.StatusNotFound, legacyResponse.StatusCode)
 }
+
+type testAuthorizationHandler struct {
+	store store.Store
+	jwt   *auth.JWTManager
+}
+
+func newTestAuthorizationServer(t *testing.T, st store.Store, signingKey string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	path, handler := authv1connect.NewAuthorizationServiceHandler(&testAuthorizationHandler{
+		store: st,
+		jwt:   auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour),
+	})
+	mux.Handle(path, handler)
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server
+}
+
+func (h *testAuthorizationHandler) GetAuthorizationSnapshot(
+	ctx context.Context,
+	req *connect.Request[authv1.GetAuthorizationSnapshotRequest],
+) (*connect.Response[authv1.GetAuthorizationSnapshotResponse], error) {
+	token := strings.TrimPrefix(req.Header().Get("Authorization"), "Bearer ")
+	claims, err := h.jwt.ValidateAccessToken(token)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid token: %w", err))
+	}
+	if claims.OrgID != req.Msg.GetOrganizationId() {
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("scope mismatch"))
+	}
+	member, err := h.store.OrgMembers().Get(ctx, claims.OrgID, claims.UserID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodePermissionDenied, err)
+	}
+	snapshot, err := h.store.Authorization().Load(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeUnavailable, err)
+	}
+	return connect.NewResponse(&authv1.GetAuthorizationSnapshotResponse{
+		OrganizationId:           req.Msg.GetOrganizationId(),
+		CustomerId:               req.Msg.GetCustomerId(),
+		ActorId:                  claims.UserID,
+		Role:                     string(member.Role),
+		CanExecuteEmergency:      member.Role == store.RoleReleaseAdmin || member.Role == store.RolePlatformAdmin,
+		CanResolveEmergency:      member.Role == store.RolePlatformAdmin,
+		CanCreateValuesRevision:  testRoleAllows(member.Role, store.AuthorizationCreateValues),
+		CanApproveValuesRevision: testRoleAllows(member.Role, store.AuthorizationApproveValues),
+		SourceVersion:            snapshot.SourceVersion,
+		PolicyVersion:            snapshot.PolicyVersion,
+		Checkpoint:               snapshot.SourceVersion,
+		Fresh:                    true,
+	}), nil
+}
+
+func (*testAuthorizationHandler) SetCapabilityGrant(
+	context.Context,
+	*connect.Request[authv1.SetCapabilityGrantRequest],
+) (*connect.Response[authv1.SetCapabilityGrantResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("not used"))
+}
+
+func testRoleAllows(role store.Role, action store.AuthorizationAction) bool {
+	switch role {
+	case store.RolePlatformAdmin:
+		return true
+	case store.RoleReleaseAdmin:
+		return action == store.AuthorizationCreateValues || action == store.AuthorizationApproveValues
+	case store.RoleDeployer:
+		return action == store.AuthorizationCreateValues
+	default:
+		return false
+	}
+}
+
+var _ authv1connect.AuthorizationServiceHandler = (*testAuthorizationHandler)(nil)
 
 func TestOrchestratorPostgreSQLCutoverAuthority(t *testing.T) {
 	baseDSN := os.Getenv("POSTGRES_TEST_DSN")

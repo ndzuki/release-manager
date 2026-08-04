@@ -17,6 +17,7 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	"github.com/ndzuki/release-manager/internal/authctx"
+	"github.com/ndzuki/release-manager/internal/authorization"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -91,6 +92,7 @@ func (s *Service) handleValuesApproval(
 	comment string,
 	reason string,
 ) (*connect.Response[orchestratorv1.ValuesRevisionDecisionResponse], error) {
+	ctx = authorization.WithFenceCapture(ctx)
 	actorContext, ok := authctx.ActorFromContext(ctx)
 	if !ok {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
@@ -116,19 +118,25 @@ func (s *Service) handleValuesApproval(
 		return nil, err
 	}
 
+	expectedAuthorizationVersion, ok := authorization.SourceVersionFromContext(ctx)
+	if !ok {
+		return nil, valuesApprovalError(connect.CodeUnavailable, "authorization_snapshot_stale",
+			errors.New("authorization snapshot is unavailable"))
+	}
 	trimmedComment := strings.TrimSpace(comment)
 	command := store.ValuesApprovalCommand{
-		RevisionID:           revisionID,
-		ExpectedStateVersion: expectedStateVersion,
-		ActorUserID:          actor.userID,
-		ActorOrgID:           actor.orgID,
-		ActorRole:            actor.role,
-		Authorized:           true,
-		Reason:               strings.TrimSpace(reason),
-		RequestID:            uuid.New().String(),
-		IdempotencyScope:     fmt.Sprintf("%s:%s:%s", actor.userID, action, revisionID),
-		IdempotencyKeyHash:   hashApprovalIdempotencyKey(idempotencyKey),
-		RequestHash:          hashApprovalRequest(action, revisionID, expectedStateVersion, trimmedComment, strings.TrimSpace(reason)),
+		RevisionID:                   revisionID,
+		ExpectedStateVersion:         expectedStateVersion,
+		ExpectedAuthorizationVersion: expectedAuthorizationVersion,
+		ActorUserID:                  actor.userID,
+		ActorOrgID:                   actor.orgID,
+		ActorRole:                    actor.role,
+		Authorized:                   true,
+		Reason:                       strings.TrimSpace(reason),
+		RequestID:                    uuid.New().String(),
+		IdempotencyScope:             fmt.Sprintf("%s:%s:%s", actor.userID, action, revisionID),
+		IdempotencyKeyHash:           hashApprovalIdempotencyKey(idempotencyKey),
+		RequestHash:                  hashApprovalRequest(action, revisionID, expectedStateVersion, trimmedComment, strings.TrimSpace(reason)),
 	}
 	if trimmedComment != "" {
 		command.Comment = &trimmedComment
@@ -264,19 +272,24 @@ func (s *Service) checkApprovalAuth(
 		if revision.CreatedByUserID != actorContext.UserID {
 			return approvalActor{}, valuesApprovalError(connect.CodePermissionDenied, "not_authorized", errors.New("actor not authorized"))
 		}
-		if !canSubmit(member.Role) {
-			return approvalActor{}, valuesApprovalError(connect.CodePermissionDenied, "role_insufficient",
-				fmt.Errorf("actor role %s is insufficient for submit", member.Role))
-		}
-	} else {
-		if revision.CreatedByUserID == actorContext.UserID {
-			return approvalActor{}, valuesApprovalError(connect.CodePermissionDenied, "self_approval_forbidden",
-				errors.New("revision creator cannot approve or reject own revision"))
-		}
-		if !canDecide(member.Role) {
+	} else if revision.CreatedByUserID == actorContext.UserID {
+		return approvalActor{}, valuesApprovalError(connect.CodePermissionDenied, "self_approval_forbidden",
+			errors.New("revision creator cannot approve or reject own revision"))
+	}
+	if s.authorizer == nil {
+		return approvalActor{}, valuesApprovalError(connect.CodeUnavailable, "authorization_snapshot_stale",
+			errors.New("authorization snapshot is unavailable"))
+	}
+	capability := store.AuthorizationApproveValues
+	if action == approvalActionSubmit {
+		capability = store.AuthorizationCreateValues
+	}
+	if err := s.authorizer.AuthorizeWrite(ctx, actorContext, definition.CustomerID, capability); err != nil {
+		if connect.CodeOf(err) == connect.CodePermissionDenied {
 			return approvalActor{}, valuesApprovalError(connect.CodePermissionDenied, "role_insufficient",
 				fmt.Errorf("actor role %s is insufficient for %s", member.Role, action))
 		}
+		return approvalActor{}, err
 	}
 	return approvalActor{userID: actorContext.UserID, orgID: actorContext.OrganizationID, role: member.Role}, nil
 }
@@ -284,14 +297,6 @@ func (s *Service) checkApprovalAuth(
 func authorizationUnavailableError(error) error {
 	return valuesApprovalError(connect.CodeUnavailable, "dependency_unavailable",
 		errors.New("authorization service unavailable"))
-}
-
-func canSubmit(role store.Role) bool {
-	return role == store.RoleDeployer || role == store.RoleReleaseAdmin || role == store.RolePlatformAdmin
-}
-
-func canDecide(role store.Role) bool {
-	return role == store.RoleReleaseAdmin || role == store.RolePlatformAdmin
 }
 
 func valuesApprovalConnectError(
@@ -309,6 +314,8 @@ func valuesApprovalConnectError(
 	case errors.As(err, &stateErr):
 		return valuesApprovalError(connect.CodeFailedPrecondition, "invalid_revision_state",
 			fmt.Errorf("revision %s is %s, expected %s", revisionID, stateErr.Actual, stateErr.Expected))
+	case errors.Is(err, store.ErrAuthorizationStale):
+		return valuesApprovalError(connect.CodeUnavailable, "authorization_snapshot_stale", errors.New("authorization snapshot is stale"))
 	case errors.Is(err, store.ErrApprovalPending):
 		return valuesApprovalError(connect.CodeFailedPrecondition, "approval_already_pending",
 			fmt.Errorf("another revision is already pending approval for definition %s", definitionID))

@@ -20,6 +20,7 @@ import (
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/authctx"
+	"github.com/ndzuki/release-manager/internal/authorization"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -56,6 +57,7 @@ func (s *Service) EmergencyChange(
 	ctx context.Context,
 	req *connect.Request[orchestratorv1.EmergencyChangeRequest],
 ) (*connect.Response[orchestratorv1.EmergencyChangeResponse], error) {
+	ctx = authorization.WithFenceCapture(ctx)
 	started := time.Now()
 	msg := req.Msg
 	actor, ok := authctx.ActorFromContext(ctx)
@@ -74,7 +76,12 @@ func (s *Service) EmergencyChange(
 		s.emitEmergencyAttempt(&actor, msg, "", err, time.Since(started))
 		return nil, err
 	}
-	if _, err := s.authorizeEmergency(ctx, actor, definition); err != nil {
+	customer, err := s.store.Customers().Get(ctx, definition.CustomerID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("load emergency customer: %w", err))
+	}
+	if customer.Status != store.CustomerActive {
+		err := emergencyError(connect.CodePermissionDenied, "customer_disabled", "customer is disabled")
 		s.emitEmergencyAttempt(&actor, msg, "", err, time.Since(started))
 		return nil, err
 	}
@@ -83,6 +90,20 @@ func (s *Service) EmergencyChange(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("hash emergency request: %w", err))
 	}
 	keyHash := hashEmergencyIdempotencyKey(msg.GetIdempotencyKey())
+	resolved, err := s.resolveEmergencyChange(ctx, msg, definition)
+	if err != nil {
+		s.emitEmergencyAttempt(&actor, msg, "", err, time.Since(started))
+		return nil, err
+	}
+	if s.authorizer == nil {
+		err := emergencyError(connect.CodeUnavailable, "authorization_snapshot_stale", "authorization snapshot is unavailable")
+		s.emitEmergencyAttempt(&actor, msg, "", err, time.Since(started))
+		return nil, err
+	}
+	if err := s.authorizer.AuthorizeWrite(ctx, actor, definition.CustomerID, store.AuthorizationExecuteEmergency); err != nil {
+		s.emitEmergencyAttempt(&actor, msg, "", err, time.Since(started))
+		return nil, err
+	}
 	replay, err := s.store.EmergencyIntents().GetReplay(ctx, actor.OrganizationID+":"+definition.ID, keyHash, requestHash)
 	if err == nil {
 		return connect.NewResponse(emergencyResponse(replay, msg.GetConvergence())), nil
@@ -95,19 +116,13 @@ func (s *Service) EmergencyChange(
 	if !errors.Is(err, store.ErrNotFound) {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("lookup emergency replay: %w", err))
 	}
-
-	resolved, err := s.resolveEmergencyChange(ctx, msg, definition)
-	if err != nil {
-		s.emitEmergencyAttempt(&actor, msg, "", err, time.Since(started))
-		return nil, err
-	}
 	if msg.GetConvergence() == orchestratorv1.EmergencyConvergence_EMERGENCY_CONVERGENCE_REQUIRE_PROMOTION {
 		blocked, checkErr := s.store.ConvergenceTasks().HasPendingPromotionPath(ctx, definition.ID, resolved.promotionPaths)
 		if checkErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("check pending promotion paths: %w", checkErr))
 		}
 		if blocked {
-			rpcErr := emergencyError(connect.CodeFailedPrecondition, "promotion_path_blocked", "promotion path already has a pending task")
+			rpcErr := emergencyError(connect.CodeFailedPrecondition, "promotion_path_blocked", "emergency target is locked")
 			s.emitEmergencyAttempt(&actor, msg, "", rpcErr, time.Since(started))
 			return nil, rpcErr
 		}
@@ -145,10 +160,17 @@ func (s *Service) EmergencyChange(
 			PromotionPaths: promotionPaths, Status: "pending_promotion", SubmittedAt: now, CreatedAt: now,
 		}
 	}
+	expectedAuthorizationVersion, ok := authorization.SourceVersionFromContext(ctx)
+	if !ok {
+		return nil, emergencyError(connect.CodeUnavailable, "authorization_snapshot_stale", "authorization snapshot is unavailable")
+	}
 	created, err := s.store.EmergencyIntents().CreateIfAvailable(ctx, store.EmergencyCreateCommand{
 		Operation: op, Intent: intent, ConvergenceTask: convergenceTask,
-		IdempotencyScope:   actor.OrganizationID + ":" + definition.ID,
-		IdempotencyKeyHash: keyHash, RequestHash: requestHash, IdempotencyExpiresAt: now.Add(24 * time.Hour),
+		ExpectedAuthorizationVersion: expectedAuthorizationVersion,
+		IdempotencyScope:             actor.OrganizationID + ":" + definition.ID,
+		IdempotencyKeyHash:           keyHash,
+		RequestHash:                  requestHash,
+		IdempotencyExpiresAt:         now.Add(24 * time.Hour),
 	})
 	if err != nil {
 		rpcErr := emergencyStoreError(err)
@@ -347,28 +369,6 @@ func (s *Service) loadEmergencyDefinition(ctx context.Context, definitionID stri
 	return definition, nil
 }
 
-func (s *Service) authorizeEmergency(ctx context.Context, actor authctx.Actor, definition *store.ReleaseDefinition) (store.Role, error) {
-	customer, err := s.store.Customers().Get(ctx, definition.CustomerID)
-	if err != nil {
-		return "", connect.NewError(connect.CodeInternal, fmt.Errorf("load emergency customer: %w", err))
-	}
-	if customer.Status != store.CustomerActive {
-		return "", emergencyError(connect.CodePermissionDenied, "customer_disabled", "customer is disabled")
-	}
-	binding, err := s.store.Bindings().GetByOrgAndCustomer(ctx, actor.OrganizationID, definition.CustomerID)
-	if err != nil || binding.Status != store.BindingActive {
-		return "", emergencyError(connect.CodePermissionDenied, "permission_denied", "actor is not authorized for customer")
-	}
-	member, err := s.store.OrgMembers().Get(ctx, actor.OrganizationID, actor.UserID)
-	if err != nil {
-		return "", emergencyError(connect.CodePermissionDenied, "permission_denied", "actor membership is unavailable")
-	}
-	if member.Role != store.RoleReleaseAdmin && member.Role != store.RolePlatformAdmin {
-		return "", emergencyError(connect.CodePermissionDenied, "permission_denied", "actor role cannot execute emergency changes")
-	}
-	return member.Role, nil
-}
-
 func (s *Service) onlineEmergencyOperator(ctx context.Context, definition *store.ReleaseDefinition) (string, error) {
 	operator, err := s.store.Operators().GetByClusterID(ctx, definition.ClusterID)
 	if err != nil || operator.CustomerID != definition.CustomerID || operator.Status != store.OperatorActive {
@@ -535,6 +535,8 @@ func hashEmergencyIdempotencyKey(key string) string {
 
 func emergencyStoreError(err error) error {
 	switch {
+	case errors.Is(err, store.ErrAuthorizationStale):
+		return emergencyError(connect.CodeUnavailable, "authorization_snapshot_stale", "authorization snapshot is stale")
 	case errors.Is(err, store.ErrReleaseBusy):
 		return emergencyError(connect.CodeFailedPrecondition, "release_busy", "release definition has a running standard operation")
 	case errors.Is(err, store.ErrEmergencyConflict):

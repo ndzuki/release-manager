@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# New pushes cancel the in-flight run for the same branch/PR: only the latest
+# commit's checks matter.
+concurrency:
+  group: ci-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   sdk-check:
     runs-on: ubuntu-latest
@@ -17,6 +23,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+          cache: true
 
       - name: Run SDK-only static gate
         run: go run ./cmd/sdkcheck/ -exceptions sdkcheck.exceptions.yaml ./...
@@ -30,6 +37,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+          cache: true
 
       - name: Install kind
         run: go install sigs.k8s.io/kind@v0.32.0
@@ -46,6 +54,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+          cache: true
 
       - name: Run operator image SDK-only gate
         run: make test-operator-image-sdk-only
@@ -54,10 +63,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # --new-from-rev needs the base commit
 
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+          cache: true
 
       - uses: bufbuild/buf-setup-action@v1
         with:
@@ -66,16 +78,98 @@ jobs:
       - name: Generate proto
         run: make proto
 
-      - name: Run tests
-        run: go test -race -coverprofile=coverage.out ./...
+      # Cache the whole Go module cache (root go.sum + analyzer fixture
+      # go.sums). analysistest compiles its testdata fixtures in module mode
+      # with GOPROXY=off (x/tools go/analysis/analysistest), so every fixture
+      # dependency must already be in the module cache; prefetching them here
+      # also makes the cache self-contained. The key covers both sums so a
+      # fixture change invalidates exactly the right entries.
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ hashFiles('go.sum', 'internal/quality/sdkcheck/testdata/**/go.mod', 'internal/quality/sdkcheck/testdata/**/go.sum') }}
+          restore-keys: go-mod-
+
+      - name: Prefetch analyzer fixture modules
+        run: |
+          for d in internal/quality/sdkcheck/testdata/*/; do
+            (cd "$d" && go mod download)
+          done
+
+      - name: Run tests (core suites)
+        run: |
+          pkgs=$(go list ./... | grep -vE '/(internal/store/sqlite|internal/quality/sdkcheck)(/|$)')
+          go test -race -coverprofile=coverage.out $pkgs
 
       - name: Coverage report
         run: go tool cover -func=coverage.out
 
-      - name: Run lint
+      # Lint only the code this PR/commit introduces instead of the whole
+      # repository: pre-existing issues on main (gocyclo/gosec debt from
+      # other tasks) must not block new work, and the check is much faster.
+      - name: Run lint (changed code only)
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
+          args: --new-from-rev=${{ github.event.pull_request.base.sha || github.event.before }}
+
+  test-sqlite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - uses: bufbuild/buf-setup-action@v1
+        with:
+          version: "1.71.0"
+
+      - name: Generate proto
+        run: make proto
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ hashFiles('go.sum', 'internal/quality/sdkcheck/testdata/**/go.mod', 'internal/quality/sdkcheck/testdata/**/go.sum') }}
+          restore-keys: go-mod-
+
+      - name: Run sqlite store tests
+        run: go test -race -coverprofile=coverage.out ./internal/store/sqlite/...
+
+  test-sdkcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ hashFiles('go.sum', 'internal/quality/sdkcheck/testdata/**/go.mod', 'internal/quality/sdkcheck/testdata/**/go.sum') }}
+          restore-keys: go-mod-
+
+      - name: Prefetch analyzer fixture modules
+        run: |
+          for d in internal/quality/sdkcheck/testdata/*/; do
+            (cd "$d" && go mod download)
+          done
+
+      - name: Run sdkcheck tests
+        run: go test -race -coverprofile=coverage.out ./internal/quality/sdkcheck/...
 
   rollout-watch:
     runs-on: ubuntu-latest

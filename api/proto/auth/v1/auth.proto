@@ -277,6 +277,47 @@ service BindingService {
   rpc RevokeBinding(RevokeBindingRequest) returns (RevokeBindingResponse);
 }
 
+// --- Authorization Snapshot (REQ-027) ---
+
+message GetAuthorizationSnapshotRequest {
+  string organization_id = 1;
+  string customer_id = 2;
+}
+
+message GetAuthorizationSnapshotResponse {
+  string organization_id = 1;
+  string customer_id = 2;
+  bool binding_active = 3;
+  bool customer_active = 4;
+  string role = 5;
+  bool can_execute_emergency = 6;
+  bool can_resolve_emergency = 7;
+  bool can_create_values_revision = 8;
+  bool can_approve_values_revision = 9;
+  uint64 source_version = 10;
+  uint64 policy_version = 11;
+  uint64 checkpoint = 12;
+  bool fresh = 13;
+  string actor_id = 14;
+}
+
+message SetCapabilityGrantRequest {
+  string organization_id = 1;
+  string subject = 2;
+  string action = 3;
+  bool revoked = 4;
+}
+
+message SetCapabilityGrantResponse {
+  uint64 source_version = 1;
+  uint64 policy_version = 2;
+}
+
+service AuthorizationService {
+  rpc GetAuthorizationSnapshot(GetAuthorizationSnapshotRequest) returns (GetAuthorizationSnapshotResponse);
+  rpc SetCapabilityGrant(SetCapabilityGrantRequest) returns (SetCapabilityGrantResponse);
+}
+
 // --- External IdP (REQ-028) ---
 
 message IdPConfig {

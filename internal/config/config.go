@@ -94,11 +94,37 @@ type ArchiveCfg struct {
 
 // ServiceConfig holds flat configuration for individual microservices.
 type ServiceConfig struct {
-	HTTPPort    int            `mapstructure:"http_port"`
-	LogLevel    string         `mapstructure:"log_level"`
-	Audit       AuditCfg       `mapstructure:"audit"`
-	Database    DatabaseConfig `mapstructure:"database"`
-	Maintenance bool           `mapstructure:"maintenance"`
+	HTTPPort      int              `mapstructure:"http_port"`
+	LogLevel      string           `mapstructure:"log_level"`
+	Audit         AuditCfg         `mapstructure:"audit"`
+	Database      DatabaseConfig   `mapstructure:"database"`
+	Maintenance   bool             `mapstructure:"maintenance"`
+	Authorization AuthorizationCfg `mapstructure:"authorization"`
+}
+
+// AuthorizationCfg controls Authorization Snapshot polling and policy reload.
+type AuthorizationCfg struct {
+	AuthURL              string        `mapstructure:"auth_url"`
+	PullInterval         time.Duration `mapstructure:"pull_interval"`
+	PullBackoffMax       time.Duration `mapstructure:"pull_backoff_max"`
+	PolicyReloadInterval time.Duration `mapstructure:"policy_reload_interval"`
+}
+
+// WithDefaults returns bounded REQ-027 defaults for omitted configuration.
+func (c AuthorizationCfg) WithDefaults() AuthorizationCfg {
+	if c.AuthURL == "" {
+		c.AuthURL = "http://localhost:8085"
+	}
+	if c.PullInterval <= 0 {
+		c.PullInterval = time.Second
+	}
+	if c.PullBackoffMax <= 0 {
+		c.PullBackoffMax = 30 * time.Second
+	}
+	if c.PolicyReloadInterval <= 0 {
+		c.PolicyReloadInterval = 5 * time.Second
+	}
+	return c
 }
 
 // AuditCfg holds audit-related service configuration.
@@ -108,13 +134,17 @@ type AuditCfg struct {
 
 func bindDatabaseEnvironment(v *viper.Viper) error {
 	bindings := map[string]string{
-		"database.driver":             "DATABASE_DRIVER",
-		"database.dsn":                "DATABASE_DSN",
-		"database.max_open_conns":     "DATABASE_MAX_OPEN_CONNS",
-		"database.max_idle_conns":     "DATABASE_MAX_IDLE_CONNS",
-		"database.conn_max_lifetime":  "DATABASE_CONN_MAX_LIFETIME",
-		"database.conn_max_idle_time": "DATABASE_CONN_MAX_IDLE_TIME",
-		"maintenance":                 "MAINTENANCE",
+		"database.driver":                      "DATABASE_DRIVER",
+		"database.dsn":                         "DATABASE_DSN",
+		"database.max_open_conns":              "DATABASE_MAX_OPEN_CONNS",
+		"database.max_idle_conns":              "DATABASE_MAX_IDLE_CONNS",
+		"database.conn_max_lifetime":           "DATABASE_CONN_MAX_LIFETIME",
+		"database.conn_max_idle_time":          "DATABASE_CONN_MAX_IDLE_TIME",
+		"maintenance":                          "MAINTENANCE",
+		"authorization.auth_url":               "AUTHORIZATION_AUTH_URL",
+		"authorization.pull_interval":          "AUTHORIZATION_PULL_INTERVAL",
+		"authorization.pull_backoff_max":       "AUTHORIZATION_PULL_BACKOFF_MAX",
+		"authorization.policy_reload_interval": "AUTHORIZATION_POLICY_RELOAD_INTERVAL",
 	}
 	for key, envName := range bindings {
 		if err := v.BindEnv(key, envName); err != nil {

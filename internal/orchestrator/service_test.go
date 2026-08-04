@@ -22,6 +22,7 @@ import (
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	authctx "github.com/ndzuki/release-manager/internal/authctx"
+	"github.com/ndzuki/release-manager/internal/authorization"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 	"github.com/ndzuki/release-manager/internal/trust"
@@ -35,7 +36,7 @@ func setupService(t *testing.T) (*Service, store.Store, func()) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	verifier := trust.NewStubVerifier(st.Verifications(), nil, logger)
-	svc := NewService(st, verifier, "staging", nil, logger)
+	svc := NewService(st, verifier, "staging", nil, authorization.NewStoreAuthorizer(st), logger)
 
 	return svc, st, func() { st.Close() }
 }
