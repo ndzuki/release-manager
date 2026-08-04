@@ -906,21 +906,21 @@ func TestRolloutError_CodeReturnsStableValues(t *testing.T) {
 	tests := []struct {
 		name string
 		kind error
-		want ErrorCode
+		want string
 	}{
-		{name: "invalid argument", kind: ErrInvalidArgument, want: ErrorCodeInvalidArgument},
-		{name: "unsupported resource", kind: ErrUnsupportedResource, want: ErrorCodeUnsupportedResource},
-		{name: "workload unavailable", kind: ErrWorkloadUnavailable, want: ErrorCodeWorkloadUnavailable},
-		{name: "rollout timeout", kind: ErrRolloutTimeout, want: ErrorCodeRolloutTimeout},
-		{name: "cancelled", kind: ErrCancelled, want: ErrorCodeCancelled},
-		{name: "watch disconnected", kind: ErrWatchDisconnected, want: ErrorCodeWatchDisconnected},
+		{name: "invalid argument", kind: ErrInvalidArgument, want: "invalid_argument"},
+		{name: "unsupported resource", kind: ErrUnsupportedResource, want: "unsupported_resource"},
+		{name: "workload unavailable", kind: ErrWorkloadUnavailable, want: "workload_unavailable"},
+		{name: "rollout timeout", kind: ErrRolloutTimeout, want: "rollout_timeout"},
+		{name: "cancelled", kind: ErrCancelled, want: "cancelled"},
+		{name: "watch disconnected", kind: ErrWatchDisconnected, want: "watch_disconnected"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := &RolloutError{Kind: tt.kind}
 
-			assert.Equal(t, tt.want, err.Code())
+			assert.Equal(t, tt.want, string(err.Code()))
 		})
 	}
 }

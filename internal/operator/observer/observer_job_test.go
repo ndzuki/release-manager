@@ -7,6 +7,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/stretchr/testify/assert"
@@ -117,5 +118,9 @@ func TestObserver_JobFailureOverridesComplete(t *testing.T) {
 }
 
 func jobRef() ResourceRef {
-	return ResourceRef{GVR: JobGVR, Namespace: "default", Name: "migrate"}
+	return ResourceRef{
+		GVR:       schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"},
+		Namespace: "default",
+		Name:      "migrate",
+	}
 }
