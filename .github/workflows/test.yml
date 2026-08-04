@@ -19,9 +19,9 @@ jobs:
   sdk-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
           cache: true
@@ -33,9 +33,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
           cache: true
@@ -50,9 +50,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
           cache: true
@@ -63,16 +63,16 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # --new-from-rev needs the base commit
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
           cache: true
 
-      - uses: bufbuild/buf-setup-action@v1
+      - uses: bufbuild/buf-setup-action@v1.50.0
         with:
           version: "1.71.0"
 
@@ -85,12 +85,19 @@ jobs:
       # dependency must already be in the module cache; prefetching them here
       # also makes the cache self-contained. The key covers both sums so a
       # fixture change invalidates exactly the right entries.
-      # This job is the single cache writer: the parallel test-sqlite and
-      # test-sdkcheck jobs restore with actions/cache/restore, so concurrent
-      # saves never race on the same key ("another job may be creating this
-      # cache" failures).
+      #
+      # Two gotchas handled here:
+      #  1. Go module cache files are read-only (0444); restoring over a
+      #     pre-existing module cache fails with "Cannot open: File exists".
+      #     Wipe the target first so tar restores into a clean tree.
+      #  2. This job is the single cache writer: the parallel test-sqlite and
+      #     test-sdkcheck jobs restore with actions/cache/restore, so
+      #     concurrent saves never race on the same key.
+      - name: Prepare module cache for restore
+        run: rm -rf ~/go/pkg/mod
+
       - name: Cache Go modules
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/go/pkg/mod
           key: go-mod-${{ hashFiles('go.sum', 'internal/quality/sdkcheck/testdata/**/go.mod', 'internal/quality/sdkcheck/testdata/**/go.sum') }}
@@ -114,7 +121,7 @@ jobs:
       # repository: pre-existing issues on main (gocyclo/gosec debt from
       # other tasks) must not block new work, and the check is much faster.
       - name: Run lint (changed code only)
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@v9.3.0
         with:
           version: v2.12.2
           args: --new-from-rev=${{ github.event.pull_request.base.sha || github.event.before }}
@@ -122,25 +129,29 @@ jobs:
   test-sqlite:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
           cache: true
 
-      - uses: bufbuild/buf-setup-action@v1
+      - uses: bufbuild/buf-setup-action@v1.50.0
         with:
           version: "1.71.0"
 
       - name: Generate proto
         run: make proto
 
+      # Wipe first: restoring over read-only module files fails (see test job).
+      - name: Prepare module cache for restore
+        run: rm -rf ~/go/pkg/mod
+
       # Restore-only: the test job is the single cache writer.
       - name: Restore Go module cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: ~/go/pkg/mod
           key: go-mod-${{ hashFiles('go.sum', 'internal/quality/sdkcheck/testdata/**/go.mod', 'internal/quality/sdkcheck/testdata/**/go.sum') }}
@@ -152,18 +163,22 @@ jobs:
   test-sdkcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
           cache: true
 
+      # Wipe first: restoring over read-only module files fails (see test job).
+      - name: Prepare module cache for restore
+        run: rm -rf ~/go/pkg/mod
+
       # Restore-only: the test job is the single cache writer.
       - name: Restore Go module cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: ~/go/pkg/mod
           key: go-mod-${{ hashFiles('go.sum', 'internal/quality/sdkcheck/testdata/**/go.mod', 'internal/quality/sdkcheck/testdata/**/go.sum') }}
