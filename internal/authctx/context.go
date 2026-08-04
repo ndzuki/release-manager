@@ -43,6 +43,9 @@ func WithAuthorizationHeader(ctx context.Context, value string) context.Context 
 
 // AuthorizationHeaderFromContext returns the inbound Authorization header for internal forwarding.
 func AuthorizationHeaderFromContext(ctx context.Context) string {
-	value, _ := ctx.Value(authorizationHeaderKey{}).(string)
+	value, ok := ctx.Value(authorizationHeaderKey{}).(string)
+	if !ok {
+		return ""
+	}
 	return value
 }
