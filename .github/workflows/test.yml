@@ -85,8 +85,12 @@ jobs:
       # dependency must already be in the module cache; prefetching them here
       # also makes the cache self-contained. The key covers both sums so a
       # fixture change invalidates exactly the right entries.
+      # This job is the single cache writer: the parallel test-sqlite and
+      # test-sdkcheck jobs restore with actions/cache/restore, so concurrent
+      # saves never race on the same key ("another job may be creating this
+      # cache" failures).
       - name: Cache Go modules
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/go/pkg/mod
           key: go-mod-${{ hashFiles('go.sum', 'internal/quality/sdkcheck/testdata/**/go.mod', 'internal/quality/sdkcheck/testdata/**/go.sum') }}
@@ -95,7 +99,7 @@ jobs:
       - name: Prefetch analyzer fixture modules
         run: |
           for d in internal/quality/sdkcheck/testdata/*/; do
-            (cd "$d" && go mod download)
+            go mod download -C "$d"
           done
 
       - name: Run tests (core suites)
@@ -134,8 +138,9 @@ jobs:
       - name: Generate proto
         run: make proto
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
+      # Restore-only: the test job is the single cache writer.
+      - name: Restore Go module cache
+        uses: actions/cache/restore@v5
         with:
           path: ~/go/pkg/mod
           key: go-mod-${{ hashFiles('go.sum', 'internal/quality/sdkcheck/testdata/**/go.mod', 'internal/quality/sdkcheck/testdata/**/go.sum') }}
@@ -156,8 +161,9 @@ jobs:
           go-version: "1.26"
           cache: true
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
+      # Restore-only: the test job is the single cache writer.
+      - name: Restore Go module cache
+        uses: actions/cache/restore@v5
         with:
           path: ~/go/pkg/mod
           key: go-mod-${{ hashFiles('go.sum', 'internal/quality/sdkcheck/testdata/**/go.mod', 'internal/quality/sdkcheck/testdata/**/go.sum') }}
@@ -166,7 +172,7 @@ jobs:
       - name: Prefetch analyzer fixture modules
         run: |
           for d in internal/quality/sdkcheck/testdata/*/; do
-            (cd "$d" && go mod download)
+            go mod download -C "$d"
           done
 
       - name: Run sdkcheck tests
