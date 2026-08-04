@@ -67,6 +67,24 @@ jobs:
       - name: Generate proto
         run: make proto
 
+      # analysistest runs testdata fixtures in module mode with GOPROXY=off
+      # (x/tools go/analysis/analysistest), so every fixture dependency must
+      # already be in the module cache. The fixture modules are independent of
+      # the root go.mod, so prefetch them explicitly and cache them by their
+      # own go.sum hashes — otherwise every CI run re-downloads the Helm
+      # dependency tree and the analyzer tests fail offline.
+      - name: Cache analyzer fixture modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: fixture-mod-${{ hashFiles('internal/quality/sdkcheck/testdata/**/go.mod', 'internal/quality/sdkcheck/testdata/**/go.sum') }}
+
+      - name: Prefetch analyzer fixture modules
+        run: |
+          for d in internal/quality/sdkcheck/testdata/*/; do
+            (cd "$d" && go mod download)
+          done
+
       - name: Run tests
         run: go test -race -coverprofile=coverage.out ./...
 
