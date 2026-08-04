@@ -398,7 +398,9 @@ func TestRolloutWatchCleanupRetriesTransientVerificationError(t *testing.T) {
 	client := kubernetesfake.NewSimpleClientset(&corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: testLabels(testID, "namespace")},
 	})
+	namespaceDeleteCalled := false
 	client.PrependReactor("delete", "namespaces", func(clienttesting.Action) (bool, runtime.Object, error) {
+		namespaceDeleteCalled = true
 		return true, nil, nil
 	})
 	deploymentListCalls := 0
@@ -415,6 +417,7 @@ func TestRolloutWatchCleanupRetriesTransientVerificationError(t *testing.T) {
 	err := cleanupTestNamespace(ctx, client, name, testID)
 
 	require.NoError(t, err)
+	assert.True(t, namespaceDeleteCalled, "cleanup must request namespace deletion")
 	assert.GreaterOrEqual(t, deploymentListCalls, 3, "cleanup must retry resource verification")
 }
 

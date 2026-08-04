@@ -360,17 +360,18 @@ test-rollout-watch: ## Create a kind cluster, run integration tests, and tear do
 	$(GO) run ./cmd/sdkcheck/ -exceptions sdkcheck.exceptions.yaml -build-tags integration ./internal/operator/observer ./test/integration; \
 	$(GO) test -c -race -tags=integration -o "$$TEST_BINARY" ./test/integration; \
 	owned=true; \
-	STARTED_AT=$$(date +%s); \
+	STARTED_AT=$$(date +%s%N); \
 	$(KIND) create cluster --name "$$CLUSTER_NAME" --image "$(KIND_NODE_IMAGE)" --kubeconfig "$$KUBECONFIG" --wait 5m; \
 	$(KIND) load docker-image "$$WORKLOAD_IMAGE" --name "$$CLUSTER_NAME"; \
 	$(DOCKER) exec "$$CLUSTER_NAME-control-plane" ctr -n k8s.io images tag "$$( $(DOCKER) image inspect "$$WORKLOAD_IMAGE" --format '{{.Id}}' )" "docker.io/library/busybox@$$WORKLOAD_IMAGE_DIGEST" >/dev/null; \
 	( cd test/integration && "$$TEST_BINARY" -test.run '^TestRolloutWatch' -test.count=1 -test.timeout=10m ); \
-	ELAPSED=$$(($$(date +%s) - $$STARTED_AT)); \
-	if [ "$$ELAPSED" -gt "$(ROLLOUT_WATCH_MAX_SECONDS)" ]; then \
-		printf "$(RED)test-rollout-watch exceeded %ss target (%ss)$(NC)\n" "$(ROLLOUT_WATCH_MAX_SECONDS)" "$$ELAPSED" >&2; \
+	ELAPSED_NS=$$(($$(date +%s%N) - $$STARTED_AT)); \
+	MAX_NS=$$(( $(ROLLOUT_WATCH_MAX_SECONDS) * 1000000000 )); \
+	if [ "$$ELAPSED_NS" -gt "$$MAX_NS" ]; then \
+		printf "$(RED)test-rollout-watch exceeded %ss target (%s.%03ds)$(NC)\n" "$(ROLLOUT_WATCH_MAX_SECONDS)" "$$(( $$ELAPSED_NS / 1000000000 ))" "$$(( ($$ELAPSED_NS / 1000000) % 1000 ))" >&2; \
 		exit 1; \
 	fi; \
-	printf "$(GREEN)test-rollout-watch pass (%ss)$(NC)\n" "$$ELAPSED"
+	printf "$(GREEN)test-rollout-watch pass (%s.%03ds)$(NC)\n" "$$(( $$ELAPSED_NS / 1000000000 ))" "$$(( ($$ELAPSED_NS / 1000000) % 1000 ))"
 .PHONY: test-coverage
 test-coverage: ## Run tests with coverage report
 	$(GO) test -race -coverprofile=coverage.out ./...
