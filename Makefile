@@ -8,6 +8,12 @@ BUF         := $(shell which buf 2>/dev/null || echo buf)
 PROTO_DIR   := api/proto
 GEN_DIR     := api/gen
 GOBIN       := $(shell go env GOBIN 2>/dev/null || echo $(HOME)/go/bin)
+KIND        ?= kind
+DOCKER      ?= docker
+KIND_NODE_IMAGE := kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
+WORKLOAD_IMAGE := busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+ROLLOUT_WATCH_MAX_SECONDS ?= 120
+
 
 # Colors (via printf for portable escape)
 ESC         := $(shell printf '\e')
@@ -16,7 +22,6 @@ YELLOW      := $(ESC)[33m
 BLUE        := $(ESC)[34m
 RED         := $(ESC)[31m
 NC          := $(ESC)[0m
-KIND        ?= kind
 INSTALL_SDK_CLUSTER ?= rm-install-sdk
 INSTALL_SDK_KUBECONFIG ?= $(CURDIR)/.tmp-install-sdk-kubeconfig
 INSTALL_SDK_PATH ?= $(CURDIR)/.tmp-install-sdk-path
@@ -331,6 +336,42 @@ dev-stage-full: proto ## All services (equivalent to old dev-manager)
 test: ## Run all tests
 	$(GO) test -race ./...
 
+.PHONY: test-rollout-watch
+test-rollout-watch: ## Create a kind cluster, run integration tests, and tear down
+	@set -eu; \
+	CLUSTER_NAME="rm-rollout-watch-$$(date +%s)-$$$$"; \
+	WORKLOAD_IMAGE="$(WORKLOAD_IMAGE)"; \
+	WORKLOAD_IMAGE_DIGEST=$${WORKLOAD_IMAGE##*@}; \
+	export ROLLOUT_WATCH_WORKLOAD_IMAGE="$$WORKLOAD_IMAGE"; \
+	KUBECONFIG=$$(mktemp); \
+	TEST_BINARY=$$(mktemp); \
+	export KUBECONFIG; \
+	owned=false; \
+	cleanup() { \
+		if [ "$$owned" = true ]; then $(KIND) delete cluster --name "$$CLUSTER_NAME" --kubeconfig "$$KUBECONFIG" >/dev/null 2>&1 || true; fi; \
+		rm -f "$$KUBECONFIG" "$$TEST_BINARY"; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	for existing in $$($(KIND) get clusters); do \
+		if [ "$$existing" = "$$CLUSTER_NAME" ]; then printf "$(RED)refusing to reuse existing kind cluster %s$(NC)\n" "$$CLUSTER_NAME" >&2; exit 1; fi; \
+	done; \
+	$(DOCKER) pull "$(KIND_NODE_IMAGE)"; \
+	$(DOCKER) pull "$$WORKLOAD_IMAGE"; \
+	$(GO) run ./cmd/sdkcheck/ -exceptions sdkcheck.exceptions.yaml -build-tags integration ./internal/operator/observer ./test/integration; \
+	$(GO) test -c -race -tags=integration -o "$$TEST_BINARY" ./test/integration; \
+	owned=true; \
+	STARTED_AT=$$(date +%s%N); \
+	$(KIND) create cluster --name "$$CLUSTER_NAME" --image "$(KIND_NODE_IMAGE)" --kubeconfig "$$KUBECONFIG" --wait 5m; \
+	$(KIND) load docker-image "$$WORKLOAD_IMAGE" --name "$$CLUSTER_NAME"; \
+	$(DOCKER) exec "$$CLUSTER_NAME-control-plane" ctr -n k8s.io images tag "$$( $(DOCKER) image inspect "$$WORKLOAD_IMAGE" --format '{{.Id}}' )" "docker.io/library/busybox@$$WORKLOAD_IMAGE_DIGEST" >/dev/null; \
+	( cd test/integration && "$$TEST_BINARY" -test.run '^TestRolloutWatch' -test.count=1 -test.timeout=10m ); \
+	ELAPSED_NS=$$(($$(date +%s%N) - $$STARTED_AT)); \
+	MAX_NS=$$(( $(ROLLOUT_WATCH_MAX_SECONDS) * 1000000000 )); \
+	if [ "$$ELAPSED_NS" -gt "$$MAX_NS" ]; then \
+		printf "$(RED)test-rollout-watch exceeded %ss target (%s.%03ds)$(NC)\n" "$(ROLLOUT_WATCH_MAX_SECONDS)" "$$(( $$ELAPSED_NS / 1000000000 ))" "$$(( ($$ELAPSED_NS / 1000000) % 1000 ))" >&2; \
+		exit 1; \
+	fi; \
+	printf "$(GREEN)test-rollout-watch pass (%s.%03ds)$(NC)\n" "$$(( $$ELAPSED_NS / 1000000000 ))" "$$(( ($$ELAPSED_NS / 1000000) % 1000 ))"
 .PHONY: test-coverage
 test-coverage: ## Run tests with coverage report
 	$(GO) test -race -coverprofile=coverage.out ./...
