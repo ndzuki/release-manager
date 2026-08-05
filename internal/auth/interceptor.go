@@ -84,7 +84,7 @@ func NewAuthInterceptor(
 				)
 				return nil, authorizationConnectError(err, enforcer.PolicyVersion())
 			}
-			if !usesHandlerAuthorization(procedure) {
+			if !usesHandlerAuthorization(procedure) && procedure != authv1connect.AuthServiceLogoutProcedure {
 				if err := enforcer.Enforce(claims.UserID, domain, object, action); err != nil {
 					logger.Warn(
 						"access denied",

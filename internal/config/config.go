@@ -29,6 +29,13 @@ type DatabaseConfig struct {
 	ConnMaxIdleTime time.Duration `mapstructure:"conn_max_idle_time"`
 }
 
+// RedisConfig describes the optional auth session cache and blacklist service.
+type RedisConfig struct {
+	Address  string `mapstructure:"address"`
+	Password string `mapstructure:"password"`
+	DB       int    `mapstructure:"db"`
+}
+
 // Validate checks the selected connection settings without exposing secrets.
 func (c DatabaseConfig) Validate() error {
 	switch c.Driver {
@@ -98,6 +105,7 @@ type ServiceConfig struct {
 	LogLevel      string           `mapstructure:"log_level"`
 	Audit         AuditCfg         `mapstructure:"audit"`
 	Database      DatabaseConfig   `mapstructure:"database"`
+	Redis         RedisConfig      `mapstructure:"redis"`
 	Maintenance   bool             `mapstructure:"maintenance"`
 	Authorization AuthorizationCfg `mapstructure:"authorization"`
 }
@@ -140,6 +148,9 @@ func bindDatabaseEnvironment(v *viper.Viper) error {
 		"database.max_idle_conns":              "DATABASE_MAX_IDLE_CONNS",
 		"database.conn_max_lifetime":           "DATABASE_CONN_MAX_LIFETIME",
 		"database.conn_max_idle_time":          "DATABASE_CONN_MAX_IDLE_TIME",
+		"redis.address":                        "REDIS_ADDRESS",
+		"redis.password":                       "REDIS_PASSWORD",
+		"redis.db":                             "REDIS_DB",
 		"maintenance":                          "MAINTENANCE",
 		"authorization.auth_url":               "AUTHORIZATION_AUTH_URL",
 		"authorization.pull_interval":          "AUTHORIZATION_PULL_INTERVAL",

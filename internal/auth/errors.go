@@ -1,6 +1,13 @@
 package auth
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+
+	"connectrpc.com/connect"
+
+	"github.com/ndzuki/release-manager/internal/store"
+)
 
 // AuthorizationError is the common context carried by authorization failures.
 type AuthorizationError struct {
@@ -73,4 +80,11 @@ func newInvalidActorContext(subject, domain string, cause error) error {
 		Domain:     domain,
 		Cause:      cause,
 	}}
+}
+
+func mapStoreError(err error, fallback string) error {
+	if errors.Is(err, store.ErrUnavailable) {
+		return connect.NewError(connect.CodeUnavailable, errors.New("verification_unavailable"))
+	}
+	return connect.NewError(connect.CodeInternal, errors.New(fallback))
 }
