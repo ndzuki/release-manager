@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -40,4 +42,37 @@ func TestLoadServiceDatabaseEnvironmentOverrides(t *testing.T) {
 	require.Equal(t, "postgres", cfg.Database.Driver)
 	require.Equal(t, "postgres://user:pass@postgres:5432/release?sslmode=disable", cfg.Database.DSN)
 	require.True(t, cfg.Maintenance)
+}
+
+func TestLoadServiceRedisConfiguration(t *testing.T) {
+	t.Run("yaml", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "auth.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(`
+database:
+  driver: sqlite
+  dsn: auth.db
+redis:
+  address: redis:6379
+  password: secret
+  db: 3
+`), 0o600))
+
+		cfg, err := LoadService(path)
+		require.NoError(t, err)
+		require.Equal(t, "redis:6379", cfg.Redis.Address)
+		require.Equal(t, "secret", cfg.Redis.Password)
+		require.Equal(t, 3, cfg.Redis.DB)
+	})
+
+	t.Run("environment overrides", func(t *testing.T) {
+		t.Setenv("REDIS_ADDRESS", "redis.example:6380")
+		t.Setenv("REDIS_PASSWORD", "env-secret")
+		t.Setenv("REDIS_DB", "5")
+
+		cfg, err := LoadService("../../configs/auth.dev.yaml")
+		require.NoError(t, err)
+		require.Equal(t, "redis.example:6380", cfg.Redis.Address)
+		require.Equal(t, "env-secret", cfg.Redis.Password)
+		require.Equal(t, 5, cfg.Redis.DB)
+	})
 }

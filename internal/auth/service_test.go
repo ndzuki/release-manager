@@ -10,14 +10,58 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
+	redis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	authv1 "github.com/ndzuki/release-manager/api/gen/auth/v1"
 	"github.com/ndzuki/release-manager/internal/store"
+	redisstore "github.com/ndzuki/release-manager/internal/store/redis"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
+
+type authSessionStoreOverride struct {
+	store.Store
+	authSessions store.AuthSessionStore
+}
+
+func (s authSessionStoreOverride) AuthSessions() store.AuthSessionStore { return s.authSessions }
+
+type unavailableAuthSessionStore struct{}
+
+func (unavailableAuthSessionStore) Create(context.Context, *store.AuthSession) error {
+	return store.ErrUnavailable
+}
+
+func (unavailableAuthSessionStore) Get(context.Context, string) (*store.AuthSession, error) {
+	return nil, store.ErrUnavailable
+}
+
+func (unavailableAuthSessionStore) GetByRefreshHash(context.Context, string) (*store.AuthSession, error) {
+	return nil, store.ErrUnavailable
+}
+
+func (unavailableAuthSessionStore) GetByTokenFamily(context.Context, string) ([]*store.AuthSession, error) {
+	return nil, store.ErrUnavailable
+}
+
+func (unavailableAuthSessionStore) RevokeFamily(context.Context, string) error {
+	return store.ErrUnavailable
+}
+
+func (unavailableAuthSessionStore) HasActiveByUserID(context.Context, string) (bool, error) {
+	return false, store.ErrUnavailable
+}
+
+func (unavailableAuthSessionStore) RevokeByUserID(context.Context, string) error {
+	return store.ErrUnavailable
+}
+
+func (unavailableAuthSessionStore) DeleteExpired(context.Context) (int64, error) {
+	return 0, store.ErrUnavailable
+}
 
 func TestAuthService_LoginAndRefreshPreserveOrganization(t *testing.T) {
 	_, st := setupEnforcer(t)
@@ -115,6 +159,80 @@ func TestAuthService_LoginPersistsSessionAcrossRestart(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, refreshResp.Msg.GetAccessToken())
 	assert.NotEmpty(t, refreshResp.Msg.GetRefreshToken())
+}
+
+func TestAuthServiceRedisUnavailableFailsClosed(t *testing.T) {
+	base := openAuthStore(t)
+	createAuthUser(t, base, "alice", "correct-password", store.UserActive)
+	st := authSessionStoreOverride{Store: base, authSessions: unavailableAuthSessionStore{}}
+	svc := NewAuthService(
+		st,
+		NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour),
+		NewRateLimiter(10, time.Minute),
+		slog.New(slog.DiscardHandler),
+	)
+
+	_, err := svc.Login(t.Context(), connect.NewRequest(&authv1.LoginRequest{
+		Username: "alice",
+		Password: "correct-password",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "verification_unavailable")
+
+	_, err = svc.RefreshToken(t.Context(), connect.NewRequest(&authv1.RefreshTokenRequest{RefreshToken: "refresh"}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "verification_unavailable")
+
+	_, err = svc.Logout(t.Context(), connect.NewRequest(&authv1.LogoutRequest{RefreshToken: "refresh"}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "verification_unavailable")
+}
+
+func TestAuthServiceRedisOutageKeepsPasswordChangeRevocationDurable(t *testing.T) {
+	ctx := t.Context()
+	mini := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{
+		Addr:                  mini.Addr(),
+		MaxRetries:            -1,
+		MinRetryBackoff:       -1,
+		MaxRetryBackoff:       -1,
+		DialerRetries:         1,
+		DialerRetryTimeout:    time.Millisecond,
+		DialTimeout:           250 * time.Millisecond,
+		WriteTimeout:          250 * time.Millisecond,
+		ContextTimeoutEnabled: true,
+	})
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	base := openAuthStore(t)
+	createAuthUser(t, base, "alice", "old-password", store.UserActive)
+	st := authSessionStoreOverride{Store: base, authSessions: redisstore.New(client, base.AuthSessions())}
+	svc := NewAuthService(
+		st,
+		NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour),
+		NewRateLimiter(10, time.Minute),
+		slog.New(slog.DiscardHandler),
+	)
+
+	login, err := svc.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: "alice", Password: "old-password"}))
+	require.NoError(t, err)
+	mini.Close()
+	_, err = svc.ChangePassword(context.WithValue(ctx, userIDKey, "alice-id"), connect.NewRequest(&authv1.ChangePasswordRequest{
+		OldPassword: "old-password",
+		NewPassword: "new-password",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "verification_unavailable")
+
+	require.NoError(t, mini.Restart())
+	_, err = svc.RefreshToken(ctx, connect.NewRequest(&authv1.RefreshTokenRequest{RefreshToken: login.Msg.GetRefreshToken()}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
+	_, err = svc.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: "alice", Password: "new-password"}))
+	require.NoError(t, err)
 }
 
 func TestAuthService_RefreshReplayRevokesTokenFamily(t *testing.T) {

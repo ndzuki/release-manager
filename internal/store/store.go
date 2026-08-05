@@ -27,6 +27,7 @@ var (
 	ErrNotFound                  = errors.New("store: not found")
 	ErrOptimisticLock            = errors.New("store: optimistic lock conflict")
 	ErrDuplicateKey              = errors.New("store: duplicate key")
+	ErrUnavailable               = errors.New("store: unavailable")
 	ErrReleaseBusy               = errors.New("store: release busy")
 	ErrInvalidCursor             = errors.New("store: invalid cursor")
 	ErrBindingRevoked            = errors.New("store: binding revoked")
