@@ -1163,17 +1163,18 @@ type TrustPolicy struct {
 
 // VerificationRecord captures the result of an artifact trust verification.
 type VerificationRecord struct {
-	ID              string
-	ArtifactDigest  string
-	PolicyVersion   string
-	Status          VerificationStatus
-	RootID          string
-	KeyID           string
-	RevocationEpoch int64
-	Issuer          string
-	Subject         string
-	Summary         string
-	CreatedAt       time.Time
+	ID                string
+	ArtifactDigest    string
+	PolicyVersion     string
+	SignatureIdentity string
+	Status            VerificationStatus
+	RootID            string
+	KeyID             string
+	RevocationEpoch   int64
+	Issuer            string
+	Subject           string
+	Summary           string
+	CreatedAt         time.Time
 }
 
 // PreflightCacheKey identifies an artifact preflight result.
@@ -1598,6 +1599,7 @@ type NotificationStore interface {
 // VerificationStore defines the persistence contract for verification records.
 type VerificationStore interface {
 	Create(ctx context.Context, rec *VerificationRecord) error
+	GetByDigestPolicyAndSignature(ctx context.Context, artifactDigest, policyVersion, signatureIdentity string) (*VerificationRecord, error)
 	GetByDigestAndPolicy(ctx context.Context, artifactDigest, policyVersion string) (*VerificationRecord, error)
 }
 

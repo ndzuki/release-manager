@@ -82,6 +82,42 @@ func TestEnforcer_AuthorizationContracts(t *testing.T) {
 	}
 }
 
+func TestEnforcer_TrustRootRoleContracts(t *testing.T) {
+	tests := []struct {
+		name    string
+		role    store.Role
+		action  string
+		allowed bool
+	}{
+		{name: "platform admin writes", role: store.RolePlatformAdmin, action: "write", allowed: true},
+		{name: "release admin reads", role: store.RoleReleaseAdmin, action: "read", allowed: true},
+		{name: "release admin cannot write", role: store.RoleReleaseAdmin, action: "write", allowed: false},
+		{name: "deployer reads", role: store.RoleDeployer, action: "read", allowed: true},
+		{name: "deployer cannot write", role: store.RoleDeployer, action: "write", allowed: false},
+		{name: "viewer reads", role: store.RoleViewer, action: "read", allowed: true},
+		{name: "viewer cannot write", role: store.RoleViewer, action: "write", allowed: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e, st := setupEnforcer(t)
+			ctx := t.Context()
+			require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: "org-trust", Name: "Trust Org"}))
+			require.NoError(t, st.Users().Create(ctx, &store.User{ID: "user-trust", Username: "user-trust", PasswordHash: "hash"}))
+			require.NoError(t, st.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: "org-trust", UserID: "user-trust", Role: tt.role}))
+			require.NoError(t, e.LoadPolicies(ctx))
+
+			err := e.Enforce("user-trust", "org-trust", "trust_root", tt.action)
+			if tt.allowed {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Equal(t, "permission_denied", authorizationReason(err))
+		})
+	}
+}
+
 func TestEnforcer_PolicyReloadTakesEffect(t *testing.T) {
 	e, st := setupEnforcer(t)
 	seedAuthorization(t, st)

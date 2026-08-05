@@ -37,16 +37,14 @@ type Output struct {
 // Verifier is the interface for artifact trust verification.
 type Verifier interface {
 	// Verify checks artifact trust and returns the verification outcome.
-	// It MUST be idempotent: calling Verify twice with the same Digest + Policy
-	// MUST produce the same result without re-validating the signature.
+	// It MUST be idempotent for the same Digest + Policy + signature identity.
+	// A different signature_ref for the same digest MUST be verified independently.
 	Verify(ctx context.Context, in Input) (*Output, error)
 }
 
-// StubVerifier performs digest comparison and signature presence checks.
-// It does NOT validate actual cryptographic signatures — that is the
-// responsibility of CosignVerifier or similar external verifiers.
-// When a RootResolver is provided, it resolves trusted issuers from live roots
-// instead of the static TrustPolicy.TrustedIssuers list.
+// StubVerifier is a test double for policy and cache semantics.
+// It does not perform cryptographic verification; production assembly uses
+// Ed25519Verifier with a live RootResolver.
 type StubVerifier struct {
 	st       store.VerificationStore
 	resolver RootResolver
@@ -69,7 +67,7 @@ func NewStubVerifier(st store.VerificationStore, r RootResolver, logger *slog.Lo
 //  6. Backend unavailable → verification_unavailable + fail closed (AC-012-04).
 func (v *StubVerifier) Verify(ctx context.Context, in Input) (*Output, error) {
 	// AC-012-03: Idempotent reuse — check store for existing record.
-	existing, err := v.st.GetByDigestAndPolicy(ctx, in.Digest, in.Policy.PolicyVersion)
+	existing, err := v.st.GetByDigestPolicyAndSignature(ctx, in.Digest, in.Policy.PolicyVersion, signatureIdentity(in.SignatureRef))
 	if err == nil {
 		// REQ-043 AC-043-04: If a resolver is available, check whether the
 		// root that produced this cached record has been revoked since.
@@ -234,9 +232,8 @@ func isTrustedIssuer(issuer string, trusted []string) bool {
 	return false
 }
 
-// StoreVerifier wraps another Verifier with store-backed caching.
-// It persists verification results after a successful Verify call,
-// enabling idempotent reuse (AC-012-03) for subsequent calls.
+// StoreVerifier is a test-oriented persistence wrapper around another Verifier.
+// Production assembly uses Ed25519Verifier, which owns live-policy caching.
 type StoreVerifier struct {
 	inner  Verifier
 	st     store.VerificationStore
@@ -260,15 +257,16 @@ func (v *StoreVerifier) Verify(ctx context.Context, in Input) (*Output, error) {
 	rec := out.Record
 	if rec == nil {
 		rec = &store.VerificationRecord{
-			ArtifactDigest:  in.Digest,
-			PolicyVersion:   in.Policy.PolicyVersion,
-			Status:          out.Status,
-			Issuer:          issuerFromRef(in.SignatureRef),
-			Subject:         subjectFromRef(in.SignatureRef),
-			Summary:         out.Summary,
-			RootID:          out.RootID,
-			KeyID:           out.KeyID,
-			RevocationEpoch: out.RevocationEpoch,
+			ArtifactDigest:    in.Digest,
+			PolicyVersion:     in.Policy.PolicyVersion,
+			SignatureIdentity: signatureIdentity(in.SignatureRef),
+			Status:            out.Status,
+			Issuer:            issuerFromRef(in.SignatureRef),
+			Subject:           subjectFromRef(in.SignatureRef),
+			Summary:           out.Summary,
+			RootID:            out.RootID,
+			KeyID:             out.KeyID,
+			RevocationEpoch:   out.RevocationEpoch,
 		}
 	}
 

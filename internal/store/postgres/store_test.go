@@ -989,17 +989,21 @@ func TestVerificationPersistenceIncludesTrustProvenance(t *testing.T) {
 	ctx := context.Background()
 	record := &store.VerificationRecord{
 		ID: uuid.NewString(), ArtifactDigest: "sha256:verification", PolicyVersion: "policy-v1",
-		Status: store.VerificationTrusted, RootID: "root-1", KeyID: "key-1", RevocationEpoch: 7,
+		SignatureIdentity: "signature-identity", Status: store.VerificationTrusted,
+		RootID: "root-1", KeyID: "key-1", RevocationEpoch: 7,
 		Issuer: "issuer", Subject: "subject", Summary: "trusted",
 	}
 	require.NoError(t, st.Verifications().Create(ctx, record))
 
-	got, err := st.Verifications().GetByDigestAndPolicy(ctx, record.ArtifactDigest, record.PolicyVersion)
+	got, err := st.Verifications().GetByDigestPolicyAndSignature(ctx, record.ArtifactDigest, record.PolicyVersion, record.SignatureIdentity)
 	require.NoError(t, err)
+	assert.Equal(t, record.SignatureIdentity, got.SignatureIdentity)
 	assert.Equal(t, record.RootID, got.RootID)
 	assert.Equal(t, record.KeyID, got.KeyID)
 	assert.Equal(t, record.RevocationEpoch, got.RevocationEpoch)
 	assert.False(t, got.CreatedAt.IsZero())
+	_, err = st.Verifications().GetByDigestPolicyAndSignature(ctx, record.ArtifactDigest, record.PolicyVersion, "different-signature")
+	assert.ErrorIs(t, err, store.ErrNotFound)
 }
 
 func TestCandidateArtifactDuplicateRefreshesIdentity(t *testing.T) {

@@ -16,6 +16,7 @@ import (
 	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
+	trustv1connect "github.com/ndzuki/release-manager/api/gen/trust/v1/trustv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/auth"
@@ -47,6 +48,7 @@ type orchSvc struct {
 	auditEmitter  audit.Sink
 	authorizer    *authorization.Module
 	traceShutdown func(context.Context) error
+	trustResolver trust.RootResolver
 }
 
 func (s *orchSvc) Name() string { return "release-orchestrator" }
@@ -113,14 +115,23 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		}
 	}
 
-	verifier := trust.NewStoreVerifier(
-		trust.NewStubVerifier(s.store.Verifications(), nil, logger),
-		s.store.Verifications(),
-		logger,
-	)
 	if !s.cfg.Maintenance {
 		s.auditEmitter = audit.NewEmitter(s.store.AuditEvents(), logger, audit.DefaultConfig())
 	}
+	trustConfig, err := s.loadTrustConfig()
+	if err != nil {
+		return err
+	}
+	resolver := s.trustResolver
+	if resolver == nil {
+		resolver = trust.NewStoreResolver(s.store.TrustRoots())
+	}
+	verifier := trust.NewEd25519Verifier(
+		s.store.Verifications(),
+		resolver,
+		trustConfig.VerificationTimeout,
+		logger,
+	)
 	operatorService, err := operator.NewService(s.store, logger, s.auditEmitter)
 	if err != nil {
 		return fmt.Errorf("create operator control service: %w", err)
@@ -149,6 +160,7 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		),
 	)
 	mux.Handle(path, handler)
+	s.registerTrustService(mux, logger, jwtMgr, enforcer, trustConfig)
 
 	retention, err := s.loadRetentionConfig()
 	if err != nil {
@@ -185,6 +197,26 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	}
 
 	return nil
+}
+
+func (s *orchSvc) registerTrustService(
+	mux *http.ServeMux,
+	logger *slog.Logger,
+	jwtMgr *auth.JWTManager,
+	enforcer *auth.Enforcer,
+	trustConfig trustConfig,
+) {
+	trustService := trust.NewTrustService(s.store.TrustRoots(), s.auditEmitter, logger)
+	trustPath, trustHandler := trustv1connect.NewTrustServiceHandler(
+		trustService,
+		connect.WithInterceptors(
+			authorization.TraceInterceptor(),
+			app.MaintenanceInterceptor(s.cfg.Maintenance, trustReadOnlyProcedures(), logger),
+			auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, map[string]bool{}, logger),
+		),
+	)
+	mux.Handle(trustPath, trustHandler)
+	logger.Info("trust service registered", "verification_timeout", trustConfig.VerificationTimeout)
 }
 
 func (s *orchSvc) openStore() error {
@@ -228,6 +260,32 @@ func (s *orchSvc) loadRetentionConfig() (orchestrator.RetentionConfig, error) {
 	return retention, nil
 }
 
+type trustConfig struct {
+	VerificationTimeout time.Duration `mapstructure:"verification_timeout"`
+}
+
+func defaultTrustConfig() trustConfig {
+	return trustConfig{VerificationTimeout: trust.DefaultVerificationTimeout}
+}
+
+func (s *orchSvc) loadTrustConfig() (trustConfig, error) {
+	trustCfg := defaultTrustConfig()
+	if s.configPath != "" {
+		v := viper.New()
+		v.SetConfigFile(s.configPath)
+		v.SetConfigType("yaml")
+		if err := v.ReadInConfig(); err == nil {
+			if err := v.UnmarshalKey("trust", &trustCfg); err != nil {
+				return trustCfg, fmt.Errorf("unmarshal trust config: %w", err)
+			}
+		}
+	}
+	if trustCfg.VerificationTimeout <= 0 {
+		trustCfg.VerificationTimeout = trust.DefaultVerificationTimeout
+	}
+	return trustCfg, nil
+}
+
 func orchestratorReadOnlyProcedures() map[string]struct{} {
 	return map[string]struct{}{
 		orchestratorv1connect.OrchestratorServiceGetReleaseDefinitionProcedure:   {},
@@ -238,6 +296,12 @@ func orchestratorReadOnlyProcedures() map[string]struct{} {
 		orchestratorv1connect.OrchestratorServiceListClustersProcedure:           {},
 		orchestratorv1connect.OrchestratorServiceGetClusterRoutesProcedure:       {},
 		orchestratorv1connect.OrchestratorServiceGetOperationProcedure:           {},
+	}
+}
+
+func trustReadOnlyProcedures() map[string]struct{} {
+	return map[string]struct{}{
+		trustv1connect.TrustServiceGetTrustPolicyProcedure: {},
 	}
 }
 

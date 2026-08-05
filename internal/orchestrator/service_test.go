@@ -21,6 +21,7 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
+	"github.com/ndzuki/release-manager/internal/audit"
 	authctx "github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/authorization"
 	"github.com/ndzuki/release-manager/internal/store"
@@ -37,6 +38,9 @@ func setupService(t *testing.T) (*Service, store.Store, func()) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	verifier := trust.NewStubVerifier(st.Verifications(), nil, logger)
 	svc := NewService(st, verifier, "staging", nil, authorization.NewStoreAuthorizer(st), logger)
+	for _, id := range []string{"bundle-001", "bundle-002", "bundle-upgrade", "bundle-flow"} {
+		seedTestBundle(t, st, id)
+	}
 
 	return svc, st, func() { st.Close() }
 }
@@ -503,55 +507,186 @@ func TestCreateOperation_InvalidType(t *testing.T) {
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
 
-// REQ-012 AC-012-01: Digest mismatch → rejected, operation not created.
+// REQ-012 AC-012-01: Digest mismatch rejects the operation using the stored bundle digest.
 func TestCreateOperation_VerificationRejected_DigestMismatch(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
 
-	ctx := context.Background()
-	_, err := svc.CreateOperation(ctx, connect.NewRequest(&orchestratorv1.CreateOperationRequest{
-		OperationType:       "INSTALL",
-		BundleId:            "bundle-001",
-		ReleaseDefinitionId: "def-001",
-		IdempotencyKey:      "idem-verify-001",
+	_, err := svc.CreateOperation(t.Context(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType: "INSTALL", BundleId: "bundle-001", ReleaseDefinitionId: "def-001",
+		ValuesRevisionId: "vr-001", IdempotencyKey: "idem-verify-001",
 		SignatureRef: &commonv1.SignatureRef{
-			Digest:    "sha256:wrong",
-			Signature: "MEUCIQD...",
-			Issuer:    "evil-ci",
-			Subject:   "release-manager/v1.0.0",
+			Digest: "sha256:wrong", Signature: "test-signature", Issuer: "release-manager-ci", Subject: "release-manager/v1.0.0",
 		},
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
+		Actor: &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
 	}))
+
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
-	assert.Contains(t, err.Error(), "artifact trust rejected")
+	assert.Contains(t, err.Error(), "digest_mismatch")
 }
 
-// REQ-012: No signature_ref → verification skipped, operation created normally.
-func TestCreateOperation_NoSignatureRef_SkipsVerification(t *testing.T) {
+// REQ-012 AC-012-05: production never skips verification when signature_ref is absent.
+func TestCreateOperation_NoSignatureRefFailsClosedInProduction(t *testing.T) {
+	_, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	svc := NewService(st, trust.NewStubVerifier(st.Verifications(), nil, logger), "production", nil, authorization.NewStoreAuthorizer(st), logger)
+
+	_, err := svc.CreateOperation(t.Context(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType: "INSTALL", BundleId: "bundle-001", ReleaseDefinitionId: "def-001",
+		ValuesRevisionId: "vr-001", IdempotencyKey: "idem-verify-002",
+		Actor: &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
+	}))
+
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "signature_missing")
+}
+
+func TestCreateOperation_NoSignatureRefWarnsInStaging(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
 
-	ctx := context.Background()
-	resp, err := svc.CreateOperation(ctx, connect.NewRequest(&orchestratorv1.CreateOperationRequest{
-		OperationType:       "INSTALL",
-		BundleId:            "bundle-001",
-		ReleaseDefinitionId: "def-001",
-		ValuesRevisionId:    "vr-001",
-		IdempotencyKey:      "idem-verify-002",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
+	resp, err := svc.CreateOperation(t.Context(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType: "INSTALL", BundleId: "bundle-001", ReleaseDefinitionId: "def-001",
+		ValuesRevisionId: "vr-001", IdempotencyKey: "idem-verify-003",
+		Actor: &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
 	}))
+
 	require.NoError(t, err)
-	assert.NotEmpty(t, resp.Msg.OperationId)
-	assert.Equal(t, commonv1.VerificationResult_VERIFICATION_RESULT_UNSPECIFIED, resp.Msg.VerificationResult)
+	assert.Equal(t, commonv1.VerificationResult_VERIFICATION_RESULT_POLICY_WARNING, resp.Msg.VerificationResult)
+}
+
+func TestCreateOperation_VerificationUnavailableFailsClosedInProduction(t *testing.T) {
+	_, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	svc := NewService(st, verifierFunc(func(context.Context, trust.Input) (*trust.Output, error) {
+		return &trust.Output{Status: store.VerificationVerificationUnavailable, Summary: "verification_unavailable: backend offline"}, nil
+	}), "production", nil, authorization.NewStoreAuthorizer(st), slog.New(slog.DiscardHandler))
+
+	digest := "sha256:" + fmt.Sprintf("%064x", 74)
+	_, err := svc.CreateOperation(t.Context(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType: "INSTALL", BundleId: "bundle-001", ReleaseDefinitionId: "def-001",
+		ValuesRevisionId: "vr-001", IdempotencyKey: "idem-verify-004",
+		SignatureRef: &commonv1.SignatureRef{Digest: digest, Signature: "signature", Issuer: "release-manager-ci"},
+		Actor:        &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
+	}))
+
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "verification_unavailable")
+}
+
+func TestCreateOperation_VerificationUnavailableWarnsInStaging(t *testing.T) {
+	_, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	svc := NewService(st, verifierFunc(func(context.Context, trust.Input) (*trust.Output, error) {
+		return &trust.Output{Status: store.VerificationVerificationUnavailable, Summary: "verification_unavailable: backend offline"}, nil
+	}), "staging", nil, authorization.NewStoreAuthorizer(st), slog.New(slog.DiscardHandler))
+
+	digest := "sha256:" + fmt.Sprintf("%064x", 74)
+	resp, err := svc.CreateOperation(t.Context(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType: "INSTALL", BundleId: "bundle-001", ReleaseDefinitionId: "def-001",
+		ValuesRevisionId: "vr-001", IdempotencyKey: "idem-verify-005",
+		SignatureRef: &commonv1.SignatureRef{Digest: digest, Signature: "signature", Issuer: "release-manager-ci"},
+		Actor:        &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
+	}))
+
+	require.NoError(t, err)
+	assert.Equal(t, commonv1.VerificationResult_VERIFICATION_RESULT_POLICY_WARNING, resp.Msg.GetVerificationResult())
+}
+
+type verifierFunc func(context.Context, trust.Input) (*trust.Output, error)
+
+func (fn verifierFunc) Verify(ctx context.Context, input trust.Input) (*trust.Output, error) {
+	return fn(ctx, input)
+}
+
+func TestCreateOperation_NonTrustedResultsEmitAudit(t *testing.T) {
+	tests := []struct {
+		name       string
+		targetEnv  string
+		verifier   verifierFunc
+		signature  *commonv1.SignatureRef
+		wantStatus store.VerificationStatus
+		wantCode   connect.Code
+	}{
+		{
+			name:      "rejected signature",
+			targetEnv: "staging",
+			verifier: func(context.Context, trust.Input) (*trust.Output, error) {
+				return &trust.Output{Status: store.VerificationRejected, Summary: "signature_invalid: rejected"}, nil
+			},
+			signature:  &commonv1.SignatureRef{Digest: "sha256:" + fmt.Sprintf("%064x", 74), Signature: "invalid", Issuer: "release-manager-ci"},
+			wantStatus: store.VerificationRejected,
+			wantCode:   connect.CodeFailedPrecondition,
+		},
+		{
+			name:      "missing signature",
+			targetEnv: "production",
+			verifier: func(context.Context, trust.Input) (*trust.Output, error) {
+				return &trust.Output{Status: store.VerificationSignatureMissing, Summary: "signature_missing: absent"}, nil
+			},
+			wantStatus: store.VerificationSignatureMissing,
+			wantCode:   connect.CodeFailedPrecondition,
+		},
+		{
+			name:      "verification unavailable",
+			targetEnv: "production",
+			verifier: func(context.Context, trust.Input) (*trust.Output, error) {
+				return &trust.Output{Status: store.VerificationVerificationUnavailable, Summary: "verification_unavailable: backend offline"}, nil
+			},
+			signature:  &commonv1.SignatureRef{Digest: "sha256:" + fmt.Sprintf("%064x", 74), Signature: "unavailable", Issuer: "release-manager-ci"},
+			wantStatus: store.VerificationVerificationUnavailable,
+			wantCode:   connect.CodeUnavailable,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, st, cleanup := setupService(t)
+			defer cleanup()
+			seedDefinition(t, st)
+			emitter := audit.NewEmitter(st.AuditEvents(), slog.New(slog.DiscardHandler), audit.EmitterConfig{BufferSize: 8, BatchSize: 1, FlushInterval: time.Hour})
+			t.Cleanup(func() { require.NoError(t, emitter.Shutdown(context.Background())) })
+			svc := NewService(st, tt.verifier, tt.targetEnv, emitter, authorization.NewStoreAuthorizer(st), slog.New(slog.DiscardHandler))
+			ctx := authctx.WithActor(t.Context(), authctx.Actor{UserID: "trusted-user", OrganizationID: "org-001", Roles: []string{string(store.RoleDeployer)}})
+
+			_, err := svc.CreateOperation(ctx, connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+				OperationType: "INSTALL", BundleId: "bundle-001", ReleaseDefinitionId: "def-001",
+				ValuesRevisionId: "vr-001", IdempotencyKey: "audit-" + strings.ReplaceAll(tt.name, " ", "-"),
+				SignatureRef: tt.signature,
+				Actor:        &commonv1.ActorContext{UserId: "spoofed-user", Organization: "org-001"},
+			}))
+			require.Error(t, err)
+			assert.Equal(t, tt.wantCode, connect.CodeOf(err))
+			require.NoError(t, emitter.Shutdown(context.Background()))
+
+			events, listErr := st.AuditEvents().ListByResource(t.Context(), "release_bundle", "bundle-001")
+			require.NoError(t, listErr)
+			require.Len(t, events, 1)
+			assert.Equal(t, "trusted-user", events[0].ActorID)
+			assert.Equal(t, "org-001", events[0].OrganizationID)
+			assert.Equal(t, string(tt.wantStatus), events[0].Status)
+			assert.Equal(t, "sha256:"+fmt.Sprintf("%064x", 74), events[0].Metadata["digest"])
+			assert.Equal(t, string(tt.wantStatus), events[0].Metadata["result"])
+		})
+	}
+}
+
+func seedTestBundle(t *testing.T, st store.Store, id string) string {
+	t.Helper()
+	digest := fmt.Sprintf("%064x", 74)
+	require.NoError(t, st.Bundles().Create(t.Context(), &store.ReleaseBundle{
+		ID: id, Name: "test bundle", DigestAlg: "sha256", DigestValue: digest, Status: store.BundleValidated,
+		CreatedAt: time.Now().UTC(),
+	}))
+	return "sha256:" + digest
 }
 
 func TestCreateOperation_InstallRequiresApprovedRevision(t *testing.T) {
@@ -1137,7 +1272,7 @@ func TestWatchOperation_SnapshotAndReplay(t *testing.T) {
 
 	require.NotNil(t, snapshot)
 	assert.Equal(t, "op-watch-1", snapshot.Operation.GetOperationId())
-	assert.Equal(t, int64(2), snapshot.SnapshotSequence) // max sequence
+	assert.Equal(t, int64(2), snapshot.SnapshotSequence)     // max sequence
 	assert.Equal(t, int64(1), snapshot.RetainedFromSequence) // min sequence
 	assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_SUCCEEDED, snapshot.Operation.State)
 
@@ -1160,8 +1295,8 @@ func TestWatchOperation_AfterSequenceSkipsEntries(t *testing.T) {
 	}
 	require.NoError(t, st.Operations().Create(context.Background(), op))
 
-	seedTimelineEntry(t, st, "op-watch-2", 1)          // seq 1, should be skipped
-	seedTimelineEntry(t, st, "op-watch-2", 2)     // seq 2, should be included
+	seedTimelineEntry(t, st, "op-watch-2", 1) // seq 1, should be skipped
+	seedTimelineEntry(t, st, "op-watch-2", 2) // seq 2, should be included
 
 	authInt := &testAuthInterceptor{
 		Actor: authctx.Actor{UserID: "user-001", OrganizationID: "org-001", Roles: []string{string(store.RoleDeployer)}},

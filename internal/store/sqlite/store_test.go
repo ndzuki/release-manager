@@ -1154,3 +1154,27 @@ func TestInventoryQueryPaginationFilteringAndConsistency(t *testing.T) {
 	})
 	assert.ErrorIs(t, err, store.ErrInvalidCursor)
 }
+
+func TestVerificationPersistenceIncludesSignatureIdentity(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	record := &store.VerificationRecord{
+		ID: uuid.NewString(), ArtifactDigest: "sha256:verification", PolicyVersion: "policy-v1",
+		SignatureIdentity: "signature-identity", Status: store.VerificationTrusted,
+		RootID: "root-1", KeyID: "key-1", RevocationEpoch: 7,
+		Issuer: "issuer", Subject: "subject", Summary: "trusted",
+		CreatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, st.Verifications().Create(ctx, record))
+
+	got, err := st.Verifications().GetByDigestPolicyAndSignature(ctx, record.ArtifactDigest, record.PolicyVersion, record.SignatureIdentity)
+	require.NoError(t, err)
+	assert.Equal(t, record.SignatureIdentity, got.SignatureIdentity)
+	assert.Equal(t, record.RootID, got.RootID)
+	assert.Equal(t, record.KeyID, got.KeyID)
+	assert.Equal(t, record.RevocationEpoch, got.RevocationEpoch)
+	assert.False(t, got.CreatedAt.IsZero())
+
+	_, err = st.Verifications().GetByDigestPolicyAndSignature(ctx, record.ArtifactDigest, record.PolicyVersion, "different-signature")
+	assert.ErrorIs(t, err, store.ErrNotFound)
+}

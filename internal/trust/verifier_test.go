@@ -64,6 +64,19 @@ func (s *stubStore) GetByDigestAndPolicy(_ context.Context, artifactDigest, poli
 	return rec, nil
 }
 
+func (s *stubStore) GetByDigestPolicyAndSignature(
+	_ context.Context,
+	artifactDigest string,
+	policyVersion string,
+	signatureIdentity string,
+) (*store.VerificationRecord, error) {
+	rec, err := s.GetByDigestAndPolicy(context.Background(), artifactDigest, policyVersion)
+	if err != nil || rec.SignatureIdentity != signatureIdentity {
+		return nil, store.ErrNotFound
+	}
+	return rec, nil
+}
+
 // AC-012-01: Digest mismatch → rejected.
 func TestVerify_DigestMismatch(t *testing.T) {
 	v := NewStubVerifier(newStubStore(), nil, logger())

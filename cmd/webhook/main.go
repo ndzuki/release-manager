@@ -12,7 +12,6 @@ import (
 	webhookv1connect "github.com/ndzuki/release-manager/api/gen/webhook/v1/webhookv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/config"
-	"github.com/ndzuki/release-manager/internal/trust"
 	"github.com/ndzuki/release-manager/internal/webhook"
 )
 
@@ -22,7 +21,7 @@ type webhookSvc struct {
 
 func (s *webhookSvc) Name() string { return "release-webhook" }
 
-func (s *webhookSvc) Configure(cfg *config.ServiceConfig) {}
+func (s *webhookSvc) Configure(_ *config.ServiceConfig) {}
 
 func (s *webhookSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	url := s.orchestratorURL
@@ -34,11 +33,7 @@ func (s *webhookSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		url,
 		connect.WithGRPC(),
 	)
-	svc := webhook.NewService(
-		trust.NewStubVerifier(nil, nil, logger),
-		logger,
-		client,
-	)
+	svc := webhook.NewService(logger, client)
 	path, handler := webhookv1connect.NewWebhookServiceHandler(svc)
 	mux.Handle(path, handler)
 	return nil
