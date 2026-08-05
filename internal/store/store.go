@@ -46,6 +46,16 @@ var (
 	ErrAuthorizationStale        = errors.New("store: authorization source version changed")
 )
 
+// ValuesRevision lifecycle sentinel errors.
+var (
+	ErrParentConflict            = errors.New("store: values parent conflict")
+	ErrDiscardNotAllowed         = errors.New("store: values discard not allowed")
+	ErrPrepareTokenExpired       = errors.New("store: prepare token expired")
+	ErrPrepareTokenConsumed      = errors.New("store: prepare token consumed")
+	ErrConvergenceRevisionExists = errors.New("store: convergence revision exists")
+	ErrConvergenceTaskConflict   = errors.New("store: convergence task conflict")
+)
+
 // StateVersionConflictError reports the current revision version after a failed CAS.
 type StateVersionConflictError struct {
 	Expected int64
@@ -174,7 +184,19 @@ const (
 	ValuesStatusApproved        ValuesStatus = "approved"
 	ValuesStatusRejected        ValuesStatus = "rejected"
 	ValuesStatusSuperseded      ValuesStatus = "superseded"
+	ValuesStatusDiscarded       ValuesStatus = "discarded"
 )
+
+// Valid reports whether the status is part of the ValuesRevision lifecycle.
+func (s ValuesStatus) Valid() bool {
+	switch s {
+	case ValuesStatusDraft, ValuesStatusPendingApproval, ValuesStatusApproved,
+		ValuesStatusRejected, ValuesStatusSuperseded, ValuesStatusDiscarded:
+		return true
+	default:
+		return false
+	}
+}
 
 // ActorContext records who initiated an operation.
 type ActorContext struct {
@@ -336,22 +358,29 @@ type ReleaseDefinition struct {
 	UpdatedAt              time.Time               `json:"updated_at"`
 }
 
+// SecretRef identifies one cluster-local Secret value injected at a canonical document path.
+type SecretRef struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+	Key  string `json:"key"`
+}
+
 // ValuesRevision stores the desired configuration for a release target.
 type ValuesRevision struct {
-	ID                  string       `json:"id"`
-	ReleaseDefinitionID string       `json:"release_definition_id"`
-	Revision            int          `json:"revision"`
-	StateVersion        int64        `json:"state_version"`
-	Status              ValuesStatus `json:"status"`
-	Values              []byte       `json:"values"`
-	Digest              string       `json:"digest"`
-	ParentRevisionID    string       `json:"parent_revision_id"`
-	SecretRefs          []byte       `json:"secret_refs,omitempty"`
-	CreatedByUserID     string       `json:"created_by_user_id"`
-	SubmittedAt         *time.Time   `json:"submitted_at,omitempty"`
-	DecidedAt           *time.Time   `json:"decided_at,omitempty"`
-	CreatedAt           time.Time    `json:"created_at"`
-	UpdatedAt           time.Time    `json:"updated_at"`
+	ID                  string          `json:"id"`
+	ReleaseDefinitionID string          `json:"release_definition_id"`
+	Version             int64           `json:"version"`
+	StateVersion        int64           `json:"state_version"`
+	Status              ValuesStatus    `json:"status"`
+	CanonicalDocument   json.RawMessage `json:"canonical_document"`
+	Digest              string          `json:"digest"`
+	ParentRevisionID    string          `json:"parent_revision_id"`
+	SecretRefs          []SecretRef     `json:"secret_refs,omitempty"`
+	CreatedByUserID     string          `json:"created_by_user_id"`
+	SubmittedAt         *time.Time      `json:"submitted_at,omitempty"`
+	DecidedAt           *time.Time      `json:"decided_at,omitempty"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
 }
 
 // ValuesDecisionAction identifies a durable approval workflow transition.
@@ -361,6 +390,7 @@ const (
 	ValuesDecisionSubmitted ValuesDecisionAction = "submitted"
 	ValuesDecisionApproved  ValuesDecisionAction = "approved"
 	ValuesDecisionRejected  ValuesDecisionAction = "rejected"
+	ValuesDecisionDiscarded ValuesDecisionAction = "discarded"
 )
 
 // ValuesRevisionDecision is an immutable state transition record.
@@ -416,6 +446,83 @@ type ValuesApprovalResult struct {
 	DecidedAt             time.Time
 	SupersededRevisionIDs []string
 	Replayed              bool
+}
+
+// ValuesListFilter binds cursor pagination to one immutable query shape.
+type ValuesListFilter struct {
+	ReleaseDefinitionID string
+	Status              ValuesStatus
+	PageSize            int
+	Cursor              string
+}
+
+// ValuesPage is one stable, version-descending page of revisions.
+type ValuesPage struct {
+	Items      []*ValuesRevision
+	NextCursor string
+}
+
+// PrepareSession is a short-lived, single-consume convergence snapshot.
+type PrepareSession struct {
+	TokenHash           string
+	ActorUserID         string
+	OrganizationID      string
+	ReleaseDefinitionID string
+	ParentRevisionID    string
+	ParentVersion       int64
+	TaskIDs             []string
+	LockedPaths         []string
+	LockedPathHash      string
+	ExpiresAt           time.Time
+	ConsumedAt          *time.Time
+	CreatedAt           time.Time
+}
+
+// CreateValuesDraftCommand contains immutable content and trusted request metadata.
+type CreateValuesDraftCommand struct {
+	Revision                     *ValuesRevision
+	PrepareTokenHash             string
+	ExpectedParentVersion        int64
+	ExpectedLockedPathHash       string
+	ExpectedAuthorizationVersion uint64
+	ActorUserID                  string
+	OrganizationID               string
+	RequestID                    string
+	IdempotencyScope             string
+	IdempotencyKeyHash           string
+	RequestHash                  string
+	IdempotencyExpiresAt         time.Time
+}
+
+// CreateValuesDraftResult reports a new or idempotently replayed draft.
+type CreateValuesDraftResult struct {
+	Revision *ValuesRevision
+	Replayed bool
+}
+
+// DiscardValuesCommand contains the trusted CAS and idempotency snapshot.
+type DiscardValuesCommand struct {
+	RevisionID                   string
+	ExpectedStateVersion         int64
+	ExpectedAuthorizationVersion uint64
+	ActorUserID                  string
+	ActorOrgID                   string
+	ActorRole                    Role
+	Comment                      *string
+	RequestID                    string
+	IdempotencyScope             string
+	IdempotencyKeyHash           string
+	RequestHash                  string
+	IdempotencyExpiresAt         time.Time
+}
+
+// DiscardValuesResult reports the committed or replayed terminal transition.
+type DiscardValuesResult struct {
+	Revision      *ValuesRevision
+	PreviousState ValuesStatus
+	NewState      ValuesStatus
+	DecidedAt     time.Time
+	Replayed      bool
 }
 
 // CustomerStatus is the lifecycle state of a customer tenant.
@@ -1036,6 +1143,7 @@ type EmergencyIntentStore interface {
 
 type ConvergenceTaskStore interface {
 	Create(ctx context.Context, task *ConvergenceTask) error
+	Get(ctx context.Context, id string) (*ConvergenceTask, error)
 	ListByDefinition(ctx context.Context, definitionID, statusFilter string) ([]*ConvergenceTask, error)
 	GetByOperationID(ctx context.Context, operationID string) (*ConvergenceTask, error)
 	HasPendingPromotionForDefinition(ctx context.Context, definitionID string) (bool, error)
@@ -1506,16 +1614,32 @@ type ValuesApprovalReader interface {
 	ListNotificationOutbox(ctx context.Context, revisionID string) ([]*ApprovalOutboxEntry, error)
 }
 
-// ValuesStore defines the persistence contract for values revisions.
-// For Create, the caller MUST populate Revision via GetNextRevisionNumber
-// and Digest via the values package before calling.
+// ValuesStore defines immutable revision reads and stable listing.
 type ValuesStore interface {
-	Create(ctx context.Context, vr *ValuesRevision) error
+	Create(ctx context.Context, revision *ValuesRevision) error
 	Get(ctx context.Context, id string) (*ValuesRevision, error)
 	GetByDigest(ctx context.Context, definitionID, digest string) (*ValuesRevision, error)
 	GetLatestApproved(ctx context.Context, definitionID string) (*ValuesRevision, error)
-	GetNextRevisionNumber(ctx context.Context, definitionID string) (int, error)
+	GetLatest(ctx context.Context, definitionID string) (*ValuesRevision, error)
 	List(ctx context.Context, definitionID string) ([]*ValuesRevision, error)
+	ListPage(ctx context.Context, filter ValuesListFilter) (*ValuesPage, error)
+	GetNextRevisionNumber(ctx context.Context, definitionID string) (int64, error)
+}
+
+// ValuesLifecycleStore executes complete create and discard transactions atomically.
+type ValuesLifecycleStore interface {
+	CreateDraft(ctx context.Context, command CreateValuesDraftCommand) (*CreateValuesDraftResult, error)
+	Discard(ctx context.Context, command DiscardValuesCommand) (*DiscardValuesResult, error)
+}
+
+// PrepareSessionStore owns short-lived convergence preparation snapshots.
+type PrepareSessionStore interface {
+	// Create persists a prepare session. expectedAuthorizationVersion fences
+	// the write against authorization source drift (REQ-018 安全边界): 0 skips
+	// the fence.
+	Create(ctx context.Context, session *PrepareSession, expectedAuthorizationVersion uint64) error
+	Get(ctx context.Context, tokenHash string) (*PrepareSession, error)
+	DeleteExpired(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 // CustomerStore defines the persistence contract for customers.
@@ -2041,6 +2165,8 @@ type Store interface {
 	Values() ValuesStore
 	ValuesApproval() ValuesApprovalStore
 	ValuesApprovalEvidence() ValuesApprovalReader
+	ValuesLifecycle() ValuesLifecycleStore
+	PrepareSessions() PrepareSessionStore
 	Customers() CustomerStore
 	CustomerCreates() CustomerBindingCreateStore
 	Clusters() ClusterStore

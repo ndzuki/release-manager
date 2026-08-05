@@ -148,6 +148,12 @@ func TestMapMethodToActionClassifiesValuesApprovalAsWrite(t *testing.T) {
 	assert.Equal(t, "write", mapMethodToAction("ApproveValuesRevision"))
 	assert.Equal(t, "write", mapMethodToAction("RejectValuesRevision"))
 	assert.Equal(t, "read", mapMethodToAction("ListSecrets"))
+
+	t.Run("orchestrator discard values revision", func(t *testing.T) {
+		object, action := mapProcedure(orchestratorv1connect.OrchestratorServiceDiscardValuesRevisionProcedure)
+		assert.Equal(t, "release", object)
+		assert.Equal(t, "write", action)
+	})
 }
 
 func reasonFromConnectError(t *testing.T, err error) string {

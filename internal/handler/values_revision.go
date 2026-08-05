@@ -92,9 +92,9 @@ func (h *ValuesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	vr := &store.ValuesRevision{
 		ID:                  uuid.New().String(),
 		ReleaseDefinitionID: req.ReleaseDefinitionID,
-		Revision:            nextRev,
+		Version:             nextRev,
 		Status:              store.ValuesStatusDraft,
-		Values:              result.Canonical,
+		CanonicalDocument:   result.Canonical,
 		Digest:              result.Digest,
 		ParentRevisionID:    req.ParentRevisionID,
 		StateVersion:        1,
@@ -168,12 +168,12 @@ func (h *ValuesHandler) Register(mux *http.ServeMux) {
 type valuesResponse struct {
 	ID                  string `json:"id"`
 	ReleaseDefinitionID string `json:"release_definition_id"`
-	Revision            int    `json:"revision"`
+	Revision            int64  `json:"revision"`
 	Status              string `json:"status"`
 	Values              string `json:"values,omitempty"`
 	Digest              string `json:"digest,omitempty"`
 	ParentRevisionID    string `json:"parent_revision_id,omitempty"`
-	RevisionNumber      int    `json:"revision_number,omitempty"`
+	RevisionNumber      int64  `json:"revision_number,omitempty"`
 	CreatedAt           string `json:"created_at"`
 	UpdatedAt           string `json:"updated_at"`
 }
@@ -217,11 +217,11 @@ func toResponse(vr *store.ValuesRevision) valuesResponse {
 	return valuesResponse{
 		ID:                  vr.ID,
 		ReleaseDefinitionID: vr.ReleaseDefinitionID,
-		Revision:            vr.Revision,
+		Revision:            vr.Version,
 		Status:              string(vr.Status),
 		Digest:              vr.Digest,
 		ParentRevisionID:    vr.ParentRevisionID,
-		RevisionNumber:      vr.Revision,
+		RevisionNumber:      vr.Version,
 		CreatedAt:           vr.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:           vr.UpdatedAt.UTC().Format(time.RFC3339),
 	}

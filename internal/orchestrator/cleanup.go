@@ -21,6 +21,7 @@ type RetentionConfig struct {
 	CandidateArtifactDays int `mapstructure:"candidate_artifact_days"` // default 30, min 1
 	PreflightResultHours  int `mapstructure:"preflight_result_hours"`  // default 168 (7d), min 1
 	GCIntervalHours       int `mapstructure:"gc_interval_hours"`       // default 6, min 1
+	PrepareSessionHours   int `mapstructure:"prepare_session_hours"`   // default 24, min 1
 }
 
 // DefaultRetentionConfig returns safe defaults.
@@ -30,6 +31,7 @@ func DefaultRetentionConfig() RetentionConfig {
 		CandidateArtifactDays: 30,
 		PreflightResultHours:  168,
 		GCIntervalHours:       6,
+		PrepareSessionHours:   24,
 	}
 }
 
@@ -46,6 +48,9 @@ func (c RetentionConfig) Validate() error {
 	}
 	if c.GCIntervalHours < 1 {
 		return fmt.Errorf("gc_interval_hours must be >= 1, got %d", c.GCIntervalHours)
+	}
+	if c.PrepareSessionHours < 1 {
+		return fmt.Errorf("prepare_session_hours must be >= 1, got %d", c.PrepareSessionHours)
 	}
 	return nil
 }
@@ -120,6 +125,7 @@ func (s *CleanupService) RunCleanup(
 		"deleted_bundles", resp.DeletedBundles,
 		"deleted_candidates", resp.DeletedCandidates,
 		"deleted_preflights", resp.DeletedPreflights,
+		"prepare_session_hours", s.config.PrepareSessionHours,
 		"errors", len(errs),
 		"duration_ms", duration.Milliseconds(),
 		"idempotency_key", key,
@@ -185,6 +191,14 @@ func (s *CleanupService) runGC(ctx context.Context) (resp *orchestratorv1.RunCle
 		resp.DeletedPreflights = boundedCleanupCount(n)
 		s.logger.Info("gc_phase4_deleted_preflights", "count", n)
 	}
+	// Phase 5: Delete expired or consumed prepare-session metadata after the retention window.
+	prepareCutoff := time.Now().UTC().Add(-time.Duration(s.config.PrepareSessionHours) * time.Hour)
+	n, err = s.store.PrepareSessions().DeleteExpired(ctx, prepareCutoff)
+	if err != nil {
+		errs = append(errs, fmt.Sprintf("phase5 delete prepare sessions: %v", err))
+	} else {
+		s.logger.Info("gc_phase5_deleted_prepare_sessions", "count", n)
+	}
 
 	resp.Errors = errs
 	return resp, errs
@@ -202,7 +216,7 @@ func boundedCleanupCount(count int64) int32 {
 }
 
 // StartTicker runs the GC on a periodic timer. Runs until ctx is canceled.
-// Skips the tick if a previous GC is still running (防重叠).
+// Skips the tick if a previous GC is still running (prevents overlap).
 func (s *CleanupService) StartTicker(ctx context.Context) {
 	interval := time.Duration(s.config.GCIntervalHours) * time.Hour
 	ticker := time.NewTicker(interval)
@@ -228,6 +242,7 @@ func (s *CleanupService) StartTicker(ctx context.Context) {
 			"deleted_bundles", resp.DeletedBundles,
 			"deleted_candidates", resp.DeletedCandidates,
 			"deleted_preflights", resp.DeletedPreflights,
+			"prepare_session_hours", s.config.PrepareSessionHours,
 			"errors", len(errs),
 			"duration_ms", duration.Milliseconds(),
 			"idempotency_key", key,

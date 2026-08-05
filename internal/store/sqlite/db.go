@@ -4,6 +4,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -54,6 +55,8 @@ type Store struct {
 	rollouts         *rolloutTrackingStore
 	emergencyIntents *emergencyIntentStore
 	convergenceTasks *convergenceTaskStore
+	valuesLifecycle  *valuesLifecycleStore
+	prepareSessions  *prepareSessionStore
 	authorization    *authorizationStore
 	idem             *idempotencyStore
 }
@@ -115,18 +118,20 @@ func Open(dsn string) (*Store, error) {
 	s.auditExports = &auditExportStore{db: db}
 	s.bundles = &bundleStore{db: db}
 	s.invs = &inventoryStore{db: db}
-	s.syncRequests = &inventorySyncRequestStore{db: db}
 	s.verifs = &verificationStore{db: db}
+	s.syncRequests = &inventorySyncRequestStore{db: db}
+	s.candidateArts = &candidateArtifactStore{db: db}
 	s.custEvents = &customerEventStore{db: db}
 	s.routes = &clusterRouteStore{db: db}
-	s.candidateArts = &candidateArtifactStore{db: db}
+	s.emergencyIntents = &emergencyIntentStore{db: db}
+	s.convergenceTasks = &convergenceTaskStore{db: db}
+	s.valuesLifecycle = &valuesLifecycleStore{db: db}
+	s.prepareSessions = &prepareSessionStore{db: db}
+	s.authorization = &authorizationStore{db: db}
 	s.preflightCycles = &preflightLifecycleStore{db: db}
 	s.executionResults = &operationExecutionResultStore{db: db}
 	s.rollouts = &rolloutTrackingStore{db: db}
-	s.emergencyIntents = &emergencyIntentStore{db: db}
-	s.convergenceTasks = &convergenceTaskStore{db: db}
 	s.customerCreates = &customerBindingCreateStore{db: db}
-	s.authorization = &authorizationStore{db: db}
 	return s, nil
 }
 
@@ -191,6 +196,12 @@ func (s *Store) ValuesApproval() store.ValuesApprovalStore { return s.valuesAppr
 
 // ValuesApprovalEvidence returns immutable workflow evidence readers.
 func (s *Store) ValuesApprovalEvidence() store.ValuesApprovalReader { return s.valuesApproval }
+
+// ValuesLifecycle returns the atomic create-and-discard store.
+func (s *Store) ValuesLifecycle() store.ValuesLifecycleStore { return s.valuesLifecycle }
+
+// PrepareSessions returns the short-lived convergence preparation store.
+func (s *Store) PrepareSessions() store.PrepareSessionStore { return s.prepareSessions }
 
 // Users returns the UserStore.
 func (s *Store) Users() store.UserStore { return s.users }
@@ -303,9 +314,14 @@ func migrate(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("begin migration tx: %w", err)
 	}
-	defer tx.Rollback() //nolint:errcheck // Rollback on a committed transaction is a no-op; error is irrelevant here.
-
+	valuesSchemaMigrated := false
 	for _, stmt := range migrationStatements {
+		if !valuesSchemaMigrated && strings.Contains(stmt, "ux_vr_def_version") {
+			if err := migrateValuesRevisionSchema(tx); err != nil {
+				return fmt.Errorf("migrate values revision schema: %w", err)
+			}
+			valuesSchemaMigrated = true
+		}
 		if _, err := tx.ExecContext(context.Background(), stmt); err != nil {
 			// ALTER TABLE ADD COLUMN is not idempotent; skip if the
 			// column already exists (added by a prior migration run
@@ -324,6 +340,158 @@ func migrate(db *sql.DB) error {
 		return fmt.Errorf("commit migration: %w", err)
 	}
 	return nil
+}
+
+func migrateValuesRevisionSchema(tx *sql.Tx) error {
+	columns, err := sqliteTableColumns(tx, "values_revisions")
+	if err != nil {
+		return err
+	}
+	if _, legacy := columns["revision"]; legacy {
+		if _, hasStateVersion := columns["state_version"]; !hasStateVersion {
+			return nil
+		}
+		if _, err := tx.ExecContext(context.Background(), `UPDATE values_revisions SET version = revision`); err != nil {
+			return fmt.Errorf("backfill values version: %w", err)
+		}
+		if _, err := tx.ExecContext(context.Background(), `ALTER TABLE values_revisions DROP COLUMN revision`); err != nil {
+			return fmt.Errorf("drop legacy values revision column: %w", err)
+		}
+	}
+
+	if err := rebuildValuesRevisionsTable(tx); err != nil {
+		return err
+	}
+	return rebuildValuesRevisionDecisionsTable(tx)
+}
+
+func rebuildValuesRevisionsTable(tx *sql.Tx) error {
+	var definition string
+	if err := tx.QueryRowContext(context.Background(), `
+		SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'values_revisions'
+	`).Scan(&definition); err != nil {
+		return fmt.Errorf("read values revision schema: %w", err)
+	}
+	if strings.Contains(definition, "'discarded'") && strings.Contains(definition, "ON DELETE RESTRICT") {
+		return nil
+	}
+
+	statements := []string{
+		`ALTER TABLE values_revisions RENAME TO values_revisions_legacy`,
+		`CREATE TABLE values_revisions (
+			id                    TEXT PRIMARY KEY,
+			release_definition_id TEXT NOT NULL REFERENCES release_definitions(id) ON DELETE RESTRICT,
+			version               INTEGER NOT NULL DEFAULT 1,
+			status                TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','pending_approval','approved','rejected','superseded','discarded')),
+			"values"              BLOB NOT NULL,
+			digest                TEXT NOT NULL DEFAULT '',
+			parent_revision_id    TEXT REFERENCES values_revisions(id) ON DELETE RESTRICT,
+			secret_refs           BLOB,
+			created_by            TEXT NOT NULL DEFAULT '',
+			approved_by           TEXT NOT NULL DEFAULT '',
+			approved_at           TEXT,
+			rejected_by           TEXT NOT NULL DEFAULT '',
+			rejection_reason      TEXT NOT NULL DEFAULT '',
+			state_version         INTEGER NOT NULL DEFAULT 0,
+			created_by_user_id    TEXT NOT NULL DEFAULT '',
+			submitted_at          TEXT,
+			decided_at            TEXT,
+			created_at            TEXT NOT NULL,
+			updated_at            TEXT NOT NULL,
+			CHECK (parent_revision_id IS NOT NULL OR version = 1)
+		)`,
+		`INSERT INTO values_revisions (
+			id, release_definition_id, version, status, "values", digest,
+			parent_revision_id, secret_refs, created_by, approved_by, approved_at,
+			rejected_by, rejection_reason, state_version, created_by_user_id,
+			submitted_at, decided_at, created_at, updated_at
+		) SELECT id, release_definition_id, version, status, "values", digest,
+			NULLIF(parent_revision_id, ''), secret_refs, created_by, approved_by, approved_at,
+			rejected_by, rejection_reason, state_version, created_by_user_id,
+			submitted_at, decided_at, created_at, updated_at FROM values_revisions_legacy`,
+		`DROP TABLE values_revisions_legacy`,
+		`CREATE INDEX IF NOT EXISTS idx_values_def ON values_revisions(release_definition_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_values_digest ON values_revisions(release_definition_id, digest)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_vr_one_approved_per_def
+		 ON values_revisions(release_definition_id) WHERE status = 'approved'`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_vr_one_pending_per_def
+		 ON values_revisions(release_definition_id) WHERE status = 'pending_approval'`,
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(context.Background(), statement); err != nil {
+			return fmt.Errorf("rebuild values revisions: %w", err)
+		}
+	}
+	return nil
+}
+
+func rebuildValuesRevisionDecisionsTable(tx *sql.Tx) error {
+	var definition string
+	err := tx.QueryRowContext(context.Background(), `
+		SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'values_revision_decisions'
+	`).Scan(&definition)
+	if errors.Is(err, sql.ErrNoRows) || strings.Contains(definition, "'discarded'") {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read values decision schema: %w", err)
+	}
+	statements := []string{
+		`ALTER TABLE values_revision_decisions RENAME TO values_revision_decisions_legacy`,
+		`CREATE TABLE values_revision_decisions (
+			id                    TEXT PRIMARY KEY,
+			revision_id           TEXT NOT NULL REFERENCES values_revisions(id) ON DELETE RESTRICT,
+			release_definition_id TEXT NOT NULL,
+			action                TEXT NOT NULL CHECK (action IN ('submitted', 'approved', 'rejected', 'discarded')),
+			from_state            TEXT NOT NULL,
+			to_state              TEXT NOT NULL,
+			actor_user_id         TEXT NOT NULL,
+			actor_org_id          TEXT NOT NULL,
+			actor_role            TEXT NOT NULL DEFAULT '',
+			comment               TEXT,
+			reason                TEXT NOT NULL DEFAULT '',
+			request_id            TEXT NOT NULL DEFAULT '',
+			idempotency_key_hash  TEXT NOT NULL DEFAULT '',
+			created_at            TEXT NOT NULL
+		)`,
+		`INSERT INTO values_revision_decisions (
+			id, revision_id, release_definition_id, action, from_state, to_state,
+			actor_user_id, actor_org_id, actor_role, comment, reason, request_id,
+			idempotency_key_hash, created_at
+		) SELECT id, revision_id, release_definition_id, action, from_state, to_state,
+			actor_user_id, actor_org_id, actor_role, comment, reason, request_id,
+			idempotency_key_hash, created_at FROM values_revision_decisions_legacy`,
+		`DROP TABLE values_revision_decisions_legacy`,
+		`CREATE INDEX IF NOT EXISTS idx_values_revision_decisions_revision ON values_revision_decisions(revision_id, created_at)`,
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(context.Background(), statement); err != nil {
+			return fmt.Errorf("rebuild values revision decisions: %w", err)
+		}
+	}
+	return nil
+}
+
+func sqliteTableColumns(tx *sql.Tx, table string) (map[string]struct{}, error) {
+	rows, err := tx.QueryContext(context.Background(), `PRAGMA table_info(`+table+`)`) //nolint:gosec // table is a fixed internal identifier.
+	if err != nil {
+		return nil, fmt.Errorf("read %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	columns := make(map[string]struct{})
+	for rows.Next() {
+		var position, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&position, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return nil, fmt.Errorf("scan %s columns: %w", table, err)
+		}
+		columns[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate %s columns: %w", table, err)
+	}
+	return columns, nil
 }
 
 // migrationStatements contains the ordered DDL for the core pipeline schema.
@@ -355,13 +523,12 @@ var migrationStatements = []string{
 
 	`CREATE TABLE IF NOT EXISTS values_revisions (
 		id                    TEXT PRIMARY KEY,
-		release_definition_id TEXT NOT NULL REFERENCES release_definitions(id) ON DELETE CASCADE,
-		revision              INTEGER NOT NULL DEFAULT 1,
+		release_definition_id TEXT NOT NULL REFERENCES release_definitions(id) ON DELETE RESTRICT,
 		version               INTEGER NOT NULL DEFAULT 1,
-		status                TEXT NOT NULL DEFAULT 'draft',
+		status                TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','pending_approval','approved','rejected','superseded','discarded')),
 		"values"              BLOB NOT NULL,
 		digest                TEXT NOT NULL DEFAULT '',
-		parent_revision_id    TEXT NOT NULL DEFAULT '',
+		parent_revision_id    TEXT REFERENCES values_revisions(id) ON DELETE RESTRICT,
 		secret_refs           BLOB,
 		created_by            TEXT NOT NULL DEFAULT '',
 		approved_by           TEXT NOT NULL DEFAULT '',
@@ -369,7 +536,8 @@ var migrationStatements = []string{
 		rejected_by           TEXT NOT NULL DEFAULT '',
 		rejection_reason      TEXT NOT NULL DEFAULT '',
 		created_at            TEXT NOT NULL,
-		updated_at            TEXT NOT NULL
+		updated_at            TEXT NOT NULL,
+		CHECK (parent_revision_id IS NOT NULL OR version = 1)
 	)`,
 
 	// Migration: add approval workflow columns to existing values revisions.
@@ -400,7 +568,7 @@ var migrationStatements = []string{
 		id                    TEXT PRIMARY KEY,
 		revision_id           TEXT NOT NULL REFERENCES values_revisions(id) ON DELETE RESTRICT,
 		release_definition_id TEXT NOT NULL,
-		action                TEXT NOT NULL CHECK (action IN ('submitted', 'approved', 'rejected')),
+		action                TEXT NOT NULL CHECK (action IN ('submitted', 'approved', 'rejected', 'discarded')),
 		from_state            TEXT NOT NULL,
 		to_state              TEXT NOT NULL,
 		actor_user_id         TEXT NOT NULL,
@@ -448,12 +616,14 @@ var migrationStatements = []string{
 		SELECT 1 FROM values_revisions AS newer
 		WHERE newer.release_definition_id = current.release_definition_id
 		  AND newer.status = 'approved'
-		  AND (newer.revision > current.revision OR (newer.revision = current.revision AND newer.id > current.id))
+		  AND (newer.version > current.version OR (newer.version = current.version AND newer.id > current.id))
 	 )`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS ux_vr_one_approved_per_def
 	 ON values_revisions(release_definition_id) WHERE status = 'approved'`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS ux_vr_one_pending_per_def
 	 ON values_revisions(release_definition_id) WHERE status = 'pending_approval'`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_vr_def_version
+	 ON values_revisions(release_definition_id, version)`,
 
 	`CREATE TABLE IF NOT EXISTS operations (
 		id                   TEXT PRIMARY KEY,
@@ -1037,6 +1207,23 @@ var migrationStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_ct_definition ON convergence_tasks(release_definition_id, status)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS ux_ct_op ON convergence_tasks(operation_id)`,
+	`CREATE TABLE IF NOT EXISTS convergence_prepare_sessions (
+		token_hash            TEXT PRIMARY KEY,
+		actor_user_id         TEXT NOT NULL,
+		organization_id       TEXT NOT NULL,
+		release_definition_id TEXT NOT NULL REFERENCES release_definitions(id) ON DELETE RESTRICT,
+		parent_revision_id    TEXT REFERENCES values_revisions(id) ON DELETE RESTRICT,
+		parent_version        INTEGER NOT NULL,
+		task_ids              BLOB NOT NULL,
+		locked_paths          BLOB NOT NULL,
+		locked_path_hash      TEXT NOT NULL,
+		expires_at            TEXT NOT NULL,
+		consumed_at           TEXT,
+		created_at            TEXT NOT NULL,
+		CHECK ((parent_revision_id IS NULL AND parent_version = 0)
+			OR (parent_revision_id IS NOT NULL AND parent_version > 0))
+	)`,
+	`CREATE INDEX IF NOT EXISTS ix_cps_expiry ON convergence_prepare_sessions(expires_at)`,
 	// Preflight lifecycle results (REQ-069) — distinct from the cache-based preflight_results table.
 	`CREATE TABLE IF NOT EXISTS preflight_lifecycles (
 		id                    TEXT PRIMARY KEY,

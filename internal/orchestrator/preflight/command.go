@@ -60,14 +60,11 @@ func BuildUpgradeCommand(
 		return nil, fmt.Errorf("upgrade command inputs are required")
 	}
 
-	effectiveValues, err := mergeEffectiveValues(revision.Values, op.ValuesPatch, bundle.Images)
+	effectiveValues, err := mergeEffectiveValues(revision.CanonicalDocument, op.ValuesPatch, bundle.Images)
 	if err != nil {
 		return nil, err
 	}
-	secretRefs, err := decodeSecretRefs(revision.SecretRefs)
-	if err != nil {
-		return nil, fmt.Errorf("decode secret refs: %w", err)
-	}
+	secretRefs := toOperatorSecretRefs(revision.SecretRefs)
 
 	timeout := durationpb.New(5 * time.Minute)
 	if op.Deadline != nil {
@@ -189,13 +186,10 @@ func normalizeImageReference(image store.BundleImage) string {
 	return image.Ref + "@sha256:" + image.Digest
 }
 
-func decodeSecretRefs(raw []byte) ([]*operatorv1.SecretRef, error) {
-	if len(raw) == 0 {
-		return nil, nil
+func toOperatorSecretRefs(refs []store.SecretRef) []*operatorv1.SecretRef {
+	result := make([]*operatorv1.SecretRef, 0, len(refs))
+	for _, ref := range refs {
+		result = append(result, &operatorv1.SecretRef{Path: ref.Path, Name: ref.Name, Key: ref.Key})
 	}
-	var refs []*operatorv1.SecretRef
-	if err := json.Unmarshal(raw, &refs); err != nil {
-		return nil, err
-	}
-	return refs, nil
+	return result
 }

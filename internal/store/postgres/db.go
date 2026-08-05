@@ -124,6 +124,8 @@ type Store struct {
 	defs              *definitionStore
 	vals              *valuesStore
 	valuesApproval    *valuesApprovalStore
+	valuesLifecycle   *valuesLifecycleStore
+	prepareSessions   *prepareSessionStore
 	customers         *customerStore
 	clusters          *clusterStore
 	tokens            *enrollmentTokenStore
@@ -199,6 +201,8 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s.preflight = &preflightStore{gorm: s.db}
 	s.vals = &valuesStore{gorm: s.db}
 	s.valuesApproval = &valuesApprovalStore{gorm: s.db}
+	s.valuesLifecycle = &valuesLifecycleStore{gorm: s.db}
+	s.prepareSessions = &prepareSessionStore{gorm: s.db}
 	s.customers = &customerStore{gorm: s.db}
 	s.clusters = &clusterStore{gorm: s.db}
 	s.tokens = &enrollmentTokenStore{gorm: s.db}
@@ -245,9 +249,10 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 
 var _ store.Store = (*Store)(nil)
 var (
+	_ store.ValuesLifecycleStore         = (*valuesLifecycleStore)(nil)
+	_ store.PrepareSessionStore          = (*prepareSessionStore)(nil)
 	_ store.ValuesApprovalStore          = (*valuesApprovalStore)(nil)
 	_ store.ValuesApprovalReader         = (*valuesApprovalStore)(nil)
-	_ store.AuditExportStore             = (*auditExportStore)(nil)
 	_ store.TrustRootStore               = (*trustRootStore)(nil)
 	_ store.ScanResultStore              = (*scanResultStore)(nil)
 	_ store.VulnerabilityExceptionStore  = (*vulnerabilityExceptionStore)(nil)
@@ -295,6 +300,8 @@ func (s *Store) Definitions() store.DefinitionStore                         { re
 func (s *Store) DefinitionEvents() store.DefinitionEventStore               { return s.defEvents }
 func (s *Store) PreflightResults() store.PreflightStore                     { return s.preflight }
 func (s *Store) Values() store.ValuesStore                                  { return s.vals }
+func (s *Store) ValuesLifecycle() store.ValuesLifecycleStore                { return s.valuesLifecycle }
+func (s *Store) PrepareSessions() store.PrepareSessionStore                 { return s.prepareSessions }
 func (s *Store) Users() store.UserStore                                     { return s.users }
 func (s *Store) AuthSessions() store.AuthSessionStore                       { return s.authSess }
 func (s *Store) Organizations() store.OrganizationStore                     { return s.orgs }

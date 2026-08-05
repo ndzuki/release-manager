@@ -1,48 +1,114 @@
 package values
 
-import "regexp"
+import (
+	"math"
+	"regexp"
+	"strings"
+	"unicode"
+)
 
-// secretPatterns are regexps matching common secret key names followed by a value.
-// Post-filtering removes false positives like empty strings, null, and template references.
-var secretPatterns = []*regexp.Regexp{
-	// password / secret / token / api_key / private_key / access_key patterns
-	regexp.MustCompile(`(?im)(?:^|\s)(?:["']?(?:password|secret|token|api[_-]?key|apikey|private[_-]?key|access[_-]?key)["']?\s*[:=]\s*)([^\s#].+)`),
-	// AWS-style key ID pattern: AKIA... (20 chars)
-	regexp.MustCompile(`\bAKIA[A-Z0-9]{16}\b`),
+var (
+	defaultSecretKeyPattern = regexp.MustCompile(`(?i)(?:password|passwd|secret|token|api[_-]?key|apikey|private[_-]?key|access[_-]?key|credential|client[_-]?secret)`)
+	awsAccessKeyPattern     = regexp.MustCompile(`\bAKIA[A-Z0-9]{16}\b`)
+	privateKeyPattern       = regexp.MustCompile(`-{5}BEGIN [A-Z0-9 ]*PRIVATE KEY-{5}`)
+	credentialURIPattern    = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@`)
+	hexValuePattern         = regexp.MustCompile(`(?i)^[0-9a-f]{32,}$`)
+	base64ValuePattern      = regexp.MustCompile(`^[A-Za-z0-9+/]{32,}={0,2}$`)
+)
+
+func containsSecret(document any, extraPatterns []string) bool {
+	patterns := make([]*regexp.Regexp, 0, len(extraPatterns)+1)
+	patterns = append(patterns, defaultSecretKeyPattern)
+	for _, raw := range extraPatterns {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		pattern, err := regexp.Compile(`(?i)(?:` + raw + `)`)
+		if err != nil {
+			return true
+		}
+		patterns = append(patterns, pattern)
+	}
+	return inspectSecret(document, "", patterns)
 }
 
-// refPatterns match values that look like secret references, not literals.
-var refPatterns = regexp.MustCompile(`^(\$\{|ref\s|\{\{|<ref>|\[ref\]|null$|""$|''$)`)
-
-// ContainsSecret returns true if input contains patterns that look like
-// literal secrets (passwords, API keys, tokens).
-func ContainsSecret(input []byte) bool {
-	s := string(input)
-	for _, pat := range secretPatterns {
-		matches := pat.FindAllStringSubmatch(s, -1)
-		for _, m := range matches {
-			// m[0] is the full match, m[1] is the captured value (if any)
-			if len(m) >= 2 {
-				val := stripQuotes(m[1])
-				if val == "" || refPatterns.MatchString(val) {
-					continue
-				}
-				return true
-			} else {
-				// No capture group (e.g. AKIA pattern)
+func inspectSecret(value any, key string, keyPatterns []*regexp.Regexp) bool {
+	if key != "" && secretKey(key, keyPatterns) && !secretPlaceholder(value) {
+		return true
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		for childKey, child := range typed {
+			if inspectSecret(child, childKey, keyPatterns) {
 				return true
 			}
+		}
+	case []any:
+		for _, child := range typed {
+			if inspectSecret(child, "", keyPatterns) {
+				return true
+			}
+		}
+	case string:
+		return secretValueShape(typed)
+	}
+	return false
+}
+
+func secretKey(key string, patterns []*regexp.Regexp) bool {
+	for _, pattern := range patterns {
+		if pattern.MatchString(key) {
+			return true
 		}
 	}
 	return false
 }
 
-// stripQuotes removes surrounding double/single quotes from a value.
-func stripQuotes(s string) string {
-	if len(s) >= 2 {
-		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
-			return s[1 : len(s)-1]
-		}
+func secretPlaceholder(value any) bool {
+	if value == nil {
+		return true
 	}
-	return s
+	text, ok := value.(string)
+	if !ok {
+		return false
+	}
+	text = strings.TrimSpace(text)
+	return text == "" || strings.HasPrefix(text, "${") || strings.HasPrefix(text, "{{") ||
+		strings.HasPrefix(strings.ToLower(text), "ref ") || text == "<ref>" || text == "[ref]"
+}
+
+func secretValueShape(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	if awsAccessKeyPattern.MatchString(trimmed) || privateKeyPattern.MatchString(trimmed) || credentialURIPattern.MatchString(trimmed) {
+		return true
+	}
+	if hexValuePattern.MatchString(trimmed) || base64ValuePattern.MatchString(trimmed) {
+		return highEntropy(trimmed)
+	}
+	return false
+}
+
+func highEntropy(value string) bool {
+	counts := make(map[rune]float64)
+	var total float64
+	for _, char := range value {
+		if unicode.IsSpace(char) {
+			continue
+		}
+		counts[char]++
+		total++
+	}
+	if total < 32 {
+		return false
+	}
+	var entropy float64
+	for _, count := range counts {
+		probability := count / total
+		entropy -= probability * math.Log2(probability)
+	}
+	return entropy >= 3.5
 }
