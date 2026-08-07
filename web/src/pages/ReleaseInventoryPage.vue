@@ -19,6 +19,8 @@ const clusterId = computed(() => String(route.params.clusterId ?? ''));
 const customerName = computed(() => String(route.query.customerName ?? customerId.value));
 const clusterName = computed(() => String(route.query.clusterName ?? clusterId.value));
 const canSync = computed(() => auth.user?.roles.some((role) => ['platform_admin', 'release_admin', 'deployer'].includes(role)) === true);
+const operationsEnabled = import.meta.env.VITE_ENABLE_RELEASE_OPERATIONS !== 'false';
+const canCreateOperation = computed(() => operationsEnabled && auth.canCreateReleaseOperation);
 
 watch(
   [customerId, clusterId],
@@ -116,7 +118,15 @@ function handleSearchInput(event: Event): void {
         action-label="刷新"
         @action="inventory.refresh"
       />
-      <ReleaseInventoryTable v-else :releases="inventory.releases" :customer-id="customerId" :cluster-id="clusterId" />
+      <ReleaseInventoryTable
+        v-else
+        :releases="inventory.releases"
+        :can-create-operation="canCreateOperation"
+        :customer-id="customerId"
+        :cluster-id="clusterId"
+        :customer-name="customerName"
+        :cluster-name="clusterName"
+      />
       <div v-if="inventory.hasMore" class="load-more">
         <button type="button" :disabled="inventory.appending" @click="inventory.load({ append: true })">
           {{ inventory.appending ? '加载中…' : '加载更多' }}

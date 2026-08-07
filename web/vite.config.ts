@@ -32,6 +32,7 @@ export default defineConfig({
         changeOrigin: true,
       },
       '/orchestrator.v1.OrchestratorService': {
+
         target: 'http://127.0.0.1:8083',
         changeOrigin: true,
       },

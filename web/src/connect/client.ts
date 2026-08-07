@@ -1,7 +1,7 @@
 import { Code, ConnectError, createClient, type Interceptor } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
 import { AuthService, OrganizationService } from '@/gen/auth/v1/auth_pb';
-import { OrchestratorService } from '@/gen/orchestrator/v1/orchestrator_pb';
+import { BundleService, OrchestratorService } from '@/gen/orchestrator/v1/orchestrator_pb';
 
 const csrfCookieName = 'rm_csrf';
 const csrfHeaderName = 'X-CSRF-Token';
@@ -25,7 +25,7 @@ export function readCookie(name: string): string | undefined {
   return undefined;
 }
 
-const sessionInterceptor: Interceptor = (next) => async (request) => {
+export const sessionInterceptor: Interceptor = (next) => async (request) => {
   const csrfToken = readCookie(csrfCookieName);
   if (csrfToken) {
     request.header.set(csrfHeaderName, csrfToken);
@@ -42,14 +42,19 @@ const sessionInterceptor: Interceptor = (next) => async (request) => {
   }
 };
 
+export function browserFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  return fetch(input, { ...init, credentials: 'include' });
+}
+
 export const transport = createConnectTransport({
   baseUrl: import.meta.env.VITE_API_BASE ?? '',
   useBinaryFormat: true,
-  fetch: (input, init) => fetch(input, { ...init, credentials: 'include' }),
+  fetch: browserFetch,
   interceptors: [sessionInterceptor],
 });
 
 export const authClient = createClient(AuthService, transport);
 export const organizationClient = createClient(OrganizationService, transport);
 export const orchestratorClient = createClient(OrchestratorService, transport);
+export const bundleClient = createClient(BundleService, transport);
 

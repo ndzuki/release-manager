@@ -4,8 +4,11 @@ import type { ReleaseSummary } from '@/stores/releaseInventory';
 
 const props = defineProps<{
   releases: ReleaseSummary[];
-  customerId: string;
-  clusterId: string;
+  canCreateOperation?: boolean;
+  customerId?: string;
+  clusterId?: string;
+  customerName?: string;
+  clusterName?: string;
 }>();
 
 const valuesRevisionEnabled = import.meta.env.VITE_ENABLE_VALUES_REVISION !== 'false';
@@ -34,6 +37,7 @@ function formatTimestamp(value: string | null): string {
           <th scope="col">Revision</th>
           <th scope="col">Values digest</th>
           <th scope="col">最近同步</th>
+          <th v-if="canCreateOperation" scope="col">操作</th>
         </tr>
       </thead>
       <tbody>
@@ -53,6 +57,25 @@ function formatTimestamp(value: string | null): string {
             <code v-else>{{ release.valuesDigest || '—' }}</code>
           </td>
           <td>{{ formatTimestamp(release.lastSyncAt) }}</td>
+          <td v-if="canCreateOperation">
+            <RouterLink
+              v-if="release.releaseDefinitionId"
+              class="release-table__operation"
+              :to="{
+                name: 'OperationCreate',
+                params: { customerId, clusterId, releaseId: release.releaseDefinitionId },
+                query: {
+                  customerName,
+                  clusterName,
+                  releaseName: `${release.namespace}/${release.name}`,
+                  currentRevision: release.revision,
+                },
+              }"
+            >
+              创建操作
+            </RouterLink>
+            <span v-else>未绑定 Definition</span>
+          </td>
         </tr>
       </tbody>
     </table>
@@ -67,4 +90,5 @@ th { color: #475569; background: #f8fafc; font-size: 0.75rem; letter-spacing: 0.
 tbody tr:last-child td { border-bottom: 0; }
 code { color: #334155; font-size: 0.75rem; overflow-wrap: anywhere; }
 .values-link { color: #2563eb; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; overflow-wrap: anywhere; }
+.release-table__operation { color: #1d4ed8; font-weight: 700; text-decoration: none; white-space: nowrap; }
 </style>

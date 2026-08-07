@@ -461,6 +461,7 @@ var migrationStatements = []string{
 	)`,
 	// Migration: add target_revision for ROLLBACK operations.
 	`ALTER TABLE operations ADD COLUMN target_revision INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE operations ADD COLUMN target_operation_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE operations ADD COLUMN terminal_at TEXT`,
 	`UPDATE operations
 	 SET terminal_at = updated_at

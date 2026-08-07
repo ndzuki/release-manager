@@ -670,6 +670,8 @@ service OrchestratorService {
   rpc GetClusterRoutes(GetClusterRoutesRequest) returns (GetClusterRoutesResponse);
   rpc DeleteClusterRoute(DeleteClusterRouteRequest) returns (DeleteClusterRouteResponse);
   rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
+  // Operation query (REQ-056)
+  rpc ListOperations(ListOperationsRequest) returns (ListOperationsResponse);
   rpc TriggerInventorySync(TriggerInventorySyncRequest) returns (TriggerInventorySyncResponse);
 
   // Inventory sync (REQ-017)
@@ -920,4 +922,32 @@ message TargetedInventoryUpdate {
   string sync_id = 4;
   InventoryItem item = 5;         // the single release that changed
   string triggered_by_operation = 6;  // operation_id that triggered this update
+}
+
+// ── Operation query (REQ-056) ─────────────────────────────────────
+message ListOperationsRequest {
+  string release_definition_id = 1;
+  string status_filter = 2;
+  int32 limit = 3;
+  string cursor = 4;
+}
+
+message ListOperationsResponse {
+  repeated OperationSummary operations = 1;
+  string next_cursor = 2;
+}
+
+message OperationSummary {
+  string operation_id = 1;
+  string operation_type = 2;
+  string state = 3;
+  int32 revision = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message BundleImage {
+  string repository = 1;
+  string tag = 2;
+  string digest = 3;
+  string values_path = 4;
 }

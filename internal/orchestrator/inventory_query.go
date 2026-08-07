@@ -27,6 +27,8 @@ type inventorySyncCommandPayload struct {
 }
 
 // ListReleases returns one filtered page of cached Helm releases for a cluster.
+//
+//nolint:gocyclo // inventory filtering validates independent request and tenancy constraints
 func (s *Service) ListReleases(
 	ctx context.Context,
 	req *connect.Request[orchestratorv1.ListReleasesRequest],
@@ -112,6 +114,8 @@ func (s *Service) ListReleases(
 }
 
 // TriggerInventorySync persists one manual full-sync command for an online operator.
+//
+//nolint:gocyclo // sync creation validates independent tenancy, operator, and idempotency constraints
 func (s *Service) TriggerInventorySync(
 	ctx context.Context,
 	req *connect.Request[orchestratorv1.TriggerInventorySyncRequest],
