@@ -93,7 +93,11 @@ jobs:
       #     test-sdkcheck jobs restore with actions/cache/restore, so
       #     concurrent saves never race on the same key.
       - name: Prepare module cache for restore
-        run: rm -rf ~/go/pkg/mod
+        run: |
+          # Go module cache files are read-only (0444) and directories 0555,
+          # so rm fails without write permission on parent dirs. chmod first.
+          chmod -R u+w ~/go/pkg/mod 2>/dev/null || true
+          rm -rf ~/go/pkg/mod
 
       - name: Cache Go modules
         uses: actions/cache@v6
@@ -146,7 +150,9 @@ jobs:
 
       # Wipe first: restoring over read-only module files fails (see test job).
       - name: Prepare module cache for restore
-        run: rm -rf ~/go/pkg/mod
+        run: |
+          chmod -R u+w ~/go/pkg/mod 2>/dev/null || true
+          rm -rf ~/go/pkg/mod
 
       # Restore-only: the test job is the single cache writer.
       - name: Restore Go module cache
@@ -173,7 +179,9 @@ jobs:
 
       # Wipe first: restoring over read-only module files fails (see test job).
       - name: Prepare module cache for restore
-        run: rm -rf ~/go/pkg/mod
+        run: |
+          chmod -R u+w ~/go/pkg/mod 2>/dev/null || true
+          rm -rf ~/go/pkg/mod
 
       # Restore-only: the test job is the single cache writer.
       - name: Restore Go module cache
