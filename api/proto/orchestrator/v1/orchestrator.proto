@@ -557,6 +557,7 @@ message ReleaseSummary {
   ReleaseInventoryStatus status = 6;
   string values_digest = 7;
   google.protobuf.Timestamp last_sync_at = 8;
+  string release_definition_id = 9;
 }
 
 message ListReleasesRequest {
@@ -579,6 +580,51 @@ message TriggerInventorySyncRequest {
   string cluster_id = 2;
 }
 
+// ── ValuesRevision CRUD and secret metadata (REQ-055) ─────────────
+message CreateValuesRevisionRequest {
+  string release_definition_id = 1;
+  string parent_revision_id = 2;
+  bytes document = 3;
+  repeated common.v1.SecretRef secret_refs = 4;
+  int32 expected_parent_version = 5;
+}
+
+message CreateValuesRevisionResponse {
+  common.v1.ValuesRevision revision = 1;
+}
+
+message GetValuesRevisionRequest {
+  string revision_id = 1;
+}
+
+message GetValuesRevisionResponse {
+  common.v1.ValuesRevision revision = 1;
+}
+
+message ListValuesRevisionsRequest {
+  string release_definition_id = 1;
+  common.v1.ValuesStatus status_filter = 2;
+  int32 limit = 3;
+}
+
+message ListValuesRevisionsResponse {
+  repeated common.v1.ValuesRevision revisions = 1;
+}
+
+message ListSecretsRequest {
+  string cluster_id = 1;
+  string release_definition_id = 2;
+}
+
+message SecretOption {
+  string name = 1;
+  repeated string keys = 2;
+}
+
+message ListSecretsResponse {
+  repeated SecretOption secrets = 1;
+}
+
 message TriggerInventorySyncResponse {
   string sync_request_id = 1;
 }
@@ -592,6 +638,13 @@ service OrchestratorService {
   rpc SubmitValuesRevision(SubmitValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
   rpc ApproveValuesRevision(ApproveValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
   rpc RejectValuesRevision(RejectValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
+  // ValuesRevision CRUD and secret metadata (REQ-055)
+  rpc CreateValuesRevision(CreateValuesRevisionRequest) returns (CreateValuesRevisionResponse);
+  rpc GetValuesRevision(GetValuesRevisionRequest) returns (GetValuesRevisionResponse);
+  rpc ListValuesRevisions(ListValuesRevisionsRequest) returns (ListValuesRevisionsResponse);
+  rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse);
+
+  // Release definition management
   rpc CreateReleaseDefinition(CreateReleaseDefinitionRequest) returns (CreateReleaseDefinitionResponse);
   rpc GetReleaseDefinition(GetReleaseDefinitionRequest) returns (GetReleaseDefinitionResponse);
   rpc ListReleaseDefinitions(ListReleaseDefinitionsRequest) returns (ListReleaseDefinitionsResponse);
@@ -618,6 +671,8 @@ service OrchestratorService {
   rpc DeleteClusterRoute(DeleteClusterRouteRequest) returns (DeleteClusterRouteResponse);
   rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
   rpc TriggerInventorySync(TriggerInventorySyncRequest) returns (TriggerInventorySyncResponse);
+
+  // Inventory sync (REQ-017)
   rpc SyncInventory(SyncInventoryRequest) returns (SyncInventoryResponse);
 }
 

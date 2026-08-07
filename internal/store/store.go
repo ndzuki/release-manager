@@ -82,7 +82,6 @@ type ApprovalPendingError struct {
 func (e *ApprovalPendingError) Error() string { return "store: another approval is pending" }
 
 func (e *ApprovalPendingError) Unwrap() error { return ErrApprovalPending }
-
 // OperationType classifies the kind of release operation.
 type OperationType string
 
@@ -398,7 +397,6 @@ type ValuesApprovalResult struct {
 	SupersededRevisionIDs []string
 	Replayed              bool
 }
-
 // CustomerStatus is the lifecycle state of a customer tenant.
 type CustomerStatus string
 

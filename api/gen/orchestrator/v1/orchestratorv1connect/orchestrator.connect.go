@@ -73,6 +73,18 @@ const (
 	// OrchestratorServiceRejectValuesRevisionProcedure is the fully-qualified name of the
 	// OrchestratorService's RejectValuesRevision RPC.
 	OrchestratorServiceRejectValuesRevisionProcedure = "/orchestrator.v1.OrchestratorService/RejectValuesRevision"
+	// OrchestratorServiceCreateValuesRevisionProcedure is the fully-qualified name of the
+	// OrchestratorService's CreateValuesRevision RPC.
+	OrchestratorServiceCreateValuesRevisionProcedure = "/orchestrator.v1.OrchestratorService/CreateValuesRevision"
+	// OrchestratorServiceGetValuesRevisionProcedure is the fully-qualified name of the
+	// OrchestratorService's GetValuesRevision RPC.
+	OrchestratorServiceGetValuesRevisionProcedure = "/orchestrator.v1.OrchestratorService/GetValuesRevision"
+	// OrchestratorServiceListValuesRevisionsProcedure is the fully-qualified name of the
+	// OrchestratorService's ListValuesRevisions RPC.
+	OrchestratorServiceListValuesRevisionsProcedure = "/orchestrator.v1.OrchestratorService/ListValuesRevisions"
+	// OrchestratorServiceListSecretsProcedure is the fully-qualified name of the OrchestratorService's
+	// ListSecrets RPC.
+	OrchestratorServiceListSecretsProcedure = "/orchestrator.v1.OrchestratorService/ListSecrets"
 	// OrchestratorServiceCreateReleaseDefinitionProcedure is the fully-qualified name of the
 	// OrchestratorService's CreateReleaseDefinition RPC.
 	OrchestratorServiceCreateReleaseDefinitionProcedure = "/orchestrator.v1.OrchestratorService/CreateReleaseDefinition"
@@ -315,6 +327,12 @@ type OrchestratorServiceClient interface {
 	SubmitValuesRevision(context.Context, *connect.Request[v1.SubmitValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
 	ApproveValuesRevision(context.Context, *connect.Request[v1.ApproveValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
 	RejectValuesRevision(context.Context, *connect.Request[v1.RejectValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
+	// ValuesRevision CRUD and secret metadata (REQ-055)
+	CreateValuesRevision(context.Context, *connect.Request[v1.CreateValuesRevisionRequest]) (*connect.Response[v1.CreateValuesRevisionResponse], error)
+	GetValuesRevision(context.Context, *connect.Request[v1.GetValuesRevisionRequest]) (*connect.Response[v1.GetValuesRevisionResponse], error)
+	ListValuesRevisions(context.Context, *connect.Request[v1.ListValuesRevisionsRequest]) (*connect.Response[v1.ListValuesRevisionsResponse], error)
+	ListSecrets(context.Context, *connect.Request[v1.ListSecretsRequest]) (*connect.Response[v1.ListSecretsResponse], error)
+	// Release definition management
 	CreateReleaseDefinition(context.Context, *connect.Request[v1.CreateReleaseDefinitionRequest]) (*connect.Response[v1.CreateReleaseDefinitionResponse], error)
 	GetReleaseDefinition(context.Context, *connect.Request[v1.GetReleaseDefinitionRequest]) (*connect.Response[v1.GetReleaseDefinitionResponse], error)
 	ListReleaseDefinitions(context.Context, *connect.Request[v1.ListReleaseDefinitionsRequest]) (*connect.Response[v1.ListReleaseDefinitionsResponse], error)
@@ -341,6 +359,7 @@ type OrchestratorServiceClient interface {
 	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
 	ListReleases(context.Context, *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error)
 	TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error)
+	// Inventory sync (REQ-017)
 	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
 
@@ -407,6 +426,30 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			httpClient,
 			baseURL+OrchestratorServiceRejectValuesRevisionProcedure,
 			connect.WithSchema(orchestratorServiceMethods.ByName("RejectValuesRevision")),
+			connect.WithClientOptions(opts...),
+		),
+		createValuesRevision: connect.NewClient[v1.CreateValuesRevisionRequest, v1.CreateValuesRevisionResponse](
+			httpClient,
+			baseURL+OrchestratorServiceCreateValuesRevisionProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("CreateValuesRevision")),
+			connect.WithClientOptions(opts...),
+		),
+		getValuesRevision: connect.NewClient[v1.GetValuesRevisionRequest, v1.GetValuesRevisionResponse](
+			httpClient,
+			baseURL+OrchestratorServiceGetValuesRevisionProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("GetValuesRevision")),
+			connect.WithClientOptions(opts...),
+		),
+		listValuesRevisions: connect.NewClient[v1.ListValuesRevisionsRequest, v1.ListValuesRevisionsResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListValuesRevisionsProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListValuesRevisions")),
+			connect.WithClientOptions(opts...),
+		),
+		listSecrets: connect.NewClient[v1.ListSecretsRequest, v1.ListSecretsResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListSecretsProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListSecrets")),
 			connect.WithClientOptions(opts...),
 		),
 		createReleaseDefinition: connect.NewClient[v1.CreateReleaseDefinitionRequest, v1.CreateReleaseDefinitionResponse](
@@ -585,6 +628,10 @@ type orchestratorServiceClient struct {
 	submitValuesRevision     *connect.Client[v1.SubmitValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
 	approveValuesRevision    *connect.Client[v1.ApproveValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
 	rejectValuesRevision     *connect.Client[v1.RejectValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
+	createValuesRevision     *connect.Client[v1.CreateValuesRevisionRequest, v1.CreateValuesRevisionResponse]
+	getValuesRevision        *connect.Client[v1.GetValuesRevisionRequest, v1.GetValuesRevisionResponse]
+	listValuesRevisions      *connect.Client[v1.ListValuesRevisionsRequest, v1.ListValuesRevisionsResponse]
+	listSecrets              *connect.Client[v1.ListSecretsRequest, v1.ListSecretsResponse]
 	createReleaseDefinition  *connect.Client[v1.CreateReleaseDefinitionRequest, v1.CreateReleaseDefinitionResponse]
 	getReleaseDefinition     *connect.Client[v1.GetReleaseDefinitionRequest, v1.GetReleaseDefinitionResponse]
 	listReleaseDefinitions   *connect.Client[v1.ListReleaseDefinitionsRequest, v1.ListReleaseDefinitionsResponse]
@@ -657,6 +704,26 @@ func (c *orchestratorServiceClient) ApproveValuesRevision(ctx context.Context, r
 // RejectValuesRevision calls orchestrator.v1.OrchestratorService.RejectValuesRevision.
 func (c *orchestratorServiceClient) RejectValuesRevision(ctx context.Context, req *connect.Request[v1.RejectValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error) {
 	return c.rejectValuesRevision.CallUnary(ctx, req)
+}
+
+// CreateValuesRevision calls orchestrator.v1.OrchestratorService.CreateValuesRevision.
+func (c *orchestratorServiceClient) CreateValuesRevision(ctx context.Context, req *connect.Request[v1.CreateValuesRevisionRequest]) (*connect.Response[v1.CreateValuesRevisionResponse], error) {
+	return c.createValuesRevision.CallUnary(ctx, req)
+}
+
+// GetValuesRevision calls orchestrator.v1.OrchestratorService.GetValuesRevision.
+func (c *orchestratorServiceClient) GetValuesRevision(ctx context.Context, req *connect.Request[v1.GetValuesRevisionRequest]) (*connect.Response[v1.GetValuesRevisionResponse], error) {
+	return c.getValuesRevision.CallUnary(ctx, req)
+}
+
+// ListValuesRevisions calls orchestrator.v1.OrchestratorService.ListValuesRevisions.
+func (c *orchestratorServiceClient) ListValuesRevisions(ctx context.Context, req *connect.Request[v1.ListValuesRevisionsRequest]) (*connect.Response[v1.ListValuesRevisionsResponse], error) {
+	return c.listValuesRevisions.CallUnary(ctx, req)
+}
+
+// ListSecrets calls orchestrator.v1.OrchestratorService.ListSecrets.
+func (c *orchestratorServiceClient) ListSecrets(ctx context.Context, req *connect.Request[v1.ListSecretsRequest]) (*connect.Response[v1.ListSecretsResponse], error) {
+	return c.listSecrets.CallUnary(ctx, req)
 }
 
 // CreateReleaseDefinition calls orchestrator.v1.OrchestratorService.CreateReleaseDefinition.
@@ -806,6 +873,12 @@ type OrchestratorServiceHandler interface {
 	SubmitValuesRevision(context.Context, *connect.Request[v1.SubmitValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
 	ApproveValuesRevision(context.Context, *connect.Request[v1.ApproveValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
 	RejectValuesRevision(context.Context, *connect.Request[v1.RejectValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
+	// ValuesRevision CRUD and secret metadata (REQ-055)
+	CreateValuesRevision(context.Context, *connect.Request[v1.CreateValuesRevisionRequest]) (*connect.Response[v1.CreateValuesRevisionResponse], error)
+	GetValuesRevision(context.Context, *connect.Request[v1.GetValuesRevisionRequest]) (*connect.Response[v1.GetValuesRevisionResponse], error)
+	ListValuesRevisions(context.Context, *connect.Request[v1.ListValuesRevisionsRequest]) (*connect.Response[v1.ListValuesRevisionsResponse], error)
+	ListSecrets(context.Context, *connect.Request[v1.ListSecretsRequest]) (*connect.Response[v1.ListSecretsResponse], error)
+	// Release definition management
 	CreateReleaseDefinition(context.Context, *connect.Request[v1.CreateReleaseDefinitionRequest]) (*connect.Response[v1.CreateReleaseDefinitionResponse], error)
 	GetReleaseDefinition(context.Context, *connect.Request[v1.GetReleaseDefinitionRequest]) (*connect.Response[v1.GetReleaseDefinitionResponse], error)
 	ListReleaseDefinitions(context.Context, *connect.Request[v1.ListReleaseDefinitionsRequest]) (*connect.Response[v1.ListReleaseDefinitionsResponse], error)
@@ -832,6 +905,7 @@ type OrchestratorServiceHandler interface {
 	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
 	ListReleases(context.Context, *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error)
 	TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error)
+	// Inventory sync (REQ-017)
 	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
 
@@ -894,6 +968,30 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		OrchestratorServiceRejectValuesRevisionProcedure,
 		svc.RejectValuesRevision,
 		connect.WithSchema(orchestratorServiceMethods.ByName("RejectValuesRevision")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceCreateValuesRevisionHandler := connect.NewUnaryHandler(
+		OrchestratorServiceCreateValuesRevisionProcedure,
+		svc.CreateValuesRevision,
+		connect.WithSchema(orchestratorServiceMethods.ByName("CreateValuesRevision")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceGetValuesRevisionHandler := connect.NewUnaryHandler(
+		OrchestratorServiceGetValuesRevisionProcedure,
+		svc.GetValuesRevision,
+		connect.WithSchema(orchestratorServiceMethods.ByName("GetValuesRevision")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceListValuesRevisionsHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListValuesRevisionsProcedure,
+		svc.ListValuesRevisions,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListValuesRevisions")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceListSecretsHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListSecretsProcedure,
+		svc.ListSecrets,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListSecrets")),
 		connect.WithHandlerOptions(opts...),
 	)
 	orchestratorServiceCreateReleaseDefinitionHandler := connect.NewUnaryHandler(
@@ -1078,6 +1176,14 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceApproveValuesRevisionHandler.ServeHTTP(w, r)
 		case OrchestratorServiceRejectValuesRevisionProcedure:
 			orchestratorServiceRejectValuesRevisionHandler.ServeHTTP(w, r)
+		case OrchestratorServiceCreateValuesRevisionProcedure:
+			orchestratorServiceCreateValuesRevisionHandler.ServeHTTP(w, r)
+		case OrchestratorServiceGetValuesRevisionProcedure:
+			orchestratorServiceGetValuesRevisionHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListValuesRevisionsProcedure:
+			orchestratorServiceListValuesRevisionsHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListSecretsProcedure:
+			orchestratorServiceListSecretsHandler.ServeHTTP(w, r)
 		case OrchestratorServiceCreateReleaseDefinitionProcedure:
 			orchestratorServiceCreateReleaseDefinitionHandler.ServeHTTP(w, r)
 		case OrchestratorServiceGetReleaseDefinitionProcedure:
@@ -1175,6 +1281,22 @@ func (UnimplementedOrchestratorServiceHandler) ApproveValuesRevision(context.Con
 
 func (UnimplementedOrchestratorServiceHandler) RejectValuesRevision(context.Context, *connect.Request[v1.RejectValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.RejectValuesRevision is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) CreateValuesRevision(context.Context, *connect.Request[v1.CreateValuesRevisionRequest]) (*connect.Response[v1.CreateValuesRevisionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.CreateValuesRevision is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) GetValuesRevision(context.Context, *connect.Request[v1.GetValuesRevisionRequest]) (*connect.Response[v1.GetValuesRevisionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.GetValuesRevision is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListValuesRevisions(context.Context, *connect.Request[v1.ListValuesRevisionsRequest]) (*connect.Response[v1.ListValuesRevisionsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListValuesRevisions is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListSecrets(context.Context, *connect.Request[v1.ListSecretsRequest]) (*connect.Response[v1.ListSecretsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListSecrets is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) CreateReleaseDefinition(context.Context, *connect.Request[v1.CreateReleaseDefinitionRequest]) (*connect.Response[v1.CreateReleaseDefinitionResponse], error) {

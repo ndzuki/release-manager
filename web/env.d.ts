@@ -3,6 +3,7 @@
 interface ImportMetaEnv {
   readonly VITE_API_BASE?: string;
   readonly VITE_ENABLE_RELEASE_INVENTORY?: string;
+  readonly VITE_ENABLE_VALUES_REVISION?: string;
 }
 
 interface ImportMeta {

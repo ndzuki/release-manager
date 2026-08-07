@@ -16,6 +16,7 @@ export type ReleaseStatus = 'active' | 'missing' | 'out_of_sync';
 export type StatusFilter = ReleaseStatus | undefined;
 
 export interface ReleaseSummary {
+  releaseDefinitionId: string;
   namespace: string;
   name: string;
   chart: string;
@@ -66,6 +67,7 @@ function timestampToISO(timestamp: Timestamp | undefined): string | null {
 
 function mapRelease(release: ProtoReleaseSummary): ReleaseSummary {
 	return {
+		releaseDefinitionId: release.releaseDefinitionId,
 		namespace: release.namespace,
 		name: release.name,
 		chart: release.chart,

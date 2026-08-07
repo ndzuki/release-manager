@@ -116,7 +116,7 @@ function handleSearchInput(event: Event): void {
         action-label="刷新"
         @action="inventory.refresh"
       />
-      <ReleaseInventoryTable v-else :releases="inventory.releases" />
+      <ReleaseInventoryTable v-else :releases="inventory.releases" :customer-id="customerId" :cluster-id="clusterId" />
       <div v-if="inventory.hasMore" class="load-more">
         <button type="button" :disabled="inventory.appending" @click="inventory.load({ append: true })">
           {{ inventory.appending ? '加载中…' : '加载更多' }}

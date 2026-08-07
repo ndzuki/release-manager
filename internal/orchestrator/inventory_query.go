@@ -94,13 +94,14 @@ func (s *Service) ListReleases(
 	}
 	for _, item := range page.Items {
 		summary := &orchestratorv1.ReleaseSummary{
-			Namespace:    item.Namespace,
-			Name:         item.ReleaseName,
-			Chart:        item.Chart,
-			ChartVersion: item.ChartVersion,
-			Revision:     int32(item.Revision), //nolint:gosec // Helm revisions are bounded integers
-			Status:       inventoryStatusToProto(item.InventoryStatus),
-			ValuesDigest: item.ValuesDigest,
+			ReleaseDefinitionId: item.ReleaseDefinitionID,
+			Namespace:           item.Namespace,
+			Name:                item.ReleaseName,
+			Chart:               item.Chart,
+			ChartVersion:        item.ChartVersion,
+			Revision:            int32(item.Revision), //nolint:gosec // Helm revisions are bounded integers
+			Status:              inventoryStatusToProto(item.InventoryStatus),
+			ValuesDigest:        item.ValuesDigest,
 		}
 		if !page.LastSyncAt.IsZero() {
 			summary.LastSyncAt = timestamppb.New(page.LastSyncAt)

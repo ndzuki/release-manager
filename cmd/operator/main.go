@@ -22,6 +22,7 @@ import (
 	operatoragent "github.com/ndzuki/release-manager/internal/operator/agent"
 	"github.com/ndzuki/release-manager/internal/operator/helmengine"
 	"github.com/ndzuki/release-manager/internal/operator/localstore"
+	"github.com/ndzuki/release-manager/internal/operator/secretmetadata"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
@@ -133,7 +134,11 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 				http.DefaultClient,
 				s.orchestratorURL,
 			)
-		s.agent, err = operatoragent.New(operatoragent.Config{
+			secretLister, err := secretmetadata.NewForKubeConfig(s.kubeConfig)
+			if err != nil {
+				return fmt.Errorf("create secret metadata lister: %w", err)
+			}
+			s.agent, err = operatoragent.New(operatoragent.Config{
 				Client:            operatoragent.ConnectClient{Client: operatorClient},
 				Engine:            engine,
 				Store:             commandStore,
@@ -141,6 +146,7 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 				SyncExecutor:      s.syncer,
 				Secrets:           secretClient.CoreV1(),
 				EmergencyExecutor: operator.NewEmergencyCommandExecutor(kubernetesClient),
+				SecretLister:      secretLister,
 				SessionID:         s.sessionID,
 				OperatorID:        s.operatorID,
 				Logger:            logger,
