@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package operator.v1;
+
+import "google/protobuf/duration.proto";
+
+option go_package = "github.com/ndzuki/release-manager/api/gen/operator/v1;operatorv1";
+
+// ReleaseBundleSnapshot freezes the immutable bundle inputs used by an upgrade.
+message ReleaseBundleSnapshot {
+  string bundle_id = 1;
+  string bundle_digest = 2;
+  string chart_ref = 3;
+  string chart_version = 4;
+  string chart_digest = 5;
+}
+
+// ChartReference identifies the exact chart artifact verified during preflight.
+message ChartReference {
+  string resolved_uri = 1;
+  string version = 2;
+  string digest = 3;
+}
+
+// SecretRef carries a local Secret reference and its preflight consistency snapshot.
+message SecretRef {
+  string path = 1;
+  string name = 2;
+  string key = 3;
+  string uid = 4;
+  string resource_version = 5;
+  string value_digest = 6;
+}
+
+// UpgradeCommand is the frozen, typed input for one Helm SDK upgrade.
+message UpgradeCommand {
+  string definition_id = 1;
+  string namespace = 2;
+  string release_name = 3;
+  ReleaseBundleSnapshot bundle = 4;
+  ChartReference chart = 5;
+  bytes effective_values_json = 6;
+  string effective_values_digest = 7;
+  repeated SecretRef secret_refs = 8;
+  string operation_id = 11;
+  string command_id = 12;
+  uint64 expected_revision = 20;
+  bool atomic = 21;
+  google.protobuf.Duration timeout = 22;
+  int32 max_history = 23;
+}
+
+// ReleaseProvenance identifies whether release-manager metadata was present.
+enum ReleaseProvenance {
+  RELEASE_PROVENANCE_UNSPECIFIED = 0;
+  RELEASE_PROVENANCE_MANAGED = 1;
+  RELEASE_PROVENANCE_LEGACY = 2;
+}
+
+// ReleaseSnapshot is a non-sensitive observation of one Helm release revision.
+message ReleaseSnapshot {
+  uint64 helm_revision = 1;
+  string bundle_digest = 2;
+  string chart_digest = 3;
+  string effective_values_digest = 4;
+  string manifest_digest = 5;
+  ReleaseProvenance provenance = 6;
+  string status = 7;
+}
+
+// ResourceSummary summarizes rendered resources without returning manifests.
+message ResourceSummary {
+  string manifest_digest = 1;
+  int32 resource_count = 2;
+}
+
+// UpgradeResult records the attempted and active release state after execution.
+message UpgradeResult {
+  ReleaseSnapshot from = 1;
+  ReleaseSnapshot attempted = 2;
+  ReleaseSnapshot active = 3;
+  bool rollback_succeeded = 10;
+  string rollout_tracking_ref = 11;
+  ResourceSummary resource_summary = 12;
+}
+
+// ExecutionError is a stable, non-sensitive execution failure.
+message ExecutionError {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+
+// CommandResult is the typed terminal result returned by an operator.
+message CommandResult {
+  string command_id = 1;
+  string operation_id = 2;
+  string status = 3;
+  oneof result {
+    UpgradeResult upgrade = 20;
+  }
+  ExecutionError error = 30;
+}

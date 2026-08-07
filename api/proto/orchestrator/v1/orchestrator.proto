@@ -5,8 +5,110 @@ package orchestrator.v1;
 import "google/protobuf/timestamp.proto";
 
 import "common/v1/domain.proto";
+import "common/v1/trust.proto";
+import "common/v1/types.proto";
 
 option go_package = "github.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1";
+
+// ── Release Bundle Ingestion and Query (REQ-011) ──────────────────
+
+message SubmitBundleRequest {
+  string name = 1;
+  string chart_ref = 2;
+  string chart_version = 3;
+  string chart_digest = 4;
+  repeated common.v1.BundleImage images = 5;
+  string git_commit = 6;
+  string pipeline_id = 7;
+  common.v1.ArtifactReference signature = 8;
+  common.v1.ArtifactReference sbom = 9;
+  common.v1.ArtifactReference provenance = 10;
+  repeated common.v1.CandidateArtifact artifacts = 20;
+}
+
+message BundleImageBindingSummary {
+  string ref = 1;
+  string digest = 2;
+  string values_path = 3;
+  common.v1.ImageValueKind value_kind = 4;
+}
+
+message BundleSummary {
+  string id = 1;
+  string name = 2;
+  common.v1.ReleaseDigest digest = 3;
+  common.v1.BundleStatus status = 4;
+  string chart_ref = 5;
+  string chart_version = 6;
+  string chart_digest = 7;
+  repeated BundleImageBindingSummary images = 8;
+  google.protobuf.Timestamp created_at = 9;
+}
+
+message SubmitBundleResponse {
+  BundleSummary bundle = 1;
+  bool created = 2;
+}
+
+message RecordArtifactEventRequest {
+  string source_id = 1;
+  string event_id = 2;
+  string event_type = 3;
+  string occurred_at = 4;
+  string raw_payload = 5;
+  string payload_sha256 = 6;
+  common.v1.ArtifactType artifact_type = 7;
+  string repository = 8;
+  repeated common.v1.EventResource resources = 9;
+  map<string, string> request_metadata = 10;
+}
+
+message RecordArtifactEventResponse {
+  string event_record_id = 1;
+  bool created = 2;
+  int32 new_candidates = 3;
+  int32 updated_locations = 4;
+}
+
+message ListBundlesRequest {
+  string release_definition_id = 1;
+  repeated common.v1.BundleStatus status_filter = 2;
+  common.v1.Pagination pagination = 3;
+  string chart_name_filter = 4;
+}
+
+message ListBundlesResponse {
+  repeated BundleSummary bundles = 1;
+  common.v1.PaginationResponse pagination = 2;
+}
+
+message GetBundleRequest {
+  string bundle_id = 1;
+  string release_definition_id = 2;
+}
+
+message BundleDetail {
+  BundleSummary summary = 1;
+  string git_commit = 2;
+  string pipeline_id = 3;
+  string signature_digest = 4;
+  string sbom_digest = 5;
+  string provenance_digest = 6;
+  string signature_ref = 7;
+  string sbom_ref = 8;
+  string provenance_ref = 9;
+}
+
+message GetBundleResponse {
+  BundleDetail bundle = 1;
+}
+
+service BundleService {
+  rpc SubmitBundle(SubmitBundleRequest) returns (SubmitBundleResponse);
+  rpc RecordArtifactEvent(RecordArtifactEventRequest) returns (RecordArtifactEventResponse);
+  rpc ListBundles(ListBundlesRequest) returns (ListBundlesResponse);
+  rpc GetBundle(GetBundleRequest) returns (GetBundleResponse);
+}
 
 // CreateOperationRequest submits a new release operation for orchestration.
 message CreateOperationRequest {
@@ -18,6 +120,7 @@ message CreateOperationRequest {
   int32 expected_current_revision = 6;// required for UPGRADE/ROLLBACK
   string idempotency_key = 7;
   common.v1.ActorContext actor = 8;
+  common.v1.SignatureRef signature_ref = 9;   // optional: artifact trust verification
 }
 
 // CreateOperationResponse returns the pending operation details.
@@ -26,6 +129,7 @@ message CreateOperationResponse {
   string state = 2;                   // always "pending"
   string preflight_id = 3;
   google.protobuf.Timestamp accepted_at = 4;
+  common.v1.VerificationResult verification_result = 5;  // trust verification outcome
 }
 
 // PublishReleaseRequest triggers release orchestration for a definition.
@@ -39,12 +143,194 @@ message PublishReleaseResponse {
   string status = 2;
 }
 
-// ReleaseOperation represents a single publish operation.
-message ReleaseOperation {
-  string id = 1;
+// RollbackReleaseRequest rolls back a release to a specific Helm revision.
+message RollbackReleaseRequest {
+  string release_definition_id = 1;
+  int32 target_revision = 2;             // revision to rollback TO
+  int32 expected_current_revision = 3;   // current revision (optimistic lock)
+  string reason = 4;                     // required
+  common.v1.ActorContext actor = 5;
+  string idempotency_key = 6;            // optional: for idempotent retry
+}
+
+// RollbackReleaseResponse returns the created rollback operation.
+message RollbackReleaseResponse {
+  string operation_id = 1;
+  int32 from_revision = 2;
+  int32 to_revision = 3;
+  string state = 4;
+}
+
+// OperationStatus is the authoritative lifecycle state of a release operation.
+enum OperationStatus {
+  OPERATION_STATUS_UNSPECIFIED = 0;
+  OPERATION_STATUS_PENDING = 1;
+  OPERATION_STATUS_PREFLIGHT = 2;
+  OPERATION_STATUS_QUEUED = 3;
+  OPERATION_STATUS_RUNNING = 4;
+  OPERATION_STATUS_CANCELLING = 5;
+  OPERATION_STATUS_SUCCEEDED = 6;
+  OPERATION_STATUS_FAILED = 7;
+  OPERATION_STATUS_CANCELLED = 8;
+  OPERATION_STATUS_TIMEOUT = 9;
+}
+
+// Operation exposes the safe, authoritative release-operation fields.
+message Operation {
+  string operation_id = 1;
   string release_definition_id = 2;
-  string status = 3;
-  common.v1.ReleaseDigest digest = 4;
+  string operation_type = 3;
+  OperationStatus state = 4;
+  int64 state_version = 5;
+  string bundle_id = 6;
+  string values_revision_id = 7;
+  int32 expected_revision = 8;
+  int32 target_revision = 9;
+  common.v1.ActorContext actor = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+  google.protobuf.Timestamp terminal_at = 13;
+  google.protobuf.Timestamp deadline = 14;
+  string last_error = 15;
+}
+
+message GetOperationRequest {
+  string operation_id = 1;
+}
+
+message GetOperationResponse {
+  Operation operation = 1;
+  EmergencyResult emergency_result = 2;
+}
+
+message CancelOperationRequest {
+  string operation_id = 1;
+  string reason = 2;
+  int64 expected_state_version = 3;
+  reserved 4;
+  reserved "idempotency_key";
+}
+
+message CancelOperationResponse {
+  Operation operation = 1;
+  string request_id = 2;
+}
+
+message WatchOperationRequest {
+  string operation_id = 1;
+  int64 after_sequence = 2;
+}
+
+message WatchOperationResponse {
+  oneof payload {
+    OperationSnapshot snapshot = 1;
+    TimelineEntry entry = 2;
+    Heartbeat heartbeat = 3;
+  }
+}
+
+message OperationSnapshot {
+  Operation operation = 1;
+  int64 snapshot_sequence = 2;
+  int64 retained_from_sequence = 3;
+}
+
+enum TimelineEntryKind {
+  TIMELINE_ENTRY_KIND_UNSPECIFIED = 0;
+  TIMELINE_ENTRY_KIND_STATE_TRANSITION = 1;
+  TIMELINE_ENTRY_KIND_ACK = 2;
+  TIMELINE_ENTRY_KIND_ROLLOUT_PROGRESS = 3;
+  TIMELINE_ENTRY_KIND_ERROR = 4;
+  TIMELINE_ENTRY_KIND_EMERGENCY_EFFECT_RESOLVED = 5;
+}
+
+message TimelineEntry {
+  string id = 1;
+  string operation_id = 2;
+  int64 sequence = 3;
+  int64 operation_state_version = 4;
+  google.protobuf.Timestamp timestamp = 5;
+  TimelineEntryKind kind = 6;
+  string request_id = 7;
+  string error_code = 8;
+  string error_message = 9;
+  string ack_stage = 10;
+  string from_state = 11;
+  string to_state = 12;
+  string workload_ref = 13;
+  int32 ready = 14;
+  int32 desired = 15;
+  string effect_from = 16;
+  string effect_to = 17;
+}
+
+message Heartbeat {
+  int64 latest_sequence = 1;
+  string request_id = 2;
+  google.protobuf.Timestamp sent_at = 3;
+}
+
+// ── Release Definition Management ────────────────────────────────
+
+message CreateReleaseDefinitionRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+  string namespace = 3;
+  string release_name = 4;
+  string chart_name = 5;
+  bool enabled = 6;
+  common.v1.ActorContext actor = 7;
+  bool hpa_managed = 8;
+  int32 max_emergency_replicas = 9;
+  repeated ApprovedAnnotationKey approved_annotation_keys = 10;
+  repeated PromotionMapping promotion_mappings = 11;
+}
+
+message CreateReleaseDefinitionResponse {
+  common.v1.ReleaseDefinition definition = 1;
+}
+
+message GetReleaseDefinitionRequest {
+  string definition_id = 1;
+}
+
+message GetReleaseDefinitionResponse {
+  common.v1.ReleaseDefinition definition = 1;
+}
+
+message ListReleaseDefinitionsRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+  bool include_disabled = 3;
+}
+
+message ListReleaseDefinitionsResponse {
+  repeated common.v1.ReleaseDefinition definitions = 1;
+}
+
+message UpdateReleaseDefinitionRequest {
+  string definition_id = 1;
+  string namespace = 2;
+  string release_name = 3;
+  string chart_name = 4;
+  int64 expected_version = 5;
+  optional bool hpa_managed = 6;
+  optional int32 max_emergency_replicas = 7;
+  repeated ApprovedAnnotationKey approved_annotation_keys = 8;
+  repeated PromotionMapping promotion_mappings = 9;
+}
+
+message UpdateReleaseDefinitionResponse {
+  common.v1.ReleaseDefinition definition = 1;
+}
+
+message DisableReleaseDefinitionRequest {
+  string definition_id = 1;
+  int64 expected_version = 2;
+}
+
+message DisableReleaseDefinitionResponse {
+  common.v1.ReleaseDefinition definition = 1;
 }
 
 // ── Customer Management ────────────────────────────────────────────
@@ -67,7 +353,11 @@ message GetCustomerResponse {
   common.v1.Customer customer = 1;
 }
 
-message ListCustomersRequest {}
+message ListCustomersRequest {
+  // include_disabled includes disabled customers in the response.
+  // Defaults to false (only active customers are returned).
+  bool include_disabled = 1;
+}
 
 message ListCustomersResponse {
   repeated common.v1.Customer customers = 1;
@@ -100,6 +390,19 @@ message CreateClusterRequest {
 
 message CreateClusterResponse {
   common.v1.Cluster cluster = 1;
+}
+
+message UpdateClusterRequest {
+  string cluster_id = 1;
+  string name = 2;
+  bool enabled = 3;
+  int64 version = 4;
+  repeated ClusterRouteInput routes = 5;
+}
+
+message UpdateClusterResponse {
+  common.v1.Cluster cluster = 1;
+  repeated ClusterRoute routes = 2;
 }
 
 message GetClusterRequest {
@@ -136,29 +439,186 @@ message CreateEnrollmentTokenResponse {
   string expires_at = 2;
 }
 
+// ── Cluster Artifact Routing (REQ-014) ────────────────────────────
+
+// ArtifactType classifies the kind of artifact routed to a cluster.
+enum ArtifactType {
+  ARTIFACT_TYPE_UNSPECIFIED = 0;
+  ARTIFACT_TYPE_IMAGE = 1;
+  ARTIFACT_TYPE_CHART = 2;
+}
+
+// ArtifactMode describes how the cluster obtains the artifact.
+enum ArtifactMode {
+  ARTIFACT_MODE_UNSPECIFIED = 0;
+  ARTIFACT_MODE_DIRECT = 1;
+  ARTIFACT_MODE_PULL_THROUGH_CACHE = 2;
+  ARTIFACT_MODE_REPLICATED = 3;
+}
+
+// ClusterRoute defines a prefix-based routing rule per artifact type.
+message ClusterRoute {
+  string id = 1;
+  string cluster_id = 2;
+  ArtifactType artifact_type = 3;
+  ArtifactMode mode = 4;
+  string source_prefix = 5;
+  string target_prefix = 6;
+}
+
+message ClusterRouteInput {
+  string id = 1;
+  ArtifactType artifact_type = 2;
+  ArtifactMode mode = 3;
+  string source_prefix = 4;
+  string target_prefix = 5;
+  string provider = 6;
+}
+
+message RouteValidationDetail {
+  string error_code = 1;
+  string field = 2;
+  string description = 3;
+  string conflicting_rule_id = 4;
+}
+
+message ConfigureClusterRouteRequest {
+  string id = 1;
+  string cluster_id = 2;
+  ArtifactType artifact_type = 3;
+  ArtifactMode mode = 4;
+  string source_prefix = 5;
+  string target_prefix = 6;
+}
+
+message ConfigureClusterRouteResponse {
+  ClusterRoute route = 1;
+}
+
+message GetClusterRoutesRequest {
+  string cluster_id = 1;
+}
+
+message GetClusterRoutesResponse {
+  repeated ClusterRoute routes = 1;
+}
+
+message DeleteClusterRouteRequest {
+  string route_id = 1;
+}
+
+message DeleteClusterRouteResponse {}
+
+// SubmitValuesRevisionRequest moves a draft revision into pending approval.
+message SubmitValuesRevisionRequest {
+  string revision_id = 1;
+  int64 expected_state_version = 2;
+  string comment = 3;
+}
+
+// ApproveValuesRevisionRequest approves a pending values revision.
+message ApproveValuesRevisionRequest {
+  string revision_id = 1;
+  int64 expected_state_version = 2;
+  string comment = 3;
+}
+
+// RejectValuesRevisionRequest rejects a pending values revision.
+message RejectValuesRevisionRequest {
+  string revision_id = 1;
+  int64 expected_state_version = 2;
+  string reason = 3;
+}
+
+// ValuesRevisionDecisionResponse reports the committed state transition.
+message ValuesRevisionDecisionResponse {
+  common.v1.ValuesRevision revision = 1;
+  common.v1.ValuesStatus previous_state = 2;
+  common.v1.ValuesStatus new_state = 3;
+  google.protobuf.Timestamp decided_at = 4;
+  repeated string superseded_revision_ids = 5;
+}
+
+// ── Release Inventory Query and Manual Sync (REQ-054) ────────────
+
+enum ReleaseInventoryStatus {
+  RELEASE_INVENTORY_STATUS_UNSPECIFIED = 0;
+  RELEASE_INVENTORY_STATUS_ACTIVE = 1;
+  RELEASE_INVENTORY_STATUS_MISSING = 2;
+  RELEASE_INVENTORY_STATUS_OUT_OF_SYNC = 3;
+}
+
+message ReleaseSummary {
+  string namespace = 1;
+  string name = 2;
+  string chart = 3;
+  string chart_version = 4;
+  int32 revision = 5;
+  ReleaseInventoryStatus status = 6;
+  string values_digest = 7;
+  google.protobuf.Timestamp last_sync_at = 8;
+}
+
+message ListReleasesRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+  ReleaseInventoryStatus status_filter = 3;
+  string name_search = 4;
+  int32 page_size = 5;
+  string cursor = 6;
+}
+
+message ListReleasesResponse {
+  repeated ReleaseSummary releases = 1;
+  string next_cursor = 2;
+  int32 total_count = 3;
+}
+
+message TriggerInventorySyncRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+}
+
+message TriggerInventorySyncResponse {
+  string sync_request_id = 1;
+}
 service OrchestratorService {
-  // Release pipeline
   rpc CreateOperation(CreateOperationRequest) returns (CreateOperationResponse);
   rpc PublishRelease(PublishReleaseRequest) returns (PublishReleaseResponse);
-
-  // Customer management
+  rpc RollbackRelease(RollbackReleaseRequest) returns (RollbackReleaseResponse);
+  rpc GetOperation(GetOperationRequest) returns (GetOperationResponse);
+  rpc WatchOperation(WatchOperationRequest) returns (stream WatchOperationResponse);
+  rpc CancelOperation(CancelOperationRequest) returns (CancelOperationResponse);
+  rpc SubmitValuesRevision(SubmitValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
+  rpc ApproveValuesRevision(ApproveValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
+  rpc RejectValuesRevision(RejectValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
+  rpc CreateReleaseDefinition(CreateReleaseDefinitionRequest) returns (CreateReleaseDefinitionResponse);
+  rpc GetReleaseDefinition(GetReleaseDefinitionRequest) returns (GetReleaseDefinitionResponse);
+  rpc ListReleaseDefinitions(ListReleaseDefinitionsRequest) returns (ListReleaseDefinitionsResponse);
+  rpc UpdateReleaseDefinition(UpdateReleaseDefinitionRequest) returns (UpdateReleaseDefinitionResponse);
+  rpc DisableReleaseDefinition(DisableReleaseDefinitionRequest) returns (DisableReleaseDefinitionResponse);
   rpc CreateCustomer(CreateCustomerRequest) returns (CreateCustomerResponse);
   rpc GetCustomer(GetCustomerRequest) returns (GetCustomerResponse);
   rpc ListCustomers(ListCustomersRequest) returns (ListCustomersResponse);
   rpc UpdateCustomer(UpdateCustomerRequest) returns (UpdateCustomerResponse);
   rpc DisableCustomer(DisableCustomerRequest) returns (DisableCustomerResponse);
-
-  // Cluster management
   rpc CreateCluster(CreateClusterRequest) returns (CreateClusterResponse);
+  rpc UpdateCluster(UpdateClusterRequest) returns (UpdateClusterResponse);
   rpc GetCluster(GetClusterRequest) returns (GetClusterResponse);
   rpc ListClusters(ListClustersRequest) returns (ListClustersResponse);
   rpc DisableCluster(DisableClusterRequest) returns (DisableClusterResponse);
-
-  // Operator enrollment
   rpc CreateEnrollmentToken(CreateEnrollmentTokenRequest) returns (CreateEnrollmentTokenResponse);
-
-  // Emergency change (REQ-032)
   rpc EmergencyChange(EmergencyChangeRequest) returns (EmergencyChangeResponse);
+  rpc ListEmergencyTargets(ListEmergencyTargetsRequest) returns (ListEmergencyTargetsResponse);
+  rpc CheckEmergencyConflict(CheckEmergencyConflictRequest) returns (CheckEmergencyConflictResponse);
+  rpc ListCandidateArtifacts(ListCandidateArtifactsRequest) returns (ListCandidateArtifactsResponse);
+  rpc ListConvergenceTasks(ListConvergenceTasksRequest) returns (ListConvergenceTasksResponse);
+  rpc ConfigureClusterRoute(ConfigureClusterRouteRequest) returns (ConfigureClusterRouteResponse);
+  rpc GetClusterRoutes(GetClusterRoutesRequest) returns (GetClusterRoutesResponse);
+  rpc DeleteClusterRoute(DeleteClusterRouteRequest) returns (DeleteClusterRouteResponse);
+  rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
+  rpc TriggerInventorySync(TriggerInventorySyncRequest) returns (TriggerInventorySyncResponse);
+  rpc SyncInventory(SyncInventoryRequest) returns (SyncInventoryResponse);
 }
 
 // ── Emergency Change (REQ-032) ────────────────────────────────────
@@ -182,18 +642,227 @@ enum EmergencyConvergence {
   EMERGENCY_CONVERGENCE_REVERT_ON_NEXT_RECONCILE = 2;
 }
 
+message ApprovedAnnotationKey {
+  string key = 1;
+  string scope = 2;
+  string promotion_values_path = 3;
+}
+
+message PromotionMapping {
+  string workload_kind = 1;
+  string workload_name = 2;
+  string container = 3;
+  string field = 4;
+  string values_path = 5;
+}
+
+message WorkloadRef {
+  string kind = 1;
+  string name = 2;
+  string namespace = 3;
+  string uid = 4;
+}
+
+message SetContainerImage {
+  string container = 1;
+  string artifact_id = 2;
+}
+
+message SetReplicas {
+  int32 replicas = 1;
+}
+
+message SetApprovedAnnotations {
+  repeated AnnotationEntry entries = 1;
+}
+
+message AnnotationEntry {
+  string key = 1;
+  string value = 2;
+}
+
+message ListEmergencyTargetsRequest {
+  string release_definition_id = 1;
+}
+
+message ListEmergencyTargetsResponse {
+  repeated EmergencyTarget targets = 1;
+}
+
+message EmergencyTarget {
+  WorkloadRef workload_ref = 1;
+  repeated string containers = 2;
+  repeated EmergencyAction supported_operations = 3;
+  repeated PromotionMapping promotions = 4;
+  map<string, string> current_image_refs = 5;
+  int32 current_replicas = 6;
+  map<string, string> current_annotations = 7;
+  bool hpa_managed = 8;
+  int32 max_emergency_replicas = 9;
+}
+
+message CheckEmergencyConflictRequest {
+  string release_definition_id = 1;
+}
+
+message CheckEmergencyConflictResponse {
+  bool has_conflict = 1;
+  RunningOperationDetail running_operation = 2;
+}
+
+message RunningOperationDetail {
+  string operation_id = 1;
+  string type = 2;
+  string status = 3;
+  google.protobuf.Timestamp started_at = 4;
+}
+
+message ListCandidateArtifactsRequest {
+  string organization_id = 1;
+  string release_definition_id = 2;
+}
+
+message ListCandidateArtifactsResponse {
+  repeated CandidateArtifactSummary artifacts = 1;
+}
+
+message CandidateArtifactSummary {
+  string id = 1;
+  string repository = 2;
+  string digest = 3;
+  string ref = 4;
+  google.protobuf.Timestamp validated_at = 5;
+  string source_id = 6;
+}
+
+message ListConvergenceTasksRequest {
+  string release_definition_id = 1;
+  string status_filter = 2;
+}
+
+message ListConvergenceTasksResponse {
+  repeated ConvergenceTaskDetail tasks = 1;
+}
+
+message ConvergenceTaskDetail {
+  string task_id = 1;
+  string operation_id = 2;
+  EmergencyAction op_type = 3;
+  string target_summary = 4;
+  google.protobuf.Timestamp submitted_at = 5;
+  string reason = 6;
+  string active_revision_id = 7;
+  string active_revision_status = 8;
+  repeated string promotion_paths = 9;
+  bool selectable = 10;
+  string incompatibility_reason = 11;
+}
+
 message EmergencyChangeRequest {
   string release_definition_id = 1;
-  EmergencyAction action = 2;
-  // payload is serialized JSON containing action-specific parameters.
-  string payload = 3;
-  string reason = 4;
-  EmergencyConvergence convergence = 5;
-  common.v1.ActorContext actor = 6;
+  string idempotency_key = 2;
+  string reason = 3;
+  WorkloadRef workload_ref = 4;
+  oneof change {
+    SetContainerImage set_container_image = 5;
+    SetReplicas set_replicas = 6;
+    SetApprovedAnnotations set_approved_annotations = 7;
+  }
+  EmergencyConvergence convergence = 8;
 }
 
 message EmergencyChangeResponse {
   string operation_id = 1;
   string status = 2;
   EmergencyConvergence convergence = 3;
+  string convergence_task_id = 4;
+  string image_reference = 5;
+  google.protobuf.Timestamp accepted_at = 6;
+}
+
+enum EmergencyEffectStatus {
+  EMERGENCY_EFFECT_STATUS_UNSPECIFIED = 0;
+  EMERGENCY_EFFECT_STATUS_UNKNOWN = 1;
+  EMERGENCY_EFFECT_STATUS_APPLIED = 2;
+  EMERGENCY_EFFECT_STATUS_NOT_APPLIED = 3;
+}
+
+message EmergencyResult {
+  EmergencyAction op_type = 1;
+  EmergencyConvergence convergence_policy = 2;
+  EmergencyTypedValues before = 3;
+  EmergencyTypedValues after = 4;
+  repeated ConvergenceTaskSummary convergence_tasks = 5;
+  string revert_status = 6;
+  string reconciled_by_operation_id = 7;
+  EmergencyEffectStatus effect_status = 8;
+}
+
+message EmergencyTypedValues {
+  oneof values {
+    ImageRefValues image_ref_values = 1;
+    ReplicasValues replicas_values = 2;
+    AnnotationValues annotation_values = 3;
+  }
+}
+
+message ImageRefValues {
+  string container = 1;
+  string image_reference = 2;
+}
+
+message ReplicasValues {
+  int32 replicas = 1;
+}
+
+message AnnotationValues {
+  repeated AnnotationEntry annotations = 1;
+}
+
+message ConvergenceTaskSummary {
+  string task_id = 1;
+  string status = 2;
+}
+
+// ── Inventory Sync (REQ-017) ───────────────────────────────────────
+
+// InventoryItem represents a single Helm release in a cluster inventory snapshot.
+// It carries only metadata and a values digest — NEVER raw Secret values.
+message InventoryItem {
+  string namespace = 1;
+  string name = 2;
+  string chart = 3;
+  string chart_version = 4;
+  int32 revision = 5;
+  string status = 6;
+  string values_digest = 7;  // SHA-256 of canonical values, not the values themselves
+  string definition_id = 8;
+}
+
+// SyncInventoryRequest is a full snapshot from an operator.
+message SyncInventoryRequest {
+  string operator_id = 1;
+  string cluster_id = 2;
+  string customer_id = 3;
+  string sync_id = 4;             // unique per snapshot, used for idempotency
+  repeated InventoryItem items = 5;
+  bool full_snapshot = 6;         // true = full sync, false = targeted update
+}
+
+// SyncInventoryResponse returns the application result.
+message SyncInventoryResponse {
+  int32 accepted_count = 1;
+  int32 missing_marked_count = 2;
+  int64 snapshot_version = 3;
+  string status = 4;              // "applied", "duplicate", "stale"
+}
+
+// TargetedInventoryUpdate is sent after a single operation completes.
+message TargetedInventoryUpdate {
+  string operator_id = 1;
+  string cluster_id = 2;
+  string customer_id = 3;
+  string sync_id = 4;
+  InventoryItem item = 5;         // the single release that changed
+  string triggered_by_operation = 6;  // operation_id that triggered this update
 }

@@ -12,15 +12,15 @@ import (
 type Event string
 
 const (
-	EventStartPreflight Event = "start_preflight"
-	EventPreflightPassed  Event = "preflight_passed"
-	EventEnqueue          Event = "enqueue"
-	EventBegin            Event = "begin"
-	EventComplete         Event = "complete"
-	EventError            Event = "error"
-	EventCancel           Event = "cancel"
+	EventStartPreflight    Event = "start_preflight"
+	EventPreflightPassed   Event = "preflight_passed"
+	EventEnqueue           Event = "enqueue"
+	EventBegin             Event = "begin"
+	EventComplete          Event = "complete"
+	EventError             Event = "error"
+	EventCancel            Event = "cancel"
 	EventAcknowledgeCancel Event = "acknowledge_cancel"
-	EventTimeout          Event = "timeout"
+	EventTimeout           Event = "timeout"
 )
 
 // Sentinel errors returned by the state machine.
@@ -33,12 +33,13 @@ var (
 var validTransitions = map[store.OperationStatus]map[Event]store.OperationStatus{
 	store.StatusPending: {
 		EventStartPreflight: store.StatusPreflight,
-		EventEnqueue:        store.StatusQueued,     // EMERGENCY path
+		EventEnqueue:        store.StatusQueued, // EMERGENCY path
 		EventCancel:         store.StatusCancelled,
 		EventTimeout:        store.StatusTimeout,
 	},
 	store.StatusPreflight: {
 		EventPreflightPassed: store.StatusQueued,
+		EventError:           store.StatusFailed,
 		EventCancel:          store.StatusCancelled,
 		EventTimeout:         store.StatusTimeout,
 	},
@@ -48,10 +49,10 @@ var validTransitions = map[store.OperationStatus]map[Event]store.OperationStatus
 		EventTimeout: store.StatusTimeout,
 	},
 	store.StatusRunning: {
-		EventComplete:          store.StatusSucceeded,
-		EventError:             store.StatusFailed,
-		EventCancel:            store.StatusCancelling,
-		EventTimeout:           store.StatusTimeout,
+		EventComplete: store.StatusSucceeded,
+		EventError:    store.StatusFailed,
+		EventCancel:   store.StatusCancelling,
+		EventTimeout:  store.StatusTimeout,
 	},
 	store.StatusCancelling: {
 		EventAcknowledgeCancel: store.StatusCancelled,

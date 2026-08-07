@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: release-manager-config
+  namespace: release-manager-dev
+data:
+  TARGET_ENV: staging
+  REGISTRY_HOST: localhost:5001
+  DEV_ENVIRONMENT: "true"

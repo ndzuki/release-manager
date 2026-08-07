@@ -3,23 +3,32 @@ syntax = "proto3";
 package webhook.v1;
 
 import "common/v1/domain.proto";
+import "orchestrator/v1/orchestrator.proto";
 
 option go_package = "github.com/ndzuki/release-manager/api/gen/webhook/v1;webhookv1";
 
-// IngestArtifactRequest carries an external artifact reference for ingestion.
-message IngestArtifactRequest {
-  string source = 1;
-  string artifact_url = 2;
-  string artifact_type = 3;
-  map<string, string> metadata = 4;
+// SubmitReleaseBundleRequest submits a complete release bundle from CI.
+message SubmitReleaseBundleRequest {
+  string name = 1;
+  string chart_ref = 2;
+  string chart_version = 3;
+  string chart_digest = 4;
+  repeated common.v1.BundleImage images = 5;
+  string git_commit = 6;
+  string pipeline_id = 7;
+  common.v1.ArtifactReference signature = 8;
+  common.v1.ArtifactReference sbom = 9;
+  common.v1.ArtifactReference provenance = 10;
+  repeated common.v1.CandidateArtifact artifacts = 20;
 }
 
-// IngestArtifactResponse returns the resulting ReleaseBundle.
-message IngestArtifactResponse {
-  common.v1.ReleaseBundle bundle = 1;
+// SubmitReleaseBundleResponse returns the canonical orchestrator Bundle result.
+message SubmitReleaseBundleResponse {
+  orchestrator.v1.BundleSummary bundle = 1;
+  bool created = 2;
 }
 
-// WebhookService handles artifact ingestion from external sources (e.g. Harbor).
+// WebhookService authenticates and forwards CI bundle submissions.
 service WebhookService {
-  rpc IngestArtifact(IngestArtifactRequest) returns (IngestArtifactResponse);
+  rpc SubmitReleaseBundle(SubmitReleaseBundleRequest) returns (SubmitReleaseBundleResponse);
 }

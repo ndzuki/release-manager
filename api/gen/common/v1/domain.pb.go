@@ -22,6 +22,286 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// BundleStatus is the lifecycle state of a ReleaseBundle.
+type BundleStatus int32
+
+const (
+	BundleStatus_BUNDLE_STATUS_UNSPECIFIED BundleStatus = 0
+	BundleStatus_BUNDLE_STATUS_RECEIVED    BundleStatus = 1
+	BundleStatus_BUNDLE_STATUS_VALIDATED   BundleStatus = 2
+	BundleStatus_BUNDLE_STATUS_REJECTED    BundleStatus = 3
+	BundleStatus_BUNDLE_STATUS_ARCHIVED    BundleStatus = 4
+)
+
+// Enum value maps for BundleStatus.
+var (
+	BundleStatus_name = map[int32]string{
+		0: "BUNDLE_STATUS_UNSPECIFIED",
+		1: "BUNDLE_STATUS_RECEIVED",
+		2: "BUNDLE_STATUS_VALIDATED",
+		3: "BUNDLE_STATUS_REJECTED",
+		4: "BUNDLE_STATUS_ARCHIVED",
+	}
+	BundleStatus_value = map[string]int32{
+		"BUNDLE_STATUS_UNSPECIFIED": 0,
+		"BUNDLE_STATUS_RECEIVED":    1,
+		"BUNDLE_STATUS_VALIDATED":   2,
+		"BUNDLE_STATUS_REJECTED":    3,
+		"BUNDLE_STATUS_ARCHIVED":    4,
+	}
+)
+
+func (x BundleStatus) Enum() *BundleStatus {
+	p := new(BundleStatus)
+	*p = x
+	return p
+}
+
+func (x BundleStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (BundleStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_v1_domain_proto_enumTypes[0].Descriptor()
+}
+
+func (BundleStatus) Type() protoreflect.EnumType {
+	return &file_common_v1_domain_proto_enumTypes[0]
+}
+
+func (x BundleStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use BundleStatus.Descriptor instead.
+func (BundleStatus) EnumDescriptor() ([]byte, []int) {
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{0}
+}
+
+// ImageValueKind describes which Helm value a binding replaces.
+type ImageValueKind int32
+
+const (
+	ImageValueKind_IMAGE_VALUE_KIND_UNSPECIFIED    ImageValueKind = 0
+	ImageValueKind_IMAGE_VALUE_KIND_FULL_REFERENCE ImageValueKind = 1
+	ImageValueKind_IMAGE_VALUE_KIND_REPOSITORY     ImageValueKind = 2
+	ImageValueKind_IMAGE_VALUE_KIND_TAG            ImageValueKind = 3
+	ImageValueKind_IMAGE_VALUE_KIND_DIGEST         ImageValueKind = 4
+)
+
+// Enum value maps for ImageValueKind.
+var (
+	ImageValueKind_name = map[int32]string{
+		0: "IMAGE_VALUE_KIND_UNSPECIFIED",
+		1: "IMAGE_VALUE_KIND_FULL_REFERENCE",
+		2: "IMAGE_VALUE_KIND_REPOSITORY",
+		3: "IMAGE_VALUE_KIND_TAG",
+		4: "IMAGE_VALUE_KIND_DIGEST",
+	}
+	ImageValueKind_value = map[string]int32{
+		"IMAGE_VALUE_KIND_UNSPECIFIED":    0,
+		"IMAGE_VALUE_KIND_FULL_REFERENCE": 1,
+		"IMAGE_VALUE_KIND_REPOSITORY":     2,
+		"IMAGE_VALUE_KIND_TAG":            3,
+		"IMAGE_VALUE_KIND_DIGEST":         4,
+	}
+)
+
+func (x ImageValueKind) Enum() *ImageValueKind {
+	p := new(ImageValueKind)
+	*p = x
+	return p
+}
+
+func (x ImageValueKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ImageValueKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_v1_domain_proto_enumTypes[1].Descriptor()
+}
+
+func (ImageValueKind) Type() protoreflect.EnumType {
+	return &file_common_v1_domain_proto_enumTypes[1]
+}
+
+func (x ImageValueKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ImageValueKind.Descriptor instead.
+func (ImageValueKind) EnumDescriptor() ([]byte, []int) {
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{1}
+}
+
+// ArtifactType classifies a globally indexed candidate artifact.
+type ArtifactType int32
+
+const (
+	ArtifactType_ARTIFACT_TYPE_UNSPECIFIED ArtifactType = 0
+	ArtifactType_ARTIFACT_TYPE_IMAGE       ArtifactType = 1
+	ArtifactType_ARTIFACT_TYPE_CHART       ArtifactType = 2
+	ArtifactType_ARTIFACT_TYPE_SBOM        ArtifactType = 3
+	ArtifactType_ARTIFACT_TYPE_PROVENANCE  ArtifactType = 4
+	ArtifactType_ARTIFACT_TYPE_SIGNATURE   ArtifactType = 5
+)
+
+// Enum value maps for ArtifactType.
+var (
+	ArtifactType_name = map[int32]string{
+		0: "ARTIFACT_TYPE_UNSPECIFIED",
+		1: "ARTIFACT_TYPE_IMAGE",
+		2: "ARTIFACT_TYPE_CHART",
+		3: "ARTIFACT_TYPE_SBOM",
+		4: "ARTIFACT_TYPE_PROVENANCE",
+		5: "ARTIFACT_TYPE_SIGNATURE",
+	}
+	ArtifactType_value = map[string]int32{
+		"ARTIFACT_TYPE_UNSPECIFIED": 0,
+		"ARTIFACT_TYPE_IMAGE":       1,
+		"ARTIFACT_TYPE_CHART":       2,
+		"ARTIFACT_TYPE_SBOM":        3,
+		"ARTIFACT_TYPE_PROVENANCE":  4,
+		"ARTIFACT_TYPE_SIGNATURE":   5,
+	}
+)
+
+func (x ArtifactType) Enum() *ArtifactType {
+	p := new(ArtifactType)
+	*p = x
+	return p
+}
+
+func (x ArtifactType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ArtifactType) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_v1_domain_proto_enumTypes[2].Descriptor()
+}
+
+func (ArtifactType) Type() protoreflect.EnumType {
+	return &file_common_v1_domain_proto_enumTypes[2]
+}
+
+func (x ArtifactType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ArtifactType.Descriptor instead.
+func (ArtifactType) EnumDescriptor() ([]byte, []int) {
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{2}
+}
+
+// ValuesStatus is the approval state of a values revision.
+type ValuesStatus int32
+
+const (
+	ValuesStatus_VALUES_STATUS_UNSPECIFIED      ValuesStatus = 0
+	ValuesStatus_VALUES_STATUS_DRAFT            ValuesStatus = 1
+	ValuesStatus_VALUES_STATUS_APPROVED         ValuesStatus = 2
+	ValuesStatus_VALUES_STATUS_REJECTED         ValuesStatus = 3
+	ValuesStatus_VALUES_STATUS_PENDING_APPROVAL ValuesStatus = 4
+	ValuesStatus_VALUES_STATUS_SUPERSEDED       ValuesStatus = 5
+)
+
+// Enum value maps for ValuesStatus.
+var (
+	ValuesStatus_name = map[int32]string{
+		0: "VALUES_STATUS_UNSPECIFIED",
+		1: "VALUES_STATUS_DRAFT",
+		2: "VALUES_STATUS_APPROVED",
+		3: "VALUES_STATUS_REJECTED",
+		4: "VALUES_STATUS_PENDING_APPROVAL",
+		5: "VALUES_STATUS_SUPERSEDED",
+	}
+	ValuesStatus_value = map[string]int32{
+		"VALUES_STATUS_UNSPECIFIED":      0,
+		"VALUES_STATUS_DRAFT":            1,
+		"VALUES_STATUS_APPROVED":         2,
+		"VALUES_STATUS_REJECTED":         3,
+		"VALUES_STATUS_PENDING_APPROVAL": 4,
+		"VALUES_STATUS_SUPERSEDED":       5,
+	}
+)
+
+func (x ValuesStatus) Enum() *ValuesStatus {
+	p := new(ValuesStatus)
+	*p = x
+	return p
+}
+
+func (x ValuesStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ValuesStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_v1_domain_proto_enumTypes[3].Descriptor()
+}
+
+func (ValuesStatus) Type() protoreflect.EnumType {
+	return &file_common_v1_domain_proto_enumTypes[3]
+}
+
+func (x ValuesStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ValuesStatus.Descriptor instead.
+func (ValuesStatus) EnumDescriptor() ([]byte, []int) {
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{3}
+}
+
+// ClusterStatus represents the lifecycle state of a cluster.
+type ClusterStatus int32
+
+const (
+	ClusterStatus_CLUSTER_STATUS_UNSPECIFIED ClusterStatus = 0
+	ClusterStatus_CLUSTER_STATUS_ACTIVE      ClusterStatus = 1
+	ClusterStatus_CLUSTER_STATUS_DISABLED    ClusterStatus = 2
+)
+
+// Enum value maps for ClusterStatus.
+var (
+	ClusterStatus_name = map[int32]string{
+		0: "CLUSTER_STATUS_UNSPECIFIED",
+		1: "CLUSTER_STATUS_ACTIVE",
+		2: "CLUSTER_STATUS_DISABLED",
+	}
+	ClusterStatus_value = map[string]int32{
+		"CLUSTER_STATUS_UNSPECIFIED": 0,
+		"CLUSTER_STATUS_ACTIVE":      1,
+		"CLUSTER_STATUS_DISABLED":    2,
+	}
+)
+
+func (x ClusterStatus) Enum() *ClusterStatus {
+	p := new(ClusterStatus)
+	*p = x
+	return p
+}
+
+func (x ClusterStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ClusterStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_v1_domain_proto_enumTypes[4].Descriptor()
+}
+
+func (ClusterStatus) Type() protoreflect.EnumType {
+	return &file_common_v1_domain_proto_enumTypes[4]
+}
+
+func (x ClusterStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ClusterStatus.Descriptor instead.
+func (ClusterStatus) EnumDescriptor() ([]byte, []int) {
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{4}
+}
+
 // ReleaseDigest is an immutable content-addressable identifier for a ReleaseBundle.
 type ReleaseDigest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -75,20 +355,277 @@ func (x *ReleaseDigest) GetValue() string {
 	return ""
 }
 
-// ReleaseBundle is the atomic unit of a release — immutable once published.
-type ReleaseBundle struct {
+// BundleImage maps a container image to its Helm values path.
+type BundleImage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Digest        *ReleaseDigest         `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Ref           string                 `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	Digest        string                 `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
+	ValuesPath    string                 `protobuf:"bytes,3,opt,name=values_path,json=valuesPath,proto3" json:"values_path,omitempty"`
+	ValueKind     ImageValueKind         `protobuf:"varint,4,opt,name=value_kind,json=valueKind,proto3,enum=common.v1.ImageValueKind" json:"value_kind,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
+func (x *BundleImage) Reset() {
+	*x = BundleImage{}
+	mi := &file_common_v1_domain_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BundleImage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BundleImage) ProtoMessage() {}
+
+func (x *BundleImage) ProtoReflect() protoreflect.Message {
+	mi := &file_common_v1_domain_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BundleImage.ProtoReflect.Descriptor instead.
+func (*BundleImage) Descriptor() ([]byte, []int) {
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *BundleImage) GetRef() string {
+	if x != nil {
+		return x.Ref
+	}
+	return ""
+}
+
+func (x *BundleImage) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+func (x *BundleImage) GetValuesPath() string {
+	if x != nil {
+		return x.ValuesPath
+	}
+	return ""
+}
+
+func (x *BundleImage) GetValueKind() ImageValueKind {
+	if x != nil {
+		return x.ValueKind
+	}
+	return ImageValueKind_IMAGE_VALUE_KIND_UNSPECIFIED
+}
+
+// ArtifactReference identifies immutable evidence stored outside the service.
+type ArtifactReference struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ref           string                 `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	Digest        string                 `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ArtifactReference) Reset() {
+	*x = ArtifactReference{}
+	mi := &file_common_v1_domain_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ArtifactReference) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ArtifactReference) ProtoMessage() {}
+
+func (x *ArtifactReference) ProtoReflect() protoreflect.Message {
+	mi := &file_common_v1_domain_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ArtifactReference.ProtoReflect.Descriptor instead.
+func (*ArtifactReference) Descriptor() ([]byte, []int) {
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ArtifactReference) GetRef() string {
+	if x != nil {
+		return x.Ref
+	}
+	return ""
+}
+
+func (x *ArtifactReference) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+// CandidateArtifact describes an additional artifact observed with a bundle.
+type CandidateArtifact struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ArtifactType  ArtifactType           `protobuf:"varint,1,opt,name=artifact_type,json=artifactType,proto3,enum=common.v1.ArtifactType" json:"artifact_type,omitempty"`
+	Ref           string                 `protobuf:"bytes,2,opt,name=ref,proto3" json:"ref,omitempty"`
+	Digest        string                 `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CandidateArtifact) Reset() {
+	*x = CandidateArtifact{}
+	mi := &file_common_v1_domain_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CandidateArtifact) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CandidateArtifact) ProtoMessage() {}
+
+func (x *CandidateArtifact) ProtoReflect() protoreflect.Message {
+	mi := &file_common_v1_domain_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CandidateArtifact.ProtoReflect.Descriptor instead.
+func (*CandidateArtifact) Descriptor() ([]byte, []int) {
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *CandidateArtifact) GetArtifactType() ArtifactType {
+	if x != nil {
+		return x.ArtifactType
+	}
+	return ArtifactType_ARTIFACT_TYPE_UNSPECIFIED
+}
+
+func (x *CandidateArtifact) GetRef() string {
+	if x != nil {
+		return x.Ref
+	}
+	return ""
+}
+
+func (x *CandidateArtifact) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+// EventResource is one artifact resource carried by an external event.
+type EventResource struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Digest        string                 `protobuf:"bytes,1,opt,name=digest,proto3" json:"digest,omitempty"`
+	Ref           string                 `protobuf:"bytes,2,opt,name=ref,proto3" json:"ref,omitempty"`
+	Tag           string                 `protobuf:"bytes,3,opt,name=tag,proto3" json:"tag,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EventResource) Reset() {
+	*x = EventResource{}
+	mi := &file_common_v1_domain_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EventResource) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EventResource) ProtoMessage() {}
+
+func (x *EventResource) ProtoReflect() protoreflect.Message {
+	mi := &file_common_v1_domain_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EventResource.ProtoReflect.Descriptor instead.
+func (*EventResource) Descriptor() ([]byte, []int) {
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *EventResource) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+func (x *EventResource) GetRef() string {
+	if x != nil {
+		return x.Ref
+	}
+	return ""
+}
+
+func (x *EventResource) GetTag() string {
+	if x != nil {
+		return x.Tag
+	}
+	return ""
+}
+
+// ReleaseBundle is the atomic unit of a release — immutable once published.
+type ReleaseBundle struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name             string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Digest           *ReleaseDigest         `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"`
+	Status           BundleStatus           `protobuf:"varint,4,opt,name=status,proto3,enum=common.v1.BundleStatus" json:"status,omitempty"`
+	ChartRef         string                 `protobuf:"bytes,5,opt,name=chart_ref,json=chartRef,proto3" json:"chart_ref,omitempty"`
+	ChartVersion     string                 `protobuf:"bytes,6,opt,name=chart_version,json=chartVersion,proto3" json:"chart_version,omitempty"`
+	ChartDigest      string                 `protobuf:"bytes,7,opt,name=chart_digest,json=chartDigest,proto3" json:"chart_digest,omitempty"`
+	Images           []*BundleImage         `protobuf:"bytes,8,rep,name=images,proto3" json:"images,omitempty"`
+	GitCommit        string                 `protobuf:"bytes,9,opt,name=git_commit,json=gitCommit,proto3" json:"git_commit,omitempty"`
+	PipelineId       string                 `protobuf:"bytes,10,opt,name=pipeline_id,json=pipelineId,proto3" json:"pipeline_id,omitempty"`
+	SignatureRef     string                 `protobuf:"bytes,11,opt,name=signature_ref,json=signatureRef,proto3" json:"signature_ref,omitempty"`
+	SbomRef          string                 `protobuf:"bytes,12,opt,name=sbom_ref,json=sbomRef,proto3" json:"sbom_ref,omitempty"`
+	ProvenanceRef    string                 `protobuf:"bytes,13,opt,name=provenance_ref,json=provenanceRef,proto3" json:"provenance_ref,omitempty"`
+	CreatedAt        *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	SignatureDigest  string                 `protobuf:"bytes,15,opt,name=signature_digest,json=signatureDigest,proto3" json:"signature_digest,omitempty"`
+	SbomDigest       string                 `protobuf:"bytes,16,opt,name=sbom_digest,json=sbomDigest,proto3" json:"sbom_digest,omitempty"`
+	ProvenanceDigest string                 `protobuf:"bytes,17,opt,name=provenance_digest,json=provenanceDigest,proto3" json:"provenance_digest,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
 func (x *ReleaseBundle) Reset() {
 	*x = ReleaseBundle{}
-	mi := &file_common_v1_domain_proto_msgTypes[1]
+	mi := &file_common_v1_domain_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -100,7 +637,7 @@ func (x *ReleaseBundle) String() string {
 func (*ReleaseBundle) ProtoMessage() {}
 
 func (x *ReleaseBundle) ProtoReflect() protoreflect.Message {
-	mi := &file_common_v1_domain_proto_msgTypes[1]
+	mi := &file_common_v1_domain_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -113,7 +650,7 @@ func (x *ReleaseBundle) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseBundle.ProtoReflect.Descriptor instead.
 func (*ReleaseBundle) Descriptor() ([]byte, []int) {
-	return file_common_v1_domain_proto_rawDescGZIP(), []int{1}
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ReleaseBundle) GetId() string {
@@ -137,6 +674,76 @@ func (x *ReleaseBundle) GetDigest() *ReleaseDigest {
 	return nil
 }
 
+func (x *ReleaseBundle) GetStatus() BundleStatus {
+	if x != nil {
+		return x.Status
+	}
+	return BundleStatus_BUNDLE_STATUS_UNSPECIFIED
+}
+
+func (x *ReleaseBundle) GetChartRef() string {
+	if x != nil {
+		return x.ChartRef
+	}
+	return ""
+}
+
+func (x *ReleaseBundle) GetChartVersion() string {
+	if x != nil {
+		return x.ChartVersion
+	}
+	return ""
+}
+
+func (x *ReleaseBundle) GetChartDigest() string {
+	if x != nil {
+		return x.ChartDigest
+	}
+	return ""
+}
+
+func (x *ReleaseBundle) GetImages() []*BundleImage {
+	if x != nil {
+		return x.Images
+	}
+	return nil
+}
+
+func (x *ReleaseBundle) GetGitCommit() string {
+	if x != nil {
+		return x.GitCommit
+	}
+	return ""
+}
+
+func (x *ReleaseBundle) GetPipelineId() string {
+	if x != nil {
+		return x.PipelineId
+	}
+	return ""
+}
+
+func (x *ReleaseBundle) GetSignatureRef() string {
+	if x != nil {
+		return x.SignatureRef
+	}
+	return ""
+}
+
+func (x *ReleaseBundle) GetSbomRef() string {
+	if x != nil {
+		return x.SbomRef
+	}
+	return ""
+}
+
+func (x *ReleaseBundle) GetProvenanceRef() string {
+	if x != nil {
+		return x.ProvenanceRef
+	}
+	return ""
+}
+
 func (x *ReleaseBundle) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
@@ -144,22 +751,53 @@ func (x *ReleaseBundle) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *ReleaseBundle) GetSignatureDigest() string {
+	if x != nil {
+		return x.SignatureDigest
+	}
+	return ""
+}
+
+func (x *ReleaseBundle) GetSbomDigest() string {
+	if x != nil {
+		return x.SbomDigest
+	}
+	return ""
+}
+
+func (x *ReleaseBundle) GetProvenanceDigest() string {
+	if x != nil {
+		return x.ProvenanceDigest
+	}
+	return ""
+}
+
 // ReleaseDefinition decouples the install preflight cycle from artifact ingestion.
 type ReleaseDefinition struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	CustomerId    string                 `protobuf:"bytes,3,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
-	ClusterId     string                 `protobuf:"bytes,4,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	Id                     string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name                   string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	CustomerId             string                 `protobuf:"bytes,3,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	ClusterId              string                 `protobuf:"bytes,4,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	Namespace              string                 `protobuf:"bytes,5,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	ReleaseName            string                 `protobuf:"bytes,6,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
+	ChartName              string                 `protobuf:"bytes,7,opt,name=chart_name,json=chartName,proto3" json:"chart_name,omitempty"`
+	Status                 string                 `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
+	Version                int64                  `protobuf:"varint,9,opt,name=version,proto3" json:"version,omitempty"`
+	CreatedBy              string                 `protobuf:"bytes,10,opt,name=created_by,json=createdBy,proto3" json:"created_by,omitempty"`
+	CreatedAt              *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt              *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	HpaManaged             bool                   `protobuf:"varint,13,opt,name=hpa_managed,json=hpaManaged,proto3" json:"hpa_managed,omitempty"`
+	MaxEmergencyReplicas   int32                  `protobuf:"varint,14,opt,name=max_emergency_replicas,json=maxEmergencyReplicas,proto3" json:"max_emergency_replicas,omitempty"`
+	ApprovedAnnotationKeys []byte                 `protobuf:"bytes,15,opt,name=approved_annotation_keys,json=approvedAnnotationKeys,proto3" json:"approved_annotation_keys,omitempty"`
+	PromotionMappings      []byte                 `protobuf:"bytes,16,opt,name=promotion_mappings,json=promotionMappings,proto3" json:"promotion_mappings,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *ReleaseDefinition) Reset() {
 	*x = ReleaseDefinition{}
-	mi := &file_common_v1_domain_proto_msgTypes[2]
+	mi := &file_common_v1_domain_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -171,7 +809,7 @@ func (x *ReleaseDefinition) String() string {
 func (*ReleaseDefinition) ProtoMessage() {}
 
 func (x *ReleaseDefinition) ProtoReflect() protoreflect.Message {
-	mi := &file_common_v1_domain_proto_msgTypes[2]
+	mi := &file_common_v1_domain_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -184,7 +822,7 @@ func (x *ReleaseDefinition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseDefinition.ProtoReflect.Descriptor instead.
 func (*ReleaseDefinition) Descriptor() ([]byte, []int) {
-	return file_common_v1_domain_proto_rawDescGZIP(), []int{2}
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ReleaseDefinition) GetId() string {
@@ -215,6 +853,48 @@ func (x *ReleaseDefinition) GetClusterId() string {
 	return ""
 }
 
+func (x *ReleaseDefinition) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *ReleaseDefinition) GetReleaseName() string {
+	if x != nil {
+		return x.ReleaseName
+	}
+	return ""
+}
+
+func (x *ReleaseDefinition) GetChartName() string {
+	if x != nil {
+		return x.ChartName
+	}
+	return ""
+}
+
+func (x *ReleaseDefinition) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *ReleaseDefinition) GetVersion() int64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *ReleaseDefinition) GetCreatedBy() string {
+	if x != nil {
+		return x.CreatedBy
+	}
+	return ""
+}
+
 func (x *ReleaseDefinition) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
@@ -229,6 +909,34 @@ func (x *ReleaseDefinition) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *ReleaseDefinition) GetHpaManaged() bool {
+	if x != nil {
+		return x.HpaManaged
+	}
+	return false
+}
+
+func (x *ReleaseDefinition) GetMaxEmergencyReplicas() int32 {
+	if x != nil {
+		return x.MaxEmergencyReplicas
+	}
+	return 0
+}
+
+func (x *ReleaseDefinition) GetApprovedAnnotationKeys() []byte {
+	if x != nil {
+		return x.ApprovedAnnotationKeys
+	}
+	return nil
+}
+
+func (x *ReleaseDefinition) GetPromotionMappings() []byte {
+	if x != nil {
+		return x.PromotionMappings
+	}
+	return nil
+}
+
 // ValuesRevision stores the desired configuration for a release target.
 type ValuesRevision struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
@@ -237,13 +945,21 @@ type ValuesRevision struct {
 	Revision            int32                  `protobuf:"varint,3,opt,name=revision,proto3" json:"revision,omitempty"`
 	Values              []byte                 `protobuf:"bytes,4,opt,name=values,proto3" json:"values,omitempty"`
 	CreatedAt           *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Status              ValuesStatus           `protobuf:"varint,6,opt,name=status,proto3,enum=common.v1.ValuesStatus" json:"status,omitempty"`
+	Digest              string                 `protobuf:"bytes,7,opt,name=digest,proto3" json:"digest,omitempty"`
+	ParentRevisionId    string                 `protobuf:"bytes,8,opt,name=parent_revision_id,json=parentRevisionId,proto3" json:"parent_revision_id,omitempty"`
+	SecretRefs          []*SecretRef           `protobuf:"bytes,9,rep,name=secret_refs,json=secretRefs,proto3" json:"secret_refs,omitempty"`
+	StateVersion        int64                  `protobuf:"varint,10,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
+	CreatedByUserId     string                 `protobuf:"bytes,11,opt,name=created_by_user_id,json=createdByUserId,proto3" json:"created_by_user_id,omitempty"`
+	SubmittedAt         *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=submitted_at,json=submittedAt,proto3" json:"submitted_at,omitempty"`
+	DecidedAt           *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=decided_at,json=decidedAt,proto3" json:"decided_at,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ValuesRevision) Reset() {
 	*x = ValuesRevision{}
-	mi := &file_common_v1_domain_proto_msgTypes[3]
+	mi := &file_common_v1_domain_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -255,7 +971,7 @@ func (x *ValuesRevision) String() string {
 func (*ValuesRevision) ProtoMessage() {}
 
 func (x *ValuesRevision) ProtoReflect() protoreflect.Message {
-	mi := &file_common_v1_domain_proto_msgTypes[3]
+	mi := &file_common_v1_domain_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -268,7 +984,7 @@ func (x *ValuesRevision) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValuesRevision.ProtoReflect.Descriptor instead.
 func (*ValuesRevision) Descriptor() ([]byte, []int) {
-	return file_common_v1_domain_proto_rawDescGZIP(), []int{3}
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ValuesRevision) GetId() string {
@@ -306,6 +1022,62 @@ func (x *ValuesRevision) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *ValuesRevision) GetStatus() ValuesStatus {
+	if x != nil {
+		return x.Status
+	}
+	return ValuesStatus_VALUES_STATUS_UNSPECIFIED
+}
+
+func (x *ValuesRevision) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+func (x *ValuesRevision) GetParentRevisionId() string {
+	if x != nil {
+		return x.ParentRevisionId
+	}
+	return ""
+}
+
+func (x *ValuesRevision) GetSecretRefs() []*SecretRef {
+	if x != nil {
+		return x.SecretRefs
+	}
+	return nil
+}
+
+func (x *ValuesRevision) GetStateVersion() int64 {
+	if x != nil {
+		return x.StateVersion
+	}
+	return 0
+}
+
+func (x *ValuesRevision) GetCreatedByUserId() string {
+	if x != nil {
+		return x.CreatedByUserId
+	}
+	return ""
+}
+
+func (x *ValuesRevision) GetSubmittedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.SubmittedAt
+	}
+	return nil
+}
+
+func (x *ValuesRevision) GetDecidedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.DecidedAt
+	}
+	return nil
+}
+
 // SecretRef holds a reference to a secret, never the secret value itself.
 type SecretRef struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -318,7 +1090,7 @@ type SecretRef struct {
 
 func (x *SecretRef) Reset() {
 	*x = SecretRef{}
-	mi := &file_common_v1_domain_proto_msgTypes[4]
+	mi := &file_common_v1_domain_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -330,7 +1102,7 @@ func (x *SecretRef) String() string {
 func (*SecretRef) ProtoMessage() {}
 
 func (x *SecretRef) ProtoReflect() protoreflect.Message {
-	mi := &file_common_v1_domain_proto_msgTypes[4]
+	mi := &file_common_v1_domain_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -343,7 +1115,7 @@ func (x *SecretRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SecretRef.ProtoReflect.Descriptor instead.
 func (*SecretRef) Descriptor() ([]byte, []int) {
-	return file_common_v1_domain_proto_rawDescGZIP(), []int{4}
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *SecretRef) GetName() string {
@@ -373,6 +1145,7 @@ type Customer struct {
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Slug          string                 `protobuf:"bytes,3,opt,name=slug,proto3" json:"slug,omitempty"`
+	Status        string                 `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -380,7 +1153,7 @@ type Customer struct {
 
 func (x *Customer) Reset() {
 	*x = Customer{}
-	mi := &file_common_v1_domain_proto_msgTypes[5]
+	mi := &file_common_v1_domain_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -392,7 +1165,7 @@ func (x *Customer) String() string {
 func (*Customer) ProtoMessage() {}
 
 func (x *Customer) ProtoReflect() protoreflect.Message {
-	mi := &file_common_v1_domain_proto_msgTypes[5]
+	mi := &file_common_v1_domain_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -405,7 +1178,7 @@ func (x *Customer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Customer.ProtoReflect.Descriptor instead.
 func (*Customer) Descriptor() ([]byte, []int) {
-	return file_common_v1_domain_proto_rawDescGZIP(), []int{5}
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Customer) GetId() string {
@@ -429,9 +1202,72 @@ func (x *Customer) GetSlug() string {
 	return ""
 }
 
+func (x *Customer) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
 func (x *Customer) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
+	}
+	return nil
+}
+
+// CustomerDisabledEvent is emitted when a customer is disabled.
+// Receivers (downstream services) use this to trigger cascading cleanup.
+// The event MUST be idempotent — emitting it for an already-disabled
+// customer is a no-op at the consumer side.
+type CustomerDisabledEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CustomerId    string                 `protobuf:"bytes,1,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	DisabledAt    *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=disabled_at,json=disabledAt,proto3" json:"disabled_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CustomerDisabledEvent) Reset() {
+	*x = CustomerDisabledEvent{}
+	mi := &file_common_v1_domain_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CustomerDisabledEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CustomerDisabledEvent) ProtoMessage() {}
+
+func (x *CustomerDisabledEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_common_v1_domain_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CustomerDisabledEvent.ProtoReflect.Descriptor instead.
+func (*CustomerDisabledEvent) Descriptor() ([]byte, []int) {
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *CustomerDisabledEvent) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+func (x *CustomerDisabledEvent) GetDisabledAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.DisabledAt
 	}
 	return nil
 }
@@ -443,14 +1279,18 @@ type Cluster struct {
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	CustomerId    string                 `protobuf:"bytes,3,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
 	KubeconfigRef string                 `protobuf:"bytes,4,opt,name=kubeconfig_ref,json=kubeconfigRef,proto3" json:"kubeconfig_ref,omitempty"`
+	Status        ClusterStatus          `protobuf:"varint,6,opt,name=status,proto3,enum=common.v1.ClusterStatus" json:"status,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	Version       int64                  `protobuf:"varint,8,opt,name=version,proto3" json:"version,omitempty"`
+	RouteCount    int32                  `protobuf:"varint,9,opt,name=route_count,json=routeCount,proto3" json:"route_count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Cluster) Reset() {
 	*x = Cluster{}
-	mi := &file_common_v1_domain_proto_msgTypes[6]
+	mi := &file_common_v1_domain_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -462,7 +1302,7 @@ func (x *Cluster) String() string {
 func (*Cluster) ProtoMessage() {}
 
 func (x *Cluster) ProtoReflect() protoreflect.Message {
-	mi := &file_common_v1_domain_proto_msgTypes[6]
+	mi := &file_common_v1_domain_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -475,7 +1315,7 @@ func (x *Cluster) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Cluster.ProtoReflect.Descriptor instead.
 func (*Cluster) Descriptor() ([]byte, []int) {
-	return file_common_v1_domain_proto_rawDescGZIP(), []int{6}
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Cluster) GetId() string {
@@ -506,11 +1346,39 @@ func (x *Cluster) GetKubeconfigRef() string {
 	return ""
 }
 
+func (x *Cluster) GetStatus() ClusterStatus {
+	if x != nil {
+		return x.Status
+	}
+	return ClusterStatus_CLUSTER_STATUS_UNSPECIFIED
+}
+
 func (x *Cluster) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *Cluster) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *Cluster) GetVersion() int64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *Cluster) GetRouteCount() int32 {
+	if x != nil {
+		return x.RouteCount
+	}
+	return 0
 }
 
 // ActorContext identifies the initiating principal for audit and authorization.
@@ -524,7 +1392,7 @@ type ActorContext struct {
 
 func (x *ActorContext) Reset() {
 	*x = ActorContext{}
-	mi := &file_common_v1_domain_proto_msgTypes[7]
+	mi := &file_common_v1_domain_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -536,7 +1404,7 @@ func (x *ActorContext) String() string {
 func (*ActorContext) ProtoMessage() {}
 
 func (x *ActorContext) ProtoReflect() protoreflect.Message {
-	mi := &file_common_v1_domain_proto_msgTypes[7]
+	mi := &file_common_v1_domain_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -549,7 +1417,7 @@ func (x *ActorContext) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActorContext.ProtoReflect.Descriptor instead.
 func (*ActorContext) Descriptor() ([]byte, []int) {
-	return file_common_v1_domain_proto_rawDescGZIP(), []int{7}
+	return file_common_v1_domain_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ActorContext) GetUserId() string {
@@ -573,52 +1441,154 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"\x16common/v1/domain.proto\x12\tcommon.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"C\n" +
 	"\rReleaseDigest\x12\x1c\n" +
 	"\talgorithm\x18\x01 \x01(\tR\talgorithm\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"\xa0\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"\x92\x01\n" +
+	"\vBundleImage\x12\x10\n" +
+	"\x03ref\x18\x01 \x01(\tR\x03ref\x12\x16\n" +
+	"\x06digest\x18\x02 \x01(\tR\x06digest\x12\x1f\n" +
+	"\vvalues_path\x18\x03 \x01(\tR\n" +
+	"valuesPath\x128\n" +
+	"\n" +
+	"value_kind\x18\x04 \x01(\x0e2\x19.common.v1.ImageValueKindR\tvalueKind\"=\n" +
+	"\x11ArtifactReference\x12\x10\n" +
+	"\x03ref\x18\x01 \x01(\tR\x03ref\x12\x16\n" +
+	"\x06digest\x18\x02 \x01(\tR\x06digest\"{\n" +
+	"\x11CandidateArtifact\x12<\n" +
+	"\rartifact_type\x18\x01 \x01(\x0e2\x17.common.v1.ArtifactTypeR\fartifactType\x12\x10\n" +
+	"\x03ref\x18\x02 \x01(\tR\x03ref\x12\x16\n" +
+	"\x06digest\x18\x03 \x01(\tR\x06digest\"K\n" +
+	"\rEventResource\x12\x16\n" +
+	"\x06digest\x18\x01 \x01(\tR\x06digest\x12\x10\n" +
+	"\x03ref\x18\x02 \x01(\tR\x03ref\x12\x10\n" +
+	"\x03tag\x18\x03 \x01(\tR\x03tag\"\x86\x05\n" +
 	"\rReleaseBundle\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x120\n" +
-	"\x06digest\x18\x03 \x01(\v2\x18.common.v1.ReleaseDigestR\x06digest\x129\n" +
+	"\x06digest\x18\x03 \x01(\v2\x18.common.v1.ReleaseDigestR\x06digest\x12/\n" +
+	"\x06status\x18\x04 \x01(\x0e2\x17.common.v1.BundleStatusR\x06status\x12\x1b\n" +
+	"\tchart_ref\x18\x05 \x01(\tR\bchartRef\x12#\n" +
+	"\rchart_version\x18\x06 \x01(\tR\fchartVersion\x12!\n" +
+	"\fchart_digest\x18\a \x01(\tR\vchartDigest\x12.\n" +
+	"\x06images\x18\b \x03(\v2\x16.common.v1.BundleImageR\x06images\x12\x1d\n" +
 	"\n" +
-	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xed\x01\n" +
+	"git_commit\x18\t \x01(\tR\tgitCommit\x12\x1f\n" +
+	"\vpipeline_id\x18\n" +
+	" \x01(\tR\n" +
+	"pipelineId\x12#\n" +
+	"\rsignature_ref\x18\v \x01(\tR\fsignatureRef\x12\x19\n" +
+	"\bsbom_ref\x18\f \x01(\tR\asbomRef\x12%\n" +
+	"\x0eprovenance_ref\x18\r \x01(\tR\rprovenanceRef\x129\n" +
+	"\n" +
+	"created_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12)\n" +
+	"\x10signature_digest\x18\x0f \x01(\tR\x0fsignatureDigest\x12\x1f\n" +
+	"\vsbom_digest\x18\x10 \x01(\tR\n" +
+	"sbomDigest\x12+\n" +
+	"\x11provenance_digest\x18\x11 \x01(\tR\x10provenanceDigest\"\xde\x04\n" +
 	"\x11ReleaseDefinition\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1f\n" +
 	"\vcustomer_id\x18\x03 \x01(\tR\n" +
 	"customerId\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x04 \x01(\tR\tclusterId\x129\n" +
+	"cluster_id\x18\x04 \x01(\tR\tclusterId\x12\x1c\n" +
+	"\tnamespace\x18\x05 \x01(\tR\tnamespace\x12!\n" +
+	"\frelease_name\x18\x06 \x01(\tR\vreleaseName\x12\x1d\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"chart_name\x18\a \x01(\tR\tchartName\x12\x16\n" +
+	"\x06status\x18\b \x01(\tR\x06status\x12\x18\n" +
+	"\aversion\x18\t \x01(\x03R\aversion\x12\x1d\n" +
 	"\n" +
-	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xc3\x01\n" +
+	"created_by\x18\n" +
+	" \x01(\tR\tcreatedBy\x129\n" +
+	"\n" +
+	"created_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1f\n" +
+	"\vhpa_managed\x18\r \x01(\bR\n" +
+	"hpaManaged\x124\n" +
+	"\x16max_emergency_replicas\x18\x0e \x01(\x05R\x14maxEmergencyReplicas\x128\n" +
+	"\x18approved_annotation_keys\x18\x0f \x01(\fR\x16approvedAnnotationKeys\x12-\n" +
+	"\x12promotion_mappings\x18\x10 \x01(\fR\x11promotionMappings\"\xbd\x04\n" +
 	"\x0eValuesRevision\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x122\n" +
 	"\x15release_definition_id\x18\x02 \x01(\tR\x13releaseDefinitionId\x12\x1a\n" +
 	"\brevision\x18\x03 \x01(\x05R\brevision\x12\x16\n" +
 	"\x06values\x18\x04 \x01(\fR\x06values\x129\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"O\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12/\n" +
+	"\x06status\x18\x06 \x01(\x0e2\x17.common.v1.ValuesStatusR\x06status\x12\x16\n" +
+	"\x06digest\x18\a \x01(\tR\x06digest\x12,\n" +
+	"\x12parent_revision_id\x18\b \x01(\tR\x10parentRevisionId\x125\n" +
+	"\vsecret_refs\x18\t \x03(\v2\x14.common.v1.SecretRefR\n" +
+	"secretRefs\x12#\n" +
+	"\rstate_version\x18\n" +
+	" \x01(\x03R\fstateVersion\x12+\n" +
+	"\x12created_by_user_id\x18\v \x01(\tR\x0fcreatedByUserId\x12=\n" +
+	"\fsubmitted_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\vsubmittedAt\x129\n" +
+	"\n" +
+	"decided_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tdecidedAt\"O\n" +
 	"\tSecretRef\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x10\n" +
-	"\x03key\x18\x03 \x01(\tR\x03key\"}\n" +
+	"\x03key\x18\x03 \x01(\tR\x03key\"\x95\x01\n" +
 	"\bCustomer\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
-	"\x04slug\x18\x03 \x01(\tR\x04slug\x129\n" +
+	"\x04slug\x18\x03 \x01(\tR\x04slug\x12\x16\n" +
+	"\x06status\x18\x05 \x01(\tR\x06status\x129\n" +
 	"\n" +
-	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xb0\x01\n" +
+	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"u\n" +
+	"\x15CustomerDisabledEvent\x12\x1f\n" +
+	"\vcustomer_id\x18\x01 \x01(\tR\n" +
+	"customerId\x12;\n" +
+	"\vdisabled_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"disabledAt\"\xd8\x02\n" +
 	"\aCluster\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1f\n" +
 	"\vcustomer_id\x18\x03 \x01(\tR\n" +
 	"customerId\x12%\n" +
-	"\x0ekubeconfig_ref\x18\x04 \x01(\tR\rkubeconfigRef\x129\n" +
+	"\x0ekubeconfig_ref\x18\x04 \x01(\tR\rkubeconfigRef\x120\n" +
+	"\x06status\x18\x06 \x01(\x0e2\x18.common.v1.ClusterStatusR\x06status\x129\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"K\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"updated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x18\n" +
+	"\aversion\x18\b \x01(\x03R\aversion\x12\x1f\n" +
+	"\vroute_count\x18\t \x01(\x05R\n" +
+	"routeCount\"K\n" +
 	"\fActorContext\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\"\n" +
-	"\forganization\x18\x02 \x01(\tR\forganizationB>Z<github.com/ndzuki/release-manager/api/gen/common/v1;commonv1b\x06proto3"
+	"\forganization\x18\x02 \x01(\tR\forganization*\x9e\x01\n" +
+	"\fBundleStatus\x12\x1d\n" +
+	"\x19BUNDLE_STATUS_UNSPECIFIED\x10\x00\x12\x1a\n" +
+	"\x16BUNDLE_STATUS_RECEIVED\x10\x01\x12\x1b\n" +
+	"\x17BUNDLE_STATUS_VALIDATED\x10\x02\x12\x1a\n" +
+	"\x16BUNDLE_STATUS_REJECTED\x10\x03\x12\x1a\n" +
+	"\x16BUNDLE_STATUS_ARCHIVED\x10\x04*\xaf\x01\n" +
+	"\x0eImageValueKind\x12 \n" +
+	"\x1cIMAGE_VALUE_KIND_UNSPECIFIED\x10\x00\x12#\n" +
+	"\x1fIMAGE_VALUE_KIND_FULL_REFERENCE\x10\x01\x12\x1f\n" +
+	"\x1bIMAGE_VALUE_KIND_REPOSITORY\x10\x02\x12\x18\n" +
+	"\x14IMAGE_VALUE_KIND_TAG\x10\x03\x12\x1b\n" +
+	"\x17IMAGE_VALUE_KIND_DIGEST\x10\x04*\xb2\x01\n" +
+	"\fArtifactType\x12\x1d\n" +
+	"\x19ARTIFACT_TYPE_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13ARTIFACT_TYPE_IMAGE\x10\x01\x12\x17\n" +
+	"\x13ARTIFACT_TYPE_CHART\x10\x02\x12\x16\n" +
+	"\x12ARTIFACT_TYPE_SBOM\x10\x03\x12\x1c\n" +
+	"\x18ARTIFACT_TYPE_PROVENANCE\x10\x04\x12\x1b\n" +
+	"\x17ARTIFACT_TYPE_SIGNATURE\x10\x05*\xc0\x01\n" +
+	"\fValuesStatus\x12\x1d\n" +
+	"\x19VALUES_STATUS_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13VALUES_STATUS_DRAFT\x10\x01\x12\x1a\n" +
+	"\x16VALUES_STATUS_APPROVED\x10\x02\x12\x1a\n" +
+	"\x16VALUES_STATUS_REJECTED\x10\x03\x12\"\n" +
+	"\x1eVALUES_STATUS_PENDING_APPROVAL\x10\x04\x12\x1c\n" +
+	"\x18VALUES_STATUS_SUPERSEDED\x10\x05*g\n" +
+	"\rClusterStatus\x12\x1e\n" +
+	"\x1aCLUSTER_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15CLUSTER_STATUS_ACTIVE\x10\x01\x12\x1b\n" +
+	"\x17CLUSTER_STATUS_DISABLED\x10\x02B>Z<github.com/ndzuki/release-manager/api/gen/common/v1;commonv1b\x06proto3"
 
 var (
 	file_common_v1_domain_proto_rawDescOnce sync.Once
@@ -632,31 +1602,53 @@ func file_common_v1_domain_proto_rawDescGZIP() []byte {
 	return file_common_v1_domain_proto_rawDescData
 }
 
-var file_common_v1_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_common_v1_domain_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_common_v1_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_common_v1_domain_proto_goTypes = []any{
-	(*ReleaseDigest)(nil),         // 0: common.v1.ReleaseDigest
-	(*ReleaseBundle)(nil),         // 1: common.v1.ReleaseBundle
-	(*ReleaseDefinition)(nil),     // 2: common.v1.ReleaseDefinition
-	(*ValuesRevision)(nil),        // 3: common.v1.ValuesRevision
-	(*SecretRef)(nil),             // 4: common.v1.SecretRef
-	(*Customer)(nil),              // 5: common.v1.Customer
-	(*Cluster)(nil),               // 6: common.v1.Cluster
-	(*ActorContext)(nil),          // 7: common.v1.ActorContext
-	(*timestamppb.Timestamp)(nil), // 8: google.protobuf.Timestamp
+	(BundleStatus)(0),             // 0: common.v1.BundleStatus
+	(ImageValueKind)(0),           // 1: common.v1.ImageValueKind
+	(ArtifactType)(0),             // 2: common.v1.ArtifactType
+	(ValuesStatus)(0),             // 3: common.v1.ValuesStatus
+	(ClusterStatus)(0),            // 4: common.v1.ClusterStatus
+	(*ReleaseDigest)(nil),         // 5: common.v1.ReleaseDigest
+	(*BundleImage)(nil),           // 6: common.v1.BundleImage
+	(*ArtifactReference)(nil),     // 7: common.v1.ArtifactReference
+	(*CandidateArtifact)(nil),     // 8: common.v1.CandidateArtifact
+	(*EventResource)(nil),         // 9: common.v1.EventResource
+	(*ReleaseBundle)(nil),         // 10: common.v1.ReleaseBundle
+	(*ReleaseDefinition)(nil),     // 11: common.v1.ReleaseDefinition
+	(*ValuesRevision)(nil),        // 12: common.v1.ValuesRevision
+	(*SecretRef)(nil),             // 13: common.v1.SecretRef
+	(*Customer)(nil),              // 14: common.v1.Customer
+	(*CustomerDisabledEvent)(nil), // 15: common.v1.CustomerDisabledEvent
+	(*Cluster)(nil),               // 16: common.v1.Cluster
+	(*ActorContext)(nil),          // 17: common.v1.ActorContext
+	(*timestamppb.Timestamp)(nil), // 18: google.protobuf.Timestamp
 }
 var file_common_v1_domain_proto_depIdxs = []int32{
-	0, // 0: common.v1.ReleaseBundle.digest:type_name -> common.v1.ReleaseDigest
-	8, // 1: common.v1.ReleaseBundle.created_at:type_name -> google.protobuf.Timestamp
-	8, // 2: common.v1.ReleaseDefinition.created_at:type_name -> google.protobuf.Timestamp
-	8, // 3: common.v1.ReleaseDefinition.updated_at:type_name -> google.protobuf.Timestamp
-	8, // 4: common.v1.ValuesRevision.created_at:type_name -> google.protobuf.Timestamp
-	8, // 5: common.v1.Customer.created_at:type_name -> google.protobuf.Timestamp
-	8, // 6: common.v1.Cluster.created_at:type_name -> google.protobuf.Timestamp
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	1,  // 0: common.v1.BundleImage.value_kind:type_name -> common.v1.ImageValueKind
+	2,  // 1: common.v1.CandidateArtifact.artifact_type:type_name -> common.v1.ArtifactType
+	5,  // 2: common.v1.ReleaseBundle.digest:type_name -> common.v1.ReleaseDigest
+	0,  // 3: common.v1.ReleaseBundle.status:type_name -> common.v1.BundleStatus
+	6,  // 4: common.v1.ReleaseBundle.images:type_name -> common.v1.BundleImage
+	18, // 5: common.v1.ReleaseBundle.created_at:type_name -> google.protobuf.Timestamp
+	18, // 6: common.v1.ReleaseDefinition.created_at:type_name -> google.protobuf.Timestamp
+	18, // 7: common.v1.ReleaseDefinition.updated_at:type_name -> google.protobuf.Timestamp
+	18, // 8: common.v1.ValuesRevision.created_at:type_name -> google.protobuf.Timestamp
+	3,  // 9: common.v1.ValuesRevision.status:type_name -> common.v1.ValuesStatus
+	13, // 10: common.v1.ValuesRevision.secret_refs:type_name -> common.v1.SecretRef
+	18, // 11: common.v1.ValuesRevision.submitted_at:type_name -> google.protobuf.Timestamp
+	18, // 12: common.v1.ValuesRevision.decided_at:type_name -> google.protobuf.Timestamp
+	18, // 13: common.v1.Customer.created_at:type_name -> google.protobuf.Timestamp
+	18, // 14: common.v1.CustomerDisabledEvent.disabled_at:type_name -> google.protobuf.Timestamp
+	4,  // 15: common.v1.Cluster.status:type_name -> common.v1.ClusterStatus
+	18, // 16: common.v1.Cluster.created_at:type_name -> google.protobuf.Timestamp
+	18, // 17: common.v1.Cluster.updated_at:type_name -> google.protobuf.Timestamp
+	18, // [18:18] is the sub-list for method output_type
+	18, // [18:18] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_common_v1_domain_proto_init() }
@@ -669,13 +1661,14 @@ func file_common_v1_domain_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_common_v1_domain_proto_rawDesc), len(file_common_v1_domain_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   8,
+			NumEnums:      5,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_common_v1_domain_proto_goTypes,
 		DependencyIndexes: file_common_v1_domain_proto_depIdxs,
+		EnumInfos:         file_common_v1_domain_proto_enumTypes,
 		MessageInfos:      file_common_v1_domain_proto_msgTypes,
 	}.Build()
 	File_common_v1_domain_proto = out.File

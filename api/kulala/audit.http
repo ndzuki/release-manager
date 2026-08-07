@@ -1,55 +1,43 @@
 # =============================================================================
-# Release Manager — Audit & Notification APIs
-# Environment: dev (Manager :8081)
+# Release Manager — Audit Collection API
+# Environment: orchestrator :8083
 # =============================================================================
 
-### List Audit Logs
-# @name ListAuditLogs
-GET {{BASE_URL}}/api/v1/audit-logs?page=1&page_size=20
-Authorization: Bearer {{token}}
-
-### Get Audit Log Detail
-# @name GetAuditLog
-GET {{BASE_URL}}/api/v1/audit-logs/{{audit_log_id}}
-Authorization: Bearer {{token}}
-
-### Export Audit Logs
-# @name ExportAuditLogs
-POST {{BASE_URL}}/api/v1/audit-logs/exports
+### Emit API key and service audit events
+# @name EmitAudit
+POST http://localhost:8083/audit.v1.AuditService/Emit
 Content-Type: application/json
-Authorization: Bearer {{token}}
 
 {
-  "from": "2026-07-01T00:00:00Z",
-  "to": "2026-07-15T00:00:00Z",
-  "format": "jsonl"
+  "events": [
+    {
+      "actor": {
+        "kind": "ACTOR_KIND_API_KEY",
+        "id": "key-ci-release",
+        "organizationId": "org-001"
+      },
+      "resourceType": "release",
+      "resourceId": "release-001",
+      "action": "update",
+      "status": "accepted",
+      "changeSummary": "password=must-not-persist",
+      "metadata": {
+        "token": "must-not-persist",
+        "request_id": "req-001"
+      }
+    },
+    {
+      "actor": {
+        "kind": "ACTOR_KIND_SERVICE",
+        "id": "release-orchestrator"
+      },
+      "resourceType": "operation",
+      "resourceId": "op-001",
+      "action": "create",
+      "status": "accepted"
+    }
+  ]
 }
 
-### List Notification Jobs
-# @name ListNotificationJobs
-GET {{BASE_URL}}/api/v1/notification-jobs
-Authorization: Bearer {{token}}
-
-### Retry Notification Job
-# @name RetryNotificationJob
-POST {{BASE_URL}}/api/v1/notification-jobs/{{job_id}}/retry
-Authorization: Bearer {{token}}
-
-### Send Test Notification
-# @name SendTestNotification
-POST {{BASE_URL}}/api/v1/notification-settings/test
-Content-Type: application/json
-Authorization: Bearer {{token}}
-
-{
-  "channel": "dingtalk",
-  "recipient": "{{DINGTALK_WEBHOOK_URL}}"
-}
-
-# =============================================================================
-# Metrics (Layer 6)
-# =============================================================================
-
-### Prometheus Metrics
-# @name Metrics
-GET {{BASE_URL}}/metrics
+### Health
+GET http://localhost:8083/health

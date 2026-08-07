@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: operator
+  namespace: release-manager-dev
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/part-of: release-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: operator
+        app.kubernetes.io/part-of: release-manager
+    spec:
+      serviceAccountName: release-manager-operator
+      securityContext:
+        fsGroup: 65532
+      containers:
+        - name: operator
+          image: localhost:5001/release-operator:dev
+          imagePullPolicy: IfNotPresent
+          args: ["--config", "/configs/operator.dev.yaml", "--db", "/data/release-manager.db", "--command-db", "/data/operator-commands.db", "--orchestrator-addr", "http://orchestrator:8083"]
+          ports:
+            - name: http
+              containerPort: 8084
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: release-manager-dev-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: operator
+  namespace: release-manager-dev
+spec:
+  selector:
+    app.kubernetes.io/name: operator
+  ports:
+    - name: http
+      port: 8084
+      targetPort: http
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: release-manager-operator
+  namespace: release-manager-dev
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: release-manager-operator
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: release-manager-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: release-manager-operator
+subjects:
+  - kind: ServiceAccount
+    name: release-manager-operator
+    namespace: release-manager-dev

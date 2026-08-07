@@ -2,6 +2,7 @@ package helmengine
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -65,6 +66,117 @@ func TestFake_UpgradeNotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+func TestFake_UpgradeRevisionConflictDoesNotMutate(t *testing.T) {
+	eng := NewFake()
+	_, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+	require.NoError(t, err)
+
+	_, err = eng.Upgrade(t.Context(), UpgradeOptions{
+		Namespace:        "apps",
+		ReleaseName:      "example",
+		ChartPath:        "chart-v2",
+		ExpectedRevision: 2,
+	})
+	require.ErrorIs(t, err, ErrConflict)
+	active, statusErr := eng.Status(t.Context(), StatusOptions{Namespace: "apps", ReleaseName: "example"})
+	require.NoError(t, statusErr)
+	assert.Equal(t, 1, active.Revision)
+	assert.Equal(t, "chart-v1", active.Chart)
+}
+
+func TestFake_UpgradeAtomicRollback(t *testing.T) {
+	eng := NewFake()
+	_, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+	require.NoError(t, err)
+	eng.UpgradeError = ErrActionFailed
+
+	active, err := eng.Upgrade(t.Context(), UpgradeOptions{
+		Namespace:        "apps",
+		ReleaseName:      "example",
+		ChartPath:        "chart-v2",
+		ExpectedRevision: 1,
+		Atomic:           true,
+	})
+	require.ErrorIs(t, err, ErrActionFailed)
+	require.NotNil(t, active)
+	assert.Equal(t, 1, active.Revision)
+	status, statusErr := eng.Status(t.Context(), StatusOptions{Namespace: "apps", ReleaseName: "example"})
+	require.NoError(t, statusErr)
+	assert.Equal(t, 1, status.Revision)
+	assert.Equal(t, "chart-v1", status.Chart)
+}
+
+func TestFake_UpgradeAtomicRollbackFailure(t *testing.T) {
+	eng := NewFake()
+	_, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+	require.NoError(t, err)
+	eng.UpgradeError = ErrActionFailed
+	eng.RollbackError = ErrActionFailed
+
+	active, err := eng.Upgrade(t.Context(), UpgradeOptions{
+		Namespace:        "apps",
+		ReleaseName:      "example",
+		ChartPath:        "chart-v2",
+		ExpectedRevision: 1,
+		Atomic:           true,
+	})
+	require.ErrorIs(t, err, ErrAtomicRollbackFailed)
+	require.NotNil(t, active)
+	assert.Equal(t, "failed", active.Status)
+}
+
+func TestFake_UpgradeRenderDriftDoesNotMutate(t *testing.T) {
+	eng := NewFake()
+	_, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+	require.NoError(t, err)
+	eng.RenderedManifestDigest = "actual"
+
+	_, err = eng.Upgrade(t.Context(), UpgradeOptions{
+		Namespace:              "apps",
+		ReleaseName:            "example",
+		ChartPath:              "chart-v2",
+		ExpectedRevision:       1,
+		ExpectedManifestDigest: "expected",
+	})
+	require.ErrorIs(t, err, ErrRenderDrift)
+	active, statusErr := eng.Status(t.Context(), StatusOptions{Namespace: "apps", ReleaseName: "example"})
+	require.NoError(t, statusErr)
+	assert.Equal(t, 1, active.Revision)
+}
+
+func TestFake_UpgradeCrashReplayAndLegacyProvenance(t *testing.T) {
+	eng := NewFake()
+	installed, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+	require.NoError(t, err)
+	assert.Equal(t, "legacy", installed.Provenance)
+	opts := UpgradeOptions{
+		Namespace:             "apps",
+		ReleaseName:           "example",
+		ChartPath:             "chart-v2",
+		ExpectedRevision:      1,
+		Atomic:                true,
+		OperationID:           "operation-1",
+		CommandID:             "command-1",
+		BundleDigest:          "sha256:bundle",
+		ChartDigest:           "sha256:chart",
+		EffectiveValuesDigest: "sha256:values",
+	}
+
+	first, err := eng.Upgrade(t.Context(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, 2, first.Revision)
+	assert.Equal(t, "managed", first.Provenance)
+	assert.Equal(t, "release-manager operation=operation-1 command=command-1", first.Description)
+	assert.NotEmpty(t, first.Labels["rm_input_digest"])
+	replayed, err := eng.Upgrade(t.Context(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, 2, replayed.Revision)
+	assert.Equal(t, first.Description, replayed.Description)
+	assert.Equal(t, first.Labels["rm_input_digest"], replayed.Labels["rm_input_digest"])
+	history, err := eng.History(t.Context(), HistoryOptions{Namespace: "apps", ReleaseName: "example"})
+	require.NoError(t, err)
+	assert.Len(t, history, 2)
+}
 func TestFake_Rollback(t *testing.T) {
 	eng := NewFake()
 	ctx := context.Background()
@@ -78,6 +190,105 @@ func TestFake_Rollback(t *testing.T) {
 	rel, err := eng.Rollback(ctx, RollbackOptions{Namespace: "default", ReleaseName: "my-release", TargetRevision: 1})
 	require.NoError(t, err)
 	assert.Equal(t, 3, rel.Revision) // rollback creates a new revision
+}
+
+// AC-063-01: valid historical revision → new revision and operation recorded.
+func TestFake_RollbackCreatesNewOperation(t *testing.T) {
+	eng := NewFake()
+	ctx := context.Background()
+
+	_, err := eng.Install(ctx, InstallOptions{Namespace: "ns1", ReleaseName: "rel-a", ChartPath: "nginx"})
+	require.NoError(t, err)
+
+	_, err = eng.Upgrade(ctx, UpgradeOptions{Namespace: "ns1", ReleaseName: "rel-a", ChartPath: "nginx"})
+	require.NoError(t, err)
+
+	// Rollback to revision 1.
+	rel, err := eng.Rollback(ctx, RollbackOptions{Namespace: "ns1", ReleaseName: "rel-a", TargetRevision: 1})
+	require.NoError(t, err)
+	assert.Equal(t, 3, rel.Revision, "rollback creates a new revision")
+	assert.Equal(t, "deployed", rel.Status)
+
+	// Verify history contains the rollback entry.
+	history, err := eng.History(ctx, HistoryOptions{Namespace: "ns1", ReleaseName: "rel-a"})
+	require.NoError(t, err)
+	assert.Len(t, history, 3)
+	assert.Contains(t, history[2].Description, "Rollback")
+}
+
+// AC-063-02: release not found → ErrNotFound (no Helm release exists at all).
+func TestFake_RollbackReleaseNotFound(t *testing.T) {
+	eng := NewFake()
+	ctx := context.Background()
+
+	_, err := eng.Rollback(ctx, RollbackOptions{Namespace: "ns1", ReleaseName: "nonexistent", TargetRevision: 1})
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+// AC-063-02: target revision not found in history → ErrRevisionNotFound.
+func TestFake_RollbackTargetRevisionNotFound(t *testing.T) {
+	eng := NewFake()
+	ctx := context.Background()
+
+	_, err := eng.Install(ctx, InstallOptions{Namespace: "ns1", ReleaseName: "rel-a", ChartPath: "nginx"})
+	require.NoError(t, err)
+
+	// Revision 2 does not exist in history (only revision 1).
+	_, err = eng.Rollback(ctx, RollbackOptions{Namespace: "ns1", ReleaseName: "rel-a", TargetRevision: 2})
+	require.ErrorIs(t, err, ErrRevisionNotFound)
+
+	// Verify release state is unchanged.
+	rel, err := eng.Status(ctx, StatusOptions{Namespace: "ns1", ReleaseName: "rel-a"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, rel.Revision)
+}
+
+// AC-063-02: historical artifact unavailable → ErrArtifactUnavailable.
+func TestFake_RollbackHistoricalArtifactUnavailable(t *testing.T) {
+	eng := NewFake()
+	ctx := context.Background()
+
+	_, err := eng.Install(ctx, InstallOptions{Namespace: "ns1", ReleaseName: "rel-a", ChartPath: "nginx"})
+	require.NoError(t, err)
+	_, err = eng.Upgrade(ctx, UpgradeOptions{Namespace: "ns1", ReleaseName: "rel-a", ChartPath: "nginx"})
+	require.NoError(t, err)
+
+	// Mark revision 1's artifact as unavailable.
+	eng.ArtifactUnavailableRevisions[1] = true
+
+	_, err = eng.Rollback(ctx, RollbackOptions{Namespace: "ns1", ReleaseName: "rel-a", TargetRevision: 1})
+	require.ErrorIs(t, err, ErrArtifactUnavailable)
+
+	// Verify release state is unchanged.
+	rel, err := eng.Status(ctx, StatusOptions{Namespace: "ns1", ReleaseName: "rel-a"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, rel.Revision) // still at revision 2
+}
+
+// AC-063-03: rollback failure → original release state preserved.
+func TestFake_RollbackFailurePreservesRelease(t *testing.T) {
+	eng := NewFake()
+	ctx := context.Background()
+
+	_, err := eng.Install(ctx, InstallOptions{Namespace: "ns1", ReleaseName: "rel-a", ChartPath: "nginx"})
+	require.NoError(t, err)
+
+	// Capture pre-rollback state.
+	before, err := eng.Status(ctx, StatusOptions{Namespace: "ns1", ReleaseName: "rel-a"})
+	require.NoError(t, err)
+	beforeRevision := before.Revision
+
+	// Inject failure.
+	eng.RollbackError = errors.New("helm rollback failed")
+
+	_, err = eng.Rollback(ctx, RollbackOptions{Namespace: "ns1", ReleaseName: "rel-a", TargetRevision: 1})
+	require.Error(t, err)
+
+	// Verify release state is unchanged.
+	after, err := eng.Status(ctx, StatusOptions{Namespace: "ns1", ReleaseName: "rel-a"})
+	require.NoError(t, err)
+	assert.Equal(t, beforeRevision, after.Revision, "original release revision preserved after failed rollback")
+	assert.Equal(t, "deployed", after.Status)
 }
 
 func TestFake_Status(t *testing.T) {
@@ -158,6 +369,44 @@ func TestFake_ConcurrentAccess(t *testing.T) {
 	assert.Equal(t, "chart2", rel2.Chart)
 }
 
+func TestFake_UpgradeIsolatesNamespaceAndRelease(t *testing.T) {
+	eng := NewFake()
+	ctx := context.Background()
+
+	for _, opts := range []InstallOptions{
+		{Namespace: "customer-a", ReleaseName: "release-a", ChartPath: "chart-a"},
+		{Namespace: "customer-b", ReleaseName: "release-b", ChartPath: "chart-b"},
+		{Namespace: "customer-a", ReleaseName: "other-release", ChartPath: "chart-other"},
+	} {
+		_, err := eng.Install(ctx, opts)
+		require.NoError(t, err)
+	}
+
+	_, err := eng.Upgrade(ctx, UpgradeOptions{
+		Namespace:        "customer-a",
+		ReleaseName:      "release-a",
+		ChartPath:        "chart-a-v2",
+		ExpectedRevision: 1,
+	})
+	require.NoError(t, err)
+
+	unchanged := []StatusOptions{
+		{Namespace: "customer-b", ReleaseName: "release-b"},
+		{Namespace: "customer-a", ReleaseName: "other-release"},
+	}
+	for _, opts := range unchanged {
+		rel, statusErr := eng.Status(ctx, opts)
+		require.NoError(t, statusErr)
+		assert.Equal(t, 1, rel.Revision)
+		assert.NotEqual(t, "chart-a-v2", rel.Chart)
+	}
+
+	updated, err := eng.Status(ctx, StatusOptions{Namespace: "customer-a", ReleaseName: "release-a"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, updated.Revision)
+	assert.Equal(t, "chart-a-v2", updated.Chart)
+}
+
 func TestFake_AllMethods(t *testing.T) {
 	// AC-041-01: all interface methods work on fake without subprocess
 	eng := NewFake()
@@ -190,4 +439,24 @@ func TestFake_AllMethods(t *testing.T) {
 	// Rollback
 	_, err = eng.Rollback(ctx, RollbackOptions{Namespace: "default", ReleaseName: "full-test", TargetRevision: 1})
 	require.NoError(t, err)
+}
+
+func TestFake_UpgradeSchemaFailed(t *testing.T) {
+	eng := NewFake()
+	_, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+	require.NoError(t, err)
+	eng.UpgradeError = ErrSchemaFailed
+
+	_, err = eng.Upgrade(t.Context(), UpgradeOptions{
+		Namespace:        "apps",
+		ReleaseName:      "example",
+		ChartPath:        "chart-v2",
+		ExpectedRevision: 1,
+		Atomic:           true,
+	})
+	require.ErrorIs(t, err, ErrSchemaFailed)
+	active, statusErr := eng.Status(t.Context(), StatusOptions{Namespace: "apps", ReleaseName: "example"})
+	require.NoError(t, statusErr)
+	assert.Equal(t, 1, active.Revision)
+	assert.Equal(t, "chart-v1", active.Chart)
 }

@@ -33,14 +33,14 @@ const (
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
-	// WebhookServiceIngestArtifactProcedure is the fully-qualified name of the WebhookService's
-	// IngestArtifact RPC.
-	WebhookServiceIngestArtifactProcedure = "/webhook.v1.WebhookService/IngestArtifact"
+	// WebhookServiceSubmitReleaseBundleProcedure is the fully-qualified name of the WebhookService's
+	// SubmitReleaseBundle RPC.
+	WebhookServiceSubmitReleaseBundleProcedure = "/webhook.v1.WebhookService/SubmitReleaseBundle"
 )
 
 // WebhookServiceClient is a client for the webhook.v1.WebhookService service.
 type WebhookServiceClient interface {
-	IngestArtifact(context.Context, *connect.Request[v1.IngestArtifactRequest]) (*connect.Response[v1.IngestArtifactResponse], error)
+	SubmitReleaseBundle(context.Context, *connect.Request[v1.SubmitReleaseBundleRequest]) (*connect.Response[v1.SubmitReleaseBundleResponse], error)
 }
 
 // NewWebhookServiceClient constructs a client for the webhook.v1.WebhookService service. By
@@ -54,10 +54,10 @@ func NewWebhookServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 	baseURL = strings.TrimRight(baseURL, "/")
 	webhookServiceMethods := v1.File_webhook_v1_webhook_proto.Services().ByName("WebhookService").Methods()
 	return &webhookServiceClient{
-		ingestArtifact: connect.NewClient[v1.IngestArtifactRequest, v1.IngestArtifactResponse](
+		submitReleaseBundle: connect.NewClient[v1.SubmitReleaseBundleRequest, v1.SubmitReleaseBundleResponse](
 			httpClient,
-			baseURL+WebhookServiceIngestArtifactProcedure,
-			connect.WithSchema(webhookServiceMethods.ByName("IngestArtifact")),
+			baseURL+WebhookServiceSubmitReleaseBundleProcedure,
+			connect.WithSchema(webhookServiceMethods.ByName("SubmitReleaseBundle")),
 			connect.WithClientOptions(opts...),
 		),
 	}
@@ -65,17 +65,17 @@ func NewWebhookServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 
 // webhookServiceClient implements WebhookServiceClient.
 type webhookServiceClient struct {
-	ingestArtifact *connect.Client[v1.IngestArtifactRequest, v1.IngestArtifactResponse]
+	submitReleaseBundle *connect.Client[v1.SubmitReleaseBundleRequest, v1.SubmitReleaseBundleResponse]
 }
 
-// IngestArtifact calls webhook.v1.WebhookService.IngestArtifact.
-func (c *webhookServiceClient) IngestArtifact(ctx context.Context, req *connect.Request[v1.IngestArtifactRequest]) (*connect.Response[v1.IngestArtifactResponse], error) {
-	return c.ingestArtifact.CallUnary(ctx, req)
+// SubmitReleaseBundle calls webhook.v1.WebhookService.SubmitReleaseBundle.
+func (c *webhookServiceClient) SubmitReleaseBundle(ctx context.Context, req *connect.Request[v1.SubmitReleaseBundleRequest]) (*connect.Response[v1.SubmitReleaseBundleResponse], error) {
+	return c.submitReleaseBundle.CallUnary(ctx, req)
 }
 
 // WebhookServiceHandler is an implementation of the webhook.v1.WebhookService service.
 type WebhookServiceHandler interface {
-	IngestArtifact(context.Context, *connect.Request[v1.IngestArtifactRequest]) (*connect.Response[v1.IngestArtifactResponse], error)
+	SubmitReleaseBundle(context.Context, *connect.Request[v1.SubmitReleaseBundleRequest]) (*connect.Response[v1.SubmitReleaseBundleResponse], error)
 }
 
 // NewWebhookServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -85,16 +85,16 @@ type WebhookServiceHandler interface {
 // and JSON codecs. They also support gzip compression.
 func NewWebhookServiceHandler(svc WebhookServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
 	webhookServiceMethods := v1.File_webhook_v1_webhook_proto.Services().ByName("WebhookService").Methods()
-	webhookServiceIngestArtifactHandler := connect.NewUnaryHandler(
-		WebhookServiceIngestArtifactProcedure,
-		svc.IngestArtifact,
-		connect.WithSchema(webhookServiceMethods.ByName("IngestArtifact")),
+	webhookServiceSubmitReleaseBundleHandler := connect.NewUnaryHandler(
+		WebhookServiceSubmitReleaseBundleProcedure,
+		svc.SubmitReleaseBundle,
+		connect.WithSchema(webhookServiceMethods.ByName("SubmitReleaseBundle")),
 		connect.WithHandlerOptions(opts...),
 	)
 	return "/webhook.v1.WebhookService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case WebhookServiceIngestArtifactProcedure:
-			webhookServiceIngestArtifactHandler.ServeHTTP(w, r)
+		case WebhookServiceSubmitReleaseBundleProcedure:
+			webhookServiceSubmitReleaseBundleHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -104,6 +104,6 @@ func NewWebhookServiceHandler(svc WebhookServiceHandler, opts ...connect.Handler
 // UnimplementedWebhookServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedWebhookServiceHandler struct{}
 
-func (UnimplementedWebhookServiceHandler) IngestArtifact(context.Context, *connect.Request[v1.IngestArtifactRequest]) (*connect.Response[v1.IngestArtifactResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("webhook.v1.WebhookService.IngestArtifact is not implemented"))
+func (UnimplementedWebhookServiceHandler) SubmitReleaseBundle(context.Context, *connect.Request[v1.SubmitReleaseBundleRequest]) (*connect.Response[v1.SubmitReleaseBundleResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("webhook.v1.WebhookService.SubmitReleaseBundle is not implemented"))
 }
