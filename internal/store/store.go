@@ -175,7 +175,6 @@ type ActorContext struct {
 	Organization string `json:"organization"`
 }
 
-// Operation is the core domain object representing a release operation.
 type Operation struct {
 	ID                  string          `json:"id"`
 	OperationType       OperationType   `json:"operation_type"`
@@ -188,6 +187,7 @@ type Operation struct {
 	ValuesRevisionID    string          `json:"values_revision_id"`
 	ExpectedRevision    int             `json:"expected_revision"`
 	TargetRevision      int             `json:"target_revision,omitempty"`
+	TargetOperationID   string          `json:"target_operation_id,omitempty"`
 	ValuesPatch         []byte          `json:"values_patch,omitempty"`
 	Actor               ActorContext    `json:"actor"`
 	CreatedAt           time.Time       `json:"created_at"`
@@ -1368,6 +1368,7 @@ type OperationStore interface {
 	HasActiveForDefinition(ctx context.Context, definitionID string) (bool, error)
 	HasActiveEmergencyForDefinition(ctx context.Context, definitionID string) (bool, error)
 	List(ctx context.Context, definitionID string) ([]*Operation, error)
+	GetActiveForDefinition(ctx context.Context, definitionID string) (*Operation, error)
 	ListNonTerminal(ctx context.Context) ([]*Operation, error)
 }
 
@@ -1684,6 +1685,8 @@ type InventoryStore interface {
 
 	// ListByCluster returns all inventory rows for a cluster.
 	ListByCluster(ctx context.Context, customerID, clusterID string) ([]*ReleaseInventory, error)
+	// GetByDefinition returns the cached release snapshot for one release definition.
+	GetByDefinition(ctx context.Context, definitionID string) (*ReleaseInventory, error)
 
 	// Query returns one filtered page and validates that an opaque cursor still
 	// belongs to the same scope, filters, and inventory snapshot.
@@ -1699,7 +1702,6 @@ type InventoryStore interface {
 
 	// GetBySyncID checks whether a sync_id has already been applied.
 	GetBySyncID(ctx context.Context, syncID string) (*InventorySyncLog, error)
-	GetByDefinition(ctx context.Context, definitionID string) (*ReleaseInventory, error)
 }
 
 // OperationExecutionResultStore provides typed result lookup.
@@ -1859,6 +1861,7 @@ type PreflightLifecycle struct {
 // PreflightLifecycleStore defines the persistence contract for preflight lifecycles.
 type PreflightLifecycleStore interface {
 	Create(ctx context.Context, pl *PreflightLifecycle) error
+	GetByOperationID(ctx context.Context, operationID string) (*PreflightLifecycle, error)
 	SetOperationTerminal(ctx context.Context, operationID string, terminalAt time.Time) error
 	DeleteExpired(ctx context.Context, ttl time.Duration) (int64, error)
 }

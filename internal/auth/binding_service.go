@@ -140,7 +140,7 @@ func (s *BindingService) RevokeBinding(
 	}
 	updated, err := s.getBinding(ctx, binding.ID)
 	if err != nil {
-		return nil, err
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("reload revoked binding: %w", err))
 	}
 	return connect.NewResponse(&authv1.RevokeBindingResponse{Binding: toProtoBinding(updated)}), nil
 }
@@ -186,7 +186,7 @@ func (s *BindingService) handleExistingBinding(
 	}
 	updated, err := s.getBinding(ctx, binding.ID)
 	if err != nil {
-		return nil, err
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("reload reactivated binding: %w", err))
 	}
 	return connect.NewResponse(&authv1.CreateBindingResponse{Binding: toProtoBinding(updated)}), nil
 }

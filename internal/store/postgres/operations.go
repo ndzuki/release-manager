@@ -571,6 +571,21 @@ func getOperation(ctx context.Context, queryer operationQueryer, id string) (*st
 	`, id)
 	return scanOperation(row)
 }
+
+func (s *operationStore) GetActiveForDefinition(ctx context.Context, definitionID string) (*store.Operation, error) {
+	row := s.gorm.QueryRowContext(ctx, `
+		SELECT id, operation_type, status, release_definition_id,
+			idempotency_key, request_hash, state_version,
+			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
+			actor, created_at, updated_at, terminal_at, deadline, last_error
+		FROM operations
+		WHERE release_definition_id = ?
+		  AND status NOT IN ('succeeded','failed','cancelled','timeout')
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, definitionID)
+	return scanOperation(row)
+}
 func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operation, error) {
 	var (
 		id, opType, status, defID, idemKey, reqHash string
