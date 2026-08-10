@@ -18,6 +18,70 @@ type operationStore struct{ gorm *DB }
 func (s *operationStore) Create(ctx context.Context, op *store.Operation) error {
 	return createOperation(ctx, s.gorm, op)
 }
+func (s *operationStore) CreateIdempotent(
+	ctx context.Context,
+	command store.OperationCreateCommand,
+) (*store.OperationCreateResult, error) {
+	if command.Operation == nil || command.Idempotency == nil {
+		return nil, fmt.Errorf("create idempotent operation: operation and idempotency are required")
+	}
+	tx, err := s.gorm.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin idempotent operation: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
+
+	replay, err := loadActiveIdempotencyRecord(
+		ctx,
+		tx,
+		command.Idempotency.Scope,
+		command.Idempotency.Key,
+		time.Now().UTC(),
+	)
+	if err == nil {
+		if replay.RequestHash != command.Idempotency.RequestHash {
+			return nil, store.ErrIdempotencyConflict
+		}
+		operation, getErr := getOperation(ctx, tx, string(replay.ResponseRef))
+		if getErr != nil {
+			return nil, fmt.Errorf("load idempotent operation: %w", getErr)
+		}
+		return &store.OperationCreateResult{Operation: operation, Replayed: true}, nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+
+	if command.CheckAvailable {
+		query := `
+			SELECT COUNT(*) FROM operations
+			WHERE release_definition_id = ?
+			  AND status NOT IN ('succeeded','failed','cancelled','timeout')
+		`
+		if command.Operation.OperationType == store.OperationEmergency {
+			query += " AND operation_type != 'EMERGENCY'"
+		}
+		var count int
+		if err := tx.QueryRowContext(ctx, query, command.Operation.ReleaseDefinitionID).Scan(&count); err != nil {
+			return nil, fmt.Errorf("count conflicting operations: %w", err)
+		}
+		if count > 0 {
+			return nil, store.ErrReleaseBusy
+		}
+	}
+
+	command.Idempotency.ResponseRef = []byte(command.Operation.ID)
+	if _, err := insertIdempotencyRecord(ctx, tx, command.Idempotency, false); err != nil {
+		return nil, err
+	}
+	if err := createOperation(ctx, tx, command.Operation); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit idempotent operation: %w", err)
+	}
+	return &store.OperationCreateResult{Operation: command.Operation}, nil
+}
 
 func (s *operationStore) CreateIfAvailable(ctx context.Context, op *store.Operation) error {
 	tx, err := s.gorm.BeginTx(ctx, nil)
@@ -310,26 +374,20 @@ func lookupOperationCancelIdempotency(
 	if command.IdempotencyKeyHash == "" {
 		return nil, nil
 	}
-	var requestHash string
-	var responseRef []byte
-	err := tx.QueryRowContext(ctx, `
-		SELECT request_hash, response_ref FROM idempotency_records
-		WHERE scope = ? AND text_key = ? AND expires_at > ?
-	`, command.IdempotencyScope, command.IdempotencyKeyHash, time.Now().UTC()).Scan(
-		&requestHash,
-		&responseRef,
+	record, err := loadActiveIdempotencyRecord(
+		ctx, tx, command.IdempotencyScope, command.IdempotencyKeyHash, time.Now().UTC(),
 	)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, store.ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("lookup operation cancel idempotency: %w", err)
 	}
-	if requestHash != command.RequestHash {
+	if record.RequestHash != command.RequestHash {
 		return nil, store.ErrIdempotencyConflict
 	}
 	var result store.OperationCancelResult
-	if err := json.Unmarshal(responseRef, &result); err != nil {
+	if err := json.Unmarshal(record.ResponseRef, &result); err != nil {
 		return nil, fmt.Errorf("decode operation cancel replay: %w", err)
 	}
 	return &result, nil
@@ -350,14 +408,10 @@ func insertOperationCancelIdempotency(
 	if err != nil {
 		return fmt.Errorf("encode operation cancel response: %w", err)
 	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO idempotency_records (scope, text_key, request_hash, response_ref, expires_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, command.IdempotencyScope, command.IdempotencyKeyHash, command.RequestHash, responseRef, expiresAt.UTC())
-	if err != nil {
-		if isUniqueConstraint(err) {
-			return store.ErrIdempotencyConflict
-		}
+	if _, err := insertIdempotencyRecord(ctx, tx, &store.IdempotencyRecord{
+		Scope: command.IdempotencyScope, Key: command.IdempotencyKeyHash,
+		RequestHash: command.RequestHash, ResponseRef: responseRef, ExpiresAt: expiresAt,
+	}, false); err != nil {
 		return fmt.Errorf("insert operation cancel idempotency: %w", err)
 	}
 	return nil

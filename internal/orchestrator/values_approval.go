@@ -18,6 +18,7 @@ import (
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	"github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/authorization"
+	"github.com/ndzuki/release-manager/internal/contracts"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -133,7 +134,7 @@ func (s *Service) handleValuesApproval(
 		ActorRole:                    actor.role,
 		Authorized:                   true,
 		Reason:                       strings.TrimSpace(reason),
-		RequestID:                    uuid.New().String(),
+		RequestID:                    requestIDOrNew(ctx),
 		IdempotencyScope:             fmt.Sprintf("%s:%s:%s", actor.userID, action, revisionID),
 		IdempotencyKeyHash:           hashApprovalIdempotencyKey(idempotencyKey),
 		RequestHash:                  hashApprovalRequest(action, revisionID, expectedStateVersion, trimmedComment, strings.TrimSpace(reason)),
@@ -159,6 +160,17 @@ func (s *Service) handleValuesApproval(
 		return nil, connectErr
 	}
 	return connect.NewResponse(toValuesDecisionResponse(result)), nil
+}
+
+// requestIDOrNew returns the trace request_id from ctx when present (set by the
+// RequestIDInterceptor), falling back to a fresh UUID for in-process callers that
+// bypass the wire chain. Persisted decision/audit records carry the originating
+// request_id so approvals can be traced back to the API request (REQ-010/ADR-010).
+func requestIDOrNew(ctx context.Context) string {
+	if rid := contracts.RequestID(ctx); rid != "" {
+		return rid
+	}
+	return uuid.NewString()
 }
 
 func validateApprovalInput(
@@ -357,7 +369,7 @@ func (s *Service) recordFailedApprovalAttempt(
 		"release_definition_id": revision.ReleaseDefinitionID,
 		"organization_id":       actor.OrganizationID,
 		"actor_user_id":         actor.UserID,
-		"request_id":            uuid.New().String(),
+		"request_id":            requestIDOrNew(ctx),
 		"action":                action,
 		"connect_code":          connect.CodeOf(failure).String(),
 		"reason_code":           approvalErrorReason(failure),

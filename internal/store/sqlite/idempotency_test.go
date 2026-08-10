@@ -1,7 +1,6 @@
 package sqlite_test
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -9,132 +8,77 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ndzuki/release-manager/internal/store"
+	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
 
 func TestIdempotencyStore_CreateOrGet(t *testing.T) {
-	st := setupStore(t)
-	ctx := context.Background()
+	st := sqlitestore.OpenTest(t)
+	ctx := t.Context()
 	idem := st.Idempotency()
+	now := time.Now().UTC()
 
-	record := &store.IdempotencyRecord{
-		ID:          "idem-001",
-		Scope:       "user-1:/test.Service/Create",
-		Key:         "idem-key-1",
-		RequestHash: "abc123",
-		CreatedAt:   time.Now().UTC(),
-		ExpiresAt:   time.Now().UTC().Add(1 * time.Hour),
+	first := &store.IdempotencyRecord{
+		Scope: "user-1:/test.Service/Create", Key: "idem-key-1", RequestHash: "abc123",
+		ResponseRef: []byte(`{"operation_id":"op-001"}`), ExpiresAt: now.Add(time.Hour),
 	}
+	createdRecord, created, err := idem.CreateOrGet(ctx, first)
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.Equal(t, first.Scope, createdRecord.Scope)
+	assert.Equal(t, first.ResponseRef, createdRecord.ResponseRef)
 
-	t.Run("creates new record", func(t *testing.T) {
-		got, created, err := idem.CreateOrGet(ctx, record)
-		require.NoError(t, err)
-		assert.True(t, created)
-		assert.Equal(t, record.ID, got.ID)
-		assert.Equal(t, record.Scope, got.Scope)
-		assert.Equal(t, record.Key, got.Key)
+	replay, created, err := idem.CreateOrGet(ctx, &store.IdempotencyRecord{
+		Scope: first.Scope, Key: first.Key, RequestHash: first.RequestHash,
+		ResponseRef: []byte(`{"operation_id":"op-002"}`), ExpiresAt: now.Add(2 * time.Hour),
 	})
+	require.NoError(t, err)
+	assert.False(t, created)
+	assert.Equal(t, []byte(`{"operation_id":"op-001"}`), []byte(replay.ResponseRef))
 
-	t.Run("returns existing on same scope+key+hash", func(t *testing.T) {
-		dup := &store.IdempotencyRecord{
-			ID:          "idem-002",
-			Scope:       "user-1:/test.Service/Create",
-			Key:         "idem-key-1",
-			RequestHash: "abc123",
-			CreatedAt:   time.Now().UTC(),
-			ExpiresAt:   time.Now().UTC().Add(1 * time.Hour),
-		}
-
-		got, created, err := idem.CreateOrGet(ctx, dup)
-		require.NoError(t, err)
-		assert.False(t, created)
-		assert.Equal(t, "idem-001", got.ID)
+	_, created, err = idem.CreateOrGet(ctx, &store.IdempotencyRecord{
+		Scope: first.Scope, Key: first.Key, RequestHash: "different",
+		ExpiresAt: now.Add(time.Hour),
 	})
+	assert.False(t, created)
+	assert.ErrorIs(t, err, store.ErrIdempotencyConflict)
 
-	t.Run("returns conflict on same scope+key but different hash", func(t *testing.T) {
-		conflict := &store.IdempotencyRecord{
-			ID:          "idem-003",
-			Scope:       "user-1:/test.Service/Create",
-			Key:         "idem-key-1",
-			RequestHash: "xyz789",
-			CreatedAt:   time.Now().UTC(),
-			ExpiresAt:   time.Now().UTC().Add(1 * time.Hour),
-		}
-
-		_, created, err := idem.CreateOrGet(ctx, conflict)
-		require.Error(t, err)
-		assert.False(t, created)
-		assert.ErrorIs(t, err, store.ErrIdempotencyConflict)
+	otherScope, created, err := idem.CreateOrGet(ctx, &store.IdempotencyRecord{
+		Scope: "user-2:/test.Service/Create", Key: first.Key, RequestHash: first.RequestHash,
+		ExpiresAt: now.Add(time.Hour),
 	})
-
-	t.Run("different scope — no conflict", func(t *testing.T) {
-		diff := &store.IdempotencyRecord{
-			ID:          "idem-004",
-			Scope:       "user-2:/test.Service/Create",
-			Key:         "idem-key-1",
-			RequestHash: "abc123",
-			CreatedAt:   time.Now().UTC(),
-			ExpiresAt:   time.Now().UTC().Add(1 * time.Hour),
-		}
-
-		got, created, err := idem.CreateOrGet(ctx, diff)
-		require.NoError(t, err)
-		assert.True(t, created)
-		assert.Equal(t, "idem-004", got.ID)
-	})
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.Equal(t, "user-2:/test.Service/Create", otherScope.Scope)
 }
 
-func TestIdempotencyStore_DeleteExpired(t *testing.T) {
-	st := setupStore(t)
-	ctx := context.Background()
+func TestIdempotencyStore_ExpiredRecordsCanBeReplacedAndPurged(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	ctx := t.Context()
 	idem := st.Idempotency()
+	now := time.Now().UTC()
 
-	expired1 := &store.IdempotencyRecord{
-		ID:          "exp-1",
-		Scope:       "s",
-		Key:         "k1",
-		RequestHash: "h",
-		CreatedAt:   time.Now().UTC().Add(-2 * time.Hour),
-		ExpiresAt:   time.Now().UTC().Add(-1 * time.Hour),
-	}
-	expired2 := &store.IdempotencyRecord{
-		ID:          "exp-2",
-		Scope:       "s",
-		Key:         "k2",
-		RequestHash: "h",
-		CreatedAt:   time.Now().UTC().Add(-2 * time.Hour),
-		ExpiresAt:   time.Now().UTC().Add(-30 * time.Minute),
-	}
-	active := &store.IdempotencyRecord{
-		ID:          "act-1",
-		Scope:       "s",
-		Key:         "k3",
-		RequestHash: "h",
-		CreatedAt:   time.Now().UTC(),
-		ExpiresAt:   time.Now().UTC().Add(1 * time.Hour),
-	}
-
-	_, _, err := idem.CreateOrGet(ctx, expired1)
-	require.NoError(t, err)
-	_, _, err = idem.CreateOrGet(ctx, expired2)
-	require.NoError(t, err)
-	_, _, err = idem.CreateOrGet(ctx, active)
-	require.NoError(t, err)
-
-	t.Run("deletes only expired", func(t *testing.T) {
-		n, err := idem.DeleteExpired(ctx, time.Now().UTC())
-		require.NoError(t, err)
-		assert.Equal(t, int64(2), n)
+	_, _, err := idem.CreateOrGet(ctx, &store.IdempotencyRecord{
+		Scope: "scope", Key: "expired", RequestHash: "old", ExpiresAt: now.Add(-time.Hour),
 	})
+	require.NoError(t, err)
 
-	t.Run("active record still exists", func(t *testing.T) {
-		_, _, err := idem.CreateOrGet(ctx, &store.IdempotencyRecord{
-			ID:          "dup",
-			Scope:       "s",
-			Key:         "k3",
-			RequestHash: "h",
-			CreatedAt:   time.Now().UTC(),
-			ExpiresAt:   time.Now().UTC().Add(1 * time.Hour),
-		})
-		require.NoError(t, err)
+	replacement, created, err := idem.CreateOrGet(ctx, &store.IdempotencyRecord{
+		Scope: "scope", Key: "expired", RequestHash: "new", ExpiresAt: now.Add(time.Hour),
 	})
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.Equal(t, "new", replacement.RequestHash)
+
+	_, _, err = idem.CreateOrGet(ctx, &store.IdempotencyRecord{
+		Scope: "scope", Key: "purge", RequestHash: "old", ExpiresAt: now.Add(-time.Minute),
+	})
+	require.NoError(t, err)
+	expired, err := idem.GetExpired(ctx, now, 10)
+	require.NoError(t, err)
+	require.Len(t, expired, 1)
+	assert.Equal(t, "purge", expired[0].Key)
+
+	deleted, err := idem.DeleteExpired(ctx, now)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, deleted)
 }

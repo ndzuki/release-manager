@@ -160,6 +160,7 @@ type Store struct {
 	emergencyIntents  *emergencyIntentStore
 	convergenceTasks  *convergenceTaskStore
 	authorization     *authorizationStore
+	idempotency      *idempotencyStore
 	closeOnce         sync.Once
 	closeErr          error
 }
@@ -235,6 +236,7 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s.emergencyIntents = &emergencyIntentStore{gorm: s.db}
 	s.convergenceTasks = &convergenceTaskStore{gorm: s.db}
 	s.authorization = &authorizationStore{gorm: s.db}
+	s.idempotency = &idempotencyStore{db: s.db}
 	return s, nil
 }
 
@@ -298,6 +300,7 @@ func (s *Store) Bindings() store.BindingStore                               { re
 func (s *Store) AuditEvents() store.AuditEventStore                         { return s.audit }
 func (s *Store) Bundles() store.BundleStore                                 { return s.bundles }
 func (s *Store) Notifications() store.NotificationStore                     { return s.notif }
+func (s *Store) Idempotency() store.IdempotencyStore                       { return s.idempotency }
 func (s *Store) Verifications() store.VerificationStore                     { return s.verifs }
 func (s *Store) CustomerEvents() store.CustomerEventStore                   { return s.custEvents }
 func (s *Store) ClusterRoutes() store.ClusterRouteStore                     { return s.routes }

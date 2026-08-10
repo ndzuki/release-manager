@@ -1,4 +1,4 @@
-package sqlite
+package postgres
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
-type idempotencyStore struct{ db *sql.DB }
+type idempotencyStore struct{ db *DB }
 
 type idempotencyQueryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
@@ -58,7 +58,7 @@ func createOrGetIdempotencyRecord(
 			deleted, deleteErr := db.ExecContext(ctx, `
 				DELETE FROM idempotency_records
 				WHERE scope = ? AND text_key = ? AND expires_at <= ?
-			`, record.Scope, record.Key, now.Format(time.RFC3339Nano))
+			`, record.Scope, record.Key, now)
 			if deleteErr != nil {
 				return nil, false, fmt.Errorf("delete expired idempotency record: %w", deleteErr)
 			}
@@ -95,7 +95,7 @@ func (s *idempotencyStore) GetExpired(
 		WHERE expires_at < ?
 		ORDER BY expires_at, scope, text_key
 		LIMIT ?
-	`, before.UTC().Format(time.RFC3339Nano), limit)
+	`, before.UTC(), limit)
 	if err != nil {
 		return nil, fmt.Errorf("query expired idempotency records: %w", err)
 	}
@@ -118,7 +118,7 @@ func (s *idempotencyStore) GetExpired(
 func (s *idempotencyStore) DeleteExpired(ctx context.Context, before time.Time) (int64, error) {
 	result, err := s.db.ExecContext(ctx, `
 		DELETE FROM idempotency_records WHERE expires_at < ?
-	`, before.UTC().Format(time.RFC3339Nano))
+	`, before.UTC())
 	if err != nil {
 		return 0, fmt.Errorf("delete expired idempotency records: %w", err)
 	}
@@ -164,7 +164,7 @@ func insertIdempotencyRecord(
 		record.Key,
 		record.RequestHash,
 		[]byte(record.ResponseRef),
-		record.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		record.ExpiresAt.UTC(),
 	)
 	if err != nil {
 		if isUniqueConstraint(err) {
@@ -190,7 +190,7 @@ func loadActiveIdempotencyRecord(
 		SELECT scope, text_key, request_hash, response_ref, expires_at
 		FROM idempotency_records
 		WHERE scope = ? AND text_key = ? AND expires_at > ?
-	`, scope, key, now.UTC().Format(time.RFC3339Nano))
+	`, scope, key, now.UTC())
 	return scanLoadedIdempotencyRecord(row)
 }
 
@@ -225,15 +225,16 @@ type idempotencyScanner interface {
 
 func scanIdempotencyRecord(scanner idempotencyScanner) (*store.IdempotencyRecord, error) {
 	var record store.IdempotencyRecord
-	var expiresAt string
-	if err := scanner.Scan(&record.Scope, &record.Key, &record.RequestHash, &record.ResponseRef, &expiresAt); err != nil {
+	if err := scanner.Scan(
+		&record.Scope,
+		&record.Key,
+		&record.RequestHash,
+		&record.ResponseRef,
+		&record.ExpiresAt,
+	); err != nil {
 		return nil, err
 	}
-	parsed, err := time.Parse(time.RFC3339Nano, expiresAt)
-	if err != nil {
-		return nil, fmt.Errorf("parse idempotency expires_at: %w", err)
-	}
-	record.ExpiresAt = parsed
+	record.ExpiresAt = record.ExpiresAt.UTC()
 	return &record, nil
 }
 

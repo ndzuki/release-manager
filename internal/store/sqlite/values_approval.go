@@ -206,26 +206,20 @@ func lookupIdempotency(
 	if command.IdempotencyKeyHash == "" {
 		return nil, nil
 	}
-	var requestHash string
-	var responseRef []byte
-	err := tx.QueryRowContext(ctx, `
-		SELECT request_hash, response_ref FROM idempotency_records
-		WHERE scope = ? AND text_key = ? AND expires_at > ?
-	`, command.IdempotencyScope, command.IdempotencyKeyHash, time.Now().UTC().Format(time.RFC3339Nano)).Scan(
-		&requestHash,
-		&responseRef,
+	record, err := loadActiveIdempotencyRecord(
+		ctx, tx, command.IdempotencyScope, command.IdempotencyKeyHash, time.Now().UTC(),
 	)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, store.ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("lookup values approval idempotency: %w", err)
 	}
-	if requestHash != command.RequestHash {
+	if record.RequestHash != command.RequestHash {
 		return nil, store.ErrIdempotencyConflict
 	}
 	var result store.ValuesApprovalResult
-	if err := json.Unmarshal(responseRef, &result); err != nil {
+	if err := json.Unmarshal(record.ResponseRef, &result); err != nil {
 		return nil, fmt.Errorf("decode values approval replay: %w", err)
 	}
 	return &result, nil
@@ -245,14 +239,10 @@ func insertIdempotency(
 	if err != nil {
 		return fmt.Errorf("encode values approval response: %w", err)
 	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO idempotency_records (scope, text_key, request_hash, response_ref, expires_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, command.IdempotencyScope, command.IdempotencyKeyHash, command.RequestHash, responseRef, expiresAt.Format(time.RFC3339Nano))
-	if err != nil {
-		if isUniqueConstraint(err) {
-			return store.ErrIdempotencyConflict
-		}
+	if _, err := insertIdempotencyRecord(ctx, tx, &store.IdempotencyRecord{
+		Scope: command.IdempotencyScope, Key: command.IdempotencyKeyHash,
+		RequestHash: command.RequestHash, ResponseRef: responseRef, ExpiresAt: expiresAt,
+	}, false); err != nil {
 		return fmt.Errorf("insert values approval idempotency: %w", err)
 	}
 	return nil

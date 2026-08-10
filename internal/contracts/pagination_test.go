@@ -1,6 +1,7 @@
 package contracts
 
 import (
+	"encoding/base64"
 	"testing"
 	"time"
 
@@ -36,6 +37,33 @@ func TestEncodeDecodeCursor(t *testing.T) {
 		// "dG9rZW4" is valid base64 and decodes to "token" — no '|' separator.
 		_, _, err := DecodeCursor("dG9rZW4")
 		assert.ErrorContains(t, err, "malformed cursor")
+	})
+
+	t.Run("legacy RFC3339Nano encoding", func(t *testing.T) {
+		ts := time.Date(2026, 7, 16, 12, 0, 0, 123456789, time.UTC)
+		payload := ts.Format(time.RFC3339Nano) + "|op-legacy"
+		token := base64.RawURLEncoding.EncodeToString([]byte(payload))
+
+		decodedTS, decodedID, err := DecodeCursor(token)
+		require.NoError(t, err)
+		assert.Equal(t, ts, decodedTS)
+		assert.Equal(t, "op-legacy", decodedID)
+	})
+
+	t.Run("invalid timestamp", func(t *testing.T) {
+		token := base64.RawURLEncoding.EncodeToString([]byte("not-a-timestamp|id-1"))
+		_, _, err := DecodeCursor(token)
+		assert.ErrorContains(t, err, "invalid cursor timestamp")
+	})
+}
+
+func TestKeysetPredicate(t *testing.T) {
+	t.Run("desc uses strict less-than", func(t *testing.T) {
+		assert.Equal(t, "(created_at < ? OR (created_at = ? AND id < ?))", KeysetPredicate(CursorDesc))
+	})
+
+	t.Run("asc uses strict greater-than", func(t *testing.T) {
+		assert.Equal(t, "(created_at > ? OR (created_at = ? AND id > ?))", KeysetPredicate(CursorAsc))
 	})
 }
 

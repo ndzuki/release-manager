@@ -44,7 +44,7 @@ func TestNewRequestIDInterceptor(t *testing.T) {
 			return connect.NewResponse(&commonv1.Pagination{}), nil
 		}
 
-		wrapped := interceptor(connect.UnaryFunc(handler))
+		wrapped := interceptor.WrapUnary(connect.UnaryFunc(handler))
 		req := connect.NewRequest(&commonv1.Pagination{PageSize: 10})
 
 		resp, err := wrapped(context.Background(), req)
@@ -59,7 +59,7 @@ func TestNewRequestIDInterceptor(t *testing.T) {
 			return connect.NewResponse(&commonv1.Pagination{}), nil
 		}
 
-		wrapped := interceptor(connect.UnaryFunc(handler))
+		wrapped := interceptor.WrapUnary(connect.UnaryFunc(handler))
 		req := connect.NewRequest(&commonv1.Pagination{PageSize: 10})
 		req.Header().Set("X-Request-Id", "my-custom-id")
 

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/ndzuki/release-manager/internal/contracts"
@@ -77,15 +76,13 @@ func NewIdempotencyInterceptor(
 			hash := sha256Hex(body)
 
 			record := &store.IdempotencyRecord{
-				ID:          uuid.New().String(),
 				Scope:       scope,
-				Key:         idempotencyKey,
+				Key:         sha256Hex([]byte(idempotencyKey)),
 				RequestHash: hash,
-				CreatedAt:   time.Now().UTC(),
 				ExpiresAt:   time.Now().UTC().Add(ttl),
 			}
 
-			existing, created, err := idemStore.CreateOrGet(ctx, record)
+			_, created, err := idemStore.CreateOrGet(ctx, record)
 			if err != nil {
 				if errors.Is(err, store.ErrIdempotencyConflict) {
 					if logger != nil {
@@ -105,8 +102,7 @@ func NewIdempotencyInterceptor(
 			if !created && logger != nil {
 				logger.Info("idempotent replay",
 					"scope", scope,
-					"key", idempotencyKey,
-					"existing_id", existing.ID,
+					"key_hash", record.Key,
 					"request_id", contracts.RequestID(ctx),
 				)
 			}

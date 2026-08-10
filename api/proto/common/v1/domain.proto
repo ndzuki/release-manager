@@ -186,11 +186,3 @@ message ActorContext {
   string organization = 2;
 }
 
-// IdempotencyRecord captures the result of an idempotent write for replay.
-message IdempotencyRecord {
-  string scope = 1;
-  string key = 2;
-  string request_hash = 3;
-  bytes response_ref = 4;
-  google.protobuf.Timestamp expires_at = 5;
-}

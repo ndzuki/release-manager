@@ -3,6 +3,7 @@ package contracts
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -14,7 +15,7 @@ func TestRequestID(t *testing.T) {
 	ctx := context.Background()
 	assert.Empty(t, RequestID(ctx))
 
-	ctx = context.WithValue(ctx, RequestIDKey, "req-123")
+	ctx = WithRequestID(ctx, "req-123")
 	assert.Equal(t, "req-123", RequestID(ctx))
 }
 
@@ -22,64 +23,65 @@ func TestOperationID(t *testing.T) {
 	ctx := context.Background()
 	assert.Empty(t, OperationID(ctx))
 
-	ctx = context.WithValue(ctx, OperationIDKey, "op-456")
+	ctx = WithOperationID(ctx, "op-456")
 	assert.Equal(t, "op-456", OperationID(ctx))
 }
 
 func TestNewAppError(t *testing.T) {
-	t.Run("with request_id", func(t *testing.T) {
-		ctx := context.WithValue(context.Background(), RequestIDKey, "req-abc")
+	t.Run("injects request_id as metadata", func(t *testing.T) {
+		ctx := WithRequestID(context.Background(), "req-abc")
 		err := NewAppError(ctx, connect.CodeNotFound, "customer not found")
 
 		require.NotNil(t, err)
 		assert.Equal(t, connect.CodeNotFound, err.Code())
-		assert.Contains(t, err.Message(), "req-abc")
-		assert.Contains(t, err.Message(), "customer not found")
+		assert.Equal(t, "customer not found", err.Message())
+		assert.Equal(t, "req-abc", err.Meta().Get(RequestIDHeader))
 	})
 
-	t.Run("without request_id", func(t *testing.T) {
+	t.Run("without request_id leaves metadata empty", func(t *testing.T) {
 		err := NewAppError(context.Background(), connect.CodeInternal, "oops")
 		assert.Equal(t, connect.CodeInternal, err.Code())
-		assert.Contains(t, err.Message(), "oops")
+		assert.Equal(t, "oops", err.Message())
+		assert.Empty(t, err.Meta().Get(RequestIDHeader))
 	})
 }
 
 func TestNewAppErrorf(t *testing.T) {
-	ctx := context.WithValue(context.Background(), RequestIDKey, "req-001")
+	ctx := WithRequestID(context.Background(), "req-001")
 	err := NewAppErrorf(ctx, connect.CodeInvalidArgument, "field %s is required", "name")
 
 	assert.Equal(t, connect.CodeInvalidArgument, err.Code())
-	assert.Contains(t, err.Message(), "req-001")
-	assert.Contains(t, err.Message(), "name is required")
+	assert.Equal(t, "field name is required", err.Message())
+	assert.Equal(t, "req-001", err.Meta().Get(RequestIDHeader))
 }
 
 func TestToConnectError(t *testing.T) {
-	ctx := context.WithValue(context.Background(), RequestIDKey, "req-xyz")
+	ctx := WithRequestID(context.Background(), "req-xyz")
 
 	t.Run("nil error", func(t *testing.T) {
 		assert.Nil(t, ToConnectError(ctx, nil))
 	})
 
-	t.Run("connect error", func(t *testing.T) {
+	t.Run("connect error keeps code and message", func(t *testing.T) {
 		orig := connect.NewError(connect.CodePermissionDenied, errors.New("access denied"))
 		sanitized := ToConnectError(ctx, orig)
 		assert.Equal(t, connect.CodePermissionDenied, sanitized.Code())
-		assert.Contains(t, sanitized.Message(), "req-xyz")
-		assert.Contains(t, sanitized.Message(), "access denied")
+		assert.Equal(t, "access denied", sanitized.Message())
+		assert.Equal(t, "req-xyz", sanitized.Meta().Get(RequestIDHeader))
 	})
 
-	t.Run("wrapped connect error", func(t *testing.T) {
+	t.Run("wrapped connect error is unwrapped", func(t *testing.T) {
 		orig := connect.NewError(connect.CodeNotFound, errors.New("gone"))
-		wrapped := errors.New("wrap: " + orig.Error())
-		// Note: connect.Error.Error() loses the type, so wrapping with %v doesn't preserve it.
-		// For real usage, use %w or errors.Join.
+		wrapped := fmt.Errorf("wrap: %w", orig)
 		sanitized := ToConnectError(ctx, wrapped)
-		assert.Equal(t, connect.CodeInternal, sanitized.Code())
+		assert.Equal(t, connect.CodeNotFound, sanitized.Code())
+		assert.Equal(t, "gone", sanitized.Message())
 	})
 
-	t.Run("plain error", func(t *testing.T) {
-		sanitized := ToConnectError(ctx, errors.New("something broke"))
+	t.Run("plain error maps to CodeInternal with generic message", func(t *testing.T) {
+		sanitized := ToConnectError(ctx, errors.New("something broke: SELECT * FROM secrets"))
 		assert.Equal(t, connect.CodeInternal, sanitized.Code())
-		assert.Contains(t, sanitized.Message(), "internal error")
+		assert.Equal(t, "internal error", sanitized.Message())
+		assert.Equal(t, "req-xyz", sanitized.Meta().Get(RequestIDHeader))
 	})
 }
