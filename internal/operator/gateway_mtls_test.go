@@ -12,6 +12,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"log/slog"
 	"net/http"
@@ -172,6 +173,11 @@ func TestGatewayMTLSEnrollAndStreamEstablish(t *testing.T) {
 	enrolled := enrollViaGateway(t, baseURL, pool, token, "cust-1", "clus-1", opID, csrPEM)
 	require.NotEmpty(t, enrolled.GetSessionId())
 	require.NotEmpty(t, enrolled.GetCertificatePem())
+	enrolledOperator, err := st.Operators().GetByClusterID(context.Background(), "clus-1")
+	require.NoError(t, err)
+	require.Len(t, enrolledOperator.CertSerial, 20, "ADR-018 serial is 10 digest bytes encoded as hex")
+	_, err = hex.DecodeString(enrolledOperator.CertSerial)
+	require.NoError(t, err)
 	agentCert, err := tls.X509KeyPair(enrolled.GetCertificatePem(), keyPEM)
 	require.NoError(t, err)
 	// PASS 2: CommandStream with the signed certificate → SessionEstablished.

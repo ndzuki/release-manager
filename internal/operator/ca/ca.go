@@ -130,7 +130,14 @@ func Load(keyPEM, certPEM []byte, cfg Config) (*CA, error) {
 	if !cert.IsCA {
 		return nil, fmt.Errorf("CA certificate is not a CA certificate")
 	}
-	// Verify the key matches the certificate (signing self-test).
+	// The self-signature proves the certificate is intact; a separate check
+	// proves the loaded private key actually matches the certificate public
+	// key (a mismatched pair would silently sign certificates the trust
+	// anchor does not back).
+	pub, ok := priv.Public().(ed25519.PublicKey)
+	if !ok || !pub.Equal(cert.PublicKey) {
+		return nil, fmt.Errorf("CA private key does not match certificate")
+	}
 	if err := cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil {
 		return nil, fmt.Errorf("CA certificate signature does not match key: %w", err)
 	}
@@ -153,6 +160,20 @@ func (ca *CA) persist(keyPath, certPath string) error {
 		return fmt.Errorf("write CA certificate: %w", err)
 	}
 	return nil
+}
+
+// LoadCertPool reads a PEM CA certificate file into a CertPool, the shared
+// trust anchor for gateway clients and the gateway listener's ClientCAs.
+func LoadCertPool(certPath string) (*x509.CertPool, error) {
+	caPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil, fmt.Errorf("read gateway CA: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("gateway CA file contains no certificates")
+	}
+	return pool, nil
 }
 
 func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
@@ -217,7 +238,7 @@ func (ca *CA) CertPEM() []byte {
 
 // SignServerCert issues a server certificate for the given hostnames, signed by
 // this CA with the serverAuth EKU. It returns the certificate and private key
-// in PEM form for the gateway TLS listener (TASK-075 gateway 接线).
+// in PEM form for the gateway TLS listener (TASK-075 gateway wiring).
 func (ca *CA) SignServerCert(hostnames []string) (certPEM, keyPEM []byte, err error) {
 	if len(hostnames) == 0 {
 		return nil, nil, fmt.Errorf("server hostnames are required")

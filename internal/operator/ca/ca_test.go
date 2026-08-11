@@ -81,3 +81,27 @@ func TestLoadRejectsCorruptFiles(t *testing.T) {
 	_, err = ca.Load(keyPEM, []byte("garbage"), ca.Config{})
 	require.Error(t, err)
 }
+
+// TestLoadRejectsMismatchedKeyAndCertificate: each file may be valid on its
+// own, but a partial restore from different CA generations must fail. Loading
+// such a pair would sign certificates the trust anchor cannot verify.
+func TestLoadRejectsMismatchedKeyAndCertificate(t *testing.T) {
+	firstDir := t.TempDir()
+	secondDir := t.TempDir()
+	firstKeyPath := filepath.Join(firstDir, "ca.key")
+	firstCertPath := filepath.Join(firstDir, "ca.crt")
+	secondKeyPath := filepath.Join(secondDir, "ca.key")
+	secondCertPath := filepath.Join(secondDir, "ca.crt")
+
+	_, err := ca.LoadOrCreate(ca.Config{}, firstKeyPath, firstCertPath)
+	require.NoError(t, err)
+	_, err = ca.LoadOrCreate(ca.Config{}, secondKeyPath, secondCertPath)
+	require.NoError(t, err)
+
+	firstKey, err := os.ReadFile(firstKeyPath)
+	require.NoError(t, err)
+	secondCert, err := os.ReadFile(secondCertPath)
+	require.NoError(t, err)
+	_, err = ca.Load(firstKey, secondCert, ca.Config{})
+	require.ErrorContains(t, err, "private key does not match certificate")
+}

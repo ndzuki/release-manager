@@ -4,13 +4,11 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"time"
 
 	"connectrpc.com/connect"
@@ -27,6 +25,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/operator"
 	operatoragent "github.com/ndzuki/release-manager/internal/operator/agent"
 	"github.com/ndzuki/release-manager/internal/operator/bootstrap"
+	"github.com/ndzuki/release-manager/internal/operator/ca"
 	"github.com/ndzuki/release-manager/internal/operator/helmengine"
 	"github.com/ndzuki/release-manager/internal/operator/localstore"
 	"github.com/ndzuki/release-manager/internal/operator/secretmetadata"
@@ -235,13 +234,9 @@ func agentTLSClient(certPEM, keyPEM, caCertPath string) (*http.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load identity certificate: %w", err)
 	}
-	pool := x509.NewCertPool()
-	caPEM, err := os.ReadFile(caCertPath)
+	pool, err := ca.LoadCertPool(caCertPath)
 	if err != nil {
-		return nil, fmt.Errorf("read gateway CA: %w", err)
-	}
-	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("gateway CA file contains no certificates")
+		return nil, err
 	}
 	return &http.Client{Transport: &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -337,7 +332,7 @@ func (s *operatorSvc) runSessionExpiry(ctx context.Context, logger *slog.Logger)
 func newSecretClient(kubeConfig string) (kubernetes.Interface, error) {
 	var (
 		restConfig *rest.Config
-		err    error
+		err        error
 	)
 	if kubeConfig != "" {
 		restConfig, err = clientcmd.BuildConfigFromFlags("", kubeConfig)

@@ -215,11 +215,9 @@ func (s *Service) Enroll(
 	}
 	certPEM := ca.CertDERToPEM(certDER)
 
-	// Generate operator ID and cert serial.
-	certSerial := hashBytes(certDER)
-	if len(certSerial) > 10 {
-		certSerial = certSerial[:10]
-	}
+	// Generate operator ID and cert serial. The serial is the first 10 bytes
+	// of sha256(certDER), hex-encoded (ADR-018; REQ-015 certificate contract).
+	certSerial := certSerialFromDER(certDER)
 
 	operatorID := msg.GetOperatorId()
 	if operatorID == "" {
@@ -1129,25 +1127,23 @@ func (s *Service) RevokeOperator(
 	}), nil
 }
 
-// hashBytes returns a hex-encoded SHA-256 of the input.
-func hashBytes(data []byte) string {
-	h := sha256.Sum256(data)
-	return hex.EncodeToString(h[:])
+// certSerialFromCert computes the ADR-018 identity serial: the first 10 bytes
+// of the SHA-256 digest of the DER certificate, hex-encoded (20 hex chars, 80
+// bits). This is the same derivation Enroll uses for Operator.CertSerial.
+func certSerialFromCert(cert *x509.Certificate) string {
+	return certSerialFromDER(cert.Raw)
 }
 
-// certSerialFromCert computes the ADR-018 identity serial: the hex-encoded
-// SHA-256 of the DER certificate, truncated to its first 10 bytes. This is
-// the same derivation Enroll uses for Operator.CertSerial.
-func certSerialFromCert(cert *x509.Certificate) string {
-	serial := hashBytes(cert.Raw)
-	if len(serial) > 10 {
-		serial = serial[:10]
-	}
-	return serial
+// certSerialFromDER derives the ADR-018 identity serial from a certificate's
+// DER encoding: sha256(certDER) truncated to its first 10 bytes, lower-case
+// hex (REQ-015 certificate contract; ADR-018).
+func certSerialFromDER(certDER []byte) string {
+	h := sha256.Sum256(certDER)
+	return hex.EncodeToString(h[:10])
 }
 
 // parseSANIdentity extracts the cluster/customer identity from a gateway
-// client certificate. The canonical SAN (REQ-015 决策 3) is
+// client certificate. The canonical SAN (REQ-015 decision 3) is
 // `<cluster>.<customer>.rm`, lower-cased; cluster IDs may contain dots, so the
 // customer is always the component immediately before the ".rm" suffix.
 func parseSANIdentity(cert *x509.Certificate) (clusterID, customerID string, ok bool) {

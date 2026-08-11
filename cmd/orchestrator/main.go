@@ -66,28 +66,26 @@ func (s *orchSvc) Configure(cfg *config.ServiceConfig) { s.cfg = *cfg }
 func (s *orchSvc) newGatewayOperatorService(logger *slog.Logger) (*operator.Service, error) {
 	gatewayCfg := s.cfg.Gateway.WithDefaults()
 	gatewayOpts := []operator.Option{operator.WithAudit(s.auditEmitter)}
-	operatorService, err := operator.NewService(s.store, logger, gatewayOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("create operator control service: %w", err)
+	if gatewayCfg.Enabled {
+		caInst, err := ca.LoadOrCreate(ca.Config{TTL: 7 * 24 * time.Hour}, gatewayCfg.CAKeyPath, gatewayCfg.CACertPath)
+		if err != nil {
+			return nil, fmt.Errorf("load gateway CA: %w", err)
+		}
+		// The gateway service shares the persisted CA so Enroll signs
+		// certificates from the same CA the listener verifies against.
+		gatewayOpts = append(gatewayOpts, operator.WithCA(caInst))
+		service, err := operator.NewService(s.store, logger, gatewayOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("create gateway operator service: %w", err)
+		}
+		s.gateway, err = s.buildGatewayServer(gatewayCfg, caInst, service, logger)
+		if err != nil {
+			return nil, err
+		}
+		logger.Info("agent gateway enabled", "addr", s.gateway.Addr, "ca_cert", gatewayCfg.CACertPath)
+		return service, nil
 	}
-	if !gatewayCfg.Enabled {
-		return operatorService, nil
-	}
-	caInst, err := ca.LoadOrCreate(ca.Config{TTL: 7 * 24 * time.Hour}, gatewayCfg.CAKeyPath, gatewayCfg.CACertPath)
-	if err != nil {
-		return nil, fmt.Errorf("load gateway CA: %w", err)
-	}
-	gatewayOpts = append(gatewayOpts, operator.WithCA(caInst))
-	gatewayService, err := operator.NewService(s.store, logger, gatewayOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("create gateway operator service: %w", err)
-	}
-	s.gateway, err = s.buildGatewayServer(gatewayCfg, caInst, gatewayService, logger)
-	if err != nil {
-		return nil, err
-	}
-	logger.Info("agent gateway enabled", "addr", s.gateway.Addr, "ca_cert", gatewayCfg.CACertPath)
-	return gatewayService, nil
+	return operator.NewService(s.store, logger, gatewayOpts...)
 }
 
 // ExtraServers reports the agent gateway listener so app.Run starts and

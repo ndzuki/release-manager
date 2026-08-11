@@ -242,6 +242,22 @@ func TestBootstrapRetriesTransientError(t *testing.T) {
 	assert.Equal(t, 1, store.saved)
 }
 
+func TestBootstrapPermanentErrorFailsFast(t *testing.T) {
+	store := &memIdentityStore{}
+	// A scope mismatch (cluster not registered for the customer) is a
+	// permanent configuration error: the agent must surface it, not retry
+	// forever (REQ-015 error model client handling).
+	mismatch := connect.NewError(connect.CodeInvalidArgument, errors.New("cluster does not belong to customer"))
+	enroller := &stubEnroller{resp: nil, err: mismatch}
+	cfg := testConfig(t, store, enroller)
+
+	_, err := Bootstrap(context.Background(), cfg)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "permanent error")
+	assert.Equal(t, int32(1), enroller.calls.Load())
+	assert.Zero(t, store.saved)
+}
+
 func TestBootstrapTokenFileTakesPrecedenceOverEnv(t *testing.T) {
 	dir := t.TempDir()
 	tokenPath := filepath.Join(dir, "token")

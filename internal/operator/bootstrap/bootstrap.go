@@ -8,7 +8,6 @@ package bootstrap
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,6 +20,7 @@ import (
 
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
+	"github.com/ndzuki/release-manager/internal/operator/ca"
 	"github.com/ndzuki/release-manager/internal/operator/localstore"
 )
 
@@ -153,15 +153,19 @@ func enrollAndPersist(ctx context.Context, cfg Config, token string, logger *slo
 			}
 			return identity, nil
 		}
-
-		// Classify the failure: token rejection is permanent; anything else
-		// (network, server-side 5xx, transient) is retried with backoff.
+		// Classify the failure: token rejection is permanent; only network
+		// and server-side 5xx failures are transient (REQ-015 error model:
+		// permanent errors such as scope_mismatch / csr_invalid fail fast so
+		// a misconfigured agent surfaces its error instead of retrying
+		// forever).
 		if isTokenRejection(err) {
 			return nil, fmt.Errorf("%w: %s", ErrTokenInvalid, err.Error())
 		}
+		if !retryableEnrollError(err) {
+			return nil, fmt.Errorf("enrollment rejected (permanent error): %w", err)
+		}
 		logger.Warn("enroll attempt failed; retrying",
 			"attempt", attempt+1, "error", err)
-
 		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
@@ -196,6 +200,23 @@ func isTokenRejection(err error) bool {
 	return false
 }
 
+// retryableEnrollError reports whether an Enroll failure is transient and
+// worth backing off: network failures and server-side 5xx only. Everything
+// else — invalid arguments, scope mismatches, permission denials — is a
+// permanent configuration or contract error that must fail fast (REQ-015
+// error model client handling).
+func retryableEnrollError(err error) bool {
+	switch connect.CodeOf(err) {
+	case connect.CodeUnavailable, // network / 502 / 503 / 504
+		connect.CodeUnknown,  // unmapped transport failures
+		connect.CodeInternal, // server 5xx
+		connect.CodeDeadlineExceeded:
+		return true
+	default:
+		return false
+	}
+}
+
 // newGatewayEnroller builds a Connect client that dials the gateway with the
 // CA certificate as the trust anchor and no client certificate: Enroll
 // accepts certificate-less requests on the gateway (mixed mTLS contract).
@@ -203,13 +224,9 @@ func newGatewayEnroller(cfg Config) (Enroller, error) {
 	if cfg.GatewayURL == "" {
 		return nil, fmt.Errorf("gateway url is required")
 	}
-	pool := x509.NewCertPool()
-	caPEM, err := os.ReadFile(cfg.CAFilePath)
+	pool, err := ca.LoadCertPool(cfg.CAFilePath)
 	if err != nil {
-		return nil, fmt.Errorf("read gateway CA: %w", err)
-	}
-	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("gateway CA file contains no certificates")
+		return nil, err
 	}
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
