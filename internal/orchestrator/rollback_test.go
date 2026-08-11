@@ -327,7 +327,7 @@ func TestRollbackRelease_CustomerDisabled(t *testing.T) {
 	cust, err := st.Customers().Get(context.Background(), "cust-001")
 	require.NoError(t, err)
 	cust.Status = store.CustomerDisabled
-	err = st.Customers().Update(context.Background(), cust)
+	err = st.Customers().Update(context.Background(), cust, cust.Version)
 	require.NoError(t, err)
 
 	_, err = svc.RollbackRelease(context.Background(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{

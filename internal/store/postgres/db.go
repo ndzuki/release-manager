@@ -147,6 +147,7 @@ type Store struct {
 	scanResults       *scanResultStore
 	vulnExceptions    *vulnerabilityExceptionStore
 	custEvents        *customerEventStore
+	customerCreates   *customerBindingCreateStore
 	defEvents         *definitionEventStore
 	preflight         *preflightStore
 	candidateArts     *candidateArtifactStore
@@ -160,7 +161,7 @@ type Store struct {
 	emergencyIntents  *emergencyIntentStore
 	convergenceTasks  *convergenceTaskStore
 	authorization     *authorizationStore
-	idempotency      *idempotencyStore
+	idempotency       *idempotencyStore
 	closeOnce         sync.Once
 	closeErr          error
 }
@@ -219,6 +220,7 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s.invs = &inventoryStore{gorm: s.db}
 	s.syncRequests = &inventorySyncRequestStore{gorm: s.db}
 	s.verifs = &verificationStore{gorm: s.db}
+	s.customerCreates = &customerBindingCreateStore{gorm: s.db}
 	s.custEvents = &customerEventStore{gorm: s.db}
 	s.trustRoots = &trustRootStore{gorm: s.db}
 	s.scanResults = &scanResultStore{gorm: s.db}
@@ -272,7 +274,7 @@ var (
 
 func (s *Store) Operations() store.OperationStore           { return s.ops }
 func (s *Store) OperationEvents() store.OperationEventStore { return s.operationEvents }
-func (s *Store) Timeline() store.TimelineStore               { return s.timeline }
+func (s *Store) Timeline() store.TimelineStore              { return s.timeline }
 
 // ExecutionResults returns typed operation result records.
 func (s *Store) ExecutionResults() store.OperationExecutionResultStore { return s.executionResults }
@@ -301,7 +303,8 @@ func (s *Store) Bindings() store.BindingStore                               { re
 func (s *Store) AuditEvents() store.AuditEventStore                         { return s.audit }
 func (s *Store) Bundles() store.BundleStore                                 { return s.bundles }
 func (s *Store) Notifications() store.NotificationStore                     { return s.notif }
-func (s *Store) Idempotency() store.IdempotencyStore                       { return s.idempotency }
+func (s *Store) Idempotency() store.IdempotencyStore                        { return s.idempotency }
+func (s *Store) CustomerCreates() store.CustomerBindingCreateStore          { return s.customerCreates }
 func (s *Store) Verifications() store.VerificationStore                     { return s.verifs }
 func (s *Store) CustomerEvents() store.CustomerEventStore                   { return s.custEvents }
 func (s *Store) ClusterRoutes() store.ClusterRouteStore                     { return s.routes }

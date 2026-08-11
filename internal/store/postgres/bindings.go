@@ -15,6 +15,24 @@ import (
 type bindingStore struct{ gorm *DB }
 
 func (s *bindingStore) Create(ctx context.Context, binding *store.OrgCustomerBinding) error {
+	tx, err := s.gorm.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin create binding: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
+	if err := createBindingInTx(ctx, tx, binding); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit create binding: %w", err)
+	}
+	return nil
+}
+
+// createBindingInTx persists one binding row plus its immutable event and the
+// authorization source-version bump inside the caller's transaction. It is
+// shared by the binding store and the atomic customer+binding creation module.
+func createBindingInTx(ctx context.Context, tx *Tx, binding *store.OrgCustomerBinding) error {
 	if binding.CreatedAt.IsZero() {
 		binding.CreatedAt = time.Now().UTC()
 	}
@@ -25,22 +43,13 @@ func (s *bindingStore) Create(ctx context.Context, binding *store.OrgCustomerBin
 		binding.Status = store.BindingActive
 	}
 
-	tx, err := s.gorm.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin create binding: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
-
-	_, err = tx.ExecContext(ctx, `
+	_, err := tx.ExecContext(ctx, `
 		INSERT INTO org_customer_bindings (id, org_id, customer_id, status, optimistic_version, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		binding.ID, binding.OrgID, binding.CustomerID, string(binding.Status), binding.OptimisticVersion,
 		binding.CreatedAt.UTC().Format(time.RFC3339), binding.UpdatedAt.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
-		if isUniqueConstraint(err) {
-			return store.ErrDuplicateKey
-		}
 		return fmt.Errorf("insert binding: %w", err)
 	}
 	if err := insertBindingEvent(ctx, tx, binding); err != nil {
@@ -48,9 +57,6 @@ func (s *bindingStore) Create(ctx context.Context, binding *store.OrgCustomerBin
 	}
 	if err := bumpAuthorizationSourceVersion(ctx, tx); err != nil {
 		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit create binding: %w", err)
 	}
 	return nil
 }

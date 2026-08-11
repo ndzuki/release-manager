@@ -72,7 +72,7 @@ func TestCustomerDisable(t *testing.T) {
 	require.NoError(t, st.Customers().Create(ctx, c))
 
 	c.Status = store.CustomerDisabled
-	require.NoError(t, st.Customers().Update(ctx, c))
+	require.NoError(t, st.Customers().Update(ctx, c, c.Version))
 
 	got, err := st.Customers().Get(ctx, c.ID)
 	require.NoError(t, err)

@@ -44,6 +44,7 @@ type Store struct {
 	invs             *inventoryStore
 	syncRequests     *inventorySyncRequestStore
 	custEvents       *customerEventStore
+	customerCreates  *customerBindingCreateStore
 	defEvents        *definitionEventStore
 	preflight        *preflightStore
 	candidateArts    *candidateArtifactStore
@@ -124,6 +125,7 @@ func Open(dsn string) (*Store, error) {
 	s.rollouts = &rolloutTrackingStore{db: db}
 	s.emergencyIntents = &emergencyIntentStore{db: db}
 	s.convergenceTasks = &convergenceTaskStore{db: db}
+	s.customerCreates = &customerBindingCreateStore{db: db}
 	s.authorization = &authorizationStore{db: db}
 	return s, nil
 }
@@ -148,6 +150,9 @@ func (s *Store) UpgradeResults() store.UpgradeResultStore { return s.ops }
 
 // Customers returns the CustomerStore.
 func (s *Store) Customers() store.CustomerStore { return s.customers }
+
+// CustomerCreates returns the atomic customer+org-binding creation module.
+func (s *Store) CustomerCreates() store.CustomerBindingCreateStore { return s.customerCreates }
 
 // Clusters returns the ClusterStore.
 func (s *Store) Clusters() store.ClusterStore { return s.clusters }
@@ -269,6 +274,7 @@ func (s *Store) ConvergenceTasks() store.ConvergenceTaskStore { return s.converg
 
 // Authorization returns the durable authorization state module.
 func (s *Store) Authorization() store.AuthorizationStore { return s.authorization }
+
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
 
@@ -489,6 +495,8 @@ var migrationStatements = []string{
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL
 	)`,
+
+	`ALTER TABLE customers ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
 
 	`CREATE TABLE IF NOT EXISTS clusters (
 		id             TEXT PRIMARY KEY,

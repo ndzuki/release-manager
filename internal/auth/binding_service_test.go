@@ -140,7 +140,7 @@ func TestBindingService_DisabledCustomerVisibleButNotWritable(t *testing.T) {
 	customer, err := st.Customers().Get(ctx, customerID)
 	require.NoError(t, err)
 	customer.Status = store.CustomerDisabled
-	require.NoError(t, st.Customers().Update(ctx, customer))
+	require.NoError(t, st.Customers().Update(ctx, customer, customer.Version))
 
 	got, err := svc.GetBinding(ctx, connect.NewRequest(&authv1.GetBindingRequest{
 		BindingId: created.Msg.GetBinding().GetId(),

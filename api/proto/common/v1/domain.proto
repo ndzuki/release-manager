@@ -150,6 +150,17 @@ message Customer {
   string slug = 3;
   string status = 5;
   google.protobuf.Timestamp created_at = 4;
+  // version is the optimistic-lock revision used for CAS updates (AC-051-02).
+  int64 version = 6;
+}
+
+// CustomerEvent is one immutable customer lifecycle observation returned by
+// ListCustomerEvents. It never carries Secret, token, or certificate content.
+message CustomerEvent {
+  string id = 1;
+  string customer_id = 2;
+  string event_type = 3;
+  google.protobuf.Timestamp created_at = 4;
 }
 
 // CustomerDisabledEvent is emitted when a customer is disabled.

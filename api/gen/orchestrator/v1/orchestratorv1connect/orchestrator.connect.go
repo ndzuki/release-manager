@@ -115,6 +115,9 @@ const (
 	// OrchestratorServiceDisableCustomerProcedure is the fully-qualified name of the
 	// OrchestratorService's DisableCustomer RPC.
 	OrchestratorServiceDisableCustomerProcedure = "/orchestrator.v1.OrchestratorService/DisableCustomer"
+	// OrchestratorServiceListCustomerEventsProcedure is the fully-qualified name of the
+	// OrchestratorService's ListCustomerEvents RPC.
+	OrchestratorServiceListCustomerEventsProcedure = "/orchestrator.v1.OrchestratorService/ListCustomerEvents"
 	// OrchestratorServiceCreateClusterProcedure is the fully-qualified name of the
 	// OrchestratorService's CreateCluster RPC.
 	OrchestratorServiceCreateClusterProcedure = "/orchestrator.v1.OrchestratorService/CreateCluster"
@@ -361,6 +364,7 @@ type OrchestratorServiceClient interface {
 	ListCustomers(context.Context, *connect.Request[v1.ListCustomersRequest]) (*connect.Response[v1.ListCustomersResponse], error)
 	UpdateCustomer(context.Context, *connect.Request[v1.UpdateCustomerRequest]) (*connect.Response[v1.UpdateCustomerResponse], error)
 	DisableCustomer(context.Context, *connect.Request[v1.DisableCustomerRequest]) (*connect.Response[v1.DisableCustomerResponse], error)
+	ListCustomerEvents(context.Context, *connect.Request[v1.ListCustomerEventsRequest]) (*connect.Response[v1.ListCustomerEventsResponse], error)
 	CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.CreateClusterResponse], error)
 	UpdateCluster(context.Context, *connect.Request[v1.UpdateClusterRequest]) (*connect.Response[v1.UpdateClusterResponse], error)
 	GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error)
@@ -539,6 +543,12 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("DisableCustomer")),
 			connect.WithClientOptions(opts...),
 		),
+		listCustomerEvents: connect.NewClient[v1.ListCustomerEventsRequest, v1.ListCustomerEventsResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListCustomerEventsProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListCustomerEvents")),
+			connect.WithClientOptions(opts...),
+		),
 		createCluster: connect.NewClient[v1.CreateClusterRequest, v1.CreateClusterResponse](
 			httpClient,
 			baseURL+OrchestratorServiceCreateClusterProcedure,
@@ -705,6 +715,7 @@ type orchestratorServiceClient struct {
 	listCustomers                *connect.Client[v1.ListCustomersRequest, v1.ListCustomersResponse]
 	updateCustomer               *connect.Client[v1.UpdateCustomerRequest, v1.UpdateCustomerResponse]
 	disableCustomer              *connect.Client[v1.DisableCustomerRequest, v1.DisableCustomerResponse]
+	listCustomerEvents           *connect.Client[v1.ListCustomerEventsRequest, v1.ListCustomerEventsResponse]
 	createCluster                *connect.Client[v1.CreateClusterRequest, v1.CreateClusterResponse]
 	updateCluster                *connect.Client[v1.UpdateClusterRequest, v1.UpdateClusterResponse]
 	getCluster                   *connect.Client[v1.GetClusterRequest, v1.GetClusterResponse]
@@ -843,6 +854,11 @@ func (c *orchestratorServiceClient) UpdateCustomer(ctx context.Context, req *con
 // DisableCustomer calls orchestrator.v1.OrchestratorService.DisableCustomer.
 func (c *orchestratorServiceClient) DisableCustomer(ctx context.Context, req *connect.Request[v1.DisableCustomerRequest]) (*connect.Response[v1.DisableCustomerResponse], error) {
 	return c.disableCustomer.CallUnary(ctx, req)
+}
+
+// ListCustomerEvents calls orchestrator.v1.OrchestratorService.ListCustomerEvents.
+func (c *orchestratorServiceClient) ListCustomerEvents(ctx context.Context, req *connect.Request[v1.ListCustomerEventsRequest]) (*connect.Response[v1.ListCustomerEventsResponse], error) {
+	return c.listCustomerEvents.CallUnary(ctx, req)
 }
 
 // CreateCluster calls orchestrator.v1.OrchestratorService.CreateCluster.
@@ -989,6 +1005,7 @@ type OrchestratorServiceHandler interface {
 	ListCustomers(context.Context, *connect.Request[v1.ListCustomersRequest]) (*connect.Response[v1.ListCustomersResponse], error)
 	UpdateCustomer(context.Context, *connect.Request[v1.UpdateCustomerRequest]) (*connect.Response[v1.UpdateCustomerResponse], error)
 	DisableCustomer(context.Context, *connect.Request[v1.DisableCustomerRequest]) (*connect.Response[v1.DisableCustomerResponse], error)
+	ListCustomerEvents(context.Context, *connect.Request[v1.ListCustomerEventsRequest]) (*connect.Response[v1.ListCustomerEventsResponse], error)
 	CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.CreateClusterResponse], error)
 	UpdateCluster(context.Context, *connect.Request[v1.UpdateClusterRequest]) (*connect.Response[v1.UpdateClusterResponse], error)
 	GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error)
@@ -1161,6 +1178,12 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		OrchestratorServiceDisableCustomerProcedure,
 		svc.DisableCustomer,
 		connect.WithSchema(orchestratorServiceMethods.ByName("DisableCustomer")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceListCustomerEventsHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListCustomerEventsProcedure,
+		svc.ListCustomerEvents,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListCustomerEvents")),
 		connect.WithHandlerOptions(opts...),
 	)
 	orchestratorServiceCreateClusterHandler := connect.NewUnaryHandler(
@@ -1349,6 +1372,8 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceUpdateCustomerHandler.ServeHTTP(w, r)
 		case OrchestratorServiceDisableCustomerProcedure:
 			orchestratorServiceDisableCustomerHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListCustomerEventsProcedure:
+			orchestratorServiceListCustomerEventsHandler.ServeHTTP(w, r)
 		case OrchestratorServiceCreateClusterProcedure:
 			orchestratorServiceCreateClusterHandler.ServeHTTP(w, r)
 		case OrchestratorServiceUpdateClusterProcedure:
@@ -1494,6 +1519,10 @@ func (UnimplementedOrchestratorServiceHandler) UpdateCustomer(context.Context, *
 
 func (UnimplementedOrchestratorServiceHandler) DisableCustomer(context.Context, *connect.Request[v1.DisableCustomerRequest]) (*connect.Response[v1.DisableCustomerResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.DisableCustomer is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListCustomerEvents(context.Context, *connect.Request[v1.ListCustomerEventsRequest]) (*connect.Response[v1.ListCustomerEventsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListCustomerEvents is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.CreateClusterResponse], error) {
