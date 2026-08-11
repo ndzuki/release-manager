@@ -4,11 +4,13 @@ package operator
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,7 +44,7 @@ type Service struct {
 }
 
 // NewService creates a new operator Connect service with a self-signed CA.
-func NewService(st store.Store, logger *slog.Logger, auditEmitter ...audit.Sink) (*Service, error) {
+func NewService(st store.Store, logger *slog.Logger, opts ...Option) (*Service, error) {
 	caInst, err := ca.New(ca.Config{TTL: 7 * 24 * time.Hour})
 	if err != nil {
 		return nil, fmt.Errorf("create CA: %w", err)
@@ -50,20 +52,39 @@ func NewService(st store.Store, logger *slog.Logger, auditEmitter ...audit.Sink)
 	if logger == nil {
 		logger = slog.Default()
 	}
-	var sink audit.Sink
-	if len(auditEmitter) > 0 {
-		sink = auditEmitter[0]
-	}
-	return &Service{
+	svc := &Service{
 		store:            st,
 		ca:               caInst,
 		logger:           logger,
 		sessionTTL:       15 * time.Minute,
 		heartbeatMaxAge:  30 * time.Second,
 		suspectAfter:     60 * time.Second,
-		auditEmitter:     sink,
 		emergencyStreams: make(map[string]chan *operatorv1.EmergencyCommand),
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(svc)
+	}
+	return svc, nil
+}
+
+// Option configures a Service after construction.
+type Option func(*Service)
+
+// WithCA overrides the service CA. The gateway wiring shares one persisted CA
+// between the listener trust anchor and certificate signing (TASK-075).
+func WithCA(caInst *ca.CA) Option {
+	return func(s *Service) {
+		if caInst != nil {
+			s.ca = caInst
+		}
+	}
+}
+
+// WithAudit attaches an audit sink to the service.
+func WithAudit(sink audit.Sink) Option {
+	return func(s *Service) {
+		s.auditEmitter = sink
+	}
 }
 
 // SetInventorySyncer attaches an inventory syncer for release inventory sync (REQ-017).
@@ -194,11 +215,9 @@ func (s *Service) Enroll(
 	}
 	certPEM := ca.CertDERToPEM(certDER)
 
-	// Generate operator ID and cert serial.
-	certSerial := hashBytes(certDER)
-	if len(certSerial) > 10 {
-		certSerial = certSerial[:10]
-	}
+	// Generate operator ID and cert serial. The serial is the first 10 bytes
+	// of sha256(certDER), hex-encoded (ADR-018; REQ-015 certificate contract).
+	certSerial := certSerialFromDER(certDER)
 
 	operatorID := msg.GetOperatorId()
 	if operatorID == "" {
@@ -292,37 +311,118 @@ func (s *Service) CommandStream(
 	operatorID := hello.GetOperatorId()
 	lastSeenSeq := hello.GetLastSeenSequence()
 
-	// Validate session.
-	sess, err := s.store.Sessions().Get(ctx, sessionID)
-	if err != nil {
-		return connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid session: %w", err))
-	}
-	if sess.OperatorID != operatorID {
-		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("session operator mismatch"))
-	}
-	if sess.Status != store.SessionOnline {
-		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("session is %s, not online", sess.Status))
-	}
-
-	// Check operator is still active (AC-015-03).
-	op, err := s.store.Operators().Get(ctx, operatorID)
-	if err != nil {
-		if err == store.ErrNotFound {
-			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator not found"))
+	// ── Gateway mTLS path (TASK-075): identity comes from the client
+	// certificate; a fresh session is established via SessionStore.Establish. ──
+	if tlsState := TLSStateFromContext(ctx); tlsState != nil {
+		if len(tlsState.PeerCertificates) == 0 {
+			return connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("client certificate required on gateway"))
 		}
-		return connect.NewError(connect.CodeInternal, fmt.Errorf("get operator: %w", err))
-	}
-	switch op.Status {
-	case store.OperatorSuperseded:
-		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator superseded: re-enroll required"))
-	case store.OperatorRevoked:
-		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator revoked"))
+		clientCert := tlsState.PeerCertificates[0]
+		clusterID, customerID, ok := parseSANIdentity(clientCert)
+		if !ok {
+			return connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("client certificate SAN does not encode operator identity"))
+		}
+
+		op, err := s.store.Operators().GetByClusterID(ctx, clusterID)
+		if err != nil {
+			if err == store.ErrNotFound {
+				return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("no operator registered for cluster %q", clusterID))
+			}
+			return connect.NewError(connect.CodeInternal, fmt.Errorf("get operator by cluster: %w", err))
+		}
+		if op.CustomerID != customerID {
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("certificate identity does not match operator"))
+		}
+		switch op.Status {
+		case store.OperatorSuperseded:
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator superseded: re-enroll required"))
+		case store.OperatorRevoked:
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator revoked"))
+		}
+		if op.CertSerial != certSerialFromCert(clientCert) {
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("certificate serial does not match registered operator"))
+		}
+		operatorID = op.ID
+
+		now := time.Now().UTC()
+		sess := &store.Session{
+			ID:            uuid.New().String(),
+			OperatorID:    operatorID,
+			Status:        store.SessionOnline,
+			InstanceID:    hello.GetInstanceId(),
+			Version:       hello.GetVersion(),
+			Capabilities:  hello.GetCapabilities(),
+			StartedAt:     now,
+			LastHeartbeat: now,
+			ExpiresAt:     now.Add(s.sessionTTL),
+		}
+		// The Enroll placeholder session (empty InstanceID) does not block the
+		// first Establish — it is replaced, not treated as a concurrent
+		// connection (store semantics, REQ-044 D-57: Hello takes over session
+		// establishment and the fresh session_id is authoritative).
+		if err := s.store.Sessions().Establish(ctx, sess); err != nil {
+			if err == store.ErrDuplicateKey {
+				return connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("another session for this operator is already online"))
+			}
+			return connect.NewError(connect.CodeInternal, fmt.Errorf("establish session: %w", err))
+		}
+		sessionID = sess.ID
+
+		s.logger.Info("operator stream established via mTLS",
+			"operator_id", operatorID,
+			"session_id", sessionID,
+			"cluster_id", clusterID,
+			"customer_id", customerID,
+			"last_seen_sequence", lastSeenSeq,
+		)
+	} else {
+		// ── Plain path (management plane / legacy dev agents): existing
+		// session_id validation. TASK-065 removes this path. ──
+		sess, err := s.store.Sessions().Get(ctx, sessionID)
+		if err != nil {
+			return connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid session: %w", err))
+		}
+		if sess.OperatorID != operatorID {
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("session operator mismatch"))
+		}
+		if sess.Status != store.SessionOnline {
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("session is %s, not online", sess.Status))
+		}
+
+		// Check operator is still active (AC-015-03).
+		op, err := s.store.Operators().Get(ctx, operatorID)
+		if err != nil {
+			if err == store.ErrNotFound {
+				return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator not found"))
+			}
+			return connect.NewError(connect.CodeInternal, fmt.Errorf("get operator: %w", err))
+		}
+		switch op.Status {
+		case store.OperatorSuperseded:
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator superseded: re-enroll required"))
+		case store.OperatorRevoked:
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator revoked"))
+		}
+
+		s.logger.Info("operator stream established",
+			"operator_id", operatorID, "session_id", sessionID,
+			"last_seen_sequence", lastSeenSeq,
+		)
 	}
 
-	s.logger.Info("operator stream established",
-		"operator_id", operatorID, "session_id", sessionID,
-		"last_seen_sequence", lastSeenSeq,
-	)
+	// First response is always SessionEstablished (REQ-044 output contract;
+	// the bootstrap agent waits for it before entering the main loop).
+	if err := stream.Send(&operatorv1.CommandStreamResponse{
+		Payload: &operatorv1.CommandStreamResponse_SessionEstablished{
+			SessionEstablished: &operatorv1.SessionEstablished{
+				SessionId:                sessionID,
+				HeartbeatIntervalSeconds: int64((s.heartbeatMaxAge / 2) / time.Second),
+				HeartbeatTimeoutSeconds:  int64(s.suspectAfter / time.Second),
+			},
+		},
+	}); err != nil {
+		return err
+	}
 
 	// ── Reconnect: detect sequence gap and re-deliver ──
 	if err := s.handleReconnect(ctx, stream, operatorID, lastSeenSeq); err != nil {
@@ -1027,10 +1127,39 @@ func (s *Service) RevokeOperator(
 	}), nil
 }
 
-// hashBytes returns a hex-encoded SHA-256 of the input.
-func hashBytes(data []byte) string {
-	h := sha256.Sum256(data)
-	return hex.EncodeToString(h[:])
+// certSerialFromCert computes the ADR-018 identity serial: the first 10 bytes
+// of the SHA-256 digest of the DER certificate, hex-encoded (20 hex chars, 80
+// bits). This is the same derivation Enroll uses for Operator.CertSerial.
+func certSerialFromCert(cert *x509.Certificate) string {
+	return certSerialFromDER(cert.Raw)
+}
+
+// certSerialFromDER derives the ADR-018 identity serial from a certificate's
+// DER encoding: sha256(certDER) truncated to its first 10 bytes, lower-case
+// hex (REQ-015 certificate contract; ADR-018).
+func certSerialFromDER(certDER []byte) string {
+	h := sha256.Sum256(certDER)
+	return hex.EncodeToString(h[:10])
+}
+
+// parseSANIdentity extracts the cluster/customer identity from a gateway
+// client certificate. The canonical SAN (REQ-015 decision 3) is
+// `<cluster>.<customer>.rm`, lower-cased; cluster IDs may contain dots, so the
+// customer is always the component immediately before the ".rm" suffix.
+func parseSANIdentity(cert *x509.Certificate) (clusterID, customerID string, ok bool) {
+	for _, name := range cert.DNSNames {
+		lower := strings.ToLower(name)
+		if !strings.HasSuffix(lower, ".rm") {
+			continue
+		}
+		trimmed := strings.TrimSuffix(lower, ".rm")
+		parts := strings.Split(trimmed, ".")
+		if len(parts) < 2 {
+			continue
+		}
+		return strings.Join(parts[:len(parts)-1], "."), parts[len(parts)-1], true
+	}
+	return "", "", false
 }
 
 // Compile-time check: Service implements the Connect handler interface.
