@@ -5,6 +5,7 @@ package postgres_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -211,15 +212,16 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 
 	got, err := st.EnrollmentTokens().GetByToken(ctx, "test-token-abc")
 	require.NoError(t, err)
-	assert.False(t, got.Used)
+	assert.Equal(t, store.TokenStatePending, got.State)
 
 	// Mark used.
 	require.NoError(t, st.EnrollmentTokens().MarkUsed(ctx, tok.ID, "op-001"))
 
 	got, err = st.EnrollmentTokens().GetByToken(ctx, "test-token-abc")
 	require.NoError(t, err)
-	assert.True(t, got.Used)
+	assert.Equal(t, store.TokenStateUsed, got.State)
 	assert.Equal(t, "op-001", got.OperatorID)
+
 }
 
 func TestOperatorCreateAndGetByCertSerial(t *testing.T) {
@@ -1333,4 +1335,229 @@ func TestCreateUserWithMembershipRollsBackOnMembershipFailure(t *testing.T) {
 
 	_, err = st.Users().GetByUsername(ctx, user.Username)
 	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
+
+func seedOperatorManagementScope(t *testing.T, st *postgresstore.Store) (customerID, clusterID string) {
+	t.Helper()
+	ctx := context.Background()
+	customerID = uuid.NewString()
+	clusterID = uuid.NewString()
+	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Operator customer", Slug: customerID}))
+	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: clusterID, Name: "Operator cluster", CustomerID: customerID}))
+	return customerID, clusterID
+}
+
+func operatorAuditEvent(id, resourceID, action string) *store.AuditEvent {
+	return &store.AuditEvent{
+		ID:             id,
+		ActorKind:      store.AuditActorUser,
+		ActorID:        "user-1",
+		OrganizationID: "org-1",
+		Role:           string(store.RoleReleaseAdmin),
+		ResourceType:   "operator",
+		ResourceID:     resourceID,
+		Action:         action,
+		Status:         "succeeded",
+	}
+}
+
+// TestOperatorManagement_CreateEnrollmentTokenAtomic mirrors the SQLite
+// contract on PostgreSQL (AC-053-06/07/10): hash-only persistence, pending
+// conflict, audit-failure rollback, and atomic replace.
+func TestOperatorManagement_CreateEnrollmentTokenAtomic(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	customerID, clusterID := seedOperatorManagementScope(t, st)
+
+	first := &store.EnrollmentToken{
+		ID:                   "token-first",
+		CustomerID:           customerID,
+		ClusterID:            clusterID,
+		OperatorName:         "operator-a",
+		Token:                "plaintext-first",
+		CreatedByDisplayName: "admin",
+		ExpiresAt:            time.Now().UTC().Add(time.Hour),
+	}
+	_, err := st.OperatorManagement().CreateEnrollmentToken(ctx, first, false, operatorAuditEvent("audit-create-first", clusterID, "operator.enrollment_token.created"))
+	require.NoError(t, err)
+	assert.NotEmpty(t, first.TokenHash)
+
+	var persistedToken string
+	require.NoError(t, st.SQLDB().QueryRowContext(ctx, `SELECT token FROM enrollment_tokens WHERE id = $1`, first.ID).Scan(&persistedToken))
+	assert.NotEqual(t, first.Token, persistedToken)
+	assert.Equal(t, first.TokenHash, persistedToken)
+
+	second := &store.EnrollmentToken{
+		ID:                   "token-second",
+		CustomerID:           customerID,
+		ClusterID:            clusterID,
+		OperatorName:         "operator-a",
+		Token:                "plaintext-second",
+		CreatedByDisplayName: "admin",
+		ExpiresAt:            time.Now().UTC().Add(time.Hour),
+	}
+	_, err = st.OperatorManagement().CreateEnrollmentToken(ctx, second, false, operatorAuditEvent("audit-create-conflict", clusterID, "operator.enrollment_token.created"))
+	assert.ErrorIs(t, err, store.ErrPendingTokenExists)
+
+	failedReplacement := &store.EnrollmentToken{
+		ID:                   "token-failed-replacement",
+		CustomerID:           customerID,
+		ClusterID:            clusterID,
+		OperatorName:         "operator-a",
+		Token:                "plaintext-failed-replacement",
+		CreatedByDisplayName: "admin",
+		ExpiresAt:            time.Now().UTC().Add(time.Hour),
+	}
+	_, err = st.OperatorManagement().CreateEnrollmentToken(ctx, failedReplacement, true, &store.AuditEvent{ID: "invalid-audit"})
+	assert.ErrorIs(t, err, store.ErrAuditUnavailable)
+	unchanged, err := st.EnrollmentTokens().ListByCluster(ctx, clusterID)
+	require.NoError(t, err)
+	require.Len(t, unchanged, 1)
+	assert.Equal(t, first.ID, unchanged[0].ID)
+	assert.Equal(t, store.TokenStatePending, unchanged[0].State)
+
+	replaced, err := st.OperatorManagement().CreateEnrollmentToken(ctx, second, true, operatorAuditEvent("audit-replace", clusterID, "operator.enrollment_token.replaced"))
+	require.NoError(t, err)
+	assert.Equal(t, first.ID, replaced.PreviousID)
+
+	old, err := st.EnrollmentTokens().ListByCluster(ctx, clusterID)
+	require.NoError(t, err)
+	require.Len(t, old, 2)
+	assert.Equal(t, store.TokenStateRevoked, old[0].State)
+	assert.Equal(t, second.ID, old[0].ReplacedByID)
+}
+
+// TestOperatorManagement_CreateEnrollmentTokenConcurrent verifies the partial
+// unique index allows exactly one pending token per cluster under concurrency
+// (AC-053-06).
+func TestOperatorManagement_CreateEnrollmentTokenConcurrent(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	customerID, clusterID := seedOperatorManagementScope(t, st)
+	start := make(chan struct{})
+	results := make(chan error, 2)
+
+	for index := range 2 {
+		go func(index int) {
+			<-start
+			token := &store.EnrollmentToken{
+				ID:                   fmt.Sprintf("token-concurrent-%d", index),
+				CustomerID:           customerID,
+				ClusterID:            clusterID,
+				OperatorName:         fmt.Sprintf("operator-%d", index),
+				Token:                fmt.Sprintf("plaintext-%d", index),
+				CreatedByDisplayName: "admin",
+				ExpiresAt:            time.Now().UTC().Add(time.Hour),
+			}
+			_, err := st.OperatorManagement().CreateEnrollmentToken(ctx, token, false, operatorAuditEvent(fmt.Sprintf("audit-concurrent-%d", index), clusterID, "operator.enrollment_token.created"))
+			results <- err
+		}(index)
+	}
+	close(start)
+
+	var succeeded, conflicted int
+	for range 2 {
+		err := <-results
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, store.ErrPendingTokenExists):
+			conflicted++
+		default:
+			require.NoErrorf(t, err, "unexpected concurrent create error: %T %v", err, err)
+		}
+	}
+	assert.Equal(t, 1, succeeded)
+	assert.Equal(t, 1, conflicted)
+
+	tokens, err := st.EnrollmentTokens().ListByCluster(ctx, clusterID)
+	require.NoError(t, err)
+	var pending int
+	for _, token := range tokens {
+		if token.State == store.TokenStatePending {
+			pending++
+		}
+	}
+	assert.Equal(t, 1, pending)
+}
+
+// TestOperatorManagement_EnrollOperatorAtomic mirrors the SQLite enrollment
+// contract on PostgreSQL (AC-053-10/22): supersede + session revoke + token
+// consume in one transaction.
+func TestOperatorManagement_EnrollOperatorAtomic(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	customerID, clusterID := seedOperatorManagementScope(t, st)
+	old := &store.Operator{ID: "operator-old", Name: "operator-old", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-old"}
+	require.NoError(t, st.Operators().Create(ctx, old))
+
+	token := &store.EnrollmentToken{
+		ID:                   "token-enroll",
+		CustomerID:           customerID,
+		ClusterID:            clusterID,
+		OperatorName:         "operator-old",
+		Token:                "plaintext-enroll",
+		CreatedByDisplayName: "admin",
+		ExpiresAt:            time.Now().UTC().Add(time.Hour),
+	}
+	_, err := st.OperatorManagement().CreateEnrollmentToken(ctx, token, false, operatorAuditEvent("audit-enroll-create", clusterID, "operator.enrollment_token.created"))
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	oldSession := &store.Session{ID: "session-old", OperatorID: old.ID, CustomerID: customerID, ClusterID: clusterID, Status: store.SessionOnline, StartedAt: now, LastHeartbeat: now, ExpiresAt: now.Add(time.Hour)}
+	require.NoError(t, st.Sessions().Create(ctx, oldSession))
+
+	op := &store.Operator{ID: "operator-new", Name: "operator-old", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-new"}
+	session := &store.Session{ID: "session-new", CustomerID: customerID, ClusterID: clusterID, Status: store.SessionOnline, StartedAt: now, LastHeartbeat: now, ExpiresAt: now.Add(time.Hour)}
+	enrollment, err := st.OperatorManagement().EnrollOperator(ctx, token.ID, op, session)
+	require.NoError(t, err)
+	assert.Equal(t, old.ID, enrollment.SupersededOperatorID)
+
+	superseded, err := st.Operators().Get(ctx, old.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.OperatorSuperseded, superseded.Status)
+	oldSession, err = st.Sessions().Get(ctx, oldSession.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.SessionRevoked, oldSession.Status)
+	assert.Equal(t, store.SessionReasonOperatorSuperseded, *oldSession.StatusReason)
+
+	// Same-name reuse after supersede is allowed (AC-053-10).
+	dup, err := st.Operators().GetActiveByName(ctx, customerID, "operator-old")
+	require.NoError(t, err)
+	assert.Equal(t, op.ID, dup.ID)
+}
+
+// TestOperatorManagement_RevokeOperatorAtomicAndIdempotent mirrors the SQLite
+// revoke contract on PostgreSQL (AC-053-04/13/14): first-write reason
+// preservation, session revocation, idempotent re-revoke, cross-scope denial.
+func TestOperatorManagement_RevokeOperatorAtomicAndIdempotent(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	customerID, clusterID := seedOperatorManagementScope(t, st)
+	now := time.Now().UTC()
+	op := &store.Operator{ID: "operator-revoke", Name: "operator-revoke", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-revoke"}
+	require.NoError(t, st.Operators().Create(ctx, op))
+	session := &store.Session{ID: "session-revoke", OperatorID: op.ID, CustomerID: customerID, ClusterID: clusterID, Status: store.SessionOnline, StartedAt: now, LastHeartbeat: now, ExpiresAt: now.Add(time.Hour)}
+	require.NoError(t, st.Sessions().Create(ctx, session))
+
+	first, err := st.OperatorManagement().RevokeOperator(ctx, customerID, clusterID, op.ID, "first reason", operatorAuditEvent("audit-revoke-1", op.ID, "operator.revoked"))
+	require.NoError(t, err)
+	assert.True(t, first.Changed)
+	assert.Equal(t, store.OperatorRevoked, first.Operator.Status)
+	assert.Equal(t, "first reason", first.Operator.RevokeReason)
+	revokedSession, err := st.Sessions().Get(ctx, session.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.SessionRevoked, revokedSession.Status)
+
+	// Duplicate revoke keeps the first reason and reports changed=false.
+	time.Sleep(2 * time.Millisecond)
+	second, err := st.OperatorManagement().RevokeOperator(ctx, customerID, clusterID, op.ID, "second reason", operatorAuditEvent("audit-revoke-2", op.ID, "operator.revoked"))
+	require.NoError(t, err)
+	assert.False(t, second.Changed)
+	assert.Equal(t, "first reason", second.Operator.RevokeReason)
+
+	// Cross-scope lookup must not surface the operator (AC-053-18).
+	_, err = st.OperatorManagement().RevokeOperator(ctx, customerID, "other-cluster", op.ID, "wrong scope", operatorAuditEvent("audit-revoke-3", op.ID, "operator.revoked"))
+	assert.ErrorIs(t, err, store.ErrOperatorNotFound)
 }
