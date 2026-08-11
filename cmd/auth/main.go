@@ -172,7 +172,7 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, publicMethods, logger),
 	)
 
-	authService := auth.NewAuthService(s.store, jwtMgr, limiter, logger)
+	authService := auth.NewAuthService(s.store, jwtMgr, limiter, logger, enforcer)
 	authPath, authHandler := authv1connect.NewAuthServiceHandler(authService, interceptorOpt)
 	mux.Handle(authPath, authHandler)
 
@@ -202,6 +202,8 @@ func authReadOnlyProcedures() map[string]struct{} {
 	return map[string]struct{}{
 		authv1connect.AuthServiceGetInitStatusProcedure:                     {},
 		authv1connect.AuthServiceValidateTokenProcedure:                     {},
+		authv1connect.AuthServiceGetLocalUserProcedure:                      {},
+		authv1connect.AuthServiceListLocalUsersProcedure:                    {},
 		authv1connect.OrganizationServiceGetOrganizationProcedure:           {},
 		authv1connect.OrganizationServiceListOrganizationsProcedure:         {},
 		authv1connect.OrganizationServiceListMembersProcedure:               {},

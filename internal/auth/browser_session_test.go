@@ -29,6 +29,7 @@ func TestAuthService_BrowserSessionLifecycle(t *testing.T) {
 		jwtManager,
 		auth.NewRateLimiter(10, time.Minute),
 		slog.Default(),
+		nil,
 		auth.BrowserSessionConfig{SecureCookies: false},
 	)
 	ctx := context.Background()

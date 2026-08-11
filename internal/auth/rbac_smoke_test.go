@@ -45,7 +45,7 @@ func TestRBACSmoke_NextRequestUsesUpdatedPolicy(t *testing.T) {
 	}, logger)
 	mux := http.NewServeMux()
 	authPath, authHandler := authv1connect.NewAuthServiceHandler(
-		NewAuthService(st, jwtManager, NewRateLimiter(10, time.Minute), logger),
+		NewAuthService(st, jwtManager, NewRateLimiter(10, time.Minute), logger, enforcer),
 		connect.WithInterceptors(interceptor),
 	)
 	mux.Handle(authPath, authHandler)

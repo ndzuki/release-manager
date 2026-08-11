@@ -155,3 +155,24 @@ func TestEnforcer_PolicyVersionAdvances(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, e.PolicyVersion(), first)
 }
+
+func TestEnforcer_ConcurrentRefreshPoliciesSerializes(t *testing.T) {
+	e, st := setupEnforcer(t)
+	seedAuthorization(t, st)
+	ctx := context.Background()
+	require.NoError(t, e.LoadPolicies(ctx))
+	first := e.PolicyVersion()
+
+	const workers = 8
+	errs := make(chan error, workers)
+	for range workers {
+		go func() {
+			_, err := e.RefreshPolicies(ctx)
+			errs <- err
+		}()
+	}
+	for range workers {
+		require.NoError(t, <-errs)
+	}
+	assert.Greater(t, e.PolicyVersion(), first)
+}
