@@ -140,8 +140,8 @@ func openGatewayStream(t *testing.T, baseURL string, pool *x509.CertPool, cert t
 	}, baseURL)
 	stream := client.CommandStream(context.Background())
 	t.Cleanup(func() {
-		_ = stream.CloseRequest()
-		_ = stream.CloseResponse()
+		stream.CloseRequest()  //nolint:errcheck // stream is already terminating
+		stream.CloseResponse() //nolint:errcheck // stream is already terminating
 	})
 	if err := stream.Send(&operatorv1.CommandStreamRequest{
 		Payload: &operatorv1.CommandStreamRequest_Hello{Hello: &operatorv1.Hello{

@@ -59,11 +59,42 @@ func (s *orchSvc) Name() string { return "release-orchestrator" }
 
 func (s *orchSvc) Configure(cfg *config.ServiceConfig) { s.cfg = *cfg }
 
+// newGatewayOperatorService builds the OperatorService shared by the
+// management plane and the agent gateway, and (when enabled) the mTLS gateway
+// listener itself. The CA is persisted so the trust chain survives restarts
+// (TASK-075 plan v1 Step 3).
+func (s *orchSvc) newGatewayOperatorService(logger *slog.Logger) (*operator.Service, error) {
+	gatewayCfg := s.cfg.Gateway.WithDefaults()
+	gatewayOpts := []operator.Option{operator.WithAudit(s.auditEmitter)}
+	operatorService, err := operator.NewService(s.store, logger, gatewayOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("create operator control service: %w", err)
+	}
+	if !gatewayCfg.Enabled {
+		return operatorService, nil
+	}
+	caInst, err := ca.LoadOrCreate(ca.Config{TTL: 7 * 24 * time.Hour}, gatewayCfg.CAKeyPath, gatewayCfg.CACertPath)
+	if err != nil {
+		return nil, fmt.Errorf("load gateway CA: %w", err)
+	}
+	gatewayOpts = append(gatewayOpts, operator.WithCA(caInst))
+	gatewayService, err := operator.NewService(s.store, logger, gatewayOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("create gateway operator service: %w", err)
+	}
+	s.gateway, err = s.buildGatewayServer(gatewayCfg, caInst, gatewayService, logger)
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("agent gateway enabled", "addr", s.gateway.Addr, "ca_cert", gatewayCfg.CACertPath)
+	return gatewayService, nil
+}
+
 // extraServers reports the agent gateway listener so app.Run starts and
 // shuts it down together with the management-plane listener (TASK-075 plan
 // v1 Step 2/3). The gateway is nil unless enabled by configuration.
 //
-//nolint:unused // implemented for the unexported internal/app extraServersProvider seam (type-asserted at runtime)
+//nolint:unused,unparam // seam for the unexported internal/app extraServersProvider (type-asserted at runtime)
 func (s *orchSvc) extraServers() ([]*http.Server, error) {
 	if s.gateway == nil {
 		return nil, nil
@@ -212,27 +243,9 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	// persisted CA keeps the trust chain stable across restarts; the service
 	// shares it via WithCA so Enroll signs certificates from the same CA the
 	// listener verifies against.
-	gatewayCfg := s.cfg.Gateway.WithDefaults()
-	gatewayOpts := []operator.Option{operator.WithAudit(s.auditEmitter)}
-	operatorService, err := operator.NewService(s.store, logger, gatewayOpts...)
+	operatorService, err := s.newGatewayOperatorService(logger)
 	if err != nil {
 		return fmt.Errorf("create operator control service: %w", err)
-	}
-	if gatewayCfg.Enabled {
-		caInst, err := ca.LoadOrCreate(ca.Config{TTL: 7 * 24 * time.Hour}, gatewayCfg.CAKeyPath, gatewayCfg.CACertPath)
-		if err != nil {
-			return fmt.Errorf("load gateway CA: %w", err)
-		}
-		gatewayOpts = append(gatewayOpts, operator.WithCA(caInst))
-		operatorService, err = operator.NewService(s.store, logger, gatewayOpts...)
-		if err != nil {
-			return fmt.Errorf("create gateway operator service: %w", err)
-		}
-		s.gateway, err = s.buildGatewayServer(gatewayCfg, caInst, operatorService, logger)
-		if err != nil {
-			return err
-		}
-		logger.Info("agent gateway enabled", "addr", s.gateway.Addr, "ca_cert", gatewayCfg.CACertPath)
 	}
 	operatorPath, operatorHandler := operatorv1connect.NewOperatorServiceHandler(
 		operatorService,

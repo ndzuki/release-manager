@@ -75,7 +75,7 @@ func TestServeExtraServersLifecycle(t *testing.T) {
 	}
 	var resp *http.Response
 	require.Eventually(t, func() bool {
-		req, err := http.NewRequest(http.MethodGet, "https://"+addr, nil)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://"+addr, http.NoBody)
 		if err != nil {
 			return false
 		}
@@ -94,7 +94,7 @@ func TestServeExtraServersLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	shutdownExtraServers(ctx, []*http.Server{extra}, logger)
-	req, err := http.NewRequest(http.MethodGet, "https://"+addr, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://"+addr, http.NoBody)
 	require.NoError(t, err)
 	r, err := client.Do(req)
 	if r != nil {
