@@ -18,6 +18,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
+// DefaultVerificationTimeout bounds trust policy resolution and root lookup.
 const DefaultVerificationTimeout = 5 * time.Second
 
 // Ed25519Verifier verifies bundle digest signatures against live Trust Roots.
@@ -86,10 +87,16 @@ func (v *Ed25519Verifier) cachedRecord(ctx context.Context, in Input, policyVers
 }
 
 func (v *Ed25519Verifier) verifyFresh(ctx context.Context, in Input, epoch int64) *Output {
-	if in.SignatureRef != nil && in.SignatureRef.GetDigest() != "" && in.SignatureRef.GetDigest() != in.Digest {
+	if in.SignatureRef == nil {
+		// AC-012-02：未提供 signature_ref → signature_missing（非 digest_mismatch）。
+		return &Output{Status: store.VerificationSignatureMissing, Summary: "signature_missing: artifact has no attached signature", RevocationEpoch: epoch}
+	}
+	// REQ-012 输入契约：提供 signature_ref 时 digest 必填且须等于验证目标（bundle canonical digest）。
+	// 空值/非 "sha256:<64 hex>" 格式不可能等于受信 digest → digest_mismatch。
+	if in.SignatureRef.GetDigest() != in.Digest {
 		return &Output{Status: store.VerificationRejected, Summary: "digest_mismatch: artifact digest does not match signed digest", RevocationEpoch: epoch}
 	}
-	if in.SignatureRef == nil || in.SignatureRef.GetSignature() == "" {
+	if in.SignatureRef.GetSignature() == "" {
 		return &Output{Status: store.VerificationSignatureMissing, Summary: "signature_missing: artifact has no attached signature", RevocationEpoch: epoch}
 	}
 

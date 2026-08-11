@@ -536,43 +536,120 @@ func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
 }
 
 func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
+	// AC-074-04b：紧急 revoke 后，同 digest 再次验证不复用缓存中的 trusted 记录——
+	// 全部经正式 Connect API（ADR-013）：platform_admin 激活 root、deployer 提交带签名 operation、
+	// revoke 提升 epoch、同签名再次提交被 untrusted_issuer 拒绝。
+	const (
+		signingKey       = "trust-epoch-signing-key"
+		organizationID   = "org-trust-epoch"
+		platformAdminID  = "platform-admin-epoch"
+		deployerID       = "deployer-trust-epoch"
+		customerID       = "customer-trust-epoch"
+		definitionID     = "definition-trust-epoch"
+		valuesRevisionID = "values-trust-epoch"
+		bundleID         = "bundle-trust-epoch"
+	)
 	ctx := t.Context()
-	st, err := sqlitestore.Open(t.TempDir() + "/trust.db")
+	dbPath := t.TempDir() + "/orchestrator.db"
+	seedStore, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, st.Close()) })
-	publicKeyPEM, privateKey := testEd25519KeyPair(t)
-	backupPublicKeyPEM, _ := testEd25519KeyPair(t)
-	trustService := trust.NewTrustService(st.TrustRoots(), nil, slog.New(slog.DiscardHandler))
-	primary, err := trustService.CreateTrustRoot(ctx, connect.NewRequest(&trustv1.CreateTrustRootRequest{
-		Environment: "production", KeyId: "primary", PublicKeyPem: publicKeyPEM, Issuer: "release-manager-ci",
-	}))
-	require.NoError(t, err)
-	_, err = trustService.CreateTrustRoot(ctx, connect.NewRequest(&trustv1.CreateTrustRootRequest{
-		Environment: "production", KeyId: "backup", PublicKeyPem: backupPublicKeyPEM, Issuer: "backup-ci",
-	}))
-	require.NoError(t, err)
-	verifier := trust.NewEd25519Verifier(st.Verifications(), trust.NewStoreResolver(st.TrustRoots()), time.Second, slog.New(slog.DiscardHandler))
-	digest := "sha256:" + fmt.Sprintf("%064x", 99)
-	input := trust.Input{
-		Digest: digest,
-		SignatureRef: &commonv1.SignatureRef{
-			Digest: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(digest))),
-			Issuer: "release-manager-ci",
-		},
-		Policy: trust.DefaultPolicy("production"), Environment: "production",
+	require.NoError(t, seedStore.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Trust Epoch Customer", Slug: "trust-epoch"}))
+	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Trust Epoch Organization"}))
+	require.NoError(t, seedStore.Bindings().Create(ctx, &store.OrgCustomerBinding{ID: "binding-trust-epoch", OrgID: organizationID, CustomerID: customerID}))
+	for userID, role := range map[string]store.Role{platformAdminID: store.RolePlatformAdmin, deployerID: store.RoleDeployer} {
+		require.NoError(t, seedStore.Users().Create(ctx, &store.User{ID: userID, Username: userID, PasswordHash: "unused", Status: store.UserActive}))
+		require.NoError(t, seedStore.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: organizationID, UserID: userID, Role: role}))
+		require.NoError(t, seedStore.AuthSessions().Create(ctx, &store.AuthSession{
+			ID: uuid.NewString(), UserID: userID, TokenFamily: uuid.NewString(), RefreshTokenHash: uuid.NewString(), ExpiresAt: time.Now().UTC().Add(time.Hour),
+		}))
 	}
-	first, err := verifier.Verify(ctx, input)
-	require.NoError(t, err)
-	assert.Equal(t, store.VerificationTrusted, first.Status)
-
-	_, err = trustService.RevokeTrustRoot(ctx, connect.NewRequest(&trustv1.RevokeTrustRootRequest{
-		Environment: "production", RootId: primary.Msg.GetRoot().GetId(),
+	ownerOrganizationID := organizationID
+	require.NoError(t, seedStore.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: definitionID, Name: "Trust Epoch Definition", CustomerID: customerID, ClusterID: "cluster-trust-epoch",
+		Namespace: "trust", ReleaseName: "trust-epoch", ChartName: "fixture", Status: store.DefStatusActive,
+		OwnerOrganizationID: &ownerOrganizationID,
+	}, nil))
+	require.NoError(t, seedStore.Values().Create(ctx, &store.ValuesRevision{
+		ID: valuesRevisionID, ReleaseDefinitionID: definitionID, Revision: 1, StateVersion: 1,
+		Status: store.ValuesStatusApproved, Values: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-epoch",
 	}))
+	bundleDigest := fmt.Sprintf("%064x", 98)
+	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{
+		ID: bundleID, Name: "Trust Epoch Bundle", DigestAlg: "sha256", DigestValue: bundleDigest,
+		Status: store.BundleValidated, CreatedAt: time.Now().UTC(),
+	}))
+	require.NoError(t, seedStore.Close())
+
+	mux := http.NewServeMux()
+	authStore, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
-	second, err := verifier.Verify(ctx, input)
+	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
+	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
+	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
+	t.Cleanup(func() { require.NoError(t, svc.Shutdown(context.Background())) })
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	adminToken, _, err := jwtManager.GenerateAccessToken(platformAdminID, organizationID, []string{string(store.RolePlatformAdmin)})
 	require.NoError(t, err)
-	assert.Equal(t, store.VerificationRejected, second.Status)
-	assert.Contains(t, second.Summary, "untrusted_issuer")
+	deployerToken, _, err := jwtManager.GenerateAccessToken(deployerID, organizationID, []string{string(store.RoleDeployer)})
+	require.NoError(t, err)
+
+	// 正式 Connect API：platform_admin 激活 root。
+	trustClient := trustv1connect.NewTrustServiceClient(server.Client(), server.URL)
+	publicKeyPEM, privateKey := testEd25519KeyPair(t)
+	createRoot := connect.NewRequest(&trustv1.CreateTrustRootRequest{
+		Environment: "staging", KeyId: "epoch-primary", PublicKeyPem: publicKeyPEM, Issuer: "release-manager-ci",
+	})
+	createRoot.Header().Set("Authorization", "Bearer "+adminToken)
+	rootResponse, err := trustClient.CreateTrustRoot(ctx, createRoot)
+	require.NoError(t, err)
+	// 第二把 key 作为 backup root：revoke 不能移除最后一个 active root（REQ-043 AC-043-03）。
+	backupPublicKeyPEM, _ := testEd25519KeyPair(t)
+	createBackup := connect.NewRequest(&trustv1.CreateTrustRootRequest{
+		Environment: "staging", KeyId: "epoch-backup", PublicKeyPem: backupPublicKeyPEM, Issuer: "backup-ci",
+	})
+	createBackup.Header().Set("Authorization", "Bearer "+adminToken)
+	_, err = trustClient.CreateTrustRoot(ctx, createBackup)
+	require.NoError(t, err)
+
+	digest := "sha256:" + bundleDigest
+
+	operationClient := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
+	newRequest := func(idempotencyKey string) *connect.Request[orchestratorv1.CreateOperationRequest] {
+		req := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+			OperationType: "INSTALL", BundleId: bundleID, ReleaseDefinitionId: definitionID,
+			ValuesRevisionId: valuesRevisionID, IdempotencyKey: idempotencyKey,
+			SignatureRef: &commonv1.SignatureRef{
+				Digest: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(digest))),
+				Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
+			},
+			Actor: &commonv1.ActorContext{UserId: deployerID, Organization: organizationID},
+		})
+		req.Header().Set("Authorization", "Bearer "+deployerToken)
+		return req
+	}
+
+	// 首次提交：受信。
+	first, err := operationClient.CreateOperation(ctx, newRequest("trust-epoch-first"))
+	require.NoError(t, err)
+	assert.Equal(t, commonv1.VerificationResult_VERIFICATION_RESULT_TRUSTED, first.Msg.GetVerificationResult())
+
+	// 紧急 revoke：epoch 提升，root 移出 live 集合。
+	revoke := connect.NewRequest(&trustv1.RevokeTrustRootRequest{Environment: "staging", RootId: rootResponse.Msg.GetRoot().GetId()})
+	revoke.Header().Set("Authorization", "Bearer "+adminToken)
+	_, err = trustClient.RevokeTrustRoot(ctx, revoke)
+	require.NoError(t, err)
+
+	// 同 digest、同签名、新幂等键再次提交：缓存不复用 → 重新验证 → untrusted_issuer rejected。
+	_, err = operationClient.CreateOperation(ctx, newRequest("trust-epoch-second"))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.ErrorContains(t, err, "untrusted_issuer")
 }
 
 func testEd25519KeyPair(t *testing.T) (string, ed25519.PrivateKey) {

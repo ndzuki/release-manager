@@ -1069,6 +1069,7 @@ func TestTrustRootsGetActiveGraceWindow(t *testing.T) {
 	roots := []*store.TrustRoot{
 		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-active", PublicKeyPEM: "pem", Issuer: "active-ci", State: store.TrustRootActive, ValidFrom: now.Add(-2 * time.Hour)},
 		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-grace-live", PublicKeyPEM: "pem", Issuer: "grace-ci", State: store.TrustRootGrace, ValidFrom: now.Add(-time.Hour), GraceUntil: &live},
+		// 无 grace_until 的 grace root 不是 live（与 trust.Root.Accepts 谓词一致）：服务端 Rotate 强制 grace root 必有 grace_until，缺失视为数据污染不参与验签。
 		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-grace-open", PublicKeyPEM: "pem", Issuer: "open-grace-ci", State: store.TrustRootGrace, ValidFrom: now.Add(-time.Hour)},
 		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-grace-expired", PublicKeyPEM: "pem", Issuer: "expired-ci", State: store.TrustRootGrace, ValidFrom: now.Add(-48 * time.Hour), GraceUntil: &expired},
 		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-future", PublicKeyPEM: "pem", Issuer: "future-ci", State: store.TrustRootActive, ValidFrom: now.Add(48 * time.Hour)},
@@ -1085,7 +1086,7 @@ func TestTrustRootsGetActiveGraceWindow(t *testing.T) {
 	for _, root := range got {
 		keys = append(keys, root.KeyID)
 	}
-	assert.ElementsMatch(t, []string{"key-active", "key-grace-live", "key-grace-open"}, keys)
+	assert.ElementsMatch(t, []string{"key-active", "key-grace-live"}, keys)
 }
 
 func TestAuditExportAtomicPersistence(t *testing.T) {

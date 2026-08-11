@@ -52,6 +52,11 @@ func (s *TrustService) CreateTrustRoot(
 	root.State = RootActive
 	root.ID = uuid.New().String()
 
+	// REQ-043 overlap_conflict: 同 environment 的 active/grace root 不得重复 key_id/issuer。
+	if err := s.checkOverlap(ctx, root.Environment, root.Issuer, root.KeyID, root.ID); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
 	// Create root and bump policy in sequence.
 	if err := s.store.Create(ctx, toStoreRoot(root)); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create trust root: %w", err))
@@ -101,13 +106,9 @@ func (s *TrustService) RotateTrustRoot(
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
-	if msg.GetGraceUntil() != nil {
-		newRoot.State = RootGrace
-		t := msg.GetGraceUntil().AsTime()
-		newRoot.GraceUntil = &t
-	} else {
-		newRoot.State = RootActive
-	}
+	// REQ-043 AC-043-01: 新 root 立即可用（active）；grace 窗口只作用于被轮换的旧 root，
+	// 窗口内新旧两把 key 均可通过验证。grace_until 属于旧 root 的过渡期语义。
+	newRoot.State = RootActive
 
 	// Check overlap: ensure new root's issuer doesn't conflict with any existing active/grace roots for the same env.
 	if err := s.checkOverlap(ctx, newRoot.Environment, newRoot.Issuer, newRoot.KeyID, newRoot.ID); err != nil {

@@ -65,12 +65,12 @@ func (s *stubStore) GetByDigestAndPolicy(_ context.Context, artifactDigest, poli
 }
 
 func (s *stubStore) GetByDigestPolicyAndSignature(
-	_ context.Context,
+	ctx context.Context,
 	artifactDigest string,
 	policyVersion string,
 	signatureIdentity string,
 ) (*store.VerificationRecord, error) {
-	rec, err := s.GetByDigestAndPolicy(context.Background(), artifactDigest, policyVersion)
+	rec, err := s.GetByDigestAndPolicy(ctx, artifactDigest, policyVersion)
 	if err != nil || rec.SignatureIdentity != signatureIdentity {
 		return nil, store.ErrNotFound
 	}

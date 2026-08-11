@@ -397,3 +397,96 @@ func TestEd25519Verifier_ExpiredGraceRootNotTrusted(t *testing.T) {
 	assert.Equal(t, store.VerificationRejected, afterGrace.Status)
 	assert.Contains(t, afterGrace.Summary, "untrusted_issuer")
 }
+
+func TestTrustService_RotateMakesNewRootActive(t *testing.T) {
+	// REQ-043 AC-043-01：rotate 后新 root 立即可用（active、无 grace 窗口），旧 root 进入 grace，
+	// 窗口内新旧两把 key 对同一制品均通过验证。
+	ctx := t.Context()
+	st, err := sqlitestore.Open(t.TempDir() + "/rotate.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+	service := NewTrustService(st.TrustRoots(), nil, logger())
+
+	oldPub, oldPriv := generateEd25519KeyPair(t)
+	newPub, newPriv := generateEd25519KeyPair(t)
+	createResp, err := service.CreateTrustRoot(ctx, connect.NewRequest(&trustv1.CreateTrustRootRequest{
+		Environment: "staging", KeyId: "key-old", PublicKeyPem: oldPub, Issuer: "release-manager-ci",
+	}))
+	require.NoError(t, err)
+	oldRootID := createResp.Msg.GetRoot().GetId()
+
+	graceUntil := time.Now().UTC().Add(time.Hour)
+	rotateResp, err := service.RotateTrustRoot(ctx, connect.NewRequest(&trustv1.RotateTrustRootRequest{
+		Environment: "staging", OldRootId: oldRootID,
+		KeyId: "key-new", PublicKeyPem: newPub, Issuer: "backup-ci",
+		GraceUntil: timestamppb.New(graceUntil),
+	}))
+	require.NoError(t, err)
+
+	// 新 root active 立即可用；旧 root 进入 grace，窗口与请求一致。
+	newRoot := rotateResp.Msg.GetNewRoot()
+	assert.Equal(t, trustv1.TrustRootState_TRUST_ROOT_STATE_ACTIVE, newRoot.GetState())
+	assert.Nil(t, newRoot.GetGraceUntil())
+	oldRoot := rotateResp.Msg.GetOldRoot()
+	assert.Equal(t, trustv1.TrustRootState_TRUST_ROOT_STATE_GRACE, oldRoot.GetState())
+	require.NotNil(t, oldRoot.GetGraceUntil())
+	assert.WithinDuration(t, graceUntil, oldRoot.GetGraceUntil().AsTime(), time.Second)
+
+	// 同一 digest：旧 key（grace 窗口内）与新 key（active）均 trusted。
+	digest := "sha256:" + fmt.Sprintf("%064x", 42)
+	verifier := NewEd25519Verifier(st.Verifications(), NewStoreResolver(st.TrustRoots()), time.Second, logger())
+	for _, tc := range []struct {
+		name   string
+		key    ed25519.PrivateKey
+		issuer string
+	}{
+		{name: "old key within grace", key: oldPriv, issuer: "release-manager-ci"},
+		{name: "new key active", key: newPriv, issuer: "backup-ci"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := verifier.Verify(ctx, Input{
+				Digest: digest,
+				SignatureRef: &commonv1.SignatureRef{
+					Digest: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(tc.key, []byte(digest))),
+					Issuer: tc.issuer, Subject: "repo:release-manager:ref:refs/heads/main",
+				},
+				Policy: DefaultPolicy("staging"), Environment: "staging",
+			})
+			require.NoError(t, err)
+			assert.Equal(t, store.VerificationTrusted, out.Status)
+		})
+	}
+}
+
+func TestTrustService_CreateRejectsDuplicateKeyOrIssuer(t *testing.T) {
+	// REQ-043 overlap_conflict：同 environment 的 active/grace root 重复 key_id 或 issuer → InvalidArgument。
+	ctx := t.Context()
+	st, err := sqlitestore.Open(t.TempDir() + "/overlap.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+	service := NewTrustService(st.TrustRoots(), nil, logger())
+
+	pub, _ := generateEd25519KeyPair(t)
+	create := func(env, keyID, issuer string) error {
+		_, err := service.CreateTrustRoot(ctx, connect.NewRequest(&trustv1.CreateTrustRootRequest{
+			Environment: env, KeyId: keyID, PublicKeyPem: pub, Issuer: issuer,
+		}))
+		return err
+	}
+	require.NoError(t, create("staging", "key-a", "issuer-a"))
+
+	// 重复 key_id → overlap_conflict。
+	err = create("staging", "key-a", "issuer-b")
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.ErrorContains(t, err, "overlap_conflict")
+
+	// 重复 issuer → overlap_conflict。
+	err = create("staging", "key-b", "issuer-a")
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.ErrorContains(t, err, "overlap_conflict")
+
+	// 不同 environment 允许重复 key/issuer（隔离）。
+	require.NoError(t, create("production", "key-a", "issuer-a"))
+}
