@@ -459,6 +459,7 @@ func TestCreateOperation_ValidationFlow(t *testing.T) {
 
 	// Seed approved values revision for INSTALL validation.
 	seedValuesRevision(t, st, "vr-flow", defID, store.ValuesStatusApproved)
+	seedBundle(t, st, "bundle-flow")
 	createOpResp, err := svc.CreateOperation(ctx, connect.NewRequest(
 		&orchestratorv1.CreateOperationRequest{
 			OperationType:       "INSTALL",
@@ -472,4 +473,22 @@ func TestCreateOperation_ValidationFlow(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, createOpResp.Msg.OperationId)
 	assert.Equal(t, "preflight", createOpResp.Msg.State)
+}
+
+func seedBundle(t *testing.T, st store.Store, id string) {
+	t.Helper()
+	require.NoError(t, st.Bundles().Create(context.Background(), &store.ReleaseBundle{
+		ID:           id,
+		Name:         id,
+		DigestAlg:    "sha256",
+		DigestValue:  "digest-" + id,
+		Status:       store.BundleValidated,
+		ChartRef:     "oci://registry.example.com/charts/nginx",
+		ChartVersion: "1.0.0",
+		Images: []store.BundleImage{{
+			Ref:        "registry.example.com/release:" + id,
+			Digest:     "sha256:image-" + id,
+			ValuesPath: "image",
+		}},
+	}))
 }

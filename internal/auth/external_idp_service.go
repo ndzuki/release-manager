@@ -250,7 +250,7 @@ func (s *ExternalIdentityService) issueSession(ctx context.Context, userID strin
 	}
 	session := &store.AuthSession{ID: newID(), UserID: userID, TokenFamily: family, RefreshTokenHash: refreshHash, ExpiresAt: time.Now().UTC().Add(s.config.SessionRefreshTTL)}
 	if err := s.store.AuthSessions().Create(ctx, session); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, errors.New("session creation failed"))
+		return nil, mapStoreError(err, "session creation failed")
 	}
 	return &authv1.LoginResponse{AccessToken: accessToken, RefreshToken: refreshRaw, ExpiresAt: accessExp.Unix(), TokenType: "Bearer"}, nil
 }

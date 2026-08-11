@@ -10,20 +10,19 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// boltStore implements Store backed by BoltDB.
-type boltStore struct {
-	db *bolt.DB
-}
-
 // bucket names
 var (
 	commandsBucket = []byte("commands")
 	byOutboxBucket = []byte("by_outbox")
+	identityBucket = []byte("identity")
 	sequenceKey    = []byte("__last_sequence__")
+	identityKey    = []byte("__identity__")
 )
 
-// OpenBolt opens (or creates) a BoltDB-backed command store at the given path.
-func OpenBolt(path string) (Store, error) {
+// OpenBolt opens (or creates) a BoltDB-backed command + identity store at the
+// given path. The returned store implements both Store (commands) and
+// IdentityStore (bootstrap identity).
+func OpenBolt(path string) (*BoltStore, error) {
 	db, err := bolt.Open(path, 0o600, nil)
 	if err != nil {
 		return nil, fmt.Errorf("open bbolt store: %w", err)
@@ -37,6 +36,9 @@ func OpenBolt(path string) (Store, error) {
 		if _, err := tx.CreateBucketIfNotExists(byOutboxBucket); err != nil {
 			return fmt.Errorf("create by_outbox bucket: %w", err)
 		}
+		if _, err := tx.CreateBucketIfNotExists(identityBucket); err != nil {
+			return fmt.Errorf("create identity bucket: %w", err)
+		}
 		return nil
 	})
 	if err != nil {
@@ -44,11 +46,55 @@ func OpenBolt(path string) (Store, error) {
 		return nil, err
 	}
 
-	return &boltStore{db: db}, nil
+	return &BoltStore{db: db}, nil
+}
+
+// BoltStore implements Store and IdentityStore backed by a single BoltDB file
+// (commands and identity share one database with separate buckets).
+type BoltStore struct {
+	db *bolt.DB
+}
+
+// SaveIdentity durably persists the bootstrap identity under a single key.
+func (s *BoltStore) SaveIdentity(_ context.Context, identity *Identity) error {
+	if identity == nil {
+		return fmt.Errorf("identity is required")
+	}
+	encoded, err := json.Marshal(identity)
+	if err != nil {
+		return fmt.Errorf("marshal identity: %w", err)
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(identityBucket)
+		if err := b.Put(identityKey, encoded); err != nil {
+			return fmt.Errorf("put identity: %w", err)
+		}
+		return nil
+	})
+}
+
+// LoadIdentity returns the persisted identity or ErrNotFound when the agent
+// has never bootstrapped.
+func (s *BoltStore) LoadIdentity(_ context.Context) (*Identity, error) {
+	var encoded []byte
+	if err := s.db.View(func(tx *bolt.Tx) error {
+		encoded = tx.Bucket(identityBucket).Get(identityKey)
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("get identity: %w", err)
+	}
+	if len(encoded) == 0 {
+		return nil, ErrNotFound
+	}
+	var identity Identity
+	if err := json.Unmarshal(encoded, &identity); err != nil {
+		return nil, fmt.Errorf("unmarshal identity: %w", err)
+	}
+	return &identity, nil
 }
 
 // Save persists a command entry with fsync.
-func (s *boltStore) Save(_ context.Context, e *CommandEntry) error {
+func (s *BoltStore) Save(_ context.Context, e *CommandEntry) error {
 	data, err := json.Marshal(e)
 	if err != nil {
 		return fmt.Errorf("marshal command entry: %w", err)
@@ -81,7 +127,7 @@ func (s *boltStore) Save(_ context.Context, e *CommandEntry) error {
 }
 
 // Get retrieves a command by command_id.
-func (s *boltStore) Get(_ context.Context, commandID string) (*CommandEntry, error) {
+func (s *BoltStore) Get(_ context.Context, commandID string) (*CommandEntry, error) {
 	var e *CommandEntry
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(commandsBucket)
@@ -102,7 +148,7 @@ func (s *boltStore) Get(_ context.Context, commandID string) (*CommandEntry, err
 }
 
 // GetByOutboxID retrieves a command by outbox_id via the index.
-func (s *boltStore) GetByOutboxID(ctx context.Context, outboxID string) (*CommandEntry, error) {
+func (s *BoltStore) GetByOutboxID(ctx context.Context, outboxID string) (*CommandEntry, error) {
 	var commandID string
 	err := s.db.View(func(tx *bolt.Tx) error {
 		ob := tx.Bucket(byOutboxBucket)
@@ -122,7 +168,7 @@ func (s *boltStore) GetByOutboxID(ctx context.Context, outboxID string) (*Comman
 }
 
 // UpdateStatus updates the status and result of a command.
-func (s *boltStore) UpdateStatus(_ context.Context, commandID, status, resultJSON string) error {
+func (s *BoltStore) UpdateStatus(_ context.Context, commandID, status, resultJSON string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(commandsBucket)
 		data := b.Get([]byte(commandID))
@@ -150,7 +196,7 @@ func (s *boltStore) UpdateStatus(_ context.Context, commandID, status, resultJSO
 }
 
 // ListActive returns all non-terminal commands.
-func (s *boltStore) ListActive(_ context.Context) ([]*CommandEntry, error) {
+func (s *BoltStore) ListActive(_ context.Context) ([]*CommandEntry, error) {
 	var entries []*CommandEntry
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(commandsBucket)
@@ -179,7 +225,7 @@ func (s *boltStore) ListActive(_ context.Context) ([]*CommandEntry, error) {
 }
 
 // LastSequence returns the highest stored sequence number.
-func (s *boltStore) LastSequence(_ context.Context) (int64, error) {
+func (s *BoltStore) LastSequence(_ context.Context) (int64, error) {
 	var seq int64
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(commandsBucket)
@@ -200,7 +246,7 @@ func (s *boltStore) LastSequence(_ context.Context) (int64, error) {
 }
 
 // Close releases the database.
-func (s *boltStore) Close() error {
+func (s *BoltStore) Close() error {
 	return s.db.Close()
 }
 

@@ -13,7 +13,6 @@ import (
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	webhookv1 "github.com/ndzuki/release-manager/api/gen/webhook/v1"
-	"github.com/ndzuki/release-manager/internal/trust"
 )
 
 type stubBundleClient struct {
@@ -40,7 +39,7 @@ func setupService(t *testing.T) *Service {
 			}, nil
 		},
 	}
-	return NewService(trust.NewStubVerifier(nil, nil, logger), logger, client)
+	return NewService(logger, client)
 }
 
 func TestSubmitReleaseBundle_ForwardsToOrchestrator(t *testing.T) {
@@ -58,7 +57,7 @@ func TestSubmitReleaseBundle_ForwardsToOrchestrator(t *testing.T) {
 
 func TestSubmitReleaseBundle_NoClient(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	svc := NewService(trust.NewStubVerifier(nil, nil, logger), logger, nil)
+	svc := NewService(logger, nil)
 	ctx := context.Background()
 	req := connect.NewRequest(&webhookv1.SubmitReleaseBundleRequest{Name: "test", ChartDigest: "sha256:abc123"})
 	_, err := svc.SubmitReleaseBundle(ctx, req)

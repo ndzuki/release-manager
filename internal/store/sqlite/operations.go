@@ -23,6 +23,104 @@ func (s *operationStore) Create(ctx context.Context, op *store.Operation) error 
 func (s *operationStore) CreateIfAvailable(ctx context.Context, op *store.Operation) error {
 	return retryBusy(ctx, func() error { return createIfAvailable(ctx, s.db, op) })
 }
+func (s *operationStore) CreateIdempotent(
+	ctx context.Context,
+	command store.OperationCreateCommand,
+) (*store.OperationCreateResult, error) {
+	if command.Operation == nil {
+		return nil, fmt.Errorf("create idempotent operation: operation is required")
+	}
+	var result *store.OperationCreateResult
+	err := retryBusy(ctx, func() error {
+		created, err := createIdempotentOperation(ctx, s.db, command)
+		if err != nil {
+			return err
+		}
+		result = created
+		return nil
+	})
+	return result, err
+}
+
+//nolint:gocyclo // 幂等创建事务编排了空 Key 跳过、重放、并发 load-after-conflict 与业务写入。
+func createIdempotentOperation(
+	ctx context.Context,
+	db *sql.DB,
+	command store.OperationCreateCommand,
+) (*store.OperationCreateResult, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin idempotent operation: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
+
+	// 空 Key（或未携带幂等记录）时跳过全部幂等逻辑（不 lookup、不 insert），直接业务创建。
+	idempotent := command.Idempotency != nil && command.Idempotency.Key != ""
+	if idempotent {
+		replay, err := loadActiveIdempotencyRecord(
+			ctx,
+			tx,
+			command.Idempotency.Scope,
+			command.Idempotency.Key,
+			time.Now().UTC(),
+		)
+		if err == nil {
+			if replay.RequestHash != command.Idempotency.RequestHash {
+				return nil, store.ErrIdempotencyConflict
+			}
+			return decodeOperationCreateReplay(ctx, tx, replay)
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
+	}
+
+	if command.CheckAvailable {
+		query := `
+			SELECT COUNT(*) FROM operations
+			WHERE release_definition_id = ?
+			  AND status NOT IN ('succeeded','failed','cancelled','timeout')
+		`
+		if command.Operation.OperationType == store.OperationEmergency {
+			query += " AND operation_type != 'EMERGENCY'"
+		}
+		var count int
+		if err := tx.QueryRowContext(ctx, query, command.Operation.ReleaseDefinitionID).Scan(&count); err != nil {
+			return nil, fmt.Errorf("count conflicting operations: %w", err)
+		}
+		if count > 0 {
+			return nil, store.ErrReleaseBusy
+		}
+	}
+
+	if idempotent {
+		command.Idempotency.ResponseRef = []byte(command.Operation.ID)
+		existing, created, err := createOrGetIdempotencyRecord(ctx, tx, command.Idempotency, time.Now().UTC())
+		if err != nil {
+			return nil, err
+		}
+		if !created {
+			// 并发窗口内另一事务已提交相同 scope+key+hash：重放其操作，业务写入随回滚丢弃。
+			return decodeOperationCreateReplay(ctx, tx, existing)
+		}
+	}
+	if err := createOperation(ctx, tx, command.Operation); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit idempotent operation: %w", err)
+	}
+	return &store.OperationCreateResult{Operation: command.Operation}, nil
+}
+
+// decodeOperationCreateReplay 把幂等记录中的 operationID 解码为操作创建重放结果。
+func decodeOperationCreateReplay(ctx context.Context, queryer operationQueryer, record *store.IdempotencyRecord) (*store.OperationCreateResult, error) {
+	operation, err := getOperation(ctx, queryer, string(record.ResponseRef))
+	if err != nil {
+		return nil, fmt.Errorf("load idempotent operation: %w", err)
+	}
+	return &store.OperationCreateResult{Operation: operation, Replayed: true}, nil
+}
 
 func createIfAvailable(ctx context.Context, db *sql.DB, op *store.Operation) error {
 	tx, err := db.BeginTx(ctx, nil)
@@ -62,6 +160,7 @@ func createIfAvailable(ctx context.Context, db *sql.DB, op *store.Operation) err
 func retryBusy(ctx context.Context, fn func() error) error {
 	const maxRetries = 10
 	backoff := time.Millisecond
+
 	var lastErr error
 	for range maxRetries + 1 {
 		if err := ctx.Err(); err != nil {
@@ -71,7 +170,7 @@ func retryBusy(ctx context.Context, fn func() error) error {
 		if lastErr == nil {
 			return nil
 		}
-		if !strings.Contains(lastErr.Error(), "database is locked") {
+		if !strings.Contains(lastErr.Error(), "locked") {
 			return lastErr
 		}
 		time.Sleep(backoff)
@@ -115,16 +214,17 @@ func createOperation(ctx context.Context, execer operationExecer, op *store.Oper
 		INSERT INTO operations (
 			id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
-			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
+			bundle_id, values_revision_id, expected_revision, target_revision, target_operation_id, values_patch,
 			actor, created_at, updated_at, terminal_at, deadline, last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		op.ID, string(op.OperationType), string(op.Status), op.ReleaseDefinitionID,
 		op.IdempotencyKey, op.RequestHash, op.StateVersion,
-		op.BundleID, op.ValuesRevisionID, op.ExpectedRevision, op.TargetRevision, op.ValuesPatch,
+		op.BundleID, op.ValuesRevisionID, op.ExpectedRevision, op.TargetRevision, op.TargetOperationID, op.ValuesPatch,
 		string(actorJSON), op.CreatedAt.UTC().Format(time.RFC3339), op.UpdatedAt.UTC().Format(time.RFC3339),
 		terminalAt, deadline, op.LastError,
 	)
+
 	if err != nil {
 		if isUniqueConstraint(err) {
 			return store.ErrDuplicateKey
@@ -138,18 +238,17 @@ func (s *operationStore) Get(ctx context.Context, id string) (*store.Operation, 
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
-			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
+			bundle_id, values_revision_id, expected_revision, target_revision, target_operation_id, values_patch,
 			actor, created_at, updated_at, terminal_at, deadline, last_error
 		FROM operations WHERE id = ?
 	`, id)
 	return scanOperation(row)
 }
-
 func (s *operationStore) GetByIdempotencyKey(ctx context.Context, key string) (*store.Operation, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
-			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
+			bundle_id, values_revision_id, expected_revision, target_revision, target_operation_id, values_patch,
 			actor, created_at, updated_at, terminal_at, deadline, last_error
 		FROM operations WHERE idempotency_key = ?
 	`, key)
@@ -320,8 +419,12 @@ func (s *operationStore) Cancel(ctx context.Context, command store.OperationCanc
 	}
 
 	cancelResult := &store.OperationCancelResult{Operation: &updated, RequestID: command.RequestID}
-	if err := insertOperationCancelIdempotency(ctx, tx, command, cancelResult, time.Now().UTC().Add(operationCancelIdempotencyTTL)); err != nil {
+	replay, err = insertOperationCancelIdempotency(ctx, tx, command, cancelResult, time.Now().UTC().Add(operationCancelIdempotencyTTL))
+	if err != nil {
 		return nil, err
+	}
+	if replay != nil {
+		return replay, nil
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit cancel operation: %w", err)
@@ -338,26 +441,20 @@ func lookupOperationCancelIdempotency(
 	if command.IdempotencyKeyHash == "" {
 		return nil, nil
 	}
-	var requestHash string
-	var responseRef []byte
-	err := tx.QueryRowContext(ctx, `
-		SELECT request_hash, response_ref FROM idempotency_records
-		WHERE scope = ? AND text_key = ? AND expires_at > ?
-	`, command.IdempotencyScope, command.IdempotencyKeyHash, time.Now().UTC().Format(time.RFC3339Nano)).Scan(
-		&requestHash,
-		&responseRef,
+	record, err := loadActiveIdempotencyRecord(
+		ctx, tx, command.IdempotencyScope, command.IdempotencyKeyHash, time.Now().UTC(),
 	)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, store.ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("lookup operation cancel idempotency: %w", err)
 	}
-	if requestHash != command.RequestHash {
+	if record.RequestHash != command.RequestHash {
 		return nil, store.ErrIdempotencyConflict
 	}
 	var result store.OperationCancelResult
-	if err := json.Unmarshal(responseRef, &result); err != nil {
+	if err := json.Unmarshal(record.ResponseRef, &result); err != nil {
 		return nil, fmt.Errorf("decode operation cancel replay: %w", err)
 	}
 	return &result, nil
@@ -370,25 +467,31 @@ func insertOperationCancelIdempotency(
 	command store.OperationCancelCommand,
 	result *store.OperationCancelResult,
 	expiresAt time.Time,
-) error {
+) (*store.OperationCancelResult, error) {
 	if command.IdempotencyKeyHash == "" {
-		return nil
+		return nil, nil
 	}
 	responseRef, err := json.Marshal(result)
 	if err != nil {
-		return fmt.Errorf("encode operation cancel response: %w", err)
+		return nil, fmt.Errorf("encode operation cancel response: %w", err)
 	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO idempotency_records (scope, text_key, request_hash, response_ref, expires_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, command.IdempotencyScope, command.IdempotencyKeyHash, command.RequestHash, responseRef, expiresAt.Format(time.RFC3339Nano))
+	existing, created, err := createOrGetIdempotencyRecord(ctx, tx, &store.IdempotencyRecord{
+		Scope: command.IdempotencyScope, Key: command.IdempotencyKeyHash,
+		RequestHash: command.RequestHash, ResponseRef: responseRef, ExpiresAt: expiresAt,
+	}, time.Now().UTC())
 	if err != nil {
-		if isUniqueConstraint(err) {
-			return store.ErrIdempotencyConflict
-		}
-		return fmt.Errorf("insert operation cancel idempotency: %w", err)
+		return nil, err
 	}
-	return nil
+	if created {
+		return nil, nil
+	}
+	// 并发窗口内另一事务已提交相同 scope+key+hash：decode 已有记录返回重放结果。
+	var replay store.OperationCancelResult
+	if err := json.Unmarshal(existing.ResponseRef, &replay); err != nil {
+		return nil, fmt.Errorf("decode operation cancel replay: %w", err)
+	}
+	replay.Replayed = true
+	return &replay, nil
 }
 
 // FinalizeUpgrade atomically persists a typed result, terminal CAS, inventory, rollout, and timeline event.
@@ -636,16 +739,32 @@ func (s *operationStore) HasActiveEmergencyForDefinition(ctx context.Context, de
 	return count > 0, nil
 }
 
+// List returns persisted operations ordered newest first.
+//nolint:dupl // Operation and Values stores intentionally share the standard list-and-scan persistence pattern.
+func (s *operationStore) GetActiveForDefinition(ctx context.Context, definitionID string) (*store.Operation, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, operation_type, status, release_definition_id,
+			idempotency_key, request_hash, state_version,
+			bundle_id, values_revision_id, expected_revision, target_revision, target_operation_id, values_patch,
+			actor, created_at, updated_at, terminal_at, deadline, last_error
+		FROM operations
+		WHERE release_definition_id = ?
+		  AND status NOT IN ('succeeded','failed','cancelled','timeout')
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, definitionID)
+	return scanOperation(row)
+}
 func (s *operationStore) List(ctx context.Context, definitionID string) ([]*store.Operation, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
-			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
+			bundle_id, values_revision_id, expected_revision, target_revision, target_operation_id, values_patch,
 			actor, created_at, updated_at, terminal_at, deadline, last_error
 		FROM operations
 		WHERE release_definition_id = ?
-		ORDER BY created_at DESC
-	`, definitionID)
+		ORDER BY created_at DESC`, definitionID)
+
 	if err != nil {
 		return nil, fmt.Errorf("list operations: %w", err)
 	}
@@ -668,12 +787,12 @@ func (s *operationStore) ListNonTerminal(ctx context.Context) ([]*store.Operatio
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
-			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
+			bundle_id, values_revision_id, expected_revision, target_revision, target_operation_id, values_patch,
 			actor, created_at, updated_at, terminal_at, deadline, last_error
 		FROM operations
 		WHERE status NOT IN ('succeeded','failed','cancelled','timeout')
-		ORDER BY created_at ASC
-	`)
+		ORDER BY created_at ASC`)
+
 	if err != nil {
 		return nil, fmt.Errorf("list non-terminal operations: %w", err)
 	}
@@ -698,17 +817,18 @@ func getOperation(ctx context.Context, queryer operationQueryer, id string) (*st
 	row := queryer.QueryRowContext(ctx, `
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
-			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
+			bundle_id, values_revision_id, expected_revision, target_revision, target_operation_id, values_patch,
 			actor, created_at, updated_at, terminal_at, deadline, last_error
 		FROM operations WHERE id = ?
 	`, id)
 	return scanOperation(row)
 }
+
 func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operation, error) {
 	var (
 		id, opType, status, defID, idemKey, reqHash string
 		stateVer, expectedRev, targetRev            int
-		bundleID, valuesRevID                       string
+		bundleID, valuesRevID, targetOperationID    string
 		valuesPatch                                 []byte
 		actorJSON                                   string
 		createdAt, updatedAt                        string
@@ -719,9 +839,10 @@ func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operatio
 	err := row.Scan(
 		&id, &opType, &status, &defID,
 		&idemKey, &reqHash, &stateVer,
-		&bundleID, &valuesRevID, &expectedRev, &targetRev, &valuesPatch,
+		&bundleID, &valuesRevID, &expectedRev, &targetRev, &targetOperationID, &valuesPatch,
 		&actorJSON, &createdAt, &updatedAt, &terminalAt, &deadline, &lastError,
 	)
+
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, store.ErrNotFound
@@ -730,7 +851,7 @@ func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operatio
 	}
 
 	return buildOperation(id, opType, status, defID, idemKey, reqHash,
-		stateVer, bundleID, valuesRevID, expectedRev, targetRev, valuesPatch,
+		stateVer, bundleID, valuesRevID, expectedRev, targetRev, targetOperationID, valuesPatch,
 		actorJSON, createdAt, updatedAt, terminalAt, deadline, lastError)
 }
 
@@ -738,7 +859,7 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 	var (
 		id, opType, status, defID, idemKey, reqHash string
 		stateVer, expectedRev, targetRev            int
-		bundleID, valuesRevID                       string
+		bundleID, valuesRevID, targetOperationID    string
 		valuesPatch                                 []byte
 		actorJSON                                   string
 		createdAt, updatedAt                        string
@@ -749,20 +870,21 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 	err := rows.Scan(
 		&id, &opType, &status, &defID,
 		&idemKey, &reqHash, &stateVer,
-		&bundleID, &valuesRevID, &expectedRev, &targetRev, &valuesPatch,
+		&bundleID, &valuesRevID, &expectedRev, &targetRev, &targetOperationID, &valuesPatch,
 		&actorJSON, &createdAt, &updatedAt, &terminalAt, &deadline, &lastError,
 	)
+
 	if err != nil {
 		return nil, fmt.Errorf("scan operation row: %w", err)
 	}
 
 	return buildOperation(id, opType, status, defID, idemKey, reqHash,
-		stateVer, bundleID, valuesRevID, expectedRev, targetRev, valuesPatch,
+		stateVer, bundleID, valuesRevID, expectedRev, targetRev, targetOperationID, valuesPatch,
 		actorJSON, createdAt, updatedAt, terminalAt, deadline, lastError)
 }
 
 func buildOperation(id, opType, status, defID, idemKey, reqHash string,
-	stateVer int, bundleID, valuesRevID string, expectedRev, targetRev int,
+	stateVer int, bundleID, valuesRevID string, expectedRev, targetRev int, targetOperationID string,
 	valuesPatch []byte, actorJSON, createdAt, updatedAt string,
 	terminalAt, deadline *string, lastError string,
 ) (*store.Operation, error) {
@@ -810,6 +932,7 @@ func buildOperation(id, opType, status, defID, idemKey, reqHash string,
 		ValuesRevisionID:    valuesRevID,
 		ExpectedRevision:    expectedRev,
 		TargetRevision:      targetRev,
+		TargetOperationID:   targetOperationID,
 		ValuesPatch:         valuesPatch,
 		Actor:               actor,
 		CreatedAt:           ct,
@@ -819,3 +942,4 @@ func buildOperation(id, opType, status, defID, idemKey, reqHash string,
 		LastError:           lastError,
 	}, nil
 }
+

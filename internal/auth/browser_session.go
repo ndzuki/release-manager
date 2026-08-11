@@ -46,11 +46,17 @@ func (s *AuthService) refreshBrowserSession(ctx context.Context, req *connect.Re
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("missing refresh cookie"))
 	}
 	session, err := s.store.AuthSessions().GetByRefreshHash(ctx, s.jwt.HashRefreshToken(refreshToken))
-	if err != nil || session.Revoked || !session.ExpiresAt.After(time.Now().UTC()) {
+	if err != nil {
+		if errors.Is(err, store.ErrUnavailable) {
+			return nil, mapStoreError(err, "invalid refresh session")
+		}
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid refresh session"))
+	}
+	if session.Revoked || !session.ExpiresAt.After(time.Now().UTC()) {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid refresh session"))
 	}
 	if err := s.store.AuthSessions().RevokeFamily(ctx, session.TokenFamily); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, errors.New("token rotation failed"))
+		return nil, mapStoreError(err, "token rotation failed")
 	}
 	user, err := s.store.Users().Get(ctx, session.UserID)
 	if err != nil || user.Status != store.UserActive {
@@ -121,7 +127,7 @@ func (s *AuthService) issueBrowserSession(ctx context.Context, user *store.User,
 	}
 	refreshExpiresAt := time.Now().UTC().Add(s.jwt.RefreshTTL())
 	if err := s.store.AuthSessions().Create(ctx, &store.AuthSession{ID: newID(), UserID: user.ID, TokenFamily: family, RefreshTokenHash: refreshHash, ExpiresAt: refreshExpiresAt}); err != nil {
-		return nil, nil, time.Time{}, nil, connect.NewError(connect.CodeInternal, errors.New("session creation failed"))
+		return nil, nil, time.Time{}, nil, mapStoreError(err, "session creation failed")
 	}
 	csrfToken, err := randomToken(32)
 	if err != nil {

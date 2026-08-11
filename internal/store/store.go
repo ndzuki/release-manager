@@ -27,6 +27,7 @@ var (
 	ErrNotFound                  = errors.New("store: not found")
 	ErrOptimisticLock            = errors.New("store: optimistic lock conflict")
 	ErrDuplicateKey              = errors.New("store: duplicate key")
+	ErrUnavailable               = errors.New("store: unavailable")
 	ErrReleaseBusy               = errors.New("store: release busy")
 	ErrInvalidCursor             = errors.New("store: invalid cursor")
 	ErrBindingRevoked            = errors.New("store: binding revoked")
@@ -175,7 +176,6 @@ type ActorContext struct {
 	Organization string `json:"organization"`
 }
 
-// Operation is the core domain object representing a release operation.
 type Operation struct {
 	ID                  string          `json:"id"`
 	OperationType       OperationType   `json:"operation_type"`
@@ -188,6 +188,7 @@ type Operation struct {
 	ValuesRevisionID    string          `json:"values_revision_id"`
 	ExpectedRevision    int             `json:"expected_revision"`
 	TargetRevision      int             `json:"target_revision,omitempty"`
+	TargetOperationID   string          `json:"target_operation_id,omitempty"`
 	ValuesPatch         []byte          `json:"values_patch,omitempty"`
 	Actor               ActorContext    `json:"actor"`
 	CreatedAt           time.Time       `json:"created_at"`
@@ -195,6 +196,19 @@ type Operation struct {
 	Deadline            *time.Time      `json:"deadline,omitempty"`
 	TerminalAt          *time.Time      `json:"terminal_at,omitempty"`
 	LastError           string          `json:"last_error,omitempty"`
+}
+
+// OperationCreateCommand contains one atomic operation creation and idempotency intent.
+type OperationCreateCommand struct {
+	Operation      *Operation
+	Idempotency    *IdempotencyRecord
+	CheckAvailable bool
+}
+
+// OperationCreateResult is the newly committed or replayed operation.
+type OperationCreateResult struct {
+	Operation *Operation
+	Replayed  bool
 }
 
 // OperationCancelCommand contains the trusted authorization and idempotency snapshot for cancellation.
@@ -1162,17 +1176,18 @@ type TrustPolicy struct {
 
 // VerificationRecord captures the result of an artifact trust verification.
 type VerificationRecord struct {
-	ID              string
-	ArtifactDigest  string
-	PolicyVersion   string
-	Status          VerificationStatus
-	RootID          string
-	KeyID           string
-	RevocationEpoch int64
-	Issuer          string
-	Subject         string
-	Summary         string
-	CreatedAt       time.Time
+	ID                string
+	ArtifactDigest    string
+	PolicyVersion     string
+	SignatureIdentity string
+	Status            VerificationStatus
+	RootID            string
+	KeyID             string
+	RevocationEpoch   int64
+	Issuer            string
+	Subject           string
+	Summary           string
+	CreatedAt         time.Time
 }
 
 // PreflightCacheKey identifies an artifact preflight result.
@@ -1356,10 +1371,32 @@ type InventoryPage struct {
 	LastSyncAt time.Time
 }
 
+// IdempotencyRecord stores a replayable response for a scoped request key.
+type IdempotencyRecord struct {
+	Scope       string
+	Key         string
+	RequestHash string
+	ResponseRef json.RawMessage
+	ExpiresAt   time.Time
+}
+
+// IdempotencyStore defines the shared persistence contract for scoped request replay.
+type IdempotencyStore interface {
+	// CreateOrGet inserts a new record or returns the existing unexpired record.
+	// Returns (record, true, nil) when created and (record, false, nil) for a replay.
+	// Returns ErrIdempotencyConflict when scope+key exists with a different request hash.
+	CreateOrGet(ctx context.Context, record *IdempotencyRecord) (*IdempotencyRecord, bool, error)
+	// GetExpired returns records whose expiry is before the supplied time.
+	GetExpired(ctx context.Context, before time.Time, limit int) ([]*IdempotencyRecord, error)
+	// DeleteExpired removes records whose expiry is before the supplied time.
+	DeleteExpired(ctx context.Context, before time.Time) (int64, error)
+}
+
 // OperationStore defines the persistence contract for operations.
 type OperationStore interface {
 	Create(ctx context.Context, op *Operation) error
 	CreateIfAvailable(ctx context.Context, op *Operation) error
+	CreateIdempotent(ctx context.Context, command OperationCreateCommand) (*OperationCreateResult, error)
 	Get(ctx context.Context, id string) (*Operation, error)
 	GetByIdempotencyKey(ctx context.Context, key string) (*Operation, error)
 	UpdateStatus(ctx context.Context, id string, status OperationStatus, stateVersion int, lastError string) (*Operation, error)
@@ -1369,6 +1406,7 @@ type OperationStore interface {
 	HasActiveForDefinition(ctx context.Context, definitionID string) (bool, error)
 	HasActiveEmergencyForDefinition(ctx context.Context, definitionID string) (bool, error)
 	List(ctx context.Context, definitionID string) ([]*Operation, error)
+	GetActiveForDefinition(ctx context.Context, definitionID string) (*Operation, error)
 	ListNonTerminal(ctx context.Context) ([]*Operation, error)
 }
 
@@ -1517,14 +1555,30 @@ type OutboxStore interface {
 	GetNextPending(ctx context.Context, operatorID string) (*OutboxEntry, error)
 }
 
+// UserListQuery narrows user listing to a stable keyset page (REQ-010 cursor pagination).
+type UserListQuery struct {
+	// Cursor is an opaque base64 username cursor from a previous page.
+	Cursor string
+	// PageSize defaults to 20 and is clamped to [1, 100].
+	PageSize int32
+}
+
+// UserPage is one stable page of local users ordered by username.
+type UserPage struct {
+	Users      []*User
+	NextCursor string
+}
+
 // UserStore defines the persistence contract for local and external user accounts (REQ-025, REQ-028).
 type UserStore interface {
 	Create(ctx context.Context, u *User) error
+	CreateWithMembership(ctx context.Context, u *User, member *OrganizationMember) error
 	Get(ctx context.Context, id string) (*User, error)
 	GetByUsername(ctx context.Context, username string) (*User, error)
 	GetByProviderSubject(ctx context.Context, provider, subject string) (*User, error)
 	Update(ctx context.Context, u *User) error
 	Count(ctx context.Context, orgID string) (int64, error)
+	List(ctx context.Context, query UserListQuery) (*UserPage, error)
 }
 
 // AuthSessionStore defines the persistence contract for auth sessions (REQ-025).
@@ -1597,6 +1651,7 @@ type NotificationStore interface {
 // VerificationStore defines the persistence contract for verification records.
 type VerificationStore interface {
 	Create(ctx context.Context, rec *VerificationRecord) error
+	GetByDigestPolicyAndSignature(ctx context.Context, artifactDigest, policyVersion, signatureIdentity string) (*VerificationRecord, error)
 	GetByDigestAndPolicy(ctx context.Context, artifactDigest, policyVersion string) (*VerificationRecord, error)
 }
 
@@ -1685,6 +1740,8 @@ type InventoryStore interface {
 
 	// ListByCluster returns all inventory rows for a cluster.
 	ListByCluster(ctx context.Context, customerID, clusterID string) ([]*ReleaseInventory, error)
+	// GetByDefinition returns the cached release snapshot for one release definition.
+	GetByDefinition(ctx context.Context, definitionID string) (*ReleaseInventory, error)
 
 	// Query returns one filtered page and validates that an opaque cursor still
 	// belongs to the same scope, filters, and inventory snapshot.
@@ -1700,7 +1757,6 @@ type InventoryStore interface {
 
 	// GetBySyncID checks whether a sync_id has already been applied.
 	GetBySyncID(ctx context.Context, syncID string) (*InventorySyncLog, error)
-	GetByDefinition(ctx context.Context, definitionID string) (*ReleaseInventory, error)
 }
 
 // OperationExecutionResultStore provides typed result lookup.
@@ -1738,15 +1794,6 @@ type CandidateArtifact struct {
 type ArtifactDigest struct {
 	Digest       string
 	ArtifactType ArtifactType
-}
-
-// IdempotencyRecord stores a replayable response for a scoped request key.
-type IdempotencyRecord struct {
-	Scope       string
-	Key         string
-	RequestHash string
-	ResponseRef json.RawMessage
-	ExpiresAt   time.Time
 }
 
 // BundleSubmission is the atomic input for a new bundle and its derived records.
@@ -1860,6 +1907,7 @@ type PreflightLifecycle struct {
 // PreflightLifecycleStore defines the persistence contract for preflight lifecycles.
 type PreflightLifecycleStore interface {
 	Create(ctx context.Context, pl *PreflightLifecycle) error
+	GetByOperationID(ctx context.Context, operationID string) (*PreflightLifecycle, error)
 	SetOperationTerminal(ctx context.Context, operationID string, terminalAt time.Time) error
 	DeleteExpired(ctx context.Context, ttl time.Duration) (int64, error)
 }
@@ -1889,6 +1937,7 @@ type Store interface {
 	AuditExports() AuditExportStore
 	TrustRoots() TrustRootStore
 	Notifications() NotificationStore
+	Idempotency() IdempotencyStore
 	Bundles() BundleStore
 	ScanResults() ScanResultStore
 	VulnerabilityExceptions() VulnerabilityExceptionStore

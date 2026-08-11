@@ -62,6 +62,15 @@ const (
 	// AuthServiceChangePasswordProcedure is the fully-qualified name of the AuthService's
 	// ChangePassword RPC.
 	AuthServiceChangePasswordProcedure = "/auth.v1.AuthService/ChangePassword"
+	// AuthServiceCreateLocalUserProcedure is the fully-qualified name of the AuthService's
+	// CreateLocalUser RPC.
+	AuthServiceCreateLocalUserProcedure = "/auth.v1.AuthService/CreateLocalUser"
+	// AuthServiceGetLocalUserProcedure is the fully-qualified name of the AuthService's GetLocalUser
+	// RPC.
+	AuthServiceGetLocalUserProcedure = "/auth.v1.AuthService/GetLocalUser"
+	// AuthServiceListLocalUsersProcedure is the fully-qualified name of the AuthService's
+	// ListLocalUsers RPC.
+	AuthServiceListLocalUsersProcedure = "/auth.v1.AuthService/ListLocalUsers"
 	// OrganizationServiceCreateOrganizationProcedure is the fully-qualified name of the
 	// OrganizationService's CreateOrganization RPC.
 	OrganizationServiceCreateOrganizationProcedure = "/auth.v1.OrganizationService/CreateOrganization"
@@ -128,6 +137,9 @@ type AuthServiceClient interface {
 	ValidateToken(context.Context, *connect.Request[v1.ValidateTokenRequest]) (*connect.Response[v1.ValidateTokenResponse], error)
 	SwitchOrganization(context.Context, *connect.Request[v1.SwitchOrganizationRequest]) (*connect.Response[v1.SwitchOrganizationResponse], error)
 	ChangePassword(context.Context, *connect.Request[v1.ChangePasswordRequest]) (*connect.Response[v1.ChangePasswordResponse], error)
+	CreateLocalUser(context.Context, *connect.Request[v1.CreateLocalUserRequest]) (*connect.Response[v1.CreateLocalUserResponse], error)
+	GetLocalUser(context.Context, *connect.Request[v1.GetLocalUserRequest]) (*connect.Response[v1.GetLocalUserResponse], error)
+	ListLocalUsers(context.Context, *connect.Request[v1.ListLocalUsersRequest]) (*connect.Response[v1.ListLocalUsersResponse], error)
 }
 
 // NewAuthServiceClient constructs a client for the auth.v1.AuthService service. By default, it uses
@@ -189,6 +201,24 @@ func NewAuthServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 			connect.WithSchema(authServiceMethods.ByName("ChangePassword")),
 			connect.WithClientOptions(opts...),
 		),
+		createLocalUser: connect.NewClient[v1.CreateLocalUserRequest, v1.CreateLocalUserResponse](
+			httpClient,
+			baseURL+AuthServiceCreateLocalUserProcedure,
+			connect.WithSchema(authServiceMethods.ByName("CreateLocalUser")),
+			connect.WithClientOptions(opts...),
+		),
+		getLocalUser: connect.NewClient[v1.GetLocalUserRequest, v1.GetLocalUserResponse](
+			httpClient,
+			baseURL+AuthServiceGetLocalUserProcedure,
+			connect.WithSchema(authServiceMethods.ByName("GetLocalUser")),
+			connect.WithClientOptions(opts...),
+		),
+		listLocalUsers: connect.NewClient[v1.ListLocalUsersRequest, v1.ListLocalUsersResponse](
+			httpClient,
+			baseURL+AuthServiceListLocalUsersProcedure,
+			connect.WithSchema(authServiceMethods.ByName("ListLocalUsers")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -202,6 +232,9 @@ type authServiceClient struct {
 	validateToken      *connect.Client[v1.ValidateTokenRequest, v1.ValidateTokenResponse]
 	switchOrganization *connect.Client[v1.SwitchOrganizationRequest, v1.SwitchOrganizationResponse]
 	changePassword     *connect.Client[v1.ChangePasswordRequest, v1.ChangePasswordResponse]
+	createLocalUser    *connect.Client[v1.CreateLocalUserRequest, v1.CreateLocalUserResponse]
+	getLocalUser       *connect.Client[v1.GetLocalUserRequest, v1.GetLocalUserResponse]
+	listLocalUsers     *connect.Client[v1.ListLocalUsersRequest, v1.ListLocalUsersResponse]
 }
 
 // GetInitStatus calls auth.v1.AuthService.GetInitStatus.
@@ -244,6 +277,21 @@ func (c *authServiceClient) ChangePassword(ctx context.Context, req *connect.Req
 	return c.changePassword.CallUnary(ctx, req)
 }
 
+// CreateLocalUser calls auth.v1.AuthService.CreateLocalUser.
+func (c *authServiceClient) CreateLocalUser(ctx context.Context, req *connect.Request[v1.CreateLocalUserRequest]) (*connect.Response[v1.CreateLocalUserResponse], error) {
+	return c.createLocalUser.CallUnary(ctx, req)
+}
+
+// GetLocalUser calls auth.v1.AuthService.GetLocalUser.
+func (c *authServiceClient) GetLocalUser(ctx context.Context, req *connect.Request[v1.GetLocalUserRequest]) (*connect.Response[v1.GetLocalUserResponse], error) {
+	return c.getLocalUser.CallUnary(ctx, req)
+}
+
+// ListLocalUsers calls auth.v1.AuthService.ListLocalUsers.
+func (c *authServiceClient) ListLocalUsers(ctx context.Context, req *connect.Request[v1.ListLocalUsersRequest]) (*connect.Response[v1.ListLocalUsersResponse], error) {
+	return c.listLocalUsers.CallUnary(ctx, req)
+}
+
 // AuthServiceHandler is an implementation of the auth.v1.AuthService service.
 type AuthServiceHandler interface {
 	GetInitStatus(context.Context, *connect.Request[v1.GetInitStatusRequest]) (*connect.Response[v1.GetInitStatusResponse], error)
@@ -254,6 +302,9 @@ type AuthServiceHandler interface {
 	ValidateToken(context.Context, *connect.Request[v1.ValidateTokenRequest]) (*connect.Response[v1.ValidateTokenResponse], error)
 	SwitchOrganization(context.Context, *connect.Request[v1.SwitchOrganizationRequest]) (*connect.Response[v1.SwitchOrganizationResponse], error)
 	ChangePassword(context.Context, *connect.Request[v1.ChangePasswordRequest]) (*connect.Response[v1.ChangePasswordResponse], error)
+	CreateLocalUser(context.Context, *connect.Request[v1.CreateLocalUserRequest]) (*connect.Response[v1.CreateLocalUserResponse], error)
+	GetLocalUser(context.Context, *connect.Request[v1.GetLocalUserRequest]) (*connect.Response[v1.GetLocalUserResponse], error)
+	ListLocalUsers(context.Context, *connect.Request[v1.ListLocalUsersRequest]) (*connect.Response[v1.ListLocalUsersResponse], error)
 }
 
 // NewAuthServiceHandler builds an HTTP handler from the service implementation. It returns the path
@@ -311,6 +362,24 @@ func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption
 		connect.WithSchema(authServiceMethods.ByName("ChangePassword")),
 		connect.WithHandlerOptions(opts...),
 	)
+	authServiceCreateLocalUserHandler := connect.NewUnaryHandler(
+		AuthServiceCreateLocalUserProcedure,
+		svc.CreateLocalUser,
+		connect.WithSchema(authServiceMethods.ByName("CreateLocalUser")),
+		connect.WithHandlerOptions(opts...),
+	)
+	authServiceGetLocalUserHandler := connect.NewUnaryHandler(
+		AuthServiceGetLocalUserProcedure,
+		svc.GetLocalUser,
+		connect.WithSchema(authServiceMethods.ByName("GetLocalUser")),
+		connect.WithHandlerOptions(opts...),
+	)
+	authServiceListLocalUsersHandler := connect.NewUnaryHandler(
+		AuthServiceListLocalUsersProcedure,
+		svc.ListLocalUsers,
+		connect.WithSchema(authServiceMethods.ByName("ListLocalUsers")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/auth.v1.AuthService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case AuthServiceGetInitStatusProcedure:
@@ -329,6 +398,12 @@ func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption
 			authServiceSwitchOrganizationHandler.ServeHTTP(w, r)
 		case AuthServiceChangePasswordProcedure:
 			authServiceChangePasswordHandler.ServeHTTP(w, r)
+		case AuthServiceCreateLocalUserProcedure:
+			authServiceCreateLocalUserHandler.ServeHTTP(w, r)
+		case AuthServiceGetLocalUserProcedure:
+			authServiceGetLocalUserHandler.ServeHTTP(w, r)
+		case AuthServiceListLocalUsersProcedure:
+			authServiceListLocalUsersHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -368,6 +443,18 @@ func (UnimplementedAuthServiceHandler) SwitchOrganization(context.Context, *conn
 
 func (UnimplementedAuthServiceHandler) ChangePassword(context.Context, *connect.Request[v1.ChangePasswordRequest]) (*connect.Response[v1.ChangePasswordResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.ChangePassword is not implemented"))
+}
+
+func (UnimplementedAuthServiceHandler) CreateLocalUser(context.Context, *connect.Request[v1.CreateLocalUserRequest]) (*connect.Response[v1.CreateLocalUserResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.CreateLocalUser is not implemented"))
+}
+
+func (UnimplementedAuthServiceHandler) GetLocalUser(context.Context, *connect.Request[v1.GetLocalUserRequest]) (*connect.Response[v1.GetLocalUserResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.GetLocalUser is not implemented"))
+}
+
+func (UnimplementedAuthServiceHandler) ListLocalUsers(context.Context, *connect.Request[v1.ListLocalUsersRequest]) (*connect.Response[v1.ListLocalUsersResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.ListLocalUsers is not implemented"))
 }
 
 // OrganizationServiceClient is a client for the auth.v1.OrganizationService service.

@@ -1,0 +1,223 @@
+import { create } from '@bufbuild/protobuf';
+import { mount, type VueWrapper } from '@vue/test-utils';
+import { createPinia, setActivePinia } from 'pinia';
+import { createMemoryHistory, createRouter } from 'vue-router';
+import { Code, ConnectError } from '@connectrpc/connect';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Client } from '@connectrpc/connect';
+import {
+  BundleService,
+  BundleSummarySchema,
+  CreateOperationResponseSchema,
+  GetOperationResponseSchema,
+  ListBundlesResponseSchema,
+  OperationSchema,
+  OperationStatus,
+  OrchestratorService,
+} from '@/gen/orchestrator/v1/orchestrator_pb';
+import { BundleStatus } from '@/gen/common/v1/domain_pb';
+import { setOperationClientForTest } from '@/connect/operation-api';
+import OperationCreatePage from './OperationCreatePage.vue';
+import { usePreflightStore } from '@/stores/preflight';
+import OperationDetailPage from './OperationDetailPage.vue';
+
+interface TestClients {
+  operations: Client<typeof OrchestratorService>;
+  bundles: Client<typeof BundleService>;
+}
+
+function optionsClients(): TestClients {
+  return {
+    operations: {
+      createOperation: vi.fn().mockResolvedValue(create(CreateOperationResponseSchema, {
+        operationId: 'op-created', state: 'preflight', preflightId: 'pf-created',
+      })),
+    } as unknown as Client<typeof OrchestratorService>,
+    bundles: {
+      listBundles: vi.fn().mockResolvedValue(create(ListBundlesResponseSchema, {
+        bundles: [create(BundleSummarySchema, {
+          id: 'bundle-1',
+          name: 'app',
+          digest: { algorithm: 'sha256', value: 'sha256:bundle' },
+          status: BundleStatus.VALIDATED,
+          chartRef: 'oci://registry/app',
+          chartVersion: '1.0.0',
+          chartDigest: 'sha256:chart',
+          images: [{ ref: 'registry/app:v1', digest: 'sha256:image', valuesPath: 'image' }],
+        })],
+      })),
+    } as unknown as Client<typeof BundleService>,
+  };
+}
+
+async function mountCreatePage(clients: TestClients) {
+  setOperationClientForTest(clients.operations, clients.bundles);
+  const pinia = createPinia();
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations/new', name: 'OperationCreate', component: OperationCreatePage },
+      { path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations/:operationId', name: 'OperationDetail', component: OperationDetailPage },
+      { path: '/customers/:customerId/clusters/:clusterId/releases', name: 'ReleaseInventory', component: { template: '<div />' } },
+    ],
+  });
+  await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/new?currentRevision=5');
+  await router.isReady();
+  const wrapper = mount(OperationCreatePage, {
+    global: { plugins: [pinia, router] },
+  });
+  await vi.waitFor(() => expect(wrapper.text()).toContain('app@1.0.0'));
+  return { wrapper, router };
+}
+
+async function fillBundleAndValues(wrapper: VueWrapper): Promise<void> {
+  await wrapper.find('select').setValue('bundle-1');
+  await wrapper.find('input[aria-label="ValuesRevision ID"]').setValue('vr-1');
+}
+
+function emptyOptionsClients(): TestClients {
+  return {
+    operations: {} as unknown as Client<typeof OrchestratorService>,
+    bundles: {
+      listBundles: vi.fn().mockResolvedValue(create(ListBundlesResponseSchema)),
+    } as unknown as Client<typeof BundleService>,
+  };
+}
+
+describe('operation pages', () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+    setActivePinia(createPinia());
+  });
+
+  it('shows the correct fields for INSTALL, UPGRADE, and ROLLBACK', async () => {
+    const { wrapper } = await mountCreatePage(optionsClients());
+
+    expect(wrapper.text()).toContain('制品 Bundle');
+    expect(wrapper.text()).not.toContain('当前 Revision');
+    expect(wrapper.text()).not.toContain('回退目标 Operation');
+
+    await wrapper.find('input[value="UPGRADE"]').setValue(true);
+    expect(wrapper.text()).toContain('当前 Revision');
+
+    await wrapper.find('input[value="ROLLBACK"]').setValue(true);
+    expect(wrapper.text()).toContain('制品 Bundle');
+    expect(wrapper.text()).toContain('当前 Revision');
+    expect(wrapper.text()).not.toContain('Patch 覆盖');
+    expect(wrapper.text()).not.toContain('回退目标 Operation');
+  });
+
+  it('marks a non-bundle image patch on the invalid row', async () => {
+    const { wrapper } = await mountCreatePage(optionsClients());
+    await fillBundleAndValues(wrapper);
+    await wrapper.findAll('button').find((button) => button.text() === '添加 Patch')?.trigger('click');
+    await wrapper.find('input[aria-label="Patch 1 path"]').setValue('sidecar.image.tag');
+    await wrapper.find('input[aria-label="Patch 1 value"]').setValue('v2');
+
+    await wrapper.find('form').trigger('submit');
+
+    const invalidRow = wrapper.find('.patch-editor__row--error');
+    expect(invalidRow.exists()).toBe(true);
+    expect(invalidRow.text()).toContain('Patch 引用了 Bundle 外镜像');
+    expect(invalidRow.find('input[aria-label="Patch 1 path"]').attributes('aria-invalid')).toBe('true');
+  });
+
+  it('opens confirmation and cancel preserves the form without creating', async () => {
+    const clients = optionsClients();
+    const { wrapper } = await mountCreatePage(clients);
+    await fillBundleAndValues(wrapper);
+    await wrapper.find('form').trigger('submit');
+
+    expect(wrapper.text()).toContain('最终确认');
+    await wrapper.findAll('button').find((button) => button.text() === '取消')?.trigger('click');
+
+    expect(wrapper.text()).toContain('创建发布操作');
+    expect(clients.operations.createOperation).not.toHaveBeenCalled();
+  });
+
+  it('shows a guided empty state when required options are unavailable', async () => {
+    setOperationClientForTest(emptyOptionsClients().operations, emptyOptionsClients().bundles);
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations/new', name: 'OperationCreate', component: OperationCreatePage },
+        { path: '/customers/:customerId/clusters/:clusterId/releases', name: 'ReleaseInventory', component: { template: '<div />' } },
+      ],
+    });
+    await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/new');
+    await router.isReady();
+    const wrapper = mount(OperationCreatePage, { global: { plugins: [createPinia(), router] } });
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('没有可创建操作的选项'));
+    expect(wrapper.text()).toContain('validated Bundle');
+  });
+
+  it('locks confirmation and links to the active operation on release_busy', async () => {
+    let resolveCreate: ((value: unknown) => void) | undefined;
+    const createPromise = new Promise((resolve) => { resolveCreate = resolve; });
+    const clients = optionsClients();
+    clients.operations.createOperation = vi.fn()
+      .mockReturnValueOnce(createPromise)
+      .mockRejectedValueOnce(new ConnectError('release busy', Code.FailedPrecondition, {
+        'X-Reason-Code': 'release_busy',
+        'X-Operation-ID': 'op-active',
+      }));
+    const { wrapper, router } = await mountCreatePage(clients);
+    await fillBundleAndValues(wrapper);
+    await wrapper.find('form').trigger('submit');
+
+    const confirm = wrapper.findAll('button').find((button) => button.text() === '确认创建');
+    await confirm?.trigger('click');
+    expect(confirm?.attributes('disabled')).toBeDefined();
+    await confirm?.trigger('click');
+    expect(clients.operations.createOperation).toHaveBeenCalledTimes(1);
+    resolveCreate?.(create(CreateOperationResponseSchema, {
+      operationId: 'op-created', state: 'preflight', preflightId: 'pf-created',
+    }));
+    await vi.waitFor(() => expect(router.currentRoute.value.params.operationId).toBe('op-created'));
+
+    const second = await mountCreatePage(clients);
+    await fillBundleAndValues(second.wrapper);
+    await second.wrapper.find('form').trigger('submit');
+    await second.wrapper.findAll('button').find((button) => button.text() === '确认创建')?.trigger('click');
+    await vi.waitFor(() => expect(second.wrapper.text()).toContain('查看进行中操作'));
+    await second.wrapper.find('.operation-page__existing').trigger('click');
+    await vi.waitFor(() => expect(second.router.currentRoute.value.params.operationId).toBe('op-active'));
+  });
+
+  it('stops polling when the operation detail page unmounts', async () => {
+    const clients: TestClients = {
+      operations: {
+        getOperation: vi.fn().mockResolvedValue(create(GetOperationResponseSchema, {
+          operation: create(OperationSchema, {
+            operationId: 'op-active',
+            operationType: 'INSTALL',
+            state: OperationStatus.PREFLIGHT,
+          }),
+        })),
+      } as unknown as Client<typeof OrchestratorService>,
+      bundles: emptyOptionsClients().bundles,
+    };
+    setOperationClientForTest(clients.operations, clients.bundles);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const store = usePreflightStore(pinia);
+    const stopPolling = vi.spyOn(store, 'stopPolling');
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations/:operationId', name: 'OperationDetail', component: OperationDetailPage },
+        { path: '/customers/:customerId/clusters/:clusterId/releases', name: 'ReleaseInventory', component: { template: '<div />' } },
+      ],
+    });
+    await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-active');
+    await router.isReady();
+    const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
+    await vi.waitFor(() => expect(store.polling).toBe(true));
+
+    wrapper.unmount();
+
+    expect(stopPolling).toHaveBeenCalled();
+    expect(store.polling).toBe(false);
+  });
+});

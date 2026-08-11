@@ -8,3 +8,12 @@ runtime_pull_preflight:
   cleanup_policy: always
   probe_command:
     - /bin/true
+
+agent:
+  mode: agent
+  customer_id: dev-customer-a
+  cluster_id: dev-customer-a-direct
+  operator_name: dev-customer-a-direct
+  enrollment_token_file: data/enrollment.token
+ca:
+  cert_path: data/gateway-ca.crt

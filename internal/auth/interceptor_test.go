@@ -16,6 +16,7 @@ import (
 	authv1 "github.com/ndzuki/release-manager/api/gen/auth/v1"
 	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
+	trustv1connect "github.com/ndzuki/release-manager/api/gen/trust/v1/trustv1connect"
 )
 
 func TestAuthInterceptor_HTTPContracts(t *testing.T) {
@@ -121,6 +122,32 @@ func TestMapProcedure(t *testing.T) {
 		assert.Equal(t, "release", object)
 		assert.Equal(t, "write", action)
 	})
+
+	trustProcedures := []struct {
+		name      string
+		procedure string
+		action    string
+	}{
+		{name: "get policy", procedure: trustv1connect.TrustServiceGetTrustPolicyProcedure, action: "read"},
+		{name: "create root", procedure: trustv1connect.TrustServiceCreateTrustRootProcedure, action: "write"},
+		{name: "rotate root", procedure: trustv1connect.TrustServiceRotateTrustRootProcedure, action: "write"},
+		{name: "end grace", procedure: trustv1connect.TrustServiceEndGraceProcedure, action: "write"},
+		{name: "retire root", procedure: trustv1connect.TrustServiceRetireTrustRootProcedure, action: "write"},
+		{name: "revoke root", procedure: trustv1connect.TrustServiceRevokeTrustRootProcedure, action: "write"},
+	}
+	for _, tt := range trustProcedures {
+		t.Run("trust "+tt.name, func(t *testing.T) {
+			object, action := mapProcedure(tt.procedure)
+			assert.Equal(t, "trust_root", object)
+			assert.Equal(t, tt.action, action)
+		})
+	}
+}
+
+func TestMapMethodToActionClassifiesValuesApprovalAsWrite(t *testing.T) {
+	assert.Equal(t, "write", mapMethodToAction("ApproveValuesRevision"))
+	assert.Equal(t, "write", mapMethodToAction("RejectValuesRevision"))
+	assert.Equal(t, "read", mapMethodToAction("ListSecrets"))
 }
 
 func reasonFromConnectError(t *testing.T, err error) string {

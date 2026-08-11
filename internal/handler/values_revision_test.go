@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/ndzuki/release-manager/internal/contracts"
 	"github.com/ndzuki/release-manager/internal/store"
 	"github.com/stretchr/testify/require"
 )
@@ -97,6 +101,95 @@ func mustUnmarshal[T any](t *testing.T, data []byte) T {
 	var value T
 	require.NoError(t, json.Unmarshal(data, &value))
 	return value
+}
+
+// failingValuesStore fails Create with the given error, inheriting the rest
+// of stubValuesStore behavior.
+type failingValuesStore struct {
+	stubValuesStore
+	createErr error
+}
+
+func (s *failingValuesStore) Create(_ context.Context, _ *store.ValuesRevision) error {
+	return s.createErr
+}
+
+func TestCreateValuesRevision_InternalErrorSanitized(t *testing.T) {
+	h := newValuesHandlerFromValuesStore(&failingValuesStore{
+		createErr: fmt.Errorf("create values revision: %w", errors.New("UNIQUE constraint failed: values_revisions.id")),
+	}, 0, slog.Default())
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	body := map[string]any{
+		"release_definition_id": uuid.New().String(),
+		"values":                "replicas: 3",
+	}
+	req := httptest.NewRequestWithContext(
+		contracts.WithRequestID(context.Background(), "req-values"),
+		http.MethodPost,
+		"/api/v1/values-revisions",
+		bytes.NewReader(mustMarshal(t, body)),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := mustUnmarshal[errorResponse](t, rec.Body.Bytes())
+	if resp.Code != "internal" {
+		t.Errorf("expected code internal, got %q", resp.Code)
+	}
+	if resp.Message != "internal error" {
+		t.Errorf("expected generic message, got %q", resp.Message)
+	}
+	if resp.RequestID != "req-values" {
+		t.Errorf("expected request_id req-values, got %q", resp.RequestID)
+	}
+	if rec.Header().Get(contracts.RequestIDHeader) != "req-values" {
+		t.Errorf("expected X-Request-ID header echo, got %q", rec.Header().Get(contracts.RequestIDHeader))
+	}
+	// AC-010-04: no SQL/internal text reaches the client.
+	if body := rec.Body.String(); strings.Contains(body, "UNIQUE") || strings.Contains(body, "values_revisions") {
+		t.Errorf("internal detail leaked to client: %s", body)
+	}
+}
+
+func TestCreateValuesRevision_BadRequestEnvelope(t *testing.T) {
+	h := newTestHandler()
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	req := httptest.NewRequestWithContext(
+		contracts.WithRequestID(context.Background(), "req-malformed"),
+		http.MethodPost,
+		"/api/v1/values-revisions",
+		bytes.NewReader([]byte("{not json")),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := mustUnmarshal[errorResponse](t, rec.Body.Bytes())
+	if resp.Code != "invalid_argument" {
+		t.Errorf("expected code invalid_argument, got %q", resp.Code)
+	}
+	if resp.Message != "invalid request body" {
+		t.Errorf("expected stable message, got %q", resp.Message)
+	}
+	if resp.RequestID != "req-malformed" {
+		t.Errorf("expected request_id req-malformed, got %q", resp.RequestID)
+	}
+	if body := rec.Body.String(); strings.Contains(body, "{not json") {
+		t.Errorf("raw decode detail leaked to client: %s", body)
+	}
 }
 
 func TestCreateValuesRevision_Success(t *testing.T) {

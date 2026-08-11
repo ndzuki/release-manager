@@ -84,7 +84,7 @@ func NewAuthInterceptor(
 				)
 				return nil, authorizationConnectError(err, enforcer.PolicyVersion())
 			}
-			if !usesHandlerAuthorization(procedure) {
+			if !usesHandlerAuthorization(procedure) && procedure != authv1connect.AuthServiceLogoutProcedure {
 				if err := enforcer.Enforce(claims.UserID, domain, object, action); err != nil {
 					logger.Warn(
 						"access denied",
@@ -278,6 +278,8 @@ func mapServiceToObject(service string) string {
 		return "binding"
 	case strings.Contains(service, "Auth"):
 		return "auth"
+	case strings.Contains(service, "Trust"):
+		return "trust_root"
 	case strings.Contains(service, "Orchestrator"):
 		return "release"
 	default:
@@ -295,12 +297,13 @@ func mapMethodToAction(method string) string {
 		strings.HasPrefix(method, "Remove"), strings.HasPrefix(method, "Revoke"),
 		strings.HasPrefix(method, "Delete"), strings.HasPrefix(method, "Change"),
 		strings.HasPrefix(method, "Emergency"), strings.HasPrefix(method, "Publish"),
-		strings.HasPrefix(method, "Rollback"), strings.HasPrefix(method, "Configure"),
-		strings.HasPrefix(method, "Sync"), strings.HasPrefix(method, "Logout"),
-		strings.HasPrefix(method, "Cancel"),
+		strings.HasPrefix(method, "Rollback"), strings.HasPrefix(method, "Rotate"),
+		strings.HasPrefix(method, "Configure"), strings.HasPrefix(method, "Sync"),
+		strings.HasPrefix(method, "Logout"), strings.HasPrefix(method, "Cancel"),
 		strings.HasPrefix(method, "Refresh"), strings.HasPrefix(method, "Authenticate"),
 		strings.HasPrefix(method, "Submit"), strings.HasPrefix(method, "Approve"),
-		strings.HasPrefix(method, "Reject"):
+		strings.HasPrefix(method, "Reject"), strings.HasPrefix(method, "End"),
+		strings.HasPrefix(method, "Retire"):
 		return "write"
 	default:
 		return ""

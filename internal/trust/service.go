@@ -15,6 +15,7 @@ import (
 	trustv1 "github.com/ndzuki/release-manager/api/gen/trust/v1"
 	trustv1connect "github.com/ndzuki/release-manager/api/gen/trust/v1/trustv1connect"
 	"github.com/ndzuki/release-manager/internal/audit"
+	authctx "github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -23,12 +24,15 @@ import (
 //nolint:revive // Name matches Connect convention TrustServiceHandler.
 type TrustService struct {
 	store  store.TrustRootStore
-	audit  *audit.Emitter
+	audit  audit.Sink
 	logger *slog.Logger
 }
 
 // NewTrustService creates a new trust management Connect handler.
-func NewTrustService(st store.TrustRootStore, emitter *audit.Emitter, logger *slog.Logger) *TrustService {
+func NewTrustService(st store.TrustRootStore, emitter audit.Sink, logger *slog.Logger) *TrustService {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &TrustService{store: st, audit: emitter, logger: logger}
 }
 
@@ -48,6 +52,11 @@ func (s *TrustService) CreateTrustRoot(
 	root.State = RootActive
 	root.ID = uuid.New().String()
 
+	// REQ-043 overlap_conflict: 同 environment 的 active/grace root 不得重复 key_id/issuer。
+	if err := s.checkOverlap(ctx, root.Environment, root.Issuer, root.KeyID, root.ID); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
 	// Create root and bump policy in sequence.
 	if err := s.store.Create(ctx, toStoreRoot(root)); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create trust root: %w", err))
@@ -63,7 +72,7 @@ func (s *TrustService) CreateTrustRoot(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("build policy: %w", err))
 	}
 
-	s.emitTrustAudit(msg.GetOperator(), "create_root", root.ID, root.Issuer, root.Environment)
+	s.emitTrustAudit(ctx, msg.GetOperator(), "create_root", root.ID, root.Issuer, root.Environment)
 
 	return connect.NewResponse(&trustv1.CreateTrustRootResponse{
 		Policy: policy,
@@ -97,13 +106,9 @@ func (s *TrustService) RotateTrustRoot(
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
-	if msg.GetGraceUntil() != nil {
-		newRoot.State = RootGrace
-		t := msg.GetGraceUntil().AsTime()
-		newRoot.GraceUntil = &t
-	} else {
-		newRoot.State = RootActive
-	}
+	// REQ-043 AC-043-01: 新 root 立即可用（active）；grace 窗口只作用于被轮换的旧 root，
+	// 窗口内新旧两把 key 均可通过验证。grace_until 属于旧 root 的过渡期语义。
+	newRoot.State = RootActive
 
 	// Check overlap: ensure new root's issuer doesn't conflict with any existing active/grace roots for the same env.
 	if err := s.checkOverlap(ctx, newRoot.Environment, newRoot.Issuer, newRoot.KeyID, newRoot.ID); err != nil {
@@ -139,7 +144,7 @@ func (s *TrustService) RotateTrustRoot(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("build policy: %w", err))
 	}
 
-	s.emitTrustAudit(msg.GetOperator(), "rotate_root", newRoot.ID, newRoot.Issuer, newRoot.Environment)
+	s.emitTrustAudit(ctx, msg.GetOperator(), "rotate_root", newRoot.ID, newRoot.Issuer, newRoot.Environment)
 
 	return connect.NewResponse(&trustv1.RotateTrustRootResponse{
 		Policy:  policy,
@@ -189,7 +194,7 @@ func (s *TrustService) EndGrace(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("build policy: %w", err))
 	}
 
-	s.emitTrustAudit(msg.GetOperator(), "end_grace", root.ID, root.Issuer, root.Environment)
+	s.emitTrustAudit(ctx, msg.GetOperator(), "end_grace", root.ID, root.Issuer, root.Environment)
 
 	return connect.NewResponse(&trustv1.EndGraceResponse{
 		Policy: policy,
@@ -237,7 +242,7 @@ func (s *TrustService) RetireTrustRoot(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("build policy: %w", err))
 	}
 
-	s.emitTrustAudit(msg.GetOperator(), "retire_root", root.ID, root.Issuer, root.Environment)
+	s.emitTrustAudit(ctx, msg.GetOperator(), "retire_root", root.ID, root.Issuer, root.Environment)
 
 	return connect.NewResponse(&trustv1.RetireTrustRootResponse{
 		Policy: policy,
@@ -290,7 +295,7 @@ func (s *TrustService) RevokeTrustRoot(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("build policy: %w", err))
 	}
 
-	s.emitTrustAudit(msg.GetOperator(), "revoke_root", root.ID, root.Issuer, root.Environment)
+	s.emitTrustAudit(ctx, msg.GetOperator(), "revoke_root", root.ID, root.Issuer, root.Environment)
 
 	return connect.NewResponse(&trustv1.RevokeTrustRootResponse{
 		Policy: policy,
@@ -487,24 +492,37 @@ func rootStateToProto(s RootState) trustv1.TrustRootState {
 	}
 }
 
-func (s *TrustService) emitTrustAudit(operator, action, rootID, issuer, env string) {
+func (s *TrustService) emitTrustAudit(ctx context.Context, fallbackOperator, action, rootID, issuer, env string) {
 	if s.audit == nil {
 		return
 	}
-	ev := &store.AuditEvent{
-		ID:             uuid.New().String(),
-		ActorKind:      store.AuditActorUser,
-		ActorID:        operator,
-		OrganizationID: "",
-		Role:           "platform_admin",
-		ResourceType:   "trust_root",
-		ResourceID:     rootID,
-		Action:         action,
-		Status:         "succeeded",
-		ChangeSummary:  fmt.Sprintf("trust_root %s succeeded issuer=%s env=%s", action, issuer, env),
-		Metadata:       map[string]string{"environment": env, "issuer": issuer},
-		CreatedAt:      time.Now().UTC(),
+	actorKind := store.AuditActorUser
+	actorID := fallbackOperator
+	organizationID := ""
+	role := "platform_admin"
+	if actor, ok := authctx.ActorFromContext(ctx); ok {
+		actorID = actor.UserID
+		organizationID = actor.OrganizationID
+		if actor.Service != "" {
+			actorKind = store.AuditActorService
+			actorID = actor.Service
+		}
+		if len(actor.Roles) > 0 {
+			role = actor.Roles[0]
+		}
 	}
+	ev := audit.NewEvent(
+		actorKind,
+		actorID,
+		organizationID,
+		role,
+		"trust_root",
+		rootID,
+		action,
+		"succeeded",
+		fmt.Sprintf("trust_root %s succeeded issuer=%s env=%s", action, issuer, env),
+		map[string]string{"environment": env, "issuer": issuer},
+	)
 	if !s.audit.Emit(ev).Accepted {
 		s.logger.Warn("trust audit event rejected", "action", action, "root_id", rootID)
 	}

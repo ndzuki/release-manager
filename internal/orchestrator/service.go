@@ -80,15 +80,8 @@ func (s *Service) CreateOperation(
 	req *connect.Request[orchestratorv1.CreateOperationRequest],
 ) (*connect.Response[orchestratorv1.CreateOperationResponse], error) {
 	msg := req.Msg
-
-	existing, err := s.findIdempotentOperation(ctx, msg)
-	if err != nil {
-		return nil, err
-	}
-	if existing != nil {
-		s.logger.Info("idempotent operation found", "key", msg.IdempotencyKey, "op_id", existing.ID)
-		return connect.NewResponse(s.toResponse(existing)), nil
-	}
+	operationScope := operationIdempotencyScope(msg.Actor.GetUserId(), msg.Actor.GetOrganization(), msg.ReleaseDefinitionId)
+	requestHash := hashRequest(msg)
 
 	opType := store.OperationType(msg.OperationType)
 	if !opType.Valid() {
@@ -190,32 +183,70 @@ func (s *Service) CreateOperation(
 			fmt.Errorf("expected_current_revision must be >= 1 for %s, got %d", opType, msg.ExpectedCurrentRevision))
 	}
 
-	// 4.5. Trust verification (REQ-012)
-	var verifyResult commonv1.VerificationResult
-	if msg.SignatureRef != nil && s.verifier != nil {
-		policy := trust.DefaultPolicy(s.targetEnv)
-		digest := fmt.Sprintf("%x", sha256.Sum256([]byte(msg.BundleId+"|"+def.ID)))
+	// 4.5. Trust verification (REQ-012).
+	policy := trust.DefaultPolicy(s.targetEnv)
+	bundle, err := s.store.Bundles().Get(ctx, msg.BundleId)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("bundle not found: %s", msg.BundleId))
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("bundle lookup: %w", err))
+	}
+	digest := bundle.DigestValue
+	if bundle.DigestAlg != "" {
+		digest = bundle.DigestAlg + ":" + bundle.DigestValue
+	}
 
-		out, err := s.verifier.Verify(ctx, trust.Input{
+	var out *trust.Output
+	if s.verifier == nil {
+		out = &trust.Output{
+			Status:  store.VerificationVerificationUnavailable,
+			Summary: "verification_unavailable: verifier is not configured",
+		}
+	} else {
+		out, err = s.verifier.Verify(ctx, trust.Input{
 			Digest:       digest,
 			SignatureRef: msg.SignatureRef,
 			Policy:       policy,
+			Environment:  s.targetEnv,
 		})
 		if err != nil {
-			if policy.FailClosed {
-				return nil, connect.NewError(connect.CodeUnavailable,
-					fmt.Errorf("verification_unavailable: %w", err))
+			out = &trust.Output{
+				Status:  store.VerificationVerificationUnavailable,
+				Summary: fmt.Sprintf("verification_unavailable: %v", err),
 			}
-			s.logger.Warn("verification backend unavailable, policy_warning", "err", err)
-			verifyResult = commonv1.VerificationResult_VERIFICATION_RESULT_VERIFICATION_UNAVAILABLE
-		} else {
-			verifyResult = trust.StatusToProto(out.Status)
-			if out.Status == store.VerificationRejected {
-				return nil, connect.NewError(connect.CodeFailedPrecondition,
-					fmt.Errorf("artifact trust rejected: %s", out.Summary))
+		} else if out == nil {
+			out = &trust.Output{
+				Status:  store.VerificationVerificationUnavailable,
+				Summary: "verification_unavailable: verifier returned no result",
 			}
 		}
 	}
+	if out.Status != store.VerificationTrusted {
+		s.emitTrustVerificationAudit(ctx, msg, digest, out)
+	}
+	responseStatus := out.Status
+	switch out.Status {
+	case store.VerificationTrusted:
+	case store.VerificationRejected:
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New(out.Summary))
+	case store.VerificationSignatureMissing:
+		if policy.FailClosed {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New(out.Summary))
+		}
+		responseStatus = store.VerificationPolicyWarning
+	case store.VerificationVerificationUnavailable:
+		if policy.FailClosed {
+			return nil, connect.NewError(connect.CodeUnavailable, errors.New(out.Summary))
+		}
+		responseStatus = store.VerificationPolicyWarning
+	default:
+		if policy.FailClosed {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("artifact trust rejected: %s", out.Summary))
+		}
+		responseStatus = store.VerificationPolicyWarning
+	}
+	verifyResult := trust.StatusToProto(responseStatus)
 
 	if opType == store.OperationInstall {
 		if msg.GetValuesRevisionId() == "" {
@@ -236,8 +267,8 @@ func (s *Service) CreateOperation(
 		}
 	}
 
-	// 5. Build operation request hash for idempotency
-	reqHash := hashRequest(msg)
+	// 5. Build operation request hash for idempotency.
+	reqHash := requestHash
 
 	// 6. Build domain Operation
 	now := time.Now().UTC()
@@ -246,7 +277,7 @@ func (s *Service) CreateOperation(
 		OperationType:       opType,
 		Status:              operation.InitialStatus(),
 		ReleaseDefinitionID: msg.ReleaseDefinitionId,
-		IdempotencyKey:      msg.IdempotencyKey,
+		IdempotencyKey:      operationIdempotencyKey(operationScope, msg.IdempotencyKey),
 		RequestHash:         reqHash,
 		BundleID:            msg.BundleId,
 		ValuesRevisionID:    msg.ValuesRevisionId,
@@ -260,17 +291,30 @@ func (s *Service) CreateOperation(
 		UpdatedAt: now,
 	}
 
-	// 7. Persist with atomic availability check (AC-062-01).
-	if err := s.store.Operations().CreateIfAvailable(ctx, op); err != nil {
-		if errors.Is(err, store.ErrReleaseBusy) {
+	// 7. Persist with atomic availability and idempotency checks.
+	createResult, err := s.store.Operations().CreateIdempotent(ctx, store.OperationCreateCommand{
+		Operation: op,
+		Idempotency: &store.IdempotencyRecord{
+			Scope: operationScope, Key: hashIdempotencyKey(msg.IdempotencyKey), RequestHash: reqHash,
+			ExpiresAt: now.Add(24 * time.Hour),
+		},
+		CheckAvailable: true,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrReleaseBusy):
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
-		}
-		if errors.Is(err, store.ErrDuplicateKey) {
+		case errors.Is(err, store.ErrIdempotencyConflict):
 			return nil, connect.NewError(connect.CodeAlreadyExists,
-				fmt.Errorf("idempotency_key %s already used", msg.IdempotencyKey))
+				errors.New("idempotency_conflict: key already used with different request"))
+		default:
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create operation: %w", err))
 		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create operation: %w", err))
+	}
+	op = createResult.Operation
+	if createResult.Replayed {
+		return connect.NewResponse(s.toResponse(op, nil)), nil
 	}
 
 	// 8. Trigger preflight transition and launch coordinator
@@ -301,36 +345,9 @@ func (s *Service) CreateOperation(
 		"definition", op.ReleaseDefinitionID,
 	)
 
-	return connect.NewResponse(&orchestratorv1.CreateOperationResponse{
-		OperationId:        op.ID,
-		State:              string(op.Status),
-		PreflightId:        op.ID,
-		AcceptedAt:         timestamppb.New(op.CreatedAt),
-		VerificationResult: verifyResult,
-	}), nil
+	return connect.NewResponse(s.toResponse(op, &verifyResult)), nil
 }
 
-func (s *Service) findIdempotentOperation(
-	ctx context.Context,
-	msg *orchestratorv1.CreateOperationRequest,
-) (*store.Operation, error) {
-	if msg.IdempotencyKey == "" {
-		return nil, nil
-	}
-
-	existing, err := s.store.Operations().GetByIdempotencyKey(ctx, msg.IdempotencyKey)
-	if err == store.ErrNotFound {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("idempotency lookup: %w", err))
-	}
-	if existing.RequestHash != hashRequest(msg) {
-		return nil, connect.NewError(connect.CodeAlreadyExists,
-			fmt.Errorf("idempotency_conflict: key %s already used with different request", msg.IdempotencyKey))
-	}
-	return existing, nil
-}
 
 // PublishRelease triggers the release pipeline for a definition (skeleton).
 func (s *Service) PublishRelease(
@@ -440,7 +457,7 @@ func (s *Service) WatchOperation(
 	if snapshot.RetainedFromSequence > 0 && req.Msg.GetAfterSequence() < snapshot.RetainedFromSequence-1 {
 		return operationCursorExpiredError(snapshot)
 	}
-	requestID := uuid.NewString()
+	requestID := requestIDOrNew(ctx)
 	if err := stream.Send(&orchestratorv1.WatchOperationResponse{
 		Payload: &orchestratorv1.WatchOperationResponse_Snapshot{Snapshot: toProtoOperationSnapshot(snapshot)},
 	}); err != nil {
@@ -714,7 +731,7 @@ func (s *Service) finishCancelWithTarget(
 	idempotencyKey string,
 	targetStatus store.OperationStatus,
 ) (*connect.Response[orchestratorv1.CancelOperationResponse], error) {
-	requestID := uuid.New().String()
+	requestID := requestIDOrNew(ctx)
 	scope := operationCancelScope(op.ID, actor.UserID)
 	reqHash := hashCancelRequest(msg.OperationId, int(msg.ExpectedStateVersion), msg.Reason)
 	keyHash := hashIdempotencyKey(idempotencyKey)
@@ -952,6 +969,33 @@ func hashIdempotencyKey(key string) string {
 	return hex.EncodeToString(hash[:])
 }
 
+func operationIdempotencyScope(userID, organizationID, definitionID string) string {
+	identity := organizationID + ":" + userID
+	if identity == ":" {
+		identity = "anonymous"
+	}
+	return identity + ":" + definitionID
+}
+
+func scopedOperationKey(scope, key string) string {
+	if key == "" {
+		return ""
+	}
+	return scope + ":" + hashIdempotencyKey(key)
+}
+
+// operationIdempotencyKey returns the value persisted in the globally UNIQUE
+// operations.idempotency_key column. When the client sends no key, idempotency
+// is disabled and the record is never written, so the column needs a unique
+// placeholder instead of the empty string shared by every keyless request
+// (AC-010-05).
+func operationIdempotencyKey(scope, key string) string {
+	if key == "" {
+		return scope + ":" + uuid.NewString()
+	}
+	return scopedOperationKey(scope, key)
+}
+
 func operationCancelScope(operationID, actorUserID string) string {
 	return operationID + ":" + actorUserID
 }
@@ -962,18 +1006,24 @@ func hashCancelRequest(operationID string, expectedStateVersion int, reason stri
 	return hex.EncodeToString(hash[:])
 }
 
-func (s *Service) toResponse(op *store.Operation) *orchestratorv1.CreateOperationResponse {
-	return &orchestratorv1.CreateOperationResponse{
+func (s *Service) toResponse(op *store.Operation, verificationResult *commonv1.VerificationResult) *orchestratorv1.CreateOperationResponse {
+	response := &orchestratorv1.CreateOperationResponse{
 		OperationId: op.ID,
 		State:       string(op.Status),
 		PreflightId: op.ID, // preflight_id = operation_id for initial phase
 		AcceptedAt:  timestamppb.New(op.CreatedAt),
 	}
+	if verificationResult != nil {
+		response.VerificationResult = *verificationResult
+	}
+	return response
 }
 
 // hashRequest computes a deterministic hash of the request for idempotency.
+// The signature reference is part of the hash so a replay with a different
+// signature for the same key conflicts (AC-010-02).
 func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
-	payload := fmt.Sprintf("%s|%s|%s|%s|%s|%d|%s|%s",
+	payload := fmt.Sprintf("%s|%s|%s|%s|%s|%d|%s|%s|%s|%s|%s",
 		req.OperationType,
 		req.BundleId,
 		req.ReleaseDefinitionId,
@@ -982,6 +1032,9 @@ func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
 		req.ExpectedCurrentRevision,
 		req.Actor.GetUserId(),
 		req.Actor.GetOrganization(),
+		req.SignatureRef.GetDigest(),
+		req.SignatureRef.GetSignature(),
+		req.SignatureRef.GetIssuer(),
 	)
 	h := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("%x", h)
@@ -1015,6 +1068,53 @@ func checkDefinitionOperable(def *store.ReleaseDefinition) error {
 		fmt.Errorf("release_definition_disabled: definition %s is %s", def.ID, def.Status))
 }
 
+func (s *Service) emitTrustVerificationAudit(
+	ctx context.Context,
+	msg *orchestratorv1.CreateOperationRequest,
+	digest string,
+	out *trust.Output,
+) {
+	if out == nil {
+		return
+	}
+	actor, ok := authctx.ActorFromContext(ctx)
+	actorKind := store.AuditActorUser
+	actorID := msg.GetActor().GetUserId()
+	organizationID := msg.GetActor().GetOrganization()
+	role := ""
+	if ok {
+		actorID = actor.UserID
+		organizationID = actor.OrganizationID
+		if actor.Service != "" {
+			actorKind = store.AuditActorService
+			actorID = actor.Service
+		}
+		if len(actor.Roles) > 0 {
+			role = actor.Roles[0]
+		}
+	}
+	policyVersion := trust.DefaultPolicy(s.targetEnv).PolicyVersion
+	if out.Record != nil && out.Record.PolicyVersion != "" {
+		policyVersion = out.Record.PolicyVersion
+	}
+	s.emitAudit(audit.NewEvent(
+		actorKind,
+		actorID,
+		organizationID,
+		role,
+		"release_bundle",
+		msg.GetBundleId(),
+		"verify_trust",
+		string(out.Status),
+		out.Summary,
+		map[string]string{
+			"digest":         digest,
+			"policy_version": policyVersion,
+			"result":         string(out.Status),
+		},
+	))
+}
+
 // emitAudit emits an audit event through the configured sink, if any.
 func (s *Service) emitAudit(ev *store.AuditEvent) {
 	if s.auditEmitter == nil {
@@ -1029,3 +1129,9 @@ func (s *Service) emitAudit(ev *store.AuditEvent) {
 		)
 	}
 }
+
+// ListOperations returns operations for a release definition.
+func (s *Service) ListOperations(_ context.Context, _ *connect.Request[orchestratorv1.ListOperationsRequest]) (*connect.Response[orchestratorv1.ListOperationsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ListOperations is not implemented"))
+}
+

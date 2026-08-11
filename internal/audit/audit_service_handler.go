@@ -12,6 +12,7 @@ import (
 	auditv1 "github.com/ndzuki/release-manager/api/gen/audit/v1"
 	auditv1connect "github.com/ndzuki/release-manager/api/gen/audit/v1/auditv1connect"
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
+	"github.com/ndzuki/release-manager/internal/contracts"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -75,12 +76,10 @@ func (h *auditServiceHandler) QueryAuditEvents(ctx context.Context, req *connect
 		}
 	}
 
-	limit := 100
+	limit := int(contracts.NormalizePageSize(0))
 	cursor := ""
 	if p := msg.GetPagination(); p != nil {
-		if p.GetPageSize() > 0 && int(p.GetPageSize()) < limit {
-			limit = int(p.GetPageSize())
-		}
+		limit = int(contracts.NormalizePageSize(p.GetPageSize()))
 		cursor = p.GetPageToken()
 	}
 

@@ -1,0 +1,492 @@
+package trust
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"connectrpc.com/connect"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	trustv1 "github.com/ndzuki/release-manager/api/gen/trust/v1"
+	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
+	"github.com/ndzuki/release-manager/internal/store"
+	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
+)
+
+type ed25519Resolver struct {
+	mu      sync.Mutex
+	roots   []*store.TrustRoot
+	meta    *store.TrustPolicyMeta
+	err     error
+	resolve int
+}
+
+func (r *ed25519Resolver) ResolveActive(context.Context, string, time.Time) ([]*store.TrustRoot, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resolve++
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.roots, nil
+}
+
+func (r *ed25519Resolver) GetPolicyMeta(context.Context, string) (*store.TrustPolicyMeta, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.meta, nil
+}
+
+func (r *ed25519Resolver) resolveCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.resolve
+}
+
+func TestEd25519Verifier_VerifiesTrustedSignature(t *testing.T) {
+	digest := "sha256:" + fmt.Sprintf("%064x", 1)
+	publicKey, privateKey := generateEd25519KeyPair(t)
+	resolver := &ed25519Resolver{
+		roots: []*store.TrustRoot{{
+			ID: "root-1", Environment: "staging", KeyID: "key-1", PublicKeyPEM: publicKey,
+			Issuer: "release-manager-ci", SubjectPattern: "repo:release-manager:", State: store.TrustRootActive,
+		}},
+		meta: &store.TrustPolicyMeta{Environment: "staging", Version: 7, RevocationEpoch: 3},
+	}
+	verifier := NewEd25519Verifier(newStubStore(), resolver, time.Second, logger())
+
+	out, err := verifier.Verify(t.Context(), Input{
+		Digest: digest,
+		SignatureRef: &commonv1.SignatureRef{
+			Digest: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(digest))),
+			Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
+		},
+		Policy: DefaultPolicy("staging"), Environment: "staging",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, store.VerificationTrusted, out.Status)
+	assert.Equal(t, "root-1", out.RootID)
+	assert.Equal(t, "key-1", out.KeyID)
+	assert.Equal(t, int64(3), out.RevocationEpoch)
+	require.NotNil(t, out.Record)
+	assert.Equal(t, "7", out.Record.PolicyVersion)
+}
+
+func TestEd25519Verifier_ReusesTrustedRecordForSameSignatureIdentity(t *testing.T) {
+	digest := "sha256:" + fmt.Sprintf("%064x", 11)
+	publicKey, privateKey := generateEd25519KeyPair(t)
+	resolver := &ed25519Resolver{
+		roots: []*store.TrustRoot{{
+			ID: "root-cache", Environment: "staging", KeyID: "key-cache", PublicKeyPEM: publicKey,
+			Issuer: "release-manager-ci", State: store.TrustRootActive,
+		}},
+		meta: &store.TrustPolicyMeta{Environment: "staging", Version: 5, RevocationEpoch: 2},
+	}
+	verifier := NewEd25519Verifier(newStubStore(), resolver, time.Second, logger())
+	input := Input{
+		Digest: digest,
+		SignatureRef: &commonv1.SignatureRef{
+			Digest: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(digest))),
+			Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
+		},
+		Policy: DefaultPolicy("staging"), Environment: "staging",
+	}
+
+	first, err := verifier.Verify(t.Context(), input)
+	require.NoError(t, err)
+	second, err := verifier.Verify(t.Context(), input)
+	require.NoError(t, err)
+
+	assert.Equal(t, store.VerificationTrusted, first.Status)
+	assert.Equal(t, store.VerificationTrusted, second.Status)
+	assert.Equal(t, 1, resolver.resolveCount())
+	assert.Equal(t, first.Record.ID, second.Record.ID)
+}
+
+func TestEd25519Verifier_DoesNotReuseTrustedRecordForInvalidSignature(t *testing.T) {
+	digest := "sha256:" + fmt.Sprintf("%064x", 14)
+	publicKey, privateKey := generateEd25519KeyPair(t)
+	_, wrongPrivateKey := generateEd25519KeyPair(t)
+	resolver := &ed25519Resolver{
+		roots: []*store.TrustRoot{{
+			ID: "root-cache-signature", Environment: "staging", KeyID: "key-cache-signature", PublicKeyPEM: publicKey,
+			Issuer: "release-manager-ci", State: store.TrustRootActive,
+		}},
+		meta: &store.TrustPolicyMeta{Environment: "staging", Version: 5, RevocationEpoch: 2},
+	}
+	verifier := NewEd25519Verifier(newStubStore(), resolver, time.Second, logger())
+	input := Input{
+		Digest: digest,
+		SignatureRef: &commonv1.SignatureRef{
+			Digest: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(digest))),
+			Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
+		},
+		Policy: DefaultPolicy("staging"), Environment: "staging",
+	}
+
+	first, err := verifier.Verify(t.Context(), input)
+	require.NoError(t, err)
+	assert.Equal(t, store.VerificationTrusted, first.Status)
+
+	input.SignatureRef.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(wrongPrivateKey, []byte(digest)))
+	second, err := verifier.Verify(t.Context(), input)
+	require.NoError(t, err)
+
+	assert.Equal(t, store.VerificationRejected, second.Status)
+	assert.Contains(t, second.Summary, "signature_invalid")
+	assert.Equal(t, 2, resolver.resolveCount())
+}
+
+func TestEd25519Verifier_DoesNotReuseRecordForDifferentSignatureIdentity(t *testing.T) {
+	digest := "sha256:" + fmt.Sprintf("%064x", 12)
+	publicKey, privateKey := generateEd25519KeyPair(t)
+	resolver := &ed25519Resolver{
+		roots: []*store.TrustRoot{{
+			ID: "root-identity", Environment: "staging", KeyID: "key-identity", PublicKeyPEM: publicKey,
+			Issuer: "release-manager-ci", SubjectPattern: "repo:release-manager:", State: store.TrustRootActive,
+		}},
+		meta: &store.TrustPolicyMeta{Environment: "staging", Version: 6},
+	}
+	verifier := NewEd25519Verifier(newStubStore(), resolver, time.Second, logger())
+	trustedInput := Input{
+		Digest: digest,
+		SignatureRef: &commonv1.SignatureRef{
+			Digest: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(digest))),
+			Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
+		},
+		Policy: DefaultPolicy("staging"), Environment: "staging",
+	}
+	first, err := verifier.Verify(t.Context(), trustedInput)
+	require.NoError(t, err)
+	assert.Equal(t, store.VerificationTrusted, first.Status)
+
+	differentIdentity := trustedInput
+	differentIdentity.SignatureRef = &commonv1.SignatureRef{
+		Digest: digest, Signature: trustedInput.SignatureRef.GetSignature(),
+		Issuer: "release-manager-ci", Subject: "repo:another:ref:refs/heads/main",
+	}
+	second, err := verifier.Verify(t.Context(), differentIdentity)
+	require.NoError(t, err)
+
+	assert.Equal(t, store.VerificationRejected, second.Status)
+	assert.Contains(t, second.Summary, "untrusted_issuer")
+	assert.Equal(t, 2, resolver.resolveCount())
+}
+
+func TestEd25519Verifier_DefaultsMissingPolicyVersionToOne(t *testing.T) {
+	digest := "sha256:" + fmt.Sprintf("%064x", 13)
+	publicKey, privateKey := generateEd25519KeyPair(t)
+	resolver := &ed25519Resolver{
+		roots: []*store.TrustRoot{{
+			ID: "root-default-version", Environment: "staging", KeyID: "key-default-version", PublicKeyPEM: publicKey,
+			Issuer: "release-manager-ci", State: store.TrustRootActive,
+		}},
+		meta: &store.TrustPolicyMeta{Environment: "staging"},
+	}
+	verifier := NewEd25519Verifier(newStubStore(), resolver, time.Second, logger())
+
+	out, err := verifier.Verify(t.Context(), Input{
+		Digest: digest,
+		SignatureRef: &commonv1.SignatureRef{
+			Digest: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(digest))),
+			Issuer: "release-manager-ci",
+		},
+		Policy: DefaultPolicy("staging"), Environment: "staging",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, out.Record)
+	assert.Equal(t, "1", out.Record.PolicyVersion)
+}
+
+func TestEd25519Verifier_RejectsInvalidSignatureAndSubject(t *testing.T) {
+	digest := "sha256:" + fmt.Sprintf("%064x", 2)
+	publicKey, _ := generateEd25519KeyPair(t)
+	_, otherPrivateKey := generateEd25519KeyPair(t)
+	resolver := &ed25519Resolver{
+		roots: []*store.TrustRoot{{
+			ID: "root-1", Environment: "staging", KeyID: "key-1", PublicKeyPEM: publicKey,
+			Issuer: "release-manager-ci", SubjectPattern: "repo:release-manager:", State: store.TrustRootActive,
+		}},
+		meta: &store.TrustPolicyMeta{Environment: "staging", Version: 1},
+	}
+	tests := []struct {
+		name      string
+		signature string
+		subject   string
+		wantCode  string
+	}{
+		{
+			name: "signature from another key", signature: base64.StdEncoding.EncodeToString(ed25519.Sign(otherPrivateKey, []byte(digest))),
+			subject: "repo:release-manager:ref:refs/heads/main", wantCode: "signature_invalid",
+		},
+		{
+			name: "subject outside root constraint", signature: base64.StdEncoding.EncodeToString(ed25519.Sign(otherPrivateKey, []byte(digest))),
+			subject: "repo:another:ref:refs/heads/main", wantCode: "untrusted_issuer",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			verifier := NewEd25519Verifier(newStubStore(), resolver, time.Second, logger())
+			out, err := verifier.Verify(t.Context(), Input{
+				Digest: digest,
+				SignatureRef: &commonv1.SignatureRef{
+					Digest: digest, Signature: tt.signature, Issuer: "release-manager-ci", Subject: tt.subject,
+				},
+				Policy: DefaultPolicy("staging"), Environment: "staging",
+			})
+			require.NoError(t, err)
+			assert.Equal(t, store.VerificationRejected, out.Status)
+			assert.Contains(t, out.Summary, tt.wantCode)
+		})
+	}
+}
+
+func TestEd25519Verifier_ReturnsUnavailableWhenResolverFails(t *testing.T) {
+	resolver := &ed25519Resolver{err: errors.New("database offline")}
+	verifier := NewEd25519Verifier(newStubStore(), resolver, 50*time.Millisecond, logger())
+
+	out, err := verifier.Verify(t.Context(), Input{
+		Digest: "sha256:" + fmt.Sprintf("%064x", 3),
+		SignatureRef: &commonv1.SignatureRef{
+			Digest: "sha256:" + fmt.Sprintf("%064x", 3), Signature: base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize)),
+			Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
+		},
+		Policy: DefaultPolicy("production"), Environment: "production",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, store.VerificationVerificationUnavailable, out.Status)
+	assert.Contains(t, out.Summary, "verification_unavailable")
+}
+
+func TestEd25519Verifier_TimesOutPolicyResolution(t *testing.T) {
+	resolver := blockingEd25519Resolver{}
+	verifier := NewEd25519Verifier(newStubStore(), resolver, 10*time.Millisecond, logger())
+	started := time.Now()
+
+	out, err := verifier.Verify(t.Context(), Input{
+		Digest: "sha256:" + fmt.Sprintf("%064x", 15),
+		Policy: DefaultPolicy("production"), Environment: "production",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, store.VerificationVerificationUnavailable, out.Status)
+	assert.Contains(t, out.Summary, "verification_unavailable")
+	assert.Less(t, time.Since(started), time.Second)
+}
+
+type blockingEd25519Resolver struct{}
+
+func (blockingEd25519Resolver) ResolveActive(context.Context, string, time.Time) ([]*store.TrustRoot, error) {
+	return nil, nil
+}
+
+func (blockingEd25519Resolver) GetPolicyMeta(ctx context.Context, _ string) (*store.TrustPolicyMeta, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestEd25519Verifier_InvalidatesCachedTrustedRecordAfterRevocationEpochBump(t *testing.T) {
+	st := newStubStore()
+	digest := "sha256:" + fmt.Sprintf("%064x", 4)
+	ref := &commonv1.SignatureRef{
+		Digest: digest, Signature: base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize)),
+		Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
+	}
+	require.NoError(t, st.Create(t.Context(), &store.VerificationRecord{
+		ArtifactDigest: digest, PolicyVersion: "9", SignatureIdentity: signatureIdentity(ref),
+		Status: store.VerificationTrusted, RevocationEpoch: 1,
+	}))
+	resolver := &ed25519Resolver{
+		roots: nil,
+		meta:  &store.TrustPolicyMeta{Environment: "production", Version: 9, RevocationEpoch: 2},
+	}
+	verifier := NewEd25519Verifier(st, resolver, time.Second, logger())
+
+	out, err := verifier.Verify(t.Context(), Input{
+		Digest: digest, SignatureRef: ref,
+		Policy: DefaultPolicy("production"), Environment: "production",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, store.VerificationRejected, out.Status)
+	assert.Contains(t, out.Summary, "untrusted_issuer")
+	assert.Equal(t, 1, resolver.resolveCount())
+}
+
+func generateEd25519KeyPair(t *testing.T) (string, ed25519.PrivateKey) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	der, err := x509.MarshalPKIXPublicKey(publicKey)
+	require.NoError(t, err)
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})), privateKey
+}
+
+func TestEd25519Verifier_ExpiredGraceRootNotTrusted(t *testing.T) {
+	// 真实链路：TrustService 创建/轮换 root → StoreResolver → Ed25519Verifier。
+	// 锁定反例：grace 窗口过期后旧 key 必须 rejected（REQ-043 AC-043-02 / AC-074-03 反例）。
+	ctx := t.Context()
+	st, err := sqlitestore.Open(t.TempDir() + "/grace.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+
+	service := NewTrustService(st.TrustRoots(), nil, logger())
+	oldPublicKeyPEM, oldPrivateKey := generateEd25519KeyPair(t)
+	newPublicKeyPEM, _ := generateEd25519KeyPair(t)
+	createResp, err := service.CreateTrustRoot(ctx, connect.NewRequest(&trustv1.CreateTrustRootRequest{
+		Environment: "staging", KeyId: "key-old", PublicKeyPem: oldPublicKeyPEM, Issuer: "release-manager-ci",
+	}))
+	require.NoError(t, err)
+	oldRootID := createResp.Msg.GetRoot().GetId()
+	_, err = service.RotateTrustRoot(ctx, connect.NewRequest(&trustv1.RotateTrustRootRequest{
+		Environment: "staging", OldRootId: oldRootID,
+		KeyId: "key-new", PublicKeyPem: newPublicKeyPEM, Issuer: "backup-ci",
+		GraceUntil: timestamppb.New(time.Now().UTC().Add(time.Hour)),
+	}))
+	require.NoError(t, err)
+
+	verifier := NewEd25519Verifier(st.Verifications(), NewStoreResolver(st.TrustRoots()), time.Second, logger())
+	digest := "sha256:" + fmt.Sprintf("%064x", 77)
+	input := Input{
+		Digest: digest,
+		SignatureRef: &commonv1.SignatureRef{
+			Digest: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(oldPrivateKey, []byte(digest))),
+			Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
+		},
+		Policy: DefaultPolicy("staging"), Environment: "staging",
+	}
+
+	// grace 窗口内：旧 key 仍受信。
+	withinGrace, err := verifier.Verify(ctx, input)
+	require.NoError(t, err)
+	assert.Equal(t, store.VerificationTrusted, withinGrace.Status)
+
+	// 时间推进：grace 窗口关闭（模拟未调用 EndGrace、仅时间流逝）。
+	old, err := st.TrustRoots().Get(ctx, oldRootID)
+	require.NoError(t, err)
+	expired := time.Now().UTC().Add(-time.Minute)
+	old.GraceUntil = &expired
+	require.NoError(t, st.TrustRoots().Update(ctx, old))
+
+	// 新 digest 无缓存：过期 grace root 不再参与验证 → untrusted_issuer rejected。
+	newDigest := "sha256:" + fmt.Sprintf("%064x", 78)
+	input.Digest = newDigest
+	input.SignatureRef = &commonv1.SignatureRef{
+		Digest: newDigest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(oldPrivateKey, []byte(newDigest))),
+		Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
+	}
+	afterGrace, err := verifier.Verify(ctx, input)
+	require.NoError(t, err)
+	assert.Equal(t, store.VerificationRejected, afterGrace.Status)
+	assert.Contains(t, afterGrace.Summary, "untrusted_issuer")
+}
+
+func TestTrustService_RotateMakesNewRootActive(t *testing.T) {
+	// REQ-043 AC-043-01：rotate 后新 root 立即可用（active、无 grace 窗口），旧 root 进入 grace，
+	// 窗口内新旧两把 key 对同一制品均通过验证。
+	ctx := t.Context()
+	st, err := sqlitestore.Open(t.TempDir() + "/rotate.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+	service := NewTrustService(st.TrustRoots(), nil, logger())
+
+	oldPub, oldPriv := generateEd25519KeyPair(t)
+	newPub, newPriv := generateEd25519KeyPair(t)
+	createResp, err := service.CreateTrustRoot(ctx, connect.NewRequest(&trustv1.CreateTrustRootRequest{
+		Environment: "staging", KeyId: "key-old", PublicKeyPem: oldPub, Issuer: "release-manager-ci",
+	}))
+	require.NoError(t, err)
+	oldRootID := createResp.Msg.GetRoot().GetId()
+
+	graceUntil := time.Now().UTC().Add(time.Hour)
+	rotateResp, err := service.RotateTrustRoot(ctx, connect.NewRequest(&trustv1.RotateTrustRootRequest{
+		Environment: "staging", OldRootId: oldRootID,
+		KeyId: "key-new", PublicKeyPem: newPub, Issuer: "backup-ci",
+		GraceUntil: timestamppb.New(graceUntil),
+	}))
+	require.NoError(t, err)
+
+	// 新 root active 立即可用；旧 root 进入 grace，窗口与请求一致。
+	newRoot := rotateResp.Msg.GetNewRoot()
+	assert.Equal(t, trustv1.TrustRootState_TRUST_ROOT_STATE_ACTIVE, newRoot.GetState())
+	assert.Nil(t, newRoot.GetGraceUntil())
+	oldRoot := rotateResp.Msg.GetOldRoot()
+	assert.Equal(t, trustv1.TrustRootState_TRUST_ROOT_STATE_GRACE, oldRoot.GetState())
+	require.NotNil(t, oldRoot.GetGraceUntil())
+	assert.WithinDuration(t, graceUntil, oldRoot.GetGraceUntil().AsTime(), time.Second)
+
+	// 同一 digest：旧 key（grace 窗口内）与新 key（active）均 trusted。
+	digest := "sha256:" + fmt.Sprintf("%064x", 42)
+	verifier := NewEd25519Verifier(st.Verifications(), NewStoreResolver(st.TrustRoots()), time.Second, logger())
+	for _, tc := range []struct {
+		name   string
+		key    ed25519.PrivateKey
+		issuer string
+	}{
+		{name: "old key within grace", key: oldPriv, issuer: "release-manager-ci"},
+		{name: "new key active", key: newPriv, issuer: "backup-ci"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := verifier.Verify(ctx, Input{
+				Digest: digest,
+				SignatureRef: &commonv1.SignatureRef{
+					Digest: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(tc.key, []byte(digest))),
+					Issuer: tc.issuer, Subject: "repo:release-manager:ref:refs/heads/main",
+				},
+				Policy: DefaultPolicy("staging"), Environment: "staging",
+			})
+			require.NoError(t, err)
+			assert.Equal(t, store.VerificationTrusted, out.Status)
+		})
+	}
+}
+
+func TestTrustService_CreateRejectsDuplicateKeyOrIssuer(t *testing.T) {
+	// REQ-043 overlap_conflict：同 environment 的 active/grace root 重复 key_id 或 issuer → InvalidArgument。
+	ctx := t.Context()
+	st, err := sqlitestore.Open(t.TempDir() + "/overlap.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+	service := NewTrustService(st.TrustRoots(), nil, logger())
+
+	pub, _ := generateEd25519KeyPair(t)
+	create := func(env, keyID, issuer string) error {
+		_, err := service.CreateTrustRoot(ctx, connect.NewRequest(&trustv1.CreateTrustRootRequest{
+			Environment: env, KeyId: keyID, PublicKeyPem: pub, Issuer: issuer,
+		}))
+		return err
+	}
+	require.NoError(t, create("staging", "key-a", "issuer-a"))
+
+	// 重复 key_id → overlap_conflict。
+	err = create("staging", "key-a", "issuer-b")
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.ErrorContains(t, err, "overlap_conflict")
+
+	// 重复 issuer → overlap_conflict。
+	err = create("staging", "key-b", "issuer-a")
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.ErrorContains(t, err, "overlap_conflict")
+
+	// 不同 environment 允许重复 key/issuer（隔离）。
+	require.NoError(t, create("production", "key-a", "issuer-a"))
+}

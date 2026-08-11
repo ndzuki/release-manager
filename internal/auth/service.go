@@ -2,12 +2,12 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"connectrpc.com/connect"
-
 	authv1 "github.com/ndzuki/release-manager/api/gen/auth/v1"
 	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
 	"github.com/ndzuki/release-manager/internal/store"
@@ -33,18 +33,20 @@ type AuthService struct {
 	jwt            *JWTManager
 	limiter        *RateLimiter
 	logger         *slog.Logger
+	enforcer       *Enforcer
 	browser        BrowserSessionConfig
 	browserEnabled bool
 }
 
-// NewAuthService creates a new AuthService.
-func NewAuthService(st store.Store, jwt *JWTManager, limiter *RateLimiter, logger *slog.Logger, browser ...BrowserSessionConfig) *AuthService {
+// NewAuthService creates a new AuthService. enforcer may be nil in unit tests;
+// when set, membership mutations trigger a Casbin policy refresh.
+func NewAuthService(st store.Store, jwt *JWTManager, limiter *RateLimiter, logger *slog.Logger, enforcer *Enforcer, browser ...BrowserSessionConfig) *AuthService {
 	config := BrowserSessionConfig{SecureCookies: true}
 	enabled := len(browser) > 0
 	if enabled {
 		config = browser[0]
 	}
-	return &AuthService{store: st, jwt: jwt, limiter: limiter, logger: logger, browser: config, browserEnabled: enabled}
+	return &AuthService{store: st, jwt: jwt, limiter: limiter, logger: logger, enforcer: enforcer, browser: config, browserEnabled: enabled}
 }
 
 // Login authenticates a user with username + password, returning tokens.
@@ -97,7 +99,7 @@ func (s *AuthService) Login(
 	}
 	if err := s.store.AuthSessions().Create(ctx, ss); err != nil {
 		s.logger.Error("create session failed", "error", err)
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("session creation failed"))
+		return nil, mapStoreError(err, "session creation failed")
 	}
 
 	s.logger.Info("user logged in", "user_id", u.ID)
@@ -120,7 +122,7 @@ func (s *AuthService) Logout(
 			return nil, err
 		}
 		if err := s.revokeRefreshCookie(ctx, req.Header()); err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("logout failed: %w", err))
+			return nil, mapStoreError(err, "logout failed")
 		}
 		response := connect.NewResponse(&authv1.LogoutResponse{})
 		setResponseCookies(response.Header(), s.clearBrowserCookies())
@@ -131,12 +133,14 @@ func (s *AuthService) Logout(
 		refreshHash := s.jwt.HashRefreshToken(rt)
 		ss, err := s.store.AuthSessions().GetByRefreshHash(ctx, refreshHash)
 		if err != nil {
-			// Token not found — idempotent logout (nilerr: intentional).
-			return connect.NewResponse(&authv1.LogoutResponse{}), nil //nolint:nilerr // Logout is idempotent for unknown refresh tokens.
+			if errors.Is(err, store.ErrNotFound) {
+				return connect.NewResponse(&authv1.LogoutResponse{}), nil
+			}
+			return nil, mapStoreError(err, "logout failed")
 		}
 		if err := s.store.AuthSessions().RevokeFamily(ctx, ss.TokenFamily); err != nil {
 			s.logger.Error("revoke family failed", "error", err)
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("logout failed"))
+			return nil, mapStoreError(err, "logout failed")
 		}
 		return connect.NewResponse(&authv1.LogoutResponse{}), nil
 	}
@@ -148,7 +152,7 @@ func (s *AuthService) Logout(
 	}
 	if err := s.store.AuthSessions().RevokeByUserID(ctx, userID); err != nil {
 		s.logger.Error("revoke by user failed", "error", err)
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("logout failed"))
+		return nil, mapStoreError(err, "logout failed")
 	}
 	return connect.NewResponse(&authv1.LogoutResponse{}), nil
 }
@@ -161,41 +165,15 @@ func (s *AuthService) RefreshToken(
 	if s.browserEnabled {
 		return s.refreshBrowserSession(ctx, req)
 	}
-	msg := req.Msg
-	refreshHash := s.jwt.HashRefreshToken(msg.GetRefreshToken())
-
-	ss, err := s.store.AuthSessions().GetByRefreshHash(ctx, refreshHash)
+	ss, err := s.refreshSessionForRotation(ctx, s.jwt.HashRefreshToken(req.Msg.GetRefreshToken()))
 	if err != nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid refresh token"))
-	}
-
-	user, err := s.store.Users().Get(ctx, ss.UserID)
-	if err != nil || user.Status != store.UserActive {
-		if revokeErr := s.store.AuthSessions().RevokeFamily(ctx, ss.TokenFamily); revokeErr != nil {
-			s.logger.Error("revoke disabled user session failed", "error", revokeErr)
-		}
-		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid refresh token"))
-	}
-
-	if ss.Revoked {
-		// AC-025-02: Refresh token replay — revoke the entire family.
-		if err := s.store.AuthSessions().RevokeFamily(ctx, ss.TokenFamily); err != nil {
-			s.logger.Error("revoke replayed family failed", "error", err)
-		}
-		s.logger.Warn("refresh token replay detected", "user_id", ss.UserID, "family", ss.TokenFamily)
-		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("refresh token has been revoked"))
-	}
-	if !ss.ExpiresAt.After(time.Now().UTC()) {
-		if err := s.store.AuthSessions().RevokeFamily(ctx, ss.TokenFamily); err != nil {
-			s.logger.Error("revoke expired family failed", "error", err)
-		}
-		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("refresh token has expired"))
+		return nil, err
 	}
 
 	// Revoke the existing token family (rotation).
 	if err := s.store.AuthSessions().RevokeFamily(ctx, ss.TokenFamily); err != nil {
 		s.logger.Error("revoke old family failed", "error", err)
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("token rotation failed"))
+		return nil, mapStoreError(err, "token rotation failed")
 	}
 
 	orgID, roles := s.userAuthorizationContext(ctx, ss.UserID)
@@ -221,7 +199,7 @@ func (s *AuthService) RefreshToken(
 	}
 	if err := s.store.AuthSessions().Create(ctx, newSS); err != nil {
 		s.logger.Error("create new session failed", "error", err)
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("session creation failed"))
+		return nil, mapStoreError(err, "session creation failed")
 	}
 
 	return connect.NewResponse(&authv1.RefreshTokenResponse{
@@ -230,6 +208,48 @@ func (s *AuthService) RefreshToken(
 		ExpiresAt:    accessExp.Unix(),
 		TokenType:    "Bearer",
 	}), nil
+}
+func (s *AuthService) refreshSessionForRotation(ctx context.Context, refreshHash string) (*store.AuthSession, error) {
+	ss, err := s.store.AuthSessions().GetByRefreshHash(ctx, refreshHash)
+	if err != nil {
+		if errors.Is(err, store.ErrUnavailable) {
+			return nil, mapStoreError(err, "invalid refresh token")
+		}
+		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid refresh token"))
+	}
+
+	if ss.Revoked {
+		// AC-025-02: Refresh token replay — revoke the entire family.
+		if err := s.store.AuthSessions().RevokeFamily(ctx, ss.TokenFamily); err != nil {
+			s.logger.Error("revoke replayed family failed", "error", err)
+			if errors.Is(err, store.ErrUnavailable) {
+				return nil, mapStoreError(err, "token rotation failed")
+			}
+		}
+		s.logger.Warn("refresh token replay detected", "user_id", ss.UserID, "family", ss.TokenFamily)
+		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("refresh token has been revoked"))
+	}
+	if !ss.ExpiresAt.After(time.Now().UTC()) {
+		if err := s.store.AuthSessions().RevokeFamily(ctx, ss.TokenFamily); err != nil {
+			s.logger.Error("revoke expired family failed", "error", err)
+			if errors.Is(err, store.ErrUnavailable) {
+				return nil, mapStoreError(err, "token rotation failed")
+			}
+		}
+		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("refresh token has expired"))
+	}
+
+	user, err := s.store.Users().Get(ctx, ss.UserID)
+	if err == nil && user.Status == store.UserActive {
+		return ss, nil
+	}
+	if revokeErr := s.store.AuthSessions().RevokeFamily(ctx, ss.TokenFamily); revokeErr != nil {
+		s.logger.Error("revoke disabled user session failed", "error", revokeErr)
+		if errors.Is(revokeErr, store.ErrUnavailable) {
+			return nil, mapStoreError(revokeErr, "token rotation failed")
+		}
+	}
+	return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid refresh token"))
 }
 
 // ValidateToken validates an access token and returns the associated principal.
@@ -286,19 +306,19 @@ func (s *AuthService) ChangePassword(
 	// AC-025-03: Password changes fail closed if session revocation fails.
 	if err := s.store.AuthSessions().RevokeByUserID(ctx, userID); err != nil {
 		s.logger.Error("revoke sessions after password change failed", "error", err)
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("revoke sessions failed"))
+		return nil, mapStoreError(err, "revoke sessions failed")
 	}
 
 	return connect.NewResponse(&authv1.ChangePasswordResponse{}), nil
 }
 
-// userAuthorizationContext returns the user's primary organization and unique roles.
-func (s *AuthService) userAuthorizationContext(ctx context.Context, userID string) (orgID string, roles []string) {
-	members, err := s.store.OrgMembers().ListByUser(ctx, userID)
-	if err != nil || len(members) == 0 {
+// membershipProjection reduces organization memberships to the primary
+// organization (first membership) and the unique role set — the shared
+// projection used by userAuthorizationContext and localUserProto.
+func membershipProjection(members []*store.OrganizationMember) (orgID string, roles []string) {
+	if len(members) == 0 {
 		return "", []string{}
 	}
-
 	orgID = members[0].OrgID
 	roles = make([]string, 0, len(members))
 	seen := make(map[string]struct{}, len(members))
@@ -311,6 +331,15 @@ func (s *AuthService) userAuthorizationContext(ctx context.Context, userID strin
 		roles = append(roles, r)
 	}
 	return orgID, roles
+}
+
+// userAuthorizationContext returns the user's primary organization and unique roles.
+func (s *AuthService) userAuthorizationContext(ctx context.Context, userID string) (orgID string, roles []string) {
+	members, err := s.store.OrgMembers().ListByUser(ctx, userID)
+	if err != nil || len(members) == 0 {
+		return "", []string{}
+	}
+	return membershipProjection(members)
 }
 
 // userIDFromCtx extracts the authenticated user ID from context.
@@ -392,6 +421,12 @@ func (s *AuthService) Initialize(
 	if err := s.store.OrgMembers().Create(ctx, member); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to add member"))
 	}
+	// The new platform_admin member must be enforceable immediately, otherwise
+	// the freshly initialized admin cannot act on anything until the next policy
+	// reload (same seam as CreateLocalUser — ADR-006).
+	if err := s.refreshPolicies(ctx); err != nil {
+		return nil, err
+	}
 
 	if s.browserEnabled {
 		principal, organizations, expiresAt, cookies, sessionErr := s.issueBrowserSession(ctx, user, orgID)
@@ -424,7 +459,7 @@ func (s *AuthService) Initialize(
 		ExpiresAt:        time.Now().UTC().Add(s.jwt.RefreshTTL()),
 	}
 	if err := s.store.AuthSessions().Create(ctx, ss); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("session creation failed"))
+		return nil, mapStoreError(err, "session creation failed")
 	}
 
 	orgs, err := s.store.Organizations().List(ctx)

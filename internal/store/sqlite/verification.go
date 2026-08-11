@@ -15,35 +15,61 @@ type verificationStore struct {
 // Create inserts a new verification record.
 func (s *verificationStore) Create(ctx context.Context, rec *store.VerificationRecord) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO verification_records (id, artifact_digest, policy_version, status, issuer, subject, summary, root_id, key_id, revocation_epoch, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.ID, rec.ArtifactDigest, rec.PolicyVersion, string(rec.Status),
+		`INSERT INTO verification_records (id, artifact_digest, policy_version, signature_identity, status, issuer, subject, summary, root_id, key_id, revocation_epoch, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rec.ID, rec.ArtifactDigest, rec.PolicyVersion, rec.SignatureIdentity, string(rec.Status),
 		rec.Issuer, rec.Subject, rec.Summary, rec.RootID, rec.KeyID, rec.RevocationEpoch,
-		rec.CreatedAt.Format(time.RFC3339),
+		rec.CreatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	return err
 }
 
-// GetByDigestAndPolicy retrieves the latest verification record for a given digest and policy version.
-func (s *verificationStore) GetByDigestAndPolicy(ctx context.Context, artifactDigest, policyVersion string) (*store.VerificationRecord, error) {
+// GetByDigestPolicyAndSignature retrieves the latest verification record for one signature identity.
+func (s *verificationStore) GetByDigestPolicyAndSignature(
+	ctx context.Context,
+	artifactDigest string,
+	policyVersion string,
+	signatureIdentity string,
+) (*store.VerificationRecord, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, artifact_digest, policy_version, status, issuer, subject, summary, root_id, key_id, revocation_epoch, created_at
+		`SELECT id, artifact_digest, policy_version, signature_identity, status, issuer, subject, summary, root_id, key_id, revocation_epoch, created_at
+		 FROM verification_records
+		 WHERE artifact_digest = ? AND policy_version = ? AND signature_identity = ?
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT 1`,
+		artifactDigest, policyVersion, signatureIdentity,
+	)
+	return scanVerificationRecord(row)
+}
+
+// GetByDigestAndPolicy retrieves the latest verification record for a digest and policy version.
+func (s *verificationStore) GetByDigestAndPolicy(
+	ctx context.Context,
+	artifactDigest string,
+	policyVersion string,
+) (*store.VerificationRecord, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, artifact_digest, policy_version, signature_identity, status, issuer, subject, summary, root_id, key_id, revocation_epoch, created_at
 		 FROM verification_records
 		 WHERE artifact_digest = ? AND policy_version = ?
-		 ORDER BY created_at DESC
+		 ORDER BY created_at DESC, id DESC
 		 LIMIT 1`,
 		artifactDigest, policyVersion,
 	)
+	return scanVerificationRecord(row)
+}
+
+func scanVerificationRecord(row interface{ Scan(...any) error }) (*store.VerificationRecord, error) {
 	rec := &store.VerificationRecord{}
 	var createdAt string
-	err := row.Scan(&rec.ID, &rec.ArtifactDigest, &rec.PolicyVersion, &rec.Status, &rec.Issuer, &rec.Subject, &rec.Summary, &rec.RootID, &rec.KeyID, &rec.RevocationEpoch, &createdAt)
+	err := row.Scan(&rec.ID, &rec.ArtifactDigest, &rec.PolicyVersion, &rec.SignatureIdentity, &rec.Status, &rec.Issuer, &rec.Subject, &rec.Summary, &rec.RootID, &rec.KeyID, &rec.RevocationEpoch, &createdAt)
 	if err == sql.ErrNoRows {
 		return nil, store.ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	rec.CreatedAt, err = time.Parse(time.RFC3339, createdAt)
+	rec.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
 		return nil, err
 	}

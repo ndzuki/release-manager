@@ -11,25 +11,17 @@ import (
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	webhookv1 "github.com/ndzuki/release-manager/api/gen/webhook/v1"
 	webhookv1connect "github.com/ndzuki/release-manager/api/gen/webhook/v1/webhookv1connect"
-	"github.com/ndzuki/release-manager/internal/audit"
-	"github.com/ndzuki/release-manager/internal/trust"
 )
 
 // Service implements the WebhookServiceHandler Connect interface.
 type Service struct {
-	verifier     trust.Verifier
-	auditSink    audit.Sink
 	logger       *slog.Logger
 	bundleClient orchestratorv1connect.BundleServiceClient
 }
 
 // NewService creates a new webhook Connect service.
-func NewService(verifier trust.Verifier, logger *slog.Logger, bundleClient orchestratorv1connect.BundleServiceClient, auditSink ...audit.Sink) *Service {
-	var sink audit.Sink
-	if len(auditSink) > 0 {
-		sink = auditSink[0]
-	}
-	return &Service{verifier: verifier, auditSink: sink, logger: logger, bundleClient: bundleClient}
+func NewService(logger *slog.Logger, bundleClient orchestratorv1connect.BundleServiceClient) *Service {
+	return &Service{logger: logger, bundleClient: bundleClient}
 }
 
 // SubmitReleaseBundle validates and forwards a bundle from CI to orchestrator.

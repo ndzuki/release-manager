@@ -40,6 +40,7 @@ type Enforcer struct {
 	store         store.Store
 	metrics       *authorization.Metrics
 	logger        *slog.Logger
+	refreshMu     sync.Mutex
 	mu            sync.RWMutex
 	policyHealthy bool
 	policyVersion uint64
@@ -129,6 +130,12 @@ func (e *Enforcer) EnforceServiceActor(ctx context.Context, service, domain, obj
 
 // LoadPolicies reloads the durable policy snapshot (AC-027-03 hot reload).
 func (e *Enforcer) LoadPolicies(ctx context.Context) error {
+	e.refreshMu.Lock()
+	defer e.refreshMu.Unlock()
+	return e.loadPolicies(ctx)
+}
+
+func (e *Enforcer) loadPolicies(ctx context.Context) error {
 	durable, err := e.store.Authorization().Load(ctx)
 	if err != nil {
 		e.setPolicyState(false, e.PolicyVersion())
@@ -176,6 +183,9 @@ func (e *Enforcer) LoadPolicies(ctx context.Context) error {
 
 // RefreshPolicies recompiles current membership and grants, persists them, then reloads Casbin.
 func (e *Enforcer) RefreshPolicies(ctx context.Context) (uint64, error) {
+	e.refreshMu.Lock()
+	defer e.refreshMu.Unlock()
+
 	durable, err := e.store.Authorization().Load(ctx)
 	if err != nil {
 		return e.PolicyVersion(), fmt.Errorf("load authorization state: %w", err)
@@ -192,7 +202,7 @@ func (e *Enforcer) RefreshPolicies(ctx context.Context) (uint64, error) {
 	}); err != nil {
 		return e.PolicyVersion(), fmt.Errorf("persist refreshed authorization policy: %w", err)
 	}
-	if err := e.LoadPolicies(ctx); err != nil {
+	if err := e.loadPolicies(ctx); err != nil {
 		return e.PolicyVersion(), err
 	}
 	return e.PolicyVersion(), nil
@@ -255,6 +265,9 @@ func (e *Enforcer) RemoveRoleBinding(user, role, domain string) error {
 }
 
 func (e *Enforcer) mutateRules(ctx context.Context, change func([]store.CasbinRule) []store.CasbinRule) error {
+	e.refreshMu.Lock()
+	defer e.refreshMu.Unlock()
+
 	durable, err := e.store.Authorization().Load(ctx)
 	if err != nil {
 		return err
@@ -268,7 +281,7 @@ func (e *Enforcer) mutateRules(ctx context.Context, change func([]store.CasbinRu
 	}); err != nil {
 		return err
 	}
-	return e.LoadPolicies(ctx)
+	return e.loadPolicies(ctx)
 }
 
 // AddServiceActorBinding grants a service actor a role in one organization domain.
@@ -425,12 +438,14 @@ func roleRules(role, domain string) [][]string {
 			[]string{role, domain, "release", "read"},
 			[]string{role, domain, "release", "write"},
 			[]string{role, domain, "customer", "read"},
+			[]string{role, domain, "trust_root", "read"},
 		)
 	case store.RoleDeployer:
 		rules = append(rules,
 			[]string{role, domain, "release", "read"},
 			[]string{role, domain, "release", "write"},
 			[]string{role, domain, "customer", "read"},
+			[]string{role, domain, "trust_root", "read"},
 		)
 	case store.RoleViewer:
 		rules = append(rules,
@@ -438,6 +453,7 @@ func roleRules(role, domain string) [][]string {
 			[]string{role, domain, "member", "read"},
 			[]string{role, domain, "release", "read"},
 			[]string{role, domain, "customer", "read"},
+			[]string{role, domain, "trust_root", "read"},
 		)
 	}
 	for _, capability := range roleCapabilityRules(store.Role(role), domain) {

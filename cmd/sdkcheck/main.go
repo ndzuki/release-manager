@@ -13,11 +13,12 @@ import (
 	"os"
 
 	"github.com/ndzuki/release-manager/internal/quality/sdkcheck"
-	"golang.org/x/tools/go/analysis/multichecker"
+	"golang.org/x/tools/go/analysis/singlechecker"
 )
 
 func main() {
 	exceptionsPath := flag.String("exceptions", "sdkcheck.exceptions.yaml", "path to exceptions YAML file")
+	buildTags := flag.String("build-tags", "", "comma-separated build tags (e.g., 'integration')")
 	flag.Parse()
 
 	a, err := sdkcheck.NewAnalyzer(*exceptionsPath)
@@ -26,6 +27,14 @@ func main() {
 		os.Exit(2)
 	}
 
-	// Register as a standalone multichecker so it runs on all packages.
-	multichecker.Main(a)
+	if *buildTags != "" {
+		orig := os.Getenv("GOFLAGS")
+		t := "-tags=" + *buildTags
+		if orig != "" {
+			t = orig + " " + t
+		}
+		os.Setenv("GOFLAGS", t)
+	}
+
+	singlechecker.Main(a)
 }

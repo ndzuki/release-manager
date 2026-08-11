@@ -8,9 +8,18 @@ authorization:
   pull_interval: 1s
   pull_backoff_max: 30s
 
+trust:
+  verification_timeout: 5s
+
 maintenance: false
 retention:
   bundle_days: 90
   candidate_artifact_days: 30
   preflight_result_hours: 168
   gc_interval_hours: 6
+
+gateway:
+  enabled: false
+  port: 8084
+  ca_key_path: data/gateway-ca.key
+  ca_cert_path: data/gateway-ca.crt

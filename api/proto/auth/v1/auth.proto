@@ -103,6 +103,47 @@ message ChangePasswordRequest {
 
 message ChangePasswordResponse {}
 
+// LocalUser is a local user account with its organization role binding (REQ-025, D-12/D-14).
+message LocalUser {
+  string id = 1;
+  string username = 2;
+  repeated string roles = 3;
+  string org_id = 4;
+  string status = 5;
+}
+
+// CreateLocalUserRequest creates a local user bound to the caller's organization (D-12).
+// Roles accepts at most one value (empty = viewer); platform_admin is rejected (D-16).
+message CreateLocalUserRequest {
+  string username = 1;
+  string password = 2;
+  repeated string roles = 3;
+  string org_id = 4; // empty = caller's active organization
+}
+
+message CreateLocalUserResponse {
+  LocalUser user = 1;
+}
+
+message GetLocalUserRequest {
+  string username = 1;
+}
+
+message GetLocalUserResponse {
+  LocalUser user = 1;
+}
+
+// ListLocalUsersRequest reuses the REQ-010 cursor pagination contract (page_size <= 100).
+message ListLocalUsersRequest {
+  string cursor = 1;
+  int32 page_size = 2;
+}
+
+message ListLocalUsersResponse {
+  repeated LocalUser users = 1;
+  string next_cursor = 2;
+}
+
 service AuthService {
   rpc GetInitStatus(GetInitStatusRequest) returns (GetInitStatusResponse);
   rpc Initialize(InitializeRequest) returns (InitializeResponse);
@@ -112,6 +153,9 @@ service AuthService {
   rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
   rpc SwitchOrganization(SwitchOrganizationRequest) returns (SwitchOrganizationResponse);
   rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
+  rpc CreateLocalUser(CreateLocalUserRequest) returns (CreateLocalUserResponse);
+  rpc GetLocalUser(GetLocalUserRequest) returns (GetLocalUserResponse);
+  rpc ListLocalUsers(ListLocalUsersRequest) returns (ListLocalUsersResponse);
 }
 
 // --- OrganizationService (REQ-026) ---

@@ -295,6 +295,59 @@ func (x *TimestampRange) GetEnd() *timestamppb.Timestamp {
 	return nil
 }
 
+// RequestMetadata carries tracing identifiers propagated across the system.
+type RequestMetadata struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	OperationId   string                 `protobuf:"bytes,2,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RequestMetadata) Reset() {
+	*x = RequestMetadata{}
+	mi := &file_common_v1_types_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RequestMetadata) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RequestMetadata) ProtoMessage() {}
+
+func (x *RequestMetadata) ProtoReflect() protoreflect.Message {
+	mi := &file_common_v1_types_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RequestMetadata.ProtoReflect.Descriptor instead.
+func (*RequestMetadata) Descriptor() ([]byte, []int) {
+	return file_common_v1_types_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *RequestMetadata) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *RequestMetadata) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
 var File_common_v1_types_proto protoreflect.FileDescriptor
 
 const file_common_v1_types_proto_rawDesc = "" +
@@ -318,7 +371,11 @@ const file_common_v1_types_proto_rawDesc = "" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\"p\n" +
 	"\x0eTimestampRange\x120\n" +
 	"\x05start\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x05start\x12,\n" +
-	"\x03end\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x03endB>Z<github.com/ndzuki/release-manager/api/gen/common/v1;commonv1b\x06proto3"
+	"\x03end\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x03end\"S\n" +
+	"\x0fRequestMetadata\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12!\n" +
+	"\foperation_id\x18\x02 \x01(\tR\voperationIdB>Z<github.com/ndzuki/release-manager/api/gen/common/v1;commonv1b\x06proto3"
 
 var (
 	file_common_v1_types_proto_rawDescOnce sync.Once
@@ -332,19 +389,20 @@ func file_common_v1_types_proto_rawDescGZIP() []byte {
 	return file_common_v1_types_proto_rawDescData
 }
 
-var file_common_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_common_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_common_v1_types_proto_goTypes = []any{
 	(*Pagination)(nil),            // 0: common.v1.Pagination
 	(*PaginationResponse)(nil),    // 1: common.v1.PaginationResponse
 	(*ErrorDetail)(nil),           // 2: common.v1.ErrorDetail
 	(*FieldViolation)(nil),        // 3: common.v1.FieldViolation
 	(*TimestampRange)(nil),        // 4: common.v1.TimestampRange
-	(*timestamppb.Timestamp)(nil), // 5: google.protobuf.Timestamp
+	(*RequestMetadata)(nil),       // 5: common.v1.RequestMetadata
+	(*timestamppb.Timestamp)(nil), // 6: google.protobuf.Timestamp
 }
 var file_common_v1_types_proto_depIdxs = []int32{
 	3, // 0: common.v1.ErrorDetail.details:type_name -> common.v1.FieldViolation
-	5, // 1: common.v1.TimestampRange.start:type_name -> google.protobuf.Timestamp
-	5, // 2: common.v1.TimestampRange.end:type_name -> google.protobuf.Timestamp
+	6, // 1: common.v1.TimestampRange.start:type_name -> google.protobuf.Timestamp
+	6, // 2: common.v1.TimestampRange.end:type_name -> google.protobuf.Timestamp
 	3, // [3:3] is the sub-list for method output_type
 	3, // [3:3] is the sub-list for method input_type
 	3, // [3:3] is the sub-list for extension type_name
@@ -363,7 +421,7 @@ func file_common_v1_types_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_common_v1_types_proto_rawDesc), len(file_common_v1_types_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

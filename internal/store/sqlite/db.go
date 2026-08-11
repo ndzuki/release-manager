@@ -54,6 +54,7 @@ type Store struct {
 	emergencyIntents *emergencyIntentStore
 	convergenceTasks *convergenceTaskStore
 	authorization    *authorizationStore
+	idem             *idempotencyStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -105,6 +106,7 @@ func Open(dsn string) (*Store, error) {
 	s.orgMembers = &organizationMemberStore{db: db}
 	s.bindings = &bindingStore{db: db}
 	s.notif = &notificationStore{db: db}
+	s.idem = &idempotencyStore{db: db}
 	s.audit = &auditEventStore{db: db}
 	s.trustRoots = &trustRootStore{db: db}
 	s.vulnExceptions = &vulnerabilityExceptionStore{db: db}
@@ -123,7 +125,6 @@ func Open(dsn string) (*Store, error) {
 	s.emergencyIntents = &emergencyIntentStore{db: db}
 	s.convergenceTasks = &convergenceTaskStore{db: db}
 	s.authorization = &authorizationStore{db: db}
-
 	return s, nil
 }
 
@@ -208,6 +209,9 @@ func (s *Store) Bundles() store.BundleStore { return s.bundles }
 // Notifications returns the NotificationStore.
 func (s *Store) Notifications() store.NotificationStore { return s.notif }
 
+// Idempotency returns the IdempotencyStore.
+func (s *Store) Idempotency() store.IdempotencyStore { return s.idem }
+
 // Verifications returns the VerificationStore.
 func (s *Store) Verifications() store.VerificationStore { return s.verifs }
 
@@ -260,7 +264,6 @@ func (s *Store) ConvergenceTasks() store.ConvergenceTaskStore { return s.converg
 
 // Authorization returns the durable authorization state module.
 func (s *Store) Authorization() store.AuthorizationStore { return s.authorization }
-
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
 
@@ -461,6 +464,7 @@ var migrationStatements = []string{
 	)`,
 	// Migration: add target_revision for ROLLBACK operations.
 	`ALTER TABLE operations ADD COLUMN target_revision INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE operations ADD COLUMN target_operation_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE operations ADD COLUMN terminal_at TEXT`,
 	`UPDATE operations
 	 SET terminal_at = updated_at
@@ -524,7 +528,10 @@ var migrationStatements = []string{
 		updated_at    TEXT NOT NULL
 	)`,
 
-	`CREATE INDEX IF NOT EXISTS idx_operators_cert ON operators(cert_serial)`,
+	// ADR-018: cert serial is the identity authority — a unique index makes
+	// an 80-bit DER-hash collision fail the insert instead of silently
+	// binding two operators to one certificate.
+	`CREATE UNIQUE INDEX IF NOT EXISTS operators_cert_serial_uq ON operators(cert_serial)`,
 	`CREATE INDEX IF NOT EXISTS idx_operators_name ON operators(operator_name)`,
 	`CREATE INDEX IF NOT EXISTS idx_operators_cluster ON operators(cluster_id, status)`,
 
@@ -735,6 +742,7 @@ var migrationStatements = []string{
 	`ALTER TABLE verification_records ADD COLUMN root_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE verification_records ADD COLUMN key_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE verification_records ADD COLUMN revocation_epoch INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE verification_records ADD COLUMN signature_identity TEXT NOT NULL DEFAULT ''`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_records_digest_policy ON verification_records(artifact_digest, policy_version, created_at)`,
 
 	// Customer domain events (REQ-013)

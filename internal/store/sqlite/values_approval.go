@@ -186,8 +186,12 @@ func (s *valuesApprovalStore) transition(
 		DecidedAt:             now,
 		SupersededRevisionIDs: supersededIDs,
 	}
-	if err := insertIdempotency(ctx, tx, command, approvalResult, now.Add(idempotencyTTL)); err != nil {
+	replay, err := insertIdempotency(ctx, tx, command, approvalResult, now.Add(idempotencyTTL))
+	if err != nil {
 		return nil, err
+	}
+	if replay != nil {
+		return replay, nil
 	}
 	if err := checkAuthorizationFence(ctx, tx, command.ExpectedAuthorizationVersion); err != nil {
 		return nil, err
@@ -206,56 +210,55 @@ func lookupIdempotency(
 	if command.IdempotencyKeyHash == "" {
 		return nil, nil
 	}
-	var requestHash string
-	var responseRef []byte
-	err := tx.QueryRowContext(ctx, `
-		SELECT request_hash, response_ref FROM idempotency_records
-		WHERE scope = ? AND text_key = ? AND expires_at > ?
-	`, command.IdempotencyScope, command.IdempotencyKeyHash, time.Now().UTC().Format(time.RFC3339Nano)).Scan(
-		&requestHash,
-		&responseRef,
+	record, err := loadActiveIdempotencyRecord(
+		ctx, tx, command.IdempotencyScope, command.IdempotencyKeyHash, time.Now().UTC(),
 	)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, store.ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("lookup values approval idempotency: %w", err)
 	}
-	if requestHash != command.RequestHash {
+	if record.RequestHash != command.RequestHash {
 		return nil, store.ErrIdempotencyConflict
 	}
 	var result store.ValuesApprovalResult
-	if err := json.Unmarshal(responseRef, &result); err != nil {
+	if err := json.Unmarshal(record.ResponseRef, &result); err != nil {
 		return nil, fmt.Errorf("decode values approval replay: %w", err)
 	}
 	return &result, nil
 }
-
 func insertIdempotency(
 	ctx context.Context,
 	tx *sql.Tx,
 	command store.ValuesApprovalCommand,
 	result *store.ValuesApprovalResult,
 	expiresAt time.Time,
-) error {
+) (*store.ValuesApprovalResult, error) {
 	if command.IdempotencyKeyHash == "" {
-		return nil
+		return nil, nil
 	}
 	responseRef, err := json.Marshal(result)
 	if err != nil {
-		return fmt.Errorf("encode values approval response: %w", err)
+		return nil, fmt.Errorf("encode values approval response: %w", err)
 	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO idempotency_records (scope, text_key, request_hash, response_ref, expires_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, command.IdempotencyScope, command.IdempotencyKeyHash, command.RequestHash, responseRef, expiresAt.Format(time.RFC3339Nano))
+	existing, created, err := createOrGetIdempotencyRecord(ctx, tx, &store.IdempotencyRecord{
+		Scope: command.IdempotencyScope, Key: command.IdempotencyKeyHash,
+		RequestHash: command.RequestHash, ResponseRef: responseRef, ExpiresAt: expiresAt,
+	}, time.Now().UTC())
 	if err != nil {
-		if isUniqueConstraint(err) {
-			return store.ErrIdempotencyConflict
-		}
-		return fmt.Errorf("insert values approval idempotency: %w", err)
+		return nil, err
 	}
-	return nil
+	if created {
+		return nil, nil
+	}
+	// 并发窗口内另一事务已提交相同 scope+key+hash：decode 已有记录返回重放结果。
+	var replay store.ValuesApprovalResult
+	if err := json.Unmarshal(existing.ResponseRef, &replay); err != nil {
+		return nil, fmt.Errorf("decode values approval replay: %w", err)
+	}
+	replay.Replayed = true
+	return &replay, nil
 }
 
 func ensureNoPendingRevision(ctx context.Context, tx *sql.Tx, revision *store.ValuesRevision) error {

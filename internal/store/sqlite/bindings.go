@@ -124,6 +124,7 @@ func (s *bindingStore) Update(ctx context.Context, binding *store.OrgCustomerBin
 	return nil
 }
 
+// SetStatus atomically transitions a binding and appends its immutable event.
 func (s *bindingStore) SetStatus(ctx context.Context, id string, status store.BindingStatus) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

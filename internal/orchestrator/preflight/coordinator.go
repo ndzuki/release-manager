@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -169,7 +170,6 @@ func (c *Coordinator) runUpgrade(ctx context.Context, op *store.Operation) {
 	}
 	c.casQueued(ctx, op, AggregateResult{OperationID: op.ID, Overall: StagePassed})
 }
-
 // runStage dispatches a PRECHECK command for one stage and polls for its result.
 func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage StageDef) (StageResult, error) {
 	emptyResult := StageResult{Stage: stage.Name, Status: StageFailed}
@@ -398,12 +398,14 @@ func (c *Coordinator) recordLifecycle(ctx context.Context, operationID string, s
 
 // errorCodeFromStatus maps a stage result status to a preflight error code.
 func errorCodeFromStatus(result StageResult) string {
-	switch result.Status {
-	case StageFailed:
-		return string(StageFailed)
-	case StageTimeout:
-		return string(StageTimeout)
-	default:
+	if result.Detail != "" {
+		if code, _, ok := strings.Cut(result.Detail, ":"); ok {
+			return strings.TrimSpace(code)
+		}
 		return result.Detail
 	}
+	if result.Status == StageTimeout {
+		return "stage_timeout"
+	}
+	return "preflight_failed"
 }
