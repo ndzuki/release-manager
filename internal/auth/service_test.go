@@ -78,7 +78,7 @@ func TestAuthService_LoginAndRefreshPreserveOrganization(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	jwtManager := NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour)
-	service := NewAuthService(st, jwtManager, NewRateLimiter(10, time.Minute), logger)
+	service := NewAuthService(st, jwtManager, NewRateLimiter(10, time.Minute), logger, nil)
 
 	login, err := service.Login(ctx, connect.NewRequest(&authv1.LoginRequest{
 		Username: "alice", Password: "password",
@@ -139,7 +139,7 @@ func TestAuthService_LoginPersistsSessionAcrossRestart(t *testing.T) {
 	st, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
 	createAuthUser(t, st, "alice", "correct-password", store.UserActive)
-	svc := NewAuthService(st, jwt, NewRateLimiter(10, time.Minute), slog.New(slog.DiscardHandler))
+	svc := NewAuthService(st, jwt, NewRateLimiter(10, time.Minute), slog.New(slog.DiscardHandler), nil)
 	loginResp, err := svc.Login(ctx, connect.NewRequest(&authv1.LoginRequest{
 		Username: "alice",
 		Password: "correct-password",
@@ -151,7 +151,7 @@ func TestAuthService_LoginPersistsSessionAcrossRestart(t *testing.T) {
 	st, err = sqlitestore.Open(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, st.Close()) })
-	svc = NewAuthService(st, jwt, NewRateLimiter(10, time.Minute), slog.New(slog.DiscardHandler))
+	svc = NewAuthService(st, jwt, NewRateLimiter(10, time.Minute), slog.New(slog.DiscardHandler), nil)
 
 	refreshResp, err := svc.RefreshToken(ctx, connect.NewRequest(&authv1.RefreshTokenRequest{
 		RefreshToken: refreshToken,
@@ -170,6 +170,7 @@ func TestAuthServiceRedisUnavailableFailsClosed(t *testing.T) {
 		NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour),
 		NewRateLimiter(10, time.Minute),
 		slog.New(slog.DiscardHandler),
+		nil,
 	)
 
 	_, err := svc.Login(t.Context(), connect.NewRequest(&authv1.LoginRequest{
@@ -214,6 +215,7 @@ func TestAuthServiceRedisOutageKeepsPasswordChangeRevocationDurable(t *testing.T
 		NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour),
 		NewRateLimiter(10, time.Minute),
 		slog.New(slog.DiscardHandler),
+		nil,
 	)
 
 	login, err := svc.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: "alice", Password: "old-password"}))
@@ -499,6 +501,7 @@ func newAuthService(st *sqlitestore.Store) *AuthService {
 		NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour),
 		NewRateLimiter(10, time.Minute),
 		slog.New(slog.DiscardHandler),
+		nil,
 	)
 }
 

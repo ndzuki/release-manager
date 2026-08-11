@@ -82,6 +82,7 @@ type ApprovalPendingError struct {
 func (e *ApprovalPendingError) Error() string { return "store: another approval is pending" }
 
 func (e *ApprovalPendingError) Unwrap() error { return ErrApprovalPending }
+
 // OperationType classifies the kind of release operation.
 type OperationType string
 
@@ -410,6 +411,7 @@ type ValuesApprovalResult struct {
 	SupersededRevisionIDs []string
 	Replayed              bool
 }
+
 // CustomerStatus is the lifecycle state of a customer tenant.
 type CustomerStatus string
 
@@ -1553,14 +1555,30 @@ type OutboxStore interface {
 	GetNextPending(ctx context.Context, operatorID string) (*OutboxEntry, error)
 }
 
+// UserListQuery narrows user listing to a stable keyset page (REQ-010 cursor pagination).
+type UserListQuery struct {
+	// Cursor is an opaque base64 username cursor from a previous page.
+	Cursor string
+	// PageSize defaults to 20 and is clamped to [1, 100].
+	PageSize int32
+}
+
+// UserPage is one stable page of local users ordered by username.
+type UserPage struct {
+	Users      []*User
+	NextCursor string
+}
+
 // UserStore defines the persistence contract for local and external user accounts (REQ-025, REQ-028).
 type UserStore interface {
 	Create(ctx context.Context, u *User) error
+	CreateWithMembership(ctx context.Context, u *User, member *OrganizationMember) error
 	Get(ctx context.Context, id string) (*User, error)
 	GetByUsername(ctx context.Context, username string) (*User, error)
 	GetByProviderSubject(ctx context.Context, provider, subject string) (*User, error)
 	Update(ctx context.Context, u *User) error
 	Count(ctx context.Context, orgID string) (int64, error)
+	List(ctx context.Context, query UserListQuery) (*UserPage, error)
 }
 
 // AuthSessionStore defines the persistence contract for auth sessions (REQ-025).

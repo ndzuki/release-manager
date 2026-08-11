@@ -33,18 +33,20 @@ type AuthService struct {
 	jwt            *JWTManager
 	limiter        *RateLimiter
 	logger         *slog.Logger
+	enforcer       *Enforcer
 	browser        BrowserSessionConfig
 	browserEnabled bool
 }
 
-// NewAuthService creates a new AuthService.
-func NewAuthService(st store.Store, jwt *JWTManager, limiter *RateLimiter, logger *slog.Logger, browser ...BrowserSessionConfig) *AuthService {
+// NewAuthService creates a new AuthService. enforcer may be nil in unit tests;
+// when set, membership mutations trigger a Casbin policy refresh.
+func NewAuthService(st store.Store, jwt *JWTManager, limiter *RateLimiter, logger *slog.Logger, enforcer *Enforcer, browser ...BrowserSessionConfig) *AuthService {
 	config := BrowserSessionConfig{SecureCookies: true}
 	enabled := len(browser) > 0
 	if enabled {
 		config = browser[0]
 	}
-	return &AuthService{store: st, jwt: jwt, limiter: limiter, logger: logger, browser: config, browserEnabled: enabled}
+	return &AuthService{store: st, jwt: jwt, limiter: limiter, logger: logger, enforcer: enforcer, browser: config, browserEnabled: enabled}
 }
 
 // Login authenticates a user with username + password, returning tokens.
@@ -310,13 +312,13 @@ func (s *AuthService) ChangePassword(
 	return connect.NewResponse(&authv1.ChangePasswordResponse{}), nil
 }
 
-// userAuthorizationContext returns the user's primary organization and unique roles.
-func (s *AuthService) userAuthorizationContext(ctx context.Context, userID string) (orgID string, roles []string) {
-	members, err := s.store.OrgMembers().ListByUser(ctx, userID)
-	if err != nil || len(members) == 0 {
+// membershipProjection reduces organization memberships to the primary
+// organization (first membership) and the unique role set — the shared
+// projection used by userAuthorizationContext and localUserProto.
+func membershipProjection(members []*store.OrganizationMember) (orgID string, roles []string) {
+	if len(members) == 0 {
 		return "", []string{}
 	}
-
 	orgID = members[0].OrgID
 	roles = make([]string, 0, len(members))
 	seen := make(map[string]struct{}, len(members))
@@ -329,6 +331,15 @@ func (s *AuthService) userAuthorizationContext(ctx context.Context, userID strin
 		roles = append(roles, r)
 	}
 	return orgID, roles
+}
+
+// userAuthorizationContext returns the user's primary organization and unique roles.
+func (s *AuthService) userAuthorizationContext(ctx context.Context, userID string) (orgID string, roles []string) {
+	members, err := s.store.OrgMembers().ListByUser(ctx, userID)
+	if err != nil || len(members) == 0 {
+		return "", []string{}
+	}
+	return membershipProjection(members)
 }
 
 // userIDFromCtx extracts the authenticated user ID from context.
@@ -409,6 +420,12 @@ func (s *AuthService) Initialize(
 	}
 	if err := s.store.OrgMembers().Create(ctx, member); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to add member"))
+	}
+	// The new platform_admin member must be enforceable immediately, otherwise
+	// the freshly initialized admin cannot act on anything until the next policy
+	// reload (same seam as CreateLocalUser — ADR-006).
+	if err := s.refreshPolicies(ctx); err != nil {
+		return nil, err
 	}
 
 	if s.browserEnabled {
