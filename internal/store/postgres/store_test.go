@@ -221,7 +221,6 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.TokenStateUsed, got.State)
 	assert.Equal(t, "op-001", got.OperatorID)
-
 }
 
 func TestOperatorCreateAndGetByCertSerial(t *testing.T) {

@@ -58,6 +58,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	return nil
 }
 
+//nolint:gosec // column list containing the token_hash column name, not a credential
 const enrollmentTokenSelect = `
 id, customer_id, cluster_id, token, token_hash, operator_name, state, created_by_display_name,
 created_at, expires_at, used_at, operator_id, revoked_at, replaced_by_id`
