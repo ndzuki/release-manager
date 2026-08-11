@@ -64,6 +64,8 @@ FROM customers WHERE slug = ?
 // Update applies changes with optimistic locking (AC-051-02): the stored
 // version must equal expectedVersion, otherwise ErrOptimisticLock is returned
 // and no row is modified.
+//
+//nolint:dupl // Customer and Cluster stores share the CAS update pattern.
 func (s *customerStore) Update(ctx context.Context, c *store.Customer, expectedVersion int64) error {
 	c.UpdatedAt = time.Now().UTC()
 

@@ -21,7 +21,7 @@ async function handleLogout(): Promise<void> {
     <header class="app-shell__header">
       <RouterLink class="app-shell__brand" :to="{ name: 'Home' }">Release Manager</RouterLink>
       <nav class="app-shell__nav" aria-label="Primary navigation">
-        <RouterLink :to="{ name: 'Home' }">Home</RouterLink>
+        <RouterLink :to="{ name: 'CustomerList' }">Customers</RouterLink>
         <RouterLink v-if="clusterRoutingEnabled && customerId" :to="{ name: 'ClusterList', params: { customerId } }">Clusters</RouterLink>
         <slot name="nav" />
       </nav>

@@ -44,6 +44,10 @@ FROM clusters WHERE id = ?
 	return scanCluster(row)
 }
 
+// Update applies changes with optimistic locking; the stored version must
+// equal expectedVersion, otherwise ErrOptimisticLock is returned.
+//
+//nolint:dupl // Customer and Cluster stores share the CAS update pattern.
 func (s *clusterStore) Update(ctx context.Context, c *store.Cluster, expectedVersion int64) error {
 	c.UpdatedAt = time.Now().UTC()
 

@@ -26,6 +26,18 @@ describe('auth route guard', () => {
     expect(valuesDisabled.resolve('/customers/customer-1/clusters/cluster-1/releases/definition-1/values').name).toBe('NotFound');
   });
 
+  it('registers the customer management routes without a write guard redirect', () => {
+    const router = createAppRouter(createMemoryHistory());
+
+    expect(router.resolve('/customers').name).toBe('CustomerList');
+    expect(router.resolve('/customers/new').name).toBe('CustomerNew');
+    expect(router.resolve('/customers/cust-1').name).toBe('CustomerDetail');
+    // Viewer write enforcement is a page-level UX boundary (AC-051-01); the
+    // routes themselves stay reachable so the server stays the only arbiter.
+    expect(router.resolve('/customers/new').meta.requiresWrite).toBeUndefined();
+    expect(router.resolve('/customers/cust-1').meta.requiresWrite).toBeUndefined();
+  });
+
   it('registers and disables release operation routes independently', () => {
     const enabled = createAppRouter(createMemoryHistory(), true, true, true);
     const disabled = createAppRouter(createMemoryHistory(), true, true, false);

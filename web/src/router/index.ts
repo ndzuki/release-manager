@@ -65,6 +65,24 @@ export function createAppRouter(
         meta: { requiresAuth: true },
       },
       {
+        path: '/customers',
+        name: 'CustomerList',
+        component: () => import('@/pages/CustomerListPage.vue'),
+        meta: { requiresAuth: true },
+      },
+      {
+        path: '/customers/new',
+        name: 'CustomerNew',
+        component: () => import('@/pages/CustomerDetailPage.vue'),
+        meta: { requiresAuth: true },
+      },
+      {
+        path: '/customers/:id',
+        name: 'CustomerDetail',
+        component: () => import('@/pages/CustomerDetailPage.vue'),
+        meta: { requiresAuth: true },
+      },
+      {
         path: '/customers/:customerId/clusters',
         name: 'ClusterList',
         component: () => import('@/pages/ClusterListPage.vue'),
