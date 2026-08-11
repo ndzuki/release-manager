@@ -90,12 +90,14 @@ func (s *orchSvc) newGatewayOperatorService(logger *slog.Logger) (*operator.Serv
 	return gatewayService, nil
 }
 
-// extraServers reports the agent gateway listener so app.Run starts and
+// ExtraServers reports the agent gateway listener so app.Run starts and
 // shuts it down together with the management-plane listener (TASK-075 plan
-// v1 Step 2/3). The gateway is nil unless enabled by configuration.
-//
-//nolint:unused,unparam // seam for the unexported internal/app extraServersProvider (type-asserted at runtime)
-func (s *orchSvc) extraServers() ([]*http.Server, error) {
+// v1 Step 2/3). The gateway is nil unless enabled by configuration. The
+// method must be exported: app.Run type-asserts the exported
+// internal/app.ExtraServersProvider interface, and unexported method names
+// are package-scoped in Go — an unexported method here could never satisfy
+// the cross-package interface (smoke-test catch, 2026-08-11).
+func (s *orchSvc) ExtraServers() ([]*http.Server, error) {
 	if s.gateway == nil {
 		return nil, nil
 	}

@@ -32,6 +32,7 @@ import (
 	trustv1 "github.com/ndzuki/release-manager/api/gen/trust/v1"
 	trustv1connect "github.com/ndzuki/release-manager/api/gen/trust/v1/trustv1connect"
 	"github.com/ndzuki/release-manager/internal/auth"
+	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/config"
 	"github.com/ndzuki/release-manager/internal/postgres"
 	"github.com/ndzuki/release-manager/internal/store"
@@ -40,6 +41,13 @@ import (
 	"github.com/ndzuki/release-manager/internal/trust"
 	"github.com/ndzuki/release-manager/migrations"
 )
+
+// Compile-time guard: orchSvc must satisfy the exported
+// internal/app.ExtraServersProvider interface from a different package.
+// Unexported method names are package-scoped in Go, so an unexported
+// extraServers() here would silently fail the app.Run type assertion and the
+// agent gateway listener would never start (TASK-075 smoke-test catch).
+var _ app.ExtraServersProvider = (*orchSvc)(nil)
 
 func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 	const signingKey = "test-signing-key"

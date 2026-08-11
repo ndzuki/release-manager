@@ -46,12 +46,12 @@ type closeService interface {
 	Close() error
 }
 
-// extraServersProvider is an optional interface for services that run
+// ExtraServersProvider is an optional interface for services that run
 // additional HTTP listeners beside the primary one (TASK-075: the
 // orchestrator agent gateway on its own mTLS port). Extra servers share the
 // primary server's startup, error reporting, and graceful shutdown.
-type extraServersProvider interface {
-	extraServers() ([]*http.Server, error)
+type ExtraServersProvider interface {
+	ExtraServers() ([]*http.Server, error)
 }
 
 // readinessContributor is an optional interface services can implement
@@ -117,8 +117,8 @@ func Run(configPath string, svc Service) {
 	// Build extra listeners (e.g. the orchestrator agent gateway) before
 	// starting anything so configuration errors surface synchronously.
 	var extra []*http.Server
-	if provider, ok := svc.(extraServersProvider); ok {
-		extra, err = provider.extraServers()
+	if provider, ok := svc.(ExtraServersProvider); ok {
+		extra, err = provider.ExtraServers()
 		if err != nil {
 			logger.Error("failed to configure extra servers", "error", err)
 			return
