@@ -197,6 +197,19 @@ type Operation struct {
 	LastError           string          `json:"last_error,omitempty"`
 }
 
+// OperationCreateCommand contains one atomic operation creation and idempotency intent.
+type OperationCreateCommand struct {
+	Operation      *Operation
+	Idempotency    *IdempotencyRecord
+	CheckAvailable bool
+}
+
+// OperationCreateResult is the newly committed or replayed operation.
+type OperationCreateResult struct {
+	Operation *Operation
+	Replayed  bool
+}
+
 // OperationCancelCommand contains the trusted authorization and idempotency snapshot for cancellation.
 type OperationCancelCommand struct {
 	OperationID          string
@@ -1356,10 +1369,32 @@ type InventoryPage struct {
 	LastSyncAt time.Time
 }
 
+// IdempotencyRecord stores a replayable response for a scoped request key.
+type IdempotencyRecord struct {
+	Scope       string
+	Key         string
+	RequestHash string
+	ResponseRef json.RawMessage
+	ExpiresAt   time.Time
+}
+
+// IdempotencyStore defines the shared persistence contract for scoped request replay.
+type IdempotencyStore interface {
+	// CreateOrGet inserts a new record or returns the existing unexpired record.
+	// Returns (record, true, nil) when created and (record, false, nil) for a replay.
+	// Returns ErrIdempotencyConflict when scope+key exists with a different request hash.
+	CreateOrGet(ctx context.Context, record *IdempotencyRecord) (*IdempotencyRecord, bool, error)
+	// GetExpired returns records whose expiry is before the supplied time.
+	GetExpired(ctx context.Context, before time.Time, limit int) ([]*IdempotencyRecord, error)
+	// DeleteExpired removes records whose expiry is before the supplied time.
+	DeleteExpired(ctx context.Context, before time.Time) (int64, error)
+}
+
 // OperationStore defines the persistence contract for operations.
 type OperationStore interface {
 	Create(ctx context.Context, op *Operation) error
 	CreateIfAvailable(ctx context.Context, op *Operation) error
+	CreateIdempotent(ctx context.Context, command OperationCreateCommand) (*OperationCreateResult, error)
 	Get(ctx context.Context, id string) (*Operation, error)
 	GetByIdempotencyKey(ctx context.Context, key string) (*Operation, error)
 	UpdateStatus(ctx context.Context, id string, status OperationStatus, stateVersion int, lastError string) (*Operation, error)
@@ -1743,15 +1778,6 @@ type ArtifactDigest struct {
 	ArtifactType ArtifactType
 }
 
-// IdempotencyRecord stores a replayable response for a scoped request key.
-type IdempotencyRecord struct {
-	Scope       string
-	Key         string
-	RequestHash string
-	ResponseRef json.RawMessage
-	ExpiresAt   time.Time
-}
-
 // BundleSubmission is the atomic input for a new bundle and its derived records.
 type BundleSubmission struct {
 	Bundle          *ReleaseBundle
@@ -1893,6 +1919,7 @@ type Store interface {
 	AuditExports() AuditExportStore
 	TrustRoots() TrustRootStore
 	Notifications() NotificationStore
+	Idempotency() IdempotencyStore
 	Bundles() BundleStore
 	ScanResults() ScanResultStore
 	VulnerabilityExceptions() VulnerabilityExceptionStore

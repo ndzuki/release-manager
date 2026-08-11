@@ -12,6 +12,7 @@ import (
 	webhookv1connect "github.com/ndzuki/release-manager/api/gen/webhook/v1/webhookv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/config"
+	contractsinterceptor "github.com/ndzuki/release-manager/internal/contracts/interceptor"
 	"github.com/ndzuki/release-manager/internal/webhook"
 )
 
@@ -34,7 +35,13 @@ func (s *webhookSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		connect.WithGRPC(),
 	)
 	svc := webhook.NewService(logger, client)
-	path, handler := webhookv1connect.NewWebhookServiceHandler(svc)
+	path, handler := webhookv1connect.NewWebhookServiceHandler(
+		svc,
+		connect.WithInterceptors(
+			contractsinterceptor.NewRequestIDInterceptor(logger),
+			contractsinterceptor.NewErrorSanitizeInterceptor(logger),
+		),
+	)
 	mux.Handle(path, handler)
 	return nil
 }

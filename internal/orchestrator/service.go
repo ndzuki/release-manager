@@ -80,14 +80,8 @@ func (s *Service) CreateOperation(
 	req *connect.Request[orchestratorv1.CreateOperationRequest],
 ) (*connect.Response[orchestratorv1.CreateOperationResponse], error) {
 	msg := req.Msg
-	existing, err := s.findIdempotentOperation(ctx, msg)
-	if err != nil {
-		return nil, err
-	}
-	if existing != nil {
-		s.logger.Info("idempotent operation found", "key", msg.IdempotencyKey, "op_id", existing.ID)
-		return connect.NewResponse(s.toResponse(existing, nil)), nil
-	}
+	operationScope := operationIdempotencyScope(msg.Actor.GetUserId(), msg.Actor.GetOrganization(), msg.ReleaseDefinitionId)
+	requestHash := hashRequest(msg)
 
 	opType := store.OperationType(msg.OperationType)
 	if !opType.Valid() {
@@ -273,8 +267,8 @@ func (s *Service) CreateOperation(
 		}
 	}
 
-	// 5. Build operation request hash for idempotency
-	reqHash := hashRequest(msg)
+	// 5. Build operation request hash for idempotency.
+	reqHash := requestHash
 
 	// 6. Build domain Operation
 	now := time.Now().UTC()
@@ -283,7 +277,7 @@ func (s *Service) CreateOperation(
 		OperationType:       opType,
 		Status:              operation.InitialStatus(),
 		ReleaseDefinitionID: msg.ReleaseDefinitionId,
-		IdempotencyKey:      msg.IdempotencyKey,
+		IdempotencyKey:      operationIdempotencyKey(operationScope, msg.IdempotencyKey),
 		RequestHash:         reqHash,
 		BundleID:            msg.BundleId,
 		ValuesRevisionID:    msg.ValuesRevisionId,
@@ -297,17 +291,30 @@ func (s *Service) CreateOperation(
 		UpdatedAt: now,
 	}
 
-	// 7. Persist with atomic availability check (AC-062-01).
-	if err := s.store.Operations().CreateIfAvailable(ctx, op); err != nil {
-		if errors.Is(err, store.ErrReleaseBusy) {
+	// 7. Persist with atomic availability and idempotency checks.
+	createResult, err := s.store.Operations().CreateIdempotent(ctx, store.OperationCreateCommand{
+		Operation: op,
+		Idempotency: &store.IdempotencyRecord{
+			Scope: operationScope, Key: hashIdempotencyKey(msg.IdempotencyKey), RequestHash: reqHash,
+			ExpiresAt: now.Add(24 * time.Hour),
+		},
+		CheckAvailable: true,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrReleaseBusy):
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
-		}
-		if errors.Is(err, store.ErrDuplicateKey) {
+		case errors.Is(err, store.ErrIdempotencyConflict):
 			return nil, connect.NewError(connect.CodeAlreadyExists,
-				fmt.Errorf("idempotency_key %s already used", msg.IdempotencyKey))
+				errors.New("idempotency_conflict: key already used with different request"))
+		default:
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create operation: %w", err))
 		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create operation: %w", err))
+	}
+	op = createResult.Operation
+	if createResult.Replayed {
+		return connect.NewResponse(s.toResponse(op, nil)), nil
 	}
 
 	// 8. Trigger preflight transition and launch coordinator
@@ -341,27 +348,6 @@ func (s *Service) CreateOperation(
 	return connect.NewResponse(s.toResponse(op, &verifyResult)), nil
 }
 
-func (s *Service) findIdempotentOperation(
-	ctx context.Context,
-	msg *orchestratorv1.CreateOperationRequest,
-) (*store.Operation, error) {
-	if msg.IdempotencyKey == "" {
-		return nil, nil
-	}
-
-	existing, err := s.store.Operations().GetByIdempotencyKey(ctx, msg.IdempotencyKey)
-	if err == store.ErrNotFound {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("idempotency lookup: %w", err))
-	}
-	if existing.RequestHash != hashRequest(msg) {
-		return nil, connect.NewError(connect.CodeAlreadyExists,
-			fmt.Errorf("idempotency_conflict: key %s already used with different request", msg.IdempotencyKey))
-	}
-	return existing, nil
-}
 
 // PublishRelease triggers the release pipeline for a definition (skeleton).
 func (s *Service) PublishRelease(
@@ -471,7 +457,7 @@ func (s *Service) WatchOperation(
 	if snapshot.RetainedFromSequence > 0 && req.Msg.GetAfterSequence() < snapshot.RetainedFromSequence-1 {
 		return operationCursorExpiredError(snapshot)
 	}
-	requestID := uuid.NewString()
+	requestID := requestIDOrNew(ctx)
 	if err := stream.Send(&orchestratorv1.WatchOperationResponse{
 		Payload: &orchestratorv1.WatchOperationResponse_Snapshot{Snapshot: toProtoOperationSnapshot(snapshot)},
 	}); err != nil {
@@ -745,7 +731,7 @@ func (s *Service) finishCancelWithTarget(
 	idempotencyKey string,
 	targetStatus store.OperationStatus,
 ) (*connect.Response[orchestratorv1.CancelOperationResponse], error) {
-	requestID := uuid.New().String()
+	requestID := requestIDOrNew(ctx)
 	scope := operationCancelScope(op.ID, actor.UserID)
 	reqHash := hashCancelRequest(msg.OperationId, int(msg.ExpectedStateVersion), msg.Reason)
 	keyHash := hashIdempotencyKey(idempotencyKey)
@@ -983,6 +969,33 @@ func hashIdempotencyKey(key string) string {
 	return hex.EncodeToString(hash[:])
 }
 
+func operationIdempotencyScope(userID, organizationID, definitionID string) string {
+	identity := organizationID + ":" + userID
+	if identity == ":" {
+		identity = "anonymous"
+	}
+	return identity + ":" + definitionID
+}
+
+func scopedOperationKey(scope, key string) string {
+	if key == "" {
+		return ""
+	}
+	return scope + ":" + hashIdempotencyKey(key)
+}
+
+// operationIdempotencyKey returns the value persisted in the globally UNIQUE
+// operations.idempotency_key column. When the client sends no key, idempotency
+// is disabled and the record is never written, so the column needs a unique
+// placeholder instead of the empty string shared by every keyless request
+// (AC-010-05).
+func operationIdempotencyKey(scope, key string) string {
+	if key == "" {
+		return scope + ":" + uuid.NewString()
+	}
+	return scopedOperationKey(scope, key)
+}
+
 func operationCancelScope(operationID, actorUserID string) string {
 	return operationID + ":" + actorUserID
 }
@@ -1007,8 +1020,10 @@ func (s *Service) toResponse(op *store.Operation, verificationResult *commonv1.V
 }
 
 // hashRequest computes a deterministic hash of the request for idempotency.
+// The signature reference is part of the hash so a replay with a different
+// signature for the same key conflicts (AC-010-02).
 func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
-	payload := fmt.Sprintf("%s|%s|%s|%s|%s|%d|%s|%s",
+	payload := fmt.Sprintf("%s|%s|%s|%s|%s|%d|%s|%s|%s|%s|%s",
 		req.OperationType,
 		req.BundleId,
 		req.ReleaseDefinitionId,
@@ -1017,6 +1032,9 @@ func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
 		req.ExpectedCurrentRevision,
 		req.Actor.GetUserId(),
 		req.Actor.GetOrganization(),
+		req.SignatureRef.GetDigest(),
+		req.SignatureRef.GetSignature(),
+		req.SignatureRef.GetIssuer(),
 	)
 	h := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("%x", h)

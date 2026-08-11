@@ -54,6 +54,7 @@ type Store struct {
 	emergencyIntents *emergencyIntentStore
 	convergenceTasks *convergenceTaskStore
 	authorization    *authorizationStore
+	idem             *idempotencyStore
 }
 
 // Open creates a new SQLite-backed Store, running migrations on the database.
@@ -105,6 +106,7 @@ func Open(dsn string) (*Store, error) {
 	s.orgMembers = &organizationMemberStore{db: db}
 	s.bindings = &bindingStore{db: db}
 	s.notif = &notificationStore{db: db}
+	s.idem = &idempotencyStore{db: db}
 	s.audit = &auditEventStore{db: db}
 	s.trustRoots = &trustRootStore{db: db}
 	s.vulnExceptions = &vulnerabilityExceptionStore{db: db}
@@ -123,7 +125,6 @@ func Open(dsn string) (*Store, error) {
 	s.emergencyIntents = &emergencyIntentStore{db: db}
 	s.convergenceTasks = &convergenceTaskStore{db: db}
 	s.authorization = &authorizationStore{db: db}
-
 	return s, nil
 }
 
@@ -208,6 +209,9 @@ func (s *Store) Bundles() store.BundleStore { return s.bundles }
 // Notifications returns the NotificationStore.
 func (s *Store) Notifications() store.NotificationStore { return s.notif }
 
+// Idempotency returns the IdempotencyStore.
+func (s *Store) Idempotency() store.IdempotencyStore { return s.idem }
+
 // Verifications returns the VerificationStore.
 func (s *Store) Verifications() store.VerificationStore { return s.verifs }
 
@@ -260,7 +264,6 @@ func (s *Store) ConvergenceTasks() store.ConvergenceTaskStore { return s.converg
 
 // Authorization returns the durable authorization state module.
 func (s *Store) Authorization() store.AuthorizationStore { return s.authorization }
-
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
 

@@ -12,12 +12,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	"github.com/ndzuki/release-manager/internal/contracts"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
 const (
-	defaultReleasePageSize     = 50
-	maxReleasePageSize         = 200
 	maxReleaseNameSearch       = 253
 	inventorySyncOperationType = "INVENTORY_SYNC"
 )
@@ -44,13 +43,7 @@ func (s *Service) ListReleases(
 		return nil, inventoryError(connect.CodeInvalidArgument, "name_search_too_long", "name_search must not exceed 253 characters")
 	}
 
-	pageSize := int(msg.GetPageSize())
-	if pageSize == 0 {
-		pageSize = defaultReleasePageSize
-	}
-	if pageSize < 1 || pageSize > maxReleasePageSize {
-		return nil, inventoryError(connect.CodeInvalidArgument, "invalid_page_size", "page_size must be between 1 and 200")
-	}
+	pageSize := int(contracts.NormalizePageSize(msg.GetPageSize()))
 	status, err := inventoryStatusFromProto(msg.GetStatusFilter())
 	if err != nil {
 		return nil, err
@@ -161,7 +154,7 @@ func (s *Service) TriggerInventorySync(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get inventory operator session: %w", err))
 	}
 
-	requestID := uuid.NewString()
+	requestID := requestIDOrNew(ctx)
 	commandID := uuid.NewString()
 	outboxID := uuid.NewString()
 	payload, err := json.Marshal(inventorySyncCommandPayload{SyncRequestID: requestID})
