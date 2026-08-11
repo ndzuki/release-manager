@@ -425,12 +425,14 @@ func roleRules(role, domain string) [][]string {
 			[]string{role, domain, "release", "read"},
 			[]string{role, domain, "release", "write"},
 			[]string{role, domain, "customer", "read"},
+			[]string{role, domain, "trust_root", "read"},
 		)
 	case store.RoleDeployer:
 		rules = append(rules,
 			[]string{role, domain, "release", "read"},
 			[]string{role, domain, "release", "write"},
 			[]string{role, domain, "customer", "read"},
+			[]string{role, domain, "trust_root", "read"},
 		)
 	case store.RoleViewer:
 		rules = append(rules,
@@ -438,6 +440,7 @@ func roleRules(role, domain string) [][]string {
 			[]string{role, domain, "member", "read"},
 			[]string{role, domain, "release", "read"},
 			[]string{role, domain, "customer", "read"},
+			[]string{role, domain, "trust_root", "read"},
 		)
 	}
 	for _, capability := range roleCapabilityRules(store.Role(role), domain) {

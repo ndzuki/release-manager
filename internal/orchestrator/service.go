@@ -80,7 +80,6 @@ func (s *Service) CreateOperation(
 	req *connect.Request[orchestratorv1.CreateOperationRequest],
 ) (*connect.Response[orchestratorv1.CreateOperationResponse], error) {
 	msg := req.Msg
-
 	operationScope := operationIdempotencyScope(msg.Actor.GetUserId(), msg.Actor.GetOrganization(), msg.ReleaseDefinitionId)
 	requestHash := hashRequest(msg)
 
@@ -184,32 +183,70 @@ func (s *Service) CreateOperation(
 			fmt.Errorf("expected_current_revision must be >= 1 for %s, got %d", opType, msg.ExpectedCurrentRevision))
 	}
 
-	// 4.5. Trust verification (REQ-012)
-	var verifyResult commonv1.VerificationResult
-	if msg.SignatureRef != nil && s.verifier != nil {
-		policy := trust.DefaultPolicy(s.targetEnv)
-		digest := fmt.Sprintf("%x", sha256.Sum256([]byte(msg.BundleId+"|"+def.ID)))
+	// 4.5. Trust verification (REQ-012).
+	policy := trust.DefaultPolicy(s.targetEnv)
+	bundle, err := s.store.Bundles().Get(ctx, msg.BundleId)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("bundle not found: %s", msg.BundleId))
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("bundle lookup: %w", err))
+	}
+	digest := bundle.DigestValue
+	if bundle.DigestAlg != "" {
+		digest = bundle.DigestAlg + ":" + bundle.DigestValue
+	}
 
-		out, err := s.verifier.Verify(ctx, trust.Input{
+	var out *trust.Output
+	if s.verifier == nil {
+		out = &trust.Output{
+			Status:  store.VerificationVerificationUnavailable,
+			Summary: "verification_unavailable: verifier is not configured",
+		}
+	} else {
+		out, err = s.verifier.Verify(ctx, trust.Input{
 			Digest:       digest,
 			SignatureRef: msg.SignatureRef,
 			Policy:       policy,
+			Environment:  s.targetEnv,
 		})
 		if err != nil {
-			if policy.FailClosed {
-				return nil, connect.NewError(connect.CodeUnavailable,
-					fmt.Errorf("verification_unavailable: %w", err))
+			out = &trust.Output{
+				Status:  store.VerificationVerificationUnavailable,
+				Summary: fmt.Sprintf("verification_unavailable: %v", err),
 			}
-			s.logger.Warn("verification backend unavailable, policy_warning", "err", err)
-			verifyResult = commonv1.VerificationResult_VERIFICATION_RESULT_VERIFICATION_UNAVAILABLE
-		} else {
-			verifyResult = trust.StatusToProto(out.Status)
-			if out.Status == store.VerificationRejected {
-				return nil, connect.NewError(connect.CodeFailedPrecondition,
-					fmt.Errorf("artifact trust rejected: %s", out.Summary))
+		} else if out == nil {
+			out = &trust.Output{
+				Status:  store.VerificationVerificationUnavailable,
+				Summary: "verification_unavailable: verifier returned no result",
 			}
 		}
 	}
+	if out.Status != store.VerificationTrusted {
+		s.emitTrustVerificationAudit(ctx, msg, digest, out)
+	}
+	responseStatus := out.Status
+	switch out.Status {
+	case store.VerificationTrusted:
+	case store.VerificationRejected:
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New(out.Summary))
+	case store.VerificationSignatureMissing:
+		if policy.FailClosed {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New(out.Summary))
+		}
+		responseStatus = store.VerificationPolicyWarning
+	case store.VerificationVerificationUnavailable:
+		if policy.FailClosed {
+			return nil, connect.NewError(connect.CodeUnavailable, errors.New(out.Summary))
+		}
+		responseStatus = store.VerificationPolicyWarning
+	default:
+		if policy.FailClosed {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("artifact trust rejected: %s", out.Summary))
+		}
+		responseStatus = store.VerificationPolicyWarning
+	}
+	verifyResult := trust.StatusToProto(responseStatus)
 
 	if opType == store.OperationInstall {
 		if msg.GetValuesRevisionId() == "" {
@@ -277,7 +314,7 @@ func (s *Service) CreateOperation(
 	}
 	op = createResult.Operation
 	if createResult.Replayed {
-		return connect.NewResponse(s.toResponse(op)), nil
+		return connect.NewResponse(s.toResponse(op, nil)), nil
 	}
 
 	// 8. Trigger preflight transition and launch coordinator
@@ -308,13 +345,7 @@ func (s *Service) CreateOperation(
 		"definition", op.ReleaseDefinitionID,
 	)
 
-	return connect.NewResponse(&orchestratorv1.CreateOperationResponse{
-		OperationId:        op.ID,
-		State:              string(op.Status),
-		PreflightId:        op.ID,
-		AcceptedAt:         timestamppb.New(op.CreatedAt),
-		VerificationResult: verifyResult,
-	}), nil
+	return connect.NewResponse(s.toResponse(op, &verifyResult)), nil
 }
 
 
@@ -975,13 +1006,17 @@ func hashCancelRequest(operationID string, expectedStateVersion int, reason stri
 	return hex.EncodeToString(hash[:])
 }
 
-func (s *Service) toResponse(op *store.Operation) *orchestratorv1.CreateOperationResponse {
-	return &orchestratorv1.CreateOperationResponse{
+func (s *Service) toResponse(op *store.Operation, verificationResult *commonv1.VerificationResult) *orchestratorv1.CreateOperationResponse {
+	response := &orchestratorv1.CreateOperationResponse{
 		OperationId: op.ID,
 		State:       string(op.Status),
 		PreflightId: op.ID, // preflight_id = operation_id for initial phase
 		AcceptedAt:  timestamppb.New(op.CreatedAt),
 	}
+	if verificationResult != nil {
+		response.VerificationResult = *verificationResult
+	}
+	return response
 }
 
 // hashRequest computes a deterministic hash of the request for idempotency.
@@ -1031,6 +1066,53 @@ func checkDefinitionOperable(def *store.ReleaseDefinition) error {
 	}
 	return connect.NewError(connect.CodeFailedPrecondition,
 		fmt.Errorf("release_definition_disabled: definition %s is %s", def.ID, def.Status))
+}
+
+func (s *Service) emitTrustVerificationAudit(
+	ctx context.Context,
+	msg *orchestratorv1.CreateOperationRequest,
+	digest string,
+	out *trust.Output,
+) {
+	if out == nil {
+		return
+	}
+	actor, ok := authctx.ActorFromContext(ctx)
+	actorKind := store.AuditActorUser
+	actorID := msg.GetActor().GetUserId()
+	organizationID := msg.GetActor().GetOrganization()
+	role := ""
+	if ok {
+		actorID = actor.UserID
+		organizationID = actor.OrganizationID
+		if actor.Service != "" {
+			actorKind = store.AuditActorService
+			actorID = actor.Service
+		}
+		if len(actor.Roles) > 0 {
+			role = actor.Roles[0]
+		}
+	}
+	policyVersion := trust.DefaultPolicy(s.targetEnv).PolicyVersion
+	if out.Record != nil && out.Record.PolicyVersion != "" {
+		policyVersion = out.Record.PolicyVersion
+	}
+	s.emitAudit(audit.NewEvent(
+		actorKind,
+		actorID,
+		organizationID,
+		role,
+		"release_bundle",
+		msg.GetBundleId(),
+		"verify_trust",
+		string(out.Status),
+		out.Summary,
+		map[string]string{
+			"digest":         digest,
+			"policy_version": policyVersion,
+			"result":         string(out.Status),
+		},
+	))
 }
 
 // emitAudit emits an audit event through the configured sink, if any.

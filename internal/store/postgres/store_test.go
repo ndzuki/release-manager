@@ -989,17 +989,21 @@ func TestVerificationPersistenceIncludesTrustProvenance(t *testing.T) {
 	ctx := context.Background()
 	record := &store.VerificationRecord{
 		ID: uuid.NewString(), ArtifactDigest: "sha256:verification", PolicyVersion: "policy-v1",
-		Status: store.VerificationTrusted, RootID: "root-1", KeyID: "key-1", RevocationEpoch: 7,
+		SignatureIdentity: "signature-identity", Status: store.VerificationTrusted,
+		RootID: "root-1", KeyID: "key-1", RevocationEpoch: 7,
 		Issuer: "issuer", Subject: "subject", Summary: "trusted",
 	}
 	require.NoError(t, st.Verifications().Create(ctx, record))
 
-	got, err := st.Verifications().GetByDigestAndPolicy(ctx, record.ArtifactDigest, record.PolicyVersion)
+	got, err := st.Verifications().GetByDigestPolicyAndSignature(ctx, record.ArtifactDigest, record.PolicyVersion, record.SignatureIdentity)
 	require.NoError(t, err)
+	assert.Equal(t, record.SignatureIdentity, got.SignatureIdentity)
 	assert.Equal(t, record.RootID, got.RootID)
 	assert.Equal(t, record.KeyID, got.KeyID)
 	assert.Equal(t, record.RevocationEpoch, got.RevocationEpoch)
 	assert.False(t, got.CreatedAt.IsZero())
+	_, err = st.Verifications().GetByDigestPolicyAndSignature(ctx, record.ArtifactDigest, record.PolicyVersion, "different-signature")
+	assert.ErrorIs(t, err, store.ErrNotFound)
 }
 
 func TestCandidateArtifactDuplicateRefreshesIdentity(t *testing.T) {
@@ -1053,6 +1057,36 @@ func TestTrustAndVulnerabilityAccessors(t *testing.T) {
 	gotException, err := st.VulnerabilityExceptions().Get(ctx, exception.ID)
 	require.NoError(t, err)
 	assert.Equal(t, exception.Reason, gotException.Reason)
+}
+
+func TestTrustRootsGetActiveGraceWindow(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	expired := now.Add(-time.Hour)
+	live := now.Add(24 * time.Hour)
+
+	roots := []*store.TrustRoot{
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-active", PublicKeyPEM: "pem", Issuer: "active-ci", State: store.TrustRootActive, ValidFrom: now.Add(-2 * time.Hour)},
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-grace-live", PublicKeyPEM: "pem", Issuer: "grace-ci", State: store.TrustRootGrace, ValidFrom: now.Add(-time.Hour), GraceUntil: &live},
+		// 无 grace_until 的 grace root 不是 live（与 trust.Root.Accepts 谓词一致）：服务端 Rotate 强制 grace root 必有 grace_until，缺失视为数据污染不参与验签。
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-grace-open", PublicKeyPEM: "pem", Issuer: "open-grace-ci", State: store.TrustRootGrace, ValidFrom: now.Add(-time.Hour)},
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-grace-expired", PublicKeyPEM: "pem", Issuer: "expired-ci", State: store.TrustRootGrace, ValidFrom: now.Add(-48 * time.Hour), GraceUntil: &expired},
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-future", PublicKeyPEM: "pem", Issuer: "future-ci", State: store.TrustRootActive, ValidFrom: now.Add(48 * time.Hour)},
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-pending", PublicKeyPEM: "pem", Issuer: "pending-ci", State: store.TrustRootPending, ValidFrom: now.Add(-time.Hour)},
+		{ID: uuid.NewString(), Environment: "production", KeyID: "key-other-env", PublicKeyPEM: "pem", Issuer: "other-ci", State: store.TrustRootActive, ValidFrom: now.Add(-time.Hour)},
+	}
+	for _, root := range roots {
+		require.NoError(t, st.TrustRoots().Create(ctx, root))
+	}
+
+	got, err := st.TrustRoots().GetActiveByEnvironment(ctx, "staging", now)
+	require.NoError(t, err)
+	var keys []string
+	for _, root := range got {
+		keys = append(keys, root.KeyID)
+	}
+	assert.ElementsMatch(t, []string{"key-active", "key-grace-live"}, keys)
 }
 
 func TestAuditExportAtomicPersistence(t *testing.T) {
