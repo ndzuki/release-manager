@@ -1,2 +1,5 @@
 http_port: 8086
 log_level: debug
+database:
+  driver: sqlite
+  dsn: data/notifier.db
