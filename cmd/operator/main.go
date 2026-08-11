@@ -71,6 +71,7 @@ func (s *operatorSvc) Configure(cfg *config.ServiceConfig) {
 	s.caCertPath = cfg.CA.CertPath
 }
 
+//nolint:unparam // error return is mandated by the internal/app serverConfigurer interface
 func (s *operatorSvc) ConfigureServer(server *http.Server) error {
 	protocols := new(http.Protocols)
 	protocols.SetHTTP1(true)
@@ -335,18 +336,18 @@ func (s *operatorSvc) runSessionExpiry(ctx context.Context, logger *slog.Logger)
 
 func newSecretClient(kubeConfig string) (kubernetes.Interface, error) {
 	var (
-		config *rest.Config
+		restConfig *rest.Config
 		err    error
 	)
 	if kubeConfig != "" {
-		config, err = clientcmd.BuildConfigFromFlags("", kubeConfig)
+		restConfig, err = clientcmd.BuildConfigFromFlags("", kubeConfig)
 	} else {
-		config, err = rest.InClusterConfig()
+		restConfig, err = rest.InClusterConfig()
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load Kubernetes REST config: %w", err)
 	}
-	client, err := kubernetes.NewForConfig(config)
+	client, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
 		return nil, fmt.Errorf("initialize Kubernetes clientset: %w", err)
 	}

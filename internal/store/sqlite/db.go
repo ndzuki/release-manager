@@ -528,7 +528,10 @@ var migrationStatements = []string{
 		updated_at    TEXT NOT NULL
 	)`,
 
-	`CREATE INDEX IF NOT EXISTS idx_operators_cert ON operators(cert_serial)`,
+	// ADR-018: cert serial is the identity authority — a unique index makes
+	// an 80-bit DER-hash collision fail the insert instead of silently
+	// binding two operators to one certificate.
+	`CREATE UNIQUE INDEX IF NOT EXISTS operators_cert_serial_uq ON operators(cert_serial)`,
 	`CREATE INDEX IF NOT EXISTS idx_operators_name ON operators(operator_name)`,
 	`CREATE INDEX IF NOT EXISTS idx_operators_cluster ON operators(cluster_id, status)`,
 

@@ -205,6 +205,38 @@ func TestOperatorCreateAndGetByCertSerial(t *testing.T) {
 	assert.Equal(t, store.OperatorActive, got.Status)
 }
 
+func TestOperatorCertSerialUnique(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	cust := &store.Customer{ID: uuid.New().String(), Name: "SerialCorp", Slug: "serialcorp"}
+	require.NoError(t, st.Customers().Create(ctx, cust))
+
+	firstCluster := &store.Cluster{ID: uuid.New().String(), Name: "c1", CustomerID: cust.ID}
+	require.NoError(t, st.Clusters().Create(ctx, firstCluster))
+	secondCluster := &store.Cluster{ID: uuid.New().String(), Name: "c2", CustomerID: cust.ID}
+	require.NoError(t, st.Clusters().Create(ctx, secondCluster))
+
+	first := &store.Operator{
+		ID:         uuid.New().String(),
+		CustomerID: cust.ID,
+		ClusterID:  firstCluster.ID,
+		CertSerial: "SERIAL-COLLISION",
+	}
+	require.NoError(t, st.Operators().Create(ctx, first))
+
+	// ADR-018: a second operator with the same cert serial must fail — an
+	// 80-bit DER-hash collision must never bind two operators to one
+	// certificate (REQ-015 v1.1 operators_cert_serial_uq).
+	collision := &store.Operator{
+		ID:         uuid.New().String(),
+		CustomerID: cust.ID,
+		ClusterID:  secondCluster.ID,
+		CertSerial: "SERIAL-COLLISION",
+	}
+	require.Error(t, st.Operators().Create(ctx, collision))
+}
+
 func TestSessionLifecycle(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
