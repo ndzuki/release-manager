@@ -135,7 +135,9 @@ func (s *Service) handleValuesApproval(
 		Authorized:                   true,
 		Reason:                       strings.TrimSpace(reason),
 		RequestID:                    requestIDOrNew(ctx),
-		IdempotencyScope:             fmt.Sprintf("%s:%s:%s", actor.userID, action, revisionID),
+		// Scope includes the organization so the same raw key under different
+		// tenants never collides (AC-010-05).
+		IdempotencyScope:             fmt.Sprintf("%s:%s:%s:%s", actor.orgID, actor.userID, action, revisionID),
 		IdempotencyKeyHash:           hashApprovalIdempotencyKey(idempotencyKey),
 		RequestHash:                  hashApprovalRequest(action, revisionID, expectedStateVersion, trimmedComment, strings.TrimSpace(reason)),
 	}

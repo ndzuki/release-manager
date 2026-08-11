@@ -76,9 +76,12 @@ func (s *BundleService) SubmitBundle(
 		if identity == "" {
 			identity = actor.UserID
 		}
+		// Scope includes the organization so the same raw key under different
+		// tenants never collides (AC-010-05); the key itself is hashed like
+		// every other domain (AC-010-01).
 		idempotency = &store.IdempotencyRecord{
-			Scope:       identity + ":SubmitBundle",
-			Key:         key,
+			Scope:       identity + ":" + actor.OrganizationID + ":SubmitBundle",
+			Key:         hashIdempotencyKey(key),
 			RequestHash: requestHash,
 			ExpiresAt:   time.Now().UTC().Add(24 * time.Hour),
 		}

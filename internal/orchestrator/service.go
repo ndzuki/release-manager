@@ -240,7 +240,7 @@ func (s *Service) CreateOperation(
 		OperationType:       opType,
 		Status:              operation.InitialStatus(),
 		ReleaseDefinitionID: msg.ReleaseDefinitionId,
-		IdempotencyKey:      scopedOperationKey(operationScope, msg.IdempotencyKey),
+		IdempotencyKey:      operationIdempotencyKey(operationScope, msg.IdempotencyKey),
 		RequestHash:         reqHash,
 		BundleID:            msg.BundleId,
 		ValuesRevisionID:    msg.ValuesRevisionId,
@@ -426,7 +426,7 @@ func (s *Service) WatchOperation(
 	if snapshot.RetainedFromSequence > 0 && req.Msg.GetAfterSequence() < snapshot.RetainedFromSequence-1 {
 		return operationCursorExpiredError(snapshot)
 	}
-	requestID := uuid.NewString()
+	requestID := requestIDOrNew(ctx)
 	if err := stream.Send(&orchestratorv1.WatchOperationResponse{
 		Payload: &orchestratorv1.WatchOperationResponse_Snapshot{Snapshot: toProtoOperationSnapshot(snapshot)},
 	}); err != nil {
@@ -700,7 +700,7 @@ func (s *Service) finishCancelWithTarget(
 	idempotencyKey string,
 	targetStatus store.OperationStatus,
 ) (*connect.Response[orchestratorv1.CancelOperationResponse], error) {
-	requestID := uuid.New().String()
+	requestID := requestIDOrNew(ctx)
 	scope := operationCancelScope(op.ID, actor.UserID)
 	reqHash := hashCancelRequest(msg.OperationId, int(msg.ExpectedStateVersion), msg.Reason)
 	keyHash := hashIdempotencyKey(idempotencyKey)
@@ -953,6 +953,18 @@ func scopedOperationKey(scope, key string) string {
 	return scope + ":" + hashIdempotencyKey(key)
 }
 
+// operationIdempotencyKey returns the value persisted in the globally UNIQUE
+// operations.idempotency_key column. When the client sends no key, idempotency
+// is disabled and the record is never written, so the column needs a unique
+// placeholder instead of the empty string shared by every keyless request
+// (AC-010-05).
+func operationIdempotencyKey(scope, key string) string {
+	if key == "" {
+		return scope + ":" + uuid.NewString()
+	}
+	return scopedOperationKey(scope, key)
+}
+
 func operationCancelScope(operationID, actorUserID string) string {
 	return operationID + ":" + actorUserID
 }
@@ -973,8 +985,10 @@ func (s *Service) toResponse(op *store.Operation) *orchestratorv1.CreateOperatio
 }
 
 // hashRequest computes a deterministic hash of the request for idempotency.
+// The signature reference is part of the hash so a replay with a different
+// signature for the same key conflicts (AC-010-02).
 func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
-	payload := fmt.Sprintf("%s|%s|%s|%s|%s|%d|%s|%s",
+	payload := fmt.Sprintf("%s|%s|%s|%s|%s|%d|%s|%s|%s|%s|%s",
 		req.OperationType,
 		req.BundleId,
 		req.ReleaseDefinitionId,
@@ -983,6 +997,9 @@ func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
 		req.ExpectedCurrentRevision,
 		req.Actor.GetUserId(),
 		req.Actor.GetOrganization(),
+		req.SignatureRef.GetDigest(),
+		req.SignatureRef.GetSignature(),
+		req.SignatureRef.GetIssuer(),
 	)
 	h := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("%x", h)

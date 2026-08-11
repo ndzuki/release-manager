@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"connectrpc.com/connect"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -18,6 +19,7 @@ import (
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/app"
+	contractsinterceptor "github.com/ndzuki/release-manager/internal/contracts/interceptor"
 	"github.com/ndzuki/release-manager/internal/operator"
 	operatoragent "github.com/ndzuki/release-manager/internal/operator/agent"
 	"github.com/ndzuki/release-manager/internal/operator/helmengine"
@@ -97,7 +99,13 @@ func (s *operatorSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("create operator service: %w", err)
 	}
-	path, handler := operatorv1connect.NewOperatorServiceHandler(svc)
+	path, handler := operatorv1connect.NewOperatorServiceHandler(
+		svc,
+		connect.WithInterceptors(
+			contractsinterceptor.NewRequestIDInterceptor(logger),
+			contractsinterceptor.NewErrorSanitizeInterceptor(logger),
+		),
+	)
 	mux.Handle(path, handler)
 
 	engine := helmengine.NewRealEngine(s.kubeConfig, logger)

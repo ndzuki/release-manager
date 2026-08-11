@@ -27,12 +27,22 @@ func (s *operationStore) CreateIdempotent(
 	ctx context.Context,
 	command store.OperationCreateCommand,
 ) (*store.OperationCreateResult, error) {
-	if command.Operation == nil || command.Idempotency == nil {
-		return nil, fmt.Errorf("create idempotent operation: operation and idempotency are required")
+	if command.Operation == nil {
+		return nil, fmt.Errorf("create idempotent operation: operation is required")
 	}
-	return createIdempotentOperation(ctx, s.db, command)
+	var result *store.OperationCreateResult
+	err := retryBusy(ctx, func() error {
+		created, err := createIdempotentOperation(ctx, s.db, command)
+		if err != nil {
+			return err
+		}
+		result = created
+		return nil
+	})
+	return result, err
 }
 
+//nolint:gocyclo // 幂等创建事务编排了空 Key 跳过、重放、并发 load-after-conflict 与业务写入。
 func createIdempotentOperation(
 	ctx context.Context,
 	db *sql.DB,
@@ -44,26 +54,25 @@ func createIdempotentOperation(
 	}
 	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
 
-	replay, err := loadActiveIdempotencyRecord(
-		ctx,
-		tx,
-		command.Idempotency.Scope,
-		command.Idempotency.Key,
-		time.Now().UTC(),
-	)
-	if err == nil {
-		if replay.RequestHash != command.Idempotency.RequestHash {
-			return nil, store.ErrIdempotencyConflict
+	// 空 Key（或未携带幂等记录）时跳过全部幂等逻辑（不 lookup、不 insert），直接业务创建。
+	idempotent := command.Idempotency != nil && command.Idempotency.Key != ""
+	if idempotent {
+		replay, err := loadActiveIdempotencyRecord(
+			ctx,
+			tx,
+			command.Idempotency.Scope,
+			command.Idempotency.Key,
+			time.Now().UTC(),
+		)
+		if err == nil {
+			if replay.RequestHash != command.Idempotency.RequestHash {
+				return nil, store.ErrIdempotencyConflict
+			}
+			return decodeOperationCreateReplay(ctx, tx, replay)
 		}
-		operationID := string(replay.ResponseRef)
-		operation, getErr := getOperation(ctx, tx, operationID)
-		if getErr != nil {
-			return nil, fmt.Errorf("load idempotent operation: %w", getErr)
+		if !errors.Is(err, store.ErrNotFound) {
+			return nil, err
 		}
-		return &store.OperationCreateResult{Operation: operation, Replayed: true}, nil
-	}
-	if !errors.Is(err, store.ErrNotFound) {
-		return nil, err
 	}
 
 	if command.CheckAvailable {
@@ -84,9 +93,16 @@ func createIdempotentOperation(
 		}
 	}
 
-	command.Idempotency.ResponseRef = []byte(command.Operation.ID)
-	if _, err := insertIdempotencyRecord(ctx, tx, command.Idempotency, false); err != nil {
-		return nil, err
+	if idempotent {
+		command.Idempotency.ResponseRef = []byte(command.Operation.ID)
+		existing, created, err := createOrGetIdempotencyRecord(ctx, tx, command.Idempotency, time.Now().UTC())
+		if err != nil {
+			return nil, err
+		}
+		if !created {
+			// 并发窗口内另一事务已提交相同 scope+key+hash：重放其操作，业务写入随回滚丢弃。
+			return decodeOperationCreateReplay(ctx, tx, existing)
+		}
 	}
 	if err := createOperation(ctx, tx, command.Operation); err != nil {
 		return nil, err
@@ -95,6 +111,15 @@ func createIdempotentOperation(
 		return nil, fmt.Errorf("commit idempotent operation: %w", err)
 	}
 	return &store.OperationCreateResult{Operation: command.Operation}, nil
+}
+
+// decodeOperationCreateReplay 把幂等记录中的 operationID 解码为操作创建重放结果。
+func decodeOperationCreateReplay(ctx context.Context, queryer operationQueryer, record *store.IdempotencyRecord) (*store.OperationCreateResult, error) {
+	operation, err := getOperation(ctx, queryer, string(record.ResponseRef))
+	if err != nil {
+		return nil, fmt.Errorf("load idempotent operation: %w", err)
+	}
+	return &store.OperationCreateResult{Operation: operation, Replayed: true}, nil
 }
 
 func createIfAvailable(ctx context.Context, db *sql.DB, op *store.Operation) error {
@@ -144,7 +169,7 @@ func retryBusy(ctx context.Context, fn func() error) error {
 		if lastErr == nil {
 			return nil
 		}
-		if !strings.Contains(lastErr.Error(), "database is locked") {
+		if !strings.Contains(lastErr.Error(), "locked") {
 			return lastErr
 		}
 		time.Sleep(backoff)
@@ -392,8 +417,12 @@ func (s *operationStore) Cancel(ctx context.Context, command store.OperationCanc
 	}
 
 	cancelResult := &store.OperationCancelResult{Operation: &updated, RequestID: command.RequestID}
-	if err := insertOperationCancelIdempotency(ctx, tx, command, cancelResult, time.Now().UTC().Add(operationCancelIdempotencyTTL)); err != nil {
+	replay, err = insertOperationCancelIdempotency(ctx, tx, command, cancelResult, time.Now().UTC().Add(operationCancelIdempotencyTTL))
+	if err != nil {
 		return nil, err
+	}
+	if replay != nil {
+		return replay, nil
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit cancel operation: %w", err)
@@ -436,21 +465,31 @@ func insertOperationCancelIdempotency(
 	command store.OperationCancelCommand,
 	result *store.OperationCancelResult,
 	expiresAt time.Time,
-) error {
+) (*store.OperationCancelResult, error) {
 	if command.IdempotencyKeyHash == "" {
-		return nil
+		return nil, nil
 	}
 	responseRef, err := json.Marshal(result)
 	if err != nil {
-		return fmt.Errorf("encode operation cancel response: %w", err)
+		return nil, fmt.Errorf("encode operation cancel response: %w", err)
 	}
-	if _, err := insertIdempotencyRecord(ctx, tx, &store.IdempotencyRecord{
+	existing, created, err := createOrGetIdempotencyRecord(ctx, tx, &store.IdempotencyRecord{
 		Scope: command.IdempotencyScope, Key: command.IdempotencyKeyHash,
 		RequestHash: command.RequestHash, ResponseRef: responseRef, ExpiresAt: expiresAt,
-	}, false); err != nil {
-		return fmt.Errorf("insert operation cancel idempotency: %w", err)
+	}, time.Now().UTC())
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	if created {
+		return nil, nil
+	}
+	// 并发窗口内另一事务已提交相同 scope+key+hash：decode 已有记录返回重放结果。
+	var replay store.OperationCancelResult
+	if err := json.Unmarshal(existing.ResponseRef, &replay); err != nil {
+		return nil, fmt.Errorf("decode operation cancel replay: %w", err)
+	}
+	replay.Replayed = true
+	return &replay, nil
 }
 
 // FinalizeUpgrade atomically persists a typed result, terminal CAS, inventory, rollout, and timeline event.

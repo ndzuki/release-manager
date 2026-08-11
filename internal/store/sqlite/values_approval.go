@@ -186,8 +186,12 @@ func (s *valuesApprovalStore) transition(
 		DecidedAt:             now,
 		SupersededRevisionIDs: supersededIDs,
 	}
-	if err := insertIdempotency(ctx, tx, command, approvalResult, now.Add(idempotencyTTL)); err != nil {
+	replay, err := insertIdempotency(ctx, tx, command, approvalResult, now.Add(idempotencyTTL))
+	if err != nil {
 		return nil, err
+	}
+	if replay != nil {
+		return replay, nil
 	}
 	if err := checkAuthorizationFence(ctx, tx, command.ExpectedAuthorizationVersion); err != nil {
 		return nil, err
@@ -224,28 +228,37 @@ func lookupIdempotency(
 	}
 	return &result, nil
 }
-
 func insertIdempotency(
 	ctx context.Context,
 	tx *sql.Tx,
 	command store.ValuesApprovalCommand,
 	result *store.ValuesApprovalResult,
 	expiresAt time.Time,
-) error {
+) (*store.ValuesApprovalResult, error) {
 	if command.IdempotencyKeyHash == "" {
-		return nil
+		return nil, nil
 	}
 	responseRef, err := json.Marshal(result)
 	if err != nil {
-		return fmt.Errorf("encode values approval response: %w", err)
+		return nil, fmt.Errorf("encode values approval response: %w", err)
 	}
-	if _, err := insertIdempotencyRecord(ctx, tx, &store.IdempotencyRecord{
+	existing, created, err := createOrGetIdempotencyRecord(ctx, tx, &store.IdempotencyRecord{
 		Scope: command.IdempotencyScope, Key: command.IdempotencyKeyHash,
 		RequestHash: command.RequestHash, ResponseRef: responseRef, ExpiresAt: expiresAt,
-	}, false); err != nil {
-		return fmt.Errorf("insert values approval idempotency: %w", err)
+	}, time.Now().UTC())
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	if created {
+		return nil, nil
+	}
+	// 并发窗口内另一事务已提交相同 scope+key+hash：decode 已有记录返回重放结果。
+	var replay store.ValuesApprovalResult
+	if err := json.Unmarshal(existing.ResponseRef, &replay); err != nil {
+		return nil, fmt.Errorf("decode values approval replay: %w", err)
+	}
+	replay.Replayed = true
+	return &replay, nil
 }
 
 func ensureNoPendingRevision(ctx context.Context, tx *sql.Tx, revision *store.ValuesRevision) error {

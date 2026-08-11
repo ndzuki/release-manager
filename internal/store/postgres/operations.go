@@ -18,12 +18,13 @@ type operationStore struct{ gorm *DB }
 func (s *operationStore) Create(ctx context.Context, op *store.Operation) error {
 	return createOperation(ctx, s.gorm, op)
 }
+//nolint:gocyclo // 幂等创建事务编排了空 Key 跳过、重放、并发 load-after-conflict 与业务写入。
 func (s *operationStore) CreateIdempotent(
 	ctx context.Context,
 	command store.OperationCreateCommand,
 ) (*store.OperationCreateResult, error) {
-	if command.Operation == nil || command.Idempotency == nil {
-		return nil, fmt.Errorf("create idempotent operation: operation and idempotency are required")
+	if command.Operation == nil {
+		return nil, fmt.Errorf("create idempotent operation: operation is required")
 	}
 	tx, err := s.gorm.BeginTx(ctx, nil)
 	if err != nil {
@@ -31,27 +32,26 @@ func (s *operationStore) CreateIdempotent(
 	}
 	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
 
-	replay, err := loadActiveIdempotencyRecord(
-		ctx,
-		tx,
-		command.Idempotency.Scope,
-		command.Idempotency.Key,
-		time.Now().UTC(),
-	)
-	if err == nil {
-		if replay.RequestHash != command.Idempotency.RequestHash {
-			return nil, store.ErrIdempotencyConflict
+	// 空 Key（或未携带幂等记录）时跳过全部幂等逻辑，直接业务创建。
+	idempotent := command.Idempotency != nil && command.Idempotency.Key != ""
+	if idempotent {
+		replay, err := loadActiveIdempotencyRecord(
+			ctx,
+			tx,
+			command.Idempotency.Scope,
+			command.Idempotency.Key,
+			time.Now().UTC(),
+		)
+		if err == nil {
+			if replay.RequestHash != command.Idempotency.RequestHash {
+				return nil, store.ErrIdempotencyConflict
+			}
+			return decodeOperationCreateReplay(ctx, tx, replay)
 		}
-		operation, getErr := getOperation(ctx, tx, string(replay.ResponseRef))
-		if getErr != nil {
-			return nil, fmt.Errorf("load idempotent operation: %w", getErr)
+		if !errors.Is(err, store.ErrNotFound) {
+			return nil, err
 		}
-		return &store.OperationCreateResult{Operation: operation, Replayed: true}, nil
 	}
-	if !errors.Is(err, store.ErrNotFound) {
-		return nil, err
-	}
-
 	if command.CheckAvailable {
 		query := `
 			SELECT COUNT(*) FROM operations
@@ -70,9 +70,16 @@ func (s *operationStore) CreateIdempotent(
 		}
 	}
 
-	command.Idempotency.ResponseRef = []byte(command.Operation.ID)
-	if _, err := insertIdempotencyRecord(ctx, tx, command.Idempotency, false); err != nil {
-		return nil, err
+	if idempotent {
+		command.Idempotency.ResponseRef = []byte(command.Operation.ID)
+		existing, created, err := createOrGetIdempotencyRecord(ctx, tx, command.Idempotency, time.Now().UTC())
+		if err != nil {
+			return nil, err
+		}
+		if !created {
+			// 并发窗口内另一事务已提交相同 scope+key+hash：重放其操作，业务写入随回滚丢弃。
+			return decodeOperationCreateReplay(ctx, tx, existing)
+		}
 	}
 	if err := createOperation(ctx, tx, command.Operation); err != nil {
 		return nil, err
@@ -81,6 +88,15 @@ func (s *operationStore) CreateIdempotent(
 		return nil, fmt.Errorf("commit idempotent operation: %w", err)
 	}
 	return &store.OperationCreateResult{Operation: command.Operation}, nil
+}
+
+// decodeOperationCreateReplay 把幂等记录中的 operationID 解码为操作创建重放结果。
+func decodeOperationCreateReplay(ctx context.Context, queryer operationQueryer, record *store.IdempotencyRecord) (*store.OperationCreateResult, error) {
+	operation, err := getOperation(ctx, queryer, string(record.ResponseRef))
+	if err != nil {
+		return nil, fmt.Errorf("load idempotent operation: %w", err)
+	}
+	return &store.OperationCreateResult{Operation: operation, Replayed: true}, nil
 }
 
 func (s *operationStore) CreateIfAvailable(ctx context.Context, op *store.Operation) error {
@@ -356,8 +372,13 @@ func (s *operationStore) Cancel(ctx context.Context, command store.OperationCanc
 	}
 
 	cancelResult := &store.OperationCancelResult{Operation: &updated, RequestID: command.RequestID}
-	if err := insertOperationCancelIdempotency(ctx, tx, command, cancelResult, time.Now().UTC().Add(operationCancelIdempotencyTTL)); err != nil {
+	replay, err = insertOperationCancelIdempotency(ctx, tx, command, cancelResult, time.Now().UTC().Add(operationCancelIdempotencyTTL))
+	if err != nil {
 		return nil, err
+	}
+	if replay != nil {
+		// 并发窗口内另一事务已提交相同 scope+key+hash：重放其结果，业务写入随回滚丢弃。
+		return replay, nil
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit cancel operation: %w", err)
@@ -386,35 +407,45 @@ func lookupOperationCancelIdempotency(
 	if record.RequestHash != command.RequestHash {
 		return nil, store.ErrIdempotencyConflict
 	}
-	var result store.OperationCancelResult
-	if err := json.Unmarshal(record.ResponseRef, &result); err != nil {
-		return nil, fmt.Errorf("decode operation cancel replay: %w", err)
-	}
-	return &result, nil
+	return decodeOperationCancelReplay(record)
 }
 
-//nolint:dupl // Operation cancellation mirrors the shared transactional idempotency record protocol.
 func insertOperationCancelIdempotency(
 	ctx context.Context,
 	tx *Tx,
 	command store.OperationCancelCommand,
 	result *store.OperationCancelResult,
 	expiresAt time.Time,
-) error {
+) (*store.OperationCancelResult, error) {
 	if command.IdempotencyKeyHash == "" {
-		return nil
+		return nil, nil
 	}
 	responseRef, err := json.Marshal(result)
 	if err != nil {
-		return fmt.Errorf("encode operation cancel response: %w", err)
+		return nil, fmt.Errorf("encode operation cancel response: %w", err)
 	}
-	if _, err := insertIdempotencyRecord(ctx, tx, &store.IdempotencyRecord{
+	existing, created, err := createOrGetIdempotencyRecord(ctx, tx, &store.IdempotencyRecord{
 		Scope: command.IdempotencyScope, Key: command.IdempotencyKeyHash,
 		RequestHash: command.RequestHash, ResponseRef: responseRef, ExpiresAt: expiresAt,
-	}, false); err != nil {
-		return fmt.Errorf("insert operation cancel idempotency: %w", err)
+	}, time.Now().UTC())
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	if created {
+		return nil, nil
+	}
+	// 并发窗口内另一事务已提交相同 scope+key+hash：重放其结果。
+	return decodeOperationCancelReplay(existing)
+}
+
+// decodeOperationCancelReplay 把幂等记录中的 JSON 响应解码为取消重放结果。
+func decodeOperationCancelReplay(record *store.IdempotencyRecord) (*store.OperationCancelResult, error) {
+	var replay store.OperationCancelResult
+	if err := json.Unmarshal(record.ResponseRef, &replay); err != nil {
+		return nil, fmt.Errorf("decode operation cancel replay: %w", err)
+	}
+	replay.Replayed = true
+	return &replay, nil
 }
 
 func (s *operationStore) UpdateStatus(ctx context.Context, id string, status store.OperationStatus, stateVersion int, lastError string) (*store.Operation, error) {

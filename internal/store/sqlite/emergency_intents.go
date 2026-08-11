@@ -64,9 +64,13 @@ func (s *emergencyIntentStore) createIfAvailable(ctx context.Context, command st
 	if err := checkAuthorizationFence(ctx, tx, command.ExpectedAuthorizationVersion); err != nil {
 		return nil, err
 	}
-	replayed, err := lookupEmergencyReplay(ctx, tx, command)
-	if err != nil || replayed != nil {
-		return replayed, err
+	// 空 Key 时跳过全部幂等逻辑（不 lookup、不 insert），业务写入照常。
+	idempotent := command.IdempotencyKeyHash != ""
+	if idempotent {
+		replayed, err := lookupEmergencyReplay(ctx, tx, command)
+		if err != nil || replayed != nil {
+			return replayed, err
+		}
 	}
 
 	var standardCount int
@@ -119,11 +123,18 @@ func (s *emergencyIntentStore) createIfAvailable(ctx context.Context, command st
 	if expiresAt.IsZero() {
 		expiresAt = time.Now().UTC().Add(emergencyIdempotencyTTL)
 	}
-	if _, err := insertIdempotencyRecord(ctx, tx, &store.IdempotencyRecord{
-		Scope: command.IdempotencyScope, Key: command.IdempotencyKeyHash,
-		RequestHash: command.RequestHash, ResponseRef: responseRef, ExpiresAt: expiresAt,
-	}, false); err != nil {
-		return nil, fmt.Errorf("insert emergency idempotency record: %w", err)
+	if idempotent {
+		existing, created, err := createOrGetIdempotencyRecord(ctx, tx, &store.IdempotencyRecord{
+			Scope: command.IdempotencyScope, Key: command.IdempotencyKeyHash,
+			RequestHash: command.RequestHash, ResponseRef: responseRef, ExpiresAt: expiresAt,
+		}, time.Now().UTC())
+		if err != nil {
+			return nil, err
+		}
+		if !created {
+			// 并发窗口内另一事务已提交相同 scope+key+hash：decode 其引用返回重放结果。
+			return decodeEmergencyReplay(ctx, tx, existing)
+		}
 	}
 
 	if err := checkAuthorizationFence(ctx, tx, command.ExpectedAuthorizationVersion); err != nil {
@@ -173,6 +184,11 @@ func lookupEmergencyReplay(ctx context.Context, queryer operationQueryer, comman
 	if record.RequestHash != command.RequestHash {
 		return nil, store.ErrIdempotencyConflict
 	}
+	return decodeEmergencyReplay(ctx, queryer, record)
+}
+
+// decodeEmergencyReplay 把幂等记录中的 emergencyReplayRef 解码为紧急创建重放结果。
+func decodeEmergencyReplay(ctx context.Context, queryer operationQueryer, record *store.IdempotencyRecord) (*store.EmergencyCreateResult, error) {
 	var reference emergencyReplayRef
 	if err := json.Unmarshal(record.ResponseRef, &reference); err != nil {
 		return nil, fmt.Errorf("decode emergency replay reference: %w", err)

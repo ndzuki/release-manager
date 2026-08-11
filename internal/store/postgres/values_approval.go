@@ -184,14 +184,19 @@ func (s *valuesApprovalStore) transition(
 		DecidedAt:             now,
 		SupersededRevisionIDs: supersededIDs,
 	}
-	if err := insertValuesApprovalIdempotency(
+	replay, err := insertValuesApprovalIdempotency(
 		ctx,
 		tx,
 		command,
 		approvalResult,
 		now.Add(valuesApprovalIdempotencyTTL),
-	); err != nil {
+	)
+	if err != nil {
 		return nil, err
+	}
+	if replay != nil {
+		// 并发窗口内另一事务已提交相同 scope+key+hash：重放其结果，业务写入随回滚丢弃。
+		return replay, nil
 	}
 	if err := checkAuthorizationFence(ctx, tx, command.ExpectedAuthorizationVersion); err != nil {
 		return nil, err
@@ -222,11 +227,7 @@ func lookupValuesApprovalIdempotency(
 	if record.RequestHash != command.RequestHash {
 		return nil, store.ErrIdempotencyConflict
 	}
-	var result store.ValuesApprovalResult
-	if err := json.Unmarshal(record.ResponseRef, &result); err != nil {
-		return nil, fmt.Errorf("decode values approval replay: %w", err)
-	}
-	return &result, nil
+	return decodeValuesApprovalReplay(record)
 }
 
 func insertValuesApprovalIdempotency(
@@ -235,21 +236,36 @@ func insertValuesApprovalIdempotency(
 	command store.ValuesApprovalCommand,
 	result *store.ValuesApprovalResult,
 	expiresAt time.Time,
-) error {
+) (*store.ValuesApprovalResult, error) {
 	if command.IdempotencyKeyHash == "" {
-		return nil
+		return nil, nil
 	}
 	responseRef, err := json.Marshal(result)
 	if err != nil {
-		return fmt.Errorf("encode values approval response: %w", err)
+		return nil, fmt.Errorf("encode values approval response: %w", err)
 	}
-	if _, err := insertIdempotencyRecord(ctx, tx, &store.IdempotencyRecord{
+	existing, created, err := createOrGetIdempotencyRecord(ctx, tx, &store.IdempotencyRecord{
 		Scope: command.IdempotencyScope, Key: command.IdempotencyKeyHash,
 		RequestHash: command.RequestHash, ResponseRef: responseRef, ExpiresAt: expiresAt,
-	}, false); err != nil {
-		return fmt.Errorf("insert values approval idempotency: %w", err)
+	}, time.Now().UTC())
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	if created {
+		return nil, nil
+	}
+	// 并发窗口内另一事务已提交相同 scope+key+hash：重放其结果。
+	return decodeValuesApprovalReplay(existing)
+}
+
+// decodeValuesApprovalReplay 把幂等记录中的 JSON 响应解码为审批重放结果。
+func decodeValuesApprovalReplay(record *store.IdempotencyRecord) (*store.ValuesApprovalResult, error) {
+	var replay store.ValuesApprovalResult
+	if err := json.Unmarshal(record.ResponseRef, &replay); err != nil {
+		return nil, fmt.Errorf("decode values approval replay: %w", err)
+	}
+	replay.Replayed = true
+	return &replay, nil
 }
 
 func ensureNoPendingValuesRevision(ctx context.Context, tx *Tx, revision *store.ValuesRevision) error {

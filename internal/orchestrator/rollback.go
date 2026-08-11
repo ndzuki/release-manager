@@ -82,7 +82,7 @@ func (s *Service) RollbackRelease(
 		OperationType:       store.OperationRollback,
 		Status:              operation.InitialStatus(),
 		ReleaseDefinitionID: msg.ReleaseDefinitionId,
-		IdempotencyKey:      scopedOperationKey(operationScope, msg.IdempotencyKey),
+		IdempotencyKey:      operationIdempotencyKey(operationScope, msg.IdempotencyKey),
 		RequestHash:         requestHash,
 		ExpectedRevision:    int(msg.ExpectedCurrentRevision),
 		TargetRevision:      int(msg.TargetRevision),
