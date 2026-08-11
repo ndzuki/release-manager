@@ -13,8 +13,10 @@ import (
 
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
+	"github.com/ndzuki/release-manager/internal/operator/commandtype"
 	"github.com/ndzuki/release-manager/internal/operator/helmengine"
 	"github.com/ndzuki/release-manager/internal/operator/localstore"
+	"github.com/ndzuki/release-manager/internal/operator/secretmetadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -324,6 +326,32 @@ type codedEmergencyError struct{ code string }
 func (e codedEmergencyError) Error() string     { return e.code }
 func (e codedEmergencyError) ErrorCode() string { return e.code }
 
+func TestAgent_SecretMetadataCommandReturnsOnlyMetadata(t *testing.T) {
+	lister := recordingSecretLister{secrets: []secretmetadata.Secret{{Name: "app-config", Keys: []string{"ca.crt", "token"}}}}
+	agent, err := New(Config{
+		Client: noopClient{}, Engine: new(recordingEngine), Store: newMemoryStore(),
+		SecretLister: lister, SessionID: "session-1", OperatorID: "operator-1",
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	require.NoError(t, err)
+	stream := newTestStream()
+	command := &operatorv1.Command{OutboxId: "outbox-secrets", CommandId: "command-secrets", OperationId: "request-secrets", OperationType: commandtype.SecretMetadataList, Namespace: "apps", Sequence: 10}
+
+	require.NoError(t, agent.handleCommand(t.Context(), stream, command))
+	require.Len(t, stream.sent, 2)
+	resultJSON := stream.sent[1].GetResult().GetResultJson()
+	assert.Equal(t, "succeeded", stream.sent[1].GetResult().GetStatus())
+	assert.JSONEq(t, `{"command_id":"command-secrets","definition_id":"","inventory_sync_hint":false,"operation_id":"request-secrets","resource_summary":{},"secrets":[{"name":"app-config","keys":["ca.crt","token"]}],"status":"succeeded"}`, resultJSON)
+	assert.NotContains(t, resultJSON, "secret-value")
+}
+
+type recordingSecretLister struct {
+	secrets []secretmetadata.Secret
+}
+
+func (l recordingSecretLister) List(context.Context, string) ([]secretmetadata.Secret, error) {
+	return l.secrets, nil
+}
 type recordingSyncExecutor struct {
 	calls int
 	err   error

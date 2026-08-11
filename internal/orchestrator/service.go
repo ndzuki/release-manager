@@ -1111,3 +1111,9 @@ func (s *Service) emitAudit(ev *store.AuditEvent) {
 		)
 	}
 }
+
+// ListOperations returns operations for a release definition.
+func (s *Service) ListOperations(_ context.Context, _ *connect.Request[orchestratorv1.ListOperationsRequest]) (*connect.Response[orchestratorv1.ListOperationsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ListOperations is not implemented"))
+}
+

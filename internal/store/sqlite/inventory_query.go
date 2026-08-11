@@ -25,6 +25,8 @@ type inventoryCursor struct {
 }
 
 // Query returns a filtered, stable page of inventory rows for one cluster.
+//
+//nolint:gocyclo // stable pagination combines cursor, filters, and consistency projection
 func (s *inventoryStore) Query(ctx context.Context, query store.InventoryQuery) (*store.InventoryPage, error) {
 	pageSize := query.PageSize
 	if pageSize <= 0 {
@@ -94,6 +96,7 @@ func (s *inventoryStore) Query(ctx context.Context, query store.InventoryQuery) 
 	}
 
 	pageArgs = append(pageArgs, pageSize+1)
+	// #nosec G202 -- statusExpression and pageWhere contain only fixed SQL fragments; all user values stay parameterized.
 	selectQuery := `SELECT ri.customer_id, ri.cluster_id, ri.release_definition_id, ri.namespace,
 		ri.release_name, ri.chart, ri.chart_version, ri.revision, ri.status, ri.values_digest,
 		ri.observed_bundle_digest, ri.observed_chart_digest, ri.observed_effective_values_digest,

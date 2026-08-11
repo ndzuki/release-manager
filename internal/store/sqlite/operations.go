@@ -62,6 +62,7 @@ func createIfAvailable(ctx context.Context, db *sql.DB, op *store.Operation) err
 func retryBusy(ctx context.Context, fn func() error) error {
 	const maxRetries = 10
 	backoff := time.Millisecond
+
 	var lastErr error
 	for range maxRetries + 1 {
 		if err := ctx.Err(); err != nil {
@@ -115,16 +116,17 @@ func createOperation(ctx context.Context, execer operationExecer, op *store.Oper
 		INSERT INTO operations (
 			id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
-			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
+			bundle_id, values_revision_id, expected_revision, target_revision, target_operation_id, values_patch,
 			actor, created_at, updated_at, terminal_at, deadline, last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		op.ID, string(op.OperationType), string(op.Status), op.ReleaseDefinitionID,
 		op.IdempotencyKey, op.RequestHash, op.StateVersion,
-		op.BundleID, op.ValuesRevisionID, op.ExpectedRevision, op.TargetRevision, op.ValuesPatch,
+		op.BundleID, op.ValuesRevisionID, op.ExpectedRevision, op.TargetRevision, op.TargetOperationID, op.ValuesPatch,
 		string(actorJSON), op.CreatedAt.UTC().Format(time.RFC3339), op.UpdatedAt.UTC().Format(time.RFC3339),
 		terminalAt, deadline, op.LastError,
 	)
+
 	if err != nil {
 		if isUniqueConstraint(err) {
 			return store.ErrDuplicateKey
@@ -138,7 +140,7 @@ func (s *operationStore) Get(ctx context.Context, id string) (*store.Operation, 
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
-			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
+			bundle_id, values_revision_id, expected_revision, target_revision, target_operation_id, values_patch,
 			actor, created_at, updated_at, terminal_at, deadline, last_error
 		FROM operations WHERE id = ?
 	`, id)
@@ -149,7 +151,7 @@ func (s *operationStore) GetByIdempotencyKey(ctx context.Context, key string) (*
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
-			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
+			bundle_id, values_revision_id, expected_revision, target_revision, target_operation_id, values_patch,
 			actor, created_at, updated_at, terminal_at, deadline, last_error
 		FROM operations WHERE idempotency_key = ?
 	`, key)
@@ -636,16 +638,32 @@ func (s *operationStore) HasActiveEmergencyForDefinition(ctx context.Context, de
 	return count > 0, nil
 }
 
+// List returns persisted operations ordered newest first.
+//nolint:dupl // Operation and Values stores intentionally share the standard list-and-scan persistence pattern.
+func (s *operationStore) GetActiveForDefinition(ctx context.Context, definitionID string) (*store.Operation, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, operation_type, status, release_definition_id,
+			idempotency_key, request_hash, state_version,
+			bundle_id, values_revision_id, expected_revision, target_revision, target_operation_id, values_patch,
+			actor, created_at, updated_at, terminal_at, deadline, last_error
+		FROM operations
+		WHERE release_definition_id = ?
+		  AND status NOT IN ('succeeded','failed','cancelled','timeout')
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, definitionID)
+	return scanOperation(row)
+}
 func (s *operationStore) List(ctx context.Context, definitionID string) ([]*store.Operation, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
-			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
+			bundle_id, values_revision_id, expected_revision, target_revision, target_operation_id, values_patch,
 			actor, created_at, updated_at, terminal_at, deadline, last_error
 		FROM operations
 		WHERE release_definition_id = ?
-		ORDER BY created_at DESC
-	`, definitionID)
+		ORDER BY created_at DESC`, definitionID)
+
 	if err != nil {
 		return nil, fmt.Errorf("list operations: %w", err)
 	}
@@ -668,12 +686,12 @@ func (s *operationStore) ListNonTerminal(ctx context.Context) ([]*store.Operatio
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
-			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
+			bundle_id, values_revision_id, expected_revision, target_revision, target_operation_id, values_patch,
 			actor, created_at, updated_at, terminal_at, deadline, last_error
 		FROM operations
 		WHERE status NOT IN ('succeeded','failed','cancelled','timeout')
-		ORDER BY created_at ASC
-	`)
+		ORDER BY created_at ASC`)
+
 	if err != nil {
 		return nil, fmt.Errorf("list non-terminal operations: %w", err)
 	}
@@ -698,17 +716,18 @@ func getOperation(ctx context.Context, queryer operationQueryer, id string) (*st
 	row := queryer.QueryRowContext(ctx, `
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, request_hash, state_version,
-			bundle_id, values_revision_id, expected_revision, target_revision, values_patch,
+			bundle_id, values_revision_id, expected_revision, target_revision, target_operation_id, values_patch,
 			actor, created_at, updated_at, terminal_at, deadline, last_error
 		FROM operations WHERE id = ?
 	`, id)
 	return scanOperation(row)
 }
+
 func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operation, error) {
 	var (
 		id, opType, status, defID, idemKey, reqHash string
 		stateVer, expectedRev, targetRev            int
-		bundleID, valuesRevID                       string
+		bundleID, valuesRevID, targetOperationID    string
 		valuesPatch                                 []byte
 		actorJSON                                   string
 		createdAt, updatedAt                        string
@@ -719,9 +738,10 @@ func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operatio
 	err := row.Scan(
 		&id, &opType, &status, &defID,
 		&idemKey, &reqHash, &stateVer,
-		&bundleID, &valuesRevID, &expectedRev, &targetRev, &valuesPatch,
+		&bundleID, &valuesRevID, &expectedRev, &targetRev, &targetOperationID, &valuesPatch,
 		&actorJSON, &createdAt, &updatedAt, &terminalAt, &deadline, &lastError,
 	)
+
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, store.ErrNotFound
@@ -730,7 +750,7 @@ func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operatio
 	}
 
 	return buildOperation(id, opType, status, defID, idemKey, reqHash,
-		stateVer, bundleID, valuesRevID, expectedRev, targetRev, valuesPatch,
+		stateVer, bundleID, valuesRevID, expectedRev, targetRev, targetOperationID, valuesPatch,
 		actorJSON, createdAt, updatedAt, terminalAt, deadline, lastError)
 }
 
@@ -738,7 +758,7 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 	var (
 		id, opType, status, defID, idemKey, reqHash string
 		stateVer, expectedRev, targetRev            int
-		bundleID, valuesRevID                       string
+		bundleID, valuesRevID, targetOperationID    string
 		valuesPatch                                 []byte
 		actorJSON                                   string
 		createdAt, updatedAt                        string
@@ -749,20 +769,21 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 	err := rows.Scan(
 		&id, &opType, &status, &defID,
 		&idemKey, &reqHash, &stateVer,
-		&bundleID, &valuesRevID, &expectedRev, &targetRev, &valuesPatch,
+		&bundleID, &valuesRevID, &expectedRev, &targetRev, &targetOperationID, &valuesPatch,
 		&actorJSON, &createdAt, &updatedAt, &terminalAt, &deadline, &lastError,
 	)
+
 	if err != nil {
 		return nil, fmt.Errorf("scan operation row: %w", err)
 	}
 
 	return buildOperation(id, opType, status, defID, idemKey, reqHash,
-		stateVer, bundleID, valuesRevID, expectedRev, targetRev, valuesPatch,
+		stateVer, bundleID, valuesRevID, expectedRev, targetRev, targetOperationID, valuesPatch,
 		actorJSON, createdAt, updatedAt, terminalAt, deadline, lastError)
 }
 
 func buildOperation(id, opType, status, defID, idemKey, reqHash string,
-	stateVer int, bundleID, valuesRevID string, expectedRev, targetRev int,
+	stateVer int, bundleID, valuesRevID string, expectedRev, targetRev int, targetOperationID string,
 	valuesPatch []byte, actorJSON, createdAt, updatedAt string,
 	terminalAt, deadline *string, lastError string,
 ) (*store.Operation, error) {
@@ -810,6 +831,7 @@ func buildOperation(id, opType, status, defID, idemKey, reqHash string,
 		ValuesRevisionID:    valuesRevID,
 		ExpectedRevision:    expectedRev,
 		TargetRevision:      targetRev,
+		TargetOperationID:   targetOperationID,
 		ValuesPatch:         valuesPatch,
 		Actor:               actor,
 		CreatedAt:           ct,
@@ -819,3 +841,4 @@ func buildOperation(id, opType, status, defID, idemKey, reqHash string,
 		LastError:           lastError,
 	}, nil
 }
+

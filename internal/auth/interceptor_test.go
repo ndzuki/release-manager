@@ -144,6 +144,12 @@ func TestMapProcedure(t *testing.T) {
 	}
 }
 
+func TestMapMethodToActionClassifiesValuesApprovalAsWrite(t *testing.T) {
+	assert.Equal(t, "write", mapMethodToAction("ApproveValuesRevision"))
+	assert.Equal(t, "write", mapMethodToAction("RejectValuesRevision"))
+	assert.Equal(t, "read", mapMethodToAction("ListSecrets"))
+}
+
 func reasonFromConnectError(t *testing.T, err error) string {
 	t.Helper()
 	var connectErr *connect.Error

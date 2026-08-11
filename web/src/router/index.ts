@@ -3,8 +3,10 @@ import type { Router, RouterHistory, RouteLocationRaw } from 'vue-router';
 import { setForbiddenNavigator, useAuthStore } from '@/stores/auth';
 
 export function createAppRouter(
-	history: RouterHistory = createWebHistory(),
-	releaseInventoryEnabled = import.meta.env.VITE_ENABLE_RELEASE_INVENTORY !== 'false',
+  history: RouterHistory = createWebHistory(),
+  releaseInventoryEnabled = import.meta.env.VITE_ENABLE_RELEASE_INVENTORY !== 'false',
+  valuesRevisionEnabled = import.meta.env.VITE_ENABLE_VALUES_REVISION !== 'false',
+  operationsEnabled = import.meta.env.VITE_ENABLE_RELEASE_OPERATIONS !== 'false',
 ): Router {
   return createRouter({
     history,
@@ -33,6 +35,27 @@ export function createAppRouter(
             name: 'ReleaseInventory',
             component: () => import('@/pages/ReleaseInventoryPage.vue'),
             meta: { requiresAuth: true },
+          }]
+        : []),
+      ...(releaseInventoryEnabled && valuesRevisionEnabled
+        ? [{
+            path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/values',
+            name: 'ValuesEditor',
+            component: () => import('@/pages/ValuesEditorPage.vue'),
+            meta: { requiresAuth: true },
+          }]
+        : []),
+      ...(releaseInventoryEnabled && operationsEnabled
+        ? [{
+            path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations/new',
+            name: 'OperationCreate',
+            component: () => import('@/pages/OperationCreatePage.vue'),
+            meta: { requiresAuth: true, requiresOperationCreate: true, feature: 'releaseOperations' },
+          }, {
+            path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations/:operationId',
+            name: 'OperationDetail',
+            component: () => import('@/pages/OperationDetailPage.vue'),
+            meta: { requiresAuth: true, feature: 'releaseOperations' },
           }]
         : []),
       {
@@ -101,6 +124,9 @@ export function installAuthGuard(router: Router): void {
     if (to.meta.feature === 'clusterRouting' && import.meta.env.VITE_FEATURE_CLUSTER_ROUTING === 'false') {
       return { name: 'NotFound' };
     }
+    if (to.meta.feature === 'releaseOperations' && import.meta.env.VITE_ENABLE_RELEASE_OPERATIONS === 'false') {
+      return { name: 'NotFound' };
+    }
     if (to.name === 'Login' && auth.isAuthenticated) {
       return { name: 'Home' };
     }
@@ -108,6 +134,9 @@ export function installAuthGuard(router: Router): void {
       auth.setReturnUrl(to.fullPath);
       return { name: 'Login', query: auth.status === 'expired' ? { reason: 'expired' } : undefined };
     }
+		if (to.meta.requiresOperationCreate && !auth.canCreateReleaseOperation) {
+			return { name: 'Forbidden' };
+		}
 
     return true;
   });

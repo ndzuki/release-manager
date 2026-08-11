@@ -49,3 +49,4 @@ test/e2e/testdata/*.tgz
 release-*
 /sdkcheck
 /reqcheck
+core.*
