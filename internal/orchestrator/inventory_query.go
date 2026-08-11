@@ -12,12 +12,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	"github.com/ndzuki/release-manager/internal/contracts"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
 const (
-	defaultReleasePageSize     = 50
-	maxReleasePageSize         = 200
 	maxReleaseNameSearch       = 253
 	inventorySyncOperationType = "INVENTORY_SYNC"
 )
@@ -27,6 +26,8 @@ type inventorySyncCommandPayload struct {
 }
 
 // ListReleases returns one filtered page of cached Helm releases for a cluster.
+//
+//nolint:gocyclo // inventory filtering validates independent request and tenancy constraints
 func (s *Service) ListReleases(
 	ctx context.Context,
 	req *connect.Request[orchestratorv1.ListReleasesRequest],
@@ -42,13 +43,7 @@ func (s *Service) ListReleases(
 		return nil, inventoryError(connect.CodeInvalidArgument, "name_search_too_long", "name_search must not exceed 253 characters")
 	}
 
-	pageSize := int(msg.GetPageSize())
-	if pageSize == 0 {
-		pageSize = defaultReleasePageSize
-	}
-	if pageSize < 1 || pageSize > maxReleasePageSize {
-		return nil, inventoryError(connect.CodeInvalidArgument, "invalid_page_size", "page_size must be between 1 and 200")
-	}
+	pageSize := int(contracts.NormalizePageSize(msg.GetPageSize()))
 	status, err := inventoryStatusFromProto(msg.GetStatusFilter())
 	if err != nil {
 		return nil, err
@@ -94,13 +89,14 @@ func (s *Service) ListReleases(
 	}
 	for _, item := range page.Items {
 		summary := &orchestratorv1.ReleaseSummary{
-			Namespace:    item.Namespace,
-			Name:         item.ReleaseName,
-			Chart:        item.Chart,
-			ChartVersion: item.ChartVersion,
-			Revision:     int32(item.Revision), //nolint:gosec // Helm revisions are bounded integers
-			Status:       inventoryStatusToProto(item.InventoryStatus),
-			ValuesDigest: item.ValuesDigest,
+			ReleaseDefinitionId: item.ReleaseDefinitionID,
+			Namespace:           item.Namespace,
+			Name:                item.ReleaseName,
+			Chart:               item.Chart,
+			ChartVersion:        item.ChartVersion,
+			Revision:            int32(item.Revision), //nolint:gosec // Helm revisions are bounded integers
+			Status:              inventoryStatusToProto(item.InventoryStatus),
+			ValuesDigest:        item.ValuesDigest,
 		}
 		if !page.LastSyncAt.IsZero() {
 			summary.LastSyncAt = timestamppb.New(page.LastSyncAt)
@@ -111,6 +107,8 @@ func (s *Service) ListReleases(
 }
 
 // TriggerInventorySync persists one manual full-sync command for an online operator.
+//
+//nolint:gocyclo // sync creation validates independent tenancy, operator, and idempotency constraints
 func (s *Service) TriggerInventorySync(
 	ctx context.Context,
 	req *connect.Request[orchestratorv1.TriggerInventorySyncRequest],
@@ -156,7 +154,7 @@ func (s *Service) TriggerInventorySync(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get inventory operator session: %w", err))
 	}
 
-	requestID := uuid.NewString()
+	requestID := requestIDOrNew(ctx)
 	commandID := uuid.NewString()
 	outboxID := uuid.NewString()
 	payload, err := json.Marshal(inventorySyncCommandPayload{SyncRequestID: requestID})

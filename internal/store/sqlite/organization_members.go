@@ -23,7 +23,12 @@ func (s *organizationMemberStore) Create(ctx context.Context, m *store.Organizat
 		m.Role = store.RoleViewer
 	}
 
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin insert organization member: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO organization_members (org_id, user_id, role, optimistic_version, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?)`,
 		m.OrgID, m.UserID, string(m.Role), m.OptimisticVersion,
@@ -31,6 +36,12 @@ func (s *organizationMemberStore) Create(ctx context.Context, m *store.Organizat
 	)
 	if err != nil {
 		return fmt.Errorf("insert organization member: %w", err)
+	}
+	if err := bumpAuthorizationSourceVersion(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit insert organization member: %w", err)
 	}
 	return nil
 }
@@ -84,7 +95,12 @@ func (s *organizationMemberStore) ListByUser(ctx context.Context, userID string)
 
 func (s *organizationMemberStore) Update(ctx context.Context, m *store.OrganizationMember) error {
 	m.UpdatedAt = time.Now().UTC()
-	result, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin update organization member: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
+	result, err := tx.ExecContext(ctx, `
 		UPDATE organization_members
 		SET role = ?, optimistic_version = optimistic_version + 1, updated_at = ?
 		WHERE org_id = ? AND user_id = ? AND optimistic_version = ?`,
@@ -101,14 +117,37 @@ func (s *organizationMemberStore) Update(ctx context.Context, m *store.Organizat
 	if rows == 0 {
 		return store.ErrOptimisticLock
 	}
+	if err := bumpAuthorizationSourceVersion(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit update organization member: %w", err)
+	}
 	return nil
 }
 
 func (s *organizationMemberStore) Delete(ctx context.Context, orgID, userID string) error {
-	_, err := s.db.ExecContext(ctx, `
-		DELETE FROM organization_members WHERE org_id = ? AND user_id = ?`, orgID, userID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delete organization member: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
+	result, err := tx.ExecContext(ctx, `DELETE FROM organization_members WHERE org_id = ? AND user_id = ?`, orgID, userID)
 	if err != nil {
 		return fmt.Errorf("delete organization member: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete organization member rows affected: %w", err)
+	}
+	if rows == 0 {
+		return store.ErrNotFound
+	}
+	if err := bumpAuthorizationSourceVersion(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete organization member: %w", err)
 	}
 	return nil
 }

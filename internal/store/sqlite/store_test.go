@@ -206,6 +206,38 @@ func TestOperatorCreateAndGetByCertSerial(t *testing.T) {
 	assert.Equal(t, store.OperatorActive, got.Status)
 }
 
+func TestOperatorCertSerialUnique(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	cust := &store.Customer{ID: uuid.New().String(), Name: "SerialCorp", Slug: "serialcorp"}
+	require.NoError(t, st.Customers().Create(ctx, cust))
+
+	firstCluster := &store.Cluster{ID: uuid.New().String(), Name: "c1", CustomerID: cust.ID}
+	require.NoError(t, st.Clusters().Create(ctx, firstCluster))
+	secondCluster := &store.Cluster{ID: uuid.New().String(), Name: "c2", CustomerID: cust.ID}
+	require.NoError(t, st.Clusters().Create(ctx, secondCluster))
+
+	first := &store.Operator{
+		ID:         uuid.New().String(),
+		CustomerID: cust.ID,
+		ClusterID:  firstCluster.ID,
+		CertSerial: "SERIAL-COLLISION",
+	}
+	require.NoError(t, st.Operators().Create(ctx, first))
+
+	// ADR-018: a second operator with the same cert serial must fail — an
+	// 80-bit DER-hash collision must never bind two operators to one
+	// certificate (REQ-015 v1.1 operators_cert_serial_uq).
+	collision := &store.Operator{
+		ID:         uuid.New().String(),
+		CustomerID: cust.ID,
+		ClusterID:  secondCluster.ID,
+		CertSerial: "SERIAL-COLLISION",
+	}
+	require.Error(t, st.Operators().Create(ctx, collision))
+}
+
 func TestSessionLifecycle(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
@@ -393,6 +425,75 @@ func TestOperationTransition_OptimisticLockAndEvent(t *testing.T) {
 	assert.Equal(t, 5, persisted.StateVersion)
 }
 
+func TestOperationTransition_RejectsInvalidTarget(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "operation-invalid-transition",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "operation-invalid-transition-key",
+		RequestHash:         "request-hash",
+		StateVersion:        4,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	_, err := st.Operations().Transition(ctx, op.ID, store.StatusPreflight, op.StateVersion, "")
+	require.ErrorIs(t, err, store.ErrInvalidState)
+
+	persisted, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusRunning, persisted.Status)
+	assert.Equal(t, 4, persisted.StateVersion)
+}
+
+func TestOperationTransition_TerminalAt(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+
+	// No preflight lifecycle row — terminal transition must still succeed
+	// and terminal_at must be set (AC-023-08).
+	op := &store.Operation{
+		ID:                  "terminal-at-no-lifecycle",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "terminal-at-no-lifecycle-key",
+		RequestHash:         "hash",
+		StateVersion:        1,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	// Transition to succeeded (terminal).
+	updated, err := st.Operations().Transition(ctx, op.ID, store.StatusSucceeded, op.StateVersion, "")
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, updated.Status)
+	require.NotNil(t, updated.TerminalAt, "returned Operation.TerminalAt must be non-nil")
+	assert.False(t, updated.TerminalAt.IsZero())
+
+	// Direct SQL: operations.terminal_at is set.
+	var terminalAt *string
+	err = st.DB().QueryRowContext(ctx, `SELECT terminal_at FROM operations WHERE id = ?`, op.ID).Scan(&terminalAt)
+	require.NoError(t, err)
+	require.NotNil(t, terminalAt, "operations.terminal_at must be non-nil after terminal transition")
+	assert.NotEmpty(t, *terminalAt)
+
+	// Verify terminal_at matches updated_at (migration history backfill concept).
+	var updatedAtStr string
+	err = st.DB().QueryRowContext(ctx, `SELECT updated_at FROM operations WHERE id = ?`, op.ID).Scan(&updatedAtStr)
+	require.NoError(t, err)
+	assert.Equal(t, *terminalAt, updatedAtStr, "terminal_at should equal updated_at (migration terminal_at backfill)")
+
+	// Verify preflight_lifecycles was not affected (no row exists).
+	var count int
+	err = st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM preflight_lifecycles WHERE operation_id = ?`, op.ID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "no preflight lifecycle row should exist — transition handles missing lifecycle gracefully")
+}
+
 func TestOperationCreateIfAvailable_AllowsEmergencyPeers(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
@@ -423,6 +524,51 @@ func TestOperationCreateIfAvailable_AllowsEmergencyPeers(t *testing.T) {
 		IdempotencyKey:      "standard-blocked-key",
 	}
 	assert.ErrorIs(t, st.Operations().CreateIfAvailable(ctx, standard), store.ErrReleaseBusy)
+}
+
+func TestFinalizeUpgradeRollsBackOnInventoryFailure(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID: "upgrade-transaction-rollback", OperationType: store.OperationUpgrade, Status: store.StatusRunning,
+		ReleaseDefinitionID: def.ID, IdempotencyKey: "upgrade-transaction-rollback-key", RequestHash: "hash",
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	input := &store.UpgradeTerminalInput{
+		OperationID: op.ID, ExpectedStateVersion: op.StateVersion, Status: store.StatusSucceeded,
+		ResultPayload: []byte(`{"active":{"helm_revision":2}}`), ReleaseDefinitionID: def.ID,
+		CustomerID: def.CustomerID, ClusterID: def.ClusterID, UpdateInventory: true,
+		Revision: 2, ObservedManifestDigest: "sha256:manifest", LiveStatus: "deployed",
+		InventoryStatus: store.InventoryActive, ResourceCount: 1,
+	}
+
+	err := st.UpgradeResults().FinalizeUpgrade(ctx, input)
+	require.ErrorIs(t, err, store.ErrNotFound)
+	persisted, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusRunning, persisted.Status)
+	assert.Equal(t, op.StateVersion, persisted.StateVersion)
+	_, err = st.ExecutionResults().Get(ctx, op.ID)
+	assert.ErrorIs(t, err, store.ErrNotFound)
+	_, err = st.RolloutTrackings().Get(ctx, op.ID)
+	assert.ErrorIs(t, err, store.ErrNotFound)
+	var eventCount int
+	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM operation_events WHERE operation_id = ?`, op.ID).Scan(&eventCount))
+	assert.Zero(t, eventCount)
+
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: def.ID, CustomerID: def.CustomerID, ClusterID: def.ClusterID,
+		Namespace: "apps", ReleaseName: "example", Revision: 1, Status: "deployed", InventoryStatus: store.InventoryActive,
+	}))
+	require.NoError(t, st.UpgradeResults().FinalizeUpgrade(ctx, input))
+	persisted, err = st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, persisted.Status)
+	result, err := st.ExecutionResults().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "upgrade", result.ResultType)
 }
 
 func TestGetNextPendingMaxInflight(t *testing.T) {
@@ -1159,4 +1305,58 @@ func operatorAuditEvent(id, resourceID, action string) *store.AuditEvent {
 		Action:         action,
 		Status:         "succeeded",
 	}
+}
+
+func TestVerificationPersistenceIncludesSignatureIdentity(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	record := &store.VerificationRecord{
+		ID: uuid.NewString(), ArtifactDigest: "sha256:verification", PolicyVersion: "policy-v1",
+		SignatureIdentity: "signature-identity", Status: store.VerificationTrusted,
+		RootID: "root-1", KeyID: "key-1", RevocationEpoch: 7,
+		Issuer: "issuer", Subject: "subject", Summary: "trusted",
+		CreatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, st.Verifications().Create(ctx, record))
+
+	got, err := st.Verifications().GetByDigestPolicyAndSignature(ctx, record.ArtifactDigest, record.PolicyVersion, record.SignatureIdentity)
+	require.NoError(t, err)
+	assert.Equal(t, record.SignatureIdentity, got.SignatureIdentity)
+	assert.Equal(t, record.RootID, got.RootID)
+	assert.Equal(t, record.KeyID, got.KeyID)
+	assert.Equal(t, record.RevocationEpoch, got.RevocationEpoch)
+	assert.False(t, got.CreatedAt.IsZero())
+
+	_, err = st.Verifications().GetByDigestPolicyAndSignature(ctx, record.ArtifactDigest, record.PolicyVersion, "different-signature")
+	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
+func TestTrustRootsGetActiveGraceWindow(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	expired := now.Add(-time.Hour)
+	live := now.Add(24 * time.Hour)
+
+	roots := []*store.TrustRoot{
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-active", PublicKeyPEM: "pem", Issuer: "active-ci", State: store.TrustRootActive, ValidFrom: now.Add(-2 * time.Hour)},
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-grace-live", PublicKeyPEM: "pem", Issuer: "grace-ci", State: store.TrustRootGrace, ValidFrom: now.Add(-time.Hour), GraceUntil: &live},
+		// 无 grace_until 的 grace root 不是 live（与 trust.Root.Accepts 谓词一致）：服务端 Rotate 强制 grace root 必有 grace_until，缺失视为数据污染不参与验签。
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-grace-open", PublicKeyPEM: "pem", Issuer: "open-grace-ci", State: store.TrustRootGrace, ValidFrom: now.Add(-time.Hour)},
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-grace-expired", PublicKeyPEM: "pem", Issuer: "expired-ci", State: store.TrustRootGrace, ValidFrom: now.Add(-48 * time.Hour), GraceUntil: &expired},
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-future", PublicKeyPEM: "pem", Issuer: "future-ci", State: store.TrustRootActive, ValidFrom: now.Add(48 * time.Hour)},
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-pending", PublicKeyPEM: "pem", Issuer: "pending-ci", State: store.TrustRootPending, ValidFrom: now.Add(-time.Hour)},
+		{ID: uuid.NewString(), Environment: "production", KeyID: "key-other-env", PublicKeyPEM: "pem", Issuer: "other-ci", State: store.TrustRootActive, ValidFrom: now.Add(-time.Hour)},
+	}
+	for _, root := range roots {
+		require.NoError(t, st.TrustRoots().Create(ctx, root))
+	}
+
+	got, err := st.TrustRoots().GetActiveByEnvironment(ctx, "staging", now)
+	require.NoError(t, err)
+	var keys []string
+	for _, root := range got {
+		keys = append(keys, root.KeyID)
+	}
+	assert.ElementsMatch(t, []string{"key-active", "key-grace-live"}, keys)
 }

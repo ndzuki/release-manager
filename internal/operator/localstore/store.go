@@ -58,3 +58,29 @@ type Store interface {
 	// Close releases the database resources.
 	Close() error
 }
+
+// Identity is the persisted operator bootstrap identity (TASK-075). It is
+// stored in the same BoltDB file as commands but in a dedicated bucket, and
+// must never be logged or transmitted (REQ-015 AC-015-05: the private key
+// stays inside the customer cluster).
+type Identity struct {
+	OperatorID     string `json:"operator_id"`
+	OperatorName   string `json:"operator_name"`
+	CustomerID     string `json:"customer_id"`
+	ClusterID      string `json:"cluster_id"`
+	SessionID      string `json:"session_id"`
+	PrivateKeyPEM  string `json:"private_key_pem"`
+	CertificatePEM string `json:"certificate_pem"`
+}
+
+// IdentityStore persists the operator identity across restarts so the agent
+// reconnects with the enrolled certificate instead of re-enrolling
+// (REQ-015/REQ-044 contract, AC-075-02).
+type IdentityStore interface {
+	// SaveIdentity durably persists the identity (fsync before returning).
+	SaveIdentity(ctx context.Context, identity *Identity) error
+
+	// LoadIdentity returns the persisted identity, or ErrNotFound when the
+	// agent has never bootstrapped.
+	LoadIdentity(ctx context.Context) (*Identity, error)
+}

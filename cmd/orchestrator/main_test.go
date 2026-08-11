@@ -2,14 +2,22 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"database/sql"
+	"encoding/base64"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,15 +26,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	authv1 "github.com/ndzuki/release-manager/api/gen/auth/v1"
+	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
+	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
-
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
+	trustv1 "github.com/ndzuki/release-manager/api/gen/trust/v1"
+	trustv1connect "github.com/ndzuki/release-manager/api/gen/trust/v1/trustv1connect"
 	"github.com/ndzuki/release-manager/internal/auth"
+	"github.com/ndzuki/release-manager/internal/config"
 	"github.com/ndzuki/release-manager/internal/operator"
+	"github.com/ndzuki/release-manager/internal/postgres"
 	"github.com/ndzuki/release-manager/internal/store"
+	postgresstore "github.com/ndzuki/release-manager/internal/store/postgres"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
+	"github.com/ndzuki/release-manager/internal/trust"
+	"github.com/ndzuki/release-manager/migrations"
 )
 
 func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
@@ -37,8 +54,8 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 
 	const (
-		organizationID   = "org-068-smoke"
-		customerID       = "customer-068-smoke"
+		organizationID   = "1d4d2977-3a2a-4a63-b695-b19a241e7ba5"
+		customerID       = "5e62e848-b527-4a7a-b8b6-13937b6f1fa7"
 		definitionID     = "definition-068-smoke"
 		revisionID       = "revision-068-smoke"
 		viewerRevisionID = "revision-068-viewer"
@@ -90,7 +107,13 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 	require.NoError(t, seedStore.Close())
 
 	mux := http.NewServeMux()
-	svc := &orchSvc{dbPath: dbPath, targetEnv: "staging", signingKey: signingKey}
+	authStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
+	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+
+	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 	server := httptest.NewServer(mux)
@@ -117,12 +140,16 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 	viewerRequest.Header().Set("Idempotency-Key", "submit-068-viewer")
 	_, err = client.SubmitValuesRevision(ctx, viewerRequest)
 	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+	assert.ErrorContains(t, err, "authorization snapshot stale")
+	_, err = client.SubmitValuesRevision(ctx, viewerRequest)
+	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 	assert.ErrorContains(t, err, "insufficient for submit")
-	viewerAudit, err := svc.st.ValuesApprovalEvidence().ListAuditOutbox(ctx, viewerRevisionID)
+	viewerAudit, err := svc.store.ValuesApprovalEvidence().ListAuditOutbox(ctx, viewerRevisionID)
 	require.NoError(t, err)
 	require.Len(t, viewerAudit, 1)
-	viewerRevision, err := svc.st.Values().Get(ctx, viewerRevisionID)
+	viewerRevision, err := svc.store.Values().Get(ctx, viewerRevisionID)
 	require.NoError(t, err)
 	assert.Equal(t, store.ValuesStatusDraft, viewerRevision.Status)
 
@@ -153,11 +180,737 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, legacyResponse.StatusCode)
 }
 
-func TestOperatorManagementEndToEnd(t *testing.T) {
-	const signingKey = "operator-smoke-signing-key"
-	ctx := context.Background()
-	dbPath := t.TempDir() + "/operator-smoke.db"
+func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
+	const (
+		signingKey       = "trust-test-signing-key"
+		organizationID   = "org-trust-live"
+		platformAdminID  = "platform-admin-trust"
+		deployerID       = "deployer-trust"
+		customerID       = "customer-trust-live"
+		definitionID     = "definition-trust-live"
+		valuesRevisionID = "values-trust-live"
+		bundleID         = "bundle-trust-live"
+		rejectedBundleID = "bundle-trust-rejected"
+	)
+	ctx := t.Context()
+	dbPath := t.TempDir() + "/orchestrator.db"
 	seedStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, seedStore.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Trust Customer", Slug: "trust-customer"}))
+	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Trust Organization"}))
+	require.NoError(t, seedStore.Bindings().Create(ctx, &store.OrgCustomerBinding{ID: "binding-trust-live", OrgID: organizationID, CustomerID: customerID}))
+	for userID, role := range map[string]store.Role{platformAdminID: store.RolePlatformAdmin, deployerID: store.RoleDeployer} {
+		require.NoError(t, seedStore.Users().Create(ctx, &store.User{ID: userID, Username: userID, PasswordHash: "unused", Status: store.UserActive}))
+		require.NoError(t, seedStore.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: organizationID, UserID: userID, Role: role}))
+		require.NoError(t, seedStore.AuthSessions().Create(ctx, &store.AuthSession{
+			ID: uuid.NewString(), UserID: userID, TokenFamily: uuid.NewString(), RefreshTokenHash: uuid.NewString(),
+			ExpiresAt: time.Now().UTC().Add(time.Hour),
+		}))
+	}
+	ownerOrganizationID := organizationID
+	require.NoError(t, seedStore.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: definitionID, Name: "Trust Definition", CustomerID: customerID, ClusterID: "cluster-trust-live",
+		Namespace: "trust", ReleaseName: "trust", ChartName: "fixture", Status: store.DefStatusActive,
+		OwnerOrganizationID: &ownerOrganizationID,
+	}, nil))
+	require.NoError(t, seedStore.Values().Create(ctx, &store.ValuesRevision{
+		ID: valuesRevisionID, ReleaseDefinitionID: definitionID, Revision: 1, StateVersion: 1,
+		Status: store.ValuesStatusApproved, Values: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-live",
+	}))
+	bundleDigest := fmt.Sprintf("%064x", 74)
+	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{
+		ID: bundleID, Name: "Trust Bundle", DigestAlg: "sha256", DigestValue: bundleDigest,
+		Status: store.BundleValidated, CreatedAt: time.Now().UTC(),
+	}))
+	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{
+		ID: rejectedBundleID, Name: "Rejected Trust Bundle", DigestAlg: "sha256", DigestValue: fmt.Sprintf("%064x", 75),
+		Status: store.BundleValidated, CreatedAt: time.Now().UTC(),
+	}))
+	require.NoError(t, seedStore.Close())
+
+	mux := http.NewServeMux()
+	authStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
+	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
+	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
+	t.Cleanup(func() { require.NoError(t, svc.Shutdown(context.Background())) })
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	platformToken, _, err := jwtManager.GenerateAccessToken(platformAdminID, organizationID, []string{string(store.RolePlatformAdmin)})
+	require.NoError(t, err)
+	deployerToken, _, err := jwtManager.GenerateAccessToken(deployerID, organizationID, []string{string(store.RoleDeployer)})
+	require.NoError(t, err)
+	trustClient := trustv1connect.NewTrustServiceClient(server.Client(), server.URL)
+
+	publicKeyPEM, privateKey := testEd25519KeyPair(t)
+	deniedCreate := connect.NewRequest(&trustv1.CreateTrustRootRequest{
+		Environment: "staging", KeyId: "key-denied", PublicKeyPem: publicKeyPEM, Issuer: "release-manager-ci",
+	})
+	deniedCreate.Header().Set("Authorization", "Bearer "+deployerToken)
+	_, err = trustClient.CreateTrustRoot(ctx, deniedCreate)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+
+	createRoot := connect.NewRequest(&trustv1.CreateTrustRootRequest{
+		Environment: "staging", KeyId: "key-live", PublicKeyPem: publicKeyPEM,
+		Issuer: "release-manager-ci", SubjectPattern: "repo:release-manager:", Operator: "spoofed-operator",
+	})
+	createRoot.Header().Set("Authorization", "Bearer "+platformToken)
+	rootResponse, err := trustClient.CreateTrustRoot(ctx, createRoot)
+	require.NoError(t, err)
+	require.NotNil(t, rootResponse.Msg.GetRoot())
+
+	getPolicy := connect.NewRequest(&trustv1.GetTrustPolicyRequest{Environment: "staging"})
+	getPolicy.Header().Set("Authorization", "Bearer "+deployerToken)
+	policyResponse, err := trustClient.GetTrustPolicy(ctx, getPolicy)
+	require.NoError(t, err)
+	assert.Len(t, policyResponse.Msg.GetPolicy().GetRoots(), 1)
+
+	deniedRotate := connect.NewRequest(&trustv1.RotateTrustRootRequest{
+		Environment: "staging", OldRootId: rootResponse.Msg.GetRoot().GetId(), KeyId: "key-rotate-denied",
+		PublicKeyPem: publicKeyPEM, Issuer: "release-manager-ci-rotate-denied",
+	})
+	deniedRotate.Header().Set("Authorization", "Bearer "+deployerToken)
+	_, err = trustClient.RotateTrustRoot(ctx, deniedRotate)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+
+	deniedEndGrace := connect.NewRequest(&trustv1.EndGraceRequest{
+		Environment: "staging", RootId: rootResponse.Msg.GetRoot().GetId(),
+	})
+	deniedEndGrace.Header().Set("Authorization", "Bearer "+deployerToken)
+	_, err = trustClient.EndGrace(ctx, deniedEndGrace)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+
+	deniedRetire := connect.NewRequest(&trustv1.RetireTrustRootRequest{
+		Environment: "staging", RootId: rootResponse.Msg.GetRoot().GetId(),
+	})
+	deniedRetire.Header().Set("Authorization", "Bearer "+deployerToken)
+	_, err = trustClient.RetireTrustRoot(ctx, deniedRetire)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+
+	deniedRevoke := connect.NewRequest(&trustv1.RevokeTrustRootRequest{
+		Environment: "staging", RootId: rootResponse.Msg.GetRoot().GetId(),
+	})
+	deniedRevoke.Header().Set("Authorization", "Bearer "+deployerToken)
+	_, err = trustClient.RevokeTrustRoot(ctx, deniedRevoke)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+
+	unauthenticatedPolicy := connect.NewRequest(&trustv1.GetTrustPolicyRequest{Environment: "staging"})
+	_, err = trustClient.GetTrustPolicy(ctx, unauthenticatedPolicy)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
+
+	digest := "sha256:" + bundleDigest
+	rejectedDigest := "sha256:" + fmt.Sprintf("%064x", 75)
+	operationClient := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
+	trustedRequest := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType: "INSTALL", BundleId: bundleID, ReleaseDefinitionId: definitionID,
+		ValuesRevisionId: valuesRevisionID, IdempotencyKey: "trust-live-accepted",
+		SignatureRef: &commonv1.SignatureRef{
+			Digest: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(digest))),
+			Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
+		},
+		Actor: &commonv1.ActorContext{UserId: deployerID, Organization: organizationID},
+	})
+	trustedRequest.Header().Set("Authorization", "Bearer "+deployerToken)
+	trustedResponse, err := operationClient.CreateOperation(ctx, trustedRequest)
+	require.NoError(t, err)
+	assert.Equal(t, commonv1.VerificationResult_VERIFICATION_RESULT_TRUSTED, trustedResponse.Msg.GetVerificationResult())
+
+	_, wrongPrivateKey := testEd25519KeyPair(t)
+	rejectedRequest := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType: "INSTALL", BundleId: rejectedBundleID, ReleaseDefinitionId: definitionID,
+		ValuesRevisionId: valuesRevisionID, IdempotencyKey: "trust-live-rejected",
+		SignatureRef: &commonv1.SignatureRef{
+			Digest: rejectedDigest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(wrongPrivateKey, []byte(rejectedDigest))),
+			Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
+		},
+		Actor: &commonv1.ActorContext{UserId: deployerID, Organization: organizationID},
+	})
+	rejectedRequest.Header().Set("Authorization", "Bearer "+deployerToken)
+	_, err = operationClient.CreateOperation(ctx, rejectedRequest)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.ErrorContains(t, err, "signature_invalid")
+
+	require.NoError(t, svc.Shutdown(context.Background()))
+	events, err := svc.store.AuditEvents().ListByResource(ctx, "trust_root", rootResponse.Msg.GetRoot().GetId())
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, platformAdminID, events[0].ActorID)
+	assert.NotEqual(t, "spoofed-operator", events[0].ActorID)
+}
+
+func TestTrustServiceMaintenanceGate(t *testing.T) {
+	const (
+		signingKey      = "trust-maintenance-signing-key"
+		organizationID  = "org-trust-maintenance"
+		platformAdminID = "platform-admin-maintenance"
+	)
+	ctx := t.Context()
+	dbPath := t.TempDir() + "/orchestrator.db"
+	seedStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Trust Maintenance Org"}))
+	require.NoError(t, seedStore.Users().Create(ctx, &store.User{ID: platformAdminID, Username: platformAdminID, PasswordHash: "unused", Status: store.UserActive}))
+	require.NoError(t, seedStore.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: organizationID, UserID: platformAdminID, Role: store.RolePlatformAdmin}))
+	require.NoError(t, seedStore.AuthSessions().Create(ctx, &store.AuthSession{
+		ID: uuid.NewString(), UserID: platformAdminID, TokenFamily: uuid.NewString(), RefreshTokenHash: uuid.NewString(),
+		ExpiresAt: time.Now().UTC().Add(time.Hour),
+	}))
+	require.NoError(t, seedStore.Close())
+
+	mux := http.NewServeMux()
+	authStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
+	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	svc.Configure(&config.ServiceConfig{
+		Database:    config.DatabaseConfig{Driver: "sqlite", DSN: dbPath},
+		Maintenance: true,
+	})
+	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
+	t.Cleanup(func() { require.NoError(t, svc.Shutdown(context.Background())) })
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	adminToken, _, err := jwtManager.GenerateAccessToken(platformAdminID, organizationID, []string{string(store.RolePlatformAdmin)})
+	require.NoError(t, err)
+	trustClient := trustv1connect.NewTrustServiceClient(server.Client(), server.URL)
+
+	// maintenance allowlist：GetTrustPolicy 在 handler 前放行。
+	getPolicy := connect.NewRequest(&trustv1.GetTrustPolicyRequest{Environment: "staging"})
+	getPolicy.Header().Set("Authorization", "Bearer "+adminToken)
+	policyResponse, err := trustClient.GetTrustPolicy(ctx, getPolicy)
+	require.NoError(t, err)
+	require.NotNil(t, policyResponse.Msg.GetPolicy())
+
+	// maintenance 拦截器：五个写 RPC 在 auth/handler 前拒绝，platform_admin 也不例外。
+	publicKeyPEM, _ := testEd25519KeyPair(t)
+	writes := []struct {
+		name   string
+		call   func() error
+	}{
+		{
+			name: "create",
+			call: func() error {
+				req := connect.NewRequest(&trustv1.CreateTrustRootRequest{
+					Environment: "staging", KeyId: "key-maintenance", PublicKeyPem: publicKeyPEM, Issuer: "release-manager-ci",
+				})
+				req.Header().Set("Authorization", "Bearer "+adminToken)
+				_, err := trustClient.CreateTrustRoot(ctx, req)
+				return err
+			},
+		},
+		{
+			name: "rotate",
+			call: func() error {
+				req := connect.NewRequest(&trustv1.RotateTrustRootRequest{
+					Environment: "staging", OldRootId: "root-none", KeyId: "key-maintenance-rotate",
+					PublicKeyPem: publicKeyPEM, Issuer: "release-manager-ci",
+				})
+				req.Header().Set("Authorization", "Bearer "+adminToken)
+				_, err := trustClient.RotateTrustRoot(ctx, req)
+				return err
+			},
+		},
+		{
+			name: "end_grace",
+			call: func() error {
+				req := connect.NewRequest(&trustv1.EndGraceRequest{Environment: "staging", RootId: "root-none"})
+				req.Header().Set("Authorization", "Bearer "+adminToken)
+				_, err := trustClient.EndGrace(ctx, req)
+				return err
+			},
+		},
+		{
+			name: "retire",
+			call: func() error {
+				req := connect.NewRequest(&trustv1.RetireTrustRootRequest{Environment: "staging", RootId: "root-none"})
+				req.Header().Set("Authorization", "Bearer "+adminToken)
+				_, err := trustClient.RetireTrustRoot(ctx, req)
+				return err
+			},
+		},
+		{
+			name: "revoke",
+			call: func() error {
+				req := connect.NewRequest(&trustv1.RevokeTrustRootRequest{Environment: "staging", RootId: "root-none"})
+				req.Header().Set("Authorization", "Bearer "+adminToken)
+				_, err := trustClient.RevokeTrustRoot(ctx, req)
+				return err
+			},
+		},
+	}
+	for _, tt := range writes {
+		t.Run("write rejected: "+tt.name, func(t *testing.T) {
+			err := tt.call()
+			require.Error(t, err)
+			assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+			assert.ErrorContains(t, err, "maintenance")
+		})
+	}
+}
+
+func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
+	const (
+		signingKey       = "trust-unavailable-signing-key"
+		organizationID   = "org-trust-unavailable"
+		deployerID       = "deployer-trust-unavailable"
+		customerID       = "customer-trust-unavailable"
+		definitionID     = "definition-trust-unavailable"
+		valuesRevisionID = "values-trust-unavailable"
+		bundleID         = "bundle-trust-unavailable"
+	)
+	ctx := t.Context()
+	dbPath := t.TempDir() + "/orchestrator.db"
+	seedStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, seedStore.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Trust Unavailable Customer", Slug: "trust-unavailable"}))
+	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Trust Unavailable Organization"}))
+	require.NoError(t, seedStore.Bindings().Create(ctx, &store.OrgCustomerBinding{ID: "binding-trust-unavailable", OrgID: organizationID, CustomerID: customerID}))
+	require.NoError(t, seedStore.Users().Create(ctx, &store.User{ID: deployerID, Username: deployerID, PasswordHash: "unused", Status: store.UserActive}))
+	require.NoError(t, seedStore.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: organizationID, UserID: deployerID, Role: store.RoleDeployer}))
+	require.NoError(t, seedStore.AuthSessions().Create(ctx, &store.AuthSession{
+		ID: uuid.NewString(), UserID: deployerID, TokenFamily: uuid.NewString(), RefreshTokenHash: uuid.NewString(), ExpiresAt: time.Now().UTC().Add(time.Hour),
+	}))
+	ownerOrganizationID := organizationID
+	require.NoError(t, seedStore.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: definitionID, Name: "Trust Unavailable Definition", CustomerID: customerID, ClusterID: "cluster-trust-unavailable",
+		Namespace: "trust", ReleaseName: "trust-unavailable", ChartName: "fixture", Status: store.DefStatusActive,
+		OwnerOrganizationID: &ownerOrganizationID,
+	}, nil))
+	require.NoError(t, seedStore.Values().Create(ctx, &store.ValuesRevision{
+		ID: valuesRevisionID, ReleaseDefinitionID: definitionID, Revision: 1, StateVersion: 1,
+		Status: store.ValuesStatusApproved, Values: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-unavailable",
+	}))
+	bundleDigest := fmt.Sprintf("%064x", 76)
+	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{
+		ID: bundleID, Name: "Trust Unavailable Bundle", DigestAlg: "sha256", DigestValue: bundleDigest,
+		Status: store.BundleValidated, CreatedAt: time.Now().UTC(),
+	}))
+	require.NoError(t, seedStore.Close())
+
+	authStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
+	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+	mux := http.NewServeMux()
+	svc := &orchSvc{
+		targetEnv: "production", signingKey: signingKey, authURL: authServer.URL,
+		trustResolver: failingTrustResolver{err: errors.New("trust store offline")},
+	}
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
+	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	deployerToken, _, err := jwtManager.GenerateAccessToken(deployerID, organizationID, []string{string(store.RoleDeployer)})
+	require.NoError(t, err)
+	digest := "sha256:" + bundleDigest
+	request := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType: "INSTALL", BundleId: bundleID, ReleaseDefinitionId: definitionID,
+		ValuesRevisionId: valuesRevisionID, IdempotencyKey: "trust-unavailable",
+		SignatureRef: &commonv1.SignatureRef{
+			Digest: digest, Signature: base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize)),
+			Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
+		},
+		Actor: &commonv1.ActorContext{UserId: deployerID, Organization: organizationID},
+	})
+	request.Header().Set("Authorization", "Bearer "+deployerToken)
+	client := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
+	_, err = client.CreateOperation(ctx, request)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+	assert.ErrorContains(t, err, "verification_unavailable")
+}
+
+func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
+	// AC-074-04b：紧急 revoke 后，同 digest 再次验证不复用缓存中的 trusted 记录——
+	// 全部经正式 Connect API（ADR-013）：platform_admin 激活 root、deployer 提交带签名 operation、
+	// revoke 提升 epoch、同签名再次提交被 untrusted_issuer 拒绝。
+	const (
+		signingKey       = "trust-epoch-signing-key"
+		organizationID   = "org-trust-epoch"
+		platformAdminID  = "platform-admin-epoch"
+		deployerID       = "deployer-trust-epoch"
+		customerID       = "customer-trust-epoch"
+		definitionID     = "definition-trust-epoch"
+		valuesRevisionID = "values-trust-epoch"
+		bundleID         = "bundle-trust-epoch"
+	)
+	ctx := t.Context()
+	dbPath := t.TempDir() + "/orchestrator.db"
+	seedStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, seedStore.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Trust Epoch Customer", Slug: "trust-epoch"}))
+	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Trust Epoch Organization"}))
+	require.NoError(t, seedStore.Bindings().Create(ctx, &store.OrgCustomerBinding{ID: "binding-trust-epoch", OrgID: organizationID, CustomerID: customerID}))
+	for userID, role := range map[string]store.Role{platformAdminID: store.RolePlatformAdmin, deployerID: store.RoleDeployer} {
+		require.NoError(t, seedStore.Users().Create(ctx, &store.User{ID: userID, Username: userID, PasswordHash: "unused", Status: store.UserActive}))
+		require.NoError(t, seedStore.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: organizationID, UserID: userID, Role: role}))
+		require.NoError(t, seedStore.AuthSessions().Create(ctx, &store.AuthSession{
+			ID: uuid.NewString(), UserID: userID, TokenFamily: uuid.NewString(), RefreshTokenHash: uuid.NewString(), ExpiresAt: time.Now().UTC().Add(time.Hour),
+		}))
+	}
+	ownerOrganizationID := organizationID
+	require.NoError(t, seedStore.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: definitionID, Name: "Trust Epoch Definition", CustomerID: customerID, ClusterID: "cluster-trust-epoch",
+		Namespace: "trust", ReleaseName: "trust-epoch", ChartName: "fixture", Status: store.DefStatusActive,
+		OwnerOrganizationID: &ownerOrganizationID,
+	}, nil))
+	require.NoError(t, seedStore.Values().Create(ctx, &store.ValuesRevision{
+		ID: valuesRevisionID, ReleaseDefinitionID: definitionID, Revision: 1, StateVersion: 1,
+		Status: store.ValuesStatusApproved, Values: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-epoch",
+	}))
+	bundleDigest := fmt.Sprintf("%064x", 98)
+	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{
+		ID: bundleID, Name: "Trust Epoch Bundle", DigestAlg: "sha256", DigestValue: bundleDigest,
+		Status: store.BundleValidated, CreatedAt: time.Now().UTC(),
+	}))
+	require.NoError(t, seedStore.Close())
+
+	mux := http.NewServeMux()
+	authStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
+	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
+	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
+	t.Cleanup(func() { require.NoError(t, svc.Shutdown(context.Background())) })
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	adminToken, _, err := jwtManager.GenerateAccessToken(platformAdminID, organizationID, []string{string(store.RolePlatformAdmin)})
+	require.NoError(t, err)
+	deployerToken, _, err := jwtManager.GenerateAccessToken(deployerID, organizationID, []string{string(store.RoleDeployer)})
+	require.NoError(t, err)
+
+	// 正式 Connect API：platform_admin 激活 root。
+	trustClient := trustv1connect.NewTrustServiceClient(server.Client(), server.URL)
+	publicKeyPEM, privateKey := testEd25519KeyPair(t)
+	createRoot := connect.NewRequest(&trustv1.CreateTrustRootRequest{
+		Environment: "staging", KeyId: "epoch-primary", PublicKeyPem: publicKeyPEM, Issuer: "release-manager-ci",
+	})
+	createRoot.Header().Set("Authorization", "Bearer "+adminToken)
+	rootResponse, err := trustClient.CreateTrustRoot(ctx, createRoot)
+	require.NoError(t, err)
+	// 第二把 key 作为 backup root：revoke 不能移除最后一个 active root（REQ-043 AC-043-03）。
+	backupPublicKeyPEM, _ := testEd25519KeyPair(t)
+	createBackup := connect.NewRequest(&trustv1.CreateTrustRootRequest{
+		Environment: "staging", KeyId: "epoch-backup", PublicKeyPem: backupPublicKeyPEM, Issuer: "backup-ci",
+	})
+	createBackup.Header().Set("Authorization", "Bearer "+adminToken)
+	_, err = trustClient.CreateTrustRoot(ctx, createBackup)
+	require.NoError(t, err)
+
+	digest := "sha256:" + bundleDigest
+
+	operationClient := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
+	newRequest := func(idempotencyKey string) *connect.Request[orchestratorv1.CreateOperationRequest] {
+		req := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+			OperationType: "INSTALL", BundleId: bundleID, ReleaseDefinitionId: definitionID,
+			ValuesRevisionId: valuesRevisionID, IdempotencyKey: idempotencyKey,
+			SignatureRef: &commonv1.SignatureRef{
+				Digest: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(digest))),
+				Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
+			},
+			Actor: &commonv1.ActorContext{UserId: deployerID, Organization: organizationID},
+		})
+		req.Header().Set("Authorization", "Bearer "+deployerToken)
+		return req
+	}
+
+	// 首次提交：受信。
+	first, err := operationClient.CreateOperation(ctx, newRequest("trust-epoch-first"))
+	require.NoError(t, err)
+	assert.Equal(t, commonv1.VerificationResult_VERIFICATION_RESULT_TRUSTED, first.Msg.GetVerificationResult())
+
+	// 紧急 revoke：epoch 提升，root 移出 live 集合。
+	revoke := connect.NewRequest(&trustv1.RevokeTrustRootRequest{Environment: "staging", RootId: rootResponse.Msg.GetRoot().GetId()})
+	revoke.Header().Set("Authorization", "Bearer "+adminToken)
+	_, err = trustClient.RevokeTrustRoot(ctx, revoke)
+	require.NoError(t, err)
+
+	// 同 digest、同签名、新幂等键再次提交：缓存不复用 → 重新验证 → untrusted_issuer rejected。
+	_, err = operationClient.CreateOperation(ctx, newRequest("trust-epoch-second"))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.ErrorContains(t, err, "untrusted_issuer")
+}
+
+func testEd25519KeyPair(t *testing.T) (string, ed25519.PrivateKey) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	der, err := x509.MarshalPKIXPublicKey(publicKey)
+	require.NoError(t, err)
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})), privateKey
+}
+
+type failingTrustResolver struct {
+	err error
+}
+
+func (r failingTrustResolver) ResolveActive(context.Context, string, time.Time) ([]*store.TrustRoot, error) {
+	return nil, r.err
+}
+
+func (r failingTrustResolver) GetPolicyMeta(context.Context, string) (*store.TrustPolicyMeta, error) {
+	return nil, r.err
+}
+
+type testAuthorizationHandler struct {
+	store store.Store
+	jwt   *auth.JWTManager
+}
+
+func newTestAuthorizationServer(t *testing.T, st store.Store, signingKey string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	path, handler := authv1connect.NewAuthorizationServiceHandler(&testAuthorizationHandler{
+		store: st,
+		jwt:   auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour),
+	})
+	mux.Handle(path, handler)
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server
+}
+
+func (h *testAuthorizationHandler) GetAuthorizationSnapshot(
+	ctx context.Context,
+	req *connect.Request[authv1.GetAuthorizationSnapshotRequest],
+) (*connect.Response[authv1.GetAuthorizationSnapshotResponse], error) {
+	token := strings.TrimPrefix(req.Header().Get("Authorization"), "Bearer ")
+	claims, err := h.jwt.ValidateAccessToken(token)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid token: %w", err))
+	}
+	if claims.OrgID != req.Msg.GetOrganizationId() {
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("scope mismatch"))
+	}
+	member, err := h.store.OrgMembers().Get(ctx, claims.OrgID, claims.UserID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodePermissionDenied, err)
+	}
+	snapshot, err := h.store.Authorization().Load(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeUnavailable, err)
+	}
+	return connect.NewResponse(&authv1.GetAuthorizationSnapshotResponse{
+		OrganizationId:           req.Msg.GetOrganizationId(),
+		CustomerId:               req.Msg.GetCustomerId(),
+		ActorId:                  claims.UserID,
+		Role:                     string(member.Role),
+		CanExecuteEmergency:      member.Role == store.RoleReleaseAdmin || member.Role == store.RolePlatformAdmin,
+		CanResolveEmergency:      member.Role == store.RolePlatformAdmin,
+		CanCreateValuesRevision:  testRoleAllows(member.Role, store.AuthorizationCreateValues),
+		CanApproveValuesRevision: testRoleAllows(member.Role, store.AuthorizationApproveValues),
+		SourceVersion:            snapshot.SourceVersion,
+		PolicyVersion:            snapshot.PolicyVersion,
+		Checkpoint:               snapshot.SourceVersion,
+		Fresh:                    true,
+	}), nil
+}
+
+func (*testAuthorizationHandler) SetCapabilityGrant(
+	context.Context,
+	*connect.Request[authv1.SetCapabilityGrantRequest],
+) (*connect.Response[authv1.SetCapabilityGrantResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("not used"))
+}
+
+func testRoleAllows(role store.Role, action store.AuthorizationAction) bool {
+	switch role {
+	case store.RolePlatformAdmin:
+		return true
+	case store.RoleReleaseAdmin:
+		return action == store.AuthorizationCreateValues || action == store.AuthorizationApproveValues
+	case store.RoleDeployer:
+		return action == store.AuthorizationCreateValues
+	default:
+		return false
+	}
+}
+
+var _ authv1connect.AuthorizationServiceHandler = (*testAuthorizationHandler)(nil)
+
+func TestOrchestratorPostgreSQLCutoverAuthority(t *testing.T) {
+	baseDSN := os.Getenv("POSTGRES_TEST_DSN")
+	if baseDSN == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	ctx := t.Context()
+	dsn := orchestratorTestSchema(ctx, t, baseDSN)
+	database, err := postgres.Open(ctx, config.DatabaseConfig{Driver: "postgres", DSN: dsn})
+	require.NoError(t, err)
+	require.NoError(t, postgres.RunMigrations(ctx, database.SQLDB(), migrations.FS))
+	seedStore, err := postgresstore.New(database.SQLDB(), database.GORM())
+	require.NoError(t, err)
+	const (
+		signingKey     = "postgres-cutover-signing-key"
+		organizationID = "org-070-cutover"
+		userID         = "user-070-cutover"
+		customerID     = "customer-070-cutover"
+	)
+	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Cutover Org"}))
+	require.NoError(t, seedStore.Users().Create(ctx, &store.User{ID: userID, Username: userID, PasswordHash: "unused"}))
+	require.NoError(t, seedStore.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: organizationID, UserID: userID, Role: store.RolePlatformAdmin}))
+	require.NoError(t, seedStore.AuthSessions().Create(ctx, &store.AuthSession{
+		ID: uuid.NewString(), UserID: userID, TokenFamily: uuid.NewString(), RefreshTokenHash: uuid.NewString(), ExpiresAt: time.Now().UTC().Add(time.Hour),
+	}))
+	require.NoError(t, seedStore.Close())
+
+	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey}
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "postgres", DSN: dsn}})
+	mux := http.NewServeMux()
+	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	token, _, err := jwtManager.GenerateAccessToken(userID, organizationID, []string{string(store.RolePlatformAdmin)})
+	require.NoError(t, err)
+	request := connect.NewRequest(&orchestratorv1.CreateCustomerRequest{Id: customerID, Name: "PostgreSQL Customer", Slug: "postgresql-customer"})
+	request.Header().Set("Authorization", "Bearer "+token)
+	client := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
+	_, err = client.CreateCustomer(ctx, request)
+	require.NoError(t, err)
+	assert.IsType(t, &postgresstore.Store{}, svc.store)
+	created, err := svc.store.Customers().Get(ctx, customerID)
+	require.NoError(t, err)
+	assert.Equal(t, "PostgreSQL Customer", created.Name)
+
+	sqlitePath := t.TempDir() + "/rollback.db"
+	rollback, err := sqlitestore.Open(sqlitePath)
+	require.NoError(t, err)
+	require.NoError(t, rollback.Customers().Create(ctx, &store.Customer{ID: "sqlite-before-cutover", Name: "SQLite Snapshot", Slug: "sqlite-snapshot"}))
+	require.NoError(t, rollback.Close())
+	before, err := os.ReadFile(sqlitePath)
+	require.NoError(t, err)
+	require.NoError(t, svc.store.Customers().Create(ctx, &store.Customer{ID: "postgres-after-cutover", Name: "PostgreSQL Only", Slug: "postgres-only"}))
+	after, err := os.ReadFile(sqlitePath)
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "PostgreSQL writes must not modify the SQLite rollback snapshot")
+
+	rollback, err = sqlitestore.Open(sqlitePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rollback.Close()) })
+	_, err = rollback.Customers().Get(ctx, "sqlite-before-cutover")
+	require.NoError(t, err)
+	_, err = rollback.Customers().Get(ctx, "postgres-after-cutover")
+	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
+func orchestratorTestSchema(ctx context.Context, t *testing.T, baseDSN string) string {
+	t.Helper()
+	schema := "task070_orchestrator_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	db, err := sql.Open("pgx", baseDSN)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, fmt.Sprintf(`CREATE SCHEMA %q`, schema)) //nolint:gosec // schema is generated from a UUID.
+	require.NoError(t, err)
+	cleanupCtx := context.WithoutCancel(ctx)
+	t.Cleanup(func() {
+		_, dropErr := db.ExecContext(cleanupCtx, fmt.Sprintf(`DROP SCHEMA %q CASCADE`, schema)) //nolint:gosec // schema is generated from a UUID.
+		require.NoError(t, dropErr)
+		require.NoError(t, db.Close())
+	})
+	parsed, err := url.Parse(baseDSN)
+	require.NoError(t, err)
+	query := parsed.Query()
+	query.Set("search_path", schema)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func TestServiceReadOnlyProcedures(t *testing.T) {
+	orchestratorReadOnly := orchestratorReadOnlyProcedures()
+	for _, procedure := range []string{
+		orchestratorv1connect.OrchestratorServiceGetReleaseDefinitionProcedure,
+		orchestratorv1connect.OrchestratorServiceListReleaseDefinitionsProcedure,
+		orchestratorv1connect.OrchestratorServiceGetCustomerProcedure,
+		orchestratorv1connect.OrchestratorServiceListCustomersProcedure,
+		orchestratorv1connect.OrchestratorServiceGetClusterProcedure,
+		orchestratorv1connect.OrchestratorServiceListClustersProcedure,
+		orchestratorv1connect.OrchestratorServiceGetClusterRoutesProcedure,
+		orchestratorv1connect.OrchestratorServiceGetOperationProcedure,
+	} {
+		assert.Contains(t, orchestratorReadOnly, procedure)
+	}
+	assert.NotContains(t, orchestratorReadOnly, trustv1connect.TrustServiceGetTrustPolicyProcedure)
+	assert.NotContains(t, orchestratorReadOnly, orchestratorv1connect.OrchestratorServiceCreateOperationProcedure)
+
+	trustReadOnly := trustReadOnlyProcedures()
+	assert.Contains(t, trustReadOnly, trustv1connect.TrustServiceGetTrustPolicyProcedure)
+	for _, procedure := range []string{
+		trustv1connect.TrustServiceCreateTrustRootProcedure,
+		trustv1connect.TrustServiceRotateTrustRootProcedure,
+		trustv1connect.TrustServiceEndGraceProcedure,
+		trustv1connect.TrustServiceRetireTrustRootProcedure,
+		trustv1connect.TrustServiceRevokeTrustRootProcedure,
+	} {
+		assert.NotContains(t, trustReadOnly, procedure)
+	}
+}
+
+func TestLoadTrustConfig(t *testing.T) {
+	configPath := t.TempDir() + "/orchestrator.yaml"
+	require.NoError(t, os.WriteFile(configPath, []byte("trust:\n  verification_timeout: 250ms\n"), 0o600))
+	svc := &orchSvc{configPath: configPath}
+
+	trustCfg, err := svc.loadTrustConfig()
+
+	require.NoError(t, err)
+	assert.Equal(t, 250*time.Millisecond, trustCfg.VerificationTimeout)
+}
+
+func TestLoadTrustConfig_DefaultsNonPositiveTimeout(t *testing.T) {
+	configPath := t.TempDir() + "/orchestrator.yaml"
+	require.NoError(t, os.WriteFile(configPath, []byte("trust:\n  verification_timeout: 0s\n"), 0o600))
+	svc := &orchSvc{configPath: configPath}
+
+	trustCfg, err := svc.loadTrustConfig()
+
+	require.NoError(t, err)
+	assert.Equal(t, trust.DefaultVerificationTimeout, trustCfg.VerificationTimeout)
+}
+
+
+// TestOperatorManagementPostgreSQLFlow exercises the full REQ-053 management
+// contract against the PostgreSQL store: token create/replace/status, viewer
+// denial, enrollment through the in-process OperatorService, live stream
+// revocation, idempotent re-revoke, and the read-only maintenance allowlist.
+func TestOperatorManagementPostgreSQLFlow(t *testing.T) {
+	baseDSN := os.Getenv("POSTGRES_TEST_DSN")
+	if baseDSN == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	ctx := t.Context()
+	dsn := orchestratorTestSchema(ctx, t, baseDSN)
+	database, err := postgres.Open(ctx, config.DatabaseConfig{Driver: "postgres", DSN: dsn})
+	require.NoError(t, err)
+	require.NoError(t, postgres.RunMigrations(ctx, database.SQLDB(), migrations.FS))
+	seedStore, err := postgresstore.New(database.SQLDB(), database.GORM())
 	require.NoError(t, err)
 	const (
 		organizationID = "org-053-smoke"
@@ -178,20 +931,21 @@ func TestOperatorManagementEndToEnd(t *testing.T) {
 		}))
 	}
 	require.NoError(t, seedStore.Close())
+	require.NoError(t, database.Close())
 
-	operatorMux := http.NewServeMux()
-	operatorStore, err := sqlitestore.Open(dbPath)
-	require.NoError(t, err)
-	operatorService, err := operator.NewService(operatorStore, slog.New(slog.DiscardHandler), operator.NewStreamRegistry())
-	require.NoError(t, err)
-	operatorPath, operatorHandler := operatorv1connect.NewOperatorServiceHandler(operatorService)
-	operatorMux.Handle(operatorPath, operatorHandler)
-	operatorServer := httptest.NewServer(operatorMux)
-	t.Cleanup(operatorServer.Close)
-	t.Cleanup(func() { require.NoError(t, operatorStore.Close()) })
-
+	const signingKey = "operator-smoke-signing-key"
 	mux := http.NewServeMux()
-	svc := &orchSvc{dbPath: dbPath, targetEnv: "staging", signingKey: signingKey, operatorEndpoint: operatorServer.URL}
+	authStore, err := sqlitestore.Open(t.TempDir() + "/auth.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
+	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+	svc := &orchSvc{
+		targetEnv:      "staging",
+		signingKey:     signingKey,
+		authURL:        authServer.URL,
+		streamRegistry: operator.NewStreamRegistry(),
+	}
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "postgres", DSN: dsn}})
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 	server := httptest.NewServer(mux)
@@ -202,8 +956,11 @@ func TestOperatorManagementEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	viewerToken, _, err := jwtManager.GenerateAccessToken(viewerID, organizationID, []string{string(store.RoleViewer)})
 	require.NoError(t, err)
-	client := orchestratorv1connect.NewOrchestratorServiceClient(http.DefaultClient, server.URL)
+	client := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
+	operatorClient := operatorv1connect.NewOperatorServiceClient(server.Client(), server.URL)
 
+	// Viewer write RPC is rejected server-side even though the UI hides the
+	// entry (AC-053-03).
 	viewerCreate := connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
 		CustomerId: customerID, ClusterId: clusterID, OperatorName: "operator-smoke", TtlMinutes: 5,
 	})
@@ -212,11 +969,14 @@ func TestOperatorManagementEndToEnd(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 
+	// Empty state returns an empty page, not an error (AC-053-11).
 	viewerList := connect.NewRequest(&orchestratorv1.ListOperatorsRequest{CustomerId: customerID, ClusterId: clusterID})
 	viewerList.Header().Set("Authorization", "Bearer "+viewerToken)
 	viewerPage, err := client.ListOperators(ctx, viewerList)
 	require.NoError(t, err)
 	assert.Empty(t, viewerPage.Msg.GetOperators())
+
+	// Token create returns the plaintext exactly once (AC-053-01/05).
 	createRequest := connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
 		CustomerId: customerID, ClusterId: clusterID, OperatorName: "operator-smoke", TtlMinutes: 5,
 	})
@@ -225,10 +985,11 @@ func TestOperatorManagementEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	plaintext := created.Msg.GetToken()
 	assert.NotEmpty(t, plaintext)
-	assert.Equal(t, operatorServer.URL, created.Msg.GetOperatorEndpoint())
+	assert.NotEmpty(t, created.Msg.GetOperatorEndpoint())
 	assert.Contains(t, created.Msg.GetInstallCommandTemplate(), "${ENROLLMENT_TOKEN}")
 	assert.NotContains(t, created.Msg.GetInstallCommandTemplate(), plaintext)
 
+	// Status returns only non-sensitive metadata (AC-053-06/07).
 	statusRequest := connect.NewRequest(&orchestratorv1.GetEnrollmentTokenStatusRequest{CustomerId: customerID, ClusterId: clusterID})
 	statusRequest.Header().Set("Authorization", "Bearer "+adminToken)
 	status, err := client.GetEnrollmentTokenStatus(ctx, statusRequest)
@@ -236,6 +997,8 @@ func TestOperatorManagementEndToEnd(t *testing.T) {
 	assert.Equal(t, orchestratorv1.EnrollmentTokenState_ENROLLMENT_TOKEN_STATE_PENDING, status.Msg.GetStatus().GetState())
 	assert.NotContains(t, status.Msg.String(), plaintext)
 
+	// Explicit replace atomically revokes the old token and issues a new one
+	// in the same transaction (AC-053-07).
 	replaceRequest := connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
 		CustomerId: customerID, ClusterId: clusterID, OperatorName: "operator-smoke", TtlMinutes: 5, ReplacePendingToken: true,
 	})
@@ -245,8 +1008,8 @@ func TestOperatorManagementEndToEnd(t *testing.T) {
 	assert.NotEqual(t, plaintext, replaced.Msg.GetToken())
 	assert.NotContains(t, replaced.Msg.String(), plaintext)
 
+	// Enroll through the in-process OperatorService mount (ADR-001/002).
 	csr := generateOperatorSmokeCSR(t, "operator-smoke", customerID, clusterID)
-	operatorClient := operatorv1connect.NewOperatorServiceClient(http.DefaultClient, operatorServer.URL)
 	enrolled, err := operatorClient.Enroll(ctx, connect.NewRequest(&operatorv1.EnrollRequest{
 		EnrollmentToken: replaced.Msg.GetToken(),
 		CustomerId:      customerID,
@@ -258,6 +1021,7 @@ func TestOperatorManagementEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, enrolled.Msg.GetSessionId())
 
+	// History now contains the enrolled operator (AC-053-12).
 	historyRequest := connect.NewRequest(&orchestratorv1.ListOperatorsRequest{CustomerId: customerID, ClusterId: clusterID})
 	historyRequest.Header().Set("Authorization", "Bearer "+adminToken)
 	history, err := client.ListOperators(ctx, historyRequest)
@@ -265,9 +1029,11 @@ func TestOperatorManagementEndToEnd(t *testing.T) {
 	require.Len(t, history.Msg.GetOperators(), 1)
 	assert.Equal(t, "operator-053-enrolled", history.Msg.GetOperators()[0].GetId())
 
+	// Revoke closes the live stream and reports revoked immediately
+	// (AC-053-04/22).
 	operatorID := "operator-053-enrolled"
 	streamCtx, cancelStream := context.WithCancel(context.Background())
-	operatorService.StreamRegistry().Register(operatorID, enrolled.Msg.GetSessionId(), cancelStream)
+	svc.streamRegistry.Register(operatorID, enrolled.Msg.GetSessionId(), cancelStream)
 
 	revokeRequest := connect.NewRequest(&orchestratorv1.RevokeOperatorRequest{
 		CustomerId: customerID, ClusterId: clusterID, OperatorId: operatorID, Reason: "security incident",
@@ -282,6 +1048,15 @@ func TestOperatorManagementEndToEnd(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("operator stream was not closed after revocation")
 	}
+
+	// Duplicate revoke is an idempotent success (AC-053-14).
+	retryRevoke := connect.NewRequest(&orchestratorv1.RevokeOperatorRequest{
+		CustomerId: customerID, ClusterId: clusterID, OperatorId: operatorID, Reason: "security incident",
+	})
+	retryRevoke.Header().Set("Authorization", "Bearer "+adminToken)
+	retry, err := client.RevokeOperator(ctx, retryRevoke)
+	require.NoError(t, err)
+	assert.False(t, retry.Msg.GetChanged())
 
 	detailRequest := connect.NewRequest(&orchestratorv1.GetOperatorRequest{CustomerId: customerID, ClusterId: clusterID, OperatorId: operatorID})
 	detailRequest.Header().Set("Authorization", "Bearer "+adminToken)
@@ -301,4 +1076,24 @@ func generateOperatorSmokeCSR(t *testing.T, operatorName, customerID, clusterID 
 	der, err := x509.CreateCertificateRequest(rand.Reader, template, privateKey)
 	require.NoError(t, err)
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
+}
+
+// TestOperatorReadOnlyProcedures pins the REQ-053 read RPCs in the maintenance
+// read-only allowlist while the write RPCs stay gated (AC-053-03).
+func TestOperatorReadOnlyProcedures(t *testing.T) {
+	orchestratorReadOnly := orchestratorReadOnlyProcedures()
+	for _, procedure := range []string{
+		orchestratorv1connect.OrchestratorServiceListOperatorsProcedure,
+		orchestratorv1connect.OrchestratorServiceGetOperatorProcedure,
+		orchestratorv1connect.OrchestratorServiceGetEnrollmentTokenStatusProcedure,
+	} {
+		assert.Contains(t, orchestratorReadOnly, procedure)
+	}
+	for _, procedure := range []string{
+		orchestratorv1connect.OrchestratorServiceRevokeOperatorProcedure,
+		orchestratorv1connect.OrchestratorServiceCreateEnrollmentTokenProcedure,
+		orchestratorv1connect.OrchestratorServiceRevokePendingEnrollmentTokenProcedure,
+	} {
+		assert.NotContains(t, orchestratorReadOnly, procedure)
+	}
 }

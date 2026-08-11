@@ -95,7 +95,11 @@ func (f *FakeObserver) Observe(
 		return result, &RolloutError{Kind: ErrRolloutTimeout, Last: result, Err: observeCtx.Err()}
 
 	case FakeError:
-		return result, response.Err
+		injectedErr := response.Err
+		if injectedErr == nil {
+			injectedErr = ErrWatchDisconnected
+		}
+		return result, &RolloutError{Kind: injectedErr, Last: result, Err: injectedErr}
 
 	default:
 		return result, response.Err

@@ -27,6 +27,8 @@ const (
 	OrganizationServiceName = "auth.v1.OrganizationService"
 	// BindingServiceName is the fully-qualified name of the BindingService service.
 	BindingServiceName = "auth.v1.BindingService"
+	// AuthorizationServiceName is the fully-qualified name of the AuthorizationService service.
+	AuthorizationServiceName = "auth.v1.AuthorizationService"
 	// ExternalIdentityServiceName is the fully-qualified name of the ExternalIdentityService service.
 	ExternalIdentityServiceName = "auth.v1.ExternalIdentityService"
 )
@@ -60,6 +62,15 @@ const (
 	// AuthServiceChangePasswordProcedure is the fully-qualified name of the AuthService's
 	// ChangePassword RPC.
 	AuthServiceChangePasswordProcedure = "/auth.v1.AuthService/ChangePassword"
+	// AuthServiceCreateLocalUserProcedure is the fully-qualified name of the AuthService's
+	// CreateLocalUser RPC.
+	AuthServiceCreateLocalUserProcedure = "/auth.v1.AuthService/CreateLocalUser"
+	// AuthServiceGetLocalUserProcedure is the fully-qualified name of the AuthService's GetLocalUser
+	// RPC.
+	AuthServiceGetLocalUserProcedure = "/auth.v1.AuthService/GetLocalUser"
+	// AuthServiceListLocalUsersProcedure is the fully-qualified name of the AuthService's
+	// ListLocalUsers RPC.
+	AuthServiceListLocalUsersProcedure = "/auth.v1.AuthService/ListLocalUsers"
 	// OrganizationServiceCreateOrganizationProcedure is the fully-qualified name of the
 	// OrganizationService's CreateOrganization RPC.
 	OrganizationServiceCreateOrganizationProcedure = "/auth.v1.OrganizationService/CreateOrganization"
@@ -99,6 +110,12 @@ const (
 	// BindingServiceRevokeBindingProcedure is the fully-qualified name of the BindingService's
 	// RevokeBinding RPC.
 	BindingServiceRevokeBindingProcedure = "/auth.v1.BindingService/RevokeBinding"
+	// AuthorizationServiceGetAuthorizationSnapshotProcedure is the fully-qualified name of the
+	// AuthorizationService's GetAuthorizationSnapshot RPC.
+	AuthorizationServiceGetAuthorizationSnapshotProcedure = "/auth.v1.AuthorizationService/GetAuthorizationSnapshot"
+	// AuthorizationServiceSetCapabilityGrantProcedure is the fully-qualified name of the
+	// AuthorizationService's SetCapabilityGrant RPC.
+	AuthorizationServiceSetCapabilityGrantProcedure = "/auth.v1.AuthorizationService/SetCapabilityGrant"
 	// ExternalIdentityServiceAuthenticateLDAPProcedure is the fully-qualified name of the
 	// ExternalIdentityService's AuthenticateLDAP RPC.
 	ExternalIdentityServiceAuthenticateLDAPProcedure = "/auth.v1.ExternalIdentityService/AuthenticateLDAP"
@@ -120,6 +137,9 @@ type AuthServiceClient interface {
 	ValidateToken(context.Context, *connect.Request[v1.ValidateTokenRequest]) (*connect.Response[v1.ValidateTokenResponse], error)
 	SwitchOrganization(context.Context, *connect.Request[v1.SwitchOrganizationRequest]) (*connect.Response[v1.SwitchOrganizationResponse], error)
 	ChangePassword(context.Context, *connect.Request[v1.ChangePasswordRequest]) (*connect.Response[v1.ChangePasswordResponse], error)
+	CreateLocalUser(context.Context, *connect.Request[v1.CreateLocalUserRequest]) (*connect.Response[v1.CreateLocalUserResponse], error)
+	GetLocalUser(context.Context, *connect.Request[v1.GetLocalUserRequest]) (*connect.Response[v1.GetLocalUserResponse], error)
+	ListLocalUsers(context.Context, *connect.Request[v1.ListLocalUsersRequest]) (*connect.Response[v1.ListLocalUsersResponse], error)
 }
 
 // NewAuthServiceClient constructs a client for the auth.v1.AuthService service. By default, it uses
@@ -181,6 +201,24 @@ func NewAuthServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 			connect.WithSchema(authServiceMethods.ByName("ChangePassword")),
 			connect.WithClientOptions(opts...),
 		),
+		createLocalUser: connect.NewClient[v1.CreateLocalUserRequest, v1.CreateLocalUserResponse](
+			httpClient,
+			baseURL+AuthServiceCreateLocalUserProcedure,
+			connect.WithSchema(authServiceMethods.ByName("CreateLocalUser")),
+			connect.WithClientOptions(opts...),
+		),
+		getLocalUser: connect.NewClient[v1.GetLocalUserRequest, v1.GetLocalUserResponse](
+			httpClient,
+			baseURL+AuthServiceGetLocalUserProcedure,
+			connect.WithSchema(authServiceMethods.ByName("GetLocalUser")),
+			connect.WithClientOptions(opts...),
+		),
+		listLocalUsers: connect.NewClient[v1.ListLocalUsersRequest, v1.ListLocalUsersResponse](
+			httpClient,
+			baseURL+AuthServiceListLocalUsersProcedure,
+			connect.WithSchema(authServiceMethods.ByName("ListLocalUsers")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -194,6 +232,9 @@ type authServiceClient struct {
 	validateToken      *connect.Client[v1.ValidateTokenRequest, v1.ValidateTokenResponse]
 	switchOrganization *connect.Client[v1.SwitchOrganizationRequest, v1.SwitchOrganizationResponse]
 	changePassword     *connect.Client[v1.ChangePasswordRequest, v1.ChangePasswordResponse]
+	createLocalUser    *connect.Client[v1.CreateLocalUserRequest, v1.CreateLocalUserResponse]
+	getLocalUser       *connect.Client[v1.GetLocalUserRequest, v1.GetLocalUserResponse]
+	listLocalUsers     *connect.Client[v1.ListLocalUsersRequest, v1.ListLocalUsersResponse]
 }
 
 // GetInitStatus calls auth.v1.AuthService.GetInitStatus.
@@ -236,6 +277,21 @@ func (c *authServiceClient) ChangePassword(ctx context.Context, req *connect.Req
 	return c.changePassword.CallUnary(ctx, req)
 }
 
+// CreateLocalUser calls auth.v1.AuthService.CreateLocalUser.
+func (c *authServiceClient) CreateLocalUser(ctx context.Context, req *connect.Request[v1.CreateLocalUserRequest]) (*connect.Response[v1.CreateLocalUserResponse], error) {
+	return c.createLocalUser.CallUnary(ctx, req)
+}
+
+// GetLocalUser calls auth.v1.AuthService.GetLocalUser.
+func (c *authServiceClient) GetLocalUser(ctx context.Context, req *connect.Request[v1.GetLocalUserRequest]) (*connect.Response[v1.GetLocalUserResponse], error) {
+	return c.getLocalUser.CallUnary(ctx, req)
+}
+
+// ListLocalUsers calls auth.v1.AuthService.ListLocalUsers.
+func (c *authServiceClient) ListLocalUsers(ctx context.Context, req *connect.Request[v1.ListLocalUsersRequest]) (*connect.Response[v1.ListLocalUsersResponse], error) {
+	return c.listLocalUsers.CallUnary(ctx, req)
+}
+
 // AuthServiceHandler is an implementation of the auth.v1.AuthService service.
 type AuthServiceHandler interface {
 	GetInitStatus(context.Context, *connect.Request[v1.GetInitStatusRequest]) (*connect.Response[v1.GetInitStatusResponse], error)
@@ -246,6 +302,9 @@ type AuthServiceHandler interface {
 	ValidateToken(context.Context, *connect.Request[v1.ValidateTokenRequest]) (*connect.Response[v1.ValidateTokenResponse], error)
 	SwitchOrganization(context.Context, *connect.Request[v1.SwitchOrganizationRequest]) (*connect.Response[v1.SwitchOrganizationResponse], error)
 	ChangePassword(context.Context, *connect.Request[v1.ChangePasswordRequest]) (*connect.Response[v1.ChangePasswordResponse], error)
+	CreateLocalUser(context.Context, *connect.Request[v1.CreateLocalUserRequest]) (*connect.Response[v1.CreateLocalUserResponse], error)
+	GetLocalUser(context.Context, *connect.Request[v1.GetLocalUserRequest]) (*connect.Response[v1.GetLocalUserResponse], error)
+	ListLocalUsers(context.Context, *connect.Request[v1.ListLocalUsersRequest]) (*connect.Response[v1.ListLocalUsersResponse], error)
 }
 
 // NewAuthServiceHandler builds an HTTP handler from the service implementation. It returns the path
@@ -303,6 +362,24 @@ func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption
 		connect.WithSchema(authServiceMethods.ByName("ChangePassword")),
 		connect.WithHandlerOptions(opts...),
 	)
+	authServiceCreateLocalUserHandler := connect.NewUnaryHandler(
+		AuthServiceCreateLocalUserProcedure,
+		svc.CreateLocalUser,
+		connect.WithSchema(authServiceMethods.ByName("CreateLocalUser")),
+		connect.WithHandlerOptions(opts...),
+	)
+	authServiceGetLocalUserHandler := connect.NewUnaryHandler(
+		AuthServiceGetLocalUserProcedure,
+		svc.GetLocalUser,
+		connect.WithSchema(authServiceMethods.ByName("GetLocalUser")),
+		connect.WithHandlerOptions(opts...),
+	)
+	authServiceListLocalUsersHandler := connect.NewUnaryHandler(
+		AuthServiceListLocalUsersProcedure,
+		svc.ListLocalUsers,
+		connect.WithSchema(authServiceMethods.ByName("ListLocalUsers")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/auth.v1.AuthService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case AuthServiceGetInitStatusProcedure:
@@ -321,6 +398,12 @@ func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption
 			authServiceSwitchOrganizationHandler.ServeHTTP(w, r)
 		case AuthServiceChangePasswordProcedure:
 			authServiceChangePasswordHandler.ServeHTTP(w, r)
+		case AuthServiceCreateLocalUserProcedure:
+			authServiceCreateLocalUserHandler.ServeHTTP(w, r)
+		case AuthServiceGetLocalUserProcedure:
+			authServiceGetLocalUserHandler.ServeHTTP(w, r)
+		case AuthServiceListLocalUsersProcedure:
+			authServiceListLocalUsersHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -360,6 +443,18 @@ func (UnimplementedAuthServiceHandler) SwitchOrganization(context.Context, *conn
 
 func (UnimplementedAuthServiceHandler) ChangePassword(context.Context, *connect.Request[v1.ChangePasswordRequest]) (*connect.Response[v1.ChangePasswordResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.ChangePassword is not implemented"))
+}
+
+func (UnimplementedAuthServiceHandler) CreateLocalUser(context.Context, *connect.Request[v1.CreateLocalUserRequest]) (*connect.Response[v1.CreateLocalUserResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.CreateLocalUser is not implemented"))
+}
+
+func (UnimplementedAuthServiceHandler) GetLocalUser(context.Context, *connect.Request[v1.GetLocalUserRequest]) (*connect.Response[v1.GetLocalUserResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.GetLocalUser is not implemented"))
+}
+
+func (UnimplementedAuthServiceHandler) ListLocalUsers(context.Context, *connect.Request[v1.ListLocalUsersRequest]) (*connect.Response[v1.ListLocalUsersResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.ListLocalUsers is not implemented"))
 }
 
 // OrganizationServiceClient is a client for the auth.v1.OrganizationService service.
@@ -786,6 +881,102 @@ func (UnimplementedBindingServiceHandler) ListBindings(context.Context, *connect
 
 func (UnimplementedBindingServiceHandler) RevokeBinding(context.Context, *connect.Request[v1.RevokeBindingRequest]) (*connect.Response[v1.RevokeBindingResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.BindingService.RevokeBinding is not implemented"))
+}
+
+// AuthorizationServiceClient is a client for the auth.v1.AuthorizationService service.
+type AuthorizationServiceClient interface {
+	GetAuthorizationSnapshot(context.Context, *connect.Request[v1.GetAuthorizationSnapshotRequest]) (*connect.Response[v1.GetAuthorizationSnapshotResponse], error)
+	SetCapabilityGrant(context.Context, *connect.Request[v1.SetCapabilityGrantRequest]) (*connect.Response[v1.SetCapabilityGrantResponse], error)
+}
+
+// NewAuthorizationServiceClient constructs a client for the auth.v1.AuthorizationService service.
+// By default, it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped
+// responses, and sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the
+// connect.WithGRPC() or connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewAuthorizationServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) AuthorizationServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	authorizationServiceMethods := v1.File_auth_v1_auth_proto.Services().ByName("AuthorizationService").Methods()
+	return &authorizationServiceClient{
+		getAuthorizationSnapshot: connect.NewClient[v1.GetAuthorizationSnapshotRequest, v1.GetAuthorizationSnapshotResponse](
+			httpClient,
+			baseURL+AuthorizationServiceGetAuthorizationSnapshotProcedure,
+			connect.WithSchema(authorizationServiceMethods.ByName("GetAuthorizationSnapshot")),
+			connect.WithClientOptions(opts...),
+		),
+		setCapabilityGrant: connect.NewClient[v1.SetCapabilityGrantRequest, v1.SetCapabilityGrantResponse](
+			httpClient,
+			baseURL+AuthorizationServiceSetCapabilityGrantProcedure,
+			connect.WithSchema(authorizationServiceMethods.ByName("SetCapabilityGrant")),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// authorizationServiceClient implements AuthorizationServiceClient.
+type authorizationServiceClient struct {
+	getAuthorizationSnapshot *connect.Client[v1.GetAuthorizationSnapshotRequest, v1.GetAuthorizationSnapshotResponse]
+	setCapabilityGrant       *connect.Client[v1.SetCapabilityGrantRequest, v1.SetCapabilityGrantResponse]
+}
+
+// GetAuthorizationSnapshot calls auth.v1.AuthorizationService.GetAuthorizationSnapshot.
+func (c *authorizationServiceClient) GetAuthorizationSnapshot(ctx context.Context, req *connect.Request[v1.GetAuthorizationSnapshotRequest]) (*connect.Response[v1.GetAuthorizationSnapshotResponse], error) {
+	return c.getAuthorizationSnapshot.CallUnary(ctx, req)
+}
+
+// SetCapabilityGrant calls auth.v1.AuthorizationService.SetCapabilityGrant.
+func (c *authorizationServiceClient) SetCapabilityGrant(ctx context.Context, req *connect.Request[v1.SetCapabilityGrantRequest]) (*connect.Response[v1.SetCapabilityGrantResponse], error) {
+	return c.setCapabilityGrant.CallUnary(ctx, req)
+}
+
+// AuthorizationServiceHandler is an implementation of the auth.v1.AuthorizationService service.
+type AuthorizationServiceHandler interface {
+	GetAuthorizationSnapshot(context.Context, *connect.Request[v1.GetAuthorizationSnapshotRequest]) (*connect.Response[v1.GetAuthorizationSnapshotResponse], error)
+	SetCapabilityGrant(context.Context, *connect.Request[v1.SetCapabilityGrantRequest]) (*connect.Response[v1.SetCapabilityGrantResponse], error)
+}
+
+// NewAuthorizationServiceHandler builds an HTTP handler from the service implementation. It returns
+// the path on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewAuthorizationServiceHandler(svc AuthorizationServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	authorizationServiceMethods := v1.File_auth_v1_auth_proto.Services().ByName("AuthorizationService").Methods()
+	authorizationServiceGetAuthorizationSnapshotHandler := connect.NewUnaryHandler(
+		AuthorizationServiceGetAuthorizationSnapshotProcedure,
+		svc.GetAuthorizationSnapshot,
+		connect.WithSchema(authorizationServiceMethods.ByName("GetAuthorizationSnapshot")),
+		connect.WithHandlerOptions(opts...),
+	)
+	authorizationServiceSetCapabilityGrantHandler := connect.NewUnaryHandler(
+		AuthorizationServiceSetCapabilityGrantProcedure,
+		svc.SetCapabilityGrant,
+		connect.WithSchema(authorizationServiceMethods.ByName("SetCapabilityGrant")),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/auth.v1.AuthorizationService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case AuthorizationServiceGetAuthorizationSnapshotProcedure:
+			authorizationServiceGetAuthorizationSnapshotHandler.ServeHTTP(w, r)
+		case AuthorizationServiceSetCapabilityGrantProcedure:
+			authorizationServiceSetCapabilityGrantHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedAuthorizationServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedAuthorizationServiceHandler struct{}
+
+func (UnimplementedAuthorizationServiceHandler) GetAuthorizationSnapshot(context.Context, *connect.Request[v1.GetAuthorizationSnapshotRequest]) (*connect.Response[v1.GetAuthorizationSnapshotResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthorizationService.GetAuthorizationSnapshot is not implemented"))
+}
+
+func (UnimplementedAuthorizationServiceHandler) SetCapabilityGrant(context.Context, *connect.Request[v1.SetCapabilityGrantRequest]) (*connect.Response[v1.SetCapabilityGrantResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthorizationService.SetCapabilityGrant is not implemented"))
 }
 
 // ExternalIdentityServiceClient is a client for the auth.v1.ExternalIdentityService service.

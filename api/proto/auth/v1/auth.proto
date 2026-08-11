@@ -103,6 +103,47 @@ message ChangePasswordRequest {
 
 message ChangePasswordResponse {}
 
+// LocalUser is a local user account with its organization role binding (REQ-025, D-12/D-14).
+message LocalUser {
+  string id = 1;
+  string username = 2;
+  repeated string roles = 3;
+  string org_id = 4;
+  string status = 5;
+}
+
+// CreateLocalUserRequest creates a local user bound to the caller's organization (D-12).
+// Roles accepts at most one value (empty = viewer); platform_admin is rejected (D-16).
+message CreateLocalUserRequest {
+  string username = 1;
+  string password = 2;
+  repeated string roles = 3;
+  string org_id = 4; // empty = caller's active organization
+}
+
+message CreateLocalUserResponse {
+  LocalUser user = 1;
+}
+
+message GetLocalUserRequest {
+  string username = 1;
+}
+
+message GetLocalUserResponse {
+  LocalUser user = 1;
+}
+
+// ListLocalUsersRequest reuses the REQ-010 cursor pagination contract (page_size <= 100).
+message ListLocalUsersRequest {
+  string cursor = 1;
+  int32 page_size = 2;
+}
+
+message ListLocalUsersResponse {
+  repeated LocalUser users = 1;
+  string next_cursor = 2;
+}
+
 service AuthService {
   rpc GetInitStatus(GetInitStatusRequest) returns (GetInitStatusResponse);
   rpc Initialize(InitializeRequest) returns (InitializeResponse);
@@ -112,6 +153,9 @@ service AuthService {
   rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
   rpc SwitchOrganization(SwitchOrganizationRequest) returns (SwitchOrganizationResponse);
   rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
+  rpc CreateLocalUser(CreateLocalUserRequest) returns (CreateLocalUserResponse);
+  rpc GetLocalUser(GetLocalUserRequest) returns (GetLocalUserResponse);
+  rpc ListLocalUsers(ListLocalUsersRequest) returns (ListLocalUsersResponse);
 }
 
 // --- OrganizationService (REQ-026) ---
@@ -275,6 +319,47 @@ service BindingService {
   rpc GetBinding(GetBindingRequest) returns (GetBindingResponse);
   rpc ListBindings(ListBindingsRequest) returns (ListBindingsResponse);
   rpc RevokeBinding(RevokeBindingRequest) returns (RevokeBindingResponse);
+}
+
+// --- Authorization Snapshot (REQ-027) ---
+
+message GetAuthorizationSnapshotRequest {
+  string organization_id = 1;
+  string customer_id = 2;
+}
+
+message GetAuthorizationSnapshotResponse {
+  string organization_id = 1;
+  string customer_id = 2;
+  bool binding_active = 3;
+  bool customer_active = 4;
+  string role = 5;
+  bool can_execute_emergency = 6;
+  bool can_resolve_emergency = 7;
+  bool can_create_values_revision = 8;
+  bool can_approve_values_revision = 9;
+  uint64 source_version = 10;
+  uint64 policy_version = 11;
+  uint64 checkpoint = 12;
+  bool fresh = 13;
+  string actor_id = 14;
+}
+
+message SetCapabilityGrantRequest {
+  string organization_id = 1;
+  string subject = 2;
+  string action = 3;
+  bool revoked = 4;
+}
+
+message SetCapabilityGrantResponse {
+  uint64 source_version = 1;
+  uint64 policy_version = 2;
+}
+
+service AuthorizationService {
+  rpc GetAuthorizationSnapshot(GetAuthorizationSnapshotRequest) returns (GetAuthorizationSnapshotResponse);
+  rpc SetCapabilityGrant(SetCapabilityGrantRequest) returns (SetCapabilityGrantResponse);
 }
 
 // --- External IdP (REQ-028) ---

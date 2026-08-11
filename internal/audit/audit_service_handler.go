@@ -12,6 +12,7 @@ import (
 	auditv1 "github.com/ndzuki/release-manager/api/gen/audit/v1"
 	auditv1connect "github.com/ndzuki/release-manager/api/gen/audit/v1/auditv1connect"
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
+	"github.com/ndzuki/release-manager/internal/contracts"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -31,6 +32,7 @@ func NewAuditServiceHandler(st store.Store, emitter Sink, logger *slog.Logger) a
 }
 
 // Emit delegates to the underlying emitter.
+//
 //nolint:dupl // This full handler intentionally mirrors the lightweight collector response contract.
 func (h *auditServiceHandler) Emit(_ context.Context, req *connect.Request[auditv1.EmitAuditRequest]) (*connect.Response[auditv1.EmitAuditResponse], error) {
 	if req.Msg == nil || len(req.Msg.GetEvents()) == 0 {
@@ -74,12 +76,10 @@ func (h *auditServiceHandler) QueryAuditEvents(ctx context.Context, req *connect
 		}
 	}
 
-	limit := 100
+	limit := int(contracts.NormalizePageSize(0))
 	cursor := ""
 	if p := msg.GetPagination(); p != nil {
-		if p.GetPageSize() > 0 && int(p.GetPageSize()) < limit {
-			limit = int(p.GetPageSize())
-		}
+		limit = int(contracts.NormalizePageSize(p.GetPageSize()))
 		cursor = p.GetPageToken()
 	}
 
@@ -140,14 +140,14 @@ func (h *auditServiceHandler) ExportAuditEvents(ctx context.Context, req *connec
 	}
 
 	event := &store.AuditEvent{
-		ID:             uuid.New().String(),
-		ActorKind:      store.AuditActorSystem,
-		ActorID:        "system",
-		ResourceType:   "audit_export",
-		ResourceID:     export.ID,
-		Action:         "export.created",
-		Status:         "success",
-		CreatedAt:      now,
+		ID:           uuid.New().String(),
+		ActorKind:    store.AuditActorSystem,
+		ActorID:      "system",
+		ResourceType: "audit_export",
+		ResourceID:   export.ID,
+		Action:       "export.created",
+		Status:       "success",
+		CreatedAt:    now,
 	}
 
 	if err := h.store.AuditExports().CreateWithEvent(ctx, export, event); err != nil {

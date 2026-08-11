@@ -11,6 +11,7 @@ import (
 
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	authctx "github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -50,11 +51,22 @@ func TestEmergencyChange_RejectedForDisabledCustomer(t *testing.T) {
 	cust.Status = store.CustomerDisabled
 	require.NoError(t, st.Customers().Update(context.Background(), cust))
 
-	_, err = svc.EmergencyChange(context.Background(), connect.NewRequest(&orchestratorv1.EmergencyChangeRequest{
+	require.NoError(t, st.Users().Create(t.Context(), &store.User{
+		ID: "release-admin", Username: "release-admin", Status: store.UserActive,
+	}))
+	require.NoError(t, st.OrgMembers().Create(t.Context(), &store.OrganizationMember{
+		OrgID: "org-001", UserID: "release-admin", Role: store.RoleReleaseAdmin,
+	}))
+	adminCtx := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "release-admin", OrganizationID: "org-001", Roles: []string{string(store.RoleReleaseAdmin)},
+	})
+	_, err = svc.EmergencyChange(adminCtx, connect.NewRequest(&orchestratorv1.EmergencyChangeRequest{
 		ReleaseDefinitionId: "def-001",
-		Action:              orchestratorv1.EmergencyAction_EMERGENCY_ACTION_SET_CONTAINER_IMAGE,
-		Payload:             `{}`,
+		IdempotencyKey:      "customer-disabled-test",
 		Reason:              "test",
+		WorkloadRef:         &orchestratorv1.WorkloadRef{Kind: "DEPLOYMENT", Name: "api", Namespace: "default", Uid: "uid-test"},
+		Change:              &orchestratorv1.EmergencyChangeRequest_SetReplicas{SetReplicas: &orchestratorv1.SetReplicas{Replicas: 1}},
+		Convergence:         orchestratorv1.EmergencyConvergence_EMERGENCY_CONVERGENCE_REQUIRE_PROMOTION,
 	}))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "is disabled")

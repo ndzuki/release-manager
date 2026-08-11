@@ -4,12 +4,14 @@ package operator
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -18,7 +20,9 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
+	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/operator/ca"
+	"github.com/ndzuki/release-manager/internal/operator/commandtype"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/store"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -26,38 +30,73 @@ import (
 
 // Service implements the OperatorServiceHandler Connect interface.
 type Service struct {
-	store           store.Store
-	ca              *ca.CA
-	logger          *slog.Logger
-	sessionTTL      time.Duration
-	heartbeatMaxAge time.Duration
-	suspectAfter    time.Duration
-	inventorySyncer *InventorySyncer
-	commandExecutor CommandExecutor
-	streams         *StreamRegistry
+	store            store.Store
+	ca               *ca.CA
+	logger           *slog.Logger
+	sessionTTL       time.Duration
+	heartbeatMaxAge  time.Duration
+	suspectAfter     time.Duration
+	inventorySyncer  *InventorySyncer
+	commandExecutor  CommandExecutor
+	auditEmitter     audit.Sink
+	streamMu         sync.RWMutex
+	emergencyStreams map[string]chan *operatorv1.EmergencyCommand
+	streams          *StreamRegistry
 }
 
 // NewService creates a new operator Connect service with a self-signed CA.
-func NewService(st store.Store, logger *slog.Logger, args ...any) (*Service, error) {
+func NewService(st store.Store, logger *slog.Logger, opts ...Option) (*Service, error) {
 	caInst, err := ca.New(ca.Config{TTL: 7 * 24 * time.Hour})
 	if err != nil {
 		return nil, fmt.Errorf("create CA: %w", err)
 	}
-	streams := NewStreamRegistry()
-	for _, arg := range args {
-		if registry, ok := arg.(*StreamRegistry); ok && registry != nil {
-			streams = registry
+	if logger == nil {
+		logger = slog.Default()
+	}
+	svc := &Service{
+		store:            st,
+		ca:               caInst,
+		logger:           logger,
+		sessionTTL:       15 * time.Minute,
+		heartbeatMaxAge:  30 * time.Second,
+		suspectAfter:     60 * time.Second,
+		emergencyStreams: make(map[string]chan *operatorv1.EmergencyCommand),
+		streams:          NewStreamRegistry(),
+	}
+	for _, opt := range opts {
+		opt(svc)
+	}
+	return svc, nil
+}
+
+// Option configures a Service after construction.
+type Option func(*Service)
+
+// WithCA overrides the service CA. The gateway wiring shares one persisted CA
+// between the listener trust anchor and certificate signing (TASK-075).
+func WithCA(caInst *ca.CA) Option {
+	return func(s *Service) {
+		if caInst != nil {
+			s.ca = caInst
 		}
 	}
-	return &Service{
-		store:           st,
-		ca:              caInst,
-		logger:          logger,
-		sessionTTL:      15 * time.Minute,
-		heartbeatMaxAge: 30 * time.Second,
-		streams:         streams,
-		suspectAfter:    60 * time.Second,
-	}, nil
+}
+
+// WithAudit attaches an audit sink to the service.
+func WithAudit(sink audit.Sink) Option {
+	return func(s *Service) {
+		s.auditEmitter = sink
+	}
+}
+
+// WithStreamRegistry overrides the command stream registry used to propagate
+// session revocation to live streams (REQ-053).
+func WithStreamRegistry(registry *StreamRegistry) Option {
+	return func(s *Service) {
+		if registry != nil {
+			s.streams = registry
+		}
+	}
 }
 
 // SetInventorySyncer attaches an inventory syncer for release inventory sync (REQ-017).
@@ -73,6 +112,24 @@ func (s *Service) SetCommandExecutor(executor CommandExecutor) {
 // StreamRegistry returns the active command stream registry.
 func (s *Service) StreamRegistry() *StreamRegistry { return s.streams }
 
+// DispatchEmergency sends one validated emergency command to the active Operator stream.
+func (s *Service) DispatchEmergency(ctx context.Context, operatorID string, command *operatorv1.EmergencyCommand) error {
+	if operatorID == "" || command == nil || command.GetCommandId() == "" {
+		return fmt.Errorf("operator_id and emergency command are required")
+	}
+	s.streamMu.RLock()
+	delivery := s.emergencyStreams[operatorID]
+	s.streamMu.RUnlock()
+	if delivery == nil {
+		return fmt.Errorf("operator stream is offline")
+	}
+	select {
+	case delivery <- command:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 // Enroll validates a single-use enrollment token, creates an operator record,
 // and establishes a new session for the operator agent.
 //
@@ -153,11 +210,9 @@ func (s *Service) Enroll(
 	}
 	certPEM := ca.CertDERToPEM(certDER)
 
-	// Generate operator ID and cert serial.
-	certSerial := hashBytes(certDER)
-	if len(certSerial) > 10 {
-		certSerial = certSerial[:10]
-	}
+	// Generate operator ID and cert serial. The serial is the first 10 bytes
+	// of sha256(certDER), hex-encoded (ADR-018; REQ-015 certificate contract).
+	certSerial := certSerialFromDER(certDER)
 
 	operatorID := msg.GetOperatorId()
 	if operatorID == "" {
@@ -239,31 +294,103 @@ func (s *Service) CommandStream(
 	operatorID := hello.GetOperatorId()
 	lastSeenSeq := hello.GetLastSeenSequence()
 
-	// Validate session.
-	sess, err := s.store.Sessions().Get(ctx, sessionID)
-	if err != nil {
-		return connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid session: %w", err))
-	}
-	if sess.OperatorID != operatorID {
-		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("session operator mismatch"))
-	}
-	if sess.Status != store.SessionOnline {
-		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("session is %s, not online", sess.Status))
-	}
-
-	// Check operator is still active (AC-015-03).
-	op, err := s.store.Operators().Get(ctx, operatorID)
-	if err != nil {
-		if err == store.ErrNotFound {
-			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator not found"))
+	// ── Gateway mTLS path (TASK-075): identity comes from the client
+	// certificate; a fresh session is established via SessionStore.Establish. ──
+	if tlsState := TLSStateFromContext(ctx); tlsState != nil {
+		if len(tlsState.PeerCertificates) == 0 {
+			return connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("client certificate required on gateway"))
 		}
-		return connect.NewError(connect.CodeInternal, fmt.Errorf("get operator: %w", err))
-	}
-	switch op.Status {
-	case store.OperatorSuperseded:
-		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator superseded: re-enroll required"))
-	case store.OperatorRevoked:
-		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator revoked"))
+		clientCert := tlsState.PeerCertificates[0]
+		clusterID, customerID, ok := parseSANIdentity(clientCert)
+		if !ok {
+			return connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("client certificate SAN does not encode operator identity"))
+		}
+
+		op, err := s.store.Operators().GetByClusterID(ctx, clusterID)
+		if err != nil {
+			if err == store.ErrNotFound {
+				return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("no operator registered for cluster %q", clusterID))
+			}
+			return connect.NewError(connect.CodeInternal, fmt.Errorf("get operator by cluster: %w", err))
+		}
+		if op.CustomerID != customerID {
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("certificate identity does not match operator"))
+		}
+		switch op.Status {
+		case store.OperatorSuperseded:
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator superseded: re-enroll required"))
+		case store.OperatorRevoked:
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator revoked"))
+		}
+		if op.CertSerial != certSerialFromCert(clientCert) {
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("certificate serial does not match registered operator"))
+		}
+		operatorID = op.ID
+
+		now := time.Now().UTC()
+		sess := &store.Session{
+			ID:            uuid.New().String(),
+			OperatorID:    operatorID,
+			Status:        store.SessionOnline,
+			InstanceID:    hello.GetInstanceId(),
+			Version:       hello.GetVersion(),
+			Capabilities:  hello.GetCapabilities(),
+			StartedAt:     now,
+			LastHeartbeat: now,
+			ExpiresAt:     now.Add(s.sessionTTL),
+		}
+		// The Enroll placeholder session (empty InstanceID) does not block the
+		// first Establish — it is replaced, not treated as a concurrent
+		// connection (store semantics, REQ-044 D-57: Hello takes over session
+		// establishment and the fresh session_id is authoritative).
+		if err := s.store.Sessions().Establish(ctx, sess); err != nil {
+			if err == store.ErrDuplicateKey {
+				return connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("another session for this operator is already online"))
+			}
+			return connect.NewError(connect.CodeInternal, fmt.Errorf("establish session: %w", err))
+		}
+		sessionID = sess.ID
+
+		s.logger.Info("operator stream established via mTLS",
+			"operator_id", operatorID,
+			"session_id", sessionID,
+			"cluster_id", clusterID,
+			"customer_id", customerID,
+			"last_seen_sequence", lastSeenSeq,
+		)
+	} else {
+		// ── Plain path (management plane / legacy dev agents): existing
+		// session_id validation. TASK-065 removes this path. ──
+		sess, err := s.store.Sessions().Get(ctx, sessionID)
+		if err != nil {
+			return connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid session: %w", err))
+		}
+		if sess.OperatorID != operatorID {
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("session operator mismatch"))
+		}
+		if sess.Status != store.SessionOnline {
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("session is %s, not online", sess.Status))
+		}
+
+		// Check operator is still active (AC-015-03).
+		op, err := s.store.Operators().Get(ctx, operatorID)
+		if err != nil {
+			if err == store.ErrNotFound {
+				return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator not found"))
+			}
+			return connect.NewError(connect.CodeInternal, fmt.Errorf("get operator: %w", err))
+		}
+		switch op.Status {
+		case store.OperatorSuperseded:
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator superseded: re-enroll required"))
+		case store.OperatorRevoked:
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator revoked"))
+		}
+
+		s.logger.Info("operator stream established",
+			"operator_id", operatorID, "session_id", sessionID,
+			"last_seen_sequence", lastSeenSeq,
+		)
 	}
 
 	s.logger.Info("operator stream established",
@@ -274,6 +401,20 @@ func (s *Service) CommandStream(
 	unregisterStream := s.streams.Register(operatorID, sessionID, cancelStream)
 	defer unregisterStream()
 	ctx = streamCtx
+
+	// First response is always SessionEstablished (REQ-044 output contract;
+	// the bootstrap agent waits for it before entering the main loop).
+	if err := stream.Send(&operatorv1.CommandStreamResponse{
+		Payload: &operatorv1.CommandStreamResponse_SessionEstablished{
+			SessionEstablished: &operatorv1.SessionEstablished{
+				SessionId:                sessionID,
+				HeartbeatIntervalSeconds: int64((s.heartbeatMaxAge / 2) / time.Second),
+				HeartbeatTimeoutSeconds:  int64(s.suspectAfter / time.Second),
+			},
+		},
+	}); err != nil {
+		return err
+	}
 
 	// ── Reconnect: detect sequence gap and re-deliver ──
 	if err := s.handleReconnect(ctx, stream, operatorID, lastSeenSeq); err != nil {
@@ -289,6 +430,34 @@ func (s *Service) CommandStream(
 	deliverCh := make(chan *store.OutboxEntry, 16)
 	deliverDone := make(chan struct{})
 	defer close(deliverDone)
+	emergencyCh := make(chan *operatorv1.EmergencyCommand, 8)
+	s.streamMu.Lock()
+	s.emergencyStreams[operatorID] = emergencyCh
+	s.streamMu.Unlock()
+	defer func() {
+		s.streamMu.Lock()
+		delete(s.emergencyStreams, operatorID)
+		s.streamMu.Unlock()
+	}()
+
+	requestCh := make(chan *operatorv1.CommandStreamRequest)
+	receiveErrCh := make(chan error, 1)
+	go func() {
+		defer close(requestCh)
+		for {
+			request, receiveErr := stream.Receive()
+			if receiveErr != nil {
+				receiveErrCh <- receiveErr
+				return
+			}
+			select {
+			case requestCh <- request:
+			case <-ctx.Done():
+				receiveErrCh <- ctx.Err()
+				return
+			}
+		}
+	}()
 
 	go s.deliverPending(ctx, operatorID, deliverCh, deliverDone)
 
@@ -303,6 +472,17 @@ func (s *Service) CommandStream(
 				return nil
 			}
 
+		case command := <-emergencyCh:
+			if err := stream.Send(&operatorv1.CommandStreamResponse{
+				Payload: &operatorv1.CommandStreamResponse_EmergencyCommand{EmergencyCommand: command},
+			}); err != nil {
+				return err
+			}
+			if intent, getErr := s.store.EmergencyIntents().GetByCommandID(ctx, command.GetCommandId()); getErr == nil {
+				if updateErr := s.store.EmergencyIntents().UpdateDeliveryStatus(ctx, intent.ID, "delivered"); updateErr != nil {
+					s.logger.Warn("failed to mark emergency delivered", "command_id", command.GetCommandId(), "error", updateErr)
+				}
+			}
 		case entry := <-deliverCh:
 			s.logger.Debug("delivering command",
 				"outbox_id", entry.ID,
@@ -322,12 +502,10 @@ func (s *Service) CommandStream(
 			}
 			return nil
 
-		default:
-			req, err := stream.Receive()
-			if err != nil {
-				return err
+		case req, ok := <-requestCh:
+			if !ok {
+				return <-receiveErrCh
 			}
-
 			switch {
 			case req.GetHeartbeat() != nil:
 				if err := s.store.Sessions().Heartbeat(ctx, sessionID); err != nil {
@@ -341,6 +519,9 @@ func (s *Service) CommandStream(
 					"sequence", ack.GetSequence(),
 					"ack_type", ack.GetAckType(),
 				)
+				// ACK_RECEIVED and ACK_PERSISTED both imply delivered,
+				// but only ACK_PERSISTED releases the orchestrator from
+				// re-delivery responsibility.
 				if ack.GetAckType() == operatorv1.AckType_ACK_TYPE_PERSISTED {
 					if err := s.store.Outbox().UpdateStatus(ctx, ack.GetOutboxId(), store.CommandPersisted, ""); err != nil {
 						s.logger.Warn("failed to mark command persisted", "error", err)
@@ -352,6 +533,22 @@ func (s *Service) CommandStream(
 					}
 				}
 
+			case req.GetEmergencyAck() != nil:
+				ack := req.GetEmergencyAck()
+				if ack.GetAckType() == operatorv1.AckType_ACK_TYPE_PERSISTED {
+					if intent, getErr := s.store.EmergencyIntents().GetByCommandID(ctx, ack.GetEmergencyCommandId()); getErr == nil {
+						if updateErr := s.store.EmergencyIntents().UpdateDeliveryStatus(ctx, intent.ID, "persisted"); updateErr != nil {
+							s.logger.Warn("failed to mark emergency persisted", "command_id", ack.GetEmergencyCommandId(), "error", updateErr)
+						}
+						if op, opErr := s.store.Operations().Get(ctx, intent.OperationID); opErr == nil && op.Status == store.StatusQueued {
+							if _, updateErr := s.store.Operations().UpdateStatus(ctx, op.ID, store.StatusRunning, op.StateVersion, ""); updateErr != nil {
+								s.logger.Warn("failed to mark emergency running", "operation_id", op.ID, "error", updateErr)
+							}
+						}
+					}
+				}
+			case req.GetEmergencyResult() != nil:
+				s.finishEmergencyResult(ctx, req.GetEmergencyResult())
 			case req.GetResult() != nil:
 				result := req.GetResult()
 				s.logger.Info("command result",
@@ -387,12 +584,33 @@ func (s *Service) CommandStream(
 				if err := s.store.Outbox().UpdateStatus(ctx, result.GetOutboxId(), status, resultJSON); err != nil {
 					s.logger.Warn("failed to persist command result", "error", err)
 				}
-				if existing != nil && existing.OperationType == "INVENTORY_SYNC" {
+				if existing != nil && existing.OperationType == commandtype.InventorySync {
 					if err := s.store.InventorySyncRequests().UpdateStatus(ctx, existing.OperationID, requestStatus, result.GetMessage()); err != nil {
 						s.logger.Warn("failed to persist inventory sync result", "error", err)
 					}
-				} else if existing != nil {
+				} else if existing != nil && existing.OperationType != commandtype.SecretMetadataList {
 					s.FinishOperation(ctx, existing.OperationID, result.GetStatus(), resultJSON)
+				}
+
+			case req.GetCommandResult() != nil:
+				result := req.GetCommandResult()
+				entry, err := s.store.Outbox().GetByCommandID(ctx, result.GetCommandId())
+				if err != nil {
+					return fmt.Errorf("load typed command result outbox: %w", err)
+				}
+				if err := s.HandleCommandResult(ctx, result); err != nil {
+					return err
+				}
+				payload, err := protojson.Marshal(result)
+				if err != nil {
+					return fmt.Errorf("marshal typed command result: %w", err)
+				}
+				status := store.CommandSucceeded
+				if result.GetStatus() != "succeeded" {
+					status = store.CommandFailed
+				}
+				if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, status, string(payload)); err != nil {
+					return fmt.Errorf("persist typed command result outbox: %w", err)
 				}
 
 			case req.GetResyncResponse() != nil:
@@ -401,6 +619,122 @@ func (s *Service) CommandStream(
 					return err
 				}
 			}
+		case receiveErr := <-receiveErrCh:
+			return receiveErr
+		}
+	}
+}
+
+func (s *Service) finishEmergencyResult(ctx context.Context, result *operatorv1.EmergencyResult) {
+	intent, err := s.store.EmergencyIntents().GetByCommandID(ctx, result.GetEmergencyCommandId())
+	if err != nil {
+		s.logger.Warn("failed to load emergency intent result", "command_id", result.GetEmergencyCommandId(), "error", err)
+		return
+	}
+	op, err := s.store.Operations().Get(ctx, intent.OperationID)
+	if err != nil {
+		s.logger.Warn("failed to load emergency operation result", "operation_id", intent.OperationID, "error", err)
+		return
+	}
+	var snapshots struct {
+		Before json.RawMessage `json:"before"`
+		After  json.RawMessage `json:"after"`
+	}
+	if result.GetResultJson() != "" {
+		if err := json.Unmarshal([]byte(result.GetResultJson()), &snapshots); err != nil {
+			s.logger.Warn("failed to decode emergency snapshots", "command_id", result.GetEmergencyCommandId(), "error", err)
+		}
+	}
+	if op.Status.IsTerminal() {
+		effectStatus := store.EmergencyEffectApplied
+		if result.GetStatus() == "failed" {
+			effectStatus = store.EmergencyEffectNotApplied
+		}
+		resolved, resolveErr := s.store.EmergencyIntents().ResolveEmergencyEffect(ctx, store.ResolveEmergencyEffectCommand{
+			OperationID: op.ID, ExpectedStateVersion: op.StateVersion, EffectStatus: effectStatus,
+			BeforeSnapshot: snapshots.Before, AfterSnapshot: snapshots.After, RequestID: result.GetEmergencyCommandId(),
+		})
+		if resolveErr != nil {
+			s.logger.Warn("failed to resolve late emergency effect", "operation_id", op.ID, "error", resolveErr)
+			return
+		}
+		if resolved.Resolved {
+			s.logger.Info("resolved late emergency effect", "operation_id", op.ID, "effect_status", effectStatus)
+		}
+		return
+	}
+	status := store.StatusSucceeded
+	lastError := ""
+	if result.GetStatus() == "failed" {
+		status = store.StatusFailed
+		lastError = result.GetErrorCode()
+		if lastError == "" {
+			lastError = result.GetMessage()
+		}
+	}
+	effectStatus := store.EmergencyEffectApplied
+	if status == store.StatusFailed {
+		effectStatus = store.EmergencyEffectNotApplied
+	}
+	finished, err := s.store.EmergencyIntents().Finish(
+		ctx,
+		intent.ID,
+		op.ID,
+		op.StateVersion,
+		status,
+		effectStatus,
+		lastError,
+		snapshots.Before,
+		snapshots.After,
+	)
+	if err != nil {
+		s.logger.Warn("failed to finish emergency operation", "operation_id", op.ID, "error", err)
+		return
+	}
+	s.emitEmergencyTerminalAudit(finished, intent, snapshots.Before, snapshots.After, result.GetErrorCode())
+}
+
+func (s *Service) emitEmergencyTerminalAudit(
+	op *store.Operation,
+	intent *store.EmergencyIntent,
+	before, after json.RawMessage,
+	errorCode string,
+) {
+	if s.auditEmitter == nil || op == nil || intent == nil {
+		return
+	}
+	status := "succeeded"
+	if op.Status != store.StatusSucceeded {
+		status = string(op.Status)
+	}
+	changeSummary, err := json.Marshal(map[string]any{
+		"action": intent.Action,
+		"before": before,
+		"after":  after,
+	})
+	if err != nil {
+		s.logger.Warn("failed to encode emergency audit summary", "operation_id", op.ID, "error", err)
+		return
+	}
+	event := audit.NewEvent(
+		store.AuditActorUser,
+		op.Actor.UserID,
+		op.Actor.Organization,
+		"",
+		"operation",
+		op.ID,
+		"emergency_change",
+		status,
+		string(changeSummary),
+		map[string]string{
+			"definition_id": intent.ReleaseDefinitionID,
+			"payload_hash":  op.RequestHash,
+			"error_code":    errorCode,
+		},
+	)
+	if s.auditEmitter != nil {
+		if result := s.auditEmitter.Emit(event); !result.Accepted {
+			s.logger.Warn("emergency audit event rejected", "operation_id", op.ID, "code", result.Code)
 		}
 	}
 }
@@ -439,6 +773,85 @@ func (s *Service) FinishOperation(ctx context.Context, operationID, resultStatus
 	if _, err := s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, lastError); err != nil {
 		s.logger.Warn("failed to persist operation result", "operation_id", operationID, "error", err)
 	}
+}
+
+// HandleCommandResult atomically applies one typed Upgrade result.
+func (s *Service) HandleCommandResult(ctx context.Context, result *operatorv1.CommandResult) error {
+	if result == nil || result.GetOperationId() == "" || result.GetCommandId() == "" {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("command_result identifiers are required"))
+	}
+	op, err := s.store.Operations().Get(ctx, result.GetOperationId())
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("load operation for result: %w", err))
+	}
+	if op.Status.IsTerminal() {
+		return nil
+	}
+	if op.Status == store.StatusQueued {
+		op, err = s.store.Operations().UpdateStatus(ctx, op.ID, store.StatusRunning, op.StateVersion, "")
+		if err != nil {
+			return connect.NewError(connect.CodeAborted, fmt.Errorf("begin operation: %w", err))
+		}
+	}
+	definition, err := s.store.Definitions().Get(ctx, op.ReleaseDefinitionID)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("load release definition for result: %w", err))
+	}
+	upgrade := result.GetUpgrade()
+	if upgrade == nil {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("upgrade result is required"))
+	}
+	active := upgrade.GetActive()
+	updateInventory := active != nil
+	if active == nil && result.GetStatus() == "succeeded" {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("successful upgrade result requires active snapshot"))
+	}
+	status, lastError, inventoryStatus := terminalMapping(result)
+	payload, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(upgrade)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("marshal upgrade result: %w", err))
+	}
+	if err := s.store.UpgradeResults().FinalizeUpgrade(ctx, &store.UpgradeTerminalInput{
+		OperationID:                   op.ID,
+		ExpectedStateVersion:          op.StateVersion,
+		Status:                        status,
+		LastError:                     lastError,
+		ResultPayload:                 payload,
+		ReleaseDefinitionID:           op.ReleaseDefinitionID,
+		CustomerID:                    definition.CustomerID,
+		ClusterID:                     definition.ClusterID,
+		UpdateInventory:               updateInventory,
+		Revision:                      int(active.GetHelmRevision()), //nolint:gosec // Helm revisions are bounded by the signed int used by the SDK and store.
+		ObservedBundleDigest:          active.GetBundleDigest(),
+		ObservedChartDigest:           active.GetChartDigest(),
+		ObservedEffectiveValuesDigest: active.GetEffectiveValuesDigest(),
+		ObservedManifestDigest:        active.GetManifestDigest(),
+		LiveStatus:                    active.GetStatus(),
+		InventoryStatus:               inventoryStatus,
+		ResourceCount:                 int(upgrade.GetResourceSummary().GetResourceCount()),
+	}); err != nil {
+		if errors.Is(err, store.ErrOptimisticLock) {
+			return connect.NewError(connect.CodeAborted, err)
+		}
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("finalize upgrade result: %w", err))
+	}
+	return nil
+}
+
+func terminalMapping(result *operatorv1.CommandResult) (store.OperationStatus, string, store.InventoryStatus) {
+	if result.GetStatus() == "succeeded" {
+		return store.StatusSucceeded, "", store.InventoryActive
+	}
+	if result.GetError().GetCode() == "atomic_rollback_failed" {
+		return store.StatusFailed, result.GetError().GetCode(), store.InventoryOutOfSync
+	}
+	if result.GetError().GetCode() == "helm_cancelled" {
+		return store.StatusCancelled, result.GetError().GetCode(), store.InventoryActive
+	}
+	if result.GetError().GetCode() == "helm_timeout" {
+		return store.StatusTimeout, result.GetError().GetCode(), store.InventoryActive
+	}
+	return store.StatusFailed, result.GetError().GetCode(), store.InventoryActive
 }
 
 // handleReconnect checks for sequence gaps and re-delivers unacknowledged commands
@@ -550,18 +963,20 @@ func (s *Service) sendCommand(
 }
 
 type commandPayload struct {
-	DefinitionID            string                  `json:"definition_id"`
-	Namespace               string                  `json:"namespace"`
-	ReleaseName             string                  `json:"release_name"`
-	CreateNamespace         bool                    `json:"create_namespace"`
-	TimeoutSeconds          int64                   `json:"timeout_seconds"`
-	Bundle                  *commonv1.ReleaseBundle `json:"bundle"`
-	Values                  json.RawMessage         `json:"values"`
-	ValuesRevisionID        string                  `json:"values_revision_id"`
-	ExpectedCurrentRevision int64                   `json:"expected_current_revision"`
-	TargetRevision          int64                   `json:"target_revision"`
-	Atomic                  bool                    `json:"atomic"`
-	ValuesPatch             []byte                  `json:"values_patch"`
+	DefinitionID            string                     `json:"definition_id"`
+	Namespace               string                     `json:"namespace"`
+	ReleaseName             string                     `json:"release_name"`
+	CreateNamespace         bool                       `json:"create_namespace"`
+	TimeoutSeconds          int64                      `json:"timeout_seconds"`
+	Bundle                  *commonv1.ReleaseBundle    `json:"bundle"`
+	Values                  json.RawMessage            `json:"values"`
+	ValuesRevisionID        string                     `json:"values_revision_id"`
+	ExpectedCurrentRevision int64                      `json:"expected_current_revision"`
+	TargetRevision          int64                      `json:"target_revision"`
+	Atomic                  bool                       `json:"atomic"`
+	ValuesPatch             []byte                     `json:"values_patch"`
+	PayloadVersion          uint32                     `json:"payload_version"`
+	Upgrade                 *operatorv1.UpgradeCommand `json:"upgrade"`
 }
 
 // DecodeCommandPayload populates command fields from an outbox JSON payload.
@@ -586,6 +1001,10 @@ func DecodeCommandPayload(payload []byte, command *operatorv1.Command) error {
 	command.TargetRevision = envelope.TargetRevision
 	command.Atomic = envelope.Atomic
 	command.ValuesPatch = envelope.ValuesPatch
+	command.PayloadVersion = envelope.PayloadVersion
+	if envelope.Upgrade != nil {
+		command.TypedPayload = &operatorv1.Command_Upgrade{Upgrade: envelope.Upgrade}
+	}
 
 	if envelope.Bundle == nil {
 		var bundle commonv1.ReleaseBundle
@@ -681,10 +1100,39 @@ func (s *Service) RevokeOperator(
 	}), nil
 }
 
-// hashBytes returns a hex-encoded SHA-256 of the input.
-func hashBytes(data []byte) string {
-	h := sha256.Sum256(data)
-	return hex.EncodeToString(h[:])
+// certSerialFromCert computes the ADR-018 identity serial: the first 10 bytes
+// of the SHA-256 digest of the DER certificate, hex-encoded (20 hex chars, 80
+// bits). This is the same derivation Enroll uses for Operator.CertSerial.
+func certSerialFromCert(cert *x509.Certificate) string {
+	return certSerialFromDER(cert.Raw)
+}
+
+// certSerialFromDER derives the ADR-018 identity serial from a certificate's
+// DER encoding: sha256(certDER) truncated to its first 10 bytes, lower-case
+// hex (REQ-015 certificate contract; ADR-018).
+func certSerialFromDER(certDER []byte) string {
+	h := sha256.Sum256(certDER)
+	return hex.EncodeToString(h[:10])
+}
+
+// parseSANIdentity extracts the cluster/customer identity from a gateway
+// client certificate. The canonical SAN (REQ-015 decision 3) is
+// `<cluster>.<customer>.rm`, lower-cased; cluster IDs may contain dots, so the
+// customer is always the component immediately before the ".rm" suffix.
+func parseSANIdentity(cert *x509.Certificate) (clusterID, customerID string, ok bool) {
+	for _, name := range cert.DNSNames {
+		lower := strings.ToLower(name)
+		if !strings.HasSuffix(lower, ".rm") {
+			continue
+		}
+		trimmed := strings.TrimSuffix(lower, ".rm")
+		parts := strings.Split(trimmed, ".")
+		if len(parts) < 2 {
+			continue
+		}
+		return strings.Join(parts[:len(parts)-1], "."), parts[len(parts)-1], true
+	}
+	return "", "", false
 }
 
 // Compile-time check: Service implements the Connect handler interface.

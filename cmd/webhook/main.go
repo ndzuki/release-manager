@@ -2,73 +2,56 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log/slog"
 	"net/http"
 
-	"context"
-	"errors"
-	"fmt"
-	auditv1connect "github.com/ndzuki/release-manager/api/gen/audit/v1/auditv1connect"
+	"connectrpc.com/connect"
+	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	webhookv1connect "github.com/ndzuki/release-manager/api/gen/webhook/v1/webhookv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
-	"github.com/ndzuki/release-manager/internal/audit"
-	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
-	"github.com/ndzuki/release-manager/internal/trust"
+	"github.com/ndzuki/release-manager/internal/config"
+	contractsinterceptor "github.com/ndzuki/release-manager/internal/contracts/interceptor"
 	"github.com/ndzuki/release-manager/internal/webhook"
 )
 
 type webhookSvc struct {
-	dbPath  string
-	store   *sqlitestore.Store
-	emitter *audit.Emitter
+	orchestratorURL string
 }
 
 func (s *webhookSvc) Name() string { return "release-webhook" }
 
-func (s *webhookSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
-	st, err := sqlitestore.Open(s.dbPath)
-	if err != nil {
-		return err
-	}
-	logger.Info("store opened", "db", s.dbPath)
+func (s *webhookSvc) Configure(_ *config.ServiceConfig) {}
 
-	auditCfg := audit.DefaultConfig()
-	auditCfg.SpoolPath = s.dbPath + ".audit-spool.jsonl"
-	if _, err := audit.NewSpoolRecoverer(st.AuditEvents(), logger).Recover(context.Background(), auditCfg.SpoolPath); err != nil {
-		return fmt.Errorf("recover audit spool: %w", err)
+func (s *webhookSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
+	url := s.orchestratorURL
+	if url == "" {
+		url = "http://localhost:8083"
 	}
-	emitter := audit.NewEmitter(st.AuditEvents(), logger, auditCfg)
-	s.store = st
-	s.emitter = emitter
-	verifier := trust.NewStoreVerifier(
-		trust.NewStubVerifier(st.Verifications(), trust.NewStoreResolver(st.TrustRoots()), logger),
-		st.Verifications(),
-		logger,
+	client := orchestratorv1connect.NewBundleServiceClient(
+		http.DefaultClient,
+		url,
+		connect.WithGRPC(),
 	)
-	svc := webhook.NewService(st, verifier, logger, emitter)
-	path, h := webhookv1connect.NewWebhookServiceHandler(svc)
-	mux.Handle(path, h)
-	auditPath, auditHandler := auditv1connect.NewAuditServiceHandler(audit.NewService(emitter))
-	mux.Handle(auditPath, auditHandler)
+	svc := webhook.NewService(logger, client)
+	path, handler := webhookv1connect.NewWebhookServiceHandler(
+		svc,
+		connect.WithInterceptors(
+			contractsinterceptor.NewRequestIDInterceptor(logger),
+			contractsinterceptor.NewErrorSanitizeInterceptor(logger),
+		),
+	)
+	mux.Handle(path, handler)
 	return nil
 }
 
-func (s *webhookSvc) Shutdown(ctx context.Context) error {
-	var errs []error
-	if s.emitter != nil {
-		errs = append(errs, s.emitter.Shutdown(ctx))
-	}
-	if s.store != nil {
-		errs = append(errs, s.store.Close())
-	}
-	return errors.Join(errs...)
-}
+func (s *webhookSvc) Shutdown(_ context.Context) error { return nil }
 
 func main() {
 	configPath := flag.String("config", "configs/webhook.dev.yaml", "path to config file")
-	dbPath := flag.String("db", "data/webhook.db", "path to SQLite database")
+	orchestratorURL := flag.String("orchestrator-url", "", "orchestrator Connect URL (default http://localhost:8083)")
 	flag.Parse()
 
-	app.Run(*configPath, &webhookSvc{dbPath: *dbPath})
+	app.Run(*configPath, &webhookSvc{orchestratorURL: *orchestratorURL})
 }

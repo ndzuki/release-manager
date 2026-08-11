@@ -25,6 +25,8 @@ type inventoryCursor struct {
 }
 
 // Query returns a filtered, stable page of inventory rows for one cluster.
+//
+//nolint:gocyclo // stable pagination combines cursor, filters, and consistency projection
 func (s *inventoryStore) Query(ctx context.Context, query store.InventoryQuery) (*store.InventoryPage, error) {
 	pageSize := query.PageSize
 	if pageSize <= 0 {
@@ -94,8 +96,11 @@ func (s *inventoryStore) Query(ctx context.Context, query store.InventoryQuery) 
 	}
 
 	pageArgs = append(pageArgs, pageSize+1)
+	// #nosec G202 -- statusExpression and pageWhere contain only fixed SQL fragments; all user values stay parameterized.
 	selectQuery := `SELECT ri.customer_id, ri.cluster_id, ri.release_definition_id, ri.namespace,
 		ri.release_name, ri.chart, ri.chart_version, ri.revision, ri.status, ri.values_digest,
+		ri.observed_bundle_digest, ri.observed_chart_digest, ri.observed_effective_values_digest,
+		ri.observed_manifest_digest, ri.live_status, ri.last_operation_id,
 		` + statusExpression + ` AS consistency_status, ri.last_sync_id,
 		ri.snapshot_version, ri.created_at, ri.updated_at
 		FROM release_inventory ri
@@ -115,9 +120,10 @@ func (s *inventoryStore) Query(ctx context.Context, query store.InventoryQuery) 
 		var item store.ReleaseInventory
 		var createdAt, updatedAt string
 		if err := rows.Scan(
-			&item.CustomerID, &item.ClusterID, &item.ReleaseDefinitionID, &item.Namespace,
-			&item.ReleaseName, &item.Chart, &item.ChartVersion, &item.Revision, &item.Status,
-			&item.ValuesDigest, &item.InventoryStatus, &item.LastSyncID,
+			&item.CustomerID, &item.ClusterID, &item.ReleaseDefinitionID, &item.Namespace, &item.ReleaseName,
+			&item.Chart, &item.ChartVersion, &item.Revision, &item.Status, &item.ValuesDigest,
+			&item.ObservedBundleDigest, &item.ObservedChartDigest, &item.ObservedEffectiveValuesDigest,
+			&item.ObservedManifestDigest, &item.LiveStatus, &item.LastOperationID, &item.InventoryStatus, &item.LastSyncID,
 			&item.SnapshotVersion, &createdAt, &updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan inventory page: %w", err)

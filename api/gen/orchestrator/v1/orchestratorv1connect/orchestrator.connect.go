@@ -21,6 +21,8 @@ import (
 const _ = connect.IsAtLeastVersion1_13_0
 
 const (
+	// BundleServiceName is the fully-qualified name of the BundleService service.
+	BundleServiceName = "orchestrator.v1.BundleService"
 	// OrchestratorServiceName is the fully-qualified name of the OrchestratorService service.
 	OrchestratorServiceName = "orchestrator.v1.OrchestratorService"
 )
@@ -33,6 +35,17 @@ const (
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
+	// BundleServiceSubmitBundleProcedure is the fully-qualified name of the BundleService's
+	// SubmitBundle RPC.
+	BundleServiceSubmitBundleProcedure = "/orchestrator.v1.BundleService/SubmitBundle"
+	// BundleServiceRecordArtifactEventProcedure is the fully-qualified name of the BundleService's
+	// RecordArtifactEvent RPC.
+	BundleServiceRecordArtifactEventProcedure = "/orchestrator.v1.BundleService/RecordArtifactEvent"
+	// BundleServiceListBundlesProcedure is the fully-qualified name of the BundleService's ListBundles
+	// RPC.
+	BundleServiceListBundlesProcedure = "/orchestrator.v1.BundleService/ListBundles"
+	// BundleServiceGetBundleProcedure is the fully-qualified name of the BundleService's GetBundle RPC.
+	BundleServiceGetBundleProcedure = "/orchestrator.v1.BundleService/GetBundle"
 	// OrchestratorServiceCreateOperationProcedure is the fully-qualified name of the
 	// OrchestratorService's CreateOperation RPC.
 	OrchestratorServiceCreateOperationProcedure = "/orchestrator.v1.OrchestratorService/CreateOperation"
@@ -42,6 +55,15 @@ const (
 	// OrchestratorServiceRollbackReleaseProcedure is the fully-qualified name of the
 	// OrchestratorService's RollbackRelease RPC.
 	OrchestratorServiceRollbackReleaseProcedure = "/orchestrator.v1.OrchestratorService/RollbackRelease"
+	// OrchestratorServiceGetOperationProcedure is the fully-qualified name of the OrchestratorService's
+	// GetOperation RPC.
+	OrchestratorServiceGetOperationProcedure = "/orchestrator.v1.OrchestratorService/GetOperation"
+	// OrchestratorServiceWatchOperationProcedure is the fully-qualified name of the
+	// OrchestratorService's WatchOperation RPC.
+	OrchestratorServiceWatchOperationProcedure = "/orchestrator.v1.OrchestratorService/WatchOperation"
+	// OrchestratorServiceCancelOperationProcedure is the fully-qualified name of the
+	// OrchestratorService's CancelOperation RPC.
+	OrchestratorServiceCancelOperationProcedure = "/orchestrator.v1.OrchestratorService/CancelOperation"
 	// OrchestratorServiceSubmitValuesRevisionProcedure is the fully-qualified name of the
 	// OrchestratorService's SubmitValuesRevision RPC.
 	OrchestratorServiceSubmitValuesRevisionProcedure = "/orchestrator.v1.OrchestratorService/SubmitValuesRevision"
@@ -51,6 +73,18 @@ const (
 	// OrchestratorServiceRejectValuesRevisionProcedure is the fully-qualified name of the
 	// OrchestratorService's RejectValuesRevision RPC.
 	OrchestratorServiceRejectValuesRevisionProcedure = "/orchestrator.v1.OrchestratorService/RejectValuesRevision"
+	// OrchestratorServiceCreateValuesRevisionProcedure is the fully-qualified name of the
+	// OrchestratorService's CreateValuesRevision RPC.
+	OrchestratorServiceCreateValuesRevisionProcedure = "/orchestrator.v1.OrchestratorService/CreateValuesRevision"
+	// OrchestratorServiceGetValuesRevisionProcedure is the fully-qualified name of the
+	// OrchestratorService's GetValuesRevision RPC.
+	OrchestratorServiceGetValuesRevisionProcedure = "/orchestrator.v1.OrchestratorService/GetValuesRevision"
+	// OrchestratorServiceListValuesRevisionsProcedure is the fully-qualified name of the
+	// OrchestratorService's ListValuesRevisions RPC.
+	OrchestratorServiceListValuesRevisionsProcedure = "/orchestrator.v1.OrchestratorService/ListValuesRevisions"
+	// OrchestratorServiceListSecretsProcedure is the fully-qualified name of the OrchestratorService's
+	// ListSecrets RPC.
+	OrchestratorServiceListSecretsProcedure = "/orchestrator.v1.OrchestratorService/ListSecrets"
 	// OrchestratorServiceCreateReleaseDefinitionProcedure is the fully-qualified name of the
 	// OrchestratorService's CreateReleaseDefinition RPC.
 	OrchestratorServiceCreateReleaseDefinitionProcedure = "/orchestrator.v1.OrchestratorService/CreateReleaseDefinition"
@@ -117,6 +151,18 @@ const (
 	// OrchestratorServiceEmergencyChangeProcedure is the fully-qualified name of the
 	// OrchestratorService's EmergencyChange RPC.
 	OrchestratorServiceEmergencyChangeProcedure = "/orchestrator.v1.OrchestratorService/EmergencyChange"
+	// OrchestratorServiceListEmergencyTargetsProcedure is the fully-qualified name of the
+	// OrchestratorService's ListEmergencyTargets RPC.
+	OrchestratorServiceListEmergencyTargetsProcedure = "/orchestrator.v1.OrchestratorService/ListEmergencyTargets"
+	// OrchestratorServiceCheckEmergencyConflictProcedure is the fully-qualified name of the
+	// OrchestratorService's CheckEmergencyConflict RPC.
+	OrchestratorServiceCheckEmergencyConflictProcedure = "/orchestrator.v1.OrchestratorService/CheckEmergencyConflict"
+	// OrchestratorServiceListCandidateArtifactsProcedure is the fully-qualified name of the
+	// OrchestratorService's ListCandidateArtifacts RPC.
+	OrchestratorServiceListCandidateArtifactsProcedure = "/orchestrator.v1.OrchestratorService/ListCandidateArtifacts"
+	// OrchestratorServiceListConvergenceTasksProcedure is the fully-qualified name of the
+	// OrchestratorService's ListConvergenceTasks RPC.
+	OrchestratorServiceListConvergenceTasksProcedure = "/orchestrator.v1.OrchestratorService/ListConvergenceTasks"
 	// OrchestratorServiceConfigureClusterRouteProcedure is the fully-qualified name of the
 	// OrchestratorService's ConfigureClusterRoute RPC.
 	OrchestratorServiceConfigureClusterRouteProcedure = "/orchestrator.v1.OrchestratorService/ConfigureClusterRoute"
@@ -126,34 +172,195 @@ const (
 	// OrchestratorServiceDeleteClusterRouteProcedure is the fully-qualified name of the
 	// OrchestratorService's DeleteClusterRoute RPC.
 	OrchestratorServiceDeleteClusterRouteProcedure = "/orchestrator.v1.OrchestratorService/DeleteClusterRoute"
+	// OrchestratorServiceListReleasesProcedure is the fully-qualified name of the OrchestratorService's
+	// ListReleases RPC.
+	OrchestratorServiceListReleasesProcedure = "/orchestrator.v1.OrchestratorService/ListReleases"
+	// OrchestratorServiceListOperationsProcedure is the fully-qualified name of the
+	// OrchestratorService's ListOperations RPC.
+	OrchestratorServiceListOperationsProcedure = "/orchestrator.v1.OrchestratorService/ListOperations"
+	// OrchestratorServiceTriggerInventorySyncProcedure is the fully-qualified name of the
+	// OrchestratorService's TriggerInventorySync RPC.
+	OrchestratorServiceTriggerInventorySyncProcedure = "/orchestrator.v1.OrchestratorService/TriggerInventorySync"
 	// OrchestratorServiceSyncInventoryProcedure is the fully-qualified name of the
 	// OrchestratorService's SyncInventory RPC.
 	OrchestratorServiceSyncInventoryProcedure = "/orchestrator.v1.OrchestratorService/SyncInventory"
 )
 
+// BundleServiceClient is a client for the orchestrator.v1.BundleService service.
+type BundleServiceClient interface {
+	SubmitBundle(context.Context, *connect.Request[v1.SubmitBundleRequest]) (*connect.Response[v1.SubmitBundleResponse], error)
+	RecordArtifactEvent(context.Context, *connect.Request[v1.RecordArtifactEventRequest]) (*connect.Response[v1.RecordArtifactEventResponse], error)
+	ListBundles(context.Context, *connect.Request[v1.ListBundlesRequest]) (*connect.Response[v1.ListBundlesResponse], error)
+	GetBundle(context.Context, *connect.Request[v1.GetBundleRequest]) (*connect.Response[v1.GetBundleResponse], error)
+}
+
+// NewBundleServiceClient constructs a client for the orchestrator.v1.BundleService service. By
+// default, it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses,
+// and sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the
+// connect.WithGRPC() or connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewBundleServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) BundleServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	bundleServiceMethods := v1.File_orchestrator_v1_orchestrator_proto.Services().ByName("BundleService").Methods()
+	return &bundleServiceClient{
+		submitBundle: connect.NewClient[v1.SubmitBundleRequest, v1.SubmitBundleResponse](
+			httpClient,
+			baseURL+BundleServiceSubmitBundleProcedure,
+			connect.WithSchema(bundleServiceMethods.ByName("SubmitBundle")),
+			connect.WithClientOptions(opts...),
+		),
+		recordArtifactEvent: connect.NewClient[v1.RecordArtifactEventRequest, v1.RecordArtifactEventResponse](
+			httpClient,
+			baseURL+BundleServiceRecordArtifactEventProcedure,
+			connect.WithSchema(bundleServiceMethods.ByName("RecordArtifactEvent")),
+			connect.WithClientOptions(opts...),
+		),
+		listBundles: connect.NewClient[v1.ListBundlesRequest, v1.ListBundlesResponse](
+			httpClient,
+			baseURL+BundleServiceListBundlesProcedure,
+			connect.WithSchema(bundleServiceMethods.ByName("ListBundles")),
+			connect.WithClientOptions(opts...),
+		),
+		getBundle: connect.NewClient[v1.GetBundleRequest, v1.GetBundleResponse](
+			httpClient,
+			baseURL+BundleServiceGetBundleProcedure,
+			connect.WithSchema(bundleServiceMethods.ByName("GetBundle")),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// bundleServiceClient implements BundleServiceClient.
+type bundleServiceClient struct {
+	submitBundle        *connect.Client[v1.SubmitBundleRequest, v1.SubmitBundleResponse]
+	recordArtifactEvent *connect.Client[v1.RecordArtifactEventRequest, v1.RecordArtifactEventResponse]
+	listBundles         *connect.Client[v1.ListBundlesRequest, v1.ListBundlesResponse]
+	getBundle           *connect.Client[v1.GetBundleRequest, v1.GetBundleResponse]
+}
+
+// SubmitBundle calls orchestrator.v1.BundleService.SubmitBundle.
+func (c *bundleServiceClient) SubmitBundle(ctx context.Context, req *connect.Request[v1.SubmitBundleRequest]) (*connect.Response[v1.SubmitBundleResponse], error) {
+	return c.submitBundle.CallUnary(ctx, req)
+}
+
+// RecordArtifactEvent calls orchestrator.v1.BundleService.RecordArtifactEvent.
+func (c *bundleServiceClient) RecordArtifactEvent(ctx context.Context, req *connect.Request[v1.RecordArtifactEventRequest]) (*connect.Response[v1.RecordArtifactEventResponse], error) {
+	return c.recordArtifactEvent.CallUnary(ctx, req)
+}
+
+// ListBundles calls orchestrator.v1.BundleService.ListBundles.
+func (c *bundleServiceClient) ListBundles(ctx context.Context, req *connect.Request[v1.ListBundlesRequest]) (*connect.Response[v1.ListBundlesResponse], error) {
+	return c.listBundles.CallUnary(ctx, req)
+}
+
+// GetBundle calls orchestrator.v1.BundleService.GetBundle.
+func (c *bundleServiceClient) GetBundle(ctx context.Context, req *connect.Request[v1.GetBundleRequest]) (*connect.Response[v1.GetBundleResponse], error) {
+	return c.getBundle.CallUnary(ctx, req)
+}
+
+// BundleServiceHandler is an implementation of the orchestrator.v1.BundleService service.
+type BundleServiceHandler interface {
+	SubmitBundle(context.Context, *connect.Request[v1.SubmitBundleRequest]) (*connect.Response[v1.SubmitBundleResponse], error)
+	RecordArtifactEvent(context.Context, *connect.Request[v1.RecordArtifactEventRequest]) (*connect.Response[v1.RecordArtifactEventResponse], error)
+	ListBundles(context.Context, *connect.Request[v1.ListBundlesRequest]) (*connect.Response[v1.ListBundlesResponse], error)
+	GetBundle(context.Context, *connect.Request[v1.GetBundleRequest]) (*connect.Response[v1.GetBundleResponse], error)
+}
+
+// NewBundleServiceHandler builds an HTTP handler from the service implementation. It returns the
+// path on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewBundleServiceHandler(svc BundleServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	bundleServiceMethods := v1.File_orchestrator_v1_orchestrator_proto.Services().ByName("BundleService").Methods()
+	bundleServiceSubmitBundleHandler := connect.NewUnaryHandler(
+		BundleServiceSubmitBundleProcedure,
+		svc.SubmitBundle,
+		connect.WithSchema(bundleServiceMethods.ByName("SubmitBundle")),
+		connect.WithHandlerOptions(opts...),
+	)
+	bundleServiceRecordArtifactEventHandler := connect.NewUnaryHandler(
+		BundleServiceRecordArtifactEventProcedure,
+		svc.RecordArtifactEvent,
+		connect.WithSchema(bundleServiceMethods.ByName("RecordArtifactEvent")),
+		connect.WithHandlerOptions(opts...),
+	)
+	bundleServiceListBundlesHandler := connect.NewUnaryHandler(
+		BundleServiceListBundlesProcedure,
+		svc.ListBundles,
+		connect.WithSchema(bundleServiceMethods.ByName("ListBundles")),
+		connect.WithHandlerOptions(opts...),
+	)
+	bundleServiceGetBundleHandler := connect.NewUnaryHandler(
+		BundleServiceGetBundleProcedure,
+		svc.GetBundle,
+		connect.WithSchema(bundleServiceMethods.ByName("GetBundle")),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/orchestrator.v1.BundleService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case BundleServiceSubmitBundleProcedure:
+			bundleServiceSubmitBundleHandler.ServeHTTP(w, r)
+		case BundleServiceRecordArtifactEventProcedure:
+			bundleServiceRecordArtifactEventHandler.ServeHTTP(w, r)
+		case BundleServiceListBundlesProcedure:
+			bundleServiceListBundlesHandler.ServeHTTP(w, r)
+		case BundleServiceGetBundleProcedure:
+			bundleServiceGetBundleHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedBundleServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedBundleServiceHandler struct{}
+
+func (UnimplementedBundleServiceHandler) SubmitBundle(context.Context, *connect.Request[v1.SubmitBundleRequest]) (*connect.Response[v1.SubmitBundleResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.BundleService.SubmitBundle is not implemented"))
+}
+
+func (UnimplementedBundleServiceHandler) RecordArtifactEvent(context.Context, *connect.Request[v1.RecordArtifactEventRequest]) (*connect.Response[v1.RecordArtifactEventResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.BundleService.RecordArtifactEvent is not implemented"))
+}
+
+func (UnimplementedBundleServiceHandler) ListBundles(context.Context, *connect.Request[v1.ListBundlesRequest]) (*connect.Response[v1.ListBundlesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.BundleService.ListBundles is not implemented"))
+}
+
+func (UnimplementedBundleServiceHandler) GetBundle(context.Context, *connect.Request[v1.GetBundleRequest]) (*connect.Response[v1.GetBundleResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.BundleService.GetBundle is not implemented"))
+}
+
 // OrchestratorServiceClient is a client for the orchestrator.v1.OrchestratorService service.
 type OrchestratorServiceClient interface {
-	// Release pipeline
 	CreateOperation(context.Context, *connect.Request[v1.CreateOperationRequest]) (*connect.Response[v1.CreateOperationResponse], error)
 	PublishRelease(context.Context, *connect.Request[v1.PublishReleaseRequest]) (*connect.Response[v1.PublishReleaseResponse], error)
 	RollbackRelease(context.Context, *connect.Request[v1.RollbackReleaseRequest]) (*connect.Response[v1.RollbackReleaseResponse], error)
-	// Values revision approval workflow
+	GetOperation(context.Context, *connect.Request[v1.GetOperationRequest]) (*connect.Response[v1.GetOperationResponse], error)
+	WatchOperation(context.Context, *connect.Request[v1.WatchOperationRequest]) (*connect.ServerStreamForClient[v1.WatchOperationResponse], error)
+	CancelOperation(context.Context, *connect.Request[v1.CancelOperationRequest]) (*connect.Response[v1.CancelOperationResponse], error)
 	SubmitValuesRevision(context.Context, *connect.Request[v1.SubmitValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
 	ApproveValuesRevision(context.Context, *connect.Request[v1.ApproveValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
 	RejectValuesRevision(context.Context, *connect.Request[v1.RejectValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
+	// ValuesRevision CRUD and secret metadata (REQ-055)
+	CreateValuesRevision(context.Context, *connect.Request[v1.CreateValuesRevisionRequest]) (*connect.Response[v1.CreateValuesRevisionResponse], error)
+	GetValuesRevision(context.Context, *connect.Request[v1.GetValuesRevisionRequest]) (*connect.Response[v1.GetValuesRevisionResponse], error)
+	ListValuesRevisions(context.Context, *connect.Request[v1.ListValuesRevisionsRequest]) (*connect.Response[v1.ListValuesRevisionsResponse], error)
+	ListSecrets(context.Context, *connect.Request[v1.ListSecretsRequest]) (*connect.Response[v1.ListSecretsResponse], error)
 	// Release definition management
 	CreateReleaseDefinition(context.Context, *connect.Request[v1.CreateReleaseDefinitionRequest]) (*connect.Response[v1.CreateReleaseDefinitionResponse], error)
 	GetReleaseDefinition(context.Context, *connect.Request[v1.GetReleaseDefinitionRequest]) (*connect.Response[v1.GetReleaseDefinitionResponse], error)
 	ListReleaseDefinitions(context.Context, *connect.Request[v1.ListReleaseDefinitionsRequest]) (*connect.Response[v1.ListReleaseDefinitionsResponse], error)
 	UpdateReleaseDefinition(context.Context, *connect.Request[v1.UpdateReleaseDefinitionRequest]) (*connect.Response[v1.UpdateReleaseDefinitionResponse], error)
 	DisableReleaseDefinition(context.Context, *connect.Request[v1.DisableReleaseDefinitionRequest]) (*connect.Response[v1.DisableReleaseDefinitionResponse], error)
-	// Customer management
 	CreateCustomer(context.Context, *connect.Request[v1.CreateCustomerRequest]) (*connect.Response[v1.CreateCustomerResponse], error)
 	GetCustomer(context.Context, *connect.Request[v1.GetCustomerRequest]) (*connect.Response[v1.GetCustomerResponse], error)
 	ListCustomers(context.Context, *connect.Request[v1.ListCustomersRequest]) (*connect.Response[v1.ListCustomersResponse], error)
 	UpdateCustomer(context.Context, *connect.Request[v1.UpdateCustomerRequest]) (*connect.Response[v1.UpdateCustomerResponse], error)
 	DisableCustomer(context.Context, *connect.Request[v1.DisableCustomerRequest]) (*connect.Response[v1.DisableCustomerResponse], error)
-	// Cluster management
 	CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.CreateClusterResponse], error)
 	UpdateCluster(context.Context, *connect.Request[v1.UpdateClusterRequest]) (*connect.Response[v1.UpdateClusterResponse], error)
 	GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error)
@@ -168,10 +375,17 @@ type OrchestratorServiceClient interface {
 	RevokePendingEnrollmentToken(context.Context, *connect.Request[v1.RevokePendingEnrollmentTokenRequest]) (*connect.Response[v1.RevokePendingEnrollmentTokenResponse], error)
 	// Emergency change (REQ-032)
 	EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error)
-	// Cluster artifact routing (REQ-014)
+	ListEmergencyTargets(context.Context, *connect.Request[v1.ListEmergencyTargetsRequest]) (*connect.Response[v1.ListEmergencyTargetsResponse], error)
+	CheckEmergencyConflict(context.Context, *connect.Request[v1.CheckEmergencyConflictRequest]) (*connect.Response[v1.CheckEmergencyConflictResponse], error)
+	ListCandidateArtifacts(context.Context, *connect.Request[v1.ListCandidateArtifactsRequest]) (*connect.Response[v1.ListCandidateArtifactsResponse], error)
+	ListConvergenceTasks(context.Context, *connect.Request[v1.ListConvergenceTasksRequest]) (*connect.Response[v1.ListConvergenceTasksResponse], error)
 	ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error)
 	GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error)
 	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
+	ListReleases(context.Context, *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error)
+	// Operation query (REQ-056)
+	ListOperations(context.Context, *connect.Request[v1.ListOperationsRequest]) (*connect.Response[v1.ListOperationsResponse], error)
+	TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error)
 	// Inventory sync (REQ-017)
 	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
@@ -205,6 +419,24 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("RollbackRelease")),
 			connect.WithClientOptions(opts...),
 		),
+		getOperation: connect.NewClient[v1.GetOperationRequest, v1.GetOperationResponse](
+			httpClient,
+			baseURL+OrchestratorServiceGetOperationProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("GetOperation")),
+			connect.WithClientOptions(opts...),
+		),
+		watchOperation: connect.NewClient[v1.WatchOperationRequest, v1.WatchOperationResponse](
+			httpClient,
+			baseURL+OrchestratorServiceWatchOperationProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("WatchOperation")),
+			connect.WithClientOptions(opts...),
+		),
+		cancelOperation: connect.NewClient[v1.CancelOperationRequest, v1.CancelOperationResponse](
+			httpClient,
+			baseURL+OrchestratorServiceCancelOperationProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("CancelOperation")),
+			connect.WithClientOptions(opts...),
+		),
 		submitValuesRevision: connect.NewClient[v1.SubmitValuesRevisionRequest, v1.ValuesRevisionDecisionResponse](
 			httpClient,
 			baseURL+OrchestratorServiceSubmitValuesRevisionProcedure,
@@ -221,6 +453,30 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			httpClient,
 			baseURL+OrchestratorServiceRejectValuesRevisionProcedure,
 			connect.WithSchema(orchestratorServiceMethods.ByName("RejectValuesRevision")),
+			connect.WithClientOptions(opts...),
+		),
+		createValuesRevision: connect.NewClient[v1.CreateValuesRevisionRequest, v1.CreateValuesRevisionResponse](
+			httpClient,
+			baseURL+OrchestratorServiceCreateValuesRevisionProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("CreateValuesRevision")),
+			connect.WithClientOptions(opts...),
+		),
+		getValuesRevision: connect.NewClient[v1.GetValuesRevisionRequest, v1.GetValuesRevisionResponse](
+			httpClient,
+			baseURL+OrchestratorServiceGetValuesRevisionProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("GetValuesRevision")),
+			connect.WithClientOptions(opts...),
+		),
+		listValuesRevisions: connect.NewClient[v1.ListValuesRevisionsRequest, v1.ListValuesRevisionsResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListValuesRevisionsProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListValuesRevisions")),
+			connect.WithClientOptions(opts...),
+		),
+		listSecrets: connect.NewClient[v1.ListSecretsRequest, v1.ListSecretsResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListSecretsProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListSecrets")),
 			connect.WithClientOptions(opts...),
 		),
 		createReleaseDefinition: connect.NewClient[v1.CreateReleaseDefinitionRequest, v1.CreateReleaseDefinitionResponse](
@@ -355,6 +611,30 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("EmergencyChange")),
 			connect.WithClientOptions(opts...),
 		),
+		listEmergencyTargets: connect.NewClient[v1.ListEmergencyTargetsRequest, v1.ListEmergencyTargetsResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListEmergencyTargetsProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListEmergencyTargets")),
+			connect.WithClientOptions(opts...),
+		),
+		checkEmergencyConflict: connect.NewClient[v1.CheckEmergencyConflictRequest, v1.CheckEmergencyConflictResponse](
+			httpClient,
+			baseURL+OrchestratorServiceCheckEmergencyConflictProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("CheckEmergencyConflict")),
+			connect.WithClientOptions(opts...),
+		),
+		listCandidateArtifacts: connect.NewClient[v1.ListCandidateArtifactsRequest, v1.ListCandidateArtifactsResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListCandidateArtifactsProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListCandidateArtifacts")),
+			connect.WithClientOptions(opts...),
+		),
+		listConvergenceTasks: connect.NewClient[v1.ListConvergenceTasksRequest, v1.ListConvergenceTasksResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListConvergenceTasksProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListConvergenceTasks")),
+			connect.WithClientOptions(opts...),
+		),
 		configureClusterRoute: connect.NewClient[v1.ConfigureClusterRouteRequest, v1.ConfigureClusterRouteResponse](
 			httpClient,
 			baseURL+OrchestratorServiceConfigureClusterRouteProcedure,
@@ -373,6 +653,24 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("DeleteClusterRoute")),
 			connect.WithClientOptions(opts...),
 		),
+		listReleases: connect.NewClient[v1.ListReleasesRequest, v1.ListReleasesResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListReleasesProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListReleases")),
+			connect.WithClientOptions(opts...),
+		),
+		listOperations: connect.NewClient[v1.ListOperationsRequest, v1.ListOperationsResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListOperationsProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListOperations")),
+			connect.WithClientOptions(opts...),
+		),
+		triggerInventorySync: connect.NewClient[v1.TriggerInventorySyncRequest, v1.TriggerInventorySyncResponse](
+			httpClient,
+			baseURL+OrchestratorServiceTriggerInventorySyncProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("TriggerInventorySync")),
+			connect.WithClientOptions(opts...),
+		),
 		syncInventory: connect.NewClient[v1.SyncInventoryRequest, v1.SyncInventoryResponse](
 			httpClient,
 			baseURL+OrchestratorServiceSyncInventoryProcedure,
@@ -387,9 +685,16 @@ type orchestratorServiceClient struct {
 	createOperation              *connect.Client[v1.CreateOperationRequest, v1.CreateOperationResponse]
 	publishRelease               *connect.Client[v1.PublishReleaseRequest, v1.PublishReleaseResponse]
 	rollbackRelease              *connect.Client[v1.RollbackReleaseRequest, v1.RollbackReleaseResponse]
+	getOperation                 *connect.Client[v1.GetOperationRequest, v1.GetOperationResponse]
+	watchOperation               *connect.Client[v1.WatchOperationRequest, v1.WatchOperationResponse]
+	cancelOperation              *connect.Client[v1.CancelOperationRequest, v1.CancelOperationResponse]
 	submitValuesRevision         *connect.Client[v1.SubmitValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
 	approveValuesRevision        *connect.Client[v1.ApproveValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
 	rejectValuesRevision         *connect.Client[v1.RejectValuesRevisionRequest, v1.ValuesRevisionDecisionResponse]
+	createValuesRevision         *connect.Client[v1.CreateValuesRevisionRequest, v1.CreateValuesRevisionResponse]
+	getValuesRevision            *connect.Client[v1.GetValuesRevisionRequest, v1.GetValuesRevisionResponse]
+	listValuesRevisions          *connect.Client[v1.ListValuesRevisionsRequest, v1.ListValuesRevisionsResponse]
+	listSecrets                  *connect.Client[v1.ListSecretsRequest, v1.ListSecretsResponse]
 	createReleaseDefinition      *connect.Client[v1.CreateReleaseDefinitionRequest, v1.CreateReleaseDefinitionResponse]
 	getReleaseDefinition         *connect.Client[v1.GetReleaseDefinitionRequest, v1.GetReleaseDefinitionResponse]
 	listReleaseDefinitions       *connect.Client[v1.ListReleaseDefinitionsRequest, v1.ListReleaseDefinitionsResponse]
@@ -412,9 +717,16 @@ type orchestratorServiceClient struct {
 	getEnrollmentTokenStatus     *connect.Client[v1.GetEnrollmentTokenStatusRequest, v1.GetEnrollmentTokenStatusResponse]
 	revokePendingEnrollmentToken *connect.Client[v1.RevokePendingEnrollmentTokenRequest, v1.RevokePendingEnrollmentTokenResponse]
 	emergencyChange              *connect.Client[v1.EmergencyChangeRequest, v1.EmergencyChangeResponse]
+	listEmergencyTargets         *connect.Client[v1.ListEmergencyTargetsRequest, v1.ListEmergencyTargetsResponse]
+	checkEmergencyConflict       *connect.Client[v1.CheckEmergencyConflictRequest, v1.CheckEmergencyConflictResponse]
+	listCandidateArtifacts       *connect.Client[v1.ListCandidateArtifactsRequest, v1.ListCandidateArtifactsResponse]
+	listConvergenceTasks         *connect.Client[v1.ListConvergenceTasksRequest, v1.ListConvergenceTasksResponse]
 	configureClusterRoute        *connect.Client[v1.ConfigureClusterRouteRequest, v1.ConfigureClusterRouteResponse]
 	getClusterRoutes             *connect.Client[v1.GetClusterRoutesRequest, v1.GetClusterRoutesResponse]
 	deleteClusterRoute           *connect.Client[v1.DeleteClusterRouteRequest, v1.DeleteClusterRouteResponse]
+	listReleases                 *connect.Client[v1.ListReleasesRequest, v1.ListReleasesResponse]
+	listOperations               *connect.Client[v1.ListOperationsRequest, v1.ListOperationsResponse]
+	triggerInventorySync         *connect.Client[v1.TriggerInventorySyncRequest, v1.TriggerInventorySyncResponse]
 	syncInventory                *connect.Client[v1.SyncInventoryRequest, v1.SyncInventoryResponse]
 }
 
@@ -433,6 +745,21 @@ func (c *orchestratorServiceClient) RollbackRelease(ctx context.Context, req *co
 	return c.rollbackRelease.CallUnary(ctx, req)
 }
 
+// GetOperation calls orchestrator.v1.OrchestratorService.GetOperation.
+func (c *orchestratorServiceClient) GetOperation(ctx context.Context, req *connect.Request[v1.GetOperationRequest]) (*connect.Response[v1.GetOperationResponse], error) {
+	return c.getOperation.CallUnary(ctx, req)
+}
+
+// WatchOperation calls orchestrator.v1.OrchestratorService.WatchOperation.
+func (c *orchestratorServiceClient) WatchOperation(ctx context.Context, req *connect.Request[v1.WatchOperationRequest]) (*connect.ServerStreamForClient[v1.WatchOperationResponse], error) {
+	return c.watchOperation.CallServerStream(ctx, req)
+}
+
+// CancelOperation calls orchestrator.v1.OrchestratorService.CancelOperation.
+func (c *orchestratorServiceClient) CancelOperation(ctx context.Context, req *connect.Request[v1.CancelOperationRequest]) (*connect.Response[v1.CancelOperationResponse], error) {
+	return c.cancelOperation.CallUnary(ctx, req)
+}
+
 // SubmitValuesRevision calls orchestrator.v1.OrchestratorService.SubmitValuesRevision.
 func (c *orchestratorServiceClient) SubmitValuesRevision(ctx context.Context, req *connect.Request[v1.SubmitValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error) {
 	return c.submitValuesRevision.CallUnary(ctx, req)
@@ -446,6 +773,26 @@ func (c *orchestratorServiceClient) ApproveValuesRevision(ctx context.Context, r
 // RejectValuesRevision calls orchestrator.v1.OrchestratorService.RejectValuesRevision.
 func (c *orchestratorServiceClient) RejectValuesRevision(ctx context.Context, req *connect.Request[v1.RejectValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error) {
 	return c.rejectValuesRevision.CallUnary(ctx, req)
+}
+
+// CreateValuesRevision calls orchestrator.v1.OrchestratorService.CreateValuesRevision.
+func (c *orchestratorServiceClient) CreateValuesRevision(ctx context.Context, req *connect.Request[v1.CreateValuesRevisionRequest]) (*connect.Response[v1.CreateValuesRevisionResponse], error) {
+	return c.createValuesRevision.CallUnary(ctx, req)
+}
+
+// GetValuesRevision calls orchestrator.v1.OrchestratorService.GetValuesRevision.
+func (c *orchestratorServiceClient) GetValuesRevision(ctx context.Context, req *connect.Request[v1.GetValuesRevisionRequest]) (*connect.Response[v1.GetValuesRevisionResponse], error) {
+	return c.getValuesRevision.CallUnary(ctx, req)
+}
+
+// ListValuesRevisions calls orchestrator.v1.OrchestratorService.ListValuesRevisions.
+func (c *orchestratorServiceClient) ListValuesRevisions(ctx context.Context, req *connect.Request[v1.ListValuesRevisionsRequest]) (*connect.Response[v1.ListValuesRevisionsResponse], error) {
+	return c.listValuesRevisions.CallUnary(ctx, req)
+}
+
+// ListSecrets calls orchestrator.v1.OrchestratorService.ListSecrets.
+func (c *orchestratorServiceClient) ListSecrets(ctx context.Context, req *connect.Request[v1.ListSecretsRequest]) (*connect.Response[v1.ListSecretsResponse], error) {
+	return c.listSecrets.CallUnary(ctx, req)
 }
 
 // CreateReleaseDefinition calls orchestrator.v1.OrchestratorService.CreateReleaseDefinition.
@@ -559,6 +906,26 @@ func (c *orchestratorServiceClient) EmergencyChange(ctx context.Context, req *co
 	return c.emergencyChange.CallUnary(ctx, req)
 }
 
+// ListEmergencyTargets calls orchestrator.v1.OrchestratorService.ListEmergencyTargets.
+func (c *orchestratorServiceClient) ListEmergencyTargets(ctx context.Context, req *connect.Request[v1.ListEmergencyTargetsRequest]) (*connect.Response[v1.ListEmergencyTargetsResponse], error) {
+	return c.listEmergencyTargets.CallUnary(ctx, req)
+}
+
+// CheckEmergencyConflict calls orchestrator.v1.OrchestratorService.CheckEmergencyConflict.
+func (c *orchestratorServiceClient) CheckEmergencyConflict(ctx context.Context, req *connect.Request[v1.CheckEmergencyConflictRequest]) (*connect.Response[v1.CheckEmergencyConflictResponse], error) {
+	return c.checkEmergencyConflict.CallUnary(ctx, req)
+}
+
+// ListCandidateArtifacts calls orchestrator.v1.OrchestratorService.ListCandidateArtifacts.
+func (c *orchestratorServiceClient) ListCandidateArtifacts(ctx context.Context, req *connect.Request[v1.ListCandidateArtifactsRequest]) (*connect.Response[v1.ListCandidateArtifactsResponse], error) {
+	return c.listCandidateArtifacts.CallUnary(ctx, req)
+}
+
+// ListConvergenceTasks calls orchestrator.v1.OrchestratorService.ListConvergenceTasks.
+func (c *orchestratorServiceClient) ListConvergenceTasks(ctx context.Context, req *connect.Request[v1.ListConvergenceTasksRequest]) (*connect.Response[v1.ListConvergenceTasksResponse], error) {
+	return c.listConvergenceTasks.CallUnary(ctx, req)
+}
+
 // ConfigureClusterRoute calls orchestrator.v1.OrchestratorService.ConfigureClusterRoute.
 func (c *orchestratorServiceClient) ConfigureClusterRoute(ctx context.Context, req *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error) {
 	return c.configureClusterRoute.CallUnary(ctx, req)
@@ -574,6 +941,21 @@ func (c *orchestratorServiceClient) DeleteClusterRoute(ctx context.Context, req 
 	return c.deleteClusterRoute.CallUnary(ctx, req)
 }
 
+// ListReleases calls orchestrator.v1.OrchestratorService.ListReleases.
+func (c *orchestratorServiceClient) ListReleases(ctx context.Context, req *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error) {
+	return c.listReleases.CallUnary(ctx, req)
+}
+
+// ListOperations calls orchestrator.v1.OrchestratorService.ListOperations.
+func (c *orchestratorServiceClient) ListOperations(ctx context.Context, req *connect.Request[v1.ListOperationsRequest]) (*connect.Response[v1.ListOperationsResponse], error) {
+	return c.listOperations.CallUnary(ctx, req)
+}
+
+// TriggerInventorySync calls orchestrator.v1.OrchestratorService.TriggerInventorySync.
+func (c *orchestratorServiceClient) TriggerInventorySync(ctx context.Context, req *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error) {
+	return c.triggerInventorySync.CallUnary(ctx, req)
+}
+
 // SyncInventory calls orchestrator.v1.OrchestratorService.SyncInventory.
 func (c *orchestratorServiceClient) SyncInventory(ctx context.Context, req *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error) {
 	return c.syncInventory.CallUnary(ctx, req)
@@ -582,27 +964,31 @@ func (c *orchestratorServiceClient) SyncInventory(ctx context.Context, req *conn
 // OrchestratorServiceHandler is an implementation of the orchestrator.v1.OrchestratorService
 // service.
 type OrchestratorServiceHandler interface {
-	// Release pipeline
 	CreateOperation(context.Context, *connect.Request[v1.CreateOperationRequest]) (*connect.Response[v1.CreateOperationResponse], error)
 	PublishRelease(context.Context, *connect.Request[v1.PublishReleaseRequest]) (*connect.Response[v1.PublishReleaseResponse], error)
 	RollbackRelease(context.Context, *connect.Request[v1.RollbackReleaseRequest]) (*connect.Response[v1.RollbackReleaseResponse], error)
-	// Values revision approval workflow
+	GetOperation(context.Context, *connect.Request[v1.GetOperationRequest]) (*connect.Response[v1.GetOperationResponse], error)
+	WatchOperation(context.Context, *connect.Request[v1.WatchOperationRequest], *connect.ServerStream[v1.WatchOperationResponse]) error
+	CancelOperation(context.Context, *connect.Request[v1.CancelOperationRequest]) (*connect.Response[v1.CancelOperationResponse], error)
 	SubmitValuesRevision(context.Context, *connect.Request[v1.SubmitValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
 	ApproveValuesRevision(context.Context, *connect.Request[v1.ApproveValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
 	RejectValuesRevision(context.Context, *connect.Request[v1.RejectValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error)
+	// ValuesRevision CRUD and secret metadata (REQ-055)
+	CreateValuesRevision(context.Context, *connect.Request[v1.CreateValuesRevisionRequest]) (*connect.Response[v1.CreateValuesRevisionResponse], error)
+	GetValuesRevision(context.Context, *connect.Request[v1.GetValuesRevisionRequest]) (*connect.Response[v1.GetValuesRevisionResponse], error)
+	ListValuesRevisions(context.Context, *connect.Request[v1.ListValuesRevisionsRequest]) (*connect.Response[v1.ListValuesRevisionsResponse], error)
+	ListSecrets(context.Context, *connect.Request[v1.ListSecretsRequest]) (*connect.Response[v1.ListSecretsResponse], error)
 	// Release definition management
 	CreateReleaseDefinition(context.Context, *connect.Request[v1.CreateReleaseDefinitionRequest]) (*connect.Response[v1.CreateReleaseDefinitionResponse], error)
 	GetReleaseDefinition(context.Context, *connect.Request[v1.GetReleaseDefinitionRequest]) (*connect.Response[v1.GetReleaseDefinitionResponse], error)
 	ListReleaseDefinitions(context.Context, *connect.Request[v1.ListReleaseDefinitionsRequest]) (*connect.Response[v1.ListReleaseDefinitionsResponse], error)
 	UpdateReleaseDefinition(context.Context, *connect.Request[v1.UpdateReleaseDefinitionRequest]) (*connect.Response[v1.UpdateReleaseDefinitionResponse], error)
 	DisableReleaseDefinition(context.Context, *connect.Request[v1.DisableReleaseDefinitionRequest]) (*connect.Response[v1.DisableReleaseDefinitionResponse], error)
-	// Customer management
 	CreateCustomer(context.Context, *connect.Request[v1.CreateCustomerRequest]) (*connect.Response[v1.CreateCustomerResponse], error)
 	GetCustomer(context.Context, *connect.Request[v1.GetCustomerRequest]) (*connect.Response[v1.GetCustomerResponse], error)
 	ListCustomers(context.Context, *connect.Request[v1.ListCustomersRequest]) (*connect.Response[v1.ListCustomersResponse], error)
 	UpdateCustomer(context.Context, *connect.Request[v1.UpdateCustomerRequest]) (*connect.Response[v1.UpdateCustomerResponse], error)
 	DisableCustomer(context.Context, *connect.Request[v1.DisableCustomerRequest]) (*connect.Response[v1.DisableCustomerResponse], error)
-	// Cluster management
 	CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.CreateClusterResponse], error)
 	UpdateCluster(context.Context, *connect.Request[v1.UpdateClusterRequest]) (*connect.Response[v1.UpdateClusterResponse], error)
 	GetCluster(context.Context, *connect.Request[v1.GetClusterRequest]) (*connect.Response[v1.GetClusterResponse], error)
@@ -617,10 +1003,17 @@ type OrchestratorServiceHandler interface {
 	RevokePendingEnrollmentToken(context.Context, *connect.Request[v1.RevokePendingEnrollmentTokenRequest]) (*connect.Response[v1.RevokePendingEnrollmentTokenResponse], error)
 	// Emergency change (REQ-032)
 	EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error)
-	// Cluster artifact routing (REQ-014)
+	ListEmergencyTargets(context.Context, *connect.Request[v1.ListEmergencyTargetsRequest]) (*connect.Response[v1.ListEmergencyTargetsResponse], error)
+	CheckEmergencyConflict(context.Context, *connect.Request[v1.CheckEmergencyConflictRequest]) (*connect.Response[v1.CheckEmergencyConflictResponse], error)
+	ListCandidateArtifacts(context.Context, *connect.Request[v1.ListCandidateArtifactsRequest]) (*connect.Response[v1.ListCandidateArtifactsResponse], error)
+	ListConvergenceTasks(context.Context, *connect.Request[v1.ListConvergenceTasksRequest]) (*connect.Response[v1.ListConvergenceTasksResponse], error)
 	ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error)
 	GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error)
 	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
+	ListReleases(context.Context, *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error)
+	// Operation query (REQ-056)
+	ListOperations(context.Context, *connect.Request[v1.ListOperationsRequest]) (*connect.Response[v1.ListOperationsResponse], error)
+	TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error)
 	// Inventory sync (REQ-017)
 	SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error)
 }
@@ -650,6 +1043,24 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("RollbackRelease")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orchestratorServiceGetOperationHandler := connect.NewUnaryHandler(
+		OrchestratorServiceGetOperationProcedure,
+		svc.GetOperation,
+		connect.WithSchema(orchestratorServiceMethods.ByName("GetOperation")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceWatchOperationHandler := connect.NewServerStreamHandler(
+		OrchestratorServiceWatchOperationProcedure,
+		svc.WatchOperation,
+		connect.WithSchema(orchestratorServiceMethods.ByName("WatchOperation")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceCancelOperationHandler := connect.NewUnaryHandler(
+		OrchestratorServiceCancelOperationProcedure,
+		svc.CancelOperation,
+		connect.WithSchema(orchestratorServiceMethods.ByName("CancelOperation")),
+		connect.WithHandlerOptions(opts...),
+	)
 	orchestratorServiceSubmitValuesRevisionHandler := connect.NewUnaryHandler(
 		OrchestratorServiceSubmitValuesRevisionProcedure,
 		svc.SubmitValuesRevision,
@@ -666,6 +1077,30 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		OrchestratorServiceRejectValuesRevisionProcedure,
 		svc.RejectValuesRevision,
 		connect.WithSchema(orchestratorServiceMethods.ByName("RejectValuesRevision")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceCreateValuesRevisionHandler := connect.NewUnaryHandler(
+		OrchestratorServiceCreateValuesRevisionProcedure,
+		svc.CreateValuesRevision,
+		connect.WithSchema(orchestratorServiceMethods.ByName("CreateValuesRevision")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceGetValuesRevisionHandler := connect.NewUnaryHandler(
+		OrchestratorServiceGetValuesRevisionProcedure,
+		svc.GetValuesRevision,
+		connect.WithSchema(orchestratorServiceMethods.ByName("GetValuesRevision")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceListValuesRevisionsHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListValuesRevisionsProcedure,
+		svc.ListValuesRevisions,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListValuesRevisions")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceListSecretsHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListSecretsProcedure,
+		svc.ListSecrets,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListSecrets")),
 		connect.WithHandlerOptions(opts...),
 	)
 	orchestratorServiceCreateReleaseDefinitionHandler := connect.NewUnaryHandler(
@@ -800,6 +1235,30 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("EmergencyChange")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orchestratorServiceListEmergencyTargetsHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListEmergencyTargetsProcedure,
+		svc.ListEmergencyTargets,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListEmergencyTargets")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceCheckEmergencyConflictHandler := connect.NewUnaryHandler(
+		OrchestratorServiceCheckEmergencyConflictProcedure,
+		svc.CheckEmergencyConflict,
+		connect.WithSchema(orchestratorServiceMethods.ByName("CheckEmergencyConflict")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceListCandidateArtifactsHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListCandidateArtifactsProcedure,
+		svc.ListCandidateArtifacts,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListCandidateArtifacts")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceListConvergenceTasksHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListConvergenceTasksProcedure,
+		svc.ListConvergenceTasks,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListConvergenceTasks")),
+		connect.WithHandlerOptions(opts...),
+	)
 	orchestratorServiceConfigureClusterRouteHandler := connect.NewUnaryHandler(
 		OrchestratorServiceConfigureClusterRouteProcedure,
 		svc.ConfigureClusterRoute,
@@ -818,6 +1277,24 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("DeleteClusterRoute")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orchestratorServiceListReleasesHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListReleasesProcedure,
+		svc.ListReleases,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListReleases")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceListOperationsHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListOperationsProcedure,
+		svc.ListOperations,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListOperations")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceTriggerInventorySyncHandler := connect.NewUnaryHandler(
+		OrchestratorServiceTriggerInventorySyncProcedure,
+		svc.TriggerInventorySync,
+		connect.WithSchema(orchestratorServiceMethods.ByName("TriggerInventorySync")),
+		connect.WithHandlerOptions(opts...),
+	)
 	orchestratorServiceSyncInventoryHandler := connect.NewUnaryHandler(
 		OrchestratorServiceSyncInventoryProcedure,
 		svc.SyncInventory,
@@ -832,12 +1309,26 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServicePublishReleaseHandler.ServeHTTP(w, r)
 		case OrchestratorServiceRollbackReleaseProcedure:
 			orchestratorServiceRollbackReleaseHandler.ServeHTTP(w, r)
+		case OrchestratorServiceGetOperationProcedure:
+			orchestratorServiceGetOperationHandler.ServeHTTP(w, r)
+		case OrchestratorServiceWatchOperationProcedure:
+			orchestratorServiceWatchOperationHandler.ServeHTTP(w, r)
+		case OrchestratorServiceCancelOperationProcedure:
+			orchestratorServiceCancelOperationHandler.ServeHTTP(w, r)
 		case OrchestratorServiceSubmitValuesRevisionProcedure:
 			orchestratorServiceSubmitValuesRevisionHandler.ServeHTTP(w, r)
 		case OrchestratorServiceApproveValuesRevisionProcedure:
 			orchestratorServiceApproveValuesRevisionHandler.ServeHTTP(w, r)
 		case OrchestratorServiceRejectValuesRevisionProcedure:
 			orchestratorServiceRejectValuesRevisionHandler.ServeHTTP(w, r)
+		case OrchestratorServiceCreateValuesRevisionProcedure:
+			orchestratorServiceCreateValuesRevisionHandler.ServeHTTP(w, r)
+		case OrchestratorServiceGetValuesRevisionProcedure:
+			orchestratorServiceGetValuesRevisionHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListValuesRevisionsProcedure:
+			orchestratorServiceListValuesRevisionsHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListSecretsProcedure:
+			orchestratorServiceListSecretsHandler.ServeHTTP(w, r)
 		case OrchestratorServiceCreateReleaseDefinitionProcedure:
 			orchestratorServiceCreateReleaseDefinitionHandler.ServeHTTP(w, r)
 		case OrchestratorServiceGetReleaseDefinitionProcedure:
@@ -882,12 +1373,26 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceRevokePendingEnrollmentTokenHandler.ServeHTTP(w, r)
 		case OrchestratorServiceEmergencyChangeProcedure:
 			orchestratorServiceEmergencyChangeHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListEmergencyTargetsProcedure:
+			orchestratorServiceListEmergencyTargetsHandler.ServeHTTP(w, r)
+		case OrchestratorServiceCheckEmergencyConflictProcedure:
+			orchestratorServiceCheckEmergencyConflictHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListCandidateArtifactsProcedure:
+			orchestratorServiceListCandidateArtifactsHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListConvergenceTasksProcedure:
+			orchestratorServiceListConvergenceTasksHandler.ServeHTTP(w, r)
 		case OrchestratorServiceConfigureClusterRouteProcedure:
 			orchestratorServiceConfigureClusterRouteHandler.ServeHTTP(w, r)
 		case OrchestratorServiceGetClusterRoutesProcedure:
 			orchestratorServiceGetClusterRoutesHandler.ServeHTTP(w, r)
 		case OrchestratorServiceDeleteClusterRouteProcedure:
 			orchestratorServiceDeleteClusterRouteHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListReleasesProcedure:
+			orchestratorServiceListReleasesHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListOperationsProcedure:
+			orchestratorServiceListOperationsHandler.ServeHTTP(w, r)
+		case OrchestratorServiceTriggerInventorySyncProcedure:
+			orchestratorServiceTriggerInventorySyncHandler.ServeHTTP(w, r)
 		case OrchestratorServiceSyncInventoryProcedure:
 			orchestratorServiceSyncInventoryHandler.ServeHTTP(w, r)
 		default:
@@ -911,6 +1416,18 @@ func (UnimplementedOrchestratorServiceHandler) RollbackRelease(context.Context, 
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.RollbackRelease is not implemented"))
 }
 
+func (UnimplementedOrchestratorServiceHandler) GetOperation(context.Context, *connect.Request[v1.GetOperationRequest]) (*connect.Response[v1.GetOperationResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.GetOperation is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) WatchOperation(context.Context, *connect.Request[v1.WatchOperationRequest], *connect.ServerStream[v1.WatchOperationResponse]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.WatchOperation is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) CancelOperation(context.Context, *connect.Request[v1.CancelOperationRequest]) (*connect.Response[v1.CancelOperationResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.CancelOperation is not implemented"))
+}
+
 func (UnimplementedOrchestratorServiceHandler) SubmitValuesRevision(context.Context, *connect.Request[v1.SubmitValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.SubmitValuesRevision is not implemented"))
 }
@@ -921,6 +1438,22 @@ func (UnimplementedOrchestratorServiceHandler) ApproveValuesRevision(context.Con
 
 func (UnimplementedOrchestratorServiceHandler) RejectValuesRevision(context.Context, *connect.Request[v1.RejectValuesRevisionRequest]) (*connect.Response[v1.ValuesRevisionDecisionResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.RejectValuesRevision is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) CreateValuesRevision(context.Context, *connect.Request[v1.CreateValuesRevisionRequest]) (*connect.Response[v1.CreateValuesRevisionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.CreateValuesRevision is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) GetValuesRevision(context.Context, *connect.Request[v1.GetValuesRevisionRequest]) (*connect.Response[v1.GetValuesRevisionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.GetValuesRevision is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListValuesRevisions(context.Context, *connect.Request[v1.ListValuesRevisionsRequest]) (*connect.Response[v1.ListValuesRevisionsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListValuesRevisions is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListSecrets(context.Context, *connect.Request[v1.ListSecretsRequest]) (*connect.Response[v1.ListSecretsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListSecrets is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) CreateReleaseDefinition(context.Context, *connect.Request[v1.CreateReleaseDefinitionRequest]) (*connect.Response[v1.CreateReleaseDefinitionResponse], error) {
@@ -1011,6 +1544,22 @@ func (UnimplementedOrchestratorServiceHandler) EmergencyChange(context.Context, 
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.EmergencyChange is not implemented"))
 }
 
+func (UnimplementedOrchestratorServiceHandler) ListEmergencyTargets(context.Context, *connect.Request[v1.ListEmergencyTargetsRequest]) (*connect.Response[v1.ListEmergencyTargetsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListEmergencyTargets is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) CheckEmergencyConflict(context.Context, *connect.Request[v1.CheckEmergencyConflictRequest]) (*connect.Response[v1.CheckEmergencyConflictResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.CheckEmergencyConflict is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListCandidateArtifacts(context.Context, *connect.Request[v1.ListCandidateArtifactsRequest]) (*connect.Response[v1.ListCandidateArtifactsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListCandidateArtifacts is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListConvergenceTasks(context.Context, *connect.Request[v1.ListConvergenceTasksRequest]) (*connect.Response[v1.ListConvergenceTasksResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListConvergenceTasks is not implemented"))
+}
+
 func (UnimplementedOrchestratorServiceHandler) ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ConfigureClusterRoute is not implemented"))
 }
@@ -1021,6 +1570,18 @@ func (UnimplementedOrchestratorServiceHandler) GetClusterRoutes(context.Context,
 
 func (UnimplementedOrchestratorServiceHandler) DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.DeleteClusterRoute is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListReleases(context.Context, *connect.Request[v1.ListReleasesRequest]) (*connect.Response[v1.ListReleasesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListReleases is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListOperations(context.Context, *connect.Request[v1.ListOperationsRequest]) (*connect.Response[v1.ListOperationsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListOperations is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.TriggerInventorySync is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) SyncInventory(context.Context, *connect.Request[v1.SyncInventoryRequest]) (*connect.Response[v1.SyncInventoryResponse], error) {

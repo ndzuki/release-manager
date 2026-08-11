@@ -36,6 +36,9 @@ export const useAuthStore = defineStore('auth', () => {
   const canReadOperators = computed(() => isAuthenticated.value);
   const canEnrollOperators = computed(() => roleNames.value.some((role) => role === 'platform_admin' || role === 'release_admin'));
   const canRevokeOperators = computed(() => roleNames.value.some((role) => role === 'platform_admin' || role === 'release_admin'));
+  const canCreateReleaseOperation = computed(
+    () => user.value?.roles.some((role) => ['platform_admin', 'release_admin'].includes(role.toLowerCase())) === true,
+  );
 
   function applySession(payload: SessionPayload): void {
     if (!payload.user) {
@@ -168,6 +171,7 @@ export const useAuthStore = defineStore('auth', () => {
     canReadOperators,
     canEnrollOperators,
     canRevokeOperators,
+    canCreateReleaseOperation,
     initialize,
     initializeSystem,
     login,

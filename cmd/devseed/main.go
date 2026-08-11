@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -27,6 +28,10 @@ const (
 	defaultWebhookURL      = "http://localhost:8082"
 	defaultValuesURL       = "http://localhost:8087"
 	developmentNamespace   = "release-manager-dev"
+	// devEnrollmentTokenDir holds one 0600 enrollment token file per dev
+	// cluster (TASK-075 plan v1 Step 8); TASK-065 replaces this with Secret
+	// injection into the customer clusters.
+	devEnrollmentTokenDir = "data/dev-enrollment-tokens" //nolint:gosec // directory path, not a credential
 )
 
 type seedConfig struct {
@@ -98,11 +103,7 @@ func run(ctx context.Context, cfg seedConfig) error {
 		}
 	}
 
-	clusters := []struct {
-		id         string
-		name       string
-		customerID string
-	}{
+	clusters := []clusterSeed{
 		{id: "dev-customer-a-direct", name: "Customer A Direct", customerID: "dev-customer-a"},
 		{id: "dev-customer-a-cache", name: "Customer A Pull Through Cache", customerID: "dev-customer-a"},
 		{id: "dev-customer-b-replicated", name: "Customer B Replicated", customerID: "dev-customer-b"},
@@ -113,6 +114,9 @@ func run(ctx context.Context, cfg seedConfig) error {
 		if err := ensureCluster(ctx, orchestratorClient, cluster.id, cluster.name, cluster.customerID); err != nil {
 			return err
 		}
+	}
+	if err := ensureEnrollmentTokens(ctx, orchestratorClient, clusters, devEnrollmentTokenDir); err != nil {
+		return err
 	}
 
 	routes := []routeSeed{
@@ -183,6 +187,60 @@ func ensureCluster(ctx context.Context, client orchestratorv1connect.Orchestrato
 		return fmt.Errorf("create cluster %s: %w", id, err)
 	}
 	fmt.Printf("cluster %s created\n", id)
+	return nil
+}
+
+// enrollmentTokenCreator is the narrow CreateEnrollmentToken seam used by
+// the enrollment seed stage.
+type enrollmentTokenCreator interface {
+	CreateEnrollmentToken(context.Context, *connect.Request[orchestratorv1.CreateEnrollmentTokenRequest]) (*connect.Response[orchestratorv1.CreateEnrollmentTokenResponse], error)
+}
+
+// clusterSeed identifies one dev cluster for seeding.
+type clusterSeed struct {
+	id         string
+	name       string
+	customerID string
+}
+
+// ensureEnrollmentTokens creates one pending enrollment token per dev
+// cluster and writes it to a 0600 file (REQ-065: devseed injects the token
+// via Secret into each customer cluster; the file is the local stand-in
+// until TASK-065 wires the Secret). Re-running dev-up is idempotent: an
+// existing token file is left untouched, so a consumed token stays consumed
+// and a live token is not regenerated.
+func ensureEnrollmentTokens(ctx context.Context, client enrollmentTokenCreator, clusters []clusterSeed, tokenDir string) error {
+	if err := os.MkdirAll(tokenDir, 0o700); err != nil {
+		return fmt.Errorf("create enrollment token dir: %w", err)
+	}
+	for _, cluster := range clusters {
+		if err := ensureEnrollmentToken(ctx, client, cluster.id, cluster.customerID, tokenDir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensureEnrollmentToken writes the enrollment token file for one cluster.
+// The token value appears only in the CreateEnrollmentToken response and is
+// never logged (REQ-065 log safety).
+func ensureEnrollmentToken(ctx context.Context, client enrollmentTokenCreator, clusterID, customerID, tokenDir string) error {
+	tokenPath := filepath.Join(tokenDir, clusterID+".token")
+	if _, err := os.Stat(tokenPath); err == nil {
+		fmt.Printf("enrollment token for cluster %s already seeded\n", clusterID)
+		return nil
+	}
+	response, err := client.CreateEnrollmentToken(ctx, connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
+		CustomerId: customerID,
+		ClusterId:  clusterID,
+	}))
+	if err != nil {
+		return fmt.Errorf("create enrollment token for cluster %s: %w", clusterID, err)
+	}
+	if err := os.WriteFile(tokenPath, []byte(response.Msg.GetToken()+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write enrollment token for cluster %s: %w", clusterID, err)
+	}
+	fmt.Printf("enrollment token for cluster %s written to %s\n", clusterID, tokenPath)
 	return nil
 }
 

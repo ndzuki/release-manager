@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file common/v1/domain.proto.
  */
 export const file_common_v1_domain: GenFile = /*@__PURE__*/
-  fileDesc("ChZjb21tb24vdjEvZG9tYWluLnByb3RvEgljb21tb24udjEiMQoNUmVsZWFzZURpZ2VzdBIRCglhbGdvcml0aG0YASABKAkSDQoFdmFsdWUYAiABKAkiPwoLQnVuZGxlSW1hZ2USCwoDcmVmGAEgASgJEg4KBmRpZ2VzdBgCIAEoCRITCgt2YWx1ZXNfcGF0aBgDIAEoCSL+AgoNUmVsZWFzZUJ1bmRsZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEigKBmRpZ2VzdBgDIAEoCzIYLmNvbW1vbi52MS5SZWxlYXNlRGlnZXN0EicKBnN0YXR1cxgEIAEoDjIXLmNvbW1vbi52MS5CdW5kbGVTdGF0dXMSEQoJY2hhcnRfcmVmGAUgASgJEhUKDWNoYXJ0X3ZlcnNpb24YBiABKAkSFAoMY2hhcnRfZGlnZXN0GAcgASgJEiYKBmltYWdlcxgIIAMoCzIWLmNvbW1vbi52MS5CdW5kbGVJbWFnZRISCgpnaXRfY29tbWl0GAkgASgJEhMKC3BpcGVsaW5lX2lkGAogASgJEhUKDXNpZ25hdHVyZV9yZWYYCyABKAkSEAoIc2JvbV9yZWYYDCABKAkSFgoOcHJvdmVuYW5jZV9yZWYYDSABKAkSLgoKY3JlYXRlZF9hdBgOIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiqAIKEVJlbGVhc2VEZWZpbml0aW9uEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSEwoLY3VzdG9tZXJfaWQYAyABKAkSEgoKY2x1c3Rlcl9pZBgEIAEoCRIRCgluYW1lc3BhY2UYBSABKAkSFAoMcmVsZWFzZV9uYW1lGAYgASgJEhIKCmNoYXJ0X25hbWUYByABKAkSDgoGc3RhdHVzGAggASgJEg8KB3ZlcnNpb24YCSABKAMSEgoKY3JlYXRlZF9ieRgKIAEoCRIuCgpjcmVhdGVkX2F0GAsgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAwgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKiAwoOVmFsdWVzUmV2aXNpb24SCgoCaWQYASABKAkSHQoVcmVsZWFzZV9kZWZpbml0aW9uX2lkGAIgASgJEhAKCHJldmlzaW9uGAMgASgFEg4KBnZhbHVlcxgEIAEoDBIuCgpjcmVhdGVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBInCgZzdGF0dXMYBiABKA4yFy5jb21tb24udjEuVmFsdWVzU3RhdHVzEg4KBmRpZ2VzdBgHIAEoCRIaChJwYXJlbnRfcmV2aXNpb25faWQYCCABKAkSKQoLc2VjcmV0X3JlZnMYCSADKAsyFC5jb21tb24udjEuU2VjcmV0UmVmEhUKDXN0YXRlX3ZlcnNpb24YCiABKAMSGgoSY3JlYXRlZF9ieV91c2VyX2lkGAsgASgJEjAKDHN1Ym1pdHRlZF9hdBgMIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKZGVjaWRlZF9hdBgNIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiOQoJU2VjcmV0UmVmEgwKBG5hbWUYASABKAkSEQoJbmFtZXNwYWNlGAIgASgJEgsKA2tleRgDIAEoCSJyCghDdXN0b21lchIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEgwKBHNsdWcYAyABKAkSDgoGc3RhdHVzGAUgASgJEi4KCmNyZWF0ZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIl0KFUN1c3RvbWVyRGlzYWJsZWRFdmVudBITCgtjdXN0b21lcl9pZBgBIAEoCRIvCgtkaXNhYmxlZF9hdBgCIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAigAIKB0NsdXN0ZXISCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRITCgtjdXN0b21lcl9pZBgDIAEoCRIWCg5rdWJlY29uZmlnX3JlZhgEIAEoCRIoCgZzdGF0dXMYBiABKA4yGC5jb21tb24udjEuQ2x1c3RlclN0YXR1cxIuCgpjcmVhdGVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIPCgd2ZXJzaW9uGAggASgDEhMKC3JvdXRlX2NvdW50GAkgASgFIjUKDEFjdG9yQ29udGV4dBIPCgd1c2VyX2lkGAEgASgJEhQKDG9yZ2FuaXphdGlvbhgCIAEoCSqCAQoMQnVuZGxlU3RhdHVzEh0KGUJVTkRMRV9TVEFUVVNfVU5TUEVDSUZJRUQQABIaChZCVU5ETEVfU1RBVFVTX1JFQ0VJVkVEEAESGwoXQlVORExFX1NUQVRVU19WQUxJREFURUQQAhIaChZCVU5ETEVfU1RBVFVTX1JFSkVDVEVEEAMqwAEKDFZhbHVlc1N0YXR1cxIdChlWQUxVRVNfU1RBVFVTX1VOU1BFQ0lGSUVEEAASFwoTVkFMVUVTX1NUQVRVU19EUkFGVBABEhoKFlZBTFVFU19TVEFUVVNfQVBQUk9WRUQQAhIaChZWQUxVRVNfU1RBVFVTX1JFSkVDVEVEEAMSIgoeVkFMVUVTX1NUQVRVU19QRU5ESU5HX0FQUFJPVkFMEAQSHAoYVkFMVUVTX1NUQVRVU19TVVBFUlNFREVEEAUqZwoNQ2x1c3RlclN0YXR1cxIeChpDTFVTVEVSX1NUQVRVU19VTlNQRUNJRklFRBAAEhkKFUNMVVNURVJfU1RBVFVTX0FDVElWRRABEhsKF0NMVVNURVJfU1RBVFVTX0RJU0FCTEVEEAJCPlo8Z2l0aHViLmNvbS9uZHp1a2kvcmVsZWFzZS1tYW5hZ2VyL2FwaS9nZW4vY29tbW9uL3YxO2NvbW1vbnYxYgZwcm90bzM", [file_google_protobuf_timestamp]);
+  fileDesc("ChZjb21tb24vdjEvZG9tYWluLnByb3RvEgljb21tb24udjEiMQoNUmVsZWFzZURpZ2VzdBIRCglhbGdvcml0aG0YASABKAkSDQoFdmFsdWUYAiABKAkibgoLQnVuZGxlSW1hZ2USCwoDcmVmGAEgASgJEg4KBmRpZ2VzdBgCIAEoCRITCgt2YWx1ZXNfcGF0aBgDIAEoCRItCgp2YWx1ZV9raW5kGAQgASgOMhkuY29tbW9uLnYxLkltYWdlVmFsdWVLaW5kIjAKEUFydGlmYWN0UmVmZXJlbmNlEgsKA3JlZhgBIAEoCRIOCgZkaWdlc3QYAiABKAkiYAoRQ2FuZGlkYXRlQXJ0aWZhY3QSLgoNYXJ0aWZhY3RfdHlwZRgBIAEoDjIXLmNvbW1vbi52MS5BcnRpZmFjdFR5cGUSCwoDcmVmGAIgASgJEg4KBmRpZ2VzdBgDIAEoCSI5Cg1FdmVudFJlc291cmNlEg4KBmRpZ2VzdBgBIAEoCRILCgNyZWYYAiABKAkSCwoDdGFnGAMgASgJIsgDCg1SZWxlYXNlQnVuZGxlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSKAoGZGlnZXN0GAMgASgLMhguY29tbW9uLnYxLlJlbGVhc2VEaWdlc3QSJwoGc3RhdHVzGAQgASgOMhcuY29tbW9uLnYxLkJ1bmRsZVN0YXR1cxIRCgljaGFydF9yZWYYBSABKAkSFQoNY2hhcnRfdmVyc2lvbhgGIAEoCRIUCgxjaGFydF9kaWdlc3QYByABKAkSJgoGaW1hZ2VzGAggAygLMhYuY29tbW9uLnYxLkJ1bmRsZUltYWdlEhIKCmdpdF9jb21taXQYCSABKAkSEwoLcGlwZWxpbmVfaWQYCiABKAkSFQoNc2lnbmF0dXJlX3JlZhgLIAEoCRIQCghzYm9tX3JlZhgMIAEoCRIWCg5wcm92ZW5hbmNlX3JlZhgNIAEoCRIuCgpjcmVhdGVkX2F0GA4gASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIYChBzaWduYXR1cmVfZGlnZXN0GA8gASgJEhMKC3Nib21fZGlnZXN0GBAgASgJEhkKEXByb3ZlbmFuY2VfZGlnZXN0GBEgASgJIpsDChFSZWxlYXNlRGVmaW5pdGlvbhIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhMKC2N1c3RvbWVyX2lkGAMgASgJEhIKCmNsdXN0ZXJfaWQYBCABKAkSEQoJbmFtZXNwYWNlGAUgASgJEhQKDHJlbGVhc2VfbmFtZRgGIAEoCRISCgpjaGFydF9uYW1lGAcgASgJEg4KBnN0YXR1cxgIIAEoCRIPCgd2ZXJzaW9uGAkgASgDEhIKCmNyZWF0ZWRfYnkYCiABKAkSLgoKY3JlYXRlZF9hdBgLIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKdXBkYXRlZF9hdBgMIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEwoLaHBhX21hbmFnZWQYDSABKAgSHgoWbWF4X2VtZXJnZW5jeV9yZXBsaWNhcxgOIAEoBRIgChhhcHByb3ZlZF9hbm5vdGF0aW9uX2tleXMYDyABKAwSGgoScHJvbW90aW9uX21hcHBpbmdzGBAgASgMIqIDCg5WYWx1ZXNSZXZpc2lvbhIKCgJpZBgBIAEoCRIdChVyZWxlYXNlX2RlZmluaXRpb25faWQYAiABKAkSEAoIcmV2aXNpb24YAyABKAUSDgoGdmFsdWVzGAQgASgMEi4KCmNyZWF0ZWRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEicKBnN0YXR1cxgGIAEoDjIXLmNvbW1vbi52MS5WYWx1ZXNTdGF0dXMSDgoGZGlnZXN0GAcgASgJEhoKEnBhcmVudF9yZXZpc2lvbl9pZBgIIAEoCRIpCgtzZWNyZXRfcmVmcxgJIAMoCzIULmNvbW1vbi52MS5TZWNyZXRSZWYSFQoNc3RhdGVfdmVyc2lvbhgKIAEoAxIaChJjcmVhdGVkX2J5X3VzZXJfaWQYCyABKAkSMAoMc3VibWl0dGVkX2F0GAwgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgpkZWNpZGVkX2F0GA0gASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCI5CglTZWNyZXRSZWYSDAoEbmFtZRgBIAEoCRIRCgluYW1lc3BhY2UYAiABKAkSCwoDa2V5GAMgASgJInIKCEN1c3RvbWVyEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDAoEc2x1ZxgDIAEoCRIOCgZzdGF0dXMYBSABKAkSLgoKY3JlYXRlZF9hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiXQoVQ3VzdG9tZXJEaXNhYmxlZEV2ZW50EhMKC2N1c3RvbWVyX2lkGAEgASgJEi8KC2Rpc2FibGVkX2F0GAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKAAgoHQ2x1c3RlchIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhMKC2N1c3RvbWVyX2lkGAMgASgJEhYKDmt1YmVjb25maWdfcmVmGAQgASgJEigKBnN0YXR1cxgGIAEoDjIYLmNvbW1vbi52MS5DbHVzdGVyU3RhdHVzEi4KCmNyZWF0ZWRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCnVwZGF0ZWRfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEg8KB3ZlcnNpb24YCCABKAMSEwoLcm91dGVfY291bnQYCSABKAUiNQoMQWN0b3JDb250ZXh0Eg8KB3VzZXJfaWQYASABKAkSFAoMb3JnYW5pemF0aW9uGAIgASgJKp4BCgxCdW5kbGVTdGF0dXMSHQoZQlVORExFX1NUQVRVU19VTlNQRUNJRklFRBAAEhoKFkJVTkRMRV9TVEFUVVNfUkVDRUlWRUQQARIbChdCVU5ETEVfU1RBVFVTX1ZBTElEQVRFRBACEhoKFkJVTkRMRV9TVEFUVVNfUkVKRUNURUQQAxIaChZCVU5ETEVfU1RBVFVTX0FSQ0hJVkVEEAQqrwEKDkltYWdlVmFsdWVLaW5kEiAKHElNQUdFX1ZBTFVFX0tJTkRfVU5TUEVDSUZJRUQQABIjCh9JTUFHRV9WQUxVRV9LSU5EX0ZVTExfUkVGRVJFTkNFEAESHwobSU1BR0VfVkFMVUVfS0lORF9SRVBPU0lUT1JZEAISGAoUSU1BR0VfVkFMVUVfS0lORF9UQUcQAxIbChdJTUFHRV9WQUxVRV9LSU5EX0RJR0VTVBAEKrIBCgxBcnRpZmFjdFR5cGUSHQoZQVJUSUZBQ1RfVFlQRV9VTlNQRUNJRklFRBAAEhcKE0FSVElGQUNUX1RZUEVfSU1BR0UQARIXChNBUlRJRkFDVF9UWVBFX0NIQVJUEAISFgoSQVJUSUZBQ1RfVFlQRV9TQk9NEAMSHAoYQVJUSUZBQ1RfVFlQRV9QUk9WRU5BTkNFEAQSGwoXQVJUSUZBQ1RfVFlQRV9TSUdOQVRVUkUQBSrAAQoMVmFsdWVzU3RhdHVzEh0KGVZBTFVFU19TVEFUVVNfVU5TUEVDSUZJRUQQABIXChNWQUxVRVNfU1RBVFVTX0RSQUZUEAESGgoWVkFMVUVTX1NUQVRVU19BUFBST1ZFRBACEhoKFlZBTFVFU19TVEFUVVNfUkVKRUNURUQQAxIiCh5WQUxVRVNfU1RBVFVTX1BFTkRJTkdfQVBQUk9WQUwQBBIcChhWQUxVRVNfU1RBVFVTX1NVUEVSU0VERUQQBSpnCg1DbHVzdGVyU3RhdHVzEh4KGkNMVVNURVJfU1RBVFVTX1VOU1BFQ0lGSUVEEAASGQoVQ0xVU1RFUl9TVEFUVVNfQUNUSVZFEAESGwoXQ0xVU1RFUl9TVEFUVVNfRElTQUJMRUQQAkI+WjxnaXRodWIuY29tL25kenVraS9yZWxlYXNlLW1hbmFnZXIvYXBpL2dlbi9jb21tb24vdjE7Y29tbW9udjFiBnByb3RvMw", [file_google_protobuf_timestamp]);
 
 /**
  * ReleaseDigest is an immutable content-addressable identifier for a ReleaseBundle.
@@ -58,6 +58,11 @@ export type BundleImage = Message<"common.v1.BundleImage"> & {
    * @generated from field: string values_path = 3;
    */
   valuesPath: string;
+
+  /**
+   * @generated from field: common.v1.ImageValueKind value_kind = 4;
+   */
+  valueKind: ImageValueKind;
 };
 
 /**
@@ -66,6 +71,88 @@ export type BundleImage = Message<"common.v1.BundleImage"> & {
  */
 export const BundleImageSchema: GenMessage<BundleImage> = /*@__PURE__*/
   messageDesc(file_common_v1_domain, 1);
+
+/**
+ * ArtifactReference identifies immutable evidence stored outside the service.
+ *
+ * @generated from message common.v1.ArtifactReference
+ */
+export type ArtifactReference = Message<"common.v1.ArtifactReference"> & {
+  /**
+   * @generated from field: string ref = 1;
+   */
+  ref: string;
+
+  /**
+   * @generated from field: string digest = 2;
+   */
+  digest: string;
+};
+
+/**
+ * Describes the message common.v1.ArtifactReference.
+ * Use `create(ArtifactReferenceSchema)` to create a new message.
+ */
+export const ArtifactReferenceSchema: GenMessage<ArtifactReference> = /*@__PURE__*/
+  messageDesc(file_common_v1_domain, 2);
+
+/**
+ * CandidateArtifact describes an additional artifact observed with a bundle.
+ *
+ * @generated from message common.v1.CandidateArtifact
+ */
+export type CandidateArtifact = Message<"common.v1.CandidateArtifact"> & {
+  /**
+   * @generated from field: common.v1.ArtifactType artifact_type = 1;
+   */
+  artifactType: ArtifactType;
+
+  /**
+   * @generated from field: string ref = 2;
+   */
+  ref: string;
+
+  /**
+   * @generated from field: string digest = 3;
+   */
+  digest: string;
+};
+
+/**
+ * Describes the message common.v1.CandidateArtifact.
+ * Use `create(CandidateArtifactSchema)` to create a new message.
+ */
+export const CandidateArtifactSchema: GenMessage<CandidateArtifact> = /*@__PURE__*/
+  messageDesc(file_common_v1_domain, 3);
+
+/**
+ * EventResource is one artifact resource carried by an external event.
+ *
+ * @generated from message common.v1.EventResource
+ */
+export type EventResource = Message<"common.v1.EventResource"> & {
+  /**
+   * @generated from field: string digest = 1;
+   */
+  digest: string;
+
+  /**
+   * @generated from field: string ref = 2;
+   */
+  ref: string;
+
+  /**
+   * @generated from field: string tag = 3;
+   */
+  tag: string;
+};
+
+/**
+ * Describes the message common.v1.EventResource.
+ * Use `create(EventResourceSchema)` to create a new message.
+ */
+export const EventResourceSchema: GenMessage<EventResource> = /*@__PURE__*/
+  messageDesc(file_common_v1_domain, 4);
 
 /**
  * ReleaseBundle is the atomic unit of a release — immutable once published.
@@ -142,6 +229,21 @@ export type ReleaseBundle = Message<"common.v1.ReleaseBundle"> & {
    * @generated from field: google.protobuf.Timestamp created_at = 14;
    */
   createdAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string signature_digest = 15;
+   */
+  signatureDigest: string;
+
+  /**
+   * @generated from field: string sbom_digest = 16;
+   */
+  sbomDigest: string;
+
+  /**
+   * @generated from field: string provenance_digest = 17;
+   */
+  provenanceDigest: string;
 };
 
 /**
@@ -149,7 +251,7 @@ export type ReleaseBundle = Message<"common.v1.ReleaseBundle"> & {
  * Use `create(ReleaseBundleSchema)` to create a new message.
  */
 export const ReleaseBundleSchema: GenMessage<ReleaseBundle> = /*@__PURE__*/
-  messageDesc(file_common_v1_domain, 2);
+  messageDesc(file_common_v1_domain, 5);
 
 /**
  * ReleaseDefinition decouples the install preflight cycle from artifact ingestion.
@@ -216,6 +318,26 @@ export type ReleaseDefinition = Message<"common.v1.ReleaseDefinition"> & {
    * @generated from field: google.protobuf.Timestamp updated_at = 12;
    */
   updatedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: bool hpa_managed = 13;
+   */
+  hpaManaged: boolean;
+
+  /**
+   * @generated from field: int32 max_emergency_replicas = 14;
+   */
+  maxEmergencyReplicas: number;
+
+  /**
+   * @generated from field: bytes approved_annotation_keys = 15;
+   */
+  approvedAnnotationKeys: Uint8Array;
+
+  /**
+   * @generated from field: bytes promotion_mappings = 16;
+   */
+  promotionMappings: Uint8Array;
 };
 
 /**
@@ -223,7 +345,7 @@ export type ReleaseDefinition = Message<"common.v1.ReleaseDefinition"> & {
  * Use `create(ReleaseDefinitionSchema)` to create a new message.
  */
 export const ReleaseDefinitionSchema: GenMessage<ReleaseDefinition> = /*@__PURE__*/
-  messageDesc(file_common_v1_domain, 3);
+  messageDesc(file_common_v1_domain, 6);
 
 /**
  * ValuesRevision stores the desired configuration for a release target.
@@ -302,7 +424,7 @@ export type ValuesRevision = Message<"common.v1.ValuesRevision"> & {
  * Use `create(ValuesRevisionSchema)` to create a new message.
  */
 export const ValuesRevisionSchema: GenMessage<ValuesRevision> = /*@__PURE__*/
-  messageDesc(file_common_v1_domain, 4);
+  messageDesc(file_common_v1_domain, 7);
 
 /**
  * SecretRef holds a reference to a secret, never the secret value itself.
@@ -331,7 +453,7 @@ export type SecretRef = Message<"common.v1.SecretRef"> & {
  * Use `create(SecretRefSchema)` to create a new message.
  */
 export const SecretRefSchema: GenMessage<SecretRef> = /*@__PURE__*/
-  messageDesc(file_common_v1_domain, 5);
+  messageDesc(file_common_v1_domain, 8);
 
 /**
  * Customer represents a tenant in the release manager.
@@ -370,7 +492,7 @@ export type Customer = Message<"common.v1.Customer"> & {
  * Use `create(CustomerSchema)` to create a new message.
  */
 export const CustomerSchema: GenMessage<Customer> = /*@__PURE__*/
-  messageDesc(file_common_v1_domain, 6);
+  messageDesc(file_common_v1_domain, 9);
 
 /**
  * CustomerDisabledEvent is emitted when a customer is disabled.
@@ -397,7 +519,7 @@ export type CustomerDisabledEvent = Message<"common.v1.CustomerDisabledEvent"> &
  * Use `create(CustomerDisabledEventSchema)` to create a new message.
  */
 export const CustomerDisabledEventSchema: GenMessage<CustomerDisabledEvent> = /*@__PURE__*/
-  messageDesc(file_common_v1_domain, 7);
+  messageDesc(file_common_v1_domain, 10);
 
 /**
  * Cluster represents a target cluster within a customer.
@@ -456,7 +578,7 @@ export type Cluster = Message<"common.v1.Cluster"> & {
  * Use `create(ClusterSchema)` to create a new message.
  */
 export const ClusterSchema: GenMessage<Cluster> = /*@__PURE__*/
-  messageDesc(file_common_v1_domain, 8);
+  messageDesc(file_common_v1_domain, 11);
 
 /**
  * ActorContext identifies the initiating principal for audit and authorization.
@@ -480,7 +602,7 @@ export type ActorContext = Message<"common.v1.ActorContext"> & {
  * Use `create(ActorContextSchema)` to create a new message.
  */
 export const ActorContextSchema: GenMessage<ActorContext> = /*@__PURE__*/
-  messageDesc(file_common_v1_domain, 9);
+  messageDesc(file_common_v1_domain, 12);
 
 /**
  * BundleStatus is the lifecycle state of a ReleaseBundle.
@@ -507,6 +629,11 @@ export enum BundleStatus {
    * @generated from enum value: BUNDLE_STATUS_REJECTED = 3;
    */
   REJECTED = 3,
+
+  /**
+   * @generated from enum value: BUNDLE_STATUS_ARCHIVED = 4;
+   */
+  ARCHIVED = 4,
 }
 
 /**
@@ -514,6 +641,87 @@ export enum BundleStatus {
  */
 export const BundleStatusSchema: GenEnum<BundleStatus> = /*@__PURE__*/
   enumDesc(file_common_v1_domain, 0);
+
+/**
+ * ImageValueKind describes which Helm value a binding replaces.
+ *
+ * @generated from enum common.v1.ImageValueKind
+ */
+export enum ImageValueKind {
+  /**
+   * @generated from enum value: IMAGE_VALUE_KIND_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: IMAGE_VALUE_KIND_FULL_REFERENCE = 1;
+   */
+  FULL_REFERENCE = 1,
+
+  /**
+   * @generated from enum value: IMAGE_VALUE_KIND_REPOSITORY = 2;
+   */
+  REPOSITORY = 2,
+
+  /**
+   * @generated from enum value: IMAGE_VALUE_KIND_TAG = 3;
+   */
+  TAG = 3,
+
+  /**
+   * @generated from enum value: IMAGE_VALUE_KIND_DIGEST = 4;
+   */
+  DIGEST = 4,
+}
+
+/**
+ * Describes the enum common.v1.ImageValueKind.
+ */
+export const ImageValueKindSchema: GenEnum<ImageValueKind> = /*@__PURE__*/
+  enumDesc(file_common_v1_domain, 1);
+
+/**
+ * ArtifactType classifies a globally indexed candidate artifact.
+ *
+ * @generated from enum common.v1.ArtifactType
+ */
+export enum ArtifactType {
+  /**
+   * @generated from enum value: ARTIFACT_TYPE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: ARTIFACT_TYPE_IMAGE = 1;
+   */
+  IMAGE = 1,
+
+  /**
+   * @generated from enum value: ARTIFACT_TYPE_CHART = 2;
+   */
+  CHART = 2,
+
+  /**
+   * @generated from enum value: ARTIFACT_TYPE_SBOM = 3;
+   */
+  SBOM = 3,
+
+  /**
+   * @generated from enum value: ARTIFACT_TYPE_PROVENANCE = 4;
+   */
+  PROVENANCE = 4,
+
+  /**
+   * @generated from enum value: ARTIFACT_TYPE_SIGNATURE = 5;
+   */
+  SIGNATURE = 5,
+}
+
+/**
+ * Describes the enum common.v1.ArtifactType.
+ */
+export const ArtifactTypeSchema: GenEnum<ArtifactType> = /*@__PURE__*/
+  enumDesc(file_common_v1_domain, 2);
 
 /**
  * ValuesStatus is the approval state of a values revision.
@@ -556,7 +764,7 @@ export enum ValuesStatus {
  * Describes the enum common.v1.ValuesStatus.
  */
 export const ValuesStatusSchema: GenEnum<ValuesStatus> = /*@__PURE__*/
-  enumDesc(file_common_v1_domain, 1);
+  enumDesc(file_common_v1_domain, 3);
 
 /**
  * ClusterStatus represents the lifecycle state of a cluster.
@@ -584,5 +792,5 @@ export enum ClusterStatus {
  * Describes the enum common.v1.ClusterStatus.
  */
 export const ClusterStatusSchema: GenEnum<ClusterStatus> = /*@__PURE__*/
-  enumDesc(file_common_v1_domain, 2);
+  enumDesc(file_common_v1_domain, 4);
 

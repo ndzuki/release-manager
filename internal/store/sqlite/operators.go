@@ -421,7 +421,12 @@ LIMIT 1
 	if err != nil && err != sql.ErrNoRows {
 		return fmt.Errorf("query active session: %w", err)
 	}
-	if err == nil && activeInstanceID != sess.InstanceID {
+	// An active session with an empty instance_id is the Enroll placeholder
+	// session (Enroll establishes one before the agent opens its first
+	// stream, TASK-075). It has never been claimed by a live agent, so the
+	// first Establish replaces it instead of treating it as a concurrent
+	// connection (REQ-044: only distinct live instances conflict).
+	if err == nil && activeInstanceID != "" && activeInstanceID != sess.InstanceID {
 		return store.ErrDuplicateKey
 	}
 

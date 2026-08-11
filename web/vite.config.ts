@@ -18,8 +18,7 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Proxy all Connect API calls to the backend services.
-      // Auth service Connect endpoint.
+      // Proxy Connect API calls to the development service ports.
       '/auth.v1.AuthService': {
         target: 'http://127.0.0.1:8085',
         changeOrigin: true,
@@ -33,6 +32,7 @@ export default defineConfig({
         changeOrigin: true,
       },
       '/orchestrator.v1.OrchestratorService': {
+
         target: 'http://127.0.0.1:8083',
         changeOrigin: true,
       },
@@ -41,11 +41,11 @@ export default defineConfig({
         changeOrigin: true,
       },
       '/audit.v1.AuditService': {
-        target: 'http://127.0.0.1:8084',
+        target: 'http://127.0.0.1:8087',
         changeOrigin: true,
       },
       '/notifier.v1.NotifierService': {
-        target: 'http://127.0.0.1:8085',
+        target: 'http://127.0.0.1:8086',
         changeOrigin: true,
       },
       '/webhook.v1.WebhookService': {

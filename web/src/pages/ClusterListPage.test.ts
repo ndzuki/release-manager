@@ -5,6 +5,7 @@ import { createMemoryHistory, createRouter } from 'vue-router';
 import ClusterListPage from './ClusterListPage.vue';
 import { listClusters } from '@/connect/cluster-api';
 import type * as ClusterApi from '@/connect/cluster-api';
+import { useAuthStore } from '@/stores/auth';
 
 vi.mock('@/connect/cluster-api', async (importOriginal) => {
   const original = await importOriginal<typeof ClusterApi>();
@@ -19,6 +20,7 @@ beforeEach(() => {
 describe('ClusterListPage', () => {
   it('shows an empty-state creation guide instead of a blank page', async () => {
     vi.mocked(listClusters).mockResolvedValue([]);
+    useAuthStore().$patch({ user: { $typeName: 'auth.v1.SessionUser', id: 'admin-1', username: 'admin', roles: ['release_admin'], activeOrgId: 'org-1' } });
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [

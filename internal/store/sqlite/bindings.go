@@ -30,7 +30,6 @@ func (s *bindingStore) Create(ctx context.Context, binding *store.OrgCustomerBin
 		return fmt.Errorf("begin create binding: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
-
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO org_customer_bindings (id, org_id, customer_id, status, optimistic_version, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -44,6 +43,9 @@ func (s *bindingStore) Create(ctx context.Context, binding *store.OrgCustomerBin
 		return fmt.Errorf("insert binding: %w", err)
 	}
 	if err := insertBindingEvent(ctx, tx, binding); err != nil {
+		return err
+	}
+	if err := bumpAuthorizationSourceVersion(ctx, tx); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -88,7 +90,12 @@ func (s *bindingStore) ListByOrg(ctx context.Context, orgID string) ([]*store.Or
 
 func (s *bindingStore) Update(ctx context.Context, binding *store.OrgCustomerBinding) error {
 	binding.UpdatedAt = time.Now().UTC()
-	result, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin update binding: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
+	result, err := tx.ExecContext(ctx, `
 		UPDATE org_customer_bindings
 		SET status = ?, optimistic_version = ?, updated_at = ?
 		WHERE id = ? AND optimistic_version = ?`,
@@ -105,23 +112,30 @@ func (s *bindingStore) Update(ctx context.Context, binding *store.OrgCustomerBin
 	if rows != 1 {
 		return store.ErrOptimisticLock
 	}
+	if err := insertBindingEvent(ctx, tx, binding); err != nil {
+		return err
+	}
+	if err := bumpAuthorizationSourceVersion(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit update binding: %w", err)
+	}
 	return nil
 }
 
+// SetStatus atomically transitions a binding and appends its immutable event.
 func (s *bindingStore) SetStatus(ctx context.Context, id string, status store.BindingStatus) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin binding status update: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
-
 	now := time.Now().UTC()
 	result, err := tx.ExecContext(ctx, `
 		UPDATE org_customer_bindings
 		SET status = ?, optimistic_version = optimistic_version + 1, updated_at = ?
-		WHERE id = ?`,
-		string(status), now.Format(time.RFC3339), id,
-	)
+		WHERE id = ?`, string(status), now.Format(time.RFC3339), id)
 	if err != nil {
 		return fmt.Errorf("update binding status: %w", err)
 	}
@@ -132,7 +146,6 @@ func (s *bindingStore) SetStatus(ctx context.Context, id string, status store.Bi
 	if rows != 1 {
 		return store.ErrNotFound
 	}
-
 	binding, err := scanBinding(tx.QueryRowContext(ctx, `
 		SELECT id, org_id, customer_id, status, optimistic_version, created_at, updated_at
 		FROM org_customer_bindings WHERE id = ?`, id))
@@ -140,6 +153,9 @@ func (s *bindingStore) SetStatus(ctx context.Context, id string, status store.Bi
 		return err
 	}
 	if err := insertBindingEvent(ctx, tx, binding); err != nil {
+		return err
+	}
+	if err := bumpAuthorizationSourceVersion(ctx, tx); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -221,19 +237,19 @@ func scanBinding(row interface{ Scan(...interface{}) error }) (*store.OrgCustome
 
 func (s *bindingStore) ListByCustomer(ctx context.Context, customerID string) ([]*store.OrgCustomerBinding, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, organization_id, customer_id, status, created_at, updated_at
-		FROM org_customer_bindings WHERE customer_id = ?`, customerID)
+		SELECT id, org_id, customer_id, status, optimistic_version, created_at, updated_at
+		FROM org_customer_bindings WHERE customer_id = ? ORDER BY created_at`, customerID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list bindings by customer: %w", err)
 	}
 	defer rows.Close()
 	var bindings []*store.OrgCustomerBinding
 	for rows.Next() {
-		b := &store.OrgCustomerBinding{}
-		if err := rows.Scan(&b.ID, &b.OrgID, &b.CustomerID, &b.Status, &b.CreatedAt, &b.UpdatedAt); err != nil {
-			return nil, err
+		binding, scanErr := scanBinding(rows)
+		if scanErr != nil {
+			return nil, scanErr
 		}
-		bindings = append(bindings, b)
+		bindings = append(bindings, binding)
 	}
 	return bindings, rows.Err()
 }

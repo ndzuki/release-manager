@@ -2,21 +2,26 @@
 package helmengine
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"os"
 	"strings"
 
 	"helm.sh/helm/v3/pkg/action"
+	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/cli"
 	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage"
 	"helm.sh/helm/v3/pkg/storage/driver"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // RealEngine implements Engine using the Helm Go SDK (helm.sh/helm/v3/pkg/action).
@@ -53,7 +58,6 @@ func (r *RealEngine) SetReleaseStorage(s *storage.Storage) {
 func (r *RealEngine) SetConfigFactory(fn func(namespace string) (*action.Configuration, error)) {
 	r.configFactory = fn
 }
-
 
 // actionConfig creates a new action.Configuration for a single operation.
 // Production uses a Kubernetes Secret driver. Tests may inject an isolated
@@ -130,7 +134,9 @@ func (r *RealEngine) Install(ctx context.Context, opts InstallOptions) (*Release
 	return toEngineRelease(rel), nil
 }
 
-// Upgrade upgrades an existing release.
+// Upgrade upgrades an existing release using the frozen typed command inputs.
+//
+//nolint:gocyclo // The ordered Helm safety gates mirror the approved execution sequence.
 func (r *RealEngine) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
@@ -140,44 +146,124 @@ func (r *RealEngine) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release
 	if err != nil {
 		return nil, fmt.Errorf("initialize Helm upgrade: %w", err)
 	}
-
-	// AC-021-02 / AC-062-02: validate ExpectedRevision before running the upgrade.
-	if opts.ExpectedRevision > 0 {
-		current, statusErr := statusWithConfig(ctx, cfg, opts.Namespace, opts.ReleaseName)
-		if statusErr != nil {
-			return nil, fmt.Errorf("check current revision for %s/%s: %w", opts.Namespace, opts.ReleaseName, statusErr)
+	current, err := helmStatusRelease(ctx, cfg, opts.ReleaseName)
+	if err != nil {
+		return nil, err
+	}
+	if current.Info == nil || current.Info.Status != release.StatusDeployed {
+		if current.Info != nil && current.Info.Status.IsPending() {
+			return nil, fmt.Errorf("release busy: %w", ErrReleaseBusy)
 		}
-		if current.Revision != opts.ExpectedRevision {
-			return nil, fmt.Errorf("%w: expected revision %d, got %d", ErrConflict, opts.ExpectedRevision, current.Revision)
-		}
+		return nil, fmt.Errorf("release is not deployed: %w", ErrReleaseNotDeployed)
 	}
 
-	upgrade := action.NewUpgrade(cfg)
-	upgrade.Version = opts.ChartVersion
+	inputDigest := digestString(strings.Join([]string{
+		opts.BundleDigest,
+		opts.ChartDigest,
+		opts.EffectiveValuesDigest,
+		opts.SecretSnapshotDigest,
+	}, "|"))
+	description := fmt.Sprintf("release-manager operation=%s command=%s", opts.OperationID, opts.CommandID)
+	if current.Info.Description == description && current.Labels["rm_input_digest"] == inputDigest {
+		return decorateRelease(toEngineRelease(current), current, opts, inputDigest), nil
+	}
+	if opts.ExpectedRevision > 0 && current.Version != opts.ExpectedRevision {
+		return nil, fmt.Errorf("expected revision %d, got %d: %w", opts.ExpectedRevision, current.Version, ErrConflict)
+	}
+
+	upgrade := newUpgradeAction(cfg, opts, description, inputDigest)
 	chartPath, err := upgrade.LocateChart(opts.ChartPath, r.settings)
 	if err != nil {
 		return nil, fmt.Errorf("locate Helm chart %q: %w", opts.ChartPath, err)
+	}
+	if opts.ChartDigest != "" && !strings.HasPrefix(opts.ChartPath, "oci://") {
+		chartBytes, err := os.ReadFile(chartPath)
+		if err != nil {
+			return nil, fmt.Errorf("read Helm chart %q: %w", chartPath, err)
+		}
+		if !digestMatches(opts.ChartDigest, chartBytes) {
+			return nil, fmt.Errorf("chart digest mismatch: %w", ErrDigestMismatch)
+		}
 	}
 
 	chrt, err := loader.Load(chartPath)
 	if err != nil {
 		return nil, fmt.Errorf("load Helm chart %q: %w", chartPath, err)
 	}
+	expectedManifestDigest, err := renderUpgradeManifestDigest(ctx, cfg, opts, description, inputDigest, chrt)
+	if err != nil {
+		return nil, mapUpgradePreparationError(ctx, err)
+	}
+	if opts.ExpectedManifestDigest != "" {
+		expectedManifestDigest = opts.ExpectedManifestDigest
+	}
+	upgrade.PostRenderer = &manifestGate{expectedDigest: expectedManifestDigest}
 
+	rel, err := upgrade.RunWithContext(ctx, opts.ReleaseName, chrt, opts.Values)
+	if err != nil && rel == nil {
+		return nil, mapUpgradePreparationError(ctx, err)
+	}
+	if err != nil {
+		active, statusErr := helmStatusRelease(context.WithoutCancel(ctx), cfg, opts.ReleaseName)
+		if statusErr != nil {
+			return nil, fmt.Errorf("upgrade failed and active release lookup failed: %w", ErrAtomicRollbackFailed)
+		}
+		activeResult := decorateRelease(toEngineRelease(active), active, opts, inputDigest)
+		if rel != nil && active.Info != nil && active.Info.Status == release.StatusDeployed && active.Version != rel.Version {
+			return activeResult, mapUpgradePreparationError(ctx, err)
+		}
+		return activeResult, fmt.Errorf("upgrade and atomic rollback failed: %w", ErrAtomicRollbackFailed)
+	}
+	return decorateRelease(toEngineRelease(rel), rel, opts, inputDigest), nil
+}
+
+func newUpgradeAction(cfg *action.Configuration, opts UpgradeOptions, description, inputDigest string) *action.Upgrade {
+	upgrade := action.NewUpgrade(cfg)
+	upgrade.Version = opts.ChartVersion
 	upgrade.Namespace = opts.Namespace
-	upgrade.Atomic = opts.Atomic
+	upgrade.Atomic = true
+	upgrade.CleanupOnFail = false
+	upgrade.ResetValues = true
+	upgrade.ReuseValues = false
+	upgrade.Force = false
+	upgrade.TakeOwnership = false
+	upgrade.DisableHooks = false
+	upgrade.WaitForJobs = true
+	upgrade.MaxHistory = 10
+	upgrade.Description = description
+	upgrade.Labels = map[string]string{"rm_input_digest": inputDigest}
 	if opts.MaxHistory > 0 {
 		upgrade.MaxHistory = opts.MaxHistory
 	}
 	if opts.Timeout > 0 {
 		upgrade.Timeout = opts.Timeout
 	}
+	return upgrade
+}
 
-	rel, err := upgrade.RunWithContext(ctx, opts.ReleaseName, chrt, opts.Values)
+func renderUpgradeManifestDigest(
+	ctx context.Context,
+	cfg *action.Configuration,
+	opts UpgradeOptions,
+	description string,
+	inputDigest string,
+	chrt *chart.Chart,
+) (string, error) {
+	dryRun := newUpgradeAction(cfg, opts, description, inputDigest)
+	dryRun.DryRun = true
+	dryRun.DryRunOption = "client"
+	rel, err := dryRun.RunWithContext(ctx, opts.ReleaseName, chrt, opts.Values)
 	if err != nil {
-		return nil, mapActionError(ctx, "upgrade Helm release", err)
+		return "", err
 	}
-	return toEngineRelease(rel), nil
+	return digestString(rel.Manifest), nil
+}
+
+func mapUpgradePreparationError(ctx context.Context, err error) error {
+	if strings.Contains(err.Error(), "values don't meet the specifications of the schema") {
+		return fmt.Errorf("prepare Helm upgrade: %w", ErrSchemaFailed)
+	}
+	return mapActionError(ctx, "upgrade Helm release", err)
 }
 
 // Rollback rolls back a release to a target revision.
@@ -227,8 +313,8 @@ func (r *RealEngine) Rollback(ctx context.Context, opts RollbackOptions) (*Relea
 	if opts.Timeout > 0 {
 		rollback.Timeout = opts.Timeout
 	}
-	rollback.Wait = true                  // wait for resources to be ready
-	rollback.CleanupOnFail = false        // AC-063-03: preserve original release on failure
+	rollback.Wait = true           // wait for resources to be ready
+	rollback.CleanupOnFail = false // AC-063-03: preserve original release on failure
 
 	if err := rollback.Run(opts.ReleaseName); err != nil {
 		return nil, mapActionError(ctx, "roll back Helm release", err)
@@ -368,6 +454,55 @@ func (r *RealEngine) List(ctx context.Context, namespace string) ([]*ReleaseList
 	return items, nil
 }
 
+type manifestGate struct {
+	expectedDigest string
+}
+
+func (g *manifestGate) Run(rendered *bytes.Buffer) (*bytes.Buffer, error) {
+	if g.expectedDigest != "" && !digestMatches(g.expectedDigest, rendered.Bytes()) {
+		return nil, fmt.Errorf("manifest digest mismatch: %w", ErrRenderDrift)
+	}
+	return bytes.NewBuffer(bytes.Clone(rendered.Bytes())), nil
+}
+
+func helmStatusRelease(ctx context.Context, cfg *action.Configuration, releaseName string) (*release.Release, error) {
+	status := action.NewStatus(cfg)
+	rel, err := status.Run(releaseName)
+	if err != nil {
+		return nil, mapActionError(ctx, "get Helm release status", err)
+	}
+	return rel, nil
+}
+
+func digestMatches(expected string, data []byte) bool {
+	expected = strings.TrimPrefix(expected, "sha256:")
+	sum := sha256.Sum256(data)
+	return strings.EqualFold(expected, fmt.Sprintf("%x", sum))
+}
+
+func decorateRelease(result *Release, rel *release.Release, opts UpgradeOptions, inputDigest string) *Release {
+	if result == nil || rel == nil {
+		return result
+	}
+	result.BundleDigest = opts.BundleDigest
+	result.ChartDigest = opts.ChartDigest
+	result.EffectiveValuesDigest = opts.EffectiveValuesDigest
+	result.Description = ""
+	if rel.Info != nil {
+		result.Description = rel.Info.Description
+	}
+	result.Labels = maps.Clone(rel.Labels)
+	result.Provenance = "legacy"
+	if rel.Info != nil && strings.HasPrefix(rel.Info.Description, "release-manager operation=") && rel.Labels["rm_input_digest"] != "" {
+		result.Provenance = "managed"
+	}
+	if result.Labels == nil {
+		result.Labels = map[string]string{}
+	}
+	result.Labels["rm_input_digest"] = inputDigest
+	return result
+}
+
 // Compile-time check: RealEngine implements Engine.
 var _ Engine = (*RealEngine)(nil)
 
@@ -428,13 +563,16 @@ func contextError(ctx context.Context) error {
 		return nil
 	}
 }
-
 func mapActionError(ctx context.Context, operation string, err error) error {
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
 		return fmt.Errorf("%s: %w", operation, ErrTimeout)
 	case errors.Is(ctx.Err(), context.Canceled), errors.Is(err, context.Canceled):
 		return fmt.Errorf("%s: %w", operation, ErrCancelled)
+	case apierrors.IsForbidden(err):
+		return fmt.Errorf("%s: %w: %v", operation, ErrForbidden, err)
+	case errors.Is(err, ErrRenderDrift):
+		return fmt.Errorf("%s: %w", operation, ErrRenderDrift)
 	case errors.Is(err, driver.ErrReleaseExists), strings.Contains(err.Error(), "cannot re-use a name that is still in use"):
 		return fmt.Errorf("%s: %w", operation, ErrAlreadyExists)
 	case errors.Is(err, driver.ErrReleaseNotFound), errors.Is(err, driver.ErrNoDeployedReleases):

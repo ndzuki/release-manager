@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file common/v1/types.proto.
  */
 export const file_common_v1_types: GenFile = /*@__PURE__*/
-  fileDesc("ChVjb21tb24vdjEvdHlwZXMucHJvdG8SCWNvbW1vbi52MSIzCgpQYWdpbmF0aW9uEhEKCXBhZ2Vfc2l6ZRgBIAEoBRISCgpwYWdlX3Rva2VuGAIgASgJIkEKElBhZ2luYXRpb25SZXNwb25zZRIXCg9uZXh0X3BhZ2VfdG9rZW4YASABKAkSEgoKdG90YWxfc2l6ZRgCIAEoBSJYCgtFcnJvckRldGFpbBIMCgRjb2RlGAEgASgFEg8KB21lc3NhZ2UYAiABKAkSKgoHZGV0YWlscxgDIAMoCzIZLmNvbW1vbi52MS5GaWVsZFZpb2xhdGlvbiI0Cg5GaWVsZFZpb2xhdGlvbhINCgVmaWVsZBgBIAEoCRITCgtkZXNjcmlwdGlvbhgCIAEoCSJkCg5UaW1lc3RhbXBSYW5nZRIpCgVzdGFydBgBIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASJwoDZW5kGAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcEI+WjxnaXRodWIuY29tL25kenVraS9yZWxlYXNlLW1hbmFnZXIvYXBpL2dlbi9jb21tb24vdjE7Y29tbW9udjFiBnByb3RvMw", [file_google_protobuf_timestamp]);
+  fileDesc("ChVjb21tb24vdjEvdHlwZXMucHJvdG8SCWNvbW1vbi52MSIzCgpQYWdpbmF0aW9uEhEKCXBhZ2Vfc2l6ZRgBIAEoBRISCgpwYWdlX3Rva2VuGAIgASgJIkEKElBhZ2luYXRpb25SZXNwb25zZRIXCg9uZXh0X3BhZ2VfdG9rZW4YASABKAkSEgoKdG90YWxfc2l6ZRgCIAEoBSJYCgtFcnJvckRldGFpbBIMCgRjb2RlGAEgASgFEg8KB21lc3NhZ2UYAiABKAkSKgoHZGV0YWlscxgDIAMoCzIZLmNvbW1vbi52MS5GaWVsZFZpb2xhdGlvbiI0Cg5GaWVsZFZpb2xhdGlvbhINCgVmaWVsZBgBIAEoCRITCgtkZXNjcmlwdGlvbhgCIAEoCSJkCg5UaW1lc3RhbXBSYW5nZRIpCgVzdGFydBgBIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASJwoDZW5kGAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCI7Cg9SZXF1ZXN0TWV0YWRhdGESEgoKcmVxdWVzdF9pZBgBIAEoCRIUCgxvcGVyYXRpb25faWQYAiABKAlCPlo8Z2l0aHViLmNvbS9uZHp1a2kvcmVsZWFzZS1tYW5hZ2VyL2FwaS9nZW4vY29tbW9uL3YxO2NvbW1vbnYxYgZwcm90bzM", [file_google_protobuf_timestamp]);
 
 /**
  * Pagination holds cursor-based pagination parameters.
@@ -138,4 +138,28 @@ export type TimestampRange = Message<"common.v1.TimestampRange"> & {
  */
 export const TimestampRangeSchema: GenMessage<TimestampRange> = /*@__PURE__*/
   messageDesc(file_common_v1_types, 4);
+
+/**
+ * RequestMetadata carries tracing identifiers propagated across the system.
+ *
+ * @generated from message common.v1.RequestMetadata
+ */
+export type RequestMetadata = Message<"common.v1.RequestMetadata"> & {
+  /**
+   * @generated from field: string request_id = 1;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: string operation_id = 2;
+   */
+  operationId: string;
+};
+
+/**
+ * Describes the message common.v1.RequestMetadata.
+ * Use `create(RequestMetadataSchema)` to create a new message.
+ */
+export const RequestMetadataSchema: GenMessage<RequestMetadata> = /*@__PURE__*/
+  messageDesc(file_common_v1_types, 5);
 

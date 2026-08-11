@@ -81,7 +81,6 @@ func (tx *Tx) QueryContext(ctx context.Context, query string, args ...any) (*sql
 func (tx *Tx) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	return tx.gorm.WithContext(ctx).Raw(postgresQuery(query), args...).Row()
 }
-
 func (tx *Tx) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
 	connPool, ok := tx.gorm.WithContext(ctx).Statement.ConnPool.(interface {
 		PrepareContext(context.Context, string) (*sql.Stmt, error)
@@ -109,45 +108,61 @@ type scanResultStore struct{ gorm *DB }
 type vulnerabilityExceptionStore struct{ gorm *DB }
 type candidateArtifactStore struct{ gorm *DB }
 type preflightLifecycleStore struct{ gorm *DB }
+type emergencyIntentStore struct{ gorm *DB }
+type convergenceTaskStore struct{ gorm *DB }
+type timelineStore struct{ gorm *DB }
 
 // Store implements store.Store backed by PostgreSQL.
 type Store struct {
-	sqlDB           *sql.DB
-	db              *DB
-	gormDB          *gorm.DB
-	ops             *operationStore
-	operationEvents *operationEventStore
-	defs            *definitionStore
-	vals            *valuesStore
-	valuesApproval  *valuesApprovalStore
-	customers       *customerStore
-	clusters        *clusterStore
-	tokens          *enrollmentTokenStore
-	operators       *operatorStore
-	sessions        *sessionStore
-	outbox          *outboxStore
-	users           *userStore
-	authSess        *authSessionStore
-	orgs            *organizationStore
-	orgMembers      *organizationMemberStore
-	bindings        *bindingStore
-	audit           *auditEventStore
-	notif           *notificationStore
-	auditExports    *auditExportStore
-	bundles         *bundleStore
-	verifs          *verificationStore
-	routes          *clusterRouteStore
-	invs            *inventoryStore
-	trustRoots      *trustRootStore
-	scanResults     *scanResultStore
-	vulnExceptions  *vulnerabilityExceptionStore
-	custEvents      *customerEventStore
-	defEvents       *definitionEventStore
-	preflight       *preflightStore
-	candidateArts   *candidateArtifactStore
-	preflightCycles *preflightLifecycleStore
-	closeOnce       sync.Once
-	closeErr        error
+	sqlDB             *sql.DB
+	db                *DB
+	gormDB            *gorm.DB
+	management        *operatorManagementStore
+	ops               *operationStore
+	operationEvents   *operationEventStore
+	timeline          *timelineStore
+	defs              *definitionStore
+	vals              *valuesStore
+	valuesApproval    *valuesApprovalStore
+	customers         *customerStore
+	clusters          *clusterStore
+	tokens            *enrollmentTokenStore
+	operators         *operatorStore
+	sessions          *sessionStore
+	outbox            *outboxStore
+	users             *userStore
+	authSess          *authSessionStore
+	orgs              *organizationStore
+	orgMembers        *organizationMemberStore
+	bindings          *bindingStore
+	audit             *auditEventStore
+	notif             *notificationStore
+	auditExports      *auditExportStore
+	bundles           *bundleStore
+	verifs            *verificationStore
+	routes            *clusterRouteStore
+	invs              *inventoryStore
+	syncRequests      *inventorySyncRequestStore
+	trustRoots        *trustRootStore
+	scanResults       *scanResultStore
+	vulnExceptions    *vulnerabilityExceptionStore
+	custEvents        *customerEventStore
+	defEvents         *definitionEventStore
+	preflight         *preflightStore
+	candidateArts     *candidateArtifactStore
+	artifactEvents    *artifactEventStore
+	validationOutbox  *validationOutboxStore
+	bundleSubmissions *bundleSubmissionStore
+	eventSubmissions  *artifactEventSubmissionStore
+	preflightCycles   *preflightLifecycleStore
+	executionResults  *executionResultReader
+	rollouts          *rolloutTrackingReader
+	emergencyIntents  *emergencyIntentStore
+	convergenceTasks  *convergenceTaskStore
+	authorization     *authorizationStore
+	idempotency      *idempotencyStore
+	closeOnce         sync.Once
+	closeErr          error
 }
 
 // New constructs a Store over the supplied shared database/sql pool and GORM wrapper.
@@ -177,6 +192,7 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s := &Store{sqlDB: sqlDB, db: &DB{gorm: gormDB}, gormDB: gormDB}
 	s.ops = &operationStore{gorm: s.db}
 	s.operationEvents = &operationEventStore{gorm: s.db}
+	s.timeline = &timelineStore{gorm: s.db}
 	s.defs = &definitionStore{gorm: s.db}
 	s.defEvents = &definitionEventStore{gorm: s.db}
 	s.preflight = &preflightStore{gorm: s.db}
@@ -187,6 +203,7 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s.tokens = &enrollmentTokenStore{gorm: s.db}
 	s.operators = &operatorStore{gorm: s.db}
 	s.sessions = &sessionStore{gorm: s.db}
+	s.management = &operatorManagementStore{gorm: s.db}
 	s.outbox = &outboxStore{gorm: s.db}
 	s.users = &userStore{gorm: s.db}
 	s.authSess = &authSessionStore{gorm: s.db}
@@ -196,8 +213,11 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s.notif = &notificationStore{gorm: s.db}
 	s.audit = &auditEventStore{gorm: s.db}
 	s.bundles = &bundleStore{gorm: s.db}
+	s.artifactEvents = &artifactEventStore{gorm: s.db}
+	s.validationOutbox = &validationOutboxStore{gorm: s.db}
 	s.auditExports = &auditExportStore{gorm: s.db}
 	s.invs = &inventoryStore{gorm: s.db}
+	s.syncRequests = &inventorySyncRequestStore{gorm: s.db}
 	s.verifs = &verificationStore{gorm: s.db}
 	s.custEvents = &customerEventStore{gorm: s.db}
 	s.trustRoots = &trustRootStore{gorm: s.db}
@@ -205,24 +225,64 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s.vulnExceptions = &vulnerabilityExceptionStore{gorm: s.db}
 	s.routes = &clusterRouteStore{gorm: s.db}
 	s.candidateArts = &candidateArtifactStore{gorm: s.db}
+	s.bundleSubmissions = &bundleSubmissionStore{
+		gorm: gormDB, bundles: s.bundles, candidates: s.candidateArts, validation: s.validationOutbox,
+	}
+	s.eventSubmissions = &artifactEventSubmissionStore{
+		gorm: gormDB, events: s.artifactEvents, candidates: s.candidateArts,
+	}
 	s.preflightCycles = &preflightLifecycleStore{gorm: s.db}
+	s.executionResults = &executionResultReader{s: s}
+	s.rollouts = &rolloutTrackingReader{s: s}
+	s.emergencyIntents = &emergencyIntentStore{gorm: s.db}
+	s.convergenceTasks = &convergenceTaskStore{gorm: s.db}
+	s.authorization = &authorizationStore{gorm: s.db}
+	s.idempotency = &idempotencyStore{db: s.db}
 	return s, nil
 }
 
 var _ store.Store = (*Store)(nil)
 var (
-	_ store.ValuesApprovalStore         = (*valuesApprovalStore)(nil)
-	_ store.ValuesApprovalReader        = (*valuesApprovalStore)(nil)
-	_ store.AuditExportStore            = (*auditExportStore)(nil)
-	_ store.TrustRootStore              = (*trustRootStore)(nil)
-	_ store.ScanResultStore             = (*scanResultStore)(nil)
-	_ store.VulnerabilityExceptionStore = (*vulnerabilityExceptionStore)(nil)
-	_ store.CandidateArtifactStore      = (*candidateArtifactStore)(nil)
-	_ store.PreflightLifecycleStore     = (*preflightLifecycleStore)(nil)
+	_ store.ValuesApprovalStore          = (*valuesApprovalStore)(nil)
+	_ store.ValuesApprovalReader         = (*valuesApprovalStore)(nil)
+	_ store.AuditExportStore             = (*auditExportStore)(nil)
+	_ store.TrustRootStore               = (*trustRootStore)(nil)
+	_ store.ScanResultStore              = (*scanResultStore)(nil)
+	_ store.VulnerabilityExceptionStore  = (*vulnerabilityExceptionStore)(nil)
+	_ store.CandidateArtifactStore       = (*candidateArtifactStore)(nil)
+	_ store.ArtifactEventStore           = (*artifactEventStore)(nil)
+	_ store.ValidationOutboxStore        = (*validationOutboxStore)(nil)
+	_ store.BundleSubmissionStore        = (*bundleSubmissionStore)(nil)
+	_ store.ArtifactEventSubmissionStore = (*artifactEventSubmissionStore)(nil)
+	_ store.PreflightLifecycleStore      = (*preflightLifecycleStore)(nil)
+	_ store.InventorySyncRequestStore    = (*inventorySyncRequestStore)(nil)
+	_ store.ValuesApprovalStore          = (*valuesApprovalStore)(nil)
+	_ store.ValuesApprovalReader         = (*valuesApprovalStore)(nil)
+	_ store.AuditExportStore             = (*auditExportStore)(nil)
+	_ store.TrustRootStore               = (*trustRootStore)(nil)
+	_ store.ScanResultStore              = (*scanResultStore)(nil)
+	_ store.VulnerabilityExceptionStore  = (*vulnerabilityExceptionStore)(nil)
+	_ store.CandidateArtifactStore       = (*candidateArtifactStore)(nil)
+	_ store.PreflightLifecycleStore      = (*preflightLifecycleStore)(nil)
+	_ store.InventorySyncRequestStore    = (*inventorySyncRequestStore)(nil)
+	_ store.EmergencyIntentStore         = (*emergencyIntentStore)(nil)
+	_ store.TimelineStore                = (*timelineStore)(nil)
+	_ store.ConvergenceTaskStore         = (*convergenceTaskStore)(nil)
 )
 
-func (s *Store) Operations() store.OperationStore                           { return s.ops }
-func (s *Store) OperationEvents() store.OperationEventStore                 { return s.operationEvents }
+func (s *Store) Operations() store.OperationStore           { return s.ops }
+func (s *Store) OperationEvents() store.OperationEventStore { return s.operationEvents }
+func (s *Store) Timeline() store.TimelineStore               { return s.timeline }
+
+// ExecutionResults returns typed operation result records.
+func (s *Store) ExecutionResults() store.OperationExecutionResultStore { return s.executionResults }
+
+// RolloutTrackings returns rollout observation records.
+func (s *Store) RolloutTrackings() store.RolloutTrackingStore { return s.rollouts }
+
+// UpgradeResults returns the atomic upgrade terminal writer.
+func (s *Store) UpgradeResults() store.UpgradeResultStore { return s }
+
 func (s *Store) Customers() store.CustomerStore                             { return s.customers }
 func (s *Store) Clusters() store.ClusterStore                               { return s.clusters }
 func (s *Store) EnrollmentTokens() store.EnrollmentTokenStore               { return s.tokens }
@@ -241,10 +301,12 @@ func (s *Store) Bindings() store.BindingStore                               { re
 func (s *Store) AuditEvents() store.AuditEventStore                         { return s.audit }
 func (s *Store) Bundles() store.BundleStore                                 { return s.bundles }
 func (s *Store) Notifications() store.NotificationStore                     { return s.notif }
+func (s *Store) Idempotency() store.IdempotencyStore                       { return s.idempotency }
 func (s *Store) Verifications() store.VerificationStore                     { return s.verifs }
 func (s *Store) CustomerEvents() store.CustomerEventStore                   { return s.custEvents }
 func (s *Store) ClusterRoutes() store.ClusterRouteStore                     { return s.routes }
 func (s *Store) Inventories() store.InventoryStore                          { return s.invs }
+func (s *Store) InventorySyncRequests() store.InventorySyncRequestStore     { return s.syncRequests }
 func (s *Store) ValuesApproval() store.ValuesApprovalStore                  { return s.valuesApproval }
 func (s *Store) ValuesApprovalEvidence() store.ValuesApprovalReader         { return s.valuesApproval }
 func (s *Store) AuditExports() store.AuditExportStore                       { return s.auditExports }
@@ -252,7 +314,18 @@ func (s *Store) TrustRoots() store.TrustRootStore                           { re
 func (s *Store) ScanResults() store.ScanResultStore                         { return s.scanResults }
 func (s *Store) VulnerabilityExceptions() store.VulnerabilityExceptionStore { return s.vulnExceptions }
 func (s *Store) CandidateArtifacts() store.CandidateArtifactStore           { return s.candidateArts }
-func (s *Store) PreflightLifecycles() store.PreflightLifecycleStore         { return s.preflightCycles }
+func (s *Store) ArtifactEvents() store.ArtifactEventStore                   { return s.artifactEvents }
+func (s *Store) ValidationOutbox() store.ValidationOutboxStore              { return s.validationOutbox }
+func (s *Store) BundleSubmissions() store.BundleSubmissionStore             { return s.bundleSubmissions }
+func (s *Store) ArtifactEventSubmissions() store.ArtifactEventSubmissionStore {
+	return s.eventSubmissions
+}
+func (s *Store) PreflightLifecycles() store.PreflightLifecycleStore { return s.preflightCycles }
+func (s *Store) EmergencyIntents() store.EmergencyIntentStore       { return s.emergencyIntents }
+func (s *Store) ConvergenceTasks() store.ConvergenceTaskStore       { return s.convergenceTasks }
+
+// Authorization returns the durable authorization state module.
+func (s *Store) Authorization() store.AuthorizationStore { return s.authorization }
 
 func (s *Store) Close() error {
 	if s == nil || s.sqlDB == nil {
@@ -263,6 +336,9 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) DB() *DB        { return s.db }
+
+// OperatorManagement returns the atomic Operator management store.
+func (s *Store) OperatorManagement() store.OperatorManagementStore { return s.management }
 func (s *Store) SQLDB() *sql.DB { return s.sqlDB }
 func (s *Store) GORM() *gorm.DB { return s.gormDB }
 

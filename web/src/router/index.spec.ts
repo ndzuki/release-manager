@@ -15,6 +15,65 @@ describe('auth route guard', () => {
     vi.unstubAllEnvs();
   });
 
+  it('registers and disables release feature routes', () => {
+    const enabled = createAppRouter(createMemoryHistory(), true, true);
+    const inventoryDisabled = createAppRouter(createMemoryHistory(), false, true);
+    const valuesDisabled = createAppRouter(createMemoryHistory(), true, false);
+
+    expect(enabled.resolve('/customers/customer-1/clusters/cluster-1/releases').name).toBe('ReleaseInventory');
+    expect(enabled.resolve('/customers/customer-1/clusters/cluster-1/releases/definition-1/values').name).toBe('ValuesEditor');
+    expect(inventoryDisabled.resolve('/customers/customer-1/clusters/cluster-1/releases').name).toBe('NotFound');
+    expect(valuesDisabled.resolve('/customers/customer-1/clusters/cluster-1/releases/definition-1/values').name).toBe('NotFound');
+  });
+
+  it('registers and disables release operation routes independently', () => {
+    const enabled = createAppRouter(createMemoryHistory(), true, true, true);
+    const disabled = createAppRouter(createMemoryHistory(), true, true, false);
+
+    expect(enabled.resolve('/customers/customer-1/clusters/cluster-1/releases/def-1/operations/new').name).toBe('OperationCreate');
+    expect(enabled.resolve('/customers/customer-1/clusters/cluster-1/releases/def-1/operations/op-1').name).toBe('OperationDetail');
+    expect(disabled.resolve('/customers/customer-1/clusters/cluster-1/releases/def-1/operations/new').name).toBe('NotFound');
+  });
+
+	it('allows only release administrators to enter the operation creation route', async () => {
+		const deployerAuth = useAuthStore();
+		deployerAuth.$patch({
+			status: 'authenticated',
+			initialized: true,
+			user: {
+				$typeName: 'auth.v1.SessionUser',
+				id: 'user-deployer',
+				username: 'deployer',
+				roles: ['deployer'],
+				activeOrgId: 'org-1',
+			},
+		});
+		const deployerRouter = createAppRouter(createMemoryHistory());
+		installAuthGuard(deployerRouter);
+		await deployerRouter.push('/customers/customer-1/clusters/cluster-1/releases/def-1/operations/new');
+		await deployerRouter.isReady();
+		expect(deployerRouter.currentRoute.value.name).toBe('Forbidden');
+
+		setActivePinia(createPinia());
+		const adminAuth = useAuthStore();
+		adminAuth.$patch({
+			status: 'authenticated',
+			initialized: true,
+			user: {
+				$typeName: 'auth.v1.SessionUser',
+				id: 'user-release-admin',
+				username: 'release-admin',
+				roles: ['release_admin'],
+				activeOrgId: 'org-1',
+			},
+		});
+		const adminRouter = createAppRouter(createMemoryHistory());
+		installAuthGuard(adminRouter);
+		await adminRouter.push('/customers/customer-1/clusters/cluster-1/releases/def-1/operations/new');
+		await adminRouter.isReady();
+		expect(adminRouter.currentRoute.value.name).toBe('OperationCreate');
+	});
+
   it('routes an uninitialized installation to first-time setup', async () => {
     const auth = useAuthStore();
     auth.$patch({ status: 'anonymous', initialized: false });

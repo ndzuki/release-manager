@@ -12,6 +12,7 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/store"
@@ -96,7 +97,7 @@ func NewAuthInterceptor(
 				)
 				return nil, authorizationConnectError(err, enforcer.PolicyVersion())
 			}
-			if !usesHandlerAuthorization(procedure) {
+			if !usesHandlerAuthorization(procedure) && procedure != authv1connect.AuthServiceLogoutProcedure {
 				if err := enforcer.Enforce(claims.UserID, domain, object, action); err != nil {
 					logger.Warn(
 						"access denied",
@@ -129,10 +130,88 @@ func NewAuthInterceptor(
 			ctx = authctx.WithActor(ctx, authctx.Actor{
 				UserID: claims.UserID, OrganizationID: domain, Roles: claims.Roles,
 			})
+			ctx = authctx.WithAuthorizationHeader(ctx, req.Header().Get("Authorization"))
 			return next(ctx, req)
 		})
 	}
 	return interceptor
+}
+
+// NewAuthStreamInterceptor applies the same authentication and RBAC policy to streaming RPCs.
+func NewAuthStreamInterceptor(
+	jwt *JWTManager,
+	st store.Store,
+	enforcer *Enforcer,
+	publicMethods map[string]bool,
+	logger *slog.Logger,
+) connect.Interceptor {
+	if st == nil && enforcer != nil {
+		st = enforcer.store
+	}
+	if publicMethods == nil {
+		publicMethods = map[string]bool{}
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return streamAuthInterceptor{jwt: jwt, store: st, enforcer: enforcer, publicMethods: publicMethods, logger: logger}
+}
+
+type streamAuthInterceptor struct {
+	jwt           *JWTManager
+	store         store.Store
+	enforcer      *Enforcer
+	publicMethods map[string]bool
+	logger        *slog.Logger
+}
+
+func (i streamAuthInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc { return next }
+
+func (i streamAuthInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
+	return next
+}
+
+func (i streamAuthInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
+		procedure := conn.Spec().Procedure
+		if i.publicMethods[procedure] {
+			return next(ctx, conn)
+		}
+		token := extractToken(conn.RequestHeader().Get("Authorization"))
+		if token == "" {
+			return connect.NewError(connect.CodeUnauthenticated, errors.New("missing authorization header"))
+		}
+		claims, err := i.jwt.ValidateAccessToken(token)
+		if err != nil {
+			return connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid token: %w", err))
+		}
+		domain := claims.OrgID
+		if domain == "" {
+			return authorizationConnectError(newInvalidActorContext(claims.UserID, "", errors.New("organization is required")), i.enforcer.PolicyVersion())
+		}
+		object, action := mapProcedure(procedure)
+		if object == "" || action == "" {
+			return authorizationConnectError(newInvalidActorContext(claims.UserID, domain, fmt.Errorf("unmapped procedure %q", procedure)), i.enforcer.PolicyVersion())
+		}
+		if err := i.enforcer.Enforce(claims.UserID, domain, object, action); err != nil {
+			i.logger.Warn("stream access denied", "user_id", claims.UserID, "organization_id", domain,
+				"procedure", procedure, "reason_code", authorizationReason(err))
+			return authorizationConnectError(err, i.enforcer.PolicyVersion())
+		}
+		user, err := i.store.Users().Get(ctx, claims.UserID)
+		if err != nil || user.Status != store.UserActive {
+			return connect.NewError(connect.CodeUnauthenticated, errors.New("session revoked"))
+		}
+		active, err := hasActiveSession(ctx, i.store.AuthSessions(), claims.UserID)
+		if err != nil {
+			return connect.NewError(connect.CodeInternal, errors.New("session validation failed"))
+		}
+		if !active {
+			return connect.NewError(connect.CodeUnauthenticated, errors.New("session revoked"))
+		}
+		ctx = authctx.WithActor(ctx, authctx.Actor{UserID: claims.UserID, OrganizationID: domain, Roles: claims.Roles})
+		return next(ctx, conn)
+	}
 }
 
 // Actor is the authenticated identity injected by NewAuthInterceptor.
@@ -200,6 +279,8 @@ func mapServiceToObject(service string) string {
 		return "binding"
 	case strings.Contains(service, "Auth"):
 		return "auth"
+	case strings.Contains(service, "Trust"):
+		return "trust_root"
 	case strings.Contains(service, "Orchestrator"):
 		return "release"
 	default:
@@ -231,18 +312,20 @@ func mapProcedure(procedure string) (object, action string) {
 func mapMethodToAction(method string) string {
 	switch {
 	case strings.HasPrefix(method, "List"), strings.HasPrefix(method, "Get"),
-		strings.HasPrefix(method, "Validate"):
+		strings.HasPrefix(method, "Watch"), strings.HasPrefix(method, "Validate"):
 		return "read"
 	case strings.HasPrefix(method, "Create"), strings.HasPrefix(method, "Add"),
 		strings.HasPrefix(method, "Update"), strings.HasPrefix(method, "Disable"),
 		strings.HasPrefix(method, "Remove"), strings.HasPrefix(method, "Revoke"),
 		strings.HasPrefix(method, "Delete"), strings.HasPrefix(method, "Change"),
 		strings.HasPrefix(method, "Emergency"), strings.HasPrefix(method, "Publish"),
-		strings.HasPrefix(method, "Rollback"), strings.HasPrefix(method, "Configure"),
-		strings.HasPrefix(method, "Sync"), strings.HasPrefix(method, "Logout"),
+		strings.HasPrefix(method, "Rollback"), strings.HasPrefix(method, "Rotate"),
+		strings.HasPrefix(method, "Configure"), strings.HasPrefix(method, "Sync"),
+		strings.HasPrefix(method, "Logout"), strings.HasPrefix(method, "Cancel"),
 		strings.HasPrefix(method, "Refresh"), strings.HasPrefix(method, "Authenticate"),
 		strings.HasPrefix(method, "Submit"), strings.HasPrefix(method, "Approve"),
-		strings.HasPrefix(method, "Reject"):
+		strings.HasPrefix(method, "Reject"), strings.HasPrefix(method, "End"),
+		strings.HasPrefix(method, "Retire"):
 		return "write"
 	default:
 		return ""
@@ -251,7 +334,9 @@ func mapMethodToAction(method string) string {
 
 func usesHandlerAuthorization(procedure string) bool {
 	switch procedure {
-	case orchestratorv1connect.OrchestratorServiceSubmitValuesRevisionProcedure,
+	case authv1connect.AuthorizationServiceGetAuthorizationSnapshotProcedure,
+		authv1connect.AuthorizationServiceSetCapabilityGrantProcedure,
+		orchestratorv1connect.OrchestratorServiceSubmitValuesRevisionProcedure,
 		orchestratorv1connect.OrchestratorServiceApproveValuesRevisionProcedure,
 		orchestratorv1connect.OrchestratorServiceRejectValuesRevisionProcedure:
 		return true

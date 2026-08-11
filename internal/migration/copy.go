@@ -46,8 +46,11 @@ var fkTopology = map[string][]string{
 	"org_customer_bindings":     {"organizations"},
 	"customer_events":           {"customers"},
 	"preflight_lifecycles":      {"operations"},
+	"emergency_intents":         {"operations", "release_definitions"},
+	"convergence_tasks":         {"operations", "release_definitions"},
 	// Tier 2: tables with FKs to tier-1 tables
 	"operation_events":                     {"operations"},
+	"operation_timeline":                   {"operations"},
 	"organization_customer_binding_events": {"org_customer_bindings", "organizations"},
 	"cluster_routes":                       {"clusters"},
 	// Tier 3: cross-cutting (FKs in PostgreSQL schema from migrations)
@@ -313,12 +316,16 @@ var jsonColumns = map[string]map[string]struct{}{
 	"audit_outbox":         {"payload_json": {}},
 	"notification_outbox":  {"payload_json": {}},
 	"operations":           {"actor": {}},
+	"operation_timeline":   {"data": {}},
 	"sessions":             {"capabilities": {}},
 	"audit_events":         {"metadata": {}},
 	"notification_jobs":    {"metadata": {}},
 	"release_bundles":      {"images": {}},
 	"preflight_lifecycles": {"stages": {}},
 	"scan_results":         {"severity_json": {}, "findings_json": {}},
+	"emergency_intents": {
+		"annotation_entries": {}, "promotion_paths": {}, "before_snapshot": {}, "after_snapshot": {},
+	},
 }
 
 func isJSONColumn(table, column string) bool {
