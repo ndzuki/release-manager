@@ -16,6 +16,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/config"
+	contractsinterceptor "github.com/ndzuki/release-manager/internal/contracts/interceptor"
 	"github.com/ndzuki/release-manager/internal/handler"
 	"github.com/ndzuki/release-manager/internal/jwtauth"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
@@ -50,7 +51,11 @@ func (s *apiSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	auditSvc := audit.NewAuditServiceHandler(st, s.emitter, logger)
 	auditPath, auditHandler := auditv1connect.NewAuditServiceHandler(
 		auditSvc,
-		connect.WithInterceptors(audit.NewJWTInterceptor(jwtMgr)),
+		connect.WithInterceptors(
+			contractsinterceptor.NewRequestIDInterceptor(logger),
+			contractsinterceptor.NewErrorSanitizeInterceptor(logger),
+			audit.NewJWTInterceptor(jwtMgr),
+		),
 	)
 	mux.Handle(auditPath, auditHandler)
 

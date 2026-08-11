@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 
+	"connectrpc.com/connect"
 	notifierv1connect "github.com/ndzuki/release-manager/api/gen/notifier/v1/notifierv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
+	contractsinterceptor "github.com/ndzuki/release-manager/internal/contracts/interceptor"
 	"github.com/ndzuki/release-manager/internal/notifier"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
@@ -47,7 +49,13 @@ func (s *notifierSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	logger.Info("store opened", "db", s.dbPath)
 
 	svc := notifier.NewService(st, logger)
-	path, h := notifierv1connect.NewNotifierServiceHandler(svc)
+	path, h := notifierv1connect.NewNotifierServiceHandler(
+		svc,
+		connect.WithInterceptors(
+			contractsinterceptor.NewRequestIDInterceptor(logger),
+			contractsinterceptor.NewErrorSanitizeInterceptor(logger),
+		),
+	)
 	mux.Handle(path, h)
 
 	// Unconfigured channels are rejected during delivery.

@@ -94,7 +94,6 @@ func TestListReleasesValidatesScopeAndCursor(t *testing.T) {
 	}{
 		{name: "customer required", request: &orchestratorv1.ListReleasesRequest{ClusterId: "cluster-a"}, wantCode: connect.CodeInvalidArgument, wantReason: "customer_id_required"},
 		{name: "cluster required", request: &orchestratorv1.ListReleasesRequest{CustomerId: "customer-a"}, wantCode: connect.CodeInvalidArgument, wantReason: "cluster_id_required"},
-		{name: "page size bounded", request: &orchestratorv1.ListReleasesRequest{CustomerId: "customer-a", ClusterId: "cluster-a", PageSize: 201}, wantCode: connect.CodeInvalidArgument, wantReason: "invalid_page_size"},
 		{name: "search bounded", request: &orchestratorv1.ListReleasesRequest{CustomerId: "customer-a", ClusterId: "cluster-a", NameSearch: strings.Repeat("x", 254)}, wantCode: connect.CodeInvalidArgument, wantReason: "name_search_too_long"},
 		{name: "customer missing", request: &orchestratorv1.ListReleasesRequest{CustomerId: "missing", ClusterId: "cluster-a"}, wantCode: connect.CodeNotFound, wantReason: "customer_not_found"},
 		{name: "cluster missing", request: &orchestratorv1.ListReleasesRequest{CustomerId: "customer-a", ClusterId: "missing"}, wantCode: connect.CodeNotFound, wantReason: "cluster_not_found"},
@@ -110,6 +109,23 @@ func TestListReleasesValidatesScopeAndCursor(t *testing.T) {
 			require.ErrorAs(t, err, &connectErr)
 			assert.Equal(t, tt.wantReason, connectErr.Meta().Get("X-Reason-Code"))
 		})
+	}
+}
+
+func TestListReleasesClampsPageSize(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	ctx := context.Background()
+	seedInventoryScope(t, st, "customer-clamp", "cluster-clamp")
+
+	// page_size > 100 不再报错，而是按共享契约 clamp 到 100（REQ-010 输入契约 page_size<=100）。
+	for _, size := range []int32{0, 201} {
+		resp, err := svc.ListReleases(ctx, connect.NewRequest(&orchestratorv1.ListReleasesRequest{
+			CustomerId: "customer-clamp", ClusterId: "cluster-clamp", PageSize: size,
+		}))
+		require.NoError(t, err)
+		assert.Equal(t, int32(0), resp.Msg.GetTotalCount())
+		assert.Empty(t, resp.Msg.GetNextCursor())
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/auth"
 	"github.com/ndzuki/release-manager/internal/authorization"
 	"github.com/ndzuki/release-manager/internal/config"
+	contractsinterceptor "github.com/ndzuki/release-manager/internal/contracts/interceptor"
 	"github.com/ndzuki/release-manager/internal/store"
 	postgresstore "github.com/ndzuki/release-manager/internal/store/postgres"
 	redisstore "github.com/ndzuki/release-manager/internal/store/redis"
@@ -164,6 +165,8 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	}
 	readOnly := authReadOnlyProcedures()
 	interceptorOpt := connect.WithInterceptors(
+		contractsinterceptor.NewRequestIDInterceptor(logger),
+		contractsinterceptor.NewErrorSanitizeInterceptor(logger),
 		authorization.TraceInterceptor(),
 		app.MaintenanceInterceptor(s.cfg.Maintenance, readOnly, logger),
 		auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, publicMethods, logger),

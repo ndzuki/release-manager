@@ -13,11 +13,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ndzuki/release-manager/internal/contracts"
 	"github.com/ndzuki/release-manager/internal/store"
 	"gorm.io/gorm"
 )
-
-const defaultBundlePageSize = 50
 
 var defaultBundleCursorSecret = []byte("release-manager-bundle-pagination-v1")
 
@@ -187,13 +186,7 @@ func loadBundleImages(ctx context.Context, db *gorm.DB, bundleIDs []string) (map
 }
 
 func (s *bundleStore) List(ctx context.Context, filter store.BundleListFilter) (*store.BundlePage, error) {
-	pageSize := filter.PageSize
-	if pageSize <= 0 {
-		pageSize = defaultBundlePageSize
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
+	pageSize := int(contracts.NormalizePageSize(int32(filter.PageSize))) //nolint:gosec // page_size 由输入契约 clamp 到 1-100，int32 转换无溢出。
 	statuses := filter.Statuses
 	if len(statuses) == 0 {
 		statuses = []store.BundleStatus{store.BundleReceived, store.BundleValidated}

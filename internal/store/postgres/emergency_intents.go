@@ -49,9 +49,14 @@ func (s *emergencyIntentStore) CreateIfAvailable(ctx context.Context, command st
 	if err := checkAuthorizationFence(ctx, tx, command.ExpectedAuthorizationVersion); err != nil {
 		return nil, err
 	}
-	replayed, err := lookupEmergencyReplay(ctx, tx, command)
-	if err != nil || replayed != nil {
-		return replayed, err
+	// 空 Key 时跳过全部幂等逻辑，直接业务创建。
+	idempotent := command.IdempotencyKeyHash != ""
+	var replayed *store.EmergencyCreateResult
+	if idempotent {
+		replayed, err = lookupEmergencyReplay(ctx, tx, command)
+		if err != nil || replayed != nil {
+			return replayed, err
+		}
 	}
 
 	var standardCount int
@@ -89,26 +94,30 @@ func (s *emergencyIntentStore) CreateIfAvailable(ctx context.Context, command st
 		}
 	}
 
-	reference := emergencyReplayRef{OperationID: command.Operation.ID, IntentID: command.Intent.ID}
-	if command.ConvergenceTask != nil {
-		reference.ConvergenceTaskID = command.ConvergenceTask.ID
-	}
-	responseRef, err := json.Marshal(reference)
-	if err != nil {
-		return nil, fmt.Errorf("marshal emergency replay reference: %w", err)
-	}
-	expiresAt := command.IdempotencyExpiresAt
-	if expiresAt.IsZero() {
-		expiresAt = time.Now().UTC().Add(emergencyIdempotencyTTL)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO idempotency_records (scope, text_key, request_hash, response_ref, expires_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, command.IdempotencyScope, command.IdempotencyKeyHash, command.RequestHash, responseRef, expiresAt.UTC()); err != nil {
-		if isUniqueConstraint(err) {
-			return nil, store.ErrIdempotencyConflict
+	if idempotent {
+		reference := emergencyReplayRef{OperationID: command.Operation.ID, IntentID: command.Intent.ID}
+		if command.ConvergenceTask != nil {
+			reference.ConvergenceTaskID = command.ConvergenceTask.ID
 		}
-		return nil, fmt.Errorf("insert emergency idempotency record: %w", err)
+		responseRef, err := json.Marshal(reference)
+		if err != nil {
+			return nil, fmt.Errorf("marshal emergency replay reference: %w", err)
+		}
+		expiresAt := command.IdempotencyExpiresAt
+		if expiresAt.IsZero() {
+			expiresAt = time.Now().UTC().Add(emergencyIdempotencyTTL)
+		}
+		existing, created, err := createOrGetIdempotencyRecord(ctx, tx, &store.IdempotencyRecord{
+			Scope: command.IdempotencyScope, Key: command.IdempotencyKeyHash,
+			RequestHash: command.RequestHash, ResponseRef: responseRef, ExpiresAt: expiresAt,
+		}, time.Now().UTC())
+		if err != nil {
+			return nil, err
+		}
+		if !created {
+			// 并发窗口内另一事务已提交相同 scope+key+hash：重放其结果，业务写入随回滚丢弃。
+			return decodeEmergencyReplay(ctx, tx, existing)
+		}
 	}
 	if err := checkAuthorizationFence(ctx, tx, command.ExpectedAuthorizationVersion); err != nil {
 		return nil, err
@@ -141,23 +150,28 @@ func checkAuthorizationFence(ctx context.Context, execer interface {
 }
 
 func lookupEmergencyReplay(ctx context.Context, queryer operationQueryer, command store.EmergencyCreateCommand) (*store.EmergencyCreateResult, error) {
-	var requestHash string
-	var responseRef []byte
-	err := queryer.QueryRowContext(ctx, `
-		SELECT request_hash, response_ref FROM idempotency_records
-		WHERE scope = ? AND text_key = ? AND expires_at > ?
-	`, command.IdempotencyScope, command.IdempotencyKeyHash, time.Now().UTC()).Scan(&requestHash, &responseRef)
-	if errors.Is(err, sql.ErrNoRows) {
+	if command.IdempotencyKeyHash == "" {
+		return nil, nil
+	}
+	record, err := loadActiveIdempotencyRecord(
+		ctx, queryer, command.IdempotencyScope, command.IdempotencyKeyHash, time.Now().UTC(),
+	)
+	if errors.Is(err, store.ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("lookup emergency idempotency: %w", err)
 	}
-	if requestHash != command.RequestHash {
+	if record.RequestHash != command.RequestHash {
 		return nil, store.ErrIdempotencyConflict
 	}
+	return decodeEmergencyReplay(ctx, queryer, record)
+}
+
+// decodeEmergencyReplay 把幂等记录中的重放引用解码为紧急创建重放结果。
+func decodeEmergencyReplay(ctx context.Context, queryer operationQueryer, record *store.IdempotencyRecord) (*store.EmergencyCreateResult, error) {
 	var reference emergencyReplayRef
-	if err := json.Unmarshal(responseRef, &reference); err != nil {
+	if err := json.Unmarshal(record.ResponseRef, &reference); err != nil {
 		return nil, fmt.Errorf("decode emergency replay reference: %w", err)
 	}
 	op, err := getOperation(ctx, queryer, reference.OperationID)

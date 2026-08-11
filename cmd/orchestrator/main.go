@@ -21,6 +21,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/auth"
 	"github.com/ndzuki/release-manager/internal/authorization"
 	"github.com/ndzuki/release-manager/internal/config"
+	contractsinterceptor "github.com/ndzuki/release-manager/internal/contracts/interceptor"
 	"github.com/ndzuki/release-manager/internal/operator"
 	"github.com/ndzuki/release-manager/internal/orchestrator"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
@@ -125,7 +126,13 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("create operator control service: %w", err)
 	}
-	operatorPath, operatorHandler := operatorv1connect.NewOperatorServiceHandler(operatorService)
+	operatorPath, operatorHandler := operatorv1connect.NewOperatorServiceHandler(
+		operatorService,
+		connect.WithInterceptors(
+			contractsinterceptor.NewRequestIDInterceptor(logger),
+			contractsinterceptor.NewErrorSanitizeInterceptor(logger),
+		),
+	)
 	mux.Handle(operatorPath, operatorHandler)
 	emergencyDispatcher := orchestrator.NewEmergencyDispatcher(operatorService)
 	svc := orchestrator.NewService(s.store, verifier, s.targetEnv, s.auditEmitter, emergencyDispatcher, s.authorizer, logger)
@@ -142,6 +149,8 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	path, handler := orchestratorv1connect.NewOrchestratorServiceHandler(
 		svc,
 		connect.WithInterceptors(
+			contractsinterceptor.NewRequestIDInterceptor(logger),
+			contractsinterceptor.NewErrorSanitizeInterceptor(logger),
 			authorization.TraceInterceptor(),
 			app.MaintenanceInterceptor(s.cfg.Maintenance, orchestratorReadOnlyProcedures(), logger),
 			auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, map[string]bool{}, logger),
@@ -158,6 +167,8 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	cleanupPath, cleanupHandler := orchestratorv1connect.NewCleanupServiceHandler(
 		s.cleanup,
 		connect.WithInterceptors(
+			contractsinterceptor.NewRequestIDInterceptor(logger),
+			contractsinterceptor.NewErrorSanitizeInterceptor(logger),
 			app.MaintenanceInterceptor(s.cfg.Maintenance, nil, logger),
 		),
 	)
@@ -169,6 +180,8 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	s.bundleSvc = bundleSvc
 	bundlePath, bundleHandler := orchestratorv1connect.NewBundleServiceHandler(bundleSvc,
 		connect.WithInterceptors(
+			contractsinterceptor.NewRequestIDInterceptor(logger),
+			contractsinterceptor.NewErrorSanitizeInterceptor(logger),
 			auth.TryAllInterceptor(logger,
 				auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, map[string]bool{}, logger),
 				auth.ServiceTokenInterceptor(s.serviceTokens(), logger),
