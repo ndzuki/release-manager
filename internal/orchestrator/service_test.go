@@ -38,7 +38,7 @@ func setupService(t *testing.T) (*Service, store.Store, func()) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	verifier := trust.NewStubVerifier(st.Verifications(), nil, logger)
 	svc := NewService(st, verifier, "staging", nil, authorization.NewStoreAuthorizer(st), logger)
-	for _, id := range []string{"bundle-001", "bundle-002", "bundle-upgrade", "bundle-flow"} {
+	for _, id := range []string{"bundle-001", "bundle-002", "bundle-upgrade"} {
 		seedTestBundle(t, st, id)
 	}
 

@@ -13,11 +13,15 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
+	trustv1 "github.com/ndzuki/release-manager/api/gen/trust/v1"
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	"github.com/ndzuki/release-manager/internal/store"
+	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
 
 type ed25519Resolver struct {
@@ -333,4 +337,63 @@ func generateEd25519KeyPair(t *testing.T) (string, ed25519.PrivateKey) {
 	der, err := x509.MarshalPKIXPublicKey(publicKey)
 	require.NoError(t, err)
 	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})), privateKey
+}
+
+func TestEd25519Verifier_ExpiredGraceRootNotTrusted(t *testing.T) {
+	// 真实链路：TrustService 创建/轮换 root → StoreResolver → Ed25519Verifier。
+	// 锁定反例：grace 窗口过期后旧 key 必须 rejected（REQ-043 AC-043-02 / AC-074-03 反例）。
+	ctx := t.Context()
+	st, err := sqlitestore.Open(t.TempDir() + "/grace.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+
+	service := NewTrustService(st.TrustRoots(), nil, logger())
+	oldPublicKeyPEM, oldPrivateKey := generateEd25519KeyPair(t)
+	newPublicKeyPEM, _ := generateEd25519KeyPair(t)
+	createResp, err := service.CreateTrustRoot(ctx, connect.NewRequest(&trustv1.CreateTrustRootRequest{
+		Environment: "staging", KeyId: "key-old", PublicKeyPem: oldPublicKeyPEM, Issuer: "release-manager-ci",
+	}))
+	require.NoError(t, err)
+	oldRootID := createResp.Msg.GetRoot().GetId()
+	_, err = service.RotateTrustRoot(ctx, connect.NewRequest(&trustv1.RotateTrustRootRequest{
+		Environment: "staging", OldRootId: oldRootID,
+		KeyId: "key-new", PublicKeyPem: newPublicKeyPEM, Issuer: "backup-ci",
+		GraceUntil: timestamppb.New(time.Now().UTC().Add(time.Hour)),
+	}))
+	require.NoError(t, err)
+
+	verifier := NewEd25519Verifier(st.Verifications(), NewStoreResolver(st.TrustRoots()), time.Second, logger())
+	digest := "sha256:" + fmt.Sprintf("%064x", 77)
+	input := Input{
+		Digest: digest,
+		SignatureRef: &commonv1.SignatureRef{
+			Digest: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(oldPrivateKey, []byte(digest))),
+			Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
+		},
+		Policy: DefaultPolicy("staging"), Environment: "staging",
+	}
+
+	// grace 窗口内：旧 key 仍受信。
+	withinGrace, err := verifier.Verify(ctx, input)
+	require.NoError(t, err)
+	assert.Equal(t, store.VerificationTrusted, withinGrace.Status)
+
+	// 时间推进：grace 窗口关闭（模拟未调用 EndGrace、仅时间流逝）。
+	old, err := st.TrustRoots().Get(ctx, oldRootID)
+	require.NoError(t, err)
+	expired := time.Now().UTC().Add(-time.Minute)
+	old.GraceUntil = &expired
+	require.NoError(t, st.TrustRoots().Update(ctx, old))
+
+	// 新 digest 无缓存：过期 grace root 不再参与验证 → untrusted_issuer rejected。
+	newDigest := "sha256:" + fmt.Sprintf("%064x", 78)
+	input.Digest = newDigest
+	input.SignatureRef = &commonv1.SignatureRef{
+		Digest: newDigest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(oldPrivateKey, []byte(newDigest))),
+		Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
+	}
+	afterGrace, err := verifier.Verify(ctx, input)
+	require.NoError(t, err)
+	assert.Equal(t, store.VerificationRejected, afterGrace.Status)
+	assert.Contains(t, afterGrace.Summary, "untrusted_issuer")
 }

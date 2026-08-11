@@ -346,6 +346,120 @@ func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 	assert.NotEqual(t, "spoofed-operator", events[0].ActorID)
 }
 
+func TestTrustServiceMaintenanceGate(t *testing.T) {
+	const (
+		signingKey      = "trust-maintenance-signing-key"
+		organizationID  = "org-trust-maintenance"
+		platformAdminID = "platform-admin-maintenance"
+	)
+	ctx := t.Context()
+	dbPath := t.TempDir() + "/orchestrator.db"
+	seedStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Trust Maintenance Org"}))
+	require.NoError(t, seedStore.Users().Create(ctx, &store.User{ID: platformAdminID, Username: platformAdminID, PasswordHash: "unused", Status: store.UserActive}))
+	require.NoError(t, seedStore.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: organizationID, UserID: platformAdminID, Role: store.RolePlatformAdmin}))
+	require.NoError(t, seedStore.AuthSessions().Create(ctx, &store.AuthSession{
+		ID: uuid.NewString(), UserID: platformAdminID, TokenFamily: uuid.NewString(), RefreshTokenHash: uuid.NewString(),
+		ExpiresAt: time.Now().UTC().Add(time.Hour),
+	}))
+	require.NoError(t, seedStore.Close())
+
+	mux := http.NewServeMux()
+	authStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
+	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	svc.Configure(&config.ServiceConfig{
+		Database:    config.DatabaseConfig{Driver: "sqlite", DSN: dbPath},
+		Maintenance: true,
+	})
+	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
+	t.Cleanup(func() { require.NoError(t, svc.Shutdown(context.Background())) })
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	adminToken, _, err := jwtManager.GenerateAccessToken(platformAdminID, organizationID, []string{string(store.RolePlatformAdmin)})
+	require.NoError(t, err)
+	trustClient := trustv1connect.NewTrustServiceClient(server.Client(), server.URL)
+
+	// maintenance allowlist：GetTrustPolicy 在 handler 前放行。
+	getPolicy := connect.NewRequest(&trustv1.GetTrustPolicyRequest{Environment: "staging"})
+	getPolicy.Header().Set("Authorization", "Bearer "+adminToken)
+	policyResponse, err := trustClient.GetTrustPolicy(ctx, getPolicy)
+	require.NoError(t, err)
+	require.NotNil(t, policyResponse.Msg.GetPolicy())
+
+	// maintenance 拦截器：五个写 RPC 在 auth/handler 前拒绝，platform_admin 也不例外。
+	publicKeyPEM, _ := testEd25519KeyPair(t)
+	writes := []struct {
+		name   string
+		call   func() error
+	}{
+		{
+			name: "create",
+			call: func() error {
+				req := connect.NewRequest(&trustv1.CreateTrustRootRequest{
+					Environment: "staging", KeyId: "key-maintenance", PublicKeyPem: publicKeyPEM, Issuer: "release-manager-ci",
+				})
+				req.Header().Set("Authorization", "Bearer "+adminToken)
+				_, err := trustClient.CreateTrustRoot(ctx, req)
+				return err
+			},
+		},
+		{
+			name: "rotate",
+			call: func() error {
+				req := connect.NewRequest(&trustv1.RotateTrustRootRequest{
+					Environment: "staging", OldRootId: "root-none", KeyId: "key-maintenance-rotate",
+					PublicKeyPem: publicKeyPEM, Issuer: "release-manager-ci",
+				})
+				req.Header().Set("Authorization", "Bearer "+adminToken)
+				_, err := trustClient.RotateTrustRoot(ctx, req)
+				return err
+			},
+		},
+		{
+			name: "end_grace",
+			call: func() error {
+				req := connect.NewRequest(&trustv1.EndGraceRequest{Environment: "staging", RootId: "root-none"})
+				req.Header().Set("Authorization", "Bearer "+adminToken)
+				_, err := trustClient.EndGrace(ctx, req)
+				return err
+			},
+		},
+		{
+			name: "retire",
+			call: func() error {
+				req := connect.NewRequest(&trustv1.RetireTrustRootRequest{Environment: "staging", RootId: "root-none"})
+				req.Header().Set("Authorization", "Bearer "+adminToken)
+				_, err := trustClient.RetireTrustRoot(ctx, req)
+				return err
+			},
+		},
+		{
+			name: "revoke",
+			call: func() error {
+				req := connect.NewRequest(&trustv1.RevokeTrustRootRequest{Environment: "staging", RootId: "root-none"})
+				req.Header().Set("Authorization", "Bearer "+adminToken)
+				_, err := trustClient.RevokeTrustRoot(ctx, req)
+				return err
+			},
+		},
+	}
+	for _, tt := range writes {
+		t.Run("write rejected: "+tt.name, func(t *testing.T) {
+			err := tt.call()
+			require.Error(t, err)
+			assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+			assert.ErrorContains(t, err, "maintenance")
+		})
+	}
+}
+
 func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
 	const (
 		signingKey       = "trust-unavailable-signing-key"

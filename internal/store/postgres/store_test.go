@@ -1059,6 +1059,35 @@ func TestTrustAndVulnerabilityAccessors(t *testing.T) {
 	assert.Equal(t, exception.Reason, gotException.Reason)
 }
 
+func TestTrustRootsGetActiveGraceWindow(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	expired := now.Add(-time.Hour)
+	live := now.Add(24 * time.Hour)
+
+	roots := []*store.TrustRoot{
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-active", PublicKeyPEM: "pem", Issuer: "active-ci", State: store.TrustRootActive, ValidFrom: now.Add(-2 * time.Hour)},
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-grace-live", PublicKeyPEM: "pem", Issuer: "grace-ci", State: store.TrustRootGrace, ValidFrom: now.Add(-time.Hour), GraceUntil: &live},
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-grace-open", PublicKeyPEM: "pem", Issuer: "open-grace-ci", State: store.TrustRootGrace, ValidFrom: now.Add(-time.Hour)},
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-grace-expired", PublicKeyPEM: "pem", Issuer: "expired-ci", State: store.TrustRootGrace, ValidFrom: now.Add(-48 * time.Hour), GraceUntil: &expired},
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-future", PublicKeyPEM: "pem", Issuer: "future-ci", State: store.TrustRootActive, ValidFrom: now.Add(48 * time.Hour)},
+		{ID: uuid.NewString(), Environment: "staging", KeyID: "key-pending", PublicKeyPEM: "pem", Issuer: "pending-ci", State: store.TrustRootPending, ValidFrom: now.Add(-time.Hour)},
+		{ID: uuid.NewString(), Environment: "production", KeyID: "key-other-env", PublicKeyPEM: "pem", Issuer: "other-ci", State: store.TrustRootActive, ValidFrom: now.Add(-time.Hour)},
+	}
+	for _, root := range roots {
+		require.NoError(t, st.TrustRoots().Create(ctx, root))
+	}
+
+	got, err := st.TrustRoots().GetActiveByEnvironment(ctx, "staging", now)
+	require.NoError(t, err)
+	var keys []string
+	for _, root := range got {
+		keys = append(keys, root.KeyID)
+	}
+	assert.ElementsMatch(t, []string{"key-active", "key-grace-live", "key-grace-open"}, keys)
+}
+
 func TestAuditExportAtomicPersistence(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
