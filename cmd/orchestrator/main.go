@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -24,6 +25,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/config"
 	contractsinterceptor "github.com/ndzuki/release-manager/internal/contracts/interceptor"
 	"github.com/ndzuki/release-manager/internal/operator"
+	"github.com/ndzuki/release-manager/internal/operator/ca"
 	"github.com/ndzuki/release-manager/internal/orchestrator"
 	"github.com/ndzuki/release-manager/internal/orchestrator/operation"
 	"github.com/ndzuki/release-manager/internal/store"
@@ -40,6 +42,7 @@ type orchSvc struct {
 	configPath string
 	authURL    string
 
+	gateway       *http.Server
 	store         store.Store
 	cleanup       *orchestrator.CleanupService
 	emergency     *orchestrator.Service
@@ -55,6 +58,77 @@ type orchSvc struct {
 func (s *orchSvc) Name() string { return "release-orchestrator" }
 
 func (s *orchSvc) Configure(cfg *config.ServiceConfig) { s.cfg = *cfg }
+
+// extraServers reports the agent gateway listener so app.Run starts and
+// shuts it down together with the management-plane listener (TASK-075 plan
+// v1 Step 2/3). The gateway is nil unless enabled by configuration.
+//
+//nolint:unused // implemented for the unexported internal/app extraServersProvider seam (type-asserted at runtime)
+func (s *orchSvc) extraServers() ([]*http.Server, error) {
+	if s.gateway == nil {
+		return nil, nil
+	}
+	return []*http.Server{s.gateway}, nil
+}
+
+// buildGatewayServer assembles the mTLS agent gateway listener (TASK-075 plan
+// v1 Step 3): a CA-signed server certificate, client certificates verified
+// when presented (VerifyClientCertIfGiven), and only the OperatorService
+// handler mounted. Enroll accepts certificate-less requests; CommandStream
+// enforces client certificates inside the handler (mixed mTLS contract).
+func (s *orchSvc) buildGatewayServer(
+	gatewayCfg config.GatewayCfg,
+	caInst *ca.CA,
+	operatorService *operator.Service,
+	logger *slog.Logger,
+) (*http.Server, error) {
+	serverCertPEM, serverKeyPEM, err := caInst.SignServerCert([]string{
+		"operator-gateway.dev.release-manager.local",
+		"localhost",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sign gateway server certificate: %w", err)
+	}
+	serverCert, err := tls.X509KeyPair(serverCertPEM, serverKeyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("load gateway server certificate: %w", err)
+	}
+
+	gmux := http.NewServeMux()
+	path, handler := operatorv1connect.NewOperatorServiceHandler(
+		operatorService,
+		connect.WithInterceptors(
+			contractsinterceptor.NewRequestIDInterceptor(logger),
+			contractsinterceptor.NewErrorSanitizeInterceptor(logger),
+		),
+	)
+	gmux.Handle(path, gatewayTLSStateMiddleware(handler))
+
+	return &http.Server{
+		Addr:              fmt.Sprintf(":%d", gatewayCfg.Port),
+		Handler:           gmux,
+		ReadHeaderTimeout: 10 * time.Second,
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{serverCert},
+			ClientAuth:   tls.VerifyClientCertIfGiven,
+			ClientCAs:    caInst.CertPool(),
+			MinVersion:   tls.VersionTLS13,
+			NextProtos:   []string{"h2", "http/1.1"},
+		},
+	}, nil
+}
+
+// gatewayTLSStateMiddleware injects the TLS connection state of the gateway
+// listener into the request context so CommandStream can enforce the mTLS
+// identity path (TASK-075 plan v1 Step 3).
+func gatewayTLSStateMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS != nil {
+			r = r.WithContext(operator.WithTLSState(r.Context(), r.TLS))
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func (s *orchSvc) Shutdown(ctx context.Context) error {
 	var result error
@@ -133,9 +207,32 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		trustConfig.VerificationTimeout,
 		logger,
 	)
-	operatorService, err := operator.NewService(s.store, logger, s.auditEmitter)
+	// Agent gateway (TASK-075 plan v1 Step 3): a second TLS listener serving
+	// only the OperatorService handler for customer cluster agents. A
+	// persisted CA keeps the trust chain stable across restarts; the service
+	// shares it via WithCA so Enroll signs certificates from the same CA the
+	// listener verifies against.
+	gatewayCfg := s.cfg.Gateway.WithDefaults()
+	gatewayOpts := []operator.Option{operator.WithAudit(s.auditEmitter)}
+	operatorService, err := operator.NewService(s.store, logger, gatewayOpts...)
 	if err != nil {
 		return fmt.Errorf("create operator control service: %w", err)
+	}
+	if gatewayCfg.Enabled {
+		caInst, err := ca.LoadOrCreate(ca.Config{TTL: 7 * 24 * time.Hour}, gatewayCfg.CAKeyPath, gatewayCfg.CACertPath)
+		if err != nil {
+			return fmt.Errorf("load gateway CA: %w", err)
+		}
+		gatewayOpts = append(gatewayOpts, operator.WithCA(caInst))
+		operatorService, err = operator.NewService(s.store, logger, gatewayOpts...)
+		if err != nil {
+			return fmt.Errorf("create gateway operator service: %w", err)
+		}
+		s.gateway, err = s.buildGatewayServer(gatewayCfg, caInst, operatorService, logger)
+		if err != nil {
+			return err
+		}
+		logger.Info("agent gateway enabled", "addr", s.gateway.Addr, "ca_cert", gatewayCfg.CACertPath)
 	}
 	operatorPath, operatorHandler := operatorv1connect.NewOperatorServiceHandler(
 		operatorService,

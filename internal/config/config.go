@@ -108,6 +108,55 @@ type ServiceConfig struct {
 	Redis         RedisConfig      `mapstructure:"redis"`
 	Maintenance   bool             `mapstructure:"maintenance"`
 	Authorization AuthorizationCfg `mapstructure:"authorization"`
+	Gateway       GatewayCfg       `mapstructure:"gateway"`
+	Agent         AgentCfg         `mapstructure:"agent"`
+	CA            OperatorCACfg    `mapstructure:"ca"`
+}
+
+// AgentCfg controls the operator agent mode (TASK-075): the agent bootstraps
+// its identity via enrollment token and connects to the gateway over mTLS.
+// Mode "agent" is the default; "gateway" keeps the management-plane operator
+// deployment (store + handler) that TASK-065 removes.
+type AgentCfg struct {
+	Mode                string `mapstructure:"mode"`
+	CustomerID          string `mapstructure:"customer_id"`
+	ClusterID           string `mapstructure:"cluster_id"`
+	OperatorName        string `mapstructure:"operator_name"`
+	EnrollmentTokenFile string `mapstructure:"enrollment_token_file"`
+}
+
+// WithDefaults returns the agent config with the default mode applied.
+func (c AgentCfg) WithDefaults() AgentCfg {
+	if c.Mode == "" {
+		c.Mode = "agent"
+	}
+	return c
+}
+
+// OperatorCACfg points the operator agent at the gateway CA certificate used
+// as the mTLS trust anchor.
+type OperatorCACfg struct {
+	CertPath string `mapstructure:"cert_path"`
+}
+
+// GatewayCfg controls the agent mTLS gateway listener (TASK-075): a second
+// TLS listener that serves only the OperatorService handler for customer
+// cluster agents. Enroll accepts certificate-less requests; CommandStream
+// enforces client certificates (mixed mTLS contract, plan v1 Step 3).
+type GatewayCfg struct {
+	Enabled    bool   `mapstructure:"enabled"`
+	Port       int    `mapstructure:"port"`
+	CAKeyPath  string `mapstructure:"ca_key_path"`
+	CACertPath string `mapstructure:"ca_cert_path"`
+}
+
+// WithDefaults returns bounded defaults for omitted gateway configuration.
+// The gateway stays disabled unless explicitly enabled.
+func (c GatewayCfg) WithDefaults() GatewayCfg {
+	if c.Port == 0 {
+		c.Port = 8084
+	}
+	return c
 }
 
 // AuthorizationCfg controls Authorization Snapshot polling and policy reload.
@@ -135,7 +184,6 @@ func (c AuthorizationCfg) WithDefaults() AuthorizationCfg {
 	return c
 }
 
-// AuditCfg holds audit-related service configuration.
 type AuditCfg struct {
 	Archive ArchiveCfg `mapstructure:"archive"`
 }
@@ -147,7 +195,6 @@ func bindDatabaseEnvironment(v *viper.Viper) error {
 		"database.max_open_conns":              "DATABASE_MAX_OPEN_CONNS",
 		"database.max_idle_conns":              "DATABASE_MAX_IDLE_CONNS",
 		"database.conn_max_lifetime":           "DATABASE_CONN_MAX_LIFETIME",
-		"database.conn_max_idle_time":          "DATABASE_CONN_MAX_IDLE_TIME",
 		"redis.address":                        "REDIS_ADDRESS",
 		"redis.password":                       "REDIS_PASSWORD",
 		"redis.db":                             "REDIS_DB",
@@ -156,6 +203,15 @@ func bindDatabaseEnvironment(v *viper.Viper) error {
 		"authorization.pull_interval":          "AUTHORIZATION_PULL_INTERVAL",
 		"authorization.pull_backoff_max":       "AUTHORIZATION_PULL_BACKOFF_MAX",
 		"authorization.policy_reload_interval": "AUTHORIZATION_POLICY_RELOAD_INTERVAL",
+		"gateway.enabled":                      "GATEWAY_ENABLED",
+		"gateway.port":                         "GATEWAY_PORT",
+		"gateway.ca_key_path":                  "GATEWAY_CA_KEY_PATH",
+		"gateway.ca_cert_path":                 "GATEWAY_CA_CERT_PATH",
+		"agent.customer_id":                    "CUSTOMER_ID",
+		"agent.cluster_id":                     "CLUSTER_ID",
+		"agent.operator_name":                  "OPERATOR_NAME",
+		"agent.enrollment_token_file":          "ENROLLMENT_TOKEN_FILE",
+		"ca.cert_path":                         "CA_CERT_PATH",
 	}
 	for key, envName := range bindings {
 		if err := v.BindEnv(key, envName); err != nil {
