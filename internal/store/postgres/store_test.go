@@ -1248,16 +1248,21 @@ func TestNotificationStoreConcurrentClaim(t *testing.T) {
 			MaxRetries: 3, CreatedAt: now, UpdatedAt: now,
 		}))
 	}
+
 	const workers = 8
 	claimed := make(chan string, jobs)
+	claimErrs := make(chan error, workers)
 	var wg sync.WaitGroup
-	for w := 0; w < workers; w++ {
+	for range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for {
 				j, err := st.Notifications().ClaimNext(ctx, now.Add(time.Hour))
-				require.NoError(t, err)
+				if err != nil {
+					claimErrs <- err
+					return
+				}
 				if j == nil {
 					return // drained
 				}
@@ -1267,6 +1272,10 @@ func TestNotificationStoreConcurrentClaim(t *testing.T) {
 	}
 	wg.Wait()
 	close(claimed)
+	close(claimErrs)
+	for err := range claimErrs {
+		require.NoError(t, err)
+	}
 
 	seen := map[string]int{}
 	for id := range claimed {
