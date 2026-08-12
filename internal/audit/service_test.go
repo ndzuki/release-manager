@@ -22,7 +22,7 @@ func TestService_EmitReturnsAcceptedIDsAndRejections(t *testing.T) {
 		}
 		return Result{EventID: eventID, Accepted: true}
 	}))
-	response, err := service.Emit(t.Context(), connect.NewRequest(&auditv1.EmitRequest{Events: []*auditv1.AuditEvent{
+	response, err := service.Emit(t.Context(), connect.NewRequest(&auditv1.EmitAuditRequest{Events: []*auditv1.AuditEvent{
 		{Id: "accepted", Actor: &auditv1.AuditActor{Kind: auditv1.ActorKind_ACTOR_KIND_API_KEY, Id: "key-1"}, ResourceType: "release", Action: "update", Status: "accepted"},
 		{Id: "reject", Actor: &auditv1.AuditActor{Kind: auditv1.ActorKind_ACTOR_KIND_SERVICE, Id: "svc-1"}, ResourceType: "release", Action: "update", Status: "accepted"},
 	}}))

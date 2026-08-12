@@ -779,15 +779,12 @@ type AuditEvent struct {
 	ID             string
 	ActorKind      AuditActorKind
 	ActorID        string
-	ActorName      string
 	OrganizationID string
 	Role           string
 	ResourceType   string
 	ResourceID     string
 	Action         string
 	Status         string
-	OperationID    string
-	RequestID      string
 	DurationMs     int64
 	ChangeSummary  string
 	Metadata       map[string]string
@@ -800,9 +797,8 @@ type AuditEventFilter struct {
 	ResourceType   string
 	ResourceID     string
 	ActorID        string
-	Actions        []string
-	Statuses       []string
-	OperationID    string
+	Action         string
+	Status         string
 	Since          *time.Time
 	Until          *time.Time
 }
@@ -821,10 +817,7 @@ type AuditExport struct {
 	Since          time.Time
 	Until          time.Time
 	Status         string
-	DownloadURL    string
-	ErrorMessage   string
 	CreatedAt      time.Time
-	CompletedAt    *time.Time
 }
 
 // NotificationChannel is the delivery channel for a notification.
@@ -1642,8 +1635,6 @@ type AuditEventStore interface {
 
 type AuditExportStore interface {
 	CreateWithEvent(ctx context.Context, exportRecord *AuditExport, event *AuditEvent) error
-	Get(ctx context.Context, id string) (*AuditExport, error)
-	UpdateStatus(ctx context.Context, id, status, downloadURL, errorMessage string, completedAt *time.Time) error
 }
 
 // NotificationStore defines the persistence contract for notification jobs (REQ-031).
