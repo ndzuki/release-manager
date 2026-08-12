@@ -63,8 +63,6 @@ function actorLabel(event: AuditEvent): string {
             <td>{{ formatTime(event) }}</td>
             <td>
               <strong>{{ actorLabel(event) }}</strong>
-              <small v-if="event.actor?.displayName">{{ event.actor.displayName }}</small>
-              <small v-if="event.actor?.role">{{ event.actor.role }}</small>
             </td>
             <td>
               <strong>{{ event.resourceType || '—' }}</strong>
@@ -72,7 +70,6 @@ function actorLabel(event: AuditEvent): string {
             </td>
             <td>
               {{ event.action || '—' }}
-              <small v-if="event.operationId">{{ event.operationId }}</small>
             </td>
             <td><span class="audit-status">{{ event.status || '—' }}</span></td>
             <td>{{ event.durationMs }} ms</td>

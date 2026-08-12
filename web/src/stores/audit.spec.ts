@@ -3,6 +3,7 @@ import { Code, ConnectError } from '@connectrpc/connect';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { auditClient } from '@/connect/client';
 import { emptyAuditFilters, filtersFromQuery, filtersToQuery, useAuditStore } from './audit';
+import type { AuditEvent, ExportAuditEventsResponse, QueryAuditEventsResponse } from '@/gen/audit/v1/audit_pb';
 
 vi.mock('@/connect/client', () => ({
   auditClient: {
@@ -16,7 +17,7 @@ const exportAuditEvents = vi.mocked(auditClient.exportAuditEvents);
 
 const ORG = 'org-1';
 
-function auditEvent(id: string, overrides: Partial<Record<string, unknown>> = {}) {
+function auditEvent(id: string, overrides: Partial<AuditEvent> = {}): AuditEvent {
   return {
     $typeName: 'audit.v1.AuditEvent' as const,
     id,
@@ -38,12 +39,14 @@ function auditEvent(id: string, overrides: Partial<Record<string, unknown>> = {}
   };
 }
 
-function queryResponse(events: ReturnType<typeof auditEvent>[], nextPageToken = '') {
+function queryResponse(events: AuditEvent[], nextPageToken = ''): QueryAuditEventsResponse {
   return {
+    $typeName: 'audit.v1.QueryAuditEventsResponse' as const,
     events,
-    pagination: { nextPageToken, totalSize: 100 },
+    pagination: { $typeName: 'common.v1.PaginationResponse' as const, nextPageToken, totalSize: 100 },
   };
 }
+
 
 function connectError(code: Code, message: string, reason?: string): ConnectError {
   const error = new ConnectError(message, code);
@@ -177,7 +180,7 @@ describe('audit query store', () => {
 
   it('creates an export receipt with the correlation ID and status (AC-059-04)', async () => {
     const store = useAuditStore();
-    exportAuditEvents.mockResolvedValueOnce({ exportId: 'export-1', status: 'pending' });
+    exportAuditEvents.mockResolvedValueOnce({ $typeName: 'audit.v1.ExportAuditEventsResponse' as const, exportId: 'export-1', status: 'pending' } satisfies ExportAuditEventsResponse);
     await store.exportEvents(ORG);
     expect(store.exportTasks[0]).toEqual({ taskId: 'export-1', status: 'pending' });
     expect(exportAuditEvents).toHaveBeenCalledWith(

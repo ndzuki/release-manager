@@ -42,14 +42,6 @@ function formatTime(event: AuditEvent): string {
         <dt>Actor</dt>
         <dd>{{ actorKindLabels[props.event.actor?.kind ?? ActorKind.UNSPECIFIED] }}:{{ props.event.actor?.id || 'unknown' }}</dd>
       </div>
-      <div v-if="props.event.actor?.displayName">
-        <dt>Actor name</dt>
-        <dd>{{ props.event.actor.displayName }}</dd>
-      </div>
-      <div v-if="props.event.actor?.role">
-        <dt>Role</dt>
-        <dd>{{ props.event.actor.role }}</dd>
-      </div>
       <div>
         <dt>Resource</dt>
         <dd>{{ props.event.resourceType }}:{{ props.event.resourceId }}</dd>
@@ -61,14 +53,6 @@ function formatTime(event: AuditEvent): string {
       <div>
         <dt>Status</dt>
         <dd>{{ props.event.status }}</dd>
-      </div>
-      <div>
-        <dt>Operation ID</dt>
-        <dd>{{ props.event.operationId || '—' }}</dd>
-      </div>
-      <div>
-        <dt>Request ID</dt>
-        <dd>{{ props.event.requestId || '—' }}</dd>
       </div>
       <div>
         <dt>Duration</dt>

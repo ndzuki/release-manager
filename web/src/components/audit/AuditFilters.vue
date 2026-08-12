@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { actionOptions, resourceOptions, statusOptions, type AuditFilters } from '@/stores/audit';
+import { actionOptions, resourceTypeOptions, statusOptions, type AuditFilters } from '@/stores/audit';
 
 const model = defineModel<AuditFilters>({ required: true });
 const emit = defineEmits<{
@@ -19,7 +19,7 @@ const emit = defineEmits<{
       <span>Resource type</span>
       <select v-model="model.resourceType" name="resource">
         <option value="">All resources</option>
-        <option v-for="resource in resourceOptions" :key="resource" :value="resource">{{ resource }}</option>
+        <option v-for="resource in resourceTypeOptions" :key="resource" :value="resource">{{ resource }}</option>
       </select>
     </label>
     <label class="audit-filters__field">
@@ -27,20 +27,18 @@ const emit = defineEmits<{
       <input v-model.trim="model.resourceId" name="resource_id" autocomplete="off" />
     </label>
     <label class="audit-filters__field">
-      <span>Actions</span>
-      <select v-model="model.actions" name="action" multiple>
+      <span>Action</span>
+      <select v-model="model.action" name="action">
+        <option value="">All actions</option>
         <option v-for="action in actionOptions" :key="action" :value="action">{{ action }}</option>
       </select>
     </label>
     <label class="audit-filters__field">
-      <span>Statuses</span>
-      <select v-model="model.statuses" name="status" multiple>
+      <span>Status</span>
+      <select v-model="model.status" name="status">
+        <option value="">All statuses</option>
         <option v-for="status in statusOptions" :key="status" :value="status">{{ status }}</option>
       </select>
-    </label>
-    <label class="audit-filters__field">
-      <span>Operation ID</span>
-      <input v-model.trim="model.operationId" name="operation_id" autocomplete="off" />
     </label>
     <label class="audit-filters__field">
       <span>From</span>
@@ -86,9 +84,6 @@ const emit = defineEmits<{
   font: inherit;
 }
 
-.audit-filters__field select[multiple] {
-  min-height: 7rem;
-}
 
 .audit-filters__field small {
   color: var(--color-muted, #64748b);

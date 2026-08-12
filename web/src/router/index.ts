@@ -107,6 +107,12 @@ export function createAppRouter(
         meta: { requiresAuth: true, feature: 'clusterRouting', requiresWrite: true },
       },
       {
+        path: '/audit',
+        name: 'Audit',
+        component: () => import('@/pages/AuditPage.vue'),
+        meta: { requiresAuth: true },
+      },
+      {
         path: '/:pathMatch(.*)*',
         name: 'NotFound',
         component: () => import('@/pages/NotFoundPage.vue'),

@@ -21,19 +21,14 @@ const auth = useAuthStore();
 const audit = useAuditStore();
 const route = useRoute();
 const router = useRouter();
-const form = reactive<AuditFilterState>(emptyAuditFilters());
+let form = reactive<AuditFilterState>(emptyAuditFilters());
 let initialized = false;
 
 const organizationId = computed(() => auth.activeOrganization?.id ?? auth.user?.activeOrgId ?? '');
 const canQuery = computed(() => organizationId.value.length > 0 && !audit.loading);
-const isPlatformAdmin = computed(() => auth.user?.roles.includes('platform_admin') ?? false);
 
 function replaceForm(filters: AuditFilterState): void {
-  Object.assign(form, {
-    ...filters,
-    actions: [...filters.actions],
-    statuses: [...filters.statuses],
-  });
+  Object.assign(form, { ...filters });
 }
 
 async function syncQuery(): Promise<void> {
@@ -59,15 +54,6 @@ async function createExport(): Promise<void> {
   await audit.exportEvents(organizationId.value);
 }
 
-async function switchOrganization(targetOrganizationId: string): Promise<void> {
-  if (!targetOrganizationId || targetOrganizationId === organizationId.value) return;
-  await auth.switchOrganization(targetOrganizationId);
-  audit.clearResults();
-}
-function onOrganizationChange(event: { target?: unknown }): void {
-  const target = event.target as { value?: string } | undefined;
-  void switchOrganization(target?.value ?? '');
-}
 
 onMounted(async () => {
   const filters = filtersFromQuery(route.query);
@@ -107,18 +93,9 @@ watch(organizationId, (next, previous) => {
       </button>
     </header>
 
-    <label v-if="isPlatformAdmin && auth.organizations.length > 1" class="audit-page__organization">
-      <span>Audit organization</span>
-      <select :value="organizationId" @change="onOrganizationChange">
-        <option v-for="organization in auth.organizations" :key="organization.id" :value="organization.id">
-          {{ organization.name }}
-        </option>
-      </select>
-      <small>The active server session is switched before querying. Organization IDs never enter the URL.</small>
-    </label>
 
     <AuditFilters v-model="form" @submit="submit" @reset="reset" />
-    <AuditExportPanel :tasks="audit.exportTasks" @refresh="audit.refreshExport" />
+    <AuditExportPanel :tasks="audit.exportTasks" />
 
     <ErrorState
       v-if="audit.error"
@@ -190,26 +167,6 @@ watch(organizationId, (next, previous) => {
   opacity: 0.55;
 }
 
-.audit-page__organization {
-  display: grid;
-  width: min(100%, 28rem);
-  gap: 0.35rem;
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-
-.audit-page__organization select {
-  padding: 0.55rem 0.65rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 0.375rem;
-  background: #fff;
-  font: inherit;
-}
-
-.audit-page__organization small {
-  color: var(--color-muted, #64748b);
-  font-weight: 400;
-}
 
 @media (max-width: 48rem) {
   .audit-page__heading {
