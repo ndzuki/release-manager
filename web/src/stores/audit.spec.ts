@@ -153,6 +153,23 @@ describe('audit query store', () => {
     expect(store.hasMore).toBe(false);
   });
 
+  it('restores the previous page verbatim when paging backward (AC-059-03)', async () => {
+    const store = useAuditStore();
+    queryAuditEvents
+      .mockResolvedValueOnce(queryResponse([auditEvent('a'), auditEvent('b')], 'cursor-1'))
+      .mockResolvedValueOnce(queryResponse([auditEvent('b'), auditEvent('c')], 'cursor-2'))
+      .mockResolvedValueOnce(queryResponse([auditEvent('a'), auditEvent('b')], 'cursor-1'));
+    await store.query(ORG);
+    await store.query(ORG, 'next');
+    expect(store.events.map((event) => event.id)).toEqual(['a', 'b', 'c']);
+
+    // 回看已浏览页必须原样恢复，不得被全会话去重清空。
+    await store.query(ORG, 'previous');
+    expect(store.events.map((event) => event.id)).toEqual(['a', 'b']);
+    expect(store.hasPrevious).toBe(false);
+    expect(store.hasMore).toBe(true);
+  });
+
   it('requests the next page with the server cursor (AC-059-03)', async () => {
     const store = useAuditStore();
     queryAuditEvents.mockResolvedValueOnce(queryResponse([auditEvent('a')], 'cursor-9'));

@@ -9,8 +9,8 @@ export const defaultAuditPageSize = 20;
 export const maxAuditRangeDays = 30;
 
 // The wire contract (D-62) uses free-form strings for resource_type/action/status.
-// These are the values emitted by services today; the option lists below are
-// datalist suggestions, not a closed set — any string filters through to the RPC.
+// The option lists below populate the filter form's selects; any string still
+// filters through to the RPC (server-side values are not a closed set).
 export const resourceTypeOptions = [
   'release_operation',
   'operation',
@@ -66,7 +66,6 @@ export type AuditFailureReason =
 export interface AuditFailure {
   reason: AuditFailureReason;
   message: string;
-  maxRangeDays?: number;
 }
 
 export interface AuditExportTask {
@@ -145,7 +144,6 @@ function validateRange(filters: AuditFilters): AuditFailure | null {
     return {
       reason: 'range_too_large',
       message: `Please narrow the time range to ${maxAuditRangeDays} days or less.`,
-      maxRangeDays: maxAuditRangeDays,
     };
   }
   return null;
@@ -180,7 +178,6 @@ function failureFrom(error: unknown): AuditFailure {
     return {
       reason: 'range_too_large',
       message: `The query range is too large. Please narrow it to ${maxAuditRangeDays} days or less.`,
-      maxRangeDays: maxAuditRangeDays,
     };
   }
   if (reason === 'invalid_cursor') {
@@ -266,9 +263,14 @@ export const useAuditStore = defineStore('audit', () => {
         cursor.value = requestCursor;
         cursorStack.value = cursorStack.value.slice(0, -1);
       }
-      // AC-059-03: never re-render events already seen in this session, so
-      // cursor pagination stays stable when new events arrive between pages.
-      const incoming = response.events.filter((event) => !seenEventIds.value.has(event.id));
+      // AC-059-03: when paging FORWARD, never re-render events already seen in
+      // this session, so cursor pagination stays stable when new events arrive
+      // between pages. Backward pages are restored verbatim — deduplicating
+      // them against the session set would wipe the list.
+      const incoming =
+        direction === 'next'
+          ? response.events.filter((event) => !seenEventIds.value.has(event.id))
+          : response.events;
       for (const event of response.events) seenEventIds.value.add(event.id);
       events.value = direction === 'next' ? [...events.value, ...incoming] : incoming;
       nextCursor.value = response.pagination?.nextPageToken ?? '';

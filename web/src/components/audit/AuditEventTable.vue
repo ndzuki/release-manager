@@ -31,7 +31,7 @@ function formatTime(event: AuditEvent): string {
 
 function actorLabel(event: AuditEvent): string {
   const actor = event.actor;
-  if (!actor) return 'system';
+  if (!actor) return 'unknown';
   return `${actorKindLabels[actor.kind]}:${actor.id || 'unknown'}`;
 }
 </script>
