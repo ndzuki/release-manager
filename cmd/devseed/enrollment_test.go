@@ -5,12 +5,14 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // fakeTokenCreator implements the narrow enrollment seam against a scripted
@@ -24,7 +26,7 @@ func (f *fakeTokenCreator) CreateEnrollmentToken(_ context.Context, _ *connect.R
 	f.createCalls++
 	return connect.NewResponse(&orchestratorv1.CreateEnrollmentTokenResponse{
 		Token:     f.token,
-		ExpiresAt: "2026-08-11T18:00:00+08:00",
+		ExpiresAt: timestamppb.New(time.Date(2026, 8, 11, 10, 0, 0, 0, time.UTC)),
 	}), nil
 }
 

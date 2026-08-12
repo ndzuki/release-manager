@@ -437,6 +437,9 @@ func roleRules(role, domain string) [][]string {
 			[]string{role, domain, "binding", "write"},
 			[]string{role, domain, "release", "read"},
 			[]string{role, domain, "release", "write"},
+			[]string{role, domain, "operator", "read"},
+			[]string{role, domain, "operator", "enroll"},
+			[]string{role, domain, "operator", "revoke"},
 			[]string{role, domain, "customer", "read"},
 			[]string{role, domain, "trust_root", "read"},
 		)
@@ -444,6 +447,7 @@ func roleRules(role, domain string) [][]string {
 		rules = append(rules,
 			[]string{role, domain, "release", "read"},
 			[]string{role, domain, "release", "write"},
+			[]string{role, domain, "operator", "read"},
 			[]string{role, domain, "customer", "read"},
 			[]string{role, domain, "trust_root", "read"},
 		)
@@ -452,6 +456,7 @@ func roleRules(role, domain string) [][]string {
 			[]string{role, domain, "organization", "read"},
 			[]string{role, domain, "member", "read"},
 			[]string{role, domain, "release", "read"},
+			[]string{role, domain, "operator", "read"},
 			[]string{role, domain, "customer", "read"},
 			[]string{role, domain, "trust_root", "read"},
 		)

@@ -2,8 +2,8 @@ package orchestrator
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,11 +15,13 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	"github.com/ndzuki/release-manager/internal/auth"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/audit"
 	authctx "github.com/ndzuki/release-manager/internal/authctx"
@@ -28,6 +30,20 @@ import (
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 	"github.com/ndzuki/release-manager/internal/trust"
 )
+
+type streamRevokerStub struct {
+	operatorID string
+	reason     string
+	calls      int
+	err        error
+}
+
+func (r *streamRevokerStub) Revoke(_ context.Context, operatorID, reason string) error {
+	r.operatorID = operatorID
+	r.reason = reason
+	r.calls++
+	return r.err
+}
 
 func setupService(t *testing.T) (*Service, store.Store, func()) {
 	t.Helper()
@@ -42,7 +58,12 @@ func setupService(t *testing.T) (*Service, store.Store, func()) {
 		seedTestBundle(t, st, id)
 	}
 
-	return svc, st, func() { st.Close() }
+	return svc, st, func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t, svc.Shutdown(shutdownCtx))
+		require.NoError(t, st.Close())
+	}
 }
 
 func seedDefinition(t *testing.T, st store.Store) {
@@ -715,6 +736,291 @@ func TestCreateOperation_InstallRequiresApprovedRevision(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "revision_not_approved")
+}
+
+func operatorSummaryIDs(operators []*orchestratorv1.OperatorSummary) []string {
+	ids := make([]string, 0, len(operators))
+	for _, operator := range operators {
+		ids = append(ids, operator.GetId())
+	}
+	return ids
+}
+
+func TestOperatorManagementContracts(t *testing.T) {
+	_, st, cleanup := setupService(t)
+	defer cleanup()
+	ctx := context.Background()
+	revoker := &streamRevokerStub{}
+	svc := NewService(st, trust.NewStubVerifier(st.Verifications(), nil, slog.New(slog.DiscardHandler)), "staging", revoker, slog.New(slog.DiscardHandler))
+	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: "org-operator", Name: "Operator Org"}))
+	require.NoError(t, st.Users().Create(ctx, &store.User{ID: "user-operator", Username: "operator-admin", PasswordHash: "unused"}))
+	require.NoError(t, st.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: "org-operator", UserID: "user-operator", Role: store.RoleReleaseAdmin}))
+	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: "customer-operator", Name: "Operator Customer", Slug: "operator-customer"}))
+	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: "cluster-operator", Name: "Operator Cluster", CustomerID: "customer-operator"}))
+	actorCtx := auth.ContextWithActor(ctx, auth.Actor{UserID: "user-operator", OrganizationID: "org-operator", Roles: []string{string(store.RoleReleaseAdmin)}})
+
+	t.Run("AC-053-06 AC-053-07 AC-053-19 pending token conflict replacement and redacted audit", func(t *testing.T) {
+		first, err := svc.CreateEnrollmentToken(actorCtx, connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
+			CustomerId: "customer-operator", ClusterId: "cluster-operator", OperatorName: "operator-one", TtlMinutes: 5,
+		}))
+		require.NoError(t, err)
+		assert.NotEmpty(t, first.Msg.GetToken())
+
+		_, err = svc.CreateEnrollmentToken(actorCtx, connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
+			CustomerId: "customer-operator", ClusterId: "cluster-operator", OperatorName: "operator-one", TtlMinutes: 5,
+		}))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+
+		status, err := svc.GetEnrollmentTokenStatus(actorCtx, connect.NewRequest(&orchestratorv1.GetEnrollmentTokenStatusRequest{
+			CustomerId: "customer-operator", ClusterId: "cluster-operator",
+		}))
+		require.NoError(t, err)
+		assert.Equal(t, orchestratorv1.EnrollmentTokenState_ENROLLMENT_TOKEN_STATE_PENDING, status.Msg.GetStatus().GetState())
+		assert.Equal(t, "operator-admin", status.Msg.GetStatus().GetCreatedByDisplayName())
+
+		replacement, err := svc.CreateEnrollmentToken(actorCtx, connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
+			CustomerId: "customer-operator", ClusterId: "cluster-operator", OperatorName: "operator-one", TtlMinutes: 5, ReplacePendingToken: true,
+		}))
+		require.NoError(t, err)
+		assert.NotEqual(t, first.Msg.GetToken(), replacement.Msg.GetToken())
+
+		createdAudit, err := st.AuditEvents().Query(ctx, store.AuditEventFilter{Action: "operator.enrollment_token.created"}, "", 20)
+		require.NoError(t, err)
+		require.Len(t, createdAudit.Events, 1)
+		assert.NotContains(t, fmt.Sprint(createdAudit.Events[0].Metadata), first.Msg.GetToken())
+		assert.Equal(t, store.AuditActorUser, createdAudit.Events[0].ActorKind)
+		assert.Equal(t, "user-operator", createdAudit.Events[0].ActorID)
+		assert.Equal(t, "org-operator", createdAudit.Events[0].OrganizationID)
+		assert.Equal(t, "customer-operator", createdAudit.Events[0].Metadata["customer_id"])
+		assert.Equal(t, "cluster-operator", createdAudit.Events[0].Metadata["cluster_id"])
+		assert.NotEmpty(t, createdAudit.Events[0].ResourceID)
+		assert.Equal(t, "succeeded", createdAudit.Events[0].Status)
+		assert.NotEmpty(t, createdAudit.Events[0].Metadata["request_id"])
+		replacedAudit, err := st.AuditEvents().Query(ctx, store.AuditEventFilter{Action: "operator.enrollment_token.replaced"}, "", 20)
+		require.NoError(t, err)
+		require.Len(t, replacedAudit.Events, 1)
+		assert.NotContains(t, fmt.Sprint(replacedAudit.Events[0].Metadata), replacement.Msg.GetToken())
+		assert.NotContains(t, fmt.Sprint(replacedAudit.Events[0].Metadata), first.Msg.GetToken())
+		assert.Equal(t, store.AuditActorUser, replacedAudit.Events[0].ActorKind)
+		assert.Equal(t, "user-operator", replacedAudit.Events[0].ActorID)
+		assert.Equal(t, "org-operator", replacedAudit.Events[0].OrganizationID)
+		assert.Equal(t, "customer-operator", replacedAudit.Events[0].Metadata["customer_id"])
+		assert.Equal(t, "cluster-operator", replacedAudit.Events[0].Metadata["cluster_id"])
+		assert.NotEmpty(t, replacedAudit.Events[0].ResourceID)
+		assert.Equal(t, "succeeded", replacedAudit.Events[0].Status)
+		assert.NotEmpty(t, replacedAudit.Events[0].Metadata["request_id"])
+	})
+	t.Run("AC-053-04 AC-053-13 AC-053-14 AC-053-18 AC-053-19 AC-053-22 revoke is scoped audited and idempotent", func(t *testing.T) {
+		op := &store.Operator{ID: "operator-managed", Name: "operator-managed", CustomerID: "customer-operator", ClusterID: "cluster-operator", CertSerial: "serial-managed"}
+		require.NoError(t, st.Operators().Create(ctx, op))
+		require.NoError(t, st.Sessions().Create(ctx, &store.Session{ID: "session-managed", OperatorID: op.ID, CustomerID: op.CustomerID, ClusterID: op.ClusterID, Status: store.SessionOnline, LastHeartbeat: time.Now().UTC()}))
+
+		_, err := svc.GetOperator(actorCtx, connect.NewRequest(&orchestratorv1.GetOperatorRequest{
+			CustomerId: "customer-operator", ClusterId: "other-cluster", OperatorId: op.ID,
+		}))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+
+		for _, invalidReason := range []string{"four", strings.Repeat("界", 501)} {
+			_, err := svc.RevokeOperator(actorCtx, connect.NewRequest(&orchestratorv1.RevokeOperatorRequest{
+				CustomerId: "customer-operator", ClusterId: "cluster-operator", OperatorId: op.ID, Reason: invalidReason,
+			}))
+			require.Error(t, err)
+			assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+		}
+
+		first, err := svc.RevokeOperator(actorCtx, connect.NewRequest(&orchestratorv1.RevokeOperatorRequest{
+			CustomerId: "customer-operator", ClusterId: "cluster-operator", OperatorId: op.ID, Reason: "security incident",
+		}))
+		require.NoError(t, err)
+		assert.True(t, first.Msg.GetChanged())
+		assert.Equal(t, orchestratorv1.OperatorSessionStatus_OPERATOR_SESSION_STATUS_REVOKED, first.Msg.GetOperator().GetSessionStatus())
+		assert.Equal(t, op.ID, revoker.operatorID)
+
+		events, err := st.AuditEvents().ListByResource(ctx, "operator", op.ID)
+		require.NoError(t, err)
+		require.Len(t, events, 1)
+		assert.Equal(t, "operator.revoked", events[0].Action)
+		assert.NotEmpty(t, events[0].Metadata["request_id"])
+		assert.Equal(t, "true", events[0].Metadata["reason_present"])
+		assert.Equal(t, fmt.Sprintf("%d", len([]rune("security incident"))), events[0].Metadata["reason_length"])
+		assert.NotContains(t, fmt.Sprint(events[0].Metadata), "security incident")
+		assert.Equal(t, store.AuditActorUser, events[0].ActorKind)
+		assert.Equal(t, "user-operator", events[0].ActorID)
+		assert.Equal(t, "org-operator", events[0].OrganizationID)
+		assert.Equal(t, "customer-operator", events[0].Metadata["customer_id"])
+		assert.Equal(t, "cluster-operator", events[0].Metadata["cluster_id"])
+		assert.Equal(t, op.ID, events[0].ResourceID)
+		assert.Equal(t, "succeeded", events[0].Status)
+
+		second, err := svc.RevokeOperator(actorCtx, connect.NewRequest(&orchestratorv1.RevokeOperatorRequest{
+			CustomerId: "customer-operator", ClusterId: "cluster-operator", OperatorId: op.ID, Reason: "must not overwrite",
+		}))
+		require.NoError(t, err)
+		assert.False(t, second.Msg.GetChanged())
+		detail, err := svc.GetOperator(actorCtx, connect.NewRequest(&orchestratorv1.GetOperatorRequest{
+			CustomerId: "customer-operator", ClusterId: "cluster-operator", OperatorId: op.ID,
+		}))
+		require.NoError(t, err)
+		assert.Equal(t, "security incident", detail.Msg.GetOperator().GetRevokeReason())
+		events, err = st.AuditEvents().ListByResource(ctx, "operator", op.ID)
+		require.NoError(t, err)
+		require.Len(t, events, 2)
+		assert.Equal(t, "operator.revoked", events[1].Action)
+	})
+
+	t.Run("AC-053-21 and AC-053-22 retry closes a stream after the committed revoke response is lost", func(t *testing.T) {
+		op := &store.Operator{ID: "operator-retry-revoke", Name: "operator-retry-revoke", CustomerID: "customer-operator", ClusterID: "cluster-operator", CertSerial: "serial-retry-revoke"}
+		require.NoError(t, st.Operators().Create(ctx, op))
+		require.NoError(t, st.Sessions().Create(ctx, &store.Session{ID: "session-retry-revoke", OperatorID: op.ID, CustomerID: op.CustomerID, ClusterID: op.ClusterID, Status: store.SessionOnline, LastHeartbeat: time.Now().UTC()}))
+		flakyRevoker := &streamRevokerStub{err: errors.New("operator service unavailable")}
+		flakyService := NewService(st, trust.NewStubVerifier(st.Verifications(), nil, slog.New(slog.DiscardHandler)), "staging", flakyRevoker, slog.New(slog.DiscardHandler))
+
+		_, err := flakyService.RevokeOperator(actorCtx, connect.NewRequest(&orchestratorv1.RevokeOperatorRequest{
+			CustomerId: "customer-operator", ClusterId: "cluster-operator", OperatorId: op.ID, Reason: "security incident",
+		}))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+		persistedSession, err := st.Sessions().Get(ctx, "session-retry-revoke")
+		require.NoError(t, err)
+		assert.Equal(t, store.SessionRevoked, persistedSession.Status)
+
+		flakyRevoker.err = nil
+		retried, err := flakyService.RevokeOperator(actorCtx, connect.NewRequest(&orchestratorv1.RevokeOperatorRequest{
+			CustomerId: "customer-operator", ClusterId: "cluster-operator", OperatorId: op.ID, Reason: "manual retry reason",
+		}))
+		require.NoError(t, err)
+		assert.False(t, retried.Msg.GetChanged())
+		assert.Equal(t, 2, flakyRevoker.calls)
+	})
+
+	t.Run("AC-053-02 AC-053-08 AC-053-09 AC-053-10 AC-053-12 AC-053-15 AC-053-17 status validation list and revoke pending", func(t *testing.T) {
+		for _, test := range []struct {
+			name     string
+			ttl      int32
+			wantCode connect.Code
+		}{
+			{name: "default ttl", ttl: 0},
+			{name: "minimum ttl", ttl: 5},
+			{name: "maximum ttl", ttl: 1440},
+			{name: "below minimum", ttl: 4, wantCode: connect.CodeInvalidArgument},
+			{name: "above maximum", ttl: 1441, wantCode: connect.CodeInvalidArgument},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				otherCustomerID := uuid.NewString()
+				otherClusterID := uuid.NewString()
+				require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: otherCustomerID, Name: test.name, Slug: otherCustomerID}))
+				require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: otherClusterID, Name: test.name, CustomerID: otherCustomerID}))
+				_, err := svc.CreateEnrollmentToken(actorCtx, connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
+					CustomerId: otherCustomerID, ClusterId: otherClusterID, OperatorName: "operator-ttl", TtlMinutes: test.ttl,
+				}))
+				if test.wantCode == 0 {
+					require.NoError(t, err)
+					return
+				}
+				require.Error(t, err)
+				assert.Equal(t, test.wantCode, connect.CodeOf(err))
+			})
+		}
+
+		for _, name := range []string{"", "-operator", "operator-", "Operator", "operator_name", strings.Repeat("a", 64)} {
+			_, err := svc.CreateEnrollmentToken(actorCtx, connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
+				CustomerId: "customer-operator", ClusterId: "cluster-operator", OperatorName: name, TtlMinutes: 5,
+			}))
+			require.Error(t, err)
+			assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+		}
+
+		active := &store.Operator{ID: "operator-active-name", Name: "shared-name", CustomerID: "customer-operator", ClusterID: "cluster-operator", CertSerial: "serial-active"}
+		require.NoError(t, st.Operators().Create(ctx, active))
+		_, err := svc.CreateEnrollmentToken(actorCtx, connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
+			CustomerId: active.CustomerID, ClusterId: active.ClusterID, OperatorName: active.Name, TtlMinutes: 5,
+		}))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+
+		reason := store.SessionReasonHeartbeatTimeout
+		offline := &store.Operator{ID: "operator-offline", Name: "operator-offline", CustomerID: "customer-operator", ClusterID: "cluster-operator", CertSerial: "serial-offline", Status: store.OperatorSuperseded, RegisteredAt: time.Now().UTC().Add(-time.Hour)}
+		require.NoError(t, st.Operators().Create(ctx, offline))
+		lastHeartbeat := time.Now().UTC().Add(-5 * time.Minute)
+		require.NoError(t, st.Sessions().Create(ctx, &store.Session{ID: "session-offline", OperatorID: offline.ID, CustomerID: offline.CustomerID, ClusterID: offline.ClusterID, Status: store.SessionOffline, StatusReason: &reason, LastHeartbeat: lastHeartbeat}))
+		detail, err := svc.GetOperator(actorCtx, connect.NewRequest(&orchestratorv1.GetOperatorRequest{CustomerId: offline.CustomerID, ClusterId: offline.ClusterID, OperatorId: offline.ID}))
+		require.NoError(t, err)
+		assert.Equal(t, orchestratorv1.OperatorSessionStatus_OPERATOR_SESSION_STATUS_OFFLINE, detail.Msg.GetOperator().GetSummary().GetSessionStatus())
+		assert.Equal(t, orchestratorv1.OperatorSessionStatusReason_OPERATOR_SESSION_STATUS_REASON_HEARTBEAT_TIMEOUT, detail.Msg.GetOperator().GetSummary().GetSessionStatusReason())
+		assert.Equal(t, lastHeartbeat.Unix(), detail.Msg.GetOperator().GetSummary().GetLastHeartbeat().AsTime().Unix())
+
+		for _, lifecycle := range []store.OperatorStatus{store.OperatorSuperseded, store.OperatorRevoked} {
+			otherCustomerID := uuid.NewString()
+			otherClusterID := uuid.NewString()
+			reusedName := "reusable-name-" + string(lifecycle)
+			require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: otherCustomerID, Name: reusedName, Slug: otherCustomerID}))
+			require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: otherClusterID, Name: reusedName, CustomerID: otherCustomerID}))
+			require.NoError(t, st.Operators().Create(ctx, &store.Operator{
+				ID: uuid.NewString(), Name: reusedName, CustomerID: otherCustomerID, ClusterID: otherClusterID,
+				CertSerial: uuid.NewString(), Status: lifecycle,
+			}))
+			_, err := svc.CreateEnrollmentToken(actorCtx, connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
+				CustomerId: otherCustomerID, ClusterId: otherClusterID, OperatorName: reusedName, TtlMinutes: 5,
+			}))
+			require.NoError(t, err)
+		}
+		page, err := svc.ListOperators(actorCtx, connect.NewRequest(&orchestratorv1.ListOperatorsRequest{
+			CustomerId: "customer-operator", ClusterId: "cluster-operator", PageSize: 1,
+		}))
+		require.NoError(t, err)
+		assert.NotEmpty(t, page.Msg.GetNextPageToken())
+		_, err = svc.ListOperators(actorCtx, connect.NewRequest(&orchestratorv1.ListOperatorsRequest{
+			CustomerId: "customer-operator", ClusterId: "cluster-operator", PageSize: 1, PageToken: page.Msg.GetNextPageToken(),
+			LifecycleStatus: func() *orchestratorv1.OperatorLifecycleStatus {
+				value := orchestratorv1.OperatorLifecycleStatus_OPERATOR_LIFECYCLE_STATUS_REVOKED
+				return &value
+			}(),
+		}))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+
+		withoutSession := &store.Operator{ID: "operator-no-session", Name: "operator-no-session", CustomerID: "customer-operator", ClusterID: "cluster-operator", CertSerial: "serial-no-session", Status: store.OperatorSuperseded, RegisteredAt: time.Now().UTC().Add(-2 * time.Hour)}
+		require.NoError(t, st.Operators().Create(ctx, withoutSession))
+		noSession := orchestratorv1.OperatorSessionStatus_OPERATOR_SESSION_STATUS_UNSPECIFIED
+		filtered, err := svc.ListOperators(actorCtx, connect.NewRequest(&orchestratorv1.ListOperatorsRequest{
+			CustomerId: "customer-operator", ClusterId: "cluster-operator", SessionStatus: &noSession,
+		}))
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, filtered.Msg.GetTotalCount(), int32(1))
+		assert.Contains(t, operatorSummaryIDs(filtered.Msg.GetOperators()), withoutSession.ID)
+
+		revokeCustomerID := uuid.NewString()
+		revokeClusterID := uuid.NewString()
+		require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: revokeCustomerID, Name: "Revoke pending", Slug: revokeCustomerID}))
+		require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: revokeClusterID, Name: "Revoke pending", CustomerID: revokeCustomerID}))
+		_, err = svc.CreateEnrollmentToken(actorCtx, connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
+			CustomerId: revokeCustomerID, ClusterId: revokeClusterID, OperatorName: "operator-revoke-pending", TtlMinutes: 5,
+		}))
+		require.NoError(t, err)
+
+		revoked, err := svc.RevokePendingEnrollmentToken(actorCtx, connect.NewRequest(&orchestratorv1.RevokePendingEnrollmentTokenRequest{CustomerId: revokeCustomerID, ClusterId: revokeClusterID}))
+		require.NoError(t, err)
+		assert.True(t, revoked.Msg.GetChanged())
+		again, err := svc.RevokePendingEnrollmentToken(actorCtx, connect.NewRequest(&orchestratorv1.RevokePendingEnrollmentTokenRequest{CustomerId: revokeCustomerID, ClusterId: revokeClusterID}))
+		require.NoError(t, err)
+		assert.False(t, again.Msg.GetChanged())
+		revokedAudit, err := st.AuditEvents().Query(ctx, store.AuditEventFilter{Action: "operator.enrollment_token.revoked"}, "", 20)
+		require.NoError(t, err)
+		require.Len(t, revokedAudit.Events, 2)
+		for _, event := range revokedAudit.Events {
+			assert.Equal(t, store.AuditActorUser, event.ActorKind)
+			assert.Equal(t, "user-operator", event.ActorID)
+			assert.Equal(t, "org-operator", event.OrganizationID)
+			assert.Equal(t, revokeCustomerID, event.Metadata["customer_id"])
+			assert.Equal(t, revokeClusterID, event.Metadata["cluster_id"])
+			assert.Equal(t, revokeClusterID, event.ResourceID)
+			assert.Equal(t, "succeeded", event.Status)
+			assert.NotEmpty(t, event.Metadata["request_id"])
+			assert.NotContains(t, fmt.Sprint(event.Metadata), "plaintext")
+		}
+	})
 }
 
 // --- GetOperation tests ---

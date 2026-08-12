@@ -75,15 +75,15 @@ run-webhook: build-webhook ## Start release-webhook
 .PHONY: run-orchestrator
 run-orchestrator: build-orchestrator ## Start release-orchestrator
 	@mkdir -p data
-	./$(BIN_DIR)/release-orchestrator --config configs/orchestrator.dev.yaml
+	./$(BIN_DIR)/release-orchestrator --config configs/orchestrator.dev.yaml --db data/release-manager.db
 
 .PHONY: run-operator
 run-operator: build-operator ## Start release-operator
-	./$(BIN_DIR)/release-operator --config configs/operator.dev.yaml
+	./$(BIN_DIR)/release-operator --config configs/operator.dev.yaml --db data/release-manager.db
 
 .PHONY: run-auth
 run-auth: build-auth ## Start release-auth
-	./$(BIN_DIR)/release-auth --config configs/auth.dev.yaml
+	./$(BIN_DIR)/release-auth --config configs/auth.dev.yaml --db data/release-manager.db
 
 .PHONY: run-notifier
 run-notifier: build-notifier ## Start release-notifier
@@ -98,9 +98,9 @@ dev: proto build-all ## Start all 6 microservices in background
 	@mkdir -p data
 	@echo "$(YELLOW)Starting all services in background...$(NC)"
 	@./$(BIN_DIR)/release-webhook --config configs/webhook.dev.yaml > data/webhook.log 2>&1 & echo $$! > data/webhook.pid
-	@./$(BIN_DIR)/release-orchestrator --config configs/orchestrator.dev.yaml > data/orchestrator.log 2>&1 & echo $$! > data/orchestrator.pid
-	@./$(BIN_DIR)/release-operator --config configs/operator.dev.yaml > data/operator.log 2>&1 & echo $$! > data/operator.pid
-	@./$(BIN_DIR)/release-auth --config configs/auth.dev.yaml > data/auth.log 2>&1 & echo $$! > data/auth.pid
+	@./$(BIN_DIR)/release-orchestrator --config configs/orchestrator.dev.yaml --db data/release-manager.db > data/orchestrator.log 2>&1 & echo $$! > data/orchestrator.pid
+	@./$(BIN_DIR)/release-operator --config configs/operator.dev.yaml --db data/release-manager.db > data/operator.log 2>&1 & echo $$! > data/operator.pid
+	@./$(BIN_DIR)/release-auth --config configs/auth.dev.yaml --db data/release-manager.db > data/auth.log 2>&1 & echo $$! > data/auth.pid
 	@./$(BIN_DIR)/release-notifier --config configs/notifier.dev.yaml > data/notifier.log 2>&1 & echo $$! > data/notifier.pid
 	@./$(BIN_DIR)/release-api --config configs/api.dev.yaml > data/api.log 2>&1 & echo $$! > data/api.pid
 	@sleep 1
@@ -284,7 +284,7 @@ dev-stage-operator: proto ## REQ-015,044,016 — Operator control
 	@echo "$(BLUE)  Operator: http://localhost:8084/health$(NC)"
 	@echo "$(BLUE)  ▸ api/operator.http$(NC)"
 	@fuser -k 8084/tcp 2>/dev/null || true
-	$(GO) run ./cmd/operator/ --config configs/operator.dev.yaml
+	$(GO) run ./cmd/operator/ --config configs/operator.dev.yaml --db data/release-manager.db
 
 .PHONY: dev-stage-config
 dev-stage-config: proto ## REQ-040,018,068 — ReleaseDefinition & ValuesRevision
@@ -302,7 +302,7 @@ dev-stage-publish: proto ## REQ-023,067 — Core pipeline CreateOperation
 	@echo "$(BLUE)  ▸ api/kulala/orchestrator.http$(NC)"
 	@mkdir -p data
 	@fuser -k 8083/tcp 2>/dev/null || true
-	$(GO) run ./cmd/orchestrator/ --config configs/orchestrator.dev.yaml
+	$(GO) run ./cmd/orchestrator/ --config configs/orchestrator.dev.yaml --db data/release-manager.db
 
 .PHONY: dev-stage-auth
 dev-stage-auth: proto ## REQ-025,026,049,027 — Auth & RBAC
@@ -310,7 +310,7 @@ dev-stage-auth: proto ## REQ-025,026,049,027 — Auth & RBAC
 	@echo "$(BLUE)  Auth: http://localhost:8085/health$(NC)"
 	@echo "$(BLUE)  ▸ api/auth.http -> Login / Orgs / Users$(NC)"
 	@fuser -k 8085/tcp 2>/dev/null || true
-	$(GO) run ./cmd/auth/ --config configs/auth.dev.yaml
+	$(GO) run ./cmd/auth/ --config configs/auth.dev.yaml --db data/release-manager.db
 
 .PHONY: dev-stage-audit
 dev-stage-audit: proto ## REQ-050,029,030 — Audit, Export & Archive

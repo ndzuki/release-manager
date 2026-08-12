@@ -1,7 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory } from 'vue-router';
 import { Code, ConnectError } from '@connectrpc/connect';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAppRouter, installAuthGuard } from './index';
 import { setForbiddenNavigator, useAuthStore } from '@/stores/auth';
 
@@ -9,6 +9,10 @@ describe('auth route guard', () => {
   beforeEach(() => {
     setForbiddenNavigator(undefined);
     setActivePinia(createPinia());
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it('registers and disables release feature routes', () => {
@@ -130,5 +134,37 @@ describe('auth route guard', () => {
     expect(router.currentRoute.value.name).toBe('Forbidden');
     expect(auth.isAuthenticated).toBe(true);
     expect(auth.forbiddenMessage).toBe('server denied the request');
+  });
+
+  it('registers the operator routes with the static new path before the detail path', () => {
+    const router = createAppRouter(createMemoryHistory());
+    const paths = router.getRoutes().map((route) => route.path);
+
+    expect(paths).toContain('/customers/:customerId/clusters/:clusterId/operators');
+    expect(paths).toContain('/customers/:customerId/clusters/:clusterId/operators/new');
+    expect(paths).toContain('/customers/:customerId/clusters/:clusterId/operators/:operatorId');
+  });
+
+  it('routes operator pages to not found when the feature is disabled', async () => {
+    const auth = useAuthStore();
+    auth.$patch({
+      status: 'authenticated',
+      initialized: true,
+      user: {
+        $typeName: 'auth.v1.SessionUser',
+        id: 'user-1',
+        username: 'admin',
+        roles: ['release_admin'],
+        activeOrgId: 'org-1',
+      },
+    });
+    vi.stubEnv('VITE_FEATURE_OPERATOR_MANAGEMENT', 'false');
+    const router = createAppRouter(createMemoryHistory());
+    installAuthGuard(router);
+
+    await router.push('/customers/customer-1/clusters/cluster-1/operators/new');
+    await router.isReady();
+
+    expect(router.currentRoute.value.name).toBe('NotFound');
   });
 });

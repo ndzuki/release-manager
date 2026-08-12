@@ -81,7 +81,6 @@ func (tx *Tx) QueryContext(ctx context.Context, query string, args ...any) (*sql
 func (tx *Tx) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	return tx.gorm.WithContext(ctx).Raw(postgresQuery(query), args...).Row()
 }
-
 func (tx *Tx) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
 	connPool, ok := tx.gorm.WithContext(ctx).Statement.ConnPool.(interface {
 		PrepareContext(context.Context, string) (*sql.Stmt, error)
@@ -118,6 +117,7 @@ type Store struct {
 	sqlDB             *sql.DB
 	db                *DB
 	gormDB            *gorm.DB
+	management        *operatorManagementStore
 	ops               *operationStore
 	operationEvents   *operationEventStore
 	timeline          *timelineStore
@@ -203,6 +203,7 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s.tokens = &enrollmentTokenStore{gorm: s.db}
 	s.operators = &operatorStore{gorm: s.db}
 	s.sessions = &sessionStore{gorm: s.db}
+	s.management = &operatorManagementStore{gorm: s.db}
 	s.outbox = &outboxStore{gorm: s.db}
 	s.users = &userStore{gorm: s.db}
 	s.authSess = &authSessionStore{gorm: s.db}
@@ -335,6 +336,9 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) DB() *DB        { return s.db }
+
+// OperatorManagement returns the atomic Operator management store.
+func (s *Store) OperatorManagement() store.OperatorManagementStore { return s.management }
 func (s *Store) SQLDB() *sql.DB { return s.sqlDB }
 func (s *Store) GORM() *gorm.DB { return s.gormDB }
 
