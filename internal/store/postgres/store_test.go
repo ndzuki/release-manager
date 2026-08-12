@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1218,18 +1219,39 @@ func TestNotificationStoreLifecycle(t *testing.T) {
 	st := setupStore(t)
 	ctx := t.Context()
 	now := time.Now().UTC().Truncate(time.Second)
+	nextRetry := now.Add(30 * time.Second)
 	job := &store.NotificationJob{
 		ID: uuid.NewString(), OperationID: uuid.NewString(), Channel: store.NotificationChannelWebhook,
 		Recipient: "https://example.invalid/hook", Status: store.NotificationPending, MaxRetries: 3,
-		Metadata: map[string]string{"source": "postgres-test"}, CreatedAt: now, UpdatedAt: now,
+		NextRetryAt: &nextRetry, Metadata: map[string]string{"source": "postgres-test"},
+		CreatedAt: now, UpdatedAt: now,
 	}
 	require.NoError(t, st.Notifications().Create(ctx, job))
-	pending, err := st.Notifications().GetPending(ctx, now, 10)
+	pending, err := st.Notifications().GetPending(ctx, now.Add(time.Hour), 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
 	assert.Equal(t, job.ID, pending[0].ID)
 
-	claimed, err := st.Notifications().ClaimNext(ctx, now)
+	// Time column round-trip (RFC3339 write ↔ TIMESTAMPTZ scan, AC-076-02):
+	// the scanned instant must equal the written one exactly.
+	stored, err := st.Notifications().Get(ctx, job.ID)
+	require.NoError(t, err)
+	// TIMESTAMPTZ scans back as time.Time in the session time zone; compare
+	// instants, not Location pointers.
+	assert.True(t, stored.NextRetryAt.Equal(nextRetry), "next_retry_at round-trip")
+	assert.True(t, stored.CreatedAt.Equal(now), "created_at round-trip")
+	assert.True(t, stored.UpdatedAt.Equal(now), "updated_at round-trip")
+
+	// Same (operation_id, channel, recipient) triple must be rejected by the
+	// UNIQUE constraint (idempotency fallback, AC-031-01).
+	duplicate := &store.NotificationJob{
+		ID: uuid.NewString(), OperationID: job.OperationID, Channel: job.Channel,
+		Recipient: job.Recipient, Status: store.NotificationPending, MaxRetries: 3,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	require.Error(t, st.Notifications().Create(ctx, duplicate))
+
+	claimed, err := st.Notifications().ClaimNext(ctx, now.Add(time.Hour))
 	require.NoError(t, err)
 	require.NotNil(t, claimed)
 	assert.Equal(t, store.NotificationSending, claimed.Status)
@@ -1242,6 +1264,106 @@ func TestNotificationStoreLifecycle(t *testing.T) {
 	deleted, err := st.Notifications().DeleteDeadLetterBefore(ctx, time.Now().UTC().Add(time.Minute))
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), deleted)
+}
+
+// TestNotificationStoreConcurrentClaim verifies the atomic claim contract
+// (REQ-031): concurrent workers must each claim a disjoint job, so a single
+// job is never claimed twice (AC-031-01 concurrent semantics).
+func TestNotificationStoreConcurrentClaim(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	const jobs = 20
+	for range jobs {
+		require.NoError(t, st.Notifications().Create(ctx, &store.NotificationJob{
+			ID: uuid.NewString(), OperationID: uuid.NewString(), Channel: store.NotificationChannelWebhook,
+			Recipient: "https://example.invalid/hook", Status: store.NotificationPending,
+			MaxRetries: 3, CreatedAt: now, UpdatedAt: now,
+		}))
+	}
+
+	const workers = 8
+	claimed := make(chan string, jobs)
+	claimErrs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				j, err := st.Notifications().ClaimNext(ctx, now.Add(time.Hour))
+				if err != nil {
+					claimErrs <- err
+					return
+				}
+				if j == nil {
+					return // drained
+				}
+				claimed <- j.ID
+			}
+		}()
+	}
+	wg.Wait()
+	close(claimed)
+	close(claimErrs)
+	for err := range claimErrs {
+		require.NoError(t, err)
+	}
+
+	seen := map[string]int{}
+	for id := range claimed {
+		seen[id]++
+	}
+	assert.Len(t, seen, jobs)
+	for id, n := range seen {
+		assert.Equal(t, 1, n, "job %s claimed more than once", id)
+	}
+}
+
+// TestNotificationStoreBackoffAndDeadLetter verifies retry state progression
+// (attempts/retry_count/next_retry_at via UpdateStatus, AC-031-02) and the
+// dead-letter transition (AC-031-03).
+func TestNotificationStoreBackoffAndDeadLetter(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Second)
+	job := &store.NotificationJob{
+		ID: uuid.NewString(), OperationID: uuid.NewString(), Channel: store.NotificationChannelWebhook,
+		Recipient: "https://example.invalid/hook", Status: store.NotificationPending, MaxRetries: 3,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, st.Notifications().Create(ctx, job))
+
+	firstRetry := now.Add(5 * time.Second)
+	require.NoError(t, st.Notifications().UpdateStatus(ctx, job.ID, store.NotificationFailed,
+		1, 1, "http_429", &firstRetry, "rate limited", nil))
+	afterFirst, err := st.Notifications().Get(ctx, job.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.NotificationFailed, afterFirst.Status)
+	assert.Equal(t, 1, afterFirst.Attempts)
+	assert.Equal(t, 1, afterFirst.RetryCount)
+	assert.Equal(t, "http_429", afterFirst.ErrorCode)
+	assert.True(t, afterFirst.NextRetryAt.Equal(firstRetry), "first next_retry_at round-trip")
+	assert.Equal(t, "rate limited", afterFirst.LastError)
+	assert.Nil(t, afterFirst.SentAt)
+
+	secondRetry := now.Add(10 * time.Second)
+	require.NoError(t, st.Notifications().UpdateStatus(ctx, job.ID, store.NotificationFailed,
+		2, 2, "http_500", &secondRetry, "internal error", nil))
+	afterSecond, err := st.Notifications().Get(ctx, job.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, afterSecond.Attempts)
+	assert.Equal(t, 2, afterSecond.RetryCount)
+	assert.True(t, afterSecond.NextRetryAt.Equal(secondRetry), "second next_retry_at round-trip")
+
+	require.NoError(t, st.Notifications().MarkDeadLetter(ctx, job.ID, "http_400", "bad recipient"))
+	dead, err := st.Notifications().Get(ctx, job.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.NotificationDeadLetter, dead.Status)
+	assert.Equal(t, "http_400", dead.ErrorCode)
+	assert.Equal(t, "bad recipient", dead.LastError)
+	assert.NotNil(t, dead.DeadLetterAt)
 }
 
 func TestCustomerEventStoreCreate(t *testing.T) {

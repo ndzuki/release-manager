@@ -11,4 +11,4 @@ WORKDIR /data
 COPY --from=builder /out/release-notifier /release-notifier
 COPY configs/notifier.dev.yaml /configs/notifier.dev.yaml
 EXPOSE 8086
-ENTRYPOINT ["/release-notifier", "--config", "/configs/notifier.dev.yaml", "--db", "/data/notifier.db"]
+ENTRYPOINT ["/release-notifier", "--config", "/configs/notifier.dev.yaml"]

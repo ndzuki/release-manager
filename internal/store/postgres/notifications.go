@@ -108,9 +108,14 @@ func (s *notificationStore) ClaimNext(ctx context.Context, now time.Time) (*stor
 
 	nowStr := now.UTC().Format(time.RFC3339)
 
-	// SELECT ... FOR UPDATE is not supported by modernc.org/sqlite with
-	// the CGo-free pure-Go driver in all modes.  We use an immediate UPDATE
-	// with RETURNING instead — the UPDATE acquires a write lock on the row.
+	// SELECT ... FOR UPDATE is not supported by modernc.org/sqlite with the
+	// CGo-free pure-Go driver in all modes, so the SQLite twin of this store
+	// uses an immediate UPDATE with RETURNING instead. On PostgreSQL the
+	// subquery must lock the candidate row: without FOR UPDATE SKIP LOCKED,
+	// two concurrent workers can both claim the same job (READ COMMITTED
+	// re-evaluates the UPDATE target after the lock is released), double
+	// incrementing attempts and double delivering — breaking AC-031-01
+	// idempotency. SKIP LOCKED makes concurrent claims disjoint.
 	row := tx.QueryRowContext(ctx, `
 		UPDATE notification_jobs
 		SET status = 'sending', attempts = attempts + 1, updated_at = ?
@@ -120,6 +125,7 @@ func (s *notificationStore) ClaimNext(ctx context.Context, now time.Time) (*stor
 			  AND (next_retry_at IS NULL OR next_retry_at <= ?)
 			ORDER BY created_at ASC
 			LIMIT 1
+			FOR UPDATE SKIP LOCKED
 		)
 		RETURNING id, operation_id, channel, recipient, status, attempts,
 			retry_count, max_retries, error_code, next_retry_at, last_error,
