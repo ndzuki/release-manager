@@ -12,6 +12,8 @@ interface SessionPayload {
   expiresAt: bigint;
 }
 
+export const organizationChangedEvent = 'release-manager:organization-changed';
+
 let forbiddenNavigator: ((message: string) => Promise<void>) | undefined;
 
 export function setForbiddenNavigator(navigator: ((message: string) => Promise<void>) | undefined): void {
@@ -123,6 +125,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function switchOrganization(organizationId: string): Promise<void> {
     const session = await authClient.switchOrganization({ orgId: organizationId });
     applySession(session);
+    globalThis.dispatchEvent?.(new CustomEvent(organizationChangedEvent, { detail: { organizationId } }));
   }
 
   async function handleAuthError(error: ConnectError): Promise<void> {

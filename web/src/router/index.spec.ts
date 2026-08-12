@@ -156,6 +156,24 @@ describe('auth route guard', () => {
     expect(paths).toContain('/customers/:customerId/clusters/:clusterId/operators/new');
     expect(paths).toContain('/customers/:customerId/clusters/:clusterId/operators/:operatorId');
   });
+  it('registers the audit route under requiresAuth', () => {
+    const router = createAppRouter(createMemoryHistory());
+    expect(router.resolve('/audit').name).toBe('Audit');
+    expect(router.resolve('/audit').meta.requiresAuth).toBe(true);
+  });
+
+  it('redirects anonymous visitors away from /audit to login (AC-059-09)', async () => {
+    const auth = useAuthStore();
+    auth.$patch({ status: 'anonymous', initialized: true });
+    const router = createAppRouter(createMemoryHistory());
+    installAuthGuard(router);
+
+    await router.push('/audit');
+    await router.isReady();
+
+    expect(router.currentRoute.value.name).toBe('Login');
+    expect(auth.returnUrl).toBe('/audit');
+  });
 
   it('routes operator pages to not found when the feature is disabled', async () => {
     const auth = useAuthStore();

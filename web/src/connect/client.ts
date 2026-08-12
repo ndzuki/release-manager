@@ -1,6 +1,7 @@
 import { Code, ConnectError, createClient, type Interceptor } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
 import { AuthService, OrganizationService } from '@/gen/auth/v1/auth_pb';
+import { AuditService } from '@/gen/audit/v1/audit_pb';
 import { BundleService, OrchestratorService } from '@/gen/orchestrator/v1/orchestrator_pb';
 
 const csrfCookieName = 'rm_csrf';
@@ -57,4 +58,5 @@ export const authClient = createClient(AuthService, transport);
 export const organizationClient = createClient(OrganizationService, transport);
 export const orchestratorClient = createClient(OrchestratorService, transport);
 export const bundleClient = createClient(BundleService, transport);
+export const auditClient = createClient(AuditService, transport);
 
