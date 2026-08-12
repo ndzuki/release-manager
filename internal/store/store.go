@@ -484,6 +484,7 @@ type Customer struct {
 	Name      string         `json:"name"`
 	Slug      string         `json:"slug"`
 	Status    CustomerStatus `json:"status"`
+	Version   int64          `json:"version"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 }
@@ -1522,8 +1523,27 @@ type CustomerStore interface {
 	Create(ctx context.Context, c *Customer) error
 	Get(ctx context.Context, id string) (*Customer, error)
 	GetBySlug(ctx context.Context, slug string) (*Customer, error)
-	Update(ctx context.Context, c *Customer) error
+	// Update applies name/slug/status changes with optimistic locking:
+	// the write succeeds only when the stored version equals expectedVersion,
+	// otherwise ErrOptimisticLock is returned (AC-051-02).
+	Update(ctx context.Context, c *Customer, expectedVersion int64) error
 	List(ctx context.Context, includeDisabled bool) ([]*Customer, error)
+}
+
+// CustomerBindingCreateCommand atomically creates a customer and binds it to
+// the acting organization in one transaction (REQ-051): a customer that is
+// created without an active org binding would be invisible to its creator.
+type CustomerBindingCreateCommand struct {
+	Customer  *Customer
+	OrgID     string
+	BindingID string
+}
+
+// CustomerBindingCreateStore executes the atomic customer+binding creation
+// seam. The customer row, the active org-customer binding, its binding event,
+// and the authorization source version bump commit together or not at all.
+type CustomerBindingCreateStore interface {
+	CreateCustomerWithOrgBinding(ctx context.Context, cmd CustomerBindingCreateCommand) error
 }
 
 // CustomerEvent is a domain event emitted for customer lifecycle changes.
@@ -1537,6 +1557,9 @@ type CustomerEvent struct {
 // CustomerEventStore defines the persistence contract for customer events.
 type CustomerEventStore interface {
 	Create(ctx context.Context, ev *CustomerEvent) error
+	// ListByCustomer returns the immutable lifecycle history for one customer,
+	// ordered by (created_at DESC, id DESC) for a stable newest-first view.
+	ListByCustomer(ctx context.Context, customerID string) ([]*CustomerEvent, error)
 }
 
 // ClusterStore defines the persistence contract for clusters.
@@ -2019,6 +2042,7 @@ type Store interface {
 	ValuesApproval() ValuesApprovalStore
 	ValuesApprovalEvidence() ValuesApprovalReader
 	Customers() CustomerStore
+	CustomerCreates() CustomerBindingCreateStore
 	Clusters() ClusterStore
 	OperatorManagement() OperatorManagementStore
 	EnrollmentTokens() EnrollmentTokenStore

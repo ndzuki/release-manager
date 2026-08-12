@@ -396,7 +396,7 @@ func TestValuesApproval_AuthorizationAndLifecycle(t *testing.T) {
 				customer, err := f.st.Customers().Get(f.ctx, f.customerID)
 				require.NoError(t, err)
 				customer.Status = store.CustomerDisabled
-				require.NoError(t, f.st.Customers().Update(f.ctx, customer))
+				require.NoError(t, f.st.Customers().Update(f.ctx, customer, customer.Version))
 			},
 			action: func(f approvalFixture) error {
 				_, err := f.svc.SubmitValuesRevision(f.actorContext(f.creatorID, store.RoleDeployer), f.submitRequest("disabled-customer"))

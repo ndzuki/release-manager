@@ -367,6 +367,9 @@ message UpdateCustomerRequest {
   string customer_id = 1;
   string name = 2;
   string slug = 3;
+  // expected_version carries the version the client observed; the update is
+  // rejected with optimistic_lock_conflict when it does not match (AC-051-02).
+  int64 expected_version = 4;
 }
 
 message UpdateCustomerResponse {
@@ -378,6 +381,15 @@ message DisableCustomerRequest {
 }
 
 message DisableCustomerResponse {}
+
+message ListCustomerEventsRequest {
+  string customer_id = 1;
+}
+
+message ListCustomerEventsResponse {
+  // events are ordered by (created_at DESC, id DESC) for a stable view.
+  repeated common.v1.CustomerEvent events = 1;
+}
 
 // ── Cluster Management ────────────────────────────────────────────
 
@@ -802,6 +814,7 @@ service OrchestratorService {
   rpc ListCustomers(ListCustomersRequest) returns (ListCustomersResponse);
   rpc UpdateCustomer(UpdateCustomerRequest) returns (UpdateCustomerResponse);
   rpc DisableCustomer(DisableCustomerRequest) returns (DisableCustomerResponse);
+  rpc ListCustomerEvents(ListCustomerEventsRequest) returns (ListCustomerEventsResponse);
   rpc CreateCluster(CreateClusterRequest) returns (CreateClusterResponse);
   rpc UpdateCluster(UpdateClusterRequest) returns (UpdateClusterResponse);
   rpc GetCluster(GetClusterRequest) returns (GetClusterResponse);
