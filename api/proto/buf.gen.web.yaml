@@ -12,3 +12,5 @@ inputs:
       - api/proto/common/v1/domain.proto
       - api/proto/common/v1/trust.proto
       - api/proto/orchestrator/v1/orchestrator.proto
+      - api/proto/audit/v1/audit.proto
+      - api/proto/common/v1/types.proto

@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file audit/v1/audit.proto.
  */
 export const file_audit_v1_audit: GenFile = /*@__PURE__*/
-  fileDesc("ChRhdWRpdC92MS9hdWRpdC5wcm90bxIIYXVkaXQudjEieAoKQXVkaXRBY3RvchIhCgRraW5kGAEgASgOMhMuYXVkaXQudjEuQWN0b3JLaW5kEgoKAmlkGAIgASgJEhcKD29yZ2FuaXphdGlvbl9pZBgDIAEoCRIMCgRyb2xlGAQgASgJEhQKDGRpc3BsYXlfbmFtZRgFIAEoCSL3AgoKQXVkaXRFdmVudBIKCgJpZBgBIAEoCRIjCgVhY3RvchgCIAEoCzIULmF1ZGl0LnYxLkF1ZGl0QWN0b3ISFQoNcmVzb3VyY2VfdHlwZRgDIAEoCRITCgtyZXNvdXJjZV9pZBgEIAEoCRIOCgZhY3Rpb24YBSABKAkSDgoGc3RhdHVzGAYgASgJEhMKC2R1cmF0aW9uX21zGAcgASgDEhYKDmNoYW5nZV9zdW1tYXJ5GAggASgJEi4KCmNyZWF0ZWRfYXQYCSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjQKCG1ldGFkYXRhGAogAygLMiIuYXVkaXQudjEuQXVkaXRFdmVudC5NZXRhZGF0YUVudHJ5EhQKDG9wZXJhdGlvbl9pZBgLIAEoCRISCgpyZXF1ZXN0X2lkGAwgASgJGi8KDU1ldGFkYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASIzCgtFbWl0UmVxdWVzdBIkCgZldmVudHMYASADKAsyFC5hdWRpdC52MS5BdWRpdEV2ZW50ImQKDEVtaXRSZXNwb25zZRIQCghhY2NlcHRlZBgBIAEoBRIQCghyZWplY3RlZBgCIAEoBRIXCg9hdWRpdF9ldmVudF9pZHMYAyADKAkSFwoPcmVqZWN0aW9uX2NvZGVzGAQgAygJItECChBBdWRpdFF1ZXJ5RmlsdGVyEhcKD29yZ2FuaXphdGlvbl9pZBgBIAEoCRIVCg1yZXNvdXJjZV90eXBlGAIgASgJEhMKC3Jlc291cmNlX2lkGAMgASgJEhAKCGFjdG9yX2lkGAQgASgJEg4KBmFjdGlvbhgFIAEoCRIOCgZzdGF0dXMYBiABKAkSLQoKdGltZV9yYW5nZRgHIAEoCzIZLmNvbW1vbi52MS5UaW1lc3RhbXBSYW5nZRIlCgdhY3Rpb25zGAggAygOMhQuYXVkaXQudjEuQWN0aW9uVHlwZRImCghzdGF0dXNlcxgJIAMoDjIULmF1ZGl0LnYxLlN0YXR1c1R5cGUSFAoMb3BlcmF0aW9uX2lkGAogASgJEjIKEnJlc291cmNlX3R5cGVfZW51bRgLIAEoDjIWLmF1ZGl0LnYxLlJlc291cmNlVHlwZSJwChdRdWVyeUF1ZGl0RXZlbnRzUmVxdWVzdBIqCgZmaWx0ZXIYASABKAsyGi5hdWRpdC52MS5BdWRpdFF1ZXJ5RmlsdGVyEikKCnBhZ2luYXRpb24YAiABKAsyFS5jb21tb24udjEuUGFnaW5hdGlvbiJzChhRdWVyeUF1ZGl0RXZlbnRzUmVzcG9uc2USJAoGZXZlbnRzGAEgAygLMhQuYXVkaXQudjEuQXVkaXRFdmVudBIxCgpwYWdpbmF0aW9uGAIgASgLMh0uY29tbW9uLnYxLlBhZ2luYXRpb25SZXNwb25zZSKAAQoYRXhwb3J0QXVkaXRFdmVudHNSZXF1ZXN0EioKBmZpbHRlchgBIAEoCzIaLmF1ZGl0LnYxLkF1ZGl0UXVlcnlGaWx0ZXISJgoGZm9ybWF0GAIgASgOMhYuYXVkaXQudjEuRXhwb3J0Rm9ybWF0EhAKCG1heF9yb3dzGAMgASgFIn8KGUV4cG9ydEF1ZGl0RXZlbnRzUmVzcG9uc2USEQoJZXhwb3J0X2lkGAEgASgJEg4KBnN0YXR1cxgCIAEoCRIPCgd0YXNrX2lkGAMgASgJEi4KCmNyZWF0ZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIi4KG0dldEF1ZGl0RXhwb3J0U3RhdHVzUmVxdWVzdBIPCgd0YXNrX2lkGAEgASgJIs4BChxHZXRBdWRpdEV4cG9ydFN0YXR1c1Jlc3BvbnNlEg8KB3Rhc2tfaWQYASABKAkSDgoGc3RhdHVzGAIgASgJEhQKDGRvd25sb2FkX3VybBgDIAEoCRIVCg1lcnJvcl9tZXNzYWdlGAQgASgJEi4KCmNyZWF0ZWRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjAKDGNvbXBsZXRlZF9hdBgGIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiTwoQQXVkaXRFcnJvckRldGFpbBIOCgZyZWFzb24YASABKAkSFgoObWF4X3JhbmdlX2RheXMYAiABKAUSEwoLcmV0cnlfYWZ0ZXIYAyABKAkqnQEKCUFjdG9yS2luZBIaChZBQ1RPUl9LSU5EX1VOU1BFQ0lGSUVEEAASGAoUQUNUT1JfS0lORF9BTk9OWU1PVVMQARITCg9BQ1RPUl9LSU5EX1VTRVIQAhIWChJBQ1RPUl9LSU5EX1NFUlZJQ0UQAxIWChJBQ1RPUl9LSU5EX0FQSV9LRVkQBBIVChFBQ1RPUl9LSU5EX1NZU1RFTRAFKqQCCgxSZXNvdXJjZVR5cGUSHQoZUkVTT1VSQ0VfVFlQRV9VTlNQRUNJRklFRBAAEhkKFVJFU09VUkNFX1RZUEVfQ0xVU1RFUhABEiQKIFJFU09VUkNFX1RZUEVfUkVMRUFTRV9ERUZJTklUSU9OEAISGwoXUkVTT1VSQ0VfVFlQRV9PUEVSQVRJT04QAxIhCh1SRVNPVVJDRV9UWVBFX1ZBTFVFU19SRVZJU0lPThAEEhoKFlJFU09VUkNFX1RZUEVfT1BFUkFUT1IQBRIcChhSRVNPVVJDRV9UWVBFX1RSVVNUX1JPT1QQBhIeChpSRVNPVVJDRV9UWVBFX1RSVVNUX1BPTElDWRAHEhoKFlJFU09VUkNFX1RZUEVfQ1VTVE9NRVIQCCrQAgoKQWN0aW9uVHlwZRIbChdBQ1RJT05fVFlQRV9VTlNQRUNJRklFRBAAEhYKEkFDVElPTl9UWVBFX0NSRUFURRABEhYKEkFDVElPTl9UWVBFX1VQREFURRACEhYKEkFDVElPTl9UWVBFX0RFTEVURRADEhcKE0FDVElPTl9UWVBFX0FQUFJPVkUQBBIWChJBQ1RJT05fVFlQRV9SRUpFQ1QQBRIXChNBQ1RJT05fVFlQRV9JTlNUQUxMEAYSFwoTQUNUSU9OX1RZUEVfVVBHUkFERRAHEhgKFEFDVElPTl9UWVBFX1JPTExCQUNLEAgSGQoVQUNUSU9OX1RZUEVfRU1FUkdFTkNZEAkSFgoSQUNUSU9OX1RZUEVfRVhQT1JUEAoSFQoRQUNUSU9OX1RZUEVfTE9HSU4QCxIWChJBQ1RJT05fVFlQRV9MT0dPVVQQDCpbCgpTdGF0dXNUeXBlEhsKF1NUQVRVU19UWVBFX1VOU1BFQ0lGSUVEEAASFwoTU1RBVFVTX1RZUEVfU1VDQ0VTUxABEhcKE1NUQVRVU19UWVBFX0ZBSUxVUkUQAipECgxFeHBvcnRGb3JtYXQSHQoZRVhQT1JUX0ZPUk1BVF9VTlNQRUNJRklFRBAAEhUKEUVYUE9SVF9GT1JNQVRfQ1NWEAEy5QIKDEF1ZGl0U2VydmljZRI1CgRFbWl0EhUuYXVkaXQudjEuRW1pdFJlcXVlc3QaFi5hdWRpdC52MS5FbWl0UmVzcG9uc2USWQoQUXVlcnlBdWRpdEV2ZW50cxIhLmF1ZGl0LnYxLlF1ZXJ5QXVkaXRFdmVudHNSZXF1ZXN0GiIuYXVkaXQudjEuUXVlcnlBdWRpdEV2ZW50c1Jlc3BvbnNlElwKEUV4cG9ydEF1ZGl0RXZlbnRzEiIuYXVkaXQudjEuRXhwb3J0QXVkaXRFdmVudHNSZXF1ZXN0GiMuYXVkaXQudjEuRXhwb3J0QXVkaXRFdmVudHNSZXNwb25zZRJlChRHZXRBdWRpdEV4cG9ydFN0YXR1cxIlLmF1ZGl0LnYxLkdldEF1ZGl0RXhwb3J0U3RhdHVzUmVxdWVzdBomLmF1ZGl0LnYxLkdldEF1ZGl0RXhwb3J0U3RhdHVzUmVzcG9uc2VCPFo6Z2l0aHViLmNvbS9uZHp1a2kvcmVsZWFzZS1tYW5hZ2VyL2FwaS9nZW4vYXVkaXQvdjE7YXVkaXR2MWIGcHJvdG8z", [file_google_protobuf_timestamp, file_common_v1_types]);
+  fileDesc("ChRhdWRpdC92MS9hdWRpdC5wcm90bxIIYXVkaXQudjEiYgoKQXVkaXRBY3RvchIhCgRraW5kGAEgASgOMhMuYXVkaXQudjEuQWN0b3JLaW5kEgoKAmlkGAIgASgJEhcKD29yZ2FuaXphdGlvbl9pZBgDIAEoCRIMCgRyb2xlGAQgASgJIs0CCgpBdWRpdEV2ZW50EgoKAmlkGAEgASgJEiMKBWFjdG9yGAIgASgLMhQuYXVkaXQudjEuQXVkaXRBY3RvchIVCg1yZXNvdXJjZV90eXBlGAMgASgJEhMKC3Jlc291cmNlX2lkGAQgASgJEg4KBmFjdGlvbhgFIAEoCRIOCgZzdGF0dXMYBiABKAkSEwoLZHVyYXRpb25fbXMYByABKAMSFgoOY2hhbmdlX3N1bW1hcnkYCCABKAkSLgoKY3JlYXRlZF9hdBgJIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASNAoIbWV0YWRhdGEYCiADKAsyIi5hdWRpdC52MS5BdWRpdEV2ZW50Lk1ldGFkYXRhRW50cnkaLwoNTWV0YWRhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIjgKEEVtaXRBdWRpdFJlcXVlc3QSJAoGZXZlbnRzGAEgAygLMhQuYXVkaXQudjEuQXVkaXRFdmVudCJpChFFbWl0QXVkaXRSZXNwb25zZRIQCghhY2NlcHRlZBgBIAEoBRIQCghyZWplY3RlZBgCIAEoBRIXCg9hdWRpdF9ldmVudF9pZHMYAyADKAkSFwoPcmVqZWN0aW9uX2NvZGVzGAQgAygJIrgBChBBdWRpdFF1ZXJ5RmlsdGVyEhcKD29yZ2FuaXphdGlvbl9pZBgBIAEoCRIVCg1yZXNvdXJjZV90eXBlGAIgASgJEhMKC3Jlc291cmNlX2lkGAMgASgJEhAKCGFjdG9yX2lkGAQgASgJEg4KBmFjdGlvbhgFIAEoCRIOCgZzdGF0dXMYBiABKAkSLQoKdGltZV9yYW5nZRgHIAEoCzIZLmNvbW1vbi52MS5UaW1lc3RhbXBSYW5nZSJwChdRdWVyeUF1ZGl0RXZlbnRzUmVxdWVzdBIqCgZmaWx0ZXIYASABKAsyGi5hdWRpdC52MS5BdWRpdFF1ZXJ5RmlsdGVyEikKCnBhZ2luYXRpb24YAiABKAsyFS5jb21tb24udjEuUGFnaW5hdGlvbiJzChhRdWVyeUF1ZGl0RXZlbnRzUmVzcG9uc2USJAoGZXZlbnRzGAEgAygLMhQuYXVkaXQudjEuQXVkaXRFdmVudBIxCgpwYWdpbmF0aW9uGAIgASgLMh0uY29tbW9uLnYxLlBhZ2luYXRpb25SZXNwb25zZSJGChhFeHBvcnRBdWRpdEV2ZW50c1JlcXVlc3QSKgoGZmlsdGVyGAEgASgLMhouYXVkaXQudjEuQXVkaXRRdWVyeUZpbHRlciI+ChlFeHBvcnRBdWRpdEV2ZW50c1Jlc3BvbnNlEhEKCWV4cG9ydF9pZBgBIAEoCRIOCgZzdGF0dXMYAiABKAkqnQEKCUFjdG9yS2luZBIaChZBQ1RPUl9LSU5EX1VOU1BFQ0lGSUVEEAASGAoUQUNUT1JfS0lORF9BTk9OWU1PVVMQARITCg9BQ1RPUl9LSU5EX1VTRVIQAhIWChJBQ1RPUl9LSU5EX1NFUlZJQ0UQAxIWChJBQ1RPUl9LSU5EX0FQSV9LRVkQBBIVChFBQ1RPUl9LSU5EX1NZU1RFTRAFMogCCgxBdWRpdFNlcnZpY2USPwoERW1pdBIaLmF1ZGl0LnYxLkVtaXRBdWRpdFJlcXVlc3QaGy5hdWRpdC52MS5FbWl0QXVkaXRSZXNwb25zZRJZChBRdWVyeUF1ZGl0RXZlbnRzEiEuYXVkaXQudjEuUXVlcnlBdWRpdEV2ZW50c1JlcXVlc3QaIi5hdWRpdC52MS5RdWVyeUF1ZGl0RXZlbnRzUmVzcG9uc2USXAoRRXhwb3J0QXVkaXRFdmVudHMSIi5hdWRpdC52MS5FeHBvcnRBdWRpdEV2ZW50c1JlcXVlc3QaIy5hdWRpdC52MS5FeHBvcnRBdWRpdEV2ZW50c1Jlc3BvbnNlQjxaOmdpdGh1Yi5jb20vbmR6dWtpL3JlbGVhc2UtbWFuYWdlci9hcGkvZ2VuL2F1ZGl0L3YxO2F1ZGl0djFiBnByb3RvMw", [file_google_protobuf_timestamp, file_common_v1_types]);
 
 /**
  * AuditActor identifies the principal that performed an audited action.
@@ -41,11 +41,6 @@ export type AuditActor = Message<"audit.v1.AuditActor"> & {
    * @generated from field: string role = 4;
    */
   role: string;
-
-  /**
-   * @generated from field: string display_name = 5;
-   */
-  displayName: string;
 };
 
 /**
@@ -112,16 +107,6 @@ export type AuditEvent = Message<"audit.v1.AuditEvent"> & {
    * @generated from field: map<string, string> metadata = 10;
    */
   metadata: { [key: string]: string };
-
-  /**
-   * @generated from field: string operation_id = 11;
-   */
-  operationId: string;
-
-  /**
-   * @generated from field: string request_id = 12;
-   */
-  requestId: string;
 };
 
 /**
@@ -132,11 +117,11 @@ export const AuditEventSchema: GenMessage<AuditEvent> = /*@__PURE__*/
   messageDesc(file_audit_v1_audit, 1);
 
 /**
- * EmitRequest submits one or more audit events for asynchronous persistence.
+ * EmitAuditRequest submits one or more audit events for asynchronous persistence.
  *
- * @generated from message audit.v1.EmitRequest
+ * @generated from message audit.v1.EmitAuditRequest
  */
-export type EmitRequest = Message<"audit.v1.EmitRequest"> & {
+export type EmitAuditRequest = Message<"audit.v1.EmitAuditRequest"> & {
   /**
    * @generated from field: repeated audit.v1.AuditEvent events = 1;
    */
@@ -144,18 +129,18 @@ export type EmitRequest = Message<"audit.v1.EmitRequest"> & {
 };
 
 /**
- * Describes the message audit.v1.EmitRequest.
- * Use `create(EmitRequestSchema)` to create a new message.
+ * Describes the message audit.v1.EmitAuditRequest.
+ * Use `create(EmitAuditRequestSchema)` to create a new message.
  */
-export const EmitRequestSchema: GenMessage<EmitRequest> = /*@__PURE__*/
+export const EmitAuditRequestSchema: GenMessage<EmitAuditRequest> = /*@__PURE__*/
   messageDesc(file_audit_v1_audit, 2);
 
 /**
- * EmitResponse acknowledges receipt of audit events.
+ * EmitAuditResponse acknowledges receipt of audit events.
  *
- * @generated from message audit.v1.EmitResponse
+ * @generated from message audit.v1.EmitAuditResponse
  */
-export type EmitResponse = Message<"audit.v1.EmitResponse"> & {
+export type EmitAuditResponse = Message<"audit.v1.EmitAuditResponse"> & {
   /**
    * @generated from field: int32 accepted = 1;
    */
@@ -178,10 +163,10 @@ export type EmitResponse = Message<"audit.v1.EmitResponse"> & {
 };
 
 /**
- * Describes the message audit.v1.EmitResponse.
- * Use `create(EmitResponseSchema)` to create a new message.
+ * Describes the message audit.v1.EmitAuditResponse.
+ * Use `create(EmitAuditResponseSchema)` to create a new message.
  */
-export const EmitResponseSchema: GenMessage<EmitResponse> = /*@__PURE__*/
+export const EmitAuditResponseSchema: GenMessage<EmitAuditResponse> = /*@__PURE__*/
   messageDesc(file_audit_v1_audit, 3);
 
 /**
@@ -224,26 +209,6 @@ export type AuditQueryFilter = Message<"audit.v1.AuditQueryFilter"> & {
    * @generated from field: common.v1.TimestampRange time_range = 7;
    */
   timeRange?: TimestampRange | undefined;
-
-  /**
-   * @generated from field: repeated audit.v1.ActionType actions = 8;
-   */
-  actions: ActionType[];
-
-  /**
-   * @generated from field: repeated audit.v1.StatusType statuses = 9;
-   */
-  statuses: StatusType[];
-
-  /**
-   * @generated from field: string operation_id = 10;
-   */
-  operationId: string;
-
-  /**
-   * @generated from field: audit.v1.ResourceType resource_type_enum = 11;
-   */
-  resourceTypeEnum: ResourceType;
 };
 
 /**
@@ -302,7 +267,7 @@ export const QueryAuditEventsResponseSchema: GenMessage<QueryAuditEventsResponse
   messageDesc(file_audit_v1_audit, 6);
 
 /**
- * ExportAuditEventsRequest creates an asynchronous export job.
+ * ExportAuditEventsRequest creates an asynchronous audit export job.
  *
  * @generated from message audit.v1.ExportAuditEventsRequest
  */
@@ -311,16 +276,6 @@ export type ExportAuditEventsRequest = Message<"audit.v1.ExportAuditEventsReques
    * @generated from field: audit.v1.AuditQueryFilter filter = 1;
    */
   filter?: AuditQueryFilter | undefined;
-
-  /**
-   * @generated from field: audit.v1.ExportFormat format = 2;
-   */
-  format: ExportFormat;
-
-  /**
-   * @generated from field: int32 max_rows = 3;
-   */
-  maxRows: number;
 };
 
 /**
@@ -345,16 +300,6 @@ export type ExportAuditEventsResponse = Message<"audit.v1.ExportAuditEventsRespo
    * @generated from field: string status = 2;
    */
   status: string;
-
-  /**
-   * @generated from field: string task_id = 3;
-   */
-  taskId: string;
-
-  /**
-   * @generated from field: google.protobuf.Timestamp created_at = 4;
-   */
-  createdAt?: Timestamp | undefined;
 };
 
 /**
@@ -363,92 +308,6 @@ export type ExportAuditEventsResponse = Message<"audit.v1.ExportAuditEventsRespo
  */
 export const ExportAuditEventsResponseSchema: GenMessage<ExportAuditEventsResponse> = /*@__PURE__*/
   messageDesc(file_audit_v1_audit, 8);
-
-/**
- * @generated from message audit.v1.GetAuditExportStatusRequest
- */
-export type GetAuditExportStatusRequest = Message<"audit.v1.GetAuditExportStatusRequest"> & {
-  /**
-   * @generated from field: string task_id = 1;
-   */
-  taskId: string;
-};
-
-/**
- * Describes the message audit.v1.GetAuditExportStatusRequest.
- * Use `create(GetAuditExportStatusRequestSchema)` to create a new message.
- */
-export const GetAuditExportStatusRequestSchema: GenMessage<GetAuditExportStatusRequest> = /*@__PURE__*/
-  messageDesc(file_audit_v1_audit, 9);
-
-/**
- * @generated from message audit.v1.GetAuditExportStatusResponse
- */
-export type GetAuditExportStatusResponse = Message<"audit.v1.GetAuditExportStatusResponse"> & {
-  /**
-   * @generated from field: string task_id = 1;
-   */
-  taskId: string;
-
-  /**
-   * @generated from field: string status = 2;
-   */
-  status: string;
-
-  /**
-   * @generated from field: string download_url = 3;
-   */
-  downloadUrl: string;
-
-  /**
-   * @generated from field: string error_message = 4;
-   */
-  errorMessage: string;
-
-  /**
-   * @generated from field: google.protobuf.Timestamp created_at = 5;
-   */
-  createdAt?: Timestamp | undefined;
-
-  /**
-   * @generated from field: google.protobuf.Timestamp completed_at = 6;
-   */
-  completedAt?: Timestamp | undefined;
-};
-
-/**
- * Describes the message audit.v1.GetAuditExportStatusResponse.
- * Use `create(GetAuditExportStatusResponseSchema)` to create a new message.
- */
-export const GetAuditExportStatusResponseSchema: GenMessage<GetAuditExportStatusResponse> = /*@__PURE__*/
-  messageDesc(file_audit_v1_audit, 10);
-
-/**
- * @generated from message audit.v1.AuditErrorDetail
- */
-export type AuditErrorDetail = Message<"audit.v1.AuditErrorDetail"> & {
-  /**
-   * @generated from field: string reason = 1;
-   */
-  reason: string;
-
-  /**
-   * @generated from field: int32 max_range_days = 2;
-   */
-  maxRangeDays: number;
-
-  /**
-   * @generated from field: string retry_after = 3;
-   */
-  retryAfter: string;
-};
-
-/**
- * Describes the message audit.v1.AuditErrorDetail.
- * Use `create(AuditErrorDetailSchema)` to create a new message.
- */
-export const AuditErrorDetailSchema: GenMessage<AuditErrorDetail> = /*@__PURE__*/
-  messageDesc(file_audit_v1_audit, 11);
 
 /**
  * ActorKind classifies the principal that performed an action.
@@ -494,193 +353,6 @@ export const ActorKindSchema: GenEnum<ActorKind> = /*@__PURE__*/
   enumDesc(file_audit_v1_audit, 0);
 
 /**
- * ResourceType identifies the resource family targeted by an audit event.
- *
- * @generated from enum audit.v1.ResourceType
- */
-export enum ResourceType {
-  /**
-   * @generated from enum value: RESOURCE_TYPE_UNSPECIFIED = 0;
-   */
-  UNSPECIFIED = 0,
-
-  /**
-   * @generated from enum value: RESOURCE_TYPE_CLUSTER = 1;
-   */
-  CLUSTER = 1,
-
-  /**
-   * @generated from enum value: RESOURCE_TYPE_RELEASE_DEFINITION = 2;
-   */
-  RELEASE_DEFINITION = 2,
-
-  /**
-   * @generated from enum value: RESOURCE_TYPE_OPERATION = 3;
-   */
-  OPERATION = 3,
-
-  /**
-   * @generated from enum value: RESOURCE_TYPE_VALUES_REVISION = 4;
-   */
-  VALUES_REVISION = 4,
-
-  /**
-   * @generated from enum value: RESOURCE_TYPE_OPERATOR = 5;
-   */
-  OPERATOR = 5,
-
-  /**
-   * @generated from enum value: RESOURCE_TYPE_TRUST_ROOT = 6;
-   */
-  TRUST_ROOT = 6,
-
-  /**
-   * @generated from enum value: RESOURCE_TYPE_TRUST_POLICY = 7;
-   */
-  TRUST_POLICY = 7,
-
-  /**
-   * @generated from enum value: RESOURCE_TYPE_CUSTOMER = 8;
-   */
-  CUSTOMER = 8,
-}
-
-/**
- * Describes the enum audit.v1.ResourceType.
- */
-export const ResourceTypeSchema: GenEnum<ResourceType> = /*@__PURE__*/
-  enumDesc(file_audit_v1_audit, 1);
-
-/**
- * ActionType identifies the operation performed by an audit event.
- *
- * @generated from enum audit.v1.ActionType
- */
-export enum ActionType {
-  /**
-   * @generated from enum value: ACTION_TYPE_UNSPECIFIED = 0;
-   */
-  UNSPECIFIED = 0,
-
-  /**
-   * @generated from enum value: ACTION_TYPE_CREATE = 1;
-   */
-  CREATE = 1,
-
-  /**
-   * @generated from enum value: ACTION_TYPE_UPDATE = 2;
-   */
-  UPDATE = 2,
-
-  /**
-   * @generated from enum value: ACTION_TYPE_DELETE = 3;
-   */
-  DELETE = 3,
-
-  /**
-   * @generated from enum value: ACTION_TYPE_APPROVE = 4;
-   */
-  APPROVE = 4,
-
-  /**
-   * @generated from enum value: ACTION_TYPE_REJECT = 5;
-   */
-  REJECT = 5,
-
-  /**
-   * @generated from enum value: ACTION_TYPE_INSTALL = 6;
-   */
-  INSTALL = 6,
-
-  /**
-   * @generated from enum value: ACTION_TYPE_UPGRADE = 7;
-   */
-  UPGRADE = 7,
-
-  /**
-   * @generated from enum value: ACTION_TYPE_ROLLBACK = 8;
-   */
-  ROLLBACK = 8,
-
-  /**
-   * @generated from enum value: ACTION_TYPE_EMERGENCY = 9;
-   */
-  EMERGENCY = 9,
-
-  /**
-   * @generated from enum value: ACTION_TYPE_EXPORT = 10;
-   */
-  EXPORT = 10,
-
-  /**
-   * @generated from enum value: ACTION_TYPE_LOGIN = 11;
-   */
-  LOGIN = 11,
-
-  /**
-   * @generated from enum value: ACTION_TYPE_LOGOUT = 12;
-   */
-  LOGOUT = 12,
-}
-
-/**
- * Describes the enum audit.v1.ActionType.
- */
-export const ActionTypeSchema: GenEnum<ActionType> = /*@__PURE__*/
-  enumDesc(file_audit_v1_audit, 2);
-
-/**
- * StatusType identifies the outcome of an audit event.
- *
- * @generated from enum audit.v1.StatusType
- */
-export enum StatusType {
-  /**
-   * @generated from enum value: STATUS_TYPE_UNSPECIFIED = 0;
-   */
-  UNSPECIFIED = 0,
-
-  /**
-   * @generated from enum value: STATUS_TYPE_SUCCESS = 1;
-   */
-  SUCCESS = 1,
-
-  /**
-   * @generated from enum value: STATUS_TYPE_FAILURE = 2;
-   */
-  FAILURE = 2,
-}
-
-/**
- * Describes the enum audit.v1.StatusType.
- */
-export const StatusTypeSchema: GenEnum<StatusType> = /*@__PURE__*/
-  enumDesc(file_audit_v1_audit, 3);
-
-/**
- * ExportFormat identifies the supported export encoding.
- *
- * @generated from enum audit.v1.ExportFormat
- */
-export enum ExportFormat {
-  /**
-   * @generated from enum value: EXPORT_FORMAT_UNSPECIFIED = 0;
-   */
-  UNSPECIFIED = 0,
-
-  /**
-   * @generated from enum value: EXPORT_FORMAT_CSV = 1;
-   */
-  CSV = 1,
-}
-
-/**
- * Describes the enum audit.v1.ExportFormat.
- */
-export const ExportFormatSchema: GenEnum<ExportFormat> = /*@__PURE__*/
-  enumDesc(file_audit_v1_audit, 4);
-
-/**
  * AuditService collects and queries audit events.
  *
  * @generated from service audit.v1.AuditService
@@ -691,8 +363,8 @@ export const AuditService: GenService<{
    */
   emit: {
     methodKind: "unary";
-    input: typeof EmitRequestSchema;
-    output: typeof EmitResponseSchema;
+    input: typeof EmitAuditRequestSchema;
+    output: typeof EmitAuditResponseSchema;
   },
   /**
    * @generated from rpc audit.v1.AuditService.QueryAuditEvents
@@ -709,14 +381,6 @@ export const AuditService: GenService<{
     methodKind: "unary";
     input: typeof ExportAuditEventsRequestSchema;
     output: typeof ExportAuditEventsResponseSchema;
-  },
-  /**
-   * @generated from rpc audit.v1.AuditService.GetAuditExportStatus
-   */
-  getAuditExportStatus: {
-    methodKind: "unary";
-    input: typeof GetAuditExportStatusRequestSchema;
-    output: typeof GetAuditExportStatusResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_audit_v1_audit, 0);
