@@ -152,6 +152,11 @@ func (s *Store) Customers() store.CustomerStore { return s.customers }
 // Clusters returns the ClusterStore.
 func (s *Store) Clusters() store.ClusterStore { return s.clusters }
 
+// OperatorManagement returns the atomic Operator management store.
+func (s *Store) OperatorManagement() store.OperatorManagementStore {
+	return &operatorManagementStore{db: s.db}
+}
+
 // EnrollmentTokens returns the EnrollmentTokenStore.
 func (s *Store) EnrollmentTokens() store.EnrollmentTokenStore { return s.tokens }
 
@@ -501,15 +506,20 @@ var migrationStatements = []string{
 
 	// Operator enrollment and session management (REQ-015, REQ-044)
 	`CREATE TABLE IF NOT EXISTS enrollment_tokens (
-		id          TEXT PRIMARY KEY,
-		customer_id TEXT NOT NULL,
-		cluster_id  TEXT NOT NULL,
-		token       TEXT NOT NULL UNIQUE,
-		created_at  TEXT NOT NULL,
-		expires_at  TEXT NOT NULL,
-		used        INTEGER NOT NULL DEFAULT 0,
-		used_at     TEXT,
-		operator_id TEXT NOT NULL DEFAULT ''
+		id                    TEXT PRIMARY KEY,
+		customer_id           TEXT NOT NULL,
+		cluster_id            TEXT NOT NULL,
+		token                 TEXT NOT NULL UNIQUE,
+		token_hash            TEXT NOT NULL DEFAULT '',
+		operator_name         TEXT NOT NULL DEFAULT '',
+		state                 TEXT NOT NULL DEFAULT 'pending',
+		created_by_display_name TEXT NOT NULL DEFAULT '',
+		created_at            TEXT NOT NULL,
+		expires_at            TEXT NOT NULL,
+		used_at               TEXT,
+		operator_id           TEXT NOT NULL DEFAULT '',
+		revoked_at            TEXT,
+		replaced_by_id        TEXT NOT NULL DEFAULT ''
 	)`,
 
 	// REQ-015: token_hash column for enrollment token security
@@ -523,7 +533,9 @@ var migrationStatements = []string{
 		cert_serial   TEXT NOT NULL,
 		status        TEXT NOT NULL DEFAULT 'active',
 		superseded_by TEXT NOT NULL DEFAULT '',
+		superseded_at TEXT,
 		revoked_at    TEXT,
+		revoke_reason TEXT NOT NULL DEFAULT '',
 		created_at    TEXT NOT NULL,
 		updated_at    TEXT NOT NULL
 	)`,
@@ -533,6 +545,9 @@ var migrationStatements = []string{
 	// binding two operators to one certificate.
 	`CREATE UNIQUE INDEX IF NOT EXISTS operators_cert_serial_uq ON operators(cert_serial)`,
 	`CREATE INDEX IF NOT EXISTS idx_operators_name ON operators(operator_name)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_operators_customer_active_name ON operators(customer_id, operator_name) WHERE status = 'active'`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_operators_cluster_active ON operators(cluster_id) WHERE status = 'active'`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_enrollment_tokens_pending_cluster ON enrollment_tokens(cluster_id) WHERE state = 'pending'`,
 	`CREATE INDEX IF NOT EXISTS idx_operators_cluster ON operators(cluster_id, status)`,
 
 	// REQ-015: operator_name column for existing databases
@@ -541,10 +556,14 @@ var migrationStatements = []string{
 	`CREATE TABLE IF NOT EXISTS sessions (
 		id             TEXT PRIMARY KEY,
 		operator_id    TEXT NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
+		customer_id    TEXT NOT NULL DEFAULT '',
+		cluster_id     TEXT NOT NULL DEFAULT '',
 		status         TEXT NOT NULL DEFAULT 'online',
+		status_reason  TEXT,
 		started_at     TEXT NOT NULL,
 		last_heartbeat TEXT NOT NULL,
-		expires_at     TEXT NOT NULL
+		expires_at     TEXT NOT NULL,
+		closed_at      TEXT
 	)`,
 
 	`ALTER TABLE sessions ADD COLUMN instance_id TEXT NOT NULL DEFAULT ''`,
@@ -555,6 +574,21 @@ var migrationStatements = []string{
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_one_active_operator ON sessions(operator_id) WHERE status IN ('online', 'suspect')`,
 
 	`CREATE INDEX IF NOT EXISTS idx_sessions_operator ON sessions(operator_id, status)`,
+
+	// New columns: enrollment token state and metadata (REQ-NNN).
+	`ALTER TABLE enrollment_tokens ADD COLUMN operator_name TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE enrollment_tokens ADD COLUMN state TEXT NOT NULL DEFAULT 'pending'`,
+	`ALTER TABLE enrollment_tokens ADD COLUMN created_by_display_name TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE enrollment_tokens ADD COLUMN revoked_at TEXT`,
+	`ALTER TABLE enrollment_tokens ADD COLUMN replaced_by_id TEXT NOT NULL DEFAULT ''`,
+	// New columns: operator supersede and revoke reason (REQ-NNN).
+	`ALTER TABLE operators ADD COLUMN superseded_at TEXT`,
+	`ALTER TABLE operators ADD COLUMN revoke_reason TEXT NOT NULL DEFAULT ''`,
+	// New columns: session customer linkage and lifecycle (REQ-NNN).
+	`ALTER TABLE sessions ADD COLUMN customer_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE sessions ADD COLUMN cluster_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE sessions ADD COLUMN status_reason TEXT`,
+	`ALTER TABLE sessions ADD COLUMN closed_at TEXT`,
 
 	// Command outbox (REQ-016)
 	`CREATE TABLE IF NOT EXISTS outbox (

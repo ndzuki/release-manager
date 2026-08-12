@@ -427,18 +427,165 @@ message DisableClusterRequest {
 
 message DisableClusterResponse {}
 
-// ── Enrollment Token Management ──────────────────────────────────
+// ── Operator Status Enums ──────────────────────────────────────────
+
+// OperatorLifecycleStatus is the lifecycle state of an operator identity.
+enum OperatorLifecycleStatus {
+  OPERATOR_LIFECYCLE_STATUS_UNSPECIFIED = 0;
+  OPERATOR_LIFECYCLE_STATUS_ACTIVE = 1;
+  OPERATOR_LIFECYCLE_STATUS_SUPERSEDED = 2;
+  OPERATOR_LIFECYCLE_STATUS_REVOKED = 3;
+}
+
+// OperatorSessionStatus tracks the operator connection lifecycle.
+enum OperatorSessionStatus {
+  OPERATOR_SESSION_STATUS_UNSPECIFIED = 0;
+  OPERATOR_SESSION_STATUS_ONLINE = 1;
+  OPERATOR_SESSION_STATUS_SUSPECT = 2;
+  OPERATOR_SESSION_STATUS_OFFLINE = 3;
+  OPERATOR_SESSION_STATUS_REVOKED = 4;
+}
+
+// OperatorSessionStatusReason explains why a session is in its current state.
+enum OperatorSessionStatusReason {
+  OPERATOR_SESSION_STATUS_REASON_UNSPECIFIED = 0;
+  OPERATOR_SESSION_STATUS_REASON_NO_SESSION = 1;
+  OPERATOR_SESSION_STATUS_REASON_HEARTBEAT_TIMEOUT = 2;
+  OPERATOR_SESSION_STATUS_REASON_HEARTBEAT_DELAYED = 3;
+  OPERATOR_SESSION_STATUS_REASON_CERTIFICATE_REVOKED = 4;
+  OPERATOR_SESSION_STATUS_REASON_OPERATOR_SUPERSEDED = 5;
+  OPERATOR_SESSION_STATUS_REASON_SESSION_REPLACED = 6;
+  OPERATOR_SESSION_STATUS_REASON_UNKNOWN = 7;
+}
+
+// EnrollmentTokenState is the lifecycle of an enrollment token.
+enum EnrollmentTokenState {
+  ENROLLMENT_TOKEN_STATE_UNSPECIFIED = 0;
+  ENROLLMENT_TOKEN_STATE_PENDING = 1;
+  ENROLLMENT_TOKEN_STATE_USED = 2;
+  ENROLLMENT_TOKEN_STATE_EXPIRED = 3;
+  ENROLLMENT_TOKEN_STATE_REVOKED = 4;
+}
+
+// ── Operator Messages ──────────────────────────────────────────────
+
+// OperatorSummary is a compact view of an operator for list display.
+message OperatorSummary {
+  string id = 1;
+  string name = 2;
+  string customer_id = 3;
+  string cluster_id = 4;
+  string cluster_name = 5;
+  OperatorLifecycleStatus lifecycle_status = 6;
+  OperatorSessionStatus session_status = 7;
+  OperatorSessionStatusReason session_status_reason = 8;
+  google.protobuf.Timestamp last_heartbeat = 9;
+  google.protobuf.Timestamp registered_at = 10;
+  google.protobuf.Timestamp superseded_at = 11;
+  google.protobuf.Timestamp revoked_at = 12;
+}
+
+// OperatorDetail contains the full operator information including metadata.
+message OperatorDetail {
+  OperatorSummary summary = 1;
+  string superseded_by = 2;
+  string revoke_reason = 3;
+  string instance_id = 4;
+  string version = 5;
+  map<string, string> capabilities = 6;
+}
+
+message ListOperatorsRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+  optional OperatorLifecycleStatus lifecycle_status = 3;
+  optional OperatorSessionStatus session_status = 4;
+  int32 page_size = 5; // default 20, maximum 100
+  string page_token = 6; // opaque cursor
+}
+
+message ListOperatorsResponse {
+  repeated OperatorSummary operators = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+  int32 heartbeat_interval_seconds = 4;
+}
+
+message GetOperatorRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+  string operator_id = 3;
+}
+
+message GetOperatorResponse {
+  OperatorDetail operator = 1;
+  int32 heartbeat_interval_seconds = 2;
+}
+
+message RevokeOperatorRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+  string operator_id = 3;
+  string reason = 4; // trim后 5–500 Unicode characters
+}
+
+message RevokeOperatorResponse {
+  OperatorSummary operator = 1;
+  bool changed = 2; // false表示重复吊销，状态仍为revoked
+}
+
+// ── Enrollment Token Messages ──────────────────────────────────────
 
 message CreateEnrollmentTokenRequest {
   string customer_id = 1;
   string cluster_id = 2;
+  string operator_name = 3;
+  int32 ttl_minutes = 4; // 0 means default 60
+  bool replace_pending_token = 5;
 }
 
 message CreateEnrollmentTokenResponse {
-  string token = 1;
-  string expires_at = 2;
+  string token = 1; // plaintext, returned once and never persisted
+  google.protobuf.Timestamp expires_at = 2;
+  string customer_id = 3;
+  string cluster_id = 4;
+  string cluster_name = 5;
+  string operator_endpoint = 6;
+  string install_command_template_version = 7;
+  string install_command_template = 8; // contains ${ENROLLMENT_TOKEN}
 }
 
+message GetEnrollmentTokenStatusRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+}
+
+message EnrollmentTokenStatus {
+  EnrollmentTokenState state = 1; // pending or no active record
+  google.protobuf.Timestamp created_at = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  string created_by_display_name = 4; // redacted display name only
+}
+
+message GetEnrollmentTokenStatusResponse {
+  EnrollmentTokenStatus status = 1;
+}
+
+message RevokePendingEnrollmentTokenRequest {
+  string customer_id = 1;
+  string cluster_id = 2;
+}
+
+message RevokePendingEnrollmentTokenResponse {
+  bool changed = 1;
+  EnrollmentTokenState final_state = 2; // revoked, expired, used, or unspecified
+}
+
+// OperatorErrorDetail carries a stable machine-readable code and optional field violations.
+message OperatorErrorDetail {
+  string error_code = 1;
+  repeated common.v1.FieldViolation field_violations = 2;
+}
 // ── Cluster Artifact Routing (REQ-014) ────────────────────────────
 
 // ArtifactType classifies the kind of artifact routed to a cluster.
@@ -660,7 +807,15 @@ service OrchestratorService {
   rpc GetCluster(GetClusterRequest) returns (GetClusterResponse);
   rpc ListClusters(ListClustersRequest) returns (ListClustersResponse);
   rpc DisableCluster(DisableClusterRequest) returns (DisableClusterResponse);
+
+  // Operator management (REQ-053)
+  rpc ListOperators(ListOperatorsRequest) returns (ListOperatorsResponse);
+  rpc GetOperator(GetOperatorRequest) returns (GetOperatorResponse);
+  rpc RevokeOperator(RevokeOperatorRequest) returns (RevokeOperatorResponse);
   rpc CreateEnrollmentToken(CreateEnrollmentTokenRequest) returns (CreateEnrollmentTokenResponse);
+  rpc GetEnrollmentTokenStatus(GetEnrollmentTokenStatusRequest) returns (GetEnrollmentTokenStatusResponse);
+  rpc RevokePendingEnrollmentToken(RevokePendingEnrollmentTokenRequest) returns (RevokePendingEnrollmentTokenResponse);
+  // Emergency change (REQ-032)
   rpc EmergencyChange(EmergencyChangeRequest) returns (EmergencyChangeResponse);
   rpc ListEmergencyTargets(ListEmergencyTargetsRequest) returns (ListEmergencyTargetsResponse);
   rpc CheckEmergencyConflict(CheckEmergencyConflictRequest) returns (CheckEmergencyConflictResponse);

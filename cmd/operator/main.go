@@ -260,7 +260,7 @@ func (s *operatorSvc) registerGateway(mux *http.ServeMux, logger *slog.Logger) e
 	logger.Info("store opened", "db", s.dbPath)
 
 	s.auditEmitter = audit.NewEmitter(st.AuditEvents(), logger, audit.DefaultConfig())
-	svc, err := operator.NewService(st, logger, operator.WithAudit(s.auditEmitter))
+	svc, err := operator.NewService(st, logger, operator.WithAudit(s.auditEmitter), operator.WithStreamRegistry(operator.ProcessStreamRegistry()))
 	if err != nil {
 		return fmt.Errorf("create operator service: %w", err)
 	}

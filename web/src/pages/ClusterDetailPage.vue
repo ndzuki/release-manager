@@ -14,6 +14,7 @@ const store = useClusterStore();
 const auth = useAuthStore();
 const customerId = String(route.params.customerId);
 const clusterId = String(route.params.clusterId);
+const operatorManagementEnabled = import.meta.env.VITE_FEATURE_OPERATOR_MANAGEMENT !== 'false';
 const endpoints = {
   cacheEndpoint: import.meta.env.VITE_ARTIFACT_CACHE_ENDPOINT ?? 'cache.local',
   registryEndpoint: import.meta.env.VITE_ARTIFACT_REGISTRY_ENDPOINT ?? 'registry.local',
@@ -43,6 +44,10 @@ async function handleDisable() {
           <p>{{ store.current.enabled ? 'Active release target' : 'Disabled — unavailable as a release target' }}</p>
         </div>
         <div class="actions">
+          <RouterLink
+            v-if="operatorManagementEnabled"
+            :to="{ name: 'OperatorList', params: { customerId, clusterId } }"
+          >Operators</RouterLink>
           <RouterLink v-if="auth.canWrite" :to="{ name: 'ClusterEdit', params: { customerId, clusterId } }">Edit</RouterLink>
           <button v-if="auth.canWrite && store.current.enabled" type="button" class="danger" @click="handleDisable">Disable cluster</button>
         </div>

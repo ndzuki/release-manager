@@ -133,6 +133,30 @@ func TestEnforcer_PolicyReloadTakesEffect(t *testing.T) {
 	require.NoError(t, e.Enforce("user-1", "org-1", "organization", "write"))
 }
 
+func TestEnforcer_OperatorPermissions(t *testing.T) {
+	e, st := setupEnforcer(t)
+	ctx := context.Background()
+	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: "org-operator", Name: "Operator Org"}))
+	for _, member := range []*store.OrganizationMember{
+		{OrgID: "org-operator", UserID: "viewer-operator", Role: store.RoleViewer},
+		{OrgID: "org-operator", UserID: "deployer-operator", Role: store.RoleDeployer},
+		{OrgID: "org-operator", UserID: "admin-operator", Role: store.RoleReleaseAdmin},
+	} {
+		require.NoError(t, st.Users().Create(ctx, &store.User{ID: member.UserID, Username: member.UserID, PasswordHash: "hash"}))
+		require.NoError(t, st.OrgMembers().Create(ctx, member))
+	}
+	require.NoError(t, e.LoadPolicies(ctx))
+
+	for _, userID := range []string{"viewer-operator", "deployer-operator", "admin-operator"} {
+		require.NoError(t, e.Enforce(userID, "org-operator", "operator", "read"))
+	}
+	for _, action := range []string{"enroll", "revoke"} {
+		require.Error(t, e.Enforce("viewer-operator", "org-operator", "operator", action))
+		require.Error(t, e.Enforce("deployer-operator", "org-operator", "operator", action))
+		require.NoError(t, e.Enforce("admin-operator", "org-operator", "operator", action))
+	}
+}
+
 func TestAuthorizationErrorsExposeReasonCodes(t *testing.T) {
 	err := newPermissionDenied("user-1", "org-1", "organization", "write")
 	var denied *PermissionDeniedError
@@ -147,6 +171,20 @@ func TestEnforcer_WriteFailsClosedBeforePolicyLoad(t *testing.T) {
 	err := e.Enforce("user-1", "org-1", "organization", "write")
 	require.Error(t, err)
 	assert.Equal(t, "policy_unavailable", authorizationReason(err))
+}
+
+func TestEnforcer_OperatorWritesFailClosedBeforePolicyLoad(t *testing.T) {
+	e, st := setupEnforcer(t)
+	ctx := context.Background()
+	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: "org-operator-unhealthy", Name: "Operator Org"}))
+	require.NoError(t, st.Users().Create(ctx, &store.User{ID: "admin-operator-unhealthy", Username: "admin-operator-unhealthy", PasswordHash: "hash"}))
+	require.NoError(t, st.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: "org-operator-unhealthy", UserID: "admin-operator-unhealthy", Role: store.RoleReleaseAdmin}))
+
+	for _, action := range []string{"enroll", "revoke"} {
+		err := e.Enforce("admin-operator-unhealthy", "org-operator-unhealthy", "operator", action)
+		require.Error(t, err)
+		assert.Equal(t, "policy_unavailable", authorizationReason(err))
+	}
 }
 
 func TestEnforcer_ServiceActorAllowedOnlyInBoundDomain(t *testing.T) {

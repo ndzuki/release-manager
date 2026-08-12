@@ -24,7 +24,14 @@ func (s *sessionStoreStub) UpdateStatus(_ context.Context, id string, status sto
 	s.statuses[id] = status
 	return nil
 }
+func (s *sessionStoreStub) UpdateStatusReason(_ context.Context, id string, status store.SessionStatus, _ store.SessionStatusReason) error {
+	s.statuses[id] = status
+	return nil
+}
 func (s *sessionStoreStub) GetActiveByOperator(context.Context, string) (*store.Session, error) {
+	return nil, store.ErrNotFound
+}
+func (s *sessionStoreStub) GetLatestByOperator(context.Context, string) (*store.Session, error) {
 	return nil, store.ErrNotFound
 }
 func (s *sessionStoreStub) ListExpiredSuspect(context.Context, time.Duration) ([]*store.Session, error) {
@@ -58,4 +65,18 @@ func TestSessionRegistryHeartbeatPreventsTransition(t *testing.T) {
 
 	registry.evaluate(context.Background(), at.Add(2*time.Second))
 	assert.Empty(t, stub.statuses)
+}
+
+func TestStreamRegistryRevokeCancelsActiveStream(t *testing.T) {
+	registry := NewStreamRegistry()
+	ctx, cancel := context.WithCancel(context.Background())
+	registry.Register("operator-1", "session-1", cancel)
+
+	require.True(t, registry.Revoke("operator-1", "operator revoked"))
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("active stream was not cancelled")
+	}
+	assert.False(t, registry.Revoke("operator-1", "operator revoked"))
 }

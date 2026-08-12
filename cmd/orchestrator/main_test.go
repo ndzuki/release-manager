@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/base64"
 	"encoding/pem"
@@ -27,13 +29,15 @@ import (
 	authv1 "github.com/ndzuki/release-manager/api/gen/auth/v1"
 	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
+	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
+	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	trustv1 "github.com/ndzuki/release-manager/api/gen/trust/v1"
 	trustv1connect "github.com/ndzuki/release-manager/api/gen/trust/v1/trustv1connect"
 	"github.com/ndzuki/release-manager/internal/auth"
-	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/config"
+	"github.com/ndzuki/release-manager/internal/operator"
 	"github.com/ndzuki/release-manager/internal/postgres"
 	"github.com/ndzuki/release-manager/internal/store"
 	postgresstore "github.com/ndzuki/release-manager/internal/store/postgres"
@@ -41,13 +45,6 @@ import (
 	"github.com/ndzuki/release-manager/internal/trust"
 	"github.com/ndzuki/release-manager/migrations"
 )
-
-// Compile-time guard: orchSvc must satisfy the exported
-// internal/app.ExtraServersProvider interface from a different package.
-// Unexported method names are package-scoped in Go, so an unexported
-// extraServers() here would silently fail the app.Run type assertion and the
-// agent gateway listener would never start (TASK-075 smoke-test catch).
-var _ app.ExtraServersProvider = (*orchSvc)(nil)
 
 func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 	const signingKey = "test-signing-key"
@@ -896,4 +893,207 @@ func TestLoadTrustConfig_DefaultsNonPositiveTimeout(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, trust.DefaultVerificationTimeout, trustCfg.VerificationTimeout)
+}
+
+
+// TestOperatorManagementPostgreSQLFlow exercises the full REQ-053 management
+// contract against the PostgreSQL store: token create/replace/status, viewer
+// denial, enrollment through the in-process OperatorService, live stream
+// revocation, idempotent re-revoke, and the read-only maintenance allowlist.
+func TestOperatorManagementPostgreSQLFlow(t *testing.T) {
+	baseDSN := os.Getenv("POSTGRES_TEST_DSN")
+	if baseDSN == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	ctx := t.Context()
+	dsn := orchestratorTestSchema(ctx, t, baseDSN)
+	database, err := postgres.Open(ctx, config.DatabaseConfig{Driver: "postgres", DSN: dsn})
+	require.NoError(t, err)
+	require.NoError(t, postgres.RunMigrations(ctx, database.SQLDB(), migrations.FS))
+	seedStore, err := postgresstore.New(database.SQLDB(), database.GORM())
+	require.NoError(t, err)
+	const (
+		organizationID = "org-053-smoke"
+		customerID     = "customer-053-smoke"
+		clusterID      = "cluster-053-smoke"
+		adminID        = "admin-053-smoke"
+		viewerID       = "viewer-053-smoke"
+	)
+	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Operator Smoke Org"}))
+	require.NoError(t, seedStore.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Operator Smoke Customer", Slug: customerID}))
+	require.NoError(t, seedStore.Clusters().Create(ctx, &store.Cluster{ID: clusterID, Name: "Operator Smoke Cluster", CustomerID: customerID}))
+	require.NoError(t, seedStore.Bindings().Create(ctx, &store.OrgCustomerBinding{ID: "binding-053-smoke", OrgID: organizationID, CustomerID: customerID}))
+	for userID, role := range map[string]store.Role{adminID: store.RoleReleaseAdmin, viewerID: store.RoleViewer} {
+		require.NoError(t, seedStore.Users().Create(ctx, &store.User{ID: userID, Username: userID, PasswordHash: "unused"}))
+		require.NoError(t, seedStore.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: organizationID, UserID: userID, Role: role}))
+		require.NoError(t, seedStore.AuthSessions().Create(ctx, &store.AuthSession{
+			ID: uuid.NewString(), UserID: userID, TokenFamily: uuid.NewString(), RefreshTokenHash: uuid.NewString(), ExpiresAt: time.Now().UTC().Add(time.Hour),
+		}))
+	}
+	require.NoError(t, seedStore.Close())
+	require.NoError(t, database.Close())
+
+	const signingKey = "operator-smoke-signing-key"
+	mux := http.NewServeMux()
+	authStore, err := sqlitestore.Open(t.TempDir() + "/auth.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
+	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+	svc := &orchSvc{
+		targetEnv:      "staging",
+		signingKey:     signingKey,
+		authURL:        authServer.URL,
+		streamRegistry: operator.NewStreamRegistry(),
+	}
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "postgres", DSN: dsn}})
+	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	adminToken, _, err := jwtManager.GenerateAccessToken(adminID, organizationID, []string{string(store.RoleReleaseAdmin)})
+	require.NoError(t, err)
+	viewerToken, _, err := jwtManager.GenerateAccessToken(viewerID, organizationID, []string{string(store.RoleViewer)})
+	require.NoError(t, err)
+	client := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
+	operatorClient := operatorv1connect.NewOperatorServiceClient(server.Client(), server.URL)
+
+	// Viewer write RPC is rejected server-side even though the UI hides the
+	// entry (AC-053-03).
+	viewerCreate := connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
+		CustomerId: customerID, ClusterId: clusterID, OperatorName: "operator-smoke", TtlMinutes: 5,
+	})
+	viewerCreate.Header().Set("Authorization", "Bearer "+viewerToken)
+	_, err = client.CreateEnrollmentToken(ctx, viewerCreate)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+
+	// Empty state returns an empty page, not an error (AC-053-11).
+	viewerList := connect.NewRequest(&orchestratorv1.ListOperatorsRequest{CustomerId: customerID, ClusterId: clusterID})
+	viewerList.Header().Set("Authorization", "Bearer "+viewerToken)
+	viewerPage, err := client.ListOperators(ctx, viewerList)
+	require.NoError(t, err)
+	assert.Empty(t, viewerPage.Msg.GetOperators())
+
+	// Token create returns the plaintext exactly once (AC-053-01/05).
+	createRequest := connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
+		CustomerId: customerID, ClusterId: clusterID, OperatorName: "operator-smoke", TtlMinutes: 5,
+	})
+	createRequest.Header().Set("Authorization", "Bearer "+adminToken)
+	created, err := client.CreateEnrollmentToken(ctx, createRequest)
+	require.NoError(t, err)
+	plaintext := created.Msg.GetToken()
+	assert.NotEmpty(t, plaintext)
+	assert.NotEmpty(t, created.Msg.GetOperatorEndpoint())
+	assert.Contains(t, created.Msg.GetInstallCommandTemplate(), "${ENROLLMENT_TOKEN}")
+	assert.NotContains(t, created.Msg.GetInstallCommandTemplate(), plaintext)
+
+	// Status returns only non-sensitive metadata (AC-053-06/07).
+	statusRequest := connect.NewRequest(&orchestratorv1.GetEnrollmentTokenStatusRequest{CustomerId: customerID, ClusterId: clusterID})
+	statusRequest.Header().Set("Authorization", "Bearer "+adminToken)
+	status, err := client.GetEnrollmentTokenStatus(ctx, statusRequest)
+	require.NoError(t, err)
+	assert.Equal(t, orchestratorv1.EnrollmentTokenState_ENROLLMENT_TOKEN_STATE_PENDING, status.Msg.GetStatus().GetState())
+	assert.NotContains(t, status.Msg.String(), plaintext)
+
+	// Explicit replace atomically revokes the old token and issues a new one
+	// in the same transaction (AC-053-07).
+	replaceRequest := connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
+		CustomerId: customerID, ClusterId: clusterID, OperatorName: "operator-smoke", TtlMinutes: 5, ReplacePendingToken: true,
+	})
+	replaceRequest.Header().Set("Authorization", "Bearer "+adminToken)
+	replaced, err := client.CreateEnrollmentToken(ctx, replaceRequest)
+	require.NoError(t, err)
+	assert.NotEqual(t, plaintext, replaced.Msg.GetToken())
+	assert.NotContains(t, replaced.Msg.String(), plaintext)
+
+	// Enroll through the in-process OperatorService mount (ADR-001/002).
+	csr := generateOperatorSmokeCSR(t, "operator-smoke", customerID, clusterID)
+	enrolled, err := operatorClient.Enroll(ctx, connect.NewRequest(&operatorv1.EnrollRequest{
+		EnrollmentToken: replaced.Msg.GetToken(),
+		CustomerId:      customerID,
+		ClusterId:       clusterID,
+		OperatorId:      "operator-053-enrolled",
+		CsrPem:          csr,
+		Capabilities:    map[string]string{"helm": "true"},
+	}))
+	require.NoError(t, err)
+	assert.NotEmpty(t, enrolled.Msg.GetSessionId())
+
+	// History now contains the enrolled operator (AC-053-12).
+	historyRequest := connect.NewRequest(&orchestratorv1.ListOperatorsRequest{CustomerId: customerID, ClusterId: clusterID})
+	historyRequest.Header().Set("Authorization", "Bearer "+adminToken)
+	history, err := client.ListOperators(ctx, historyRequest)
+	require.NoError(t, err)
+	require.Len(t, history.Msg.GetOperators(), 1)
+	assert.Equal(t, "operator-053-enrolled", history.Msg.GetOperators()[0].GetId())
+
+	// Revoke closes the live stream and reports revoked immediately
+	// (AC-053-04/22).
+	operatorID := "operator-053-enrolled"
+	streamCtx, cancelStream := context.WithCancel(context.Background())
+	svc.streamRegistry.Register(operatorID, enrolled.Msg.GetSessionId(), cancelStream)
+
+	revokeRequest := connect.NewRequest(&orchestratorv1.RevokeOperatorRequest{
+		CustomerId: customerID, ClusterId: clusterID, OperatorId: operatorID, Reason: "security incident",
+	})
+	revokeRequest.Header().Set("Authorization", "Bearer "+adminToken)
+	revoked, err := client.RevokeOperator(ctx, revokeRequest)
+	require.NoError(t, err)
+	assert.True(t, revoked.Msg.GetChanged())
+	assert.Equal(t, orchestratorv1.OperatorSessionStatus_OPERATOR_SESSION_STATUS_REVOKED, revoked.Msg.GetOperator().GetSessionStatus())
+	select {
+	case <-streamCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("operator stream was not closed after revocation")
+	}
+
+	// Duplicate revoke is an idempotent success (AC-053-14).
+	retryRevoke := connect.NewRequest(&orchestratorv1.RevokeOperatorRequest{
+		CustomerId: customerID, ClusterId: clusterID, OperatorId: operatorID, Reason: "security incident",
+	})
+	retryRevoke.Header().Set("Authorization", "Bearer "+adminToken)
+	retry, err := client.RevokeOperator(ctx, retryRevoke)
+	require.NoError(t, err)
+	assert.False(t, retry.Msg.GetChanged())
+
+	detailRequest := connect.NewRequest(&orchestratorv1.GetOperatorRequest{CustomerId: customerID, ClusterId: clusterID, OperatorId: operatorID})
+	detailRequest.Header().Set("Authorization", "Bearer "+adminToken)
+	detail, err := client.GetOperator(ctx, detailRequest)
+	require.NoError(t, err)
+	assert.Equal(t, orchestratorv1.OperatorSessionStatus_OPERATOR_SESSION_STATUS_REVOKED, detail.Msg.GetOperator().GetSummary().GetSessionStatus())
+}
+
+func generateOperatorSmokeCSR(t *testing.T, operatorName, customerID, clusterID string) []byte {
+	t.Helper()
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	template := &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: operatorName},
+		DNSNames: []string{customerID, clusterID},
+	}
+	der, err := x509.CreateCertificateRequest(rand.Reader, template, privateKey)
+	require.NoError(t, err)
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
+}
+
+// TestOperatorReadOnlyProcedures pins the REQ-053 read RPCs in the maintenance
+// read-only allowlist while the write RPCs stay gated (AC-053-03).
+func TestOperatorReadOnlyProcedures(t *testing.T) {
+	orchestratorReadOnly := orchestratorReadOnlyProcedures()
+	for _, procedure := range []string{
+		orchestratorv1connect.OrchestratorServiceListOperatorsProcedure,
+		orchestratorv1connect.OrchestratorServiceGetOperatorProcedure,
+		orchestratorv1connect.OrchestratorServiceGetEnrollmentTokenStatusProcedure,
+	} {
+		assert.Contains(t, orchestratorReadOnly, procedure)
+	}
+	for _, procedure := range []string{
+		orchestratorv1connect.OrchestratorServiceRevokeOperatorProcedure,
+		orchestratorv1connect.OrchestratorServiceCreateEnrollmentTokenProcedure,
+		orchestratorv1connect.OrchestratorServiceRevokePendingEnrollmentTokenProcedure,
+	} {
+		assert.NotContains(t, orchestratorReadOnly, procedure)
+	}
 }

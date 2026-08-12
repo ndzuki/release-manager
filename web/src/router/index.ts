@@ -77,6 +77,24 @@ export function createAppRouter(
         meta: { requiresAuth: true, feature: 'clusterRouting', requiresWrite: true },
       },
       {
+        path: '/customers/:customerId/clusters/:clusterId/operators/new',
+        name: 'OperatorEnroll',
+        component: () => import('@/pages/OperatorEnrollPage.vue'),
+        meta: { requiresAuth: true, feature: 'operatorManagement' },
+      },
+      {
+        path: '/customers/:customerId/clusters/:clusterId/operators/:operatorId',
+        name: 'OperatorDetail',
+        component: () => import('@/pages/OperatorDetailPage.vue'),
+        meta: { requiresAuth: true, feature: 'operatorManagement' },
+      },
+      {
+        path: '/customers/:customerId/clusters/:clusterId/operators',
+        name: 'OperatorList',
+        component: () => import('@/pages/OperatorListPage.vue'),
+        meta: { requiresAuth: true, feature: 'operatorManagement' },
+      },
+      {
         path: '/customers/:customerId/clusters/:clusterId',
         name: 'ClusterDetail',
         component: () => import('@/pages/ClusterDetailPage.vue'),
@@ -122,6 +140,9 @@ export function installAuthGuard(router: Router): void {
     }
 
     if (to.meta.feature === 'clusterRouting' && import.meta.env.VITE_FEATURE_CLUSTER_ROUTING === 'false') {
+      return { name: 'NotFound' };
+    }
+    if (to.meta.feature === 'operatorManagement' && import.meta.env.VITE_FEATURE_OPERATOR_MANAGEMENT === 'false') {
       return { name: 'NotFound' };
     }
     if (to.meta.feature === 'releaseOperations' && import.meta.env.VITE_ENABLE_RELEASE_OPERATIONS === 'false') {

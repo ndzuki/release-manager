@@ -11,4 +11,4 @@ WORKDIR /data
 COPY --from=builder /out/release-auth /release-auth
 COPY configs/auth.dev.yaml /configs/auth.dev.yaml
 EXPOSE 8085
-ENTRYPOINT ["/release-auth", "--config", "/configs/auth.dev.yaml"]
+ENTRYPOINT ["/release-auth", "--config", "/configs/auth.dev.yaml", "--db", "/data/release-manager.db"]

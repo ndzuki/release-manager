@@ -49,6 +49,7 @@ func newGatewayStore(t *testing.T, token string) store.Store {
 	require.NoError(t, st.Clusters().Create(ctx, clus))
 	require.NoError(t, st.EnrollmentTokens().Create(ctx, &store.EnrollmentToken{
 		ID: "tok-1", CustomerID: "cust-1", ClusterID: "clus-1", Token: token,
+		OperatorName: "clus-1", // must match the CSR CommonName (REQ-053 token binding)
 		CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
 	}))
 	return st
@@ -209,7 +210,7 @@ func TestGatewayMTLSEnrollAndStreamEstablish(t *testing.T) {
 	// Token is consumed (single-use).
 	used, err := st.EnrollmentTokens().GetByToken(context.Background(), token)
 	require.NoError(t, err)
-	require.True(t, used.Used)
+	require.Equal(t, store.TokenStateUsed, used.State)
 }
 
 func TestGatewayCommandStreamRequiresClientCert(t *testing.T) {

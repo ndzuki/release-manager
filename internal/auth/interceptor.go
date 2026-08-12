@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -52,8 +53,13 @@ func NewAuthInterceptor(
 			}
 
 			token := extractToken(req.Header().Get("Authorization"))
+			cookieAuthenticated := false
 			if token == "" {
-				return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("missing authorization header"))
+				token = cookieValue(req.Header(), AccessCookieName)
+				cookieAuthenticated = token != ""
+			}
+			if token == "" {
+				return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("missing authentication credentials"))
 			}
 
 			claims, err := jwt.ValidateAccessToken(token)
@@ -72,6 +78,13 @@ func NewAuthInterceptor(
 					domain,
 					fmt.Errorf("unmapped procedure %q", procedure),
 				), enforcer.PolicyVersion())
+			}
+			if cookieAuthenticated && action != "read" {
+				cookieToken := cookieValue(req.Header(), CSRFCookieName)
+				headerToken := req.Header().Get(CSRFHeaderName)
+				if cookieToken == "" || headerToken == "" || subtle.ConstantTimeCompare([]byte(cookieToken), []byte(headerToken)) != 1 {
+					return nil, connect.NewError(connect.CodePermissionDenied, errors.New("csrf token mismatch"))
+				}
 			}
 
 			if err := enforceRequestBinding(ctx, enforcer, req.Any(), procedure, domain); err != nil {
@@ -257,18 +270,6 @@ func enforceRequestBinding(
 }
 
 // mapProcedure maps a Connect RPC procedure to a Casbin object and action.
-func mapProcedure(procedure string) (object, action string) {
-	parts := strings.Split(strings.TrimPrefix(procedure, "/"), "/")
-	if len(parts) != 2 {
-		return "", ""
-	}
-
-	serviceName := parts[0]
-	if dot := strings.LastIndex(serviceName, "."); dot >= 0 {
-		serviceName = serviceName[dot+1:]
-	}
-	return mapServiceToObject(serviceName), mapMethodToAction(parts[1])
-}
 
 func mapServiceToObject(service string) string {
 	switch {
@@ -285,6 +286,27 @@ func mapServiceToObject(service string) string {
 	default:
 		return ""
 	}
+}
+
+func mapProcedure(procedure string) (object, action string) {
+	parts := strings.Split(strings.TrimPrefix(procedure, "/"), "/")
+	if len(parts) != 2 {
+		return "", ""
+	}
+	method := parts[1]
+	switch method {
+	case "ListOperators", "GetOperator":
+		return "operator", "read"
+	case "CreateEnrollmentToken", "GetEnrollmentTokenStatus", "RevokePendingEnrollmentToken":
+		return "operator", "enroll"
+	case "RevokeOperator":
+		return "operator", "revoke"
+	}
+	serviceName := parts[0]
+	if dot := strings.LastIndex(serviceName, "."); dot >= 0 {
+		serviceName = serviceName[dot+1:]
+	}
+	return mapServiceToObject(serviceName), mapMethodToAction(method)
 }
 
 func mapMethodToAction(method string) string {

@@ -53,6 +53,11 @@ type orchSvc struct {
 	authorizer    *authorization.Module
 	traceShutdown func(context.Context) error
 	trustResolver trust.RootResolver
+
+	// streamRegistry is the shared command-stream registry used to revoke live
+	// Operator streams after a committed management write (REQ-053). It is
+	// process-global by default; tests inject a private registry for isolation.
+	streamRegistry *operator.StreamRegistry
 }
 
 func (s *orchSvc) Name() string { return "release-orchestrator" }
@@ -65,7 +70,7 @@ func (s *orchSvc) Configure(cfg *config.ServiceConfig) { s.cfg = *cfg }
 // (TASK-075 plan v1 Step 3).
 func (s *orchSvc) newGatewayOperatorService(logger *slog.Logger) (*operator.Service, error) {
 	gatewayCfg := s.cfg.Gateway.WithDefaults()
-	gatewayOpts := []operator.Option{operator.WithAudit(s.auditEmitter)}
+	gatewayOpts := []operator.Option{operator.WithAudit(s.auditEmitter), operator.WithStreamRegistry(s.operatorRegistry())}
 	if gatewayCfg.Enabled {
 		caInst, err := ca.LoadOrCreate(ca.Config{TTL: 7 * 24 * time.Hour}, gatewayCfg.CAKeyPath, gatewayCfg.CACertPath)
 		if err != nil {
@@ -86,6 +91,25 @@ func (s *orchSvc) newGatewayOperatorService(logger *slog.Logger) (*operator.Serv
 		return service, nil
 	}
 	return operator.NewService(s.store, logger, gatewayOpts...)
+}
+
+// operatorRegistry returns the shared command-stream registry, defaulting to
+// the process-wide registry for combined deployments (REQ-053).
+func (s *orchSvc) operatorRegistry() *operator.StreamRegistry {
+	if s.streamRegistry != nil {
+		return s.streamRegistry
+	}
+	return operator.ProcessStreamRegistry()
+}
+
+// operatorEndpoint returns the agent-facing OperatorService URL embedded in
+// enrollment install templates (REQ-053).
+func (s *orchSvc) operatorEndpoint() string {
+	gatewayCfg := s.cfg.Gateway.WithDefaults()
+	if gatewayCfg.Enabled {
+		return fmt.Sprintf("https://operator-gateway.dev.release-manager.local:%d", gatewayCfg.Port)
+	}
+	return "http://operator:8084"
 }
 
 // ExtraServers reports the agent gateway listener so app.Run starts and
@@ -256,7 +280,7 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	)
 	mux.Handle(operatorPath, operatorHandler)
 	emergencyDispatcher := orchestrator.NewEmergencyDispatcher(operatorService)
-	svc := orchestrator.NewService(s.store, verifier, s.targetEnv, s.auditEmitter, emergencyDispatcher, s.authorizer, logger)
+	svc := orchestrator.NewService(s.store, verifier, s.targetEnv, s.auditEmitter, emergencyDispatcher, orchestrator.NewProcessStreamRevoker(s.operatorRegistry()), s.operatorEndpoint(), s.authorizer, logger)
 	s.emergency = svc
 	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)
 	enforcer, err := auth.NewEnforcer(s.store, logger)
@@ -411,14 +435,17 @@ func (s *orchSvc) loadTrustConfig() (trustConfig, error) {
 
 func orchestratorReadOnlyProcedures() map[string]struct{} {
 	return map[string]struct{}{
-		orchestratorv1connect.OrchestratorServiceGetReleaseDefinitionProcedure:   {},
-		orchestratorv1connect.OrchestratorServiceListReleaseDefinitionsProcedure: {},
-		orchestratorv1connect.OrchestratorServiceGetCustomerProcedure:            {},
-		orchestratorv1connect.OrchestratorServiceListCustomersProcedure:          {},
-		orchestratorv1connect.OrchestratorServiceGetClusterProcedure:             {},
-		orchestratorv1connect.OrchestratorServiceListClustersProcedure:           {},
-		orchestratorv1connect.OrchestratorServiceGetClusterRoutesProcedure:       {},
-		orchestratorv1connect.OrchestratorServiceGetOperationProcedure:           {},
+		orchestratorv1connect.OrchestratorServiceGetReleaseDefinitionProcedure:     {},
+		orchestratorv1connect.OrchestratorServiceListReleaseDefinitionsProcedure:   {},
+		orchestratorv1connect.OrchestratorServiceGetCustomerProcedure:              {},
+		orchestratorv1connect.OrchestratorServiceListCustomersProcedure:            {},
+		orchestratorv1connect.OrchestratorServiceGetClusterProcedure:               {},
+		orchestratorv1connect.OrchestratorServiceListClustersProcedure:             {},
+		orchestratorv1connect.OrchestratorServiceGetClusterRoutesProcedure:         {},
+		orchestratorv1connect.OrchestratorServiceGetOperationProcedure:             {},
+		orchestratorv1connect.OrchestratorServiceListOperatorsProcedure:            {},
+		orchestratorv1connect.OrchestratorServiceGetOperatorProcedure:              {},
+		orchestratorv1connect.OrchestratorServiceGetEnrollmentTokenStatusProcedure: {},
 	}
 }
 
