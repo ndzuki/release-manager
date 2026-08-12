@@ -3,60 +3,52 @@ import { computed, shallowRef } from 'vue';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { auditClient } from '@/connect/client';
-import {
-  ActionType,
-  AuditErrorDetailSchema,
-  ExportFormat,
-  ResourceType,
-  StatusType,
-  type AuditEvent,
-} from '@/gen/audit/v1/audit_pb';
+import type { AuditEvent } from '@/gen/audit/v1/audit_pb';
 
 export const defaultAuditPageSize = 20;
 export const maxAuditRangeDays = 30;
 
-const actionByName: Record<string, ActionType> = {
-  CREATE: ActionType.CREATE,
-  UPDATE: ActionType.UPDATE,
-  DELETE: ActionType.DELETE,
-  APPROVE: ActionType.APPROVE,
-  REJECT: ActionType.REJECT,
-  INSTALL: ActionType.INSTALL,
-  UPGRADE: ActionType.UPGRADE,
-  ROLLBACK: ActionType.ROLLBACK,
-  EMERGENCY: ActionType.EMERGENCY,
-  EXPORT: ActionType.EXPORT,
-  LOGIN: ActionType.LOGIN,
-  LOGOUT: ActionType.LOGOUT,
-};
+// The wire contract (D-62) uses free-form strings for resource_type/action/status.
+// These are the values emitted by services today; the option lists below are
+// datalist suggestions, not a closed set — any string filters through to the RPC.
+export const resourceTypeOptions = [
+  'release_operation',
+  'operation',
+  'release_bundle',
+  'trust_root',
+  'audit_export',
+  'organization',
+  'release',
+  'customer',
+  'cluster',
+];
 
-const statusByName: Record<string, StatusType> = {
-  SUCCESS: StatusType.SUCCESS,
-  FAILURE: StatusType.FAILURE,
-};
+export const actionOptions = [
+  'create',
+  'update',
+  'delete',
+  'approve',
+  'reject',
+  'install',
+  'upgrade',
+  'rollback',
+  'emergency_change',
+  'export.created',
+  'verify_trust',
+  'login',
+  'logout',
+];
 
-const resourceByName: Record<string, ResourceType> = {
-  CLUSTER: ResourceType.CLUSTER,
-  RELEASE_DEFINITION: ResourceType.RELEASE_DEFINITION,
-  OPERATION: ResourceType.OPERATION,
-  VALUES_REVISION: ResourceType.VALUES_REVISION,
-  OPERATOR: ResourceType.OPERATOR,
-  TRUST_ROOT: ResourceType.TRUST_ROOT,
-  TRUST_POLICY: ResourceType.TRUST_POLICY,
-  CUSTOMER: ResourceType.CUSTOMER,
-};
-
-export const resourceOptions = Object.keys(resourceByName);
-export const actionOptions = Object.keys(actionByName);
-export const statusOptions = Object.keys(statusByName);
+export const statusOptions = ['succeeded', 'failed', 'accepted', 'success'];
 
 export interface AuditFilters {
+  // Private filter: never written to the URL (AC-059-05/07).
   actor: string;
   resourceType: string;
   resourceId: string;
-  actions: string[];
-  statuses: string[];
-  operationId: string;
+  action: string;
+  status: string;
+  // Local datetime-local values (no timezone); converted to ISO8601 for the URL.
   from: string;
   to: string;
 }
@@ -65,6 +57,7 @@ export type AuditFailureReason =
   | 'permission_denied'
   | 'range_too_large'
   | 'invalid_cursor'
+  | 'invalid_argument'
   | 'export_unavailable'
   | 'deadline_exceeded'
   | 'internal'
@@ -74,16 +67,12 @@ export interface AuditFailure {
   reason: AuditFailureReason;
   message: string;
   maxRangeDays?: number;
-  retryAfter?: string;
 }
 
 export interface AuditExportTask {
+  // export_id from ExportAuditEventsResponse; AC-059-04 requires displaying it.
   taskId: string;
   status: string;
-  downloadUrl: string;
-  errorMessage: string;
-  createdAt: string;
-  completedAt: string;
 }
 
 function defaultRange(): Pick<AuditFilters, 'from' | 'to'> {
@@ -96,9 +85,8 @@ export const emptyAuditFilters = (): AuditFilters => ({
   actor: '',
   resourceType: '',
   resourceId: '',
-  actions: [],
-  statuses: [],
-  operationId: '',
+  action: '',
+  status: '',
   ...defaultRange(),
 });
 
@@ -107,32 +95,27 @@ function first(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
-function all(value: unknown): string[] {
-  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string');
-  return typeof value === 'string' ? [value] : [];
-}
-
+// URL codec (AC-059-07): resource/resource_id/action/status/from/to round-trip;
+// actor never enters the URL.
 export function filtersFromQuery(query: Record<string, unknown>): AuditFilters {
   const defaults = emptyAuditFilters();
   return {
     actor: '',
-    resourceType: first(query.resource).toUpperCase(),
+    resourceType: first(query.resource),
     resourceId: first(query.resource_id),
-    actions: all(query.action).map((value) => value.toUpperCase()).filter((value) => value in actionByName),
-    statuses: all(query.status).map((value) => value.toUpperCase()).filter((value) => value in statusByName),
-    operationId: first(query.operation_id),
+    action: first(query.action),
+    status: first(query.status),
     from: first(query.from) ? toLocalInput(new Date(first(query.from))) : defaults.from,
     to: first(query.to) ? toLocalInput(new Date(first(query.to))) : defaults.to,
   };
 }
 
-export function filtersToQuery(filters: AuditFilters): Record<string, string | string[]> {
-  const query: Record<string, string | string[]> = {};
+export function filtersToQuery(filters: AuditFilters): Record<string, string> {
+  const query: Record<string, string> = {};
   if (filters.resourceType) query.resource = filters.resourceType;
   if (filters.resourceId) query.resource_id = filters.resourceId;
-  if (filters.actions.length > 0) query.action = [...filters.actions];
-  if (filters.statuses.length > 0) query.status = [...filters.statuses];
-  if (filters.operationId) query.operation_id = filters.operationId;
+  if (filters.action) query.action = filters.action;
+  if (filters.status) query.status = filters.status;
   if (filters.from) query.from = new Date(filters.from).toISOString();
   if (filters.to) query.to = new Date(filters.to).toISOString();
   return query;
@@ -144,17 +127,20 @@ function asDate(value: string): Date | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
+// Converts a Date to a local datetime-local input value (YYYY-MM-DDTHH:mm).
 function toLocalInput(date: Date): string {
   if (Number.isNaN(date.getTime())) return '';
   const offset = date.getTimezoneOffset() * 60_000;
   return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
+// Client-side preflight (AC-059-02): a range wider than maxAuditRangeDays is
+// rejected before any RPC is sent.
 function validateRange(filters: AuditFilters): AuditFailure | null {
   const from = asDate(filters.from);
   const to = asDate(filters.to);
-  if (!from || !to) return { reason: 'range_too_large', message: 'Select a valid start and end time.' };
-  if (from > to) return { reason: 'range_too_large', message: 'The start time must not be after the end time.' };
+  if (!from || !to) return { reason: 'invalid_argument', message: 'Select a valid start and end time.' };
+  if (from > to) return { reason: 'invalid_argument', message: 'The start time must not be after the end time.' };
   if (to.getTime() - from.getTime() > maxAuditRangeDays * 24 * 60 * 60 * 1000) {
     return {
       reason: 'range_too_large',
@@ -170,12 +156,11 @@ function toProtoFilter(filters: AuditFilters, organizationId: string) {
   const to = asDate(filters.to);
   return {
     organizationId,
-    actorId: filters.actor.trim(),
-    resourceTypeEnum: resourceByName[filters.resourceType] ?? ResourceType.UNSPECIFIED,
+    resourceType: filters.resourceType.trim(),
     resourceId: filters.resourceId.trim(),
-    actions: filters.actions.map((value) => actionByName[value]).filter((value) => value !== undefined),
-    statuses: filters.statuses.map((value) => statusByName[value]).filter((value) => value !== undefined),
-    operationId: filters.operationId.trim(),
+    actorId: filters.actor.trim(),
+    action: filters.action.trim(),
+    status: filters.status.trim(),
     timeRange: {
       start: from ? timestampFromDate(from) : undefined,
       end: to ? timestampFromDate(to) : undefined,
@@ -183,38 +168,37 @@ function toProtoFilter(filters: AuditFilters, organizationId: string) {
   };
 }
 
+// Server errors are classified by the X-Reason-Code metadata header when present
+// (TASK-029 v2 contract, TASK-027 pattern); otherwise the Connect code decides.
 function failureFrom(error: unknown): AuditFailure {
   const connectError = ConnectError.from(error);
-  const detail = connectError.findDetails(AuditErrorDetailSchema)[0];
-  const reason = detail?.reason || connectError.metadata.get('X-Reason-Code');
+  const reason = connectError.metadata.get('X-Reason-Code');
   if (reason === 'permission_denied' || connectError.code === Code.PermissionDenied) {
     return { reason: 'permission_denied', message: 'You do not have access to this organization.' };
   }
   if (reason === 'range_too_large') {
-    const maxRangeDays = detail?.maxRangeDays || maxAuditRangeDays;
     return {
       reason: 'range_too_large',
-      message: `The query range is too large. Please narrow it to ${maxRangeDays} days or less.`,
-      maxRangeDays,
+      message: `The query range is too large. Please narrow it to ${maxAuditRangeDays} days or less.`,
+      maxRangeDays: maxAuditRangeDays,
     };
   }
   if (reason === 'invalid_cursor') {
     return { reason: 'invalid_cursor', message: 'This page expired. The first page was reloaded.' };
   }
   if (reason === 'export_unavailable' || connectError.code === Code.Unavailable) {
-    return {
-      reason: 'export_unavailable',
-      message: detail?.retryAfter
-        ? `Audit export is unavailable. Retry after ${detail.retryAfter}.`
-        : 'Audit export is unavailable. Try again later.',
-      retryAfter: detail?.retryAfter,
-    };
+    return { reason: 'export_unavailable', message: 'Audit export is unavailable. Try again later.' };
   }
   if (connectError.code === Code.DeadlineExceeded) {
     return { reason: 'deadline_exceeded', message: 'The request timed out. Please retry.' };
   }
   if (connectError.code === Code.Internal) {
     return { reason: 'internal', message: 'The audit service failed. Please retry later.' };
+  }
+  if (connectError.code === Code.InvalidArgument) {
+    // No stable reason header (e.g. service-side validation beyond the wire
+    // contract): surface the server message verbatim.
+    return { reason: 'invalid_argument', message: connectError.rawMessage || 'The query was rejected.' };
   }
   return { reason: 'unknown', message: connectError.rawMessage || 'The audit request failed.' };
 }
@@ -236,7 +220,7 @@ export const useAuditStore = defineStore('audit', () => {
   const hasPrevious = computed(() => cursorStack.value.length > 0);
 
   function setFilters(nextFilters: AuditFilters): void {
-    filters.value = { ...nextFilters, actions: [...nextFilters.actions], statuses: [...nextFilters.statuses] };
+    filters.value = { ...nextFilters };
   }
 
   function clearResults(): void {
@@ -282,6 +266,8 @@ export const useAuditStore = defineStore('audit', () => {
         cursor.value = requestCursor;
         cursorStack.value = cursorStack.value.slice(0, -1);
       }
+      // AC-059-03: never re-render events already seen in this session, so
+      // cursor pagination stays stable when new events arrive between pages.
       const incoming = response.events.filter((event) => !seenEventIds.value.has(event.id));
       for (const event of response.events) seenEventIds.value.add(event.id);
       events.value = direction === 'next' ? [...events.value, ...incoming] : incoming;
@@ -292,11 +278,13 @@ export const useAuditStore = defineStore('audit', () => {
       const failure = failureFrom(requestError);
       error.value = failure;
       if (failure.reason === 'permission_denied') {
+        // AC-059-01: filters stay, stale results must not leak other org data.
         clearResults();
       } else if (failure.reason === 'invalid_cursor') {
         clearResults();
         await query(organizationId, 'first');
       } else {
+        // AC-059-08: timeout/internal errors keep the loaded page intact.
         events.value = previousEvents;
         cursor.value = previousCursor;
         nextCursor.value = previousNextCursor;
@@ -319,44 +307,14 @@ export const useAuditStore = defineStore('audit', () => {
     try {
       const response = await auditClient.exportAuditEvents({
         filter: toProtoFilter(filters.value, organizationId),
-        format: ExportFormat.CSV,
-        maxRows: 10000,
       });
-      exportTasks.value = [
-        {
-          taskId: response.taskId || response.exportId,
-          status: response.status,
-          downloadUrl: '',
-          errorMessage: '',
-          createdAt: response.createdAt ? response.createdAt.toString() : '',
-          completedAt: '',
-        },
-        ...exportTasks.value,
-      ];
+      // The wire contract returns only a creation receipt (export_id + initial
+      // status); there is no status-query RPC (D-62), so tasks never poll.
+      exportTasks.value = [{ taskId: response.exportId, status: response.status }, ...exportTasks.value];
     } catch (requestError) {
       error.value = failureFrom(requestError);
     } finally {
       exporting.value = false;
-    }
-  }
-
-  async function refreshExport(taskId: string): Promise<void> {
-    try {
-      const response = await auditClient.getAuditExportStatus({ taskId });
-      exportTasks.value = exportTasks.value.map((task) =>
-        task.taskId === taskId
-          ? {
-              taskId,
-              status: response.status,
-              downloadUrl: response.downloadUrl,
-              errorMessage: response.errorMessage,
-              createdAt: response.createdAt ? response.createdAt.toString() : task.createdAt,
-              completedAt: response.completedAt ? response.completedAt.toString() : '',
-            }
-          : task,
-      );
-    } catch (requestError) {
-      error.value = failureFrom(requestError);
     }
   }
 
@@ -383,7 +341,6 @@ export const useAuditStore = defineStore('audit', () => {
     clearResults,
     query,
     exportEvents,
-    refreshExport,
     selectEvent,
   };
 });
