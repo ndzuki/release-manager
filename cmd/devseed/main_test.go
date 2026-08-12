@@ -54,7 +54,7 @@ func (h *fakeAuthHandler) Login(_ context.Context, req *connect.Request[authv1.L
 		role = "platform_admin"
 	}
 	return connect.NewResponse(&authv1.LoginResponse{
-		User:         &authv1.SessionUser{Id: req.Msg.GetUsername() + "-1", Username: req.Msg.GetUsername(), Roles: []string{role}},
+		User:         &authv1.SessionUser{Id: req.Msg.GetUsername() + "-1", Username: req.Msg.GetUsername(), Roles: []string{role}, ActiveOrgId: "org-admin"},
 		AccessToken:  "token-" + req.Msg.GetUsername(),
 		RefreshToken: "refresh-" + req.Msg.GetUsername(),
 		TokenType:    "Bearer",
@@ -72,12 +72,47 @@ func (h *fakeAuthHandler) CreateLocalUser(_ context.Context, req *connect.Reques
 		User: &authv1.LocalUser{Id: req.Msg.GetUsername() + "-1", Username: req.Msg.GetUsername(), Roles: req.Msg.GetRoles()},
 	}), nil
 }
+func (h *fakeAuthHandler) GetLocalUser(context.Context, *connect.Request[authv1.GetLocalUserRequest]) (*connect.Response[authv1.GetLocalUserResponse], error) {
+	return connect.NewResponse(&authv1.GetLocalUserResponse{
+		User: &authv1.LocalUser{Id: "admin-1", Username: "admin", Roles: []string{"platform_admin"}, OrgId: "org-admin", Status: "active"},
+	}), nil
+}
 
 func newTestAuthServer(t *testing.T, handler *fakeAuthHandler) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	path, authHandler := authv1connect.NewAuthServiceHandler(handler)
 	mux.Handle(path, authHandler)
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server
+}
+
+// --- fake BindingService ---
+
+type fakeBindingHandler struct {
+	authv1connect.UnimplementedBindingServiceHandler
+	createCalls int
+	authHeader  string
+	createErr   error
+}
+
+func (h *fakeBindingHandler) CreateBinding(_ context.Context, req *connect.Request[authv1.CreateBindingRequest]) (*connect.Response[authv1.CreateBindingResponse], error) {
+	h.createCalls++
+	h.authHeader = req.Header().Get("Authorization")
+	if h.createErr != nil {
+		return nil, h.createErr
+	}
+	return connect.NewResponse(&authv1.CreateBindingResponse{Binding: &authv1.OrgCustomerBinding{
+		Id: "binding-1", OrgId: req.Msg.GetOrgId(), CustomerId: req.Msg.GetCustomerId(), Status: "active",
+	}}), nil
+}
+
+func newTestBindingServer(t *testing.T, handler *fakeBindingHandler) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	path, bindingHandler := authv1connect.NewBindingServiceHandler(handler)
+	mux.Handle(path, bindingHandler)
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	return server
@@ -158,7 +193,8 @@ func TestEnsureAuth_InitializesAndLogsInBothActors(t *testing.T) {
 	server := newTestAuthServer(t, fake)
 	client := authv1connect.NewAuthServiceClient(http.DefaultClient, server.URL)
 
-	adminToken, deployerToken, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
+	adminToken, deployerToken, adminOrgID, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
+	assert.Equal(t, "org-admin", adminOrgID)
 	require.NoError(t, err)
 	assert.Equal(t, "token-admin", adminToken)
 	assert.Equal(t, "token-deployer", deployerToken)
@@ -170,7 +206,7 @@ func TestEnsureAuth_SkipsInitializeWhenAlreadyInitialized(t *testing.T) {
 	server := newTestAuthServer(t, fake)
 	client := authv1connect.NewAuthServiceClient(http.DefaultClient, server.URL)
 
-	_, _, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
+	_, _, _, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
 	require.NoError(t, err)
 	assert.Equal(t, 2, fake.loginCallCount)
 }
@@ -180,7 +216,8 @@ func TestEnsureAuth_ProvisionsDeployerViaCreateLocalUser(t *testing.T) {
 	server := newTestAuthServer(t, fake)
 	client := authv1connect.NewAuthServiceClient(http.DefaultClient, server.URL)
 
-	adminToken, deployerToken, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
+	adminToken, deployerToken, adminOrgID, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
+	assert.Equal(t, "org-admin", adminOrgID)
 	require.NoError(t, err)
 	assert.Equal(t, "token-admin", adminToken)
 	assert.Equal(t, "token-deployer", deployerToken)
@@ -197,7 +234,7 @@ func TestEnsureAuth_DeployerCreateLocalUserFailsClosed(t *testing.T) {
 	server := newTestAuthServer(t, fake)
 	client := authv1connect.NewAuthServiceClient(http.DefaultClient, server.URL)
 
-	_, _, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
+	_, _, _, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "deployer")
 	assert.ErrorContains(t, err, "CreateLocalUser")
@@ -209,10 +246,33 @@ func TestEnsureAuth_SkipsCreateLocalUserWhenDeployerExists(t *testing.T) {
 	server := newTestAuthServer(t, fake)
 	client := authv1connect.NewAuthServiceClient(http.DefaultClient, server.URL)
 
-	_, _, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
+	_, _, _, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
 	require.NoError(t, err)
 	assert.Equal(t, 2, fake.loginCallCount)
 	assert.Equal(t, 0, fake.createLocalUserCalls, "existing deployer account must not be re-provisioned")
+}
+func TestEnsureOrgBinding_CreatesAndIgnoresDuplicate(t *testing.T) {
+	fake := &fakeBindingHandler{}
+	server := newTestBindingServer(t, fake)
+	client := authv1connect.NewBindingServiceClient(http.DefaultClient, server.URL)
+
+	require.NoError(t, ensureOrgBinding(context.Background(), client, "token-admin", "org-1", "customer-1"))
+	assert.Equal(t, 1, fake.createCalls)
+	assert.Equal(t, "Bearer token-admin", fake.authHeader)
+
+	fake.createErr = connect.NewError(connect.CodeAlreadyExists, errors.New("duplicate_binding"))
+	require.NoError(t, ensureOrgBinding(context.Background(), client, "token-admin", "org-1", "customer-1"))
+	assert.Equal(t, 2, fake.createCalls, "re-seeding must tolerate an existing active binding")
+}
+
+func TestEnsureOrgBinding_ErrorPropagates(t *testing.T) {
+	fake := &fakeBindingHandler{createErr: connect.NewError(connect.CodePermissionDenied, errors.New("requires role platform_admin"))}
+	server := newTestBindingServer(t, fake)
+	client := authv1connect.NewBindingServiceClient(http.DefaultClient, server.URL)
+
+	err := ensureOrgBinding(context.Background(), client, "token-admin", "org-1", "customer-1")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "create binding")
 }
 
 func TestEnsureValuesRevision_CreatesSubmitsApproves(t *testing.T) {

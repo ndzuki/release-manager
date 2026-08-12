@@ -98,7 +98,8 @@ func fail(message string) {
 func run(ctx context.Context, cfg seedConfig) error {
 	httpClient := http.DefaultClient
 	authClient := authv1connect.NewAuthServiceClient(httpClient, cfg.authURL)
-	adminToken, deployerToken, err := ensureAuth(ctx, authClient, cfg.adminUser, cfg.adminPassword, cfg.deployerUser, cfg.deployerPass)
+	bindingClient := authv1connect.NewBindingServiceClient(httpClient, cfg.authURL)
+	adminToken, deployerToken, adminOrgID, err := ensureAuth(ctx, authClient, cfg.adminUser, cfg.adminPassword, cfg.deployerUser, cfg.deployerPass)
 	if err != nil {
 		return err
 	}
@@ -114,8 +115,16 @@ func run(ctx context.Context, cfg seedConfig) error {
 		{id: "dev-customer-b", name: "Development Customer B", slug: "development-customer-b"},
 	}
 
+	// Customers and their org bindings are provisioned with the platform admin
+	// actor: CreateCustomer carries no customer_id field (no binding check),
+	// while every later customer-scoped call (GetCustomer/CreateCluster/…)
+	// requires an active org-customer binding (auth interceptor
+	// enforceRequestBinding, ADR-006).
 	for _, customer := range customers {
-		if err := ensureCustomer(ctx, orchestratorClient, deployerToken, customer.id, customer.name, customer.slug); err != nil {
+		if err := ensureCustomer(ctx, orchestratorClient, adminToken, customer.id, customer.name, customer.slug); err != nil {
+			return err
+		}
+		if err := ensureOrgBinding(ctx, bindingClient, adminToken, adminOrgID, customer.id); err != nil {
 			return err
 		}
 	}
@@ -185,10 +194,10 @@ func ensureAuth(
 	ctx context.Context,
 	client authv1connect.AuthServiceClient,
 	adminUser, adminPassword, deployerUser, deployerPassword string,
-) (adminToken, deployerToken string, err error) {
+) (adminToken, deployerToken, adminOrgID string, err error) {
 	initStatus, err := client.GetInitStatus(ctx, connect.NewRequest(&authv1.GetInitStatusRequest{}))
 	if err != nil {
-		return "", "", fmt.Errorf("get init status: %w", err)
+		return "", "", "", fmt.Errorf("get init status: %w", err)
 	}
 	if !initStatus.Msg.GetInitialized() {
 		if _, err := client.Initialize(ctx, connect.NewRequest(&authv1.InitializeRequest{
@@ -196,19 +205,32 @@ func ensureAuth(
 			Password:         adminPassword,
 			OrganizationName: developmentNamespace,
 		})); err != nil {
-			return "", "", fmt.Errorf("initialize system: %w", err)
+			return "", "", "", fmt.Errorf("initialize system: %w", err)
 		}
 		fmt.Printf("system initialized with admin user %s\n", adminUser)
 	}
 	adminLogin, err := client.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: adminUser, Password: adminPassword}))
 	if err != nil {
-		return "", "", fmt.Errorf("login admin user %s: %w", adminUser, err)
+		return "", "", "", fmt.Errorf("login admin user %s: %w", adminUser, err)
 	}
 	adminToken = adminLogin.Msg.GetAccessToken()
+	// The login response carries no organization (service login, not browser
+	// session); resolve the admin's org via GetLocalUser (TASK-072), which
+	// aggregates the membership org id from the user store.
+	userReq := connect.NewRequest(&authv1.GetLocalUserRequest{Username: adminUser})
+	withAuth(userReq, adminToken)
+	userResp, err := client.GetLocalUser(ctx, userReq)
+	if err != nil {
+		return "", "", "", fmt.Errorf("resolve admin org: %w", err)
+	}
+	adminOrgID = userResp.Msg.GetUser().GetOrgId()
+	if adminOrgID == "" {
+		return "", "", "", fmt.Errorf("login admin user %s: no active organization in session", adminUser)
+	}
 
 	deployerLogin, err := client.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: deployerUser, Password: deployerPassword}))
 	if err == nil {
-		return adminToken, deployerLogin.Msg.GetAccessToken(), nil
+		return adminToken, deployerLogin.Msg.GetAccessToken(), adminOrgID, nil
 	}
 	createReq := connect.NewRequest(&authv1.CreateLocalUserRequest{
 		Username: deployerUser,
@@ -217,14 +239,14 @@ func ensureAuth(
 	})
 	withAuth(createReq, adminToken)
 	if _, createErr := client.CreateLocalUser(ctx, createReq); createErr != nil {
-		return "", "", fmt.Errorf("login deployer user %s: %w; provision via CreateLocalUser: %v", deployerUser, err, createErr)
+		return "", "", "", fmt.Errorf("login deployer user %s: %w; provision via CreateLocalUser: %v", deployerUser, err, createErr)
 	}
 	fmt.Printf("deployer user %s created\n", deployerUser)
 	deployerLogin, err = client.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: deployerUser, Password: deployerPassword}))
 	if err != nil {
-		return "", "", fmt.Errorf("login deployer user %s after provisioning: %w", deployerUser, err)
+		return "", "", "", fmt.Errorf("login deployer user %s after provisioning: %w", deployerUser, err)
 	}
-	return adminToken, deployerLogin.Msg.GetAccessToken(), nil
+	return adminToken, deployerLogin.Msg.GetAccessToken(), adminOrgID, nil
 }
 
 // withAuth injects the bearer token into a Connect request.
@@ -232,25 +254,50 @@ func withAuth[T any](req *connect.Request[T], token string) {
 	req.Header().Set("Authorization", "Bearer "+token)
 }
 
-func ensureCustomer(ctx context.Context, client orchestratorv1connect.OrchestratorServiceClient, token, id, name, slug string) error {
-	req := connect.NewRequest(&orchestratorv1.GetCustomerRequest{CustomerId: id})
-	withAuth(req, token)
-	_, err := client.GetCustomer(ctx, req)
-	if err == nil {
-		fmt.Printf("customer %s already exists\n", id)
-		return nil
+// ensureCustomer creates the customer with the platform admin actor when it
+// does not exist yet. Existence is probed via ListCustomers (no customer_id
+// field, hence no org-binding check) because GetCustomer requires an active
+// org-customer binding that cannot exist before the customer itself.
+func ensureCustomer(ctx context.Context, client orchestratorv1connect.OrchestratorServiceClient, adminToken, id, name, slug string) error {
+	listReq := connect.NewRequest(&orchestratorv1.ListCustomersRequest{IncludeDisabled: true})
+	withAuth(listReq, adminToken)
+	list, err := client.ListCustomers(ctx, listReq)
+	if err != nil {
+		return fmt.Errorf("list customers: %w", err)
 	}
-	if connect.CodeOf(err) != connect.CodeNotFound {
-		return fmt.Errorf("get customer %s: %w", id, err)
+	for _, customer := range list.Msg.GetCustomers() {
+		if customer.GetId() == id {
+			fmt.Printf("customer %s already exists\n", id)
+			return nil
+		}
 	}
 	createReq := connect.NewRequest(&orchestratorv1.CreateCustomerRequest{Id: id, Name: name, Slug: slug})
-	withAuth(createReq, token)
+	withAuth(createReq, adminToken)
 	_, err = client.CreateCustomer(ctx, createReq)
 	if err != nil {
 		return fmt.Errorf("create customer %s: %w", id, err)
 	}
 	fmt.Printf("customer %s created\n", id)
 	return nil
+}
+
+// ensureOrgBinding creates the org-customer binding required by the auth
+// interceptor for every customer-scoped request (ADR-006). CreateBinding is
+// exempt from the binding check itself; an already-active binding surfaces as
+// CodeAlreadyExists and is ignored (re-seeding is idempotent).
+func ensureOrgBinding(ctx context.Context, client authv1connect.BindingServiceClient, adminToken, orgID, customerID string) error {
+	req := connect.NewRequest(&authv1.CreateBindingRequest{OrgId: orgID, CustomerId: customerID})
+	withAuth(req, adminToken)
+	_, err := client.CreateBinding(ctx, req)
+	if err == nil {
+		fmt.Printf("org %s bound to customer %s\n", orgID, customerID)
+		return nil
+	}
+	if connect.CodeOf(err) == connect.CodeAlreadyExists {
+		fmt.Printf("org %s already bound to customer %s\n", orgID, customerID)
+		return nil
+	}
+	return fmt.Errorf("create binding org %s customer %s: %w", orgID, customerID, err)
 }
 
 func ensureCluster(ctx context.Context, client orchestratorv1connect.OrchestratorServiceClient, token, id, name, customerID string) error {
