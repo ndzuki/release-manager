@@ -73,8 +73,9 @@ FROM trust_roots
 WHERE environment = ?
   AND state IN ('active', 'grace')
   AND valid_from <= ?
+  AND (state = 'active' OR (grace_until IS NOT NULL AND grace_until > ?))
 ORDER BY created_at ASC
-`, env, at.UTC().Format(time.RFC3339))
+`, env, at.UTC().Format(time.RFC3339), at.UTC().Format(time.RFC3339))
 	if err != nil {
 		return nil, fmt.Errorf("list active trust_roots: %w", err)
 	}

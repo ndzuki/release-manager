@@ -27,6 +27,9 @@ spec:
           envFrom:
             - secretRef:
                 name: release-manager-dev-credentials
+          env:
+            - name: AUTHORIZATION_AUTH_URL
+              value: http://auth:8085
           ports:
             - name: http
               containerPort: 8083

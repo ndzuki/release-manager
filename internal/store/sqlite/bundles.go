@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/ndzuki/release-manager/internal/store"
+	"gorm.io/gorm"
 )
 
 type bundleStore struct{ db *sql.DB }
@@ -265,4 +267,20 @@ func stringsToAny(ss []string) []any {
 		out[i] = s
 	}
 	return out
+}
+
+func (s *bundleStore) CreateTx(_ *gorm.DB, _ *store.ReleaseBundle) error {
+	return errors.New("sqlite bundle transactions are unsupported")
+}
+
+func (s *bundleStore) GetByAlias(ctx context.Context, alias string) (*store.ReleaseBundle, error) {
+	return s.Get(ctx, alias)
+}
+
+func (s *bundleStore) List(context.Context, store.BundleListFilter) (*store.BundlePage, error) {
+	return nil, errors.New("sqlite bundle listing is unsupported")
+}
+
+func (s *bundleStore) UpdateStatusTx(_ *gorm.DB, _ string, _, _ store.BundleStatus, _ string) error {
+	return errors.New("sqlite bundle status transactions are unsupported")
 }

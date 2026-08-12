@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -46,6 +47,46 @@ func (s *preflightLifecycleStore) Create(ctx context.Context, pl *store.Prefligh
 		return fmt.Errorf("insert preflight lifecycle: %w", err)
 	}
 	return nil
+}
+
+// GetByOperationID returns the most recent lifecycle record for an operation.
+func (s *preflightLifecycleStore) GetByOperationID(ctx context.Context, operationID string) (*store.PreflightLifecycle, error) {
+	row := s.gorm.QueryRowContext(ctx, `
+		SELECT id, operation_id, operation_terminal_at, stages, overall, error_code, created_at
+		FROM preflight_lifecycles
+		WHERE operation_id = ?
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, operationID)
+
+	var (
+		pl                  store.PreflightLifecycle
+		storedOperationID   *string
+		operationTerminalAt *string
+		stages              string
+		createdAt           string
+	)
+	if err := row.Scan(&pl.ID, &storedOperationID, &operationTerminalAt, &stages, &pl.Overall, &pl.ErrorCode, &createdAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("scan preflight lifecycle: %w", err)
+	}
+	pl.OperationID = storedOperationID
+	pl.Stages = []byte(stages)
+	if operationTerminalAt != nil && *operationTerminalAt != "" {
+		t, err := time.Parse(time.RFC3339, *operationTerminalAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse operation_terminal_at: %w", err)
+		}
+		pl.OperationTerminalAt = &t
+	}
+	ct, err := time.Parse(time.RFC3339, createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse created_at: %w", err)
+	}
+	pl.CreatedAt = ct
+	return &pl, nil
 }
 
 // SetOperationTerminal records the terminal time for an on-going preflight operation.

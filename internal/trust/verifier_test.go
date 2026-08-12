@@ -15,8 +15,8 @@ import (
 
 func trustedPolicy() store.TrustPolicy {
 	return store.TrustPolicy{
-		PolicyVersion: "v1",
-		FailClosed:    true,
+		PolicyVersion:  "v1",
+		FailClosed:     true,
 		TrustedIssuers: []string{"release-manager-ci"},
 	}
 }
@@ -59,6 +59,19 @@ func (s *stubStore) GetByDigestAndPolicy(_ context.Context, artifactDigest, poli
 	key := artifactDigest + ":" + policyVersion
 	rec, ok := s.records[key]
 	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return rec, nil
+}
+
+func (s *stubStore) GetByDigestPolicyAndSignature(
+	ctx context.Context,
+	artifactDigest string,
+	policyVersion string,
+	signatureIdentity string,
+) (*store.VerificationRecord, error) {
+	rec, err := s.GetByDigestAndPolicy(ctx, artifactDigest, policyVersion)
+	if err != nil || rec.SignatureIdentity != signatureIdentity {
 		return nil, store.ErrNotFound
 	}
 	return rec, nil

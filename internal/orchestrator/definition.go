@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -60,18 +61,22 @@ func (s *Service) CreateReleaseDefinition(
 
 	now := time.Now().UTC()
 	def := &store.ReleaseDefinition{
-		ID:                uuid.New().String(),
-		Name:              msg.GetReleaseName(),
-		CustomerID:        msg.GetCustomerId(),
-		ClusterID:         msg.GetClusterId(),
-		Namespace:         msg.GetNamespace(),
-		ReleaseName:       msg.GetReleaseName(),
-		ChartName:         msg.GetChartName(),
-		Status:            store.DefStatusActive,
-		OptimisticVersion: 1,
-		CreatedBy:         msg.GetActor().GetUserId(),
-		CreatedAt:         now,
-		UpdatedAt:         now,
+		ID:                     uuid.New().String(),
+		Name:                   msg.GetReleaseName(),
+		CustomerID:             msg.GetCustomerId(),
+		ClusterID:              msg.GetClusterId(),
+		Namespace:              msg.GetNamespace(),
+		ReleaseName:            msg.GetReleaseName(),
+		ChartName:              msg.GetChartName(),
+		Status:                 store.DefStatusActive,
+		OptimisticVersion:      1,
+		CreatedBy:              msg.GetActor().GetUserId(),
+		CreatedAt:              now,
+		UpdatedAt:              now,
+		HPAManaged:             msg.GetHpaManaged(),
+		MaxEmergencyReplicas:   msg.GetMaxEmergencyReplicas(),
+		ApprovedAnnotationKeys: approvedAnnotationKeysFromProto(msg.GetApprovedAnnotationKeys()),
+		PromotionMappings:      promotionMappingsFromProto(msg.GetPromotionMappings()),
 	}
 	if !msg.GetEnabled() {
 		def.Status = store.DefStatusDraft
@@ -107,6 +112,7 @@ func (s *Service) CreateReleaseDefinition(
 }
 
 // GetReleaseDefinition retrieves a release definition by ID.
+//
 //nolint:dupl // Resource Get handlers intentionally share the project-wide Connect error mapping.
 func (s *Service) GetReleaseDefinition(
 	ctx context.Context,
@@ -179,6 +185,18 @@ func (s *Service) UpdateReleaseDefinition(
 	if cn := msg.GetChartName(); cn != "" {
 		def.ChartName = cn
 	}
+	if msg.HpaManaged != nil {
+		def.HPAManaged = msg.GetHpaManaged()
+	}
+	if msg.MaxEmergencyReplicas != nil {
+		def.MaxEmergencyReplicas = msg.GetMaxEmergencyReplicas()
+	}
+	if msg.ApprovedAnnotationKeys != nil {
+		def.ApprovedAnnotationKeys = approvedAnnotationKeysFromProto(msg.GetApprovedAnnotationKeys())
+	}
+	if msg.PromotionMappings != nil {
+		def.PromotionMappings = promotionMappingsFromProto(msg.GetPromotionMappings())
+	}
 
 	updated, err := s.store.Definitions().Update(ctx, def, nil)
 	if err != nil {
@@ -250,17 +268,61 @@ func (s *Service) DisableReleaseDefinition(
 // toProtoDefinition converts a store.ReleaseDefinition to a commonv1.ReleaseDefinition proto message.
 func toProtoDefinition(def *store.ReleaseDefinition) *commonv1.ReleaseDefinition {
 	return &commonv1.ReleaseDefinition{
-		Id:          def.ID,
-		Name:        def.Name,
-		CustomerId:  def.CustomerID,
-		ClusterId:   def.ClusterID,
-		Namespace:   def.Namespace,
-		ReleaseName: def.ReleaseName,
-		ChartName:   def.ChartName,
-		Status:      string(def.Status),
-		Version:     int64(def.OptimisticVersion),
-		CreatedBy:   def.CreatedBy,
-		CreatedAt:   timestamppb.New(def.CreatedAt),
-		UpdatedAt:   timestamppb.New(def.UpdatedAt),
+		Id:                     def.ID,
+		Name:                   def.Name,
+		CustomerId:             def.CustomerID,
+		ClusterId:              def.ClusterID,
+		Namespace:              def.Namespace,
+		ReleaseName:            def.ReleaseName,
+		ChartName:              def.ChartName,
+		Status:                 string(def.Status),
+		Version:                int64(def.OptimisticVersion),
+		CreatedBy:              def.CreatedBy,
+		CreatedAt:              timestamppb.New(def.CreatedAt),
+		UpdatedAt:              timestamppb.New(def.UpdatedAt),
+		HpaManaged:             def.HPAManaged,
+		MaxEmergencyReplicas:   def.MaxEmergencyReplicas,
+		ApprovedAnnotationKeys: mustJSON(def.ApprovedAnnotationKeys),
+		PromotionMappings:      mustJSON(def.PromotionMappings),
 	}
+}
+
+func approvedAnnotationKeysFromProto(values []*orchestratorv1.ApprovedAnnotationKey) []store.ApprovedAnnotationKey {
+	result := make([]store.ApprovedAnnotationKey, 0, len(values))
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		result = append(result, store.ApprovedAnnotationKey{
+			Key:                 value.GetKey(),
+			Scope:               value.GetScope(),
+			PromotionValuesPath: value.GetPromotionValuesPath(),
+		})
+	}
+	return result
+}
+
+func promotionMappingsFromProto(values []*orchestratorv1.PromotionMapping) []store.PromotionMapping {
+	result := make([]store.PromotionMapping, 0, len(values))
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		result = append(result, store.PromotionMapping{
+			WorkloadKind: value.GetWorkloadKind(),
+			WorkloadName: value.GetWorkloadName(),
+			Container:    value.GetContainer(),
+			Field:        value.GetField(),
+			ValuesPath:   value.GetValuesPath(),
+		})
+	}
+	return result
+}
+
+func mustJSON(value any) []byte {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return []byte("[]")
+	}
+	return encoded
 }

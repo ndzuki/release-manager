@@ -46,6 +46,14 @@ type closeService interface {
 	Close() error
 }
 
+// ExtraServersProvider is an optional interface for services that run
+// additional HTTP listeners beside the primary one (TASK-075: the
+// orchestrator agent gateway on its own mTLS port). Extra servers share the
+// primary server's startup, error reporting, and graceful shutdown.
+type ExtraServersProvider interface {
+	ExtraServers() ([]*http.Server, error)
+}
+
 // readinessContributor is an optional interface services can implement
 // to supply dependency readiness checks for /readyz.
 type readinessContributor interface {
@@ -103,14 +111,24 @@ func Run(configPath string, svc Service) {
 			return
 		}
 	}
-
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	// Build extra listeners (e.g. the orchestrator agent gateway) before
+	// starting anything so configuration errors surface synchronously.
+	var extra []*http.Server
+	if provider, ok := svc.(ExtraServersProvider); ok {
+		extra, err = provider.ExtraServers()
+		if err != nil {
+			logger.Error("failed to configure extra servers", "error", err)
+			return
+		}
+	}
 	if background, ok := svc.(backgroundService); ok {
 		go background.Run(ctx)
 	}
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 1+len(extra))
 	go func() {
 		logger.Info(svc.Name()+" started", "http_port", cfg.HTTPPort)
 		var serveErr error
@@ -128,7 +146,7 @@ func Run(configPath string, svc Service) {
 			errCh <- fmt.Errorf("server: %w", serveErr)
 		}
 	}()
-
+	serveExtraServers(extra, errCh, logger)
 	select {
 	case err := <-errCh:
 		logger.Error("server error", "error", err)
@@ -142,6 +160,7 @@ func Run(configPath string, svc Service) {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("shutdown error", "error", err)
 	}
+	shutdownExtraServers(shutdownCtx, extra, logger)
 	if shutdowner, ok := svc.(Shutdowner); ok {
 		if err := shutdowner.Shutdown(shutdownCtx); err != nil {
 			logger.Error("service shutdown error", "error", err)
@@ -154,4 +173,29 @@ func Run(configPath string, svc Service) {
 		}
 	}
 	logger.Info(svc.Name() + " stopped")
+}
+
+// serveExtraServers starts every extra listener. Each server carries its own
+// TLSConfig (including certificates), so empty filenames make
+// ListenAndServeTLS use it.
+func serveExtraServers(extra []*http.Server, errCh chan<- error, logger *slog.Logger) {
+	for i, extraSrv := range extra {
+		extraSrv := extraSrv
+		go func() {
+			logger.Info("extra listener started", "addr", extraSrv.Addr)
+			serveErr := extraSrv.ListenAndServeTLS("", "")
+			if serveErr != nil && serveErr != http.ErrServerClosed {
+				errCh <- fmt.Errorf("extra server %d: %w", i, serveErr)
+			}
+		}()
+	}
+}
+
+// shutdownExtraServers gracefully stops every extra listener.
+func shutdownExtraServers(ctx context.Context, extra []*http.Server, logger *slog.Logger) {
+	for _, extraSrv := range extra {
+		if err := extraSrv.Shutdown(ctx); err != nil {
+			logger.Error("extra server shutdown error", "addr", extraSrv.Addr, "error", err)
+		}
+	}
 }

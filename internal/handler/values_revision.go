@@ -2,12 +2,15 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"github.com/ndzuki/release-manager/internal/contracts"
 	"github.com/ndzuki/release-manager/internal/store"
 	"github.com/ndzuki/release-manager/internal/values"
 )
@@ -50,38 +53,39 @@ type createRequest struct {
 func (h *ValuesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req createRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, errResp("invalid request body: "+err.Error()))
+		h.logger.Error("decode create values revision request", "error", err)
+		h.writeError(w, r, http.StatusBadRequest, connect.CodeInvalidArgument.String(), "invalid request body")
 		return
 	}
 
 	if req.ReleaseDefinitionID == "" {
-		writeJSON(w, http.StatusBadRequest, errResp("release_definition_id is required"))
+		h.writeError(w, r, http.StatusBadRequest, connect.CodeInvalidArgument.String(), "release_definition_id is required")
 		return
 	}
 
 	// Validate, canonicalize, and compute digest.
 	result, err := values.Validate([]byte(req.Values), h.maxSize)
 	if err != nil {
-		code := http.StatusBadRequest
 		switch {
 		case err == values.ErrSecretLiteral:
-			// stays 400, specific message
+			// 稳定业务错误：400 + 具体 message。
+			h.writeError(w, r, http.StatusBadRequest, connect.CodeInvalidArgument.String(), err.Error())
 		case err == values.ErrSizeExceeded:
+			h.writeError(w, r, http.StatusBadRequest, connect.CodeInvalidArgument.String(), err.Error())
 		case values.IsYAMLError(err):
+			// YAML 解析细节（行号等）属输入诊断，仅日志。
+			h.logger.Debug("values validate yaml", "error", err)
+			h.writeError(w, r, http.StatusBadRequest, connect.CodeInvalidArgument.String(), values.ErrInvalidYAML.Error())
 		default:
-			h.logger.Error("values validate", "error", err)
-			writeJSON(w, http.StatusInternalServerError, errResp("validation failed"))
-			return
+			h.writeInternalError(w, r, "values validate", err)
 		}
-		writeJSON(w, code, errResp(err.Error()))
 		return
 	}
 
 	// Get next revision number.
 	nextRev, err := h.values.GetNextRevisionNumber(r.Context(), req.ReleaseDefinitionID)
 	if err != nil {
-		h.logger.Error("get next revision", "error", err)
-		writeJSON(w, http.StatusInternalServerError, errResp("failed to get next revision number"))
+		h.writeInternalError(w, r, "get next revision", err)
 		return
 	}
 
@@ -100,8 +104,7 @@ func (h *ValuesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.values.Create(r.Context(), vr); err != nil {
-		h.logger.Error("create values revision", "error", err)
-		writeJSON(w, http.StatusInternalServerError, errResp("failed to create values revision"))
+		h.writeInternalError(w, r, "create values revision", err)
 		return
 	}
 
@@ -112,18 +115,17 @@ func (h *ValuesHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *ValuesHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
-		writeJSON(w, http.StatusBadRequest, errResp("id is required"))
+		h.writeError(w, r, http.StatusBadRequest, connect.CodeInvalidArgument.String(), "id is required")
 		return
 	}
 
 	vr, err := h.values.Get(r.Context(), id)
 	if err != nil {
 		if err == store.ErrNotFound {
-			writeJSON(w, http.StatusNotFound, errResp("not found"))
+			h.writeError(w, r, http.StatusNotFound, connect.CodeNotFound.String(), "not found")
 			return
 		}
-		h.logger.Error("get values revision", "error", err)
-		writeJSON(w, http.StatusInternalServerError, errResp("failed to get values revision"))
+		h.writeInternalError(w, r, "get values revision", err)
 		return
 	}
 
@@ -134,14 +136,13 @@ func (h *ValuesHandler) Get(w http.ResponseWriter, r *http.Request) {
 func (h *ValuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	defID := r.URL.Query().Get("definition_id")
 	if defID == "" {
-		writeJSON(w, http.StatusBadRequest, errResp("definition_id query parameter is required"))
+		h.writeError(w, r, http.StatusBadRequest, connect.CodeInvalidArgument.String(), "definition_id query parameter is required")
 		return
 	}
 
 	revs, err := h.values.List(r.Context(), defID)
 	if err != nil {
-		h.logger.Error("list values revisions", "error", err)
-		writeJSON(w, http.StatusInternalServerError, errResp("failed to list values revisions"))
+		h.writeInternalError(w, r, "list values revisions", err)
 		return
 	}
 
@@ -177,12 +178,39 @@ type valuesResponse struct {
 	UpdatedAt           string `json:"updated_at"`
 }
 
+// errorResponse is the REQ-010 output-contract error envelope:
+// {code, message, request_id, field_errors?}.
 type errorResponse struct {
-	Error string `json:"error"`
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id"`
 }
 
-func errResp(msg string) errorResponse {
-	return errorResponse{Error: msg}
+// writeError writes a stable error envelope per the REQ-010 output contract.
+// msg MUST be client-safe; internal detail goes to logs only.
+func (h *ValuesHandler) writeError(w http.ResponseWriter, r *http.Request, status int, code, msg string) {
+	rid := requestID(r.Context())
+	w.Header().Set(contracts.RequestIDHeader, rid)
+	writeJSON(w, status, errorResponse{Code: code, Message: msg, RequestID: rid})
+}
+
+// writeInternalError logs the full detail and responds with the generic
+// internal-error envelope (AC-010-04): no SQL/stack/credential text reaches
+// the client.
+func (h *ValuesHandler) writeInternalError(w http.ResponseWriter, r *http.Request, op string, err error) {
+	rid := contracts.RequestID(r.Context())
+	h.logger.Error(op, "request_id", rid, "error", err)
+	h.writeError(w, r, http.StatusInternalServerError, connect.CodeInternal.String(), "internal error")
+}
+
+// requestID returns the request_id from ctx, generating a UUID when the
+// request did not carry one (the values routes are plain HTTP handlers and
+// are not wrapped by the RequestID interceptor chain).
+func requestID(ctx context.Context) string {
+	if rid := contracts.RequestID(ctx); rid != "" {
+		return rid
+	}
+	return uuid.NewString()
 }
 
 func toResponse(vr *store.ValuesRevision) valuesResponse {

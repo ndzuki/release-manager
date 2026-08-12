@@ -19,8 +19,8 @@ func DefaultPolicy(env string) store.TrustPolicy {
 		}
 	}
 	return store.TrustPolicy{
-		PolicyVersion:  "v1",
-		FailClosed:     false,
+		PolicyVersion: "v1",
+		FailClosed:    false,
 		TrustedIssuers: []string{
 			"release-manager-ci",
 		},

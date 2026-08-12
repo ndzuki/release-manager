@@ -3,13 +3,13 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/ndzuki/release-manager/internal/contracts"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -140,11 +140,11 @@ func (s *auditEventStore) Query(
 
 	where, args := buildAuditWhere(filter)
 	if cursor != "" {
-		createdAt, id, err := decodeAuditCursor(cursor)
+		createdAt, id, err := contracts.DecodeCursor(cursor)
 		if err != nil {
-			return nil, err
+			return nil, store.ErrInvalidCursor
 		}
-		where = append(where, `(created_at < ? OR (created_at = ? AND id < ?))`)
+		where = append(where, contracts.KeysetPredicate(contracts.CursorDesc))
 		createdAtString := createdAt.UTC().Format(time.RFC3339Nano)
 		args = append(args, createdAtString, createdAtString, id)
 	}
@@ -179,7 +179,7 @@ func (s *auditEventStore) Query(
 		page.HasMore = true
 		page.Events = events[:limit]
 		last := page.Events[len(page.Events)-1]
-		page.NextCursor = encodeAuditCursor(last.CreatedAt, last.ID)
+		page.NextCursor = contracts.EncodeCursor(last.CreatedAt, last.ID)
 	}
 	return page, nil
 }
@@ -272,27 +272,6 @@ func scanAuditEvent(row interface{ Scan(...any) error }) (*store.AuditEvent, err
 	}
 	event.CreatedAt = parsed
 	return &event, nil
-}
-
-func encodeAuditCursor(createdAt time.Time, id string) string {
-	raw := createdAt.UTC().Format(time.RFC3339Nano) + "|" + id
-	return base64.RawURLEncoding.EncodeToString([]byte(raw))
-}
-
-func decodeAuditCursor(cursor string) (time.Time, string, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(cursor)
-	if err != nil {
-		return time.Time{}, "", store.ErrInvalidCursor
-	}
-	createdAt, id, ok := strings.Cut(string(raw), "|")
-	if !ok || id == "" {
-		return time.Time{}, "", store.ErrInvalidCursor
-	}
-	parsed, err := time.Parse(time.RFC3339Nano, createdAt)
-	if err != nil {
-		return time.Time{}, "", store.ErrInvalidCursor
-	}
-	return parsed, id, nil
 }
 
 // ListOlderThan returns events with created_at < cutoff, ordered ASC.
