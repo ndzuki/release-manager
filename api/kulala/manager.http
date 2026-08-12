@@ -195,50 +195,87 @@ POST {{BASE_URL}}/api/v1/customers/{{CUSTOMER_ID}}/clusters/{{CLUSTER_NAME}}/syn
 Authorization: Bearer {{token}}
 
 # =============================================================================
-# ValuesRevision (Layer 2)
+# ValuesRevision (orchestrator Connect seam, TASK-071)
 # =============================================================================
+# ValuesRevision Create/Get/List/Submit/Approve/Reject 走 orchestrator Connect
+# gRPC（legacy REST /api/v1/values-revisions 已退役，ADR-002/015）。
+# Idempotency-Key header 用法（REQ-010/REQ-018 D14）：
+#   同 scope（actor+action+release_definition_id）同 key 同 request_hash 重放
+#   → 返回首次结果不重复写；同 key 不同 request_hash → CodeAlreadyExists。
 
-### Create ValuesRevision (draft)
+### Create ValuesRevision (draft, initial)
 # @name CreateValuesRevision
-POST {{BASE_URL}}/api/v1/values-revisions
-Content-Type: application/json
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/CreateValuesRevision
+Content-Type: application/grpc
+Idempotency-Key: create-values-{{DEFINITION_ID}}-v1
 Authorization: Bearer {{token}}
 
 {
-  "release_definition_id": "{{definition_id}}",
-  "values": {
-    "image": {
-      "repository": "harbor.example.com/library/{{RELEASE_NAME}}",
-      "tag": "latest"
-    },
-    "replicas": 2
-  }
+  "release_definition_id": "{{DEFINITION_ID}}",
+  "document": "image:\n  repository: harbor.example.com/library/{{RELEASE_NAME}}\n  tag: latest\nreplicas: 2"
+}
+
+### List ValuesRevisions (by definition)
+# @name ListValuesRevisions
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/ListValuesRevisions
+Content-Type: application/grpc
+Authorization: Bearer {{token}}
+
+{
+  "release_definition_id": "{{DEFINITION_ID}}"
+}
+
+### Get ValuesRevision
+# @name GetValuesRevision
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/GetValuesRevision
+Content-Type: application/grpc
+Authorization: Bearer {{token}}
+
+{
+  "revision_id": "{{REVISION_ID}}"
+}
+
+### Submit ValuesRevision (draft → pending_approval)
+# @name SubmitValuesRevision
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/SubmitValuesRevision
+Content-Type: application/grpc
+Idempotency-Key: submit-values-{{REVISION_ID}}
+Authorization: Bearer {{token}}
+
+{
+  "revision_id": "{{REVISION_ID}}",
+  "expected_state_version": 1,
+  "comment": "ready for review"
 }
 
 ### Approve ValuesRevision
-# @name ApproveRevision
-POST {{BASE_URL}}/api/v1/values-revisions/{{revision_id}}/approve
-Content-Type: application/json
+# @name ApproveValuesRevision
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/ApproveValuesRevision
+Content-Type: application/grpc
+Idempotency-Key: approve-values-{{REVISION_ID}}
 Authorization: Bearer {{token}}
 
 {
+  "revision_id": "{{REVISION_ID}}",
+  "expected_state_version": 2,
   "comment": "LGTM for production"
 }
 
 ### Reject ValuesRevision
-# @name RejectRevision
-POST {{BASE_URL}}/api/v1/values-revisions/{{revision_id}}/reject
-Content-Type: application/json
+# @name RejectValuesRevision
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/RejectValuesRevision
+Content-Type: application/grpc
+Idempotency-Key: reject-values-{{REVISION_ID}}
 Authorization: Bearer {{token}}
 
 {
+  "revision_id": "{{REVISION_ID}}",
+  "expected_state_version": 2,
   "reason": "missing resource limits"
 }
 
-### List ValuesRevisions
-# @name ListRevisions
-GET {{BASE_URL}}/api/v1/values-revisions?release_definition_id={{definition_id}}
-Authorization: Bearer {{token}}
+# DiscardValuesRevision / CreatePrepareSession / GetPrepareSession 示例待
+# TASK-018 v6（收敛路径 + prepare_token CAS）合入后补充。
 
 # =============================================================================
 # Release Operations (Layer 3)
