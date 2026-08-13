@@ -99,13 +99,6 @@ func WithStreamRegistry(registry *StreamRegistry) Option {
 	}
 }
 
-func loggerOrDefault(logger *slog.Logger) *slog.Logger {
-	if logger != nil {
-		return logger
-	}
-	return slog.Default()
-}
-
 // SetInventorySyncer attaches an inventory syncer for release inventory sync (REQ-017).
 func (s *Service) SetInventorySyncer(syncer *InventorySyncer) {
 	s.inventorySyncer = syncer

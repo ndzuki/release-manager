@@ -17,8 +17,9 @@ import (
 
 // seedUnresolvedEmergencyEffect inserts a terminal EMERGENCY operation whose
 // effect is still UNKNOWN for the definition (AC-067-20 precondition).
-func seedUnresolvedEmergencyEffect(t *testing.T, st store.Store, defID, opID string) {
+func seedUnresolvedEmergencyEffect(t *testing.T, st store.Store, opID string) {
 	t.Helper()
+	const defID = "def-001"
 	now := time.Now().UTC()
 	require.NoError(t, st.Operations().Create(context.Background(), &store.Operation{
 		ID: opID, OperationType: store.OperationEmergency, Status: store.StatusSucceeded,
@@ -42,8 +43,9 @@ func seedUnresolvedEmergencyEffect(t *testing.T, st store.Store, defID, opID str
 
 // seedPendingPromotionTask inserts a pending_promotion convergence task
 // (AC-067-21 precondition).
-func seedPendingPromotionTask(t *testing.T, st store.Store, defID string) *store.ConvergenceTask {
+func seedPendingPromotionTask(t *testing.T, st store.Store) *store.ConvergenceTask {
 	t.Helper()
+	const defID = "def-001"
 	now := time.Now().UTC()
 	require.NoError(t, st.Operations().Create(context.Background(), &store.Operation{
 		ID: "op-task-" + defID, OperationType: store.OperationEmergency, Status: store.StatusSucceeded,
@@ -94,7 +96,7 @@ func TestCreateOperation_UnresolvedEffectBlocks(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
-	seedUnresolvedEmergencyEffect(t, st, "def-001", "op-unresolved-1")
+	seedUnresolvedEmergencyEffect(t, st, "op-unresolved-1")
 
 	_, err := svc.CreateOperation(adminCtx(), installRequest())
 	require.Error(t, err)
@@ -114,7 +116,7 @@ func TestRollbackRelease_UnresolvedEffectBlocks(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 	seedRollbackInventory(t, st)
-	seedUnresolvedEmergencyEffect(t, st, "def-001", "op-unresolved-rb-1")
+	seedUnresolvedEmergencyEffect(t, st, "op-unresolved-rb-1")
 
 	_, err := svc.RollbackRelease(adminCtx(), rollbackRequest())
 	require.Error(t, err)
@@ -129,7 +131,7 @@ func TestCreateOperation_PendingPromotionBlocks(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
-	task := seedPendingPromotionTask(t, st, "def-001")
+	task := seedPendingPromotionTask(t, st)
 
 	_, err := svc.CreateOperation(adminCtx(), installRequest())
 	require.Error(t, err)
@@ -145,7 +147,7 @@ func TestRollbackRelease_PendingPromotionBlocks(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 	seedRollbackInventory(t, st)
-	task := seedPendingPromotionTask(t, st, "def-001")
+	task := seedPendingPromotionTask(t, st)
 
 	_, err := svc.RollbackRelease(adminCtx(), rollbackRequest())
 	require.Error(t, err)
@@ -161,8 +163,8 @@ func TestCreateOperation_GatePriorityAuthorizationFirst(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
-	seedUnresolvedEmergencyEffect(t, st, "def-001", "op-priority-emergency")
-	seedPendingPromotionTask(t, st, "def-001")
+	seedUnresolvedEmergencyEffect(t, st, "op-priority-emergency")
+	seedPendingPromotionTask(t, st)
 
 	// authorizer == nil simulates an unavailable authorization snapshot
 	// (fail closed before any gate runs).
@@ -179,8 +181,8 @@ func TestCreateOperation_EmergencyGateDetailCarriesBothIDArrays(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
-	seedUnresolvedEmergencyEffect(t, st, "def-001", "op-both-emergency")
-	task := seedPendingPromotionTask(t, st, "def-001")
+	seedUnresolvedEmergencyEffect(t, st, "op-both-emergency")
+	task := seedPendingPromotionTask(t, st)
 
 	_, err := svc.CreateOperation(adminCtx(), installRequest())
 	require.Error(t, err)
