@@ -438,8 +438,8 @@ func valuesLifecycleConnectError(err error, definitionID string) *connect.Error 
 		return valuesRevisionError(connect.CodeAlreadyExists, "prepare_token_consumed", errors.New("prepare_token_consumed"))
 	case errors.Is(err, store.ErrConvergenceRevisionExists):
 		return valuesRevisionError(connect.CodeAlreadyExists, "convergence_revision_exists", errors.New("convergence_revision_exists"))
-	case errors.Is(err, store.ErrConvergenceTaskConflict):
-		return valuesRevisionError(connect.CodeFailedPrecondition, "convergence_task_conflict", errors.New("convergence_task_conflict"))
+	case errors.Is(err, store.ErrConvergenceConflict):
+		return valuesRevisionError(connect.CodeFailedPrecondition, "convergence_conflict", errors.New("convergence_conflict"))
 	case errors.Is(err, store.ErrNotFound):
 		return valuesRevisionError(connect.CodeNotFound, "release_definition_not_found", errors.New("release_definition_not_found"))
 	default:

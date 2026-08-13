@@ -53,7 +53,7 @@ var (
 	ErrPrepareTokenExpired       = errors.New("store: prepare token expired")
 	ErrPrepareTokenConsumed      = errors.New("store: prepare token consumed")
 	ErrConvergenceRevisionExists = errors.New("store: convergence revision exists")
-	ErrConvergenceTaskConflict   = errors.New("store: convergence task conflict")
+	ErrConvergenceConflict   = errors.New("store: convergence task conflict")
 )
 
 // StateVersionConflictError reports the current revision version after a failed CAS.

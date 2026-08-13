@@ -967,7 +967,7 @@ func TestCreateValuesRevision_LockedPathDriftRollsBackSession(t *testing.T) {
 	_, err = f.svc.CreateValuesRevision(f.ctx, request)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
-	assert.Equal(t, "convergence_task_conflict", approvalReasonCode(t, err))
+	assert.Equal(t, "convergence_conflict", approvalReasonCode(t, err))
 
 	session, err := f.st.PrepareSessions().Get(f.ctx, hashPrepareToken(prepared.Msg.PrepareToken))
 	require.NoError(t, err)
@@ -1201,4 +1201,146 @@ func TestGetPrepareSession_RevokedMembershipDenied(t *testing.T) {
 	_, err = f.svc.GetPrepareSession(f.ctx, request)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+}
+
+// AC-018-27: initial convergence — a definition without revisions accepts a
+// prepare session with expected_parent_version=0, GetPrepareSession returns
+// document={} and parent_version=0, and the converged create produces
+// version=1 draft bound to the tasks.
+func TestCreateValuesRevision_InitialConvergenceCreatesVersionOne(t *testing.T) {
+	f := newPrepareFixture(t)
+	prepareRequest := connect.NewRequest(&orchestratorv1.CreatePrepareSessionRequest{
+		ReleaseDefinitionId:   f.defID,
+		TaskIds:               []string{"task-vr-1"},
+		ExpectedParentVersion: 0,
+	})
+	prepared, err := f.svc.CreatePrepareSession(f.ctx, prepareRequest)
+	require.NoError(t, err)
+	assert.Empty(t, prepared.Msg.ParentRevisionId)
+	assert.Zero(t, prepared.Msg.ParentVersion)
+
+	getRequest := connect.NewRequest(&orchestratorv1.GetPrepareSessionRequest{
+		PrepareToken: prepared.Msg.PrepareToken,
+	})
+	got, err := f.svc.GetPrepareSession(f.ctx, getRequest)
+	require.NoError(t, err)
+	assert.Equal(t, "{}", got.Msg.Document)
+	assert.Zero(t, got.Msg.ParentVersion)
+	assert.Equal(t, []string{"task-vr-1"}, got.Msg.TaskIds)
+	assert.Equal(t, prepared.Msg.LockedPaths, got.Msg.LockedPaths)
+	assert.Equal(t, store.LockedPathHash(got.Msg.LockedPaths), got.Msg.LockedPathsHash)
+
+	createRequest := connect.NewRequest(&orchestratorv1.CreateValuesRevisionRequest{
+		ReleaseDefinitionId: f.defID,
+		Document:            `replicas: 3`,
+		PrepareToken:        prepared.Msg.PrepareToken,
+	})
+	createRequest.Header().Set("Idempotency-Key", "initial-convergence-create")
+	created, err := f.svc.CreateValuesRevision(f.ctx, createRequest)
+	require.NoError(t, err)
+	assert.True(t, created.Msg.Created)
+	assert.Equal(t, int64(1), created.Msg.Revision.Version)
+	assert.Equal(t, commonv1.ValuesStatus_VALUES_STATUS_DRAFT, created.Msg.Revision.Status)
+
+	task, err := f.st.ConvergenceTasks().Get(f.ctx, "task-vr-1")
+	require.NoError(t, err)
+	require.NotNil(t, task.ActiveRevisionID)
+	assert.Equal(t, created.Msg.Revision.Id, *task.ActiveRevisionID)
+
+	session, err := f.st.PrepareSessions().Get(f.ctx, hashPrepareToken(prepared.Msg.PrepareToken))
+	require.NoError(t, err)
+	require.NotNil(t, session.ConsumedAt)
+}
+
+// AC-018-28: a task that is no longer pending makes CreatePrepareSession fail
+// with convergence_conflict carrying the conflicting task IDs.
+func TestCreatePrepareSession_ConvergenceConflictCarriesTaskIDs(t *testing.T) {
+	f := newPrepareFixture(t)
+	require.NoError(t, f.st.ConvergenceTasks().BindRevision(f.ctx, "task-vr-1", "other-revision", "draft"))
+
+	request := connect.NewRequest(&orchestratorv1.CreatePrepareSessionRequest{
+		ReleaseDefinitionId: f.defID,
+		TaskIds:             []string{"task-vr-1"},
+	})
+	_, err := f.svc.CreatePrepareSession(f.ctx, request)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Equal(t, "convergence_conflict", approvalReasonCode(t, err))
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, "task-vr-1", connectErr.Meta().Get("X-Conflict-Task-Ids"))
+}
+
+// AC-018-28 (path conflict): a draft convergence revision owning a selected
+// path surfaces as convergence_conflict with the owning task ID.
+func TestCreatePrepareSession_PathConflictCarriesTaskIDs(t *testing.T) {
+	f := newPrepareFixture(t)
+	// task-vr-2 owns the same promotion path and is bound to a draft revision.
+	require.NoError(t, f.st.Operations().Create(f.ctx, &store.Operation{
+		ID:                  "op-vr-2",
+		ReleaseDefinitionID: f.defID,
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusPending,
+		IdempotencyKey:      "op-vr-2-idempotency",
+		Actor:               store.ActorContext{UserID: f.creatorID},
+	}))
+	require.NoError(t, f.st.ConvergenceTasks().Create(f.ctx, &store.ConvergenceTask{
+		ID:                  "task-vr-2",
+		OperationID:         "op-vr-2",
+		ReleaseDefinitionID: f.defID,
+		Action:              store.EmergencySetContainerImage,
+		TargetSummary:       "test",
+		PromotionPaths:      json.RawMessage(`["spec.template.spec.containers[0].image"]`),
+		Status:              "pending_promotion",
+		SubmittedAt:         time.Now().UTC(),
+		CreatedAt:           time.Now().UTC(),
+	}))
+	require.NoError(t, f.st.ConvergenceTasks().BindRevision(f.ctx, "task-vr-2", "draft-revision", "draft"))
+
+	request := connect.NewRequest(&orchestratorv1.CreatePrepareSessionRequest{
+		ReleaseDefinitionId: f.defID,
+		TaskIds:             []string{"task-vr-1"},
+	})
+	_, err := f.svc.CreatePrepareSession(f.ctx, request)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Equal(t, "convergence_conflict", approvalReasonCode(t, err))
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, "task-vr-2", connectErr.Meta().Get("X-Conflict-Task-Ids"))
+}
+
+// AC-018-29: a consumed session still returns its snapshot before the 24h GC
+// retention window; only expiry fails.
+func TestGetPrepareSession_ConsumedSessionReturnsSnapshot(t *testing.T) {
+	f := newPrepareFixture(t)
+	prepareRequest := connect.NewRequest(&orchestratorv1.CreatePrepareSessionRequest{
+		ReleaseDefinitionId: f.defID,
+		TaskIds:             []string{"task-vr-1"},
+	})
+	prepared, err := f.svc.CreatePrepareSession(f.ctx, prepareRequest)
+	require.NoError(t, err)
+
+	createRequest := connect.NewRequest(&orchestratorv1.CreateValuesRevisionRequest{
+		ReleaseDefinitionId: f.defID,
+		Document:            `replicas: 2`,
+		PrepareToken:        prepared.Msg.PrepareToken,
+	})
+	createRequest.Header().Set("Idempotency-Key", "consumed-snapshot-create")
+	created, err := f.svc.CreateValuesRevision(f.ctx, createRequest)
+	require.NoError(t, err)
+	assert.True(t, created.Msg.Created)
+
+	getRequest := connect.NewRequest(&orchestratorv1.GetPrepareSessionRequest{
+		PrepareToken: prepared.Msg.PrepareToken,
+	})
+	got, err := f.svc.GetPrepareSession(f.ctx, getRequest)
+	require.NoError(t, err)
+	assert.Equal(t, f.defID, got.Msg.ReleaseDefinitionId)
+	assert.NotEmpty(t, got.Msg.Document)
+	assert.Equal(t, []string{"task-vr-1"}, got.Msg.TaskIds)
+	assert.Equal(t, int64(0), got.Msg.ParentVersion)
+	assert.NotNil(t, got.Msg.ExpiresAt)
 }

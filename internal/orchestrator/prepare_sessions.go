@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -99,10 +101,18 @@ func (s *Service) CreatePrepareSession(
 		return nil, valuesRevisionError(connect.CodeAborted, "parent_conflict",
 			fmt.Errorf("expected parent version %d, current %d", msg.GetExpectedParentVersion(), parentVersion))
 	}
-	// Validate every selected task and compute stable locked paths.
-	lockedPaths, err := s.computeLockedPaths(ctx, msg.GetReleaseDefinitionId(), taskIDs)
+	// Validate every selected task and compute stable locked paths. Tasks that
+	// violate convergence preconditions are reported as convergence_conflict
+	// with their IDs (AC-018-28), not task_invalid.
+	lockedPaths, conflictTaskIDs, err := s.validatePrepareTasks(ctx, msg.GetReleaseDefinitionId(), taskIDs)
 	if err != nil {
 		return nil, err
+	}
+	if len(conflictTaskIDs) > 0 {
+		conflictErr := valuesRevisionError(connect.CodeFailedPrecondition, "convergence_conflict",
+			fmt.Errorf("convergence_conflict: tasks %v are not available", conflictTaskIDs))
+		conflictErr.Meta().Set("X-Conflict-Task-Ids", strings.Join(conflictTaskIDs, ","))
+		return nil, conflictErr
 	}
 
 	// Generate token
@@ -202,35 +212,90 @@ func (s *Service) GetPrepareSession(
 		Document:            document,
 		LockedPaths:         session.LockedPaths,
 		ExpiresAt:           timestamppb.New(session.ExpiresAt),
+		TaskIds:             session.TaskIDs,
+		LockedPathsHash:     session.LockedPathHash,
+		ParentVersion:       session.ParentVersion,
 	}), nil
 }
 
-func (s *Service) computeLockedPaths(ctx context.Context, definitionID string, taskIDs []string) ([]string, error) {
-	tasks := make([]*store.ConvergenceTask, 0, len(taskIDs))
+// validatePrepareTasks validates the selected convergence tasks and returns
+// the stable locked paths plus the IDs of tasks that violate convergence
+// preconditions (AC-018-28). Structurally invalid selections (unknown task,
+// task of another definition) surface as task_invalid per REQ-018.
+func (s *Service) validatePrepareTasks(ctx context.Context, definitionID string, taskIDs []string) ([]string, []string, error) {
+	validTasks := make([]*store.ConvergenceTask, 0, len(taskIDs))
+	conflictTaskIDs := make([]string, 0)
 	for _, taskID := range taskIDs {
 		task, err := s.store.ConvergenceTasks().Get(ctx, taskID)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
-				return nil, valuesRevisionError(connect.CodeInvalidArgument, "task_invalid",
+				return nil, nil, valuesRevisionError(connect.CodeInvalidArgument, "task_invalid",
 					fmt.Errorf("convergence task %s not found", taskID))
 			}
-			return nil, s.stableInternalError("get convergence task", fmt.Errorf("task %s: %w", taskID, err))
+			return nil, nil, s.stableInternalError("get convergence task", fmt.Errorf("task %s: %w", taskID, err))
 		}
-		if task.ReleaseDefinitionID != definitionID || task.Status != "pending_promotion" {
-			return nil, valuesRevisionError(connect.CodeInvalidArgument, "task_invalid",
-				fmt.Errorf("convergence task %s is not pending for release definition", taskID))
+		if task.ReleaseDefinitionID != definitionID {
+			return nil, nil, valuesRevisionError(connect.CodeInvalidArgument, "task_invalid",
+				fmt.Errorf("convergence task %s does not belong to release definition", taskID))
 		}
-		if task.ActiveRevisionID != nil {
-			return nil, valuesRevisionError(connect.CodeAlreadyExists, "convergence_revision_exists",
-				fmt.Errorf("convergence task %s is already bound", taskID))
+		if task.Status != "pending_promotion" || (task.ActiveRevisionID != nil && *task.ActiveRevisionID != "") {
+			conflictTaskIDs = append(conflictTaskIDs, taskID)
+			continue
 		}
-		tasks = append(tasks, task)
+		validTasks = append(validTasks, task)
 	}
-	paths, err := store.LockedPathsForTasks(taskIDs, tasks)
+	validTaskIDs := make([]string, 0, len(validTasks))
+	for _, task := range validTasks {
+		validTaskIDs = append(validTaskIDs, task.ID)
+	}
+	paths, err := store.LockedPathsForTasks(validTaskIDs, validTasks)
 	if err != nil {
-		return nil, valuesRevisionError(connect.CodeInvalidArgument, "task_invalid", err)
+		return nil, nil, valuesRevisionError(connect.CodeInvalidArgument, "task_invalid", err)
 	}
-	return paths, nil
+	if len(conflictTaskIDs) == 0 {
+		conflictTaskIDs = append(conflictTaskIDs, s.conflictingBoundTaskIDs(ctx, definitionID, taskIDs, paths)...)
+	}
+	return paths, conflictTaskIDs, nil
+}
+
+// conflictingBoundTaskIDs reports tasks that own any locked path through a
+// draft or pending_approval convergence revision (REQ-018 validation order 4).
+func (s *Service) conflictingBoundTaskIDs(ctx context.Context, definitionID string, taskIDs, paths []string) []string {
+	existing, err := s.store.ConvergenceTasks().ListByDefinition(ctx, definitionID, "")
+	if err != nil {
+		return nil
+	}
+	selected := make(map[string]struct{}, len(taskIDs))
+	for _, taskID := range taskIDs {
+		selected[taskID] = struct{}{}
+	}
+	wanted := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		wanted[path] = struct{}{}
+	}
+	conflictTaskIDs := make([]string, 0)
+	for _, task := range existing {
+		if _, ok := selected[task.ID]; ok {
+			continue
+		}
+		if task.ActiveRevisionID == nil || task.ActiveRevisionStatus == nil {
+			continue
+		}
+		if *task.ActiveRevisionStatus != "draft" && *task.ActiveRevisionStatus != "pending_approval" {
+			continue
+		}
+		var taskPaths []string
+		if err := json.Unmarshal(task.PromotionPaths, &taskPaths); err != nil {
+			continue
+		}
+		for _, path := range taskPaths {
+			if _, ok := wanted[path]; ok {
+				conflictTaskIDs = append(conflictTaskIDs, task.ID)
+				break
+			}
+		}
+	}
+	return conflictTaskIDs
 }
 
 // --- helpers ---

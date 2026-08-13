@@ -24,16 +24,16 @@ func LockedPathsForTasks(taskIDs []string, tasks []*ConvergenceTask) ([]string, 
 	paths := make([]string, 0)
 	for _, taskID := range taskIDs {
 		if taskID == "" {
-			return nil, ErrConvergenceTaskConflict
+			return nil, ErrConvergenceConflict
 		}
 		if _, duplicate := seenIDs[taskID]; duplicate {
-			return nil, ErrConvergenceTaskConflict
+			return nil, ErrConvergenceConflict
 		}
 		seenIDs[taskID] = struct{}{}
 
 		task, ok := selected[taskID]
 		if !ok || task.Status != "pending_promotion" {
-			return nil, ErrConvergenceTaskConflict
+			return nil, ErrConvergenceConflict
 		}
 		if task.ActiveRevisionID != nil && *task.ActiveRevisionID != "" {
 			return nil, ErrConvergenceRevisionExists
@@ -44,7 +44,7 @@ func LockedPathsForTasks(taskIDs []string, tasks []*ConvergenceTask) ([]string, 
 		}
 		for _, path := range taskPaths {
 			if path == "" {
-				return nil, ErrConvergenceTaskConflict
+				return nil, ErrConvergenceConflict
 			}
 			if _, duplicate := seenPaths[path]; duplicate {
 				// The same promotion path may be covered by several selected

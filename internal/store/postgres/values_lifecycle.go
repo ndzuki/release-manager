@@ -49,7 +49,7 @@ func (s *valuesLifecycleStore) CreateDraft(ctx context.Context, command store.Cr
 			return nil, err
 		}
 		if command.ExpectedLockedPathHash != "" && prepared.LockedPathHash != command.ExpectedLockedPathHash {
-			return nil, store.ErrConvergenceTaskConflict
+			return nil, store.ErrConvergenceConflict
 		}
 	}
 	var definitionID string
@@ -241,7 +241,7 @@ func consumePrepareSession(ctx context.Context, tx *Tx, command store.CreateValu
 	if session.ConsumedAt != nil {
 		return nil, store.ErrPrepareTokenConsumed
 	}
-	return nil, store.ErrConvergenceTaskConflict
+	return nil, store.ErrConvergenceConflict
 }
 
 //nolint:gocyclo // Task validation and binding intentionally stay in one transaction-local invariant check.
@@ -281,7 +281,7 @@ func bindPrepareTasks(ctx context.Context, tx *Tx, session *store.PrepareSession
 		return err
 	}
 	if store.LockedPathHash(paths) != session.LockedPathHash || store.LockedPathHash(session.LockedPaths) != session.LockedPathHash {
-		return store.ErrConvergenceTaskConflict
+		return store.ErrConvergenceConflict
 	}
 	conflict, err := store.HasActiveConvergencePathConflict(session.TaskIDs, paths, allTasks)
 	if err != nil {
