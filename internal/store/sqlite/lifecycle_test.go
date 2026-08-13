@@ -75,7 +75,7 @@ func TestBundleArchive_StoresPreviousStatus(t *testing.T) {
 			archived, err := st.Bundles().Get(t.Context(), bundle.ID)
 			require.NoError(t, err)
 			assert.Equal(t, store.BundleArchived, archived.Status)
-			assert.Equal(t, tt.status, archived.ArchivedFromStatus)
+			assert.Equal(t, tt.status, *archived.ArchivedFromStatus)
 		})
 	}
 }
@@ -411,7 +411,7 @@ func TestSetCurrentBundle_ArchivedReceivedRejected(t *testing.T) {
 			storedBundle, err := st.Bundles().Get(t.Context(), bundle.ID)
 			require.NoError(t, err)
 			assert.Equal(t, store.BundleArchived, storedBundle.Status)
-			assert.Equal(t, tt.fromStatus, storedBundle.ArchivedFromStatus)
+			assert.Equal(t, tt.fromStatus, *storedBundle.ArchivedFromStatus)
 		})
 	}
 }
@@ -675,7 +675,7 @@ func TestSQLiteUnitOfWork_AtomicCommit(t *testing.T) {
 	storedBundle, err := st.Bundles().Get(ctx, bundle.ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.BundleValidated, storedBundle.Status)
-	assert.Empty(t, storedBundle.ArchivedFromStatus)
+	assert.Nil(t, storedBundle.ArchivedFromStatus)
 	_, err = st.Outbox().GetByCommandID(ctx, dispatch.CommandID)
 	require.NoError(t, err)
 	var linked int
@@ -733,7 +733,7 @@ func TestSQLiteUnitOfWork_ArchivedReceivedRejected(t *testing.T) {
 	storedBundle, err := st.Bundles().Get(ctx, bundle.ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.BundleArchived, storedBundle.Status)
-	assert.Equal(t, store.BundleReceived, storedBundle.ArchivedFromStatus)
+	assert.Equal(t, store.BundleReceived, *storedBundle.ArchivedFromStatus)
 	var linked int
 	require.NoError(t, st.DB().QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM bundle_candidate_artifacts WHERE bundle_id = ?
@@ -797,7 +797,7 @@ func TestSQLiteUnitOfWork_RollbackOnPartialFailure(t *testing.T) {
 	storedBundle, err := st.Bundles().Get(ctx, bundle.ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.BundleArchived, storedBundle.Status)
-	assert.Equal(t, store.BundleValidated, storedBundle.ArchivedFromStatus)
+	assert.Equal(t, store.BundleValidated, *storedBundle.ArchivedFromStatus)
 	storedDefinition, err := st.Definitions().Get(ctx, definition.ID)
 	require.NoError(t, err)
 	assert.Nil(t, storedDefinition.CurrentBundleID)
