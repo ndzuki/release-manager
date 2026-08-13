@@ -11,6 +11,8 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
+// parseDocument 解析单个 YAML/JSON 文档为通用值：剥离 BOM、拒绝 anchor/
+// alias 与多文档（REQ-018 D11）。空输入视为空 map（canonical `{}`）。
 func parseDocument(input []byte) (any, error) {
 	input = stripBOM(input)
 	if len(bytes.TrimSpace(input)) == 0 {
@@ -35,6 +37,10 @@ func parseDocument(input []byte) (any, error) {
 	return nodeValue(document.Content[0])
 }
 
+// nodeValue 将 yaml.Node 解码为 Go 值：显式拒绝 anchor/alias（AliasNode/
+// Anchor 非空），标量按 tag 区分 int/float/bool/null/string，防止隐式类型
+// 混淆破坏 digest 稳定性。
+//
 //nolint:gocyclo // YAML node kinds and scalar tags require an explicit exhaustive decoder.
 func nodeValue(node *yaml.Node) (any, error) {
 	if node == nil {
@@ -86,6 +92,8 @@ func nodeValue(node *yaml.Node) (any, error) {
 	}
 }
 
+// scalarValue 按 YAML tag 解码标量：null/str/bool/int 直接映射；
+// float 包装为 canonicalFloat 保留 3.0 形态（不降级为 3）。
 func scalarValue(node *yaml.Node) (any, error) {
 	switch node.Tag {
 	case "!!null":
@@ -125,6 +133,9 @@ func (value canonicalFloat) MarshalJSON() ([]byte, error) {
 	return []byte(encoded), nil
 }
 
+// marshalCanonical 递归编码 canonical JSON：map key 字节序排序、数组保序、
+// null 保留、int/float 不混淆（整值 float 输出 3.0 形态，canonicalFloat
+// 覆写 MarshalJSON 保证）。
 func marshalCanonical(document any) ([]byte, error) {
 	encoded, err := json.Marshal(document)
 	if err != nil {

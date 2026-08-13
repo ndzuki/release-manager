@@ -190,6 +190,12 @@ func (s *valuesLifecycleStore) discard(ctx context.Context, command store.Discar
 	return discarded, nil
 }
 
+// validateValuesParent 校验链头并发契约（AC-018-05/24）：definition 无
+// revision 时仅允许 initial（parent 省略且 expected=0，返回 version=1）；
+// 已有 revision 时 parent 必填、属同 definition 且 MAX(version) == expected，
+// 失配返回 ErrParentConflict；initial 哨兵撞上已存在 revision 返回
+// ErrDuplicateKey（普通创建 → invalid_argument；收敛创建由调用方转
+// parent_conflict）。
 func validateValuesParent(ctx context.Context, queryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, definitionID, parentID string, expectedVersion int64) (int64, error) {

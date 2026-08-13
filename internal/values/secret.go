@@ -16,6 +16,9 @@ var (
 	base64ValuePattern      = regexp.MustCompile(`^[A-Za-z0-9+/]{32,}={0,2}$`)
 )
 
+// containsSecret 双通道检测（REQ-018 D4）：key 名模式命中且值非空/非占位，
+// 或值形态命中（AKIA 前缀、高熵 base64/hex、BEGIN ... PRIVATE KEY、
+// user:pass@ URI）即判定为疑似 Secret，fail closed 无逃生口。
 func containsSecret(document any, extraPatterns []string) bool {
 	patterns := make([]*regexp.Regexp, 0, len(extraPatterns)+1)
 	patterns = append(patterns, defaultSecretKeyPattern)
@@ -33,6 +36,8 @@ func containsSecret(document any, extraPatterns []string) bool {
 	return inspectSecret(document, "", patterns)
 }
 
+// inspectSecret 递归遍历文档：key 名命中且值非占位即命中；字符串值再按
+// 形态检测；map/数组递归下行。
 func inspectSecret(value any, key string, keyPatterns []*regexp.Regexp) bool {
 	if key != "" && secretKey(key, keyPatterns) && !secretPlaceholder(value) {
 		return true
@@ -65,6 +70,8 @@ func secretKey(key string, patterns []*regexp.Regexp) bool {
 	return false
 }
 
+// secretPlaceholder 判定占位值：null、空串、${...}/{{...}} 模板、
+// ref 前缀引用均视为占位，key 名命中但值为占位时不误报。
 func secretPlaceholder(value any) bool {
 	if value == nil {
 		return true
