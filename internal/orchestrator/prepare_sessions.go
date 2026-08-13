@@ -188,7 +188,11 @@ func (s *Service) GetPrepareSession(
 		return nil, err
 	}
 
-	if time.Now().UTC().After(session.ExpiresAt) {
+	// AC-018-29/D23: expiry is only reported for unconsumed sessions. A
+	// consumed session keeps returning its snapshot until the 24h GC
+	// retention clears the metadata — the token can never be used again, so
+	// the TTL has no security meaning after consumption.
+	if session.ConsumedAt == nil && time.Now().UTC().After(session.ExpiresAt) {
 		return nil, valuesRevisionError(connect.CodeFailedPrecondition, "prepare_token_expired", errors.New("prepare_token_expired"))
 	}
 
@@ -248,14 +252,46 @@ func (s *Service) validatePrepareTasks(ctx context.Context, definitionID string,
 	for _, task := range validTasks {
 		validTaskIDs = append(validTaskIDs, task.ID)
 	}
+	// REQ-018 校验顺序 4: promotion paths of the selected tasks must not
+	// overlap each other (两两不重叠) — a shared path means two tasks would
+	// converge the same field, so both owners are reported as
+	// convergence_conflict + conflict_task_ids.
+	seenPathOwners := make(map[string]string, 8)
+	for _, task := range validTasks {
+		var taskPaths []string
+		if err := json.Unmarshal(task.PromotionPaths, &taskPaths); err != nil {
+			return nil, nil, s.stableInternalError("decode promotion paths", err)
+		}
+		for _, path := range taskPaths {
+			if owner, ok := seenPathOwners[path]; ok {
+				conflictTaskIDs = append(conflictTaskIDs, task.ID, owner)
+				continue
+			}
+			seenPathOwners[path] = task.ID
+		}
+	}
+	conflictTaskIDs = deduplicateStrings(conflictTaskIDs)
 	paths, err = store.LockedPathsForTasks(validTaskIDs, validTasks)
 	if err != nil {
 		return nil, nil, valuesRevisionError(connect.CodeInvalidArgument, "task_invalid", err)
 	}
-	if len(conflictTaskIDs) == 0 {
-		conflictTaskIDs = append(conflictTaskIDs, s.conflictingBoundTaskIDs(ctx, definitionID, taskIDs, paths)...)
+	// Collect bound-path conflicts unconditionally: clients get every task
+	// they must fix in conflict_task_ids, not just the first violation found.
+	conflictTaskIDs = append(conflictTaskIDs, s.conflictingBoundTaskIDs(ctx, definitionID, taskIDs, paths)...)
+	return paths, deduplicateStrings(conflictTaskIDs), nil
+}
+
+func deduplicateStrings(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	deduped := make([]string, 0, len(items))
+	for _, item := range items {
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		deduped = append(deduped, item)
 	}
-	return paths, conflictTaskIDs, nil
+	return deduped
 }
 
 // conflictingBoundTaskIDs reports tasks that own any locked path through a

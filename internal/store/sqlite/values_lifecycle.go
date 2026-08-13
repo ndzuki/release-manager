@@ -71,6 +71,13 @@ func (s *valuesLifecycleStore) createDraft(ctx context.Context, command store.Cr
 	}
 	nextVersion, err := validateValuesParent(ctx, tx, command.Revision.ReleaseDefinitionID, command.Revision.ParentRevisionID, command.ExpectedParentVersion)
 	if err != nil {
+		// REQ-018 D18/校验顺序 8: a converged initial create rechecks the
+		// definition still has no revisions; if one appeared between Prepare
+		// and Create, that is chain-head drift → parent_conflict. The plain
+		// create keeps ErrDuplicateKey → invalid_argument (AC-018-17).
+		if command.PrepareTokenHash != "" && errors.Is(err, store.ErrDuplicateKey) {
+			return nil, store.ErrParentConflict
+		}
 		return nil, err
 	}
 	command.Revision.Version = nextVersion

@@ -1176,6 +1176,18 @@ func TestCreateValuesRevision_ConvergedIdempotentReplay(t *testing.T) {
 	assert.False(t, replayed.Msg.Created)
 	assert.Equal(t, first.Msg.Revision.Id, replayed.Msg.Revision.Id)
 
+	// AC-018-29/D23: even after the session TTL lapses, the replay still
+	// returns the first result — a consumed token cannot block idempotent
+	// replays before the store's replay lookup.
+	_, err = f.st.DB().ExecContext(f.ctx, `
+		UPDATE convergence_prepare_sessions SET expires_at = ? WHERE token_hash = ?
+	`, time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano), hashPrepareToken(prepared.Msg.PrepareToken))
+	require.NoError(t, err)
+	replayedAfterTTL, err := f.svc.CreateValuesRevision(f.ctx, request)
+	require.NoError(t, err)
+	assert.False(t, replayedAfterTTL.Msg.Created)
+	assert.Equal(t, first.Msg.Revision.Id, replayedAfterTTL.Msg.Revision.Id)
+
 	// Exactly one revision and one binding exist.
 	page, err := f.st.Values().ListPage(f.ctx, store.ValuesListFilter{ReleaseDefinitionID: f.defID})
 	require.NoError(t, err)
@@ -1252,6 +1264,50 @@ func TestCreateValuesRevision_InitialConvergenceCreatesVersionOne(t *testing.T) 
 	require.NotNil(t, session.ConsumedAt)
 }
 
+// REQ-018 D18/校验顺序 8: an initial convergence prepared at version 0 fails
+// with parent_conflict (not invalid_argument) when the definition gained a
+// revision before the converged create commits; the session stays unconsumed.
+func TestCreateValuesRevision_InitialConvergenceDriftFailsParentConflict(t *testing.T) {
+	f := newPrepareFixture(t)
+
+	// Prepare at the initial sentinel while the definition still has no
+	// revisions (AC-018-27 precondition).
+	prepareRequest := connect.NewRequest(&orchestratorv1.CreatePrepareSessionRequest{
+		ReleaseDefinitionId:   f.defID,
+		TaskIds:               []string{"task-vr-1"},
+		ExpectedParentVersion: 0,
+	})
+	prepared, err := f.svc.CreatePrepareSession(f.ctx, prepareRequest)
+	require.NoError(t, err)
+	require.Empty(t, prepared.Msg.ParentRevisionId)
+
+	// Another client commits the initial revision before the converged create.
+	initial := connect.NewRequest(&orchestratorv1.CreateValuesRevisionRequest{
+		ReleaseDefinitionId: f.defID,
+		Document:            `replicas: 1`,
+	})
+	initial.Header().Set("Idempotency-Key", "drift-initial-version1")
+	created, err := f.svc.CreateValuesRevision(f.ctx, initial)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), created.Msg.Revision.Version)
+
+	request := connect.NewRequest(&orchestratorv1.CreateValuesRevisionRequest{
+		ReleaseDefinitionId: f.defID,
+		Document:            `replicas: 2`,
+		PrepareToken:        prepared.Msg.PrepareToken,
+	})
+	request.Header().Set("Idempotency-Key", "drift-initial-converged")
+	_, err = f.svc.CreateValuesRevision(f.ctx, request)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAborted, connect.CodeOf(err))
+	assert.Equal(t, "parent_conflict", approvalReasonCode(t, err))
+
+	// The failed create must not consume the session (AC-018-10 rollback).
+	session, err := f.st.PrepareSessions().Get(f.ctx, hashPrepareToken(prepared.Msg.PrepareToken))
+	require.NoError(t, err)
+	assert.Nil(t, session.ConsumedAt)
+}
+
 // AC-018-28: a task that is no longer pending makes CreatePrepareSession fail
 // with convergence_conflict carrying the conflicting task IDs.
 func TestCreatePrepareSession_ConvergenceConflictCarriesTaskIDs(t *testing.T) {
@@ -1312,8 +1368,53 @@ func TestCreatePrepareSession_PathConflictCarriesTaskIDs(t *testing.T) {
 	assert.Equal(t, "task-vr-2", connectErr.Meta().Get("X-Conflict-Task-Ids"))
 }
 
+// REQ-018 校验顺序 4: two SELECTED pending tasks sharing a promotion path are
+// rejected as convergence_conflict with both task IDs — paths must not
+// overlap each other (两两不重叠), even though locked paths deduplicate.
+func TestCreatePrepareSession_SelectedTasksSharePathConflict(t *testing.T) {
+	f := newPrepareFixture(t)
+	require.NoError(t, f.st.Operations().Create(f.ctx, &store.Operation{
+		ID: "op-vr-2", BundleID: "bundle-vr-2", OperationType: store.OperationUpgrade,
+		ReleaseDefinitionID: f.defID, Status: store.StatusPending,
+		IdempotencyKey: "op-vr-2-share-path",
+		Actor:          store.ActorContext{UserID: f.creatorID},
+	}))
+	require.NoError(t, f.st.ConvergenceTasks().Create(f.ctx, &store.ConvergenceTask{
+		ID:                  "task-vr-2",
+		OperationID:         "op-vr-2",
+		ReleaseDefinitionID: f.defID,
+		Action:              store.EmergencySetContainerImage,
+		TargetSummary:       "test",
+		PromotionPaths:      json.RawMessage(`["spec.template.spec.containers[0].image"]`),
+		Status:              "pending_promotion",
+		SubmittedAt:         time.Now().UTC(),
+		CreatedAt:           time.Now().UTC(),
+	}))
+
+	request := connect.NewRequest(&orchestratorv1.CreatePrepareSessionRequest{
+		ReleaseDefinitionId: f.defID,
+		TaskIds:             []string{"task-vr-1", "task-vr-2"},
+	})
+	_, err := f.svc.CreatePrepareSession(f.ctx, request)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Equal(t, "convergence_conflict", approvalReasonCode(t, err))
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	got := strings.Split(connectErr.Meta().Get("X-Conflict-Task-Ids"), ",")
+	assert.ElementsMatch(t, []string{"task-vr-1", "task-vr-2"}, got)
+
+	// No session was created.
+	var sessionCount int
+	require.NoError(t, f.st.DB().QueryRowContext(f.ctx,
+		`SELECT COUNT(*) FROM convergence_prepare_sessions WHERE release_definition_id = ?`, f.defID,
+	).Scan(&sessionCount))
+	assert.Zero(t, sessionCount)
+}
+
 // AC-018-29: a consumed session still returns its snapshot before the 24h GC
-// retention window; only expiry fails.
+// retention window; only expiry of an UNCONSUMED session fails.
 func TestGetPrepareSession_ConsumedSessionReturnsSnapshot(t *testing.T) {
 	f := newPrepareFixture(t)
 	prepareRequest := connect.NewRequest(&orchestratorv1.CreatePrepareSessionRequest{
@@ -1333,6 +1434,13 @@ func TestGetPrepareSession_ConsumedSessionReturnsSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, created.Msg.Created)
 
+	// Push the TTL into the past: consumption already happened, so expiry is
+	// no longer reportable — the snapshot survives until the 24h GC retention.
+	_, err = f.st.DB().ExecContext(f.ctx, `
+		UPDATE convergence_prepare_sessions SET expires_at = ? WHERE token_hash = ?
+	`, time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano), hashPrepareToken(prepared.Msg.PrepareToken))
+	require.NoError(t, err)
+
 	getRequest := connect.NewRequest(&orchestratorv1.GetPrepareSessionRequest{
 		PrepareToken: prepared.Msg.PrepareToken,
 	})
@@ -1343,4 +1451,40 @@ func TestGetPrepareSession_ConsumedSessionReturnsSnapshot(t *testing.T) {
 	assert.Equal(t, []string{"task-vr-1"}, got.Msg.TaskIds)
 	assert.Equal(t, int64(0), got.Msg.ParentVersion)
 	assert.NotNil(t, got.Msg.ExpiresAt)
+
+	// Control: an unconsumed session whose TTL expired must still fail.
+	require.NoError(t, f.st.Operations().Create(f.ctx, &store.Operation{
+		ID: "op-vr-2", BundleID: "bundle-vr-2", OperationType: store.OperationUpgrade,
+		ReleaseDefinitionID: f.defID, Status: store.StatusPending,
+		IdempotencyKey: "op-vr-2-idem",
+		Actor:          store.ActorContext{UserID: f.creatorID},
+	}))
+	require.NoError(t, f.st.ConvergenceTasks().Create(f.ctx, &store.ConvergenceTask{
+		ID:                  "task-vr-2",
+		OperationID:         "op-vr-2",
+		ReleaseDefinitionID: f.defID,
+		Action:              store.EmergencySetContainerImage,
+		TargetSummary:       "smoke control",
+		Reason:              "smoke control",
+		PromotionPaths:      json.RawMessage(`["spec.replicas"]`),
+		Status:              "pending_promotion",
+		SubmittedAt:         time.Now().UTC(),
+		CreatedAt:           time.Now().UTC(),
+	}))
+	expired := connect.NewRequest(&orchestratorv1.CreatePrepareSessionRequest{
+		ReleaseDefinitionId:   f.defID,
+		TaskIds:               []string{"task-vr-2"},
+		ExpectedParentVersion: created.Msg.Revision.Version,
+	})
+	expiredPrepared, err := f.svc.CreatePrepareSession(f.ctx, expired)
+	require.NoError(t, err)
+	_, err = f.st.DB().ExecContext(f.ctx, `
+		UPDATE convergence_prepare_sessions SET expires_at = ? WHERE token_hash = ?
+	`, time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano), hashPrepareToken(expiredPrepared.Msg.PrepareToken))
+	require.NoError(t, err)
+	_, err = f.svc.GetPrepareSession(f.ctx, connect.NewRequest(&orchestratorv1.GetPrepareSessionRequest{
+		PrepareToken: expiredPrepared.Msg.PrepareToken,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, "prepare_token_expired", approvalReasonCode(t, err))
 }

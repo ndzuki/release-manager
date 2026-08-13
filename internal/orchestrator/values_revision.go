@@ -123,14 +123,14 @@ func (s *Service) CreateValuesRevision(
 		// An expired token can never have produced a successful create
 		// (consumption requires a live session), so it is safe to reject here —
 		// before document validation — without breaking idempotent replays
-		// (REQ-018 validation order 2, AC-018-09).
-		if !prepareSession.ExpiresAt.After(time.Now().UTC()) {
+		// (REQ-018 validation order 2, AC-018-09). A CONSUMED session whose TTL
+		// lapsed is a replay of an already-succeeded converged create: expiry
+		// and consumption are enforced inside the store transaction AFTER the
+		// idempotency replay lookup, so it falls through to the replay result
+		// (REQ-010 D-9, AC-018-29).
+		if prepareSession.ConsumedAt == nil && !prepareSession.ExpiresAt.After(time.Now().UTC()) {
 			return nil, valuesRevisionError(connect.CodeFailedPrecondition, "prepare_token_expired", errors.New("prepare_token_expired"))
 		}
-		// Expiry and consumption are enforced inside the store transaction AFTER
-		// the idempotency replay lookup, so a replay of an already-succeeded
-		// converged create returns the first result (REQ-010 D-9) instead of
-		// being blocked by the consumed/expired token here.
 		if msg.GetParentRevisionId() != "" && msg.GetParentRevisionId() != prepareSession.ParentRevisionID {
 			return nil, valuesRevisionError(connect.CodeAborted, "parent_conflict", errors.New("parent_conflict"))
 		}
