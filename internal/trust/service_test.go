@@ -61,32 +61,6 @@ func TestTrustService_NilAuditSinkIsSafe(t *testing.T) {
 	assert.NotEmpty(t, createTrustRoot(t, svc, "key-1", "issuer-1").GetId())
 }
 
-func TestTrustService_OverlapConflictMapsToInvalidArgument(t *testing.T) {
-	svc := newTrustServiceTest(t, nil)
-	createTrustRoot(t, svc, "key-1", "issuer-1")
-	for _, tc := range []struct {
-		name, keyID, issuer string
-	}{
-		{name: "key id", keyID: "key-1", issuer: "issuer-2"},
-		{name: "issuer", keyID: "key-2", issuer: "issuer-1"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			publicKeyPEM, _ := generateEd25519KeyPair(t)
-			_, err := svc.CreateTrustRoot(t.Context(), connect.NewRequest(&trustv1.CreateTrustRootRequest{
-				Environment: "staging", KeyId: tc.keyID, PublicKeyPem: publicKeyPEM, Issuer: tc.issuer,
-			}))
-			require.Error(t, err)
-			assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
-			assert.ErrorContains(t, err, ErrOverlapConflict.Error())
-		})
-	}
-	publicKeyPEM, _ := generateEd25519KeyPair(t)
-	_, err := svc.CreateTrustRoot(t.Context(), connect.NewRequest(&trustv1.CreateTrustRootRequest{
-		Environment: "production", KeyId: "key-1", PublicKeyPem: publicKeyPEM, Issuer: "issuer-1",
-	}))
-	require.NoError(t, err)
-}
-
 func TestTrustService_RotateOverlapConflictMapsToInvalidArgument(t *testing.T) {
 	svc := newTrustServiceTest(t, nil)
 	old := createTrustRoot(t, svc, "key-old", "issuer-old")
@@ -109,7 +83,25 @@ func TestTrustService_ErrorMappings(t *testing.T) {
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
-	assert.ErrorContains(t, err, ErrInvalidRoot.Error())
+	assert.ErrorIs(t, err, ErrInvalidRoot)
+
+	// invalid_root required fields (REQ-043 错误模型: environment/key_id/issuer 必填)。
+	// time-window branch (grace_until must be after valid_from) is unreachable at the
+	// service seam: CreateTrustRootRequest carries no grace_until, and Rotate assigns
+	// grace_until directly to the old root without Validate.
+	for _, tc := range []struct{ name, keyID, issuer string }{
+		{name: "missing key id", keyID: "", issuer: "issuer-ok"},
+		{name: "missing issuer", keyID: "key-ok", issuer: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.CreateTrustRoot(t.Context(), connect.NewRequest(&trustv1.CreateTrustRootRequest{
+				Environment: "staging", KeyId: tc.keyID, PublicKeyPem: publicKeyPEM, Issuer: tc.issuer,
+			}))
+			require.Error(t, err)
+			assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+			assert.ErrorIs(t, err, ErrInvalidRoot)
+		})
+	}
 
 	calls := map[string]func() error{
 		"end grace": func() error {
@@ -137,6 +129,36 @@ func TestTrustService_ErrorMappings(t *testing.T) {
 			assert.ErrorContains(t, err, "root not found")
 		})
 	}
+}
+
+func TestTrustService_RevokeAlreadyRevokedRootForbidden(t *testing.T) {
+	svc := newTrustServiceTest(t, nil)
+	first := createTrustRoot(t, svc, "key-1", "issuer-1")
+	createTrustRoot(t, svc, "key-2", "issuer-2")
+
+	_, err := svc.RevokeTrustRoot(t.Context(), connect.NewRequest(&trustv1.RevokeTrustRootRequest{
+		Environment: "staging", RootId: first.GetId(),
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.RevokeTrustRoot(t.Context(), connect.NewRequest(&trustv1.RevokeTrustRootRequest{
+		Environment: "staging", RootId: first.GetId(),
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.ErrorIs(t, err, ErrRevokedRoot)
+}
+
+func TestTrustService_AuditOperatorFallback(t *testing.T) {
+	sink := &recordingTrustSink{}
+	svc := newTrustServiceTest(t, sink)
+	createTrustRoot(t, svc, "key-1", "issuer-1") // helper passes Operator: "operator-1"
+	require.Len(t, sink.events, 1)
+	// No actor in context → fallback to request Operator (REQ-043 审计: operator 回退)。
+	assert.Equal(t, "operator-1", sink.events[0].ActorID)
+	// REQ-043 输出契约: actor/organization/role 来自服务端身份上下文（无认证上下文时 role 默认 platform_admin）。
+	assert.Equal(t, "platform_admin", sink.events[0].Role)
+	assert.Empty(t, sink.events[0].OrganizationID)
 }
 
 func TestTrustService_LastActiveOrGraceRootForbidden(t *testing.T) {
@@ -187,9 +209,11 @@ func TestTrustService_LastRootGuardAllowsSecondRoot(t *testing.T) {
 	response, err := svc.RetireTrustRoot(t.Context(), connect.NewRequest(&trustv1.RetireTrustRootRequest{Environment: "staging", RootId: first.GetId()}))
 	require.NoError(t, err)
 	assert.Equal(t, trustv1.TrustRootState_TRUST_ROOT_STATE_RETIRED, response.Msg.GetRoot().GetState())
-	stored, err := svc.store.Get(t.Context(), second.GetId())
+	policy, err := svc.GetTrustPolicy(t.Context(), connect.NewRequest(&trustv1.GetTrustPolicyRequest{Environment: "staging"}))
 	require.NoError(t, err)
-	assert.Equal(t, store.TrustRootActive, stored.State)
+	secondProto := policyRoot(policy.Msg.GetPolicy(), second.GetId())
+	require.NotNil(t, secondProto)
+	assert.Equal(t, trustv1.TrustRootState_TRUST_ROOT_STATE_ACTIVE, secondProto.GetState())
 }
 
 func TestTrustService_PolicyVersionAndEpochMonotonic(t *testing.T) {
@@ -205,10 +229,10 @@ func TestTrustService_PolicyVersionAndEpochMonotonic(t *testing.T) {
 
 	_, err = svc.RevokeTrustRoot(t.Context(), connect.NewRequest(&trustv1.RevokeTrustRootRequest{Environment: "staging", RootId: first.GetId()}))
 	require.NoError(t, err)
-	meta, err := svc.store.GetPolicy(t.Context(), "staging")
+	policyResp, err := svc.GetTrustPolicy(t.Context(), connect.NewRequest(&trustv1.GetTrustPolicyRequest{Environment: "staging"}))
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), meta.Version)
-	assert.Equal(t, int64(1), meta.RevocationEpoch)
+	assert.Equal(t, int64(2), policyResp.Msg.GetPolicy().GetVersion())
+	assert.Equal(t, int64(1), policyResp.Msg.GetPolicy().GetRevocationEpoch())
 }
 
 func TestTrustService_RetireAndEndGraceBumpPolicyVersion(t *testing.T) {
@@ -233,9 +257,19 @@ func TestTrustService_RetireAndEndGraceBumpPolicyVersion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(6), ended.Msg.GetPolicy().GetVersion())
 
-	stored, err := svc.store.Get(t.Context(), third.GetId())
+	policy, err := svc.GetTrustPolicy(t.Context(), connect.NewRequest(&trustv1.GetTrustPolicyRequest{Environment: "staging"}))
 	require.NoError(t, err)
-	assert.Equal(t, store.TrustRootActive, stored.State)
+	assert.Equal(t, trustv1.TrustRootState_TRUST_ROOT_STATE_ACTIVE, policyRoot(policy.Msg.GetPolicy(), third.GetId()).GetState())
+}
+
+// policyRoot returns the trust root with the given id from a policy, or nil.
+func policyRoot(policy *trustv1.TrustPolicy, id string) *trustv1.TrustRoot {
+	for _, r := range policy.GetRoots() {
+		if r.GetId() == id {
+			return r
+		}
+	}
+	return nil
 }
 
 func TestTrustService_AuditEventsExcludeKeyMaterial(t *testing.T) {

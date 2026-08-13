@@ -267,7 +267,7 @@ func (s *TrustService) RevokeTrustRoot(
 	}
 	if root.State == store.TrustRootRevoked {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("root %q is already revoked", root.ID))
+			fmt.Errorf("%w: root %q is already revoked", ErrRevokedRoot, root.ID))
 	}
 
 	if err := s.ensureNotLastActive(ctx, root.Environment, root.ID); err != nil {

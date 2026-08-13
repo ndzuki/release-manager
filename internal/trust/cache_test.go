@@ -10,6 +10,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	trustv1 "github.com/ndzuki/release-manager/api/gen/trust/v1"
@@ -160,4 +161,49 @@ func TestStubVerifier_ReusesCacheWhenRevocationEpochUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.VerificationTrusted, out.Status)
 	assert.Equal(t, "cached trusted result", out.Summary)
+}
+
+// TestEd25519Verifier_GraceWindowAcceptsBothSignatures locks AC-043-01 with real
+// Ed25519 signatures: within the grace window both the old (grace) and the new
+// (active) root keys verify as trusted through the production verification chain.
+func TestEd25519Verifier_GraceWindowAcceptsBothSignatures(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	oldPublicKeyPEM, oldPrivateKey := generateEd25519KeyPair(t)
+	newPublicKeyPEM, newPrivateKey := generateEd25519KeyPair(t)
+	service := NewTrustService(st.TrustRoots(), nil, logger())
+
+	oldResponse, err := service.CreateTrustRoot(t.Context(), connect.NewRequest(&trustv1.CreateTrustRootRequest{
+		Environment: "staging", KeyId: "key-old", PublicKeyPem: oldPublicKeyPEM, Issuer: "old-ci",
+	}))
+	require.NoError(t, err)
+	_, err = service.RotateTrustRoot(t.Context(), connect.NewRequest(&trustv1.RotateTrustRootRequest{
+		Environment: "staging", OldRootId: oldResponse.Msg.GetRoot().GetId(), KeyId: "key-new",
+		PublicKeyPem: newPublicKeyPEM, Issuer: "new-ci",
+		GraceUntil: timestamppb.New(time.Now().UTC().Add(time.Hour)),
+	}))
+	require.NoError(t, err)
+
+	verifier := NewEd25519Verifier(st.Verifications(), NewStoreResolver(st.TrustRoots()), time.Second, logger())
+	for _, tc := range []struct {
+		name   string
+		issuer string
+		key    ed25519.PrivateKey
+	}{
+		{name: "grace old root", issuer: "old-ci", key: oldPrivateKey},
+		{name: "active new root", issuer: "new-ci", key: newPrivateKey},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			digest := "sha256:grace-" + tc.name
+			ref := &commonv1.SignatureRef{
+				Digest:    digest,
+				Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(tc.key, []byte(digest))),
+				Issuer:    tc.issuer, Subject: "release-manager/v1.0.0",
+			}
+			out, err := verifier.Verify(t.Context(), Input{
+				Digest: digest, SignatureRef: ref, Policy: DefaultPolicy("staging"), Environment: "staging",
+			})
+			require.NoError(t, err)
+			assert.Equal(t, store.VerificationTrusted, out.Status)
+		})
+	}
 }
