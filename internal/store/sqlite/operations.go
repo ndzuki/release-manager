@@ -60,6 +60,10 @@ func createIdempotentOperation(
 	}
 	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
 
+	if err := checkAuthorizationFence(ctx, tx, command.ExpectedAuthorizationVersion); err != nil {
+		return nil, err
+	}
+
 	// 空 Key（或未携带幂等记录）时跳过全部幂等逻辑（不 lookup、不 insert），直接业务创建。
 	idempotent := command.Idempotency != nil && command.Idempotency.Key != ""
 	if idempotent {

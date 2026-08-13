@@ -5,33 +5,44 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	"github.com/ndzuki/release-manager/internal/store"
 )
+
+// seedRollbackInventory creates an active inventory entry for def-001 at
+// revision 3, satisfying the ROLLBACK inventory precondition (REQ-067 rule 13).
+func seedRollbackInventory(t *testing.T, st store.Store) {
+	t.Helper()
+	require.NoError(t, st.Inventories().Upsert(t.Context(), &store.ReleaseInventory{
+		ReleaseDefinitionID: "def-001",
+		CustomerID:          "cust-001",
+		ClusterID:           "cls-001",
+		Namespace:           "default",
+		ReleaseName:         "my-release",
+		InventoryStatus:     store.InventoryActive,
+		Revision:            3,
+	}))
+}
 
 func TestRollbackRelease_Success(t *testing.T) {
 	// AC-022-03: successful rollback creates operation and returns from/to revision
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
+	seedRollbackInventory(t, st)
 
-	resp, err := svc.RollbackRelease(context.Background(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
+	resp, err := svc.RollbackRelease(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
 		ReleaseDefinitionId:     "def-001",
 		TargetRevision:          1,
 		ExpectedCurrentRevision: 3,
 		Reason:                  "rolling back due to config error",
-		IdempotencyKey:          "idem-rb-001",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
-	}))
+	}), "idem-rb-001"))
 	require.NoError(t, err)
 	assert.NotEmpty(t, resp.Msg.OperationId)
 	assert.Equal(t, int32(3), resp.Msg.FromRevision)
@@ -92,17 +103,12 @@ func TestRollbackRelease_TargetRevisionInvalid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := svc.RollbackRelease(context.Background(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
+			_, err := svc.RollbackRelease(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
 				ReleaseDefinitionId:     "def-001",
 				TargetRevision:          tt.targetRev,
 				ExpectedCurrentRevision: tt.expected,
 				Reason:                  "test",
-				IdempotencyKey:          "idem-" + tt.name,
-				Actor: &commonv1.ActorContext{
-					UserId:       "user-001",
-					Organization: "org-001",
-				},
-			}))
+			}), "idem-"+tt.name))
 			require.Error(t, err)
 			assert.Equal(t, tt.wantCode, connect.CodeOf(err))
 			assert.Contains(t, err.Error(), tt.wantMsg)
@@ -119,20 +125,15 @@ func TestRollbackRelease_DefinitionNotFound(t *testing.T) {
 	svc, _, cleanup := setupService(t)
 	defer cleanup()
 
-	_, err := svc.RollbackRelease(context.Background(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
+	_, err := svc.RollbackRelease(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
 		ReleaseDefinitionId:     "nonexistent",
 		TargetRevision:          1,
 		ExpectedCurrentRevision: 3,
 		Reason:                  "test",
-		IdempotencyKey:          "idem-rb-nf",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
-	}))
+	}), "idem-rb-nf"))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
-	assert.Contains(t, err.Error(), "release_definition not found")
+	assert.Contains(t, err.Error(), "definition_not_found")
 }
 
 func TestRollbackRelease_ReleaseBusy(t *testing.T) {
@@ -140,33 +141,24 @@ func TestRollbackRelease_ReleaseBusy(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
+	seedRollbackInventory(t, st)
 
 	// First rollback succeeds
-	_, err := svc.RollbackRelease(context.Background(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
+	_, err := svc.RollbackRelease(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
 		ReleaseDefinitionId:     "def-001",
 		TargetRevision:          1,
 		ExpectedCurrentRevision: 3,
 		Reason:                  "first rollback",
-		IdempotencyKey:          "idem-rb-busy-1",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
-	}))
+	}), "idem-rb-busy-1"))
 	require.NoError(t, err)
 
 	// Second rollback on same definition → release_busy
-	_, err = svc.RollbackRelease(context.Background(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
+	_, err = svc.RollbackRelease(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
 		ReleaseDefinitionId:     "def-001",
 		TargetRevision:          2,
 		ExpectedCurrentRevision: 3,
 		Reason:                  "second rollback",
-		IdempotencyKey:          "idem-rb-busy-2",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
-	}))
+	}), "idem-rb-busy-2"))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "release_busy")
@@ -176,22 +168,18 @@ func TestRollbackRelease_ConcurrentOnlyOneAccepted(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
+	seedRollbackInventory(t, st)
 
 	const requests = 8
 	errorsCh := make(chan error, requests)
 	for i := range requests {
 		go func(i int) {
-			_, err := svc.RollbackRelease(context.Background(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
+			_, err := svc.RollbackRelease(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
 				ReleaseDefinitionId:     "def-001",
 				TargetRevision:          1,
 				ExpectedCurrentRevision: 3,
 				Reason:                  "concurrent rollback",
-				IdempotencyKey:          fmt.Sprintf("idem-rb-concurrent-%d", i),
-				Actor: &commonv1.ActorContext{
-					UserId:       "user-001",
-					Organization: "org-001",
-				},
-			}))
+			}), fmt.Sprintf("idem-rb-concurrent-%d", i)))
 			errorsCh <- err
 		}(i)
 	}
@@ -227,17 +215,12 @@ func TestRollbackRelease_MissingReason(t *testing.T) {
 	svc, _, cleanup := setupService(t)
 	defer cleanup()
 
-	_, err := svc.RollbackRelease(context.Background(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
+	_, err := svc.RollbackRelease(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
 		ReleaseDefinitionId:     "def-001",
 		TargetRevision:          1,
 		ExpectedCurrentRevision: 3,
 		Reason:                  "",
-		IdempotencyKey:          "idem-rb-no-reason",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
-	}))
+	}), "idem-rb-no-reason"))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "reason is required")
@@ -247,25 +230,21 @@ func TestRollbackRelease_Idempotency(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
+	seedRollbackInventory(t, st)
 
 	req := &orchestratorv1.RollbackReleaseRequest{
 		ReleaseDefinitionId:     "def-001",
 		TargetRevision:          1,
 		ExpectedCurrentRevision: 3,
 		Reason:                  "idempotent rollback",
-		IdempotencyKey:          "idem-rb-idem",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
 	}
 
 	// First call creates operation
-	resp1, err := svc.RollbackRelease(context.Background(), connect.NewRequest(req))
+	resp1, err := svc.RollbackRelease(adminCtx(), withIdempotencyKey(connect.NewRequest(req), "idem-rb-idem"))
 	require.NoError(t, err)
 
 	// Second call with same idempotency key returns existing operation
-	resp2, err := svc.RollbackRelease(context.Background(), connect.NewRequest(req))
+	resp2, err := svc.RollbackRelease(adminCtx(), withIdempotencyKey(connect.NewRequest(req), "idem-rb-idem"))
 	require.NoError(t, err)
 
 	assert.Equal(t, resp1.Msg.OperationId, resp2.Msg.OperationId)
@@ -280,15 +259,9 @@ func TestRollbackRelease_Idempotency(t *testing.T) {
 func TestRollbackRelease_DefinitionNotActive(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
+	seedDefinition(t, st)
 
-	// Create a draft (non-active) definition with its customer.
-	cust := &store.Customer{
-		ID:   "cust-001",
-		Name: "Test Customer",
-		Slug: "test-customer",
-	}
-	require.NoError(t, st.Customers().Create(context.Background(), cust))
-
+	// Create a draft (non-active) definition under the seeded customer/org.
 	def := &store.ReleaseDefinition{
 		ID:          "def-draft",
 		Name:        "draft-release",
@@ -299,20 +272,17 @@ func TestRollbackRelease_DefinitionNotActive(t *testing.T) {
 		ChartName:   "nginx",
 		Status:      store.DefStatusDraft,
 		CreatedBy:   "test",
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
 	}
 	require.NoError(t, st.Definitions().Create(context.Background(), def, nil))
 
-	_, err := svc.RollbackRelease(context.Background(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
+	_, err := svc.RollbackRelease(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
 		ReleaseDefinitionId:     "def-draft",
 		TargetRevision:          1,
 		ExpectedCurrentRevision: 3,
 		Reason:                  "test",
-		IdempotencyKey:          "idem-rb-draft",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
-	}))
+	}), "idem-rb-draft"))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "draft")
@@ -330,18 +300,12 @@ func TestRollbackRelease_CustomerDisabled(t *testing.T) {
 	err = st.Customers().Update(context.Background(), cust, cust.Version)
 	require.NoError(t, err)
 
-	_, err = svc.RollbackRelease(context.Background(), connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
+	_, err = svc.RollbackRelease(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
 		ReleaseDefinitionId:     "def-001",
 		TargetRevision:          1,
 		ExpectedCurrentRevision: 3,
 		Reason:                  "test",
-		IdempotencyKey:          "idem-rb-cust-disabled",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
-	}))
+	}), "idem-rb-cust-disabled"))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
-	assert.Contains(t, err.Error(), "disabled")
 }

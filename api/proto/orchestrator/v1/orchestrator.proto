@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package orchestrator.v1;
 
+import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 
 import "common/v1/domain.proto";
@@ -110,16 +111,23 @@ service BundleService {
   rpc GetBundle(GetBundleRequest) returns (GetBundleResponse);
 }
 
-// CreateOperationRequest submits a new release operation for orchestration.
+// CreateOperationGateDetail carries the associated IDs for creation gates
+// (AC-067-20/21/22). The top-level reason uses only the highest-priority gate.
+message CreateOperationGateDetail {
+  repeated string unresolved_operation_ids = 1;
+  repeated string convergence_task_ids = 2;
+}
+
+// CreateOperationRequest submits a new standard release operation for orchestration.
 message CreateOperationRequest {
-  string operation_type = 1;          // INSTALL, UPGRADE, ROLLBACK, EMERGENCY
+  string operation_type = 1;          // INSTALL or UPGRADE
   string bundle_id = 2;               // ReleaseBundle ID
   string release_definition_id = 3;
   string values_revision_id = 4;      // must be approved
-  string values_patch = 5;            // JSON merge patch (optional)
-  int32 expected_current_revision = 6;// required for UPGRADE/ROLLBACK
-  string idempotency_key = 7;
-  common.v1.ActorContext actor = 8;
+  google.protobuf.Struct values_patch = 5;  // JSON Merge Patch (nullable)
+  int32 expected_current_revision = 6;// required for UPGRADE
+  reserved 7, 8;
+  reserved "idempotency_key", "actor";
   common.v1.SignatureRef signature_ref = 9;   // optional: artifact trust verification
 }
 
@@ -149,8 +157,10 @@ message RollbackReleaseRequest {
   int32 target_revision = 2;             // revision to rollback TO
   int32 expected_current_revision = 3;   // current revision (optimistic lock)
   string reason = 4;                     // required
-  common.v1.ActorContext actor = 5;
-  string idempotency_key = 6;            // optional: for idempotent retry
+  reserved 5, 6;
+  reserved "actor", "idempotency_key";
+  string values_revision_id = 7 [deprecated = true];  // rejected server-side (AC-067-16)
+  string values_patch = 8 [deprecated = true];        // rejected server-side (AC-067-16)
 }
 
 // RollbackReleaseResponse returns the created rollback operation.

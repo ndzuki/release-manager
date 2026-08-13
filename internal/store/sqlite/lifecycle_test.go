@@ -685,6 +685,48 @@ func TestSQLiteUnitOfWork_AtomicCommit(t *testing.T) {
 	assert.Equal(t, 2, linked)
 }
 
+func TestSQLiteUnitOfWork_AuthorizationFence(t *testing.T) {
+	// AC-067-22: a stale authorization snapshot is rejected inside the
+	// transaction with no writes (expected version never matches).
+	st := setupStore(t)
+	ctx := t.Context()
+
+	definition := &store.ReleaseDefinition{
+		ID: uuid.New().String(), Name: "fence-definition", CustomerID: "fence-customer",
+		ClusterID: "fence-cluster", ReleaseName: "fence-release", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
+	bundle := &store.ReleaseBundle{
+		ID: uuid.New().String(), Name: "fence-bundle", DigestAlg: "sha256",
+		DigestValue: uuid.New().String(), Status: store.BundleValidated,
+	}
+	require.NoError(t, st.Bundles().Create(ctx, bundle))
+
+	now := time.Now().UTC()
+	operationRecord := &store.Operation{
+		ID: uuid.New().String(), OperationType: store.OperationInstall, Status: store.StatusPending,
+		ReleaseDefinitionID: definition.ID, IdempotencyKey: uuid.New().String(), IdempotencyScope: "org:" + definition.ID,
+		RequestHash: uuid.New().String(), BundleID: bundle.ID, CreatedAt: now, UpdatedAt: now,
+	}
+	dispatch := &store.OutboxEntry{
+		ID: uuid.New().String(), CommandID: operationRecord.ID + ":artifact", OperationID: operationRecord.ID,
+		OperationType: string(operationRecord.OperationType), Payload: []byte(`{}`),
+	}
+
+	_, err := st.OperationCreationUnitOfWork()(ctx, store.OperationCreationRequest{
+		Operation:                    operationRecord,
+		Dispatch:                     dispatch,
+		CandidateArtifactDigests:     []string{},
+		ExpectedAuthorizationVersion: 42, // never matches the durable version
+	})
+	require.ErrorIs(t, err, store.ErrAuthorizationStale)
+
+	_, err = st.Operations().Get(ctx, operationRecord.ID)
+	require.ErrorIs(t, err, store.ErrNotFound)
+	_, err = st.Outbox().GetByCommandID(ctx, dispatch.CommandID)
+	require.ErrorIs(t, err, store.ErrNotFound)
+}
+
 func TestSQLiteUnitOfWork_ArchivedReceivedRejected(t *testing.T) {
 	st := setupStore(t)
 	ctx := t.Context()

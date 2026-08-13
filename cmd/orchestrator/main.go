@@ -280,7 +280,13 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	)
 	mux.Handle(operatorPath, operatorHandler)
 	emergencyDispatcher := orchestrator.NewEmergencyDispatcher(operatorService)
-	svc := orchestrator.NewService(s.store, verifier, s.targetEnv, s.auditEmitter, emergencyDispatcher, orchestrator.NewProcessStreamRevoker(s.operatorRegistry()), s.operatorEndpoint(), s.authorizer, logger)
+	var createOperation orchestrator.OperationCreationUnitOfWork
+	if uowProvider, ok := s.store.(interface {
+		OperationCreationUnitOfWork() store.OperationCreationUnitOfWork
+	}); ok {
+		createOperation = uowProvider.OperationCreationUnitOfWork()
+	}
+	svc := orchestrator.NewService(s.store, verifier, s.targetEnv, s.auditEmitter, emergencyDispatcher, orchestrator.NewProcessStreamRevoker(s.operatorRegistry()), s.operatorEndpoint(), createOperation, s.authorizer, logger)
 	s.emergency = svc
 	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)
 	enforcer, err := auth.NewEnforcer(s.store, logger)

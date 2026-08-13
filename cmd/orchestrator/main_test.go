@@ -114,7 +114,7 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 
 	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
 	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
-	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
+	require.NoError(t, svc.Register(mux, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))))
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
@@ -183,10 +183,10 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 	const (
 		signingKey       = "trust-test-signing-key"
-		organizationID   = "org-trust-live"
+		organizationID   = "0f7e6d3e-8a2b-4f6e-9a1c-3d5b7e9f1a2b"
 		platformAdminID  = "platform-admin-trust"
 		deployerID       = "deployer-trust"
-		customerID       = "customer-trust-live"
+		customerID       = "1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f"
 		definitionID     = "definition-trust-live"
 		valuesRevisionID = "values-trust-live"
 		bundleID         = "bundle-trust-live"
@@ -220,11 +220,11 @@ func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 	bundleDigest := fmt.Sprintf("%064x", 74)
 	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{
 		ID: bundleID, Name: "Trust Bundle", DigestAlg: "sha256", DigestValue: bundleDigest,
-		Status: store.BundleValidated, CreatedAt: time.Now().UTC(),
+		Status: store.BundleValidated, ChartRef: "fixture", CreatedAt: time.Now().UTC(),
 	}))
 	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{
 		ID: rejectedBundleID, Name: "Rejected Trust Bundle", DigestAlg: "sha256", DigestValue: fmt.Sprintf("%064x", 75),
-		Status: store.BundleValidated, CreatedAt: time.Now().UTC(),
+		Status: store.BundleValidated, ChartRef: "fixture", CreatedAt: time.Now().UTC(),
 	}))
 	require.NoError(t, seedStore.Close())
 
@@ -236,6 +236,16 @@ func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
 	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
+	// Bump the authorization source version so the Module snapshot is fresh
+	// (a fresh database starts at version 0, which fails closed).
+	authSnap, err := svc.store.Authorization().Load(context.Background())
+	require.NoError(t, err)
+	_, err = svc.store.Authorization().Apply(context.Background(), store.AuthorizationApplyCommand{
+		ExpectedSourceVersion: authSnap.SourceVersion,
+		ExpectedPolicyVersion: authSnap.PolicyVersion,
+		Mutation:              store.AuthorizationMembershipChanged,
+	})
+	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, svc.Shutdown(context.Background())) })
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 	server := httptest.NewServer(mux)
@@ -313,16 +323,17 @@ func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 	digest := "sha256:" + bundleDigest
 	rejectedDigest := "sha256:" + fmt.Sprintf("%064x", 75)
 	operationClient := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
+	warmAuthorization(ctx, t, operationClient, platformToken, definitionID, "warm-trust-live")
 	trustedRequest := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType: "INSTALL", BundleId: bundleID, ReleaseDefinitionId: definitionID,
-		ValuesRevisionId: valuesRevisionID, IdempotencyKey: "trust-live-accepted",
+		ValuesRevisionId: valuesRevisionID,
 		SignatureRef: &commonv1.SignatureRef{
 			Digest: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(digest))),
 			Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
 		},
-		Actor: &commonv1.ActorContext{UserId: deployerID, Organization: organizationID},
 	})
-	trustedRequest.Header().Set("Authorization", "Bearer "+deployerToken)
+	trustedRequest.Header().Set("Authorization", "Bearer "+platformToken)
+	trustedRequest.Header().Set("Idempotency-Key", "trust-live-accepted")
 	trustedResponse, err := operationClient.CreateOperation(ctx, trustedRequest)
 	require.NoError(t, err)
 	assert.Equal(t, commonv1.VerificationResult_VERIFICATION_RESULT_TRUSTED, trustedResponse.Msg.GetVerificationResult())
@@ -330,14 +341,14 @@ func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 	_, wrongPrivateKey := testEd25519KeyPair(t)
 	rejectedRequest := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType: "INSTALL", BundleId: rejectedBundleID, ReleaseDefinitionId: definitionID,
-		ValuesRevisionId: valuesRevisionID, IdempotencyKey: "trust-live-rejected",
+		ValuesRevisionId: valuesRevisionID,
 		SignatureRef: &commonv1.SignatureRef{
 			Digest: rejectedDigest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(wrongPrivateKey, []byte(rejectedDigest))),
 			Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
 		},
-		Actor: &commonv1.ActorContext{UserId: deployerID, Organization: organizationID},
 	})
-	rejectedRequest.Header().Set("Authorization", "Bearer "+deployerToken)
+	rejectedRequest.Header().Set("Authorization", "Bearer "+platformToken)
+	rejectedRequest.Header().Set("Idempotency-Key", "trust-live-rejected")
 	_, err = operationClient.CreateOperation(ctx, rejectedRequest)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
@@ -468,9 +479,9 @@ func TestTrustServiceMaintenanceGate(t *testing.T) {
 func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
 	const (
 		signingKey       = "trust-unavailable-signing-key"
-		organizationID   = "org-trust-unavailable"
+		organizationID   = "2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d"
 		deployerID       = "deployer-trust-unavailable"
-		customerID       = "customer-trust-unavailable"
+		customerID       = "3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f"
 		definitionID     = "definition-trust-unavailable"
 		valuesRevisionID = "values-trust-unavailable"
 		bundleID         = "bundle-trust-unavailable"
@@ -483,7 +494,7 @@ func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
 	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Trust Unavailable Organization"}))
 	require.NoError(t, seedStore.Bindings().Create(ctx, &store.OrgCustomerBinding{ID: "binding-trust-unavailable", OrgID: organizationID, CustomerID: customerID}))
 	require.NoError(t, seedStore.Users().Create(ctx, &store.User{ID: deployerID, Username: deployerID, PasswordHash: "unused", Status: store.UserActive}))
-	require.NoError(t, seedStore.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: organizationID, UserID: deployerID, Role: store.RoleDeployer}))
+	require.NoError(t, seedStore.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: organizationID, UserID: deployerID, Role: store.RoleReleaseAdmin}))
 	require.NoError(t, seedStore.AuthSessions().Create(ctx, &store.AuthSession{
 		ID: uuid.NewString(), UserID: deployerID, TokenFamily: uuid.NewString(), RefreshTokenHash: uuid.NewString(), ExpiresAt: time.Now().UTC().Add(time.Hour),
 	}))
@@ -500,7 +511,7 @@ func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
 	bundleDigest := fmt.Sprintf("%064x", 76)
 	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{
 		ID: bundleID, Name: "Trust Unavailable Bundle", DigestAlg: "sha256", DigestValue: bundleDigest,
-		Status: store.BundleValidated, CreatedAt: time.Now().UTC(),
+		Status: store.BundleValidated, ChartRef: "fixture", CreatedAt: time.Now().UTC(),
 	}))
 	require.NoError(t, seedStore.Close())
 
@@ -515,25 +526,35 @@ func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
 	}
 	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
+	// Bump the authorization source version so the Module snapshot is fresh.
+	authSnap, err := svc.store.Authorization().Load(context.Background())
+	require.NoError(t, err)
+	_, err = svc.store.Authorization().Apply(context.Background(), store.AuthorizationApplyCommand{
+		ExpectedSourceVersion: authSnap.SourceVersion,
+		ExpectedPolicyVersion: authSnap.PolicyVersion,
+		Mutation:              store.AuthorizationMembershipChanged,
+	})
+	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
 	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
-	deployerToken, _, err := jwtManager.GenerateAccessToken(deployerID, organizationID, []string{string(store.RoleDeployer)})
+	adminToken, _, err := jwtManager.GenerateAccessToken(deployerID, organizationID, []string{string(store.RoleReleaseAdmin)})
 	require.NoError(t, err)
 	digest := "sha256:" + bundleDigest
 	request := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType: "INSTALL", BundleId: bundleID, ReleaseDefinitionId: definitionID,
-		ValuesRevisionId: valuesRevisionID, IdempotencyKey: "trust-unavailable",
+		ValuesRevisionId: valuesRevisionID,
 		SignatureRef: &commonv1.SignatureRef{
 			Digest: digest, Signature: base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize)),
 			Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
 		},
-		Actor: &commonv1.ActorContext{UserId: deployerID, Organization: organizationID},
 	})
-	request.Header().Set("Authorization", "Bearer "+deployerToken)
+	request.Header().Set("Authorization", "Bearer "+adminToken)
+	request.Header().Set("Idempotency-Key", "trust-unavailable")
 	client := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
+	warmAuthorization(ctx, t, client, adminToken, definitionID, "warm-trust-unavailable")
 	_, err = client.CreateOperation(ctx, request)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
@@ -546,10 +567,10 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 	// revoke 提升 epoch、同签名再次提交被 untrusted_issuer 拒绝。
 	const (
 		signingKey       = "trust-epoch-signing-key"
-		organizationID   = "org-trust-epoch"
+		organizationID   = "4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a"
 		platformAdminID  = "platform-admin-epoch"
 		deployerID       = "deployer-trust-epoch"
-		customerID       = "customer-trust-epoch"
+		customerID       = "5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b"
 		definitionID     = "definition-trust-epoch"
 		valuesRevisionID = "values-trust-epoch"
 		bundleID         = "bundle-trust-epoch"
@@ -581,7 +602,7 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 	bundleDigest := fmt.Sprintf("%064x", 98)
 	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{
 		ID: bundleID, Name: "Trust Epoch Bundle", DigestAlg: "sha256", DigestValue: bundleDigest,
-		Status: store.BundleValidated, CreatedAt: time.Now().UTC(),
+		Status: store.BundleValidated, ChartRef: "fixture", CreatedAt: time.Now().UTC(),
 	}))
 	require.NoError(t, seedStore.Close())
 
@@ -593,6 +614,15 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
 	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
+	// Bump the authorization source version so the Module snapshot is fresh.
+	authSnap, err := svc.store.Authorization().Load(context.Background())
+	require.NoError(t, err)
+	_, err = svc.store.Authorization().Apply(context.Background(), store.AuthorizationApplyCommand{
+		ExpectedSourceVersion: authSnap.SourceVersion,
+		ExpectedPolicyVersion: authSnap.PolicyVersion,
+		Mutation:              store.AuthorizationMembershipChanged,
+	})
+	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, svc.Shutdown(context.Background())) })
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 	server := httptest.NewServer(mux)
@@ -600,8 +630,6 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 
 	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
 	adminToken, _, err := jwtManager.GenerateAccessToken(platformAdminID, organizationID, []string{string(store.RolePlatformAdmin)})
-	require.NoError(t, err)
-	deployerToken, _, err := jwtManager.GenerateAccessToken(deployerID, organizationID, []string{string(store.RoleDeployer)})
 	require.NoError(t, err)
 
 	// 正式 Connect API：platform_admin 激活 root。
@@ -625,17 +653,18 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 	digest := "sha256:" + bundleDigest
 
 	operationClient := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
+	warmAuthorization(ctx, t, operationClient, adminToken, definitionID, "warm-epoch")
 	newRequest := func(idempotencyKey string) *connect.Request[orchestratorv1.CreateOperationRequest] {
 		req := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 			OperationType: "INSTALL", BundleId: bundleID, ReleaseDefinitionId: definitionID,
-			ValuesRevisionId: valuesRevisionID, IdempotencyKey: idempotencyKey,
+			ValuesRevisionId: valuesRevisionID,
 			SignatureRef: &commonv1.SignatureRef{
 				Digest: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(digest))),
 				Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
 			},
-			Actor: &commonv1.ActorContext{UserId: deployerID, Organization: organizationID},
 		})
-		req.Header().Set("Authorization", "Bearer "+deployerToken)
+		req.Header().Set("Authorization", "Bearer "+adminToken)
+		req.Header().Set("Idempotency-Key", idempotencyKey)
 		return req
 	}
 
@@ -655,6 +684,25 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.ErrorContains(t, err, "untrusted_issuer")
+}
+
+// warmAuthorization issues one CreateOperation call that fails at the
+// authorization gate: the Module's first pull after a source bump observes a
+// changed checkpoint and fails closed (REQ-027), so the real request below
+// succeeds on the caught-up snapshot.
+func warmAuthorization(ctx context.Context, t *testing.T, client orchestratorv1connect.OrchestratorServiceClient, token, definitionID, idempotencyKey string) {
+	t.Helper()
+	req := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-warm",
+		ReleaseDefinitionId: definitionID,
+		ValuesRevisionId:    "values-warm",
+	})
+	req.Header().Set("Authorization", "Bearer "+token)
+	req.Header().Set("Idempotency-Key", idempotencyKey)
+	_, err := client.CreateOperation(ctx, req)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
 }
 
 func testEd25519KeyPair(t *testing.T) (string, ed25519.PrivateKey) {

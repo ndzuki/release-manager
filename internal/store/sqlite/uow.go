@@ -51,6 +51,9 @@ func createOperationUnitOfWork(
 	tx *sql.Tx,
 	req store.OperationCreationRequest,
 ) (*store.OperationCreationResult, error) {
+	if err := checkAuthorizationFence(ctx, tx, req.ExpectedAuthorizationVersion); err != nil {
+		return nil, err
+	}
 	if err := ensureOperationAvailable(ctx, tx, req.Operation); err != nil {
 		return nil, err
 	}

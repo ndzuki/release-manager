@@ -218,9 +218,10 @@ type Operation struct {
 // OperationCreationRequest contains the durable records and artifact links that
 // must be committed atomically when a standard operation is created.
 type OperationCreationRequest struct {
-	Operation                *Operation
-	Dispatch                 *OutboxEntry
-	CandidateArtifactDigests []string
+	Operation                    *Operation
+	Dispatch                     *OutboxEntry
+	CandidateArtifactDigests     []string
+	ExpectedAuthorizationVersion uint64
 }
 
 // OperationCreationResult reports the records affected by operation creation.
@@ -239,9 +240,10 @@ type OperationCreationUnitOfWork func(
 
 // OperationCreateCommand contains one atomic operation creation and idempotency intent.
 type OperationCreateCommand struct {
-	Operation      *Operation
-	Idempotency    *IdempotencyRecord
-	CheckAvailable bool
+	Operation                  *Operation
+	Idempotency                *IdempotencyRecord
+	CheckAvailable             bool
+	ExpectedAuthorizationVersion uint64
 }
 
 // OperationCreateResult is the newly committed or replayed operation.
@@ -734,13 +736,15 @@ const (
 	AuthorizationResolveEmergency AuthorizationAction = "release.emergency.resolve"
 	AuthorizationCreateValues     AuthorizationAction = "release.values.create"
 	AuthorizationApproveValues    AuthorizationAction = "release.values.approve"
+	AuthorizationCreateOperation  AuthorizationAction = "release.operation.create"
 )
 
 // Valid reports whether the action is part of the fixed authorization contract.
 func (a AuthorizationAction) Valid() bool {
 	switch a {
 	case AuthorizationExecuteEmergency, AuthorizationResolveEmergency,
-		AuthorizationCreateValues, AuthorizationApproveValues:
+		AuthorizationCreateValues, AuthorizationApproveValues,
+		AuthorizationCreateOperation:
 		return true
 	}
 	return false
@@ -1065,6 +1069,10 @@ type EmergencyIntentStore interface {
 	UpdateDeliveryStatus(ctx context.Context, id, status string) error
 	Finish(ctx context.Context, intentID, operationID string, expectedStateVersion int, status OperationStatus, effectStatus EmergencyEffectStatus, lastError string, beforeSnapshot, afterSnapshot json.RawMessage) (*Operation, error)
 	ResolveEmergencyEffect(ctx context.Context, command ResolveEmergencyEffectCommand) (*ResolveEmergencyEffectResult, error)
+	// HasUnresolvedForDefinition reports terminal EMERGENCY operations whose
+	// effect is still UNKNOWN for the definition (AC-067-20). It returns the
+	// operation IDs so the handler can attach typed detail.
+	HasUnresolvedForDefinition(ctx context.Context, definitionID string) (bool, []string, error)
 }
 
 type ConvergenceTaskStore interface {
