@@ -182,7 +182,7 @@ func (v *StubVerifier) verifyWithRoots(ctx context.Context, in Input) (*Output, 
 	if resolveErr != nil {
 		v.logger.Error("live root resolution failed", "env", in.Environment, "err", resolveErr)
 		return &Output{
-			Status:  store.VerificationRejected,
+			Status:  store.VerificationVerificationUnavailable,
 			Summary: "verification_unavailable: cannot resolve live trust roots",
 		}, nil
 	}
@@ -193,12 +193,13 @@ func (v *StubVerifier) verifyWithRoots(ctx context.Context, in Input) (*Output, 
 		epoch = meta.RevocationEpoch
 	}
 
-	// Check if any root accepts this issuer.
+	// A root owns both issuer and subject constraints; matching issuer alone
+	// would allow signatures from an unrelated subject under the same issuer.
 	for _, r := range roots {
-		if r.Issuer == in.SignatureRef.Issuer {
+		if rootMatches(r, in.SignatureRef.Issuer, subjectFromRef(in.SignatureRef)) {
 			return &Output{
 				Status:          store.VerificationTrusted,
-				Summary:         fmt.Sprintf("trusted: issuer %q matched root %q", in.SignatureRef.Issuer, r.KeyID),
+				Summary:         fmt.Sprintf("trusted: issuer %q and subject matched root %q", in.SignatureRef.Issuer, r.KeyID),
 				RootID:          r.ID,
 				KeyID:           r.KeyID,
 				RevocationEpoch: epoch,

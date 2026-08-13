@@ -1360,3 +1360,157 @@ func TestTrustRootsGetActiveGraceWindow(t *testing.T) {
 	}
 	assert.ElementsMatch(t, []string{"key-active", "key-grace-live"}, keys)
 }
+
+func TestTrustRootCreateAndGet(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	root := &store.TrustRoot{
+		ID:           "root-001",
+		Environment:  "staging",
+		KeyID:        "k1",
+		PublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAtest\n-----END PUBLIC KEY-----",
+		Issuer:       "release-manager-ci",
+		State:        store.TrustRootActive,
+		ValidFrom:    now,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	require.NoError(t, st.TrustRoots().Create(ctx, root))
+
+	got, err := st.TrustRoots().Get(ctx, "root-001")
+	require.NoError(t, err)
+	assert.Equal(t, root.ID, got.ID)
+	assert.Equal(t, store.TrustRootActive, got.State)
+	assert.Equal(t, "release-manager-ci", got.Issuer)
+}
+
+func TestTrustRootGetNotFound(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+
+	_, err := st.TrustRoots().Get(ctx, "nonexistent")
+	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
+func TestTrustRootListByEnvironment(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	for _, id := range []string{"r1", "r2", "r3"} {
+		require.NoError(t, st.TrustRoots().Create(ctx, &store.TrustRoot{
+			ID: id, Environment: "staging", KeyID: id, Issuer: "ci-" + id,
+			State: store.TrustRootActive, ValidFrom: now,
+			CreatedAt: now, UpdatedAt: now,
+		}))
+	}
+	// different environment
+	require.NoError(t, st.TrustRoots().Create(ctx, &store.TrustRoot{
+		ID: "r4", Environment: "production", KeyID: "k4", Issuer: "ci-prod",
+		State: store.TrustRootActive, ValidFrom: now,
+		CreatedAt: now, UpdatedAt: now,
+	}))
+
+	roots, err := st.TrustRoots().ListByEnvironment(ctx, "staging")
+	require.NoError(t, err)
+	assert.Len(t, roots, 3)
+
+	roots, err = st.TrustRoots().ListByEnvironment(ctx, "production")
+	require.NoError(t, err)
+	assert.Len(t, roots, 1)
+}
+
+func TestTrustRootGetActiveByEnvironment(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	past := now.Add(-1 * time.Hour)
+
+	// Active root
+	require.NoError(t, st.TrustRoots().Create(ctx, &store.TrustRoot{
+		ID: "active-1", Environment: "staging", KeyID: "k1", Issuer: "ci-1",
+		State: store.TrustRootActive, ValidFrom: past,
+		CreatedAt: now, UpdatedAt: now,
+	}))
+	// Grace root
+	graceUntil := now.Add(1 * time.Hour)
+	require.NoError(t, st.TrustRoots().Create(ctx, &store.TrustRoot{
+		ID: "grace-1", Environment: "staging", KeyID: "k2", Issuer: "ci-2",
+		State: store.TrustRootGrace, ValidFrom: past, GraceUntil: &graceUntil,
+		CreatedAt: now, UpdatedAt: now,
+	}))
+	// Retired root — should not appear
+	require.NoError(t, st.TrustRoots().Create(ctx, &store.TrustRoot{
+		ID: "retired-1", Environment: "staging", KeyID: "k3", Issuer: "ci-3",
+		State: store.TrustRootRetired, ValidFrom: past,
+		CreatedAt: now, UpdatedAt: now,
+	}))
+
+	active, err := st.TrustRoots().GetActiveByEnvironment(ctx, "staging", now)
+	require.NoError(t, err)
+	assert.Len(t, active, 2) // active + grace
+}
+
+func TestTrustRootUpdate(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	require.NoError(t, st.TrustRoots().Create(ctx, &store.TrustRoot{
+		ID: "root-upd", Environment: "staging", KeyID: "k1", Issuer: "ci-1",
+		State: store.TrustRootPending, ValidFrom: now,
+		CreatedAt: now, UpdatedAt: now,
+	}))
+
+	root, err := st.TrustRoots().Get(ctx, "root-upd")
+	require.NoError(t, err)
+	root.State = store.TrustRootActive
+	require.NoError(t, st.TrustRoots().Update(ctx, root))
+
+	got, err := st.TrustRoots().Get(ctx, "root-upd")
+	require.NoError(t, err)
+	assert.Equal(t, store.TrustRootActive, got.State)
+}
+
+func TestTrustRootBumpPolicy(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+
+	// First bump initializes policy.
+	ver, epoch, err := st.TrustRoots().BumpPolicy(ctx, "staging")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), ver)
+	assert.Equal(t, int64(0), epoch)
+
+	// Second bump increments.
+	ver, _, err = st.TrustRoots().BumpPolicy(ctx, "staging")
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), ver)
+}
+
+func TestTrustRootBumpRevocationEpoch(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+
+	epoch, err := st.TrustRoots().BumpRevocationEpoch(ctx, "production")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), epoch)
+
+	epoch, err = st.TrustRoots().BumpRevocationEpoch(ctx, "production")
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), epoch)
+}
+
+func TestTrustRootGetPolicyDefault(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+
+	// No policy row yet → returns defaults.
+	meta, err := st.TrustRoots().GetPolicy(ctx, "unknown-env")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), meta.Version)
+	assert.Equal(t, int64(0), meta.RevocationEpoch)
+}
