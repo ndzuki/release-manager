@@ -49,6 +49,13 @@ func TestCleanupServiceDeletesOnlyPrepareSessionMetadataPastRetention(t *testing
 	require.NoError(t, err)
 }
 
+func TestDefaultRetentionConfigValidates(t *testing.T) {
+	require.NoError(t, DefaultRetentionConfig().Validate())
+	assert.Equal(t, 6, DefaultRetentionConfig().GCIntervalHours)
+	assert.Equal(t, 24, DefaultRetentionConfig().PrepareSessionHours)
+	assert.Equal(t, 10, DefaultRetentionConfig().PrepareSessionGCIntervalMinutes)
+}
+
 func createCleanupDefinition(t *testing.T, st *sqlitestore.Store, id string) *store.ReleaseDefinition {
 	t.Helper()
 	definition := &store.ReleaseDefinition{

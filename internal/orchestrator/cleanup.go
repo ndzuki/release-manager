@@ -31,6 +31,7 @@ func DefaultRetentionConfig() RetentionConfig {
 		BundleDays:                      90,
 		CandidateArtifactDays:           30,
 		PreflightResultHours:            168,
+		GCIntervalHours:                 6,
 		PrepareSessionHours:             24,
 		PrepareSessionGCIntervalMinutes: 10,
 	}
