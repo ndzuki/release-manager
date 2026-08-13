@@ -214,8 +214,8 @@ func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 		OwnerOrganizationID: &ownerOrganizationID,
 	}, nil))
 	require.NoError(t, seedStore.Values().Create(ctx, &store.ValuesRevision{
-		ID: valuesRevisionID, ReleaseDefinitionID: definitionID, Revision: 1, StateVersion: 1,
-		Status: store.ValuesStatusApproved, Values: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-live",
+		ID: valuesRevisionID, ReleaseDefinitionID: definitionID, Version: 1, StateVersion: 1,
+		Status: store.ValuesStatusApproved, CanonicalDocument: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-live",
 	}))
 	bundleDigest := fmt.Sprintf("%064x", 74)
 	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{
@@ -494,8 +494,8 @@ func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
 		OwnerOrganizationID: &ownerOrganizationID,
 	}, nil))
 	require.NoError(t, seedStore.Values().Create(ctx, &store.ValuesRevision{
-		ID: valuesRevisionID, ReleaseDefinitionID: definitionID, Revision: 1, StateVersion: 1,
-		Status: store.ValuesStatusApproved, Values: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-unavailable",
+		ID: valuesRevisionID, ReleaseDefinitionID: definitionID, Version: 1, StateVersion: 1,
+		Status: store.ValuesStatusApproved, CanonicalDocument: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-unavailable",
 	}))
 	bundleDigest := fmt.Sprintf("%064x", 76)
 	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{
@@ -575,8 +575,8 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 		OwnerOrganizationID: &ownerOrganizationID,
 	}, nil))
 	require.NoError(t, seedStore.Values().Create(ctx, &store.ValuesRevision{
-		ID: valuesRevisionID, ReleaseDefinitionID: definitionID, Revision: 1, StateVersion: 1,
-		Status: store.ValuesStatusApproved, Values: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-epoch",
+		ID: valuesRevisionID, ReleaseDefinitionID: definitionID, Version: 1, StateVersion: 1,
+		Status: store.ValuesStatusApproved, CanonicalDocument: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-epoch",
 	}))
 	bundleDigest := fmt.Sprintf("%064x", 98)
 	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{

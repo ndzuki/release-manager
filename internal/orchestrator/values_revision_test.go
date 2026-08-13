@@ -133,6 +133,12 @@ func TestCreateValuesRevision_InitialCanBeApprovedAndUsedForInstall(t *testing.T
 	)
 	require.NoError(t, err)
 
+	require.NoError(t, f.st.Bundles().Create(f.ctx, &store.ReleaseBundle{
+		ID: "bundle-initial-install", Name: "Initial Install Bundle",
+		DigestAlg: "sha256", DigestValue: fmt.Sprintf("%064x", 42), Status: store.BundleValidated,
+		CreatedAt: time.Now().UTC(),
+	}))
+
 	operationRequest := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INSTALL",
 		BundleId:            "bundle-initial-install",
