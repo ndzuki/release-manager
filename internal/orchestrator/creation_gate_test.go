@@ -172,3 +172,21 @@ func TestCreateOperation_GatePriorityAuthorizationFirst(t *testing.T) {
 	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "authorization_snapshot_stale")
 }
+
+// AC-067-22: when both gates are present, the emergency gate wins as the
+// top-level reason, but the typed detail carries both ID arrays.
+func TestCreateOperation_EmergencyGateDetailCarriesBothIDArrays(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedUnresolvedEmergencyEffect(t, st, "def-001", "op-both-emergency")
+	task := seedPendingPromotionTask(t, st, "def-001")
+
+	_, err := svc.CreateOperation(adminCtx(), installRequest())
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "emergency_effect_unresolved")
+	detail := gateDetail(t, err)
+	assert.Equal(t, []string{"op-both-emergency"}, detail.GetUnresolvedOperationIds())
+	assert.Equal(t, []string{task.ID}, detail.GetConvergenceTaskIds())
+}

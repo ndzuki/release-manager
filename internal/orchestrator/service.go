@@ -122,11 +122,6 @@ func (s *Service) CreateOperation(
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
 
-	// REQ-067 rule 5: the idempotency key is mandatory and travels via the
-	// HTTP Idempotency-Key header (AC-067-06/07).
-	if idempotencyKey == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("idempotency_key is required"))
-	}
 
 	// Definition lookup feeds authorization, gates, and validation below.
 	def, err := s.store.Definitions().Get(ctx, msg.ReleaseDefinitionId)
@@ -150,8 +145,14 @@ func (s *Service) CreateOperation(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("emergency effect gate: %w", err))
 	}
 	if unresolved {
-		return nil, operationGateError("emergency_effect_unresolved",
-			&orchestratorv1.CreateOperationGateDetail{UnresolvedOperationIds: unresolvedOperationIDs})
+		// AC-067-22: the typed detail may carry both ID arrays even though the
+		// top-level reason only reflects the highest-priority gate.
+		detail := &orchestratorv1.CreateOperationGateDetail{UnresolvedOperationIds: unresolvedOperationIDs}
+		pendingTasks, listErr := s.store.ConvergenceTasks().ListByDefinition(ctx, def.ID, "pending_promotion")
+		if listErr == nil && len(pendingTasks) > 0 {
+			detail.ConvergenceTaskIds = taskIDs(pendingTasks)
+		}
+		return nil, operationGateError("emergency_effect_unresolved", detail)
 	}
 
 	// REQ-067 rule 4: pending promotion convergence gate (AC-067-21).
@@ -160,15 +161,20 @@ func (s *Service) CreateOperation(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("convergence gate: %w", err))
 	}
 	if len(pendingTasks) > 0 {
-		convergenceTaskIDs := make([]string, 0, len(pendingTasks))
-		for _, task := range pendingTasks {
-			convergenceTaskIDs = append(convergenceTaskIDs, task.ID)
-		}
 		return nil, operationGateError("release_convergence_pending",
-			&orchestratorv1.CreateOperationGateDetail{ConvergenceTaskIds: convergenceTaskIDs})
+			&orchestratorv1.CreateOperationGateDetail{ConvergenceTaskIds: taskIDs(pendingTasks)})
 	}
 
 	// REQ-067 rule 5: idempotent replay or conflict (same scope + key).
+
+	// REQ-067 rule 5: the idempotency key is mandatory and travels via the
+	// HTTP Idempotency-Key header (AC-067-06/07). Emptiness is checked with
+	// the idempotency step, after authorization and gates (rule order 2-5,
+	// ADR-009: unauthorized actors never learn anything about keys).
+	if idempotencyKey == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("idempotency_key is required"))
+	}
+
 	scope := idempotencyScope(actor.OrganizationID, def.ID)
 	scopedKey := operationIdempotencyKey(scope, idempotencyKey)
 	existing, err := s.store.Operations().GetByIdempotencyScopeAndKey(ctx, scope, scopedKey)
@@ -1190,6 +1196,16 @@ func operationGateError(reason string, detail *orchestratorv1.CreateOperationGat
 		}
 	}
 	return connectErr
+}
+
+// taskIDs extracts convergence task IDs for the typed gate detail
+// (AC-067-21/22).
+func taskIDs(tasks []*store.ConvergenceTask) []string {
+	ids := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		ids = append(ids, task.ID)
+	}
+	return ids
 }
 
 

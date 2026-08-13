@@ -1,0 +1,10 @@
+ALTER TABLE operations DROP COLUMN IF EXISTS reason;
+ALTER TABLE operations DROP COLUMN IF EXISTS target_operation_id;
+ALTER TABLE operations DROP COLUMN IF EXISTS effective_values_digest;
+ALTER TABLE operations DROP COLUMN IF EXISTS patch_digest;
+ALTER TABLE operations DROP COLUMN IF EXISTS policy_version;
+ALTER TABLE operations DROP COLUMN IF EXISTS image_digests_json;
+ALTER TABLE operations DROP COLUMN IF EXISTS image_refs_json;
+ALTER TABLE operations DROP COLUMN IF EXISTS bundle_chart_digest;
+ALTER TABLE operations DROP COLUMN IF EXISTS bundle_chart_ref;
+ALTER TABLE operations DROP COLUMN IF EXISTS idempotency_scope;
