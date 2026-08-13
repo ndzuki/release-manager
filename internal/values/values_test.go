@@ -115,6 +115,12 @@ func TestValidate_SecretDetection(t *testing.T) {
 		{"template ref ok", `token: "{{ .Values.token }}"`, nil},
 		{"clean values", `replicas: 3`, nil},
 		{"nested clean", "image:\n  tag: v1.0", nil},
+		{"json compact password", `{"password":"hunter2"}`, ErrSecretLiteral},
+		{"json spaced password", `{"password": "hunter2"}`, ErrSecretLiteral},
+
+		{"json ref ok", `{"password":"${ref:vault}"}`, nil},
+		{"json template ref ok", `{"token":"{{ .Values.token }}"}`, nil},
+		{"json clean", `{"replicas":3}`, nil},
 	}
 
 	for _, tt := range tests {

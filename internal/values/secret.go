@@ -5,8 +5,11 @@ import "regexp"
 // secretPatterns are regexps matching common secret key names followed by a value.
 // Post-filtering removes false positives like empty strings, null, and template references.
 var secretPatterns = []*regexp.Regexp{
-	// password / secret / token / api_key / private_key / access_key patterns
-	regexp.MustCompile(`(?im)(?:^|\s)(?:["']?(?:password|secret|token|api[_-]?key|apikey|private[_-]?key|access[_-]?key)["']?\s*[:=]\s*)([^\s#].+)`),
+	// password / secret / token / api_key / private_key / access_key patterns.
+	// The value capture is either a quoted string or a bare token, so JSON
+	// structure characters (`,`, `}`, `]`) are never swallowed into the value
+	// — that keeps ref/null/empty exemptions working on compact JSON.
+	regexp.MustCompile(`(?im)(?:^|[\s{,\[])(?:["']?(?:password|secret|token|api[_-]?key|apikey|private[_-]?key|access[_-]?key)["']?\s*[:=]\s*)("[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*'|[^\s#,}\]]+)`),
 	// AWS-style key ID pattern: AKIA... (20 chars)
 	regexp.MustCompile(`\bAKIA[A-Z0-9]{16}\b`),
 }

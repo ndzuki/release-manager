@@ -18,7 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
+	"google.golang.org/protobuf/types/known/structpb"
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	"github.com/ndzuki/release-manager/internal/auth"
@@ -1690,4 +1690,165 @@ func (i *testAuthInterceptor) WrapStreamingHandler(next connect.StreamingHandler
 		ctx = authctx.WithActor(ctx, i.Actor)
 		return next(ctx, conn)
 	}
+}
+
+// AC-067-02: an UPGRADE whose expected revision does not match the inventory
+// is rejected with revision_conflict and no write (REQ-067 rule 13).
+func TestCreateOperation_RevisionConflict(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedUpgradeInventory(t, st) // inventory revision = 1
+	seedValuesRevision(t, st, "vr-revconf", "def-001", store.ValuesStatusApproved)
+
+	req := upgradeRequest("vr-revconf")
+	req.Msg.ExpectedCurrentRevision = 5 // does not match inventory revision 1
+	_, err := svc.CreateOperation(adminCtx(), req)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "revision_conflict")
+
+	operations, listErr := st.Operations().List(context.Background(), "def-001")
+	require.NoError(t, listErr)
+	assert.Empty(t, operations, "revision conflict must not write an operation")
+}
+
+// AC-067-03: a bundle whose chart_ref does not match the definition chart_name
+// is rejected with chart_mismatch.
+func TestCreateOperation_ChartMismatch(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	require.NoError(t, st.Bundles().Create(t.Context(), &store.ReleaseBundle{
+		ID: "bundle-chart-mismatch", Name: "wrong chart bundle", DigestAlg: "sha256",
+		DigestValue: fmt.Sprintf("%064x", 91), Status: store.BundleValidated,
+		ChartRef: "nginx-ingress", CreatedAt: time.Now().UTC(),
+	}))
+
+	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-chart-mismatch",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+	}), "idem-chart"))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "chart_mismatch")
+}
+
+// AC-067-08: a bundle still in received state is not ready for release.
+func TestCreateOperation_BundleNotReady(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	require.NoError(t, st.Bundles().Create(t.Context(), &store.ReleaseBundle{
+		ID: "bundle-received", Name: "received bundle", DigestAlg: "sha256",
+		DigestValue: fmt.Sprintf("%064x", 92), Status: store.BundleReceived,
+		ChartRef: "nginx", CreatedAt: time.Now().UTC(),
+	}))
+
+	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-received",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+	}), "idem-received"))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "bundle_not_ready")
+}
+
+// AC-067-09: a rejected bundle blocks creation.
+func TestCreateOperation_BundleRejected(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	require.NoError(t, st.Bundles().Create(t.Context(), &store.ReleaseBundle{
+		ID: "bundle-rejected", Name: "rejected bundle", DigestAlg: "sha256",
+		DigestValue: fmt.Sprintf("%064x", 93), Status: store.BundleRejected,
+		ChartRef: "nginx", CreatedAt: time.Now().UTC(),
+	}))
+
+	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-rejected",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+	}), "idem-rejected"))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "bundle_rejected")
+}
+
+// AC-067-11: a deployer is not authorized to create standard operations
+// (only release_admin / platform_admin are, REQ-067 rule 2).
+func TestCreateOperation_DeployerDenied(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	require.NoError(t, st.Users().Create(context.Background(), &store.User{
+		ID: "user-deployer", Username: "user-deployer", Status: store.UserActive,
+	}))
+	require.NoError(t, st.OrgMembers().Create(context.Background(), &store.OrganizationMember{
+		OrgID: "org-001", UserID: "user-deployer", Role: store.RoleDeployer,
+	}))
+
+	deployerCtx := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-deployer", OrganizationID: "org-001", Roles: []string{string(store.RoleDeployer)},
+	})
+	_, err := svc.CreateOperation(deployerCtx, withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-001",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+	}), "idem-deployer"))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+}
+
+// AC-067-12: a values_patch containing a literal secret is rejected with
+// secret_literal_forbidden (ADR-007, REQ-067 rule 14).
+func TestCreateOperation_SecretPatchRejected(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-001",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+		ValuesPatch: &structpb.Struct{Fields: map[string]*structpb.Value{
+			"password": structpb.NewStringValue("hunter2"),
+		}},
+	}), "idem-secret"))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "secret_literal_forbidden")
+}
+
+// AC-067-13: when no operator is available for the preflight dispatch, the
+// operation is still persisted in pending and the dispatch is durably queued.
+func TestCreateOperation_CoordinatorUnavailablePersistsDispatch(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	// No operators registered: Coordinator.Dispatch returns errNoOperator,
+	// which forces the deferred-dispatch path (REQ-067 rule: dispatch persists).
+	resp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-001",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+	}), "idem-noop"))
+	require.NoError(t, err, "create operation must succeed even without an operator")
+	stored, err := st.Operations().Get(context.Background(), resp.Msg.OperationId)
+	require.NoError(t, err)
+	// AC-067-13: the operation is durably written (pending at UOW commit; the
+	// handler then synchronously advances it to preflight before responding).
+	assert.False(t, stored.Status.IsTerminal(), "operation must be persisted, got %s", stored.Status)
+
+	_, err = st.Outbox().GetByCommandID(context.Background(), resp.Msg.OperationId+":artifact")
+	require.NoError(t, err, "preflight dispatch must be durably persisted")
 }

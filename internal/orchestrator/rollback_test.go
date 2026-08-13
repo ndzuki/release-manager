@@ -309,3 +309,26 @@ func TestRollbackRelease_CustomerDisabled(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 }
+
+// AC-067-16: ROLLBACK must not carry values; the deprecated request fields
+// remain the server-side rejection detection point.
+func TestRollbackRelease_ValuesNotAllowed(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	_, err := svc.RollbackRelease(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
+		ReleaseDefinitionId:     "def-001",
+		TargetRevision:          1,
+		ExpectedCurrentRevision: 3,
+		Reason:                  "test",
+		ValuesRevisionId:        "vr-001",
+	}), "idem-rb-values"))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "rollback_values_not_allowed")
+
+	operations, listErr := st.Operations().List(context.Background(), "def-001")
+	require.NoError(t, listErr)
+	assert.Empty(t, operations, "rollback with values must not write an operation")
+}
