@@ -168,6 +168,17 @@ func createOperation(ctx context.Context, execer operationExecer, op *store.Oper
 		terminalAt = &t
 	}
 
+	// Summary columns default to empty JSON arrays; normalize nil payloads
+	// so NOT NULL constraints hold for callers that don't populate them
+	// (mirrors the SQLite port).
+	imageRefsJSON, imageDigestsJSON := op.ImageRefsJSON, op.ImageDigestsJSON
+	if imageRefsJSON == nil {
+		imageRefsJSON = []byte(`[]`)
+	}
+	if imageDigestsJSON == nil {
+		imageDigestsJSON = []byte(`[]`)
+	}
+
 	_, err = execer.ExecContext(ctx, `
 		INSERT INTO operations (
 			id, operation_type, status, release_definition_id,
@@ -179,7 +190,7 @@ func createOperation(ctx context.Context, execer operationExecer, op *store.Oper
 	`,
 		op.ID, string(op.OperationType), string(op.Status), op.ReleaseDefinitionID,
 		op.IdempotencyKey, op.IdempotencyScope, op.RequestHash, op.StateVersion,
-		op.BundleID, op.BundleChartRef, op.BundleChartDigest, op.ImageRefsJSON, op.ImageDigestsJSON, op.PolicyVersion,
+		op.BundleID, op.BundleChartRef, op.BundleChartDigest, imageRefsJSON, imageDigestsJSON, op.PolicyVersion,
 		op.ValuesRevisionID, op.ExpectedRevision, op.TargetRevision, op.TargetOperationID, op.ValuesPatch, op.PatchDigest, op.EffectiveValuesDigest, op.Reason,
 		string(actorJSON), op.CreatedAt.UTC().Format(time.RFC3339), op.UpdatedAt.UTC().Format(time.RFC3339),
 		terminalAt, deadline, op.LastError,

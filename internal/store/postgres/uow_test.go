@@ -24,7 +24,7 @@ func TestPostgresUnitOfWork_AtomicCommit(t *testing.T) {
 		ID: uuid.New().String(), Name: "pg-uow-bundle", DigestAlg: "sha256",
 		DigestValue: uuid.New().String(), Status: store.BundleArchived,
 		ChartDigest: "sha256:chart-pg-uow",
-		Images:      []store.BundleImage{{Ref: "app:v1", Digest: "sha256:image-pg-uow"}},
+		Images:      []store.BundleImage{{Ref: "app:v1", Digest: "sha256:image-pg-uow", ValueKind: store.ImageValueFullReference}},
 	}
 	require.NoError(t, st.Bundles().Create(ctx, bundle))
 	_, err := st.SQLDB().ExecContext(ctx, `
