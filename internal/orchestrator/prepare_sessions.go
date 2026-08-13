@@ -222,9 +222,9 @@ func (s *Service) GetPrepareSession(
 // the stable locked paths plus the IDs of tasks that violate convergence
 // preconditions (AC-018-28). Structurally invalid selections (unknown task,
 // task of another definition) surface as task_invalid per REQ-018.
-func (s *Service) validatePrepareTasks(ctx context.Context, definitionID string, taskIDs []string) ([]string, []string, error) {
+func (s *Service) validatePrepareTasks(ctx context.Context, definitionID string, taskIDs []string) (paths, conflictTaskIDs []string, err error) {
 	validTasks := make([]*store.ConvergenceTask, 0, len(taskIDs))
-	conflictTaskIDs := make([]string, 0)
+	conflictTaskIDs = make([]string, 0)
 	for _, taskID := range taskIDs {
 		task, err := s.store.ConvergenceTasks().Get(ctx, taskID)
 		if err != nil {
@@ -248,7 +248,7 @@ func (s *Service) validatePrepareTasks(ctx context.Context, definitionID string,
 	for _, task := range validTasks {
 		validTaskIDs = append(validTaskIDs, task.ID)
 	}
-	paths, err := store.LockedPathsForTasks(validTaskIDs, validTasks)
+	paths, err = store.LockedPathsForTasks(validTaskIDs, validTasks)
 	if err != nil {
 		return nil, nil, valuesRevisionError(connect.CodeInvalidArgument, "task_invalid", err)
 	}
