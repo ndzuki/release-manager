@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -111,8 +112,10 @@ func run(ctx context.Context, cfg seedConfig) error {
 		name string
 		slug string
 	}{
-		{id: "dev-customer-a", name: "Development Customer A", slug: "development-customer-a"},
-		{id: "dev-customer-b", name: "Development Customer B", slug: "development-customer-b"},
+		// Deterministic UUIDs: the authorization snapshot seam requires a valid
+		// UUID customer id (AuthorizeWrite), while re-seeding stays idempotent.
+		{id: "11111111-1111-4111-8111-111111111111", name: "Development Customer A", slug: "development-customer-a"},
+		{id: "22222222-2222-4222-8222-222222222222", name: "Development Customer B", slug: "development-customer-b"},
 	}
 
 	// Customers and their org bindings are provisioned with the platform admin
@@ -128,12 +131,11 @@ func run(ctx context.Context, cfg seedConfig) error {
 			return err
 		}
 	}
-
 	clusters := []clusterSeed{
-		{id: "dev-customer-a-direct", name: "Customer A Direct", customerID: "dev-customer-a"},
-		{id: "dev-customer-a-cache", name: "Customer A Pull Through Cache", customerID: "dev-customer-a"},
-		{id: "dev-customer-b-replicated", name: "Customer B Replicated", customerID: "dev-customer-b"},
-		{id: "dev-customer-b-mixed", name: "Customer B Mixed", customerID: "dev-customer-b"},
+		{id: "dev-customer-a-direct", name: "Customer A Direct", customerID: "11111111-1111-4111-8111-111111111111"},
+		{id: "dev-customer-a-cache", name: "Customer A Pull Through Cache", customerID: "11111111-1111-4111-8111-111111111111"},
+		{id: "dev-customer-b-replicated", name: "Customer B Replicated", customerID: "22222222-2222-4222-8222-222222222222"},
+		{id: "dev-customer-b-mixed", name: "Customer B Mixed", customerID: "22222222-2222-4222-8222-222222222222"},
 	}
 
 	for _, cluster := range clusters {
@@ -141,7 +143,7 @@ func run(ctx context.Context, cfg seedConfig) error {
 			return err
 		}
 	}
-	if err := ensureEnrollmentTokens(ctx, orchestratorClient, deployerToken, clusters, devEnrollmentTokenDir); err != nil {
+	if err := ensureEnrollmentTokens(ctx, orchestratorClient, adminToken, clusters, devEnrollmentTokenDir); err != nil {
 		return err
 	}
 
@@ -163,7 +165,7 @@ func run(ctx context.Context, cfg seedConfig) error {
 
 	definitions := make([]string, 0, len(clusters))
 	for i, cluster := range clusters {
-		definitionID, err := ensureDefinition(ctx, orchestratorClient, deployerToken, cluster.customerID, cluster.id, i)
+		definitionID, err := ensureDefinition(ctx, orchestratorClient, deployerToken, cfg.deployerUser, adminOrgID, cluster.customerID, cluster.id, i)
 		if err != nil {
 			return err
 		}
@@ -282,13 +284,29 @@ func ensureCustomer(ctx context.Context, client orchestratorv1connect.Orchestrat
 }
 
 // ensureOrgBinding creates the org-customer binding required by the auth
-// interceptor for every customer-scoped request (ADR-006). CreateBinding is
-// exempt from the binding check itself; an already-active binding surfaces as
-// CodeAlreadyExists and is ignored (re-seeding is idempotent).
+// interceptor for every customer-scoped request (ADR-006). The binding is
+// probed via ListBindings first (platform_admin carries domain-wide rules) so
+// that environments with pre-provisioned bindings (e.g. dev-up seeding) skip
+// the CreateBinding call — the CreateBinding customer-validation seam is not
+// wired yet (auth binds StubResolver until an orchestrator resolver is
+// configured), so a missing binding surfaces as a clear fail-closed error
+// instead of a bootstrap attempt that cannot succeed.
 func ensureOrgBinding(ctx context.Context, client authv1connect.BindingServiceClient, adminToken, orgID, customerID string) error {
+	listReq := connect.NewRequest(&authv1.ListBindingsRequest{OrgId: orgID})
+	withAuth(listReq, adminToken)
+	list, err := client.ListBindings(ctx, listReq)
+	if err != nil {
+		return fmt.Errorf("list bindings org %s: %w", orgID, err)
+	}
+	for _, binding := range list.Msg.GetBindings() {
+		if binding.GetCustomerId() == customerID && binding.GetStatus() == "active" {
+			fmt.Printf("org %s already bound to customer %s\n", orgID, customerID)
+			return nil
+		}
+	}
 	req := connect.NewRequest(&authv1.CreateBindingRequest{OrgId: orgID, CustomerId: customerID})
 	withAuth(req, adminToken)
-	_, err := client.CreateBinding(ctx, req)
+	_, err = client.CreateBinding(ctx, req)
 	if err == nil {
 		fmt.Printf("org %s bound to customer %s\n", orgID, customerID)
 		return nil
@@ -362,8 +380,9 @@ func ensureEnrollmentToken(ctx context.Context, client enrollmentTokenCreator, t
 		return nil
 	}
 	req := connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
-		CustomerId: customerID,
-		ClusterId:  clusterID,
+		CustomerId:   customerID,
+		ClusterId:    clusterID,
+		OperatorName: "operator-" + clusterID,
 	})
 	withAuth(req, token)
 	response, err := client.CreateEnrollmentToken(ctx, req)
@@ -393,7 +412,7 @@ func ensureRoute(ctx context.Context, client orchestratorv1connect.OrchestratorS
 	return nil
 }
 
-func ensureDefinition(ctx context.Context, client orchestratorv1connect.OrchestratorServiceClient, token, customerID, clusterID string, index int) (string, error) {
+func ensureDefinition(ctx context.Context, client orchestratorv1connect.OrchestratorServiceClient, token, actorUser, ownerOrgID, customerID, clusterID string, index int) (string, error) {
 	listReq := connect.NewRequest(&orchestratorv1.ListReleaseDefinitionsRequest{CustomerId: customerID, ClusterId: clusterID, IncludeDisabled: true})
 	withAuth(listReq, token)
 	list, err := client.ListReleaseDefinitions(ctx, listReq)
@@ -410,6 +429,9 @@ func ensureDefinition(ctx context.Context, client orchestratorv1connect.Orchestr
 	createReq := connect.NewRequest(&orchestratorv1.CreateReleaseDefinitionRequest{
 		CustomerId: customerID, ClusterId: clusterID, Namespace: developmentNamespace,
 		ReleaseName: name, ChartName: "release-manager", Enabled: true,
+		// The creating actor's organization becomes the definition owner
+		// (REQ-040); values approval gates on it (REQ-068).
+		Actor: &commonv1.ActorContext{UserId: actorUser, Organization: ownerOrgID},
 	})
 	withAuth(createReq, token)
 	response, err := client.CreateReleaseDefinition(ctx, createReq)
@@ -470,13 +492,14 @@ func ensureValuesRevision(ctx context.Context, client orchestratorv1connect.Orch
 		pending = created.Msg.GetRevision()
 		fmt.Printf("values revision %s created\n", pending.GetId())
 	}
-
 	if pending.GetStatus() == commonv1.ValuesStatus_VALUES_STATUS_DRAFT {
 		submitReq := connect.NewRequest(&orchestratorv1.SubmitValuesRevisionRequest{
 			RevisionId: pending.GetId(), ExpectedStateVersion: pending.GetStateVersion(), Comment: "seeded by devseed",
 		})
 		withAuth(submitReq, deployerToken)
-		submitted, err := client.SubmitValuesRevision(ctx, submitReq)
+		submitted, err := retrySnapshotWarmup(ctx, func() (*connect.Response[orchestratorv1.ValuesRevisionDecisionResponse], error) {
+			return client.SubmitValuesRevision(ctx, submitReq)
+		})
 		if err != nil {
 			return fmt.Errorf("submit values revision %s: %w", pending.GetId(), err)
 		}
@@ -488,11 +511,37 @@ func ensureValuesRevision(ctx context.Context, client orchestratorv1connect.Orch
 		RevisionId: pending.GetId(), ExpectedStateVersion: pending.GetStateVersion(), Comment: "seeded by devseed",
 	})
 	withAuth(approveReq, adminToken)
-	if _, err := client.ApproveValuesRevision(ctx, approveReq); err != nil {
+	approved, err := retrySnapshotWarmup(ctx, func() (*connect.Response[orchestratorv1.ValuesRevisionDecisionResponse], error) {
+		return client.ApproveValuesRevision(ctx, approveReq)
+	})
+	if err != nil {
 		return fmt.Errorf("approve values revision %s: %w", pending.GetId(), err)
 	}
+	pending = approved.Msg.GetRevision()
 	fmt.Printf("values revision %s approved\n", pending.GetId())
 	return nil
+}
+
+// retrySnapshotWarmup retries a governance write once after a short backoff
+// when the authorization snapshot is still warming up. REQ-027 deliberately
+// fails the first governance write for a scope (consumer checkpoint 0 ->
+// stale, caught up by the 1s background pull); a seed client re-driving the
+// same idempotent decision after the warmup window is safe and expected.
+func retrySnapshotWarmup[T any](ctx context.Context, call func() (*connect.Response[T], error)) (*connect.Response[T], error) {
+	response, err := call()
+	if err == nil {
+		return response, nil
+	}
+	if connect.CodeOf(err) != connect.CodeUnavailable ||
+		!strings.Contains(err.Error(), "authorization snapshot stale") {
+		return nil, err
+	}
+	select {
+	case <-time.After(2 * time.Second):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return call()
 }
 
 func ensureReleaseBundle(ctx context.Context, client webhookv1connect.WebhookServiceClient) error {

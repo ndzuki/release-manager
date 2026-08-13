@@ -95,6 +95,15 @@ type fakeBindingHandler struct {
 	createCalls int
 	authHeader  string
 	createErr   error
+	bindings    []*authv1.OrgCustomerBinding
+	listErr     error
+}
+
+func (h *fakeBindingHandler) ListBindings(_ context.Context, _ *connect.Request[authv1.ListBindingsRequest]) (*connect.Response[authv1.ListBindingsResponse], error) {
+	if h.listErr != nil {
+		return nil, h.listErr
+	}
+	return connect.NewResponse(&authv1.ListBindingsResponse{Bindings: h.bindings}), nil
 }
 
 func (h *fakeBindingHandler) CreateBinding(_ context.Context, req *connect.Request[authv1.CreateBindingRequest]) (*connect.Response[authv1.CreateBindingResponse], error) {
@@ -251,7 +260,7 @@ func TestEnsureAuth_SkipsCreateLocalUserWhenDeployerExists(t *testing.T) {
 	assert.Equal(t, 2, fake.loginCallCount)
 	assert.Equal(t, 0, fake.createLocalUserCalls, "existing deployer account must not be re-provisioned")
 }
-func TestEnsureOrgBinding_CreatesAndIgnoresDuplicate(t *testing.T) {
+func TestEnsureOrgBinding_CreatesWhenMissing(t *testing.T) {
 	fake := &fakeBindingHandler{}
 	server := newTestBindingServer(t, fake)
 	client := authv1connect.NewBindingServiceClient(http.DefaultClient, server.URL)
@@ -265,16 +274,26 @@ func TestEnsureOrgBinding_CreatesAndIgnoresDuplicate(t *testing.T) {
 	assert.Equal(t, 2, fake.createCalls, "re-seeding must tolerate an existing active binding")
 }
 
+func TestEnsureOrgBinding_SkipsCreateWhenActiveBindingExists(t *testing.T) {
+	fake := &fakeBindingHandler{bindings: []*authv1.OrgCustomerBinding{{
+		Id: "binding-1", OrgId: "org-1", CustomerId: "customer-1", Status: "active",
+	}}}
+	server := newTestBindingServer(t, fake)
+	client := authv1connect.NewBindingServiceClient(http.DefaultClient, server.URL)
+
+	require.NoError(t, ensureOrgBinding(context.Background(), client, "token-admin", "org-1", "customer-1"))
+	assert.Equal(t, 0, fake.createCalls, "an active pre-provisioned binding must skip CreateBinding")
+}
+
 func TestEnsureOrgBinding_ErrorPropagates(t *testing.T) {
-	fake := &fakeBindingHandler{createErr: connect.NewError(connect.CodePermissionDenied, errors.New("requires role platform_admin"))}
+	fake := &fakeBindingHandler{listErr: connect.NewError(connect.CodePermissionDenied, errors.New("requires role platform_admin"))}
 	server := newTestBindingServer(t, fake)
 	client := authv1connect.NewBindingServiceClient(http.DefaultClient, server.URL)
 
 	err := ensureOrgBinding(context.Background(), client, "token-admin", "org-1", "customer-1")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "create binding")
+	assert.ErrorContains(t, err, "list bindings")
 }
-
 func TestEnsureValuesRevision_CreatesSubmitsApproves(t *testing.T) {
 	fake := &fakeOrchestratorHandler{}
 	server := newTestOrchestratorServer(t, fake)
@@ -340,4 +359,28 @@ func TestWithAuth_SetsBearerHeader(t *testing.T) {
 	req := connect.NewRequest(&orchestratorv1.GetCustomerRequest{CustomerId: "c"})
 	withAuth(req, "token-abc")
 	assert.Equal(t, "Bearer token-abc", req.Header().Get("Authorization"))
+}
+
+func TestRetrySnapshotWarmup_RetriesOnceOnStale(t *testing.T) {
+	calls := 0
+	response, err := retrySnapshotWarmup(context.Background(), func() (*connect.Response[orchestratorv1.GetCustomerResponse], error) {
+		calls++
+		if calls == 1 {
+			return nil, connect.NewError(connect.CodeUnavailable, errors.New("authorization snapshot stale"))
+		}
+		return connect.NewResponse(&orchestratorv1.GetCustomerResponse{}), nil
+	})
+	require.NoError(t, err)
+	assert.NotNil(t, response)
+	assert.Equal(t, 2, calls, "stale snapshot must be retried exactly once")
+}
+
+func TestRetrySnapshotWarmup_DoesNotRetryOtherErrors(t *testing.T) {
+	calls := 0
+	_, err := retrySnapshotWarmup(context.Background(), func() (*connect.Response[orchestratorv1.GetCustomerResponse], error) {
+		calls++
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("permission_denied"))
+	})
+	require.Error(t, err)
+	assert.Equal(t, 1, calls, "non-stale errors must not be retried")
 }
