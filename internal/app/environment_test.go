@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,7 @@ import (
 func getEnvironment(t *testing.T, service string) (environmentResponse, *httptest.ResponseRecorder) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/environment", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/environment", http.NoBody)
 	environmentHandler(service)(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	var resp environmentResponse

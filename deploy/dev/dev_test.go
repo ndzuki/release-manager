@@ -5,6 +5,7 @@
 package devtest
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -37,13 +38,13 @@ func repoRoot(t *testing.T) string {
 
 // fakeEnv builds an environment that points the lifecycle module at fake
 // CLI shims and an isolated data dir.
-func fakeEnv(t *testing.T, stateDir string) ([]string, string) {
+func fakeEnv(t *testing.T, stateDir string) (env []string, binDir string) {
 	t.Helper()
-	binDir := filepath.Join(stateDir, "bin")
+	binDir = filepath.Join(stateDir, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	env := append(os.Environ(),
+	env = append(os.Environ(),
 		"DEV_DATA_DIR="+stateDir,
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
@@ -63,7 +64,9 @@ func writeShim(t *testing.T, dir, name, body string) {
 func runDev(t *testing.T, env []string, args ...string) (string, error) {
 	t.Helper()
 	root := repoRoot(t)
-	cmd := exec.Command(filepath.Join(root, "deploy/dev/dev.sh"), args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, filepath.Join(root, "deploy", "dev", "dev.sh"), args...)
 	cmd.Dir = root
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
@@ -90,16 +93,20 @@ func TestLockConflictReportsHolder(t *testing.T) {
 	writeShim(t, binDir, "docker", "#!/usr/bin/env bash\nexit 0\n")
 	// (down is a no-op on an empty manifest and would release the lock
 	// before the second process starts).
-	hold := exec.Command("bash", "-c", fmt.Sprintf(
+	holdCtx, holdCancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer holdCancel()
+	hold := exec.CommandContext(holdCtx, "bash", "-c", fmt.Sprintf(
 		"source %q; acquire_lock down; sleep 30",
-		filepath.Join(repoRoot(t), "deploy/dev/lib/lock.sh")))
+		filepath.Join(repoRoot(t), "deploy", "dev", "lib", "lock.sh")))
 	hold.Env = env
 	if err := hold.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		_ = hold.Process.Kill()
-		_, _ = hold.Process.Wait()
+		//nolint:errcheck // test teardown: process may already be gone
+		hold.Process.Kill()
+		//nolint:errcheck // test teardown
+		hold.Process.Wait()
 	}()
 
 	// The flock is held only after the holder wrote its stage record; the
@@ -250,7 +257,7 @@ func TestCiProfileRequiresE2ERunID(t *testing.T) {
 // Docker or k3d on the host.
 func fakeK3d(t *testing.T, binDir, stateDir string) {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), "deploy/dev/testdata/fake-k3d.sh"))
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "deploy", "dev", "testdata", "fake-k3d.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}

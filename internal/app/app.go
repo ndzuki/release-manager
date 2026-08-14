@@ -106,7 +106,8 @@ func environmentHandler(service string) http.HandlerFunc {
 		production := os.Getenv("APP_PRODUCTION") == "true"
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(environmentResponse{
+		//nolint:errcheck // response encoding failure after headers are sent is not actionable
+		json.NewEncoder(w).Encode(environmentResponse{
 			Service:       service,
 			Environment:   environment,
 			EnvironmentID: envID,
