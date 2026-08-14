@@ -9,6 +9,5 @@ FROM gcr.io/distroless/static-debian13:nonroot
 USER nonroot:nonroot
 WORKDIR /data
 COPY --from=builder /out/release-orchestrator /release-orchestrator
-COPY configs/orchestrator.dev.yaml /configs/orchestrator.dev.yaml
 EXPOSE 8083
 ENTRYPOINT ["/release-orchestrator", "--config", "/configs/orchestrator.dev.yaml", "--db", "/data/release-manager.db"]

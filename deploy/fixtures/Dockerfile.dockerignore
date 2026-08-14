@@ -1,0 +1,12 @@
+# Fixture image build context (REQ-065): only go.mod/go.sum and the
+# deploy/fixtures sources are needed; exclude everything else.
+*
+!go.mod
+!go.sum
+!deploy/
+!deploy/fixtures/
+!deploy/fixtures/cmd/
+!deploy/fixtures/cmd/server/
+!deploy/fixtures/cmd/server/**
+!deploy/fixtures/static/
+!deploy/fixtures/static/**

@@ -1,0 +1,5 @@
+replicaCount: 1
+
+image:
+  repository: localhost:5001/release-fixture
+  tag: dev

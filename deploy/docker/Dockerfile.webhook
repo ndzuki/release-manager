@@ -9,6 +9,5 @@ FROM gcr.io/distroless/static-debian13:nonroot
 USER nonroot:nonroot
 WORKDIR /data
 COPY --from=builder /out/release-webhook /release-webhook
-COPY configs/webhook.dev.yaml /configs/webhook.dev.yaml
 EXPOSE 8082
 ENTRYPOINT ["/release-webhook", "--config", "/configs/webhook.dev.yaml", "--db", "/data/webhook.db"]

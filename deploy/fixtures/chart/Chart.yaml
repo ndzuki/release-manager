@@ -1,0 +1,6 @@
+apiVersion: v2
+name: release-fixture
+description: Release Manager development fixture workload (static file server with health and version endpoints).
+type: application
+version: 0.1.0
+appVersion: "v2"

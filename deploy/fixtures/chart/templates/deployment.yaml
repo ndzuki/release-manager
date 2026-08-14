@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-fixture
+  labels:
+    app.kubernetes.io/name: release-fixture
+    app.kubernetes.io/part-of: release-manager
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: release-fixture
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: release-fixture
+        app.kubernetes.io/part-of: release-manager
+    spec:
+      securityContext:
+        fsGroup: 65532
+      containers:
+        - name: release-fixture
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8088
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
