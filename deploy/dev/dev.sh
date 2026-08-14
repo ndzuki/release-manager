@@ -49,7 +49,58 @@ log() {
 cleanup_trap() {
   local rc=$?
   release_lock
+  # CI profile (REQ-065): dev-up exit auto-tries to clean managed resources
+  # so a CI job never leaks clusters/registry. Cleanup runs in a subshell and
+  # never overrides the primary exit code; on failure it prints
+  # `dev_purge_failed` plus a JSON-lines residual manifest for the CI
+  # post-step to act on.
+  if [ "${DEV_PROFILE:-local}" = "ci" ] && [ -n "${E2E_RUN_ID:-}" ]; then
+    (
+      set +e
+      if ! ci_auto_purge >/dev/null 2>&1; then
+        ci_residual_manifest >&2
+        printf 'dev_purge_failed: automatic cleanup of managed resources failed; run make dev-purge CONFIRM=1\n' >&2
+      fi
+    )
+  fi
   exit "$rc"
+}
+
+# ci_auto_purge — delete every resource in the ownership whitelist.
+ci_auto_purge() {
+  local manifest name
+  manifest="$(ownership_read)"
+  printf '%s' "$manifest" | sed -nE 's/.*"docker_containers"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
+    [ -n "$name" ] || continue
+    docker rm -f "$name" >/dev/null 2>&1 || true
+  done
+  printf '%s' "$manifest" | sed -nE 's/.*"docker_networks"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
+    [ -n "$name" ] || continue
+    docker network rm "$name" >/dev/null 2>&1 || true
+  done
+  printf '%s' "$manifest" | sed -nE 's/.*"k3d_clusters"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
+    [ -n "$name" ] || continue
+    k3d cluster delete "$name" >/dev/null 2>&1 || true
+  done
+}
+
+# ci_residual_manifest — JSON-lines residual list of resources that still
+# exist after an attempted cleanup (REQ-065 ci profile contract).
+ci_residual_manifest() {
+  local manifest name
+  manifest="$(ownership_read)"
+  printf '%s' "$manifest" | sed -nE 's/.*"docker_containers"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
+    [ -n "$name" ] || continue
+    if docker container inspect "$name" >/dev/null 2>&1; then
+      printf '{"resource_type":"docker_container","name":"%s"}\n' "$name"
+    fi
+  done
+  printf '%s' "$manifest" | sed -nE 's/.*"k3d_clusters"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
+    [ -n "$name" ] || continue
+    if k3d cluster list 2>/dev/null | grep -qw "$name"; then
+      printf '{"resource_type":"k3d_cluster","name":"%s"}\n' "$name"
+    fi
+  done
 }
 
 # wait_for_endpoint <url> <seconds> — poll an HTTP endpoint until 200.
@@ -279,8 +330,14 @@ readiness() {
 # ---------------------------------------------------------------------------
 seed() {
   log "[7/7] seed data .......................... "
-  if ! go run ./cmd/devseed/ --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085; then
-    fail "$ERR_SEED_WRITE_FAILED" "devseed failed; see stderr for the failing phase"
+  local seed_output
+  if ! seed_output="$(go run ./cmd/devseed/ --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085 2>&1)"; then
+    # AC-065-18: an operator session that never reached online reports its
+    # own error code with the faulting cluster name (devfixture verify).
+    if printf '%s' "$seed_output" | grep -q "operator_not_online"; then
+      fail "$ERR_OPERATOR_NOT_ONLINE" "$seed_output"
+    fi
+    fail "$ERR_SEED_WRITE_FAILED" "devseed failed: $seed_output"
   fi
   log "  seed data .......................... DONE"
 }
@@ -426,7 +483,7 @@ cmd_reset_data() {
   for db in release_manager release_notifier; do
     dump_file="$DEV_DATA_DIR/backups/dump-$ts-$db.sql"
     if ! PGPASSWORD=dev-release-manager pg_dump -Fc -h 127.0.0.1 -p 5432 -U release_manager -d "$db" -f "$dump_file" >/dev/null 2>&1; then
-      fail "$ERR_DOCKER_UNAVAILABLE" "pg_dump failed for $db (backup $dump_file); environment untouched"
+      fail "$ERR_SERVICE_UNHEALTHY" "pg_dump failed for $db (backup $dump_file); environment untouched"
     fi
     dump_files+=("$dump_file")
     log "  dumped $db -> $dump_file"
@@ -485,17 +542,17 @@ cmd_purge() {
   manifest="$(ownership_read)"
   local name
   # Containers and networks from the whitelist, registry included.
-  printf '%s' "$manifest" | sed -nE 's/.*"docker_containers"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while read -r name; do
+  printf '%s' "$manifest" | sed -nE 's/.*"docker_containers"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
     [ -n "$name" ] || continue
     docker rm -f "$name" >/dev/null 2>&1 || true
     log "  removed container $name"
   done
-  printf '%s' "$manifest" | sed -nE 's/.*"docker_networks"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while read -r name; do
+  printf '%s' "$manifest" | sed -nE 's/.*"docker_networks"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
     [ -n "$name" ] || continue
     docker network rm "$name" >/dev/null 2>&1 || true
     log "  removed network $name"
   done
-  printf '%s' "$manifest" | sed -nE 's/.*"k3d_clusters"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while read -r name; do
+  printf '%s' "$manifest" | sed -nE 's/.*"k3d_clusters"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
     [ -n "$name" ] || continue
     k3d cluster delete "$name" >/dev/null 2>&1 || true
     log "  removed cluster $name"

@@ -153,7 +153,12 @@ func (r *runner) verifyBundle(ctx context.Context) error {
 	return nil
 }
 
-func (r *runner) verifyEnrollment(_ context.Context) error {
+// verifyEnrollment verifies the enrollment side of the fixture: the token
+// file exists (canonical local artifact) and every seed cluster has an
+// operator agent whose session reached ONLINE (AC-065-01/18). A missing or
+// non-online session reports the failing cluster name so dev-up surfaces
+// `operator_not_online` with the faulting cluster.
+func (r *runner) verifyEnrollment(ctx context.Context) error {
 	for _, seed := range clusterSeeds {
 		info, err := os.Stat(r.enrollmentTokenPath(seed.id))
 		if err != nil {
@@ -162,8 +167,36 @@ func (r *runner) verifyEnrollment(_ context.Context) error {
 		if info.Size() == 0 {
 			return fmt.Errorf("verify: enrollment token for %s is empty", seed.id)
 		}
+		if err := r.requireClusterOperatorOnline(ctx, seed); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// requireClusterOperatorOnline lists operators for the cluster and fails
+// unless at least one has an ONLINE session (AC-065-18).
+func (r *runner) requireClusterOperatorOnline(ctx context.Context, seed clusterSeed) error {
+	listReq := connect.NewRequest(&orchestratorv1.ListOperatorsRequest{
+		ClusterId: seed.id,
+		PageSize:  100,
+	})
+	withAuth(listReq, r.state.deployerToken)
+	response, err := r.clients.orch.ListOperators(ctx, listReq)
+	if err != nil {
+		return fmt.Errorf("operator_not_online: list operators for cluster %s: %w", seed.id, err)
+	}
+	for _, operator := range response.Msg.GetOperators() {
+		if operator.GetSessionStatus() == orchestratorv1.OperatorSessionStatus_OPERATOR_SESSION_STATUS_ONLINE {
+			return nil
+		}
+	}
+	statuses := make([]string, 0, len(response.Msg.GetOperators()))
+	for _, operator := range response.Msg.GetOperators() {
+		statuses = append(statuses, operator.GetSessionStatus().String())
+	}
+	return fmt.Errorf("operator_not_online: no online operator session for cluster %s (sessions: %v)",
+		seed.id, statuses)
 }
 
 func (r *runner) verifyOperations(ctx context.Context) error {

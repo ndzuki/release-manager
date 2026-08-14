@@ -390,3 +390,32 @@ func TestRetrySnapshotWarmup_DoesNotRetryOtherErrors(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, 1, calls)
 }
+
+// TestVerifyEnrollment_RequiresOnlineOperatorSessions covers AC-065-18: the
+// verify phase fails with `operator_not_online` naming the faulting cluster
+// when an operator session has not reached ONLINE, and passes when every
+// cluster has an online session.
+func TestVerifyEnrollment_RequiresOnlineOperatorSessions(t *testing.T) {
+	fakes := newFakeServices()
+	r := testRunner(t, fakes)
+	_, err := r.run(context.Background())
+	require.NoError(t, err) // default fake sessions are ONLINE
+
+	// Take one cluster's session offline: verify must now fail naming it.
+	fakes.orch.mu.Lock()
+	fakes.orch.operators[clusterSeeds[0].id] = orchestratorv1.OperatorSessionStatus_OPERATOR_SESSION_STATUS_OFFLINE
+	fakes.orch.mu.Unlock()
+
+	err = r.phaseVerify(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "operator_not_online")
+	require.Contains(t, err.Error(), clusterSeeds[0].id)
+	require.Contains(t, err.Error(), "OFFLINE")
+
+	// Restore ONLINE: verify passes again.
+	fakes.orch.mu.Lock()
+	fakes.orch.operators[clusterSeeds[0].id] = orchestratorv1.OperatorSessionStatus_OPERATOR_SESSION_STATUS_ONLINE
+	fakes.orch.mu.Unlock()
+	err = r.phaseVerify(context.Background())
+	require.NoError(t, err)
+}

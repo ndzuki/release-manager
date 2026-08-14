@@ -184,6 +184,9 @@ type fakeOrchestrator struct {
 	values      map[string]*commonv1.ValuesRevision
 	tokens      map[string]string // cluster id → token
 	operations  map[string]*fakeOperation
+	// operators tracks the per-cluster operator session status used by
+	// ListOperators (AC-065-18); zero value maps to ONLINE by default.
+	operators map[string]orchestratorv1.OperatorSessionStatus
 
 	counters map[string]int
 	// opKeyTerminal overrides the terminal state for operations created
@@ -202,6 +205,7 @@ func newFakeOrchestrator() *fakeOrchestrator {
 		values:        map[string]*commonv1.ValuesRevision{},
 		tokens:        map[string]string{},
 		operations:    map[string]*fakeOperation{},
+		operators:     map[string]orchestratorv1.OperatorSessionStatus{},
 		counters:      map[string]int{},
 		opKeyTerminal: map[string]orchestratorv1.OperationStatus{},
 	}
@@ -393,6 +397,24 @@ func (f *fakeOrchestrator) CreateEnrollmentToken(_ context.Context, req *connect
 	f.tokens[req.Msg.GetClusterId()] = token
 	return connect.NewResponse(&orchestratorv1.CreateEnrollmentTokenResponse{
 		Token: token, CustomerId: req.Msg.GetCustomerId(), ClusterId: req.Msg.GetClusterId(),
+	}), nil
+}
+
+func (f *fakeOrchestrator) ListOperators(_ context.Context, req *connect.Request[orchestratorv1.ListOperatorsRequest]) (*connect.Response[orchestratorv1.ListOperatorsResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bump("ListOperators")
+	status, ok := f.operators[req.Msg.GetClusterId()]
+	if !ok {
+		status = orchestratorv1.OperatorSessionStatus_OPERATOR_SESSION_STATUS_ONLINE
+	}
+	return connect.NewResponse(&orchestratorv1.ListOperatorsResponse{
+		Operators: []*orchestratorv1.OperatorSummary{{
+			Id:            "op-" + req.Msg.GetClusterId(),
+			ClusterId:     req.Msg.GetClusterId(),
+			SessionStatus: status,
+		}},
+		TotalCount: 1,
 	}), nil
 }
 

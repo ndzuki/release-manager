@@ -48,9 +48,13 @@ case "$1" in
         shift 2
         name=""
         while [ "$#" -gt 0 ]; do
-          if [ "$1" = "--name" ]; then name="$2"; fi
+          if [ "$1" = "--name" ]; then name="$2"; shift 2; continue; fi
+          # Real k3d accepts the cluster name positionally: `k3d cluster
+          # delete <name>`. Fall back to the positional arg when no --name.
+          if [ -z "$name" ] && [ "$1" != "--" ]; then name="$1"; fi
           shift
         done
+        [ -n "$name" ] || exit 0
         [ -f "$STATE/clusters.txt" ] || exit 0
         grep -v "^${name}$" "$STATE/clusters.txt" > "$STATE/clusters.tmp" || true
         mv "$STATE/clusters.tmp" "$STATE/clusters.txt"

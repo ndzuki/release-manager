@@ -55,6 +55,8 @@ type OrchestratorClient interface {
 	ApproveValuesRevision(context.Context, *connect.Request[orchestratorv1.ApproveValuesRevisionRequest]) (*connect.Response[orchestratorv1.ValuesRevisionDecisionResponse], error)
 	// enrollment
 	CreateEnrollmentToken(context.Context, *connect.Request[orchestratorv1.CreateEnrollmentTokenRequest]) (*connect.Response[orchestratorv1.CreateEnrollmentTokenResponse], error)
+	// operator session online check (AC-065-18)
+	ListOperators(context.Context, *connect.Request[orchestratorv1.ListOperatorsRequest]) (*connect.Response[orchestratorv1.ListOperatorsResponse], error)
 	// install
 	CreateOperation(context.Context, *connect.Request[orchestratorv1.CreateOperationRequest]) (*connect.Response[orchestratorv1.CreateOperationResponse], error)
 	GetOperation(context.Context, *connect.Request[orchestratorv1.GetOperationRequest]) (*connect.Response[orchestratorv1.GetOperationResponse], error)

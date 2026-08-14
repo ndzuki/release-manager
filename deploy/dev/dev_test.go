@@ -431,3 +431,26 @@ func TestResetFailsWithoutRunningEnvironment(t *testing.T) {
 		t.Fatalf("expected service_unhealthy:\n%s", out)
 	}
 }
+
+// TestCiProfileAutoPurgesOnExit covers the REQ-065 ci profile contract:
+// dev-up exit with DEV_PROFILE=ci + E2E_RUN_ID set automatically deletes the
+// managed clusters and registry (tear-down without an explicit dev-purge).
+func TestCiProfileAutoPurgesOnExit(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	env = append(env, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-001")
+
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("ci dev-up failed:\n%s", out)
+	}
+	// After the up trap, every cluster in the ownership manifest must have
+	// been deleted: the fake-k3d clusters.txt file reflects current clusters.
+	clustersPath := filepath.Join(stateDir, "clusters.txt")
+	data, err := os.ReadFile(clustersPath)
+	if err == nil && strings.TrimSpace(string(data)) != "" {
+		t.Fatalf("expected all clusters purged after ci dev-up, remaining:\n%s", data)
+	}
+}
+
