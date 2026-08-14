@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   sdk-check:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v7
 
@@ -29,7 +29,7 @@ jobs:
         run: go run ./cmd/sdkcheck/ -exceptions sdkcheck.exceptions.yaml ./...
 
   install-sdk:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -46,7 +46,7 @@ jobs:
         run: make test-install-sdk
 
   operator-image-sdk-only:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -60,7 +60,7 @@ jobs:
         run: make test-operator-image-sdk-only
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v7
         with:
@@ -130,7 +130,7 @@ jobs:
           args: --new-from-rev=${{ github.event.pull_request.base.sha || github.event.before }}
 
   test-sqlite:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v7
         with:
@@ -166,7 +166,7 @@ jobs:
         run: go test -race -coverprofile=coverage.out ./internal/store/sqlite/...
 
   test-sdkcheck:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v7
         with:
@@ -201,7 +201,7 @@ jobs:
         run: go test -race -coverprofile=coverage.out ./internal/quality/sdkcheck/...
 
   rollout-watch:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
