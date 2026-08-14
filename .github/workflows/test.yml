@@ -14,6 +14,18 @@ concurrency:
   group: ci-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+#
+# Runner selection fallback (private-repo Actions billing block):
+#   jobs run on `${{ vars.RUNS_ON || 'ubuntu-latest' }}`.
+#   GitHub-hosted minutes for private repos are limited (2000/month);
+#   when jobs start failing instantly with "recent account payments have
+#   failed or your spending limit needs to be increased", switch to the
+#   local self-hosted runner (arch-dev-1, systemd user service
+#   actions-runner-release-manager):
+#     gh variable set RUNS_ON self-hosted --repo ndzuki/release-manager
+#   and back when billing is restored:
+#     gh variable delete RUNS_ON --repo ndzuki/release-manager
+#
 jobs:
   sdk-check:
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
