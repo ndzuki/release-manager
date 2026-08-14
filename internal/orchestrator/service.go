@@ -426,6 +426,7 @@ func (s *Service) CreateOperation(
 		} else {
 			op.Status = updated.Status
 			op.StateVersion = updated.StateVersion
+			//nolint:contextcheck // preflight must outlive the request context; Runner.Start detaches deliberately (AC-019-03).
 			s.startPreflight(op)
 			s.logger.Info("preflight coordinator launched", "op_id", op.ID)
 		}
@@ -1275,6 +1276,7 @@ func (s *Service) ResumePreflights(ctx context.Context) (int, error) {
 	started := 0
 	for _, op := range ops {
 		if op.Status == store.StatusPreflight {
+			//nolint:contextcheck // resumed runs use the runner's detached background context.
 			s.startPreflight(op)
 			started++
 		}

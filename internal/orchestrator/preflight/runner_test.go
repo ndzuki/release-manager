@@ -15,7 +15,7 @@ import (
 // fakeRun blocks until ctx is cancelled, then records the operation it ran.
 // Channel-driven so tests never sleep on real timeouts (Step 5 prototype gate:
 // cancel/complete/shutdown races are exercised deterministically under -race).
-func fakeRun(blocked chan<- string, done chan<- string) func(context.Context, *store.Operation) {
+func fakeRun(blocked, done chan<- string) func(context.Context, *store.Operation) {
 	return func(ctx context.Context, op *store.Operation) {
 		blocked <- op.ID
 		<-ctx.Done()

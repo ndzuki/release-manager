@@ -897,7 +897,8 @@ func TestMigrateLegacyPreflightLifecycleSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.db")
 	raw, err := sql.Open("sqlite", path)
 	require.NoError(t, err)
-	_, err = raw.Exec(`CREATE TABLE preflight_lifecycles (
+	ctx := context.Background()
+	_, err = raw.ExecContext(ctx, `CREATE TABLE preflight_lifecycles (
 		id                    TEXT PRIMARY KEY,
 		operation_id          TEXT,
 		operation_terminal_at TEXT,
@@ -907,9 +908,9 @@ func TestMigrateLegacyPreflightLifecycleSchema(t *testing.T) {
 		created_at            TEXT NOT NULL
 	)`)
 	require.NoError(t, err)
-	_, err = raw.Exec(`CREATE INDEX idx_preflight_lifecycles_operation ON preflight_lifecycles(operation_id)`)
+	_, err = raw.ExecContext(ctx, `CREATE INDEX idx_preflight_lifecycles_operation ON preflight_lifecycles(operation_id)`)
 	require.NoError(t, err)
-	_, err = raw.Exec(`CREATE INDEX idx_preflight_lifecycles_terminal ON preflight_lifecycles(operation_terminal_at)`)
+	_, err = raw.ExecContext(ctx, `CREATE INDEX idx_preflight_lifecycles_terminal ON preflight_lifecycles(operation_terminal_at)`)
 	require.NoError(t, err)
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -928,7 +929,7 @@ func TestMigrateLegacyPreflightLifecycleSchema(t *testing.T) {
 		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at) VALUES ('expl-1', NULL, NULL, '[]', 'passed', '', '` + late + `')`,
 	}
 	for _, stmt := range seed {
-		_, err = raw.Exec(stmt)
+		_, err = raw.ExecContext(ctx, stmt)
 		require.NoError(t, err)
 	}
 	require.NoError(t, raw.Close())
@@ -937,7 +938,6 @@ func TestMigrateLegacyPreflightLifecycleSchema(t *testing.T) {
 	st, err := sqlitestore.Open(path)
 	require.NoError(t, err)
 	defer st.Close()
-	ctx := context.Background()
 
 	var count int
 	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM preflight_lifecycles WHERE operation_id = 'op-dup'`).Scan(&count))
@@ -962,6 +962,7 @@ func TestMigrateLegacyPreflightLifecycleSchema(t *testing.T) {
 	// New shape: updated_at present, error_code gone, operation_id unique.
 	rows, err := st.DB().QueryContext(ctx, `PRAGMA table_info(preflight_lifecycles)`)
 	require.NoError(t, err)
+	defer rows.Close()
 	cols := map[string]bool{}
 	for rows.Next() {
 		var pos, notNull, pk int
@@ -970,7 +971,7 @@ func TestMigrateLegacyPreflightLifecycleSchema(t *testing.T) {
 		require.NoError(t, rows.Scan(&pos, &name, &colType, &notNull, &def, &pk))
 		cols[name] = true
 	}
-	require.NoError(t, rows.Close())
+	require.NoError(t, rows.Err())
 	assert.True(t, cols["updated_at"], "updated_at column must exist")
 	assert.False(t, cols["error_code"], "error_code column must be removed")
 

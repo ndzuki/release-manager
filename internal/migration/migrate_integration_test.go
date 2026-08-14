@@ -167,7 +167,8 @@ func createMigrationSource(ctx context.Context, t *testing.T) string {
 	require.NoError(t, st.CandidateArtifacts().Create(ctx, &store.CandidateArtifact{
 		ID: "candidate-migrate", ArtifactType: store.ArtifactImage, Ref: "registry/app:v1", Digest: "sha256:candidate", BundleID: &bundleID,
 	}))
-	require.NoError(t, st.PreflightLifecycles().CreateOrReset(ctx, "operation-migrate"))
+	_, lifecycleErr := st.PreflightLifecycles().CreateOrReset(ctx, "operation-migrate")
+	require.NoError(t, lifecycleErr)
 	require.NoError(t, st.PreflightLifecycles().UpdateResult(ctx, "operation-migrate", "passed", "verify"))
 
 	require.NoError(t, st.Users().Create(ctx, &store.User{ID: "user-migrate", Username: "migration-user", PasswordHash: "hash"}))

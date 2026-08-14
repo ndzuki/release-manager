@@ -34,7 +34,7 @@ func TestErrorCodeFromStatus(t *testing.T) {
 
 // seedPreflightFixture creates a definition with an active operator so stage
 // commands can be dispatched and driven to results.
-func seedPreflightFixture(t *testing.T, st *sqlitestore.Store) (*store.Operation, *store.ReleaseDefinition) {
+func seedPreflightFixture(t *testing.T, st *sqlitestore.Store) *store.Operation {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -58,7 +58,7 @@ func seedPreflightFixture(t *testing.T, st *sqlitestore.Store) (*store.Operation
 		BundleID: "bundle-preflight", StateVersion: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	require.NoError(t, st.Operations().Create(ctx, operation))
-	return operation, def
+	return operation
 }
 
 // newTestCoordinator returns a coordinator with a fast poll interval so stage
@@ -88,7 +88,7 @@ func waitForCommand(t *testing.T, st *sqlitestore.Store, commandID string) *stor
 // is consumed, not duplicated, and restarts stay idempotent on the identity.
 func TestCoordinatorRun_ConsumesPreCreatedArtifactDispatch(t *testing.T) {
 	st := sqlitestore.OpenTest(t)
-	op, _ := seedPreflightFixture(t, st)
+	op := seedPreflightFixture(t, st)
 	c := newTestCoordinator(t, st)
 	ctx := context.Background()
 
@@ -128,7 +128,7 @@ func TestCoordinatorRun_ConsumesPreCreatedArtifactDispatch(t *testing.T) {
 // lifecycle records passed with canonical stages.
 func TestCoordinatorRun_AllPassedFinalizesLifecycle(t *testing.T) {
 	st := sqlitestore.OpenTest(t)
-	op, _ := seedPreflightFixture(t, st)
+	op := seedPreflightFixture(t, st)
 	c := newTestCoordinator(t, st)
 	ctx := context.Background()
 
@@ -158,7 +158,7 @@ func TestCoordinatorRun_AllPassedFinalizesLifecycle(t *testing.T) {
 // AC-019-01/06: a required stage failure stops the pipeline and records failed.
 func TestCoordinatorRun_RequiredFailureStopsPipeline(t *testing.T) {
 	st := sqlitestore.OpenTest(t)
-	op, _ := seedPreflightFixture(t, st)
+	op := seedPreflightFixture(t, st)
 	c := newTestCoordinator(t, st)
 	ctx := context.Background()
 
@@ -190,7 +190,7 @@ func TestCoordinatorRun_RequiredFailureStopsPipeline(t *testing.T) {
 // lifecycle as cancelled without overwriting the operation via a stale CAS.
 func TestCoordinatorRun_CancelFinalizesCancelledLifecycle(t *testing.T) {
 	st := sqlitestore.OpenTest(t)
-	op, _ := seedPreflightFixture(t, st)
+	op := seedPreflightFixture(t, st)
 	c := newTestCoordinator(t, st)
 
 	runCtx, cancel := context.WithCancel(context.Background())
