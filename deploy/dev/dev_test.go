@@ -46,6 +46,9 @@ func fakeEnv(t *testing.T, stateDir string) (env []string, binDir string) {
 	}
 	env = append(os.Environ(),
 		"DEV_DATA_DIR="+stateDir,
+		// Probe idle test ports, not the real 8082-8087: the actual dev
+		// environment may be running on the host during tests.
+		"DEV_PORTS_OVERRIDE=19082 19083 19084 19085 19086 19087",
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	return env, binDir
@@ -274,7 +277,10 @@ func fakeK3d(t *testing.T, binDir, stateDir string) {
 // minimums without touching real resources.
 func happyShims(t *testing.T, binDir string) {
 	t.Helper()
-	writeShim(t, binDir, "docker", "#!/usr/bin/env bash\nexit 0\n")
+	// docker: `container inspect` reports the object does not exist (the
+	// registry container is only created by the fake k3d); other verbs
+	// (start/rm) pass through.
+	writeShim(t, binDir, "docker", "#!/usr/bin/env bash\nfor a in \"$@\"; do if [ \"$a\" = \"inspect\" ]; then exit 1; fi; done\nexit 0\n")
 	writeShim(t, binDir, "curl", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "kubectl", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
@@ -302,6 +308,18 @@ func k3dCreates(stateDir string) []string {
 	return strings.Split(trimmed, "\n")
 }
 
+// clusterCreates filters out non-cluster lines (e.g. the fake registry
+// create record) from the k3d invocation log.
+func clusterCreates(records []string) []string {
+	var clusters []string
+	for _, r := range records {
+		if !strings.HasPrefix(r, "registry create ") {
+			clusters = append(clusters, r)
+		}
+	}
+	return clusters
+}
+
 func TestDevUpCreatesFiveClustersAndMergedKubeconfig(t *testing.T) {
 	stateDir := t.TempDir()
 	env, binDir := fakeEnv(t, stateDir)
@@ -312,7 +330,7 @@ func TestDevUpCreatesFiveClustersAndMergedKubeconfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dev-up failed:\n%s", out)
 	}
-	creates := k3dCreates(stateDir)
+	creates := clusterCreates(k3dCreates(stateDir))
 	if len(creates) != 5 {
 		t.Fatalf("expected 5 cluster creates, got %d: %v", len(creates), creates)
 	}
@@ -354,7 +372,7 @@ func TestDevUpIsIdempotent(t *testing.T) {
 	if out, err := runDev(t, env, "up"); err != nil {
 		t.Fatalf("first dev-up failed: %v\n%s", err, out)
 	}
-	first := k3dCreates(stateDir)
+	first := clusterCreates(k3dCreates(stateDir))
 	// Simulate a partially-created environment: keep the control cluster
 	// and the first customer cluster, drop the other three.
 	clustersPath := filepath.Join(stateDir, "clusters.txt")
@@ -364,7 +382,7 @@ func TestDevUpIsIdempotent(t *testing.T) {
 	if out, err := runDev(t, env, "up"); err != nil {
 		t.Fatalf("second dev-up failed: %v\n%s", err, out)
 	}
-	second := k3dCreates(stateDir)
+	second := clusterCreates(k3dCreates(stateDir))
 	// Only the three missing clusters are created; the two present are skipped.
 	if len(second)-len(first) != 3 {
 		t.Fatalf("expected 3 creates on resume, got %d (first=%d second=%d)",
@@ -381,13 +399,13 @@ func TestClusterCreateInjectsProxyEnv(t *testing.T) {
 	// asserted. manifest inspect fails (registry empty) so every service
 	// actually goes through docker build; build/push pass through.
 	writeShim(t, binDir, "docker",
-		"#!/usr/bin/env bash\nif [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
+		"#!/usr/bin/env bash\nif [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
 	env = append(env, "HTTP_PROXY=http://127.0.0.1:7890", "HTTPS_PROXY=http://127.0.0.1:7890")
 
 	if out, err := runDev(t, env, "up"); err != nil {
 		t.Fatalf("dev-up failed:\n%s", out)
 	}
-	creates := k3dCreates(stateDir)
+	creates := clusterCreates(k3dCreates(stateDir))
 	for _, c := range creates {
 		if !strings.Contains(c, "NO_PROXY=k3d-release-manager-registry") {
 			t.Fatalf("create missing NO_PROXY registry domain: %s", c)
@@ -476,5 +494,89 @@ func TestCiProfileAutoPurgesOnExit(t *testing.T) {
 	data, err := os.ReadFile(clustersPath)
 	if err == nil && strings.TrimSpace(string(data)) != "" {
 		t.Fatalf("expected all clusters purged after ci dev-up, remaining:\n%s", data)
+	}
+}
+
+// TestCleanCheckoutCreatesDataDirBeforeDiskGate reproduces the audit finding
+// on AC-065-01: with a pristine checkout (data/ absent, gitignored and
+// module-generated) the disk preflight must not fail. require_disk runs
+// `df -Pk $DEV_DATA_DIR`, which emits nothing for a missing directory, so
+// ownership_init (which mkdirs the data dir) must run BEFORE preflight_up.
+// The awk shim forwards the real df output (empty when the target dir is
+// missing), unlike happyShims which answers a fixed 500 GiB and would mask
+// the ordering bug.
+func TestCleanCheckoutCreatesDataDirBeforeDiskGate(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	// Simulate a pristine checkout: DEV_DATA_DIR does not exist yet.
+	dataDir := filepath.Join(stateDir, "data")
+	env = append(env, "DEV_DATA_DIR="+dataDir)
+	fakeK3d(t, binDir, stateDir)
+	writeShim(t, binDir, "docker", "#!/usr/bin/env bash\nfor a in \"$@\"; do if [ \"$a\" = \"inspect\" ]; then exit 1; fi; done\nexit 0\n")
+	writeShim(t, binDir, "curl", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "kubectl", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "go", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "nproc", "#!/usr/bin/env bash\nprintf '8\\n'\n")
+	// awk: answer the memory probe with a pass, but forward the disk probe
+	// output — a missing data dir yields no output and must fail the gate.
+	writeShim(t, binDir, "awk", `#!/usr/bin/env bash
+if [[ "$*" == *"/proc/meminfo"* ]]; then
+  printf '24576\n'
+  exit 0
+fi
+count=0
+while IFS= read -r line || [ -n "$line" ]; do
+  count=$((count + 1))
+  if [ "$count" -eq 2 ]; then
+    printf '%s\n' "$line" | tr -s ' ' | cut -d' ' -f4
+    exit 0
+  fi
+done
+exit 0
+`)
+
+	out, err := runDev(t, env, "up")
+	if err != nil {
+		t.Fatalf("dev-up on pristine checkout failed:\n%s", out)
+	}
+	if _, err := os.Stat(dataDir); err != nil {
+		t.Fatalf("expected data dir created before preflight, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "dev-ownership.json")); err != nil {
+		t.Fatalf("expected ownership manifest in data dir, got %v", err)
+	}
+}
+
+// TestRegistryCreateUsesHostPortForm locks the k3d v5.8 registry port
+// contract: `--port [HOST:]HOSTPORT` (the container port 5000 is fixed).
+// The earlier three-part form "127.0.0.1:5001:5000" was rejected by real
+// k3d ("Failed to parse registry port") while the fake shim accepted it
+// silently — real-smoke regression found during the AC-065-01 audit repair.
+func TestRegistryCreateUsesHostPortForm(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+
+	out, err := runDev(t, env, "up")
+	if err != nil {
+		t.Fatalf("dev-up failed:\n%s", out)
+	}
+	var registryCreate string
+	for _, line := range k3dCreates(stateDir) {
+		if strings.HasPrefix(line, "registry create ") {
+			registryCreate = line
+			break
+		}
+	}
+	if registryCreate == "" {
+		t.Fatalf("expected a registry create invocation, got: %v", k3dCreates(stateDir))
+	}
+	if !strings.Contains(registryCreate, "--port 127.0.0.1:5001") {
+		t.Fatalf("expected [HOST:]HOSTPORT form --port 127.0.0.1:5001, got: %s", registryCreate)
+	}
+	if strings.Contains(registryCreate, ":5000") {
+		t.Fatalf("container port must not be passed to k3d v5.8 (fixed at 5000): %s", registryCreate)
 	}
 }

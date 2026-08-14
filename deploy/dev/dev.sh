@@ -132,26 +132,31 @@ require_readyz() {
 # Stage 1: host preflight + environment lock
 # ---------------------------------------------------------------------------
 stage_preflight() {
-  preflight_up
+  # ownership_init must run first: it mkdirs DEV_DATA_DIR, and the disk
+  # preflight (require_disk -> df -Pk $DEV_DATA_DIR) emits nothing for a
+  # missing directory, failing AC-065-21 on a pristine checkout where
+  # data/ is gitignored and module-generated.
   ownership_init
+  preflight_up
 }
 
 # ---------------------------------------------------------------------------
 # Stage 2: registry
 # ---------------------------------------------------------------------------
 registry_up() {
-  local registries
   registries="$(k3d registry list 2>/dev/null || true)"
   if ! printf '%s' "$registries" | grep -qw "$REGISTRY_NAME"; then
     require_no_conflict container "$REGISTRY_CONTAINER"
-    if ! k3d registry create "$REGISTRY_NAME" --port "127.0.0.1:${REGISTRY_PORT}:5000" --image registry:3; then
+    if ! k3d registry create "$REGISTRY_NAME" --port "127.0.0.1:${REGISTRY_PORT}" --image registry:3; then
       fail "$ERR_REGISTRY_UNREACHABLE" "k3d failed to create registry $REGISTRY_NAME"
     fi
   elif ! docker container inspect --format '{{.State.Running}}' "$REGISTRY_CONTAINER" 2>/dev/null | grep -q '^true$'; then
     docker start "$REGISTRY_CONTAINER" >/dev/null || fail "$ERR_REGISTRY_UNREACHABLE" "cannot start registry container $REGISTRY_CONTAINER"
   fi
   ownership_add docker_containers "$REGISTRY_CONTAINER"
-  if ! curl --fail --silent --show-error --retry 20 --retry-delay 1 "http://127.0.0.1:${REGISTRY_PORT}/v2/" >/dev/null; then
+  # First creation pulls registry:3 and starts the container; allow a wide
+  # readiness window (connection reset/refused until the daemon listens).
+  if ! curl --fail --silent --show-error --retry 90 --retry-delay 2 --retry-connrefused "http://127.0.0.1:${REGISTRY_PORT}/v2/" >/dev/null; then
     fail "$ERR_REGISTRY_UNREACHABLE" "registry http://127.0.0.1:${REGISTRY_PORT}/v2/ is unavailable"
   fi
   log "  local registry .................... localhost:${REGISTRY_PORT}"
@@ -264,7 +269,11 @@ build_and_push() {
   # exact digest pushed here (recorded before the unchanged-skip return so a
   # cache hit still pins the same tag).
   IMAGE_TAGS["$service"]="$hash"
-  local tag="content-sha256:$hash"
+  # docker distribution references forbid ':' inside the tag; REQ-065's
+  # literal `content-sha256:<hex>` is not a valid docker tag (real smoke:
+  # "invalid reference format"). Keep the content-addressed semantics with
+  # the '-' separator.
+  local tag="content-sha256-$hash"
   local dockerfile="deploy/docker/Dockerfile.$service"
   if [ "$service" = "fixture" ]; then
     dockerfile="deploy/fixtures/Dockerfile"
@@ -317,7 +326,7 @@ kustomize_apply() {
   for svc in "${!IMAGE_TAGS[@]}"; do
     hash="${IMAGE_TAGS[$svc]:-}"
     [ -n "$hash" ] || continue
-    manifest="$(printf '%s\n' "$manifest" | sed "s#release-$svc:dev#release-$svc:content-sha256:$hash#g")"
+    manifest="$(printf '%s\n' "$manifest" | sed "s#release-$svc:dev#release-$svc:content-sha256-$hash#g")"
   done
   if ! printf '%s\n' "$manifest" | kubectl apply -f -; then
     fail "$ERR_SERVICE_UNHEALTHY" "kubectl apply failed for $KUSTOMIZE_DIR"

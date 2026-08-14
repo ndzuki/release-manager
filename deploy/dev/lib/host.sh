@@ -14,7 +14,12 @@ MIN_MEM_AVAILABLE_GB=12
 MIN_DISK_AVAILABLE_GB=20
 MIN_CPU_COUNT=4
 DEV_PORTS=(8082 8083 8084 8085 8086 8087)
-
+# Test isolation: DEV_PORTS_OVERRIDE env (space-separated) lets fake-CLI
+# tests probe idle ports on hosts where the real dev environment is up.
+# A distinct name avoids bash arrays shadowing a same-named scalar.
+if [ -n "${DEV_PORTS_OVERRIDE:-}" ]; then
+  read -r -a DEV_PORTS <<< "$DEV_PORTS_OVERRIDE"
+fi
 # require_linux — the dev environment is Linux-only (REQ-065 non-goal).
 require_linux() {
   if [ "$(uname -s)" != "Linux" ]; then

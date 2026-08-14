@@ -68,10 +68,18 @@ case "$1" in
   registry)
     case "$2" in
       list)
-        printf 'release-manager-registry\n'
+        # Reflect a stateful registry: present only after `registry create`
+        # so dev.sh's idempotent path is exercised both ways.
+        if [ -f "$STATE/registry.txt" ]; then
+          printf 'release-manager-registry\n'
+        fi
         ;;
       create)
-        printf '%s\n' "registry create" >> "$STATE/k3d-creates.log"
+        shift 2
+        printf '%s\n' "$1" > "$STATE/registry.txt"
+        # Record the full argv so tests can assert the exact CLI contract
+        # (e.g. the [HOST:]HOSTPORT form of --port).
+        printf '%s\n' "registry create $*" >> "$STATE/k3d-creates.log"
         ;;
     esac
     ;;
