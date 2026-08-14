@@ -156,7 +156,6 @@ preflight_up() {
   require_flock
   require_docker
   require_k3d
-  require_ports_free
   require_memory
   require_disk
   require_cpu

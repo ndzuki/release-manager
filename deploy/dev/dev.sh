@@ -138,6 +138,28 @@ stage_preflight() {
   # data/ is gitignored and module-generated.
   ownership_init
   preflight_up
+  # The port gate (AC-065-07) targets foreign occupiers on a clean host.
+  # When a managed cluster already exists its loadbalancer owns 8082-8087
+  # by design — an interrupted dev-up must resume idempotently (AC-065-02)
+  # instead of failing its own port mapping. Port checks after preflight_up
+  # so k3d availability is already verified.
+  if ! clusters_exist; then
+    require_ports_free
+  fi
+}
+
+# clusters_exist — 1 when any managed k3d cluster is running (partial or
+# full environment present).
+clusters_exist() {
+  local clusters
+  clusters="$(k3d cluster list 2>/dev/null || true)"
+  local cluster
+  for cluster in "${ALL_CLUSTERS[@]}"; do
+    if printf '%s' "$clusters" | grep -qw "$cluster"; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 # ---------------------------------------------------------------------------
