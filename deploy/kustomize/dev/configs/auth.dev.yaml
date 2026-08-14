@@ -1,0 +1,10 @@
+http_port: 8085
+log_level: debug
+database:
+  driver: postgres
+  dsn: postgres://release_manager:dev-release-manager@postgres:5432/release_manager?sslmode=disable
+redis:
+  address: redis:6379
+authorization:
+  policy_reload_interval: 5s
+maintenance: false

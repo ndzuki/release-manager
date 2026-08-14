@@ -34,6 +34,11 @@ REGISTRY_NAME="release-manager-registry"
 REGISTRY_CONTAINER="k3d-$REGISTRY_NAME"
 REGISTRY_PORT=5001
 KUSTOMIZE_DIR="deploy/kustomize/dev"
+# IMAGE_TAGS maps each service to the content-sha256 tag recorded by
+# build_and_push so kustomize_apply can substitute the static `:dev`
+# references with the exact digest tags pushed in Stage 4 (REQ-065 digest
+# contract).
+declare -A IMAGE_TAGS=()
 
 # log — user-facing progress on stdout; diagnostics go to stderr (REQ-065).
 log() {
@@ -203,6 +208,10 @@ build_and_push() {
   local service="$1"
   local hash
   hash="$(content_hash "$service")"
+  # Record the tag so kustomize_apply can pin the applied manifests to the
+  # exact digest pushed here (recorded before the unchanged-skip return so a
+  # cache hit still pins the same tag).
+  IMAGE_TAGS["$service"]="$hash"
   local tag="content-sha256:$hash"
   local dockerfile="deploy/docker/Dockerfile.$service"
   if [ "$service" = "fixture" ]; then
@@ -224,7 +233,7 @@ build_and_push() {
 images_up() {
   log "[4/7] docker images ..................... "
   local service
-  for service in webhook orchestrator operator auth notifier web fixture; do
+  for service in webhook orchestrator operator auth notifier web fixture notification-sink; do
     build_and_push "$service"
   done
 }
@@ -233,10 +242,20 @@ images_up() {
 
 kustomize_apply() {
   log "[5/7] kustomize apply ................... "
-  if ! kustomize build "$KUSTOMIZE_DIR" >/dev/null; then
+  local manifest svc hash
+  if ! manifest="$(kustomize build "$KUSTOMIZE_DIR")"; then
     fail "$ERR_KUSTOMIZE_BUILD_FAILED" "kustomize build failed for $KUSTOMIZE_DIR"
   fi
-  if ! kubectl apply -k "$KUSTOMIZE_DIR"; then
+  # Substitute each static `release-<svc>:dev` reference with the recorded
+  # content-sha256 digest tag so the applied manifests pin the exact images
+  # built and pushed in Stage 4 (REQ-065 digest contract). The substitution
+  # runs over the built manifest in memory; no files are rewritten.
+  for svc in "${!IMAGE_TAGS[@]}"; do
+    hash="${IMAGE_TAGS[$svc]:-}"
+    [ -n "$hash" ] || continue
+    manifest="$(printf '%s\n' "$manifest" | sed "s#release-$svc:dev#release-$svc:content-sha256:$hash#g")"
+  done
+  if ! printf '%s\n' "$manifest" | kubectl apply -f -; then
     fail "$ERR_SERVICE_UNHEALTHY" "kubectl apply failed for $KUSTOMIZE_DIR"
   fi
 }

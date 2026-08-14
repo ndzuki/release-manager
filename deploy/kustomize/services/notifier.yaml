@@ -23,7 +23,9 @@ spec:
         - name: notifier
           image: localhost:5001/release-notifier:dev
           imagePullPolicy: IfNotPresent
-          args: ["--config", "/configs/notifier.dev.yaml"]
+          args:
+            - --config
+            - /configs/notifier.dev.yaml
           ports:
             - name: http
               containerPort: 8086
@@ -46,12 +48,13 @@ spec:
               cpu: 250m
               memory: 256Mi
           volumeMounts:
-            - name: data
-              mountPath: /data
+            - name: config
+              mountPath: /configs/notifier.dev.yaml
+              subPath: notifier.dev.yaml
       volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: release-manager-dev-data
+        - name: config
+          configMap:
+            name: notifier-config
 ---
 apiVersion: v1
 kind: Service
@@ -59,9 +62,11 @@ metadata:
   name: notifier
   namespace: release-manager-dev
 spec:
+  type: NodePort
   selector:
     app.kubernetes.io/name: notifier
   ports:
     - name: http
       port: 8086
       targetPort: http
+      nodePort: 30086

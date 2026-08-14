@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - rbac.yaml
+  - pvc.yaml
+  - deployment.yaml
+# Per-customer secrets. The enrollment token is a dev placeholder; the real
+# single-use token is injected per cluster by the seed flow. The gateway CA is
+# the management orchestrator's generated CA (placeholder here; sync the real
+# /data/gateway-ca.crt from the management orchestrator in production dev).
+secretGenerator:
+  - name: operator-enrollment
+    namespace: release-manager-customer
+    literals:
+      - token=dev-enrollment-token-placeholder
+  - name: operator-gateway-ca
+    namespace: release-manager-customer
+    files:
+      - gateway-ca.crt=files/gateway-ca.crt

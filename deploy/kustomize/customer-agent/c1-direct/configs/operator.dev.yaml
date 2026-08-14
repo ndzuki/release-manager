@@ -1,0 +1,9 @@
+http_port: 8084
+log_level: debug
+agent:
+  mode: agent
+  customer_id: dev-customer-a
+  cluster_id: dev-customer-a-direct
+  operator_name: dev-customer-a-direct
+ca:
+  cert_path: /data/gateway-ca.crt

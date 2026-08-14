@@ -1,32 +1,34 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: api
+  name: notification-sink
   namespace: release-manager-dev
   labels:
-    app.kubernetes.io/name: api
+    app.kubernetes.io/name: notification-sink
     app.kubernetes.io/part-of: release-manager
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: api
+      app.kubernetes.io/name: notification-sink
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: api
+        app.kubernetes.io/name: notification-sink
         app.kubernetes.io/part-of: release-manager
     spec:
       securityContext:
         fsGroup: 65532
       containers:
-        - name: api
-          image: localhost:5001/release-api:dev
+        - name: notification-sink
+          image: localhost:5001/release-notification-sink:dev
           imagePullPolicy: IfNotPresent
-          args: ["--config", "/configs/api.dev.yaml", "--db", "/data/release-manager.db"]
+          args:
+            - --config
+            - /configs/notification-sink.dev.yaml
           ports:
             - name: http
-              containerPort: 8087
+              containerPort: 8088
           readinessProbe:
             httpGet:
               path: /readyz
@@ -41,27 +43,31 @@ spec:
           resources:
             requests:
               cpu: 10m
-              memory: 32Mi
+              memory: 16Mi
             limits:
-              cpu: 250m
-              memory: 256Mi
+              cpu: 100m
+              memory: 128Mi
           volumeMounts:
-            - name: data
-              mountPath: /data
+            - name: config
+              mountPath: /configs/notification-sink.dev.yaml
+              subPath: notification-sink.dev.yaml
       volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: release-manager-dev-data
+        - name: config
+          configMap:
+            name: notification-sink-config
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: api
+  name: notification-sink
   namespace: release-manager-dev
 spec:
+  # ClusterIP-only: the sink is a dev observability endpoint consumed only
+  # in-cluster by the notifier webhook channel; it is deliberately not exposed
+  # on a NodePort (REQ-065).
   selector:
-    app.kubernetes.io/name: api
+    app.kubernetes.io/name: notification-sink
   ports:
     - name: http
-      port: 8087
+      port: 8088
       targetPort: http

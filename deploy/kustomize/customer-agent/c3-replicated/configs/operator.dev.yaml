@@ -1,0 +1,9 @@
+http_port: 8084
+log_level: debug
+agent:
+  mode: agent
+  customer_id: dev-customer-b
+  cluster_id: dev-customer-b-replicated
+  operator_name: dev-customer-b-replicated
+ca:
+  cert_path: /data/gateway-ca.crt

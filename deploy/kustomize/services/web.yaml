@@ -1,44 +1,37 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: auth
+  name: web
   namespace: release-manager-dev
   labels:
-    app.kubernetes.io/name: auth
+    app.kubernetes.io/name: web
     app.kubernetes.io/part-of: release-manager
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: auth
+      app.kubernetes.io/name: web
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: auth
+        app.kubernetes.io/name: web
         app.kubernetes.io/part-of: release-manager
     spec:
-      securityContext:
-        fsGroup: 65532
       containers:
-        - name: auth
-          image: localhost:5001/release-auth:dev
+        - name: web
+          image: localhost:5001/release-web:dev
           imagePullPolicy: IfNotPresent
-          args:
-            - --config
-            - /configs/auth.dev.yaml
-            - --signing-key
-            - dev-only-signing-key
           ports:
             - name: http
-              containerPort: 8085
+              containerPort: 8087
           readinessProbe:
             httpGet:
-              path: /readyz
+              path: /
               port: http
             periodSeconds: 5
           livenessProbe:
             httpGet:
-              path: /health
+              path: /
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
@@ -49,26 +42,18 @@ spec:
             limits:
               cpu: 250m
               memory: 256Mi
-          volumeMounts:
-            - name: config
-              mountPath: /configs/auth.dev.yaml
-              subPath: auth.dev.yaml
-      volumes:
-        - name: config
-          configMap:
-            name: auth-config
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: auth
+  name: web
   namespace: release-manager-dev
 spec:
   type: NodePort
   selector:
-    app.kubernetes.io/name: auth
+    app.kubernetes.io/name: web
   ports:
     - name: http
-      port: 8085
+      port: 8087
       targetPort: http
-      nodePort: 30085
+      nodePort: 30087

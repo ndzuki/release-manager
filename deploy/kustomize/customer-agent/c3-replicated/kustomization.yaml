@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../base
+# Agent-only overlay for the dev-customer-b-replicated cluster. Runs only the
+# operator agent with the per-cluster identity config; no management plane.
+configMapGenerator:
+  - name: operator-config
+    namespace: release-manager-customer
+    files:
+      - configs/operator.dev.yaml

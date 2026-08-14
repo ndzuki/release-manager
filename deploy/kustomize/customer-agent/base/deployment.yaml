@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: operator
+  namespace: release-manager-customer
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/part-of: release-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: operator
+        app.kubernetes.io/part-of: release-manager
+    spec:
+      serviceAccountName: release-manager-operator
+      securityContext:
+        fsGroup: 65532
+      hostAliases:
+        # Placeholder Docker IPs — replace with the real k3d network addresses
+        # of the management node and the registry container (REQ-065). The
+        # agent dials the management gateway and pulls images from the registry
+        # through these cluster-local aliases.
+        - ip: "172.18.0.2"
+          hostnames:
+            - operator-gateway.dev.release-manager.local
+        - ip: "172.18.0.3"
+          hostnames:
+            - registry.dev.release-manager.local
+      containers:
+        - name: operator
+          image: localhost:5001/release-operator:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config
+            - /configs/operator.dev.yaml
+            - --command-db
+            - /data/operator-commands.db
+            - --orchestrator-addr
+            - https://operator-gateway.dev.release-manager.local:30084
+          env:
+            # Single-use enrollment token injected from the per-cluster Secret.
+            # The agent consumes it once at bootstrap, then persists its
+            # identity in the /data command store.
+            - name: ENROLLMENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: operator-enrollment
+                  key: token
+          ports:
+            - name: http
+              containerPort: 8084
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /configs/operator.dev.yaml
+              subPath: operator.dev.yaml
+            - name: identity
+              mountPath: /data
+            - name: gateway-ca
+              mountPath: /data/gateway-ca.crt
+              subPath: gateway-ca.crt
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: operator-config
+        - name: identity
+          persistentVolumeClaim:
+            claimName: operator-identity
+        - name: gateway-ca
+          secret:
+            secretName: operator-gateway-ca
+            items:
+              - key: gateway-ca.crt
+                path: gateway-ca.crt

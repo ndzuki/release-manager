@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:16-alpine
+          image: postgres:16
           ports:
             - name: postgres
               containerPort: 5432
@@ -30,6 +30,8 @@ spec:
             - name: POSTGRES_INITDB_ARGS
               value: --auth-host=scram-sha-256
           volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
             - name: init
               mountPath: /docker-entrypoint-initdb.d/init.sql
               subPath: init.sql
@@ -51,6 +53,9 @@ spec:
               cpu: 500m
               memory: 512Mi
       volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: release-manager-postgres-data
         - name: init
           configMap:
             name: postgres-init

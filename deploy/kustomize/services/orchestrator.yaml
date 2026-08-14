@@ -23,16 +23,18 @@ spec:
         - name: orchestrator
           image: localhost:5001/release-orchestrator:dev
           imagePullPolicy: IfNotPresent
-          args: ["--config", "/configs/orchestrator.dev.yaml", "--target-env", "staging"]
-          envFrom:
-            - secretRef:
-                name: release-manager-dev-credentials
-          env:
-            - name: AUTHORIZATION_AUTH_URL
-              value: http://auth:8085
+          args:
+            - --config
+            - /configs/orchestrator.dev.yaml
           ports:
+            # Management-plane Connect HTTP listener.
             - name: http
               containerPort: 8083
+            # Agent mTLS gateway listener (gateway.enabled: true). Exposed
+            # through the operator Service (nodePort 30084) so customer
+            # cluster agents can enroll and stream commands.
+            - name: gateway
+              containerPort: 8084
           readinessProbe:
             httpGet:
               path: /readyz
@@ -52,12 +54,18 @@ spec:
               cpu: 250m
               memory: 256Mi
           volumeMounts:
+            - name: config
+              mountPath: /configs/orchestrator.dev.yaml
+              subPath: orchestrator.dev.yaml
             - name: data
               mountPath: /data
       volumes:
+        - name: config
+          configMap:
+            name: orchestrator-config
         - name: data
           persistentVolumeClaim:
-            claimName: release-manager-dev-data
+            claimName: release-manager-orchestrator-data
 ---
 apiVersion: v1
 kind: Service
@@ -65,9 +73,30 @@ metadata:
   name: orchestrator
   namespace: release-manager-dev
 spec:
+  type: NodePort
   selector:
     app.kubernetes.io/name: orchestrator
   ports:
     - name: http
       port: 8083
       targetPort: http
+      nodePort: 30083
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: operator
+  namespace: release-manager-dev
+spec:
+  # The management-plane OperatorService gateway is served by the orchestrator
+  # (gateway.enabled: true, containerPort 8084). This Service exposes that
+  # mTLS listener to customer clusters via the 30084 nodePort the k3d
+  # loadbalancer maps from host 8084.
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: orchestrator
+  ports:
+    - name: gateway
+      port: 8084
+      targetPort: gateway
+      nodePort: 30084

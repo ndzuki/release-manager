@@ -3,7 +3,7 @@ kind: Kustomization
 resources:
   - webhook.yaml
   - orchestrator.yaml
-  - operator.yaml
   - auth.yaml
   - notifier.yaml
-  - api.yaml
+  - notification-sink.yaml
+  - web.yaml

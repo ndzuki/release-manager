@@ -7,3 +7,4 @@ data:
   TARGET_ENV: staging
   REGISTRY_HOST: localhost:5001
   DEV_ENVIRONMENT: "true"
+  APP_ENVIRONMENT: development

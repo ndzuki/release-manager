@@ -3,4 +3,29 @@ kind: Kustomization
 resources:
   - ../base
   - ../postgres
+  - ../redis
   - ../services
+# Per-service configuration is generated from the configs/*.dev.yaml files
+# below (semantics of configs/*.dev.yaml, overridden to the in-cluster
+# PostgreSQL/Redis services, auth URL, and the orchestrator agent gateway).
+configMapGenerator:
+  - name: webhook-config
+    namespace: release-manager-dev
+    files:
+      - configs/webhook.dev.yaml
+  - name: orchestrator-config
+    namespace: release-manager-dev
+    files:
+      - configs/orchestrator.dev.yaml
+  - name: auth-config
+    namespace: release-manager-dev
+    files:
+      - configs/auth.dev.yaml
+  - name: notifier-config
+    namespace: release-manager-dev
+    files:
+      - configs/notifier.dev.yaml
+  - name: notification-sink-config
+    namespace: release-manager-dev
+    files:
+      - configs/notification-sink.dev.yaml
