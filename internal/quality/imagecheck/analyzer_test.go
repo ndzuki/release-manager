@@ -3,6 +3,9 @@ package imagecheck
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -233,4 +236,126 @@ func writeTarFile(
 		_, err := writer.Write(data)
 		require.NoError(t, err)
 	}
+}
+
+func TestAnalyze_OCIArchive(t *testing.T) {
+	policy := testPolicy()
+	dockerfile := writeDockerfile(t, policy.BaseImage)
+	archive := buildOCIArchive(t, imageConfigInput{
+		Entrypoint: []string{"/release-operator"},
+		Cmd:        []string{"--config", "/configs/operator.dev.yaml"},
+	}, true, []layerEntry{
+		{Name: "release-operator", Mode: 0o755},
+		{Name: "configs/operator.dev.yaml", Mode: 0o644},
+	})
+
+	result, err := Analyze(bytes.NewReader(archive), dockerfile, policy)
+	require.NoError(t, err)
+	assert.True(t, result.Passed())
+	assert.Empty(t, result.Violations)
+}
+
+func TestAnalyze_OCIArchivePlainTarLayers(t *testing.T) {
+	policy := testPolicy()
+	dockerfile := writeDockerfile(t, policy.BaseImage)
+	archive := buildOCIArchive(t, imageConfigInput{
+		Entrypoint: []string{"/release-operator"},
+	}, false, []layerEntry{
+		{Name: "release-operator", Mode: 0o755},
+		{Name: "usr/bin/helm", Mode: 0o755},
+	}, []layerEntry{
+		{Name: "usr/bin/.wh.helm", Mode: 0o000},
+	})
+
+	result, err := Analyze(bytes.NewReader(archive), dockerfile, policy)
+	require.NoError(t, err)
+	assert.True(t, result.Passed())
+}
+
+// buildOCIArchive constructs a Docker >= 29 style OCI layout archive:
+// index.json -> platform index (real manifest + attestation manifest) ->
+// image manifest -> config + gzip-compressed layer blobs.
+func buildOCIArchive(t *testing.T, configInput imageConfigInput, attestation bool, layers ...[]layerEntry) []byte {
+	t.Helper()
+
+	config := map[string]any{
+		"config": map[string]any{
+			"Entrypoint": configInput.Entrypoint,
+			"Cmd":        configInput.Cmd,
+		},
+	}
+	configData, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	blobs := map[string][]byte{}
+	addBlob := func(data []byte) string {
+		sum := sha256.Sum256(data)
+		hexDigest := hex.EncodeToString(sum[:])
+		blobs["blobs/sha256/"+hexDigest] = data
+		return "sha256:" + hexDigest
+	}
+
+	configDigest := addBlob(configData)
+	manifest := ociManifest{
+		Config: struct {
+			Digest string `json:"digest"`
+		}{Digest: configDigest},
+	}
+	for _, entries := range layers {
+		layerData := buildLayer(t, entries)
+		var compressed bytes.Buffer
+		zw := gzip.NewWriter(&compressed)
+		_, err := zw.Write(layerData)
+		require.NoError(t, err)
+		require.NoError(t, zw.Close())
+		manifest.Layers = append(manifest.Layers, struct {
+			Digest string `json:"digest"`
+		}{Digest: addBlob(compressed.Bytes())})
+	}
+	manifestData, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	manifestDigest := addBlob(manifestData)
+
+	platformEntries := []map[string]any{{
+		"mediaType": "application/vnd.oci.image.manifest.v1+json",
+		"digest":    manifestDigest,
+		"platform":  map[string]string{"architecture": "amd64", "os": "linux"},
+	}}
+	if attestation {
+		platformEntries = append(platformEntries, map[string]any{
+			"mediaType": "application/vnd.oci.image.manifest.v1+json",
+			"digest":    addBlob(manifestData), // attestation reuses manifest bytes
+			"annotations": map[string]string{
+				"vnd.docker.reference.type":   "attestation-manifest",
+				"vnd.docker.reference.digest": manifestDigest,
+			},
+			"platform": map[string]string{"architecture": "unknown", "os": "unknown"},
+		})
+	}
+	platformIndexData, err := json.Marshal(map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.index.v1+json",
+		"manifests":     platformEntries,
+	})
+	require.NoError(t, err)
+	platformIndexDigest := addBlob(platformIndexData)
+
+	indexData, err := json.Marshal(map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.index.v1+json",
+		"manifests": []map[string]any{{
+			"mediaType": "application/vnd.oci.image.index.v1+json",
+			"digest":    platformIndexDigest,
+		}},
+	})
+	require.NoError(t, err)
+
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	writeTarFile(t, writer, "index.json", indexData, 0o644, tar.TypeReg, "")
+	for name, data := range blobs {
+		writeTarFile(t, writer, name, data, 0o644, tar.TypeReg, "")
+	}
+	require.NoError(t, writer.Close())
+	return archive.Bytes()
 }

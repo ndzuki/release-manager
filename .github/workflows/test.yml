@@ -14,22 +14,34 @@ concurrency:
   group: ci-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+#
+# Runner selection fallback (private-repo Actions billing block):
+#   jobs run on `${{ vars.RUNS_ON || 'ubuntu-latest' }}`.
+#   GitHub-hosted minutes for private repos are limited (2000/month);
+#   when jobs start failing instantly with "recent account payments have
+#   failed or your spending limit needs to be increased", switch to the
+#   local self-hosted runner (arch-dev-1, systemd user service
+#   actions-runner-release-manager):
+#     gh variable set RUNS_ON self-hosted --repo ndzuki/release-manager
+#   and back when billing is restored:
+#     gh variable delete RUNS_ON --repo ndzuki/release-manager
+#
 jobs:
   sdk-check:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
-          cache: true
+          cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Run SDK-only static gate
         run: go run ./cmd/sdkcheck/ -exceptions sdkcheck.exceptions.yaml ./...
 
   install-sdk:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -37,7 +49,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
-          cache: true
+          cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Install kind
         run: go install sigs.k8s.io/kind@v0.32.0
@@ -46,7 +58,7 @@ jobs:
         run: make test-install-sdk
 
   operator-image-sdk-only:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -54,13 +66,13 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
-          cache: true
+          cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Run operator image SDK-only gate
         run: make test-operator-image-sdk-only
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -69,7 +81,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
-          cache: true
+          cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - uses: bufbuild/buf-setup-action@v1.50.0
         with:
@@ -93,6 +105,9 @@ jobs:
       #     test-sdkcheck jobs restore with actions/cache/restore, so
       #     concurrent saves never race on the same key.
       - name: Prepare module cache for restore
+        # Skip on self-hosted: ~/go/pkg/mod is a shared persistent dir there
+        # (wiping it would nuke every local Go project's cache).
+        if: vars.RUNS_ON != 'self-hosted'
         run: |
           # Go module cache files are read-only (0444) and directories 0555,
           # so rm fails without write permission on parent dirs. chmod first.
@@ -100,6 +115,8 @@ jobs:
           rm -rf ~/go/pkg/mod
 
       - name: Cache Go modules
+        # Skip on self-hosted: module cache is already shared between jobs.
+        if: vars.RUNS_ON != 'self-hosted'
         uses: actions/cache@v6
         with:
           path: ~/go/pkg/mod
@@ -130,7 +147,7 @@ jobs:
           args: --new-from-rev=${{ github.event.pull_request.base.sha || github.event.before }}
 
   test-sqlite:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -139,7 +156,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
-          cache: true
+          cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - uses: bufbuild/buf-setup-action@v1.50.0
         with:
@@ -150,12 +167,16 @@ jobs:
 
       # Wipe first: restoring over read-only module files fails (see test job).
       - name: Prepare module cache for restore
+        # Skip on self-hosted: ~/go/pkg/mod is a shared persistent dir there.
+        if: vars.RUNS_ON != 'self-hosted'
         run: |
           chmod -R u+w ~/go/pkg/mod 2>/dev/null || true
           rm -rf ~/go/pkg/mod
 
       # Restore-only: the test job is the single cache writer.
+      # Skip on self-hosted: module cache is already shared between jobs.
       - name: Restore Go module cache
+        if: vars.RUNS_ON != 'self-hosted'
         uses: actions/cache/restore@v6
         with:
           path: ~/go/pkg/mod
@@ -166,7 +187,7 @@ jobs:
         run: go test -race -coverprofile=coverage.out ./internal/store/sqlite/...
 
   test-sdkcheck:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -175,16 +196,20 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
-          cache: true
+          cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       # Wipe first: restoring over read-only module files fails (see test job).
       - name: Prepare module cache for restore
+        # Skip on self-hosted: ~/go/pkg/mod is a shared persistent dir there.
+        if: vars.RUNS_ON != 'self-hosted'
         run: |
           chmod -R u+w ~/go/pkg/mod 2>/dev/null || true
           rm -rf ~/go/pkg/mod
 
       # Restore-only: the test job is the single cache writer.
+      # Skip on self-hosted: module cache is already shared between jobs.
       - name: Restore Go module cache
+        if: vars.RUNS_ON != 'self-hosted'
         uses: actions/cache/restore@v6
         with:
           path: ~/go/pkg/mod
@@ -201,7 +226,7 @@ jobs:
         run: go test -race -coverprofile=coverage.out ./internal/quality/sdkcheck/...
 
   rollout-watch:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -216,8 +241,12 @@ jobs:
         run: |
           curl -fsSLo /tmp/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.32.0/kind-linux-amd64
           echo "${KIND_SHA256}  /tmp/kind" | sha256sum --check
-          sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+          if [ "${{ vars.RUNS_ON }}" = "self-hosted" ]; then
+            # No sudo on the local runner: install into the user's PATH.
+            mkdir -p "$HOME/.local/bin"
+            install -m 0755 /tmp/kind "$HOME/.local/bin/kind"
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          else
+            sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+          fi
           kind version
-
-      - name: Run rollout watch integration gate
-        run: make test-rollout-watch

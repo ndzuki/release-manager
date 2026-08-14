@@ -4,6 +4,7 @@ package imagecheck
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -331,6 +332,13 @@ func readDockerArchive(reader io.Reader) (imageArchive, error) {
 		members[path.Clean(header.Name)] = archiveMember{Data: data}
 	}
 
+	// Docker >= 29 saves images in OCI layout (blobs/ + index.json) by
+	// default; older Docker used the legacy manifest.json layout. Detect
+	// the format by the presence of index.json.
+	if _, oci := members["index.json"]; oci {
+		return readOCIArchive(members)
+	}
+
 	manifestMember, found := members["manifest.json"]
 	if !found {
 		return imageArchive{}, fmt.Errorf("image archive missing manifest.json")
@@ -363,6 +371,160 @@ func readDockerArchive(reader io.Reader) (imageArchive, error) {
 		}
 	}
 	return imageArchive{Config: config, RootFS: rootFS}, nil
+}
+
+// resolveOCIManifest follows the OCI digest chain from an index entry to the
+// image manifest. Docker's save output can nest one extra index level
+// (platform index) between the top-level index.json and the manifest, and the
+// platform index also carries attestation manifests that must be skipped, so
+// the chain is walked until a real manifest with config/layers is found.
+func resolveOCIManifest(members map[string]archiveMember, digest string) (ociManifest, error) {
+	for range 8 {
+		name, err := blobName(digest)
+		if err != nil {
+			return ociManifest{}, err
+		}
+		member, found := members[name]
+		if !found {
+			return ociManifest{}, fmt.Errorf("OCI archive missing blob %q", name)
+		}
+
+		next, err := indexNext(member.Data, digest)
+		if err != nil {
+			return ociManifest{}, err
+		}
+		if next != "" {
+			digest = next
+			continue
+		}
+
+		var m ociManifest
+		if err := json.Unmarshal(member.Data, &m); err != nil {
+			return ociManifest{}, fmt.Errorf("parse OCI manifest %q: %w", name, err)
+		}
+		if m.Config.Digest == "" {
+			return ociManifest{}, fmt.Errorf("OCI manifest %q has no config digest", name)
+		}
+		return m, nil
+	}
+	return ociManifest{}, fmt.Errorf("OCI digest chain too deep (loop?)")
+}
+
+// indexNext returns the digest to follow when data is an OCI image index, or
+// an empty string when data is not an index. Docker attestation manifests
+// inside the platform index are skipped. An index without any usable
+// (non-attestation) manifest entry is reported as an error.
+func indexNext(data []byte, current string) (string, error) {
+	var idx ociIndex
+	if err := json.Unmarshal(data, &idx); err == nil {
+		if len(idx.Manifests) == 0 {
+			return "", nil
+		}
+		for _, entry := range idx.Manifests {
+			if entry.Annotations["vnd.docker.reference.type"] == "attestation-manifest" {
+				continue
+			}
+			if next := entry.Digest; next != "" && next != current {
+				return next, nil
+			}
+		}
+		return "", fmt.Errorf("OCI index has no non-attestation manifest")
+	}
+	return "", nil
+}
+
+// OCI layout types (Docker >= 29 docker save output).
+type ociIndex struct {
+	Manifests []struct {
+		Digest      string            `json:"digest"`
+		Annotations map[string]string `json:"annotations"`
+	} `json:"manifests"`
+}
+
+type ociManifest struct {
+	Config struct {
+		Digest string `json:"digest"`
+	} `json:"config"`
+	Layers []struct {
+		Digest string `json:"digest"`
+	} `json:"layers"`
+}
+
+// blobName resolves an OCI content digest ("sha256:hex") to the archive
+// member path used by the OCI layout ("blobs/sha256/hex").
+func blobName(digest string) (string, error) {
+	algo, hex, found := strings.Cut(digest, ":")
+	if !found || algo == "" || hex == "" {
+		return "", fmt.Errorf("invalid OCI digest %q", digest)
+	}
+	return path.Join("blobs", algo, hex), nil
+}
+
+func readOCIArchive(members map[string]archiveMember) (imageArchive, error) {
+	indexMember, found := members["index.json"]
+	if !found {
+		return imageArchive{}, fmt.Errorf("image archive missing index.json")
+	}
+	var index ociIndex
+	if err := json.Unmarshal(indexMember.Data, &index); err != nil {
+		return imageArchive{}, fmt.Errorf("parse OCI index: %w", err)
+	}
+	if len(index.Manifests) != 1 {
+		return imageArchive{}, fmt.Errorf("OCI archive must contain exactly one image, got %d", len(index.Manifests))
+	}
+
+	manifest, err := resolveOCIManifest(members, index.Manifests[0].Digest)
+	if err != nil {
+		return imageArchive{}, err
+	}
+
+	configName, err := blobName(manifest.Config.Digest)
+	if err != nil {
+		return imageArchive{}, err
+	}
+	configMember, found := members[configName]
+	if !found {
+		return imageArchive{}, fmt.Errorf("OCI archive missing config %q", configName)
+	}
+	var config imageConfig
+	if err := json.Unmarshal(configMember.Data, &config); err != nil {
+		return imageArchive{}, fmt.Errorf("parse OCI config: %w", err)
+	}
+
+	rootFS := map[string]fileEntry{}
+	for _, layer := range manifest.Layers {
+		layerName, err := blobName(layer.Digest)
+		if err != nil {
+			return imageArchive{}, err
+		}
+		layerMember, found := members[layerName]
+		if !found {
+			return imageArchive{}, fmt.Errorf("OCI archive missing layer %q", layerName)
+		}
+		if err := applyLayerBlob(rootFS, layerMember.Data, layerName); err != nil {
+			return imageArchive{}, err
+		}
+	}
+	return imageArchive{Config: config, RootFS: rootFS}, nil
+}
+
+// applyLayerBlob applies one layer blob to the root FS. OCI layer blobs are
+// gzip-compressed tars; legacy layers are plain tars. The format is detected
+// by the gzip magic bytes.
+func applyLayerBlob(rootFS map[string]fileEntry, data []byte, layerName string) error {
+	if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+		zr, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return fmt.Errorf("read layer %q: %w", layerName, err)
+		}
+		decompressed, err := io.ReadAll(zr)
+		zr.Close()
+		if err != nil {
+			return fmt.Errorf("decompress layer %q: %w", layerName, err)
+		}
+		data = decompressed
+	}
+	return applyLayer(rootFS, data, layerName)
 }
 
 func applyLayer(rootFS map[string]fileEntry, data []byte, layerName string) error {
