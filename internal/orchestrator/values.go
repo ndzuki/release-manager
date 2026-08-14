@@ -30,10 +30,10 @@ type mergedValues struct {
 // the approved revision, and runs the secret-literal scan on base, patch, and
 // effective values (AC-067-12). A nil patch is equivalent to {}.
 func prepareValues(revision *store.ValuesRevision, patch *structpb.Struct) (*mergedValues, error) {
-	base, err := valueutil.Canonicalize(revision.Values)
-	if err != nil {
-		return nil, fmt.Errorf("%w: values revision is not valid JSON", errInvalidMergePatch)
-	}
+	// CanonicalDocument is the store's canonical JSON (TASK-018 model):
+	// re-canonicalizing it is a no-op, but the secret scan must still run
+	// on the base (AC-067-12).
+	base := append([]byte(nil), revision.CanonicalDocument...)
 	if valueutil.ContainsSecret(base) {
 		return nil, errSecretLiteralForbidden
 	}

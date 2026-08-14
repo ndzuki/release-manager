@@ -153,8 +153,8 @@ func createMigrationSource(ctx context.Context, t *testing.T) string {
 		Namespace: "default", ReleaseName: "migration-release", Status: store.DefStatusActive,
 	}, nil))
 	require.NoError(t, st.Values().Create(ctx, &store.ValuesRevision{
-		ID: "values-legacy", ReleaseDefinitionID: "definition-migrate", Revision: 1, StateVersion: 3,
-		Status: store.ValuesStatusDraft, Values: []byte(`{"replicas":2}`), Digest: "sha256:values", CreatedByUserID: "creator-legacy",
+		ID: "values-legacy", ReleaseDefinitionID: "definition-migrate", Version: 1, StateVersion: 3,
+		Status: store.ValuesStatusDraft, CanonicalDocument: []byte(`{"replicas":2}`), Digest: "sha256:values", CreatedByUserID: "creator-legacy",
 	}))
 	_, err = st.DB().ExecContext(ctx, `UPDATE values_revisions SET state_version = 0, created_by_user_id = '' WHERE id = 'values-legacy'`)
 	require.NoError(t, err)

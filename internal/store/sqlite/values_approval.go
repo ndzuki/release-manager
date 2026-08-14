@@ -286,7 +286,7 @@ func supersedeApprovedRevisions(
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id FROM values_revisions
 		WHERE release_definition_id = ? AND status = 'approved' AND id != ?
-		ORDER BY revision, id
+		ORDER BY version, id
 	`, revision.ReleaseDefinitionID, revision.ID)
 	if err != nil {
 		return nil, fmt.Errorf("list approved values revisions: %w", err)
@@ -310,7 +310,7 @@ func supersedeApprovedRevisions(
 
 	updated, err := tx.ExecContext(ctx, `
 		UPDATE values_revisions
-		SET status = 'superseded', state_version = state_version + 1, version = version + 1,
+		SET status = 'superseded', state_version = state_version + 1,
 			decided_at = ?, updated_at = ?
 		WHERE release_definition_id = ? AND status = 'approved' AND id != ?
 	`, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), revision.ReleaseDefinitionID, revision.ID)
@@ -345,7 +345,7 @@ func updateRevisionState(
 	}
 	updated, err := tx.ExecContext(ctx, `
 		UPDATE values_revisions
-		SET status = ?, state_version = state_version + 1, version = version + 1,
+		SET status = ?, state_version = state_version + 1,
 			submitted_at = COALESCE(?, submitted_at), decided_at = COALESCE(?, decided_at), updated_at = ?
 		WHERE id = ? AND status = ? AND state_version = ?
 	`, string(transition.to), submittedAt, decidedAt, now.Format(time.RFC3339Nano),

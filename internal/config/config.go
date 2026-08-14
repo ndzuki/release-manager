@@ -17,6 +17,7 @@ type Config struct {
 	RuntimePullPreflight RuntimePullConfig `mapstructure:"runtime_pull_preflight"`
 	Database             DatabaseConfig    `mapstructure:"database"`
 	Maintenance          bool              `mapstructure:"maintenance"`
+	Values               ValuesConfig      `mapstructure:"values"`
 }
 
 // DatabaseConfig describes the authoritative application database.
@@ -71,6 +72,23 @@ type RuntimePullConfig struct {
 	ProbeCommand   []string      `mapstructure:"probe_command"`
 }
 
+// ValuesConfig controls immutable ValuesRevision validation.
+type ValuesConfig struct {
+	MaxDocumentBytes int64    `mapstructure:"max_document_bytes"`
+	SecretPatterns   []string `mapstructure:"secret_patterns"`
+}
+
+// WithDefaults returns bounded ValuesRevision defaults.
+func (c ValuesConfig) WithDefaults() ValuesConfig {
+	if c.MaxDocumentBytes <= 0 {
+		c.MaxDocumentBytes = 1 << 20
+	}
+	if c.SecretPatterns == nil {
+		c.SecretPatterns = []string{}
+	}
+	return c
+}
+
 // Load reads the configuration from the given path.
 func Load(path string) (*Config, error) {
 	v := viper.New()
@@ -108,6 +126,7 @@ type ServiceConfig struct {
 	Redis         RedisConfig      `mapstructure:"redis"`
 	Maintenance   bool             `mapstructure:"maintenance"`
 	Authorization AuthorizationCfg `mapstructure:"authorization"`
+	Values        ValuesConfig     `mapstructure:"values"`
 	Gateway       GatewayCfg       `mapstructure:"gateway"`
 	Agent         AgentCfg         `mapstructure:"agent"`
 	CA            OperatorCACfg    `mapstructure:"ca"`
@@ -212,6 +231,8 @@ func bindDatabaseEnvironment(v *viper.Viper) error {
 		"agent.operator_name":                  "OPERATOR_NAME",
 		"agent.enrollment_token_file":          "ENROLLMENT_TOKEN_FILE",
 		"ca.cert_path":                         "CA_CERT_PATH",
+		"values.max_document_bytes":            "VALUES_MAX_DOCUMENT_BYTES",
+		"values.secret_patterns":               "VALUES_SECRET_PATTERNS",
 	}
 	for key, envName := range bindings {
 		if err := v.BindEnv(key, envName); err != nil {

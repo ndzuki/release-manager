@@ -54,7 +54,7 @@ type cacheEntry struct {
 	initialized   bool
 	backoff       time.Duration
 	nextPull      time.Time
-	pullMu sync.Mutex
+	pullMu        sync.Mutex
 }
 
 // Module maintains active actor snapshots and persisted scope checkpoints.
@@ -160,6 +160,9 @@ func (m *Module) AuthorizeWrite(ctx context.Context, actor authctx.Actor, custom
 	m.mu.Unlock()
 
 	if err := m.pull(ctx, key); err != nil {
+		m.logger.Warn("authorization snapshot pull failed during authorize",
+			"organization_id", actor.OrganizationID, "customer_id", customerID,
+			"action", action, "reason", reasonCode(err), "error", err)
 		m.recordDecision(actorID, actorType, actor.OrganizationID, customerID, action, "deny", reasonCode(err), Snapshot{})
 		return err
 	}

@@ -51,6 +51,7 @@ type Service struct {
 	preflightWG         sync.WaitGroup
 	preflightClosed     bool
 	preflightCancels    map[string]context.CancelFunc
+	valuesConfig        ValuesConfig
 }
 
 func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args ...any) *Service {
@@ -60,6 +61,7 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 	var createOperation OperationCreationUnitOfWork
 	operatorEndpoint := "http://operator:8084"
 	logger := slog.Default()
+	valuesConfig := DefaultValuesConfig()
 	var authorizer authorization.Authorizer
 	for _, arg := range args {
 		switch value := arg.(type) {
@@ -77,6 +79,8 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 			}
 		case authorization.Authorizer:
 			authorizer = value
+		case ValuesConfig:
+			valuesConfig = value.WithDefaults()
 		case *slog.Logger:
 			logger = value
 		}
@@ -94,6 +98,7 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 		logger:              logger,
 		authorizer:          authorizer,
 		preflightCancels:    make(map[string]context.CancelFunc),
+		valuesConfig:        valuesConfig,
 	}
 }
 

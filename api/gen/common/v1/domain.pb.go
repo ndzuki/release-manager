@@ -203,6 +203,7 @@ const (
 	ValuesStatus_VALUES_STATUS_REJECTED         ValuesStatus = 3
 	ValuesStatus_VALUES_STATUS_PENDING_APPROVAL ValuesStatus = 4
 	ValuesStatus_VALUES_STATUS_SUPERSEDED       ValuesStatus = 5
+	ValuesStatus_VALUES_STATUS_DISCARDED        ValuesStatus = 6
 )
 
 // Enum value maps for ValuesStatus.
@@ -214,6 +215,7 @@ var (
 		3: "VALUES_STATUS_REJECTED",
 		4: "VALUES_STATUS_PENDING_APPROVAL",
 		5: "VALUES_STATUS_SUPERSEDED",
+		6: "VALUES_STATUS_DISCARDED",
 	}
 	ValuesStatus_value = map[string]int32{
 		"VALUES_STATUS_UNSPECIFIED":      0,
@@ -222,6 +224,7 @@ var (
 		"VALUES_STATUS_REJECTED":         3,
 		"VALUES_STATUS_PENDING_APPROVAL": 4,
 		"VALUES_STATUS_SUPERSEDED":       5,
+		"VALUES_STATUS_DISCARDED":        6,
 	}
 )
 
@@ -942,8 +945,8 @@ type ValuesRevision struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	Id                  string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	ReleaseDefinitionId string                 `protobuf:"bytes,2,opt,name=release_definition_id,json=releaseDefinitionId,proto3" json:"release_definition_id,omitempty"`
-	Revision            int32                  `protobuf:"varint,3,opt,name=revision,proto3" json:"revision,omitempty"`
-	Values              []byte                 `protobuf:"bytes,4,opt,name=values,proto3" json:"values,omitempty"`
+	Version             int64                  `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"`
+	CanonicalDocument   []byte                 `protobuf:"bytes,4,opt,name=canonical_document,json=canonicalDocument,proto3" json:"canonical_document,omitempty"`
 	CreatedAt           *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	Status              ValuesStatus           `protobuf:"varint,6,opt,name=status,proto3,enum=common.v1.ValuesStatus" json:"status,omitempty"`
 	Digest              string                 `protobuf:"bytes,7,opt,name=digest,proto3" json:"digest,omitempty"`
@@ -1001,16 +1004,16 @@ func (x *ValuesRevision) GetReleaseDefinitionId() string {
 	return ""
 }
 
-func (x *ValuesRevision) GetRevision() int32 {
+func (x *ValuesRevision) GetVersion() int64 {
 	if x != nil {
-		return x.Revision
+		return x.Version
 	}
 	return 0
 }
 
-func (x *ValuesRevision) GetValues() []byte {
+func (x *ValuesRevision) GetCanonicalDocument() []byte {
 	if x != nil {
-		return x.Values
+		return x.CanonicalDocument
 	}
 	return nil
 }
@@ -1081,8 +1084,8 @@ func (x *ValuesRevision) GetDecidedAt() *timestamppb.Timestamp {
 // SecretRef holds a reference to a secret, never the secret value itself.
 type SecretRef struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Key           string                 `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1118,16 +1121,16 @@ func (*SecretRef) Descriptor() ([]byte, []int) {
 	return file_common_v1_domain_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *SecretRef) GetName() string {
+func (x *SecretRef) GetPath() string {
 	if x != nil {
-		return x.Name
+		return x.Path
 	}
 	return ""
 }
 
-func (x *SecretRef) GetNamespace() string {
+func (x *SecretRef) GetName() string {
 	if x != nil {
-		return x.Namespace
+		return x.Name
 	}
 	return ""
 }
@@ -1586,12 +1589,12 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"hpaManaged\x124\n" +
 	"\x16max_emergency_replicas\x18\x0e \x01(\x05R\x14maxEmergencyReplicas\x128\n" +
 	"\x18approved_annotation_keys\x18\x0f \x01(\fR\x16approvedAnnotationKeys\x12-\n" +
-	"\x12promotion_mappings\x18\x10 \x01(\fR\x11promotionMappings\"\xbd\x04\n" +
+	"\x12promotion_mappings\x18\x10 \x01(\fR\x11promotionMappings\"\xd2\x04\n" +
 	"\x0eValuesRevision\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x122\n" +
-	"\x15release_definition_id\x18\x02 \x01(\tR\x13releaseDefinitionId\x12\x1a\n" +
-	"\brevision\x18\x03 \x01(\x05R\brevision\x12\x16\n" +
-	"\x06values\x18\x04 \x01(\fR\x06values\x129\n" +
+	"\x15release_definition_id\x18\x02 \x01(\tR\x13releaseDefinitionId\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\x03R\aversion\x12-\n" +
+	"\x12canonical_document\x18\x04 \x01(\fR\x11canonicalDocument\x129\n" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12/\n" +
 	"\x06status\x18\x06 \x01(\x0e2\x17.common.v1.ValuesStatusR\x06status\x12\x16\n" +
@@ -1604,10 +1607,10 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"\x12created_by_user_id\x18\v \x01(\tR\x0fcreatedByUserId\x12=\n" +
 	"\fsubmitted_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\vsubmittedAt\x129\n" +
 	"\n" +
-	"decided_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tdecidedAt\"O\n" +
+	"decided_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tdecidedAt\"E\n" +
 	"\tSecretRef\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
-	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x10\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x10\n" +
 	"\x03key\x18\x03 \x01(\tR\x03key\"\xaf\x01\n" +
 	"\bCustomer\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
@@ -1665,14 +1668,15 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"\x13ARTIFACT_TYPE_CHART\x10\x02\x12\x16\n" +
 	"\x12ARTIFACT_TYPE_SBOM\x10\x03\x12\x1c\n" +
 	"\x18ARTIFACT_TYPE_PROVENANCE\x10\x04\x12\x1b\n" +
-	"\x17ARTIFACT_TYPE_SIGNATURE\x10\x05*\xc0\x01\n" +
+	"\x17ARTIFACT_TYPE_SIGNATURE\x10\x05*\xdd\x01\n" +
 	"\fValuesStatus\x12\x1d\n" +
 	"\x19VALUES_STATUS_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13VALUES_STATUS_DRAFT\x10\x01\x12\x1a\n" +
 	"\x16VALUES_STATUS_APPROVED\x10\x02\x12\x1a\n" +
 	"\x16VALUES_STATUS_REJECTED\x10\x03\x12\"\n" +
 	"\x1eVALUES_STATUS_PENDING_APPROVAL\x10\x04\x12\x1c\n" +
-	"\x18VALUES_STATUS_SUPERSEDED\x10\x05*g\n" +
+	"\x18VALUES_STATUS_SUPERSEDED\x10\x05\x12\x1b\n" +
+	"\x17VALUES_STATUS_DISCARDED\x10\x06*g\n" +
 	"\rClusterStatus\x12\x1e\n" +
 	"\x1aCLUSTER_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15CLUSTER_STATUS_ACTIVE\x10\x01\x12\x1b\n" +

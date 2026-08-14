@@ -286,7 +286,23 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	}); ok {
 		createOperation = uowProvider.OperationCreationUnitOfWork()
 	}
-	svc := orchestrator.NewService(s.store, verifier, s.targetEnv, s.auditEmitter, emergencyDispatcher, orchestrator.NewProcessStreamRevoker(s.operatorRegistry()), s.operatorEndpoint(), createOperation, s.authorizer, logger)
+	valuesConfig := s.cfg.Values.WithDefaults()
+	svc := orchestrator.NewService(
+		s.store,
+		verifier,
+		s.targetEnv,
+		s.auditEmitter,
+		emergencyDispatcher,
+		orchestrator.NewProcessStreamRevoker(s.operatorRegistry()),
+		s.operatorEndpoint(),
+		createOperation,
+		s.authorizer,
+		orchestrator.ValuesConfig{
+			MaxDocumentBytes: valuesConfig.MaxDocumentBytes,
+			SecretPatterns:   valuesConfig.SecretPatterns,
+		},
+		logger,
+	)
 	s.emergency = svc
 	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)
 	enforcer, err := auth.NewEnforcer(s.store, logger)
@@ -448,6 +464,9 @@ func orchestratorReadOnlyProcedures() map[string]struct{} {
 		orchestratorv1connect.OrchestratorServiceGetClusterProcedure:               {},
 		orchestratorv1connect.OrchestratorServiceListClustersProcedure:             {},
 		orchestratorv1connect.OrchestratorServiceGetClusterRoutesProcedure:         {},
+		orchestratorv1connect.OrchestratorServiceGetValuesRevisionProcedure:        {},
+		orchestratorv1connect.OrchestratorServiceListValuesRevisionsProcedure:      {},
+		orchestratorv1connect.OrchestratorServiceGetPrepareSessionProcedure:        {},
 		orchestratorv1connect.OrchestratorServiceGetOperationProcedure:             {},
 		orchestratorv1connect.OrchestratorServiceListOperatorsProcedure:            {},
 		orchestratorv1connect.OrchestratorServiceGetOperatorProcedure:              {},

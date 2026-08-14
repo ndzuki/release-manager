@@ -2,7 +2,11 @@ package values
 
 import (
 	"bytes"
+	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCanonicalize_EquivalentYAMLProducesIdenticalJSON(t *testing.T) {
@@ -186,7 +190,7 @@ func TestCanonicalize_JSONInput(t *testing.T) {
 	}
 }
 
-// AC-018-03: Array replacement.
+// Full-document arrays remain ordered and distinct during canonicalization.
 func TestCanonicalize_ArrayReplacement(t *testing.T) {
 	yamlA := []byte(`ports: [80, 443]`)
 	yamlB := []byte(`ports: [8080]`)
@@ -205,5 +209,103 @@ func TestCanonicalize_ArrayReplacement(t *testing.T) {
 	}
 	if bytes.Equal(a, b) {
 		t.Error("expected different arrays")
+	}
+}
+
+func TestCanonicalize_CrossFormatAndScalarSemantics(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "cross format yaml", input: "b: null\na: [true, 3]", want: `{"a":[true,3],"b":null}`},
+		{name: "cross format json", input: `{"a":[true,3],"b":null}`, want: `{"a":[true,3],"b":null}`},
+		{name: "float stays float", input: "value: 3.0", want: `{"value":3.0}`},
+		{name: "integer stays integer", input: "value: 3", want: `{"value":3}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Canonicalize([]byte(tt.input))
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, string(got))
+		})
+	}
+}
+
+func TestCanonicalize_RejectsAliasesAndMultipleDocuments(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "alias", input: "defaults: &defaults\n  replicas: 2\ncopy: *defaults\n"},
+		{name: "multiple documents", input: "a: 1\n---\nb: 2\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Canonicalize([]byte(tt.input))
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrInvalidYAML)
+		})
+	}
+}
+
+func TestValidateWithRefs_SecretPatternsAndReferences(t *testing.T) {
+	document := []byte("database:\n  password: null\nimage:\n  tag: v1\n")
+	validRefs := []SecretRef{{Path: "/database/password", Name: "database-secret", Key: "password"}}
+
+	result, err := ValidateWithRefs(document, 1024, nil, validRefs)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"database":{"password":null},"image":{"tag":"v1"}}`, string(result.Canonical))
+
+	tests := []struct {
+		name string
+		refs []SecretRef
+	}{
+		{name: "missing path", refs: []SecretRef{{Path: "/database/missing", Name: "database-secret", Key: "password"}}},
+		{name: "non null path", refs: []SecretRef{{Path: "/image/tag", Name: "database-secret", Key: "password"}}},
+		{name: "duplicate path", refs: []SecretRef{{Path: "/database/password", Name: "one", Key: "a"}, {Path: "/database/password", Name: "two", Key: "b"}}},
+		{name: "invalid name", refs: []SecretRef{{Path: "/database/password", Name: "Invalid_Name", Key: "password"}}},
+		{name: "invalid key", refs: []SecretRef{{Path: "/database/password", Name: "database-secret", Key: "bad/key"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ValidateWithRefs(document, 1024, nil, tt.refs)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrInvalidSecretRef)
+		})
+	}
+}
+
+func TestValidateWithRefs_RejectsTooManyRefs(t *testing.T) {
+	refs := make([]SecretRef, 65)
+	for index := range refs {
+		refs[index] = SecretRef{Path: "/placeholder", Name: "secret", Key: "key"}
+	}
+	_, err := ValidateWithRefs([]byte("placeholder: null"), 1024, nil, refs)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidSecretRef)
+}
+
+func TestValidate_CustomSecretPatternAndValueShapes(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		patterns []string
+	}{
+		{name: "custom key", input: "credential: visible", patterns: []string{"credential"}},
+		{name: "private key", input: "value: |\n  -----BEGIN PRIVATE KEY-----\n  abc\n"},
+		{name: "credential uri", input: "dsn: postgresql://user:password@example.invalid/db"},
+		{name: "long hex", input: "value: 0123456789abcdef0123456789abcdef"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ValidateWithRefs([]byte(tt.input), 0, tt.patterns, nil)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, ErrSecretLiteral))
+		})
 	}
 }

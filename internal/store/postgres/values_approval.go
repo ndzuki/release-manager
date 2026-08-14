@@ -293,7 +293,7 @@ func supersedeApprovedValuesRevisions(
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id FROM values_revisions
 		WHERE release_definition_id = ? AND status = 'approved' AND id != ?
-		ORDER BY revision, id
+		ORDER BY version, id
 		FOR UPDATE
 	`, revision.ReleaseDefinitionID, revision.ID)
 	if err != nil {
@@ -318,7 +318,7 @@ func supersedeApprovedValuesRevisions(
 
 	updated, err := tx.ExecContext(ctx, `
 		UPDATE values_revisions
-		SET status = 'superseded', state_version = state_version + 1, version = version + 1,
+		SET status = 'superseded', state_version = state_version + 1,
 			decided_at = ?, updated_at = ?
 		WHERE release_definition_id = ? AND status = 'approved' AND id != ?
 	`, now.UTC(), now.UTC(), revision.ReleaseDefinitionID, revision.ID)
@@ -353,7 +353,7 @@ func updateValuesApprovalRevisionState(
 	}
 	updated, err := tx.ExecContext(ctx, `
 		UPDATE values_revisions
-		SET status = ?, state_version = state_version + 1, version = version + 1,
+		SET status = ?, state_version = state_version + 1,
 			submitted_at = COALESCE(CAST(? AS TIMESTAMPTZ), submitted_at),
 			decided_at = COALESCE(CAST(? AS TIMESTAMPTZ), decided_at), updated_at = ?
 		WHERE id = ? AND status = ? AND state_version = ?
@@ -615,7 +615,7 @@ func valuesApprovalOutboxSelectQuery(table approvalOutboxTable) (string, error) 
 }
 
 const valuesApprovalRevisionSelect = `
-	SELECT id, release_definition_id, revision, state_version, status, "values",
+	SELECT id, release_definition_id, version, state_version, status, "values",
 		digest, parent_revision_id, secret_refs, created_by_user_id,
 		submitted_at, decided_at, created_at, updated_at
 	FROM values_revisions`

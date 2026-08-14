@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -43,6 +44,7 @@ import (
 	postgresstore "github.com/ndzuki/release-manager/internal/store/postgres"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 	"github.com/ndzuki/release-manager/internal/trust"
+	"github.com/ndzuki/release-manager/internal/values"
 	"github.com/ndzuki/release-manager/migrations"
 )
 
@@ -95,14 +97,14 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 		Status: store.DefStatusActive, OwnerOrganizationID: &ownerOrganizationID,
 	}, nil))
 	require.NoError(t, seedStore.Values().Create(ctx, &store.ValuesRevision{
-		ID: revisionID, ReleaseDefinitionID: definitionID, Revision: 1,
-		StateVersion: 1, Status: store.ValuesStatusDraft, Values: []byte(`{"replicas":1}`),
+		ID: revisionID, ReleaseDefinitionID: definitionID, Version: 1,
+		StateVersion: 1, Status: store.ValuesStatusDraft, CanonicalDocument: []byte(`{"replicas":1}`),
 		Digest: "sha256:068-smoke", CreatedByUserID: creatorID,
 	}))
 	require.NoError(t, seedStore.Values().Create(ctx, &store.ValuesRevision{
-		ID: viewerRevisionID, ReleaseDefinitionID: definitionID, Revision: 2,
-		StateVersion: 1, Status: store.ValuesStatusDraft, Values: []byte(`{"replicas":2}`),
-		Digest: "sha256:068-viewer", CreatedByUserID: viewerID,
+		ID: viewerRevisionID, ReleaseDefinitionID: definitionID, Version: 2,
+		StateVersion: 1, Status: store.ValuesStatusDraft, CanonicalDocument: []byte(`{"replicas":2}`),
+		Digest: "sha256:068-viewer", ParentRevisionID: revisionID, CreatedByUserID: viewerID,
 	}))
 	require.NoError(t, seedStore.Close())
 
@@ -214,8 +216,8 @@ func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 		OwnerOrganizationID: &ownerOrganizationID,
 	}, nil))
 	require.NoError(t, seedStore.Values().Create(ctx, &store.ValuesRevision{
-		ID: valuesRevisionID, ReleaseDefinitionID: definitionID, Revision: 1, StateVersion: 1,
-		Status: store.ValuesStatusApproved, Values: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-live",
+		ID: valuesRevisionID, ReleaseDefinitionID: definitionID, Version: 1, StateVersion: 1,
+		Status: store.ValuesStatusApproved, CanonicalDocument: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-live",
 	}))
 	bundleDigest := fmt.Sprintf("%064x", 74)
 	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{
@@ -412,8 +414,8 @@ func TestTrustServiceMaintenanceGate(t *testing.T) {
 	// maintenance 拦截器：五个写 RPC 在 auth/handler 前拒绝，platform_admin 也不例外。
 	publicKeyPEM, _ := testEd25519KeyPair(t)
 	writes := []struct {
-		name   string
-		call   func() error
+		name string
+		call func() error
 	}{
 		{
 			name: "create",
@@ -505,8 +507,8 @@ func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
 		OwnerOrganizationID: &ownerOrganizationID,
 	}, nil))
 	require.NoError(t, seedStore.Values().Create(ctx, &store.ValuesRevision{
-		ID: valuesRevisionID, ReleaseDefinitionID: definitionID, Revision: 1, StateVersion: 1,
-		Status: store.ValuesStatusApproved, Values: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-unavailable",
+		ID: valuesRevisionID, ReleaseDefinitionID: definitionID, Version: 1, StateVersion: 1,
+		Status: store.ValuesStatusApproved, CanonicalDocument: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-unavailable",
 	}))
 	bundleDigest := fmt.Sprintf("%064x", 76)
 	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{
@@ -596,8 +598,8 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 		OwnerOrganizationID: &ownerOrganizationID,
 	}, nil))
 	require.NoError(t, seedStore.Values().Create(ctx, &store.ValuesRevision{
-		ID: valuesRevisionID, ReleaseDefinitionID: definitionID, Revision: 1, StateVersion: 1,
-		Status: store.ValuesStatusApproved, Values: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-epoch",
+		ID: valuesRevisionID, ReleaseDefinitionID: definitionID, Version: 1, StateVersion: 1,
+		Status: store.ValuesStatusApproved, CanonicalDocument: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-epoch",
 	}))
 	bundleDigest := fmt.Sprintf("%064x", 98)
 	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{
@@ -724,6 +726,146 @@ func (r failingTrustResolver) ResolveActive(context.Context, string, time.Time) 
 
 func (r failingTrustResolver) GetPolicyMeta(context.Context, string) (*store.TrustPolicyMeta, error) {
 	return nil, r.err
+}
+
+func TestOrchestratorValuesRevisionManagementEndToEnd(t *testing.T) {
+	const signingKey = "test-signing-key"
+	ctx := context.Background()
+	dbPath := t.TempDir() + "/orchestrator.db"
+	seedStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+
+	const (
+		organizationID = "71e2f6bc-70b0-4c3a-a693-c906207d45ce"
+		customerID     = "b31fd8f2-9b67-4cb7-8c0e-8c108a28ed8a"
+		definitionID   = "definition-018-smoke"
+		creatorID      = "creator-018-smoke"
+	)
+	ownerOrganizationID := organizationID
+	require.NoError(t, seedStore.Customers().Create(ctx, &store.Customer{
+		ID: customerID, Name: "Customer 018 Smoke", Slug: "customer-018-smoke",
+	}))
+	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{
+		ID: organizationID, Name: "Organization 018 Smoke",
+	}))
+	require.NoError(t, seedStore.Bindings().Create(ctx, &store.OrgCustomerBinding{
+		ID: "binding-018-smoke", OrgID: organizationID, CustomerID: customerID,
+	}))
+	require.NoError(t, seedStore.Users().Create(ctx, &store.User{
+		ID: creatorID, Username: creatorID, PasswordHash: "unused",
+	}))
+	require.NoError(t, seedStore.OrgMembers().Create(ctx, &store.OrganizationMember{
+		OrgID: organizationID, UserID: creatorID, Role: store.RoleDeployer,
+	}))
+	require.NoError(t, seedStore.AuthSessions().Create(ctx, &store.AuthSession{
+		ID: uuid.NewString(), UserID: creatorID, TokenFamily: uuid.NewString(),
+		RefreshTokenHash: uuid.NewString(), ExpiresAt: time.Now().UTC().Add(time.Hour),
+	}))
+	require.NoError(t, seedStore.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: definitionID, Name: "definition-018-smoke", CustomerID: customerID,
+		ClusterID: "cluster-018-smoke", ReleaseName: "release-018-smoke",
+		Status: store.DefStatusActive, OwnerOrganizationID: &ownerOrganizationID,
+	}, nil))
+	require.NoError(t, seedStore.Close())
+
+	mux := http.NewServeMux()
+	authStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
+	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+
+	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	svc.Configure(&config.ServiceConfig{
+		Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath},
+		Values:   config.ValuesConfig{MaxDocumentBytes: 1 << 20},
+	})
+	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	t.Cleanup(cancelRun)
+	go svc.Run(runCtx)
+
+	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	creatorToken, _, err := jwtManager.GenerateAccessToken(
+		creatorID,
+		organizationID,
+		[]string{string(store.RoleDeployer)},
+	)
+	require.NoError(t, err)
+	client := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
+
+	createRequest := connect.NewRequest(&orchestratorv1.CreateValuesRevisionRequest{
+		ReleaseDefinitionId: definitionID,
+		Document:            "database:\n  password: null\nreplicas: 2\n",
+		SecretRefs: []*commonv1.SecretRef{
+			{Path: "/database/password", Name: "database-secret", Key: "password"},
+		},
+	})
+	createRequest.Header().Set("Authorization", "Bearer "+creatorToken)
+	createRequest.Header().Set("Idempotency-Key", "create-018-smoke")
+	var created *connect.Response[orchestratorv1.CreateValuesRevisionResponse]
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		var createErr error
+		created, createErr = client.CreateValuesRevision(ctx, createRequest)
+		if !assert.NoError(collect, createErr) {
+			assert.Contains(collect, []connect.Code{connect.CodeUnavailable, connect.CodeFailedPrecondition}, connect.CodeOf(createErr))
+		}
+	}, 3*time.Second, 50*time.Millisecond)
+	assert.True(t, created.Msg.GetCreated())
+	assert.Equal(t, int64(1), created.Msg.GetRevision().GetVersion())
+	assert.Equal(t, "{\"database\":{\"password\":null},\"replicas\":2}", string(created.Msg.GetRevision().GetCanonicalDocument()))
+
+	replayed, err := client.CreateValuesRevision(ctx, createRequest)
+	require.NoError(t, err)
+	assert.False(t, replayed.Msg.GetCreated())
+	assert.Equal(t, created.Msg.GetRevision().GetId(), replayed.Msg.GetRevision().GetId())
+
+	getRequest := connect.NewRequest(&orchestratorv1.GetValuesRevisionRequest{
+		RevisionId: created.Msg.GetRevision().GetId(),
+	})
+	getRequest.Header().Set("Authorization", "Bearer "+creatorToken)
+	got, err := client.GetValuesRevision(ctx, getRequest)
+	require.NoError(t, err)
+	assert.Equal(t, created.Msg.GetRevision().GetDigest(), got.Msg.GetDigest())
+	assert.Equal(t, created.Msg.GetRevision().GetSecretRefs(), got.Msg.GetSecretRefs())
+
+	listRequest := connect.NewRequest(&orchestratorv1.ListValuesRevisionsRequest{
+		ReleaseDefinitionId: definitionID,
+		Status:              commonv1.ValuesStatus_VALUES_STATUS_DRAFT,
+		PageSize:            10,
+	})
+	listRequest.Header().Set("Authorization", "Bearer "+creatorToken)
+	listed, err := client.ListValuesRevisions(ctx, listRequest)
+	require.NoError(t, err)
+	require.Len(t, listed.Msg.GetItems(), 1)
+	assert.Equal(t, created.Msg.GetRevision().GetId(), listed.Msg.GetItems()[0].GetId())
+
+	discardRequest := connect.NewRequest(&orchestratorv1.DiscardValuesRevisionRequest{
+		RevisionId:           created.Msg.GetRevision().GetId(),
+		ExpectedStateVersion: created.Msg.GetRevision().GetStateVersion(),
+		Comment:              "obsolete draft",
+	})
+	discardRequest.Header().Set("Authorization", "Bearer "+creatorToken)
+	discardRequest.Header().Set("Idempotency-Key", "discard-018-smoke")
+	discarded, err := client.DiscardValuesRevision(ctx, discardRequest)
+	require.NoErrorf(t, err, "discard values revision failed: code=%s err=%v", connect.CodeOf(err), err)
+	assert.Equal(t, commonv1.ValuesStatus_VALUES_STATUS_DISCARDED, discarded.Msg.GetNewState())
+	assert.Equal(t, created.Msg.GetRevision().GetCanonicalDocument(), discarded.Msg.GetRevision().GetCanonicalDocument())
+
+	secretRequest := connect.NewRequest(&orchestratorv1.CreateValuesRevisionRequest{
+		ReleaseDefinitionId:   definitionID,
+		Document:              "password: plaintext-secret",
+		ParentRevisionId:      created.Msg.GetRevision().GetId(),
+		ExpectedParentVersion: created.Msg.GetRevision().GetVersion(),
+	})
+	secretRequest.Header().Set("Authorization", "Bearer "+creatorToken)
+	secretRequest.Header().Set("Idempotency-Key", "secret-018-smoke")
+	_, err = client.CreateValuesRevision(ctx, secretRequest)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.ErrorContains(t, err, "secret_literal_forbidden")
 }
 
 type testAuthorizationHandler struct {
@@ -902,6 +1044,9 @@ func TestServiceReadOnlyProcedures(t *testing.T) {
 		orchestratorv1connect.OrchestratorServiceListClustersProcedure,
 		orchestratorv1connect.OrchestratorServiceGetClusterRoutesProcedure,
 		orchestratorv1connect.OrchestratorServiceGetOperationProcedure,
+		orchestratorv1connect.OrchestratorServiceGetValuesRevisionProcedure,
+		orchestratorv1connect.OrchestratorServiceListValuesRevisionsProcedure,
+		orchestratorv1connect.OrchestratorServiceGetPrepareSessionProcedure,
 	} {
 		assert.Contains(t, orchestratorReadOnly, procedure)
 	}
@@ -916,6 +1061,14 @@ func TestServiceReadOnlyProcedures(t *testing.T) {
 		trustv1connect.TrustServiceEndGraceProcedure,
 		trustv1connect.TrustServiceRetireTrustRootProcedure,
 		trustv1connect.TrustServiceRevokeTrustRootProcedure,
+		orchestratorv1connect.OrchestratorServiceCreateOperationProcedure,
+		orchestratorv1connect.OrchestratorServiceCreateEnrollmentTokenProcedure,
+		orchestratorv1connect.OrchestratorServiceEmergencyChangeProcedure,
+		orchestratorv1connect.OrchestratorServiceSyncInventoryProcedure,
+		orchestratorv1connect.OrchestratorServiceConfigureClusterRouteProcedure,
+		orchestratorv1connect.OrchestratorServiceCreateValuesRevisionProcedure,
+		orchestratorv1connect.OrchestratorServiceDiscardValuesRevisionProcedure,
+		orchestratorv1connect.OrchestratorServiceCreatePrepareSessionProcedure,
 	} {
 		assert.NotContains(t, trustReadOnly, procedure)
 	}
@@ -942,7 +1095,6 @@ func TestLoadTrustConfig_DefaultsNonPositiveTimeout(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, trust.DefaultVerificationTimeout, trustCfg.VerificationTimeout)
 }
-
 
 // TestOperatorManagementPostgreSQLFlow exercises the full REQ-053 management
 // contract against the PostgreSQL store: token create/replace/status, viewer
@@ -1144,4 +1296,304 @@ func TestOperatorReadOnlyProcedures(t *testing.T) {
 	} {
 		assert.NotContains(t, orchestratorReadOnly, procedure)
 	}
+}
+
+// TestValuesCreateListIdempotencyConnectEndToEnd exercises the TASK-018
+// delivered Create/List/Discard/CreatePrepareSession/GetPrepareSession
+// procedures through the real Connect server + auth interceptor + RBAC
+// enforcer (AC-071-01/02/03): draft creation with digest consistency and
+// prepare_token CAS consumption, list returning ALL revisions including
+// discarded history ordered version DESC with cursor paging, and the
+// idempotency double-branch under the REQ-018 D14 scope (same key + same
+// request_hash replay vs same key + different request_hash).
+func TestValuesCreateListIdempotencyConnectEndToEnd(t *testing.T) {
+	const signingKey = "test-signing-key"
+	ctx := context.Background()
+	dbPath := t.TempDir() + "/orchestrator.db"
+	seedStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+
+	const (
+		organizationID    = "3d7a5c91-6f1b-4d2e-9a58-2c4e8b1f7a03"
+		customerID        = "8e2f4b6d-1a3c-4e5f-9b7a-0c1d2e3f4a5b"
+		definitionID      = "definition-071-smoke"
+		creatorID         = "creator-071-smoke"
+		approverID        = "approver-071-smoke"
+		convergenceTaskID = "task-071-convergence"
+	)
+	ownerOrganizationID := organizationID
+	require.NoError(t, seedStore.Customers().Create(ctx, &store.Customer{
+		ID: customerID, Name: "Customer 071 Smoke", Slug: "customer-071-smoke",
+	}))
+	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{
+		ID: organizationID, Name: "Organization 071 Smoke",
+	}))
+	require.NoError(t, seedStore.Bindings().Create(ctx, &store.OrgCustomerBinding{
+		ID: "binding-071-smoke", OrgID: organizationID, CustomerID: customerID,
+	}))
+	for userID, role := range map[string]store.Role{
+		creatorID:  store.RoleDeployer,
+		approverID: store.RoleReleaseAdmin,
+	} {
+		require.NoError(t, seedStore.Users().Create(ctx, &store.User{
+			ID: userID, Username: userID, PasswordHash: "unused",
+		}))
+		require.NoError(t, seedStore.OrgMembers().Create(ctx, &store.OrganizationMember{
+			OrgID: organizationID, UserID: userID, Role: role,
+		}))
+		require.NoError(t, seedStore.AuthSessions().Create(ctx, &store.AuthSession{
+			ID: uuid.NewString(), UserID: userID, TokenFamily: uuid.NewString(),
+			RefreshTokenHash: uuid.NewString(), ExpiresAt: time.Now().UTC().Add(time.Hour),
+		}))
+	}
+	require.NoError(t, seedStore.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: definitionID, Name: "definition-071-smoke", CustomerID: customerID,
+		ClusterID: "cluster-071-smoke", ReleaseName: "release-071-smoke",
+		Status: store.DefStatusActive, OwnerOrganizationID: &ownerOrganizationID,
+	}, nil))
+	// One pending_promotion convergence task backing the prepare_token path;
+	// it references an operation (FK constraint on convergence_tasks).
+	require.NoError(t, seedStore.Operations().Create(ctx, &store.Operation{
+		ID:                  "op-071-smoke",
+		ReleaseDefinitionID: definitionID,
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusPending,
+		Actor:               store.ActorContext{UserID: creatorID},
+	}))
+	require.NoError(t, seedStore.ConvergenceTasks().Create(ctx, &store.ConvergenceTask{
+		ID:                  convergenceTaskID,
+		OperationID:         "op-071-smoke",
+		ReleaseDefinitionID: definitionID,
+		Action:              store.EmergencySetContainerImage,
+		TargetSummary:       "seed chain",
+		PromotionPaths:      json.RawMessage(`["/replicas"]`),
+		Status:              "pending_promotion",
+		SubmittedAt:         time.Now().UTC(),
+		CreatedAt:           time.Now().UTC(),
+	}))
+	require.NoError(t, seedStore.Close())
+
+	mux := http.NewServeMux()
+	authStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
+	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+
+	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	svc.Configure(&config.ServiceConfig{
+		Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath},
+		Values:   config.ValuesConfig{MaxDocumentBytes: 1 << 20},
+	})
+	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	t.Cleanup(cancelRun)
+	go svc.Run(runCtx)
+
+	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	creatorToken, _, err := jwtManager.GenerateAccessToken(
+		creatorID, organizationID, []string{string(store.RoleDeployer)},
+	)
+	require.NoError(t, err)
+	approverToken, _, err := jwtManager.GenerateAccessToken(
+		approverID, organizationID, []string{string(store.RoleReleaseAdmin)},
+	)
+	require.NoError(t, err)
+	client := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
+
+	const (
+		documentA = "replicas: 2\nimage:\n  tag: v1\n"
+		documentB = "replicas: 3\nimage:\n  tag: v2\n"
+	)
+	canonicalA, err := values.Canonicalize([]byte(documentA))
+	require.NoError(t, err)
+
+	create := func(document, idemKey, prepareToken, parentID string, parentVersion int64) (*connect.Response[orchestratorv1.CreateValuesRevisionResponse], error) {
+		req := connect.NewRequest(&orchestratorv1.CreateValuesRevisionRequest{
+			ReleaseDefinitionId:   definitionID,
+			Document:              document,
+			PrepareToken:          prepareToken,
+			ParentRevisionId:      parentID,
+			ExpectedParentVersion: parentVersion,
+		})
+		req.Header().Set("Authorization", "Bearer "+creatorToken)
+		req.Header().Set("Idempotency-Key", idemKey)
+		return client.CreateValuesRevision(ctx, req)
+	}
+	createEventually := func(document, idemKey, prepareToken, parentID string, parentVersion int64) *connect.Response[orchestratorv1.CreateValuesRevisionResponse] {
+		var created *connect.Response[orchestratorv1.CreateValuesRevisionResponse]
+		require.EventuallyWithT(t, func(collect *assert.CollectT) {
+			var createErr error
+			created, createErr = create(document, idemKey, prepareToken, parentID, parentVersion)
+			if !assert.NoError(collect, createErr) {
+				assert.Contains(collect, []connect.Code{connect.CodeUnavailable, connect.CodeFailedPrecondition}, connect.CodeOf(createErr))
+			}
+		}, 3*time.Second, 50*time.Millisecond)
+		return created
+	}
+
+	// AC-071-01: create the initial draft through the formal Connect seam —
+	// created=true, status=draft, digest consistent with the canonical document.
+	first := createEventually(documentA, "create-071-a", "", "", 0)
+	assert.True(t, first.Msg.GetCreated())
+	assert.Equal(t, commonv1.ValuesStatus_VALUES_STATUS_DRAFT, first.Msg.GetRevision().GetStatus())
+	assert.Equal(t, int64(1), first.Msg.GetRevision().GetVersion())
+	assert.Equal(t, string(canonicalA), string(first.Msg.GetRevision().GetCanonicalDocument()))
+	assert.Equal(t, values.Digest(canonicalA), first.Msg.GetRevision().GetDigest())
+
+	// Second ordinary revision chains off the first and becomes the chain head
+	// for the prepare session.
+	second := createEventually(documentB, "create-071-b", "", first.Msg.GetRevision().GetId(), first.Msg.GetRevision().GetVersion())
+	assert.True(t, second.Msg.GetCreated())
+	assert.Equal(t, int64(2), second.Msg.GetRevision().GetVersion())
+
+	// AC-071-01 (convergence path): CreatePrepareSession locks the chain head,
+	// GetPrepareSession reads the session back, and CreateValuesRevision
+	// consumes the prepare_token inside the same transaction.
+	prepareReq := connect.NewRequest(&orchestratorv1.CreatePrepareSessionRequest{
+		ReleaseDefinitionId:   definitionID,
+		TaskIds:               []string{convergenceTaskID},
+		ExpectedParentVersion: second.Msg.GetRevision().GetVersion(),
+	})
+	prepareReq.Header().Set("Authorization", "Bearer "+creatorToken)
+	var prepareResponse *connect.Response[orchestratorv1.CreatePrepareSessionResponse]
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		var prepareErr error
+		prepareResponse, prepareErr = client.CreatePrepareSession(ctx, prepareReq)
+		if !assert.NoError(collect, prepareErr) {
+			assert.Contains(collect, []connect.Code{connect.CodeUnavailable, connect.CodeFailedPrecondition}, connect.CodeOf(prepareErr))
+		}
+	}, 3*time.Second, 50*time.Millisecond)
+	prepareToken := prepareResponse.Msg.GetPrepareToken()
+	assert.NotEmpty(t, prepareToken)
+	assert.Equal(t, second.Msg.GetRevision().GetId(), prepareResponse.Msg.GetParentRevisionId())
+	assert.Equal(t, second.Msg.GetRevision().GetVersion(), prepareResponse.Msg.GetParentVersion())
+	assert.Equal(t, []string{"/replicas"}, prepareResponse.Msg.GetLockedPaths())
+
+	getPrepareReq := connect.NewRequest(&orchestratorv1.GetPrepareSessionRequest{PrepareToken: prepareToken})
+	getPrepareReq.Header().Set("Authorization", "Bearer "+creatorToken)
+	sessionInfo, err := client.GetPrepareSession(ctx, getPrepareReq)
+	require.NoError(t, err)
+	assert.Equal(t, definitionID, sessionInfo.Msg.GetReleaseDefinitionId())
+	assert.Equal(t, second.Msg.GetRevision().GetId(), sessionInfo.Msg.GetParentRevisionId())
+	assert.Equal(t, []string{convergenceTaskID}, sessionInfo.Msg.GetTaskIds())
+	assert.Equal(t, []string{"/replicas"}, sessionInfo.Msg.GetLockedPaths())
+	assert.NotEmpty(t, sessionInfo.Msg.GetLockedPathsHash())
+
+	converged := createEventually("replicas: 4\nimage:\n  tag: v3\n", "create-071-converge", prepareToken, "", 0)
+	assert.True(t, converged.Msg.GetCreated())
+	assert.Equal(t, int64(3), converged.Msg.GetRevision().GetVersion())
+	assert.Equal(t, second.Msg.GetRevision().GetId(), converged.Msg.GetRevision().GetParentRevisionId())
+	// CAS consumption: replaying the same request (same token + key + hash)
+	// returns the original revision instead of creating another.
+	replayedConverged, err := create("replicas: 4\nimage:\n  tag: v3\n", "create-071-converge", prepareToken, "", 0)
+	require.NoError(t, err)
+	assert.False(t, replayedConverged.Msg.GetCreated())
+	assert.Equal(t, converged.Msg.GetRevision().GetId(), replayedConverged.Msg.GetRevision().GetId())
+
+	// AC-071-02: discard the first revision, then list by definition — ALL
+	// revisions including discarded history, ordered version DESC.
+	discardRequest := connect.NewRequest(&orchestratorv1.DiscardValuesRevisionRequest{
+		RevisionId:           first.Msg.GetRevision().GetId(),
+		ExpectedStateVersion: first.Msg.GetRevision().GetStateVersion(),
+		Comment:              "superseded by seed chain",
+	})
+	discardRequest.Header().Set("Authorization", "Bearer "+creatorToken)
+	discardRequest.Header().Set("Idempotency-Key", "discard-071-1")
+	discarded, err := client.DiscardValuesRevision(ctx, discardRequest)
+	require.NoErrorf(t, err, "discard values revision failed: code=%s err=%v", connect.CodeOf(err), err)
+	assert.Equal(t, commonv1.ValuesStatus_VALUES_STATUS_DISCARDED, discarded.Msg.GetNewState())
+
+	listRequest := connect.NewRequest(&orchestratorv1.ListValuesRevisionsRequest{
+		ReleaseDefinitionId: definitionID,
+		PageSize:            10,
+	})
+	listRequest.Header().Set("Authorization", "Bearer "+creatorToken)
+	listed, err := client.ListValuesRevisions(ctx, listRequest)
+	require.NoError(t, err)
+	require.Len(t, listed.Msg.GetItems(), 3)
+	assert.Equal(t, converged.Msg.GetRevision().GetId(), listed.Msg.GetItems()[0].GetId())
+	assert.Equal(t, second.Msg.GetRevision().GetId(), listed.Msg.GetItems()[1].GetId())
+	assert.Equal(t, first.Msg.GetRevision().GetId(), listed.Msg.GetItems()[2].GetId())
+	assert.Equal(t, commonv1.ValuesStatus_VALUES_STATUS_DISCARDED, listed.Msg.GetItems()[2].GetStatus())
+	assert.Empty(t, listed.Msg.GetNextCursor())
+
+	// Cursor paging walks every revision exactly once.
+	pagedRequest := connect.NewRequest(&orchestratorv1.ListValuesRevisionsRequest{
+		ReleaseDefinitionId: definitionID,
+		PageSize:            1,
+	})
+	pagedRequest.Header().Set("Authorization", "Bearer "+creatorToken)
+	seen := map[string]bool{}
+	for page := range 3 {
+		pageResponse, pageErr := client.ListValuesRevisions(ctx, pagedRequest)
+		require.NoError(t, pageErr)
+		require.Len(t, pageResponse.Msg.GetItems(), 1)
+		itemID := pageResponse.Msg.GetItems()[0].GetId()
+		seen[itemID] = true
+		if page < 2 {
+			require.NotEmpty(t, pageResponse.Msg.GetNextCursor())
+			pagedRequest.Msg.Cursor = pageResponse.Msg.GetNextCursor()
+		} else {
+			assert.Empty(t, pageResponse.Msg.GetNextCursor())
+		}
+	}
+	require.Len(t, seen, 3)
+
+	// AC-071-03 branch 1: same scope + same key + same request_hash replay →
+	// created=false, no duplicate write (list count unchanged).
+	replayed, err := create(documentA, "create-071-a", "", "", 0)
+	require.NoError(t, err)
+	assert.False(t, replayed.Msg.GetCreated())
+	assert.Equal(t, first.Msg.GetRevision().GetId(), replayed.Msg.GetRevision().GetId())
+	counted, err := client.ListValuesRevisions(ctx, listRequest)
+	require.NoError(t, err)
+	require.Len(t, counted.Msg.GetItems(), 3)
+
+	// AC-071-03 branch 2: same scope + same key + different request_hash →
+	// CodeAlreadyExists with idempotency_conflict (REQ-010 semantics).
+	_, err = create(documentA+"extra: true\n", "create-071-a", "", "", 0)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+	assert.ErrorContains(t, err, "idempotency_conflict")
+
+	// Full chain (devseed semantics): Submit by the creator, self-approval
+	// refused (REQ-068), then Approve by the release admin.
+	submitRequest := connect.NewRequest(&orchestratorv1.SubmitValuesRevisionRequest{
+		RevisionId:           second.Msg.GetRevision().GetId(),
+		ExpectedStateVersion: second.Msg.GetRevision().GetStateVersion(),
+		Comment:              "seeded by devseed",
+	})
+	submitRequest.Header().Set("Authorization", "Bearer "+creatorToken)
+	submitRequest.Header().Set("Idempotency-Key", "submit-071-2")
+	submitted, err := client.SubmitValuesRevision(ctx, submitRequest)
+	require.NoErrorf(t, err, "submit values revision failed: code=%s err=%v", connect.CodeOf(err), err)
+	assert.Equal(t, commonv1.ValuesStatus_VALUES_STATUS_PENDING_APPROVAL, submitted.Msg.GetNewState())
+
+	selfApproveRequest := connect.NewRequest(&orchestratorv1.ApproveValuesRevisionRequest{
+		RevisionId:           second.Msg.GetRevision().GetId(),
+		ExpectedStateVersion: submitted.Msg.GetRevision().GetStateVersion(),
+		Comment:              "self approve",
+	})
+	selfApproveRequest.Header().Set("Authorization", "Bearer "+creatorToken)
+	selfApproveRequest.Header().Set("Idempotency-Key", "self-approve-071-2")
+	_, err = client.ApproveValuesRevision(ctx, selfApproveRequest)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+	var selfApproveErr *connect.Error
+	require.ErrorAs(t, err, &selfApproveErr)
+	assert.Equal(t, "self_approval_forbidden", selfApproveErr.Meta().Get("X-Reason-Code"))
+
+	approveRequest := connect.NewRequest(&orchestratorv1.ApproveValuesRevisionRequest{
+		RevisionId:           second.Msg.GetRevision().GetId(),
+		ExpectedStateVersion: submitted.Msg.GetRevision().GetStateVersion(),
+		Comment:              "approved",
+	})
+	approveRequest.Header().Set("Authorization", "Bearer "+approverToken)
+	approveRequest.Header().Set("Idempotency-Key", "approve-071-2")
+	approved, err := client.ApproveValuesRevision(ctx, approveRequest)
+	require.NoErrorf(t, err, "approve values revision failed: code=%s err=%v", connect.CodeOf(err), err)
+	assert.Equal(t, commonv1.ValuesStatus_VALUES_STATUS_APPROVED, approved.Msg.GetNewState())
 }
