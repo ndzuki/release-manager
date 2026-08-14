@@ -38,9 +38,12 @@ import (
 // so the mTLS identity guard starts from a clean slate.
 func newGatewayStore(t *testing.T, token string) store.Store {
 	t.Helper()
-	st, err := sqlitestore.Open("file::memory:?cache=shared")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = st.Close() })
+	// OpenTest allocates a unique named in-memory DB per test; the anonymous
+	// file::memory:?cache=shared form would be shared by every test in the
+	// process, leaking rows across tests once a previous store's connection
+	// outlives its cleanup.
+	st := sqlitestore.OpenTest(t)
+
 
 	ctx := context.Background()
 	cust := &store.Customer{ID: "cust-1", Name: "test-customer", Slug: "test", Status: store.CustomerActive, CreatedAt: time.Now(), UpdatedAt: time.Now()}

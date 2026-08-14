@@ -54,7 +54,7 @@ func (s *stubValuesStore) GetLatestApproved(_ context.Context, defID string) (*s
 	var latest *store.ValuesRevision
 	for _, vr := range s.items {
 		if vr.ReleaseDefinitionID == defID && vr.Status == store.ValuesStatusApproved {
-			if latest == nil || vr.Revision > latest.Revision {
+			if latest == nil || vr.Version > latest.Version {
 				latest = vr
 			}
 		}
@@ -65,14 +65,27 @@ func (s *stubValuesStore) GetLatestApproved(_ context.Context, defID string) (*s
 	return latest, nil
 }
 
-func (s *stubValuesStore) GetNextRevisionNumber(_ context.Context, defID string) (int, error) {
-	maxRev := 0
+func (s *stubValuesStore) GetLatest(_ context.Context, defID string) (*store.ValuesRevision, error) {
+	var latest *store.ValuesRevision
 	for _, vr := range s.items {
-		if vr.ReleaseDefinitionID == defID && vr.Revision > maxRev {
-			maxRev = vr.Revision
+		if vr.ReleaseDefinitionID == defID && (latest == nil || vr.Version > latest.Version) {
+			latest = vr
 		}
 	}
-	return maxRev + 1, nil
+	if latest == nil {
+		return nil, store.ErrNotFound
+	}
+	return latest, nil
+}
+
+func (s *stubValuesStore) GetNextRevisionNumber(_ context.Context, defID string) (int64, error) {
+	var maxVersion int64
+	for _, vr := range s.items {
+		if vr.ReleaseDefinitionID == defID && vr.Version > maxVersion {
+			maxVersion = vr.Version
+		}
+	}
+	return maxVersion + 1, nil
 }
 
 func (s *stubValuesStore) List(_ context.Context, defID string) ([]*store.ValuesRevision, error) {
@@ -83,6 +96,13 @@ func (s *stubValuesStore) List(_ context.Context, defID string) ([]*store.Values
 		}
 	}
 	return revs, nil
+}
+func (s *stubValuesStore) ListPage(ctx context.Context, filter store.ValuesListFilter) (*store.ValuesPage, error) {
+	items, err := s.List(ctx, filter.ReleaseDefinitionID)
+	if err != nil {
+		return nil, err
+	}
+	return &store.ValuesPage{Items: items}, nil
 }
 
 func newTestHandler() *ValuesHandler {

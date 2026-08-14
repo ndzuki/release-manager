@@ -115,9 +115,9 @@ func seedDefinition(t *testing.T, st store.Store) {
 	revision := &store.ValuesRevision{
 		ID:                  "vr-001",
 		ReleaseDefinitionID: def.ID,
-		Revision:            1,
+		Version:             1,
 		Status:              store.ValuesStatusApproved,
-		Values:              []byte(`{"message":"hello"}`),
+		CanonicalDocument:   []byte(`{"message":"hello"}`),
 		Digest:              "digest-vr-001",
 	}
 	require.NoError(t, st.Values().Create(context.Background(), revision))
@@ -136,14 +136,23 @@ func seedValuesRevision(
 	if status == store.ValuesStatusApproved {
 		initialStatus = store.ValuesStatusPendingApproval
 	}
+	nextVersion, err := st.Values().GetNextRevisionNumber(context.Background(), definitionID)
+	require.NoError(t, err)
+	parentRevisionID := ""
+	if nextVersion > 1 {
+		latest, latestErr := st.Values().GetLatest(context.Background(), definitionID)
+		require.NoError(t, latestErr)
+		parentRevisionID = latest.ID
+	}
 	revision := &store.ValuesRevision{
 		ID:                  id,
 		ReleaseDefinitionID: definitionID,
-		Revision:            1,
+		Version:             nextVersion,
 		StateVersion:        1,
 		Status:              initialStatus,
-		Values:              []byte(`{"replicas":2}`),
+		CanonicalDocument:   []byte(`{"replicas":2}`),
 		Digest:              "sha256:test",
+		ParentRevisionID:    parentRevisionID,
 		CreatedAt:           now,
 		UpdatedAt:           now,
 	}
@@ -718,10 +727,11 @@ func TestCreateOperation_InstallRequiresApprovedRevision(t *testing.T) {
 	draft := &store.ValuesRevision{
 		ID:                  "vr-draft",
 		ReleaseDefinitionID: "def-001",
-		Revision:            2,
+		Version:             2,
 		Status:              store.ValuesStatusDraft,
-		Values:              []byte(`{}`),
+		CanonicalDocument:   []byte(`{}`),
 		Digest:              "digest-vr-draft",
+		ParentRevisionID:    "vr-001",
 	}
 	require.NoError(t, st.Values().Create(context.Background(), draft))
 
