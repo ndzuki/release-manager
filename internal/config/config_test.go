@@ -76,3 +76,13 @@ redis:
 		require.Equal(t, 5, cfg.Redis.DB)
 	})
 }
+
+func TestValuesConfigWithDefaults(t *testing.T) {
+	defaults := (ValuesConfig{}).WithDefaults()
+	require.Equal(t, int64(1<<20), defaults.MaxDocumentBytes)
+	require.Empty(t, defaults.SecretPatterns)
+
+	configured := (ValuesConfig{MaxDocumentBytes: 2048, SecretPatterns: []string{"credential"}}).WithDefaults()
+	require.Equal(t, int64(2048), configured.MaxDocumentBytes)
+	require.Equal(t, []string{"credential"}, configured.SecretPatterns)
+}

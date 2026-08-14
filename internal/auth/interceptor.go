@@ -322,6 +322,7 @@ func mapMethodToAction(method string) string {
 		strings.HasPrefix(method, "Rollback"), strings.HasPrefix(method, "Rotate"),
 		strings.HasPrefix(method, "Configure"), strings.HasPrefix(method, "Sync"),
 		strings.HasPrefix(method, "Logout"), strings.HasPrefix(method, "Cancel"),
+		strings.HasPrefix(method, "Discard"),
 		strings.HasPrefix(method, "Refresh"), strings.HasPrefix(method, "Authenticate"),
 		strings.HasPrefix(method, "Submit"), strings.HasPrefix(method, "Approve"),
 		strings.HasPrefix(method, "Reject"), strings.HasPrefix(method, "End"),

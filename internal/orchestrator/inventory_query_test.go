@@ -26,8 +26,8 @@ func TestListReleasesFiltersAndPaginates(t *testing.T) {
 		Namespace: "other", ReleaseName: "api", Status: store.DefStatusActive,
 	}, nil))
 	require.NoError(t, st.Values().Create(ctx, &store.ValuesRevision{
-		ID: "values-drifted", ReleaseDefinitionID: "definition-drifted", Revision: 1,
-		Status: store.ValuesStatusApproved, Values: []byte(`{}`), Digest: "sha256:desired",
+		ID: "values-drifted", ReleaseDefinitionID: "definition-drifted", Version: 1,
+		Status: store.ValuesStatusApproved, CanonicalDocument: []byte(`{}`), Digest: "sha256:desired",
 	}))
 
 	items := []*store.ReleaseInventory{

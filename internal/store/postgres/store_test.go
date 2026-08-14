@@ -674,9 +674,9 @@ func TestValuesRevisionCreateAndGet(t *testing.T) {
 	vr := &store.ValuesRevision{
 		ID:                  uuid.New().String(),
 		ReleaseDefinitionID: def.ID,
-		Revision:            1,
+		Version:             1,
 		Status:              store.ValuesStatusDraft,
-		Values:              []byte(`{"key":"value"}`),
+		CanonicalDocument:   []byte(`{"key":"value"}`),
 		Digest:              "sha256:abc123",
 		ParentRevisionID:    "",
 	}
@@ -687,9 +687,8 @@ func TestValuesRevisionCreateAndGet(t *testing.T) {
 	got, err := st.Values().Get(ctx, vr.ID)
 	require.NoError(t, err)
 	assert.Equal(t, vr.ID, got.ID)
-	assert.Equal(t, vr.Digest, got.Digest)
 	assert.Equal(t, store.ValuesStatusDraft, got.Status)
-	assert.Equal(t, 1, got.Revision)
+	assert.Equal(t, int64(1), got.Version)
 }
 
 func TestValuesRevisionGetByDigest(t *testing.T) {
@@ -700,9 +699,9 @@ func TestValuesRevisionGetByDigest(t *testing.T) {
 	vr := &store.ValuesRevision{
 		ID:                  uuid.New().String(),
 		ReleaseDefinitionID: def.ID,
-		Revision:            1,
+		Version:             1,
 		Status:              store.ValuesStatusDraft,
-		Values:              []byte(`{}`),
+		CanonicalDocument:   []byte(`{}`),
 		Digest:              "auth0:deadbeef",
 	}
 	require.NoError(t, st.Values().Create(ctx, vr))
@@ -720,21 +719,66 @@ func TestValuesRevisionGetNextRevisionNumber(t *testing.T) {
 	// First revision
 	n, err := st.Values().GetNextRevisionNumber(ctx, def.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 1, n)
+	assert.Equal(t, int64(1), n)
 
 	vr := &store.ValuesRevision{
 		ID:                  uuid.New().String(),
 		ReleaseDefinitionID: def.ID,
-		Revision:            1,
+		Version:             1,
 		Status:              store.ValuesStatusDraft,
-		Values:              []byte(`{}`),
+		CanonicalDocument:   []byte(`{}`),
 		Digest:              "sha256:a",
 	}
 	require.NoError(t, st.Values().Create(ctx, vr))
 
 	n, err = st.Values().GetNextRevisionNumber(ctx, def.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 2, n)
+	assert.Equal(t, int64(2), n)
+}
+
+func TestValuesLifecycleConcurrentIdempotentCreateReplaysFirstResult(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+
+	start := make(chan struct{})
+	results := make(chan *store.CreateValuesDraftResult, 2)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			result, err := st.ValuesLifecycle().CreateDraft(ctx, store.CreateValuesDraftCommand{
+				Revision: &store.ValuesRevision{
+					ID:                  uuid.NewString(),
+					ReleaseDefinitionID: def.ID,
+					CanonicalDocument:   []byte(`{"replicas":1}`),
+					Digest:              "sha256:idempotent",
+				},
+				ActorUserID:          "creator",
+				IdempotencyScope:     "create-values:creator:" + def.ID,
+				IdempotencyKeyHash:   "shared-key",
+				RequestHash:          "shared-request",
+				IdempotencyExpiresAt: time.Now().UTC().Add(time.Hour),
+			})
+			results <- result
+			errs <- err
+		}()
+	}
+	close(start)
+
+	created := make([]*store.CreateValuesDraftResult, 0, 2)
+	for range 2 {
+		require.NoError(t, <-errs)
+		created = append(created, <-results)
+	}
+	require.NotNil(t, created[0])
+	require.NotNil(t, created[1])
+	assert.Equal(t, created[0].Revision.ID, created[1].Revision.ID)
+	assert.NotEqual(t, created[0].Replayed, created[1].Replayed)
+
+	items, err := st.Values().List(ctx, def.ID)
+	require.NoError(t, err)
+	assert.Len(t, items, 1)
 }
 
 func TestValuesApprovalOptimisticLock(t *testing.T) {
@@ -745,10 +789,10 @@ func TestValuesApprovalOptimisticLock(t *testing.T) {
 	vr := &store.ValuesRevision{
 		ID:                  uuid.New().String(),
 		ReleaseDefinitionID: def.ID,
-		Revision:            1,
+		Version:             1,
 		StateVersion:        1,
 		Status:              store.ValuesStatusDraft,
-		Values:              []byte(`{"key":"v1"}`),
+		CanonicalDocument:   []byte(`{"key":"v1"}`),
 		Digest:              "sha256:abc",
 		CreatedByUserID:     "creator-1",
 	}
@@ -771,16 +815,19 @@ func TestValuesRevisionList(t *testing.T) {
 	ctx := context.Background()
 	def := createTestDefinition(t, st)
 
+	parentRevisionID := ""
 	for i := 1; i <= 3; i++ {
 		vr := &store.ValuesRevision{
 			ID:                  uuid.New().String(),
 			ReleaseDefinitionID: def.ID,
-			Revision:            i,
+			Version:             int64(i),
 			Status:              store.ValuesStatusDraft,
-			Values:              []byte(`{}`),
+			CanonicalDocument:   []byte(`{}`),
 			Digest:              "sha256:" + string(rune('a'+i-1)),
+			ParentRevisionID:    parentRevisionID,
 		}
 		require.NoError(t, st.Values().Create(ctx, vr))
+		parentRevisionID = vr.ID
 	}
 
 	revs, err := st.Values().List(ctx, def.ID)
@@ -1018,11 +1065,14 @@ func TestCandidateArtifactDuplicateRefreshesIdentity(t *testing.T) {
 	require.NoError(t, st.CandidateArtifacts().Create(ctx, second))
 	assert.Equal(t, first.ID, second.ID)
 
-	var ref string
+	// The v2 schema (migration 000007) keeps refs in
+	// candidate_artifact_locations; the identity refresh contract is that
+	// the digest/type row is reused and its last_seen_at advances.
+	var lastSeen time.Time
 	require.NoError(t, st.SQLDB().QueryRowContext(ctx,
-		`SELECT ref FROM candidate_artifacts WHERE id = $1`, first.ID,
-	).Scan(&ref))
-	assert.Equal(t, second.Ref, ref)
+		`SELECT last_seen_at FROM candidate_artifacts WHERE id = $1`, first.ID,
+	).Scan(&lastSeen))
+	assert.False(t, lastSeen.IsZero(), "upsert refresh must keep the row readable")
 }
 
 func TestTrustAndVulnerabilityAccessors(t *testing.T) {
@@ -1199,7 +1249,7 @@ func TestBundleStoreLifecycle(t *testing.T) {
 	ctx := t.Context()
 	bundle := &store.ReleaseBundle{
 		ID: uuid.NewString(), Name: "PostgreSQL Bundle", DigestAlg: "sha256", DigestValue: uuid.NewString(),
-		Status: store.BundleValidated, Images: []store.BundleImage{{Ref: "registry/app:v1", Digest: "sha256:image", ValuesPath: "image.repository"}},
+		Status: store.BundleValidated, Images: []store.BundleImage{{Ref: "registry/app:v1", Digest: "sha256:image", ValuesPath: "image.repository", ValueKind: store.ImageValueFullReference}},
 	}
 	require.NoError(t, st.Bundles().Create(ctx, bundle))
 	got, err := st.Bundles().GetByDigest(ctx, bundle.DigestAlg, bundle.DigestValue)

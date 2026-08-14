@@ -19,8 +19,8 @@ func TestBuildUpgradePayloadFreezesEffectiveValues(t *testing.T) {
 		Images: []store.BundleImage{{Ref: "registry.example.com/app", Digest: "sha256:image", ValuesPath: "image"}},
 	}
 	revision := &store.ValuesRevision{
-		Values:     []byte(`{"replicas":2,"image":"old"}`),
-		SecretRefs: []byte(`[{"path":"database.password","name":"database","key":"password","uid":"uid-1","resource_version":"7","value_digest":"sha256:value"}]`),
+		CanonicalDocument: []byte(`{"replicas":2,"image":"old"}`),
+		SecretRefs:        []store.SecretRef{{Path: "database.password", Name: "database", Key: "password"}},
 	}
 
 	payload, err := BuildUpgradePayload(op, definition, bundle, revision, "command-1")
@@ -34,14 +34,16 @@ func TestBuildUpgradePayloadFreezesEffectiveValues(t *testing.T) {
 	assert.True(t, upgrade.GetAtomic())
 	assert.Equal(t, int32(10), upgrade.GetMaxHistory())
 	require.Len(t, upgrade.GetSecretRefs(), 1)
-	assert.Equal(t, "uid-1", upgrade.GetSecretRefs()[0].GetUid())
+	assert.Equal(t, "database.password", upgrade.GetSecretRefs()[0].GetPath())
+	assert.Equal(t, "database", upgrade.GetSecretRefs()[0].GetName())
+	assert.Equal(t, "password", upgrade.GetSecretRefs()[0].GetKey())
 }
 
 func TestBuildUpgradePayloadRejectsInvalidImagePath(t *testing.T) {
 	op := &store.Operation{ID: "operation-1", BundleID: "bundle-1", ExpectedRevision: 1}
 	definition := &store.ReleaseDefinition{ID: "definition-1", Namespace: "apps", ReleaseName: "example"}
 	bundle := &store.ReleaseBundle{ID: "bundle-1", Images: []store.BundleImage{{Ref: "example/app", Digest: "sha256:image", ValuesPath: "image.repository"}}}
-	revision := &store.ValuesRevision{Values: []byte(`{"image":"not-an-object"}`)}
+	revision := &store.ValuesRevision{CanonicalDocument: []byte(`{"image":"not-an-object"}`)}
 
 	_, err := BuildUpgradePayload(op, definition, bundle, revision, "command-1")
 	require.Error(t, err)

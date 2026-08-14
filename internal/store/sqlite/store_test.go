@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"testing"
 	"path/filepath"
-	"time"
 	"sync"
+	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -19,10 +19,7 @@ import (
 
 func setupStore(t *testing.T) *sqlitestore.Store {
 	t.Helper()
-	st, err := sqlitestore.Open("file::memory:?cache=shared")
-	require.NoError(t, err)
-	t.Cleanup(func() { st.Close() })
-	return st
+	return sqlitestore.OpenTest(t)
 }
 
 // setupFileStore opens a real on-disk SQLite database (WAL mode) so concurrent
@@ -631,9 +628,9 @@ func TestValuesRevisionCreateAndGet(t *testing.T) {
 	vr := &store.ValuesRevision{
 		ID:                  uuid.New().String(),
 		ReleaseDefinitionID: def.ID,
-		Revision:            1,
+		Version:             1,
 		Status:              store.ValuesStatusDraft,
-		Values:              []byte(`{"key":"value"}`),
+		CanonicalDocument:   []byte(`{"key":"value"}`),
 		Digest:              "sha256:abc123",
 		ParentRevisionID:    "",
 	}
@@ -646,7 +643,28 @@ func TestValuesRevisionCreateAndGet(t *testing.T) {
 	assert.Equal(t, vr.ID, got.ID)
 	assert.Equal(t, vr.Digest, got.Digest)
 	assert.Equal(t, store.ValuesStatusDraft, got.Status)
-	assert.Equal(t, 1, got.Revision)
+	assert.Equal(t, vr.Version, got.Version)
+}
+
+func TestValuesRevisionInitialParentPersistsAsNull(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+
+	revision := &store.ValuesRevision{
+		ID:                  uuid.NewString(),
+		ReleaseDefinitionID: def.ID,
+		Version:             1,
+		Status:              store.ValuesStatusDraft,
+		CanonicalDocument:   []byte(`{}`),
+	}
+	require.NoError(t, st.Values().Create(ctx, revision))
+
+	var parentRevisionID *string
+	require.NoError(t, st.DB().QueryRowContext(ctx,
+		`SELECT parent_revision_id FROM values_revisions WHERE id = ?`, revision.ID,
+	).Scan(&parentRevisionID))
+	assert.Nil(t, parentRevisionID)
 }
 
 func TestValuesRevisionGetByDigest(t *testing.T) {
@@ -657,9 +675,9 @@ func TestValuesRevisionGetByDigest(t *testing.T) {
 	vr := &store.ValuesRevision{
 		ID:                  uuid.New().String(),
 		ReleaseDefinitionID: def.ID,
-		Revision:            1,
+		Version:             1,
 		Status:              store.ValuesStatusDraft,
-		Values:              []byte(`{}`),
+		CanonicalDocument:   []byte(`{}`),
 		Digest:              "auth0:deadbeef",
 	}
 	require.NoError(t, st.Values().Create(ctx, vr))
@@ -667,6 +685,142 @@ func TestValuesRevisionGetByDigest(t *testing.T) {
 	got, err := st.Values().GetByDigest(ctx, def.ID, "auth0:deadbeef")
 	require.NoError(t, err)
 	assert.Equal(t, vr.ID, got.ID)
+}
+
+func TestValuesLifecycleCreateDraftRequiresParentAfterInitial(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+
+	initial := &store.ValuesRevision{
+		ID:                  uuid.NewString(),
+		ReleaseDefinitionID: def.ID,
+		CanonicalDocument:   []byte(`{"replicas":1}`),
+		Digest:              "sha256:initial",
+	}
+	first, err := st.ValuesLifecycle().CreateDraft(ctx, store.CreateValuesDraftCommand{
+		Revision: initial,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), first.Revision.Version)
+
+	_, err = st.ValuesLifecycle().CreateDraft(ctx, store.CreateValuesDraftCommand{
+		Revision: &store.ValuesRevision{
+			ID:                  uuid.NewString(),
+			ReleaseDefinitionID: def.ID,
+			CanonicalDocument:   []byte(`{"replicas":2}`),
+			Digest:              "sha256:missing-parent",
+		},
+	})
+	assert.ErrorIs(t, err, store.ErrDuplicateKey)
+}
+
+func TestValuesLifecycleCreateDraftConcurrentParentVersion(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+
+	initial := &store.ValuesRevision{
+		ID:                  uuid.NewString(),
+		ReleaseDefinitionID: def.ID,
+		CanonicalDocument:   []byte(`{"replicas":1}`),
+		Digest:              "sha256:initial",
+	}
+	first, err := st.ValuesLifecycle().CreateDraft(ctx, store.CreateValuesDraftCommand{Revision: initial})
+	require.NoError(t, err)
+
+	results := make(chan error, 2)
+	for index := range 2 {
+		go func() {
+			_, createErr := st.ValuesLifecycle().CreateDraft(ctx, store.CreateValuesDraftCommand{
+				Revision: &store.ValuesRevision{
+					ID:                  uuid.NewString(),
+					ReleaseDefinitionID: def.ID,
+					ParentRevisionID:    first.Revision.ID,
+					CanonicalDocument:   []byte(fmt.Sprintf(`{"replicas":%d}`, index+2)),
+					Digest:              fmt.Sprintf("sha256:concurrent-%d", index),
+				},
+				ExpectedParentVersion: first.Revision.Version,
+			})
+			results <- createErr
+		}()
+	}
+
+	var successes, conflicts int
+	for range 2 {
+		err := <-results
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, store.ErrParentConflict):
+			conflicts++
+		default:
+			require.NoErrorf(t, err, "unexpected concurrent create error: %T %v", err, err)
+		}
+	}
+	assert.Equal(t, 1, successes)
+	assert.Equal(t, 1, conflicts)
+}
+
+func TestValuesLifecycleDiscardIsIdempotentAndPreservesContent(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	created, err := st.ValuesLifecycle().CreateDraft(ctx, store.CreateValuesDraftCommand{
+		Revision: &store.ValuesRevision{
+			ID:                  uuid.NewString(),
+			ReleaseDefinitionID: def.ID,
+			CanonicalDocument:   []byte(`{"replicas":1}`),
+			Digest:              "sha256:discard",
+			SecretRefs:          []store.SecretRef{{Path: "/password", Name: "database", Key: "password"}},
+		},
+		ActorUserID: "creator",
+	})
+	require.NoError(t, err)
+	command := store.DiscardValuesCommand{
+		RevisionID:           created.Revision.ID,
+		ExpectedStateVersion: created.Revision.StateVersion,
+		ActorUserID:          "creator",
+		IdempotencyScope:     "discard-values:creator:" + created.Revision.ID,
+		IdempotencyKeyHash:   "discard-key",
+		RequestHash:          "discard-request",
+	}
+	first, err := st.ValuesLifecycle().Discard(ctx, command)
+	require.NoError(t, err)
+	second, err := st.ValuesLifecycle().Discard(ctx, command)
+	require.NoError(t, err)
+	assert.False(t, first.Replayed)
+	assert.True(t, second.Replayed)
+	assert.Equal(t, created.Revision.CanonicalDocument, second.Revision.CanonicalDocument)
+	assert.Equal(t, created.Revision.Digest, second.Revision.Digest)
+	assert.Equal(t, created.Revision.SecretRefs, second.Revision.SecretRefs)
+
+	decisions, err := st.ValuesApprovalEvidence().ListDecisions(ctx, created.Revision.ID)
+	require.NoError(t, err)
+	assert.Len(t, decisions, 1)
+	auditEntries, err := st.ValuesApprovalEvidence().ListAuditOutbox(ctx, created.Revision.ID)
+	require.NoError(t, err)
+	assert.Len(t, auditEntries, 2)
+}
+
+func TestPrepareSessionDeleteExpiredRetainsRecentMetadata(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	sessions := []*store.PrepareSession{
+		{TokenHash: "expired-old", ActorUserID: "user", OrganizationID: "org", ReleaseDefinitionID: createTestDefinition(t, st).ID, ParentVersion: 0, TaskIDs: []string{"task"}, LockedPaths: []string{"/replicas"}, LockedPathHash: "old", ExpiresAt: now.Add(-25 * time.Hour), CreatedAt: now.Add(-26 * time.Hour)},
+		{TokenHash: "expired-recent", ActorUserID: "user", OrganizationID: "org", ReleaseDefinitionID: createTestDefinition(t, st).ID, ParentVersion: 0, TaskIDs: []string{"task"}, LockedPaths: []string{"/replicas"}, LockedPathHash: "recent", ExpiresAt: now.Add(-time.Hour), CreatedAt: now.Add(-2 * time.Hour)},
+	}
+	for _, session := range sessions {
+		require.NoError(t, st.PrepareSessions().Create(ctx, session, 0))
+	}
+	deleted, err := st.PrepareSessions().DeleteExpired(ctx, now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), deleted)
+	_, err = st.PrepareSessions().Get(ctx, "expired-old")
+	assert.ErrorIs(t, err, store.ErrNotFound)
+	_, err = st.PrepareSessions().Get(ctx, "expired-recent")
+	require.NoError(t, err)
 }
 
 func TestValuesRevisionGetNextRevisionNumber(t *testing.T) {
@@ -677,21 +831,21 @@ func TestValuesRevisionGetNextRevisionNumber(t *testing.T) {
 	// First revision
 	n, err := st.Values().GetNextRevisionNumber(ctx, def.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 1, n)
+	assert.Equal(t, int64(1), n)
 
 	vr := &store.ValuesRevision{
 		ID:                  uuid.New().String(),
 		ReleaseDefinitionID: def.ID,
-		Revision:            1,
+		Version:             1,
 		Status:              store.ValuesStatusDraft,
-		Values:              []byte(`{}`),
+		CanonicalDocument:   []byte(`{}`),
 		Digest:              "sha256:a",
 	}
 	require.NoError(t, st.Values().Create(ctx, vr))
 
 	n, err = st.Values().GetNextRevisionNumber(ctx, def.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 2, n)
+	assert.Equal(t, int64(2), n)
 }
 
 func TestValuesRevisionList(t *testing.T) {
@@ -699,16 +853,19 @@ func TestValuesRevisionList(t *testing.T) {
 	ctx := context.Background()
 	def := createTestDefinition(t, st)
 
+	parentRevisionID := ""
 	for i := 1; i <= 3; i++ {
 		vr := &store.ValuesRevision{
 			ID:                  uuid.New().String(),
 			ReleaseDefinitionID: def.ID,
-			Revision:            i,
+			Version:             int64(i),
 			Status:              store.ValuesStatusDraft,
-			Values:              []byte(`{}`),
+			CanonicalDocument:   []byte(`{}`),
 			Digest:              "sha256:" + string(rune('a'+i-1)),
+			ParentRevisionID:    parentRevisionID,
 		}
 		require.NoError(t, st.Values().Create(ctx, vr))
+		parentRevisionID = vr.ID
 	}
 
 	revs, err := st.Values().List(ctx, def.ID)
@@ -731,22 +888,23 @@ func TestValuesRevisionApproveSupersedesPreviousApproved(t *testing.T) {
 	previous := &store.ValuesRevision{
 		ID:                  uuid.New().String(),
 		ReleaseDefinitionID: def.ID,
-		Revision:            1,
+		Version:             1,
 		StateVersion:        1,
 		Status:              store.ValuesStatusApproved,
-		Values:              []byte(`{"key":"old"}`),
+		CanonicalDocument:   []byte(`{"key":"old"}`),
 		Digest:              "sha256:old",
 		CreatedByUserID:     "creator-old",
 	}
 	next := &store.ValuesRevision{
 		ID:                  uuid.New().String(),
 		ReleaseDefinitionID: def.ID,
-		Revision:            2,
+		Version:             2,
 		StateVersion:        1,
 		Status:              store.ValuesStatusPendingApproval,
-		Values:              []byte(`{"key":"new"}`),
+		CanonicalDocument:   []byte(`{"key":"new"}`),
 		Digest:              "sha256:new",
 		CreatedByUserID:     "creator-new",
+		ParentRevisionID:    previous.ID,
 	}
 	require.NoError(t, st.Values().Create(ctx, previous))
 	require.NoError(t, st.Values().Create(ctx, next))
@@ -771,9 +929,9 @@ func TestValuesApprovalRejectsUnauthorizedCommand(t *testing.T) {
 	ctx := context.Background()
 	def := createTestDefinition(t, st)
 	revision := &store.ValuesRevision{
-		ID: uuid.New().String(), ReleaseDefinitionID: def.ID, Revision: 1,
+		ID: uuid.New().String(), ReleaseDefinitionID: def.ID, Version: 1,
 		StateVersion: 1, Status: store.ValuesStatusPendingApproval,
-		Values: []byte(`{"key":"value"}`), Digest: "sha256:unauthorized",
+		CanonicalDocument: []byte(`{"key":"value"}`), Digest: "sha256:unauthorized",
 		CreatedByUserID: "creator",
 	}
 	require.NoError(t, st.Values().Create(ctx, revision))
@@ -797,22 +955,23 @@ func TestValuesRevisionApproveRejectOptimisticLock(t *testing.T) {
 	approval := &store.ValuesRevision{
 		ID:                  uuid.New().String(),
 		ReleaseDefinitionID: def.ID,
-		Revision:            1,
+		Version:             1,
 		StateVersion:        1,
 		Status:              store.ValuesStatusPendingApproval,
-		Values:              []byte(`{"key":"approve"}`),
+		CanonicalDocument:   []byte(`{"key":"approve"}`),
 		Digest:              "sha256:approve",
 		CreatedByUserID:     "creator-approve",
 	}
 	rejection := &store.ValuesRevision{
 		ID:                  uuid.New().String(),
 		ReleaseDefinitionID: def.ID,
-		Revision:            2,
+		Version:             2,
 		StateVersion:        1,
 		Status:              store.ValuesStatusDraft,
-		Values:              []byte(`{"key":"reject"}`),
+		CanonicalDocument:   []byte(`{"key":"reject"}`),
 		Digest:              "sha256:reject",
 		CreatedByUserID:     "creator-reject",
+		ParentRevisionID:    approval.ID,
 	}
 	require.NoError(t, st.Values().Create(ctx, approval))
 	require.NoError(t, st.Values().Create(ctx, rejection))
@@ -1634,4 +1793,174 @@ func TestTrustRootTransitionConcurrentRemovalIsAtomicFile(t *testing.T) {
 	live, err := st.TrustRoots().GetActiveByEnvironment(ctx, "staging", time.Now())
 	require.NoError(t, err)
 	assert.Len(t, live, 1, "exactly one live root must remain")
+}
+
+func TestInventoryQueryUsesDefaultPageSizeAndSyncLogTimestamp(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	syncedAt := time.Date(2026, time.July, 22, 9, 30, 0, 0, time.UTC)
+
+	for i := range 51 {
+		releaseName := fmt.Sprintf("release-%02d", i)
+		require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+			CustomerID:      "customer-default-page",
+			ClusterID:       "cluster-default-page",
+			Namespace:       "apps",
+			ReleaseName:     releaseName,
+			InventoryStatus: store.InventoryActive,
+			LastSyncID:      "sync-default-page",
+			SnapshotVersion: 9,
+		}))
+	}
+	inserted, err := st.Inventories().CreateSyncLog(ctx, &store.InventorySyncLog{
+		SyncID:          "sync-default-page",
+		CustomerID:      "customer-default-page",
+		ClusterID:       "cluster-default-page",
+		IsFullSnapshot:  true,
+		AcceptedCount:   51,
+		SnapshotVersion: 9,
+		CreatedAt:       syncedAt,
+	})
+	require.NoError(t, err)
+	require.True(t, inserted)
+
+	page, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-default-page",
+		ClusterID:  "cluster-default-page",
+	})
+	require.NoError(t, err)
+	assert.Len(t, page.Items, 50)
+	assert.Equal(t, 51, page.TotalCount)
+	assert.NotEmpty(t, page.NextCursor)
+	assert.Equal(t, syncedAt, page.LastSyncAt)
+
+	next, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-default-page",
+		ClusterID:  "cluster-default-page",
+		Cursor:     page.NextCursor,
+	})
+	require.NoError(t, err)
+	assert.Len(t, next.Items, 1)
+}
+
+func TestInventoryQueryPaginationFilteringAndConsistency(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	baseTime := time.Date(2026, time.July, 22, 8, 0, 0, 0, time.UTC)
+
+	items := []*store.ReleaseInventory{
+		{
+			ReleaseDefinitionID: "definition-active",
+			CustomerID:          "customer-1",
+			ClusterID:           "cluster-1",
+			Namespace:           "apps",
+			ReleaseName:         "api",
+			Chart:               "api",
+			ChartVersion:        "1.0.0",
+			Revision:            3,
+			ValuesDigest:        "sha256:approved",
+			InventoryStatus:     store.InventoryActive,
+			LastSyncID:          "sync-1",
+			SnapshotVersion:     7,
+			CreatedAt:           baseTime,
+		},
+		{
+			ReleaseDefinitionID: "definition-drifted",
+			CustomerID:          "customer-1",
+			ClusterID:           "cluster-1",
+			Namespace:           "other",
+			ReleaseName:         "api",
+			Chart:               "api",
+			ChartVersion:        "1.1.0",
+			Revision:            4,
+			ValuesDigest:        "sha256:actual",
+			InventoryStatus:     store.InventoryActive,
+			LastSyncID:          "sync-1",
+			SnapshotVersion:     7,
+			CreatedAt:           baseTime.Add(time.Second),
+		},
+		{
+			CustomerID:      "customer-1",
+			ClusterID:       "cluster-1",
+			Namespace:       "system",
+			ReleaseName:     "metrics",
+			Chart:           "metrics",
+			ChartVersion:    "2.0.0",
+			Revision:        1,
+			ValuesDigest:    "sha256:metrics",
+			InventoryStatus: store.InventoryMissing,
+			LastSyncID:      "sync-1",
+			SnapshotVersion: 7,
+			CreatedAt:       baseTime.Add(2 * time.Second),
+		},
+	}
+	for _, item := range items {
+		require.NoError(t, st.Inventories().Upsert(ctx, item))
+	}
+
+	activeDefinition := &store.ReleaseDefinition{
+		ID: "definition-active", Name: "active", CustomerID: "customer-1", ClusterID: "cluster-1",
+		Namespace: "apps", ReleaseName: "api", Status: store.DefStatusActive,
+	}
+	driftedDefinition := &store.ReleaseDefinition{
+		ID: "definition-drifted", Name: "drifted", CustomerID: "customer-1", ClusterID: "cluster-1",
+		Namespace: "other", ReleaseName: "api", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, activeDefinition, nil))
+	require.NoError(t, st.Definitions().Create(ctx, driftedDefinition, nil))
+	require.NoError(t, st.Values().Create(ctx, &store.ValuesRevision{
+		ID: "values-active", ReleaseDefinitionID: activeDefinition.ID, Version: 1,
+		Status: store.ValuesStatusApproved, CanonicalDocument: []byte(`{}`), Digest: "sha256:approved",
+	}))
+	require.NoError(t, st.Values().Create(ctx, &store.ValuesRevision{
+		ID: "values-drifted", ReleaseDefinitionID: driftedDefinition.ID, Version: 1,
+		Status: store.ValuesStatusApproved, CanonicalDocument: []byte(`{}`), Digest: "sha256:desired",
+	}))
+
+	page, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-1",
+		ClusterID:  "cluster-1",
+		NameSearch: "api",
+		PageSize:   1,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, store.InventoryActive, page.Items[0].InventoryStatus)
+	assert.Equal(t, 2, page.TotalCount)
+	assert.NotEmpty(t, page.NextCursor)
+
+	next, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-1",
+		ClusterID:  "cluster-1",
+		NameSearch: "api",
+		PageSize:   1,
+		Cursor:     page.NextCursor,
+	})
+	require.NoError(t, err)
+	require.Len(t, next.Items, 1)
+	assert.Equal(t, store.InventoryOutOfSync, next.Items[0].InventoryStatus)
+	assert.Empty(t, next.NextCursor)
+
+	missing, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-1",
+		ClusterID:  "cluster-1",
+		Status:     store.InventoryMissing,
+		PageSize:   50,
+	})
+	require.NoError(t, err)
+	require.Len(t, missing.Items, 1)
+	assert.Equal(t, "metrics", missing.Items[0].ReleaseName)
+
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		CustomerID: "customer-1", ClusterID: "cluster-1", Namespace: "apps", ReleaseName: "worker",
+		InventoryStatus: store.InventoryActive, LastSyncID: "sync-2", SnapshotVersion: 8,
+	}))
+	_, err = st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-1",
+		ClusterID:  "cluster-1",
+		NameSearch: "api",
+		PageSize:   1,
+		Cursor:     page.NextCursor,
+	})
+	assert.ErrorIs(t, err, store.ErrInvalidCursor)
 }

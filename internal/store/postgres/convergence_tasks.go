@@ -45,6 +45,14 @@ func insertConvergenceTask(ctx context.Context, execer operationExecer, task *st
 	return nil
 }
 
+func (s *convergenceTaskStore) Get(ctx context.Context, id string) (*store.ConvergenceTask, error) {
+	return getConvergenceTask(ctx, s.gorm, id)
+}
+
+func getConvergenceTask(ctx context.Context, queryer operationQueryer, id string) (*store.ConvergenceTask, error) {
+	return scanConvergenceTask(queryer.QueryRowContext(ctx, convergenceTaskSelect+` WHERE id = ?`, id))
+}
+
 func (s *convergenceTaskStore) ListByDefinition(ctx context.Context, definitionID, statusFilter string) ([]*store.ConvergenceTask, error) {
 	query := convergenceTaskSelect + ` WHERE release_definition_id = ?`
 	args := []any{definitionID}

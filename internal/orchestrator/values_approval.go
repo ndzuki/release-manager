@@ -436,14 +436,18 @@ func toProtoValuesRevision(revision *store.ValuesRevision) *commonv1.ValuesRevis
 	result := &commonv1.ValuesRevision{
 		Id:                  revision.ID,
 		ReleaseDefinitionId: revision.ReleaseDefinitionID,
-		Revision:            int32(revision.Revision), //nolint:gosec // Revision numbers are persisted as non-negative application integers.
-		Values:              revision.Values,
+		Version:             revision.Version,
+		CanonicalDocument:   revision.CanonicalDocument,
 		CreatedAt:           timestamppb.New(revision.CreatedAt),
 		Status:              valuesStatusToProto(revision.Status),
 		Digest:              revision.Digest,
 		ParentRevisionId:    revision.ParentRevisionID,
 		StateVersion:        revision.StateVersion,
 		CreatedByUserId:     revision.CreatedByUserID,
+		SecretRefs:          make([]*commonv1.SecretRef, 0, len(revision.SecretRefs)),
+	}
+	for _, ref := range revision.SecretRefs {
+		result.SecretRefs = append(result.SecretRefs, &commonv1.SecretRef{Path: ref.Path, Name: ref.Name, Key: ref.Key})
 	}
 	if revision.SubmittedAt != nil {
 		result.SubmittedAt = timestamppb.New(*revision.SubmittedAt)
@@ -466,6 +470,8 @@ func valuesStatusToProto(status store.ValuesStatus) commonv1.ValuesStatus {
 		return commonv1.ValuesStatus_VALUES_STATUS_REJECTED
 	case store.ValuesStatusSuperseded:
 		return commonv1.ValuesStatus_VALUES_STATUS_SUPERSEDED
+	case store.ValuesStatusDiscarded:
+		return commonv1.ValuesStatus_VALUES_STATUS_DISCARDED
 	default:
 		return commonv1.ValuesStatus_VALUES_STATUS_UNSPECIFIED
 	}

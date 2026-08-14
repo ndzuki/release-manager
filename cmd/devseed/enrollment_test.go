@@ -38,7 +38,7 @@ func TestEnsureEnrollmentTokensWritesTokenFiles(t *testing.T) {
 		{id: "dev-customer-b-replicated", customerID: "dev-customer-b"},
 	}
 
-	err := ensureEnrollmentTokens(context.Background(), client, clusters, dir)
+	err := ensureEnrollmentTokens(context.Background(), client, "test-token", clusters, dir)
 	require.NoError(t, err)
 	assert.Equal(t, 2, client.createCalls)
 
@@ -58,8 +58,8 @@ func TestEnsureEnrollmentTokensIdempotent(t *testing.T) {
 	clusters := []clusterSeed{{id: "dev-customer-a-direct", customerID: "dev-customer-a"}}
 
 	// First run creates; second run must skip (file exists, no new RPC).
-	require.NoError(t, ensureEnrollmentTokens(context.Background(), client, clusters, dir))
-	require.NoError(t, ensureEnrollmentTokens(context.Background(), client, clusters, dir))
+	require.NoError(t, ensureEnrollmentTokens(context.Background(), client, "test-token", clusters, dir))
+	require.NoError(t, ensureEnrollmentTokens(context.Background(), client, "test-token", clusters, dir))
 	assert.Equal(t, 1, client.createCalls)
 
 	// The original token value is preserved across re-seeds.

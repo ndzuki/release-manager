@@ -78,6 +78,13 @@ func (s *Service) CreateReleaseDefinition(
 		ApprovedAnnotationKeys: approvedAnnotationKeysFromProto(msg.GetApprovedAnnotationKeys()),
 		PromotionMappings:      promotionMappingsFromProto(msg.GetPromotionMappings()),
 	}
+	// The creating actor's organization owns the definition (REQ-040): approval
+	// gates on OwnerOrganizationID (values_approval.go), so a definition
+	// created through the public seam must carry it when the actor context
+	// provides an organization.
+	if ownerOrg := msg.GetActor().GetOrganization(); ownerOrg != "" {
+		def.OwnerOrganizationID = &ownerOrg
+	}
 	if !msg.GetEnabled() {
 		def.Status = store.DefStatusDraft
 	}

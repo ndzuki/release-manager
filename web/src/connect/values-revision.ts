@@ -22,16 +22,16 @@ function timestampToISO(value: Timestamp | undefined): string | undefined {
 }
 
 function mapSecretRef(ref: ProtoSecretRef): SecretRef {
-  return { name: ref.name, key: ref.key, namespace: ref.namespace || undefined };
+  return { path: ref.path, name: ref.name, key: ref.key };
 }
 
 export function mapValuesRevision(revision: ProtoValuesRevision): ValuesRevision {
   return {
     id: revision.id,
     releaseDefinitionId: revision.releaseDefinitionId,
-    revision: revision.revision,
+    revision: Number(revision.version),
     stateVersion: revision.stateVersion.toString(),
-    document: new TextDecoder().decode(revision.values),
+    document: new TextDecoder().decode(revision.canonicalDocument),
     valuesDigest: revision.digest,
     status: statusFromProto(revision.status),
     parentRevisionId: revision.parentRevisionId || null,
@@ -46,16 +46,15 @@ export function mapValuesRevision(revision: ProtoValuesRevision): ValuesRevision
 export async function listValuesRevisions(releaseDefinitionId: string, statusFilter?: ValuesStatus): Promise<ValuesRevision[]> {
   const response = await orchestratorClient.listValuesRevisions(create(ListValuesRevisionsRequestSchema, {
     releaseDefinitionId,
-    statusFilter: statusFilter ?? ValuesStatus.UNSPECIFIED,
-    limit: 50,
+    status: statusFilter ?? ValuesStatus.UNSPECIFIED,
+    pageSize: 50,
   }));
-  return response.revisions.map(mapValuesRevision);
+  return response.items.map(mapValuesRevision);
 }
 
 export async function getValuesRevision(revisionId: string): Promise<ValuesRevision> {
   const response = await orchestratorClient.getValuesRevision({ revisionId });
-  if (!response.revision) throw new ConnectError('revision response is missing', Code.Internal);
-  return mapValuesRevision(response.revision);
+  return mapValuesRevision(response);
 }
 
 export async function createValuesRevision(input: {
@@ -68,9 +67,9 @@ export async function createValuesRevision(input: {
   const request = create(CreateValuesRevisionRequestSchema, {
     releaseDefinitionId: input.releaseDefinitionId,
     parentRevisionId: input.parentRevisionId,
-    document: new TextEncoder().encode(input.document),
+    document: input.document,
     secretRefs: input.secretRefs.map((ref) => create(SecretRefSchema, ref)),
-    expectedParentVersion: input.expectedParentVersion,
+    expectedParentVersion: BigInt(input.expectedParentVersion),
   });
   const response = await orchestratorClient.createValuesRevision(request);
   if (!response.revision) throw new ConnectError('create response is missing', Code.Internal);

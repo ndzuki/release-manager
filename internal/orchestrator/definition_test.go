@@ -41,6 +41,8 @@ func TestCreateReleaseDefinition_Success(t *testing.T) {
 			ReleaseName: "my-release",
 			ChartName:   "nginx",
 			Enabled:     true,
+			// REQ-040: the creating actor's organization owns the definition.
+			Actor: &commonv1.ActorContext{UserId: "user-1", Organization: "org-1"},
 		},
 	))
 	require.NoError(t, err)
@@ -54,6 +56,9 @@ func TestCreateReleaseDefinition_Success(t *testing.T) {
 	// AC-040-01: Verify no Helm release interaction — only store-level operations.
 	got, err := st.Definitions().Get(context.Background(), def.Id)
 	require.NoError(t, err)
+	if assert.NotNil(t, got.OwnerOrganizationID, "creating actor's organization must own the definition (REQ-040)") {
+		assert.Equal(t, "org-1", *got.OwnerOrganizationID)
+	}
 	assert.Equal(t, store.DefStatusActive, got.Status)
 	assert.NotEmpty(t, got.ID)
 
@@ -384,6 +389,7 @@ func TestCreateOperation_DisabledDefinition(t *testing.T) {
 	defer cleanup()
 	seedCustomer(t, st, "cust-opd", "opd")
 	seedCluster(t, st, "cls-opd", "cust-opd")
+	seedActorBinding(t, st, "cust-opd")
 
 	createResp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
@@ -399,13 +405,12 @@ func TestCreateOperation_DisabledDefinition(t *testing.T) {
 	require.NoError(t, err)
 
 	// Try create operation on disabled definition.
-	_, err = svc.CreateOperation(context.Background(), connect.NewRequest(
+	_, err = svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(
 		&orchestratorv1.CreateOperationRequest{
 			OperationType:       "INSTALL",
 			ReleaseDefinitionId: createResp.Msg.Definition.Id,
-			IdempotencyKey:      "idis-001",
 		},
-	))
+	), "idis-001"))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "release_definition_disabled")
@@ -444,6 +449,7 @@ func TestCreateOperation_ValidationFlow(t *testing.T) {
 	defer cleanup()
 	seedCustomer(t, st, "cust-flow", "flow")
 	seedCluster(t, st, "cls-flow", "cust-flow")
+	seedActorBinding(t, st, "cust-flow")
 
 	ctx := context.Background()
 
@@ -460,16 +466,14 @@ func TestCreateOperation_ValidationFlow(t *testing.T) {
 	// Seed approved values revision for INSTALL validation.
 	seedValuesRevision(t, st, "vr-flow", defID, store.ValuesStatusApproved)
 	seedBundle(t, st, "bundle-flow")
-	createOpResp, err := svc.CreateOperation(ctx, connect.NewRequest(
+	createOpResp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(
 		&orchestratorv1.CreateOperationRequest{
 			OperationType:       "INSTALL",
 			ReleaseDefinitionId: defID,
 			BundleId:            "bundle-flow",
 			ValuesRevisionId:    "vr-flow",
-			IdempotencyKey:      "flow-key",
-			Actor:               &commonv1.ActorContext{UserId: "actor-1"},
 		},
-	))
+	), "flow-key"))
 	require.NoError(t, err)
 	assert.NotEmpty(t, createOpResp.Msg.OperationId)
 	assert.Equal(t, "preflight", createOpResp.Msg.State)

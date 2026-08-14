@@ -17,19 +17,23 @@ import (
 
 // RetentionConfig holds configurable GC retention parameters.
 type RetentionConfig struct {
-	BundleDays            int `mapstructure:"bundle_days"`             // default 90, min 7
-	CandidateArtifactDays int `mapstructure:"candidate_artifact_days"` // default 30, min 1
-	PreflightResultHours  int `mapstructure:"preflight_result_hours"`  // default 168 (7d), min 1
-	GCIntervalHours       int `mapstructure:"gc_interval_hours"`       // default 6, min 1
+	BundleDays                      int `mapstructure:"bundle_days"`                         // default 90, min 7
+	CandidateArtifactDays           int `mapstructure:"candidate_artifact_days"`             // default 30, min 1
+	PreflightResultHours            int `mapstructure:"preflight_result_hours"`              // default 168 (7d), min 1
+	GCIntervalHours                 int `mapstructure:"gc_interval_hours"`                   // default 6, min 1
+	PrepareSessionHours             int `mapstructure:"prepare_session_hours"`               // default 24, min 1
+	PrepareSessionGCIntervalMinutes int `mapstructure:"prepare_session_gc_interval_minutes"` // default 10, min 1
 }
 
 // DefaultRetentionConfig returns safe defaults.
 func DefaultRetentionConfig() RetentionConfig {
 	return RetentionConfig{
-		BundleDays:            90,
-		CandidateArtifactDays: 30,
-		PreflightResultHours:  168,
-		GCIntervalHours:       6,
+		BundleDays:                      90,
+		CandidateArtifactDays:           30,
+		PreflightResultHours:            168,
+		GCIntervalHours:                 6,
+		PrepareSessionHours:             24,
+		PrepareSessionGCIntervalMinutes: 10,
 	}
 }
 
@@ -46,6 +50,12 @@ func (c RetentionConfig) Validate() error {
 	}
 	if c.GCIntervalHours < 1 {
 		return fmt.Errorf("gc_interval_hours must be >= 1, got %d", c.GCIntervalHours)
+	}
+	if c.PrepareSessionHours < 1 {
+		return fmt.Errorf("prepare_session_hours must be >= 1, got %d", c.PrepareSessionHours)
+	}
+	if c.PrepareSessionGCIntervalMinutes < 1 {
+		return fmt.Errorf("prepare_session_gc_interval_minutes must be >= 1, got %d", c.PrepareSessionGCIntervalMinutes)
 	}
 	return nil
 }
@@ -120,6 +130,7 @@ func (s *CleanupService) RunCleanup(
 		"deleted_bundles", resp.DeletedBundles,
 		"deleted_candidates", resp.DeletedCandidates,
 		"deleted_preflights", resp.DeletedPreflights,
+		"prepare_session_hours", s.config.PrepareSessionHours,
 		"errors", len(errs),
 		"duration_ms", duration.Milliseconds(),
 		"idempotency_key", key,
@@ -186,6 +197,17 @@ func (s *CleanupService) runGC(ctx context.Context) (resp *orchestratorv1.RunCle
 		s.logger.Info("gc_phase4_deleted_preflights", "count", n)
 	}
 
+	// Phase 5: Delete expired or consumed prepare-session metadata after the
+	// retention window (also swept every PrepareSessionGCIntervalMinutes by
+	// the dedicated ticker, REQ-018 D23).
+	prepareCutoff := time.Now().UTC().Add(-time.Duration(s.config.PrepareSessionHours) * time.Hour)
+	n, err = s.store.PrepareSessions().DeleteExpired(ctx, prepareCutoff)
+	if err != nil {
+		errs = append(errs, fmt.Sprintf("phase5 delete prepare sessions: %v", err))
+	} else {
+		s.logger.Info("gc_phase5_deleted_prepare_sessions", "count", n)
+	}
+
 	resp.Errors = errs
 	return resp, errs
 }
@@ -201,12 +223,33 @@ func boundedCleanupCount(count int64) int32 {
 	return int32(count) //nolint:gosec // Value is explicitly bounded to the int32 range.
 }
 
+// runPrepareSessionGC deletes expired or consumed prepare-session metadata
+// after the retention window (REQ-018 D23). It runs on its own short
+// interval (default 10 minutes) and only touches convergence_prepare_sessions.
+func (s *CleanupService) runPrepareSessionGC(ctx context.Context) (int64, error) {
+	cutoff := time.Now().UTC().Add(-time.Duration(s.config.PrepareSessionHours) * time.Hour)
+	n, err := s.store.PrepareSessions().DeleteExpired(ctx, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		s.logger.Info("gc_prepare_sessions_deleted", "count", n)
+	}
+	return n, nil
+}
+
 // StartTicker runs the GC on a periodic timer. Runs until ctx is canceled.
-// Skips the tick if a previous GC is still running (防重叠).
+// Skips the tick if a previous GC is still running (prevents overlap). The
+// prepare-session metadata GC runs on an independent short interval (REQ-018
+// D23: every 10 minutes, 24h retention) sharing the same run lock.
 func (s *CleanupService) StartTicker(ctx context.Context) {
 	interval := time.Duration(s.config.GCIntervalHours) * time.Hour
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	prepareInterval := time.Duration(s.config.PrepareSessionGCIntervalMinutes) * time.Minute
+	prepareTicker := time.NewTicker(prepareInterval)
+	defer prepareTicker.Stop()
 
 	var running sync.Mutex
 
@@ -237,6 +280,21 @@ func (s *CleanupService) StartTicker(ctx context.Context) {
 		}
 	}
 
+	runPrepare := func() {
+		if !running.TryLock() {
+			s.logger.Info("gc_prepare_skip", "reason", "previous run still active")
+			return
+		}
+		defer running.Unlock()
+
+		start := time.Now()
+		if _, err := s.runPrepareSessionGC(ctx); err != nil {
+			s.logger.Warn("cleanup_error", "phase", "prepare_sessions", "error", err)
+			return
+		}
+		s.logger.Debug("gc_prepare_completed", "duration_ms", time.Since(start).Milliseconds())
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -244,6 +302,8 @@ func (s *CleanupService) StartTicker(ctx context.Context) {
 			return
 		case <-ticker.C:
 			run()
+		case <-prepareTicker.C:
+			runPrepare()
 		}
 	}
 }

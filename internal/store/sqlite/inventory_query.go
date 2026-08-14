@@ -55,8 +55,8 @@ func (s *inventoryStore) Query(ctx context.Context, query store.InventoryQuery) 
 			SELECT 1 FROM values_revisions vr
 			WHERE vr.release_definition_id = ri.release_definition_id
 			  AND vr.status = 'approved'
-			  AND vr.revision = (
-				SELECT MAX(latest.revision) FROM values_revisions latest
+			  AND vr.version = (
+				SELECT MAX(latest.version) FROM values_revisions latest
 				WHERE latest.release_definition_id = ri.release_definition_id
 				  AND latest.status = 'approved'
 			  )

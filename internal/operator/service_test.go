@@ -15,12 +15,14 @@ import (
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
 
-// newTestSvc creates a Store backed by an in-memory SQLite database.
+// newTestSvc creates a Store backed by a per-test in-memory SQLite database.
 func newTestSvc(t *testing.T) store.Store {
 	t.Helper()
-	st, err := sqlitestore.Open("file::memory:?cache=shared")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = st.Close() })
+	// OpenTest allocates a unique named in-memory DB per test; the anonymous
+	// file::memory:?cache=shared form would be shared by every test in the
+	// process, leaking rows across tests once a previous store's connection
+	// outlives its cleanup.
+	st := sqlitestore.OpenTest(t)
 
 	ctx := context.Background()
 	cust := &store.Customer{ID: "cust-1", Name: "test-customer", Slug: "test", Status: store.CustomerActive, CreatedAt: time.Now(), UpdatedAt: time.Now()}
@@ -256,7 +258,12 @@ func TestDecodeCommandPayload(t *testing.T) {
 		"create_namespace":true,
 		"timeout_seconds":45,
 		"bundle":{"name":"example-bundle","chart_ref":"oci://registry.example.com/charts/example","chart_version":"1.0.0"},
-		"values":{"message":"hello"}
+		"values":{"message":"hello"},
+		"values_revision_id":"revision-1",
+		"expected_current_revision":3,
+		"target_revision":1,
+		"atomic":true,
+		"values_patch":{"replicas":2}
 	}`)
 	command := new(operatorv1.Command)
 
@@ -268,6 +275,11 @@ func TestDecodeCommandPayload(t *testing.T) {
 	assert.Equal(t, int64(45), command.GetTimeoutSeconds())
 	assert.Equal(t, "oci://registry.example.com/charts/example", command.GetBundle().GetChartRef())
 	assert.JSONEq(t, `{"message":"hello"}`, string(command.GetValues()))
+	assert.Equal(t, "revision-1", command.GetValuesRevisionId())
+	assert.Equal(t, int64(3), command.GetExpectedCurrentRevision())
+	assert.Equal(t, int64(1), command.GetTargetRevision())
+	assert.True(t, command.GetAtomic())
+	assert.JSONEq(t, `{"replicas":2}`, string(command.GetValuesPatch()))
 }
 
 func TestDecodeCommandPayload_RollbackFields(t *testing.T) {
@@ -479,4 +491,28 @@ func TestHandleCommandResultRollbackFailureMarksOutOfSync(t *testing.T) {
 	assert.Equal(t, "sha256:failed", inventory.ObservedManifestDigest)
 	assert.Equal(t, "failed", inventory.LiveStatus)
 	assert.False(t, result.GetError().GetRetryable())
+}
+
+func TestFinishOperation_PreflightFailurePersistsStableCode(t *testing.T) {
+	st := newTestSvc(t)
+	svc, err := operator.NewService(st, nil)
+	require.NoError(t, err)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-preflight-failed", Name: "definition-preflight-failed",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "example",
+		Status: store.DefStatusActive,
+	}, nil))
+	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+		ID: "operation-preflight-failed", OperationType: store.OperationUpgrade,
+		Status: store.StatusPending, ReleaseDefinitionID: "definition-preflight-failed",
+		IdempotencyKey: "idempotency-preflight-failed", RequestHash: "hash",
+	}))
+
+	svc.FinishOperation(ctx, "operation-preflight-failed", "failed", `{"code":"inventory_stale"}`)
+
+	got, err := st.Operations().Get(ctx, "operation-preflight-failed")
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusFailed, got.Status)
+	assert.Equal(t, `{"code":"inventory_stale"}`, got.LastError)
 }

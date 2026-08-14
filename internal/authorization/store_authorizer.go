@@ -86,7 +86,8 @@ func roleAllows(role store.Role, action store.AuthorizationAction) bool {
 	case store.RolePlatformAdmin:
 		return true
 	case store.RoleReleaseAdmin:
-		return action == store.AuthorizationExecuteEmergency || action == store.AuthorizationCreateValues || action == store.AuthorizationApproveValues
+		return action == store.AuthorizationCreateOperation || action == store.AuthorizationExecuteEmergency ||
+			action == store.AuthorizationCreateValues || action == store.AuthorizationApproveValues
 	case store.RoleDeployer:
 		return action == store.AuthorizationCreateValues
 	default:

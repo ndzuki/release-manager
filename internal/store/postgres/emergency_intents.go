@@ -272,6 +272,34 @@ func listActiveEmergencyIntents(ctx context.Context, queryer interface {
 	return scanEmergencyIntentRows(rows)
 }
 
+func (s *emergencyIntentStore) HasUnresolvedForDefinition(ctx context.Context, definitionID string) (found bool, operationIDs []string, err error) {
+	rows, err := s.gorm.QueryContext(ctx, `
+		SELECT ei.operation_id
+		FROM emergency_intents AS ei
+		JOIN operations AS o ON o.id = ei.operation_id
+		WHERE ei.release_definition_id = ?
+		  AND ei.effect_status = 'UNKNOWN'
+		  AND o.terminal_at IS NOT NULL
+		ORDER BY ei.operation_id
+	`, definitionID)
+	if err != nil {
+		return false, nil, fmt.Errorf("query unresolved emergency effects: %w", err)
+	}
+	defer rows.Close()
+	operationIDs = make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return false, nil, fmt.Errorf("scan unresolved emergency effect: %w", err)
+		}
+		operationIDs = append(operationIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return false, nil, fmt.Errorf("iterate unresolved emergency effects: %w", err)
+	}
+	return len(operationIDs) > 0, operationIDs, nil
+}
+
 func (s *emergencyIntentStore) ListPendingDeliveryByDefinition(ctx context.Context, definitionID string) ([]*store.EmergencyIntent, error) {
 	rows, err := s.gorm.QueryContext(ctx, emergencyIntentSelect+`
 		WHERE release_definition_id = ? AND delivery_status != 'persisted'

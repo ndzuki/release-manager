@@ -25,10 +25,6 @@ func TestCommandPayload_RollbackFields(t *testing.T) {
 		ValuesPatch:         []byte(`{"key":"value"}`),
 	}
 
-	stage := StageDef{
-		Name:     StageArtifact,
-		Required: true,
-	}
 
 	// A minimal stub that satisfies store.DefinitionStore.
 	stubDefs := &stubDefinitionStore{
@@ -44,7 +40,7 @@ func TestCommandPayload_RollbackFields(t *testing.T) {
 		timeoutSeconds: 300,
 	}
 
-	payload, err := c.commandPayload(context.Background(), op, stage)
+	payload, err := c.commandPayload(context.Background(), op, StageArtifact, nil, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, StageArtifact, payload.Stage)
@@ -58,11 +54,10 @@ func TestCommandPayload_RollbackFields(t *testing.T) {
 	assert.Equal(t, int64(3), payload.ExpectedCurrentRevision)
 	assert.Equal(t, int64(1), payload.TargetRevision)
 	assert.False(t, payload.Atomic) // rollback is never atomic
-	assert.Equal(t, []byte(`{"key":"value"}`), payload.ValuesPatch)
+	assert.Equal(t, json.RawMessage(`{"key":"value"}`), payload.ValuesPatch)
 }
 
 func TestCommandPayload_RollbackRoundTrip(t *testing.T) {
-	// Verify that the marshalled payload round-trips correctly.
 	payload := &CommandPayload{
 		Stage:                   StageArtifact,
 		OperationID:             "op-001",

@@ -90,8 +90,8 @@ func newApprovalFixture(t *testing.T) approvalFixture {
 
 	revisionID := "revision-068"
 	require.NoError(t, st.Values().Create(ctx, &store.ValuesRevision{
-		ID: revisionID, ReleaseDefinitionID: defID, Revision: 1, StateVersion: 1,
-		Status: store.ValuesStatusDraft, Values: []byte(`{"replicas":1}`), Digest: "sha256:068",
+		ID: revisionID, ReleaseDefinitionID: defID, Version: 1, StateVersion: 1,
+		Status: store.ValuesStatusDraft, CanonicalDocument: []byte(`{"replicas":1}`), Digest: "sha256:068",
 		CreatedByUserID: creatorID,
 	}))
 	return approvalFixture{
@@ -192,10 +192,17 @@ func TestValuesApproval_SuccessPathsAndEvidence(t *testing.T) {
 	t.Run("AC-068-02 approve supersedes old and updates pointer", func(t *testing.T) {
 		f := newApprovalFixture(t)
 		oldID := "old-approved-068"
+		_, err := f.st.DB().ExecContext(f.ctx, `DELETE FROM values_revisions WHERE id = ?`, f.revisionID)
+		require.NoError(t, err)
 		require.NoError(t, f.st.Values().Create(f.ctx, &store.ValuesRevision{
-			ID: oldID, ReleaseDefinitionID: f.defID, Revision: 0, StateVersion: 1,
-			Status: store.ValuesStatusApproved, Values: []byte(`{"replicas":0}`), Digest: "sha256:old",
+			ID: oldID, ReleaseDefinitionID: f.defID, Version: 1, StateVersion: 1,
+			Status: store.ValuesStatusApproved, CanonicalDocument: []byte(`{"replicas":0}`), Digest: "sha256:old",
 			CreatedByUserID: "old-creator",
+		}))
+		require.NoError(t, f.st.Values().Create(f.ctx, &store.ValuesRevision{
+			ID: f.revisionID, ReleaseDefinitionID: f.defID, Version: 2, StateVersion: 1,
+			Status: store.ValuesStatusDraft, CanonicalDocument: []byte(`{"replicas":1}`), Digest: "sha256:068",
+			ParentRevisionID: oldID, CreatedByUserID: f.creatorID,
 		}))
 		f.submit(t)
 		resp, err := f.svc.ApproveValuesRevision(
@@ -257,8 +264,8 @@ func TestValuesApproval_SuccessPathsAndEvidence(t *testing.T) {
 		require.NoError(t, err)
 		childID := "child-068"
 		require.NoError(t, f.st.Values().Create(f.ctx, &store.ValuesRevision{
-			ID: childID, ReleaseDefinitionID: f.defID, Revision: 2, StateVersion: 1,
-			Status: store.ValuesStatusDraft, Values: []byte(`{"replicas":2}`), Digest: "sha256:child",
+			ID: childID, ReleaseDefinitionID: f.defID, Version: 2, StateVersion: 1,
+			Status: store.ValuesStatusDraft, CanonicalDocument: []byte(`{"replicas":2}`), Digest: "sha256:child",
 			ParentRevisionID: f.revisionID, CreatedByUserID: f.creatorID,
 		}))
 		submit := connect.NewRequest(&orchestratorv1.SubmitValuesRevisionRequest{
@@ -597,8 +604,9 @@ func TestValuesApproval_IdempotencyConcurrencyAndState(t *testing.T) {
 		f.submit(t)
 		otherID := "revision-068-other"
 		require.NoError(t, f.st.Values().Create(f.ctx, &store.ValuesRevision{
-			ID: otherID, ReleaseDefinitionID: f.defID, Revision: 2, StateVersion: 1,
-			Status: store.ValuesStatusDraft, Values: []byte(`{}`), Digest: "sha256:other", CreatedByUserID: f.creatorID,
+			ID: otherID, ReleaseDefinitionID: f.defID, Version: 2, StateVersion: 1,
+			Status: store.ValuesStatusDraft, CanonicalDocument: []byte(`{}`), Digest: "sha256:other",
+			ParentRevisionID: f.revisionID, CreatedByUserID: f.creatorID,
 		}))
 		req := connect.NewRequest(&orchestratorv1.SubmitValuesRevisionRequest{RevisionId: otherID, ExpectedStateVersion: 1})
 		req.Header().Set("Idempotency-Key", "second-pending")
@@ -632,12 +640,16 @@ func TestValuesApproval_IdempotencyConcurrencyAndState(t *testing.T) {
 		f := newApprovalFixture(t)
 		_, err := f.st.DB().ExecContext(f.ctx, `DROP INDEX ux_vr_one_approved_per_def`)
 		require.NoError(t, err)
+		parentID := f.revisionID
 		for i := range 2 {
+			version := int64(i + 2)
+			id := fmt.Sprintf("historical-%d", i)
 			require.NoError(t, f.st.Values().Create(f.ctx, &store.ValuesRevision{
-				ID: fmt.Sprintf("historical-%d", i), ReleaseDefinitionID: f.defID, Revision: i,
-				StateVersion: 1, Status: store.ValuesStatusApproved, Values: []byte(`{}`),
-				Digest: fmt.Sprintf("sha256:%d", i), CreatedByUserID: "historical",
+				ID: id, ReleaseDefinitionID: f.defID, Version: version,
+				StateVersion: 1, Status: store.ValuesStatusApproved, CanonicalDocument: []byte(`{}`),
+				Digest: fmt.Sprintf("sha256:%d", i), ParentRevisionID: parentID, CreatedByUserID: "historical",
 			}))
+			parentID = id
 		}
 		f.submit(t)
 		resp, err := f.svc.ApproveValuesRevision(f.actorContext(f.adminID, store.RoleReleaseAdmin), f.approveRequest("multi-old", 2))
@@ -712,8 +724,8 @@ func TestValuesApproval_RollbackSemanticsAndUnavailable(t *testing.T) {
 		require.NoError(t, err)
 		correctedID := "corrected-068"
 		require.NoError(t, f.st.Values().Create(f.ctx, &store.ValuesRevision{
-			ID: correctedID, ReleaseDefinitionID: f.defID, Revision: 2, StateVersion: 1,
-			Status: store.ValuesStatusDraft, Values: []byte(`{"replicas":2}`), Digest: "sha256:corrected",
+			ID: correctedID, ReleaseDefinitionID: f.defID, Version: 2, StateVersion: 1,
+			Status: store.ValuesStatusDraft, CanonicalDocument: []byte(`{"replicas":2}`), Digest: "sha256:corrected",
 			ParentRevisionID: f.revisionID, CreatedByUserID: f.creatorID,
 		}))
 		submit := connect.NewRequest(&orchestratorv1.SubmitValuesRevisionRequest{RevisionId: correctedID, ExpectedStateVersion: 1})

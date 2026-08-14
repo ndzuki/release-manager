@@ -16,6 +16,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
@@ -28,12 +29,14 @@ import (
 	"github.com/ndzuki/release-manager/internal/orchestrator/preflight"
 	"github.com/ndzuki/release-manager/internal/store"
 	"github.com/ndzuki/release-manager/internal/trust"
+	valueutil "github.com/ndzuki/release-manager/internal/values"
 	"github.com/ndzuki/release-manager/internal/vulnerability"
 )
 
 // Service implements the OrchestratorServiceHandler Connect interface.
 type Service struct {
 	store               store.Store
+	createOperation     OperationCreationUnitOfWork
 	verifier            trust.Verifier
 	targetEnv           string
 	coordinator         *preflight.Coordinator
@@ -48,14 +51,17 @@ type Service struct {
 	preflightWG         sync.WaitGroup
 	preflightClosed     bool
 	preflightCancels    map[string]context.CancelFunc
+	valuesConfig        ValuesConfig
 }
 
 func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args ...any) *Service {
 	var auditEmitter audit.Sink
 	var dispatcher emergencyDispatcher
 	var streamRevoker OperatorStreamRevoker
+	var createOperation OperationCreationUnitOfWork
 	operatorEndpoint := "http://operator:8084"
 	logger := slog.Default()
+	valuesConfig := DefaultValuesConfig()
 	var authorizer authorization.Authorizer
 	for _, arg := range args {
 		switch value := arg.(type) {
@@ -65,18 +71,23 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 			dispatcher = value
 		case OperatorStreamRevoker:
 			streamRevoker = value
+		case OperationCreationUnitOfWork:
+			createOperation = value
 		case string:
 			if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
 				operatorEndpoint = strings.TrimRight(value, "/")
 			}
 		case authorization.Authorizer:
 			authorizer = value
+		case ValuesConfig:
+			valuesConfig = value.WithDefaults()
 		case *slog.Logger:
 			logger = value
 		}
 	}
 	return &Service{
 		store:               st,
+		createOperation:     createOperation,
 		verifier:            verifier,
 		emergencyDispatcher: dispatcher,
 		targetEnv:           targetEnv,
@@ -87,6 +98,7 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 		logger:              logger,
 		authorizer:          authorizer,
 		preflightCancels:    make(map[string]context.CancelFunc),
+		valuesConfig:        valuesConfig,
 	}
 }
 
@@ -97,124 +109,148 @@ func (s *Service) CreateOperation(
 	ctx context.Context,
 	req *connect.Request[orchestratorv1.CreateOperationRequest],
 ) (*connect.Response[orchestratorv1.CreateOperationResponse], error) {
+	ctx = authorization.WithFenceCapture(ctx)
 	msg := req.Msg
-	operationScope := operationIdempotencyScope(msg.Actor.GetUserId(), msg.Actor.GetOrganization(), msg.ReleaseDefinitionId)
-	requestHash := hashRequest(msg)
+	idempotencyKey := req.Header().Get("Idempotency-Key")
 
+	// REQ-067 rule 1: only INSTALL and UPGRADE are accepted here; ROLLBACK
+	// uses RollbackRelease and EMERGENCY uses EmergencyChange.
 	opType := store.OperationType(msg.OperationType)
-	if !opType.Valid() {
+	if opType != store.OperationInstall && opType != store.OperationUpgrade {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("invalid operation_type: %s", msg.OperationType))
+			errors.New("invalid_operation_type: only INSTALL and UPGRADE are accepted"))
 	}
 
-	// 3. Lookup release definition
+	// REQ-067 rule 2: actor comes from the auth interceptor context.
+	actor, ok := authctx.ActorFromContext(ctx)
+	if !ok {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
+	}
+
+
+	// Definition lookup feeds authorization, gates, and validation below.
 	def, err := s.store.Definitions().Get(ctx, msg.ReleaseDefinitionId)
-	if err == store.ErrNotFound {
+	if errors.Is(err, store.ErrNotFound) {
 		return nil, connect.NewError(connect.CodeNotFound,
-			fmt.Errorf("release_definition not found: %s", msg.ReleaseDefinitionId))
+			fmt.Errorf("definition_not_found: %s", msg.ReleaseDefinitionId))
 	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("definition lookup: %w", err))
 	}
 
-	// Validate definition is active (AC-040-03).
-	if err := checkDefinitionOperable(def); err != nil {
+	// REQ-067 rule 2: authorization (binding + role) runs before idempotency
+	// and gates (AC-067-22 priority 1, ADR-009).
+	if err := s.authorizeOperationActor(ctx, actor, def.CustomerID); err != nil {
 		return nil, err
 	}
 
-	// AC-013-02: Reject operations for disabled customers.
+	// REQ-067 rule 3: unresolved emergency effect gate (AC-067-20).
+	unresolved, unresolvedOperationIDs, err := s.store.EmergencyIntents().HasUnresolvedForDefinition(ctx, def.ID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("emergency effect gate: %w", err))
+	}
+	if unresolved {
+		// AC-067-22: the typed detail may carry both ID arrays even though the
+		// top-level reason only reflects the highest-priority gate.
+		detail := &orchestratorv1.CreateOperationGateDetail{UnresolvedOperationIds: unresolvedOperationIDs}
+		pendingTasks, listErr := s.store.ConvergenceTasks().ListByDefinition(ctx, def.ID, "pending_promotion")
+		if listErr == nil && len(pendingTasks) > 0 {
+			detail.ConvergenceTaskIds = taskIDs(pendingTasks)
+		}
+		return nil, operationGateError("emergency_effect_unresolved", detail)
+	}
+
+	// REQ-067 rule 4: pending promotion convergence gate (AC-067-21).
+	pendingTasks, err := s.store.ConvergenceTasks().ListByDefinition(ctx, def.ID, "pending_promotion")
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("convergence gate: %w", err))
+	}
+	if len(pendingTasks) > 0 {
+		return nil, operationGateError("release_convergence_pending",
+			&orchestratorv1.CreateOperationGateDetail{ConvergenceTaskIds: taskIDs(pendingTasks)})
+	}
+
+	// REQ-067 rule 5: idempotent replay or conflict (same scope + key).
+
+	// REQ-067 rule 5: the idempotency key is mandatory and travels via the
+	// HTTP Idempotency-Key header (AC-067-06/07). Emptiness is checked with
+	// the idempotency step, after authorization and gates (rule order 2-5,
+	// ADR-009: unauthorized actors never learn anything about keys).
+	if idempotencyKey == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("idempotency_key is required"))
+	}
+
+	scope := idempotencyScope(actor.OrganizationID, def.ID)
+	scopedKey := operationIdempotencyKey(scope, idempotencyKey)
+	existing, err := s.store.Operations().GetByIdempotencyScopeAndKey(ctx, scope, scopedKey)
+	if err == nil {
+		if existing.RequestHash != hashRequest(msg, canonicalPatchForHash(msg.GetValuesPatch())) {
+			return nil, connect.NewError(connect.CodeAlreadyExists,
+				errors.New("idempotency_conflict: key already used with different request"))
+		}
+		s.logger.Info("idempotent operation found", "key", idempotencyKey, "op_id", existing.ID)
+		return connect.NewResponse(s.toResponse(existing, nil)), nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("idempotency lookup: %w", err))
+	}
+
+	// REQ-067 rule 6: definition must be active (AC-040-03).
+	if err := checkDefinitionOperable(def); err != nil {
+		return nil, err
+	}
+	// REQ-067 rule 7: customer must not be disabled (AC-013-02).
 	if err := s.checkCustomerNotDisabled(ctx, def.CustomerID); err != nil {
-		return nil, connect.NewError(connect.CodePermissionDenied, err)
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("customer_disabled: %w", err))
+	}
+	// REQ-067 rule 8: no other non-terminal operation for the definition
+	// (standard/EMERGENCY mutual exclusion, REQ-023 AC-023-06/07).
+	if err := s.checkNoActiveOperation(ctx, def.ID); err != nil {
+		return nil, err
 	}
 
-	// When a caller supplies an organization, it must have an active customer binding.
-	// Legacy in-process callers without organization context remain compatible.
-	if organizationID := msg.Actor.GetOrganization(); organizationID != "" {
-		if err := s.store.Bindings().RequireActive(ctx, organizationID, def.CustomerID); err != nil {
-			if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrBindingRevoked) {
-				return nil, connect.NewError(connect.CodePermissionDenied,
-					errors.New("customer binding is not active"))
-			}
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("binding check: %w", err))
-		}
-	}
-	// EMERGENCY ↔ standard mutual exclusion (REQ-023 AC-023-06, AC-023-07).
-	if opType.IsStandard() {
-		hasEmergency, err := s.store.Operations().HasActiveEmergencyForDefinition(ctx, msg.ReleaseDefinitionId)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("emergency check: %w", err))
-		}
-		if hasEmergency {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("release_busy: definition %s has a running EMERGENCY", msg.ReleaseDefinitionId))
-		}
-	}
-	if opType == store.OperationEmergency {
-		hasStandard, err := s.store.Operations().HasActiveForDefinition(ctx, msg.ReleaseDefinitionId)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("standard check: %w", err))
-		}
-		if hasStandard {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("release_busy: definition %s has an active standard operation", msg.ReleaseDefinitionId))
-		}
-	}
-	if opType.IsStandard() {
-		hasPendingPromotion, err := s.store.ConvergenceTasks().HasPendingPromotionForDefinition(ctx, msg.ReleaseDefinitionId)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("emergency convergence check: %w", err))
-		}
-		if hasPendingPromotion {
-			promotionErr := connect.NewError(connect.CodeFailedPrecondition, errors.New("promotion_required: emergency change must be promoted before standard release"))
-			promotionErr.Meta().Set("X-Reason-Code", "promotion_required")
-			promotionErr.Meta().Set("X-Remediation", "create and approve a ValuesRevision that absorbs the pending emergency change")
-			return nil, promotionErr
-		}
-	}
-	// AC-021-02: UPGRADE requires a positive expected revision and an approved values revision.
-	if opType == store.OperationUpgrade {
-		if msg.ExpectedCurrentRevision < 1 {
-			return nil, connect.NewError(connect.CodeInvalidArgument,
-				fmt.Errorf("expected_current_revision must be >= 1 for %s, got %d", opType, msg.ExpectedCurrentRevision))
-		}
-
-		vr, err := s.store.Values().Get(ctx, msg.ValuesRevisionId)
-		if err == store.ErrNotFound {
-			return nil, connect.NewError(connect.CodeNotFound,
-				fmt.Errorf("values_revision not found: %s", msg.ValuesRevisionId))
-		}
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("values_revision lookup: %w", err))
-		}
-		if vr.ReleaseDefinitionID != def.ID {
-			return nil, connect.NewError(connect.CodeInvalidArgument,
-				fmt.Errorf("values_revision %s belongs to release_definition %s, not %s", vr.ID, vr.ReleaseDefinitionID, def.ID))
-		}
-		if vr.Status != store.ValuesStatusApproved {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("values_revision %s is %s, must be approved", vr.ID, vr.Status))
-		}
-	}
-
-	if opType == store.OperationRollback && msg.ExpectedCurrentRevision < 1 {
-		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("expected_current_revision must be >= 1 for %s, got %d", opType, msg.ExpectedCurrentRevision))
-	}
-
-	// 4.5. Trust verification (REQ-012).
-	policy := trust.DefaultPolicy(s.targetEnv)
+	// REQ-067 rule 9: bundle state, including archived CAS pre-check
+	// (AC-067-17/18; the UOW re-checks atomically inside the transaction).
 	bundle, err := s.store.Bundles().Get(ctx, msg.BundleId)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("bundle not found: %s", msg.BundleId))
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("bundle_not_found: %s", msg.BundleId))
 	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("bundle lookup: %w", err))
 	}
+	switch bundle.Status {
+	case store.BundleReceived:
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("bundle_not_ready"))
+	case store.BundleRejected:
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("bundle_rejected"))
+	case store.BundleValidated:
+	case store.BundleArchived:
+		// archived_from_status nil/validated continues; received/rejected
+		// are rejected per the REQ-067 SetCurrentBundle decision table.
+		switch {
+		case bundle.ArchivedFromStatus == nil || *bundle.ArchivedFromStatus == store.BundleValidated:
+		case *bundle.ArchivedFromStatus == store.BundleRejected:
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("bundle_rejected"))
+		default:
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("bundle_not_ready"))
+		}
+	default:
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("bundle_not_ready"))
+	}
+	// REQ-067 rule 10: chart match (AC-067-03).
+	if !chartNameMatches(bundle.ChartRef, def.ChartName) {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("chart_mismatch: bundle chart_ref %q does not match definition chart_name %q", bundle.ChartRef, def.ChartName))
+	}
+
+	// Trust verification (REQ-012): merged main flow. The signature reference
+	// stays part of the request contract; the preflight Artifact stage owns
+	// the synchronous trust checks per REQ-067 non-goals.
+	policy := trust.DefaultPolicy(s.targetEnv)
 	digest := bundle.DigestValue
 	if bundle.DigestAlg != "" {
 		digest = bundle.DigestAlg + ":" + bundle.DigestValue
 	}
-
 	var out *trust.Output
 	if s.verifier == nil {
 		out = &trust.Output{
@@ -266,92 +302,135 @@ func (s *Service) CreateOperation(
 	}
 	verifyResult := trust.StatusToProto(responseStatus)
 
-	if opType == store.OperationInstall {
-		if msg.GetValuesRevisionId() == "" {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				errors.New("revision_not_approved: values_revision_id is required"))
+	// REQ-067 rule 11: values revision approved and bound to the definition.
+	revision, err := s.checkValuesRevision(ctx, def, msg.GetValuesRevisionId())
+	if err != nil {
+		return nil, err
+	}
+	// REQ-067 rules 12/13: inventory preconditions (AC-067-02).
+	if err := s.checkReleaseState(ctx, def, opType, int(msg.GetExpectedCurrentRevision())); err != nil {
+		return nil, err
+	}
+	// REQ-067 rule 14: canonical merge and secret scan (AC-067-12).
+	merged, err := prepareValues(revision, msg.GetValuesPatch())
+	if err != nil {
+		if errors.Is(err, errSecretLiteralForbidden) {
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("secret_literal_forbidden"))
 		}
-		revision, err := s.store.Values().Get(ctx, msg.GetValuesRevisionId())
-		if err == store.ErrNotFound {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				errors.New("revision_not_approved: values revision not found"))
-		}
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("values revision lookup: %w", err))
-		}
-		if revision.ReleaseDefinitionID != def.ID || revision.Status != store.ValuesStatusApproved {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				errors.New("revision_not_approved: values revision must be approved for the target definition"))
-		}
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
-	// 5. Build operation request hash for idempotency.
-	reqHash := requestHash
-
-	// 6. Build domain Operation
+	// Build the domain Operation with the canonical request hash.
 	now := time.Now().UTC()
+	policyVersion := trust.DefaultPolicy(s.targetEnv).PolicyVersion
+	imageRefsJSON, imageDigestsJSON, err := bundleImageDigests(bundle.Images)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("marshal bundle image digests: %w", err))
+	}
 	op := &store.Operation{
 		ID:                  uuid.New().String(),
 		OperationType:       opType,
 		Status:              operation.InitialStatus(),
-		ReleaseDefinitionID: msg.ReleaseDefinitionId,
-		IdempotencyKey:      operationIdempotencyKey(operationScope, msg.IdempotencyKey),
-		RequestHash:         reqHash,
-		BundleID:            msg.BundleId,
-		ValuesRevisionID:    msg.ValuesRevisionId,
-		ExpectedRevision:    int(msg.ExpectedCurrentRevision),
-		ValuesPatch:         []byte(msg.ValuesPatch),
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      scopedKey,
+		IdempotencyScope:    scope,
+		RequestHash:         hashRequest(msg, string(merged.patch)),
+		BundleID:            bundle.ID,
+		BundleChartRef:      bundle.ChartRef,
+		BundleChartDigest:   bundle.ChartDigest,
+		ImageRefsJSON:       imageRefsJSON,
+		ImageDigestsJSON:    imageDigestsJSON,
+		PolicyVersion:       policyVersion,
+		ValuesRevisionID:    msg.GetValuesRevisionId(),
+		ExpectedRevision:    int(msg.GetExpectedCurrentRevision()),
+		ValuesPatch:         merged.patch,
+		PatchDigest:         merged.patchDigest,
+		EffectiveValuesDigest: merged.effectiveDigest,
 		Actor: store.ActorContext{
-			UserID:       msg.Actor.GetUserId(),
-			Organization: msg.Actor.GetOrganization(),
+			UserID:       actor.UserID,
+			Organization: actor.OrganizationID,
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 
-	// 7. Persist with atomic availability and idempotency checks.
-	createResult, err := s.store.Operations().CreateIdempotent(ctx, store.OperationCreateCommand{
-		Operation: op,
-		Idempotency: &store.IdempotencyRecord{
-			Scope: operationScope, Key: hashIdempotencyKey(msg.IdempotencyKey), RequestHash: reqHash,
-			ExpiresAt: now.Add(24 * time.Hour),
-		},
-		CheckAvailable: true,
-	})
-	if err != nil {
+	// Preflight dispatch: coordinator publishes in-process; a coordinator
+	// failure still persists a deferred outbox entry (AC-067-13).
+	dispatch, dispatchErr := s.coordinator.Dispatch(ctx, op, bundleToProto(bundle), merged.effective)
+	if dispatchErr != nil {
+		payload, marshalErr := (&preflight.CommandPayload{
+			Stage: preflight.StageArtifact, OperationID: op.ID, BundleID: op.BundleID, DefinitionID: def.ID,
+			Bundle: bundleToProto(bundle), Namespace: def.Namespace, ReleaseName: def.ReleaseName, Values: merged.effective,
+			ValuesRevisionID: op.ValuesRevisionID, ValuesPatch: op.ValuesPatch,
+			ExpectedCurrentRevision: int64(op.ExpectedRevision), TargetRevision: int64(op.TargetRevision),
+		}).Marshal()
+		if marshalErr != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("marshal deferred dispatch: %w", marshalErr))
+		}
+		dispatch = &store.OutboxEntry{
+			ID: uuid.New().String(), CommandID: fmt.Sprintf("%s:artifact", op.ID),
+			OperationID: op.ID, OperationType: string(op.OperationType), Payload: payload,
+		}
+	}
+	if s.createOperation == nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("operation creation unit of work is not configured"))
+	}
+	expectedAuthorizationVersion, ok := authorization.SourceVersionFromContext(ctx)
+	if !ok {
+		return nil, connect.NewError(connect.CodeUnavailable,
+			errors.New("authorization_snapshot_stale: authorization snapshot is unavailable"))
+	}
+	artifactDigests := make([]string, 0, len(bundle.Images)+1)
+	if bundle.ChartDigest != "" {
+		artifactDigests = append(artifactDigests, bundle.ChartDigest)
+	}
+	for _, image := range bundle.Images {
+		if image.Digest != "" {
+			artifactDigests = append(artifactDigests, image.Digest)
+		}
+	}
+	// Atomically commit operation, dispatch, bundle CAS, artifact links, and
+	// definition current_bundle_id; the fence re-checks the authorization
+	// snapshot inside the transaction (AC-067-19/22).
+	if _, err := s.createOperation(ctx, CreateOperationRequest{
+		Operation:                    op,
+		Dispatch:                     dispatch,
+		CandidateArtifactDigests:     artifactDigests,
+		ExpectedAuthorizationVersion: expectedAuthorizationVersion,
+	}); err != nil {
 		switch {
 		case errors.Is(err, store.ErrReleaseBusy):
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
-		case errors.Is(err, store.ErrIdempotencyConflict):
-			return nil, connect.NewError(connect.CodeAlreadyExists,
-				errors.New("idempotency_conflict: key already used with different request"))
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("release_busy"))
+		case errors.Is(err, store.ErrDuplicateKey):
+			return nil, connect.NewError(connect.CodeAlreadyExists, errors.New("idempotency_conflict"))
+		case errors.Is(err, store.ErrBundleNotReady):
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("bundle_not_ready"))
+		case errors.Is(err, store.ErrBundleRejected):
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("bundle_rejected"))
+		case errors.Is(err, store.ErrAuthorizationStale):
+			return nil, connect.NewError(connect.CodeUnavailable,
+				errors.New("authorization_snapshot_stale: authorization snapshot is stale"))
 		default:
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create operation: %w", err))
 		}
 	}
-	op = createResult.Operation
-	if createResult.Replayed {
-		return connect.NewResponse(s.toResponse(op, nil)), nil
+	if dispatchErr != nil {
+		s.logger.Warn("preflight dispatch deferred", "op_id", op.ID, "err", dispatchErr)
 	}
 
-	// 8. Trigger preflight transition and launch coordinator
-	//    Standard ops go pending→preflight, EMERGENCY goes pending→queued
-	if opType.IsStandard() {
-		next, err := operation.Transition(op.Status, operation.EventStartPreflight)
-		if err != nil {
-			s.logger.Error("preflight transition failed", "op_id", op.ID, "err", err)
+	// Transition pending → preflight and launch the coordinator.
+	next, err := operation.Transition(op.Status, operation.EventStartPreflight)
+	if err != nil {
+		s.logger.Error("preflight transition failed", "op_id", op.ID, "err", err)
+	} else {
+		updated, updateErr := s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, "")
+		if updateErr != nil {
+			s.logger.Error("preflight status update failed", "op_id", op.ID, "err", updateErr)
 		} else {
-			_, err = s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, "")
-			if err != nil {
-				s.logger.Error("preflight status update failed", "op_id", op.ID, "err", err)
-			} else {
-				op.Status = next
-				op.StateVersion++
-
-				s.startPreflight(ctx, op)
-				s.logger.Info("preflight coordinator launched", "op_id", op.ID)
-			}
+			op.Status = updated.Status
+			op.StateVersion = updated.StateVersion
+			s.startPreflight(ctx, op)
+			s.logger.Info("preflight coordinator launched", "op_id", op.ID)
 		}
 	}
 	s.logger.Info("operation created",
@@ -362,6 +441,7 @@ func (s *Service) CreateOperation(
 
 	return connect.NewResponse(s.toResponse(op, &verifyResult)), nil
 }
+
 
 
 // PublishRelease triggers the release pipeline for a definition (skeleton).
@@ -984,12 +1064,10 @@ func hashIdempotencyKey(key string) string {
 	return hex.EncodeToString(hash[:])
 }
 
-func operationIdempotencyScope(userID, organizationID, definitionID string) string {
-	identity := organizationID + ":" + userID
-	if identity == ":" {
-		identity = "anonymous"
-	}
-	return identity + ":" + definitionID
+// idempotencyScope scopes idempotency by organization and definition
+// (REQ-067: scope = organization_id + ":" + release_definition_id).
+func idempotencyScope(orgID, definitionID string) string {
+	return orgID + ":" + definitionID
 }
 
 func scopedOperationKey(scope, key string) string {
@@ -1034,25 +1112,128 @@ func (s *Service) toResponse(op *store.Operation, verificationResult *commonv1.V
 	return response
 }
 
-// hashRequest computes a deterministic hash of the request for idempotency.
-// The signature reference is part of the hash so a replay with a different
-// signature for the same key conflicts (AC-010-02).
-func hashRequest(req *orchestratorv1.CreateOperationRequest) string {
-	payload := fmt.Sprintf("%s|%s|%s|%s|%s|%d|%s|%s|%s|%s|%s",
-		req.OperationType,
-		req.BundleId,
-		req.ReleaseDefinitionId,
-		req.ValuesRevisionId,
-		req.ValuesPatch,
-		req.ExpectedCurrentRevision,
-		req.Actor.GetUserId(),
-		req.Actor.GetOrganization(),
-		req.SignatureRef.GetDigest(),
-		req.SignatureRef.GetSignature(),
-		req.SignatureRef.GetIssuer(),
-	)
+// hashRequest computes a deterministic hash of the canonical request payload
+// (REQ-067 idempotency model). The canonical patch is produced by
+// canonicalPatchForHash so replays with equivalent patches hash identically.
+func hashRequest(req *orchestratorv1.CreateOperationRequest, canonicalPatch string) string {
+	return hashOperationRequest(store.OperationType(req.GetOperationType()), req.GetBundleId(), req.GetReleaseDefinitionId(),
+		req.GetValuesRevisionId(), canonicalPatch, int(req.GetExpectedCurrentRevision()), 0, "")
+}
+
+// hashOperationRequest canonicalizes the REQ-067 hash input into one JSON
+// document: operation_type, bundle_id, release_definition_id,
+// values_revision_id, values_patch, expected_current_revision,
+// target_revision, reason (0/"" for non-ROLLBACK).
+func hashOperationRequest(opType store.OperationType, bundleID, definitionID, valuesRevisionID, canonicalPatch string, expectedRevision, targetRevision int, reason string) string {
+	payload := fmt.Sprintf(`{"operation_type":%q,"bundle_id":%q,"release_definition_id":%q,"values_revision_id":%q,"values_patch":%s,"expected_current_revision":%d,"target_revision":%d,"reason":%q}`,
+		string(opType), bundleID, definitionID, valuesRevisionID, canonicalPatch, expectedRevision, targetRevision, reason)
 	h := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("%x", h)
+}
+
+// canonicalPatchForHash returns the canonical JSON of a Struct merge patch,
+// matching prepareValues output so stored request hashes stay stable.
+func canonicalPatchForHash(patch *structpb.Struct) string {
+	if patch == nil {
+		return "{}"
+	}
+	raw, err := json.Marshal(patch.AsMap())
+	if err != nil {
+		return "{}"
+	}
+	canonical, err := valueutil.Canonicalize(raw)
+	if err != nil {
+		return "{}"
+	}
+	return string(canonical)
+}
+
+// authorizeOperationActor verifies the actor's binding and role via the
+// authorization snapshot (REQ-067 rule 2, ADR-006). The successful decision
+// records the fence source version into the request context; a missing or
+// stale snapshot fails closed before idempotency and gates (AC-067-22).
+func (s *Service) authorizeOperationActor(ctx context.Context, actor authctx.Actor, customerID string) error {
+	if s.authorizer == nil {
+		return connect.NewError(connect.CodeUnavailable,
+			errors.New("authorization_snapshot_stale: authorization snapshot is unavailable"))
+	}
+	if err := s.authorizer.AuthorizeWrite(ctx, actor, customerID, store.AuthorizationCreateOperation); err != nil {
+		if connect.CodeOf(err) == connect.CodePermissionDenied {
+			return connect.NewError(connect.CodePermissionDenied, errors.New("permission_denied"))
+		}
+		return err
+	}
+	return nil
+}
+
+// checkNoActiveOperation enforces REQ-067 rule 8: no other non-terminal
+// standard or EMERGENCY operation for the definition (AC-067-04, REQ-023
+// AC-023-06/07). The UOW re-checks availability atomically inside the
+// transaction.
+func (s *Service) checkNoActiveOperation(ctx context.Context, defID string) error {
+	active, err := s.store.Operations().HasActiveForDefinition(ctx, defID)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("active check: %w", err))
+	}
+	if active {
+		return connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("release_busy: definition %s has active operation", defID))
+	}
+	activeEmergency, err := s.store.Operations().HasActiveEmergencyForDefinition(ctx, defID)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("emergency check: %w", err))
+	}
+	if activeEmergency {
+		return connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("release_busy: definition %s has a running EMERGENCY", defID))
+	}
+	return nil
+}
+
+// operationGateError builds a CodeFailedPrecondition error with an optional
+// typed CreateOperationGateDetail (AC-067-20/21/22).
+func operationGateError(reason string, detail *orchestratorv1.CreateOperationGateDetail) error {
+	connectErr := connect.NewError(connect.CodeFailedPrecondition, errors.New(reason))
+
+	if detail != nil {
+		if errorDetail, err := connect.NewErrorDetail(detail); err == nil {
+			connectErr.AddDetail(errorDetail)
+		}
+	}
+	return connectErr
+}
+
+// taskIDs extracts convergence task IDs for the typed gate detail
+// (AC-067-21/22).
+func taskIDs(tasks []*store.ConvergenceTask) []string {
+	ids := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		ids = append(ids, task.ID)
+	}
+	return ids
+}
+
+
+func (s *Service) checkValuesRevision(ctx context.Context, def *store.ReleaseDefinition, revisionID string) (*store.ValuesRevision, error) {
+	if revisionID == "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("revision_not_approved"))
+	}
+	revision, err := s.store.Values().Get(ctx, revisionID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("revision_mismatch: values_revision not found: %s", revisionID))
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("values revision lookup: %w", err))
+	}
+	if revision.ReleaseDefinitionID != def.ID {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("values_revision %s belongs to release_definition %s", revision.ID, revision.ReleaseDefinitionID))
+	}
+	if revision.Status != store.ValuesStatusApproved {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("revision_not_approved: values_revision %s must be approved", revision.ID))
+	}
+	return revision, nil
 }
 
 // checkCustomerNotDisabled verifies the customer is not disabled.
@@ -1119,6 +1300,62 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	}
 }
 
+func (s *Service) checkReleaseState(
+	ctx context.Context,
+	def *store.ReleaseDefinition,
+	opType store.OperationType,
+	expected int,
+) error {
+	installed, err := s.store.Inventories().GetByDefinition(ctx, def.ID)
+	if opType == store.OperationInstall {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return connect.NewError(connect.CodeInternal, fmt.Errorf("inventory lookup: %w", err))
+		}
+		if installed.InventoryStatus == store.InventoryActive {
+			return connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("release_already_exists: installed release exists for definition %s", def.ID))
+		}
+		return nil
+	}
+
+	if expected < 1 {
+		return connect.NewError(connect.CodeInvalidArgument, errors.New("expected_current_revision must be >= 1"))
+	}
+	if errors.Is(err, store.ErrNotFound) || (err == nil && installed.InventoryStatus != store.InventoryActive) {
+		return connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("release_not_found: no installed release for definition %s", def.ID))
+	}
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("inventory lookup: %w", err))
+	}
+	if installed.Revision != expected {
+		return connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("revision_conflict: expected revision %d, but current revision is %d", expected, installed.Revision))
+	}
+	return nil
+}
+
+// chartNameMatches performs a loose match between a chart reference and a chart name.
+// Registry host prefixes (e.g., "registry.example.com/") are stripped from both
+// before comparison (AC-067-03).
+func chartNameMatches(chartRef, chartName string) bool {
+	ref := extractChartName(chartRef)
+	name := extractChartName(chartName)
+	return ref == name
+}
+
+// extractChartName strips the registry host prefix from a chart reference.
+// "registry.example.com/nginx" → "nginx"
+// "nginx" → "nginx"
+func extractChartName(ref string) string {
+	if idx := strings.LastIndex(ref, "/"); idx >= 0 {
+		return ref[idx+1:]
+	}
+	return ref
+}
 // Compile-time check: Service implements the Connect handler interface.
 var _ orchestratorv1connect.OrchestratorServiceHandler = (*Service)(nil)
 
@@ -1145,8 +1382,8 @@ func (s *Service) emitTrustVerificationAudit(
 	}
 	actor, ok := authctx.ActorFromContext(ctx)
 	actorKind := store.AuditActorUser
-	actorID := msg.GetActor().GetUserId()
-	organizationID := msg.GetActor().GetOrganization()
+	actorID := ""
+	organizationID := ""
 	role := ""
 	if ok {
 		actorID = actor.UserID
@@ -1199,5 +1436,48 @@ func (s *Service) emitAudit(ev *store.AuditEvent) {
 // ListOperations returns operations for a release definition.
 func (s *Service) ListOperations(_ context.Context, _ *connect.Request[orchestratorv1.ListOperationsRequest]) (*connect.Response[orchestratorv1.ListOperationsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ListOperations is not implemented"))
+}
+
+// bundleToProto converts a store bundle into the common proto shape used by
+// preflight dispatch payloads.
+func bundleToProto(bundle *store.ReleaseBundle) *commonv1.ReleaseBundle {
+	images := make([]*commonv1.BundleImage, 0, len(bundle.Images))
+	for _, image := range bundle.Images {
+		images = append(images, &commonv1.BundleImage{
+			Ref: image.Ref, Digest: image.Digest, ValuesPath: image.ValuesPath,
+		})
+	}
+	return &commonv1.ReleaseBundle{
+		Id: bundle.ID, Name: bundle.Name,
+		Digest:   &commonv1.ReleaseDigest{Algorithm: bundle.DigestAlg, Value: bundle.DigestValue},
+		Status:   commonv1.BundleStatus(commonv1.BundleStatus_value["BUNDLE_STATUS_"+strings.ToUpper(string(bundle.Status))]),
+		ChartRef: bundle.ChartRef, ChartVersion: bundle.ChartVersion, ChartDigest: bundle.ChartDigest,
+		Images: images, GitCommit: bundle.GitCommit, PipelineId: bundle.PipelineID,
+		SignatureRef: bundle.SignatureRef, SbomRef: bundle.SBOMRef, ProvenanceRef: bundle.ProvenanceRef,
+		CreatedAt: timestamppb.New(bundle.CreatedAt),
+	}
+}
+
+// bundleImageDigests converts bundle images to JSON byte arrays for storage.
+func bundleImageDigests(images []store.BundleImage) (refsJSON, digestsJSON []byte, err error) {
+	refs := make([]string, 0, len(images))
+	digests := make([]string, 0, len(images))
+	for _, image := range images {
+		if image.Ref != "" {
+			refs = append(refs, image.Ref)
+		}
+		if image.Digest != "" {
+			digests = append(digests, image.Digest)
+		}
+	}
+	refsJSON, err = json.Marshal(refs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal image refs: %w", err)
+	}
+	digestsJSON, err = json.Marshal(digests)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal image digests: %w", err)
+	}
+	return refsJSON, digestsJSON, nil
 }
 

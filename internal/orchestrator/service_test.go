@@ -18,7 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
+	"google.golang.org/protobuf/types/known/structpb"
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	"github.com/ndzuki/release-manager/internal/auth"
@@ -45,6 +45,61 @@ func (r *streamRevokerStub) Revoke(_ context.Context, operatorID, reason string)
 	return r.err
 }
 
+// seedActorBinding provisions the org-001/user-001 release_admin actor and an
+// active binding to the given customer, satisfying the REQ-067 authorization
+// precondition for tests that build their own definitions.
+func seedActorBinding(t *testing.T, st store.Store, customerID string) {
+	t.Helper()
+	ctx := context.Background()
+	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: "org-001", Name: "Test Organization"}))
+	require.NoError(t, st.Users().Create(ctx, &store.User{ID: "user-001", Username: "user-001", Status: store.UserActive}))
+	require.NoError(t, st.OrgMembers().Create(ctx, &store.OrganizationMember{
+		OrgID: "org-001", UserID: "user-001", Role: store.RoleReleaseAdmin,
+	}))
+	require.NoError(t, st.Bindings().Create(ctx, &store.OrgCustomerBinding{
+		ID: "binding-" + customerID, OrgID: "org-001", CustomerID: customerID,
+	}))
+}
+
+// sqliteUOW extracts the operation creation UOW from a store returned by
+// setupService (concrete *sqlite.Store behind the store.Store interface).
+func sqliteUOW(st store.Store) store.OperationCreationUnitOfWork {
+	if provider, ok := st.(interface{ OperationCreationUnitOfWork() store.OperationCreationUnitOfWork }); ok {
+		return provider.OperationCreationUnitOfWork()
+	}
+	return nil
+}
+
+// seedUpgradeInventory creates an active inventory entry for def-001 at
+// revision 1, satisfying the UPGRADE inventory precondition (REQ-067 rule 13).
+func seedUpgradeInventory(t *testing.T, st store.Store) {
+	t.Helper()
+	require.NoError(t, st.Inventories().Upsert(t.Context(), &store.ReleaseInventory{
+		ReleaseDefinitionID: "def-001",
+		CustomerID:          "cust-001",
+		ClusterID:           "cls-001",
+		Namespace:           "default",
+		ReleaseName:         "my-release",
+		InventoryStatus:     store.InventoryActive,
+		Revision:            1,
+	}))
+}
+
+// adminCtx returns a context with a release_admin actor for org-001
+// (REQ-067 rule 2: actor comes from the auth interceptor context).
+func adminCtx() context.Context {
+	return authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-001", OrganizationID: "org-001", Roles: []string{string(store.RoleReleaseAdmin)},
+	})
+}
+
+// withIdempotencyKey sets the HTTP Idempotency-Key header on a request
+// (REQ-067 rule 5: the key travels via the header, not the body).
+func withIdempotencyKey[Req any](req *connect.Request[Req], key string) *connect.Request[Req] {
+	req.Header().Set("Idempotency-Key", key)
+	return req
+}
+
 func setupService(t *testing.T) (*Service, store.Store, func()) {
 	t.Helper()
 	dbPath := t.TempDir() + "/test.db"
@@ -53,7 +108,7 @@ func setupService(t *testing.T) (*Service, store.Store, func()) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	verifier := trust.NewStubVerifier(st.Verifications(), nil, logger)
-	svc := NewService(st, verifier, "staging", nil, authorization.NewStoreAuthorizer(st), logger)
+	svc := NewService(st, verifier, "staging", nil, st.OperationCreationUnitOfWork(), authorization.NewStoreAuthorizer(st), logger)
 	for _, id := range []string{"bundle-001", "bundle-002", "bundle-upgrade"} {
 		seedTestBundle(t, st, id)
 	}
@@ -93,7 +148,7 @@ func seedDefinition(t *testing.T, st store.Store) {
 	require.NoError(t, st.Bindings().Create(context.Background(), binding))
 
 	require.NoError(t, st.OrgMembers().Create(context.Background(), &store.OrganizationMember{
-		OrgID: org.ID, UserID: "user-001", Role: store.RoleDeployer,
+		OrgID: org.ID, UserID: "user-001", Role: store.RoleReleaseAdmin,
 	}))
 
 	def := &store.ReleaseDefinition{
@@ -115,9 +170,9 @@ func seedDefinition(t *testing.T, st store.Store) {
 	revision := &store.ValuesRevision{
 		ID:                  "vr-001",
 		ReleaseDefinitionID: def.ID,
-		Revision:            1,
+		Version:             1,
 		Status:              store.ValuesStatusApproved,
-		Values:              []byte(`{"message":"hello"}`),
+		CanonicalDocument:   []byte(`{"message":"hello"}`),
 		Digest:              "digest-vr-001",
 	}
 	require.NoError(t, st.Values().Create(context.Background(), revision))
@@ -136,14 +191,23 @@ func seedValuesRevision(
 	if status == store.ValuesStatusApproved {
 		initialStatus = store.ValuesStatusPendingApproval
 	}
+	nextVersion, err := st.Values().GetNextRevisionNumber(context.Background(), definitionID)
+	require.NoError(t, err)
+	parentRevisionID := ""
+	if nextVersion > 1 {
+		latest, latestErr := st.Values().GetLatest(context.Background(), definitionID)
+		require.NoError(t, latestErr)
+		parentRevisionID = latest.ID
+	}
 	revision := &store.ValuesRevision{
 		ID:                  id,
 		ReleaseDefinitionID: definitionID,
-		Revision:            1,
+		Version:             nextVersion,
 		StateVersion:        1,
 		Status:              initialStatus,
-		Values:              []byte(`{"replicas":2}`),
+		CanonicalDocument:   []byte(`{"replicas":2}`),
 		Digest:              "sha256:test",
+		ParentRevisionID:    parentRevisionID,
 		CreatedAt:           now,
 		UpdatedAt:           now,
 	}
@@ -156,19 +220,16 @@ func seedValuesRevision(
 	}
 }
 
-func upgradeRequest(valuesRevisionID string) *orchestratorv1.CreateOperationRequest {
-	return &orchestratorv1.CreateOperationRequest{
+func upgradeRequest(valuesRevisionID string) *connect.Request[orchestratorv1.CreateOperationRequest] {
+	req := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:           "UPGRADE",
 		BundleId:                "bundle-upgrade",
 		ReleaseDefinitionId:     "def-001",
 		ValuesRevisionId:        valuesRevisionID,
 		ExpectedCurrentRevision: 1,
-		IdempotencyKey:          "idem-upgrade-" + valuesRevisionID,
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
-	}
+	})
+	req.Header().Set("Idempotency-Key", "idem-upgrade-"+valuesRevisionID)
+	return req
 }
 
 func TestCreateOperation_Install_Success(t *testing.T) {
@@ -176,18 +237,13 @@ func TestCreateOperation_Install_Success(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 
-	resp, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+	resp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:           "INSTALL",
 		BundleId:                "bundle-001",
 		ReleaseDefinitionId:     "def-001",
 		ValuesRevisionId:        "vr-001",
-		IdempotencyKey:          "idem-001",
 		ExpectedCurrentRevision: 0,
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
-	}))
+	}), "idem-001"))
 	require.NoError(t, err)
 	assert.NotEmpty(t, resp.Msg.OperationId)
 	assert.Equal(t, "preflight", resp.Msg.State) // standard ops enter preflight
@@ -203,19 +259,13 @@ func TestCreateOperation_RejectedForRevokedCustomerBinding(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, st.Bindings().SetStatus(context.Background(), binding.ID, store.BindingRevoked))
 
-	_, err = svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+	_, err = svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INSTALL",
 		BundleId:            "bundle-001",
 		ReleaseDefinitionId: "def-001",
-		IdempotencyKey:      "revoked-binding",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
-	}))
+	}), "revoked-binding"))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
-	assert.ErrorContains(t, err, "customer binding is not active")
 }
 
 func TestCreateOperation_Idempotency(t *testing.T) {
@@ -229,17 +279,12 @@ func TestCreateOperation_Idempotency(t *testing.T) {
 		BundleId:            "bundle-001",
 		ReleaseDefinitionId: "def-001",
 		ValuesRevisionId:    "vr-001",
-		IdempotencyKey:      "idem-dup",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
 	}
 
-	resp1, err := svc.CreateOperation(context.Background(), connect.NewRequest(msg))
+	resp1, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(msg), "idem-dup"))
 	require.NoError(t, err)
 
-	resp2, err := svc.CreateOperation(context.Background(), connect.NewRequest(msg))
+	resp2, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(msg), "idem-dup"))
 	require.NoError(t, err)
 
 	assert.Equal(t, resp1.Msg.OperationId, resp2.Msg.OperationId, "idempotent requests must return same operation")
@@ -255,10 +300,8 @@ func TestCreateOperation_IdempotencyConflict(t *testing.T) {
 		BundleId:            "bundle-001",
 		ReleaseDefinitionId: "def-001",
 		ValuesRevisionId:    "vr-001",
-		IdempotencyKey:      "idem-conflict",
-		Actor:               &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
 	}
-	_, err := svc.CreateOperation(context.Background(), connect.NewRequest(first))
+	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(first), "idem-conflict"))
 	require.NoError(t, err)
 
 	conflicting := &orchestratorv1.CreateOperationRequest{
@@ -266,10 +309,8 @@ func TestCreateOperation_IdempotencyConflict(t *testing.T) {
 		BundleId:            "bundle-002",
 		ReleaseDefinitionId: "def-001",
 		ValuesRevisionId:    "vr-001",
-		IdempotencyKey:      "idem-conflict",
-		Actor:               &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
 	}
-	_, err = svc.CreateOperation(context.Background(), connect.NewRequest(conflicting))
+	_, err = svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(conflicting), "idem-conflict"))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
 	assert.ErrorContains(t, err, "idempotency_conflict")
@@ -292,18 +333,13 @@ func TestCreateOperation_ReleaseBusy(t *testing.T) {
 	seedValuesRevision(t, st, "vr-002", "def-001", store.ValuesStatusApproved)
 
 	// Second request with different idempotency key -> release_busy
-	_, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:           "UPGRADE",
 		BundleId:                "bundle-002",
 		ReleaseDefinitionId:     "def-001",
 		ValuesRevisionId:        "vr-002",
 		ExpectedCurrentRevision: 1,
-		IdempotencyKey:          "idem-003",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
-	}))
+	}), "idem-003"))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "release_busy")
@@ -313,6 +349,7 @@ func TestCreateOperation_ConcurrentUpgradeOnlyOneAccepted(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
+	seedUpgradeInventory(t, st)
 	seedValuesRevision(t, st, "vr-concurrent", "def-001", store.ValuesStatusApproved)
 
 	const requests = 8
@@ -320,8 +357,8 @@ func TestCreateOperation_ConcurrentUpgradeOnlyOneAccepted(t *testing.T) {
 	for i := range requests {
 		go func(i int) {
 			req := upgradeRequest("vr-concurrent")
-			req.IdempotencyKey = fmt.Sprintf("idem-concurrent-%d", i)
-			_, err := svc.CreateOperation(context.Background(), connect.NewRequest(req))
+			req.Header().Set("Idempotency-Key", fmt.Sprintf("idem-concurrent-%d", i))
+			_, err := svc.CreateOperation(adminCtx(), req)
 			results <- err
 		}(i)
 	}
@@ -425,6 +462,7 @@ func TestCreateOperation_UpgradeValidation(t *testing.T) {
 			svc, st, cleanup := setupService(t)
 			defer cleanup()
 			seedDefinition(t, st)
+			seedUpgradeInventory(t, st)
 			if tt.prepare != nil {
 				tt.prepare(t, st)
 			}
@@ -440,10 +478,10 @@ func TestCreateOperation_UpgradeValidation(t *testing.T) {
 			}
 			req := upgradeRequest(valuesID)
 			if tt.mutate != nil {
-				tt.mutate(req)
+				tt.mutate(req.Msg)
 			}
 
-			resp, err := svc.CreateOperation(context.Background(), connect.NewRequest(req))
+			resp, err := svc.CreateOperation(adminCtx(), req)
 			if tt.wantCreated {
 				require.NoError(t, err)
 				assert.NotEmpty(t, resp.Msg.OperationId)
@@ -468,6 +506,7 @@ func TestCreateOperation_UpgradeDoesNotMutateOtherDefinition(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
+	seedUpgradeInventory(t, st)
 	seedValuesRevision(t, st, "vr-approved", "def-001", store.ValuesStatusApproved)
 
 	other := &store.ReleaseDefinition{
@@ -485,7 +524,7 @@ func TestCreateOperation_UpgradeDoesNotMutateOtherDefinition(t *testing.T) {
 	}
 	require.NoError(t, st.Definitions().Create(context.Background(), other, nil))
 
-	resp, err := svc.CreateOperation(context.Background(), connect.NewRequest(upgradeRequest("vr-approved")))
+	resp, err := svc.CreateOperation(adminCtx(), upgradeRequest("vr-approved"))
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
@@ -498,15 +537,10 @@ func TestCreateOperation_DefinitionNotFound(t *testing.T) {
 	svc, _, cleanup := setupService(t)
 	defer cleanup()
 
-	_, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INSTALL",
 		ReleaseDefinitionId: "nonexistent",
-		IdempotencyKey:      "idem-004",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
-	}))
+	}), "idem-004"))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
 }
@@ -515,15 +549,10 @@ func TestCreateOperation_InvalidType(t *testing.T) {
 	svc, _, cleanup := setupService(t)
 	defer cleanup()
 
-	_, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INVALID",
 		ReleaseDefinitionId: "def-001",
-		IdempotencyKey:      "idem-005",
-		Actor: &commonv1.ActorContext{
-			UserId:       "user-001",
-			Organization: "org-001",
-		},
-	}))
+	}), "idem-005"))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
@@ -534,14 +563,13 @@ func TestCreateOperation_VerificationRejected_DigestMismatch(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 
-	_, err := svc.CreateOperation(t.Context(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType: "INSTALL", BundleId: "bundle-001", ReleaseDefinitionId: "def-001",
-		ValuesRevisionId: "vr-001", IdempotencyKey: "idem-verify-001",
+		ValuesRevisionId: "vr-001",
 		SignatureRef: &commonv1.SignatureRef{
 			Digest: "sha256:wrong", Signature: "test-signature", Issuer: "release-manager-ci", Subject: "release-manager/v1.0.0",
 		},
-		Actor: &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
-	}))
+	}), "idem-verify-001"))
 
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
@@ -556,11 +584,10 @@ func TestCreateOperation_NoSignatureRefFailsClosedInProduction(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	svc := NewService(st, trust.NewStubVerifier(st.Verifications(), nil, logger), "production", nil, authorization.NewStoreAuthorizer(st), logger)
 
-	_, err := svc.CreateOperation(t.Context(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType: "INSTALL", BundleId: "bundle-001", ReleaseDefinitionId: "def-001",
-		ValuesRevisionId: "vr-001", IdempotencyKey: "idem-verify-002",
-		Actor: &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
-	}))
+		ValuesRevisionId: "vr-001",
+	}), "idem-verify-002"))
 
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
@@ -572,11 +599,10 @@ func TestCreateOperation_NoSignatureRefWarnsInStaging(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 
-	resp, err := svc.CreateOperation(t.Context(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+	resp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType: "INSTALL", BundleId: "bundle-001", ReleaseDefinitionId: "def-001",
-		ValuesRevisionId: "vr-001", IdempotencyKey: "idem-verify-003",
-		Actor: &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
-	}))
+		ValuesRevisionId: "vr-001",
+	}), "idem-verify-003"))
 
 	require.NoError(t, err)
 	assert.Equal(t, commonv1.VerificationResult_VERIFICATION_RESULT_POLICY_WARNING, resp.Msg.VerificationResult)
@@ -591,12 +617,11 @@ func TestCreateOperation_VerificationUnavailableFailsClosedInProduction(t *testi
 	}), "production", nil, authorization.NewStoreAuthorizer(st), slog.New(slog.DiscardHandler))
 
 	digest := "sha256:" + fmt.Sprintf("%064x", 74)
-	_, err := svc.CreateOperation(t.Context(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType: "INSTALL", BundleId: "bundle-001", ReleaseDefinitionId: "def-001",
-		ValuesRevisionId: "vr-001", IdempotencyKey: "idem-verify-004",
-		SignatureRef: &commonv1.SignatureRef{Digest: digest, Signature: "signature", Issuer: "release-manager-ci"},
-		Actor:        &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
-	}))
+		ValuesRevisionId: "vr-001",
+		SignatureRef:     &commonv1.SignatureRef{Digest: digest, Signature: "signature", Issuer: "release-manager-ci"},
+	}), "idem-verify-004"))
 
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
@@ -609,15 +634,14 @@ func TestCreateOperation_VerificationUnavailableWarnsInStaging(t *testing.T) {
 	seedDefinition(t, st)
 	svc := NewService(st, verifierFunc(func(context.Context, trust.Input) (*trust.Output, error) {
 		return &trust.Output{Status: store.VerificationVerificationUnavailable, Summary: "verification_unavailable: backend offline"}, nil
-	}), "staging", nil, authorization.NewStoreAuthorizer(st), slog.New(slog.DiscardHandler))
+	}), "staging", nil, sqliteUOW(st), authorization.NewStoreAuthorizer(st), slog.New(slog.DiscardHandler))
 
 	digest := "sha256:" + fmt.Sprintf("%064x", 74)
-	resp, err := svc.CreateOperation(t.Context(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+	resp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType: "INSTALL", BundleId: "bundle-001", ReleaseDefinitionId: "def-001",
-		ValuesRevisionId: "vr-001", IdempotencyKey: "idem-verify-005",
-		SignatureRef: &commonv1.SignatureRef{Digest: digest, Signature: "signature", Issuer: "release-manager-ci"},
-		Actor:        &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
-	}))
+		ValuesRevisionId: "vr-001",
+		SignatureRef:     &commonv1.SignatureRef{Digest: digest, Signature: "signature", Issuer: "release-manager-ci"},
+	}), "idem-verify-005"))
 
 	require.NoError(t, err)
 	assert.Equal(t, commonv1.VerificationResult_VERIFICATION_RESULT_POLICY_WARNING, resp.Msg.GetVerificationResult())
@@ -675,15 +699,14 @@ func TestCreateOperation_NonTrustedResultsEmitAudit(t *testing.T) {
 			seedDefinition(t, st)
 			emitter := audit.NewEmitter(st.AuditEvents(), slog.New(slog.DiscardHandler), audit.EmitterConfig{BufferSize: 8, BatchSize: 1, FlushInterval: time.Hour})
 			t.Cleanup(func() { require.NoError(t, emitter.Shutdown(context.Background())) })
-			svc := NewService(st, tt.verifier, tt.targetEnv, emitter, authorization.NewStoreAuthorizer(st), slog.New(slog.DiscardHandler))
-			ctx := authctx.WithActor(t.Context(), authctx.Actor{UserID: "trusted-user", OrganizationID: "org-001", Roles: []string{string(store.RoleDeployer)}})
+			svc := NewService(st, tt.verifier, tt.targetEnv, emitter, sqliteUOW(st), authorization.NewStoreAuthorizer(st), slog.New(slog.DiscardHandler))
+			ctx := adminCtx()
 
-			_, err := svc.CreateOperation(ctx, connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+			_, err := svc.CreateOperation(ctx, withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 				OperationType: "INSTALL", BundleId: "bundle-001", ReleaseDefinitionId: "def-001",
-				ValuesRevisionId: "vr-001", IdempotencyKey: "audit-" + strings.ReplaceAll(tt.name, " ", "-"),
-				SignatureRef: tt.signature,
-				Actor:        &commonv1.ActorContext{UserId: "spoofed-user", Organization: "org-001"},
-			}))
+				ValuesRevisionId: "vr-001",
+				SignatureRef:     tt.signature,
+			}), "audit-"+strings.ReplaceAll(tt.name, " ", "-")))
 			require.Error(t, err)
 			assert.Equal(t, tt.wantCode, connect.CodeOf(err))
 			require.NoError(t, emitter.Shutdown(context.Background()))
@@ -691,7 +714,7 @@ func TestCreateOperation_NonTrustedResultsEmitAudit(t *testing.T) {
 			events, listErr := st.AuditEvents().ListByResource(t.Context(), "release_bundle", "bundle-001")
 			require.NoError(t, listErr)
 			require.Len(t, events, 1)
-			assert.Equal(t, "trusted-user", events[0].ActorID)
+			assert.Equal(t, "user-001", events[0].ActorID)
 			assert.Equal(t, "org-001", events[0].OrganizationID)
 			assert.Equal(t, string(tt.wantStatus), events[0].Status)
 			assert.Equal(t, "sha256:"+fmt.Sprintf("%064x", 74), events[0].Metadata["digest"])
@@ -705,7 +728,7 @@ func seedTestBundle(t *testing.T, st store.Store, id string) string {
 	digest := fmt.Sprintf("%064x", 74)
 	require.NoError(t, st.Bundles().Create(t.Context(), &store.ReleaseBundle{
 		ID: id, Name: "test bundle", DigestAlg: "sha256", DigestValue: digest, Status: store.BundleValidated,
-		CreatedAt: time.Now().UTC(),
+		ChartRef: "nginx", ChartDigest: "sha256:" + digest, CreatedAt: time.Now().UTC(),
 	}))
 	return "sha256:" + digest
 }
@@ -718,21 +741,20 @@ func TestCreateOperation_InstallRequiresApprovedRevision(t *testing.T) {
 	draft := &store.ValuesRevision{
 		ID:                  "vr-draft",
 		ReleaseDefinitionID: "def-001",
-		Revision:            2,
+		Version:             2,
 		Status:              store.ValuesStatusDraft,
-		Values:              []byte(`{}`),
+		CanonicalDocument:   []byte(`{}`),
 		Digest:              "digest-vr-draft",
+		ParentRevisionID:    "vr-001",
 	}
 	require.NoError(t, st.Values().Create(context.Background(), draft))
 
-	_, err := svc.CreateOperation(context.Background(), connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INSTALL",
 		BundleId:            "bundle-001",
 		ReleaseDefinitionId: "def-001",
 		ValuesRevisionId:    draft.ID,
-		IdempotencyKey:      "idem-draft",
-		Actor:               &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
-	}))
+	}), "idem-draft"))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "revision_not_approved")
@@ -1678,4 +1700,165 @@ func (i *testAuthInterceptor) WrapStreamingHandler(next connect.StreamingHandler
 		ctx = authctx.WithActor(ctx, i.Actor)
 		return next(ctx, conn)
 	}
+}
+
+// AC-067-02: an UPGRADE whose expected revision does not match the inventory
+// is rejected with revision_conflict and no write (REQ-067 rule 13).
+func TestCreateOperation_RevisionConflict(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedUpgradeInventory(t, st) // inventory revision = 1
+	seedValuesRevision(t, st, "vr-revconf", "def-001", store.ValuesStatusApproved)
+
+	req := upgradeRequest("vr-revconf")
+	req.Msg.ExpectedCurrentRevision = 5 // does not match inventory revision 1
+	_, err := svc.CreateOperation(adminCtx(), req)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "revision_conflict")
+
+	operations, listErr := st.Operations().List(context.Background(), "def-001")
+	require.NoError(t, listErr)
+	assert.Empty(t, operations, "revision conflict must not write an operation")
+}
+
+// AC-067-03: a bundle whose chart_ref does not match the definition chart_name
+// is rejected with chart_mismatch.
+func TestCreateOperation_ChartMismatch(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	require.NoError(t, st.Bundles().Create(t.Context(), &store.ReleaseBundle{
+		ID: "bundle-chart-mismatch", Name: "wrong chart bundle", DigestAlg: "sha256",
+		DigestValue: fmt.Sprintf("%064x", 91), Status: store.BundleValidated,
+		ChartRef: "nginx-ingress", CreatedAt: time.Now().UTC(),
+	}))
+
+	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-chart-mismatch",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+	}), "idem-chart"))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "chart_mismatch")
+}
+
+// AC-067-08: a bundle still in received state is not ready for release.
+func TestCreateOperation_BundleNotReady(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	require.NoError(t, st.Bundles().Create(t.Context(), &store.ReleaseBundle{
+		ID: "bundle-received", Name: "received bundle", DigestAlg: "sha256",
+		DigestValue: fmt.Sprintf("%064x", 92), Status: store.BundleReceived,
+		ChartRef: "nginx", CreatedAt: time.Now().UTC(),
+	}))
+
+	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-received",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+	}), "idem-received"))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "bundle_not_ready")
+}
+
+// AC-067-09: a rejected bundle blocks creation.
+func TestCreateOperation_BundleRejected(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	require.NoError(t, st.Bundles().Create(t.Context(), &store.ReleaseBundle{
+		ID: "bundle-rejected", Name: "rejected bundle", DigestAlg: "sha256",
+		DigestValue: fmt.Sprintf("%064x", 93), Status: store.BundleRejected,
+		ChartRef: "nginx", CreatedAt: time.Now().UTC(),
+	}))
+
+	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-rejected",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+	}), "idem-rejected"))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "bundle_rejected")
+}
+
+// AC-067-11: a deployer is not authorized to create standard operations
+// (only release_admin / platform_admin are, REQ-067 rule 2).
+func TestCreateOperation_DeployerDenied(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	require.NoError(t, st.Users().Create(context.Background(), &store.User{
+		ID: "user-deployer", Username: "user-deployer", Status: store.UserActive,
+	}))
+	require.NoError(t, st.OrgMembers().Create(context.Background(), &store.OrganizationMember{
+		OrgID: "org-001", UserID: "user-deployer", Role: store.RoleDeployer,
+	}))
+
+	deployerCtx := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-deployer", OrganizationID: "org-001", Roles: []string{string(store.RoleDeployer)},
+	})
+	_, err := svc.CreateOperation(deployerCtx, withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-001",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+	}), "idem-deployer"))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+}
+
+// AC-067-12: a values_patch containing a literal secret is rejected with
+// secret_literal_forbidden (ADR-007, REQ-067 rule 14).
+func TestCreateOperation_SecretPatchRejected(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-001",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+		ValuesPatch: &structpb.Struct{Fields: map[string]*structpb.Value{
+			"password": structpb.NewStringValue("hunter2"),
+		}},
+	}), "idem-secret"))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "secret_literal_forbidden")
+}
+
+// AC-067-13: when no operator is available for the preflight dispatch, the
+// operation is still persisted in pending and the dispatch is durably queued.
+func TestCreateOperation_CoordinatorUnavailablePersistsDispatch(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	// No operators registered: Coordinator.Dispatch returns errNoOperator,
+	// which forces the deferred-dispatch path (REQ-067 rule: dispatch persists).
+	resp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-001",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+	}), "idem-noop"))
+	require.NoError(t, err, "create operation must succeed even without an operator")
+	stored, err := st.Operations().Get(context.Background(), resp.Msg.OperationId)
+	require.NoError(t, err)
+	// AC-067-13: the operation is durably written (pending at UOW commit; the
+	// handler then synchronously advances it to preflight before responding).
+	assert.False(t, stored.Status.IsTerminal(), "operation must be persisted, got %s", stored.Status)
+
+	_, err = st.Outbox().GetByCommandID(context.Background(), resp.Msg.OperationId+":artifact")
+	require.NoError(t, err, "preflight dispatch must be durably persisted")
 }

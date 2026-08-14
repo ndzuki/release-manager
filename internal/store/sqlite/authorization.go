@@ -103,15 +103,16 @@ FROM authorization_checkpoints WHERE organization_id = ? AND customer_id = ?`, o
 }
 
 func (s *authorizationStore) SaveCheckpoint(ctx context.Context, checkpoint store.AuthorizationCheckpoint) error {
-	if checkpoint.UpdatedAt.IsZero() {
-		checkpoint.UpdatedAt = time.Now().UTC()
-	}
-	// The guarded UPSERT is monotonic and idempotent: an equal or lower version
-	// is deliberately not persisted, and the consumer relies on the module-level
-	// regression check (previous > remote) to fail closed. No read-back is
-	// performed: a read-back on a separate pooled connection can spuriously
-	// observe the pre-write row under concurrency and must not fail the call.
-	_, err := s.db.ExecContext(ctx, `
+	return retryBusy(ctx, func() error {
+		if checkpoint.UpdatedAt.IsZero() {
+			checkpoint.UpdatedAt = time.Now().UTC()
+		}
+		// The guarded UPSERT is monotonic and idempotent: an equal or lower version
+		// is deliberately not persisted, and the consumer relies on the module-level
+		// regression check (previous > remote) to fail closed. No read-back is
+		// performed: a read-back on a separate pooled connection can spuriously
+		// observe the pre-write row under concurrency and must not fail the call.
+		_, err := s.db.ExecContext(ctx, `
 INSERT INTO authorization_checkpoints (
     organization_id, customer_id, source_version, policy_version, fresh, updated_at
 ) VALUES (?, ?, ?, ?, ?, ?)
@@ -123,13 +124,14 @@ ON CONFLICT(organization_id, customer_id) DO UPDATE SET
 WHERE excluded.source_version > authorization_checkpoints.source_version
    OR (excluded.source_version = authorization_checkpoints.source_version
        AND excluded.policy_version >= authorization_checkpoints.policy_version)`,
-		checkpoint.OrganizationID, checkpoint.CustomerID, checkpoint.SourceVersion,
-		checkpoint.PolicyVersion, checkpoint.Fresh, checkpoint.UpdatedAt.UTC().Format(time.RFC3339Nano),
-	)
-	if err != nil {
-		return fmt.Errorf("save authorization checkpoint: %w", err)
-	}
-	return nil
+			checkpoint.OrganizationID, checkpoint.CustomerID, checkpoint.SourceVersion,
+			checkpoint.PolicyVersion, checkpoint.Fresh, checkpoint.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		)
+		if err != nil {
+			return fmt.Errorf("save authorization checkpoint: %w", err)
+		}
+		return nil
+	})
 }
 
 type authorizationQueryer interface {
