@@ -136,83 +136,33 @@ stop-all: ## Stop all background microservices
 	@echo "$(GREEN)All services stopped$(NC)"
 
 # ---------------------------------------------------------------------------
-# Kind development environment
+# Development environment (single lifecycle module: deploy/dev/dev.sh)
 # ---------------------------------------------------------------------------
-KIND_CLUSTER_NAME := release-manager-dev
-KIND_REGISTRY_PORT := 5001
-KIND_SCRIPT := deploy/kind/registry.sh
-KUSTOMIZE_DIR := deploy/kustomize/dev
-REGISTRY := localhost:$(KIND_REGISTRY_PORT)
-IMAGE_TAG := dev
-
-.PHONY: kind-up
-kind-up: ## Create the idempotent Kind cluster and local registry
-	@$(KIND_SCRIPT) up
-
-.PHONY: kind-down
-kind-down: ## Delete only the project Kind cluster; retain the registry
-	@$(KIND_SCRIPT) down
-
-.PHONY: kind-status
-kind-status: ## Show project Kind cluster and registry state
-	@$(KIND_SCRIPT) status
-
-.PHONY: docker-build
-docker-build: proto ## Build all service images for the local registry
-	@mkdir -p data
-	@for service in $(SERVICES); do \
-		docker build --file deploy/docker/Dockerfile.$$service --tag $(REGISTRY)/release-$$service:$(IMAGE_TAG) . || exit $$?; \
-	done
-
-.PHONY: docker-push
-docker-push: docker-build ## Push all service images to the local registry
-	@for service in $(SERVICES); do docker push $(REGISTRY)/release-$$service:$(IMAGE_TAG) || exit $$?; done
-
-.PHONY: kustomize-build
-kustomize-build: ## Render the complete development Kubernetes manifest
-	@kustomize build $(KUSTOMIZE_DIR)
-
-.PHONY: kustomize-apply
-kustomize-apply: ## Apply the complete development Kubernetes manifest
-	@kubectl apply -k $(KUSTOMIZE_DIR)
-
-.PHONY: kustomize-delete
-kustomize-delete: ## Delete only Release Manager development resources
-	@kubectl delete -k $(KUSTOMIZE_DIR) --ignore-not-found
-
-.PHONY: dev-wait
-dev-wait: ## Wait for development services to become ready
-	@kubectl -n release-manager-dev wait --for=condition=Available deployment --all --timeout=180s
-	@for port in 8082 8083 8084 8085 8086 8087; do \
-		curl --fail --silent --show-error --retry 20 --retry-delay 2 http://127.0.0.1:$$port/readyz >/dev/null || exit $$?; \
-	done
-	@echo "$(GREEN)Development endpoints are reachable on localhost:8082-8087$(NC)"
+DEV_SCRIPT := deploy/dev/dev.sh
 
 .PHONY: dev-up
-dev-up: kind-up docker-push kustomize-apply dev-wait dev-seed ## Create, build, deploy, seed, and verify the complete development environment
-	@echo "$(GREEN)Development environment is ready$(NC)"
-	@echo "  webhook:       http://127.0.0.1:8082"
-	@echo "  orchestrator:  http://127.0.0.1:8083"
-	@echo "  operator:      http://127.0.0.1:8084"
-	@echo "  auth:          http://127.0.0.1:8085"
-	@echo "  notifier:      http://127.0.0.1:8086"
-	@echo "  api:           http://127.0.0.1:8087"
-
-.PHONY: dev-seed
-dev-seed: ## Seed deterministic development customers, clusters, routes, definitions, values, and bundle
-	@$(GO) run ./cmd/devseed/ --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085
-
-.PHONY: dev-reset-data
-dev-reset-data: ## Recreate only the project development environment with explicit confirmation
-	@test "$(CONFIRM)" = "1" || { echo "refusing destructive reset; rerun with CONFIRM=1" >&2; exit 2; }
-	@kubectl delete -k $(KUSTOMIZE_DIR) --ignore-not-found
-	@kubectl apply -k $(KUSTOMIZE_DIR)
-	@$(MAKE) dev-wait dev-seed
+dev-up: ## Create/converge the full dev environment (idempotent)
+	@$(DEV_SCRIPT) up
 
 .PHONY: dev-down
-dev-down: kind-down ## Delete only the project Kind cluster; retain registry and external resources
-	@echo "$(GREEN)Project Kind cluster removed; registry and external resources retained$(NC)"
+dev-down: ## Delete the 5 managed k3d clusters; retain registry and images
+	@$(DEV_SCRIPT) down
 
+.PHONY: dev-seed
+dev-seed: ## Write/verify the Development Fixture via the formal Connect API
+	@$(DEV_SCRIPT) seed
+
+.PHONY: dev-reset-data
+dev-reset-data: ## Dump + rebuild databases and re-seed (requires CONFIRM=1)
+	@$(DEV_SCRIPT) reset-data
+
+.PHONY: dev-status
+dev-status: ## Print machine-readable data/dev-status.json
+	@$(DEV_SCRIPT) status
+
+.PHONY: dev-purge
+dev-purge: ## Delete every managed resource incl. registry (requires CONFIRM=1)
+	@$(DEV_SCRIPT) purge
 # ---------------------------------------------------------------------------
 # Kulala integration — open .http files directly in Neovim
 # ---------------------------------------------------------------------------

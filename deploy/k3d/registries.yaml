@@ -1,0 +1,15 @@
+# deploy/k3d/registries.yaml — containerd mirror configuration for k3d nodes
+# (REQ-065 registry contract).
+#
+# k3d wires `--registry-use` into every node as
+# http://k3d-release-manager-registry:5000. This file additionally mirrors
+# localhost:5001 — the host-side registry endpoint that charts and image
+# references embed (e.g. devseed ReleaseBundle ChartRef) — so nodes resolve
+# it to the registry container instead of their own loopback.
+#
+# Reference: k3d v5 `k3d cluster create --registry-config` accepts this
+# containerd-style YAML (mirrors -> endpoint list).
+mirrors:
+  "localhost:5001":
+    endpoint:
+      - http://k3d-release-manager-registry:5000
