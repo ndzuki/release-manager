@@ -416,18 +416,21 @@ func resolveOCIManifest(members map[string]archiveMember, digest string) (ociMan
 // (non-attestation) manifest entry is reported as an error.
 func indexNext(data []byte, current string) (string, error) {
 	var idx ociIndex
-	if err := json.Unmarshal(data, &idx); err != nil || len(idx.Manifests) == 0 {
-		return "", nil
-	}
-	for _, entry := range idx.Manifests {
-		if entry.Annotations["vnd.docker.reference.type"] == "attestation-manifest" {
-			continue
+	if err := json.Unmarshal(data, &idx); err == nil {
+		if len(idx.Manifests) == 0 {
+			return "", nil
 		}
-		if next := entry.Digest; next != "" && next != current {
-			return next, nil
+		for _, entry := range idx.Manifests {
+			if entry.Annotations["vnd.docker.reference.type"] == "attestation-manifest" {
+				continue
+			}
+			if next := entry.Digest; next != "" && next != current {
+				return next, nil
+			}
 		}
+		return "", fmt.Errorf("OCI index has no non-attestation manifest")
 	}
-	return "", fmt.Errorf("OCI index has no non-attestation manifest")
+	return "", nil
 }
 
 // OCI layout types (Docker >= 29 docker save output).
@@ -498,26 +501,30 @@ func readOCIArchive(members map[string]archiveMember) (imageArchive, error) {
 		if !found {
 			return imageArchive{}, fmt.Errorf("OCI archive missing layer %q", layerName)
 		}
-		data := layerMember.Data
-		// OCI layer blobs are gzip-compressed tars; legacy layers are
-		// plain tars. Detect by the gzip magic bytes.
-		if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
-			zr, err := gzip.NewReader(bytes.NewReader(data))
-			if err != nil {
-				return imageArchive{}, fmt.Errorf("read layer %q: %w", layerName, err)
-			}
-			decompressed, err := io.ReadAll(zr)
-			zr.Close()
-			if err != nil {
-				return imageArchive{}, fmt.Errorf("decompress layer %q: %w", layerName, err)
-			}
-			data = decompressed
-		}
-		if err := applyLayer(rootFS, data, layerName); err != nil {
+		if err := applyLayerBlob(rootFS, layerMember.Data, layerName); err != nil {
 			return imageArchive{}, err
 		}
 	}
 	return imageArchive{Config: config, RootFS: rootFS}, nil
+}
+
+// applyLayerBlob applies one layer blob to the root FS. OCI layer blobs are
+// gzip-compressed tars; legacy layers are plain tars. The format is detected
+// by the gzip magic bytes.
+func applyLayerBlob(rootFS map[string]fileEntry, data []byte, layerName string) error {
+	if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+		zr, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return fmt.Errorf("read layer %q: %w", layerName, err)
+		}
+		decompressed, err := io.ReadAll(zr)
+		zr.Close()
+		if err != nil {
+			return fmt.Errorf("decompress layer %q: %w", layerName, err)
+		}
+		data = decompressed
+	}
+	return applyLayer(rootFS, data, layerName)
 }
 
 func applyLayer(rootFS map[string]fileEntry, data []byte, layerName string) error {
