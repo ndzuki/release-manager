@@ -207,9 +207,8 @@ func newFakeOrchestrator() *fakeOrchestrator {
 	}
 }
 
-func (f *fakeOrchestrator) bump(name string) int {
+func (f *fakeOrchestrator) bump(name string) {
 	f.counters[name]++
-	return f.counters[name]
 }
 
 func (f *fakeOrchestrator) count(name string) int { return f.counters[name] }
@@ -403,12 +402,13 @@ func (f *fakeOrchestrator) CreateOperation(_ context.Context, req *connect.Reque
 	f.bump("CreateOperation")
 	f.nextOpID++
 	terminal := orchestratorv1.OperationStatus_OPERATION_STATUS_SUCCEEDED
-	if override, ok := f.opKeyTerminal[req.Msg.GetIdempotencyKey()]; ok {
+	key := req.Header().Get("Idempotency-Key")
+	if override, ok := f.opKeyTerminal[key]; ok {
 		terminal = override
 	}
 	op := &fakeOperation{
 		id:       fmt.Sprintf("op-%d", f.nextOpID),
-		key:      req.Msg.GetIdempotencyKey(),
+		key:      key,
 		state:    orchestratorv1.OperationStatus_OPERATION_STATUS_PENDING,
 		terminal: terminal,
 	}

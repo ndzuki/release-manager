@@ -34,7 +34,7 @@ func (r *runner) phaseEnrollment(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("create enrollment token for cluster %s: %w", seed.id, err)
 		}
-		if err := writeFileAtomic(tokenPath, []byte(response.Msg.GetToken()+"\n"), 0o600); err != nil {
+		if err := writeFileAtomic(tokenPath, []byte(response.Msg.GetToken()+"\n")); err != nil {
 			return fmt.Errorf("write enrollment token for cluster %s: %w", seed.id, err)
 		}
 		r.cfg.log().Info("enrollment token written", "cluster", seed.id, "path", tokenPath)
@@ -45,7 +45,7 @@ func (r *runner) phaseEnrollment(ctx context.Context) error {
 // checkCommittedEnrollment verifies every cluster token file exists and is
 // non-empty (the server-side token may legitimately be consumed by the
 // operator agent; the file is the canonical local artifact).
-func (r *runner) checkCommittedEnrollment(ctx context.Context) error {
+func (r *runner) checkCommittedEnrollment(_ context.Context) error {
 	for _, seed := range clusterSeeds {
 		tokenPath := r.enrollmentTokenPath(seed.id)
 		info, err := os.Stat(tokenPath)

@@ -16,7 +16,18 @@ import (
 func (r *runner) phaseIdentity(ctx context.Context) error {
 	r.state.customers = map[string]string{}
 	r.state.clusters = map[string]string{}
+	if err := r.seedCustomers(ctx); err != nil {
+		return err
+	}
+	if err := r.seedOrgBindings(ctx); err != nil {
+		return err
+	}
+	return r.seedClusters(ctx)
+}
 
+// seedCustomers creates the two seed customers when absent, keyed by their
+// stable logical keys.
+func (r *runner) seedCustomers(ctx context.Context) error {
 	listReq := connect.NewRequest(&orchestratorv1.ListCustomersRequest{IncludeDisabled: true})
 	withAuth(listReq, r.state.adminToken)
 	list, err := r.clients.orch.ListCustomers(ctx, listReq)
@@ -39,9 +50,12 @@ func (r *runner) phaseIdentity(ctx context.Context) error {
 		}
 		r.state.customers[seed.logicalKey] = seed.id
 	}
+	return nil
+}
 
-	// Org bindings (ADR-006): every customer-scoped call requires an active
-	// binding; probe via ListBindings and skip pre-provisioned ones.
+// seedOrgBindings binds the admin org to every seed customer unless an
+// active binding already exists (ADR-006: customer-scoped calls require one).
+func (r *runner) seedOrgBindings(ctx context.Context) error {
 	bindingReq := connect.NewRequest(&authv1.ListBindingsRequest{OrgId: r.state.adminOrgID})
 	withAuth(bindingReq, r.state.adminToken)
 	bindingList, err := r.clients.binding.ListBindings(ctx, bindingReq)
@@ -66,7 +80,12 @@ func (r *runner) phaseIdentity(ctx context.Context) error {
 		}
 		r.cfg.log().Info("org bound to customer", "customer", seed.logicalKey, "org", r.state.adminOrgID)
 	}
+	return nil
+}
 
+// seedClusters creates the four seed clusters (one per customer) when
+// absent, tracking their server ids.
+func (r *runner) seedClusters(ctx context.Context) error {
 	for _, seed := range clusterSeeds {
 		customerID := r.state.customers[seed.customerKey]
 		getReq := connect.NewRequest(&orchestratorv1.GetClusterRequest{ClusterId: seed.id})
@@ -86,7 +105,7 @@ func (r *runner) phaseIdentity(ctx context.Context) error {
 		if _, err := r.clients.orch.CreateCluster(ctx, createReq); err != nil {
 			return fmt.Errorf("create cluster %s: %w", seed.id, err)
 		}
-		r.cfg.log().Info("cluster created", "cluster", seed.id)
+		r.cfg.log().Info("cluster created", "cluster", seed.id, "customer", seed.customerKey)
 		r.state.clusters[seed.id] = seed.id
 	}
 	return nil

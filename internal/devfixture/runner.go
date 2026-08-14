@@ -179,8 +179,8 @@ type runner struct {
 	chartSvc chartPackager
 }
 
-func newRunner(cfg Config) (*runner, error) {
-	return &runner{cfg: cfg, clients: newConnectClients(cfg), chartSvc: defaultChartPackager{cfg: cfg}}, nil
+func newRunner(cfg Config) *runner {
+	return &runner{cfg: cfg, clients: newConnectClients(cfg), chartSvc: defaultChartPackager{cfg: cfg}}
 }
 
 func (r *runner) progressPath() string { return filepath.Join(r.cfg.DataDir, progressFileName) }
@@ -212,7 +212,7 @@ func (r *runner) saveProgress() error {
 		return fmt.Errorf("encode seed progress: %w", err)
 	}
 	raw = append(raw, '\n')
-	if err := writeFileAtomic(r.progressPath(), raw, 0o600); err != nil {
+	if err := writeFileAtomic(r.progressPath(), raw); err != nil {
 		return fmt.Errorf("write seed progress: %w", err)
 	}
 	return nil
@@ -239,7 +239,7 @@ func (r *runner) saveManifest(m *Manifest) error {
 		return fmt.Errorf("encode fixture manifest: %w", err)
 	}
 	raw = append(raw, '\n')
-	if err := writeFileAtomic(r.manifestPath(), raw, 0o600); err != nil {
+	if err := writeFileAtomic(r.manifestPath(), raw); err != nil {
 		return fmt.Errorf("write fixture manifest: %w", err)
 	}
 	return nil

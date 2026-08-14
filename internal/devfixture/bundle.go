@@ -106,7 +106,7 @@ func archiveDigest(path string) (string, error) {
 // OCI artifact via the Helm registry SDK (plain HTTP for the localhost dev
 // registry). The pushed reference matches the bundle chart_ref minus the
 // oci:// scheme.
-func pushChartArchive(ctx context.Context, tgzPath string) error {
+func pushChartArchive(_ context.Context, tgzPath string) error {
 	raw, err := os.ReadFile(tgzPath)
 	if err != nil {
 		return fmt.Errorf("read chart archive for push: %w", err)

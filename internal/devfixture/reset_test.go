@@ -51,9 +51,9 @@ func (f *fakeMigrations) Up(context.Context) error {
 
 func (f *fakeMigrations) Close() error { f.closed = true; return nil }
 
-func resetRunner(t *testing.T, fakes *fakeServices, mg *fakeMigrations, mutate ...func(*Config)) *runner {
+func resetRunner(t *testing.T, fakes *fakeServices, mg *fakeMigrations) *runner {
 	t.Helper()
-	r := testRunner(t, fakes, mutate...)
+	r := testRunner(t, fakes)
 	r.cfg.MigrationsFactory = func(string) (Migrations, error) { return mg, nil }
 	return r
 }
@@ -210,9 +210,12 @@ func TestTrustRootKey_ReusedAcrossRuns(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 
+	key1Pub, ok1 := key1.Public().(ed25519.PublicKey)
 	key2, err := r.loadOrGenerateTrustRootKey(r.cfg)
 	require.NoError(t, err)
-	require.Equal(t, key1.Public().(ed25519.PublicKey), key2.Public().(ed25519.PublicKey))
+	key2Pub, ok2 := key2.Public().(ed25519.PublicKey)
+	require.True(t, ok1 && ok2)
+	require.Equal(t, key1Pub, key2Pub)
 
 	// CI mode loads the injected key and writes nothing.
 	ci := testRunner(t, fakes, func(c *Config) {
@@ -221,7 +224,9 @@ func TestTrustRootKey_ReusedAcrossRuns(t *testing.T) {
 	})
 	key3, err := ci.loadOrGenerateTrustRootKey(ci.cfg)
 	require.NoError(t, err)
-	require.Equal(t, key1.Public().(ed25519.PublicKey), key3.Public().(ed25519.PublicKey))
+	key3Pub, ok3 := key3.Public().(ed25519.PublicKey)
+	require.True(t, ok3)
+	require.Equal(t, key1Pub, key3Pub)
 	_, err = os.Stat(ci.trustRootKeyPath())
 	require.True(t, os.IsNotExist(err))
 }

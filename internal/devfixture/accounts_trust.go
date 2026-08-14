@@ -35,7 +35,11 @@ func (r *runner) phaseTrust(ctx context.Context) error {
 	}
 	r.state.trustRootKey = key
 
-	pubPEM, err := encodePublicKey(key.Public().(ed25519.PublicKey))
+	pub, ok := key.Public().(ed25519.PublicKey)
+	if !ok {
+		return fmt.Errorf("dev trust root key is not an ed25519 public key")
+	}
+	pubPEM, err := encodePublicKey(pub)
 	if err != nil {
 		return err
 	}

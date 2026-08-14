@@ -20,13 +20,16 @@ const (
 	credentialsFileName  = "dev-credentials.env"
 	trustRootDirName     = "dev-trust-root"
 	trustRootKeyFileName = "dev-trust-root.key"
-	enrollmentTokenDir   = "dev-enrollment-tokens"
+	//nolint:gosec // directory name, not a credential (G101 false positive on "token")
+	enrollmentTokenDir = "dev-enrollment-tokens"
 )
 
 // writeFileAtomic writes content to path via a temp file in the same
 // directory followed by rename, so a crash never leaves a partially written
-// progress/manifest/credentials file behind.
-func writeFileAtomic(path string, content []byte, perm os.FileMode) error {
+// progress/manifest/credentials file behind. The file is always created with
+// mode 0600: every artifact this module writes is a credential, key or
+// environment record (REQ-065 security boundary).
+func writeFileAtomic(path string, content []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create parent dir for %s: %w", path, err)
@@ -36,11 +39,12 @@ func writeFileAtomic(path string, content []byte, perm os.FileMode) error {
 		return fmt.Errorf("create temp file for %s: %w", path, err)
 	}
 	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }() //nolint:errcheck // best-effort cleanup after rename or failure
-	if err := tmp.Chmod(perm); err != nil {
+	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("chmod temp file for %s: %w", path, err)
 	}
+	defer func() { _ = os.Remove(tmpName) }() //nolint:errcheck // best-effort cleanup after rename or failure
 	if _, err := tmp.Write(content); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("write temp file for %s: %w", path, err)
@@ -146,58 +150,58 @@ func loadCredentialsFile(path string) (credentials, bool) {
 // When any effective password differs from the file content the file is
 // rewritten so it stays the source of truth for later runs.
 func (r *runner) resolveCredentials(cfg Config) (credentials, error) {
+	if cfg.Mode == ModeCI {
+		return ciCredentials(cfg)
+	}
 	path := filepath.Join(cfg.DataDir, credentialsFileName)
 	fileCreds, fileOK := loadCredentialsFile(path)
 
-	useCI := cfg.Mode == ModeCI
-	if useCI {
-		missing := []string{}
-		if cfg.AdminPassword == "" {
-			missing = append(missing, "DEV_ADMIN_PASSWORD")
-		}
-		if cfg.DeployerPassword == "" {
-			missing = append(missing, "DEV_DEPLOYER_PASSWORD")
-		}
-		if cfg.ReaderPassword == "" {
-			missing = append(missing, "DEV_READER_PASSWORD")
-		}
-		if len(missing) > 0 {
-			return credentials{}, fmt.Errorf("ci profile requires env-injected passwords: %s", strings.Join(missing, ", "))
-		}
-		return credentials{admin: cfg.AdminPassword, deployer: cfg.DeployerPassword, reader: cfg.ReaderPassword}, nil
-	}
-
-	effective := fileCreds
-	if fileOK && cfg.AdminPassword != "" {
-		effective.admin = cfg.AdminPassword
-	}
-	if fileOK && cfg.DeployerPassword != "" {
-		effective.deployer = cfg.DeployerPassword
-	}
-	if fileOK && cfg.ReaderPassword != "" {
-		effective.reader = cfg.ReaderPassword
-	}
-	if !fileOK {
-		effective = generatePasswords()
-		if cfg.AdminPassword != "" {
-			effective.admin = cfg.AdminPassword
-		}
-		if cfg.DeployerPassword != "" {
-			effective.deployer = cfg.DeployerPassword
-		}
-		if cfg.ReaderPassword != "" {
-			effective.reader = cfg.ReaderPassword
-		}
-	}
+	effective := localCredentials(fileCreds, fileOK, cfg)
 	// Rewrite when the file is absent, malformed, or stale relative to
 	// explicit overrides so the file always mirrors the effective set.
-	needsWrite := !fileOK || effective != fileCreds
-	if needsWrite {
-		if err := writeFileAtomic(path, effective.envFile(), 0o600); err != nil {
+	if !fileOK || effective != fileCreds {
+		if err := writeFileAtomic(path, effective.envFile()); err != nil {
 			return credentials{}, fmt.Errorf("write credentials file: %w", err)
 		}
 	}
 	return effective, nil
+}
+
+// ciCredentials requires all three passwords to be env-injected and never
+// touches the credentials file (REQ-065 CI profile).
+func ciCredentials(cfg Config) (credentials, error) {
+	missing := []string{}
+	if cfg.AdminPassword == "" {
+		missing = append(missing, "DEV_ADMIN_PASSWORD")
+	}
+	if cfg.DeployerPassword == "" {
+		missing = append(missing, "DEV_DEPLOYER_PASSWORD")
+	}
+	if cfg.ReaderPassword == "" {
+		missing = append(missing, "DEV_READER_PASSWORD")
+	}
+	if len(missing) > 0 {
+		return credentials{}, fmt.Errorf("ci profile requires env-injected passwords: %s", strings.Join(missing, ", "))
+	}
+	return credentials{admin: cfg.AdminPassword, deployer: cfg.DeployerPassword, reader: cfg.ReaderPassword}, nil
+}
+
+// localCredentials merges explicit config overrides on top of the existing
+// credentials file, generating fresh passwords only when no file exists.
+func localCredentials(fileCreds credentials, fileOK bool, cfg Config) credentials {
+	if !fileOK {
+		fileCreds = generatePasswords()
+	}
+	if cfg.AdminPassword != "" {
+		fileCreds.admin = cfg.AdminPassword
+	}
+	if cfg.DeployerPassword != "" {
+		fileCreds.deployer = cfg.DeployerPassword
+	}
+	if cfg.ReaderPassword != "" {
+		fileCreds.reader = cfg.ReaderPassword
+	}
+	return fileCreds
 }
 
 // trustRootKeyPath returns the on-disk Dev Trust Root private key location.
@@ -235,7 +239,7 @@ func (r *runner) loadOrGenerateTrustRootKey(cfg Config) (ed25519.PrivateKey, err
 	if err != nil {
 		return nil, err
 	}
-	if err := writeFileAtomic(path, encoded, 0o600); err != nil {
+	if err := writeFileAtomic(path, encoded); err != nil {
 		return nil, fmt.Errorf("write dev trust root key: %w", err)
 	}
 	r.cfg.log().Info("dev trust root key generated", "path", path)

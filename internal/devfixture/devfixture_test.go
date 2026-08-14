@@ -44,8 +44,7 @@ func testRunner(t *testing.T, fakes *fakeServices, mutate ...func(*Config)) *run
 		fn(&cfg)
 	}
 	cfg = cfg.withDefaults()
-	r, err := newRunner(cfg)
-	require.NoError(t, err)
+	r := newRunner(cfg)
 	if fakes != nil {
 		r.clients = &connectClients{
 			auth: fakes.auth, binding: fakes.binding, orch: fakes.orch,

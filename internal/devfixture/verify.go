@@ -153,7 +153,7 @@ func (r *runner) verifyBundle(ctx context.Context) error {
 	return nil
 }
 
-func (r *runner) verifyEnrollment(ctx context.Context) error {
+func (r *runner) verifyEnrollment(_ context.Context) error {
 	for _, seed := range clusterSeeds {
 		info, err := os.Stat(r.enrollmentTokenPath(seed.id))
 		if err != nil {

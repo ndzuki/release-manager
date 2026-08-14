@@ -134,11 +134,7 @@ type Manifest struct {
 // "fixture up-to-date" (AC-065-03), and returns the existing manifest.
 func Run(ctx context.Context, cfg Config) (*Manifest, error) {
 	cfg = cfg.withDefaults()
-	runner, err := newRunner(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return runner.run(ctx)
+	return newRunner(cfg).run(ctx)
 }
 
 // Reset rebuilds the databases and re-seeds every phase, ignoring the
@@ -147,13 +143,14 @@ func Run(ctx context.Context, cfg Config) (*Manifest, error) {
 // shell layer owns pg_restore recovery.
 func Reset(ctx context.Context, cfg Config) (*Manifest, error) {
 	cfg = cfg.withDefaults()
-	runner, err := newRunner(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return runner.reset(ctx)
+	return newRunner(cfg).reset(ctx)
 }
 
+// withDefaults fills unset configuration fields with their development
+// defaults. Every branch is an independent field default; extracting helpers
+// would scatter the config surface.
+//
+//nolint:gocyclo // one branch per config field, no shared state
 func (c Config) withDefaults() Config {
 	if c.Mode == "" {
 		c.Mode = ModeLocal

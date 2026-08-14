@@ -59,8 +59,6 @@ func (r *runner) ensureInstallOperation(ctx context.Context, seed definitionSeed
 			BundleId:            r.state.bundle.id,
 			ReleaseDefinitionId: record.id,
 			ValuesRevisionId:    record.valuesRevisionID,
-			IdempotencyKey:      key,
-			Actor:               &commonv1.ActorContext{UserId: r.state.deployerUserID, Organization: r.state.adminOrgID},
 			SignatureRef: &commonv1.SignatureRef{
 				Digest:    r.state.bundle.digest,
 				Signature: signBundleDigest(r.state.trustRootKey, r.state.bundle.digest),
@@ -68,6 +66,10 @@ func (r *runner) ensureInstallOperation(ctx context.Context, seed definitionSeed
 				Subject:   devTrustRootSubject,
 			},
 		})
+		// TASK-067 contract: idempotency travels via the Idempotency-Key
+		// header (AC-067-06/07) and the actor is derived from the bearer
+		// token by the auth interceptor, not from request fields.
+		req.Header().Set("Idempotency-Key", key)
 		withAuth(req, r.state.deployerToken)
 		response, err := r.clients.orch.CreateOperation(ctx, req)
 		if err != nil {
