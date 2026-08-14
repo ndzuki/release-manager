@@ -11,7 +11,7 @@ GOBIN       := $(shell go env GOBIN 2>/dev/null || echo $(HOME)/go/bin)
 KIND        ?= kind
 DOCKER      ?= docker
 KIND_NODE_IMAGE := kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
-WORKLOAD_IMAGE := busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+WORKLOAD_IMAGE ?= busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
 ROLLOUT_WATCH_MAX_SECONDS ?= 120
 
 
@@ -363,7 +363,8 @@ test-rollout-watch: ## Create a kind cluster, run integration tests, and tear do
 	STARTED_AT=$$(date +%s%N); \
 	$(KIND) create cluster --name "$$CLUSTER_NAME" --image "$(KIND_NODE_IMAGE)" --kubeconfig "$$KUBECONFIG" --wait 5m; \
 	$(KIND) load docker-image "$$WORKLOAD_IMAGE" --name "$$CLUSTER_NAME"; \
-	$(DOCKER) exec "$$CLUSTER_NAME-control-plane" ctr -n k8s.io images tag "$$( $(DOCKER) image inspect "$$WORKLOAD_IMAGE" --format '{{.Id}}' )" "docker.io/library/busybox@$$WORKLOAD_IMAGE_DIGEST" >/dev/null; \
+	$(DOCKER) exec "$$CLUSTER_NAME-control-plane" ctr -n k8s.io images tag "$$( $(DOCKER) image inspect "$$WORKLOAD_IMAGE" --format '{{.Id}}' )" "docker.io/library/busybox@$$WORKLOAD_IMAGE_DIGEST" >/dev/null 2>&1 || \
+	$(DOCKER) exec "$$CLUSTER_NAME-control-plane" ctr -n k8s.io images tag "import-$$(date +%Y-%m-%d)@$$WORKLOAD_IMAGE_DIGEST" "docker.io/library/busybox@$$WORKLOAD_IMAGE_DIGEST" >/dev/null; \
 	( cd test/integration && "$$TEST_BINARY" -test.run '^TestRolloutWatch' -test.count=1 -test.timeout=10m ); \
 	ELAPSED_NS=$$(($$(date +%s%N) - $$STARTED_AT)); \
 	MAX_NS=$$(( $(ROLLOUT_WATCH_MAX_SECONDS) * 1000000000 )); \
