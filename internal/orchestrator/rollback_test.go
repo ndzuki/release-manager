@@ -169,6 +169,13 @@ func TestRollbackRelease_ConcurrentOnlyOneAccepted(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 	seedRollbackInventory(t, st)
+	// An active operator keeps the accepted operation in preflight (polling for
+	// a stage result); without one the coordinator fail-closes it to terminal,
+	// which legitimately allows a subsequent accept (ADR-008).
+	require.NoError(t, st.Operators().Create(context.Background(), &store.Operator{
+		ID: "operator-rollback", Name: "operator-rollback", CustomerID: "cust-001", ClusterID: "cls-001",
+		CertSerial: "serial-rollback", Status: store.OperatorActive,
+	}))
 
 	const requests = 8
 	errorsCh := make(chan error, requests)

@@ -208,6 +208,10 @@ func (s *Service) RollbackRelease(
 		} else {
 			op.Status = updated.Status
 			op.StateVersion = updated.StateVersion
+			// The rollback path has no pre-created first dispatch row
+			// (CreateIdempotent, not the UOW) — the coordinator creates the
+			// artifact command on demand (D-87).
+			s.startPreflight(op)
 		}
 	}
 

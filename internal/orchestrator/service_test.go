@@ -1170,6 +1170,35 @@ func seedCancelableOperation(t *testing.T, st store.Store, id string, status sto
 	}))
 }
 
+// ADR-009: operations left in preflight after a restart resume coordination,
+// and shutdown drains the resumed runs before the store closes.
+func TestResumePreflights_RestartsPreflightCoordination(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	// Active operator for the definition's cluster so stages can dispatch.
+	require.NoError(t, st.Operators().Create(context.Background(), &store.Operator{
+		ID: "operator-resume", Name: "operator-resume", CustomerID: "cust-001", ClusterID: "cls-001",
+		CertSerial: "serial-resume", Status: store.OperatorActive,
+	}))
+	seedCancelableOperation(t, st, "op-resume", store.StatusPreflight)
+
+	n, err := svc.ResumePreflights(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	// The resumed coordinator starts the two-phase lifecycle (AC-019-05).
+	require.Eventually(t, func() bool {
+		pl, err := st.PreflightLifecycles().GetByOperationID(context.Background(), "op-resume")
+		return err == nil && pl.Overall == "running"
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// Shutdown cancels and drains the resumed run.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, svc.Shutdown(shutdownCtx))
+}
+
 func TestCancelOperation_SuccessPending(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()

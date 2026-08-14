@@ -304,6 +304,16 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		logger,
 	)
 	s.emergency = svc
+	if !s.cfg.Maintenance {
+		// ADR-009 restart recovery: operations interrupted mid-preflight resume
+		// coordination after the generic terminal-state recovery pass.
+		resumed, resumeErr := svc.ResumePreflights(context.Background())
+		if resumeErr != nil {
+			logger.Warn("preflight resume failed", "err", resumeErr)
+		} else if resumed > 0 {
+			logger.Warn("preflight operations resumed on restart", "count", resumed)
+		}
+	}
 	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)
 	enforcer, err := auth.NewEnforcer(s.store, logger)
 	if err != nil {
