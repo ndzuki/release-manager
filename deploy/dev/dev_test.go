@@ -192,17 +192,19 @@ func TestResetRequiresConfirm(t *testing.T) {
 	}
 }
 
-// TestPreflightBatteryOrder runs dev-up and asserts that whichever preflight
-// gate fires, the output carries a stable REQ-065 error code — proving the
-// battery runs before any resource creation. On hosts that pass every gate
-// the test skips (the full-battery order is covered by fake-CLI tests in
-// host_test.go).
+// TestPreflightBatteryOrder runs dev-up with an awk shim that reports only
+// 8 GiB available and asserts the memory gate fires with a stable REQ-065
+// error code before any resource creation (AC-065-20) — deterministic on
+// every host, unlike the earlier host-probe version that created real k3d
+// clusters once the host passed every gate. The full battery order is
+// covered by fake-CLI tests in host_test.go.
 func TestPreflightBatteryOrder(t *testing.T) {
 	stateDir := t.TempDir()
-	env, _ := fakeEnv(t, stateDir)
+	env, binDir := fakeEnv(t, stateDir)
+	writeShim(t, binDir, "awk", "#!/usr/bin/env bash\ncat >/dev/null\nprintf '8000\\n'\n")
 	out, err := runDev(t, env, "up")
 	if err == nil {
-		t.Skip("host satisfied every preflight gate")
+		t.Fatalf("expected preflight failure, got success:\n%s", out)
 	}
 	code := exitCode(t, err)
 	if code != 1 && code != 2 && code != 3 {
@@ -213,7 +215,7 @@ func TestPreflightBatteryOrder(t *testing.T) {
 		"port_conflict", "docker_unavailable", "k3d_unavailable",
 	} {
 		if strings.Contains(out, want) {
-			return // one of the preflight gates fired in order
+			return
 		}
 	}
 	t.Fatalf("no preflight error code found in output:\n%s", out)
@@ -375,6 +377,11 @@ func TestClusterCreateInjectsProxyEnv(t *testing.T) {
 	env, binDir := fakeEnv(t, stateDir)
 	fakeK3d(t, binDir, stateDir)
 	happyShims(t, binDir)
+	// Record docker invocations so the build proxy injection can be
+	// asserted. manifest inspect fails (registry empty) so every service
+	// actually goes through docker build; build/push pass through.
+	writeShim(t, binDir, "docker",
+		"#!/usr/bin/env bash\nif [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
 	env = append(env, "HTTP_PROXY=http://127.0.0.1:7890", "HTTPS_PROXY=http://127.0.0.1:7890")
 
 	if out, err := runDev(t, env, "up"); err != nil {
@@ -388,6 +395,24 @@ func TestClusterCreateInjectsProxyEnv(t *testing.T) {
 	}
 	if len(creates) == 0 {
 		t.Fatal("no cluster creates recorded")
+	}
+	calls, err := os.ReadFile(filepath.Join(stateDir, "docker-calls.log"))
+	if err != nil {
+		t.Fatalf("docker-calls.log not written: %v", err)
+	}
+	var buildInjected bool
+	for _, line := range strings.Split(strings.TrimSpace(string(calls)), "\n") {
+		if !strings.HasPrefix(line, "build ") {
+			continue
+		}
+		if !strings.Contains(line, "--build-arg HTTP_PROXY=http://127.0.0.1:7890") ||
+			!strings.Contains(line, "--build-arg HTTPS_PROXY=http://127.0.0.1:7890") {
+			t.Fatalf("docker build missing proxy build-args: %s", line)
+		}
+		buildInjected = true
+	}
+	if !buildInjected {
+		t.Fatalf("no docker build invocation recorded:\n%s", calls)
 	}
 }
 func TestStatusJSONSchema(t *testing.T) {
@@ -453,4 +478,3 @@ func TestCiProfileAutoPurgesOnExit(t *testing.T) {
 		t.Fatalf("expected all clusters purged after ci dev-up, remaining:\n%s", data)
 	}
 }
-

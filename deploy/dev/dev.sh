@@ -179,7 +179,9 @@ cluster_up() {
     return 0
   fi
   local args=(
-    cluster create --name "$cluster"
+    # k3d v5 takes the cluster name positionally: `k3d cluster create
+    # <name> [flags]` — there is no --name flag (REQ-065 k3d >= 5.8).
+    cluster create "$cluster"
     --registry-use "$REGISTRY_NAME"
     --registry-config "$SCRIPT_DIR/../k3d/registries.yaml"
     --wait
@@ -254,7 +256,6 @@ content_hash() {
   done
   printf '%s' "$hash_input" | sha256sum | cut -d' ' -f1
 }
-
 build_and_push() {
   local service="$1"
   local hash
@@ -272,7 +273,19 @@ build_and_push() {
     log "  release-$service:$tag (unchanged)"
     return 0
   fi
-  if ! docker build --file "$dockerfile" --tag "localhost:${REGISTRY_PORT}/release-$service:$tag" .; then
+  # Proxy build-args (same contract as the k3d node injection below): a host
+  # behind a proxy must pass it into the build container or `go mod download`
+  # inside the Dockerfile fails (Go modules resolve through the proxy). The
+  # value is the caller's, matching the node injection (REQ-065 framework).
+  local build_args=()
+  if [ -n "${HTTP_PROXY:-}${http_proxy:-}${HTTPS_PROXY:-}${https_proxy:-}" ]; then
+    build_args+=(
+      --build-arg "HTTP_PROXY=${HTTP_PROXY:-${http_proxy:-}}"
+      --build-arg "HTTPS_PROXY=${HTTPS_PROXY:-${https_proxy:-}}"
+      --build-arg "NO_PROXY=localhost,127.0.0.1${NO_PROXY:+,$NO_PROXY}"
+    )
+  fi
+  if ! docker build "${build_args[@]}" --file "$dockerfile" --tag "localhost:${REGISTRY_PORT}/release-$service:$tag" .; then
     fail "$ERR_DOCKER_BUILD_FAILED" "build failed for release-$service"
   fi
   if ! docker push "localhost:${REGISTRY_PORT}/release-$service:$tag"; then

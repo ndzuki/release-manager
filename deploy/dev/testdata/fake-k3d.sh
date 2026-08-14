@@ -39,6 +39,10 @@ case "$1" in
         name=""
         while [ "$#" -gt 0 ]; do
           if [ "$1" = "--name" ]; then name="$2"; shift 2; continue; fi
+          # Real k3d v5 takes the cluster name positionally: `k3d cluster
+          # create <name> [flags]`. Fall back to the first positional arg
+          # (the name precedes any flag values in dev.sh's invocation).
+          if [ -z "$name" ] && [ "$1" != "--" ]; then name="$1"; fi
           shift
         done
         printf '%s|%s\n' "$name" "$argv" >> "$STATE/k3d-creates.log"
