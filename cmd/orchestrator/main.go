@@ -187,8 +187,17 @@ func gatewayTLSStateMiddleware(next http.Handler) http.Handler {
 
 func (s *orchSvc) Shutdown(ctx context.Context) error {
 	var result error
+	if s.emergency != nil {
+		// Drain preflight coordinators before the Store closes so no runner
+		// touches a closed database (TASK-019 v3 Step 5).
+		if err := s.emergency.Shutdown(ctx); result == nil {
+			result = err
+		}
+	}
 	if emitter, ok := s.auditEmitter.(interface{ Shutdown(context.Context) error }); ok {
-		result = emitter.Shutdown(ctx)
+		if err := emitter.Shutdown(ctx); result == nil {
+			result = err
+		}
 	}
 	if s.traceShutdown != nil {
 		if err := s.traceShutdown(ctx); result == nil {

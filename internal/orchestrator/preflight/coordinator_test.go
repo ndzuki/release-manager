@@ -133,6 +133,50 @@ func TestCoordinatorRun_ConsumesPreCreatedArtifactDispatch(t *testing.T) {
 	assert.Equal(t, store.StatusQueued, got.Status)
 }
 
+// D-87 restart replay: a Run over an outbox that already carries the
+// pre-created artifact dispatch and later stage rows must reuse them instead
+// of recreating duplicates (idempotent resume on the stable command identity).
+func TestCoordinatorRun_RestartReusesExistingDispatches(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	op := seedPreflightFixture(t, st)
+	c := newTestCoordinator(t, st)
+	ctx := context.Background()
+
+	// Rows left behind by a previous Run before an interruption: the UOW
+	// first dispatch plus the render stage already dispatched.
+	for _, stage := range []string{"artifact", "render"} {
+		require.NoError(t, st.Outbox().Create(ctx, &store.OutboxEntry{
+			ID: uuid.NewString(), CommandID: op.ID + ":" + stage, OperationID: op.ID,
+			OperationType: string(op.OperationType), OperatorID: "operator-preflight",
+			Payload: []byte(`{"stage":"` + stage + `","operation_id":"` + op.ID + `"}`),
+		}))
+	}
+
+	done := make(chan struct{})
+	go func() { c.Run(ctx, op); close(done) }()
+
+	// Drive all stages through the pre-existing rows.
+	for _, stage := range []string{"artifact", "render", "cluster", "runtime_pull"} {
+		entry := waitForCommand(t, st, op.ID+":"+stage)
+		require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("coordinator did not finish")
+	}
+
+	for _, stage := range []string{"artifact", "render", "cluster", "runtime_pull"} {
+		var count int
+		require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM outbox WHERE command_id = ?`, op.ID+":"+stage).Scan(&count))
+		assert.Equal(t, 1, count, "resumed run must not duplicate command %s", stage)
+	}
+
+	got, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusQueued, got.Status)
+}
+
 // AC-019-02: a required stage with no available operator fail-closes the
 // operation with stage_unavailable (production semantics).
 func TestCoordinatorRun_StageUnavailableFailsClosed(t *testing.T) {
@@ -158,6 +202,81 @@ func TestCoordinatorRun_StageUnavailableFailsClosed(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "failed", pl.Overall)
 	assert.Equal(t, "artifact", pl.Stages)
+}
+
+// AC-019-02 regression: a cluster whose operators are all revoked must fail
+// closed — revoked-only operators never receive commands (restored from v2,
+// lost in the TASK-067 baseline rewrite).
+func TestCoordinatorRun_RevokedOnlyFailsClosed(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	cust := &store.Customer{ID: "cust-revoked", Name: "Revoked Customer", Slug: "revoked-cust", Status: store.CustomerActive}
+	require.NoError(t, st.Customers().Create(ctx, cust))
+	cluster := &store.Cluster{ID: "cluster-revoked", Name: "Revoked Cluster", CustomerID: cust.ID}
+	require.NoError(t, st.Clusters().Create(ctx, cluster))
+	def := &store.ReleaseDefinition{
+		ID: "def-revoked", Name: "Revoked Definition", CustomerID: cust.ID, ClusterID: cluster.ID,
+		Namespace: "default", ReleaseName: "revoked-rel", Status: store.DefStatusActive, OptimisticVersion: 1,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def, nil))
+	require.NoError(t, st.Operators().Create(ctx, &store.Operator{
+		ID: "operator-revoked", Name: "revoked-operator", CustomerID: cust.ID, ClusterID: cluster.ID,
+		CertSerial: "serial-revoked", Status: store.OperatorRevoked,
+	}))
+	op := &store.Operation{
+		ID: uuid.NewString(), OperationType: store.OperationInstall, Status: store.StatusPreflight,
+		ReleaseDefinitionID: def.ID, IdempotencyKey: uuid.NewString(), RequestHash: "hash",
+		BundleID: "bundle-revoked", StateVersion: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+	c := newTestCoordinator(t, st)
+
+	done := make(chan struct{})
+	go func() { c.Run(ctx, op); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("coordinator did not finish")
+	}
+
+	got, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusFailed, got.Status, "revoked-only cluster must fail closed")
+	pl, err := st.PreflightLifecycles().GetByOperationID(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "failed", pl.Overall)
+}
+
+// REQ-019: preflight timeout is a cancellation — the operation must end
+// cancelled (not failed) and the lifecycle must agree.
+func TestCoordinatorRun_StageTimeoutCancelsOperation(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	op := seedPreflightFixture(t, st)
+	c := newTestCoordinator(t, st)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() { c.Run(ctx, op); close(done) }()
+
+	// Drive artifact to passed, then let render time out (short StageDef).
+	entry := waitForCommand(t, st, op.ID+":artifact")
+	require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
+	entry = waitForCommand(t, st, op.ID+":render")
+	require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"timeout"}`))
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("coordinator did not finish")
+	}
+
+	got, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusCancelled, got.Status, "preflight timeout must cancel the operation")
+	pl, err := st.PreflightLifecycles().GetByOperationID(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "cancelled", pl.Overall)
+	assert.Equal(t, "artifact,render", pl.Stages)
 }
 
 // AC-019-04/06: all required stages pass → operation CAS to queued and the

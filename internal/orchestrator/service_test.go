@@ -1301,6 +1301,40 @@ func TestCancelOperation_CancellingRejectsNewIntent(t *testing.T) {
 	assert.Equal(t, 2, persisted.StateVersion)
 }
 
+// AC-019-03/07 wiring: cancelling an operation in preflight propagates to the
+// running coordinator, which finalizes the lifecycle as cancelled.
+func TestCancelOperation_PreflightPropagatesCancellation(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	// Active operator so the resumed preflight dispatches instead of failing
+	// closed (production semantics).
+	require.NoError(t, st.Operators().Create(context.Background(), &store.Operator{
+		ID: "operator-cancel-preflight", Name: "operator-cancel-preflight", CustomerID: "cust-001", ClusterID: "cls-001",
+		CertSerial: "serial-cancel-preflight", Status: store.OperatorActive,
+	}))
+	seedCancelableOperation(t, st, "op-cancel-preflight", store.StatusPreflight)
+
+	n, err := svc.ResumePreflights(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	// The coordinator is polling; cancel through the public handler.
+	req := connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: "op-cancel-preflight", Reason: "cancel preflight", ExpectedStateVersion: 1,
+	})
+	req.Header().Set("Idempotency-Key", "cancel-preflight")
+	resp, err := svc.CancelOperation(deployerCtx(), req)
+	require.NoError(t, err)
+	assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLED, resp.Msg.Operation.State)
+
+	// AC-019-07: the coordinator finalizes the lifecycle as cancelled.
+	require.Eventually(t, func() bool {
+		pl, err := st.PreflightLifecycles().GetByOperationID(context.Background(), "op-cancel-preflight")
+		return err == nil && pl.Overall == "cancelled"
+	}, 5*time.Second, 50*time.Millisecond)
+}
+
 func TestCancelOperation_ReasonUsesUnicodeCharacters(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()

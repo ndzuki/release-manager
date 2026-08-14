@@ -1273,14 +1273,8 @@ func (s *Service) ResumePreflights(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	started := 0
-	for _, op := range ops {
-		if op.Status == store.StatusPreflight {
-			//nolint:contextcheck // resumed runs use the runner's detached background context.
-			s.startPreflight(op)
-			started++
-		}
-	}
+	//nolint:contextcheck // resumed runs use the runner's detached background context.
+	started := s.preflightRunner.Resume(ops)
 	if started > 0 {
 		s.logger.Info("resumed preflight operations after restart", "count", started)
 	}

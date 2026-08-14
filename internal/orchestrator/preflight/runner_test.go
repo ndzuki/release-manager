@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/ndzuki/release-manager/internal/store"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // fakeRun blocks until ctx is cancelled, then records the operation it ran.
@@ -47,12 +47,42 @@ func TestRunnerCancelUnregisters(t *testing.T) {
 
 	// Cancel is idempotent after completion.
 	r.Cancel(op.ID)
-
-	// Unregistration is visible: a fresh Start runs again.
+	// Unregistration is visible: a fresh Start runs again. The fresh start can
+	// only succeed once the previous entry is unregistered, so a hang here
+	// means the completion path leaked the registration — fail instead of
+	// blocking forever.
 	r.Start(op)
-	require.Equal(t, "op-cancel", <-blocked, "restart after completion must run")
+	select {
+	case <-blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("restart after completion must run: previous entry not unregistered")
+	}
 	r.Cancel(op.ID)
 	<-done
+}
+
+// ADR-009 recovery: Resume restarts only operations still in preflight and is
+// idempotent across repeated calls (running entries are no-ops).
+func TestRunnerResumeStartsPreflightOps(t *testing.T) {
+	blocked := make(chan string, 2)
+	done := make(chan string, 2)
+	r := newTestRunner(t, fakeRun(blocked, done))
+
+	ops := []*store.Operation{
+		testOperation("op-resume-1"),
+		testOperation("op-resume-2"),
+		{ID: "op-queued", OperationType: store.OperationInstall, Status: store.StatusQueued},
+		{ID: "op-terminal", OperationType: store.OperationInstall, Status: store.StatusFailed},
+	}
+	assert.Equal(t, 2, r.Resume(ops), "only preflight operations resume")
+	started := map[string]bool{<-blocked: true, <-blocked: true}
+	assert.True(t, started["op-resume-1"] && started["op-resume-2"], "both preflight operations must start")
+	// Repeated Resume must not start duplicates.
+	assert.Equal(t, 0, r.Resume(ops), "already-running operations are no-ops")
+	r.Cancel("op-resume-1")
+	r.Cancel("op-resume-2")
+	exited := map[string]bool{<-done: true, <-done: true}
+	assert.True(t, exited["op-resume-1"] && exited["op-resume-2"], "both cancelled runs must exit")
 }
 
 // Duplicate starts for the same operation are no-ops.
@@ -117,6 +147,13 @@ func TestRunnerConcurrentCancelAndShutdown(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		require.NoError(t, r.Shutdown(shutdownCtx))
+	}()
 	for _, id := range []string{"op-a", "op-b", "op-c", "op-d"} {
 		wg.Add(1)
 		go func(id string) {
@@ -125,10 +162,6 @@ func TestRunnerConcurrentCancelAndShutdown(t *testing.T) {
 		}(id)
 	}
 	wg.Wait()
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	require.NoError(t, r.Shutdown(shutdownCtx))
 	for range 4 {
 		<-done
 	}

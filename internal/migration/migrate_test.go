@@ -328,6 +328,10 @@ func TestAppendTargetColumns(t *testing.T) {
 	}{
 		{name: "candidate last seen", table: "candidate_artifacts", columns: []string{"id", "created_at"}, want: []string{"id", "created_at", "last_seen_at"}, wantExtra: 1},
 		{name: "preflight updated at", table: "preflight_lifecycles", columns: []string{"id", "created_at"}, want: []string{"id", "created_at", "updated_at"}, wantExtra: 1},
+		// Post-migration sources already carry the derived column: it must not
+		// be appended twice (duplicate column in INSERT is rejected by PG).
+		{name: "preflight updated at present", table: "preflight_lifecycles", columns: []string{"id", "created_at", "updated_at"}, want: []string{"id", "created_at", "updated_at"}, wantExtra: 0},
+		{name: "candidate last seen present", table: "candidate_artifacts", columns: []string{"id", "created_at", "last_seen_at"}, want: []string{"id", "created_at", "last_seen_at"}, wantExtra: 0},
 		{name: "unchanged", table: "customers", columns: []string{"id"}, want: []string{"id"}},
 	}
 	for _, tt := range tests {

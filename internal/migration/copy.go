@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -181,10 +182,17 @@ func appendTargetColumns(table string, cols []string) ([]string, []columnDefault
 		return cols, nil
 	}
 	targetCols := append([]string(nil), cols...)
+	kept := make([]columnDefault, 0, len(defaults))
 	for _, column := range defaults {
+		if slices.Contains(cols, column.name) {
+			// The source already carries the column; appending it again would
+			// produce a duplicate column in the INSERT (PostgreSQL rejects it).
+			continue
+		}
 		targetCols = append(targetCols, column.name)
+		kept = append(kept, column)
 	}
-	return targetCols, defaults
+	return targetCols, kept
 }
 
 // isTimeColumn returns true if the column name indicates a timestamp.
@@ -313,15 +321,15 @@ func convertSQLiteValue(table, column string, value any, timeColumn, blobColumn 
 }
 
 var jsonColumns = map[string]map[string]struct{}{
-	"audit_outbox":         {"payload_json": {}},
-	"notification_outbox":  {"payload_json": {}},
-	"operations":           {"actor": {}},
-	"operation_timeline":   {"data": {}},
-	"sessions":             {"capabilities": {}},
-	"audit_events":         {"metadata": {}},
-	"notification_jobs":    {"metadata": {}},
-	"release_bundles":      {"images": {}},
-	"scan_results":         {"severity_json": {}, "findings_json": {}},
+	"audit_outbox":        {"payload_json": {}},
+	"notification_outbox": {"payload_json": {}},
+	"operations":          {"actor": {}},
+	"operation_timeline":  {"data": {}},
+	"sessions":            {"capabilities": {}},
+	"audit_events":        {"metadata": {}},
+	"notification_jobs":   {"metadata": {}},
+	"release_bundles":     {"images": {}},
+	"scan_results":        {"severity_json": {}, "findings_json": {}},
 	"emergency_intents": {
 		"annotation_entries": {}, "promotion_paths": {}, "before_snapshot": {}, "after_snapshot": {},
 	},

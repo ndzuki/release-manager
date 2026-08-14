@@ -1745,10 +1745,11 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 	svc2 := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
 	svc2.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
 	require.NoError(t, svc2.Register(mux2, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))))
-	_ = httptest.NewServer(mux2)
+	server2 := httptest.NewServer(mux2)
 	t.Cleanup(func() {
 		require.NoError(t, svc2.emergency.Shutdown(context.Background()))
 		require.NoError(t, svc2.Close())
+		server2.Close()
 	})
 
 	// The resumed coordinator re-records the lifecycle as running (AC-019-05 retry).

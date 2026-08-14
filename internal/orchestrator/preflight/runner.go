@@ -35,17 +35,17 @@ func NewRunner(run func(ctx context.Context, op *store.Operation), logger *slog.
 // Start begins (or resumes) the preflight pipeline for an operation with a
 // context detached from any HTTP request, so request completion cannot cancel
 // it. Duplicate starts for the same operation are no-ops; starts after
-// Shutdown are rejected.
-func (r *Runner) Start(op *store.Operation) {
+// Shutdown are rejected. Returns whether the run was started.
+func (r *Runner) Start(op *store.Operation) bool {
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
 		r.logger.Warn("preflight runner rejected during shutdown", "op_id", op.ID)
-		return
+		return false
 	}
 	if _, exists := r.entries[op.ID]; exists {
 		r.mu.Unlock()
-		return
+		return false
 	}
 	ctx, cancel := context.WithCancel(context.WithoutCancel(context.Background()))
 	r.entries[op.ID] = cancel
@@ -58,6 +58,21 @@ func (r *Runner) Start(op *store.Operation) {
 		defer r.unregister(op.ID)
 		r.run(ctx, op)
 	}()
+	return true
+}
+// Resume restarts preflight coordination for every operation still in the
+// preflight state after a service restart (ADR-009 recovery). The caller
+// supplies the candidate operations; recovery policy (which states resume)
+// lives in the Runner, not the service. Idempotent: operations already
+// running are no-ops. Returns the number of operations resumed.
+func (r *Runner) Resume(ops []*store.Operation) int {
+	started := 0
+	for _, op := range ops {
+		if op.Status == store.StatusPreflight && r.Start(op) {
+			started++
+		}
+	}
+	return started
 }
 
 // Cancel propagates cancellation to a running preflight. Idempotent: cancelling

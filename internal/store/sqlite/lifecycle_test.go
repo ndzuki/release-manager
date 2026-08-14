@@ -923,6 +923,15 @@ func TestMigrateLegacyPreflightLifecycleSchema(t *testing.T) {
 		// created_at while carrying the latest result and the non-null terminal.
 		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at) VALUES ('dup-1', 'op-dup', NULL, '[]', 'running', '', '` + early + `')`,
 		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at) VALUES ('dup-2', 'op-dup', '` + terminal + `', '[{"stage":"artifact","status":"passed"},{"stage":"render","status":"passed"}]', 'passed', '', '` + late + `')`,
+		// op-rev: the latest result row has NULL terminal but an older row
+		// carries it — the non-null terminal must survive dedupe.
+		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at) VALUES ('rev-early', 'op-rev', '` + terminal + `', '[]', 'running', '', '` + early + `')`,
+		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at) VALUES ('rev-late', 'op-rev', NULL, '[{"stage":"artifact","status":"passed"}]', 'passed', '', '` + late + `')`,
+		// op-null-a/op-null-b: multiple exploratory rows (NULL operation_id)
+		// are distinct rows in the legacy model and must all survive dedupe
+		// (UNIQUE allows multiple NULLs).
+		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at) VALUES ('null-a', NULL, NULL, '[]', 'running', '', '` + early + `')`,
+		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at) VALUES ('null-b', NULL, NULL, '[]', 'passed', '', '` + late + `')`,
 		// op-timeout: JSON stages + timeout overall → cancelled.
 		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at) VALUES ('timeout-1', 'op-timeout', NULL, '[]', 'timeout', 'stage_timeout', '` + late + `')`,
 		// exploratory (no operation) survives.
@@ -953,11 +962,22 @@ func TestMigrateLegacyPreflightLifecycleSchema(t *testing.T) {
 	assert.Equal(t, early, updatedAt, "updated_at must be backfilled from created_at")
 	assert.Equal(t, terminal, terminalAt, "terminal_at must be preserved")
 
+	// The latest row wins the result, but a non-null terminal from an older
+	// duplicate row must not be lost (Spec review finding, v3).
+	require.NoError(t, st.DB().QueryRowContext(ctx, `
+		SELECT overall, COALESCE(operation_terminal_at, '')
+		FROM preflight_lifecycles WHERE operation_id = 'op-rev'`).Scan(&overall, &terminalAt))
+	assert.Equal(t, "passed", overall, "latest result must win")
+	assert.Equal(t, terminal, terminalAt, "non-null terminal_at from an older row must be preserved")
+
+	// Multiple NULL-operation rows must not collapse into one (Spec review
+	// finding, v3): each exploratory row keeps its own identity.
+	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM preflight_lifecycles WHERE operation_id IS NULL`).Scan(&count))
+	assert.Equal(t, 3, count, "every exploratory row with NULL operation_id must survive")
+
 	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT overall FROM preflight_lifecycles WHERE operation_id = 'op-timeout'`).Scan(&overall))
 	assert.Equal(t, "cancelled", overall, "legacy timeout must map to cancelled")
 
-	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM preflight_lifecycles WHERE operation_id IS NULL`).Scan(&count))
-	assert.Equal(t, 1, count, "exploratory rows without operation must survive")
 
 	// New shape: updated_at present, error_code gone, operation_id unique.
 	rows, err := st.DB().QueryContext(ctx, `PRAGMA table_info(preflight_lifecycles)`)

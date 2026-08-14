@@ -411,7 +411,14 @@ func migratePreflightLifecycleSchema(tx *sql.Tx) error {
 		 SELECT
 			l.id,
 			l.operation_id,
-			l.operation_terminal_at,
+			COALESCE(
+				l.operation_terminal_at,
+				(SELECT pl2.operation_terminal_at FROM preflight_lifecycles_legacy pl2
+				 WHERE pl2.operation_id IS l.operation_id
+				   AND pl2.operation_id IS NOT NULL
+				   AND pl2.operation_terminal_at IS NOT NULL
+				 ORDER BY pl2.created_at DESC LIMIT 1)
+			),
 			CASE
 				WHEN l.stages IS NULL OR l.stages = '' OR l.stages = '[]' THEN ''
 				WHEN json_valid(l.stages) AND json_type(l.stages) = 'array' THEN
@@ -426,14 +433,20 @@ func migratePreflightLifecycleSchema(tx *sql.Tx) error {
 			m.min_created,
 			m.min_created
 		 FROM (
-			SELECT pl.*, ROW_NUMBER() OVER (PARTITION BY operation_id ORDER BY created_at DESC) AS rn
+			SELECT pl.*,
+				CASE WHEN pl.operation_id IS NULL THEN pl.id ELSE pl.operation_id END AS group_key,
+				ROW_NUMBER() OVER (
+					PARTITION BY CASE WHEN pl.operation_id IS NULL THEN pl.id ELSE pl.operation_id END
+					ORDER BY pl.created_at DESC
+				) AS rn
 			FROM preflight_lifecycles_legacy pl
 		 ) l
 		 JOIN (
-			SELECT operation_id, MIN(created_at) AS min_created
+			SELECT CASE WHEN operation_id IS NULL THEN id ELSE operation_id END AS group_key,
+				MIN(created_at) AS min_created
 			FROM preflight_lifecycles_legacy
-			GROUP BY operation_id
-		 ) m ON m.operation_id IS l.operation_id
+			GROUP BY CASE WHEN operation_id IS NULL THEN id ELSE operation_id END
+		 ) m ON m.group_key IS l.group_key
 		 WHERE l.rn = 1`,
 		`DROP TABLE preflight_lifecycles_legacy`,
 		`CREATE INDEX IF NOT EXISTS idx_preflight_lifecycles_terminal ON preflight_lifecycles(operation_terminal_at)`,
