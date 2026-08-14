@@ -29,13 +29,12 @@ import (
 )
 
 const (
-	defaultMaxDocumentBytes = 1 << 20 // 1 MiB
-	maxPageSize             = 100
-	idempotencyTTL          = 24 * time.Hour
+	defaultMaxDocumentBytes    = 1 << 20 // 1 MiB
+	maxPageSize                = 100
+	idempotencyTTL             = 24 * time.Hour
 	secretMetadataTimeout      = 15 * time.Second
 	secretMetadataPollInterval = 50 * time.Millisecond
 )
-
 
 // ValuesConfig controls immutable document validation.
 type ValuesConfig struct {
@@ -617,6 +616,7 @@ type secretMetadataCommandResult struct {
 }
 
 // requestSecretMetadata dispatches a durable operator command and polls its persisted result.
+//
 //nolint:gocyclo // Independent offline, result, and timeout branches make the control flow explicit.
 func (s *Service) requestSecretMetadata(ctx context.Context, definition *store.ReleaseDefinition) ([]*orchestratorv1.SecretOption, error) {
 	operator, err := s.store.Operators().GetByClusterID(ctx, definition.ClusterID)
