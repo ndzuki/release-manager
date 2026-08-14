@@ -3,6 +3,7 @@ package preflight
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -90,15 +91,6 @@ func (c *Coordinator) Dispatch(ctx context.Context, op *store.Operation, bundle 
 		ID: uuid.New().String(), CommandID: fmt.Sprintf("%s:%s", op.ID, stage.Name),
 		OperationID: op.ID, OperationType: string(op.OperationType), OperatorID: operatorID, Payload: encoded,
 	}, dispatchErr
-}
-
-// Enqueue persists the first preflight command before the API returns.
-func (c *Coordinator) Enqueue(ctx context.Context, op *store.Operation) error {
-	entry, err := c.Dispatch(ctx, op, nil, nil)
-	if err != nil {
-		return err
-	}
-	return c.outbox.Create(ctx, entry)
 }
 
 func (c *Coordinator) Run(ctx context.Context, op *store.Operation) {
@@ -247,6 +239,26 @@ func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage S
 	}
 
 	commandID := fmt.Sprintf("%s:%s", op.ID, stage.Name)
+
+	// D-87: the first artifact command is persisted atomically inside the
+	// operation creation transaction (REQ-067 OperationCreationUnitOfWork).
+	// Consume that row instead of creating a duplicate; operations without a
+	// pre-created first row (e.g. rollback) create one on demand. The same
+	// command identity also makes restarts idempotent.
+	if stage.Name == StageArtifact {
+		if existing, err := c.outbox.GetByCommandID(ctx, commandID); err == nil {
+			c.logger.Debug("consuming pre-created artifact dispatch",
+				"op_id", op.ID, "command_id", commandID, "entry_id", existing.ID)
+			return c.pollStage(ctx, commandID, stage)
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return StageResult{
+				Stage:  stage.Name,
+				Status: StageFailed,
+				Detail: fmt.Sprintf("dispatch lookup error: %v", err),
+			}, err
+		}
+	}
+
 	payload, err := c.commandPayload(ctx, op, stage.Name, nil, nil)
 	if err != nil {
 		return emptyResult, err

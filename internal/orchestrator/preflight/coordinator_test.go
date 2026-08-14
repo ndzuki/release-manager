@@ -84,6 +84,46 @@ func waitForCommand(t *testing.T, st *sqlitestore.Store, commandID string) *stor
 	return entry
 }
 
+// D-87: the artifact command pre-created by the operation creation transaction
+// is consumed, not duplicated, and restarts stay idempotent on the identity.
+func TestCoordinatorRun_ConsumesPreCreatedArtifactDispatch(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	op, _ := seedPreflightFixture(t, st)
+	c := newTestCoordinator(t, st)
+	ctx := context.Background()
+
+	// Simulate the OperationCreationUnitOfWork first dispatch row.
+	first := &store.OutboxEntry{
+		ID: uuid.NewString(), CommandID: op.ID + ":artifact", OperationID: op.ID,
+		OperationType: string(op.OperationType), OperatorID: "operator-preflight",
+		Payload: []byte(`{"stage":"artifact","operation_id":"` + op.ID + `"}`),
+	}
+	require.NoError(t, st.Outbox().Create(ctx, first))
+
+	done := make(chan struct{})
+	go func() { c.Run(ctx, op); close(done) }()
+
+	// Drive the artifact stage through the pre-created row, then the rest.
+	require.NoError(t, st.Outbox().UpdateStatus(ctx, first.ID, store.CommandPersisted, `{"status":"passed"}`))
+	for _, stage := range []string{"render", "cluster", "runtime_pull"} {
+		entry := waitForCommand(t, st, op.ID+":"+stage)
+		require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("coordinator did not finish")
+	}
+
+	var count int
+	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM outbox WHERE command_id = ?`, op.ID+":artifact").Scan(&count))
+	assert.Equal(t, 1, count, "the pre-created dispatch must be consumed, not duplicated")
+
+	got, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusQueued, got.Status)
+}
+
 // AC-019-04/06: all required stages pass → operation CAS to queued and the
 // lifecycle records passed with canonical stages.
 func TestCoordinatorRun_AllPassedFinalizesLifecycle(t *testing.T) {
