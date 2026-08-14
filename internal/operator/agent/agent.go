@@ -52,7 +52,6 @@ type InventorySyncExecutor interface {
 type EmergencyExecutor interface {
 	Execute(context.Context, *operatorv1.EmergencyCommand) (string, error)
 }
-
 // Agent receives durable commands, executes Helm operations, and returns cached results on redelivery.
 type Agent struct {
 	client            StreamClient
@@ -494,7 +493,6 @@ func (a *Agent) executeSecretMetadataList(ctx context.Context, command *operator
 	result.Secrets = secrets
 	return result
 }
-
 func (a *Agent) executeInstall(ctx context.Context, command *operatorv1.Command) Result {
 	result := Result{
 		OperationID:  command.GetOperationId(),
@@ -614,6 +612,21 @@ func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command,
 	if upgrade.GetTimeout() != nil {
 		timeout = upgrade.GetTimeout().AsDuration()
 	}
+
+	current, err := a.engine.Status(ctx, helmengine.StatusOptions{
+		Namespace:   command.GetNamespace(),
+		ReleaseName: command.GetReleaseName(),
+	})
+	if err != nil {
+		result.Code = upgradeErrorCode(err)
+		result.Message = err.Error()
+		return result
+	}
+	if expected := int(command.GetExpectedCurrentRevision()); expected > 0 && current.Revision != expected {
+		result.Code = "inventory_stale"
+		result.Message = fmt.Sprintf("expected current revision %d, got %d", expected, current.Revision)
+		return result
+	}
 	release, err := a.engine.Upgrade(ctx, helmengine.UpgradeOptions{
 		Namespace:             upgrade.GetNamespace(),
 		ReleaseName:           upgrade.GetReleaseName(),
@@ -700,23 +713,41 @@ func (a *Agent) executeRollback(ctx context.Context, command *operatorv1.Command
 		return result
 	}
 
-	timeout := a.installFlags.Timeout
-	if command.GetTimeoutSeconds() > 0 {
-		timeout = time.Duration(command.GetTimeoutSeconds()) * time.Second
-	}
-
-	release, err := a.engine.Rollback(ctx, helmengine.RollbackOptions{
-		Namespace:      command.GetNamespace(),
-		ReleaseName:    command.GetReleaseName(),
-		TargetRevision: int(command.GetTargetRevision()),
-		Timeout:        timeout,
+	history, err := a.engine.History(ctx, helmengine.HistoryOptions{
+		Namespace:   command.GetNamespace(),
+		ReleaseName: command.GetReleaseName(),
 	})
 	if err != nil {
 		result.Code = rollbackErrorCode(err)
 		result.Message = err.Error()
 		return result
 	}
+	targetFound := false
+	for _, entry := range history {
+		if entry.Revision == int(command.GetTargetRevision()) {
+			targetFound = true
+			break
+		}
+	}
+	if !targetFound {
+		result.Code = "target_revision_not_found"
+		result.Message = fmt.Sprintf("target revision %d not found", command.GetTargetRevision())
+		return result
+	}
 
+	timeout := a.installFlags.Timeout
+	if command.GetTimeoutSeconds() > 0 {
+		timeout = time.Duration(command.GetTimeoutSeconds()) * time.Second
+	}
+	release, err := a.engine.Rollback(ctx, helmengine.RollbackOptions{
+		Namespace: command.GetNamespace(), ReleaseName: command.GetReleaseName(),
+		TargetRevision: int(command.GetTargetRevision()), Timeout: timeout,
+	})
+	if err != nil {
+		result.Code = rollbackErrorCode(err)
+		result.Message = err.Error()
+		return result
+	}
 	result.Status = "succeeded"
 	result.Release = release
 	result.InventorySync = true
@@ -905,10 +936,6 @@ func rollbackErrorCode(err error) string {
 	switch {
 	case errors.Is(err, helmengine.ErrNotFound):
 		return "release_not_found"
-	case errors.Is(err, helmengine.ErrRevisionNotFound):
-		return "target_revision_not_found"
-	case errors.Is(err, helmengine.ErrArtifactUnavailable):
-		return "historical_artifact_unavailable"
 	case errors.Is(err, helmengine.ErrTimeout):
 		return "timeout"
 	case errors.Is(err, helmengine.ErrCancelled):

@@ -280,6 +280,12 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	)
 	mux.Handle(operatorPath, operatorHandler)
 	emergencyDispatcher := orchestrator.NewEmergencyDispatcher(operatorService)
+	var createOperation orchestrator.OperationCreationUnitOfWork
+	if uowProvider, ok := s.store.(interface {
+		OperationCreationUnitOfWork() store.OperationCreationUnitOfWork
+	}); ok {
+		createOperation = uowProvider.OperationCreationUnitOfWork()
+	}
 	valuesConfig := s.cfg.Values.WithDefaults()
 	svc := orchestrator.NewService(
 		s.store,
@@ -289,6 +295,7 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		emergencyDispatcher,
 		orchestrator.NewProcessStreamRevoker(s.operatorRegistry()),
 		s.operatorEndpoint(),
+		createOperation,
 		s.authorizer,
 		orchestrator.ValuesConfig{
 			MaxDocumentBytes: valuesConfig.MaxDocumentBytes,

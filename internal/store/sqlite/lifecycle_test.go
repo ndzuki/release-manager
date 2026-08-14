@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -44,6 +45,39 @@ func TestBundleArchiveAndUnarchive(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.BundleValidated, got.Status)
 	assert.Nil(t, got.ArchivedAt)
+}
+
+func TestBundleArchive_StoresPreviousStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		status store.BundleStatus
+	}{
+		{name: "received", status: store.BundleReceived},
+		{name: "validated", status: store.BundleValidated},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := setupStore(t)
+			bundle := &store.ReleaseBundle{
+				ID:          uuid.New().String(),
+				Name:        "archive-source-" + tt.name,
+				DigestAlg:   "sha256",
+				DigestValue: uuid.New().String(),
+				Status:      tt.status,
+			}
+			require.NoError(t, st.Bundles().Create(t.Context(), bundle))
+
+			count, err := st.Bundles().Archive(t.Context(), []string{bundle.ID})
+			require.NoError(t, err)
+			assert.Equal(t, int64(1), count)
+
+			archived, err := st.Bundles().Get(t.Context(), bundle.ID)
+			require.NoError(t, err)
+			assert.Equal(t, store.BundleArchived, archived.Status)
+			assert.Equal(t, tt.status, *archived.ArchivedFromStatus)
+		})
+	}
 }
 
 func TestBundleArchiveIdempotent(t *testing.T) {
@@ -293,7 +327,7 @@ func TestBundleListForArchive_EligibleAfterTerminal(t *testing.T) {
 
 // ── Definition SetCurrentBundle (AC-069-02) ──────────────────────
 
-func TestSetCurrentBundle_AutoUnarchive(t *testing.T) {
+func TestSetCurrentBundle_ArchivedValidatedRestored(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
 
@@ -306,9 +340,9 @@ func TestSetCurrentBundle_AutoUnarchive(t *testing.T) {
 	}
 	require.NoError(t, st.Bundles().Create(ctx, b))
 
-	// Manually set archived_at (Create doesn't set it automatically).
+	// Manually set archival metadata (Create doesn't set it automatically).
 	_, err := st.DB().ExecContext(ctx,
-		`UPDATE release_bundles SET archived_at=?, status='archived' WHERE id=?`,
+		`UPDATE release_bundles SET archived_at=?, status='archived', archived_from_status='validated' WHERE id=?`,
 		time.Now().UTC().Format(time.RFC3339), b.ID)
 	require.NoError(t, err)
 
@@ -331,6 +365,55 @@ func TestSetCurrentBundle_AutoUnarchive(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.BundleValidated, got.Status)
 	assert.Nil(t, got.ArchivedAt)
+}
+
+func TestSetCurrentBundle_ArchivedReceivedRejected(t *testing.T) {
+	tests := []struct {
+		name       string
+		fromStatus store.BundleStatus
+		wantErr    error
+	}{
+		{name: "received", fromStatus: store.BundleReceived, wantErr: store.ErrBundleNotReady},
+		{name: "rejected", fromStatus: store.BundleRejected, wantErr: store.ErrBundleRejected},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := setupStore(t)
+			bundle := &store.ReleaseBundle{
+				ID:          uuid.New().String(),
+				Name:        "archived-" + tt.name,
+				DigestAlg:   "sha256",
+				DigestValue: uuid.New().String(),
+				Status:      store.BundleArchived,
+			}
+			require.NoError(t, st.Bundles().Create(t.Context(), bundle))
+			_, err := st.DB().ExecContext(t.Context(), `
+				UPDATE release_bundles
+				SET archived_at=?, archived_from_status=?
+				WHERE id=?
+			`, time.Now().UTC().Format(time.RFC3339), string(tt.fromStatus), bundle.ID)
+			require.NoError(t, err)
+
+			definition := &store.ReleaseDefinition{
+				ID: uuid.New().String(), Name: "definition-" + tt.name,
+				CustomerID: "cust-" + tt.name, ClusterID: "cluster-" + tt.name,
+				ReleaseName: "release-" + tt.name, Status: store.DefStatusActive,
+			}
+			require.NoError(t, st.Definitions().Create(t.Context(), definition, nil))
+
+			_, err = st.Definitions().SetCurrentBundle(t.Context(), definition.ID, bundle.ID)
+			require.ErrorIs(t, err, tt.wantErr)
+
+			storedDefinition, err := st.Definitions().Get(t.Context(), definition.ID)
+			require.NoError(t, err)
+			assert.Nil(t, storedDefinition.CurrentBundleID)
+			storedBundle, err := st.Bundles().Get(t.Context(), bundle.ID)
+			require.NoError(t, err)
+			assert.Equal(t, store.BundleArchived, storedBundle.Status)
+			assert.Equal(t, tt.fromStatus, *storedBundle.ArchivedFromStatus)
+		})
+	}
 }
 
 func TestSetCurrentBundle_AlreadyValidated(t *testing.T) {
@@ -383,6 +466,12 @@ func TestCandidateArtifactCreateAndLink(t *testing.T) {
 		Digest:       "sha256:candidate123",
 	}
 	require.NoError(t, st.CandidateArtifacts().Create(ctx, ca2))
+	assert.NotEqual(t, ca.ID, ca2.ID)
+	var persistedID string
+	require.NoError(t, st.DB().QueryRowContext(ctx, `
+		SELECT id FROM candidate_artifacts WHERE digest = ? AND artifact_type = ?
+	`, ca.Digest, string(ca.ArtifactType)).Scan(&persistedID))
+	assert.Equal(t, ca.ID, persistedID)
 
 	// Link to a bundle.
 	b := &store.ReleaseBundle{
@@ -395,6 +484,75 @@ func TestCandidateArtifactCreateAndLink(t *testing.T) {
 	require.NoError(t, st.Bundles().Create(ctx, b))
 
 	require.NoError(t, st.CandidateArtifacts().LinkToBundle(ctx, ca.ID, b.ID))
+}
+
+func TestLinkCandidateArtifacts_Batch(t *testing.T) {
+	st := setupStore(t)
+	bundle := &store.ReleaseBundle{
+		ID: uuid.New().String(), Name: "batch-link-bundle", DigestAlg: "sha256",
+		DigestValue: uuid.New().String(), Status: store.BundleValidated,
+	}
+	require.NoError(t, st.Bundles().Create(t.Context(), bundle))
+
+	digests := []string{"sha256:image-one", "sha256:image-two", "sha256:chart"}
+	for i, digest := range digests {
+		artifactType := store.ArtifactImage
+		if i == len(digests)-1 {
+			artifactType = store.ArtifactChart
+		}
+		artifact := &store.CandidateArtifact{
+			ArtifactType: artifactType,
+			Ref:          fmt.Sprintf("artifact-%d", i),
+			Digest:       digest,
+		}
+		require.NoError(t, st.CandidateArtifacts().Create(t.Context(), artifact))
+	}
+
+	const workers = 8
+	type linkResult struct {
+		linked int64
+		err    error
+	}
+	results := make(chan linkResult, workers)
+	for range workers {
+		go func() {
+			linked, err := st.CandidateArtifacts().LinkCandidateArtifacts(t.Context(), bundle.ID, digests)
+			results <- linkResult{linked: linked, err: err}
+		}()
+	}
+
+	var totalLinked int64
+	for range workers {
+		result := <-results
+		require.NoError(t, result.err)
+		totalLinked += result.linked
+	}
+	assert.Equal(t, int64(len(digests)), totalLinked)
+
+	var count int
+	require.NoError(t, st.DB().QueryRowContext(t.Context(), `
+		SELECT COUNT(*) FROM bundle_candidate_artifacts WHERE bundle_id = ?
+	`, bundle.ID).Scan(&count))
+	assert.Equal(t, len(digests), count)
+	var claimed int
+	require.NoError(t, st.DB().QueryRowContext(t.Context(), `
+		SELECT COUNT(*) FROM candidate_artifacts
+		WHERE digest IN (?, ?, ?) AND orphaned_at IS NULL
+	`, digests[0], digests[1], digests[2]).Scan(&claimed))
+	assert.Equal(t, len(digests), claimed)
+}
+
+func TestLinkCandidateArtifacts_NoMatch(t *testing.T) {
+	st := setupStore(t)
+	bundle := &store.ReleaseBundle{
+		ID: uuid.New().String(), Name: "no-match-bundle", DigestAlg: "sha256",
+		DigestValue: uuid.New().String(), Status: store.BundleValidated,
+	}
+	require.NoError(t, st.Bundles().Create(t.Context(), bundle))
+
+	linked, err := st.CandidateArtifacts().LinkCandidateArtifacts(t.Context(), bundle.ID, []string{"sha256:missing"})
+	require.NoError(t, err)
+	assert.Zero(t, linked)
 }
 
 func TestCandidateArtifactDeleteOrphan(t *testing.T) {
@@ -413,8 +571,8 @@ func TestCandidateArtifactDeleteOrphan(t *testing.T) {
 	require.NoError(t, st.CandidateArtifacts().Create(ctx, oldOrphan))
 
 	_, err := st.DB().ExecContext(ctx,
-		`UPDATE candidate_artifacts SET created_at=? WHERE id=?`,
-		now.Add(-35*24*time.Hour).Format(time.RFC3339), oldOrphan.ID)
+		`UPDATE candidate_artifacts SET created_at=?, orphaned_at=? WHERE id=?`,
+		now.Add(-35*24*time.Hour).Format(time.RFC3339), now.Add(-35*24*time.Hour).Format(time.RFC3339), oldOrphan.ID)
 	require.NoError(t, err)
 
 	// Linked candidate — should survive (AC-069-08).
@@ -454,6 +612,242 @@ func TestCandidateArtifactDeleteOrphan(t *testing.T) {
 	n, err := st.CandidateArtifacts().DeleteOrphanBefore(ctx, cutoff)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), n) // only old orphan deleted
+}
+func TestSQLiteUnitOfWork_AtomicCommit(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+
+	bundle := &store.ReleaseBundle{
+		ID: uuid.New().String(), Name: "uow-bundle", DigestAlg: "sha256",
+		DigestValue: uuid.New().String(), Status: store.BundleArchived,
+		ChartDigest: "sha256:chart-uow",
+		Images:      []store.BundleImage{{Ref: "app:v1", Digest: "sha256:image-uow"}},
+	}
+	require.NoError(t, st.Bundles().Create(ctx, bundle))
+	_, err := st.DB().ExecContext(ctx, `
+		UPDATE release_bundles
+		SET archived_at=?, archived_from_status='validated'
+		WHERE id=?
+	`, time.Now().UTC().Format(time.RFC3339), bundle.ID)
+	require.NoError(t, err)
+
+	definition := &store.ReleaseDefinition{
+		ID: uuid.New().String(), Name: "uow-definition", CustomerID: "uow-customer",
+		ClusterID: "uow-cluster", ReleaseName: "uow-release", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
+
+	for artifactType, digest := range map[store.ArtifactType]string{
+		store.ArtifactChart: bundle.ChartDigest,
+		store.ArtifactImage: bundle.Images[0].Digest,
+	} {
+		require.NoError(t, st.CandidateArtifacts().Create(ctx, &store.CandidateArtifact{
+			ArtifactType: artifactType, Ref: string(artifactType), Digest: digest,
+		}))
+	}
+
+	now := time.Now().UTC()
+	operationRecord := &store.Operation{
+		ID: uuid.New().String(), OperationType: store.OperationInstall, Status: store.StatusPending,
+		ReleaseDefinitionID: definition.ID, IdempotencyKey: uuid.New().String(), IdempotencyScope: "org:" + definition.ID,
+		RequestHash: uuid.New().String(), BundleID: bundle.ID, CreatedAt: now, UpdatedAt: now,
+	}
+	dispatch := &store.OutboxEntry{
+		ID: uuid.New().String(), CommandID: operationRecord.ID + ":artifact", OperationID: operationRecord.ID,
+		OperationType: string(operationRecord.OperationType), Payload: []byte(`{}`),
+	}
+
+	result, err := st.OperationCreationUnitOfWork()(ctx, store.OperationCreationRequest{
+		Operation: operationRecord, Dispatch: dispatch,
+		CandidateArtifactDigests: []string{bundle.ChartDigest, bundle.Images[0].Digest},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.BundleRestored)
+	assert.Equal(t, int64(2), result.LinkedCandidateCount)
+
+	storedOperation, err := st.Operations().Get(ctx, operationRecord.ID)
+	require.NoError(t, err)
+	assert.Equal(t, bundle.ID, storedOperation.BundleID)
+	storedDefinition, err := st.Definitions().Get(ctx, definition.ID)
+	require.NoError(t, err)
+	require.NotNil(t, storedDefinition.CurrentBundleID)
+	assert.Equal(t, bundle.ID, *storedDefinition.CurrentBundleID)
+	storedBundle, err := st.Bundles().Get(ctx, bundle.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.BundleValidated, storedBundle.Status)
+	assert.Nil(t, storedBundle.ArchivedFromStatus)
+	_, err = st.Outbox().GetByCommandID(ctx, dispatch.CommandID)
+	require.NoError(t, err)
+	var linked int
+	require.NoError(t, st.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM bundle_candidate_artifacts WHERE bundle_id = ?
+	`, bundle.ID).Scan(&linked))
+	assert.Equal(t, 2, linked)
+}
+
+func TestSQLiteUnitOfWork_AuthorizationFence(t *testing.T) {
+	// AC-067-22: a stale authorization snapshot is rejected inside the
+	// transaction with no writes (expected version never matches).
+	st := setupStore(t)
+	ctx := t.Context()
+
+	definition := &store.ReleaseDefinition{
+		ID: uuid.New().String(), Name: "fence-definition", CustomerID: "fence-customer",
+		ClusterID: "fence-cluster", ReleaseName: "fence-release", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
+	bundle := &store.ReleaseBundle{
+		ID: uuid.New().String(), Name: "fence-bundle", DigestAlg: "sha256",
+		DigestValue: uuid.New().String(), Status: store.BundleValidated,
+	}
+	require.NoError(t, st.Bundles().Create(ctx, bundle))
+
+	now := time.Now().UTC()
+	operationRecord := &store.Operation{
+		ID: uuid.New().String(), OperationType: store.OperationInstall, Status: store.StatusPending,
+		ReleaseDefinitionID: definition.ID, IdempotencyKey: uuid.New().String(), IdempotencyScope: "org:" + definition.ID,
+		RequestHash: uuid.New().String(), BundleID: bundle.ID, CreatedAt: now, UpdatedAt: now,
+	}
+	dispatch := &store.OutboxEntry{
+		ID: uuid.New().String(), CommandID: operationRecord.ID + ":artifact", OperationID: operationRecord.ID,
+		OperationType: string(operationRecord.OperationType), Payload: []byte(`{}`),
+	}
+
+	_, err := st.OperationCreationUnitOfWork()(ctx, store.OperationCreationRequest{
+		Operation:                    operationRecord,
+		Dispatch:                     dispatch,
+		CandidateArtifactDigests:     []string{},
+		ExpectedAuthorizationVersion: 42, // never matches the durable version
+	})
+	require.ErrorIs(t, err, store.ErrAuthorizationStale)
+
+	_, err = st.Operations().Get(ctx, operationRecord.ID)
+	require.ErrorIs(t, err, store.ErrNotFound)
+	_, err = st.Outbox().GetByCommandID(ctx, dispatch.CommandID)
+	require.ErrorIs(t, err, store.ErrNotFound)
+}
+
+func TestSQLiteUnitOfWork_ArchivedReceivedRejected(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	bundle := &store.ReleaseBundle{
+		ID: uuid.New().String(), Name: "archived-received-uow", DigestAlg: "sha256",
+		DigestValue: uuid.New().String(), Status: store.BundleArchived,
+	}
+	require.NoError(t, st.Bundles().Create(ctx, bundle))
+	_, err := st.DB().ExecContext(ctx, `
+		UPDATE release_bundles SET archived_at=?, archived_from_status='received' WHERE id=?
+	`, time.Now().UTC().Format(time.RFC3339), bundle.ID)
+	require.NoError(t, err)
+
+	definition := &store.ReleaseDefinition{
+		ID: uuid.New().String(), Name: "archived-received-definition", CustomerID: "archived-received-customer",
+		ClusterID: "archived-received-cluster", ReleaseName: "archived-received-release", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
+	const artifactDigest = "sha256:archived-received-artifact"
+	require.NoError(t, st.CandidateArtifacts().Create(ctx, &store.CandidateArtifact{
+		ArtifactType: store.ArtifactImage, Ref: "archived-received-artifact", Digest: artifactDigest,
+	}))
+
+	operationRecord := &store.Operation{
+		ID: uuid.New().String(), OperationType: store.OperationInstall, Status: store.StatusPending,
+		ReleaseDefinitionID: definition.ID, IdempotencyKey: uuid.New().String(), IdempotencyScope: "org:" + definition.ID,
+		RequestHash: uuid.New().String(), BundleID: bundle.ID,
+	}
+	dispatch := &store.OutboxEntry{
+		ID: uuid.New().String(), CommandID: operationRecord.ID + ":artifact", OperationID: operationRecord.ID,
+		OperationType: string(operationRecord.OperationType), Payload: []byte(`{}`),
+	}
+
+	_, err = st.OperationCreationUnitOfWork()(ctx, store.OperationCreationRequest{
+		Operation: operationRecord, Dispatch: dispatch, CandidateArtifactDigests: []string{artifactDigest},
+	})
+	require.ErrorIs(t, err, store.ErrBundleNotReady)
+
+	_, err = st.Operations().Get(ctx, operationRecord.ID)
+	assert.ErrorIs(t, err, store.ErrNotFound)
+	_, err = st.Outbox().GetByCommandID(ctx, dispatch.CommandID)
+	assert.ErrorIs(t, err, store.ErrNotFound)
+	storedDefinition, err := st.Definitions().Get(ctx, definition.ID)
+	require.NoError(t, err)
+	assert.Nil(t, storedDefinition.CurrentBundleID)
+	storedBundle, err := st.Bundles().Get(ctx, bundle.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.BundleArchived, storedBundle.Status)
+	assert.Equal(t, store.BundleReceived, *storedBundle.ArchivedFromStatus)
+	var linked int
+	require.NoError(t, st.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM bundle_candidate_artifacts WHERE bundle_id = ?
+	`, bundle.ID).Scan(&linked))
+	assert.Zero(t, linked)
+	var orphaned int
+	require.NoError(t, st.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM candidate_artifacts WHERE digest = ? AND orphaned_at IS NOT NULL
+	`, artifactDigest).Scan(&orphaned))
+	assert.Equal(t, 1, orphaned)
+}
+
+func TestSQLiteUnitOfWork_RollbackOnPartialFailure(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	bundle := &store.ReleaseBundle{
+		ID: uuid.New().String(), Name: "rollback-bundle", DigestAlg: "sha256",
+		DigestValue: uuid.New().String(), Status: store.BundleArchived,
+	}
+	require.NoError(t, st.Bundles().Create(ctx, bundle))
+	_, err := st.DB().ExecContext(ctx, `
+		UPDATE release_bundles SET archived_at=?, archived_from_status='validated' WHERE id=?
+	`, time.Now().UTC().Format(time.RFC3339), bundle.ID)
+	require.NoError(t, err)
+
+	definition := &store.ReleaseDefinition{
+		ID: uuid.New().String(), Name: "rollback-definition", CustomerID: "rollback-customer",
+		ClusterID: "rollback-cluster", ReleaseName: "rollback-release", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
+	const artifactDigest = "sha256:rollback-artifact"
+	require.NoError(t, st.CandidateArtifacts().Create(ctx, &store.CandidateArtifact{
+		ArtifactType: store.ArtifactImage, Ref: "rollback-artifact", Digest: artifactDigest,
+	}))
+
+	// Force the final link step to fail after operation, dispatch, bundle restore,
+	// and definition update have all executed inside the transaction.
+	_, err = st.DB().ExecContext(ctx, `DROP TABLE bundle_candidate_artifacts`)
+	require.NoError(t, err)
+
+	operationRecord := &store.Operation{
+		ID: uuid.New().String(), OperationType: store.OperationInstall, Status: store.StatusPending,
+		ReleaseDefinitionID: definition.ID, IdempotencyKey: uuid.New().String(), IdempotencyScope: "org:" + definition.ID,
+		RequestHash: uuid.New().String(), BundleID: bundle.ID,
+	}
+	dispatch := &store.OutboxEntry{
+		ID: uuid.New().String(), CommandID: operationRecord.ID + ":artifact", OperationID: operationRecord.ID,
+		OperationType: string(operationRecord.OperationType), Payload: []byte(`{}`),
+	}
+
+	_, err = st.OperationCreationUnitOfWork()(ctx, store.OperationCreationRequest{
+		Operation: operationRecord, Dispatch: dispatch, CandidateArtifactDigests: []string{artifactDigest},
+	})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "bundle_candidate_artifacts")
+
+	_, err = st.Operations().Get(ctx, operationRecord.ID)
+	assert.ErrorIs(t, err, store.ErrNotFound)
+	_, err = st.Outbox().GetByCommandID(ctx, dispatch.CommandID)
+	assert.ErrorIs(t, err, store.ErrNotFound)
+	storedBundle, err := st.Bundles().Get(ctx, bundle.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.BundleArchived, storedBundle.Status)
+	assert.Equal(t, store.BundleValidated, *storedBundle.ArchivedFromStatus)
+	storedDefinition, err := st.Definitions().Get(ctx, definition.ID)
+	require.NoError(t, err)
+	assert.Nil(t, storedDefinition.CurrentBundleID)
+	var orphaned int
+	require.NoError(t, st.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM candidate_artifacts WHERE digest = ? AND orphaned_at IS NOT NULL
+	`, artifactDigest).Scan(&orphaned))
+	assert.Equal(t, 1, orphaned)
 }
 
 // ── Preflight Lifecycle (AC-069-09, AC-069-10) ──────────────────

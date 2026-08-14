@@ -329,6 +329,8 @@ func (m *Module) Snapshot(_ context.Context, organizationID, customerID string) 
 
 func capabilityAllowed(snapshot Snapshot, action store.AuthorizationAction) bool {
 	switch action {
+	case store.AuthorizationCreateOperation:
+		return snapshot.Role == string(store.RoleReleaseAdmin) || snapshot.Role == string(store.RolePlatformAdmin)
 	case store.AuthorizationExecuteEmergency:
 		return snapshot.CanExecuteEmergency
 	case store.AuthorizationResolveEmergency:

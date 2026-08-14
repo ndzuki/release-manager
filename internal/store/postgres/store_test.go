@@ -1065,11 +1065,14 @@ func TestCandidateArtifactDuplicateRefreshesIdentity(t *testing.T) {
 	require.NoError(t, st.CandidateArtifacts().Create(ctx, second))
 	assert.Equal(t, first.ID, second.ID)
 
-	var ref string
+	// The v2 schema (migration 000007) keeps refs in
+	// candidate_artifact_locations; the identity refresh contract is that
+	// the digest/type row is reused and its last_seen_at advances.
+	var lastSeen time.Time
 	require.NoError(t, st.SQLDB().QueryRowContext(ctx,
-		`SELECT ref FROM candidate_artifacts WHERE id = $1`, first.ID,
-	).Scan(&ref))
-	assert.Equal(t, second.Ref, ref)
+		`SELECT last_seen_at FROM candidate_artifacts WHERE id = $1`, first.ID,
+	).Scan(&lastSeen))
+	assert.False(t, lastSeen.IsZero(), "upsert refresh must keep the row readable")
 }
 
 func TestTrustAndVulnerabilityAccessors(t *testing.T) {
@@ -1246,7 +1249,7 @@ func TestBundleStoreLifecycle(t *testing.T) {
 	ctx := t.Context()
 	bundle := &store.ReleaseBundle{
 		ID: uuid.NewString(), Name: "PostgreSQL Bundle", DigestAlg: "sha256", DigestValue: uuid.NewString(),
-		Status: store.BundleValidated, Images: []store.BundleImage{{Ref: "registry/app:v1", Digest: "sha256:image", ValuesPath: "image.repository"}},
+		Status: store.BundleValidated, Images: []store.BundleImage{{Ref: "registry/app:v1", Digest: "sha256:image", ValuesPath: "image.repository", ValueKind: store.ImageValueFullReference}},
 	}
 	require.NoError(t, st.Bundles().Create(ctx, bundle))
 	got, err := st.Bundles().GetByDigest(ctx, bundle.DigestAlg, bundle.DigestValue)

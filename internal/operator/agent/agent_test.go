@@ -211,25 +211,73 @@ func TestAgent_UpgradeErrorMapping(t *testing.T) {
 	}
 }
 
-func TestAgent_InventorySyncCommandExecutesFullSync(t *testing.T) {
-	executor := new(recordingSyncExecutor)
-	agent, err := New(Config{
-		Client: noopClient{}, Engine: new(recordingEngine), Store: newMemoryStore(),
-		SyncExecutor: executor, SessionID: "session-1", OperatorID: "operator-1",
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-	})
-	require.NoError(t, err)
-	stream := newTestStream()
-	command := &operatorv1.Command{
-		OutboxId: "outbox-sync", CommandId: "command-sync", OperationId: "request-sync",
-		OperationType: "INVENTORY_SYNC", Sequence: 9,
+func TestAgent_UpgradePreflightRejectsInventoryStale(t *testing.T) {
+	engine := &recordingEngine{
+		statusRelease: &helmengine.Release{
+			Name:      "example",
+			Namespace: "apps",
+			Revision:  2,
+			Status:    "deployed",
+		},
+		release: &helmengine.Release{Revision: 3},
 	}
+	agent := newTestAgent(t, engine, newMemoryStore(), nil)
+	stream := newTestStream()
 
+	valuesJSON := []byte(`{"message":"hello"}`)
+	command := upgradeCommand("cmd-inventory-stale", valuesJSON, sha256Hex(valuesJSON))
+	command.GetUpgrade().ExpectedRevision = 2 // 现场 revision=2，跳过 revision_conflict
+	command.ExpectedCurrentRevision = 1  // 与现场 revision=2 不符 → inventory_stale
 	require.NoError(t, agent.handleCommand(t.Context(), stream, command))
 	require.Len(t, stream.sent, 2)
-	assert.Equal(t, 1, executor.calls)
+	result := stream.sent[1].GetCommandResult()
+	require.NotNil(t, result)
+	assert.Equal(t, "failed", result.GetStatus())
+	assert.Equal(t, "inventory_stale", result.GetError().GetCode())
+	assert.Equal(t, 2, engine.statusCalls)
+	assert.Zero(t, engine.upgradeCalls)
+}
+
+func TestAgent_RollbackPreflightRejectsMissingTargetRevision(t *testing.T) {
+	engine := &recordingEngine{
+		history: []helmengine.ReleaseHistoryEntry{
+			{Revision: 2, Status: "deployed", Chart: "example-2.0.0"},
+			{Revision: 3, Status: "deployed", Chart: "example-3.0.0"},
+		},
+		release: &helmengine.Release{Revision: 4},
+	}
+	agent := newTestAgent(t, engine, newMemoryStore(), nil)
+	stream := newTestStream()
+
+	require.NoError(t, agent.handleCommand(t.Context(), stream, rollbackCommand("cmd-target-missing")))
+	require.Len(t, stream.sent, 2)
+	assert.Equal(t, "failed", stream.sent[1].GetResult().GetStatus())
+	assert.Contains(t, stream.sent[1].GetResult().GetResultJson(), `"code":"target_revision_not_found"`)
+	assert.Equal(t, 1, engine.historyCalls)
+	assert.Zero(t, engine.rollbackCalls)
+}
+
+func TestAgent_RollbackCommand(t *testing.T) {
+	engine := &recordingEngine{
+		history: []helmengine.ReleaseHistoryEntry{
+			{Revision: 1, Status: "superseded", Chart: "example-1.0.0"},
+			{Revision: 3, Status: "deployed", Chart: "example-3.0.0"},
+		},
+		release: &helmengine.Release{
+			Name: "example", Namespace: "apps", Revision: 4, Status: "deployed",
+		},
+	}
+	agent := newTestAgent(t, engine, newMemoryStore(), nil)
+	stream := newTestStream()
+
+	require.NoError(t, agent.handleCommand(t.Context(), stream, rollbackCommand("cmd-rollback")))
+	require.Len(t, stream.sent, 2)
 	assert.Equal(t, "succeeded", stream.sent[1].GetResult().GetStatus())
-	assert.Contains(t, stream.sent[1].GetResult().GetResultJson(), `"inventory_sync_hint":true`)
+	assert.Equal(t, 1, engine.historyCalls)
+	assert.Equal(t, 1, engine.rollbackCalls)
+	assert.Equal(t, 1, engine.lastRollback.TargetRevision)
+	assert.Equal(t, "apps", engine.lastRollback.Namespace)
+	assert.Equal(t, "example", engine.lastRollback.ReleaseName)
 }
 
 func TestAgent_EmergencyCommandPersistsAcknowledgesAndExecutes(t *testing.T) {
@@ -437,15 +485,16 @@ func upgradeCommand(commandID string, valuesJSON []byte, digest string) *operato
 //nolint:unused // Reserved for future rollback-command tests; intentionally kept.
 func rollbackCommand(commandID string) *operatorv1.Command {
 	return &operatorv1.Command{
-		OutboxId:       "outbox-rollback",
-		CommandId:      commandID,
-		OperationId:    "op-rollback",
-		OperationType:  "ROLLBACK",
-		TargetRevision: 1,
-		DefinitionId:   "definition-rollback",
-		Namespace:      "apps",
-		ReleaseName:    "example",
-		TimeoutSeconds: 45,
+		OutboxId:                "outbox-rollback",
+		CommandId:               commandID,
+		OperationId:             "op-rollback",
+		OperationType:           "ROLLBACK",
+		DefinitionId:            "definition-rollback",
+		Namespace:               "apps",
+		ReleaseName:             "example",
+		ExpectedCurrentRevision: 3,
+		TargetRevision:          1,
+		TimeoutSeconds:          45,
 	}
 }
 
@@ -481,15 +530,21 @@ func (n *recordingNotifier) NotifyOperationComplete(_, _, _, definitionID string
 }
 
 type recordingEngine struct {
-	installCalls int
-	lastInstall  helmengine.InstallOptions
-	release      *helmengine.Release
-	err          error
-	upgradeCalls int
-	lastUpgrade  helmengine.UpgradeOptions
-	status       *helmengine.Release
-	statusErr    error
-	upgradeErr   error
+	installCalls  int
+	upgradeCalls  int
+	rollbackCalls int
+	statusCalls   int
+	historyCalls  int
+	lastInstall   helmengine.InstallOptions
+	lastUpgrade   helmengine.UpgradeOptions
+	lastRollback  helmengine.RollbackOptions
+	statusRelease *helmengine.Release
+	status        *helmengine.Release
+	statusErr     error
+	upgradeErr    error
+	history       []helmengine.ReleaseHistoryEntry
+	release       *helmengine.Release
+	err           error
 }
 
 func (e *recordingEngine) Install(_ context.Context, opts helmengine.InstallOptions) (*helmengine.Release, error) {
@@ -503,20 +558,27 @@ func (e *recordingEngine) Upgrade(_ context.Context, opts helmengine.UpgradeOpti
 	e.lastUpgrade = opts
 	return e.release, e.upgradeErr
 }
-func (e *recordingEngine) Rollback(context.Context, helmengine.RollbackOptions) (*helmengine.Release, error) {
-	return nil, errors.New("not implemented")
+func (e *recordingEngine) Rollback(_ context.Context, opts helmengine.RollbackOptions) (*helmengine.Release, error) {
+	e.rollbackCalls++
+	e.lastRollback = opts
+	return e.release, e.err
 }
 func (e *recordingEngine) Status(context.Context, helmengine.StatusOptions) (*helmengine.Release, error) {
+	e.statusCalls++
 	if e.statusErr != nil {
 		return nil, e.statusErr
+	}
+	if e.statusRelease != nil {
+		return e.statusRelease, nil
 	}
 	if e.status == nil {
 		return nil, helmengine.ErrNotFound
 	}
 	return e.status, nil
 }
-func (*recordingEngine) History(context.Context, helmengine.HistoryOptions) ([]helmengine.ReleaseHistoryEntry, error) {
-	return nil, errors.New("not implemented")
+func (e *recordingEngine) History(context.Context, helmengine.HistoryOptions) ([]helmengine.ReleaseHistoryEntry, error) {
+	e.historyCalls++
+	return e.history, e.err
 }
 func (*recordingEngine) GetValues(context.Context, helmengine.GetValuesOptions) (map[string]interface{}, error) {
 	return nil, errors.New("not implemented")

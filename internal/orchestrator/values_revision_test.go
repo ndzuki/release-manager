@@ -70,7 +70,7 @@ func newValuesRevisionFixture(t *testing.T) valuesRevisionFixture {
 
 	return valuesRevisionFixture{
 		t:          t,
-		svc:        NewService(st, nil, "staging", nil, authorization.NewStoreAuthorizer(st), slog.New(slog.DiscardHandler)),
+		svc:        NewService(st, nil, "staging", nil, st.OperationCreationUnitOfWork(), authorization.NewStoreAuthorizer(st), slog.New(slog.DiscardHandler)),
 		st:         st,
 		ctx:        authCtx,
 		orgID:      orgID,
@@ -144,12 +144,11 @@ func TestCreateValuesRevision_InitialCanBeApprovedAndUsedForInstall(t *testing.T
 		BundleId:            "bundle-initial-install",
 		ReleaseDefinitionId: f.defID,
 		ValuesRevisionId:    approved.Msg.Revision.Id,
-		IdempotencyKey:      "initial-install-operation",
-		Actor: &commonv1.ActorContext{
-			UserId: f.creatorID, Organization: f.orgID,
-		},
 	})
-	operation, err := f.svc.CreateOperation(f.ctx, operationRequest)
+	// TASK-067 contract: idempotency key travels in the header and the
+	// actor comes from the auth interceptor context (not the request body).
+	operationRequest.Header().Set("Idempotency-Key", "initial-install-operation")
+	operation, err := f.svc.CreateOperation(f.adminContext(), operationRequest)
 	require.NoError(t, err)
 	assert.NotEmpty(t, operation.Msg.OperationId)
 	assert.Equal(t, "preflight", operation.Msg.State)
