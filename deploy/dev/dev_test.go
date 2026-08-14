@@ -402,7 +402,8 @@ func TestClusterCreateInjectsProxyEnv(t *testing.T) {
 	// actually goes through docker build; build/push pass through.
 	writeShim(t, binDir, "docker",
 		"#!/usr/bin/env bash\nif [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
-	env = append(env, "HTTP_PROXY=http://127.0.0.1:7890", "HTTPS_PROXY=http://127.0.0.1:7890")
+	env = append(env, "HTTP_PROXY=http://127.0.0.1:7890", "HTTPS_PROXY=http://127.0.0.1:7890",
+		"DEV_DOCKER_MIRROR=docker.1ms.run/library/")
 
 	if out, err := runDev(t, env, "up"); err != nil {
 		t.Fatalf("dev-up failed:\n%s", out)
@@ -429,6 +430,10 @@ func TestClusterCreateInjectsProxyEnv(t *testing.T) {
 			!strings.Contains(line, "--build-arg HTTPS_PROXY=http://127.0.0.1:7890") ||
 			!strings.Contains(line, "--build-arg GOPROXY=https://proxy.golang.org,direct") {
 			t.Fatalf("docker build missing proxy/GOPROXY build-args: %s", line)
+		}
+		if strings.Contains(line, "release-web:") &&
+			!strings.Contains(line, "--build-arg NODE_IMAGE=docker.1ms.run/library/node:24-alpine") {
+			t.Fatalf("web build missing NODE_IMAGE mirror build-arg: %s", line)
 		}
 		buildInjected = true
 	}

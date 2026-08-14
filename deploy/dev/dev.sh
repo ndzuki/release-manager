@@ -321,6 +321,15 @@ build_and_push() {
   # module proxy so go mod download resolves (go env GOPROXY on CI hosts is
   # the default proxy.golang.org, so the fallback only guards missing go).
   build_args+=(--build-arg "GOPROXY=${GOPROXY:-$(go env GOPROXY 2>/dev/null || printf 'https://proxy.golang.org,direct')}")
+  # Container-image mirror build-args (web): DEV_DOCKER_MIRROR is a registry
+  # prefix such as docker.1ms.run/library/ used when Docker Hub is
+  # unreachable from the host (CN); empty keeps the official tags (CI).
+  if [ "$service" = "web" ] && [ -n "${DEV_DOCKER_MIRROR:-}" ]; then
+    build_args+=(
+      --build-arg "NODE_IMAGE=${DEV_DOCKER_MIRROR}node:24-alpine"
+      --build-arg "NGINX_IMAGE=${DEV_DOCKER_MIRROR}nginx:1.27-alpine"
+    )
+  fi
   if ! docker build "${build_args[@]}" --file "$dockerfile" --tag "localhost:${REGISTRY_PORT}/release-$service:$tag" .; then
     fail "$ERR_DOCKER_BUILD_FAILED" "build failed for release-$service"
   fi
