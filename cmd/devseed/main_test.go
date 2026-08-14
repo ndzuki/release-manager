@@ -202,8 +202,8 @@ func TestEnsureAuth_InitializesAndLogsInBothActors(t *testing.T) {
 	server := newTestAuthServer(t, fake)
 	client := authv1connect.NewAuthServiceClient(http.DefaultClient, server.URL)
 
-	adminToken, deployerToken, adminOrgID, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
-	assert.Equal(t, "org-admin", adminOrgID)
+	adminToken, deployerToken, _, deployerUserID, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
+	assert.Equal(t, "deployer-1", deployerUserID)
 	require.NoError(t, err)
 	assert.Equal(t, "token-admin", adminToken)
 	assert.Equal(t, "token-deployer", deployerToken)
@@ -215,7 +215,7 @@ func TestEnsureAuth_SkipsInitializeWhenAlreadyInitialized(t *testing.T) {
 	server := newTestAuthServer(t, fake)
 	client := authv1connect.NewAuthServiceClient(http.DefaultClient, server.URL)
 
-	_, _, _, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
+	_, _, _, _, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
 	require.NoError(t, err)
 	assert.Equal(t, 2, fake.loginCallCount)
 }
@@ -225,8 +225,8 @@ func TestEnsureAuth_ProvisionsDeployerViaCreateLocalUser(t *testing.T) {
 	server := newTestAuthServer(t, fake)
 	client := authv1connect.NewAuthServiceClient(http.DefaultClient, server.URL)
 
-	adminToken, deployerToken, adminOrgID, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
-	assert.Equal(t, "org-admin", adminOrgID)
+	adminToken, deployerToken, _, deployerUserID, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
+	assert.Equal(t, "deployer-1", deployerUserID)
 	require.NoError(t, err)
 	assert.Equal(t, "token-admin", adminToken)
 	assert.Equal(t, "token-deployer", deployerToken)
@@ -243,7 +243,7 @@ func TestEnsureAuth_DeployerCreateLocalUserFailsClosed(t *testing.T) {
 	server := newTestAuthServer(t, fake)
 	client := authv1connect.NewAuthServiceClient(http.DefaultClient, server.URL)
 
-	_, _, _, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
+	_, _, _, _, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "deployer")
 	assert.ErrorContains(t, err, "CreateLocalUser")
@@ -255,7 +255,7 @@ func TestEnsureAuth_SkipsCreateLocalUserWhenDeployerExists(t *testing.T) {
 	server := newTestAuthServer(t, fake)
 	client := authv1connect.NewAuthServiceClient(http.DefaultClient, server.URL)
 
-	_, _, _, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
+	_, _, _, _, err := ensureAuth(context.Background(), client, "admin", "admin-pass", "deployer", "deployer-pass")
 	require.NoError(t, err)
 	assert.Equal(t, 2, fake.loginCallCount)
 	assert.Equal(t, 0, fake.createLocalUserCalls, "existing deployer account must not be re-provisioned")
@@ -310,7 +310,7 @@ func TestEnsureValuesRevision_CreatesSubmitsApproves(t *testing.T) {
 
 func TestEnsureValuesRevision_SkipsWhenAlreadyApproved(t *testing.T) {
 	fake := &fakeOrchestratorHandler{revisions: []*commonv1.ValuesRevision{
-		{Id: "revision-approved", Status: commonv1.ValuesStatus_VALUES_STATUS_APPROVED},
+		{Id: "revision-approved", Status: commonv1.ValuesStatus_VALUES_STATUS_APPROVED, Digest: seedValuesDigest([]byte(`{"environment":"dev-1","replicas":1,"service":"release-manager"}`))},
 	}}
 	server := newTestOrchestratorServer(t, fake)
 	client := orchestratorv1connect.NewOrchestratorServiceClient(http.DefaultClient, server.URL)
@@ -322,7 +322,7 @@ func TestEnsureValuesRevision_SkipsWhenAlreadyApproved(t *testing.T) {
 
 func TestEnsureValuesRevision_SubmitsExistingDraft(t *testing.T) {
 	fake := &fakeOrchestratorHandler{revisions: []*commonv1.ValuesRevision{
-		{Id: "revision-draft", Status: commonv1.ValuesStatus_VALUES_STATUS_DRAFT, StateVersion: 1},
+		{Id: "revision-draft", Status: commonv1.ValuesStatus_VALUES_STATUS_DRAFT, StateVersion: 1, Digest: seedValuesDigest([]byte(`{"environment":"dev-1","replicas":1,"service":"release-manager"}`))},
 	}}
 	server := newTestOrchestratorServer(t, fake)
 	client := orchestratorv1connect.NewOrchestratorServiceClient(http.DefaultClient, server.URL)
@@ -334,7 +334,7 @@ func TestEnsureValuesRevision_SubmitsExistingDraft(t *testing.T) {
 
 func TestEnsureValuesRevision_ApprovesExistingPending(t *testing.T) {
 	fake := &fakeOrchestratorHandler{revisions: []*commonv1.ValuesRevision{
-		{Id: "revision-pending", Status: commonv1.ValuesStatus_VALUES_STATUS_PENDING_APPROVAL, StateVersion: 2},
+		{Id: "revision-pending", Status: commonv1.ValuesStatus_VALUES_STATUS_PENDING_APPROVAL, StateVersion: 2, Digest: seedValuesDigest([]byte(`{"environment":"dev-1","replicas":1,"service":"release-manager"}`))},
 	}}
 	server := newTestOrchestratorServer(t, fake)
 	client := orchestratorv1connect.NewOrchestratorServiceClient(http.DefaultClient, server.URL)
@@ -342,6 +342,18 @@ func TestEnsureValuesRevision_ApprovesExistingPending(t *testing.T) {
 	err := ensureValuesRevision(context.Background(), client, "token-deployer", "token-admin", "definition-1", 0)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"List", "Approve"}, fake.calls)
+}
+
+func TestEnsureValuesRevision_DoesNotReuseDifferentDigest(t *testing.T) {
+	fake := &fakeOrchestratorHandler{revisions: []*commonv1.ValuesRevision{
+		{Id: "wrong-approved", Status: commonv1.ValuesStatus_VALUES_STATUS_APPROVED, Digest: "sha256:wrong"},
+	}}
+	server := newTestOrchestratorServer(t, fake)
+	client := orchestratorv1connect.NewOrchestratorServiceClient(http.DefaultClient, server.URL)
+
+	err := ensureValuesRevision(context.Background(), client, "token-deployer", "token-admin", "definition-1", 0)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"List", "Create", "Submit", "Approve"}, fake.calls)
 }
 
 func TestEnsureValuesRevision_CreateErrorPropagates(t *testing.T) {
@@ -366,7 +378,9 @@ func TestRetrySnapshotWarmup_RetriesOnceOnStale(t *testing.T) {
 	response, err := retrySnapshotWarmup(context.Background(), func() (*connect.Response[orchestratorv1.GetCustomerResponse], error) {
 		calls++
 		if calls == 1 {
-			return nil, connect.NewError(connect.CodeUnavailable, errors.New("authorization snapshot stale"))
+			stale := connect.NewError(connect.CodeUnavailable, errors.New("authorization snapshot is stale"))
+			stale.Meta().Set("X-Reason-Code", "authorization_snapshot_stale")
+			return nil, stale
 		}
 		return connect.NewResponse(&orchestratorv1.GetCustomerResponse{}), nil
 	})

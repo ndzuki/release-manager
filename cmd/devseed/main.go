@@ -3,7 +3,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -23,6 +26,11 @@ import (
 	webhookv1 "github.com/ndzuki/release-manager/api/gen/webhook/v1"
 	webhookv1connect "github.com/ndzuki/release-manager/api/gen/webhook/v1/webhookv1connect"
 )
+
+func seedValuesDigest(document []byte) string {
+	digest := sha256.Sum256(document)
+	return "sha256:" + hex.EncodeToString(digest[:])
+}
 
 const (
 	defaultOrchestratorURL = "http://localhost:8083"
@@ -100,7 +108,7 @@ func run(ctx context.Context, cfg seedConfig) error {
 	httpClient := http.DefaultClient
 	authClient := authv1connect.NewAuthServiceClient(httpClient, cfg.authURL)
 	bindingClient := authv1connect.NewBindingServiceClient(httpClient, cfg.authURL)
-	adminToken, deployerToken, adminOrgID, err := ensureAuth(ctx, authClient, cfg.adminUser, cfg.adminPassword, cfg.deployerUser, cfg.deployerPass)
+	adminToken, deployerToken, adminOrgID, deployerUserID, err := ensureAuth(ctx, authClient, cfg.adminUser, cfg.adminPassword, cfg.deployerUser, cfg.deployerPass)
 	if err != nil {
 		return err
 	}
@@ -165,7 +173,7 @@ func run(ctx context.Context, cfg seedConfig) error {
 
 	definitions := make([]string, 0, len(clusters))
 	for i, cluster := range clusters {
-		definitionID, err := ensureDefinition(ctx, orchestratorClient, deployerToken, cfg.deployerUser, adminOrgID, cluster.customerID, cluster.id, i)
+		definitionID, err := ensureDefinition(ctx, orchestratorClient, deployerToken, deployerUserID, adminOrgID, cluster.customerID, cluster.id, i)
 		if err != nil {
 			return err
 		}
@@ -196,10 +204,10 @@ func ensureAuth(
 	ctx context.Context,
 	client authv1connect.AuthServiceClient,
 	adminUser, adminPassword, deployerUser, deployerPassword string,
-) (adminToken, deployerToken, adminOrgID string, err error) {
+) (adminToken, deployerToken, adminOrgID, deployerUserID string, err error) {
 	initStatus, err := client.GetInitStatus(ctx, connect.NewRequest(&authv1.GetInitStatusRequest{}))
 	if err != nil {
-		return "", "", "", fmt.Errorf("get init status: %w", err)
+		return "", "", "", "", fmt.Errorf("get init status: %w", err)
 	}
 	if !initStatus.Msg.GetInitialized() {
 		if _, err := client.Initialize(ctx, connect.NewRequest(&authv1.InitializeRequest{
@@ -207,13 +215,13 @@ func ensureAuth(
 			Password:         adminPassword,
 			OrganizationName: developmentNamespace,
 		})); err != nil {
-			return "", "", "", fmt.Errorf("initialize system: %w", err)
+			return "", "", "", "", fmt.Errorf("initialize system: %w", err)
 		}
 		fmt.Printf("system initialized with admin user %s\n", adminUser)
 	}
 	adminLogin, err := client.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: adminUser, Password: adminPassword}))
 	if err != nil {
-		return "", "", "", fmt.Errorf("login admin user %s: %w", adminUser, err)
+		return "", "", "", "", fmt.Errorf("login admin user %s: %w", adminUser, err)
 	}
 	adminToken = adminLogin.Msg.GetAccessToken()
 	// The login response carries no organization (service login, not browser
@@ -223,16 +231,16 @@ func ensureAuth(
 	withAuth(userReq, adminToken)
 	userResp, err := client.GetLocalUser(ctx, userReq)
 	if err != nil {
-		return "", "", "", fmt.Errorf("resolve admin org: %w", err)
+		return "", "", "", "", fmt.Errorf("resolve admin org: %w", err)
 	}
 	adminOrgID = userResp.Msg.GetUser().GetOrgId()
 	if adminOrgID == "" {
-		return "", "", "", fmt.Errorf("login admin user %s: no active organization in session", adminUser)
+		return "", "", "", "", fmt.Errorf("login admin user %s: no active organization in session", adminUser)
 	}
 
 	deployerLogin, err := client.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: deployerUser, Password: deployerPassword}))
 	if err == nil {
-		return adminToken, deployerLogin.Msg.GetAccessToken(), adminOrgID, nil
+		return adminToken, deployerLogin.Msg.GetAccessToken(), adminOrgID, deployerLogin.Msg.GetUser().GetId(), nil
 	}
 	createReq := connect.NewRequest(&authv1.CreateLocalUserRequest{
 		Username: deployerUser,
@@ -241,14 +249,14 @@ func ensureAuth(
 	})
 	withAuth(createReq, adminToken)
 	if _, createErr := client.CreateLocalUser(ctx, createReq); createErr != nil {
-		return "", "", "", fmt.Errorf("login deployer user %s: %w; provision via CreateLocalUser: %v", deployerUser, err, createErr)
+		return "", "", "", "", fmt.Errorf("login deployer user %s: %w; provision via CreateLocalUser: %v", deployerUser, err, createErr)
 	}
 	fmt.Printf("deployer user %s created\n", deployerUser)
 	deployerLogin, err = client.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: deployerUser, Password: deployerPassword}))
 	if err != nil {
-		return "", "", "", fmt.Errorf("login deployer user %s after provisioning: %w", deployerUser, err)
+		return "", "", "", "", fmt.Errorf("login deployer user %s after provisioning: %w", deployerUser, err)
 	}
-	return adminToken, deployerLogin.Msg.GetAccessToken(), adminOrgID, nil
+	return adminToken, deployerLogin.Msg.GetAccessToken(), adminOrgID, deployerLogin.Msg.GetUser().GetId(), nil
 }
 
 // withAuth injects the bearer token into a Connect request.
@@ -442,11 +450,8 @@ func ensureDefinition(ctx context.Context, client orchestratorv1connect.Orchestr
 	return response.Msg.GetDefinition().GetId(), nil
 }
 
-// ensureValuesRevision creates a draft values revision per definition (when
-// none exists yet), then drives it to approved: Submit with the deployer
-// actor, Approve with the platform admin actor (self-approval forbidden per
-// REQ-068). Digest comparison uses the server-side digest returned by List
-// (ADR-013: seed only uses public service seams; no local canonicalization).
+// ensureValuesRevision creates or reuses the deterministic values revision for
+// one definition, then drives the matching draft through Submit and Approve.
 func ensureValuesRevision(ctx context.Context, client orchestratorv1connect.OrchestratorServiceClient, deployerToken, adminToken, definitionID string, index int) error {
 	valuesDocument := map[string]any{
 		"environment": fmt.Sprintf("dev-%d", index+1),
@@ -457,6 +462,7 @@ func ensureValuesRevision(ctx context.Context, client orchestratorv1connect.Orch
 	if err != nil {
 		return fmt.Errorf("marshal seed values %s: %w", definitionID, err)
 	}
+	expectedDigest := seedValuesDigest(valuesJSON)
 
 	listReq := connect.NewRequest(&orchestratorv1.ListValuesRevisionsRequest{ReleaseDefinitionId: definitionID})
 	withAuth(listReq, deployerToken)
@@ -464,17 +470,19 @@ func ensureValuesRevision(ctx context.Context, client orchestratorv1connect.Orch
 	if err != nil {
 		return fmt.Errorf("list values revisions for %s: %w", definitionID, err)
 	}
-	for _, revision := range listResponse.Msg.GetRevisions() {
-		if revision.GetStatus() == commonv1.ValuesStatus_VALUES_STATUS_APPROVED {
-			fmt.Printf("values revision %s already approved\n", revision.GetId())
-			return nil
-		}
-	}
 	var pending *commonv1.ValuesRevision
 	for _, revision := range listResponse.Msg.GetRevisions() {
-		if revision.GetStatus() == commonv1.ValuesStatus_VALUES_STATUS_DRAFT ||
-			revision.GetStatus() == commonv1.ValuesStatus_VALUES_STATUS_PENDING_APPROVAL {
+		if revision.GetDigest() != expectedDigest {
+			continue
+		}
+		switch revision.GetStatus() {
+		case commonv1.ValuesStatus_VALUES_STATUS_APPROVED:
+			fmt.Printf("values revision %s already approved\n", revision.GetId())
+			return nil
+		case commonv1.ValuesStatus_VALUES_STATUS_DRAFT, commonv1.ValuesStatus_VALUES_STATUS_PENDING_APPROVAL:
 			pending = revision
+		}
+		if pending != nil {
 			break
 		}
 	}
@@ -517,8 +525,7 @@ func ensureValuesRevision(ctx context.Context, client orchestratorv1connect.Orch
 	if err != nil {
 		return fmt.Errorf("approve values revision %s: %w", pending.GetId(), err)
 	}
-	pending = approved.Msg.GetRevision()
-	fmt.Printf("values revision %s approved\n", pending.GetId())
+	fmt.Printf("values revision %s approved\n", approved.Msg.GetRevision().GetId())
 	return nil
 }
 
@@ -532,8 +539,7 @@ func retrySnapshotWarmup[T any](ctx context.Context, call func() (*connect.Respo
 	if err == nil {
 		return response, nil
 	}
-	if connect.CodeOf(err) != connect.CodeUnavailable ||
-		!strings.Contains(err.Error(), "authorization snapshot stale") {
+	if connect.CodeOf(err) != connect.CodeUnavailable || !isAuthorizationSnapshotStale(err) {
 		return nil, err
 	}
 	select {
@@ -542,6 +548,15 @@ func retrySnapshotWarmup[T any](ctx context.Context, call func() (*connect.Respo
 		return nil, ctx.Err()
 	}
 	return call()
+}
+
+func isAuthorizationSnapshotStale(err error) bool {
+	var connectErr *connect.Error
+	if errors.As(err, &connectErr) && strings.EqualFold(connectErr.Meta().Get("X-Reason-Code"), "authorization_snapshot_stale") {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "authorization snapshot stale") || strings.Contains(message, "authorization snapshot is stale")
 }
 
 func ensureReleaseBundle(ctx context.Context, client webhookv1connect.WebhookServiceClient) error {
