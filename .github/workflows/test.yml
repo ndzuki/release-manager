@@ -234,6 +234,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
+          cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Install kind v0.32.0
         env:
