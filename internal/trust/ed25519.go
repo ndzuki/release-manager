@@ -83,7 +83,23 @@ func (v *Ed25519Verifier) cachedRecord(ctx context.Context, in Input, policyVers
 		v.logger.Debug("cached verification invalidated by revocation epoch", "digest", in.Digest, "stored_epoch", record.RevocationEpoch, "current_epoch", currentEpoch)
 		return nil
 	}
-	return record
+	// AC-043-02: natural grace expiry does not bump the policy version or the
+	// revocation epoch, so a previously trusted record for the same digest and
+	// signature must not be reused once the signing root is no longer live.
+	// Fail-closed: a resolver failure or an absent/expired root invalidates the
+	// cache and forces a fresh verification.
+	live, err := v.resolver.ResolveActive(ctx, in.Environment, time.Now())
+	if err != nil {
+		v.logger.Warn("live root re-check failed; invalidating cached verification", "digest", in.Digest, "error", err)
+		return nil
+	}
+	for _, r := range live {
+		if r.ID == record.RootID {
+			return record
+		}
+	}
+	v.logger.Debug("cached verification invalidated: signing root no longer live", "digest", in.Digest, "root_id", record.RootID)
+	return nil
 }
 
 func (v *Ed25519Verifier) verifyFresh(ctx context.Context, in Input, epoch int64) *Output {

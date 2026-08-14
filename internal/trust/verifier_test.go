@@ -2,9 +2,11 @@ package trust
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,6 +38,33 @@ func signRef(issuer string) *commonv1.SignatureRef {
 		Issuer:    issuer,
 		Subject:   "release-manager/v1.0.0",
 	}
+}
+
+type timeAwareTrustResolver struct {
+	roots []*store.TrustRoot
+	meta  *store.TrustPolicyMeta
+}
+
+func (r *timeAwareTrustResolver) ResolveActive(_ context.Context, _ string, at time.Time) ([]*store.TrustRoot, error) {
+	active := make([]*store.TrustRoot, 0, len(r.roots))
+	for _, root := range r.roots {
+		if root == nil || at.Before(root.ValidFrom) {
+			continue
+		}
+		switch root.State {
+		case store.TrustRootActive:
+			active = append(active, root)
+		case store.TrustRootGrace:
+			if root.GraceUntil != nil && at.Before(*root.GraceUntil) {
+				active = append(active, root)
+			}
+		}
+	}
+	return active, nil
+}
+
+func (r *timeAwareTrustResolver) GetPolicyMeta(context.Context, string) (*store.TrustPolicyMeta, error) {
+	return r.meta, nil
 }
 
 func logger() *slog.Logger {
@@ -281,4 +310,81 @@ func TestStatusToProto(t *testing.T) {
 			assert.Equal(t, tt.expected, gotOrch)
 		})
 	}
+}
+func TestVerifyWithRoots_GraceAcceptsBothRoots(t *testing.T) {
+	now := time.Now().UTC()
+	graceUntil := now.Add(time.Hour)
+	resolver := &timeAwareTrustResolver{
+		roots: []*store.TrustRoot{
+			{ID: "old", KeyID: "old-key", Issuer: "old-ci", SubjectPattern: "release-manager/", State: store.TrustRootGrace, ValidFrom: now.Add(-time.Minute), GraceUntil: &graceUntil},
+			{ID: "new", KeyID: "new-key", Issuer: "new-ci", SubjectPattern: "release-manager/", State: store.TrustRootActive, ValidFrom: now.Add(-time.Minute)},
+		},
+		meta: &store.TrustPolicyMeta{Environment: "staging", Version: 2, RevocationEpoch: 1},
+	}
+	v := NewStubVerifier(newStubStore(), resolver, logger())
+
+	for _, issuer := range []string{"old-ci", "new-ci"} {
+		out, err := v.Verify(t.Context(), Input{
+			Digest: "sha256:abc123",
+			SignatureRef: &commonv1.SignatureRef{
+				Digest: "sha256:abc123", Signature: "signature", Issuer: issuer, Subject: "release-manager/v1.0.0",
+			},
+			Policy: trustedPolicy(), Environment: "staging",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, store.VerificationTrusted, out.Status)
+	}
+}
+
+func TestVerifyWithRoots_GraceEndedRejectsOldRoot(t *testing.T) {
+	resolver := &ed25519Resolver{
+		roots: []*store.TrustRoot{{
+			ID: "new", KeyID: "new-key", Issuer: "new-ci", SubjectPattern: "release-manager/", State: store.TrustRootActive,
+		}},
+		meta: &store.TrustPolicyMeta{Environment: "staging", Version: 3, RevocationEpoch: 1},
+	}
+	v := NewStubVerifier(newStubStore(), resolver, logger())
+
+	out, err := v.Verify(t.Context(), Input{
+		Digest: "sha256:abc123",
+		SignatureRef: &commonv1.SignatureRef{
+			Digest: "sha256:abc123", Signature: "signature", Issuer: "old-ci", Subject: "release-manager/v1.0.0",
+		},
+		Policy: trustedPolicy(), Environment: "staging",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, store.VerificationRejected, out.Status)
+	assert.Contains(t, out.Summary, "untrusted_issuer")
+}
+
+func TestVerifyWithRoots_RequiresMatchingSubject(t *testing.T) {
+	resolver := &ed25519Resolver{
+		roots: []*store.TrustRoot{{
+			ID: "root", KeyID: "root-key", Issuer: "release-manager-ci", SubjectPattern: "release-manager/", State: store.TrustRootActive,
+		}},
+		meta: &store.TrustPolicyMeta{Environment: "staging", Version: 4},
+	}
+	v := NewStubVerifier(newStubStore(), resolver, logger())
+
+	out, err := v.Verify(t.Context(), Input{
+		Digest: "sha256:abc123",
+		SignatureRef: &commonv1.SignatureRef{
+			Digest: "sha256:abc123", Signature: "signature", Issuer: "release-manager-ci", Subject: "other/repository",
+		},
+		Policy: trustedPolicy(), Environment: "staging",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, store.VerificationRejected, out.Status)
+}
+
+func TestVerifyWithRoots_ResolverFailureFailsClosed(t *testing.T) {
+	resolver := &ed25519Resolver{err: errors.New("resolver unavailable")}
+	v := NewStubVerifier(newStubStore(), resolver, logger())
+
+	out, err := v.Verify(t.Context(), Input{
+		Digest: "sha256:abc123", SignatureRef: signRef("release-manager-ci"),
+		Policy: trustedPolicy(), Environment: "staging",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, store.VerificationVerificationUnavailable, out.Status)
 }
