@@ -35,6 +35,13 @@ func TestErrorCodeFromStatus(t *testing.T) {
 // seedPreflightFixture creates a definition with an active operator so stage
 // commands can be dispatched and driven to results.
 func seedPreflightFixture(t *testing.T, st *sqlitestore.Store) *store.Operation {
+	return seedPreflightFixtureWithOperator(t, st, true)
+}
+
+// seedPreflightFixtureWithOperator controls operator seeding: with an operator
+// stages dispatch and poll; without one the required stage fails closed
+// (AC-019-02 stage_unavailable).
+func seedPreflightFixtureWithOperator(t *testing.T, st *sqlitestore.Store, withOperator bool) *store.Operation {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -47,11 +54,13 @@ func seedPreflightFixture(t *testing.T, st *sqlitestore.Store) *store.Operation 
 		Namespace: "default", ReleaseName: "preflight-rel", Status: store.DefStatusActive, OptimisticVersion: 1,
 	}
 	require.NoError(t, st.Definitions().Create(ctx, def, nil))
-	op := &store.Operator{
-		ID: "operator-preflight", Name: "preflight-operator", CustomerID: cust.ID, ClusterID: cluster.ID,
-		CertSerial: "serial-preflight", Status: store.OperatorActive,
+	if withOperator {
+		op := &store.Operator{
+			ID: "operator-preflight", Name: "preflight-operator", CustomerID: cust.ID, ClusterID: cluster.ID,
+			CertSerial: "serial-preflight", Status: store.OperatorActive,
+		}
+		require.NoError(t, st.Operators().Create(ctx, op))
 	}
-	require.NoError(t, st.Operators().Create(ctx, op))
 	operation := &store.Operation{
 		ID: uuid.NewString(), OperationType: store.OperationInstall, Status: store.StatusPreflight,
 		ReleaseDefinitionID: def.ID, IdempotencyKey: uuid.NewString(), RequestHash: "hash",
@@ -122,6 +131,33 @@ func TestCoordinatorRun_ConsumesPreCreatedArtifactDispatch(t *testing.T) {
 	got, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusQueued, got.Status)
+}
+
+// AC-019-02: a required stage with no available operator fail-closes the
+// operation with stage_unavailable (production semantics).
+func TestCoordinatorRun_StageUnavailableFailsClosed(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	op := seedPreflightFixtureWithOperator(t, st, false)
+	c := newTestCoordinator(t, st)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() { c.Run(ctx, op); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("coordinator did not finish")
+	}
+
+	got, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusFailed, got.Status, "AC-019-02: fail closed with no operator")
+
+	// The lifecycle records the failure and the attempted stage.
+	pl, err := st.PreflightLifecycles().GetByOperationID(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "failed", pl.Overall)
+	assert.Equal(t, "artifact", pl.Stages)
 }
 
 // AC-019-04/06: all required stages pass → operation CAS to queued and the
