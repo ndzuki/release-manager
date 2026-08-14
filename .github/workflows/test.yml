@@ -250,3 +250,6 @@ jobs:
             sudo install -m 0755 /tmp/kind /usr/local/bin/kind
           fi
           kind version
+
+      - name: Run rollout watch integration gate
+        run: make test-rollout-watch
