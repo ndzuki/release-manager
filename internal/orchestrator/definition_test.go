@@ -41,6 +41,8 @@ func TestCreateReleaseDefinition_Success(t *testing.T) {
 			ReleaseName: "my-release",
 			ChartName:   "nginx",
 			Enabled:     true,
+			// REQ-040: the creating actor's organization owns the definition.
+			Actor: &commonv1.ActorContext{UserId: "user-1", Organization: "org-1"},
 		},
 	))
 	require.NoError(t, err)
@@ -54,6 +56,9 @@ func TestCreateReleaseDefinition_Success(t *testing.T) {
 	// AC-040-01: Verify no Helm release interaction — only store-level operations.
 	got, err := st.Definitions().Get(context.Background(), def.Id)
 	require.NoError(t, err)
+	if assert.NotNil(t, got.OwnerOrganizationID, "creating actor's organization must own the definition (REQ-040)") {
+		assert.Equal(t, "org-1", *got.OwnerOrganizationID)
+	}
 	assert.Equal(t, store.DefStatusActive, got.Status)
 	assert.NotEmpty(t, got.ID)
 

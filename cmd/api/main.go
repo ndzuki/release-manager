@@ -17,7 +17,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/config"
 	contractsinterceptor "github.com/ndzuki/release-manager/internal/contracts/interceptor"
-	"github.com/ndzuki/release-manager/internal/handler"
+
 	"github.com/ndzuki/release-manager/internal/jwtauth"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
@@ -41,9 +41,6 @@ func (s *apiSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		return err
 	}
 	logger.Info("store opened", "db", s.dbPath)
-
-	valsHandler := handler.NewValuesHandler(st, 0, logger)
-	valsHandler.Register(mux)
 
 	jwtMgr := jwtauth.New([]byte(s.signingKey), 15*time.Minute)
 	s.store = st

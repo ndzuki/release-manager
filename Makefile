@@ -200,7 +200,7 @@ dev-up: kind-up docker-push kustomize-apply dev-wait dev-seed ## Create, build, 
 
 .PHONY: dev-seed
 dev-seed: ## Seed deterministic development customers, clusters, routes, definitions, values, and bundle
-	@$(GO) run ./cmd/devseed/ --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --values http://127.0.0.1:8087
+	@$(GO) run ./cmd/devseed/ --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085
 
 .PHONY: dev-reset-data
 dev-reset-data: ## Recreate only the project development environment with explicit confirmation
