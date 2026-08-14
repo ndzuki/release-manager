@@ -1,4 +1,8 @@
 FROM golang:1.26.4 AS builder
+# GOPROXY build-arg: dev.sh injects the host's go env GOPROXY; the default
+# proxy.golang.org is unreachable from CN hosts.
+ARG GOPROXY
+ENV GOPROXY=$GOPROXY
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

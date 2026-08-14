@@ -316,6 +316,11 @@ build_and_push() {
       --build-arg "NO_PROXY=localhost,127.0.0.1${NO_PROXY:+,$NO_PROXY}"
     )
   fi
+  # GOPROXY build-arg: the container's default proxy.golang.org is
+  # unreachable from CN hosts (real-smoke failure); forward the host's go
+  # module proxy so go mod download resolves (go env GOPROXY on CI hosts is
+  # the default proxy.golang.org, so the fallback only guards missing go).
+  build_args+=(--build-arg "GOPROXY=${GOPROXY:-$(go env GOPROXY 2>/dev/null || printf 'https://proxy.golang.org,direct')}")
   if ! docker build "${build_args[@]}" --file "$dockerfile" --tag "localhost:${REGISTRY_PORT}/release-$service:$tag" .; then
     fail "$ERR_DOCKER_BUILD_FAILED" "build failed for release-$service"
   fi

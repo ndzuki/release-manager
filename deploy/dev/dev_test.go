@@ -284,7 +284,9 @@ func happyShims(t *testing.T, binDir string) {
 	writeShim(t, binDir, "curl", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "kubectl", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
-	writeShim(t, binDir, "go", "#!/usr/bin/env bash\nexit 0\n")
+	// go: answer the GOPROXY probe dev.sh forwards as a build-arg; the
+	// seed path (go run ./cmd/devseed) just needs exit 0.
+	writeShim(t, binDir, "go", "#!/usr/bin/env bash\nif [ \"$1\" = \"env\" ]; then printf 'https://proxy.golang.org,direct\\n'; fi\nexit 0\n")
 	// awk: consume stdin fully (real awk reads all input before exiting —
 	// an early exit SIGPIPEs the pipe writer), then answer the memory probe
 	// in MiB (24 GiB) or the df pipeline in KiB (500 GiB).
@@ -424,8 +426,9 @@ func TestClusterCreateInjectsProxyEnv(t *testing.T) {
 			continue
 		}
 		if !strings.Contains(line, "--build-arg HTTP_PROXY=http://127.0.0.1:7890") ||
-			!strings.Contains(line, "--build-arg HTTPS_PROXY=http://127.0.0.1:7890") {
-			t.Fatalf("docker build missing proxy build-args: %s", line)
+			!strings.Contains(line, "--build-arg HTTPS_PROXY=http://127.0.0.1:7890") ||
+			!strings.Contains(line, "--build-arg GOPROXY=https://proxy.golang.org,direct") {
+			t.Fatalf("docker build missing proxy/GOPROXY build-args: %s", line)
 		}
 		buildInjected = true
 	}
@@ -516,7 +519,7 @@ func TestCleanCheckoutCreatesDataDirBeforeDiskGate(t *testing.T) {
 	writeShim(t, binDir, "curl", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "kubectl", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
-	writeShim(t, binDir, "go", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "go", "#!/usr/bin/env bash\nif [ \"$1\" = \"env\" ]; then printf 'https://proxy.golang.org,direct\\n'; fi\nexit 0\n")
 	writeShim(t, binDir, "nproc", "#!/usr/bin/env bash\nprintf '8\\n'\n")
 	// awk: answer the memory probe with a pass, but forward the disk probe
 	// output — a missing data dir yields no output and must fail the gate.
