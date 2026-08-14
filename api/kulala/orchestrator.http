@@ -26,7 +26,7 @@ Content-Type: application/grpc
 #   1. First create a ReleaseDefinition (POST /api/v1/release-definitions on API)
 #   2. Then CreateOperation here →
 #   3. Verify with Get Operation on API
-#   Makefile target: make dev (starts both api + orchestrator)
+#   Makefile target: make dev-stage-publish (starts orchestrator)
 # =============================================================================
 
 ### Orchestrator — Create INSTALL Operation

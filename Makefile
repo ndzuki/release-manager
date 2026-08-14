@@ -93,48 +93,6 @@ run-notifier: build-notifier ## Start release-notifier
 run-api: build-api ## Start release-api
 	./$(BIN_DIR)/release-api --config configs/api.dev.yaml --db data/api.db --signing-key change-me-in-production
 
-.PHONY: dev
-dev: proto build-all ## Start all 6 microservices in background
-	@mkdir -p data
-	@echo "$(YELLOW)Starting all services in background...$(NC)"
-	@./$(BIN_DIR)/release-webhook --config configs/webhook.dev.yaml > data/webhook.log 2>&1 & echo $$! > data/webhook.pid
-	@./$(BIN_DIR)/release-orchestrator --config configs/orchestrator.dev.yaml --db data/release-manager.db > data/orchestrator.log 2>&1 & echo $$! > data/orchestrator.pid
-	@./$(BIN_DIR)/release-operator --config configs/operator.dev.yaml --db data/release-manager.db > data/operator.log 2>&1 & echo $$! > data/operator.pid
-	@./$(BIN_DIR)/release-auth --config configs/auth.dev.yaml --db data/release-manager.db > data/auth.log 2>&1 & echo $$! > data/auth.pid
-	@./$(BIN_DIR)/release-notifier --config configs/notifier.dev.yaml > data/notifier.log 2>&1 & echo $$! > data/notifier.pid
-	@./$(BIN_DIR)/release-api --config configs/api.dev.yaml > data/api.log 2>&1 & echo $$! > data/api.pid
-	@sleep 1
-	@echo ""
-	@echo "$(GREEN)All 6 services started.$(NC)  Connect: gRPC + gRPC-Web + JSON on one port"
-	@echo "$(BLUE)  webhook:       :8082$(NC)"
-	@echo "$(BLUE)  orchestrator:  :8083$(NC)"
-	@echo "$(BLUE)  operator:      :8084$(NC)"
-	@echo "$(BLUE)  auth:           :8085$(NC)"
-	@echo "$(BLUE)  notifier:      :8086$(NC)"
-	@echo "$(BLUE)  api:            :8087$(NC)"
-	@echo ""
-	@echo "$(YELLOW)Kulala shortcuts:$(NC)"
-	@echo "  make api-orchestrator  -> CreateOperation / PublishRelease"
-	@echo "  make api-manager       -> REST APIs (Customers / Clusters / Releases)"
-	@echo "  make api-operator      -> Operator gRPC"
-	@echo "  make api-auth          -> Auth / Login"
-	@echo "  make api-webhook       -> Webhook simulation"
-	@echo "  make api-audit         -> Audit / Notifications"
-	@echo ""
-	@echo "$(YELLOW)Stop all:$(NC)  make stop-all"
-	@echo "$(YELLOW)View logs:$(NC) tail -f data/*.log"
-
-.PHONY: stop-all
-stop-all: ## Stop all background microservices
-	@echo "$(YELLOW)Stopping all services...$(NC)"
-	@for pidf in data/*.pid; do \
-		[ -f "$$pidf" ] && kill $$(cat "$$pidf") 2>/dev/null && rm "$$pidf" || true; \
-	done
-	@for port in 8082 8083 8084 8085 8086 8087; do \
-		fuser -k $$port/tcp 2>/dev/null || true; \
-	done
-	@echo "$(GREEN)All services stopped$(NC)"
-
 # ---------------------------------------------------------------------------
 # Development environment (single lifecycle module: deploy/dev/dev.sh)
 # ---------------------------------------------------------------------------
