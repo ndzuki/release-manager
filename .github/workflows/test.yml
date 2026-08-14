@@ -234,6 +234,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
+          cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Install kind v0.32.0
         env:
@@ -250,3 +251,12 @@ jobs:
             sudo install -m 0755 /tmp/kind /usr/local/bin/kind
           fi
           kind version
+
+      - name: Run rollout watch integration gate
+        # Docker >= 29 saves multi-platform manifests sparsely, which breaks
+        # `kind load docker-image` (ctr import: content digest not found).
+        # On the self-hosted runner use the single-platform amd64 manifest
+        # digest instead of the multi-platform manifest list digest.
+        env:
+          WORKLOAD_IMAGE: ${{ vars.RUNS_ON == 'self-hosted' && 'busybox:1.36@sha256:b7f3d86d6e84fc17718c48bcde1450807faa2d56704205c697b4bd5df7b9e29f' || 'busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662' }}
+        run: make test-rollout-watch
