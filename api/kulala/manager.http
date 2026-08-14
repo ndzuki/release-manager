@@ -274,8 +274,40 @@ Authorization: Bearer {{token}}
   "reason": "missing resource limits"
 }
 
-# DiscardValuesRevision / CreatePrepareSession / GetPrepareSession 示例待
-# TASK-018 v6（收敛路径 + prepare_token CAS）合入后补充。
+### Discard ValuesRevision（收敛冲突处置，REQ-018 D20）
+# @name DiscardValuesRevision
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/DiscardValuesRevision
+Content-Type: application/grpc
+Idempotency-Key: discard-values-{{REVISION_ID}}
+Authorization: Bearer {{token}}
+
+{
+  "revision_id": "{{REVISION_ID}}",
+  "expected_state_version": 2,
+  "comment": "superseded by convergence re-plan"
+}
+
+### CreatePrepareSession（收敛路径：锁定任务路径换取 prepare_token，REQ-018 D18）
+# @name CreatePrepareSession
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/CreatePrepareSession
+Content-Type: application/grpc
+Authorization: Bearer {{token}}
+
+{
+  "release_definition_id": "{{DEFINITION_ID}}",
+  "task_ids": ["{{TASK_ID}}"],
+  "expected_parent_version": 1
+}
+
+### GetPrepareSession（prepare_token CAS 校验 + 回读锁定范围）
+# @name GetPrepareSession
+GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/GetPrepareSession
+Content-Type: application/grpc
+Authorization: Bearer {{token}}
+
+{
+  "prepare_token": "{{PREPARE_TOKEN}}"
+}
 
 # =============================================================================
 # Release Operations (Layer 3)
