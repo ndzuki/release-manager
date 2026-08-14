@@ -135,7 +135,7 @@ type fakeOrchestratorHandler struct {
 	calls          []string
 	authHeaders    []string
 	lastIdemKey    string
-	createDocument []byte
+	createDocument string
 	submitState    int64
 	approveState   int64
 	createErr      error
@@ -145,7 +145,7 @@ type fakeOrchestratorHandler struct {
 
 func (h *fakeOrchestratorHandler) ListValuesRevisions(context.Context, *connect.Request[orchestratorv1.ListValuesRevisionsRequest]) (*connect.Response[orchestratorv1.ListValuesRevisionsResponse], error) {
 	h.calls = append(h.calls, "List")
-	return connect.NewResponse(&orchestratorv1.ListValuesRevisionsResponse{Revisions: h.revisions}), nil
+	return connect.NewResponse(&orchestratorv1.ListValuesRevisionsResponse{Items: h.revisions}), nil
 }
 
 func (h *fakeOrchestratorHandler) CreateValuesRevision(_ context.Context, req *connect.Request[orchestratorv1.CreateValuesRevisionRequest]) (*connect.Response[orchestratorv1.CreateValuesRevisionResponse], error) {

@@ -471,7 +471,7 @@ func ensureValuesRevision(ctx context.Context, client orchestratorv1connect.Orch
 		return fmt.Errorf("list values revisions for %s: %w", definitionID, err)
 	}
 	var pending *commonv1.ValuesRevision
-	for _, revision := range listResponse.Msg.GetRevisions() {
+	for _, revision := range listResponse.Msg.GetItems() {
 		if revision.GetDigest() != expectedDigest {
 			continue
 		}
@@ -489,7 +489,7 @@ func ensureValuesRevision(ctx context.Context, client orchestratorv1connect.Orch
 	if pending == nil {
 		createReq := connect.NewRequest(&orchestratorv1.CreateValuesRevisionRequest{
 			ReleaseDefinitionId: definitionID,
-			Document:            valuesJSON,
+			Document:            string(valuesJSON),
 		})
 		createReq.Header().Set("Idempotency-Key", "devseed-create-values-"+definitionID)
 		withAuth(createReq, deployerToken)
