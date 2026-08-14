@@ -332,20 +332,62 @@ cmd_seed() {
 cmd_status() {
   acquire_lock status shared
   local status_file="$DEV_DATA_DIR/dev-status.json"
+  local fixture_file="$DEV_DATA_DIR/dev-fixture.json"
+  # REQ-065 status schema keys for the five clusters.
+  local -A cluster_keys=(
+    [release-manager-control]=control
+    [dev-customer-a-direct]=ca_direct
+    [dev-customer-a-cache]=ca_cache
+    [dev-customer-b-replicated]=cb_replicated
+    [dev-customer-b-mixed]=cb_mixed
+  )
   printf '{"environment_id":"%s","profile":"%s","clusters":{' \
     "$(environment_id)" "${DEV_PROFILE:-local}" > "$status_file"
-  local first=1 cluster
+  local first=1 cluster key status
   for cluster in "${ALL_CLUSTERS[@]}"; do
     [ "$first" -eq 1 ] || printf ',' >> "$status_file"
-    if cluster_exists "$cluster"; then
-      printf '"%s":{"name":"%s","status":"ready"}' "$cluster" "$cluster" >> "$status_file"
-    else
-      printf '"%s":{"name":"%s","status":"absent"}' "$cluster" "$cluster" >> "$status_file"
-    fi
+    key="${cluster_keys[$cluster]:-$cluster}"
+    if cluster_exists "$cluster"; then status="ready"; else status="absent"; fi
+    printf '"%s":{"name":"%s","status":"%s"}' "$key" "$cluster" "$status" >> "$status_file"
     first=0
   done
-  printf '},"registry":"localhost:%s"}\n' "$REGISTRY_PORT" >> "$status_file"
+  printf '},"registry":"localhost:%s","endpoints":{' "$REGISTRY_PORT" >> "$status_file"
+  local -a endpoint_names=(webhook orchestrator operator auth notifier web)
+  local -a endpoint_ports=(8082 8083 8084 8085 8086 8087)
+  first=1
+  for i in "${!endpoint_names[@]}"; do
+    [ "$first" -eq 1 ] || printf ',' >> "$status_file"
+    printf '"%s":"http://localhost:%s"' "${endpoint_names[$i]}" "${endpoint_ports[$i]}" >> "$status_file"
+    first=0
+  done
+  printf '},' >> "$status_file"
+  # Fixture-derived counters come from data/dev-fixture.json when present;
+  # a missing fixture (never seeded) reports zeros.
+  local sessions installs customers clusters routes definitions values bundles
+  sessions="$(fixture_counter "$fixture_file" operator_sessions)"
+  installs="$(fixture_counter "$fixture_file" bootstrap_installs)"
+  customers="$(fixture_counter "$fixture_file" customers)"
+  clusters="$(fixture_counter "$fixture_file" clusters)"
+  routes="$(fixture_counter "$fixture_file" routes)"
+  definitions="$(fixture_counter "$fixture_file" definitions)"
+  values="$(fixture_counter "$fixture_file" values_revisions)"
+  bundles="$(fixture_counter "$fixture_file" bundles)"
+  printf '"operator_sessions":%s,"fixture_version":"%s","fixture_entities":{' \
+    "$sessions" "$FIXTURE_VERSION" >> "$status_file"
+  printf '"customers":%s,"clusters":%s,"routes":%s,"definitions":%s,"values_revisions":%s,"bundles":%s},' \
+    "$customers" "$clusters" "$routes" "$definitions" "$values" "$bundles" >> "$status_file"
+  printf '"bootstrap_installs":%s}\n' "$installs" >> "$status_file"
   cat "$status_file"
+}
+
+fixture_counter() {
+  local file="$1"
+  local key="$2"
+  local value=""
+  if [ -f "$file" ]; then
+    value="$(sed -nE "s/.*\"$key\"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p" "$file" | sed -n '1p')"
+  fi
+  printf '%s' "${value:-0}"
 }
 
 cmd_reset_data() {
@@ -353,16 +395,86 @@ cmd_reset_data() {
   require_pg_tools
   acquire_lock reset-data
   trap cleanup_trap EXIT INT TERM
-  # In-cluster PostgreSQL dump via kubectl exec, then database rebuild is
-  # handled by the devfixture reset path (Step 7). Placeholder wiring keeps
-  # the operation fail-safe: without a reachable cluster the dump step fails
-  # before any destructive action.
-  local pods
-  pods="$(kubectl -n release-manager-dev get pods -l app.kubernetes.io/name=postgres -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-  if [ -z "$pods" ]; then
-    fail "$ERR_SERVICE_UNHEALTHY" "postgres pod not found; dev-reset-data requires a running environment"
+  log "=== dev-reset-data ==="
+  # The reset path rebuilds the two PostgreSQL databases from schema zero
+  # (migrate down -all -> up, executed by devseed --reset through the
+  # golang-migrate SDK) and re-seeds the canonical fixture. pg_dump is the
+  # safety net: on seed failure both databases are restored and the
+  # environment is marked partial (REQ-065 snapshot recovery).
+  if ! kubectl -n release-manager-dev get deployment postgres >/dev/null 2>&1; then
+    fail "$ERR_SERVICE_UNHEALTHY" "postgres deployment not found; dev-reset-data requires a running environment"
   fi
-  log "postgres pod: $pods"
+  # 1. maintenance: stop writes on the maintenance-capable services
+  #    (ADR-015 procedure-level maintenance gate; MAINTENANCE env overrides
+  #    the config file per internal/config env mapping).
+  kubectl -n release-manager-dev set env deployment/orchestrator deployment/auth deployment/notifier MAINTENANCE=true >/dev/null \
+    || fail "$ERR_SERVICE_UNHEALTHY" "cannot enable maintenance mode"
+  kubectl -n release-manager-dev rollout status deployment/orchestrator deployment/auth deployment/notifier --timeout=180s >/dev/null \
+    || fail "$ERR_SERVICE_UNHEALTHY" "maintenance rollout did not converge"
+  log "  maintenance enabled (writes stopped)"
+
+  # 2. dump both databases through a port-forward to the host pg_dump.
+  local pf_pid=""
+  kubectl -n release-manager-dev port-forward svc/postgres 5432:5432 >/dev/null 2>&1 &
+  pf_pid=$!
+  # The trap releases the environment lock; the port-forward dies with the
+  # process group on exit, but kill it explicitly to avoid a stray listener.
+  trap 'kill "$pf_pid" 2>/dev/null || true; cleanup_trap' EXIT INT TERM
+  local ts dump_files=() db dump_file
+  ts="$(date +%Y%m%dT%H%M%S%z)"
+  mkdir -p "$DEV_DATA_DIR/backups"
+  for db in release_manager release_notifier; do
+    dump_file="$DEV_DATA_DIR/backups/dump-$ts-$db.sql"
+    if ! PGPASSWORD=dev-release-manager pg_dump -Fc -h 127.0.0.1 -p 5432 -U release_manager -d "$db" -f "$dump_file" >/dev/null 2>&1; then
+      fail "$ERR_DOCKER_UNAVAILABLE" "pg_dump failed for $db (backup $dump_file); environment untouched"
+    fi
+    dump_files+=("$dump_file")
+    log "  dumped $db -> $dump_file"
+  done
+
+  # 3. rebuild the 4 customer clusters (control cluster and registry stay).
+  local cluster
+  for cluster in "${CUSTOMER_CLUSTERS[@]}"; do
+    if cluster_exists "$cluster"; then
+      k3d cluster delete "$cluster" >/dev/null 2>&1 || true
+      ownership_remove k3d_clusters "$cluster"
+    fi
+    cluster_up "$cluster"
+  done
+
+  # 4. schema rebuild + canonical re-seed via devseed --reset (golang-migrate
+  #    SDK down -all -> up, then the nine phases; see internal/devfixture).
+  if ! go run ./cmd/devseed/ --reset \
+    --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085 \
+    --database-dsn "postgres://release_manager:dev-release-manager@127.0.0.1:5432/release_manager?sslmode=disable"; then
+    # 5a. failure: restore both databases, drop the half-built customer
+    #     clusters, mark the environment partial; a later reset converges.
+    log "  seed failed; restoring databases"
+    for db in release_manager release_notifier; do
+      dump_file="$DEV_DATA_DIR/backups/dump-$ts-$db.sql"
+      if ! PGPASSWORD=dev-release-manager pg_restore -Fc -h 127.0.0.1 -p 5432 -U release_manager -d "$db" "$dump_file" >/dev/null 2>&1; then
+        printf 'restore failed for %s (backup %s); manual recovery required\n' "$db" "$dump_file" >&2
+      fi
+    done
+    for cluster in "${CUSTOMER_CLUSTERS[@]}"; do
+      if cluster_exists "$cluster"; then
+        k3d cluster delete "$cluster" >/dev/null 2>&1 || true
+        ownership_remove k3d_clusters "$cluster"
+      fi
+    done
+    kubectl -n release-manager-dev set env deployment/orchestrator deployment/auth deployment/notifier MAINTENANCE- >/dev/null 2>&1 || true
+    fail "$ERR_FIXTURE_CONFLICT" "reset failed; databases restored and environment marked partial (rerun dev-reset-data to converge)"
+  fi
+
+  # 5b. success: drop the safety-net dumps and restore writes.
+  for dump_file in "${dump_files[@]}"; do
+    rm -f "$dump_file"
+  done
+  kubectl -n release-manager-dev set env deployment/orchestrator deployment/auth deployment/notifier MAINTENANCE- >/dev/null \
+    || fail "$ERR_SERVICE_UNHEALTHY" "cannot disable maintenance mode"
+  kubectl -n release-manager-dev rollout status deployment/orchestrator deployment/auth deployment/notifier --timeout=180s >/dev/null \
+    || fail "$ERR_SERVICE_UNHEALTHY" "maintenance rollout did not converge"
+  log "=== dev-reset-data complete ==="
 }
 
 cmd_purge() {

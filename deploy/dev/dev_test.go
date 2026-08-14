@@ -383,3 +383,44 @@ func TestClusterCreateInjectsProxyEnv(t *testing.T) {
 		t.Fatal("no cluster creates recorded")
 	}
 }
+func TestStatusJSONSchema(t *testing.T) {
+	stateDir := t.TempDir()
+	env, _ := fakeEnv(t, stateDir)
+
+	out, err := runDev(t, env, "status")
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		`"environment_id":"dev-local"`, `"profile":"local"`,
+		`"control":{"name":"release-manager-control"`,
+		`"endpoints":{"webhook":"http://localhost:8082"`,
+		`"operator_sessions":0`, `"fixture_entities":{"customers":0`,
+		`"bootstrap_installs":0`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("status output missing %s:\n%s", want, out)
+		}
+	}
+}
+
+func TestResetFailsWithoutRunningEnvironment(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	writeShim(t, binDir, "k3d", "#!/usr/bin/env bash\nprintf 'k3d version v5.8.3 k3s1\\n'\n")
+	writeShim(t, binDir, "kubectl", "#!/usr/bin/env bash\nfor a in \"$@\"; do if [ \"$a\" = \"get\" ]; then exit 1; fi; done\nexit 0\n")
+	writeShim(t, binDir, "pg_dump", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "pg_restore", "#!/usr/bin/env bash\nexit 0\n")
+	env = append(env, "CONFIRM=1")
+
+	out, err := runDev(t, env, "reset-data")
+	if err == nil {
+		t.Fatalf("expected reset failure without postgres deployment:\n%s", out)
+	}
+	if code := exitCode(t, err); code != 1 {
+		t.Fatalf("expected exit 1, got %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "service_unhealthy") {
+		t.Fatalf("expected service_unhealthy:\n%s", out)
+	}
+}
