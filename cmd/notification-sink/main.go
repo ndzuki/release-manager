@@ -83,7 +83,7 @@ func (s *notificationSink) Configure(cfg *config.ServiceConfig) { s.cfg = *cfg }
 // Register mounts the two sink endpoints: the webhook receiver the notifier
 // POSTs to, and the read-back list endpoint. app.Run already registers
 // /health and /readyz.
-func (s *notificationSink) Register(mux *http.ServeMux, logger *slog.Logger) error {
+func (s *notificationSink) Register(mux *http.ServeMux, _ *slog.Logger) error {
 	s.ring = newRing(s.capacity)
 	mux.HandleFunc("POST /webhook", s.handleWebhook)
 	mux.HandleFunc("GET /notifications", s.handleList)
@@ -130,7 +130,9 @@ func (s *notificationSink) handleList(w http.ResponseWriter, _ *http.Request) {
 		DroppedCount:  dropped,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Error("notification sink encode error", "error", err)
+	}
 }
 
 func main() {
