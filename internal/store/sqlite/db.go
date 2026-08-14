@@ -315,12 +315,19 @@ func migrate(db *sql.DB) error {
 		return fmt.Errorf("begin migration tx: %w", err)
 	}
 	valuesSchemaMigrated := false
+	preflightSchemaMigrated := false
 	for _, stmt := range migrationStatements {
 		if !valuesSchemaMigrated && strings.Contains(stmt, "ux_vr_def_version") {
 			if err := migrateValuesRevisionSchema(tx); err != nil {
 				return fmt.Errorf("migrate values revision schema: %w", err)
 			}
 			valuesSchemaMigrated = true
+		}
+		if !preflightSchemaMigrated && strings.HasPrefix(strings.TrimSpace(stmt), "CREATE TABLE IF NOT EXISTS preflight_lifecycles") {
+			if err := migratePreflightLifecycleSchema(tx); err != nil {
+				return fmt.Errorf("migrate preflight lifecycle schema: %w", err)
+			}
+			preflightSchemaMigrated = true
 		}
 		if _, err := tx.ExecContext(context.Background(), stmt); err != nil {
 			// ALTER TABLE ADD COLUMN is not idempotent; skip if the
@@ -363,6 +370,80 @@ func migrateValuesRevisionSchema(tx *sql.Tx) error {
 		return err
 	}
 	return rebuildValuesRevisionDecisionsTable(tx)
+}
+
+// migratePreflightLifecycleSchema rebuilds legacy preflight_lifecycles tables to
+// the REQ-019 two-phase contract: operation_id UNIQUE, canonical comma-separated
+// stages, four-value overall (timeout mapped to cancelled), and updated_at, with
+// the error_code column removed. Legacy rows are deduplicated to one row per
+// operation (keeping the earliest created_at), and updated_at is backfilled from
+// created_at. Fresh databases (table not yet created) are left to the CREATE
+// TABLE statement in migrationStatements.
+func migratePreflightLifecycleSchema(tx *sql.Tx) error {
+	columns, err := sqliteTableColumns(tx, "preflight_lifecycles")
+	if err != nil {
+		return err
+	}
+	if len(columns) == 0 {
+		return nil // table does not exist yet — the CREATE TABLE below defines the new shape
+	}
+	if _, hasUpdatedAt := columns["updated_at"]; hasUpdatedAt {
+		if _, hasErrorCode := columns["error_code"]; !hasErrorCode {
+			return nil // already on the two-phase contract
+		}
+	}
+
+	statements := []string{
+		`DROP INDEX IF EXISTS idx_preflight_lifecycles_operation`,
+		`DROP INDEX IF EXISTS idx_preflight_lifecycles_terminal`,
+		`ALTER TABLE preflight_lifecycles RENAME TO preflight_lifecycles_legacy`,
+		`CREATE TABLE preflight_lifecycles (
+			id                    TEXT PRIMARY KEY,
+			operation_id          TEXT UNIQUE,
+			operation_terminal_at TEXT,
+			stages                TEXT NOT NULL DEFAULT '',
+			overall               TEXT NOT NULL DEFAULT 'running',
+			created_at            TEXT NOT NULL,
+			updated_at            TEXT NOT NULL,
+			CHECK (overall IN ('running','passed','failed','cancelled'))
+		)`,
+		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, created_at, updated_at)
+		 SELECT
+			l.id,
+			l.operation_id,
+			l.operation_terminal_at,
+			CASE
+				WHEN l.stages IS NULL OR l.stages = '' OR l.stages = '[]' THEN ''
+				WHEN json_valid(l.stages) AND json_type(l.stages) = 'array' THEN
+					COALESCE((SELECT group_concat(json_extract(value, '$.stage'), ',') FROM json_each(l.stages)), '')
+				ELSE ''
+			END,
+			CASE
+				WHEN l.overall = 'timeout' THEN 'cancelled'
+				WHEN l.overall IN ('running','passed','failed','cancelled') THEN l.overall
+				ELSE 'failed'
+			END,
+			m.min_created,
+			m.min_created
+		 FROM (
+			SELECT pl.*, ROW_NUMBER() OVER (PARTITION BY operation_id ORDER BY created_at DESC) AS rn
+			FROM preflight_lifecycles_legacy pl
+		 ) l
+		 JOIN (
+			SELECT operation_id, MIN(created_at) AS min_created
+			FROM preflight_lifecycles_legacy
+			GROUP BY operation_id
+		 ) m ON m.operation_id IS l.operation_id
+		 WHERE l.rn = 1`,
+		`DROP TABLE preflight_lifecycles_legacy`,
+		`CREATE INDEX IF NOT EXISTS idx_preflight_lifecycles_terminal ON preflight_lifecycles(operation_terminal_at)`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.ExecContext(context.Background(), stmt); err != nil {
+			return fmt.Errorf("preflight lifecycle migration statement: %w\nstmt: %s", err, stmt)
+		}
+	}
+	return nil
 }
 
 func rebuildValuesRevisionsTable(tx *sql.Tx) error {
@@ -1243,17 +1324,17 @@ var migrationStatements = []string{
 			OR (parent_revision_id IS NOT NULL AND parent_version > 0))
 	)`,
 	`CREATE INDEX IF NOT EXISTS ix_cps_expiry ON convergence_prepare_sessions(expires_at)`,
-	// Preflight lifecycle results (REQ-069) — distinct from the cache-based preflight_results table.
+	// Preflight lifecycle results (REQ-019) — distinct from the cache-based preflight_results table.
 	`CREATE TABLE IF NOT EXISTS preflight_lifecycles (
 		id                    TEXT PRIMARY KEY,
-		operation_id          TEXT,
+		operation_id          TEXT UNIQUE,
 		operation_terminal_at TEXT,
-		stages                TEXT NOT NULL DEFAULT '[]',
-		overall               TEXT NOT NULL DEFAULT '',
-		error_code            TEXT NOT NULL DEFAULT '',
-		created_at            TEXT NOT NULL
+		stages                TEXT NOT NULL DEFAULT '',
+		overall               TEXT NOT NULL DEFAULT 'running',
+		created_at            TEXT NOT NULL,
+		updated_at            TEXT NOT NULL,
+		CHECK (overall IN ('running','passed','failed','cancelled'))
 	)`,
-	`CREATE INDEX IF NOT EXISTS idx_preflight_lifecycles_operation ON preflight_lifecycles(operation_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_preflight_lifecycles_terminal ON preflight_lifecycles(operation_terminal_at)`,
 	// Durable authorization source, policy, grants, rules, and consumer checkpoints (REQ-027).
 	`CREATE TABLE IF NOT EXISTS authorization_source_version (

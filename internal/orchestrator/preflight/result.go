@@ -4,10 +4,11 @@ package preflight
 type StageStatus string
 
 const (
-	StagePassed  StageStatus = "passed"
-	StageFailed  StageStatus = "failed"
-	StageSkipped StageStatus = "skipped"
-	StageTimeout StageStatus = "timeout"
+	StagePassed    StageStatus = "passed"
+	StageFailed    StageStatus = "failed"
+	StageSkipped   StageStatus = "skipped"
+	StageTimeout   StageStatus = "timeout"
+	StageCancelled StageStatus = "cancelled"
 )
 
 // StageResult captures the outcome of running one preflight stage.

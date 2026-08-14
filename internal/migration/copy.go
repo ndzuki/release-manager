@@ -321,7 +321,6 @@ var jsonColumns = map[string]map[string]struct{}{
 	"audit_events":         {"metadata": {}},
 	"notification_jobs":    {"metadata": {}},
 	"release_bundles":      {"images": {}},
-	"preflight_lifecycles": {"stages": {}},
 	"scan_results":         {"severity_json": {}, "findings_json": {}},
 	"emergency_intents": {
 		"annotation_entries": {}, "promotion_paths": {}, "before_snapshot": {}, "after_snapshot": {},
