@@ -114,7 +114,11 @@ func TestEd25519Verifier_ReusesTrustedRecordForSameSignatureIdentity(t *testing.
 
 	assert.Equal(t, store.VerificationTrusted, first.Status)
 	assert.Equal(t, store.VerificationTrusted, second.Status)
-	assert.Equal(t, 1, resolver.resolveCount())
+	// AC-043-02: the cached record is trusted only after re-checking that the
+	// signing root is still live (grace expiry does not bump version/epoch), so
+	// the second Verify resolves live roots once for the re-check and reuses
+	// the cached record without a fresh signature verification.
+	assert.Equal(t, 2, resolver.resolveCount())
 	assert.Equal(t, first.Record.ID, second.Record.ID)
 }
 

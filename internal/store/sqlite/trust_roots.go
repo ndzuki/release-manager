@@ -223,6 +223,116 @@ SELECT revocation_epoch FROM trust_policies WHERE environment = ?
 	return newEpoch, nil
 }
 
+// TransitionLiveRoot atomically moves a live root (active or grace) to a
+// terminal state, enforcing the "at least one live root" invariant and bumping
+// the policy version or revocation epoch in the same transaction (AC-043-03).
+func (s *trustRootStore) TransitionLiveRoot(ctx context.Context, id, env string, to store.TrustRootState, revokedAt *time.Time, bumpRevocation bool) (*store.TrustPolicyMeta, error) {
+	var tx *sql.Tx
+	err := retryBusy(ctx, func() error {
+		var beginErr error
+		tx, beginErr = s.db.BeginTx(ctx, nil) // _txlock=immediate serializes writers.
+		return beginErr
+	})
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback on committed tx is a no-op.
+
+	now := time.Now().UTC()
+	// Environment write barrier: ensure the policy row exists and take the
+	// environment's write lock so concurrent transitions serialize.
+	_, err = tx.ExecContext(ctx, `
+INSERT OR IGNORE INTO trust_policies (environment, version, revocation_epoch, updated_at)
+VALUES (?, 0, 0, ?)
+`, env, now.Format(time.RFC3339))
+	if err != nil {
+		return nil, fmt.Errorf("ensure trust_policy: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `
+UPDATE trust_policies SET updated_at = ? WHERE environment = ?
+`, now.Format(time.RFC3339), env)
+	if err != nil {
+		return nil, fmt.Errorf("lock trust_policy: %w", err)
+	}
+
+	// Conditional update: only a live root can be transitioned.
+	result, err := tx.ExecContext(ctx, `
+UPDATE trust_roots
+SET state = ?, updated_at = ?, revoked_at = ?
+WHERE id = ? AND state IN ('active', 'grace')
+`, string(to), now.Format(time.RFC3339), formatTimePtr(revokedAt), id)
+	if err != nil {
+		return nil, fmt.Errorf("transition trust_root: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("transition trust_root rows_affected: %w", err)
+	}
+	if n == 0 {
+		// Distinguish a missing root from one that is not live so callers keep
+		// their state-conflict error contract.
+		var exists bool
+		err = tx.QueryRowContext(ctx, `
+SELECT EXISTS(SELECT 1 FROM trust_roots WHERE id = ?)
+`, id).Scan(&exists)
+		if err != nil {
+			return nil, fmt.Errorf("check trust_root exists: %w", err)
+		}
+		if !exists {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("%w: root %q is not in active or grace state", store.ErrRootNotLive, id)
+	}
+
+	// Last-root guard: after the transition at least one live root must remain
+	// (same predicate as GetActiveByEnvironment).
+	var liveCount int
+	err = tx.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM trust_roots
+WHERE environment = ?
+  AND state IN ('active', 'grace')
+  AND valid_from <= ?
+  AND (state = 'active' OR (grace_until IS NOT NULL AND grace_until > ?))
+`, env, now.Format(time.RFC3339), now.Format(time.RFC3339)).Scan(&liveCount)
+	if err != nil {
+		return nil, fmt.Errorf("count live trust_roots: %w", err)
+	}
+	if liveCount == 0 {
+		return nil, store.ErrLastRootRemovalForbidden
+	}
+
+	// Bump the policy version or the revocation epoch.
+	if bumpRevocation {
+		_, err = tx.ExecContext(ctx, `
+UPDATE trust_policies
+SET revocation_epoch = revocation_epoch + 1, updated_at = ?
+WHERE environment = ?
+`, now.Format(time.RFC3339), env)
+	} else {
+		_, err = tx.ExecContext(ctx, `
+UPDATE trust_policies
+SET version = version + 1, updated_at = ?
+WHERE environment = ?
+`, now.Format(time.RFC3339), env)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("bump trust_policy: %w", err)
+	}
+
+	row := tx.QueryRowContext(ctx, `
+SELECT environment, version, revocation_epoch FROM trust_policies WHERE environment = ?
+`, env)
+	var meta store.TrustPolicyMeta
+	if err := row.Scan(&meta.Environment, &meta.Version, &meta.RevocationEpoch); err != nil {
+		return nil, fmt.Errorf("read trust_policy: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit transition: %w", err)
+	}
+	return &meta, nil
+}
+
 // scanTrustRoot scans a single trust root row.
 func scanTrustRoot(row interface{ Scan(...interface{}) error }) (*store.TrustRoot, error) {
 	var (

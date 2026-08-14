@@ -233,3 +233,108 @@ func TestTrustRootBumpRevocationEpochConcurrent(t *testing.T) {
 	// version 0 until a BumpPolicy happens (REQ-043: revoke bumps epoch, not version).
 	assert.Equal(t, int64(0), meta.Version)
 }
+
+func TestTrustRootTransitionLiveRoot(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	first := &store.TrustRoot{
+		ID: uuid.NewString(), Environment: "staging", KeyID: uuid.NewString(), Issuer: "ci-1",
+		State: store.TrustRootActive, ValidFrom: now,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	second := &store.TrustRoot{
+		ID: uuid.NewString(), Environment: "staging", KeyID: uuid.NewString(), Issuer: "ci-2",
+		State: store.TrustRootActive, ValidFrom: now,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, st.TrustRoots().Create(ctx, first))
+	require.NoError(t, st.TrustRoots().Create(ctx, second))
+
+	// Transition with a second live root present: state flips and the policy
+	// version bumps in the same transaction.
+	meta, err := st.TrustRoots().TransitionLiveRoot(ctx, first.ID, "staging", store.TrustRootRetired, nil, false)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), meta.Version)
+	assert.Equal(t, int64(0), meta.RevocationEpoch)
+	got, err := st.TrustRoots().Get(ctx, first.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.TrustRootRetired, got.State)
+
+	// Revoking the last live root is forbidden and leaves no partial write:
+	// the root stays live and the revocation epoch stays put.
+	_, err = st.TrustRoots().TransitionLiveRoot(ctx, second.ID, "staging", store.TrustRootRevoked, &now, true)
+	assert.ErrorIs(t, err, store.ErrLastRootRemovalForbidden)
+	got, err = st.TrustRoots().Get(ctx, second.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.TrustRootActive, got.State)
+	meta, err = st.TrustRoots().GetPolicy(ctx, "staging")
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), meta.RevocationEpoch, "forbidden transition must not bump the epoch")
+
+	// A non-live root cannot be transitioned.
+	_, err = st.TrustRoots().TransitionLiveRoot(ctx, first.ID, "staging", store.TrustRootRetired, nil, false)
+	assert.ErrorIs(t, err, store.ErrRootNotLive)
+	// A missing root maps to ErrNotFound.
+	_, err = st.TrustRoots().TransitionLiveRoot(ctx, uuid.NewString(), "staging", store.TrustRootRetired, nil, false)
+	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
+// TestTrustRootTransitionConcurrentRemovalIsAtomic locks AC-043-03 on the store
+// seam: two racing removals must never leave the environment with zero live
+// roots — the policy-row write barrier serializes the transitions so exactly
+// one wins and the other is rejected with ErrLastRootRemovalForbidden.
+func TestTrustRootTransitionConcurrentRemovalIsAtomic(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	first := &store.TrustRoot{
+		ID: uuid.NewString(), Environment: "staging", KeyID: uuid.NewString(), Issuer: "ci-1",
+		State: store.TrustRootActive, ValidFrom: now,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	second := &store.TrustRoot{
+		ID: uuid.NewString(), Environment: "staging", KeyID: uuid.NewString(), Issuer: "ci-2",
+		State: store.TrustRootActive, ValidFrom: now,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, st.TrustRoots().Create(ctx, first))
+	require.NoError(t, st.TrustRoots().Create(ctx, second))
+
+	const workers = 2
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for _, root := range []*store.TrustRoot{first, second} {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			<-start
+			_, err := st.TrustRoots().TransitionLiveRoot(ctx, id, "staging", store.TrustRootRetired, nil, false)
+			errs <- err
+		}(root.ID)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	var succeeded, forbidden int
+	for err := range errs {
+		switch {
+		case err == nil:
+			succeeded++
+		case assert.ErrorIs(t, err, store.ErrLastRootRemovalForbidden):
+			forbidden++
+		default:
+			t.Fatalf("unexpected transition error: %v", err)
+		}
+	}
+	assert.Equal(t, 1, succeeded)
+	assert.Equal(t, 1, forbidden)
+
+	live, err := st.TrustRoots().GetActiveByEnvironment(ctx, "staging", time.Now())
+	require.NoError(t, err)
+	assert.Len(t, live, 1, "exactly one live root must remain")
+}

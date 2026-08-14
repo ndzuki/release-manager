@@ -159,7 +159,6 @@ func (s *TrustService) EndGrace(
 	req *connect.Request[trustv1.EndGraceRequest],
 ) (*connect.Response[trustv1.EndGraceResponse], error) {
 	msg := req.Msg
-	now := time.Now().UTC()
 
 	root, err := s.store.Get(ctx, msg.GetRootId())
 	if err != nil {
@@ -173,26 +172,31 @@ func (s *TrustService) EndGrace(
 			fmt.Errorf("root %q is %s, must be grace to end grace", root.ID, root.State))
 	}
 
-	// Check last active guard.
-	if err := s.ensureNotLastActive(ctx, root.Environment, root.ID); err != nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
-	}
-
-	root.State = store.TrustRootRetired
-	root.UpdatedAt = now
-	if err := s.store.Update(ctx, root); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update root: %w", err))
-	}
-
-	ver, epoch, err := s.store.BumpPolicy(ctx, root.Environment)
+	// AC-043-03: 状态转换、last-root guard 与 policy bump 在同一事务内完成，
+	// 避免并发移除请求同时通过守卫后留下零个 live root（审计 TOCTOU 修复）。
+	meta, err := s.store.TransitionLiveRoot(ctx, root.ID, root.Environment, store.TrustRootRetired, nil, false)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("bump policy: %w", err))
+		switch {
+		case errors.Is(err, store.ErrRootNotLive):
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("root %q is %s, must be grace to end grace", root.ID, root.State))
+		case errors.Is(err, store.ErrNotFound):
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("root not found"))
+		case errors.Is(err, store.ErrLastRootRemovalForbidden):
+			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+		default:
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("transition root: %w", err))
+		}
 	}
+	// Reflect the transition in the response snapshot (the store row was updated
+	// inside the transaction; the pre-transition root was read before it).
+	root.State = store.TrustRootRetired
 
-	policy, err := s.buildPolicy(ctx, root.Environment, ver, epoch)
+	policy, err := s.buildPolicy(ctx, root.Environment, meta.Version, meta.RevocationEpoch)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("build policy: %w", err))
 	}
+
 
 	s.emitTrustAudit(ctx, msg.GetOperator(), "end_grace", root.ID, root.Issuer, root.Environment)
 
@@ -208,7 +212,6 @@ func (s *TrustService) RetireTrustRoot(
 	req *connect.Request[trustv1.RetireTrustRootRequest],
 ) (*connect.Response[trustv1.RetireTrustRootResponse], error) {
 	msg := req.Msg
-	now := time.Now().UTC()
 
 	root, err := s.store.Get(ctx, msg.GetRootId())
 	if err != nil {
@@ -222,22 +225,25 @@ func (s *TrustService) RetireTrustRoot(
 			fmt.Errorf("root %q is %s, must be active or grace to retire", root.ID, root.State))
 	}
 
-	if err := s.ensureNotLastActive(ctx, root.Environment, root.ID); err != nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
-	}
-
-	root.State = store.TrustRootRetired
-	root.UpdatedAt = now
-	if err := s.store.Update(ctx, root); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update root: %w", err))
-	}
-
-	ver, epoch, err := s.store.BumpPolicy(ctx, root.Environment)
+	// AC-043-03: 状态转换、last-root guard 与 policy bump 在同一事务内完成，
+	// 避免并发移除请求同时通过守卫后留下零个 live root（审计 TOCTOU 修复）。
+	meta, err := s.store.TransitionLiveRoot(ctx, root.ID, root.Environment, store.TrustRootRetired, nil, false)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("bump policy: %w", err))
+		switch {
+		case errors.Is(err, store.ErrRootNotLive):
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("root %q is %s, must be active or grace to retire", root.ID, root.State))
+		case errors.Is(err, store.ErrNotFound):
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("root not found"))
+		case errors.Is(err, store.ErrLastRootRemovalForbidden):
+			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+		default:
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("transition root: %w", err))
+		}
 	}
+	root.State = store.TrustRootRetired
 
-	policy, err := s.buildPolicy(ctx, root.Environment, ver, epoch)
+	policy, err := s.buildPolicy(ctx, root.Environment, meta.Version, meta.RevocationEpoch)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("build policy: %w", err))
 	}
@@ -270,31 +276,30 @@ func (s *TrustService) RevokeTrustRoot(
 			fmt.Errorf("%w: root %q is already revoked", ErrRevokedRoot, root.ID))
 	}
 
-	if err := s.ensureNotLastActive(ctx, root.Environment, root.ID); err != nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
-	}
-
-	root.State = store.TrustRootRevoked
-	root.RevokedAt = &now
-	root.UpdatedAt = now
-	if err := s.store.Update(ctx, root); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update root: %w", err))
-	}
-
-	_, err = s.store.BumpRevocationEpoch(ctx, root.Environment)
+	// AC-043-03: 状态转换、last-root guard 与 revocation epoch bump 在同一事务内
+	// 完成，避免并发移除请求同时通过守卫后留下零个 live root（审计 TOCTOU 修复）。
+	meta, err := s.store.TransitionLiveRoot(ctx, root.ID, root.Environment, store.TrustRootRevoked, &now, true)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("bump revocation epoch: %w", err))
+		switch {
+		case errors.Is(err, store.ErrRootNotLive):
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("root %q is %s, must be active or grace to revoke", root.ID, root.State))
+		case errors.Is(err, store.ErrNotFound):
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("root not found"))
+		case errors.Is(err, store.ErrLastRootRemovalForbidden):
+			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+		default:
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("transition root: %w", err))
+		}
 	}
 
-	policyMeta, err := s.store.GetPolicy(ctx, root.Environment)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get policy: %w", err))
-	}
-	policy, err := s.buildPolicy(ctx, root.Environment, policyMeta.Version, policyMeta.RevocationEpoch)
+	policy, err := s.buildPolicy(ctx, root.Environment, meta.Version, meta.RevocationEpoch)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("build policy: %w", err))
 	}
 
+	root.State = store.TrustRootRevoked
+	root.RevokedAt = &now
 	s.emitTrustAudit(ctx, msg.GetOperator(), "revoke_root", root.ID, root.Issuer, root.Environment)
 
 	return connect.NewResponse(&trustv1.RevokeTrustRootResponse{
@@ -339,23 +344,6 @@ func (s *TrustService) buildPolicy(ctx context.Context, env string, version, epo
 	}, nil
 }
 
-// ensureNotLastActive rejects the operation if the root being removed is the last active/grace root.
-func (s *TrustService) ensureNotLastActive(ctx context.Context, env, excludeID string) error {
-	active, err := s.store.GetActiveByEnvironment(ctx, env, time.Now())
-	if err != nil {
-		return fmt.Errorf("get active roots: %w", err)
-	}
-	remaining := 0
-	for _, r := range active {
-		if r.ID != excludeID {
-			remaining++
-		}
-	}
-	if remaining == 0 {
-		return ErrLastRootRemovalForbidden
-	}
-	return nil
-}
 
 // checkOverlap rejects a new root if an existing active/grace root for the same
 // environment already uses the same issuer or key_id (but not the same root ID).

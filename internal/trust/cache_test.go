@@ -207,3 +207,55 @@ func TestEd25519Verifier_GraceWindowAcceptsBothSignatures(t *testing.T) {
 		})
 	}
 }
+
+// TestEd25519Verifier_GraceExpiryInvalidatesTrustedCache locks AC-043-02 on the
+// cached path: natural grace expiry does not bump the policy version or the
+// revocation epoch, so a previously trusted record for the SAME digest and
+// signature must not be reused once the signing root's grace window closed.
+func TestEd25519Verifier_GraceExpiryInvalidatesTrustedCache(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	oldPublicKeyPEM, oldPrivateKey := generateEd25519KeyPair(t)
+	newPublicKeyPEM, _ := generateEd25519KeyPair(t)
+	service := NewTrustService(st.TrustRoots(), nil, logger())
+
+	oldResponse, err := service.CreateTrustRoot(t.Context(), connect.NewRequest(&trustv1.CreateTrustRootRequest{
+		Environment: "staging", KeyId: "key-old", PublicKeyPem: oldPublicKeyPEM, Issuer: "old-ci",
+	}))
+	require.NoError(t, err)
+	_, err = service.RotateTrustRoot(t.Context(), connect.NewRequest(&trustv1.RotateTrustRootRequest{
+		Environment: "staging", OldRootId: oldResponse.Msg.GetRoot().GetId(), KeyId: "key-new",
+		PublicKeyPem: newPublicKeyPEM, Issuer: "new-ci",
+		GraceUntil: timestamppb.New(time.Now().UTC().Add(time.Hour)),
+	}))
+	require.NoError(t, err)
+
+	digest := "sha256:grace-expiry-same-digest"
+	ref := &commonv1.SignatureRef{
+		Digest:    digest,
+		Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(oldPrivateKey, []byte(digest))),
+		Issuer:    "old-ci", Subject: "release-manager/v1.0.0",
+	}
+	input := Input{Digest: digest, SignatureRef: ref, Policy: DefaultPolicy("staging"), Environment: "staging"}
+	verifier := NewEd25519Verifier(st.Verifications(), NewStoreResolver(st.TrustRoots()), time.Second, logger())
+
+	// Within grace: trusted, and the result is cached under the old root's identity.
+	withinGrace, err := verifier.Verify(t.Context(), input)
+	require.NoError(t, err)
+	assert.Equal(t, store.VerificationTrusted, withinGrace.Status)
+	assert.Equal(t, oldResponse.Msg.GetRoot().GetId(), withinGrace.RootID)
+
+	// Grace expires naturally: grace_until moves to the past without any
+	// policy version or revocation epoch bump (no EndGrace/Retire/Revoke).
+	old, err := st.TrustRoots().Get(t.Context(), oldResponse.Msg.GetRoot().GetId())
+	require.NoError(t, err)
+	expired := time.Now().UTC().Add(-time.Minute)
+	old.GraceUntil = &expired
+	require.NoError(t, st.TrustRoots().Update(t.Context(), old))
+
+	// Same digest, same signature: the cached trusted result must not be
+	// reused once the signing root is no longer live.
+	afterExpiry, err := verifier.Verify(t.Context(), input)
+	require.NoError(t, err)
+	assert.Equal(t, store.VerificationRejected, afterExpiry.Status)
+	assert.Contains(t, afterExpiry.Summary, "untrusted_issuer")
+}

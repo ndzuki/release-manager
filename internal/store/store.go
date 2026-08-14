@@ -44,6 +44,8 @@ var (
 	ErrAuditUnavailable          = errors.New("store: audit unavailable")
 	ErrEmergencyConflict         = errors.New("store: conflicting emergency target")
 	ErrAuthorizationStale        = errors.New("store: authorization source version changed")
+	ErrRootNotLive              = errors.New("store: trust root not in active or grace state")
+	ErrLastRootRemovalForbidden = errors.New("last_root_removal_forbidden")
 )
 
 // StateVersionConflictError reports the current revision version after a failed CAS.
@@ -1095,6 +1097,13 @@ type TrustRootStore interface {
 	GetPolicy(ctx context.Context, env string) (*TrustPolicyMeta, error)
 	BumpPolicy(ctx context.Context, env string) (version int64, epoch int64, err error)
 	BumpRevocationEpoch(ctx context.Context, env string) (int64, error)
+	// TransitionLiveRoot atomically moves a live root (active or grace) to the
+	// given terminal state and bumps the environment's policy version — or the
+	// revocation epoch when bumpRevocation is true — in a single transaction.
+	// The transition fails with ErrLastRootRemovalForbidden if it would leave
+	// the environment with no live roots, and with ErrNotFound when the root
+	// does not exist or is not live. It returns the resulting policy metadata.
+	TransitionLiveRoot(ctx context.Context, id, env string, to TrustRootState, revokedAt *time.Time, bumpRevocation bool) (*TrustPolicyMeta, error)
 }
 
 // --- Bundle domain types (REQ-011) ---

@@ -2,8 +2,10 @@ package trust
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
+	"path/filepath"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -293,4 +295,61 @@ func TestTrustService_AuditEventsExcludeKeyMaterial(t *testing.T) {
 		assert.NotContains(t, strings.ToLower(value), "private key")
 		assert.NotContains(t, value, publicKeyPEM)
 	}
+}
+
+// TestTrustService_ConcurrentRemovalLeavesAtLeastOneLiveRoot locks the AC-043-03
+// invariant under concurrency: two racing removals must never leave the
+// environment with zero live roots — exactly one wins, the other is rejected
+// with last_root_removal_forbidden, and one live root remains.
+func TestTrustService_ConcurrentRemovalLeavesAtLeastOneLiveRoot(t *testing.T) {
+	// Use an on-disk store: modernc.org/sqlite's shared in-memory databases can
+	// deadlock under simultaneous BEGIN IMMEDIATE, while the file store has
+	// production locking semantics (WAL + busy_timeout).
+	st, err := sqlitestore.Open(filepath.Join(t.TempDir(), "trust-concurrent.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { st.Close() })
+	svc := NewTrustService(st.TrustRoots(), nil, logger())
+	first := createTrustRoot(t, svc, "key-1", "issuer-1")
+	second := createTrustRoot(t, svc, "key-2", "issuer-2")
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, id := range []string{first.GetId(), second.GetId()} {
+		wg.Add(1)
+		go func(rootID string) {
+			defer wg.Done()
+			<-start
+			_, err := svc.RetireTrustRoot(t.Context(), connect.NewRequest(&trustv1.RetireTrustRootRequest{Environment: "staging", RootId: rootID}))
+			errs <- err
+		}(id)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	var succeeded, forbidden int
+	for err := range errs {
+		if err == nil {
+			succeeded++
+			continue
+		}
+		assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+		assert.ErrorContains(t, err, ErrLastRootRemovalForbidden.Error())
+		forbidden++
+	}
+	assert.Equal(t, 1, succeeded)
+	assert.Equal(t, 1, forbidden)
+
+	// The environment still has exactly one live root afterwards (public seam).
+	policyResp, err := svc.GetTrustPolicy(t.Context(), connect.NewRequest(&trustv1.GetTrustPolicyRequest{Environment: "staging"}))
+	require.NoError(t, err)
+	live := 0
+	for _, r := range policyResp.Msg.GetPolicy().GetRoots() {
+		if r.GetState() == trustv1.TrustRootState_TRUST_ROOT_STATE_ACTIVE ||
+			r.GetState() == trustv1.TrustRootState_TRUST_ROOT_STATE_GRACE {
+			live++
+		}
+	}
+	assert.Equal(t, 1, live)
 }
