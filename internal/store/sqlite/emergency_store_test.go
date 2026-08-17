@@ -188,3 +188,32 @@ func TestResolveEmergencyEffect_RejectsInvalidState(t *testing.T) {
 	})
 	assert.ErrorIs(t, err, store.ErrInvalidState)
 }
+
+func TestEmergencyPersistAck_AtomicEntryAndIdempotency(t *testing.T) {
+	st := OpenTest(t)
+	ctx := context.Background()
+	seedEmergencyDefinition(t, st, "def-persist-ack")
+	cmd := emergencyCreateCommand(t, "def-persist-ack", "idem-persist-ack", "hash-persist-ack", store.EmergencySetReplicas)
+	result, err := st.EmergencyIntents().CreateIfAvailable(ctx, cmd)
+	require.NoError(t, err)
+
+	acked, err := st.EmergencyIntents().PersistAck(ctx, result.Intent.ID)
+	require.NoError(t, err)
+	require.NotNil(t, acked)
+	assert.Equal(t, string(store.TimelineEntryACK), acked.Kind)
+	assert.Equal(t, int64(1), acked.Sequence)
+	assert.Equal(t, result.Operation.ID, acked.OperationID)
+
+	intent, err := st.EmergencyIntents().GetByOperationID(ctx, result.Operation.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(store.CommandPersisted), intent.DeliveryStatus)
+
+	// Replayed ACK_PERSISTED must not write a second entry (AC-077-10).
+	replay, err := st.EmergencyIntents().PersistAck(ctx, result.Intent.ID)
+	require.NoError(t, err)
+	assert.Nil(t, replay)
+	entries, err := st.Timeline().List(ctx, result.Operation.ID, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, string(store.TimelineEntryACK), entries[0].Kind)
+}

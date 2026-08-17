@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -137,6 +138,42 @@ func (s *outboxStore) UpdateStatus(ctx context.Context, id string, status store.
 		return fmt.Errorf("update outbox status: %w", err)
 	}
 	return nil
+}
+
+func (s *outboxStore) PersistAck(ctx context.Context, id string) (*store.OperationTimelineEntry, error) {
+	tx, err := s.gorm.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin outbox ack: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after commit
+
+	var operationID, commandID string
+	now := time.Now().UTC().Format(time.RFC3339)
+	err = tx.QueryRowContext(ctx, `
+		UPDATE outbox SET status = ?, acked_at = ?, updated_at = ?
+		WHERE id = ? AND status != ?
+		RETURNING operation_id, command_id
+	`, string(store.CommandPersisted), now, now, id, string(store.CommandPersisted)).Scan(&operationID, &commandID)
+	if err == sql.ErrNoRows {
+		return nil, nil // already persisted: idempotent replay, no second entry
+	}
+	if err != nil {
+		return nil, fmt.Errorf("persist outbox ack: %w", err)
+	}
+	data, err := json.Marshal(store.AckTimelineData{RequestID: commandID, AckStage: "persisted"})
+	if err != nil {
+		return nil, fmt.Errorf("encode outbox ack timeline: %w", err)
+	}
+	entry, err := appendTimelineEntry(ctx, tx, &store.OperationTimelineEntry{
+		OperationID: operationID, Kind: string(store.TimelineEntryACK), Data: data,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit outbox ack: %w", err)
+	}
+	return entry, nil
 }
 
 func (s *outboxStore) GetNextPending(ctx context.Context, operatorID string) (*store.OutboxEntry, error) {

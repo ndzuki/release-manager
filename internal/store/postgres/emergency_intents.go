@@ -330,6 +330,43 @@ func (s *emergencyIntentStore) UpdateDeliveryStatus(ctx context.Context, id, sta
 	return nil
 }
 
+func (s *emergencyIntentStore) PersistAck(ctx context.Context, id string) (*store.OperationTimelineEntry, error) {
+	tx, err := s.gorm.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin emergency ack: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after commit
+
+	var operationID, commandID string
+	now := time.Now().UTC()
+	err = tx.QueryRowContext(ctx, `
+		UPDATE emergency_intents
+		SET delivery_status = ?, last_delivery_at = ?, updated_at = ?
+		WHERE id = ? AND delivery_status != ?
+		RETURNING operation_id, command_id
+	`, string(store.CommandPersisted), now, now, id, string(store.CommandPersisted)).Scan(&operationID, &commandID)
+	if err == sql.ErrNoRows {
+		return nil, nil // already persisted: idempotent replay, no second entry
+	}
+	if err != nil {
+		return nil, fmt.Errorf("persist emergency ack: %w", err)
+	}
+	data, err := json.Marshal(store.AckTimelineData{RequestID: commandID, AckStage: "persisted"})
+	if err != nil {
+		return nil, fmt.Errorf("encode emergency ack timeline: %w", err)
+	}
+	entry, err := appendTimelineEntry(ctx, tx, &store.OperationTimelineEntry{
+		OperationID: operationID, Kind: string(store.TimelineEntryACK), Data: data,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit emergency ack: %w", err)
+	}
+	return entry, nil
+}
+
 func (s *emergencyIntentStore) Finish(
 	ctx context.Context,
 	intentID, operationID string,

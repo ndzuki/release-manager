@@ -355,6 +355,58 @@ func (s *emergencyIntentStore) UpdateDeliveryStatus(ctx context.Context, id, sta
 	return nil
 }
 
+func (s *emergencyIntentStore) PersistAck(ctx context.Context, id string) (*store.OperationTimelineEntry, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin emergency ack: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after commit
+
+	// Read first so the timeline entry can reference the operation and the
+	// replay dedup key; the conditional UPDATE below closes the concurrent
+	// double-ACK race (rows == 0 means another transaction persisted first).
+	var operationID, commandID, status string
+	if err := tx.QueryRowContext(ctx, `SELECT operation_id, command_id, delivery_status FROM emergency_intents WHERE id = ?`, id).Scan(&operationID, &commandID, &status); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("load emergency intent for ack: %w", err)
+	}
+	if status == string(store.CommandPersisted) {
+		return nil, nil // already persisted: idempotent replay, no second entry
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	result, err := tx.ExecContext(ctx, `
+		UPDATE emergency_intents
+		SET delivery_status = ?, last_delivery_at = ?, updated_at = ?
+		WHERE id = ? AND delivery_status != ?
+	`, string(store.CommandPersisted), now, now, id, string(store.CommandPersisted))
+	if err != nil {
+		return nil, fmt.Errorf("persist emergency ack: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("emergency ack rows affected: %w", err)
+	}
+	if rows == 0 {
+		return nil, nil // lost a concurrent ACK race: already persisted
+	}
+	data, err := json.Marshal(store.AckTimelineData{RequestID: commandID, AckStage: "persisted"})
+	if err != nil {
+		return nil, fmt.Errorf("encode emergency ack timeline: %w", err)
+	}
+	entry, err := appendTimelineEntry(ctx, tx, &store.OperationTimelineEntry{
+		OperationID: operationID, Kind: string(store.TimelineEntryACK), Data: data,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit emergency ack: %w", err)
+	}
+	return entry, nil
+}
+
 func (s *emergencyIntentStore) Finish(
 	ctx context.Context,
 	intentID, operationID string,

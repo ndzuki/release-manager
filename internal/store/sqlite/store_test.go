@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -1963,4 +1964,200 @@ func TestInventoryQueryPaginationFilteringAndConsistency(t *testing.T) {
 		Cursor:     page.NextCursor,
 	})
 	assert.ErrorIs(t, err, store.ErrInvalidCursor)
+}
+
+func TestTimelineRoundTripNewKinds(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "timeline-roundtrip",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "timeline-roundtrip-key",
+		RequestHash:         "request-hash",
+		StateVersion:        1,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	ackData, err := json.Marshal(store.AckTimelineData{RequestID: "req-ack", AckStage: "persisted"})
+	require.NoError(t, err)
+	ack, err := st.Timeline().Append(ctx, &store.OperationTimelineEntry{
+		OperationID: op.ID, Kind: string(store.TimelineEntryACK), Data: ackData,
+	})
+	require.NoError(t, err)
+
+	progressData, err := json.Marshal(store.RolloutProgressTimelineData{WorkloadRef: "deployments/app/default", Ready: 2, Desired: 3})
+	require.NoError(t, err)
+	progress, err := st.Timeline().Append(ctx, &store.OperationTimelineEntry{
+		OperationID: op.ID, Kind: string(store.TimelineEntryRolloutProgress), Data: progressData,
+	})
+	require.NoError(t, err)
+
+	errorData, err := json.Marshal(store.ErrorTimelineData{RequestID: "req-err", ErrorCode: "helm_upgrade_failed", ErrorMessage: "sanitized summary"})
+	require.NoError(t, err)
+	errorEntry, err := st.Timeline().Append(ctx, &store.OperationTimelineEntry{
+		OperationID: op.ID, Kind: string(store.TimelineEntryError), Data: errorData,
+	})
+	require.NoError(t, err)
+
+	// Independent per-operation sequence allocation, strictly increasing.
+	assert.Equal(t, int64(1), ack.Sequence)
+	assert.Equal(t, int64(2), progress.Sequence)
+	assert.Equal(t, int64(3), errorEntry.Sequence)
+
+	entries, err := st.Timeline().List(ctx, op.ID, 0, 3)
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+	assert.Equal(t, string(store.TimelineEntryACK), entries[0].Kind)
+	assert.Equal(t, string(store.TimelineEntryRolloutProgress), entries[1].Kind)
+	assert.Equal(t, string(store.TimelineEntryError), entries[2].Kind)
+
+	var gotAck store.AckTimelineData
+	require.NoError(t, json.Unmarshal(entries[0].Data, &gotAck))
+	assert.Equal(t, store.AckTimelineData{RequestID: "req-ack", AckStage: "persisted"}, gotAck)
+
+	var gotProgress store.RolloutProgressTimelineData
+	require.NoError(t, json.Unmarshal(entries[1].Data, &gotProgress))
+	assert.Equal(t, store.RolloutProgressTimelineData{WorkloadRef: "deployments/app/default", Ready: 2, Desired: 3}, gotProgress)
+
+	var gotError store.ErrorTimelineData
+	require.NoError(t, json.Unmarshal(entries[2].Data, &gotError))
+	assert.Equal(t, store.ErrorTimelineData{RequestID: "req-err", ErrorCode: "helm_upgrade_failed", ErrorMessage: "sanitized summary"}, gotError)
+}
+
+func TestOutboxPersistAck_AtomicEntryAndIdempotency(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "outbox-persist-ack",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "outbox-persist-ack-key",
+		RequestHash:         "request-hash",
+		StateVersion:        1,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+	entry := pendingStoreEntry(t, st, op.ID, store.CommandDelivered)
+
+	acked, err := st.Outbox().PersistAck(ctx, entry.ID)
+	require.NoError(t, err)
+	require.NotNil(t, acked)
+	assert.Equal(t, string(store.TimelineEntryACK), acked.Kind)
+	assert.Equal(t, int64(1), acked.Sequence)
+	assert.Equal(t, op.ID, acked.OperationID)
+
+	got, err := st.Outbox().Get(ctx, entry.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.CommandPersisted, got.Status)
+	require.NotNil(t, got.AckedAt)
+
+	// Replayed ACK_PERSISTED must not write a second entry (AC-077-10).
+	replay, err := st.Outbox().PersistAck(ctx, entry.ID)
+	require.NoError(t, err)
+	assert.Nil(t, replay)
+	entries, err := st.Timeline().List(ctx, op.ID, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+}
+
+func TestOutboxPersistAck_RollbackKeepsDelivered(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	// The outbox row references a ghost operation: the status UPDATE inside
+	// the transaction succeeds but the timeline FK check fails, so the whole
+	// transaction must roll back (AC-077-09) — no half-committed persisted state.
+	entry := pendingStoreEntry(t, st, "ghost-operation", store.CommandDelivered)
+
+	_, err := st.Outbox().PersistAck(ctx, entry.ID)
+	require.Error(t, err)
+
+	got, err := st.Outbox().Get(ctx, entry.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.CommandDelivered, got.Status)
+	assert.Nil(t, got.AckedAt)
+}
+
+func TestPersistAck_ConcurrentSequenceStrictlyIncreasing(t *testing.T) {
+	st := setupFileStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "persist-ack-concurrent",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "persist-ack-concurrent-key",
+		RequestHash:         "request-hash",
+		StateVersion:        1,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+	e1 := pendingStoreEntry(t, st, op.ID, store.CommandDelivered)
+	e2 := pendingStoreEntry(t, st, op.ID, store.CommandDelivered)
+
+	// ACK_PERSISTED for two commands races with the terminal state transition
+	// of the same operation: all three append timeline entries, and the shared
+	// MAX(sequence)+1 allocation must yield a gap-free strictly increasing run
+	// (AC-077-11).
+	var wg sync.WaitGroup
+	errs := make(chan error, 3)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		_, err := st.Outbox().PersistAck(ctx, e1.ID)
+		errs <- err
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := st.Outbox().PersistAck(ctx, e2.ID)
+		errs <- err
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := st.Operations().Transition(ctx, op.ID, store.StatusSucceeded, op.StateVersion, "")
+		errs <- err
+	}()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	entries, err := st.Timeline().List(ctx, op.ID, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+	seen := map[int64]bool{}
+	var prev int64
+	for i, e := range entries {
+		assert.False(t, seen[e.Sequence], "duplicate sequence %d", e.Sequence)
+		seen[e.Sequence] = true
+		if i > 0 {
+			assert.Equal(t, prev+1, e.Sequence, "gap between sequences")
+		}
+		prev = e.Sequence
+	}
+	assert.Equal(t, int64(3), entries[2].Sequence)
+}
+
+// pendingStoreEntry inserts an outbox row with the given operation and status.
+func pendingStoreEntry(t *testing.T, st *sqlitestore.Store, opID string, status store.CommandStatus) *store.OutboxEntry {
+	t.Helper()
+	e := &store.OutboxEntry{
+		ID:            uuid.New().String(),
+		CommandID:     uuid.New().String(),
+		OperationID:   opID,
+		OperationType: "INSTALL",
+		OperatorID:    "op-1",
+		Payload:       []byte(`{}`),
+		Status:        status,
+		MaxInFlight:   1,
+		Sequence:      1,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+	require.NoError(t, st.Outbox().Create(context.Background(), e))
+	return e
 }

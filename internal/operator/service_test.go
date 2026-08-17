@@ -2,14 +2,16 @@ package operator_test
 
 import (
 	"context"
-	"testing"
-	"time"
-
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
 
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
+	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	"github.com/ndzuki/release-manager/internal/operator"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
@@ -515,4 +517,99 @@ func TestFinishOperation_PreflightFailurePersistsStableCode(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusFailed, got.Status)
 	assert.Equal(t, `{"code":"inventory_stale"}`, got.LastError)
+}
+
+// TestCommandStreamAckPersistedWritesTimelineEntry drives the real
+// CommandStream bidi endpoint over HTTP: an ACK_PERSISTED must atomically
+// persist the outbox row and append one ACK timeline entry; a replayed
+// ACK_PERSISTED (reconnect) must not write a second entry (AC-077-01/10).
+func TestCommandStreamAckPersistedWritesTimelineEntry(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-ack-stream", Name: "definition-ack-stream",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "example",
+		Status: store.DefStatusActive,
+	}, nil))
+	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+		ID: "operation-ack-stream", OperationType: store.OperationInstall,
+		Status: store.StatusRunning, ReleaseDefinitionID: "definition-ack-stream",
+		IdempotencyKey: "idem-ack-stream", RequestHash: "hash",
+	}))
+	entry := pendingEntry(t, st, "operation-ack-stream", 1, store.CommandDelivered)
+
+	svc, err := operator.NewService(st, nil)
+	require.NoError(t, err)
+	path, handler := operatorv1connect.NewOperatorServiceHandler(svc)
+	mux := http.NewServeMux()
+	mux.Handle(path, handler)
+
+	srv := httptest.NewUnstartedServer(mux)
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+
+	client := operatorv1connect.NewOperatorServiceClient(srv.Client(), srv.URL)
+	stream := client.CommandStream(ctx)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Hello{
+			Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+		},
+	}))
+	established, err := stream.Receive()
+	require.NoError(t, err)
+	require.NotNil(t, established.GetSessionEstablished())
+
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Ack{
+			Ack: &operatorv1.Ack{
+				OutboxId: entry.ID, CommandId: entry.CommandID,
+				Sequence: 1, AckType: operatorv1.AckType_ACK_TYPE_PERSISTED,
+			},
+		},
+	}))
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break // stream closed by server after request close
+		}
+	}
+
+	got, err := st.Outbox().Get(ctx, entry.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.CommandPersisted, got.Status)
+	entries, err := st.Timeline().List(ctx, "operation-ack-stream", 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, string(store.TimelineEntryACK), entries[0].Kind)
+
+	// Replay: a second connection with a replayed ACK_PERSISTED (e.g. the
+	// operator's local store survived a reconnect) must stay idempotent.
+	stream2 := client.CommandStream(ctx)
+	require.NoError(t, err)
+	require.NoError(t, stream2.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Hello{
+			Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+		},
+	}))
+	_, err = stream2.Receive()
+	require.NoError(t, err)
+	require.NoError(t, stream2.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Ack{
+			Ack: &operatorv1.Ack{
+				OutboxId: entry.ID, CommandId: entry.CommandID,
+				Sequence: 1, AckType: operatorv1.AckType_ACK_TYPE_PERSISTED,
+			},
+		},
+	}))
+	require.NoError(t, stream2.CloseRequest())
+	for {
+		if _, err := stream2.Receive(); err != nil {
+			break
+		}
+	}
+
+	entries, err = st.Timeline().List(ctx, "operation-ack-stream", 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
 }

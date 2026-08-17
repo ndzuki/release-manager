@@ -523,8 +523,15 @@ func (s *Service) CommandStream(
 				// but only ACK_PERSISTED releases the orchestrator from
 				// re-delivery responsibility.
 				if ack.GetAckType() == operatorv1.AckType_ACK_TYPE_PERSISTED {
-					if err := s.store.Outbox().UpdateStatus(ctx, ack.GetOutboxId(), store.CommandPersisted, ""); err != nil {
-						s.logger.Warn("failed to mark command persisted", "error", err)
+					if entry, err := s.store.Outbox().PersistAck(ctx, ack.GetOutboxId()); err != nil {
+						s.logger.Warn("failed to persist command ack", "error", err)
+					} else if entry != nil {
+						s.logger.Debug("command ack persisted with timeline entry",
+							"outbox_id", ack.GetOutboxId(),
+							"sequence", entry.Sequence,
+						)
+					} else {
+						s.logger.Debug("command ack replay, already persisted", "outbox_id", ack.GetOutboxId())
 					}
 				}
 
@@ -532,8 +539,15 @@ func (s *Service) CommandStream(
 				ack := req.GetEmergencyAck()
 				if ack.GetAckType() == operatorv1.AckType_ACK_TYPE_PERSISTED {
 					if intent, getErr := s.store.EmergencyIntents().GetByCommandID(ctx, ack.GetEmergencyCommandId()); getErr == nil {
-						if updateErr := s.store.EmergencyIntents().UpdateDeliveryStatus(ctx, intent.ID, "persisted"); updateErr != nil {
-							s.logger.Warn("failed to mark emergency persisted", "command_id", ack.GetEmergencyCommandId(), "error", updateErr)
+						if entry, ackErr := s.store.EmergencyIntents().PersistAck(ctx, intent.ID); ackErr != nil {
+							s.logger.Warn("failed to persist emergency ack", "command_id", ack.GetEmergencyCommandId(), "error", ackErr)
+						} else if entry != nil {
+							s.logger.Debug("emergency ack persisted with timeline entry",
+								"command_id", ack.GetEmergencyCommandId(),
+								"sequence", entry.Sequence,
+							)
+						} else {
+							s.logger.Debug("emergency ack replay, already persisted", "command_id", ack.GetEmergencyCommandId())
 						}
 						if op, opErr := s.store.Operations().Get(ctx, intent.OperationID); opErr == nil && op.Status == store.StatusQueued {
 							if _, updateErr := s.store.Operations().UpdateStatus(ctx, op.ID, store.StatusRunning, op.StateVersion, ""); updateErr != nil {
