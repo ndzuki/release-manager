@@ -3,6 +3,7 @@ package preflight
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -29,6 +30,10 @@ type Coordinator struct {
 	invs           store.InventoryStore
 	logger         *slog.Logger
 	timeoutSeconds int64
+
+	// pollInterval is the stage polling cadence; tests override it to avoid
+	// real second-scale waits. Stage timeouts come from the StageDef itself.
+	pollInterval time.Duration
 }
 
 // NewCoordinator creates a preflight coordinator with the required store dependencies.
@@ -87,23 +92,31 @@ func (c *Coordinator) Dispatch(ctx context.Context, op *store.Operation, bundle 
 	}, dispatchErr
 }
 
-// Enqueue persists the first preflight command before the API returns.
-func (c *Coordinator) Enqueue(ctx context.Context, op *store.Operation) error {
-	entry, err := c.Dispatch(ctx, op, nil, nil)
-	if err != nil {
-		return err
-	}
-	return c.outbox.Create(ctx, entry)
-}
-
 func (c *Coordinator) Run(ctx context.Context, op *store.Operation) {
 	c.logger.Info("preflight coordinator started",
 		"op_id", op.ID,
 		"type", op.OperationType,
 	)
-	if op.OperationType == store.OperationUpgrade {
-		c.runUpgrade(ctx, op)
+
+	// Phase Start (REQ-019): record the lifecycle as running before any dispatch.
+	// A start-write failure must not dispatch commands (AC-019-05).
+	if err := c.startLifecycle(ctx, op.ID); err != nil {
+		c.logger.Error("preflight lifecycle start failed", "op_id", op.ID, "err", err)
 		return
+	}
+
+	overall, results := c.runPipeline(ctx, op)
+
+	// Phase Complete (REQ-019): persist the final result with a bounded
+	// non-cancelled context so cancellation/shutdown cannot drop the write
+	// (AC-019-06/07).
+	c.finalizeLifecycle(ctx, op.ID, overall, results)
+}
+
+func (c *Coordinator) runPipeline(ctx context.Context, op *store.Operation) (StageStatus, []StageResult) {
+	if op.OperationType == store.OperationUpgrade {
+		overall := c.runUpgrade(ctx, op)
+		return overall, nil
 	}
 	stages := ProductionStages()
 	results := make([]StageResult, 0, len(stages))
@@ -113,14 +126,9 @@ func (c *Coordinator) Run(ctx context.Context, op *store.Operation) {
 		select {
 		case <-ctx.Done():
 			c.logger.Warn("preflight cancelled via context", "op_id", op.ID, "stage", stage.Name)
-			c.casFailed(ctx, op, AggregateResult{
-				OperationID: op.ID,
-				Overall:     StageFailed,
-				FailedStage: stage.Name,
-				Stages:      results,
-				ErrorCode:   "preflight_cancelled",
-			})
-			return
+			// The operation was already CASed to cancelled by CancelOperation;
+			// a stale state_version must not overwrite it with failed (AC-019-07).
+			return StageCancelled, results
 		default:
 		}
 
@@ -134,8 +142,35 @@ func (c *Coordinator) Run(ctx context.Context, op *store.Operation) {
 		}
 		results = append(results, result)
 
+		if result.Status == StageCancelled {
+			// AC-019-03/07: operation cancelled — the operation was already CASed
+			// to cancelled by CancelOperation; a stale state_version must not
+			// overwrite it with failed.
+			return StageCancelled, results
+		}
 		if result.Status == StageFailed || result.Status == StageTimeout {
+			if !stage.Required {
+				// Optional stage failure: record the policy result and continue
+				// — only required stage failures fail the operation (REQ-019).
+				c.logger.Info("optional stage failed, continuing",
+					"op_id", op.ID, "stage", stage.Name, "status", result.Status)
+				continue
+			}
 			errorCode := errorCodeFromStatus(result)
+
+			if result.Status == StageTimeout {
+				// REQ-019: preflight timeout is a cancellation — record the
+				// operation as cancelled, not failed (overall enum row:
+				// "Operation 取消或 preflight 超时被取消").
+				c.casCancelled(ctx, op, AggregateResult{
+					OperationID: op.ID,
+					Overall:     StageCancelled,
+					FailedStage: stage.Name,
+					Stages:      results,
+					ErrorCode:   errorCode,
+				})
+				return StageCancelled, results
+			}
 			c.casFailed(ctx, op, AggregateResult{
 				OperationID: op.ID,
 				Overall:     StageFailed,
@@ -143,12 +178,9 @@ func (c *Coordinator) Run(ctx context.Context, op *store.Operation) {
 				Stages:      results,
 				ErrorCode:   errorCode,
 			})
-			// Record lifecycle result for GC (REQ-069).
-			c.recordLifecycle(ctx, op.ID, results, string(StageFailed), errorCode)
-			return
+			return StageFailed, results
 		}
-		// Optional stage failure → skip, continue (policy recorded)
-		c.logger.Info("optional stage skipped", "op_id", op.ID, "stage", stage.Name)
+		c.logger.Info("optional stage passed", "op_id", op.ID, "stage", stage.Name)
 	}
 
 	// All stages passed → CAS to queued.
@@ -158,53 +190,53 @@ func (c *Coordinator) Run(ctx context.Context, op *store.Operation) {
 		Stages:      results,
 	}
 	c.casQueued(ctx, op, result)
-	// Record lifecycle result for GC (REQ-069).
-	c.recordLifecycle(ctx, op.ID, results, string(StagePassed), "")
+	return StagePassed, results
 }
-func (c *Coordinator) runUpgrade(ctx context.Context, op *store.Operation) {
+func (c *Coordinator) runUpgrade(ctx context.Context, op *store.Operation) StageStatus {
 	operatorID, err := c.resolveOperator(ctx, op)
 	if err != nil {
 		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "stage_unavailable"})
-		return
+		return StageFailed
 	}
 	definition, err := c.defs.Get(ctx, op.ReleaseDefinitionID)
 	if err != nil {
 		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "release_not_found"})
-		return
+		return StageFailed
 	}
 	if _, err := c.invs.GetByDefinition(ctx, op.ReleaseDefinitionID); err != nil {
 		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "release_not_found"})
-		return
+		return StageFailed
 	}
 	bundle, err := c.bundles.Get(ctx, op.BundleID)
 	if err != nil {
 		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "bundle_not_found"})
-		return
+		return StageFailed
 	}
 	revision, err := c.values.Get(ctx, op.ValuesRevisionID)
 	if err != nil {
 		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "revision_not_approved"})
-		return
+		return StageFailed
 	}
 	commandID := op.ID + ":execute"
 	payload, err := BuildUpgradePayload(op, definition, bundle, revision, commandID)
 	if err != nil {
 		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "render_failed"})
-		return
+		return StageFailed
 	}
 	encoded, err := payload.Marshal()
 	if err != nil {
 		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "invalid_command"})
-		return
+		return StageFailed
 	}
 	if err := c.outbox.Create(ctx, &store.OutboxEntry{
 		ID: uuid.NewString(), CommandID: commandID, OperationID: op.ID,
 		OperationType: string(store.OperationUpgrade), OperatorID: operatorID, Payload: encoded,
 	}); err != nil {
 		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "dispatch_failed"})
-		return
+		return StageFailed
 	}
 	c.casQueued(ctx, op, AggregateResult{OperationID: op.ID, Overall: StagePassed})
+	return StagePassed
 }
 // runStage dispatches a PRECHECK command for one stage and polls for its result.
 func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage StageDef) (StageResult, error) {
@@ -222,6 +254,24 @@ func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage S
 	}
 
 	commandID := fmt.Sprintf("%s:%s", op.ID, stage.Name)
+
+	// D-87/ADR-005: reuse an existing row for the same command identity. The
+	// first artifact command is persisted atomically inside the operation
+	// creation transaction (REQ-067 OperationCreationUnitOfWork); any stage
+	// row left by a previous Run before an interruption is likewise resumed
+	// instead of duplicated. The stable command_id makes restarts idempotent.
+	if existing, err := c.outbox.GetByCommandID(ctx, commandID); err == nil {
+		c.logger.Debug("consuming existing precheck dispatch",
+			"op_id", op.ID, "command_id", commandID, "entry_id", existing.ID)
+		return c.pollStage(ctx, commandID, stage)
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return StageResult{
+			Stage:  stage.Name,
+			Status: StageFailed,
+			Detail: fmt.Sprintf("dispatch lookup error: %v", err),
+		}, err
+	}
+
 	payload, err := c.commandPayload(ctx, op, stage.Name, nil, nil)
 	if err != nil {
 		return emptyResult, err
@@ -283,12 +333,25 @@ func (c *Coordinator) pollStage(ctx context.Context, commandID string, stage Sta
 	stageCtx, cancel := context.WithTimeout(ctx, stage.Timeout)
 	defer cancel()
 
-	ticker := time.NewTicker(500 * time.Millisecond)
+	poll := c.pollInterval
+	if poll <= 0 {
+		poll = 500 * time.Millisecond
+	}
+	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-stageCtx.Done():
+			// AC-019-03/07: distinguish operation cancellation from a stage
+			// timeout so the lifecycle records cancelled, not a failure.
+			if ctx.Err() != nil {
+				return StageResult{
+					Stage:  stage.Name,
+					Status: StageCancelled,
+					Detail: "preflight_cancelled",
+				}, ctx.Err()
+			}
 			return StageResult{
 				Stage:  stage.Name,
 				Status: StageTimeout,
@@ -356,7 +419,6 @@ func (c *Coordinator) resolveOperator(ctx context.Context, op *store.Operation) 
 			return o.ID, nil
 		}
 	}
-
 	// Fallback: any non-revoked operator
 	for _, o := range opers {
 		if o.Status != store.OperatorRevoked {
@@ -364,9 +426,8 @@ func (c *Coordinator) resolveOperator(ctx context.Context, op *store.Operation) 
 		}
 	}
 
-	if len(opers) > 0 {
-		return opers[0].ID, nil
-	}
+	// All operators revoked: fail closed (AC-019-02) — a revoked-only cluster
+	// must never receive commands.
 
 	return "", fmt.Errorf("no operator for cluster %s", def.ClusterID)
 }
@@ -385,6 +446,22 @@ func (c *Coordinator) casFailed(ctx context.Context, op *store.Operation, result
 	}
 }
 
+// casCancelled transitions the operation to cancelled via EventCancel.
+// Preflight timeout is a cancellation per REQ-019 ("Operation 取消或 preflight
+// 超时被取消"); if CancelOperation already CASed the operation with a newer
+// state_version, this CAS fails safely without overwriting it (AC-019-07).
+func (c *Coordinator) casCancelled(ctx context.Context, op *store.Operation, result AggregateResult) {
+	next, err := operation.Transition(op.Status, operation.EventCancel)
+	if err != nil {
+		c.logger.Error("preflight→cancelled transition invalid", "op_id", op.ID, "err", err)
+		return
+	}
+	_, err = c.ops.UpdateStatus(ctx, op.ID, next, op.StateVersion, result.ErrorCode)
+	if err != nil {
+		c.logger.Error("CAS cancelled transition failed", "op_id", op.ID, "err", err)
+	}
+}
+
 func (c *Coordinator) casQueued(ctx context.Context, op *store.Operation, _ AggregateResult) {
 	c.logger.Info("preflight passed, enqueuing operation", "op_id", op.ID)
 
@@ -400,29 +477,54 @@ func (c *Coordinator) casQueued(ctx context.Context, op *store.Operation, _ Aggr
 	}
 }
 
-// recordLifecycle persists a PreflightLifecycle record for GC (REQ-069).
-// This is best-effort — failures are logged but not propagated.
-func (c *Coordinator) recordLifecycle(ctx context.Context, operationID string, stages []StageResult, overall, errorCode string) {
+// startLifecycle records the running state before any dispatch (REQ-019 Phase Start).
+func (c *Coordinator) startLifecycle(ctx context.Context, operationID string) error {
+	if c.pl == nil {
+		return nil
+	}
+	// Phase Start is authoritative persistence: a concurrently cancelled Run
+	// must still record the running row so the final cancelled result has a
+	// lifecycle to update (AC-019-05/07). Use a bounded non-cancelled context,
+	// mirroring finalizeLifecycle.
+	startCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if _, err := c.pl.CreateOrReset(startCtx, operationID); err != nil {
+		return fmt.Errorf("record preflight start: %w", err)
+	}
+	return nil
+}
+
+// finalizeLifecycle persists the final result (REQ-019 Phase Complete) using a
+// bounded non-cancelled cleanup context so a cancelled Run cannot drop the write.
+// Failures are logged but not propagated — lifecycle persistence is observational.
+func (c *Coordinator) finalizeLifecycle(ctx context.Context, operationID string, overall StageStatus, stages []StageResult) {
 	if c.pl == nil {
 		return
 	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := c.pl.UpdateResult(cleanupCtx, operationID, string(overall), canonicalStages(stages)); err != nil {
+		c.logger.Warn("failed to update preflight lifecycle", "op_id", operationID, "err", err)
+	}
+}
 
-	stagesJSON, err := json.Marshal(stages)
-	if err != nil {
-		c.logger.Warn("failed to marshal preflight stages for lifecycle", "op_id", operationID, "err", err)
-		return
+// canonicalStageName maps a stage to its canonical lifecycle name (REQ-019):
+// the cluster stage is recorded as "dryrun" matching the command type.
+func canonicalStageName(s StageName) string {
+	if s == StageCluster {
+		return "dryrun"
 	}
+	return string(s)
+}
 
-	opID := &operationID
-	pl := &store.PreflightLifecycle{
-		OperationID: opID,
-		Stages:      stagesJSON,
-		Overall:     overall,
-		ErrorCode:   errorCode,
+// canonicalStages returns the comma-separated canonical stage names in execution
+// order (REQ-019 stages construction).
+func canonicalStages(stages []StageResult) string {
+	names := make([]string, 0, len(stages))
+	for _, s := range stages {
+		names = append(names, canonicalStageName(s.Stage))
 	}
-	if err := c.pl.Create(ctx, pl); err != nil {
-		c.logger.Warn("failed to record preflight lifecycle", "op_id", operationID, "err", err)
-	}
+	return strings.Join(names, ",")
 }
 
 // errorCodeFromStatus maps a stage result status to a preflight error code.

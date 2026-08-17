@@ -1597,3 +1597,164 @@ func TestValuesCreateListIdempotencyConnectEndToEnd(t *testing.T) {
 	require.NoErrorf(t, err, "approve values revision failed: code=%s err=%v", connect.CodeOf(err), err)
 	assert.Equal(t, commonv1.ValuesStatus_VALUES_STATUS_APPROVED, approved.Msg.GetNewState())
 }
+
+// TestPreflightLifecycleConnectEndToEnd drives the REQ-019 two-phase lifecycle
+// through the real Connect server: CreateOperation (AC-019-04/05/06), stage
+// results via the outbox, first-dispatch consumption (D-87), and restart
+// recovery of operations left in preflight (ADR-009).
+func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
+	const signingKey = "test-signing-key"
+	ctx := context.Background()
+	dbPath := t.TempDir() + "/orchestrator.db"
+	seedStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+
+	const (
+		organizationID = "a1b2c3d4-0000-4000-8000-000000000019"
+		customerID     = "a1b2c3d4-0000-4000-8000-0000000000c0"
+		clusterID      = "cluster-preflight-e2e"
+		definitionID   = "def-preflight-e2e"
+		revisionID     = "revision-preflight-e2e"
+		bundleID       = "bundle-preflight-e2e"
+		userID         = "user-preflight-e2e"
+	)
+	require.NoError(t, seedStore.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Preflight E2E", Slug: "preflight-e2e"}))
+	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Preflight E2E Org"}))
+	require.NoError(t, seedStore.Bindings().Create(ctx, &store.OrgCustomerBinding{ID: "binding-preflight-e2e", OrgID: organizationID, CustomerID: customerID}))
+	require.NoError(t, seedStore.Users().Create(ctx, &store.User{ID: userID, Username: userID, PasswordHash: "unused"}))
+	require.NoError(t, seedStore.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: organizationID, UserID: userID, Role: store.RoleReleaseAdmin}))
+	require.NoError(t, seedStore.AuthSessions().Create(ctx, &store.AuthSession{
+		ID: uuid.NewString(), UserID: userID, TokenFamily: uuid.NewString(),
+		RefreshTokenHash: uuid.NewString(), ExpiresAt: time.Now().UTC().Add(time.Hour),
+	}))
+	owner := organizationID
+	require.NoError(t, seedStore.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: definitionID, Name: "preflight-e2e", CustomerID: customerID, ClusterID: clusterID,
+		Namespace: "default", ReleaseName: "preflight-e2e-rel", Status: store.DefStatusActive,
+		OwnerOrganizationID: &owner,
+	}, nil))
+	require.NoError(t, seedStore.Values().Create(ctx, &store.ValuesRevision{
+		ID: revisionID, ReleaseDefinitionID: definitionID, Version: 1, StateVersion: 1,
+		Status: store.ValuesStatusApproved, CanonicalDocument: []byte(`{"replicas":1}`),
+		Digest: "sha256:preflight-e2e", CreatedByUserID: userID,
+	}))
+	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{
+		ID: bundleID, Name: "preflight-e2e-bundle", DigestAlg: "sha256", DigestValue: "preflight-e2e-digest",
+		Status: store.BundleValidated, Images: []store.BundleImage{{Ref: "registry/app:v1", Digest: "sha256:preflight-e2e-image"}},
+	}))
+	// Active operator so artifact stages dispatch and poll for results.
+	require.NoError(t, seedStore.Operators().Create(ctx, &store.Operator{
+		ID: "operator-preflight-e2e", Name: "operator-preflight-e2e", CustomerID: customerID, ClusterID: clusterID,
+		CertSerial: "serial-preflight-e2e", Status: store.OperatorActive,
+	}))
+	require.NoError(t, seedStore.Close())
+
+	mux := http.NewServeMux()
+	authStore, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
+	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+
+	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
+	require.NoError(t, svc.Register(mux, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))))
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	// Bump the authorization source version so the Module pulls a fresh
+	// snapshot with the seeded membership grants (REQ-027 pattern from
+	// TestProductionTrustResolverFailureFailsClosed).
+	authSnap, err := svc.store.Authorization().Load(context.Background())
+	require.NoError(t, err)
+	_, err = svc.store.Authorization().Apply(context.Background(), store.AuthorizationApplyCommand{
+		ExpectedSourceVersion: authSnap.SourceVersion,
+		ExpectedPolicyVersion: authSnap.PolicyVersion,
+		Mutation:              store.AuthorizationMembershipChanged,
+	})
+	require.NoError(t, err)
+
+	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	token, _, err := jwtManager.GenerateAccessToken(userID, organizationID, []string{string(store.RoleReleaseAdmin)})
+	require.NoError(t, err)
+	client := orchestratorv1connect.NewOrchestratorServiceClient(http.DefaultClient, server.URL)
+
+	createRequest := func(key string) *connect.Request[orchestratorv1.CreateOperationRequest] {
+		req := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+			OperationType: "INSTALL", BundleId: bundleID, ReleaseDefinitionId: definitionID, ValuesRevisionId: revisionID,
+		})
+		req.Header().Set("Authorization", "Bearer "+token)
+		req.Header().Set("Idempotency-Key", key)
+		return req
+	}
+
+	// The first call warms the authorization snapshot; on a stale-snapshot
+	// failure the identical request is retried once (same pattern as the
+	// values E2E tests).
+	createResp, err := client.CreateOperation(ctx, createRequest("create-preflight-e2e"))
+	if err != nil {
+		require.Equal(t, connect.CodeUnavailable, connect.CodeOf(err), "first create should fail only on stale snapshot: %v", err)
+		createResp, err = client.CreateOperation(ctx, createRequest("create-preflight-e2e"))
+	}
+	require.NoErrorf(t, err, "create operation failed: code=%s err=%v", connect.CodeOf(err), err)
+	opID := createResp.Msg.GetOperationId()
+	assert.Equal(t, "preflight", createResp.Msg.GetState())
+
+	// AC-019-05: the lifecycle is running and the UOW first dispatch exists.
+	pl, err := svc.store.PreflightLifecycles().GetByOperationID(ctx, opID)
+	require.NoError(t, err)
+	assert.Equal(t, "running", pl.Overall)
+	_, err = svc.store.Outbox().GetByCommandID(ctx, opID+":artifact")
+	require.NoError(t, err, "D-87 first dispatch must be pre-created by the creation transaction")
+
+	// Drive the four stages to passed through the outbox.
+	for _, stage := range []string{"artifact", "render", "cluster", "runtime_pull"} {
+		var entry *store.OutboxEntry
+		require.Eventually(t, func() bool {
+			e, err := svc.store.Outbox().GetByCommandID(ctx, opID+":"+stage)
+			if err != nil {
+				return false
+			}
+			entry = e
+			return true
+		}, 5*time.Second, 50*time.Millisecond)
+		require.NoError(t, svc.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
+	}
+
+	// AC-019-04/06: operation CAS to queued, lifecycle passed with canonical stages.
+	require.Eventually(t, func() bool {
+		op, err := svc.store.Operations().Get(ctx, opID)
+		return err == nil && op.Status == store.StatusQueued
+	}, 5*time.Second, 50*time.Millisecond)
+	pl, err = svc.store.PreflightLifecycles().GetByOperationID(ctx, opID)
+	require.NoError(t, err)
+	assert.Equal(t, "passed", pl.Overall)
+	assert.Equal(t, "artifact,render,dryrun,runtime_pull", pl.Stages)
+
+	// Restart recovery: an operation left in preflight resumes coordination.
+	restartOpID := "op-restart-preflight-e2e"
+	require.NoError(t, svc.store.Operations().Create(ctx, &store.Operation{
+		ID: restartOpID, OperationType: store.OperationInstall, Status: store.StatusPreflight,
+		ReleaseDefinitionID: definitionID, IdempotencyKey: "idem-restart-preflight-e2e",
+		RequestHash: "hash-restart-preflight-e2e", StateVersion: 1,
+	}))
+	require.NoError(t, svc.emergency.Shutdown(context.Background()))
+	require.NoError(t, svc.Close())
+
+	// Second generation on the same DB: Register resumes the preflight op.
+	mux2 := http.NewServeMux()
+	svc2 := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	svc2.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
+	require.NoError(t, svc2.Register(mux2, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))))
+	server2 := httptest.NewServer(mux2)
+	t.Cleanup(func() {
+		require.NoError(t, svc2.emergency.Shutdown(context.Background()))
+		require.NoError(t, svc2.Close())
+		server2.Close()
+	})
+
+	// The resumed coordinator re-records the lifecycle as running (AC-019-05 retry).
+	require.Eventually(t, func() bool {
+		pl, err := svc2.store.PreflightLifecycles().GetByOperationID(ctx, restartOpID)
+		return err == nil && pl.Overall == "running"
+	}, 5*time.Second, 50*time.Millisecond)
+}

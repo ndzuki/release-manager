@@ -544,11 +544,8 @@ func TestOperationTransition_TerminalAt(t *testing.T) {
 		IdempotencyKey:      uuid.NewString(),
 	}
 	require.NoError(t, st.Operations().Create(ctx, op))
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, &store.PreflightLifecycle{
-		OperationID: &op.ID,
-		Stages:      []byte(`[{"stage":"control-plane","status":"passed"}]`),
-		Overall:     "passed",
-	}))
+	_, err := st.PreflightLifecycles().CreateOrReset(ctx, op.ID)
+	require.NoError(t, err)
 
 	updated, err := st.Operations().Transition(ctx, op.ID, store.StatusSucceeded, op.StateVersion, "")
 	require.NoError(t, err)
@@ -1198,8 +1195,15 @@ func TestPreflightLifecycleRetention(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
-	exploratory := &store.PreflightLifecycle{Stages: []byte(`[]`), Overall: "passed", CreatedAt: now.Add(-8 * 24 * time.Hour)}
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, exploratory))
+	old := now.Add(-8 * 24 * time.Hour)
+
+	// Exploratory preflight (no operation) — inserted directly: the two-phase
+	// contract no longer creates exploratory rows.
+	require.NoError(t, st.SQLDB().QueryRowContext(ctx,
+		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, created_at, updated_at)
+		 VALUES ($1, NULL, NULL, '', 'passed', $2, $2)`,
+		"exploratory", old,
+	).Err())
 
 	definition := createTestDefinition(t, st)
 	operationID := uuid.NewString()
@@ -1207,10 +1211,14 @@ func TestPreflightLifecycleRetention(t *testing.T) {
 		ID: operationID, OperationType: store.OperationInstall, Status: store.StatusRunning,
 		ReleaseDefinitionID: definition.ID, IdempotencyKey: uuid.NewString(), RequestHash: "preflight-retention",
 	}))
-	linked := &store.PreflightLifecycle{OperationID: &operationID, Stages: []byte(`[]`), Overall: "passed", CreatedAt: now.Add(-8 * 24 * time.Hour)}
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, linked))
-	require.NoError(t, st.PreflightLifecycles().SetOperationTerminal(ctx, operationID, now.Add(-8*24*time.Hour)))
-	require.NoError(t, st.PreflightLifecycles().SetOperationTerminal(ctx, operationID, now))
+	pl, err := st.PreflightLifecycles().CreateOrReset(ctx, operationID)
+	require.NoError(t, err)
+	// A terminal_at older than the TTL makes the row collectable; the second
+	// update asserts the GC predicate does not depend on a fresh timestamp.
+	require.NoError(t, st.SQLDB().QueryRowContext(ctx,
+		`UPDATE preflight_lifecycles SET operation_terminal_at = $1, created_at = $2, updated_at = $2 WHERE id = $3`,
+		old, old, pl.ID,
+	).Err())
 
 	deleted, err := st.PreflightLifecycles().DeleteExpired(ctx, 7*24*time.Hour)
 	require.NoError(t, err)

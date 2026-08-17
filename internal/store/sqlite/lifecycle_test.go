@@ -2,7 +2,9 @@ package sqlite_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ndzuki/release-manager/internal/store"
+	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
 
 // ── Bundle lifecycle tests (AC-069-01, AC-069-02, AC-069-13) ──────
@@ -850,27 +853,152 @@ func TestSQLiteUnitOfWork_RollbackOnPartialFailure(t *testing.T) {
 	assert.Equal(t, 1, orphaned)
 }
 
-// ── Preflight Lifecycle (AC-069-09, AC-069-10) ──────────────────
+// ── Preflight Lifecycle two-phase contract (AC-019-05/06/07) ─────
 
-func TestPreflightLifecycleCRUD(t *testing.T) {
+func TestPreflightLifecycleTwoPhaseWrite(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
 
+	// Phase start: first insert records running with empty stages (AC-019-05).
 	opID := uuid.New().String()
-	pl := &store.PreflightLifecycle{
-		OperationID: &opID,
-		Stages:      []byte(`[{"stage":"control-plane","status":"passed"},{"stage":"inventory","status":"passed"}]`),
-		Overall:     "passed",
-	}
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, pl))
+	pl, err := st.PreflightLifecycles().CreateOrReset(ctx, opID)
+	require.NoError(t, err)
 	assert.NotEmpty(t, pl.ID)
+	assert.Equal(t, "running", pl.Overall)
+	assert.Equal(t, "", pl.Stages)
+	assert.False(t, pl.CreatedAt.IsZero())
+	assert.False(t, pl.UpdatedAt.IsZero())
 
-	// Set operation terminal.
-	terminalAt := time.Now().UTC()
-	require.NoError(t, st.PreflightLifecycles().SetOperationTerminal(ctx, opID, terminalAt))
+	// Retry for the same operation reuses and resets the row (AC-019-05).
+	pl2, err := st.PreflightLifecycles().CreateOrReset(ctx, opID)
+	require.NoError(t, err)
+	assert.Equal(t, pl.ID, pl2.ID, "retry must reuse the existing row")
+	assert.Equal(t, "running", pl2.Overall)
 
-	// Second call is no-op (already set).
-	require.NoError(t, st.PreflightLifecycles().SetOperationTerminal(ctx, opID, terminalAt.Add(time.Hour)))
+	// Phase complete: final result persisted (AC-019-06).
+	require.NoError(t, st.PreflightLifecycles().UpdateResult(ctx, opID, "passed", "artifact,render,dryrun"))
+	got, err := st.PreflightLifecycles().GetByOperationID(ctx, opID)
+	require.NoError(t, err)
+	assert.Equal(t, "passed", got.Overall)
+	assert.Equal(t, "artifact,render,dryrun", got.Stages)
+	assert.False(t, got.UpdatedAt.Before(got.CreatedAt))
+
+	// UpdateResult on a missing row reports not found.
+	err = st.PreflightLifecycles().UpdateResult(ctx, uuid.New().String(), "failed", "artifact")
+	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
+// ── Preflight Lifecycle GC (AC-069-09, AC-069-10) ──────────────────
+
+// TestMigrateLegacyPreflightLifecycleSchema validates the REQ-019 two-phase
+// schema rebuild against a real legacy-format database: duplicate operation
+// rows, JSON stages, timeout overall, and terminal_at preservation.
+func TestMigrateLegacyPreflightLifecycleSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	raw, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	ctx := context.Background()
+	_, err = raw.ExecContext(ctx, `CREATE TABLE preflight_lifecycles (
+		id                    TEXT PRIMARY KEY,
+		operation_id          TEXT,
+		operation_terminal_at TEXT,
+		stages                TEXT NOT NULL DEFAULT '[]',
+		overall               TEXT NOT NULL DEFAULT '',
+		error_code            TEXT NOT NULL DEFAULT '',
+		created_at            TEXT NOT NULL
+	)`)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(ctx, `CREATE INDEX idx_preflight_lifecycles_operation ON preflight_lifecycles(operation_id)`)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(ctx, `CREATE INDEX idx_preflight_lifecycles_terminal ON preflight_lifecycles(operation_terminal_at)`)
+	require.NoError(t, err)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	early := now.Add(-2 * time.Hour).Format(time.RFC3339)
+	late := now.Add(-1 * time.Hour).Format(time.RFC3339)
+	terminal := now.Add(-30 * time.Minute).Format(time.RFC3339)
+
+	seed := []string{
+		// op-dup: two rows for the same operation — dedupe keeps the earliest
+		// created_at while carrying the latest result and the non-null terminal.
+		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at) VALUES ('dup-1', 'op-dup', NULL, '[]', 'running', '', '` + early + `')`,
+		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at) VALUES ('dup-2', 'op-dup', '` + terminal + `', '[{"stage":"artifact","status":"passed"},{"stage":"render","status":"passed"}]', 'passed', '', '` + late + `')`,
+		// op-rev: the latest result row has NULL terminal but an older row
+		// carries it — the non-null terminal must survive dedupe.
+		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at) VALUES ('rev-early', 'op-rev', '` + terminal + `', '[]', 'running', '', '` + early + `')`,
+		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at) VALUES ('rev-late', 'op-rev', NULL, '[{"stage":"artifact","status":"passed"}]', 'passed', '', '` + late + `')`,
+		// op-null-a/op-null-b: multiple exploratory rows (NULL operation_id)
+		// are distinct rows in the legacy model and must all survive dedupe
+		// (UNIQUE allows multiple NULLs).
+		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at) VALUES ('null-a', NULL, NULL, '[]', 'running', '', '` + early + `')`,
+		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at) VALUES ('null-b', NULL, NULL, '[]', 'passed', '', '` + late + `')`,
+		// op-timeout: JSON stages + timeout overall → cancelled.
+		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at) VALUES ('timeout-1', 'op-timeout', NULL, '[]', 'timeout', 'stage_timeout', '` + late + `')`,
+		// exploratory (no operation) survives.
+		`INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, error_code, created_at) VALUES ('expl-1', NULL, NULL, '[]', 'passed', '', '` + late + `')`,
+	}
+	for _, stmt := range seed {
+		_, err = raw.ExecContext(ctx, stmt)
+		require.NoError(t, err)
+	}
+	require.NoError(t, raw.Close())
+
+	// Open through the store so the migration hook rebuilds the legacy table.
+	st, err := sqlitestore.Open(path)
+	require.NoError(t, err)
+	defer st.Close()
+
+	var count int
+	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM preflight_lifecycles WHERE operation_id = 'op-dup'`).Scan(&count))
+	assert.Equal(t, 1, count, "duplicate operation rows must be deduplicated")
+
+	var stages, overall, createdAt, updatedAt, terminalAt string
+	require.NoError(t, st.DB().QueryRowContext(ctx, `
+		SELECT stages, overall, created_at, updated_at, COALESCE(operation_terminal_at, '')
+		FROM preflight_lifecycles WHERE operation_id = 'op-dup'`).Scan(&stages, &overall, &createdAt, &updatedAt, &terminalAt))
+	assert.Equal(t, "artifact,render", stages, "JSON stages must convert to canonical names")
+	assert.Equal(t, "passed", overall, "latest result must win")
+	assert.Equal(t, early, createdAt, "earliest created_at must be preserved")
+	assert.Equal(t, early, updatedAt, "updated_at must be backfilled from created_at")
+	assert.Equal(t, terminal, terminalAt, "terminal_at must be preserved")
+
+	// The latest row wins the result, but a non-null terminal from an older
+	// duplicate row must not be lost (Spec review finding, v3).
+	require.NoError(t, st.DB().QueryRowContext(ctx, `
+		SELECT overall, COALESCE(operation_terminal_at, '')
+		FROM preflight_lifecycles WHERE operation_id = 'op-rev'`).Scan(&overall, &terminalAt))
+	assert.Equal(t, "passed", overall, "latest result must win")
+	assert.Equal(t, terminal, terminalAt, "non-null terminal_at from an older row must be preserved")
+
+	// Multiple NULL-operation rows must not collapse into one (Spec review
+	// finding, v3): each exploratory row keeps its own identity.
+	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM preflight_lifecycles WHERE operation_id IS NULL`).Scan(&count))
+	assert.Equal(t, 3, count, "every exploratory row with NULL operation_id must survive")
+
+	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT overall FROM preflight_lifecycles WHERE operation_id = 'op-timeout'`).Scan(&overall))
+	assert.Equal(t, "cancelled", overall, "legacy timeout must map to cancelled")
+
+
+	// New shape: updated_at present, error_code gone, operation_id unique.
+	rows, err := st.DB().QueryContext(ctx, `PRAGMA table_info(preflight_lifecycles)`)
+	require.NoError(t, err)
+	defer rows.Close()
+	cols := map[string]bool{}
+	for rows.Next() {
+		var pos, notNull, pk int
+		var name, colType string
+		var def any
+		require.NoError(t, rows.Scan(&pos, &name, &colType, &notNull, &def, &pk))
+		cols[name] = true
+	}
+	require.NoError(t, rows.Err())
+	assert.True(t, cols["updated_at"], "updated_at column must exist")
+	assert.False(t, cols["error_code"], "error_code column must be removed")
+
+	_, err = st.DB().ExecContext(ctx, `
+		INSERT INTO preflight_lifecycles (id, operation_id, stages, overall, created_at, updated_at)
+		VALUES ('dup-3', 'op-dup', '', 'running', ?, ?)`, late, late)
+	require.Error(t, err, "operation_id uniqueness must be enforced")
 }
 
 func TestPreflightLifecycleDeleteExpired(t *testing.T) {
@@ -878,45 +1006,33 @@ func TestPreflightLifecycleDeleteExpired(t *testing.T) {
 	ctx := context.Background()
 
 	now := time.Now().UTC()
+	old := now.Add(-8 * 24 * time.Hour).Format(time.RFC3339)
 
-	// Exploratory preflight (no operation) — old → deleted (AC-069-09).
-	exploratory := &store.PreflightLifecycle{
-		OperationID: nil,
-		Stages:      []byte(`[]`),
-		Overall:     "passed",
-	}
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, exploratory))
-
-	_, err := st.DB().ExecContext(ctx,
-		`UPDATE preflight_lifecycles SET created_at=? WHERE id=?`,
-		now.Add(-8*24*time.Hour).Format(time.RFC3339), exploratory.ID)
+	// Exploratory preflight (no operation) — old → deleted (AC-069-09). Inserted
+	// directly: the two-phase contract no longer creates exploratory rows.
+	_, err := st.DB().ExecContext(ctx, `
+		INSERT INTO preflight_lifecycles (id, operation_id, operation_terminal_at, stages, overall, created_at, updated_at)
+		VALUES (?, NULL, NULL, '', 'passed', ?, ?)`,
+		"exploratory", old, old)
 	require.NoError(t, err)
 
 	// Preflight without terminal_at — should survive (AC-069-10).
 	opID := uuid.New().String()
-	noTerminal := &store.PreflightLifecycle{
-		OperationID: &opID,
-		Stages:      []byte(`[]`),
-		Overall:     "passed",
-	}
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, noTerminal))
-
+	pl, err := st.PreflightLifecycles().CreateOrReset(ctx, opID)
+	require.NoError(t, err)
 	_, err = st.DB().ExecContext(ctx,
-		`UPDATE preflight_lifecycles SET created_at=? WHERE id=?`,
-		now.Add(-8*24*time.Hour).Format(time.RFC3339), noTerminal.ID)
+		`UPDATE preflight_lifecycles SET created_at=?, updated_at=? WHERE id=?`,
+		old, old, pl.ID)
 	require.NoError(t, err)
 
 	// Preflight with terminal_at set — old → deleted.
 	opID2 := uuid.New().String()
-	terminal := &store.PreflightLifecycle{
-		OperationID: &opID2,
-		Stages:      []byte(`[]`),
-		Overall:     "failed",
-	}
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, terminal))
-
-	terminalAt := now.Add(-8 * 24 * time.Hour)
-	require.NoError(t, st.PreflightLifecycles().SetOperationTerminal(ctx, opID2, terminalAt))
+	pl2, err := st.PreflightLifecycles().CreateOrReset(ctx, opID2)
+	require.NoError(t, err)
+	_, err = st.DB().ExecContext(ctx,
+		`UPDATE preflight_lifecycles SET operation_terminal_at=?, created_at=?, updated_at=? WHERE id=?`,
+		old, old, old, pl2.ID)
+	require.NoError(t, err)
 
 	// GC: TTL = 7 days.
 	n, err := st.PreflightLifecycles().DeleteExpired(ctx, 7*24*time.Hour)
@@ -932,12 +1048,8 @@ func TestOperationTransition_SetsPreflightTerminal(t *testing.T) {
 
 	// Create a preflight lifecycle record first.
 	opID := uuid.New().String()
-	pl := &store.PreflightLifecycle{
-		OperationID: &opID,
-		Stages:      []byte(`[{"stage":"control-plane","status":"passed"}]`),
-		Overall:     "passed",
-	}
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, pl))
+	_, err := st.PreflightLifecycles().CreateOrReset(ctx, opID)
+	require.NoError(t, err)
 
 	// Create an operation in running state.
 	def := &store.ReleaseDefinition{

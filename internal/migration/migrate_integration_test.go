@@ -66,11 +66,13 @@ func TestRunMigratesCurrentSQLiteSchemaEndToEnd(t *testing.T) {
 	assert.True(t, candidateDerived.Equal(candidateCreated))
 
 	var preflightUpdated, preflightCreated time.Time
+	var preflightOverall, preflightStages string
 	require.NoError(t, targetDB.QueryRowContext(ctx,
-		`SELECT updated_at, created_at FROM preflight_lifecycles WHERE id = 'preflight-migrate'`,
-	).Scan(&preflightUpdated, &preflightCreated))
-	assert.True(t, preflightUpdated.Equal(preflightCreated))
-
+		`SELECT updated_at, created_at, overall, stages FROM preflight_lifecycles WHERE operation_id = 'operation-migrate'`,
+	).Scan(&preflightUpdated, &preflightCreated, &preflightOverall, &preflightStages))
+	assert.False(t, preflightUpdated.Before(preflightCreated), "updated_at must not predate created_at")
+	assert.Equal(t, "passed", preflightOverall)
+	assert.Equal(t, "verify", preflightStages)
 	var linked int
 	require.NoError(t, targetDB.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM bundle_candidate_artifacts WHERE bundle_id = 'bundle-migrate' AND candidate_artifact_id = 'candidate-migrate'`,
@@ -167,9 +169,9 @@ func createMigrationSource(ctx context.Context, t *testing.T) string {
 	require.NoError(t, st.CandidateArtifacts().Create(ctx, &store.CandidateArtifact{
 		ID: "candidate-migrate", ArtifactType: store.ArtifactImage, Ref: "registry/app:v1", Digest: "sha256:candidate", BundleID: &bundleID,
 	}))
-	require.NoError(t, st.PreflightLifecycles().Create(ctx, &store.PreflightLifecycle{
-		ID: "preflight-migrate", Stages: json.RawMessage(`[{"stage":"verify","status":"passed"}]`), Overall: "passed", CreatedAt: now,
-	}))
+	_, lifecycleErr := st.PreflightLifecycles().CreateOrReset(ctx, "operation-migrate")
+	require.NoError(t, lifecycleErr)
+	require.NoError(t, st.PreflightLifecycles().UpdateResult(ctx, "operation-migrate", "passed", "verify"))
 
 	require.NoError(t, st.Users().Create(ctx, &store.User{ID: "user-migrate", Username: "migration-user", PasswordHash: "hash"}))
 	require.NoError(t, st.AuthSessions().Create(ctx, &store.AuthSession{

@@ -2188,22 +2188,27 @@ type ValidationOutboxStore interface {
 
 // ── Preflight lifecycle domain types (REQ-069) ─────────────────────
 
-// PreflightLifecycle records the lifecycle of a preflight check for GC.
+// PreflightLifecycle records the lifecycle of a preflight check (REQ-019).
 type PreflightLifecycle struct {
 	ID                  string
 	OperationID         *string
 	OperationTerminalAt *time.Time
-	Stages              json.RawMessage
-	Overall             string
-	ErrorCode           string
+	Stages              string // comma-separated canonical stage names, e.g. "artifact,render,dryrun"
+	Overall             string // running | passed | failed | cancelled
 	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // PreflightLifecycleStore defines the persistence contract for preflight lifecycles.
 type PreflightLifecycleStore interface {
-	Create(ctx context.Context, pl *PreflightLifecycle) error
+	// CreateOrReset inserts a running lifecycle row for the operation, or resets
+	// an existing row to running with empty stages on retry, preserving any
+	// operation_terminal_at already recorded by the operation terminal transaction
+	// (REQ-019 two-phase write).
+	CreateOrReset(ctx context.Context, operationID string) (*PreflightLifecycle, error)
+	// UpdateResult persists the final overall result and canonical stage list.
+	UpdateResult(ctx context.Context, operationID, overall, stages string) error
 	GetByOperationID(ctx context.Context, operationID string) (*PreflightLifecycle, error)
-	SetOperationTerminal(ctx context.Context, operationID string, terminalAt time.Time) error
 	DeleteExpired(ctx context.Context, ttl time.Duration) (int64, error)
 }
 

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -40,6 +39,7 @@ type Service struct {
 	verifier            trust.Verifier
 	targetEnv           string
 	coordinator         *preflight.Coordinator
+	preflightRunner     *preflight.Runner
 	vulnEval            *vulnerability.Evaluator
 	auditEmitter        audit.Sink
 	emergencyDispatcher emergencyDispatcher
@@ -47,10 +47,6 @@ type Service struct {
 	operatorEndpoint    string
 	logger              *slog.Logger
 	authorizer          authorization.Authorizer
-	preflightMu         sync.Mutex
-	preflightWG         sync.WaitGroup
-	preflightClosed     bool
-	preflightCancels    map[string]context.CancelFunc
 	valuesConfig        ValuesConfig
 }
 
@@ -85,19 +81,20 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 			logger = value
 		}
 	}
+	coordinator := preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.Values(), st.Bundles(), st.PreflightLifecycles(), st.Inventories(), logger)
 	return &Service{
 		store:               st,
 		createOperation:     createOperation,
 		verifier:            verifier,
 		emergencyDispatcher: dispatcher,
 		targetEnv:           targetEnv,
-		coordinator:         preflight.NewCoordinator(st.Outbox(), st.Operations(), st.Operators(), st.Definitions(), st.Values(), st.Bundles(), st.PreflightLifecycles(), st.Inventories(), logger),
+		coordinator:         coordinator,
+		preflightRunner:     preflight.NewRunner(coordinator.Run, logger),
 		auditEmitter:        auditEmitter,
 		streamRevoker:       streamRevoker,
 		operatorEndpoint:    operatorEndpoint,
 		logger:              logger,
 		authorizer:          authorizer,
-		preflightCancels:    make(map[string]context.CancelFunc),
 		valuesConfig:        valuesConfig,
 	}
 }
@@ -429,7 +426,8 @@ func (s *Service) CreateOperation(
 		} else {
 			op.Status = updated.Status
 			op.StateVersion = updated.StateVersion
-			s.startPreflight(ctx, op)
+			//nolint:contextcheck // preflight must outlive the request context; Runner.Start detaches deliberately (AC-019-03).
+			s.startPreflight(op)
 			s.logger.Info("preflight coordinator launched", "op_id", op.ID)
 		}
 	}
@@ -862,6 +860,11 @@ func (s *Service) finishCancelWithTarget(
 	}
 
 	protoOp := toProtoOperation(result.Operation)
+	if result.Operation.Status == store.StatusCancelled || result.Operation.Status == store.StatusCancelling {
+		// AC-019-03: a successfully cancelled operation terminates its running
+		// preflight; the coordinator finalizes the lifecycle as cancelled.
+		s.CancelPreflight(op.ID)
+	}
 	return connect.NewResponse(&orchestratorv1.CancelOperationResponse{
 		Operation: protoOp,
 		RequestId: result.RequestID,
@@ -1249,55 +1252,38 @@ func (s *Service) checkCustomerNotDisabled(ctx context.Context, customerID strin
 	return nil
 }
 
-func (s *Service) startPreflight(ctx context.Context, op *store.Operation) {
-	preflightCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	s.preflightMu.Lock()
-	if s.preflightClosed {
-		s.preflightMu.Unlock()
-		cancel()
-		s.logger.Warn("preflight coordinator rejected during shutdown", "op_id", op.ID)
-		return
-	}
-	s.preflightCancels[op.ID] = cancel
-	s.preflightWG.Add(1)
-	s.preflightMu.Unlock()
+// startPreflight begins the preflight pipeline for an operation, detached from
+// the request context (AC-019-03). Runs are tracked by the runner for
+// operation-scoped cancellation and graceful shutdown.
+func (s *Service) startPreflight(op *store.Operation) {
+	s.preflightRunner.Start(op)
+}
 
-	go func() {
-		defer s.preflightWG.Done()
-		defer cancel()
-		defer func() {
-			s.preflightMu.Lock()
-			delete(s.preflightCancels, op.ID)
-			s.preflightMu.Unlock()
-		}()
-		s.coordinator.Run(preflightCtx, op)
-	}()
+// CancelPreflight propagates cancellation to a running preflight after the
+// operation has been CASed to cancelled (AC-019-03/07).
+func (s *Service) CancelPreflight(operationID string) {
+	s.preflightRunner.Cancel(operationID)
+}
+
+// ResumePreflights restarts preflight coordination for operations left in the
+// preflight state after a service restart (ADR-009 recovery). Returns the
+// number of operations resumed.
+func (s *Service) ResumePreflights(ctx context.Context) (int, error) {
+	ops, err := s.store.Operations().ListNonTerminal(ctx)
+	if err != nil {
+		return 0, err
+	}
+	//nolint:contextcheck // resumed runs use the runner's detached background context.
+	started := s.preflightRunner.Resume(ops)
+	if started > 0 {
+		s.logger.Info("resumed preflight operations after restart", "count", started)
+	}
+	return started, nil
 }
 
 // Shutdown cancels and joins all preflight coordinators before the Store closes.
 func (s *Service) Shutdown(ctx context.Context) error {
-	s.preflightMu.Lock()
-	s.preflightClosed = true
-	cancels := make([]context.CancelFunc, 0, len(s.preflightCancels))
-	for _, cancel := range s.preflightCancels {
-		cancels = append(cancels, cancel)
-	}
-	s.preflightMu.Unlock()
-	for _, cancel := range cancels {
-		cancel()
-	}
-
-	done := make(chan struct{})
-	go func() {
-		s.preflightWG.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("wait for preflight coordinators: %w", ctx.Err())
-	}
+	return s.preflightRunner.Shutdown(ctx)
 }
 
 func (s *Service) checkReleaseState(

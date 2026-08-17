@@ -187,8 +187,17 @@ func gatewayTLSStateMiddleware(next http.Handler) http.Handler {
 
 func (s *orchSvc) Shutdown(ctx context.Context) error {
 	var result error
+	if s.emergency != nil {
+		// Drain preflight coordinators before the Store closes so no runner
+		// touches a closed database (TASK-019 v3 Step 5).
+		if err := s.emergency.Shutdown(ctx); result == nil {
+			result = err
+		}
+	}
 	if emitter, ok := s.auditEmitter.(interface{ Shutdown(context.Context) error }); ok {
-		result = emitter.Shutdown(ctx)
+		if err := emitter.Shutdown(ctx); result == nil {
+			result = err
+		}
 	}
 	if s.traceShutdown != nil {
 		if err := s.traceShutdown(ctx); result == nil {
@@ -304,6 +313,16 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		logger,
 	)
 	s.emergency = svc
+	if !s.cfg.Maintenance {
+		// ADR-009 restart recovery: operations interrupted mid-preflight resume
+		// coordination after the generic terminal-state recovery pass.
+		resumed, resumeErr := svc.ResumePreflights(context.Background())
+		if resumeErr != nil {
+			logger.Warn("preflight resume failed", "err", resumeErr)
+		} else if resumed > 0 {
+			logger.Warn("preflight operations resumed on restart", "count", resumed)
+		}
+	}
 	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)
 	enforcer, err := auth.NewEnforcer(s.store, logger)
 	if err != nil {
