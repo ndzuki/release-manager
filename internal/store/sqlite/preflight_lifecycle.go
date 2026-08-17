@@ -101,14 +101,31 @@ func (s *preflightLifecycleStore) GetByOperationID(ctx context.Context, operatio
 	return &pl, nil
 }
 
-// DeleteExpired removes lifecycle records past their TTL (REQ-069).
-func (s *preflightLifecycleStore) DeleteExpired(ctx context.Context, ttl time.Duration) (int64, error) {
-	cutoff := time.Now().UTC().Add(-ttl).Format(time.RFC3339)
-	result, err := s.db.ExecContext(ctx, `
-		DELETE FROM preflight_lifecycles
-		WHERE (operation_id IS NULL AND created_at < ?)
-		   OR (operation_id IS NOT NULL AND operation_terminal_at IS NOT NULL AND operation_terminal_at < ?)
-	`, cutoff, cutoff)
+// DeleteExpired removes lifecycle records past their retention in bounded
+// batches (REQ-069 Phase 4, AC-069-23/24/25/26): operation-linked rows past
+// ttl from operation_terminal_at, orphan rows past orphanTTL from created_at,
+// and rows whose linked operation is terminal without a backfilled
+// operation_terminal_at, evaluated from operations.terminal_at.
+func (s *preflightLifecycleStore) DeleteExpired(ctx context.Context, ttl, orphanTTL time.Duration, limits ...int) (int64, error) {
+	limit := 100
+	if len(limits) > 0 && limits[0] > 0 && limits[0] < limit {
+		limit = limits[0]
+	}
+	now := time.Now().UTC()
+	ttlCutoff := now.Add(-ttl).Format(time.RFC3339)
+	orphanCutoff := now.Add(-orphanTTL).Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx, `DELETE FROM preflight_lifecycles WHERE rowid IN (
+		SELECT pl.rowid FROM preflight_lifecycles AS pl
+		LEFT JOIN operations AS o ON o.id = pl.operation_id
+		WHERE (pl.operation_id IS NULL AND pl.created_at < ?)
+		   OR (pl.operation_terminal_at IS NOT NULL AND pl.operation_terminal_at < ?)
+		   OR (pl.operation_terminal_at IS NULL
+		       AND o.id IS NOT NULL
+		       AND o.status IN ('succeeded', 'failed', 'cancelled', 'timeout')
+		       AND o.terminal_at IS NOT NULL
+		       AND o.terminal_at < ?)
+		ORDER BY pl.created_at, pl.id LIMIT ?
+	)`, orphanCutoff, ttlCutoff, ttlCutoff, limit)
 	if err != nil {
 		return 0, fmt.Errorf("delete expired preflight lifecycles: %w", err)
 	}

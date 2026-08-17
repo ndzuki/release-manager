@@ -65,9 +65,9 @@ func (s *preflightLifecycleStore) GetByOperationID(ctx context.Context, operatio
 	var (
 		pl                  store.PreflightLifecycle
 		storedOperationID   *string
-		operationTerminalAt  *string
-		createdAt            string
-		updatedAt            string
+		operationTerminalAt *string
+		createdAt           string
+		updatedAt           string
 	)
 	if err := row.Scan(&pl.ID, &storedOperationID, &operationTerminalAt, &pl.Stages, &pl.Overall, &createdAt, &updatedAt); err != nil {
 		if err == sql.ErrNoRows {
@@ -99,14 +99,41 @@ func (s *preflightLifecycleStore) GetByOperationID(ctx context.Context, operatio
 	return &pl, nil
 }
 
-// DeleteExpired removes lifecycle records past their TTL (REQ-069).
-func (s *preflightLifecycleStore) DeleteExpired(ctx context.Context, ttl time.Duration) (int64, error) {
-	cutoff := time.Now().UTC().Add(-ttl).Format(time.RFC3339)
+// DeleteExpired removes lifecycle records past their retention in bounded
+// batches (REQ-069 Phase 4, AC-069-23/24/25/26):
+//   - operation-linked rows whose operation_terminal_at is older than ttl;
+//   - orphan rows (operation_id IS NULL) whose created_at is older than
+//     orphanTTL;
+//   - rows whose operation_terminal_at is NULL but whose linked operation is
+//     terminal, evaluated from operations.terminal_at when it exists (JOIN
+//     fallback for rows that predate the REQ-023 backfill).
+//
+// Rows linked to non-terminal operations are always preserved.
+func (s *preflightLifecycleStore) DeleteExpired(ctx context.Context, ttl, orphanTTL time.Duration, limits ...int) (int64, error) {
+	limit := 100
+	if len(limits) > 0 && limits[0] > 0 && limits[0] < limit {
+		limit = limits[0]
+	}
+	now := time.Now().UTC()
+	ttlCutoff := now.Add(-ttl).Format(time.RFC3339)
+	orphanCutoff := now.Add(-orphanTTL).Format(time.RFC3339)
 	result, err := s.gorm.ExecContext(ctx, `
-		DELETE FROM preflight_lifecycles
-		WHERE (operation_id IS NULL AND created_at < ?)
-		   OR (operation_id IS NOT NULL AND operation_terminal_at IS NOT NULL AND operation_terminal_at < ?)
-	`, cutoff, cutoff)
+		WITH expired AS (
+			SELECT pl.ctid
+			FROM preflight_lifecycles AS pl
+			LEFT JOIN operations AS o ON o.id = pl.operation_id
+			WHERE (pl.operation_id IS NULL AND pl.created_at < ?)
+			   OR (pl.operation_terminal_at IS NOT NULL AND pl.operation_terminal_at < ?)
+			   OR (pl.operation_terminal_at IS NULL
+			       AND o.id IS NOT NULL
+			       AND o.status IN ('succeeded', 'failed', 'cancelled', 'timeout')
+			       AND o.terminal_at IS NOT NULL
+			       AND o.terminal_at < ?)
+			ORDER BY pl.created_at, pl.id
+			LIMIT ?
+		)
+		DELETE FROM preflight_lifecycles WHERE ctid IN (SELECT ctid FROM expired)
+	`, orphanCutoff, ttlCutoff, ttlCutoff, limit)
 	if err != nil {
 		return 0, fmt.Errorf("delete expired preflight lifecycles: %w", err)
 	}

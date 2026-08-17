@@ -123,6 +123,17 @@ func TestMapProcedure(t *testing.T) {
 		assert.Equal(t, "write", action)
 	})
 
+	t.Run("cleanup procedures require platform write", func(t *testing.T) {
+		for _, procedure := range []string{
+			"/orchestrator.v1.CleanupService/RunCleanup",
+			"/orchestrator.v1.CleanupService/UnarchiveBundle",
+		} {
+			object, action := mapProcedure(procedure)
+			assert.Equal(t, "cleanup", object)
+			assert.Equal(t, "write", action)
+		}
+	})
+
 	trustProcedures := []struct {
 		name      string
 		procedure string

@@ -42,7 +42,9 @@ func TestBundleArchiveAndUnarchive(t *testing.T) {
 	assert.NotNil(t, got.ArchivedAt)
 
 	// Unarchive the bundle.
-	require.NoError(t, st.Bundles().Unarchive(ctx, b.ID))
+	previousStatus, err := st.Bundles().Unarchive(ctx, b.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(store.BundleValidated), previousStatus)
 
 	got, err = st.Bundles().Get(ctx, b.ID)
 	require.NoError(t, err)
@@ -978,7 +980,6 @@ func TestMigrateLegacyPreflightLifecycleSchema(t *testing.T) {
 	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT overall FROM preflight_lifecycles WHERE operation_id = 'op-timeout'`).Scan(&overall))
 	assert.Equal(t, "cancelled", overall, "legacy timeout must map to cancelled")
 
-
 	// New shape: updated_at present, error_code gone, operation_id unique.
 	rows, err := st.DB().QueryContext(ctx, `PRAGMA table_info(preflight_lifecycles)`)
 	require.NoError(t, err)
@@ -1034,8 +1035,8 @@ func TestPreflightLifecycleDeleteExpired(t *testing.T) {
 		old, old, old, pl2.ID)
 	require.NoError(t, err)
 
-	// GC: TTL = 7 days.
-	n, err := st.PreflightLifecycles().DeleteExpired(ctx, 7*24*time.Hour)
+	// GC: TTL = 7 days for both operation-linked and orphan rows.
+	n, err := st.PreflightLifecycles().DeleteExpired(ctx, 7*24*time.Hour, 7*24*time.Hour)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), n) // exploratory + terminal (both > 7d)
 }

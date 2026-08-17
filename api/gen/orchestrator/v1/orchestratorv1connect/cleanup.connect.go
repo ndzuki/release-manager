@@ -36,6 +36,9 @@ const (
 	// CleanupServiceRunCleanupProcedure is the fully-qualified name of the CleanupService's RunCleanup
 	// RPC.
 	CleanupServiceRunCleanupProcedure = "/orchestrator.v1.CleanupService/RunCleanup"
+	// CleanupServiceUnarchiveBundleProcedure is the fully-qualified name of the CleanupService's
+	// UnarchiveBundle RPC.
+	CleanupServiceUnarchiveBundleProcedure = "/orchestrator.v1.CleanupService/UnarchiveBundle"
 )
 
 // CleanupServiceClient is a client for the orchestrator.v1.CleanupService service.
@@ -44,6 +47,7 @@ type CleanupServiceClient interface {
 	// The idempotency_key ensures the same key returns the same result
 	// without re-executing the cleanup.
 	RunCleanup(context.Context, *connect.Request[v1.RunCleanupRequest]) (*connect.Response[v1.RunCleanupResponse], error)
+	UnarchiveBundle(context.Context, *connect.Request[v1.UnarchiveBundleRequest]) (*connect.Response[v1.UnarchiveBundleResponse], error)
 }
 
 // NewCleanupServiceClient constructs a client for the orchestrator.v1.CleanupService service. By
@@ -63,17 +67,29 @@ func NewCleanupServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(cleanupServiceMethods.ByName("RunCleanup")),
 			connect.WithClientOptions(opts...),
 		),
+		unarchiveBundle: connect.NewClient[v1.UnarchiveBundleRequest, v1.UnarchiveBundleResponse](
+			httpClient,
+			baseURL+CleanupServiceUnarchiveBundleProcedure,
+			connect.WithSchema(cleanupServiceMethods.ByName("UnarchiveBundle")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // cleanupServiceClient implements CleanupServiceClient.
 type cleanupServiceClient struct {
-	runCleanup *connect.Client[v1.RunCleanupRequest, v1.RunCleanupResponse]
+	runCleanup      *connect.Client[v1.RunCleanupRequest, v1.RunCleanupResponse]
+	unarchiveBundle *connect.Client[v1.UnarchiveBundleRequest, v1.UnarchiveBundleResponse]
 }
 
 // RunCleanup calls orchestrator.v1.CleanupService.RunCleanup.
 func (c *cleanupServiceClient) RunCleanup(ctx context.Context, req *connect.Request[v1.RunCleanupRequest]) (*connect.Response[v1.RunCleanupResponse], error) {
 	return c.runCleanup.CallUnary(ctx, req)
+}
+
+// UnarchiveBundle calls orchestrator.v1.CleanupService.UnarchiveBundle.
+func (c *cleanupServiceClient) UnarchiveBundle(ctx context.Context, req *connect.Request[v1.UnarchiveBundleRequest]) (*connect.Response[v1.UnarchiveBundleResponse], error) {
+	return c.unarchiveBundle.CallUnary(ctx, req)
 }
 
 // CleanupServiceHandler is an implementation of the orchestrator.v1.CleanupService service.
@@ -82,6 +98,7 @@ type CleanupServiceHandler interface {
 	// The idempotency_key ensures the same key returns the same result
 	// without re-executing the cleanup.
 	RunCleanup(context.Context, *connect.Request[v1.RunCleanupRequest]) (*connect.Response[v1.RunCleanupResponse], error)
+	UnarchiveBundle(context.Context, *connect.Request[v1.UnarchiveBundleRequest]) (*connect.Response[v1.UnarchiveBundleResponse], error)
 }
 
 // NewCleanupServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -97,10 +114,18 @@ func NewCleanupServiceHandler(svc CleanupServiceHandler, opts ...connect.Handler
 		connect.WithSchema(cleanupServiceMethods.ByName("RunCleanup")),
 		connect.WithHandlerOptions(opts...),
 	)
+	cleanupServiceUnarchiveBundleHandler := connect.NewUnaryHandler(
+		CleanupServiceUnarchiveBundleProcedure,
+		svc.UnarchiveBundle,
+		connect.WithSchema(cleanupServiceMethods.ByName("UnarchiveBundle")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/orchestrator.v1.CleanupService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case CleanupServiceRunCleanupProcedure:
 			cleanupServiceRunCleanupHandler.ServeHTTP(w, r)
+		case CleanupServiceUnarchiveBundleProcedure:
+			cleanupServiceUnarchiveBundleHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -112,4 +137,8 @@ type UnimplementedCleanupServiceHandler struct{}
 
 func (UnimplementedCleanupServiceHandler) RunCleanup(context.Context, *connect.Request[v1.RunCleanupRequest]) (*connect.Response[v1.RunCleanupResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.CleanupService.RunCleanup is not implemented"))
+}
+
+func (UnimplementedCleanupServiceHandler) UnarchiveBundle(context.Context, *connect.Request[v1.UnarchiveBundleRequest]) (*connect.Response[v1.UnarchiveBundleResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.CleanupService.UnarchiveBundle is not implemented"))
 }

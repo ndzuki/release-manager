@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file orchestrator/v1/cleanup.proto.
  */
 export const file_orchestrator_v1_cleanup: GenFile = /*@__PURE__*/
-  fileDesc("Ch1vcmNoZXN0cmF0b3IvdjEvY2xlYW51cC5wcm90bxIPb3JjaGVzdHJhdG9yLnYxIiwKEVJ1bkNsZWFudXBSZXF1ZXN0EhcKD2lkZW1wb3RlbmN5X2tleRgBIAEoCSJ1ChJSdW5DbGVhbnVwUmVzcG9uc2USFwoPZGVsZXRlZF9idW5kbGVzGAEgASgFEhoKEmRlbGV0ZWRfY2FuZGlkYXRlcxgCIAEoBRIaChJkZWxldGVkX3ByZWZsaWdodHMYAyABKAUSDgoGZXJyb3JzGAQgAygJMmcKDkNsZWFudXBTZXJ2aWNlElUKClJ1bkNsZWFudXASIi5vcmNoZXN0cmF0b3IudjEuUnVuQ2xlYW51cFJlcXVlc3QaIy5vcmNoZXN0cmF0b3IudjEuUnVuQ2xlYW51cFJlc3BvbnNlQkpaSGdpdGh1Yi5jb20vbmR6dWtpL3JlbGVhc2UtbWFuYWdlci9hcGkvZ2VuL29yY2hlc3RyYXRvci92MTtvcmNoZXN0cmF0b3J2MWIGcHJvdG8z");
+  fileDesc("Ch1vcmNoZXN0cmF0b3IvdjEvY2xlYW51cC5wcm90bxIPb3JjaGVzdHJhdG9yLnYxIiwKEVJ1bkNsZWFudXBSZXF1ZXN0EhcKD2lkZW1wb3RlbmN5X2tleRgBIAEoCSKOAQoSUnVuQ2xlYW51cFJlc3BvbnNlEhcKD2RlbGV0ZWRfYnVuZGxlcxgBIAEoAxIaChJkZWxldGVkX2NhbmRpZGF0ZXMYAiABKAMSGgoSZGVsZXRlZF9wcmVmbGlnaHRzGAMgASgDEg4KBmVycm9ycxgEIAMoCRIXCg9za2lwcGVkX2J1bmRsZXMYBSABKAMiKwoWVW5hcmNoaXZlQnVuZGxlUmVxdWVzdBIRCglidW5kbGVfaWQYASABKAkiRQoXVW5hcmNoaXZlQnVuZGxlUmVzcG9uc2USEQoJYnVuZGxlX2lkGAEgASgJEhcKD3ByZXZpb3VzX3N0YXR1cxgCIAEoCTLNAQoOQ2xlYW51cFNlcnZpY2USVQoKUnVuQ2xlYW51cBIiLm9yY2hlc3RyYXRvci52MS5SdW5DbGVhbnVwUmVxdWVzdBojLm9yY2hlc3RyYXRvci52MS5SdW5DbGVhbnVwUmVzcG9uc2USZAoPVW5hcmNoaXZlQnVuZGxlEicub3JjaGVzdHJhdG9yLnYxLlVuYXJjaGl2ZUJ1bmRsZVJlcXVlc3QaKC5vcmNoZXN0cmF0b3IudjEuVW5hcmNoaXZlQnVuZGxlUmVzcG9uc2VCSlpIZ2l0aHViLmNvbS9uZHp1a2kvcmVsZWFzZS1tYW5hZ2VyL2FwaS9nZW4vb3JjaGVzdHJhdG9yL3YxO29yY2hlc3RyYXRvcnYxYgZwcm90bzM");
 
 /**
  * @generated from message orchestrator.v1.RunCleanupRequest
@@ -36,24 +36,29 @@ export const RunCleanupRequestSchema: GenMessage<RunCleanupRequest> = /*@__PURE_
  */
 export type RunCleanupResponse = Message<"orchestrator.v1.RunCleanupResponse"> & {
   /**
-   * @generated from field: int32 deleted_bundles = 1;
+   * @generated from field: int64 deleted_bundles = 1;
    */
-  deletedBundles: number;
+  deletedBundles: bigint;
 
   /**
-   * @generated from field: int32 deleted_candidates = 2;
+   * @generated from field: int64 deleted_candidates = 2;
    */
-  deletedCandidates: number;
+  deletedCandidates: bigint;
 
   /**
-   * @generated from field: int32 deleted_preflights = 3;
+   * @generated from field: int64 deleted_preflights = 3;
    */
-  deletedPreflights: number;
+  deletedPreflights: bigint;
 
   /**
    * @generated from field: repeated string errors = 4;
    */
   errors: string[];
+
+  /**
+   * @generated from field: int64 skipped_bundles = 5;
+   */
+  skippedBundles: bigint;
 };
 
 /**
@@ -62,6 +67,45 @@ export type RunCleanupResponse = Message<"orchestrator.v1.RunCleanupResponse"> &
  */
 export const RunCleanupResponseSchema: GenMessage<RunCleanupResponse> = /*@__PURE__*/
   messageDesc(file_orchestrator_v1_cleanup, 1);
+
+/**
+ * @generated from message orchestrator.v1.UnarchiveBundleRequest
+ */
+export type UnarchiveBundleRequest = Message<"orchestrator.v1.UnarchiveBundleRequest"> & {
+  /**
+   * @generated from field: string bundle_id = 1;
+   */
+  bundleId: string;
+};
+
+/**
+ * Describes the message orchestrator.v1.UnarchiveBundleRequest.
+ * Use `create(UnarchiveBundleRequestSchema)` to create a new message.
+ */
+export const UnarchiveBundleRequestSchema: GenMessage<UnarchiveBundleRequest> = /*@__PURE__*/
+  messageDesc(file_orchestrator_v1_cleanup, 2);
+
+/**
+ * @generated from message orchestrator.v1.UnarchiveBundleResponse
+ */
+export type UnarchiveBundleResponse = Message<"orchestrator.v1.UnarchiveBundleResponse"> & {
+  /**
+   * @generated from field: string bundle_id = 1;
+   */
+  bundleId: string;
+
+  /**
+   * @generated from field: string previous_status = 2;
+   */
+  previousStatus: string;
+};
+
+/**
+ * Describes the message orchestrator.v1.UnarchiveBundleResponse.
+ * Use `create(UnarchiveBundleResponseSchema)` to create a new message.
+ */
+export const UnarchiveBundleResponseSchema: GenMessage<UnarchiveBundleResponse> = /*@__PURE__*/
+  messageDesc(file_orchestrator_v1_cleanup, 3);
 
 /**
  * CleanupService handles artifact lifecycle GC operations.
@@ -80,6 +124,14 @@ export const CleanupService: GenService<{
     methodKind: "unary";
     input: typeof RunCleanupRequestSchema;
     output: typeof RunCleanupResponseSchema;
+  },
+  /**
+   * @generated from rpc orchestrator.v1.CleanupService.UnarchiveBundle
+   */
+  unarchiveBundle: {
+    methodKind: "unary";
+    input: typeof UnarchiveBundleRequestSchema;
+    output: typeof UnarchiveBundleResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_orchestrator_v1_cleanup, 0);

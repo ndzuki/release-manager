@@ -54,6 +54,12 @@ type ExtraServersProvider interface {
 	ExtraServers() ([]*http.Server, error)
 }
 
+// gcJSONProvider is an optional interface services implement to contribute a
+// JSON-ready gc sub-object to the /health response (REQ-069 健康检查).
+type gcJSONProvider interface {
+	GCHealthJSON() any
+}
+
 // readinessContributor is an optional interface services can implement
 // to supply dependency readiness checks for /readyz.
 type readinessContributor interface {
@@ -84,7 +90,11 @@ func Run(configPath string, svc Service) {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", handler.Health())
+	if gcProvider, ok := svc.(gcJSONProvider); ok {
+		mux.HandleFunc("GET /health", handler.Health(gcProvider.GCHealthJSON))
+	} else {
+		mux.HandleFunc("GET /health", handler.Health())
+	}
 
 	if err := svc.Register(mux, logger); err != nil {
 		logger.Error("failed to register service", "error", err)

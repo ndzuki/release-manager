@@ -10,6 +10,7 @@ service CleanupService {
     // The idempotency_key ensures the same key returns the same result
     // without re-executing the cleanup.
     rpc RunCleanup(RunCleanupRequest) returns (RunCleanupResponse);
+    rpc UnarchiveBundle(UnarchiveBundleRequest) returns (UnarchiveBundleResponse);
 }
 
 message RunCleanupRequest {
@@ -17,8 +18,18 @@ message RunCleanupRequest {
 }
 
 message RunCleanupResponse {
-    int32 deleted_bundles = 1;
-    int32 deleted_candidates = 2;
-    int32 deleted_preflights = 3;
+    int64 deleted_bundles = 1;
+    int64 deleted_candidates = 2;
+    int64 deleted_preflights = 3;
     repeated string errors = 4;
+    int64 skipped_bundles = 5;
 }
+
+message UnarchiveBundleRequest {
+    string bundle_id = 1;
+}
+
+message UnarchiveBundleResponse {
+    string bundle_id = 1;
+    string previous_status = 2;
+ }

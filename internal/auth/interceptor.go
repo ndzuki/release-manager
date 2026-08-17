@@ -283,6 +283,8 @@ func mapServiceToObject(service string) string {
 		return "trust_root"
 	case strings.Contains(service, "Orchestrator"):
 		return "release"
+	case strings.Contains(service, "Cleanup"):
+		return "cleanup"
 	default:
 		return ""
 	}
@@ -326,7 +328,8 @@ func mapMethodToAction(method string) string {
 		strings.HasPrefix(method, "Refresh"), strings.HasPrefix(method, "Authenticate"),
 		strings.HasPrefix(method, "Submit"), strings.HasPrefix(method, "Approve"),
 		strings.HasPrefix(method, "Reject"), strings.HasPrefix(method, "End"),
-		strings.HasPrefix(method, "Retire"):
+		strings.HasPrefix(method, "Retire"), strings.HasPrefix(method, "Run"),
+		strings.HasPrefix(method, "Unarchive"):
 		return "write"
 	default:
 		return ""

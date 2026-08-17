@@ -244,9 +244,8 @@ func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.Release
 	return &definition, nil
 }
 
-// SetCurrentBundle associates a bundle with a release definition.
-// If the bundle is archived, it is unarchived in the same transaction.
-// Returns true if the bundle was unarchived.
+// SetCurrentBundle associates a validated bundle with a release definition.
+// Bundles archived from validated are restored in the same transaction.
 func (s *definitionStore) SetCurrentBundle(ctx context.Context, defID, bundleID string) (bool, error) {
 	tx, err := s.gorm.BeginTx(ctx, nil)
 	if err != nil {
@@ -254,34 +253,12 @@ func (s *definitionStore) SetCurrentBundle(ctx context.Context, defID, bundleID 
 	}
 	defer tx.Rollback() //nolint:errcheck // Rollback after Commit is a no-op.
 
-	result, err := tx.ExecContext(ctx, `
-		UPDATE release_definitions SET current_bundle_id = ?
-		WHERE id = ?
-	`, bundleID, defID)
+	restored, err := setCurrentBundle(ctx, tx, defID, bundleID)
 	if err != nil {
-		return false, fmt.Errorf("update definition current_bundle_id: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("definition rows affected: %w", err)
-	}
-	if rows == 0 {
-		return false, fmt.Errorf("definition %s: %w", defID, store.ErrNotFound)
-	}
-
-	unarchiveResult, err := tx.ExecContext(ctx, `
-		UPDATE release_bundles SET status = 'validated', archived_at = NULL
-		WHERE id = ? AND status = 'archived'
-	`, bundleID)
-	if err != nil {
-		return false, fmt.Errorf("unarchive bundle %s: %w", bundleID, err)
-	}
-	unarchived, err := unarchiveResult.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("unarchive bundle rows affected: %w", err)
+		return false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit set current bundle: %w", err)
 	}
-	return unarchived > 0, nil
+	return restored, nil
 }

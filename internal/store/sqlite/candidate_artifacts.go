@@ -180,15 +180,15 @@ func (s *candidateArtifactStore) LinkToBundleTx(_ *gorm.DB, _ string, _ []store.
 }
 
 const candidateArtifactSelect = `
-	SELECT id, artifact_type, ref, digest, bundle_id, created_at, validated_at, source_id
+	SELECT id, artifact_type, ref, digest, bundle_id, created_at, validated_at, source_id, orphaned_at
 	FROM candidate_artifacts`
 
 func scanCandidateArtifact(row interface{ Scan(...any) error }) (*store.CandidateArtifact, error) {
 	var artifact store.CandidateArtifact
 	var artifactType, createdAt string
-	var bundleID, validatedAt sql.NullString
+	var bundleID, validatedAt, orphanedAt sql.NullString
 	if err := row.Scan(&artifact.ID, &artifactType, &artifact.Ref, &artifact.Digest, &bundleID,
-		&createdAt, &validatedAt, &artifact.SourceID); err != nil {
+		&createdAt, &validatedAt, &artifact.SourceID, &orphanedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, store.ErrNotFound
 		}
@@ -209,6 +209,13 @@ func scanCandidateArtifact(row interface{ Scan(...any) error }) (*store.Candidat
 			return nil, fmt.Errorf("parse candidate validated_at: %w", parseErr)
 		}
 		artifact.ValidatedAt = &value
+	}
+	if orphanedAt.Valid {
+		value, parseErr := time.Parse(time.RFC3339Nano, orphanedAt.String)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse candidate orphaned_at: %w", parseErr)
+		}
+		artifact.OrphanedAt = &value
 	}
 	return &artifact, nil
 }
