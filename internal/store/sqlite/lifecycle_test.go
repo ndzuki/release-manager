@@ -978,7 +978,6 @@ func TestMigrateLegacyPreflightLifecycleSchema(t *testing.T) {
 	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT overall FROM preflight_lifecycles WHERE operation_id = 'op-timeout'`).Scan(&overall))
 	assert.Equal(t, "cancelled", overall, "legacy timeout must map to cancelled")
 
-
 	// New shape: updated_at present, error_code gone, operation_id unique.
 	rows, err := st.DB().QueryContext(ctx, `PRAGMA table_info(preflight_lifecycles)`)
 	require.NoError(t, err)

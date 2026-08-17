@@ -2,11 +2,11 @@ package postgres
 
 import (
 	"context"
-	"strings"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,6 +19,7 @@ type operationStore struct{ gorm *DB }
 func (s *operationStore) Create(ctx context.Context, op *store.Operation) error {
 	return createOperation(ctx, s.gorm, op)
 }
+
 //nolint:gocyclo // 幂等创建事务编排了空 Key 跳过、重放、并发 load-after-conflict 与业务写入。
 func (s *operationStore) CreateIdempotent(
 	ctx context.Context,
@@ -210,8 +211,10 @@ func (s *operationStore) Get(ctx context.Context, id string) (*store.Operation, 
 			idempotency_key, idempotency_scope, request_hash, state_version,
 			bundle_id, bundle_chart_ref, bundle_chart_digest, image_refs_json, image_digests_json, policy_version,
 			values_revision_id, expected_revision, target_revision, target_operation_id, values_patch, patch_digest, effective_values_digest, reason,
-			actor, created_at, updated_at, terminal_at, deadline, last_error
-		FROM operations WHERE id = ?
+			actor, created_at, updated_at, terminal_at, deadline, last_error,
+			ei.delivery_status, ei.effect_status
+		FROM operations LEFT JOIN emergency_intents ei ON ei.operation_id = operations.id
+		WHERE id = ?
 	`, id)
 	return scanOperation(row)
 }
@@ -220,10 +223,10 @@ func (s *operationStore) GetByIdempotencyKey(ctx context.Context, key string) (*
 	row := s.gorm.QueryRowContext(ctx, `
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, idempotency_scope, request_hash, state_version,
-			bundle_id, bundle_chart_ref, bundle_chart_digest, image_refs_json, image_digests_json, policy_version,
-			values_revision_id, expected_revision, target_revision, target_operation_id, values_patch, patch_digest, effective_values_digest, reason,
-			actor, created_at, updated_at, terminal_at, deadline, last_error
-		FROM operations WHERE idempotency_key = ?
+			actor, created_at, updated_at, terminal_at, deadline, last_error,
+			ei.delivery_status, ei.effect_status
+		FROM operations LEFT JOIN emergency_intents ei ON ei.operation_id = operations.id
+		WHERE idempotency_key = ?
 	`, key)
 	return scanOperation(row)
 }
@@ -238,8 +241,10 @@ func (s *operationStore) GetByIdempotencyScopeAndKey(ctx context.Context, scope,
 			idempotency_key, idempotency_scope, request_hash, state_version,
 			bundle_id, bundle_chart_ref, bundle_chart_digest, image_refs_json, image_digests_json, policy_version,
 			values_revision_id, expected_revision, target_revision, target_operation_id, values_patch, patch_digest, effective_values_digest, reason,
-			actor, created_at, updated_at, terminal_at, deadline, last_error
-		FROM operations WHERE release_definition_id = ? AND idempotency_key = ?
+			actor, created_at, updated_at, terminal_at, deadline, last_error,
+			ei.delivery_status, ei.effect_status
+		FROM operations LEFT JOIN emergency_intents ei ON ei.operation_id = operations.id
+		WHERE release_definition_id = ? AND idempotency_key = ?
 	`, defID, key)
 	return scanOperation(row)
 }
@@ -639,9 +644,9 @@ func (s *operationStore) List(ctx context.Context, definitionID string) ([]*stor
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, idempotency_scope, request_hash, state_version,
 			bundle_id, bundle_chart_ref, bundle_chart_digest, image_refs_json, image_digests_json, policy_version,
-			values_revision_id, expected_revision, target_revision, target_operation_id, values_patch, patch_digest, effective_values_digest, reason,
-			actor, created_at, updated_at, terminal_at, deadline, last_error
-		FROM operations
+			actor, created_at, updated_at, terminal_at, deadline, last_error,
+			ei.delivery_status, ei.effect_status
+		FROM operations LEFT JOIN emergency_intents ei ON ei.operation_id = operations.id
 		WHERE release_definition_id = ?
 		ORDER BY created_at DESC
 	`, definitionID)
@@ -668,9 +673,9 @@ func (s *operationStore) ListNonTerminal(ctx context.Context) ([]*store.Operatio
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, idempotency_scope, request_hash, state_version,
 			bundle_id, bundle_chart_ref, bundle_chart_digest, image_refs_json, image_digests_json, policy_version,
-			values_revision_id, expected_revision, target_revision, target_operation_id, values_patch, patch_digest, effective_values_digest, reason,
-			actor, created_at, updated_at, terminal_at, deadline, last_error
-		FROM operations
+			actor, created_at, updated_at, terminal_at, deadline, last_error,
+			ei.delivery_status, ei.effect_status
+		FROM operations LEFT JOIN emergency_intents ei ON ei.operation_id = operations.id
 		WHERE status NOT IN ('succeeded','failed','cancelled','timeout')
 		ORDER BY created_at ASC
 	`)
@@ -700,8 +705,10 @@ func getOperation(ctx context.Context, queryer operationQueryer, id string) (*st
 			idempotency_key, idempotency_scope, request_hash, state_version,
 			bundle_id, bundle_chart_ref, bundle_chart_digest, image_refs_json, image_digests_json, policy_version,
 			values_revision_id, expected_revision, target_revision, target_operation_id, values_patch, patch_digest, effective_values_digest, reason,
-			actor, created_at, updated_at, terminal_at, deadline, last_error
-		FROM operations WHERE id = ?
+			actor, created_at, updated_at, terminal_at, deadline, last_error,
+			ei.delivery_status, ei.effect_status
+		FROM operations LEFT JOIN emergency_intents ei ON ei.operation_id = operations.id
+		WHERE id = ?
 	`, id)
 	return scanOperation(row)
 }
@@ -710,16 +717,14 @@ func (s *operationStore) GetActiveForDefinition(ctx context.Context, definitionI
 	row := s.gorm.QueryRowContext(ctx, `
 		SELECT id, operation_type, status, release_definition_id,
 			idempotency_key, idempotency_scope, request_hash, state_version,
-			bundle_id, bundle_chart_ref, bundle_chart_digest, image_refs_json, image_digests_json, policy_version,
-			values_revision_id, expected_revision, target_revision, target_operation_id, values_patch, patch_digest, effective_values_digest, reason,
-			actor, created_at, updated_at, terminal_at, deadline, last_error
-		FROM operations
+			actor, created_at, updated_at, terminal_at, deadline, last_error,
+			ei.delivery_status, ei.effect_status
+		FROM operations LEFT JOIN emergency_intents ei ON ei.operation_id = operations.id
 		WHERE release_definition_id = ? AND status NOT IN ('succeeded','failed','cancelled','timeout')
 		ORDER BY state_version DESC LIMIT 1
 	`, definitionID)
 	return scanOperation(row)
 }
-
 
 func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operation, error) {
 	var (
@@ -734,6 +739,7 @@ func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operatio
 		createdAt, updatedAt                                   string
 		terminalAt, deadline                                   *string
 		lastError                                              string
+		deliveryStatus, effectStatus                           sql.NullString
 	)
 
 	err := row.Scan(
@@ -742,6 +748,7 @@ func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operatio
 		&bundleID, &bundleChartRef, &bundleChartDigest, &imageRefsJSON, &imageDigestsJSON, &policyVersion,
 		&valuesRevID, &expectedRev, &targetRev, &targetOperationID, &valuesPatch, &patchDigest, &effectiveDigest, &reason,
 		&actorJSON, &createdAt, &updatedAt, &terminalAt, &deadline, &lastError,
+		&deliveryStatus, &effectStatus,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -753,9 +760,9 @@ func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operatio
 	return buildOperation(id, opType, status, defID, idemKey, idemScope, reqHash,
 		stateVer, bundleID, bundleChartRef, bundleChartDigest, imageRefsJSON, imageDigestsJSON, policyVersion,
 		valuesRevID, expectedRev, targetRev, targetOperationID, valuesPatch, patchDigest, effectiveDigest, reason,
-		actorJSON, createdAt, updatedAt, terminalAt, deadline, lastError)
+		actorJSON, createdAt, updatedAt, terminalAt, deadline, lastError,
+		deliveryStatus, effectStatus)
 }
-
 
 func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 	var (
@@ -770,6 +777,7 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 		createdAt, updatedAt                                   string
 		terminalAt, deadline                                   *string
 		lastError                                              string
+		deliveryStatus, effectStatus                           sql.NullString
 	)
 
 	err := rows.Scan(
@@ -778,6 +786,7 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 		&bundleID, &bundleChartRef, &bundleChartDigest, &imageRefsJSON, &imageDigestsJSON, &policyVersion,
 		&valuesRevID, &expectedRev, &targetRev, &targetOperationID, &valuesPatch, &patchDigest, &effectiveDigest, &reason,
 		&actorJSON, &createdAt, &updatedAt, &terminalAt, &deadline, &lastError,
+		&deliveryStatus, &effectStatus,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan operation row: %w", err)
@@ -786,13 +795,15 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 	return buildOperation(id, opType, status, defID, idemKey, idemScope, reqHash,
 		stateVer, bundleID, bundleChartRef, bundleChartDigest, imageRefsJSON, imageDigestsJSON, policyVersion,
 		valuesRevID, expectedRev, targetRev, targetOperationID, valuesPatch, patchDigest, effectiveDigest, reason,
-		actorJSON, createdAt, updatedAt, terminalAt, deadline, lastError)
+		actorJSON, createdAt, updatedAt, terminalAt, deadline, lastError,
+		deliveryStatus, effectStatus)
 }
 
 func buildOperation(id, opType, status, defID, idemKey, idemScope, reqHash string,
 	stateVer int, bundleID, bundleChartRef, bundleChartDigest string, imageRefsJSON, imageDigestsJSON []byte, policyVersion string,
 	valuesRevID string, expectedRev, targetRev int, targetOperationID string, valuesPatch []byte, patchDigest, effectiveDigest, reason string,
 	actorJSON, createdAt, updatedAt string, terminalAt, deadline *string, lastError string,
+	deliveryStatus, effectStatus sql.NullString,
 ) (*store.Operation, error) {
 	var actor store.ActorContext
 	if err := json.Unmarshal([]byte(actorJSON), &actor); err != nil {
@@ -826,33 +837,36 @@ func buildOperation(id, opType, status, defID, idemKey, idemScope, reqHash strin
 		dl = &t
 	}
 	return &store.Operation{
-		ID:                     id,
-		OperationType:          store.OperationType(opType),
-		Status:                 store.OperationStatus(status),
-		ReleaseDefinitionID:    defID,
-		IdempotencyKey:         idemKey,
-		IdempotencyScope:       idemScope,
-		RequestHash:            reqHash,
-		StateVersion:           stateVer,
-		BundleID:               bundleID,
-		BundleChartRef:         bundleChartRef,
-		BundleChartDigest:      bundleChartDigest,
-		ImageRefsJSON:          imageRefsJSON,
-		ImageDigestsJSON:       imageDigestsJSON,
-		PolicyVersion:          policyVersion,
-		ValuesRevisionID:       valuesRevID,
-		ExpectedRevision:       expectedRev,
-		TargetRevision:         targetRev,
-		TargetOperationID:      targetOperationID,
-		ValuesPatch:            valuesPatch,
-		PatchDigest:            patchDigest,
-		EffectiveValuesDigest:  effectiveDigest,
-		Reason:                 reason,
-		Actor:                  actor,
-		CreatedAt:              ct,
-		UpdatedAt:              ut,
-		Deadline:               dl,
-		TerminalAt:             terminal,
-		LastError:              lastError,
+		ID:                    id,
+		OperationType:         store.OperationType(opType),
+		Status:                store.OperationStatus(status),
+		ReleaseDefinitionID:   defID,
+		IdempotencyKey:        idemKey,
+		IdempotencyScope:      idemScope,
+		RequestHash:           reqHash,
+		StateVersion:          stateVer,
+		BundleID:              bundleID,
+		BundleChartRef:        bundleChartRef,
+		BundleChartDigest:     bundleChartDigest,
+		ImageRefsJSON:         imageRefsJSON,
+		ImageDigestsJSON:      imageDigestsJSON,
+		PolicyVersion:         policyVersion,
+		ValuesRevisionID:      valuesRevID,
+		ExpectedRevision:      expectedRev,
+		TargetRevision:        targetRev,
+		TargetOperationID:     targetOperationID,
+		ValuesPatch:           valuesPatch,
+		PatchDigest:           patchDigest,
+		EffectiveValuesDigest: effectiveDigest,
+		Reason:                reason,
+		Actor:                 actor,
+		CreatedAt:             ct,
+		UpdatedAt:             ut,
+		Deadline:              dl,
+		TerminalAt:            terminal,
+		LastError:             lastError,
+		EffectStatus: store.ProjectEffectStatus(
+			store.OperationType(opType), deliveryStatus.String, store.EmergencyEffectStatus(effectStatus.String),
+		),
 	}, nil
 }

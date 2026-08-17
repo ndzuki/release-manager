@@ -236,11 +236,15 @@ type Operation struct {
 	EffectiveValuesDigest string          `json:"effective_values_digest,omitempty"`
 	Reason                string          `json:"reason,omitempty"`
 	Actor                 ActorContext    `json:"actor"`
+	LastError             string          `json:"last_error,omitempty"`
 	CreatedAt             time.Time       `json:"created_at"`
 	UpdatedAt             time.Time       `json:"updated_at"`
 	Deadline              *time.Time      `json:"deadline,omitempty"`
 	TerminalAt            *time.Time      `json:"terminal_at,omitempty"`
-	LastError             string          `json:"last_error,omitempty"`
+	// EffectStatus is the in-memory projection of the authoritative EMERGENCY
+	// effect (never persisted on the operations row; derived via
+	// ProjectEffectStatus from the joined emergency_intents row).
+	EffectStatus EmergencyEffectStatus `json:"-"`
 }
 
 // OperationCreationRequest contains the durable records and artifact links that
@@ -2342,4 +2346,26 @@ func stableErrorCode(lastError string) string {
 		}
 	}
 	return "operation_failed"
+}
+
+// ProjectEffectStatus derives the authoritative effect_status projection for an
+// operation (AC-077-04/13). Non-EMERGENCY operations and EMERGENCY commands
+// that have not crossed the irrevocable delivery boundary (pending/queued/
+// undelivered) project NOT_STARTED; delivered/persisted intents project
+// UNKNOWN until a late result resolves the effect to APPLIED/NOT_APPLIED.
+func ProjectEffectStatus(operationType OperationType, deliveryStatus string, effectStatus EmergencyEffectStatus) EmergencyEffectStatus {
+	if operationType != OperationEmergency {
+		return EmergencyEffectNotStarted
+	}
+	switch deliveryStatus {
+	case "", "undelivered", "pending", "queued":
+		return EmergencyEffectNotStarted
+	case "delivered", "persisted":
+		if effectStatus == EmergencyEffectApplied || effectStatus == EmergencyEffectNotApplied {
+			return effectStatus
+		}
+		return EmergencyEffectUnknown
+	default:
+		return EmergencyEffectUnknown
+	}
 }

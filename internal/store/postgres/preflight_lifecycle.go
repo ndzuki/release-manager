@@ -65,9 +65,9 @@ func (s *preflightLifecycleStore) GetByOperationID(ctx context.Context, operatio
 	var (
 		pl                  store.PreflightLifecycle
 		storedOperationID   *string
-		operationTerminalAt  *string
-		createdAt            string
-		updatedAt            string
+		operationTerminalAt *string
+		createdAt           string
+		updatedAt           string
 	)
 	if err := row.Scan(&pl.ID, &storedOperationID, &operationTerminalAt, &pl.Stages, &pl.Overall, &createdAt, &updatedAt); err != nil {
 		if err == sql.ErrNoRows {

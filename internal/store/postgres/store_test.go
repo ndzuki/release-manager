@@ -1516,7 +1516,6 @@ func TestCreateUserWithMembershipRollsBackOnMembershipFailure(t *testing.T) {
 	assert.ErrorIs(t, err, store.ErrNotFound)
 }
 
-
 func seedOperatorManagementScope(t *testing.T, st *postgresstore.Store) (customerID, clusterID string) {
 	t.Helper()
 	ctx := context.Background()

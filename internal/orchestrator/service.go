@@ -124,7 +124,6 @@ func (s *Service) CreateOperation(
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
 
-
 	// Definition lookup feeds authorization, gates, and validation below.
 	def, err := s.store.Definitions().Get(ctx, msg.ReleaseDefinitionId)
 	if errors.Is(err, store.ErrNotFound) {
@@ -325,23 +324,23 @@ func (s *Service) CreateOperation(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("marshal bundle image digests: %w", err))
 	}
 	op := &store.Operation{
-		ID:                  uuid.New().String(),
-		OperationType:       opType,
-		Status:              operation.InitialStatus(),
-		ReleaseDefinitionID: def.ID,
-		IdempotencyKey:      scopedKey,
-		IdempotencyScope:    scope,
-		RequestHash:         hashRequest(msg, string(merged.patch)),
-		BundleID:            bundle.ID,
-		BundleChartRef:      bundle.ChartRef,
-		BundleChartDigest:   bundle.ChartDigest,
-		ImageRefsJSON:       imageRefsJSON,
-		ImageDigestsJSON:    imageDigestsJSON,
-		PolicyVersion:       policyVersion,
-		ValuesRevisionID:    msg.GetValuesRevisionId(),
-		ExpectedRevision:    int(msg.GetExpectedCurrentRevision()),
-		ValuesPatch:         merged.patch,
-		PatchDigest:         merged.patchDigest,
+		ID:                    uuid.New().String(),
+		OperationType:         opType,
+		Status:                operation.InitialStatus(),
+		ReleaseDefinitionID:   def.ID,
+		IdempotencyKey:        scopedKey,
+		IdempotencyScope:      scope,
+		RequestHash:           hashRequest(msg, string(merged.patch)),
+		BundleID:              bundle.ID,
+		BundleChartRef:        bundle.ChartRef,
+		BundleChartDigest:     bundle.ChartDigest,
+		ImageRefsJSON:         imageRefsJSON,
+		ImageDigestsJSON:      imageDigestsJSON,
+		PolicyVersion:         policyVersion,
+		ValuesRevisionID:      msg.GetValuesRevisionId(),
+		ExpectedRevision:      int(msg.GetExpectedCurrentRevision()),
+		ValuesPatch:           merged.patch,
+		PatchDigest:           merged.patchDigest,
 		EffectiveValuesDigest: merged.effectiveDigest,
 		Actor: store.ActorContext{
 			UserID:       actor.UserID,
@@ -439,8 +438,6 @@ func (s *Service) CreateOperation(
 
 	return connect.NewResponse(s.toResponse(op, &verifyResult)), nil
 }
-
-
 
 // PublishRelease triggers the release pipeline for a definition (skeleton).
 func (s *Service) PublishRelease(
@@ -662,6 +659,8 @@ func emergencyEffectToProto(value store.EmergencyEffectStatus) orchestratorv1.Em
 		return orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_NOT_APPLIED
 	case store.EmergencyEffectUnknown:
 		return orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_UNKNOWN
+	case store.EmergencyEffectNotStarted:
+		return orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_NOT_STARTED
 	default:
 		return orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_UNSPECIFIED
 	}
@@ -1021,9 +1020,11 @@ func toProtoOperation(op *store.Operation) *orchestratorv1.Operation {
 			UserId:       op.Actor.UserID,
 			Organization: op.Actor.Organization,
 		},
-		CreatedAt: timestamppb.New(op.CreatedAt),
-		UpdatedAt: timestamppb.New(op.UpdatedAt),
 		LastError: op.LastError,
+		// effect_status is the authoritative cluster effect projection for
+		// EMERGENCY operations; non-EMERGENCY operations always project
+		// NOT_STARTED (AC-077-04).
+		EffectStatus: emergencyEffectToProto(op.EffectStatus),
 	}
 	if op.TerminalAt != nil {
 		result.TerminalAt = timestamppb.New(*op.TerminalAt)
@@ -1216,7 +1217,6 @@ func taskIDs(tasks []*store.ConvergenceTask) []string {
 	return ids
 }
 
-
 func (s *Service) checkValuesRevision(ctx context.Context, def *store.ReleaseDefinition, revisionID string) (*store.ValuesRevision, error) {
 	if revisionID == "" {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("revision_not_approved"))
@@ -1342,6 +1342,7 @@ func extractChartName(ref string) string {
 	}
 	return ref
 }
+
 // Compile-time check: Service implements the Connect handler interface.
 var _ orchestratorv1connect.OrchestratorServiceHandler = (*Service)(nil)
 
@@ -1466,4 +1467,3 @@ func bundleImageDigests(images []store.BundleImage) (refsJSON, digestsJSON []byt
 	}
 	return refsJSON, digestsJSON, nil
 }
-
