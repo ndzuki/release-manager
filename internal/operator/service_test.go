@@ -16,6 +16,8 @@ import (
 	"github.com/ndzuki/release-manager/internal/operator"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 )
 
 // newTestSvc creates a Store backed by a per-test in-memory SQLite database.
@@ -836,4 +838,32 @@ func TestCommandStreamRolloutProgressInvalidFieldDropped(t *testing.T) {
 	entries, err := st.Timeline().List(ctx, "operation-invalid", 0, 10)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
+}
+
+// AC-077-16: proto3 unknown-field tolerance. A CommandStreamRequest wire
+// payload carrying oneof field 9 (rollout_progress) decodes without error
+// even when the decoder build does not know the field (old orchestrator):
+// unknown fields are retained and ignored, never failing the stream. The
+// authoritative wire-compat evidence is the buf breaking check (additive
+// field 9 only; no renumbering).
+func TestCommandStreamRequest_UnknownOneofFieldTolerated(t *testing.T) {
+	progress := &operatorv1.RolloutProgress{OperationId: "op-1", WorkloadRef: "deployments/app/default", Ready: 1, Desired: 3}
+	inner, err := proto.Marshal(progress)
+	require.NoError(t, err)
+	wire := protowire.AppendTag(nil, 9, protowire.BytesType)
+	wire = protowire.AppendBytes(wire, inner)
+
+	var req operatorv1.CommandStreamRequest
+	require.NoError(t, proto.Unmarshal(wire, &req))
+	assert.NotNil(t, req.GetRolloutProgress())
+	assert.Equal(t, "op-1", req.GetRolloutProgress().GetOperationId())
+
+	// Unknown-field semantics: a field the decoder does not know is
+	// preserved and round-trips without error.
+	wireUnknown := protowire.AppendTag(nil, 99, protowire.BytesType)
+	wireUnknown = protowire.AppendBytes(wireUnknown, []byte("future-payload"))
+	require.NoError(t, proto.Unmarshal(wireUnknown, &req))
+	got, err := proto.Marshal(&req)
+	require.NoError(t, err)
+	assert.Equal(t, wireUnknown, got)
 }
