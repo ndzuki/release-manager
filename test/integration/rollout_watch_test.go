@@ -1607,6 +1607,8 @@ func TestRolloutWatchObserveWithProgressCounts(t *testing.T) {
 
 	_, err := updateDeploymentStatus(t, fx.adminClient, fx.namespace, deployment.Name, func(d *appsv1.Deployment) {
 		d.Status.ObservedGeneration = expectedGeneration
+		d.Status.Replicas = 1
+		d.Status.ReadyReplicas = 1
 		d.Status.UpdatedReplicas = 1
 		d.Status.AvailableReplicas = 1
 		d.Status.UnavailableReplicas = 0
