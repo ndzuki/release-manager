@@ -201,6 +201,9 @@ message Operation {
   google.protobuf.Timestamp terminal_at = 13;
   google.protobuf.Timestamp deadline = 14;
   string last_error = 15;
+  // effect_status is the authoritative cluster effect for EMERGENCY operations.
+  // Non-EMERGENCY operations always project NOT_STARTED.
+  EmergencyEffectStatus effect_status = 16;
 }
 
 message GetOperationRequest {
@@ -1059,7 +1062,8 @@ enum EmergencyEffectStatus {
   EMERGENCY_EFFECT_STATUS_UNSPECIFIED = 0;
   EMERGENCY_EFFECT_STATUS_UNKNOWN = 1;
   EMERGENCY_EFFECT_STATUS_APPLIED = 2;
-  EMERGENCY_EFFECT_STATUS_NOT_APPLIED = 3;
+  EMERGENCY_EFFECT_STATUS_NOT_APPLIED = 3;   // 既有
+  EMERGENCY_EFFECT_STATUS_NOT_STARTED = 4;   // 追加
 }
 
 message EmergencyResult {
