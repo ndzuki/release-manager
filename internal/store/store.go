@@ -1866,7 +1866,6 @@ type SessionStore interface {
 	Get(ctx context.Context, id string) (*Session, error)
 	Heartbeat(ctx context.Context, id string) error
 	UpdateStatus(ctx context.Context, id string, status SessionStatus) error
-	UpdateStatusReason(ctx context.Context, id string, status SessionStatus, reason SessionStatusReason) error
 	GetActiveByOperator(ctx context.Context, operatorID string) (*Session, error)
 	GetLatestByOperator(ctx context.Context, operatorID string) (*Session, error)
 	ListExpiredSuspect(ctx context.Context, suspectAfter time.Duration) ([]*Session, error)
@@ -1877,6 +1876,9 @@ type OutboxStore interface {
 	Create(ctx context.Context, e *OutboxEntry) error
 	Get(ctx context.Context, id string) (*OutboxEntry, error)
 	GetByCommandID(ctx context.Context, commandID string) (*OutboxEntry, error)
+	// GetByOperationID resolves the outbox row for a standard operation
+	// (used for rollout_progress ownership checks, AC-077-15).
+	GetByOperationID(ctx context.Context, operationID string) (*OutboxEntry, error)
 	GetPendingForOperator(ctx context.Context, operatorID string) (*OutboxEntry, error)
 	GetDeliveredNotAcked(ctx context.Context, operatorID string) ([]*OutboxEntry, error)
 	GetInflightForOperator(ctx context.Context, operatorID string) (*OutboxEntry, error)

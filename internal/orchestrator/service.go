@@ -4,6 +4,7 @@ package orchestrator
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -518,7 +520,7 @@ func (s *Service) GetOperation(
 
 const (
 	operationWatchPollInterval = 50 * time.Millisecond
-	operationWatchHeartbeat    = 30 * time.Second
+	operationWatchHeartbeat    = 5 * time.Second
 )
 
 // WatchOperation streams a consistent snapshot, retained replay, live entries, and heartbeats.
@@ -612,7 +614,23 @@ func operationCursorExpiredError(snapshot *store.TimelineSnapshot) error {
 	err.Meta().Set("X-Reason-Code", "cursor_expired")
 	err.Meta().Set("X-Snapshot-Sequence", fmt.Sprintf("%d", snapshot.SnapshotSequence))
 	err.Meta().Set("X-Retained-From-Sequence", fmt.Sprintf("%d", snapshot.RetainedFromSequence))
+	// X-Snapshot-Proto carries a base64 protojson OperationSnapshot so a
+	// client can rebuild the stream without a second round trip
+	// (AC-077-05/14).
+	if encoded, encodeErr := encodeSnapshotProto(snapshot); encodeErr == nil {
+		err.Meta().Set("X-Snapshot-Proto", encoded)
+	}
 	return err
+}
+
+// encodeSnapshotProto serializes the snapshot as base64(protojson) for the
+// X-Snapshot-Proto error header.
+func encodeSnapshotProto(snapshot *store.TimelineSnapshot) (string, error) {
+	raw, err := protojson.Marshal(toProtoOperationSnapshot(snapshot))
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(raw), nil
 }
 
 func toProtoOperationSnapshot(snapshot *store.TimelineSnapshot) *orchestratorv1.OperationSnapshot {
@@ -644,6 +662,29 @@ func toProtoTimelineEntry(entry *store.OperationTimelineEntry) *orchestratorv1.T
 			result.RequestId = data.RequestID
 			result.EffectFrom = data.EffectFrom
 			result.EffectTo = data.EffectTo
+		}
+	case store.TimelineEntryACK:
+		result.Kind = orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_ACK
+		var data store.AckTimelineData
+		if json.Unmarshal(entry.Data, &data) == nil {
+			result.RequestId = data.RequestID
+			result.AckStage = data.AckStage
+		}
+	case store.TimelineEntryRolloutProgress:
+		result.Kind = orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_ROLLOUT_PROGRESS
+		var data store.RolloutProgressTimelineData
+		if json.Unmarshal(entry.Data, &data) == nil {
+			result.WorkloadRef = data.WorkloadRef
+			result.Ready = data.Ready
+			result.Desired = data.Desired
+		}
+	case store.TimelineEntryError:
+		result.Kind = orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_ERROR
+		var data store.ErrorTimelineData
+		if json.Unmarshal(entry.Data, &data) == nil {
+			result.RequestId = data.RequestID
+			result.ErrorCode = data.ErrorCode
+			result.ErrorMessage = data.ErrorMessage
 		}
 	default:
 		result.Kind = orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_UNSPECIFIED

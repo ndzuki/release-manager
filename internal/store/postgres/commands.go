@@ -83,6 +83,11 @@ func (s *outboxStore) GetInflightForOperator(ctx context.Context, operatorID str
 	return scanOutboxEntry(row)
 }
 
+func (s *outboxStore) GetByOperationID(ctx context.Context, operationID string) (*store.OutboxEntry, error) {
+	row := s.gorm.QueryRowContext(ctx, `SELECT `+outboxColumns+` FROM outbox WHERE operation_id = ? ORDER BY created_at DESC LIMIT 1`, operationID)
+	return scanOutboxEntry(row)
+}
+
 func (s *outboxStore) GetNextSequence(ctx context.Context) (int64, error) {
 	var seq sql.NullInt64
 	err := s.gorm.QueryRowContext(ctx, `SELECT MAX(sequence) FROM outbox`).Scan(&seq)

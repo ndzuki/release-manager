@@ -63,6 +63,11 @@ func (s *outboxStore) GetByCommandID(ctx context.Context, commandID string) (*st
 	return scanOutboxEntry(row)
 }
 
+func (s *outboxStore) GetByOperationID(ctx context.Context, operationID string) (*store.OutboxEntry, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+outboxColumns+` FROM outbox WHERE operation_id = ? ORDER BY created_at DESC LIMIT 1`, operationID)
+	return scanOutboxEntry(row)
+}
+
 func (s *outboxStore) GetPendingForOperator(ctx context.Context, operatorID string) (*store.OutboxEntry, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+outboxColumns+` FROM outbox WHERE operator_id=? AND status='pending' ORDER BY sequence ASC LIMIT 1`, operatorID)
 	return scanOutboxEntry(row)

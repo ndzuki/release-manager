@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/trust"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -2043,4 +2045,85 @@ func TestGetOperation_EffectStatusReflectsLateResolution(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	assert.Equal(t, orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_APPLIED, resp.Msg.Operation.EffectStatus)
+}
+
+// ── AC-077-05/14: cursor_expired carries a decodable snapshot ──
+
+func TestCursorExpiredErrorSnapshotProto(t *testing.T) {
+	op := &store.Operation{
+		ID: "op-cursor-expired", OperationType: store.OperationInstall,
+		Status: store.StatusSucceeded, ReleaseDefinitionID: "def-001",
+		IdempotencyKey: "cursor-ik", RequestHash: "cursor-rh", StateVersion: 4,
+	}
+	snapshot := &store.TimelineSnapshot{
+		Operation: op, SnapshotSequence: 7, RetainedFromSequence: 3,
+	}
+	err := operationCursorExpiredError(snapshot)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeOutOfRange, connect.CodeOf(err))
+
+	// Header values are read from the error's Meta.
+	assert.Equal(t, "cursor_expired", connectErrMeta(err, "X-Reason-Code"))
+	assert.Equal(t, "3", connectErrMeta(err, "X-Retained-From-Sequence"))
+	encoded := connectErrMeta(err, "X-Snapshot-Proto")
+	require.NotEmpty(t, encoded)
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	require.NoError(t, err)
+	var decoded orchestratorv1.OperationSnapshot
+	require.NoError(t, protojson.Unmarshal(raw, &decoded))
+	assert.Equal(t, int64(7), decoded.SnapshotSequence)
+	assert.Equal(t, int64(3), decoded.RetainedFromSequence)
+	assert.Equal(t, "op-cursor-expired", decoded.Operation.GetOperationId())
+}
+
+func connectErrMeta(err error, key string) string {
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		return ""
+	}
+	return connectErr.Meta().Get(key)
+}
+
+// ── AC-077-06: heartbeat hard limit ≤10s (implementation value 5s) ──
+
+func TestOperationWatchHeartbeatWithinHardLimit(t *testing.T) {
+	assert.LessOrEqual(t, operationWatchHeartbeat, 10*time.Second)
+	assert.Equal(t, 5*time.Second, operationWatchHeartbeat)
+}
+
+// ── AC-077-01/02/03 serialization cases ──
+
+func TestToProtoTimelineEntryNewKinds(t *testing.T) {
+	now := time.Now().UTC()
+	ackData, err := json.Marshal(store.AckTimelineData{RequestID: "req-ack", AckStage: "persisted"})
+	require.NoError(t, err)
+	ack := toProtoTimelineEntry(&store.OperationTimelineEntry{
+		ID: "e-ack", OperationID: "op-1", Sequence: 1, Kind: string(store.TimelineEntryACK),
+		OperationStateVersion: 2, Data: ackData, CreatedAt: now,
+	})
+	assert.Equal(t, orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_ACK, ack.Kind)
+	assert.Equal(t, "req-ack", ack.RequestId)
+	assert.Equal(t, "persisted", ack.AckStage)
+
+	progressData, err := json.Marshal(store.RolloutProgressTimelineData{WorkloadRef: "deployments/app/default", Ready: 2, Desired: 3})
+	require.NoError(t, err)
+	progress := toProtoTimelineEntry(&store.OperationTimelineEntry{
+		ID: "e-progress", OperationID: "op-1", Sequence: 2, Kind: string(store.TimelineEntryRolloutProgress),
+		OperationStateVersion: 2, Data: progressData, CreatedAt: now,
+	})
+	assert.Equal(t, orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_ROLLOUT_PROGRESS, progress.Kind)
+	assert.Equal(t, "deployments/app/default", progress.WorkloadRef)
+	assert.Equal(t, int32(2), progress.Ready)
+	assert.Equal(t, int32(3), progress.Desired)
+
+	errorData, err := json.Marshal(store.ErrorTimelineData{RequestID: "req-err", ErrorCode: "helm_upgrade_failed", ErrorMessage: "sanitized"})
+	require.NoError(t, err)
+	errorEntry := toProtoTimelineEntry(&store.OperationTimelineEntry{
+		ID: "e-error", OperationID: "op-1", Sequence: 3, Kind: string(store.TimelineEntryError),
+		OperationStateVersion: 2, Data: errorData, CreatedAt: now,
+	})
+	assert.Equal(t, orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_ERROR, errorEntry.Kind)
+	assert.Equal(t, "req-err", errorEntry.RequestId)
+	assert.Equal(t, "helm_upgrade_failed", errorEntry.ErrorCode)
+	assert.Equal(t, "sanitized", errorEntry.ErrorMessage)
 }

@@ -2,6 +2,7 @@ package operator_test
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -612,4 +613,227 @@ func TestCommandStreamAckPersistedWritesTimelineEntry(t *testing.T) {
 	entries, err = st.Timeline().List(ctx, "operation-ack-stream", 0, 10)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
+}
+
+// ── AC-077-02/15/17: rollout_progress service-side handling ──
+
+// commandStreamPair starts a real bidi CommandStream over HTTP/2 and returns
+// the client.
+func commandStreamPair(t *testing.T, svc *operator.Service) operatorv1connect.OperatorServiceClient {
+	t.Helper()
+	path, handler := operatorv1connect.NewOperatorServiceHandler(svc)
+	mux := http.NewServeMux()
+	mux.Handle(path, handler)
+	srv := httptest.NewUnstartedServer(mux)
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return operatorv1connect.NewOperatorServiceClient(srv.Client(), srv.URL)
+}
+
+func TestCommandStreamRolloutProgressWritesTimelineEntry(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-rollout", Name: "definition-rollout",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "example",
+		Status: store.DefStatusActive,
+	}, nil))
+	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+		ID: "operation-rollout", OperationType: store.OperationInstall,
+		Status: store.StatusRunning, ReleaseDefinitionID: "definition-rollout",
+		IdempotencyKey: "idem-rollout", RequestHash: "hash",
+	}))
+	pendingEntry(t, st, "operation-rollout", 1, store.CommandDelivered)
+
+	svc, err := operator.NewService(st, nil)
+	require.NoError(t, err)
+	client := commandStreamPair(t, svc)
+	stream := client.CommandStream(ctx)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Hello{
+			Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+		},
+	}))
+	_, err = stream.Receive()
+	require.NoError(t, err)
+
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_RolloutProgress{
+			RolloutProgress: &operatorv1.RolloutProgress{
+				OperationId: "operation-rollout", WorkloadRef: "deployments/app/default",
+				Ready: 2, Desired: 3,
+			},
+		},
+	}))
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break
+		}
+	}
+
+	entries, err := st.Timeline().List(ctx, "operation-rollout", 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, string(store.TimelineEntryRolloutProgress), entries[0].Kind)
+	var data store.RolloutProgressTimelineData
+	require.NoError(t, json.Unmarshal(entries[0].Data, &data))
+	assert.Equal(t, store.RolloutProgressTimelineData{WorkloadRef: "deployments/app/default", Ready: 2, Desired: 3}, data)
+}
+
+func TestCommandStreamRolloutProgressForeignOperationDropped(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-foreign", Name: "definition-foreign",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "foreign",
+		Status: store.DefStatusActive,
+	}, nil))
+	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+		ID: "operation-foreign", OperationType: store.OperationInstall,
+		Status: store.StatusRunning, ReleaseDefinitionID: "definition-foreign",
+		IdempotencyKey: "idem-foreign", RequestHash: "hash",
+	}))
+	// Outbox row owned by a different operator than the session (op-2 vs op-1);
+	// the entry must be persisted with op-2, mutating the in-memory struct
+	// alone would not change the stored row.
+	require.NoError(t, st.Outbox().Create(ctx, &store.OutboxEntry{
+		ID: uuid.NewString(), CommandID: uuid.NewString(), OperationID: "operation-foreign",
+		OperationType: "INSTALL", OperatorID: "op-2", Payload: []byte(`{}`),
+		Status: store.CommandDelivered, MaxInFlight: 1, Sequence: 1,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}))
+
+	svc, err := operator.NewService(st, nil)
+	require.NoError(t, err)
+	client := commandStreamPair(t, svc)
+	stream := client.CommandStream(ctx)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Hello{
+			Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+		},
+	}))
+	_, err = stream.Receive()
+	require.NoError(t, err)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_RolloutProgress{
+			RolloutProgress: &operatorv1.RolloutProgress{
+				OperationId: "operation-foreign", WorkloadRef: "deployments/app/default",
+				Ready: 1, Desired: 3,
+			},
+		},
+	}))
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break
+		}
+	}
+
+	entries, err := st.Timeline().List(ctx, "operation-foreign", 0, 10)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+func TestCommandStreamRolloutProgressTerminalOperationDropped(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-terminal", Name: "definition-terminal",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "terminal",
+		Status: store.DefStatusActive,
+	}, nil))
+	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+		ID: "operation-terminal", OperationType: store.OperationInstall,
+		Status: store.StatusRunning, ReleaseDefinitionID: "definition-terminal",
+		IdempotencyKey: "idem-terminal", RequestHash: "hash", StateVersion: 1,
+	}))
+	pendingEntry(t, st, "operation-terminal", 1, store.CommandDelivered)
+	_, err := st.Operations().Transition(ctx, "operation-terminal", store.StatusFailed, 1, "failed")
+	require.NoError(t, err)
+
+	svc, err := operator.NewService(st, nil)
+	require.NoError(t, err)
+	client := commandStreamPair(t, svc)
+	stream := client.CommandStream(ctx)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Hello{
+			Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+		},
+	}))
+	_, err = stream.Receive()
+	require.NoError(t, err)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_RolloutProgress{
+			RolloutProgress: &operatorv1.RolloutProgress{
+				OperationId: "operation-terminal", WorkloadRef: "deployments/app/default",
+				Ready: 1, Desired: 3,
+			},
+		},
+	}))
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break
+		}
+	}
+
+	entries, err := st.Timeline().List(ctx, "operation-terminal", 0, 10)
+	require.NoError(t, err)
+	// STATE_TRANSITION plus the AC-077-03 ERROR entry from the failed
+	// transition; no progress entry (AC-077-17).
+	require.Len(t, entries, 2)
+	for _, e := range entries {
+		assert.NotEqual(t, string(store.TimelineEntryRolloutProgress), e.Kind)
+	}
+}
+
+func TestCommandStreamRolloutProgressInvalidFieldDropped(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-invalid", Name: "definition-invalid",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "invalid",
+		Status: store.DefStatusActive,
+	}, nil))
+	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+		ID: "operation-invalid", OperationType: store.OperationInstall,
+		Status: store.StatusRunning, ReleaseDefinitionID: "definition-invalid",
+		IdempotencyKey: "idem-invalid", RequestHash: "hash",
+	}))
+	pendingEntry(t, st, "operation-invalid", 1, store.CommandDelivered)
+
+	svc, err := operator.NewService(st, nil)
+	require.NoError(t, err)
+	client := commandStreamPair(t, svc)
+	stream := client.CommandStream(ctx)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Hello{
+			Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+		},
+	}))
+	_, err = stream.Receive()
+	require.NoError(t, err)
+
+	// ready > desired and non-whitelisted GVR: both must be dropped silently.
+	for _, progress := range []*operatorv1.RolloutProgress{
+		{OperationId: "operation-invalid", WorkloadRef: "deployments/app/default", Ready: 4, Desired: 3},
+		{OperationId: "operation-invalid", WorkloadRef: "cronjobs/app/default", Ready: 1, Desired: 3},
+		{OperationId: "operation-invalid", WorkloadRef: "deployments/default", Ready: 1, Desired: 3},
+	} {
+		require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+			Payload: &operatorv1.CommandStreamRequest_RolloutProgress{RolloutProgress: progress},
+		}))
+	}
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break
+		}
+	}
+
+	entries, err := st.Timeline().List(ctx, "operation-invalid", 0, 10)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
 }
