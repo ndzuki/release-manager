@@ -9,6 +9,16 @@ import (
 	"time"
 )
 
+// WorkloadSummary identifies one four-GVR workload (Deployment/StatefulSet/
+// DaemonSet/Job) contained in a release manifest. It is non-sensitive
+// metadata only — never manifest bodies or Secret values (REQ-077 Q1).
+type WorkloadSummary struct {
+	APIVersion string `json:"api_version"`
+	Kind       string `json:"kind"`
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+}
+
 // Release represents the result of a Helm operation.
 type Release struct {
 	Name      string `json:"name"`
@@ -26,6 +36,9 @@ type Release struct {
 	ChartDigest           string            `json:"chart_digest,omitempty"`
 	EffectiveValuesDigest string            `json:"effective_values_digest,omitempty"`
 	Provenance            string            `json:"provenance,omitempty"`
+	// Workloads lists the four-GVR workload identities extracted from the
+	// rendered manifest (REQ-077 Q1: observation input equals execution input).
+	Workloads []WorkloadSummary `json:"workloads,omitempty"`
 }
 
 // ReleaseListItem is a lightweight inventory entry for listing releases.

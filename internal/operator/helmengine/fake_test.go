@@ -460,3 +460,28 @@ func TestFake_UpgradeSchemaFailed(t *testing.T) {
 	assert.Equal(t, 1, active.Revision)
 	assert.Equal(t, "chart-v1", active.Chart)
 }
+
+// REQ-077 Q1: FakeWorkloads are injected into Install/Upgrade/Rollback
+// results so agent tests can drive rollout observation without a cluster.
+func TestFake_WorkloadsInjectedAcrossActions(t *testing.T) {
+	eng := NewFake()
+	eng.FakeWorkloads = []WorkloadSummary{
+		{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "apps", Name: "web"},
+		{APIVersion: "batch/v1", Kind: "Job", Namespace: "apps", Name: "migrate"},
+	}
+	ctx := t.Context()
+
+	installed, err := eng.Install(ctx, InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+	require.NoError(t, err)
+	assert.Equal(t, eng.FakeWorkloads, installed.Workloads)
+
+	upgraded, err := eng.Upgrade(ctx, UpgradeOptions{
+		Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v2", ExpectedRevision: 1, Atomic: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, eng.FakeWorkloads, upgraded.Workloads)
+
+	rolledBack, err := eng.Rollback(ctx, RollbackOptions{Namespace: "apps", ReleaseName: "example", TargetRevision: 1})
+	require.NoError(t, err)
+	assert.Equal(t, eng.FakeWorkloads, rolledBack.Workloads)
+}
