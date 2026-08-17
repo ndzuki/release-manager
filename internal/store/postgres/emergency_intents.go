@@ -465,6 +465,16 @@ func (s *emergencyIntentStore) Finish(
 	}); err != nil {
 		return nil, err
 	}
+	if (updated.Status == store.StatusFailed || updated.Status == store.StatusTimeout) && lastError != "" {
+		errorEntry, err := store.ErrorTimelineEntry(updated.ID, updated.StateVersion, lastError)
+		if err != nil {
+			return nil, err
+		}
+		errorEntry.CreatedAt = updated.UpdatedAt
+		if _, err := appendTimelineEntry(ctx, tx, errorEntry); err != nil {
+			return nil, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit finish emergency: %w", err)
 	}

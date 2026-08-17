@@ -217,3 +217,40 @@ func TestEmergencyPersistAck_AtomicEntryAndIdempotency(t *testing.T) {
 	require.Len(t, entries, 1)
 	assert.Equal(t, string(store.TimelineEntryACK), entries[0].Kind)
 }
+
+func TestEmergencyFinishWritesSanitizedErrorEntry(t *testing.T) {
+	st := OpenTest(t)
+	ctx := context.Background()
+	seedEmergencyDefinition(t, st, "def-finish-error")
+	cmd := emergencyCreateCommand(t, "def-finish-error", "idem-finish-error", "hash-finish-error", store.EmergencySetReplicas)
+	result, err := st.EmergencyIntents().CreateIfAvailable(ctx, cmd)
+	require.NoError(t, err)
+
+	opCurrent, err := st.Operations().Get(ctx, result.Operation.ID)
+	require.NoError(t, err)
+	opCurrent, err = st.Operations().UpdateStatus(ctx, opCurrent.ID, store.StatusQueued, opCurrent.StateVersion, "")
+	require.NoError(t, err)
+	opCurrent, err = st.Operations().UpdateStatus(ctx, opCurrent.ID, store.StatusRunning, opCurrent.StateVersion, "")
+	require.NoError(t, err)
+
+	// AC-077-03/12: terminal EMERGENCY failure writes a sanitized ERROR entry.
+	sensitiveErr := `{"code":"helm_rollback_failed"}: rollback error: token=rollback-live-42`
+	finished, err := st.EmergencyIntents().Finish(
+		ctx, result.Intent.ID, opCurrent.ID, opCurrent.StateVersion, store.StatusFailed,
+		store.EmergencyEffectUnknown, sensitiveErr, nil, nil,
+	)
+	require.NoError(t, err)
+
+	// queued→running transitions already appended two STATE_TRANSITION entries;
+	// Finish appends the terminal transition plus the ERROR entry.
+	entries, err := st.Timeline().List(ctx, finished.ID, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 4)
+	assert.Equal(t, string(store.TimelineEntryStateTransition), entries[2].Kind)
+	assert.Equal(t, string(store.TimelineEntryError), entries[3].Kind)
+
+	var errorData store.ErrorTimelineData
+	require.NoError(t, json.Unmarshal(entries[3].Data, &errorData))
+	assert.Equal(t, "helm_rollback_failed", errorData.ErrorCode)
+	assert.NotContains(t, errorData.ErrorMessage, "rollback-live-42")
+}

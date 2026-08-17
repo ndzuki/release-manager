@@ -6,9 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
+
+	"github.com/ndzuki/release-manager/internal/redact"
 )
 
 // VerificationStatus is the outcome of an artifact trust verification.
@@ -2298,4 +2302,44 @@ type Store interface {
 	ConvergenceTasks() ConvergenceTaskStore
 	Authorization() AuthorizationStore
 	Close() error
+}
+
+// ErrorTimelineEntry builds a sanitized ERROR timeline entry for a terminal
+// failed/timeout operation. The error code is extracted from the stable code
+// envelope when present (falling back to operation_failed); the message is
+// redacted and truncated to the 500-rune summary bound (AC-077-03/12).
+func ErrorTimelineEntry(operationID string, stateVersion int, lastError string) (*OperationTimelineEntry, error) {
+	sanitized, _ := redact.Sanitize(lastError)
+	sanitized = redact.Truncate(sanitized, 500)
+	data, err := json.Marshal(ErrorTimelineData{
+		ErrorCode:    stableErrorCode(lastError),
+		ErrorMessage: sanitized,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode error timeline entry: %w", err)
+	}
+	return &OperationTimelineEntry{
+		OperationID: operationID, OperationStateVersion: stateVersion,
+		Kind: string(TimelineEntryError), Data: data,
+	}, nil
+}
+
+// stableErrorCode extracts the stable agent/observer error code from a
+// terminal last_error: a JSON {"code": "..."} envelope (agent result shape)
+// or a bare known code. Unknown payloads fall back to operation_failed so the
+// ERROR entry always carries a stable, non-volatile code (AC-077-03).
+func stableErrorCode(lastError string) string {
+	var envelope struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal([]byte(lastError), &envelope); err == nil && envelope.Code != "" {
+		return envelope.Code
+	}
+	trimmed := strings.TrimSpace(lastError)
+	for _, code := range []string{"helm_install_failed", "helm_upgrade_failed", "helm_rollback_failed", "rollout_timeout", "cancelled"} {
+		if trimmed == code || strings.Contains(lastError, `"`+code+`"`) {
+			return code
+		}
+	}
+	return "operation_failed"
 }

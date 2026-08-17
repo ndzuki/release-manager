@@ -128,6 +128,16 @@ func (s *Store) FinalizeUpgrade(ctx context.Context, input *store.UpgradeTermina
 	}); err != nil {
 		return err
 	}
+	if (input.Status == store.StatusFailed || input.Status == store.StatusTimeout) && input.LastError != "" {
+		errorEntry, err := store.ErrorTimelineEntry(input.OperationID, input.ExpectedStateVersion+1, input.LastError)
+		if err != nil {
+			return err
+		}
+		errorEntry.CreatedAt = now
+		if _, err := appendTimelineEntry(ctx, tx, errorEntry); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit upgrade terminal transaction: %w", err)
 	}

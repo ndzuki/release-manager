@@ -657,6 +657,16 @@ func (s *operationStore) FinalizeUpgrade(ctx context.Context, input *store.Upgra
 	}); err != nil {
 		return err
 	}
+	if (input.Status == store.StatusFailed || input.Status == store.StatusTimeout) && input.LastError != "" {
+		errorEntry, err := store.ErrorTimelineEntry(input.OperationID, input.ExpectedStateVersion+1, input.LastError)
+		if err != nil {
+			return err
+		}
+		errorEntry.CreatedAt = createdAt
+		if _, err := appendTimelineEntry(ctx, tx, errorEntry); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit upgrade terminal transaction: %w", err)
 	}
@@ -759,6 +769,16 @@ func (s *operationStore) transition(
 		Kind: string(store.TimelineEntryStateTransition), Data: timelineData, CreatedAt: updated.UpdatedAt,
 	}); err != nil {
 		return nil, err
+	}
+	if (updated.Status == store.StatusFailed || updated.Status == store.StatusTimeout) && lastError != "" {
+		errorEntry, err := store.ErrorTimelineEntry(updated.ID, updated.StateVersion, lastError)
+		if err != nil {
+			return nil, err
+		}
+		errorEntry.CreatedAt = updated.UpdatedAt
+		if _, err := appendTimelineEntry(ctx, tx, errorEntry); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit operation transition: %w", err)
