@@ -53,6 +53,16 @@ func (f *FakeObserver) Observe(
 	_ int64,
 	timeout time.Duration,
 ) (WatchResult, error) {
+	return f.ObserveWithProgress(ctx, ref, 0, timeout, nil)
+}
+
+func (f *FakeObserver) ObserveWithProgress(
+	ctx context.Context,
+	ref ResourceRef,
+	_ int64,
+	timeout time.Duration,
+	onProgress func(WatchResult),
+) (WatchResult, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, ref)
 	response, ok := f.responses[ref]
@@ -65,9 +75,16 @@ func (f *FakeObserver) Observe(
 	result := response.Result
 	result.Resource = ref
 
+	report := func() {
+		if onProgress != nil {
+			onProgress(result)
+		}
+	}
+
 	switch response.Behavior {
 	case FakeImmediateReady:
 		result.Ready = true
+		report()
 		return result, nil
 
 	case FakeDelayedReady:
@@ -80,8 +97,10 @@ func (f *FakeObserver) Observe(
 		select {
 		case <-timer.C:
 			result.Ready = true
+			report()
 			return result, nil
 		case <-ctx.Done():
+			report()
 			return result, &RolloutError{Kind: ErrCancelled, Last: result, Err: ctx.Err()}
 		}
 
@@ -89,6 +108,7 @@ func (f *FakeObserver) Observe(
 		observeCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		<-observeCtx.Done()
+		report()
 		if ctx.Err() != nil {
 			return result, &RolloutError{Kind: ErrCancelled, Last: result, Err: ctx.Err()}
 		}
@@ -99,9 +119,11 @@ func (f *FakeObserver) Observe(
 		if injectedErr == nil {
 			injectedErr = ErrWatchDisconnected
 		}
+		report()
 		return result, &RolloutError{Kind: injectedErr, Last: result, Err: injectedErr}
 
 	default:
+		report()
 		return result, response.Err
 	}
 }

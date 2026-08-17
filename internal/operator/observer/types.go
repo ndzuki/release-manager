@@ -56,6 +56,12 @@ type WatchResult struct {
 	Ready              bool
 	Failed             bool
 	Conditions         []Condition
+	// ReadyCount/DesiredCount are the rollout progress counters reported to
+	// the orchestrator: Deployment=availableReplicas/spec.replicas,
+	// StatefulSet=readyReplicas/spec.replicas,
+	// DaemonSet=numberAvailable/desiredNumberScheduled, Job=0/0 (REQ-077).
+	ReadyCount   int32
+	DesiredCount int32
 }
 
 type RolloutError struct {
