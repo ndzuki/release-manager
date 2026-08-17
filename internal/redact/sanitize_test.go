@@ -87,8 +87,8 @@ func TestIsSensitiveField(t *testing.T) {
 }
 
 func TestRedactSensitive(t *testing.T) {
-	assert.Equal(t, "****REDACTED****", RedactSensitive("token", "abc123"))
-	assert.Equal(t, "api-v1", RedactSensitive("image_ref", "api-v1"))
+	assert.Equal(t, "****REDACTED****", Sensitive("token", "abc123"))
+	assert.Equal(t, "api-v1", Sensitive("image_ref", "api-v1"))
 }
 
 func TestTruncate(t *testing.T) {

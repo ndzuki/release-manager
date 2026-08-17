@@ -21,7 +21,7 @@ func IsSensitiveField(fieldName string) bool {
 // RedactSensitive redacts a field value if the field name is sensitive.
 // Returns the (possibly redacted) value.
 func RedactSensitive(fieldName, value string) string {
-	return redact.RedactSensitive(fieldName, value)
+	return redact.Sensitive(fieldName, value)
 }
 
 // sanitizeAuditEvent returns a copy of ev with ChangeSummary and Metadata values

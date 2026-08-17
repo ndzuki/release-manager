@@ -2041,7 +2041,7 @@ func TestOutboxPersistAck_AtomicEntryAndIdempotency(t *testing.T) {
 		StateVersion:        1,
 	}
 	require.NoError(t, st.Operations().Create(ctx, op))
-	entry := pendingStoreEntry(t, st, op.ID, store.CommandDelivered)
+	entry := pendingStoreEntry(t, st, op.ID)
 
 	acked, err := st.Outbox().PersistAck(ctx, entry.ID)
 	require.NoError(t, err)
@@ -2070,7 +2070,7 @@ func TestOutboxPersistAck_RollbackKeepsDelivered(t *testing.T) {
 	// The outbox row references a ghost operation: the status UPDATE inside
 	// the transaction succeeds but the timeline FK check fails, so the whole
 	// transaction must roll back (AC-077-09) — no half-committed persisted state.
-	entry := pendingStoreEntry(t, st, "ghost-operation", store.CommandDelivered)
+	entry := pendingStoreEntry(t, st, "ghost-operation")
 
 	_, err := st.Outbox().PersistAck(ctx, entry.ID)
 	require.Error(t, err)
@@ -2095,8 +2095,8 @@ func TestPersistAck_ConcurrentSequenceStrictlyIncreasing(t *testing.T) {
 		StateVersion:        1,
 	}
 	require.NoError(t, st.Operations().Create(ctx, op))
-	e1 := pendingStoreEntry(t, st, op.ID, store.CommandDelivered)
-	e2 := pendingStoreEntry(t, st, op.ID, store.CommandDelivered)
+	e1 := pendingStoreEntry(t, st, op.ID)
+	e2 := pendingStoreEntry(t, st, op.ID)
 
 	// ACK_PERSISTED for two commands races with the terminal state transition
 	// of the same operation: all three append timeline entries, and the shared
@@ -2142,8 +2142,8 @@ func TestPersistAck_ConcurrentSequenceStrictlyIncreasing(t *testing.T) {
 	assert.Equal(t, int64(3), entries[2].Sequence)
 }
 
-// pendingStoreEntry inserts an outbox row with the given operation and status.
-func pendingStoreEntry(t *testing.T, st *sqlitestore.Store, opID string, status store.CommandStatus) *store.OutboxEntry {
+// pendingStoreEntry inserts a delivered outbox row for the given operation.
+func pendingStoreEntry(t *testing.T, st *sqlitestore.Store, opID string) *store.OutboxEntry {
 	t.Helper()
 	e := &store.OutboxEntry{
 		ID:            uuid.New().String(),
@@ -2152,7 +2152,7 @@ func pendingStoreEntry(t *testing.T, st *sqlitestore.Store, opID string, status 
 		OperationType: "INSTALL",
 		OperatorID:    "op-1",
 		Payload:       []byte(`{}`),
-		Status:        status,
+		Status:        store.CommandDelivered,
 		MaxInFlight:   1,
 		Sequence:      1,
 		CreatedAt:     time.Now(),

@@ -61,9 +61,9 @@ func IsSensitiveField(fieldName string) bool {
 	return false
 }
 
-// RedactSensitive redacts a field value if the field name is sensitive.
+// Sensitive redacts a field value if the field name is sensitive.
 // Returns the (possibly redacted) value.
-func RedactSensitive(fieldName, value string) string {
+func Sensitive(fieldName, value string) string {
 	if IsSensitiveField(fieldName) {
 		return "****REDACTED****"
 	}
