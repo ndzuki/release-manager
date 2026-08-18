@@ -24,30 +24,32 @@ const (
 
 // Sentinel errors for store operations.
 var (
-	ErrNotFound                  = errors.New("store: not found")
-	ErrOptimisticLock            = errors.New("store: optimistic lock conflict")
-	ErrDuplicateKey              = errors.New("store: duplicate key")
-	ErrUnavailable               = errors.New("store: unavailable")
-	ErrReleaseBusy               = errors.New("store: release busy")
-	ErrInvalidCursor             = errors.New("store: invalid cursor")
-	ErrBindingRevoked            = errors.New("store: binding revoked")
-	ErrApprovalPending           = errors.New("store: another approval is pending")
-	ErrIdempotencyConflict       = errors.New("store: idempotency conflict")
-	ErrInvalidState              = errors.New("store: invalid values revision state")
-	ErrDefinitionOwnerUnresolved = errors.New("store: definition owner unresolved")
-	ErrNotAuthorized             = errors.New("store: approval command not authorized")
-	ErrPendingTokenExists        = errors.New("store: pending enrollment token already exists")
-	ErrDuplicateOperatorName     = errors.New("store: duplicate active operator name")
-	ErrOperatorNotFound          = errors.New("store: operator not found")
-	ErrTokenReplaceConflict      = errors.New("store: token replace conflict")
-	ErrOperatorStateConflict     = errors.New("store: operator state conflict")
-	ErrAuditUnavailable          = errors.New("store: audit unavailable")
-	ErrEmergencyConflict         = errors.New("store: conflicting emergency target")
-	ErrAuthorizationStale        = errors.New("store: authorization source version changed")
-	ErrRootNotLive               = errors.New("store: trust root not in active or grace state")
-	ErrLastRootRemovalForbidden  = errors.New("last_root_removal_forbidden")
-	ErrBundleNotReady            = errors.New("store: bundle not ready")
-	ErrBundleRejected            = errors.New("store: bundle rejected")
+	ErrNotFound                      = errors.New("store: not found")
+	ErrOptimisticLock                = errors.New("store: optimistic lock conflict")
+	ErrDuplicateKey                  = errors.New("store: duplicate key")
+	ErrUnavailable                   = errors.New("store: unavailable")
+	ErrReleaseBusy                   = errors.New("store: release busy")
+	ErrInvalidCursor                 = errors.New("store: invalid cursor")
+	ErrBindingRevoked                = errors.New("store: binding revoked")
+	ErrApprovalPending               = errors.New("store: another approval is pending")
+	ErrIdempotencyConflict           = errors.New("store: idempotency conflict")
+	ErrCleanupAlreadyRequested       = errors.New("store: cleanup already requested")
+	ErrCleanupIdempotencyUnavailable = errors.New("store: cleanup idempotency unavailable")
+	ErrInvalidState                  = errors.New("store: invalid values revision state")
+	ErrDefinitionOwnerUnresolved     = errors.New("store: definition owner unresolved")
+	ErrNotAuthorized                 = errors.New("store: approval command not authorized")
+	ErrPendingTokenExists            = errors.New("store: pending enrollment token already exists")
+	ErrDuplicateOperatorName         = errors.New("store: duplicate active operator name")
+	ErrOperatorNotFound              = errors.New("store: operator not found")
+	ErrTokenReplaceConflict          = errors.New("store: token replace conflict")
+	ErrOperatorStateConflict         = errors.New("store: operator state conflict")
+	ErrAuditUnavailable              = errors.New("store: audit unavailable")
+	ErrEmergencyConflict             = errors.New("store: conflicting emergency target")
+	ErrAuthorizationStale            = errors.New("store: authorization source version changed")
+	ErrRootNotLive                   = errors.New("store: trust root not in active or grace state")
+	ErrLastRootRemovalForbidden      = errors.New("last_root_removal_forbidden")
+	ErrBundleNotReady                = errors.New("store: bundle not ready")
+	ErrBundleRejected                = errors.New("store: bundle rejected")
 )
 
 // ValuesRevision lifecycle sentinel errors.
@@ -1360,10 +1362,11 @@ type BundleStore interface {
 	GetByAlias(ctx context.Context, alias string) (*ReleaseBundle, error)
 	List(ctx context.Context, filter BundleListFilter) (*BundlePage, error)
 	UpdateStatusTx(tx *gorm.DB, id string, from, to BundleStatus, validationErr string) error
-	ListForArchive(ctx context.Context, retentionDays int, terminalStates []OperationStatus) ([]string, error)
+	ListForArchive(ctx context.Context, retentionDays int, terminalStates []OperationStatus, limit ...int) ([]string, error)
 	Archive(ctx context.Context, ids []string) (int64, error)
-	Unarchive(ctx context.Context, id string) error
-	DeleteBefore(ctx context.Context, cutoff time.Time) (int64, error)
+	Unarchive(ctx context.Context, id string) (previousStatus string, err error)
+	DeleteBefore(ctx context.Context, cutoff time.Time, limit ...int) (int64, error)
+	DeleteExpiredBefore(ctx context.Context, cutoff time.Time, limit ...int) (int64, error)
 }
 
 // TrustPolicy defines the verification rules for an environment.
@@ -1589,6 +1592,17 @@ type IdempotencyStore interface {
 	GetExpired(ctx context.Context, before time.Time, limit int) ([]*IdempotencyRecord, error)
 	// DeleteExpired removes records whose expiry is before the supplied time.
 	DeleteExpired(ctx context.Context, before time.Time) (int64, error)
+}
+
+// CleanupIdempotencyStore persists one-shot cleanup request keys independently
+// from operation idempotency records.
+type CleanupIdempotencyStore interface {
+	// TryCreate reserves a cleanup request key. It returns
+	// ErrCleanupAlreadyRequested when the key already exists and was created
+	// within the retention window; older keys are re-usable (the retention
+	// window is enforced here, not only by periodic cleanup).
+	TryCreate(ctx context.Context, key string, retention time.Duration) error
+	DeleteExpiredBefore(ctx context.Context, cutoff time.Time, limit int) (int64, error)
 }
 
 // OperationStore defines the persistence contract for operations.
@@ -2209,7 +2223,13 @@ type PreflightLifecycleStore interface {
 	// UpdateResult persists the final overall result and canonical stage list.
 	UpdateResult(ctx context.Context, operationID, overall, stages string) error
 	GetByOperationID(ctx context.Context, operationID string) (*PreflightLifecycle, error)
-	DeleteExpired(ctx context.Context, ttl time.Duration) (int64, error)
+	// DeleteExpired removes lifecycle records past their retention in bounded
+	// batches (REQ-069 Phase 4): operation-linked rows past ttl from
+	// operation_terminal_at, orphan rows (operation_id IS NULL) past orphanTTL
+	// from created_at, and rows whose operation reached a terminal state
+	// without a backfilled operation_terminal_at, evaluated from
+	// operations.terminal_at (JOIN fallback, AC-069-25).
+	DeleteExpired(ctx context.Context, ttl, orphanTTL time.Duration, limit ...int) (int64, error)
 }
 
 // Store is the top-level persistence abstraction.
@@ -2242,6 +2262,7 @@ type Store interface {
 	TrustRoots() TrustRootStore
 	Notifications() NotificationStore
 	Idempotency() IdempotencyStore
+	CleanupIdempotency() CleanupIdempotencyStore
 	Bundles() BundleStore
 	ScanResults() ScanResultStore
 	VulnerabilityExceptions() VulnerabilityExceptionStore

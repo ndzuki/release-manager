@@ -27,29 +27,32 @@ func (s *candidateArtifactStore) Create(ctx context.Context, candidate *store.Ca
 
 // LinkToBundle preserves the legacy direct association call.
 func (s *candidateArtifactStore) LinkToBundle(ctx context.Context, artifactID, bundleID string) error {
-	result := s.gorm.gorm.WithContext(ctx).Exec(`
-		INSERT INTO bundle_candidate_artifacts (bundle_id, artifact_id, linked_at)
-		SELECT ?, id, ? FROM candidate_artifacts WHERE id = ?
-		ON CONFLICT DO NOTHING
-	`, bundleID, time.Now().UTC(), artifactID)
-	if result.Error != nil {
-		return fmt.Errorf("link candidate artifact to bundle: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		var count int64
-		if err := s.gorm.gorm.WithContext(ctx).Raw(`SELECT COUNT(*) FROM candidate_artifacts WHERE id = ?`, artifactID).Scan(&count).Error; err != nil {
-			return fmt.Errorf("check candidate artifact: %w", err)
+	return s.gorm.gorm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Exec(`
+			INSERT INTO bundle_candidate_artifacts (bundle_id, artifact_id, linked_at)
+			SELECT ?, id, ? FROM candidate_artifacts WHERE id = ?
+			ON CONFLICT DO NOTHING
+		`, bundleID, time.Now().UTC(), artifactID)
+		if result.Error != nil {
+			return fmt.Errorf("link candidate artifact to bundle: %w", result.Error)
 		}
-		if count == 0 {
-			return fmt.Errorf("candidate artifact %s: %w", artifactID, store.ErrNotFound)
+		if result.RowsAffected == 0 {
+			var count int64
+			if err := tx.Raw(`SELECT COUNT(*) FROM candidate_artifacts WHERE id = ?`, artifactID).Scan(&count).Error; err != nil {
+				return fmt.Errorf("check candidate artifact: %w", err)
+			}
+			if count == 0 {
+				return fmt.Errorf("candidate artifact %s: %w", artifactID, store.ErrNotFound)
+			}
 		}
-	}
-	return nil
+		if err := tx.Exec(`UPDATE candidate_artifacts SET orphaned_at = NULL WHERE id = ?`, artifactID).Error; err != nil {
+			return fmt.Errorf("clear candidate artifact orphaned_at: %w", err)
+		}
+		return nil
+	})
 }
 
 // LinkCandidateArtifacts batch-links candidate artifacts by digest to a bundle.
-// Returns the number of newly created links. Artifacts that gain their first
-// bundle association have orphaned_at cleared (AC-067-19).
 func (s *candidateArtifactStore) LinkCandidateArtifacts(ctx context.Context, bundleID string, digests []string) (int64, error) {
 	if len(digests) == 0 {
 		return 0, nil
@@ -66,26 +69,28 @@ func (s *candidateArtifactStore) LinkCandidateArtifacts(ctx context.Context, bun
 		}
 		placeholders += "?"
 	}
-	result := s.gorm.gorm.WithContext(ctx).Exec(`
-		INSERT INTO bundle_candidate_artifacts (bundle_id, artifact_id, linked_at)
-		SELECT ?, ca.id, NOW()
-		FROM candidate_artifacts ca
-		WHERE ca.digest IN (`+placeholders+`)
-		ON CONFLICT (bundle_id, artifact_id) DO NOTHING
-	`, args...)
-	if result.Error != nil {
-		return 0, fmt.Errorf("insert bundle candidate artifact links: %w", result.Error)
-	}
-	if err := s.gorm.gorm.WithContext(ctx).Exec(`
-		UPDATE candidate_artifacts
-		SET orphaned_at = NULL
-		WHERE id IN (
-			SELECT artifact_id FROM bundle_candidate_artifacts WHERE bundle_id = ?
-		) AND orphaned_at IS NOT NULL
-	`, bundleID).Error; err != nil {
-		return 0, fmt.Errorf("clear linked candidate artifact orphaned_at: %w", err)
-	}
-	return result.RowsAffected, nil
+	var linked int64
+	err := s.gorm.gorm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Exec(`
+			INSERT INTO bundle_candidate_artifacts (bundle_id, artifact_id, linked_at)
+			SELECT ?, ca.id, NOW()
+			FROM candidate_artifacts ca
+			WHERE ca.digest IN (`+placeholders+`)
+			ON CONFLICT (bundle_id, artifact_id) DO NOTHING
+		`, args...)
+		if result.Error != nil {
+			return fmt.Errorf("insert bundle candidate artifact links: %w", result.Error)
+		}
+		linked = result.RowsAffected
+		if err := tx.Exec(`
+			UPDATE candidate_artifacts SET orphaned_at = NULL
+			WHERE id IN (SELECT artifact_id FROM bundle_candidate_artifacts WHERE bundle_id = ?)
+		`, bundleID).Error; err != nil {
+			return fmt.Errorf("clear linked candidate artifact orphaned_at: %w", err)
+		}
+		return nil
+	})
+	return linked, err
 }
 
 func (s *candidateArtifactStore) UpsertTx(tx *gorm.DB, candidate *store.CandidateArtifact) error {
@@ -102,7 +107,6 @@ func (s *candidateArtifactStore) UpsertTx(tx *gorm.DB, candidate *store.Candidat
 	if candidate.LastSeenAt.IsZero() {
 		candidate.LastSeenAt = now
 	}
-
 	type candidateRow struct {
 		ID           string     `gorm:"column:id"`
 		ArtifactType string     `gorm:"column:artifact_type"`
@@ -110,38 +114,26 @@ func (s *candidateArtifactStore) UpsertTx(tx *gorm.DB, candidate *store.Candidat
 		CreatedAt    time.Time  `gorm:"column:created_at"`
 		LastSeenAt   time.Time  `gorm:"column:last_seen_at"`
 		OrphanedAt   *time.Time `gorm:"column:orphaned_at"`
-		ValidatedAt  *time.Time `gorm:"column:validated_at"`
-		SourceID     string     `gorm:"column:source_id"`
 	}
-	row := candidateRow{
-		ID: candidate.ID, ArtifactType: string(candidate.ArtifactType), Digest: candidate.Digest,
-		CreatedAt: candidate.CreatedAt.UTC(), LastSeenAt: candidate.LastSeenAt.UTC(), OrphanedAt: candidate.OrphanedAt,
-		ValidatedAt: candidate.ValidatedAt, SourceID: candidate.SourceID,
-	}
-	if err := tx.Clauses(
-		clause.OnConflict{
-			Columns:   []clause.Column{{Name: "digest"}, {Name: "artifact_type"}},
-			DoUpdates: clause.Assignments(map[string]any{"last_seen_at": candidate.LastSeenAt.UTC(), "orphaned_at": nil}),
-		},
-		clause.Returning{},
-	).Table("candidate_artifacts").Create(&row).Error; err != nil {
+	row := candidateRow{ID: candidate.ID, ArtifactType: string(candidate.ArtifactType), Digest: candidate.Digest, CreatedAt: candidate.CreatedAt.UTC(), LastSeenAt: candidate.LastSeenAt.UTC(), OrphanedAt: candidate.OrphanedAt}
+	if err := tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "digest"}, {Name: "artifact_type"}},
+		DoUpdates: clause.Assignments(map[string]any{"last_seen_at": candidate.LastSeenAt.UTC()}),
+	}, clause.Returning{}).Table("candidate_artifacts").Create(&row).Error; err != nil {
 		return fmt.Errorf("upsert candidate artifact: %w", err)
 	}
-	candidate.ID = row.ID
-	candidate.CreatedAt = row.CreatedAt
-	candidate.LastSeenAt = row.LastSeenAt
-	candidate.OrphanedAt = row.OrphanedAt
+	candidate.ID, candidate.CreatedAt, candidate.LastSeenAt, candidate.OrphanedAt = row.ID, row.CreatedAt, row.LastSeenAt, row.OrphanedAt
 	return nil
 }
 
 func (s *candidateArtifactStore) Get(ctx context.Context, id string) (*store.CandidateArtifact, error) {
-	return scanCandidateArtifact(s.gorm.QueryRowContext(ctx, candidateArtifactSelect+` WHERE id = ?`, id))
+	return scanCandidateArtifact(s.gorm.QueryRowContext(ctx, candidateArtifactSelect+` WHERE ca.id = ?`, id))
 }
 
 func (s *candidateArtifactStore) ListValidated(ctx context.Context) ([]*store.CandidateArtifact, error) {
-	rows, err := s.gorm.QueryContext(ctx, candidateArtifactSelect+` WHERE validated_at IS NOT NULL ORDER BY validated_at DESC`)
+	rows, err := s.gorm.QueryContext(ctx, candidateArtifactSelect+` WHERE ca.id IN (SELECT artifact_id FROM candidate_artifact_locations) ORDER BY ca.created_at DESC`)
 	if err != nil {
-		return nil, fmt.Errorf("list validated candidate artifacts: %w", err)
+		return nil, fmt.Errorf("list candidate artifacts: %w", err)
 	}
 	defer rows.Close()
 	artifacts := make([]*store.CandidateArtifact, 0)
@@ -168,16 +160,12 @@ func (s *candidateArtifactStore) UpsertLocationTx(tx *gorm.DB, artifactID, ref, 
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	result := tx.Exec(`
-		INSERT INTO candidate_artifact_locations
-			(artifact_id, ref, source_id, first_seen_at, last_seen_at)
+	if err := tx.Exec(`
+		INSERT INTO candidate_artifact_locations (artifact_id, ref, source_id, first_seen_at, last_seen_at)
 		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT (artifact_id, ref) DO UPDATE SET
-			source_id = EXCLUDED.source_id,
-			last_seen_at = EXCLUDED.last_seen_at
-	`, artifactID, ref, sourceID, now.UTC(), now.UTC())
-	if result.Error != nil {
-		return fmt.Errorf("upsert candidate artifact location: %w", result.Error)
+		ON CONFLICT (artifact_id, ref) DO UPDATE SET source_id = EXCLUDED.source_id, last_seen_at = EXCLUDED.last_seen_at
+	`, artifactID, ref, sourceID, now.UTC(), now.UTC()).Error; err != nil {
+		return fmt.Errorf("upsert candidate artifact location: %w", err)
 	}
 	return nil
 }
@@ -189,8 +177,7 @@ func (s *candidateArtifactStore) LinkToBundleTx(tx *gorm.DB, bundleID string, di
 	for _, digest := range digests {
 		result := tx.Exec(`
 			INSERT INTO bundle_candidate_artifacts (bundle_id, artifact_id, linked_at)
-			SELECT ?, id, ? FROM candidate_artifacts
-			WHERE digest = ? AND artifact_type = ?
+			SELECT ?, id, ? FROM candidate_artifacts WHERE digest = ? AND artifact_type = ?
 			ON CONFLICT DO NOTHING
 		`, bundleID, time.Now().UTC(), digest.Digest, string(digest.ArtifactType))
 		if result.Error != nil {
@@ -198,9 +185,7 @@ func (s *candidateArtifactStore) LinkToBundleTx(tx *gorm.DB, bundleID string, di
 		}
 		if result.RowsAffected == 0 {
 			var count int64
-			if err := tx.Raw(`
-				SELECT COUNT(*) FROM candidate_artifacts WHERE digest = ? AND artifact_type = ?
-			`, digest.Digest, string(digest.ArtifactType)).Scan(&count).Error; err != nil {
+			if err := tx.Raw(`SELECT COUNT(*) FROM candidate_artifacts WHERE digest = ? AND artifact_type = ?`, digest.Digest, string(digest.ArtifactType)).Scan(&count).Error; err != nil {
 				return fmt.Errorf("check candidate artifact identity: %w", err)
 			}
 			if count == 0 {
@@ -208,26 +193,24 @@ func (s *candidateArtifactStore) LinkToBundleTx(tx *gorm.DB, bundleID string, di
 			}
 		}
 	}
+	if err := tx.Exec(`UPDATE candidate_artifacts SET orphaned_at = NULL WHERE id IN (SELECT artifact_id FROM bundle_candidate_artifacts WHERE bundle_id = ?)`, bundleID).Error; err != nil {
+		return fmt.Errorf("clear linked candidate artifact orphaned_at: %w", err)
+	}
 	return nil
 }
 
-// DeleteOrphanBefore removes unlinked candidate artifacts older than cutoff in bounded batches.
 func (s *candidateArtifactStore) DeleteOrphanBefore(ctx context.Context, cutoff time.Time, limits ...int) (int64, error) {
-	limit := 500
-	if len(limits) > 0 && limits[0] > 0 {
+	limit := 100
+	if len(limits) > 0 && limits[0] > 0 && limits[0] < limit {
 		limit = limits[0]
 	}
 	result := s.gorm.gorm.WithContext(ctx).Exec(`
 		DELETE FROM candidate_artifacts
 		WHERE id IN (
-			SELECT ca.id
-			FROM candidate_artifacts AS ca
-			WHERE ca.last_seen_at < ?
-			  AND NOT EXISTS (
-				SELECT 1 FROM bundle_candidate_artifacts AS link WHERE link.artifact_id = ca.id
-			  )
-			ORDER BY ca.last_seen_at, ca.id
-			LIMIT ?
+			SELECT ca.id FROM candidate_artifacts AS ca
+			WHERE ca.orphaned_at IS NOT NULL AND ca.orphaned_at < ?
+			  AND NOT EXISTS (SELECT 1 FROM bundle_candidate_artifacts AS link WHERE link.artifact_id = ca.id)
+			ORDER BY ca.orphaned_at, ca.id LIMIT ?
 		)
 	`, cutoff.UTC(), limit)
 	if result.Error != nil {
@@ -237,28 +220,35 @@ func (s *candidateArtifactStore) DeleteOrphanBefore(ctx context.Context, cutoff 
 }
 
 const candidateArtifactSelect = `
-	SELECT id, artifact_type, ref, digest, bundle_id, created_at, validated_at, source_id
-	FROM candidate_artifacts`
+	SELECT ca.id, ca.artifact_type, loc.ref, ca.digest, ca.created_at, ca.last_seen_at, ca.orphaned_at, loc.source_id
+	FROM candidate_artifacts AS ca
+	LEFT JOIN LATERAL (
+		SELECT ref, source_id FROM candidate_artifact_locations
+		WHERE artifact_id = ca.id ORDER BY last_seen_at DESC, ref LIMIT 1
+	) AS loc ON TRUE`
 
 func scanCandidateArtifact(row interface{ Scan(...any) error }) (*store.CandidateArtifact, error) {
 	var artifact store.CandidateArtifact
 	var artifactType string
-	var bundleID sql.NullString
-	if err := row.Scan(&artifact.ID, &artifactType, &artifact.Ref, &artifact.Digest, &bundleID,
-		&artifact.CreatedAt, &artifact.ValidatedAt, &artifact.SourceID); err != nil {
+	var ref, sourceID sql.NullString
+	if err := row.Scan(&artifact.ID, &artifactType, &ref, &artifact.Digest, &artifact.CreatedAt, &artifact.LastSeenAt, &artifact.OrphanedAt, &sourceID); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, store.ErrNotFound
 		}
 		return nil, fmt.Errorf("scan candidate artifact: %w", err)
 	}
 	artifact.ArtifactType = store.ArtifactType(artifactType)
-	if bundleID.Valid {
-		artifact.BundleID = &bundleID.String
+	if ref.Valid {
+		artifact.Ref = ref.String
+	}
+	if sourceID.Valid {
+		artifact.SourceID = sourceID.String
 	}
 	artifact.CreatedAt = artifact.CreatedAt.UTC()
-	if artifact.ValidatedAt != nil {
-		value := artifact.ValidatedAt.UTC()
-		artifact.ValidatedAt = &value
+	artifact.LastSeenAt = artifact.LastSeenAt.UTC()
+	if artifact.OrphanedAt != nil {
+		value := artifact.OrphanedAt.UTC()
+		artifact.OrphanedAt = &value
 	}
 	return &artifact, nil
 }

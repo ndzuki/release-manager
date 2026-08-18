@@ -1220,7 +1220,7 @@ func TestPreflightLifecycleRetention(t *testing.T) {
 		old, old, pl.ID,
 	).Err())
 
-	deleted, err := st.PreflightLifecycles().DeleteExpired(ctx, 7*24*time.Hour)
+	deleted, err := st.PreflightLifecycles().DeleteExpired(ctx, 7*24*time.Hour, 7*24*time.Hour)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), deleted)
 }
@@ -1268,7 +1268,9 @@ func TestBundleStoreLifecycle(t *testing.T) {
 	archived, err := st.Bundles().Archive(ctx, []string{bundle.ID})
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), archived)
-	require.NoError(t, st.Bundles().Unarchive(ctx, bundle.ID))
+	previousStatus, err := st.Bundles().Unarchive(ctx, bundle.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(store.BundleValidated), previousStatus)
 	got, err = st.Bundles().Get(ctx, bundle.ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.BundleValidated, got.Status)
@@ -1515,7 +1517,6 @@ func TestCreateUserWithMembershipRollsBackOnMembershipFailure(t *testing.T) {
 	_, err = st.Users().GetByUsername(ctx, user.Username)
 	assert.ErrorIs(t, err, store.ErrNotFound)
 }
-
 
 func seedOperatorManagementScope(t *testing.T, st *postgresstore.Store) (customerID, clusterID string) {
 	t.Helper()

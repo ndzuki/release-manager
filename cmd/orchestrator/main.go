@@ -214,18 +214,52 @@ func (s *orchSvc) Close() error {
 	return s.store.Close()
 }
 func (s *orchSvc) ReadinessChecks() map[string]func() error {
-	if s.pingDB == nil {
-		return nil
-	}
-	return map[string]func() error{
-		"database": func() error {
+	checks := map[string]func() error{}
+	if s.pingDB != nil {
+		checks["database"] = func() error {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			return s.pingDB(ctx)
-		},
+		}
+	}
+	if s.cleanup != nil {
+		checks["cleanup_gc"] = func() error {
+			if !s.cleanup.Health() {
+				return fmt.Errorf("cleanup gc unhealthy")
+			}
+			return nil
+		}
+	}
+	return checks
+}
+
+// GCHealthJSON renders the REQ-069 gc sub-object for /health: status plus the
+// last success/attempt timestamps as Unix seconds (AC-069-32/33/34).
+func (s *orchSvc) GCHealthJSON() any {
+	if s.cleanup == nil {
+		return map[string]any{"status": "healthy"}
+	}
+	snapshot := s.cleanup.GCHealthSnapshot()
+	if snapshot.Disabled {
+		snapshot.Status = orchestrator.GCHealthHealthy
+	}
+	unix := func(t time.Time) int64 {
+		if t.IsZero() {
+			return 0
+		}
+		return t.Unix()
+	}
+	return map[string]any{
+		"status":          string(snapshot.Status),
+		"last_success_at": unix(snapshot.LastSuccess),
+		"last_attempt_at": unix(snapshot.LastAttempt),
 	}
 }
 
+// Register wires every service onto the shared mux; each block is a
+// self-contained registration branch.
+//
+//nolint:gocyclo // Service registration is a flat list of independent branches.
 func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if err := s.openStore(); err != nil {
 		return err
@@ -350,13 +384,14 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	s.cleanup = orchestrator.NewCleanupService(s.store, retention, logger)
+	s.cleanup = orchestrator.NewCleanupService(s.store, retention, logger, s.auditEmitter)
 	cleanupPath, cleanupHandler := orchestratorv1connect.NewCleanupServiceHandler(
 		s.cleanup,
 		connect.WithInterceptors(
 			contractsinterceptor.NewRequestIDInterceptor(logger),
 			contractsinterceptor.NewErrorSanitizeInterceptor(logger),
 			app.MaintenanceInterceptor(s.cfg.Maintenance, nil, logger),
+			auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, map[string]bool{}, logger),
 		),
 	)
 	mux.Handle(cleanupPath, cleanupHandler)
@@ -431,19 +466,45 @@ func (s *orchSvc) openStore() error {
 }
 
 func (s *orchSvc) loadRetentionConfig() (orchestrator.RetentionConfig, error) {
+	gc := orchestrator.DefaultGcConfig()
 	retention := orchestrator.DefaultRetentionConfig()
 	if s.configPath != "" {
 		v := viper.New()
 		v.SetConfigFile(s.configPath)
 		v.SetConfigType("yaml")
 		if err := v.ReadInConfig(); err == nil {
-			if err := v.UnmarshalKey("retention", &retention); err != nil {
-				return retention, fmt.Errorf("unmarshal retention config: %w", err)
+			if err := v.UnmarshalKey("gc", &gc); err != nil {
+				return retention, fmt.Errorf("unmarshal gc config: %w", err)
 			}
 		}
 	}
+	for _, diagnostic := range gc.Diagnostics() {
+		slog.Warn("gc configuration warning", "code", diagnostic.Code, "message", diagnostic.Message)
+	}
+	if err := gc.Validate(); err != nil {
+		return retention, fmt.Errorf("validate gc config: %w", err)
+	}
+	// The cleanup engine retains its existing call surface while the input
+	// layer uses the REQ-069 gc.* names. Prepare-session settings remain local
+	// cleanup settings until their dedicated configuration migration.
+	retention.BundleRetentionDays = gc.BundleRetentionDays
+	retention.ArchiveGraceDays = gc.ArchiveGraceDays
+	retention.CandidateArtifactRetentionDays = gc.CandidateArtifactRetentionDays
+	retention.PreflightRetentionDays = gc.PreflightRetentionDays
+	retention.OrphanPreflightRetentionDays = gc.OrphanPreflightRetentionDays
+	retention.GCInterval = gc.Interval
+	if gc.Interval > 0 {
+		retention.GCIntervalHours = int(gc.Interval / time.Hour)
+		if retention.GCIntervalHours < 1 {
+			retention.GCIntervalHours = 1
+		}
+	} else {
+		retention.GCIntervalHours = 0
+	}
+	retention.GCMaxDurationMinutes = gc.GCMaxDurationMinutes
+	retention.CleanupIdempotencyRetentionHours = gc.CleanupIdempotencyRetentionHours
 	if err := retention.Validate(); err != nil {
-		return retention, fmt.Errorf("validate retention config: %w", err)
+		return retention, fmt.Errorf("validate cleanup config: %w", err)
 	}
 	return retention, nil
 }

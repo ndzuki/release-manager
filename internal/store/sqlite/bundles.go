@@ -147,35 +147,31 @@ func scanBundle(row interface{ Scan(...interface{}) error }) (*store.ReleaseBund
 }
 
 // ListForArchive returns bundle IDs eligible for archival.
-// Eligible: status IN ('received','validated'), created_at < now - retentionDays,
+// Eligible: status IN ('received','validated','rejected'), created_at < now - retentionDays,
 // NOT referenced by any active definition (via current_bundle_id),
 // NOT referenced by any non-terminal operation.
-func (s *bundleStore) ListForArchive(ctx context.Context, retentionDays int, terminalStates []store.OperationStatus) ([]string, error) {
+func (s *bundleStore) ListForArchive(ctx context.Context, retentionDays int, terminalStates []store.OperationStatus, limits ...int) ([]string, error) {
+	limit := 100
+	if len(limits) > 0 && limits[0] > 0 && limits[0] < limit {
+		limit = limits[0]
+	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format(time.RFC3339)
 	terminal := make([]string, len(terminalStates))
-	for i, s := range terminalStates {
-		terminal[i] = string(s)
+	for i, status := range terminalStates {
+		terminal[i] = string(status)
 	}
-
-	//nolint:gosec // only generated placeholders are concatenated; terminal states remain bound parameters
+	//nolint:gosec // only generated placeholders are concatenated; bundle IDs and statuses remain bound parameters
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT b.id FROM release_bundles b
-		WHERE b.status IN ('received','validated')
-		  AND b.created_at < ?
-		  AND NOT EXISTS (
-		    SELECT 1 FROM release_definitions d
-		    WHERE d.current_bundle_id = b.id AND d.status = 'active'
-		  )
-		  AND NOT EXISTS (
-		    SELECT 1 FROM operations o
-		    WHERE o.bundle_id = b.id AND o.status NOT IN (`+placeholders(len(terminal))+`)
-		  )
-	`, append([]any{cutoff}, stringsToAny(terminal)...)...)
+        SELECT b.id FROM release_bundles b
+        WHERE b.status IN ('received','validated','rejected') AND b.created_at < ?
+          AND NOT EXISTS (SELECT 1 FROM release_definitions d WHERE d.current_bundle_id = b.id AND d.status = 'active')
+          AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.bundle_id = b.id AND o.status NOT IN (`+placeholders(len(terminal))+`))
+        ORDER BY b.created_at, b.id LIMIT ?
+    `, append(append([]any{cutoff}, stringsToAny(terminal)...), limit)...)
 	if err != nil {
 		return nil, fmt.Errorf("list bundles for archive: %w", err)
 	}
 	defer rows.Close()
-
 	var ids []string
 	for rows.Next() {
 		var id string
@@ -204,7 +200,7 @@ func (s *bundleStore) Archive(ctx context.Context, ids []string) (int64, error) 
 	result, err := tx.ExecContext(ctx, `
 		UPDATE release_bundles
 		SET archived_from_status = status, status = 'archived', archived_at = ?
-		WHERE id IN (`+placeholders(len(ids))+`) AND status IN ('received','validated')
+		WHERE id IN (`+placeholders(len(ids))+`) AND status IN ('received','validated','rejected')
 	`, append([]any{now}, stringsToAny(ids)...)...)
 	if err != nil {
 		return 0, fmt.Errorf("archive bundles: %w", err)
@@ -218,37 +214,132 @@ func (s *bundleStore) Archive(ctx context.Context, ids []string) (int64, error) 
 
 // DeleteBefore deletes bundles eligible for physical removal:
 // (status='archived' AND archived_at < cutoff) OR (status='rejected' AND created_at < cutoff).
-func (s *bundleStore) DeleteBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+func (s *bundleStore) DeleteBefore(ctx context.Context, cutoff time.Time, limits ...int) (int64, error) {
+	limit := 100
+	if len(limits) > 0 && limits[0] > 0 && limits[0] < limit {
+		limit = limits[0]
+	}
 	cutoffStr := cutoff.UTC().Format(time.RFC3339)
-	result, err := s.db.ExecContext(ctx, `
-		DELETE FROM release_bundles
-		WHERE (status = 'archived' AND archived_at < ?)
-		   OR (status = 'rejected' AND created_at < ?)
-	`, cutoffStr, cutoffStr)
+	result, err := s.db.ExecContext(ctx, `DELETE FROM release_bundles WHERE rowid IN (SELECT rowid FROM release_bundles WHERE (status = 'archived' AND archived_at < ?) OR (status = 'rejected' AND created_at < ?) ORDER BY created_at, id LIMIT ?)`, cutoffStr, cutoffStr, limit)
 	if err != nil {
 		return 0, fmt.Errorf("delete bundles: %w", err)
 	}
 	return result.RowsAffected()
 }
 
-// Unarchive transitions a bundle from archived back to validated.
-func (s *bundleStore) Unarchive(ctx context.Context, id string) error {
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE release_bundles
-		SET status = archived_from_status, archived_at = NULL, archived_from_status = ''
-		WHERE id = ? AND status = 'archived' AND archived_from_status != ''
-	`, id)
-	if err != nil {
-		return fmt.Errorf("unarchive bundle %s: %w", id, err)
+func (s *bundleStore) DeleteExpiredBefore(ctx context.Context, cutoff time.Time, limits ...int) (int64, error) {
+	limit := 100
+	if len(limits) > 0 && limits[0] > 0 && limits[0] < limit {
+		limit = limits[0]
 	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("unarchive rows affected: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("bundle %s: %w", id, store.ErrNotFound)
-	}
-	return nil
+	cutoffStr := cutoff.UTC().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
+	var deleted int64
+	err := retryBusy(ctx, func() error {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin delete expired bundles: %w", err)
+		}
+		defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
+
+		// Clear definition references to the bundles being removed (AC-069-05).
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE release_definitions SET current_bundle_id = NULL
+			WHERE current_bundle_id IN (
+				SELECT id FROM release_bundles
+				WHERE status = 'archived' AND archived_at < ?
+				ORDER BY archived_at, id LIMIT ?
+			)`, cutoffStr, limit); err != nil {
+			return fmt.Errorf("clear expired bundle references: %w", err)
+		}
+		// Mark candidates whose only link disappears as orphaned (AC-069-05).
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE candidate_artifacts SET orphaned_at = COALESCE(orphaned_at, ?)
+			WHERE bundle_id IN (
+				SELECT id FROM release_bundles
+				WHERE status = 'archived' AND archived_at < ?
+				ORDER BY archived_at, id LIMIT ?
+			)`, now, cutoffStr, limit); err != nil {
+			return fmt.Errorf("mark expired candidate orphans: %w", err)
+		}
+		result, err := tx.ExecContext(ctx, `DELETE FROM release_bundles WHERE rowid IN (SELECT rowid FROM release_bundles WHERE status = 'archived' AND archived_at < ? ORDER BY archived_at, id LIMIT ?)`, cutoffStr, limit)
+		if err != nil {
+			return fmt.Errorf("delete expired bundles: %w", err)
+		}
+		deleted, err = result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("expired bundle rows affected: %w", err)
+		}
+		return tx.Commit()
+	})
+	return deleted, err
+}
+
+// Unarchive restores a bundle only when it was archived from validated.
+// Already validated bundles are an idempotent success.
+func (s *bundleStore) Unarchive(ctx context.Context, id string) (string, error) {
+	var previousStatus string
+	err := retryBusy(ctx, func() error {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin unarchive bundle: %w", err)
+		}
+		defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
+
+		var status string
+		var archivedFromStatus sql.NullString
+		if err := tx.QueryRowContext(ctx, `
+			SELECT status, archived_from_status
+			FROM release_bundles
+			WHERE id = ?
+		`, id).Scan(&status, &archivedFromStatus); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("bundle %s: %w", id, store.ErrNotFound)
+			}
+			return fmt.Errorf("query bundle state: %w", err)
+		}
+
+		previousStatus = status
+		switch store.BundleStatus(status) {
+		case store.BundleValidated:
+			return nil
+		case store.BundleReceived:
+			return store.ErrBundleNotReady
+		case store.BundleRejected:
+			return store.ErrBundleRejected
+		case store.BundleArchived:
+			previousStatus = archivedFromStatus.String
+			if store.BundleStatus(previousStatus) != store.BundleValidated {
+				if store.BundleStatus(previousStatus) == store.BundleRejected {
+					return store.ErrBundleRejected
+				}
+				return store.ErrBundleNotReady
+			}
+		default:
+			return store.ErrBundleNotReady
+		}
+
+		result, err := tx.ExecContext(ctx, `
+			UPDATE release_bundles
+			SET status = 'validated', archived_at = NULL, archived_from_status = ''
+			WHERE id = ? AND status = 'archived' AND archived_from_status = 'validated'
+		`, id)
+		if err != nil {
+			return fmt.Errorf("unarchive bundle %s: %w", id, err)
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("unarchive bundle rows affected: %w", err)
+		}
+		if rows != 1 {
+			return store.ErrOptimisticLock
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit unarchive bundle: %w", err)
+		}
+		return nil
+	})
+	return previousStatus, err
 }
 
 func placeholders(n int) string {

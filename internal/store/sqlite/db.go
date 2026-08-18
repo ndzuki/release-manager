@@ -233,6 +233,11 @@ func (s *Store) Notifications() store.NotificationStore { return s.notif }
 // Idempotency returns the IdempotencyStore.
 func (s *Store) Idempotency() store.IdempotencyStore { return s.idem }
 
+// CleanupIdempotency returns an explicit PostgreSQL-only implementation.
+func (s *Store) CleanupIdempotency() store.CleanupIdempotencyStore {
+	return unsupportedCleanupIdempotencyStore{}
+}
+
 // Verifications returns the VerificationStore.
 func (s *Store) Verifications() store.VerificationStore { return s.verifs }
 

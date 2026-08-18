@@ -164,6 +164,7 @@ type Store struct {
 	convergenceTasks  *convergenceTaskStore
 	authorization     *authorizationStore
 	idempotency       *idempotencyStore
+	cleanupIdempotency *cleanupIdempotencyStore
 	closeOnce         sync.Once
 	closeErr          error
 }
@@ -244,6 +245,7 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s.convergenceTasks = &convergenceTaskStore{gorm: s.db}
 	s.authorization = &authorizationStore{gorm: s.db}
 	s.idempotency = &idempotencyStore{db: s.db}
+	s.cleanupIdempotency = &cleanupIdempotencyStore{db: s.db}
 	return s, nil
 }
 
@@ -275,6 +277,7 @@ var (
 	_ store.EmergencyIntentStore         = (*emergencyIntentStore)(nil)
 	_ store.TimelineStore                = (*timelineStore)(nil)
 	_ store.ConvergenceTaskStore         = (*convergenceTaskStore)(nil)
+	_ store.CleanupIdempotencyStore     = (*cleanupIdempotencyStore)(nil)
 )
 
 func (s *Store) Operations() store.OperationStore           { return s.ops }
@@ -311,6 +314,7 @@ func (s *Store) AuditEvents() store.AuditEventStore                         { re
 func (s *Store) Bundles() store.BundleStore                                 { return s.bundles }
 func (s *Store) Notifications() store.NotificationStore                     { return s.notif }
 func (s *Store) Idempotency() store.IdempotencyStore                        { return s.idempotency }
+func (s *Store) CleanupIdempotency() store.CleanupIdempotencyStore          { return s.cleanupIdempotency }
 func (s *Store) CustomerCreates() store.CustomerBindingCreateStore          { return s.customerCreates }
 func (s *Store) Verifications() store.VerificationStore                     { return s.verifs }
 func (s *Store) CustomerEvents() store.CustomerEventStore                   { return s.custEvents }

@@ -67,10 +67,11 @@ func (x *RunCleanupRequest) GetIdempotencyKey() string {
 
 type RunCleanupResponse struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
-	DeletedBundles    int32                  `protobuf:"varint,1,opt,name=deleted_bundles,json=deletedBundles,proto3" json:"deleted_bundles,omitempty"`
-	DeletedCandidates int32                  `protobuf:"varint,2,opt,name=deleted_candidates,json=deletedCandidates,proto3" json:"deleted_candidates,omitempty"`
-	DeletedPreflights int32                  `protobuf:"varint,3,opt,name=deleted_preflights,json=deletedPreflights,proto3" json:"deleted_preflights,omitempty"`
+	DeletedBundles    int64                  `protobuf:"varint,1,opt,name=deleted_bundles,json=deletedBundles,proto3" json:"deleted_bundles,omitempty"`
+	DeletedCandidates int64                  `protobuf:"varint,2,opt,name=deleted_candidates,json=deletedCandidates,proto3" json:"deleted_candidates,omitempty"`
+	DeletedPreflights int64                  `protobuf:"varint,3,opt,name=deleted_preflights,json=deletedPreflights,proto3" json:"deleted_preflights,omitempty"`
 	Errors            []string               `protobuf:"bytes,4,rep,name=errors,proto3" json:"errors,omitempty"`
+	SkippedBundles    int64                  `protobuf:"varint,5,opt,name=skipped_bundles,json=skippedBundles,proto3" json:"skipped_bundles,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -105,21 +106,21 @@ func (*RunCleanupResponse) Descriptor() ([]byte, []int) {
 	return file_orchestrator_v1_cleanup_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *RunCleanupResponse) GetDeletedBundles() int32 {
+func (x *RunCleanupResponse) GetDeletedBundles() int64 {
 	if x != nil {
 		return x.DeletedBundles
 	}
 	return 0
 }
 
-func (x *RunCleanupResponse) GetDeletedCandidates() int32 {
+func (x *RunCleanupResponse) GetDeletedCandidates() int64 {
 	if x != nil {
 		return x.DeletedCandidates
 	}
 	return 0
 }
 
-func (x *RunCleanupResponse) GetDeletedPreflights() int32 {
+func (x *RunCleanupResponse) GetDeletedPreflights() int64 {
 	if x != nil {
 		return x.DeletedPreflights
 	}
@@ -133,21 +134,131 @@ func (x *RunCleanupResponse) GetErrors() []string {
 	return nil
 }
 
+func (x *RunCleanupResponse) GetSkippedBundles() int64 {
+	if x != nil {
+		return x.SkippedBundles
+	}
+	return 0
+}
+
+type UnarchiveBundleRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BundleId      string                 `protobuf:"bytes,1,opt,name=bundle_id,json=bundleId,proto3" json:"bundle_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnarchiveBundleRequest) Reset() {
+	*x = UnarchiveBundleRequest{}
+	mi := &file_orchestrator_v1_cleanup_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnarchiveBundleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnarchiveBundleRequest) ProtoMessage() {}
+
+func (x *UnarchiveBundleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_cleanup_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnarchiveBundleRequest.ProtoReflect.Descriptor instead.
+func (*UnarchiveBundleRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_cleanup_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *UnarchiveBundleRequest) GetBundleId() string {
+	if x != nil {
+		return x.BundleId
+	}
+	return ""
+}
+
+type UnarchiveBundleResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	BundleId       string                 `protobuf:"bytes,1,opt,name=bundle_id,json=bundleId,proto3" json:"bundle_id,omitempty"`
+	PreviousStatus string                 `protobuf:"bytes,2,opt,name=previous_status,json=previousStatus,proto3" json:"previous_status,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *UnarchiveBundleResponse) Reset() {
+	*x = UnarchiveBundleResponse{}
+	mi := &file_orchestrator_v1_cleanup_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnarchiveBundleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnarchiveBundleResponse) ProtoMessage() {}
+
+func (x *UnarchiveBundleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_v1_cleanup_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnarchiveBundleResponse.ProtoReflect.Descriptor instead.
+func (*UnarchiveBundleResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_v1_cleanup_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *UnarchiveBundleResponse) GetBundleId() string {
+	if x != nil {
+		return x.BundleId
+	}
+	return ""
+}
+
+func (x *UnarchiveBundleResponse) GetPreviousStatus() string {
+	if x != nil {
+		return x.PreviousStatus
+	}
+	return ""
+}
+
 var File_orchestrator_v1_cleanup_proto protoreflect.FileDescriptor
 
 const file_orchestrator_v1_cleanup_proto_rawDesc = "" +
 	"\n" +
 	"\x1dorchestrator/v1/cleanup.proto\x12\x0forchestrator.v1\"<\n" +
 	"\x11RunCleanupRequest\x12'\n" +
-	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\"\xb3\x01\n" +
+	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\"\xdc\x01\n" +
 	"\x12RunCleanupResponse\x12'\n" +
-	"\x0fdeleted_bundles\x18\x01 \x01(\x05R\x0edeletedBundles\x12-\n" +
-	"\x12deleted_candidates\x18\x02 \x01(\x05R\x11deletedCandidates\x12-\n" +
-	"\x12deleted_preflights\x18\x03 \x01(\x05R\x11deletedPreflights\x12\x16\n" +
-	"\x06errors\x18\x04 \x03(\tR\x06errors2g\n" +
+	"\x0fdeleted_bundles\x18\x01 \x01(\x03R\x0edeletedBundles\x12-\n" +
+	"\x12deleted_candidates\x18\x02 \x01(\x03R\x11deletedCandidates\x12-\n" +
+	"\x12deleted_preflights\x18\x03 \x01(\x03R\x11deletedPreflights\x12\x16\n" +
+	"\x06errors\x18\x04 \x03(\tR\x06errors\x12'\n" +
+	"\x0fskipped_bundles\x18\x05 \x01(\x03R\x0eskippedBundles\"5\n" +
+	"\x16UnarchiveBundleRequest\x12\x1b\n" +
+	"\tbundle_id\x18\x01 \x01(\tR\bbundleId\"_\n" +
+	"\x17UnarchiveBundleResponse\x12\x1b\n" +
+	"\tbundle_id\x18\x01 \x01(\tR\bbundleId\x12'\n" +
+	"\x0fprevious_status\x18\x02 \x01(\tR\x0epreviousStatus2\xcd\x01\n" +
 	"\x0eCleanupService\x12U\n" +
 	"\n" +
-	"RunCleanup\x12\".orchestrator.v1.RunCleanupRequest\x1a#.orchestrator.v1.RunCleanupResponseBJZHgithub.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1b\x06proto3"
+	"RunCleanup\x12\".orchestrator.v1.RunCleanupRequest\x1a#.orchestrator.v1.RunCleanupResponse\x12d\n" +
+	"\x0fUnarchiveBundle\x12'.orchestrator.v1.UnarchiveBundleRequest\x1a(.orchestrator.v1.UnarchiveBundleResponseBJZHgithub.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1b\x06proto3"
 
 var (
 	file_orchestrator_v1_cleanup_proto_rawDescOnce sync.Once
@@ -161,16 +272,20 @@ func file_orchestrator_v1_cleanup_proto_rawDescGZIP() []byte {
 	return file_orchestrator_v1_cleanup_proto_rawDescData
 }
 
-var file_orchestrator_v1_cleanup_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_orchestrator_v1_cleanup_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_orchestrator_v1_cleanup_proto_goTypes = []any{
-	(*RunCleanupRequest)(nil),  // 0: orchestrator.v1.RunCleanupRequest
-	(*RunCleanupResponse)(nil), // 1: orchestrator.v1.RunCleanupResponse
+	(*RunCleanupRequest)(nil),       // 0: orchestrator.v1.RunCleanupRequest
+	(*RunCleanupResponse)(nil),      // 1: orchestrator.v1.RunCleanupResponse
+	(*UnarchiveBundleRequest)(nil),  // 2: orchestrator.v1.UnarchiveBundleRequest
+	(*UnarchiveBundleResponse)(nil), // 3: orchestrator.v1.UnarchiveBundleResponse
 }
 var file_orchestrator_v1_cleanup_proto_depIdxs = []int32{
 	0, // 0: orchestrator.v1.CleanupService.RunCleanup:input_type -> orchestrator.v1.RunCleanupRequest
-	1, // 1: orchestrator.v1.CleanupService.RunCleanup:output_type -> orchestrator.v1.RunCleanupResponse
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
+	2, // 1: orchestrator.v1.CleanupService.UnarchiveBundle:input_type -> orchestrator.v1.UnarchiveBundleRequest
+	1, // 2: orchestrator.v1.CleanupService.RunCleanup:output_type -> orchestrator.v1.RunCleanupResponse
+	3, // 3: orchestrator.v1.CleanupService.UnarchiveBundle:output_type -> orchestrator.v1.UnarchiveBundleResponse
+	2, // [2:4] is the sub-list for method output_type
+	0, // [0:2] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -187,7 +302,7 @@ func file_orchestrator_v1_cleanup_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_orchestrator_v1_cleanup_proto_rawDesc), len(file_orchestrator_v1_cleanup_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
