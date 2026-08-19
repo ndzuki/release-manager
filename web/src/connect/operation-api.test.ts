@@ -94,14 +94,16 @@ describe('operation API', () => {
     });
 
     const payload = vi.mocked(testClient.createOperation).mock.calls[0]?.[0];
+    const options = vi.mocked(testClient.createOperation).mock.calls[0]?.[1];
     expect(payload).toEqual(expect.objectContaining({
       operationType: 'UPGRADE',
       bundleId: 'bundle-1',
+      releaseDefinitionId: 'def-1',
       expectedCurrentRevision: 7,
-      idempotencyKey: 'idem-1',
       valuesRevisionId: 'vr-1',
-      valuesPatch: '{"image.tag":"v2"}',
+      valuesPatch: { 'image.tag': 'v2' },
     }));
+    expect(new Headers(options?.headers).get('Idempotency-Key')).toBe('idem-1');
     expect(payload).not.toHaveProperty('actor');
     expect(JSON.stringify(payload).toLowerCase()).not.toMatch(/password|access_token|refresh_token/);
   });
@@ -131,7 +133,7 @@ describe('operation API', () => {
       releaseDefinitionId: 'def-1',
       operationType: 'UPGRADE',
       state: 'running',
-      stateVersion: 3,
+      stateVersion: 3n,
       bundleId: 'bundle-1',
       valuesRevisionId: 'vr-1',
       expectedRevision: 4,
@@ -139,6 +141,7 @@ describe('operation API', () => {
       lastError: '',
     }));
   });
+
 
   it('maps release_busy to the existing operation link', () => {
     const error = new ConnectError('release busy', Code.FailedPrecondition, {

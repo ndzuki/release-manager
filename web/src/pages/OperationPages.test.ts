@@ -1,7 +1,7 @@
 import { create } from '@bufbuild/protobuf';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
-import { createMemoryHistory, createRouter } from 'vue-router';
+import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Client } from '@connectrpc/connect';
@@ -12,13 +12,15 @@ import {
   GetOperationResponseSchema,
   ListBundlesResponseSchema,
   OperationSchema,
+  OperationSnapshotSchema,
   OperationStatus,
   OrchestratorService,
+  WatchOperationResponseSchema,
 } from '@/gen/orchestrator/v1/orchestrator_pb';
 import { BundleStatus } from '@/gen/common/v1/domain_pb';
 import { setOperationClientForTest } from '@/connect/operation-api';
 import OperationCreatePage from './OperationCreatePage.vue';
-import { usePreflightStore } from '@/stores/preflight';
+import { useOperationTimelineStore } from '@/stores/operationTimeline';
 import OperationDetailPage from './OperationDetailPage.vue';
 
 interface TestClients {
@@ -185,24 +187,34 @@ describe('operation pages', () => {
     await vi.waitFor(() => expect(second.router.currentRoute.value.params.operationId).toBe('op-active'));
   });
 
-  it('stops polling when the operation detail page unmounts', async () => {
+  it('resets the operation timeline store when the operation detail page unmounts', async () => {
     const clients: TestClients = {
       operations: {
-        getOperation: vi.fn().mockResolvedValue(create(GetOperationResponseSchema, {
-          operation: create(OperationSchema, {
-            operationId: 'op-active',
-            operationType: 'INSTALL',
-            state: OperationStatus.PREFLIGHT,
-          }),
-        })),
+        watchOperation: vi.fn().mockResolvedValue((async function* () {
+          yield create(WatchOperationResponseSchema, {
+            payload: {
+              case: 'snapshot',
+              value: create(OperationSnapshotSchema, {
+                operation: create(OperationSchema, {
+                  operationId: 'op-active',
+                  operationType: 'INSTALL',
+                  state: OperationStatus.PREFLIGHT,
+                }),
+                snapshotSequence: 1n,
+                retainedFromSequence: 1n,
+              }),
+            },
+          });
+          await new Promise<void>(() => undefined);
+        })()),
       } as unknown as Client<typeof OrchestratorService>,
       bundles: emptyOptionsClients().bundles,
     };
     setOperationClientForTest(clients.operations, clients.bundles);
     const pinia = createPinia();
     setActivePinia(pinia);
-    const store = usePreflightStore(pinia);
-    const stopPolling = vi.spyOn(store, 'stopPolling');
+    const timelineStore = useOperationTimelineStore(pinia);
+    const reset = vi.spyOn(timelineStore, 'reset');
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -213,11 +225,196 @@ describe('operation pages', () => {
     await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-active');
     await router.isReady();
     const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
-    await vi.waitFor(() => expect(store.polling).toBe(true));
+    await vi.waitFor(() => expect(timelineStore.operation?.operationId).toBe('op-active'));
 
     wrapper.unmount();
 
-    expect(stopPolling).toHaveBeenCalled();
-    expect(store.polling).toBe(false);
+    expect(reset).toHaveBeenCalled();
+    expect(timelineStore.operation).toBeNull();
+  });
+
+  function detailRoute(router: Router): void {
+    router.addRoute({
+      path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations/:operationId',
+      name: 'OperationDetail',
+      component: OperationDetailPage,
+    });
+    router.addRoute({
+      path: '/customers/:customerId/clusters/:clusterId/releases',
+      name: 'ReleaseInventory',
+      component: { template: '<div />' },
+    });
+  }
+
+  it('AC-13: renders a disabled 取消中… button while the operation is cancelling', async () => {
+    const clients: TestClients = {
+      operations: {
+        watchOperation: vi.fn().mockResolvedValue((async function* () {
+          yield create(WatchOperationResponseSchema, {
+            payload: {
+              case: 'snapshot',
+              value: create(OperationSnapshotSchema, {
+                operation: create(OperationSchema, {
+                  operationId: 'op-cancelling',
+                  operationType: 'INSTALL',
+                  state: OperationStatus.CANCELLING,
+                }),
+                snapshotSequence: 1n,
+                retainedFromSequence: 1n,
+              }),
+            },
+          });
+          await new Promise<void>(() => undefined);
+        })()),
+      } as unknown as Client<typeof OrchestratorService>,
+      bundles: emptyOptionsClients().bundles,
+    };
+    setOperationClientForTest(clients.operations, clients.bundles);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    detailRoute(router);
+    await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-cancelling');
+    await router.isReady();
+    const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('取消中…'));
+    const button = wrapper.findAll('button').find((b) => b.text() === '取消中…');
+    expect(button?.attributes('disabled')).toBeDefined();
+  });
+
+  it('AC-15: route scope change with the same operationId reloads the store', async () => {
+    let watchCalls = 0;
+    const clients: TestClients = {
+      operations: {
+        watchOperation: vi.fn().mockImplementation(() => {
+          watchCalls++;
+          return (async function* () {
+            yield create(WatchOperationResponseSchema, {
+              payload: {
+                case: 'snapshot',
+                value: create(OperationSnapshotSchema, {
+                  operation: create(OperationSchema, {
+                    operationId: 'op-shared',
+                    operationType: 'INSTALL',
+                    state: OperationStatus.PREFLIGHT,
+                  }),
+                  snapshotSequence: 1n,
+                  retainedFromSequence: 1n,
+                }),
+              },
+            });
+            await new Promise<void>(() => undefined);
+          })();
+        }),
+      } as unknown as Client<typeof OrchestratorService>,
+      bundles: emptyOptionsClients().bundles,
+    };
+    setOperationClientForTest(clients.operations, clients.bundles);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const timelineStore = useOperationTimelineStore(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    detailRoute(router);
+    await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-shared');
+    await router.isReady();
+    const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
+    await vi.waitFor(() => expect(timelineStore.operation?.operationId).toBe('op-shared'));
+    expect(watchCalls).toBe(1);
+
+    // Same operationId under a different cluster/release: the store must
+    // reset and open a fresh stream (AC-057-15).
+    await router.push('/customers/cust-1/clusters/cluster-2/releases/def-2/operations/op-shared');
+    await vi.waitFor(() => expect(watchCalls).toBe(2));
+    await vi.waitFor(() => expect(timelineStore.operation?.operationId).toBe('op-shared'));
+    wrapper.unmount();
+  });
+
+  it('AC-07: a viewer sees no cancel affordance even for terminal operations', async () => {
+    const clients: TestClients = {
+      operations: {
+        watchOperation: vi.fn().mockResolvedValue((async function* () {
+          yield create(WatchOperationResponseSchema, {
+            payload: {
+              case: 'snapshot',
+              value: create(OperationSnapshotSchema, {
+                operation: create(OperationSchema, {
+                  operationId: 'op-viewer',
+                  operationType: 'INSTALL',
+                  state: OperationStatus.SUCCEEDED,
+                }),
+                snapshotSequence: 1n,
+                retainedFromSequence: 1n,
+              }),
+            },
+          });
+          await new Promise<void>(() => undefined);
+        })()),
+      } as unknown as Client<typeof OrchestratorService>,
+      bundles: emptyOptionsClients().bundles,
+    };
+    setOperationClientForTest(clients.operations, clients.bundles);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const timelineStore = useOperationTimelineStore(pinia);
+    timelineStore.configure({ canWrite: () => false });
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    detailRoute(router);
+    await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-viewer');
+    await router.isReady();
+    const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
+    await vi.waitFor(() => expect(wrapper.text()).toContain('succeeded'));
+
+    expect(wrapper.text()).not.toContain('取消操作');
+    expect(wrapper.text()).not.toContain('取消中');
+  });
+
+  it('AC-16: the manual refresh button re-fetches via GetOperation', async () => {
+    const getOperation = vi.fn().mockResolvedValue(create(GetOperationResponseSchema, {
+      operation: create(OperationSchema, {
+        operationId: 'op-refresh',
+        operationType: 'INSTALL',
+        state: OperationStatus.RUNNING,
+        stateVersion: 2n,
+      }),
+    }));
+    const clients: TestClients = {
+      operations: {
+        watchOperation: vi.fn().mockResolvedValue((async function* () {
+          yield create(WatchOperationResponseSchema, {
+            payload: {
+              case: 'snapshot',
+              value: create(OperationSnapshotSchema, {
+                operation: create(OperationSchema, {
+                  operationId: 'op-refresh',
+                  operationType: 'INSTALL',
+                  state: OperationStatus.RUNNING,
+                  stateVersion: 1n,
+                }),
+                snapshotSequence: 1n,
+                retainedFromSequence: 1n,
+              }),
+            },
+          });
+          await new Promise<void>(() => undefined);
+        })()),
+        getOperation,
+      } as unknown as Client<typeof OrchestratorService>,
+      bundles: emptyOptionsClients().bundles,
+    };
+    setOperationClientForTest(clients.operations, clients.bundles);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const timelineStore = useOperationTimelineStore(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    detailRoute(router);
+    await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-refresh');
+    await router.isReady();
+    const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
+    await vi.waitFor(() => expect(timelineStore.operation?.stateVersion).toBe(1n));
+
+    await wrapper.findAll('button').find((b) => b.text() === '刷新')?.trigger('click');
+    await vi.waitFor(() => expect(getOperation).toHaveBeenCalled());
+    await vi.waitFor(() => expect(timelineStore.operation?.stateVersion).toBe(2n));
   });
 });
