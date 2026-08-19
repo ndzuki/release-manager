@@ -84,11 +84,13 @@ func (r *rolloutReporter) report(workloadRef string, ready, desired int32, force
 }
 
 // observeRollout watches the four-GVR workloads of a successful standard
-// operation (INSTALL/UPGRADE/ROLLBACK) and reports ready/desired counters
-// over the command stream (AC-077-02). Observation is best-effort
-// enhancement (CONTEXT WorkloadObservation): it never blocks the operation
-// result, never extends the operation lifetime beyond the remaining command
-// budget, and failures only log.
+// operation (INSTALL/UPGRADE/ROLLBACK) and reports ready/desired counters over
+// the command stream (AC-077-02). Observation runs synchronously to a bounded
+// deadline — the command's remaining time budget — so every progress report,
+// including the unconditional terminal flush, reaches the orchestrator BEFORE
+// the operation Result terminalizes the command (AC-077-17 then drops any
+// late report). Observation failure or timeout never changes the operation
+// outcome (REQ-077 Q2/Q5: enhancement, not a terminal-state precondition).
 func (a *Agent) observeRollout(
 	ctx context.Context,
 	operationID string,
@@ -99,9 +101,12 @@ func (a *Agent) observeRollout(
 	if a.observer == nil || len(workloads) == 0 || timeout <= 0 {
 		return
 	}
+	var wg sync.WaitGroup
 	for _, workload := range workloads {
 		workload := workload
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			ref := observerResourceRef(workload)
 			if ref.GVR.Empty() {
 				a.logger.Debug("skipping unsupported rollout workload", "kind", workload.Kind, "api_version", workload.APIVersion)
@@ -127,6 +132,7 @@ func (a *Agent) observeRollout(
 			}
 		}()
 	}
+	wg.Wait()
 }
 
 // observerResourceRef maps a manifest workload identity to the observer's

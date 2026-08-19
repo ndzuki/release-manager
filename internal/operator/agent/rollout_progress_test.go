@@ -176,7 +176,7 @@ func TestAgent_InstallReportsRolloutProgress(t *testing.T) {
 	assert.Equal(t, 1, results)
 }
 
-func TestAgent_ObservationDoesNotBlockResult(t *testing.T) {
+func TestAgent_ProgressPrecedesResult(t *testing.T) {
 	engine := &recordingEngine{
 		release: &helmengine.Release{
 			Name: "example", Namespace: "apps", Revision: 1, Status: "deployed",
@@ -188,9 +188,9 @@ func TestAgent_ObservationDoesNotBlockResult(t *testing.T) {
 	}
 	obs := observer.NewFake()
 	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "apps", Generation: 2}}
-	// Observation holds open for 300ms while the result path is immediate.
+	// Observation holds open for 100ms before reporting ready.
 	obs.SetResponse(observer.ResourceRef{GVR: observer.DeploymentGVR, Namespace: "apps", Name: "web"},
-		observer.FakeResponse{Behavior: observer.FakeDelayedReady, Delay: 300 * time.Millisecond,
+		observer.FakeResponse{Behavior: observer.FakeDelayedReady, Delay: 100 * time.Millisecond,
 			Result: observer.WatchResult{ReadyCount: 1, DesiredCount: 1}})
 
 	agent, err := New(Config{
@@ -206,22 +206,71 @@ func TestAgent_ObservationDoesNotBlockResult(t *testing.T) {
 	require.NoError(t, agent.handleCommand(t.Context(), stream, installCommand("cmd-delayed")))
 	elapsed := time.Since(started)
 
-	// The result is sent while observation is still running (enhancement,
-	// never a terminal-state precondition).
-	require.True(t, elapsed < 300*time.Millisecond, "result was blocked by observation (%s)", elapsed)
-	require.Eventually(t, func() bool {
-		for _, req := range stream.all() {
-			if req.GetResult() != nil {
-				return true
-			}
-		}
-		return false
-	}, time.Second, time.Millisecond)
+	// Observation runs synchronously: the delayed observation must finish
+	// before the result is sent, so handleCommand blocks until then.
+	require.GreaterOrEqual(t, elapsed, 100*time.Millisecond, "result sent before observation finished (%s)", elapsed)
 
-	// Observation completes later with initial report + terminal flush.
-	progress := stream.waitForProgress(t, 2)
+	// Progress (initial report + unconditional terminal flush) precedes the
+	// result on the stream.
+	reqs := stream.all()
+	lastProgress, resultAt := -1, -1
+	for i, req := range reqs {
+		if req.GetRolloutProgress() != nil {
+			lastProgress = i
+		}
+		if req.GetResult() != nil {
+			resultAt = i
+		}
+	}
+	require.NotEqual(t, -1, resultAt, "result missing from stream")
+	require.Less(t, lastProgress, resultAt, "progress must precede the result (progress=%d result=%d)", lastProgress, resultAt)
+
+	progress := stream.progress()
+	require.Len(t, progress, 2) // initial + terminal flush
 	assert.Equal(t, "deployments/apps/web", progress[0].GetWorkloadRef())
 	assert.Equal(t, int32(1), progress[0].GetReady())
+}
+
+func TestAgent_ObservationTimeoutStillYieldsResult(t *testing.T) {
+	engine := &recordingEngine{
+		release: &helmengine.Release{
+			Name: "example", Namespace: "apps", Revision: 1, Status: "deployed",
+			ManifestDigest: "sha256:manifest",
+			Workloads: []helmengine.WorkloadSummary{
+				{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "apps", Name: "web"},
+			},
+		},
+	}
+	obs := observer.NewFake()
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "apps", Generation: 2}}
+	// Never becomes ready: the observation is bounded by the remaining budget.
+	obs.SetResponse(observer.ResourceRef{GVR: observer.DeploymentGVR, Namespace: "apps", Name: "web"},
+		observer.FakeResponse{Behavior: observer.FakeNeverReady, Result: observer.WatchResult{ReadyCount: 0, DesiredCount: 1}})
+
+	agent, err := New(Config{
+		Client: noopClient{}, Engine: engine, Store: newMemoryStore(),
+		SessionID: "session-1", OperatorID: "operator-1", Logger: discardLogger(),
+		Observer: obs, KubeClient: fake.NewSimpleClientset(deployment),
+		InstallFlags: InstallFlags{Atomic: true, Timeout: time.Minute},
+	})
+	require.NoError(t, err)
+
+	cmd := installCommand("cmd-never-ready")
+	cmd.TimeoutSeconds = 1 // 1s remaining budget bounds the observation
+	stream := newSyncTestStream()
+	started := time.Now()
+	require.NoError(t, agent.handleCommand(t.Context(), stream, cmd))
+	elapsed := time.Since(started)
+
+	// The observation timeout must not block the result: it yields after the
+	// bounded budget, never forever.
+	require.Less(t, elapsed, 5*time.Second, "observation timeout blocked the result (%s)", elapsed)
+	for _, req := range stream.all() {
+		if req.GetResult() != nil {
+			return
+		}
+	}
+	t.Fatal("result must still be delivered after the observation timeout")
 }
 
 func TestAgent_InstallWithoutObserverSkipsRolloutProgress(t *testing.T) {
