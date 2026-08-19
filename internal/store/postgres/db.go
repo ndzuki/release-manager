@@ -349,12 +349,12 @@ func (s *Store) Close() error {
 	return s.closeErr
 }
 
-func (s *Store) DB() *DB        { return s.db }
+func (s *Store) DB() *DB { return s.db }
 
 // OperatorManagement returns the atomic Operator management store.
 func (s *Store) OperatorManagement() store.OperatorManagementStore { return s.management }
-func (s *Store) SQLDB() *sql.DB { return s.sqlDB }
-func (s *Store) GORM() *gorm.DB { return s.gormDB }
+func (s *Store) SQLDB() *sql.DB                                    { return s.sqlDB }
+func (s *Store) GORM() *gorm.DB                                    { return s.gormDB }
 
 // IsUniqueConstraint reports PostgreSQL unique/exclusion violations.
 func isUniqueConstraint(err error) bool {

@@ -40,6 +40,9 @@ func TestObserver_JobReady(t *testing.T) {
 	assert.Equal(t, int64(3), result.Generation)
 	assert.Zero(t, result.ObservedGeneration)
 	assert.Equal(t, "31", result.ResourceVersion)
+	// Jobs report no replica counters (REQ-077: Job is always 0/0).
+	assert.Zero(t, result.ReadyCount)
+	assert.Zero(t, result.DesiredCount)
 	require.Len(t, result.Conditions, 1)
 	assert.Equal(t, string(batchv1.JobComplete), result.Conditions[0].Type)
 	assert.Equal(t, string(corev1.ConditionTrue), result.Conditions[0].Status)

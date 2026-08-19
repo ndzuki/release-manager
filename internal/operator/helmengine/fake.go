@@ -29,6 +29,11 @@ type Fake struct {
 	// HistoryError, if set, causes History to fail with this error.
 	HistoryError error
 
+	// FakeWorkloads are injected into every Install/Upgrade/Rollback result
+	// so agent tests can drive rollout observation without a cluster
+	// (REQ-077 Q1; mirrors real-engine extraction from rel.Manifest).
+	FakeWorkloads []WorkloadSummary
+
 	// ArtifactUnavailableRevisions is a set of revisions whose historical
 	// chart artifacts are unavailable. Rollback to these revisions returns
 	// ErrArtifactUnavailable (AC-063-02).
@@ -72,6 +77,7 @@ func (f *Fake) Install(ctx context.Context, opts InstallOptions) (*Release, erro
 		ManifestDigest: fmt.Sprintf("fake-digest-%d", f.counter),
 		Notes:          fmt.Sprintf("installed %s/%s rev=1", opts.Namespace, opts.ReleaseName),
 		Provenance:     "legacy",
+		Workloads:      f.FakeWorkloads,
 	}
 	f.releases[key] = rel
 	f.history[key] = append(f.history[key], ReleaseHistoryEntry{
@@ -146,6 +152,7 @@ func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, erro
 		ChartDigest:           opts.ChartDigest,
 		EffectiveValuesDigest: opts.EffectiveValuesDigest,
 		Provenance:            "managed",
+		Workloads:             f.FakeWorkloads,
 	}
 	f.releases[key] = rel
 	f.history[key] = append(f.history[key], ReleaseHistoryEntry{
@@ -229,6 +236,7 @@ func (f *Fake) Rollback(ctx context.Context, opts RollbackOptions) (*Release, er
 		Chart:          f.releases[key].Chart,
 		ManifestDigest: fmt.Sprintf("fake-digest-%d", f.counter),
 		Notes:          fmt.Sprintf("rolled back %s/%s to rev=%d", opts.Namespace, opts.ReleaseName, opts.TargetRevision),
+		Workloads:      f.FakeWorkloads,
 	}
 	f.releases[key] = rel
 	f.history[key] = append(f.history[key], ReleaseHistoryEntry{

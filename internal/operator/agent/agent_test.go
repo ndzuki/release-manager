@@ -16,6 +16,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/operator/commandtype"
 	"github.com/ndzuki/release-manager/internal/operator/helmengine"
 	"github.com/ndzuki/release-manager/internal/operator/localstore"
+	"github.com/ndzuki/release-manager/internal/operator/observer"
 	"github.com/ndzuki/release-manager/internal/operator/secretmetadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -227,7 +228,7 @@ func TestAgent_UpgradePreflightRejectsInventoryStale(t *testing.T) {
 	valuesJSON := []byte(`{"message":"hello"}`)
 	command := upgradeCommand("cmd-inventory-stale", valuesJSON, sha256Hex(valuesJSON))
 	command.GetUpgrade().ExpectedRevision = 2 // 现场 revision=2，跳过 revision_conflict
-	command.ExpectedCurrentRevision = 1  // 与现场 revision=2 不符 → inventory_stale
+	command.ExpectedCurrentRevision = 1       // 与现场 revision=2 不符 → inventory_stale
 	require.NoError(t, agent.handleCommand(t.Context(), stream, command))
 	require.Len(t, stream.sent, 2)
 	result := stream.sent[1].GetCommandResult()
@@ -393,6 +394,18 @@ func TestAgent_SecretMetadataCommandReturnsOnlyMetadata(t *testing.T) {
 	assert.NotContains(t, resultJSON, "secret-value")
 }
 
+// REQ-077 wiring invariant: rollout observation requires a kube client for
+// generation resolution; the agent must fail fast at construction.
+func TestAgent_ObserverRequiresKubeClient(t *testing.T) {
+	_, err := New(Config{
+		Client: noopClient{}, Engine: new(recordingEngine), Store: newMemoryStore(),
+		SessionID: "session-1", OperatorID: "operator-1",
+		Observer: observer.NewFake(),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "observer requires kube client")
+}
+
 type recordingSecretLister struct {
 	secrets []secretmetadata.Secret
 }
@@ -400,6 +413,7 @@ type recordingSecretLister struct {
 func (l recordingSecretLister) List(context.Context, string) ([]secretmetadata.Secret, error) {
 	return l.secrets, nil
 }
+
 type recordingSyncExecutor struct {
 	calls int
 	err   error

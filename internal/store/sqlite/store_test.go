@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -1963,4 +1964,356 @@ func TestInventoryQueryPaginationFilteringAndConsistency(t *testing.T) {
 		Cursor:     page.NextCursor,
 	})
 	assert.ErrorIs(t, err, store.ErrInvalidCursor)
+}
+
+func TestTimelineRoundTripNewKinds(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "timeline-roundtrip",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "timeline-roundtrip-key",
+		RequestHash:         "request-hash",
+		StateVersion:        1,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	ackData, err := json.Marshal(store.AckTimelineData{RequestID: "req-ack", AckStage: "persisted"})
+	require.NoError(t, err)
+	ack, err := st.Timeline().Append(ctx, &store.OperationTimelineEntry{
+		OperationID: op.ID, Kind: string(store.TimelineEntryACK), Data: ackData,
+	})
+	require.NoError(t, err)
+
+	progressData, err := json.Marshal(store.RolloutProgressTimelineData{WorkloadRef: "deployments/app/default", Ready: 2, Desired: 3})
+	require.NoError(t, err)
+	progress, err := st.Timeline().Append(ctx, &store.OperationTimelineEntry{
+		OperationID: op.ID, Kind: string(store.TimelineEntryRolloutProgress), Data: progressData,
+	})
+	require.NoError(t, err)
+
+	errorData, err := json.Marshal(store.ErrorTimelineData{RequestID: "req-err", ErrorCode: "helm_upgrade_failed", ErrorMessage: "sanitized summary"})
+	require.NoError(t, err)
+	errorEntry, err := st.Timeline().Append(ctx, &store.OperationTimelineEntry{
+		OperationID: op.ID, Kind: string(store.TimelineEntryError), Data: errorData,
+	})
+	require.NoError(t, err)
+
+	// Independent per-operation sequence allocation, strictly increasing.
+	assert.Equal(t, int64(1), ack.Sequence)
+	assert.Equal(t, int64(2), progress.Sequence)
+	assert.Equal(t, int64(3), errorEntry.Sequence)
+
+	entries, err := st.Timeline().List(ctx, op.ID, 0, 3)
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+	assert.Equal(t, string(store.TimelineEntryACK), entries[0].Kind)
+	assert.Equal(t, string(store.TimelineEntryRolloutProgress), entries[1].Kind)
+	assert.Equal(t, string(store.TimelineEntryError), entries[2].Kind)
+
+	var gotAck store.AckTimelineData
+	require.NoError(t, json.Unmarshal(entries[0].Data, &gotAck))
+	assert.Equal(t, store.AckTimelineData{RequestID: "req-ack", AckStage: "persisted"}, gotAck)
+
+	var gotProgress store.RolloutProgressTimelineData
+	require.NoError(t, json.Unmarshal(entries[1].Data, &gotProgress))
+	assert.Equal(t, store.RolloutProgressTimelineData{WorkloadRef: "deployments/app/default", Ready: 2, Desired: 3}, gotProgress)
+
+	var gotError store.ErrorTimelineData
+	require.NoError(t, json.Unmarshal(entries[2].Data, &gotError))
+	assert.Equal(t, store.ErrorTimelineData{RequestID: "req-err", ErrorCode: "helm_upgrade_failed", ErrorMessage: "sanitized summary"}, gotError)
+}
+
+func TestOutboxPersistAck_AtomicEntryAndIdempotency(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "outbox-persist-ack",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "outbox-persist-ack-key",
+		RequestHash:         "request-hash",
+		StateVersion:        1,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+	entry := pendingStoreEntry(t, st, op.ID)
+
+	acked, err := st.Outbox().PersistAck(ctx, entry.ID)
+	require.NoError(t, err)
+	require.NotNil(t, acked)
+	assert.Equal(t, string(store.TimelineEntryACK), acked.Kind)
+	assert.Equal(t, int64(1), acked.Sequence)
+	assert.Equal(t, op.ID, acked.OperationID)
+
+	got, err := st.Outbox().Get(ctx, entry.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.CommandPersisted, got.Status)
+	require.NotNil(t, got.AckedAt)
+
+	// Replayed ACK_PERSISTED must not write a second entry (AC-077-10).
+	replay, err := st.Outbox().PersistAck(ctx, entry.ID)
+	require.NoError(t, err)
+	assert.Nil(t, replay)
+	entries, err := st.Timeline().List(ctx, op.ID, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+}
+
+func TestOutboxPersistAck_RollbackKeepsDelivered(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	// The outbox row references a ghost operation: the status UPDATE inside
+	// the transaction succeeds but the timeline FK check fails, so the whole
+	// transaction must roll back (AC-077-09) — no half-committed persisted state.
+	entry := pendingStoreEntry(t, st, "ghost-operation")
+
+	_, err := st.Outbox().PersistAck(ctx, entry.ID)
+	require.Error(t, err)
+
+	got, err := st.Outbox().Get(ctx, entry.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.CommandDelivered, got.Status)
+	assert.Nil(t, got.AckedAt)
+}
+
+func TestPersistAck_ConcurrentSequenceStrictlyIncreasing(t *testing.T) {
+	st := setupFileStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "persist-ack-concurrent",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "persist-ack-concurrent-key",
+		RequestHash:         "request-hash",
+		StateVersion:        1,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+	e1 := pendingStoreEntry(t, st, op.ID)
+	e2 := pendingStoreEntry(t, st, op.ID)
+
+	// ACK_PERSISTED for two commands races with the terminal state transition
+	// of the same operation: all three append timeline entries, and the shared
+	// MAX(sequence)+1 allocation must yield a gap-free strictly increasing run
+	// (AC-077-11).
+	var wg sync.WaitGroup
+	errs := make(chan error, 3)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		_, err := st.Outbox().PersistAck(ctx, e1.ID)
+		errs <- err
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := st.Outbox().PersistAck(ctx, e2.ID)
+		errs <- err
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := st.Operations().Transition(ctx, op.ID, store.StatusSucceeded, op.StateVersion, "")
+		errs <- err
+	}()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	entries, err := st.Timeline().List(ctx, op.ID, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+	seen := map[int64]bool{}
+	var prev int64
+	for i, e := range entries {
+		assert.False(t, seen[e.Sequence], "duplicate sequence %d", e.Sequence)
+		seen[e.Sequence] = true
+		if i > 0 {
+			assert.Equal(t, prev+1, e.Sequence, "gap between sequences")
+		}
+		prev = e.Sequence
+	}
+	assert.Equal(t, int64(3), entries[2].Sequence)
+}
+
+// pendingStoreEntry inserts a delivered outbox row for the given operation.
+func pendingStoreEntry(t *testing.T, st *sqlitestore.Store, opID string) *store.OutboxEntry {
+	t.Helper()
+	e := &store.OutboxEntry{
+		ID:            uuid.New().String(),
+		CommandID:     uuid.New().String(),
+		OperationID:   opID,
+		OperationType: "INSTALL",
+		OperatorID:    "op-1",
+		Payload:       []byte(`{}`),
+		Status:        store.CommandDelivered,
+		MaxInFlight:   1,
+		Sequence:      1,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+	require.NoError(t, st.Outbox().Create(context.Background(), e))
+	return e
+}
+
+func TestTransitionWritesSanitizedErrorEntry(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "transition-error-entry",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "transition-error-entry-key",
+		RequestHash:         "request-hash",
+		StateVersion:        1,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	// AC-077-12: last_error carrying a Secret manifest / credential fragment
+	// must surface as a sanitized summary with a stable code.
+	sensitiveErr := `helm install failed {"code":"helm_install_failed"}: ` +
+		`secret stringData: {"api_key": "sk-live-456"}` +
+		` INSERT INTO audit (token) VALUES ('s3cret')`
+	updated, err := st.Operations().Transition(ctx, op.ID, store.StatusFailed, op.StateVersion, sensitiveErr)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusFailed, updated.Status)
+
+	entries, err := st.Timeline().List(ctx, op.ID, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	assert.Equal(t, string(store.TimelineEntryStateTransition), entries[0].Kind)
+	assert.Equal(t, string(store.TimelineEntryError), entries[1].Kind)
+	assert.Equal(t, entries[0].Sequence+1, entries[1].Sequence)
+
+	var errorData store.ErrorTimelineData
+	require.NoError(t, json.Unmarshal(entries[1].Data, &errorData))
+	assert.Equal(t, "helm_install_failed", errorData.ErrorCode)
+	assert.NotContains(t, errorData.ErrorMessage, "sk-live-456")
+	assert.NotContains(t, errorData.ErrorMessage, "s3cret")
+	assert.Contains(t, errorData.ErrorMessage, "****REDACTED****")
+
+	// The raw last_error column keeps its original semantics (only the entry is sanitized).
+	persisted, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Contains(t, persisted.LastError, "sk-live-456")
+}
+
+func TestTransitionCancelledWritesNoErrorEntry(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "transition-cancelled",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "transition-cancelled-key",
+		RequestHash:         "request-hash",
+		StateVersion:        1,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	// AC-077-03 negative: cancelled must not produce an ERROR entry even with last_error.
+	// running → cancelling → cancelled (direct running→cancelled is not a legal transition).
+	_, err := st.Operations().Transition(ctx, op.ID, store.StatusCancelling, op.StateVersion, "operator cancel requested")
+	require.NoError(t, err)
+	_, err = st.Operations().Transition(ctx, op.ID, store.StatusCancelled, 2, "operator cancelled")
+	require.NoError(t, err)
+	entries, err := st.Timeline().List(ctx, op.ID, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	assert.Equal(t, string(store.TimelineEntryStateTransition), entries[0].Kind)
+	assert.Equal(t, string(store.TimelineEntryStateTransition), entries[1].Kind)
+}
+
+func TestTransitionSucceededWritesNoErrorEntry(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "transition-succeeded",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "transition-succeeded-key",
+		RequestHash:         "request-hash",
+		StateVersion:        1,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	_, err := st.Operations().Transition(ctx, op.ID, store.StatusSucceeded, op.StateVersion, "")
+	require.NoError(t, err)
+	entries, err := st.Timeline().List(ctx, op.ID, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+}
+
+func TestFinalizeUpgradeFailedWritesSanitizedErrorEntry(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "finalize-upgrade-error",
+		OperationType:       store.OperationUpgrade,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "finalize-upgrade-error-key",
+		RequestHash:         "request-hash",
+		StateVersion:        2,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	sensitiveErr := `{"code":"rollout_timeout"}: timeout waiting for Deployment rollback (token=abc987)`
+	err := st.UpgradeResults().FinalizeUpgrade(ctx, &store.UpgradeTerminalInput{
+		OperationID: op.ID, ExpectedStateVersion: op.StateVersion, Status: store.StatusFailed,
+		LastError: sensitiveErr, ResultPayload: []byte(`{"upgrade":"failed"}`),
+	})
+	require.NoError(t, err)
+
+	entries, err := st.Timeline().List(ctx, op.ID, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	assert.Equal(t, string(store.TimelineEntryError), entries[1].Kind)
+
+	var errorData store.ErrorTimelineData
+	require.NoError(t, json.Unmarshal(entries[1].Data, &errorData))
+	assert.Equal(t, "rollout_timeout", errorData.ErrorCode)
+	assert.NotContains(t, errorData.ErrorMessage, "abc987")
+}
+
+func TestFinalizeUpgradeFallbackCode(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+	op := &store.Operation{
+		ID:                  "finalize-upgrade-fallback",
+		OperationType:       store.OperationUpgrade,
+		Status:              store.StatusRunning,
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "finalize-upgrade-fallback-key",
+		RequestHash:         "request-hash",
+		StateVersion:        2,
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	err := st.UpgradeResults().FinalizeUpgrade(ctx, &store.UpgradeTerminalInput{
+		OperationID: op.ID, ExpectedStateVersion: op.StateVersion, Status: store.StatusTimeout,
+		LastError: "execution window exhausted with unstructured payload", ResultPayload: []byte(`{}`),
+	})
+	require.NoError(t, err)
+
+	entries, err := st.Timeline().List(ctx, op.ID, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	var errorData store.ErrorTimelineData
+	require.NoError(t, json.Unmarshal(entries[1].Data, &errorData))
+	assert.Equal(t, "operation_failed", errorData.ErrorCode)
 }

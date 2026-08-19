@@ -2,17 +2,22 @@ package operator_test
 
 import (
 	"context"
-	"testing"
-	"time"
-
+	"encoding/json"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
 
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
+	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	"github.com/ndzuki/release-manager/internal/operator"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 )
 
 // newTestSvc creates a Store backed by a per-test in-memory SQLite database.
@@ -515,4 +520,350 @@ func TestFinishOperation_PreflightFailurePersistsStableCode(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusFailed, got.Status)
 	assert.Equal(t, `{"code":"inventory_stale"}`, got.LastError)
+}
+
+// TestCommandStreamAckPersistedWritesTimelineEntry drives the real
+// CommandStream bidi endpoint over HTTP: an ACK_PERSISTED must atomically
+// persist the outbox row and append one ACK timeline entry; a replayed
+// ACK_PERSISTED (reconnect) must not write a second entry (AC-077-01/10).
+func TestCommandStreamAckPersistedWritesTimelineEntry(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-ack-stream", Name: "definition-ack-stream",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "example",
+		Status: store.DefStatusActive,
+	}, nil))
+	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+		ID: "operation-ack-stream", OperationType: store.OperationInstall,
+		Status: store.StatusRunning, ReleaseDefinitionID: "definition-ack-stream",
+		IdempotencyKey: "idem-ack-stream", RequestHash: "hash",
+	}))
+	entry := pendingEntry(t, st, "operation-ack-stream", 1, store.CommandDelivered)
+
+	svc, err := operator.NewService(st, nil)
+	require.NoError(t, err)
+	path, handler := operatorv1connect.NewOperatorServiceHandler(svc)
+	mux := http.NewServeMux()
+	mux.Handle(path, handler)
+
+	srv := httptest.NewUnstartedServer(mux)
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+
+	client := operatorv1connect.NewOperatorServiceClient(srv.Client(), srv.URL)
+	stream := client.CommandStream(ctx)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Hello{
+			Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+		},
+	}))
+	established, err := stream.Receive()
+	require.NoError(t, err)
+	require.NotNil(t, established.GetSessionEstablished())
+
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Ack{
+			Ack: &operatorv1.Ack{
+				OutboxId: entry.ID, CommandId: entry.CommandID,
+				Sequence: 1, AckType: operatorv1.AckType_ACK_TYPE_PERSISTED,
+			},
+		},
+	}))
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break // stream closed by server after request close
+		}
+	}
+
+	got, err := st.Outbox().Get(ctx, entry.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.CommandPersisted, got.Status)
+	entries, err := st.Timeline().List(ctx, "operation-ack-stream", 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, string(store.TimelineEntryACK), entries[0].Kind)
+
+	// Replay: a second connection with a replayed ACK_PERSISTED (e.g. the
+	// operator's local store survived a reconnect) must stay idempotent.
+	stream2 := client.CommandStream(ctx)
+	require.NoError(t, err)
+	require.NoError(t, stream2.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Hello{
+			Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+		},
+	}))
+	_, err = stream2.Receive()
+	require.NoError(t, err)
+	require.NoError(t, stream2.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Ack{
+			Ack: &operatorv1.Ack{
+				OutboxId: entry.ID, CommandId: entry.CommandID,
+				Sequence: 1, AckType: operatorv1.AckType_ACK_TYPE_PERSISTED,
+			},
+		},
+	}))
+	require.NoError(t, stream2.CloseRequest())
+	for {
+		if _, err := stream2.Receive(); err != nil {
+			break
+		}
+	}
+
+	entries, err = st.Timeline().List(ctx, "operation-ack-stream", 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+}
+
+// ── AC-077-02/15/17: rollout_progress service-side handling ──
+
+// commandStreamPair starts a real bidi CommandStream over HTTP/2 and returns
+// the client.
+func commandStreamPair(t *testing.T, svc *operator.Service) operatorv1connect.OperatorServiceClient {
+	t.Helper()
+	path, handler := operatorv1connect.NewOperatorServiceHandler(svc)
+	mux := http.NewServeMux()
+	mux.Handle(path, handler)
+	srv := httptest.NewUnstartedServer(mux)
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return operatorv1connect.NewOperatorServiceClient(srv.Client(), srv.URL)
+}
+
+func TestCommandStreamRolloutProgressWritesTimelineEntry(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-rollout", Name: "definition-rollout",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "example",
+		Status: store.DefStatusActive,
+	}, nil))
+	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+		ID: "operation-rollout", OperationType: store.OperationInstall,
+		Status: store.StatusRunning, ReleaseDefinitionID: "definition-rollout",
+		IdempotencyKey: "idem-rollout", RequestHash: "hash",
+	}))
+	pendingEntry(t, st, "operation-rollout", 1, store.CommandDelivered)
+
+	svc, err := operator.NewService(st, nil)
+	require.NoError(t, err)
+	client := commandStreamPair(t, svc)
+	stream := client.CommandStream(ctx)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Hello{
+			Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+		},
+	}))
+	_, err = stream.Receive()
+	require.NoError(t, err)
+
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_RolloutProgress{
+			RolloutProgress: &operatorv1.RolloutProgress{
+				OperationId: "operation-rollout", WorkloadRef: "deployments/app/default",
+				Ready: 2, Desired: 3,
+			},
+		},
+	}))
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break
+		}
+	}
+
+	entries, err := st.Timeline().List(ctx, "operation-rollout", 0, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, string(store.TimelineEntryRolloutProgress), entries[0].Kind)
+	var data store.RolloutProgressTimelineData
+	require.NoError(t, json.Unmarshal(entries[0].Data, &data))
+	assert.Equal(t, store.RolloutProgressTimelineData{WorkloadRef: "deployments/app/default", Ready: 2, Desired: 3}, data)
+}
+
+func TestCommandStreamRolloutProgressForeignOperationDropped(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-foreign", Name: "definition-foreign",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "foreign",
+		Status: store.DefStatusActive,
+	}, nil))
+	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+		ID: "operation-foreign", OperationType: store.OperationInstall,
+		Status: store.StatusRunning, ReleaseDefinitionID: "definition-foreign",
+		IdempotencyKey: "idem-foreign", RequestHash: "hash",
+	}))
+	// Outbox row owned by a different operator than the session (op-2 vs op-1);
+	// the entry must be persisted with op-2, mutating the in-memory struct
+	// alone would not change the stored row.
+	require.NoError(t, st.Outbox().Create(ctx, &store.OutboxEntry{
+		ID: uuid.NewString(), CommandID: uuid.NewString(), OperationID: "operation-foreign",
+		OperationType: "INSTALL", OperatorID: "op-2", Payload: []byte(`{}`),
+		Status: store.CommandDelivered, MaxInFlight: 1, Sequence: 1,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}))
+
+	svc, err := operator.NewService(st, nil)
+	require.NoError(t, err)
+	client := commandStreamPair(t, svc)
+	stream := client.CommandStream(ctx)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Hello{
+			Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+		},
+	}))
+	_, err = stream.Receive()
+	require.NoError(t, err)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_RolloutProgress{
+			RolloutProgress: &operatorv1.RolloutProgress{
+				OperationId: "operation-foreign", WorkloadRef: "deployments/app/default",
+				Ready: 1, Desired: 3,
+			},
+		},
+	}))
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break
+		}
+	}
+
+	entries, err := st.Timeline().List(ctx, "operation-foreign", 0, 10)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+func TestCommandStreamRolloutProgressTerminalOperationDropped(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-terminal", Name: "definition-terminal",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "terminal",
+		Status: store.DefStatusActive,
+	}, nil))
+	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+		ID: "operation-terminal", OperationType: store.OperationInstall,
+		Status: store.StatusRunning, ReleaseDefinitionID: "definition-terminal",
+		IdempotencyKey: "idem-terminal", RequestHash: "hash", StateVersion: 1,
+	}))
+	pendingEntry(t, st, "operation-terminal", 1, store.CommandDelivered)
+	_, err := st.Operations().Transition(ctx, "operation-terminal", store.StatusFailed, 1, "failed")
+	require.NoError(t, err)
+
+	svc, err := operator.NewService(st, nil)
+	require.NoError(t, err)
+	client := commandStreamPair(t, svc)
+	stream := client.CommandStream(ctx)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Hello{
+			Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+		},
+	}))
+	_, err = stream.Receive()
+	require.NoError(t, err)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_RolloutProgress{
+			RolloutProgress: &operatorv1.RolloutProgress{
+				OperationId: "operation-terminal", WorkloadRef: "deployments/app/default",
+				Ready: 1, Desired: 3,
+			},
+		},
+	}))
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break
+		}
+	}
+
+	entries, err := st.Timeline().List(ctx, "operation-terminal", 0, 10)
+	require.NoError(t, err)
+	// STATE_TRANSITION plus the AC-077-03 ERROR entry from the failed
+	// transition; no progress entry (AC-077-17).
+	require.Len(t, entries, 2)
+	for _, e := range entries {
+		assert.NotEqual(t, string(store.TimelineEntryRolloutProgress), e.Kind)
+	}
+}
+
+func TestCommandStreamRolloutProgressInvalidFieldDropped(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-invalid", Name: "definition-invalid",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "invalid",
+		Status: store.DefStatusActive,
+	}, nil))
+	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+		ID: "operation-invalid", OperationType: store.OperationInstall,
+		Status: store.StatusRunning, ReleaseDefinitionID: "definition-invalid",
+		IdempotencyKey: "idem-invalid", RequestHash: "hash",
+	}))
+	pendingEntry(t, st, "operation-invalid", 1, store.CommandDelivered)
+
+	svc, err := operator.NewService(st, nil)
+	require.NoError(t, err)
+	client := commandStreamPair(t, svc)
+	stream := client.CommandStream(ctx)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Hello{
+			Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+		},
+	}))
+	_, err = stream.Receive()
+	require.NoError(t, err)
+
+	// ready > desired and non-whitelisted GVR: both must be dropped silently.
+	for _, progress := range []*operatorv1.RolloutProgress{
+		{OperationId: "operation-invalid", WorkloadRef: "deployments/app/default", Ready: 4, Desired: 3},
+		{OperationId: "operation-invalid", WorkloadRef: "cronjobs/app/default", Ready: 1, Desired: 3},
+		{OperationId: "operation-invalid", WorkloadRef: "deployments/default", Ready: 1, Desired: 3},
+	} {
+		require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+			Payload: &operatorv1.CommandStreamRequest_RolloutProgress{RolloutProgress: progress},
+		}))
+	}
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break
+		}
+	}
+
+	entries, err := st.Timeline().List(ctx, "operation-invalid", 0, 10)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+// AC-077-16: proto3 unknown-field tolerance. A CommandStreamRequest wire
+// payload carrying oneof field 9 (rollout_progress) decodes without error
+// even when the decoder build does not know the field (old orchestrator):
+// unknown fields are retained and ignored, never failing the stream. The
+// authoritative wire-compat evidence is the buf breaking check (additive
+// field 9 only; no renumbering).
+func TestCommandStreamRequest_UnknownOneofFieldTolerated(t *testing.T) {
+	progress := &operatorv1.RolloutProgress{OperationId: "op-1", WorkloadRef: "deployments/app/default", Ready: 1, Desired: 3}
+	inner, err := proto.Marshal(progress)
+	require.NoError(t, err)
+	wire := protowire.AppendTag(nil, 9, protowire.BytesType)
+	wire = protowire.AppendBytes(wire, inner)
+
+	var req operatorv1.CommandStreamRequest
+	require.NoError(t, proto.Unmarshal(wire, &req))
+	assert.NotNil(t, req.GetRolloutProgress())
+	assert.Equal(t, "op-1", req.GetRolloutProgress().GetOperationId())
+
+	// Unknown-field semantics: a field the decoder does not know is
+	// preserved and round-trips without error.
+	wireUnknown := protowire.AppendTag(nil, 99, protowire.BytesType)
+	wireUnknown = protowire.AppendBytes(wireUnknown, []byte("future-payload"))
+	require.NoError(t, proto.Unmarshal(wireUnknown, &req))
+	got, err := proto.Marshal(&req)
+	require.NoError(t, err)
+	assert.Equal(t, wireUnknown, got)
 }

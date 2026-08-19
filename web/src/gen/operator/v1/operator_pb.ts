@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file operator/v1/operator.proto.
  */
 export const file_operator_v1_operator: GenFile = /*@__PURE__*/
-  fileDesc("ChpvcGVyYXRvci92MS9vcGVyYXRvci5wcm90bxILb3BlcmF0b3IudjEi8QEKDUVucm9sbFJlcXVlc3QSGAoQZW5yb2xsbWVudF90b2tlbhgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRISCgpjbHVzdGVyX2lkGAMgASgJEhMKC29wZXJhdG9yX2lkGAQgASgJEg8KB2Nzcl9wZW0YBSABKAwSQgoMY2FwYWJpbGl0aWVzGAYgAygLMiwub3BlcmF0b3IudjEuRW5yb2xsUmVxdWVzdC5DYXBhYmlsaXRpZXNFbnRyeRozChFDYXBhYmlsaXRpZXNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIlIKDkVucm9sbFJlc3BvbnNlEhIKCnNlc3Npb25faWQYASABKAkSEwoLdHRsX3NlY29uZHMYAiABKAMSFwoPY2VydGlmaWNhdGVfcGVtGAMgASgMIpcDChRDb21tYW5kU3RyZWFtUmVxdWVzdBIjCgVoZWxsbxgBIAEoCzISLm9wZXJhdG9yLnYxLkhlbGxvSAASHwoDYWNrGAIgASgLMhAub3BlcmF0b3IudjEuQWNrSAASKwoJaGVhcnRiZWF0GAMgASgLMhYub3BlcmF0b3IudjEuSGVhcnRiZWF0SAASJQoGcmVzdWx0GAQgASgLMhMub3BlcmF0b3IudjEuUmVzdWx0SAASNgoPcmVzeW5jX3Jlc3BvbnNlGAUgASgLMhsub3BlcmF0b3IudjEuUmVzeW5jUmVzcG9uc2VIABIyCg1lbWVyZ2VuY3lfYWNrGAYgASgLMhkub3BlcmF0b3IudjEuRW1lcmdlbmN5QWNrSAASOAoQZW1lcmdlbmN5X3Jlc3VsdBgHIAEoCzIcLm9wZXJhdG9yLnYxLkVtZXJnZW5jeVJlc3VsdEgAEjQKDmNvbW1hbmRfcmVzdWx0GAggASgLMhoub3BlcmF0b3IudjEuQ29tbWFuZFJlc3VsdEgAQgkKB3BheWxvYWQi4wEKBUhlbGxvEhIKCnNlc3Npb25faWQYASABKAkSEwoLb3BlcmF0b3JfaWQYAiABKAkSGgoSbGFzdF9zZWVuX3NlcXVlbmNlGAMgASgDEhMKC2luc3RhbmNlX2lkGAQgASgJEg8KB3ZlcnNpb24YBSABKAkSOgoMY2FwYWJpbGl0aWVzGAYgAygLMiQub3BlcmF0b3IudjEuSGVsbG8uQ2FwYWJpbGl0aWVzRW50cnkaMwoRQ2FwYWJpbGl0aWVzRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASKOAQoSU2Vzc2lvbkVzdGFibGlzaGVkEhIKCnNlc3Npb25faWQYASABKAkSIgoaaGVhcnRiZWF0X2ludGVydmFsX3NlY29uZHMYAiABKAMSIQoZaGVhcnRiZWF0X3RpbWVvdXRfc2Vjb25kcxgDIAEoAxIdChVhY3RpdmVfY29uZmlnX3ZlcnNpb24YBCABKAkiZgoDQWNrEhEKCW91dGJveF9pZBgBIAEoCRISCgpjb21tYW5kX2lkGAIgASgJEhAKCHNlcXVlbmNlGAMgASgDEiYKCGFja190eXBlGAQgASgOMhQub3BlcmF0b3IudjEuQWNrVHlwZSIfCglIZWFydGJlYXQSEgoKc2Vzc2lvbl9pZBgBIAEoCSKHAQoGUmVzdWx0EhEKCW91dGJveF9pZBgBIAEoCRISCgpjb21tYW5kX2lkGAIgASgJEg4KBnN0YXR1cxgDIAEoCRIPCgdtZXNzYWdlGAQgASgJEg4KBm91dHB1dBgFIAEoDBIQCghzZXF1ZW5jZRgGIAEoAxITCgtyZXN1bHRfanNvbhgHIAEoCSJUCgxFbWVyZ2VuY3lBY2sSHAoUZW1lcmdlbmN5X2NvbW1hbmRfaWQYASABKAkSJgoIYWNrX3R5cGUYAiABKA4yFC5vcGVyYXRvci52MS5BY2tUeXBlIo8BCg9FbWVyZ2VuY3lSZXN1bHQSHAoUZW1lcmdlbmN5X2NvbW1hbmRfaWQYASABKAkSFAoMb3BlcmF0aW9uX2lkGAIgASgJEg4KBnN0YXR1cxgDIAEoCRISCgplcnJvcl9jb2RlGAQgASgJEg8KB21lc3NhZ2UYBSABKAkSEwoLcmVzdWx0X2pzb24YBiABKAki7wIKFUNvbW1hbmRTdHJlYW1SZXNwb25zZRInCgdjb21tYW5kGAEgASgLMhQub3BlcmF0b3IudjEuQ29tbWFuZEgAEjIKDXNlc3Npb25fZXZlbnQYAiABKAsyGS5vcGVyYXRvci52MS5TZXNzaW9uRXZlbnRIABI0Cg5yZXN5bmNfcmVxdWVzdBgDIAEoCzIaLm9wZXJhdG9yLnYxLlJlc3luY1JlcXVlc3RIABI8ChJkdXBsaWNhdGVfcmVzcG9uc2UYBCABKAsyHi5vcGVyYXRvci52MS5EdXBsaWNhdGVSZXNwb25zZUgAEj4KE3Nlc3Npb25fZXN0YWJsaXNoZWQYBSABKAsyHy5vcGVyYXRvci52MS5TZXNzaW9uRXN0YWJsaXNoZWRIABI6ChFlbWVyZ2VuY3lfY29tbWFuZBgGIAEoCzIdLm9wZXJhdG9yLnYxLkVtZXJnZW5jeUNvbW1hbmRIAEIJCgdwYXlsb2FkIvUDCgdDb21tYW5kEhEKCW91dGJveF9pZBgBIAEoCRISCgpjb21tYW5kX2lkGAIgASgJEhQKDG9wZXJhdGlvbl9pZBgDIAEoCRIWCg5vcGVyYXRpb25fdHlwZRgEIAEoCRIoCgZidW5kbGUYBSABKAsyGC5jb21tb24udjEuUmVsZWFzZUJ1bmRsZRIOCgZ2YWx1ZXMYBiABKAwSEAoIc2VxdWVuY2UYByABKAMSFQoNZGVmaW5pdGlvbl9pZBgIIAEoCRIRCgluYW1lc3BhY2UYCSABKAkSFAoMcmVsZWFzZV9uYW1lGAogASgJEhgKEGNyZWF0ZV9uYW1lc3BhY2UYCyABKAgSFwoPdGltZW91dF9zZWNvbmRzGAwgASgDEhoKEnZhbHVlc19yZXZpc2lvbl9pZBgNIAEoCRIhChlleHBlY3RlZF9jdXJyZW50X3JldmlzaW9uGA4gASgDEg4KBmF0b21pYxgPIAEoCBIUCgx2YWx1ZXNfcGF0Y2gYECABKAwSFwoPdGFyZ2V0X3JldmlzaW9uGBEgASgDEhcKD3BheWxvYWRfdmVyc2lvbhgSIAEoDRIuCgd1cGdyYWRlGBQgASgLMhsub3BlcmF0b3IudjEuVXBncmFkZUNvbW1hbmRIAEIPCg10eXBlZF9wYXlsb2FkIosDChBFbWVyZ2VuY3lDb21tYW5kEhIKCmNvbW1hbmRfaWQYASABKAkSFAoMb3BlcmF0aW9uX2lkGAIgASgJEg4KBmFjdGlvbhgDIAEoCRIVCg13b3JrbG9hZF9raW5kGAQgASgJEhUKDXdvcmtsb2FkX25hbWUYBSABKAkSGgoSd29ya2xvYWRfbmFtZXNwYWNlGAYgASgJEhQKDHdvcmtsb2FkX3VpZBgHIAEoCRJGChNzZXRfY29udGFpbmVyX2ltYWdlGAggASgLMicub3BlcmF0b3IudjEuRW1lcmdlbmN5U2V0Q29udGFpbmVySW1hZ2VIABI5CgxzZXRfcmVwbGljYXMYCSABKAsyIS5vcGVyYXRvci52MS5FbWVyZ2VuY3lTZXRSZXBsaWNhc0gAElAKGHNldF9hcHByb3ZlZF9hbm5vdGF0aW9ucxgKIAEoCzIsLm9wZXJhdG9yLnYxLkVtZXJnZW5jeVNldEFwcHJvdmVkQW5ub3RhdGlvbnNIAEIICgZjaGFuZ2UiSAoaRW1lcmdlbmN5U2V0Q29udGFpbmVySW1hZ2USEQoJY29udGFpbmVyGAEgASgJEhcKD2ltYWdlX3JlZmVyZW5jZRgCIAEoCSIoChRFbWVyZ2VuY3lTZXRSZXBsaWNhcxIQCghyZXBsaWNhcxgBIAEoBSJoCh9FbWVyZ2VuY3lTZXRBcHByb3ZlZEFubm90YXRpb25zEjYKB2VudHJpZXMYASADKAsyJS5vcGVyYXRvci52MS5FbWVyZ2VuY3lBbm5vdGF0aW9uRW50cnkSDQoFc2NvcGUYAiABKAkiNgoYRW1lcmdlbmN5QW5ub3RhdGlvbkVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCSJDCg1SZXN5bmNSZXF1ZXN0EiIKGm9yY2hlc3RyYXRvcl9sYXN0X3NlcXVlbmNlGAEgASgDEg4KBnJlYXNvbhgCIAEoCSIwCg5SZXN5bmNSZXNwb25zZRIeChZvcGVyYXRvcl9sYXN0X3NlcXVlbmNlGAEgASgDIjwKEUR1cGxpY2F0ZVJlc3BvbnNlEhIKCmNvbW1hbmRfaWQYASABKAkSEwoLcmVzdWx0X2pzb24YAiABKAkiLQoMU2Vzc2lvbkV2ZW50EgwKBHR5cGUYASABKAkSDwoHbWVzc2FnZRgCIAEoCSI8ChVSZXZva2VPcGVyYXRvclJlcXVlc3QSEwoLb3BlcmF0b3JfaWQYASABKAkSDgoGcmVhc29uGAIgASgJIj0KFlJldm9rZU9wZXJhdG9yUmVzcG9uc2USEwoLb3BlcmF0b3JfaWQYASABKAkSDgoGc3RhdHVzGAIgASgJKlIKB0Fja1R5cGUSGAoUQUNLX1RZUEVfVU5TUEVDSUZJRUQQABIVChFBQ0tfVFlQRV9SRUNFSVZFRBABEhYKEkFDS19UWVBFX1BFUlNJU1RFRBACMosCCg9PcGVyYXRvclNlcnZpY2USQQoGRW5yb2xsEhoub3BlcmF0b3IudjEuRW5yb2xsUmVxdWVzdBobLm9wZXJhdG9yLnYxLkVucm9sbFJlc3BvbnNlEloKDUNvbW1hbmRTdHJlYW0SIS5vcGVyYXRvci52MS5Db21tYW5kU3RyZWFtUmVxdWVzdBoiLm9wZXJhdG9yLnYxLkNvbW1hbmRTdHJlYW1SZXNwb25zZSgBMAESWQoOUmV2b2tlT3BlcmF0b3ISIi5vcGVyYXRvci52MS5SZXZva2VPcGVyYXRvclJlcXVlc3QaIy5vcGVyYXRvci52MS5SZXZva2VPcGVyYXRvclJlc3BvbnNlQkJaQGdpdGh1Yi5jb20vbmR6dWtpL3JlbGVhc2UtbWFuYWdlci9hcGkvZ2VuL29wZXJhdG9yL3YxO29wZXJhdG9ydjFiBnByb3RvMw", [file_common_v1_domain, file_operator_v1_upgrade_result]);
+  fileDesc("ChpvcGVyYXRvci92MS9vcGVyYXRvci5wcm90bxILb3BlcmF0b3IudjEi8QEKDUVucm9sbFJlcXVlc3QSGAoQZW5yb2xsbWVudF90b2tlbhgBIAEoCRITCgtjdXN0b21lcl9pZBgCIAEoCRISCgpjbHVzdGVyX2lkGAMgASgJEhMKC29wZXJhdG9yX2lkGAQgASgJEg8KB2Nzcl9wZW0YBSABKAwSQgoMY2FwYWJpbGl0aWVzGAYgAygLMiwub3BlcmF0b3IudjEuRW5yb2xsUmVxdWVzdC5DYXBhYmlsaXRpZXNFbnRyeRozChFDYXBhYmlsaXRpZXNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIlIKDkVucm9sbFJlc3BvbnNlEhIKCnNlc3Npb25faWQYASABKAkSEwoLdHRsX3NlY29uZHMYAiABKAMSFwoPY2VydGlmaWNhdGVfcGVtGAMgASgMItEDChRDb21tYW5kU3RyZWFtUmVxdWVzdBIjCgVoZWxsbxgBIAEoCzISLm9wZXJhdG9yLnYxLkhlbGxvSAASHwoDYWNrGAIgASgLMhAub3BlcmF0b3IudjEuQWNrSAASKwoJaGVhcnRiZWF0GAMgASgLMhYub3BlcmF0b3IudjEuSGVhcnRiZWF0SAASJQoGcmVzdWx0GAQgASgLMhMub3BlcmF0b3IudjEuUmVzdWx0SAASNgoPcmVzeW5jX3Jlc3BvbnNlGAUgASgLMhsub3BlcmF0b3IudjEuUmVzeW5jUmVzcG9uc2VIABIyCg1lbWVyZ2VuY3lfYWNrGAYgASgLMhkub3BlcmF0b3IudjEuRW1lcmdlbmN5QWNrSAASOAoQZW1lcmdlbmN5X3Jlc3VsdBgHIAEoCzIcLm9wZXJhdG9yLnYxLkVtZXJnZW5jeVJlc3VsdEgAEjQKDmNvbW1hbmRfcmVzdWx0GAggASgLMhoub3BlcmF0b3IudjEuQ29tbWFuZFJlc3VsdEgAEjgKEHJvbGxvdXRfcHJvZ3Jlc3MYCSABKAsyHC5vcGVyYXRvci52MS5Sb2xsb3V0UHJvZ3Jlc3NIAEIJCgdwYXlsb2FkIl0KD1JvbGxvdXRQcm9ncmVzcxIUCgxvcGVyYXRpb25faWQYASABKAkSFAoMd29ya2xvYWRfcmVmGAIgASgJEg0KBXJlYWR5GAMgASgFEg8KB2Rlc2lyZWQYBCABKAUi4wEKBUhlbGxvEhIKCnNlc3Npb25faWQYASABKAkSEwoLb3BlcmF0b3JfaWQYAiABKAkSGgoSbGFzdF9zZWVuX3NlcXVlbmNlGAMgASgDEhMKC2luc3RhbmNlX2lkGAQgASgJEg8KB3ZlcnNpb24YBSABKAkSOgoMY2FwYWJpbGl0aWVzGAYgAygLMiQub3BlcmF0b3IudjEuSGVsbG8uQ2FwYWJpbGl0aWVzRW50cnkaMwoRQ2FwYWJpbGl0aWVzRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASKOAQoSU2Vzc2lvbkVzdGFibGlzaGVkEhIKCnNlc3Npb25faWQYASABKAkSIgoaaGVhcnRiZWF0X2ludGVydmFsX3NlY29uZHMYAiABKAMSIQoZaGVhcnRiZWF0X3RpbWVvdXRfc2Vjb25kcxgDIAEoAxIdChVhY3RpdmVfY29uZmlnX3ZlcnNpb24YBCABKAkiZgoDQWNrEhEKCW91dGJveF9pZBgBIAEoCRISCgpjb21tYW5kX2lkGAIgASgJEhAKCHNlcXVlbmNlGAMgASgDEiYKCGFja190eXBlGAQgASgOMhQub3BlcmF0b3IudjEuQWNrVHlwZSIfCglIZWFydGJlYXQSEgoKc2Vzc2lvbl9pZBgBIAEoCSKHAQoGUmVzdWx0EhEKCW91dGJveF9pZBgBIAEoCRISCgpjb21tYW5kX2lkGAIgASgJEg4KBnN0YXR1cxgDIAEoCRIPCgdtZXNzYWdlGAQgASgJEg4KBm91dHB1dBgFIAEoDBIQCghzZXF1ZW5jZRgGIAEoAxITCgtyZXN1bHRfanNvbhgHIAEoCSJUCgxFbWVyZ2VuY3lBY2sSHAoUZW1lcmdlbmN5X2NvbW1hbmRfaWQYASABKAkSJgoIYWNrX3R5cGUYAiABKA4yFC5vcGVyYXRvci52MS5BY2tUeXBlIo8BCg9FbWVyZ2VuY3lSZXN1bHQSHAoUZW1lcmdlbmN5X2NvbW1hbmRfaWQYASABKAkSFAoMb3BlcmF0aW9uX2lkGAIgASgJEg4KBnN0YXR1cxgDIAEoCRISCgplcnJvcl9jb2RlGAQgASgJEg8KB21lc3NhZ2UYBSABKAkSEwoLcmVzdWx0X2pzb24YBiABKAki7wIKFUNvbW1hbmRTdHJlYW1SZXNwb25zZRInCgdjb21tYW5kGAEgASgLMhQub3BlcmF0b3IudjEuQ29tbWFuZEgAEjIKDXNlc3Npb25fZXZlbnQYAiABKAsyGS5vcGVyYXRvci52MS5TZXNzaW9uRXZlbnRIABI0Cg5yZXN5bmNfcmVxdWVzdBgDIAEoCzIaLm9wZXJhdG9yLnYxLlJlc3luY1JlcXVlc3RIABI8ChJkdXBsaWNhdGVfcmVzcG9uc2UYBCABKAsyHi5vcGVyYXRvci52MS5EdXBsaWNhdGVSZXNwb25zZUgAEj4KE3Nlc3Npb25fZXN0YWJsaXNoZWQYBSABKAsyHy5vcGVyYXRvci52MS5TZXNzaW9uRXN0YWJsaXNoZWRIABI6ChFlbWVyZ2VuY3lfY29tbWFuZBgGIAEoCzIdLm9wZXJhdG9yLnYxLkVtZXJnZW5jeUNvbW1hbmRIAEIJCgdwYXlsb2FkIvUDCgdDb21tYW5kEhEKCW91dGJveF9pZBgBIAEoCRISCgpjb21tYW5kX2lkGAIgASgJEhQKDG9wZXJhdGlvbl9pZBgDIAEoCRIWCg5vcGVyYXRpb25fdHlwZRgEIAEoCRIoCgZidW5kbGUYBSABKAsyGC5jb21tb24udjEuUmVsZWFzZUJ1bmRsZRIOCgZ2YWx1ZXMYBiABKAwSEAoIc2VxdWVuY2UYByABKAMSFQoNZGVmaW5pdGlvbl9pZBgIIAEoCRIRCgluYW1lc3BhY2UYCSABKAkSFAoMcmVsZWFzZV9uYW1lGAogASgJEhgKEGNyZWF0ZV9uYW1lc3BhY2UYCyABKAgSFwoPdGltZW91dF9zZWNvbmRzGAwgASgDEhoKEnZhbHVlc19yZXZpc2lvbl9pZBgNIAEoCRIhChlleHBlY3RlZF9jdXJyZW50X3JldmlzaW9uGA4gASgDEg4KBmF0b21pYxgPIAEoCBIUCgx2YWx1ZXNfcGF0Y2gYECABKAwSFwoPdGFyZ2V0X3JldmlzaW9uGBEgASgDEhcKD3BheWxvYWRfdmVyc2lvbhgSIAEoDRIuCgd1cGdyYWRlGBQgASgLMhsub3BlcmF0b3IudjEuVXBncmFkZUNvbW1hbmRIAEIPCg10eXBlZF9wYXlsb2FkIosDChBFbWVyZ2VuY3lDb21tYW5kEhIKCmNvbW1hbmRfaWQYASABKAkSFAoMb3BlcmF0aW9uX2lkGAIgASgJEg4KBmFjdGlvbhgDIAEoCRIVCg13b3JrbG9hZF9raW5kGAQgASgJEhUKDXdvcmtsb2FkX25hbWUYBSABKAkSGgoSd29ya2xvYWRfbmFtZXNwYWNlGAYgASgJEhQKDHdvcmtsb2FkX3VpZBgHIAEoCRJGChNzZXRfY29udGFpbmVyX2ltYWdlGAggASgLMicub3BlcmF0b3IudjEuRW1lcmdlbmN5U2V0Q29udGFpbmVySW1hZ2VIABI5CgxzZXRfcmVwbGljYXMYCSABKAsyIS5vcGVyYXRvci52MS5FbWVyZ2VuY3lTZXRSZXBsaWNhc0gAElAKGHNldF9hcHByb3ZlZF9hbm5vdGF0aW9ucxgKIAEoCzIsLm9wZXJhdG9yLnYxLkVtZXJnZW5jeVNldEFwcHJvdmVkQW5ub3RhdGlvbnNIAEIICgZjaGFuZ2UiSAoaRW1lcmdlbmN5U2V0Q29udGFpbmVySW1hZ2USEQoJY29udGFpbmVyGAEgASgJEhcKD2ltYWdlX3JlZmVyZW5jZRgCIAEoCSIoChRFbWVyZ2VuY3lTZXRSZXBsaWNhcxIQCghyZXBsaWNhcxgBIAEoBSJoCh9FbWVyZ2VuY3lTZXRBcHByb3ZlZEFubm90YXRpb25zEjYKB2VudHJpZXMYASADKAsyJS5vcGVyYXRvci52MS5FbWVyZ2VuY3lBbm5vdGF0aW9uRW50cnkSDQoFc2NvcGUYAiABKAkiNgoYRW1lcmdlbmN5QW5ub3RhdGlvbkVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCSJDCg1SZXN5bmNSZXF1ZXN0EiIKGm9yY2hlc3RyYXRvcl9sYXN0X3NlcXVlbmNlGAEgASgDEg4KBnJlYXNvbhgCIAEoCSIwCg5SZXN5bmNSZXNwb25zZRIeChZvcGVyYXRvcl9sYXN0X3NlcXVlbmNlGAEgASgDIjwKEUR1cGxpY2F0ZVJlc3BvbnNlEhIKCmNvbW1hbmRfaWQYASABKAkSEwoLcmVzdWx0X2pzb24YAiABKAkiLQoMU2Vzc2lvbkV2ZW50EgwKBHR5cGUYASABKAkSDwoHbWVzc2FnZRgCIAEoCSI8ChVSZXZva2VPcGVyYXRvclJlcXVlc3QSEwoLb3BlcmF0b3JfaWQYASABKAkSDgoGcmVhc29uGAIgASgJIj0KFlJldm9rZU9wZXJhdG9yUmVzcG9uc2USEwoLb3BlcmF0b3JfaWQYASABKAkSDgoGc3RhdHVzGAIgASgJKlIKB0Fja1R5cGUSGAoUQUNLX1RZUEVfVU5TUEVDSUZJRUQQABIVChFBQ0tfVFlQRV9SRUNFSVZFRBABEhYKEkFDS19UWVBFX1BFUlNJU1RFRBACMosCCg9PcGVyYXRvclNlcnZpY2USQQoGRW5yb2xsEhoub3BlcmF0b3IudjEuRW5yb2xsUmVxdWVzdBobLm9wZXJhdG9yLnYxLkVucm9sbFJlc3BvbnNlEloKDUNvbW1hbmRTdHJlYW0SIS5vcGVyYXRvci52MS5Db21tYW5kU3RyZWFtUmVxdWVzdBoiLm9wZXJhdG9yLnYxLkNvbW1hbmRTdHJlYW1SZXNwb25zZSgBMAESWQoOUmV2b2tlT3BlcmF0b3ISIi5vcGVyYXRvci52MS5SZXZva2VPcGVyYXRvclJlcXVlc3QaIy5vcGVyYXRvci52MS5SZXZva2VPcGVyYXRvclJlc3BvbnNlQkJaQGdpdGh1Yi5jb20vbmR6dWtpL3JlbGVhc2UtbWFuYWdlci9hcGkvZ2VuL29wZXJhdG9yL3YxO29wZXJhdG9ydjFiBnByb3RvMw", [file_common_v1_domain, file_operator_v1_upgrade_result]);
 
 /**
  * EnrollRequest registers an operator agent with the orchestrator using a single-use token.
@@ -162,6 +162,14 @@ export type CommandStreamRequest = Message<"operator.v1.CommandStreamRequest"> &
      */
     value: CommandResult;
     case: "commandResult";
+  } | {
+    /**
+     * periodic workload rollout progress (TASK-077)
+     *
+     * @generated from field: operator.v1.RolloutProgress rollout_progress = 9;
+     */
+    value: RolloutProgress;
+    case: "rolloutProgress";
   } | { case: undefined; value?: undefined };
 };
 
@@ -171,6 +179,42 @@ export type CommandStreamRequest = Message<"operator.v1.CommandStreamRequest"> &
  */
 export const CommandStreamRequestSchema: GenMessage<CommandStreamRequest> = /*@__PURE__*/
   messageDesc(file_operator_v1_operator, 2);
+
+/**
+ * RolloutProgress reports observed workload readiness during a standard operation.
+ *
+ * @generated from message operator.v1.RolloutProgress
+ */
+export type RolloutProgress = Message<"operator.v1.RolloutProgress"> & {
+  /**
+   * @generated from field: string operation_id = 1;
+   */
+  operationId: string;
+
+  /**
+   * "<gvr.resource>/<namespace>/<name>", e.g. "deployments/app/default"
+   *
+   * @generated from field: string workload_ref = 2;
+   */
+  workloadRef: string;
+
+  /**
+   * @generated from field: int32 ready = 3;
+   */
+  ready: number;
+
+  /**
+   * @generated from field: int32 desired = 4;
+   */
+  desired: number;
+};
+
+/**
+ * Describes the message operator.v1.RolloutProgress.
+ * Use `create(RolloutProgressSchema)` to create a new message.
+ */
+export const RolloutProgressSchema: GenMessage<RolloutProgress> = /*@__PURE__*/
+  messageDesc(file_operator_v1_operator, 3);
 
 /**
  * Hello is sent by the operator to establish a session after enrollment.
@@ -218,7 +262,7 @@ export type Hello = Message<"operator.v1.Hello"> & {
  * Use `create(HelloSchema)` to create a new message.
  */
 export const HelloSchema: GenMessage<Hello> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 3);
+  messageDesc(file_operator_v1_operator, 4);
 
 /**
  * SessionEstablished confirms a validated operator session.
@@ -252,7 +296,7 @@ export type SessionEstablished = Message<"operator.v1.SessionEstablished"> & {
  * Use `create(SessionEstablishedSchema)` to create a new message.
  */
 export const SessionEstablishedSchema: GenMessage<SessionEstablished> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 4);
+  messageDesc(file_operator_v1_operator, 5);
 
 /**
  * Ack acknowledges receipt of a command delivered to the operator.
@@ -290,7 +334,7 @@ export type Ack = Message<"operator.v1.Ack"> & {
  * Use `create(AckSchema)` to create a new message.
  */
 export const AckSchema: GenMessage<Ack> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 5);
+  messageDesc(file_operator_v1_operator, 6);
 
 /**
  * Heartbeat signals operator liveness.
@@ -309,7 +353,7 @@ export type Heartbeat = Message<"operator.v1.Heartbeat"> & {
  * Use `create(HeartbeatSchema)` to create a new message.
  */
 export const HeartbeatSchema: GenMessage<Heartbeat> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 6);
+  messageDesc(file_operator_v1_operator, 7);
 
 /**
  * Result reports command execution outcome.
@@ -364,7 +408,7 @@ export type Result = Message<"operator.v1.Result"> & {
  * Use `create(ResultSchema)` to create a new message.
  */
 export const ResultSchema: GenMessage<Result> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 7);
+  messageDesc(file_operator_v1_operator, 8);
 
 /**
  * @generated from message operator.v1.EmergencyAck
@@ -386,7 +430,7 @@ export type EmergencyAck = Message<"operator.v1.EmergencyAck"> & {
  * Use `create(EmergencyAckSchema)` to create a new message.
  */
 export const EmergencyAckSchema: GenMessage<EmergencyAck> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 8);
+  messageDesc(file_operator_v1_operator, 9);
 
 /**
  * @generated from message operator.v1.EmergencyResult
@@ -428,7 +472,7 @@ export type EmergencyResult = Message<"operator.v1.EmergencyResult"> & {
  * Use `create(EmergencyResultSchema)` to create a new message.
  */
 export const EmergencyResultSchema: GenMessage<EmergencyResult> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 9);
+  messageDesc(file_operator_v1_operator, 10);
 
 /**
  * CommandStreamResponse delivers session lifecycle responses.
@@ -491,7 +535,7 @@ export type CommandStreamResponse = Message<"operator.v1.CommandStreamResponse">
  * Use `create(CommandStreamResponseSchema)` to create a new message.
  */
 export const CommandStreamResponseSchema: GenMessage<CommandStreamResponse> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 10);
+  messageDesc(file_operator_v1_operator, 11);
 
 /**
  * Command is a deploy directive sent to the operator.
@@ -614,7 +658,7 @@ export type Command = Message<"operator.v1.Command"> & {
  * Use `create(CommandSchema)` to create a new message.
  */
 export const CommandSchema: GenMessage<Command> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 11);
+  messageDesc(file_operator_v1_operator, 12);
 
 /**
  * @generated from message operator.v1.EmergencyCommand
@@ -684,7 +728,7 @@ export type EmergencyCommand = Message<"operator.v1.EmergencyCommand"> & {
  * Use `create(EmergencyCommandSchema)` to create a new message.
  */
 export const EmergencyCommandSchema: GenMessage<EmergencyCommand> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 12);
+  messageDesc(file_operator_v1_operator, 13);
 
 /**
  * @generated from message operator.v1.EmergencySetContainerImage
@@ -706,7 +750,7 @@ export type EmergencySetContainerImage = Message<"operator.v1.EmergencySetContai
  * Use `create(EmergencySetContainerImageSchema)` to create a new message.
  */
 export const EmergencySetContainerImageSchema: GenMessage<EmergencySetContainerImage> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 13);
+  messageDesc(file_operator_v1_operator, 14);
 
 /**
  * @generated from message operator.v1.EmergencySetReplicas
@@ -723,7 +767,7 @@ export type EmergencySetReplicas = Message<"operator.v1.EmergencySetReplicas"> &
  * Use `create(EmergencySetReplicasSchema)` to create a new message.
  */
 export const EmergencySetReplicasSchema: GenMessage<EmergencySetReplicas> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 14);
+  messageDesc(file_operator_v1_operator, 15);
 
 /**
  * @generated from message operator.v1.EmergencySetApprovedAnnotations
@@ -745,7 +789,7 @@ export type EmergencySetApprovedAnnotations = Message<"operator.v1.EmergencySetA
  * Use `create(EmergencySetApprovedAnnotationsSchema)` to create a new message.
  */
 export const EmergencySetApprovedAnnotationsSchema: GenMessage<EmergencySetApprovedAnnotations> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 15);
+  messageDesc(file_operator_v1_operator, 16);
 
 /**
  * @generated from message operator.v1.EmergencyAnnotationEntry
@@ -767,7 +811,7 @@ export type EmergencyAnnotationEntry = Message<"operator.v1.EmergencyAnnotationE
  * Use `create(EmergencyAnnotationEntrySchema)` to create a new message.
  */
 export const EmergencyAnnotationEntrySchema: GenMessage<EmergencyAnnotationEntry> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 16);
+  messageDesc(file_operator_v1_operator, 17);
 
 /**
  * ResyncRequest asks the operator to report its last seen sequence for gap recovery.
@@ -795,7 +839,7 @@ export type ResyncRequest = Message<"operator.v1.ResyncRequest"> & {
  * Use `create(ResyncRequestSchema)` to create a new message.
  */
 export const ResyncRequestSchema: GenMessage<ResyncRequest> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 17);
+  messageDesc(file_operator_v1_operator, 18);
 
 /**
  * ResyncResponse is sent by the operator in response to a ResyncRequest.
@@ -816,7 +860,7 @@ export type ResyncResponse = Message<"operator.v1.ResyncResponse"> & {
  * Use `create(ResyncResponseSchema)` to create a new message.
  */
 export const ResyncResponseSchema: GenMessage<ResyncResponse> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 18);
+  messageDesc(file_operator_v1_operator, 19);
 
 /**
  * DuplicateResponse is sent when the operator receives a command it has already completed.
@@ -842,7 +886,7 @@ export type DuplicateResponse = Message<"operator.v1.DuplicateResponse"> & {
  * Use `create(DuplicateResponseSchema)` to create a new message.
  */
 export const DuplicateResponseSchema: GenMessage<DuplicateResponse> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 19);
+  messageDesc(file_operator_v1_operator, 20);
 
 /**
  * SessionEvent signals a session lifecycle change.
@@ -868,7 +912,7 @@ export type SessionEvent = Message<"operator.v1.SessionEvent"> & {
  * Use `create(SessionEventSchema)` to create a new message.
  */
 export const SessionEventSchema: GenMessage<SessionEvent> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 20);
+  messageDesc(file_operator_v1_operator, 21);
 
 /**
  * RevokeOperatorRequest revokes an operator and closes its active sessions.
@@ -892,7 +936,7 @@ export type RevokeOperatorRequest = Message<"operator.v1.RevokeOperatorRequest">
  * Use `create(RevokeOperatorRequestSchema)` to create a new message.
  */
 export const RevokeOperatorRequestSchema: GenMessage<RevokeOperatorRequest> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 21);
+  messageDesc(file_operator_v1_operator, 22);
 
 /**
  * RevokeOperatorResponse confirms operator revocation.
@@ -918,7 +962,7 @@ export type RevokeOperatorResponse = Message<"operator.v1.RevokeOperatorResponse
  * Use `create(RevokeOperatorResponseSchema)` to create a new message.
  */
 export const RevokeOperatorResponseSchema: GenMessage<RevokeOperatorResponse> = /*@__PURE__*/
-  messageDesc(file_operator_v1_operator, 22);
+  messageDesc(file_operator_v1_operator, 23);
 
 /**
  * AckType classifies the acknowledgment level.

@@ -21,6 +21,10 @@ import (
 
 type RolloutObserver interface {
 	Observe(ctx context.Context, ref ResourceRef, expectedGeneration int64, timeout time.Duration) (WatchResult, error)
+	// ObserveWithProgress is Observe with an onProgress callback invoked
+	// after every evaluation round (including the initial list result) so
+	// the caller can report ready/desired counters (REQ-077 AC-077-02).
+	ObserveWithProgress(ctx context.Context, ref ResourceRef, expectedGeneration int64, timeout time.Duration, onProgress func(WatchResult)) (WatchResult, error)
 }
 
 type Observer struct {
@@ -45,6 +49,16 @@ func (o *Observer) Observe(
 	expectedGeneration int64,
 	timeout time.Duration,
 ) (WatchResult, error) {
+	return o.ObserveWithProgress(ctx, ref, expectedGeneration, timeout, nil)
+}
+
+func (o *Observer) ObserveWithProgress(
+	ctx context.Context,
+	ref ResourceRef,
+	expectedGeneration int64,
+	timeout time.Duration,
+	onProgress func(WatchResult),
+) (WatchResult, error) {
 	if err := validateObserveInput(ctx, ref, expectedGeneration, timeout); err != nil {
 		return WatchResult{Resource: ref}, err
 	}
@@ -58,7 +72,7 @@ func (o *Observer) Observe(
 	}
 
 	fieldSelector := fields.OneTermEqualSelector("metadata.name", ref.Name).String()
-	return o.observeLoop(ctx, observeCtx, ref, source, fieldSelector)
+	return o.observeLoop(ctx, observeCtx, ref, source, fieldSelector, onProgress)
 }
 
 func (o *Observer) observeLoop(
@@ -67,6 +81,7 @@ func (o *Observer) observeLoop(
 	ref ResourceRef,
 	source resourceSource,
 	fieldSelector string,
+	onProgress func(WatchResult),
 ) (WatchResult, error) {
 	last := WatchResult{Resource: ref}
 	var lockedUID types.UID
@@ -83,6 +98,9 @@ func (o *Observer) observeLoop(
 		)
 		if err != nil {
 			return last, classifyError(parentCtx, observeCtx, last, err)
+		}
+		if onProgress != nil {
+			onProgress(last)
 		}
 		if ready {
 			if parentCtx.Err() != nil {
@@ -103,7 +121,7 @@ func (o *Observer) observeLoop(
 			return last, classifyError(parentCtx, observeCtx, last, watchErr)
 		}
 
-		last, watchErr = consumeWatch(observeCtx, source.eval, last, watcher, lockedUID)
+		last, watchErr = consumeWatch(observeCtx, source.eval, last, watcher, lockedUID, onProgress)
 		if watchErr == nil {
 			if parentCtx.Err() != nil {
 				return last, classifyError(parentCtx, observeCtx, last, parentCtx.Err())
@@ -151,6 +169,7 @@ func consumeWatch(
 	last WatchResult,
 	watcher watch.Interface,
 	lockedUID types.UID,
+	onProgress func(WatchResult),
 ) (WatchResult, error) {
 	defer watcher.Stop()
 	for {
@@ -168,6 +187,9 @@ func consumeWatch(
 					return last, unavailableError(last, "object UID changed")
 				}
 				last = result
+				if onProgress != nil {
+					onProgress(last)
+				}
 				if err != nil {
 					return last, err
 				}
@@ -388,6 +410,8 @@ func deploymentResult(
 		Ready:              genReached && available && countersOK && !failed,
 		Failed:             failed,
 		Conditions:         conditions,
+		ReadyCount:         deployment.Status.AvailableReplicas,
+		DesiredCount:       replicas,
 	}
 	if failed {
 		return result, false, unavailableError(result, "deployment reported terminal failure")
@@ -430,6 +454,8 @@ func statefulSetResult(
 		Ready:              generationReady && replicasReady && revisionsMatch,
 		Failed:             false,
 		Conditions:         conditions,
+		ReadyCount:         statefulSet.Status.ReadyReplicas,
+		DesiredCount:       desired,
 	}
 	return result, result.Ready, nil
 }
@@ -465,6 +491,8 @@ func daemonSetResult(
 		Ready:              generationReady && scheduledReady && availabilityReady,
 		Failed:             false,
 		Conditions:         conditions,
+		ReadyCount:         daemonSet.Status.NumberAvailable,
+		DesiredCount:       daemonSet.Status.DesiredNumberScheduled,
 	}
 	return result, result.Ready, nil
 }

@@ -4,6 +4,7 @@ package orchestrator
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -123,7 +125,6 @@ func (s *Service) CreateOperation(
 	if !ok {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
-
 
 	// Definition lookup feeds authorization, gates, and validation below.
 	def, err := s.store.Definitions().Get(ctx, msg.ReleaseDefinitionId)
@@ -325,23 +326,23 @@ func (s *Service) CreateOperation(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("marshal bundle image digests: %w", err))
 	}
 	op := &store.Operation{
-		ID:                  uuid.New().String(),
-		OperationType:       opType,
-		Status:              operation.InitialStatus(),
-		ReleaseDefinitionID: def.ID,
-		IdempotencyKey:      scopedKey,
-		IdempotencyScope:    scope,
-		RequestHash:         hashRequest(msg, string(merged.patch)),
-		BundleID:            bundle.ID,
-		BundleChartRef:      bundle.ChartRef,
-		BundleChartDigest:   bundle.ChartDigest,
-		ImageRefsJSON:       imageRefsJSON,
-		ImageDigestsJSON:    imageDigestsJSON,
-		PolicyVersion:       policyVersion,
-		ValuesRevisionID:    msg.GetValuesRevisionId(),
-		ExpectedRevision:    int(msg.GetExpectedCurrentRevision()),
-		ValuesPatch:         merged.patch,
-		PatchDigest:         merged.patchDigest,
+		ID:                    uuid.New().String(),
+		OperationType:         opType,
+		Status:                operation.InitialStatus(),
+		ReleaseDefinitionID:   def.ID,
+		IdempotencyKey:        scopedKey,
+		IdempotencyScope:      scope,
+		RequestHash:           hashRequest(msg, string(merged.patch)),
+		BundleID:              bundle.ID,
+		BundleChartRef:        bundle.ChartRef,
+		BundleChartDigest:     bundle.ChartDigest,
+		ImageRefsJSON:         imageRefsJSON,
+		ImageDigestsJSON:      imageDigestsJSON,
+		PolicyVersion:         policyVersion,
+		ValuesRevisionID:      msg.GetValuesRevisionId(),
+		ExpectedRevision:      int(msg.GetExpectedCurrentRevision()),
+		ValuesPatch:           merged.patch,
+		PatchDigest:           merged.patchDigest,
 		EffectiveValuesDigest: merged.effectiveDigest,
 		Actor: store.ActorContext{
 			UserID:       actor.UserID,
@@ -440,8 +441,6 @@ func (s *Service) CreateOperation(
 	return connect.NewResponse(s.toResponse(op, &verifyResult)), nil
 }
 
-
-
 // PublishRelease triggers the release pipeline for a definition (skeleton).
 func (s *Service) PublishRelease(
 	ctx context.Context,
@@ -521,7 +520,7 @@ func (s *Service) GetOperation(
 
 const (
 	operationWatchPollInterval = 50 * time.Millisecond
-	operationWatchHeartbeat    = 30 * time.Second
+	operationWatchHeartbeat    = 5 * time.Second
 )
 
 // WatchOperation streams a consistent snapshot, retained replay, live entries, and heartbeats.
@@ -615,7 +614,23 @@ func operationCursorExpiredError(snapshot *store.TimelineSnapshot) error {
 	err.Meta().Set("X-Reason-Code", "cursor_expired")
 	err.Meta().Set("X-Snapshot-Sequence", fmt.Sprintf("%d", snapshot.SnapshotSequence))
 	err.Meta().Set("X-Retained-From-Sequence", fmt.Sprintf("%d", snapshot.RetainedFromSequence))
+	// X-Snapshot-Proto carries a base64 protojson OperationSnapshot so a
+	// client can rebuild the stream without a second round trip
+	// (AC-077-05/14).
+	if encoded, encodeErr := encodeSnapshotProto(snapshot); encodeErr == nil {
+		err.Meta().Set("X-Snapshot-Proto", encoded)
+	}
 	return err
+}
+
+// encodeSnapshotProto serializes the snapshot as base64(protojson) for the
+// X-Snapshot-Proto error header.
+func encodeSnapshotProto(snapshot *store.TimelineSnapshot) (string, error) {
+	raw, err := protojson.Marshal(toProtoOperationSnapshot(snapshot))
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(raw), nil
 }
 
 func toProtoOperationSnapshot(snapshot *store.TimelineSnapshot) *orchestratorv1.OperationSnapshot {
@@ -648,6 +663,29 @@ func toProtoTimelineEntry(entry *store.OperationTimelineEntry) *orchestratorv1.T
 			result.EffectFrom = data.EffectFrom
 			result.EffectTo = data.EffectTo
 		}
+	case store.TimelineEntryACK:
+		result.Kind = orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_ACK
+		var data store.AckTimelineData
+		if json.Unmarshal(entry.Data, &data) == nil {
+			result.RequestId = data.RequestID
+			result.AckStage = data.AckStage
+		}
+	case store.TimelineEntryRolloutProgress:
+		result.Kind = orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_ROLLOUT_PROGRESS
+		var data store.RolloutProgressTimelineData
+		if json.Unmarshal(entry.Data, &data) == nil {
+			result.WorkloadRef = data.WorkloadRef
+			result.Ready = data.Ready
+			result.Desired = data.Desired
+		}
+	case store.TimelineEntryError:
+		result.Kind = orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_ERROR
+		var data store.ErrorTimelineData
+		if json.Unmarshal(entry.Data, &data) == nil {
+			result.RequestId = data.RequestID
+			result.ErrorCode = data.ErrorCode
+			result.ErrorMessage = data.ErrorMessage
+		}
 	default:
 		result.Kind = orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_UNSPECIFIED
 	}
@@ -662,6 +700,8 @@ func emergencyEffectToProto(value store.EmergencyEffectStatus) orchestratorv1.Em
 		return orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_NOT_APPLIED
 	case store.EmergencyEffectUnknown:
 		return orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_UNKNOWN
+	case store.EmergencyEffectNotStarted:
+		return orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_NOT_STARTED
 	default:
 		return orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_UNSPECIFIED
 	}
@@ -1021,9 +1061,11 @@ func toProtoOperation(op *store.Operation) *orchestratorv1.Operation {
 			UserId:       op.Actor.UserID,
 			Organization: op.Actor.Organization,
 		},
-		CreatedAt: timestamppb.New(op.CreatedAt),
-		UpdatedAt: timestamppb.New(op.UpdatedAt),
 		LastError: op.LastError,
+		// effect_status is the authoritative cluster effect projection for
+		// EMERGENCY operations; non-EMERGENCY operations always project
+		// NOT_STARTED (AC-077-04).
+		EffectStatus: emergencyEffectToProto(op.EffectStatus),
 	}
 	if op.TerminalAt != nil {
 		result.TerminalAt = timestamppb.New(*op.TerminalAt)
@@ -1216,7 +1258,6 @@ func taskIDs(tasks []*store.ConvergenceTask) []string {
 	return ids
 }
 
-
 func (s *Service) checkValuesRevision(ctx context.Context, def *store.ReleaseDefinition, revisionID string) (*store.ValuesRevision, error) {
 	if revisionID == "" {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("revision_not_approved"))
@@ -1342,6 +1383,7 @@ func extractChartName(ref string) string {
 	}
 	return ref
 }
+
 // Compile-time check: Service implements the Connect handler interface.
 var _ orchestratorv1connect.OrchestratorServiceHandler = (*Service)(nil)
 
@@ -1466,4 +1508,3 @@ func bundleImageDigests(images []store.BundleImage) (refsJSON, digestsJSON []byt
 	}
 	return refsJSON, digestsJSON, nil
 }
-

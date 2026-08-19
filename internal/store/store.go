@@ -6,9 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
+
+	"github.com/ndzuki/release-manager/internal/redact"
 )
 
 // VerificationStatus is the outcome of an artifact trust verification.
@@ -234,11 +238,15 @@ type Operation struct {
 	EffectiveValuesDigest string          `json:"effective_values_digest,omitempty"`
 	Reason                string          `json:"reason,omitempty"`
 	Actor                 ActorContext    `json:"actor"`
+	LastError             string          `json:"last_error,omitempty"`
 	CreatedAt             time.Time       `json:"created_at"`
 	UpdatedAt             time.Time       `json:"updated_at"`
 	Deadline              *time.Time      `json:"deadline,omitempty"`
 	TerminalAt            *time.Time      `json:"terminal_at,omitempty"`
-	LastError             string          `json:"last_error,omitempty"`
+	// EffectStatus is the in-memory projection of the authoritative EMERGENCY
+	// effect (never persisted on the operations row; derived via
+	// ProjectEffectStatus from the joined emergency_intents row).
+	EffectStatus EmergencyEffectStatus `json:"-"`
 }
 
 // OperationCreationRequest contains the durable records and artifact links that
@@ -323,6 +331,7 @@ const (
 	EmergencyEffectUnknown    EmergencyEffectStatus = "UNKNOWN"
 	EmergencyEffectApplied    EmergencyEffectStatus = "APPLIED"
 	EmergencyEffectNotApplied EmergencyEffectStatus = "NOT_APPLIED"
+	EmergencyEffectNotStarted EmergencyEffectStatus = "NOT_STARTED"
 )
 
 // OperationTimelineEntryKind identifies sanitized Operation timeline payloads.
@@ -331,6 +340,9 @@ type OperationTimelineEntryKind string
 const (
 	TimelineEntryStateTransition         OperationTimelineEntryKind = "STATE_TRANSITION"
 	TimelineEntryEmergencyEffectResolved OperationTimelineEntryKind = "EMERGENCY_EFFECT_RESOLVED"
+	TimelineEntryACK                     OperationTimelineEntryKind = "ACK"
+	TimelineEntryRolloutProgress         OperationTimelineEntryKind = "ROLLOUT_PROGRESS"
+	TimelineEntryError                   OperationTimelineEntryKind = "ERROR"
 )
 
 // OperationTimelineEntry records one ordered, sanitized observation for an Operation.
@@ -350,6 +362,26 @@ type StateTransitionTimelineData struct {
 	FromState string `json:"from_state"`
 	ToState   string `json:"to_state"`
 	ErrorCode string `json:"error_code,omitempty"`
+}
+
+// AckTimelineData is the sanitized payload for an operator ACK_PERSISTED ack.
+type AckTimelineData struct {
+	RequestID string `json:"request_id,omitempty"`
+	AckStage  string `json:"ack_stage"`
+}
+
+// RolloutProgressTimelineData is the sanitized payload for a workload rollout progress report.
+type RolloutProgressTimelineData struct {
+	WorkloadRef string `json:"workload_ref"`
+	Ready       int32  `json:"ready"`
+	Desired     int32  `json:"desired"`
+}
+
+// ErrorTimelineData is the sanitized payload for a terminal operation error.
+type ErrorTimelineData struct {
+	RequestID    string `json:"request_id,omitempty"`
+	ErrorCode    string `json:"error_code"`
+	ErrorMessage string `json:"error_message"`
 }
 
 // EmergencyEffectTimelineData is the sanitized payload for a late effect resolution.
@@ -1178,6 +1210,11 @@ type EmergencyIntentStore interface {
 	GetActiveLocksForDefinition(ctx context.Context, definitionID string) ([]*EmergencyIntent, error)
 	ListPendingDeliveryByDefinition(ctx context.Context, definitionID string) ([]*EmergencyIntent, error)
 	UpdateDeliveryStatus(ctx context.Context, id, status string) error
+	// PersistAck atomically marks a delivered emergency command as persisted and
+	// appends an ACK timeline entry in the same transaction (TASK-077 AC-077-01).
+	// Returns (nil, nil) when the intent is already persisted so a replayed
+	// ACK_PERSISTED does not write a second entry (idempotent, AC-077-10).
+	PersistAck(ctx context.Context, id string) (*OperationTimelineEntry, error)
 	Finish(ctx context.Context, intentID, operationID string, expectedStateVersion int, status OperationStatus, effectStatus EmergencyEffectStatus, lastError string, beforeSnapshot, afterSnapshot json.RawMessage) (*Operation, error)
 	ResolveEmergencyEffect(ctx context.Context, command ResolveEmergencyEffectCommand) (*ResolveEmergencyEffectResult, error)
 	// HasUnresolvedForDefinition reports terminal EMERGENCY operations whose
@@ -1843,7 +1880,6 @@ type SessionStore interface {
 	Get(ctx context.Context, id string) (*Session, error)
 	Heartbeat(ctx context.Context, id string) error
 	UpdateStatus(ctx context.Context, id string, status SessionStatus) error
-	UpdateStatusReason(ctx context.Context, id string, status SessionStatus, reason SessionStatusReason) error
 	GetActiveByOperator(ctx context.Context, operatorID string) (*Session, error)
 	GetLatestByOperator(ctx context.Context, operatorID string) (*Session, error)
 	ListExpiredSuspect(ctx context.Context, suspectAfter time.Duration) ([]*Session, error)
@@ -1854,11 +1890,19 @@ type OutboxStore interface {
 	Create(ctx context.Context, e *OutboxEntry) error
 	Get(ctx context.Context, id string) (*OutboxEntry, error)
 	GetByCommandID(ctx context.Context, commandID string) (*OutboxEntry, error)
+	// GetByOperationID resolves the outbox row for a standard operation
+	// (used for rollout_progress ownership checks, AC-077-15).
+	GetByOperationID(ctx context.Context, operationID string) (*OutboxEntry, error)
 	GetPendingForOperator(ctx context.Context, operatorID string) (*OutboxEntry, error)
 	GetDeliveredNotAcked(ctx context.Context, operatorID string) ([]*OutboxEntry, error)
 	GetInflightForOperator(ctx context.Context, operatorID string) (*OutboxEntry, error)
 	GetNextSequence(ctx context.Context) (int64, error)
 	UpdateSequence(ctx context.Context, id string, sequence int64) error
+	// PersistAck atomically marks a delivered command as persisted and appends
+	// an ACK timeline entry in the same transaction (TASK-077 AC-077-01).
+	// Returns (nil, nil) when the command is already persisted so a replayed
+	// ACK_PERSISTED does not write a second entry (idempotent, AC-077-10).
+	PersistAck(ctx context.Context, id string) (*OperationTimelineEntry, error)
 	UpdateStatus(ctx context.Context, id string, status CommandStatus, resultJSON string) error
 	GetNextPending(ctx context.Context, operatorID string) (*OutboxEntry, error)
 }
@@ -2285,4 +2329,66 @@ type Store interface {
 	ConvergenceTasks() ConvergenceTaskStore
 	Authorization() AuthorizationStore
 	Close() error
+}
+
+// ErrorTimelineEntry builds a sanitized ERROR timeline entry for a terminal
+// failed/timeout operation. The error code is extracted from the stable code
+// envelope when present (falling back to operation_failed); the message is
+// redacted and truncated to the 500-rune summary bound (AC-077-03/12).
+func ErrorTimelineEntry(operationID string, stateVersion int, lastError string) (*OperationTimelineEntry, error) {
+	sanitized, _ := redact.Sanitize(lastError)
+	sanitized = redact.Truncate(sanitized, 500)
+	data, err := json.Marshal(ErrorTimelineData{
+		ErrorCode:    stableErrorCode(lastError),
+		ErrorMessage: sanitized,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode error timeline entry: %w", err)
+	}
+	return &OperationTimelineEntry{
+		OperationID: operationID, OperationStateVersion: stateVersion,
+		Kind: string(TimelineEntryError), Data: data,
+	}, nil
+}
+
+// stableErrorCode extracts the stable agent/observer error code from a
+// terminal last_error: a JSON {"code": "..."} envelope (agent result shape)
+// or a bare known code. Unknown payloads fall back to operation_failed so the
+// ERROR entry always carries a stable, non-volatile code (AC-077-03).
+func stableErrorCode(lastError string) string {
+	var envelope struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal([]byte(lastError), &envelope); err == nil && envelope.Code != "" {
+		return envelope.Code
+	}
+	trimmed := strings.TrimSpace(lastError)
+	for _, code := range []string{"helm_install_failed", "helm_upgrade_failed", "helm_rollback_failed", "rollout_timeout", "cancelled"} {
+		if trimmed == code || strings.Contains(lastError, `"`+code+`"`) {
+			return code
+		}
+	}
+	return "operation_failed"
+}
+
+// ProjectEffectStatus derives the authoritative effect_status projection for an
+// operation (AC-077-04/13). Non-EMERGENCY operations and EMERGENCY commands
+// that have not crossed the irrevocable delivery boundary (pending/queued/
+// undelivered) project NOT_STARTED; delivered/persisted intents project
+// UNKNOWN until a late result resolves the effect to APPLIED/NOT_APPLIED.
+func ProjectEffectStatus(operationType OperationType, deliveryStatus string, effectStatus EmergencyEffectStatus) EmergencyEffectStatus {
+	if operationType != OperationEmergency {
+		return EmergencyEffectNotStarted
+	}
+	switch deliveryStatus {
+	case "", "undelivered", "pending", "queued":
+		return EmergencyEffectNotStarted
+	case "delivered", "persisted":
+		if effectStatus == EmergencyEffectApplied || effectStatus == EmergencyEffectNotApplied {
+			return effectStatus
+		}
+		return EmergencyEffectUnknown
+	default:
+		return EmergencyEffectUnknown
+	}
 }

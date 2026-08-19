@@ -2,8 +2,9 @@ package orchestrator
 
 import (
 	"context"
-	"errors"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,19 +17,20 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/structpb"
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
-	"github.com/ndzuki/release-manager/internal/auth"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/audit"
+	"github.com/ndzuki/release-manager/internal/auth"
 	authctx "github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/authorization"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 	"github.com/ndzuki/release-manager/internal/trust"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 type streamRevokerStub struct {
@@ -64,7 +66,9 @@ func seedActorBinding(t *testing.T, st store.Store, customerID string) {
 // sqliteUOW extracts the operation creation UOW from a store returned by
 // setupService (concrete *sqlite.Store behind the store.Store interface).
 func sqliteUOW(st store.Store) store.OperationCreationUnitOfWork {
-	if provider, ok := st.(interface{ OperationCreationUnitOfWork() store.OperationCreationUnitOfWork }); ok {
+	if provider, ok := st.(interface {
+		OperationCreationUnitOfWork() store.OperationCreationUnitOfWork
+	}); ok {
 		return provider.OperationCreationUnitOfWork()
 	}
 	return nil
@@ -1924,4 +1928,202 @@ func TestCreateOperation_CoordinatorUnavailablePersistsDispatch(t *testing.T) {
 
 	_, err = st.Outbox().GetByCommandID(context.Background(), resp.Msg.OperationId+":artifact")
 	require.NoError(t, err, "preflight dispatch must be durably persisted")
+}
+
+// ── AC-077-04/13: effect_status projection matrix ──
+
+// emergencyProjectionOp creates an EMERGENCY operation with an intent in the
+// given delivery state and returns both rows.
+func emergencyProjectionOp(t *testing.T, st store.Store, id, definitionID, deliveryStatus string, effect store.EmergencyEffectStatus) (*store.Operation, *store.EmergencyIntent) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	intent := &store.EmergencyIntent{
+		ID: uuid.NewString(), ReleaseDefinitionID: definitionID, OperationID: id, CommandID: uuid.NewString(),
+		Action: store.EmergencySetReplicas, WorkloadKind: "DEPLOYMENT", WorkloadName: "api", WorkloadNamespace: "default", WorkloadUID: "uid-" + id,
+		Convergence: store.EmergencyRevertOnNextReconcile, DeliveryStatus: deliveryStatus,
+		EffectStatus: effect, CreatedAt: now, UpdatedAt: now,
+	}
+	op := &store.Operation{
+		ID: id, OperationType: store.OperationEmergency, Status: store.StatusPending,
+		ReleaseDefinitionID: definitionID, IdempotencyKey: id + "-key", RequestHash: id + "-hash",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	_, err := st.EmergencyIntents().CreateIfAvailable(ctx, store.EmergencyCreateCommand{
+		Operation: op, Intent: intent,
+		IdempotencyScope: "org-001:" + definitionID, IdempotencyKeyHash: id + "-hash",
+		RequestHash: id + "-hash", IdempotencyExpiresAt: now.Add(time.Hour),
+	})
+	require.NoError(t, err)
+	return op, intent
+}
+
+func TestGetOperation_EffectStatusProjectionMatrix(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	for _, defID := range []string{"def-002", "def-003", "def-004", "def-005", "def-006", "def-007"} {
+		require.NoError(t, st.Definitions().Create(context.Background(), &store.ReleaseDefinition{
+			ID: defID, Name: defID, CustomerID: "cust-001", ClusterID: "clus-001",
+			Namespace: "apps", ReleaseName: defID, Status: store.DefStatusActive,
+		}, nil))
+	}
+
+	// Non-EMERGENCY operation always projects NOT_STARTED (AC-077-04).
+	require.NoError(t, st.Operations().Create(context.Background(), &store.Operation{
+		ID: "op-standard-proj", OperationType: store.OperationInstall,
+		Status: store.StatusRunning, ReleaseDefinitionID: "def-001",
+		IdempotencyKey: "std-proj-key", RequestHash: "std-proj-hash", StateVersion: 1,
+	}))
+
+	// EMERGENCY matrix (AC-077-13): pending/queued → NOT_STARTED;
+	// delivered/persisted with UNKNOWN effect → UNKNOWN; resolved → APPLIED/NOT_APPLIED.
+	// One active EMERGENCY per definition (conflict rule).
+	opPending, _ := emergencyProjectionOp(t, st, "op-emo-pending", "def-002", "pending", store.EmergencyEffectUnknown)
+	opQueued, _ := emergencyProjectionOp(t, st, "op-emo-queued", "def-003", "queued", store.EmergencyEffectUnknown)
+	opDelivered, _ := emergencyProjectionOp(t, st, "op-emo-delivered", "def-004", "delivered", store.EmergencyEffectUnknown)
+	opPersisted, _ := emergencyProjectionOp(t, st, "op-emo-persisted", "def-005", "persisted", store.EmergencyEffectUnknown)
+	opResolvedApplied, _ := emergencyProjectionOp(t, st, "op-emo-applied", "def-006", "persisted", store.EmergencyEffectApplied)
+	opResolvedNotApplied, _ := emergencyProjectionOp(t, st, "op-emo-not-applied", "def-007", "persisted", store.EmergencyEffectNotApplied)
+
+	tests := []struct {
+		name     string
+		opID     string
+		expected orchestratorv1.EmergencyEffectStatus
+	}{
+		{"non-emergency", "op-standard-proj", orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_NOT_STARTED},
+		{"emergency pending", opPending.ID, orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_NOT_STARTED},
+		{"emergency queued", opQueued.ID, orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_NOT_STARTED},
+		{"emergency delivered unknown", opDelivered.ID, orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_UNKNOWN},
+		{"emergency persisted unknown", opPersisted.ID, orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_UNKNOWN},
+		{"emergency applied", opResolvedApplied.ID, orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_APPLIED},
+		{"emergency not applied", opResolvedNotApplied.ID, orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_NOT_APPLIED},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := svc.GetOperation(deployerCtx(), connect.NewRequest(&orchestratorv1.GetOperationRequest{
+				OperationId: tt.opID,
+			}))
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, resp.Msg.Operation.EffectStatus)
+		})
+	}
+}
+
+// AC-077-08 projection: after a late result resolves the effect, a subsequent
+// GetOperation must project the new value (existing ResolveEmergencyEffect path).
+func TestGetOperation_EffectStatusReflectsLateResolution(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	require.NoError(t, st.Definitions().Create(context.Background(), &store.ReleaseDefinition{
+		ID: "def-late-resolve", Name: "def-late-resolve", CustomerID: "cust-001", ClusterID: "clus-001",
+		Namespace: "apps", ReleaseName: "late-resolve", Status: store.DefStatusActive,
+	}, nil))
+
+	op, intent := emergencyProjectionOp(t, st, "op-emo-late-resolve", "def-late-resolve", "delivered", store.EmergencyEffectUnknown)
+	ctx := context.Background()
+	op, err := st.Operations().UpdateStatus(ctx, op.ID, store.StatusQueued, op.StateVersion, "")
+	require.NoError(t, err)
+	op, err = st.Operations().UpdateStatus(ctx, op.ID, store.StatusRunning, op.StateVersion, "")
+	require.NoError(t, err)
+	finished, err := st.EmergencyIntents().Finish(
+		ctx, intent.ID, op.ID, op.StateVersion, store.StatusFailed,
+		store.EmergencyEffectUnknown, "execution_error", nil, nil,
+	)
+	require.NoError(t, err)
+	_, err = st.EmergencyIntents().ResolveEmergencyEffect(ctx, store.ResolveEmergencyEffectCommand{
+		OperationID:          op.ID,
+		ExpectedStateVersion: finished.StateVersion,
+		EffectStatus:         store.EmergencyEffectApplied,
+		RequestID:            "late-resolve",
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.GetOperation(deployerCtx(), connect.NewRequest(&orchestratorv1.GetOperationRequest{
+		OperationId: op.ID,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, orchestratorv1.EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_APPLIED, resp.Msg.Operation.EffectStatus)
+}
+
+// ── AC-077-05/14: cursor_expired carries a decodable snapshot ──
+
+func TestCursorExpiredErrorSnapshotProto(t *testing.T) {
+	op := &store.Operation{
+		ID: "op-cursor-expired", OperationType: store.OperationInstall,
+		Status: store.StatusSucceeded, ReleaseDefinitionID: "def-001",
+		IdempotencyKey: "cursor-ik", RequestHash: "cursor-rh", StateVersion: 4,
+	}
+	snapshot := &store.TimelineSnapshot{
+		Operation: op, SnapshotSequence: 7, RetainedFromSequence: 3,
+	}
+	err := operationCursorExpiredError(snapshot)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeOutOfRange, connect.CodeOf(err))
+
+	// Header values are read from the error's Meta.
+	assert.Equal(t, "cursor_expired", connectErrMeta(err, "X-Reason-Code"))
+	assert.Equal(t, "3", connectErrMeta(err, "X-Retained-From-Sequence"))
+	encoded := connectErrMeta(err, "X-Snapshot-Proto")
+	require.NotEmpty(t, encoded)
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	require.NoError(t, err)
+	var decoded orchestratorv1.OperationSnapshot
+	require.NoError(t, protojson.Unmarshal(raw, &decoded))
+	assert.Equal(t, int64(7), decoded.SnapshotSequence)
+	assert.Equal(t, int64(3), decoded.RetainedFromSequence)
+	assert.Equal(t, "op-cursor-expired", decoded.Operation.GetOperationId())
+}
+
+func connectErrMeta(err error, key string) string {
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		return ""
+	}
+	return connectErr.Meta().Get(key)
+}
+
+// ── AC-077-06: heartbeat hard limit ≤10s (implementation value 5s) ──
+
+func TestOperationWatchHeartbeatWithinHardLimit(t *testing.T) {
+	assert.LessOrEqual(t, operationWatchHeartbeat, 10*time.Second)
+	assert.Equal(t, 5*time.Second, operationWatchHeartbeat)
+}
+
+// ── AC-077-01/02/03 serialization cases ──
+
+func TestToProtoTimelineEntryNewKinds(t *testing.T) {
+	now := time.Now().UTC()
+	ackData, err := json.Marshal(store.AckTimelineData{RequestID: "req-ack", AckStage: "persisted"})
+	require.NoError(t, err)
+	ack := toProtoTimelineEntry(&store.OperationTimelineEntry{
+		ID: "e-ack", OperationID: "op-1", Sequence: 1, Kind: string(store.TimelineEntryACK),
+		OperationStateVersion: 2, Data: ackData, CreatedAt: now,
+	})
+	assert.Equal(t, orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_ACK, ack.Kind)
+	assert.Equal(t, "req-ack", ack.RequestId)
+	assert.Equal(t, "persisted", ack.AckStage)
+
+	progressData, err := json.Marshal(store.RolloutProgressTimelineData{WorkloadRef: "deployments/app/default", Ready: 2, Desired: 3})
+	require.NoError(t, err)
+	progress := toProtoTimelineEntry(&store.OperationTimelineEntry{
+		ID: "e-progress", OperationID: "op-1", Sequence: 2, Kind: string(store.TimelineEntryRolloutProgress),
+		OperationStateVersion: 2, Data: progressData, CreatedAt: now,
+	})
+	assert.Equal(t, orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_ROLLOUT_PROGRESS, progress.Kind)
+	assert.Equal(t, "deployments/app/default", progress.WorkloadRef)
+	assert.Equal(t, int32(2), progress.Ready)
+	assert.Equal(t, int32(3), progress.Desired)
+
+	errorData, err := json.Marshal(store.ErrorTimelineData{RequestID: "req-err", ErrorCode: "helm_upgrade_failed", ErrorMessage: "sanitized"})
+	require.NoError(t, err)
+	errorEntry := toProtoTimelineEntry(&store.OperationTimelineEntry{
+		ID: "e-error", OperationID: "op-1", Sequence: 3, Kind: string(store.TimelineEntryError),
+		OperationStateVersion: 2, Data: errorData, CreatedAt: now,
+	})
+	assert.Equal(t, orchestratorv1.TimelineEntryKind_TIMELINE_ENTRY_KIND_ERROR, errorEntry.Kind)
+	assert.Equal(t, "req-err", errorEntry.RequestId)
+	assert.Equal(t, "helm_upgrade_failed", errorEntry.ErrorCode)
+	assert.Equal(t, "sanitized", errorEntry.ErrorMessage)
 }

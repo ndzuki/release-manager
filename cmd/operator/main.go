@@ -28,6 +28,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/operator/ca"
 	"github.com/ndzuki/release-manager/internal/operator/helmengine"
 	"github.com/ndzuki/release-manager/internal/operator/localstore"
+	operatorobserver "github.com/ndzuki/release-manager/internal/operator/observer"
 	"github.com/ndzuki/release-manager/internal/operator/secretmetadata"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
@@ -207,6 +208,8 @@ func (s *operatorSvc) registerAgent(logger *slog.Logger) error {
 		Secrets:           secretClient.CoreV1(),
 		EmergencyExecutor: operator.NewEmergencyCommandExecutor(kubernetesClient),
 		SecretLister:      secretLister,
+		Observer:          operatorobserver.New(secretClient),
+		KubeClient:        secretClient,
 		SessionID:         identity.SessionID,
 		OperatorID:        identity.OperatorID,
 		Logger:            logger,

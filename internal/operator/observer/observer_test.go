@@ -931,6 +931,120 @@ func TestRolloutError_NilReceiverIsSafe(t *testing.T) {
 	assert.Empty(t, err.Code())
 }
 
+// ── REQ-077 AC-077-02: progress counters per workload kind ──
+
+func TestObserver_ProgressCountersPerKind(t *testing.T) {
+	t.Run("deployment", func(t *testing.T) {
+		replicas := int32(4)
+		deployment := readyDeployment(4, "12")
+		deployment.UID = "deployment-uid"
+		deployment.Spec.Replicas = &replicas
+		deployment.Status.AvailableReplicas = 4
+		deployment.Status.UpdatedReplicas = 4
+
+		result, err := New(fake.NewSimpleClientset(deployment)).Observe(t.Context(), deploymentRef(), 4, time.Second)
+
+		require.NoError(t, err)
+		assert.True(t, result.Ready)
+		assert.Equal(t, int32(4), result.ReadyCount)
+		assert.Equal(t, int32(4), result.DesiredCount)
+	})
+
+	t.Run("statefulset", func(t *testing.T) {
+		result, err := New(fake.NewSimpleClientset(readyStatefulSet())).Observe(t.Context(), statefulSetRef(), 5, time.Second)
+
+		require.NoError(t, err)
+		assert.True(t, result.Ready)
+		assert.Equal(t, int32(3), result.ReadyCount)
+		assert.Equal(t, int32(3), result.DesiredCount)
+	})
+
+	t.Run("daemonset", func(t *testing.T) {
+		result, err := New(fake.NewSimpleClientset(readyDaemonSet())).Observe(t.Context(), daemonSetRef(), 8, time.Second)
+
+		require.NoError(t, err)
+		assert.True(t, result.Ready)
+		assert.Equal(t, int32(4), result.ReadyCount)
+		assert.Equal(t, int32(4), result.DesiredCount)
+	})
+
+	t.Run("counters lag behind readiness", func(t *testing.T) {
+		replicas := int32(3)
+		deployment := readyDeployment(2, "2")
+		deployment.UID = "deployment-uid"
+		deployment.Spec.Replicas = &replicas
+		deployment.Status.AvailableReplicas = 1
+		deployment.Status.UpdatedReplicas = 1
+
+		result, err := New(fake.NewSimpleClientset(deployment)).Observe(t.Context(), deploymentRef(), 2, 20*time.Millisecond)
+
+		assert.ErrorIs(t, err, ErrRolloutTimeout)
+		assert.False(t, result.Ready)
+		// Counters reflect the observed state even before readiness.
+		assert.Equal(t, int32(1), result.ReadyCount)
+		assert.Equal(t, int32(3), result.DesiredCount)
+	})
+}
+
+func TestObserver_ObserveWithProgress_ReportsInitialListAndWatchEvents(t *testing.T) {
+	replicas := int32(3)
+	pending := readyDeployment(1, "1")
+	pending.Generation = 2
+	pending.UID = "deployment-uid"
+	pending.Spec.Replicas = &replicas
+	pending.Status.AvailableReplicas = 1
+	pending.Status.UpdatedReplicas = 1
+	ready := readyDeployment(2, "2")
+	ready.UID = pending.UID
+	ready.Spec.Replicas = &replicas
+	ready.Status.AvailableReplicas = 3
+	ready.Status.UpdatedReplicas = 3
+
+	client := fake.NewSimpleClientset(pending)
+	watcher := watch.NewRaceFreeFake()
+	client.PrependWatchReactor("deployments", func(_ clienttesting.Action) (bool, watch.Interface, error) {
+		return true, watcher, nil
+	})
+
+	var mu sync.Mutex
+	var progress []WatchResult
+	resultCh := make(chan WatchResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := New(client).ObserveWithProgress(t.Context(), deploymentRef(), 2, time.Second, func(r WatchResult) {
+			mu.Lock()
+			progress = append(progress, r)
+			mu.Unlock()
+		})
+		resultCh <- result
+		errCh <- err
+	}()
+
+	require.Eventually(t, func() bool { return len(client.Actions()) >= 2 }, time.Second, time.Millisecond)
+	watcher.Modify(ready)
+
+	select {
+	case err := <-errCh:
+		result := <-resultCh
+		require.NoError(t, err)
+		assert.True(t, result.Ready)
+		assert.Equal(t, int32(3), result.ReadyCount)
+		assert.Equal(t, int32(3), result.DesiredCount)
+	case <-time.After(time.Second):
+		t.Fatal("observer did not complete after watch event")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, progress, 2, "initial list result plus the ready watch event")
+	assert.False(t, progress[0].Ready)
+	assert.Equal(t, int32(1), progress[0].ReadyCount)
+	assert.Equal(t, int32(3), progress[0].DesiredCount)
+	assert.True(t, progress[1].Ready)
+	assert.Equal(t, int32(3), progress[1].ReadyCount)
+	assert.Equal(t, int32(3), progress[1].DesiredCount)
+}
+
 func deploymentRef() ResourceRef {
 	return ResourceRef{GVR: DeploymentGVR, Namespace: "default", Name: "web"}
 }

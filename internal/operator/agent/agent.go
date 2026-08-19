@@ -7,10 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"google.golang.org/protobuf/proto"
 	"log/slog"
 	"strings"
 	"time"
-	"google.golang.org/protobuf/proto"
 
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
@@ -18,9 +18,11 @@ import (
 	"github.com/ndzuki/release-manager/internal/operator/helmengine"
 	operatork8s "github.com/ndzuki/release-manager/internal/operator/k8s"
 	"github.com/ndzuki/release-manager/internal/operator/localstore"
-	"google.golang.org/protobuf/encoding/protojson"
-	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+	"github.com/ndzuki/release-manager/internal/operator/observer"
 	"github.com/ndzuki/release-manager/internal/operator/secretmetadata"
+	"google.golang.org/protobuf/encoding/protojson"
+	"k8s.io/client-go/kubernetes"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
 const defaultInstallTimeout = 5 * time.Minute
@@ -52,6 +54,7 @@ type InventorySyncExecutor interface {
 type EmergencyExecutor interface {
 	Execute(context.Context, *operatorv1.EmergencyCommand) (string, error)
 }
+
 // Agent receives durable commands, executes Helm operations, and returns cached results on redelivery.
 type Agent struct {
 	client            StreamClient
@@ -62,6 +65,8 @@ type Agent struct {
 	secrets           corev1client.CoreV1Interface
 	emergencyExecutor EmergencyExecutor
 	secretLister      secretmetadata.Lister
+	observer          observer.RolloutObserver
+	kubeClient        kubernetes.Interface
 	sessionID         string
 	operatorID        string
 	logger            *slog.Logger
@@ -84,10 +89,15 @@ type Config struct {
 	Secrets           corev1client.CoreV1Interface
 	EmergencyExecutor EmergencyExecutor
 	SecretLister      secretmetadata.Lister
-	SessionID         string
-	OperatorID        string
-	Logger            *slog.Logger
-	InstallFlags      InstallFlags
+	// Observer watches workload rollouts after standard operations and
+	// reports ready/desired counters (REQ-077). Nil disables rollout
+	// progress reporting; when set, KubeClient must also be set.
+	Observer     observer.RolloutObserver
+	KubeClient   kubernetes.Interface
+	SessionID    string
+	OperatorID   string
+	Logger       *slog.Logger
+	InstallFlags InstallFlags
 }
 
 // Result is persisted locally and sent to the orchestrator for idempotent replay.
@@ -123,6 +133,8 @@ func New(cfg Config) (*Agent, error) {
 		return nil, errors.New("agent session_id is required")
 	case cfg.OperatorID == "":
 		return nil, errors.New("agent operator_id is required")
+	case cfg.Observer != nil && cfg.KubeClient == nil:
+		return nil, errors.New("agent observer requires kube client")
 	}
 
 	logger := cfg.Logger
@@ -142,6 +154,8 @@ func New(cfg Config) (*Agent, error) {
 		secrets:           cfg.Secrets,
 		emergencyExecutor: cfg.EmergencyExecutor,
 		secretLister:      cfg.SecretLister,
+		observer:          cfg.Observer,
+		kubeClient:        cfg.KubeClient,
 		sessionID:         cfg.SessionID,
 		operatorID:        cfg.OperatorID,
 		logger:            logger,
@@ -395,7 +409,8 @@ func (a *Agent) executeEntry(ctx context.Context, stream Stream, entry *localsto
 		return fmt.Errorf("mark command %q running: %w", entry.CommandID, err)
 	}
 
-	result := a.execute(ctx, &command)
+	reporter := newRolloutReporter(stream, command.GetOperationId(), a.logger)
+	result := a.execute(ctx, &command, reporter)
 	resultJSON, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("marshal command result %q: %w", entry.CommandID, err)
@@ -424,7 +439,7 @@ func (a *Agent) executeEntry(ctx context.Context, stream Stream, entry *localsto
 	return stream.Send(resultRequest(&command, result, resultJSON))
 }
 
-func (a *Agent) execute(ctx context.Context, command *operatorv1.Command) Result {
+func (a *Agent) execute(ctx context.Context, command *operatorv1.Command, reporter *rolloutReporter) Result {
 	result := Result{
 		OperationID:  command.GetOperationId(),
 		CommandID:    command.GetCommandId(),
@@ -434,11 +449,11 @@ func (a *Agent) execute(ctx context.Context, command *operatorv1.Command) Result
 
 	switch command.GetOperationType() {
 	case "INSTALL":
-		return a.executeInstall(ctx, command)
+		return a.executeInstall(ctx, command, reporter)
 	case "UPGRADE":
-		return a.executeUpgrade(ctx, command, result)
+		return a.executeUpgrade(ctx, command, result, reporter)
 	case "ROLLBACK":
-		return a.executeRollback(ctx, command)
+		return a.executeRollback(ctx, command, reporter)
 	case "INVENTORY_SYNC":
 		return a.executeInventorySync(ctx, command)
 	case commandtype.SecretMetadataList:
@@ -493,7 +508,7 @@ func (a *Agent) executeSecretMetadataList(ctx context.Context, command *operator
 	result.Secrets = secrets
 	return result
 }
-func (a *Agent) executeInstall(ctx context.Context, command *operatorv1.Command) Result {
+func (a *Agent) executeInstall(ctx context.Context, command *operatorv1.Command, reporter *rolloutReporter) Result {
 	result := Result{
 		OperationID:  command.GetOperationId(),
 		CommandID:    command.GetCommandId(),
@@ -525,6 +540,7 @@ func (a *Agent) executeInstall(ctx context.Context, command *operatorv1.Command)
 		timeout = time.Duration(command.GetTimeoutSeconds()) * time.Second
 	}
 
+	started := time.Now()
 	release, err := a.engine.Install(ctx, helmengine.InstallOptions{
 		Namespace:       command.GetNamespace(),
 		ReleaseName:     command.GetReleaseName(),
@@ -540,6 +556,10 @@ func (a *Agent) executeInstall(ctx context.Context, command *operatorv1.Command)
 		result.Message = err.Error()
 		return result
 	}
+
+	// REQ-077 Q2: observe with the command's remaining time budget, never
+	// beyond it; observation is best-effort enhancement.
+	a.observeRollout(ctx, command.GetOperationId(), release.Workloads, timeout-time.Since(started), reporter)
 
 	result.Status = "succeeded"
 	result.Release = release
@@ -567,44 +587,9 @@ func releaseSnapshot(release *helmengine.Release) *operatorv1.ReleaseSnapshot {
 	}
 }
 
-func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command, result Result) Result {
-	upgrade := command.GetUpgrade()
-	if command.GetPayloadVersion() != 2 || upgrade == nil {
-		result.Code = "unsupported_command_version"
-		result.Message = "upgrade payload_version 2 is required"
-		return result
-	}
-	valuesDigest := sha256Hex(upgrade.GetEffectiveValuesJson())
-	if valuesDigest != strings.TrimPrefix(upgrade.GetEffectiveValuesDigest(), "sha256:") {
-		result.Code = "digest_mismatch"
-		result.Message = "effective values digest mismatch"
-		return result
-	}
-	valuesMap := map[string]interface{}{}
-	if err := json.Unmarshal(upgrade.GetEffectiveValuesJson(), &valuesMap); err != nil {
-		result.Code = "invalid_command"
-		result.Message = "effective values must be canonical JSON"
-		return result
-	}
-	fromRelease, statusErr := a.engine.Status(ctx, helmengine.StatusOptions{
-		Namespace:   upgrade.GetNamespace(),
-		ReleaseName: upgrade.GetReleaseName(),
-	})
-	if statusErr != nil {
-		result.Code = upgradeErrorCode(statusErr)
-		result.Message = upgradeErrorMessage(result.Code)
-		return result
-	}
-	if upgrade.GetExpectedRevision() > 0 && uint64(fromRelease.Revision) != upgrade.GetExpectedRevision() { //nolint:gosec // Helm revisions are positive SDK ints.
-		result.Code = "revision_conflict"
-		result.Message = upgradeErrorMessage(result.Code)
-		return result
-	}
-
-	secretDigest, err := operatork8s.Resolve(ctx, a.secrets, upgrade.GetNamespace(), upgrade.GetSecretRefs(), valuesMap)
-	if err != nil {
-		result.Code = upgradeErrorCode(err)
-		result.Message = upgradeErrorMessage(result.Code)
+func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command, result Result, reporter *rolloutReporter) Result {
+	upgrade, valuesMap, fromRelease, secretDigest, ok := a.resolveUpgradeInputs(ctx, command, &result)
+	if !ok {
 		return result
 	}
 
@@ -612,6 +597,7 @@ func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command,
 	if upgrade.GetTimeout() != nil {
 		timeout = upgrade.GetTimeout().AsDuration()
 	}
+	started := time.Now()
 
 	current, err := a.engine.Status(ctx, helmengine.StatusOptions{
 		Namespace:   command.GetNamespace(),
@@ -627,6 +613,7 @@ func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command,
 		result.Message = fmt.Sprintf("expected current revision %d, got %d", expected, current.Revision)
 		return result
 	}
+
 	release, err := a.engine.Upgrade(ctx, helmengine.UpgradeOptions{
 		Namespace:             upgrade.GetNamespace(),
 		ReleaseName:           upgrade.GetReleaseName(),
@@ -680,7 +667,55 @@ func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command,
 	result.Release = release
 	result.InventorySync = true
 	result.ResourceSummary.ManifestDigest = release.ManifestDigest
+	// REQ-077 Q2: observe with the command's remaining time budget.
+	a.observeRollout(ctx, command.GetOperationId(), release.Workloads, timeout-time.Since(started), reporter)
 	return result
+}
+
+// resolveUpgradeInputs validates the upgrade command and resolves the inputs
+// shared by the execution path: effective values (digest + JSON), the current
+// release (expected revision check), and the secret snapshot. Failures write
+// the result code/message and report ok=false.
+func (a *Agent) resolveUpgradeInputs(ctx context.Context, command *operatorv1.Command, result *Result) (upgrade *operatorv1.UpgradeCommand, valuesMap map[string]interface{}, fromRelease *helmengine.Release, secretDigest string, ok bool) {
+	upgrade = command.GetUpgrade()
+	if command.GetPayloadVersion() != 2 || upgrade == nil {
+		result.Code = "unsupported_command_version"
+		result.Message = "upgrade payload_version 2 is required"
+		return nil, nil, nil, "", false
+	}
+	valuesDigest := sha256Hex(upgrade.GetEffectiveValuesJson())
+	if valuesDigest != strings.TrimPrefix(upgrade.GetEffectiveValuesDigest(), "sha256:") {
+		result.Code = "digest_mismatch"
+		result.Message = "effective values digest mismatch"
+		return nil, nil, nil, "", false
+	}
+	valuesMap = map[string]interface{}{}
+	if err := json.Unmarshal(upgrade.GetEffectiveValuesJson(), &valuesMap); err != nil {
+		result.Code = "invalid_command"
+		result.Message = "effective values must be canonical JSON"
+		return nil, nil, nil, "", false
+	}
+	fromRelease, statusErr := a.engine.Status(ctx, helmengine.StatusOptions{
+		Namespace:   upgrade.GetNamespace(),
+		ReleaseName: upgrade.GetReleaseName(),
+	})
+	if statusErr != nil {
+		result.Code = upgradeErrorCode(statusErr)
+		result.Message = upgradeErrorMessage(result.Code)
+		return nil, nil, nil, "", false
+	}
+	if upgrade.GetExpectedRevision() > 0 && uint64(fromRelease.Revision) != upgrade.GetExpectedRevision() { //nolint:gosec // Helm revisions are positive SDK ints.
+		result.Code = "revision_conflict"
+		result.Message = upgradeErrorMessage(result.Code)
+		return nil, nil, nil, "", false
+	}
+	secretDigest, err := operatork8s.Resolve(ctx, a.secrets, upgrade.GetNamespace(), upgrade.GetSecretRefs(), valuesMap)
+	if err != nil {
+		result.Code = upgradeErrorCode(err)
+		result.Message = upgradeErrorMessage(result.Code)
+		return nil, nil, nil, "", false
+	}
+	return upgrade, valuesMap, fromRelease, secretDigest, true
 }
 
 func manifestDigest(release *helmengine.Release) string {
@@ -695,7 +730,7 @@ func sha256Hex(data []byte) string {
 	return fmt.Sprintf("%x", digest)
 }
 
-func (a *Agent) executeRollback(ctx context.Context, command *operatorv1.Command) Result {
+func (a *Agent) executeRollback(ctx context.Context, command *operatorv1.Command, reporter *rolloutReporter) Result {
 	result := Result{
 		OperationID:  command.GetOperationId(),
 		CommandID:    command.GetCommandId(),
@@ -739,6 +774,7 @@ func (a *Agent) executeRollback(ctx context.Context, command *operatorv1.Command
 	if command.GetTimeoutSeconds() > 0 {
 		timeout = time.Duration(command.GetTimeoutSeconds()) * time.Second
 	}
+	started := time.Now()
 	release, err := a.engine.Rollback(ctx, helmengine.RollbackOptions{
 		Namespace: command.GetNamespace(), ReleaseName: command.GetReleaseName(),
 		TargetRevision: int(command.GetTargetRevision()), Timeout: timeout,
@@ -752,6 +788,8 @@ func (a *Agent) executeRollback(ctx context.Context, command *operatorv1.Command
 	result.Release = release
 	result.InventorySync = true
 	result.ResourceSummary.ManifestDigest = release.ManifestDigest
+	// REQ-077 Q2: observe with the command's remaining time budget.
+	a.observeRollout(ctx, command.GetOperationId(), release.Workloads, timeout-time.Since(started), reporter)
 	return result
 }
 
@@ -944,6 +982,7 @@ func rollbackErrorCode(err error) string {
 		return "helm_rollback_failed"
 	}
 }
+
 // ConnectClient adapts the generated Connect client to StreamClient.
 type ConnectClient struct {
 	Client operatorv1connect.OperatorServiceClient

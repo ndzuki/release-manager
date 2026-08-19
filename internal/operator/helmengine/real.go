@@ -530,6 +530,7 @@ func toEngineRelease(rel *release.Release) *Release {
 		Chart:          chartRef,
 		ManifestDigest: digestString(rel.Manifest),
 		Notes:          notes,
+		Workloads:      ExtractWorkloads(rel.Manifest, rel.Namespace),
 	}
 }
 

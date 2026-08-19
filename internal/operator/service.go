@@ -130,6 +130,7 @@ func (s *Service) DispatchEmergency(ctx context.Context, operatorID string, comm
 		return ctx.Err()
 	}
 }
+
 // Enroll validates a single-use enrollment token, creates an operator record,
 // and establishes a new session for the operator agent.
 //
@@ -523,8 +524,15 @@ func (s *Service) CommandStream(
 				// but only ACK_PERSISTED releases the orchestrator from
 				// re-delivery responsibility.
 				if ack.GetAckType() == operatorv1.AckType_ACK_TYPE_PERSISTED {
-					if err := s.store.Outbox().UpdateStatus(ctx, ack.GetOutboxId(), store.CommandPersisted, ""); err != nil {
-						s.logger.Warn("failed to mark command persisted", "error", err)
+					if entry, err := s.store.Outbox().PersistAck(ctx, ack.GetOutboxId()); err != nil {
+						s.logger.Warn("failed to persist command ack", "error", err)
+					} else if entry != nil {
+						s.logger.Debug("command ack persisted with timeline entry",
+							"outbox_id", ack.GetOutboxId(),
+							"sequence", entry.Sequence,
+						)
+					} else {
+						s.logger.Debug("command ack replay, already persisted", "outbox_id", ack.GetOutboxId())
 					}
 				}
 
@@ -532,8 +540,15 @@ func (s *Service) CommandStream(
 				ack := req.GetEmergencyAck()
 				if ack.GetAckType() == operatorv1.AckType_ACK_TYPE_PERSISTED {
 					if intent, getErr := s.store.EmergencyIntents().GetByCommandID(ctx, ack.GetEmergencyCommandId()); getErr == nil {
-						if updateErr := s.store.EmergencyIntents().UpdateDeliveryStatus(ctx, intent.ID, "persisted"); updateErr != nil {
-							s.logger.Warn("failed to mark emergency persisted", "command_id", ack.GetEmergencyCommandId(), "error", updateErr)
+						if entry, ackErr := s.store.EmergencyIntents().PersistAck(ctx, intent.ID); ackErr != nil {
+							s.logger.Warn("failed to persist emergency ack", "command_id", ack.GetEmergencyCommandId(), "error", ackErr)
+						} else if entry != nil {
+							s.logger.Debug("emergency ack persisted with timeline entry",
+								"command_id", ack.GetEmergencyCommandId(),
+								"sequence", entry.Sequence,
+							)
+						} else {
+							s.logger.Debug("emergency ack replay, already persisted", "command_id", ack.GetEmergencyCommandId())
 						}
 						if op, opErr := s.store.Operations().Get(ctx, intent.OperationID); opErr == nil && op.Status == store.StatusQueued {
 							if _, updateErr := s.store.Operations().UpdateStatus(ctx, op.ID, store.StatusRunning, op.StateVersion, ""); updateErr != nil {
@@ -606,6 +621,47 @@ func (s *Service) CommandStream(
 				}
 				if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, status, string(payload)); err != nil {
 					return fmt.Errorf("persist typed command result outbox: %w", err)
+				}
+
+			case req.GetRolloutProgress() != nil:
+				// AC-077-02 service side: validate, verify ownership, drop
+				// reports for terminal operations; never interrupt the stream.
+				progress := req.GetRolloutProgress()
+				if err := validateRolloutProgress(progress); err != nil {
+					s.logger.Debug("dropping invalid rollout progress", "operation_id", progress.GetOperationId(), "error", err)
+					continue
+				}
+				// AC-077-15: the operation must belong to this operator session.
+				outboxEntry, err := s.store.Outbox().GetByOperationID(ctx, progress.GetOperationId())
+				if err != nil || outboxEntry.OperatorID != operatorID {
+					s.logger.Warn("dropping rollout progress for unknown or foreign operation",
+						"operation_id", progress.GetOperationId(), "operator_id", operatorID, "error", err)
+					continue
+				}
+				// AC-077-17: terminal operations never accept progress reports.
+				op, err := s.store.Operations().Get(ctx, progress.GetOperationId())
+				if err != nil {
+					s.logger.Debug("dropping rollout progress: operation lookup failed",
+						"operation_id", progress.GetOperationId(), "error", err)
+					continue
+				}
+				if op.Status.IsTerminal() {
+					s.logger.Debug("dropping rollout progress for terminal operation",
+						"operation_id", progress.GetOperationId(), "status", op.Status)
+					continue
+				}
+				data, err := json.Marshal(store.RolloutProgressTimelineData{
+					WorkloadRef: progress.GetWorkloadRef(), Ready: progress.GetReady(), Desired: progress.GetDesired(),
+				})
+				if err != nil {
+					s.logger.Warn("failed to encode rollout progress", "operation_id", progress.GetOperationId(), "error", err)
+					continue
+				}
+				if _, err := s.store.Timeline().Append(ctx, &store.OperationTimelineEntry{
+					OperationID: progress.GetOperationId(), Kind: string(store.TimelineEntryRolloutProgress), Data: data,
+				}); err != nil {
+					s.logger.Warn("failed to persist rollout progress",
+						"operation_id", progress.GetOperationId(), "error", err)
 				}
 
 			case req.GetResyncResponse() != nil:
@@ -1138,6 +1194,38 @@ func parseSANIdentity(cert *x509.Certificate) (clusterID, customerID string, ok 
 		return strings.Join(parts[:len(parts)-1], "."), parts[len(parts)-1], true
 	}
 	return "", "", false
+}
+
+// rolloutGVRResources is the four-kind workload whitelist accepted in
+// rollout_progress workload_refs (REQ-077; matches observer evaluators).
+var rolloutGVRResources = map[string]struct{}{
+	"deployments": {}, "statefulsets": {}, "daemonsets": {}, "jobs": {},
+}
+
+// validateRolloutProgress enforces the AC-077-02 field contract:
+// workload_ref is "<gvr.resource>/<namespace>/<name>" with a whitelisted GVR,
+// and 0 <= ready <= desired.
+func validateRolloutProgress(progress *operatorv1.RolloutProgress) error {
+	if progress == nil {
+		return errors.New("rollout progress is nil")
+	}
+	if progress.GetOperationId() == "" {
+		return errors.New("operation_id is required")
+	}
+	if progress.GetReady() < 0 || progress.GetDesired() < 0 || progress.GetReady() > progress.GetDesired() {
+		return errors.New("ready must satisfy 0 <= ready <= desired")
+	}
+	parts := strings.Split(progress.GetWorkloadRef(), "/")
+	if len(parts) != 3 {
+		return errors.New("workload_ref must be <gvr.resource>/<namespace>/<name>")
+	}
+	if _, ok := rolloutGVRResources[parts[0]]; !ok {
+		return fmt.Errorf("unsupported workload GVR %q", parts[0])
+	}
+	if parts[1] == "" || parts[2] == "" {
+		return errors.New("workload_ref namespace and name are required")
+	}
+	return nil
 }
 
 // Compile-time check: Service implements the Connect handler interface.

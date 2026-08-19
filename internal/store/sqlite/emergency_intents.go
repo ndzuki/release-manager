@@ -355,6 +355,15 @@ func (s *emergencyIntentStore) UpdateDeliveryStatus(ctx context.Context, id, sta
 	return nil
 }
 
+func (s *emergencyIntentStore) PersistAck(ctx context.Context, id string) (*store.OperationTimelineEntry, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin emergency ack: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after commit
+	return persistAckTx(ctx, tx, "emergency_intents", "delivery_status", "last_delivery_at", "emergency", id, time.Now().UTC().Format(time.RFC3339Nano))
+}
+
 func (s *emergencyIntentStore) Finish(
 	ctx context.Context,
 	intentID, operationID string,
@@ -452,6 +461,16 @@ func (s *emergencyIntentStore) Finish(
 		Kind: string(store.TimelineEntryStateTransition), Data: timeline, CreatedAt: updated.UpdatedAt,
 	}); err != nil {
 		return nil, err
+	}
+	if (updated.Status == store.StatusFailed || updated.Status == store.StatusTimeout) && lastError != "" {
+		errorEntry, err := store.ErrorTimelineEntry(updated.ID, updated.StateVersion, lastError)
+		if err != nil {
+			return nil, err
+		}
+		errorEntry.CreatedAt = updated.UpdatedAt
+		if _, err := appendTimelineEntry(ctx, tx, errorEntry); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit finish emergency: %w", err)

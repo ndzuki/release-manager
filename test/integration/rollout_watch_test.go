@@ -1556,6 +1556,87 @@ func TestRolloutWatchReadyWorkloads(t *testing.T) {
 	}
 }
 
+// REQ-077 AC-077-02: ObserveWithProgress reports ready/desired counters on
+// the initial list result and after every evaluation round (here: the watch
+// event that makes the deployment ready).
+func TestRolloutWatchObserveWithProgressCounts(t *testing.T) {
+	fx := setupRolloutFixture(t, t.Name())
+	deployment := fx.createDeployment(t, "deployment")
+	ref := fx.deploymentRef(deployment.Name)
+	expectedGeneration := deployment.Generation
+
+	client := fx.observerClient(t)
+	var mu sync.Mutex
+	var progress []observer.WatchResult
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	outcomes := make(chan observeOutcome, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		result, err := observer.New(client).ObserveWithProgress(
+			ctx,
+			ref,
+			expectedGeneration,
+			defaultSceneTimeout,
+			func(r observer.WatchResult) {
+				mu.Lock()
+				progress = append(progress, r)
+				mu.Unlock()
+			},
+		)
+		outcomes <- observeOutcome{result: result, err: err}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Errorf("ObserveWithProgress goroutine did not exit during cleanup")
+		}
+	})
+	call := observeCall{outcome: outcomes, done: done, cancel: cancel}
+
+	// The initial list reports the not-ready state with 0/1 counters before
+	// any watch event arrives.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(progress) >= 1
+	}, 5*time.Second, 10*time.Millisecond)
+
+	_, err := updateDeploymentStatus(t, fx.adminClient, fx.namespace, deployment.Name, func(d *appsv1.Deployment) {
+		d.Status.ObservedGeneration = expectedGeneration
+		d.Status.Replicas = 1
+		d.Status.ReadyReplicas = 1
+		d.Status.UpdatedReplicas = 1
+		d.Status.AvailableReplicas = 1
+		d.Status.UnavailableReplicas = 0
+		d.Status.Conditions = []appsv1.DeploymentCondition{
+			{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
+		}
+	})
+	require.NoError(t, err)
+
+	outcome := awaitObserve(t, call, defaultSceneTimeout)
+	require.NoError(t, outcome.err)
+	assert.True(t, outcome.result.Ready)
+	assert.Equal(t, int32(1), outcome.result.ReadyCount)
+	assert.Equal(t, int32(1), outcome.result.DesiredCount)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.GreaterOrEqual(t, len(progress), 2, "initial list result plus the ready evaluation")
+	assert.False(t, progress[0].Ready)
+	assert.Equal(t, int32(0), progress[0].ReadyCount)
+	assert.Equal(t, int32(1), progress[0].DesiredCount)
+	last := progress[len(progress)-1]
+	assert.True(t, last.Ready)
+	assert.Equal(t, int32(1), last.ReadyCount)
+	assert.Equal(t, int32(1), last.DesiredCount)
+	fx.assertClean(t)
+}
+
 func TestRolloutWatchJobCompletesAfterWatch(t *testing.T) {
 	fx := setupRolloutFixture(t, t.Name())
 	job := fx.createJob(t, "job")

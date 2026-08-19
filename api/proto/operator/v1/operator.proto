@@ -35,7 +35,16 @@ message CommandStreamRequest {
     EmergencyAck emergency_ack = 6;
     EmergencyResult emergency_result = 7;
     CommandResult command_result = 8;  // typed terminal result for payload v2+
+    RolloutProgress rollout_progress = 9;  // periodic workload rollout progress (TASK-077)
   }
+}
+
+// RolloutProgress reports observed workload readiness during a standard operation.
+message RolloutProgress {
+  string operation_id = 1;
+  string workload_ref = 2;  // "<gvr.resource>/<namespace>/<name>", e.g. "deployments/app/default"
+  int32 ready = 3;
+  int32 desired = 4;
 }
 
 // Hello is sent by the operator to establish a session after enrollment.
