@@ -417,4 +417,87 @@ describe('operation pages', () => {
     await vi.waitFor(() => expect(getOperation).toHaveBeenCalled());
     await vi.waitFor(() => expect(timelineStore.operation?.stateVersion).toBe(2n));
   });
+
+  it('AC-02: a terminal operation disables the cancel button with the completion tooltip', async () => {
+    const clients: TestClients = {
+      operations: {
+        watchOperation: vi.fn().mockResolvedValue((async function* () {
+          yield create(WatchOperationResponseSchema, {
+            payload: {
+              case: 'snapshot',
+              value: create(OperationSnapshotSchema, {
+                operation: create(OperationSchema, {
+                  operationId: 'op-terminal',
+                  operationType: 'INSTALL',
+                  state: OperationStatus.SUCCEEDED,
+                }),
+                snapshotSequence: 1n,
+                retainedFromSequence: 1n,
+              }),
+            },
+          });
+          await new Promise<void>(() => undefined);
+        })()),
+      } as unknown as Client<typeof OrchestratorService>,
+      bundles: emptyOptionsClients().bundles,
+    };
+    setOperationClientForTest(clients.operations, clients.bundles);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    detailRoute(router);
+    await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-terminal');
+    await router.isReady();
+    const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
+    await vi.waitFor(() => expect(wrapper.text()).toContain('succeeded'));
+
+    const button = wrapper.findAll('button').find((b) => b.text() === '取消操作');
+    expect(button?.attributes('disabled')).toBeDefined();
+    expect(button?.attributes('title')).toBe('操作已完成，无法取消');
+  });
+
+  it('AC-27: the cancel entry stays usable while the stream is disconnected', async () => {
+    const clients: TestClients = {
+      operations: {
+        // Deliberately finite stream: the store must fall back to degraded
+        // mode (disconnected) instead of staying connected (AC-057-05).
+        watchOperation: vi.fn().mockResolvedValue((async function* () {
+          yield create(WatchOperationResponseSchema, {
+            payload: {
+              case: 'snapshot',
+              value: create(OperationSnapshotSchema, {
+                operation: create(OperationSchema, {
+                  operationId: 'op-degraded',
+                  operationType: 'INSTALL',
+                  state: OperationStatus.RUNNING,
+                  stateVersion: 3n,
+                }),
+                snapshotSequence: 1n,
+                retainedFromSequence: 1n,
+              }),
+            },
+          });
+        })()),
+      } as unknown as Client<typeof OrchestratorService>,
+      bundles: emptyOptionsClients().bundles,
+    };
+    setOperationClientForTest(clients.operations, clients.bundles);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const timelineStore = useOperationTimelineStore(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    detailRoute(router);
+    await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-degraded');
+    await router.isReady();
+    const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
+    await vi.waitFor(() => expect(timelineStore.streamStatus).toBe('disconnected'));
+
+    // Banner shown, data retained, cancel entry still rendered and enabled.
+    expect(wrapper.text()).toContain('实时更新已断开，正在重连…');
+    expect(timelineStore.operation?.stateVersion).toBe(3n);
+    const button = wrapper.findAll('button').find((b) => b.text() === '取消操作');
+    expect(button).toBeDefined();
+    expect(button?.attributes('disabled')).toBeUndefined();
+    wrapper.unmount();
+  });
 });

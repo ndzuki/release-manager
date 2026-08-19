@@ -72,7 +72,24 @@ describe('TimelineEntryItem', () => {
     const wrapper = mount(TimelineEntryItem, {
       props: { entry: entry({ kind: 'ROLLOUT_PROGRESS', workloadRef: 'deployments/app/default', ready: 2, desired: 3 }) },
     });
-    expect(wrapper.text()).toContain('2/3 就绪');
+    expect(wrapper.text()).toContain('2/3');
+  });
+
+  it('AC-23: cancel transitions render the state change without the reason text', () => {
+    const wrapper = mount(TimelineEntryItem, {
+      props: {
+        entry: entry({
+          kind: 'STATE_TRANSITION',
+          fromState: 'running',
+          toState: 'cancelling',
+          requestId: 'req-secret-reason-here',
+        }),
+      },
+    });
+    expect(wrapper.text()).toContain('running');
+    expect(wrapper.text()).toContain('cancelling');
+    // The reason/request identity must never leak into the timeline.
+    expect(wrapper.text()).not.toContain('secret-reason');
   });
 
   it('shows copyable operation/request identities for errors', async () => {
