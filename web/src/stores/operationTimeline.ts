@@ -10,7 +10,7 @@ import { OperationSnapshotSchema, TimelineEntryKind } from '@/gen/orchestrator/v
 import { cancelOperation, getOperation, mapOperationError, watchOperation } from '@/connect/operation-api';
 import type { OperationAPIError } from '@/connect/operation-api';
 import { useAuthStore } from '@/stores/auth';
-import type { Operation, OperationSnapshot, TimelineEntry } from '@/types/operation';
+import type { EffectStatus, Operation, OperationSnapshot, OperationState, TimelineEntry } from '@/types/operation';
 import { mapOperationSnapshot } from '@/types/operation';
 
 export type StreamStatus = 'connecting' | 'connected' | 'disconnected';
@@ -51,6 +51,25 @@ export const RECONNECT_MAX_MS = 30_000;
 export const RECONNECT_JITTER = 0.2;
 export const REASON_MIN_CHARS = 1;
 export const REASON_MAX_CHARS = 500;
+
+const EFFECT_STATES: Record<string, true> = {
+  UNKNOWN: true,
+  APPLIED: true,
+  NOT_APPLIED: true,
+  NOT_STARTED: true,
+};
+
+const OPERATION_STATES: Record<string, true> = {
+  pending: true,
+  preflight: true,
+  queued: true,
+  running: true,
+  cancelling: true,
+  succeeded: true,
+  failed: true,
+  cancelled: true,
+  timeout: true,
+};
 
 const TERMINAL_STATES: Record<string, true> = {
   succeeded: true,
@@ -308,7 +327,35 @@ export const useOperationTimelineStore = defineStore('operationTimeline', () => 
     }
     if (kind === 'EMERGENCY_EFFECT_RESOLVED') {
       emergencyEffectStatus.value = 'resolved';
+      // The resolved entry also carries the authoritative effect outcome:
+      // merge it into the summary (monotonic only) so the header shows the
+      // confirmed effect instead of the stale UNKNOWN (advisory 2026-08-19).
+      if (entry.effectTo && operation.value) {
+        const nextVersion = entry.operationStateVersion;
+        if (EFFECT_STATES[entry.effectTo] === true && nextVersion > operation.value.stateVersion) {
+          operation.value = {
+            ...operation.value,
+            effectStatus: entry.effectTo as EffectStatus,
+            stateVersion: nextVersion,
+          };
+        }
+      }
     } else {
+      // STATE_TRANSITION carries the authoritative next state: merge it into
+      // the operation summary (monotonic only) so the header, canCancel and
+      // the CAS expectedStateVersion track the live stream instead of the
+      // first snapshot (advisory 2026-08-19). Out-of-order entries never
+      // regress stateVersion (AC-057-01).
+      if (kind === 'STATE_TRANSITION' && entry.toState && operation.value) {
+        const nextVersion = entry.operationStateVersion;
+        if (OPERATION_STATES[entry.toState] === true && nextVersion > operation.value.stateVersion) {
+          operation.value = {
+            ...operation.value,
+            state: entry.toState as OperationState,
+            stateVersion: nextVersion,
+          };
+        }
+      }
       evaluateEmergencyEffect(operation.value);
     }
   }
@@ -410,6 +457,12 @@ export const useOperationTimelineStore = defineStore('operationTimeline', () => 
           default:
             break;
         }
+      }
+      // Normal stream termination (server EOF): never strand the store in
+      // 'connected' — fall back to degraded mode with 5s poll + bounded
+      // reconnect, keeping the last authoritative state (AC-057-05/18/29).
+      if (capturedScope === scope && operationId.value === nextOperationId && !controller.signal.aborted) {
+        enterDisconnected();
       }
     } catch (error) {
       if (capturedScope !== scope || operationId.value !== nextOperationId || controller.signal.aborted) return;
@@ -594,6 +647,12 @@ export const useOperationTimelineStore = defineStore('operationTimeline', () => 
       cancelLoading.value = false;
       cancelError.value = { code: mapped.code, message: mapped.message };
       if (mapped.code === 'optimistic_lock_conflict' || mapped.code === 'cancel_not_allowed') {
+        // Business rejection: the request content changed (refreshed
+        // stateVersion), so the previous key must not be reused — the
+        // backend hashes expected_state_version into the idempotency record
+        // and would return a conflict for the same key with a new hash.
+        // Only transient/network retries reuse the key (AC-057-06).
+        activeCancelIdempotencyKey.value = null;
         await refresh();
       }
       if (mapped.code === 'permission_denied') {

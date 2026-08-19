@@ -63,6 +63,16 @@ function entry(operationId: string, sequence: bigint, overrides: Record<string, 
 function streamOf(...messages: WatchOperationResponse[]): AsyncIterable<WatchOperationResponse> {
   return (async function* () {
     for (const message of messages) yield message;
+    // Real server streams stay open until the consumer aborts: keep the
+    // generator pending so tests exercise the connected state. EOF tests
+    // use eofStreamOf with a deliberately finite stream instead.
+    await new Promise<void>(() => {});
+  })();
+}
+
+function eofStreamOf(...messages: WatchOperationResponse[]): AsyncIterable<WatchOperationResponse> {
+  return (async function* () {
+    for (const message of messages) yield message;
   })();
 }
 
@@ -665,5 +675,156 @@ describe('operationTimeline store', () => {
     await flush();
     expect(store.entries).toHaveLength(0);
     expect(store.operation?.stateVersion).toBe(9n);
+  });
+
+  it('live: STATE_TRANSITION merges the authoritative state into the operation summary', async () => {
+    const store = setupStore();
+    mockedWatch.mockResolvedValue(streamOf(
+      snapshot('op-1', 1n, 10n),
+      entry('op-1', 11n, { operationStateVersion: 2n, kind: TimelineEntryKind.STATE_TRANSITION, toState: 'cancelling' }),
+    ));
+
+    await store.load('op-1');
+    await flush();
+
+    expect(store.operation?.state).toBe('cancelling');
+    expect(store.operation?.stateVersion).toBe(2n);
+    // cancelling is not cancellable: the entry disappears right after merge.
+    expect(store.canCancel).toBe(false);
+  });
+
+  it('AC-01: out-of-order STATE_TRANSITION never regresses the summary', async () => {
+    const store = setupStore();
+    mockedWatch.mockResolvedValue(streamOf(
+      snapshot('op-1', 1n, 10n),
+      entry('op-1', 11n, { operationStateVersion: 5n, kind: TimelineEntryKind.STATE_TRANSITION, toState: 'cancelled' }),
+      entry('op-1', 12n, { operationStateVersion: 3n, kind: TimelineEntryKind.STATE_TRANSITION, toState: 'running' }),
+    ));
+
+    await store.load('op-1');
+    await flush();
+
+    expect(store.operation?.state).toBe('cancelled');
+    expect(store.operation?.stateVersion).toBe(5n);
+    expect(store.latestSequence).toBe(12n);
+  });
+
+  it('AC-06: a business rejection drops the idempotency key so the next submit is a new intent', async () => {
+    const store = setupStore();
+    mockedWatch.mockResolvedValue(streamOf(snapshot('op-1', 1n, 3n)));
+    mockedCancel.mockRejectedValueOnce(new ConnectError('conflict', Code.Aborted, { 'X-Reason-Code': 'optimistic_lock_conflict' }));
+    mockedCancel.mockResolvedValue({ operation: { operationId: 'op-1', state: 'cancelling', stateVersion: 2n }, requestId: 'req-1' } as never);
+    mockedGet.mockResolvedValue({ operationId: 'op-1', state: 'running', stateVersion: 2n } as never);
+
+    await store.load('op-1');
+    await flush();
+    const first = await store.submitCancel('冲突');
+    await flush();
+
+    expect(first.errorCode).toBe('optimistic_lock_conflict');
+    expect(store.operation?.stateVersion).toBe(2n);
+
+    const second = await store.submitCancel('再试');
+    expect(second.errorCode).toBeNull();
+    const firstKey = mockedCancel.mock.calls[0]![0].idempotencyKey;
+    const secondKey = mockedCancel.mock.calls[1]![0].idempotencyKey;
+    expect(firstKey).not.toBe(secondKey);
+  });
+
+  it('AC-06: a transient network error keeps the idempotency key for retry', async () => {
+    const store = setupStore();
+    mockedWatch.mockResolvedValue(streamOf(snapshot('op-1', 1n, 3n)));
+    mockedCancel.mockRejectedValueOnce(new ConnectError('down', Code.Unavailable));
+    mockedCancel.mockResolvedValue({ operation: { operationId: 'op-1', state: 'cancelling', stateVersion: 2n }, requestId: 'req-1' } as never);
+
+    await store.load('op-1');
+    await flush();
+    const first = await store.submitCancel('网络抖动');
+    expect(first.errorCode).toBe('network_error');
+
+    const second = await store.submitCancel('网络抖动');
+    expect(second.errorCode).toBeNull();
+    expect(mockedCancel.mock.calls[0]![0].idempotencyKey).toBe(mockedCancel.mock.calls[1]![0].idempotencyKey);
+  });
+
+  it('AC-19/20: EMERGENCY_EFFECT_RESOLVED merges the authoritative effect outcome', async () => {
+    const store = setupStore();
+    mockedWatch.mockResolvedValue(streamOf(
+      snapshot('op-1', 4n, 3n, { operationType: 'EMERGENCY', state: OperationStatus.CANCELLED, effectStatus: EmergencyEffectStatus.UNKNOWN }),
+      entry('op-1', 4n, {
+        id: 'resolved-1',
+        operationStateVersion: 5n,
+        kind: TimelineEntryKind.EMERGENCY_EFFECT_RESOLVED,
+        effectFrom: 'UNKNOWN',
+        effectTo: 'APPLIED',
+      }),
+    ));
+
+    await store.load('op-1');
+    await flush();
+
+    expect(store.emergencyEffectStatus).toBe('resolved');
+    expect(store.operation?.effectStatus).toBe('APPLIED');
+    expect(store.operation?.stateVersion).toBe(5n);
+  });
+
+  it('AC-01: stale EMERGENCY_EFFECT_RESOLVED never regresses the summary', async () => {
+    const store = setupStore();
+    mockedWatch.mockResolvedValue(streamOf(
+      snapshot('op-1', 6n, 3n, { operationType: 'EMERGENCY', state: OperationStatus.CANCELLED, effectStatus: EmergencyEffectStatus.APPLIED }),
+      entry('op-1', 4n, {
+        id: 'resolved-1',
+        operationStateVersion: 5n,
+        kind: TimelineEntryKind.EMERGENCY_EFFECT_RESOLVED,
+        effectFrom: 'UNKNOWN',
+        effectTo: 'NOT_APPLIED',
+      }),
+    ));
+
+    await store.load('op-1');
+    await flush();
+
+    // Snapshot already carries v6/APPLIED; the stale resolved entry must not
+    // regress either the effect or the version.
+    expect(store.operation?.effectStatus).toBe('APPLIED');
+    expect(store.operation?.stateVersion).toBe(6n);
+    expect(store.emergencyEffectStatus).toBe('resolved');
+  });
+
+  it('AC-05/18: normal stream EOF falls back to disconnected and keeps the data', async () => {
+    const store = setupStore();
+    mockedWatch.mockResolvedValue(eofStreamOf(
+      snapshot('op-1', 1n, 3n),
+      entry('op-1', 4n, { operationStateVersion: 2n, kind: TimelineEntryKind.STATE_TRANSITION, toState: 'cancelling' }),
+    ));
+
+    await store.load('op-1');
+    await flush();
+
+    // The finite stream ended: never stranded in 'connected'.
+    expect(store.streamStatus).toBe('disconnected');
+    expect(store.operation?.state).toBe('cancelling');
+    expect(store.entries).toHaveLength(1);
+  });
+
+  it('AC-05/11: EOF degraded mode reconnects with bounded backoff and stops polling', async () => {
+    const store = setupStore();
+    mockedWatch.mockResolvedValueOnce(eofStreamOf(snapshot('op-1', 1n, 3n)));
+    mockedWatch.mockResolvedValueOnce(streamOf(snapshot('op-1', 2n, 5n)));
+    mockedGet.mockResolvedValue({ operationId: 'op-1', state: 'running', stateVersion: 1n } as never);
+
+    await store.load('op-1');
+    await flush();
+    expect(store.streamStatus).toBe('disconnected');
+
+    await vi.advanceTimersByTimeAsync(1_000); // reconnect#1 (base 1s, jitter 0)
+    await flush();
+    expect(store.streamStatus).toBe('connected');
+    expect(store.operation?.stateVersion).toBe(2n);
+    expect(mockedWatch).toHaveBeenCalledTimes(2);
+
+    // Polling must not run after reconnect (no GetOperation calls).
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mockedGet).not.toHaveBeenCalled();
   });
 });
