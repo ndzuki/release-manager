@@ -340,6 +340,15 @@ func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, commonv1.VerificationResult_VERIFICATION_RESULT_TRUSTED, trustedResponse.Msg.GetVerificationResult())
 
+	// The trusted operation enters preflight and fails closed (this fixture
+	// seeds no operator). Wait for it to reach a terminal state before the
+	// rejected request: on a slow -race CI run the second CreateOperation
+	// otherwise hits release_busy instead of the signature check.
+	require.Eventually(t, func() bool {
+		op, err := svc.store.Operations().Get(ctx, trustedResponse.Msg.GetOperationId())
+		return err == nil && op.Status == store.StatusFailed
+	}, 5*time.Second, 50*time.Millisecond)
+
 	_, wrongPrivateKey := testEd25519KeyPair(t)
 	rejectedRequest := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType: "INSTALL", BundleId: rejectedBundleID, ReleaseDefinitionId: definitionID,
