@@ -159,38 +159,46 @@ func (s *outboxStore) PersistAck(ctx context.Context, id string) (*store.Operati
 		return nil, fmt.Errorf("begin outbox ack: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after commit
+	return persistAckTx(ctx, tx, "outbox", "status", "acked_at", "outbox", id, time.Now().UTC().Format(time.RFC3339))
+}
 
+// persistAckTx runs the shared atomic ACK transaction (REQ-077): read the
+// command identity, conditionally flip the delivery status (rows == 0 means a
+// concurrent ACK persisted first), and append the ACK timeline entry inside
+// the same transaction. The outbox and emergency_intents variants differ only
+// in table/column names, error prefix, and timestamp precision.
+func persistAckTx(ctx context.Context, tx *sql.Tx, table, statusColumn, ackColumn, opLabel, id, now string) (*store.OperationTimelineEntry, error) {
 	// Read first so the timeline entry can reference the operation and the
 	// replay dedup key; the conditional UPDATE below closes the concurrent
 	// double-ACK race (rows == 0 means another transaction persisted first).
 	var operationID, commandID, status string
-	if err := tx.QueryRowContext(ctx, `SELECT operation_id, command_id, status FROM outbox WHERE id = ?`, id).Scan(&operationID, &commandID, &status); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT operation_id, command_id, `+statusColumn+` FROM `+table+` WHERE id = ?`, id).Scan(&operationID, &commandID, &status); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, store.ErrNotFound
 		}
-		return nil, fmt.Errorf("load outbox for ack: %w", err)
+		return nil, fmt.Errorf("load %s for ack: %w", opLabel, err)
 	}
 	if status == string(store.CommandPersisted) {
 		return nil, nil // already persisted: idempotent replay, no second entry
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	//nolint:gosec // table/column identifiers are internal constants, never user input.
 	result, err := tx.ExecContext(ctx, `
-		UPDATE outbox SET status = ?, acked_at = ?, updated_at = ?
-		WHERE id = ? AND status != ?
+		UPDATE `+table+` SET `+statusColumn+` = ?, `+ackColumn+` = ?, updated_at = ?
+		WHERE id = ? AND `+statusColumn+` != ?
 	`, string(store.CommandPersisted), now, now, id, string(store.CommandPersisted))
 	if err != nil {
-		return nil, fmt.Errorf("persist outbox ack: %w", err)
+		return nil, fmt.Errorf("persist %s ack: %w", opLabel, err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return nil, fmt.Errorf("outbox ack rows affected: %w", err)
+		return nil, fmt.Errorf("%s ack rows affected: %w", opLabel, err)
 	}
 	if rows == 0 {
 		return nil, nil // lost a concurrent ACK race: already persisted
 	}
 	data, err := json.Marshal(store.AckTimelineData{RequestID: commandID, AckStage: "persisted"})
 	if err != nil {
-		return nil, fmt.Errorf("encode outbox ack timeline: %w", err)
+		return nil, fmt.Errorf("encode %s ack timeline: %w", opLabel, err)
 	}
 	entry, err := appendTimelineEntry(ctx, tx, &store.OperationTimelineEntry{
 		OperationID: operationID, Kind: string(store.TimelineEntryACK), Data: data,
@@ -199,7 +207,7 @@ func (s *outboxStore) PersistAck(ctx context.Context, id string) (*store.Operati
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit outbox ack: %w", err)
+		return nil, fmt.Errorf("commit %s ack: %w", opLabel, err)
 	}
 	return entry, nil
 }

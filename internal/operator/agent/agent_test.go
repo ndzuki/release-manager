@@ -228,7 +228,7 @@ func TestAgent_UpgradePreflightRejectsInventoryStale(t *testing.T) {
 	valuesJSON := []byte(`{"message":"hello"}`)
 	command := upgradeCommand("cmd-inventory-stale", valuesJSON, sha256Hex(valuesJSON))
 	command.GetUpgrade().ExpectedRevision = 2 // 现场 revision=2，跳过 revision_conflict
-	command.ExpectedCurrentRevision = 1  // 与现场 revision=2 不符 → inventory_stale
+	command.ExpectedCurrentRevision = 1       // 与现场 revision=2 不符 → inventory_stale
 	require.NoError(t, agent.handleCommand(t.Context(), stream, command))
 	require.Len(t, stream.sent, 2)
 	result := stream.sent[1].GetCommandResult()
@@ -413,6 +413,7 @@ type recordingSecretLister struct {
 func (l recordingSecretLister) List(context.Context, string) ([]secretmetadata.Secret, error) {
 	return l.secrets, nil
 }
+
 type recordingSyncExecutor struct {
 	calls int
 	err   error
