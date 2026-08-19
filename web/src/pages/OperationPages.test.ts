@@ -8,6 +8,7 @@ import type { Client } from '@connectrpc/connect';
 import {
   BundleService,
   BundleSummarySchema,
+  CancelOperationResponseSchema,
   CreateOperationResponseSchema,
   GetOperationResponseSchema,
   ListBundlesResponseSchema,
@@ -457,6 +458,15 @@ describe('operation pages', () => {
   });
 
   it('AC-27: the cancel entry stays usable while the stream is disconnected', async () => {
+    const cancelOperation = vi.fn().mockResolvedValue(create(CancelOperationResponseSchema, {
+      operation: create(OperationSchema, {
+        operationId: 'op-degraded',
+        operationType: 'INSTALL',
+        state: OperationStatus.CANCELLING,
+        stateVersion: 4n,
+      }),
+      requestId: 'req-degraded',
+    }));
     const clients: TestClients = {
       operations: {
         // Deliberately finite stream: the store must fall back to degraded
@@ -478,6 +488,7 @@ describe('operation pages', () => {
             },
           });
         })()),
+        cancelOperation,
       } as unknown as Client<typeof OrchestratorService>,
       bundles: emptyOptionsClients().bundles,
     };
@@ -498,6 +509,20 @@ describe('operation pages', () => {
     const button = wrapper.findAll('button').find((b) => b.text() === '取消操作');
     expect(button).toBeDefined();
     expect(button?.attributes('disabled')).toBeUndefined();
+
+    // A real cancel submit while disconnected must use the last
+    // authoritative state_version (AC-057-27).
+    await button?.trigger('click');
+    await wrapper.find('textarea').setValue('断线取消');
+    await wrapper.findAll('button').find((b) => b.text() === '确认取消')?.trigger('click');
+    await vi.waitFor(() => expect(cancelOperation).toHaveBeenCalledTimes(1));
+    const [request] = cancelOperation.mock.calls[0] as [never, never];
+    expect(request).toEqual(expect.objectContaining({
+      operationId: 'op-degraded',
+      reason: '断线取消',
+      expectedStateVersion: 3n,
+    }));
+    expect(timelineStore.operation?.state).toBe('cancelling');
     wrapper.unmount();
   });
 });

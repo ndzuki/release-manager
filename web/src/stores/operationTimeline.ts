@@ -329,7 +329,7 @@ export const useOperationTimelineStore = defineStore('operationTimeline', () => 
       emergencyEffectStatus.value = 'resolved';
       // The resolved entry also carries the authoritative effect outcome:
       // merge it into the summary (monotonic only) so the header shows the
-      // confirmed effect instead of the stale UNKNOWN (advisory 2026-08-19).
+      // confirmed effect instead of the stale UNKNOWN.
       if (entry.effectTo && operation.value) {
         const nextVersion = entry.operationStateVersion;
         if (EFFECT_STATES[entry.effectTo] === true && nextVersion > operation.value.stateVersion) {
@@ -344,7 +344,7 @@ export const useOperationTimelineStore = defineStore('operationTimeline', () => 
       // STATE_TRANSITION carries the authoritative next state: merge it into
       // the operation summary (monotonic only) so the header, canCancel and
       // the CAS expectedStateVersion track the live stream instead of the
-      // first snapshot (advisory 2026-08-19). Out-of-order entries never
+      // first snapshot. Out-of-order entries never
       // regress stateVersion (AC-057-01).
       if (kind === 'STATE_TRANSITION' && entry.toState && operation.value) {
         const nextVersion = entry.operationStateVersion;
