@@ -557,8 +557,9 @@ func (a *Agent) executeInstall(ctx context.Context, command *operatorv1.Command,
 		return result
 	}
 
-	// REQ-077 Q2: observe with the command's remaining time budget, never
-	// beyond it; observation is best-effort enhancement.
+	// REQ-077 Q2: observe synchronously within the remaining time budget —
+	// progress (including the terminal flush) reaches the stream before the
+	// Result below terminalizes the operation.
 	a.observeRollout(ctx, command.GetOperationId(), release.Workloads, timeout-time.Since(started), reporter)
 
 	result.Status = "succeeded"
