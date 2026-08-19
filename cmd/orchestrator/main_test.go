@@ -1725,10 +1725,14 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 		op, err := svc.store.Operations().Get(ctx, opID)
 		return err == nil && op.Status == store.StatusQueued
 	}, 5*time.Second, 50*time.Millisecond)
-	pl, err = svc.store.PreflightLifecycles().GetByOperationID(ctx, opID)
-	require.NoError(t, err)
-	assert.Equal(t, "passed", pl.Overall)
-	assert.Equal(t, "artifact,render,dryrun,runtime_pull", pl.Stages)
+	// The lifecycle finalization is a separate transaction from the operation
+	// CAS (observational write), so poll for the terminal result too — the
+	// two-transaction commit window made this flaky under CI's -race full
+	// suite (TASK-077 CI failure).
+	require.Eventually(t, func() bool {
+		pl, err := svc.store.PreflightLifecycles().GetByOperationID(ctx, opID)
+		return err == nil && pl.Overall == "passed" && pl.Stages == "artifact,render,dryrun,runtime_pull"
+	}, 5*time.Second, 50*time.Millisecond)
 
 	// Restart recovery: an operation left in preflight resumes coordination.
 	restartOpID := "op-restart-preflight-e2e"
