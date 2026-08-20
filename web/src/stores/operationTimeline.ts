@@ -6,12 +6,12 @@ import type {
   TimelineEntry as ProtoTimelineEntry,
   WatchOperationResponse,
 } from '@/gen/orchestrator/v1/orchestrator_pb';
-import { OperationSnapshotSchema, TimelineEntryKind } from '@/gen/orchestrator/v1/orchestrator_pb';
+import { OperationSnapshotSchema } from '@/gen/orchestrator/v1/orchestrator_pb';
 import { cancelOperation, getOperation, mapOperationError, watchOperation } from '@/connect/operation-api';
 import type { OperationAPIError } from '@/connect/operation-api';
 import { useAuthStore } from '@/stores/auth';
 import type { EffectStatus, Operation, OperationSnapshot, OperationState, TimelineEntry } from '@/types/operation';
-import { mapOperationSnapshot } from '@/types/operation';
+import { mapOperationSnapshot, mapTimelineEntry } from '@/types/operation';
 
 export type StreamStatus = 'connecting' | 'connected' | 'disconnected';
 export type EmergencyEffectStatus = 'watching' | 'resolved' | 'not_applicable';
@@ -267,23 +267,6 @@ export const useOperationTimelineStore = defineStore('operationTimeline', () => 
     emergencyEffectStatus.value = 'not_applicable';
   }
 
-  function entryKind(kind: TimelineEntryKind): TimelineEntry['kind'] {
-    switch (kind) {
-      case TimelineEntryKind.STATE_TRANSITION:
-        return 'STATE_TRANSITION';
-      case TimelineEntryKind.ACK:
-        return 'ACK';
-      case TimelineEntryKind.ROLLOUT_PROGRESS:
-        return 'ROLLOUT_PROGRESS';
-      case TimelineEntryKind.ERROR:
-        return 'ERROR';
-      case TimelineEntryKind.EMERGENCY_EFFECT_RESOLVED:
-        return 'EMERGENCY_EFFECT_RESOLVED';
-      default:
-        return 'UNSPECIFIED';
-    }
-  }
-
   function applySnapshot(snapshot: ProtoOperationSnapshot): boolean {
     // The stream is opened per operation; drop any mismatched snapshot so a
     // server bug can never pollute the page or clear a history gap.
@@ -301,30 +284,13 @@ export const useOperationTimelineStore = defineStore('operationTimeline', () => 
     if (entries.value.some((existing) => existing.id === entry.id)) return;
     if (entry.sequence <= latestSequence.value) return;
     latestSequence.value = entry.sequence;
-    const kind = entryKind(entry.kind);
-    entries.value = [...entries.value, {
-      id: entry.id,
-      operationId: entry.operationId,
-      sequence: entry.sequence,
-      operationStateVersion: entry.operationStateVersion,
-      timestamp: entry.timestamp ? new Date(Number(entry.timestamp.seconds) * 1000).toISOString() : null,
-      kind,
-      requestId: entry.requestId,
-      errorCode: entry.errorCode,
-      errorMessage: entry.errorMessage,
-      ackStage: entry.ackStage,
-      fromState: entry.fromState,
-      toState: entry.toState,
-      effectFrom: entry.effectFrom,
-      effectTo: entry.effectTo,
-      workloadRef: entry.workloadRef,
-      ready: entry.ready,
-      desired: entry.desired,
-    }];
+    const mapped = mapTimelineEntry(entry);
+    entries.value = [...entries.value, mapped];
     if (entries.value.length > MAX_TIMELINE_ENTRIES) {
       entries.value = entries.value.slice(-MAX_TIMELINE_ENTRIES);
       historyTruncated.value = true;
     }
+    const kind = mapped.kind;
     if (kind === 'EMERGENCY_EFFECT_RESOLVED') {
       emergencyEffectStatus.value = 'resolved';
       // The resolved entry also carries the authoritative effect outcome:
@@ -496,8 +462,14 @@ export const useOperationTimelineStore = defineStore('operationTimeline', () => 
       }
     } catch (error) {
       if (capturedScope !== scope || operationId.value !== currentId) return;
+      const mapped = mapOperationError(error);
+      // First load failed (live flag off: explicit refresh is the only path
+      // in) — surface a retryable error instead of a silent empty page.
+      if (!operation.value) {
+        initialError.value = { code: mapped.code, message: mapped.message, retryable: mapped.retryable || mapped.code === 'network_error' };
+        return;
+      }
       // Transient failures keep the last authoritative state; polling retries.
-      mapOperationError(error);
     }
   }
 
@@ -628,7 +600,8 @@ export const useOperationTimelineStore = defineStore('operationTimeline', () => 
         idempotencyKey: key,
       });
       if (capturedScope !== scope || operationId.value !== currentId) {
-        cancelLoading.value = false;
+        // Scope moved on (load/reset already reinitialized cancel state);
+        // the stale response must not clobber a newer scope's cancel.
         return { ok: false, errorCode: 'unknown', message: '操作已切换' };
       }
       operation.value = result.operation;
@@ -640,7 +613,8 @@ export const useOperationTimelineStore = defineStore('operationTimeline', () => 
       return { ok: true, errorCode: null, message: '' };
     } catch (error) {
       if (capturedScope !== scope || operationId.value !== currentId) {
-        cancelLoading.value = false;
+        // Same stale-response guard as the success path: never write back
+        // cancelLoading/error state into a scope that moved on.
         return { ok: false, errorCode: 'unknown', message: '操作已切换' };
       }
       const mapped = mapOperationError(error);

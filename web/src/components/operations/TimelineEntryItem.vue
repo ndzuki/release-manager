@@ -1,10 +1,15 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { onUnmounted, ref } from 'vue';
 import type { TimelineEntry } from '@/types/operation';
 
 defineProps<{ entry: TimelineEntry }>();
 
 const copied = ref(false);
+let copiedResetTimer: ReturnType<typeof setTimeout> | null = null;
+
+onUnmounted(() => {
+  if (copiedResetTimer !== null) clearTimeout(copiedResetTimer);
+});
 
 function formatTimestamp(value: string | null): string {
   return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(value)) : '—';
@@ -14,7 +19,13 @@ async function copyIdentity(value: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(value);
     copied.value = true;
-    setTimeout(() => { copied.value = false; }, 1200);
+    // Replace any pending reset so a rapid second copy keeps the indicator
+    // visible for the full duration of the latest click (AC-057-04 UX).
+    if (copiedResetTimer !== null) clearTimeout(copiedResetTimer);
+    copiedResetTimer = setTimeout(() => {
+      copied.value = false;
+      copiedResetTimer = null;
+    }, 1200);
   } catch {
     // Clipboard unavailable (permissions/HTTP): leave the selectable text in place.
   }

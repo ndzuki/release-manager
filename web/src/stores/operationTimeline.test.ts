@@ -753,6 +753,47 @@ describe('operationTimeline store', () => {
     expect(store.operation?.stateVersion).toBe(9n);
   });
 
+  it('scope switch: a stale cancel response never clears the new scope loading or writes state', async () => {
+    const store = setupStore();
+    mockedWatch.mockResolvedValue(streamOf(snapshot('op-1', 1n, 3n)));
+    await store.load('op-1');
+    await flush();
+
+    let rejectOld: ((e: unknown) => void) | undefined;
+    const oldCancel = new Promise<never>((_, reject) => { rejectOld = reject; });
+    mockedCancel.mockReturnValueOnce(oldCancel as never);
+    void store.submitCancel('旧请求');
+    expect(store.cancelLoading).toBe(true);
+
+    // Navigate away mid-flight: the new scope reinitializes cancel state.
+    mockedWatch.mockResolvedValueOnce(streamOf(snapshot('op-2', 1n, 3n)));
+    await store.load('op-2');
+    await flush();
+    expect(store.cancelLoading).toBe(false);
+
+    // New scope starts its own cancel, held open so we can observe whether
+    // the stale old-scope rejection touches it.
+    let resolveNew: ((v: never) => void) | undefined;
+    const newCancel = new Promise<never>((resolve) => { resolveNew = resolve; });
+    mockedCancel.mockReturnValueOnce(newCancel as never);
+    const second = store.submitCancel('新请求');
+    expect(store.cancelLoading).toBe(true);
+    expect(mockedCancel).toHaveBeenCalledTimes(2);
+
+    // Stale old-scope rejection arrives: must not clear the new loading.
+    rejectOld!(new ConnectError('down', Code.Unavailable));
+    await flush();
+    expect(store.cancelLoading).toBe(true); // new scope cancel still in flight
+    expect(store.cancelError).toBeNull();  // old failure must not surface
+
+    // New scope cancel completes normally.
+    resolveNew!({ operation: { operationId: 'op-2', state: 'cancelling', stateVersion: 2n }, requestId: 'req-2' } as never);
+    await flush();
+    expect((await second).ok).toBe(true);
+    expect(store.cancelLoading).toBe(false);
+    expect(store.operation?.operationId).toBe('op-2');
+  });
+
   it('live: STATE_TRANSITION merges the authoritative state into the operation summary', async () => {
     const store = setupStore();
     mockedWatch.mockResolvedValue(streamOf(
