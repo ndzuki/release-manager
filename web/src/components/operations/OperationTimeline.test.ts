@@ -109,6 +109,9 @@ describe('TimelineEntryItem', () => {
     expect(wrapper.text()).toContain('req-777');
     await wrapper.findAll('button')[0]!.trigger('click');
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('op-1');
+    // The request identity is copyable too (AC-057-04: request_id).
+    await wrapper.findAll('button')[1]!.trigger('click');
+    expect(navigator.clipboard.writeText).toHaveBeenLastCalledWith('req-777');
   });
 });
 

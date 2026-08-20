@@ -407,12 +407,18 @@ export const useOperationTimelineStore = defineStore('operationTimeline', () => 
             }
             break;
           case 'entry':
-            applyEntry(message.payload.value);
-            streamStatus.value = 'connected';
-            historyGap.value = false;
-            stopPolling();
-            reconnectAttempts = 0;
-            scheduleHeartbeatTimeout();
+            // Only an entry for the current operation is evidence of a
+            // healthy stream. A stale/mismatched entry must not clear a
+            // history gap, stop degraded polling, or reset backoff without
+            // any accepted data.
+            if (message.payload.value.operationId === nextOperationId) {
+              applyEntry(message.payload.value);
+              streamStatus.value = 'connected';
+              historyGap.value = false;
+              stopPolling();
+              reconnectAttempts = 0;
+              scheduleHeartbeatTimeout();
+            }
             break;
           case 'heartbeat':
             lastHeartbeatAt.value = message.payload.value.sentAt

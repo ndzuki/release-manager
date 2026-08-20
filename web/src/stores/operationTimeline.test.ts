@@ -413,9 +413,24 @@ describe('operationTimeline store', () => {
     mockedWatch.mockResolvedValue(streamOf(snapshot('op-1', 1n, 3n, { state: OperationStatus.SUCCEEDED })));
     await store.load('op-1');
     await flush();
-
     expect(store.canCancel).toBe(false);
     expect(store.isTerminal).toBe(true);
+
+    // Every terminal state disables the entry (AC-057-02).
+    const states = [
+      OperationStatus.SUCCEEDED,
+      OperationStatus.FAILED,
+      OperationStatus.CANCELLED,
+      OperationStatus.TIMEOUT,
+    ];
+    for (const state of states) {
+      const s = setupStore();
+      mockedWatch.mockResolvedValue(streamOf(snapshot('op-1', 1n, 3n, { state })));
+      await s.load('op-1');
+      await flush();
+      expect(s.canCancel, `terminal ${state}`).toBe(false);
+      expect(s.isTerminal, `terminal ${state}`).toBe(true);
+    }
   });
 
   it('AC-07: viewer role hides cancel entirely (active and disabled affordances)', async () => {
@@ -531,16 +546,22 @@ describe('operationTimeline store', () => {
     const store = setupStore();
     mockedWatch.mockResolvedValue(streamOf(snapshot('op-1', 1n, 3n)));
     mockedCancel.mockRejectedValueOnce(new ConnectError('conflict', Code.Aborted, { 'X-Reason-Code': 'optimistic_lock_conflict' }));
-    mockedGet.mockResolvedValue({ operationId: 'op-1', state: 'running', stateVersion: 2n } as never);
+    // The refreshed operation is terminal: the cancel entry must recompute
+    // to disabled, proving the button follows the new state (AC-057-03).
+    mockedGet.mockResolvedValue({ operationId: 'op-1', state: 'succeeded', stateVersion: 2n } as never);
 
     await store.load('op-1');
     await flush();
+    expect(store.canCancel).toBe(true); // running before the conflict
     const result = await store.submitCancel('冲突');
     await flush();
 
     expect(result.errorCode).toBe('optimistic_lock_conflict');
     expect(mockedGet).toHaveBeenCalledTimes(1);
     expect(store.operation?.stateVersion).toBe(2n);
+    expect(store.operation?.state).toBe('succeeded');
+    expect(store.canCancel).toBe(false); // recomputed from the refreshed state
+    expect(store.isTerminal).toBe(true);
   });
 
   it('AC-05/24: the 5s poll keeps repeating while disconnected', async () => {
