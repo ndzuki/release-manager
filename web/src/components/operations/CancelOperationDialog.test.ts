@@ -31,7 +31,7 @@ describe('CancelOperationDialog', () => {
     expect(wrapper.text()).toContain('取消不等于 K8s 回滚');
   });
 
-  it('keeps the dialog open with the error inline on failure', async () => {
+  it('AC-22: keeps the dialog open with the error inline on failure', async () => {
     const wrapper = mount(CancelOperationDialog, {
       props: { submitting: false, error: { code: 'cancel_not_allowed', message: '当前状态不允许取消' } },
     });

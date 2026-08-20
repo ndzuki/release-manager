@@ -76,12 +76,16 @@ function eofStreamOf(...messages: WatchOperationResponse[]): AsyncIterable<Watch
   })();
 }
 
-function cursorExpiredError(snapshotSequence: bigint): ConnectError {
-  return new ConnectError('cursor_expired: retained timeline no longer includes the requested sequence', Code.OutOfRange, {
+function cursorExpiredError(snapshotSequence: bigint, snapshotProto?: string): ConnectError {
+  const headers: Record<string, string> = {
     'X-Reason-Code': 'cursor_expired',
     'X-Snapshot-Sequence': snapshotSequence.toString(),
     'X-Retained-From-Sequence': '10',
-  });
+  };
+  if (snapshotProto !== undefined) {
+    headers['X-Snapshot-Proto'] = snapshotProto;
+  }
+  return new ConnectError('cursor_expired: retained timeline no longer includes the requested sequence', Code.OutOfRange, headers);
 }
 
 async function flush(): Promise<void> {
@@ -147,6 +151,27 @@ describe('operationTimeline store', () => {
     expect(mockedWatch.mock.calls[0]![1]).toBe(0n);
     expect(mockedGet).not.toHaveBeenCalled();
     expect(store.operation?.state).toBe('running');
+    expect(store.streamStatus).toBe('connected');
+  });
+
+  it('AC-10: the snapshot is the authority and replay/live entries across its boundary are all kept', async () => {
+    const store = setupStore();
+    mockedWatch.mockResolvedValue(streamOf(
+      snapshot('op-1', 5n, 10n),
+      entry('op-1', 9n),  // replay: sequence below the snapshot boundary
+      entry('op-1', 11n), // live: sequence above the snapshot boundary
+    ));
+
+    await store.load('op-1');
+    await flush();
+
+    // Snapshot drives the authoritative summary; no GetOperation gap-fill.
+    expect(mockedGet).not.toHaveBeenCalled();
+    expect(store.operation?.stateVersion).toBe(5n);
+    // The snapshot must not advance the cursor, so replay (9) and live (11)
+    // entries on both sides of the boundary survive, in sequence order.
+    expect(store.entries.map((e) => e.sequence)).toEqual([9n, 11n]);
+    expect(store.latestSequence).toBe(11n);
     expect(store.streamStatus).toBe('connected');
   });
 
@@ -271,6 +296,52 @@ describe('operationTimeline store', () => {
     expect(store.historyGap).toBe(false);
     expect(store.streamStatus).toBe('connected');
     expect(store.operation?.stateVersion).toBe(5n);
+  });
+
+  it('AC-12b: cursor_expired with X-Snapshot-Proto rebuilds from the decoded snapshot', async () => {
+    const store = setupStore();
+    const decodeSnapshotProto = vi.fn(() => ({
+      operation: {
+        operationId: 'op-1',
+        releaseDefinitionId: 'def-1',
+        operationType: 'EMERGENCY' as const,
+        state: 'cancelled' as const,
+        stateVersion: 7n,
+        bundleId: '',
+        valuesRevisionId: '',
+        expectedRevision: 0,
+        targetRevision: 0,
+        createdBy: '',
+        createdAt: null,
+        updatedAt: null,
+        terminalAt: null,
+        deadline: null,
+        lastError: '',
+        effectStatus: 'UNKNOWN' as const,
+      },
+      snapshotSequence: 99n,
+      retainedFromSequence: 20n,
+    }));
+    store.configure({ decodeSnapshotProto });
+    mockedWatch.mockResolvedValueOnce(streamOf(snapshot('op-1', 1n, 3n), entry('op-1', 4n)));
+    await store.load('op-1');
+    await flush();
+
+    mockedWatch.mockRejectedValueOnce(cursorExpiredError(42n, 'encoded'));
+    mockedWatch.mockResolvedValueOnce(streamOf(snapshot('op-1', 7n, 99n)));
+
+    await vi.advanceTimersByTimeAsync(30_000); // disconnect
+    await vi.advanceTimersByTimeAsync(1_000); // reconnect hits cursor_expired
+    await flush();
+
+    // The X-Snapshot-Proto header is decoded, not just mirrored as a string.
+    expect(decodeSnapshotProto).toHaveBeenCalledWith('encoded');
+    // The decoded snapshot is the rebuild authority: its snapshot sequence
+    // drives the re-established stream, not the metadata header's (42n).
+    expect(mockedWatch.mock.calls[2]![1]).toBe(99n);
+    expect(store.operation?.stateVersion).toBe(7n);
+    expect(store.historyGap).toBe(false);
+    expect(store.streamStatus).toBe('connected');
   });
 
   it('AC-29: cursor rebuild failure keeps gap and empties entries while polling', async () => {
@@ -605,7 +676,7 @@ describe('operationTimeline store', () => {
     expect(store.activeCancelIdempotencyKey).toBeNull();
   });
 
-  it('cancel_not_allowed auto-refreshes GetOperation and keeps the dialog open', async () => {
+  it('AC-22: cancel_not_allowed keeps the dialog open, refreshes GetOperation, and re-enables submit', async () => {
     const store = setupStore();
     mockedWatch.mockResolvedValue(streamOf(snapshot('op-1', 1n, 3n)));
     mockedCancel.mockRejectedValueOnce(
@@ -614,15 +685,20 @@ describe('operationTimeline store', () => {
     mockedGet.mockResolvedValue({ operationId: 'op-1', state: 'failed', stateVersion: 2n } as never);
     await store.load('op-1');
     await flush();
+    store.cancelDialogOpen = true;
 
     const result = await store.submitCancel('取消');
     await flush();
 
     expect(result.errorCode).toBe('cancel_not_allowed');
+    // AC-22: only a success or an explicit user close may close the dialog.
+    expect(store.cancelDialogOpen).toBe(true);
     expect(mockedGet).toHaveBeenCalledTimes(1);
     expect(store.operation?.stateVersion).toBe(2n);
     expect(store.cancelError?.code).toBe('cancel_not_allowed');
+    // Submit re-arms after a rejection; the button becomes clickable again.
     expect(store.cancelLoading).toBe(false);
+    expect(store.activeCancelIdempotencyKey).toBeNull();
   });
 
   it('AC-19/20: resolved is sticky against later non-resolved entries', async () => {

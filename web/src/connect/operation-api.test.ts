@@ -175,7 +175,7 @@ describe('operation API', () => {
     expect(options.signal).toBe(controller.signal);
   });
 
-  it('cancelOperation sends reason/expected_state_version with an Idempotency-Key header', async () => {
+  it('AC-08: cancelOperation sends reason/expected_state_version with an Idempotency-Key header', async () => {
     const cancel = vi.fn().mockResolvedValue(create(CancelOperationResponseSchema, {
       operation: create(OperationSchema, {
         operationId: 'op-1',

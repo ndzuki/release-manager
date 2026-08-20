@@ -92,7 +92,7 @@ describe('TimelineEntryItem', () => {
     expect(wrapper.text()).not.toContain('secret-reason');
   });
 
-  it('shows copyable operation/request identities for errors', async () => {
+  it('AC-04: shows copyable operation/request identities for errors', async () => {
     vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
     const wrapper = mount(TimelineEntryItem, {
       props: {
