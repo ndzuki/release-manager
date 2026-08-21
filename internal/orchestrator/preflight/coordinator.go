@@ -142,6 +142,14 @@ func (c *Coordinator) runPipeline(ctx context.Context, op *store.Operation) (Sta
 		}
 		results = append(results, result)
 
+		// AC-019-03/07: the operation may be cancelled between the loop-top
+		// check and a failed stage result (e.g. a dispatch/operator lookup that
+		// lost the ctx race). Treat it as cancelled so the lifecycle records
+		// cancelled instead of failed and no stale CAS overwrites the operation.
+		if ctx.Err() != nil {
+			c.logger.Warn("preflight cancelled during stage", "op_id", op.ID, "stage", stage.Name)
+			return StageCancelled, results
+		}
 		if result.Status == StageCancelled {
 			// AC-019-03/07: operation cancelled — the operation was already CASed
 			// to cancelled by CancelOperation; a stale state_version must not
