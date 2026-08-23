@@ -57,6 +57,28 @@ func TestListCandidateArtifactsReturnsValidatedImages(t *testing.T) {
 	assert.Equal(t, "registry.example/team/api", resp.Msg.GetArtifacts()[0].GetRepository())
 }
 
+// AC-079-G5: ListCandidateArtifacts cascade parameters require workload_ref.
+func TestListCandidateArtifactsCascadeRequiresWorkloadRef(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	for _, msg := range []*orchestratorv1.ListCandidateArtifactsRequest{
+		{OrganizationId: "org-001", ReleaseDefinitionId: "def-001", Container: "api"},
+		{OrganizationId: "org-001", ReleaseDefinitionId: "def-001", OperationVersion: "v1.0.0"},
+	} {
+		_, err := svc.ListCandidateArtifacts(deployerCtx(), connect.NewRequest(msg))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+		assert.Equal(t, "workload_ref_required", connectErrorReason(err))
+	}
+	// With workload_ref present the cascade validation passes.
+	_, err := svc.ListCandidateArtifacts(deployerCtx(), connect.NewRequest(&orchestratorv1.ListCandidateArtifactsRequest{
+		OrganizationId: "org-001", ReleaseDefinitionId: "def-001",
+		WorkloadRef: "deployments/default/api", Container: "api",
+	}))
+	require.NoError(t, err)
+}
+
 func TestListConvergenceTasksReturnsPendingTask(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
@@ -65,13 +87,15 @@ func TestListConvergenceTasksReturnsPendingTask(t *testing.T) {
 	definition, err := st.Definitions().Get(t.Context(), "def-001")
 	require.NoError(t, err)
 	definition.PromotionMappings = []store.PromotionMapping{{
-		WorkloadKind: workloadDeployment, WorkloadName: "api", Field: "replicas", ValuesPath: "replicaCount",
+		WorkloadKind: workloadDeployment, WorkloadName: "api", Container: "api",
+		Field: "image_digest", ValuesPath: "api.image.digest",
 	}}
 	_, err = st.Definitions().Update(t.Context(), definition, nil)
 	require.NoError(t, err)
-	req := emergencyReplicasRequest("convergence-list", 3)
-	req.Msg.Convergence = orchestratorv1.EmergencyConvergence_EMERGENCY_CONVERGENCE_REQUIRE_PROMOTION
-	created, err := svc.EmergencyChange(emergencyAdminContext(), req)
+	req := emergencyImageRequest("convergence-list")
+	req.Msg.ConvergenceStrategy = orchestratorv1.ConvergenceStrategy_REQUIRE_PROMOTION
+	req.Msg.TargetLocks = []string{"api.image.digest"}
+	created, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), req)
 	require.NoError(t, err)
 
 	resp, err := svc.ListConvergenceTasks(emergencyAdminContext(), connect.NewRequest(&orchestratorv1.ListConvergenceTasksRequest{
@@ -79,9 +103,9 @@ func TestListConvergenceTasksReturnsPendingTask(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	require.Len(t, resp.Msg.GetTasks(), 1)
-	assert.Equal(t, created.Msg.GetConvergenceTaskId(), resp.Msg.GetTasks()[0].GetTaskId())
+	assert.Equal(t, created.Msg.GetResult().GetConvergenceTasks()[0].GetTaskId(), resp.Msg.GetTasks()[0].GetTaskId())
 	assert.True(t, resp.Msg.GetTasks()[0].GetSelectable())
-	assert.Equal(t, []string{"replicaCount"}, resp.Msg.GetTasks()[0].GetPromotionPaths())
+	assert.Equal(t, []string{"api.image.digest"}, resp.Msg.GetTasks()[0].GetPromotionPaths())
 }
 
 func TestListEmergencyTargetsReportsUnavailable(t *testing.T) {
@@ -113,5 +137,8 @@ func emergencyTestServiceFromExisting(t *testing.T, svc *Service, st store.Store
 	}))
 	dispatcher := &recordingEmergencyDispatcher{}
 	svc.emergencyDispatcher = dispatcher
+	// Canonical contract fixtures: kill switch on + validated trusted image.
+	require.NoError(t, st.EmergencyConfig().SetEmergencyConfig(t.Context(), store.EmergencyConfig{Enabled: true}))
+	seedEmergencyTestArtifact(t, st)
 	return svc, st, dispatcher
 }

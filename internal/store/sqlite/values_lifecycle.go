@@ -330,15 +330,25 @@ func insertValuesDraft(ctx context.Context, tx *sql.Tx, revision *store.ValuesRe
 	if err != nil {
 		return fmt.Errorf("encode values secret refs: %w", err)
 	}
+	convergenceIDs, err := encodeStringArray(revision.ConvergenceTaskIds)
+	if err != nil {
+		return fmt.Errorf("encode convergence task ids: %w", err)
+	}
+	lockedPaths, err := encodeStringArray(revision.LockedPaths)
+	if err != nil {
+		return fmt.Errorf("encode locked paths: %w", err)
+	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO values_revisions (
 			id, release_definition_id, version, state_version, status, "values", digest,
 			parent_revision_id, secret_refs, created_by, created_by_user_id, approved_by,
-			approved_at, rejected_by, rejection_reason, submitted_at, decided_at, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', NULL, '', '', NULL, NULL, ?, ?)
+			approved_at, rejected_by, rejection_reason, submitted_at, decided_at,
+			convergence_task_ids, locked_paths, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', NULL, '', '', NULL, NULL, ?, ?, ?, ?)
 	`, revision.ID, revision.ReleaseDefinitionID, revision.Version, revision.StateVersion, string(revision.Status),
 		[]byte(revision.CanonicalDocument), revision.Digest, valuesOptionalString(revision.ParentRevisionID), refs,
 		revision.CreatedByUserID, revision.CreatedByUserID,
+		convergenceIDs, lockedPaths,
 		revision.CreatedAt.UTC().Format(time.RFC3339Nano), revision.UpdatedAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		if isUniqueConstraint(err) {

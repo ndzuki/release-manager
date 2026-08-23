@@ -37,11 +37,14 @@ func TestCreateOperation_RejectedForDisabledCustomer(t *testing.T) {
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 }
 
-// AC-013-02: EmergencyChange rejected for disabled customer.
+// AC-013-02: ExecuteEmergencyChange rejected for disabled customer.
 func TestEmergencyChange_RejectedForDisabledCustomer(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
+	// The kill switch gate runs before the customer gate: enable it so the
+	// request reaches the disabled-customer check.
+	require.NoError(t, st.EmergencyConfig().SetEmergencyConfig(t.Context(), store.EmergencyConfig{Enabled: true}))
 
 	// Disable the customer.
 	cust, err := st.Customers().Get(context.Background(), "cust-001")
@@ -58,13 +61,13 @@ func TestEmergencyChange_RejectedForDisabledCustomer(t *testing.T) {
 	adminCtx := authctx.WithActor(context.Background(), authctx.Actor{
 		UserID: "release-admin", OrganizationID: "org-001", Roles: []string{string(store.RoleReleaseAdmin)},
 	})
-	_, err = svc.EmergencyChange(adminCtx, connect.NewRequest(&orchestratorv1.EmergencyChangeRequest{
+	_, err = svc.ExecuteEmergencyChange(adminCtx, connect.NewRequest(&orchestratorv1.ExecuteEmergencyChangeRequest{
 		ReleaseDefinitionId: "def-001",
+		WorkloadRef:         "deployments/default/api",
+		Container:           "api",
+		ArtifactRef:         "artifact-img",
+		ConvergenceStrategy: orchestratorv1.ConvergenceStrategy_REVERT_ON_NEXT_RECONCILE,
 		IdempotencyKey:      "customer-disabled-test",
-		Reason:              "test",
-		WorkloadRef:         &orchestratorv1.WorkloadRef{Kind: "DEPLOYMENT", Name: "api", Namespace: "default", Uid: "uid-test"},
-		Change:              &orchestratorv1.EmergencyChangeRequest_SetReplicas{SetReplicas: &orchestratorv1.SetReplicas{Replicas: 1}},
-		Convergence:         orchestratorv1.EmergencyConvergence_EMERGENCY_CONVERGENCE_REQUIRE_PROMOTION,
 	}))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "is disabled")

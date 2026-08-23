@@ -113,7 +113,7 @@ func (s *Service) CreateOperation(
 	idempotencyKey := req.Header().Get("Idempotency-Key")
 
 	// REQ-067 rule 1: only INSTALL and UPGRADE are accepted here; ROLLBACK
-	// uses RollbackRelease and EMERGENCY uses EmergencyChange.
+	// uses RollbackRelease and EMERGENCY uses ExecuteEmergencyChange (REQ-079).
 	opType := store.OperationType(msg.OperationType)
 	if opType != store.OperationInstall && opType != store.OperationUpgrade {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
@@ -715,6 +715,8 @@ func (s *Service) emergencyOperationResult(ctx context.Context, op *store.Operat
 	result := &orchestratorv1.EmergencyResult{
 		OpType:            emergencyActionToProto(intent.Action),
 		ConvergencePolicy: emergencyConvergenceToProto(intent.Convergence),
+		// REQ-079 D1: every persisted EMERGENCY operation was accepted.
+		Requested: true,
 	}
 	result.EffectStatus = emergencyEffectToProto(intent.EffectStatus)
 	result.Before, err = emergencyTypedValues(intent.Action, intent.BeforeSnapshot)

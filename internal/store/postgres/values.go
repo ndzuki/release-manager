@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ndzuki/release-manager/internal/store"
@@ -47,12 +48,13 @@ func (s *valuesStore) Create(ctx context.Context, revision *store.ValuesRevision
 			id, release_definition_id, version, state_version, status, "values",
 			digest, parent_revision_id, secret_refs, created_by, created_by_user_id,
 			approved_by, approved_at, rejected_by, rejection_reason, submitted_at, decided_at,
-			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', NULL, '', '', ?, ?, ?, ?)
+			convergence_task_ids, locked_paths, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', NULL, '', '', ?, ?, ?::uuid[], ?::text[], ?, ?)
 	`, revision.ID, revision.ReleaseDefinitionID, revision.Version, revision.StateVersion,
 		string(revision.Status), []byte(revision.CanonicalDocument), revision.Digest, valuesOptionalString(revision.ParentRevisionID),
 		refs, revision.CreatedByUserID, revision.CreatedByUserID, valuesOptionalTime(revision.SubmittedAt),
-		valuesOptionalTime(revision.DecidedAt), revision.CreatedAt.UTC(), revision.UpdatedAt.UTC())
+		valuesOptionalTime(revision.DecidedAt), postgresArrayLiteral(revision.ConvergenceTaskIds),
+		postgresArrayLiteral(revision.LockedPaths), revision.CreatedAt.UTC(), revision.UpdatedAt.UTC())
 	if err != nil {
 		if isUniqueConstraint(err) {
 			return store.ErrDuplicateKey
@@ -163,7 +165,8 @@ func (s *valuesStore) GetNextRevisionNumber(ctx context.Context, definitionID st
 const valuesSelect = `
 	SELECT id, release_definition_id, version, state_version, status, "values",
 		digest, parent_revision_id, secret_refs, created_by_user_id,
-		submitted_at, decided_at, created_at, updated_at
+		submitted_at, decided_at, convergence_task_ids::text[], locked_paths,
+		created_at, updated_at
 	FROM values_revisions`
 
 func scanValues(row interface{ Scan(...any) error }) (*store.ValuesRevision, error) {
@@ -175,7 +178,8 @@ func scanValues(row interface{ Scan(...any) error }) (*store.ValuesRevision, err
 	if err := row.Scan(
 		&revision.ID, &revision.ReleaseDefinitionID, &revision.Version, &revision.StateVersion,
 		&status, &revision.CanonicalDocument, &revision.Digest, &parentRevisionID, &refs,
-		&revision.CreatedByUserID, &submittedAt, &decidedAt, &revision.CreatedAt, &revision.UpdatedAt,
+		&revision.CreatedByUserID, &submittedAt, &decidedAt, &revision.ConvergenceTaskIds,
+		&revision.LockedPaths, &revision.CreatedAt, &revision.UpdatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -217,6 +221,21 @@ func scanValuesRows(rows *sql.Rows) ([]*store.ValuesRevision, error) {
 		return nil, fmt.Errorf("iterate values revisions: %w", err)
 	}
 	return items, nil
+}
+
+// postgresArrayLiteral renders a Postgres array literal for the text[]/uuid[]
+// convergence columns. Empty slices stay '{}'.
+func postgresArrayLiteral(values []string) string {
+	if len(values) == 0 {
+		return "{}"
+	}
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		escaped := strings.ReplaceAll(value, `\`, `\\`)
+		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+		quoted = append(quoted, `"`+escaped+`"`)
+	}
+	return "{" + strings.Join(quoted, ",") + "}"
 }
 
 func valuesOptionalTime(value *time.Time) any {

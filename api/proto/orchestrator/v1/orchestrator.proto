@@ -796,6 +796,12 @@ message ReleaseSummary {
   string values_digest = 7;
   google.protobuf.Timestamp last_sync_at = 8;
   string release_definition_id = 9;
+  // Canonical Emergency contract fields (REQ-079, D5 — names are fixed by the
+  // TASK-058 gate fixture; optional in proto3).
+  string operation_version = 10;
+  bool emergency_conflict = 11;
+  int32 pending_convergence_count = 12;
+  string revert_status_summary = 13;
 }
 
 message ListReleasesRequest {
@@ -881,8 +887,8 @@ service OrchestratorService {
   rpc CreateEnrollmentToken(CreateEnrollmentTokenRequest) returns (CreateEnrollmentTokenResponse);
   rpc GetEnrollmentTokenStatus(GetEnrollmentTokenStatusRequest) returns (GetEnrollmentTokenStatusResponse);
   rpc RevokePendingEnrollmentToken(RevokePendingEnrollmentTokenRequest) returns (RevokePendingEnrollmentTokenResponse);
-  // Emergency change (REQ-032)
-  rpc EmergencyChange(EmergencyChangeRequest) returns (EmergencyChangeResponse);
+  // Emergency change (REQ-079 canonical contract; replaces the REQ-032 legacy call surface)
+  rpc ExecuteEmergencyChange(ExecuteEmergencyChangeRequest) returns (ExecuteEmergencyChangeResponse);
   rpc ListEmergencyTargets(ListEmergencyTargetsRequest) returns (ListEmergencyTargetsResponse);
   rpc CheckEmergencyConflict(CheckEmergencyConflictRequest) returns (CheckEmergencyConflictResponse);
   rpc ListCandidateArtifacts(ListCandidateArtifactsRequest) returns (ListCandidateArtifactsResponse);
@@ -998,6 +1004,12 @@ message RunningOperationDetail {
 message ListCandidateArtifactsRequest {
   string organization_id = 1;
   string release_definition_id = 2;
+  // Cascade parameters (REQ-079 AC-079-08 / D11): workload_ref is the
+  // "<gvr.resource>/<namespace>/<name>" form also used by the operator
+  // control stream; container/operation_version require workload_ref.
+  string workload_ref = 3;
+  string container = 4;
+  string operation_version = 5;
 }
 
 message ListCandidateArtifactsResponse {
@@ -1036,26 +1048,62 @@ message ConvergenceTaskDetail {
   string incompatibility_reason = 11;
 }
 
-message EmergencyChangeRequest {
-  string release_definition_id = 1;
-  string idempotency_key = 2;
-  string reason = 3;
-  WorkloadRef workload_ref = 4;
-  oneof change {
-    SetContainerImage set_container_image = 5;
-    SetReplicas set_replicas = 6;
-    SetApprovedAnnotations set_approved_annotations = 7;
-  }
-  EmergencyConvergence convergence = 8;
+// ExecuteEmergencyChange is the canonical emergency execution contract
+// (REQ-079, D-94 decision A). It replaces the legacy REQ-032 call surface.
+// workload_ref uses the "<gvr.resource>/<namespace>/<name>" string form
+// shared with the operator control stream.
+message ExecuteEmergencyChangeRequest {
+  string release_definition_id = 1; // required (domain term: ReleaseDefinition)
+  string workload_ref = 2;          // required; "<gvr.resource>/<namespace>/<name>"
+  string container = 3;             // optional; requires workload_ref (D11)
+  string operation_version = 4;     // optional; requires workload_ref (D11/D4)
+  string artifact_ref = 5;          // required; must resolve to a ListCandidateArtifacts candidate (D14)
+  ConvergenceStrategy convergence_strategy = 6; // required; UNSPECIFIED rejected (D12/D13)
+  repeated string target_locks = 7; // required when REQUIRE_PROMOTION (D12)
+  string idempotency_key = 8;       // write idempotency key (ADR-009)
+  bytes request_hash = 9;           // request fingerprint (ADR-009)
 }
 
-message EmergencyChangeResponse {
-  string operation_id = 1;
-  string status = 2;
-  EmergencyConvergence convergence = 3;
-  string convergence_task_id = 4;
-  string image_reference = 5;
-  google.protobuf.Timestamp accepted_at = 6;
+message ExecuteEmergencyChangeResponse {
+  EmergencyResult result = 1;
+  string operation_id = 2;         // linked Operation for traceability
+  string operation_version = 3;    // authoritative version derived on acceptance (D4)
+}
+
+// buf:lint:ignore ENUM_VALUE_PREFIX
+// REQ-079 §4 pins the canonical value names REVERT_ON_NEXT_RECONCILE /
+// REQUIRE_PROMOTION (grilling decisions D12/D13); prefixing would diverge
+// from the contract wording and the Go constant names derived from it.
+enum ConvergenceStrategy {
+  CONVERGENCE_STRATEGY_UNSPECIFIED = 0; // proto3 zero value; rejected by the server (D13)
+  REVERT_ON_NEXT_RECONCILE = 1;         // revert at next reconcile (ADR-011)
+  REQUIRE_PROMOTION = 2;                // persistent Convergence Task (ADR-011)
+}
+
+// OperationVersion is a message (not a scalar) so connect-es emits an
+// OperationVersionSchema export consumed by the frontend gate fixture.
+message OperationVersion {
+  string version = 1; // semver-style string (e.g. "v1.0.0")
+}
+
+message EmergencyErrorDetail {
+  EmergencyReasonCode reason_code = 1; // typed classification (D2)
+  string message = 2;                  // user-facing message
+  bool retryable = 3;                  // client retry guidance (D3)
+}
+
+enum EmergencyReasonCode {
+  EMERGENCY_REASON_CODE_UNSPECIFIED = 0;
+  EMERGENCY_REASON_CODE_KILL_SWITCH_DISABLED = 1;
+  EMERGENCY_REASON_CODE_NO_CANDIDATE_ARTIFACT = 2;
+  EMERGENCY_REASON_CODE_VALUES_CONFLICT = 3;
+  EMERGENCY_REASON_CODE_OPERATION_IN_PROGRESS = 4;
+  EMERGENCY_REASON_CODE_INTERNAL = 5;
+  EMERGENCY_REASON_CODE_ARTIFACT_NOT_FOUND = 6;
+  EMERGENCY_REASON_CODE_WORKLOAD_NOT_FOUND = 7;
+  EMERGENCY_REASON_CODE_CONTAINER_NOT_FOUND = 8;
+  EMERGENCY_REASON_CODE_VERSION_INVALID = 9;
+  EMERGENCY_REASON_CODE_LOCKED_PATH = 10;
 }
 
 enum EmergencyEffectStatus {
@@ -1075,6 +1123,10 @@ message EmergencyResult {
   string revert_status = 6;
   string reconciled_by_operation_id = 7;
   EmergencyEffectStatus effect_status = 8;
+  // requested=true means the change was accepted and queued; execution is
+  // asynchronous and its terminal state arrives via GetOperation/WatchOperation
+  // or events (REQ-079 D1).
+  bool requested = 9;
 }
 
 message EmergencyTypedValues {

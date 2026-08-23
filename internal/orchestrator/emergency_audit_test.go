@@ -18,25 +18,32 @@ import (
 	"github.com/ndzuki/release-manager/internal/trust"
 )
 
-func TestEmergencyChange_AuditsSuccessAndFailure(t *testing.T) {
+func TestExecuteEmergencyChange_AuditsSuccessAndFailure(t *testing.T) {
 	_, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
 	seedEmergencyAuditIdentity(t, st)
+	require.NoError(t, st.EmergencyConfig().SetEmergencyConfig(t.Context(), store.EmergencyConfig{Enabled: true}))
+	seedEmergencyTestArtifact(t, st)
 
 	logger := slog.New(slog.DiscardHandler)
 	emitter := audit.NewEmitter(st.AuditEvents(), logger, audit.EmitterConfig{
 		BufferSize: 16, FlushInterval: time.Hour, BatchSize: 16, SpoolPath: t.TempDir() + "/audit.jsonl",
 	})
 	dispatcher := &recordingEmergencyDispatcher{}
-	svc := NewService(st, trust.NewStubVerifier(st.Verifications(), nil, logger), "staging", emitter, dispatcher, authorization.NewStoreAuthorizer(st), logger)
+	uowStore, ok := st.(interface {
+		store.Store
+		OperationCreationUnitOfWork() store.OperationCreationUnitOfWork
+	})
+	require.True(t, ok)
+	svc := NewService(st, trust.NewStubVerifier(st.Verifications(), nil, logger), "staging", emitter, dispatcher, authorization.NewStoreAuthorizer(st), uowStore.OperationCreationUnitOfWork(), logger)
 	ctx := emergencyAuditContext()
 
-	successResp, err := svc.EmergencyChange(ctx, emergencyReplicasRequest("audit-success", 3))
+	successResp, err := svc.ExecuteEmergencyChange(ctx, emergencyImageRequest("audit-success"))
 	require.NoError(t, err)
-	invalid := emergencyReplicasRequest("audit-failure", 3)
-	invalid.Msg.Reason = ""
-	_, err = svc.EmergencyChange(ctx, invalid)
+	invalid := emergencyImageRequest("audit-failure")
+	invalid.Msg.ArtifactRef = ""
+	_, err = svc.ExecuteEmergencyChange(ctx, invalid)
 	require.Error(t, err)
 
 	require.NoError(t, emitter.Shutdown(context.Background()))
@@ -77,26 +84,36 @@ func emergencyAuditContext() context.Context {
 	})
 }
 
-func TestEmergencyChange_AuditDoesNotPersistRawPayload(t *testing.T) {
+func TestExecuteEmergencyChange_AuditDoesNotPersistRawPayload(t *testing.T) {
 	_, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
 	seedEmergencyAuditIdentity(t, st)
+	require.NoError(t, st.EmergencyConfig().SetEmergencyConfig(t.Context(), store.EmergencyConfig{Enabled: true}))
+	seedEmergencyTestArtifact(t, st)
 
 	logger := slog.New(slog.DiscardHandler)
 	emitter := audit.NewEmitter(st.AuditEvents(), logger, audit.EmitterConfig{
 		BufferSize: 4, FlushInterval: time.Hour, BatchSize: 4, SpoolPath: t.TempDir() + "/audit.jsonl",
 	})
-	svc := NewService(st, trust.NewStubVerifier(st.Verifications(), nil, logger), "staging", emitter, &recordingEmergencyDispatcher{}, authorization.NewStoreAuthorizer(st), logger)
-	req := emergencyReplicasRequest("audit-redaction", 3)
-	req.Msg.Reason = "token=secret-value"
-	resp, err := svc.EmergencyChange(emergencyAuditContext(), req)
+	uowStore, ok := st.(interface {
+		store.Store
+		OperationCreationUnitOfWork() store.OperationCreationUnitOfWork
+	})
+	require.True(t, ok)
+	svc := NewService(st, trust.NewStubVerifier(st.Verifications(), nil, logger), "staging", emitter, &recordingEmergencyDispatcher{}, authorization.NewStoreAuthorizer(st), uowStore.OperationCreationUnitOfWork(), logger)
+	resp, err := svc.ExecuteEmergencyChange(emergencyAuditContext(), emergencyImageRequest("audit-redaction"))
 	require.NoError(t, err)
 	require.NoError(t, emitter.Shutdown(context.Background()))
 
 	events, err := st.AuditEvents().ListByResource(context.Background(), "operation", resp.Msg.OperationId)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
-	assert.NotContains(t, events[0].Metadata["reason"], "secret-value")
+	// The audit event carries identifiers only; no request payload fields
+	// (artifact_ref / workload_ref / container values) leak into metadata.
+	for _, value := range events[0].Metadata {
+		assert.NotContains(t, value, "artifact-img")
+		assert.NotContains(t, value, "deployments/default/api")
+	}
 	assert.Equal(t, store.AuditActorUser, events[0].ActorKind)
 }

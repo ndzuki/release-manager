@@ -111,6 +111,14 @@ func (s *AuthorizationService) GetAuthorizationSnapshot(
 	response.CanResolveEmergency = s.allowed(ctx, subject, organizationID, store.AuthorizationResolveEmergency)
 	response.CanCreateValuesRevision = s.allowed(ctx, subject, organizationID, store.AuthorizationCreateValues)
 	response.CanApproveValuesRevision = s.allowed(ctx, subject, organizationID, store.AuthorizationApproveValues)
+	// REQ-079 D6: the global emergency kill switch. Missing or unreadable
+	// configuration fails closed to false (the store default), so a config
+	// read error must not take down the whole authorization snapshot.
+	emergencyConfig, configErr := s.store.EmergencyConfig().GetEmergencyConfig(ctx)
+	if configErr != nil {
+		s.logger.Warn("emergency config unavailable; kill switch fails closed", "error", configErr)
+	}
+	response.EmergencyChangeEnabled = emergencyConfig.Enabled
 	return connect.NewResponse(response), nil
 }
 

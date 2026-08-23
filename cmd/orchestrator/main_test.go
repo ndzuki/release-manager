@@ -1072,7 +1072,7 @@ func TestServiceReadOnlyProcedures(t *testing.T) {
 		trustv1connect.TrustServiceRevokeTrustRootProcedure,
 		orchestratorv1connect.OrchestratorServiceCreateOperationProcedure,
 		orchestratorv1connect.OrchestratorServiceCreateEnrollmentTokenProcedure,
-		orchestratorv1connect.OrchestratorServiceEmergencyChangeProcedure,
+		orchestratorv1connect.OrchestratorServiceExecuteEmergencyChangeProcedure,
 		orchestratorv1connect.OrchestratorServiceSyncInventoryProcedure,
 		orchestratorv1connect.OrchestratorServiceConfigureClusterRouteProcedure,
 		orchestratorv1connect.OrchestratorServiceCreateValuesRevisionProcedure,

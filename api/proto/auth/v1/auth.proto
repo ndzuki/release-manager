@@ -343,6 +343,9 @@ message GetAuthorizationSnapshotResponse {
   uint64 checkpoint = 12;
   bool fresh = 13;
   string actor_id = 14;
+  // Global emergency change kill switch (REQ-079 D6): false blocks every
+  // ExecuteEmergencyChange entry.
+  bool emergency_change_enabled = 15;
 }
 
 message SetCapabilityGrantRequest {

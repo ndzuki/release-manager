@@ -329,7 +329,12 @@ func mapMethodToAction(method string) string {
 		strings.HasPrefix(method, "Submit"), strings.HasPrefix(method, "Approve"),
 		strings.HasPrefix(method, "Reject"), strings.HasPrefix(method, "End"),
 		strings.HasPrefix(method, "Retire"), strings.HasPrefix(method, "Run"),
-		strings.HasPrefix(method, "Unarchive"):
+		strings.HasPrefix(method, "Unarchive"),
+		// Execute: canonical emergency execution RPC (REQ-079). Without this
+		// branch mapMethodToAction returns "" → 403, the same prefix-table
+		// gap that hit SwitchOrganization in TASK-072 (per
+		// core/go/connect-rpc.md 踩坑实践).
+		strings.HasPrefix(method, "Execute"):
 		return "write"
 	default:
 		return ""

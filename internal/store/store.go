@@ -49,11 +49,15 @@ var (
 	ErrOperatorStateConflict         = errors.New("store: operator state conflict")
 	ErrAuditUnavailable              = errors.New("store: audit unavailable")
 	ErrEmergencyConflict             = errors.New("store: conflicting emergency target")
-	ErrAuthorizationStale            = errors.New("store: authorization source version changed")
-	ErrRootNotLive                   = errors.New("store: trust root not in active or grace state")
-	ErrLastRootRemovalForbidden      = errors.New("last_root_removal_forbidden")
-	ErrBundleNotReady                = errors.New("store: bundle not ready")
-	ErrBundleRejected                = errors.New("store: bundle rejected")
+	// ErrEmergencyOperationInProgress reports a non-terminal EMERGENCY
+	// operation already exists for the release definition (REQ-079 D18:
+	// release-global emergency mutex, AC-079-G3).
+	ErrEmergencyOperationInProgress = errors.New("store: emergency operation in progress")
+	ErrAuthorizationStale           = errors.New("store: authorization source version changed")
+	ErrRootNotLive                  = errors.New("store: trust root not in active or grace state")
+	ErrLastRootRemovalForbidden     = errors.New("last_root_removal_forbidden")
+	ErrBundleNotReady               = errors.New("store: bundle not ready")
+	ErrBundleRejected               = errors.New("store: bundle rejected")
 )
 
 // ValuesRevision lifecycle sentinel errors.
@@ -250,12 +254,18 @@ type Operation struct {
 }
 
 // OperationCreationRequest contains the durable records and artifact links that
-// must be committed atomically when a standard operation is created.
+// must be committed atomically when a standard operation is created. When
+// Emergency is non-nil the unit of work runs the EMERGENCY creation branch
+// (REQ-079: the canonical ExecuteEmergencyChange path reuses the standard
+// ADR-009 transaction seam instead of a private transaction): it commits the
+// operation, emergency intent, convergence task and idempotency record in one
+// transaction and skips bundle selection/outbox dispatch.
 type OperationCreationRequest struct {
 	Operation                    *Operation
 	Dispatch                     *OutboxEntry
 	CandidateArtifactDigests     []string
 	ExpectedAuthorizationVersion uint64
+	Emergency                    *EmergencyCreateCommand
 }
 
 // OperationCreationResult reports the records affected by operation creation.
@@ -263,6 +273,10 @@ type OperationCreationResult struct {
 	Operation            *Operation
 	BundleRestored       bool
 	LinkedCandidateCount int64
+	// Intent/ConvergenceTask/Replayed are populated by the EMERGENCY branch.
+	Intent          *EmergencyIntent
+	ConvergenceTask *ConvergenceTask
+	Replayed        bool
 }
 
 // OperationCreationUnitOfWork atomically creates an operation, persists its
@@ -452,6 +466,11 @@ type ValuesRevision struct {
 	DecidedAt           *time.Time      `json:"decided_at,omitempty"`
 	CreatedAt           time.Time       `json:"created_at"`
 	UpdatedAt           time.Time       `json:"updated_at"`
+	// Convergence bindings (REQ-079 D10/D15): operation ids of the Convergence
+	// Tasks locking this revision and the locked values paths. Postgres stores
+	// them as uuid[]/text[] array columns; SQLite stores JSON-encoded TEXT.
+	ConvergenceTaskIds []string `json:"convergence_task_ids,omitempty"`
+	LockedPaths        []string `json:"locked_paths,omitempty"`
 }
 
 // ValuesDecisionAction identifies a durable approval workflow transition.
@@ -1203,7 +1222,9 @@ type EmergencyCreateResult struct {
 }
 
 type EmergencyIntentStore interface {
-	CreateIfAvailable(ctx context.Context, command EmergencyCreateCommand) (*EmergencyCreateResult, error)
+	// Creation runs through OperationCreationUnitOfWork (REQ-079): the
+	// EMERGENCY branch commits operation + intent + convergence task +
+	// idempotency record atomically on the shared ADR-009 transaction seam.
 	GetReplay(ctx context.Context, scope, keyHash, requestHash string) (*EmergencyCreateResult, error)
 	GetByOperationID(ctx context.Context, operationID string) (*EmergencyIntent, error)
 	GetByCommandID(ctx context.Context, commandID string) (*EmergencyIntent, error)
@@ -1232,6 +1253,30 @@ type ConvergenceTaskStore interface {
 	HasPendingPromotionPath(ctx context.Context, definitionID string, promotionPaths []string) (bool, error)
 	MarkConverged(ctx context.Context, id, revisionID string) error
 	BindRevision(ctx context.Context, id, revisionID, revisionStatus string) error
+}
+
+// --- Emergency configuration (REQ-079) ---
+
+// EmergencyConfig is the global emergency change configuration snapshot.
+type EmergencyConfig struct {
+	// Enabled is the kill switch: false blocks every ExecuteEmergencyChange
+	// entry (REQ-079 D6). A missing configuration key fails closed to false.
+	Enabled bool
+	// OperationTimeout bounds a non-terminal EMERGENCY operation (REQ-079
+	// D16). A missing or unparsable configuration value falls back to the
+	// default.
+	OperationTimeout time.Duration
+}
+
+// DefaultEmergencyOperationTimeout is the D16 default EMERGENCY deadline.
+const DefaultEmergencyOperationTimeout = 30 * time.Second
+
+// EmergencyConfigStore reads the kill switch and timeout configuration keys
+// from the shared application settings table (ADR-014).
+type EmergencyConfigStore interface {
+	GetEmergencyConfig(ctx context.Context) (EmergencyConfig, error)
+	// SetEmergencyConfig upserts the two configuration keys.
+	SetEmergencyConfig(ctx context.Context, config EmergencyConfig) error
 }
 
 // --- Trust root domain types (REQ-043) ---
@@ -2327,6 +2372,7 @@ type Store interface {
 	PreflightLifecycles() PreflightLifecycleStore
 	EmergencyIntents() EmergencyIntentStore
 	ConvergenceTasks() ConvergenceTaskStore
+	EmergencyConfig() EmergencyConfigStore
 	Authorization() AuthorizationStore
 	Close() error
 }

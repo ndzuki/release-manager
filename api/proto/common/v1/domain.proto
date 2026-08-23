@@ -135,6 +135,10 @@ message ValuesRevision {
   string created_by_user_id = 11;
   google.protobuf.Timestamp submitted_at = 12;
   google.protobuf.Timestamp decided_at = 13;
+  // Convergence bindings (REQ-079 D10): operation ids of the Convergence
+  // Tasks locking this revision, and the locked values paths.
+  repeated string convergence_task_ids = 14;
+  repeated string locked_paths = 15;
 }
 
 // SecretRef holds a reference to a secret, never the secret value itself.
