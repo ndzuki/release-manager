@@ -18,6 +18,7 @@ import {
   ConvergenceStrategy,
   CreatePrepareSessionRequestSchema,
   ExecuteEmergencyChangeRequestSchema,
+  GetOperationRequestSchema,
   GetPrepareSessionRequestSchema,
   ListCandidateArtifactsRequestSchema,
   ListConvergenceTasksRequestSchema,
@@ -198,11 +199,26 @@ export async function listCandidateArtifacts(
   return response.artifacts.map(mapCandidateArtifact);
 }
 
+/**
+ * Fetches the authoritative EmergencyResult projection attached to
+ * GetOperation (AC-058-20: a direct URL restores the full result without any
+ * in-memory dependency on the submitting page).
+ */
+export async function getEmergencyResult(
+  operationId: string,
+  signal?: AbortSignal,
+): Promise<EmergencyResultDisplay | null> {
+  const response = await orchestratorEmergencyClient.getOperation(
+    create(GetOperationRequestSchema, { operationId }),
+    { signal },
+  );
+  return mapEmergencyResult(response.emergencyResult);
+}
+
 export async function executeEmergencyChange(
   input: ExecuteEmergencyInput,
   signal?: AbortSignal,
-): Promise<ExecuteEmergencyOutput> {
-  const response = await orchestratorEmergencyClient.executeEmergencyChange(
+): Promise<ExecuteEmergencyOutput> {  const response = await orchestratorEmergencyClient.executeEmergencyChange(
     create(ExecuteEmergencyChangeRequestSchema, {
       releaseDefinitionId: input.releaseDefinitionId,
       workloadRef: input.workloadRef,

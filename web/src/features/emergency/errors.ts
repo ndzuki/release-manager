@@ -69,6 +69,10 @@ const REASON_MESSAGES: Record<string, string> = {
   customer_disabled: '客户已停用',
   release_definition_disabled: '发布定义已停用',
   authentication_required: '登录已失效，请重新登录',
+  parent_conflict: '收敛父版本已变化，请刷新后重试',
+  task_invalid: '所选任务不合法，请刷新列表',
+  release_definition_not_found: '发布定义不存在',
+  release_definition_owner_unresolved: '发布定义归属未解析',
   invalid_argument: '请求参数不合法，请检查后重试',
   not_found: '资源不存在或当前账号不可见',
 };
@@ -135,6 +139,13 @@ export function mapEmergencyError(error: unknown): EmergencyErrorDisplay {
         code: 'idempotency_conflict',
         message: REASON_MESSAGES.idempotency_conflict,
         retryable: false,
+        typed: false,
+      };
+    case Code.Aborted:
+      return {
+        code: reason || 'parent_conflict',
+        message: reasonMessageFor(reason, REASON_MESSAGES.parent_conflict),
+        retryable: RETRYABLE_CODES.has(reason),
         typed: false,
       };
     case Code.FailedPrecondition:

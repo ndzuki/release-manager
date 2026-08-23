@@ -10,8 +10,13 @@ const mocks = vi.hoisted(() => ({
   auth: {
     user: { id: 'admin-1', roles: ['release_admin'] },
   },
+  authorization: {
+    canApproveValuesRevision: false,
+    load: vi.fn(async () => undefined),
+    reset: vi.fn(),
+  },
   editor: {
-    currentRevision: null as null | { createdBy: string; status: string },
+    currentRevision: null as null | { createdByUserId: string; status: string },
     parentRevision: null as null | { status: string },
     editorContent: '# Paste or edit your values.yaml here\n{}',
     editorLanguage: 'yaml',
@@ -20,6 +25,10 @@ const mocks = vi.hoisted(() => ({
     loading: false,
     saving: false,
     approving: false,
+    discarding: false,
+    convergenceMode: false,
+    lockedPaths: [] as string[],
+    preparedTaskIds: [] as string[],
     error: null as string | null,
     canonicalCurrent: {} as unknown | null,
     validationIssue: null,
@@ -34,6 +43,7 @@ const mocks = vi.hoisted(() => ({
     resetScope: vi.fn(),
     setEditable: vi.fn(),
     load: vi.fn(async () => undefined),
+    loadConvergence: vi.fn(async () => undefined),
     reloadParent: vi.fn(async () => undefined),
     setEditorLanguage: vi.fn(),
     setEditorContent: vi.fn(),
@@ -41,8 +51,10 @@ const mocks = vi.hoisted(() => ({
     addSecretRef: vi.fn(),
     removeSecretRef: vi.fn(),
     save: vi.fn(async () => true),
+    submit: vi.fn(async () => true),
     approve: vi.fn(async () => true),
     reject: vi.fn(async () => true),
+    discard: vi.fn(async () => true),
     dispose: vi.fn(),
   },
 }));
@@ -50,6 +62,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('vue-router', () => ({ useRoute: () => mocks.route }));
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => mocks.auth }));
 vi.mock('@/stores/valuesEditor', () => ({ useValuesEditorStore: () => mocks.editor }));
+vi.mock('@/stores/emergencyAuthorization', () => ({ useEmergencyAuthorizationStore: () => mocks.authorization }));
 
 function mountPage() {
   return mount(ValuesEditorPage, {

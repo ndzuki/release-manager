@@ -1,7 +1,7 @@
 import type { ValuesStatus } from '@/gen/common/v1/domain_pb';
 
 export type EditorLanguage = 'yaml' | 'json';
-export type RevisionStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'superseded';
+export type RevisionStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'superseded' | 'discarded';
 
 export interface SecretRef {
   path?: string;
@@ -34,6 +34,9 @@ export interface ValuesRevision {
   createdAt: string;
   submittedAt?: string;
   decidedAt?: string;
+  /** Convergence bindings (REQ-079 D10): task operation ids + locked paths. */
+  convergenceTaskIds: string[];
+  lockedPaths: string[];
 }
 
 export interface DiffChange {
@@ -75,6 +78,8 @@ export function statusFromProto(status: ValuesStatus): RevisionStatus {
       return 'pending_approval';
     case 5:
       return 'superseded';
+    case 6:
+      return 'discarded';
     default:
       return 'draft';
   }
