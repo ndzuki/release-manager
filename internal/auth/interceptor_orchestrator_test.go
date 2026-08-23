@@ -16,7 +16,7 @@ import (
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
 
-func TestAuthInterceptor_OrchestratorEmergencyChange(t *testing.T) {
+func TestAuthInterceptor_OrchestratorExecuteEmergencyChange(t *testing.T) {
 	ctx := context.Background()
 	st, err := sqlitestore.Open(t.TempDir() + "/auth.db")
 	require.NoError(t, err)
@@ -65,11 +65,11 @@ func TestAuthInterceptor_OrchestratorEmergencyChange(t *testing.T) {
 	jwtManager := NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour)
 	interceptor := NewAuthInterceptor(jwtManager, st, enforcer, map[string]bool{}, logger)
 	call := interceptor(func(_ context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
-		return connect.NewResponse(&orchestratorv1.EmergencyChangeResponse{}), nil
+		return connect.NewResponse(&orchestratorv1.ExecuteEmergencyChangeResponse{}), nil
 	})
 	newRequest := func() connect.AnyRequest {
 		return &orchestratorRequest{
-			Request: connect.NewRequest(&orchestratorv1.EmergencyChangeRequest{}),
+			Request: connect.NewRequest(&orchestratorv1.ExecuteEmergencyChangeRequest{}),
 		}
 	}
 
@@ -223,12 +223,12 @@ func (r *operatorWriteRequest) Spec() connect.Spec {
 }
 
 type orchestratorRequest struct {
-	*connect.Request[orchestratorv1.EmergencyChangeRequest]
+	*connect.Request[orchestratorv1.ExecuteEmergencyChangeRequest]
 }
 
 func (r *orchestratorRequest) Spec() connect.Spec {
 	return connect.Spec{
-		Procedure:  orchestratorv1connect.OrchestratorServiceEmergencyChangeProcedure,
+		Procedure:  orchestratorv1connect.OrchestratorServiceExecuteEmergencyChangeProcedure,
 		StreamType: connect.StreamTypeUnary,
 	}
 }

@@ -161,9 +161,9 @@ const (
 	// OrchestratorServiceRevokePendingEnrollmentTokenProcedure is the fully-qualified name of the
 	// OrchestratorService's RevokePendingEnrollmentToken RPC.
 	OrchestratorServiceRevokePendingEnrollmentTokenProcedure = "/orchestrator.v1.OrchestratorService/RevokePendingEnrollmentToken"
-	// OrchestratorServiceEmergencyChangeProcedure is the fully-qualified name of the
-	// OrchestratorService's EmergencyChange RPC.
-	OrchestratorServiceEmergencyChangeProcedure = "/orchestrator.v1.OrchestratorService/EmergencyChange"
+	// OrchestratorServiceExecuteEmergencyChangeProcedure is the fully-qualified name of the
+	// OrchestratorService's ExecuteEmergencyChange RPC.
+	OrchestratorServiceExecuteEmergencyChangeProcedure = "/orchestrator.v1.OrchestratorService/ExecuteEmergencyChange"
 	// OrchestratorServiceListEmergencyTargetsProcedure is the fully-qualified name of the
 	// OrchestratorService's ListEmergencyTargets RPC.
 	OrchestratorServiceListEmergencyTargetsProcedure = "/orchestrator.v1.OrchestratorService/ListEmergencyTargets"
@@ -390,8 +390,8 @@ type OrchestratorServiceClient interface {
 	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
 	GetEnrollmentTokenStatus(context.Context, *connect.Request[v1.GetEnrollmentTokenStatusRequest]) (*connect.Response[v1.GetEnrollmentTokenStatusResponse], error)
 	RevokePendingEnrollmentToken(context.Context, *connect.Request[v1.RevokePendingEnrollmentTokenRequest]) (*connect.Response[v1.RevokePendingEnrollmentTokenResponse], error)
-	// Emergency change (REQ-032)
-	EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error)
+	// Emergency change (REQ-079 canonical contract; replaces the REQ-032 legacy call surface)
+	ExecuteEmergencyChange(context.Context, *connect.Request[v1.ExecuteEmergencyChangeRequest]) (*connect.Response[v1.ExecuteEmergencyChangeResponse], error)
 	ListEmergencyTargets(context.Context, *connect.Request[v1.ListEmergencyTargetsRequest]) (*connect.Response[v1.ListEmergencyTargetsResponse], error)
 	CheckEmergencyConflict(context.Context, *connect.Request[v1.CheckEmergencyConflictRequest]) (*connect.Response[v1.CheckEmergencyConflictResponse], error)
 	ListCandidateArtifacts(context.Context, *connect.Request[v1.ListCandidateArtifactsRequest]) (*connect.Response[v1.ListCandidateArtifactsResponse], error)
@@ -646,10 +646,10 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("RevokePendingEnrollmentToken")),
 			connect.WithClientOptions(opts...),
 		),
-		emergencyChange: connect.NewClient[v1.EmergencyChangeRequest, v1.EmergencyChangeResponse](
+		executeEmergencyChange: connect.NewClient[v1.ExecuteEmergencyChangeRequest, v1.ExecuteEmergencyChangeResponse](
 			httpClient,
-			baseURL+OrchestratorServiceEmergencyChangeProcedure,
-			connect.WithSchema(orchestratorServiceMethods.ByName("EmergencyChange")),
+			baseURL+OrchestratorServiceExecuteEmergencyChangeProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ExecuteEmergencyChange")),
 			connect.WithClientOptions(opts...),
 		),
 		listEmergencyTargets: connect.NewClient[v1.ListEmergencyTargetsRequest, v1.ListEmergencyTargetsResponse](
@@ -761,7 +761,7 @@ type orchestratorServiceClient struct {
 	createEnrollmentToken        *connect.Client[v1.CreateEnrollmentTokenRequest, v1.CreateEnrollmentTokenResponse]
 	getEnrollmentTokenStatus     *connect.Client[v1.GetEnrollmentTokenStatusRequest, v1.GetEnrollmentTokenStatusResponse]
 	revokePendingEnrollmentToken *connect.Client[v1.RevokePendingEnrollmentTokenRequest, v1.RevokePendingEnrollmentTokenResponse]
-	emergencyChange              *connect.Client[v1.EmergencyChangeRequest, v1.EmergencyChangeResponse]
+	executeEmergencyChange       *connect.Client[v1.ExecuteEmergencyChangeRequest, v1.ExecuteEmergencyChangeResponse]
 	listEmergencyTargets         *connect.Client[v1.ListEmergencyTargetsRequest, v1.ListEmergencyTargetsResponse]
 	checkEmergencyConflict       *connect.Client[v1.CheckEmergencyConflictRequest, v1.CheckEmergencyConflictResponse]
 	listCandidateArtifacts       *connect.Client[v1.ListCandidateArtifactsRequest, v1.ListCandidateArtifactsResponse]
@@ -966,9 +966,9 @@ func (c *orchestratorServiceClient) RevokePendingEnrollmentToken(ctx context.Con
 	return c.revokePendingEnrollmentToken.CallUnary(ctx, req)
 }
 
-// EmergencyChange calls orchestrator.v1.OrchestratorService.EmergencyChange.
-func (c *orchestratorServiceClient) EmergencyChange(ctx context.Context, req *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error) {
-	return c.emergencyChange.CallUnary(ctx, req)
+// ExecuteEmergencyChange calls orchestrator.v1.OrchestratorService.ExecuteEmergencyChange.
+func (c *orchestratorServiceClient) ExecuteEmergencyChange(ctx context.Context, req *connect.Request[v1.ExecuteEmergencyChangeRequest]) (*connect.Response[v1.ExecuteEmergencyChangeResponse], error) {
+	return c.executeEmergencyChange.CallUnary(ctx, req)
 }
 
 // ListEmergencyTargets calls orchestrator.v1.OrchestratorService.ListEmergencyTargets.
@@ -1070,8 +1070,8 @@ type OrchestratorServiceHandler interface {
 	CreateEnrollmentToken(context.Context, *connect.Request[v1.CreateEnrollmentTokenRequest]) (*connect.Response[v1.CreateEnrollmentTokenResponse], error)
 	GetEnrollmentTokenStatus(context.Context, *connect.Request[v1.GetEnrollmentTokenStatusRequest]) (*connect.Response[v1.GetEnrollmentTokenStatusResponse], error)
 	RevokePendingEnrollmentToken(context.Context, *connect.Request[v1.RevokePendingEnrollmentTokenRequest]) (*connect.Response[v1.RevokePendingEnrollmentTokenResponse], error)
-	// Emergency change (REQ-032)
-	EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error)
+	// Emergency change (REQ-079 canonical contract; replaces the REQ-032 legacy call surface)
+	ExecuteEmergencyChange(context.Context, *connect.Request[v1.ExecuteEmergencyChangeRequest]) (*connect.Response[v1.ExecuteEmergencyChangeResponse], error)
 	ListEmergencyTargets(context.Context, *connect.Request[v1.ListEmergencyTargetsRequest]) (*connect.Response[v1.ListEmergencyTargetsResponse], error)
 	CheckEmergencyConflict(context.Context, *connect.Request[v1.CheckEmergencyConflictRequest]) (*connect.Response[v1.CheckEmergencyConflictResponse], error)
 	ListCandidateArtifacts(context.Context, *connect.Request[v1.ListCandidateArtifactsRequest]) (*connect.Response[v1.ListCandidateArtifactsResponse], error)
@@ -1322,10 +1322,10 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("RevokePendingEnrollmentToken")),
 		connect.WithHandlerOptions(opts...),
 	)
-	orchestratorServiceEmergencyChangeHandler := connect.NewUnaryHandler(
-		OrchestratorServiceEmergencyChangeProcedure,
-		svc.EmergencyChange,
-		connect.WithSchema(orchestratorServiceMethods.ByName("EmergencyChange")),
+	orchestratorServiceExecuteEmergencyChangeHandler := connect.NewUnaryHandler(
+		OrchestratorServiceExecuteEmergencyChangeProcedure,
+		svc.ExecuteEmergencyChange,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ExecuteEmergencyChange")),
 		connect.WithHandlerOptions(opts...),
 	)
 	orchestratorServiceListEmergencyTargetsHandler := connect.NewUnaryHandler(
@@ -1472,8 +1472,8 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceGetEnrollmentTokenStatusHandler.ServeHTTP(w, r)
 		case OrchestratorServiceRevokePendingEnrollmentTokenProcedure:
 			orchestratorServiceRevokePendingEnrollmentTokenHandler.ServeHTTP(w, r)
-		case OrchestratorServiceEmergencyChangeProcedure:
-			orchestratorServiceEmergencyChangeHandler.ServeHTTP(w, r)
+		case OrchestratorServiceExecuteEmergencyChangeProcedure:
+			orchestratorServiceExecuteEmergencyChangeHandler.ServeHTTP(w, r)
 		case OrchestratorServiceListEmergencyTargetsProcedure:
 			orchestratorServiceListEmergencyTargetsHandler.ServeHTTP(w, r)
 		case OrchestratorServiceCheckEmergencyConflictProcedure:
@@ -1657,8 +1657,8 @@ func (UnimplementedOrchestratorServiceHandler) RevokePendingEnrollmentToken(cont
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.RevokePendingEnrollmentToken is not implemented"))
 }
 
-func (UnimplementedOrchestratorServiceHandler) EmergencyChange(context.Context, *connect.Request[v1.EmergencyChangeRequest]) (*connect.Response[v1.EmergencyChangeResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.EmergencyChange is not implemented"))
+func (UnimplementedOrchestratorServiceHandler) ExecuteEmergencyChange(context.Context, *connect.Request[v1.ExecuteEmergencyChangeRequest]) (*connect.Response[v1.ExecuteEmergencyChangeResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ExecuteEmergencyChange is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) ListEmergencyTargets(context.Context, *connect.Request[v1.ListEmergencyTargetsRequest]) (*connect.Response[v1.ListEmergencyTargetsResponse], error) {

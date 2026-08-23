@@ -445,6 +445,9 @@ func toProtoValuesRevision(revision *store.ValuesRevision) *commonv1.ValuesRevis
 		StateVersion:        revision.StateVersion,
 		CreatedByUserId:     revision.CreatedByUserID,
 		SecretRefs:          make([]*commonv1.SecretRef, 0, len(revision.SecretRefs)),
+		// REQ-079 D10: convergence bindings.
+		ConvergenceTaskIds: revision.ConvergenceTaskIds,
+		LockedPaths:        revision.LockedPaths,
 	}
 	for _, ref := range revision.SecretRefs {
 		result.SecretRefs = append(result.SecretRefs, &commonv1.SecretRef{Path: ref.Path, Name: ref.Name, Key: ref.Key})

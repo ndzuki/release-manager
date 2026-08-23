@@ -182,6 +182,13 @@ func (s *Service) CreateValuesRevision(
 		CreatedAt:           now,
 		UpdatedAt:           now,
 	}
+	// REQ-079 D10/G10: convergence bindings ride the prepare session — the
+	// tasks being converged and their locked paths are recorded on the
+	// revision (Postgres uuid[]/text[] array columns).
+	if prepareSession != nil {
+		revision.ConvergenceTaskIds = append([]string(nil), prepareSession.TaskIDs...)
+		revision.LockedPaths = append([]string(nil), prepareSession.LockedPaths...)
+	}
 	command := store.CreateValuesDraftCommand{
 		Revision:                     revision,
 		PrepareTokenHash:             prepareTokenHash(prepareSession),

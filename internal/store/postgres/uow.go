@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -14,13 +15,21 @@ import (
 
 // OperationCreationUnitOfWork returns the PostgreSQL adapter for the operation
 // creation transaction. It executes on the REQ-070 transaction seam so GORM
-// writes and raw SQL share one connection (ADR-014).
+// writes and raw SQL share one connection (ADR-014). The EMERGENCY branch
+// (req.Emergency != nil) is the canonical ExecuteEmergencyChange creation path
+// (REQ-079): it commits operation + intent + convergence task + idempotency
+// record atomically on the same seam, eliminating the previous private
+// transaction fork.
 func (s *Store) OperationCreationUnitOfWork() store.OperationCreationUnitOfWork {
 	return func(ctx context.Context, req store.OperationCreationRequest) (*store.OperationCreationResult, error) {
 		if req.Operation == nil {
 			return nil, errors.New("operation is required")
 		}
-		if req.Dispatch == nil {
+		if req.Emergency != nil {
+			if req.Emergency.Operation == nil || req.Emergency.Intent == nil {
+				return nil, errors.New("emergency creation requires operation and intent")
+			}
+		} else if req.Dispatch == nil {
 			return nil, errors.New("preflight dispatch is required")
 		}
 		var result *store.OperationCreationResult
@@ -29,10 +38,138 @@ func (s *Store) OperationCreationUnitOfWork() store.OperationCreationUnitOfWork 
 			// placeholder translation used by the rest of this package.
 			pgTx := &Tx{gorm: tx}
 			var err error
-			result, err = createOperationUnitOfWork(ctx, pgTx, req)
+			if req.Emergency != nil {
+				result, err = createEmergencyOperationUnitOfWork(ctx, pgTx, req)
+			} else {
+				result, err = createOperationUnitOfWork(ctx, pgTx, req)
+			}
 			return err
 		})
 		return result, err
+	}
+}
+
+// createEmergencyOperationUnitOfWork atomically commits the EMERGENCY
+// operation, its intent, optional convergence task and the idempotency record
+// (REQ-079). Guards mirror the standard path: authorization fence, standard
+// operation exclusion, release-global EMERGENCY mutex (D18), field-lock
+// conflicts, and idempotent replay decode.
+//
+//nolint:gocyclo // Mirrors the legacy emergency create transaction; branches are domain-ordered.
+func createEmergencyOperationUnitOfWork(
+	ctx context.Context,
+	tx *Tx,
+	req store.OperationCreationRequest,
+) (*store.OperationCreationResult, error) {
+	command := req.Emergency
+	op := command.Operation
+	if err := checkAuthorizationFence(ctx, tx, command.ExpectedAuthorizationVersion); err != nil {
+		return nil, err
+	}
+	// 空 Key 时跳过全部幂等逻辑，直接业务创建。
+	idempotent := command.IdempotencyKeyHash != ""
+	if idempotent {
+		replayed, err := lookupEmergencyReplay(ctx, tx, *command)
+		if err != nil {
+			return nil, err
+		}
+		if replayed != nil {
+			return emergencyUowResult(replayed), nil
+		}
+	}
+
+	var standardCount int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM operations
+		WHERE release_definition_id = ?
+		  AND operation_type != 'EMERGENCY'
+		  AND status NOT IN ('succeeded','failed','cancelled','timeout')
+	`, op.ReleaseDefinitionID).Scan(&standardCount); err != nil {
+		return nil, fmt.Errorf("count standard operation conflicts: %w", err)
+	}
+	if standardCount > 0 {
+		return nil, store.ErrReleaseBusy
+	}
+	// D18: release-global EMERGENCY mutex — one in-flight (non-terminal)
+	// EMERGENCY operation per definition (AC-079-G3).
+	var emergencyCount int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM operations
+		WHERE release_definition_id = ?
+		  AND operation_type = 'EMERGENCY'
+		  AND status NOT IN ('succeeded','failed','cancelled','timeout')
+	`, op.ReleaseDefinitionID).Scan(&emergencyCount); err != nil {
+		return nil, fmt.Errorf("count in-flight emergency operations: %w", err)
+	}
+	if emergencyCount > 0 {
+		return nil, store.ErrEmergencyOperationInProgress
+	}
+
+	active, err := listActiveEmergencyIntents(ctx, tx, op.ReleaseDefinitionID)
+	if err != nil {
+		return nil, err
+	}
+	for _, existing := range active {
+		if emergencyIntentsConflict(existing, command.Intent) {
+			return nil, store.ErrEmergencyConflict
+		}
+	}
+
+	if err := createOperation(ctx, tx, op); err != nil {
+		return nil, err
+	}
+	if err := insertEmergencyIntent(ctx, tx, command.Intent); err != nil {
+		return nil, err
+	}
+	if command.ConvergenceTask != nil {
+		if err := insertConvergenceTask(ctx, tx, command.ConvergenceTask); err != nil {
+			return nil, err
+		}
+	}
+
+	if idempotent {
+		reference := emergencyReplayRef{OperationID: op.ID, IntentID: command.Intent.ID}
+		if command.ConvergenceTask != nil {
+			reference.ConvergenceTaskID = command.ConvergenceTask.ID
+		}
+		responseRef, err := json.Marshal(reference)
+		if err != nil {
+			return nil, fmt.Errorf("marshal emergency replay reference: %w", err)
+		}
+		expiresAt := command.IdempotencyExpiresAt
+		if expiresAt.IsZero() {
+			expiresAt = time.Now().UTC().Add(emergencyIdempotencyTTL)
+		}
+		existing, created, err := createOrGetIdempotencyRecord(ctx, tx, &store.IdempotencyRecord{
+			Scope: command.IdempotencyScope, Key: command.IdempotencyKeyHash,
+			RequestHash: command.RequestHash, ResponseRef: responseRef, ExpiresAt: expiresAt,
+		}, time.Now().UTC())
+		if err != nil {
+			return nil, err
+		}
+		if !created {
+			// 并发窗口内另一事务已提交相同 scope+key+hash：重放其结果，业务写入随回滚丢弃。
+			replayed, err := decodeEmergencyReplay(ctx, tx, existing)
+			if err != nil {
+				return nil, err
+			}
+			return emergencyUowResult(replayed), nil
+		}
+	}
+	if err := checkAuthorizationFence(ctx, tx, command.ExpectedAuthorizationVersion); err != nil {
+		return nil, err
+	}
+	return emergencyUowResult(&store.EmergencyCreateResult{
+		Operation: op, Intent: command.Intent, ConvergenceTask: command.ConvergenceTask,
+	}), nil
+}
+
+func emergencyUowResult(created *store.EmergencyCreateResult) *store.OperationCreationResult {
+	return &store.OperationCreationResult{
+		Operation:       created.Operation,
+		Intent:          created.Intent,
+		ConvergenceTask: created.ConvergenceTask,
+		Replayed:        created.Replayed,
 	}
 }
 

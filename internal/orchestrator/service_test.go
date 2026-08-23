@@ -1949,10 +1949,19 @@ func emergencyProjectionOp(t *testing.T, st store.Store, id, definitionID, deliv
 		ReleaseDefinitionID: definitionID, IdempotencyKey: id + "-key", RequestHash: id + "-hash",
 		CreatedAt: now, UpdatedAt: now,
 	}
-	_, err := st.EmergencyIntents().CreateIfAvailable(ctx, store.EmergencyCreateCommand{
+	command := store.EmergencyCreateCommand{
 		Operation: op, Intent: intent,
 		IdempotencyScope: "org-001:" + definitionID, IdempotencyKeyHash: id + "-hash",
 		RequestHash: id + "-hash", IdempotencyExpiresAt: now.Add(time.Hour),
+	}
+	uowStore, ok := st.(interface {
+		store.Store
+		OperationCreationUnitOfWork() store.OperationCreationUnitOfWork
+	})
+	require.True(t, ok)
+	_, err := uowStore.OperationCreationUnitOfWork()(ctx, store.OperationCreationRequest{
+		Operation: op,
+		Emergency: &command,
 	})
 	require.NoError(t, err)
 	return op, intent

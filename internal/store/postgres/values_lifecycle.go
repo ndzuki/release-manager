@@ -331,11 +331,13 @@ func insertValuesDraft(ctx context.Context, tx *Tx, revision *store.ValuesRevisi
 		INSERT INTO values_revisions (
 			id, release_definition_id, version, state_version, status, "values", digest,
 			parent_revision_id, secret_refs, created_by, created_by_user_id, approved_by,
-			approved_at, rejected_by, rejection_reason, submitted_at, decided_at, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', NULL, '', '', NULL, NULL, ?, ?)
+			approved_at, rejected_by, rejection_reason, submitted_at, decided_at,
+			convergence_task_ids, locked_paths, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', NULL, '', '', NULL, NULL, ?::uuid[], ?::text[], ?, ?)
 	`, revision.ID, revision.ReleaseDefinitionID, revision.Version, revision.StateVersion, string(revision.Status),
 		[]byte(revision.CanonicalDocument), revision.Digest, valuesOptionalString(revision.ParentRevisionID), refs,
-		revision.CreatedByUserID, revision.CreatedByUserID, revision.CreatedAt.UTC(), revision.UpdatedAt.UTC())
+		revision.CreatedByUserID, revision.CreatedByUserID, postgresArrayLiteral(revision.ConvergenceTaskIds),
+		postgresArrayLiteral(revision.LockedPaths), revision.CreatedAt.UTC(), revision.UpdatedAt.UTC())
 	if err != nil {
 		if isUniqueConstraint(err) {
 			return store.ErrParentConflict

@@ -7,14 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
@@ -25,55 +24,93 @@ import (
 )
 
 const (
-	maxEmergencyReasonBytes = 1000
-	maxAnnotationEntries    = 50
-	emergencyOperationTTL   = 30 * time.Second
-	workloadDeployment      = "DEPLOYMENT"
-	workloadStatefulSet     = "STATEFUL_SET"
-	workloadDaemonSet       = "DAEMON_SET"
+	workloadDeployment  = "DEPLOYMENT"
+	workloadStatefulSet = "STATEFUL_SET"
+	workloadDaemonSet   = "DAEMON_SET"
 )
+
+// operationVersionPattern is the semver-style contract accepted for
+// operation_version (REQ-079 D4/D17; OperationVersionSchema carries a plain
+// string, so the server enforces the shape).
+var operationVersionPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)
+
+// workloadGVRResources maps the operator control-stream GVR form
+// ("<gvr.resource>/<namespace>/<name>", per api/proto/operator/v1/operator.proto
+// RolloutProgress.workload_ref) to the store workload kinds accepted for
+// emergency changes.
+var workloadGVRResources = map[string]string{
+	"deployments":  workloadDeployment,
+	"statefulsets": workloadStatefulSet,
+	"daemonsets":   workloadDaemonSet,
+}
+
+// parsedWorkloadRef is the decoded canonical workload_ref string.
+type parsedWorkloadRef struct {
+	Kind      string // store workload kind (DEPLOYMENT/STATEFUL_SET/DAEMON_SET)
+	Namespace string
+	Name      string
+}
 
 type emergencyDispatcher interface {
 	DispatchEmergency(context.Context, string, *operatorv1.EmergencyCommand) error
 }
 
 type emergencyResolvedChange struct {
-	action            store.EmergencyAction
-	container         *string
-	artifactID        *string
-	imageReference    *string
-	targetReplicas    *int32
-	annotationScope   *string
-	annotationEntries json.RawMessage
-	promotionPaths    []string
-	targetSummary     string
+	action         store.EmergencyAction
+	workload       parsedWorkloadRef
+	container      string
+	artifactID     string
+	imageReference string
+	promotionPaths []string
+	targetSummary  string
 }
 
-// EmergencyChange validates and persists a typed emergency operation before immediate Operator delivery.
-// Implements REQ-032.
+// ExecuteEmergencyChange validates and persists a canonical emergency
+// operation before immediate Operator delivery (REQ-079, D-94 decision A).
+// It replaces the legacy REQ-032 call surface. Creation runs through the
+// shared OperationCreationUnitOfWork transaction seam (ADR-009/ADR-014,
+// REQ-079 plan Step 3 design comparison option A); authorization precedes the
+// idempotency hit (ADR-009).
 //
-//nolint:gocyclo // Emergency handler runs 16 sequentially ordered validation rules per REQ-032 spec.
-func (s *Service) EmergencyChange(
+//nolint:gocyclo // Emergency handler runs sequentially ordered validation rules per REQ-079.
+func (s *Service) ExecuteEmergencyChange(
 	ctx context.Context,
-	req *connect.Request[orchestratorv1.EmergencyChangeRequest],
-) (*connect.Response[orchestratorv1.EmergencyChangeResponse], error) {
+	req *connect.Request[orchestratorv1.ExecuteEmergencyChangeRequest],
+) (*connect.Response[orchestratorv1.ExecuteEmergencyChangeResponse], error) {
 	ctx = authorization.WithFenceCapture(ctx)
 	started := time.Now()
 	msg := req.Msg
+	strategy := msg.GetConvergenceStrategy()
 	actor, ok := authctx.ActorFromContext(ctx)
 	if !ok {
 		err := emergencyError(connect.CodeUnauthenticated, "authentication_required", "authentication required")
-		s.emitEmergencyAttempt(nil, msg, "", err, time.Since(started))
+		s.emitEmergencyAttempt(nil, msg.GetReleaseDefinitionId(), "", strategy, err, time.Since(started))
 		return nil, err
 	}
-	if err := validateEmergencyBase(msg); err != nil {
-		s.emitEmergencyAttempt(&actor, msg, "", err, time.Since(started))
+	if err := validateExecuteEmergencyRequest(msg); err != nil {
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, err, time.Since(started))
 		return nil, err
+	}
+
+	// AC-079-G2: the kill switch is the highest-priority gate (REQ-079 D6).
+	// Missing configuration fails closed to false (store default).
+	emergencyConfig, err := s.store.EmergencyConfig().GetEmergencyConfig(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("load emergency config: %w", err))
+	}
+	if !emergencyConfig.Enabled {
+		rpcErr := emergencyDetailError(
+			connect.CodeFailedPrecondition,
+			orchestratorv1.EmergencyReasonCode_EMERGENCY_REASON_CODE_KILL_SWITCH_DISABLED,
+			"emergency change is disabled by the kill switch", false,
+		)
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, rpcErr, time.Since(started))
+		return nil, rpcErr
 	}
 
 	definition, err := s.loadEmergencyDefinition(ctx, msg.GetReleaseDefinitionId())
 	if err != nil {
-		s.emitEmergencyAttempt(&actor, msg, "", err, time.Since(started))
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, err, time.Since(started))
 		return nil, err
 	}
 	customer, err := s.store.Customers().Get(ctx, definition.CustomerID)
@@ -82,81 +119,89 @@ func (s *Service) EmergencyChange(
 	}
 	if customer.Status != store.CustomerActive {
 		err := emergencyError(connect.CodePermissionDenied, "customer_disabled", "customer is disabled")
-		s.emitEmergencyAttempt(&actor, msg, "", err, time.Since(started))
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, err, time.Since(started))
 		return nil, err
 	}
-	requestHash, err := hashEmergencyRequest(msg)
+
+	requestHash, err := hashExecuteEmergencyRequest(msg)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("hash emergency request: %w", err))
 	}
 	keyHash := hashEmergencyIdempotencyKey(msg.GetIdempotencyKey())
-	resolved, err := s.resolveEmergencyChange(ctx, msg, definition)
+	resolved, err := s.resolveExecuteEmergencyChange(ctx, msg, definition)
 	if err != nil {
-		s.emitEmergencyAttempt(&actor, msg, "", err, time.Since(started))
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, err, time.Since(started))
 		return nil, err
 	}
 	if s.authorizer == nil {
 		err := emergencyError(connect.CodeUnavailable, "authorization_snapshot_stale", "authorization snapshot is unavailable")
-		s.emitEmergencyAttempt(&actor, msg, "", err, time.Since(started))
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, err, time.Since(started))
 		return nil, err
 	}
+	// ADR-009: authorization precedes the idempotency hit.
 	if err := s.authorizer.AuthorizeWrite(ctx, actor, definition.CustomerID, store.AuthorizationExecuteEmergency); err != nil {
-		s.emitEmergencyAttempt(&actor, msg, "", err, time.Since(started))
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, err, time.Since(started))
 		return nil, err
 	}
 	replay, err := s.store.EmergencyIntents().GetReplay(ctx, actor.OrganizationID+":"+definition.ID, keyHash, requestHash)
 	if err == nil {
-		return connect.NewResponse(emergencyResponse(replay, msg.GetConvergence())), nil
+		return connect.NewResponse(executeEmergencyResponse(replay.Operation, replay.Intent, replay.ConvergenceTask, msg.GetConvergenceStrategy())), nil
 	}
 	if errors.Is(err, store.ErrIdempotencyConflict) {
 		rpcErr := emergencyStoreError(err)
-		s.emitEmergencyAttempt(&actor, msg, "", rpcErr, time.Since(started))
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, rpcErr, time.Since(started))
 		return nil, rpcErr
 	}
 	if !errors.Is(err, store.ErrNotFound) {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("lookup emergency replay: %w", err))
 	}
-	if msg.GetConvergence() == orchestratorv1.EmergencyConvergence_EMERGENCY_CONVERGENCE_REQUIRE_PROMOTION {
+	if msg.GetConvergenceStrategy() == orchestratorv1.ConvergenceStrategy_REQUIRE_PROMOTION {
 		blocked, checkErr := s.store.ConvergenceTasks().HasPendingPromotionPath(ctx, definition.ID, resolved.promotionPaths)
 		if checkErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("check pending promotion paths: %w", checkErr))
 		}
 		if blocked {
-			rpcErr := emergencyError(connect.CodeFailedPrecondition, "promotion_path_blocked", "emergency target is locked")
-			s.emitEmergencyAttempt(&actor, msg, "", rpcErr, time.Since(started))
+			rpcErr := emergencyDetailError(
+				connect.CodeFailedPrecondition,
+				orchestratorv1.EmergencyReasonCode_EMERGENCY_REASON_CODE_LOCKED_PATH,
+				"emergency target is locked", false,
+			)
+			s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, rpcErr, time.Since(started))
 			return nil, rpcErr
 		}
 	}
 
 	now := time.Now().UTC()
-	deadline := now.Add(emergencyOperationTTL)
+	// D16: the emergency deadline comes from the configurable
+	// emergency.operation_timeout setting (default 30s).
+	deadline := now.Add(emergencyConfig.OperationTimeout)
 	opID := uuid.NewString()
 	commandID := uuid.NewString()
-	convergence := emergencyConvergenceFromProto(msg.GetConvergence())
+	convergence := convergenceStrategyFromProto(msg.GetConvergenceStrategy())
 	promotionPaths, err := json.Marshal(resolved.promotionPaths)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("encode promotion paths: %w", err))
 	}
 	intent := &store.EmergencyIntent{
 		ID: uuid.NewString(), ReleaseDefinitionID: definition.ID, OperationID: opID, CommandID: commandID,
-		Action: resolved.action, WorkloadKind: msg.GetWorkloadRef().GetKind(), WorkloadName: msg.GetWorkloadRef().GetName(),
-		WorkloadNamespace: msg.GetWorkloadRef().GetNamespace(), WorkloadUID: msg.GetWorkloadRef().GetUid(),
-		Container: resolved.container, ArtifactID: resolved.artifactID, ImageReference: resolved.imageReference,
-		TargetReplicas: resolved.targetReplicas, AnnotationScope: resolved.annotationScope,
-		AnnotationEntries: resolved.annotationEntries, Convergence: convergence, PromotionPaths: promotionPaths,
+		Action: resolved.action, WorkloadKind: resolved.workload.Kind, WorkloadName: resolved.workload.Name,
+		WorkloadNamespace: resolved.workload.Namespace, WorkloadUID: "",
+		Container: &resolved.container, ArtifactID: &resolved.artifactID, ImageReference: &resolved.imageReference,
+		Convergence: convergence, PromotionPaths: promotionPaths,
 		DeliveryStatus: "pending", CreatedAt: now, UpdatedAt: now,
 	}
 	op := &store.Operation{
 		ID: opID, OperationType: store.OperationEmergency, Status: store.StatusPending,
-		ReleaseDefinitionID: definition.ID, IdempotencyKey: keyHash, RequestHash: requestHash,
-		Actor:     store.ActorContext{UserID: actor.UserID, Organization: actor.OrganizationID},
-		CreatedAt: now, UpdatedAt: now, Deadline: &deadline,
+		ReleaseDefinitionID: definition.ID, IdempotencyKey: keyHash, IdempotencyScope: actor.OrganizationID + ":" + definition.ID,
+		RequestHash: requestHash,
+		Actor:       store.ActorContext{UserID: actor.UserID, Organization: actor.OrganizationID},
+		CreatedAt:   now, UpdatedAt: now, Deadline: &deadline,
 	}
 	var convergenceTask *store.ConvergenceTask
 	if convergence == store.EmergencyRequirePromotion {
 		convergenceTask = &store.ConvergenceTask{
 			ID: uuid.NewString(), OperationID: opID, ReleaseDefinitionID: definition.ID,
-			Action: resolved.action, TargetSummary: resolved.targetSummary, Reason: strings.TrimSpace(msg.GetReason()),
+			Action: resolved.action, TargetSummary: resolved.targetSummary, Reason: "",
 			PromotionPaths: promotionPaths, Status: "pending_promotion", SubmittedAt: now, CreatedAt: now,
 		}
 	}
@@ -164,32 +209,45 @@ func (s *Service) EmergencyChange(
 	if !ok {
 		return nil, emergencyError(connect.CodeUnavailable, "authorization_snapshot_stale", "authorization snapshot is unavailable")
 	}
-	created, err := s.store.EmergencyIntents().CreateIfAvailable(ctx, store.EmergencyCreateCommand{
-		Operation: op, Intent: intent, ConvergenceTask: convergenceTask,
+	if s.createOperation == nil {
+		return nil, emergencyDetailError(
+			connect.CodeUnavailable,
+			orchestratorv1.EmergencyReasonCode_EMERGENCY_REASON_CODE_INTERNAL,
+			"operation creation unit of work is unavailable", false,
+		)
+	}
+	created, err := s.createOperation(ctx, store.OperationCreationRequest{
+		Operation:                    op,
 		ExpectedAuthorizationVersion: expectedAuthorizationVersion,
-		IdempotencyScope:             actor.OrganizationID + ":" + definition.ID,
-		IdempotencyKeyHash:           keyHash,
-		RequestHash:                  requestHash,
-		IdempotencyExpiresAt:         now.Add(24 * time.Hour),
+		Emergency: &store.EmergencyCreateCommand{
+			Operation:                    op,
+			Intent:                       intent,
+			ConvergenceTask:              convergenceTask,
+			ExpectedAuthorizationVersion: expectedAuthorizationVersion,
+			IdempotencyScope:             actor.OrganizationID + ":" + definition.ID,
+			IdempotencyKeyHash:           keyHash,
+			RequestHash:                  requestHash,
+			IdempotencyExpiresAt:         now.Add(24 * time.Hour),
+		},
 	})
 	if err != nil {
 		rpcErr := emergencyStoreError(err)
-		s.emitEmergencyAttempt(&actor, msg, "", rpcErr, time.Since(started))
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, rpcErr, time.Since(started))
 		return nil, rpcErr
 	}
 	if !created.Replayed {
 		operatorID, onlineErr := s.onlineEmergencyOperator(ctx, definition)
 		if onlineErr != nil {
-			return nil, s.failEmergencyDelivery(ctx, created, &actor, msg, onlineErr, time.Since(started))
+			return nil, s.failEmergencyDelivery(ctx, created, &actor, msg.GetReleaseDefinitionId(), strategy, onlineErr, time.Since(started))
 		}
 		command := emergencyCommandFromIntent(created.Intent)
 		if s.emergencyDispatcher == nil {
 			deliveryErr := emergencyError(connect.CodeUnavailable, "delivery_failed", "emergency dispatcher is unavailable")
-			return nil, s.failEmergencyDelivery(ctx, created, &actor, msg, deliveryErr, time.Since(started))
+			return nil, s.failEmergencyDelivery(ctx, created, &actor, msg.GetReleaseDefinitionId(), strategy, deliveryErr, time.Since(started))
 		}
 		if err := s.emergencyDispatcher.DispatchEmergency(ctx, operatorID, command); err != nil {
 			deliveryErr := emergencyError(connect.CodeUnavailable, "delivery_failed", "emergency command delivery failed")
-			return nil, s.failEmergencyDelivery(ctx, created, &actor, msg, deliveryErr, time.Since(started))
+			return nil, s.failEmergencyDelivery(ctx, created, &actor, msg.GetReleaseDefinitionId(), strategy, deliveryErr, time.Since(started))
 		}
 		if err := s.store.EmergencyIntents().UpdateDeliveryStatus(ctx, created.Intent.ID, "queued"); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("mark emergency queued: %w", err))
@@ -201,10 +259,10 @@ func (s *Service) EmergencyChange(
 		created.Operation = transitioned
 	}
 
-	s.emitEmergencyAttempt(&actor, msg, created.Operation.ID, nil, time.Since(started))
+	s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), created.Operation.ID, strategy, nil, time.Since(started))
 	s.logger.Info("emergency change accepted", "operation_id", created.Operation.ID, "definition_id", definition.ID,
 		"action", resolved.action, "convergence", convergence)
-	return connect.NewResponse(emergencyResponse(created, msg.GetConvergence())), nil
+	return connect.NewResponse(executeEmergencyResponse(created.Operation, created.Intent, created.ConvergenceTask, msg.GetConvergenceStrategy())), nil
 }
 
 // ExpireEmergencyOperations moves overdue emergency operations to timeout and emits audit evidence.
@@ -266,29 +324,47 @@ func (s *Service) emitEmergencyTimeoutAudit(operation *store.Operation, intent *
 	}
 }
 
-func emergencyResponse(
-	created *store.EmergencyCreateResult,
-	convergence orchestratorv1.EmergencyConvergence,
-) *orchestratorv1.EmergencyChangeResponse {
-	response := &orchestratorv1.EmergencyChangeResponse{Convergence: convergence}
-	if created == nil || created.Operation == nil || created.Intent == nil {
+// executeEmergencyResponse projects one accepted (or idempotently replayed)
+// emergency creation onto the canonical response contract.
+func executeEmergencyResponse(
+	operation *store.Operation,
+	intent *store.EmergencyIntent,
+	convergenceTask *store.ConvergenceTask,
+	strategy orchestratorv1.ConvergenceStrategy,
+) *orchestratorv1.ExecuteEmergencyChangeResponse {
+	response := &orchestratorv1.ExecuteEmergencyChangeResponse{
+		Result: &orchestratorv1.EmergencyResult{
+			Requested:         true, // AC-079-G1: accepted and queued; execution is asynchronous
+			ConvergencePolicy: emergencyConvergenceToProto(convergenceStrategyFromProto(strategy)),
+		},
+	}
+	if operation == nil || intent == nil {
 		return response
 	}
-	response.OperationId = created.Operation.ID
-	response.Status = string(created.Operation.Status)
-	response.ImageReference = valueOrEmpty(created.Intent.ImageReference)
-	response.AcceptedAt = timestamppb.New(created.Operation.CreatedAt)
-	if created.ConvergenceTask != nil {
-		response.ConvergenceTaskId = created.ConvergenceTask.ID
+	response.OperationId = operation.ID
+	// D17: the authoritative version derives from the Operation state version.
+	response.OperationVersion = operationVersionFromStateVersion(operation.StateVersion)
+	if convergenceTask != nil {
+		response.Result.ConvergenceTasks = []*orchestratorv1.ConvergenceTaskSummary{{
+			TaskId: convergenceTask.ID, Status: convergenceTask.Status,
+		}}
 	}
 	return response
 }
 
+func operationVersionFromStateVersion(stateVersion int) string {
+	if stateVersion < 1 {
+		stateVersion = 1
+	}
+	return fmt.Sprintf("v%d.0.0", stateVersion)
+}
+
 func (s *Service) failEmergencyDelivery(
 	ctx context.Context,
-	created *store.EmergencyCreateResult,
+	created *store.OperationCreationResult,
 	actor *authctx.Actor,
-	msg *orchestratorv1.EmergencyChangeRequest,
+	definitionID string,
+	strategy orchestratorv1.ConvergenceStrategy,
 	deliveryErr error,
 	duration time.Duration,
 ) error {
@@ -309,7 +385,7 @@ func (s *Service) failEmergencyDelivery(
 			s.logger.Error("failed to mark emergency delivery terminal", "operation_id", operationID, "error", err)
 		}
 	}
-	s.emitEmergencyAttempt(actor, msg, operationID, deliveryErr, duration)
+	s.emitEmergencyAttempt(actor, definitionID, operationID, strategy, deliveryErr, duration)
 	return deliveryErr
 }
 
@@ -323,36 +399,59 @@ func connectErrorReasonCode(err error) string {
 	return connect.CodeOf(err).String()
 }
 
-//nolint:gocyclo // Validation rules must execute in REQ-defined order.
-func validateEmergencyBase(msg *orchestratorv1.EmergencyChangeRequest) error {
+// validateExecuteEmergencyRequest enforces the REQ-079 §4 field contract:
+// required identifiers, cascade dependencies (D11), convergence strategy
+// (D12/D13), target locks (D12) and the operation version shape (D4/D17).
+func validateExecuteEmergencyRequest(msg *orchestratorv1.ExecuteEmergencyChangeRequest) error {
 	if msg == nil || strings.TrimSpace(msg.GetReleaseDefinitionId()) == "" {
 		return emergencyError(connect.CodeInvalidArgument, "release_definition_id_required", "release_definition_id is required")
+	}
+	if _, err := parseWorkloadRef(msg.GetWorkloadRef()); err != nil {
+		return emergencyError(connect.CodeInvalidArgument, "invalid_workload_ref", "workload_ref is invalid")
 	}
 	if strings.TrimSpace(msg.GetIdempotencyKey()) == "" {
 		return emergencyError(connect.CodeInvalidArgument, "idempotency_key_required", "idempotency_key is required")
 	}
-	ref := msg.GetWorkloadRef()
-	if ref == nil || !validEmergencyWorkloadKind(ref.GetKind()) || ref.GetName() == "" || ref.GetNamespace() == "" || ref.GetUid() == "" {
-		return emergencyError(connect.CodeInvalidArgument, "invalid_workload_ref", "workload_ref is invalid")
+	// AC-079-G7 / D13: UNSPECIFIED is rejected server-side.
+	if msg.GetConvergenceStrategy() == orchestratorv1.ConvergenceStrategy_CONVERGENCE_STRATEGY_UNSPECIFIED {
+		return emergencyError(connect.CodeInvalidArgument, "convergence_strategy_required", "convergence strategy is required")
 	}
-	reason := strings.TrimSpace(msg.GetReason())
-	if reason == "" {
-		return emergencyError(connect.CodeInvalidArgument, "reason_required", "reason is required")
+	// AC-079-G8: artifact_ref is mandatory (D14).
+	if strings.TrimSpace(msg.GetArtifactRef()) == "" {
+		return emergencyError(connect.CodeInvalidArgument, "artifact_ref_required", "artifact_ref is required")
 	}
-	if !utf8.ValidString(reason) || len([]byte(reason)) > maxEmergencyReasonBytes || strings.ContainsRune(reason, '\x00') || strings.ContainsRune(reason, '\uFFFE') || strings.ContainsRune(reason, '\uFFFF') {
-		return emergencyError(connect.CodeInvalidArgument, "invalid_reason", "reason is invalid")
+	// AC-079-G9 / D12: REQUIRE_PROMOTION requires target locks.
+	if msg.GetConvergenceStrategy() == orchestratorv1.ConvergenceStrategy_REQUIRE_PROMOTION && len(msg.GetTargetLocks()) == 0 {
+		return emergencyError(connect.CodeInvalidArgument, "target_locks_required", "target_locks are required for REQUIRE_PROMOTION")
 	}
-	if msg.GetConvergence() == orchestratorv1.EmergencyConvergence_EMERGENCY_CONVERGENCE_UNSPECIFIED {
-		return emergencyError(connect.CodeInvalidArgument, "convergence_required", "convergence is required")
-	}
-	if msg.GetChange() == nil {
-		return emergencyError(connect.CodeInvalidArgument, "unsupported_emergency_action", "emergency action is required")
+	// D4/D17: operation_version must match the OperationVersionSchema shape
+	// (semver-style string).
+	if msg.GetOperationVersion() != "" && !operationVersionPattern.MatchString(strings.TrimSpace(msg.GetOperationVersion())) {
+		return emergencyDetailError(
+			connect.CodeInvalidArgument,
+			orchestratorv1.EmergencyReasonCode_EMERGENCY_REASON_CODE_VERSION_INVALID,
+			"operation_version is invalid", false,
+		)
 	}
 	return nil
 }
 
-func validEmergencyWorkloadKind(kind string) bool {
-	return kind == workloadDeployment || kind == workloadStatefulSet || kind == workloadDaemonSet
+// parseWorkloadRef decodes the canonical "<gvr.resource>/<namespace>/<name>"
+// workload_ref string form shared with the operator control stream
+// (api/proto/operator/v1/operator.proto).
+func parseWorkloadRef(value string) (parsedWorkloadRef, error) {
+	parts := strings.Split(strings.TrimSpace(value), "/")
+	if len(parts) != 3 {
+		return parsedWorkloadRef{}, errors.New("workload_ref must be <gvr.resource>/<namespace>/<name>")
+	}
+	kind, ok := workloadGVRResources[parts[0]]
+	if !ok {
+		return parsedWorkloadRef{}, fmt.Errorf("unsupported workload GVR %q", parts[0])
+	}
+	if parts[1] == "" || parts[2] == "" {
+		return parsedWorkloadRef{}, errors.New("workload_ref namespace and name are required")
+	}
+	return parsedWorkloadRef{Kind: kind, Namespace: parts[1], Name: parts[2]}, nil
 }
 
 func (s *Service) loadEmergencyDefinition(ctx context.Context, definitionID string) (*store.ReleaseDefinition, error) {
@@ -381,60 +480,61 @@ func (s *Service) onlineEmergencyOperator(ctx context.Context, definition *store
 	return operator.ID, nil
 }
 
-func (s *Service) resolveEmergencyChange(ctx context.Context, msg *orchestratorv1.EmergencyChangeRequest, definition *store.ReleaseDefinition) (emergencyResolvedChange, error) {
-	ref := msg.GetWorkloadRef()
-	switch change := msg.GetChange().(type) {
-	case *orchestratorv1.EmergencyChangeRequest_SetContainerImage:
-		container := strings.TrimSpace(change.SetContainerImage.GetContainer())
-		if container == "" {
-			return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument, "container_required", "container is required")
-		}
-		artifact, err := s.resolveEmergencyArtifact(ctx, change.SetContainerImage.GetArtifactId())
-		if err != nil {
-			return emergencyResolvedChange{}, err
-		}
-		paths := emergencyPromotionPaths(definition, ref, container, "image_digest")
-		if err := requirePromotionPaths(msg, paths); err != nil {
-			return emergencyResolvedChange{}, err
-		}
-		return emergencyResolvedChange{action: store.EmergencySetContainerImage, container: &container,
-			artifactID: &artifact.ID, imageReference: &artifact.Ref, promotionPaths: paths,
-			targetSummary: fmt.Sprintf("%s/%s, container=%s", ref.GetKind(), ref.GetName(), container)}, nil
-	case *orchestratorv1.EmergencyChangeRequest_SetReplicas:
-		if ref.GetKind() == workloadDaemonSet {
-			return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument, "workload_kind_not_supported", "DaemonSet replicas are not supported")
-		}
-		if definition.HPAManaged {
-			return emergencyResolvedChange{}, emergencyError(connect.CodeFailedPrecondition, "hpa_managed", "workload is managed by HPA")
-		}
-		replicas := change.SetReplicas.GetReplicas()
-		limit := definition.MaxEmergencyReplicas
-		if limit <= 0 {
-			limit = 100
-		}
-		if replicas < 0 || replicas > limit {
-			return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument, "invalid_replicas", "replicas exceed the emergency limit")
-		}
-		paths := emergencyPromotionPaths(definition, ref, "", "replicas")
-		if err := requirePromotionPaths(msg, paths); err != nil {
-			return emergencyResolvedChange{}, err
-		}
-		return emergencyResolvedChange{action: store.EmergencySetReplicas, targetReplicas: &replicas,
-			promotionPaths: paths, targetSummary: fmt.Sprintf("%s/%s, replicas", ref.GetKind(), ref.GetName())}, nil
-	case *orchestratorv1.EmergencyChangeRequest_SetApprovedAnnotations:
-		return resolveEmergencyAnnotations(msg, definition)
-	default:
-		return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument, "unsupported_emergency_action", "emergency action is unsupported")
+// resolveExecuteEmergencyChange resolves the workload_ref string, candidate
+// artifact reference and promotion mapping paths (D14).
+func (s *Service) resolveExecuteEmergencyChange(
+	ctx context.Context,
+	msg *orchestratorv1.ExecuteEmergencyChangeRequest,
+	definition *store.ReleaseDefinition,
+) (emergencyResolvedChange, error) {
+	workload, err := parseWorkloadRef(msg.GetWorkloadRef())
+	if err != nil {
+		return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument, "invalid_workload_ref", "workload_ref is invalid")
 	}
+	artifact, err := s.resolveEmergencyArtifact(ctx, msg.GetArtifactRef())
+	if err != nil {
+		return emergencyResolvedChange{}, err
+	}
+	container := strings.TrimSpace(msg.GetContainer())
+	// §4 declares container optional; the image action still requires a
+	// concrete target container, so the requirement is enforced here at
+	// resolution (same as the legacy SET_CONTAINER_IMAGE resolution).
+	if container == "" {
+		return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument, "container_required", "container is required for the image change")
+	}
+	paths := emergencyPromotionPathsForRef(definition, workload, container, "image_digest")
+	if msg.GetConvergenceStrategy() == orchestratorv1.ConvergenceStrategy_REQUIRE_PROMOTION && len(paths) == 0 {
+		return emergencyResolvedChange{}, emergencyError(connect.CodeFailedPrecondition, "promotion_not_supported", "target has no promotion mapping")
+	}
+	return emergencyResolvedChange{
+		action:         store.EmergencySetContainerImage,
+		workload:       workload,
+		container:      container,
+		artifactID:     artifact.ID,
+		imageReference: artifact.Ref,
+		promotionPaths: paths,
+		targetSummary:  fmt.Sprintf("%s/%s, container=%s", workload.Kind, workload.Name, container),
+	}, nil
 }
 
 func (s *Service) resolveEmergencyArtifact(ctx context.Context, artifactID string) (*store.CandidateArtifact, error) {
-	if strings.TrimSpace(artifactID) == "" {
-		return nil, emergencyError(connect.CodeInvalidArgument, "invalid_image_reference", "artifact_id is required")
+	artifact, err := s.store.CandidateArtifacts().Get(ctx, strings.TrimSpace(artifactID))
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, emergencyDetailError(
+			connect.CodeNotFound,
+			orchestratorv1.EmergencyReasonCode_EMERGENCY_REASON_CODE_ARTIFACT_NOT_FOUND,
+			"candidate artifact not found", false,
+		)
 	}
-	artifact, err := s.store.CandidateArtifacts().Get(ctx, artifactID)
-	if err != nil || artifact.ArtifactType != store.ArtifactImage || artifact.ValidatedAt == nil {
-		return nil, emergencyError(connect.CodeInvalidArgument, "invalid_image_reference", "candidate artifact is not validated")
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("load emergency artifact: %w", err))
+	}
+	if artifact.ArtifactType != store.ArtifactImage || artifact.ValidatedAt == nil {
+		return nil, emergencyDetailError(
+			connect.CodeNotFound,
+			orchestratorv1.EmergencyReasonCode_EMERGENCY_REASON_CODE_NO_CANDIDATE_ARTIFACT,
+			"candidate artifact is not validated", true,
+		)
 	}
 	policy := trustPolicyVersion(s.targetEnv)
 	verification, err := s.store.Verifications().GetByDigestAndPolicy(ctx, artifact.Digest, policy)
@@ -454,72 +554,18 @@ func (s *Service) resolveEmergencyArtifact(ctx context.Context, artifactID strin
 
 func trustPolicyVersion(_ string) string { return "v1" }
 
-func emergencyPromotionPaths(definition *store.ReleaseDefinition, ref *orchestratorv1.WorkloadRef, container, field string) []string {
+func emergencyPromotionPathsForRef(definition *store.ReleaseDefinition, workload parsedWorkloadRef, container, field string) []string {
 	paths := make([]string, 0, 1)
 	for _, mapping := range definition.PromotionMappings {
-		if strings.EqualFold(mapping.WorkloadKind, ref.GetKind()) && mapping.WorkloadName == ref.GetName() && mapping.Field == field && mapping.Container == container && mapping.ValuesPath != "" {
+		if strings.EqualFold(mapping.WorkloadKind, workload.Kind) && mapping.WorkloadName == workload.Name &&
+			mapping.Field == field && mapping.Container == container && mapping.ValuesPath != "" {
 			paths = append(paths, mapping.ValuesPath)
 		}
 	}
 	return paths
 }
 
-func requirePromotionPaths(msg *orchestratorv1.EmergencyChangeRequest, paths []string) error {
-	if msg.GetConvergence() == orchestratorv1.EmergencyConvergence_EMERGENCY_CONVERGENCE_REQUIRE_PROMOTION && len(paths) == 0 {
-		return emergencyError(connect.CodeFailedPrecondition, "promotion_not_supported", "target has no promotion mapping")
-	}
-	return nil
-}
-
-//nolint:gocyclo // Annotation resolution rules are naturally sequential.
-func resolveEmergencyAnnotations(msg *orchestratorv1.EmergencyChangeRequest, definition *store.ReleaseDefinition) (emergencyResolvedChange, error) {
-	change := msg.GetSetApprovedAnnotations()
-	if change == nil || len(change.GetEntries()) == 0 || len(change.GetEntries()) > maxAnnotationEntries {
-		return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument, "invalid_annotation_entries", "annotation entries are invalid")
-	}
-	allowed := make(map[string]store.ApprovedAnnotationKey, len(definition.ApprovedAnnotationKeys))
-	for _, entry := range definition.ApprovedAnnotationKeys {
-		allowed[entry.Key] = entry
-	}
-	seen := make(map[string]struct{}, len(change.GetEntries()))
-	entries := make([]map[string]string, 0, len(change.GetEntries()))
-	paths := make([]string, 0, len(change.GetEntries()))
-	scope := ""
-	for _, entry := range change.GetEntries() {
-		if entry == nil || entry.GetKey() == "" || entry.GetValue() == "" || len(entry.GetKey()) > 253 || len(entry.GetValue()) > 2048 {
-			return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument, "invalid_annotation_entries", "annotation entry is invalid")
-		}
-		if _, ok := seen[entry.GetKey()]; ok {
-			return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument, "duplicate_annotation_key", "annotation key is duplicated")
-		}
-		seen[entry.GetKey()] = struct{}{}
-		approved, ok := allowed[entry.GetKey()]
-		if !ok {
-			return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument, "annotation_key_not_allowed", "annotation key is not allowed")
-		}
-		if scope == "" {
-			scope = approved.Scope
-		} else if scope != approved.Scope {
-			return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument, "annotation_scope_mismatch", "annotation scopes must match")
-		}
-		if approved.PromotionValuesPath != "" {
-			paths = append(paths, approved.PromotionValuesPath)
-		}
-		entries = append(entries, map[string]string{"key": entry.GetKey(), "value": entry.GetValue()})
-	}
-	if err := requirePromotionPaths(msg, paths); err != nil {
-		return emergencyResolvedChange{}, err
-	}
-	encoded, err := json.Marshal(entries)
-	if err != nil {
-		return emergencyResolvedChange{}, connect.NewError(connect.CodeInternal, fmt.Errorf("encode annotations: %w", err))
-	}
-	return emergencyResolvedChange{action: store.EmergencySetApprovedAnnotations, annotationScope: &scope,
-		annotationEntries: encoded, promotionPaths: paths,
-		targetSummary: fmt.Sprintf("%s/%s, annotations", msg.GetWorkloadRef().GetKind(), msg.GetWorkloadRef().GetName())}, nil
-}
-
-func hashEmergencyRequest(msg *orchestratorv1.EmergencyChangeRequest) (string, error) {
+func hashExecuteEmergencyRequest(msg *orchestratorv1.ExecuteEmergencyChangeRequest) (string, error) {
 	encoded, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(msg)
 	if err != nil {
 		return "", err
@@ -539,8 +585,19 @@ func emergencyStoreError(err error) error {
 		return emergencyError(connect.CodeUnavailable, "authorization_snapshot_stale", "authorization snapshot is stale")
 	case errors.Is(err, store.ErrReleaseBusy):
 		return emergencyError(connect.CodeFailedPrecondition, "release_busy", "release definition has a running standard operation")
+	case errors.Is(err, store.ErrEmergencyOperationInProgress):
+		// AC-079-G3 / D18: release-global emergency mutex.
+		return emergencyDetailError(
+			connect.CodeAborted,
+			orchestratorv1.EmergencyReasonCode_EMERGENCY_REASON_CODE_OPERATION_IN_PROGRESS,
+			"another emergency operation is in progress for this release", true,
+		)
 	case errors.Is(err, store.ErrEmergencyConflict):
-		return emergencyError(connect.CodeFailedPrecondition, "conflicting_emergency", "emergency target is locked")
+		return emergencyDetailError(
+			connect.CodeFailedPrecondition,
+			orchestratorv1.EmergencyReasonCode_EMERGENCY_REASON_CODE_LOCKED_PATH,
+			"emergency target is locked", false,
+		)
 	case errors.Is(err, store.ErrIdempotencyConflict):
 		return emergencyError(connect.CodeAlreadyExists, "idempotency_conflict", "idempotency key was used with different parameters")
 	default:
@@ -548,30 +605,38 @@ func emergencyStoreError(err error) error {
 	}
 }
 
+// emergencyError builds a Connect error carrying the legacy X-Reason-Code
+// metadata contract.
 func emergencyError(code connect.Code, reason, message string) error {
 	err := connect.NewError(code, errors.New(message))
 	err.Meta().Set("X-Reason-Code", reason)
 	return err
 }
 
-func emergencyActionFromRequest(msg *orchestratorv1.EmergencyChangeRequest) store.EmergencyAction {
-	if msg == nil {
-		return ""
+// emergencyDetailError builds a Connect error carrying the typed
+// EmergencyErrorDetail contract (REQ-079 D2/D3) as a connect error detail and
+// the legacy X-Reason-Code metadata.
+func emergencyDetailError(code connect.Code, reasonCode orchestratorv1.EmergencyReasonCode, message string, retryable bool) error {
+	err := connect.NewError(code, errors.New(message))
+	err.Meta().Set("X-Reason-Code", emergencyReasonCodeName(reasonCode))
+	detail, detailErr := connect.NewErrorDetail(&orchestratorv1.EmergencyErrorDetail{
+		ReasonCode: reasonCode,
+		Message:    message,
+		Retryable:  retryable,
+	})
+	if detailErr == nil {
+		err.AddDetail(detail)
 	}
-	switch msg.GetChange().(type) {
-	case *orchestratorv1.EmergencyChangeRequest_SetContainerImage:
-		return store.EmergencySetContainerImage
-	case *orchestratorv1.EmergencyChangeRequest_SetReplicas:
-		return store.EmergencySetReplicas
-	case *orchestratorv1.EmergencyChangeRequest_SetApprovedAnnotations:
-		return store.EmergencySetApprovedAnnotations
-	default:
-		return ""
-	}
+	return err
 }
 
-func emergencyConvergenceFromProto(value orchestratorv1.EmergencyConvergence) store.EmergencyConvergence {
-	if value == orchestratorv1.EmergencyConvergence_EMERGENCY_CONVERGENCE_REVERT_ON_NEXT_RECONCILE {
+func emergencyReasonCodeName(code orchestratorv1.EmergencyReasonCode) string {
+	name := code.String()
+	return strings.TrimPrefix(name, "EMERGENCY_REASON_CODE_")
+}
+
+func convergenceStrategyFromProto(value orchestratorv1.ConvergenceStrategy) store.EmergencyConvergence {
+	if value == orchestratorv1.ConvergenceStrategy_REVERT_ON_NEXT_RECONCILE {
 		return store.EmergencyRevertOnNextReconcile
 	}
 	return store.EmergencyRequirePromotion
@@ -619,8 +684,8 @@ func valueOrZero(value *int32) int32 {
 	return *value
 }
 
-func (s *Service) emitEmergencyAttempt(actor *authctx.Actor, msg *orchestratorv1.EmergencyChangeRequest, operationID string, operationErr error, duration time.Duration) {
-	if msg == nil {
+func (s *Service) emitEmergencyAttempt(actor *authctx.Actor, definitionID, operationID string, strategy orchestratorv1.ConvergenceStrategy, operationErr error, duration time.Duration) {
+	if definitionID == "" {
 		return
 	}
 	status := "succeeded"
@@ -643,13 +708,12 @@ func (s *Service) emitEmergencyAttempt(actor *authctx.Actor, msg *orchestratorv1
 	}
 	resourceID := operationID
 	if resourceID == "" {
-		resourceID = msg.GetReleaseDefinitionId()
+		resourceID = definitionID
 	}
-	reason, _ := audit.Sanitize(strings.TrimSpace(msg.GetReason()))
 	event := audit.NewEvent(actorKind, actorID, organizationID, role, "operation", resourceID,
 		"emergency_change", status,
-		fmt.Sprintf("action=%s convergence=%s", emergencyActionFromRequest(msg), emergencyConvergenceFromProto(msg.GetConvergence())),
-		map[string]string{"definition_id": msg.GetReleaseDefinitionId(), "reason": reason, "error_code": errorCode})
+		fmt.Sprintf("action=%s convergence=%s", store.EmergencySetContainerImage, convergenceStrategyFromProto(strategy)),
+		map[string]string{"definition_id": definitionID, "error_code": errorCode})
 	event.DurationMs = duration.Milliseconds()
 	s.emitAudit(event)
 }

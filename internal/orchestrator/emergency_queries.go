@@ -88,6 +88,11 @@ func (s *Service) ListCandidateArtifacts(
 	if req.Msg.GetReleaseDefinitionId() == "" {
 		return nil, emergencyError(connect.CodeInvalidArgument, "release_definition_id_required", "release_definition_id is required")
 	}
+	// AC-079-G5 / D11: container/operation_version cascade parameters require
+	// workload_ref.
+	if (req.Msg.GetContainer() != "" || req.Msg.GetOperationVersion() != "") && strings.TrimSpace(req.Msg.GetWorkloadRef()) == "" {
+		return nil, emergencyError(connect.CodeInvalidArgument, "workload_ref_required", "workload_ref is required when container or operation_version is provided")
+	}
 	if err := s.authorizeEmergencyRead(ctx, req.Msg.GetReleaseDefinitionId(), req.Msg.GetOrganizationId()); err != nil {
 		return nil, err
 	}

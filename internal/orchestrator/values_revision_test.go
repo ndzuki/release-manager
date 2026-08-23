@@ -1487,3 +1487,32 @@ func TestGetPrepareSession_ConsumedSessionReturnsSnapshot(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, "prepare_token_expired", approvalReasonCode(t, err))
 }
+
+// AC-079-G10: a convergence draft created from a prepare session persists its
+// ConvergenceTask ids and locked paths on the ValuesRevision (the array
+// columns exercised by the store round-trip tests).
+func TestCreateValuesRevision_PrepareSessionPersistsConvergenceBindings(t *testing.T) {
+	f := newPrepareFixture(t)
+	prepareRequest := connect.NewRequest(&orchestratorv1.CreatePrepareSessionRequest{
+		ReleaseDefinitionId: f.defID,
+		TaskIds:             []string{"task-vr-1"},
+	})
+	prepared, err := f.svc.CreatePrepareSession(f.ctx, prepareRequest)
+	require.NoError(t, err)
+
+	request := connect.NewRequest(&orchestratorv1.CreateValuesRevisionRequest{
+		ReleaseDefinitionId: f.defID,
+		Document:            `image: null`,
+		PrepareToken:        prepared.Msg.PrepareToken,
+	})
+	request.Header().Set("Idempotency-Key", "g10-convergence-bindings")
+	created, err := f.svc.CreateValuesRevision(f.ctx, request)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"task-vr-1"}, created.Msg.Revision.GetConvergenceTaskIds())
+	assert.Equal(t, []string{"spec.template.spec.containers[0].image"}, created.Msg.Revision.GetLockedPaths())
+
+	persisted, err := f.st.Values().Get(f.ctx, created.Msg.Revision.Id)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"task-vr-1"}, persisted.ConvergenceTaskIds)
+	assert.Equal(t, []string{"spec.template.spec.containers[0].image"}, persisted.LockedPaths)
+}

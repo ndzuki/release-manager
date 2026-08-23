@@ -21,23 +21,27 @@ func TestEmergencyStoresCreateReplayAndConflict(t *testing.T) {
 	seedEmergencyDefinition(t, st, "def-emergency")
 
 	first := emergencyCreateCommand(t, "def-emergency", "idem-1", "hash-1", store.EmergencySetReplicas)
-	result, err := st.EmergencyIntents().CreateIfAvailable(ctx, first)
-	require.NoError(t, err)
+	result := createEmergencyViaUOW(t, st, first)
 	assert.False(t, result.Replayed)
 	assert.Equal(t, first.Operation.ID, result.Operation.ID)
 
-	replay, err := st.EmergencyIntents().CreateIfAvailable(ctx, first)
-	require.NoError(t, err)
+	replay := createEmergencyViaUOW(t, st, first)
 	assert.True(t, replay.Replayed)
 	assert.Equal(t, first.Operation.ID, replay.Operation.ID)
 
-	conflict := emergencyCreateCommand(t, "def-emergency", "idem-2", "hash-2", store.EmergencySetReplicas)
-	_, err = st.EmergencyIntents().CreateIfAvailable(ctx, conflict)
-	assert.ErrorIs(t, err, store.ErrEmergencyConflict)
+	// D18: one in-flight (non-terminal) EMERGENCY operation per definition.
+	inFlight := emergencyCreateCommand(t, "def-emergency", "idem-2", "hash-2", store.EmergencySetReplicas)
+	_, err := st.OperationCreationUnitOfWork()(ctx, store.OperationCreationRequest{Operation: inFlight.Operation, Emergency: &inFlight})
+	assert.ErrorIs(t, err, store.ErrEmergencyOperationInProgress)
 
-	differentField := emergencyCreateCommand(t, "def-emergency", "idem-3", "hash-3", store.EmergencySetContainerImage)
-	_, err = st.EmergencyIntents().CreateIfAvailable(ctx, differentField)
+	// Field locks survive through terminal operations whose effect is still
+	// UNKNOWN (Unresolved Emergency Effect keeps its Emergency Target Lock).
+	_, err = st.EmergencyIntents().Finish(ctx, result.Intent.ID, result.Operation.ID,
+		result.Operation.StateVersion, store.StatusFailed, store.EmergencyEffectUnknown, "x", nil, nil)
 	require.NoError(t, err)
+	locked := emergencyCreateCommand(t, "def-emergency", "idem-3", "hash-3", store.EmergencySetReplicas)
+	_, err = st.OperationCreationUnitOfWork()(ctx, store.OperationCreationRequest{Operation: locked.Operation, Emergency: &locked})
+	assert.ErrorIs(t, err, store.ErrEmergencyConflict)
 }
 
 func TestConvergenceTaskStoreLifecycle(t *testing.T) {
@@ -45,8 +49,7 @@ func TestConvergenceTaskStoreLifecycle(t *testing.T) {
 	ctx := context.Background()
 	seedEmergencyDefinition(t, st, "def-convergence")
 	command := emergencyCreateCommand(t, "def-convergence", "idem-convergence", "hash-convergence", store.EmergencySetContainerImage)
-	result, err := st.EmergencyIntents().CreateIfAvailable(ctx, command)
-	require.NoError(t, err)
+	result := createEmergencyViaUOW(t, st, command)
 	require.NotNil(t, result.ConvergenceTask)
 
 	hasPending, err := st.ConvergenceTasks().HasPendingPromotionForDefinition(ctx, "def-convergence")
@@ -72,6 +75,18 @@ func seedEmergencyDefinition(t *testing.T, st *Store, id string) {
 		ID: id, Name: id, CustomerID: "customer", ClusterID: "cluster", Namespace: "default",
 		ReleaseName: id, Status: store.DefStatusActive, MaxEmergencyReplicas: 100,
 	}, nil))
+}
+
+// createEmergencyViaUOW routes an emergency creation through the shared
+// OperationCreationUnitOfWork seam (REQ-079 canonical creation path).
+func createEmergencyViaUOW(t *testing.T, st *Store, command store.EmergencyCreateCommand) *store.OperationCreationResult {
+	t.Helper()
+	result, err := st.OperationCreationUnitOfWork()(t.Context(), store.OperationCreationRequest{
+		Operation: command.Operation,
+		Emergency: &command,
+	})
+	require.NoError(t, err)
+	return result
 }
 
 func emergencyCreateCommand(t *testing.T, definitionID, idempotencyKey, requestHash string, action store.EmergencyAction) store.EmergencyCreateCommand {
@@ -117,8 +132,7 @@ func TestResolveEmergencyEffect_Applied(t *testing.T) {
 	ctx := context.Background()
 	seedEmergencyDefinition(t, st, "def-resolve")
 	command := emergencyCreateCommand(t, "def-resolve", "idem-resolve", "hash-resolve", store.EmergencySetReplicas)
-	result, err := st.EmergencyIntents().CreateIfAvailable(ctx, command)
-	require.NoError(t, err)
+	result := createEmergencyViaUOW(t, st, command)
 	require.NotNil(t, result.Operation)
 
 	t.Run("resolve_applied_idempotent", func(t *testing.T) {
@@ -176,11 +190,10 @@ func TestResolveEmergencyEffect_RejectsInvalidState(t *testing.T) {
 	ctx := context.Background()
 	seedEmergencyDefinition(t, st, "def-resolve-invalid")
 	cmd := emergencyCreateCommand(t, "def-resolve-invalid", "resolve-invalid-1", "hash-r1", store.EmergencySetReplicas)
-	createResult, err := st.EmergencyIntents().CreateIfAvailable(ctx, cmd)
-	require.NoError(t, err)
+	createResult := createEmergencyViaUOW(t, st, cmd)
 
 	// Not terminal → ErrInvalidState.
-	_, err = st.EmergencyIntents().ResolveEmergencyEffect(ctx, store.ResolveEmergencyEffectCommand{
+	_, err := st.EmergencyIntents().ResolveEmergencyEffect(ctx, store.ResolveEmergencyEffectCommand{
 		OperationID:          createResult.Operation.ID,
 		ExpectedStateVersion: createResult.Operation.StateVersion,
 		EffectStatus:         store.EmergencyEffectApplied,
@@ -194,8 +207,7 @@ func TestEmergencyPersistAck_AtomicEntryAndIdempotency(t *testing.T) {
 	ctx := context.Background()
 	seedEmergencyDefinition(t, st, "def-persist-ack")
 	cmd := emergencyCreateCommand(t, "def-persist-ack", "idem-persist-ack", "hash-persist-ack", store.EmergencySetReplicas)
-	result, err := st.EmergencyIntents().CreateIfAvailable(ctx, cmd)
-	require.NoError(t, err)
+	result := createEmergencyViaUOW(t, st, cmd)
 
 	acked, err := st.EmergencyIntents().PersistAck(ctx, result.Intent.ID)
 	require.NoError(t, err)
@@ -223,8 +235,7 @@ func TestEmergencyFinishWritesSanitizedErrorEntry(t *testing.T) {
 	ctx := context.Background()
 	seedEmergencyDefinition(t, st, "def-finish-error")
 	cmd := emergencyCreateCommand(t, "def-finish-error", "idem-finish-error", "hash-finish-error", store.EmergencySetReplicas)
-	result, err := st.EmergencyIntents().CreateIfAvailable(ctx, cmd)
-	require.NoError(t, err)
+	result := createEmergencyViaUOW(t, st, cmd)
 
 	opCurrent, err := st.Operations().Get(ctx, result.Operation.ID)
 	require.NoError(t, err)

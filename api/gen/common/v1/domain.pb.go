@@ -956,8 +956,12 @@ type ValuesRevision struct {
 	CreatedByUserId     string                 `protobuf:"bytes,11,opt,name=created_by_user_id,json=createdByUserId,proto3" json:"created_by_user_id,omitempty"`
 	SubmittedAt         *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=submitted_at,json=submittedAt,proto3" json:"submitted_at,omitempty"`
 	DecidedAt           *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=decided_at,json=decidedAt,proto3" json:"decided_at,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Convergence bindings (REQ-079 D10): operation ids of the Convergence
+	// Tasks locking this revision, and the locked values paths.
+	ConvergenceTaskIds []string `protobuf:"bytes,14,rep,name=convergence_task_ids,json=convergenceTaskIds,proto3" json:"convergence_task_ids,omitempty"`
+	LockedPaths        []string `protobuf:"bytes,15,rep,name=locked_paths,json=lockedPaths,proto3" json:"locked_paths,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ValuesRevision) Reset() {
@@ -1077,6 +1081,20 @@ func (x *ValuesRevision) GetSubmittedAt() *timestamppb.Timestamp {
 func (x *ValuesRevision) GetDecidedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.DecidedAt
+	}
+	return nil
+}
+
+func (x *ValuesRevision) GetConvergenceTaskIds() []string {
+	if x != nil {
+		return x.ConvergenceTaskIds
+	}
+	return nil
+}
+
+func (x *ValuesRevision) GetLockedPaths() []string {
+	if x != nil {
+		return x.LockedPaths
 	}
 	return nil
 }
@@ -1589,7 +1607,7 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"hpaManaged\x124\n" +
 	"\x16max_emergency_replicas\x18\x0e \x01(\x05R\x14maxEmergencyReplicas\x128\n" +
 	"\x18approved_annotation_keys\x18\x0f \x01(\fR\x16approvedAnnotationKeys\x12-\n" +
-	"\x12promotion_mappings\x18\x10 \x01(\fR\x11promotionMappings\"\xd2\x04\n" +
+	"\x12promotion_mappings\x18\x10 \x01(\fR\x11promotionMappings\"\xa7\x05\n" +
 	"\x0eValuesRevision\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x122\n" +
 	"\x15release_definition_id\x18\x02 \x01(\tR\x13releaseDefinitionId\x12\x18\n" +
@@ -1607,7 +1625,9 @@ const file_common_v1_domain_proto_rawDesc = "" +
 	"\x12created_by_user_id\x18\v \x01(\tR\x0fcreatedByUserId\x12=\n" +
 	"\fsubmitted_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\vsubmittedAt\x129\n" +
 	"\n" +
-	"decided_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tdecidedAt\"E\n" +
+	"decided_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tdecidedAt\x120\n" +
+	"\x14convergence_task_ids\x18\x0e \x03(\tR\x12convergenceTaskIds\x12!\n" +
+	"\flocked_paths\x18\x0f \x03(\tR\vlockedPaths\"E\n" +
 	"\tSecretRef\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x10\n" +

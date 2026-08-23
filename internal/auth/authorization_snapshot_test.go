@@ -43,6 +43,14 @@ func TestAuthorizationServiceSnapshotAndCapabilityLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, before.Msg.GetCanExecuteEmergency())
 	assert.True(t, before.Msg.GetCanCreateValuesRevision())
+	// AC-079-07 / D6: emergencyChangeEnabled kill switch projection — missing
+	// config fails closed to false.
+	assert.False(t, before.Msg.GetEmergencyChangeEnabled())
+
+	require.NoError(t, st.EmergencyConfig().SetEmergencyConfig(ctx, store.EmergencyConfig{Enabled: true}))
+	enabledSnap, err := svc.GetAuthorizationSnapshot(deployerCtx, snapshotRequest)
+	require.NoError(t, err)
+	assert.True(t, enabledSnap.Msg.GetEmergencyChangeEnabled())
 
 	adminCtx := authctx.WithActor(ctx, authctx.Actor{UserID: adminID, OrganizationID: orgID})
 	grantRequest := connect.NewRequest(&authv1.SetCapabilityGrantRequest{

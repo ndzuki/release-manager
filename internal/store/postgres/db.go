@@ -162,6 +162,7 @@ type Store struct {
 	rollouts          *rolloutTrackingReader
 	emergencyIntents  *emergencyIntentStore
 	convergenceTasks  *convergenceTaskStore
+	emergencyConfig   *emergencyConfigStore
 	authorization     *authorizationStore
 	idempotency       *idempotencyStore
 	cleanupIdempotency *cleanupIdempotencyStore
@@ -243,6 +244,7 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s.rollouts = &rolloutTrackingReader{s: s}
 	s.emergencyIntents = &emergencyIntentStore{gorm: s.db}
 	s.convergenceTasks = &convergenceTaskStore{gorm: s.db}
+	s.emergencyConfig = &emergencyConfigStore{gorm: s.db}
 	s.authorization = &authorizationStore{gorm: s.db}
 	s.idempotency = &idempotencyStore{db: s.db}
 	s.cleanupIdempotency = &cleanupIdempotencyStore{db: s.db}
@@ -337,6 +339,7 @@ func (s *Store) ArtifactEventSubmissions() store.ArtifactEventSubmissionStore {
 func (s *Store) PreflightLifecycles() store.PreflightLifecycleStore { return s.preflightCycles }
 func (s *Store) EmergencyIntents() store.EmergencyIntentStore       { return s.emergencyIntents }
 func (s *Store) ConvergenceTasks() store.ConvergenceTaskStore       { return s.convergenceTasks }
+func (s *Store) EmergencyConfig() store.EmergencyConfigStore        { return s.emergencyConfig }
 
 // Authorization returns the durable authorization state module.
 func (s *Store) Authorization() store.AuthorizationStore { return s.authorization }

@@ -2946,8 +2946,11 @@ type GetAuthorizationSnapshotResponse struct {
 	Checkpoint               uint64                 `protobuf:"varint,12,opt,name=checkpoint,proto3" json:"checkpoint,omitempty"`
 	Fresh                    bool                   `protobuf:"varint,13,opt,name=fresh,proto3" json:"fresh,omitempty"`
 	ActorId                  string                 `protobuf:"bytes,14,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	// Global emergency change kill switch (REQ-079 D6): false blocks every
+	// ExecuteEmergencyChange entry.
+	EmergencyChangeEnabled bool `protobuf:"varint,15,opt,name=emergency_change_enabled,json=emergencyChangeEnabled,proto3" json:"emergency_change_enabled,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *GetAuthorizationSnapshotResponse) Reset() {
@@ -3076,6 +3079,13 @@ func (x *GetAuthorizationSnapshotResponse) GetActorId() string {
 		return x.ActorId
 	}
 	return ""
+}
+
+func (x *GetAuthorizationSnapshotResponse) GetEmergencyChangeEnabled() bool {
+	if x != nil {
+		return x.EmergencyChangeEnabled
+	}
+	return false
 }
 
 type SetCapabilityGrantRequest struct {
@@ -3721,7 +3731,7 @@ const file_auth_v1_auth_proto_rawDesc = "" +
 	"\x1fGetAuthorizationSnapshotRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12\x1f\n" +
 	"\vcustomer_id\x18\x02 \x01(\tR\n" +
-	"customerId\"\xd3\x04\n" +
+	"customerId\"\x8d\x05\n" +
 	" GetAuthorizationSnapshotResponse\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12\x1f\n" +
 	"\vcustomer_id\x18\x02 \x01(\tR\n" +
@@ -3740,7 +3750,8 @@ const file_auth_v1_auth_proto_rawDesc = "" +
 	"checkpoint\x18\f \x01(\x04R\n" +
 	"checkpoint\x12\x14\n" +
 	"\x05fresh\x18\r \x01(\bR\x05fresh\x12\x19\n" +
-	"\bactor_id\x18\x0e \x01(\tR\aactorId\"\x90\x01\n" +
+	"\bactor_id\x18\x0e \x01(\tR\aactorId\x128\n" +
+	"\x18emergency_change_enabled\x18\x0f \x01(\bR\x16emergencyChangeEnabled\"\x90\x01\n" +
 	"\x19SetCapabilityGrantRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12\x18\n" +
 	"\asubject\x18\x02 \x01(\tR\asubject\x12\x16\n" +

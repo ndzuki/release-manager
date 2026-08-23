@@ -708,6 +708,50 @@ func TestValuesRevisionGetByDigest(t *testing.T) {
 	assert.Equal(t, vr.ID, got.ID)
 }
 
+// AC-079-G10 / D15: convergence bindings round-trip through the Postgres
+// uuid[]/text[] array columns.
+func TestValuesRevisionConvergenceArraysRoundTrip(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	def := createTestDefinition(t, st)
+
+	vr := &store.ValuesRevision{
+		ID:                  uuid.NewString(),
+		ReleaseDefinitionID: def.ID,
+		Version:             1,
+		Status:              store.ValuesStatusDraft,
+		CanonicalDocument:   []byte(`{}`),
+		ConvergenceTaskIds:  []string{uuid.NewString(), uuid.NewString()},
+		LockedPaths:         []string{"api.image.digest", "web/*"},
+	}
+	require.NoError(t, st.Values().Create(ctx, vr))
+
+	got, err := st.Values().Get(ctx, vr.ID)
+	require.NoError(t, err)
+	assert.Equal(t, vr.ConvergenceTaskIds, got.ConvergenceTaskIds)
+	assert.Equal(t, []string{"api.image.digest", "web/*"}, got.LockedPaths)
+}
+
+// AC-079-G2/D16: emergency configuration defaults fail closed and round-trip.
+func TestEmergencyConfigStoreRoundTrip(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	cfg, err := st.EmergencyConfig().GetEmergencyConfig(ctx)
+	require.NoError(t, err)
+	assert.False(t, cfg.Enabled, "missing kill switch key must fail closed")
+	assert.Equal(t, store.DefaultEmergencyOperationTimeout, cfg.OperationTimeout)
+
+	require.NoError(t, st.EmergencyConfig().SetEmergencyConfig(ctx, store.EmergencyConfig{
+		Enabled:          true,
+		OperationTimeout: 2 * time.Minute,
+	}))
+	cfg, err = st.EmergencyConfig().GetEmergencyConfig(ctx)
+	require.NoError(t, err)
+	assert.True(t, cfg.Enabled)
+	assert.Equal(t, 2*time.Minute, cfg.OperationTimeout)
+}
+
 func TestValuesRevisionGetNextRevisionNumber(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()

@@ -55,6 +55,7 @@ type Store struct {
 	rollouts         *rolloutTrackingStore
 	emergencyIntents *emergencyIntentStore
 	convergenceTasks *convergenceTaskStore
+	emergencyConfig  *emergencyConfigStore
 	valuesLifecycle  *valuesLifecycleStore
 	prepareSessions  *prepareSessionStore
 	authorization    *authorizationStore
@@ -125,6 +126,7 @@ func Open(dsn string) (*Store, error) {
 	s.routes = &clusterRouteStore{db: db}
 	s.emergencyIntents = &emergencyIntentStore{db: db}
 	s.convergenceTasks = &convergenceTaskStore{db: db}
+	s.emergencyConfig = &emergencyConfigStore{db: db}
 	s.valuesLifecycle = &valuesLifecycleStore{db: db}
 	s.prepareSessions = &prepareSessionStore{db: db}
 	s.authorization = &authorizationStore{db: db}
@@ -287,6 +289,9 @@ func (s *Store) EmergencyIntents() store.EmergencyIntentStore { return s.emergen
 
 // ConvergenceTasks returns the ConvergenceTaskStore.
 func (s *Store) ConvergenceTasks() store.ConvergenceTaskStore { return s.convergenceTasks }
+
+// EmergencyConfig returns the emergency kill-switch/timeout configuration store.
+func (s *Store) EmergencyConfig() store.EmergencyConfigStore { return s.emergencyConfig }
 
 // Authorization returns the durable authorization state module.
 func (s *Store) Authorization() store.AuthorizationStore { return s.authorization }
@@ -495,6 +500,8 @@ func rebuildValuesRevisionsTable(tx *sql.Tx) error {
 			created_by_user_id    TEXT NOT NULL DEFAULT '',
 			submitted_at          TEXT,
 			decided_at            TEXT,
+			convergence_task_ids  TEXT NOT NULL DEFAULT '[]',
+			locked_paths          TEXT NOT NULL DEFAULT '[]',
 			created_at            TEXT NOT NULL,
 			updated_at            TEXT NOT NULL,
 			CHECK (parent_revision_id IS NOT NULL OR version = 1)
@@ -503,11 +510,11 @@ func rebuildValuesRevisionsTable(tx *sql.Tx) error {
 			id, release_definition_id, version, status, "values", digest,
 			parent_revision_id, secret_refs, created_by, approved_by, approved_at,
 			rejected_by, rejection_reason, state_version, created_by_user_id,
-			submitted_at, decided_at, created_at, updated_at
+			submitted_at, decided_at, convergence_task_ids, locked_paths, created_at, updated_at
 		) SELECT id, release_definition_id, version, status, "values", digest,
 			NULLIF(parent_revision_id, ''), secret_refs, created_by, approved_by, approved_at,
 			rejected_by, rejection_reason, state_version, created_by_user_id,
-			submitted_at, decided_at, created_at, updated_at FROM values_revisions_legacy`,
+			submitted_at, decided_at, '[]', '[]', created_at, updated_at FROM values_revisions_legacy`,
 		`DROP TABLE values_revisions_legacy`,
 		`CREATE INDEX IF NOT EXISTS idx_values_def ON values_revisions(release_definition_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_values_digest ON values_revisions(release_definition_id, digest)`,
@@ -639,6 +646,13 @@ var migrationStatements = []string{
 		CHECK (parent_revision_id IS NOT NULL OR version = 1)
 	)`,
 
+	// Application-wide key/value settings (REQ-079 kill switch + timeout).
+	`CREATE TABLE IF NOT EXISTS app_settings (
+		key        TEXT PRIMARY KEY,
+		value      TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`,
+
 	// Migration: add approval workflow columns to existing values revisions.
 	`ALTER TABLE values_revisions ADD COLUMN digest TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE values_revisions ADD COLUMN parent_revision_id TEXT NOT NULL DEFAULT ''`,
@@ -654,6 +668,11 @@ var migrationStatements = []string{
 	`ALTER TABLE values_revisions ADD COLUMN created_by_user_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE values_revisions ADD COLUMN submitted_at TEXT`,
 	`ALTER TABLE values_revisions ADD COLUMN decided_at TEXT`,
+	// Convergence bindings (REQ-079 D10/D15): SQLite has no native arrays,
+	// so the two fields use the JSON-encoded TEXT form (same convention as
+	// secret_refs); Postgres stores text[]/uuid[] array columns.
+	`ALTER TABLE values_revisions ADD COLUMN convergence_task_ids TEXT NOT NULL DEFAULT '[]'`,
+	`ALTER TABLE values_revisions ADD COLUMN locked_paths TEXT NOT NULL DEFAULT '[]'`,
 	`UPDATE values_revisions SET state_version = CASE WHEN version > 0 THEN version ELSE 1 END WHERE state_version = 0`,
 	`UPDATE values_revisions SET created_by_user_id = created_by WHERE created_by_user_id = ''`,
 	`ALTER TABLE release_definitions ADD COLUMN owner_organization_id TEXT`,

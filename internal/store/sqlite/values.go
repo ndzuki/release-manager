@@ -42,17 +42,26 @@ func (s *valuesStore) Create(ctx context.Context, revision *store.ValuesRevision
 	if err != nil {
 		return fmt.Errorf("encode values secret refs: %w", err)
 	}
+	convergenceIDs, err := encodeStringArray(revision.ConvergenceTaskIds)
+	if err != nil {
+		return fmt.Errorf("encode convergence task ids: %w", err)
+	}
+	lockedPaths, err := encodeStringArray(revision.LockedPaths)
+	if err != nil {
+		return fmt.Errorf("encode locked paths: %w", err)
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO values_revisions (
 			id, release_definition_id, version, state_version, status, "values",
 			digest, parent_revision_id, secret_refs, created_by, created_by_user_id,
 			approved_by, approved_at, rejected_by, rejection_reason, submitted_at, decided_at,
-			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', NULL, '', '', ?, ?, ?, ?)
+			convergence_task_ids, locked_paths, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', NULL, '', '', ?, ?, ?, ?, ?, ?)
 	`, revision.ID, revision.ReleaseDefinitionID, revision.Version, revision.StateVersion,
 		string(revision.Status), []byte(revision.CanonicalDocument), revision.Digest, valuesOptionalString(revision.ParentRevisionID),
 		refs, revision.CreatedByUserID, revision.CreatedByUserID, formatOptionalTime(revision.SubmittedAt),
-		formatOptionalTime(revision.DecidedAt), revision.CreatedAt.UTC().Format(time.RFC3339Nano),
+		formatOptionalTime(revision.DecidedAt), convergenceIDs, lockedPaths,
+		revision.CreatedAt.UTC().Format(time.RFC3339Nano),
 		revision.UpdatedAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		if isUniqueConstraint(err) {
@@ -164,7 +173,8 @@ func (s *valuesStore) GetNextRevisionNumber(ctx context.Context, definitionID st
 const valuesSelect = `
 	SELECT id, release_definition_id, version, state_version, status, "values",
 		digest, parent_revision_id, secret_refs, created_by_user_id,
-		submitted_at, decided_at, created_at, updated_at
+		submitted_at, decided_at, convergence_task_ids, locked_paths,
+		created_at, updated_at
 	FROM values_revisions`
 
 func getValues(ctx context.Context, queryer interface {
@@ -176,13 +186,14 @@ func getValues(ctx context.Context, queryer interface {
 func scanValues(row interface{ Scan(...any) error }) (*store.ValuesRevision, error) {
 	var revision store.ValuesRevision
 	var status string
-	var refs []byte
+	var refs, convergenceIDs, lockedPaths []byte
 	var parentRevisionID, submittedAt, decidedAt sql.NullString
 	var createdAt, updatedAt string
 	if err := row.Scan(
 		&revision.ID, &revision.ReleaseDefinitionID, &revision.Version, &revision.StateVersion,
 		&status, &revision.CanonicalDocument, &revision.Digest, &parentRevisionID, &refs,
-		&revision.CreatedByUserID, &submittedAt, &decidedAt, &createdAt, &updatedAt,
+		&revision.CreatedByUserID, &submittedAt, &decidedAt, &convergenceIDs, &lockedPaths,
+		&createdAt, &updatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -193,6 +204,12 @@ func scanValues(row interface{ Scan(...any) error }) (*store.ValuesRevision, err
 		if err := json.Unmarshal(refs, &revision.SecretRefs); err != nil {
 			return nil, fmt.Errorf("decode values secret refs: %w", err)
 		}
+	}
+	if err := decodeStringArray(convergenceIDs, &revision.ConvergenceTaskIds); err != nil {
+		return nil, fmt.Errorf("decode convergence task ids: %w", err)
+	}
+	if err := decodeStringArray(lockedPaths, &revision.LockedPaths); err != nil {
+		return nil, fmt.Errorf("decode locked paths: %w", err)
 	}
 	if parentRevisionID.Valid {
 		revision.ParentRevisionID = parentRevisionID.String
@@ -267,6 +284,30 @@ func valuesOptionalString(value string) any {
 		return nil
 	}
 	return value
+}
+
+// encodeStringArray renders the JSON-encoded TEXT form of a string slice used
+// for the convergence columns (SQLite has no native arrays; REQ-079 D15).
+func encodeStringArray(values []string) ([]byte, error) {
+	if len(values) == 0 {
+		return []byte("[]"), nil
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return nil, err
+	}
+	return encoded, nil
+}
+
+func decodeStringArray(encoded []byte, target *[]string) error {
+	if len(encoded) == 0 || string(encoded) == "[]" {
+		*target = nil
+		return nil
+	}
+	if err := json.Unmarshal(encoded, target); err != nil {
+		return err
+	}
+	return nil
 }
 
 func valuesQueryHash(filter store.ValuesListFilter) string {
