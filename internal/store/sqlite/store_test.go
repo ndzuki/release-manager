@@ -2,6 +2,8 @@ package sqlite_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +19,13 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
+
+// sha256Hex derives the irreversible token hash in tests (REQ-015: the
+// plaintext is never persisted).
+func sha256Hex(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
 
 func setupStore(t *testing.T) *sqlitestore.Store {
 	t.Helper()
@@ -177,7 +186,7 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 		ID:         uuid.New().String(),
 		CustomerID: cust.ID,
 		ClusterID:  cl.ID,
-		Token:      "test-token-abc",
+		TokenHash:  sha256Hex("test-token-abc"),
 	}
 	require.NoError(t, st.EnrollmentTokens().Create(ctx, tok))
 
@@ -1261,7 +1270,7 @@ func TestOperatorManagement_CreateEnrollmentTokenAtomic(t *testing.T) {
 		CustomerID:           customerID,
 		ClusterID:            clusterID,
 		OperatorName:         "operator-a",
-		Token:                "plaintext-first",
+		TokenHash:            sha256Hex("plaintext-first"),
 		CreatedByDisplayName: "admin",
 		ExpiresAt:            time.Now().UTC().Add(time.Hour),
 	}
@@ -1270,8 +1279,7 @@ func TestOperatorManagement_CreateEnrollmentTokenAtomic(t *testing.T) {
 	assert.NotEmpty(t, first.TokenHash)
 
 	var persistedToken string
-	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT token FROM enrollment_tokens WHERE id = ?`, first.ID).Scan(&persistedToken))
-	assert.NotEqual(t, first.Token, persistedToken)
+	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT token_hash FROM enrollment_tokens WHERE id = ?`, first.ID).Scan(&persistedToken))
 	assert.Equal(t, first.TokenHash, persistedToken)
 
 	second := &store.EnrollmentToken{
@@ -1279,7 +1287,7 @@ func TestOperatorManagement_CreateEnrollmentTokenAtomic(t *testing.T) {
 		CustomerID:           customerID,
 		ClusterID:            clusterID,
 		OperatorName:         "operator-a",
-		Token:                "plaintext-second",
+		TokenHash:            sha256Hex("plaintext-second"),
 		CreatedByDisplayName: "admin",
 		ExpiresAt:            time.Now().UTC().Add(time.Hour),
 	}
@@ -1291,7 +1299,7 @@ func TestOperatorManagement_CreateEnrollmentTokenAtomic(t *testing.T) {
 		CustomerID:           customerID,
 		ClusterID:            clusterID,
 		OperatorName:         "operator-a",
-		Token:                "plaintext-failed-replacement",
+		TokenHash:            sha256Hex("plaintext-failed-replacement"),
 		CreatedByDisplayName: "admin",
 		ExpiresAt:            time.Now().UTC().Add(time.Hour),
 	}
@@ -1329,7 +1337,7 @@ func TestOperatorManagement_CreateEnrollmentTokenConcurrent(t *testing.T) {
 				CustomerID:           customerID,
 				ClusterID:            clusterID,
 				OperatorName:         fmt.Sprintf("operator-%d", index),
-				Token:                fmt.Sprintf("plaintext-%d", index),
+				TokenHash:            sha256Hex(fmt.Sprintf("plaintext-%d", index)),
 				CreatedByDisplayName: "admin",
 				ExpiresAt:            time.Now().UTC().Add(time.Hour),
 			}
@@ -1374,7 +1382,7 @@ func TestOperatorManagement_EnrollOperatorAtomic(t *testing.T) {
 	require.NoError(t, st.Sessions().Create(ctx, &store.Session{ID: "session-old", OperatorID: old.ID, CustomerID: customerID, ClusterID: clusterID, Status: store.SessionOnline}))
 	token := &store.EnrollmentToken{
 		ID: "token-enroll", CustomerID: customerID, ClusterID: clusterID, OperatorName: "operator-new",
-		Token: "plaintext-enroll", ExpiresAt: time.Now().UTC().Add(time.Hour),
+		TokenHash: sha256Hex("plaintext-enroll"), ExpiresAt: time.Now().UTC().Add(time.Hour),
 	}
 	require.NoError(t, st.EnrollmentTokens().Create(ctx, token))
 	next := &store.Operator{ID: "operator-new", Name: "operator-new", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-new"}
@@ -1386,7 +1394,7 @@ func TestOperatorManagement_EnrollOperatorAtomic(t *testing.T) {
 	assert.Equal(t, customerID, result.Session.CustomerID)
 	assert.Equal(t, clusterID, result.Session.ClusterID)
 
-	used, err := st.EnrollmentTokens().GetByToken(ctx, token.Token)
+	used, err := st.EnrollmentTokens().GetByToken(ctx, "plaintext-enroll")
 	require.NoError(t, err)
 	assert.Equal(t, store.TokenStateUsed, used.State)
 	oldAfter, err := st.Operators().Get(ctx, old.ID)

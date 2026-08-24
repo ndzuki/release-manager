@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,7 @@ import (
 type Service struct {
 	store            store.Store
 	ca               *ca.CA
+	renewBeforeRatio float64
 	logger           *slog.Logger
 	sessionTTL       time.Duration
 	heartbeatMaxAge  time.Duration
@@ -44,18 +46,15 @@ type Service struct {
 	streams          *StreamRegistry
 }
 
-// NewService creates a new operator Connect service with a self-signed CA.
+// NewService creates a new operator Connect service. The signing CA must be
+// injected through WithCA — the service never generates one per start, since
+// a fresh CA would invalidate every enrolled agent certificate (ADR-017).
 func NewService(st store.Store, logger *slog.Logger, opts ...Option) (*Service, error) {
-	caInst, err := ca.New(ca.Config{TTL: 7 * 24 * time.Hour})
-	if err != nil {
-		return nil, fmt.Errorf("create CA: %w", err)
-	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 	svc := &Service{
 		store:            st,
-		ca:               caInst,
 		logger:           logger,
 		sessionTTL:       15 * time.Minute,
 		heartbeatMaxAge:  30 * time.Second,
@@ -65,6 +64,9 @@ func NewService(st store.Store, logger *slog.Logger, opts ...Option) (*Service, 
 	}
 	for _, opt := range opts {
 		opt(svc)
+	}
+	if svc.ca == nil {
+		return nil, fmt.Errorf("operator service requires a persisted CA (WithCA); refusing per-start CA generation")
 	}
 	return svc, nil
 }
@@ -78,6 +80,17 @@ func WithCA(caInst *ca.CA) Option {
 	return func(s *Service) {
 		if caInst != nil {
 			s.ca = caInst
+		}
+	}
+}
+
+// WithRenewBeforeRatio sets the renew window ratio used by RenewCertificate
+// (REQ-015 AC-015-09: renew denied while remaining validity exceeds
+// ca.cert_ttl × renew_before_ratio).
+func WithRenewBeforeRatio(ratio float64) Option {
+	return func(s *Service) {
+		if ratio > 0 {
+			s.renewBeforeRatio = ratio
 		}
 	}
 }
@@ -131,8 +144,9 @@ func (s *Service) DispatchEmergency(ctx context.Context, operatorID string, comm
 	}
 }
 
-// Enroll validates a single-use enrollment token, creates an operator record,
-// and establishes a new session for the operator agent.
+// Enroll validates a single-use enrollment token, creates an operator record
+// with a center-generated operator_id (REQ-015 决策 4), and establishes a new
+// session for the operator agent (REQ-015 事务边界 1).
 //
 //nolint:gocyclo // enrollment validation requires multiple sequential checks
 func (s *Service) Enroll(
@@ -140,104 +154,110 @@ func (s *Service) Enroll(
 	req *connect.Request[operatorv1.EnrollRequest],
 ) (*connect.Response[operatorv1.EnrollResponse], error) {
 	msg := req.Msg
+	now := time.Now().UTC()
 
-	// Validate token exists and is unused.
+	// Validate token exists and is pending (AC-015-01: 伪造/过期/重复拒绝).
 	token, err := s.store.EnrollmentTokens().GetByToken(ctx, msg.GetEnrollmentToken())
 	if err != nil {
-		if err == store.ErrNotFound {
-			return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid enrollment token"))
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, operatorError(connect.CodeUnauthenticated, reasonInvalidToken, "invalid enrollment token")
 		}
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, operatorError(connect.CodeInternal, reasonInternal, "enrollment token lookup failed")
+	}
+	switch token.State {
+	case store.TokenStatePending:
+	case store.TokenStateUsed:
+		return nil, operatorError(connect.CodeUnauthenticated, reasonTokenReused, "enrollment token already used")
+	case store.TokenStateExpired:
+		return nil, operatorError(connect.CodeUnauthenticated, reasonEnrollTokenExpired, "enrollment token expired")
+	case store.TokenStateRevoked:
+		return nil, operatorError(connect.CodeUnauthenticated, reasonInvalidToken, "invalid enrollment token")
+	default:
+		return nil, operatorError(connect.CodeInternal, reasonInternal, "invalid enrollment token state")
+	}
+	if !token.ExpiresAt.After(now) {
+		return nil, operatorError(connect.CodeUnauthenticated, reasonEnrollTokenExpired, "enrollment token expired")
 	}
 
-	if token.State != store.TokenStatePending {
-		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("enrollment token already used"))
-	}
-
-	if time.Now().UTC().After(token.ExpiresAt) {
-		return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("enrollment token expired"))
-	}
-
-	// Validate token matches requested customer/cluster.
-	if token.CustomerID != msg.GetCustomerId() {
-		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("customer_id mismatch"))
-	}
-	if token.ClusterID != msg.GetClusterId() {
-		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("cluster_id mismatch"))
+	// Normalize the requested scope and require an exact token match
+	// (AC-015-04: the client has no self-report channel).
+	requestedCustomerID, customerErr := normalizeDNSLabel(msg.GetCustomerId())
+	requestedClusterID, clusterErr := normalizeDNSLabel(msg.GetClusterId())
+	if customerErr != nil || clusterErr != nil ||
+		requestedCustomerID != strings.ToLower(token.CustomerID) || requestedClusterID != strings.ToLower(token.ClusterID) {
+		return nil, operatorError(connect.CodePermissionDenied, reasonScopeMismatch, "enrollment scope does not match token")
 	}
 
 	// Verify customer and cluster are still active.
-	cust, err := s.store.Customers().Get(ctx, msg.GetCustomerId())
+	cust, err := s.store.Customers().Get(ctx, token.CustomerID)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, operatorError(connect.CodeInternal, reasonInternal, "customer lookup failed")
 	}
 	if cust.Status == store.CustomerDisabled {
-		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("customer %q is disabled", msg.GetCustomerId()))
+		return nil, operatorError(connect.CodePermissionDenied, reasonCustomerDisabled, "customer is disabled")
 	}
-
-	cl, err := s.store.Clusters().Get(ctx, msg.GetClusterId())
+	cl, err := s.store.Clusters().Get(ctx, token.ClusterID)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, operatorError(connect.CodeInternal, reasonInternal, "cluster lookup failed")
 	}
 	if cl.Status == store.ClusterDisabled {
-		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("cluster %q is disabled", msg.GetClusterId()))
+		return nil, operatorError(connect.CodePermissionDenied, reasonClusterDisabled, "cluster is disabled")
 	}
-	// Parse and validate CSR (AC-015-06).
+	if cl.CustomerID != token.CustomerID {
+		return nil, operatorError(connect.CodePermissionDenied, reasonScopeMismatch, "cluster does not belong to customer")
+	}
+
+	// Parse and validate the CSR (AC-015-06): strict algorithm check,
+	// signature proof, and the canonical SAN `<cluster>.<customer>.rm`.
 	csr, err := parseCSR(msg.GetCsrPem())
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid CSR: %w", err))
+		return nil, operatorError(connect.CodeInvalidArgument, reasonCSRInvalid, "invalid certificate signing request")
 	}
-	if err := validateCSRSANs(csr, msg.GetCustomerId(), msg.GetClusterId()); err != nil {
-		return nil, connect.NewError(connect.CodePermissionDenied, err)
+	identity, err := validateCSRIdentity(csr, token.CustomerID, token.ClusterID)
+	if err != nil {
+		return nil, operatorError(connect.CodePermissionDenied, reasonCSRSANMismatch, "certificate signing request SAN does not match enrollment scope")
 	}
-	operatorName := csr.Subject.CommonName
-	if operatorName == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("CSR CommonName (operator_name) is required"))
+	if token.OperatorName != "" && identity.OperatorName != token.OperatorName {
+		return nil, operatorError(connect.CodeAlreadyExists, reasonDuplicateOperatorName, "operator name does not match enrollment token")
 	}
 
-	// Check operator_name is not already used by another cluster (AC-015-02).
-	if existingByName, err := s.store.Operators().GetActiveByName(ctx, msg.GetCustomerId(), operatorName); err == nil {
-		if existingByName.ClusterID != msg.GetClusterId() {
-			return nil, connect.NewError(connect.CodePermissionDenied,
-				fmt.Errorf("operator_name %q already registered on cluster %q", operatorName, existingByName.ClusterID))
+	// Operator_name must not be reused across clusters (AC-015-02).
+	if existingByName, lookupErr := s.store.Operators().GetActiveByName(ctx, token.CustomerID, identity.OperatorName); lookupErr == nil {
+		if existingByName.ClusterID != token.ClusterID {
+			return nil, operatorError(connect.CodePermissionDenied, reasonOperatorNameCrossCluster, "operator name is active on another cluster")
 		}
+		return nil, operatorError(connect.CodeAlreadyExists, reasonDuplicateOperatorName, "operator name is already active")
+	} else if !errors.Is(lookupErr, store.ErrNotFound) {
+		return nil, operatorError(connect.CodeInternal, reasonInternal, "operator name lookup failed")
 	}
 
-	// Sign CSR with CA (AC-015-05).
-	certDER, err := s.ca.SignCSR(csr)
+	// Sign the CSR (AC-015-05/AC-015-16). Certificate issuance is a pure
+	// side-effect-free function and may run before the transaction.
+	issued, err := s.ca.SignCSR(csr, []string{identity.DNSName})
 	if err != nil {
 		s.logger.Error("CA sign CSR failed", "error", err)
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("sign CSR: %w", err))
-	}
-	certPEM := ca.CertDERToPEM(certDER)
-
-	// Generate operator ID and cert serial. The serial is the first 10 bytes
-	// of sha256(certDER), hex-encoded (ADR-018; REQ-015 certificate contract).
-	certSerial := certSerialFromDER(certDER)
-
-	operatorID := msg.GetOperatorId()
-	if operatorID == "" {
-		operatorID = uuid.New().String()
+		return nil, operatorError(connect.CodeInternal, reasonInternal, "certificate signing failed")
 	}
 
-	// Create operator record with operator_name from CSR CN.
+	// The operator_id is center-generated (REQ-015 决策 4, AC-015-04).
+	operatorID := uuid.NewString()
 	op := &store.Operator{
-		ID:         operatorID,
-		Name:       operatorName,
-		CustomerID: msg.GetCustomerId(),
-		ClusterID:  msg.GetClusterId(),
-		CertSerial: certSerial,
-		Status:     store.OperatorActive,
+		ID:                   operatorID,
+		Name:                 identity.OperatorName,
+		CustomerID:           token.CustomerID,
+		ClusterID:            token.ClusterID,
+		CertSerial:           issued.Serial,
+		CertificateExpiresAt: &issued.ExpiresAt,
+		Status:               store.OperatorActive,
 	}
 
 	// Atomically consume the token, supersede any active identity, create the
-	// new Operator, and establish its Session in the shared control-plane Store.
-	now := time.Now().UTC()
+	// new Operator, and establish its Session (REQ-015 事务边界 1/2).
 	session := &store.Session{
-		ID:            uuid.New().String(),
+		ID:            uuid.NewString(),
 		OperatorID:    operatorID,
-		CustomerID:    msg.GetCustomerId(),
-		ClusterID:     msg.GetClusterId(),
+		CustomerID:    token.CustomerID,
+		ClusterID:     token.ClusterID,
 		Status:        store.SessionOnline,
 		StartedAt:     now,
 		LastHeartbeat: now,
@@ -246,24 +266,55 @@ func (s *Service) Enroll(
 	}
 	enrollment, err := s.store.OperatorManagement().EnrollOperator(ctx, token.ID, op, session)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("commit operator enrollment: %w", err))
+		switch {
+		case errors.Is(err, store.ErrOperatorStateConflict), errors.Is(err, store.ErrTokenExpired):
+			// A concurrent Enroll consumed the token (CAS loser) or the token
+			// expired between precheck and commit — surface the domain reason.
+			current, lookupErr := s.store.EnrollmentTokens().GetByToken(ctx, msg.GetEnrollmentToken())
+			if lookupErr == nil {
+				switch current.State {
+				case store.TokenStateUsed:
+					return nil, operatorError(connect.CodeUnauthenticated, reasonTokenReused, "enrollment token already used")
+				case store.TokenStateExpired:
+					return nil, operatorError(connect.CodeUnauthenticated, reasonEnrollTokenExpired, "enrollment token expired")
+				case store.TokenStateRevoked:
+					return nil, operatorError(connect.CodeUnauthenticated, reasonInvalidToken, "invalid enrollment token")
+				}
+			}
+			return nil, operatorError(connect.CodeUnauthenticated, reasonTokenReused, "enrollment token already used")
+		case errors.Is(err, store.ErrNotAuthorized):
+			return nil, operatorError(connect.CodePermissionDenied, reasonScopeMismatch, "enrollment scope does not match token")
+		case errors.Is(err, store.ErrDuplicateOperatorName):
+			return nil, operatorError(connect.CodeAlreadyExists, reasonDuplicateOperatorName, "operator name is already active")
+		case errors.Is(err, store.ErrNotFound):
+			return nil, operatorError(connect.CodeUnauthenticated, reasonInvalidToken, "invalid enrollment token")
+		default:
+			s.logger.WarnContext(ctx, "enrollment commit failed", "error", err, "token_id", token.ID)
+			return nil, operatorError(connect.CodeInternal, reasonInternal, "enrollment transaction failed")
+		}
 	}
+	// Supersede propagates to live streams immediately (AC-015-08).
 	if enrollment.SupersededOperatorID != "" {
 		s.streams.Revoke(enrollment.SupersededOperatorID, "operator superseded")
 	}
 
 	s.logger.Info("operator enrolled",
 		"operator_id", operatorID,
-		"operator_name", operatorName,
-		"customer_id", msg.GetCustomerId(),
-		"cluster_id", msg.GetClusterId(),
+		"operator_name", identity.OperatorName,
+		"customer_id", token.CustomerID,
+		"cluster_id", token.ClusterID,
 		"session_id", session.ID,
+		"cert_serial", issued.Serial,
 	)
 
+	s.emitOperatorEnrollmentAudit(req.Header(), op, session.ID, enrollment.SupersededOperatorID)
+
 	return connect.NewResponse(&operatorv1.EnrollResponse{
-		SessionId:      session.ID,
-		TtlSeconds:     int64(s.sessionTTL.Seconds()),
-		CertificatePem: certPEM,
+		SessionId:             session.ID,
+		TtlSeconds:            int64(s.sessionTTL.Seconds()),
+		CertificatePem:        issued.PEM,
+		OperatorId:            operatorID,
+		CertificateExpiresAt:  issued.ExpiresAt.Format(time.RFC3339),
 	}), nil
 }
 
@@ -1131,34 +1182,124 @@ func (s *Service) deliverPending(
 	}
 }
 
-// RevokeOperator revokes an operator and closes its active sessions (AC-015-03).
-func (s *Service) RevokeOperator(
+// RenewCertificate replaces the current operator certificate without changing
+// logical identity (REQ-015 决策 1/8). Authentication is the verified mTLS
+// client certificate; the payload operator_id must match it. On success the
+// old certificate is immediately invalid (ADR-018 serial authority).
+//
+//nolint:gocyclo // renewal runs the identity/state/window/CSR validation chain
+func (s *Service) RenewCertificate(
 	ctx context.Context,
-	req *connect.Request[operatorv1.RevokeOperatorRequest],
-) (*connect.Response[operatorv1.RevokeOperatorResponse], error) {
-	msg := req.Msg
-
-	op, err := s.store.Operators().Get(ctx, msg.GetOperatorId())
+	req *connect.Request[operatorv1.RenewCertificateRequest],
+) (*connect.Response[operatorv1.RenewCertificateResponse], error) {
+	identity, ok := certificateIdentityFromContext(ctx)
+	if !ok {
+		return nil, operatorError(connect.CodeUnauthenticated, reasonCertificateInvalid, "verified client certificate is required")
+	}
+	operatorRecord, err := s.store.Operators().Get(ctx, req.Msg.GetOperatorId())
 	if err != nil {
-		if err == store.ErrNotFound {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("operator %q not found", msg.GetOperatorId()))
-		}
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, operatorError(connect.CodeUnauthenticated, reasonCertificateInvalid, "operator identity is invalid")
 	}
-
-	status := "already_revoked"
-	if op.Status != store.OperatorRevoked {
-		if _, err := s.store.OperatorManagement().RevokeOperator(ctx, op.CustomerID, op.ClusterID, op.ID, msg.GetReason(), nil); err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("revoke operator: %w", err))
-		}
-		status = "revoked"
+	// Identity consistency (AC-015-10): the mTLS certificate must resolve to
+	// the same operator the payload names.
+	if err := validateRenewIdentity(identity, operatorRecord, req.Msg.GetOperatorId()); err != nil {
+		return nil, operatorError(connect.CodeUnauthenticated, reasonCertificateInvalid, "client certificate identity does not match operator")
 	}
-	s.streams.Revoke(op.ID, "operator revoked")
-	s.logger.Warn("operator revoked", "operator_id", op.ID, "reason_provided", strings.TrimSpace(msg.GetReason()) != "")
-	return connect.NewResponse(&operatorv1.RevokeOperatorResponse{
-		OperatorId: op.ID,
-		Status:     status,
+	// State guard (AC-015-12) and serial authority (AC-015-11): a renewed
+	// operator keeps only the current certificate valid.
+	if err := validateCertificateIdentity(operatorRecord, identity); err != nil {
+		return nil, err
+	}
+	// Renew window (AC-015-09): only renew within ca.cert_ttl × ratio.
+	if err := renewAllowed(time.Now().UTC(), operatorRecord, s.ca.TTL(), s.renewBeforeRatio); err != nil {
+		return nil, operatorError(connect.CodeFailedPrecondition, reasonRenewTooEarly, "certificate renewal is too early")
+	}
+	csr, err := parseCSR(req.Msg.GetCsrPem())
+	if err != nil {
+		return nil, operatorError(connect.CodeInvalidArgument, reasonCSRInvalid, "invalid certificate signing request")
+	}
+	csrIdentity, err := validateCSRIdentity(csr, operatorRecord.CustomerID, operatorRecord.ClusterID)
+	if err != nil {
+		return nil, operatorError(connect.CodePermissionDenied, reasonCSRSANMismatch, "certificate signing request SAN does not match operator")
+	}
+	if csrIdentity.OperatorName != operatorRecord.Name {
+		return nil, operatorError(connect.CodeInvalidArgument, reasonCSRInvalid, "certificate signing request name does not match operator")
+	}
+	issued, err := s.ca.SignCSR(csr, []string{csrIdentity.DNSName})
+	if err != nil {
+		return nil, operatorError(connect.CodeInternal, reasonInternal, "certificate signing failed")
+	}
+	// CAS on the expected serial: a concurrent renew's last commit wins and
+	// this request reports cert_replaced (ADR-018; REQ-015 事务边界 3).
+	if err := s.store.OperatorLifecycle().UpdateCertificate(ctx, operatorRecord.ID, operatorRecord.CertSerial, issued.Serial, issued.ExpiresAt); err != nil {
+		if errors.Is(err, store.ErrCertificateConflict) {
+			return nil, operatorError(connect.CodePermissionDenied, reasonCertReplaced, "client certificate was replaced")
+		}
+		return nil, operatorError(connect.CodeInternal, reasonInternal, "certificate update failed")
+	}
+	s.logger.Info("operator certificate renewed",
+		"operator_id", operatorRecord.ID,
+		"cert_serial", issued.Serial,
+	)
+	s.emitOperatorRenewAudit(req.Header(), operatorRecord, issued.Serial)
+	return connect.NewResponse(&operatorv1.RenewCertificateResponse{
+		CertificatePem: issued.PEM,
+		TtlSeconds:     int64(s.ca.TTL().Seconds()),
 	}), nil
+}
+
+// emitOperatorEnrollmentAudit records operator.enrolled (and
+// operator.superseded when a prior identity was replaced) through the shared
+// sanitizing audit emitter (REQ-015 审计事件, ADR-010).
+func (s *Service) emitOperatorEnrollmentAudit(header http.Header, operator *store.Operator, sessionID, supersededID string) {
+	if s.auditEmitter == nil || operator == nil {
+		return
+	}
+	requestID := strings.TrimSpace(header.Get("X-Request-ID"))
+	if requestID == "" {
+		requestID = uuid.NewString()
+	}
+	metadata := map[string]string{
+		"operator_id": operator.ID, "operator_name": operator.Name,
+		"customer_id": operator.CustomerID, "cluster_id": operator.ClusterID,
+		"session_id": sessionID, "request_id": requestID,
+	}
+	s.emitOperatorAudit(audit.NewEvent(store.AuditActorService, operator.ID, "", "", "operator", operator.ID,
+		"enrolled", "succeeded", "operator enrolled", metadata))
+	if supersededID != "" {
+		s.emitOperatorAudit(audit.NewEvent(store.AuditActorService, operator.ID, "", "", "operator", supersededID,
+			"superseded", "succeeded", "operator superseded", map[string]string{
+				"old_id": supersededID, "new_id": operator.ID, "customer_id": operator.CustomerID,
+				"cluster_id": operator.ClusterID, "request_id": requestID,
+			}))
+	}
+}
+
+// emitOperatorRenewAudit records operator.renewed with the new serial but no
+// key material or token data (REQ-015 审计事件, 脱敏).
+func (s *Service) emitOperatorRenewAudit(header http.Header, operatorRecord *store.Operator, serial string) {
+	if s.auditEmitter == nil || operatorRecord == nil {
+		return
+	}
+	requestID := strings.TrimSpace(header.Get("X-Request-ID"))
+	if requestID == "" {
+		requestID = uuid.NewString()
+	}
+	s.emitOperatorAudit(audit.NewEvent(store.AuditActorService, operatorRecord.ID, "", "", "operator", operatorRecord.ID,
+		"renewed", "succeeded", "operator certificate renewed", map[string]string{
+			"operator_id": operatorRecord.ID, "customer_id": operatorRecord.CustomerID,
+			"cluster_id": operatorRecord.ClusterID, "cert_serial": serial, "request_id": requestID,
+		}))
+}
+
+// emitOperatorAudit submits a sanitized audit event through the shared sink.
+func (s *Service) emitOperatorAudit(event *store.AuditEvent) {
+	if s.auditEmitter == nil || event == nil {
+		return
+	}
+	if result := s.auditEmitter.Emit(event); !result.Accepted {
+		s.logger.Warn("operator audit event rejected", "action", event.Action, "code", result.Code)
+	}
 }
 
 // certSerialFromCert computes the ADR-018 identity serial: the first 10 bytes

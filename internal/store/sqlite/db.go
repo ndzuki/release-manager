@@ -169,6 +169,12 @@ func (s *Store) OperatorManagement() store.OperatorManagementStore {
 	return &operatorManagementStore{db: s.db}
 }
 
+// OperatorLifecycle returns the REQ-015 certificate and scope-disable
+// transaction store.
+func (s *Store) OperatorLifecycle() store.OperatorLifecycleStore {
+	return &operatorLifecycleStore{db: s.db}
+}
+
 // EnrollmentTokens returns the EnrollmentTokenStore.
 func (s *Store) EnrollmentTokens() store.EnrollmentTokenStore { return s.tokens }
 
@@ -326,6 +332,7 @@ func migrate(db *sql.DB) error {
 	}
 	valuesSchemaMigrated := false
 	preflightSchemaMigrated := false
+	enrollmentTokenMigrated := false
 	for _, stmt := range migrationStatements {
 		if !valuesSchemaMigrated && strings.Contains(stmt, "ux_vr_def_version") {
 			if err := migrateValuesRevisionSchema(tx); err != nil {
@@ -338,6 +345,12 @@ func migrate(db *sql.DB) error {
 				return fmt.Errorf("migrate preflight lifecycle schema: %w", err)
 			}
 			preflightSchemaMigrated = true
+		}
+		if !enrollmentTokenMigrated && strings.HasPrefix(strings.TrimSpace(stmt), "CREATE TABLE IF NOT EXISTS enrollment_tokens") {
+			if err := migrateEnrollmentTokenDropPlaintext(tx); err != nil {
+				return fmt.Errorf("migrate enrollment token schema: %w", err)
+			}
+			enrollmentTokenMigrated = true
 		}
 		if _, err := tx.ExecContext(context.Background(), stmt); err != nil {
 			// ALTER TABLE ADD COLUMN is not idempotent; skip if the
@@ -464,6 +477,61 @@ func migratePreflightLifecycleSchema(tx *sql.Tx) error {
 	for _, stmt := range statements {
 		if _, err := tx.ExecContext(context.Background(), stmt); err != nil {
 			return fmt.Errorf("preflight lifecycle migration statement: %w\nstmt: %s", err, stmt)
+		}
+	}
+	return nil
+}
+
+// migrateEnrollmentTokenDropPlaintext rebuilds enrollment_tokens without the
+// legacy plaintext-capable `token` column (REQ-015 安全边界: 持久化仅存
+// SHA-256 哈希). The current writer already stores only the hash in the
+// legacy column; the rebuild keeps token_hash and drops the column entirely.
+// COALESCE keeps legacy rows queryable regardless of which column held the
+// hash. Fresh databases (table not yet created) are left to the CREATE TABLE
+// below, which no longer defines the column.
+func migrateEnrollmentTokenDropPlaintext(tx *sql.Tx) error {
+	columns, err := sqliteTableColumns(tx, "enrollment_tokens")
+	if err != nil {
+		return err
+	}
+	if len(columns) == 0 {
+		return nil // table does not exist yet — the CREATE TABLE below defines the new shape
+	}
+	if _, hasToken := columns["token"]; !hasToken {
+		return nil // already on the hash-only shape
+	}
+	statements := []string{
+		`ALTER TABLE enrollment_tokens RENAME TO enrollment_tokens_legacy`,
+		`CREATE TABLE enrollment_tokens (
+			id                      TEXT PRIMARY KEY,
+			customer_id             TEXT NOT NULL,
+			cluster_id              TEXT NOT NULL,
+			token_hash              TEXT NOT NULL DEFAULT '',
+			operator_name           TEXT NOT NULL DEFAULT '',
+			state                   TEXT NOT NULL DEFAULT 'pending',
+			created_by_display_name TEXT NOT NULL DEFAULT '',
+			created_at              TEXT NOT NULL,
+			expires_at              TEXT NOT NULL,
+			used_at                 TEXT,
+			operator_id             TEXT NOT NULL DEFAULT '',
+			revoked_at              TEXT,
+			replaced_by_id          TEXT NOT NULL DEFAULT ''
+		)`,
+		`INSERT INTO enrollment_tokens (
+			id, customer_id, cluster_id, token_hash, operator_name, state,
+			created_by_display_name, created_at, expires_at, used_at,
+			operator_id, revoked_at, replaced_by_id
+		) SELECT
+			id, customer_id, cluster_id, COALESCE(NULLIF(token_hash, ''), token),
+			operator_name, state, created_by_display_name, created_at, expires_at,
+			used_at, operator_id, revoked_at, replaced_by_id
+		FROM enrollment_tokens_legacy`,
+		`DROP TABLE enrollment_tokens_legacy`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_enrollment_tokens_pending_cluster ON enrollment_tokens(cluster_id) WHERE state = 'pending'`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.ExecContext(context.Background(), stmt); err != nil {
+			return fmt.Errorf("enrollment token migration statement: %w\nstmt: %s", err, stmt)
 		}
 	}
 	return nil
@@ -814,7 +882,6 @@ var migrationStatements = []string{
 		id                    TEXT PRIMARY KEY,
 		customer_id           TEXT NOT NULL,
 		cluster_id            TEXT NOT NULL,
-		token                 TEXT NOT NULL UNIQUE,
 		token_hash            TEXT NOT NULL DEFAULT '',
 		operator_name         TEXT NOT NULL DEFAULT '',
 		state                 TEXT NOT NULL DEFAULT 'pending',
@@ -836,6 +903,7 @@ var migrationStatements = []string{
 		cluster_id    TEXT NOT NULL,
 		operator_name TEXT NOT NULL DEFAULT '',
 		cert_serial   TEXT NOT NULL,
+		certificate_expires_at TEXT,
 		status        TEXT NOT NULL DEFAULT 'active',
 		superseded_by TEXT NOT NULL DEFAULT '',
 		superseded_at TEXT,
@@ -889,6 +957,8 @@ var migrationStatements = []string{
 	// New columns: operator supersede and revoke reason (REQ-NNN).
 	`ALTER TABLE operators ADD COLUMN superseded_at TEXT`,
 	`ALTER TABLE operators ADD COLUMN revoke_reason TEXT NOT NULL DEFAULT ''`,
+	// REQ-015: renew window authority (certificate_expires_at).
+	`ALTER TABLE operators ADD COLUMN certificate_expires_at TEXT`,
 	// New columns: session customer linkage and lifecycle (REQ-NNN).
 	`ALTER TABLE sessions ADD COLUMN customer_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE sessions ADD COLUMN cluster_id TEXT NOT NULL DEFAULT ''`,

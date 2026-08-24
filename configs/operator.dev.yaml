@@ -17,3 +17,5 @@ agent:
   enrollment_token_file: data/enrollment.token
 ca:
   cert_path: data/gateway-ca.crt
+  cert_ttl: 168h
+  renew_before_ratio: 0.5

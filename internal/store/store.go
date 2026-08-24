@@ -47,6 +47,8 @@ var (
 	ErrOperatorNotFound              = errors.New("store: operator not found")
 	ErrTokenReplaceConflict          = errors.New("store: token replace conflict")
 	ErrOperatorStateConflict         = errors.New("store: operator state conflict")
+	ErrTokenExpired                  = errors.New("store: enrollment token expired")
+	ErrCertificateConflict           = errors.New("store: certificate serial conflict")
 	ErrAuditUnavailable              = errors.New("store: audit unavailable")
 	ErrEmergencyConflict             = errors.New("store: conflicting emergency target")
 	// ErrEmergencyOperationInProgress reports a non-terminal EMERGENCY
@@ -709,12 +711,13 @@ const (
 )
 
 // EnrollmentToken is a single-use token for operator registration.
+// The plaintext token is returned once at creation and never persisted —
+// only the irreversible SHA-256 hash is stored (REQ-015 安全边界).
 type EnrollmentToken struct {
 	ID                   string               `json:"id"`
 	CustomerID           string               `json:"customer_id"`
 	ClusterID            string               `json:"cluster_id"`
 	OperatorName         string               `json:"operator_name"`
-	Token                string               `json:"token,omitempty"`
 	TokenHash            string               `json:"token_hash"`
 	State                EnrollmentTokenState `json:"state"`
 	CreatedByDisplayName string               `json:"created_by_display_name"`
@@ -728,18 +731,19 @@ type EnrollmentToken struct {
 
 // Operator represents a registered operator agent in a cluster.
 type Operator struct {
-	ID           string         `json:"id"`
-	Name         string         `json:"name"`
-	CustomerID   string         `json:"customer_id"`
-	ClusterID    string         `json:"cluster_id"`
-	CertSerial   string         `json:"cert_serial"`
-	Status       OperatorStatus `json:"status"`
-	SupersededBy string         `json:"superseded_by,omitempty"`
-	SupersededAt *time.Time     `json:"superseded_at,omitempty"`
-	RevokedAt    *time.Time     `json:"revoked_at,omitempty"`
-	RevokeReason string         `json:"revoke_reason,omitempty"`
-	RegisteredAt time.Time      `json:"registered_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
+	ID                   string         `json:"id"`
+	Name                 string         `json:"name"`
+	CustomerID           string         `json:"customer_id"`
+	ClusterID            string         `json:"cluster_id"`
+	CertSerial           string         `json:"cert_serial"`
+	CertificateExpiresAt *time.Time     `json:"certificate_expires_at,omitempty"`
+	Status               OperatorStatus `json:"status"`
+	SupersededBy         string         `json:"superseded_by,omitempty"`
+	SupersededAt         *time.Time     `json:"superseded_at,omitempty"`
+	RevokedAt            *time.Time     `json:"revoked_at,omitempty"`
+	RevokeReason         string         `json:"revoke_reason,omitempty"`
+	RegisteredAt         time.Time      `json:"registered_at"`
+	UpdatedAt            time.Time      `json:"updated_at"`
 }
 
 // Session tracks a live operator connection.
@@ -1888,6 +1892,30 @@ type OperatorManagementStore interface {
 	RevokeOperator(ctx context.Context, customerID, clusterID, operatorID, reason string, auditEvent *AuditEvent) (*OperatorRevocation, error)
 }
 
+// CascadeRevokeResult reports the durable records changed by a scope disable
+// (REQ-015 事务边界 4: tokens + operators + sessions in one transaction).
+type CascadeRevokeResult struct {
+	TokenIDs    []string
+	OperatorIDs []string
+	SessionIDs  []string
+	Changed     bool
+}
+
+// OperatorLifecycleStore owns the operator certificate and scope-disable
+// transactions beyond the management-plane surface (REQ-015).
+type OperatorLifecycleStore interface {
+	// UpdateCertificate atomically rotates the effective cert serial with a
+	// CAS on the expected serial (ADR-018 authority; last commit wins).
+	UpdateCertificate(ctx context.Context, operatorID, expectedSerial, newSerial string, expiresAt time.Time) error
+	// DisableCustomer revokes every token, operator and session of a
+	// customer in one transaction (irreversible; re-enable requires new
+	// enrollment).
+	DisableCustomer(ctx context.Context, customerID, reason string) (*CascadeRevokeResult, error)
+	// DisableCluster revokes every token, operator and session of a cluster
+	// in one transaction.
+	DisableCluster(ctx context.Context, clusterID, reason string) (*CascadeRevokeResult, error)
+}
+
 // EnrollmentTokenStore defines the persistence contract for enrollment tokens.
 type EnrollmentTokenStore interface {
 	Create(ctx context.Context, t *EnrollmentToken) error
@@ -2337,6 +2365,7 @@ type Store interface {
 	CustomerCreates() CustomerBindingCreateStore
 	Clusters() ClusterStore
 	OperatorManagement() OperatorManagementStore
+	OperatorLifecycle() OperatorLifecycleStore
 	EnrollmentTokens() EnrollmentTokenStore
 	Operators() OperatorStore
 	Sessions() SessionStore

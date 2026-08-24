@@ -270,13 +270,17 @@ WHERE operator_id = ? AND status != 'revoked'
 		}
 	}
 
+	var certExpiresAt any
+	if op.CertificateExpiresAt != nil {
+		certExpiresAt = op.CertificateExpiresAt.UTC().Format(time.RFC3339Nano)
+	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO operators (
-	id, customer_id, cluster_id, operator_name, cert_serial, status,
+	id, customer_id, cluster_id, operator_name, cert_serial, certificate_expires_at, status,
 	superseded_by, superseded_at, revoked_at, revoke_reason, created_at, updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, '', NULL, NULL, '', ?, ?)
-`, op.ID, op.CustomerID, op.ClusterID, op.Name, op.CertSerial, string(op.Status),
+VALUES (?, ?, ?, ?, ?, ?, ?, '', NULL, NULL, '', ?, ?)
+`, op.ID, op.CustomerID, op.ClusterID, op.Name, op.CertSerial, certExpiresAt, string(op.Status),
 		op.RegisteredAt.UTC().Format(time.RFC3339Nano), op.UpdatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 		if isUniqueConstraint(err) {
 			return nil, store.ErrDuplicateOperatorName

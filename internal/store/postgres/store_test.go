@@ -4,7 +4,9 @@ package postgres_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -24,6 +26,13 @@ import (
 	postgresstore "github.com/ndzuki/release-manager/internal/store/postgres"
 	"gorm.io/gorm"
 )
+
+// sha256HexTest derives the irreversible token hash in tests (REQ-015: the
+// plaintext is never persisted).
+func sha256HexTest(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
 
 func setupStore(t *testing.T) *postgresstore.Store {
 	t.Helper()
@@ -207,7 +216,7 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 		ID:         uuid.New().String(),
 		CustomerID: cust.ID,
 		ClusterID:  cl.ID,
-		Token:      "test-token-abc",
+		TokenHash:  sha256HexTest("test-token-abc"),
 	}
 	require.NoError(t, st.EnrollmentTokens().Create(ctx, tok))
 
@@ -1599,7 +1608,7 @@ func TestOperatorManagement_CreateEnrollmentTokenAtomic(t *testing.T) {
 		CustomerID:           customerID,
 		ClusterID:            clusterID,
 		OperatorName:         "operator-a",
-		Token:                "plaintext-first",
+		TokenHash:            sha256HexTest("plaintext-first"),
 		CreatedByDisplayName: "admin",
 		ExpiresAt:            time.Now().UTC().Add(time.Hour),
 	}
@@ -1608,8 +1617,7 @@ func TestOperatorManagement_CreateEnrollmentTokenAtomic(t *testing.T) {
 	assert.NotEmpty(t, first.TokenHash)
 
 	var persistedToken string
-	require.NoError(t, st.SQLDB().QueryRowContext(ctx, `SELECT token FROM enrollment_tokens WHERE id = $1`, first.ID).Scan(&persistedToken))
-	assert.NotEqual(t, first.Token, persistedToken)
+	require.NoError(t, st.SQLDB().QueryRowContext(ctx, `SELECT token_hash FROM enrollment_tokens WHERE id = $1`, first.ID).Scan(&persistedToken))
 	assert.Equal(t, first.TokenHash, persistedToken)
 
 	second := &store.EnrollmentToken{
@@ -1617,7 +1625,7 @@ func TestOperatorManagement_CreateEnrollmentTokenAtomic(t *testing.T) {
 		CustomerID:           customerID,
 		ClusterID:            clusterID,
 		OperatorName:         "operator-a",
-		Token:                "plaintext-second",
+		TokenHash:            sha256HexTest("plaintext-second"),
 		CreatedByDisplayName: "admin",
 		ExpiresAt:            time.Now().UTC().Add(time.Hour),
 	}
@@ -1629,7 +1637,7 @@ func TestOperatorManagement_CreateEnrollmentTokenAtomic(t *testing.T) {
 		CustomerID:           customerID,
 		ClusterID:            clusterID,
 		OperatorName:         "operator-a",
-		Token:                "plaintext-failed-replacement",
+		TokenHash:            sha256HexTest("plaintext-failed-replacement"),
 		CreatedByDisplayName: "admin",
 		ExpiresAt:            time.Now().UTC().Add(time.Hour),
 	}
@@ -1670,7 +1678,7 @@ func TestOperatorManagement_CreateEnrollmentTokenConcurrent(t *testing.T) {
 				CustomerID:           customerID,
 				ClusterID:            clusterID,
 				OperatorName:         fmt.Sprintf("operator-%d", index),
-				Token:                fmt.Sprintf("plaintext-%d", index),
+				TokenHash:            sha256HexTest(fmt.Sprintf("plaintext-%d", index)),
 				CreatedByDisplayName: "admin",
 				ExpiresAt:            time.Now().UTC().Add(time.Hour),
 			}
@@ -1721,7 +1729,7 @@ func TestOperatorManagement_EnrollOperatorAtomic(t *testing.T) {
 		CustomerID:           customerID,
 		ClusterID:            clusterID,
 		OperatorName:         "operator-old",
-		Token:                "plaintext-enroll",
+		TokenHash:            sha256HexTest("plaintext-enroll"),
 		CreatedByDisplayName: "admin",
 		ExpiresAt:            time.Now().UTC().Add(time.Hour),
 	}

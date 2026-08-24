@@ -6,26 +6,24 @@ import (
 )
 
 func NewCertificateIdentityHandler(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/operator.v1.OperatorService/CommandStream" {
-			next.ServeHTTP(w, r)
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/operator.v1.OperatorService/CommandStream" &&
+			request.URL.Path != "/operator.v1.OperatorService/RenewCertificate" {
+			next.ServeHTTP(response, request)
 			return
 		}
-
-		certificate := verifiedClientCertificate(r)
-		if certificate == nil {
-			http.Error(w, "client certificate required", http.StatusUnauthorized)
+		identity, err := CertIdentityFromRequest(request)
+		if err != nil {
+			http.Error(response, "client certificate required", http.StatusUnauthorized)
 			return
 		}
-
-		ctx := WithCertificateIdentity(r.Context(), certificate.SerialNumber.String())
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(response, request.WithContext(WithCertificateIdentity(request.Context(), identity)))
 	})
 }
 
-func verifiedClientCertificate(r *http.Request) *x509.Certificate {
-	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 {
+func verifiedClientCertificate(request *http.Request) *x509.Certificate {
+	if request == nil || request.TLS == nil || len(request.TLS.VerifiedChains) == 0 || len(request.TLS.VerifiedChains[0]) == 0 {
 		return nil
 	}
-	return r.TLS.VerifiedChains[0][0]
+	return request.TLS.VerifiedChains[0][0]
 }
