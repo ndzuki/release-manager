@@ -402,8 +402,12 @@ func TestClusterCreateInjectsProxyEnv(t *testing.T) {
 	// actually goes through docker build; build/push pass through.
 	writeShim(t, binDir, "docker",
 		"#!/usr/bin/env bash\nif [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
+	// GOPROXY is explicitly cleared so dev.sh takes the `go env GOPROXY`
+	// fallback path and the shim's fixed output is asserted — otherwise an
+	// inherited host GOPROXY (e.g. goproxy.cn) makes the assertion
+	// environment-dependent.
 	env = append(env, "HTTP_PROXY=http://127.0.0.1:7890", "HTTPS_PROXY=http://127.0.0.1:7890",
-		"DEV_DOCKER_MIRROR=docker.1ms.run/library/")
+		"GOPROXY=", "DEV_DOCKER_MIRROR=docker.1ms.run/library/")
 
 	if out, err := runDev(t, env, "up"); err != nil {
 		t.Fatalf("dev-up failed:\n%s", out)
@@ -526,8 +530,11 @@ func TestCleanCheckoutCreatesDataDirBeforeDiskGate(t *testing.T) {
 	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "go", "#!/usr/bin/env bash\nif [ \"$1\" = \"env\" ]; then printf 'https://proxy.golang.org,direct\\n'; fi\nexit 0\n")
 	writeShim(t, binDir, "nproc", "#!/usr/bin/env bash\nprintf '8\\n'\n")
-	// awk: answer the memory probe with a pass, but forward the disk probe
-	// output — a missing data dir yields no output and must fail the gate.
+	// awk: answer the memory probe with a pass, and make the disk probe
+	// ordering-sensitive but filesystem-independent: a missing data dir
+	// yields no `df -Pk` output and must fail the gate, while a present dir
+	// answers a fixed 40 GiB (test temp dirs may live on a small tmpfs,
+	// so forwarding the real number is environment-dependent).
 	writeShim(t, binDir, "awk", `#!/usr/bin/env bash
 if [[ "$*" == *"/proc/meminfo"* ]]; then
   printf '24576\n'
@@ -537,7 +544,7 @@ count=0
 while IFS= read -r line || [ -n "$line" ]; do
   count=$((count + 1))
   if [ "$count" -eq 2 ]; then
-    printf '%s\n' "$line" | tr -s ' ' | cut -d' ' -f4
+    printf '41943040\n'
     exit 0
   fi
 done
