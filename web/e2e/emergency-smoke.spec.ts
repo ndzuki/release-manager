@@ -21,6 +21,12 @@ const CREDENTIALS = {
   adminB: { username: process.env.E2E_ADMIN_B_USER ?? 'admin-b', password: process.env.E2E_ADMIN_B_PASS ?? '' },
 };
 
+// D19=A: web-side TTI budget assertion — "route entry → form operable"
+// p95 ≤ 1.5s (REQ-058 performance table). A single E2E sample asserts the
+// budget, not the p95 statistic; the service-side p95 belongs to the
+// observability takeover item (REQ-065/066 e2e + metrics).
+const TTI_BUDGET_MS = Number(process.env.E2E_TTI_BUDGET_MS ?? 1500);
+
 async function login(page: import('@playwright/test').Page, username: string, password: string): Promise<void> {
   await page.goto('/login');
   await page.getByLabel('Username').fill(username);
@@ -41,8 +47,20 @@ test('Inventory → Emergency → Execute → Operation Detail (REQUIRE_PROMOTIO
   await emergencyLink.click();
   await page.waitForURL(/\/emergency$/);
 
+  // D19=A: route entry → form operable within the TTI budget (REQ-058
+  // performance table; service-side p95 is the observability takeover item).
+  const targetRadio = page.getByRole('radio', { name: /DEPLOYMENT/i }).first();
+  const ttiStart = Date.now();
+  await expect(targetRadio).toBeVisible();
+  await expect(targetRadio).toBeEnabled();
+  const ttiMs = Date.now() - ttiStart;
+  expect(
+    ttiMs,
+    `Emergency form TTI within ${TTI_BUDGET_MS}ms (measured ${ttiMs}ms)`,
+  ).toBeLessThanOrEqual(TTI_BUDGET_MS);
+
   // Target → container → VERIFIED artifact → reason → policy → confirm.
-  await page.getByRole('radio', { name: /DEPLOYMENT/i }).first().check();
+  await targetRadio.check();
   await page.getByLabel('容器').selectOption({ index: 1 });
   await page.getByRole('radio').first().check();
   await page.getByPlaceholder('事故 ID / 现象 / 影响范围').fill('E2E 冒烟：验证镜像紧急变更');
