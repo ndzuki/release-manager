@@ -33,7 +33,7 @@ function containsForbiddenCodePoints(value: string): boolean {
   return false;
 }
 
-/** reason: trim 后 1–1000 UTF-8 bytes；禁止 NUL、U+FFFE、U+FFFF（决策 D8）。 */
+/** reason: trimmed, 1–1000 UTF-8 bytes; forbids NUL, U+FFFE, U+FFFF (decision D8). */
 export function validateReason(raw: string): ValidationResult {
   const reason = raw.trim();
   if (reason.length === 0) {
@@ -53,7 +53,7 @@ export function validateReason(raw: string): ValidationResult {
   return { valid: true };
 }
 
-/** replicas: 整数且 0 ≤ value ≤ max（HPA 管理或超过上限均不可提交）。 */
+/** replicas: integer with 0 ≤ value ≤ max (HPA-managed or over-max is not submittable). */
 export function validateReplicas(value: number, max: number, hpaManaged: boolean): ValidationResult {
   if (hpaManaged) {
     return { valid: false, code: 'hpa_managed', message: '副本数由 HPA 管理，不可修改' };
@@ -74,7 +74,7 @@ export interface AnnotationEntryDraft {
   scope: string;
 }
 
-/** annotations: 1–50 条、key 唯一、value 1–2048 UTF-8 bytes、同 scope。 */
+/** annotations: 1–50 entries, unique keys, value 1–2048 UTF-8 bytes, same scope. */
 export function validateAnnotationEntries(entries: AnnotationEntryDraft[]): ValidationResult {
   if (entries.length < ANNOTATION_MIN_ENTRIES || entries.length > ANNOTATION_MAX_ENTRIES) {
     return {

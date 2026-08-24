@@ -57,7 +57,7 @@ export const useEmergencyAuthorizationStore = defineStore('emergencyAuthorizatio
    * - otherwise → 'allowed'
    */
   function gateFor(capability: 'execute' | 'createValues' | 'approveValues' | 'none'): RouteGate {
-    if (!snapshot.value) return loading.value || error.value ? 'loading' : 'loading';
+    if (!snapshot.value) return 'loading';
     if (!snapshot.value.bindingActive || !snapshot.value.customerActive) return 'not_found';
     // The kill switch only closes the NEW emergency entry; convergence and
     // existing operation paths stay reachable (AC-058-05).
