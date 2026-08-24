@@ -41,8 +41,17 @@ DEV_TIMEOUT_SEED_RETRIES="${DEV_TIMEOUT_SEED_RETRIES:-3}"
 # and state documents. data/archive/ is explicitly preserved.
 PURGE_DATA_PATHS=(dev-credentials.env dev-trust-root dev-jwt kubeconfigs kubeconfig.yaml dev-ownership.json dev-fixture.json dev-seed-progress.json dev-status.json backups)
 CONTROL_CLUSTER="release-manager-control"
+# k3d names the kubeconfig context "k3d-<cluster>".
+CONTROL_CTX="k3d-$CONTROL_CLUSTER"
 CUSTOMER_CLUSTERS=(dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed)
 ALL_CLUSTERS=("$CONTROL_CLUSTER" "${CUSTOMER_CLUSTERS[@]}")
+# ctl_kubectl — kubectl against the MANAGEMENT cluster: the merged project
+# kubeconfig plus the explicit control context. Without both, kubectl falls
+# back to ~/.kube/config (or its ambient context) and management manifests
+# land on a customer cluster (real smoke 2026-08-24 regression).
+ctl_kubectl() {
+  KUBECONFIG="$DEV_DATA_DIR/kubeconfig.yaml" kubectl --context "$CONTROL_CTX" "$@"
+}
 # k3d-managed registry: k3d names the container k3d-<name> and cluster nodes
 # reach it as k3d-<name>:5000 on the cluster network (REQ-065 registry).
 REGISTRY_NAME="release-manager-registry"
@@ -319,6 +328,12 @@ cluster_up() {
     --registry-use "$REGISTRY_NAME"
     --registry-config "$SCRIPT_DIR/../k3d/registries.yaml"
     --wait
+    # REQ-065 kubeconfig isolation (real smoke 2026-08-24): without these,
+    # k3d rewrites ~/.kube/config and switches its current-context to the
+    # newest cluster — every host-side kubectl (kustomize apply, reset-data)
+    # then targets the WRONG cluster. Kubeconfigs live only in data/.
+    --kubeconfig-update-default=false
+    --kubeconfig-switch-context=false
   )
   if [ "$cluster" = "$CONTROL_CLUSTER" ]; then
     # The control cluster owns the fixed local API port and the
@@ -474,7 +489,7 @@ kustomize_apply() {
     [ -n "$hash" ] || continue
     manifest="$(printf '%s\n' "$manifest" | sed "s#release-$svc:dev#release-$svc:content-sha256-$hash#g")"
   done
-  if ! printf '%s\n' "$manifest" | kubectl apply -f -; then
+  if ! printf '%s\n' "$manifest" | ctl_kubectl apply -f -; then
     fail "$ERR_SERVICE_UNHEALTHY" "kubectl apply failed for $KUSTOMIZE_DIR"
   fi
   # ci profile: the transient JWT key file served the kustomize build above;
@@ -641,21 +656,21 @@ cmd_reset_data() {
   # golang-migrate SDK) and re-seeds the canonical fixture. pg_dump is the
   # safety net: on seed failure both databases are restored and the
   # environment is marked partial (REQ-065 snapshot recovery).
-  if ! kubectl -n release-manager-dev get deployment postgres >/dev/null 2>&1; then
+  if ! ctl_kubectl -n release-manager-dev get deployment postgres >/dev/null 2>&1; then
     fail "$ERR_SERVICE_UNHEALTHY" "postgres deployment not found; dev-reset-data requires a running environment"
   fi
   # 1. maintenance: stop writes on the maintenance-capable services
   #    (ADR-015 procedure-level maintenance gate; MAINTENANCE env overrides
   #    the config file per internal/config env mapping).
-  kubectl -n release-manager-dev set env deployment/orchestrator deployment/auth deployment/notifier MAINTENANCE=true >/dev/null \
+  ctl_kubectl -n release-manager-dev set env deployment/orchestrator deployment/auth deployment/notifier MAINTENANCE=true >/dev/null \
     || fail "$ERR_SERVICE_UNHEALTHY" "cannot enable maintenance mode"
-  kubectl -n release-manager-dev rollout status deployment/orchestrator deployment/auth deployment/notifier --timeout=180s >/dev/null \
+  ctl_kubectl -n release-manager-dev rollout status deployment/orchestrator deployment/auth deployment/notifier --timeout=180s >/dev/null \
     || fail "$ERR_SERVICE_UNHEALTHY" "maintenance rollout did not converge"
   log "  maintenance enabled (writes stopped)"
 
   # 2. dump both databases through a port-forward to the host pg_dump.
   local pf_pid=""
-  kubectl -n release-manager-dev port-forward svc/postgres 5432:5432 >/dev/null 2>&1 &
+  ctl_kubectl -n release-manager-dev port-forward svc/postgres 5432:5432 >/dev/null 2>&1 &
   pf_pid=$!
   # The trap releases the environment lock; the port-forward dies with the
   # process group on exit, but kill it explicitly to avoid a stray listener.
@@ -703,7 +718,7 @@ cmd_reset_data() {
         ownership_remove k3d_clusters "$cluster"
       fi
     done
-    kubectl -n release-manager-dev set env deployment/orchestrator deployment/auth deployment/notifier MAINTENANCE- >/dev/null 2>&1 || true
+    ctl_kubectl -n release-manager-dev set env deployment/orchestrator deployment/auth deployment/notifier MAINTENANCE- >/dev/null 2>&1 || true
     fail "$ERR_FIXTURE_CONFLICT" "reset failed; databases restored and environment marked partial (rerun dev-reset-data to converge)"
   fi
 
@@ -711,9 +726,9 @@ cmd_reset_data() {
   for dump_file in "${dump_files[@]}"; do
     rm -f "$dump_file"
   done
-  kubectl -n release-manager-dev set env deployment/orchestrator deployment/auth deployment/notifier MAINTENANCE- >/dev/null \
+  ctl_kubectl -n release-manager-dev set env deployment/orchestrator deployment/auth deployment/notifier MAINTENANCE- >/dev/null \
     || fail "$ERR_SERVICE_UNHEALTHY" "cannot disable maintenance mode"
-  kubectl -n release-manager-dev rollout status deployment/orchestrator deployment/auth deployment/notifier --timeout=180s >/dev/null \
+  ctl_kubectl -n release-manager-dev rollout status deployment/orchestrator deployment/auth deployment/notifier --timeout=180s >/dev/null \
     || fail "$ERR_SERVICE_UNHEALTHY" "maintenance rollout did not converge"
   log "=== dev-reset-data complete ==="
 }
