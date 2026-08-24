@@ -114,16 +114,25 @@ docker_profile() {
   docker "$type" inspect --format '{{ index .Config.Labels "io.release-manager.dev.profile" }}' "$name" 2>/dev/null || true
 }
 
-# require_no_conflict <type> <name> — fail resource_conflict when a
-# same-named object exists without the managed label (AC-065-22).
+# require_no_conflict <type> <name> [whitelist-key] — fail resource_conflict
+# when a same-named object exists without the managed label (AC-065-22).
+# A whitelist-key lets callers mark objects that cannot carry Docker labels
+# at creation time (k3d-created cluster networks / registries) as managed:
+# an object recorded in the ownership whitelist by an earlier dev.sh run is
+# adopted instead of conflicting.
 require_no_conflict() {
   local type="$1"
   local name="$2"
+  local whitelist_key="${3:-}"
   if docker "$type" inspect "$name" >/dev/null 2>&1; then
-    if ! docker_managed "$type" "$name"; then
-      fail "$ERR_RESOURCE_CONFLICT" \
-        "$type '$name' exists without label $MANAGED_LABEL=true; remove or label it manually, then retry"
+    if docker_managed "$type" "$name"; then
+      return 0
     fi
+    if [ -n "$whitelist_key" ] && ownership_contains "$whitelist_key" "$name"; then
+      return 0
+    fi
+    fail "$ERR_RESOURCE_CONFLICT" \
+      "$type '$name' exists without label $MANAGED_LABEL=true; remove or label it manually, then retry"
   fi
 }
 

@@ -9,10 +9,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -37,6 +39,44 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
+// fakeOperatorGatewayPort is the loopback port fakeEnv points the operator
+// mTLS gateway TCP readiness probe at (dev.sh DEV_OPERATOR_GATEWAY_PORT
+// seam). It lives outside the DEV_PORTS_OVERRIDE band so the preflight port
+// gate (require_ports_free) never sees it occupied.
+const fakeOperatorGatewayPort = "19984"
+
+var (
+	fakeGatewayOnce sync.Once
+	fakeGatewayLn   net.Listener
+	fakeGatewayErr  error
+)
+
+// fakeOperatorGateway binds one shared loopback listener for the whole test
+// package (fakeEnv is called multiple times per test; a per-call listener
+// would collide with itself). The connection is accepted and immediately
+// closed — the readiness probe only needs a TCP open to succeed.
+func fakeOperatorGateway(t *testing.T) {
+	t.Helper()
+	fakeGatewayOnce.Do(func() {
+		fakeGatewayLn, fakeGatewayErr = new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:"+fakeOperatorGatewayPort)
+		if fakeGatewayErr != nil {
+			return
+		}
+		go func() {
+			for {
+				conn, err := fakeGatewayLn.Accept()
+				if err != nil {
+					return
+				}
+				conn.Close()
+			}
+		}()
+	})
+	if fakeGatewayErr != nil {
+		t.Fatalf("cannot bind fake operator gateway listener: %v", fakeGatewayErr)
+	}
+}
+
 // fakeEnv builds an environment that points the lifecycle module at fake
 // CLI shims and an isolated data dir.
 func fakeEnv(t *testing.T, stateDir string) (env []string, binDir string) {
@@ -50,8 +90,13 @@ func fakeEnv(t *testing.T, stateDir string) (env []string, binDir string) {
 		// Probe idle test ports, not the real 8082-8087: the actual dev
 		// environment may be running on the host during tests.
 		"DEV_PORTS_OVERRIDE=19082 19083 19084 19085 19086 19087",
+		// The operator gateway readiness is a TCP probe without an HTTP
+		// endpoint to shim; point dev.sh's probe at the shared loopback
+		// listener above.
+		"DEV_OPERATOR_GATEWAY_PORT="+fakeOperatorGatewayPort,
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
+	fakeOperatorGateway(t)
 	return env, binDir
 }
 
@@ -88,6 +133,33 @@ func exitCode(t *testing.T, err error) int {
 		t.Fatalf("expected ExitError, got %v", err)
 	}
 	return exitErr.ExitCode()
+}
+
+// copyTree recursively copies a directory tree (used to isolate kustomize
+// builds from the repository data dir).
+func copyTree(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.Walk(src, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
+	if err != nil {
+		t.Fatalf("copyTree %s -> %s: %v", src, dst, err)
+	}
 }
 
 func TestLockConflictReportsHolder(t *testing.T) {
@@ -293,6 +365,9 @@ if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then
   fi
   exit 1
 fi
+# AC-065-22 conflict gates probe network inspect; report the object absent
+# (the fake env has no Docker networks) so creation proceeds.
+if [ "$1" = "network" ] && [ "$2" = "inspect" ]; then exit 1; fi
 exit 0
 `)
 	writeShim(t, binDir, "curl", "#!/usr/bin/env bash\nexit 0\n")
@@ -423,7 +498,7 @@ func TestClusterCreateInjectsProxyEnv(t *testing.T) {
 	// asserted. manifest inspect fails (registry empty) so every service
 	// actually goes through docker build; build/push pass through.
 	writeShim(t, binDir, "docker",
-		"#!/usr/bin/env bash\nif [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
+		"#!/usr/bin/env bash\nif [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"network\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
 	// GOPROXY is explicitly cleared so dev.sh takes the `go env GOPROXY`
 	// fallback path and the shim's fixed output is asserted — otherwise an
 	// inherited host GOPROXY (e.g. goproxy.cn) makes the assertion
@@ -644,6 +719,79 @@ func TestRegistryCreateUsesHostPortForm(t *testing.T) {
 	}
 }
 
+// TestUnlabeledSameNameResourceConflicts covers AC-065-22: a same-named
+// Docker container / network WITHOUT the managed label and absent from the
+// ownership whitelist stops dev-up with exit 1 + resource_conflict naming
+// the conflicting object.
+func TestUnlabeledSameNameResourceConflicts(t *testing.T) {
+	t.Run("container", func(t *testing.T) {
+		stateDir := t.TempDir()
+		env, binDir := fakeEnv(t, stateDir)
+		fakeK3d(t, binDir, stateDir)
+		// The registry already exists per the k3d shim state (created by a
+		// previous run without the ownership whitelist): the conflict gate
+		// must reject it instead of adopting or recreating it.
+		if err := os.WriteFile(filepath.Join(stateDir, "registry.txt"),
+			[]byte("release-manager-registry\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then
+  # Plain inspect: the object EXISTS. The --format label probe then prints
+  # nothing (no managed label) and exits 1.
+  if [ "$3" = "--format" ]; then exit 1; fi
+  exit 0
+fi
+exit 0
+`)
+		writeShim(t, binDir, "curl", "#!/usr/bin/env bash\nexit 0\n")
+		// Host-gate shims so the run reaches the registry stage.
+		writeShim(t, binDir, "awk", "#!/usr/bin/env bash\ncat >/dev/null\nif [[ \"$*\" == *\"/proc/meminfo\"* ]]; then printf '24576\\n'; else printf '524288000\\n'; fi\n")
+		writeShim(t, binDir, "df", "#!/usr/bin/env bash\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/x 1000000000 1 524288000 1%% /\\n'\n")
+		writeShim(t, binDir, "nproc", "#!/usr/bin/env bash\nprintf '8\\n'\n")
+		out, err := runDev(t, env, "up")
+		if err == nil {
+			t.Fatalf("expected resource_conflict, got success:\n%s", out)
+		}
+		if code := exitCode(t, err); code != 1 {
+			t.Fatalf("expected exit 1, got %d\n%s", code, out)
+		}
+		if !strings.Contains(out, "resource_conflict") ||
+			!strings.Contains(out, "k3d-release-manager-registry") {
+			t.Fatalf("expected resource_conflict naming the container:\n%s", out)
+		}
+	})
+
+	t.Run("network", func(t *testing.T) {
+		stateDir := t.TempDir()
+		env, binDir := fakeEnv(t, stateDir)
+		fakeK3d(t, binDir, stateDir)
+		happyShims(t, binDir)
+		// The control cluster does not exist yet (create path), but a
+		// foreign unlabeled k3d-release-manager-control network occupies the
+		// name: the network conflict gate must fire before cluster create.
+		writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "network" ] && [ "$2" = "inspect" ]; then
+  if [ "$3" = "--format" ]; then exit 1; fi
+  exit 0
+fi
+if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then exit 1; fi
+exit 0
+`)
+		out, err := runDev(t, env, "up")
+		if err == nil {
+			t.Fatalf("expected resource_conflict, got success:\n%s", out)
+		}
+		if code := exitCode(t, err); code != 1 {
+			t.Fatalf("expected exit 1, got %d\n%s", code, out)
+		}
+		if !strings.Contains(out, "resource_conflict") ||
+			!strings.Contains(out, "k3d-release-manager-control") {
+			t.Fatalf("expected resource_conflict naming the network:\n%s", out)
+		}
+	})
+}
+
 // TestPurgeRemovesDataRuntimeFilesKeepsArchive covers AC-065-26: dev-purge
 // deletes the data/ runtime credentials/keys/state files and keeps
 // data/archive/. fakeEnv points DEV_DATA_DIR at the state dir itself, so the
@@ -832,23 +980,37 @@ exit 0
 // manifest level with the real kustomize: the dev overlay materializes the
 // release-manager-jwt Secret from the local key file and no longer declares
 // a PostgreSQL PVC. Skipped when kustomize is not on PATH.
+//
+// The build runs in an isolated temp tree (symlinked deploy/kustomize +
+// temp data/dev-jwt) — an earlier version wrote the key into the REAL repo
+// data dir and RemoveAll'ed it on cleanup, which wiped a concurrently
+// running dev environment's JWT key (real-smoke regression 2026-08-24:
+// kustomize_build_failed mid-run).
 func TestKustomizeBuildJwtSecretAndNoPostgresPVC(t *testing.T) {
 	kustomize, err := exec.LookPath("kustomize")
 	if err != nil {
 		t.Skip("kustomize not installed")
 	}
 	root := repoRoot(t)
-	keyPath := filepath.Join(root, "data", "dev-jwt", "jwt-signing-key.pem")
+	tmp := t.TempDir()
+	// Mirror the repo-relative layout the overlay's secretGenerator expects:
+	// ../../../data/dev-jwt/jwt-signing-key.pem relative to
+	// deploy/kustomize/dev resolves inside tmp. A symlink does NOT work:
+	// kustomize resolves the kustomization dir through symlinks and then
+	// resolves relative file sources from the REAL location — the key path
+	// would land back in the repo data dir (the destructive bug this test
+	// isolation fixes). Copy the tree instead.
+	copyTree(t, filepath.Join(root, "deploy", "kustomize"), filepath.Join(tmp, "deploy", "kustomize"))
+	keyPath := filepath.Join(tmp, "data", "dev-jwt", "jwt-signing-key.pem")
 	if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(keyPath, []byte("test-jwt-key"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(filepath.Join(root, "data", "dev-jwt")) //nolint:errcheck // best-effort test cleanup
 
 	cmd := exec.CommandContext(context.Background(), kustomize, "build", "--load-restrictor", "LoadRestrictionsNone", "deploy/kustomize/dev")
-	cmd.Dir = root
+	cmd.Dir = tmp
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("kustomize build failed: %v\n%s", err, out)

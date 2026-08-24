@@ -159,10 +159,15 @@ require_readyz() {
 
 # require_tcp_ready <service> <port> — readiness for non-HTTP listeners
 # (the operator mTLS gateway): the port must accept TCP connections within
-# DEV_TIMEOUT_READY (AC-065-10/28).
+# DEV_TIMEOUT_READY (AC-065-10/28). DEV_OPERATOR_GATEWAY_PORT (test seam)
+# redirects the probe without touching the preflight port band — fake-CLI
+# tests bind a loopback listener there; unset uses the production port.
 require_tcp_ready() {
   local service="$1"
   local port="$2"
+  if [ -n "${DEV_OPERATOR_GATEWAY_PORT:-}" ]; then
+    port="$DEV_OPERATOR_GATEWAY_PORT"
+  fi
   local deadline=$((SECONDS + DEV_TIMEOUT_READY))
   while [ "$SECONDS" -lt "$deadline" ]; do
     if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
@@ -237,6 +242,11 @@ stage_preflight() {
   # instead of failing its own port mapping. Port checks after preflight_up
   # so k3d availability is already verified.
   if ! clusters_exist; then
+    # The memory gate (AC-065-20) has the same resume contract: 5 k3d
+    # clusters commit ~3 GiB of the 12 GiB budget, so a running (or
+    # partially created) environment's own footprint must not fail its own
+    # re-run. On a clean host the gate still fires before any creation.
+    require_memory
     require_ports_free
   fi
 }
@@ -261,11 +271,27 @@ clusters_exist() {
 registry_up() {
   registries="$(k3d registry list 2>/dev/null || true)"
   if ! printf '%s' "$registries" | grep -qw "$REGISTRY_NAME"; then
-    require_no_conflict container "$REGISTRY_CONTAINER"
+    require_no_conflict container "$REGISTRY_CONTAINER" docker_containers
     if ! k3d registry create "$REGISTRY_NAME" --port "127.0.0.1:${REGISTRY_PORT}" --image registry:3; then
       fail "$ERR_REGISTRY_UNREACHABLE" "k3d failed to create registry $REGISTRY_NAME"
     fi
-  elif ! docker container inspect --format '{{.State.Running}}' "$REGISTRY_CONTAINER" 2>/dev/null | grep -q '^true$'; then
+  else
+    # The registry already exists (k3d-managed). k3d `registry create` has
+    # no runtime-label equivalent, so the container can never carry the
+    # managed label: whitelist membership is its managed marker. A foreign
+    # same-named registry — unlabeled AND absent from the whitelist — is a
+    # resource_conflict (AC-065-22); the host's 2026-08-24 leftover
+    # unlabeled registry is exactly this case (remove it, then re-run).
+    if ! ownership_contains docker_containers "$REGISTRY_CONTAINER"; then
+      if docker_managed container "$REGISTRY_CONTAINER"; then
+        ownership_add docker_containers "$REGISTRY_CONTAINER"
+      else
+        fail "$ERR_RESOURCE_CONFLICT" \
+          "container '$REGISTRY_CONTAINER' exists without label $MANAGED_LABEL=true and is not in the ownership whitelist; remove or label it manually, then retry"
+      fi
+    fi
+  fi
+  if ! docker container inspect --format '{{.State.Running}}' "$REGISTRY_CONTAINER" 2>/dev/null | grep -q '^true$'; then
     docker start "$REGISTRY_CONTAINER" >/dev/null || fail "$ERR_REGISTRY_UNREACHABLE" "cannot start registry container $REGISTRY_CONTAINER"
   fi
   ownership_add docker_containers "$REGISTRY_CONTAINER"
@@ -298,6 +324,13 @@ k3s_images_prewarm() {
     "rancher/klipper-helm:v0.9.3-build20241008"
     "rancher/klipper-lb:v0.4.9"
     "rancher/local-path-provisioner:v0.0.30"
+    # The management topology pins postgres:16 and redis:7-alpine (REQ-065);
+    # the docker.io mirror routes their node-side pulls through the local
+    # registry, so the `library/` names must be pre-warmed too (real smoke
+    # 2026-08-24: without them postgres/redis stay ImagePullBackOff on CN
+    # hosts where docker.io is unreachable).
+    "library/postgres:16"
+    "library/redis:7-alpine"
   )
   local image
   for image in "${images[@]}"; do
@@ -339,6 +372,12 @@ cluster_up() {
     log "  $cluster (exists)"
     return 0
   fi
+  # AC-065-22 conflict gates for the Docker objects this cluster will own:
+  # the server node container (labeled at creation via --runtime-label, so
+  # whitelist fallback is unnecessary) and the k3d cluster network (k3d
+  # creates it unlabeled — the whitelist is its managed marker).
+  require_no_conflict container "k3d-$cluster-server-0"
+  require_no_conflict network "$(cluster_network_name "$cluster")" docker_networks
   local args=(
     # k3d v5 takes the cluster name positionally: `k3d cluster create
     # <name> [flags]` — there is no --name flag (REQ-065 k3d >= 5.8).
@@ -352,6 +391,14 @@ cluster_up() {
     # then targets the WRONG cluster. Kubeconfigs live only in data/.
     --kubeconfig-update-default=false
     --kubeconfig-switch-context=false
+    # REQ-065 ownership labels: k3d applies --runtime-label to every node
+    # container it creates, so managed clusters are recognizable via
+    # docker_managed without any post-hoc label hack. k3d rejects an
+    # unfiltered runtime-label on multi-node clusters (server + loadbalancer
+    # count as two nodes), so scope it to the server nodes — the ownership
+    # gate only ever inspects k3d-<cluster>-server-0.
+    --runtime-label "$MANAGED_LABEL=true@servers:*"
+    --runtime-label "$PROFILE_LABEL=${DEV_PROFILE:-local}@servers:*"
   )
   if [ "$cluster" = "$CONTROL_CLUSTER" ]; then
     # The control cluster owns the fixed local API port and the
@@ -378,6 +425,9 @@ cluster_up() {
   # kubeconfig into the project data dir, never ~/.kube/config.
   k3d kubeconfig get "$cluster" > "$DEV_DATA_DIR/kubeconfigs/$cluster.yaml"
   ownership_add k3d_clusters "$cluster"
+  # The cluster network is created by k3d without labels; record it so the
+  # conflict gate and dev-purge treat it as managed (AC-065-22/26).
+  ownership_add docker_networks "$(cluster_network_name "$cluster")"
   log "  $cluster (created)"
 }
 
@@ -517,20 +567,23 @@ kustomize_apply() {
 
 readiness() {
   log "[6/7] readiness ......................... "
-  require_readyz webhook 8082
-  require_readyz orchestrator 8083
+  # Probe ports come from DEV_PORTS (host.sh) so the DEV_PORTS_OVERRIDE
+  # test-isolation seam applies to the readiness stage too — fake-CLI tests
+  # probe the overridden ports instead of the production 8082-8087 band.
+  require_readyz webhook "${DEV_PORTS[0]}"
+  require_readyz orchestrator "${DEV_PORTS[1]}"
   # operator 8084 is the orchestrator's mTLS agent gateway (HTTPS), not an
   # HTTP /readyz endpoint (real smoke 2026-08-24: plain-HTTP probes get
   # "Client sent an HTTP request to an HTTPS server"). Readiness = the
   # gateway accepts TCP connections; agents enroll there.
-  require_tcp_ready operator 8084
-  require_readyz auth 8085
-  require_readyz notifier 8086
+  require_tcp_ready operator "${DEV_PORTS[2]}"
+  require_readyz auth "${DEV_PORTS[3]}"
+  require_readyz notifier "${DEV_PORTS[4]}"
   # web has no /readyz; the root page is the probe.
-  if ! wait_for_endpoint "http://127.0.0.1:8087" "$DEV_TIMEOUT_READY"; then
-    fail "$ERR_SERVICE_UNHEALTHY" "web did not answer on port 8087"
+  if ! wait_for_endpoint "http://127.0.0.1:${DEV_PORTS[5]}" "$DEV_TIMEOUT_READY"; then
+    fail "$ERR_SERVICE_UNHEALTHY" "web did not answer on port ${DEV_PORTS[5]}"
   fi
-  log "  web           http://localhost:8087         200"
+  log "  web           http://localhost:${DEV_PORTS[5]}         200"
 }
 
 # ---------------------------------------------------------------------------

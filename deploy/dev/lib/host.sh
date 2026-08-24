@@ -148,6 +148,11 @@ require_pg_tools() {
 # preflight_up — full battery for dev-up. The ci profile parameter check runs
 # first: it is pure argument validation (AC-065-25: no resources are created
 # when the run id is invalid) and must not depend on host resource probes.
+# require_memory is NOT part of this battery: the memory gate lives in
+# dev.sh's stage_preflight where it is resume-aware (a running environment's
+# own clusters consume the 12 GiB budget — an idempotent re-run or an
+# interrupted-run resume must not fail its own committed memory, mirroring
+# the port gate's clusters_exist skip).
 preflight_up() {
   require_linux
   if [ "${DEV_PROFILE:-local}" = "ci" ]; then
@@ -156,7 +161,6 @@ preflight_up() {
   require_flock
   require_docker
   require_k3d
-  require_memory
   require_disk
   require_cpu
 }
