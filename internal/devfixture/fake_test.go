@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 
 	"connectrpc.com/connect"
@@ -454,21 +455,36 @@ func (f *fakeOrchestrator) GetOperation(_ context.Context, req *connect.Request[
 	}), nil
 }
 
+// anyRequestLike is the minimal connect request surface the auth-recording
+// helper needs (connect.Request[T] satisfies it for every T).
+type anyRequestLike interface {
+	Header() http.Header
+}
+
 // fakeTrust is an in-memory TrustService.
 type fakeTrust struct {
-	mu     sync.Mutex
-	roots  map[string][]*trustv1.TrustRoot
-	nextID int
-	calls  map[string]int
+	mu           sync.Mutex
+	roots        map[string][]*trustv1.TrustRoot
+	nextID       int
+	calls        map[string]int
+	lastAuthHdrs []string
 }
 
 func newFakeTrust() *fakeTrust {
 	return &fakeTrust{roots: map[string][]*trustv1.TrustRoot{}, calls: map[string]int{}}
 }
 
+// lastAuth records the Authorization header of the most recent call so tests
+// can assert the bearer token is attached (the real TrustService runs behind
+// the shared auth interceptor — real smoke: missing header → unauthenticated).
+func (f *fakeTrust) lastAuth(req anyRequestLike) {
+	f.lastAuthHdrs = append(f.lastAuthHdrs, req.Header().Get("Authorization"))
+}
+
 func (f *fakeTrust) GetTrustPolicy(_ context.Context, req *connect.Request[trustv1.GetTrustPolicyRequest]) (*connect.Response[trustv1.GetTrustPolicyResponse], error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.lastAuth(req)
 	f.calls["GetTrustPolicy"]++
 	return connect.NewResponse(&trustv1.GetTrustPolicyResponse{
 		Policy: &trustv1.TrustPolicy{Environment: req.Msg.GetEnvironment(), Version: 1, Roots: f.roots[req.Msg.GetEnvironment()]},
@@ -478,6 +494,7 @@ func (f *fakeTrust) GetTrustPolicy(_ context.Context, req *connect.Request[trust
 func (f *fakeTrust) CreateTrustRoot(_ context.Context, req *connect.Request[trustv1.CreateTrustRootRequest]) (*connect.Response[trustv1.CreateTrustRootResponse], error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.lastAuth(req)
 	f.calls["CreateTrustRoot"]++
 	f.nextID++
 	root := &trustv1.TrustRoot{

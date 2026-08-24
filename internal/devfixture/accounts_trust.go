@@ -45,6 +45,7 @@ func (r *runner) phaseTrust(ctx context.Context) error {
 	}
 
 	policyReq := connect.NewRequest(&trustv1.GetTrustPolicyRequest{Environment: r.cfg.TrustEnvironment})
+	withAuth(policyReq, r.state.adminToken)
 	policyResp, err := r.clients.trust.GetTrustPolicy(ctx, policyReq)
 	if err != nil {
 		return fmt.Errorf("get trust policy for %s: %w", r.cfg.TrustEnvironment, err)
@@ -65,6 +66,7 @@ func (r *runner) phaseTrust(ctx context.Context) error {
 		ValidFrom:      timestamppb.New(r.cfg.now()),
 		Operator:       "devseed",
 	})
+	withAuth(createReq, r.state.adminToken)
 	response, err := r.clients.trust.CreateTrustRoot(ctx, createReq)
 	if err != nil {
 		return fmt.Errorf("create trust root: %w", err)
@@ -81,6 +83,7 @@ func (r *runner) phaseTrust(ctx context.Context) error {
 // environment and (local mode) the private key file still exists.
 func (r *runner) checkCommittedTrust(ctx context.Context) error {
 	policyReq := connect.NewRequest(&trustv1.GetTrustPolicyRequest{Environment: r.cfg.TrustEnvironment})
+	withAuth(policyReq, r.state.adminToken)
 	policyResp, err := r.clients.trust.GetTrustPolicy(ctx, policyReq)
 	if err != nil {
 		return fmt.Errorf("get trust policy for %s: %w", r.cfg.TrustEnvironment, err)

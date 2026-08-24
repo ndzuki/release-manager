@@ -52,6 +52,7 @@ type orchSvc struct {
 	validation    *orchestrator.ValidationWorker
 	auditEmitter  audit.Sink
 	authorizer    *authorization.Module
+	enforcer      *auth.Enforcer
 	traceShutdown func(context.Context) error
 	trustResolver trust.RootResolver
 
@@ -366,6 +367,15 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if err := enforcer.LoadPolicies(context.Background()); err != nil {
 		return fmt.Errorf("load orchestrator policies: %w", err)
 	}
+	// The shared AuthInterceptor enforces against this Casbin enforcer. It
+	// must hot-reload the durable policy like cmd/auth does: the dev
+	// fixture's Initialize creates the organization + platform_admin AFTER
+	// the orchestrator has booted, so a boot-time-only snapshot stays empty
+	// and every post-seed protected call is denied (real smoke 2026-08-24:
+	// devseed identity phase `list customers: permission_denied` with an
+	// empty policy). The reloader keeps the interceptor fresh on the same
+	// cadence as the auth service.
+	s.enforcer = enforcer
 
 	path, handler := orchestratorv1connect.NewOrchestratorServiceHandler(
 		svc,
@@ -565,6 +575,11 @@ func trustReadOnlyProcedures() map[string]struct{} {
 func (s *orchSvc) Run(ctx context.Context) {
 	if s.authorizer != nil {
 		go s.authorizer.Run(ctx)
+	}
+	// Durable authorization policy hot-reload (shared interceptor freshness;
+	// see the enforcer wiring above). Maintenance mode skips background work.
+	if s.enforcer != nil && !s.cfg.Maintenance {
+		go s.enforcer.StartPolicyReloader(ctx, s.cfg.Authorization.WithDefaults().PolicyReloadInterval)
 	}
 	if s.validation != nil {
 		go s.validation.Run(ctx)

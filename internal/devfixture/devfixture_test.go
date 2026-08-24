@@ -152,6 +152,14 @@ func TestRun_SeedsAllNinePhases(t *testing.T) {
 	require.Equal(t, 1, fakes.webhook.calls)
 	require.Equal(t, 1, fakes.trust.calls["CreateTrustRoot"])
 
+	// Trust RPCs must carry the admin bearer token: the real TrustService
+	// sits behind the shared auth interceptor (real smoke 2026-08-24:
+	// missing header → unauthenticated on GetTrustPolicy).
+	for i, hdr := range fakes.trust.lastAuthHdrs {
+		require.Truef(t, strings.HasPrefix(hdr, "Bearer "),
+			"trust call %d missing bearer token: %q", i, hdr)
+	}
+
 	// Enrollment token files: one per cluster.
 	for _, seed := range clusterSeeds {
 		info, err := os.Stat(r.enrollmentTokenPath(seed.id))
