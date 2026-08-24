@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ndzuki/release-manager/internal/devfixture"
 )
@@ -25,6 +26,14 @@ const (
 
 func main() {
 	cfg := devfixture.Config{}
+	var (
+		printFixtureVersion bool
+		operatorTimeoutSecs int
+		seedRetries         int
+	)
+	flag.BoolVar(&printFixtureVersion, "print-fixture-version", false, "print the authoritative fixture version constant and exit (AC-065-30)")
+	flag.IntVar(&operatorTimeoutSecs, "operator-timeout", 0, "operator-online wait timeout in seconds (env DEV_TIMEOUT_OPERATOR, default 180; AC-065-28)")
+	flag.IntVar(&seedRetries, "seed-retries", 0, "seed phase-write retry count with 1s/2s/4s backoff (env DEV_TIMEOUT_SEED_RETRIES, default 3; AC-065-28)")
 	flag.BoolVar(&resetMode, "reset", false, "rebuild databases and re-seed (dev-reset-data)")
 	flag.StringVar(&cfg.OrchestratorURL, "orchestrator", defaultOrchestratorURL, "Orchestrator Connect URL")
 	flag.StringVar(&cfg.WebhookURL, "webhook", defaultWebhookURL, "Webhook Connect URL")
@@ -39,9 +48,24 @@ func main() {
 	flag.StringVar(&cfg.DatabaseDSN, "database-dsn", os.Getenv("RELEASE_MANAGER_DATABASE_DSN"), "PostgreSQL DSN for --reset (env RELEASE_MANAGER_DATABASE_DSN)")
 	flag.Parse()
 
+	// The fixture version is authoritative from the devseed constant; the
+	// lifecycle module resolves its own copy from this flag (AC-065-30).
+	if printFixtureVersion {
+		fmt.Println(devfixture.DefaultFixtureVersion)
+		return
+	}
+
 	cfg.Mode = devfixture.Mode(envOr("DEV_PROFILE", "local"))
 	if cfg.Mode != devfixture.ModeLocal && cfg.Mode != devfixture.ModeCI {
 		fail(fmt.Sprintf("invalid DEV_PROFILE %q (local or ci)", cfg.Mode))
+	}
+	// AC-065-28: DEV_TIMEOUT_* overrides arrive from the lifecycle module;
+	// zero keeps the package defaults (180s operator wait / 3 retries).
+	if operatorTimeoutSecs > 0 {
+		cfg.OperatorOnlineTimeout = time.Duration(operatorTimeoutSecs) * time.Second
+	}
+	if seedRetries > 0 {
+		cfg.SeedRetries = seedRetries
 	}
 	cfg.Logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
 

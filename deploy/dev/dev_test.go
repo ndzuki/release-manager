@@ -5,6 +5,7 @@
 package devtest
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -487,25 +488,51 @@ func TestResetFailsWithoutRunningEnvironment(t *testing.T) {
 	}
 }
 
-// TestCiProfileAutoPurgesOnExit covers the REQ-065 ci profile contract:
-// dev-up exit with DEV_PROFILE=ci + E2E_RUN_ID set automatically deletes the
-// managed clusters and registry (tear-down without an explicit dev-purge).
+// TestCiProfileAutoPurgesOnExit covers the REQ-065 ci profile cleanup-timing
+// contract (D4, AC-065-27): a FAILED dev-up auto-deletes the managed
+// clusters and registry, while a SUCCESSFUL dev-up keeps the environment for
+// REQ-066 consumption (teardown is the CI post-step dev-purge).
 func TestCiProfileAutoPurgesOnExit(t *testing.T) {
+	// Success path: environment retained.
 	stateDir := t.TempDir()
 	env, binDir := fakeEnv(t, stateDir)
 	fakeK3d(t, binDir, stateDir)
 	happyShims(t, binDir)
-	env = append(env, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-001")
+	env = append(env, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-001", "DEV_JWT_SIGNING_KEY=ci-jwt-key")
 
 	if out, err := runDev(t, env, "up"); err != nil {
 		t.Fatalf("ci dev-up failed:\n%s", out)
 	}
-	// After the up trap, every cluster in the ownership manifest must have
-	// been deleted: the fake-k3d clusters.txt file reflects current clusters.
 	clustersPath := filepath.Join(stateDir, "clusters.txt")
 	data, err := os.ReadFile(clustersPath)
-	if err == nil && strings.TrimSpace(string(data)) != "" {
-		t.Fatalf("expected all clusters purged after ci dev-up, remaining:\n%s", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		t.Fatal("expected clusters retained after successful ci dev-up (AC-065-27)")
+	}
+
+	// Failure path: a failing docker build aborts dev-up; the trap must
+	// auto-purge the clusters and registry created so far.
+	stateDir2 := t.TempDir()
+	env2, binDir2 := fakeEnv(t, stateDir2)
+	fakeK3d(t, binDir2, stateDir2)
+	happyShims(t, binDir2)
+	writeShim(t, binDir2, "docker",
+		"#!/usr/bin/env bash\nfor a in \"$@\"; do if [ \"$a\" = \"inspect\" ]; then exit 1; fi; done\nif [ \"$1\" = \"build\" ]; then exit 1; fi\nexit 0\n")
+	env2 = append(env2, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-002", "DEV_JWT_SIGNING_KEY=ci-jwt-key")
+
+	out, err := runDev(t, env2, "up")
+	if err == nil {
+		t.Fatalf("expected ci dev-up failure, got success:\n%s", out)
+	}
+	if !strings.Contains(out, "docker_build_failed") {
+		t.Fatalf("expected docker_build_failed:\n%s", out)
+	}
+	clustersPath2 := filepath.Join(stateDir2, "clusters.txt")
+	data2, err := os.ReadFile(clustersPath2)
+	if err == nil && strings.TrimSpace(string(data2)) != "" {
+		t.Fatalf("expected all clusters purged after failed ci dev-up, remaining:\n%s", data2)
 	}
 }
 
@@ -593,5 +620,214 @@ func TestRegistryCreateUsesHostPortForm(t *testing.T) {
 	}
 	if strings.Contains(registryCreate, ":5000") {
 		t.Fatalf("container port must not be passed to k3d v5.8 (fixed at 5000): %s", registryCreate)
+	}
+}
+
+// TestPurgeRemovesDataRuntimeFilesKeepsArchive covers AC-065-26: dev-purge
+// deletes the data/ runtime credentials/keys/state files and keeps
+// data/archive/. fakeEnv points DEV_DATA_DIR at the state dir itself, so the
+// runtime files live directly under stateDir.
+func TestPurgeRemovesDataRuntimeFilesKeepsArchive(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+
+	files := []string{
+		"dev-credentials.env", "dev-ownership.json", "dev-fixture.json",
+		"dev-seed-progress.json", "dev-status.json", "kubeconfig.yaml",
+		"backups/dump-20260824.sql",
+		"dev-trust-root/dev-trust-root.key",
+		"dev-jwt/jwt-signing-key.pem",
+		"kubeconfigs/cluster.yaml",
+	}
+	for _, name := range files {
+		path := filepath.Join(stateDir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	archive := filepath.Join(stateDir, "archive", "archive-2026-08-14T10-00-00Z-v2.json")
+	if err := os.MkdirAll(filepath.Dir(archive), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(archive, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	env = append(env, "CONFIRM=1")
+	out, err := runDev(t, env, "purge")
+	if err != nil {
+		t.Fatalf("purge failed:\n%s", out)
+	}
+	for _, name := range files {
+		if _, err := os.Stat(filepath.Join(stateDir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected %s purged, stat err=%v", name, err)
+		}
+	}
+	if _, err := os.Stat(archive); err != nil {
+		t.Fatalf("data/archive must be preserved by dev-purge: %v", err)
+	}
+}
+
+// TestJwtSigningKeyGeneratedAndReused covers D3: local dev-up generates a
+// 0600 data/dev-jwt/jwt-signing-key.pem before apply, reuses it on re-runs,
+// and rotation (delete + re-run) produces a fresh key.
+func TestJwtSigningKeyGeneratedAndReused(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("dev-up failed:\n%s", out)
+	}
+	// fakeEnv points DEV_DATA_DIR at the state dir: the key lives at
+	// <stateDir>/dev-jwt/jwt-signing-key.pem.
+	keyPath := filepath.Join(stateDir, "dev-jwt", "jwt-signing-key.pem")
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatalf("jwt signing key not generated: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("expected 0600 jwt signing key, got %o", info.Mode().Perm())
+	}
+	first, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) == 0 {
+		t.Fatal("generated jwt key is empty")
+	}
+
+	// Re-run reuses the same key (no regeneration).
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("second dev-up failed:\n%s", out)
+	}
+	second, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("jwt key regenerated on re-run; reuse contract violated")
+	}
+
+	// Rotation: delete the key and re-run — a fresh key appears.
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("dev-up after rotation failed:\n%s", out)
+	}
+	third, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(first, third) {
+		t.Fatal("expected a fresh jwt key after rotation")
+	}
+}
+
+// TestDevTimeoutReadyOverride covers AC-065-28 (readiness leg): when the
+// endpoints never answer, dev-up reports service_unhealthy after the
+// DEV_TIMEOUT_READY window (1s here) instead of the 300s default.
+func TestDevTimeoutReadyOverride(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	// curl fails only for the readiness probes; the registry readiness probe
+	// still passes so the run reaches the readiness stage.
+	writeShim(t, binDir, "curl", "#!/usr/bin/env bash\nif [[ \"$*\" == *\"/readyz\"* ]] || [[ \"$*\" == *\"8087\"* ]]; then exit 1; fi\nexit 0\n")
+	env = append(env, "DEV_TIMEOUT_READY=1")
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("expected readiness failure, got success:\n%s", out)
+	}
+	if !strings.Contains(out, "service_unhealthy") {
+		t.Fatalf("expected service_unhealthy after DEV_TIMEOUT_READY expiry:\n%s", out)
+	}
+}
+
+// TestDevSeedPassesTimeoutRetryOverrides covers AC-065-28 (seed legs): the
+// DEV_TIMEOUT_OPERATOR / DEV_TIMEOUT_SEED_RETRIES overrides are forwarded to
+// devseed as flags.
+func TestDevSeedPassesTimeoutRetryOverrides(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	// dev-seed precondition: the JWT key must already exist (generated by a
+	// prior dev-up, D3). fakeEnv points DEV_DATA_DIR at the state dir.
+	keyPath := filepath.Join(stateDir, "dev-jwt", "jwt-signing-key.pem")
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeShim(t, binDir, "flock", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "go", "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/go-calls.log\"\nif [ \"$1\" = \"env\" ]; then printf 'https://proxy.golang.org,direct\\n'; fi\nexit 0\n")
+	env = append(env, "DEV_TIMEOUT_OPERATOR=42", "DEV_TIMEOUT_SEED_RETRIES=7")
+
+	out, err := runDev(t, env, "seed")
+	if err != nil {
+		t.Fatalf("seed failed:\n%s", out)
+	}
+	logged, err := os.ReadFile(filepath.Join(stateDir, "go-calls.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := string(logged)
+	if !strings.Contains(all, "--operator-timeout 42") {
+		t.Fatalf("expected --operator-timeout 42 forwarded to devseed:\n%s", all)
+	}
+	if !strings.Contains(all, "--seed-retries 7") {
+		t.Fatalf("expected --seed-retries 7 forwarded to devseed:\n%s", all)
+	}
+}
+
+// TestKustomizeBuildJwtSecretAndNoPostgresPVC covers AC-065-29 + D3 at the
+// manifest level with the real kustomize: the dev overlay materializes the
+// release-manager-jwt Secret from the local key file and no longer declares
+// a PostgreSQL PVC. Skipped when kustomize is not on PATH.
+func TestKustomizeBuildJwtSecretAndNoPostgresPVC(t *testing.T) {
+	kustomize, err := exec.LookPath("kustomize")
+	if err != nil {
+		t.Skip("kustomize not installed")
+	}
+	root := repoRoot(t)
+	keyPath := filepath.Join(root, "data", "dev-jwt", "jwt-signing-key.pem")
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, []byte("test-jwt-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(filepath.Join(root, "data", "dev-jwt")) //nolint:errcheck // best-effort test cleanup
+
+	cmd := exec.CommandContext(context.Background(), kustomize, "build", "--load-restrictor", "LoadRestrictionsNone", "deploy/kustomize/dev")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("kustomize build failed: %v\n%s", err, out)
+	}
+	manifest := string(out)
+	// kustomize appends a content hash to the generated Secret name and
+	// rewrites every reference: assert both the Secret resource and the
+	// JWT_SIGNING_KEY data key.
+	if !strings.Contains(manifest, "name: release-manager-jwt-") {
+		t.Fatalf("expected generated release-manager-jwt-<hash> Secret in built manifest:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, "key: JWT_SIGNING_KEY") {
+		t.Fatalf("expected JWT_SIGNING_KEY data key in built manifest:\n%s", manifest)
+	}
+	if strings.Contains(manifest, "release-manager-postgres-data") {
+		t.Fatalf("postgres PVC must be gone (AC-065-29):\n%s", manifest)
+	}
+	if !strings.Contains(manifest, "emptyDir: {}") {
+		t.Fatalf("expected postgres emptyDir volume (AC-065-29):\n%s", manifest)
 	}
 }

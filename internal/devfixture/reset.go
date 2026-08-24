@@ -3,8 +3,10 @@ package devfixture
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx-backed database/sql driver for PostgreSQL
 	"github.com/ndzuki/release-manager/internal/postgres"
@@ -128,8 +130,16 @@ func (r *runner) reset(ctx context.Context) (*Manifest, error) {
 	return r.manifest, nil
 }
 
+// seedRetryDelays are the exponential backoff delays between phase-write
+// retries (AC-065-28: 1s/2s/4s). A package var so tests can shorten it.
+var seedRetryDelays = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+
 // runPhases executes every non-committed phase in order (shared by run and
-// reset).
+// reset). Write phases are retried up to SeedRetries times with exponential
+// backoff (AC-065-28) — every phase is idempotent by design, so a transient
+// RPC failure replays safely; canonical drift (fixture_conflict) is
+// deterministic and never retried. The readback verify phase is not a write
+// and is not retried: a count/digest mismatch is drift, not a transient.
 func (r *runner) runPhases(ctx context.Context) error {
 	phases := []struct {
 		name string
@@ -149,8 +159,8 @@ func (r *runner) runPhases(ctx context.Context) error {
 		if _, committed := r.progress.Phases[phase.name]; committed {
 			continue
 		}
-		if err := phase.run(ctx); err != nil {
-			return fmt.Errorf("%s phase: %w", phase.name, err)
+		if err := r.runPhaseWithRetry(ctx, phase.name, phase.run); err != nil {
+			return err
 		}
 		state := phaseState{Status: "committed", CommittedAt: r.cfg.nowRFC3339()}
 		switch phase.name {
@@ -167,4 +177,42 @@ func (r *runner) runPhases(ctx context.Context) error {
 		r.cfg.log().Info("phase committed", "phase", phase.name)
 	}
 	return nil
+}
+
+// runPhaseWithRetry runs one phase with the AC-065-28 retry contract. The
+// initial attempt is followed by up to SeedRetries retries, each delayed by
+// the 1s/2s/4s sequence (retry #attempt+1 waits seedRetryDelays[attempt]);
+// the last error is returned wrapped with the phase name and retry count so
+// dev.sh maps it to seed_write_failed after the retries are exhausted.
+func (r *runner) runPhaseWithRetry(ctx context.Context, name string, run func(context.Context) error) error {
+	retries := r.cfg.SeedRetries
+	if name == "verify" {
+		retries = 0
+	}
+	var lastErr error
+	for attempt := 0; attempt <= retries; attempt++ {
+		err := run(ctx)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if attempt == retries {
+			break
+		}
+		// fixture_conflict (canonical drift) is deterministic; retrying it
+		// would only burn the backoff window before reporting the conflict.
+		if errors.Is(err, ErrFixtureConflict) {
+			break
+		}
+		if attempt > 0 {
+			r.cfg.log().Warn("phase write failed, retrying", "phase", name, "attempt", attempt+1, "error", err)
+		}
+		delay := seedRetryDelays[attempt%len(seedRetryDelays)]
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return fmt.Errorf("%s phase (after %d retries): %w", name, retries, lastErr)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -155,7 +156,8 @@ func (r *runner) verifyBundle(ctx context.Context) error {
 
 // verifyEnrollment verifies the enrollment side of the fixture: the token
 // file exists (canonical local artifact) and every seed cluster has an
-// operator agent whose session reached ONLINE (AC-065-01/18). A missing or
+// operator agent whose session reached ONLINE (AC-065-01/18). The online
+// wait is bounded by OperatorOnlineTimeout (AC-065-28); a missing or
 // non-online session reports the failing cluster name so dev-up surfaces
 // `operator_not_online` with the faulting cluster.
 func (r *runner) verifyEnrollment(ctx context.Context) error {
@@ -167,11 +169,38 @@ func (r *runner) verifyEnrollment(ctx context.Context) error {
 		if info.Size() == 0 {
 			return fmt.Errorf("verify: enrollment token for %s is empty", seed.id)
 		}
-		if err := r.requireClusterOperatorOnline(ctx, seed); err != nil {
+		if err := r.waitClusterOperatorOnline(ctx, seed); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// operatorOnlinePollPeriod is the interval between ListOperators probes
+// during the online wait; a package var so tests can shorten it.
+var operatorOnlinePollPeriod = 3 * time.Second
+
+// waitClusterOperatorOnline polls ListOperators until an ONLINE session
+// appears or the OperatorOnlineTimeout deadline expires. The operator agent
+// bootstraps asynchronously after its cluster is applied, so the first
+// probes are expected to report offline/suspect; the timeout is the
+// deterministic outer bound (AC-065-18/28).
+func (r *runner) waitClusterOperatorOnline(ctx context.Context, seed clusterSeed) error {
+	deadline := time.Now().Add(r.cfg.OperatorOnlineTimeout)
+	for {
+		err := r.requireClusterOperatorOnline(ctx, seed)
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return err
+		}
+		select {
+		case <-time.After(operatorOnlinePollPeriod):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 // requireClusterOperatorOnline lists operators for the cluster and fails

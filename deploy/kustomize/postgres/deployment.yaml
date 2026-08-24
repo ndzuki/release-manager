@@ -53,9 +53,11 @@ spec:
               cpu: 500m
               memory: 512Mi
       volumes:
+        # AC-065-29: PostgreSQL data is ephemeral (emptyDir, no PVC) — dev-down
+        # deletes the cluster and the data goes with it; rebuilds are guaranteed
+        # by seed/reset-data (ADR-014/015 single authority).
         - name: data
-          persistentVolumeClaim:
-            claimName: release-manager-postgres-data
+          emptyDir: {}
         - name: init
           configMap:
             name: postgres-init

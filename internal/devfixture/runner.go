@@ -334,10 +334,15 @@ func (r *runner) run(ctx context.Context) (*Manifest, error) {
 	r.manifest = manifest
 
 	// A fixture version change means the seed contract moved on; previous
-	// progress is stale and every phase re-runs (idempotently).
+	// progress is stale and every phase re-runs (idempotently). The old
+	// progress generation is archived first (AC-065-30), keeping the most
+	// recent 3 generations in data/archive/.
 	if r.progress.FixtureVersion != r.cfg.FixtureVersion {
 		r.cfg.log().Info("fixture version changed, re-seeding all phases",
 			"old", r.progress.FixtureVersion, "new", r.cfg.FixtureVersion)
+		if err := r.archiveProgress(); err != nil {
+			return nil, err
+		}
 		r.progress = newProgress(r.cfg.FixtureVersion)
 		r.manifest = nil
 	}

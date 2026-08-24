@@ -26,6 +26,17 @@ var testNow = time.Date(2026, 8, 14, 10, 0, 0, 0, time.UTC)
 // testRunner builds a runner wired to fake services with a temp data dir.
 func testRunner(t *testing.T, fakes *fakeServices, mutate ...func(*Config)) *runner {
 	t.Helper()
+	// AC-065-28 knobs keep their defaults (3 retries) but the real 1s/2s/4s
+	// backoff and 3s operator poll would slow every test; shorten both for
+	// the duration of this test.
+	prevDelays := seedRetryDelays
+	prevPoll := operatorOnlinePollPeriod
+	seedRetryDelays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	operatorOnlinePollPeriod = time.Millisecond
+	t.Cleanup(func() {
+		seedRetryDelays = prevDelays
+		operatorOnlinePollPeriod = prevPoll
+	})
 	cfg := Config{
 		Mode:              ModeLocal,
 		OrchestratorURL:   "http://orchestrator.test",
@@ -37,8 +48,11 @@ func testRunner(t *testing.T, fakes *fakeServices, mutate ...func(*Config)) *run
 		DeployerUser:      "deployer",
 		InstallTimeout:    5 * time.Second,
 		InstallPollPeriod: time.Millisecond,
-		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Now:               func() time.Time { return testNow },
+		// Short operator-online deadline: offline-session cases poll a few
+		// times instead of waiting the real 180s (AC-065-28 default).
+		OperatorOnlineTimeout: 100 * time.Millisecond,
+		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Now:                   func() time.Time { return testNow },
 	}
 	for _, fn := range mutate {
 		fn(&cfg)
@@ -209,12 +223,15 @@ func TestRun_CanonicalDriftYieldsFixtureConflict(t *testing.T) {
 
 func TestRun_InterruptedResumeContinuesFromFailedPhase(t *testing.T) {
 	fakes := newFakeServices()
-	fakes.webhook.failOnce = errors.New("simulated bundle outage")
+	// A persistent bundle outage: with AC-065-28 retries (1 initial + 3
+	// retries) the phase fails for good and the run turns partial.
+	fakes.webhook.failEvery = errors.New("simulated bundle outage")
 	r := testRunner(t, fakes)
 
 	_, err := r.run(context.Background())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bundle phase")
+	require.Contains(t, err.Error(), "after 3 retries")
 	p := loadProgressFile(t, r.cfg.DataDir)
 	require.True(t, p.Partial)
 	// Phases before the failure are committed and preserved.
@@ -223,14 +240,18 @@ func TestRun_InterruptedResumeContinuesFromFailedPhase(t *testing.T) {
 	_, ok := p.Phases["bundle"]
 	require.False(t, ok)
 
-	// Resume: earlier phases must not re-create entities.
+	// Resume: earlier phases must not re-create entities. The simulated
+	// outage is over.
+	fakes.webhook.failEvery = nil
 	identityCreates := fakes.orch.count("CreateCustomer") + fakes.orch.count("CreateCluster")
 
 	manifest, err := r.run(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, manifest)
 	require.Equal(t, identityCreates, fakes.orch.count("CreateCustomer")+fakes.orch.count("CreateCluster"))
-	require.Equal(t, 2, fakes.webhook.calls)
+	// First run burned 1 initial + 3 retries on the failing bundle phase;
+	// the resumed run submits once.
+	require.Equal(t, 5, fakes.webhook.calls)
 
 	p = loadProgressFile(t, r.cfg.DataDir)
 	require.False(t, p.Partial)
@@ -418,4 +439,100 @@ func TestVerifyEnrollment_RequiresOnlineOperatorSessions(t *testing.T) {
 	fakes.orch.mu.Unlock()
 	err = r.phaseVerify(context.Background())
 	require.NoError(t, err)
+}
+
+// TestRun_SeedRetryRecoversFromTransientWriteFailure covers AC-065-28: a
+// transient phase-write failure is retried (default 3 retries with 1s/2s/4s
+// backoff; shortened in tests) and the run completes without partial state.
+func TestRun_SeedRetryRecoversFromTransientWriteFailure(t *testing.T) {
+	fakes := newFakeServices()
+	fakes.webhook.failOnce = errors.New("simulated transient bundle outage")
+	r := testRunner(t, fakes)
+
+	manifest, err := r.run(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, manifest)
+	// Initial attempt + one retry.
+	require.Equal(t, 2, fakes.webhook.calls)
+	p := loadProgressFile(t, r.cfg.DataDir)
+	require.False(t, p.Partial)
+	for _, phase := range phaseOrder {
+		require.Equal(t, "committed", p.Phases[phase].Status)
+	}
+}
+
+// TestRun_FixtureVersionChangeArchivesProgressAndPrunes covers AC-065-30:
+// the old progress generation is archived as
+// archive-<ISO8601>-<fixture_version>.json and data/archive/ keeps only the
+// most recent 3 generations.
+func TestRun_FixtureVersionChangeArchivesProgressAndPrunes(t *testing.T) {
+	fakes := newFakeServices()
+	dataDir := t.TempDir()
+	r := testRunner(t, fakes, func(c *Config) {
+		c.DataDir = dataDir
+		c.FixtureVersion = "v1"
+	})
+	_, err := r.run(context.Background())
+	require.NoError(t, err)
+
+	// Three legacy archive generations from earlier contract moves (older
+	// timestamps than testNow so the v1 archive is newest).
+	archiveDir := filepath.Join(dataDir, "archive")
+	require.NoError(t, os.MkdirAll(archiveDir, 0o700))
+	for _, name := range []string{
+		"archive-2026-01-01T00-00-00Z-v0.json",
+		"archive-2026-02-01T00-00-00Z-v0.json",
+		"archive-2026-03-01T00-00-00Z-v0.json",
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(archiveDir, name), []byte("{}\n"), 0o600))
+	}
+
+	// The version authority moved v1 -> v2 (maintainer bump): the v1
+	// progress is archived and the archive pruned to 3 generations — the
+	// oldest (2026-01) generation is dropped.
+	r2 := testRunner(t, fakes, func(c *Config) {
+		c.DataDir = dataDir
+		c.FixtureVersion = "v2"
+	})
+	manifest, err := r2.run(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "v2", manifest.FixtureVersion)
+
+	entries, err := os.ReadDir(archiveDir)
+	require.NoError(t, err)
+	var names []string
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	require.Len(t, names, 3, "archive must keep the 3 most recent generations, got %v", names)
+	require.Contains(t, names, "archive-2026-08-14T10-00-00Z-v1.json")
+	require.Contains(t, names, "archive-2026-03-01T00-00-00Z-v0.json")
+	require.Contains(t, names, "archive-2026-02-01T00-00-00Z-v0.json")
+	require.NotContains(t, names, "archive-2026-01-01T00-00-00Z-v0.json")
+
+	// The persisted progress carries the new authoritative version.
+	p := loadProgressFile(t, dataDir)
+	require.Equal(t, "v2", p.FixtureVersion)
+}
+
+// TestLoadCredentialsFileEnforcesPasswordCharset covers D2: values must be
+// exactly 32 characters of [A-Za-z0-9]; any other character (or length)
+// makes the file invalid so it is regenerated.
+func TestLoadCredentialsFileEnforcesPasswordCharset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dev-credentials.env")
+	valid := "DEV_ADMIN_PASSWORD=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n" +
+		"DEV_DEPLOYER_PASSWORD=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n" +
+		"DEV_READER_PASSWORD=01234567890123456789012345678901\n"
+	require.NoError(t, os.WriteFile(path, []byte(valid), 0o600))
+	creds, ok := loadCredentialsFile(path)
+	require.True(t, ok)
+	require.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", creds.admin)
+
+	// Same length, but a '-' sneaks into the alphanumeric contract.
+	invalid := "DEV_ADMIN_PASSWORD=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-\n" +
+		"DEV_DEPLOYER_PASSWORD=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n" +
+		"DEV_READER_PASSWORD=01234567890123456789012345678901\n"
+	require.NoError(t, os.WriteFile(path, []byte(invalid), 0o600))
+	_, ok = loadCredentialsFile(path)
+	require.False(t, ok)
 }

@@ -27,7 +27,16 @@ spec:
             - --config
             - /configs/auth.dev.yaml
             - --signing-key
-            - dev-only-signing-key
+            # $(JWT_SIGNING_KEY) is expanded by Kubernetes from the explicit
+            # env entry below (release-manager-jwt Secret, D3); a rotated key
+            # changes the Secret hash and rolls this Deployment.
+            - $(JWT_SIGNING_KEY)
+          env:
+            - name: JWT_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: release-manager-jwt
+                  key: JWT_SIGNING_KEY
           ports:
             - name: http
               containerPort: 8085

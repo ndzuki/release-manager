@@ -26,6 +26,16 @@ spec:
           args:
             - --config
             - /configs/orchestrator.dev.yaml
+            # JWT validation key from the release-manager-jwt Secret (D3);
+            # Kubernetes expands $(JWT_SIGNING_KEY) from the env entry below.
+            - --signing-key
+            - $(JWT_SIGNING_KEY)
+          env:
+            - name: JWT_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: release-manager-jwt
+                  key: JWT_SIGNING_KEY
           ports:
             # Management-plane Connect HTTP listener.
             - name: http

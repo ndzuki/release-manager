@@ -45,6 +45,14 @@ const (
 	DefaultTrustEnv       = "staging" // orchestrator --target-env in the dev kustomize
 	DefaultInstallTimeout = 15 * time.Minute
 	DefaultInstallPoll    = 3 * time.Second
+	// AC-065-28 defaults (DEV_TIMEOUT_OPERATOR / DEV_TIMEOUT_SEED_RETRIES):
+	// operator-online wait and phase-write retry count with 1s/2s/4s backoff.
+	DefaultOperatorOnlineTimeout = 180 * time.Second
+	DefaultSeedRetries           = 3
+	// maxArchiveGenerations is the data/archive/ retention window (AC-065-30):
+	// only the most recent generations are kept; dev-purge and dev-reset-data
+	// never delete the archive directory.
+	maxArchiveGenerations = 3
 )
 
 // ErrFixtureConflict reports canonical drift of an already-committed phase:
@@ -78,6 +86,13 @@ type Config struct {
 
 	InstallTimeout    time.Duration
 	InstallPollPeriod time.Duration
+
+	// OperatorOnlineTimeout bounds the operator-session-online wait during
+	// verify (AC-065-18/28); SeedRetries bounds phase-write retries with
+	// 1s/2s/4s exponential backoff (AC-065-19/28). Zero falls back to the
+	// package defaults.
+	OperatorOnlineTimeout time.Duration
+	SeedRetries           int
 
 	Logger *slog.Logger
 	Now    func() time.Time // test hook; defaults to time.Now
@@ -187,6 +202,12 @@ func (c Config) withDefaults() Config {
 	}
 	if c.InstallPollPeriod <= 0 {
 		c.InstallPollPeriod = DefaultInstallPoll
+	}
+	if c.OperatorOnlineTimeout <= 0 {
+		c.OperatorOnlineTimeout = DefaultOperatorOnlineTimeout
+	}
+	if c.SeedRetries <= 0 {
+		c.SeedRetries = DefaultSeedRetries
 	}
 	if c.Logger == nil {
 		c.Logger = slog.Default()

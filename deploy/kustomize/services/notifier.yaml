@@ -26,6 +26,10 @@ spec:
           args:
             - --config
             - /configs/notifier.dev.yaml
+          # D3: every management-plane service consumes release-manager-jwt.
+          envFrom:
+            - secretRef:
+                name: release-manager-jwt
           ports:
             - name: http
               containerPort: 8086

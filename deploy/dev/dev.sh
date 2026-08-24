@@ -21,10 +21,25 @@ source "$SCRIPT_DIR/lib/errors.sh"
 source "$SCRIPT_DIR/lib/host.sh"
 # shellcheck source=lib/lock.sh
 source "$SCRIPT_DIR/lib/lock.sh"
+# Fixture version authority = the devseed built-in constant (REQ-065 D1,
+# AC-065-30): dev-up/dev-seed never auto-increment. The fallback keeps the
+# preflight battery working when the Go toolchain is unavailable.
+FIXTURE_VERSION="${FIXTURE_VERSION:-$(go run ./cmd/devseed/ -print-fixture-version 2>/dev/null || true)}"
+FIXTURE_VERSION="${FIXTURE_VERSION:-v2}"
+export FIXTURE_VERSION
 # shellcheck source=lib/ownership.sh
 source "$SCRIPT_DIR/lib/ownership.sh"
 
 DEV_DATA_DIR="${DEV_DATA_DIR:-$SCRIPT_DIR/../../data}"
+# DEV_TIMEOUT_* runtime knobs (REQ-065 D5, AC-065-28): defaults are the
+# deterministic base; each may be overridden per invocation via the
+# environment and is never persisted to any state file.
+DEV_TIMEOUT_READY="${DEV_TIMEOUT_READY:-300}"
+DEV_TIMEOUT_OPERATOR="${DEV_TIMEOUT_OPERATOR:-180}"
+DEV_TIMEOUT_SEED_RETRIES="${DEV_TIMEOUT_SEED_RETRIES:-3}"
+# Runtime files dev-purge removes (AC-065-26): credentials, keys, kubeconfigs
+# and state documents. data/archive/ is explicitly preserved.
+PURGE_DATA_PATHS=(dev-credentials.env dev-trust-root dev-jwt kubeconfigs kubeconfig.yaml dev-ownership.json dev-fixture.json dev-seed-progress.json dev-status.json backups)
 CONTROL_CLUSTER="release-manager-control"
 CUSTOMER_CLUSTERS=(dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed)
 ALL_CLUSTERS=("$CONTROL_CLUSTER" "${CUSTOMER_CLUSTERS[@]}")
@@ -49,12 +64,17 @@ log() {
 cleanup_trap() {
   local rc=$?
   release_lock
-  # CI profile (REQ-065): dev-up exit auto-tries to clean managed resources
-  # so a CI job never leaks clusters/registry. Cleanup runs in a subshell and
-  # never overrides the primary exit code; on failure it prints
-  # `dev_purge_failed` plus a JSON-lines residual manifest for the CI
-  # post-step to act on.
-  if [ "${DEV_PROFILE:-local}" = "ci" ] && [ -n "${E2E_RUN_ID:-}" ]; then
+  # The ci JWT key file is transient (D3): remove it on every exit path —
+  # including failures that never reached the post-apply cleanup.
+  jwt_ci_temp_cleanup
+  # CI profile (REQ-065 D4, AC-065-27): auto-clean managed resources ONLY on
+  # a non-zero exit (failure or INT/TERM — bash reports 128+signal). A
+  # successful dev-up keeps the environment for REQ-066 consumption; the CI
+  # post-step `make dev-purge CONFIRM=1` is the teardown backstop. Cleanup
+  # runs in a subshell and never overrides the primary exit code; on failure
+  # it prints `dev_purge_failed` plus a JSON-lines residual manifest for the
+  # CI post-step to act on.
+  if [ "$rc" -ne 0 ] && [ "${DEV_PROFILE:-local}" = "ci" ] && [ -n "${E2E_RUN_ID:-}" ]; then
     (
       set +e
       if ! ci_auto_purge >/dev/null 2>&1; then
@@ -118,14 +138,60 @@ wait_for_endpoint() {
 }
 
 # require_readyz <service> <port> — fail service_unhealthy with the service
-# name when /readyz does not answer 200 within the timeout (AC-065-10).
+# name when /readyz does not answer 200 within DEV_TIMEOUT_READY (AC-065-10/28).
 require_readyz() {
   local service="$1"
   local port="$2"
-  if ! wait_for_endpoint "http://127.0.0.1:$port/readyz" 180; then
+  if ! wait_for_endpoint "http://127.0.0.1:$port/readyz" "$DEV_TIMEOUT_READY"; then
     fail "$ERR_SERVICE_UNHEALTHY" "$service /readyz did not return 200 on port $port"
   fi
   log "  $service       http://localhost:$port/readyz  200"
+}
+
+# ---------------------------------------------------------------------------
+# JWT signing key (REQ-065 D3): local profile generates/reuses a 0600
+# data/dev-jwt/jwt-signing-key.pem before deployment; the ci profile injects
+# the DEV_JWT_SIGNING_KEY Secret env into the same source path transiently
+# (removed right after apply, never persisted).
+# ---------------------------------------------------------------------------
+jwt_key_path() { printf '%s' "$DEV_DATA_DIR/dev-jwt/jwt-signing-key.pem"; }
+
+jwt_signing_key_ensure() {
+  local key_path
+  key_path="$(jwt_key_path)"
+  if [ "${DEV_PROFILE:-local}" = "ci" ]; then
+    if [ -z "${DEV_JWT_SIGNING_KEY:-}" ]; then
+      fail "$ERR_SERVICE_UNHEALTHY" "ci profile requires DEV_JWT_SIGNING_KEY (JWT signing key is not written to disk)"
+    fi
+    # ci: the Secret env value is materialized to the kustomize source path
+    # only for the duration of the build/apply (D3: not persisted) and is
+    # removed by jwt_ci_temp_cleanup on every exit path.
+    mkdir -p "$DEV_DATA_DIR/dev-jwt"
+    umask 077
+    printf '%s' "$DEV_JWT_SIGNING_KEY" > "$key_path"
+    chmod 600 "$key_path"
+    return 0
+  fi
+  if [ -f "$key_path" ] && [ -s "$key_path" ]; then
+    log "  jwt signing key (reused) .......... $key_path"
+    return 0
+  fi
+  mkdir -p "$DEV_DATA_DIR/dev-jwt"
+  # 88-char base64 of 64 random bytes; no external tool dependency. The key
+  # is consumed as raw bytes by the auth JWT manager (any non-empty value is
+  # valid); rotation = delete the file and re-run dev-up (kustomize then
+  # regenerates the Secret hash and rolls the consuming Deployments).
+  umask 077
+  head -c 64 /dev/urandom | base64 > "$key_path"
+  chmod 600 "$key_path"
+  log "  jwt signing key (generated) ....... $key_path"
+}
+
+# jwt_ci_temp_cleanup — remove the transient ci JWT key file after apply
+# (D3: the ci profile never leaves secret material on disk). No-op for local.
+jwt_ci_temp_cleanup() {
+  [ "${DEV_PROFILE:-local}" = "ci" ] || return 0
+  rm -f "$(jwt_key_path)" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -352,7 +418,10 @@ images_up() {
 kustomize_apply() {
   log "[5/7] kustomize apply ................... "
   local manifest svc hash
-  if ! manifest="$(kustomize build "$KUSTOMIZE_DIR")"; then
+  # LoadRestrictionsNone: the JWT secret source lives in the data dir
+  # (outside the kustomization dir); kustomize's default security loader
+  # rejects it. The escape is scoped to the dev lifecycle build (D3).
+  if ! manifest="$(kustomize build --load-restrictor LoadRestrictionsNone "$KUSTOMIZE_DIR")"; then
     fail "$ERR_KUSTOMIZE_BUILD_FAILED" "kustomize build failed for $KUSTOMIZE_DIR"
   fi
   # Substitute each static `release-<svc>:dev` reference with the recorded
@@ -367,6 +436,9 @@ kustomize_apply() {
   if ! printf '%s\n' "$manifest" | kubectl apply -f -; then
     fail "$ERR_SERVICE_UNHEALTHY" "kubectl apply failed for $KUSTOMIZE_DIR"
   fi
+  # ci profile: the transient JWT key file served the kustomize build above;
+  # the Secret lives in the cluster now and the file is removed (D3).
+  jwt_ci_temp_cleanup
 }
 
 readiness() {
@@ -377,7 +449,7 @@ readiness() {
   require_readyz auth 8085
   require_readyz notifier 8086
   # web has no /readyz; the root page is the probe.
-  if ! wait_for_endpoint "http://127.0.0.1:8087" 180; then
+  if ! wait_for_endpoint "http://127.0.0.1:8087" "$DEV_TIMEOUT_READY"; then
     fail "$ERR_SERVICE_UNHEALTHY" "web did not answer on port 8087"
   fi
   log "  web           http://localhost:8087         200"
@@ -389,7 +461,9 @@ readiness() {
 seed() {
   log "[7/7] seed data .......................... "
   local seed_output
-  if ! seed_output="$(go run ./cmd/devseed/ --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085 2>&1)"; then
+  # DEV_TIMEOUT_OPERATOR bounds the operator-online wait inside devseed;
+  # DEV_TIMEOUT_SEED_RETRIES bounds phase-write retries (AC-065-28).
+  if ! seed_output="$(go run ./cmd/devseed/ --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085 --operator-timeout "$DEV_TIMEOUT_OPERATOR" --seed-retries "$DEV_TIMEOUT_SEED_RETRIES" 2>&1)"; then
     # AC-065-18: an operator session that never reached online reports its
     # own error code with the faulting cluster name (devfixture verify).
     if printf '%s' "$seed_output" | grep -q "operator_not_online"; then
@@ -409,6 +483,10 @@ cmd_up() {
   trap cleanup_trap EXIT INT TERM
   log "=== Release Manager Dev Environment ==="
   log "Profile: ${DEV_PROFILE:-local} | environment_id: $(environment_id)"
+  # D3: the JWT signing key must exist before kustomize build/apply (the
+  # secretGenerator sources it); generate/reuse happens here, before any
+  # deployment stage.
+  jwt_signing_key_ensure
   registry_up
   clusters_up
   images_up
@@ -441,6 +519,12 @@ cmd_down() {
 cmd_seed() {
   acquire_lock seed
   trap cleanup_trap EXIT INT TERM
+  # dev-seed precondition (REQ-065 D3): the JWT signing key must already be
+  # injected — dev-up generates it before deployment. Seed never generates
+  # the key itself: a missing key means dev-up has not converged yet.
+  if [ "${DEV_PROFILE:-local}" != "ci" ] && { [ ! -f "$(jwt_key_path)" ] || [ ! -s "$(jwt_key_path)" ]; }; then
+    fail "$ERR_SERVICE_UNHEALTHY" "JWT signing key $(jwt_key_path) missing; run make dev-up first"
+  fi
   seed
 }
 
@@ -561,6 +645,7 @@ cmd_reset_data() {
   #    SDK down -all -> up, then the nine phases; see internal/devfixture).
   if ! go run ./cmd/devseed/ --reset \
     --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085 \
+    --operator-timeout "$DEV_TIMEOUT_OPERATOR" --seed-retries "$DEV_TIMEOUT_SEED_RETRIES" \
     --database-dsn "postgres://release_manager:dev-release-manager@127.0.0.1:5432/release_manager?sslmode=disable"; then
     # 5a. failure: restore both databases, drop the half-built customer
     #     clusters, mark the environment partial; a later reset converges.
@@ -592,6 +677,19 @@ cmd_reset_data() {
   log "=== dev-reset-data complete ==="
 }
 
+# purge_data_runtime — remove the data/ runtime files (AC-065-26). The
+# whitelist covers credentials, keys, kubeconfigs and state documents;
+# data/archive/ (fixture progress generations) is always preserved. The
+# dev.lock file is deleted last while still held — a third process cannot
+# have observed a purged environment yet.
+purge_data_runtime() {
+  local path
+  for path in "${PURGE_DATA_PATHS[@]}"; do
+    rm -rf "$DEV_DATA_DIR/$path"
+  done
+  rm -f "$DEV_DATA_DIR/dev.lock"
+}
+
 cmd_purge() {
   require_confirm "$ERR_DEV_PURGE_CONFIRM_REQUIRED"
   acquire_lock purge
@@ -615,6 +713,8 @@ cmd_purge() {
     k3d cluster delete "$name" >/dev/null 2>&1 || true
     log "  removed cluster $name"
   done
+  purge_data_runtime
+  log "data/ runtime files removed (data/archive/ preserved)"
   log "dev-purge complete"
 }
 

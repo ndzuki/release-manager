@@ -29,3 +29,15 @@ configMapGenerator:
     namespace: release-manager-dev
     files:
       - configs/notification-sink.dev.yaml
+# D3: the JWT signing key secret is sourced by dev-up before apply — local
+# profile generates/reuses data/dev-jwt/jwt-signing-key.pem (0600); the ci
+# profile writes the DEV_JWT_SIGNING_KEY env value to the same path
+# transiently (removed right after apply, never persisted). kustomize names
+# the Secret release-manager-jwt-<hash> and rewrites every reference in the
+# built manifest, so a rotated key changes the hash and rolls the consuming
+# Deployments automatically.
+secretGenerator:
+  - name: release-manager-jwt
+    namespace: release-manager-dev
+    files:
+      - JWT_SIGNING_KEY=../../../data/dev-jwt/jwt-signing-key.pem

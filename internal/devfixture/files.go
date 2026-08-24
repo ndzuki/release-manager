@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -20,6 +21,7 @@ const (
 	credentialsFileName  = "dev-credentials.env"
 	trustRootDirName     = "dev-trust-root"
 	trustRootKeyFileName = "dev-trust-root.key"
+	archiveDirName       = "archive"
 	//nolint:gosec // directory name, not a credential (G101 false positive on "token")
 	enrollmentTokenDir = "dev-enrollment-tokens"
 )
@@ -104,8 +106,9 @@ func randomPassword() string {
 }
 
 // loadCredentialsFile parses a valid dev-credentials.env: exactly the three
-// KEY=VALUE lines with 32-character values. A malformed file yields
-// (zero, false) so the caller regenerates (REQ-065 reuse semantics).
+// KEY=VALUE lines with 32-character [A-Za-z0-9] values (REQ-065 D2). A
+// malformed file yields (zero, false) so the caller regenerates (REQ-065
+// reuse semantics).
 func loadCredentialsFile(path string) (credentials, bool) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -119,7 +122,7 @@ func loadCredentialsFile(path string) (credentials, bool) {
 			continue
 		}
 		key, value, ok := strings.Cut(line, "=")
-		if !ok || len(value) != passwordLength {
+		if !ok || !validPassword(value) {
 			return credentials{}, false
 		}
 		switch strings.TrimSpace(key) {
@@ -138,6 +141,22 @@ func loadCredentialsFile(path string) (credentials, bool) {
 		return credentials{}, false
 	}
 	return result, true
+}
+
+// validPassword enforces the D2 password contract: exactly 32 characters
+// from [A-Za-z0-9] (≈190 bit, alphanumeric so the value is safe unquoted in
+// a shell env file).
+func validPassword(value string) bool {
+	if len(value) != passwordLength {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c < '0' || c > 'z' || (c > '9' && c < 'A') || (c > 'Z' && c < 'a') {
+			return false
+		}
+	}
+	return true
 }
 
 // resolveCredentials applies the reuse-or-generate contract:
@@ -182,6 +201,15 @@ func ciCredentials(cfg Config) (credentials, error) {
 	}
 	if len(missing) > 0 {
 		return credentials{}, fmt.Errorf("ci profile requires env-injected passwords: %s", strings.Join(missing, ", "))
+	}
+	// D2 contract applies to the ci profile too: every injected password
+	// must be 32 chars of [A-Za-z0-9].
+	for name, value := range map[string]string{
+		"DEV_ADMIN_PASSWORD": cfg.AdminPassword, "DEV_DEPLOYER_PASSWORD": cfg.DeployerPassword, "DEV_READER_PASSWORD": cfg.ReaderPassword,
+	} {
+		if !validPassword(value) {
+			return credentials{}, fmt.Errorf("ci profile password %s must be 32 characters of [A-Za-z0-9]", name)
+		}
 	}
 	return credentials{admin: cfg.AdminPassword, deployer: cfg.DeployerPassword, reader: cfg.ReaderPassword}, nil
 }
@@ -282,4 +310,67 @@ func decodePrivateKey(raw []byte) (ed25519.PrivateKey, error) {
 // enrollmentTokenPath returns the token file path for one cluster.
 func (r *runner) enrollmentTokenPath(clusterID string) string {
 	return filepath.Join(r.cfg.DataDir, enrollmentTokenDir, clusterID+".token")
+}
+
+// archiveProgress writes the current progress document to
+// data/archive/archive-<ISO8601>-<fixture_version>.json (AC-065-30) and
+// prunes the archive to the most recent maxArchiveGenerations entries.
+// No-op when there is no previous progress file or its fixture version is
+// empty (first seed). dev-purge and dev-reset-data never delete data/archive.
+func (r *runner) archiveProgress() error {
+	if r.progress.FixtureVersion == "" {
+		return nil
+	}
+	if _, err := os.Stat(r.progressPath()); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	raw, err := os.ReadFile(r.progressPath())
+	if err != nil {
+		return fmt.Errorf("read progress for archive: %w", err)
+	}
+	archiveDir := filepath.Join(r.cfg.DataDir, archiveDirName)
+	if err := os.MkdirAll(archiveDir, 0o700); err != nil {
+		return fmt.Errorf("create archive dir: %w", err)
+	}
+	// ISO 8601 with hyphens instead of colons (filename-safe on every
+	// filesystem); Z suffix keeps it UTC-parseable. The name is assembled
+	// from the fixed archive scheme and the maintainer-controlled version
+	// constant — never from caller input.
+	name := fmt.Sprintf("archive-%s-%s.json", r.cfg.now().UTC().Format("2006-01-02T15-04-05Z"), r.progress.FixtureVersion)
+	archivePath := filepath.Join(archiveDir, name)
+	//nolint:gosec // G703: path built from the fixed archive scheme above, not caller input
+	if err := os.WriteFile(archivePath, raw, 0o600); err != nil {
+		return fmt.Errorf("write archive %s: %w", name, err)
+	}
+	r.cfg.log().Info("fixture progress archived", "archive", filepath.Join(archiveDirName, name), "version", r.progress.FixtureVersion)
+	return r.pruneArchive(archiveDir)
+}
+
+// pruneArchive keeps only the maxArchiveGenerations most recent archives in
+// the archive directory (AC-065-30). Only files matching the
+// archive-<ISO8601>-<version>.json scheme are considered so foreign files
+// are never touched.
+func (r *runner) pruneArchive(archiveDir string) error {
+	entries, err := os.ReadDir(archiveDir)
+	if err != nil {
+		return fmt.Errorf("read archive dir: %w", err)
+	}
+	var archives []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() && strings.HasPrefix(name, "archive-") && strings.HasSuffix(name, ".json") {
+			archives = append(archives, name)
+		}
+	}
+	sort.Slice(archives, func(i, j int) bool {
+		// Names share one timestamp format: lexicographic == chronological.
+		return archives[i] > archives[j]
+	})
+	for _, old := range archives[maxArchiveGenerations:] {
+		if err := os.Remove(filepath.Join(archiveDir, old)); err != nil {
+			return fmt.Errorf("prune archive %s: %w", old, err)
+		}
+		r.cfg.log().Info("old fixture archive pruned", "archive", old)
+	}
+	return nil
 }

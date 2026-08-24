@@ -23,12 +23,22 @@ FIXTURE_VERSION="${FIXTURE_VERSION:-v2}"
 
 # ownership_init — create an empty manifest for the active profile. Never
 # overwrites an existing manifest (the previous profile's resources are the
-# previous owner's responsibility).
+# previous owner's responsibility); when the fixture version authority moved
+# on, only the fixture_version field is updated in place (AC-065-30) — the
+# resource whitelist is never touched.
 ownership_init() {
   mkdir -p "$DEV_DATA_DIR"
   if [ ! -f "$OWNERSHIP_FILE" ]; then
     printf '{"profile":"%s","created_at":"%s","fixture_version":"%s","k3d_clusters":[],"docker_containers":[],"docker_networks":[]}\n' \
       "${DEV_PROFILE:-local}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$FIXTURE_VERSION" > "$OWNERSHIP_FILE"
+    return 0
+  fi
+  local current
+  current="$(ownership_read | sed -nE 's/.*"fixture_version"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | sed -n '1p')"
+  if [ -n "$current" ] && [ "$current" != "$FIXTURE_VERSION" ]; then
+    printf '%s\n' "$(ownership_read)" \
+      | sed -E 's/"fixture_version"[[:space:]]*:[[:space:]]*"[^"]*"/"fixture_version":"'"$FIXTURE_VERSION"'"/' > "$OWNERSHIP_FILE"
+    printf 'ownership manifest fixture_version %s -> %s\n' "$current" "$FIXTURE_VERSION" >&2
   fi
 }
 
