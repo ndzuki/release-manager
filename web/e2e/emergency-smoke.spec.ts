@@ -44,13 +44,15 @@ test('Inventory → Emergency → Execute → Operation Detail (REQUIRE_PROMOTIO
   // The entry comes from the ReleaseSummary projection (AC-058-08).
   const emergencyLink = page.getByRole('link', { name: '紧急变更' }).first();
   await expect(emergencyLink).toBeVisible();
-  await emergencyLink.click();
-  await page.waitForURL(/\/emergency$/);
 
   // D19=A: route entry → form operable within the TTI budget (REQ-058
-  // performance table; service-side p95 is the observability takeover item).
-  const targetRadio = page.getByRole('radio', { name: /DEPLOYMENT/i }).first();
+  // performance table). The clock starts at navigation initiation (link
+  // click) and stops when the first form control is enabled; the
+  // service-side p95 stays with the observability takeover item.
   const ttiStart = Date.now();
+  await emergencyLink.click();
+  await page.waitForURL(/\/emergency$/);
+  const targetRadio = page.getByRole('radio', { name: /DEPLOYMENT/i }).first();
   await expect(targetRadio).toBeVisible();
   await expect(targetRadio).toBeEnabled();
   const ttiMs = Date.now() - ttiStart;
@@ -112,10 +114,11 @@ test('Convergence: Prepare → ValuesEditor draft → Submit → cross-actor App
 
 test('Kill switch: new entry 404 while existing paths stay reachable (AC-058-05)', async ({ page }) => {
   await login(page, CREDENTIALS.adminA.username, CREDENTIALS.adminA.password);
-  // When emergencyChangeEnabled=false the entry route must 404 (page gate);
-  // convergence remains reachable per capability.
-  const response = await page.goto('/customers/c1/clusters/c1/releases/def1/emergency');
-  // 404 comes from the page-level gate; the server remains authoritative.
-  expect([404, 200]).toContain(response?.status() ?? 0);
+  // When emergencyChangeEnabled=false the page-level gate must render the
+  // not-found state for the new-emergency entry. In this SPA the dev server
+  // answers HTTP 200, so the authoritative AC-05 signal is the rendered
+  // NotFound UI (EmergencyChangePage gate === 'not_found'), not the HTTP
+  // status; convergence remains reachable per capability.
+  await page.goto('/customers/c1/clusters/c1/releases/def1/emergency');
   await expect(page.getByText(/紧急变更不可用|404/)).toBeVisible();
 });
