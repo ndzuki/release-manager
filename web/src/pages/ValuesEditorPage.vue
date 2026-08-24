@@ -1,20 +1,25 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, shallowRef, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import ErrorState from '@/components/common/ErrorState.vue';
+import ConvergenceLockedPathsPanel from '@/components/emergency/ConvergenceLockedPathsPanel.vue';
 import SecretRefEditor from '@/components/values/SecretRefEditor.vue';
 import ValuesCodeEditor from '@/components/values/ValuesCodeEditor.vue';
 import ValuesConflictDialog from '@/components/values/ValuesConflictDialog.vue';
 import ValuesDiffPanel from '@/components/values/ValuesDiffPanel.vue';
 import ValuesEditorSkeleton from '@/components/values/ValuesEditorSkeleton.vue';
+import ValuesRevisionActions from '@/components/values/ValuesRevisionActions.vue';
 import { useAuthStore } from '@/stores/auth';
+import { useEmergencyAuthorizationStore } from '@/stores/emergencyAuthorization';
 import { useValuesEditorStore } from '@/stores/valuesEditor';
 import type { EditorLanguage, SecretRef } from '@/types/valuesRevision';
 
 const route = useRoute();
 const auth = useAuthStore();
 const editor = useValuesEditorStore();
+const authorization = useEmergencyAuthorizationStore();
 const reloadingParent = shallowRef(false);
+const discardConfirmOpen = ref(false);
 
 const customerId = computed(() => String(route.params.customerId ?? ''));
 const clusterId = computed(() => String(route.params.clusterId ?? ''));
@@ -26,13 +31,32 @@ const roles = computed(() => auth.user?.roles.map((role) => role.toLowerCase()) 
 const canWrite = computed(() => roles.value.some((role) => ['platform_admin', 'release_admin', 'deployer'].includes(role)));
 const firstRevision = computed(() => !editor.currentRevision && !editor.parentRevision);
 const readOnly = computed(() => !canWrite.value || !editor.canEdit);
+// Convergence mode (REQ-058 Step 8): URL carries ONLY mode + opaque token.
+const convergenceMode = computed(() => String(route.query.mode ?? '') === 'convergence');
+const prepareToken = computed(() => String(route.query.prepareToken ?? ''));
+// Cross-actor approval: the server enforces the final authorization; the
+// snapshot capability gates the buttons, and self-approval is always denied.
+const canApprove = computed(
+  () => authorization.canApproveValuesRevision && editor.currentRevision?.status === 'pending_approval',
+);
+const selfApproval = computed(
+  () => editor.currentRevision !== null && editor.currentRevision.createdByUserId === auth.user?.id,
+);
 
 watch(
-  [releaseDefinitionId, clusterId, canWrite],
-  async ([definitionId, nextClusterId, writable]) => {
+  [releaseDefinitionId, clusterId, canWrite, convergenceMode, prepareToken],
+  async ([definitionId, nextClusterId, writable, isConvergence, token]) => {
     editor.resetScope(definitionId, nextClusterId);
     editor.setEditable(writable);
-    await editor.load();
+    const organizationId = auth.activeOrganization?.id ?? '';
+    if (organizationId && customerId.value) {
+      void authorization.load(organizationId, customerId.value);
+    }
+    if (isConvergence && token) {
+      await editor.loadConvergence(token);
+    } else {
+      await editor.load();
+    }
   },
   { immediate: true },
 );
@@ -54,7 +78,19 @@ async function reloadParent(): Promise<void> {
   }
 }
 
-onBeforeUnmount(() => editor.dispose());
+function requestDiscard(): void {
+  discardConfirmOpen.value = true;
+}
+
+async function confirmDiscard(): Promise<void> {
+  discardConfirmOpen.value = false;
+  await editor.discard();
+}
+
+onBeforeUnmount(() => {
+  editor.dispose();
+  authorization.reset();
+});
 </script>
 
 <template>
@@ -124,14 +160,34 @@ onBeforeUnmount(() => editor.dispose());
         @update="updateSecretRef"
       />
 
-      <div v-if="!readOnly" class="save-bar">
-        <p v-if="editor.currentRevision" class="status-line">
-          <span :class="['status', `status--${editor.currentRevision.status}`]">{{ editor.currentRevision.status }}</span>
-          <code>{{ editor.currentRevision.valuesDigest }}</code>
-        </p>
-        <button type="button" class="primary" :disabled="editor.saveDisabled" @click="editor.save">
-          {{ editor.saving ? '保存中…' : '保存为 Draft' }}
-        </button>
+      <ConvergenceLockedPathsPanel
+        v-if="editor.convergenceMode"
+        :locked-paths="editor.lockedPaths"
+        :task-ids="editor.preparedTaskIds"
+      />
+
+      <ValuesRevisionActions
+        :revision="editor.currentRevision"
+        :saving="editor.saving"
+        :approving="editor.approving"
+        :discarding="editor.discarding"
+        :save-disabled="editor.saveDisabled"
+        :can-approve="canApprove"
+        :self-approval="selfApproval"
+        :read-only="readOnly"
+        @save="editor.save"
+        @submit="editor.submit"
+        @approve="editor.approve"
+        @reject="editor.reject"
+        @discard="requestDiscard"
+      />
+
+      <div v-if="discardConfirmOpen" class="discard-dialog" role="dialog" aria-modal="true" aria-label="确认丢弃 Draft">
+        <p>确认丢弃当前 Draft？绑定的 {{ editor.preparedTaskIds.length }} 个收敛任务将被解绑。</p>
+        <div class="discard-actions">
+          <button type="button" @click="discardConfirmOpen = false">取消</button>
+          <button type="button" class="danger" @click="confirmDiscard">确认丢弃</button>
+        </div>
       </div>
     </template>
 
@@ -171,6 +227,10 @@ onBeforeUnmount(() => editor.dispose());
 .status--rejected { background: #fee2e2; color: #991b1b; }
 .status--superseded { background: #e2e8f0; color: #475569; }
 .status--pending_approval { background: #fef3c7; color: #92400e; }
+.discard-dialog { display: grid; gap: 0.75rem; padding: 1rem; border: 1px solid #fca5a5; border-radius: 0.65rem; background: #fef2f2; }
+.discard-actions { display: flex; justify-content: flex-end; gap: 0.6rem; }
+.discard-actions button { min-height: 2.4rem; padding: 0.45rem 0.8rem; border: 1px solid #cbd5e1; border-radius: 0.4rem; background: #fff; }
+.discard-actions button.danger { border-color: #b91c1c; background: #b91c1c; color: #fff; }
 @media (max-width: 72rem) { .editor-grid { grid-template-columns: 1fr; } }
 @media (max-width: 48rem) { .values-page__header, .save-bar { flex-direction: column; } }
 </style>

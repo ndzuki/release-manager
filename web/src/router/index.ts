@@ -56,6 +56,19 @@ export function createAppRouter(
             name: 'OperationDetail',
             component: () => import('@/pages/OperationDetailPage.vue'),
             meta: { requiresAuth: true, feature: 'releaseOperations' },
+          }, {
+            // Emergency change entry (REQ-058 Step 6). The kill switch and
+            // capability are server-authoritative (Authorization Snapshot);
+            // the page resolves 403/404 — the guard only enforces auth here.
+            path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/emergency',
+            name: 'EmergencyChange',
+            component: () => import('@/pages/EmergencyChangePage.vue'),
+            meta: { requiresAuth: true, feature: 'releaseOperations' },
+          }, {
+            path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/emergency/convergence',
+            name: 'ConvergenceTasks',
+            component: () => import('@/pages/ConvergenceTasksPage.vue'),
+            meta: { requiresAuth: true, feature: 'releaseOperations' },
           }]
         : []),
       {

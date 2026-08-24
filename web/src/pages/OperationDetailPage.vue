@@ -1,16 +1,24 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import CancelOperationDialog from '@/components/operations/CancelOperationDialog.vue';
 import DisconnectBanner from '@/components/operations/DisconnectBanner.vue';
 import OperationTimeline from '@/components/operations/OperationTimeline.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import EmergencyResultPanel from '@/components/emergency/EmergencyResultPanel.vue';
+import { getEmergencyResult } from '@/connect/emergency-api';
+import { useEmergencyEffectObservation } from '@/composables/useEmergencyEffectObservation';
+import { useAuthStore } from '@/stores/auth';
+import { useEmergencyAuthorizationStore } from '@/stores/emergencyAuthorization';
 import { useOperationTimelineStore } from '@/stores/operationTimeline';
+import type { EmergencyResultDisplay } from '@/features/emergency/model';
 
 const route = useRoute();
+const router = useRouter();
 const store = useOperationTimelineStore();
+const authStore = useAuthStore();
 const operationId = computed(() => String(route.params.operationId ?? ''));
 const releaseName = computed(() => String(route.query.releaseName ?? route.params.releaseId ?? 'Release'));
 // Full route scope: a same operationId under a different customer/cluster/
@@ -25,6 +33,58 @@ const liveUpdatesEnabled = import.meta.env.VITE_OPERATION_LIVE_UPDATES !== 'fals
 
 // Configure store-level seams once (production defaults, no-ops).
 store.configure({ liveUpdatesEnabled: () => liveUpdatesEnabled });
+
+// ── Emergency result observation (TASK-058 Step 5 seam) ────────────────────
+// The EmergencyResultPanel restores the full result from GetOperation alone
+// (AC-058-20) and re-fetches whenever the authoritative stateVersion moves
+// (late Result resolution increments it — AC-058-22). UNKNOWN observation
+// reuses the operationTimeline watch lifecycle (D3/D10).
+const authorization = useEmergencyAuthorizationStore();
+const emergencyResult = ref<EmergencyResultDisplay | null>(null);
+const effectObservation = useEmergencyEffectObservation();
+
+const isEmergency = computed(() => store.operation?.operationType === 'EMERGENCY');
+
+async function loadEmergencyResult(): Promise<void> {
+  const currentId = operationId.value;
+  if (!currentId || !isEmergency.value) return;
+  try {
+    const result = await getEmergencyResult(currentId);
+    if (operationId.value !== currentId) return;
+    emergencyResult.value = result;
+  } catch {
+    // The summary/timeline already surface stream errors; the panel simply
+    // keeps the last authoritative result when the fetch fails transiently.
+  }
+}
+
+watch(
+  () => [operationId.value, isEmergency.value],
+  () => {
+    emergencyResult.value = null;
+    const organizationId = authStore.activeOrganization?.id ?? '';
+    const customerId = String(route.params.customerId ?? '');
+    if (organizationId && customerId) {
+      void authorization.load(organizationId, customerId);
+    }
+    if (isEmergency.value) {
+      void loadEmergencyResult();
+      effectObservation.start(operationId.value, () => liveUpdatesEnabled);
+    } else {
+      effectObservation.stop();
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => store.operation?.stateVersion,
+  (current, previous) => {
+    if (isEmergency.value && current !== previous) {
+      void loadEmergencyResult();
+    }
+  },
+);
 
 const cancelTrigger = ref<HTMLButtonElement | null>(null);
 let lastFocused: HTMLElement | null = null;
@@ -52,7 +112,22 @@ watch(routeScope, (current, previous) => {
   }
   void store.load(nextOperationId);
 }, { immediate: true });
-onBeforeUnmount(store.reset);
+onBeforeUnmount(() => {
+  effectObservation.stop();
+  store.reset();
+  authorization.reset();
+});
+
+function openConvergence(): void {
+  void router.push({
+    name: 'ConvergenceTasks',
+    params: {
+      customerId: String(route.params.customerId ?? ''),
+      clusterId: String(route.params.clusterId ?? ''),
+      releaseId: String(route.params.releaseId ?? ''),
+    },
+  });
+}
 
 function formatTimestamp(value: string | null): string {
   return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(value)) : '—';
@@ -156,6 +231,16 @@ function formatTimestamp(value: string | null): string {
         <div><dt>更新时间</dt><dd>{{ formatTimestamp(store.operation?.updatedAt ?? null) }}</dd></div>
         <div><dt>终止时间</dt><dd>{{ formatTimestamp(store.operation?.terminalAt ?? null) }}</dd></div>
       </dl>
+
+      <EmergencyResultPanel
+        v-if="isEmergency"
+        :result="emergencyResult"
+        :operation-state="store.operation?.state ?? ''"
+        :operation-effect-status="store.operation?.effectStatus ?? ''"
+        :observation-status="effectObservation.status.value"
+        :can-create-values-revision="authorization.canCreateValuesRevision"
+        @open-convergence="openConvergence"
+      />
 
       <OperationTimeline
         :entries="store.entries"

@@ -197,4 +197,20 @@ describe('auth route guard', () => {
 
     expect(router.currentRoute.value.name).toBe('NotFound');
   });
+
+  it('registers the emergency and convergence routes (REQ-058 Step 6)', () => {
+    const router = createAppRouter(createMemoryHistory(), true, true, true);
+
+    const emergency = router.resolve('/customers/customer-1/clusters/cluster-1/releases/definition-1/emergency');
+    expect(emergency.name).toBe('EmergencyChange');
+    expect(emergency.meta.requiresAuth).toBe(true);
+
+    const convergence = router.resolve('/customers/customer-1/clusters/cluster-1/releases/definition-1/emergency/convergence');
+    expect(convergence.name).toBe('ConvergenceTasks');
+    expect(convergence.meta.requiresAuth).toBe(true);
+
+    // Operations flag off → the emergency entry group is not registered.
+    const disabled = createAppRouter(createMemoryHistory(), true, true, false);
+    expect(disabled.resolve('/customers/customer-1/clusters/cluster-1/releases/definition-1/emergency').name).toBe('NotFound');
+  });
 });

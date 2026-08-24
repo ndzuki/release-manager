@@ -14,6 +14,11 @@ export default defineConfig({
     environment: 'happy-dom',
     globals: true,
     restoreMocks: true,
+    // Playwright E2E specs live in e2e/ and are executed by `npm run test:e2e`
+    // (ADR-013: browser flows go through the formal API), never by vitest —
+    // vitest's default include `**/*.spec.ts` would otherwise pick them up and
+    // fail the full `npm test` gate.
+    exclude: ['e2e/**', 'playwright/**', 'node_modules/**'],
   },
   server: {
     port: 5173,

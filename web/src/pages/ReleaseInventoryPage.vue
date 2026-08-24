@@ -6,11 +6,13 @@ import ErrorState from '@/components/common/ErrorState.vue';
 import ReleaseInventorySkeleton from '@/components/releases/ReleaseInventorySkeleton.vue';
 import ReleaseInventoryTable from '@/components/releases/ReleaseInventoryTable.vue';
 import { useAuthStore } from '@/stores/auth';
+import { useEmergencyAuthorizationStore } from '@/stores/emergencyAuthorization';
 import { useReleaseInventoryStore, type StatusFilter } from '@/stores/releaseInventory';
 
 const route = useRoute();
 const auth = useAuthStore();
 const inventory = useReleaseInventoryStore();
+const authorization = useEmergencyAuthorizationStore();
 const cacheMaxAgeMs = 5 * 60 * 1000;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -21,6 +23,21 @@ const clusterName = computed(() => String(route.query.clusterName ?? clusterId.v
 const canSync = computed(() => auth.user?.roles.some((role) => ['platform_admin', 'release_admin', 'deployer'].includes(role)) === true);
 const operationsEnabled = import.meta.env.VITE_ENABLE_RELEASE_OPERATIONS !== 'false';
 const canCreateOperation = computed(() => operationsEnabled && auth.canCreateReleaseOperation);
+
+// One scoped Authorization Snapshot per page — the emergency/convergence
+// entry columns derive from it; no per-row authorization RPC (AC-058-04/08).
+watch(
+  [customerId],
+  ([nextCustomerId]) => {
+    const organizationId = auth.activeOrganization?.id ?? '';
+    if (organizationId && nextCustomerId) {
+      void authorization.load(organizationId, nextCustomerId);
+    } else {
+      authorization.reset();
+    }
+  },
+  { immediate: true },
+);
 
 watch(
   [customerId, clusterId],
@@ -39,6 +56,7 @@ onActivated(() => {
 
 onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer);
+  authorization.reset();
 });
 
 async function handleStatusChange(event: Event): Promise<void> {
@@ -122,6 +140,8 @@ function handleSearchInput(event: Event): void {
         v-else
         :releases="inventory.releases"
         :can-create-operation="canCreateOperation"
+        :can-emergency="authorization.canExecuteEmergency"
+        :can-convergence="authorization.canCreateValuesRevision"
         :customer-id="customerId"
         :cluster-id="clusterId"
         :customer-name="customerName"
