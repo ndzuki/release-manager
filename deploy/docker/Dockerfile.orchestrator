@@ -14,4 +14,7 @@ USER nonroot:nonroot
 WORKDIR /data
 COPY --from=builder /out/release-orchestrator /release-orchestrator
 EXPOSE 8083
-ENTRYPOINT ["/release-orchestrator", "--config", "/configs/orchestrator.dev.yaml", "--db", "/data/release-manager.db"]
+# Args come from the Kustomize Deployment (config path + env); the historical
+# --db flag was removed upstream (config-file database.driver), so the
+# ENTRYPOINT must not pass it — the flag package rejects unknown flags.
+ENTRYPOINT ["/release-orchestrator"]

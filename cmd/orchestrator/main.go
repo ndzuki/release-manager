@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -599,8 +600,20 @@ func loadSourceRegistries(logger *slog.Logger) []orchestrator.SourceRegistry {
 func main() {
 	configPath := flag.String("config", "configs/orchestrator.dev.yaml", "path to config file")
 	targetEnv := flag.String("target-env", "staging", "target environment (production, staging)")
-	signingKey := flag.String("signing-key", "change-me-in-production", "JWT signing key")
+	// REQ-065 D3: the dev lifecycle injects the JWT signing key through the
+	// release-manager-jwt Secret as the JWT_SIGNING_KEY env var; the flag
+	// default falls back to it so the Kustomize Deployment needs no static
+	// key in args (Kubernetes cannot expand secretKeyRef values in args).
+	signingKey := flag.String("signing-key", envOr("JWT_SIGNING_KEY", "change-me-in-production"), "JWT signing key")
 	flag.Parse()
 
 	app.Run(*configPath, &orchSvc{targetEnv: *targetEnv, configPath: *configPath, signingKey: *signingKey})
+}
+
+// envOr returns the environment value or the fallback when unset.
+func envOr(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }

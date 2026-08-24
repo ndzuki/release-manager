@@ -26,10 +26,11 @@ spec:
           args:
             - --config
             - /configs/orchestrator.dev.yaml
-            # JWT validation key from the release-manager-jwt Secret (D3);
-            # Kubernetes expands $(JWT_SIGNING_KEY) from the env entry below.
-            - --signing-key
-            - $(JWT_SIGNING_KEY)
+          # D3: the JWT signing key travels via the JWT_SIGNING_KEY env var
+          # (release-manager-jwt Secret); cmd/orchestrator falls back to it
+          # for the --signing-key flag default. Kubernetes cannot expand
+          # secretKeyRef values inside args; the key rotation rolls the
+          # Deployment via the Secret hash.
           env:
             - name: JWT_SIGNING_KEY
               valueFrom:

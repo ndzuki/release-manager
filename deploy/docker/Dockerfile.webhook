@@ -14,4 +14,7 @@ USER nonroot:nonroot
 WORKDIR /data
 COPY --from=builder /out/release-webhook /release-webhook
 EXPOSE 8082
-ENTRYPOINT ["/release-webhook", "--config", "/configs/webhook.dev.yaml", "--db", "/data/webhook.db"]
+# Args come from the Kustomize Deployment (config path + env); the historical
+# --db flag was removed upstream (config-file database.driver), so the
+# ENTRYPOINT must not pass it — the flag package rejects unknown flags.
+ENTRYPOINT ["/release-webhook"]

@@ -14,4 +14,7 @@ USER nonroot:nonroot
 WORKDIR /data
 COPY --from=builder /out/release-auth /release-auth
 EXPOSE 8085
-ENTRYPOINT ["/release-auth", "--config", "/configs/auth.dev.yaml", "--db", "/data/release-manager.db"]
+# Args come from the Kustomize Deployment (config path + env); the historical
+# --db flag was removed upstream (config-file database.driver), so the
+# ENTRYPOINT must not pass it — the flag package rejects unknown flags.
+ENTRYPOINT ["/release-auth"]

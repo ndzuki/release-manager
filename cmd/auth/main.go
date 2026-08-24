@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"connectrpc.com/connect"
@@ -216,8 +217,20 @@ func authReadOnlyProcedures() map[string]struct{} {
 }
 func main() {
 	configPath := flag.String("config", "configs/auth.dev.yaml", "path to config file")
-	signingKey := flag.String("signing-key", "change-me-in-production", "JWT signing key")
+	// REQ-065 D3: the dev lifecycle injects the JWT signing key through the
+	// release-manager-jwt Secret as the JWT_SIGNING_KEY env var; the flag
+	// default falls back to it so the Kustomize Deployment needs no static
+	// key in args (Kubernetes cannot expand secretKeyRef values in args).
+	signingKey := flag.String("signing-key", envOr("JWT_SIGNING_KEY", "change-me-in-production"), "JWT signing key")
 	flag.Parse()
 
 	app.Run(*configPath, &authSvc{signingKey: *signingKey})
+}
+
+// envOr returns the environment value or the fallback when unset.
+func envOr(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }
