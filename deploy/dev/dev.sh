@@ -268,7 +268,8 @@ k3s_images_prewarm() {
     "rancher/mirrored-library-traefik:2.11.18"
     "rancher/mirrored-metrics-server:v0.7.2"
     "rancher/mirrored-library-busybox:1.36.1"
-    "rancher/local-path-provisioner:v0.0.31"
+    "rancher/klipper-helm:v0.9.3-build20241008"
+    "rancher/local-path-provisioner:v0.0.30"
   )
   local image
   for image in "${images[@]}"; do
