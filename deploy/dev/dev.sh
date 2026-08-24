@@ -157,6 +157,24 @@ require_readyz() {
   log "  $service       http://localhost:$port/readyz  200"
 }
 
+# require_tcp_ready <service> <port> — readiness for non-HTTP listeners
+# (the operator mTLS gateway): the port must accept TCP connections within
+# DEV_TIMEOUT_READY (AC-065-10/28).
+require_tcp_ready() {
+  local service="$1"
+  local port="$2"
+  local deadline=$((SECONDS + DEV_TIMEOUT_READY))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+      exec 3>&- 2>/dev/null || true
+      log "  $service       localhost:$port            tcp-open"
+      return 0
+    fi
+    sleep 2
+  done
+  fail "$ERR_SERVICE_UNHEALTHY" "$service gateway did not accept TCP on port $port"
+}
+
 # ---------------------------------------------------------------------------
 # JWT signing key (REQ-065 D3): local profile generates/reuses a 0600
 # data/dev-jwt/jwt-signing-key.pem before deployment; the ci profile injects
@@ -501,7 +519,11 @@ readiness() {
   log "[6/7] readiness ......................... "
   require_readyz webhook 8082
   require_readyz orchestrator 8083
-  require_readyz operator 8084
+  # operator 8084 is the orchestrator's mTLS agent gateway (HTTPS), not an
+  # HTTP /readyz endpoint (real smoke 2026-08-24: plain-HTTP probes get
+  # "Client sent an HTTP request to an HTTPS server"). Readiness = the
+  # gateway accepts TCP connections; agents enroll there.
+  require_tcp_ready operator 8084
   require_readyz auth 8085
   require_readyz notifier 8086
   # web has no /readyz; the root page is the probe.
