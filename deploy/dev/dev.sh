@@ -243,8 +243,11 @@ registry_up() {
   fi
   ownership_add docker_containers "$REGISTRY_CONTAINER"
   # First creation pulls registry:3 and starts the container; allow a wide
-  # readiness window (connection reset/refused until the daemon listens).
-  if ! curl --fail --silent --show-error --retry 90 --retry-delay 2 --retry-connrefused "http://127.0.0.1:${REGISTRY_PORT}/v2/" >/dev/null; then
+  # readiness window. Real smoke (2026-08-24): before the daemon listens the
+  # port accepts connections and then RESETS them — curl reports error 56
+  # (Recv failure), which --retry-connrefused alone does not retry; the
+  # readiness probe must therefore use --retry-all-errors (curl >= 7.71).
+  if ! curl --fail --silent --show-error --retry 90 --retry-delay 2 --retry-connrefused --retry-all-errors "http://127.0.0.1:${REGISTRY_PORT}/v2/" >/dev/null; then
     fail "$ERR_REGISTRY_UNREACHABLE" "registry http://127.0.0.1:${REGISTRY_PORT}/v2/ is unavailable"
   fi
   log "  local registry .................... localhost:${REGISTRY_PORT}"
