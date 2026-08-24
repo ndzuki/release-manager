@@ -13,3 +13,11 @@ mirrors:
   "localhost:5001":
     endpoint:
       - http://k3d-release-manager-registry:5000
+  # CN hosts cannot reach registry-1.docker.io: k3s component images (pause,
+  # coredns, traefik, metrics-server, ...) are pre-warmed into the local
+  # registry by dev.sh (k3s_images_prewarm) and this mirror routes every
+  # docker.io reference through it. containerd keeps the docker.io path, so
+  # the pre-warmed names must be the full `rancher/mirrored-*` names.
+  "docker.io":
+    endpoint:
+      - http://k3d-release-manager-registry:5000

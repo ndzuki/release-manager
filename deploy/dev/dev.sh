@@ -250,7 +250,43 @@ registry_up() {
   if ! curl --fail --silent --show-error --retry 90 --retry-delay 2 --retry-connrefused --retry-all-errors "http://127.0.0.1:${REGISTRY_PORT}/v2/" >/dev/null; then
     fail "$ERR_REGISTRY_UNREACHABLE" "registry http://127.0.0.1:${REGISTRY_PORT}/v2/ is unavailable"
   fi
+  k3s_images_prewarm
   log "  local registry .................... localhost:${REGISTRY_PORT}"
+}
+
+# k3s_images_prewarm — CN-host adaptation (real smoke 2026-08-24): k3d nodes
+# pull k3s component images (pause/coredns/traefik/metrics-server/...) from
+# docker.io at pod-start time, which is unreachable from CN hosts — every pod
+# stays ContainerCreating on the pause sandbox. These images are therefore
+# pre-warmed into the local registry under their full `rancher/mirrored-*`
+# names; the docker.io mirror in deploy/k3d/registries.yaml routes node pulls
+# through it. Already-present manifests are skipped (idempotent, AC-065-02).
+k3s_images_prewarm() {
+  local images=(
+    "rancher/mirrored-pause:3.6"
+    "rancher/mirrored-coredns-coredns:1.12.0"
+    "rancher/mirrored-library-traefik:2.11.18"
+    "rancher/mirrored-metrics-server:v0.7.2"
+    "rancher/mirrored-library-busybox:1.36.1"
+    "rancher/local-path-provisioner:v0.0.31"
+  )
+  local image
+  for image in "${images[@]}"; do
+    if docker manifest inspect "localhost:${REGISTRY_PORT}/$image" >/dev/null 2>&1; then
+      continue
+    fi
+    if ! docker image inspect "$image" >/dev/null 2>&1; then
+      # pull through the user-configured mirror when Docker Hub is unreachable.
+      if ! docker pull "$image" >/dev/null 2>&1; then
+        fail "$ERR_REGISTRY_UNREACHABLE" "cannot obtain k3s component image $image (docker.io unreachable and not cached); pre-pull it or set a docker mirror"
+      fi
+    fi
+    docker tag "$image" "localhost:${REGISTRY_PORT}/$image" >/dev/null
+    if ! docker push "localhost:${REGISTRY_PORT}/$image" >/dev/null; then
+      fail "$ERR_DOCKER_PUSH_FAILED" "push failed for $image"
+    fi
+    log "  prewarmed $image"
+  done
 }
 
 # ---------------------------------------------------------------------------
