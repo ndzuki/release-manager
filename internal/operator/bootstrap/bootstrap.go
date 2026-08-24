@@ -124,7 +124,7 @@ func enrollAndPersist(ctx context.Context, cfg Config, token string, logger *slo
 		return nil, fmt.Errorf("generate identity key and CSR: %w", err)
 	}
 
-	operatorID := newOperatorID()
+	operatorID := ""
 	backoff := 1 * time.Second
 	const maxBackoff = 30 * time.Second
 	for attempt := 0; ; attempt++ {
@@ -132,10 +132,13 @@ func enrollAndPersist(ctx context.Context, cfg Config, token string, logger *slo
 			EnrollmentToken: token,
 			CustomerId:      cfg.CustomerID,
 			ClusterId:       cfg.ClusterID,
-			OperatorId:      operatorID,
 			CsrPem:          csrPEM,
 		}))
 		if err == nil {
+			// operator_id is center-generated (REQ-015 决策 4, AC-015-04):
+			// the agent has no self-report channel and adopts the identity
+			// returned by the server.
+			operatorID = resp.Msg.GetOperatorId()
 			identity := &localstore.Identity{
 				OperatorID:     operatorID,
 				OperatorName:   operatorName(cfg),

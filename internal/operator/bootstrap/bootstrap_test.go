@@ -89,6 +89,7 @@ func enrollResponse() *connect.Response[operatorv1.EnrollResponse] {
 		SessionId:      "sess-1",
 		TtlSeconds:     600,
 		CertificatePem: []byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"),
+		OperatorId:     "op-center-1",
 	})
 }
 
