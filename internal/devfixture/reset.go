@@ -175,6 +175,12 @@ func (r *runner) runPhases(ctx context.Context) error {
 			return err
 		}
 		r.cfg.log().Info("phase committed", "phase", phase.name)
+		// StopAfterPhase: clean early exit once the named phase is committed
+		// (dev.sh splits the seed around the enrollment phase).
+		if r.cfg.StopAfterPhase != "" && phase.name == r.cfg.StopAfterPhase {
+			r.cfg.log().Info("stopping after phase (requested)", "phase", phase.name)
+			return nil
+		}
 	}
 	return nil
 }

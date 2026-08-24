@@ -536,3 +536,39 @@ func TestLoadCredentialsFileEnforcesPasswordCharset(t *testing.T) {
 	_, ok = loadCredentialsFile(path)
 	require.False(t, ok)
 }
+
+// TestRun_StopAfterPhaseCommitsUpToAndStops covers the split-seed contract:
+// --stop-after enrollment commits identity..enrollment, leaves install and
+// verify uncommitted, exits cleanly (no partial marker), and a subsequent
+// plain Run resumes at the install phase.
+func TestRun_StopAfterPhaseCommitsUpToAndStops(t *testing.T) {
+	fakes := newFakeServices()
+	r := testRunner(t, fakes, func(c *Config) { c.StopAfterPhase = "enrollment" })
+
+	manifest, err := r.run(context.Background())
+	require.NoError(t, err)
+	require.Nil(t, manifest) // verify never ran: no readback manifest yet
+	p := loadProgressFile(t, r.cfg.DataDir)
+	require.False(t, p.Partial, "stop-after is a clean exit, not a failure")
+	for _, phase := range []string{"identity", "routing", "accounts", "trust", "bundle", "values", "enrollment"} {
+		require.Equal(t, "committed", p.Phases[phase].Status, "phase %s", phase)
+	}
+	_, ok := p.Phases["install"]
+	require.False(t, ok, "install must not run under --stop-after enrollment")
+
+	// Resume: a plain run completes install + verify.
+	r2 := testRunner(t, fakes, func(c *Config) {
+		c.DataDir = r.cfg.DataDir
+	})
+	manifest2, err := r2.run(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, manifest2)
+	p2 := loadProgressFile(t, r.cfg.DataDir)
+	require.Equal(t, "committed", p2.Phases["install"].Status)
+	require.Equal(t, "committed", p2.Phases["verify"].Status)
+	// No duplicate writes for the phases committed before the split: the
+	// deployer (authenticate) and reader (accounts phase) are each created
+	// exactly once across both runs.
+	require.Equal(t, 2, fakes.orch.count("CreateCustomer"))
+	require.Equal(t, 2, fakes.auth.createCalls)
+}

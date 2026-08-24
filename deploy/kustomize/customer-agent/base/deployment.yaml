@@ -21,10 +21,10 @@ spec:
       securityContext:
         fsGroup: 65532
       hostAliases:
-        # Placeholder Docker IPs — replace with the real k3d network addresses
-        # of the management node and the registry container (REQ-065). The
-        # agent dials the management gateway and pulls images from the registry
-        # through these cluster-local aliases.
+        # Placeholder IPs replaced by dev.sh agents_up at apply time with the
+        # real Docker network addresses of the management cluster node and the
+        # registry container (REQ-065). The agent dials the management gateway
+        # and pulls images through these cluster-local aliases.
         - ip: "172.18.0.2"
           hostnames:
             - operator-gateway.dev.release-manager.local

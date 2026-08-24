@@ -34,6 +34,7 @@ func main() {
 	flag.BoolVar(&printFixtureVersion, "print-fixture-version", false, "print the authoritative fixture version constant and exit (AC-065-30)")
 	flag.IntVar(&operatorTimeoutSecs, "operator-timeout", 0, "operator-online wait timeout in seconds (env DEV_TIMEOUT_OPERATOR, default 180; AC-065-28)")
 	flag.IntVar(&seedRetries, "seed-retries", 0, "seed phase-write retry count with 1s/2s/4s backoff (env DEV_TIMEOUT_SEED_RETRIES, default 3; AC-065-28)")
+	flag.StringVar(&cfg.StopAfterPhase, "stop-after", "", "commit phases up to and including this phase, then exit cleanly (e.g. enrollment; dev.sh resumes with a later run)")
 	flag.BoolVar(&resetMode, "reset", false, "rebuild databases and re-seed (dev-reset-data)")
 	flag.StringVar(&cfg.OrchestratorURL, "orchestrator", defaultOrchestratorURL, "Orchestrator Connect URL")
 	flag.StringVar(&cfg.WebhookURL, "webhook", defaultWebhookURL, "Webhook Connect URL")

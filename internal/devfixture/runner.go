@@ -379,6 +379,21 @@ func (r *runner) run(ctx context.Context) (*Manifest, error) {
 		return r.manifest, nil
 	}
 
+	// Resuming into the install phase (values already committed) needs the
+	// in-memory definition/bundle records that the values/bundle phases
+	// normally populate: hydrate them from the server readback and the
+	// persisted progress extras (split-seed resume contract, AC-065-03).
+	if r.progress.Phases["values"].Status == "committed" && r.progress.Phases["install"].Status != "committed" {
+		r.state.definitions = map[string]definitionRecord{}
+		if err := r.readbackDefinitions(ctx); err != nil {
+			return nil, err
+		}
+		r.state.bundle = bundleRecord{
+			id:     r.progress.Phases["bundle"].BundleID,
+			digest: r.progress.Phases["bundle"].BundleDigest,
+		}
+	}
+
 	if err := r.runPhases(ctx); err != nil {
 		r.markPartial()
 		return nil, err

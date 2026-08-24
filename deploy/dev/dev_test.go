@@ -279,15 +279,36 @@ func fakeK3d(t *testing.T, binDir, stateDir string) {
 func happyShims(t *testing.T, binDir string) {
 	t.Helper()
 	// docker: `container inspect` reports the object does not exist (the
-	// registry container is only created by the fake k3d); other verbs
-	// (start/rm) pass through.
-	writeShim(t, binDir, "docker", "#!/usr/bin/env bash\nfor a in \"$@\"; do if [ \"$a\" = \"inspect\" ]; then exit 1; fi; done\nexit 0\n")
+	// registry container is only created by the fake k3d) EXCEPT for the
+	// --format IP probes used by agents_up (management node / registry
+	// hostAliases); other verbs (start/rm) pass through.
+	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then
+  if [ "$3" = "--format" ]; then
+    case "${5}" in
+      k3d-release-manager-control-server-0) printf '172.18.0.2\n'; exit 0 ;;
+      k3d-release-manager-registry) printf '172.18.0.3\n'; exit 0 ;;
+      *) exit 1 ;;
+    esac
+  fi
+  exit 1
+fi
+exit 0
+`)
 	writeShim(t, binDir, "curl", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "kubectl", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
-	// go: answer the GOPROXY probe dev.sh forwards as a build-arg; the
-	// seed path (go run ./cmd/devseed) just needs exit 0.
-	writeShim(t, binDir, "go", "#!/usr/bin/env bash\nif [ \"$1\" = \"env\" ]; then printf 'https://proxy.golang.org,direct\\n'; fi\nexit 0\n")
+	// go: answer the GOPROXY probe dev.sh forwards as a build-arg; the seed
+	// path (go run ./cmd/devseed) writes the four enrollment tokens (the
+	// split-seed agents_up stage consumes them) and exits 0.
+	writeShim(t, binDir, "go", `#!/usr/bin/env bash
+if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
+mkdir -p "$DEV_DATA_DIR/dev-enrollment-tokens"
+for c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed; do
+  printf 'fake-token\n' > "$DEV_DATA_DIR/dev-enrollment-tokens/$c.token"
+done
+exit 0
+`)
 	// awk: consume stdin fully (real awk reads all input before exiting —
 	// an early exit SIGPIPEs the pipe writer), then answer the memory probe
 	// in MiB (24 GiB) or the df pipeline in KiB (500 GiB).
@@ -769,7 +790,25 @@ func TestDevSeedPassesTimeoutRetryOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeShim(t, binDir, "flock", "#!/usr/bin/env bash\nexit 0\n")
-	writeShim(t, binDir, "go", "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/go-calls.log\"\nif [ \"$1\" = \"env\" ]; then printf 'https://proxy.golang.org,direct\\n'; fi\nexit 0\n")
+	// The split-seed agents_up stage needs the enrollment tokens (written by
+	// the fake devseed below), the docker IP probes and kubectl/kustomize
+	// pass-throughs.
+	writeShim(t, binDir, "go", "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/go-calls.log\"\nif [ \"$1\" = \"env\" ]; then printf 'https://proxy.golang.org,direct\\n'; exit 0; fi\nmkdir -p \"$DEV_DATA_DIR/dev-enrollment-tokens\"\nfor c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed; do printf 'fake-token\\n' > \"$DEV_DATA_DIR/dev-enrollment-tokens/$c.token\"; done\nexit 0\n")
+	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then
+  if [ "$3" = "--format" ]; then
+    case "${5}" in
+      k3d-release-manager-control-server-0) printf '172.18.0.2\n'; exit 0 ;;
+      k3d-release-manager-registry) printf '172.18.0.3\n'; exit 0 ;;
+      *) exit 1 ;;
+    esac
+  fi
+  exit 1
+fi
+exit 0
+`)
+	writeShim(t, binDir, "kubectl", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
 	env = append(env, "DEV_TIMEOUT_OPERATOR=42", "DEV_TIMEOUT_SEED_RETRIES=7")
 
 	out, err := runDev(t, env, "seed")

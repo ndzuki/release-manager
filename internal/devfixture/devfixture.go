@@ -94,6 +94,13 @@ type Config struct {
 	OperatorOnlineTimeout time.Duration
 	SeedRetries           int
 
+	// StopAfterPhase ends the run cleanly once the named phase has been
+	// committed (no error, no partial marker). The lifecycle module uses
+	// `enrollment` to split the seed: it generates the tokens first,
+	// deploys/injects them into the customer agent clusters, then re-runs
+	// devseed to resume from the install phase (progress/resume contract).
+	StopAfterPhase string
+
 	Logger *slog.Logger
 	Now    func() time.Time // test hook; defaults to time.Now
 
