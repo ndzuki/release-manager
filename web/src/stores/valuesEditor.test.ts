@@ -4,10 +4,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useValuesEditorStore } from './valuesEditor';
 import type { ValuesRevision } from '@/types/valuesRevision';
 import {
+  approveValuesRevision,
   createValuesRevision,
+  discardValuesRevision,
   listSecrets,
   listValuesRevisions,
+  rejectValuesRevision,
+  submitValuesRevision,
 } from '@/connect/values-revision';
+import { getPrepareSession } from '@/connect/emergency-api';
 
 vi.mock('@/connect/values-revision', async (importOriginal) => {
   const original = await importOriginal<typeof import('@/connect/values-revision')>();
@@ -16,13 +21,23 @@ vi.mock('@/connect/values-revision', async (importOriginal) => {
     createValuesRevision: vi.fn(),
     listSecrets: vi.fn(),
     listValuesRevisions: vi.fn(),
+    submitValuesRevision: vi.fn(),
+    approveValuesRevision: vi.fn(),
+    rejectValuesRevision: vi.fn(),
+    discardValuesRevision: vi.fn(),
   };
+});
+
+vi.mock('@/connect/emergency-api', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/connect/emergency-api')>();
+  return { ...original, getPrepareSession: vi.fn() };
 });
 
 const parent: ValuesRevision = {
   id: 'parent-1', releaseDefinitionId: 'definition-1', revision: 1, stateVersion: '3',
   document: '{"replicas":1}', valuesDigest: 'sha256:parent', status: 'approved', parentRevisionId: null,
   secretRefs: [], createdByUserId: 'creator-1', createdAt: '2026-07-23T00:00:00Z',
+  convergenceTaskIds: [], lockedPaths: [],
 };
 
 const draft: ValuesRevision = {
@@ -133,6 +148,85 @@ describe('values editor store', () => {
     expect(store.secretRefsError).toBe('请完成 SecretRef 配置');
     expect(await store.save()).toBe(false);
     expect(createValuesRevision).not.toHaveBeenCalled();
+  });
+
+  it('loads the prepared convergence snapshot and never reads browser drafts (AC-058-35/48)', async () => {
+    window.localStorage.setItem('values_draft:definition-1', 'local: stale-draft');
+    vi.mocked(getPrepareSession).mockResolvedValue({
+      releaseDefinitionId: 'definition-1',
+      parentRevisionId: 'parent-1',
+      document: 'replicas: 5',
+      lockedPaths: ['replicas'],
+      expiresAt: '2026-08-22T10:00:00.000Z',
+      taskIds: ['t1', 't2'],
+      lockedPathsHash: 'hash-1',
+      parentVersion: 3n,
+    });
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1');
+
+    await store.loadConvergence('token-1');
+
+    expect(store.convergenceMode).toBe(true);
+    expect(store.editorContent).toBe('replicas: 5');
+    expect(store.lockedPaths).toEqual(['replicas']);
+    expect(store.preparedTaskIds).toEqual(['t1', 't2']);
+    expect(store.restoredDraft).toBe(false);
+    expect(window.localStorage.getItem(store.draftKey)).toBe('local: stale-draft');
+  });
+
+  it('creates a convergence draft with the token and consumes it once (AC-058-36/38)', async () => {
+    vi.mocked(getPrepareSession).mockResolvedValue({
+      releaseDefinitionId: 'definition-1',
+      parentRevisionId: 'parent-1',
+      document: 'replicas: 5',
+      lockedPaths: ['replicas'],
+      expiresAt: null,
+      taskIds: ['t1'],
+      lockedPathsHash: 'hash-1',
+      parentVersion: 3n,
+    });
+    vi.mocked(createValuesRevision).mockResolvedValue({ ...draft, document: 'replicas: 5' });
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1');
+    await store.loadConvergence('token-1');
+    vi.mocked(createValuesRevision).mockClear();
+
+    expect(await store.save()).toBe(true);
+    expect(createValuesRevision).toHaveBeenCalledWith(
+      expect.objectContaining({ prepareToken: 'token-1', expectedParentVersion: 3, parentRevisionId: 'parent-1' }),
+    );
+    expect(store.prepareToken).toBe('');
+    expect(store.toast).toContain('收敛 Draft');
+  });
+
+  it('wires the approval chain: submit/approve/reject/discard (AC-058-39~41)', async () => {
+    vi.mocked(listValuesRevisions).mockResolvedValue([draft, parent]);
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1');
+    await store.load();
+
+    const pending = { ...draft, status: 'pending_approval' as const };
+    const approved = { ...draft, status: 'approved' as const };
+    const rejected = { ...draft, status: 'rejected' as const };
+    const discarded = { ...draft, status: 'discarded' as const };
+
+    vi.mocked(submitValuesRevision).mockResolvedValue(pending);
+    expect(await store.submit()).toBe(true);
+    expect(submitValuesRevision).toHaveBeenCalledWith('draft-1', '1');
+    expect(store.currentRevision?.status).toBe('pending_approval');
+
+    vi.mocked(approveValuesRevision).mockResolvedValue(approved);
+    expect(await store.approve()).toBe(true);
+    expect(store.currentRevision?.status).toBe('approved');
+
+    vi.mocked(rejectValuesRevision).mockResolvedValue(rejected);
+    expect(await store.reject()).toBe(true);
+    expect(store.currentRevision?.status).toBe('rejected');
+
+    vi.mocked(discardValuesRevision).mockResolvedValue(discarded);
+    expect(await store.discard()).toBe(true);
+    expect(store.currentRevision?.status).toBe('discarded');
   });
 
 });

@@ -9,6 +9,7 @@ const draft: ValuesRevision = {
   id: 'draft-1', releaseDefinitionId: 'definition-1', revision: 2, stateVersion: '1',
   document: '{"replicas":2}', valuesDigest: 'sha256:draft', status: 'pending_approval', parentRevisionId: 'parent-1',
   secretRefs: [], createdByUserId: 'creator-1', createdAt: '2026-07-23T00:00:00Z',
+  convergenceTaskIds: [], lockedPaths: [],
 };
 
 describe('values editor presentation', () => {
@@ -33,7 +34,7 @@ describe('values editor presentation', () => {
   it('does not render approval actions for self approval', () => {
     const wrapper = mount(ValuesRevisionActions, {
       props: {
-        revision: draft, saving: false, approving: false, saveDisabled: false,
+        revision: draft, saving: false, approving: false, discarding: false, saveDisabled: false,
         canApprove: false, selfApproval: true, readOnly: false,
       },
     });
@@ -46,7 +47,7 @@ describe('values editor presentation', () => {
   it('renders approve and reject only for an eligible draft', () => {
     const wrapper = mount(ValuesRevisionActions, {
       props: {
-        revision: draft, saving: false, approving: false, saveDisabled: false,
+        revision: draft, saving: false, approving: false, discarding: false, saveDisabled: false,
         canApprove: true, selfApproval: false, readOnly: false,
       },
     });
@@ -64,6 +65,7 @@ describe('values editor presentation', () => {
         },
         saving: false,
         approving: false,
+        discarding: false,
         saveDisabled: true,
         canApprove: false,
         selfApproval: false,

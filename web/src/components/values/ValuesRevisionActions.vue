@@ -6,16 +6,17 @@ const props = defineProps<{
   revision: ValuesRevision | null;
   saving: boolean;
   approving: boolean;
+  discarding: boolean;
   saveDisabled: boolean;
   canApprove: boolean;
   selfApproval: boolean;
   readOnly: boolean;
 }>();
 
-const emit = defineEmits<{ save: []; approve: []; reject: [] }>();
+const emit = defineEmits<{ save: []; submit: []; approve: []; reject: []; discard: [] }>();
 
 const statusLabel = computed(() => ({
-  draft: 'Draft', pending_approval: 'Pending Approval', approved: 'Approved', rejected: 'Rejected', superseded: 'Superseded',
+  draft: 'Draft', pending_approval: 'Pending Approval', approved: 'Approved', rejected: 'Rejected', superseded: 'Superseded', discarded: 'Discarded',
 } satisfies Record<RevisionStatus, string>)[props.revision?.status ?? 'draft']);
 
 function formatTimestamp(value?: string): string {
@@ -39,8 +40,26 @@ function formatTimestamp(value?: string): string {
     </div>
 
     <div class="revision-actions__buttons">
-      <button v-if="!readOnly" type="button" class="primary" :disabled="saveDisabled" @click="emit('save')">
-        {{ saving ? '保存中…' : '保存为 Draft' }}
+      <button v-if="!readOnly && revision?.status === 'draft'" type="button" class="primary" :disabled="saveDisabled" @click="emit('save')">
+        {{ saving ? '保存中…' : '保存 Draft' }}
+      </button>
+      <button
+        v-if="!readOnly && revision?.status === 'draft'"
+        type="button"
+        class="primary"
+        :disabled="approving"
+        @click="emit('submit')"
+      >
+        {{ approving ? '提交中…' : 'Submit' }}
+      </button>
+      <button
+        v-if="!readOnly && revision?.status === 'draft'"
+        type="button"
+        class="secondary"
+        :disabled="discarding"
+        @click="emit('discard')"
+      >
+        {{ discarding ? '丢弃中…' : 'Discard' }}
       </button>
       <template v-if="canApprove && revision?.status === 'pending_approval'">
         <button type="button" class="success" :disabled="approving" @click="emit('approve')">
@@ -69,6 +88,7 @@ h2, p { margin: 0; }
 .revision-actions__buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.65rem; }
 button { min-height: 2.5rem; padding: 0.5rem 0.8rem; border: 1px solid #cbd5e1; border-radius: 0.45rem; background: #fff; cursor: pointer; }
 button.primary { border-color: #2563eb; background: #2563eb; color: #fff; }
+button.secondary { border-color: #b91c1c; color: #b91c1c; }
 button.success { border-color: #15803d; background: #15803d; color: #fff; }
 button.danger { border-color: #b91c1c; color: #b91c1c; }
 button:disabled { cursor: not-allowed; opacity: 0.6; }
