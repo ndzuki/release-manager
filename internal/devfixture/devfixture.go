@@ -77,6 +77,10 @@ type Config struct {
 	DeployerUser     string
 	DeployerPassword string // optional override; falls back to credentials file
 	ReaderPassword   string // optional override; generated in local mode
+	// E2ERunnerPassword is the e2e-runner (release_admin) password
+	// (REQ-066 下游义务, 批次4 D1/D3); optional override, generated in local
+	// mode, env-injected as E2E_RUNNER_PASSWORD in ci mode.
+	E2ERunnerPassword string
 
 	TrustEnvironment    string
 	TrustRootPrivateKey string // CI mode: PEM-encoded Ed25519 private key
@@ -189,11 +193,14 @@ func (c Config) withDefaults() Config {
 	if c.DataDir == "" {
 		c.DataDir = DefaultDataDir
 	}
+	// The REQ-065 development account names are part of the canonical
+	// fixture identity (AC-065-01/34: dev-admin / dev-deployer /
+	// dev-reader / e2e-runner); the defaults carry the contract names.
 	if c.AdminUser == "" {
-		c.AdminUser = "admin"
+		c.AdminUser = "dev-admin"
 	}
 	if c.DeployerUser == "" {
-		c.DeployerUser = "deployer"
+		c.DeployerUser = "dev-deployer"
 	}
 	if c.TrustEnvironment == "" {
 		c.TrustEnvironment = DefaultTrustEnv

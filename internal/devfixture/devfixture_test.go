@@ -44,8 +44,8 @@ func testRunner(t *testing.T, fakes *fakeServices, mutate ...func(*Config)) *run
 		AuthURL:           "http://auth.test",
 		DataDir:           t.TempDir(),
 		ChartDir:          filepath.Join(t.TempDir(), "missing-chart"),
-		AdminUser:         "admin",
-		DeployerUser:      "deployer",
+		AdminUser:         "dev-admin",
+		DeployerUser:      "dev-deployer",
 		InstallTimeout:    5 * time.Second,
 		InstallPollPeriod: time.Millisecond,
 		// Short operator-online deadline: offline-session cases poll a few
@@ -173,6 +173,19 @@ func TestRun_SeedsAllNinePhases(t *testing.T) {
 	var onDisk Manifest
 	require.NoError(t, json.Unmarshal(raw, &onDisk))
 	require.Equal(t, manifest.Bundle.ID, onDisk.Bundle.ID)
+
+	// AC-065-34: four development accounts with correct roles — e2e-runner
+	// carries release_admin (REQ-066 E2E write identity, 批次4 D1/D2).
+	require.Equal(t, []string{"release_admin"}, fakes.auth.users[e2eRunnerUser].GetRoles())
+	require.Equal(t, []string{"platform_admin"}, fakes.auth.users["dev-admin"].GetRoles())
+	require.Equal(t, []string{"deployer"}, fakes.auth.users["dev-deployer"].GetRoles())
+	require.Equal(t, []string{"viewer"}, fakes.auth.users[readerUser].GetRoles())
+	// The credentials file carries all four keys (AC-065-34).
+	credsRaw, err := os.ReadFile(filepath.Join(r.cfg.DataDir, credentialsFileName))
+	require.NoError(t, err)
+	for _, key := range []string{"DEV_ADMIN_PASSWORD", "DEV_DEPLOYER_PASSWORD", "DEV_READER_PASSWORD", "E2E_RUNNER_PASSWORD"} {
+		require.Truef(t, strings.Contains(string(credsRaw), key+"="), "credentials file missing %s", key)
+	}
 }
 
 func TestRun_RepeatedRunIsIdempotentAndUpToDate(t *testing.T) {
@@ -350,6 +363,7 @@ func TestRun_CIProfileUsesEnvSecretsAndWritesNoFiles(t *testing.T) {
 		c.AdminPassword = strings.Repeat("a", 32)
 		c.DeployerPassword = strings.Repeat("b", 32)
 		c.ReaderPassword = strings.Repeat("c", 32)
+		c.E2ERunnerPassword = strings.Repeat("d", 32)
 		c.TrustRootPrivateKey = testPrivateKeyPEM
 	})
 
@@ -530,17 +544,29 @@ func TestLoadCredentialsFileEnforcesPasswordCharset(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dev-credentials.env")
 	valid := "DEV_ADMIN_PASSWORD=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n" +
 		"DEV_DEPLOYER_PASSWORD=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n" +
-		"DEV_READER_PASSWORD=01234567890123456789012345678901\n"
+		"DEV_READER_PASSWORD=01234567890123456789012345678901\n" +
+		"E2E_RUNNER_PASSWORD=CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC\n"
 	require.NoError(t, os.WriteFile(path, []byte(valid), 0o600))
 	creds, ok := loadCredentialsFile(path)
 	require.True(t, ok)
 	require.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", creds.admin)
+	require.Equal(t, "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", creds.runner)
 
 	// Same length, but a '-' sneaks into the alphanumeric contract.
 	invalid := "DEV_ADMIN_PASSWORD=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-\n" +
 		"DEV_DEPLOYER_PASSWORD=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n" +
-		"DEV_READER_PASSWORD=01234567890123456789012345678901\n"
+		"DEV_READER_PASSWORD=01234567890123456789012345678901\n" +
+		"E2E_RUNNER_PASSWORD=CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC\n"
 	require.NoError(t, os.WriteFile(path, []byte(invalid), 0o600))
+	_, ok = loadCredentialsFile(path)
+	require.False(t, ok)
+
+	// Three keys (the pre-批次4 format) is stale: the file must carry all
+	// four accounts and is regenerated.
+	stale := "DEV_ADMIN_PASSWORD=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n" +
+		"DEV_DEPLOYER_PASSWORD=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n" +
+		"DEV_READER_PASSWORD=01234567890123456789012345678901\n"
+	require.NoError(t, os.WriteFile(path, []byte(stale), 0o600))
 	_, ok = loadCredentialsFile(path)
 	require.False(t, ok)
 }
@@ -575,8 +601,8 @@ func TestRun_StopAfterPhaseCommitsUpToAndStops(t *testing.T) {
 	require.Equal(t, "committed", p2.Phases["install"].Status)
 	require.Equal(t, "committed", p2.Phases["verify"].Status)
 	// No duplicate writes for the phases committed before the split: the
-	// deployer (authenticate) and reader (accounts phase) are each created
-	// exactly once across both runs.
+	// deployer (authenticate), reader and e2e-runner (accounts phase) are
+	// each created exactly once across both runs.
 	require.Equal(t, 2, fakes.orch.count("CreateCustomer"))
-	require.Equal(t, 2, fakes.auth.createCalls)
+	require.Equal(t, 3, fakes.auth.createCalls)
 }

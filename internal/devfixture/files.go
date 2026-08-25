@@ -64,11 +64,13 @@ func writeFileAtomic(path string, content []byte) error {
 	return nil
 }
 
-// credentials holds the three seeded account passwords (REQ-065).
+// credentials holds the four seeded account passwords (REQ-065; the
+// e2e-runner account is REQ-066's E2E write identity, 批次4 D1/D3).
 type credentials struct {
 	admin    string
 	deployer string
 	reader   string
+	runner   string
 }
 
 const passwordLength = 32
@@ -79,16 +81,18 @@ func (c credentials) envFile() []byte {
 DEV_ADMIN_PASSWORD=%s
 DEV_DEPLOYER_PASSWORD=%s
 DEV_READER_PASSWORD=%s
-`, c.admin, c.deployer, c.reader))
+E2E_RUNNER_PASSWORD=%s
+`, c.admin, c.deployer, c.reader, c.runner))
 }
 
-// generatePasswords returns three fresh random passwords using only
+// generatePasswords returns four fresh random passwords using only
 // alphanumeric characters (safe to embed unquoted in a shell env file).
 func generatePasswords() credentials {
 	return credentials{
 		admin:    randomPassword(),
 		deployer: randomPassword(),
 		reader:   randomPassword(),
+		runner:   randomPassword(),
 	}
 }
 
@@ -105,7 +109,18 @@ func randomPassword() string {
 	return string(buffer)
 }
 
-// loadCredentialsFile parses a valid dev-credentials.env: exactly the three
+// credentialFields maps dev-credentials.env keys to the credentials fields
+// (the four development accounts of REQ-065, AC-065-34).
+func credentialFields(result *credentials) map[string]*string {
+	return map[string]*string{
+		"DEV_ADMIN_PASSWORD":    &result.admin,
+		"DEV_DEPLOYER_PASSWORD": &result.deployer,
+		"DEV_READER_PASSWORD":   &result.reader,
+		"E2E_RUNNER_PASSWORD":   &result.runner,
+	}
+}
+
+// loadCredentialsFile parses a valid dev-credentials.env: exactly the four
 // KEY=VALUE lines with 32-character [A-Za-z0-9] values (REQ-065 D2). A
 // malformed file yields (zero, false) so the caller regenerates (REQ-065
 // reuse semantics).
@@ -115,6 +130,7 @@ func loadCredentialsFile(path string) (credentials, bool) {
 		return credentials{}, false
 	}
 	result := credentials{}
+	fields := credentialFields(&result)
 	seen := 0
 	for _, line := range strings.Split(string(raw), "\n") {
 		line = strings.TrimSpace(line)
@@ -122,22 +138,14 @@ func loadCredentialsFile(path string) (credentials, bool) {
 			continue
 		}
 		key, value, ok := strings.Cut(line, "=")
-		if !ok || !validPassword(value) {
+		field, known := fields[strings.TrimSpace(key)]
+		if !ok || !known || !validPassword(value) {
 			return credentials{}, false
 		}
-		switch strings.TrimSpace(key) {
-		case "DEV_ADMIN_PASSWORD":
-			result.admin = value
-		case "DEV_DEPLOYER_PASSWORD":
-			result.deployer = value
-		case "DEV_READER_PASSWORD":
-			result.reader = value
-		default:
-			return credentials{}, false
-		}
+		*field = value
 		seen++
 	}
-	if seen != 3 || result.admin == "" || result.deployer == "" || result.reader == "" {
+	if seen != len(fields) || result.admin == "" || result.deployer == "" || result.reader == "" || result.runner == "" {
 		return credentials{}, false
 	}
 	return result, true
@@ -186,7 +194,7 @@ func (r *runner) resolveCredentials(cfg Config) (credentials, error) {
 	return effective, nil
 }
 
-// ciCredentials requires all three passwords to be env-injected and never
+// ciCredentials requires all four passwords to be env-injected and never
 // touches the credentials file (REQ-065 CI profile).
 func ciCredentials(cfg Config) (credentials, error) {
 	missing := []string{}
@@ -199,19 +207,22 @@ func ciCredentials(cfg Config) (credentials, error) {
 	if cfg.ReaderPassword == "" {
 		missing = append(missing, "DEV_READER_PASSWORD")
 	}
+	if cfg.E2ERunnerPassword == "" {
+		missing = append(missing, "E2E_RUNNER_PASSWORD")
+	}
 	if len(missing) > 0 {
 		return credentials{}, fmt.Errorf("ci profile requires env-injected passwords: %s", strings.Join(missing, ", "))
 	}
 	// D2 contract applies to the ci profile too: every injected password
 	// must be 32 chars of [A-Za-z0-9].
 	for name, value := range map[string]string{
-		"DEV_ADMIN_PASSWORD": cfg.AdminPassword, "DEV_DEPLOYER_PASSWORD": cfg.DeployerPassword, "DEV_READER_PASSWORD": cfg.ReaderPassword,
+		"DEV_ADMIN_PASSWORD": cfg.AdminPassword, "DEV_DEPLOYER_PASSWORD": cfg.DeployerPassword, "DEV_READER_PASSWORD": cfg.ReaderPassword, "E2E_RUNNER_PASSWORD": cfg.E2ERunnerPassword,
 	} {
 		if !validPassword(value) {
 			return credentials{}, fmt.Errorf("ci profile password %s must be 32 characters of [A-Za-z0-9]", name)
 		}
 	}
-	return credentials{admin: cfg.AdminPassword, deployer: cfg.DeployerPassword, reader: cfg.ReaderPassword}, nil
+	return credentials{admin: cfg.AdminPassword, deployer: cfg.DeployerPassword, reader: cfg.ReaderPassword, runner: cfg.E2ERunnerPassword}, nil
 }
 
 // localCredentials merges explicit config overrides on top of the existing
@@ -228,6 +239,9 @@ func localCredentials(fileCreds credentials, fileOK bool, cfg Config) credential
 	}
 	if cfg.ReaderPassword != "" {
 		fileCreds.reader = cfg.ReaderPassword
+	}
+	if cfg.E2ERunnerPassword != "" {
+		fileCreds.runner = cfg.E2ERunnerPassword
 	}
 	return fileCreds
 }

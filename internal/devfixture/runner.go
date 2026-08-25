@@ -26,6 +26,10 @@ const (
 	orgName = "dev-platform"
 	// readerUser is the third development account (viewer role).
 	readerUser = "dev-reader"
+	// e2eRunnerUser is the fourth development account: REQ-066's E2E write
+	// identity with the release_admin role (CreateOperation / RollbackRelease
+	// / emergency changes; 批次4 D1/D2, AC-065-34).
+	e2eRunnerUser = "e2e-runner"
 
 	bundleName      = "dev-release-bundle"
 	bundleChartRef  = "oci://localhost:5001/release-fixture"
@@ -452,38 +456,22 @@ func (r *runner) checkCommittedPhases(ctx context.Context) error {
 	return nil
 }
 
-// checkCommittedAccounts verifies the three accounts still authenticate with
-// the effective passwords (reader included).
+// checkCommittedAccounts verifies the four accounts still authenticate with
+// the effective passwords (reader and e2e-runner included).
 func (r *runner) checkCommittedAccounts(ctx context.Context) error {
 	authClient := r.clients.auth
 	for _, user := range []struct {
 		name     string
 		password string
-	}{{r.cfg.AdminUser, r.state.credentials.admin}, {r.cfg.DeployerUser, r.state.credentials.deployer}, {readerUser, r.state.credentials.reader}} {
+	}{
+		{r.cfg.AdminUser, r.state.credentials.admin},
+		{r.cfg.DeployerUser, r.state.credentials.deployer},
+		{readerUser, r.state.credentials.reader},
+		{e2eRunnerUser, r.state.credentials.runner},
+	} {
 		if _, err := authClient.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: user.name, Password: user.password})); err != nil {
 			return fmt.Errorf("account %s no longer authenticates: %w", user.name, err)
 		}
-	}
-	return nil
-}
-
-// ensureReaderUser provisions the viewer account when its login fails.
-func (r *runner) ensureReaderUser(ctx context.Context) error {
-	authClient := r.clients.auth
-	if _, err := authClient.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: readerUser, Password: r.state.credentials.reader})); err == nil {
-		return nil
-	}
-	req := connect.NewRequest(&authv1.CreateLocalUserRequest{
-		Username: readerUser,
-		Password: r.state.credentials.reader,
-	})
-	withAuth(req, r.state.adminToken)
-	if _, err := authClient.CreateLocalUser(ctx, req); err != nil {
-		return fmt.Errorf("create reader user %s: %w", readerUser, err)
-	}
-	r.cfg.log().Info("reader user created", "user", readerUser)
-	if _, err := authClient.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: readerUser, Password: r.state.credentials.reader})); err != nil {
-		return fmt.Errorf("login reader user %s after provisioning: %w", readerUser, err)
 	}
 	return nil
 }

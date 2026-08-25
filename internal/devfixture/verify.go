@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
 	"connectrpc.com/connect"
 
+	authv1 "github.com/ndzuki/release-manager/api/gen/auth/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 )
 
@@ -16,6 +18,9 @@ import (
 // the runtime manifest (data/dev-fixture.json) and the all-committed
 // progress are written.
 func (r *runner) phaseVerify(ctx context.Context) error {
+	if err := r.verifyAccounts(ctx); err != nil {
+		return err
+	}
 	if err := r.verifyCustomers(ctx); err != nil {
 		return err
 	}
@@ -48,6 +53,39 @@ func (r *runner) phaseVerify(ctx context.Context) error {
 		"definitions", len(definitionSeeds),
 		"bundle", r.state.bundle.digest,
 	)
+	return nil
+}
+
+// verifyAccounts verifies the four development accounts exist with their
+// roles (AC-065-34): dev-admin (platform_admin), dev-deployer (deployer),
+// dev-reader (viewer) and e2e-runner (release_admin — the REQ-066 E2E write
+// identity). The roles are read back through GetLocalUser so the assertion
+// covers the server-authoritative role binding.
+func (r *runner) verifyAccounts(ctx context.Context) error {
+	accounts := []struct {
+		name     string
+		expected string
+	}{
+		{r.cfg.AdminUser, "platform_admin"},
+		{r.cfg.DeployerUser, "deployer"},
+		{readerUser, "viewer"},
+		{e2eRunnerUser, "release_admin"},
+	}
+	for _, account := range accounts {
+		req := connect.NewRequest(&authv1.GetLocalUserRequest{Username: account.name})
+		withAuth(req, r.state.adminToken)
+		response, err := r.clients.auth.GetLocalUser(ctx, req)
+		if err != nil {
+			return fmt.Errorf("verify account %s: %w", account.name, err)
+		}
+		user := response.Msg.GetUser()
+		if user == nil || user.GetUsername() != account.name || user.GetStatus() != "active" {
+			return fmt.Errorf("verify: account %s missing or not active", account.name)
+		}
+		if !slices.Contains(user.GetRoles(), account.expected) {
+			return fmt.Errorf("verify: account %s roles %v do not contain %q", account.name, user.GetRoles(), account.expected)
+		}
+	}
 	return nil
 }
 

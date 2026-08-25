@@ -39,7 +39,7 @@ DEV_TIMEOUT_OPERATOR="${DEV_TIMEOUT_OPERATOR:-180}"
 DEV_TIMEOUT_SEED_RETRIES="${DEV_TIMEOUT_SEED_RETRIES:-3}"
 # Runtime files dev-purge removes (AC-065-26): credentials, keys, kubeconfigs
 # and state documents. data/archive/ is explicitly preserved.
-PURGE_DATA_PATHS=(dev-credentials.env dev-trust-root dev-jwt kubeconfigs kubeconfig.yaml dev-ownership.json dev-fixture.json dev-seed-progress.json dev-status.json backups)
+PURGE_DATA_PATHS=(dev-credentials.env dev-trust-root dev-jwt dev-service-tokens kubeconfigs kubeconfig.yaml dev-ownership.json dev-fixture.json dev-seed-progress.json dev-status.json backups)
 CONTROL_CLUSTER="release-manager-control"
 # k3d names the kubeconfig context "k3d-<cluster>".
 CONTROL_CTX="k3d-$CONTROL_CLUSTER"
@@ -73,9 +73,11 @@ log() {
 cleanup_trap() {
   local rc=$?
   release_lock
-  # The ci JWT key file is transient (D3): remove it on every exit path —
-  # including failures that never reached the post-apply cleanup.
+  # The ci JWT key / service token files are transient (D3 / 批次3 D2): remove
+  # them on every exit path — including failures that never reached the
+  # post-apply cleanup.
   jwt_ci_temp_cleanup
+  service_token_ci_temp_cleanup
   # CI profile (REQ-065 D4, AC-065-27): auto-clean managed resources ONLY on
   # a non-zero exit (failure or INT/TERM — bash reports 128+signal). A
   # successful dev-up keeps the environment for REQ-066 consumption; the CI
@@ -97,12 +99,17 @@ cleanup_trap() {
 
 # ci_auto_purge — delete every resource in the ownership whitelist.
 ci_auto_purge() {
-  local manifest name
+  local manifest name registry_vol
+  registry_vol=""
+  if ownership_contains docker_containers "$REGISTRY_CONTAINER"; then
+    registry_vol="$(registry_volume)"
+  fi
   manifest="$(ownership_read)"
   printf '%s' "$manifest" | sed -nE 's/.*"docker_containers"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
     [ -n "$name" ] || continue
     docker rm -f "$name" >/dev/null 2>&1 || true
   done
+  registry_volume_remove "$registry_vol"
   printf '%s' "$manifest" | sed -nE 's/.*"docker_networks"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
     [ -n "$name" ] || continue
     docker network rm "$name" >/dev/null 2>&1 || true
@@ -227,6 +234,54 @@ jwt_ci_temp_cleanup() {
 }
 
 # ---------------------------------------------------------------------------
+# Bundle ingress service token (REQ-065 批次3 D2, AC-065-33): local profile
+# generates/reuses a 0600 data/dev-service-tokens/webhook-service-token before
+# deployment (rotation = delete the file and re-run dev-up); the ci profile
+# injects the DEV_WEBHOOK_SERVICE_TOKEN Secret env transiently for the
+# kustomize build (never persisted). Lifetime is independent from the JWT key
+# and Dev Trust Root directories (REQ-065 security boundary).
+# ---------------------------------------------------------------------------
+service_token_path() { printf '%s' "$DEV_DATA_DIR/dev-service-tokens/webhook-service-token"; }
+
+service_token_ensure() {
+  local token_path
+  token_path="$(service_token_path)"
+  if [ "${DEV_PROFILE:-local}" = "ci" ]; then
+    if [ -z "${DEV_WEBHOOK_SERVICE_TOKEN:-}" ]; then
+      fail "$ERR_SERVICE_UNHEALTHY" "ci profile requires DEV_WEBHOOK_SERVICE_TOKEN (bundle ingress service token is not written to disk)"
+    fi
+    # ci: materialized only for the kustomize build/apply duration (D2: not
+    # persisted) and removed by service_token_ci_temp_cleanup on every exit.
+    mkdir -p "$DEV_DATA_DIR/dev-service-tokens"
+    umask 077
+    printf '%s' "$DEV_WEBHOOK_SERVICE_TOKEN" > "$token_path"
+    chmod 600 "$token_path"
+    return 0
+  fi
+  if [ -f "$token_path" ] && [ -s "$token_path" ]; then
+    log "  webhook service token (reused) .. $token_path"
+    return 0
+  fi
+  mkdir -p "$DEV_DATA_DIR/dev-service-tokens"
+  # 32-char [A-Za-z0-9] token — same charset contract as dev-credentials.env
+  # passwords (REQ-065 D2) so the value stays safe unquoted in env files and
+  # Kubernetes Secrets. crypto-grade entropy via /dev/urandom, no external
+  # tool dependency.
+  umask 077
+  head -c 1024 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32 > "$token_path"
+  chmod 600 "$token_path"
+  log "  webhook service token (generated) . $token_path"
+}
+
+# service_token_ci_temp_cleanup — remove the transient ci service token file
+# after apply (批次3 D2: the ci profile never leaves secret material on
+# disk). No-op for local.
+service_token_ci_temp_cleanup() {
+  [ "${DEV_PROFILE:-local}" = "ci" ] || return 0
+  rm -f "$(service_token_path)" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
 # Stage 1: host preflight + environment lock
 # ---------------------------------------------------------------------------
 stage_preflight() {
@@ -268,28 +323,96 @@ clusters_exist() {
 # ---------------------------------------------------------------------------
 # Stage 2: registry
 # ---------------------------------------------------------------------------
+# registry_identity_labels — the --label arguments shared by registry
+# creation and relabeling: the k3d identification labels (so `k3d registry
+# list` and `k3d cluster create --registry-use` keep resolving the container)
+# plus the REQ-065 managed/profile labels (AC-065-32). Mirrors k3d v5.8's own
+# label set; the version label is read from the live k3d binary when possible.
+registry_identity_labels() {
+  local k3d_ver=""
+  k3d_ver="$(k3d version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+  printf -- "--label app=k3d --label k3d.cluster= --label k3d.role=registry --label k3d.version=%s --label k3d.registry.host=127.0.0.1 --label k3d.registry.hostIP=127.0.0.1 --label k3s.registry.port.external=%s --label k3s.registry.port.internal=5000 --label %s=true --label %s=%s" \
+    "${k3d_ver:-v5.8.3}" "$REGISTRY_PORT" "$MANAGED_LABEL" "$PROFILE_LABEL" "${DEV_PROFILE:-local}"
+}
+
+# registry_volume — the /var/lib/registry mount source (image cache lives
+# here): a named volume for dev.sh-created registries, the anonymous volume
+# for legacy k3d-created ones. Empty output means the container had no mount.
+registry_volume() {
+  docker container inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/registry"}}{{.Name}}{{end}}{{end}}' "$REGISTRY_CONTAINER" 2>/dev/null || true
+}
+
+# registry_volume_remove — delete the registry data volume when it is
+# whitelist-managed (dev-purge / ci failure auto-purge only; dev-down keeps
+# it as the image cache per the REQ-065 contract). The caller must capture
+# the volume name BEFORE the registry container is removed.
+registry_volume_remove() {
+  local volume="$1"
+  [ -n "$volume" ] || return 0
+  docker volume rm "$volume" >/dev/null 2>&1 || true
+}
+
+# registry_create — create the registry container directly via Docker so the
+# managed/profile labels are present from the start (AC-065-32). k3d
+# `registry create` offers no label flag and Docker labels are immutable
+# after creation, so k3d cannot produce a labeled container; the k3d
+# identification labels above keep `k3d registry list` /
+# `k3d cluster create --registry-use` working unchanged. The named volume
+# makes the image cache survive dev-down and relabeling.
+registry_create() {
+  local volume_source="$REGISTRY_CONTAINER"
+  # shellcheck disable=SC2086 # label arguments are deliberately word-split
+  if ! docker container create \
+    --name "$REGISTRY_CONTAINER" \
+    $(registry_identity_labels) \
+    --publish "127.0.0.1:${REGISTRY_PORT}:5000" \
+    --volume "$volume_source:/var/lib/registry" \
+    registry:3 >/dev/null; then
+    fail "$ERR_REGISTRY_UNREACHABLE" "cannot create registry container $REGISTRY_CONTAINER"
+  fi
+  log "  registry container (created, labeled)"
+}
+
+# registry_relabel — a legacy registry container (created by k3d before the
+# AC-065-32 label contract) is recreated in place with the identity labels:
+# same image, same port binding, same /var/lib/registry volume (image cache
+# preserved). Docker cannot update labels on an existing container, so
+# stop/rm/create is the only faithful mechanism (REQ-065 决策 D8: 补打 label).
+registry_relabel() {
+  local image volume
+  image="$(docker container inspect --format '{{.Image}}' "$REGISTRY_CONTAINER" 2>/dev/null || true)"
+  [ -n "$image" ] || fail "$ERR_REGISTRY_UNREACHABLE" "cannot inspect registry container $REGISTRY_CONTAINER"
+  volume="$(registry_volume)"
+  docker container rm -f "$REGISTRY_CONTAINER" >/dev/null \
+    || fail "$ERR_REGISTRY_UNREACHABLE" "cannot remove registry container $REGISTRY_CONTAINER for relabeling"
+  # shellcheck disable=SC2086 # label arguments are deliberately word-split
+  if ! docker container create \
+    --name "$REGISTRY_CONTAINER" \
+    $(registry_identity_labels) \
+    --publish "127.0.0.1:${REGISTRY_PORT}:5000" \
+    ${volume:+--volume "$volume:/var/lib/registry"} \
+    "$image" >/dev/null; then
+    fail "$ERR_REGISTRY_UNREACHABLE" "cannot recreate registry container $REGISTRY_CONTAINER"
+  fi
+  log "  registry container (relabeled)"
+}
+
 registry_up() {
-  registries="$(k3d registry list 2>/dev/null || true)"
-  if ! printf '%s' "$registries" | grep -qw "$REGISTRY_NAME"; then
-    require_no_conflict container "$REGISTRY_CONTAINER" docker_containers
-    if ! k3d registry create "$REGISTRY_NAME" --port "127.0.0.1:${REGISTRY_PORT}" --image registry:3; then
-      fail "$ERR_REGISTRY_UNREACHABLE" "k3d failed to create registry $REGISTRY_NAME"
-    fi
-  else
-    # The registry already exists (k3d-managed). k3d `registry create` has
-    # no runtime-label equivalent, so the container can never carry the
-    # managed label: whitelist membership is its managed marker. A foreign
-    # same-named registry — unlabeled AND absent from the whitelist — is a
-    # resource_conflict (AC-065-22); the host's 2026-08-24 leftover
-    # unlabeled registry is exactly this case (remove it, then re-run).
-    if ! ownership_contains docker_containers "$REGISTRY_CONTAINER"; then
-      if docker_managed container "$REGISTRY_CONTAINER"; then
-        ownership_add docker_containers "$REGISTRY_CONTAINER"
-      else
+  if docker container inspect "$REGISTRY_CONTAINER" >/dev/null 2>&1; then
+    # Exists path: a foreign same-named container — unlabeled AND absent from
+    # the whitelist — is a resource_conflict (AC-065-22). A whitelisted or
+    # managed container is adopted, and a whitelisted container without the
+    # labels is relabeled in place (AC-065-32 / D8).
+    if ! docker_managed container "$REGISTRY_CONTAINER"; then
+      if ! ownership_contains docker_containers "$REGISTRY_CONTAINER"; then
         fail "$ERR_RESOURCE_CONFLICT" \
           "container '$REGISTRY_CONTAINER' exists without label $MANAGED_LABEL=true and is not in the ownership whitelist; remove or label it manually, then retry"
       fi
+      registry_relabel
     fi
+  else
+    require_no_conflict container "$REGISTRY_CONTAINER" docker_containers
+    registry_create
   fi
   if ! docker container inspect --format '{{.State.Running}}' "$REGISTRY_CONTAINER" 2>/dev/null | grep -q '^true$'; then
     docker start "$REGISTRY_CONTAINER" >/dev/null || fail "$ERR_REGISTRY_UNREACHABLE" "cannot start registry container $REGISTRY_CONTAINER"
@@ -560,9 +683,11 @@ kustomize_apply() {
   if ! printf '%s\n' "$manifest" | ctl_kubectl apply -f -; then
     fail "$ERR_SERVICE_UNHEALTHY" "kubectl apply failed for $KUSTOMIZE_DIR"
   fi
-  # ci profile: the transient JWT key file served the kustomize build above;
-  # the Secret lives in the cluster now and the file is removed (D3).
+  # ci profile: the transient JWT key / service token files served the
+  # kustomize build above; the Secrets live in the cluster now and the files
+  # are removed (D3 / 批次3 D2).
   jwt_ci_temp_cleanup
+  service_token_ci_temp_cleanup
 }
 
 readiness() {
@@ -738,8 +863,10 @@ cmd_up() {
   log "Profile: ${DEV_PROFILE:-local} | environment_id: $(environment_id)"
   # D3: the JWT signing key must exist before kustomize build/apply (the
   # secretGenerator sources it); generate/reuse happens here, before any
-  # deployment stage.
+  # deployment stage. Same for the bundle ingress service token (批次3 D2,
+  # AC-065-33): its secretGenerator sources data/dev-service-tokens/.
   jwt_signing_key_ensure
+  service_token_ensure
   registry_up
   clusters_up
   images_up
@@ -772,11 +899,15 @@ cmd_down() {
 cmd_seed() {
   acquire_lock seed
   trap cleanup_trap EXIT INT TERM
-  # dev-seed precondition (REQ-065 D3): the JWT signing key must already be
-  # injected — dev-up generates it before deployment. Seed never generates
-  # the key itself: a missing key means dev-up has not converged yet.
+  # dev-seed precondition (REQ-065 D3 / 批次3 D2): the JWT signing key and
+  # the webhook→orchestrator service token must already be injected — dev-up
+  # generates both before deployment. Seed never generates them itself: a
+  # missing key/token means dev-up has not converged yet.
   if [ "${DEV_PROFILE:-local}" != "ci" ] && { [ ! -f "$(jwt_key_path)" ] || [ ! -s "$(jwt_key_path)" ]; }; then
     fail "$ERR_SERVICE_UNHEALTHY" "JWT signing key $(jwt_key_path) missing; run make dev-up first"
+  fi
+  if [ "${DEV_PROFILE:-local}" != "ci" ] && { [ ! -f "$(service_token_path)" ] || [ ! -s "$(service_token_path)" ]; }; then
+    fail "$ERR_SERVICE_UNHEALTHY" "webhook service token $(service_token_path) missing; run make dev-up first"
   fi
   seed
 }
@@ -947,7 +1078,11 @@ cmd_purge() {
   require_confirm "$ERR_DEV_PURGE_CONFIRM_REQUIRED"
   acquire_lock purge
   trap cleanup_trap EXIT INT TERM
-  local manifest
+  local manifest registry_vol
+  registry_vol=""
+  if ownership_contains docker_containers "$REGISTRY_CONTAINER"; then
+    registry_vol="$(registry_volume)"
+  fi
   manifest="$(ownership_read)"
   local name
   # Containers and networks from the whitelist, registry included.
@@ -956,6 +1091,10 @@ cmd_purge() {
     docker rm -f "$name" >/dev/null 2>&1 || true
     log "  removed container $name"
   done
+  # The registry data volume (named by dev-up, anonymous by legacy k3d
+  # creation) holds the image cache; purge deletes it together with the
+  # container (dev-down retains both per the cache contract).
+  registry_volume_remove "$registry_vol"
   printf '%s' "$manifest" | sed -nE 's/.*"docker_networks"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
     [ -n "$name" ] || continue
     docker network rm "$name" >/dev/null 2>&1 || true

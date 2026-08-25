@@ -351,10 +351,16 @@ func fakeK3d(t *testing.T, binDir, stateDir string) {
 func happyShims(t *testing.T, binDir string) {
 	t.Helper()
 	// docker: `container inspect` reports the object does not exist (the
-	// registry container is only created by the fake k3d) EXCEPT for the
-	// --format IP probes used by agents_up (management node / registry
-	// hostAliases); other verbs (start/rm) pass through.
+	// registry container is only created by dev.sh's registry_create) EXCEPT
+	// for the --format IP probes used by agents_up (management node /
+	// registry hostAliases); `container create` invocations are logged to
+	// $DEV_DATA_DIR/docker-create.log so tests can assert the AC-065-32
+	// label contract; other verbs (start/rm) pass through.
 	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "container" ] && [ "$2" = "create" ]; then
+  printf '%s\n' "$*" >> "$DEV_DATA_DIR/docker-create.log"
+  exit 0
+fi
 if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then
   if [ "$3" = "--format" ]; then
     case "${5}" in
@@ -594,7 +600,7 @@ func TestCiProfileAutoPurgesOnExit(t *testing.T) {
 	env, binDir := fakeEnv(t, stateDir)
 	fakeK3d(t, binDir, stateDir)
 	happyShims(t, binDir)
-	env = append(env, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-001", "DEV_JWT_SIGNING_KEY=ci-jwt-key")
+	env = append(env, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-001", "DEV_JWT_SIGNING_KEY=ci-jwt-key", "DEV_WEBHOOK_SERVICE_TOKEN=ci-service-token")
 
 	if out, err := runDev(t, env, "up"); err != nil {
 		t.Fatalf("ci dev-up failed:\n%s", out)
@@ -616,7 +622,7 @@ func TestCiProfileAutoPurgesOnExit(t *testing.T) {
 	happyShims(t, binDir2)
 	writeShim(t, binDir2, "docker",
 		"#!/usr/bin/env bash\nfor a in \"$@\"; do if [ \"$a\" = \"inspect\" ]; then exit 1; fi; done\nif [ \"$1\" = \"build\" ]; then exit 1; fi\nexit 0\n")
-	env2 = append(env2, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-002", "DEV_JWT_SIGNING_KEY=ci-jwt-key")
+	env2 = append(env2, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-002", "DEV_JWT_SIGNING_KEY=ci-jwt-key", "DEV_WEBHOOK_SERVICE_TOKEN=ci-service-token")
 
 	out, err := runDev(t, env2, "up")
 	if err == nil {
@@ -691,7 +697,12 @@ exit 0
 // The earlier three-part form "127.0.0.1:5001:5000" was rejected by real
 // k3d ("Failed to parse registry port") while the fake shim accepted it
 // silently — real-smoke regression found during the AC-065-01 audit repair.
-func TestRegistryCreateUsesHostPortForm(t *testing.T) {
+// TestRegistryContainerCreatedWithManagedLabels covers AC-065-32: dev-up
+// creates the registry container directly via Docker (k3d `registry create`
+// has no label flag and Docker labels are immutable), carrying the k3d
+// identification labels plus the managed/profile labels, the loopback port
+// binding and the data volume.
+func TestRegistryContainerCreatedWithManagedLabels(t *testing.T) {
 	stateDir := t.TempDir()
 	env, binDir := fakeEnv(t, stateDir)
 	fakeK3d(t, binDir, stateDir)
@@ -701,21 +712,35 @@ func TestRegistryCreateUsesHostPortForm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dev-up failed:\n%s", out)
 	}
-	var registryCreate string
-	for _, line := range k3dCreates(stateDir) {
-		if strings.HasPrefix(line, "registry create ") {
-			registryCreate = line
-			break
+	logged, err := os.ReadFile(filepath.Join(stateDir, "docker-create.log"))
+	if err != nil {
+		t.Fatalf("docker container create not recorded: %v", err)
+	}
+	create := string(logged)
+	if !strings.Contains(create, "--name k3d-release-manager-registry") {
+		t.Fatalf("expected registry container create with explicit name:\n%s", create)
+	}
+	for _, label := range []string{
+		"--label app=k3d",
+		"--label k3d.role=registry",
+		"--label io.release-manager.dev.managed=true",
+		"--label io.release-manager.dev.profile=local",
+	} {
+		if !strings.Contains(create, label) {
+			t.Fatalf("expected %s in docker container create:\n%s", label, create)
 		}
 	}
-	if registryCreate == "" {
-		t.Fatalf("expected a registry create invocation, got: %v", k3dCreates(stateDir))
+	if !strings.Contains(create, "--publish 127.0.0.1:5001:5000") {
+		t.Fatalf("expected loopback port binding 127.0.0.1:5001:5000:\n%s", create)
 	}
-	if !strings.Contains(registryCreate, "--port 127.0.0.1:5001") {
-		t.Fatalf("expected [HOST:]HOSTPORT form --port 127.0.0.1:5001, got: %s", registryCreate)
+	if !strings.Contains(create, "--volume k3d-release-manager-registry:/var/lib/registry") {
+		t.Fatalf("expected registry data volume mount:\n%s", create)
 	}
-	if strings.Contains(registryCreate, ":5000") {
-		t.Fatalf("container port must not be passed to k3d v5.8 (fixed at 5000): %s", registryCreate)
+	// No k3d registry create may remain: the container is dev-managed.
+	for _, line := range k3dCreates(stateDir) {
+		if strings.HasPrefix(line, "registry create ") {
+			t.Fatalf("dev.sh must not call k3d registry create anymore:\n%s", line)
+		}
 	}
 }
 
@@ -728,13 +753,10 @@ func TestUnlabeledSameNameResourceConflicts(t *testing.T) {
 		stateDir := t.TempDir()
 		env, binDir := fakeEnv(t, stateDir)
 		fakeK3d(t, binDir, stateDir)
-		// The registry already exists per the k3d shim state (created by a
-		// previous run without the ownership whitelist): the conflict gate
-		// must reject it instead of adopting or recreating it.
-		if err := os.WriteFile(filepath.Join(stateDir, "registry.txt"),
-			[]byte("release-manager-registry\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		// The docker shim reports a same-named registry container that
+		// exists but carries no managed label and is absent from the
+		// ownership whitelist: the conflict gate must reject it instead of
+		// adopting or relabeling it.
 		writeShim(t, binDir, "docker", `#!/usr/bin/env bash
 if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then
   # Plain inspect: the object EXISTS. The --format label probe then prints
@@ -808,6 +830,7 @@ func TestPurgeRemovesDataRuntimeFilesKeepsArchive(t *testing.T) {
 		"backups/dump-20260824.sql",
 		"dev-trust-root/dev-trust-root.key",
 		"dev-jwt/jwt-signing-key.pem",
+		"dev-service-tokens/webhook-service-token",
 		"kubeconfigs/cluster.yaml",
 	}
 	for _, name := range files {
@@ -900,6 +923,143 @@ func TestJwtSigningKeyGeneratedAndReused(t *testing.T) {
 	}
 }
 
+// TestServiceTokenGeneratedAndReused covers 批次3 D2 / AC-065-33 (injection
+// channel): local dev-up generates a 0600
+// data/dev-service-tokens/webhook-service-token (32 chars [A-Za-z0-9]),
+// reuses it on re-runs, and rotation (delete + re-run) produces a fresh one.
+func TestServiceTokenGeneratedAndReused(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("dev-up failed:\n%s", out)
+	}
+	tokenPath := filepath.Join(stateDir, "dev-service-tokens", "webhook-service-token")
+	info, err := os.Stat(tokenPath)
+	if err != nil {
+		t.Fatalf("webhook service token not generated: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("expected 0600 service token, got %o", info.Mode().Perm())
+	}
+	first, err := os.ReadFile(tokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := strings.TrimSpace(string(first))
+	if len(token) != 32 || strings.Trim(token, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789") != "" {
+		t.Fatalf("expected 32-char [A-Za-z0-9] token, got %q", token)
+	}
+
+	// Re-run reuses the same token (no regeneration).
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("second dev-up failed:\n%s", out)
+	}
+	second, err := os.ReadFile(tokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("service token regenerated on re-run; reuse contract violated")
+	}
+
+	// Rotation: delete the file and re-run — a fresh token appears.
+	if err := os.Remove(tokenPath); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("dev-up after rotation failed:\n%s", out)
+	}
+	third, err := os.ReadFile(tokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(first, third) {
+		t.Fatal("expected a fresh service token after rotation")
+	}
+}
+
+// TestRegistryRelabelAdoptsWhitelistedLegacyContainer covers AC-065-32 / D8
+// (relabel leg): a whitelisted legacy k3d-created registry without the
+// managed label is recreated in place with the identity labels, preserving
+// its image and /var/lib/registry volume (image cache).
+func TestRegistryRelabelAdoptsWhitelistedLegacyContainer(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	// The legacy registry is already in the ownership whitelist from an
+	// earlier dev.sh run.
+	ownershipFile := filepath.Join(stateDir, "dev-ownership.json")
+	if err := os.WriteFile(ownershipFile,
+		[]byte(`{"profile":"local","created_at":"2026-08-24T00:00:00Z","fixture_version":"v2","k3d_clusters":[],"docker_containers":["k3d-release-manager-registry"],"docker_networks":[]}`+"\n"),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
+	// docker shim: the legacy registry container exists without the managed
+	// label (label probe fails), but exposes image/volume/state probes. Any
+	// other container name reports absent so the cluster conflict gates pass.
+	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "container" ] && [ "$2" = "create" ]; then
+  printf '%s\n' "$*" >> "$DEV_DATA_DIR/docker-create.log"
+  exit 0
+fi
+if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then
+  if [ "$3" = "--format" ]; then
+    name="$5"
+    [ "$name" = "k3d-release-manager-registry" ] || exit 1
+    case "${4}" in
+      *'.Image'*) printf 'registry:3'; exit 0 ;;
+      *'.Mounts'*) printf 'regvol'; exit 0 ;;
+      *'.State.Running'*) printf 'true'; exit 0 ;;
+      *'.Config.Labels'*) exit 1 ;;
+      *) exit 1 ;;
+    esac
+  fi
+  name="$3"
+  [ "$name" = "k3d-release-manager-registry" ] || exit 1
+  exit 0
+fi
+if [ "$1" = "network" ] && [ "$2" = "inspect" ]; then exit 1; fi
+exit 0
+`)
+	writeShim(t, binDir, "curl", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "kubectl", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "go", `#!/usr/bin/env bash
+if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
+mkdir -p "$DEV_DATA_DIR/dev-enrollment-tokens"
+for c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed; do
+  printf 'fake-token\n' > "$DEV_DATA_DIR/dev-enrollment-tokens/$c.token"
+done
+exit 0
+`)
+	writeShim(t, binDir, "awk", "#!/usr/bin/env bash\ncat >/dev/null\nif [[ \"$*\" == *\"/proc/meminfo\"* ]]; then printf '24576\\n'; else printf '524288000\\n'; fi\n")
+	writeShim(t, binDir, "df", "#!/usr/bin/env bash\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/x 1000000000 1 524288000 1%% /\\n'\n")
+	writeShim(t, binDir, "nproc", "#!/usr/bin/env bash\nprintf '8\\n'\n")
+
+	out, err := runDev(t, env, "up")
+	if err != nil {
+		t.Fatalf("dev-up failed:\n%s", out)
+	}
+	logged, err := os.ReadFile(filepath.Join(stateDir, "docker-create.log"))
+	if err != nil {
+		t.Fatalf("docker container create not recorded: %v", err)
+	}
+	create := string(logged)
+	if !strings.Contains(create, "--label io.release-manager.dev.managed=true") ||
+		!strings.Contains(create, "--label io.release-manager.dev.profile=local") {
+		t.Fatalf("relabel must recreate the container with managed/profile labels:\n%s", create)
+	}
+	if !strings.Contains(create, "--volume regvol:/var/lib/registry") {
+		t.Fatalf("relabel must preserve the registry data volume:\n%s", create)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(create), "registry:3") {
+		t.Fatalf("relabel must reuse the existing registry image:\n%s", create)
+	}
+}
+
 // TestDevTimeoutReadyOverride covers AC-065-28 (readiness leg): when the
 // endpoints never answer, dev-up reports service_unhealthy after the
 // DEV_TIMEOUT_READY window (1s here) instead of the 300s default.
@@ -928,13 +1088,21 @@ func TestDevTimeoutReadyOverride(t *testing.T) {
 func TestDevSeedPassesTimeoutRetryOverrides(t *testing.T) {
 	stateDir := t.TempDir()
 	env, binDir := fakeEnv(t, stateDir)
-	// dev-seed precondition: the JWT key must already exist (generated by a
-	// prior dev-up, D3). fakeEnv points DEV_DATA_DIR at the state dir.
+	// dev-seed precondition: the JWT key and the webhook service token must
+	// already exist (generated by a prior dev-up, D3 / 批次3 D2). fakeEnv
+	// points DEV_DATA_DIR at the state dir.
 	keyPath := filepath.Join(stateDir, "dev-jwt", "jwt-signing-key.pem")
 	if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(keyPath, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokenPath := filepath.Join(stateDir, "dev-service-tokens", "webhook-service-token")
+	if err := os.MkdirAll(filepath.Dir(tokenPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tokenPath, []byte("service-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	writeShim(t, binDir, "flock", "#!/usr/bin/env bash\nexit 0\n")
@@ -1008,6 +1176,15 @@ func TestKustomizeBuildJwtSecretAndNoPostgresPVC(t *testing.T) {
 	if err := os.WriteFile(keyPath, []byte("test-jwt-key"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// AC-065-33: the webhook-service-token secretGenerator sources the same
+	// data-dir layout; provide the file in the isolated tree.
+	tokenPath := filepath.Join(tmp, "data", "dev-service-tokens", "webhook-service-token")
+	if err := os.MkdirAll(filepath.Dir(tokenPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tokenPath, []byte("test-service-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	cmd := exec.CommandContext(context.Background(), kustomize, "build", "--load-restrictor", "LoadRestrictionsNone", "deploy/kustomize/dev")
 	cmd.Dir = tmp
@@ -1030,5 +1207,23 @@ func TestKustomizeBuildJwtSecretAndNoPostgresPVC(t *testing.T) {
 	}
 	if !strings.Contains(manifest, "emptyDir: {}") {
 		t.Fatalf("expected postgres emptyDir volume (AC-065-29):\n%s", manifest)
+	}
+	// AC-065-33: the webhook-service-token Secret is generated with a content
+	// hash and wired into the webhook (sender) and orchestrator (verifier)
+	// Deployments.
+	if !strings.Contains(manifest, "name: release-manager-webhook-service-token-") {
+		t.Fatalf("expected generated release-manager-webhook-service-token-<hash> Secret in built manifest:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, "key: WEBHOOK_SERVICE_TOKEN") {
+		t.Fatalf("expected WEBHOOK_SERVICE_TOKEN data key in built manifest:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, "name: DEV_WEBHOOK_SERVICE_TOKEN") {
+		t.Fatalf("expected DEV_WEBHOOK_SERVICE_TOKEN env wiring in built manifest:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, "name: DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS") {
+		t.Fatalf("expected DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS env wiring (rotation seam) in built manifest:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, "optional: true") {
+		t.Fatalf("expected optional previous-token key (zero-downtime rotation):\n%s", manifest)
 	}
 }

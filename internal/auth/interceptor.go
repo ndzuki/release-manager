@@ -281,6 +281,13 @@ func mapServiceToObject(service string) string {
 		return "auth"
 	case strings.Contains(service, "Trust"):
 		return "trust_root"
+	case strings.Contains(service, "Bundle"):
+		// BundleService (REQ-011 §562 bundle ingress): the JWT path needs a
+		// stable object so a JWT-authenticated caller reaches the Casbin
+		// policy gate with a meaningful object instead of invalid_actor_context
+		// (D-100 选项 B wiring). The service-token path bypasses mapProcedure
+		// entirely (ServiceTokenInterceptor injects the actor directly).
+		return "bundle"
 	case strings.Contains(service, "Orchestrator"):
 		return "release"
 	case strings.Contains(service, "Cleanup"):

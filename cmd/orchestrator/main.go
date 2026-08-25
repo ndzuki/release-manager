@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -417,7 +418,12 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 			contractsinterceptor.NewErrorSanitizeInterceptor(logger),
 			auth.TryAllInterceptor(logger,
 				auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, map[string]bool{}, logger),
-				auth.ServiceTokenInterceptor(s.serviceTokens(), logger),
+				// REQ-011 §562 bundle ingress (D-100 选项 B dev wiring):
+				// the webhook forwards its dev service token; the actor is
+				// service:release-webhook and the token is scoped to
+				// SubmitReleaseBundle only (REQ-011 §561, v21 Step 6 风险行).
+				auth.ServiceTokenInterceptor("release-webhook", s.serviceTokens(), logger,
+					orchestratorv1connect.BundleServiceSubmitBundleProcedure),
 			),
 		),
 	)
@@ -605,7 +611,26 @@ func (s *orchSvc) Run(ctx context.Context) {
 	}
 }
 
-func (s *orchSvc) serviceTokens() []string { return nil }
+// serviceTokens returns the bundle ingress service token hashes
+// (REQ-011 §562 dev minimal wiring, D-100 选项 B, AC-065-33): the current
+// and previous tokens load from DEV_WEBHOOK_SERVICE_TOKEN /
+// DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS and are stored as SHA-256 hex digests —
+// the plaintext never leaves the env; ServiceTokenInterceptor compares the
+// inbound bearer constant-time against these hashes. Empty env returns nil:
+// production/non-dev behavior is unchanged (bundle ingress keeps requiring
+// the JWT path, and no token is silently accepted).
+func (s *orchSvc) serviceTokens() []string {
+	current := strings.TrimSpace(os.Getenv("DEV_WEBHOOK_SERVICE_TOKEN"))
+	previous := strings.TrimSpace(os.Getenv("DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS"))
+	var tokens []string
+	if current != "" {
+		tokens = append(tokens, auth.SHA256Hash([]byte(current)))
+	}
+	if previous != "" {
+		tokens = append(tokens, auth.SHA256Hash([]byte(previous)))
+	}
+	return tokens
+}
 
 func loadSourceRegistries(logger *slog.Logger) []orchestrator.SourceRegistry {
 	_ = logger

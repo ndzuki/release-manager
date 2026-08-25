@@ -12,15 +12,50 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	authv1 "github.com/ndzuki/release-manager/api/gen/auth/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	trustv1 "github.com/ndzuki/release-manager/api/gen/trust/v1"
 )
 
-// phaseAccounts ensures the viewer account exists and the credentials file
-// is valid. Admin/deployer provisioning happens in the login preamble; this
-// phase commits the reader account (REQ-065 development accounts).
+// phaseAccounts ensures the viewer and e2e-runner accounts exist and the
+// credentials file is valid. Admin/deployer provisioning happens in the login
+// preamble; this phase commits reader (viewer) and e2e-runner
+// (release_admin, REQ-066 下游义务) — the four development accounts of
+// REQ-065 / AC-065-34.
 func (r *runner) phaseAccounts(ctx context.Context) error {
-	return r.ensureReaderUser(ctx)
+	if err := r.ensureLocalUser(ctx, readerUser, r.state.credentials.reader, nil); err != nil {
+		return fmt.Errorf("ensure %s: %w", readerUser, err)
+	}
+	if err := r.ensureLocalUser(ctx, e2eRunnerUser, r.state.credentials.runner, []string{"release_admin"}); err != nil {
+		return fmt.Errorf("ensure %s: %w", e2eRunnerUser, err)
+	}
+	return nil
+}
+
+// ensureLocalUser provisions one development account when its login fails:
+// login → CreateLocalUser (empty roles = viewer, D-12/D-16) → re-login. The
+// e2e-runner passes the release_admin role (REQ-027 role matrix:
+// CreateOperation / RollbackRelease / emergency changes; deployer cannot
+// create Operations). Idempotent: an existing login wins.
+func (r *runner) ensureLocalUser(ctx context.Context, username, password string, roles []string) error {
+	authClient := r.clients.auth
+	if _, err := authClient.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: username, Password: password})); err == nil {
+		return nil
+	}
+	req := connect.NewRequest(&authv1.CreateLocalUserRequest{
+		Username: username,
+		Password: password,
+		Roles:    roles,
+	})
+	withAuth(req, r.state.adminToken)
+	if _, err := authClient.CreateLocalUser(ctx, req); err != nil {
+		return fmt.Errorf("create user %s: %w", username, err)
+	}
+	r.cfg.log().Info("development user created", "user", username, "roles", roles)
+	if _, err := authClient.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: username, Password: password})); err != nil {
+		return fmt.Errorf("login user %s after provisioning: %w", username, err)
+	}
+	return nil
 }
 
 // phaseTrust establishes the Dev Trust Root: an Ed25519 key owned by the

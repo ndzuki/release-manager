@@ -1771,3 +1771,44 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 		return err == nil && pl.Overall == "running"
 	}, 5*time.Second, 50*time.Millisecond)
 }
+
+// TestServiceTokensEnvLoading covers AC-065-33 (verifier side, REQ-011 §562):
+// serviceTokens() reads DEV_WEBHOOK_SERVICE_TOKEN (current) and
+// DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS (previous) and returns their SHA-256
+// hex digests — never the plaintext. Empty env returns nil so non-dev
+// behavior is unchanged.
+func TestServiceTokensEnvLoading(t *testing.T) {
+	svc := &orchSvc{}
+
+	t.Run("empty env returns nil", func(t *testing.T) {
+		t.Setenv("DEV_WEBHOOK_SERVICE_TOKEN", "")
+		t.Setenv("DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS", "")
+		assert.Nil(t, svc.serviceTokens())
+	})
+
+	t.Run("current only", func(t *testing.T) {
+		t.Setenv("DEV_WEBHOOK_SERVICE_TOKEN", "dev-token")
+		t.Setenv("DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS", "")
+		tokens := svc.serviceTokens()
+		require.Len(t, tokens, 1)
+		assert.Equal(t, auth.SHA256Hash([]byte("dev-token")), tokens[0])
+		assert.NotContains(t, strings.Join(tokens, " "), "dev-token")
+	})
+
+	t.Run("current and previous", func(t *testing.T) {
+		t.Setenv("DEV_WEBHOOK_SERVICE_TOKEN", "dev-token-current")
+		t.Setenv("DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS", "dev-token-previous")
+		tokens := svc.serviceTokens()
+		require.Len(t, tokens, 2)
+		assert.Equal(t, auth.SHA256Hash([]byte("dev-token-current")), tokens[0])
+		assert.Equal(t, auth.SHA256Hash([]byte("dev-token-previous")), tokens[1])
+	})
+
+	t.Run("whitespace trimmed", func(t *testing.T) {
+		t.Setenv("DEV_WEBHOOK_SERVICE_TOKEN", "  dev-token  ")
+		t.Setenv("DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS", "")
+		tokens := svc.serviceTokens()
+		require.Len(t, tokens, 1)
+		assert.Equal(t, auth.SHA256Hash([]byte("dev-token")), tokens[0])
+	})
+}

@@ -37,6 +37,22 @@ spec:
                 secretKeyRef:
                   name: release-manager-jwt
                   key: JWT_SIGNING_KEY
+            # 批次3 D2 (AC-065-33): verifier-side bundle ingress service
+            # tokens. serviceTokens() loads current+previous as SHA-256
+            # hashes and compares constant-time (REQ-011 §562); the optional
+            # PREVIOUS key enables zero-downtime rotation when a CI Secret
+            # manager overlays the Secret with two keys.
+            - name: DEV_WEBHOOK_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: release-manager-webhook-service-token
+                  key: WEBHOOK_SERVICE_TOKEN
+            - name: DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS
+              valueFrom:
+                secretKeyRef:
+                  name: release-manager-webhook-service-token
+                  key: WEBHOOK_SERVICE_TOKEN_PREVIOUS
+                  optional: true
           ports:
             # Management-plane Connect HTTP listener.
             - name: http

@@ -32,6 +32,15 @@ spec:
           envFrom:
             - secretRef:
                 name: release-manager-jwt
+          # 批次3 D2 (AC-065-33): sender-side bundle ingress service token —
+          # forwarded as `Authorization: Bearer <token>` to the orchestrator
+          # BundleService (actor service:release-webhook, REQ-011 §562).
+          env:
+            - name: DEV_WEBHOOK_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: release-manager-webhook-service-token
+                  key: WEBHOOK_SERVICE_TOKEN
           ports:
             - name: http
               containerPort: 8082
