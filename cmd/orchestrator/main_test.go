@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -115,7 +116,7 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 	authServer := newTestAuthorizationServer(t, authStore, signingKey)
 
 	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
-	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}, CA: testCAConfig(t)})
 	require.NoError(t, svc.Register(mux, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))))
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 	server := httptest.NewServer(mux)
@@ -236,7 +237,7 @@ func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
 	authServer := newTestAuthorizationServer(t, authStore, signingKey)
 	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
-	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}, CA: testCAConfig(t)})
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
 	// Bump the authorization source version so the Module snapshot is fresh
 	// (a fresh database starts at version 0, which fails closed).
@@ -401,6 +402,7 @@ func TestTrustServiceMaintenanceGate(t *testing.T) {
 	svc.Configure(&config.ServiceConfig{
 		Database:    config.DatabaseConfig{Driver: "sqlite", DSN: dbPath},
 		Maintenance: true,
+		CA:          testCAConfig(t),
 	})
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
 	t.Cleanup(func() { require.NoError(t, svc.Shutdown(context.Background())) })
@@ -535,7 +537,7 @@ func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
 		targetEnv: "production", signingKey: signingKey, authURL: authServer.URL,
 		trustResolver: failingTrustResolver{err: errors.New("trust store offline")},
 	}
-	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}, CA: testCAConfig(t)})
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
 	// Bump the authorization source version so the Module snapshot is fresh.
 	authSnap, err := svc.store.Authorization().Load(context.Background())
@@ -623,7 +625,7 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
 	authServer := newTestAuthorizationServer(t, authStore, signingKey)
 	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
-	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}, CA: testCAConfig(t)})
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
 	// Bump the authorization source version so the Module snapshot is fresh.
 	authSnap, err := svc.store.Authorization().Load(context.Background())
@@ -787,6 +789,7 @@ func TestOrchestratorValuesRevisionManagementEndToEnd(t *testing.T) {
 	svc.Configure(&config.ServiceConfig{
 		Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath},
 		Values:   config.ValuesConfig{MaxDocumentBytes: 1 << 20},
+		CA:       testCAConfig(t),
 	})
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
@@ -880,6 +883,19 @@ func TestOrchestratorValuesRevisionManagementEndToEnd(t *testing.T) {
 type testAuthorizationHandler struct {
 	store store.Store
 	jwt   *auth.JWTManager
+}
+
+// testCAConfig points the operator service at a per-test CA file pair so the
+// fail-closed CA loading (ADR-017) has a dev backend in integration tests.
+func testCAConfig(t *testing.T) config.CAConfig {
+	t.Helper()
+	dir := t.TempDir()
+	return config.CAConfig{
+		KeyPath:          filepath.Join(dir, "ca.key"),
+		CertPath:         filepath.Join(dir, "ca.crt"),
+		CertTTL:          24 * time.Hour,
+		RenewBeforeRatio: 0.5,
+	}
 }
 
 func newTestAuthorizationServer(t *testing.T, st store.Store, signingKey string) *httptest.Server {
@@ -980,7 +996,7 @@ func TestOrchestratorPostgreSQLCutoverAuthority(t *testing.T) {
 	require.NoError(t, seedStore.Close())
 
 	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey}
-	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "postgres", DSN: dsn}})
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "postgres", DSN: dsn}, CA: testCAConfig(t)})
 	mux := http.NewServeMux()
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
@@ -1154,7 +1170,7 @@ func TestOperatorManagementPostgreSQLFlow(t *testing.T) {
 		authURL:        authServer.URL,
 		streamRegistry: operator.NewStreamRegistry(),
 	}
-	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "postgres", DSN: dsn}})
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "postgres", DSN: dsn}, CA: testCAConfig(t)})
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 	server := httptest.NewServer(mux)
@@ -1393,6 +1409,7 @@ func TestValuesCreateListIdempotencyConnectEndToEnd(t *testing.T) {
 	svc.Configure(&config.ServiceConfig{
 		Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath},
 		Values:   config.ValuesConfig{MaxDocumentBytes: 1 << 20},
+		CA:       testCAConfig(t),
 	})
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
@@ -1666,7 +1683,7 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 	authServer := newTestAuthorizationServer(t, authStore, signingKey)
 
 	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
-	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
+	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}, CA: testCAConfig(t)})
 	require.NoError(t, svc.Register(mux, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))))
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
