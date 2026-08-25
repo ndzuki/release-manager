@@ -1223,12 +1223,14 @@ func TestOperatorManagementPostgreSQLFlow(t *testing.T) {
 		EnrollmentToken: replaced.Msg.GetToken(),
 		CustomerId:      customerID,
 		ClusterId:       clusterID,
-		OperatorId:      "operator-053-enrolled",
 		CsrPem:          csr,
 		Capabilities:    map[string]string{"helm": "true"},
 	}))
 	require.NoError(t, err)
 	assert.NotEmpty(t, enrolled.Msg.GetSessionId())
+	// operator_id is center-generated (REQ-015 决策 4).
+	operatorID := enrolled.Msg.GetOperatorId()
+	assert.NotEmpty(t, operatorID)
 
 	// History now contains the enrolled operator (AC-053-12).
 	historyRequest := connect.NewRequest(&orchestratorv1.ListOperatorsRequest{CustomerId: customerID, ClusterId: clusterID})
@@ -1236,11 +1238,10 @@ func TestOperatorManagementPostgreSQLFlow(t *testing.T) {
 	history, err := client.ListOperators(ctx, historyRequest)
 	require.NoError(t, err)
 	require.Len(t, history.Msg.GetOperators(), 1)
-	assert.Equal(t, "operator-053-enrolled", history.Msg.GetOperators()[0].GetId())
+	assert.Equal(t, operatorID, history.Msg.GetOperators()[0].GetId())
 
 	// Revoke closes the live stream and reports revoked immediately
 	// (AC-053-04/22).
-	operatorID := "operator-053-enrolled"
 	streamCtx, cancelStream := context.WithCancel(context.Background())
 	svc.streamRegistry.Register(operatorID, enrolled.Msg.GetSessionId(), cancelStream)
 
@@ -1280,7 +1281,7 @@ func generateOperatorSmokeCSR(t *testing.T, operatorName, customerID, clusterID 
 	require.NoError(t, err)
 	template := &x509.CertificateRequest{
 		Subject:  pkix.Name{CommonName: operatorName},
-		DNSNames: []string{customerID, clusterID},
+		DNSNames: []string{customerID, clusterID, strings.ToLower(clusterID + "." + customerID + ".rm")},
 	}
 	der, err := x509.CreateCertificateRequest(rand.Reader, template, privateKey)
 	require.NoError(t, err)

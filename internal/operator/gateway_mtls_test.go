@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -22,7 +23,6 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
@@ -51,11 +51,18 @@ func newGatewayStore(t *testing.T, token string) store.Store {
 	clus := &store.Cluster{ID: "clus-1", Name: "test-cluster", CustomerID: "cust-1", Status: store.ClusterActive, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	require.NoError(t, st.Clusters().Create(ctx, clus))
 	require.NoError(t, st.EnrollmentTokens().Create(ctx, &store.EnrollmentToken{
-		ID: "tok-1", CustomerID: "cust-1", ClusterID: "clus-1", Token: token,
+		ID: "tok-1", CustomerID: "cust-1", ClusterID: "clus-1", TokenHash: sha256Hex(token),
 		OperatorName: "clus-1", // must match the CSR CommonName (REQ-053 token binding)
 		CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
 	}))
 	return st
+}
+
+// sha256Hex derives the hash-only token representation (REQ-015: the
+// plaintext is never persisted).
+func sha256Hex(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
 
 // newGatewayServer starts a TLS httptest server that mirrors the production
@@ -116,7 +123,7 @@ func newAgentKeyAndCSR(t *testing.T, customerID, clusterID string) (keyPEM, csrP
 		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
 }
 
-func enrollViaGateway(t *testing.T, baseURL string, pool *x509.CertPool, token, customerID, clusterID, operatorID string, csrPEM []byte) *operatorv1.EnrollResponse {
+func enrollViaGateway(t *testing.T, baseURL string, pool *x509.CertPool, token, customerID, clusterID string, csrPEM []byte) *operatorv1.EnrollResponse {
 	client := operatorv1connect.NewOperatorServiceClient(&http.Client{
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS13}, ForceAttemptHTTP2: true},
 	}, baseURL)
@@ -124,7 +131,6 @@ func enrollViaGateway(t *testing.T, baseURL string, pool *x509.CertPool, token, 
 		EnrollmentToken: token,
 		CustomerId:      customerID,
 		ClusterId:       clusterID,
-		OperatorId:      operatorID,
 		CsrPem:          csrPEM,
 	}))
 	require.NoError(t, err)
@@ -171,12 +177,14 @@ func TestGatewayMTLSEnrollAndStreamEstablish(t *testing.T) {
 
 	baseURL, pool := newGatewayServer(t, st, caInst)
 	keyPEM, csrPEM := newAgentKeyAndCSR(t, "cust-1", "clus-1")
-	opID := uuid.New().String()
 
 	// PASS 1: Enroll without a client certificate succeeds (token + CSR).
-	enrolled := enrollViaGateway(t, baseURL, pool, token, "cust-1", "clus-1", opID, csrPEM)
+	// The operator_id is center-generated (REQ-015 决策 4).
+	enrolled := enrollViaGateway(t, baseURL, pool, token, "cust-1", "clus-1", csrPEM)
 	require.NotEmpty(t, enrolled.GetSessionId())
 	require.NotEmpty(t, enrolled.GetCertificatePem())
+	require.NotEmpty(t, enrolled.GetOperatorId())
+	opID := enrolled.GetOperatorId()
 	enrolledOperator, err := st.Operators().GetByClusterID(context.Background(), "clus-1")
 	require.NoError(t, err)
 	require.Len(t, enrolledOperator.CertSerial, 20, "ADR-018 serial is 10 digest bytes encoded as hex")
@@ -241,9 +249,9 @@ func TestGatewayStreamRejectsSerialMismatch(t *testing.T) {
 
 	baseURL, pool := newGatewayServer(t, st, caInst)
 	keyPEM, csrPEM := newAgentKeyAndCSR(t, "cust-1", "clus-1")
-	opID := uuid.New().String()
 
-	enrolled := enrollViaGateway(t, baseURL, pool, token, "cust-1", "clus-1", opID, csrPEM)
+	enrolled := enrollViaGateway(t, baseURL, pool, token, "cust-1", "clus-1", csrPEM)
+	opID := enrolled.GetOperatorId()
 	agentCert, err := tls.X509KeyPair(enrolled.GetCertificatePem(), keyPEM)
 	require.NoError(t, err)
 

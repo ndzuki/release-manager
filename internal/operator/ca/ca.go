@@ -111,7 +111,7 @@ func LoadOrCreateWithProvider(ctx context.Context, provider Provider, cfg Config
 	}
 	credentials, err := provider.Load(ctx)
 	if err == nil {
-		return Load(credentials.CertificatePEM, credentials.PrivateKeyPEM, cfg)
+		return Load(credentials.PrivateKeyPEM, credentials.CertificatePEM, cfg)
 	}
 	if !errors.Is(err, ErrCredentialsNotFound) {
 		return nil, fmt.Errorf("load CA credentials: %w", err)
@@ -130,7 +130,7 @@ func LoadOrCreateWithProvider(ctx context.Context, provider Provider, cfg Config
 	}
 	if createErr := provider.Create(ctx, toStore); createErr != nil {
 		if loaded, loadErr := provider.Load(ctx); loadErr == nil {
-			return Load(loaded.CertificatePEM, loaded.PrivateKeyPEM, cfg)
+			return Load(loaded.PrivateKeyPEM, loaded.CertificatePEM, cfg)
 		}
 		return nil, fmt.Errorf("persist CA credentials: %w", errors.Join(createErr))
 	}

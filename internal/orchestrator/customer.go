@@ -215,33 +215,43 @@ func (s *Service) DisableCustomer(
 		}
 	}
 
-	// Cascade: revoke all enrollment tokens for this customer (AC-015-04).
-	tokens, err := s.store.EnrollmentTokens().ListByCustomer(ctx, c.ID)
+	// Cascade: revoke every pending token, non-revoked operator and live
+	// session of the customer in ONE transaction (REQ-015 事务边界 4).
+	// Irreversible: re-enabling does not resurrect identities.
+	cascade, err := s.store.OperatorLifecycle().DisableCustomer(ctx, c.ID, "customer disabled")
 	if err != nil {
-		s.logger.Warn("listing tokens for cascade revoke", "error", err)
+		s.logger.Error("cascade revoke customer", "customer_id", c.ID, "error", err)
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("cascade revoke customer: %w", err))
 	}
-	for _, t := range tokens {
-		if t.State == store.TokenStatePending {
-			if err := s.store.EnrollmentTokens().Revoke(ctx, t.ID); err != nil {
-				s.logger.Warn("cascade revoke token", "token_id", t.ID, "error", err)
-			}
-		}
-	}
-
-	// Cascade: revoke all active operators for this customer.
-	operators, err := s.store.Operators().ListByCustomer(ctx, c.ID)
-	if err != nil {
-		s.logger.Warn("listing operators for cascade revoke", "error", err)
-	}
-	for _, op := range operators {
-		if op.Status == store.OperatorActive {
-			if _, err := s.store.OperatorManagement().RevokeOperator(ctx, c.ID, op.ClusterID, op.ID, "customer disabled", nil); err != nil {
-				s.logger.Warn("cascade revoke operator", "operator_id", op.ID, "error", err)
-			}
-		}
-	}
-	s.logger.Warn("customer disabled", "id", c.ID, "name", c.Name)
+	s.emitRevocationAudits(ctx, cascade.OperatorIDs, "customer disabled")
+	s.logger.Warn("customer disabled", "id", c.ID, "name", c.Name,
+		"revoked_tokens", len(cascade.TokenIDs), "revoked_operators", len(cascade.OperatorIDs), "closed_sessions", len(cascade.SessionIDs))
 	return connect.NewResponse(&orchestratorv1.DisableCustomerResponse{}), nil
+}
+
+// emitRevocationAudits records operator.revoked for cascade-revoked identities
+// (REQ-015 AC-015-17): stable actor/scope/action/result/request_id metadata
+// with only a non-sensitive reason summary — no token, hash, or key material.
+func (s *Service) emitRevocationAudits(ctx context.Context, operatorIDs []string, reason string) {
+	for _, operatorID := range operatorIDs {
+		op, err := s.store.Operators().Get(ctx, operatorID)
+		if err != nil {
+			s.logger.Warn("cascade revoke audit lookup failed", "operator_id", operatorID, "error", err)
+			continue
+		}
+		event, err := s.operatorAuditEvent(ctx, "operator", operatorID, "operator.revoked", map[string]string{
+			"customer_id": op.CustomerID,
+			"cluster_id":  op.ClusterID,
+			"reason":      reason,
+		})
+		if err != nil {
+			s.logger.Warn("cascade revoke audit build failed", "operator_id", operatorID, "error", err)
+			continue
+		}
+		if result := s.auditEmitter.Emit(event); !result.Accepted {
+			s.logger.Warn("cascade revoke audit rejected", "operator_id", operatorID, "code", result.Code)
+		}
+	}
 }
 
 // ListCustomerEvents returns the customer lifecycle history, newest first.
