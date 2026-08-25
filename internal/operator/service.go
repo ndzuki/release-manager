@@ -223,6 +223,13 @@ func (s *Service) Enroll(
 
 	// Operator_name must not be reused across clusters (AC-015-02).
 	if existingByName, lookupErr := s.store.Operators().GetActiveByName(ctx, token.CustomerID, identity.OperatorName); lookupErr == nil {
+		// The operator row and token transition commit atomically. If the
+		// active name is already visible, re-read the token: a concurrent
+		// Enroll that consumed it must surface token_reused, not a confusing
+		// name conflict (v2 checkpoint 容错).
+		if current, currentErr := s.store.EnrollmentTokens().GetByToken(ctx, msg.GetEnrollmentToken()); currentErr == nil && current.State == store.TokenStateUsed {
+			return nil, operatorError(connect.CodeUnauthenticated, reasonTokenReused, "enrollment token already used")
+		}
 		if existingByName.ClusterID != token.ClusterID {
 			return nil, operatorError(connect.CodePermissionDenied, reasonOperatorNameCrossCluster, "operator name is active on another cluster")
 		}

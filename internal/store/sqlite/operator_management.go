@@ -124,7 +124,7 @@ func (s *operatorManagementStore) RevokePendingEnrollmentToken(
 	defer tx.Rollback() //nolint:errcheck // no-op after successful commit
 
 	token, err := scanEnrollmentToken(tx.QueryRowContext(ctx, `
-SELECT id, customer_id, cluster_id, token, token_hash, operator_name, state, created_by_display_name, created_at, expires_at, used_at, operator_id, revoked_at, replaced_by_id
+SELECT id, customer_id, cluster_id, token_hash, operator_name, state, created_by_display_name, created_at, expires_at, used_at, operator_id, revoked_at, replaced_by_id
 FROM enrollment_tokens
 WHERE customer_id = ? AND cluster_id = ? AND state = 'pending'
 ORDER BY created_at DESC, id DESC
@@ -247,6 +247,25 @@ WHERE id = ?
 	if tokenCustomerID != op.CustomerID || tokenClusterID != op.ClusterID || tokenName != op.Name {
 		return nil, store.ErrNotAuthorized
 	}
+	// Consume the token FIRST (REQ-015 事务边界 1; v2 checkpoint 重排序):
+	// the pending→used CAS is the transaction's first mutation, so the
+	// concurrent loser of the same token fails here with a state conflict
+	// instead of a confusing duplicate-key error further down.
+	tokenCAS, err := tx.ExecContext(ctx, `
+UPDATE enrollment_tokens
+SET state = 'used', used_at = ?, operator_id = ?
+WHERE id = ? AND state = 'pending'
+`, session.StartedAt.UTC().Format(time.RFC3339Nano), op.ID, tokenID)
+	if err != nil {
+		return nil, fmt.Errorf("consume enrollment token: %w", err)
+	}
+	tokenRows, err := tokenCAS.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("consume enrollment token rows affected: %w", err)
+	}
+	if tokenRows != 1 {
+		return nil, store.ErrOperatorStateConflict
+	}
 
 	var supersededID string
 	existing, existingErr := scanOperator(tx.QueryRowContext(ctx, `SELECT `+operatorSelect+`
@@ -303,21 +322,6 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)
 		session.StartedAt.UTC().Format(time.RFC3339Nano), session.LastHeartbeat.UTC().Format(time.RFC3339Nano),
 		session.ExpiresAt.UTC().Format(time.RFC3339Nano)); err != nil {
 		return nil, fmt.Errorf("insert enrollment session: %w", err)
-	}
-	result, err := tx.ExecContext(ctx, `
-UPDATE enrollment_tokens
-SET state = 'used', used_at = ?, operator_id = ?
-WHERE id = ? AND state = 'pending'
-`, session.StartedAt.UTC().Format(time.RFC3339Nano), op.ID, tokenID)
-	if err != nil {
-		return nil, fmt.Errorf("mark enrollment token used: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return nil, fmt.Errorf("count used enrollment token: %w", err)
-	}
-	if rows != 1 {
-		return nil, store.ErrOperatorStateConflict
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit enroll operator: %w", err)

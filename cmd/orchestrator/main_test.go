@@ -1774,7 +1774,7 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 	// Second generation on the same DB: Register resumes the preflight op.
 	mux2 := http.NewServeMux()
 	svc2 := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
-	svc2.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}})
+	svc2.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}, CA: testCAConfig(t)})
 	require.NoError(t, svc2.Register(mux2, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))))
 	server2 := httptest.NewServer(mux2)
 	t.Cleanup(func() {
