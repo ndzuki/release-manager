@@ -299,11 +299,27 @@ func (r *runner) waitClusterOperatorOnline(ctx context.Context, seed clusterSeed
 }
 
 // requireClusterOperatorOnline lists operators for the cluster and fails
-// unless at least one has an ONLINE session (AC-065-18).
+// unless at least one has an ONLINE session (AC-065-18). ListOperators is
+// customer-scoped for external actors (real smoke 2026-08-28:
+// invalid_argument: customer_id is required), so the request carries the
+// deterministic seed customer id (the readback state may be empty on resume).
 func (r *runner) requireClusterOperatorOnline(ctx context.Context, seed clusterSeed) error {
+	customerID := r.state.customers[seed.customerKey]
+	if customerID == "" {
+		for _, cs := range customerSeeds {
+			if cs.logicalKey == seed.customerKey {
+				customerID = cs.id
+				break
+			}
+		}
+	}
+	if customerID == "" {
+		return fmt.Errorf("operator_not_online: customer id unknown for cluster %s", seed.id)
+	}
 	listReq := connect.NewRequest(&orchestratorv1.ListOperatorsRequest{
-		ClusterId: seed.id,
-		PageSize:  100,
+		ClusterId:  seed.id,
+		CustomerId: customerID,
+		PageSize:   100,
 	})
 	withAuth(listReq, r.state.deployerToken)
 	response, err := r.clients.orch.ListOperators(ctx, listReq)
