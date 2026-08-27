@@ -1729,10 +1729,12 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 		require.NoError(t, svc.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
 	}
 
-	// AC-019-04/06: operation CAS to queued, lifecycle passed with canonical stages.
+	// AC-019-04/06: operation CAS to succeeded for INSTALL (the precheck
+	// artifact stage executed the real install — no separate executor exists;
+	// real smoke 2026-08-28), lifecycle passed with canonical stages.
 	require.Eventually(t, func() bool {
 		op, err := svc.store.Operations().Get(ctx, opID)
-		return err == nil && op.Status == store.StatusQueued
+		return err == nil && op.Status == store.StatusSucceeded
 	}, 5*time.Second, 50*time.Millisecond)
 	// The lifecycle finalization is a separate transaction from the operation
 	// CAS (observational write), so poll for the terminal result too — the
