@@ -71,5 +71,10 @@ acquire_lock() {
 # (see file header); closing fd 9 releases the flock.
 release_lock() {
   flock -u 9 2>/dev/null || true
-  exec 9>&- 2>/dev/null || true
+  # NOTE: no `2>/dev/null` here — `exec` redirections are permanent for the
+  # shell, so `exec 9>&- 2>/dev/null` would silently redirect every later
+  # stderr write in the trap chain (dev_purge_failed residual manifest,
+  # diagnostics summary) into /dev/null. Closing an already-closed fd is a
+  # silent no-op in bash, so no error suppression is needed.
+  exec 9>&- || true
 }

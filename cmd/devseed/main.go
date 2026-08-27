@@ -30,8 +30,16 @@ func main() {
 		printFixtureVersion bool
 		operatorTimeoutSecs int
 		seedRetries         int
+		ensureMTLSCA        bool
+		mtlsCADir           string
 	)
 	flag.BoolVar(&printFixtureVersion, "print-fixture-version", false, "print the authoritative fixture version constant and exit (AC-065-30)")
+	// AC-065-36 (批次5 D1): generate/reuse the dev mTLS CA in <dir> and exit.
+	// The helper owns the full contract — an existing parseable pair is
+	// reused, a missing or corrupt pair is regenerated — in the exact PEM
+	// format the operator gateway's ca.Load consumes.
+	flag.BoolVar(&ensureMTLSCA, "ensure-mtls-ca", false, "ensure the dev mTLS CA exists in -mtls-ca-dir (generate/reuse, AC-065-36) and exit")
+	flag.StringVar(&mtlsCADir, "mtls-ca-dir", "", "target directory for -ensure-mtls-ca (ca.key + ca.crt)")
 	flag.IntVar(&operatorTimeoutSecs, "operator-timeout", 0, "operator-online wait timeout in seconds (env DEV_TIMEOUT_OPERATOR, default 180; AC-065-28)")
 	flag.IntVar(&seedRetries, "seed-retries", 0, "seed phase-write retry count with 1s/2s/4s backoff (env DEV_TIMEOUT_SEED_RETRIES, default 3; AC-065-28)")
 	flag.StringVar(&cfg.StopAfterPhase, "stop-after", "", "commit phases up to and including this phase, then exit cleanly (e.g. enrollment; dev.sh resumes with a later run)")
@@ -54,6 +62,15 @@ func main() {
 	// lifecycle module resolves its own copy from this flag (AC-065-30).
 	if printFixtureVersion {
 		fmt.Println(devfixture.DefaultFixtureVersion)
+		return
+	}
+
+	// AC-065-36: the dev mTLS CA helper runs standalone (no profile, no
+	// clients) and exits once the pair is ensured.
+	if ensureMTLSCA {
+		if err := ensureDevMTLSCA(mtlsCADir); err != nil {
+			fail(fmt.Sprintf("ensure dev mTLS CA: %v", err))
+		}
 		return
 	}
 

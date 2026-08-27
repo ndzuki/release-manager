@@ -39,7 +39,7 @@ DEV_TIMEOUT_OPERATOR="${DEV_TIMEOUT_OPERATOR:-180}"
 DEV_TIMEOUT_SEED_RETRIES="${DEV_TIMEOUT_SEED_RETRIES:-3}"
 # Runtime files dev-purge removes (AC-065-26): credentials, keys, kubeconfigs
 # and state documents. data/archive/ is explicitly preserved.
-PURGE_DATA_PATHS=(dev-credentials.env dev-trust-root dev-jwt dev-service-tokens kubeconfigs kubeconfig.yaml dev-ownership.json dev-fixture.json dev-seed-progress.json dev-status.json backups)
+PURGE_DATA_PATHS=(dev-credentials.env dev-trust-root dev-jwt dev-service-tokens dev-ca diagnostics kubeconfigs kubeconfig.yaml dev-ownership.json dev-fixture.json dev-seed-progress.json dev-status.json backups)
 CONTROL_CLUSTER="release-manager-control"
 # k3d names the kubeconfig context "k3d-<cluster>".
 CONTROL_CTX="k3d-$CONTROL_CLUSTER"
@@ -70,14 +70,28 @@ log() {
 }
 
 # trap handler — release the flock and preserve the primary error code.
+# Chained traps (smoke_fixture_version / cmd_reset_data) run housekeeping
+# commands before this handler; those commands would reset $?, so callers
+# pass the ORIGINAL exit status via TRAP_RC. A bare `trap cleanup_trap` keeps
+# the plain $? semantics (cleanup_trap is then the trap's first command).
 cleanup_trap() {
-  local rc=$?
+  local rc="${TRAP_RC:-$?}"
+  unset TRAP_RC
   release_lock
-  # The ci JWT key / service token files are transient (D3 / 批次3 D2): remove
-  # them on every exit path — including failures that never reached the
-  # post-apply cleanup.
+  # The ci JWT key / service token / mTLS CA files are transient (D3 /
+  # 批次3 D2 / 批次5 D1): remove them on every exit path — including
+  # failures that never reached the post-apply cleanup.
   jwt_ci_temp_cleanup
   service_token_ci_temp_cleanup
+  mtls_ca_ci_temp_cleanup
+  # Failure diagnostics (批次5 D6, AC-065-39): collect describe/get/logs
+  # BEFORE any ci auto-purge so the evidence survives the teardown (REQ-065:
+  # "ci profile 失败自动清理路径同样先落盘诊断再清理"). Collection runs in a
+  # subshell, never overrides the primary exit code, and emits only a
+  # one-line stderr summary.
+  if [ "$rc" -ne 0 ]; then
+    collect_diagnostics "$rc"
+  fi
   # CI profile (REQ-065 D4, AC-065-27): auto-clean managed resources ONLY on
   # a non-zero exit (failure or INT/TERM — bash reports 128+signal). A
   # successful dev-up keeps the environment for REQ-066 consumption; the CI
@@ -97,7 +111,45 @@ cleanup_trap() {
   exit "$rc"
 }
 
+# collect_diagnostics — on a failed run capture kubectl describe/get/logs
+# into data/diagnostics/<ISO8601>/ (0600, 批次5 D6, AC-065-39) for offline
+# root-causing. Only the management cluster is inspected; nothing runs when
+# no environment was ever applied (no merged kubeconfig). Failures here are
+# best-effort: they must never override the primary error code.
+collect_diagnostics() {
+  local rc="$1"
+  local dir="$DEV_DATA_DIR/diagnostics/$(date -u +%Y%m%dT%H%M%SZ)"
+  [ -f "$DEV_DATA_DIR/kubeconfig.yaml" ] || return 0
+  command -v kubectl >/dev/null 2>&1 || return 0
+  (
+    set +e
+    umask 077
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+    ctl_kubectl -n release-manager-dev get pods -o wide > "$dir/pods.txt" 2>/dev/null
+    ctl_kubectl -n release-manager-dev get deployments,services,configmaps,secrets > "$dir/resources.txt" 2>/dev/null
+    ctl_kubectl -n release-manager-dev get events --sort-by=.lastTimestamp > "$dir/events.txt" 2>/dev/null
+    ctl_kubectl -n release-manager-dev describe pods > "$dir/describe-pods.txt" 2>/dev/null
+    # Per-pod recent logs; one file per pod (name hashed into the filename
+    # to stay flat and shell-safe).
+    local pod hash
+    while IFS= read -r pod; do
+      [ -n "$pod" ] || continue
+      hash="$(printf '%s' "$pod" | sha256sum | cut -c1-12)"
+      ctl_kubectl -n release-manager-dev logs "pod/$pod" --all-containers --tail=100 --timestamps \
+        > "$dir/log-$hash.txt" 2>/dev/null || true
+    done < <(ctl_kubectl -n release-manager-dev get pods -o name 2>/dev/null | sed 's#^pod/##' || true)
+    find "$dir" -type f -exec chmod 600 {} + 2>/dev/null || true
+  ) || true
+  printf 'diagnostics collected to %s (exit %s)\n' "$dir" "$rc" >&2
+}
+
 # ci_auto_purge — delete every resource in the ownership whitelist.
+# D-017 teardown order: clusters first, then their kubeconfigs/ownership
+# entries, then the networks (the registry is disconnected from each network
+# BEFORE removal — k3d registry_up joins the registry to every cluster
+# network and docker refuses to remove a network with live endpoints, real
+# smoke ②), then the containers incl. the registry and its data volume.
 ci_auto_purge() {
   local manifest name registry_vol
   registry_vol=""
@@ -105,19 +157,37 @@ ci_auto_purge() {
     registry_vol="$(registry_volume)"
   fi
   manifest="$(ownership_read)"
+  printf '%s' "$manifest" | sed -nE 's/.*"k3d_clusters"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
+    [ -n "$name" ] || continue
+    k3d cluster delete "$name" >/dev/null 2>&1 || true
+    rm -f "$DEV_DATA_DIR/kubeconfigs/$name.yaml"
+    ownership_remove k3d_clusters "$name"
+  done
+  rm -f "$DEV_DATA_DIR/kubeconfig.yaml"
+  printf '%s' "$manifest" | sed -nE 's/.*"docker_networks"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
+    [ -n "$name" ] || continue
+    network_teardown "$name"
+    ownership_remove docker_networks "$name"
+  done
   printf '%s' "$manifest" | sed -nE 's/.*"docker_containers"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
     [ -n "$name" ] || continue
     docker rm -f "$name" >/dev/null 2>&1 || true
   done
   registry_volume_remove "$registry_vol"
-  printf '%s' "$manifest" | sed -nE 's/.*"docker_networks"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
-    [ -n "$name" ] || continue
-    docker network rm "$name" >/dev/null 2>&1 || true
-  done
-  printf '%s' "$manifest" | sed -nE 's/.*"k3d_clusters"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
-    [ -n "$name" ] || continue
-    k3d cluster delete "$name" >/dev/null 2>&1 || true
-  done
+}
+
+# network_teardown <network> — remove one cluster network in the D-017
+# order: disconnect the registry container from the network FIRST (a network
+# with live endpoints cannot be removed), then remove the network itself.
+# Idempotent: an already-gone network is a no-op.
+network_teardown() {
+  local network="$1"
+  if docker network inspect "$network" >/dev/null 2>&1; then
+    if docker container inspect "$REGISTRY_CONTAINER" >/dev/null 2>&1; then
+      docker network disconnect -f "$network" "$REGISTRY_CONTAINER" >/dev/null 2>&1 || true
+    fi
+    docker network rm "$network" >/dev/null 2>&1 || true
+  fi
 }
 
 # ci_residual_manifest — JSON-lines residual list of resources that still
@@ -178,7 +248,12 @@ require_tcp_ready() {
   local deadline=$((SECONDS + DEV_TIMEOUT_READY))
   while [ "$SECONDS" -lt "$deadline" ]; do
     if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
-      exec 3>&- 2>/dev/null || true
+      # The fd-close must live in a subshell: `exec` redirections are
+      # PERMANENT for the shell, so a bare `exec 3>&- 2>/dev/null` would
+      # silently redirect every later stderr write (fail messages,
+      # diagnostics summary) into /dev/null (real trap-chain bug caught by
+      # fake-CLI tests: the fixture /version smoke failure vanished).
+      (exec 3>&-) 2>/dev/null || true
       log "  $service       localhost:$port            tcp-open"
       return 0
     fi
@@ -279,6 +354,55 @@ service_token_ensure() {
 service_token_ci_temp_cleanup() {
   [ "${DEV_PROFILE:-local}" = "ci" ] || return 0
   rm -f "$(service_token_path)" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# Dev mTLS CA (REQ-065 批次5 D1, AC-065-36): the operator gateway's mTLS CA
+# is generated by dev-up BEFORE deployment into 0600 data/dev-ca/ (ca.key +
+# ca.crt), injected by kustomize into the orchestrator gateway mount, so the
+# seed enrollment phase never races the CA's first-time generation (REQ-015
+# 决策#2 dev 文件降级). Generation/reuse semantics live in the devseed
+# helper (cmd/devseed -ensure-mtls-ca): it reuses an existing parseable CA
+# and regenerates a missing/corrupt one — the exact format the operator's
+# ca.Load consumes. Rotation = delete data/dev-ca/ and re-run dev-up. The ci
+# profile materializes DEV_M_TLS_CA_KEY / DEV_M_TLS_CA_CERT transiently for
+# the kustomize build and never persists them.
+# ---------------------------------------------------------------------------
+mtls_ca_key_path() { printf '%s' "$DEV_DATA_DIR/dev-ca/ca.key"; }
+mtls_ca_cert_path() { printf '%s' "$DEV_DATA_DIR/dev-ca/ca.crt"; }
+
+mtls_ca_ensure() {
+  local dir="$DEV_DATA_DIR/dev-ca"
+  if [ "${DEV_PROFILE:-local}" = "ci" ]; then
+    if [ -z "${DEV_M_TLS_CA_KEY:-}" ] || [ -z "${DEV_M_TLS_CA_CERT:-}" ]; then
+      fail "$ERR_SERVICE_UNHEALTHY" "ci profile requires DEV_M_TLS_CA_KEY and DEV_M_TLS_CA_CERT (the dev mTLS CA is not written to disk)"
+    fi
+    mkdir -p "$dir"
+    umask 077
+    printf '%s' "$DEV_M_TLS_CA_KEY" > "$(mtls_ca_key_path)"
+    printf '%s' "$DEV_M_TLS_CA_CERT" > "$(mtls_ca_cert_path)"
+    chmod 600 "$(mtls_ca_key_path)" "$(mtls_ca_cert_path)"
+    return 0
+  fi
+  # The helper owns the full contract (exists+parseable → reuse, missing or
+  # corrupt → regenerate); dev-up always delegates so corrupt material is
+  # regenerated instead of bricking the orchestrator gateway (ca.Load fails
+  # closed on an unparseable pair).
+  if ! go run ./cmd/devseed/ -ensure-mtls-ca "$dir"; then
+    fail "$ERR_SERVICE_UNHEALTHY" "cannot generate/reuse the dev mTLS CA in $dir (go toolchain required)"
+  fi
+  [ -s "$(mtls_ca_key_path)" ] && [ -s "$(mtls_ca_cert_path)" ] \
+    || fail "$ERR_SERVICE_UNHEALTHY" "dev mTLS CA helper produced no files in $dir"
+  chmod 600 "$(mtls_ca_key_path)" "$(mtls_ca_cert_path)" 2>/dev/null || true
+  chmod 700 "$dir" 2>/dev/null || true
+  log "  dev mTLS CA (ensured) ............ $dir"
+}
+
+# mtls_ca_ci_temp_cleanup — remove the transient ci mTLS CA files after
+# apply (批次5 D1: the ci profile never leaves secret material on disk).
+mtls_ca_ci_temp_cleanup() {
+  [ "${DEV_PROFILE:-local}" = "ci" ] || return 0
+  rm -f "$(mtls_ca_key_path)" "$(mtls_ca_cert_path)" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -489,9 +613,53 @@ cluster_exists() {
   names="$(k3d cluster list 2>/dev/null || true)"
   printf '%s' "$names" | grep -qw "$1"
 }
+# node_memory_for / node_cpu_for — deterministic server-node resources per
+# cluster class (REQ-065 批次5 D2, AC-065-37): control cluster 3GiB/2CPU,
+# customer clusters 1.5GiB/1CPU. DEV_K3D_NODE_MEMORY / DEV_K3D_NODE_CPU
+# override both classes (DEV_TIMEOUT_* pattern: per-invocation, never
+# persisted).
+node_memory_for() {
+  if [ -n "${DEV_K3D_NODE_MEMORY:-}" ]; then
+    printf '%s' "$DEV_K3D_NODE_MEMORY"
+  elif [ "$1" = "$CONTROL_CLUSTER" ]; then
+    printf '3GiB'
+  else
+    printf '1.5GiB'
+  fi
+}
+
+node_cpu_for() {
+  if [ -n "${DEV_K3D_NODE_CPU:-}" ]; then
+    printf '%s' "$DEV_K3D_NODE_CPU"
+  elif [ "$1" = "$CONTROL_CLUSTER" ]; then
+    printf '2'
+  else
+    printf '1'
+  fi
+}
+
+# node_resources_apply <cluster> — enforce the CPU cap on the server node
+# container. k3d exposes --servers-memory but no CPU flag at all (v5.8.3
+# --help 实测; the memory flag is passed at creation below), so the CPU
+# limit rides docker update on the server-0 container — applied to newly
+# created clusters and to owned clusters on resume so a DEV_K3D_NODE_CPU
+# override stays effective across re-runs (AC-065-37).
+node_resources_apply() {
+  local cluster="$1" cpu
+  cpu="$(node_cpu_for "$cluster")"
+  if ! docker update --cpus "$cpu" "k3d-$cluster-server-0" >/dev/null; then
+    fail "$ERR_CLUSTER_CREATE_FAILED" "cannot apply node CPU limit $cpu to cluster $cluster"
+  fi
+}
+
 cluster_up() {
   local cluster="$1"
   if cluster_exists "$cluster"; then
+    # Owned clusters keep their resource caps current on resume (AC-065-37);
+    # a same-named foreign cluster is never touched (AC-065-22 boundary).
+    if ownership_contains k3d_clusters "$cluster"; then
+      node_resources_apply "$cluster"
+    fi
     log "  $cluster (exists)"
     return 0
   fi
@@ -507,6 +675,10 @@ cluster_up() {
     cluster create "$cluster"
     --registry-use "$REGISTRY_NAME"
     --registry-config "$SCRIPT_DIR/../k3d/registries.yaml"
+    # AC-065-37 (批次5 D2): deterministic server-node memory. k3d has no
+    # CPU flag — the CPU cap is applied via docker update after creation
+    # (node_resources_apply).
+    --servers-memory "$(node_memory_for "$cluster")"
     --wait
     # REQ-065 kubeconfig isolation (real smoke 2026-08-24): without these,
     # k3d rewrites ~/.kube/config and switches its current-context to the
@@ -545,8 +717,11 @@ cluster_up() {
   if ! k3d "${args[@]}"; then
     fail "$ERR_CLUSTER_CREATE_FAILED" "k3d failed to create $cluster"
   fi
-  # kubeconfig into the project data dir, never ~/.kube/config.
+  node_resources_apply "$cluster"
+  # kubeconfig into the project data dir, never ~/.kube/config. 0600:
+  # the file carries full cluster admin credentials (批次5 D7, AC-065-40).
   k3d kubeconfig get "$cluster" > "$DEV_DATA_DIR/kubeconfigs/$cluster.yaml"
+  chmod 600 "$DEV_DATA_DIR/kubeconfigs/$cluster.yaml"
   ownership_add k3d_clusters "$cluster"
   # The cluster network is created by k3d without labels; record it so the
   # conflict gate and dev-purge treat it as managed (AC-065-22/26).
@@ -570,6 +745,8 @@ clusters_up() {
   done
   if [ "${#existing[@]}" -gt 0 ]; then
     k3d kubeconfig merge "${existing[@]}" -o "$DEV_DATA_DIR/kubeconfig.yaml" >/dev/null
+    # Merged file carries the same admin credentials: 0600 too (AC-065-40).
+    chmod 600 "$DEV_DATA_DIR/kubeconfig.yaml"
   fi
 }
 
@@ -596,9 +773,11 @@ content_hash() {
   done
   printf '%s' "$hash_input" | sha256sum | cut -d' ' -f1
 }
-build_and_push() {
-  local service="$1"
-  local hash
+# image_record <service> — compute the content hash, record it in IMAGE_TAGS
+# (so kustomize_apply can pin the exact digest), and report whether a build
+# is needed (0) or the manifest already exists in the registry (1).
+image_record() {
+  local service="$1" hash
   hash="$(content_hash "$service")"
   # Record the tag so kustomize_apply can pin the applied manifests to the
   # exact digest pushed here (recorded before the unchanged-skip return so a
@@ -609,13 +788,25 @@ build_and_push() {
   # "invalid reference format"). Keep the content-addressed semantics with
   # the '-' separator.
   local tag="content-sha256-$hash"
-  local dockerfile="deploy/docker/Dockerfile.$service"
-  if [ "$service" = "fixture" ]; then
-    dockerfile="deploy/fixtures/Dockerfile"
-  fi
   if docker manifest inspect "localhost:${REGISTRY_PORT}/release-$service:$tag" >/dev/null 2>&1; then
     log "  release-$service:$tag (unchanged)"
-    return 0
+    return 1
+  fi
+  return 0
+}
+
+# build_push_now <service> — build and push using the tag recorded by
+# image_record. Exit codes 10 (build failure) / 11 (push failure) let the
+# parallel scheduler join every job before mapping failures back to the
+# stable docker_build_failed / docker_push_failed error codes.
+build_push_now() {
+  local service="$1" hash tag dockerfile
+  hash="${IMAGE_TAGS[$service]:-}"
+  [ -n "$hash" ] || return 10
+  tag="content-sha256-$hash"
+  dockerfile="deploy/docker/Dockerfile.$service"
+  if [ "$service" = "fixture" ]; then
+    dockerfile="deploy/fixtures/Dockerfile"
   fi
   # Proxy build-args (same contract as the k3d node injection below): a host
   # behind a proxy must pass it into the build container or `go mod download`
@@ -644,20 +835,110 @@ build_and_push() {
     )
   fi
   if ! docker build "${build_args[@]}" --file "$dockerfile" --tag "localhost:${REGISTRY_PORT}/release-$service:$tag" .; then
-    fail "$ERR_DOCKER_BUILD_FAILED" "build failed for release-$service"
+    return 10
   fi
   if ! docker push "localhost:${REGISTRY_PORT}/release-$service:$tag"; then
-    fail "$ERR_DOCKER_PUSH_FAILED" "push failed for release-$service:$tag"
+    return 11
   fi
   log "  release-$service:$tag (built & pushed)"
+  return 0
 }
 
-images_up() {
-  log "[4/7] docker images ..................... "
+# build_and_push <service> — sequential image build (record + build/push).
+build_and_push() {
+  local service="$1" rc
+  if ! image_record "$service"; then
+    return 0
+  fi
+  if ! build_push_now "$service"; then
+    rc=$?
+    if [ "$rc" -eq 11 ]; then
+      fail "$ERR_DOCKER_PUSH_FAILED" "push failed for release-$service:content-sha256-${IMAGE_TAGS[$service]:-}"
+    fi
+    fail "$ERR_DOCKER_BUILD_FAILED" "build failed for release-$service"
+  fi
+}
+
+# images_up_sequential — the deterministic default: every image is built in
+# order (AC-065-38: 5 clusters stay resident while 8 Go builds run; parallel
+# Go builds risk OOM).
+images_up_sequential() {
   local service
   for service in webhook orchestrator operator auth notifier web fixture notification-sink; do
     build_and_push "$service"
   done
+}
+
+# images_up_parallel <n> — DEV_BUILD_PARALLELISM=2/4 scheduler (AC-065-38):
+# tags are recorded in the parent shell first (associative arrays do not
+# cross subshell boundaries), then pending images are built in chunks of n
+# background jobs. Every job is joined before failure mapping so a slow
+# sibling cannot be orphaned behind an early fail.
+images_up_parallel() {
+  local par="$1"
+  log "[4/7] docker images (parallelism $par) .... "
+  local service pending=()
+  for service in webhook orchestrator operator auth notifier web fixture notification-sink; do
+    if image_record "$service"; then
+      pending+=("$service")
+    fi
+  done
+  [ "${#pending[@]}" -gt 0 ] || return 0
+  local i=0 svc rc first_fail="" pids=() names=()
+  for svc in "${pending[@]}"; do
+    build_push_now "$svc" &
+    pids+=("$!")
+    names+=("$svc")
+    i=$((i + 1))
+    if [ "$i" -ge "$par" ]; then
+      local j=0
+      for j in "${!pids[@]}"; do
+        if ! wait "${pids[$j]}"; then
+          rc=$?
+          first_fail="${first_fail:-${names[$j]}}"
+        fi
+      done
+      pids=()
+      names=()
+      i=0
+    fi
+  done
+  if [ "${#pids[@]}" -gt 0 ]; then
+    local j=0
+    for j in "${!pids[@]}"; do
+      if ! wait "${pids[$j]}"; then
+        rc=$?
+        first_fail="${first_fail:-${names[$j]}}"
+      fi
+    done
+  fi
+  if [ -n "$first_fail" ]; then
+    if [ "${rc:-0}" -eq 11 ]; then
+      fail "$ERR_DOCKER_PUSH_FAILED" "push failed for release-$first_fail:content-sha256-${IMAGE_TAGS[$first_fail]:-}"
+    fi
+    fail "$ERR_DOCKER_BUILD_FAILED" "build failed for release-$first_fail"
+  fi
+}
+
+images_up() {
+  # AC-065-38 (批次5 D5): 1/2/4 selects the parallel degree; the default
+  # (unset) is sequential for determinism. An unrecognized value falls back
+  # to sequential with a stderr note — the knob must never brick dev-up.
+  case "${DEV_BUILD_PARALLELISM:-}" in
+    2 | 4)
+      images_up_parallel "$DEV_BUILD_PARALLELISM"
+      ;;
+    "" | 1)
+      log "[4/7] docker images ..................... "
+      images_up_sequential
+      ;;
+    *)
+      printf 'DEV_BUILD_PARALLELISM=%s invalid (expected 1/2/4); falling back to sequential builds\n' \
+        "$DEV_BUILD_PARALLELISM" >&2
+      log "[4/7] docker images ..................... "
+      images_up_sequential
+      ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
@@ -683,11 +964,43 @@ kustomize_apply() {
   if ! printf '%s\n' "$manifest" | ctl_kubectl apply -f -; then
     fail "$ERR_SERVICE_UNHEALTHY" "kubectl apply failed for $KUSTOMIZE_DIR"
   fi
-  # ci profile: the transient JWT key / service token files served the
-  # kustomize build above; the Secrets live in the cluster now and the files
-  # are removed (D3 / 批次3 D2).
+  # ci profile: the transient JWT key / service token / mTLS CA files served
+  # the kustomize build above; the Secrets live in the cluster now and the
+  # files are removed (D3 / 批次3 D2 / 批次5 D1).
   jwt_ci_temp_cleanup
   service_token_ci_temp_cleanup
+  mtls_ca_ci_temp_cleanup
+}
+
+# require_db_ready <service> — PostgreSQL/Redis readiness via kubectl exec
+# into the pinned image pods (REQ-065 批次5 D3, AC-065-01): `pg_isready`
+# (postgres:16) and `redis-cli ping` (redis:7-alpine) probe the databases
+# directly instead of proxying through business-service connections. The
+# output only drives this shell judgment and never enters E2E assertions;
+# the wait is bounded by DEV_TIMEOUT_READY (AC-065-10/28).
+require_pg_ready() {
+  local deadline=$((SECONDS + DEV_TIMEOUT_READY))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if ctl_kubectl -n release-manager-dev exec deployment/postgres -- pg_isready >/dev/null 2>&1; then
+      log "  postgresql    cluster-internal:5432         ready"
+      return 0
+    fi
+    sleep 2
+  done
+  fail "$ERR_SERVICE_UNHEALTHY" "postgres did not pass pg_isready within ${DEV_TIMEOUT_READY}s"
+}
+
+require_redis_ready() {
+  local deadline=$((SECONDS + DEV_TIMEOUT_READY)) out
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    out="$(ctl_kubectl -n release-manager-dev exec deployment/redis -- redis-cli ping 2>/dev/null || true)"
+    if printf '%s' "$out" | grep -q 'PONG'; then
+      log "  redis         cluster-internal:6379         ready"
+      return 0
+    fi
+    sleep 2
+  done
+  fail "$ERR_SERVICE_UNHEALTHY" "redis did not answer redis-cli ping PONG within ${DEV_TIMEOUT_READY}s"
 }
 
 readiness() {
@@ -709,6 +1022,10 @@ readiness() {
     fail "$ERR_SERVICE_UNHEALTHY" "web did not answer on port ${DEV_PORTS[5]}"
   fi
   log "  web           http://localhost:${DEV_PORTS[5]}         200"
+  # Cluster-internal databases (批次5 D3): kubectl exec probes against the
+  # pinned image pods, counted into the DEV_TIMEOUT_READY budget.
+  require_pg_ready
+  require_redis_ready
 }
 
 # ---------------------------------------------------------------------------
@@ -815,6 +1132,45 @@ agents_up() {
   done
 }
 
+# smoke_fixture_version — assert the fixture workload reports fixture-vN
+# through a temporary kubectl port-forward (REQ-065 批次5 D10, AC-065-01):
+# the image content version is decoupled from the data fixture_version, no
+# NodePort is exposed and no operator-side proxy is introduced. The forward
+# is killed on every exit path.
+smoke_fixture_version() {
+  local pf_pid="" logf port version_out
+  logf="$DEV_DATA_DIR/fixture-pf.log"
+  # dev-customer-a-direct hosts every E2E target; e2e-release is the
+  # e2e-release-target namespace (fixture chart deployment release-fixture).
+  customer_kubectl dev-customer-a-direct -n e2e-release port-forward svc/release-fixture :8088 > "$logf" 2>&1 &
+  pf_pid=$!
+  # ${pf_pid:-} / ${logf:-}: the vars are local to this function and are out
+  # of scope when the trap fires at script EXIT — plain "$pf_pid" would trip
+  # `set -u` (unbound variable), abort the trap with exit 1 and skip
+  # cleanup_trap entirely (real trap-chain bug caught by fake-CLI tests).
+  trap 'TRAP_RC=$?; kill "${pf_pid:-}" 2>/dev/null || true; rm -f "${logf:-}" 2>/dev/null || true; cleanup_trap' EXIT INT TERM
+  local deadline=$((SECONDS + 15))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    port="$(sed -nE 's#Forwarding from (127\.0\.0\.1|\[::1\]):([0-9]+) -> .*#\2#p' "$logf" 2>/dev/null | head -1 || true)"
+    [ -n "$port" ] && break
+    sleep 1
+  done
+  if [ -z "$port" ]; then
+    kill "$pf_pid" 2>/dev/null || true
+    fail "$ERR_SERVICE_UNHEALTHY" "fixture port-forward did not bind a local port (log: $(cat "$logf" 2>/dev/null || true))"
+  fi
+  if ! version_out="$(curl --fail --silent --show-error "http://127.0.0.1:$port/version" 2>/dev/null)"; then
+    kill "$pf_pid" 2>/dev/null || true
+    fail "$ERR_SERVICE_UNHEALTHY" "fixture /version unreachable via port-forward on 127.0.0.1:$port"
+  fi
+  kill "$pf_pid" 2>/dev/null || true
+  rm -f "$logf"
+  if ! printf '%s' "$version_out" | grep -Eq '"version"[[:space:]]*:[[:space:]]*"fixture-v[0-9]+"'; then
+    fail "$ERR_SERVICE_UNHEALTHY" "fixture /version returned unexpected payload: $version_out"
+  fi
+  log "  fixture /version .................. $version_out"
+}
+
 # ---------------------------------------------------------------------------
 # Stage 7: seed (delegates to the devfixture runner)
 # ---------------------------------------------------------------------------
@@ -850,6 +1206,9 @@ seed() {
     fail "$ERR_SEED_WRITE_FAILED" "devseed failed: $seed_output"
   fi
   log "  seed data .......................... DONE"
+  # AC-065-01 (批次5 D10): the installed fixture workload must report
+  # fixture-vN via a temporary port-forward.
+  smoke_fixture_version
 }
 
 # ---------------------------------------------------------------------------
@@ -864,9 +1223,12 @@ cmd_up() {
   # D3: the JWT signing key must exist before kustomize build/apply (the
   # secretGenerator sources it); generate/reuse happens here, before any
   # deployment stage. Same for the bundle ingress service token (批次3 D2,
-  # AC-065-33): its secretGenerator sources data/dev-service-tokens/.
+  # AC-065-33) and the dev mTLS CA (批次5 D1, AC-065-36): their
+  # secretGenerators source data/dev-service-tokens/ and data/dev-ca/, and
+  # the seed enrollment phase requires the CA to already be in place.
   jwt_signing_key_ensure
   service_token_ensure
+  mtls_ca_ensure
   registry_up
   clusters_up
   images_up
@@ -879,7 +1241,11 @@ cmd_up() {
 cmd_down() {
   acquire_lock down
   trap cleanup_trap EXIT INT TERM
-  local cluster
+  local cluster network
+  # D-017 teardown order (real smoke ②): delete clusters → clean their
+  # kubeconfigs + ownership entries → disconnect the registry from each
+  # cluster network → remove the networks. Deleting a cluster while the
+  # registry is still attached to its network leaves both behind.
   for cluster in "${ALL_CLUSTERS[@]}"; do
     if ! ownership_contains k3d_clusters "$cluster"; then
       if cluster_exists "$cluster"; then
@@ -889,25 +1255,49 @@ cmd_down() {
     fi
     if cluster_exists "$cluster"; then
       k3d cluster delete "$cluster" || true
-      ownership_remove k3d_clusters "$cluster"
-      log "  removed cluster $cluster"
+    fi
+    # AC-065-04: the deleted cluster's kubeconfig and ownership entries go
+    # with it (registry/profile/created_at metadata is preserved).
+    rm -f "$DEV_DATA_DIR/kubeconfigs/$cluster.yaml"
+    ownership_remove k3d_clusters "$cluster"
+    network="$(cluster_network_name "$cluster")"
+    network_teardown "$network"
+    ownership_remove docker_networks "$network"
+    log "  removed cluster $cluster"
+  done
+  # Rebuild the merged kubeconfig from the clusters that remain; delete the
+  # merged file when nothing is left (AC-065-04).
+  local remaining=()
+  for cluster in "${ALL_CLUSTERS[@]}"; do
+    if cluster_exists "$cluster"; then
+      remaining+=("$cluster")
     fi
   done
+  if [ "${#remaining[@]}" -gt 0 ]; then
+    k3d kubeconfig merge "${remaining[@]}" -o "$DEV_DATA_DIR/kubeconfig.yaml" >/dev/null
+    chmod 600 "$DEV_DATA_DIR/kubeconfig.yaml"
+  else
+    rm -f "$DEV_DATA_DIR/kubeconfig.yaml"
+  fi
   log "registry and image cache retained"
 }
 
 cmd_seed() {
   acquire_lock seed
   trap cleanup_trap EXIT INT TERM
-  # dev-seed precondition (REQ-065 D3 / 批次3 D2): the JWT signing key and
-  # the webhook→orchestrator service token must already be injected — dev-up
-  # generates both before deployment. Seed never generates them itself: a
-  # missing key/token means dev-up has not converged yet.
+  # dev-seed precondition (REQ-065 D3 / 批次3 D2 / 批次5 D1): the JWT signing
+  # key, the webhook→orchestrator service token and the dev mTLS CA must
+  # already be injected — dev-up generates all three before deployment. Seed
+  # never generates them itself: a missing key/token/CA means dev-up has not
+  # converged yet.
   if [ "${DEV_PROFILE:-local}" != "ci" ] && { [ ! -f "$(jwt_key_path)" ] || [ ! -s "$(jwt_key_path)" ]; }; then
     fail "$ERR_SERVICE_UNHEALTHY" "JWT signing key $(jwt_key_path) missing; run make dev-up first"
   fi
   if [ "${DEV_PROFILE:-local}" != "ci" ] && { [ ! -f "$(service_token_path)" ] || [ ! -s "$(service_token_path)" ]; }; then
     fail "$ERR_SERVICE_UNHEALTHY" "webhook service token $(service_token_path) missing; run make dev-up first"
+  fi
+  if [ "${DEV_PROFILE:-local}" != "ci" ] && { [ ! -s "$(mtls_ca_key_path)" ] || [ ! -s "$(mtls_ca_cert_path)" ]; }; then
+    fail "$ERR_SERVICE_UNHEALTHY" "dev mTLS CA $DEV_DATA_DIR/dev-ca missing; run make dev-up first"
   fi
   seed
 }
@@ -1002,7 +1392,9 @@ cmd_reset_data() {
   pf_pid=$!
   # The trap releases the environment lock; the port-forward dies with the
   # process group on exit, but kill it explicitly to avoid a stray listener.
-  trap 'kill "$pf_pid" 2>/dev/null || true; cleanup_trap' EXIT INT TERM
+  # ${pf_pid:-}: local to this function — out of scope when the EXIT trap
+  # fires after cmd_reset_data returns (set -u would abort the trap).
+  trap 'TRAP_RC=$?; kill "${pf_pid:-}" 2>/dev/null || true; cleanup_trap' EXIT INT TERM
   local ts dump_files=() db dump_file
   ts="$(date +%Y%m%dT%H%M%S%z)"
   mkdir -p "$DEV_DATA_DIR/backups"
@@ -1085,7 +1477,27 @@ cmd_purge() {
   fi
   manifest="$(ownership_read)"
   local name
-  # Containers and networks from the whitelist, registry included.
+  # D-017 teardown order: clusters first (with kubeconfig + ownership
+  # cleanup), then networks (registry disconnected before removal), then the
+  # containers incl. the registry, its data volume and the data/ runtime
+  # files.
+  printf '%s' "$manifest" | sed -nE 's/.*"k3d_clusters"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
+    [ -n "$name" ] || continue
+    if cluster_exists "$name"; then
+      k3d cluster delete "$name" >/dev/null 2>&1 || true
+      log "  removed cluster $name"
+    fi
+    rm -f "$DEV_DATA_DIR/kubeconfigs/$name.yaml"
+    ownership_remove k3d_clusters "$name"
+  done
+  rm -f "$DEV_DATA_DIR/kubeconfig.yaml"
+  printf '%s' "$manifest" | sed -nE 's/.*"docker_networks"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
+    [ -n "$name" ] || continue
+    network_teardown "$name"
+    ownership_remove docker_networks "$name"
+    log "  removed network $name"
+  done
+  # Containers from the whitelist, registry included.
   printf '%s' "$manifest" | sed -nE 's/.*"docker_containers"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
     [ -n "$name" ] || continue
     docker rm -f "$name" >/dev/null 2>&1 || true
@@ -1095,16 +1507,6 @@ cmd_purge() {
   # creation) holds the image cache; purge deletes it together with the
   # container (dev-down retains both per the cache contract).
   registry_volume_remove "$registry_vol"
-  printf '%s' "$manifest" | sed -nE 's/.*"docker_networks"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
-    [ -n "$name" ] || continue
-    docker network rm "$name" >/dev/null 2>&1 || true
-    log "  removed network $name"
-  done
-  printf '%s' "$manifest" | sed -nE 's/.*"k3d_clusters"[[:space:]]*:[[:space:]]*\[([^]]*)\].*/\1/p' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | while IFS= read -r name || [ -n "$name" ]; do
-    [ -n "$name" ] || continue
-    k3d cluster delete "$name" >/dev/null 2>&1 || true
-    log "  removed cluster $name"
-  done
   purge_data_runtime
   log "data/ runtime files removed (data/archive/ preserved)"
   log "dev-purge complete"

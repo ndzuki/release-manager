@@ -361,6 +361,12 @@ if [ "$1" = "container" ] && [ "$2" = "create" ]; then
   printf '%s\n' "$*" >> "$DEV_DATA_DIR/docker-create.log"
   exit 0
 fi
+# AC-065-37: the CPU cap rides docker update --cpus (k3d has no CPU
+# flag); record it so tests can assert defaults and overrides.
+if [ "$1" = "update" ]; then
+  printf '%s\n' "$*" >> "$DEV_DATA_DIR/docker-update.log"
+  exit 0
+fi
 if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then
   if [ "$3" = "--format" ]; then
     case "${5}" in
@@ -376,14 +382,50 @@ fi
 if [ "$1" = "network" ] && [ "$2" = "inspect" ]; then exit 1; fi
 exit 0
 `)
-	writeShim(t, binDir, "curl", "#!/usr/bin/env bash\nexit 0\n")
-	writeShim(t, binDir, "kubectl", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "curl", `#!/usr/bin/env bash
+# The fixture /version smoke (批次5 D10) must receive a version payload
+# through the fake port-forward; every other probe just needs exit 0.
+if [[ "$*" == *"/version"* ]]; then printf '{"version":"fixture-v2"}\n'; exit 0; fi
+exit 0
+`)
+	writeShim(t, binDir, "kubectl", `#!/usr/bin/env bash
+# The fixture /version smoke runs `+"`kubectl port-forward`"+` against the
+# customer cluster; the fake forwards 127.0.0.1:18088 and stays alive until
+# killed. The Redis readiness probe (批次5 D3) expects a PONG from
+# `+"`kubectl exec ... redis-cli ping`"+`; the pg_isready probe only needs a
+# zero exit. Everything else passes through.
+for a in "$@"; do
+  if [ "$a" = "port-forward" ]; then
+    printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'
+    sleep 30
+    exit 0
+  fi
+  if [ "$a" = "redis-cli" ]; then
+    printf 'PONG\n'
+    exit 0
+  fi
+done
+exit 0
+`)
 	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
 	// go: answer the GOPROXY probe dev.sh forwards as a build-arg; the seed
 	// path (go run ./cmd/devseed) writes the four enrollment tokens (the
-	// split-seed agents_up stage consumes them) and exits 0.
+	// split-seed agents_up stage consumes them) and exits 0. The mTLS CA
+	// helper invocation (批次5 D1, AC-065-36: -ensure-mtls-ca <dir>) writes
+	// the two dummy CA files and exits 0.
 	writeShim(t, binDir, "go", `#!/usr/bin/env bash
 if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-ensure-mtls-ca" ]; then
+    mkdir -p "$a"
+    printf 'fake-ca-key\n' > "$a/ca.key"
+    printf 'fake-ca-cert\n' > "$a/ca.crt"
+    chmod 600 "$a/ca.key" "$a/ca.crt"
+    exit 0
+  fi
+  prev="$a"
+done
 mkdir -p "$DEV_DATA_DIR/dev-enrollment-tokens"
 for c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed; do
   printf 'fake-token\n' > "$DEV_DATA_DIR/dev-enrollment-tokens/$c.token"
@@ -453,6 +495,25 @@ func TestDevUpCreatesFiveClustersAndMergedKubeconfig(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(stateDir, "kubeconfig.yaml")); err != nil {
 		t.Fatalf("expected merged data/kubeconfig.yaml, got %v", err)
+	}
+	// AC-065-40 (批次5 D7): per-cluster and merged kubeconfigs are 0600.
+	for _, path := range []string{
+		filepath.Join(stateDir, "kubeconfig.yaml"),
+		filepath.Join(stateDir, "kubeconfigs", "release-manager-control.yaml"),
+		filepath.Join(stateDir, "kubeconfigs", "dev-customer-a-direct.yaml"),
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("expected %s, got %v", path, err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("expected 0600 on %s, got %o", path, info.Mode().Perm())
+		}
+	}
+	// AC-065-01 (批次5 D10): the fixture /version smoke runs through the
+	// temporary port-forward and reports fixture-vN.
+	if !strings.Contains(out, "fixture /version") || !strings.Contains(out, "fixture-v2") {
+		t.Fatalf("expected fixture /version smoke output (fixture-vN):\n%s", out)
 	}
 	// Ownership manifest lists the 5 clusters and the registry container.
 	manifest, err := os.ReadFile(filepath.Join(stateDir, "dev-ownership.json"))
@@ -600,7 +661,8 @@ func TestCiProfileAutoPurgesOnExit(t *testing.T) {
 	env, binDir := fakeEnv(t, stateDir)
 	fakeK3d(t, binDir, stateDir)
 	happyShims(t, binDir)
-	env = append(env, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-001", "DEV_JWT_SIGNING_KEY=ci-jwt-key", "DEV_WEBHOOK_SERVICE_TOKEN=ci-service-token")
+	env = append(env, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-001", "DEV_JWT_SIGNING_KEY=ci-jwt-key", "DEV_WEBHOOK_SERVICE_TOKEN=ci-service-token",
+		"DEV_M_TLS_CA_KEY=ci-ca-key", "DEV_M_TLS_CA_CERT=ci-ca-cert")
 
 	if out, err := runDev(t, env, "up"); err != nil {
 		t.Fatalf("ci dev-up failed:\n%s", out)
@@ -622,7 +684,8 @@ func TestCiProfileAutoPurgesOnExit(t *testing.T) {
 	happyShims(t, binDir2)
 	writeShim(t, binDir2, "docker",
 		"#!/usr/bin/env bash\nfor a in \"$@\"; do if [ \"$a\" = \"inspect\" ]; then exit 1; fi; done\nif [ \"$1\" = \"build\" ]; then exit 1; fi\nexit 0\n")
-	env2 = append(env2, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-002", "DEV_JWT_SIGNING_KEY=ci-jwt-key", "DEV_WEBHOOK_SERVICE_TOKEN=ci-service-token")
+	env2 = append(env2, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-002", "DEV_JWT_SIGNING_KEY=ci-jwt-key", "DEV_WEBHOOK_SERVICE_TOKEN=ci-service-token",
+		"DEV_M_TLS_CA_KEY=ci-ca-key", "DEV_M_TLS_CA_CERT=ci-ca-cert")
 
 	out, err := runDev(t, env2, "up")
 	if err == nil {
@@ -654,10 +717,37 @@ func TestCleanCheckoutCreatesDataDirBeforeDiskGate(t *testing.T) {
 	env = append(env, "DEV_DATA_DIR="+dataDir)
 	fakeK3d(t, binDir, stateDir)
 	writeShim(t, binDir, "docker", "#!/usr/bin/env bash\nfor a in \"$@\"; do if [ \"$a\" = \"inspect\" ]; then exit 1; fi; done\nexit 0\n")
-	writeShim(t, binDir, "curl", "#!/usr/bin/env bash\nexit 0\n")
-	writeShim(t, binDir, "kubectl", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "curl", `#!/usr/bin/env bash
+if [[ "$*" == *"/version"* ]]; then printf '{"version":"fixture-v2"}\n'; exit 0; fi
+exit 0
+`)
+	writeShim(t, binDir, "kubectl", `#!/usr/bin/env bash
+for a in "$@"; do
+  if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
+  if [ "$a" = "redis-cli" ]; then printf 'PONG\n'; exit 0; fi
+done
+exit 0
+`)
 	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
-	writeShim(t, binDir, "go", "#!/usr/bin/env bash\nif [ \"$1\" = \"env\" ]; then printf 'https://proxy.golang.org,direct\\n'; fi\nexit 0\n")
+	writeShim(t, binDir, "go", `#!/usr/bin/env bash
+if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-ensure-mtls-ca" ]; then
+    mkdir -p "$a"
+    printf 'fake-ca-key\n' > "$a/ca.key"
+    printf 'fake-ca-cert\n' > "$a/ca.crt"
+    chmod 600 "$a/ca.key" "$a/ca.crt"
+    exit 0
+  fi
+  prev="$a"
+done
+mkdir -p "$DEV_DATA_DIR/dev-enrollment-tokens"
+for c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed; do
+  printf 'fake-token\n' > "$DEV_DATA_DIR/dev-enrollment-tokens/$c.token"
+done
+exit 0
+`)
 	writeShim(t, binDir, "nproc", "#!/usr/bin/env bash\nprintf '8\\n'\n")
 	// awk: answer the memory probe with a pass, and make the disk probe
 	// ordering-sensitive but filesystem-independent: a missing data dir
@@ -771,6 +861,23 @@ exit 0
 		writeShim(t, binDir, "awk", "#!/usr/bin/env bash\ncat >/dev/null\nif [[ \"$*\" == *\"/proc/meminfo\"* ]]; then printf '24576\\n'; else printf '524288000\\n'; fi\n")
 		writeShim(t, binDir, "df", "#!/usr/bin/env bash\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/x 1000000000 1 524288000 1%% /\\n'\n")
 		writeShim(t, binDir, "nproc", "#!/usr/bin/env bash\nprintf '8\\n'\n")
+		// The mTLS CA ensure (批次5 D1) runs before the registry stage; the
+		// shim writes the dummy CA pair so the conflict gate is the failure.
+		writeShim(t, binDir, "go", `#!/usr/bin/env bash
+if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-ensure-mtls-ca" ]; then
+    mkdir -p "$a"
+    printf 'fake-ca-key\n' > "$a/ca.key"
+    printf 'fake-ca-cert\n' > "$a/ca.crt"
+    chmod 600 "$a/ca.key" "$a/ca.crt"
+    exit 0
+  fi
+  prev="$a"
+done
+exit 0
+`)
 		out, err := runDev(t, env, "up")
 		if err == nil {
 			t.Fatalf("expected resource_conflict, got success:\n%s", out)
@@ -831,6 +938,9 @@ func TestPurgeRemovesDataRuntimeFilesKeepsArchive(t *testing.T) {
 		"dev-trust-root/dev-trust-root.key",
 		"dev-jwt/jwt-signing-key.pem",
 		"dev-service-tokens/webhook-service-token",
+		"dev-ca/ca.key",
+		"dev-ca/ca.crt",
+		"diagnostics/20260825T120000Z/pods.txt",
 		"kubeconfigs/cluster.yaml",
 	}
 	for _, name := range files {
@@ -1024,11 +1134,31 @@ fi
 if [ "$1" = "network" ] && [ "$2" = "inspect" ]; then exit 1; fi
 exit 0
 `)
-	writeShim(t, binDir, "curl", "#!/usr/bin/env bash\nexit 0\n")
-	writeShim(t, binDir, "kubectl", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "curl", `#!/usr/bin/env bash
+if [[ "$*" == *"/version"* ]]; then printf '{"version":"fixture-v2"}\n'; exit 0; fi
+exit 0
+`)
+	writeShim(t, binDir, "kubectl", `#!/usr/bin/env bash
+for a in "$@"; do
+  if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
+  if [ "$a" = "redis-cli" ]; then printf 'PONG\n'; exit 0; fi
+done
+exit 0
+`)
 	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "go", `#!/usr/bin/env bash
 if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-ensure-mtls-ca" ]; then
+    mkdir -p "$a"
+    printf 'fake-ca-key\n' > "$a/ca.key"
+    printf 'fake-ca-cert\n' > "$a/ca.crt"
+    chmod 600 "$a/ca.key" "$a/ca.crt"
+    exit 0
+  fi
+  prev="$a"
+done
 mkdir -p "$DEV_DATA_DIR/dev-enrollment-tokens"
 for c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed; do
   printf 'fake-token\n' > "$DEV_DATA_DIR/dev-enrollment-tokens/$c.token"
@@ -1088,9 +1218,9 @@ func TestDevTimeoutReadyOverride(t *testing.T) {
 func TestDevSeedPassesTimeoutRetryOverrides(t *testing.T) {
 	stateDir := t.TempDir()
 	env, binDir := fakeEnv(t, stateDir)
-	// dev-seed precondition: the JWT key and the webhook service token must
-	// already exist (generated by a prior dev-up, D3 / 批次3 D2). fakeEnv
-	// points DEV_DATA_DIR at the state dir.
+	// dev-seed precondition: the JWT key, the webhook service token and the
+	// dev mTLS CA must already exist (generated by a prior dev-up, D3 /
+	// 批次3 D2 / 批次5 D1). fakeEnv points DEV_DATA_DIR at the state dir.
 	keyPath := filepath.Join(stateDir, "dev-jwt", "jwt-signing-key.pem")
 	if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
 		t.Fatal(err)
@@ -1103,6 +1233,16 @@ func TestDevSeedPassesTimeoutRetryOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(tokenPath, []byte("service-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	caKeyPath := filepath.Join(stateDir, "dev-ca", "ca.key")
+	if err := os.MkdirAll(filepath.Dir(caKeyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(caKeyPath, []byte("ca-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "dev-ca", "ca.crt"), []byte("ca-cert"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	writeShim(t, binDir, "flock", "#!/usr/bin/env bash\nexit 0\n")
@@ -1123,8 +1263,18 @@ if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then
 fi
 exit 0
 `)
-	writeShim(t, binDir, "kubectl", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "kubectl", `#!/usr/bin/env bash
+for a in "$@"; do
+  if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
+  if [ "$a" = "redis-cli" ]; then printf 'PONG\n'; exit 0; fi
+done
+exit 0
+`)
 	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "curl", `#!/usr/bin/env bash
+if [[ "$*" == *"/version"* ]]; then printf '{"version":"fixture-v2"}\n'; exit 0; fi
+exit 0
+`)
 	env = append(env, "DEV_TIMEOUT_OPERATOR=42", "DEV_TIMEOUT_SEED_RETRIES=7")
 
 	out, err := runDev(t, env, "seed")
@@ -1185,6 +1335,18 @@ func TestKustomizeBuildJwtSecretAndNoPostgresPVC(t *testing.T) {
 	if err := os.WriteFile(tokenPath, []byte("test-service-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// AC-065-36: the mTLS CA secretGenerator sources data/dev-ca/ (ca.key +
+	// ca.crt) generated by dev-up before apply.
+	caDir := filepath.Join(tmp, "data", "dev-ca")
+	if err := os.MkdirAll(caDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(caDir, "ca.key"), []byte("test-ca-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(caDir, "ca.crt"), []byte("test-ca-cert"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	cmd := exec.CommandContext(context.Background(), kustomize, "build", "--load-restrictor", "LoadRestrictionsNone", "deploy/kustomize/dev")
 	cmd.Dir = tmp
@@ -1225,5 +1387,501 @@ func TestKustomizeBuildJwtSecretAndNoPostgresPVC(t *testing.T) {
 	}
 	if !strings.Contains(manifest, "optional: true") {
 		t.Fatalf("expected optional previous-token key (zero-downtime rotation):\n%s", manifest)
+	}
+	// AC-065-36: the mTLS CA Secret is generated with a content hash and
+	// mounted into the orchestrator gateway paths (/data/gateway-ca.key +
+	// /data/gateway-ca.crt, the ca.key_path/ca.cert_path config targets).
+	if !strings.Contains(manifest, "name: release-manager-mtls-ca-") {
+		t.Fatalf("expected generated release-manager-mtls-ca-<hash> Secret in built manifest:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, "\n  ca.key: ") || !strings.Contains(manifest, "\n  ca.crt: ") {
+		t.Fatalf("expected ca.key/ca.crt data keys in the mtls-ca Secret:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, "mountPath: /data/gateway-ca.key") ||
+		!strings.Contains(manifest, "mountPath: /data/gateway-ca.crt") {
+		t.Fatalf("expected gateway CA key/cert mounts on the orchestrator Deployment:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, "subPath: ca.key") || !strings.Contains(manifest, "subPath: ca.crt") {
+		t.Fatalf("expected gateway CA subPath mounts on the orchestrator Deployment:\n%s", manifest)
+	}
+}
+
+// TestMtlsCaGeneratedAndReused covers 批次5 D1 / AC-065-36 (local leg):
+// dev-up delegates the dev mTLS CA ensure to the devseed helper
+// (go run -ensure-mtls-ca <dir>) before any deployment stage, and the pair
+// lands as 0600 files in a 0700 dir. The helper owns reuse vs regeneration
+// (Go-tested); the shell contract asserted here is the invocation, the file
+// presence and the permissions, plus regeneration after rotation.
+func TestMtlsCaGeneratedAndReused(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	// Replace the go shim with one that logs every -ensure-mtls-ca call and
+	// generates non-deterministic content (rotation must be observable).
+	writeShim(t, binDir, "go", `#!/usr/bin/env bash
+if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
+printf '%s\n' "$*" >> "$DEV_DATA_DIR/go-calls.log"
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-ensure-mtls-ca" ]; then
+    n=$(cat "$DEV_DATA_DIR/ca-count" 2>/dev/null || printf 0)
+    n=$((n + 1))
+    printf '%s' "$n" > "$DEV_DATA_DIR/ca-count"
+    mkdir -p "$a"
+    printf 'fake-ca-key-%s\n' "$n" > "$a/ca.key"
+    printf 'fake-ca-cert-%s\n' "$n" > "$a/ca.crt"
+    chmod 600 "$a/ca.key" "$a/ca.crt"
+    exit 0
+  fi
+  prev="$a"
+done
+mkdir -p "$DEV_DATA_DIR/dev-enrollment-tokens"
+for c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed; do
+  printf 'fake-token\n' > "$DEV_DATA_DIR/dev-enrollment-tokens/$c.token"
+done
+exit 0
+`)
+
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("dev-up failed:\n%s", out)
+	}
+	caDir := filepath.Join(stateDir, "dev-ca")
+	keyPath := filepath.Join(caDir, "ca.key")
+	certPath := filepath.Join(caDir, "ca.crt")
+	for _, path := range []string{keyPath, certPath} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("expected %s, got %v", path, err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("expected 0600 on %s, got %o", path, info.Mode().Perm())
+		}
+	}
+	dirInfo, err := os.Stat(caDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("expected 0700 dev-ca dir, got %o", dirInfo.Mode().Perm())
+	}
+	// The helper invocation targeted the data/dev-ca dir.
+	logged, err := os.ReadFile(filepath.Join(stateDir, "go-calls.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), "-ensure-mtls-ca "+caDir) {
+		t.Fatalf("expected -ensure-mtls-ca %s delegation:\n%s", caDir, logged)
+	}
+	// Re-run delegates again (reuse vs regenerate is the helper's own
+	// contract, locked by cmd/devseed TestEnsureDevMTLSCA_GenerateReuse...);
+	// the shell contract is that the delegation happens on every run and
+	// the pair remains present with the right permissions.
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("second dev-up failed:\n%s", out)
+	}
+	logged, err = os.ReadFile(filepath.Join(stateDir, "go-calls.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(logged), "-ensure-mtls-ca "+caDir); got != 2 {
+		t.Fatalf("expected the CA helper delegated on both runs, got %d:\n%s", got, logged)
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		t.Fatalf("dev mTLS CA key missing after re-run: %v", err)
+	}
+	// Rotation: delete the key and re-run — the helper regenerates.
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("dev-up after rotation failed:\n%s", out)
+	}
+	recreated, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatalf("expected a recreated dev mTLS CA key after rotation: %v", err)
+	}
+	if recreated.Mode().Perm() != 0o600 {
+		t.Fatalf("expected 0600 recreated key, got %o", recreated.Mode().Perm())
+	}
+}
+
+// TestCiProfileMtlsCaTransientFilesRemoved covers 批次5 D1 (ci leg,
+// AC-065-36): the ci profile materializes DEV_M_TLS_CA_KEY/CERT into the
+// kustomize source path transiently and never leaves them on disk after a
+// successful dev-up.
+func TestCiProfileMtlsCaTransientFilesRemoved(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	env = append(env, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-003", "DEV_JWT_SIGNING_KEY=ci-jwt-key",
+		"DEV_WEBHOOK_SERVICE_TOKEN=ci-service-token", "DEV_M_TLS_CA_KEY=ci-ca-key", "DEV_M_TLS_CA_CERT=ci-ca-cert")
+
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("ci dev-up failed:\n%s", out)
+	}
+	for _, path := range []string{
+		filepath.Join(stateDir, "dev-ca", "ca.key"),
+		filepath.Join(stateDir, "dev-ca", "ca.crt"),
+	} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("ci profile must not persist the transient mTLS CA file %s (stat err=%v)", path, err)
+		}
+	}
+}
+
+// TestDevDownTeardownOrderAndKubeconfigCleanup covers ② D-017 / AC-065-04:
+// dev-down deletes the clusters, then cleans their kubeconfigs + ownership
+// entries, disconnects the registry from each cluster network BEFORE
+// removing the network (real smoke: a network with the registry attached
+// cannot be removed), and drops the merged kubeconfig when no cluster
+// remains.
+func TestDevDownTeardownOrderAndKubeconfigCleanup(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("dev-up failed:\n%s", out)
+	}
+	for _, cluster := range []string{
+		"release-manager-control", "dev-customer-a-direct", "dev-customer-a-cache",
+		"dev-customer-b-replicated", "dev-customer-b-mixed",
+	} {
+		if _, err := os.Stat(filepath.Join(stateDir, "kubeconfigs", cluster+".yaml")); err != nil {
+			t.Fatalf("expected kubeconfig for %s after dev-up, got %v", cluster, err)
+		}
+	}
+	// Swap in a teardown-observing docker shim: networks and the registry
+	// container exist, and every network verb is logged in argument order.
+	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "network" ]; then
+  printf '%s\n' "$*" >> "$DEV_DATA_DIR/docker-net.log"
+  exit 0
+fi
+if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then exit 0; fi
+exit 0
+`)
+
+	if out, err := runDev(t, env, "down"); err != nil {
+		t.Fatalf("dev-down failed:\n%s", out)
+	}
+	// Kubeconfigs for the deleted clusters are gone; nothing remains to
+	// merge, so the merged file is deleted too (AC-065-04).
+	for _, cluster := range []string{
+		"release-manager-control", "dev-customer-a-direct", "dev-customer-a-cache",
+		"dev-customer-b-replicated", "dev-customer-b-mixed",
+	} {
+		if _, err := os.Stat(filepath.Join(stateDir, "kubeconfigs", cluster+".yaml")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected kubeconfig for %s removed by dev-down (stat err=%v)", cluster, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "kubeconfig.yaml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected merged kubeconfig removed when no cluster remains (stat err=%v)", err)
+	}
+	// Ownership: clusters and networks removed; registry entry retained.
+	manifest, err := os.ReadFile(filepath.Join(stateDir, "dev-ownership.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(manifest), `"k3d_clusters":[]`) {
+		t.Fatalf("expected empty k3d_clusters after dev-down:\n%s", manifest)
+	}
+	if !strings.Contains(string(manifest), `"docker_networks":[]`) {
+		t.Fatalf("expected empty docker_networks after dev-down:\n%s", manifest)
+	}
+	if !strings.Contains(string(manifest), "k3d-release-manager-registry") {
+		t.Fatalf("dev-down must retain the registry ownership entry:\n%s", manifest)
+	}
+	// D-017 order: for every cluster network the registry disconnect line
+	// precedes the network removal line.
+	logged, err := os.ReadFile(filepath.Join(stateDir, "docker-net.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, network := range []string{
+		"k3d-release-manager-control", "k3d-dev-customer-a-direct", "k3d-dev-customer-a-cache",
+		"k3d-dev-customer-b-replicated", "k3d-dev-customer-b-mixed",
+	} {
+		disconnectIdx := strings.Index(string(logged), "disconnect -f "+network)
+		rmIdx := strings.Index(string(logged), "rm "+network)
+		if disconnectIdx == -1 {
+			t.Fatalf("expected registry disconnect for %s:\n%s", network, logged)
+		}
+		if rmIdx == -1 {
+			t.Fatalf("expected network removal for %s:\n%s", network, logged)
+		}
+		if disconnectIdx > rmIdx {
+			t.Fatalf("D-017 order violated for %s: disconnect must precede rm:\n%s", network, logged)
+		}
+	}
+}
+
+// TestK3dNodeResourceDefaultsAndOverride covers AC-065-37 (批次5 D2):
+// k3d create receives --servers-memory with the deterministic class defaults
+// (control 3GiB, customers 1.5GiB) and the CPU cap is applied via docker
+// update (control 2, customers 1); DEV_K3D_NODE_MEMORY / DEV_K3D_NODE_CPU
+// override both classes.
+func TestK3dNodeResourceDefaultsAndOverride(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		stateDir := t.TempDir()
+		env, binDir := fakeEnv(t, stateDir)
+		fakeK3d(t, binDir, stateDir)
+		happyShims(t, binDir)
+		if out, err := runDev(t, env, "up"); err != nil {
+			t.Fatalf("dev-up failed:\n%s", out)
+		}
+		creates := clusterCreates(k3dCreates(stateDir))
+		if len(creates) != 5 {
+			t.Fatalf("expected 5 creates, got %d", len(creates))
+		}
+		for _, c := range creates {
+			if strings.HasPrefix(c, "release-manager-control|") && !strings.Contains(c, "--servers-memory 3GiB") {
+				t.Fatalf("control cluster missing default 3GiB:\n%s", c)
+			}
+			if !strings.HasPrefix(c, "release-manager-control|") && !strings.Contains(c, "--servers-memory 1.5GiB") {
+				t.Fatalf("customer cluster missing default 1.5GiB:\n%s", c)
+			}
+		}
+		updates, err := os.ReadFile(filepath.Join(stateDir, "docker-update.log"))
+		if err != nil {
+			t.Fatalf("docker update not recorded: %v", err)
+		}
+		lines := strings.Split(strings.TrimSpace(string(updates)), "\n")
+		if len(lines) != 5 {
+			t.Fatalf("expected 5 docker update calls, got %d:\n%s", len(lines), updates)
+		}
+		if !strings.Contains(string(updates), "k3d-release-manager-control-server-0 --cpus 2") &&
+			!strings.Contains(string(updates), "--cpus 2 k3d-release-manager-control-server-0") {
+			t.Fatalf("expected control cluster CPU cap 2:\n%s", updates)
+		}
+		if !strings.Contains(string(updates), "--cpus 1") {
+			t.Fatalf("expected customer cluster CPU cap 1:\n%s", updates)
+		}
+	})
+	t.Run("override", func(t *testing.T) {
+		stateDir := t.TempDir()
+		env, binDir := fakeEnv(t, stateDir)
+		fakeK3d(t, binDir, stateDir)
+		happyShims(t, binDir)
+		env = append(env, "DEV_K3D_NODE_MEMORY=2GiB", "DEV_K3D_NODE_CPU=4")
+		if out, err := runDev(t, env, "up"); err != nil {
+			t.Fatalf("dev-up failed:\n%s", out)
+		}
+		creates := clusterCreates(k3dCreates(stateDir))
+		for _, c := range creates {
+			if !strings.Contains(c, "--servers-memory 2GiB") {
+				t.Fatalf("override memory missing:\n%s", c)
+			}
+		}
+		updates, err := os.ReadFile(filepath.Join(stateDir, "docker-update.log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(updates)), "\n") {
+			if !strings.Contains(line, "--cpus 4") {
+				t.Fatalf("override CPU cap missing in docker update:\n%s", updates)
+			}
+		}
+	})
+}
+
+// TestBuildParallelismSequentialParallelInvalid covers AC-065-38 (批次5 D5):
+// the default is sequential builds (no overlap), DEV_BUILD_PARALLELISM=2
+// overlaps up to 2 builds, and an invalid value falls back to sequential.
+func TestBuildParallelismSequentialParallelInvalid(t *testing.T) {
+	buildOrder := func(t *testing.T, env []string) []byte {
+		t.Helper()
+		stateDir := t.TempDir()
+		env2, binDir := fakeEnv(t, stateDir)
+		fakeK3d(t, binDir, stateDir)
+		happyShims(t, binDir)
+		writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "manifest" ] && [ "$2" = "inspect" ]; then exit 1; fi
+if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then exit 1; fi
+if [ "$1" = "network" ] && [ "$2" = "inspect" ]; then exit 1; fi
+if [ "$1" = "build" ]; then printf 'B\n' >> "$DEV_DATA_DIR/build-order.log"; sleep 0.5; printf 'E\n' >> "$DEV_DATA_DIR/build-order.log"; exit 0; fi
+if [ "$1" = "push" ]; then exit 0; fi
+exit 0
+`)
+		env2 = append(env2, env...)
+		if out, err := runDev(t, env2, "up"); err != nil {
+			t.Fatalf("dev-up failed:\n%s", out)
+		}
+		logged, err := os.ReadFile(filepath.Join(stateDir, "build-order.log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return logged
+	}
+	marker := func(t *testing.T, env []string) string {
+		t.Helper()
+		return strings.TrimSpace(string(buildOrder(t, env)))
+	}
+
+	t.Run("sequential default", func(t *testing.T) {
+		order := marker(t, nil)
+		if strings.Contains(order, "B\nB") {
+			t.Fatalf("default builds must be sequential, got overlap:\n%s", order)
+		}
+		if got := strings.Count(order, "B"); got != 8 {
+			t.Fatalf("expected 8 builds, got %d:\n%s", got, order)
+		}
+	})
+	t.Run("parallelism 2", func(t *testing.T) {
+		order := marker(t, []string{"DEV_BUILD_PARALLELISM=2"})
+		if !strings.Contains(order, "B\nB") {
+			t.Fatalf("parallelism 2 must overlap builds, got:\n%s", order)
+		}
+		if strings.Contains(order, "B\nB\nB") {
+			t.Fatalf("parallelism 2 must cap concurrency at 2, got:\n%s", order)
+		}
+		if got := strings.Count(order, "B"); got != 8 {
+			t.Fatalf("expected 8 builds, got %d:\n%s", got, order)
+		}
+	})
+	t.Run("invalid falls back sequential", func(t *testing.T) {
+		order := marker(t, []string{"DEV_BUILD_PARALLELISM=3"})
+		if strings.Contains(order, "B\nB") {
+			t.Fatalf("invalid parallelism must fall back to sequential, got overlap:\n%s", order)
+		}
+	})
+}
+
+// TestKubectlExecDbReadiness covers 批次5 D3 (AC-065-01): PostgreSQL and
+// Redis readiness are probed with kubectl exec into the pinned image pods
+// (pg_isready / redis-cli ping), and a never-ready PostgreSQL fails
+// dev-up with service_unhealthy after DEV_TIMEOUT_READY.
+func TestKubectlExecDbReadiness(t *testing.T) {
+	t.Run("probes recorded", func(t *testing.T) {
+		stateDir := t.TempDir()
+		env, binDir := fakeEnv(t, stateDir)
+		fakeK3d(t, binDir, stateDir)
+		happyShims(t, binDir)
+		writeShim(t, binDir, "kubectl", `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DEV_DATA_DIR/kubectl.log"
+for a in "$@"; do
+  if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
+  if [ "$a" = "redis-cli" ]; then printf 'PONG\n'; exit 0; fi
+done
+exit 0
+`)
+		if out, err := runDev(t, env, "up"); err != nil {
+			t.Fatalf("dev-up failed:\n%s", out)
+		}
+		logged, err := os.ReadFile(filepath.Join(stateDir, "kubectl.log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		all := string(logged)
+		if !strings.Contains(all, "exec deployment/postgres -- pg_isready") {
+			t.Fatalf("expected kubectl exec pg_isready probe:\n%s", all)
+		}
+		if !strings.Contains(all, "exec deployment/redis -- redis-cli ping") {
+			t.Fatalf("expected kubectl exec redis-cli ping probe:\n%s", all)
+		}
+	})
+	t.Run("postgres never ready", func(t *testing.T) {
+		stateDir := t.TempDir()
+		env, binDir := fakeEnv(t, stateDir)
+		fakeK3d(t, binDir, stateDir)
+		happyShims(t, binDir)
+		// Only the pg_isready probe fails; apply/port-forward/redis must
+		// keep passing so the run reaches the readiness stage (a blanket
+		// exit 1 would fail kubectl apply first and mask the probe).
+		writeShim(t, binDir, "kubectl", `#!/usr/bin/env bash
+if [[ "$*" == *"pg_isready"* ]]; then exit 1; fi
+for a in "$@"; do
+  if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
+  if [ "$a" = "redis-cli" ]; then printf 'PONG\n'; exit 0; fi
+done
+exit 0
+`)
+		env = append(env, "DEV_TIMEOUT_READY=1")
+		out, err := runDev(t, env, "up")
+		if err == nil {
+			t.Fatalf("expected readiness failure, got success:\n%s", out)
+		}
+		if !strings.Contains(out, "service_unhealthy") || !strings.Contains(out, "pg_isready") {
+			t.Fatalf("expected service_unhealthy naming the pg_isready probe:\n%s", out)
+		}
+	})
+}
+
+// TestDiagnosticsCollectedOnFailureAndPurged covers 批次5 D6 / AC-065-39:
+// a failed dev-up collects kubectl describe/get/logs into
+// data/diagnostics/<ISO8601>/ (0600 files, one-line stderr summary), and
+// dev-purge removes the directory.
+func TestDiagnosticsCollectedOnFailureAndPurged(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	// The build fails after the clusters were created, so the merged
+	// kubeconfig exists and diagnostics have something to inspect.
+	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "manifest" ] && [ "$2" = "inspect" ]; then exit 1; fi
+if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then exit 1; fi
+if [ "$1" = "network" ] && [ "$2" = "inspect" ]; then exit 1; fi
+if [ "$1" = "build" ]; then exit 1; fi
+exit 0
+`)
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("expected docker_build_failed, got success:\n%s", out)
+	}
+	if !strings.Contains(out, "docker_build_failed") {
+		t.Fatalf("expected docker_build_failed:\n%s", out)
+	}
+	diagDir := filepath.Join(stateDir, "diagnostics")
+	entries, err := os.ReadDir(diagDir)
+	if err != nil {
+		t.Fatalf("expected diagnostics dir after failure: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected one ISO8601 diagnostics snapshot, got %d", len(entries))
+	}
+	snapshot := filepath.Join(diagDir, entries[0].Name())
+	for _, name := range []string{"pods.txt", "resources.txt", "events.txt", "describe-pods.txt"} {
+		info, err := os.Stat(filepath.Join(snapshot, name))
+		if err != nil {
+			t.Fatalf("expected collected %s, got %v", name, err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("expected 0600 on %s, got %o", name, info.Mode().Perm())
+		}
+	}
+
+	// dev-purge removes the diagnostics directory (AC-065-39 second leg).
+	env = append(env, "CONFIRM=1")
+	if out, err := runDev(t, env, "purge"); err != nil {
+		t.Fatalf("purge failed:\n%s", out)
+	}
+	if _, err := os.Stat(diagDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected diagnostics dir purged (stat err=%v)", err)
+	}
+}
+
+// TestFixtureVersionSmokeRejectsUnexpectedPayload covers 批次5 D10 negative
+// leg (AC-065-01): a /version payload outside fixture-vN fails dev-up with
+// service_unhealthy naming the unexpected payload.
+func TestFixtureVersionSmokeRejectsUnexpectedPayload(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	writeShim(t, binDir, "curl", `#!/usr/bin/env bash
+if [[ "$*" == *"/version"* ]]; then printf '{"version":"production-image"}\n'; exit 0; fi
+exit 0
+`)
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("expected fixture /version smoke failure, got success:\n%s", out)
+	}
+	if !strings.Contains(out, "service_unhealthy") || !strings.Contains(out, "unexpected payload") {
+		t.Fatalf("expected service_unhealthy with unexpected payload:\n%s", out)
 	}
 }
