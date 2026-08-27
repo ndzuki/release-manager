@@ -561,6 +561,9 @@ type fakeWebhook struct {
 	// (default, mirrors the async real validation's end state); false keeps
 	// them RECEIVED so tests can exercise waitBundleValidated's timeout.
 	validateSync bool
+	// lastImages records the bundle images of the most recent submission so
+	// tests can assert the fixture image digest is the resolved one.
+	lastImages []*commonv1.BundleImage
 }
 
 func newFakeWebhook(shared map[string]*orchestratorv1.BundleSummary) *fakeWebhook {
@@ -572,6 +575,8 @@ func (f *fakeWebhook) SubmitReleaseBundle(_ context.Context, req *connect.Reques
 	defer f.mu.Unlock()
 	f.calls++
 	f.idemKeys = append(f.idemKeys, idemOf(req))
+	msg := req.Msg
+	f.lastImages = append([]*commonv1.BundleImage(nil), msg.GetImages()...)
 	if f.failOnce != nil {
 		err := f.failOnce
 		f.failOnce = nil
@@ -580,7 +585,6 @@ func (f *fakeWebhook) SubmitReleaseBundle(_ context.Context, req *connect.Reques
 	if f.failEvery != nil {
 		return nil, f.failEvery
 	}
-	msg := req.Msg
 	digest := "sha256:" + valuesDigest([]byte(msg.GetName()+"|"+msg.GetChartDigest()))
 	summary, ok := f.summaries[msg.GetChartDigest()]
 	if !ok {

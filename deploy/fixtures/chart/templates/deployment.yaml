@@ -20,7 +20,11 @@ spec:
         fsGroup: 65532
       containers:
         - name: release-fixture
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          # The bundle overrides image.repository with the full reference
+          # (FULL_REFERENCE value kind), so the template uses it directly —
+          # appending :{{ .Values.image.tag }} would produce a double tag
+          # (real smoke 2026-08-27: ErrImagePull on the malformed ref).
+          image: "{{ .Values.image.repository }}"
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

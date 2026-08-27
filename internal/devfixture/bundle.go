@@ -196,11 +196,25 @@ func fallbackChartDigest() string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// contentDigest returns the content-sha256 digest for an artifact reference
-// (REQ-065 image digest semantics).
-func contentDigest(ref string) string {
-	sum := sha256.Sum256([]byte(ref))
-	return "sha256:" + hex.EncodeToString(sum[:])
+// fixtureImageDigest resolves the REAL registry digest of the dev fixture
+// image (release-fixture:dev, re-tagged by dev.sh from the content-sha256
+// push). The bundle's image digest must match what the operator pulls and
+// what preflight resolves (real smoke 2026-08-27: the previous content
+// digest of the ref STRING was fake — image pulls and preflight digest
+// parity could never match the actual manifest).
+func fixtureImageDigest() (string, error) {
+	client, err := registry.NewClient(registry.ClientOptPlainHTTP())
+	if err != nil {
+		return "", fmt.Errorf("create helm registry client: %w", err)
+	}
+	desc, err := client.Resolve(bundleImageRef)
+	if err != nil {
+		return "", fmt.Errorf("resolve fixture image %s: %w", bundleImageRef, err)
+	}
+	if desc.Digest == "" {
+		return "", fmt.Errorf("resolve fixture image %s: empty digest", bundleImageRef)
+	}
+	return desc.Digest.String(), nil
 }
 
 // phaseBundle packages and submits the fixture release bundle through the
@@ -216,7 +230,11 @@ func (r *runner) phaseBundle(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	imageDigest := contentDigest(bundleImageRef)
+	imageDigest, err := r.imageDigest()
+	if err != nil {
+		return err
+	}
+	r.cfg.log().Info("fixture image digest resolved", "ref", bundleImageRef, "digest", imageDigest)
 
 	req := connect.NewRequest(&webhookv1.SubmitReleaseBundleRequest{
 		Name:         bundleName,

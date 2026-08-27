@@ -192,10 +192,14 @@ type runner struct {
 	manifest *Manifest
 	state    runState
 	chartSvc chartPackager
+	// imageDigest resolves the real registry digest of the fixture image for
+	// the bundle. Defaults to fixtureImageDigest (hits the local registry);
+	// tests inject a stub to avoid the network seam.
+	imageDigest func() (string, error)
 }
 
 func newRunner(cfg Config) *runner {
-	return &runner{cfg: cfg, clients: newConnectClients(cfg), chartSvc: defaultChartPackager{cfg: cfg}}
+	return &runner{cfg: cfg, clients: newConnectClients(cfg), chartSvc: defaultChartPackager{cfg: cfg}, imageDigest: fixtureImageDigest}
 }
 
 func (r *runner) progressPath() string { return filepath.Join(r.cfg.DataDir, progressFileName) }

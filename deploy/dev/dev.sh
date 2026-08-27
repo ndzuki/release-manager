@@ -898,6 +898,19 @@ build_push_now() {
   if ! docker push "localhost:${REGISTRY_PORT}/release-$service:$tag"; then
     return 11
   fi
+  # The fixture chart's values reference the static localhost:5001/release-fixture:dev
+  # (image.repository/tag); the operator's bundle image override points at the
+  # same ref. Re-tag the freshly pushed fixture image with :dev so the dev
+  # cluster can actually pull it (real smoke 2026-08-27: ErrImagePull —
+  # release-fixture:dev 404, only content-sha256 tags existed).
+  if [ "$service" = "fixture" ]; then
+    if ! docker tag "localhost:${REGISTRY_PORT}/release-$service:$tag" "localhost:${REGISTRY_PORT}/release-$service:dev"; then
+      return 10
+    fi
+    if ! docker push "localhost:${REGISTRY_PORT}/release-$service:dev"; then
+      return 11
+    fi
+  fi
   log "  release-$service:$tag (built & pushed)"
   return 0
 }

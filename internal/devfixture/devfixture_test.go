@@ -67,6 +67,9 @@ func testRunner(t *testing.T, fakes *fakeServices, mutate ...func(*Config)) *run
 		}
 	}
 	r.chartSvc = stubChartPackager{digest: "sha256:" + strings.Repeat("ab", 32)}
+	// The fixture image digest resolution hits the real local registry; stub
+	// it with a deterministic value so tests stay hermetic.
+	r.imageDigest = func() (string, error) { return "sha256:" + strings.Repeat("cd", 32), nil }
 	return r
 }
 
@@ -620,6 +623,27 @@ func TestRun_GetBundleReadbackCarriesAdminBearer(t *testing.T) {
 	for _, hdr := range fakes.bundle.lastAuthHdrs {
 		require.True(t, strings.HasPrefix(hdr, "Bearer "), "GetBundle call missing bearer token: %q", hdr)
 	}
+}
+
+// TestRun_BundleImageDigestIsResolvedFromRegistry locks the bundle image
+// contract (real smoke 2026-08-27): the submitted bundle image digest must be
+// the REAL registry digest the operator pulls and preflight resolves — not a
+// digest of the ref string (which never matches the actual manifest and broke
+// image pulls / digest parity). The runner's imageDigest seam is the registry
+// resolution; the test stubs it and asserts the value lands in the bundle.
+func TestRun_BundleImageDigestIsResolvedFromRegistry(t *testing.T) {
+	fakes := newFakeServices()
+	r := testRunner(t, fakes)
+	resolved := "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	r.imageDigest = func() (string, error) { return resolved, nil }
+
+	_, err := r.run(context.Background())
+	require.NoError(t, err)
+	require.Len(t, fakes.webhook.lastImages, 1)
+	img := fakes.webhook.lastImages[0]
+	require.Equal(t, bundleImageRef, img.GetRef())
+	require.Equal(t, resolved, img.GetDigest())
+	require.Equal(t, commonv1.ImageValueKind_IMAGE_VALUE_KIND_FULL_REFERENCE, img.GetValueKind())
 }
 
 // TestRun_AllWritesCarryStableIdempotencyKeys covers 批次5 D9 / AC-065-41:
