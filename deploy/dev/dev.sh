@@ -1137,7 +1137,10 @@ customer_kubectl() {
 # needs the IPs on ITS OWN cluster network.
 node_ip_on() {
   local container="$1" network="$2"
-  docker container inspect --format "{{index .NetworkSettings.Networks \"$network\".IPAddress}}" "$container" 2>/dev/null
+  # (index ... ).IPAddress — the map-indexed field access needs parens;
+  # `index ... "net".IPAddress` is a template parse error (real smoke
+  # 2026-08-27: empty mgmt/registry IPs → hostAliases unresolvable).
+  docker container inspect --format "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}" "$container" 2>/dev/null
 }
 
 # mgmt_node_ip_on <cluster> — the control node's IP on the customer network.
