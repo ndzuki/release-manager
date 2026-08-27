@@ -150,6 +150,7 @@ func newProgress(version string) progress {
 type runState struct {
 	adminToken     string
 	deployerToken  string
+	runnerToken    string
 	adminOrgID     string
 	deployerUserID string
 	credentials    credentials

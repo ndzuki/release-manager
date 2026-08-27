@@ -712,11 +712,22 @@ cluster_up() {
   # DNS name (Go httpproxy does not CIDR-match domains; without it nodes
   # route k3d-release-manager-registry through the proxy and fail). With
   # no proxy configured the cluster is created bare (REQ-065 framework).
+  # The @servers:* node filter is REQUIRED: k3d rejects an unfiltered --env
+  # mapping on multi-node clusters (server + loadbalancer count as two
+  # nodes; real smoke 2026-08-27: `EnvVarMapping 'HTTPS_PROXY=...' lacks a
+  # node filter, but there's more than one node`) — same class as the
+  # --runtime-label pitfall fixed in e18e3ed. NO_PROXY additionally covers
+  # the private CIDRs (k3d bridge 172.16.0.0/12, cluster CIDR 10.0.0.0/8):
+  # k3s honors HTTP(S)_PROXY for internal pod↔pod and apiserver→kubelet
+  # traffic, so without them every cluster-internal HTTP call routes
+  # through the host proxy (real smoke 2026-08-27: orchestrator values RPCs
+  # died with 502-style internal errors and `kubectl logs` got
+  # "proxyconnect tcp: proxy error ... code 502").
   if [ -n "${HTTP_PROXY:-}${http_proxy:-}${HTTPS_PROXY:-}${https_proxy:-}" ]; then
     args+=(
-      --env "HTTP_PROXY=${HTTP_PROXY:-${http_proxy:-}}"
-      --env "HTTPS_PROXY=${HTTPS_PROXY:-${https_proxy:-}}"
-      --env "NO_PROXY=k3d-$REGISTRY_NAME,localhost,127.0.0.1${NO_PROXY:+,$NO_PROXY}"
+      --env "HTTP_PROXY=${HTTP_PROXY:-${http_proxy:-}}@servers:*"
+      --env "HTTPS_PROXY=${HTTPS_PROXY:-${https_proxy:-}}@servers:*"
+      --env "NO_PROXY=k3d-$REGISTRY_NAME,localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16${NO_PROXY:+,$NO_PROXY}@servers:*"
     )
   fi
   if ! k3d "${args[@]}"; then
@@ -778,6 +789,34 @@ content_hash() {
   done
   printf '%s' "$hash_input" | sha256sum | cut -d' ' -f1
 }
+
+# build_goproxy — the GOPROXY chain forwarded into image builds. CN hosts
+# cannot reach the google default (proxy.golang.org) directly, and buildkit
+# RUN steps cannot reach a LOOPBACK host proxy (real smoke 2026-08-27: both
+# paths dead — proxied fetch refused, direct fetch i/o timeout). goproxy.cn
+# is directly reachable from CN hosts, so it is prepended as the primary
+# entry whenever the resolved chain is the google default (or empty); an
+# explicit user GOPROXY is passed through untouched.
+build_goproxy() {
+  local resolved="${GOPROXY:-$(go env GOPROXY 2>/dev/null || printf '')}"
+  case "$resolved" in
+    "https://proxy.golang.org,direct" | "" | "proxy.golang.org,direct")
+      printf 'https://goproxy.cn,%s' "${resolved:-https://proxy.golang.org,direct}"
+      ;;
+    *)
+      printf '%s' "$resolved"
+      ;;
+  esac
+}
+
+# goproxy_no_proxy_host — the hostname of the first build GOPROXY entry,
+# used to exempt module fetches from the build proxy (buildkit RUN steps
+# cannot reach a loopback host proxy). Empty when no host can be parsed
+# (NO_PROXY then keeps only its fixed entries).
+goproxy_no_proxy_host() {
+  printf '%s' "$(build_goproxy)" | sed -nE 's#^https?://([^/,:]+).*#\1#p' | sed -n '1p'
+}
+
 # image_record <service> — compute the content hash, record it in IMAGE_TAGS
 # (so kustomize_apply can pin the exact digest), and report whether a build
 # is needed (0) or the manifest already exists in the registry (1).
@@ -822,14 +861,21 @@ build_push_now() {
     build_args+=(
       --build-arg "HTTP_PROXY=${HTTP_PROXY:-${http_proxy:-}}"
       --build-arg "HTTPS_PROXY=${HTTPS_PROXY:-${https_proxy:-}}"
-      --build-arg "NO_PROXY=localhost,127.0.0.1${NO_PROXY:+,$NO_PROXY}"
+      # The GOPROXY host is added to NO_PROXY: buildkit RUN steps cannot
+      # reach a LOOPBACK host proxy (127.0.0.1 inside the build container is
+      # the container itself — real smoke 2026-08-27: `go mod download`
+      # died with "dial tcp 127.0.0.1:7890: connect: connection refused"),
+      # so module fetches bypass the proxy and go direct (goproxy.cn is
+      # directly reachable from CN hosts, verified 200/52ms).
+      --build-arg "NO_PROXY=localhost,127.0.0.1,$(goproxy_no_proxy_host)${NO_PROXY:+,$NO_PROXY}"
     )
   fi
   # GOPROXY build-arg: the container's default proxy.golang.org is
-  # unreachable from CN hosts (real-smoke failure); forward the host's go
-  # module proxy so go mod download resolves (go env GOPROXY on CI hosts is
-  # the default proxy.golang.org, so the fallback only guards missing go).
-  build_args+=(--build-arg "GOPROXY=${GOPROXY:-$(go env GOPROXY 2>/dev/null || printf 'https://proxy.golang.org,direct')}")
+  # unreachable from CN hosts (real-smoke failure); forward the effective
+  # build chain (goproxy.cn first when the google default resolves) so
+  # go mod download resolves (go env GOPROXY on CI hosts is the default
+  # proxy.golang.org, so the fallback only guards missing go).
+  build_args+=(--build-arg "GOPROXY=$(build_goproxy)")
   # Container-image mirror build-args (web): DEV_DOCKER_MIRROR is a registry
   # prefix such as docker.1ms.run/library/ used when Docker Hub is
   # unreachable from the host (CN); empty keeps the official tags (CI).
@@ -1020,6 +1066,17 @@ require_redis_ready() {
 
 readiness() {
   log "[6/7] readiness ......................... "
+  # Wait for every management-plane rollout to converge BEFORE probing:
+  # readyz can pass on a pod that the rolling update is about to terminate,
+  # and a seed request routed to that pod dies with `unexpected EOF`
+  # (real smoke 2026-08-27: seed authenticate hit the auth pod mid-rollout
+  # right after apply). rollout status is the deterministic convergence
+  # signal the probes alone are not.
+  if ! ctl_kubectl -n release-manager-dev rollout status \
+    deployment/webhook deployment/orchestrator deployment/auth deployment/notifier deployment/web deployment/notification-sink \
+    --timeout="${DEV_TIMEOUT_READY}s" >/dev/null; then
+    fail "$ERR_SERVICE_UNHEALTHY" "management-plane rollout did not converge within ${DEV_TIMEOUT_READY}s"
+  fi
   # Probe ports come from DEV_PORTS (host.sh) so the DEV_PORTS_OVERRIDE
   # test-isolation seam applies to the readiness stage too — fake-CLI tests
   # probe the overridden ports instead of the production 8082-8087 band.
@@ -1410,12 +1467,33 @@ cmd_reset_data() {
   # ${pf_pid:-}: local to this function — out of scope when the EXIT trap
   # fires after cmd_reset_data returns (set -u would abort the trap).
   trap 'TRAP_RC=$?; kill "${pf_pid:-}" 2>/dev/null || true; cleanup_trap' EXIT INT TERM
+  # The port-forward binds its listeners asynchronously; pg_dump would hit
+  # ECONNREFUSED when run immediately (real smoke 2026-08-27: reset-data
+  # failed `pg_dump failed for release_manager` while a manual re-run after
+  # 3s succeeded). Wait for the loopback listener before the first dump.
+  local pf_deadline=$((SECONDS + 30))
+  while [ "$SECONDS" -lt "$pf_deadline" ]; do
+    if (exec 3<>"/dev/tcp/127.0.0.1/5432") 2>/dev/null; then
+      (exec 3>&-) 2>/dev/null || true
+      break
+    fi
+    sleep 1
+  done
+  if [ "$SECONDS" -ge "$pf_deadline" ]; then
+    kill "$pf_pid" 2>/dev/null || true
+    fail "$ERR_SERVICE_UNHEALTHY" "postgres port-forward did not bind 127.0.0.1:5432 within 30s"
+  fi
   local ts dump_files=() db dump_file
   ts="$(date +%Y%m%dT%H%M%S%z)"
   mkdir -p "$DEV_DATA_DIR/backups"
   for db in release_manager release_notifier; do
     dump_file="$DEV_DATA_DIR/backups/dump-$ts-$db.sql"
     if ! PGPASSWORD=dev-release-manager pg_dump -Fc -h 127.0.0.1 -p 5432 -U release_manager -d "$db" -f "$dump_file" >/dev/null 2>&1; then
+      # AC-065-13 "environment untouched": the dump stage failed before any
+      # destructive step — restore writes before reporting. (Real smoke
+      # 2026-08-27: the port-forward race failed the dump and left the
+      # maintenance flag on, blocking every later seed write.)
+      ctl_kubectl -n release-manager-dev set env deployment/orchestrator deployment/auth deployment/notifier MAINTENANCE- >/dev/null 2>&1 || true
       fail "$ERR_SERVICE_UNHEALTHY" "pg_dump failed for $db (backup $dump_file); environment untouched"
     fi
     dump_files+=("$dump_file")
@@ -1434,6 +1512,18 @@ cmd_reset_data() {
 
   # 4. schema rebuild + canonical re-seed via devseed --reset (golang-migrate
   #    SDK down -all -> up, then the nine phases; see internal/devfixture).
+  #    Maintenance was protecting the dump; the re-seed is a WRITE pass
+  #    (Initialize + all nine phases) and must run with writes enabled —
+  #    keeping MAINTENANCE=true here blocks the very first Initialize RPC
+  #    (real smoke 2026-08-27: "initialize system: unavailable: maintenance"
+  #    left the reset dead-ended). The exclusive flock already serializes
+  #    lifecycle operations; the migrate window between this point and the
+  #    seed is dev-only acceptable exposure.
+  ctl_kubectl -n release-manager-dev set env deployment/orchestrator deployment/auth deployment/notifier MAINTENANCE- >/dev/null \
+    || fail "$ERR_SERVICE_UNHEALTHY" "cannot disable maintenance mode for re-seed"
+  ctl_kubectl -n release-manager-dev rollout status deployment/orchestrator deployment/auth deployment/notifier --timeout=180s >/dev/null \
+    || fail "$ERR_SERVICE_UNHEALTHY" "maintenance rollout did not converge"
+  log "  maintenance disabled (re-seed writes enabled)"
   if ! go run ./cmd/devseed/ --reset \
     --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085 \
     --operator-timeout "$DEV_TIMEOUT_OPERATOR" --seed-retries "$DEV_TIMEOUT_SEED_RETRIES" \
@@ -1443,9 +1533,24 @@ cmd_reset_data() {
     log "  seed failed; restoring databases"
     for db in release_manager release_notifier; do
       dump_file="$DEV_DATA_DIR/backups/dump-$ts-$db.sql"
-      if ! PGPASSWORD=dev-release-manager pg_restore -Fc -h 127.0.0.1 -p 5432 -U release_manager -d "$db" "$dump_file" >/dev/null 2>&1; then
+      # --clean --if-exists: the failed re-seed already ran migrate up, so
+      # the schema is non-empty — a plain restore would fail on "relation
+      # already exists" (real smoke 2026-08-27: restore failed while the
+      # dump file itself was perfectly readable).
+      # The host tools are PostgreSQL 18.6 while the dev server is pinned
+      # postgres:16 — pg_dump 18.6 emits `SET transaction_timeout = 0;` in
+      # the archive header, which the PG16 server rejects on restore
+      # (unrecognized configuration parameter; real smoke 2026-08-27, the
+      # P3 prototype's "版本不兼容" failure). Restore therefore decodes the
+      # custom archive to SQL, strips that one PG17+-only GUC line, and
+      # replays it via psql with ON_ERROR_STOP — still the real host tools.
+      if ! { PGPASSWORD=dev-release-manager pg_restore --clean --if-exists -Fc -f - "$dump_file" 2>"$dump_file.restore-err" \
+        | sed -e '/SET transaction_timeout = 0;/d' \
+        | PGPASSWORD=dev-release-manager psql -v ON_ERROR_STOP=1 -q -h 127.0.0.1 -p 5432 -U release_manager -d "$db"; } then
         printf 'restore failed for %s (backup %s); manual recovery required\n' "$db" "$dump_file" >&2
+        tail -5 "$dump_file.restore-err" >&2 2>/dev/null || true
       fi
+      rm -f "$dump_file.restore-err"
     done
     for cluster in "${CUSTOMER_CLUSTERS[@]}"; do
       if cluster_exists "$cluster"; then

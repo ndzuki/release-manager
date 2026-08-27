@@ -583,6 +583,27 @@ func TestClusterCreateInjectsProxyEnv(t *testing.T) {
 		if !strings.Contains(c, "NO_PROXY=k3d-release-manager-registry") {
 			t.Fatalf("create missing NO_PROXY registry domain: %s", c)
 		}
+		// Real smoke 2026-08-27: k3d rejects unfiltered --env mappings on
+		// multi-node clusters ("lacks a node filter, but there's more than
+		// one node"); every proxy env must carry the @servers:* filter.
+		if !strings.Contains(c, "@servers:*") {
+			t.Fatalf("create proxy env missing @servers:* node filter: %s", c)
+		}
+		for _, envArg := range []string{"HTTP_PROXY=", "HTTPS_PROXY=", "NO_PROXY=k3d-release-manager-registry"} {
+			if !strings.Contains(c, envArg) {
+				t.Fatalf("create missing %s env injection: %s", envArg, c)
+			}
+		}
+		// Real smoke 2026-08-27: NO_PROXY must cover the private CIDRs —
+		// k3s honors HTTP(S)_PROXY for internal apiserver→kubelet and
+		// pod↔pod HTTP traffic, so without them cluster-internal calls
+		// route through the host proxy (values RPCs died, kubectl logs got
+		// "proxyconnect tcp: proxy error ... 502").
+		for _, cidr := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"} {
+			if !strings.Contains(c, cidr) {
+				t.Fatalf("create NO_PROXY missing private CIDR %s: %s", cidr, c)
+			}
+		}
 	}
 	if len(creates) == 0 {
 		t.Fatal("no cluster creates recorded")
@@ -598,8 +619,17 @@ func TestClusterCreateInjectsProxyEnv(t *testing.T) {
 		}
 		if !strings.Contains(line, "--build-arg HTTP_PROXY=http://127.0.0.1:7890") ||
 			!strings.Contains(line, "--build-arg HTTPS_PROXY=http://127.0.0.1:7890") ||
-			!strings.Contains(line, "--build-arg GOPROXY=https://proxy.golang.org,direct") {
+			// Real smoke 2026-08-27: the google default module host is
+			// unreachable directly from CN hosts and buildkit cannot reach a
+			// loopback host proxy — the build chain must prepend the
+			// directly-reachable goproxy.cn as the primary entry.
+			!strings.Contains(line, "--build-arg GOPROXY=https://goproxy.cn,https://proxy.golang.org,direct") {
 			t.Fatalf("docker build missing proxy/GOPROXY build-args: %s", line)
+		}
+		// The first GOPROXY host must be exempted in NO_PROXY (module
+		// fetches go direct instead of through the loopback proxy).
+		if !strings.Contains(line, "--build-arg NO_PROXY=localhost,127.0.0.1,goproxy.cn") {
+			t.Fatalf("docker build NO_PROXY missing goproxy host exemption: %s", line)
 		}
 		if strings.Contains(line, "release-web:") &&
 			!strings.Contains(line, "--build-arg NODE_IMAGE=docker.1ms.run/library/node:24-alpine") {

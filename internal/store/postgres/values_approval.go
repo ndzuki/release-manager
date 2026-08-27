@@ -617,7 +617,9 @@ func valuesApprovalOutboxSelectQuery(table approvalOutboxTable) (string, error) 
 const valuesApprovalRevisionSelect = `
 	SELECT id, release_definition_id, version, state_version, status, "values",
 		digest, parent_revision_id, secret_refs, created_by_user_id,
-		submitted_at, decided_at, convergence_task_ids::text[], locked_paths,
+		submitted_at, decided_at,
+		array_to_json(convergence_task_ids) AS convergence_task_ids,
+		array_to_json(locked_paths) AS locked_paths,
 		created_at, updated_at
 	FROM values_revisions`
 

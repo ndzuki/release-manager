@@ -200,6 +200,11 @@ type fakeOrchestrator struct {
 	// idemKeys records the Idempotency-Key of every write RPC so tests can
 	// assert the stable key contract (AC-065-41).
 	idemKeys []string
+	// createAuthHdrs records the Authorization header of every
+	// CreateOperation so tests can assert the creating actor (AC-065-01:
+	// e2e-runner / release_admin — the deployer role cannot create
+	// Operations; real smoke 2026-08-27 permission_denied).
+	createAuthHdrs []string
 
 	nextOpID int
 }
@@ -442,6 +447,7 @@ func (f *fakeOrchestrator) CreateOperation(_ context.Context, req *connect.Reque
 	terminal := orchestratorv1.OperationStatus_OPERATION_STATUS_SUCCEEDED
 	key := req.Header().Get("Idempotency-Key")
 	f.idemKeys = append(f.idemKeys, key)
+	f.createAuthHdrs = append(f.createAuthHdrs, req.Header().Get("Authorization"))
 	if override, ok := f.opKeyTerminal[key]; ok {
 		terminal = override
 	}

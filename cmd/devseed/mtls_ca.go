@@ -34,14 +34,27 @@ func ensureDevMTLSCA(dir string) error {
 		fmt.Printf("dev mTLS CA reused from %s\n", dir)
 		return nil
 	}
+	// Distinguish first-run generation from rotation: the stderr note (the
+	// corrupt/incomplete pair it replaced) only matters when material
+	// already existed; a pristine data dir is the normal generate path and
+	// must stay quiet (REQ-065: stderr 仅诊断).
+	hadKey := fileExists(keyPath)
+	hadCert := fileExists(certPath)
 	if err := generateDevMTLSCA(dir, keyPath, certPath); err != nil {
 		return err
 	}
-	if reuseErr != nil {
+	if (hadKey || hadCert) && reuseErr != nil {
 		fmt.Fprintf(os.Stderr, "existing dev CA pair regenerated (was: %v)\n", reuseErr)
 	}
 	fmt.Printf("dev mTLS CA generated in %s\n", dir)
 	return nil
+}
+
+// fileExists reports whether a path exists (a dir counts: it is not a
+// parseable key and must be treated as pre-existing material to replace).
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // devCAReusable reports whether both files exist and parse as a valid CA

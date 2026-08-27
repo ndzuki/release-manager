@@ -6,6 +6,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	authv1 "github.com/ndzuki/release-manager/api/gen/auth/v1"
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 )
@@ -26,6 +27,16 @@ func (r *runner) phaseInstall(ctx context.Context) error {
 	}
 	r.state.operations = nil
 
+	// CreateOperation is denied to the deployer role (REQ-027 matrix /
+	// D-101); the bootstrap INSTALLs act as e2e-runner (release_admin) —
+	// the account the accounts phase provisioned exactly for
+	// CreateOperation/RollbackRelease/emergency changes. Real smoke
+	// 2026-08-27: install phase failed `permission_denied` on the deployer
+	// token, which the fakes (no role enforcement) had masked.
+	if err := r.ensureRunnerToken(ctx); err != nil {
+		return err
+	}
+
 	for _, seed := range definitionSeeds {
 		record := r.state.definitions[seed.logicalKey]
 		if record.id == "" || record.valuesRevisionID == "" {
@@ -38,6 +49,24 @@ func (r *runner) phaseInstall(ctx context.Context) error {
 		r.cfg.log().Info("bootstrap install succeeded", "definition", seed.logicalKey, "operation", operationID)
 		r.state.operations = append(r.state.operations, operationID)
 	}
+	return nil
+}
+
+// ensureRunnerToken logs the e2e-runner (release_admin) in once per run and
+// caches the token; the login is lazy because the account itself is only
+// provisioned in the accounts phase (a resume into install already has it).
+func (r *runner) ensureRunnerToken(ctx context.Context) error {
+	if r.state.runnerToken != "" {
+		return nil
+	}
+	login, err := r.clients.auth.Login(ctx, connect.NewRequest(&authv1.LoginRequest{
+		Username: e2eRunnerUser,
+		Password: r.state.credentials.runner,
+	}))
+	if err != nil {
+		return fmt.Errorf("login %s for bootstrap installs: %w", e2eRunnerUser, err)
+	}
+	r.state.runnerToken = login.Msg.GetAccessToken()
 	return nil
 }
 
@@ -69,8 +98,11 @@ func (r *runner) ensureInstallOperation(ctx context.Context, seed definitionSeed
 		// TASK-067 contract: idempotency travels via the Idempotency-Key
 		// header (AC-067-06/07) and the actor is derived from the bearer
 		// token by the auth interceptor, not from request fields.
+		// The creating actor is e2e-runner (release_admin): the deployer
+		// role cannot create Operations (REQ-027 matrix / D-101; real smoke
+		// 2026-08-27 permission_denied).
 		req.Header().Set("Idempotency-Key", key)
-		withAuth(req, r.state.deployerToken)
+		withAuth(req, r.state.runnerToken)
 		response, err := r.clients.orch.CreateOperation(ctx, req)
 		if err != nil {
 			return "", fmt.Errorf("create INSTALL operation for %s: %w", seed.logicalKey, err)

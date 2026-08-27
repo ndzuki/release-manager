@@ -161,6 +161,15 @@ func TestRun_SeedsAllNinePhases(t *testing.T) {
 			"trust call %d missing bearer token: %q", i, hdr)
 	}
 
+	// CreateOperation must act as e2e-runner (release_admin): the deployer
+	// role cannot create Operations (REQ-027 matrix / D-101; real smoke
+	// 2026-08-27: install phase permission_denied on the deployer token).
+	require.NotEmpty(t, fakes.orch.createAuthHdrs)
+	for i, hdr := range fakes.orch.createAuthHdrs {
+		require.Equalf(t, "Bearer token-e2e-runner", hdr,
+			"CreateOperation %d must carry the e2e-runner bearer, got %q", i, hdr)
+	}
+
 	// Enrollment token files: one per cluster.
 	for _, seed := range clusterSeeds {
 		info, err := os.Stat(r.enrollmentTokenPath(seed.id))
