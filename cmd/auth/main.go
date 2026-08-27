@@ -138,7 +138,20 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	s.traceShutdown = authorization.InstallTracing()
 	authzConfig := s.cfg.Authorization.WithDefaults()
 	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)
-	limiter := auth.NewRateLimiter(5, time.Minute)
+	// Per-username login rate limit: the production default is 5 attempts /
+	// minute; the dev environment configures a higher bound because the
+	// fixture re-authenticates every account during seed/resume and retries
+	// (real smoke 2026-08-27: `resource_exhausted: too many login attempts`
+	// blocked devseed's accounts drift check mid-reset).
+	maxAttempts := 5
+	window := time.Minute
+	if s.cfg.LoginRateLimit.MaxAttempts > 0 {
+		maxAttempts = s.cfg.LoginRateLimit.MaxAttempts
+	}
+	if s.cfg.LoginRateLimit.Window > 0 {
+		window = s.cfg.LoginRateLimit.Window
+	}
+	limiter := auth.NewRateLimiter(maxAttempts, window)
 	resolver := auth.StubResolver{}
 
 	enforcer, err := auth.NewEnforcer(s.store, logger, metrics)

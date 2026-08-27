@@ -8,3 +8,10 @@ redis:
 authorization:
   policy_reload_interval: 5s
 maintenance: false
+# The dev fixture re-authenticates all four accounts during seed/resume and
+# retries them on transient failures; the production 5/min default blocks the
+# canonical accounts drift check (real smoke 2026-08-27: resource_exhausted:
+# too many login attempts).
+login_rate_limit:
+  max_attempts: 1000
+  window: 1m

@@ -117,19 +117,28 @@ type ArchiveCfg struct {
 	ChecksumAlgorithm string        `mapstructure:"checksum_algorithm"`
 }
 
+// LoginRateLimitCfg controls the per-username login rate limiter (auth
+// service only; other services ignore it). Zero values fall back to the
+// auth service's defaults (5 attempts / 1 minute).
+type LoginRateLimitCfg struct {
+	MaxAttempts int           `mapstructure:"max_attempts"`
+	Window      time.Duration `mapstructure:"window"`
+}
+
 // ServiceConfig holds flat configuration for individual microservices.
 type ServiceConfig struct {
-	HTTPPort      int              `mapstructure:"http_port"`
-	LogLevel      string           `mapstructure:"log_level"`
-	Audit         AuditCfg         `mapstructure:"audit"`
-	Database      DatabaseConfig   `mapstructure:"database"`
-	Redis         RedisConfig      `mapstructure:"redis"`
-	Maintenance   bool             `mapstructure:"maintenance"`
-	Authorization AuthorizationCfg `mapstructure:"authorization"`
-	Values        ValuesConfig     `mapstructure:"values"`
-	Gateway       GatewayCfg       `mapstructure:"gateway"`
-	Agent         AgentCfg         `mapstructure:"agent"`
-	CA            OperatorCACfg    `mapstructure:"ca"`
+	HTTPPort       int               `mapstructure:"http_port"`
+	LogLevel       string            `mapstructure:"log_level"`
+	Audit          AuditCfg          `mapstructure:"audit"`
+	Database       DatabaseConfig    `mapstructure:"database"`
+	Redis          RedisConfig       `mapstructure:"redis"`
+	Maintenance    bool              `mapstructure:"maintenance"`
+	Authorization  AuthorizationCfg  `mapstructure:"authorization"`
+	Values         ValuesConfig      `mapstructure:"values"`
+	Gateway        GatewayCfg        `mapstructure:"gateway"`
+	Agent          AgentCfg          `mapstructure:"agent"`
+	CA             OperatorCACfg     `mapstructure:"ca"`
+	LoginRateLimit LoginRateLimitCfg `mapstructure:"login_rate_limit"`
 }
 
 // AgentCfg controls the operator agent mode (TASK-075): the agent bootstraps
