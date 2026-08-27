@@ -673,6 +673,8 @@ func (s *operationStore) ListNonTerminal(ctx context.Context) ([]*store.Operatio
 		SELECT operations.id, operations.operation_type, operations.status, operations.release_definition_id,
 			operations.idempotency_key, operations.idempotency_scope, operations.request_hash, operations.state_version,
 			operations.bundle_id, operations.bundle_chart_ref, operations.bundle_chart_digest, operations.image_refs_json, operations.image_digests_json, operations.policy_version,
+			operations.values_revision_id, operations.expected_revision, operations.target_revision, operations.target_operation_id,
+			operations.values_patch, operations.patch_digest, operations.effective_values_digest, operations.reason,
 			operations.actor, operations.created_at, operations.updated_at, operations.terminal_at, operations.deadline, operations.last_error,
 			ei.delivery_status, ei.effect_status
 		FROM operations LEFT JOIN emergency_intents ei ON ei.operation_id = operations.id
