@@ -5,11 +5,18 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"strings"
 )
 
 const maxDNSLabelLength = 63
+
+// errInvalidOperatorName separates a CSR CommonName that fails the operator
+// name contract from a SAN mismatch, so callers can map it to csr_invalid
+// instead of csr_san_mismatch (REQ-015 error model: CN empty/invalid ->
+// csr_invalid; SAN mismatch -> csr_san_mismatch).
+var errInvalidOperatorName = errors.New("invalid operator name")
 
 type csrIdentity struct {
 	OperatorName string
@@ -54,7 +61,7 @@ func validateCSRIdentity(csr *x509.CertificateRequest, customerID, clusterID str
 	}
 	operatorName := strings.TrimSpace(csr.Subject.CommonName)
 	if err := validateDNSLabel(operatorName); err != nil {
-		return csrIdentity{}, fmt.Errorf("invalid operator_name: %w", err)
+		return csrIdentity{}, fmt.Errorf("%w: %v", errInvalidOperatorName, err)
 	}
 	customerID, err := normalizeDNSLabel(customerID)
 	if err != nil {

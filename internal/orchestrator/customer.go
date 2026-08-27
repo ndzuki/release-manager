@@ -186,8 +186,20 @@ func (s *Service) DisableCustomer(
 	}
 
 	// AC-013-04: Idempotent — already disabled is a no-op (still emit event
-	// for the first disable only).
+	// for the first disable only). The cascade still runs (idempotently) so a
+	// retry after a partial first attempt converges: a customer that is
+	// disabled must never leave active operators/sessions behind (AC-015-13).
 	if c.Status == store.CustomerDisabled {
+		cascade, err := s.store.OperatorLifecycle().DisableCustomer(ctx, c.ID, "customer disabled")
+		if err != nil {
+			s.logger.Error("cascade revoke customer (idempotent retry)", "customer_id", c.ID, "error", err)
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("cascade revoke customer: %w", err))
+		}
+		if cascade.Changed {
+			s.emitRevocationAudits(ctx, cascade.OperatorIDs, "customer disabled")
+			s.logger.Warn("customer disabled cascade converged", "id", c.ID,
+				"revoked_tokens", len(cascade.TokenIDs), "revoked_operators", len(cascade.OperatorIDs), "closed_sessions", len(cascade.SessionIDs))
+		}
 		s.logger.Info("customer already disabled", "id", c.ID)
 		return connect.NewResponse(&orchestratorv1.DisableCustomerResponse{}), nil
 	}

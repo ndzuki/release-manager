@@ -1,6 +1,7 @@
 package operator
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,9 +10,14 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
+// errCertificateExpiryUnavailable distinguishes a missing certificate expiry
+// (an inconsistent operator record) from a plain out-of-window renewal, so the
+// caller can map it to certificate_invalid instead of renew_too_early.
+var errCertificateExpiryUnavailable = errors.New("certificate expiry is unavailable")
+
 func renewAllowed(now time.Time, operator *store.Operator, certTTL time.Duration, renewBeforeRatio float64) error {
 	if operator == nil || operator.CertificateExpiresAt == nil {
-		return fmt.Errorf("certificate expiry is unavailable")
+		return errCertificateExpiryUnavailable
 	}
 	window := time.Duration(float64(certTTL) * renewBeforeRatio)
 	if operator.CertificateExpiresAt.Sub(now.UTC()) > window {

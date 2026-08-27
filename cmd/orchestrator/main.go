@@ -162,7 +162,7 @@ func (s *orchSvc) buildGatewayServer(
 			contractsinterceptor.NewErrorSanitizeInterceptor(logger),
 		),
 	)
-	gmux.Handle(path, gatewayTLSStateMiddleware(handler))
+	gmux.Handle(path, operator.NewCertificateIdentityHandler(gatewayTLSStateMiddleware(handler)))
 
 	return &http.Server{
 		Addr:              fmt.Sprintf(":%d", gatewayCfg.Port),

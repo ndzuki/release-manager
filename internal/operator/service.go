@@ -215,10 +215,19 @@ func (s *Service) Enroll(
 	}
 	identity, err := validateCSRIdentity(csr, token.CustomerID, token.ClusterID)
 	if err != nil {
+		// A CSR whose CN violates the operator-name contract is csr_invalid
+		// (invalid_argument); only a SAN/scope mismatch is csr_san_mismatch
+		// (permission_denied) — REQ-015 error model.
+		if errors.Is(err, errInvalidOperatorName) {
+			return nil, operatorError(connect.CodeInvalidArgument, reasonCSRInvalid, "invalid operator name in certificate signing request")
+		}
 		return nil, operatorError(connect.CodePermissionDenied, reasonCSRSANMismatch, "certificate signing request SAN does not match enrollment scope")
 	}
 	if token.OperatorName != "" && identity.OperatorName != token.OperatorName {
-		return nil, operatorError(connect.CodeAlreadyExists, reasonDuplicateOperatorName, "operator name does not match enrollment token")
+		// The token is bound to a specific operator_name; a CSR whose CN
+		// disagrees is a CSR problem, not a duplicate-name conflict
+		// (REQ-015 error model: csr_invalid = invalid_argument).
+		return nil, operatorError(connect.CodeInvalidArgument, reasonCSRInvalid, "operator name does not match enrollment token")
 	}
 
 	// Operator_name must not be reused across clusters (AC-015-02).
@@ -368,6 +377,21 @@ func (s *Service) CommandStream(
 		op, err := s.store.Operators().GetByClusterID(ctx, clusterID)
 		if err != nil {
 			if err == store.ErrNotFound {
+				// No active operator for the cluster. Distinguish a
+				// superseded/revoked identity reconnecting with its old
+				// certificate from a genuinely unregistered cluster
+				// (AC-015-03/08: the rejection must carry the stable reason).
+				all, listErr := s.store.Operators().ListByCluster(ctx, clusterID)
+				if listErr == nil {
+					for _, candidate := range all {
+						if candidate.Status == store.OperatorSuperseded {
+							return operatorError(connect.CodePermissionDenied, reasonOperatorSuperseded, "operator superseded: re-enroll required")
+						}
+						if candidate.Status == store.OperatorRevoked {
+							return operatorError(connect.CodePermissionDenied, reasonOperatorRevoked, "operator revoked")
+						}
+					}
+				}
 				return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("no operator registered for cluster %q", clusterID))
 			}
 			return connect.NewError(connect.CodeInternal, fmt.Errorf("get operator by cluster: %w", err))
@@ -377,12 +401,12 @@ func (s *Service) CommandStream(
 		}
 		switch op.Status {
 		case store.OperatorSuperseded:
-			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator superseded: re-enroll required"))
+			return operatorError(connect.CodePermissionDenied, reasonOperatorSuperseded, "operator superseded: re-enroll required")
 		case store.OperatorRevoked:
-			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator revoked"))
+			return operatorError(connect.CodePermissionDenied, reasonOperatorRevoked, "operator revoked")
 		}
 		if op.CertSerial != certSerialFromCert(clientCert) {
-			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("certificate serial does not match registered operator"))
+			return operatorError(connect.CodePermissionDenied, reasonCertReplaced, "certificate serial does not match registered operator")
 		}
 		operatorID = op.ID
 
@@ -441,9 +465,9 @@ func (s *Service) CommandStream(
 		}
 		switch op.Status {
 		case store.OperatorSuperseded:
-			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator superseded: re-enroll required"))
+			return operatorError(connect.CodePermissionDenied, reasonOperatorSuperseded, "operator superseded: re-enroll required")
 		case store.OperatorRevoked:
-			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("operator revoked"))
+			return operatorError(connect.CodePermissionDenied, reasonOperatorRevoked, "operator revoked")
 		}
 
 		s.logger.Info("operator stream established",
@@ -1219,6 +1243,9 @@ func (s *Service) RenewCertificate(
 	}
 	// Renew window (AC-015-09): only renew within ca.cert_ttl × ratio.
 	if err := renewAllowed(time.Now().UTC(), operatorRecord, s.ca.TTL(), s.renewBeforeRatio); err != nil {
+		if errors.Is(err, errCertificateExpiryUnavailable) {
+			return nil, operatorError(connect.CodeUnauthenticated, reasonCertificateInvalid, "operator certificate expiry is unavailable")
+		}
 		return nil, operatorError(connect.CodeFailedPrecondition, reasonRenewTooEarly, "certificate renewal is too early")
 	}
 	csr, err := parseCSR(req.Msg.GetCsrPem())
@@ -1227,6 +1254,11 @@ func (s *Service) RenewCertificate(
 	}
 	csrIdentity, err := validateCSRIdentity(csr, operatorRecord.CustomerID, operatorRecord.ClusterID)
 	if err != nil {
+		// CN violation is csr_invalid; SAN/scope mismatch is csr_san_mismatch
+		// (REQ-015 error model).
+		if errors.Is(err, errInvalidOperatorName) {
+			return nil, operatorError(connect.CodeInvalidArgument, reasonCSRInvalid, "invalid operator name in certificate signing request")
+		}
 		return nil, operatorError(connect.CodePermissionDenied, reasonCSRSANMismatch, "certificate signing request SAN does not match operator")
 	}
 	if csrIdentity.OperatorName != operatorRecord.Name {

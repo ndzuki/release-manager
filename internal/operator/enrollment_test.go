@@ -56,6 +56,11 @@ func TestEnrollRejectsTokenFailuresWithStableReasons(t *testing.T) {
 		{name: "CSR SAN mismatch", prepare: validEnrollmentToken, mutate: func(t *testing.T, _ *sqlitestore.Store, request *operatorv1.EnrollRequest) {
 			request.CsrPem = generateTestCSR(t, "operator-1", []string{"other-cluster.customer-1.rm"})
 		}, wantCode: connect.CodePermissionDenied, wantReason: "csr_san_mismatch"},
+		{name: "CSR invalid operator name", prepare: validEnrollmentToken, mutate: func(t *testing.T, _ *sqlitestore.Store, request *operatorv1.EnrollRequest) {
+			// CN violates the DNS-label operator-name contract: csr_invalid,
+			// not csr_san_mismatch (REQ-015 error model).
+			request.CsrPem = generateTestCSR(t, "Operator_1", []string{"cluster-1.customer-1.rm"})
+		}, wantCode: connect.CodeInvalidArgument, wantReason: "csr_invalid"},
 		{name: "duplicate operator name", prepare: validEnrollmentToken, mutate: seedActiveOperatorOnCluster, wantCode: connect.CodeAlreadyExists, wantReason: "duplicate_operator_name"},
 		{name: "operator name cross cluster", prepare: validEnrollmentToken, mutate: seedActiveOperatorOnOtherCluster, wantCode: connect.CodePermissionDenied, wantReason: "operator_name_cross_cluster"},
 	}
