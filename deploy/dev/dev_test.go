@@ -77,6 +77,42 @@ func fakeOperatorGateway(t *testing.T) {
 	}
 }
 
+// fakeResetPgPort is the loopback port the reset-data port-forward wait
+// probes (dev.sh DEV_RESET_PG_PORT seam, real default 5432). A dedicated
+// port keeps the fake test deterministic without touching a host PostgreSQL.
+const fakeResetPgPort = "15432"
+
+var (
+	fakeResetPgOnce sync.Once
+	fakeResetPgLn   net.Listener
+	fakeResetPgErr  error
+)
+
+// fakeResetPostgres binds one shared loopback listener for the whole test
+// package so every reset-data test's TCP probe succeeds (accepted and closed
+// immediately, exactly like fakeOperatorGateway).
+func fakeResetPostgres(t *testing.T) {
+	t.Helper()
+	fakeResetPgOnce.Do(func() {
+		fakeResetPgLn, fakeResetPgErr = new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:"+fakeResetPgPort)
+		if fakeResetPgErr != nil {
+			return
+		}
+		go func() {
+			for {
+				conn, err := fakeResetPgLn.Accept()
+				if err != nil {
+					return
+				}
+				conn.Close()
+			}
+		}()
+	})
+	if fakeResetPgErr != nil {
+		t.Fatalf("cannot bind fake reset postgres listener: %v", fakeResetPgErr)
+	}
+}
+
 // fakeEnv builds an environment that points the lifecycle module at fake
 // CLI shims and an isolated data dir.
 func fakeEnv(t *testing.T, stateDir string) (env []string, binDir string) {
@@ -94,9 +130,13 @@ func fakeEnv(t *testing.T, stateDir string) (env []string, binDir string) {
 		// endpoint to shim; point dev.sh's probe at the shared loopback
 		// listener above.
 		"DEV_OPERATOR_GATEWAY_PORT="+fakeOperatorGatewayPort,
+		// The reset-data port-forward wait probes a loopback TCP port; point
+		// it at the shared fake listener (real default 5432).
+		"DEV_RESET_PG_PORT="+fakeResetPgPort,
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	fakeOperatorGateway(t)
+	fakeResetPostgres(t)
 	return env, binDir
 }
 
@@ -680,6 +720,76 @@ func TestResetFailsWithoutRunningEnvironment(t *testing.T) {
 	}
 	if !strings.Contains(out, "service_unhealthy") {
 		t.Fatalf("expected service_unhealthy:\n%s", out)
+	}
+}
+
+// TestResetDataSplitsSeedAroundEnrollmentAndDeploysAgents locks the
+// reset-data split-seed contract (D-017 residual, real smoke 2026-08-27):
+// reset-data rebuilds the customer clusters from zero, so they hold no
+// operator agents and the bootstrap INSTALL would fail the artifact stage
+// with "no operator for cluster ..." — the re-seed must enroll first
+// (--reset --stop-after enrollment), deploy the agents (agents_up), and only
+// then resume install + verify. The fake `go` shim records every devseed
+// invocation so the test asserts the exact two-leg CLI contract.
+func TestResetDataSplitsSeedAroundEnrollmentAndDeploysAgents(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	// Override the happy go shim: record each devseed invocation to
+	// devseed-calls.log, print a fixture version for the -print-fixture-version
+	// probe, and write the four enrollment tokens on the --stop-after
+	// enrollment leg (the split-seed agents_up stage consumes them).
+	writeShim(t, binDir, "go", `#!/usr/bin/env bash
+if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-mtls-ca-dir" ]; then
+    mkdir -p "$a"
+    printf 'fake-ca-key\n' > "$a/ca.key"
+    printf 'fake-ca-cert\n' > "$a/ca.crt"
+    chmod 600 "$a/ca.key" "$a/ca.crt"
+    exit 0
+  fi
+  prev="$a"
+done
+if [[ "$*" == *"-print-fixture-version"* ]]; then printf 'v22\n'; exit 0; fi
+printf '%s\n' "$*" >> "$DEV_DATA_DIR/devseed-calls.log"
+if [[ "$*" == *"--stop-after enrollment"* ]]; then
+  mkdir -p "$DEV_DATA_DIR/dev-enrollment-tokens"
+  for c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed; do
+    printf 'fake-token\n' > "$DEV_DATA_DIR/dev-enrollment-tokens/$c.token"
+  done
+fi
+exit 0
+`)
+	writeShim(t, binDir, "pg_dump", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "pg_restore", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "psql", "#!/usr/bin/env bash\nexit 0\n")
+	env = append(env, "CONFIRM=1")
+
+	out, err := runDev(t, env, "reset-data")
+	if err != nil {
+		t.Fatalf("reset-data failed:\n%s", out)
+	}
+	callsPath := filepath.Join(stateDir, "devseed-calls.log")
+	data, err := os.ReadFile(callsPath)
+	if err != nil {
+		t.Fatalf("devseed-calls.log missing: %v\n%s", err, out)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected exactly 2 devseed seed invocations, got %d:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[0], "--reset") ||
+		!strings.Contains(lines[0], "--stop-after enrollment") ||
+		!strings.Contains(lines[0], "--database-dsn") {
+		t.Fatalf("first devseed leg must be --reset --stop-after enrollment with --database-dsn, got:\n%s", lines[0])
+	}
+	if strings.Contains(lines[1], "--reset") ||
+		strings.Contains(lines[1], "--stop-after") ||
+		strings.Contains(lines[1], "--database-dsn") {
+		t.Fatalf("second devseed leg must be a plain resume (no --reset/--stop-after/--database-dsn), got:\n%s", lines[1])
 	}
 }
 

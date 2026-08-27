@@ -1459,7 +1459,9 @@ cmd_reset_data() {
   log "  maintenance enabled (writes stopped)"
 
   # 2. dump both databases through a port-forward to the host pg_dump.
-  local pf_pid=""
+  #    DEV_RESET_PG_PORT is the fake-CLI test seam for the loopback probe
+  #    and the host pg tools (real default 5432).
+  local pf_pid="" pg_port="${DEV_RESET_PG_PORT:-5432}"
   ctl_kubectl -n release-manager-dev port-forward svc/postgres 5432:5432 >/dev/null 2>&1 &
   pf_pid=$!
   # The trap releases the environment lock; the port-forward dies with the
@@ -1473,7 +1475,7 @@ cmd_reset_data() {
   # 3s succeeded). Wait for the loopback listener before the first dump.
   local pf_deadline=$((SECONDS + 30))
   while [ "$SECONDS" -lt "$pf_deadline" ]; do
-    if (exec 3<>"/dev/tcp/127.0.0.1/5432") 2>/dev/null; then
+    if (exec 3<>"/dev/tcp/127.0.0.1/$pg_port") 2>/dev/null; then
       (exec 3>&-) 2>/dev/null || true
       break
     fi
@@ -1481,14 +1483,14 @@ cmd_reset_data() {
   done
   if [ "$SECONDS" -ge "$pf_deadline" ]; then
     kill "$pf_pid" 2>/dev/null || true
-    fail "$ERR_SERVICE_UNHEALTHY" "postgres port-forward did not bind 127.0.0.1:5432 within 30s"
+    fail "$ERR_SERVICE_UNHEALTHY" "postgres port-forward did not bind 127.0.0.1:$pg_port within 30s"
   fi
   local ts dump_files=() db dump_file
   ts="$(date +%Y%m%dT%H%M%S%z)"
   mkdir -p "$DEV_DATA_DIR/backups"
   for db in release_manager release_notifier; do
     dump_file="$DEV_DATA_DIR/backups/dump-$ts-$db.sql"
-    if ! PGPASSWORD=dev-release-manager pg_dump -Fc -h 127.0.0.1 -p 5432 -U release_manager -d "$db" -f "$dump_file" >/dev/null 2>&1; then
+    if ! PGPASSWORD=dev-release-manager pg_dump -Fc -h 127.0.0.1 -p "$pg_port" -U release_manager -d "$db" -f "$dump_file" >/dev/null 2>&1; then
       # AC-065-13 "environment untouched": the dump stage failed before any
       # destructive step — restore writes before reporting. (Real smoke
       # 2026-08-27: the port-forward race failed the dump and left the
@@ -1501,6 +1503,10 @@ cmd_reset_data() {
   done
 
   # 3. rebuild the 4 customer clusters (control cluster and registry stay).
+  #    cluster_up writes each cluster's kubeconfig; ensure the dir exists even
+  #    on a pristine data dir (dev-up's clusters_up creates it, reset-data
+  #    drives cluster_up directly).
+  mkdir -p "$DEV_DATA_DIR/kubeconfigs"
   local cluster
   for cluster in "${CUSTOMER_CLUSTERS[@]}"; do
     if cluster_exists "$cluster"; then
@@ -1530,10 +1536,30 @@ cmd_reset_data() {
   # until the new pods answer before the re-seed.
   require_readyz auth "${DEV_PORTS[3]}"
   require_readyz orchestrator "${DEV_PORTS[1]}"
-  if ! go run ./cmd/devseed/ --reset \
+  # 4b. Split the re-seed around the enrollment phase exactly like dev-up's
+  #     seed(): the freshly rebuilt customer clusters hold no operator
+  #     agents, and the bootstrap INSTALL requires an operator for the
+  #     artifact stage — enroll first, deploy the agents with their
+  #     single-use tokens, then resume install + verify (real smoke
+  #     2026-08-27: the monolithic --reset failed the artifact stage with
+  #     "no operator for cluster dev-customer-a-direct" → stage_unavailable).
+  local reset_seed_failed=0
+  local seed_dsn="postgres://release_manager:dev-release-manager@127.0.0.1:5432/release_manager?sslmode=disable"
+  if ! go run ./cmd/devseed/ --reset --stop-after enrollment \
     --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085 \
     --operator-timeout "$DEV_TIMEOUT_OPERATOR" --seed-retries "$DEV_TIMEOUT_SEED_RETRIES" \
-    --database-dsn "postgres://release_manager:dev-release-manager@127.0.0.1:5432/release_manager?sslmode=disable"; then
+    --database-dsn "$seed_dsn"; then
+    reset_seed_failed=1
+  fi
+  if [ "$reset_seed_failed" -eq 0 ]; then
+    agents_up || reset_seed_failed=1
+  fi
+  if [ "$reset_seed_failed" -eq 0 ] && ! go run ./cmd/devseed/ \
+    --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085 \
+    --operator-timeout "$DEV_TIMEOUT_OPERATOR" --seed-retries "$DEV_TIMEOUT_SEED_RETRIES"; then
+    reset_seed_failed=1
+  fi
+  if [ "$reset_seed_failed" -ne 0 ]; then
     # 5a. failure: restore both databases, drop the half-built customer
     #     clusters, mark the environment partial; a later reset converges.
     log "  seed failed; restoring databases"
@@ -1552,7 +1578,7 @@ cmd_reset_data() {
       # replays it via psql with ON_ERROR_STOP — still the real host tools.
       if ! { PGPASSWORD=dev-release-manager pg_restore --clean --if-exists -Fc -f - "$dump_file" 2>"$dump_file.restore-err" \
         | sed -e '/SET transaction_timeout = 0;/d' \
-        | PGPASSWORD=dev-release-manager psql -v ON_ERROR_STOP=1 -q -h 127.0.0.1 -p 5432 -U release_manager -d "$db"; } then
+        | PGPASSWORD=dev-release-manager psql -v ON_ERROR_STOP=1 -q -h 127.0.0.1 -p "$pg_port" -U release_manager -d "$db"; } then
         printf 'restore failed for %s (backup %s); manual recovery required\n' "$db" "$dump_file" >&2
         tail -5 "$dump_file.restore-err" >&2 2>/dev/null || true
       fi
