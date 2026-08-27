@@ -272,16 +272,14 @@ func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage S
 	var effective []byte
 	if bundle, bundleErr := c.bundles.Get(ctx, op.BundleID); bundleErr == nil {
 		bundleProto = bundleToProto(bundle)
+		// The values passed with the stage command are the approved revision's
+		// canonical document (the operator applies the bundle image overrides
+		// itself during install — real smoke 2026-08-27: mergeEffectiveValues
+		// here failed `values_path "image.repository" does not reference an
+		// object` when the fixture values lacked an image object).
 		if op.ValuesRevisionID != "" {
 			if revision, revErr := c.values.Get(ctx, op.ValuesRevisionID); revErr == nil {
-				effective, revErr = mergeEffectiveValues(revision.CanonicalDocument, op.ValuesPatch, bundle.Images)
-				if revErr != nil {
-					return StageResult{
-						Stage:  stage.Name,
-						Status: StageFailed,
-						Detail: fmt.Sprintf("render values: %v", revErr),
-					}, revErr
-				}
+				effective = revision.CanonicalDocument
 			}
 		}
 	}
