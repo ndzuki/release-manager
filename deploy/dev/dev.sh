@@ -1111,9 +1111,15 @@ declare -A CUSTOMER_OVERLAYS=(
   [dev-customer-b-mixed]=c4-mixed
 )
 
-# customer_kubectl <cluster> — kubectl against one customer cluster.
+# customer_kubectl <cluster> [args...] — kubectl against one customer
+# cluster. The cluster is consumed for the KUBECONFIG path only: "$@" must
+# NOT include it, or kubectl treats the cluster name as its subcommand
+# (`unknown command "dev-customer-a-direct" for "kubectl"`, real smoke
+# 2026-08-27 — latent until agents_up actually deployed agents).
 customer_kubectl() {
-  KUBECONFIG="$DEV_DATA_DIR/kubeconfigs/$1.yaml" kubectl "$@"
+  local cluster="$1"
+  shift
+  KUBECONFIG="$DEV_DATA_DIR/kubeconfigs/$cluster.yaml" kubectl "$@"
 }
 
 # mgmt_node_ip / registry_ip — the Docker network addresses injected into the
