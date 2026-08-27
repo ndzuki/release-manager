@@ -404,7 +404,7 @@ func (c *Coordinator) pollStage(ctx context.Context, commandID string, stage Sta
 			}
 
 			switch entry.Status {
-			case store.CommandPersisted:
+			case store.CommandPersisted, store.CommandSucceeded:
 				var result StageResult
 				if entry.ResultJSON != "" {
 					if err := json.Unmarshal([]byte(entry.ResultJSON), &result); err != nil {
@@ -417,7 +417,12 @@ func (c *Coordinator) pollStage(ctx context.Context, commandID string, stage Sta
 					}
 				}
 				result.Stage = stage.Name
-				if result.Status == "" {
+				// The operator's command result writes a helm-shaped JSON
+				// (`{"status":"succeeded",...}`); normalize a successful
+				// execution to StagePassed (real smoke 2026-08-27: the render
+				// stage's CommandSucceeded result was never consumed and the
+				// stage timed out).
+				if result.Status == "" || result.Status == "succeeded" || result.Status == "passed" {
 					result.Status = StagePassed
 				}
 				return result, nil

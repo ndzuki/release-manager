@@ -341,6 +341,41 @@ func TestCoordinatorRun_RequiredFailureStopsPipeline(t *testing.T) {
 	assert.Equal(t, "artifact", pl.Stages)
 }
 
+// TestCoordinatorRun_SucceededCommandResultPassesStage locks the operator
+// result contract (real smoke 2026-08-27): the operator writes its command
+// result as CommandSucceeded with a helm-shaped JSON (`{"status":"succeeded",
+// ...}`). pollStage must consume that as a passed stage — previously only
+// CommandPersisted was handled and a CommandSucceeded race left the stage
+// polling until timeout.
+func TestCoordinatorRun_SucceededCommandResultPassesStage(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	op := seedPreflightFixture(t, st)
+	c := newTestCoordinator(t, st)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() { c.Run(ctx, op); close(done) }()
+
+	// Drive artifact to CommandSucceeded with the operator's helm-shaped JSON.
+	entry := waitForCommand(t, st, op.ID+":artifact")
+	require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandSucceeded,
+		`{"operation_id":"`+op.ID+`","status":"succeeded","release":{"name":"preflight-rel"}}`))
+	// Remaining stages: same succeeded result.
+	for _, stage := range []string{"render", "cluster", "runtime_pull"} {
+		e := waitForCommand(t, st, op.ID+":"+stage)
+		require.NoError(t, st.Outbox().UpdateStatus(ctx, e.ID, store.CommandSucceeded, `{"status":"succeeded"}`))
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("coordinator did not finish")
+	}
+
+	got, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusQueued, got.Status, "all stages passed via succeeded results must queue the operation")
+}
+
 // TestCoordinatorRun_StageCommandsCarryBundle locks the stage-command
 // contract (real smoke 2026-08-27): every precheck stage command (render/
 // cluster/runtime_pull) must carry the operation's bundle — the wire Command
