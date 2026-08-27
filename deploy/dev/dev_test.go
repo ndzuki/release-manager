@@ -1950,7 +1950,9 @@ func TestCustomerAgentConfigCarriesCustomerUUIDs(t *testing.T) {
 		"dev-customer-b-mixed":      "c4-mixed",
 	}
 	for cluster, overlay := range overlays {
-		out, err := exec.Command(kustomize, "build", filepath.Join(tmp, "deploy", "kustomize", "customer-agent", overlay)).CombinedOutput()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		out, err := exec.CommandContext(ctx, kustomize, "build", filepath.Join(tmp, "deploy", "kustomize", "customer-agent", overlay)).CombinedOutput()
+		cancel()
 		if err != nil {
 			t.Fatalf("kustomize build %s failed: %v\n%s", overlay, err, out)
 		}
@@ -2376,6 +2378,49 @@ exit 0
 			t.Fatalf("expected service_unhealthy naming the pg_isready probe:\n%s", out)
 		}
 	})
+}
+
+// TestDiagnosticsCollectedBeforeKubeconfig covers the AC-065-39 pre-kubeconfig
+// leg (real smoke 2026-08-28): the most common fail-fast paths (host memory /
+// port / registry / cluster failures) run BEFORE kustomize apply, so
+// data/kubeconfig.yaml does not exist. Diagnostics must still collect the
+// shell-level host context (ownership / k3d / docker) instead of returning
+// zero evidence.
+func TestDiagnosticsCollectedBeforeKubeconfig(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	// Fail on docker build (registry_up succeeds, but no kustomize apply, so
+	// no merged kubeconfig is written).
+	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "build" ]; then exit 1; fi
+exit 0
+`)
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("expected docker_build_failed, got success:\n%s", out)
+	}
+	if _, statErr := os.Stat(filepath.Join(stateDir, "kubeconfig.yaml")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected no merged kubeconfig at pre-kubeconfig failure point (stat err=%v)", statErr)
+	}
+	diagDir := filepath.Join(stateDir, "diagnostics")
+	entries, err := os.ReadDir(diagDir)
+	if err != nil {
+		t.Fatalf("expected diagnostics dir after pre-kubeconfig failure: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected one ISO8601 diagnostics snapshot, got %d", len(entries))
+	}
+	snapshot := filepath.Join(diagDir, entries[0].Name())
+	hostCtx, err := os.ReadFile(filepath.Join(snapshot, "host-context.txt"))
+	if err != nil {
+		t.Fatalf("expected host-context.txt even without a kubeconfig, got %v", err)
+	}
+	if !strings.Contains(string(hostCtx), "ownership manifest") {
+		t.Fatalf("host-context must include the ownership manifest:\n%s", hostCtx)
+	}
 }
 
 // TestDiagnosticsCollectedOnFailureAndPurged covers 批次5 D6 / AC-065-39:

@@ -121,8 +121,12 @@ func normalizeChartTgz(tgzPath string) error {
 
 	var out bytes.Buffer
 	zw := gzip.NewWriter(&out)
-	zw.Header.Extra = []byte("+aHR0cHM6Ly95b3V0dS5iZS96OVV6MWljandyTQo=")
-	zw.Header.Comment = "Helm"
+	// Header.Extra/Header.Comment — the embedded Header field; staticcheck
+	// QF1008 suggests dropping the selector, but Header is the standard
+	// gzip.Header struct field and the explicit form reads clearly (kept
+	// intentional: matches helm's save.go output byte-for-byte).
+	zw.Header.Extra = []byte("+aHR0cHM6Ly95b3V0dS5iZS96OVV6MWljandyTQo=") //nolint:staticcheck // explicit Header field reads clearly
+	zw.Header.Comment = "Helm"                                                //nolint:staticcheck // explicit Header field reads clearly
 	tw := tar.NewWriter(zw)
 	const fixedModTime = int64(0) // epoch: deterministic regardless of when packaged
 	for {
@@ -139,7 +143,9 @@ func normalizeChartTgz(tgzPath string) error {
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
 		}
-		if _, err := io.Copy(tw, tr); err != nil {
+		// The archive is a trusted dev fixture chart; copy with a sane bound
+		// (64 MiB) to satisfy the decompression-bomb check.
+		if _, err := io.Copy(tw, io.LimitReader(tr, 64<<20)); err != nil {
 			return err
 		}
 	}
@@ -152,7 +158,7 @@ func normalizeChartTgz(tgzPath string) error {
 	if err := gz.Close(); err != nil {
 		return err
 	}
-	return os.WriteFile(tgzPath, out.Bytes(), 0o644)
+	return os.WriteFile(tgzPath, out.Bytes(), 0o600)
 }
 
 // archiveDigest returns the content sha256 digest of a chart archive.

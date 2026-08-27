@@ -7,3 +7,8 @@ agent:
   operator_name: dev-customer-a-direct
 ca:
   cert_path: /data/gateway-ca.crt
+
+# Dev fixture registry is plain HTTP (loopback-bound, unauthenticated,
+# AC-065-01 D8): allow OCI chart pulls over HTTP. Production registries stay
+# HTTPS (registry_plain_http defaults false).
+registry_plain_http: true

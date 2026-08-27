@@ -72,6 +72,7 @@ type Agent struct {
 	operatorID        string
 	logger            *slog.Logger
 	installFlags      InstallFlags
+	registryPlainHTTP bool
 }
 
 // InstallFlags contains operator-wide defaults for INSTALL commands.
@@ -99,6 +100,9 @@ type Config struct {
 	OperatorID   string
 	Logger       *slog.Logger
 	InstallFlags InstallFlags
+	// RegistryPlainHTTP allows OCI chart pulls from a plain HTTP registry
+	// (dev fixture only; production keeps HTTPS — see helmengine options).
+	RegistryPlainHTTP bool
 }
 
 // Result is persisted locally and sent to the orchestrator for idempotent replay.
@@ -161,6 +165,7 @@ func New(cfg Config) (*Agent, error) {
 		operatorID:        cfg.OperatorID,
 		logger:            logger,
 		installFlags:      cfg.InstallFlags,
+		registryPlainHTTP: cfg.RegistryPlainHTTP,
 	}, nil
 }
 
@@ -626,6 +631,7 @@ func (a *Agent) executeInstall(ctx context.Context, command *operatorv1.Command,
 		Values:          values,
 		Atomic:          a.installFlags.Atomic,
 		CreateNamespace: command.GetCreateNamespace(),
+		PlainHTTP:       a.registryPlainHTTP,
 		Timeout:         timeout,
 	})
 	if err != nil {
@@ -707,6 +713,7 @@ func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command,
 		BundleDigest:          upgrade.GetBundle().GetBundleDigest(),
 		ChartDigest:           upgrade.GetChart().GetDigest(),
 		EffectiveValuesDigest: upgrade.GetEffectiveValuesDigest(),
+		PlainHTTP:             a.registryPlainHTTP,
 		SecretSnapshotDigest:  secretDigest,
 		ResetValues:           true,
 		ReuseValues:           false,

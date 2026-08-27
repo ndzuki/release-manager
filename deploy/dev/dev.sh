@@ -119,26 +119,40 @@ cleanup_trap() {
 collect_diagnostics() {
   local rc="$1"
   local dir="$DEV_DATA_DIR/diagnostics/$(date -u +%Y%m%dT%H%M%SZ)"
-  [ -f "$DEV_DATA_DIR/kubeconfig.yaml" ] || return 0
-  command -v kubectl >/dev/null 2>&1 || return 0
+  command -v kubectl >/dev/null 2>&1 || { printf 'diagnostics skipped (kubectl missing)\n' >&2; return 0; }
   (
     set +e
     umask 077
     mkdir -p "$dir"
     chmod 700 "$dir"
-    ctl_kubectl -n release-manager-dev get pods -o wide > "$dir/pods.txt" 2>/dev/null
-    ctl_kubectl -n release-manager-dev get deployments,services,configmaps,secrets > "$dir/resources.txt" 2>/dev/null
-    ctl_kubectl -n release-manager-dev get events --sort-by=.lastTimestamp > "$dir/events.txt" 2>/dev/null
-    ctl_kubectl -n release-manager-dev describe pods > "$dir/describe-pods.txt" 2>/dev/null
-    # Per-pod recent logs; one file per pod (name hashed into the filename
-    # to stay flat and shell-safe).
-    local pod hash
-    while IFS= read -r pod; do
-      [ -n "$pod" ] || continue
-      hash="$(printf '%s' "$pod" | sha256sum | cut -c1-12)"
-      ctl_kubectl -n release-manager-dev logs "pod/$pod" --all-containers --tail=100 --timestamps \
-        > "$dir/log-$hash.txt" 2>/dev/null || true
-    done < <(ctl_kubectl -n release-manager-dev get pods -o name 2>/dev/null | sed 's#^pod/##' || true)
+    # Shell-level context is always available — collect it even when the
+    # kubeconfig does not exist yet (preflight/registry/cluster failures
+    # happen before kustomize apply; real smoke 2026-08-28, AC-065-39: the
+    # early return previously produced ZERO diagnostics for the most common
+    # fail-fast paths).
+    {
+      printf '=== ownership manifest ===\n'
+      ownership_read 2>/dev/null || true
+      printf '\n=== k3d clusters ===\n'
+      k3d cluster list 2>&1 || true
+      printf '\n=== docker containers (release-manager) ===\n'
+      docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.Status}}' 2>/dev/null | grep -E 'k3d-|release-manager' || true
+    } > "$dir/host-context.txt" 2>/dev/null
+    if [ -f "$DEV_DATA_DIR/kubeconfig.yaml" ]; then
+      ctl_kubectl -n release-manager-dev get pods -o wide > "$dir/pods.txt" 2>/dev/null
+      ctl_kubectl -n release-manager-dev get deployments,services,configmaps,secrets > "$dir/resources.txt" 2>/dev/null
+      ctl_kubectl -n release-manager-dev get events --sort-by=.lastTimestamp > "$dir/events.txt" 2>/dev/null
+      ctl_kubectl -n release-manager-dev describe pods > "$dir/describe-pods.txt" 2>/dev/null
+      # Per-pod recent logs; one file per pod (name hashed into the filename
+      # to stay flat and shell-safe).
+      local pod hash
+      while IFS= read -r pod; do
+        [ -n "$pod" ] || continue
+        hash="$(printf '%s' "$pod" | sha256sum | cut -c1-12)"
+        ctl_kubectl -n release-manager-dev logs "pod/$pod" --all-containers --tail=100 --timestamps \
+          > "$dir/log-$hash.txt" 2>/dev/null || true
+      done < <(ctl_kubectl -n release-manager-dev get pods -o name 2>/dev/null | sed 's#^pod/##' || true)
+    fi
     find "$dir" -type f -exec chmod 600 {} + 2>/dev/null || true
   ) || true
   printf 'diagnostics collected to %s (exit %s)\n' "$dir" "$rc" >&2
