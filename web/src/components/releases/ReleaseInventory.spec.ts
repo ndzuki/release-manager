@@ -19,8 +19,8 @@ describe('release inventory presentation', () => {
     const wrapper = mount(ReleaseInventoryTable, {
       props: {
         releases: [
-          { releaseDefinitionId: 'definition-a', namespace: 'apps', name: 'api', chart: 'api', chartVersion: '1.0.0', revision: 1, status: 'active', valuesDigest: 'sha256:a', lastSyncAt: null },
-          { releaseDefinitionId: 'definition-b', namespace: 'system', name: 'api', chart: 'api', chartVersion: '1.0.0', revision: 2, status: 'missing', valuesDigest: 'sha256:b', lastSyncAt: null },
+          { releaseDefinitionId: 'definition-a', namespace: 'apps', name: 'api', chart: 'api', chartVersion: '1.0.0', revision: 1, status: 'active', valuesDigest: 'sha256:a', lastSyncAt: null, emergencyConflict: false, pendingConvergenceCount: 0, revertStatusSummary: '' },
+          { releaseDefinitionId: 'definition-b', namespace: 'system', name: 'api', chart: 'api', chartVersion: '1.0.0', revision: 2, status: 'missing', valuesDigest: 'sha256:b', lastSyncAt: null, emergencyConflict: false, pendingConvergenceCount: 0, revertStatusSummary: '' },
         ],
         customerId: 'customer-1',
         clusterId: 'cluster-1',
@@ -35,6 +35,7 @@ describe('release inventory presentation', () => {
     const release = {
       releaseDefinitionId: 'def-apps', namespace: 'apps', name: 'api', chart: 'api', chartVersion: '1.0.0',
       revision: 7, status: 'active' as const, valuesDigest: 'sha256:a', lastSyncAt: null,
+      emergencyConflict: false, pendingConvergenceCount: 0, revertStatusSummary: '',
     };
     const writable = mount(ReleaseInventoryTable, {
       props: {
@@ -70,5 +71,77 @@ describe('release inventory presentation', () => {
       const to = link.props('to');
       return typeof to === 'object' && to !== null && 'name' in to && to.name === 'OperationCreate';
     })).toBe(false);
+  });
+
+  it('renders the emergency entry from the single ListReleases summary (no per-row RPC, AC-058-08)', () => {
+    const rows = Array.from({ length: 100 }, (_, index) => ({
+      releaseDefinitionId: `def-${index}`,
+      namespace: 'apps',
+      name: `api-${index}`,
+      chart: 'api',
+      chartVersion: '1.0.0',
+      revision: 1,
+      status: 'active' as const,
+      valuesDigest: 'sha256:a',
+      lastSyncAt: null,
+      emergencyConflict: false,
+      pendingConvergenceCount: index % 2 === 0 ? 2 : 0,
+      revertStatusSummary: '',
+    }));
+    const wrapper = mount(ReleaseInventoryTable, {
+      props: {
+        releases: rows,
+        canEmergency: true,
+        canConvergence: true,
+        customerId: 'customer-1',
+        clusterId: 'cluster-1',
+      },
+      global: { stubs: { RouterLink: RouterLinkStub } },
+    });
+
+    // 100 rows render their emergency info purely from summary props — the
+    // component performs zero fetches by construction (no client import).
+    const links = wrapper.findAllComponents(RouterLinkStub);
+    const emergencyLinks = links.filter((link) => {
+      const to = link.props('to');
+      return typeof to === 'object' && to !== null && 'name' in to && to.name === 'EmergencyChange';
+    });
+    expect(emergencyLinks).toHaveLength(100);
+    expect(links.filter((link) => {
+      const to = link.props('to');
+      return typeof to === 'object' && to !== null && 'name' in to && to.name === 'ConvergenceTasks';
+    })).toHaveLength(50);
+  });
+
+  it('disables the emergency entry on conflict and explains unbound definitions (AC-058-46)', () => {
+    const wrapper = mount(ReleaseInventoryTable, {
+      props: {
+        releases: [
+          {
+            releaseDefinitionId: 'def-1', namespace: 'apps', name: 'api', chart: 'api', chartVersion: '1.0.0',
+            revision: 1, status: 'active' as const, valuesDigest: 'sha256:a', lastSyncAt: null,
+            emergencyConflict: true, pendingConvergenceCount: 0, revertStatusSummary: '',
+          },
+          {
+            releaseDefinitionId: '', namespace: 'apps', name: 'web', chart: 'web', chartVersion: '1.0.0',
+            revision: 1, status: 'active' as const, valuesDigest: 'sha256:a', lastSyncAt: null,
+            emergencyConflict: false, pendingConvergenceCount: 0, revertStatusSummary: '',
+          },
+        ],
+        canEmergency: true,
+        customerId: 'customer-1',
+        clusterId: 'cluster-1',
+      },
+      global: { stubs: { RouterLink: RouterLinkStub } },
+    });
+
+    // Conflicted row → non-clickable span; unbound row → explanation text.
+    expect(wrapper.text()).toContain('未绑定 Definition');
+    const emergencyLinks = wrapper.findAllComponents(RouterLinkStub).filter((link) => {
+      const to = link.props('to');
+      return typeof to === 'object' && to !== null && 'name' in to && to.name === 'EmergencyChange';
+    });
+    expect(emergencyLinks).toHaveLength(0);
+    expect(wrapper.text()).toContain('紧急变更');
   });
 });

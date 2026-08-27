@@ -25,6 +25,11 @@ export interface ReleaseSummary {
   status: ReleaseStatus;
   valuesDigest: string;
   lastSyncAt: string | null;
+  // Optional emergency/convergence summary fields (REQ-079 D5): consumed once
+  // from ListReleases — never a per-row RPC (AC-058-08).
+  emergencyConflict: boolean;
+  pendingConvergenceCount: number;
+  revertStatusSummary: string;
 }
 
 export interface ReleaseInventoryState {
@@ -76,6 +81,9 @@ function mapRelease(release: ProtoReleaseSummary): ReleaseSummary {
 		status: statusFromProto(release.status),
 		valuesDigest: release.valuesDigest,
 		lastSyncAt: timestampToISO(release.lastSyncAt),
+		emergencyConflict: release.emergencyConflict,
+		pendingConvergenceCount: release.pendingConvergenceCount,
+		revertStatusSummary: release.revertStatusSummary,
 	};
 }
 

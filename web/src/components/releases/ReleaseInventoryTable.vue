@@ -5,6 +5,8 @@ import type { ReleaseSummary } from '@/stores/releaseInventory';
 const props = defineProps<{
   releases: ReleaseSummary[];
   canCreateOperation?: boolean;
+  canEmergency?: boolean;
+  canConvergence?: boolean;
   customerId?: string;
   clusterId?: string;
   customerName?: string;
@@ -18,6 +20,20 @@ function valuesRoute(release: ReleaseSummary) {
     name: 'ValuesEditor',
     params: { customerId: props.customerId, clusterId: props.clusterId, releaseId: release.releaseDefinitionId },
     query: { releaseName: release.name },
+  };
+}
+
+function emergencyRoute(release: ReleaseSummary) {
+  return {
+    name: 'EmergencyChange',
+    params: { customerId: props.customerId, clusterId: props.clusterId, releaseId: release.releaseDefinitionId },
+  };
+}
+
+function convergenceRoute(release: ReleaseSummary) {
+  return {
+    name: 'ConvergenceTasks',
+    params: { customerId: props.customerId, clusterId: props.clusterId, releaseId: release.releaseDefinitionId },
   };
 }
 
@@ -37,6 +53,7 @@ function formatTimestamp(value: string | null): string {
           <th scope="col">Revision</th>
           <th scope="col">Values digest</th>
           <th scope="col">最近同步</th>
+          <th v-if="canEmergency || canConvergence" scope="col">紧急变更</th>
           <th v-if="canCreateOperation" scope="col">操作</th>
         </tr>
       </thead>
@@ -57,6 +74,36 @@ function formatTimestamp(value: string | null): string {
             <code v-else>{{ release.valuesDigest || '—' }}</code>
           </td>
           <td>{{ formatTimestamp(release.lastSyncAt) }}</td>
+          <td v-if="canEmergency || canConvergence">
+            <span v-if="!release.releaseDefinitionId" class="muted" title="未关联 ReleaseDefinition，紧急变更入口不可用">
+              未绑定 Definition
+            </span>
+            <template v-else>
+              <span
+                v-if="canEmergency && release.emergencyConflict"
+                class="emergency-link blocked"
+                title="存在进行中的标准操作，紧急变更入口已阻断"
+              >
+                紧急变更
+              </span>
+              <RouterLink
+                v-else-if="canEmergency"
+                class="emergency-link"
+                :to="emergencyRoute(release)"
+                title="发起紧急变更"
+              >
+                紧急变更
+              </RouterLink>
+              <RouterLink
+                v-if="canConvergence && release.pendingConvergenceCount > 0"
+                class="convergence-link"
+                :to="convergenceRoute(release)"
+                :title="`${release.pendingConvergenceCount} 个待收敛任务`"
+              >
+                收敛 {{ release.pendingConvergenceCount }}
+              </RouterLink>
+            </template>
+          </td>
           <td v-if="canCreateOperation">
             <RouterLink
               v-if="release.releaseDefinitionId"
@@ -91,4 +138,8 @@ tbody tr:last-child td { border-bottom: 0; }
 code { color: #334155; font-size: 0.75rem; overflow-wrap: anywhere; }
 .values-link { color: #2563eb; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; overflow-wrap: anywhere; }
 .release-table__operation { color: #1d4ed8; font-weight: 700; text-decoration: none; white-space: nowrap; }
+.emergency-link { color: #dc2626; font-weight: 700; text-decoration: none; white-space: nowrap; }
+.emergency-link.blocked { color: #94a3b8; cursor: not-allowed; }
+.convergence-link { color: #7c3aed; font-weight: 700; text-decoration: none; white-space: nowrap; margin-left: 0.6rem; }
+.muted { color: #94a3b8; white-space: nowrap; }
 </style>
