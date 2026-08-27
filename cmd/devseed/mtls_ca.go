@@ -126,11 +126,11 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	}
 	defer os.Remove(tmp.Name()) //nolint:errcheck // best-effort temp cleanup
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close() //nolint:errcheck
+		tmp.Close() //nolint:errcheck // the write error is the primary failure; close is best-effort
 		return err
 	}
 	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close() //nolint:errcheck
+		tmp.Close() //nolint:errcheck // the chmod error is the primary failure; close is best-effort
 		return err
 	}
 	if err := tmp.Close(); err != nil {

@@ -1604,8 +1604,8 @@ exit 0
 		"k3d-release-manager-control", "k3d-dev-customer-a-direct", "k3d-dev-customer-a-cache",
 		"k3d-dev-customer-b-replicated", "k3d-dev-customer-b-mixed",
 	} {
-		disconnectIdx := strings.Index(string(logged), "disconnect -f "+network)
-		rmIdx := strings.Index(string(logged), "rm "+network)
+		disconnectIdx := bytes.Index(logged, []byte("disconnect -f "+network))
+		rmIdx := bytes.Index(logged, []byte("rm "+network))
 		if disconnectIdx == -1 {
 			t.Fatalf("expected registry disconnect for %s:\n%s", network, logged)
 		}
