@@ -37,6 +37,14 @@ func (r *runner) phaseInstall(ctx context.Context) error {
 	if err := r.ensureRunnerToken(ctx); err != nil {
 		return err
 	}
+	// The install phase (per-definition waitBundleValidated + CreateOperation
+	// + preflight + operator execution) can exceed the 15-minute JWT TTL;
+	// refresh the admin token so waitBundleValidated's GetBundle does not fall
+	// through to the service-token leg (`invalid service token`, real smoke
+	// 2026-08-27). Refreshed again per definition below.
+	if err := r.refreshTokens(ctx); err != nil {
+		return err
+	}
 
 	// CreateOperation rejects a bundle in received state
 	// (failed_precondition: bundle_not_ready; REQ-067 rule 9). The
