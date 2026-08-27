@@ -130,7 +130,7 @@ func TestCoordinatorRun_ConsumesPreCreatedArtifactDispatch(t *testing.T) {
 
 	got, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)
-	assert.Equal(t, store.StatusQueued, got.Status)
+	assert.Equal(t, store.StatusSucceeded, got.Status, "INSTALL preflight passed == install executed; operation reaches succeeded")
 }
 
 // D-87 restart replay: a Run over an outbox that already carries the
@@ -174,7 +174,7 @@ func TestCoordinatorRun_RestartReusesExistingDispatches(t *testing.T) {
 
 	got, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)
-	assert.Equal(t, store.StatusQueued, got.Status)
+	assert.Equal(t, store.StatusSucceeded, got.Status, "INSTALL preflight passed == install executed; operation reaches succeeded")
 }
 
 // AC-019-02: a required stage with no available operator fail-closes the
@@ -302,7 +302,7 @@ func TestCoordinatorRun_AllPassedFinalizesLifecycle(t *testing.T) {
 
 	got, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)
-	assert.Equal(t, store.StatusQueued, got.Status, "AC-019-04: operation CAS to queued")
+	assert.Equal(t, store.StatusSucceeded, got.Status, "AC-019-04: INSTALL operation CAS to succeeded after install executed")
 
 	pl, err := st.PreflightLifecycles().GetByOperationID(ctx, op.ID)
 	require.NoError(t, err)
@@ -373,7 +373,7 @@ func TestCoordinatorRun_SucceededCommandResultPassesStage(t *testing.T) {
 
 	got, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)
-	assert.Equal(t, store.StatusQueued, got.Status, "all stages passed via succeeded results must queue the operation")
+	assert.Equal(t, store.StatusSucceeded, got.Status, "all stages passed via succeeded results must succeed the INSTALL operation")
 }
 
 // TestCoordinatorRun_StageCommandsCarryBundle locks the stage-command
