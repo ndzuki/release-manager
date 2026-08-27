@@ -596,6 +596,28 @@ func (a *Agent) executeInstall(ctx context.Context, command *operatorv1.Command,
 	}
 
 	started := time.Now()
+	// Idempotent install (real smoke 2026-08-27): the preflight pipeline
+	// dispatches artifact/render/cluster as INSTALL-typed commands and the
+	// wire Command does not carry the stage, so the agent runs a real install
+	// for each. The first stage installs the release; later stages find it
+	// already deployed. Check Status first and replay a deployed release as
+	// success — a genuine Install on an existing release would fail with
+	// ErrAlreadyExists. ErrAlreadyExists from Install still maps to
+	// release_already_exists (a true conflict), so the error contract is
+	// preserved.
+	if existing, statusErr := a.engine.Status(ctx, helmengine.StatusOptions{
+		Namespace:   command.GetNamespace(),
+		ReleaseName: command.GetReleaseName(),
+	}); statusErr == nil && existing != nil && existing.Status == "deployed" {
+		a.logger.Info("release already deployed; install replayed as success",
+			"namespace", command.GetNamespace(), "release", command.GetReleaseName(), "command", command.GetCommandId())
+		result.Status = "succeeded"
+		result.InventorySync = true
+		if existing.ManifestDigest != "" {
+			result.ResourceSummary.ManifestDigest = existing.ManifestDigest
+		}
+		return result
+	}
 	release, err := a.engine.Install(ctx, helmengine.InstallOptions{
 		Namespace:       command.GetNamespace(),
 		ReleaseName:     command.GetReleaseName(),

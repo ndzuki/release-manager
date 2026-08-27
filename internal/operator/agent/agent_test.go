@@ -24,8 +24,33 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-func TestAgent_InstallCommand(t *testing.T) {
+// TestAgent_InstallReplaysDeployedRelease locks the idempotent install
+// contract (real smoke 2026-08-27): the preflight pipeline dispatches
+// artifact/render/cluster as INSTALL-typed commands (the wire Command carries
+// no stage), so later stages find the release already deployed by the first
+// install. executeInstall must replay a deployed release as success without
+// calling Install again.
+func TestAgent_InstallReplaysDeployedRelease(t *testing.T) {
 	engine := &recordingEngine{
+		statusRelease: &helmengine.Release{
+			Name: "example", Namespace: "apps", Revision: 1, Status: "deployed", ManifestDigest: "sha256:replay",
+		},
+	}
+	store := newMemoryStore()
+	agent := newTestAgent(t, engine, store, nil)
+	stream := newTestStream()
+	command := installCommand("cmd-replay")
+
+	require.NoError(t, agent.handleCommand(t.Context(), stream, command))
+	require.Len(t, stream.sent, 2)
+	assert.Equal(t, "succeeded", stream.sent[1].GetResult().GetStatus())
+	assert.Equal(t, 0, engine.installCalls, "deployed release must not re-install")
+	assert.Equal(t, 1, engine.statusCalls)
+	assert.Contains(t, stream.sent[1].GetResult().GetResultJson(), `"manifest_digest":"sha256:replay"`)
+}
+
+// TestAgent_InstallCommand covers the happy path install.
+func TestAgent_InstallCommand(t *testing.T) {	engine := &recordingEngine{
 		release: &helmengine.Release{
 			Name:           "example",
 			Namespace:      "apps",
