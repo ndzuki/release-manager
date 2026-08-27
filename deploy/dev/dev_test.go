@@ -411,13 +411,15 @@ exit 0
 	// go: answer the GOPROXY probe dev.sh forwards as a build-arg; the seed
 	// path (go run ./cmd/devseed) writes the four enrollment tokens (the
 	// split-seed agents_up stage consumes them) and exits 0. The mTLS CA
-	// helper invocation (批次5 D1, AC-065-36: -ensure-mtls-ca <dir>) writes
-	// the two dummy CA files and exits 0.
+	// helper invocation (批次5 D1, AC-065-36) writes the two dummy CA
+	// files and exits 0. -ensure-mtls-ca is a bool flag and the target dir
+	// travels in the -mtls-ca-dir flag — the shim mirrors the REAL Go flag
+	// semantics so a shell-side mismatch cannot be masked in tests.
 	writeShim(t, binDir, "go", `#!/usr/bin/env bash
 if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
 prev=""
 for a in "$@"; do
-  if [ "$prev" = "-ensure-mtls-ca" ]; then
+  if [ "$prev" = "-mtls-ca-dir" ]; then
     mkdir -p "$a"
     printf 'fake-ca-key\n' > "$a/ca.key"
     printf 'fake-ca-cert\n' > "$a/ca.crt"
@@ -733,7 +735,7 @@ exit 0
 if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
 prev=""
 for a in "$@"; do
-  if [ "$prev" = "-ensure-mtls-ca" ]; then
+  if [ "$prev" = "-mtls-ca-dir" ]; then
     mkdir -p "$a"
     printf 'fake-ca-key\n' > "$a/ca.key"
     printf 'fake-ca-cert\n' > "$a/ca.crt"
@@ -867,7 +869,7 @@ exit 0
 if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
 prev=""
 for a in "$@"; do
-  if [ "$prev" = "-ensure-mtls-ca" ]; then
+  if [ "$prev" = "-mtls-ca-dir" ]; then
     mkdir -p "$a"
     printf 'fake-ca-key\n' > "$a/ca.key"
     printf 'fake-ca-cert\n' > "$a/ca.crt"
@@ -1150,7 +1152,7 @@ exit 0
 if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
 prev=""
 for a in "$@"; do
-  if [ "$prev" = "-ensure-mtls-ca" ]; then
+  if [ "$prev" = "-mtls-ca-dir" ]; then
     mkdir -p "$a"
     printf 'fake-ca-key\n' > "$a/ca.key"
     printf 'fake-ca-cert\n' > "$a/ca.crt"
@@ -1408,7 +1410,7 @@ func TestKustomizeBuildJwtSecretAndNoPostgresPVC(t *testing.T) {
 
 // TestMtlsCaGeneratedAndReused covers 批次5 D1 / AC-065-36 (local leg):
 // dev-up delegates the dev mTLS CA ensure to the devseed helper
-// (go run -ensure-mtls-ca <dir>) before any deployment stage, and the pair
+// (go run -ensure-mtls-ca -mtls-ca-dir <dir>) before any deployment stage, and the pair
 // lands as 0600 files in a 0700 dir. The helper owns reuse vs regeneration
 // (Go-tested); the shell contract asserted here is the invocation, the file
 // presence and the permissions, plus regeneration after rotation.
@@ -1417,14 +1419,16 @@ func TestMtlsCaGeneratedAndReused(t *testing.T) {
 	env, binDir := fakeEnv(t, stateDir)
 	fakeK3d(t, binDir, stateDir)
 	happyShims(t, binDir)
-	// Replace the go shim with one that logs every -ensure-mtls-ca call and
+	// Replace the go shim with one that logs every -mtls-ca-dir value and
 	// generates non-deterministic content (rotation must be observable).
+	// The shim parses -mtls-ca-dir as a value-taking flag, matching the real
+	// Go flag semantics of cmd/devseed.
 	writeShim(t, binDir, "go", `#!/usr/bin/env bash
 if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
 printf '%s\n' "$*" >> "$DEV_DATA_DIR/go-calls.log"
 prev=""
 for a in "$@"; do
-  if [ "$prev" = "-ensure-mtls-ca" ]; then
+  if [ "$prev" = "-mtls-ca-dir" ]; then
     n=$(cat "$DEV_DATA_DIR/ca-count" 2>/dev/null || printf 0)
     n=$((n + 1))
     printf '%s' "$n" > "$DEV_DATA_DIR/ca-count"
@@ -1470,8 +1474,8 @@ exit 0
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(logged), "-ensure-mtls-ca "+caDir) {
-		t.Fatalf("expected -ensure-mtls-ca %s delegation:\n%s", caDir, logged)
+	if !strings.Contains(string(logged), "-ensure-mtls-ca -mtls-ca-dir "+caDir) {
+		t.Fatalf("expected -ensure-mtls-ca -mtls-ca-dir %s delegation:\n%s", caDir, logged)
 	}
 	// Re-run delegates again (reuse vs regenerate is the helper's own
 	// contract, locked by cmd/devseed TestEnsureDevMTLSCA_GenerateReuse...);
@@ -1484,7 +1488,7 @@ exit 0
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(string(logged), "-ensure-mtls-ca "+caDir); got != 2 {
+	if got := strings.Count(string(logged), "-ensure-mtls-ca -mtls-ca-dir "+caDir); got != 2 {
 		t.Fatalf("expected the CA helper delegated on both runs, got %d:\n%s", got, logged)
 	}
 	if _, err := os.Stat(keyPath); err != nil {
@@ -1652,12 +1656,17 @@ func TestK3dNodeResourceDefaultsAndOverride(t *testing.T) {
 		if len(lines) != 5 {
 			t.Fatalf("expected 5 docker update calls, got %d:\n%s", len(lines), updates)
 		}
-		if !strings.Contains(string(updates), "k3d-release-manager-control-server-0 --cpus 2") &&
-			!strings.Contains(string(updates), "--cpus 2 k3d-release-manager-control-server-0") {
-			t.Fatalf("expected control cluster CPU cap 2:\n%s", updates)
-		}
-		if !strings.Contains(string(updates), "--cpus 1") {
-			t.Fatalf("expected customer cluster CPU cap 1:\n%s", updates)
+		// AC-065-37: both caps ride docker update (k3d has no CPU flag; the
+		// memory cap is re-applied on resume too, keeping overrides effective).
+		for _, line := range lines {
+			if strings.Contains(line, "k3d-release-manager-control-server-0") &&
+				(!strings.Contains(line, "--cpus 2") || !strings.Contains(line, "--memory 3GiB")) {
+				t.Fatalf("expected control cluster caps (--cpus 2 --memory 3GiB):\n%s", line)
+			}
+			if !strings.Contains(line, "k3d-release-manager-control-server-0") &&
+				(!strings.Contains(line, "--cpus 1") || !strings.Contains(line, "--memory 1.5GiB")) {
+				t.Fatalf("expected customer cluster caps (--cpus 1 --memory 1.5GiB):\n%s", line)
+			}
 		}
 	})
 	t.Run("override", func(t *testing.T) {
@@ -1680,8 +1689,8 @@ func TestK3dNodeResourceDefaultsAndOverride(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, line := range strings.Split(strings.TrimSpace(string(updates)), "\n") {
-			if !strings.Contains(line, "--cpus 4") {
-				t.Fatalf("override CPU cap missing in docker update:\n%s", updates)
+			if !strings.Contains(line, "--cpus 4") || !strings.Contains(line, "--memory 2GiB") {
+				t.Fatalf("override caps missing in docker update:\n%s", line)
 			}
 		}
 	})

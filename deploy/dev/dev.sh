@@ -387,8 +387,10 @@ mtls_ca_ensure() {
   # The helper owns the full contract (exists+parseable → reuse, missing or
   # corrupt → regenerate); dev-up always delegates so corrupt material is
   # regenerated instead of bricking the orchestrator gateway (ca.Load fails
-  # closed on an unparseable pair).
-  if ! go run ./cmd/devseed/ -ensure-mtls-ca "$dir"; then
+  # closed on an unparseable pair). -ensure-mtls-ca is a bool flag: the
+  # target dir travels in the separate -mtls-ca-dir flag (Go flag semantics
+  # — a bool flag never consumes a positional value).
+  if ! go run ./cmd/devseed/ -ensure-mtls-ca -mtls-ca-dir "$dir"; then
     fail "$ERR_SERVICE_UNHEALTHY" "cannot generate/reuse the dev mTLS CA in $dir (go toolchain required)"
   fi
   [ -s "$(mtls_ca_key_path)" ] && [ -s "$(mtls_ca_cert_path)" ] \
@@ -638,17 +640,20 @@ node_cpu_for() {
   fi
 }
 
-# node_resources_apply <cluster> — enforce the CPU cap on the server node
-# container. k3d exposes --servers-memory but no CPU flag at all (v5.8.3
-# --help 实测; the memory flag is passed at creation below), so the CPU
-# limit rides docker update on the server-0 container — applied to newly
-# created clusters and to owned clusters on resume so a DEV_K3D_NODE_CPU
-# override stays effective across re-runs (AC-065-37).
+# node_resources_apply <cluster> — enforce the node resource caps on the
+# server node container. k3d exposes --servers-memory but no CPU flag at all
+# (v5.8.3 --help 实测; the memory flag is passed at creation below), so both
+# caps ride docker update on the server-0 container — applied to newly
+# created clusters AND to owned clusters on resume, which keeps a
+# DEV_K3D_NODE_MEMORY/CPU override effective across re-runs (AC-065-37:
+# "Given 覆盖 Then 按覆盖值生效" — creation-only would drop the memory
+# override on every resume; Spec 轴审查发现).
 node_resources_apply() {
-  local cluster="$1" cpu
+  local cluster="$1" cpu mem
   cpu="$(node_cpu_for "$cluster")"
-  if ! docker update --cpus "$cpu" "k3d-$cluster-server-0" >/dev/null; then
-    fail "$ERR_CLUSTER_CREATE_FAILED" "cannot apply node CPU limit $cpu to cluster $cluster"
+  mem="$(node_memory_for "$cluster")"
+  if ! docker update --cpus "$cpu" --memory "$mem" "k3d-$cluster-server-0" >/dev/null; then
+    fail "$ERR_CLUSTER_CREATE_FAILED" "cannot apply node resource limits (cpu=$cpu memory=$mem) to cluster $cluster"
   fi
 }
 
@@ -884,7 +889,11 @@ images_up_parallel() {
     fi
   done
   [ "${#pending[@]}" -gt 0 ] || return 0
-  local i=0 svc rc first_fail="" pids=() names=()
+  # first_fail / first_rc always move together: the FIRST failed job decides
+  # the error report. Recording only the LAST failure's rc would misreport a
+  # leading build failure (10) as docker_push_failed when a later job fails
+  # with 11 (Spec 轴审查发现).
+  local i=0 svc rc first_fail="" first_rc=0 pids=() names=()
   for svc in "${pending[@]}"; do
     build_push_now "$svc" &
     pids+=("$!")
@@ -895,7 +904,10 @@ images_up_parallel() {
       for j in "${!pids[@]}"; do
         if ! wait "${pids[$j]}"; then
           rc=$?
-          first_fail="${first_fail:-${names[$j]}}"
+          if [ -z "$first_fail" ]; then
+            first_fail="${names[$j]}"
+            first_rc=$rc
+          fi
         fi
       done
       pids=()
@@ -908,12 +920,15 @@ images_up_parallel() {
     for j in "${!pids[@]}"; do
       if ! wait "${pids[$j]}"; then
         rc=$?
-        first_fail="${first_fail:-${names[$j]}}"
+        if [ -z "$first_fail" ]; then
+          first_fail="${names[$j]}"
+          first_rc=$rc
+        fi
       fi
     done
   fi
   if [ -n "$first_fail" ]; then
-    if [ "${rc:-0}" -eq 11 ]; then
+    if [ "$first_rc" -eq 11 ]; then
       fail "$ERR_DOCKER_PUSH_FAILED" "push failed for release-$first_fail:content-sha256-${IMAGE_TAGS[$first_fail]:-}"
     fi
     fail "$ERR_DOCKER_BUILD_FAILED" "build failed for release-$first_fail"
