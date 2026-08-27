@@ -62,6 +62,13 @@ func (r *runner) phaseInstall(ctx context.Context) error {
 		if record.id == "" || record.valuesRevisionID == "" {
 			return fmt.Errorf("definition %s not ready for install", seed.logicalKey)
 		}
+		// Each definition's CreateOperation + preflight + operator execution
+		// can exceed the 15-minute JWT TTL; refresh the runner token before
+		// every operation (real smoke 2026-08-28: CreateOperation `token is
+		// expired` on the second definition).
+		if err := r.refreshTokens(ctx); err != nil {
+			return err
+		}
 		operationID, err := r.ensureInstallOperation(ctx, seed, record)
 		if err != nil {
 			return err

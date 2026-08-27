@@ -68,8 +68,8 @@ func (r *runner) phaseVerify(ctx context.Context) error {
 // refreshTokens re-logs the dev accounts to obtain fresh access tokens after
 // a long install phase (the 15-minute JWT TTL can elapse mid-run). It
 // refreshes admin (verify readbacks), deployer (definition readback) and
-// e2e-runner (already-installed operations are not re-created, but keeping it
-// fresh avoids a stale token in later phases).
+// e2e-runner (CreateOperation actor — real smoke 2026-08-28: the cached
+// runner token expired mid-install → CreateOperation `token is expired`).
 func (r *runner) refreshTokens(ctx context.Context) error {
 	authClient := r.clients.auth
 	adminLogin, err := authClient.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: r.cfg.AdminUser, Password: r.state.credentials.admin}))
@@ -83,6 +83,11 @@ func (r *runner) refreshTokens(ctx context.Context) error {
 	}
 	r.state.deployerToken = deployerLogin.Msg.GetAccessToken()
 	r.state.deployerUserID = deployerLogin.Msg.GetUser().GetId()
+	runnerLogin, err := authClient.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: e2eRunnerUser, Password: r.state.credentials.runner}))
+	if err != nil {
+		return fmt.Errorf("refresh %s login: %w", e2eRunnerUser, err)
+	}
+	r.state.runnerToken = runnerLogin.Msg.GetAccessToken()
 	return nil
 }
 

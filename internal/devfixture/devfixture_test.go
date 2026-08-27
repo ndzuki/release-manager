@@ -638,10 +638,11 @@ func TestPhaseVerifyRefreshesTokens(t *testing.T) {
 	require.NoError(t, err)
 
 	// The full run authenticates at start (2 logins: admin+deployer) and
-	// again at verify (refreshTokens: admin+deployer). Assert the extra
-	// logins happened, i.e. the token was refreshed.
-	require.GreaterOrEqual(t, fakes.auth.loginCalls, 4)
+	// again at verify (refreshTokens: admin+deployer+runner). Assert the
+	// extra logins happened, i.e. the tokens were refreshed.
+	require.GreaterOrEqual(t, fakes.auth.loginCalls, 5)
 	require.Equal(t, "token-dev-admin", r.state.adminToken, "admin token must be refreshed by the verify phase")
+	require.Equal(t, "token-e2e-runner", r.state.runnerToken, "runner token must be refreshed by the verify phase")
 }
 
 // TestRun_BundleImageDigestIsResolvedFromRegistry locks the bundle image
