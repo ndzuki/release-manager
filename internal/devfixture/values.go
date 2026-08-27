@@ -209,8 +209,34 @@ func (r *runner) checkApprovedValues(ctx context.Context, definitionID, expected
 }
 
 // manifestDefinitionIDs reconstructs the definition records from the live
-// readback (used by verify and the up-to-date rebuild path).
+// readback (used by verify and the up-to-date rebuild path): definition ids
+// plus their approved values revision ids.
 func (r *runner) readbackDefinitions(ctx context.Context) error {
+	if err := r.readbackDefinitionIDs(ctx); err != nil {
+		return err
+	}
+	// Resolve approved values revision ids for the manifest.
+	for _, seed := range definitionSeeds {
+		record := r.state.definitions[seed.logicalKey]
+		if record.id == "" {
+			continue
+		}
+		revisionID, err := r.findApprovedRevisionID(ctx, record.id)
+		if err != nil {
+			return fmt.Errorf("definition %s: %w", seed.logicalKey, err)
+		}
+		record.valuesRevisionID = revisionID
+		r.state.definitions[seed.logicalKey] = record
+	}
+	return nil
+}
+
+// readbackDefinitionIDs hydrates only the definition ids from the live
+// readback. Unlike readbackDefinitions it does not resolve approved values
+// revisions, so callers that need a definition scope but may run before the
+// values phase commits (e.g. the bundle committed-check) do not depend on a
+// values revision existing yet.
+func (r *runner) readbackDefinitionIDs(ctx context.Context) error {
 	listReq := connect.NewRequest(&orchestratorv1.ListReleaseDefinitionsRequest{
 		CustomerId: definitionCustomerID, ClusterId: definitionCluster, IncludeDisabled: true,
 	})
@@ -227,19 +253,6 @@ func (r *runner) readbackDefinitions(ctx context.Context) error {
 				r.state.definitions[seed.logicalKey] = record
 			}
 		}
-	}
-	// Resolve approved values revision ids for the manifest.
-	for _, seed := range definitionSeeds {
-		record := r.state.definitions[seed.logicalKey]
-		if record.id == "" {
-			continue
-		}
-		revisionID, err := r.findApprovedRevisionID(ctx, record.id)
-		if err != nil {
-			return fmt.Errorf("definition %s: %w", seed.logicalKey, err)
-		}
-		record.valuesRevisionID = revisionID
-		r.state.definitions[seed.logicalKey] = record
 	}
 	return nil
 }

@@ -551,10 +551,14 @@ type fakeWebhook struct {
 	failOnce  error
 	failEvery error
 	idemKeys  []string
+	// validateSync makes the fake validate submitted bundles immediately
+	// (default, mirrors the async real validation's end state); false keeps
+	// them RECEIVED so tests can exercise waitBundleValidated's timeout.
+	validateSync bool
 }
 
 func newFakeWebhook(shared map[string]*orchestratorv1.BundleSummary) *fakeWebhook {
-	return &fakeWebhook{summaries: map[string]*orchestratorv1.BundleSummary{}, shared: shared}
+	return &fakeWebhook{summaries: map[string]*orchestratorv1.BundleSummary{}, shared: shared, validateSync: true}
 }
 
 func (f *fakeWebhook) SubmitReleaseBundle(_ context.Context, req *connect.Request[webhookv1.SubmitReleaseBundleRequest]) (*connect.Response[webhookv1.SubmitReleaseBundleResponse], error) {
@@ -575,11 +579,20 @@ func (f *fakeWebhook) SubmitReleaseBundle(_ context.Context, req *connect.Reques
 	summary, ok := f.summaries[msg.GetChartDigest()]
 	if !ok {
 		f.nextID++
+		// The fake acts as a synchronous validator by default (the real
+		// orchestrator validates asynchronously via its 30s worker poll);
+		// the seed's waitBundleValidated then returns on the first read.
+		// Tests for the not-yet-validated leg set validateSync=false and
+		// flip the status back to RECEIVED.
+		status := commonv1.BundleStatus_BUNDLE_STATUS_VALIDATED
+		if !f.validateSync {
+			status = commonv1.BundleStatus_BUNDLE_STATUS_RECEIVED
+		}
 		summary = &orchestratorv1.BundleSummary{
 			Id: fmt.Sprintf("bundle-%d", f.nextID), Name: msg.GetName(),
 			Digest:   &commonv1.ReleaseDigest{Algorithm: "sha256", Value: digest},
 			ChartRef: msg.GetChartRef(), ChartVersion: msg.GetChartVersion(), ChartDigest: msg.GetChartDigest(),
-			Status: commonv1.BundleStatus_BUNDLE_STATUS_RECEIVED,
+			Status: status,
 		}
 		f.summaries[msg.GetChartDigest()] = summary
 		f.shared[summary.GetId()] = summary

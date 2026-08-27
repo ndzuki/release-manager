@@ -1524,6 +1524,12 @@ cmd_reset_data() {
   ctl_kubectl -n release-manager-dev rollout status deployment/orchestrator deployment/auth deployment/notifier --timeout=180s >/dev/null \
     || fail "$ERR_SERVICE_UNHEALTHY" "maintenance rollout did not converge"
   log "  maintenance disabled (re-seed writes enabled)"
+  # rollout status is not connection-level convergence: the loadbalancer can
+  # still route a fresh seed connection to a just-terminated pod
+  # (`unexpected EOF`, real smoke 2026-08-27). Poll the host endpoints
+  # until the new pods answer before the re-seed.
+  require_readyz auth "${DEV_PORTS[3]}"
+  require_readyz orchestrator "${DEV_PORTS[1]}"
   if ! go run ./cmd/devseed/ --reset \
     --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085 \
     --operator-timeout "$DEV_TIMEOUT_OPERATOR" --seed-retries "$DEV_TIMEOUT_SEED_RETRIES" \

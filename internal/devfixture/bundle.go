@@ -207,11 +207,19 @@ func (r *runner) checkCommittedBundle(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("compute chart digest: %w", err)
 	}
-	req := connect.NewRequest(&orchestratorv1.GetBundleRequest{BundleId: state.BundleID})
 	// D-016 残余 (AC-065-33 后半链): GetBundle runs behind the shared auth
 	// interceptor on the real orchestrator — the readback must carry the
 	// admin bearer like every other phase (real smoke 2026-08-25:
-	// unauthenticated).
+	// unauthenticated) and is definition-scoped (real smoke 2026-08-27:
+	// not_authorized: release_definition_id is required).
+	definitionID, err := r.resolveBundleDefinitionID(ctx)
+	if err != nil {
+		return fmt.Errorf("get bundle %s: %w", state.BundleID, err)
+	}
+	req := connect.NewRequest(&orchestratorv1.GetBundleRequest{
+		BundleId:            state.BundleID,
+		ReleaseDefinitionId: definitionID,
+	})
 	withAuth(req, r.state.adminToken)
 	response, err := r.clients.bundle.GetBundle(ctx, req)
 	if err != nil {

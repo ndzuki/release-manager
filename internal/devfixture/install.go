@@ -3,6 +3,7 @@ package devfixture
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -37,6 +38,17 @@ func (r *runner) phaseInstall(ctx context.Context) error {
 		return err
 	}
 
+	// CreateOperation rejects a bundle in received state
+	// (failed_precondition: bundle_not_ready; REQ-067 rule 9). The
+	// orchestrator's validation worker transitions received→validated
+	// asynchronously (30s poll) — wait for the transition instead of
+	// burning the phase retry budget against the not-yet-run worker
+	// (real smoke 2026-08-27: all 3 install retries failed while the
+	// worker's first poll was still 20s away).
+	if err := r.waitBundleValidated(ctx); err != nil {
+		return err
+	}
+
 	for _, seed := range definitionSeeds {
 		record := r.state.definitions[seed.logicalKey]
 		if record.id == "" || record.valuesRevisionID == "" {
@@ -68,6 +80,76 @@ func (r *runner) ensureRunnerToken(ctx context.Context) error {
 	}
 	r.state.runnerToken = login.Msg.GetAccessToken()
 	return nil
+}
+
+// bundleValidationPoll / bundleValidationTimeout bound the
+// waitBundleValidated loop; package vars so tests can shorten them.
+var (
+	bundleValidationPoll    = 5 * time.Second
+	bundleValidationTimeout = 5 * time.Minute
+)
+
+// waitBundleValidated polls GetBundle until the submitted bundle reaches
+// VALIDATED. The orchestrator validates asynchronously (validation worker
+// poll), so an immediate CreateOperation would fail bundle_not_ready; the
+// wait bounds that convergence window and fails closed with the observed
+// status. GetBundle is definition-scoped for external actors (real smoke
+// 2026-08-27: not_authorized: release_definition_id is required), so the
+// request carries the first E2E definition.
+func (r *runner) waitBundleValidated(ctx context.Context) error {
+	if r.state.bundle.id == "" {
+		return fmt.Errorf("bundle id not recorded; run the bundle phase first")
+	}
+	definitionID, err := r.resolveBundleDefinitionID(ctx)
+	if err != nil {
+		return err
+	}
+	deadline := time.Now().Add(bundleValidationTimeout)
+	for {
+		req := connect.NewRequest(&orchestratorv1.GetBundleRequest{
+			BundleId:            r.state.bundle.id,
+			ReleaseDefinitionId: definitionID,
+		})
+		withAuth(req, r.state.adminToken)
+		response, err := r.clients.bundle.GetBundle(ctx, req)
+		if err != nil {
+			return fmt.Errorf("get bundle status: %w", err)
+		}
+		summary := response.Msg.GetBundle().GetSummary()
+		if summary != nil && summary.GetStatus() == commonv1.BundleStatus_BUNDLE_STATUS_VALIDATED {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			status := commonv1.BundleStatus_BUNDLE_STATUS_UNSPECIFIED
+			if summary != nil {
+				status = summary.GetStatus()
+			}
+			return fmt.Errorf("bundle %s not validated within %s (status %s)", r.state.bundle.id, bundleValidationTimeout, status)
+		}
+		select {
+		case <-time.After(bundleValidationPoll):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// resolveBundleDefinitionID returns the first E2E definition id, hydrating
+// the definition ids from the live readback when the current run resumed
+// without populating them in memory. It uses the ids-only readback so the
+// bundle committed-check keeps working before the values phase commits.
+func (r *runner) resolveBundleDefinitionID(ctx context.Context) (string, error) {
+	if len(r.state.definitions) == 0 {
+		r.state.definitions = map[string]definitionRecord{}
+		if err := r.readbackDefinitionIDs(ctx); err != nil {
+			return "", fmt.Errorf("resolve definition for bundle readback: %w", err)
+		}
+	}
+	record := r.state.definitions[definitionSeeds[0].logicalKey]
+	if record.id == "" {
+		return "", fmt.Errorf("definition %s id not resolved for bundle readback", definitionSeeds[0].logicalKey)
+	}
+	return record.id, nil
 }
 
 // ensureInstallOperation creates the INSTALL operation and waits for its

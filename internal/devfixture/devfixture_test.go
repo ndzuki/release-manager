@@ -667,8 +667,7 @@ func TestRun_AllWritesCarryStableIdempotencyKeys(t *testing.T) {
 	}
 }
 
-// TestRun_WriteRetryReusesSameIdempotencyKey covers AC-065-41's retry leg:
-// a phase-internal retry (DEV_TIMEOUT_SEED_RETRIES) replays the same key so
+// TestRun_WriteRetryReusesSameIdempotencyKey covers AC-065-41's retry leg:// a phase-internal retry (DEV_TIMEOUT_SEED_RETRIES) replays the same key so
 // the server-side scoped idempotency dedupes instead of creating duplicates.
 func TestRun_WriteRetryReusesSameIdempotencyKey(t *testing.T) {
 	fakes := newFakeServices()
@@ -718,4 +717,34 @@ func TestRun_StopAfterPhaseCommitsUpToAndStops(t *testing.T) {
 	// each created exactly once across both runs.
 	require.Equal(t, 2, fakes.orch.count("CreateCustomer"))
 	require.Equal(t, 3, fakes.auth.createCalls)
+}
+
+// TestRun_InstallWaitsForBundleValidation covers the bundle_not_ready leg
+// (real smoke 2026-08-27): the orchestrator validates bundles
+// asynchronously (30s worker poll), so the install phase must wait for the
+// VALIDATED status instead of burning its retry budget against a received
+// bundle. A bundle that never validates fails closed with the observed
+// status within the (test-shortened) window.
+func TestRun_InstallWaitsForBundleValidation(t *testing.T) {
+	fakes := newFakeServices()
+	fakes.webhook.validateSync = false
+	r := testRunner(t, fakes)
+
+	prevPoll := bundleValidationPoll
+	prevTimeout := bundleValidationTimeout
+	bundleValidationPoll = time.Millisecond
+	bundleValidationTimeout = 50 * time.Millisecond
+	t.Cleanup(func() {
+		bundleValidationPoll = prevPoll
+		bundleValidationTimeout = prevTimeout
+	})
+
+	_, err := r.run(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not validated")
+	require.Contains(t, err.Error(), "BUNDLE_STATUS_RECEIVED")
+	// The install phase never created an operation (the wait gates it).
+	require.Equal(t, 0, fakes.orch.count("CreateOperation"))
+	p := loadProgressFile(t, r.cfg.DataDir)
+	require.True(t, p.Partial)
 }
