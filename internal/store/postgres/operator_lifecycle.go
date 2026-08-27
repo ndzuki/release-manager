@@ -69,6 +69,8 @@ func (s *operatorLifecycleStore) DisableCluster(
 // revokeScope is the shared transactional cascade: list → revoke tokens and
 // operators → close live sessions, all-or-nothing. Already-revoked records
 // are not re-touched (first-write reason/time preserved, idempotent).
+// column is restricted to the "customer_id"/"cluster_id" whitelist (see
+// DisableCustomer/DisableCluster); values are always parameterized.
 func (s *operatorLifecycleStore) revokeScope(
 	ctx context.Context,
 	column, value, reason string,
