@@ -30,6 +30,7 @@ func (r *runner) phaseEnrollment(ctx context.Context) error {
 			OperatorName: "operator-" + seed.id,
 		})
 		withAuth(req, r.state.adminToken)
+		req.Header().Set("Idempotency-Key", idempotencyKey("enrollment", seed.id))
 		response, err := r.clients.orch.CreateEnrollmentToken(ctx, req)
 		if err != nil {
 			return fmt.Errorf("create enrollment token for cluster %s: %w", seed.id, err)

@@ -167,7 +167,7 @@ func (r *runner) phaseBundle(ctx context.Context) error {
 		GitCommit:  bundleGitCommit,
 		PipelineId: bundlePipeline,
 	})
-	req.Header().Set("Idempotency-Key", "devseed-submit-release-bundle")
+	req.Header().Set("Idempotency-Key", idempotencyKey("bundle", "submit"))
 	response, err := r.clients.webhook.SubmitReleaseBundle(ctx, req)
 	if err != nil {
 		return fmt.Errorf("submit release bundle: %w", err)
@@ -208,6 +208,11 @@ func (r *runner) checkCommittedBundle(ctx context.Context) error {
 		return fmt.Errorf("compute chart digest: %w", err)
 	}
 	req := connect.NewRequest(&orchestratorv1.GetBundleRequest{BundleId: state.BundleID})
+	// D-016 残余 (AC-065-33 后半链): GetBundle runs behind the shared auth
+	// interceptor on the real orchestrator — the readback must carry the
+	// admin bearer like every other phase (real smoke 2026-08-25:
+	// unauthenticated).
+	withAuth(req, r.state.adminToken)
 	response, err := r.clients.bundle.GetBundle(ctx, req)
 	if err != nil {
 		return fmt.Errorf("get bundle %s: %w", state.BundleID, err)

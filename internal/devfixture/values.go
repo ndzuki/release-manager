@@ -39,7 +39,7 @@ func (r *runner) phaseValues(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		revisionID, err := r.ensureValuesRevision(ctx, definitionID)
+		revisionID, err := r.ensureValuesRevision(ctx, seed, definitionID)
 		if err != nil {
 			return err
 		}
@@ -77,6 +77,7 @@ func (r *runner) ensureDefinition(ctx context.Context, seed definitionSeed) (str
 		Actor: &commonv1.ActorContext{UserId: r.state.deployerUserID, Organization: r.state.adminOrgID},
 	})
 	withAuth(createReq, r.state.deployerToken)
+	createReq.Header().Set("Idempotency-Key", idempotencyKey("values", seed.logicalKey+"-definition"))
 	response, err := r.clients.orch.CreateReleaseDefinition(ctx, createReq)
 	if err != nil {
 		return "", fmt.Errorf("create release definition %s: %w", seed.logicalKey, err)
@@ -87,8 +88,10 @@ func (r *runner) ensureDefinition(ctx context.Context, seed definitionSeed) (str
 
 // ensureValuesRevision creates or reuses the minimal approved values
 // revision ({"replicaCount":1}) for one definition, then drives the matching
-// draft through Submit and Approve.
-func (r *runner) ensureValuesRevision(ctx context.Context, definitionID string) (string, error) {
+// draft through Submit and Approve. The idempotency keys use the stable
+// definition logical key — never the server definition id, which does not
+// exist yet on a retried create (批次5 D9, AC-065-41).
+func (r *runner) ensureValuesRevision(ctx context.Context, seed definitionSeed, definitionID string) (string, error) {
 	valuesJSON := []byte(valuesDocument)
 	expectedDigest := valuesDigest(valuesJSON)
 
@@ -119,7 +122,7 @@ func (r *runner) ensureValuesRevision(ctx context.Context, definitionID string) 
 			ReleaseDefinitionId: definitionID,
 			Document:            string(valuesJSON),
 		})
-		createReq.Header().Set("Idempotency-Key", "devseed-create-values-"+definitionID)
+		createReq.Header().Set("Idempotency-Key", idempotencyKey("values", seed.logicalKey))
 		withAuth(createReq, r.state.deployerToken)
 		created, err := r.clients.orch.CreateValuesRevision(ctx, createReq)
 		if err != nil {
@@ -133,6 +136,9 @@ func (r *runner) ensureValuesRevision(ctx context.Context, definitionID string) 
 			RevisionId: pending.GetId(), ExpectedStateVersion: pending.GetStateVersion(), Comment: "seeded by devseed",
 		})
 		withAuth(submitReq, r.state.deployerToken)
+		// The request hash covers the state version, so the same key +
+		// identical body replays idempotently across phase-internal retries.
+		submitReq.Header().Set("Idempotency-Key", idempotencyKey("values", seed.logicalKey+"-submit"))
 		submitted, err := retrySnapshotWarmup(ctx, func() (*connect.Response[orchestratorv1.ValuesRevisionDecisionResponse], error) {
 			return r.clients.orch.SubmitValuesRevision(ctx, submitReq)
 		})
@@ -147,6 +153,7 @@ func (r *runner) ensureValuesRevision(ctx context.Context, definitionID string) 
 		RevisionId: pending.GetId(), ExpectedStateVersion: pending.GetStateVersion(), Comment: "seeded by devseed",
 	})
 	withAuth(approveReq, r.state.adminToken)
+	approveReq.Header().Set("Idempotency-Key", idempotencyKey("values", seed.logicalKey+"-approve"))
 	approved, err := retrySnapshotWarmup(ctx, func() (*connect.Response[orchestratorv1.ValuesRevisionDecisionResponse], error) {
 		return r.clients.orch.ApproveValuesRevision(ctx, approveReq)
 	})

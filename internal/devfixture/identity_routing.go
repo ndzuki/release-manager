@@ -43,6 +43,9 @@ func (r *runner) seedCustomers(ctx context.Context) error {
 		if !existing[seed.id] {
 			createReq := connect.NewRequest(&orchestratorv1.CreateCustomerRequest{Id: seed.id, Name: seed.name, Slug: seed.slug})
 			withAuth(createReq, r.state.adminToken)
+			// 批次5 D9 (AC-065-41): stable logical key so a phase-internal
+			// retry replays the same request instead of creating a duplicate.
+			createReq.Header().Set("Idempotency-Key", idempotencyKey("identity", seed.logicalKey))
 			if _, err := r.clients.orch.CreateCustomer(ctx, createReq); err != nil {
 				return fmt.Errorf("create customer %s: %w", seed.id, err)
 			}
@@ -74,6 +77,7 @@ func (r *runner) seedOrgBindings(ctx context.Context) error {
 		}
 		req := connect.NewRequest(&authv1.CreateBindingRequest{OrgId: r.state.adminOrgID, CustomerId: seed.id})
 		withAuth(req, r.state.adminToken)
+		req.Header().Set("Idempotency-Key", idempotencyKey("identity", "binding-"+seed.logicalKey))
 		_, err := r.clients.binding.CreateBinding(ctx, req)
 		if err != nil && connect.CodeOf(err) != connect.CodeAlreadyExists {
 			return fmt.Errorf("create binding org %s customer %s: %w", r.state.adminOrgID, seed.id, err)
@@ -102,6 +106,7 @@ func (r *runner) seedClusters(ctx context.Context) error {
 			Id: seed.id, Name: seed.name, CustomerId: customerID, KubeconfigRef: "kind://release-manager-dev",
 		})
 		withAuth(createReq, r.state.deployerToken)
+		createReq.Header().Set("Idempotency-Key", idempotencyKey("identity", seed.id))
 		if _, err := r.clients.orch.CreateCluster(ctx, createReq); err != nil {
 			return fmt.Errorf("create cluster %s: %w", seed.id, err)
 		}
@@ -157,6 +162,7 @@ func (r *runner) phaseRouting(ctx context.Context) error {
 			SourcePrefix: seed.sourcePrefix, TargetPrefix: seed.targetPrefix,
 		})
 		withAuth(req, r.state.deployerToken)
+		req.Header().Set("Idempotency-Key", idempotencyKey("routing", seed.id))
 		response, err := r.clients.orch.ConfigureClusterRoute(ctx, req)
 		if err != nil {
 			return fmt.Errorf("configure route %s: %w", seed.id, err)

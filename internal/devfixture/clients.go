@@ -106,3 +106,12 @@ func newConnectClients(cfg Config) *connectClients {
 func withAuth[T any](req *connect.Request[T], token string) {
 	req.Header().Set("Authorization", "Bearer "+token)
 }
+
+// idempotencyKey renders the stable idempotency key contract for every
+// devseed create/submit-class write (批次5 D9, AC-065-41): the format is
+// devseed-<phase>-<logical-key> where the logical key is a stable dev-*
+// identity — never a server-generated id (a server id in the key breaks
+// retry idempotency because the id does not exist on the retry path).
+func idempotencyKey(phase, logicalKey string) string {
+	return "devseed-" + phase + "-" + logicalKey
+}

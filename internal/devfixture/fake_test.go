@@ -27,6 +27,7 @@ type fakeAuth struct {
 	loginCalls  int
 	createCalls int
 	initCalls   int
+	idemKeys    []string
 }
 
 func newFakeAuth() *fakeAuth {
@@ -77,6 +78,7 @@ func (f *fakeAuth) CreateLocalUser(_ context.Context, req *connect.Request[authv
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.createCalls++
+	f.idemKeys = append(f.idemKeys, idemOf(req))
 	if _, ok := f.users[req.Msg.GetUsername()]; ok {
 		return nil, connect.NewError(connect.CodeAlreadyExists, errors.New("user already exists"))
 	}
@@ -111,6 +113,7 @@ func (f *fakeAuth) GetLocalUser(_ context.Context, req *connect.Request[authv1.G
 type fakeBinding struct {
 	mu       sync.Mutex
 	bindings map[string]*authv1.OrgCustomerBinding // key: customer id
+	idemKeys []string
 }
 
 func newFakeBinding() *fakeBinding {
@@ -130,6 +133,7 @@ func (f *fakeBinding) ListBindings(_ context.Context, _ *connect.Request[authv1.
 func (f *fakeBinding) CreateBinding(_ context.Context, req *connect.Request[authv1.CreateBindingRequest]) (*connect.Response[authv1.CreateBindingResponse], error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.idemKeys = append(f.idemKeys, idemOf(req))
 	if _, ok := f.bindings[req.Msg.GetCustomerId()]; ok {
 		return nil, connect.NewError(connect.CodeAlreadyExists, errors.New("binding exists"))
 	}
@@ -193,6 +197,9 @@ type fakeOrchestrator struct {
 	// opKeyTerminal overrides the terminal state for operations created
 	// with a matching idempotency key (default succeeded).
 	opKeyTerminal map[string]orchestratorv1.OperationStatus
+	// idemKeys records the Idempotency-Key of every write RPC so tests can
+	// assert the stable key contract (AC-065-41).
+	idemKeys []string
 
 	nextOpID int
 }
@@ -233,6 +240,7 @@ func (f *fakeOrchestrator) CreateCustomer(_ context.Context, req *connect.Reques
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bump("CreateCustomer")
+	f.idemKeys = append(f.idemKeys, idemOf(req))
 	msg := req.Msg
 	if _, ok := f.customers[msg.GetId()]; ok {
 		return nil, connect.NewError(connect.CodeAlreadyExists, errors.New("customer exists"))
@@ -256,6 +264,7 @@ func (f *fakeOrchestrator) CreateCluster(_ context.Context, req *connect.Request
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bump("CreateCluster")
+	f.idemKeys = append(f.idemKeys, idemOf(req))
 	msg := req.Msg
 	if _, ok := f.clusters[msg.GetId()]; ok {
 		return nil, connect.NewError(connect.CodeAlreadyExists, errors.New("cluster exists"))
@@ -271,6 +280,7 @@ func (f *fakeOrchestrator) ConfigureClusterRoute(_ context.Context, req *connect
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bump("ConfigureClusterRoute")
+	f.idemKeys = append(f.idemKeys, idemOf(req))
 	msg := req.Msg
 	route, ok := f.routes[msg.GetId()]
 	if !ok {
@@ -315,6 +325,7 @@ func (f *fakeOrchestrator) CreateReleaseDefinition(_ context.Context, req *conne
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bump("CreateReleaseDefinition")
+	f.idemKeys = append(f.idemKeys, idemOf(req))
 	msg := req.Msg
 	id := fmt.Sprintf("definition-%d", len(f.definitions)+1)
 	definition := &commonv1.ReleaseDefinition{
@@ -331,6 +342,7 @@ func (f *fakeOrchestrator) CreateValuesRevision(_ context.Context, req *connect.
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bump("CreateValuesRevision")
+	f.idemKeys = append(f.idemKeys, idemOf(req))
 	for _, revision := range f.values {
 		if revision.GetReleaseDefinitionId() == req.Msg.GetReleaseDefinitionId() && revision.GetDigest() == valuesDigest([]byte(req.Msg.GetDocument())) {
 			return connect.NewResponse(&orchestratorv1.CreateValuesRevisionResponse{Revision: revision, Created: false}), nil
@@ -372,6 +384,7 @@ func (f *fakeOrchestrator) SubmitValuesRevision(_ context.Context, req *connect.
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bump("SubmitValuesRevision")
+	f.idemKeys = append(f.idemKeys, idemOf(req))
 	revision, ok := f.values[req.Msg.GetRevisionId()]
 	if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, errors.New("revision not found"))
@@ -383,6 +396,7 @@ func (f *fakeOrchestrator) ApproveValuesRevision(_ context.Context, req *connect
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bump("ApproveValuesRevision")
+	f.idemKeys = append(f.idemKeys, idemOf(req))
 	revision, ok := f.values[req.Msg.GetRevisionId()]
 	if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, errors.New("revision not found"))
@@ -394,6 +408,7 @@ func (f *fakeOrchestrator) CreateEnrollmentToken(_ context.Context, req *connect
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bump("CreateEnrollmentToken")
+	f.idemKeys = append(f.idemKeys, idemOf(req))
 	token := fmt.Sprintf("enroll-%s-%d", req.Msg.GetClusterId(), len(f.tokens)+1)
 	f.tokens[req.Msg.GetClusterId()] = token
 	return connect.NewResponse(&orchestratorv1.CreateEnrollmentTokenResponse{
@@ -426,6 +441,7 @@ func (f *fakeOrchestrator) CreateOperation(_ context.Context, req *connect.Reque
 	f.nextOpID++
 	terminal := orchestratorv1.OperationStatus_OPERATION_STATUS_SUCCEEDED
 	key := req.Header().Get("Idempotency-Key")
+	f.idemKeys = append(f.idemKeys, key)
 	if override, ok := f.opKeyTerminal[key]; ok {
 		terminal = override
 	}
@@ -461,6 +477,13 @@ type anyRequestLike interface {
 	Header() http.Header
 }
 
+// idemOf extracts the Idempotency-Key header from a request (empty when
+// absent). The fake seams record it so tests can assert the stable
+// devseed-<phase>-<logical-key> contract (批次5 D9, AC-065-41).
+func idemOf(req anyRequestLike) string {
+	return req.Header().Get("Idempotency-Key")
+}
+
 // fakeTrust is an in-memory TrustService.
 type fakeTrust struct {
 	mu           sync.Mutex
@@ -468,6 +491,7 @@ type fakeTrust struct {
 	nextID       int
 	calls        map[string]int
 	lastAuthHdrs []string
+	idemKeys     []string
 }
 
 func newFakeTrust() *fakeTrust {
@@ -496,6 +520,7 @@ func (f *fakeTrust) CreateTrustRoot(_ context.Context, req *connect.Request[trus
 	defer f.mu.Unlock()
 	f.lastAuth(req)
 	f.calls["CreateTrustRoot"]++
+	f.idemKeys = append(f.idemKeys, idemOf(req))
 	f.nextID++
 	root := &trustv1.TrustRoot{
 		Id: fmt.Sprintf("root-%d", f.nextID), Environment: req.Msg.GetEnvironment(),
@@ -519,6 +544,7 @@ type fakeWebhook struct {
 	calls     int
 	failOnce  error
 	failEvery error
+	idemKeys  []string
 }
 
 func newFakeWebhook(shared map[string]*orchestratorv1.BundleSummary) *fakeWebhook {
@@ -529,6 +555,7 @@ func (f *fakeWebhook) SubmitReleaseBundle(_ context.Context, req *connect.Reques
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	f.idemKeys = append(f.idemKeys, idemOf(req))
 	if f.failOnce != nil {
 		err := f.failOnce
 		f.failOnce = nil
@@ -554,10 +581,12 @@ func (f *fakeWebhook) SubmitReleaseBundle(_ context.Context, req *connect.Reques
 	return connect.NewResponse(&webhookv1.SubmitReleaseBundleResponse{Bundle: summary, Created: !ok}), nil
 }
 
-// fakeBundle serves GetBundle for verify.
+// fakeBundle serves GetBundle for verify. The auth header is recorded so
+// tests can assert the readback carries the admin bearer (D-016 残余, AC-33).
 type fakeBundle struct {
-	mu        sync.Mutex
-	summaries map[string]*orchestratorv1.BundleSummary
+	mu           sync.Mutex
+	summaries    map[string]*orchestratorv1.BundleSummary
+	lastAuthHdrs []string
 }
 
 func newFakeBundle() *fakeBundle {
@@ -567,6 +596,7 @@ func newFakeBundle() *fakeBundle {
 func (f *fakeBundle) GetBundle(_ context.Context, req *connect.Request[orchestratorv1.GetBundleRequest]) (*connect.Response[orchestratorv1.GetBundleResponse], error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.lastAuthHdrs = append(f.lastAuthHdrs, req.Header().Get("Authorization"))
 	summary, ok := f.summaries[req.Msg.GetBundleId()]
 	if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, errors.New("bundle not found"))

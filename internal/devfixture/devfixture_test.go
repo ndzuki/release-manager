@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -569,6 +570,109 @@ func TestLoadCredentialsFileEnforcesPasswordCharset(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(stale), 0o600))
 	_, ok = loadCredentialsFile(path)
 	require.False(t, ok)
+}
+
+// TestRun_GetBundleReadbackCarriesAdminBearer covers the D-016 residual fix
+// (AC-065-33 后半链): GetBundle on the real orchestrator sits behind the
+// shared auth interceptor, so both readback paths — the committed-phase
+// consistency check (checkCommittedBundle) and verify (verifyBundle) — must
+// attach the admin bearer (real smoke 2026-08-25: unauthenticated).
+func TestRun_GetBundleReadbackCarriesAdminBearer(t *testing.T) {
+	fakes := newFakeServices()
+	r := testRunner(t, fakes)
+
+	_, err := r.run(context.Background())
+	require.NoError(t, err)
+	// The first run reads the bundle twice: checkCommittedBundle does not
+	// run for uncommitted phases, so this is verifyBundle only.
+	require.NotEmpty(t, fakes.bundle.lastAuthHdrs)
+	for i, hdr := range fakes.bundle.lastAuthHdrs {
+		require.Truef(t, strings.HasPrefix(hdr, "Bearer "),
+			"GetBundle call %d missing bearer token: %q", i, hdr)
+	}
+
+	// The second run exercises checkCommittedBundle for the committed
+	// bundle phase; it must carry the bearer too.
+	before := len(fakes.bundle.lastAuthHdrs)
+	_, err = r.run(context.Background())
+	require.NoError(t, err)
+	require.Greater(t, len(fakes.bundle.lastAuthHdrs), before)
+	for _, hdr := range fakes.bundle.lastAuthHdrs {
+		require.True(t, strings.HasPrefix(hdr, "Bearer "), "GetBundle call missing bearer token: %q", hdr)
+	}
+}
+
+// TestRun_AllWritesCarryStableIdempotencyKeys covers 批次5 D9 / AC-065-41:
+// every create/submit-class write carries a stable Idempotency-Key in the
+// devseed-<phase>-<logical-key> format, and the key never embeds a
+// server-generated id (the old devseed-create-values-<definitionID> key
+// would not be replayable on a phase-internal retry because the definition
+// id does not exist on the retry path).
+func TestRun_AllWritesCarryStableIdempotencyKeys(t *testing.T) {
+	fakes := newFakeServices()
+	r := testRunner(t, fakes)
+
+	_, err := r.run(context.Background())
+	require.NoError(t, err)
+
+	keys := []string{}
+	keys = append(keys, fakes.orch.idemKeys...)
+	keys = append(keys, fakes.auth.idemKeys...)
+	keys = append(keys, fakes.binding.idemKeys...)
+	keys = append(keys, fakes.trust.idemKeys...)
+	keys = append(keys, fakes.webhook.idemKeys...)
+	require.NotEmpty(t, keys)
+
+	keyPattern := regexp.MustCompile(`^devseed-[a-z]+-[a-z0-9-]+$`)
+	for _, key := range keys {
+		require.Truef(t, keyPattern.MatchString(key),
+			"write idempotency key %q does not match devseed-<phase>-<logical-key>", key)
+		// The old contract embedded server-generated ids (definition id):
+		// any key carrying one breaks retry idempotency.
+		require.NotContains(t, key, "definition-", "idempotency key embeds a server definition id")
+		require.NotContains(t, key, "values-1", "idempotency key embeds a server values id")
+		require.NotContains(t, key, "devseed-create-values-", "legacy key format must be gone")
+	}
+
+	want := []string{
+		"devseed-identity-dev-customer-a",
+		"devseed-identity-dev-customer-b",
+		"devseed-identity-binding-dev-customer-a",
+		"devseed-identity-dev-customer-a-direct",
+		"devseed-identity-dev-customer-b-mixed",
+		"devseed-routing-dev-route-ca-direct-image",
+		"devseed-accounts-dev-deployer",
+		"devseed-accounts-dev-reader",
+		"devseed-accounts-e2e-runner",
+		"devseed-trust-dev-trust-root",
+		"devseed-bundle-submit",
+		"devseed-values-e2e-release-target-definition",
+		"devseed-values-e2e-release-target",
+		"devseed-values-e2e-release-target-submit",
+		"devseed-values-e2e-release-target-approve",
+		"devseed-enrollment-dev-customer-a-direct",
+		"devseed-install-e2e-release",
+	}
+	for _, key := range want {
+		require.Contains(t, keys, key, "expected write to carry idempotency key %s", key)
+	}
+}
+
+// TestRun_WriteRetryReusesSameIdempotencyKey covers AC-065-41's retry leg:
+// a phase-internal retry (DEV_TIMEOUT_SEED_RETRIES) replays the same key so
+// the server-side scoped idempotency dedupes instead of creating duplicates.
+func TestRun_WriteRetryReusesSameIdempotencyKey(t *testing.T) {
+	fakes := newFakeServices()
+	fakes.webhook.failOnce = errors.New("simulated transient bundle outage")
+	r := testRunner(t, fakes)
+
+	_, err := r.run(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 2, fakes.webhook.calls)
+	require.Len(t, fakes.webhook.idemKeys, 2)
+	require.Equal(t, "devseed-bundle-submit", fakes.webhook.idemKeys[0])
+	require.Equal(t, fakes.webhook.idemKeys[0], fakes.webhook.idemKeys[1],
+		"retry must replay the same idempotency key")
 }
 
 // TestRun_StopAfterPhaseCommitsUpToAndStops covers the split-seed contract:

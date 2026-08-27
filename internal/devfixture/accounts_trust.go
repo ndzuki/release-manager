@@ -48,6 +48,7 @@ func (r *runner) ensureLocalUser(ctx context.Context, username, password string,
 		Roles:    roles,
 	})
 	withAuth(req, r.state.adminToken)
+	req.Header().Set("Idempotency-Key", idempotencyKey("accounts", username))
 	if _, err := authClient.CreateLocalUser(ctx, req); err != nil {
 		return fmt.Errorf("create user %s: %w", username, err)
 	}
@@ -102,6 +103,7 @@ func (r *runner) phaseTrust(ctx context.Context) error {
 		Operator:       "devseed",
 	})
 	withAuth(createReq, r.state.adminToken)
+	createReq.Header().Set("Idempotency-Key", idempotencyKey("trust", "dev-trust-root"))
 	response, err := r.clients.trust.CreateTrustRoot(ctx, createReq)
 	if err != nil {
 		return fmt.Errorf("create trust root: %w", err)

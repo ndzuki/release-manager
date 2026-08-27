@@ -178,6 +178,10 @@ func (r *runner) verifyBundle(ctx context.Context) error {
 		return fmt.Errorf("verify: bundle id not recorded")
 	}
 	req := connect.NewRequest(&orchestratorv1.GetBundleRequest{BundleId: r.state.bundle.id})
+	// D-016 残余 (AC-065-33 后半链): the verify readback hits the real
+	// orchestrator auth interceptor — attach the admin bearer (real smoke
+	// 2026-08-25: verify bundle ... unauthenticated).
+	withAuth(req, r.state.adminToken)
 	response, err := r.clients.bundle.GetBundle(ctx, req)
 	if err != nil {
 		return fmt.Errorf("verify bundle %s: %w", r.state.bundle.id, err)

@@ -313,6 +313,7 @@ func (r *runner) authenticate(ctx context.Context) error {
 		Roles:    []string{"deployer"},
 	})
 	withAuth(createReq, r.state.adminToken)
+	createReq.Header().Set("Idempotency-Key", idempotencyKey("accounts", r.cfg.DeployerUser))
 	if _, createErr := authClient.CreateLocalUser(ctx, createReq); createErr != nil {
 		return fmt.Errorf("login deployer user %s: %w; provision via CreateLocalUser: %v", r.cfg.DeployerUser, err, createErr)
 	}
