@@ -625,6 +625,25 @@ func TestRun_GetBundleReadbackCarriesAdminBearer(t *testing.T) {
 	}
 }
 
+// TestPhaseVerifyRefreshesTokens locks the token-refresh contract (real smoke
+// 2026-08-27): the install phase can exceed the 15-minute JWT TTL, leaving the
+// run-start admin token expired for the verify readbacks (GetBundle then falls
+// through to the service-token leg → invalid service token). phaseVerify must
+// re-login the dev accounts first.
+func TestPhaseVerifyRefreshesTokens(t *testing.T) {
+	fakes := newFakeServices()
+	r := testRunner(t, fakes)
+
+	_, err := r.run(context.Background())
+	require.NoError(t, err)
+
+	// The full run authenticates at start (2 logins: admin+deployer) and
+	// again at verify (refreshTokens: admin+deployer). Assert the extra
+	// logins happened, i.e. the token was refreshed.
+	require.GreaterOrEqual(t, fakes.auth.loginCalls, 4)
+	require.Equal(t, "token-dev-admin", r.state.adminToken, "admin token must be refreshed by the verify phase")
+}
+
 // TestRun_BundleImageDigestIsResolvedFromRegistry locks the bundle image
 // contract (real smoke 2026-08-27): the submitted bundle image digest must be
 // the REAL registry digest the operator pulls and preflight resolves — not a

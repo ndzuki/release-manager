@@ -18,6 +18,15 @@ import (
 // the runtime manifest (data/dev-fixture.json) and the all-committed
 // progress are written.
 func (r *runner) phaseVerify(ctx context.Context) error {
+	// The install phase (waitBundleValidated + CreateOperation + preflight +
+	// operator execution) can exceed the 15-minute JWT TTL, leaving the
+	// run-start admin token expired — the verify readbacks then fall through
+	// the JWT leg to the service-token leg and fail `invalid service token`
+	// (real smoke 2026-08-27: verify bundle ... permission_denied). Refresh
+	// the tokens before the readback battery.
+	if err := r.refreshTokens(ctx); err != nil {
+		return err
+	}
 	if err := r.verifyAccounts(ctx); err != nil {
 		return err
 	}
@@ -53,6 +62,27 @@ func (r *runner) phaseVerify(ctx context.Context) error {
 		"definitions", len(definitionSeeds),
 		"bundle", r.state.bundle.digest,
 	)
+	return nil
+}
+
+// refreshTokens re-logs the dev accounts to obtain fresh access tokens after
+// a long install phase (the 15-minute JWT TTL can elapse mid-run). It
+// refreshes admin (verify readbacks), deployer (definition readback) and
+// e2e-runner (already-installed operations are not re-created, but keeping it
+// fresh avoids a stale token in later phases).
+func (r *runner) refreshTokens(ctx context.Context) error {
+	authClient := r.clients.auth
+	adminLogin, err := authClient.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: r.cfg.AdminUser, Password: r.state.credentials.admin}))
+	if err != nil {
+		return fmt.Errorf("refresh admin login: %w", err)
+	}
+	r.state.adminToken = adminLogin.Msg.GetAccessToken()
+	deployerLogin, err := authClient.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Username: r.cfg.DeployerUser, Password: r.state.credentials.deployer}))
+	if err != nil {
+		return fmt.Errorf("refresh deployer login: %w", err)
+	}
+	r.state.deployerToken = deployerLogin.Msg.GetAccessToken()
+	r.state.deployerUserID = deployerLogin.Msg.GetUser().GetId()
 	return nil
 }
 
