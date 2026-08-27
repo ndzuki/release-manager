@@ -108,6 +108,12 @@ func (r *RealEngine) Install(ctx context.Context, opts InstallOptions) (*Release
 	}
 	install := action.NewInstall(cfg)
 	install.Version = opts.ChartVersion
+	// The dev fixture registry is plain HTTP (localhost / cluster-local
+	// registry.dev.release-manager.local). Helm's OCI downloader defaults to
+	// HTTPS; without PlainHTTP the fetch attempts HTTPS against a plain-HTTP
+	// registry and fails (real smoke 2026-08-27: helm_install_failed "Get
+	// https://... connection refused / EOF").
+	install.PlainHTTP = true
 	chartPath, err := install.LocateChart(opts.ChartPath, r.settings)
 	if err != nil {
 		return nil, fmt.Errorf("locate Helm chart %q: %w", opts.ChartPath, err)
@@ -220,6 +226,8 @@ func (r *RealEngine) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release
 func newUpgradeAction(cfg *action.Configuration, opts UpgradeOptions, description, inputDigest string) *action.Upgrade {
 	upgrade := action.NewUpgrade(cfg)
 	upgrade.Version = opts.ChartVersion
+	// Plain HTTP for the dev fixture registry (see Install/PlainHTTP).
+	upgrade.PlainHTTP = true
 	upgrade.Namespace = opts.Namespace
 	upgrade.Atomic = true
 	upgrade.CleanupOnFail = false

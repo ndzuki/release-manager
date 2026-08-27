@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -168,8 +167,10 @@ func archiveDigest(path string) (string, error) {
 
 // pushChartArchive pushes the packaged chart to the local k3d registry as an
 // OCI artifact via the Helm registry SDK (plain HTTP for the localhost dev
-// registry). The pushed reference matches the bundle chart_ref minus the
-// oci:// scheme.
+// registry). The push uses the HOST-side reference (bundleChartHostRef): the
+// registry is published at localhost:5001 on the dev host, while the bundle's
+// canonical chart ref (bundleChartRef) is the cluster-reachable
+// registry.dev.release-manager.local alias the operator pulls from.
 func pushChartArchive(_ context.Context, tgzPath string) error {
 	raw, err := os.ReadFile(tgzPath)
 	if err != nil {
@@ -179,7 +180,7 @@ func pushChartArchive(_ context.Context, tgzPath string) error {
 	if err != nil {
 		return fmt.Errorf("create helm registry client: %w", err)
 	}
-	ref := strings.TrimPrefix(bundleChartRef, "oci://") + ":" + bundleChartVer
+	ref := bundleChartHostRef + ":" + bundleChartVer
 	if _, err := client.Push(raw, ref); err != nil {
 		return fmt.Errorf("push fixture chart to %s: %w", ref, err)
 	}

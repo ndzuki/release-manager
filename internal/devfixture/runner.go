@@ -32,10 +32,20 @@ const (
 	e2eRunnerUser = "e2e-runner"
 
 	bundleName      = "dev-release-bundle"
-	bundleChartRef  = "oci://localhost:5001/release-fixture"
-	bundleChartVer  = "0.1.0"
-	bundleGitCommit = "dev"
-	bundlePipeline  = "dev-seed"
+	// bundleChartRef is the OCI reference the OPERATOR pulls (installed into
+	// the customer cluster). It must be reachable from the operator pod, so it
+	// uses the registry.dev.release-manager.local hostAlias injected into the
+	// agent deployment (real smoke 2026-08-27: localhost:5001 resolved to the
+	// pod's own loopback → helm_install_failed connection refused).
+	bundleChartRef  = "oci://registry.dev.release-manager.local:5000/release-fixture"
+	// bundleChartHostRef is the HOST-side push reference (devseed pushes the
+	// chart archive into the local registry from the dev host, where the
+	// registry is published as localhost:5001). Same registry, different
+	// reachable endpoint.
+	bundleChartHostRef = "localhost:5001/release-fixture"
+	bundleChartVer   = "0.1.0"
+	bundleGitCommit  = "dev"
+	bundlePipeline   = "dev-seed"
 
 	// devTrustRootKeyID is the stable key id of the Dev Trust Root.
 	devTrustRootKeyID = "dev-trust-root"
