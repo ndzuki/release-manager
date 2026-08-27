@@ -1292,6 +1292,30 @@ smoke_fixture_version() {
 # ---------------------------------------------------------------------------
 # Stage 7: seed (delegates to the devfixture runner)
 # ---------------------------------------------------------------------------
+# run_seed_leg <devseed-args...> — run one devseed leg to completion with one
+# retry on a transient failure. Seed legs are idempotent by design (progress
+# file + stable idempotency keys), so a retry is safe. The retry covers the
+# loadbalancer endpoint race: right after a maintenance rollout a fresh seed
+# connection can still be routed to a just-terminated pod and reset with
+# `unexpected EOF` even though require_readyz already saw 200 (real smoke
+# 2026-08-27). The final output is printed on stdout and the function exits 1
+# on exhaustion so callers can map the error code.
+run_seed_leg() {
+  local attempt output delay="${DEV_SEED_RETRY_DELAY:-5}"
+  for attempt in 1 2; do
+    if output="$(go run ./cmd/devseed/ "$@" 2>&1)"; then
+      printf '%s\n' "$output"
+      return 0
+    fi
+    if [ "$attempt" -lt 2 ]; then
+      log "  devseed leg failed (attempt $attempt/2); retrying after ${delay}s endpoint convergence"
+      sleep "$delay"
+    fi
+  done
+  printf '%s\n' "$output"
+  return 1
+}
+
 seed() {
   log "[7/7] seed data .......................... "
   local seed_output
@@ -1308,14 +1332,14 @@ seed() {
     fi
   done
   if [ "$tokens_ready" = false ]; then
-    if ! seed_output="$(go run ./cmd/devseed/ --stop-after enrollment --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085 --operator-timeout "$DEV_TIMEOUT_OPERATOR" --seed-retries "$DEV_TIMEOUT_SEED_RETRIES" 2>&1)"; then
+    if ! seed_output="$(run_seed_leg --stop-after enrollment --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085 --operator-timeout "$DEV_TIMEOUT_OPERATOR" --seed-retries "$DEV_TIMEOUT_SEED_RETRIES")"; then
       fail "$ERR_SEED_WRITE_FAILED" "devseed enrollment failed: $seed_output"
     fi
     agents_up
   fi
   # Resume: install + verify (the operator-online wait lives in verify,
   # bounded by DEV_TIMEOUT_OPERATOR).
-  if ! seed_output="$(go run ./cmd/devseed/ --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085 --operator-timeout "$DEV_TIMEOUT_OPERATOR" --seed-retries "$DEV_TIMEOUT_SEED_RETRIES" 2>&1)"; then
+  if ! seed_output="$(run_seed_leg --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085 --operator-timeout "$DEV_TIMEOUT_OPERATOR" --seed-retries "$DEV_TIMEOUT_SEED_RETRIES")"; then
     # AC-065-18: an operator session that never reached online reports its
     # own error code with the faulting cluster name (devfixture verify).
     if printf '%s' "$seed_output" | grep -q "operator_not_online"; then
@@ -1591,7 +1615,7 @@ cmd_reset_data() {
   #     "no operator for cluster dev-customer-a-direct" → stage_unavailable).
   local reset_seed_failed=0
   local seed_dsn="postgres://release_manager:dev-release-manager@127.0.0.1:5432/release_manager?sslmode=disable"
-  if ! go run ./cmd/devseed/ --reset --stop-after enrollment \
+  if ! run_seed_leg --reset --stop-after enrollment \
     --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085 \
     --operator-timeout "$DEV_TIMEOUT_OPERATOR" --seed-retries "$DEV_TIMEOUT_SEED_RETRIES" \
     --database-dsn "$seed_dsn"; then
@@ -1600,7 +1624,7 @@ cmd_reset_data() {
   if [ "$reset_seed_failed" -eq 0 ]; then
     agents_up || reset_seed_failed=1
   fi
-  if [ "$reset_seed_failed" -eq 0 ] && ! go run ./cmd/devseed/ \
+  if [ "$reset_seed_failed" -eq 0 ] && ! run_seed_leg \
     --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085 \
     --operator-timeout "$DEV_TIMEOUT_OPERATOR" --seed-retries "$DEV_TIMEOUT_SEED_RETRIES"; then
     reset_seed_failed=1

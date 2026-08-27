@@ -952,6 +952,83 @@ printf 'apiVersion: v1\nkind: Pod\nmetadata:\n  name: operator\nspec:\n  hostAli
 	}
 }
 
+// TestSeedLegRetriesTransientDevseedFailure locks the run_seed_leg retry
+// contract (real smoke 2026-08-27: `get init status: unavailable: unexpected
+// EOF` — a fresh seed connection routed to a just-terminated pod right after
+// the maintenance rollout, despite require_readyz already seeing 200). The
+// fake devseed fails the enrollment leg once with a transient error, then
+// succeeds; the test asserts the leg was retried and the seed converged.
+func TestSeedLegRetriesTransientDevseedFailure(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	// dev-seed preconditions: JWT key, webhook service token and dev mTLS CA.
+	keyPath := filepath.Join(stateDir, "dev-jwt", "jwt-signing-key.pem")
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokenPath := filepath.Join(stateDir, "dev-service-tokens", "webhook-service-token")
+	if err := os.MkdirAll(filepath.Dir(tokenPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tokenPath, []byte("service-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	caDir := filepath.Join(stateDir, "dev-ca")
+	if err := os.MkdirAll(caDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(caDir, "ca.key"), []byte("ca-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(caDir, "ca.crt"), []byte("ca-cert"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// devseed shim: record invocations, fail the FIRST enrollment leg with a
+	// transient unavailable error, then succeed and write the tokens.
+	writeShim(t, binDir, "go", `#!/usr/bin/env bash
+if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
+if [[ "$*" == *"-print-fixture-version"* ]]; then printf 'v22\n'; exit 0; fi
+printf '%s\n' "$*" >> "$DEV_DATA_DIR/go-calls.log"
+if [[ "$*" == *"--stop-after enrollment"* ]]; then
+  if [ ! -f "$DEV_DATA_DIR/enroll-failed" ]; then
+    touch "$DEV_DATA_DIR/enroll-failed"
+    printf 'get init status: unavailable: unexpected EOF\n' >&2
+    exit 1
+  fi
+  mkdir -p "$DEV_DATA_DIR/dev-enrollment-tokens"
+  for c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed; do
+    printf 'fake-token\n' > "$DEV_DATA_DIR/dev-enrollment-tokens/$c.token"
+  done
+fi
+exit 0
+`)
+	env = append(env, "DEV_SEED_RETRY_DELAY=0")
+
+	out, err := runDev(t, env, "seed")
+	if err != nil {
+		t.Fatalf("seed failed despite the transient being retried:\n%s", out)
+	}
+	logged, err := os.ReadFile(filepath.Join(stateDir, "go-calls.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrollCount := strings.Count(string(logged), "--stop-after enrollment")
+	if enrollCount != 2 {
+		t.Fatalf("expected the enrollment leg to be retried exactly once (2 invocations), got %d:\n%s", enrollCount, logged)
+	}
+	// 3 seed invocations total: 2 for the retried enrollment leg + 1 for the
+	// plain resume leg (which must NOT be retried when it succeeds).
+	totalLines := len(strings.Split(strings.TrimSpace(string(logged)), "\n"))
+	if totalLines != 3 {
+		t.Fatalf("expected 3 seed invocations (2 enrollment + 1 resume), got %d:\n%s", totalLines, logged)
+	}
+}
+
 // TestCiProfileAutoPurgesOnExit covers the REQ-065 ci profile cleanup-timing
 // contract (D4, AC-065-27): a FAILED dev-up auto-deletes the managed
 // clusters and registry, while a SUCCESSFUL dev-up keeps the environment for
