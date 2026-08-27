@@ -1758,6 +1758,53 @@ exit 0
 	})
 }
 
+// TestBuildParallelismMixedFailureReportsFirstJobCode covers the parallel
+// scheduler error mapping (Spec 轴审查发现): when the FIRST failed job is a
+// build failure (10) and a later job fails with push (11), dev-up must
+// report docker_build_failed naming the first service — the old code
+// recorded only the LAST failure's rc and misreported docker_push_failed.
+func TestBuildParallelismMixedFailureReportsFirstJobCode(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "manifest" ] && [ "$2" = "inspect" ]; then exit 1; fi
+if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then exit 1; fi
+if [ "$1" = "network" ] && [ "$2" = "inspect" ]; then exit 1; fi
+if [ "$1" = "build" ]; then
+  # The FIRST service (webhook) fails the build; every later service fails
+  # the push — the report must follow the first failure's class.
+  if [[ "$*" == *"release-webhook"* ]]; then printf 'B\n' >> "$DEV_DATA_DIR/build-order.log"; exit 1; fi
+  exit 0
+fi
+if [ "$1" = "push" ]; then
+  # Only release-* image pushes fail (k3s component prewarm pushes pass).
+  if [[ "$*" == *"release-"* ]]; then
+    printf 'P\n' >> "$DEV_DATA_DIR/build-order.log"
+    exit 1
+  fi
+  exit 0
+fi
+exit 0
+`)
+	env = append(env, "DEV_BUILD_PARALLELISM=2")
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("expected build failure, got success:\n%s", out)
+	}
+	if !strings.Contains(out, "docker_build_failed") {
+		t.Fatalf("expected docker_build_failed (first failure class):\n%s", out)
+	}
+	if !strings.Contains(out, "release-webhook") {
+		t.Fatalf("expected the first failed service named:\n%s", out)
+	}
+	if strings.Contains(out, "docker_push_failed") {
+		t.Fatalf("a later push failure must not override the first build failure class:\n%s", out)
+	}
+}
+
 // TestKubectlExecDbReadiness covers 批次5 D3 (AC-065-01): PostgreSQL and
 // Redis readiness are probed with kubectl exec into the pinned image pods
 // (pg_isready / redis-cli ping), and a never-ready PostgreSQL fails
