@@ -57,6 +57,35 @@ func TestAgent_InstallCommand(t *testing.T) {
 	assert.Equal(t, 1, notifier.calls)
 }
 
+// TestAgent_InstallAppliesBundleImageOverride locks the install image
+// contract (real smoke 2026-08-27): the bundle image (values_path +
+// FULL_REFERENCE) must be merged into the installed values — otherwise the
+// chart deploys its static image.repository (bare localhost:5001/... →
+// ErrImagePull :latest).
+func TestAgent_InstallAppliesBundleImageOverride(t *testing.T) {
+	engine := &recordingEngine{
+		release: &helmengine.Release{Name: "example", Namespace: "apps", Revision: 1, Status: "deployed", ManifestDigest: "sha256:m"},
+	}
+	store := newMemoryStore()
+	agent := newTestAgent(t, engine, store, nil)
+	command := installCommand("cmd-img")
+	command.Bundle = &commonv1.ReleaseBundle{
+		Name: "bundle", ChartRef: "oci://registry.example.com/charts/example", ChartVersion: "1.0.0",
+		Images: []*commonv1.BundleImage{{
+			Ref: "localhost:5001/release-fixture:dev", Digest: "sha256:abc123",
+			ValuesPath: "image.repository",
+			ValueKind:  commonv1.ImageValueKind_IMAGE_VALUE_KIND_FULL_REFERENCE,
+		}},
+	}
+	command.Values = []byte(`{"message":"hello"}`)
+
+	require.NoError(t, agent.handleCommand(t.Context(), newTestStream(), command))
+	image, ok := engine.lastInstall.Values["image"].(map[string]interface{})
+	require.True(t, ok, "install values must carry an image object")
+	assert.Equal(t, "localhost:5001/release-fixture:dev@sha256:abc123", image["repository"])
+	assert.Equal(t, "hello", engine.lastInstall.Values["message"])
+}
+
 func TestAgent_DuplicateCommandReturnsCachedResult(t *testing.T) {
 	engine := new(recordingEngine)
 	store := newMemoryStore()

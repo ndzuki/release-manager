@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	"github.com/ndzuki/release-manager/internal/operator/commandtype"
@@ -508,6 +509,49 @@ func (a *Agent) executeSecretMetadataList(ctx context.Context, command *operator
 	result.Secrets = secrets
 	return result
 }
+
+// applyBundleImageOverrides sets each bundle image at its values path. Only
+// FULL_REFERENCE is supported by the dev fixture; the value is the immutable
+// ref@digest the chart should deploy. Mirrors the orchestrator's
+// normalizeImageReference semantics so the rendered manifest matches what
+// preflight verified.
+func applyBundleImageOverrides(values map[string]interface{}, images []*commonv1.BundleImage) error {
+	for _, image := range images {
+		if image.GetRef() == "" || image.GetDigest() == "" || image.GetValuesPath() == "" {
+			return fmt.Errorf("bundle image ref, digest and values_path are required")
+		}
+		fullRef := image.GetRef()
+		if !strings.Contains(fullRef, "@") {
+			fullRef = image.GetRef() + "@" + image.GetDigest()
+		}
+		if err := setValuesPath(values, image.GetValuesPath(), fullRef); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// setValuesPath sets a JSON-style dotted path on a values map (creates
+// intermediate objects).
+func setValuesPath(values map[string]interface{}, path, value string) error {
+	parts := strings.Split(path, ".")
+	if path == "" || value == "" {
+		return fmt.Errorf("image override path and value are required")
+	}
+	current := values
+	for _, part := range parts[:len(parts)-1] {
+		next, ok := current[part].(map[string]interface{})
+		if !ok {
+			child := map[string]interface{}{}
+			current[part] = child
+			next = child
+		}
+		current = next
+	}
+	current[parts[len(parts)-1]] = value
+	return nil
+}
+
 func (a *Agent) executeInstall(ctx context.Context, command *operatorv1.Command, reporter *rolloutReporter) Result {
 	result := Result{
 		OperationID:  command.GetOperationId(),
@@ -533,6 +577,17 @@ func (a *Agent) executeInstall(ctx context.Context, command *operatorv1.Command,
 			result.Message = "values must be canonical JSON"
 			return result
 		}
+	}
+	// The bundle's image overrides (values_path + FULL_REFERENCE ref@digest)
+	// must be applied to the installed values: the orchestrator's effective
+	// values only merge the approved document + patch, the image override is
+	// carried in the bundle. Without it the chart deploys its static
+	// image.repository (real smoke 2026-08-27: bare localhost:5001/
+	// release-fixture → ErrImagePull :latest).
+	if err := applyBundleImageOverrides(values, command.GetBundle().GetImages()); err != nil {
+		result.Code = "invalid_command"
+		result.Message = err.Error()
+		return result
 	}
 
 	timeout := a.installFlags.Timeout
