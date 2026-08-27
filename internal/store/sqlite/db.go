@@ -325,6 +325,7 @@ func OpenTest(t interface{ Cleanup(func()) }) *Store {
 // migrate runs the ordered migration steps against the database.
 // ALTER TABLE ADD COLUMN statements that fail because the column already
 // exists are silently skipped to keep migrations idempotent.
+//nolint:gocyclo // serialized, ordered migration gate with one guard branch per schema step (project convention).
 func migrate(db *sql.DB) error {
 	tx, err := db.BeginTx(context.Background(), nil)
 	if err != nil {

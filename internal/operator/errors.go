@@ -8,7 +8,7 @@ import (
 
 const (
 	reasonInvalidToken             = "invalid_token"
-	reasonEnrollTokenExpired       = "enroll_token_expired"
+	reasonEnrollTokenExpired       = "enroll_token_expired" //nolint:gosec // reason-code constant name, not a credential
 	reasonTokenReused              = "token_reused"
 	reasonScopeMismatch            = "scope_mismatch"
 	reasonCustomerDisabled         = "customer_disabled"

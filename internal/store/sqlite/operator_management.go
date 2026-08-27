@@ -193,7 +193,6 @@ WHERE id = ? AND state = 'pending'
 	return &store.EnrollmentTokenMutation{Token: token, Changed: true}, nil
 }
 
-//nolint:gocyclo // Enrollment atomically validates and mutates token, identity, session, and supersession state.
 func (s *operatorManagementStore) EnrollOperator(
 	ctx context.Context,
 	tokenID string,
@@ -206,6 +205,29 @@ func (s *operatorManagementStore) EnrollOperator(
 	if op.CustomerID == "" || op.ClusterID == "" || op.Name == "" {
 		return nil, errors.New("enroll operator: operator scope and name are required")
 	}
+	var enrollment *store.OperatorEnrollment
+	// Concurrent enrollments of the same token contend for the SQLite write
+	// lock; retry on busy so the loser surfaces the token CAS state conflict
+	// (ErrOperatorStateConflict -> token_reused) instead of a transient
+	// "database table is locked" internal error (AC-015-07).
+	err := retryBusy(ctx, func() error {
+		var err error
+		enrollment, err = s.enrollOperator(ctx, tokenID, op, session)
+		return err
+	})
+	return enrollment, err
+}
+
+// enrollOperator runs the atomic enrollment transaction: consume the token
+// (pending→used CAS), supersede any active identity, create the operator and
+// its session in one all-or-nothing step.
+//nolint:gocyclo // Enrollment atomically validates and mutates token, identity, session, and supersession state.
+func (s *operatorManagementStore) enrollOperator(
+	ctx context.Context,
+	tokenID string,
+	op *store.Operator,
+	session *store.Session,
+) (*store.OperatorEnrollment, error) {
 	prepareSession(session)
 	session.OperatorID = op.ID
 	session.CustomerID = op.CustomerID

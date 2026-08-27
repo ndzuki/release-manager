@@ -184,7 +184,7 @@ func (s *Service) Enroll(
 	requestedCustomerID, customerErr := normalizeDNSLabel(msg.GetCustomerId())
 	requestedClusterID, clusterErr := normalizeDNSLabel(msg.GetClusterId())
 	if customerErr != nil || clusterErr != nil ||
-		requestedCustomerID != strings.ToLower(token.CustomerID) || requestedClusterID != strings.ToLower(token.ClusterID) {
+		!strings.EqualFold(requestedCustomerID, token.CustomerID) || !strings.EqualFold(requestedClusterID, token.ClusterID) {
 		return nil, operatorError(connect.CodePermissionDenied, reasonScopeMismatch, "enrollment scope does not match token")
 	}
 

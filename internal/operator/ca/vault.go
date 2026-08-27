@@ -57,11 +57,11 @@ func (p *VaultProvider) Load(ctx context.Context) (Credentials, error) {
 	}
 	certPEM, ok := secret.Data[vaultCertificateKey].(string)
 	if !ok || certPEM == "" {
-		return Credentials{}, fmt.Errorf("Vault secret %q missing %q", p.path, vaultCertificateKey)
+		return Credentials{}, fmt.Errorf("vault secret %q missing %q", p.path, vaultCertificateKey)
 	}
 	keyB64, ok := secret.Data[vaultPrivateKeyKey].(string)
 	if !ok || keyB64 == "" {
-		return Credentials{}, fmt.Errorf("Vault secret %q missing %q", p.path, vaultPrivateKeyKey)
+		return Credentials{}, fmt.Errorf("vault secret %q missing %q", p.path, vaultPrivateKeyKey)
 	}
 	keyPEM, err := base64.StdEncoding.DecodeString(keyB64)
 	if err != nil {
