@@ -70,8 +70,11 @@ func (r *runner) ensureDefinition(ctx context.Context, seed definitionSeed) (str
 		ClusterId:   definitionCluster,
 		Namespace:   seed.namespace,
 		ReleaseName: seed.releaseName,
-		ChartName:   "fixture-chart",
-		Enabled:     true,
+		// ChartName must match the bundle chart_ref basename
+		// (oci://localhost:5001/release-fixture → release-fixture) or the
+		// orchestrator rejects INSTALL with chart_mismatch (REQ-067 rule 10).
+		ChartName: "release-fixture",
+		Enabled:   true,
 		// The creating actor's organization becomes the definition owner
 		// (REQ-040); values approval gates on it (REQ-068).
 		Actor: &commonv1.ActorContext{UserId: r.state.deployerUserID, Organization: r.state.adminOrgID},
