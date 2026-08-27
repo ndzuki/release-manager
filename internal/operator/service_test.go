@@ -360,6 +360,35 @@ func TestFinishOperation(t *testing.T) {
 	}
 }
 
+// TestFinishOperation_IgnoresPreflightState locks the preflight-finalization
+// boundary (real smoke 2026-08-27): a preflight-stage command result must not
+// finalize the operation (it is still in `preflight`; the coordinator CASes
+// preflight→queued/failed after ALL stages). The artifact stage result
+// previously triggered `invalid state transition: complete from preflight`.
+func TestFinishOperation_IgnoresPreflightState(t *testing.T) {
+	st := newTestSvc(t)
+	svc, err := operator.NewService(st, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+	def := &store.ReleaseDefinition{
+		ID: "definition-preflight-ignore", Name: "definition", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", ChartName: "example", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def, nil))
+	op := &store.Operation{
+		ID: "operation-preflight-ignore", OperationType: store.OperationInstall,
+		Status: store.StatusPreflight, ReleaseDefinitionID: def.ID,
+		IdempotencyKey: "idempotency-preflight-ignore", RequestHash: "hash",
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	svc.FinishOperation(ctx, op.ID, "succeeded", `{"code":"ok"}`)
+
+	got, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusPreflight, got.Status, "preflight operation must not be finalized by a stage result")
+}
+
 func TestHandleCommandResultFinalizesUpgrade(t *testing.T) {
 	st := newTestSvc(t)
 	svc, err := operator.NewService(st, nil)
