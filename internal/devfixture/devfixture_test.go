@@ -177,6 +177,17 @@ func TestRun_SeedsAllNinePhases(t *testing.T) {
 		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 	}
 
+	// Enrollment token operator_name must equal the cluster id: the agent's
+	// CSR CommonName (from its operator.dev.yaml operator_name) is the
+	// cluster id, and the store rejects a token↔operator name mismatch with
+	// ErrNotAuthorized ("approval command not authorized", real smoke
+	// 2026-08-27 — the token previously carried operator-<cluster>).
+	require.Len(t, fakes.orch.enrollTokens, 4)
+	for _, tok := range fakes.orch.enrollTokens {
+		require.Equalf(t, tok.GetClusterId(), tok.GetOperatorName(),
+			"enrollment token for %s must carry operator_name = cluster id", tok.GetClusterId())
+	}
+
 	// Manifest persisted on disk.
 	raw, err := os.ReadFile(r.manifestPath())
 	require.NoError(t, err)

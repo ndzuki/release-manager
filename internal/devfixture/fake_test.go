@@ -205,6 +205,11 @@ type fakeOrchestrator struct {
 	// e2e-runner / release_admin — the deployer role cannot create
 	// Operations; real smoke 2026-08-27 permission_denied).
 	createAuthHdrs []string
+	// enrollTokens records every CreateEnrollmentToken request so tests can
+	// assert the operator_name contract (real smoke 2026-08-27: the token
+	// carried operator-<cluster> while the agent's CSR CN uses the cluster
+	// id → store ErrNotAuthorized "approval command not authorized").
+	enrollTokens []*orchestratorv1.CreateEnrollmentTokenRequest
 
 	nextOpID int
 }
@@ -414,6 +419,7 @@ func (f *fakeOrchestrator) CreateEnrollmentToken(_ context.Context, req *connect
 	defer f.mu.Unlock()
 	f.bump("CreateEnrollmentToken")
 	f.idemKeys = append(f.idemKeys, idemOf(req))
+	f.enrollTokens = append(f.enrollTokens, req.Msg)
 	token := fmt.Sprintf("enroll-%s-%d", req.Msg.GetClusterId(), len(f.tokens)+1)
 	f.tokens[req.Msg.GetClusterId()] = token
 	return connect.NewResponse(&orchestratorv1.CreateEnrollmentTokenResponse{

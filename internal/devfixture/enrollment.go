@@ -27,7 +27,7 @@ func (r *runner) phaseEnrollment(ctx context.Context) error {
 		req := connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
 			CustomerId:   customerID,
 			ClusterId:    seed.id,
-			OperatorName: "operator-" + seed.id,
+			OperatorName: seed.id,
 		})
 		withAuth(req, r.state.adminToken)
 		req.Header().Set("Idempotency-Key", idempotencyKey("enrollment", seed.id))
