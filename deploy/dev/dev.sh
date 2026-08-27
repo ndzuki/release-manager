@@ -1532,10 +1532,13 @@ cmd_reset_data() {
   log "  maintenance enabled (writes stopped)"
 
   # 2. dump both databases through a port-forward to the host pg_dump.
-  #    DEV_RESET_PG_PORT is the fake-CLI test seam for the loopback probe
-  #    and the host pg tools (real default 5432).
+  #    DEV_RESET_PG_PORT is the test seam AND the local port for the
+  #    forward (real default 5432): the forward must not hardcode 5432,
+  #    because a foreign host postgres may already hold it (real smoke
+  #    2026-08-27: a concurrent task's pg-task015-001 occupied 127.0.0.1:5432
+  #    and pg_dump connected to the WRONG postgres → role missing).
   local pf_pid="" pg_port="${DEV_RESET_PG_PORT:-5432}"
-  ctl_kubectl -n release-manager-dev port-forward svc/postgres 5432:5432 >/dev/null 2>&1 &
+  ctl_kubectl -n release-manager-dev port-forward svc/postgres "$pg_port":5432 >/dev/null 2>&1 &
   pf_pid=$!
   # The trap releases the environment lock; the port-forward dies with the
   # process group on exit, but kill it explicitly to avoid a stray listener.
