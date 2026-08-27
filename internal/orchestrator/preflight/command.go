@@ -31,6 +31,7 @@ type CommandPayload struct {
 	ExpectedCurrentRevision int64                      `json:"expected_current_revision,omitempty"`
 	TargetRevision          int64                      `json:"target_revision,omitempty"`
 	Atomic                  bool                       `json:"atomic,omitempty"`
+	CreateNamespace         bool                       `json:"create_namespace,omitempty"`
 	ValuesPatch             json.RawMessage            `json:"values_patch,omitempty"`
 }
 

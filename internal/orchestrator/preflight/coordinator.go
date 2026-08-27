@@ -332,7 +332,11 @@ func (c *Coordinator) commandPayload(
 		Bundle: bundle, Namespace: def.Namespace, ReleaseName: def.ReleaseName, Values: values,
 		ValuesRevisionID: op.ValuesRevisionID, ValuesPatch: op.ValuesPatch,
 		ExpectedCurrentRevision: int64(op.ExpectedRevision), TargetRevision: int64(op.TargetRevision),
-		TimeoutSeconds: c.timeoutSeconds,
+		// INSTALL creates the target namespace (the E2E fixture namespaces do
+		// not pre-exist in the customer clusters; real smoke 2026-08-27:
+		// namespaces "e2e-release" not found).
+		CreateNamespace: op.OperationType == store.OperationInstall,
+		TimeoutSeconds:  c.timeoutSeconds,
 	}, nil
 }
 
