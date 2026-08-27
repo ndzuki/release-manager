@@ -1911,6 +1911,46 @@ func TestCiProfileMtlsCaTransientFilesRemoved(t *testing.T) {
 	}
 }
 
+// TestCustomerAgentConfigCarriesCustomerUUIDs locks the operator enrollment
+// contract (real smoke 2026-08-27: `customer_id mismatch` — the agent config
+// carried the customer NAME while devseed enrollment tokens carry the
+// deterministic customer UUID): each customer-agent overlay's operator config
+// pairs its cluster id with the fixture customer UUID the seed resolves.
+func TestCustomerAgentConfigCarriesCustomerUUIDs(t *testing.T) {
+	kustomize, err := exec.LookPath("kustomize")
+	if err != nil {
+		t.Skip("kustomize not installed")
+	}
+	root := repoRoot(t)
+	tmp := t.TempDir()
+	copyTree(t, filepath.Join(root, "deploy", "kustomize"), filepath.Join(tmp, "deploy", "kustomize"))
+	want := map[string]string{
+		"dev-customer-a-direct":     "11111111-1111-4111-8111-111111111111",
+		"dev-customer-a-cache":      "11111111-1111-4111-8111-111111111111",
+		"dev-customer-b-replicated": "22222222-2222-4222-8222-222222222222",
+		"dev-customer-b-mixed":      "22222222-2222-4222-8222-222222222222",
+	}
+	overlays := map[string]string{
+		"dev-customer-a-direct":     "c1-direct",
+		"dev-customer-a-cache":      "c2-cache",
+		"dev-customer-b-replicated": "c3-replicated",
+		"dev-customer-b-mixed":      "c4-mixed",
+	}
+	for cluster, overlay := range overlays {
+		out, err := exec.Command(kustomize, "build", filepath.Join(tmp, "deploy", "kustomize", "customer-agent", overlay)).CombinedOutput()
+		if err != nil {
+			t.Fatalf("kustomize build %s failed: %v\n%s", overlay, err, out)
+		}
+		manifest := string(out)
+		if !strings.Contains(manifest, "customer_id: "+want[cluster]) {
+			t.Fatalf("operator config for %s must carry customer UUID %s:\n%s", cluster, want[cluster], manifest)
+		}
+		if !strings.Contains(manifest, "cluster_id: "+cluster) {
+			t.Fatalf("operator config for %s must carry its own cluster id:\n%s", cluster, manifest)
+		}
+	}
+}
+
 // TestDevDownTeardownOrderAndKubeconfigCleanup covers ② D-017 / AC-065-04:
 // dev-down deletes the clusters, then cleans their kubeconfigs + ownership
 // entries, disconnects the registry from each cluster network BEFORE

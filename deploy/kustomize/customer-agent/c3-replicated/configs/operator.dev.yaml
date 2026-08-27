@@ -2,7 +2,7 @@ http_port: 8084
 log_level: debug
 agent:
   mode: agent
-  customer_id: dev-customer-b
+  customer_id: 22222222-2222-4222-8222-222222222222
   cluster_id: dev-customer-b-replicated
   operator_name: dev-customer-b-replicated
 ca:
