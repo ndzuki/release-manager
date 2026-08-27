@@ -552,6 +552,19 @@ func TestDevUpCreatesFiveClustersAndMergedKubeconfig(t *testing.T) {
 			t.Fatalf("expected 0600 on %s, got %o", path, info.Mode().Perm())
 		}
 	}
+	// k3d writes kubeconfigs with a 0.0.0.0 API server for k3d-assigned
+	// ports, which the host cannot dial; dev.sh rewrites it to 127.0.0.1
+	// (real smoke 2026-08-27: customer_kubectl → openapi download refused).
+	rawKC, err := os.ReadFile(filepath.Join(stateDir, "kubeconfigs", "dev-customer-a-direct.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(rawKC), "0.0.0.0:") {
+		t.Fatalf("customer kubeconfig must not retain 0.0.0.0 server:\n%s", rawKC)
+	}
+	if !strings.Contains(string(rawKC), "https://127.0.0.1:12345") {
+		t.Fatalf("customer kubeconfig server must be rewritten to 127.0.0.1:\n%s", rawKC)
+	}
 	// AC-065-01 (批次5 D10): the fixture /version smoke runs through the
 	// temporary port-forward and reports fixture-vN.
 	if !strings.Contains(out, "fixture /version") || !strings.Contains(out, "fixture-v2") {

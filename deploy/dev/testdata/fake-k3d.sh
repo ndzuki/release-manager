@@ -95,7 +95,10 @@ case "$1" in
         printf 'apiVersion: v1\nkind: Config\n' > "$out"
         ;;
       get)
-        printf 'apiVersion: v1\nkind: Config\n'
+        # Emit a kubeconfig with k3d's host-side 0.0.0.0 API server (k3d
+        # writes this for k3d-assigned ports); dev.sh rewrites it to
+        # 127.0.0.1 so tests can assert the rewrite contract.
+        printf 'apiVersion: v1\nkind: Config\nclusters:\n- cluster:\n    server: https://0.0.0.0:12345\n  name: k3d-%s\ncontexts:\n- context:\n    cluster: k3d-%s\n  name: k3d-%s\ncurrent-context: k3d-%s\n' "$3" "$3" "$3" "$3"
         ;;
     esac
     ;;

@@ -741,6 +741,13 @@ cluster_up() {
   # kubeconfig into the project data dir, never ~/.kube/config. 0600:
   # the file carries full cluster admin credentials (批次5 D7, AC-065-40).
   k3d kubeconfig get "$cluster" > "$DEV_DATA_DIR/kubeconfigs/$cluster.yaml"
+  # k3d writes the kubeconfig server as https://0.0.0.0:<port> for
+  # k3d-assigned API ports; the host cannot dial 0.0.0.0, so every
+  # customer_kubectl call (operator apply, secret injection, smoke
+  # port-forward) fails with connection refused on localhost:8080 (real
+  # smoke 2026-08-27: `failed to download openapi: dial tcp [::1]:8080`).
+  # Rewrite to the host-reachable loopback.
+  sed -i 's#https://0\.0\.0\.0:#https://127.0.0.1:#g' "$DEV_DATA_DIR/kubeconfigs/$cluster.yaml"
   chmod 600 "$DEV_DATA_DIR/kubeconfigs/$cluster.yaml"
   # Bridge the management node into the new network so the operator agent
   # reaches the management gateway (mgmt_node_connect is idempotent).
