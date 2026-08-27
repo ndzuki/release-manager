@@ -27,6 +27,16 @@ func (r *runner) phaseVerify(ctx context.Context) error {
 	if err := r.refreshTokens(ctx); err != nil {
 		return err
 	}
+	// Defensive hydration: verify runs after install in a resume where the
+	// line-406 install-hydration block may not have run (real smoke
+	// 2026-08-28: verify bundle id not recorded). Populate the bundle from
+	// the persisted progress extras when the in-memory record is empty.
+	if r.state.bundle.id == "" {
+		r.state.bundle = bundleRecord{
+			id:     r.progress.Phases["bundle"].BundleID,
+			digest: r.progress.Phases["bundle"].BundleDigest,
+		}
+	}
 	if err := r.verifyAccounts(ctx); err != nil {
 		return err
 	}
