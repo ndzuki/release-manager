@@ -1629,7 +1629,7 @@ cmd_reset_data() {
   #     2026-08-27: the monolithic --reset failed the artifact stage with
   #     "no operator for cluster dev-customer-a-direct" → stage_unavailable).
   local reset_seed_failed=0
-  local seed_dsn="postgres://release_manager:dev-release-manager@127.0.0.1:5432/release_manager?sslmode=disable"
+  local seed_dsn="postgres://release_manager:dev-release-manager@127.0.0.1:$pg_port/release_manager?sslmode=disable"
   if ! run_seed_leg --reset --stop-after enrollment \
     --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085 \
     --operator-timeout "$DEV_TIMEOUT_OPERATOR" --seed-retries "$DEV_TIMEOUT_SEED_RETRIES" \
