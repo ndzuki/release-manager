@@ -261,6 +261,31 @@ func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage S
 		}, err
 	}
 
+	// Load the bundle and effective values so EVERY stage command carries
+	// the full execution context. The wire Command does not carry the stage,
+	// and the operator executes each INSTALL-typed stage command against the
+	// bundle — a stage dispatched without it fails `chart_ref is required`
+	// (real smoke 2026-08-27: the render stage rejected a nil bundle). A
+	// missing bundle is tolerated (fall back to nil) for operations without
+	// one.
+	var bundleProto *commonv1.ReleaseBundle
+	var effective []byte
+	if bundle, bundleErr := c.bundles.Get(ctx, op.BundleID); bundleErr == nil {
+		bundleProto = bundleToProto(bundle)
+		if op.ValuesRevisionID != "" {
+			if revision, revErr := c.values.Get(ctx, op.ValuesRevisionID); revErr == nil {
+				effective, revErr = mergeEffectiveValues(revision.CanonicalDocument, op.ValuesPatch, bundle.Images)
+				if revErr != nil {
+					return StageResult{
+						Stage:  stage.Name,
+						Status: StageFailed,
+						Detail: fmt.Sprintf("render values: %v", revErr),
+					}, revErr
+				}
+			}
+		}
+	}
+
 	commandID := fmt.Sprintf("%s:%s", op.ID, stage.Name)
 
 	// D-87/ADR-005: reuse an existing row for the same command identity. The
@@ -280,7 +305,7 @@ func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage S
 		}, err
 	}
 
-	payload, err := c.commandPayload(ctx, op, stage.Name, nil, nil)
+	payload, err := c.commandPayload(ctx, op, stage.Name, bundleProto, effective)
 	if err != nil {
 		return emptyResult, err
 	}
