@@ -1589,6 +1589,15 @@ cmd_reset_data() {
     cluster_up "$cluster"
   done
 
+  # 3b. converge the image tags. reset-data rebuilds the customer clusters
+  #     and re-seeds (agents_up pins each operator image to
+  #     content-sha256-$hash from IMAGE_TAGS), but unlike dev-up it never
+  #     runs images_up — with IMAGE_TAGS empty the agent manifest would fall
+  #     back to the unpinned `:dev` tag, which the registry does not carry
+  #     (real smoke 2026-08-27: ImagePullBackOff `manifest unknown`). images_up
+  #     is idempotent: unchanged services skip the build/push.
+  images_up
+
   # 4. schema rebuild + canonical re-seed via devseed --reset (golang-migrate
   #    SDK down -all -> up, then the nine phases; see internal/devfixture).
   #    Maintenance was protecting the dump; the re-seed is a WRITE pass
