@@ -2,6 +2,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: release-fixture
+  # Pin the namespace explicitly (same rationale as the Service template).
+  namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/name: release-fixture
     app.kubernetes.io/part-of: release-manager

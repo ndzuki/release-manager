@@ -2,6 +2,12 @@ apiVersion: v1
 kind: Service
 metadata:
   name: release-fixture
+  # Pin the namespace explicitly: without it the resource lands in the
+  # operator's REST-config default (release-manager-customer), colliding with
+  # the first target's install (real smoke 2026-08-28: Service
+  # "release-fixture" in "release-manager-customer" exists and cannot be
+  # imported into "e2e-isolation").
+  namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/name: release-fixture
     app.kubernetes.io/part-of: release-manager
