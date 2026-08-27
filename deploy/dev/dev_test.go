@@ -843,10 +843,36 @@ for c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated de
 done
 exit 0
 `)
+	// docker: answer the per-network IP probes with deterministic addresses
+	// derived from the network name in the --format string, so the test can
+	// assert agents_up substitutes each cluster's OWN management/registry IP
+	// (the {{range}} concatenation bug — real smoke 2026-08-27 — is caught
+	// by the per-cluster assertions below).
+	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then
+  if [ "$3" = "--format" ]; then
+    net="$(printf '%s' "$4" | sed -nE 's#.*"k3d-([^"]+)".*#\1#p')"
+    case "${5}:${net}" in
+      k3d-release-manager-control-server-0:dev-customer-a-direct) printf '10.1.0.2\n'; exit 0 ;;
+      k3d-release-manager-control-server-0:dev-customer-a-cache) printf '10.2.0.2\n'; exit 0 ;;
+      k3d-release-manager-control-server-0:dev-customer-b-replicated) printf '10.3.0.2\n'; exit 0 ;;
+      k3d-release-manager-control-server-0:dev-customer-b-mixed) printf '10.4.0.2\n'; exit 0 ;;
+      k3d-release-manager-registry:dev-customer-a-direct) printf '10.1.0.3\n'; exit 0 ;;
+      k3d-release-manager-registry:dev-customer-a-cache) printf '10.2.0.3\n'; exit 0 ;;
+      k3d-release-manager-registry:dev-customer-b-replicated) printf '10.3.0.3\n'; exit 0 ;;
+      k3d-release-manager-registry:dev-customer-b-mixed) printf '10.4.0.3\n'; exit 0 ;;
+      *) exit 1 ;;
+    esac
+  fi
+  exit 1
+fi
+exit 0
+`)
 	// kubectl: exit 42 when a cluster id leaks into the argv position (the
 	// customer_kubectl contract — a leaked id lands as the first kubectl
 	// subcommand), report the customer operator deployments as absent so
-	// agents_up actually deploys, and record every call with its KUBECONFIG.
+	// agents_up actually deploys, capture every applied manifest keyed by
+	// cluster, and record every call with its KUBECONFIG.
 	writeShim(t, binDir, "kubectl", `#!/usr/bin/env bash
 case "$1" in
   dev-customer-*|release-manager-*) printf 'kubectl received cluster as subcommand: %s\n' "$*" >&2; exit 42 ;;
@@ -856,9 +882,25 @@ for a in "$@"; do
   if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
 done
 if [[ "$*" == *"get deployment operator"* ]]; then exit 1; fi
+# Capture the agent manifest apply: the create-secret pipelines pipe EMPTY
+# output through apply here (the create shim emits nothing), so only a
+# non-empty stdin is recorded — that is exactly the agent manifest.
+if [ "$1" = "apply" ] && [ "$2" = "-f" ] && [ "$3" = "-" ]; then
+  mkdir -p "$DEV_DATA_DIR/applied"
+  cluster="$(basename "${KUBECONFIG:-unknown}" .yaml)"
+  if IFS= read -r first_line; then
+    printf '%s\n' "$first_line" > "$DEV_DATA_DIR/applied/$cluster.yaml"
+    cat >> "$DEV_DATA_DIR/applied/$cluster.yaml"
+  fi
+  exit 0
+fi
 exit 0
 `)
-	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nprintf 'apiVersion: v1\\nkind: List\\nitems: []\\n'\n")
+	// kustomize emits the base agent manifest carrying the hostAliases
+	// placeholders agents_up substitutes per cluster.
+	writeShim(t, binDir, "kustomize", `#!/usr/bin/env bash
+printf 'apiVersion: v1\nkind: Pod\nmetadata:\n  name: operator\nspec:\n  hostAliases:\n  - ip: "172.18.0.2"\n    hostnames:\n    - operator-gateway.dev.release-manager.local\n  - ip: "172.18.0.3"\n    hostnames:\n    - registry.dev.release-manager.local\n'
+`)
 	env = append(env, "DEV_TIMEOUT_OPERATOR=42", "DEV_TIMEOUT_SEED_RETRIES=1")
 
 	out, err := runDev(t, env, "seed")
@@ -881,6 +923,31 @@ exit 0
 		}
 		if strings.HasPrefix(fields[2], "dev-customer-") || strings.HasPrefix(fields[2], "release-manager-") {
 			t.Fatalf("cluster id leaked into kubectl argv: %s", line)
+		}
+	}
+	// Per-cluster hostAliases: each cluster's applied manifest carries its
+	// OWN management node (10.<i>.0.2) and registry (10.<i>.0.3) addresses —
+	// never another cluster's (would catch the {{range}} concatenation).
+	for i, cluster := range []string{
+		"dev-customer-a-direct", "dev-customer-a-cache", "dev-customer-b-replicated", "dev-customer-b-mixed",
+	} {
+		applied, err := os.ReadFile(filepath.Join(stateDir, "applied", cluster+".yaml"))
+		if err != nil {
+			t.Fatalf("applied manifest for %s missing: %v\nkc log:\n%s", cluster, err, calls)
+		}
+		wantMgmt := fmt.Sprintf(`"10.%d.0.2"`, i+1)
+		wantReg := fmt.Sprintf(`"10.%d.0.3"`, i+1)
+		if !strings.Contains(string(applied), wantMgmt) || !strings.Contains(string(applied), wantReg) {
+			t.Fatalf("applied manifest for %s must carry %s and %s:\n%s", cluster, wantMgmt, wantReg, applied)
+		}
+		for j := range []int{1, 2, 3, 4} {
+			if j == i {
+				continue
+			}
+			if strings.Contains(string(applied), fmt.Sprintf(`"10.%d.0.2"`, j+1)) ||
+				strings.Contains(string(applied), fmt.Sprintf(`"10.%d.0.3"`, j+1)) {
+				t.Fatalf("applied manifest for %s leaked another cluster's IP:\n%s", cluster, applied)
+			}
 		}
 	}
 }
@@ -1831,7 +1898,8 @@ exit 0
 		t.Fatalf("dev-down must retain the registry ownership entry:\n%s", manifest)
 	}
 	// D-017 order: for every cluster network the registry disconnect line
-	// precedes the network removal line.
+	// precedes the network removal line; the management node (bridged into
+	// each customer network by mgmt_node_connect) is disconnected too.
 	logged, err := os.ReadFile(filepath.Join(stateDir, "docker-net.log"))
 	if err != nil {
 		t.Fatal(err)
@@ -1851,6 +1919,89 @@ exit 0
 		if disconnectIdx > rmIdx {
 			t.Fatalf("D-017 order violated for %s: disconnect must precede rm:\n%s", network, logged)
 		}
+		// The management node is bridged into every customer network
+		// (mgmt_node_connect) — teardown must disconnect it before the rm.
+		for _, network := range []string{
+			"k3d-dev-customer-a-direct", "k3d-dev-customer-a-cache",
+			"k3d-dev-customer-b-replicated", "k3d-dev-customer-b-mixed",
+		} {
+			mDisconnect := bytes.Index(logged, []byte("disconnect -f "+network+" k3d-release-manager-control-server-0"))
+			mRm := bytes.Index(logged, []byte("rm "+network))
+			if mDisconnect == -1 {
+				t.Fatalf("expected management node disconnect for %s:\n%s", network, logged)
+			}
+			if mDisconnect > mRm {
+				t.Fatalf("D-017 order violated for %s: management disconnect must precede rm:\n%s", network, logged)
+			}
+		}
+	}
+}
+
+// TestDevUpBridgesManagementNodeIntoCustlerNetworks locks the customer-agent
+// reachability contract (real smoke 2026-08-27: the control node's IP is not
+// routable from customer pods, so agents can never reach the operator
+// gateway): dev-up bridges the management node into every customer cluster's
+// network (mgmt_node_connect) and never into its own network. The docker
+// shim answers network inspect statefully via the append-only k3d create log
+// (a network exists once its cluster was created — mirroring the real k3d
+// leftover when the registry holds the network).
+func TestDevUpBridgesManagementNodeIntoCustlerNetworks(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	// Override the happy docker shim: record network verbs and answer
+	// network inspect statefully (present once the cluster exists in the
+	// append-only create log), so the conflict gate sees absent before
+	// create while mgmt_node_connect sees present after.
+	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "network" ]; then
+  if [ "$2" = "inspect" ]; then
+    cluster="${3#k3d-}"
+    if grep -q "^${cluster}|" "$DEV_DATA_DIR/k3d-creates.log" 2>/dev/null; then exit 0; fi
+    exit 1
+  fi
+  printf '%s\n' "$*" >> "$DEV_DATA_DIR/docker-net.log"
+  exit 0
+fi
+if [ "$1" = "container" ] && [ "$2" = "create" ]; then
+  printf '%s\n' "$*" >> "$DEV_DATA_DIR/docker-create.log"
+  exit 0
+fi
+if [ "$1" = "update" ]; then
+  printf '%s\n' "$*" >> "$DEV_DATA_DIR/docker-update.log"
+  exit 0
+fi
+if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then
+  if [ "$3" = "--format" ]; then
+    case "${5}" in
+      k3d-release-manager-control-server-0) printf '172.18.0.2\n'; exit 0 ;;
+      k3d-release-manager-registry) printf '172.18.0.3\n'; exit 0 ;;
+      *) exit 1 ;;
+    esac
+  fi
+  exit 1
+fi
+exit 0
+`)
+
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("dev-up failed:\n%s", out)
+	}
+	logged, err := os.ReadFile(filepath.Join(stateDir, "docker-net.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cluster := range []string{
+		"dev-customer-a-direct", "dev-customer-a-cache", "dev-customer-b-replicated", "dev-customer-b-mixed",
+	} {
+		want := "network connect k3d-" + cluster + " k3d-release-manager-control-server-0"
+		if !bytes.Contains(logged, []byte(want)) {
+			t.Fatalf("expected management node bridge for %s:\nlog:\n%s", cluster, logged)
+		}
+	}
+	if bytes.Contains(logged, []byte("connect k3d-release-manager-control ")) {
+		t.Fatalf("management node must not be bridged into its own network:\n%s", logged)
 	}
 }
 
