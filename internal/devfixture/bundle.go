@@ -1,13 +1,18 @@
 package devfixture
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -75,7 +80,12 @@ func (p defaultChartPackager) Digest() (string, error) {
 }
 
 // packageChartArchive loads the chart directory and saves it as a tgz,
-// returning the archive path (helm SDK only — no helm CLI).
+// returning the archive path (helm SDK only — no helm CLI). The archive is
+// timestamp-normalized before returning so the tgz bytes are content
+// addressed: helm's chartutil.Save stamps every tar entry with time.Now()
+// (save.go writeToTar), which would make each packaging produce a different
+// digest — the resume's bundle drift check would then never match the
+// submitted digest (real smoke 2026-08-27: "bundle identity mismatch").
 func packageChartArchive(chartDir string) (string, error) {
 	chart, err := loader.LoadDir(chartDir)
 	if err != nil {
@@ -89,7 +99,61 @@ func packageChartArchive(chartDir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("package fixture chart: %w", err)
 	}
+	if err := normalizeChartTgz(path); err != nil {
+		return "", fmt.Errorf("normalize fixture chart archive: %w", err)
+	}
 	return path, nil
+}
+
+// normalizeChartTgz rewrites a helm chart tgz with deterministic tar and
+// gzip headers: every file entry gets a fixed modification time and the gzip
+// header carries the fixed Helm magic (matching chartutil.Save's output
+// shape). Two packagings of the same chart then produce identical bytes.
+func normalizeChartTgz(tgzPath string) error {
+	raw, err := os.ReadFile(tgzPath)
+	if err != nil {
+		return err
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	tr := tar.NewReader(gz)
+
+	var out bytes.Buffer
+	zw := gzip.NewWriter(&out)
+	zw.Header.Extra = []byte("+aHR0cHM6Ly95b3V0dS5iZS96OVV6MWljandyTQo=")
+	zw.Header.Comment = "Helm"
+	tw := tar.NewWriter(zw)
+	const fixedModTime = int64(0) // epoch: deterministic regardless of when packaged
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		hdr.ModTime = time.Unix(fixedModTime, 0).UTC()
+		hdr.AccessTime = time.Time{}
+		hdr.ChangeTime = time.Time{}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if _, err := io.Copy(tw, tr); err != nil {
+			return err
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	if err := zw.Close(); err != nil {
+		return err
+	}
+	if err := gz.Close(); err != nil {
+		return err
+	}
+	return os.WriteFile(tgzPath, out.Bytes(), 0o644)
 }
 
 // archiveDigest returns the content sha256 digest of a chart archive.
