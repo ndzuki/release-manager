@@ -12,7 +12,8 @@ message EnrollRequest {
   string enrollment_token = 1;
   string customer_id = 2;
   string cluster_id = 3;
-  string operator_id = 4;
+  reserved 4;
+  reserved "operator_id";
   bytes csr_pem = 5;           // PEM-encoded certificate signing request
   map<string, string> capabilities = 6;
 }
@@ -22,6 +23,8 @@ message EnrollResponse {
   string session_id = 1;
   int64 ttl_seconds = 2;
   bytes certificate_pem = 3;   // signed client certificate (mTLS)
+  string operator_id = 4;      // center-generated operator identity (REQ-015 决策 4)
+  string certificate_expires_at = 5; // cert expiry for client-side renew scheduling
 }
 
 // CommandStreamRequest carries operator status updates and acknowledgments.
@@ -207,18 +210,19 @@ message SessionEvent {
 // OperatorService manages the bidirectional stream between orchestrator and operator agents.
 service OperatorService {
   rpc Enroll(EnrollRequest) returns (EnrollResponse);
+  rpc RenewCertificate(RenewCertificateRequest) returns (RenewCertificateResponse);
   rpc CommandStream(stream CommandStreamRequest) returns (stream CommandStreamResponse);
-  rpc RevokeOperator(RevokeOperatorRequest) returns (RevokeOperatorResponse);
 }
 
-// RevokeOperatorRequest revokes an operator and closes its active sessions.
-message RevokeOperatorRequest {
+// RenewCertificateRequest rotates the current operator certificate without changing identity.
+// Authentication is the verified mTLS client certificate; operator_id must match it.
+message RenewCertificateRequest {
   string operator_id = 1;
-  string reason = 2;
+  bytes csr_pem = 2;
 }
 
-// RevokeOperatorResponse confirms operator revocation.
-message RevokeOperatorResponse {
-  string operator_id = 1;
-  string status = 2;   // "revoked" or "already_revoked"
+// RenewCertificateResponse returns the replacement client certificate.
+message RenewCertificateResponse {
+  bytes certificate_pem = 1;
+  int64 ttl_seconds = 2;
 }

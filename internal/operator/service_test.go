@@ -14,11 +14,21 @@ import (
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	"github.com/ndzuki/release-manager/internal/operator"
+	"github.com/ndzuki/release-manager/internal/operator/ca"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
+
+// testCA builds a throwaway CA for services that no longer self-generate one
+// (ADR-017: the signing CA is externally managed and injected via WithCA).
+func testCA(t *testing.T) *ca.CA {
+	t.Helper()
+	authority, err := ca.New(ca.Config{TTL: time.Hour})
+	require.NoError(t, err)
+	return authority
+}
 
 // newTestSvc creates a Store backed by a per-test in-memory SQLite database.
 func newTestSvc(t *testing.T) store.Store {
@@ -326,7 +336,7 @@ func TestFinishOperation(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			st := newTestSvc(t)
-			svc, err := operator.NewService(st, nil)
+			svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
 			require.NoError(t, err)
 			ctx := context.Background()
 			def := &store.ReleaseDefinition{
@@ -367,7 +377,7 @@ func TestFinishOperation(t *testing.T) {
 // previously triggered `invalid state transition: complete from preflight`.
 func TestFinishOperation_IgnoresPreflightState(t *testing.T) {
 	st := newTestSvc(t)
-	svc, err := operator.NewService(st, nil)
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
 	require.NoError(t, err)
 	ctx := context.Background()
 	def := &store.ReleaseDefinition{
@@ -391,7 +401,7 @@ func TestFinishOperation_IgnoresPreflightState(t *testing.T) {
 
 func TestHandleCommandResultFinalizesUpgrade(t *testing.T) {
 	st := newTestSvc(t)
-	svc, err := operator.NewService(st, nil)
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
 	require.NoError(t, err)
 	ctx := t.Context()
 	definition := &store.ReleaseDefinition{
@@ -442,7 +452,7 @@ func TestHandleCommandResultFinalizesUpgrade(t *testing.T) {
 
 func TestHandleCommandResultAtomicRollbackPersistsActiveRevision(t *testing.T) {
 	st := newTestSvc(t)
-	svc, err := operator.NewService(st, nil)
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
 	require.NoError(t, err)
 	ctx := t.Context()
 	definition := &store.ReleaseDefinition{
@@ -486,7 +496,7 @@ func TestHandleCommandResultAtomicRollbackPersistsActiveRevision(t *testing.T) {
 
 func TestHandleCommandResultRollbackFailureMarksOutOfSync(t *testing.T) {
 	st := newTestSvc(t)
-	svc, err := operator.NewService(st, nil)
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
 	require.NoError(t, err)
 	ctx := t.Context()
 	definition := &store.ReleaseDefinition{
@@ -529,7 +539,7 @@ func TestHandleCommandResultRollbackFailureMarksOutOfSync(t *testing.T) {
 
 func TestFinishOperation_PreflightFailurePersistsStableCode(t *testing.T) {
 	st := newTestSvc(t)
-	svc, err := operator.NewService(st, nil)
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
 	require.NoError(t, err)
 	ctx := t.Context()
 	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
@@ -570,7 +580,7 @@ func TestCommandStreamAckPersistedWritesTimelineEntry(t *testing.T) {
 	}))
 	entry := pendingEntry(t, st, "operation-ack-stream", 1, store.CommandDelivered)
 
-	svc, err := operator.NewService(st, nil)
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
 	require.NoError(t, err)
 	path, handler := operatorv1connect.NewOperatorServiceHandler(svc)
 	mux := http.NewServeMux()
@@ -677,7 +687,7 @@ func TestCommandStreamRolloutProgressWritesTimelineEntry(t *testing.T) {
 	}))
 	pendingEntry(t, st, "operation-rollout", 1, store.CommandDelivered)
 
-	svc, err := operator.NewService(st, nil)
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
 	require.NoError(t, err)
 	client := commandStreamPair(t, svc)
 	stream := client.CommandStream(ctx)
@@ -736,7 +746,7 @@ func TestCommandStreamRolloutProgressForeignOperationDropped(t *testing.T) {
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}))
 
-	svc, err := operator.NewService(st, nil)
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
 	require.NoError(t, err)
 	client := commandStreamPair(t, svc)
 	stream := client.CommandStream(ctx)
@@ -784,7 +794,7 @@ func TestCommandStreamRolloutProgressTerminalOperationDropped(t *testing.T) {
 	_, err := st.Operations().Transition(ctx, "operation-terminal", store.StatusFailed, 1, "failed")
 	require.NoError(t, err)
 
-	svc, err := operator.NewService(st, nil)
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
 	require.NoError(t, err)
 	client := commandStreamPair(t, svc)
 	stream := client.CommandStream(ctx)
@@ -835,7 +845,7 @@ func TestCommandStreamRolloutProgressInvalidFieldDropped(t *testing.T) {
 	}))
 	pendingEntry(t, st, "operation-invalid", 1, store.CommandDelivered)
 
-	svc, err := operator.NewService(st, nil)
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
 	require.NoError(t, err)
 	client := commandStreamPair(t, svc)
 	stream := client.CommandStream(ctx)

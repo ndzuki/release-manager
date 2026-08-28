@@ -78,7 +78,6 @@ type EnrollRequest struct {
 	EnrollmentToken string                 `protobuf:"bytes,1,opt,name=enrollment_token,json=enrollmentToken,proto3" json:"enrollment_token,omitempty"`
 	CustomerId      string                 `protobuf:"bytes,2,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
 	ClusterId       string                 `protobuf:"bytes,3,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
-	OperatorId      string                 `protobuf:"bytes,4,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
 	CsrPem          []byte                 `protobuf:"bytes,5,opt,name=csr_pem,json=csrPem,proto3" json:"csr_pem,omitempty"` // PEM-encoded certificate signing request
 	Capabilities    map[string]string      `protobuf:"bytes,6,rep,name=capabilities,proto3" json:"capabilities,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields   protoimpl.UnknownFields
@@ -136,13 +135,6 @@ func (x *EnrollRequest) GetClusterId() string {
 	return ""
 }
 
-func (x *EnrollRequest) GetOperatorId() string {
-	if x != nil {
-		return x.OperatorId
-	}
-	return ""
-}
-
 func (x *EnrollRequest) GetCsrPem() []byte {
 	if x != nil {
 		return x.CsrPem
@@ -159,12 +151,14 @@ func (x *EnrollRequest) GetCapabilities() map[string]string {
 
 // EnrollResponse acknowledges enrollment and starts a session.
 type EnrollResponse struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	SessionId      string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	TtlSeconds     int64                  `protobuf:"varint,2,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"`
-	CertificatePem []byte                 `protobuf:"bytes,3,opt,name=certificate_pem,json=certificatePem,proto3" json:"certificate_pem,omitempty"` // signed client certificate (mTLS)
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	SessionId            string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	TtlSeconds           int64                  `protobuf:"varint,2,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"`
+	CertificatePem       []byte                 `protobuf:"bytes,3,opt,name=certificate_pem,json=certificatePem,proto3" json:"certificate_pem,omitempty"`                     // signed client certificate (mTLS)
+	OperatorId           string                 `protobuf:"bytes,4,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`                                 // center-generated operator identity (REQ-015 决策 4)
+	CertificateExpiresAt string                 `protobuf:"bytes,5,opt,name=certificate_expires_at,json=certificateExpiresAt,proto3" json:"certificate_expires_at,omitempty"` // cert expiry for client-side renew scheduling
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *EnrollResponse) Reset() {
@@ -216,6 +210,20 @@ func (x *EnrollResponse) GetCertificatePem() []byte {
 		return x.CertificatePem
 	}
 	return nil
+}
+
+func (x *EnrollResponse) GetOperatorId() string {
+	if x != nil {
+		return x.OperatorId
+	}
+	return ""
+}
+
+func (x *EnrollResponse) GetCertificateExpiresAt() string {
+	if x != nil {
+		return x.CertificateExpiresAt
+	}
+	return ""
 }
 
 // CommandStreamRequest carries operator status updates and acknowledgments.
@@ -1895,29 +1903,30 @@ func (x *SessionEvent) GetMessage() string {
 	return ""
 }
 
-// RevokeOperatorRequest revokes an operator and closes its active sessions.
-type RevokeOperatorRequest struct {
+// RenewCertificateRequest rotates the current operator certificate without changing identity.
+// Authentication is the verified mTLS client certificate; operator_id must match it.
+type RenewCertificateRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	OperatorId    string                 `protobuf:"bytes,1,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	CsrPem        []byte                 `protobuf:"bytes,2,opt,name=csr_pem,json=csrPem,proto3" json:"csr_pem,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RevokeOperatorRequest) Reset() {
-	*x = RevokeOperatorRequest{}
+func (x *RenewCertificateRequest) Reset() {
+	*x = RenewCertificateRequest{}
 	mi := &file_operator_v1_operator_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RevokeOperatorRequest) String() string {
+func (x *RenewCertificateRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RevokeOperatorRequest) ProtoMessage() {}
+func (*RenewCertificateRequest) ProtoMessage() {}
 
-func (x *RevokeOperatorRequest) ProtoReflect() protoreflect.Message {
+func (x *RenewCertificateRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_operator_v1_operator_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1929,48 +1938,48 @@ func (x *RevokeOperatorRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RevokeOperatorRequest.ProtoReflect.Descriptor instead.
-func (*RevokeOperatorRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use RenewCertificateRequest.ProtoReflect.Descriptor instead.
+func (*RenewCertificateRequest) Descriptor() ([]byte, []int) {
 	return file_operator_v1_operator_proto_rawDescGZIP(), []int{22}
 }
 
-func (x *RevokeOperatorRequest) GetOperatorId() string {
+func (x *RenewCertificateRequest) GetOperatorId() string {
 	if x != nil {
 		return x.OperatorId
 	}
 	return ""
 }
 
-func (x *RevokeOperatorRequest) GetReason() string {
+func (x *RenewCertificateRequest) GetCsrPem() []byte {
 	if x != nil {
-		return x.Reason
+		return x.CsrPem
 	}
-	return ""
+	return nil
 }
 
-// RevokeOperatorResponse confirms operator revocation.
-type RevokeOperatorResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	OperatorId    string                 `protobuf:"bytes,1,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
-	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"` // "revoked" or "already_revoked"
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+// RenewCertificateResponse returns the replacement client certificate.
+type RenewCertificateResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	CertificatePem []byte                 `protobuf:"bytes,1,opt,name=certificate_pem,json=certificatePem,proto3" json:"certificate_pem,omitempty"`
+	TtlSeconds     int64                  `protobuf:"varint,2,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
-func (x *RevokeOperatorResponse) Reset() {
-	*x = RevokeOperatorResponse{}
+func (x *RenewCertificateResponse) Reset() {
+	*x = RenewCertificateResponse{}
 	mi := &file_operator_v1_operator_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RevokeOperatorResponse) String() string {
+func (x *RenewCertificateResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RevokeOperatorResponse) ProtoMessage() {}
+func (*RenewCertificateResponse) ProtoMessage() {}
 
-func (x *RevokeOperatorResponse) ProtoReflect() protoreflect.Message {
+func (x *RenewCertificateResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_operator_v1_operator_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1982,49 +1991,50 @@ func (x *RevokeOperatorResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RevokeOperatorResponse.ProtoReflect.Descriptor instead.
-func (*RevokeOperatorResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use RenewCertificateResponse.ProtoReflect.Descriptor instead.
+func (*RenewCertificateResponse) Descriptor() ([]byte, []int) {
 	return file_operator_v1_operator_proto_rawDescGZIP(), []int{23}
 }
 
-func (x *RevokeOperatorResponse) GetOperatorId() string {
+func (x *RenewCertificateResponse) GetCertificatePem() []byte {
 	if x != nil {
-		return x.OperatorId
+		return x.CertificatePem
 	}
-	return ""
+	return nil
 }
 
-func (x *RevokeOperatorResponse) GetStatus() string {
+func (x *RenewCertificateResponse) GetTtlSeconds() int64 {
 	if x != nil {
-		return x.Status
+		return x.TtlSeconds
 	}
-	return ""
+	return 0
 }
 
 var File_operator_v1_operator_proto protoreflect.FileDescriptor
 
 const file_operator_v1_operator_proto_rawDesc = "" +
 	"\n" +
-	"\x1aoperator/v1/operator.proto\x12\voperator.v1\x1a\x16common/v1/domain.proto\x1a operator/v1/upgrade_result.proto\"\xc7\x02\n" +
+	"\x1aoperator/v1/operator.proto\x12\voperator.v1\x1a\x16common/v1/domain.proto\x1a operator/v1/upgrade_result.proto\"\xb9\x02\n" +
 	"\rEnrollRequest\x12)\n" +
 	"\x10enrollment_token\x18\x01 \x01(\tR\x0fenrollmentToken\x12\x1f\n" +
 	"\vcustomer_id\x18\x02 \x01(\tR\n" +
 	"customerId\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x03 \x01(\tR\tclusterId\x12\x1f\n" +
-	"\voperator_id\x18\x04 \x01(\tR\n" +
-	"operatorId\x12\x17\n" +
+	"cluster_id\x18\x03 \x01(\tR\tclusterId\x12\x17\n" +
 	"\acsr_pem\x18\x05 \x01(\fR\x06csrPem\x12P\n" +
 	"\fcapabilities\x18\x06 \x03(\v2,.operator.v1.EnrollRequest.CapabilitiesEntryR\fcapabilities\x1a?\n" +
 	"\x11CapabilitiesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"y\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x04\x10\x05R\voperator_id\"\xd0\x01\n" +
 	"\x0eEnrollResponse\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
 	"\vttl_seconds\x18\x02 \x01(\x03R\n" +
 	"ttlSeconds\x12'\n" +
-	"\x0fcertificate_pem\x18\x03 \x01(\fR\x0ecertificatePem\"\xbf\x04\n" +
+	"\x0fcertificate_pem\x18\x03 \x01(\fR\x0ecertificatePem\x12\x1f\n" +
+	"\voperator_id\x18\x04 \x01(\tR\n" +
+	"operatorId\x124\n" +
+	"\x16certificate_expires_at\x18\x05 \x01(\tR\x14certificateExpiresAt\"\xbf\x04\n" +
 	"\x14CommandStreamRequest\x12*\n" +
 	"\x05hello\x18\x01 \x01(\v2\x12.operator.v1.HelloH\x00R\x05hello\x12$\n" +
 	"\x03ack\x18\x02 \x01(\v2\x10.operator.v1.AckH\x00R\x03ack\x126\n" +
@@ -2159,23 +2169,23 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"resultJson\"<\n" +
 	"\fSessionEvent\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"P\n" +
-	"\x15RevokeOperatorRequest\x12\x1f\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"S\n" +
+	"\x17RenewCertificateRequest\x12\x1f\n" +
 	"\voperator_id\x18\x01 \x01(\tR\n" +
-	"operatorId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"Q\n" +
-	"\x16RevokeOperatorResponse\x12\x1f\n" +
-	"\voperator_id\x18\x01 \x01(\tR\n" +
-	"operatorId\x12\x16\n" +
-	"\x06status\x18\x02 \x01(\tR\x06status*R\n" +
+	"operatorId\x12\x17\n" +
+	"\acsr_pem\x18\x02 \x01(\fR\x06csrPem\"d\n" +
+	"\x18RenewCertificateResponse\x12'\n" +
+	"\x0fcertificate_pem\x18\x01 \x01(\fR\x0ecertificatePem\x12\x1f\n" +
+	"\vttl_seconds\x18\x02 \x01(\x03R\n" +
+	"ttlSeconds*R\n" +
 	"\aAckType\x12\x18\n" +
 	"\x14ACK_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11ACK_TYPE_RECEIVED\x10\x01\x12\x16\n" +
-	"\x12ACK_TYPE_PERSISTED\x10\x022\x8b\x02\n" +
+	"\x12ACK_TYPE_PERSISTED\x10\x022\x91\x02\n" +
 	"\x0fOperatorService\x12A\n" +
-	"\x06Enroll\x12\x1a.operator.v1.EnrollRequest\x1a\x1b.operator.v1.EnrollResponse\x12Z\n" +
-	"\rCommandStream\x12!.operator.v1.CommandStreamRequest\x1a\".operator.v1.CommandStreamResponse(\x010\x01\x12Y\n" +
-	"\x0eRevokeOperator\x12\".operator.v1.RevokeOperatorRequest\x1a#.operator.v1.RevokeOperatorResponseBBZ@github.com/ndzuki/release-manager/api/gen/operator/v1;operatorv1b\x06proto3"
+	"\x06Enroll\x12\x1a.operator.v1.EnrollRequest\x1a\x1b.operator.v1.EnrollResponse\x12_\n" +
+	"\x10RenewCertificate\x12$.operator.v1.RenewCertificateRequest\x1a%.operator.v1.RenewCertificateResponse\x12Z\n" +
+	"\rCommandStream\x12!.operator.v1.CommandStreamRequest\x1a\".operator.v1.CommandStreamResponse(\x010\x01BBZ@github.com/ndzuki/release-manager/api/gen/operator/v1;operatorv1b\x06proto3"
 
 var (
 	file_operator_v1_operator_proto_rawDescOnce sync.Once
@@ -2215,8 +2225,8 @@ var file_operator_v1_operator_proto_goTypes = []any{
 	(*ResyncResponse)(nil),                  // 20: operator.v1.ResyncResponse
 	(*DuplicateResponse)(nil),               // 21: operator.v1.DuplicateResponse
 	(*SessionEvent)(nil),                    // 22: operator.v1.SessionEvent
-	(*RevokeOperatorRequest)(nil),           // 23: operator.v1.RevokeOperatorRequest
-	(*RevokeOperatorResponse)(nil),          // 24: operator.v1.RevokeOperatorResponse
+	(*RenewCertificateRequest)(nil),         // 23: operator.v1.RenewCertificateRequest
+	(*RenewCertificateResponse)(nil),        // 24: operator.v1.RenewCertificateResponse
 	nil,                                     // 25: operator.v1.EnrollRequest.CapabilitiesEntry
 	nil,                                     // 26: operator.v1.Hello.CapabilitiesEntry
 	(*CommandResult)(nil),                   // 27: operator.v1.CommandResult
@@ -2250,11 +2260,11 @@ var file_operator_v1_operator_proto_depIdxs = []int32{
 	17, // 23: operator.v1.EmergencyCommand.set_approved_annotations:type_name -> operator.v1.EmergencySetApprovedAnnotations
 	18, // 24: operator.v1.EmergencySetApprovedAnnotations.entries:type_name -> operator.v1.EmergencyAnnotationEntry
 	1,  // 25: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
-	3,  // 26: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
-	23, // 27: operator.v1.OperatorService.RevokeOperator:input_type -> operator.v1.RevokeOperatorRequest
+	23, // 26: operator.v1.OperatorService.RenewCertificate:input_type -> operator.v1.RenewCertificateRequest
+	3,  // 27: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
 	2,  // 28: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
-	12, // 29: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
-	24, // 30: operator.v1.OperatorService.RevokeOperator:output_type -> operator.v1.RevokeOperatorResponse
+	24, // 29: operator.v1.OperatorService.RenewCertificate:output_type -> operator.v1.RenewCertificateResponse
+	12, // 30: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
 	28, // [28:31] is the sub-list for method output_type
 	25, // [25:28] is the sub-list for method input_type
 	25, // [25:25] is the sub-list for extension type_name

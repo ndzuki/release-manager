@@ -356,6 +356,12 @@ func (s *Store) DB() *DB { return s.db }
 
 // OperatorManagement returns the atomic Operator management store.
 func (s *Store) OperatorManagement() store.OperatorManagementStore { return s.management }
+
+// OperatorLifecycle returns the REQ-015 certificate and scope-disable
+// transaction store.
+func (s *Store) OperatorLifecycle() store.OperatorLifecycleStore {
+	return &operatorLifecycleStore{gorm: s.db}
+}
 func (s *Store) SQLDB() *sql.DB                                    { return s.sqlDB }
 func (s *Store) GORM() *gorm.DB                                    { return s.gormDB }
 

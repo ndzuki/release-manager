@@ -9,11 +9,13 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -22,7 +24,6 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
@@ -32,6 +33,16 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
+
+// gatewayReason extracts the stable X-Reason-Code from a Connect error (the
+// external test package cannot see the operator package's unexported helper).
+func gatewayReason(err error) string {
+	var connectErr *connect.Error
+	if errors.As(err, &connectErr) {
+		return connectErr.Meta().Get("X-Reason-Code")
+	}
+	return ""
+}
 
 // newGatewayStore opens an in-memory store with one active customer/cluster
 // and a pending enrollment token. Unlike newTestSvc it creates no operator,
@@ -51,11 +62,18 @@ func newGatewayStore(t *testing.T, token string) store.Store {
 	clus := &store.Cluster{ID: "clus-1", Name: "test-cluster", CustomerID: "cust-1", Status: store.ClusterActive, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	require.NoError(t, st.Clusters().Create(ctx, clus))
 	require.NoError(t, st.EnrollmentTokens().Create(ctx, &store.EnrollmentToken{
-		ID: "tok-1", CustomerID: "cust-1", ClusterID: "clus-1", Token: token,
+		ID: "tok-1", CustomerID: "cust-1", ClusterID: "clus-1", TokenHash: sha256Hex(token),
 		OperatorName: "clus-1", // must match the CSR CommonName (REQ-053 token binding)
 		CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
 	}))
 	return st
+}
+
+// sha256Hex derives the hash-only token representation (REQ-015: the
+// plaintext is never persisted).
+func sha256Hex(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
 
 // newGatewayServer starts a TLS httptest server that mirrors the production
@@ -116,7 +134,7 @@ func newAgentKeyAndCSR(t *testing.T, customerID, clusterID string) (keyPEM, csrP
 		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
 }
 
-func enrollViaGateway(t *testing.T, baseURL string, pool *x509.CertPool, token, customerID, clusterID, operatorID string, csrPEM []byte) *operatorv1.EnrollResponse {
+func enrollViaGateway(t *testing.T, baseURL string, pool *x509.CertPool, token, customerID, clusterID string, csrPEM []byte) *operatorv1.EnrollResponse {
 	client := operatorv1connect.NewOperatorServiceClient(&http.Client{
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS13}, ForceAttemptHTTP2: true},
 	}, baseURL)
@@ -124,7 +142,6 @@ func enrollViaGateway(t *testing.T, baseURL string, pool *x509.CertPool, token, 
 		EnrollmentToken: token,
 		CustomerId:      customerID,
 		ClusterId:       clusterID,
-		OperatorId:      operatorID,
 		CsrPem:          csrPEM,
 	}))
 	require.NoError(t, err)
@@ -134,7 +151,7 @@ func enrollViaGateway(t *testing.T, baseURL string, pool *x509.CertPool, token, 
 // openGatewayStream opens a CommandStream with the given client certificate
 // and returns the SessionEstablished message. The stream is closed via
 // t.Cleanup so the server handler and the httptest server can wind down.
-func openGatewayStream(t *testing.T, baseURL string, pool *x509.CertPool, cert tls.Certificate, operatorID, instanceID string) (*operatorv1.SessionEstablished, error) {
+func openGatewayStream(t *testing.T, baseURL string, pool *x509.CertPool, cert tls.Certificate, operatorID string) (*operatorv1.SessionEstablished, error) {
 	t.Helper()
 	client := operatorv1connect.NewOperatorServiceClient(&http.Client{
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{
@@ -150,7 +167,7 @@ func openGatewayStream(t *testing.T, baseURL string, pool *x509.CertPool, cert t
 	})
 	if err := stream.Send(&operatorv1.CommandStreamRequest{
 		Payload: &operatorv1.CommandStreamRequest_Hello{Hello: &operatorv1.Hello{
-			OperatorId: operatorID, InstanceId: instanceID, Version: "test-1.0",
+			OperatorId: operatorID, InstanceId: "inst-1", Version: "test-1.0",
 		}},
 	}); err != nil {
 		return nil, err
@@ -171,12 +188,14 @@ func TestGatewayMTLSEnrollAndStreamEstablish(t *testing.T) {
 
 	baseURL, pool := newGatewayServer(t, st, caInst)
 	keyPEM, csrPEM := newAgentKeyAndCSR(t, "cust-1", "clus-1")
-	opID := uuid.New().String()
 
 	// PASS 1: Enroll without a client certificate succeeds (token + CSR).
-	enrolled := enrollViaGateway(t, baseURL, pool, token, "cust-1", "clus-1", opID, csrPEM)
+	// The operator_id is center-generated (REQ-015 决策 4).
+	enrolled := enrollViaGateway(t, baseURL, pool, token, "cust-1", "clus-1", csrPEM)
 	require.NotEmpty(t, enrolled.GetSessionId())
 	require.NotEmpty(t, enrolled.GetCertificatePem())
+	require.NotEmpty(t, enrolled.GetOperatorId())
+	opID := enrolled.GetOperatorId()
 	enrolledOperator, err := st.Operators().GetByClusterID(context.Background(), "clus-1")
 	require.NoError(t, err)
 	require.Len(t, enrolledOperator.CertSerial, 20, "ADR-018 serial is 10 digest bytes encoded as hex")
@@ -187,7 +206,7 @@ func TestGatewayMTLSEnrollAndStreamEstablish(t *testing.T) {
 	// PASS 2: CommandStream with the signed certificate → SessionEstablished.
 	// Hello takes over session establishment (REQ-044 D-57), so the fresh
 	// session_id supersedes the Enroll placeholder session.
-	est, err := openGatewayStream(t, baseURL, pool, agentCert, opID, "inst-1")
+	est, err := openGatewayStream(t, baseURL, pool, agentCert, opID)
 	require.NoError(t, err)
 	require.NotEmpty(t, est.GetSessionId())
 	require.NotEqual(t, enrolled.GetSessionId(), est.GetSessionId())
@@ -199,7 +218,7 @@ func TestGatewayMTLSEnrollAndStreamEstablish(t *testing.T) {
 	// the unique online session; the previous session goes offline
 	// (REQ-044: same instance_id may replace; a different instance_id while
 	// the old session is online returns duplicate_session).
-	est2, err := openGatewayStream(t, baseURL, pool, agentCert, opID, "inst-1")
+	est2, err := openGatewayStream(t, baseURL, pool, agentCert, opID)
 	require.NoError(t, err)
 	require.NotEqual(t, est.GetSessionId(), est2.GetSessionId())
 
@@ -241,9 +260,9 @@ func TestGatewayStreamRejectsSerialMismatch(t *testing.T) {
 
 	baseURL, pool := newGatewayServer(t, st, caInst)
 	keyPEM, csrPEM := newAgentKeyAndCSR(t, "cust-1", "clus-1")
-	opID := uuid.New().String()
 
-	enrolled := enrollViaGateway(t, baseURL, pool, token, "cust-1", "clus-1", opID, csrPEM)
+	enrolled := enrollViaGateway(t, baseURL, pool, token, "cust-1", "clus-1", csrPEM)
+	opID := enrolled.GetOperatorId()
 	agentCert, err := tls.X509KeyPair(enrolled.GetCertificatePem(), keyPEM)
 	require.NoError(t, err)
 
@@ -254,7 +273,45 @@ func TestGatewayStreamRejectsSerialMismatch(t *testing.T) {
 	op.CertSerial = "deadbeef00"
 	require.NoError(t, st.Operators().Update(context.Background(), op))
 
-	_, err = openGatewayStream(t, baseURL, pool, agentCert, opID, "inst-1")
+	_, err = openGatewayStream(t, baseURL, pool, agentCert, opID)
 	require.Error(t, err)
 	require.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+	require.Equal(t, "cert_replaced", gatewayReason(err), "old certificate after serial rotation must surface cert_replaced (ADR-018)")
+}
+
+// TestGatewayStreamRejectsSupersededAndRevoked covers AC-015-03/08: a
+// superseded or revoked identity cannot reconnect via the mTLS gateway path,
+// and the rejection carries the stable reason code.
+func TestGatewayStreamRejectsSupersededAndRevoked(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		status    store.OperatorStatus
+		wantReason string
+	}{
+		{name: "superseded", status: store.OperatorSuperseded, wantReason: "operator_superseded"},
+		{name: "revoked", status: store.OperatorRevoked, wantReason: "operator_revoked"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			token := "gateway-test-token-" + tt.name
+			st := newGatewayStore(t, token)
+			caInst, err := ca.New(ca.Config{})
+			require.NoError(t, err)
+			baseURL, pool := newGatewayServer(t, st, caInst)
+			keyPEM, csrPEM := newAgentKeyAndCSR(t, "cust-1", "clus-1")
+			enrolled := enrollViaGateway(t, baseURL, pool, token, "cust-1", "clus-1", csrPEM)
+			opID := enrolled.GetOperatorId()
+			agentCert, err := tls.X509KeyPair(enrolled.GetCertificatePem(), keyPEM)
+			require.NoError(t, err)
+
+			op, err := st.Operators().GetByClusterID(context.Background(), "clus-1")
+			require.NoError(t, err)
+			op.Status = tt.status
+			require.NoError(t, st.Operators().Update(context.Background(), op))
+
+			_, err = openGatewayStream(t, baseURL, pool, agentCert, opID)
+			require.Error(t, err)
+			require.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+			require.Equal(t, tt.wantReason, gatewayReason(err))
+		})
+	}
 }

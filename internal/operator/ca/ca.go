@@ -1,18 +1,31 @@
-// Package ca provides a self-signed certificate authority for operator mTLS.
+// Package ca provides the persistent self-signed certificate authority for
+// operator mTLS (ADR-017/ADR-018).
 package ca
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
-	"path/filepath"
 	"time"
 )
+
+// IssuedCertificate is the product of signing a CSR: the DER certificate, its
+// PEM form, the ADR-018 serial authority (sha256(DER)[:10] hex) and expiry.
+type IssuedCertificate struct {
+	DER       []byte
+	PEM       []byte
+	Serial    string
+	ExpiresAt time.Time
+}
 
 // CA is a self-signed certificate authority for signing operator CSRs.
 type CA struct {
@@ -79,25 +92,49 @@ func New(cfg Config) (*CA, error) {
 // LoadOrCreate loads the CA from keyPath/certPath, generating and atomically
 // persisting a fresh CA when either file is missing (TASK-075 gateway wiring:
 // a stable CA across restarts keeps the agent trust chain intact — a new CA on
-// every start would invalidate every enrolled agent certificate).
+// every start would invalidate every enrolled agent certificate). File-based
+// convenience wrapper over LoadOrCreateWithProvider.
 func LoadOrCreate(cfg Config, keyPath, certPath string) (*CA, error) {
-	if keyPath == "" || certPath == "" {
-		return nil, fmt.Errorf("ca key and cert paths are required")
+	return LoadOrCreateWithProvider(context.Background(), NewFileProvider(certPath, keyPath), cfg)
+}
+
+// LoadOrCreateWithProvider loads CA credentials through the provider and
+// generates + persists a fresh CA when none exist (ADR-017). A racing creator
+// re-loads the persisted credentials instead of overwriting them, so every
+// process converges on the same trust anchor.
+func LoadOrCreateWithProvider(ctx context.Context, provider Provider, cfg Config) (*CA, error) {
+	if provider == nil {
+		return nil, fmt.Errorf("load CA: provider is required")
 	}
-	keyPEM, keyErr := os.ReadFile(keyPath)
-	certPEM, certErr := os.ReadFile(certPath)
-	if keyErr == nil && certErr == nil {
-		return Load(keyPEM, certPEM, cfg)
+	if cfg.TTL == 0 {
+		cfg.TTL = 7 * 24 * time.Hour
 	}
-	// Missing or unreadable file: generate a fresh CA and persist both files.
-	caInst, err := New(cfg)
-	if err != nil {
-		return nil, err
+	credentials, err := provider.Load(ctx)
+	if err == nil {
+		return Load(credentials.PrivateKeyPEM, credentials.CertificatePEM, cfg)
 	}
-	if err := caInst.persist(keyPath, certPath); err != nil {
-		return nil, fmt.Errorf("persist generated CA: %w", err)
+	if !errors.Is(err, ErrCredentialsNotFound) {
+		return nil, fmt.Errorf("load CA credentials: %w", err)
 	}
-	return caInst, nil
+	generated, genErr := New(cfg)
+	if genErr != nil {
+		return nil, genErr
+	}
+	keyDER, marshalErr := x509.MarshalPKCS8PrivateKey(generated.priv)
+	if marshalErr != nil {
+		return nil, fmt.Errorf("marshal CA key: %w", marshalErr)
+	}
+	toStore := Credentials{
+		CertificatePEM: generated.CertPEM(),
+		PrivateKeyPEM:  pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
+	}
+	if createErr := provider.Create(ctx, toStore); createErr != nil {
+		if loaded, loadErr := provider.Load(ctx); loadErr == nil {
+			return Load(loaded.PrivateKeyPEM, loaded.CertificatePEM, cfg)
+		}
+		return nil, fmt.Errorf("persist CA credentials: %w", errors.Join(createErr))
+	}
+	return generated, nil
 }
 
 // Load parses a CA from PEM-encoded key and certificate material. The key must
@@ -145,23 +182,6 @@ func Load(keyPEM, certPEM []byte, cfg Config) (*CA, error) {
 	return &CA{cert: cert, priv: priv, ttl: cfg.TTL, serial: serial}, nil
 }
 
-// persist writes the CA key and certificate atomically (temp file + rename).
-// The key file is created 0600; the certificate 0644.
-func (ca *CA) persist(keyPath, certPath string) error {
-	keyDER, err := x509.MarshalPKCS8PrivateKey(ca.priv)
-	if err != nil {
-		return fmt.Errorf("marshal CA key: %w", err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-	if err := atomicWriteFile(keyPath, keyPEM, 0o600); err != nil {
-		return fmt.Errorf("write CA key: %w", err)
-	}
-	if err := atomicWriteFile(certPath, ca.CertPEM(), 0o644); err != nil {
-		return fmt.Errorf("write CA certificate: %w", err)
-	}
-	return nil
-}
-
 // LoadCertPool reads a PEM CA certificate file into a CertPool, the shared
 // trust anchor for gateway clients and the gateway listener's ClientCAs.
 func LoadCertPool(certPath string) (*x509.CertPool, error) {
@@ -176,51 +196,33 @@ func LoadCertPool(certPath string) (*x509.CertPool, error) {
 	return pool, nil
 }
 
-func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+// SignCSR signs a certificate signing request and returns the issued
+// certificate (REQ-015 证书契约): ExtKeyUsage=clientAuth, KeyUsage=
+// digitalSignature only, TTL=ca.cert_ttl, serial=ADR-018 sha256(DER)[:10]
+// hex. dnsNames is the authoritative (normalized) SAN set — it overrides the
+// raw CSR SANs so the issued certificate carries exactly the canonical
+// operator identity. The CSR signature proves private-key possession.
+func (ca *CA) SignCSR(csr *x509.CertificateRequest, dnsNames []string) (*IssuedCertificate, error) {
+	if csr == nil {
+		return nil, fmt.Errorf("sign CSR: CSR is required")
 	}
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
+	if err := csr.CheckSignature(); err != nil {
+		return nil, fmt.Errorf("sign CSR: invalid signature: %w", err)
 	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
-}
-
-// SignCSR signs a certificate signing request and returns the DER-encoded
-// certificate. The returned certificate is valid for the CA's configured TTL.
-func (ca *CA) SignCSR(csr *x509.CertificateRequest) ([]byte, error) {
 	serial, err := randomSerial()
 	if err != nil {
 		return nil, fmt.Errorf("generate serial: %w", err)
 	}
 
 	now := time.Now().UTC()
+	expiresAt := now.Add(ca.ttl)
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      csr.Subject,
-		DNSNames:     csr.DNSNames,
+		DNSNames:     append([]string(nil), dnsNames...),
 		NotBefore:    now,
-		NotAfter:     now.Add(ca.ttl),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		NotAfter:     expiresAt,
+		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
 
@@ -228,13 +230,21 @@ func (ca *CA) SignCSR(csr *x509.CertificateRequest) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sign CSR: %w", err)
 	}
-	return der, nil
+	return &IssuedCertificate{
+		DER:       der,
+		PEM:       CertDERToPEM(der),
+		Serial:    CertSerialDER(der),
+		ExpiresAt: expiresAt,
+	}, nil
 }
 
 // CertPEM returns the CA certificate in PEM format.
 func (ca *CA) CertPEM() []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.cert.Raw})
 }
+
+// TTL returns the configured certificate validity duration.
+func (ca *CA) TTL() time.Duration { return ca.ttl }
 
 // SignServerCert issues a server certificate for the given hostnames, signed by
 // this CA with the serverAuth EKU. It returns the certificate and private key
@@ -297,4 +307,18 @@ func randomSerial() (*big.Int, error) {
 // CertDERToPEM encodes a DER certificate to PEM format.
 func CertDERToPEM(der []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+// CertSerialDER is the ADR-018 identity authority: sha256(certDER)[:10] hex.
+func CertSerialDER(der []byte) string {
+	digest := sha256.Sum256(der)
+	return hex.EncodeToString(digest[:10])
+}
+
+// CertSerial returns the ADR-018 serial for a parsed certificate.
+func CertSerial(certificate *x509.Certificate) string {
+	if certificate == nil {
+		return ""
+	}
+	return CertSerialDER(certificate.Raw)
 }

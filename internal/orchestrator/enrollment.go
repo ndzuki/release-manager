@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -62,7 +64,7 @@ func (s *Service) CreateEnrollmentToken(
 		CustomerID:           msg.GetCustomerId(),
 		ClusterID:            msg.GetClusterId(),
 		OperatorName:         name,
-		Token:                plaintext,
+		TokenHash:            enrollmentTokenHash(plaintext),
 		State:                store.TokenStatePending,
 		CreatedByDisplayName: user.Username,
 		CreatedAt:            now,
@@ -101,6 +103,13 @@ func (s *Service) CreateEnrollmentToken(
 			"${CLUSTER_ID}", token.ClusterID,
 		).Replace(installTemplate),
 	}), nil
+}
+
+// enrollmentTokenHash derives the irreversible SHA-256 hex hash persisted for
+// a plaintext enrollment token (REQ-015 安全边界: 存储仅哈希).
+func enrollmentTokenHash(plaintext string) string {
+	sum := sha256.Sum256([]byte(plaintext))
+	return hex.EncodeToString(sum[:])
 }
 
 func validateOperatorName(name string) error {

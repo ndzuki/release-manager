@@ -37,20 +37,16 @@ func prepareEnrollmentToken(token *store.EnrollmentToken) {
 	if token.State == "" {
 		token.State = store.TokenStatePending
 	}
-	if token.TokenHash == "" && token.Token != "" {
-		token.TokenHash = sha256Hex(token.Token)
-	}
 }
 
 func insertEnrollmentToken(ctx context.Context, execer enrollmentTokenExecer, token *store.EnrollmentToken) error {
 	_, err := execer.ExecContext(ctx, `
-INSERT INTO enrollment_tokens (id, customer_id, cluster_id, token, token_hash, operator_name, state, created_by_display_name, created_at, expires_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO enrollment_tokens (id, customer_id, cluster_id, token_hash, operator_name, state, created_by_display_name, created_at, expires_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 `,
 		token.ID,
 		token.CustomerID,
 		token.ClusterID,
-		token.TokenHash, // Legacy column retains only the irreversible hash.
 		token.TokenHash,
 		token.OperatorName,
 		string(token.State),
@@ -67,7 +63,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 func (s *enrollmentTokenStore) GetByToken(ctx context.Context, token string) (*store.EnrollmentToken, error) {
 	tokenHash := sha256Hex(token)
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, customer_id, cluster_id, token, token_hash, operator_name, state, created_by_display_name, created_at, expires_at, used_at, operator_id, revoked_at, replaced_by_id
+SELECT id, customer_id, cluster_id, token_hash, operator_name, state, created_by_display_name, created_at, expires_at, used_at, operator_id, revoked_at, replaced_by_id
 FROM enrollment_tokens WHERE token_hash = ?
 `, tokenHash)
 	return scanEnrollmentToken(row)
@@ -93,15 +89,14 @@ UPDATE enrollment_tokens SET state='used', used_at=?, operator_id=? WHERE id=? A
 
 func scanEnrollmentToken(row interface{ Scan(...interface{}) error }) (*store.EnrollmentToken, error) {
 	var (
-		token                                       store.EnrollmentToken
-		legacyToken, state, createdAt, expiresAt    string
+		token                               store.EnrollmentToken
+		state, createdAt, expiresAt         string
 		usedAt, operatorID, revokedAt, replacedByID *string
 	)
 	if err := row.Scan(
 		&token.ID,
 		&token.CustomerID,
 		&token.ClusterID,
-		&legacyToken,
 		&token.TokenHash,
 		&token.OperatorName,
 		&state,
@@ -118,7 +113,6 @@ func scanEnrollmentToken(row interface{ Scan(...interface{}) error }) (*store.En
 		}
 		return nil, fmt.Errorf("scan enrollment token: %w", err)
 	}
-	_ = legacyToken // Never expose the legacy token column; it contains only a hash after TASK-053.
 	token.State = store.EnrollmentTokenState(state)
 	var err error
 	token.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
@@ -169,7 +163,7 @@ func (s *operatorStore) Create(ctx context.Context, op *store.Operator) error {
 		op.Status = store.OperatorActive
 	}
 
-	var revokedAt, supersededAt *string
+	var revokedAt, supersededAt, certExpiresAt *string
 	if op.RevokedAt != nil {
 		v := op.RevokedAt.UTC().Format(time.RFC3339Nano)
 		revokedAt = &v
@@ -178,12 +172,16 @@ func (s *operatorStore) Create(ctx context.Context, op *store.Operator) error {
 		v := op.SupersededAt.UTC().Format(time.RFC3339Nano)
 		supersededAt = &v
 	}
+	if op.CertificateExpiresAt != nil {
+		v := op.CertificateExpiresAt.UTC().Format(time.RFC3339Nano)
+		certExpiresAt = &v
+	}
 
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO operators (id, customer_id, cluster_id, operator_name, cert_serial, status, superseded_by, superseded_at, revoked_at, revoke_reason, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO operators (id, customer_id, cluster_id, operator_name, cert_serial, certificate_expires_at, status, superseded_by, superseded_at, revoked_at, revoke_reason, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `,
-		op.ID, op.CustomerID, op.ClusterID, op.Name, op.CertSerial, string(op.Status),
+		op.ID, op.CustomerID, op.ClusterID, op.Name, op.CertSerial, certExpiresAt, string(op.Status),
 		op.SupersededBy, supersededAt, revokedAt, op.RevokeReason,
 		op.RegisteredAt.UTC().Format(time.RFC3339Nano), op.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -194,7 +192,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 }
 
 const operatorSelect = `
-id, operator_name, customer_id, cluster_id, cert_serial, status, superseded_by, superseded_at, revoked_at, revoke_reason, created_at, updated_at`
+id, operator_name, customer_id, cluster_id, cert_serial, certificate_expires_at, status, superseded_by, superseded_at, revoked_at, revoke_reason, created_at, updated_at`
 
 func (s *operatorStore) Get(ctx context.Context, id string) (*store.Operator, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+operatorSelect+`
@@ -213,7 +211,7 @@ FROM operators WHERE cert_serial = ?
 func (s *operatorStore) Update(ctx context.Context, op *store.Operator) error {
 	op.UpdatedAt = time.Now().UTC()
 
-	var revokedAt, supersededAt *string
+	var revokedAt, supersededAt, certExpiresAt *string
 	if op.RevokedAt != nil {
 		v := op.RevokedAt.UTC().Format(time.RFC3339Nano)
 		revokedAt = &v
@@ -222,12 +220,16 @@ func (s *operatorStore) Update(ctx context.Context, op *store.Operator) error {
 		v := op.SupersededAt.UTC().Format(time.RFC3339Nano)
 		supersededAt = &v
 	}
+	if op.CertificateExpiresAt != nil {
+		v := op.CertificateExpiresAt.UTC().Format(time.RFC3339Nano)
+		certExpiresAt = &v
+	}
 
 	_, err := s.db.ExecContext(ctx, `
-UPDATE operators SET operator_name=?, cert_serial=?, status=?, superseded_by=?, superseded_at=?, revoked_at=?, revoke_reason=?, updated_at=?
+UPDATE operators SET operator_name=?, cert_serial=?, certificate_expires_at=?, status=?, superseded_by=?, superseded_at=?, revoked_at=?, revoke_reason=?, updated_at=?
 WHERE id=?
 `,
-		op.Name, op.CertSerial, string(op.Status), op.SupersededBy, supersededAt, revokedAt, op.RevokeReason,
+		op.Name, op.CertSerial, certExpiresAt, string(op.Status), op.SupersededBy, supersededAt, revokedAt, op.RevokeReason,
 		op.UpdatedAt.UTC().Format(time.RFC3339Nano), op.ID,
 	)
 	if err != nil {
@@ -298,10 +300,10 @@ FROM operators WHERE cluster_id = ?
 func scanOperator(row interface{ Scan(...interface{}) error }) (*store.Operator, error) {
 	var (
 		id, name, customerID, clusterID, certSerial, status, supersededBy, revokeReason string
-		supersededAt, revokedAt                                                         *string
+		supersededAt, revokedAt, certExpiresAt                                          *string
 		createdAt, updatedAt                                                            string
 	)
-	if err := row.Scan(&id, &name, &customerID, &clusterID, &certSerial, &status, &supersededBy, &supersededAt, &revokedAt, &revokeReason, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&id, &name, &customerID, &clusterID, &certSerial, &certExpiresAt, &status, &supersededBy, &supersededAt, &revokedAt, &revokeReason, &createdAt, &updatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, store.ErrNotFound
 		}
@@ -328,6 +330,13 @@ func scanOperator(row interface{ Scan(...interface{}) error }) (*store.Operator,
 		RevokeReason: revokeReason,
 		RegisteredAt: ct,
 		UpdatedAt:    ut,
+	}
+	if certExpiresAt != nil {
+		t, err := time.Parse(time.RFC3339Nano, *certExpiresAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse operator certificate_expires_at: %w", err)
+		}
+		op.CertificateExpiresAt = &t
 	}
 	if supersededAt != nil {
 		t, err := time.Parse(time.RFC3339Nano, *supersededAt)
@@ -671,10 +680,10 @@ func scanOperators(rows *sql.Rows) ([]*store.Operator, error) {
 func scanRowOperator(row interface{ Scan(...interface{}) error }) (*store.Operator, error) {
 	var (
 		id, name, customerID, clusterID, certSerial, status, supersededBy, revokeReason string
-		supersededAt, revokedAt                                                         *string
+		supersededAt, revokedAt, certExpiresAt                                          *string
 		createdAt, updatedAt                                                            string
 	)
-	if err := row.Scan(&id, &name, &customerID, &clusterID, &certSerial, &status, &supersededBy, &supersededAt, &revokedAt, &revokeReason, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&id, &name, &customerID, &clusterID, &certSerial, &certExpiresAt, &status, &supersededBy, &supersededAt, &revokedAt, &revokeReason, &createdAt, &updatedAt); err != nil {
 		return nil, fmt.Errorf("scan operator row: %w", err)
 	}
 
@@ -698,6 +707,13 @@ func scanRowOperator(row interface{ Scan(...interface{}) error }) (*store.Operat
 		RevokeReason: revokeReason,
 		RegisteredAt: ct,
 		UpdatedAt:    ut,
+	}
+	if certExpiresAt != nil {
+		t, err := time.Parse(time.RFC3339Nano, *certExpiresAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse operator certificate_expires_at: %w", err)
+		}
+		op.CertificateExpiresAt = &t
 	}
 	if supersededAt != nil {
 		t, err := time.Parse(time.RFC3339Nano, *supersededAt)
@@ -742,7 +758,7 @@ UPDATE enrollment_tokens SET state='revoked', revoked_at=? WHERE id=?
 // ListByCustomer returns all enrollment tokens for a customer.
 func (s *enrollmentTokenStore) ListByCustomer(ctx context.Context, customerID string) ([]*store.EnrollmentToken, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, customer_id, cluster_id, token, token_hash, operator_name, state, created_by_display_name, created_at, expires_at, used_at, operator_id, revoked_at, replaced_by_id
+SELECT id, customer_id, cluster_id, token_hash, operator_name, state, created_by_display_name, created_at, expires_at, used_at, operator_id, revoked_at, replaced_by_id
 FROM enrollment_tokens WHERE customer_id = ?
 `, customerID)
 	if err != nil {
@@ -755,7 +771,7 @@ FROM enrollment_tokens WHERE customer_id = ?
 // ListByCluster returns all enrollment tokens for a cluster.
 func (s *enrollmentTokenStore) ListByCluster(ctx context.Context, clusterID string) ([]*store.EnrollmentToken, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, customer_id, cluster_id, token, token_hash, operator_name, state, created_by_display_name, created_at, expires_at, used_at, operator_id, revoked_at, replaced_by_id
+SELECT id, customer_id, cluster_id, token_hash, operator_name, state, created_by_display_name, created_at, expires_at, used_at, operator_id, revoked_at, replaced_by_id
 FROM enrollment_tokens WHERE cluster_id = ?
 `, clusterID)
 	if err != nil {
@@ -787,7 +803,7 @@ func scanEnrollmentTokens(rows *sql.Rows) ([]*store.EnrollmentToken, error) {
 // GetPendingByCluster returns the pending enrollment token for a given cluster, if any.
 func (s *enrollmentTokenStore) GetPendingByCluster(ctx context.Context, customerID, clusterID string) (*store.EnrollmentToken, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, customer_id, cluster_id, token, token_hash, operator_name, state, created_by_display_name, created_at, expires_at, used_at, operator_id, revoked_at, replaced_by_id
+SELECT id, customer_id, cluster_id, token_hash, operator_name, state, created_by_display_name, created_at, expires_at, used_at, operator_id, revoked_at, replaced_by_id
 FROM enrollment_tokens WHERE customer_id = ? AND cluster_id = ? AND state = 'pending'
 ORDER BY created_at DESC LIMIT 1
 `, customerID, clusterID)

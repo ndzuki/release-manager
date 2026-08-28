@@ -137,7 +137,7 @@ type ServiceConfig struct {
 	Values         ValuesConfig      `mapstructure:"values"`
 	Gateway        GatewayCfg        `mapstructure:"gateway"`
 	Agent          AgentCfg          `mapstructure:"agent"`
-	CA             OperatorCACfg     `mapstructure:"ca"`
+	CA             CAConfig          `mapstructure:"ca"`
 	LoginRateLimit LoginRateLimitCfg `mapstructure:"login_rate_limit"`
 }
 
@@ -166,10 +166,43 @@ func (c AgentCfg) WithDefaults() AgentCfg {
 	return c
 }
 
-// OperatorCACfg points the operator agent at the gateway CA certificate used
-// as the mTLS trust anchor.
-type OperatorCACfg struct {
-	CertPath string `mapstructure:"cert_path"`
+// CAConfig controls the persistent operator certificate authority (REQ-015,
+// ADR-017): production loads credentials from Vault KV, dev persists them as
+// files. The same CA cert doubles as the agent-side mTLS trust anchor.
+type CAConfig struct {
+	VaultPath        string        `mapstructure:"vault_path"`
+	KeyPath          string        `mapstructure:"key_path"`
+	CertPath         string        `mapstructure:"cert_path"`
+	CertTTL          time.Duration `mapstructure:"cert_ttl"`
+	RenewBeforeRatio float64       `mapstructure:"renew_before_ratio"`
+}
+
+// WithDefaults returns the CA config with bounded defaults applied.
+func (c CAConfig) WithDefaults() CAConfig {
+	if c.CertTTL <= 0 {
+		c.CertTTL = 7 * 24 * time.Hour
+	}
+	if c.RenewBeforeRatio == 0 {
+		c.RenewBeforeRatio = 0.5
+	}
+	return c
+}
+
+// Validate checks the CA credential source without exposing secrets.
+// VaultPath or the dev file pair must be configured; Vault unavailable is a
+// fail-closed startup error (Step 4 验收).
+func (c CAConfig) Validate() error {
+	c = c.WithDefaults()
+	if c.RenewBeforeRatio <= 0 || c.RenewBeforeRatio > 1 {
+		return fmt.Errorf("ca_invalid: ca.renew_before_ratio must be within (0, 1]")
+	}
+	if c.VaultPath != "" {
+		return nil
+	}
+	if strings.TrimSpace(c.KeyPath) == "" || strings.TrimSpace(c.CertPath) == "" {
+		return fmt.Errorf("ca_invalid: ca.vault_path or ca.key_path and ca.cert_path are required")
+	}
+	return nil
 }
 
 // GatewayCfg controls the agent mTLS gateway listener (TASK-075): a second

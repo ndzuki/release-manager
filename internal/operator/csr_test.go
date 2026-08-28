@@ -3,135 +3,160 @@ package operator
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// generateTestCSR creates a PEM-encoded CSR with the given CN and DNS SANs.
 func generateTestCSR(t *testing.T, cn string, dnsNames []string) []byte {
 	t.Helper()
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-	tmpl := &x509.CertificateRequest{
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	return createCSR(t, cn, dnsNames, privateKey)
+}
+
+func createCSR(t *testing.T, cn string, dnsNames []string, privateKey any) []byte {
+	t.Helper()
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
 		Subject:  pkix.Name{CommonName: cn},
 		DNSNames: dnsNames,
-	}
-	der, err := x509.CreateCertificateRequest(rand.Reader, tmpl, priv)
-	if err != nil {
-		t.Fatalf("create CSR: %v", err)
-	}
+	}, privateKey)
+	require.NoError(t, err)
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
 }
 
 func TestParseCSR(t *testing.T) {
-	t.Run("valid CSR", func(t *testing.T) {
-		csrPEM := generateTestCSR(t, "op-1", []string{"cust-1", "cluster-1"})
-		csr, err := parseCSR(csrPEM)
-		if err != nil {
-			t.Fatalf("expected success, got: %v", err)
-		}
-		if csr.Subject.CommonName != "op-1" {
-			t.Fatalf("expected CN op-1, got %q", csr.Subject.CommonName)
-		}
-	})
+	tests := []struct {
+		name    string
+		csrPEM  func(*testing.T) []byte
+		wantErr bool
+	}{
+		{
+			name: "valid ed25519",
+			csrPEM: func(t *testing.T) []byte {
+				return generateTestCSR(t, "operator-1", []string{"cluster-1.customer-1.rm"})
+			},
+		},
+		{
+			name: "valid rsa 2048",
+			csrPEM: func(t *testing.T) []byte {
+				key, err := rsa.GenerateKey(rand.Reader, 2048)
+				require.NoError(t, err)
+				return createCSR(t, "operator-1", []string{"cluster-1.customer-1.rm"}, key)
+			},
+		},
+		{
+			name: "rsa below 2048",
+			csrPEM: func(t *testing.T) []byte {
+				key, err := rsa.GenerateKey(rand.Reader, 1024)
+				require.NoError(t, err)
+				return createCSR(t, "operator-1", []string{"cluster-1.customer-1.rm"}, key)
+			},
+			wantErr: true,
+		},
+		{
+			name:    "invalid pem",
+			csrPEM:  func(*testing.T) []byte { return []byte("not-pem") },
+			wantErr: true,
+		},
+		{
+			name: "wrong pem type",
+			csrPEM: func(*testing.T) []byte {
+				return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("bad")})
+			},
+			wantErr: true,
+		},
+		{
+			name:    "empty input",
+			csrPEM:  func(*testing.T) []byte { return nil },
+			wantErr: true,
+		},
+	}
 
-	t.Run("invalid PEM", func(t *testing.T) {
-		_, err := parseCSR([]byte("not-pem"))
-		if err == nil {
-			t.Fatal("expected error for invalid PEM")
-		}
-	})
-
-	t.Run("wrong PEM type", func(t *testing.T) {
-		block := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: []byte{}})
-		_, err := parseCSR(block)
-		if err == nil {
-			t.Fatal("expected error for wrong PEM type")
-		}
-	})
-
-	t.Run("empty input", func(t *testing.T) {
-		_, err := parseCSR(nil)
-		if err == nil {
-			t.Fatal("expected error for nil input")
-		}
-	})
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := parseCSR(test.csrPEM(t))
+			assert.Equal(t, test.wantErr, err != nil)
+		})
+	}
 }
 
-func TestValidateCSRSANs(t *testing.T) {
+func TestParseCSRRejectsInvalidSignature(t *testing.T) {
+	csrPEM := generateTestCSR(t, "operator-1", []string{"cluster-1.customer-1.rm"})
+	block, rest := pem.Decode(csrPEM)
+	require.Empty(t, rest)
+	require.NotNil(t, block)
+	block.Bytes[len(block.Bytes)-1] ^= 0xff
+
+	_, err := parseCSR(pem.EncodeToMemory(block))
+	require.Error(t, err)
+}
+
+func TestValidateCSRIdentity(t *testing.T) {
 	tests := []struct {
 		name       string
 		cn         string
 		dnsNames   []string
 		customerID string
 		clusterID  string
+		want       csrIdentity
 		wantErr    bool
 	}{
 		{
-			name:       "both SANs present",
-			cn:         "op-1",
-			dnsNames:   []string{"cust-1", "cluster-1"},
-			customerID: "cust-1",
-			clusterID:  "cluster-1",
-			wantErr:    false,
+			name: "canonical",
+			cn:   "operator-1", dnsNames: []string{"cluster-1.customer-1.rm"},
+			customerID: "customer-1", clusterID: "cluster-1",
+			want: csrIdentity{OperatorName: "operator-1", DNSName: "cluster-1.customer-1.rm", CustomerID: "customer-1", ClusterID: "cluster-1"},
 		},
 		{
-			name:       "customer_id in CN, cluster_id in DNS",
-			cn:         "cust-1",
-			dnsNames:   []string{"cluster-1"},
-			customerID: "cust-1",
-			clusterID:  "cluster-1",
-			wantErr:    false,
+			name: "uppercase scope normalizes",
+			cn:   "operator-1", dnsNames: []string{"CLUSTER-1.CUSTOMER-1.RM"},
+			customerID: "CUSTOMER-1", clusterID: "CLUSTER-1",
+			want: csrIdentity{OperatorName: "operator-1", DNSName: "cluster-1.customer-1.rm", CustomerID: "customer-1", ClusterID: "cluster-1"},
 		},
 		{
-			name:       "missing customer_id",
-			cn:         "op-1",
-			dnsNames:   []string{"cluster-1"},
-			customerID: "cust-1",
-			clusterID:  "cluster-1",
-			wantErr:    true,
+			name: "missing canonical san",
+			cn:   "operator-1", dnsNames: []string{"cluster-1", "customer-1"},
+			customerID: "customer-1", clusterID: "cluster-1", wantErr: true,
 		},
 		{
-			name:       "missing cluster_id",
-			cn:         "op-1",
-			dnsNames:   []string{"cust-1"},
-			customerID: "cust-1",
-			clusterID:  "cluster-1",
-			wantErr:    true,
+			name: "customer mismatch",
+			cn:   "operator-1", dnsNames: []string{"cluster-1.other-customer.rm"},
+			customerID: "customer-1", clusterID: "cluster-1", wantErr: true,
 		},
 		{
-			name:       "both missing",
-			cn:         "op-1",
-			dnsNames:   []string{},
-			customerID: "cust-1",
-			clusterID:  "cluster-1",
-			wantErr:    true,
+			name: "invalid operator name",
+			cn:   "Operator_1", dnsNames: []string{"cluster-1.customer-1.rm"},
+			customerID: "customer-1", clusterID: "cluster-1", wantErr: true,
 		},
 		{
-			name:       "empty customer_id check",
-			cn:         "op-1",
-			dnsNames:   []string{"cluster-1"},
-			customerID: "",
-			clusterID:  "cluster-1",
-			wantErr:    true,
+			name: "empty customer id",
+			cn:   "operator-1", dnsNames: []string{"cluster-1.customer-1.rm"},
+			customerID: "", clusterID: "cluster-1", wantErr: true,
+		},
+		{
+			name: "invalid cluster label",
+			cn:   "operator-1", dnsNames: []string{"cluster_1.customer-1.rm"},
+			customerID: "customer-1", clusterID: "cluster_1", wantErr: true,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			csrPEM := generateTestCSR(t, tt.cn, tt.dnsNames)
-			csr, err := parseCSR(csrPEM)
-			if err != nil {
-				t.Fatalf("parseCSR: %v", err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			csr, err := parseCSR(generateTestCSR(t, test.cn, test.dnsNames))
+			require.NoError(t, err)
+			identity, err := validateCSRIdentity(csr, test.customerID, test.clusterID)
+			if test.wantErr {
+				require.Error(t, err)
+				return
 			}
-			err = validateCSRSANs(csr, tt.customerID, tt.clusterID)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("wantErr=%v, got err=%v", tt.wantErr, err)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, test.want, identity)
 		})
 	}
 }

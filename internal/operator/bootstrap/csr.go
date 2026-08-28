@@ -8,17 +8,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"strings"
-
-	"github.com/google/uuid"
 )
-
-// newOperatorID generates the agent-chosen operator identifier. REQ-015
-// decision 4 (server-generated operator_id) is a TASK-015 replan item; the
-// current main Enroll contract still accepts a client-supplied operator_id,
-// so the agent sends a fresh uuid v4 (plan v1 Step 6 scope boundary).
-func newOperatorID() string {
-	return uuid.New().String()
-}
 
 // operatorName returns the CSR CommonName: the operator name, defaulting to
 // the cluster ID when not configured (plan v1 Step 6).
