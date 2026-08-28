@@ -17,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ndzuki/release-manager/internal/config"
 )
 
 // repoRoot resolves the repository root from the test working directory
@@ -1329,6 +1331,7 @@ func TestPurgeRemovesDataRuntimeFilesKeepsArchive(t *testing.T) {
 		"dev-trust-root/dev-trust-root.key",
 		"dev-jwt/jwt-signing-key.pem",
 		"dev-service-tokens/webhook-service-token",
+		"dev-enrollment-tokens/dev-customer-a-direct.token",
 		"dev-ca/ca.key",
 		"dev-ca/ca.crt",
 		"diagnostics/20260825T120000Z/pods.txt",
@@ -1924,6 +1927,43 @@ func TestCiProfileMtlsCaTransientFilesRemoved(t *testing.T) {
 	}
 }
 
+// TestOrchestratorDevConfigWiresTopLevelCA locks the AC-065-36 injection
+// contract at the config seam (real smoke 2026-08-28 independent-audit
+// failure): merge 40d0a69 adopted PR#88's top-level CAConfig
+// (ca.key_path/ca.cert_path, ADR-017) as the operator CA contract, but the
+// dev overlay still carried the legacy gateway.ca_key_path/ca_cert_path keys
+// (GatewayCfg dead fields with zero consumers) — ca.LoadConfigured(s.cfg.CA)
+// then failed `ca_invalid` and the orchestrator CrashLoopBackOff'd before
+// readiness. Tests that construct config programmatically cannot see this
+// drift; this test decodes the exact YAML kustomize ships with the
+// production loader and asserts the wiring.
+func TestOrchestratorDevConfigWiresTopLevelCA(t *testing.T) {
+	overlay := filepath.Join(repoRoot(t), "deploy", "kustomize", "dev", "configs", "orchestrator.dev.yaml")
+	cfg, err := config.LoadService(overlay)
+	if err != nil {
+		t.Fatalf("loading dev orchestrator config: %v", err)
+	}
+	if cfg.CA.KeyPath != "/data/gateway-ca.key" {
+		t.Fatalf("expected ca.key_path=/data/gateway-ca.key (release-manager-mtls-ca Secret subPath), got %q", cfg.CA.KeyPath)
+	}
+	if cfg.CA.CertPath != "/data/gateway-ca.crt" {
+		t.Fatalf("expected ca.cert_path=/data/gateway-ca.crt (release-manager-mtls-ca Secret subPath), got %q", cfg.CA.CertPath)
+	}
+	// ca.LoadConfigured fail-closes on Validate; the dev overlay must decode
+	// to a CA config that passes exactly the validation the real orchestrator
+	// startup runs (cmd/orchestrator main.go LoadConfigured).
+	if err := cfg.CA.Validate(); err != nil {
+		t.Fatalf("dev orchestrator CA config must validate: %v", err)
+	}
+	// Anti-drift: the legacy gateway CA keys have zero consumers and must not
+	// return — they silently shadow the real contract (this exact trap caused
+	// the audit failure).
+	if cfg.Gateway.CAKeyPath != "" || cfg.Gateway.CACertPath != "" {
+		t.Fatalf("legacy gateway.ca_key_path/ca_cert_path dead keys must not be set in the dev overlay (decoded CAKeyPath=%q CACertPath=%q)",
+			cfg.Gateway.CAKeyPath, cfg.Gateway.CACertPath)
+	}
+}
+
 // TestCustomerAgentConfigCarriesCustomerUUIDs locks the operator enrollment
 // contract (real smoke 2026-08-27: `customer_id mismatch` — the agent config
 // carried the customer NAME while devseed enrollment tokens carry the
@@ -1999,8 +2039,36 @@ if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then exit 0; fi
 exit 0
 `)
 
+	// Seed-state files: dev-down wipes the emptyDir PostgreSQL state, so the
+	// persisted seed progress/manifest must go too (real smoke 2026-08-28
+	// independent audit: dev-down→dev-up fixture_conflict identity drift
+	// when all-committed progress replays against an empty database). The
+	// single-use enrollment tokens are equally cluster-bound: stale token
+	// files make the next dev-up skip agents_up and the install phase fails
+	// with stage_unavailable (no operator for cluster — same recovery-path
+	// defect, observed in the same real smoke).
+	for _, file := range []string{"dev-seed-progress.json", "dev-fixture.json"} {
+		if err := os.WriteFile(filepath.Join(stateDir, file), []byte(`{"stale":true}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tokenPath := filepath.Join(stateDir, "dev-enrollment-tokens", "dev-customer-a-direct.token")
+	if err := os.MkdirAll(filepath.Dir(tokenPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tokenPath, []byte("stale-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if out, err := runDev(t, env, "down"); err != nil {
 		t.Fatalf("dev-down failed:\n%s", out)
+	}
+	for _, file := range []string{"dev-seed-progress.json", "dev-fixture.json"} {
+		if _, err := os.Stat(filepath.Join(stateDir, file)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected %s removed by dev-down (cluster-side seed state gone, stat err=%v)", file, err)
+		}
+	}
+	if _, err := os.Stat(tokenPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected enrollment tokens removed by dev-down (single-use, cluster-bound, stat err=%v)", err)
 	}
 	// Kubeconfigs for the deleted clusters are gone; nothing remains to
 	// merge, so the merged file is deleted too (AC-065-04).

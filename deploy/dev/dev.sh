@@ -39,7 +39,7 @@ DEV_TIMEOUT_OPERATOR="${DEV_TIMEOUT_OPERATOR:-180}"
 DEV_TIMEOUT_SEED_RETRIES="${DEV_TIMEOUT_SEED_RETRIES:-3}"
 # Runtime files dev-purge removes (AC-065-26): credentials, keys, kubeconfigs
 # and state documents. data/archive/ is explicitly preserved.
-PURGE_DATA_PATHS=(dev-credentials.env dev-trust-root dev-jwt dev-service-tokens dev-ca diagnostics kubeconfigs kubeconfig.yaml dev-ownership.json dev-fixture.json dev-seed-progress.json dev-status.json backups)
+PURGE_DATA_PATHS=(dev-credentials.env dev-trust-root dev-jwt dev-service-tokens dev-enrollment-tokens dev-ca diagnostics kubeconfigs kubeconfig.yaml dev-ownership.json dev-fixture.json dev-seed-progress.json dev-status.json backups)
 CONTROL_CLUSTER="release-manager-control"
 # k3d names the kubeconfig context "k3d-<cluster>".
 CONTROL_CTX="k3d-$CONTROL_CLUSTER"
@@ -1458,6 +1458,20 @@ cmd_down() {
   else
     rm -f "$DEV_DATA_DIR/kubeconfig.yaml"
   fi
+  # dev-down deletes the clusters and with them the emptyDir PostgreSQL
+  # state (AC-065-29: no PVC); the persisted seed state describes that
+  # cluster-side data, so it must go with the clusters — otherwise the next
+  # dev-up loads an all-committed progress against an empty database and
+  # skips re-seeding (real smoke 2026-08-28 independent audit:
+  # fixture_conflict phase identity drift, dev-down→dev-up recovery path).
+  rm -f "$DEV_DATA_DIR/dev-seed-progress.json" "$DEV_DATA_DIR/dev-fixture.json"
+  # Enrollment tokens are single-use and bound to the deleted clusters'
+  # enrollment rows in the (now empty) database; stale token files make the
+  # next dev-up's tokens_ready probe skip both the enrollment seed leg and
+  # agents_up, and the install phase then fails with
+  # "no operator for cluster" → stage_unavailable (real smoke 2026-08-28,
+  # same recovery path as above). Clear them with the clusters.
+  rm -rf "$DEV_DATA_DIR/dev-enrollment-tokens"
   log "registry and image cache retained"
 }
 

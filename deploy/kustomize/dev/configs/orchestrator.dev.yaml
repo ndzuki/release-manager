@@ -22,5 +22,12 @@ retention:
 gateway:
   enabled: true
   port: 8084
-  ca_key_path: /data/gateway-ca.key
-  ca_cert_path: /data/gateway-ca.crt
+# 批次5 D1 (AC-065-36): the dev mTLS CA travels through the
+# release-manager-mtls-ca Secret into these paths (subPath ca.key/ca.crt,
+# see deploy/kustomize/services/orchestrator.yaml volumeMounts). The
+# orchestrator reads the top-level ca: block (CAConfig, ADR-017) via
+# ca.LoadConfigured — the legacy gateway.ca_key_path/ca_cert_path keys are
+# dead fields with zero consumers and must not be used here.
+ca:
+  key_path: /data/gateway-ca.key
+  cert_path: /data/gateway-ca.crt
