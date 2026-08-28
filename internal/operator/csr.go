@@ -1,57 +1,115 @@
 package operator
 
 import (
+	"crypto/ed25519"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"strings"
 )
 
-// parseCSR parses a PEM-encoded certificate signing request.
+const maxDNSLabelLength = 63
+
+// errInvalidOperatorName separates a CSR CommonName that fails the operator
+// name contract from a SAN mismatch, so callers can map it to csr_invalid
+// instead of csr_san_mismatch (REQ-015 error model: CN empty/invalid ->
+// csr_invalid; SAN mismatch -> csr_san_mismatch).
+var errInvalidOperatorName = errors.New("invalid operator name")
+
+type csrIdentity struct {
+	OperatorName string
+	DNSName      string
+	CustomerID   string
+	ClusterID    string
+}
+
 func parseCSR(csrPEM []byte) (*x509.CertificateRequest, error) {
-	block, _ := pem.Decode(csrPEM)
-	if block == nil {
-		return nil, fmt.Errorf("failed to decode CSR PEM")
+	block, rest := pem.Decode(csrPEM)
+	if block == nil || len(rest) != 0 {
+		return nil, fmt.Errorf("decode CSR PEM")
 	}
 	if block.Type != "CERTIFICATE REQUEST" && block.Type != "NEW CERTIFICATE REQUEST" {
-		return nil, fmt.Errorf("unexpected PEM block type: %q", block.Type)
+		return nil, fmt.Errorf("unexpected CSR PEM block type")
 	}
 	csr, err := x509.ParseCertificateRequest(block.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("parse CSR: %w", err)
 	}
+	if err := csr.CheckSignature(); err != nil {
+		return nil, fmt.Errorf("verify CSR signature: %w", err)
+	}
+	switch publicKey := csr.PublicKey.(type) {
+	case ed25519.PublicKey:
+		if len(publicKey) != ed25519.PublicKeySize {
+			return nil, fmt.Errorf("invalid Ed25519 public key")
+		}
+	case *rsa.PublicKey:
+		if publicKey.N == nil || publicKey.N.BitLen() < 2048 {
+			return nil, fmt.Errorf("RSA public key must be at least 2048 bits")
+		}
+	default:
+		return nil, fmt.Errorf("unsupported CSR public key algorithm")
+	}
 	return csr, nil
 }
 
-// validateCSRSANs checks that the CSR SANs contain both customerID and clusterID.
-// Returns an error if either is missing — AC-015-06.
-func validateCSRSANs(csr *x509.CertificateRequest, customerID, clusterID string) error {
-	dnsNames := csr.DNSNames
-	// Also check Subject.CommonName as a SAN fallback per convention.
-	if csr.Subject.CommonName != "" {
-		dnsNames = append(dnsNames, csr.Subject.CommonName)
+func validateCSRIdentity(csr *x509.CertificateRequest, customerID, clusterID string) (csrIdentity, error) {
+	if csr == nil {
+		return csrIdentity{}, fmt.Errorf("CSR is required")
 	}
-
-	hasCustomer := false
-	hasCluster := false
-	for _, name := range dnsNames {
-		if strings.EqualFold(name, customerID) {
-			hasCustomer = true
+	operatorName := strings.TrimSpace(csr.Subject.CommonName)
+	if err := validateDNSLabel(operatorName); err != nil {
+		return csrIdentity{}, fmt.Errorf("%w: %v", errInvalidOperatorName, err)
+	}
+	customerID, err := normalizeDNSLabel(customerID)
+	if err != nil {
+		return csrIdentity{}, fmt.Errorf("invalid customer_id: %w", err)
+	}
+	clusterID, err = normalizeDNSLabel(clusterID)
+	if err != nil {
+		return csrIdentity{}, fmt.Errorf("invalid cluster_id: %w", err)
+	}
+	canonicalName := clusterID + "." + customerID + ".rm"
+	matched := false
+	for _, dnsName := range csr.DNSNames {
+		if strings.EqualFold(strings.TrimSpace(dnsName), canonicalName) {
+			matched = true
+			break
 		}
-		if strings.EqualFold(name, clusterID) {
-			hasCluster = true
-		}
 	}
+	if !matched {
+		return csrIdentity{}, fmt.Errorf("CSR SAN does not contain canonical operator identity")
+	}
+	return csrIdentity{
+		OperatorName: operatorName,
+		DNSName:      canonicalName,
+		CustomerID:   customerID,
+		ClusterID:    clusterID,
+	}, nil
+}
 
-	var missing []string
-	if !hasCustomer {
-		missing = append(missing, fmt.Sprintf("customer_id=%q", customerID))
+func normalizeDNSLabel(value string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if err := validateDNSLabel(normalized); err != nil {
+		return "", err
 	}
-	if !hasCluster {
-		missing = append(missing, fmt.Sprintf("cluster_id=%q", clusterID))
+	return normalized, nil
+}
+
+func validateDNSLabel(value string) error {
+	if value == "" || len(value) > maxDNSLabelLength {
+		return fmt.Errorf("DNS label length must be 1-63")
 	}
-	if len(missing) > 0 {
-		return fmt.Errorf("CSR SANs missing required identifiers: %s", strings.Join(missing, ", "))
+	if value[0] == '-' || value[len(value)-1] == '-' {
+		return fmt.Errorf("DNS label cannot start or end with hyphen")
+	}
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '-' {
+			continue
+		}
+		return fmt.Errorf("DNS label contains invalid character")
 	}
 	return nil
 }

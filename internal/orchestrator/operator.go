@@ -334,7 +334,7 @@ func (s *Service) operatorAuditEvent(ctx context.Context, resourceType, resource
 	for key, value := range metadata {
 		metadataCopy[key] = value
 	}
-	metadataCopy["request_id"] = uuid.NewString()
+	metadataCopy["request_id"] = requestIDOrNew(ctx)
 	return &store.AuditEvent{
 		ID:             uuid.NewString(),
 		ActorKind:      store.AuditActorUser,

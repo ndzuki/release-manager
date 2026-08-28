@@ -274,33 +274,17 @@ func (s *Service) DisableCluster(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("disable cluster: %w", err))
 	}
 
-	// Cascade: revoke all enrollment tokens for this cluster (AC-015-04).
-	tokens, err := s.store.EnrollmentTokens().ListByCluster(ctx, c.ID)
+	// Cascade: revoke every pending token, non-revoked operator and live
+	// session of the cluster in ONE transaction (REQ-015 事务边界 4).
+	// Irreversible: re-enabling does not resurrect identities.
+	cascade, err := s.store.OperatorLifecycle().DisableCluster(ctx, c.ID, "cluster disabled")
 	if err != nil {
-		s.logger.Warn("listing tokens for cascade revoke", "error", err)
+		s.logger.Error("cascade revoke cluster", "cluster_id", c.ID, "error", err)
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("cascade revoke cluster: %w", err))
 	}
-	for _, t := range tokens {
-		if t.State == store.TokenStatePending {
-			if err := s.store.EnrollmentTokens().Revoke(ctx, t.ID); err != nil {
-				s.logger.Warn("cascade revoke token", "token_id", t.ID, "error", err)
-			}
-		}
-	}
-
-	// Cascade: revoke all active operators for this cluster.
-	operators, err := s.store.Operators().ListByCluster(ctx, c.ID)
-	if err != nil {
-		s.logger.Warn("listing operators for cascade revoke", "error", err)
-	} else {
-		for _, op := range operators {
-			if op.Status == store.OperatorActive {
-				if _, revokeErr := s.store.OperatorManagement().RevokeOperator(ctx, c.CustomerID, c.ID, op.ID, "cluster disabled", nil); revokeErr != nil {
-					s.logger.Warn("cascade revoke operator", "operator_id", op.ID, "error", revokeErr)
-				}
-			}
-		}
-	}
-	s.logger.Warn("cluster disabled", "id", c.ID, "customer_id", c.CustomerID)
+	s.emitRevocationAudits(ctx, cascade.OperatorIDs, "cluster disabled")
+	s.logger.Warn("cluster disabled", "id", c.ID, "customer_id", c.CustomerID,
+		"revoked_tokens", len(cascade.TokenIDs), "revoked_operators", len(cascade.OperatorIDs), "closed_sessions", len(cascade.SessionIDs))
 	return connect.NewResponse(&orchestratorv1.DisableClusterResponse{}), nil
 }
 

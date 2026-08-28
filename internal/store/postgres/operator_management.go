@@ -242,6 +242,25 @@ WHERE id = ?
 	if tokenCustomerID != op.CustomerID || tokenClusterID != op.ClusterID || tokenName != op.Name {
 		return nil, store.ErrNotAuthorized
 	}
+	// Consume the token FIRST (REQ-015 事务边界 1; v2 checkpoint 重排序):
+	// the pending→used CAS is the transaction's first mutation, so the
+	// concurrent loser of the same token fails here with a state conflict
+	// instead of a confusing duplicate-key error further down.
+	tokenCAS, err := tx.ExecContext(ctx, `
+UPDATE enrollment_tokens
+SET state = 'used', used_at = ?, operator_id = ?
+WHERE id = ? AND state = 'pending'
+`, session.StartedAt.UTC().Format(time.RFC3339Nano), op.ID, tokenID)
+	if err != nil {
+		return nil, fmt.Errorf("consume enrollment token: %w", err)
+	}
+	tokenRows, err := tokenCAS.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("consume enrollment token rows affected: %w", err)
+	}
+	if tokenRows != 1 {
+		return nil, store.ErrOperatorStateConflict
+	}
 
 	var supersededID string
 	existing, existingErr := scanOperator(tx.QueryRowContext(ctx, `SELECT `+operatorSelect+`
@@ -270,13 +289,17 @@ WHERE operator_id = ? AND status != 'revoked'
 		}
 	}
 
+	var certExpiresAt any
+	if op.CertificateExpiresAt != nil {
+		certExpiresAt = op.CertificateExpiresAt.UTC().Format(time.RFC3339Nano)
+	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO operators (
-	id, customer_id, cluster_id, operator_name, cert_serial, status,
+	id, customer_id, cluster_id, operator_name, cert_serial, certificate_expires_at, status,
 	superseded_by, superseded_at, revoked_at, revoke_reason, created_at, updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, '', NULL, NULL, '', ?, ?)
-`, op.ID, op.CustomerID, op.ClusterID, op.Name, op.CertSerial, string(op.Status),
+VALUES (?, ?, ?, ?, ?, ?, ?, '', NULL, NULL, '', ?, ?)
+`, op.ID, op.CustomerID, op.ClusterID, op.Name, op.CertSerial, certExpiresAt, string(op.Status),
 		op.RegisteredAt.UTC().Format(time.RFC3339Nano), op.UpdatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 		if isUniqueConstraint(err) {
 			return nil, store.ErrDuplicateOperatorName
@@ -294,21 +317,6 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)
 		session.StartedAt.UTC().Format(time.RFC3339Nano), session.LastHeartbeat.UTC().Format(time.RFC3339Nano),
 		session.ExpiresAt.UTC().Format(time.RFC3339Nano)); err != nil {
 		return nil, fmt.Errorf("insert enrollment session: %w", err)
-	}
-	result, err := tx.ExecContext(ctx, `
-UPDATE enrollment_tokens
-SET state = 'used', used_at = ?, operator_id = ?
-WHERE id = ? AND state = 'pending'
-`, session.StartedAt.UTC().Format(time.RFC3339Nano), op.ID, tokenID)
-	if err != nil {
-		return nil, fmt.Errorf("mark enrollment token used: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return nil, fmt.Errorf("count used enrollment token: %w", err)
-	}
-	if rows != 1 {
-		return nil, store.ErrOperatorStateConflict
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit enroll operator: %w", err)

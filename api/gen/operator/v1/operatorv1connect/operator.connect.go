@@ -35,19 +35,19 @@ const (
 const (
 	// OperatorServiceEnrollProcedure is the fully-qualified name of the OperatorService's Enroll RPC.
 	OperatorServiceEnrollProcedure = "/operator.v1.OperatorService/Enroll"
+	// OperatorServiceRenewCertificateProcedure is the fully-qualified name of the OperatorService's
+	// RenewCertificate RPC.
+	OperatorServiceRenewCertificateProcedure = "/operator.v1.OperatorService/RenewCertificate"
 	// OperatorServiceCommandStreamProcedure is the fully-qualified name of the OperatorService's
 	// CommandStream RPC.
 	OperatorServiceCommandStreamProcedure = "/operator.v1.OperatorService/CommandStream"
-	// OperatorServiceRevokeOperatorProcedure is the fully-qualified name of the OperatorService's
-	// RevokeOperator RPC.
-	OperatorServiceRevokeOperatorProcedure = "/operator.v1.OperatorService/RevokeOperator"
 )
 
 // OperatorServiceClient is a client for the operator.v1.OperatorService service.
 type OperatorServiceClient interface {
 	Enroll(context.Context, *connect.Request[v1.EnrollRequest]) (*connect.Response[v1.EnrollResponse], error)
+	RenewCertificate(context.Context, *connect.Request[v1.RenewCertificateRequest]) (*connect.Response[v1.RenewCertificateResponse], error)
 	CommandStream(context.Context) *connect.BidiStreamForClient[v1.CommandStreamRequest, v1.CommandStreamResponse]
-	RevokeOperator(context.Context, *connect.Request[v1.RevokeOperatorRequest]) (*connect.Response[v1.RevokeOperatorResponse], error)
 }
 
 // NewOperatorServiceClient constructs a client for the operator.v1.OperatorService service. By
@@ -67,16 +67,16 @@ func NewOperatorServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(operatorServiceMethods.ByName("Enroll")),
 			connect.WithClientOptions(opts...),
 		),
+		renewCertificate: connect.NewClient[v1.RenewCertificateRequest, v1.RenewCertificateResponse](
+			httpClient,
+			baseURL+OperatorServiceRenewCertificateProcedure,
+			connect.WithSchema(operatorServiceMethods.ByName("RenewCertificate")),
+			connect.WithClientOptions(opts...),
+		),
 		commandStream: connect.NewClient[v1.CommandStreamRequest, v1.CommandStreamResponse](
 			httpClient,
 			baseURL+OperatorServiceCommandStreamProcedure,
 			connect.WithSchema(operatorServiceMethods.ByName("CommandStream")),
-			connect.WithClientOptions(opts...),
-		),
-		revokeOperator: connect.NewClient[v1.RevokeOperatorRequest, v1.RevokeOperatorResponse](
-			httpClient,
-			baseURL+OperatorServiceRevokeOperatorProcedure,
-			connect.WithSchema(operatorServiceMethods.ByName("RevokeOperator")),
 			connect.WithClientOptions(opts...),
 		),
 	}
@@ -84,9 +84,9 @@ func NewOperatorServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 
 // operatorServiceClient implements OperatorServiceClient.
 type operatorServiceClient struct {
-	enroll         *connect.Client[v1.EnrollRequest, v1.EnrollResponse]
-	commandStream  *connect.Client[v1.CommandStreamRequest, v1.CommandStreamResponse]
-	revokeOperator *connect.Client[v1.RevokeOperatorRequest, v1.RevokeOperatorResponse]
+	enroll           *connect.Client[v1.EnrollRequest, v1.EnrollResponse]
+	renewCertificate *connect.Client[v1.RenewCertificateRequest, v1.RenewCertificateResponse]
+	commandStream    *connect.Client[v1.CommandStreamRequest, v1.CommandStreamResponse]
 }
 
 // Enroll calls operator.v1.OperatorService.Enroll.
@@ -94,21 +94,21 @@ func (c *operatorServiceClient) Enroll(ctx context.Context, req *connect.Request
 	return c.enroll.CallUnary(ctx, req)
 }
 
+// RenewCertificate calls operator.v1.OperatorService.RenewCertificate.
+func (c *operatorServiceClient) RenewCertificate(ctx context.Context, req *connect.Request[v1.RenewCertificateRequest]) (*connect.Response[v1.RenewCertificateResponse], error) {
+	return c.renewCertificate.CallUnary(ctx, req)
+}
+
 // CommandStream calls operator.v1.OperatorService.CommandStream.
 func (c *operatorServiceClient) CommandStream(ctx context.Context) *connect.BidiStreamForClient[v1.CommandStreamRequest, v1.CommandStreamResponse] {
 	return c.commandStream.CallBidiStream(ctx)
 }
 
-// RevokeOperator calls operator.v1.OperatorService.RevokeOperator.
-func (c *operatorServiceClient) RevokeOperator(ctx context.Context, req *connect.Request[v1.RevokeOperatorRequest]) (*connect.Response[v1.RevokeOperatorResponse], error) {
-	return c.revokeOperator.CallUnary(ctx, req)
-}
-
 // OperatorServiceHandler is an implementation of the operator.v1.OperatorService service.
 type OperatorServiceHandler interface {
 	Enroll(context.Context, *connect.Request[v1.EnrollRequest]) (*connect.Response[v1.EnrollResponse], error)
+	RenewCertificate(context.Context, *connect.Request[v1.RenewCertificateRequest]) (*connect.Response[v1.RenewCertificateResponse], error)
 	CommandStream(context.Context, *connect.BidiStream[v1.CommandStreamRequest, v1.CommandStreamResponse]) error
-	RevokeOperator(context.Context, *connect.Request[v1.RevokeOperatorRequest]) (*connect.Response[v1.RevokeOperatorResponse], error)
 }
 
 // NewOperatorServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -124,26 +124,26 @@ func NewOperatorServiceHandler(svc OperatorServiceHandler, opts ...connect.Handl
 		connect.WithSchema(operatorServiceMethods.ByName("Enroll")),
 		connect.WithHandlerOptions(opts...),
 	)
+	operatorServiceRenewCertificateHandler := connect.NewUnaryHandler(
+		OperatorServiceRenewCertificateProcedure,
+		svc.RenewCertificate,
+		connect.WithSchema(operatorServiceMethods.ByName("RenewCertificate")),
+		connect.WithHandlerOptions(opts...),
+	)
 	operatorServiceCommandStreamHandler := connect.NewBidiStreamHandler(
 		OperatorServiceCommandStreamProcedure,
 		svc.CommandStream,
 		connect.WithSchema(operatorServiceMethods.ByName("CommandStream")),
 		connect.WithHandlerOptions(opts...),
 	)
-	operatorServiceRevokeOperatorHandler := connect.NewUnaryHandler(
-		OperatorServiceRevokeOperatorProcedure,
-		svc.RevokeOperator,
-		connect.WithSchema(operatorServiceMethods.ByName("RevokeOperator")),
-		connect.WithHandlerOptions(opts...),
-	)
 	return "/operator.v1.OperatorService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case OperatorServiceEnrollProcedure:
 			operatorServiceEnrollHandler.ServeHTTP(w, r)
+		case OperatorServiceRenewCertificateProcedure:
+			operatorServiceRenewCertificateHandler.ServeHTTP(w, r)
 		case OperatorServiceCommandStreamProcedure:
 			operatorServiceCommandStreamHandler.ServeHTTP(w, r)
-		case OperatorServiceRevokeOperatorProcedure:
-			operatorServiceRevokeOperatorHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -157,10 +157,10 @@ func (UnimplementedOperatorServiceHandler) Enroll(context.Context, *connect.Requ
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("operator.v1.OperatorService.Enroll is not implemented"))
 }
 
-func (UnimplementedOperatorServiceHandler) CommandStream(context.Context, *connect.BidiStream[v1.CommandStreamRequest, v1.CommandStreamResponse]) error {
-	return connect.NewError(connect.CodeUnimplemented, errors.New("operator.v1.OperatorService.CommandStream is not implemented"))
+func (UnimplementedOperatorServiceHandler) RenewCertificate(context.Context, *connect.Request[v1.RenewCertificateRequest]) (*connect.Response[v1.RenewCertificateResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("operator.v1.OperatorService.RenewCertificate is not implemented"))
 }
 
-func (UnimplementedOperatorServiceHandler) RevokeOperator(context.Context, *connect.Request[v1.RevokeOperatorRequest]) (*connect.Response[v1.RevokeOperatorResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("operator.v1.OperatorService.RevokeOperator is not implemented"))
+func (UnimplementedOperatorServiceHandler) CommandStream(context.Context, *connect.BidiStream[v1.CommandStreamRequest, v1.CommandStreamResponse]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("operator.v1.OperatorService.CommandStream is not implemented"))
 }
