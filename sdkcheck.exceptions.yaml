@@ -1,2 +1,7 @@
 version: "1"
-exceptions: []
+exceptions:
+  - owner: "release-manager"
+    reason: "TASK-065 dev lifecycle test harness: deploy/dev/dev_test.go drives the dev.sh shell module (ADR-004 lifecycle scripts) via fake-CLI os/exec seams; test-only, never runtime"
+    expires_at: "2099-12-31"
+    path: "deploy/dev/dev_test.go"
+    rule: "os_exec_import"

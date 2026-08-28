@@ -125,6 +125,15 @@ func fakeEnv(t *testing.T, stateDir string) (env []string, binDir string) {
 	}
 	env = append(os.Environ(),
 		"DEV_DATA_DIR="+stateDir,
+		// Pin FIXTURE_VERSION so dev.sh skips its `go run ./cmd/devseed/
+		// -print-fixture-version` preamble (dev.sh line 27). On a cold CI
+		// build cache that probe compiles the whole devseed binary and takes
+		// 12-30s+, which raced the 30s holder window in
+		// TestLockConflictReportsHolder — by the time `down` reached
+		// acquire_lock the holder's lock had already expired, so the conflict
+		// was never reported. The real probe returns "v2", so this is
+		// behavior-identical and makes every fake-CLI test deterministic.
+		"FIXTURE_VERSION=v2",
 		// Probe idle test ports, not the real 8082-8087: the actual dev
 		// environment may be running on the host during tests.
 		"DEV_PORTS_OVERRIDE=19082 19083 19084 19085 19086 19087",
@@ -211,11 +220,19 @@ func TestLockConflictReportsHolder(t *testing.T) {
 	writeShim(t, binDir, "docker", "#!/usr/bin/env bash\nexit 0\n")
 	// (down is a no-op on an empty manifest and would release the lock
 	// before the second process starts).
-	holdCtx, holdCancel := context.WithTimeout(context.Background(), 40*time.Second)
+	//
+	// The holder keeps the flock until the test writes a release marker,
+	// rather than a fixed sleep window: a fixed window races the second
+	// process's startup under CI load (the devseed -print-fixture-version
+	// probe used to compile the whole binary on a cold cache, 12-30s+, and
+	// expire the window before `down` reached acquire_lock — TASK-065 CI
+	// failure). The marker makes the hold deterministic.
+	releasePath := filepath.Join(stateDir, "release-lock")
+	holdCtx, holdCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer holdCancel()
 	hold := exec.CommandContext(holdCtx, "bash", "-c", fmt.Sprintf(
-		"source %q; acquire_lock down; sleep 30",
-		filepath.Join(repoRoot(t), "deploy", "dev", "lib", "lock.sh")))
+		"source %q; acquire_lock down; while [ ! -f %q ]; do sleep 0.1; done",
+		filepath.Join(repoRoot(t), "deploy", "dev", "lib", "lock.sh"), releasePath))
 	hold.Env = env
 	if err := hold.Start(); err != nil {
 		t.Fatal(err)
@@ -254,6 +271,11 @@ func TestLockConflictReportsHolder(t *testing.T) {
 	}
 	if !strings.Contains(out, "pid=") || !strings.Contains(out, "started_at=") {
 		t.Fatalf("expected holder pid/started_at in output:\n%s", out)
+	}
+	// Release the holder now that the conflict is asserted; the flock drops
+	// when the holder process exits (the deferred kill is a safety net).
+	if err := os.WriteFile(releasePath, []byte("release"), 0o600); err != nil {
+		t.Fatalf("write release marker: %v", err)
 	}
 }
 

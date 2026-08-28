@@ -568,7 +568,24 @@ func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
 	request.Header().Set("Idempotency-Key", "trust-unavailable")
 	client := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
 	warmAuthorization(ctx, t, client, adminToken, definitionID, "warm-trust-unavailable")
-	_, err = client.CreateOperation(ctx, request)
+	// AC-074 fail-closed contract: the trust resolver being offline must
+	// surface as verification_unavailable. The authorization module pulls
+	// the snapshot over an RPC with a 200ms deadline; on a loaded CI runner
+	// that deadline can be exceeded repeatedly, so a single retry is not
+	// enough to warm the snapshot. Poll (bounded) until the request reaches
+	// the trust resolver, then assert the fail-closed result below (same
+	// de-flake pattern as the preflight E2E tests, TASK-077).
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		_, err = client.CreateOperation(ctx, request)
+		if err != nil && strings.Contains(err.Error(), "verification_unavailable") {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
 	assert.ErrorContains(t, err, "verification_unavailable")
