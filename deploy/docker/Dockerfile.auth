@@ -1,4 +1,8 @@
 FROM golang:1.26.4 AS builder
+# GOPROXY build-arg: dev.sh injects the host's go env GOPROXY; the default
+# proxy.golang.org is unreachable from CN hosts.
+ARG GOPROXY
+ENV GOPROXY=$GOPROXY
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -9,6 +13,8 @@ FROM gcr.io/distroless/static-debian13:nonroot
 USER nonroot:nonroot
 WORKDIR /data
 COPY --from=builder /out/release-auth /release-auth
-COPY configs/auth.dev.yaml /configs/auth.dev.yaml
 EXPOSE 8085
-ENTRYPOINT ["/release-auth", "--config", "/configs/auth.dev.yaml", "--db", "/data/release-manager.db"]
+# Args come from the Kustomize Deployment (config path + env); the historical
+# --db flag was removed upstream (config-file database.driver), so the
+# ENTRYPOINT must not pass it — the flag package rejects unknown flags.
+ENTRYPOINT ["/release-auth"]

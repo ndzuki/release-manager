@@ -3,7 +3,6 @@ package auth
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -19,9 +18,14 @@ import (
 )
 
 // ServiceTokenInterceptor validates a Bearer token for backend service-to-service
-// communication. The token is compared against a set of allowed hashes using
-// constant-time comparison to prevent timing attacks.
-func ServiceTokenInterceptor(allowedTokens []string, logger *slog.Logger) connect.UnaryInterceptorFunc {
+// communication. The token is compared against a set of allowed SHA-256 hex
+// hashes using constant-time comparison to prevent timing attacks. On success
+// the actor is injected as service:<serviceName> (REQ-011 §562: the bundle
+// ingress consumer authenticates as service:release-webhook). When
+// allowedProcedures is non-empty, only those Connect procedures pass —
+// REQ-011 §561 scopes the CI key to SubmitReleaseBundle and the plan requires
+// the authorization surface not to widen beyond it (v21 Step 6 风险行).
+func ServiceTokenInterceptor(serviceName string, allowedTokens []string, logger *slog.Logger, allowedProcedures ...string) connect.UnaryInterceptorFunc {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -33,6 +37,10 @@ func ServiceTokenInterceptor(allowedTokens []string, logger *slog.Logger) connec
 			continue
 		}
 		hashes[index] = bytes
+	}
+	allowed := make(map[string]bool, len(allowedProcedures))
+	for _, procedure := range allowedProcedures {
+		allowed[procedure] = true
 	}
 	return connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
@@ -46,9 +54,12 @@ func ServiceTokenInterceptor(allowedTokens []string, logger *slog.Logger) connec
 			if !constantTimeMatch(token, hashes) {
 				return nil, connect.NewError(connect.CodePermissionDenied, errors.New("invalid service token"))
 			}
+			if len(allowed) > 0 && !allowed[req.Spec().Procedure] {
+				return nil, connect.NewError(connect.CodePermissionDenied, errors.New("procedure not allowed for service token"))
+			}
 			ctx = authctx.WithActor(ctx, authctx.Actor{
 				UserID:  "system",
-				Service: "backend",
+				Service: serviceName,
 			})
 			return next(ctx, req)
 		}
@@ -98,9 +109,10 @@ func constantTimeMatch(candidate string, hashes [][]byte) bool {
 	if len(hashes) == 0 {
 		return false
 	}
-	mac := hmac.New(sha256.New, nil)
-	mac.Write([]byte(candidate))
-	candidateHash := mac.Sum(nil)
+	// The configured hashes are plain SHA-256 digests (see SHA256Hash, used
+	// by cmd/orchestrator serviceTokens()); comparing the candidate through
+	// the same digest keeps the formats aligned.
+	candidateHash := hashBytes([]byte(candidate))
 	for _, hash := range hashes {
 		if hash == nil {
 			continue

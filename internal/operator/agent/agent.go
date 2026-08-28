@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	"github.com/ndzuki/release-manager/internal/operator/commandtype"
@@ -71,6 +72,7 @@ type Agent struct {
 	operatorID        string
 	logger            *slog.Logger
 	installFlags      InstallFlags
+	registryPlainHTTP bool
 }
 
 // InstallFlags contains operator-wide defaults for INSTALL commands.
@@ -98,6 +100,9 @@ type Config struct {
 	OperatorID   string
 	Logger       *slog.Logger
 	InstallFlags InstallFlags
+	// RegistryPlainHTTP allows OCI chart pulls from a plain HTTP registry
+	// (dev fixture only; production keeps HTTPS — see helmengine options).
+	RegistryPlainHTTP bool
 }
 
 // Result is persisted locally and sent to the orchestrator for idempotent replay.
@@ -160,6 +165,7 @@ func New(cfg Config) (*Agent, error) {
 		operatorID:        cfg.OperatorID,
 		logger:            logger,
 		installFlags:      cfg.InstallFlags,
+		registryPlainHTTP: cfg.RegistryPlainHTTP,
 	}, nil
 }
 
@@ -508,6 +514,49 @@ func (a *Agent) executeSecretMetadataList(ctx context.Context, command *operator
 	result.Secrets = secrets
 	return result
 }
+
+// applyBundleImageOverrides sets each bundle image at its values path. Only
+// FULL_REFERENCE is supported by the dev fixture; the value is the immutable
+// ref@digest the chart should deploy. Mirrors the orchestrator's
+// normalizeImageReference semantics so the rendered manifest matches what
+// preflight verified.
+func applyBundleImageOverrides(values map[string]interface{}, images []*commonv1.BundleImage) error {
+	for _, image := range images {
+		if image.GetRef() == "" || image.GetDigest() == "" || image.GetValuesPath() == "" {
+			return fmt.Errorf("bundle image ref, digest and values_path are required")
+		}
+		fullRef := image.GetRef()
+		if !strings.Contains(fullRef, "@") {
+			fullRef = image.GetRef() + "@" + image.GetDigest()
+		}
+		if err := setValuesPath(values, image.GetValuesPath(), fullRef); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// setValuesPath sets a JSON-style dotted path on a values map (creates
+// intermediate objects).
+func setValuesPath(values map[string]interface{}, path, value string) error {
+	parts := strings.Split(path, ".")
+	if path == "" || value == "" {
+		return fmt.Errorf("image override path and value are required")
+	}
+	current := values
+	for _, part := range parts[:len(parts)-1] {
+		next, ok := current[part].(map[string]interface{})
+		if !ok {
+			child := map[string]interface{}{}
+			current[part] = child
+			next = child
+		}
+		current = next
+	}
+	current[parts[len(parts)-1]] = value
+	return nil
+}
+
 func (a *Agent) executeInstall(ctx context.Context, command *operatorv1.Command, reporter *rolloutReporter) Result {
 	result := Result{
 		OperationID:  command.GetOperationId(),
@@ -534,6 +583,17 @@ func (a *Agent) executeInstall(ctx context.Context, command *operatorv1.Command,
 			return result
 		}
 	}
+	// The bundle's image overrides (values_path + FULL_REFERENCE ref@digest)
+	// must be applied to the installed values: the orchestrator's effective
+	// values only merge the approved document + patch, the image override is
+	// carried in the bundle. Without it the chart deploys its static
+	// image.repository (real smoke 2026-08-27: bare localhost:5001/
+	// release-fixture → ErrImagePull :latest).
+	if err := applyBundleImageOverrides(values, command.GetBundle().GetImages()); err != nil {
+		result.Code = "invalid_command"
+		result.Message = err.Error()
+		return result
+	}
 
 	timeout := a.installFlags.Timeout
 	if command.GetTimeoutSeconds() > 0 {
@@ -541,6 +601,28 @@ func (a *Agent) executeInstall(ctx context.Context, command *operatorv1.Command,
 	}
 
 	started := time.Now()
+	// Idempotent install (real smoke 2026-08-27): the preflight pipeline
+	// dispatches artifact/render/cluster as INSTALL-typed commands and the
+	// wire Command does not carry the stage, so the agent runs a real install
+	// for each. The first stage installs the release; later stages find it
+	// already deployed. Check Status first and replay a deployed release as
+	// success — a genuine Install on an existing release would fail with
+	// ErrAlreadyExists. ErrAlreadyExists from Install still maps to
+	// release_already_exists (a true conflict), so the error contract is
+	// preserved.
+	if existing, statusErr := a.engine.Status(ctx, helmengine.StatusOptions{
+		Namespace:   command.GetNamespace(),
+		ReleaseName: command.GetReleaseName(),
+	}); statusErr == nil && existing != nil && existing.Status == "deployed" {
+		a.logger.Info("release already deployed; install replayed as success",
+			"namespace", command.GetNamespace(), "release", command.GetReleaseName(), "command", command.GetCommandId())
+		result.Status = "succeeded"
+		result.InventorySync = true
+		if existing.ManifestDigest != "" {
+			result.ResourceSummary.ManifestDigest = existing.ManifestDigest
+		}
+		return result
+	}
 	release, err := a.engine.Install(ctx, helmengine.InstallOptions{
 		Namespace:       command.GetNamespace(),
 		ReleaseName:     command.GetReleaseName(),
@@ -549,6 +631,7 @@ func (a *Agent) executeInstall(ctx context.Context, command *operatorv1.Command,
 		Values:          values,
 		Atomic:          a.installFlags.Atomic,
 		CreateNamespace: command.GetCreateNamespace(),
+		PlainHTTP:       a.registryPlainHTTP,
 		Timeout:         timeout,
 	})
 	if err != nil {
@@ -630,6 +713,7 @@ func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command,
 		BundleDigest:          upgrade.GetBundle().GetBundleDigest(),
 		ChartDigest:           upgrade.GetChart().GetDigest(),
 		EffectiveValuesDigest: upgrade.GetEffectiveValuesDigest(),
+		PlainHTTP:             a.registryPlainHTTP,
 		SecretSnapshotDigest:  secretDigest,
 		ResetValues:           true,
 		ReuseValues:           false,

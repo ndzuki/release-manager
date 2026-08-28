@@ -117,19 +117,28 @@ type ArchiveCfg struct {
 	ChecksumAlgorithm string        `mapstructure:"checksum_algorithm"`
 }
 
+// LoginRateLimitCfg controls the per-username login rate limiter (auth
+// service only; other services ignore it). Zero values fall back to the
+// auth service's defaults (5 attempts / 1 minute).
+type LoginRateLimitCfg struct {
+	MaxAttempts int           `mapstructure:"max_attempts"`
+	Window      time.Duration `mapstructure:"window"`
+}
+
 // ServiceConfig holds flat configuration for individual microservices.
 type ServiceConfig struct {
-	HTTPPort      int              `mapstructure:"http_port"`
-	LogLevel      string           `mapstructure:"log_level"`
-	Audit         AuditCfg         `mapstructure:"audit"`
-	Database      DatabaseConfig   `mapstructure:"database"`
-	Redis         RedisConfig      `mapstructure:"redis"`
-	Maintenance   bool             `mapstructure:"maintenance"`
-	Authorization AuthorizationCfg `mapstructure:"authorization"`
-	Values        ValuesConfig     `mapstructure:"values"`
-	Gateway       GatewayCfg       `mapstructure:"gateway"`
-	Agent         AgentCfg         `mapstructure:"agent"`
-	CA            CAConfig         `mapstructure:"ca"`
+	HTTPPort       int               `mapstructure:"http_port"`
+	LogLevel       string            `mapstructure:"log_level"`
+	Audit          AuditCfg          `mapstructure:"audit"`
+	Database       DatabaseConfig    `mapstructure:"database"`
+	Redis          RedisConfig       `mapstructure:"redis"`
+	Maintenance    bool              `mapstructure:"maintenance"`
+	Authorization  AuthorizationCfg  `mapstructure:"authorization"`
+	Values         ValuesConfig      `mapstructure:"values"`
+	Gateway        GatewayCfg        `mapstructure:"gateway"`
+	Agent          AgentCfg          `mapstructure:"agent"`
+	CA             CAConfig          `mapstructure:"ca"`
+	LoginRateLimit LoginRateLimitCfg `mapstructure:"login_rate_limit"`
 }
 
 // AgentCfg controls the operator agent mode (TASK-075): the agent bootstraps
@@ -142,6 +151,11 @@ type AgentCfg struct {
 	ClusterID           string `mapstructure:"cluster_id"`
 	OperatorName        string `mapstructure:"operator_name"`
 	EnrollmentTokenFile string `mapstructure:"enrollment_token_file"`
+	// RegistryPlainHTTP allows the operator to pull OCI charts from a plain
+	// HTTP registry (dev fixture only — the local registry is loopback-bound
+	// and unauthenticated, AC-065-01 D8). Production registries are HTTPS and
+	// must NOT set this (defaults false).
+	RegistryPlainHTTP bool `mapstructure:"registry_plain_http"`
 }
 
 // WithDefaults returns the agent config with the default mode applied.

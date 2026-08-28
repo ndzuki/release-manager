@@ -261,6 +261,29 @@ func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage S
 		}, err
 	}
 
+	// Load the bundle and effective values so EVERY stage command carries
+	// the full execution context. The wire Command does not carry the stage,
+	// and the operator executes each INSTALL-typed stage command against the
+	// bundle — a stage dispatched without it fails `chart_ref is required`
+	// (real smoke 2026-08-27: the render stage rejected a nil bundle). A
+	// missing bundle is tolerated (fall back to nil) for operations without
+	// one.
+	var bundleProto *commonv1.ReleaseBundle
+	var effective []byte
+	if bundle, bundleErr := c.bundles.Get(ctx, op.BundleID); bundleErr == nil {
+		bundleProto = bundleToProto(bundle)
+		// The values passed with the stage command are the approved revision's
+		// canonical document (the operator applies the bundle image overrides
+		// itself during install — real smoke 2026-08-27: mergeEffectiveValues
+		// here failed `values_path "image.repository" does not reference an
+		// object` when the fixture values lacked an image object).
+		if op.ValuesRevisionID != "" {
+			if revision, revErr := c.values.Get(ctx, op.ValuesRevisionID); revErr == nil {
+				effective = revision.CanonicalDocument
+			}
+		}
+	}
+
 	commandID := fmt.Sprintf("%s:%s", op.ID, stage.Name)
 
 	// D-87/ADR-005: reuse an existing row for the same command identity. The
@@ -280,7 +303,7 @@ func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage S
 		}, err
 	}
 
-	payload, err := c.commandPayload(ctx, op, stage.Name, nil, nil)
+	payload, err := c.commandPayload(ctx, op, stage.Name, bundleProto, effective)
 	if err != nil {
 		return emptyResult, err
 	}
@@ -332,7 +355,11 @@ func (c *Coordinator) commandPayload(
 		Bundle: bundle, Namespace: def.Namespace, ReleaseName: def.ReleaseName, Values: values,
 		ValuesRevisionID: op.ValuesRevisionID, ValuesPatch: op.ValuesPatch,
 		ExpectedCurrentRevision: int64(op.ExpectedRevision), TargetRevision: int64(op.TargetRevision),
-		TimeoutSeconds: c.timeoutSeconds,
+		// INSTALL creates the target namespace (the E2E fixture namespaces do
+		// not pre-exist in the customer clusters; real smoke 2026-08-27:
+		// namespaces "e2e-release" not found).
+		CreateNamespace: op.OperationType == store.OperationInstall,
+		TimeoutSeconds:  c.timeoutSeconds,
 	}, nil
 }
 
@@ -377,7 +404,7 @@ func (c *Coordinator) pollStage(ctx context.Context, commandID string, stage Sta
 			}
 
 			switch entry.Status {
-			case store.CommandPersisted:
+			case store.CommandPersisted, store.CommandSucceeded:
 				var result StageResult
 				if entry.ResultJSON != "" {
 					if err := json.Unmarshal([]byte(entry.ResultJSON), &result); err != nil {
@@ -390,7 +417,12 @@ func (c *Coordinator) pollStage(ctx context.Context, commandID string, stage Sta
 					}
 				}
 				result.Stage = stage.Name
-				if result.Status == "" {
+				// The operator's command result writes a helm-shaped JSON
+				// (`{"status":"succeeded",...}`); normalize a successful
+				// execution to StagePassed (real smoke 2026-08-27: the render
+				// stage's CommandSucceeded result was never consumed and the
+				// stage timed out).
+				if result.Status == "" || result.Status == "succeeded" || result.Status == "passed" {
 					result.Status = StagePassed
 				}
 				return result, nil
@@ -478,10 +510,37 @@ func (c *Coordinator) casQueued(ctx context.Context, op *store.Operation, _ Aggr
 		c.logger.Error("preflight→queued transition invalid", "op_id", op.ID, "err", err)
 		return
 	}
-
-	_, err = c.ops.UpdateStatus(ctx, op.ID, next, op.StateVersion, "")
+	queuedOp, err := c.ops.UpdateStatus(ctx, op.ID, next, op.StateVersion, "")
 	if err != nil {
 		c.logger.Error("CAS queued transition failed", "op_id", op.ID, "err", err)
+		return
+	}
+
+	// The wire Command does not carry the preflight stage, so each stage
+	// command is an INSTALL that the operator executes; the first (artifact)
+	// stage already ran the real helm install and the release is deployed.
+	// There is no separate queued→running executor in this wiring, so an
+	// INSTALL operation would sit in `queued` forever and never reach a
+	// terminal state (real smoke 2026-08-27: the fixture release was
+	// deployed but the operation stayed QUEUED). Drive the standard
+	// queued→running→succeeded chain — the install was the execution.
+	if op.OperationType == store.OperationInstall {
+		running, err := operation.Transition(next, operation.EventBegin)
+		if err == nil {
+			runningOp, err := c.ops.UpdateStatus(ctx, op.ID, running, queuedOp.StateVersion, "")
+			if err != nil {
+				c.logger.Error("CAS running transition failed", "op_id", op.ID, "err", err)
+				return
+			}
+			succeeded, err := operation.Transition(running, operation.EventComplete)
+			if err == nil {
+				if _, err = c.ops.UpdateStatus(ctx, op.ID, succeeded, runningOp.StateVersion, ""); err != nil {
+					c.logger.Error("CAS succeeded transition failed", "op_id", op.ID, "err", err)
+				}
+				return
+			}
+		}
+		c.logger.Warn("preflight→succeeded chain invalid; operation stays queued", "op_id", op.ID, "err", err)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 	"github.com/ndzuki/release-manager/internal/values"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // CommandPayload is the JSON body delivered in an outbox entry for a preflight stage.
@@ -31,12 +32,37 @@ type CommandPayload struct {
 	ExpectedCurrentRevision int64                      `json:"expected_current_revision,omitempty"`
 	TargetRevision          int64                      `json:"target_revision,omitempty"`
 	Atomic                  bool                       `json:"atomic,omitempty"`
+	CreateNamespace         bool                       `json:"create_namespace,omitempty"`
 	ValuesPatch             json.RawMessage            `json:"values_patch,omitempty"`
 }
 
 // Marshal serializes the payload to JSON bytes.
 func (p *CommandPayload) Marshal() ([]byte, error) {
 	return json.Marshal(p)
+}
+
+// bundleToProto converts a store bundle into the common proto shape used by
+// preflight dispatch payloads (mirrors the orchestrator service's converter;
+// the preflight package owns its copy so the coordinator can attach the
+// bundle to every stage command — real smoke 2026-08-27: render/cluster
+// stages dispatched with nil bundle failed `chart_ref is required`).
+func bundleToProto(bundle *store.ReleaseBundle) *commonv1.ReleaseBundle {
+	images := make([]*commonv1.BundleImage, 0, len(bundle.Images))
+	for _, image := range bundle.Images {
+		images = append(images, &commonv1.BundleImage{
+			Ref: image.Ref, Digest: image.Digest, ValuesPath: image.ValuesPath,
+			ValueKind: commonv1.ImageValueKind(commonv1.ImageValueKind_value[string(image.ValueKind)]),
+		})
+	}
+	return &commonv1.ReleaseBundle{
+		Id: bundle.ID, Name: bundle.Name,
+		Digest:   &commonv1.ReleaseDigest{Algorithm: bundle.DigestAlg, Value: bundle.DigestValue},
+		Status:   commonv1.BundleStatus(commonv1.BundleStatus_value["BUNDLE_STATUS_"+strings.ToUpper(string(bundle.Status))]),
+		ChartRef: bundle.ChartRef, ChartVersion: bundle.ChartVersion, ChartDigest: bundle.ChartDigest,
+		Images: images, GitCommit: bundle.GitCommit, PipelineId: bundle.PipelineID,
+		SignatureRef: bundle.SignatureRef, SbomRef: bundle.SBOMRef, ProvenanceRef: bundle.ProvenanceRef,
+		CreatedAt: timestamppb.New(bundle.CreatedAt),
+	}
 }
 
 // UnmarshalCommandPayload deserializes a command payload from raw bytes.

@@ -93,126 +93,34 @@ run-notifier: build-notifier ## Start release-notifier
 run-api: build-api ## Start release-api
 	./$(BIN_DIR)/release-api --config configs/api.dev.yaml --db data/api.db --signing-key change-me-in-production
 
-.PHONY: dev
-dev: proto build-all ## Start all 6 microservices in background
-	@mkdir -p data
-	@echo "$(YELLOW)Starting all services in background...$(NC)"
-	@./$(BIN_DIR)/release-webhook --config configs/webhook.dev.yaml > data/webhook.log 2>&1 & echo $$! > data/webhook.pid
-	@./$(BIN_DIR)/release-orchestrator --config configs/orchestrator.dev.yaml --db data/release-manager.db > data/orchestrator.log 2>&1 & echo $$! > data/orchestrator.pid
-	@./$(BIN_DIR)/release-operator --config configs/operator.dev.yaml --db data/release-manager.db > data/operator.log 2>&1 & echo $$! > data/operator.pid
-	@./$(BIN_DIR)/release-auth --config configs/auth.dev.yaml --db data/release-manager.db > data/auth.log 2>&1 & echo $$! > data/auth.pid
-	@./$(BIN_DIR)/release-notifier --config configs/notifier.dev.yaml > data/notifier.log 2>&1 & echo $$! > data/notifier.pid
-	@./$(BIN_DIR)/release-api --config configs/api.dev.yaml > data/api.log 2>&1 & echo $$! > data/api.pid
-	@sleep 1
-	@echo ""
-	@echo "$(GREEN)All 6 services started.$(NC)  Connect: gRPC + gRPC-Web + JSON on one port"
-	@echo "$(BLUE)  webhook:       :8082$(NC)"
-	@echo "$(BLUE)  orchestrator:  :8083$(NC)"
-	@echo "$(BLUE)  operator:      :8084$(NC)"
-	@echo "$(BLUE)  auth:           :8085$(NC)"
-	@echo "$(BLUE)  notifier:      :8086$(NC)"
-	@echo "$(BLUE)  api:            :8087$(NC)"
-	@echo ""
-	@echo "$(YELLOW)Kulala shortcuts:$(NC)"
-	@echo "  make api-orchestrator  -> CreateOperation / PublishRelease"
-	@echo "  make api-manager       -> REST APIs (Customers / Clusters / Releases)"
-	@echo "  make api-operator      -> Operator gRPC"
-	@echo "  make api-auth          -> Auth / Login"
-	@echo "  make api-webhook       -> Webhook simulation"
-	@echo "  make api-audit         -> Audit / Notifications"
-	@echo ""
-	@echo "$(YELLOW)Stop all:$(NC)  make stop-all"
-	@echo "$(YELLOW)View logs:$(NC) tail -f data/*.log"
-
-.PHONY: stop-all
-stop-all: ## Stop all background microservices
-	@echo "$(YELLOW)Stopping all services...$(NC)"
-	@for pidf in data/*.pid; do \
-		[ -f "$$pidf" ] && kill $$(cat "$$pidf") 2>/dev/null && rm "$$pidf" || true; \
-	done
-	@for port in 8082 8083 8084 8085 8086 8087; do \
-		fuser -k $$port/tcp 2>/dev/null || true; \
-	done
-	@echo "$(GREEN)All services stopped$(NC)"
-
 # ---------------------------------------------------------------------------
-# Kind development environment
+# Development environment (single lifecycle module: deploy/dev/dev.sh)
 # ---------------------------------------------------------------------------
-KIND_CLUSTER_NAME := release-manager-dev
-KIND_REGISTRY_PORT := 5001
-KIND_SCRIPT := deploy/kind/registry.sh
-KUSTOMIZE_DIR := deploy/kustomize/dev
-REGISTRY := localhost:$(KIND_REGISTRY_PORT)
-IMAGE_TAG := dev
-
-.PHONY: kind-up
-kind-up: ## Create the idempotent Kind cluster and local registry
-	@$(KIND_SCRIPT) up
-
-.PHONY: kind-down
-kind-down: ## Delete only the project Kind cluster; retain the registry
-	@$(KIND_SCRIPT) down
-
-.PHONY: kind-status
-kind-status: ## Show project Kind cluster and registry state
-	@$(KIND_SCRIPT) status
-
-.PHONY: docker-build
-docker-build: proto ## Build all service images for the local registry
-	@mkdir -p data
-	@for service in $(SERVICES); do \
-		docker build --file deploy/docker/Dockerfile.$$service --tag $(REGISTRY)/release-$$service:$(IMAGE_TAG) . || exit $$?; \
-	done
-
-.PHONY: docker-push
-docker-push: docker-build ## Push all service images to the local registry
-	@for service in $(SERVICES); do docker push $(REGISTRY)/release-$$service:$(IMAGE_TAG) || exit $$?; done
-
-.PHONY: kustomize-build
-kustomize-build: ## Render the complete development Kubernetes manifest
-	@kustomize build $(KUSTOMIZE_DIR)
-
-.PHONY: kustomize-apply
-kustomize-apply: ## Apply the complete development Kubernetes manifest
-	@kubectl apply -k $(KUSTOMIZE_DIR)
-
-.PHONY: kustomize-delete
-kustomize-delete: ## Delete only Release Manager development resources
-	@kubectl delete -k $(KUSTOMIZE_DIR) --ignore-not-found
-
-.PHONY: dev-wait
-dev-wait: ## Wait for development services to become ready
-	@kubectl -n release-manager-dev wait --for=condition=Available deployment --all --timeout=180s
-	@for port in 8082 8083 8084 8085 8086 8087; do \
-		curl --fail --silent --show-error --retry 20 --retry-delay 2 http://127.0.0.1:$$port/readyz >/dev/null || exit $$?; \
-	done
-	@echo "$(GREEN)Development endpoints are reachable on localhost:8082-8087$(NC)"
+DEV_SCRIPT := deploy/dev/dev.sh
 
 .PHONY: dev-up
-dev-up: kind-up docker-push kustomize-apply dev-wait dev-seed ## Create, build, deploy, seed, and verify the complete development environment
-	@echo "$(GREEN)Development environment is ready$(NC)"
-	@echo "  webhook:       http://127.0.0.1:8082"
-	@echo "  orchestrator:  http://127.0.0.1:8083"
-	@echo "  operator:      http://127.0.0.1:8084"
-	@echo "  auth:          http://127.0.0.1:8085"
-	@echo "  notifier:      http://127.0.0.1:8086"
-	@echo "  api:           http://127.0.0.1:8087"
-
-.PHONY: dev-seed
-dev-seed: ## Seed deterministic development customers, clusters, routes, definitions, values, and bundle
-	@$(GO) run ./cmd/devseed/ --orchestrator http://127.0.0.1:8083 --webhook http://127.0.0.1:8082 --auth http://127.0.0.1:8085
-
-.PHONY: dev-reset-data
-dev-reset-data: ## Recreate only the project development environment with explicit confirmation
-	@test "$(CONFIRM)" = "1" || { echo "refusing destructive reset; rerun with CONFIRM=1" >&2; exit 2; }
-	@kubectl delete -k $(KUSTOMIZE_DIR) --ignore-not-found
-	@kubectl apply -k $(KUSTOMIZE_DIR)
-	@$(MAKE) dev-wait dev-seed
+dev-up: ## Create/converge the full dev environment (idempotent)
+	@$(DEV_SCRIPT) up
 
 .PHONY: dev-down
-dev-down: kind-down ## Delete only the project Kind cluster; retain registry and external resources
-	@echo "$(GREEN)Project Kind cluster removed; registry and external resources retained$(NC)"
+dev-down: ## Delete the 5 managed k3d clusters; retain registry and images
+	@$(DEV_SCRIPT) down
 
+.PHONY: dev-seed
+dev-seed: ## Write/verify the Development Fixture via the formal Connect API
+	@$(DEV_SCRIPT) seed
+
+.PHONY: dev-reset-data
+dev-reset-data: ## Dump + rebuild databases and re-seed (requires CONFIRM=1)
+	@$(DEV_SCRIPT) reset-data
+
+.PHONY: dev-status
+dev-status: ## Print machine-readable data/dev-status.json
+	@$(DEV_SCRIPT) status
+
+.PHONY: dev-purge
+dev-purge: ## Delete every managed resource incl. registry (requires CONFIRM=1)
+	@$(DEV_SCRIPT) purge
 # ---------------------------------------------------------------------------
 # Kulala integration — open .http files directly in Neovim
 # ---------------------------------------------------------------------------

@@ -1,0 +1,29 @@
+# Build-context scope for the release-web image (REQ-065: only web/ sources
+# plus the package manifests influence the image; the Node build regenerates
+# dist/ and tsbuildinfo).
+.git
+.github
+.vscode
+.idea
+/bin
+/data
+/coverage.out
+*.log
+*.pid
+/test
+/docs
+/configs
+/deploy
+/cmd
+/internal
+/api
+/migrations
+/auth
+/webhook
+web/node_modules
+web/dist
+web/*.tsbuildinfo
+web/vite.config.d.ts
+web/vite.config.d.ts.map
+**/*_test.go
+test/e2e/testdata

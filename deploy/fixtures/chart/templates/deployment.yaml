@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-fixture
+  # Pin the namespace explicitly (same rationale as the Service template).
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: release-fixture
+    app.kubernetes.io/part-of: release-manager
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: release-fixture
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: release-fixture
+        app.kubernetes.io/part-of: release-manager
+    spec:
+      securityContext:
+        fsGroup: 65532
+      containers:
+        - name: release-fixture
+          # The bundle overrides image.repository with the full reference
+          # (FULL_REFERENCE value kind), so the template uses it directly —
+          # appending :{{ .Values.image.tag }} would produce a double tag
+          # (real smoke 2026-08-27: ErrImagePull on the malformed ref).
+          image: "{{ .Values.image.repository }}"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8088
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi

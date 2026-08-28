@@ -121,6 +121,10 @@ type InstallOptions struct {
 	Atomic          bool          // rollback on failure
 	CreateNamespace bool          // create namespace if missing
 	Timeout         time.Duration // helm install timeout
+	// PlainHTTP allows OCI chart pulls from a plain HTTP registry (dev
+	// fixture only — the local registry is loopback/unauthenticated). Defaults
+	// false so production OCI pulls stay HTTPS.
+	PlainHTTP bool
 }
 
 // UpgradeOptions holds parameters for the Helm SDK Upgrade method.
@@ -141,6 +145,9 @@ type UpgradeOptions struct {
 	EffectiveValuesDigest  string
 	SecretSnapshotDigest   string
 	ExpectedManifestDigest string
+	// PlainHTTP allows OCI chart pulls from a plain HTTP registry (dev
+	// fixture only). Defaults false so production stays HTTPS.
+	PlainHTTP bool
 	ResetValues            bool
 	ReuseValues            bool
 	CleanupOnFail          bool

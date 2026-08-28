@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"connectrpc.com/connect"
@@ -137,7 +138,20 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	s.traceShutdown = authorization.InstallTracing()
 	authzConfig := s.cfg.Authorization.WithDefaults()
 	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)
-	limiter := auth.NewRateLimiter(5, time.Minute)
+	// Per-username login rate limit: the production default is 5 attempts /
+	// minute; the dev environment configures a higher bound because the
+	// fixture re-authenticates every account during seed/resume and retries
+	// (real smoke 2026-08-27: `resource_exhausted: too many login attempts`
+	// blocked devseed's accounts drift check mid-reset).
+	maxAttempts := 5
+	window := time.Minute
+	if s.cfg.LoginRateLimit.MaxAttempts > 0 {
+		maxAttempts = s.cfg.LoginRateLimit.MaxAttempts
+	}
+	if s.cfg.LoginRateLimit.Window > 0 {
+		window = s.cfg.LoginRateLimit.Window
+	}
+	limiter := auth.NewRateLimiter(maxAttempts, window)
 	resolver := auth.StubResolver{}
 
 	enforcer, err := auth.NewEnforcer(s.store, logger, metrics)
@@ -216,8 +230,20 @@ func authReadOnlyProcedures() map[string]struct{} {
 }
 func main() {
 	configPath := flag.String("config", "configs/auth.dev.yaml", "path to config file")
-	signingKey := flag.String("signing-key", "change-me-in-production", "JWT signing key")
+	// REQ-065 D3: the dev lifecycle injects the JWT signing key through the
+	// release-manager-jwt Secret as the JWT_SIGNING_KEY env var; the flag
+	// default falls back to it so the Kustomize Deployment needs no static
+	// key in args (Kubernetes cannot expand secretKeyRef values in args).
+	signingKey := flag.String("signing-key", envOr("JWT_SIGNING_KEY", "change-me-in-production"), "JWT signing key")
 	flag.Parse()
 
 	app.Run(*configPath, &authSvc{signingKey: *signingKey})
+}
+
+// envOr returns the environment value or the fallback when unset.
+func envOr(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }

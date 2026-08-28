@@ -1,0 +1,22 @@
+# Build-context scope for the release-webhook image (REQ-065 content-sha256:
+# go.mod/go.sum + cmd/webhook + internal influence the image).
+.git
+.github
+.vscode
+.idea
+/bin
+/data
+/coverage.out
+*.log
+*.pid
+/test
+/docs
+/configs
+/deploy
+/web
+/auth
+/webhook
+web/node_modules
+web/dist
+**/*_test.go
+test/e2e/testdata

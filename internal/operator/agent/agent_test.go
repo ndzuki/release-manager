@@ -24,8 +24,33 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-func TestAgent_InstallCommand(t *testing.T) {
+// TestAgent_InstallReplaysDeployedRelease locks the idempotent install
+// contract (real smoke 2026-08-27): the preflight pipeline dispatches
+// artifact/render/cluster as INSTALL-typed commands (the wire Command carries
+// no stage), so later stages find the release already deployed by the first
+// install. executeInstall must replay a deployed release as success without
+// calling Install again.
+func TestAgent_InstallReplaysDeployedRelease(t *testing.T) {
 	engine := &recordingEngine{
+		statusRelease: &helmengine.Release{
+			Name: "example", Namespace: "apps", Revision: 1, Status: "deployed", ManifestDigest: "sha256:replay",
+		},
+	}
+	store := newMemoryStore()
+	agent := newTestAgent(t, engine, store, nil)
+	stream := newTestStream()
+	command := installCommand("cmd-replay")
+
+	require.NoError(t, agent.handleCommand(t.Context(), stream, command))
+	require.Len(t, stream.sent, 2)
+	assert.Equal(t, "succeeded", stream.sent[1].GetResult().GetStatus())
+	assert.Equal(t, 0, engine.installCalls, "deployed release must not re-install")
+	assert.Equal(t, 1, engine.statusCalls)
+	assert.Contains(t, stream.sent[1].GetResult().GetResultJson(), `"manifest_digest":"sha256:replay"`)
+}
+
+// TestAgent_InstallCommand covers the happy path install.
+func TestAgent_InstallCommand(t *testing.T) {	engine := &recordingEngine{
 		release: &helmengine.Release{
 			Name:           "example",
 			Namespace:      "apps",
@@ -55,6 +80,35 @@ func TestAgent_InstallCommand(t *testing.T) {
 	assert.True(t, engine.lastInstall.CreateNamespace)
 	assert.Equal(t, 45*time.Second, engine.lastInstall.Timeout)
 	assert.Equal(t, 1, notifier.calls)
+}
+
+// TestAgent_InstallAppliesBundleImageOverride locks the install image
+// contract (real smoke 2026-08-27): the bundle image (values_path +
+// FULL_REFERENCE) must be merged into the installed values — otherwise the
+// chart deploys its static image.repository (bare localhost:5001/... →
+// ErrImagePull :latest).
+func TestAgent_InstallAppliesBundleImageOverride(t *testing.T) {
+	engine := &recordingEngine{
+		release: &helmengine.Release{Name: "example", Namespace: "apps", Revision: 1, Status: "deployed", ManifestDigest: "sha256:m"},
+	}
+	store := newMemoryStore()
+	agent := newTestAgent(t, engine, store, nil)
+	command := installCommand("cmd-img")
+	command.Bundle = &commonv1.ReleaseBundle{
+		Name: "bundle", ChartRef: "oci://registry.example.com/charts/example", ChartVersion: "1.0.0",
+		Images: []*commonv1.BundleImage{{
+			Ref: "localhost:5001/release-fixture:dev", Digest: "sha256:abc123",
+			ValuesPath: "image.repository",
+			ValueKind:  commonv1.ImageValueKind_IMAGE_VALUE_KIND_FULL_REFERENCE,
+		}},
+	}
+	command.Values = []byte(`{"message":"hello"}`)
+
+	require.NoError(t, agent.handleCommand(t.Context(), newTestStream(), command))
+	image, ok := engine.lastInstall.Values["image"].(map[string]interface{})
+	require.True(t, ok, "install values must carry an image object")
+	assert.Equal(t, "localhost:5001/release-fixture:dev@sha256:abc123", image["repository"])
+	assert.Equal(t, "hello", engine.lastInstall.Values["message"])
 }
 
 func TestAgent_DuplicateCommandReturnsCachedResult(t *testing.T) {

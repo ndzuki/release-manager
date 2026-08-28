@@ -1,0 +1,5 @@
+http_port: 8086
+log_level: debug
+database:
+  driver: postgres
+  dsn: postgres://release_manager:dev-release-manager@postgres:5432/release_notifier?sslmode=disable

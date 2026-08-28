@@ -881,6 +881,15 @@ func (s *Service) FinishOperation(ctx context.Context, operationID, resultStatus
 	}
 
 	current := op.Status
+	// A preflight-stage command result must NOT finalize the operation: the
+	// operation is still in `preflight` and the coordinator CASes
+	// preflight→queued/failed after ALL stages pass (real smoke 2026-08-27:
+	// the artifact stage result triggered `invalid state transition: complete
+	// from preflight`). Only queued/running standard operations are finalized
+	// here.
+	if current == store.StatusPreflight {
+		return
+	}
 	if current == store.StatusPending {
 		if resultStatus == "failed" {
 			if _, err := s.store.Operations().UpdateStatus(ctx, op.ID, store.StatusFailed, op.StateVersion, resultJSON); err != nil {

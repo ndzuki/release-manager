@@ -23,10 +23,20 @@ spec:
         - name: auth
           image: localhost:5001/release-auth:dev
           imagePullPolicy: IfNotPresent
-          args: ["--config", "/configs/auth.dev.yaml", "--signing-key", "dev-only-signing-key"]
-          envFrom:
-            - secretRef:
-                name: release-manager-dev-credentials
+          args:
+            - --config
+            - /configs/auth.dev.yaml
+          # D3: the JWT signing key travels via the JWT_SIGNING_KEY env var
+          # (release-manager-jwt Secret); cmd/auth falls back to it for the
+          # --signing-key flag default. Kubernetes cannot expand
+          # secretKeyRef values inside args ($(VAR) only sees env `value`),
+          # and the key rotation rolls the Deployment via the Secret hash.
+          env:
+            - name: JWT_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: release-manager-jwt
+                  key: JWT_SIGNING_KEY
           ports:
             - name: http
               containerPort: 8085
@@ -49,12 +59,13 @@ spec:
               cpu: 250m
               memory: 256Mi
           volumeMounts:
-            - name: data
-              mountPath: /data
+            - name: config
+              mountPath: /configs/auth.dev.yaml
+              subPath: auth.dev.yaml
       volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: release-manager-dev-data
+        - name: config
+          configMap:
+            name: auth-config
 ---
 apiVersion: v1
 kind: Service
@@ -62,9 +73,11 @@ metadata:
   name: auth
   namespace: release-manager-dev
 spec:
+  type: NodePort
   selector:
     app.kubernetes.io/name: auth
   ports:
     - name: http
       port: 8085
       targetPort: http
+      nodePort: 30085

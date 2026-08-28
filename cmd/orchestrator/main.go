@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -51,6 +53,7 @@ type orchSvc struct {
 	validation    *orchestrator.ValidationWorker
 	auditEmitter  audit.Sink
 	authorizer    *authorization.Module
+	enforcer      *auth.Enforcer
 	traceShutdown func(context.Context) error
 	trustResolver trust.RootResolver
 
@@ -370,6 +373,15 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if err := enforcer.LoadPolicies(context.Background()); err != nil {
 		return fmt.Errorf("load orchestrator policies: %w", err)
 	}
+	// The shared AuthInterceptor enforces against this Casbin enforcer. It
+	// must hot-reload the durable policy like cmd/auth does: the dev
+	// fixture's Initialize creates the organization + platform_admin AFTER
+	// the orchestrator has booted, so a boot-time-only snapshot stays empty
+	// and every post-seed protected call is denied (real smoke 2026-08-24:
+	// devseed identity phase `list customers: permission_denied` with an
+	// empty policy). The reloader keeps the interceptor fresh on the same
+	// cadence as the auth service.
+	s.enforcer = enforcer
 
 	path, handler := orchestratorv1connect.NewOrchestratorServiceHandler(
 		svc,
@@ -411,7 +423,12 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 			contractsinterceptor.NewErrorSanitizeInterceptor(logger),
 			auth.TryAllInterceptor(logger,
 				auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, map[string]bool{}, logger),
-				auth.ServiceTokenInterceptor(s.serviceTokens(), logger),
+				// REQ-011 §562 bundle ingress (D-100 选项 B dev wiring):
+				// the webhook forwards its dev service token; the actor is
+				// service:release-webhook and the token is scoped to
+				// SubmitReleaseBundle only (REQ-011 §561, v21 Step 6 风险行).
+				auth.ServiceTokenInterceptor("release-webhook", s.serviceTokens(), logger,
+					orchestratorv1connect.BundleServiceSubmitBundleProcedure),
 			),
 		),
 	)
@@ -570,6 +587,11 @@ func (s *orchSvc) Run(ctx context.Context) {
 	if s.authorizer != nil {
 		go s.authorizer.Run(ctx)
 	}
+	// Durable authorization policy hot-reload (shared interceptor freshness;
+	// see the enforcer wiring above). Maintenance mode skips background work.
+	if s.enforcer != nil && !s.cfg.Maintenance {
+		go s.enforcer.StartPolicyReloader(ctx, s.cfg.Authorization.WithDefaults().PolicyReloadInterval)
+	}
 	if s.validation != nil {
 		go s.validation.Run(ctx)
 	}
@@ -594,7 +616,26 @@ func (s *orchSvc) Run(ctx context.Context) {
 	}
 }
 
-func (s *orchSvc) serviceTokens() []string { return nil }
+// serviceTokens returns the bundle ingress service token hashes
+// (REQ-011 §562 dev minimal wiring, D-100 选项 B, AC-065-33): the current
+// and previous tokens load from DEV_WEBHOOK_SERVICE_TOKEN /
+// DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS and are stored as SHA-256 hex digests —
+// the plaintext never leaves the env; ServiceTokenInterceptor compares the
+// inbound bearer constant-time against these hashes. Empty env returns nil:
+// production/non-dev behavior is unchanged (bundle ingress keeps requiring
+// the JWT path, and no token is silently accepted).
+func (s *orchSvc) serviceTokens() []string {
+	current := strings.TrimSpace(os.Getenv("DEV_WEBHOOK_SERVICE_TOKEN"))
+	previous := strings.TrimSpace(os.Getenv("DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS"))
+	var tokens []string
+	if current != "" {
+		tokens = append(tokens, auth.SHA256Hash([]byte(current)))
+	}
+	if previous != "" {
+		tokens = append(tokens, auth.SHA256Hash([]byte(previous)))
+	}
+	return tokens
+}
 
 func loadSourceRegistries(logger *slog.Logger) []orchestrator.SourceRegistry {
 	_ = logger
@@ -604,8 +645,20 @@ func loadSourceRegistries(logger *slog.Logger) []orchestrator.SourceRegistry {
 func main() {
 	configPath := flag.String("config", "configs/orchestrator.dev.yaml", "path to config file")
 	targetEnv := flag.String("target-env", "staging", "target environment (production, staging)")
-	signingKey := flag.String("signing-key", "change-me-in-production", "JWT signing key")
+	// REQ-065 D3: the dev lifecycle injects the JWT signing key through the
+	// release-manager-jwt Secret as the JWT_SIGNING_KEY env var; the flag
+	// default falls back to it so the Kustomize Deployment needs no static
+	// key in args (Kubernetes cannot expand secretKeyRef values in args).
+	signingKey := flag.String("signing-key", envOr("JWT_SIGNING_KEY", "change-me-in-production"), "JWT signing key")
 	flag.Parse()
 
 	app.Run(*configPath, &orchSvc{targetEnv: *targetEnv, configPath: *configPath, signingKey: *signingKey})
+}
+
+// envOr returns the environment value or the fallback when unset.
+func envOr(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }

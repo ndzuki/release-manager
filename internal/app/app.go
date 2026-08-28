@@ -6,6 +6,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -70,6 +71,51 @@ type tlsService interface {
 	TLSCertificateFiles() (certFile string, keyFile string, enabled bool)
 }
 
+// environmentResponse is the GET /environment payload (REQ-065). Every
+// management-plane service answers this endpoint with identical metadata so
+// clients can assert a single dev environment.
+type environmentResponse struct {
+	Service       string `json:"service"`
+	Environment   string `json:"environment"`
+	EnvironmentID string `json:"environment_id"`
+	Production    bool   `json:"production"`
+}
+
+// environmentHandler builds the GET /environment handler for one service.
+// Metadata is injected by the deployment (Kustomize generators):
+//   - APP_ENVIRONMENT defaults to "development";
+//   - ENVIRONMENT_ID defaults from DEV_PROFILE: dev-local, or ci-<E2E_RUN_ID>;
+//   - production is false unless APP_PRODUCTION is exactly "true".
+//
+// The Service interface is intentionally not extended (REQ-065).
+func environmentHandler(service string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		environment := os.Getenv("APP_ENVIRONMENT")
+		if environment == "" {
+			environment = "development"
+		}
+		envID := os.Getenv("ENVIRONMENT_ID")
+		if envID == "" {
+			switch os.Getenv("DEV_PROFILE") {
+			case "ci":
+				envID = "ci-" + os.Getenv("E2E_RUN_ID")
+			default:
+				envID = "dev-local"
+			}
+		}
+		production := os.Getenv("APP_PRODUCTION") == "true"
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		//nolint:errcheck // response encoding failure after headers are sent is not actionable
+		json.NewEncoder(w).Encode(environmentResponse{
+			Service:       service,
+			Environment:   environment,
+			EnvironmentID: envID,
+			Production:    production,
+		})
+	}
+}
+
 // Run starts a service with config loading, signal handling, and graceful shutdown.
 //
 //nolint:gocyclo // Service startup keeps lifecycle and shutdown gates explicit in one owner.
@@ -95,6 +141,7 @@ func Run(configPath string, svc Service) {
 	} else {
 		mux.HandleFunc("GET /health", handler.Health())
 	}
+	mux.HandleFunc("GET /environment", environmentHandler(svc.Name()))
 
 	if err := svc.Register(mux, logger); err != nil {
 		logger.Error("failed to register service", "error", err)

@@ -23,7 +23,24 @@ spec:
         - name: webhook
           image: localhost:5001/release-webhook:dev
           imagePullPolicy: IfNotPresent
-          args: ["--config", "/configs/webhook.dev.yaml", "--db", "/data/release-manager.db"]
+          args:
+            - --config
+            - /configs/webhook.dev.yaml
+            - --orchestrator-url
+            - http://orchestrator:8083
+          # D3: every management-plane service consumes release-manager-jwt.
+          envFrom:
+            - secretRef:
+                name: release-manager-jwt
+          # 批次3 D2 (AC-065-33): sender-side bundle ingress service token —
+          # forwarded as `Authorization: Bearer <token>` to the orchestrator
+          # BundleService (actor service:release-webhook, REQ-011 §562).
+          env:
+            - name: DEV_WEBHOOK_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: release-manager-webhook-service-token
+                  key: WEBHOOK_SERVICE_TOKEN
           ports:
             - name: http
               containerPort: 8082
@@ -46,12 +63,13 @@ spec:
               cpu: 250m
               memory: 256Mi
           volumeMounts:
-            - name: data
-              mountPath: /data
+            - name: config
+              mountPath: /configs/webhook.dev.yaml
+              subPath: webhook.dev.yaml
       volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: release-manager-dev-data
+        - name: config
+          configMap:
+            name: webhook-config
 ---
 apiVersion: v1
 kind: Service
@@ -59,9 +77,11 @@ metadata:
   name: webhook
   namespace: release-manager-dev
 spec:
+  type: NodePort
   selector:
     app.kubernetes.io/name: webhook
   ports:
     - name: http
       port: 8082
       targetPort: http
+      nodePort: 30082

@@ -568,7 +568,24 @@ func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
 	request.Header().Set("Idempotency-Key", "trust-unavailable")
 	client := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
 	warmAuthorization(ctx, t, client, adminToken, definitionID, "warm-trust-unavailable")
-	_, err = client.CreateOperation(ctx, request)
+	// AC-074 fail-closed contract: the trust resolver being offline must
+	// surface as verification_unavailable. The authorization module pulls
+	// the snapshot over an RPC with a 200ms deadline; on a loaded CI runner
+	// that deadline can be exceeded repeatedly, so a single retry is not
+	// enough to warm the snapshot. Poll (bounded) until the request reaches
+	// the trust resolver, then assert the fail-closed result below (same
+	// de-flake pattern as the preflight E2E tests, TASK-077).
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		_, err = client.CreateOperation(ctx, request)
+		if err != nil && strings.Contains(err.Error(), "verification_unavailable") {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
 	assert.ErrorContains(t, err, "verification_unavailable")
@@ -1747,10 +1764,12 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 		require.NoError(t, svc.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
 	}
 
-	// AC-019-04/06: operation CAS to queued, lifecycle passed with canonical stages.
+	// AC-019-04/06: operation CAS to succeeded for INSTALL (the precheck
+	// artifact stage executed the real install — no separate executor exists;
+	// real smoke 2026-08-28), lifecycle passed with canonical stages.
 	require.Eventually(t, func() bool {
 		op, err := svc.store.Operations().Get(ctx, opID)
-		return err == nil && op.Status == store.StatusQueued
+		return err == nil && op.Status == store.StatusSucceeded
 	}, 5*time.Second, 50*time.Millisecond)
 	// The lifecycle finalization is a separate transaction from the operation
 	// CAS (observational write), so poll for the terminal result too — the
@@ -1788,4 +1807,45 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 		pl, err := svc2.store.PreflightLifecycles().GetByOperationID(ctx, restartOpID)
 		return err == nil && pl.Overall == "running"
 	}, 5*time.Second, 50*time.Millisecond)
+}
+
+// TestServiceTokensEnvLoading covers AC-065-33 (verifier side, REQ-011 §562):
+// serviceTokens() reads DEV_WEBHOOK_SERVICE_TOKEN (current) and
+// DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS (previous) and returns their SHA-256
+// hex digests — never the plaintext. Empty env returns nil so non-dev
+// behavior is unchanged.
+func TestServiceTokensEnvLoading(t *testing.T) {
+	svc := &orchSvc{}
+
+	t.Run("empty env returns nil", func(t *testing.T) {
+		t.Setenv("DEV_WEBHOOK_SERVICE_TOKEN", "")
+		t.Setenv("DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS", "")
+		assert.Nil(t, svc.serviceTokens())
+	})
+
+	t.Run("current only", func(t *testing.T) {
+		t.Setenv("DEV_WEBHOOK_SERVICE_TOKEN", "dev-token")
+		t.Setenv("DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS", "")
+		tokens := svc.serviceTokens()
+		require.Len(t, tokens, 1)
+		assert.Equal(t, auth.SHA256Hash([]byte("dev-token")), tokens[0])
+		assert.NotContains(t, strings.Join(tokens, " "), "dev-token")
+	})
+
+	t.Run("current and previous", func(t *testing.T) {
+		t.Setenv("DEV_WEBHOOK_SERVICE_TOKEN", "dev-token-current")
+		t.Setenv("DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS", "dev-token-previous")
+		tokens := svc.serviceTokens()
+		require.Len(t, tokens, 2)
+		assert.Equal(t, auth.SHA256Hash([]byte("dev-token-current")), tokens[0])
+		assert.Equal(t, auth.SHA256Hash([]byte("dev-token-previous")), tokens[1])
+	})
+
+	t.Run("whitespace trimmed", func(t *testing.T) {
+		t.Setenv("DEV_WEBHOOK_SERVICE_TOKEN", "  dev-token  ")
+		t.Setenv("DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS", "")
+		tokens := svc.serviceTokens()
+		require.Len(t, tokens, 1)
+		assert.Equal(t, auth.SHA256Hash([]byte("dev-token")), tokens[0])
+	})
 }

@@ -50,6 +50,7 @@ type operatorSvc struct {
 	operatorName        string
 	caCertPath          string
 	enrollmentTokenFile string
+	registryPlainHTTP   bool
 	installAtomic       bool
 	installTimeout      time.Duration
 	st                  *sqlitestore.Store
@@ -68,6 +69,7 @@ func (s *operatorSvc) Configure(cfg *config.ServiceConfig) {
 	s.clusterID = agentCfg.ClusterID
 	s.operatorName = agentCfg.OperatorName
 	s.enrollmentTokenFile = agentCfg.EnrollmentTokenFile
+	s.registryPlainHTTP = agentCfg.RegistryPlainHTTP
 	s.caCertPath = cfg.CA.CertPath
 }
 
@@ -217,6 +219,7 @@ func (s *operatorSvc) registerAgent(logger *slog.Logger) error {
 			Atomic:  s.installAtomic,
 			Timeout: s.installTimeout,
 		},
+		RegistryPlainHTTP: s.registryPlainHTTP,
 	})
 	if err != nil {
 		return fmt.Errorf("create operator agent: %w", err)

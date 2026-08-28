@@ -1,0 +1,14 @@
+http_port: 8084
+log_level: debug
+agent:
+  mode: agent
+  customer_id: 11111111-1111-4111-8111-111111111111
+  cluster_id: dev-customer-a-cache
+  operator_name: dev-customer-a-cache
+ca:
+  cert_path: /data/gateway-ca.crt
+
+# Dev fixture registry is plain HTTP (loopback-bound, unauthenticated,
+# AC-065-01 D8): allow OCI chart pulls over HTTP. Production registries stay
+# HTTPS (registry_plain_http defaults false).
+registry_plain_http: true

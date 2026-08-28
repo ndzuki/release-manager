@@ -165,21 +165,30 @@ func (s *valuesStore) GetNextRevisionNumber(ctx context.Context, definitionID st
 const valuesSelect = `
 	SELECT id, release_definition_id, version, state_version, status, "values",
 		digest, parent_revision_id, secret_refs, created_by_user_id,
-		submitted_at, decided_at, convergence_task_ids::text[], locked_paths,
+		submitted_at, decided_at,
+		array_to_json(convergence_task_ids) AS convergence_task_ids,
+		array_to_json(locked_paths) AS locked_paths,
 		created_at, updated_at
 	FROM values_revisions`
 
 func scanValues(row interface{ Scan(...any) error }) (*store.ValuesRevision, error) {
 	var revision store.ValuesRevision
 	var status string
-	var refs []byte
+	var refs, convergenceIDs, lockedPaths []byte
 	var parentRevisionID sql.NullString
 	var submittedAt, decidedAt sql.NullTime
+	// Array columns are read via array_to_json: the gorm postgres driver
+	// (pgx stdlib) returns array-typed columns as their TEXT representation,
+	// which database/sql cannot convert into *[]string ("unsupported Scan,
+	// storing driver.Value type string into type *[]string" — real smoke
+	// 2026-08-27 on the live dev environment, seed values phase). JSON text
+	// scans into []byte portably and decodes with the same helper the
+	// SQLite store uses for its JSON-encoded arrays (cross-engine parity).
 	if err := row.Scan(
 		&revision.ID, &revision.ReleaseDefinitionID, &revision.Version, &revision.StateVersion,
 		&status, &revision.CanonicalDocument, &revision.Digest, &parentRevisionID, &refs,
-		&revision.CreatedByUserID, &submittedAt, &decidedAt, &revision.ConvergenceTaskIds,
-		&revision.LockedPaths, &revision.CreatedAt, &revision.UpdatedAt,
+		&revision.CreatedByUserID, &submittedAt, &decidedAt, &convergenceIDs, &lockedPaths,
+		&revision.CreatedAt, &revision.UpdatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -189,6 +198,16 @@ func scanValues(row interface{ Scan(...any) error }) (*store.ValuesRevision, err
 	if len(refs) > 0 {
 		if err := json.Unmarshal(refs, &revision.SecretRefs); err != nil {
 			return nil, fmt.Errorf("decode values secret refs: %w", err)
+		}
+	}
+	if len(convergenceIDs) > 0 {
+		if err := json.Unmarshal(convergenceIDs, &revision.ConvergenceTaskIds); err != nil {
+			return nil, fmt.Errorf("decode convergence task ids: %w", err)
+		}
+	}
+	if len(lockedPaths) > 0 {
+		if err := json.Unmarshal(lockedPaths, &revision.LockedPaths); err != nil {
+			return nil, fmt.Errorf("decode locked paths: %w", err)
 		}
 	}
 	if parentRevisionID.Valid {

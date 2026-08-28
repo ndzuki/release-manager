@@ -130,7 +130,7 @@ func TestCoordinatorRun_ConsumesPreCreatedArtifactDispatch(t *testing.T) {
 
 	got, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)
-	assert.Equal(t, store.StatusQueued, got.Status)
+	assert.Equal(t, store.StatusSucceeded, got.Status, "INSTALL preflight passed == install executed; operation reaches succeeded")
 }
 
 // D-87 restart replay: a Run over an outbox that already carries the
@@ -174,7 +174,7 @@ func TestCoordinatorRun_RestartReusesExistingDispatches(t *testing.T) {
 
 	got, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)
-	assert.Equal(t, store.StatusQueued, got.Status)
+	assert.Equal(t, store.StatusSucceeded, got.Status, "INSTALL preflight passed == install executed; operation reaches succeeded")
 }
 
 // AC-019-02: a required stage with no available operator fail-closes the
@@ -302,7 +302,7 @@ func TestCoordinatorRun_AllPassedFinalizesLifecycle(t *testing.T) {
 
 	got, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)
-	assert.Equal(t, store.StatusQueued, got.Status, "AC-019-04: operation CAS to queued")
+	assert.Equal(t, store.StatusSucceeded, got.Status, "AC-019-04: INSTALL operation CAS to succeeded after install executed")
 
 	pl, err := st.PreflightLifecycles().GetByOperationID(ctx, op.ID)
 	require.NoError(t, err)
@@ -339,6 +339,79 @@ func TestCoordinatorRun_RequiredFailureStopsPipeline(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "failed", pl.Overall)
 	assert.Equal(t, "artifact", pl.Stages)
+}
+
+// TestCoordinatorRun_SucceededCommandResultPassesStage locks the operator
+// result contract (real smoke 2026-08-27): the operator writes its command
+// result as CommandSucceeded with a helm-shaped JSON (`{"status":"succeeded",
+// ...}`). pollStage must consume that as a passed stage — previously only
+// CommandPersisted was handled and a CommandSucceeded race left the stage
+// polling until timeout.
+func TestCoordinatorRun_SucceededCommandResultPassesStage(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	op := seedPreflightFixture(t, st)
+	c := newTestCoordinator(t, st)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() { c.Run(ctx, op); close(done) }()
+
+	// Drive artifact to CommandSucceeded with the operator's helm-shaped JSON.
+	entry := waitForCommand(t, st, op.ID+":artifact")
+	require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandSucceeded,
+		`{"operation_id":"`+op.ID+`","status":"succeeded","release":{"name":"preflight-rel"}}`))
+	// Remaining stages: same succeeded result.
+	for _, stage := range []string{"render", "cluster", "runtime_pull"} {
+		e := waitForCommand(t, st, op.ID+":"+stage)
+		require.NoError(t, st.Outbox().UpdateStatus(ctx, e.ID, store.CommandSucceeded, `{"status":"succeeded"}`))
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("coordinator did not finish")
+	}
+
+	got, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, got.Status, "all stages passed via succeeded results must succeed the INSTALL operation")
+}
+
+// TestCoordinatorRun_StageCommandsCarryBundle locks the stage-command
+// contract (real smoke 2026-08-27): every precheck stage command (render/
+// cluster/runtime_pull) must carry the operation's bundle — the wire Command
+// does not convey the stage and the operator executes each INSTALL-typed
+// command against the bundle; a nil bundle fails `chart_ref is required`.
+func TestCoordinatorRun_StageCommandsCarryBundle(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	op := seedPreflightFixture(t, st)
+	// Seed the bundle referenced by the fixture operation.
+	require.NoError(t, st.Bundles().Create(t.Context(), &store.ReleaseBundle{
+		ID: op.BundleID, Name: "bundle-preflight", ChartRef: "oci://registry.example.com/charts/example",
+		ChartVersion: "1.0.0", ChartDigest: "sha256:chart", Status: store.BundleValidated,
+		Images: []store.BundleImage{{Ref: "localhost:5001/release-fixture:dev", Digest: "sha256:img", ValuesPath: "image.repository", ValueKind: store.ImageValueFullReference}},
+	}))
+	c := newTestCoordinator(t, st)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() { c.Run(ctx, op); close(done) }()
+
+	// Drive each stage to passed and decode its payload: every command must
+	// carry the bundle (chart_ref + image).
+	for _, stage := range []string{"artifact", "render", "cluster", "runtime_pull"} {
+		entry := waitForCommand(t, st, op.ID+":"+stage)
+		payload, err := UnmarshalCommandPayload(entry.Payload)
+		require.NoError(t, err)
+		require.NotNil(t, payload.Bundle, "stage %s command must carry the bundle", stage)
+		assert.Equal(t, "oci://registry.example.com/charts/example", payload.Bundle.GetChartRef())
+		assert.Len(t, payload.Bundle.GetImages(), 1)
+		require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("coordinator did not finish")
+	}
 }
 
 // AC-019-03/07: cancelling the run context terminates polling and records the
