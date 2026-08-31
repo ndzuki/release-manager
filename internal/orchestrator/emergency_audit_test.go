@@ -61,6 +61,40 @@ func TestExecuteEmergencyChange_AuditsSuccessAndFailure(t *testing.T) {
 	assert.Equal(t, connect.CodeInvalidArgument.String(), failureEvents[0].Metadata["error_code"])
 }
 
+// AC-081-03 (ADR-010): a set_replicas acceptance audit event labels the
+// resolved action SET_REPLICAS instead of the previously hard-coded
+// SET_CONTAINER_IMAGE.
+func TestExecuteEmergencyChangeSetReplicasAuditsResolvedAction(t *testing.T) {
+	_, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedEmergencyAuditIdentity(t, st)
+	require.NoError(t, st.EmergencyConfig().SetEmergencyConfig(t.Context(), store.EmergencyConfig{Enabled: true}))
+	seedReplicasDefinition(t, st, replicasPromotionMapping(), false, 10)
+
+	logger := slog.New(slog.DiscardHandler)
+	emitter := audit.NewEmitter(st.AuditEvents(), logger, audit.EmitterConfig{
+		BufferSize: 4, FlushInterval: time.Hour, BatchSize: 4, SpoolPath: t.TempDir() + "/audit.jsonl",
+	})
+	uowStore, ok := st.(interface {
+		store.Store
+		OperationCreationUnitOfWork() store.OperationCreationUnitOfWork
+	})
+	require.True(t, ok)
+	svc := NewService(st, trust.NewStubVerifier(st.Verifications(), nil, logger), "staging", emitter, &recordingEmergencyDispatcher{}, authorization.NewStoreAuthorizer(st), uowStore.OperationCreationUnitOfWork(), logger)
+
+	resp, err := svc.ExecuteEmergencyChange(emergencyAuditContext(), emergencyReplicasRequest("audit-replicas", 2))
+	require.NoError(t, err)
+	require.NoError(t, emitter.Shutdown(context.Background()))
+
+	events, err := st.AuditEvents().ListByResource(context.Background(), "operation", resp.Msg.OperationId)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "succeeded", events[0].Status)
+	assert.Contains(t, events[0].ChangeSummary, "action=set_replicas")
+	assert.NotContains(t, events[0].ChangeSummary, "set_container_image")
+}
+
 func seedEmergencyAuditIdentity(t *testing.T, st store.Store) {
 	t.Helper()
 	require.NoError(t, st.Users().Create(t.Context(), &store.User{ID: "release-admin", Username: "release-admin", Status: store.UserActive}))

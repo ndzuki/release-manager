@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -108,17 +109,156 @@ func TestListConvergenceTasksReturnsPendingTask(t *testing.T) {
 	assert.Equal(t, []string{"api.image.digest"}, resp.Msg.GetTasks()[0].GetPromotionPaths())
 }
 
-func TestListEmergencyTargetsReportsUnavailable(t *testing.T) {
+// AC-081-01 (D1=B): ListEmergencyTargets derives a real EmergencyTarget from
+// release_inventory + release_definitions instead of the removed
+// manifest_inventory_unavailable stub. Underivable fields carry the D7=A
+// unavailable sentinels (current_replicas=-1, empty containers/annotations/
+// image refs, empty workload_ref.kind/uid).
+func TestListEmergencyTargetsDerivesFromInventory(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedReplicasDefinition(t, st, replicasPromotionMapping(), false, 10)
+	require.NoError(t, st.Inventories().Upsert(t.Context(), &store.ReleaseInventory{
+		ReleaseDefinitionID: "def-001", CustomerID: "cust-001", ClusterID: "cls-001",
+		Namespace: "default", ReleaseName: "my-release", Status: "deployed", InventoryStatus: store.InventoryActive,
+	}))
+
+	resp, err := svc.ListEmergencyTargets(deployerCtx(), connect.NewRequest(&orchestratorv1.ListEmergencyTargetsRequest{
+		ReleaseDefinitionId: "def-001",
+	}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.GetTargets(), 1)
+	target := resp.Msg.GetTargets()[0]
+
+	// Derived values (release_inventory + release_definitions).
+	assert.Equal(t, "my-release", target.GetWorkloadRef().GetName())
+	assert.Equal(t, "default", target.GetWorkloadRef().GetNamespace())
+	assert.False(t, target.GetHpaManaged())
+	assert.Equal(t, int32(10), target.GetMaxEmergencyReplicas())
+	require.Len(t, target.GetPromotions(), 1)
+	assert.Equal(t, workloadDeployment, target.GetPromotions()[0].GetWorkloadKind())
+	assert.Equal(t, "replicas", target.GetPromotions()[0].GetField())
+	assert.Equal(t, "replicaCount", target.GetPromotions()[0].GetValuesPath())
+
+	// D7=A unavailable sentinels.
+	assert.Empty(t, target.GetWorkloadRef().GetKind())
+	assert.Empty(t, target.GetWorkloadRef().GetUid())
+	assert.Empty(t, target.GetContainers())
+	assert.Empty(t, target.GetCurrentImageRefs())
+	assert.Empty(t, target.GetCurrentAnnotations())
+	assert.Equal(t, int32(-1), target.GetCurrentReplicas())
+
+	// supported_operations: full computation (D1=B 待澄清③) — replicas is
+	// supported for a non-HPA DEPLOYMENT mapping; image/annotation operations
+	// stay degraded (no container/annotation data).
+	assert.Contains(t, target.GetSupportedOperations(), orchestratorv1.EmergencyAction_EMERGENCY_ACTION_SET_REPLICAS)
+	assert.NotContains(t, target.GetSupportedOperations(), orchestratorv1.EmergencyAction_EMERGENCY_ACTION_SET_CONTAINER_IMAGE)
+	assert.NotContains(t, target.GetSupportedOperations(), orchestratorv1.EmergencyAction_EMERGENCY_ACTION_SET_APPROVED_ANNOTATION)
+}
+
+// AC-081-01: a missing inventory row is not an error — the response carries
+// zero targets.
+func TestListEmergencyTargetsEmptyWhenInventoryMissing(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
 
-	_, err := svc.ListEmergencyTargets(deployerCtx(), connect.NewRequest(&orchestratorv1.ListEmergencyTargetsRequest{
+	resp, err := svc.ListEmergencyTargets(deployerCtx(), connect.NewRequest(&orchestratorv1.ListEmergencyTargetsRequest{
 		ReleaseDefinitionId: "def-001",
 	}))
-	require.Error(t, err)
-	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
-	assert.Equal(t, "manifest_inventory_unavailable", connectErrorReason(err))
+	require.NoError(t, err)
+	assert.Empty(t, resp.Msg.GetTargets())
+}
+
+// AC-081-01: supported_operations degrades without promotion mappings (no
+// derivable workload kind) and drops SET_REPLICAS for HPA-managed
+// definitions (REQ-032 §171).
+func TestListEmergencyTargetsSupportedOperations(t *testing.T) {
+	t.Run("no promotion mappings", func(t *testing.T) {
+		svc, st, cleanup := setupService(t)
+		defer cleanup()
+		seedDefinition(t, st)
+		require.NoError(t, st.Inventories().Upsert(t.Context(), &store.ReleaseInventory{
+			ReleaseDefinitionID: "def-001", CustomerID: "cust-001", ClusterID: "cls-001",
+			Namespace: "default", ReleaseName: "my-release", InventoryStatus: store.InventoryActive,
+		}))
+		resp, err := svc.ListEmergencyTargets(deployerCtx(), connect.NewRequest(&orchestratorv1.ListEmergencyTargetsRequest{
+			ReleaseDefinitionId: "def-001",
+		}))
+		require.NoError(t, err)
+		require.Len(t, resp.Msg.GetTargets(), 1)
+		assert.Empty(t, resp.Msg.GetTargets()[0].GetSupportedOperations())
+	})
+	t.Run("hpa managed", func(t *testing.T) {
+		svc, st, cleanup := setupService(t)
+		defer cleanup()
+		seedDefinition(t, st)
+		seedReplicasDefinition(t, st, replicasPromotionMapping(), true, 10)
+		require.NoError(t, st.Inventories().Upsert(t.Context(), &store.ReleaseInventory{
+			ReleaseDefinitionID: "def-001", CustomerID: "cust-001", ClusterID: "cls-001",
+			Namespace: "default", ReleaseName: "my-release", InventoryStatus: store.InventoryActive,
+		}))
+		resp, err := svc.ListEmergencyTargets(deployerCtx(), connect.NewRequest(&orchestratorv1.ListEmergencyTargetsRequest{
+			ReleaseDefinitionId: "def-001",
+		}))
+		require.NoError(t, err)
+		require.Len(t, resp.Msg.GetTargets(), 1)
+		assert.Empty(t, resp.Msg.GetTargets()[0].GetSupportedOperations())
+	})
+	t.Run("zero replicas ceiling", func(t *testing.T) {
+		// max_emergency_replicas=0 leaves no legal replicas value, so the
+		// derived operations must not advertise SET_REPLICAS.
+		svc, st, cleanup := setupService(t)
+		defer cleanup()
+		seedDefinition(t, st)
+		seedReplicasDefinition(t, st, replicasPromotionMapping(), false, 0)
+		require.NoError(t, st.Inventories().Upsert(t.Context(), &store.ReleaseInventory{
+			ReleaseDefinitionID: "def-001", CustomerID: "cust-001", ClusterID: "cls-001",
+			Namespace: "default", ReleaseName: "my-release", InventoryStatus: store.InventoryActive,
+		}))
+		resp, err := svc.ListEmergencyTargets(deployerCtx(), connect.NewRequest(&orchestratorv1.ListEmergencyTargetsRequest{
+			ReleaseDefinitionId: "def-001",
+		}))
+		require.NoError(t, err)
+		require.Len(t, resp.Msg.GetTargets(), 1)
+		assert.Empty(t, resp.Msg.GetTargets()[0].GetSupportedOperations())
+	})
+}
+
+// AC-081-01 failure paths: missing definition id and unknown definition are
+// rejected with the existing emergency error contract.
+func TestListEmergencyTargetsFailurePaths(t *testing.T) {
+	t.Run("missing definition id", func(t *testing.T) {
+		svc, st, cleanup := setupService(t)
+		defer cleanup()
+		seedDefinition(t, st)
+		_, err := svc.ListEmergencyTargets(deployerCtx(), connect.NewRequest(&orchestratorv1.ListEmergencyTargetsRequest{}))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+		assert.Equal(t, "release_definition_id_required", connectErrorReason(err))
+	})
+	t.Run("definition not found", func(t *testing.T) {
+		svc, st, cleanup := setupService(t)
+		defer cleanup()
+		seedDefinition(t, st)
+		_, err := svc.ListEmergencyTargets(deployerCtx(), connect.NewRequest(&orchestratorv1.ListEmergencyTargetsRequest{
+			ReleaseDefinitionId: "nonexistent",
+		}))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+		assert.Equal(t, "definition_not_found", connectErrorReason(err))
+	})
+	t.Run("unauthenticated", func(t *testing.T) {
+		svc, st, cleanup := setupService(t)
+		defer cleanup()
+		seedDefinition(t, st)
+		_, err := svc.ListEmergencyTargets(context.Background(), connect.NewRequest(&orchestratorv1.ListEmergencyTargetsRequest{
+			ReleaseDefinitionId: "def-001",
+		}))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
+	})
 }
 
 func emergencyTestServiceFromExisting(t *testing.T, svc *Service, st store.Store) (*Service, store.Store, *recordingEmergencyDispatcher) {
