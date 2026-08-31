@@ -192,7 +192,11 @@ func (s *operatorSvc) registerAgent(logger *slog.Logger) error {
 		return fmt.Errorf("create secret metadata lister: %w", err)
 	}
 
-	orchClient := orchestratorv1connect.NewOrchestratorServiceClient(http.DefaultClient, s.orchestratorURL)
+	// TASK-080: reuse the mTLS httpClient (gateway CA trust anchor + enrolled
+	// identity certificate) built above instead of http.DefaultClient, which
+	// skipped the gateway CA and failed inventory sync with
+	// x509: certificate signed by unknown authority.
+	orchClient := orchestratorv1connect.NewOrchestratorServiceClient(httpClient, s.orchestratorURL)
 	s.syncer = operator.NewInventorySyncer(
 		engine,
 		orchClient,
@@ -254,6 +258,28 @@ func agentTLSClient(certPEM, keyPEM, caCertPath string) (*http.Client, error) {
 	}}, nil
 }
 
+// caOnlyTLSClient builds a CA-only HTTP client for the gateway-mode operator:
+// the gateway CA from caCertPath as the trust anchor and no client
+// certificate (the gateway operator has no bootstrap identity). Mirrors
+// newGatewayEnroller (internal/operator/bootstrap) and SessionClient
+// (internal/operator/session_client.go). Per core/go/connect-rpc.md, Connect
+// clients accept a custom http.Client/Transport and TLS verification is
+// delegated to net/http (RootCAs), so this Transport fully governs the
+// handshake against the gateway.
+func caOnlyTLSClient(caCertPath string) (*http.Client, error) {
+	pool, err := ca.LoadCertPool(caCertPath)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{
+			RootCAs:    pool,
+			MinVersion: tls.VersionTLS13,
+		},
+		ForceAttemptHTTP2: true,
+	}}, nil
+}
+
 // registerGateway keeps the management-plane operator deployment:
 // authoritative store, OperatorService handler, and inventory sync when an
 // identity is configured (TASK-075 plan v1 Step 7 (d); TASK-065 removes it).
@@ -282,10 +308,19 @@ func (s *operatorSvc) registerGateway(mux *http.ServeMux, logger *slog.Logger) e
 	if s.orchestratorURL == "" {
 		return nil
 	}
-	orchClient := orchestratorv1connect.NewOrchestratorServiceClient(http.DefaultClient, s.orchestratorURL)
 	// The gateway operator has no bootstrap identity; the inventory syncer
 	// needs an operator_id, so it is wired only when one is configured.
 	if s.customerID != "" && s.clusterID != "" {
+		// TASK-080: CA-only client (gateway CA trust anchor, no client
+		// certificate) instead of http.DefaultClient, which failed inventory
+		// sync with x509: certificate signed by unknown authority. Built
+		// inside the identity block so a gateway without identity does not
+		// fail startup on a missing CA file it would never use.
+		httpClient, err := caOnlyTLSClient(s.caCertPath)
+		if err != nil {
+			return fmt.Errorf("build gateway CA-only client: %w", err)
+		}
+		orchClient := orchestratorv1connect.NewOrchestratorServiceClient(httpClient, s.orchestratorURL)
 		engine := helmengine.NewRealEngine(s.kubeConfig, logger)
 		s.syncer = operator.NewInventorySyncer(
 			engine,
