@@ -36,7 +36,14 @@ func (s *Service) authorizeEmergencyRead(ctx context.Context, definitionID, requ
 	return nil
 }
 
-// ListEmergencyTargets returns unavailable until the workload manifest snapshot contract is implemented.
+// ListEmergencyTargets derives one EmergencyTarget per release definition
+// from the cached release inventory snapshot and the definition's emergency
+// configuration (REQ-081 D1=B). Fields release_inventory does not carry
+// (workload kind/uid, containers, image refs, current replicas/annotations)
+// are reported with the D7=A unavailable sentinels: current_replicas=-1,
+// empty containers/annotations/image refs and an empty workload_ref.kind/uid.
+// A definition without an inventory row yields an empty target list (not an
+// error).
 func (s *Service) ListEmergencyTargets(
 	ctx context.Context,
 	req *connect.Request[orchestratorv1.ListEmergencyTargetsRequest],
@@ -47,7 +54,76 @@ func (s *Service) ListEmergencyTargets(
 	if err := s.authorizeEmergencyRead(ctx, req.Msg.GetReleaseDefinitionId(), ""); err != nil {
 		return nil, err
 	}
-	return nil, emergencyError(connect.CodeUnavailable, "manifest_inventory_unavailable", "workload manifest inventory is unavailable")
+	definition, err := s.store.Definitions().Get(ctx, req.Msg.GetReleaseDefinitionId())
+	if errors.Is(err, store.ErrNotFound) {
+		// authorizeEmergencyRead already loaded the definition successfully,
+		// so this is a defensive mapping for the concurrent-deletion window.
+		return nil, emergencyError(connect.CodeNotFound, "definition_not_found", "release definition not found")
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("load emergency definition: %w", err))
+	}
+	inventory, err := s.store.Inventories().GetByDefinition(ctx, req.Msg.GetReleaseDefinitionId())
+	if errors.Is(err, store.ErrNotFound) {
+		return connect.NewResponse(&orchestratorv1.ListEmergencyTargetsResponse{Targets: []*orchestratorv1.EmergencyTarget{}}), nil
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("load emergency inventory: %w", err))
+	}
+
+	target := &orchestratorv1.EmergencyTarget{
+		// D1=B: name/namespace come from the inventory row; kind/uid stay
+		// empty (D7=A — release_inventory has no kind/uid columns).
+		WorkloadRef: &orchestratorv1.WorkloadRef{
+			Name:      inventory.ReleaseName,
+			Namespace: inventory.Namespace,
+		},
+		// D7=A unavailable sentinels.
+		CurrentReplicas:      -1,
+		Containers:           []string{},
+		CurrentImageRefs:     map[string]string{},
+		CurrentAnnotations:   map[string]string{},
+		HpaManaged:           definition.HPAManaged,
+		MaxEmergencyReplicas: definition.MaxEmergencyReplicas,
+		Promotions:           promotionsToProto(definition.PromotionMappings),
+		SupportedOperations:  deriveSupportedOperations(definition),
+	}
+	return connect.NewResponse(&orchestratorv1.ListEmergencyTargetsResponse{Targets: []*orchestratorv1.EmergencyTarget{target}}), nil
+}
+
+// promotionsToProto projects stored promotion mappings onto the wire contract.
+func promotionsToProto(mappings []store.PromotionMapping) []*orchestratorv1.PromotionMapping {
+	result := make([]*orchestratorv1.PromotionMapping, 0, len(mappings))
+	for _, mapping := range mappings {
+		result = append(result, &orchestratorv1.PromotionMapping{
+			WorkloadKind: mapping.WorkloadKind,
+			WorkloadName: mapping.WorkloadName,
+			Container:    mapping.Container,
+			Field:        mapping.Field,
+			ValuesPath:   mapping.ValuesPath,
+		})
+	}
+	return result
+}
+
+// deriveSupportedOperations computes the emergency actions available under
+// the D1=B derived model (REQ-081, REQ-032 §226): the workload kind is
+// derived from the promotion mappings (the only kind source) and replicas
+// changes are supported for DEPLOYMENT/STATEFUL_SET targets without live HPA
+// and with a positive replicas ceiling. Image/annotation operations stay
+// degraded — no container or annotation data exists in release_inventory.
+func deriveSupportedOperations(definition *store.ReleaseDefinition) []orchestratorv1.EmergencyAction {
+	replicasEligible := false
+	for _, mapping := range definition.PromotionMappings {
+		if mapping.WorkloadKind == workloadDeployment || mapping.WorkloadKind == workloadStatefulSet {
+			replicasEligible = true
+			break
+		}
+	}
+	if !replicasEligible || definition.HPAManaged || definition.MaxEmergencyReplicas <= 0 {
+		return []orchestratorv1.EmergencyAction{}
+	}
+	return []orchestratorv1.EmergencyAction{orchestratorv1.EmergencyAction_EMERGENCY_ACTION_SET_REPLICAS}
 }
 
 // CheckEmergencyConflict reports a running standard operation for one definition.

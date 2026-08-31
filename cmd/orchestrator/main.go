@@ -273,6 +273,19 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		return err
 	}
 	logger.Info("store opened", "driver", s.cfg.Database.Driver)
+	// REQ-081 D2=A: the orchestrator is the production writer of the
+	// emergency kill switch configuration — load emergency.* from the config
+	// and upsert it into app_settings before serving requests. A missing
+	// section fails closed (enabled=false, default timeout) and preserves an
+	// existing app_settings value.
+	emergencyCfg, emergencyPresent, err := s.loadEmergencyConfig()
+	if err != nil {
+		return err
+	}
+	if err := s.seedEmergencyConfig(context.Background(), emergencyCfg, emergencyPresent); err != nil {
+		return fmt.Errorf("seed emergency config: %w", err)
+	}
+	logger.Info("emergency config seeded", "enabled", emergencyCfg.Enabled, "operation_timeout", emergencyCfg.OperationTimeout, "present", emergencyPresent)
 	metrics := authorization.NewMetrics(prometheus.NewRegistry())
 	mux.Handle("GET /metrics", metrics.Handler())
 	s.traceShutdown = authorization.InstallTracing()
@@ -537,6 +550,62 @@ type trustConfig struct {
 
 func defaultTrustConfig() trustConfig {
 	return trustConfig{VerificationTimeout: trust.DefaultVerificationTimeout}
+}
+
+// loadEmergencyConfig reads the emergency.* keys from the service config
+// (REQ-081 D2=A): a missing section fails closed to enabled=false and the
+// D16 default operation timeout, reported via present=false so the startup
+// seed leaves an already-configured app_settings value untouched; an
+// unparsable/non-positive timeout falls back to the default while keeping
+// the configured enabled flag.
+func (s *orchSvc) loadEmergencyConfig() (config.EmergencyCfg, bool, error) {
+	emergencyCfg := config.EmergencyCfg{Enabled: false, OperationTimeout: store.DefaultEmergencyOperationTimeout.String()}
+	if s.configPath == "" {
+		return emergencyCfg, false, nil
+	}
+	v := viper.New()
+	v.SetConfigFile(s.configPath)
+	v.SetConfigType("yaml")
+	if err := v.ReadInConfig(); err != nil {
+		return emergencyCfg, false, fmt.Errorf("read emergency config: %w", err)
+	}
+	var raw struct {
+		Enabled          bool   `mapstructure:"enabled"`
+		OperationTimeout string `mapstructure:"operation_timeout"`
+	}
+	if err := v.UnmarshalKey("emergency", &raw); err != nil {
+		return emergencyCfg, false, fmt.Errorf("unmarshal emergency config: %w", err)
+	}
+	present := v.IsSet("emergency")
+	emergencyCfg.Enabled = raw.Enabled
+	if raw.OperationTimeout != "" {
+		if parsed, parseErr := time.ParseDuration(raw.OperationTimeout); parseErr == nil && parsed > 0 {
+			emergencyCfg.OperationTimeout = parsed.String()
+		}
+	}
+	return emergencyCfg, present, nil
+}
+
+// seedEmergencyConfig is the production writer of EmergencyConfigStore
+// (REQ-081 D2=A): it upserts the startup emergency configuration into
+// app_settings before the service accepts requests. When the config carries
+// no emergency section (present=false) an existing app_settings value is
+// preserved — a missing config fails closed only for a fresh database; an
+// explicit enabled:false still overrides. The kill switch gate in
+// ExecuteEmergencyChange keeps failing closed on a missing configuration
+// (ADR-011).
+func (s *orchSvc) seedEmergencyConfig(ctx context.Context, cfg config.EmergencyCfg, present bool) error {
+	if !present {
+		return nil
+	}
+	timeout := store.DefaultEmergencyOperationTimeout
+	if parsed, err := time.ParseDuration(cfg.OperationTimeout); err == nil && parsed > 0 {
+		timeout = parsed
+	}
+	return s.store.EmergencyConfig().SetEmergencyConfig(ctx, store.EmergencyConfig{
+		Enabled:          cfg.Enabled,
+		OperationTimeout: timeout,
+	})
 }
 
 func (s *orchSvc) loadTrustConfig() (trustConfig, error) {

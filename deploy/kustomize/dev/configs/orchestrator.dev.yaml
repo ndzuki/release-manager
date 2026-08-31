@@ -31,3 +31,9 @@ gateway:
 ca:
   key_path: /data/gateway-ca.key
   cert_path: /data/gateway-ca.crt
+
+# REQ-081 (D2=A): the orchestrator seeds these keys into app_settings at
+# startup — the dev cluster runs with the emergency kill switch on.
+emergency:
+  enabled: true
+  operation_timeout: 30s

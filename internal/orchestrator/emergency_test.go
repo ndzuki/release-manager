@@ -109,6 +109,24 @@ func TestExecuteEmergencyChangeKillSwitchDisabled(t *testing.T) {
 	assert.False(t, detail.GetRetryable())
 }
 
+// AC-081-02 (D2=A): with the kill switch enabled (the value the orchestrator
+// startup seed writes from config), ExecuteEmergencyChange no longer returns
+// KILL_SWITCH_DISABLED and the acceptance flow proceeds.
+func TestExecuteEmergencyChangeKillSwitchEnabled(t *testing.T) {
+	svc, st, _ := emergencyTestService(t)
+	// The startup seed path calls SetEmergencyConfig — verify the enabled
+	// value survives the upsert and is read back (D2=A seed semantics).
+	require.NoError(t, st.EmergencyConfig().SetEmergencyConfig(t.Context(), store.EmergencyConfig{Enabled: true}))
+	loaded, err := st.EmergencyConfig().GetEmergencyConfig(t.Context())
+	require.NoError(t, err)
+	assert.True(t, loaded.Enabled)
+	assert.Equal(t, store.DefaultEmergencyOperationTimeout, loaded.OperationTimeout)
+
+	resp, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyImageRequest("kill-switch-on"))
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.GetResult().GetRequested())
+}
+
 // AC-079-G7: UNSPECIFIED convergence strategy is rejected.
 func TestExecuteEmergencyChangeRejectsUnspecifiedStrategy(t *testing.T) {
 	svc, _, _ := emergencyTestService(t)
@@ -408,6 +426,227 @@ func TestCancelOperation_EmergencyQueuedUndelivered(t *testing.T) {
 	updatedIntent, err := st.EmergencyIntents().GetByOperationID(t.Context(), opID)
 	require.NoError(t, err)
 	assert.Equal(t, store.EmergencyEffectNotApplied, updatedIntent.EffectStatus)
+}
+
+// --- REQ-081 set_replicas path (AC-081-03) ---
+
+func emergencyReplicasRequest(key string, replicas int32) *connect.Request[orchestratorv1.ExecuteEmergencyChangeRequest] {
+	return connect.NewRequest(&orchestratorv1.ExecuteEmergencyChangeRequest{
+		ReleaseDefinitionId: "def-001",
+		WorkloadRef:         "deployments/default/my-release",
+		OperationVersion:    "v1.0.0",
+		ConvergenceStrategy: orchestratorv1.ConvergenceStrategy_REVERT_ON_NEXT_RECONCILE,
+		IdempotencyKey:      key,
+		SetReplicas:         replicas,
+	})
+}
+
+// seedReplicasDefinition configures def-001 for the set_replicas path: HPA
+// flag, max emergency replicas and promotion mappings (field "replicas" per
+// REQ-032 §222 promotion mapping field vocabulary).
+func seedReplicasDefinition(t *testing.T, st store.Store, mappings []store.PromotionMapping, hpa bool, maxReplicas int32) {
+	t.Helper()
+	definition, err := st.Definitions().Get(t.Context(), "def-001")
+	require.NoError(t, err)
+	definition.HPAManaged = hpa
+	definition.MaxEmergencyReplicas = maxReplicas
+	definition.PromotionMappings = mappings
+	_, err = st.Definitions().Update(t.Context(), definition, nil)
+	require.NoError(t, err)
+}
+
+func replicasPromotionMapping() []store.PromotionMapping {
+	return []store.PromotionMapping{{
+		WorkloadKind: workloadDeployment, WorkloadName: "my-release",
+		Field: "replicas", ValuesPath: "replicaCount",
+	}}
+}
+
+// AC-081-03: set_replicas:2 resolves through the real SetReplicas storage
+// entry point (not the hard-coded image branch) and dispatches
+// EmergencyCommand_SetReplicas.
+func TestExecuteEmergencyChangeSetReplicas(t *testing.T) {
+	svc, st, dispatcher := emergencyTestService(t)
+	seedReplicasDefinition(t, st, replicasPromotionMapping(), false, 10)
+
+	resp, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("replicas-1", 2))
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.GetResult().GetRequested())
+	assert.NotEmpty(t, resp.Msg.GetOperationId())
+	assert.NotEmpty(t, resp.Msg.GetOperationVersion())
+
+	require.Len(t, dispatcher.commands, 1)
+	require.NotNil(t, dispatcher.commands[0].GetSetReplicas())
+	assert.Equal(t, int32(2), dispatcher.commands[0].GetSetReplicas().GetReplicas())
+	assert.Equal(t, "my-release", dispatcher.commands[0].GetWorkloadName())
+
+	intent, err := st.EmergencyIntents().GetByOperationID(t.Context(), resp.Msg.GetOperationId())
+	require.NoError(t, err)
+	assert.Equal(t, store.EmergencySetReplicas, intent.Action)
+	require.NotNil(t, intent.TargetReplicas)
+	assert.Equal(t, int32(2), *intent.TargetReplicas)
+	assert.Nil(t, intent.Container)
+	assert.Nil(t, intent.ArtifactID)
+	assert.Nil(t, intent.ImageReference)
+}
+
+// AC-081-03 (D4=A): set_replicas combined with container/artifact_ref is
+// rejected as conflicting_change (single action per request).
+func TestExecuteEmergencyChangeSetReplicasConflictingImage(t *testing.T) {
+	svc, st, dispatcher := emergencyTestService(t)
+	seedReplicasDefinition(t, st, replicasPromotionMapping(), false, 10)
+
+	req := emergencyReplicasRequest("replicas-conflict", 2)
+	req.Msg.Container = "api"
+	req.Msg.ArtifactRef = "artifact-img"
+	_, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), req)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Equal(t, "conflicting_change", connectErrorReason(err))
+	assert.Empty(t, dispatcher.commands)
+}
+
+// AC-081-03: SET_REPLICAS validation rules per REQ-032 §171 — workload kind,
+// HPA managed and replicas bounds.
+func TestExecuteEmergencyChangeSetReplicasValidation(t *testing.T) {
+	t.Run("replicas below zero", func(t *testing.T) {
+		svc, st, _ := emergencyTestService(t)
+		seedReplicasDefinition(t, st, replicasPromotionMapping(), false, 10)
+		_, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("replicas-neg", -1))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+		assert.Equal(t, "invalid_replicas", connectErrorReason(err))
+	})
+	t.Run("zero means not requested", func(t *testing.T) {
+		// REQ-081 Step 2 risk note: set_replicas is a flat int32 without
+		// presence — 0 falls back to the image branch and its artifact_ref
+		// requirement. Pinned here so a future scale-to-zero contract change
+		// (oneof/optional) is a deliberate, visible decision.
+		svc, st, _ := emergencyTestService(t)
+		seedReplicasDefinition(t, st, replicasPromotionMapping(), false, 10)
+		_, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("replicas-zero", 0))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+		assert.Equal(t, "artifact_ref_required", connectErrorReason(err))
+	})
+	t.Run("replicas above max", func(t *testing.T) {
+		svc, st, _ := emergencyTestService(t)
+		seedReplicasDefinition(t, st, replicasPromotionMapping(), false, 5)
+		_, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("replicas-max", 6))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+		assert.Equal(t, "invalid_replicas", connectErrorReason(err))
+	})
+	t.Run("replicas at max accepted", func(t *testing.T) {
+		svc, st, dispatcher := emergencyTestService(t)
+		seedReplicasDefinition(t, st, replicasPromotionMapping(), false, 3)
+		resp, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("replicas-at-max", 3))
+		require.NoError(t, err)
+		require.Len(t, dispatcher.commands, 1)
+		require.NotNil(t, dispatcher.commands[0].GetSetReplicas())
+		assert.Equal(t, int32(3), dispatcher.commands[0].GetSetReplicas().GetReplicas())
+		assert.NotEmpty(t, resp.Msg.GetOperationId())
+	})
+	t.Run("hpa managed", func(t *testing.T) {
+		svc, st, _ := emergencyTestService(t)
+		seedReplicasDefinition(t, st, replicasPromotionMapping(), true, 10)
+		_, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("replicas-hpa", 2))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+		assert.Equal(t, "hpa_managed", connectErrorReason(err))
+	})
+	t.Run("workload kind not supported", func(t *testing.T) {
+		svc, st, _ := emergencyTestService(t)
+		seedReplicasDefinition(t, st, replicasPromotionMapping(), false, 10)
+		req := emergencyReplicasRequest("replicas-daemonset", 2)
+		req.Msg.WorkloadRef = "daemonsets/default/my-release"
+		_, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), req)
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+		assert.Equal(t, "workload_kind_not_supported", connectErrorReason(err))
+	})
+}
+
+// AC-081-03: REQUIRE_PROMOTION without a field=replicas promotion mapping is
+// rejected (same promotion_not_supported contract as the image branch).
+func TestExecuteEmergencyChangeSetReplicasRequirePromotionWithoutMapping(t *testing.T) {
+	svc, st, _ := emergencyTestService(t)
+	seedReplicasDefinition(t, st, nil, false, 10)
+	req := emergencyReplicasRequest("replicas-no-mapping", 2)
+	req.Msg.ConvergenceStrategy = orchestratorv1.ConvergenceStrategy_REQUIRE_PROMOTION
+	req.Msg.TargetLocks = []string{"replicaCount"}
+	_, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), req)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Equal(t, "promotion_not_supported", connectErrorReason(err))
+}
+
+// AC-081-03: REQUIRE_PROMOTION with a replicas mapping creates the
+// convergence task bound to the replicas promotion path.
+func TestExecuteEmergencyChangeSetReplicasRequirePromotion(t *testing.T) {
+	svc, st, _ := emergencyTestService(t)
+	seedReplicasDefinition(t, st, replicasPromotionMapping(), false, 10)
+	req := emergencyReplicasRequest("replicas-promotion", 2)
+	req.Msg.ConvergenceStrategy = orchestratorv1.ConvergenceStrategy_REQUIRE_PROMOTION
+	req.Msg.TargetLocks = []string{"replicaCount"}
+	resp, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), req)
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.GetResult().GetConvergenceTasks(), 1)
+
+	intent, err := st.EmergencyIntents().GetByOperationID(t.Context(), resp.Msg.GetOperationId())
+	require.NoError(t, err)
+	assert.Equal(t, store.EmergencyRequirePromotion, intent.Convergence)
+	task, err := st.ConvergenceTasks().GetByOperationID(t.Context(), resp.Msg.GetOperationId())
+	require.NoError(t, err)
+	assert.Equal(t, store.EmergencySetReplicas, task.Action)
+	assert.Equal(t, "pending_promotion", task.Status)
+}
+
+// AC-081-03 (ADR-009): the set_replicas branch reuses the existing
+// idempotency key + request hash path — same request replays, a changed
+// replicas value conflicts.
+func TestExecuteEmergencyChangeSetReplicasIdempotency(t *testing.T) {
+	svc, st, dispatcher := emergencyTestService(t)
+	seedReplicasDefinition(t, st, nil, false, 10)
+	first, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("same-replicas", 2))
+	require.NoError(t, err)
+	second, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("same-replicas", 2))
+	require.NoError(t, err)
+	assert.Equal(t, first.Msg.GetOperationId(), second.Msg.GetOperationId())
+	assert.Len(t, dispatcher.commands, 1)
+
+	conflict := emergencyReplicasRequest("same-replicas", 3)
+	_, err = svc.ExecuteEmergencyChange(emergencyAdminContext(), conflict)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+}
+
+// AC-081-03 recovery path: a rejected replicas request leaves no state
+// behind — correcting the input with the same idempotency key succeeds.
+func TestExecuteEmergencyChangeSetReplicasRecoversAfterValidationFailure(t *testing.T) {
+	svc, st, dispatcher := emergencyTestService(t)
+	seedReplicasDefinition(t, st, replicasPromotionMapping(), false, 10)
+
+	invalid := emergencyReplicasRequest("replicas-recover", 11)
+	_, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), invalid)
+	require.Error(t, err)
+	assert.Equal(t, "invalid_replicas", connectErrorReason(err))
+	assert.Empty(t, dispatcher.commands)
+
+	corrected := emergencyReplicasRequest("replicas-recover", 2)
+	resp, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), corrected)
+	require.NoError(t, err)
+	require.Len(t, dispatcher.commands, 1)
+	require.NotNil(t, dispatcher.commands[0].GetSetReplicas())
+	assert.Equal(t, int32(2), dispatcher.commands[0].GetSetReplicas().GetReplicas())
+	assert.Equal(t, store.StatusQueued, mustGetEmergencyOperation(t, st, resp.Msg.GetOperationId()).Status)
+}
+
+func mustGetEmergencyOperation(t *testing.T, st store.Store, operationID string) *store.Operation {
+	t.Helper()
+	operation, err := st.Operations().Get(t.Context(), operationID)
+	require.NoError(t, err)
+	return operation
 }
 
 func connectErrorReason(err error) string {

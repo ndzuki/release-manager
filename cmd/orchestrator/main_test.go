@@ -1138,6 +1138,109 @@ func TestLoadTrustConfig_DefaultsNonPositiveTimeout(t *testing.T) {
 	assert.Equal(t, trust.DefaultVerificationTimeout, trustCfg.VerificationTimeout)
 }
 
+// AC-081-02 (D2=A): the startup emergency config loader reads the
+// emergency.enabled / emergency.operation_timeout keys from the service
+// config file.
+func TestLoadEmergencyConfig(t *testing.T) {
+	configPath := t.TempDir() + "/orchestrator.yaml"
+	require.NoError(t, os.WriteFile(configPath, []byte("emergency:\n  enabled: true\n  operation_timeout: 90s\n"), 0o600))
+	svc := &orchSvc{configPath: configPath}
+
+	emergencyCfg, present, err := svc.loadEmergencyConfig()
+
+	require.NoError(t, err)
+	assert.True(t, present)
+	assert.True(t, emergencyCfg.Enabled)
+	parsed, parseErr := time.ParseDuration(emergencyCfg.OperationTimeout)
+	require.NoError(t, parseErr)
+	assert.Equal(t, 90*time.Second, parsed)
+}
+
+// AC-081-02 (D2=A, ADR-011): a missing emergency section fails closed to
+// enabled=false and the D16 default timeout, and reports present=false so
+// the seed leaves existing app_settings values untouched.
+func TestLoadEmergencyConfig_MissingFailsClosed(t *testing.T) {
+	configPath := t.TempDir() + "/orchestrator.yaml"
+	require.NoError(t, os.WriteFile(configPath, []byte("http_port: 8083\n"), 0o600))
+	svc := &orchSvc{configPath: configPath}
+
+	emergencyCfg, present, err := svc.loadEmergencyConfig()
+
+	require.NoError(t, err)
+	assert.False(t, present)
+	assert.False(t, emergencyCfg.Enabled)
+	parsed, parseErr := time.ParseDuration(emergencyCfg.OperationTimeout)
+	require.NoError(t, parseErr)
+	assert.Equal(t, store.DefaultEmergencyOperationTimeout, parsed)
+}
+
+// AC-081-02 (D2=A): an unparsable/empty operation_timeout falls back to the
+// D16 default while keeping the configured enabled flag.
+func TestLoadEmergencyConfig_InvalidTimeoutFallsBack(t *testing.T) {
+	for _, raw := range []string{
+		"emergency:\n  enabled: true\n  operation_timeout: not-a-duration\n",
+		"emergency:\n  enabled: true\n  operation_timeout: 0s\n",
+		"emergency:\n  enabled: true\n  operation_timeout: -5s\n",
+	} {
+		configPath := t.TempDir() + "/orchestrator.yaml"
+		require.NoError(t, os.WriteFile(configPath, []byte(raw), 0o600))
+		svc := &orchSvc{configPath: configPath}
+
+		emergencyCfg, present, err := svc.loadEmergencyConfig()
+
+		require.NoError(t, err)
+		assert.True(t, present)
+		assert.True(t, emergencyCfg.Enabled)
+		parsed, parseErr := time.ParseDuration(emergencyCfg.OperationTimeout)
+		require.NoError(t, parseErr)
+		assert.Equal(t, store.DefaultEmergencyOperationTimeout, parsed)
+	}
+}
+
+// AC-081-02 (D2=A): the startup seed path upserts the emergency config into
+// app_settings idempotently; an explicit config overrides the previous value,
+// and a missing section (present=false) preserves the existing app_settings
+// state.
+func TestSeedEmergencyConfigUpsertsIdempotently(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	st, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+	svc := &orchSvc{store: st}
+
+	require.NoError(t, svc.seedEmergencyConfig(t.Context(), config.EmergencyCfg{Enabled: true, OperationTimeout: "90s"}, true))
+	loaded, err := st.EmergencyConfig().GetEmergencyConfig(t.Context())
+	require.NoError(t, err)
+	assert.True(t, loaded.Enabled)
+	assert.Equal(t, 90*time.Second, loaded.OperationTimeout)
+
+	// An explicit config section overrides the previous value; a zero
+	// timeout falls back to the D16 default.
+	require.NoError(t, svc.seedEmergencyConfig(t.Context(), config.EmergencyCfg{Enabled: false, OperationTimeout: "0s"}, true))
+	loaded, err = st.EmergencyConfig().GetEmergencyConfig(t.Context())
+	require.NoError(t, err)
+	assert.False(t, loaded.Enabled)
+	assert.Equal(t, store.DefaultEmergencyOperationTimeout, loaded.OperationTimeout)
+}
+
+// AC-081-02 (D2=A): a missing emergency section does not clobber an existing
+// app_settings value — only an explicit config section is the startup
+// authority.
+func TestSeedEmergencyConfig_MissingSectionPreservesExisting(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	st, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+	svc := &orchSvc{store: st}
+
+	require.NoError(t, svc.seedEmergencyConfig(t.Context(), config.EmergencyCfg{Enabled: true, OperationTimeout: "90s"}, true))
+	require.NoError(t, svc.seedEmergencyConfig(t.Context(), config.EmergencyCfg{Enabled: false, OperationTimeout: "30s"}, false))
+	loaded, err := st.EmergencyConfig().GetEmergencyConfig(t.Context())
+	require.NoError(t, err)
+	assert.True(t, loaded.Enabled)
+	assert.Equal(t, 90*time.Second, loaded.OperationTimeout)
+}
+
 // TestOperatorManagementPostgreSQLFlow exercises the full REQ-053 management
 // contract against the PostgreSQL store: token create/replace/status, viewer
 // denial, enrollment through the in-process OperatorService, live stream
