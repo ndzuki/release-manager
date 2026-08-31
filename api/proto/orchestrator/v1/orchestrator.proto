@@ -1062,6 +1062,13 @@ message ExecuteEmergencyChangeRequest {
   repeated string target_locks = 7; // required when REQUIRE_PROMOTION (D12)
   string idempotency_key = 8;       // write idempotency key (ADR-009)
   bytes request_hash = 9;           // request fingerprint (ADR-009)
+  // REQ-081 (D3=A/D4=A): flat replicas scalar for the SET_REPLICAS action.
+  // Mutually exclusive with container/artifact_ref (image change) — sending
+  // both is rejected as conflicting_change. 0 means "replicas not requested"
+  // (flat scalar has no presence; scale-to-zero needs a contract revisit).
+  // The request-level operation_version (field 4) also governs this branch
+  // (D5=A); idempotency key + request hash are reused unchanged (ADR-009).
+  int32 set_replicas = 10;
 }
 
 message ExecuteEmergencyChangeResponse {
