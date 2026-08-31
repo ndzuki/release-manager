@@ -141,6 +141,18 @@ type ServiceConfig struct {
 	LoginRateLimit LoginRateLimitCfg `mapstructure:"login_rate_limit"`
 }
 
+// EmergencyCfg carries the emergency change kill switch and operation
+// timeout (REQ-081 D2=A): the orchestrator loads both at startup (see
+// cmd/orchestrator loadEmergencyConfig) and seeds them into the shared
+// app_settings table as the production writer of SetEmergencyConfig. A
+// missing section fails closed (Enabled=false, default timeout). The
+// operation_timeout is decoded from its raw string form so an unparsable
+// value falls back to the D16 default instead of failing config loading.
+type EmergencyCfg struct {
+	Enabled          bool   `mapstructure:"enabled"`
+	OperationTimeout string `mapstructure:"operation_timeout"`
+}
+
 // AgentCfg controls the operator agent mode (TASK-075): the agent bootstraps
 // its identity via enrollment token and connects to the gateway over mTLS.
 // Mode "agent" is the default; "gateway" keeps the management-plane operator
