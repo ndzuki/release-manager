@@ -1083,6 +1083,42 @@ func TestInventoryDefinitionAssociation(t *testing.T) {
 	assert.Equal(t, "definition-1", items[0].ReleaseDefinitionID)
 }
 
+// TestInventoryUpsertPreservesDefinitionOnEmptyConflictUpdate locks the
+// PostgreSQL DO UPDATE branch of the inventory upsert (TASK-080): a conflict
+// update carrying an empty release_definition_id (a full snapshot with no
+// definition) must keep the existing association instead of clearing it,
+// while still applying the other observable fields.
+func TestInventoryUpsertPreservesDefinitionOnEmptyConflictUpdate(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	base := func(defID, lastSyncID, chart string) *store.ReleaseInventory {
+		return &store.ReleaseInventory{
+			ReleaseDefinitionID: defID,
+			CustomerID:          "customer-1",
+			ClusterID:           "cluster-1",
+			Namespace:           "apps",
+			ReleaseName:         "example",
+			Chart:               chart,
+			ChartVersion:        "2.0.0",
+			Revision:            2,
+			Status:              "superseded",
+			InventoryStatus:     store.InventoryActive,
+			LastSyncID:          lastSyncID,
+		}
+	}
+
+	require.NoError(t, st.Inventories().Upsert(ctx, base("definition-1", "sync-1", "example-chart")))
+	require.NoError(t, st.Inventories().Upsert(ctx, base("", "sync-2", "example-chart-v2")))
+
+	items, err := st.Inventories().ListByCluster(ctx, "customer-1", "cluster-1")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "definition-1", items[0].ReleaseDefinitionID)
+	assert.Equal(t, "sync-2", items[0].LastSyncID)
+	assert.Equal(t, "example-chart-v2", items[0].Chart)
+}
+
 func TestVerificationPersistenceIncludesTrustProvenance(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()

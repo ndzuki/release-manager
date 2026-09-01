@@ -1,4 +1,4 @@
-package main
+package operator_test
 
 import (
 	"context"
@@ -18,11 +18,13 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ndzuki/release-manager/internal/operator"
 	"github.com/ndzuki/release-manager/internal/operator/ca"
 )
 
 // writeCAFile persists the CA certificate PEM to a temp file so the client
-// constructors can exercise their real file-based trust anchor path.
+// constructors can exercise their real file-based trust anchor path
+// (TASK-080).
 func writeCAFile(t *testing.T, caInst *ca.CA) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "ca.crt")
@@ -32,7 +34,7 @@ func writeCAFile(t *testing.T, caInst *ca.CA) string {
 
 // newTLSGatewayServer starts an httptest TLS server with a CA-signed server
 // certificate, mirroring the production gateway listener. clientAuth and
-// clientCAs may be nil for server-authentication-only tests.
+// clientCAs may be nil for server-authentication-only tests (TASK-080).
 func newTLSGatewayServer(t *testing.T, certPEM, keyPEM []byte, clientAuth tls.ClientAuthType, clientCAs *x509.CertPool) *httptest.Server {
 	t.Helper()
 	serverCert, err := tls.X509KeyPair(certPEM, keyPEM)
@@ -51,16 +53,17 @@ func newTLSGatewayServer(t *testing.T, certPEM, keyPEM []byte, clientAuth tls.Cl
 	ts.EnableHTTP2 = true
 	ts.StartTLS()
 	// The server certificate carries DNS SANs only; point clients at
-	// localhost so the name matches (same approach as internal/operator
-	// gateway_mtls_test.go newGatewayServer).
+	// localhost so the name matches (same approach as gateway_mtls_test.go
+	// newGatewayServer).
 	ts.URL = strings.Replace(ts.URL, "127.0.0.1", "localhost", 1)
 	t.Cleanup(ts.Close)
 	return ts
 }
 
-// newAgentKeyAndCSR generates an Ed25519 key and a CSR signed by that key,
-// ready for ca.SignCSR (client identity issuance).
-func newAgentKeyAndCSR(t *testing.T) (keyPEM, csrPEM []byte) {
+// newClientKeyAndCSR generates an Ed25519 key and a CSR signed by that key,
+// ready for ca.SignCSR (client identity issuance). Named distinctly from
+// gateway_mtls_test.go's newAgentKeyAndCSR to avoid a package-level clash.
+func newClientKeyAndCSR(t *testing.T) (keyPEM, csrPEM []byte) {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -75,12 +78,12 @@ func newAgentKeyAndCSR(t *testing.T) (keyPEM, csrPEM []byte) {
 		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
 }
 
-// TestCAOnlyTLSClient covers AC-080-02 for the gateway mode: the CA-only
+// TestNewCAOnlyHTTPClient covers AC-080-02 for the gateway mode: the CA-only
 // client must derive RootCAs from caCertPath, complete a TLS handshake
 // against a CA-signed gateway, and present no client certificate. A client
 // built from an unrelated CA must fail the handshake (proves RootCAs really
 // takes effect) (TASK-080).
-func TestCAOnlyTLSClient(t *testing.T) {
+func TestNewCAOnlyHTTPClient(t *testing.T) {
 	gatewayCA, err := ca.New(ca.Config{TTL: 24 * time.Hour})
 	require.NoError(t, err)
 	caPath := writeCAFile(t, gatewayCA)
@@ -89,7 +92,7 @@ func TestCAOnlyTLSClient(t *testing.T) {
 	require.NoError(t, err)
 	ts := newTLSGatewayServer(t, serverCertPEM, serverKeyPEM, tls.NoClientCert, nil)
 
-	client, err := caOnlyTLSClient(caPath)
+	client, err := operator.NewCAOnlyHTTPClient(caPath)
 	require.NoError(t, err)
 	transport, ok := client.Transport.(*http.Transport)
 	require.True(t, ok, "CA-only client must use a *http.Transport")
@@ -116,7 +119,7 @@ func TestCAOnlyTLSClient(t *testing.T) {
 	otherCA, err := ca.New(ca.Config{TTL: 24 * time.Hour})
 	require.NoError(t, err)
 	otherPath := writeCAFile(t, otherCA)
-	badClient, err := caOnlyTLSClient(otherPath)
+	badClient, err := operator.NewCAOnlyHTTPClient(otherPath)
 	require.NoError(t, err)
 	badReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL, http.NoBody)
 	require.NoError(t, err)
@@ -128,11 +131,12 @@ func TestCAOnlyTLSClient(t *testing.T) {
 	require.Contains(t, err.Error(), "unknown authority")
 }
 
-// TestAgentTLSClient covers the agent-mode mTLS path (AC-080-02): the client
-// presents the enrolled identity certificate and trusts the gateway CA, and
-// completes a handshake against a gateway that requires and verifies client
-// certificates. This guards the agent-mode reuse against regression.
-func TestAgentTLSClient(t *testing.T) {
+// TestNewAgentTLSClient covers the agent-mode mTLS path (AC-080-02): the
+// client presents the enrolled identity certificate and trusts the gateway
+// CA, and completes a handshake against a gateway that requires and verifies
+// client certificates. This guards the agent-mode reuse against regression
+// (TASK-080).
+func TestNewAgentTLSClient(t *testing.T) {
 	gatewayCA, err := ca.New(ca.Config{TTL: 24 * time.Hour})
 	require.NoError(t, err)
 	caPath := writeCAFile(t, gatewayCA)
@@ -141,7 +145,7 @@ func TestAgentTLSClient(t *testing.T) {
 	require.NoError(t, err)
 	ts := newTLSGatewayServer(t, serverCertPEM, serverKeyPEM, tls.RequireAndVerifyClientCert, gatewayCA.CertPool())
 
-	keyPEM, csrPEM := newAgentKeyAndCSR(t)
+	keyPEM, csrPEM := newClientKeyAndCSR(t)
 	csrBlock, _ := pem.Decode(csrPEM)
 	require.NotNil(t, csrBlock)
 	csr, err := x509.ParseCertificateRequest(csrBlock.Bytes)
@@ -149,7 +153,7 @@ func TestAgentTLSClient(t *testing.T) {
 	issued, err := gatewayCA.SignCSR(csr, nil)
 	require.NoError(t, err)
 
-	client, err := agentTLSClient(string(issued.PEM), string(keyPEM), caPath)
+	client, err := operator.NewAgentTLSClient(string(issued.PEM), string(keyPEM), caPath)
 	require.NoError(t, err)
 	transport, ok := client.Transport.(*http.Transport)
 	require.True(t, ok)
@@ -165,9 +169,86 @@ func TestAgentTLSClient(t *testing.T) {
 	resp.Body.Close()
 }
 
-// TestCAOnlyTLSClientMissingCA: a missing CA file must fail the constructor
-// loudly instead of falling back to the system pool (fail-closed trust).
-func TestCAOnlyTLSClientMissingCA(t *testing.T) {
-	_, err := caOnlyTLSClient(filepath.Join(t.TempDir(), "missing-ca.crt"))
+// TestNewCAOnlyHTTPClientMissingCA: a missing CA file must fail the
+// constructor loudly instead of falling back to the system pool (fail-closed
+// trust, D4=A) (TASK-080).
+func TestNewCAOnlyHTTPClientMissingCA(t *testing.T) {
+	_, err := operator.NewCAOnlyHTTPClient(filepath.Join(t.TempDir(), "missing-ca.crt"))
 	require.Error(t, err)
+}
+
+// TestNewCAOnlyHTTPClientRejectsMalformedCA: a corrupt CA file must fail the
+// constructor (fail-closed trust, D4=A) (TASK-080).
+func TestNewCAOnlyHTTPClientRejectsMalformedCA(t *testing.T) {
+	path := writeTempFile(t, "malformed-ca.crt", "not a PEM certificate")
+	client, err := operator.NewCAOnlyHTTPClient(path)
+	require.Error(t, err)
+	require.Nil(t, client)
+}
+
+// TestNewAgentTLSClientRejectsMalformedInputs covers the negative constructor
+// matrix for the mTLS client: malformed CA/cert/key and a certificate/private
+// key mismatch must all fail closed with a nil client (TASK-080, AC-080-02).
+func TestNewAgentTLSClientRejectsMalformedInputs(t *testing.T) {
+	gatewayCA, err := ca.New(ca.Config{TTL: 24 * time.Hour})
+	require.NoError(t, err)
+	caPath := writeCAFile(t, gatewayCA)
+
+	keyPEM, csrPEM := newClientKeyAndCSR(t)
+	csrBlock, _ := pem.Decode(csrPEM)
+	require.NotNil(t, csrBlock)
+	csr, err := x509.ParseCertificateRequest(csrBlock.Bytes)
+	require.NoError(t, err)
+	issued, err := gatewayCA.SignCSR(csr, nil)
+	require.NoError(t, err)
+
+	otherKeyPEM, _ := newClientKeyAndCSR(t)
+
+	tests := []struct {
+		name       string
+		certPEM    string
+		keyPEM     string
+		caCertPath string
+	}{
+		{
+			name:       "malformed CA PEM",
+			certPEM:    string(issued.PEM),
+			keyPEM:     string(keyPEM),
+			caCertPath: writeTempFile(t, "bad-ca.crt", "not a PEM certificate"),
+		},
+		{
+			name:       "malformed identity certificate PEM",
+			certPEM:    "not a PEM certificate",
+			keyPEM:     string(keyPEM),
+			caCertPath: caPath,
+		},
+		{
+			name:       "malformed identity key PEM",
+			certPEM:    string(issued.PEM),
+			keyPEM:     "not a PEM key",
+			caCertPath: caPath,
+		},
+		{
+			name:       "certificate key mismatch",
+			certPEM:    string(issued.PEM),
+			keyPEM:     string(otherKeyPEM),
+			caCertPath: caPath,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, err := operator.NewAgentTLSClient(tt.certPEM, tt.keyPEM, tt.caCertPath)
+			require.Error(t, err)
+			require.Nil(t, client)
+		})
+	}
+}
+
+// writeTempFile persists arbitrary content to a temp file for negative
+// constructor inputs (TASK-080).
+func writeTempFile(t *testing.T, name, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	return path
 }

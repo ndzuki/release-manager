@@ -68,15 +68,17 @@ func (s *orchSvc) Name() string { return "release-orchestrator" }
 func (s *orchSvc) Configure(cfg *config.ServiceConfig) { s.cfg = *cfg }
 
 // newGatewayOperatorService builds the OperatorService shared by the
-// management plane and the agent gateway, and (when enabled) the mTLS gateway
-// listener itself. The CA is loaded from the configured source (Vault KV or
-// dev files, ADR-017) so the trust chain survives restarts; missing or
-// unavailable credentials fail closed.
-func (s *orchSvc) newGatewayOperatorService(logger *slog.Logger) (*operator.Service, error) {
+// management plane and the agent gateway. The CA is loaded from the
+// configured source (Vault KV or dev files, ADR-017) so the trust chain
+// survives restarts; missing or unavailable credentials fail closed. The
+// gateway listener itself is built later (buildGatewayServer) once the
+// orchestrator Service exists, because it also mounts SyncInventory
+// (TASK-080, D-107=A).
+func (s *orchSvc) newGatewayOperatorService(logger *slog.Logger) (*operator.Service, *ca.CA, config.GatewayCfg, error) {
 	gatewayCfg := s.cfg.Gateway.WithDefaults()
 	caInst, renewRatio, err := ca.LoadConfigured(context.Background(), s.cfg.CA)
 	if err != nil {
-		return nil, fmt.Errorf("load operator CA: %w", err)
+		return nil, nil, gatewayCfg, fmt.Errorf("load operator CA: %w", err)
 	}
 	gatewayOpts := []operator.Option{
 		operator.WithCA(caInst),
@@ -84,21 +86,13 @@ func (s *orchSvc) newGatewayOperatorService(logger *slog.Logger) (*operator.Serv
 		operator.WithAudit(s.auditEmitter),
 		operator.WithStreamRegistry(s.operatorRegistry()),
 	}
-	if gatewayCfg.Enabled {
-		// The gateway service shares the persisted CA so Enroll signs
-		// certificates from the same CA the listener verifies against.
-		service, err := operator.NewService(s.store, logger, gatewayOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("create gateway operator service: %w", err)
-		}
-		s.gateway, err = s.buildGatewayServer(gatewayCfg, caInst, service, logger)
-		if err != nil {
-			return nil, err
-		}
-		logger.Info("agent gateway enabled", "addr", s.gateway.Addr, "ca_cert", s.cfg.CA.CertPath)
-		return service, nil
+	// The gateway service shares the persisted CA so Enroll signs
+	// certificates from the same CA the listener verifies against.
+	service, err := operator.NewService(s.store, logger, gatewayOpts...)
+	if err != nil {
+		return nil, nil, gatewayCfg, fmt.Errorf("create gateway operator service: %w", err)
 	}
-	return operator.NewService(s.store, logger, gatewayOpts...)
+	return service, caInst, gatewayCfg, nil
 }
 
 // operatorRegistry returns the shared command-stream registry, defaulting to
@@ -136,13 +130,16 @@ func (s *orchSvc) ExtraServers() ([]*http.Server, error) {
 
 // buildGatewayServer assembles the mTLS agent gateway listener (TASK-075 plan
 // v1 Step 3): a CA-signed server certificate, client certificates verified
-// when presented (VerifyClientCertIfGiven), and only the OperatorService
-// handler mounted. Enroll accepts certificate-less requests; CommandStream
-// enforces client certificates inside the handler (mixed mTLS contract).
+// when presented (VerifyClientCertIfGiven), the OperatorService handler, and
+// the single OrchestratorService.SyncInventory path with certificate identity
+// authentication (TASK-080, D-107=A). Enroll accepts certificate-less
+// requests; CommandStream and SyncInventory enforce client certificates
+// inside their handlers (mixed mTLS contract).
 func (s *orchSvc) buildGatewayServer(
 	gatewayCfg config.GatewayCfg,
 	caInst *ca.CA,
 	operatorService *operator.Service,
+	syncService *orchestrator.Service,
 	logger *slog.Logger,
 ) (*http.Server, error) {
 	serverCertPEM, serverKeyPEM, err := caInst.SignServerCert([]string{
@@ -166,6 +163,24 @@ func (s *orchSvc) buildGatewayServer(
 		),
 	)
 	gmux.Handle(path, operator.NewCertificateIdentityHandler(gatewayTLSStateMiddleware(handler)))
+
+	// TASK-080 (D-107=A): mount only OrchestratorService.SyncInventory on the
+	// gateway mux (minimal exposure; the rest of OrchestratorService stays
+	// 404 here). The Connect handler is generated from the orchestrator
+	// Service but only the exact SyncInventory path is registered, with
+	// certificate identity authentication: verified client certificate,
+	// ADR-018 serial lookup via GetByCertSerial, and
+	// operator_id/customer_id/cluster_id field consistency.
+	_, syncHandler := orchestratorv1connect.NewOrchestratorServiceHandler(
+		syncService,
+		connect.WithInterceptors(
+			contractsinterceptor.NewRequestIDInterceptor(logger),
+			contractsinterceptor.NewErrorSanitizeInterceptor(logger),
+			orchestrator.NewSyncInventoryCertAuthInterceptor(s.store, logger),
+		),
+	)
+	gmux.Handle("POST "+orchestratorv1connect.OrchestratorServiceSyncInventoryProcedure,
+		gatewayTLSStateMiddleware(syncHandler))
 
 	return &http.Server{
 		Addr:              fmt.Sprintf(":%d", gatewayCfg.Port),
@@ -327,11 +342,11 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		logger,
 	)
 	// Agent gateway (TASK-075 plan v1 Step 3): a second TLS listener serving
-	// only the OperatorService handler for customer cluster agents. A
-	// persisted CA keeps the trust chain stable across restarts; the service
-	// shares it via WithCA so Enroll signs certificates from the same CA the
-	// listener verifies against.
-	operatorService, err := s.newGatewayOperatorService(logger)
+	// the OperatorService handler for customer cluster agents plus the
+	// SyncInventory path (TASK-080). A persisted CA keeps the trust chain
+	// stable across restarts; the service shares it via WithCA so Enroll
+	// signs certificates from the same CA the listener verifies against.
+	operatorService, caInst, gatewayCfg, err := s.newGatewayOperatorService(logger)
 	if err != nil {
 		return fmt.Errorf("create operator control service: %w", err)
 	}
@@ -368,6 +383,16 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		logger,
 	)
 	s.emergency = svc
+	if gatewayCfg.Enabled {
+		// TASK-080 (D-107=A): build the gateway listener after the
+		// orchestrator Service exists — the gateway mounts SyncInventory on
+		// it with certificate identity authentication.
+		s.gateway, err = s.buildGatewayServer(gatewayCfg, caInst, operatorService, svc, logger)
+		if err != nil {
+			return err
+		}
+		logger.Info("agent gateway enabled", "addr", s.gateway.Addr, "ca_cert", s.cfg.CA.CertPath)
+	}
 	if !s.cfg.Maintenance {
 		// ADR-009 restart recovery: operations interrupted mid-preflight resume
 		// coordination after the generic terminal-state recovery pass.
