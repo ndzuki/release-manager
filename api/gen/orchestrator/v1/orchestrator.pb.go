@@ -8921,8 +8921,15 @@ type ExecuteEmergencyChangeRequest struct {
 	TargetLocks         []string               `protobuf:"bytes,7,rep,name=target_locks,json=targetLocks,proto3" json:"target_locks,omitempty"`                                                                   // required when REQUIRE_PROMOTION (D12)
 	IdempotencyKey      string                 `protobuf:"bytes,8,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`                                                          // write idempotency key (ADR-009)
 	RequestHash         []byte                 `protobuf:"bytes,9,opt,name=request_hash,json=requestHash,proto3" json:"request_hash,omitempty"`                                                                   // request fingerprint (ADR-009)
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// REQ-081 (D3=A/D4=A): flat replicas scalar for the SET_REPLICAS action.
+	// Mutually exclusive with container/artifact_ref (image change) — sending
+	// both is rejected as conflicting_change. 0 means "replicas not requested"
+	// (flat scalar has no presence; scale-to-zero needs a contract revisit).
+	// The request-level operation_version (field 4) also governs this branch
+	// (D5=A); idempotency key + request hash are reused unchanged (ADR-009).
+	SetReplicas   int32 `protobuf:"varint,10,opt,name=set_replicas,json=setReplicas,proto3" json:"set_replicas,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ExecuteEmergencyChangeRequest) Reset() {
@@ -9016,6 +9023,13 @@ func (x *ExecuteEmergencyChangeRequest) GetRequestHash() []byte {
 		return x.RequestHash
 	}
 	return nil
+}
+
+func (x *ExecuteEmergencyChangeRequest) GetSetReplicas() int32 {
+	if x != nil {
+		return x.SetReplicas
+	}
+	return 0
 }
 
 type ExecuteEmergencyChangeResponse struct {
@@ -10899,7 +10913,7 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"selectable\x18\n" +
 	" \x01(\bR\n" +
 	"selectable\x125\n" +
-	"\x16incompatibility_reason\x18\v \x01(\tR\x15incompatibilityReason\"\xac\x03\n" +
+	"\x16incompatibility_reason\x18\v \x01(\tR\x15incompatibilityReason\"\xcf\x03\n" +
 	"\x1dExecuteEmergencyChangeRequest\x122\n" +
 	"\x15release_definition_id\x18\x01 \x01(\tR\x13releaseDefinitionId\x12!\n" +
 	"\fworkload_ref\x18\x02 \x01(\tR\vworkloadRef\x12\x1c\n" +
@@ -10909,7 +10923,9 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\x14convergence_strategy\x18\x06 \x01(\x0e2$.orchestrator.v1.ConvergenceStrategyR\x13convergenceStrategy\x12!\n" +
 	"\ftarget_locks\x18\a \x03(\tR\vtargetLocks\x12'\n" +
 	"\x0fidempotency_key\x18\b \x01(\tR\x0eidempotencyKey\x12!\n" +
-	"\frequest_hash\x18\t \x01(\fR\vrequestHash\"\xaa\x01\n" +
+	"\frequest_hash\x18\t \x01(\fR\vrequestHash\x12!\n" +
+	"\fset_replicas\x18\n" +
+	" \x01(\x05R\vsetReplicas\"\xaa\x01\n" +
 	"\x1eExecuteEmergencyChangeResponse\x128\n" +
 	"\x06result\x18\x01 \x01(\v2 .orchestrator.v1.EmergencyResultR\x06result\x12!\n" +
 	"\foperation_id\x18\x02 \x01(\tR\voperationId\x12+\n" +

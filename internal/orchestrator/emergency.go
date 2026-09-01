@@ -61,6 +61,7 @@ type emergencyResolvedChange struct {
 	container      string
 	artifactID     string
 	imageReference string
+	replicas       *int32
 	promotionPaths []string
 	targetSummary  string
 }
@@ -84,11 +85,11 @@ func (s *Service) ExecuteEmergencyChange(
 	actor, ok := authctx.ActorFromContext(ctx)
 	if !ok {
 		err := emergencyError(connect.CodeUnauthenticated, "authentication_required", "authentication required")
-		s.emitEmergencyAttempt(nil, msg.GetReleaseDefinitionId(), "", strategy, err, time.Since(started))
+		s.emitEmergencyAttempt(nil, msg.GetReleaseDefinitionId(), "", strategy, "", err, time.Since(started))
 		return nil, err
 	}
 	if err := validateExecuteEmergencyRequest(msg); err != nil {
-		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, err, time.Since(started))
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, deriveRequestedEmergencyAction(msg), err, time.Since(started))
 		return nil, err
 	}
 
@@ -104,13 +105,13 @@ func (s *Service) ExecuteEmergencyChange(
 			orchestratorv1.EmergencyReasonCode_EMERGENCY_REASON_CODE_KILL_SWITCH_DISABLED,
 			"emergency change is disabled by the kill switch", false,
 		)
-		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, rpcErr, time.Since(started))
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, deriveRequestedEmergencyAction(msg), rpcErr, time.Since(started))
 		return nil, rpcErr
 	}
 
 	definition, err := s.loadEmergencyDefinition(ctx, msg.GetReleaseDefinitionId())
 	if err != nil {
-		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, err, time.Since(started))
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, deriveRequestedEmergencyAction(msg), err, time.Since(started))
 		return nil, err
 	}
 	customer, err := s.store.Customers().Get(ctx, definition.CustomerID)
@@ -119,7 +120,7 @@ func (s *Service) ExecuteEmergencyChange(
 	}
 	if customer.Status != store.CustomerActive {
 		err := emergencyError(connect.CodePermissionDenied, "customer_disabled", "customer is disabled")
-		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, err, time.Since(started))
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, deriveRequestedEmergencyAction(msg), err, time.Since(started))
 		return nil, err
 	}
 
@@ -130,17 +131,17 @@ func (s *Service) ExecuteEmergencyChange(
 	keyHash := hashEmergencyIdempotencyKey(msg.GetIdempotencyKey())
 	resolved, err := s.resolveExecuteEmergencyChange(ctx, msg, definition)
 	if err != nil {
-		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, err, time.Since(started))
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, deriveRequestedEmergencyAction(msg), err, time.Since(started))
 		return nil, err
 	}
 	if s.authorizer == nil {
 		err := emergencyError(connect.CodeUnavailable, "authorization_snapshot_stale", "authorization snapshot is unavailable")
-		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, err, time.Since(started))
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, resolved.action, err, time.Since(started))
 		return nil, err
 	}
 	// ADR-009: authorization precedes the idempotency hit.
 	if err := s.authorizer.AuthorizeWrite(ctx, actor, definition.CustomerID, store.AuthorizationExecuteEmergency); err != nil {
-		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, err, time.Since(started))
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, resolved.action, err, time.Since(started))
 		return nil, err
 	}
 	replay, err := s.store.EmergencyIntents().GetReplay(ctx, actor.OrganizationID+":"+definition.ID, keyHash, requestHash)
@@ -149,7 +150,7 @@ func (s *Service) ExecuteEmergencyChange(
 	}
 	if errors.Is(err, store.ErrIdempotencyConflict) {
 		rpcErr := emergencyStoreError(err)
-		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, rpcErr, time.Since(started))
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, resolved.action, rpcErr, time.Since(started))
 		return nil, rpcErr
 	}
 	if !errors.Is(err, store.ErrNotFound) {
@@ -166,7 +167,7 @@ func (s *Service) ExecuteEmergencyChange(
 				orchestratorv1.EmergencyReasonCode_EMERGENCY_REASON_CODE_LOCKED_PATH,
 				"emergency target is locked", false,
 			)
-			s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, rpcErr, time.Since(started))
+			s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, resolved.action, rpcErr, time.Since(started))
 			return nil, rpcErr
 		}
 	}
@@ -182,12 +183,22 @@ func (s *Service) ExecuteEmergencyChange(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("encode promotion paths: %w", err))
 	}
+	// Image fields are only populated for the image action; a replicas intent
+	// persists nil container/artifact/image columns (REQ-081 single-action
+	// semantics).
+	var container, artifactID, imageReference *string
+	if resolved.action == store.EmergencySetContainerImage {
+		container = &resolved.container
+		artifactID = &resolved.artifactID
+		imageReference = &resolved.imageReference
+	}
 	intent := &store.EmergencyIntent{
 		ID: uuid.NewString(), ReleaseDefinitionID: definition.ID, OperationID: opID, CommandID: commandID,
 		Action: resolved.action, WorkloadKind: resolved.workload.Kind, WorkloadName: resolved.workload.Name,
 		WorkloadNamespace: resolved.workload.Namespace, WorkloadUID: "",
-		Container: &resolved.container, ArtifactID: &resolved.artifactID, ImageReference: &resolved.imageReference,
-		Convergence: convergence, PromotionPaths: promotionPaths,
+		Container: container, ArtifactID: artifactID, ImageReference: imageReference,
+		TargetReplicas: resolved.replicas,
+		Convergence:    convergence, PromotionPaths: promotionPaths,
 		DeliveryStatus: "pending", CreatedAt: now, UpdatedAt: now,
 	}
 	op := &store.Operation{
@@ -232,7 +243,7 @@ func (s *Service) ExecuteEmergencyChange(
 	})
 	if err != nil {
 		rpcErr := emergencyStoreError(err)
-		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, rpcErr, time.Since(started))
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, resolved.action, rpcErr, time.Since(started))
 		return nil, rpcErr
 	}
 	if !created.Replayed {
@@ -259,7 +270,7 @@ func (s *Service) ExecuteEmergencyChange(
 		created.Operation = transitioned
 	}
 
-	s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), created.Operation.ID, strategy, nil, time.Since(started))
+	s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), created.Operation.ID, strategy, resolved.action, nil, time.Since(started))
 	s.logger.Info("emergency change accepted", "operation_id", created.Operation.ID, "definition_id", definition.ID,
 		"action", resolved.action, "convergence", convergence)
 	return connect.NewResponse(executeEmergencyResponse(created.Operation, created.Intent, created.ConvergenceTask, msg.GetConvergenceStrategy())), nil
@@ -369,8 +380,10 @@ func (s *Service) failEmergencyDelivery(
 	duration time.Duration,
 ) error {
 	operationID := ""
+	intentAction := store.EmergencyAction("")
 	if created != nil && created.Operation != nil && created.Intent != nil {
 		operationID = created.Operation.ID
+		intentAction = created.Intent.Action
 		if _, err := s.store.EmergencyIntents().Finish(
 			ctx,
 			created.Intent.ID,
@@ -385,7 +398,7 @@ func (s *Service) failEmergencyDelivery(
 			s.logger.Error("failed to mark emergency delivery terminal", "operation_id", operationID, "error", err)
 		}
 	}
-	s.emitEmergencyAttempt(actor, definitionID, operationID, strategy, deliveryErr, duration)
+	s.emitEmergencyAttempt(actor, definitionID, operationID, strategy, intentAction, deliveryErr, duration)
 	return deliveryErr
 }
 
@@ -416,8 +429,15 @@ func validateExecuteEmergencyRequest(msg *orchestratorv1.ExecuteEmergencyChangeR
 	if msg.GetConvergenceStrategy() == orchestratorv1.ConvergenceStrategy_CONVERGENCE_STRATEGY_UNSPECIFIED {
 		return emergencyError(connect.CodeInvalidArgument, "convergence_strategy_required", "convergence strategy is required")
 	}
-	// AC-079-G8: artifact_ref is mandatory (D14).
-	if strings.TrimSpace(msg.GetArtifactRef()) == "" {
+	// REQ-081 (D3=A/D4=A): one action per request. A non-zero set_replicas
+	// selects the SET_REPLICAS branch and is mutually exclusive with the
+	// image change fields; otherwise the image branch keeps the AC-079-G8
+	// mandatory artifact_ref contract (D14) unchanged.
+	if deriveRequestedEmergencyAction(msg) == store.EmergencySetReplicas {
+		if strings.TrimSpace(msg.GetContainer()) != "" || strings.TrimSpace(msg.GetArtifactRef()) != "" {
+			return emergencyError(connect.CodeInvalidArgument, "conflicting_change", "set_replicas is mutually exclusive with container/artifact_ref")
+		}
+	} else if strings.TrimSpace(msg.GetArtifactRef()) == "" {
 		return emergencyError(connect.CodeInvalidArgument, "artifact_ref_required", "artifact_ref is required")
 	}
 	// AC-079-G9 / D12: REQUIRE_PROMOTION requires target locks.
@@ -481,7 +501,9 @@ func (s *Service) onlineEmergencyOperator(ctx context.Context, definition *store
 }
 
 // resolveExecuteEmergencyChange resolves the workload_ref string, candidate
-// artifact reference and promotion mapping paths (D14).
+// artifact reference and promotion mapping paths (D14), dispatching on the
+// request payload: set_replicas selects the SET_REPLICAS branch (REQ-081
+// D3=A), everything else keeps the canonical image branch.
 func (s *Service) resolveExecuteEmergencyChange(
 	ctx context.Context,
 	msg *orchestratorv1.ExecuteEmergencyChangeRequest,
@@ -491,6 +513,52 @@ func (s *Service) resolveExecuteEmergencyChange(
 	if err != nil {
 		return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument, "invalid_workload_ref", "workload_ref is invalid")
 	}
+	if deriveRequestedEmergencyAction(msg) == store.EmergencySetReplicas {
+		return resolveEmergencyReplicas(msg, definition, workload)
+	}
+	return s.resolveEmergencyImage(ctx, msg, definition, workload)
+}
+
+// resolveEmergencyReplicas validates and resolves the SET_REPLICAS branch
+// (REQ-081, REQ-032 §171): deployment/statefulset kinds only, no live HPA
+// target, 0 <= replicas <= max_emergency_replicas, and — for
+// REQUIRE_PROMOTION — a field="replicas" promotion mapping path.
+func resolveEmergencyReplicas(
+	msg *orchestratorv1.ExecuteEmergencyChangeRequest,
+	definition *store.ReleaseDefinition,
+	workload parsedWorkloadRef,
+) (emergencyResolvedChange, error) {
+	if workload.Kind != workloadDeployment && workload.Kind != workloadStatefulSet {
+		return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument, "workload_kind_not_supported", "workload kind does not support replicas changes")
+	}
+	if definition.HPAManaged {
+		return emergencyResolvedChange{}, emergencyError(connect.CodeFailedPrecondition, "hpa_managed", "replicas changes are disabled for HPA-managed workloads")
+	}
+	replicas := msg.GetSetReplicas()
+	if replicas < 0 || replicas > definition.MaxEmergencyReplicas {
+		return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument, "invalid_replicas", "replicas is outside the allowed range")
+	}
+	paths := emergencyPromotionPathsForRef(definition, workload, "", "replicas")
+	if msg.GetConvergenceStrategy() == orchestratorv1.ConvergenceStrategy_REQUIRE_PROMOTION && len(paths) == 0 {
+		return emergencyResolvedChange{}, emergencyError(connect.CodeFailedPrecondition, "promotion_not_supported", "target has no promotion mapping")
+	}
+	return emergencyResolvedChange{
+		action:         store.EmergencySetReplicas,
+		workload:       workload,
+		replicas:       &replicas,
+		promotionPaths: paths,
+		targetSummary:  fmt.Sprintf("%s/%s, replicas=%d", workload.Kind, workload.Name, replicas),
+	}, nil
+}
+
+// resolveEmergencyImage keeps the canonical SET_CONTAINER_IMAGE resolution
+// (REQ-079 D14).
+func (s *Service) resolveEmergencyImage(
+	ctx context.Context,
+	msg *orchestratorv1.ExecuteEmergencyChangeRequest,
+	definition *store.ReleaseDefinition,
+	workload parsedWorkloadRef,
+) (emergencyResolvedChange, error) {
 	artifact, err := s.resolveEmergencyArtifact(ctx, msg.GetArtifactRef())
 	if err != nil {
 		return emergencyResolvedChange{}, err
@@ -684,7 +752,18 @@ func valueOrZero(value *int32) int32 {
 	return *value
 }
 
-func (s *Service) emitEmergencyAttempt(actor *authctx.Actor, definitionID, operationID string, strategy orchestratorv1.ConvergenceStrategy, operationErr error, duration time.Duration) {
+// deriveRequestedEmergencyAction infers the request's emergency action from
+// the payload before resolution (REQ-081 D3=A): non-zero set_replicas selects
+// SET_REPLICAS, everything else keeps the canonical image action. Used for
+// audit events emitted before/at resolution failure points.
+func deriveRequestedEmergencyAction(msg *orchestratorv1.ExecuteEmergencyChangeRequest) store.EmergencyAction {
+	if msg != nil && msg.GetSetReplicas() != 0 {
+		return store.EmergencySetReplicas
+	}
+	return store.EmergencySetContainerImage
+}
+
+func (s *Service) emitEmergencyAttempt(actor *authctx.Actor, definitionID, operationID string, strategy orchestratorv1.ConvergenceStrategy, action store.EmergencyAction, operationErr error, duration time.Duration) {
 	if definitionID == "" {
 		return
 	}
@@ -693,6 +772,10 @@ func (s *Service) emitEmergencyAttempt(actor *authctx.Actor, definitionID, opera
 	if operationErr != nil {
 		status = "failed"
 		errorCode = connect.CodeOf(operationErr).String()
+	}
+	summaryAction := string(action)
+	if summaryAction == "" {
+		summaryAction = "emergency_change"
 	}
 	actorKind := store.AuditActorAnonymous
 	actorID := "anonymous"
@@ -712,7 +795,7 @@ func (s *Service) emitEmergencyAttempt(actor *authctx.Actor, definitionID, opera
 	}
 	event := audit.NewEvent(actorKind, actorID, organizationID, role, "operation", resourceID,
 		"emergency_change", status,
-		fmt.Sprintf("action=%s convergence=%s", store.EmergencySetContainerImage, convergenceStrategyFromProto(strategy)),
+		fmt.Sprintf("action=%s convergence=%s", summaryAction, convergenceStrategyFromProto(strategy)),
 		map[string]string{"definition_id": definitionID, "error_code": errorCode})
 	event.DurationMs = duration.Milliseconds()
 	s.emitAudit(event)
