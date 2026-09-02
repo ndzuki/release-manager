@@ -690,6 +690,51 @@ func TestSQLiteUnitOfWork_AtomicCommit(t *testing.T) {
 	assert.Equal(t, 2, linked)
 }
 
+// TASK-082 AC-082-02 (D-108 ①b): a nil Dispatch is valid — UPGRADE does not
+// run preflight stages, runUpgrade builds the :execute entry itself, and the
+// unit of work must commit the operation without any outbox row.
+func TestSQLiteUnitOfWork_NilDispatchSkipsOutbox(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+
+	definition := &store.ReleaseDefinition{
+		ID: uuid.New().String(), Name: "nil-dispatch-definition", CustomerID: "nil-dispatch-customer",
+		ClusterID: "nil-dispatch-cluster", ReleaseName: "nil-dispatch-release", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
+	bundle := &store.ReleaseBundle{
+		ID: uuid.New().String(), Name: "nil-dispatch-bundle", DigestAlg: "sha256",
+		DigestValue: uuid.New().String(), Status: store.BundleValidated,
+	}
+	require.NoError(t, st.Bundles().Create(ctx, bundle))
+
+	now := time.Now().UTC()
+	operationRecord := &store.Operation{
+		ID: uuid.New().String(), OperationType: store.OperationUpgrade, Status: store.StatusPending,
+		ReleaseDefinitionID: definition.ID, IdempotencyKey: uuid.New().String(), IdempotencyScope: "org:" + definition.ID,
+		RequestHash: uuid.New().String(), BundleID: bundle.ID, CreatedAt: now, UpdatedAt: now,
+	}
+
+	result, err := st.OperationCreationUnitOfWork()(ctx, store.OperationCreationRequest{
+		Operation: operationRecord, Dispatch: nil, CandidateArtifactDigests: []string{},
+	})
+	require.NoError(t, err)
+	assert.NotNil(t, result.Operation)
+
+	storedOperation, err := st.Operations().Get(ctx, operationRecord.ID)
+	require.NoError(t, err)
+	assert.Equal(t, bundle.ID, storedOperation.BundleID)
+
+	var outboxRows int
+	require.NoError(t, st.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM outbox WHERE operation_id = ?
+	`, operationRecord.ID).Scan(&outboxRows))
+	assert.Zero(t, outboxRows, "nil dispatch must not create any outbox row")
+
+	_, err = st.Outbox().GetByCommandID(ctx, operationRecord.ID+":artifact")
+	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
 func TestSQLiteUnitOfWork_AuthorizationFence(t *testing.T) {
 	// AC-067-22: a stale authorization snapshot is rejected inside the
 	// transaction with no writes (expected version never matches).

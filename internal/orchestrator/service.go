@@ -354,20 +354,31 @@ func (s *Service) CreateOperation(
 
 	// Preflight dispatch: coordinator publishes in-process; a coordinator
 	// failure still persists a deferred outbox entry (AC-067-13).
-	dispatch, dispatchErr := s.coordinator.Dispatch(ctx, op, bundleToProto(bundle), merged.effective)
-	if dispatchErr != nil {
-		payload, marshalErr := (&preflight.CommandPayload{
-			Stage: preflight.StageArtifact, OperationID: op.ID, BundleID: op.BundleID, DefinitionID: def.ID,
-			Bundle: bundleToProto(bundle), Namespace: def.Namespace, ReleaseName: def.ReleaseName, Values: merged.effective,
-			ValuesRevisionID: op.ValuesRevisionID, ValuesPatch: op.ValuesPatch,
-			ExpectedCurrentRevision: int64(op.ExpectedRevision), TargetRevision: int64(op.TargetRevision),
-		}).Marshal()
-		if marshalErr != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("marshal deferred dispatch: %w", marshalErr))
-		}
-		dispatch = &store.OutboxEntry{
-			ID: uuid.New().String(), CommandID: fmt.Sprintf("%s:artifact", op.ID),
-			OperationID: op.ID, OperationType: string(op.OperationType), Payload: payload,
+	// TASK-082 (D-108 ①b): UPGRADE never runs preflight stages — runUpgrade
+	// builds and consumes the :execute entry itself. Persisting a :artifact
+	// entry for UPGRADE poisons the operator stream (deliverPending sends it
+	// first and the agent rejects the stage-shaped payload with
+	// unsupported_command_version), so no :artifact entry is created for
+	// UPGRADE (AC-067-13 / D-87 first-row semantics stay unchanged for
+	// INSTALL and the other staged operation types).
+	var dispatch *store.OutboxEntry
+	var dispatchErr error
+	if op.OperationType != store.OperationUpgrade {
+		dispatch, dispatchErr = s.coordinator.Dispatch(ctx, op, bundleToProto(bundle), merged.effective)
+		if dispatchErr != nil {
+			payload, marshalErr := (&preflight.CommandPayload{
+				Stage: preflight.StageArtifact, OperationID: op.ID, BundleID: op.BundleID, DefinitionID: def.ID,
+				Bundle: bundleToProto(bundle), Namespace: def.Namespace, ReleaseName: def.ReleaseName, Values: merged.effective,
+				ValuesRevisionID: op.ValuesRevisionID, ValuesPatch: op.ValuesPatch,
+				ExpectedCurrentRevision: int64(op.ExpectedRevision), TargetRevision: int64(op.TargetRevision),
+			}).Marshal()
+			if marshalErr != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("marshal deferred dispatch: %w", marshalErr))
+			}
+			dispatch = &store.OutboxEntry{
+				ID: uuid.New().String(), CommandID: fmt.Sprintf("%s:artifact", op.ID),
+				OperationID: op.ID, OperationType: string(op.OperationType), Payload: payload,
+			}
 		}
 	}
 	if s.createOperation == nil {

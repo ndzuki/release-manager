@@ -28,9 +28,12 @@ func (s *Store) createOperation(
 		if req.Emergency.Operation == nil || req.Emergency.Intent == nil {
 			return nil, errors.New("emergency creation requires operation and intent")
 		}
-	} else if req.Dispatch == nil {
-		return nil, errors.New("preflight dispatch is required")
 	}
+	// TASK-082 (D-108 ①b): a nil Dispatch is valid — UPGRADE operations do not
+	// run preflight stages and runUpgrade builds its :execute entry itself, so
+	// no :artifact row may be committed for them (a first-delivered :artifact
+	// poisons the operator stream). createOperationUnitOfWork skips the outbox
+	// write when Dispatch is nil.
 
 	var result *store.OperationCreationResult
 	err := retryBusy(ctx, func() error {
@@ -194,8 +197,13 @@ func createOperationUnitOfWork(
 	if err := createOperation(ctx, tx, req.Operation); err != nil {
 		return nil, err
 	}
-	if err := createOutbox(ctx, tx, req.Dispatch); err != nil {
-		return nil, fmt.Errorf("create preflight dispatch: %w", err)
+	// TASK-082: UPGRADE carries no preflight dispatch (runUpgrade creates the
+	// :execute entry); skip the outbox write instead of inserting an
+	// unconsumed :artifact row.
+	if req.Dispatch != nil {
+		if err := createOutbox(ctx, tx, req.Dispatch); err != nil {
+			return nil, fmt.Errorf("create preflight dispatch: %w", err)
+		}
 	}
 
 	restored, err := setCurrentBundle(ctx, tx, req.Operation.ReleaseDefinitionID, req.Operation.BundleID)
