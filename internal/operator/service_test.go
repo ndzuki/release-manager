@@ -1,6 +1,7 @@
 package operator_test
 
 import (
+	"connectrpc.com/connect"
 	"context"
 	"encoding/json"
 	"github.com/google/uuid"
@@ -535,6 +536,79 @@ func TestHandleCommandResultRollbackFailureMarksOutOfSync(t *testing.T) {
 	assert.Equal(t, "sha256:failed", inventory.ObservedManifestDigest)
 	assert.Equal(t, "failed", inventory.LiveStatus)
 	assert.False(t, result.GetError().GetRetryable())
+}
+
+// TASK-082 AC-082-03 (D-108): the agent's helm_cancelled authoritative result
+// must drive a cancelling UPGRADE to cancelled (AC-023-04 acknowledgement). In
+// the D-108 repro the operation stayed stuck in CANCELLING because the
+// poisoned :artifact row meant :execute was never delivered and the agent
+// could never report back.
+func TestHandleCommandResultHelmCancelledFinalizesCancelled(t *testing.T) {
+	st := newTestSvc(t)
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
+	require.NoError(t, err)
+	ctx := t.Context()
+	definition := &store.ReleaseDefinition{
+		ID: "definition-cancel-upgrade", Name: "example", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: definition.ID, CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Revision: 1, Status: "deployed",
+		InventoryStatus: store.InventoryActive,
+	}))
+	op := &store.Operation{
+		ID: "operation-cancel-upgrade", OperationType: store.OperationUpgrade, Status: store.StatusCancelling,
+		ReleaseDefinitionID: definition.ID, IdempotencyKey: "idem-cancel-upgrade", RequestHash: "hash",
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	result := &operatorv1.CommandResult{
+		CommandId: "command-cancel-upgrade", OperationId: op.ID, Status: "failed",
+		Error: &operatorv1.ExecutionError{Code: "helm_cancelled", Message: "release cancelled"},
+		Result: &operatorv1.CommandResult_Upgrade{Upgrade: &operatorv1.UpgradeResult{
+			Active: &operatorv1.ReleaseSnapshot{
+				HelmRevision: 1, BundleDigest: "sha256:bundle", ChartDigest: "sha256:chart",
+				EffectiveValuesDigest: "sha256:values", ManifestDigest: "sha256:manifest", Status: "deployed",
+			},
+		}},
+	}
+
+	require.NoError(t, svc.HandleCommandResult(ctx, result))
+	updated, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusCancelled, updated.Status)
+	assert.Equal(t, "helm_cancelled", updated.LastError)
+}
+
+// TASK-082 AC-082-03 negative contract: a command result without the typed
+// upgrade payload is still rejected with the stable upgrade result is required
+// error — the dispatch fix removes the poison row, it does not loosen result
+// validation (D-108 observed gateway invalid_argument must not reappear via
+// the fixed path).
+func TestHandleCommandResultUpgradeResultRequired(t *testing.T) {
+	st := newTestSvc(t)
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
+	require.NoError(t, err)
+	ctx := t.Context()
+	definition := &store.ReleaseDefinition{
+		ID: "definition-no-result", Name: "example", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
+	op := &store.Operation{
+		ID: "operation-no-result", OperationType: store.OperationUpgrade, Status: store.StatusQueued,
+		ReleaseDefinitionID: definition.ID, IdempotencyKey: "idem-no-result", RequestHash: "hash",
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	err = svc.HandleCommandResult(ctx, &operatorv1.CommandResult{
+		CommandId: "command-no-result", OperationId: op.ID, Status: "succeeded",
+	})
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "upgrade result is required")
 }
 
 func TestFinishOperation_PreflightFailurePersistsStableCode(t *testing.T) {

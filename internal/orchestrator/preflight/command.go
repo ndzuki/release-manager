@@ -182,6 +182,15 @@ func mergeJSON(target, patch map[string]any) {
 	}
 }
 
+// setValuesPath sets a JSON-style dotted path on a values map. Missing
+// intermediate objects are created on demand — this mirrors the operator-side
+// override application (internal/operator/agent/agent.go
+// applyBundleImageOverrides) so the effective values the orchestrator freezes
+// for an UPGRADE match what the operator actually renders (TASK-082 / D-108:
+// the dev fixture approves `{"replicaCount":1}` without an image object and
+// must not fail render_failed). Only real traversal errors stay fatal: an
+// existing non-object intermediate segment, a leaf that cannot accept a
+// string (AC-021-13), and an empty path.
 func setValuesPath(document map[string]any, path, value string) error {
 	if path == "" {
 		return fmt.Errorf("image values_path is required")
@@ -191,7 +200,12 @@ func setValuesPath(document map[string]any, path, value string) error {
 	for _, segment := range segments[:len(segments)-1] {
 		next, ok := current[segment].(map[string]any)
 		if !ok {
-			return fmt.Errorf("values_path %q does not reference an object", path)
+			if current[segment] != nil {
+				return fmt.Errorf("values_path %q does not reference an object", path)
+			}
+			child := map[string]any{}
+			current[segment] = child
+			next = child
 		}
 		current = next
 	}

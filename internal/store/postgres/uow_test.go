@@ -124,6 +124,51 @@ func TestPostgresUnitOfWork_AuthorizationFence(t *testing.T) {
 	require.ErrorIs(t, err, store.ErrNotFound)
 }
 
+// TestPostgresUnitOfWork_NilDispatchSkipsOutbox covers TASK-082 AC-082-02 on
+// the PostgreSQL adapter: a nil Dispatch (UPGRADE carries no preflight stages;
+// runUpgrade builds :execute itself) commits the operation with no outbox row.
+func TestPostgresUnitOfWork_NilDispatchSkipsOutbox(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+
+	definition := &store.ReleaseDefinition{
+		ID: uuid.New().String(), Name: "pg-nil-dispatch-definition", CustomerID: "pg-nil-dispatch-customer",
+		ClusterID: "pg-nil-dispatch-cluster", ReleaseName: "pg-nil-dispatch-release", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
+	bundle := &store.ReleaseBundle{
+		ID: uuid.New().String(), Name: "pg-nil-dispatch-bundle", DigestAlg: "sha256",
+		DigestValue: uuid.New().String(), Status: store.BundleValidated,
+	}
+	require.NoError(t, st.Bundles().Create(ctx, bundle))
+
+	now := time.Now().UTC()
+	operationRecord := &store.Operation{
+		ID: uuid.New().String(), OperationType: store.OperationUpgrade, Status: store.StatusPending,
+		ReleaseDefinitionID: definition.ID, IdempotencyKey: uuid.New().String(), IdempotencyScope: "org:" + definition.ID,
+		RequestHash: uuid.New().String(), BundleID: bundle.ID, CreatedAt: now, UpdatedAt: now,
+	}
+
+	result, err := st.OperationCreationUnitOfWork()(ctx, store.OperationCreationRequest{
+		Operation: operationRecord, Dispatch: nil, CandidateArtifactDigests: []string{},
+	})
+	require.NoError(t, err)
+	assert.NotNil(t, result.Operation)
+
+	storedOperation, err := st.Operations().Get(ctx, operationRecord.ID)
+	require.NoError(t, err)
+	assert.Equal(t, bundle.ID, storedOperation.BundleID)
+
+	var outboxRows int
+	require.NoError(t, st.SQLDB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM outbox WHERE operation_id = $1
+	`, operationRecord.ID).Scan(&outboxRows))
+	assert.Zero(t, outboxRows, "nil dispatch must not create any outbox row")
+
+	_, err = st.Outbox().GetByCommandID(ctx, operationRecord.ID+":artifact")
+	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
 // TestPostgresUnitOfWork_RollbackOnPartialFailure verifies that a failure
 // mid-transaction leaves no partial writes (AC-067-19 atomicity).
 func TestPostgresUnitOfWork_RollbackOnPartialFailure(t *testing.T) {

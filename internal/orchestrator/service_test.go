@@ -24,6 +24,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/auth"
 	authctx "github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/authorization"
+	"github.com/ndzuki/release-manager/internal/orchestrator/preflight"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 	"github.com/ndzuki/release-manager/internal/trust"
@@ -535,6 +536,189 @@ func TestCreateOperation_UpgradeDoesNotMutateOtherDefinition(t *testing.T) {
 	otherOperations, err := st.Operations().List(context.Background(), other.ID)
 	require.NoError(t, err)
 	assert.Empty(t, otherOperations)
+}
+
+// TASK-082 AC-082-02 (D-108 ①b): an UPGRADE CreateOperation must not persist
+// the unconsumed :artifact dispatch row — runUpgrade builds the :execute entry
+// itself, so the first outbox entry deliverPending sends is the PayloadVersion=2
+// upgrade command. A stage-shaped :artifact first row poisoned the operator
+// stream with unsupported_command_version and left the operation stuck in
+// RUNNING / CANCELLING (real smoke op 27f05688).
+func TestCreateOperation_UpgradeDispatchesExecuteOnly(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedUpgradeInventory(t, st)
+
+	// Active operator for cls-001 so runUpgrade can resolve a target.
+	require.NoError(t, st.Operators().Create(context.Background(), &store.Operator{
+		ID: "operator-upgrade", Name: "upgrade-operator", CustomerID: "cust-001",
+		ClusterID: "cls-001", CertSerial: "serial-upgrade", Status: store.OperatorActive,
+	}))
+
+	// Bundle with an image override whose values_path points into an image
+	// object the approved values do not carry (D-108 repro shape).
+	digest := fmt.Sprintf("%064x", 75)
+	require.NoError(t, st.Bundles().Create(context.Background(), &store.ReleaseBundle{
+		ID: "bundle-upgrade-img", Name: "upgrade bundle", DigestAlg: "sha256", DigestValue: digest,
+		Status: store.BundleValidated, ChartRef: "nginx", ChartDigest: "sha256:" + digest,
+		CreatedAt: time.Now().UTC(),
+		Images:    []store.BundleImage{{Ref: "registry.example.com/app", Digest: "sha256:img", ValuesPath: "image.repository"}},
+	}))
+
+	resp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:           "UPGRADE",
+		BundleId:                "bundle-upgrade-img",
+		ReleaseDefinitionId:     "def-001",
+		ValuesRevisionId:        "vr-001",
+		ExpectedCurrentRevision: 1,
+	}), "idem-upgrade-exec"))
+	require.NoError(t, err)
+	opID := resp.Msg.OperationId
+
+	// runUpgrade builds the :execute entry in the background coordinator
+	// goroutine; the merge tolerates the missing image object (AC-082-01).
+	var execute *store.OutboxEntry
+	require.Eventually(t, func() bool {
+		entry, err := st.Outbox().GetByCommandID(context.Background(), opID+":execute")
+		if err != nil {
+			return false
+		}
+		execute = entry
+		return true
+	}, 5*time.Second, 20*time.Millisecond, "runUpgrade must dispatch the :execute command")
+
+	payload, err := preflight.UnmarshalCommandPayload(execute.Payload)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(2), payload.PayloadVersion)
+	require.NotNil(t, payload.Upgrade)
+	assert.JSONEq(t, `{"message":"hello","image":{"repository":"registry.example.com/app@sha256:img"}}`,
+		string(payload.Upgrade.GetEffectiveValuesJson()))
+
+	// The operation reaches queued — the :execute entry is the authoritative
+	// dispatch and the tolerantly merged values do not render_failed.
+	require.Eventually(t, func() bool {
+		op, err := st.Operations().Get(context.Background(), opID)
+		return err == nil && op.Status == store.StatusQueued
+	}, 5*time.Second, 20*time.Millisecond, "UPGRADE must reach queued")
+
+	// No :artifact row may exist for UPGRADE. The dispatch is committed
+	// atomically with the operation, so checking after queued is reached is
+	// deterministic: a poison row would already be there.
+	_, err = st.Outbox().GetByCommandID(context.Background(), opID+":artifact")
+	assert.ErrorIs(t, err, store.ErrNotFound, "UPGRADE must not persist an :artifact dispatch")
+
+	// deliverPending first delivery: GetNextPending must return the :execute
+	// upgrade command (OperationType/阶段一致), never a stage-shaped payload.
+	next, err := st.Outbox().GetNextPending(context.Background(), "operator-upgrade")
+	require.NoError(t, err)
+	assert.Equal(t, opID+":execute", next.CommandID)
+	assert.Equal(t, string(store.OperationUpgrade), next.OperationType)
+	decoded, err := preflight.UnmarshalCommandPayload(next.Payload)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(2), decoded.PayloadVersion)
+	assert.NotNil(t, decoded.Upgrade)
+}
+
+// TASK-082 AC-082-03 (D-108): with the dispatch fix in place the full UPGRADE
+// chain reaches terminal states through the authoritative seams — the
+// operator's result drives queued→running→succeeded, and a CancelOperation on
+// a running UPGRADE waits for the agent's helm_cancelled ack (cancelling→
+// cancelled) instead of staying stuck in RUNNING / CANCELLING (AC-023-04).
+func TestCreateOperation_UpgradeTerminalAndCancelRegression(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedUpgradeInventory(t, st)
+	require.NoError(t, st.Operators().Create(context.Background(), &store.Operator{
+		ID: "operator-upgrade", Name: "upgrade-operator", CustomerID: "cust-001",
+		ClusterID: "cls-001", CertSerial: "serial-upgrade", Status: store.OperatorActive,
+	}))
+	digest := fmt.Sprintf("%064x", 76)
+	require.NoError(t, st.Bundles().Create(context.Background(), &store.ReleaseBundle{
+		ID: "bundle-upgrade-img", Name: "upgrade bundle", DigestAlg: "sha256", DigestValue: digest,
+		Status: store.BundleValidated, ChartRef: "nginx", ChartDigest: "sha256:" + digest,
+		CreatedAt: time.Now().UTC(),
+		Images:    []store.BundleImage{{Ref: "registry.example.com/app", Digest: "sha256:img", ValuesPath: "image.repository"}},
+	}))
+
+	createUpgrade := func(key string) string {
+		resp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+			OperationType:           "UPGRADE",
+			BundleId:                "bundle-upgrade-img",
+			ReleaseDefinitionId:     "def-001",
+			ValuesRevisionId:        "vr-001",
+			ExpectedCurrentRevision: 1,
+		}), key))
+		require.NoError(t, err)
+		return resp.Msg.OperationId
+	}
+	waitQueued := func(opID string) *store.Operation {
+		var op *store.Operation
+		require.Eventually(t, func() bool {
+			got, err := st.Operations().Get(context.Background(), opID)
+			if err != nil || got.Status != store.StatusQueued {
+				return false
+			}
+			op = got
+			return true
+		}, 5*time.Second, 20*time.Millisecond, "UPGRADE %s must reach queued", opID)
+		return op
+	}
+
+	// Part 1: success terminal — the operator's authoritative result drives
+	// queued→running→succeeded.
+	op1 := createUpgrade("idem-upgrade-terminal")
+	queued := waitQueued(op1)
+	running, err := st.Operations().UpdateStatus(context.Background(), op1, store.StatusRunning, queued.StateVersion, "")
+	require.NoError(t, err)
+	require.NoError(t, st.UpgradeResults().FinalizeUpgrade(context.Background(), &store.UpgradeTerminalInput{
+		OperationID: op1, ExpectedStateVersion: running.StateVersion, Status: store.StatusSucceeded,
+		ReleaseDefinitionID: "def-001", ResultPayload: []byte(`{}`),
+	}))
+	got1, err := st.Operations().Get(context.Background(), op1)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, got1.Status)
+
+	// Part 2: cancel terminal regression — running→cancelling is not a fake
+	// terminal (AC-023-04); the agent's helm_cancelled result finalizes it.
+	op2 := createUpgrade("idem-upgrade-cancel")
+	queued2 := waitQueued(op2)
+	running2, err := st.Operations().UpdateStatus(context.Background(), op2, store.StatusRunning, queued2.StateVersion, "")
+	require.NoError(t, err)
+
+	cancelReq := connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: op2, Reason: "cancel during upgrade", ExpectedStateVersion: int64(running2.StateVersion),
+	})
+	cancelReq.Header().Set("Idempotency-Key", "cancel-upgrade-running")
+	cancelResp, err := svc.CancelOperation(adminCtx(), cancelReq)
+	require.NoError(t, err)
+	assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLING, cancelResp.Msg.Operation.State)
+
+	cancelling, err := st.Operations().Get(context.Background(), op2)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusCancelling, cancelling.Status, "CancelOperation must await the agent ack, not fake a terminal state")
+
+	// Agent authoritative result: helm_cancelled → cancelled (the :execute
+	// command was deliverable, so the operator can report back).
+	require.NoError(t, st.UpgradeResults().FinalizeUpgrade(context.Background(), &store.UpgradeTerminalInput{
+		OperationID: op2, ExpectedStateVersion: cancelling.StateVersion, Status: store.StatusCancelled,
+		LastError: "helm_cancelled", ReleaseDefinitionID: "def-001", ResultPayload: []byte(`{}`),
+	}))
+	got2, err := st.Operations().Get(context.Background(), op2)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusCancelled, got2.Status, "helm_cancelled must drive cancelling→cancelled")
+
+	// A second cancel on the terminal operation is rejected — nothing is left
+	// stuck in cancelling.
+	secondReq := connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: op2, Reason: "again", ExpectedStateVersion: int64(got2.StateVersion),
+	})
+	secondReq.Header().Set("Idempotency-Key", "cancel-upgrade-again")
+	_, err = svc.CancelOperation(adminCtx(), secondReq)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "cancel_not_allowed")
 }
 
 func TestCreateOperation_DefinitionNotFound(t *testing.T) {
