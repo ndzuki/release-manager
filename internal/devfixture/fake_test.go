@@ -210,6 +210,13 @@ type fakeOrchestrator struct {
 	// carried operator-<cluster> while the agent's CSR CN uses the cluster
 	// id → store ErrNotAuthorized "approval command not authorized").
 	enrollTokens []*orchestratorv1.CreateEnrollmentTokenRequest
+	// createDefReqs records every CreateReleaseDefinitionRequest by release
+	// name so tests can assert the exact request body devseed sent (REQ-083:
+	// e2e-emergency-target must carry max_emergency_replicas >= 2). Without
+	// recording the request the assertion would silently pass on the old
+	// behavior (max=0) — per core/daemon-stuck-task-patterns.md (TASK-019:
+	// tests asserting the old bug).
+	createDefReqs map[string]*orchestratorv1.CreateReleaseDefinitionRequest
 
 	nextOpID int
 }
@@ -226,6 +233,7 @@ func newFakeOrchestrator() *fakeOrchestrator {
 		operators:     map[string]orchestratorv1.OperatorSessionStatus{},
 		counters:      map[string]int{},
 		opKeyTerminal: map[string]orchestratorv1.OperationStatus{},
+		createDefReqs: map[string]*orchestratorv1.CreateReleaseDefinitionRequest{},
 	}
 }
 
@@ -337,12 +345,17 @@ func (f *fakeOrchestrator) CreateReleaseDefinition(_ context.Context, req *conne
 	f.bump("CreateReleaseDefinition")
 	f.idemKeys = append(f.idemKeys, idemOf(req))
 	msg := req.Msg
+	f.createDefReqs[msg.GetReleaseName()] = msg
 	id := fmt.Sprintf("definition-%d", len(f.definitions)+1)
 	definition := &commonv1.ReleaseDefinition{
 		Id: id, Name: msg.GetReleaseName(), CustomerId: msg.GetCustomerId(),
 		ClusterId: msg.GetClusterId(), Namespace: msg.GetNamespace(),
 		ReleaseName: msg.GetReleaseName(), ChartName: msg.GetChartName(),
-		Status: "active",
+		// Passthrough mirrors the real store write (definition.go:
+		// MaxEmergencyReplicas = msg.GetMaxEmergencyReplicas()) so tests can
+		// assert the persisted ceiling, not just the request (REQ-083).
+		MaxEmergencyReplicas: msg.GetMaxEmergencyReplicas(),
+		Status:               "active",
 	}
 	f.definitions[id] = definition
 	return connect.NewResponse(&orchestratorv1.CreateReleaseDefinitionResponse{Definition: definition}), nil

@@ -803,3 +803,63 @@ func TestRun_InstallWaitsForBundleValidation(t *testing.T) {
 	p := loadProgressFile(t, r.cfg.DataDir)
 	require.True(t, p.Partial)
 }
+
+// TestRun_EmergencyTargetCarriesMaxEmergencyReplicas covers REQ-083
+// (D-108 gap 2): devseed's CreateReleaseDefinitionRequest for
+// e2e-emergency-target must carry max_emergency_replicas >= 2 so REQ-066's
+// emergency Stage set_replicas:2 passes the server range check
+// (internal/orchestrator/emergency.go resolveEmergencyReplicas:
+// replicas > MaxEmergencyReplicas → invalid_argument; the accept/reject
+// semantics themselves are pinned by
+// TestExecuteEmergencyChangeSetReplicasValidation in internal/orchestrator).
+// The other three E2E targets keep 0 (minimal-change scope). The fake
+// records the raw request body, so the assertion cannot silently pass on the
+// old buggy behavior (per core/daemon-stuck-task-patterns.md, TASK-019:
+// tests asserting the old bug).
+func TestRun_EmergencyTargetCarriesMaxEmergencyReplicas(t *testing.T) {
+	const emergencyMinReplicas = int32(2)
+
+	fakes := newFakeServices()
+	r := testRunner(t, fakes)
+
+	_, err := r.run(context.Background())
+	require.NoError(t, err)
+
+	t.Run("emergency seed request carries ceiling >= 2", func(t *testing.T) {
+		req, ok := fakes.orch.createDefReqs["e2e-emergency"]
+		require.True(t, ok, "e2e-emergency definition request was not recorded")
+		require.GreaterOrEqual(t, req.GetMaxEmergencyReplicas(), emergencyMinReplicas,
+			"e2e-emergency-target max_emergency_replicas must be >= 2 so set_replicas:2 falls inside [0, max] (REQ-032 §171)")
+	})
+
+	t.Run("other seeds keep historical request shape", func(t *testing.T) {
+		for _, seed := range definitionSeeds {
+			if seed.logicalKey == "e2e-emergency-target" {
+				continue
+			}
+			req, ok := fakes.orch.createDefReqs[seed.releaseName]
+			require.Truef(t, ok, "definition request %s was not recorded", seed.logicalKey)
+			require.Equalf(t, int32(0), req.GetMaxEmergencyReplicas(),
+				"seed %s must keep max_emergency_replicas = 0 (untouched semantics)", seed.logicalKey)
+		}
+	})
+
+	t.Run("readback via ListReleaseDefinitions shows seeded ceiling", func(t *testing.T) {
+		// AC-083-01: the persisted definition (as the server would return it
+		// to TASK-066's ListReleaseDefinitions probe) carries the ceiling.
+		listResp, err := fakes.orch.ListReleaseDefinitions(context.Background(),
+			connect.NewRequest(&orchestratorv1.ListReleaseDefinitionsRequest{
+				CustomerId: definitionCustomerID, ClusterId: definitionCluster, IncludeDisabled: true,
+			}))
+		require.NoError(t, err)
+		for _, definition := range listResp.Msg.GetDefinitions() {
+			if definition.GetReleaseName() != "e2e-emergency" {
+				continue
+			}
+			require.GreaterOrEqual(t, definition.GetMaxEmergencyReplicas(), emergencyMinReplicas,
+				"seeded e2e-emergency-target max_emergency_replicas must be >= 2")
+			return
+		}
+		t.Fatal("e2e-emergency definition missing from ListReleaseDefinitions readback")
+	})
+}

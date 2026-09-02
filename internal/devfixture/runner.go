@@ -123,12 +123,21 @@ type definitionSeed struct {
 	logicalKey  string
 	releaseName string
 	namespace   string
+	// maxEmergencyReplicas is the per-seed emergency SetReplicas ceiling
+	// carried into CreateReleaseDefinitionRequest. Zero keeps the historical
+	// behavior (field omitted over the wire). Only e2e-emergency-target sets
+	// a value (REQ-083 / D-108 gap 2): REQ-066's emergency Stage drives
+	// set_replicas:2, which requires max_emergency_replicas >= 2
+	// (REQ-032 §171: 0 <= replicas <= max_emergency_replicas). 4 keeps
+	// headroom (D2-B "at least 3, e.g. 4") without pinning the contract
+	// beyond >= 2.
+	maxEmergencyReplicas int32
 }
 
 var definitionSeeds = []definitionSeed{
 	{logicalKey: "e2e-release-target", releaseName: "e2e-release", namespace: "e2e-release"},
 	{logicalKey: "e2e-isolation-target", releaseName: "e2e-isolation", namespace: "e2e-isolation"},
-	{logicalKey: "e2e-emergency-target", releaseName: "e2e-emergency", namespace: "e2e-emergency"},
+	{logicalKey: "e2e-emergency-target", releaseName: "e2e-emergency", namespace: "e2e-emergency", maxEmergencyReplicas: 4},
 	{logicalKey: "e2e-restart-target", releaseName: "e2e-restart", namespace: "e2e-restart"},
 }
 
