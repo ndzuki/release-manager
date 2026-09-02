@@ -75,6 +75,12 @@ func (r *runner) ensureDefinition(ctx context.Context, seed definitionSeed) (str
 		// orchestrator rejects INSTALL with chart_mismatch (REQ-067 rule 10).
 		ChartName: "release-fixture",
 		Enabled:   true,
+		// Per-seed emergency SetReplicas ceiling (REQ-083, canonical site:
+		// definitionSeed.maxEmergencyReplicas in runner.go). The zero value
+		// on the other three seeds preserves their historical request shape
+		// (proto3 int32 zero == omitted on the wire), so their semantics are
+		// untouched.
+		MaxEmergencyReplicas: seed.maxEmergencyReplicas,
 		// The creating actor's organization becomes the definition owner
 		// (REQ-040); values approval gates on it (REQ-068).
 		Actor: &commonv1.ActorContext{UserId: r.state.deployerUserID, Organization: r.state.adminOrgID},
