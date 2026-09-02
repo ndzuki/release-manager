@@ -40,6 +40,8 @@ import (
 	"github.com/ndzuki/release-manager/internal/auth"
 	"github.com/ndzuki/release-manager/internal/config"
 	"github.com/ndzuki/release-manager/internal/operator"
+	"github.com/ndzuki/release-manager/internal/operator/ca"
+	"github.com/ndzuki/release-manager/internal/orchestrator"
 	"github.com/ndzuki/release-manager/internal/postgres"
 	"github.com/ndzuki/release-manager/internal/store"
 	postgresstore "github.com/ndzuki/release-manager/internal/store/postgres"
@@ -1951,4 +1953,161 @@ func TestServiceTokensEnvLoading(t *testing.T) {
 		require.Len(t, tokens, 1)
 		assert.Equal(t, auth.SHA256Hash([]byte("dev-token")), tokens[0])
 	})
+}
+
+// TestBuildGatewayServerMountsSyncInventory covers AC-080-04 at the gateway
+// seam (TASK-080, D-107=A): the gateway mux exposes exactly
+// OrchestratorService.SyncInventory with certificate identity authentication
+// — a trusted operator certificate whose ADR-018 serial resolves via
+// GetByCertSerial with matching operator_id/customer_id/cluster_id succeeds
+// and writes inventory; a certificate-less client is rejected 401; other
+// OrchestratorService paths (CreateOperation) stay unmounted (404).
+func TestBuildGatewayServerMountsSyncInventory(t *testing.T) {
+	ctx := t.Context()
+	st := sqlitestore.OpenTest(t)
+	const (
+		operatorID = "operator-080-gateway"
+		customerID = "customer-080-gateway"
+		clusterID  = "cluster-080-gateway"
+	)
+	require.NoError(t, st.Customers().Create(ctx, &store.Customer{
+		ID: customerID, Name: "Gateway Sync Customer", Slug: "gateway-sync",
+		Status: store.CustomerActive, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}))
+	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{
+		ID: clusterID, Name: "gateway-sync-cluster", CustomerID: customerID,
+		Status: store.ClusterActive, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}))
+
+	gatewayCA, err := ca.New(ca.Config{TTL: 24 * time.Hour})
+	require.NoError(t, err)
+	keyPEM, issued := signOperatorIdentity(t, gatewayCA, clusterID)
+	require.NoError(t, st.Operators().Create(ctx, &store.Operator{
+		ID:         operatorID,
+		Name:       clusterID,
+		CustomerID: customerID,
+		ClusterID:  clusterID,
+		CertSerial: issued.Serial,
+		Status:     store.OperatorActive,
+	}))
+
+	operatorService, err := operator.NewService(st, slog.New(slog.DiscardHandler), operator.WithCA(gatewayCA))
+	require.NoError(t, err)
+	syncService := orchestrator.NewService(st, nil, "staging", slog.New(slog.DiscardHandler))
+
+	svc := &orchSvc{store: st}
+	server, err := svc.buildGatewayServer(
+		config.GatewayCfg{},
+		gatewayCA,
+		operatorService,
+		syncService,
+		slog.New(slog.DiscardHandler),
+	)
+	require.NoError(t, err)
+
+	ts := httptest.NewUnstartedServer(server.Handler)
+	ts.TLS = server.TLSConfig
+	ts.EnableHTTP2 = true
+	ts.StartTLS()
+	ts.URL = strings.Replace(ts.URL, "127.0.0.1", "localhost", 1)
+	t.Cleanup(ts.Close)
+
+	caPath := filepath.Join(t.TempDir(), "gateway-ca.crt")
+	require.NoError(t, os.WriteFile(caPath, gatewayCA.CertPEM(), 0o600))
+
+	// Trusted operator identity: mTLS client carrying the registered
+	// certificate must pass the serial lookup and field consistency checks.
+	trustedClient, err := operator.NewAgentTLSClient(string(issued.PEM), string(keyPEM), caPath)
+	require.NoError(t, err)
+	syncClient := orchestratorv1connect.NewOrchestratorServiceClient(trustedClient, ts.URL)
+	resp, err := syncClient.SyncInventory(ctx, connect.NewRequest(&orchestratorv1.SyncInventoryRequest{
+		OperatorId: operatorID,
+		CustomerId: customerID,
+		ClusterId:  clusterID,
+		SyncId:     "sync-080-gateway",
+		Items: []*orchestratorv1.InventoryItem{{
+			Namespace:    "ns",
+			Name:         "release-080",
+			Chart:        "fixture",
+			ChartVersion: "0.1.0",
+			Revision:     1,
+			Status:       "deployed",
+			ValuesDigest: "sha256:080",
+			DefinitionId: "definition-080",
+		}},
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "applied", resp.Msg.GetStatus())
+	syncLog, err := st.Inventories().GetBySyncID(ctx, "sync-080-gateway")
+	require.NoError(t, err)
+	require.NotNil(t, syncLog, "inventory sync log must be written")
+	assert.Equal(t, 1, syncLog.AcceptedCount)
+
+	// Certificate-less client (CA-only trust, no identity): handshake
+	// succeeds under VerifyClientCertIfGiven but the auth interceptor must
+	// reject with 401.
+	caOnlyClient, err := operator.NewCAOnlyHTTPClient(caPath)
+	require.NoError(t, err)
+	noCertClient := orchestratorv1connect.NewOrchestratorServiceClient(caOnlyClient, ts.URL)
+	_, err = noCertClient.SyncInventory(ctx, connect.NewRequest(&orchestratorv1.SyncInventoryRequest{
+		OperatorId: operatorID,
+		CustomerId: customerID,
+		ClusterId:  clusterID,
+		SyncId:     "sync-080-no-cert",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
+
+	// A gateway-CA-signed identity whose ADR-018 serial has no Operator row
+	// must be rejected 401 at the real TLS seam (serial lookup is real).
+	foreignKeyPEM, foreignIssued := signOperatorIdentity(t, gatewayCA, "foreign-080")
+	foreignClient, err := operator.NewAgentTLSClient(string(foreignIssued.PEM), string(foreignKeyPEM), caPath)
+	require.NoError(t, err)
+	foreignSyncClient := orchestratorv1connect.NewOrchestratorServiceClient(foreignClient, ts.URL)
+	_, err = foreignSyncClient.SyncInventory(ctx, connect.NewRequest(&orchestratorv1.SyncInventoryRequest{
+		OperatorId: "operator-080-foreign",
+		CustomerId: customerID,
+		ClusterId:  clusterID,
+		SyncId:     "sync-080-foreign",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
+
+	// Same trusted certificate but a spoofed operator_id must be denied at
+	// the field-consistency check (403).
+	_, err = syncClient.SyncInventory(ctx, connect.NewRequest(&orchestratorv1.SyncInventoryRequest{
+		OperatorId: "operator-080-spoofed",
+		CustomerId: customerID,
+		ClusterId:  clusterID,
+		SyncId:     "sync-080-spoofed",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+
+	// Minimal exposure: other OrchestratorService procedures are not mounted
+	// on the gateway mux (404 → CodeUnimplemented).
+	_, err = syncClient.CreateOperation(ctx, connect.NewRequest(&orchestratorv1.CreateOperationRequest{}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+}
+
+// signOperatorIdentity issues an operator client certificate (clientAuth
+// EKU) from the gateway CA and returns the identity private key PEM
+// (TASK-080, AC-080-04).
+func signOperatorIdentity(t *testing.T, caInst *ca.CA, commonName string) (keyPEM []byte, issued *ca.IssuedCertificate) {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: commonName},
+		DNSNames: []string{commonName},
+	}, priv)
+	require.NoError(t, err)
+	csr, err := x509.ParseCertificateRequest(csrDER)
+	require.NoError(t, err)
+	issuedCert, err := caInst.SignCSR(csr, nil)
+	require.NoError(t, err)
+	privDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	require.NoError(t, err)
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privDER}), issuedCert
 }

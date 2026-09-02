@@ -26,13 +26,13 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 	}
 	item.UpdatedAt = time.Now().UTC()
 
-	const stmt = `INSERT INTO release_inventory
+	const stmt = `INSERT INTO release_inventory AS current_inventory
 		(customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version, revision, status,
 		 values_digest, observed_bundle_digest, observed_chart_digest, observed_effective_values_digest,
 		 observed_manifest_digest, live_status, last_operation_id, inventory_status, last_sync_id, snapshot_version, created_at, updated_at)
 	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	 ON CONFLICT(customer_id, cluster_id, namespace, release_name) DO UPDATE SET
-		release_definition_id = excluded.release_definition_id,
+		release_definition_id = COALESCE(NULLIF(excluded.release_definition_id, ''), current_inventory.release_definition_id),
 		chart = excluded.chart,
 		chart_version = excluded.chart_version,
 		revision = excluded.revision,

@@ -29,7 +29,7 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 		 observed_manifest_digest, live_status, last_operation_id, inventory_status, last_sync_id, snapshot_version, created_at, updated_at)
 	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	 ON CONFLICT(customer_id, cluster_id, namespace, release_name) DO UPDATE SET
-		release_definition_id = excluded.release_definition_id,
+		release_definition_id = COALESCE(NULLIF(excluded.release_definition_id, ''), release_definition_id),
 		chart = excluded.chart,
 		chart_version = excluded.chart_version,
 		revision = excluded.revision,
