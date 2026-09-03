@@ -39,6 +39,27 @@ func TestBuildUpgradePayloadFreezesEffectiveValues(t *testing.T) {
 	assert.Equal(t, "password", upgrade.GetSecretRefs()[0].GetKey())
 }
 
+// TASK-084 AC-084-01: the wire envelope carries the top-level namespace/
+// release_name so any command.GetNamespace()/GetReleaseName() consumer on the
+// decoded wire Command observes the same release identity; the typed
+// UpgradeCommand stays the single authoritative source for Helm execution.
+func TestBuildUpgradePayloadCarriesTopLevelIdentity(t *testing.T) {
+	op := &store.Operation{ID: "operation-1", BundleID: "bundle-1", ExpectedRevision: 1}
+	definition := &store.ReleaseDefinition{ID: "definition-1", Namespace: "apps", ReleaseName: "example"}
+	bundle := &store.ReleaseBundle{
+		ID: "bundle-1", DigestAlg: "sha256", DigestValue: "bundle",
+		ChartRef: "oci://registry.example.com/example", ChartVersion: "1.2.3", ChartDigest: "sha256:chart",
+	}
+	revision := &store.ValuesRevision{CanonicalDocument: []byte(`{"replicas":1}`)}
+
+	payload, err := BuildUpgradePayload(op, definition, bundle, revision, "command-1")
+	require.NoError(t, err)
+	assert.Equal(t, "apps", payload.Namespace)
+	assert.Equal(t, "example", payload.ReleaseName)
+	assert.Equal(t, payload.Namespace, payload.Upgrade.GetNamespace())
+	assert.Equal(t, payload.ReleaseName, payload.Upgrade.GetReleaseName())
+}
+
 func TestBuildUpgradePayloadRejectsInvalidImagePath(t *testing.T) {
 	op := &store.Operation{ID: "operation-1", BundleID: "bundle-1", ExpectedRevision: 1}
 	definition := &store.ReleaseDefinition{ID: "definition-1", Namespace: "apps", ReleaseName: "example"}

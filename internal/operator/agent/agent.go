@@ -171,6 +171,14 @@ func New(cfg Config) (*Agent, error) {
 
 // Run connects to CommandStream and processes commands until the context is cancelled.
 func (a *Agent) Run(ctx context.Context) error {
+	// TASK-084 AC-084-03: every connection derives its own context so a
+	// revoked stream cancels the in-flight Helm call (engine Upgrade/Status
+	// honour ctx) and the resulting helm_cancelled typed result is persisted
+	// locally before the stream dies — the reconnect replay then delivers the
+	// agent acknowledgement (ADR-005 local persistence + replay).
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	lastSequence, err := a.store.LastSequence(ctx)
 	if err != nil {
 		return fmt.Errorf("load last command sequence: %w", err)
@@ -674,6 +682,10 @@ func releaseSnapshot(release *helmengine.Release) *operatorv1.ReleaseSnapshot {
 func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command, result Result, reporter *rolloutReporter) Result {
 	upgrade, valuesMap, fromRelease, secretDigest, ok := a.resolveUpgradeInputs(ctx, command, &result)
 	if !ok {
+		// TASK-084 AC-084-02: resolve failures also carry the typed payload
+		// with the empty snapshot semantics — the gateway must never see an
+		// UPGRADE result without CommandResult.upgrade.
+		ensureUpgradeResult(&result, nil)
 		return result
 	}
 
@@ -684,17 +696,23 @@ func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command,
 	started := time.Now()
 
 	current, err := a.engine.Status(ctx, helmengine.StatusOptions{
-		Namespace:   command.GetNamespace(),
-		ReleaseName: command.GetReleaseName(),
+		// TASK-084 AC-084-01: the typed UpgradeCommand is the single authority
+		// for the Helm release identity of this execute entry. The top-level
+		// wire fields are empty for UPGRADE and previously produced an
+		// invalid Helm release on this second Status (D-109 repro).
+		Namespace:   upgrade.GetNamespace(),
+		ReleaseName: upgrade.GetReleaseName(),
 	})
 	if err != nil {
 		result.Code = upgradeErrorCode(err)
 		result.Message = err.Error()
+		ensureUpgradeResult(&result, fromRelease)
 		return result
 	}
 	if expected := int(command.GetExpectedCurrentRevision()); expected > 0 && current.Revision != expected {
 		result.Code = "inventory_stale"
 		result.Message = fmt.Sprintf("expected current revision %d, got %d", expected, current.Revision)
+		ensureUpgradeResult(&result, fromRelease)
 		return result
 	}
 
@@ -725,16 +743,38 @@ func (a *Agent) executeUpgrade(ctx context.Context, command *operatorv1.Command,
 		result.Code = upgradeErrorCode(err)
 		result.Message = upgradeErrorMessage(result.Code)
 		result.Release = release
+		// TASK-084 AC-084-04: the engine's structured outcome is the only
+		// authoritative rollback signal. The legacy revision-equality
+		// heuristic fabricated rollback_succeeded even when no rollback had
+		// happened (D-109); a non-decorated error now maps to
+		// RollbackSucceeded=false (fail closed, ADR-008).
+		//
+		// Restored is taken verbatim — the engine established it by observing
+		// the post-failure state (active deployed and rolled off the failed
+		// revision). No revision re-check is applied here: the Helm SDK's
+		// atomic rollback restores the pre-upgrade config under a NEW
+		// revision (real-SDK evidence: upgrade revision 2, restored active
+		// revision 3), so comparing active.Revision to from.Revision would
+		// misclassify a real restore as not-restored.
+		outcome := helmengine.OutcomeOf(err)
+		attempted, active := release, release
+		if outcome.Attempted != nil {
+			attempted = outcome.Attempted
+		}
+		if outcome.Active != nil {
+			active = outcome.Active
+		}
+		rollbackSucceeded := outcome.Restored
 		result.Upgrade = &operatorv1.UpgradeResult{
 			From:              releaseSnapshot(fromRelease),
-			Attempted:         releaseSnapshot(release),
-			Active:            releaseSnapshot(release),
-			RollbackSucceeded: release != nil && fromRelease != nil && release.Revision == fromRelease.Revision,
+			Attempted:         releaseSnapshot(attempted),
+			Active:            releaseSnapshot(active),
+			RollbackSucceeded: rollbackSucceeded,
 			ResourceSummary: &operatorv1.ResourceSummary{
-				ManifestDigest: manifestDigest(release),
+				ManifestDigest: manifestDigest(active),
 			},
 		}
-		result.ResourceSummary.ManifestDigest = manifestDigest(release)
+		result.ResourceSummary.ManifestDigest = manifestDigest(active)
 		return result
 	}
 
@@ -766,6 +806,14 @@ func (a *Agent) resolveUpgradeInputs(ctx context.Context, command *operatorv1.Co
 	if command.GetPayloadVersion() != 2 || upgrade == nil {
 		result.Code = "unsupported_command_version"
 		result.Message = "upgrade payload_version 2 is required"
+		return nil, nil, nil, "", false
+	}
+	// TASK-084 AC-084-01: fail closed before any Helm SDK call when the typed
+	// identity is incomplete (ADR-008) — an empty namespace/release_name must
+	// never reach engine.Status/Upgrade and produce an invalid Helm release.
+	if upgrade.GetNamespace() == "" || upgrade.GetReleaseName() == "" {
+		result.Code = "invalid_command"
+		result.Message = "upgrade namespace and release_name are required"
 		return nil, nil, nil, "", false
 	}
 	valuesDigest := sha256Hex(upgrade.GetEffectiveValuesJson())
@@ -808,6 +856,18 @@ func manifestDigest(release *helmengine.Release) string {
 		return ""
 	}
 	return release.ManifestDigest
+}
+
+// ensureUpgradeResult attaches the typed UpgradeResult to an UPGRADE result
+// that does not carry one yet (TASK-084 AC-084-02 / REQ-084 output contract:
+// success, failure and cancellation results all carry CommandResult.upgrade).
+// from may be nil and keeps the existing empty snapshot semantics; the gateway
+// tolerates empty active snapshots on failed results.
+func ensureUpgradeResult(result *Result, from *helmengine.Release) {
+	if result.Upgrade != nil {
+		return
+	}
+	result.Upgrade = &operatorv1.UpgradeResult{From: releaseSnapshot(from)}
 }
 
 func sha256Hex(data []byte) string {
@@ -895,6 +955,10 @@ func (a *Agent) finishFailure(ctx context.Context, stream Stream, entry *localst
 		OperationType: entry.OperationType,
 	}
 	if command.GetOperationType() == "UPGRADE" {
+		// TASK-084 AC-084-02: even a locally corrupted UPGRADE payload must
+		// report a typed result — the gateway rejects UPGRADE results without
+		// CommandResult.upgrade and the operation would stay RUNNING forever.
+		ensureUpgradeResult(&result, nil)
 		return stream.Send(commandResultRequest(command, result))
 	}
 	return stream.Send(resultRequest(command, result, resultJSON))
@@ -905,6 +969,12 @@ func commandResultRequest(command *operatorv1.Command, result Result) *operatorv
 		CommandId:   command.GetCommandId(),
 		OperationId: command.GetOperationId(),
 		Status:      result.Status,
+	}
+	if command.GetOperationType() == "UPGRADE" && result.Upgrade == nil {
+		// TASK-084 AC-084-02 wire-edge assertion: UPGRADE results are never
+		// sent without the typed payload. An empty UpgradeResult is the
+		// documented empty snapshot semantics, not a gateway rejection.
+		result.Upgrade = &operatorv1.UpgradeResult{}
 	}
 	if result.Upgrade != nil {
 		commandResult.Result = &operatorv1.CommandResult_Upgrade{Upgrade: result.Upgrade}

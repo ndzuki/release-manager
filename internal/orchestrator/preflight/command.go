@@ -131,7 +131,16 @@ func BuildUpgradePayload(
 	if err != nil {
 		return nil, err
 	}
-	return &CommandPayload{OperationID: op.ID, BundleID: op.BundleID, PayloadVersion: 2, Upgrade: upgrade}, nil
+	return &CommandPayload{
+		OperationID: op.ID, BundleID: op.BundleID, PayloadVersion: 2,
+		Upgrade: upgrade,
+		// TASK-084 AC-084-01: mirror the release identity on the envelope so
+		// every command.GetNamespace()/GetReleaseName() consumer on the decoded
+		// wire Command observes the same identity. The typed UpgradeCommand
+		// stays the single authoritative source for Helm execution.
+		Namespace:   definition.Namespace,
+		ReleaseName: definition.ReleaseName,
+	}, nil
 }
 
 func mergeEffectiveValues(base, patch []byte, images []store.BundleImage) ([]byte, error) {

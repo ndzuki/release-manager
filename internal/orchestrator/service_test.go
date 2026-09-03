@@ -1749,6 +1749,140 @@ func TestCancelOperation_PreflightLifecycleNullOnMissingLifecycle(t *testing.T) 
 	assert.NotNil(t, op.TerminalAt)
 }
 
+// cancelServiceWithRevoker builds a Service with a stub revoker on top of an
+// isolated sqlite store (TASK-084 Step 3 seam).
+func cancelServiceWithRevoker(t *testing.T, revoker OperatorStreamRevoker) (*Service, store.Store, func()) {
+	t.Helper()
+	dbPath := t.TempDir() + "/test.db"
+	st, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	verifier := trust.NewStubVerifier(st.Verifications(), nil, logger)
+	svc := NewService(st, verifier, "staging", revoker, st.OperationCreationUnitOfWork(), authorization.NewStoreAuthorizer(st), logger)
+	return svc, st, func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t, svc.Shutdown(shutdownCtx))
+		require.NoError(t, st.Close())
+	}
+}
+
+func seedRunningUpgradeWithOutbox(t *testing.T, st store.Store, opID, operatorID string) {
+	t.Helper()
+	require.NoError(t, st.Operations().Create(context.Background(), &store.Operation{
+		ID: opID, OperationType: store.OperationUpgrade, Status: store.StatusRunning,
+		ReleaseDefinitionID: "def-001", IdempotencyKey: opID + "-key", RequestHash: opID + "-hash", StateVersion: 1,
+	}))
+	require.NoError(t, st.Outbox().Create(context.Background(), &store.OutboxEntry{
+		ID: "outbox-" + opID, CommandID: opID + ":execute", OperationID: opID,
+		OperationType: string(store.OperationUpgrade), OperatorID: operatorID,
+		Payload: []byte(`{"operation_id":"` + opID + `"}`), Status: store.CommandDelivered,
+	}))
+}
+
+// TASK-084 AC-084-03: committing a running standard operation to CANCELLING
+// revokes the executing operator's stream (resolved from the :execute outbox
+// row) so the agent can acknowledge with a helm_cancelled typed result.
+func TestCancelRunningUpgradeRevokesStream(t *testing.T) {
+	revoker := &streamRevokerStub{}
+	svc, st, cleanup := cancelServiceWithRevoker(t, revoker)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedRunningUpgradeWithOutbox(t, st, "op-revoke", "operator-running")
+
+	req := connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+		OperationId: "op-revoke", Reason: "must rollback", ExpectedStateVersion: 1,
+	})
+	req.Header().Set("Idempotency-Key", "cancel-revoke")
+	resp, err := svc.CancelOperation(deployerCtx(), req)
+	require.NoError(t, err)
+	assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLING, resp.Msg.Operation.State)
+	assert.Equal(t, 1, revoker.calls)
+	assert.Equal(t, "operator-running", revoker.operatorID)
+	assert.Equal(t, "operation cancelled", revoker.reason)
+
+	// Idempotency replay must not revoke twice.
+	resp2, err := svc.CancelOperation(deployerCtx(), req)
+	require.NoError(t, err)
+	assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLING, resp2.Msg.Operation.State)
+	assert.Equal(t, 1, revoker.calls, "replayed cancel must not revoke again")
+}
+
+// TASK-084 AC-084-03 negative: revocation is best-effort (AC-053-14) — a
+// failing revoker must not turn the committed cancel into an RPC error, and a
+// pending operation without an outbox row must not call the revoker at all.
+func TestCancelRevokeBestEffortAndPendingNoRevoke(t *testing.T) {
+	t.Run("revoker error does not fail RPC", func(t *testing.T) {
+		revoker := &streamRevokerStub{err: errors.New("registry unavailable")}
+		svc, st, cleanup := cancelServiceWithRevoker(t, revoker)
+		defer cleanup()
+		seedDefinition(t, st)
+		seedRunningUpgradeWithOutbox(t, st, "op-revoke-fail", "operator-running")
+
+		req := connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+			OperationId: "op-revoke-fail", Reason: "cancel", ExpectedStateVersion: 1,
+		})
+		req.Header().Set("Idempotency-Key", "cancel-revoke-fail")
+		resp, err := svc.CancelOperation(deployerCtx(), req)
+		require.NoError(t, err)
+		assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLING, resp.Msg.Operation.State)
+		assert.Equal(t, 1, revoker.calls)
+	})
+
+	t.Run("pending operation without outbox row does not revoke", func(t *testing.T) {
+		revoker := &streamRevokerStub{}
+		svc, st, cleanup := cancelServiceWithRevoker(t, revoker)
+		defer cleanup()
+		seedDefinition(t, st)
+		seedCancelableOperation(t, st, "op-pending-no-revoke", store.StatusPending)
+
+		req := connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+			OperationId: "op-pending-no-revoke", Reason: "cancel", ExpectedStateVersion: 1,
+		})
+		req.Header().Set("Idempotency-Key", "cancel-pending-no-revoke")
+		resp, err := svc.CancelOperation(deployerCtx(), req)
+		require.NoError(t, err)
+		assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLED, resp.Msg.Operation.State)
+		assert.Zero(t, revoker.calls)
+	})
+
+	t.Run("newest outbox row is not the execute entry", func(t *testing.T) {
+		revoker := &streamRevokerStub{}
+		svc, st, cleanup := cancelServiceWithRevoker(t, revoker)
+		defer cleanup()
+		seedDefinition(t, st)
+		require.NoError(t, st.Operations().Create(context.Background(), &store.Operation{
+			ID: "op-foreign-row", OperationType: store.OperationUpgrade, Status: store.StatusRunning,
+			ReleaseDefinitionID: "def-001", IdempotencyKey: "op-foreign-row-key",
+			RequestHash: "op-foreign-row-hash", StateVersion: 1,
+		}))
+		// The newest row for this operation is NOT its :execute entry — it
+		// belongs to a different command/operator. The revoke must skip it
+		// rather than disconnect the wrong (or a stale) operator.
+		require.NoError(t, st.Outbox().Create(context.Background(), &store.OutboxEntry{
+			ID: "outbox-foreign-row", CommandID: "op-foreign-row:rollback-compensation",
+			OperationID: "op-foreign-row", OperationType: string(store.OperationUpgrade),
+			OperatorID: "operator-other", Payload: []byte(`{}`),
+			Status: store.CommandDelivered, CreatedAt: time.Now().Add(time.Second),
+		}))
+		require.NoError(t, st.Outbox().Create(context.Background(), &store.OutboxEntry{
+			ID: "outbox-execute-row", CommandID: "op-foreign-row:execute",
+			OperationID: "op-foreign-row", OperationType: string(store.OperationUpgrade),
+			OperatorID: "operator-running", Payload: []byte(`{}`),
+			Status: store.CommandDelivered, CreatedAt: time.Now(),
+		}))
+
+		req := connect.NewRequest(&orchestratorv1.CancelOperationRequest{
+			OperationId: "op-foreign-row", Reason: "cancel", ExpectedStateVersion: 1,
+		})
+		req.Header().Set("Idempotency-Key", "cancel-foreign-row")
+		resp, err := svc.CancelOperation(deployerCtx(), req)
+		require.NoError(t, err)
+		assert.Equal(t, orchestratorv1.OperationStatus_OPERATION_STATUS_CANCELLING, resp.Msg.Operation.State)
+		assert.Zero(t, revoker.calls, "non-execute newest row must never be revoked")
+	})
+}
+
 func seedTimelineEntry(t *testing.T, st store.Store, opID string, stateVersion int) *store.OperationTimelineEntry {
 	t.Helper()
 	entry, err := st.Timeline().Append(context.Background(), &store.OperationTimelineEntry{

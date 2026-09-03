@@ -918,10 +918,58 @@ func (s *Service) finishCancelWithTarget(
 		// preflight; the coordinator finalizes the lifecycle as cancelled.
 		s.CancelPreflight(op.ID)
 	}
+	if result.Operation.Status == store.StatusCancelling {
+		// TASK-084 AC-084-03: a running standard operation enters CANCELLING
+		// after the Store commit; revoke the executing operator's command
+		// stream so the agent's in-flight Helm call cancels and reports a
+		// helm_cancelled typed result (AC-023-04 acknowledgement). Best-effort
+		// per AC-053-14 — an offline operator must not fail the RPC.
+		s.revokeOperationStream(ctx, op.ID)
+	}
 	return connect.NewResponse(&orchestratorv1.CancelOperationResponse{
 		Operation: protoOp,
 		RequestId: result.RequestID,
 	}), nil
+}
+
+// revokeOperationStream closes the executing operator's command stream after a
+// committed cancel. The operator identity is resolved from the operation's
+// outbox row (the :execute entry created by runUpgrade, newest by created_at).
+func (s *Service) revokeOperationStream(ctx context.Context, operationID string) {
+	if s.streamRevoker == nil {
+		return
+	}
+	// Revocation outlives the RPC that committed the cancel (best-effort per
+	// AC-053-14): a client disconnect must not cancel the revoke itself.
+	ctx = context.WithoutCancel(ctx)
+	entry, err := s.store.Outbox().GetByOperationID(ctx, operationID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			// No outbox row: nothing is executing at an operator (e.g. a
+			// running operation whose dispatch failed) — nothing to revoke.
+			return
+		}
+		s.logger.Warn("cancel: resolve executing operator failed", "operation_id", operationID, "error", err)
+		return
+	}
+	if entry.OperatorID == "" {
+		return
+	}
+	if entry.CommandID != operationID+":execute" {
+		// TASK-084 AC-084-03: only the :execute entry represents the agent
+		// running this operation's Helm call. Revoking a newer foreign row
+		// would either hit the wrong operator or leave the executing one
+		// connected — both can keep the operation stuck in CANCELLING.
+		s.logger.Warn("cancel: newest outbox row is not the execute entry; skipping revoke",
+			"operation_id", operationID, "command_id", entry.CommandID)
+		return
+	}
+	// Stream close happens after the Store commit (stream_revoker contract);
+	// a revocation failure is logged but never turns a committed cancel into
+	// an RPC error (AC-053-14).
+	if err := s.streamRevoker.Revoke(ctx, entry.OperatorID, "operation cancelled"); err != nil {
+		s.logger.Warn("cancel: revoke operator stream failed", "operator_id", entry.OperatorID, "error", err)
+	}
 }
 
 func (s *Service) replayCancel(

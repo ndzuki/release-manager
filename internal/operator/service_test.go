@@ -611,6 +611,79 @@ func TestHandleCommandResultUpgradeResultRequired(t *testing.T) {
 	assert.Contains(t, err.Error(), "upgrade result is required")
 }
 
+// TASK-084 AC-084-02: a failed typed result with an empty active snapshot is
+// accepted (REQ-084 empty semantics — e.g. preparation failures that never
+// produced a revision). The operation reaches its terminal state without an
+// inventory write, and the replay stays idempotent.
+func TestHandleCommandResultFailedEmptyActiveAccepted(t *testing.T) {
+	st := newTestSvc(t)
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
+	require.NoError(t, err)
+	ctx := t.Context()
+	definition := &store.ReleaseDefinition{
+		ID: "definition-empty-active", Name: "example", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: definition.ID, CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Revision: 1, Status: "deployed",
+		InventoryStatus: store.InventoryActive,
+	}))
+	op := &store.Operation{
+		ID: "operation-empty-active", OperationType: store.OperationUpgrade, Status: store.StatusQueued,
+		ReleaseDefinitionID: definition.ID, IdempotencyKey: "idem-empty-active", RequestHash: "hash",
+	}
+	require.NoError(t, st.Operations().Create(ctx, op))
+
+	result := &operatorv1.CommandResult{
+		CommandId: "command-empty-active", OperationId: op.ID, Status: "failed",
+		Error:  &operatorv1.ExecutionError{Code: "helm_upgrade_failed", Message: "preparation failed"},
+		Result: &operatorv1.CommandResult_Upgrade{Upgrade: &operatorv1.UpgradeResult{}},
+	}
+
+	require.NoError(t, svc.HandleCommandResult(ctx, result))
+	updated, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusFailed, updated.Status)
+	inventory, err := st.Inventories().GetByDefinition(ctx, definition.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, inventory.Revision, "empty active must not write inventory")
+
+	// Replay: terminal operation short-circuits; single execution result row.
+	require.NoError(t, svc.HandleCommandResult(ctx, result))
+	resultRecord, err := st.ExecutionResults().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "upgrade", resultRecord.ResultType)
+}
+
+// TASK-084 AC-084-02 negative guard: a succeeded typed result without an
+// active snapshot stays rejected (ADR-008: a success must not hide an
+// unobserved cluster state).
+func TestHandleCommandResultSucceededEmptyActiveRejected(t *testing.T) {
+	st := newTestSvc(t)
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
+	require.NoError(t, err)
+	ctx := t.Context()
+	definition := &store.ReleaseDefinition{
+		ID: "definition-succeeded-empty", Name: "example", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
+	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+		ID: "operation-succeeded-empty", OperationType: store.OperationUpgrade, Status: store.StatusQueued,
+		ReleaseDefinitionID: definition.ID, IdempotencyKey: "idem-succeeded-empty", RequestHash: "hash",
+	}))
+
+	err = svc.HandleCommandResult(ctx, &operatorv1.CommandResult{
+		CommandId: "command-succeeded-empty", OperationId: "operation-succeeded-empty", Status: "succeeded",
+		Result: &operatorv1.CommandResult_Upgrade{Upgrade: &operatorv1.UpgradeResult{}},
+	})
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "successful upgrade result requires active snapshot")
+}
+
 func TestFinishOperation_PreflightFailurePersistsStableCode(t *testing.T) {
 	st := newTestSvc(t)
 	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
@@ -633,6 +706,179 @@ func TestFinishOperation_PreflightFailurePersistsStableCode(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusFailed, got.Status)
 	assert.Equal(t, `{"code":"inventory_stale"}`, got.LastError)
+}
+
+// TASK-084 AC-084-03 (legacy INSTALL/ROLLBACK results): a CANCELLING operation
+// acknowledges into cancelled only on the agent's authoritative cancellation
+// result; any other result records a definitive failure (AC-023-04).
+func TestFinishOperationCancellingAcknowledge(t *testing.T) {
+	st := newTestSvc(t)
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
+	require.NoError(t, err)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-cancelling", Name: "example", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: store.DefStatusActive,
+	}, nil))
+
+	t.Run("cancel code acknowledges to cancelled", func(t *testing.T) {
+		require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+			ID: "operation-cancelling-ack", OperationType: store.OperationInstall,
+			Status: store.StatusCancelling, ReleaseDefinitionID: "definition-cancelling",
+			IdempotencyKey: "idem-cancelling-ack", RequestHash: "hash",
+		}))
+		svc.FinishOperation(ctx, "operation-cancelling-ack", "failed", `{"code":"cancelled","message":"release cancelled"}`)
+		got, err := st.Operations().Get(ctx, "operation-cancelling-ack")
+		require.NoError(t, err)
+		assert.Equal(t, store.StatusCancelled, got.Status)
+	})
+
+	t.Run("helm_cancelled code also acknowledges", func(t *testing.T) {
+		require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+			ID: "operation-cancelling-helm", OperationType: store.OperationRollback,
+			Status: store.StatusCancelling, ReleaseDefinitionID: "definition-cancelling",
+			IdempotencyKey: "idem-cancelling-helm", RequestHash: "hash",
+		}))
+		svc.FinishOperation(ctx, "operation-cancelling-helm", "failed", `{"code":"helm_cancelled","message":"release cancelled"}`)
+		got, err := st.Operations().Get(ctx, "operation-cancelling-helm")
+		require.NoError(t, err)
+		assert.Equal(t, store.StatusCancelled, got.Status)
+	})
+
+	t.Run("non-cancel code records failure", func(t *testing.T) {
+		require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+			ID: "operation-cancelling-fail", OperationType: store.OperationRollback,
+			Status: store.StatusCancelling, ReleaseDefinitionID: "definition-cancelling",
+			IdempotencyKey: "idem-cancelling-fail", RequestHash: "hash",
+		}))
+		svc.FinishOperation(ctx, "operation-cancelling-fail", "failed", `{"code":"helm_upgrade_failed"}`)
+		got, err := st.Operations().Get(ctx, "operation-cancelling-fail")
+		require.NoError(t, err)
+		assert.Equal(t, store.StatusFailed, got.Status)
+		assert.Equal(t, `{"code":"helm_upgrade_failed"}`, got.LastError)
+	})
+
+	t.Run("late success loses to the cancel intent", func(t *testing.T) {
+		require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+			ID: "operation-cancelling-late", OperationType: store.OperationInstall,
+			Status: store.StatusCancelling, ReleaseDefinitionID: "definition-cancelling",
+			IdempotencyKey: "idem-cancelling-late", RequestHash: "hash",
+		}))
+		svc.FinishOperation(ctx, "operation-cancelling-late", "succeeded", `{}`)
+		got, err := st.Operations().Get(ctx, "operation-cancelling-late")
+		require.NoError(t, err)
+		assert.Equal(t, store.StatusFailed, got.Status)
+	})
+}
+
+// TASK-084 AC-084-03 (typed results): a late succeeded typed result arriving
+// while the operation is CANCELLING must not resurrect it — the cancel intent
+// wins and a definitive failure is recorded (REQ-023 CANCELLING has no
+// completion transition).
+func TestHandleCommandResultLateSuccessWhileCancellingFails(t *testing.T) {
+	st := newTestSvc(t)
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
+	require.NoError(t, err)
+	ctx := t.Context()
+	definition := &store.ReleaseDefinition{
+		ID: "definition-late-success", Name: "example", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: definition.ID, CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Revision: 1, Status: "deployed",
+		InventoryStatus: store.InventoryActive,
+	}))
+	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+		ID: "operation-late-success", OperationType: store.OperationUpgrade,
+		Status: store.StatusCancelling, ReleaseDefinitionID: definition.ID,
+		IdempotencyKey: "idem-late-success", RequestHash: "hash",
+	}))
+
+	err = svc.HandleCommandResult(ctx, &operatorv1.CommandResult{
+		CommandId: "command-late-success", OperationId: "operation-late-success", Status: "succeeded",
+		Result: &operatorv1.CommandResult_Upgrade{Upgrade: &operatorv1.UpgradeResult{
+			Active: &operatorv1.ReleaseSnapshot{HelmRevision: 2, Status: "deployed"},
+		}},
+	})
+	require.NoError(t, err)
+	got, err := st.Operations().Get(ctx, "operation-late-success")
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusFailed, got.Status)
+	assert.Equal(t, "cancellation committed before the upgrade result arrived", got.LastError)
+}
+
+// TASK-084 AC-084-06: a replayed typed CommandResult over the real stream
+// converges through the existing idempotency chain (ADR-005 command_id dedup +
+// FinalizeUpgrade execution-result dedup): the redelivery does not error, the
+// operation keeps its terminal state, and exactly one execution result row is
+// written.
+func TestCommandStreamTypedResultReplayConvergesOnce(t *testing.T) {
+	st := newTestSvc(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	definition := &store.ReleaseDefinition{
+		ID: "definition-dup-typed", Name: "example", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: definition.ID, CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Revision: 1, Status: "deployed",
+		InventoryStatus: store.InventoryActive,
+	}))
+	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+		ID: "operation-dup-typed", OperationType: store.OperationUpgrade,
+		Status: store.StatusQueued, ReleaseDefinitionID: definition.ID,
+		IdempotencyKey: "idem-dup-typed", RequestHash: "hash",
+	}))
+	require.NoError(t, st.Outbox().Create(ctx, &store.OutboxEntry{
+		ID: "outbox-dup-typed", CommandID: "command-dup-typed", OperationID: "operation-dup-typed",
+		OperationType: string(store.OperationUpgrade), OperatorID: "op-1",
+		Payload: []byte(`{}`), Status: store.CommandDelivered, Sequence: 1,
+	}))
+
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
+	require.NoError(t, err)
+	client := commandStreamPair(t, svc)
+	stream := client.CommandStream(ctx)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Hello{
+			Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+		},
+	}))
+	established, err := stream.Receive()
+	require.NoError(t, err)
+	require.NotNil(t, established.GetSessionEstablished())
+
+	result := &operatorv1.CommandResult{
+		CommandId: "command-dup-typed", OperationId: "operation-dup-typed", Status: "succeeded",
+		Result: &operatorv1.CommandResult_Upgrade{Upgrade: &operatorv1.UpgradeResult{
+			Active: &operatorv1.ReleaseSnapshot{HelmRevision: 2, Status: "deployed"},
+		}},
+	}
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_CommandResult{CommandResult: result},
+	}))
+	// Replay the exact same result on the same stream; the terminal operation
+	// short-circuit must not error the stream (agent acknowledgement safe).
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_CommandResult{CommandResult: result},
+	}))
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break
+		}
+	}
+
+	got, err := st.Operations().Get(context.Background(), "operation-dup-typed")
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, got.Status)
+	resultRecord, err := st.ExecutionResults().Get(context.Background(), "operation-dup-typed")
+	require.NoError(t, err)
+	assert.Equal(t, "upgrade", resultRecord.ResultType, "single terminal decision only")
 }
 
 // TestCommandStreamAckPersistedWritesTimelineEntry drives the real
