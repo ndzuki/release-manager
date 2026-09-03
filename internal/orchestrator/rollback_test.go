@@ -150,6 +150,16 @@ func TestRollbackRelease_ReleaseBusy(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 	seedRollbackInventory(t, st)
+	// The first rollback must stay non-terminal so the second one observes a
+	// live operation and gets release_busy. Without an active operator the
+	// async preflight coordinator fail-closes the first operation to a
+	// terminal state right after the synchronous response (same shape as
+	// TestRollbackRelease_ConcurrentOnlyOneAccepted); an active operator keeps
+	// it in preflight while the artifact stage awaits its result.
+	require.NoError(t, st.Operators().Create(context.Background(), &store.Operator{
+		ID: "operator-rollback-busy", Name: "operator-rollback-busy", CustomerID: "cust-001", ClusterID: "cls-001",
+		CertSerial: "serial-rollback-busy", Status: store.OperatorActive,
+	}))
 
 	// First rollback succeeds
 	_, err := svc.RollbackRelease(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
