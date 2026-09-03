@@ -125,6 +125,70 @@ func TestFake_UpgradeAtomicRollbackFailure(t *testing.T) {
 	assert.Equal(t, "failed", active.Status)
 }
 
+// TASK-084 AC-084-04: the fake's structured outcome is the authoritative
+// post-failure signal — restored=true only when the atomic rollback actually
+// restored the pre-upgrade revision, never fabricated.
+func TestFake_UpgradeOutcomeSignals(t *testing.T) {
+	t.Run("atomic rollback restored", func(t *testing.T) {
+		eng := NewFake()
+		_, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+		require.NoError(t, err)
+		eng.UpgradeError = ErrActionFailed
+
+		active, err := eng.Upgrade(t.Context(), UpgradeOptions{
+			Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v2",
+			ExpectedRevision: 1, Atomic: true,
+		})
+		require.Error(t, err)
+		outcome := OutcomeOf(err)
+		assert.True(t, outcome.Restored)
+		require.NotNil(t, outcome.Active)
+		assert.Equal(t, 1, outcome.Active.Revision)
+		assert.Equal(t, outcome.Active.Revision, active.Revision)
+	})
+
+	t.Run("rollback cascade failed", func(t *testing.T) {
+		eng := NewFake()
+		_, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+		require.NoError(t, err)
+		eng.UpgradeError = ErrActionFailed
+		eng.RollbackError = ErrActionFailed
+
+		_, err = eng.Upgrade(t.Context(), UpgradeOptions{
+			Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v2",
+			ExpectedRevision: 1, Atomic: true,
+		})
+		require.Error(t, err)
+		outcome := OutcomeOf(err)
+		assert.False(t, outcome.Restored, "rollback failure must never report restored")
+		require.NotNil(t, outcome.Active)
+		assert.Equal(t, "failed", outcome.Active.Status)
+	})
+
+	t.Run("non-atomic failure keeps failed revision active", func(t *testing.T) {
+		eng := NewFake()
+		_, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+		require.NoError(t, err)
+		eng.UpgradeError = ErrActionFailed
+
+		_, err = eng.Upgrade(t.Context(), UpgradeOptions{
+			Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v2",
+			ExpectedRevision: 1, Atomic: false,
+		})
+		require.Error(t, err)
+		outcome := OutcomeOf(err)
+		assert.False(t, outcome.Restored)
+		require.NotNil(t, outcome.Active)
+		assert.Equal(t, 2, outcome.Active.Revision)
+	})
+
+	t.Run("undecorated error is fail-closed", func(t *testing.T) {
+		outcome := OutcomeOf(ErrActionFailed)
+		assert.False(t, outcome.Restored)
+		assert.Nil(t, outcome.Active)
+	})
+}
+
 func TestFake_UpgradeRenderDriftDoesNotMutate(t *testing.T) {
 	eng := NewFake()
 	_, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})

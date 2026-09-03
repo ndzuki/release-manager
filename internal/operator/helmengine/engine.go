@@ -82,6 +82,55 @@ var (
 	ErrSchemaFailed         = errors.New("helm: schema validation failed")
 )
 
+// UpgradeOutcome describes what a failed Upgrade left behind (TASK-084
+// AC-084-04). It is the authoritative post-failure signal captured in the
+// same SDK call sequence — the agent maps it into UpgradeResult instead of
+// guessing from revision equality (the D-109 fabrication source).
+type UpgradeOutcome struct {
+	// Attempted is the failed new revision; nil when the attempt produced no
+	// release record (preparation failures).
+	Attempted *Release
+	// Active is the release that is active after the failure; nil when the
+	// post-failure state could not be observed.
+	Active *Release
+	// Restored is true when the atomic rollback restored the pre-upgrade
+	// revision (only then may the caller report rollback_succeeded).
+	Restored bool
+}
+
+// OutcomeError decorates an Upgrade failure with the structured post-failure
+// state. It preserves the wrapped error for errors.Is classification.
+type OutcomeError struct {
+	Err     error
+	Outcome UpgradeOutcome
+}
+
+// NewOutcomeError builds an OutcomeError wrapping err.
+func NewOutcomeError(err error, outcome UpgradeOutcome) error {
+	if err == nil {
+		return nil
+	}
+	return &OutcomeError{Err: err, Outcome: outcome}
+}
+
+func (e *OutcomeError) Error() string { return e.Err.Error() }
+func (e *OutcomeError) Unwrap() error { return e.Err }
+
+// OutcomeOf extracts the structured post-failure outcome from an Upgrade
+// error. A non-decorated error yields the zero outcome (Restored=false),
+// which callers MUST treat as "no authoritative rollback signal" — never as
+// success.
+func OutcomeOf(err error) UpgradeOutcome {
+	var decorated interface{ UpgradeOutcome() UpgradeOutcome }
+	if errors.As(err, &decorated) {
+		return decorated.UpgradeOutcome()
+	}
+	return UpgradeOutcome{}
+}
+
+// UpgradeOutcome implements the OutcomeOf extraction interface.
+func (e *OutcomeError) UpgradeOutcome() UpgradeOutcome { return e.Outcome }
+
 // Engine defines the contract for Helm SDK operations (REQ-041).
 // Implementations MUST use the Helm Go SDK only (helm.sh/helm/v3/pkg/action);
 // no os/exec or subprocess calls are permitted.
@@ -147,12 +196,12 @@ type UpgradeOptions struct {
 	ExpectedManifestDigest string
 	// PlainHTTP allows OCI chart pulls from a plain HTTP registry (dev
 	// fixture only). Defaults false so production stays HTTPS.
-	PlainHTTP bool
-	ResetValues            bool
-	ReuseValues            bool
-	CleanupOnFail          bool
-	WaitForJobs            bool
-	TakeOwnership          bool
+	PlainHTTP     bool
+	ResetValues   bool
+	ReuseValues   bool
+	CleanupOnFail bool
+	WaitForJobs   bool
+	TakeOwnership bool
 }
 
 // RollbackOptions holds parameters for Rollback.

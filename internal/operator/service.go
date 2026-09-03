@@ -326,11 +326,11 @@ func (s *Service) Enroll(
 	s.emitOperatorEnrollmentAudit(req.Header(), op, session.ID, enrollment.SupersededOperatorID)
 
 	return connect.NewResponse(&operatorv1.EnrollResponse{
-		SessionId:             session.ID,
-		TtlSeconds:            int64(s.sessionTTL.Seconds()),
-		CertificatePem:        issued.PEM,
-		OperatorId:            operatorID,
-		CertificateExpiresAt:  issued.ExpiresAt.Format(time.RFC3339),
+		SessionId:            session.ID,
+		TtlSeconds:           int64(s.sessionTTL.Seconds()),
+		CertificatePem:       issued.PEM,
+		OperatorId:           operatorID,
+		CertificateExpiresAt: issued.ExpiresAt.Format(time.RFC3339),
 	}), nil
 }
 
@@ -690,6 +690,11 @@ func (s *Service) CommandStream(
 				if err != nil {
 					return fmt.Errorf("load typed command result outbox: %w", err)
 				}
+				// AC-084-06: a replayed typed result converges through the
+				// existing idempotency chain (ADR-005 command_id dedup) —
+				// HandleCommandResult short-circuits terminal operations and
+				// FinalizeUpgrade deduplicates on operation_execution_results,
+				// so a redelivered result never re-runs the terminal decision.
 				if err := s.HandleCommandResult(ctx, result); err != nil {
 					return err
 				}
@@ -910,6 +915,35 @@ func (s *Service) FinishOperation(ctx context.Context, operationID, resultStatus
 			return
 		}
 	}
+	if current == store.StatusCancelling {
+		// TASK-084 AC-084-03: only the agent's authoritative cancellation
+		// result acknowledges CANCELLING → cancelled (AC-023-04); any other
+		// result records a definitive failure — the cancel intent wins over a
+		// late success. Both legacy (`cancelled`) and typed-normalized
+		// (`helm_cancelled`) cancellation codes acknowledge, so a future
+		// legacy-code unification cannot silently misclassify the cancel.
+		var parsed struct {
+			Code string `json:"code"`
+		}
+		event := operation.EventError
+		if json.Unmarshal([]byte(resultJSON), &parsed) == nil &&
+			(parsed.Code == "cancelled" || parsed.Code == "helm_cancelled") {
+			event = operation.EventAcknowledgeCancel
+		}
+		next, transitionErr := operation.Transition(current, event)
+		if transitionErr != nil {
+			s.logger.Warn("failed to transition cancelling operation result", "operation_id", operationID, "error", transitionErr)
+			return
+		}
+		lastError := ""
+		if event == operation.EventError {
+			lastError = resultJSON
+		}
+		if _, err := s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, lastError); err != nil {
+			s.logger.Warn("failed to persist cancelling operation result", "operation_id", operationID, "error", err)
+		}
+		return
+	}
 
 	event := operation.EventComplete
 	lastError := ""
@@ -959,6 +993,14 @@ func (s *Service) HandleCommandResult(ctx context.Context, result *operatorv1.Co
 		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("successful upgrade result requires active snapshot"))
 	}
 	status, lastError, inventoryStatus := terminalMapping(result)
+	if op.Status == store.StatusCancelling && status == store.StatusSucceeded {
+		// TASK-084 AC-084-03: after the Store committed CANCELLING the cancel
+		// intent wins. CANCELLING has no completion transition (REQ-023), so a
+		// late success must not resurrect the operation — it records a
+		// definitive failure instead of faking a cancelled/succeeded outcome.
+		status = store.StatusFailed
+		lastError = "cancellation committed before the upgrade result arrived"
+	}
 	payload, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(upgrade)
 	if err != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("marshal upgrade result: %w", err))

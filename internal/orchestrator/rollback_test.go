@@ -36,6 +36,14 @@ func TestRollbackRelease_Success(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 	seedRollbackInventory(t, st)
+	// Preflight runs asynchronously (REQ-019); an active operator keeps the
+	// operation in preflight while the artifact stage awaits its result.
+	// Without one the coordinator fail-closes the operation to a terminal
+	// state, making the transient preflight assertion racy.
+	require.NoError(t, st.Operators().Create(context.Background(), &store.Operator{
+		ID: "operator-rollback-success", Name: "operator-rollback-success", CustomerID: "cust-001", ClusterID: "cls-001",
+		CertSerial: "serial-rollback-success", Status: store.OperatorActive,
+	}))
 
 	resp, err := svc.RollbackRelease(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
 		ReleaseDefinitionId:     "def-001",
@@ -142,6 +150,16 @@ func TestRollbackRelease_ReleaseBusy(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 	seedRollbackInventory(t, st)
+	// The first rollback must stay non-terminal so the second one observes a
+	// live operation and gets release_busy. Without an active operator the
+	// async preflight coordinator fail-closes the first operation to a
+	// terminal state right after the synchronous response (same shape as
+	// TestRollbackRelease_ConcurrentOnlyOneAccepted); an active operator keeps
+	// it in preflight while the artifact stage awaits its result.
+	require.NoError(t, st.Operators().Create(context.Background(), &store.Operator{
+		ID: "operator-rollback-busy", Name: "operator-rollback-busy", CustomerID: "cust-001", ClusterID: "cls-001",
+		CertSerial: "serial-rollback-busy", Status: store.OperatorActive,
+	}))
 
 	// First rollback succeeds
 	_, err := svc.RollbackRelease(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
@@ -238,6 +256,14 @@ func TestRollbackRelease_Idempotency(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 	seedRollbackInventory(t, st)
+	// The idempotent replay returns the operation's live state; without an
+	// operator the async preflight coordinator fail-closes the operation
+	// between the two calls, making the state comparison racy (same shape as
+	// TestRollbackRelease_ConcurrentOnlyOneAccepted).
+	require.NoError(t, st.Operators().Create(context.Background(), &store.Operator{
+		ID: "operator-rollback-idem", Name: "operator-rollback-idem", CustomerID: "cust-001", ClusterID: "cls-001",
+		CertSerial: "serial-rollback-idem", Status: store.OperatorActive,
+	}))
 
 	req := &orchestratorv1.RollbackReleaseRequest{
 		ReleaseDefinitionId:     "def-001",

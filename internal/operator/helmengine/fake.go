@@ -170,15 +170,27 @@ func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, erro
 			if f.RollbackError != nil {
 				f.RollbackError = nil
 				rel.Status = "failed"
-				return rel, fmt.Errorf("rollback failed: %w", ErrAtomicRollbackFailed)
+				// TASK-084 AC-084-04: the rollback cascade failed — the
+				// outcome must never report a restored release.
+				return rel, NewOutcomeError(
+					fmt.Errorf("rollback failed: %w", ErrAtomicRollbackFailed),
+					UpgradeOutcome{Attempted: rel, Active: rel, Restored: false},
+				)
 			}
 			f.releases[key] = &prevRelease
 			f.history[key][len(f.history[key])-1].Description = "Upgrade failed, rolled back"
 			rolledBack := prevRelease
 			rolledBack.Labels = maps.Clone(prevRelease.Labels)
-			return &rolledBack, err
+			// TASK-084 AC-084-04: authoritative restore signal — the active
+			// release is the restored pre-upgrade revision.
+			return &rolledBack, NewOutcomeError(err, UpgradeOutcome{
+				Attempted: rel, Active: &rolledBack, Restored: true,
+			})
 		}
-		return rel, err
+		// Non-atomic failure: the failed revision stays active, no restore.
+		return rel, NewOutcomeError(err, UpgradeOutcome{
+			Attempted: rel, Active: rel, Restored: false,
+		})
 	}
 
 	return rel, nil

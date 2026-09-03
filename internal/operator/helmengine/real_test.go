@@ -19,6 +19,7 @@ import (
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
+	"helm.sh/helm/v3/pkg/kube"
 	kubefake "helm.sh/helm/v3/pkg/kube/fake"
 	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/release"
@@ -113,10 +114,111 @@ func TestRealEngine_UpgradeAtomicFailureRestoresRelease(t *testing.T) {
 		Timeout:          time.Second,
 	})
 	require.Error(t, err)
+	// TASK-084 AC-084-04 negative (real SDK): the persistent WaitError also
+	// fails the atomic rollback itself, so the outcome must report Restored=
+	// false with the failed active revision — never a fabricated restore.
+	outcome := OutcomeOf(err)
+	assert.False(t, outcome.Restored, "failed rollback cascade must never report restored")
+	require.NotNil(t, outcome.Active)
+	assert.Equal(t, "failed", outcome.Active.Status)
+	require.NotNil(t, outcome.Attempted)
+	assert.Equal(t, 2, outcome.Attempted.Revision)
 
 	stored, getErr := releases.Get("upgrade-atomic", 1)
 	require.NoError(t, getErr)
 	assert.Equal(t, 1, stored.Version)
+}
+
+// onceFailKubeClient fails exactly N Wait/WaitWithJobs calls and then lets the
+// wait succeed — one shot for the upgrade wait, success for the atomic
+// rollback wait (TASK-084 real-SDK restore scenario).
+type onceFailKubeClient struct {
+	*kubefake.FailingKubeClient
+	remaining int
+}
+
+func (c *onceFailKubeClient) Wait(resources kube.ResourceList, d time.Duration) error {
+	if c.remaining > 0 {
+		c.remaining--
+		return c.FailingKubeClient.Wait(resources, d)
+	}
+	return nil
+}
+
+func (c *onceFailKubeClient) WaitWithJobs(resources kube.ResourceList, d time.Duration) error {
+	if c.remaining > 0 {
+		c.remaining--
+		return c.FailingKubeClient.WaitWithJobs(resources, d)
+	}
+	return nil
+}
+
+// TASK-084 AC-084-04: real SDK positive — the upgrade wait fails once, the
+// atomic rollback succeeds, and the engine reports the authoritative restore
+// signal. The restored active lands on the NEW rollback revision (3), which is
+// why the agent must trust Restored instead of comparing revisions.
+func TestRealEngine_UpgradeAtomicRollbackRestoredOutcome(t *testing.T) {
+	kubeClient := &onceFailKubeClient{
+		FailingKubeClient: &kubefake.FailingKubeClient{
+			PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+		},
+		remaining: 1,
+	}
+	kubeClient.WaitError = errors.New("upgrade hook failed")
+	engine, releases := newTestRealEngine(t, kubeClient)
+	chartPath := writeTestChart(t)
+	_, err := engine.Install(t.Context(), InstallOptions{
+		Namespace: "default", ReleaseName: "upgrade-restored", ChartPath: chartPath,
+	})
+	require.NoError(t, err)
+
+	_, err = engine.Upgrade(t.Context(), UpgradeOptions{
+		Namespace:        "default",
+		ReleaseName:      "upgrade-restored",
+		ChartPath:        chartPath,
+		ExpectedRevision: 1,
+		Atomic:           true,
+		Timeout:          time.Second,
+	})
+	require.Error(t, err)
+	outcome := OutcomeOf(err)
+	assert.True(t, outcome.Restored, "real SDK restore must report the authoritative signal")
+	require.NotNil(t, outcome.Active)
+	assert.Equal(t, 3, outcome.Active.Revision, "restored config lands on the new rollback revision")
+	assert.Equal(t, "deployed", outcome.Active.Status)
+	require.NotNil(t, outcome.Attempted)
+	assert.Equal(t, 2, outcome.Attempted.Revision)
+
+	// Revision 1 remains the canonical pre-upgrade config source.
+	stored, getErr := releases.Get("upgrade-restored", 1)
+	require.NoError(t, getErr)
+	assert.Equal(t, 1, stored.Version)
+}
+
+// TASK-084 AC-084-04 negative: real SDK preparation failures never decorate an
+// outcome — the zero outcome is the documented fail-closed "no rollback
+// signal", which the agent must never map to rollback_succeeded.
+func TestRealEngine_UpgradePreparationFailureHasNoOutcome(t *testing.T) {
+	engine, _ := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	})
+	chartPath := writeTestChart(t)
+	_, err := engine.Install(t.Context(), InstallOptions{
+		Namespace: "default", ReleaseName: "upgrade-prep-fail", ChartPath: chartPath,
+	})
+	require.NoError(t, err)
+
+	// A manifest drift is detected before the Helm action writes anything:
+	// rel == nil, so the plain preparation error carries no outcome.
+	_, err = engine.Upgrade(t.Context(), UpgradeOptions{
+		Namespace: "default", ReleaseName: "upgrade-prep-fail", ChartPath: chartPath,
+		ExpectedRevision:       1,
+		EffectiveValuesDigest:  "sha256:never-matched",
+		ExpectedManifestDigest: "sha256:never-matched",
+	})
+	require.Error(t, err)
+	assert.False(t, OutcomeOf(err).Restored, "preparation failure must fail closed")
+	assert.Nil(t, OutcomeOf(err).Active)
 }
 
 func TestRealEngine_InstallAtomicFailureRemovesRelease(t *testing.T) {
@@ -366,7 +468,7 @@ func TestDigestValuesDeterministic(t *testing.T) {
 	assert.Equal(t, digestValues(left), digestValues(right))
 }
 
-func newTestRealEngine(t *testing.T, kubeClient *kubefake.FailingKubeClient) (*RealEngine, *storage.Storage) {
+func newTestRealEngine(t *testing.T, kubeClient kube.Interface) (*RealEngine, *storage.Storage) {
 	t.Helper()
 
 	releases := storage.Init(driver.NewMemory())

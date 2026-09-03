@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	modernc "modernc.org/sqlite"
+
 	"github.com/ndzuki/release-manager/internal/store"
-	_ "modernc.org/sqlite"
 )
 
 // Store implements store.Store backed by SQLite.
@@ -85,7 +87,7 @@ func Open(dsn string) (*Store, error) {
 		return nil, fmt.Errorf("sqlite pragma foreign_keys: %w", err)
 	}
 
-	if err := migrate(db); err != nil {
+	if err := migrate(db, dsn); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("sqlite migrate: %w", err)
 	}
@@ -323,10 +325,173 @@ func OpenTest(t interface{ Cleanup(func()) }) *Store {
 }
 
 // migrate runs the ordered migration steps against the database.
+//
+// Empty databases take a fast path: instead of replaying the incremental
+// ALTER history — each ALTER TABLE round trip costs ~8ms under the race
+// detector even on an empty table, and the test suites open hundreds of
+// empty stores per run (the orchestrator suite alone opens 272 stores ≈
+// 2.5min of pure migration) — they receive a page-level clone of a
+// per-process template that was itself migrated by the legacy loop once. The
+// clone is byte-identical to the legacy outcome by construction. When the
+// backup API is unavailable the fast path degrades to replaying the
+// canonical DDL snapshot read back from sqlite_master; both paths fall back
+// to the legacy loop on any uncertainty. Databases carrying any schema
+// objects always go through the legacy loop, keeping their
+// repair/idempotency semantics.
+func migrate(db *sql.DB, dsn string) error {
+	fresh, err := databaseIsFresh(db)
+	if err != nil {
+		return fmt.Errorf("sqlite freshness check: %w", err)
+	}
+	if !fresh {
+		return migrateLegacy(db)
+	}
+	if backupCapableDSN(dsn) {
+		if err := cloneFreshSchema(db, dsn); err == nil {
+			return nil
+		} else if !errors.Is(err, errFreshBackupUnavailable) {
+			return fmt.Errorf("sqlite fresh clone: %w", err)
+		}
+	}
+	if ddl, seed, ok := freshSchema(); ok {
+		return migrateFresh(db, ddl, seed)
+	}
+	return migrateLegacy(db)
+}
+
+// databaseIsFresh reports whether the database carries no schema objects yet.
+// Only a completely empty database takes the fresh fast path: any user table,
+// index, trigger or view (even a legacy-era schema that predates the
+// release_definitions anchor table) must go through the legacy repair loop.
+func databaseIsFresh(db *sql.DB) (bool, error) {
+	var n int
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'`,
+	).Scan(&n); err != nil {
+		return false, err
+	}
+	return n == 0, nil
+}
+
+// errFreshBackupUnavailable reports that the modernc driver connection does
+// not expose the NewBackup method (driver internals changed).
+var errFreshBackupUnavailable = errors.New("fresh-schema backup API unavailable")
+
+// backupCapableDSN reports whether a second connection (the backup target
+// opened by modernc's NewBackup) can address the same database as the DSN.
+// Private (non-shared) in-memory databases are excluded: every connection
+// there gets its own empty database, so a backup would silently write a
+// different database and leave the caller's database empty.
+func backupCapableDSN(dsn string) bool {
+	if dsn == ":memory:" {
+		return false
+	}
+	if strings.Contains(dsn, "mode=memory") && !strings.Contains(dsn, "cache=shared") {
+		return false
+	}
+	return true
+}
+
+var (
+	freshTemplateOnce sync.Once
+	freshTemplateDB   *sql.DB
+	freshTemplateErr  error
+)
+
+// freshTemplate returns a migrated in-memory database used as the page-level
+// source for fresh-database schema clones. It is built once per process by
+// running the authoritative legacy migration, so a clone is byte-identical
+// to the legacy outcome. The template stays open for the process lifetime
+// (a few pages in memory).
+func freshTemplate() (*sql.DB, error) {
+	freshTemplateOnce.Do(func() {
+		db, err := sql.Open("sqlite", "file:release-manager-schema-template?mode=memory&cache=shared")
+		if err != nil {
+			freshTemplateErr = fmt.Errorf("open schema template: %w", err)
+			return
+		}
+		if _, err := db.ExecContext(context.Background(), "PRAGMA journal_mode=WAL"); err != nil {
+			db.Close()
+			freshTemplateErr = fmt.Errorf("schema template journal_mode: %w", err)
+			return
+		}
+		if _, err := db.ExecContext(context.Background(), "PRAGMA foreign_keys=ON"); err != nil {
+			db.Close()
+			freshTemplateErr = fmt.Errorf("schema template foreign_keys: %w", err)
+			return
+		}
+		if err := migrateLegacy(db); err != nil {
+			db.Close()
+			freshTemplateErr = fmt.Errorf("migrate schema template: %w", err)
+			return
+		}
+		freshTemplateDB = db
+	})
+	return freshTemplateDB, freshTemplateErr
+}
+
+// cloneFreshSchema backs the migrated template up into the fresh database the
+// caller already has open. The backup destination reuses the original DSN,
+// so the clone lands in the exact database `db` is connected to (a file path
+// or a cache=shared memory URI).
+func cloneFreshSchema(db *sql.DB, dsn string) error {
+	tmpl, err := freshTemplate()
+	if err != nil {
+		return err
+	}
+	c, err := tmpl.Conn(context.Background())
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	var newBackup func(string) (*modernc.Backup, error)
+	if err := c.Raw(func(dc any) error {
+		b, ok := dc.(interface {
+			NewBackup(string) (*modernc.Backup, error)
+		})
+		if !ok {
+			return errFreshBackupUnavailable
+		}
+		newBackup = b.NewBackup
+		return nil
+	}); err != nil {
+		return err
+	}
+	backup, err := newBackup(dsn)
+	if err != nil {
+		return err
+	}
+	done, err := backup.Step(-1)
+	if err != nil {
+		_ = backup.Finish() //nolint:errcheck // best-effort cleanup on the error path; the Step error is authoritative
+		return err
+	}
+	if done {
+		_ = backup.Finish() //nolint:errcheck // best-effort cleanup; the anomaly error below is authoritative
+		return fmt.Errorf("schema backup did not finish in one step")
+	}
+	if err := backup.Finish(); err != nil {
+		return err
+	}
+	// The clone may have rewritten the file header (the in-memory template
+	// ignores journal_mode); re-assert WAL on the caller's connection so
+	// file-backed databases keep the WAL journal mode.
+	if _, err := db.ExecContext(context.Background(), "PRAGMA journal_mode=WAL"); err != nil {
+		return fmt.Errorf("re-assert journal_mode after clone: %w", err)
+	}
+	return nil
+}
+
+// migrateLegacy is the authoritative incremental migration: ordered DDL with
+// Go-side branches for legacy values/preflight/enrollment-token shapes. It
+// runs for every pre-existing database and doubles as the builder of the
+// fresh-schema snapshot.
+//
 // ALTER TABLE ADD COLUMN statements that fail because the column already
 // exists are silently skipped to keep migrations idempotent.
+//
 //nolint:gocyclo // serialized, ordered migration gate with one guard branch per schema step (project convention).
-func migrate(db *sql.DB) error {
+func migrateLegacy(db *sql.DB) error {
 	tx, err := db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return fmt.Errorf("begin migration tx: %w", err)
@@ -367,6 +532,135 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration: %w", err)
+	}
+	return nil
+}
+
+// freshSchemaState is the per-process canonical snapshot of a freshly
+// migrated database.
+type freshSchemaState struct {
+	ddl  string // ordered end-state DDL read back from sqlite_master
+	seed string // data-level statements to replay after the DDL
+}
+
+var (
+	freshSchemaOnce sync.Once
+	freshSchemaData freshSchemaState
+	freshSchemaOK   bool
+)
+
+// freshSchema returns the canonical fresh-database schema, built on first use
+// by running the legacy migration against a scratch database. ok is false
+// when the migration contains statement shapes the snapshot cannot faithfully
+// capture (see buildFreshSchema); callers must then use the legacy path.
+func freshSchema() (ddl, seed string, ok bool) {
+	freshSchemaOnce.Do(func() {
+		freshSchemaData, freshSchemaOK = buildFreshSchema()
+	})
+	if !freshSchemaOK {
+		return "", "", false
+	}
+	return freshSchemaData.ddl, freshSchemaData.seed, true
+}
+
+// buildFreshSchema replays the legacy migration on a scratch database and
+// captures the resulting end-state: all schema-level statements are folded
+// into the sqlite_master DDL snapshot (so no incremental ALTER history is
+// replayed on fresh databases), while data-level statements (INSERT/DELETE)
+// are preserved verbatim for replay after the DDL. UPDATEs are skipped — on
+// an empty database they are no-ops.
+//
+// The function fails closed (ok=false) on any statement shape it cannot
+// capture: unknown statement prefixes or virtual tables (whose shadow tables
+// would be replayed twice).
+func buildFreshSchema() (freshSchemaState, bool) {
+	var seed strings.Builder
+	for _, stmt := range migrationStatements {
+		verb := strings.ToUpper(strings.TrimSpace(stmt))
+		switch {
+		case strings.HasPrefix(verb, "CREATE "),
+			strings.HasPrefix(verb, "ALTER "),
+			strings.HasPrefix(verb, "DROP "),
+			strings.HasPrefix(verb, "UPDATE "):
+			// Captured by the sqlite_master snapshot below.
+		case strings.HasPrefix(verb, "INSERT "), strings.HasPrefix(verb, "DELETE "):
+			seed.WriteString(stmt)
+			seed.WriteString(";\n")
+		default:
+			return freshSchemaState{}, false
+		}
+	}
+
+	db, err := sql.Open("sqlite", "file:release-manager-fresh-schema-snapshot?mode=memory&cache=shared")
+	if err != nil {
+		return freshSchemaState{}, false
+	}
+	defer db.Close()
+	if err := migrateLegacy(db); err != nil {
+		return freshSchemaState{}, false
+	}
+
+	var ddl strings.Builder
+	// Tables first, then indexes/triggers/views; within each type, sqlite_master
+	// rowid order is creation order, which already satisfies foreign-key
+	// parent-before-child ordering (no table is ever dropped during a fresh
+	// migration, so rowid order is stable).
+	for _, typ := range []string{"table", "index", "trigger", "view"} {
+		ok, err := appendTypeDDL(&ddl, db, typ)
+		if err != nil || !ok {
+			return freshSchemaState{}, false
+		}
+	}
+	return freshSchemaState{ddl: ddl.String(), seed: seed.String()}, true
+}
+
+// appendTypeDDL appends the sqlite_master sql texts of the given object type
+// to ddl in rowid (creation) order. It returns ok=false without error when the
+// type contains a virtual table, whose shadow tables would be replayed twice
+// by a snapshot.
+func appendTypeDDL(ddl *strings.Builder, db *sql.DB, typ string) (ok bool, err error) {
+	rows, err := db.QueryContext(context.Background(),
+		`SELECT sql FROM sqlite_master
+		 WHERE type = ? AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+		 ORDER BY rowid`, typ)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var stmt string
+		if err := rows.Scan(&stmt); err != nil {
+			return false, err
+		}
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(stmt)), "CREATE VIRTUAL TABLE") {
+			return false, nil
+		}
+		ddl.WriteString(stmt)
+		ddl.WriteString(";\n")
+	}
+	return true, rows.Err()
+}
+
+// migrateFresh applies the canonical snapshot to a fresh database in a single
+// transaction. Unlike the legacy loop there are no expected statement
+// failures, so any error aborts the migration loudly.
+func migrateFresh(db *sql.DB, ddl, seed string) error {
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fmt.Errorf("begin migration tx: %w", err)
+	}
+	if _, err := tx.ExecContext(context.Background(), ddl); err != nil {
+		_ = tx.Rollback() //nolint:errcheck // Rollback after a failed Exec is best-effort; the Exec error is authoritative
+		return fmt.Errorf("apply fresh schema: %w", err)
+	}
+	if seed != "" {
+		if _, err := tx.ExecContext(context.Background(), seed); err != nil {
+			_ = tx.Rollback() //nolint:errcheck // Rollback after a failed Exec is best-effort; the Exec error is authoritative
+			return fmt.Errorf("apply fresh seed: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
 	}

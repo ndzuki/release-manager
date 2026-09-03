@@ -208,18 +208,33 @@ func (r *RealEngine) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release
 
 	rel, err := upgrade.RunWithContext(ctx, opts.ReleaseName, chrt, opts.Values)
 	if err != nil && rel == nil {
+		// Preparation failure: no release record was produced, so no rollback
+		// cascade exists. The plain error keeps the zero outcome semantics.
 		return nil, mapUpgradePreparationError(ctx, err)
 	}
 	if err != nil {
 		active, statusErr := helmStatusRelease(context.WithoutCancel(ctx), cfg, opts.ReleaseName)
 		if statusErr != nil {
-			return nil, fmt.Errorf("upgrade failed and active release lookup failed: %w", ErrAtomicRollbackFailed)
+			// TASK-084 AC-084-04: the post-failure state is unknown — never
+			// fabricate a rollback_succeeded signal.
+			return nil, NewOutcomeError(
+				fmt.Errorf("upgrade failed and active release lookup failed: %w", ErrAtomicRollbackFailed),
+				UpgradeOutcome{Attempted: toEngineRelease(rel), Active: nil, Restored: false},
+			)
 		}
 		activeResult := decorateRelease(toEngineRelease(active), active, opts, inputDigest)
 		if rel != nil && active.Info != nil && active.Info.Status == release.StatusDeployed && active.Version != rel.Version {
-			return activeResult, mapUpgradePreparationError(ctx, err)
+			// The atomic rollback restored the pre-upgrade revision: this is
+			// the only authoritative rollback_succeeded signal (TASK-084).
+			return activeResult, NewOutcomeError(
+				mapUpgradePreparationError(ctx, err),
+				UpgradeOutcome{Attempted: toEngineRelease(rel), Active: activeResult, Restored: true},
+			)
 		}
-		return activeResult, fmt.Errorf("upgrade and atomic rollback failed: %w", ErrAtomicRollbackFailed)
+		return activeResult, NewOutcomeError(
+			fmt.Errorf("upgrade and atomic rollback failed: %w", ErrAtomicRollbackFailed),
+			UpgradeOutcome{Attempted: toEngineRelease(rel), Active: activeResult, Restored: false},
+		)
 	}
 	return decorateRelease(toEngineRelease(rel), rel, opts, inputDigest), nil
 }

@@ -3,6 +3,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -50,7 +51,8 @@ func TestAgent_InstallReplaysDeployedRelease(t *testing.T) {
 }
 
 // TestAgent_InstallCommand covers the happy path install.
-func TestAgent_InstallCommand(t *testing.T) {	engine := &recordingEngine{
+func TestAgent_InstallCommand(t *testing.T) {
+	engine := &recordingEngine{
 		release: &helmengine.Release{
 			Name:           "example",
 			Namespace:      "apps",
@@ -229,7 +231,10 @@ func TestAgent_UpgradeAtomicFailureReturnsActiveSnapshot(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, "failed", result.GetStatus())
 	assert.Equal(t, "helm_upgrade_failed", result.GetError().GetCode())
-	assert.True(t, result.GetUpgrade().GetRollbackSucceeded())
+	// TASK-084 AC-084-04: an undecorated engine error carries no rollback
+	// signal — the legacy revision-equality heuristic (1==1 here) fabricated
+	// rollback_succeeded; the mapping must fail closed.
+	assert.False(t, result.GetUpgrade().GetRollbackSucceeded())
 	assert.Equal(t, uint64(1), result.GetUpgrade().GetActive().GetHelmRevision())
 }
 
@@ -609,10 +614,14 @@ type recordingEngine struct {
 	statusRelease *helmengine.Release
 	status        *helmengine.Release
 	statusErr     error
-	upgradeErr    error
-	history       []helmengine.ReleaseHistoryEntry
-	release       *helmengine.Release
-	err           error
+	statusOptions []helmengine.StatusOptions
+	// statusFailOnCall, when > 0, makes the Status call at that ordinal fail
+	// with statusErr (TASK-084 second-Status failure matrix).
+	statusFailOnCall int
+	upgradeErr       error
+	history          []helmengine.ReleaseHistoryEntry
+	release          *helmengine.Release
+	err              error
 }
 
 func (e *recordingEngine) Install(_ context.Context, opts helmengine.InstallOptions) (*helmengine.Release, error) {
@@ -631,9 +640,14 @@ func (e *recordingEngine) Rollback(_ context.Context, opts helmengine.RollbackOp
 	e.lastRollback = opts
 	return e.release, e.err
 }
-func (e *recordingEngine) Status(context.Context, helmengine.StatusOptions) (*helmengine.Release, error) {
+func (e *recordingEngine) Status(_ context.Context, opts helmengine.StatusOptions) (*helmengine.Release, error) {
 	e.statusCalls++
-	if e.statusErr != nil {
+	e.statusOptions = append(e.statusOptions, opts)
+	if e.statusFailOnCall > 0 {
+		if e.statusCalls == e.statusFailOnCall && e.statusErr != nil {
+			return nil, e.statusErr
+		}
+	} else if e.statusErr != nil {
 		return nil, e.statusErr
 	}
 	if e.statusRelease != nil {
@@ -755,4 +769,378 @@ func TestAgent_UpgradeCachedResultRedelivery(t *testing.T) {
 	assert.Equal(t, "succeeded", cmdResult.GetStatus())
 	assert.Equal(t, "cmd-cached-upgrade", cmdResult.GetCommandId())
 	assert.Equal(t, uint64(2), cmdResult.GetUpgrade().GetActive().GetHelmRevision())
+}
+
+// TASK-084 AC-084-01: both Helm SDK calls of one UPGRADE execute entry use the
+// typed identity, even when the decoded wire Command carries empty top-level
+// namespace/release_name (the D-109 repro: the second engine.Status used the
+// empty top-level fields and produced an invalid Helm release).
+func TestExecuteUpgradeUsesTypedIdentity(t *testing.T) {
+	valuesJSON := []byte(`{"message":"hello"}`)
+	engine := &recordingEngine{
+		status: &helmengine.Release{
+			Name: "example", Namespace: "apps", Revision: 1, Status: "deployed", Provenance: "legacy",
+		},
+		release: &helmengine.Release{
+			Name: "example", Namespace: "apps", Revision: 2, Status: "deployed",
+			ManifestDigest: "manifest-v2", Provenance: "managed",
+		},
+	}
+	agent := newTestAgent(t, engine, newMemoryStore(), nil)
+	command := upgradeCommand("cmd-typed-identity", valuesJSON, sha256Hex(valuesJSON))
+	// The wire Command intentionally carries no top-level identity: the typed
+	// payload is the only authority (DecodeCommandPayload mirrors the
+	// orchestrator envelope, which the pre-TASK-084 BuildUpgradePayload left
+	// empty).
+	require.Empty(t, command.GetNamespace())
+	require.Empty(t, command.GetReleaseName())
+
+	require.NoError(t, agent.handleCommand(t.Context(), newTestStream(), command))
+	require.Len(t, engine.statusOptions, 2, "resolveUpgradeInputs + executeUpgrade each perform one Status")
+	for _, opts := range engine.statusOptions {
+		assert.Equal(t, "apps", opts.Namespace)
+		assert.Equal(t, "example", opts.ReleaseName)
+	}
+	assert.Equal(t, "apps", engine.lastUpgrade.Namespace)
+	assert.Equal(t, "example", engine.lastUpgrade.ReleaseName)
+}
+
+// TASK-084 AC-084-01 negative: a typed UpgradeCommand without a valid
+// namespace/release_name fails closed with invalid_command before any Helm SDK
+// call (ADR-008: missing identity is rejected, never executed).
+func TestResolveUpgradeInputsRejectsEmptyIdentity(t *testing.T) {
+	tests := []struct {
+		name        string
+		namespace   string
+		releaseName string
+	}{
+		{name: "empty namespace", releaseName: "example"},
+		{name: "empty release name", namespace: "apps"},
+		{name: "both empty"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			engine := new(recordingEngine)
+			agent := newTestAgent(t, engine, newMemoryStore(), nil)
+			stream := newTestStream()
+			valuesJSON := []byte(`{"message":"hello"}`)
+			command := upgradeCommand("cmd-empty-identity", valuesJSON, sha256Hex(valuesJSON))
+			command.GetUpgrade().Namespace = test.namespace
+			command.GetUpgrade().ReleaseName = test.releaseName
+
+			require.NoError(t, agent.handleCommand(t.Context(), stream, command))
+			require.Len(t, stream.sent, 2)
+			result := stream.sent[1].GetCommandResult()
+			require.NotNil(t, result)
+			assert.Equal(t, "failed", result.GetStatus())
+			assert.Equal(t, "invalid_command", result.GetError().GetCode())
+			require.Zero(t, engine.statusCalls, "no Helm SDK call may observe an invalid identity")
+			require.Zero(t, engine.upgradeCalls)
+		})
+	}
+}
+
+// TASK-084 AC-084-02: every UPGRADE failure path carries the typed
+// CommandResult.upgrade payload so the gateway never rejects the result with
+// "upgrade result is required" (D-109 repro: the second-Status failure and
+// resolveUpgradeInputs failures were sent without typed Upgrade and the
+// operation stayed RUNNING forever).
+func TestExecuteUpgradeFailurePathsCarryTypedResult(t *testing.T) {
+	valuesJSON := []byte(`{"message":"hello"}`)
+	rev1 := &helmengine.Release{Name: "example", Namespace: "apps", Revision: 1, Status: "deployed", Provenance: "legacy"}
+	rev2 := &helmengine.Release{Name: "example", Namespace: "apps", Revision: 2, Status: "deployed", Provenance: "managed"}
+
+	tests := []struct {
+		name        string
+		command     func() *operatorv1.Command
+		setup       func(command *operatorv1.Command)
+		engine      *recordingEngine
+		wantCode    string
+		wantFromRev uint64
+	}{
+		{
+			name: "payload version rejected",
+			command: func() *operatorv1.Command {
+				command := upgradeCommand("cmd-fail-version", valuesJSON, sha256Hex(valuesJSON))
+				command.PayloadVersion = 1
+				return command
+			},
+			engine:   new(recordingEngine),
+			wantCode: "unsupported_command_version",
+		},
+		{
+			name: "digest mismatch",
+			command: func() *operatorv1.Command {
+				return upgradeCommand("cmd-fail-digest", valuesJSON, "wrong")
+			},
+			engine:   new(recordingEngine),
+			wantCode: "digest_mismatch",
+		},
+		{
+			name: "invalid values JSON",
+			command: func() *operatorv1.Command {
+				return upgradeCommand("cmd-fail-json", []byte(`{not-json`), sha256Hex([]byte(`{not-json`)))
+			},
+			engine:   new(recordingEngine),
+			wantCode: "invalid_command",
+		},
+		{
+			name: "first status fails",
+			command: func() *operatorv1.Command {
+				return upgradeCommand("cmd-fail-status", valuesJSON, sha256Hex(valuesJSON))
+			},
+			engine:   &recordingEngine{statusErr: helmengine.ErrNotFound},
+			wantCode: "release_not_found",
+		},
+		{
+			name: "revision conflict",
+			command: func() *operatorv1.Command {
+				return upgradeCommand("cmd-fail-revision", valuesJSON, sha256Hex(valuesJSON))
+			},
+			engine:   &recordingEngine{status: rev2},
+			wantCode: "revision_conflict",
+		},
+		{
+			name: "secret ref changed",
+			command: func() *operatorv1.Command {
+				command := upgradeCommand("cmd-fail-secret", valuesJSON, sha256Hex(valuesJSON))
+				command.GetUpgrade().SecretRefs = []*operatorv1.SecretRef{{Path: "db.password", Name: "db", Key: "password"}}
+				return command
+			},
+			engine:   &recordingEngine{status: rev1},
+			wantCode: "secret_ref_changed",
+		},
+		{
+			name: "second status fails",
+			command: func() *operatorv1.Command {
+				return upgradeCommand("cmd-fail-status2", valuesJSON, sha256Hex(valuesJSON))
+			},
+			engine:   &recordingEngine{status: rev1, statusFailOnCall: 2, statusErr: helmengine.ErrReleaseNotDeployed},
+			wantCode: "release_not_deployed", wantFromRev: 1,
+		},
+		{
+			name:    "inventory stale",
+			command: func() *operatorv1.Command { return upgradeCommand("cmd-fail-stale", valuesJSON, sha256Hex(valuesJSON)) },
+			setup: func(command *operatorv1.Command) {
+				command.GetUpgrade().ExpectedRevision = 2
+				command.ExpectedCurrentRevision = 1
+			},
+			engine:   &recordingEngine{status: rev2},
+			wantCode: "inventory_stale", wantFromRev: 2,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			agent := newTestAgent(t, test.engine, newMemoryStore(), nil)
+			stream := newTestStream()
+			command := test.command()
+			if test.setup != nil {
+				test.setup(command)
+			}
+			require.NoError(t, agent.handleCommand(t.Context(), stream, command))
+			require.Len(t, stream.sent, 2)
+			result := stream.sent[1].GetCommandResult()
+			require.NotNil(t, result)
+			assert.Equal(t, "failed", result.GetStatus())
+			assert.Equal(t, test.wantCode, result.GetError().GetCode())
+			require.NotNil(t, result.GetUpgrade(), "failed UPGRADE result must carry the typed payload")
+			if test.wantFromRev > 0 {
+				require.NotNil(t, result.GetUpgrade().GetFrom(), "from snapshot must be preserved when resolved")
+				assert.Equal(t, test.wantFromRev, result.GetUpgrade().GetFrom().GetHelmRevision())
+			}
+			assert.False(t, result.GetUpgrade().GetRollbackSucceeded())
+		})
+	}
+}
+
+// TASK-084 AC-084-02 wire-edge assertion: commandResultRequest must never emit
+// a UPGRADE command result without the typed payload — even for the invalid
+// local payload path (executeEntry → finishFailure).
+func TestCommandResultRequestAlwaysCarriesTypedUpgrade(t *testing.T) {
+	req := commandResultRequest(&operatorv1.Command{
+		CommandId: "cmd-1", OperationId: "op-1", OperationType: "UPGRADE",
+	}, Result{Status: "failed", Code: "invalid_command", Message: "invalid command payload"})
+	require.NotNil(t, req.GetCommandResult().GetUpgrade(),
+		"UPGRADE command result must never be sent without CommandResult.upgrade")
+
+	withTyped := commandResultRequest(&operatorv1.Command{
+		CommandId: "cmd-2", OperationId: "op-2", OperationType: "UPGRADE",
+	}, Result{
+		Status: "failed", Code: "helm_cancelled",
+		Upgrade: &operatorv1.UpgradeResult{Active: &operatorv1.ReleaseSnapshot{HelmRevision: 3}},
+	})
+	assert.Equal(t, uint64(3), withTyped.GetCommandResult().GetUpgrade().GetActive().GetHelmRevision())
+}
+
+// TASK-084 AC-084-04: the engine's structured outcome is the only authority
+// for rollback_succeeded — the legacy revision-equality heuristic is gone and
+// an undecorated error fails closed (D-109 anti-fabrication guard).
+func TestExecuteUpgradeRollbackOutcomeMapping(t *testing.T) {
+	valuesJSON := []byte(`{"message":"hello"}`)
+	rev1 := &helmengine.Release{Name: "example", Namespace: "apps", Revision: 1, Status: "deployed", Provenance: "legacy"}
+	rev2 := &helmengine.Release{Name: "example", Namespace: "apps", Revision: 2, Status: "deployed", Provenance: "managed"}
+	rev2Failed := &helmengine.Release{Name: "example", Namespace: "apps", Revision: 2, Status: "failed"}
+
+	tests := []struct {
+		name         string
+		release      *helmengine.Release
+		upgradeErr   error
+		wantCode     string
+		wantRollback bool
+	}{
+		{
+			name:    "atomic rollback restored",
+			release: rev1,
+			upgradeErr: helmengine.NewOutcomeError(
+				helmengine.ErrActionFailed,
+				helmengine.UpgradeOutcome{Attempted: rev2, Active: rev1, Restored: true},
+			),
+			wantCode: "helm_upgrade_failed", wantRollback: true,
+		},
+		{
+			name:    "rollback cascade failed",
+			release: rev2Failed,
+			upgradeErr: helmengine.NewOutcomeError(
+				helmengine.ErrAtomicRollbackFailed,
+				helmengine.UpgradeOutcome{Attempted: rev2, Active: rev2Failed, Restored: false},
+			),
+			wantCode: "atomic_rollback_failed", wantRollback: false,
+		},
+		{
+			name:       "undecorated error with coincidental revisions fails closed",
+			release:    rev1,
+			upgradeErr: helmengine.ErrActionFailed,
+			// rev1.Revision == fromRelease.Revision would have faked success
+			// under the legacy heuristic; without an outcome the mapping must
+			// never report rollback_succeeded.
+			wantCode: "helm_upgrade_failed", wantRollback: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			engine := &recordingEngine{status: rev1, release: test.release, upgradeErr: test.upgradeErr}
+			agent := newTestAgent(t, engine, newMemoryStore(), nil)
+			stream := newTestStream()
+
+			require.NoError(t, agent.handleCommand(t.Context(), stream, upgradeCommand("cmd-outcome", valuesJSON, sha256Hex(valuesJSON))))
+			require.Len(t, stream.sent, 2)
+			result := stream.sent[1].GetCommandResult()
+			require.NotNil(t, result)
+			assert.Equal(t, "failed", result.GetStatus())
+			assert.Equal(t, test.wantCode, result.GetError().GetCode())
+			require.NotNil(t, result.GetUpgrade())
+			assert.Equal(t, test.wantRollback, result.GetUpgrade().GetRollbackSucceeded())
+		})
+	}
+}
+
+// blockingEngine models an in-flight Helm Upgrade that only returns once the
+// execution context is cancelled (TASK-084 Step 3 seam).
+type blockingEngine struct {
+	recordingEngine
+	started chan struct{}
+}
+
+func newBlockingEngine() *blockingEngine {
+	return &blockingEngine{
+		recordingEngine: recordingEngine{statusRelease: &helmengine.Release{
+			Name: "example", Namespace: "apps", Revision: 1, Status: "deployed", Provenance: "legacy",
+		}},
+		started: make(chan struct{}),
+	}
+}
+
+func (e *blockingEngine) Upgrade(ctx context.Context, opts helmengine.UpgradeOptions) (*helmengine.Release, error) {
+	e.upgradeCalls++
+	e.lastUpgrade = opts
+	close(e.started)
+	<-ctx.Done()
+	return nil, helmengine.ErrCancelled
+}
+
+// scriptedStream delivers one command and then blocks until done is closed
+// (simulating a stream that dies when the server revokes the connection).
+type scriptedStream struct {
+	sent      []*operatorv1.CommandStreamRequest
+	response  *operatorv1.CommandStreamResponse
+	delivered bool
+	done      chan struct{}
+}
+
+func newScriptedStream(response *operatorv1.CommandStreamResponse) *scriptedStream {
+	return &scriptedStream{response: response, done: make(chan struct{})}
+}
+
+func (s *scriptedStream) Send(request *operatorv1.CommandStreamRequest) error {
+	s.sent = append(s.sent, request)
+	return nil
+}
+
+func (s *scriptedStream) Receive() (*operatorv1.CommandStreamResponse, error) {
+	if !s.delivered {
+		s.delivered = true
+		return s.response, nil
+	}
+	<-s.done
+	return nil, context.Canceled
+}
+func (*scriptedStream) CloseRequest() error  { return nil }
+func (*scriptedStream) CloseResponse() error { return nil }
+
+type scriptedClient struct{ stream Stream }
+
+func (c scriptedClient) CommandStream(context.Context) Stream { return c.stream }
+
+// TASK-084 AC-084-03: revoking the connection cancels the in-flight Helm call
+// through the connection-scoped context; the helm_cancelled typed result is
+// persisted locally first (ADR-005 persist-before-send) and replayed as a
+// typed CommandResult on the next delivery.
+func TestStreamDisconnectCancelsInFlightUpgrade(t *testing.T) {
+	valuesJSON := []byte(`{"message":"hello"}`)
+	command := upgradeCommand("cmd-cancel-flight", valuesJSON, sha256Hex(valuesJSON))
+	store := newMemoryStore()
+	engine := newBlockingEngine()
+	stream := newScriptedStream(&operatorv1.CommandStreamResponse{
+		Payload: &operatorv1.CommandStreamResponse_Command{Command: command},
+	})
+	agent, err := New(Config{
+		Client: scriptedClient{stream: stream}, Engine: engine, Store: store,
+		SessionID: "session-1", OperatorID: "operator-1",
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	require.NoError(t, err)
+
+	parentCtx, cancel := context.WithCancel(t.Context())
+	runDone := make(chan error, 1)
+	go func() { runDone <- agent.Run(parentCtx) }()
+	select {
+	case <-engine.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("engine.Upgrade never started")
+	}
+
+	// Server-side revocation: the parent connection dies.
+	cancel()
+	close(stream.done)
+	require.NoError(t, <-runDone)
+
+	entry, err := store.Get(context.Background(), command.GetCommandId())
+	require.NoError(t, err)
+	require.Equal(t, localstore.StatusFailed, entry.Status, "cancelled result must persist before the stream dies")
+	var cached Result
+	require.NoError(t, json.Unmarshal([]byte(entry.ResultJSON), &cached))
+	assert.Equal(t, "helm_cancelled", cached.Code)
+	require.NotNil(t, cached.Upgrade, "helm_cancelled result must carry the typed payload")
+
+	// Reconnect replay: the redelivered command returns the cached typed
+	// result — the agent acknowledgement the gateway consumes.
+	replayStream := newTestStream()
+	require.NoError(t, agent.handleCommand(context.Background(), replayStream, command))
+	require.Len(t, replayStream.sent, 1)
+	replayed := replayStream.sent[0].GetCommandResult()
+	require.NotNil(t, replayed)
+	assert.Equal(t, "helm_cancelled", replayed.GetError().GetCode())
+	require.NotNil(t, replayed.GetUpgrade(), "replayed cancel result must carry CommandResult.upgrade")
 }
