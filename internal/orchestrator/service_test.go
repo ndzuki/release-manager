@@ -356,6 +356,15 @@ func TestCreateOperation_ConcurrentUpgradeOnlyOneAccepted(t *testing.T) {
 	seedDefinition(t, st)
 	seedUpgradeInventory(t, st)
 	seedValuesRevision(t, st, "vr-concurrent", "def-001", store.ValuesStatusApproved)
+	// An active operator keeps the accepted operation non-terminal (runUpgrade
+	// dispatches :execute and queues it); without one the detached coordinator
+	// fail-closes it to a terminal state, making the accepted-count and
+	// non-terminal-count assertions race the coordinator (same shape as
+	// TestRollbackRelease_ConcurrentOnlyOneAccepted).
+	require.NoError(t, st.Operators().Create(context.Background(), &store.Operator{
+		ID: "operator-concurrent-upgrade", Name: "operator-concurrent-upgrade", CustomerID: "cust-001", ClusterID: "cls-001",
+		CertSerial: "serial-concurrent-upgrade", Status: store.OperatorActive,
+	}))
 
 	const requests = 8
 	results := make(chan error, requests)
@@ -2238,11 +2247,16 @@ func TestCreateOperation_CoordinatorUnavailablePersistsDispatch(t *testing.T) {
 		ValuesRevisionId:    "vr-001",
 	}), "idem-noop"))
 	require.NoError(t, err, "create operation must succeed even without an operator")
-	stored, err := st.Operations().Get(context.Background(), resp.Msg.OperationId)
-	require.NoError(t, err)
-	// AC-067-13: the operation is durably written (pending at UOW commit; the
-	// handler then synchronously advances it to preflight before responding).
-	assert.False(t, stored.Status.IsTerminal(), "operation must be persisted, got %s", stored.Status)
+	// AC-067-13: the operation is durably written at UOW commit and the handler
+	// synchronously advances it to preflight before responding. Assert on the
+	// response seam rather than a store read-back: the detached preflight
+	// coordinator (no operator → stage_unavailable) fail-closes the operation
+	// to a terminal state on its own schedule, so a read-back after the call
+	// races that transition (probe-measured 38/40 terminal reads within 2ms;
+	// the source of the intermittent -count=3 batch failures reported by the
+	// independent audit). The response state is built synchronously from the
+	// CAS-advanced operation and cannot observe the detached goroutine.
+	assert.Equal(t, "preflight", resp.Msg.State, "operation must be durably persisted and advanced to preflight before the response")
 
 	_, err = st.Outbox().GetByCommandID(context.Background(), resp.Msg.OperationId+":artifact")
 	require.NoError(t, err, "preflight dispatch must be durably persisted")
