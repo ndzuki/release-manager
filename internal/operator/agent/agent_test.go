@@ -7,10 +7,15 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
 	"google.golang.org/protobuf/proto"
+
+	appsv1 "k8s.io/api/apps/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kubernetesfake "k8s.io/client-go/kubernetes/fake"
 
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
@@ -31,6 +36,170 @@ import (
 // no stage), so later stages find the release already deployed by the first
 // install. executeInstall must replay a deployed release as success without
 // calling Install again.
+// REQ-085 AC-085-01/02: a successful install reports the authoritative
+// workload identity (kind/name/namespace/uid read from the live cluster)
+// BEFORE the terminal result, so the orchestrator has identity persisted
+// when the operation completes. Job workloads are outside the emergency
+// whitelist and workloads without a live uid are skipped (fail closed).
+func TestAgent_InstallReportsWorkloadIdentityBeforeTerminalResult(t *testing.T) {
+	engine := &recordingEngine{
+		release: &helmengine.Release{
+			Name: "example", Namespace: "apps", Revision: 1, Status: "deployed",
+			ManifestDigest: "sha256:manifest",
+			Workloads: []helmengine.WorkloadSummary{
+				{Kind: "Deployment", Name: "api", Namespace: "apps"},
+				{Kind: "Job", Name: "migrate", Namespace: "apps"},
+				{Kind: "StatefulSet", Name: "api-sts", Namespace: "apps"},
+			},
+		},
+	}
+	kube := kubernetesfake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "apps", UID: "uid-deployment-1"},
+	})
+	store := newMemoryStore()
+	agent, err := New(Config{
+		Client: noopClient{}, Engine: engine, Store: store,
+		SessionID: "session-1", OperatorID: "operator-1", KubeClient: kube,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		InstallFlags: InstallFlags{Atomic: true, Timeout: time.Minute},
+	})
+	require.NoError(t, err)
+	stream := newTestStream()
+
+	require.NoError(t, agent.handleCommand(t.Context(), stream, installCommand("cmd-identity")))
+	require.Len(t, stream.sent, 3, "expected [AckPersisted, WorkloadIdentityReport, Result]")
+	assert.Equal(t, operatorv1.AckType_ACK_TYPE_PERSISTED, stream.sent[0].GetAck().GetAckType())
+
+	report := stream.sent[1].GetWorkloadIdentityReport()
+	require.NotNil(t, report, "identity report must precede the terminal result")
+	require.Len(t, report.GetItems(), 1, "Job and uid-less workloads must be skipped")
+	item := report.GetItems()[0]
+	assert.Equal(t, "apps", item.GetReleaseNamespace())
+	assert.Equal(t, "example", item.GetReleaseName())
+	assert.Equal(t, "DEPLOYMENT", item.GetKind())
+	assert.Equal(t, "api", item.GetName())
+	assert.Equal(t, "apps", item.GetNamespace())
+	assert.Equal(t, "uid-deployment-1", item.GetUid())
+
+	assert.Equal(t, "succeeded", stream.sent[2].GetResult().GetStatus(), "terminal result stays last")
+}
+
+// REQ-085: releases without workloads or without a kube client send no
+// identity report — the terminal result sequence stays unchanged.
+func TestAgent_InstallWithoutWorkloadsSendsNoIdentityReport(t *testing.T) {
+	engine := &recordingEngine{
+		release: &helmengine.Release{Name: "example", Namespace: "apps", Revision: 1, Status: "deployed"},
+	}
+	kube := kubernetesfake.NewSimpleClientset()
+	store := newMemoryStore()
+	agent, err := New(Config{
+		Client: noopClient{}, Engine: engine, Store: store,
+		SessionID: "session-1", OperatorID: "operator-1", KubeClient: kube,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		InstallFlags: InstallFlags{Atomic: true, Timeout: time.Minute},
+	})
+	require.NoError(t, err)
+	stream := newTestStream()
+
+	require.NoError(t, agent.handleCommand(t.Context(), stream, installCommand("cmd-no-workloads")))
+	require.Len(t, stream.sent, 2)
+	assert.NotNil(t, stream.sent[0].GetAck())
+	assert.NotNil(t, stream.sent[1].GetResult())
+}
+
+// REQ-085 startup scan: after the stream session is established, the agent
+// reports identities for releases already deployed (engine.List + Status),
+// best-effort — a failing List only logs a warning and the command loop
+// keeps running.
+func TestAgent_StartupScanReportsWorkloadIdentity(t *testing.T) {
+	engine := &recordingEngine{
+		list: []*helmengine.ReleaseListItem{{Namespace: "apps", Name: "example", Revision: 1}},
+		statusRelease: &helmengine.Release{
+			Name: "example", Namespace: "apps", Revision: 1, Status: "deployed",
+			Workloads: []helmengine.WorkloadSummary{{Kind: "Deployment", Name: "api", Namespace: "apps"}},
+		},
+	}
+	kube := kubernetesfake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "apps", UID: "uid-scan-1"},
+	})
+	stream := newScriptedStream(&operatorv1.CommandStreamResponse{
+		Payload: &operatorv1.CommandStreamResponse_SessionEstablished{
+			SessionEstablished: &operatorv1.SessionEstablished{SessionId: "session-1"},
+		},
+	})
+	agent, err := New(Config{
+		Client: scriptedClient{stream: stream}, Engine: engine, Store: newMemoryStore(),
+		SessionID: "session-1", OperatorID: "operator-1", KubeClient: kube,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		InstallFlags: InstallFlags{Atomic: true, Timeout: time.Minute},
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	runDone := make(chan error, 1)
+	go func() { runDone <- agent.Run(ctx) }()
+	waitForStreamSend(t, stream, 2, runDone)
+	cancel()
+	close(stream.done)
+	require.NoError(t, <-runDone)
+
+	require.Len(t, stream.sent, 2, "expected [Hello, WorkloadIdentityReport]")
+	report := stream.sent[1].GetWorkloadIdentityReport()
+	require.NotNil(t, report, "startup scan must report the deployed release identity")
+	require.Len(t, report.GetItems(), 1)
+	assert.Equal(t, "DEPLOYMENT", report.GetItems()[0].GetKind())
+	assert.Equal(t, "uid-scan-1", report.GetItems()[0].GetUid())
+}
+
+// REQ-085 startup scan failure is non-fatal: List error logs a warning and
+// the agent still enters the command loop (context cancel ends Run cleanly).
+func TestAgent_StartupScanFailureDoesNotBreakLoop(t *testing.T) {
+	engine := &recordingEngine{listErr: errors.New("list exploded")}
+	stream := newScriptedStream(&operatorv1.CommandStreamResponse{
+		Payload: &operatorv1.CommandStreamResponse_SessionEstablished{
+			SessionEstablished: &operatorv1.SessionEstablished{SessionId: "session-1"},
+		},
+	})
+	agent, err := New(Config{
+		Client: scriptedClient{stream: stream}, Engine: engine, Store: newMemoryStore(),
+		SessionID: "session-1", OperatorID: "operator-1",
+		KubeClient: kubernetesfake.NewSimpleClientset(),
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		InstallFlags: InstallFlags{Atomic: true, Timeout: time.Minute},
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	runDone := make(chan error, 1)
+	go func() { runDone <- agent.Run(ctx) }()
+	waitForStreamSend(t, stream, 1, runDone)
+	cancel()
+	close(stream.done)
+	require.NoError(t, <-runDone)
+
+	require.Len(t, stream.sent, 1, "scan failure must not produce a report")
+	assert.NotNil(t, stream.sent[0].GetHello())
+}
+
+// waitForStreamSend blocks until the scripted stream recorded n messages or
+// the run terminated unexpectedly (fails the test on early exit).
+func waitForStreamSend(t *testing.T, stream *scriptedStream, n int, runDone <-chan error) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		if stream.sentCount() >= n {
+			return
+		}
+		select {
+		case err := <-runDone:
+			t.Fatalf("agent Run exited before %d sends: %v (sent=%d)", n, err, stream.sentCount())
+		case <-deadline:
+			t.Fatalf("timed out waiting for %d sends (sent=%d)", n, stream.sentCount())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
 func TestAgent_InstallReplaysDeployedRelease(t *testing.T) {
 	engine := &recordingEngine{
 		statusRelease: &helmengine.Release{
@@ -622,6 +791,10 @@ type recordingEngine struct {
 	history          []helmengine.ReleaseHistoryEntry
 	release          *helmengine.Release
 	err              error
+	// list/listErr script the REQ-085 startup identity scan; both empty
+	// keeps the legacy "not implemented" behaviour.
+	list    []*helmengine.ReleaseListItem
+	listErr error
 }
 
 func (e *recordingEngine) Install(_ context.Context, opts helmengine.InstallOptions) (*helmengine.Release, error) {
@@ -665,7 +838,10 @@ func (e *recordingEngine) History(context.Context, helmengine.HistoryOptions) ([
 func (*recordingEngine) GetValues(context.Context, helmengine.GetValuesOptions) (map[string]interface{}, error) {
 	return nil, errors.New("not implemented")
 }
-func (*recordingEngine) List(context.Context, string) ([]*helmengine.ReleaseListItem, error) {
+func (e *recordingEngine) List(context.Context, string) ([]*helmengine.ReleaseListItem, error) {
+	if e.list != nil || e.listErr != nil {
+		return e.list, e.listErr
+	}
 	return nil, errors.New("not implemented")
 }
 
@@ -1063,6 +1239,7 @@ func (e *blockingEngine) Upgrade(ctx context.Context, opts helmengine.UpgradeOpt
 // scriptedStream delivers one command and then blocks until done is closed
 // (simulating a stream that dies when the server revokes the connection).
 type scriptedStream struct {
+	mu        sync.Mutex
 	sent      []*operatorv1.CommandStreamRequest
 	response  *operatorv1.CommandStreamResponse
 	delivered bool
@@ -1074,8 +1251,17 @@ func newScriptedStream(response *operatorv1.CommandStreamResponse) *scriptedStre
 }
 
 func (s *scriptedStream) Send(request *operatorv1.CommandStreamRequest) error {
+	s.mu.Lock()
 	s.sent = append(s.sent, request)
+	s.mu.Unlock()
 	return nil
+}
+
+// sentCount is a race-free observation point for polling tests (-race safe).
+func (s *scriptedStream) sentCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.sent)
 }
 
 func (s *scriptedStream) Receive() (*operatorv1.CommandStreamResponse, error) {

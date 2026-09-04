@@ -39,7 +39,30 @@ message CommandStreamRequest {
     EmergencyResult emergency_result = 7;
     CommandResult command_result = 8;  // typed terminal result for payload v2+
     RolloutProgress rollout_progress = 9;  // periodic workload rollout progress (TASK-077)
+    WorkloadIdentityReport workload_identity_report = 10;  // authoritative live workload identities (REQ-085)
   }
+}
+
+// WorkloadIdentityReport carries authoritative workload identities the
+// operator read from the live cluster (REQ-085): the orchestrator persists
+// them on release_inventory and fills EmergencyTarget / EmergencyIntent /
+// EmergencyCommand from them. Additive alongside RolloutProgress (field 9).
+message WorkloadIdentityReport {
+  repeated WorkloadIdentityItem items = 1;
+}
+
+// WorkloadIdentityItem identifies one live workload (REQ-085). kind uses the
+// same enum-style vocabulary as EmergencyCommand.workload_kind
+// (DEPLOYMENT/STATEFUL_SET/DAEMON_SET). namespace is the workload's
+// Kubernetes namespace; release_namespace/release_name locate the Helm
+// release the workload belongs to.
+message WorkloadIdentityItem {
+  string release_namespace = 1;
+  string release_name = 2;
+  string kind = 3;
+  string name = 4;
+  string namespace = 5;
+  string uid = 6;
 }
 
 // RolloutProgress reports observed workload readiness during a standard operation.

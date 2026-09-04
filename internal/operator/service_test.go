@@ -1226,3 +1226,145 @@ func TestCommandStreamRequest_UnknownOneofFieldTolerated(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, wireUnknown, got)
 }
+
+// ── REQ-085: workload identity report consumption ──
+
+// openIdentityStream starts a bidi CommandStream and performs the Hello
+// handshake, returning the live client stream for sending reports.
+func openIdentityStream(ctx context.Context, t *testing.T, st store.Store) *connect.BidiStreamForClient[operatorv1.CommandStreamRequest, operatorv1.CommandStreamResponse] {
+	t.Helper()
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
+	require.NoError(t, err)
+	client := commandStreamPair(t, svc)
+	stream := client.CommandStream(ctx)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Hello{
+			Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+		},
+	}))
+	established, err := stream.Receive()
+	require.NoError(t, err)
+	require.NotNil(t, established.GetSessionEstablished())
+	return stream
+}
+
+// AC-085-01 (report consumption): a WorkloadIdentityReport over the control
+// stream persists the authoritative identity onto the matching
+// release_inventory row (customer/cluster resolved from the Hello operator).
+func TestCommandStreamWorkloadIdentityReportPersistsIdentity(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: "definition-identity", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: "deployed", InventoryStatus: store.InventoryActive,
+	}))
+
+	stream := openIdentityStream(ctx, t, st)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_WorkloadIdentityReport{
+			WorkloadIdentityReport: &operatorv1.WorkloadIdentityReport{Items: []*operatorv1.WorkloadIdentityItem{{
+				ReleaseNamespace: "apps", ReleaseName: "example",
+				Kind: "DEPLOYMENT", Name: "example", Namespace: "apps", Uid: "uid-svc-1",
+			}}},
+		},
+	}))
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break
+		}
+	}
+
+	items, err := st.Inventories().ListByCluster(ctx, "cust-1", "clus-1")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "DEPLOYMENT", items[0].WorkloadKind)
+	assert.Equal(t, "example", items[0].WorkloadName)
+	assert.Equal(t, "apps", items[0].WorkloadNamespace)
+	assert.Equal(t, "uid-svc-1", items[0].WorkloadUID)
+}
+
+// REQ-085 D-110 ②: with promotion mappings on the definition, only the item
+// matching a mapping's (kind, name) is selected — the unmapped item is
+// ignored (fail closed).
+func TestCommandStreamWorkloadIdentityReportSelectsMappedWorkload(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-mapped", Name: "definition-mapped",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "example",
+		Status: store.DefStatusActive,
+	}, nil))
+	definition, err := st.Definitions().Get(ctx, "definition-mapped")
+	require.NoError(t, err)
+	definition.PromotionMappings = []store.PromotionMapping{{
+		WorkloadKind: "DEPLOYMENT", WorkloadName: "api", Field: "replicas", ValuesPath: "replicaCount",
+	}}
+	_, err = st.Definitions().Update(ctx, definition, nil)
+	require.NoError(t, err)
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: "definition-mapped", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: "deployed", InventoryStatus: store.InventoryActive,
+	}))
+
+	stream := openIdentityStream(ctx, t, st)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_WorkloadIdentityReport{
+			WorkloadIdentityReport: &operatorv1.WorkloadIdentityReport{Items: []*operatorv1.WorkloadIdentityItem{
+				{ReleaseNamespace: "apps", ReleaseName: "example", Kind: "DEPLOYMENT", Name: "api", Namespace: "apps", Uid: "uid-api"},
+				{ReleaseNamespace: "apps", ReleaseName: "example", Kind: "DEPLOYMENT", Name: "web", Namespace: "apps", Uid: "uid-web"},
+			}},
+		},
+	}))
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break
+		}
+	}
+
+	items, err := st.Inventories().ListByCluster(ctx, "cust-1", "clus-1")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "api", items[0].WorkloadName, "only the mapped workload is selected")
+	assert.Equal(t, "uid-api", items[0].WorkloadUID)
+}
+
+// REQ-085 D-110 ②/③ (negative matrix): unknown releases, ambiguous
+// multi-workload reports without mappings, and items with an empty uid are
+// all dropped — the inventory identity stays empty (fail closed).
+func TestCommandStreamWorkloadIdentityReportFailClosedMatrix(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: "definition-matrix", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: "deployed", InventoryStatus: store.InventoryActive,
+	}))
+
+	stream := openIdentityStream(ctx, t, st)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_WorkloadIdentityReport{
+			WorkloadIdentityReport: &operatorv1.WorkloadIdentityReport{Items: []*operatorv1.WorkloadIdentityItem{
+				// Unknown release row → ignored.
+				{ReleaseNamespace: "apps", ReleaseName: "ghost", Kind: "DEPLOYMENT", Name: "ghost", Namespace: "apps", Uid: "uid-ghost"},
+				// Two complete items for one release without mappings → ambiguous.
+				{ReleaseNamespace: "apps", ReleaseName: "example", Kind: "DEPLOYMENT", Name: "a", Namespace: "apps", Uid: "uid-a"},
+				{ReleaseNamespace: "apps", ReleaseName: "example", Kind: "DEPLOYMENT", Name: "b", Namespace: "apps", Uid: "uid-b"},
+				// Empty uid → never selectable.
+				{ReleaseNamespace: "apps", ReleaseName: "example", Kind: "DEPLOYMENT", Name: "c", Namespace: "apps", Uid: ""},
+			}},
+		},
+	}))
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break
+		}
+	}
+
+	items, err := st.Inventories().ListByCluster(ctx, "cust-1", "clus-1")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Empty(t, items[0].WorkloadKind)
+	assert.Empty(t, items[0].WorkloadUID)
+}

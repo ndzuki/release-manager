@@ -756,6 +756,13 @@ func (s *Service) CommandStream(
 				if err := s.reDeliverFrom(ctx, stream, operatorID, rr.GetOperatorLastSequence()); err != nil {
 					return err
 				}
+			case req.GetWorkloadIdentityReport() != nil:
+				// REQ-085 D-110 ②: persist the authoritative workload
+				// identities reported by the operator. Best-effort — a
+				// malformed report must never interrupt the control stream.
+				if err := s.applyWorkloadIdentityReport(ctx, req.GetWorkloadIdentityReport(), operatorID); err != nil {
+					s.logger.Warn("failed to apply workload identity report", "operator_id", operatorID, "error", err)
+				}
 			}
 		case receiveErr := <-receiveErrCh:
 			return receiveErr

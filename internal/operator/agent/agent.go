@@ -15,6 +15,7 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
+	operatorruntime "github.com/ndzuki/release-manager/internal/operator"
 	"github.com/ndzuki/release-manager/internal/operator/commandtype"
 	"github.com/ndzuki/release-manager/internal/operator/helmengine"
 	operatork8s "github.com/ndzuki/release-manager/internal/operator/k8s"
@@ -201,6 +202,14 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	if err := a.replayActive(ctx, stream); err != nil {
 		return err
+	}
+
+	// REQ-085 startup scan: report authoritative workload identities for the
+	// releases already deployed by this operator so the orchestrator's
+	// release_inventory rows carry kind/uid even for pre-existing releases.
+	// Best-effort only — failures must never break the command loop.
+	if err := a.scanWorkloadIdentity(ctx, stream); err != nil {
+		a.logger.Warn("startup workload identity scan failed", "error", err)
 	}
 
 	for {
@@ -438,6 +447,16 @@ func (a *Agent) executeEntry(ctx context.Context, stream Stream, entry *localsto
 		return fmt.Errorf("persist command result %q: %w", entry.CommandID, err)
 	}
 
+	// REQ-085: report the authoritative workload identities of a successful
+	// install/upgrade/rollback BEFORE the terminal result so the orchestrator
+	// has persisted kind/uid when the operation completes (D-110 ① — the
+	// dev-seed completion must not race an emergency command on empty uid).
+	if result.Status == "succeeded" && result.Release != nil && len(result.Release.Workloads) > 0 {
+		if err := a.reportWorkloadIdentity(ctx, stream, result.Release); err != nil {
+			a.logger.Warn("failed to report workload identity", "operation_id", result.OperationID, "error", err)
+		}
+	}
+
 	if result.Status == "succeeded" && result.Release != nil && a.notifier != nil {
 		a.notifier.NotifyOperationComplete(
 			result.Release.Namespace,
@@ -521,6 +540,83 @@ func (a *Agent) executeSecretMetadataList(ctx context.Context, command *operator
 	result.Status = "succeeded"
 	result.Secrets = secrets
 	return result
+}
+
+// buildWorkloadIdentityItems resolves live UIDs for one release's workloads
+// (REQ-085). Workloads outside the emergency whitelist (e.g. Job) and
+// workloads whose live UID cannot be read are skipped — an identity item
+// with an empty uid must never reach the orchestrator (D-110 ③ fail closed).
+func (a *Agent) buildWorkloadIdentityItems(ctx context.Context, release *helmengine.Release) []*operatorv1.WorkloadIdentityItem {
+	items := make([]*operatorv1.WorkloadIdentityItem, 0, len(release.Workloads))
+	for _, workload := range release.Workloads {
+		kind, ok := operatorruntime.NormalizeWorkloadKind(workload.Kind)
+		if !ok {
+			continue // Job / unknown kinds are outside the emergency whitelist
+		}
+		if workload.Namespace == "" || workload.Name == "" {
+			continue
+		}
+		uid, err := operatorruntime.WorkloadUID(ctx, a.kubeClient, kind, workload.Namespace, workload.Name)
+		if err != nil || uid == "" {
+			a.logger.Debug("skipping workload without live uid",
+				"kind", kind, "namespace", workload.Namespace, "name", workload.Name, "error", err)
+			continue
+		}
+		items = append(items, &operatorv1.WorkloadIdentityItem{
+			ReleaseNamespace: release.Namespace,
+			ReleaseName:      release.Name,
+			Kind:             kind,
+			Name:             workload.Name,
+			Namespace:        workload.Namespace,
+			Uid:              uid,
+		})
+	}
+	return items
+}
+
+// reportWorkloadIdentity sends one WorkloadIdentityReport for a release
+// (REQ-085). An empty item set is not sent (no-op).
+func (a *Agent) reportWorkloadIdentity(ctx context.Context, stream Stream, release *helmengine.Release) error {
+	items := a.buildWorkloadIdentityItems(ctx, release)
+	if len(items) == 0 {
+		return nil
+	}
+	return stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_WorkloadIdentityReport{
+			WorkloadIdentityReport: &operatorv1.WorkloadIdentityReport{Items: items},
+		},
+	})
+}
+
+// scanWorkloadIdentity reports identities for every release already deployed
+// by this operator (startup catch-up, REQ-085). Best-effort: a failed
+// release read is logged and skipped, never fatal to the command loop.
+func (a *Agent) scanWorkloadIdentity(ctx context.Context, stream Stream) error {
+	if a.kubeClient == nil {
+		return errors.New("agent kube client is unavailable")
+	}
+	items, err := a.engine.List(ctx, "") // empty namespace = all namespaces
+	if err != nil {
+		return fmt.Errorf("list releases for workload identity scan: %w", err)
+	}
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		release, err := a.engine.Status(ctx, helmengine.StatusOptions{Namespace: item.Namespace, ReleaseName: item.Name})
+		if err != nil {
+			a.logger.Debug("skipping release without status in identity scan",
+				"namespace", item.Namespace, "release", item.Name, "error", err)
+			continue
+		}
+		if release == nil || len(release.Workloads) == 0 {
+			continue
+		}
+		if err := a.reportWorkloadIdentity(ctx, stream, release); err != nil {
+			return fmt.Errorf("report workload identity for %s/%s: %w", item.Namespace, item.Name, err)
+		}
+	}
+	return nil
 }
 
 // applyBundleImageOverrides sets each bundle image at its values path. Only

@@ -90,6 +90,24 @@ func TestEmergencyCommandExecutorRejectsUIDMismatch(t *testing.T) {
 	assert.Equal(t, "workload_uid_mismatch", coded.ErrorCode())
 }
 
+// AC-085-02 (operator fail-closed half): a command with an empty WorkloadUID
+// is rejected with invalid_command before any live object read — REQ-085
+// ensures the orchestrator never produces such a command, and this guard
+// stays the operator-side backstop (D-110 ③).
+func TestEmergencyCommandExecutorRejectsEmptyWorkloadUID(t *testing.T) {
+	client := kubernetesfake.NewSimpleClientset(emergencyDeploymentFixture())
+	executor := NewEmergencyCommandExecutor(client)
+	command := emergencyCommandFixture()
+	command.WorkloadUid = ""
+	command.Change = &operatorv1.EmergencyCommand_SetReplicas{SetReplicas: &operatorv1.EmergencySetReplicas{Replicas: 5}}
+
+	_, err := executor.Execute(t.Context(), command)
+	require.Error(t, err)
+	var coded *EmergencyExecutionError
+	require.True(t, errors.As(err, &coded))
+	assert.Equal(t, "invalid_command", coded.ErrorCode())
+}
+
 func TestEmergencyCommandExecutorReturnsConflict(t *testing.T) {
 	client := kubernetesfake.NewSimpleClientset(emergencyDeploymentFixture())
 	client.PrependReactor("update", "deployments", func(ktesting.Action) (bool, runtime.Object, error) {

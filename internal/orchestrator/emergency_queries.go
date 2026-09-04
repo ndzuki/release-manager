@@ -38,10 +38,13 @@ func (s *Service) authorizeEmergencyRead(ctx context.Context, definitionID, requ
 
 // ListEmergencyTargets derives one EmergencyTarget per release definition
 // from the cached release inventory snapshot and the definition's emergency
-// configuration (REQ-081 D1=B). Fields release_inventory does not carry
-// (workload kind/uid, containers, image refs, current replicas/annotations)
-// are reported with the D7=A unavailable sentinels: current_replicas=-1,
-// empty containers/annotations/image refs and an empty workload_ref.kind/uid.
+// configuration (REQ-081 D1=B). When the inventory row carries the
+// authoritative workload identity reported by the operator (REQ-085
+// D-110 ②), all four WorkloadRef fields come from it; otherwise name/namespace
+// keep the D1=B derivation and kind/uid stay empty (downstream fail-closed).
+// Other fields release_inventory does not carry (containers, image refs,
+// current replicas/annotations) keep the D7=A unavailable sentinels:
+// current_replicas=-1, empty containers/annotations/image refs.
 // A definition without an inventory row yields an empty target list (not an
 // error).
 func (s *Service) ListEmergencyTargets(
@@ -71,13 +74,23 @@ func (s *Service) ListEmergencyTargets(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("load emergency inventory: %w", err))
 	}
 
+	// REQ-085: the authoritative identity wins when present; otherwise fall
+	// back to D1=B (name/namespace from the inventory row, kind/uid empty).
+	workloadRef := &orchestratorv1.WorkloadRef{
+		Name:      inventory.ReleaseName,
+		Namespace: inventory.Namespace,
+	}
+	if inventory.WorkloadKind != "" && inventory.WorkloadUID != "" {
+		workloadRef = &orchestratorv1.WorkloadRef{
+			Kind:      inventory.WorkloadKind,
+			Name:      inventory.WorkloadName,
+			Namespace: inventory.WorkloadNamespace,
+			Uid:       inventory.WorkloadUID,
+		}
+	}
+
 	target := &orchestratorv1.EmergencyTarget{
-		// D1=B: name/namespace come from the inventory row; kind/uid stay
-		// empty (D7=A — release_inventory has no kind/uid columns).
-		WorkloadRef: &orchestratorv1.WorkloadRef{
-			Name:      inventory.ReleaseName,
-			Namespace: inventory.Namespace,
-		},
+		WorkloadRef: workloadRef,
 		// D7=A unavailable sentinels.
 		CurrentReplicas:      -1,
 		Containers:           []string{},

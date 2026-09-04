@@ -1571,6 +1571,17 @@ type UpgradeTerminalInput struct {
 	ResourceCount                 int
 }
 
+// WorkloadIdentity is the authoritative live-cluster identity of one workload
+// (REQ-085, D-110 ①): the operator reads it from Kubernetes and reports it
+// over the Connect control stream; the orchestrator persists it on the
+// release_inventory row and fills EmergencyTarget/intent/command from it.
+type WorkloadIdentity struct {
+	Kind      string // enum-style: DEPLOYMENT / STATEFUL_SET / DAEMON_SET
+	Name      string
+	Namespace string
+	UID       string
+}
+
 // ReleaseInventory represents a cached release snapshot in the orchestrator's observation store.
 // Unique key: (customer_id, cluster_id, namespace, release_name).
 type ReleaseInventory struct {
@@ -1593,8 +1604,15 @@ type ReleaseInventory struct {
 	InventoryStatus               InventoryStatus
 	LastSyncID                    string
 	SnapshotVersion               int64
-	CreatedAt                     time.Time
-	UpdatedAt                     time.Time
+	// Workload identity (REQ-085): authoritative kind/name/namespace/uid of
+	// the release's emergency workload, reported by the operator. Empty
+	// strings mean "not yet observed" — consumers must fail closed.
+	WorkloadKind      string
+	WorkloadName      string
+	WorkloadNamespace string
+	WorkloadUID       string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // InventorySyncLog records the application of a sync snapshot for idempotency.
@@ -2167,6 +2185,12 @@ type InventoryStore interface {
 	ListByCluster(ctx context.Context, customerID, clusterID string) ([]*ReleaseInventory, error)
 	// GetByDefinition returns the cached release snapshot for one release definition.
 	GetByDefinition(ctx context.Context, definitionID string) (*ReleaseInventory, error)
+
+	// UpdateWorkloadIdentity overwrites the authoritative workload identity
+	// columns on the row located by (customer_id, cluster_id, namespace,
+	// release_name). Returns ErrNotFound when no such inventory row exists.
+	// Idempotent: reapplying the same identity is a no-op write.
+	UpdateWorkloadIdentity(ctx context.Context, customerID, clusterID, namespace, releaseName string, identity WorkloadIdentity) error
 
 	// Query returns one filtered page and validates that an opaque cursor still
 	// belongs to the same scope, filters, and inventory snapshot.

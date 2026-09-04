@@ -168,30 +168,24 @@ func (e *EmergencyCommandExecutor) Execute(ctx context.Context, command *operato
 	return string(encoded), nil
 }
 
+// loadWorkload reads the live workload object through the shared typed
+// dispatch (readWorkloadObject, REQ-085) and wraps it for emergency updates.
 func (e *EmergencyCommandExecutor) loadWorkload(ctx context.Context, command *operatorv1.EmergencyCommand) (*emergencyWorkload, error) {
-	namespace := command.GetWorkloadNamespace()
-	name := command.GetWorkloadName()
-	switch command.GetWorkloadKind() {
-	case emergencyDeployment:
-		resource, err := e.client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return nil, classifyEmergencyGetError(err)
+	object, err := readWorkloadObject(ctx, e.client, command.GetWorkloadKind(), command.GetWorkloadNamespace(), command.GetWorkloadName())
+	if err != nil {
+		var coded interface{ ErrorCode() string }
+		if errors.As(err, &coded) {
+			return nil, err // already classified (unsupported kind)
 		}
-		return deploymentWorkload(e.client, resource), nil
-	case emergencyStatefulSet:
-		resource, err := e.client.AppsV1().StatefulSets(namespace).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return nil, classifyEmergencyGetError(err)
-		}
-		return statefulSetWorkload(e.client, resource), nil
-	case emergencyDaemonSet:
-		resource, err := e.client.AppsV1().DaemonSets(namespace).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return nil, classifyEmergencyGetError(err)
-		}
-		return daemonSetWorkload(e.client, resource), nil
+		return nil, classifyEmergencyGetError(err)
+	}
+	switch {
+	case object.deployment != nil:
+		return deploymentWorkload(e.client, object.deployment), nil
+	case object.statefulSet != nil:
+		return statefulSetWorkload(e.client, object.statefulSet), nil
 	default:
-		return nil, emergencyExecutionError("workload_kind_not_supported", errors.New("workload kind is unsupported"))
+		return daemonSetWorkload(e.client, object.daemonSet), nil
 	}
 }
 

@@ -23,6 +23,7 @@ func TestExecuteEmergencyChange_AuditsSuccessAndFailure(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 	seedEmergencyAuditIdentity(t, st)
+	seedEmergencyImageIdentity(t, st)
 	require.NoError(t, st.EmergencyConfig().SetEmergencyConfig(t.Context(), store.EmergencyConfig{Enabled: true}))
 	seedEmergencyTestArtifact(t, st)
 
@@ -123,6 +124,7 @@ func TestExecuteEmergencyChange_AuditDoesNotPersistRawPayload(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 	seedEmergencyAuditIdentity(t, st)
+	seedEmergencyImageIdentity(t, st)
 	require.NoError(t, st.EmergencyConfig().SetEmergencyConfig(t.Context(), store.EmergencyConfig{Enabled: true}))
 	seedEmergencyTestArtifact(t, st)
 
