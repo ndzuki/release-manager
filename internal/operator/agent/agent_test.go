@@ -107,6 +107,67 @@ func TestAgent_InstallWithoutWorkloadsSendsNoIdentityReport(t *testing.T) {
 	assert.NotNil(t, stream.sent[1].GetResult())
 }
 
+// REQ-085 AC-085-04: the report-before-terminal ordering holds for the
+// upgrade and rollback success paths too (the same executeEntry seam as
+// install) — each terminal result stays last and carries the live uid.
+func TestAgent_UpgradeAndRollbackReportWorkloadIdentity(t *testing.T) {
+	tests := []struct {
+		name    string
+		command func() *operatorv1.Command
+	}{
+		{name: "upgrade", command: func() *operatorv1.Command {
+			valuesJSON := []byte(`{"message":"hello"}`)
+			return upgradeCommand("cmd-upgrade-identity", valuesJSON, sha256Hex(valuesJSON))
+		}},
+		{name: "rollback", command: func() *operatorv1.Command { return rollbackCommand("cmd-rollback-identity") }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			engine := &recordingEngine{
+				status: &helmengine.Release{
+					Name: "example", Namespace: "apps", Revision: 1, Status: "deployed", Provenance: "legacy",
+				},
+				history: []helmengine.ReleaseHistoryEntry{
+					{Revision: 1, Status: "superseded", Chart: "example-1.0.0"},
+					{Revision: 3, Status: "deployed", Chart: "example-3.0.0"},
+				},
+				release: &helmengine.Release{
+					Name: "example", Namespace: "apps", Revision: 2, Status: "deployed", ManifestDigest: "sha256:v2",
+					Workloads: []helmengine.WorkloadSummary{{Kind: "Deployment", Name: "api", Namespace: "apps"}},
+				},
+			}
+			kube := kubernetesfake.NewSimpleClientset(&appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "apps", UID: "uid-upgrade-rollback"},
+			})
+			store := newMemoryStore()
+			agent, err := New(Config{
+				Client: noopClient{}, Engine: engine, Store: store,
+				SessionID: "session-1", OperatorID: "operator-1", KubeClient: kube,
+				Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+				InstallFlags: InstallFlags{Atomic: true, Timeout: time.Minute},
+			})
+			require.NoError(t, err)
+			stream := newTestStream()
+
+			require.NoError(t, agent.handleCommand(t.Context(), stream, test.command()))
+			require.Len(t, stream.sent, 3, "expected [AckPersisted, WorkloadIdentityReport, terminal]")
+			assert.Equal(t, operatorv1.AckType_ACK_TYPE_PERSISTED, stream.sent[0].GetAck().GetAckType())
+
+			report := stream.sent[1].GetWorkloadIdentityReport()
+			require.NotNil(t, report, "identity report must precede the terminal result")
+			require.Len(t, report.GetItems(), 1)
+			assert.Equal(t, "DEPLOYMENT", report.GetItems()[0].GetKind())
+			assert.Equal(t, "uid-upgrade-rollback", report.GetItems()[0].GetUid())
+
+			if stream.sent[2].GetCommandResult() != nil {
+				assert.Equal(t, "succeeded", stream.sent[2].GetCommandResult().GetStatus())
+			} else {
+				assert.Equal(t, "succeeded", stream.sent[2].GetResult().GetStatus())
+			}
+		})
+	}
+}
+
 // REQ-085 startup scan: after the stream session is established, the agent
 // reports identities for releases already deployed (engine.List + Status),
 // best-effort — a failing List only logs a warning and the command loop
@@ -724,7 +785,6 @@ func upgradeCommand(commandID string, valuesJSON []byte, digest string) *operato
 	}
 }
 
-//nolint:unused // Reserved for future rollback-command tests; intentionally kept.
 func rollbackCommand(commandID string) *operatorv1.Command {
 	return &operatorv1.Command{
 		OutboxId:                "outbox-rollback",
