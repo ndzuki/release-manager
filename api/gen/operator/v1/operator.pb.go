@@ -240,6 +240,7 @@ type CommandStreamRequest struct {
 	//	*CommandStreamRequest_EmergencyResult
 	//	*CommandStreamRequest_CommandResult
 	//	*CommandStreamRequest_RolloutProgress
+	//	*CommandStreamRequest_WorkloadIdentityReport
 	Payload       isCommandStreamRequest_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -363,6 +364,15 @@ func (x *CommandStreamRequest) GetRolloutProgress() *RolloutProgress {
 	return nil
 }
 
+func (x *CommandStreamRequest) GetWorkloadIdentityReport() *WorkloadIdentityReport {
+	if x != nil {
+		if x, ok := x.Payload.(*CommandStreamRequest_WorkloadIdentityReport); ok {
+			return x.WorkloadIdentityReport
+		}
+	}
+	return nil
+}
+
 type isCommandStreamRequest_Payload interface {
 	isCommandStreamRequest_Payload()
 }
@@ -403,6 +413,10 @@ type CommandStreamRequest_RolloutProgress struct {
 	RolloutProgress *RolloutProgress `protobuf:"bytes,9,opt,name=rollout_progress,json=rolloutProgress,proto3,oneof"` // periodic workload rollout progress (TASK-077)
 }
 
+type CommandStreamRequest_WorkloadIdentityReport struct {
+	WorkloadIdentityReport *WorkloadIdentityReport `protobuf:"bytes,10,opt,name=workload_identity_report,json=workloadIdentityReport,proto3,oneof"` // authoritative live workload identities (REQ-085)
+}
+
 func (*CommandStreamRequest_Hello) isCommandStreamRequest_Payload() {}
 
 func (*CommandStreamRequest_Ack) isCommandStreamRequest_Payload() {}
@@ -421,6 +435,145 @@ func (*CommandStreamRequest_CommandResult) isCommandStreamRequest_Payload() {}
 
 func (*CommandStreamRequest_RolloutProgress) isCommandStreamRequest_Payload() {}
 
+func (*CommandStreamRequest_WorkloadIdentityReport) isCommandStreamRequest_Payload() {}
+
+// WorkloadIdentityReport carries authoritative workload identities the
+// operator read from the live cluster (REQ-085): the orchestrator persists
+// them on release_inventory and fills EmergencyTarget / EmergencyIntent /
+// EmergencyCommand from them. Additive alongside RolloutProgress (field 9).
+type WorkloadIdentityReport struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	Items         []*WorkloadIdentityItem `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkloadIdentityReport) Reset() {
+	*x = WorkloadIdentityReport{}
+	mi := &file_operator_v1_operator_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkloadIdentityReport) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkloadIdentityReport) ProtoMessage() {}
+
+func (x *WorkloadIdentityReport) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkloadIdentityReport.ProtoReflect.Descriptor instead.
+func (*WorkloadIdentityReport) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *WorkloadIdentityReport) GetItems() []*WorkloadIdentityItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+// WorkloadIdentityItem identifies one live workload (REQ-085). kind uses the
+// same enum-style vocabulary as EmergencyCommand.workload_kind
+// (DEPLOYMENT/STATEFUL_SET/DAEMON_SET). namespace is the workload's
+// Kubernetes namespace; release_namespace/release_name locate the Helm
+// release the workload belongs to.
+type WorkloadIdentityItem struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	ReleaseNamespace string                 `protobuf:"bytes,1,opt,name=release_namespace,json=releaseNamespace,proto3" json:"release_namespace,omitempty"`
+	ReleaseName      string                 `protobuf:"bytes,2,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
+	Kind             string                 `protobuf:"bytes,3,opt,name=kind,proto3" json:"kind,omitempty"`
+	Name             string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	Namespace        string                 `protobuf:"bytes,5,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Uid              string                 `protobuf:"bytes,6,opt,name=uid,proto3" json:"uid,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *WorkloadIdentityItem) Reset() {
+	*x = WorkloadIdentityItem{}
+	mi := &file_operator_v1_operator_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkloadIdentityItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkloadIdentityItem) ProtoMessage() {}
+
+func (x *WorkloadIdentityItem) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkloadIdentityItem.ProtoReflect.Descriptor instead.
+func (*WorkloadIdentityItem) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *WorkloadIdentityItem) GetReleaseNamespace() string {
+	if x != nil {
+		return x.ReleaseNamespace
+	}
+	return ""
+}
+
+func (x *WorkloadIdentityItem) GetReleaseName() string {
+	if x != nil {
+		return x.ReleaseName
+	}
+	return ""
+}
+
+func (x *WorkloadIdentityItem) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *WorkloadIdentityItem) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *WorkloadIdentityItem) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *WorkloadIdentityItem) GetUid() string {
+	if x != nil {
+		return x.Uid
+	}
+	return ""
+}
+
 // RolloutProgress reports observed workload readiness during a standard operation.
 type RolloutProgress struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -434,7 +587,7 @@ type RolloutProgress struct {
 
 func (x *RolloutProgress) Reset() {
 	*x = RolloutProgress{}
-	mi := &file_operator_v1_operator_proto_msgTypes[3]
+	mi := &file_operator_v1_operator_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -446,7 +599,7 @@ func (x *RolloutProgress) String() string {
 func (*RolloutProgress) ProtoMessage() {}
 
 func (x *RolloutProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[3]
+	mi := &file_operator_v1_operator_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -459,7 +612,7 @@ func (x *RolloutProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RolloutProgress.ProtoReflect.Descriptor instead.
 func (*RolloutProgress) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{3}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *RolloutProgress) GetOperationId() string {
@@ -505,7 +658,7 @@ type Hello struct {
 
 func (x *Hello) Reset() {
 	*x = Hello{}
-	mi := &file_operator_v1_operator_proto_msgTypes[4]
+	mi := &file_operator_v1_operator_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -517,7 +670,7 @@ func (x *Hello) String() string {
 func (*Hello) ProtoMessage() {}
 
 func (x *Hello) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[4]
+	mi := &file_operator_v1_operator_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -530,7 +683,7 @@ func (x *Hello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Hello.ProtoReflect.Descriptor instead.
 func (*Hello) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{4}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Hello) GetSessionId() string {
@@ -588,7 +741,7 @@ type SessionEstablished struct {
 
 func (x *SessionEstablished) Reset() {
 	*x = SessionEstablished{}
-	mi := &file_operator_v1_operator_proto_msgTypes[5]
+	mi := &file_operator_v1_operator_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -600,7 +753,7 @@ func (x *SessionEstablished) String() string {
 func (*SessionEstablished) ProtoMessage() {}
 
 func (x *SessionEstablished) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[5]
+	mi := &file_operator_v1_operator_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -613,7 +766,7 @@ func (x *SessionEstablished) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionEstablished.ProtoReflect.Descriptor instead.
 func (*SessionEstablished) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{5}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *SessionEstablished) GetSessionId() string {
@@ -657,7 +810,7 @@ type Ack struct {
 
 func (x *Ack) Reset() {
 	*x = Ack{}
-	mi := &file_operator_v1_operator_proto_msgTypes[6]
+	mi := &file_operator_v1_operator_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -669,7 +822,7 @@ func (x *Ack) String() string {
 func (*Ack) ProtoMessage() {}
 
 func (x *Ack) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[6]
+	mi := &file_operator_v1_operator_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -682,7 +835,7 @@ func (x *Ack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ack.ProtoReflect.Descriptor instead.
 func (*Ack) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{6}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Ack) GetOutboxId() string {
@@ -723,7 +876,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_operator_v1_operator_proto_msgTypes[7]
+	mi := &file_operator_v1_operator_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -735,7 +888,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[7]
+	mi := &file_operator_v1_operator_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -748,7 +901,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{7}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Heartbeat) GetSessionId() string {
@@ -774,7 +927,7 @@ type Result struct {
 
 func (x *Result) Reset() {
 	*x = Result{}
-	mi := &file_operator_v1_operator_proto_msgTypes[8]
+	mi := &file_operator_v1_operator_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -786,7 +939,7 @@ func (x *Result) String() string {
 func (*Result) ProtoMessage() {}
 
 func (x *Result) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[8]
+	mi := &file_operator_v1_operator_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -799,7 +952,7 @@ func (x *Result) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Result.ProtoReflect.Descriptor instead.
 func (*Result) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{8}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Result) GetOutboxId() string {
@@ -861,7 +1014,7 @@ type EmergencyAck struct {
 
 func (x *EmergencyAck) Reset() {
 	*x = EmergencyAck{}
-	mi := &file_operator_v1_operator_proto_msgTypes[9]
+	mi := &file_operator_v1_operator_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -873,7 +1026,7 @@ func (x *EmergencyAck) String() string {
 func (*EmergencyAck) ProtoMessage() {}
 
 func (x *EmergencyAck) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[9]
+	mi := &file_operator_v1_operator_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -886,7 +1039,7 @@ func (x *EmergencyAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmergencyAck.ProtoReflect.Descriptor instead.
 func (*EmergencyAck) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{9}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *EmergencyAck) GetEmergencyCommandId() string {
@@ -917,7 +1070,7 @@ type EmergencyResult struct {
 
 func (x *EmergencyResult) Reset() {
 	*x = EmergencyResult{}
-	mi := &file_operator_v1_operator_proto_msgTypes[10]
+	mi := &file_operator_v1_operator_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -929,7 +1082,7 @@ func (x *EmergencyResult) String() string {
 func (*EmergencyResult) ProtoMessage() {}
 
 func (x *EmergencyResult) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[10]
+	mi := &file_operator_v1_operator_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -942,7 +1095,7 @@ func (x *EmergencyResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmergencyResult.ProtoReflect.Descriptor instead.
 func (*EmergencyResult) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{10}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *EmergencyResult) GetEmergencyCommandId() string {
@@ -1005,7 +1158,7 @@ type CommandStreamResponse struct {
 
 func (x *CommandStreamResponse) Reset() {
 	*x = CommandStreamResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[11]
+	mi := &file_operator_v1_operator_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1017,7 +1170,7 @@ func (x *CommandStreamResponse) String() string {
 func (*CommandStreamResponse) ProtoMessage() {}
 
 func (x *CommandStreamResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[11]
+	mi := &file_operator_v1_operator_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1030,7 +1183,7 @@ func (x *CommandStreamResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandStreamResponse.ProtoReflect.Descriptor instead.
 func (*CommandStreamResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{11}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *CommandStreamResponse) GetPayload() isCommandStreamResponse_Payload {
@@ -1165,7 +1318,7 @@ type Command struct {
 
 func (x *Command) Reset() {
 	*x = Command{}
-	mi := &file_operator_v1_operator_proto_msgTypes[12]
+	mi := &file_operator_v1_operator_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1177,7 +1330,7 @@ func (x *Command) String() string {
 func (*Command) ProtoMessage() {}
 
 func (x *Command) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[12]
+	mi := &file_operator_v1_operator_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1190,7 +1343,7 @@ func (x *Command) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Command.ProtoReflect.Descriptor instead.
 func (*Command) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{12}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Command) GetOutboxId() string {
@@ -1366,7 +1519,7 @@ type EmergencyCommand struct {
 
 func (x *EmergencyCommand) Reset() {
 	*x = EmergencyCommand{}
-	mi := &file_operator_v1_operator_proto_msgTypes[13]
+	mi := &file_operator_v1_operator_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1378,7 +1531,7 @@ func (x *EmergencyCommand) String() string {
 func (*EmergencyCommand) ProtoMessage() {}
 
 func (x *EmergencyCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[13]
+	mi := &file_operator_v1_operator_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1391,7 +1544,7 @@ func (x *EmergencyCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmergencyCommand.ProtoReflect.Descriptor instead.
 func (*EmergencyCommand) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{13}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *EmergencyCommand) GetCommandId() string {
@@ -1509,7 +1662,7 @@ type EmergencySetContainerImage struct {
 
 func (x *EmergencySetContainerImage) Reset() {
 	*x = EmergencySetContainerImage{}
-	mi := &file_operator_v1_operator_proto_msgTypes[14]
+	mi := &file_operator_v1_operator_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1521,7 +1674,7 @@ func (x *EmergencySetContainerImage) String() string {
 func (*EmergencySetContainerImage) ProtoMessage() {}
 
 func (x *EmergencySetContainerImage) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[14]
+	mi := &file_operator_v1_operator_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1534,7 +1687,7 @@ func (x *EmergencySetContainerImage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmergencySetContainerImage.ProtoReflect.Descriptor instead.
 func (*EmergencySetContainerImage) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{14}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *EmergencySetContainerImage) GetContainer() string {
@@ -1560,7 +1713,7 @@ type EmergencySetReplicas struct {
 
 func (x *EmergencySetReplicas) Reset() {
 	*x = EmergencySetReplicas{}
-	mi := &file_operator_v1_operator_proto_msgTypes[15]
+	mi := &file_operator_v1_operator_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1572,7 +1725,7 @@ func (x *EmergencySetReplicas) String() string {
 func (*EmergencySetReplicas) ProtoMessage() {}
 
 func (x *EmergencySetReplicas) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[15]
+	mi := &file_operator_v1_operator_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1585,7 +1738,7 @@ func (x *EmergencySetReplicas) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmergencySetReplicas.ProtoReflect.Descriptor instead.
 func (*EmergencySetReplicas) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{15}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *EmergencySetReplicas) GetReplicas() int32 {
@@ -1605,7 +1758,7 @@ type EmergencySetApprovedAnnotations struct {
 
 func (x *EmergencySetApprovedAnnotations) Reset() {
 	*x = EmergencySetApprovedAnnotations{}
-	mi := &file_operator_v1_operator_proto_msgTypes[16]
+	mi := &file_operator_v1_operator_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1617,7 +1770,7 @@ func (x *EmergencySetApprovedAnnotations) String() string {
 func (*EmergencySetApprovedAnnotations) ProtoMessage() {}
 
 func (x *EmergencySetApprovedAnnotations) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[16]
+	mi := &file_operator_v1_operator_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1630,7 +1783,7 @@ func (x *EmergencySetApprovedAnnotations) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmergencySetApprovedAnnotations.ProtoReflect.Descriptor instead.
 func (*EmergencySetApprovedAnnotations) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{16}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *EmergencySetApprovedAnnotations) GetEntries() []*EmergencyAnnotationEntry {
@@ -1657,7 +1810,7 @@ type EmergencyAnnotationEntry struct {
 
 func (x *EmergencyAnnotationEntry) Reset() {
 	*x = EmergencyAnnotationEntry{}
-	mi := &file_operator_v1_operator_proto_msgTypes[17]
+	mi := &file_operator_v1_operator_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1669,7 +1822,7 @@ func (x *EmergencyAnnotationEntry) String() string {
 func (*EmergencyAnnotationEntry) ProtoMessage() {}
 
 func (x *EmergencyAnnotationEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[17]
+	mi := &file_operator_v1_operator_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1682,7 +1835,7 @@ func (x *EmergencyAnnotationEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmergencyAnnotationEntry.ProtoReflect.Descriptor instead.
 func (*EmergencyAnnotationEntry) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{17}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *EmergencyAnnotationEntry) GetKey() string {
@@ -1710,7 +1863,7 @@ type ResyncRequest struct {
 
 func (x *ResyncRequest) Reset() {
 	*x = ResyncRequest{}
-	mi := &file_operator_v1_operator_proto_msgTypes[18]
+	mi := &file_operator_v1_operator_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1722,7 +1875,7 @@ func (x *ResyncRequest) String() string {
 func (*ResyncRequest) ProtoMessage() {}
 
 func (x *ResyncRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[18]
+	mi := &file_operator_v1_operator_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1735,7 +1888,7 @@ func (x *ResyncRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResyncRequest.ProtoReflect.Descriptor instead.
 func (*ResyncRequest) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{18}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ResyncRequest) GetOrchestratorLastSequence() int64 {
@@ -1762,7 +1915,7 @@ type ResyncResponse struct {
 
 func (x *ResyncResponse) Reset() {
 	*x = ResyncResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[19]
+	mi := &file_operator_v1_operator_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1774,7 +1927,7 @@ func (x *ResyncResponse) String() string {
 func (*ResyncResponse) ProtoMessage() {}
 
 func (x *ResyncResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[19]
+	mi := &file_operator_v1_operator_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1787,7 +1940,7 @@ func (x *ResyncResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResyncResponse.ProtoReflect.Descriptor instead.
 func (*ResyncResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{19}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ResyncResponse) GetOperatorLastSequence() int64 {
@@ -1808,7 +1961,7 @@ type DuplicateResponse struct {
 
 func (x *DuplicateResponse) Reset() {
 	*x = DuplicateResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[20]
+	mi := &file_operator_v1_operator_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1820,7 +1973,7 @@ func (x *DuplicateResponse) String() string {
 func (*DuplicateResponse) ProtoMessage() {}
 
 func (x *DuplicateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[20]
+	mi := &file_operator_v1_operator_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1833,7 +1986,7 @@ func (x *DuplicateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DuplicateResponse.ProtoReflect.Descriptor instead.
 func (*DuplicateResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{20}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *DuplicateResponse) GetCommandId() string {
@@ -1861,7 +2014,7 @@ type SessionEvent struct {
 
 func (x *SessionEvent) Reset() {
 	*x = SessionEvent{}
-	mi := &file_operator_v1_operator_proto_msgTypes[21]
+	mi := &file_operator_v1_operator_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1873,7 +2026,7 @@ func (x *SessionEvent) String() string {
 func (*SessionEvent) ProtoMessage() {}
 
 func (x *SessionEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[21]
+	mi := &file_operator_v1_operator_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1886,7 +2039,7 @@ func (x *SessionEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionEvent.ProtoReflect.Descriptor instead.
 func (*SessionEvent) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{21}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SessionEvent) GetType() string {
@@ -1915,7 +2068,7 @@ type RenewCertificateRequest struct {
 
 func (x *RenewCertificateRequest) Reset() {
 	*x = RenewCertificateRequest{}
-	mi := &file_operator_v1_operator_proto_msgTypes[22]
+	mi := &file_operator_v1_operator_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1927,7 +2080,7 @@ func (x *RenewCertificateRequest) String() string {
 func (*RenewCertificateRequest) ProtoMessage() {}
 
 func (x *RenewCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[22]
+	mi := &file_operator_v1_operator_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1940,7 +2093,7 @@ func (x *RenewCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenewCertificateRequest.ProtoReflect.Descriptor instead.
 func (*RenewCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{22}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *RenewCertificateRequest) GetOperatorId() string {
@@ -1968,7 +2121,7 @@ type RenewCertificateResponse struct {
 
 func (x *RenewCertificateResponse) Reset() {
 	*x = RenewCertificateResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[23]
+	mi := &file_operator_v1_operator_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1980,7 +2133,7 @@ func (x *RenewCertificateResponse) String() string {
 func (*RenewCertificateResponse) ProtoMessage() {}
 
 func (x *RenewCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[23]
+	mi := &file_operator_v1_operator_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1993,7 +2146,7 @@ func (x *RenewCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenewCertificateResponse.ProtoReflect.Descriptor instead.
 func (*RenewCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{23}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *RenewCertificateResponse) GetCertificatePem() []byte {
@@ -2034,7 +2187,7 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x0fcertificate_pem\x18\x03 \x01(\fR\x0ecertificatePem\x12\x1f\n" +
 	"\voperator_id\x18\x04 \x01(\tR\n" +
 	"operatorId\x124\n" +
-	"\x16certificate_expires_at\x18\x05 \x01(\tR\x14certificateExpiresAt\"\xbf\x04\n" +
+	"\x16certificate_expires_at\x18\x05 \x01(\tR\x14certificateExpiresAt\"\xa0\x05\n" +
 	"\x14CommandStreamRequest\x12*\n" +
 	"\x05hello\x18\x01 \x01(\v2\x12.operator.v1.HelloH\x00R\x05hello\x12$\n" +
 	"\x03ack\x18\x02 \x01(\v2\x10.operator.v1.AckH\x00R\x03ack\x126\n" +
@@ -2044,8 +2197,19 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\remergency_ack\x18\x06 \x01(\v2\x19.operator.v1.EmergencyAckH\x00R\femergencyAck\x12I\n" +
 	"\x10emergency_result\x18\a \x01(\v2\x1c.operator.v1.EmergencyResultH\x00R\x0femergencyResult\x12C\n" +
 	"\x0ecommand_result\x18\b \x01(\v2\x1a.operator.v1.CommandResultH\x00R\rcommandResult\x12I\n" +
-	"\x10rollout_progress\x18\t \x01(\v2\x1c.operator.v1.RolloutProgressH\x00R\x0frolloutProgressB\t\n" +
-	"\apayload\"\x87\x01\n" +
+	"\x10rollout_progress\x18\t \x01(\v2\x1c.operator.v1.RolloutProgressH\x00R\x0frolloutProgress\x12_\n" +
+	"\x18workload_identity_report\x18\n" +
+	" \x01(\v2#.operator.v1.WorkloadIdentityReportH\x00R\x16workloadIdentityReportB\t\n" +
+	"\apayload\"Q\n" +
+	"\x16WorkloadIdentityReport\x127\n" +
+	"\x05items\x18\x01 \x03(\v2!.operator.v1.WorkloadIdentityItemR\x05items\"\xbe\x01\n" +
+	"\x14WorkloadIdentityItem\x12+\n" +
+	"\x11release_namespace\x18\x01 \x01(\tR\x10releaseNamespace\x12!\n" +
+	"\frelease_name\x18\x02 \x01(\tR\vreleaseName\x12\x12\n" +
+	"\x04kind\x18\x03 \x01(\tR\x04kind\x12\x12\n" +
+	"\x04name\x18\x04 \x01(\tR\x04name\x12\x1c\n" +
+	"\tnamespace\x18\x05 \x01(\tR\tnamespace\x12\x10\n" +
+	"\x03uid\x18\x06 \x01(\tR\x03uid\"\x87\x01\n" +
 	"\x0fRolloutProgress\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12!\n" +
 	"\fworkload_ref\x18\x02 \x01(\tR\vworkloadRef\x12\x14\n" +
@@ -2200,76 +2364,80 @@ func file_operator_v1_operator_proto_rawDescGZIP() []byte {
 }
 
 var file_operator_v1_operator_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_operator_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_operator_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_operator_v1_operator_proto_goTypes = []any{
 	(AckType)(0),                            // 0: operator.v1.AckType
 	(*EnrollRequest)(nil),                   // 1: operator.v1.EnrollRequest
 	(*EnrollResponse)(nil),                  // 2: operator.v1.EnrollResponse
 	(*CommandStreamRequest)(nil),            // 3: operator.v1.CommandStreamRequest
-	(*RolloutProgress)(nil),                 // 4: operator.v1.RolloutProgress
-	(*Hello)(nil),                           // 5: operator.v1.Hello
-	(*SessionEstablished)(nil),              // 6: operator.v1.SessionEstablished
-	(*Ack)(nil),                             // 7: operator.v1.Ack
-	(*Heartbeat)(nil),                       // 8: operator.v1.Heartbeat
-	(*Result)(nil),                          // 9: operator.v1.Result
-	(*EmergencyAck)(nil),                    // 10: operator.v1.EmergencyAck
-	(*EmergencyResult)(nil),                 // 11: operator.v1.EmergencyResult
-	(*CommandStreamResponse)(nil),           // 12: operator.v1.CommandStreamResponse
-	(*Command)(nil),                         // 13: operator.v1.Command
-	(*EmergencyCommand)(nil),                // 14: operator.v1.EmergencyCommand
-	(*EmergencySetContainerImage)(nil),      // 15: operator.v1.EmergencySetContainerImage
-	(*EmergencySetReplicas)(nil),            // 16: operator.v1.EmergencySetReplicas
-	(*EmergencySetApprovedAnnotations)(nil), // 17: operator.v1.EmergencySetApprovedAnnotations
-	(*EmergencyAnnotationEntry)(nil),        // 18: operator.v1.EmergencyAnnotationEntry
-	(*ResyncRequest)(nil),                   // 19: operator.v1.ResyncRequest
-	(*ResyncResponse)(nil),                  // 20: operator.v1.ResyncResponse
-	(*DuplicateResponse)(nil),               // 21: operator.v1.DuplicateResponse
-	(*SessionEvent)(nil),                    // 22: operator.v1.SessionEvent
-	(*RenewCertificateRequest)(nil),         // 23: operator.v1.RenewCertificateRequest
-	(*RenewCertificateResponse)(nil),        // 24: operator.v1.RenewCertificateResponse
-	nil,                                     // 25: operator.v1.EnrollRequest.CapabilitiesEntry
-	nil,                                     // 26: operator.v1.Hello.CapabilitiesEntry
-	(*CommandResult)(nil),                   // 27: operator.v1.CommandResult
-	(*v1.ReleaseBundle)(nil),                // 28: common.v1.ReleaseBundle
-	(*UpgradeCommand)(nil),                  // 29: operator.v1.UpgradeCommand
+	(*WorkloadIdentityReport)(nil),          // 4: operator.v1.WorkloadIdentityReport
+	(*WorkloadIdentityItem)(nil),            // 5: operator.v1.WorkloadIdentityItem
+	(*RolloutProgress)(nil),                 // 6: operator.v1.RolloutProgress
+	(*Hello)(nil),                           // 7: operator.v1.Hello
+	(*SessionEstablished)(nil),              // 8: operator.v1.SessionEstablished
+	(*Ack)(nil),                             // 9: operator.v1.Ack
+	(*Heartbeat)(nil),                       // 10: operator.v1.Heartbeat
+	(*Result)(nil),                          // 11: operator.v1.Result
+	(*EmergencyAck)(nil),                    // 12: operator.v1.EmergencyAck
+	(*EmergencyResult)(nil),                 // 13: operator.v1.EmergencyResult
+	(*CommandStreamResponse)(nil),           // 14: operator.v1.CommandStreamResponse
+	(*Command)(nil),                         // 15: operator.v1.Command
+	(*EmergencyCommand)(nil),                // 16: operator.v1.EmergencyCommand
+	(*EmergencySetContainerImage)(nil),      // 17: operator.v1.EmergencySetContainerImage
+	(*EmergencySetReplicas)(nil),            // 18: operator.v1.EmergencySetReplicas
+	(*EmergencySetApprovedAnnotations)(nil), // 19: operator.v1.EmergencySetApprovedAnnotations
+	(*EmergencyAnnotationEntry)(nil),        // 20: operator.v1.EmergencyAnnotationEntry
+	(*ResyncRequest)(nil),                   // 21: operator.v1.ResyncRequest
+	(*ResyncResponse)(nil),                  // 22: operator.v1.ResyncResponse
+	(*DuplicateResponse)(nil),               // 23: operator.v1.DuplicateResponse
+	(*SessionEvent)(nil),                    // 24: operator.v1.SessionEvent
+	(*RenewCertificateRequest)(nil),         // 25: operator.v1.RenewCertificateRequest
+	(*RenewCertificateResponse)(nil),        // 26: operator.v1.RenewCertificateResponse
+	nil,                                     // 27: operator.v1.EnrollRequest.CapabilitiesEntry
+	nil,                                     // 28: operator.v1.Hello.CapabilitiesEntry
+	(*CommandResult)(nil),                   // 29: operator.v1.CommandResult
+	(*v1.ReleaseBundle)(nil),                // 30: common.v1.ReleaseBundle
+	(*UpgradeCommand)(nil),                  // 31: operator.v1.UpgradeCommand
 }
 var file_operator_v1_operator_proto_depIdxs = []int32{
-	25, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
-	5,  // 1: operator.v1.CommandStreamRequest.hello:type_name -> operator.v1.Hello
-	7,  // 2: operator.v1.CommandStreamRequest.ack:type_name -> operator.v1.Ack
-	8,  // 3: operator.v1.CommandStreamRequest.heartbeat:type_name -> operator.v1.Heartbeat
-	9,  // 4: operator.v1.CommandStreamRequest.result:type_name -> operator.v1.Result
-	20, // 5: operator.v1.CommandStreamRequest.resync_response:type_name -> operator.v1.ResyncResponse
-	10, // 6: operator.v1.CommandStreamRequest.emergency_ack:type_name -> operator.v1.EmergencyAck
-	11, // 7: operator.v1.CommandStreamRequest.emergency_result:type_name -> operator.v1.EmergencyResult
-	27, // 8: operator.v1.CommandStreamRequest.command_result:type_name -> operator.v1.CommandResult
-	4,  // 9: operator.v1.CommandStreamRequest.rollout_progress:type_name -> operator.v1.RolloutProgress
-	26, // 10: operator.v1.Hello.capabilities:type_name -> operator.v1.Hello.CapabilitiesEntry
-	0,  // 11: operator.v1.Ack.ack_type:type_name -> operator.v1.AckType
-	0,  // 12: operator.v1.EmergencyAck.ack_type:type_name -> operator.v1.AckType
-	13, // 13: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
-	22, // 14: operator.v1.CommandStreamResponse.session_event:type_name -> operator.v1.SessionEvent
-	19, // 15: operator.v1.CommandStreamResponse.resync_request:type_name -> operator.v1.ResyncRequest
-	21, // 16: operator.v1.CommandStreamResponse.duplicate_response:type_name -> operator.v1.DuplicateResponse
-	6,  // 17: operator.v1.CommandStreamResponse.session_established:type_name -> operator.v1.SessionEstablished
-	14, // 18: operator.v1.CommandStreamResponse.emergency_command:type_name -> operator.v1.EmergencyCommand
-	28, // 19: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
-	29, // 20: operator.v1.Command.upgrade:type_name -> operator.v1.UpgradeCommand
-	15, // 21: operator.v1.EmergencyCommand.set_container_image:type_name -> operator.v1.EmergencySetContainerImage
-	16, // 22: operator.v1.EmergencyCommand.set_replicas:type_name -> operator.v1.EmergencySetReplicas
-	17, // 23: operator.v1.EmergencyCommand.set_approved_annotations:type_name -> operator.v1.EmergencySetApprovedAnnotations
-	18, // 24: operator.v1.EmergencySetApprovedAnnotations.entries:type_name -> operator.v1.EmergencyAnnotationEntry
-	1,  // 25: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
-	23, // 26: operator.v1.OperatorService.RenewCertificate:input_type -> operator.v1.RenewCertificateRequest
-	3,  // 27: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
-	2,  // 28: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
-	24, // 29: operator.v1.OperatorService.RenewCertificate:output_type -> operator.v1.RenewCertificateResponse
-	12, // 30: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
-	28, // [28:31] is the sub-list for method output_type
-	25, // [25:28] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	27, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
+	7,  // 1: operator.v1.CommandStreamRequest.hello:type_name -> operator.v1.Hello
+	9,  // 2: operator.v1.CommandStreamRequest.ack:type_name -> operator.v1.Ack
+	10, // 3: operator.v1.CommandStreamRequest.heartbeat:type_name -> operator.v1.Heartbeat
+	11, // 4: operator.v1.CommandStreamRequest.result:type_name -> operator.v1.Result
+	22, // 5: operator.v1.CommandStreamRequest.resync_response:type_name -> operator.v1.ResyncResponse
+	12, // 6: operator.v1.CommandStreamRequest.emergency_ack:type_name -> operator.v1.EmergencyAck
+	13, // 7: operator.v1.CommandStreamRequest.emergency_result:type_name -> operator.v1.EmergencyResult
+	29, // 8: operator.v1.CommandStreamRequest.command_result:type_name -> operator.v1.CommandResult
+	6,  // 9: operator.v1.CommandStreamRequest.rollout_progress:type_name -> operator.v1.RolloutProgress
+	4,  // 10: operator.v1.CommandStreamRequest.workload_identity_report:type_name -> operator.v1.WorkloadIdentityReport
+	5,  // 11: operator.v1.WorkloadIdentityReport.items:type_name -> operator.v1.WorkloadIdentityItem
+	28, // 12: operator.v1.Hello.capabilities:type_name -> operator.v1.Hello.CapabilitiesEntry
+	0,  // 13: operator.v1.Ack.ack_type:type_name -> operator.v1.AckType
+	0,  // 14: operator.v1.EmergencyAck.ack_type:type_name -> operator.v1.AckType
+	15, // 15: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
+	24, // 16: operator.v1.CommandStreamResponse.session_event:type_name -> operator.v1.SessionEvent
+	21, // 17: operator.v1.CommandStreamResponse.resync_request:type_name -> operator.v1.ResyncRequest
+	23, // 18: operator.v1.CommandStreamResponse.duplicate_response:type_name -> operator.v1.DuplicateResponse
+	8,  // 19: operator.v1.CommandStreamResponse.session_established:type_name -> operator.v1.SessionEstablished
+	16, // 20: operator.v1.CommandStreamResponse.emergency_command:type_name -> operator.v1.EmergencyCommand
+	30, // 21: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
+	31, // 22: operator.v1.Command.upgrade:type_name -> operator.v1.UpgradeCommand
+	17, // 23: operator.v1.EmergencyCommand.set_container_image:type_name -> operator.v1.EmergencySetContainerImage
+	18, // 24: operator.v1.EmergencyCommand.set_replicas:type_name -> operator.v1.EmergencySetReplicas
+	19, // 25: operator.v1.EmergencyCommand.set_approved_annotations:type_name -> operator.v1.EmergencySetApprovedAnnotations
+	20, // 26: operator.v1.EmergencySetApprovedAnnotations.entries:type_name -> operator.v1.EmergencyAnnotationEntry
+	1,  // 27: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
+	25, // 28: operator.v1.OperatorService.RenewCertificate:input_type -> operator.v1.RenewCertificateRequest
+	3,  // 29: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
+	2,  // 30: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
+	26, // 31: operator.v1.OperatorService.RenewCertificate:output_type -> operator.v1.RenewCertificateResponse
+	14, // 32: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
+	30, // [30:33] is the sub-list for method output_type
+	27, // [27:30] is the sub-list for method input_type
+	27, // [27:27] is the sub-list for extension type_name
+	27, // [27:27] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_operator_v1_operator_proto_init() }
@@ -2288,8 +2456,9 @@ func file_operator_v1_operator_proto_init() {
 		(*CommandStreamRequest_EmergencyResult)(nil),
 		(*CommandStreamRequest_CommandResult)(nil),
 		(*CommandStreamRequest_RolloutProgress)(nil),
+		(*CommandStreamRequest_WorkloadIdentityReport)(nil),
 	}
-	file_operator_v1_operator_proto_msgTypes[11].OneofWrappers = []any{
+	file_operator_v1_operator_proto_msgTypes[13].OneofWrappers = []any{
 		(*CommandStreamResponse_Command)(nil),
 		(*CommandStreamResponse_SessionEvent)(nil),
 		(*CommandStreamResponse_ResyncRequest)(nil),
@@ -2297,10 +2466,10 @@ func file_operator_v1_operator_proto_init() {
 		(*CommandStreamResponse_SessionEstablished)(nil),
 		(*CommandStreamResponse_EmergencyCommand)(nil),
 	}
-	file_operator_v1_operator_proto_msgTypes[12].OneofWrappers = []any{
+	file_operator_v1_operator_proto_msgTypes[14].OneofWrappers = []any{
 		(*Command_Upgrade)(nil),
 	}
-	file_operator_v1_operator_proto_msgTypes[13].OneofWrappers = []any{
+	file_operator_v1_operator_proto_msgTypes[15].OneofWrappers = []any{
 		(*EmergencyCommand_SetContainerImage)(nil),
 		(*EmergencyCommand_SetReplicas)(nil),
 		(*EmergencyCommand_SetApprovedAnnotations)(nil),
@@ -2311,7 +2480,7 @@ func file_operator_v1_operator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_operator_v1_operator_proto_rawDesc), len(file_operator_v1_operator_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   26,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

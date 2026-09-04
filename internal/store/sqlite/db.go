@@ -1522,6 +1522,12 @@ var migrationStatements = []string{
 	`ALTER TABLE release_inventory ADD COLUMN live_status TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE release_inventory ADD COLUMN last_operation_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE release_inventory ADD COLUMN release_definition_id TEXT NOT NULL DEFAULT ''`,
+	// REQ-085 (TASK-085): authoritative workload identity reported by the
+	// operator; mirrors migrations/000024_workload_identity.up.sql.
+	`ALTER TABLE release_inventory ADD COLUMN workload_kind TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN workload_name TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN workload_namespace TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_inventory ADD COLUMN workload_uid TEXT NOT NULL DEFAULT ''`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_cluster ON release_inventory(customer_id, cluster_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_status ON release_inventory(inventory_status)`,
 

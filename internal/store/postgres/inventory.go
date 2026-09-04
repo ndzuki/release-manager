@@ -29,8 +29,9 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 	const stmt = `INSERT INTO release_inventory AS current_inventory
 		(customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version, revision, status,
 		 values_digest, observed_bundle_digest, observed_chart_digest, observed_effective_values_digest,
-		 observed_manifest_digest, live_status, last_operation_id, inventory_status, last_sync_id, snapshot_version, created_at, updated_at)
-	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 observed_manifest_digest, live_status, last_operation_id, inventory_status, last_sync_id, snapshot_version,
+		 workload_kind, workload_name, workload_namespace, workload_uid, created_at, updated_at)
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	 ON CONFLICT(customer_id, cluster_id, namespace, release_name) DO UPDATE SET
 		release_definition_id = COALESCE(NULLIF(excluded.release_definition_id, ''), current_inventory.release_definition_id),
 		chart = excluded.chart,
@@ -47,6 +48,10 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 		inventory_status = excluded.inventory_status,
 		last_sync_id = excluded.last_sync_id,
 		snapshot_version = excluded.snapshot_version,
+		workload_kind = COALESCE(NULLIF(excluded.workload_kind, ''), current_inventory.workload_kind),
+		workload_name = COALESCE(NULLIF(excluded.workload_name, ''), current_inventory.workload_name),
+		workload_namespace = COALESCE(NULLIF(excluded.workload_namespace, ''), current_inventory.workload_namespace),
+		workload_uid = COALESCE(NULLIF(excluded.workload_uid, ''), current_inventory.workload_uid),
 		updated_at = excluded.updated_at`
 
 	_, err := s.gorm.ExecContext(ctx, stmt,
@@ -54,7 +59,9 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 		item.Chart, item.ChartVersion, item.Revision, item.Status, item.ValuesDigest,
 		item.ObservedBundleDigest, item.ObservedChartDigest, item.ObservedEffectiveValuesDigest,
 		item.ObservedManifestDigest, item.LiveStatus, item.LastOperationID, string(item.InventoryStatus),
-		item.LastSyncID, item.SnapshotVersion, item.CreatedAt.UTC().Format(time.RFC3339), now,
+		item.LastSyncID, item.SnapshotVersion,
+		item.WorkloadKind, item.WorkloadName, item.WorkloadNamespace, item.WorkloadUID,
+		item.CreatedAt.UTC().Format(time.RFC3339), now,
 	)
 	return err
 }
@@ -65,7 +72,8 @@ func (s *inventoryStore) ListByCluster(ctx context.Context, customerID, clusterI
 		`SELECT customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version,
 		        revision, status, values_digest, observed_bundle_digest, observed_chart_digest,
 		        observed_effective_values_digest, observed_manifest_digest, live_status, last_operation_id,
-		        inventory_status, last_sync_id, snapshot_version, created_at, updated_at
+		        inventory_status, last_sync_id, snapshot_version,
+		        workload_kind, workload_name, workload_namespace, workload_uid, created_at, updated_at
 		 FROM release_inventory
 		 WHERE customer_id = ? AND cluster_id = ?
 		 ORDER BY namespace, release_name`,
@@ -85,7 +93,9 @@ func (s *inventoryStore) ListByCluster(ctx context.Context, customerID, clusterI
 			&item.Chart, &item.ChartVersion, &item.Revision, &item.Status, &item.ValuesDigest,
 			&item.ObservedBundleDigest, &item.ObservedChartDigest, &item.ObservedEffectiveValuesDigest,
 			&item.ObservedManifestDigest, &item.LiveStatus, &item.LastOperationID, &item.InventoryStatus, &item.LastSyncID,
-			&item.SnapshotVersion, &createdAt, &updatedAt,
+			&item.SnapshotVersion,
+			&item.WorkloadKind, &item.WorkloadName, &item.WorkloadNamespace, &item.WorkloadUID,
+			&createdAt, &updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan inventory: %w", err)
 		}
@@ -102,7 +112,8 @@ func (s *inventoryStore) GetByDefinition(ctx context.Context, definitionID strin
 		SELECT customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version,
 		       revision, status, values_digest, observed_bundle_digest, observed_chart_digest,
 		       observed_effective_values_digest, observed_manifest_digest, live_status, last_operation_id,
-		       inventory_status, last_sync_id, snapshot_version, created_at, updated_at
+		       inventory_status, last_sync_id, snapshot_version,
+		       workload_kind, workload_name, workload_namespace, workload_uid, created_at, updated_at
 		FROM release_inventory
 		WHERE release_definition_id = ?
 	`, definitionID)
@@ -112,7 +123,9 @@ func (s *inventoryStore) GetByDefinition(ctx context.Context, definitionID strin
 		&item.Chart, &item.ChartVersion, &item.Revision, &item.Status, &item.ValuesDigest,
 		&item.ObservedBundleDigest, &item.ObservedChartDigest, &item.ObservedEffectiveValuesDigest,
 		&item.ObservedManifestDigest, &item.LiveStatus, &item.LastOperationID, &item.InventoryStatus, &item.LastSyncID,
-		&item.SnapshotVersion, &item.CreatedAt, &item.UpdatedAt,
+		&item.SnapshotVersion,
+		&item.WorkloadKind, &item.WorkloadName, &item.WorkloadNamespace, &item.WorkloadUID,
+		&item.CreatedAt, &item.UpdatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -120,6 +133,32 @@ func (s *inventoryStore) GetByDefinition(ctx context.Context, definitionID strin
 		return nil, fmt.Errorf("get inventory by definition: %w", err)
 	}
 	return &item, nil
+}
+
+// UpdateWorkloadIdentity overwrites the authoritative workload identity on
+// the row located by the inventory unique key (REQ-085). Returns
+// store.ErrNotFound when the row does not exist — identity is never inserted
+// for releases the inventory does not know.
+func (s *inventoryStore) UpdateWorkloadIdentity(ctx context.Context, customerID, clusterID, namespace, releaseName string, identity store.WorkloadIdentity) error {
+	result, err := s.gorm.ExecContext(ctx, `
+		UPDATE release_inventory
+		SET workload_kind = ?, workload_name = ?, workload_namespace = ?, workload_uid = ?, updated_at = ?
+		WHERE customer_id = ? AND cluster_id = ? AND namespace = ? AND release_name = ?`,
+		identity.Kind, identity.Name, identity.Namespace, identity.UID,
+		time.Now().UTC().Format(time.RFC3339),
+		customerID, clusterID, namespace, releaseName,
+	)
+	if err != nil {
+		return fmt.Errorf("update workload identity: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update workload identity rows: %w", err)
+	}
+	if affected == 0 {
+		return store.ErrNotFound
+	}
+	return nil
 }
 
 // MarkMissing sets InventoryMissing for all rows in a cluster not present in the given set.

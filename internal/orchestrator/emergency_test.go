@@ -51,7 +51,22 @@ func emergencyTestService(t *testing.T) (*Service, store.Store, *recordingEmerge
 	t.Helper()
 	svc, st, _ := setupService(t)
 	seedDefinition(t, st)
+	seedEmergencyImageIdentity(t, st)
 	return emergencyTestServiceFromExisting(t, svc, st)
+}
+
+// seedEmergencyImageIdentity seeds the inventory row for the canonical image
+// branch fixture: the workload_ref "deployments/default/api" resolves against
+// the authoritative identity (REQ-085). The release name is my-release, the
+// workload name api — identity reports carry the manifest workload name, not
+// the Helm release name.
+func seedEmergencyImageIdentity(t *testing.T, st store.Store) {
+	t.Helper()
+	require.NoError(t, st.Inventories().Upsert(t.Context(), &store.ReleaseInventory{
+		ReleaseDefinitionID: "def-001", CustomerID: "cust-001", ClusterID: "cls-001",
+		Namespace: "default", ReleaseName: "my-release", Status: "deployed", InventoryStatus: store.InventoryActive,
+		WorkloadKind: workloadDeployment, WorkloadName: "api", WorkloadNamespace: "default", WorkloadUID: "uid-image-0001",
+	}))
 }
 
 func emergencyAdminContext() context.Context {
@@ -195,9 +210,13 @@ func TestExecuteEmergencyChangePersistsAndDispatches(t *testing.T) {
 	assert.NotEmpty(t, resp.Msg.GetOperationVersion())
 	assert.Len(t, dispatcher.commands, 1)
 	assert.Equal(t, "api", dispatcher.commands[0].GetSetContainerImage().GetContainer())
+	// REQ-085: the image branch carries the same authoritative identity
+	// (both change branches share the resolve-then-fill path).
+	assert.Equal(t, "uid-image-0001", dispatcher.commands[0].GetWorkloadUid())
 	intent, err := st.EmergencyIntents().GetByOperationID(t.Context(), resp.Msg.GetOperationId())
 	require.NoError(t, err)
 	assert.Equal(t, "queued", intent.DeliveryStatus)
+	assert.Equal(t, "uid-image-0001", intent.WorkloadUID)
 	operation, err := st.Operations().Get(t.Context(), resp.Msg.GetOperationId())
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusQueued, operation.Status)
@@ -443,7 +462,9 @@ func emergencyReplicasRequest(key string, replicas int32) *connect.Request[orche
 
 // seedReplicasDefinition configures def-001 for the set_replicas path: HPA
 // flag, max emergency replicas and promotion mappings (field "replicas" per
-// REQ-032 §222 promotion mapping field vocabulary).
+// REQ-032 §222 promotion mapping field vocabulary). It also seeds the
+// authoritative workload identity matching emergencyReplicasRequest's
+// workload_ref "deployments/default/my-release" (REQ-085).
 func seedReplicasDefinition(t *testing.T, st store.Store, mappings []store.PromotionMapping, hpa bool, maxReplicas int32) {
 	t.Helper()
 	definition, err := st.Definitions().Get(t.Context(), "def-001")
@@ -453,6 +474,11 @@ func seedReplicasDefinition(t *testing.T, st store.Store, mappings []store.Promo
 	definition.PromotionMappings = mappings
 	_, err = st.Definitions().Update(t.Context(), definition, nil)
 	require.NoError(t, err)
+	require.NoError(t, st.Inventories().Upsert(t.Context(), &store.ReleaseInventory{
+		ReleaseDefinitionID: "def-001", CustomerID: "cust-001", ClusterID: "cls-001",
+		Namespace: "default", ReleaseName: "my-release", Status: "deployed", InventoryStatus: store.InventoryActive,
+		WorkloadKind: workloadDeployment, WorkloadName: "my-release", WorkloadNamespace: "default", WorkloadUID: "uid-replicas-0001",
+	}))
 }
 
 func replicasPromotionMapping() []store.PromotionMapping {
@@ -479,15 +505,87 @@ func TestExecuteEmergencyChangeSetReplicas(t *testing.T) {
 	require.NotNil(t, dispatcher.commands[0].GetSetReplicas())
 	assert.Equal(t, int32(2), dispatcher.commands[0].GetSetReplicas().GetReplicas())
 	assert.Equal(t, "my-release", dispatcher.commands[0].GetWorkloadName())
+	// AC-085-02: the dispatched command carries the authoritative non-empty
+	// uid persisted on the inventory row — the operator no longer rejects it
+	// as an empty-identity invalid_command.
+	assert.Equal(t, "uid-replicas-0001", dispatcher.commands[0].GetWorkloadUid())
+	assert.Equal(t, workloadDeployment, dispatcher.commands[0].GetWorkloadKind())
+	assert.Equal(t, "default", dispatcher.commands[0].GetWorkloadNamespace())
 
 	intent, err := st.EmergencyIntents().GetByOperationID(t.Context(), resp.Msg.GetOperationId())
 	require.NoError(t, err)
 	assert.Equal(t, store.EmergencySetReplicas, intent.Action)
+	assert.Equal(t, "uid-replicas-0001", intent.WorkloadUID)
 	require.NotNil(t, intent.TargetReplicas)
 	assert.Equal(t, int32(2), *intent.TargetReplicas)
 	assert.Nil(t, intent.Container)
 	assert.Nil(t, intent.ArtifactID)
 	assert.Nil(t, intent.ImageReference)
+}
+
+// AC-085-03: a definition whose inventory row carries no operator-reported
+// workload identity is rejected with the stable invalid_workload_ref reason
+// code before any intent/operation exists — an empty WorkloadUID is never
+// persisted nor dispatched (D-110 ③).
+func TestExecuteEmergencyChangeRejectsMissingWorkloadIdentity(t *testing.T) {
+	svc, st, dispatcher := emergencyTestServiceWithoutIdentity(t)
+	definition, err := st.Definitions().Get(t.Context(), "def-001")
+	require.NoError(t, err)
+	definition.MaxEmergencyReplicas = 10
+	_, err = st.Definitions().Update(t.Context(), definition, nil)
+	require.NoError(t, err)
+
+	_, err = svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("missing-identity", 2))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Equal(t, "invalid_workload_ref", connectErrorReason(err))
+	assert.Empty(t, dispatcher.commands, "no command may be dispatched without identity")
+
+	intents, intentErr := st.EmergencyIntents().ListPendingDeliveryByDefinition(t.Context(), "def-001")
+	require.NoError(t, intentErr)
+	assert.Empty(t, intents, "no intent may be persisted without identity")
+}
+
+// AC-085-03: an identity whose kind/name/namespace disagrees with the
+// requested workload_ref is rejected (fail closed) — the request may not
+// execute against a workload the authoritative identity does not describe.
+func TestExecuteEmergencyChangeRejectsMismatchedWorkloadIdentity(t *testing.T) {
+	svc, st, dispatcher := emergencyTestService(t)
+	seedReplicasDefinition(t, st, replicasPromotionMapping(), false, 10)
+	require.NoError(t, st.Inventories().UpdateWorkloadIdentity(t.Context(), "cust-001", "cls-001", "default", "my-release", store.WorkloadIdentity{
+		Kind: workloadDeployment, Name: "other-workload", Namespace: "default", UID: "uid-other",
+	}))
+
+	_, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("mismatched-identity", 2))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Equal(t, "invalid_workload_ref", connectErrorReason(err))
+	assert.Empty(t, dispatcher.commands)
+}
+
+// AC-085-03: an unparseable identity (kind outside the emergency whitelist)
+// is rejected with invalid_workload_ref before dispatch.
+func TestExecuteEmergencyChangeRejectsUnparseableWorkloadIdentity(t *testing.T) {
+	svc, st, dispatcher := emergencyTestService(t)
+	seedReplicasDefinition(t, st, replicasPromotionMapping(), false, 10)
+	require.NoError(t, st.Inventories().UpdateWorkloadIdentity(t.Context(), "cust-001", "cls-001", "default", "my-release", store.WorkloadIdentity{
+		Kind: "JOB", Name: "my-release", Namespace: "default", UID: "uid-job",
+	}))
+
+	_, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyReplicasRequest("unparseable-identity", 2))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Equal(t, "invalid_workload_ref", connectErrorReason(err))
+	assert.Empty(t, dispatcher.commands)
+}
+
+// emergencyTestServiceWithoutIdentity mirrors emergencyTestService but skips
+// the inventory identity seed — for the fail-closed negative matrix.
+func emergencyTestServiceWithoutIdentity(t *testing.T) (*Service, store.Store, *recordingEmergencyDispatcher) {
+	t.Helper()
+	svc, st, _ := setupService(t)
+	seedDefinition(t, st)
+	return emergencyTestServiceFromExisting(t, svc, st)
 }
 
 // AC-081-03 (D4=A): set_replicas combined with container/artifact_ref is

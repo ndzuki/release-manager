@@ -134,6 +134,15 @@ func (s *Service) ExecuteEmergencyChange(
 		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, deriveRequestedEmergencyAction(msg), err, time.Since(started))
 		return nil, err
 	}
+	// REQ-085 D-110 ③: load and verify the authoritative workload identity
+	// BEFORE any intent is created — a missing/unparseable/mismatched
+	// identity fails closed with invalid_workload_ref and an empty
+	// WorkloadUID is never persisted or dispatched.
+	identity, err := s.resolveEmergencyWorkloadIdentity(ctx, definition, resolved.workload)
+	if err != nil {
+		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, resolved.action, err, time.Since(started))
+		return nil, err
+	}
 	if s.authorizer == nil {
 		err := emergencyError(connect.CodeUnavailable, "authorization_snapshot_stale", "authorization snapshot is unavailable")
 		s.emitEmergencyAttempt(&actor, msg.GetReleaseDefinitionId(), "", strategy, resolved.action, err, time.Since(started))
@@ -195,7 +204,7 @@ func (s *Service) ExecuteEmergencyChange(
 	intent := &store.EmergencyIntent{
 		ID: uuid.NewString(), ReleaseDefinitionID: definition.ID, OperationID: opID, CommandID: commandID,
 		Action: resolved.action, WorkloadKind: resolved.workload.Kind, WorkloadName: resolved.workload.Name,
-		WorkloadNamespace: resolved.workload.Namespace, WorkloadUID: "",
+		WorkloadNamespace: resolved.workload.Namespace, WorkloadUID: identity.UID,
 		Container: container, ArtifactID: artifactID, ImageReference: imageReference,
 		TargetReplicas: resolved.replicas,
 		Convergence:    convergence, PromotionPaths: promotionPaths,
@@ -517,6 +526,37 @@ func (s *Service) resolveExecuteEmergencyChange(
 		return resolveEmergencyReplicas(msg, definition, workload)
 	}
 	return s.resolveEmergencyImage(ctx, msg, definition, workload)
+}
+
+// resolveEmergencyWorkloadIdentity loads the authoritative workload identity
+// persisted on the definition's inventory row (REQ-085 D-110 ②③) and verifies
+// it against the parsed workload_ref. A missing, unparseable or mismatched
+// identity fails closed with the stable invalid_workload_ref reason code
+// before any intent or command exists — an empty WorkloadUID is never
+// persisted nor dispatched.
+func (s *Service) resolveEmergencyWorkloadIdentity(ctx context.Context, definition *store.ReleaseDefinition, workload parsedWorkloadRef) (store.WorkloadIdentity, error) {
+	inventory, err := s.store.Inventories().GetByDefinition(ctx, definition.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.WorkloadIdentity{}, emergencyError(connect.CodeInvalidArgument, "invalid_workload_ref", "workload identity is unavailable: no inventory snapshot for the release definition")
+	}
+	if err != nil {
+		return store.WorkloadIdentity{}, connect.NewError(connect.CodeInternal, fmt.Errorf("load workload identity: %w", err))
+	}
+	identity := store.WorkloadIdentity{
+		Kind:      inventory.WorkloadKind,
+		Name:      inventory.WorkloadName,
+		Namespace: inventory.WorkloadNamespace,
+		UID:       inventory.WorkloadUID,
+	}
+	switch {
+	case identity.Kind == "" || identity.Name == "" || identity.Namespace == "" || identity.UID == "":
+		return store.WorkloadIdentity{}, emergencyError(connect.CodeInvalidArgument, "invalid_workload_ref", "workload identity is unavailable: the operator has not reported it yet")
+	case identity.Kind != workloadDeployment && identity.Kind != workloadStatefulSet && identity.Kind != workloadDaemonSet:
+		return store.WorkloadIdentity{}, emergencyError(connect.CodeInvalidArgument, "invalid_workload_ref", "workload identity is unparseable: unsupported workload kind")
+	case identity.Kind != workload.Kind || identity.Name != workload.Name || identity.Namespace != workload.Namespace:
+		return store.WorkloadIdentity{}, emergencyError(connect.CodeInvalidArgument, "invalid_workload_ref", "workload identity does not match the requested workload_ref")
+	}
+	return identity, nil
 }
 
 // resolveEmergencyReplicas validates and resolves the SET_REPLICAS branch
