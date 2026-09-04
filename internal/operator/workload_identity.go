@@ -126,7 +126,11 @@ func (s *Service) applyWorkloadIdentityReport(ctx context.Context, report *opera
 			s.logger.Debug("ignoring workload identity for unknown release", "namespace_release", key)
 			continue
 		}
-		identity, ok := selectWorkloadIdentity(ctx, s.store, row, items)
+		identity, ok, err := selectWorkloadIdentity(ctx, s.store, row, items)
+		if err != nil {
+			s.logger.Warn("workload identity selection failed", "namespace_release", key, "error", err)
+			continue
+		}
 		if !ok {
 			s.logger.Debug("workload identity not selectable, keeping fail-closed empty identity", "namespace_release", key)
 			continue
@@ -141,8 +145,10 @@ func (s *Service) applyWorkloadIdentityReport(ctx context.Context, report *opera
 
 // selectWorkloadIdentity picks the authoritative identity item for one
 // inventory row (REQ-085 D-110 ②). Selection is fail closed: an ambiguous or
-// unmapped report never overwrites an existing identity.
-func selectWorkloadIdentity(ctx context.Context, st store.Store, row *store.ReleaseInventory, items []*operatorv1.WorkloadIdentityItem) (store.WorkloadIdentity, bool) {
+// unmapped report never overwrites an existing identity; a definition lookup
+// failure surfaces as an error so the caller logs it instead of silently
+// falling back to the weaker selection rule.
+func selectWorkloadIdentity(ctx context.Context, st store.Store, row *store.ReleaseInventory, items []*operatorv1.WorkloadIdentityItem) (store.WorkloadIdentity, bool, error) {
 	complete := make([]*operatorv1.WorkloadIdentityItem, 0, len(items))
 	for _, item := range items {
 		if item.GetKind() == "" || item.GetName() == "" || item.GetUid() == "" || item.GetNamespace() == "" {
@@ -151,30 +157,33 @@ func selectWorkloadIdentity(ctx context.Context, st store.Store, row *store.Rele
 		complete = append(complete, item)
 	}
 	if len(complete) == 0 {
-		return store.WorkloadIdentity{}, false
+		return store.WorkloadIdentity{}, false, nil
 	}
 	identityOf := func(item *operatorv1.WorkloadIdentityItem) store.WorkloadIdentity {
 		return store.WorkloadIdentity{Kind: item.GetKind(), Name: item.GetName(), Namespace: item.GetNamespace(), UID: item.GetUid()}
 	}
 	if row.ReleaseDefinitionID != "" {
 		definition, err := st.Definitions().Get(ctx, row.ReleaseDefinitionID)
-		if err == nil && len(definition.PromotionMappings) > 0 {
+		if err != nil {
+			return store.WorkloadIdentity{}, false, fmt.Errorf("load definition for identity selection: %w", err)
+		}
+		if len(definition.PromotionMappings) > 0 {
 			// Promotion mappings carry the only kind source for the
 			// definition (D1=B): the mapped workload is the emergency target.
 			for _, item := range complete {
 				for _, mapping := range definition.PromotionMappings {
 					if item.GetKind() == mapping.WorkloadKind && item.GetName() == mapping.WorkloadName {
-						return identityOf(item), true
+						return identityOf(item), true, nil
 					}
 				}
 			}
-			return store.WorkloadIdentity{}, false
+			return store.WorkloadIdentity{}, false, nil
 		}
 	}
 	if len(complete) != 1 {
-		return store.WorkloadIdentity{}, false // ambiguous without mappings
+		return store.WorkloadIdentity{}, false, nil // ambiguous without mappings
 	}
-	return identityOf(complete[0]), true
+	return identityOf(complete[0]), true, nil
 }
 
 // reportReleaseKey formats the stable release key used by both sides of the

@@ -1254,6 +1254,11 @@ func openIdentityStream(ctx context.Context, t *testing.T, st store.Store) *conn
 func TestCommandStreamWorkloadIdentityReportPersistsIdentity(t *testing.T) {
 	st := newTestSvc(t)
 	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-identity", Name: "definition-identity",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "example",
+		Status: store.DefStatusActive,
+	}, nil))
 	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
 		ReleaseDefinitionID: "definition-identity", CustomerID: "cust-1", ClusterID: "clus-1",
 		Namespace: "apps", ReleaseName: "example", Status: "deployed", InventoryStatus: store.InventoryActive,
@@ -1331,14 +1336,25 @@ func TestCommandStreamWorkloadIdentityReportSelectsMappedWorkload(t *testing.T) 
 }
 
 // REQ-085 D-110 ②/③ (negative matrix): unknown releases, ambiguous
-// multi-workload reports without mappings, and items with an empty uid are
-// all dropped — the inventory identity stays empty (fail closed).
+// multi-workload reports without mappings, items with an empty uid, and an
+// inventory row whose definition lookup fails are all dropped — the
+// inventory identity stays empty (fail closed).
 func TestCommandStreamWorkloadIdentityReportFailClosedMatrix(t *testing.T) {
 	st := newTestSvc(t)
 	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-matrix", Name: "definition-matrix",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "example",
+		Status: store.DefStatusActive,
+	}, nil))
 	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
 		ReleaseDefinitionID: "definition-matrix", CustomerID: "cust-1", ClusterID: "clus-1",
 		Namespace: "apps", ReleaseName: "example", Status: "deployed", InventoryStatus: store.InventoryActive,
+	}))
+	// A row whose definition no longer exists must fail closed on selection.
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: "definition-orphan", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "orphan", Status: "deployed", InventoryStatus: store.InventoryActive,
 	}))
 
 	stream := openIdentityStream(ctx, t, st)
@@ -1352,6 +1368,8 @@ func TestCommandStreamWorkloadIdentityReportFailClosedMatrix(t *testing.T) {
 				{ReleaseNamespace: "apps", ReleaseName: "example", Kind: "DEPLOYMENT", Name: "b", Namespace: "apps", Uid: "uid-b"},
 				// Empty uid → never selectable.
 				{ReleaseNamespace: "apps", ReleaseName: "example", Kind: "DEPLOYMENT", Name: "c", Namespace: "apps", Uid: ""},
+				// Orphaned definition row → selection fails closed.
+				{ReleaseNamespace: "apps", ReleaseName: "orphan", Kind: "DEPLOYMENT", Name: "orphan", Namespace: "apps", Uid: "uid-orphan"},
 			}},
 		},
 	}))
@@ -1364,7 +1382,9 @@ func TestCommandStreamWorkloadIdentityReportFailClosedMatrix(t *testing.T) {
 
 	items, err := st.Inventories().ListByCluster(ctx, "cust-1", "clus-1")
 	require.NoError(t, err)
-	require.Len(t, items, 1)
-	assert.Empty(t, items[0].WorkloadKind)
-	assert.Empty(t, items[0].WorkloadUID)
+	require.Len(t, items, 2)
+	for _, item := range items {
+		assert.Empty(t, item.WorkloadKind, "no identity may be persisted for %s", item.ReleaseName)
+		assert.Empty(t, item.WorkloadUID)
+	}
 }

@@ -74,13 +74,15 @@ func (s *Service) ListEmergencyTargets(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("load emergency inventory: %w", err))
 	}
 
-	// REQ-085: the authoritative identity wins when present; otherwise fall
-	// back to D1=B (name/namespace from the inventory row, kind/uid empty).
+	// REQ-085: the authoritative identity wins when complete (all four
+	// fields — same completeness gate as resolveEmergencyWorkloadIdentity);
+	// otherwise fall back to D1=B (name/namespace from the inventory row,
+	// kind/uid empty, downstream fail-closed).
 	workloadRef := &orchestratorv1.WorkloadRef{
 		Name:      inventory.ReleaseName,
 		Namespace: inventory.Namespace,
 	}
-	if inventory.WorkloadKind != "" && inventory.WorkloadUID != "" {
+	if inventory.WorkloadKind != "" && inventory.WorkloadName != "" && inventory.WorkloadNamespace != "" && inventory.WorkloadUID != "" {
 		workloadRef = &orchestratorv1.WorkloadRef{
 			Kind:      inventory.WorkloadKind,
 			Name:      inventory.WorkloadName,

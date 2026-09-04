@@ -173,7 +173,7 @@ func (e *EmergencyCommandExecutor) Execute(ctx context.Context, command *operato
 func (e *EmergencyCommandExecutor) loadWorkload(ctx context.Context, command *operatorv1.EmergencyCommand) (*emergencyWorkload, error) {
 	object, err := readWorkloadObject(ctx, e.client, command.GetWorkloadKind(), command.GetWorkloadNamespace(), command.GetWorkloadName())
 	if err != nil {
-		var coded interface{ ErrorCode() string }
+		var coded *EmergencyExecutionError
 		if errors.As(err, &coded) {
 			return nil, err // already classified (unsupported kind)
 		}
@@ -184,8 +184,13 @@ func (e *EmergencyCommandExecutor) loadWorkload(ctx context.Context, command *op
 		return deploymentWorkload(e.client, object.deployment), nil
 	case object.statefulSet != nil:
 		return statefulSetWorkload(e.client, object.statefulSet), nil
-	default:
+	case object.daemonSet != nil:
 		return daemonSetWorkload(e.client, object.daemonSet), nil
+	default:
+		// Unreachable while readWorkloadObject fills exactly one branch;
+		// kept explicit so a dispatch regression fails loudly instead of
+		// wrapping a nil workload.
+		return nil, emergencyExecutionError("workload_kind_not_supported", errors.New("workload kind is unsupported"))
 	}
 }
 
