@@ -210,9 +210,13 @@ func TestExecuteEmergencyChangePersistsAndDispatches(t *testing.T) {
 	assert.NotEmpty(t, resp.Msg.GetOperationVersion())
 	assert.Len(t, dispatcher.commands, 1)
 	assert.Equal(t, "api", dispatcher.commands[0].GetSetContainerImage().GetContainer())
+	// REQ-085: the image branch carries the same authoritative identity
+	// (both change branches share the resolve-then-fill path).
+	assert.Equal(t, "uid-image-0001", dispatcher.commands[0].GetWorkloadUid())
 	intent, err := st.EmergencyIntents().GetByOperationID(t.Context(), resp.Msg.GetOperationId())
 	require.NoError(t, err)
 	assert.Equal(t, "queued", intent.DeliveryStatus)
+	assert.Equal(t, "uid-image-0001", intent.WorkloadUID)
 	operation, err := st.Operations().Get(t.Context(), resp.Msg.GetOperationId())
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusQueued, operation.Status)
