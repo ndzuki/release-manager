@@ -4,7 +4,9 @@ package postgres_test
 
 import (
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -94,4 +96,115 @@ func TestInventoryUpsertPreservesWorkloadIdentity(t *testing.T) {
 	assert.Equal(t, "STATEFUL_SET", items[0].WorkloadKind)
 	assert.Equal(t, "example-sts", items[0].WorkloadName)
 	assert.Equal(t, "uid-sts", items[0].WorkloadUID)
+}
+
+// ── REQ-088 (TASK-088): pending workload identity buffer ──
+
+// seedPendingCustomerClusterPg creates the customer/cluster FK targets that
+// pending_workload_identity references (ON DELETE CASCADE).
+func seedPendingCustomerClusterPg(t *testing.T, st interface {
+	Customers() store.CustomerStore
+	Clusters() store.ClusterStore
+}, customerID, clusterID string) {
+	t.Helper()
+	ctx := t.Context()
+	require.NoError(t, st.Customers().Create(ctx, &store.Customer{
+		ID: customerID, Name: "pending-test-customer", Slug: "pending-" + uuid.NewString()[:8],
+		Status: store.CustomerActive, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}))
+	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{
+		ID: clusterID, Name: "pending-test-cluster", CustomerID: customerID,
+		Status: store.ClusterActive, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}))
+}
+
+func pendingIdentityPg(customerID, clusterID, namespace, releaseName, uid string, createdAt time.Time) *store.PendingWorkloadIdentity {
+	return &store.PendingWorkloadIdentity{
+		ID: "pending-" + uuid.NewString(), CustomerID: customerID, ClusterID: clusterID,
+		Namespace: namespace, ReleaseName: releaseName,
+		WorkloadKind: "DEPLOYMENT", WorkloadName: "example", WorkloadNamespace: "apps", WorkloadUID: uid,
+		CreatedAt: createdAt,
+	}
+}
+
+// AC-088-05/08 (postgres seam, migration 000025): Upsert persists the
+// buffered report and is idempotent by the release key — a second upsert
+// replaces the four-tuple without duplicating rows.
+func TestPendingWorkloadIdentityUpsertIdempotentByReleaseKey(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	const customerID, clusterID = "customer-pending", "cluster-pending"
+	seedPendingCustomerClusterPg(t, st, customerID, clusterID)
+
+	first := pendingIdentityPg(customerID, clusterID, "apps", "example", "uid-0001", time.Now().UTC())
+	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, first))
+
+	second := pendingIdentityPg(customerID, clusterID, "apps", "example", "uid-0002", time.Now().UTC().Add(-time.Minute))
+	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, second))
+
+	got, err := st.PendingWorkloadIdentities().GetByReleaseKey(ctx, customerID, clusterID, "apps", "example")
+	require.NoError(t, err)
+	assert.Equal(t, "uid-0002", got.WorkloadUID, "same release key must replace the buffered four-tuple")
+	// created_at is refreshed to the re-report arrival time (TTL restart).
+	assert.WithinDuration(t, time.Now(), got.CreatedAt, time.Minute, "conflict refresh must restart the TTL from now")
+
+	rows, err := st.PendingWorkloadIdentities().ListByCluster(ctx, customerID, clusterID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "same-key upserts must not duplicate rows")
+}
+
+// AC-088-03 (postgres seam): a missing release key returns ErrNotFound and
+// delete is idempotent.
+func TestPendingWorkloadIdentityGetAndDeleteByReleaseKey(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	const customerID, clusterID = "customer-pending-del", "cluster-pending-del"
+	seedPendingCustomerClusterPg(t, st, customerID, clusterID)
+
+	_, err := st.PendingWorkloadIdentities().GetByReleaseKey(ctx, customerID, clusterID, "apps", "missing")
+	require.ErrorIs(t, err, store.ErrNotFound)
+
+	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, pendingIdentityPg(customerID, clusterID, "apps", "example", "uid-0001", time.Now().UTC())))
+	require.NoError(t, st.PendingWorkloadIdentities().DeleteByReleaseKey(ctx, customerID, clusterID, "apps", "example"))
+	_, err = st.PendingWorkloadIdentities().GetByReleaseKey(ctx, customerID, clusterID, "apps", "example")
+	require.ErrorIs(t, err, store.ErrNotFound)
+
+	require.NoError(t, st.PendingWorkloadIdentities().DeleteByReleaseKey(ctx, customerID, clusterID, "apps", "example"))
+}
+
+// AC-088-06 (postgres seam, D3=A): PurgeExpired removes only rows whose
+// created_at precedes the cutoff.
+func TestPendingWorkloadIdentityPurgeExpired(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	const customerID, clusterID = "customer-pending-purge", "cluster-pending-purge"
+	seedPendingCustomerClusterPg(t, st, customerID, clusterID)
+
+	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, pendingIdentityPg(customerID, clusterID, "apps", "fresh", "uid-fresh", time.Now().UTC())))
+	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, pendingIdentityPg(customerID, clusterID, "apps", "stale", "uid-stale", time.Now().UTC().Add(-30*time.Minute))))
+
+	purged, err := st.PendingWorkloadIdentities().PurgeExpired(ctx, time.Now().UTC().Add(-10*time.Minute))
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), purged)
+
+	_, err = st.PendingWorkloadIdentities().GetByReleaseKey(ctx, customerID, clusterID, "apps", "stale")
+	require.ErrorIs(t, err, store.ErrNotFound)
+	_, err = st.PendingWorkloadIdentities().GetByReleaseKey(ctx, customerID, clusterID, "apps", "fresh")
+	require.NoError(t, err)
+}
+
+// AC-088-01 (inventory seam): GetByReleaseKey resolves the row by the exact
+// inventory unique key (the replay precondition).
+func TestInventoryGetByReleaseKey(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	seedInventoryRow(t, st, "customer-1", "cluster-1", "apps", "example")
+
+	got, err := st.Inventories().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Equal(t, "example", got.ReleaseName)
+	assert.Equal(t, "definition-1", got.ReleaseDefinitionID)
+
+	_, err = st.Inventories().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "missing")
+	require.ErrorIs(t, err, store.ErrNotFound)
 }

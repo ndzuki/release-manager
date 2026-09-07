@@ -114,60 +114,61 @@ type timelineStore struct{ gorm *DB }
 
 // Store implements store.Store backed by PostgreSQL.
 type Store struct {
-	sqlDB             *sql.DB
-	db                *DB
-	gormDB            *gorm.DB
-	management        *operatorManagementStore
-	ops               *operationStore
-	operationEvents   *operationEventStore
-	timeline          *timelineStore
-	defs              *definitionStore
-	vals              *valuesStore
-	valuesApproval    *valuesApprovalStore
-	valuesLifecycle   *valuesLifecycleStore
-	prepareSessions   *prepareSessionStore
-	customers         *customerStore
-	clusters          *clusterStore
-	tokens            *enrollmentTokenStore
-	operators         *operatorStore
-	sessions          *sessionStore
-	outbox            *outboxStore
-	users             *userStore
-	authSess          *authSessionStore
-	orgs              *organizationStore
-	orgMembers        *organizationMemberStore
-	bindings          *bindingStore
-	audit             *auditEventStore
-	notif             *notificationStore
-	auditExports      *auditExportStore
-	bundles           *bundleStore
-	verifs            *verificationStore
-	routes            *clusterRouteStore
-	invs              *inventoryStore
-	syncRequests      *inventorySyncRequestStore
-	trustRoots        *trustRootStore
-	scanResults       *scanResultStore
-	vulnExceptions    *vulnerabilityExceptionStore
-	custEvents        *customerEventStore
-	customerCreates   *customerBindingCreateStore
-	defEvents         *definitionEventStore
-	preflight         *preflightStore
-	candidateArts     *candidateArtifactStore
-	artifactEvents    *artifactEventStore
-	validationOutbox  *validationOutboxStore
-	bundleSubmissions *bundleSubmissionStore
-	eventSubmissions  *artifactEventSubmissionStore
-	preflightCycles   *preflightLifecycleStore
-	executionResults  *executionResultReader
-	rollouts          *rolloutTrackingReader
-	emergencyIntents  *emergencyIntentStore
-	convergenceTasks  *convergenceTaskStore
-	emergencyConfig   *emergencyConfigStore
-	authorization     *authorizationStore
-	idempotency       *idempotencyStore
+	sqlDB              *sql.DB
+	db                 *DB
+	gormDB             *gorm.DB
+	management         *operatorManagementStore
+	ops                *operationStore
+	operationEvents    *operationEventStore
+	timeline           *timelineStore
+	defs               *definitionStore
+	vals               *valuesStore
+	valuesApproval     *valuesApprovalStore
+	valuesLifecycle    *valuesLifecycleStore
+	prepareSessions    *prepareSessionStore
+	customers          *customerStore
+	clusters           *clusterStore
+	tokens             *enrollmentTokenStore
+	operators          *operatorStore
+	sessions           *sessionStore
+	outbox             *outboxStore
+	users              *userStore
+	authSess           *authSessionStore
+	orgs               *organizationStore
+	orgMembers         *organizationMemberStore
+	bindings           *bindingStore
+	audit              *auditEventStore
+	notif              *notificationStore
+	auditExports       *auditExportStore
+	bundles            *bundleStore
+	verifs             *verificationStore
+	routes             *clusterRouteStore
+	invs               *inventoryStore
+	syncRequests       *inventorySyncRequestStore
+	trustRoots         *trustRootStore
+	scanResults        *scanResultStore
+	vulnExceptions     *vulnerabilityExceptionStore
+	custEvents         *customerEventStore
+	customerCreates    *customerBindingCreateStore
+	defEvents          *definitionEventStore
+	preflight          *preflightStore
+	candidateArts      *candidateArtifactStore
+	artifactEvents     *artifactEventStore
+	validationOutbox   *validationOutboxStore
+	bundleSubmissions  *bundleSubmissionStore
+	eventSubmissions   *artifactEventSubmissionStore
+	preflightCycles    *preflightLifecycleStore
+	executionResults   *executionResultReader
+	rollouts           *rolloutTrackingReader
+	emergencyIntents   *emergencyIntentStore
+	convergenceTasks   *convergenceTaskStore
+	emergencyConfig    *emergencyConfigStore
+	authorization      *authorizationStore
+	idempotency        *idempotencyStore
 	cleanupIdempotency *cleanupIdempotencyStore
-	closeOnce         sync.Once
-	closeErr          error
+	pendingWorkload    *pendingWorkloadIdentityStore
+	closeOnce          sync.Once
+	closeErr           error
 }
 
 // New constructs a Store over the supplied shared database/sql pool and GORM wrapper.
@@ -248,6 +249,7 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s.authorization = &authorizationStore{gorm: s.db}
 	s.idempotency = &idempotencyStore{db: s.db}
 	s.cleanupIdempotency = &cleanupIdempotencyStore{db: s.db}
+	s.pendingWorkload = &pendingWorkloadIdentityStore{gorm: s.db}
 	return s, nil
 }
 
@@ -279,7 +281,8 @@ var (
 	_ store.EmergencyIntentStore         = (*emergencyIntentStore)(nil)
 	_ store.TimelineStore                = (*timelineStore)(nil)
 	_ store.ConvergenceTaskStore         = (*convergenceTaskStore)(nil)
-	_ store.CleanupIdempotencyStore     = (*cleanupIdempotencyStore)(nil)
+	_ store.CleanupIdempotencyStore      = (*cleanupIdempotencyStore)(nil)
+	_ store.PendingWorkloadIdentityStore = (*pendingWorkloadIdentityStore)(nil)
 )
 
 func (s *Store) Operations() store.OperationStore           { return s.ops }
@@ -344,6 +347,11 @@ func (s *Store) EmergencyConfig() store.EmergencyConfigStore        { return s.e
 // Authorization returns the durable authorization state module.
 func (s *Store) Authorization() store.AuthorizationStore { return s.authorization }
 
+// PendingWorkloadIdentities returns the REQ-088 identity buffer store.
+func (s *Store) PendingWorkloadIdentities() store.PendingWorkloadIdentityStore {
+	return s.pendingWorkload
+}
+
 func (s *Store) Close() error {
 	if s == nil || s.sqlDB == nil {
 		return nil
@@ -362,8 +370,8 @@ func (s *Store) OperatorManagement() store.OperatorManagementStore { return s.ma
 func (s *Store) OperatorLifecycle() store.OperatorLifecycleStore {
 	return &operatorLifecycleStore{gorm: s.db}
 }
-func (s *Store) SQLDB() *sql.DB                                    { return s.sqlDB }
-func (s *Store) GORM() *gorm.DB                                    { return s.gormDB }
+func (s *Store) SQLDB() *sql.DB { return s.sqlDB }
+func (s *Store) GORM() *gorm.DB { return s.gormDB }
 
 // IsUniqueConstraint reports PostgreSQL unique/exclusion violations.
 func isUniqueConstraint(err error) bool {

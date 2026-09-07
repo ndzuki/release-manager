@@ -1582,6 +1582,53 @@ type WorkloadIdentity struct {
 	UID       string
 }
 
+// PendingWorkloadIdentity buffers an authoritative identity report whose
+// release_inventory row does not exist yet (REQ-088, D2=A). The unique key
+// (customer_id, cluster_id, namespace, release_name) matches the inventory
+// unique key (REQ-017); the row is deleted once the identity is bound to the
+// inventory row, and created_at starts the TTL after which an orphan (a
+// release that never materializes) is purged (D3=A).
+type PendingWorkloadIdentity struct {
+	ID                string
+	CustomerID        string
+	ClusterID         string
+	Namespace         string
+	ReleaseName       string
+	WorkloadKind      string
+	WorkloadName      string
+	WorkloadNamespace string
+	WorkloadUID       string
+	CreatedAt         time.Time
+}
+
+// PendingWorkloadIdentityStore defines the persistence contract for the
+// orchestrator-side identity buffer (REQ-088 D2/D3/D6).
+type PendingWorkloadIdentityStore interface {
+	// Upsert persists one buffered identity for a release key, replacing any
+	// earlier pending row for the same key and refreshing created_at (the TTL
+	// start). Idempotent by the unique key (D6=A).
+	Upsert(ctx context.Context, pending *PendingWorkloadIdentity) error
+
+	// GetByReleaseKey returns the pending row for one inventory unique key,
+	// or store.ErrNotFound when none is buffered.
+	GetByReleaseKey(ctx context.Context, customerID, clusterID, namespace, releaseName string) (*PendingWorkloadIdentity, error)
+
+	// ListByCluster returns every pending row for one cluster.
+	ListByCluster(ctx context.Context, customerID, clusterID string) ([]*PendingWorkloadIdentity, error)
+
+	// ListAll returns every pending row across all clusters (periodic sweep
+	// enumeration).
+	ListAll(ctx context.Context) ([]*PendingWorkloadIdentity, error)
+
+	// DeleteByReleaseKey removes the buffered row for one release key. Deleting
+	// a missing row is a no-op.
+	DeleteByReleaseKey(ctx context.Context, customerID, clusterID, namespace, releaseName string) error
+
+	// PurgeExpired removes pending rows whose created_at precedes cutoff
+	// (TTL orphans) and returns the number purged.
+	PurgeExpired(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
 // ReleaseInventory represents a cached release snapshot in the orchestrator's observation store.
 // Unique key: (customer_id, cluster_id, namespace, release_name).
 type ReleaseInventory struct {
@@ -2185,6 +2232,10 @@ type InventoryStore interface {
 	ListByCluster(ctx context.Context, customerID, clusterID string) ([]*ReleaseInventory, error)
 	// GetByDefinition returns the cached release snapshot for one release definition.
 	GetByDefinition(ctx context.Context, definitionID string) (*ReleaseInventory, error)
+	// GetByReleaseKey returns the cached release snapshot located by the
+	// inventory unique key (customer_id, cluster_id, namespace, release_name).
+	// Returns store.ErrNotFound when no such inventory row exists.
+	GetByReleaseKey(ctx context.Context, customerID, clusterID, namespace, releaseName string) (*ReleaseInventory, error)
 
 	// UpdateWorkloadIdentity overwrites the authoritative workload identity
 	// columns on the row located by (customer_id, cluster_id, namespace,
@@ -2427,6 +2478,7 @@ type Store interface {
 	ConvergenceTasks() ConvergenceTaskStore
 	EmergencyConfig() EmergencyConfigStore
 	Authorization() AuthorizationStore
+	PendingWorkloadIdentities() PendingWorkloadIdentityStore
 	Close() error
 }
 
