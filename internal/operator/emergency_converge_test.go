@@ -61,11 +61,13 @@ func seedQueuedEmergency(t *testing.T, st store.Store, definitionID string) (*st
 	return queued, created.Intent
 }
 
-func emergencyResultMsg(intent *store.EmergencyIntent, status string) *operatorv1.CommandStreamRequest {
-	payload, _ := json.Marshal(map[string]any{
+func emergencyResultMsg(t *testing.T, intent *store.EmergencyIntent, status string) *operatorv1.CommandStreamRequest {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
 		"before": map[string]any{"replicas": 1},
 		"after":  map[string]any{"replicas": 3},
 	})
+	require.NoError(t, err)
 	return &operatorv1.CommandStreamRequest{
 		Payload: &operatorv1.CommandStreamRequest_EmergencyResult{
 			EmergencyResult: &operatorv1.EmergencyResult{
@@ -80,7 +82,7 @@ func emergencyResultMsg(intent *store.EmergencyIntent, status string) *operatorv
 
 // emergencyCommandStream opens a Hello stream against the real HTTP/2 gateway
 // and returns the client stream.
-func emergencyCommandStream(t *testing.T, st store.Store, svc *operator.Service) *connect.BidiStreamForClient[operatorv1.CommandStreamRequest, operatorv1.CommandStreamResponse] {
+func emergencyCommandStream(t *testing.T, svc *operator.Service) *connect.BidiStreamForClient[operatorv1.CommandStreamRequest, operatorv1.CommandStreamResponse] {
 	t.Helper()
 	client := commandStreamPair(t, svc)
 	stream := client.CommandStream(t.Context())
@@ -107,8 +109,8 @@ func TestEmergencyResultConvergesWhenRunningMigrationLagged(t *testing.T) {
 
 	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
 	require.NoError(t, err)
-	stream := emergencyCommandStream(t, st, svc)
-	require.NoError(t, stream.Send(emergencyResultMsg(intent, "succeeded")))
+	stream := emergencyCommandStream(t, svc)
+	require.NoError(t, stream.Send(emergencyResultMsg(t, intent, "succeeded")))
 	require.NoError(t, stream.CloseRequest())
 	for {
 		if _, err := stream.Receive(); err != nil {
@@ -164,8 +166,8 @@ func TestEmergencyResultConvergesFromRunning(t *testing.T) {
 
 	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
 	require.NoError(t, err)
-	stream := emergencyCommandStream(t, st, svc)
-	require.NoError(t, stream.Send(emergencyResultMsg(intent, "failed")))
+	stream := emergencyCommandStream(t, svc)
+	require.NoError(t, stream.Send(emergencyResultMsg(t, intent, "failed")))
 	require.NoError(t, stream.CloseRequest())
 	for {
 		if _, err := stream.Receive(); err != nil {
@@ -194,8 +196,8 @@ func TestEmergencyResultResolvesLateUnknownEffect(t *testing.T) {
 
 	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
 	require.NoError(t, err)
-	stream := emergencyCommandStream(t, st, svc)
-	require.NoError(t, stream.Send(emergencyResultMsg(intent, "succeeded")))
+	stream := emergencyCommandStream(t, svc)
+	require.NoError(t, stream.Send(emergencyResultMsg(t, intent, "succeeded")))
 	require.NoError(t, stream.CloseRequest())
 	for {
 		if _, err := stream.Receive(); err != nil {
@@ -233,10 +235,10 @@ func TestEmergencyResultReplayIsNoop(t *testing.T) {
 
 	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
 	require.NoError(t, err)
-	stream := emergencyCommandStream(t, st, svc)
+	stream := emergencyCommandStream(t, svc)
 	// First result converges; second identical result is a replay.
-	require.NoError(t, stream.Send(emergencyResultMsg(intent, "succeeded")))
-	require.NoError(t, stream.Send(emergencyResultMsg(intent, "succeeded")))
+	require.NoError(t, stream.Send(emergencyResultMsg(t, intent, "succeeded")))
+	require.NoError(t, stream.Send(emergencyResultMsg(t, intent, "succeeded")))
 	require.NoError(t, stream.CloseRequest())
 	for {
 		if _, err := stream.Receive(); err != nil {

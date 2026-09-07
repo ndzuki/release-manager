@@ -20,6 +20,8 @@ import (
 // advance+terminal sequence runs inside a single CAS transaction so a result
 // that beats the queued→running migration never produces an illegal
 // queued→succeeded/failed row or timeline entry (ADR-009 / REQ-032 §475-487).
+//
+//nolint:gocyclo // ConvergeEmergencyResult mirrors the full EMERGENCY state-machine/lock-release decision matrix (hop advance, terminal resolution, safety guards); branching is inherent.
 func (s *emergencyIntentStore) ConvergeEmergencyResult(ctx context.Context, command store.EmergencyConvergeCommand) (*store.EmergencyConvergeResult, error) {
 	if command.OperationID == "" || command.IntentID == "" {
 		return nil, fmt.Errorf("converge emergency result: operation_id and intent_id are required")
@@ -142,6 +144,8 @@ func nextEmergencyHop(status store.OperationStatus) store.OperationStatus {
 // terminal_at only on the terminal hop), writes the state-change event and
 // timeline entry, and — on the terminal hop — writes the intent effect +
 // snapshots (and an ERROR timeline entry for failed results with a reason).
+//
+//nolint:gocyclo // emergencyHopTx mirrors the full EMERGENCY state-machine/lock-release decision matrix (hop advance, terminal resolution, safety guards); branching is inherent.
 func emergencyHopTx(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -304,12 +308,6 @@ func (s *emergencyIntentStore) GetByID(ctx context.Context, id string) (*store.E
 	return scanEmergencyIntent(s.db.QueryRowContext(ctx, emergencyIntentSelect+` WHERE emergency_intents.id = ?`, id))
 }
 
-// stuckRow pairs one stuck intent id with its operation terminal time.
-type stuckRow struct {
-	intentID   string
-	terminalAt time.Time
-}
-
 // ListStuckLocks derives stuck locks for the optional definition/customer
 // scope (REQ-087 D4/D5, AC-087-07): a stuck lock is a terminal EMERGENCY
 // intent whose effect is still UNKNOWN, was not explicitly released, and has
@@ -335,6 +333,7 @@ func (s *emergencyIntentStore) ListStuckLocks(ctx context.Context, filter store.
 		args = append(args, filter.DefinitionID)
 	}
 	if len(filter.CustomerIDs) > 0 {
+		//nolint:gosec // only generated placeholders are concatenated; customer IDs remain bound parameters
 		query += ` AND ei.release_definition_id IN (
 			SELECT id FROM release_definitions WHERE customer_id IN (` + placeholders(len(filter.CustomerIDs)) + `)
 		)`
@@ -348,39 +347,39 @@ func (s *emergencyIntentStore) ListStuckLocks(ctx context.Context, filter store.
 	if err != nil {
 		return nil, fmt.Errorf("list stuck emergency locks: %w", err)
 	}
-	var pairs []stuckRow
+	defer rows.Close()
+	type pair struct {
+		id string
+		at time.Time
+	}
+	pairs := make([]pair, 0)
 	for rows.Next() {
 		var id string
 		var terminalAt string
 		if err := rows.Scan(&id, &terminalAt); err != nil {
-			rows.Close()
 			return nil, fmt.Errorf("scan stuck emergency lock: %w", err)
 		}
 		parsed, err := time.Parse(time.RFC3339, terminalAt)
 		if err != nil {
-			rows.Close()
 			return nil, fmt.Errorf("parse stuck emergency terminal_at: %w", err)
 		}
-		pairs = append(pairs, stuckRow{intentID: id, terminalAt: parsed})
+		pairs = append(pairs, pair{id: id, at: parsed})
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
 		return nil, fmt.Errorf("iterate stuck emergency locks: %w", err)
 	}
-	rows.Close()
-
 	locks := make([]*store.StuckLock, 0, len(pairs))
-	for _, pair := range pairs {
-		intent, err := s.GetByID(ctx, pair.intentID)
+	for _, p := range pairs {
+		intent, err := s.GetByID(ctx, p.id)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				continue // deleted concurrently
 			}
-			return nil, fmt.Errorf("load stuck emergency lock %s: %w", pair.intentID, err)
+			return nil, fmt.Errorf("load stuck emergency lock %s: %w", p.id, err)
 		}
 		locks = append(locks, &store.StuckLock{
 			Intent:          intent,
-			TerminalAt:      pair.terminalAt,
+			TerminalAt:      p.at,
 			LockPathSummary: emergencyLockPathSummary(intent),
 		})
 	}
@@ -395,6 +394,8 @@ func (s *emergencyIntentStore) ListStuckLocks(ctx context.Context, filter store.
 // resolution: state_version+1 + EMERGENCY_EFFECT_RESOLVED) and releases;
 // AUDITED_OVERRIDE only stamps lock_released_at and keeps the effect UNKNOWN
 // so a late result can still resolve it (REQ-032 AC-032-31).
+//
+//nolint:gocyclo // ReleaseLock mirrors the full EMERGENCY state-machine/lock-release decision matrix (hop advance, terminal resolution, safety guards); branching is inherent.
 func (s *emergencyIntentStore) ReleaseLock(ctx context.Context, command store.ReleaseLockCommand) (*store.ReleaseLockResult, error) {
 	if command.IntentID == "" || command.Mode == "" || strings.TrimSpace(command.Reason) == "" {
 		return nil, fmt.Errorf("release emergency lock: intent_id, mode and reason are required")

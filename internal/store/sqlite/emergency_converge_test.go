@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -32,21 +33,6 @@ func convergeCmd(t *testing.T, result *store.OperationCreationResult, terminal s
 		AfterSnapshot:        after,
 		RequestID:            result.Intent.CommandID,
 	}
-}
-
-// timelineKinds lists the STATE_TRANSITION kinds recorded for an operation in
-// chronological order.
-func timelineKinds(t *testing.T, st *Store, operationID string) []string {
-	t.Helper()
-	entries, err := st.Timeline().List(context.Background(), operationID, 0, 1<<30)
-	require.NoError(t, err)
-	kinds := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.Kind == string(store.TimelineEntryStateTransition) {
-			kinds = append(kinds, string(entry.Data))
-		}
-	}
-	return kinds
 }
 
 // TestConvergeEmergencyResult_ResultBeatsRunningTransition (REQ-087 AC-087-01,
@@ -84,23 +70,24 @@ func TestConvergeEmergencyResult_ResultBeatsRunningTransition(t *testing.T) {
 	sawRunning := false
 	sawSucceeded := false
 	for _, entry := range entries {
-		if entry.Kind == string(store.TimelineEntryStateTransition) {
-			var data store.StateTransitionTimelineData
-			require.NoError(t, json.Unmarshal(entry.Data, &data))
-			if data.FromState == "queued" && data.ToState == "running" {
-				sawRunning = true
-			}
-			if data.FromState == "running" && data.ToState == "succeeded" {
-				sawSucceeded = true
-			}
-			// The D1 race must never write a queued→terminal migration.
-			if data.FromState == "queued" {
-				assert.False(t, store.OperationStatus(data.ToState).IsTerminal(),
-					"illegal queued→%s terminal hop must never be recorded", data.ToState)
-			}
-			assert.True(t, store.OperationStatus(data.FromState).CanTransitionTo(store.OperationStatus(data.ToState)),
-				"illegal transition %s→%s", data.FromState, data.ToState)
+		if entry.Kind != string(store.TimelineEntryStateTransition) {
+			continue
 		}
+		var data store.StateTransitionTimelineData
+		require.NoError(t, json.Unmarshal(entry.Data, &data))
+		if data.FromState == "queued" && data.ToState == "running" {
+			sawRunning = true
+		}
+		if data.FromState == "running" && data.ToState == "succeeded" {
+			sawSucceeded = true
+		}
+		// The D1 race must never write a queued→terminal migration.
+		if data.FromState == "queued" {
+			assert.False(t, store.OperationStatus(data.ToState).IsTerminal(),
+				"illegal queued→%s terminal hop must never be recorded", data.ToState)
+		}
+		assert.True(t, store.OperationStatus(data.FromState).CanTransitionTo(store.OperationStatus(data.ToState)),
+			"illegal transition %s→%s", data.FromState, data.ToState)
 	}
 	assert.True(t, sawRunning, "expected a queued→running hop entry")
 	assert.True(t, sawSucceeded, "expected a running→succeeded terminal entry")
@@ -497,4 +484,112 @@ func TestConvergeEmergencyResult_FailedLastErrorWritesErrorTimeline(t *testing.T
 	}
 	assert.True(t, found, "expected an ERROR timeline entry for the failed result")
 	_ = strings.TrimSpace
+}
+
+// TestConvergeEmergencyResult_ConcurrentCalls: many concurrent authoritative
+// results for the same operation converge exactly once — the CAS + single-tx
+// hop advance guarantees a single terminal state, no duplicate timeline rows
+// and no lost result (REQ-087 D2 concurrency / AC-087-12).
+func TestConvergeEmergencyResult_ConcurrentCalls(t *testing.T) {
+	st := OpenTest(t)
+	ctx := context.Background()
+	seedEmergencyDefinition(t, st, "def-converge-concurrent")
+	created := createEmergencyViaUOW(t, st, emergencyCreateCommand(t, "def-converge-concurrent", "idem-concurrent", "hash-concurrent", store.EmergencySetReplicas))
+	queued, err := st.Operations().UpdateStatus(ctx, created.Operation.ID, store.StatusQueued, 1, "")
+	require.NoError(t, err)
+	cmd := convergeCmd(t, created, store.StatusSucceeded, store.EmergencyEffectApplied, queued.StateVersion, "")
+
+	const workers = 8
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	resolved := make(chan bool, workers)
+	for range workers {
+		go func() {
+			<-start
+			outcome, convErr := st.EmergencyIntents().ConvergeEmergencyResult(ctx, cmd)
+			errs <- convErr
+			if convErr == nil {
+				resolved <- outcome.Resolved
+			}
+		}()
+	}
+	close(start)
+	winCount := 0
+	noopCount := 0
+	optLock := 0
+	for range workers {
+		convErr := <-errs
+		switch {
+		case convErr == nil:
+			if <-resolved {
+				winCount++
+			} else {
+				noopCount++
+			}
+		case errors.Is(convErr, store.ErrOptimisticLock):
+			optLock++
+		default:
+			t.Fatalf("unexpected concurrent converge error: %v", convErr)
+		}
+	}
+	assert.Equal(t, 1, winCount, "exactly one concurrent caller converges to the terminal state")
+	assert.Equal(t, workers-1, noopCount+optLock, "the rest see the terminal state as no-op or lose the CAS")
+
+	op, err := st.Operations().Get(ctx, created.Operation.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, op.Status)
+	assert.Equal(t, queued.StateVersion+2, op.StateVersion, "terminal state version reflects exactly one converged hop sequence")
+
+	// Only one running→succeeded timeline row exists.
+	stateTransitions := 0
+	entries, err := st.Timeline().List(ctx, created.Operation.ID, 0, 1<<30)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		if entry.Kind == string(store.TimelineEntryStateTransition) {
+			stateTransitions++
+		}
+	}
+	assert.Equal(t, 3, stateTransitions, "pending→queued (seed) + queued→running + running→succeeded must appear once each")
+}
+
+// TestActiveLockFactSourceTerminalEffectAuthority (REQ-087 AC-087-11 / D7):
+// a dispatch-failed op finished with effect NOT_APPLIED while delivery_status
+// is still pending no longer counts as holding the target lock, and the read
+// projection surfaces the DB effect instead of NOT_STARTED.
+func TestActiveLockFactSourceTerminalEffectAuthority(t *testing.T) {
+	st := OpenTest(t)
+	ctx := context.Background()
+	seedEmergencyDefinition(t, st, "def-lock-fact")
+	created := createEmergencyViaUOW(t, st, emergencyCreateCommand(t, "def-lock-fact", "idem-fact", "hash-fact", store.EmergencySetReplicas))
+	// Orchestrator dispatch failure: Finish(failed, NOT_APPLIED) while the
+	// intent delivery_status never left pending.
+	finished, err := st.EmergencyIntents().Finish(ctx, created.Intent.ID, created.Operation.ID, 1,
+		store.StatusFailed, store.EmergencyEffectNotApplied, "delivery_failed", nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, store.StatusFailed, finished.Status)
+	intent, err := st.EmergencyIntents().GetByOperationID(ctx, created.Operation.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", intent.DeliveryStatus, "delivery never advanced (dispatch failed)")
+
+	// Read projection: terminal op surfaces DB effect, not NOT_STARTED.
+	op, err := st.Operations().Get(ctx, created.Operation.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.EmergencyEffectNotApplied, op.EffectStatus)
+
+	// Lock fact source: the intent no longer holds the target lock.
+	active, err := st.EmergencyIntents().GetActiveLocksForDefinition(ctx, "def-lock-fact")
+	require.NoError(t, err)
+	for _, lock := range active {
+		assert.NotEqual(t, created.Intent.ID, lock.ID, "resolved terminal intent must not hold the lock")
+	}
+	hasUnresolved, ids, err := st.EmergencyIntents().HasUnresolvedForDefinition(ctx, "def-lock-fact")
+	require.NoError(t, err)
+	assert.False(t, hasUnresolved)
+	assert.Empty(t, ids)
+
+	// A new emergency on the same target is accepted.
+	next := emergencyCreateCommand(t, "def-lock-fact", "idem-fact-2", "hash-fact-2", store.EmergencySetReplicas)
+	result, err := st.OperationCreationUnitOfWork()(ctx, store.OperationCreationRequest{Operation: next.Operation, Emergency: &next})
+	require.NoError(t, err)
+	assert.False(t, result.Replayed)
 }
