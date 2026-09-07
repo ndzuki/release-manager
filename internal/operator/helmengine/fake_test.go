@@ -3,6 +3,7 @@ package helmengine
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -548,4 +549,40 @@ func TestFake_WorkloadsInjectedAcrossActions(t *testing.T) {
 	rolledBack, err := eng.Rollback(ctx, RollbackOptions{Namespace: "apps", ReleaseName: "example", TargetRevision: 1})
 	require.NoError(t, err)
 	assert.Equal(t, eng.FakeWorkloads, rolledBack.Workloads)
+}
+
+// REQ-086: the fake engine mirrors the real engine's persisted Secret label —
+// the write and the idempotency comparison share encodeLabelDigest, so the
+// stored label is the 63-hex encoding and replay stays revision-stable.
+func TestFake_UpgradePersistsEncodedLabel(t *testing.T) {
+	eng := NewFake()
+	_, err := eng.Install(t.Context(), InstallOptions{Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v1"})
+	require.NoError(t, err)
+
+	opts := UpgradeOptions{
+		Namespace: "apps", ReleaseName: "example", ChartPath: "chart-v2", ExpectedRevision: 1, Atomic: true,
+		OperationID: "operation-1", CommandID: "command-1",
+		BundleDigest: "sha256:bundle", ChartDigest: "sha256:chart",
+		EffectiveValuesDigest: "sha256:values", SecretSnapshotDigest: "sha256:secret",
+	}
+	inputDigest := digestString(strings.Join([]string{
+		opts.BundleDigest, opts.ChartDigest, opts.EffectiveValuesDigest, opts.SecretSnapshotDigest,
+	}, "|"))
+	require.Len(t, inputDigest, 64)
+
+	first, err := eng.Upgrade(t.Context(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, 2, first.Revision)
+	assert.Equal(t, encodeLabelDigest(inputDigest), first.Labels["rm_input_digest"])
+	assert.Len(t, first.Labels["rm_input_digest"], 63)
+	assert.NotEqual(t, inputDigest, first.Labels["rm_input_digest"])
+
+	replayed, err := eng.Upgrade(t.Context(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, 2, replayed.Revision, "replay must stay revision-stable")
+	assert.Equal(t, first.Labels["rm_input_digest"], replayed.Labels["rm_input_digest"])
+
+	history, err := eng.History(t.Context(), HistoryOptions{Namespace: "apps", ReleaseName: "example"})
+	require.NoError(t, err)
+	assert.Len(t, history, 2)
 }
