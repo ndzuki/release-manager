@@ -1,16 +1,21 @@
 package operator_test
 
 import (
-	"connectrpc.com/connect"
 	"context"
 	"encoding/json"
-	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"connectrpc.com/connect"
+	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
@@ -18,8 +23,6 @@ import (
 	"github.com/ndzuki/release-manager/internal/operator/ca"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
-	"google.golang.org/protobuf/encoding/protowire"
-	"google.golang.org/protobuf/proto"
 )
 
 // testCA builds a throwaway CA for services that no longer self-generate one
@@ -1387,4 +1390,269 @@ func TestCommandStreamWorkloadIdentityReportFailClosedMatrix(t *testing.T) {
 		assert.Empty(t, item.WorkloadKind, "no identity may be persisted for %s", item.ReleaseName)
 		assert.Empty(t, item.WorkloadUID)
 	}
+}
+
+// ── REQ-088 (TASK-088): buffered identity convergence ──
+
+// AC-088-05 (service seam, D2=A): a report for a release whose inventory row
+// does not exist yet (seed-first-operation ordering) is buffered into
+// pending_workload_identity instead of being dropped. The reverse definition
+// lookup resolves the release so the report is treated as a real target.
+func TestCommandStreamWorkloadIdentityReportBuffersWhenRowMissing(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-buffer", Name: "definition-buffer",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "example",
+		Status: store.DefStatusActive,
+	}, nil))
+
+	stream := openIdentityStream(ctx, t, st)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_WorkloadIdentityReport{
+			WorkloadIdentityReport: &operatorv1.WorkloadIdentityReport{Items: []*operatorv1.WorkloadIdentityItem{{
+				ReleaseNamespace: "apps", ReleaseName: "example",
+				Kind: "DEPLOYMENT", Name: "example", Namespace: "apps", Uid: "uid-svc-1",
+			}}},
+		},
+	}))
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break
+		}
+	}
+
+	pending, err := st.PendingWorkloadIdentities().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.NoError(t, err, "report for a not-yet-synced release must be buffered")
+	assert.Equal(t, "DEPLOYMENT", pending.WorkloadKind)
+	assert.Equal(t, "example", pending.WorkloadName)
+	assert.Equal(t, "apps", pending.WorkloadNamespace)
+	assert.Equal(t, "uid-svc-1", pending.WorkloadUID)
+
+	items, err := st.Inventories().ListByCluster(ctx, "cust-1", "clus-1")
+	require.NoError(t, err)
+	assert.Empty(t, items, "buffering must not create an inventory row")
+}
+
+// AC-088-07 (service seam, D4=C): on an existing row an identical report
+// no-ops, a same-workload uid change updates the uid, and a conflicting
+// workload keeps the existing identity (fail closed).
+func TestCommandStreamWorkloadIdentityReportTieredApply(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-tiered", Name: "definition-tiered",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "example",
+		Status: store.DefStatusActive,
+	}, nil))
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: "definition-tiered", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: "deployed", InventoryStatus: store.InventoryActive,
+	}))
+
+	// sendReport runs one report on a fresh stream and drains it to close, so
+	// the server-side report handling has fully completed before the caller
+	// asserts row state (report handling is asynchronous to Send).
+	sendReport := func(kind, name, uid string) {
+		t.Helper()
+		stream := openIdentityStream(ctx, t, st)
+		require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+			Payload: &operatorv1.CommandStreamRequest_WorkloadIdentityReport{
+				WorkloadIdentityReport: &operatorv1.WorkloadIdentityReport{Items: []*operatorv1.WorkloadIdentityItem{{
+					ReleaseNamespace: "apps", ReleaseName: "example",
+					Kind: kind, Name: name, Namespace: "apps", Uid: uid,
+				}}},
+			},
+		}))
+		require.NoError(t, stream.CloseRequest())
+		for {
+			if _, err := stream.Receive(); err != nil {
+				break
+			}
+		}
+	}
+	rowIdentity := func() store.WorkloadIdentity {
+		row, err := st.Inventories().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+		require.NoError(t, err)
+		return store.WorkloadIdentity{Kind: row.WorkloadKind, Name: row.WorkloadName, Namespace: row.WorkloadNamespace, UID: row.WorkloadUID}
+	}
+
+	// First report binds the identity.
+	sendReport("DEPLOYMENT", "example", "uid-v1")
+	require.Equal(t, "uid-v1", rowIdentity().UID)
+
+	// Same workload with a recreated uid (workload rebuild) updates the uid.
+	sendReport("DEPLOYMENT", "example", "uid-v2")
+	require.Equal(t, "uid-v2", rowIdentity().UID)
+
+	// Conflicting workload (different kind) keeps the existing identity.
+	sendReport("STATEFUL_SET", "example", "uid-sts")
+	got := rowIdentity()
+	assert.Equal(t, "DEPLOYMENT", got.Kind, "conflict must keep the existing identity")
+	assert.Equal(t, "uid-v2", got.UID)
+}
+
+// AC-088-05 (service seam, D5=A): ReplayAfterInventory binds a buffered
+// identity the moment the inventory row appears and deletes the pending row.
+// Re-invoking it after binding is a no-op (nothing buffered).
+func TestServiceReplayAfterInventoryBindsBufferedIdentity(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-replay", Name: "definition-replay",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "example",
+		Status: store.DefStatusActive,
+	}, nil))
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
+	require.NoError(t, err)
+
+	// The report was buffered before any inventory row existed.
+	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, &store.PendingWorkloadIdentity{
+		ID: "pending-replay", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example",
+		WorkloadKind: "DEPLOYMENT", WorkloadName: "example", WorkloadNamespace: "apps", WorkloadUID: "uid-replay",
+		CreatedAt: time.Now().UTC(),
+	}))
+
+	// Replay before the row exists keeps the pending row (sweep retries later).
+	require.NoError(t, svc.ReplayAfterInventory(ctx, "cust-1", "clus-1", "apps", "example"))
+	_, err = st.PendingWorkloadIdentities().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.NoError(t, err, "pending must survive replay while the row is absent")
+
+	// The inventory row is created (SyncInventory Upsert) → replay binds it.
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: "definition-replay", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: "deployed", InventoryStatus: store.InventoryActive,
+	}))
+	require.NoError(t, svc.ReplayAfterInventory(ctx, "cust-1", "clus-1", "apps", "example"))
+
+	row, err := st.Inventories().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Equal(t, "DEPLOYMENT", row.WorkloadKind)
+	assert.Equal(t, "uid-replay", row.WorkloadUID)
+
+	_, err = st.PendingWorkloadIdentities().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.ErrorIs(t, err, store.ErrNotFound, "pending must be deleted once bound")
+
+	// Idempotent: a second replay after binding is a no-op success.
+	require.NoError(t, svc.ReplayAfterInventory(ctx, "cust-1", "clus-1", "apps", "example"))
+}
+
+// AC-088-08 (service seam): a buffered identity survives the orchestrator
+// "restart" — a fresh Service instance over the same store replays it once the
+// row appears (cross-restart idempotent convergence).
+func TestServiceReplayAfterRestartBindsBufferedIdentity(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-restart", Name: "definition-restart",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "example",
+		Status: store.DefStatusActive,
+	}, nil))
+	// First "process" buffers the report before the row exists.
+	first, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
+	require.NoError(t, err)
+	require.NoError(t, first.ReconcilePendingIdentities(ctx))
+	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, &store.PendingWorkloadIdentity{
+		ID: "pending-restart", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example",
+		WorkloadKind: "DEPLOYMENT", WorkloadName: "example", WorkloadNamespace: "apps", WorkloadUID: "uid-restart",
+		CreatedAt: time.Now().UTC(),
+	}))
+
+	// Second process after "restart" sees the persisted pending row once the
+	// SyncInventory row is created.
+	second, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
+	require.NoError(t, err)
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: "definition-restart", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: "deployed", InventoryStatus: store.InventoryActive,
+	}))
+	require.NoError(t, second.ReconcilePendingIdentities(ctx))
+
+	row, err := st.Inventories().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Equal(t, "uid-restart", row.WorkloadUID, "identity must not be lost across restart")
+	_, err = st.PendingWorkloadIdentities().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.ErrorIs(t, err, store.ErrNotFound)
+}
+
+// AC-088-06 (service seam, D3=A): ReconcilePendingIdentities purges orphaned
+// pending rows whose created_at is older than the TTL (injected short TTL),
+// while a fresh pending row with no inventory row survives.
+func TestServiceReconcilePendingIdentitiesPurgesOrphans(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)), operator.WithPendingIdentityTTL(5*time.Minute))
+	require.NoError(t, err)
+
+	stale := &store.PendingWorkloadIdentity{
+		ID: "pending-stale", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "stale",
+		WorkloadKind: "DEPLOYMENT", WorkloadName: "stale", WorkloadNamespace: "apps", WorkloadUID: "uid-stale",
+		CreatedAt: time.Now().UTC().Add(-30 * time.Minute),
+	}
+	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, stale))
+	fresh := &store.PendingWorkloadIdentity{
+		ID: "pending-fresh", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "fresh",
+		WorkloadKind: "DEPLOYMENT", WorkloadName: "fresh", WorkloadNamespace: "apps", WorkloadUID: "uid-fresh",
+		CreatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, fresh))
+
+	require.NoError(t, svc.ReconcilePendingIdentities(ctx))
+
+	_, err = st.PendingWorkloadIdentities().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "stale")
+	require.ErrorIs(t, err, store.ErrNotFound, "orphan past TTL must be purged")
+	_, err = st.PendingWorkloadIdentities().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "fresh")
+	require.NoError(t, err, "fresh pending within TTL must survive without an inventory row")
+}
+
+// D7=A: the convergence counters fire on buffered / conflict / purged /
+// bound-after-inventory events.
+func TestServiceIdentityMetricsCounting(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	reg := prometheus.NewRegistry()
+	idMetrics := operator.NewIdentityMetrics(reg)
+	svc, err := operator.NewService(st, nil,
+		operator.WithCA(testCA(t)), operator.WithIdentityMetrics(idMetrics), operator.WithPendingIdentityTTL(5*time.Minute))
+	require.NoError(t, err)
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-metrics", Name: "definition-metrics",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "example",
+		Status: store.DefStatusActive,
+	}, nil))
+
+	// A buffered report increments report_buffered.
+	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, &store.PendingWorkloadIdentity{
+		ID: "pending-metrics", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example",
+		WorkloadKind: "DEPLOYMENT", WorkloadName: "example", WorkloadNamespace: "apps", WorkloadUID: "uid-m1",
+		CreatedAt: time.Now().UTC(),
+	}))
+	counterValue := func(c prometheus.Counter) float64 {
+		return testutil.ToFloat64(c)
+	}
+	assert.Equal(t, float64(0), counterValue(idMetrics.ReportBuffered))
+
+	// Bind after the row appears → bound_after_inventory.
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: "definition-metrics", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: "deployed", InventoryStatus: store.InventoryActive,
+	}))
+	require.NoError(t, svc.ReplayAfterInventory(ctx, "cust-1", "clus-1", "apps", "example"))
+	assert.Equal(t, float64(1), counterValue(idMetrics.BoundAfterInventory))
+
+	// A stale orphan purge increments pending_purged.
+	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, &store.PendingWorkloadIdentity{
+		ID: "pending-orphan", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "orphan",
+		WorkloadKind: "DEPLOYMENT", WorkloadName: "orphan", WorkloadNamespace: "apps", WorkloadUID: "uid-orphan",
+		CreatedAt: time.Now().UTC().Add(-30 * time.Minute),
+	}))
+	require.NoError(t, svc.ReconcilePendingIdentities(ctx))
+	assert.Equal(t, float64(1), counterValue(idMetrics.PendingPurged))
 }

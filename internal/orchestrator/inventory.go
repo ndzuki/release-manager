@@ -100,6 +100,16 @@ func (s *Service) SyncInventory(
 			return nil, connect.NewError(connect.CodeInternal,
 				fmt.Errorf("upsert inventory item %s/%s: %w", item.Namespace, item.Name, err))
 		}
+		// REQ-088 D5=A: the inventory row now exists — event-driven replay of
+		// any buffered identity for this release key. Best-effort by design:
+		// a transient replay failure only keeps the pending row, which the
+		// periodic sweep retries; it must never fail the sync itself.
+		if s.pendingIdentity != nil {
+			if err := s.pendingIdentity.ReplayAfterInventory(ctx, msg.CustomerId, msg.ClusterId, item.Namespace, item.Name); err != nil {
+				s.logger.Warn("pending workload identity replay failed after upsert",
+					"sync_id", msg.SyncId, "namespace", item.Namespace, "name", item.Name, "error", err)
+			}
+		}
 
 		key := item.Namespace + "/" + item.Name
 		presentKeys = append(presentKeys, key)

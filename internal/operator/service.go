@@ -31,19 +31,21 @@ import (
 
 // Service implements the OperatorServiceHandler Connect interface.
 type Service struct {
-	store            store.Store
-	ca               *ca.CA
-	renewBeforeRatio float64
-	logger           *slog.Logger
-	sessionTTL       time.Duration
-	heartbeatMaxAge  time.Duration
-	suspectAfter     time.Duration
-	inventorySyncer  *InventorySyncer
-	commandExecutor  CommandExecutor
-	auditEmitter     audit.Sink
-	streamMu         sync.RWMutex
-	emergencyStreams map[string]chan *operatorv1.EmergencyCommand
-	streams          *StreamRegistry
+	store              store.Store
+	ca                 *ca.CA
+	renewBeforeRatio   float64
+	logger             *slog.Logger
+	sessionTTL         time.Duration
+	heartbeatMaxAge    time.Duration
+	suspectAfter       time.Duration
+	inventorySyncer    *InventorySyncer
+	commandExecutor    CommandExecutor
+	auditEmitter       audit.Sink
+	streamMu           sync.RWMutex
+	emergencyStreams   map[string]chan *operatorv1.EmergencyCommand
+	streams            *StreamRegistry
+	identityMetrics    *IdentityMetrics
+	pendingIdentityTTL time.Duration
 }
 
 // NewService creates a new operator Connect service. The signing CA must be
@@ -108,6 +110,27 @@ func WithStreamRegistry(registry *StreamRegistry) Option {
 	return func(s *Service) {
 		if registry != nil {
 			s.streams = registry
+		}
+	}
+}
+
+// WithIdentityMetrics attaches the REQ-088 workload identity convergence
+// counters. A nil (default) metrics struct leaves every count a no-op, so
+// services that do not expose /metrics behave identically.
+func WithIdentityMetrics(metrics *IdentityMetrics) Option {
+	return func(s *Service) {
+		if metrics != nil {
+			s.identityMetrics = metrics
+		}
+	}
+}
+
+// WithPendingIdentityTTL overrides the buffered-identity TTL used by the
+// periodic sweep to purge orphans (REQ-088 D3=A). Tests inject short TTLs.
+func WithPendingIdentityTTL(ttl time.Duration) Option {
+	return func(s *Service) {
+		if ttl > 0 {
+			s.pendingIdentityTTL = ttl
 		}
 	}
 }
