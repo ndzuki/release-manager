@@ -893,6 +893,11 @@ service OrchestratorService {
   rpc CheckEmergencyConflict(CheckEmergencyConflictRequest) returns (CheckEmergencyConflictResponse);
   rpc ListCandidateArtifacts(ListCandidateArtifactsRequest) returns (ListCandidateArtifactsResponse);
   rpc ListConvergenceTasks(ListConvergenceTasksRequest) returns (ListConvergenceTasksResponse);
+  // Emergency stuck-lock observation and release (REQ-087): terminal
+  // operations whose effect is still UNKNOWN past the observe window surface
+  // as stuck locks for release_admin/platform_admin operators.
+  rpc ListStuckLocks(ListStuckLocksRequest) returns (ListStuckLocksResponse);
+  rpc ReleaseEmergencyLock(ReleaseEmergencyLockRequest) returns (ReleaseEmergencyLockResponse);
   rpc ConfigureClusterRoute(ConfigureClusterRouteRequest) returns (ConfigureClusterRouteResponse);
   rpc GetClusterRoutes(GetClusterRoutesRequest) returns (GetClusterRoutesResponse);
   rpc DeleteClusterRoute(DeleteClusterRouteRequest) returns (DeleteClusterRouteResponse);
@@ -1160,6 +1165,68 @@ message AnnotationValues {
 message ConvergenceTaskSummary {
   string task_id = 1;
   string status = 2;
+}
+
+// ── Emergency stuck locks (REQ-087) ───────────────────────────────
+
+// ReleaseMode classifies how a stuck emergency target lock is released
+// (REQ-087 §4.2, D4=A/D5=B). Both modes require a terminal operation whose
+// effect is still UNKNOWN past the observe window.
+enum ReleaseMode {
+  RELEASE_MODE_UNSPECIFIED = 0;
+  // NOT_APPLIED_PROVEN releases the lock and records the effect as
+  // NOT_APPLIED: the operator can prove the command never took effect (e.g.
+  // it was never ACK_PERSISTED and the operator session is offline).
+  NOT_APPLIED_PROVEN = 1;
+  // AUDITED_OVERRIDE releases the lock while the effect stays UNKNOWN: the
+  // operator cannot prove the change did not take effect but must take over
+  // the target. The release is fully audited and a late result may still
+  // resolve the effect later (REQ-032 AC-032-31).
+  AUDITED_OVERRIDE = 2;
+}
+
+message ListStuckLocksRequest {
+  // Optional; empty lists all stuck locks within the authorized scope.
+  string release_definition_id = 1;
+}
+
+message ListStuckLocksResponse {
+  repeated StuckLock locks = 1;
+}
+
+message StuckLock {
+  string intent_id = 1;
+  string operation_id = 2;
+  string release_definition_id = 3;
+  EmergencyAction action = 4;
+  // Sanitized human-readable lock path summary, e.g. "Deployment/api, container=app".
+  string lock_path_summary = 5;
+  // Always EMERGENCY_EFFECT_STATUS_UNKNOWN for a stuck lock.
+  EmergencyEffectStatus effect_status = 6;
+  google.protobuf.Timestamp terminal_at = 7;
+  // terminal_at + emergency.effect_observe_timeout (when the lock became stuck).
+  google.protobuf.Timestamp stuck_since = 8;
+  // Current observe-window value, for display only.
+  string observe_timeout_display = 9;
+}
+
+message ReleaseEmergencyLockRequest {
+  // Target emergency intent id (emergency_intents.id).
+  string intent_id = 1;
+  // Required; 1-1000 UTF-8 characters, trimmed before storage.
+  string reason = 2;
+  ReleaseMode mode = 3;
+  // Optional unlock evidence summary (<=500 chars, sanitized on ingestion).
+  string evidence = 4;
+}
+
+message ReleaseEmergencyLockResponse {
+  string intent_id = 1;
+  bool lock_released = 2;
+  // Effect after the release: NOT_APPLIED for NOT_APPLIED_PROVEN, or the
+  // retained UNKNOWN for AUDITED_OVERRIDE.
+  EmergencyEffectStatus effect_status = 3;
+  string audit_event_id = 4;
 }
 
 // ── Inventory Sync (REQ-017) ───────────────────────────────────────

@@ -300,7 +300,7 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if err := s.seedEmergencyConfig(context.Background(), emergencyCfg, emergencyPresent); err != nil {
 		return fmt.Errorf("seed emergency config: %w", err)
 	}
-	logger.Info("emergency config seeded", "enabled", emergencyCfg.Enabled, "operation_timeout", emergencyCfg.OperationTimeout, "present", emergencyPresent)
+	logger.Info("emergency config seeded", "enabled", emergencyCfg.Enabled, "operation_timeout", emergencyCfg.OperationTimeout, "effect_observe_timeout", emergencyCfg.EffectObserveTimeout, "present", emergencyPresent)
 	metrics := authorization.NewMetrics(prometheus.NewRegistry())
 	mux.Handle("GET /metrics", metrics.Handler())
 	s.traceShutdown = authorization.InstallTracing()
@@ -578,13 +578,17 @@ func defaultTrustConfig() trustConfig {
 }
 
 // loadEmergencyConfig reads the emergency.* keys from the service config
-// (REQ-081 D2=A): a missing section fails closed to enabled=false and the
-// D16 default operation timeout, reported via present=false so the startup
-// seed leaves an already-configured app_settings value untouched; an
-// unparsable/non-positive timeout falls back to the default while keeping
-// the configured enabled flag.
+// (REQ-081 D2=A, REQ-087 D5=B): a missing section fails closed to
+// enabled=false and the default operation timeout / observe window, reported
+// via present=false so the startup seed leaves an already-configured
+// app_settings value untouched; an unparsable/non-positive duration falls
+// back to the default while keeping the configured enabled flag.
 func (s *orchSvc) loadEmergencyConfig() (config.EmergencyCfg, bool, error) {
-	emergencyCfg := config.EmergencyCfg{Enabled: false, OperationTimeout: store.DefaultEmergencyOperationTimeout.String()}
+	emergencyCfg := config.EmergencyCfg{
+		Enabled:              false,
+		OperationTimeout:     store.DefaultEmergencyOperationTimeout.String(),
+		EffectObserveTimeout: store.DefaultEmergencyEffectObserveTimeout.String(),
+	}
 	if s.configPath == "" {
 		return emergencyCfg, false, nil
 	}
@@ -595,8 +599,9 @@ func (s *orchSvc) loadEmergencyConfig() (config.EmergencyCfg, bool, error) {
 		return emergencyCfg, false, fmt.Errorf("read emergency config: %w", err)
 	}
 	var raw struct {
-		Enabled          bool   `mapstructure:"enabled"`
-		OperationTimeout string `mapstructure:"operation_timeout"`
+		Enabled              bool   `mapstructure:"enabled"`
+		OperationTimeout     string `mapstructure:"operation_timeout"`
+		EffectObserveTimeout string `mapstructure:"effect_observe_timeout"`
 	}
 	if err := v.UnmarshalKey("emergency", &raw); err != nil {
 		return emergencyCfg, false, fmt.Errorf("unmarshal emergency config: %w", err)
@@ -606,6 +611,11 @@ func (s *orchSvc) loadEmergencyConfig() (config.EmergencyCfg, bool, error) {
 	if raw.OperationTimeout != "" {
 		if parsed, parseErr := time.ParseDuration(raw.OperationTimeout); parseErr == nil && parsed > 0 {
 			emergencyCfg.OperationTimeout = parsed.String()
+		}
+	}
+	if raw.EffectObserveTimeout != "" {
+		if parsed, parseErr := time.ParseDuration(raw.EffectObserveTimeout); parseErr == nil && parsed > 0 {
+			emergencyCfg.EffectObserveTimeout = parsed.String()
 		}
 	}
 	return emergencyCfg, present, nil
@@ -627,9 +637,14 @@ func (s *orchSvc) seedEmergencyConfig(ctx context.Context, cfg config.EmergencyC
 	if parsed, err := time.ParseDuration(cfg.OperationTimeout); err == nil && parsed > 0 {
 		timeout = parsed
 	}
+	observeTimeout := store.DefaultEmergencyEffectObserveTimeout
+	if parsed, err := time.ParseDuration(cfg.EffectObserveTimeout); err == nil && parsed > 0 {
+		observeTimeout = parsed
+	}
 	return s.store.EmergencyConfig().SetEmergencyConfig(ctx, store.EmergencyConfig{
-		Enabled:          cfg.Enabled,
-		OperationTimeout: timeout,
+		Enabled:              cfg.Enabled,
+		OperationTimeout:     timeout,
+		EffectObserveTimeout: observeTimeout,
 	})
 }
 
@@ -698,6 +713,10 @@ func (s *orchSvc) Run(ctx context.Context) {
 	if s.emergency == nil {
 		return
 	}
+	// REQ-087 D5=B: slow-cycle stuck-lock observation (alert + audit only;
+	// never auto-releases). Started as its own goroutine so the 1s emergency
+	// deadline sweep below never delays it.
+	go s.startStuckLockScanner(ctx)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -706,6 +725,25 @@ func (s *orchSvc) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.emergency.ExpireEmergencyOperations(ctx)
+		}
+	}
+}
+
+// startStuckLockScanner runs the stuck-lock observer on a 60s cadence
+// (REQ-087 §4.1). Each scan lists stuck locks across the whole system and
+// alerts+audits each newly-stuck lock; a lock that resolves or is released
+// stops being alerted. The per-process dedup set resets on restart (repeated
+// alerts after restart are acceptable and idempotent in the audit store).
+func (s *orchSvc) startStuckLockScanner(ctx context.Context) {
+	alerted := orchestrator.NewAlertedStuckLocks()
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.emergency.ScanStuckEmergencyLocks(ctx, alerted)
 		}
 	}
 }

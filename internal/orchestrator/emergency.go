@@ -285,7 +285,15 @@ func (s *Service) ExecuteEmergencyChange(
 	return connect.NewResponse(executeEmergencyResponse(created.Operation, created.Intent, created.ConvergenceTask, msg.GetConvergenceStrategy())), nil
 }
 
-// ExpireEmergencyOperations moves overdue emergency operations to timeout and emits audit evidence.
+// ExpireEmergencyOperations moves overdue emergency operations to timeout and
+// emits audit evidence. The effect written depends on how far the command
+// crossed the irrevocable delivery boundary (REQ-087 D8=B / AC-087-04/05):
+//   - pending (never dispatched): provably undelivered → NOT_APPLIED, which
+//     releases the target lock;
+//   - queued/running (dispatch initiated / ACK_PERSISTED received): the
+//     command may already have executed → UNKNOWN, which retains the lock for
+//     late-result observation (AC-032-31). A never-delivered op therefore no
+//     longer leaves a permanent UNKNOWN lock behind (D-111 defect ②).
 func (s *Service) ExpireEmergencyOperations(ctx context.Context) int {
 	operations, err := s.store.Operations().ListNonTerminal(ctx)
 	if err != nil {
@@ -303,9 +311,14 @@ func (s *Service) ExpireEmergencyOperations(ctx context.Context) int {
 			s.logger.Warn("failed to load timed out emergency intent", "operation_id", operation.ID, "error", getErr)
 			continue
 		}
+		// D8 staged effect: pending deadline expiry is provably undelivered.
+		effectStatus := store.EmergencyEffectUnknown
+		if operation.Status == store.StatusPending {
+			effectStatus = store.EmergencyEffectNotApplied
+		}
 		finished, finishErr := s.store.EmergencyIntents().Finish(
 			ctx, intent.ID, operation.ID, operation.StateVersion, store.StatusTimeout,
-			store.EmergencyEffectUnknown, "operation_timeout", nil, nil,
+			effectStatus, "operation_timeout", nil, nil,
 		)
 		if finishErr != nil {
 			if !errors.Is(finishErr, store.ErrOptimisticLock) && !errors.Is(finishErr, store.ErrInvalidState) {
@@ -313,13 +326,13 @@ func (s *Service) ExpireEmergencyOperations(ctx context.Context) int {
 			}
 			continue
 		}
-		s.emitEmergencyTimeoutAudit(finished, intent)
+		s.emitEmergencyTimeoutAudit(finished, intent, effectStatus)
 		expired++
 	}
 	return expired
 }
 
-func (s *Service) emitEmergencyTimeoutAudit(operation *store.Operation, intent *store.EmergencyIntent) {
+func (s *Service) emitEmergencyTimeoutAudit(operation *store.Operation, intent *store.EmergencyIntent, effectStatus store.EmergencyEffectStatus) {
 	if s.auditEmitter == nil || operation == nil || intent == nil {
 		return
 	}
@@ -332,7 +345,7 @@ func (s *Service) emitEmergencyTimeoutAudit(operation *store.Operation, intent *
 		operation.ID,
 		"emergency_change",
 		"timeout",
-		fmt.Sprintf("action=%s convergence=%s", intent.Action, intent.Convergence),
+		fmt.Sprintf("action=%s convergence=%s effect=%s", intent.Action, intent.Convergence, effectStatus),
 		map[string]string{
 			"definition_id": intent.ReleaseDefinitionID,
 			"payload_hash":  operation.RequestHash,

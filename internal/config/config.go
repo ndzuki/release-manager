@@ -142,15 +142,17 @@ type ServiceConfig struct {
 }
 
 // EmergencyCfg carries the emergency change kill switch and operation
-// timeout (REQ-081 D2=A): the orchestrator loads both at startup (see
-// cmd/orchestrator loadEmergencyConfig) and seeds them into the shared
-// app_settings table as the production writer of SetEmergencyConfig. A
-// missing section fails closed (Enabled=false, default timeout). The
-// operation_timeout is decoded from its raw string form so an unparsable
-// value falls back to the D16 default instead of failing config loading.
+// timeout (REQ-081 D2=A) plus the stuck-lock observation window (REQ-087
+// D5=B): the orchestrator loads them at startup (see cmd/orchestrator
+// loadEmergencyConfig) and seeds them into the shared app_settings table as
+// the production writer of SetEmergencyConfig. A missing section fails
+// closed (Enabled=false, default timeout / observe window). Durations are
+// decoded from their raw string form so an unparsable value falls back to
+// the defaults instead of failing config loading.
 type EmergencyCfg struct {
-	Enabled          bool   `mapstructure:"enabled"`
-	OperationTimeout string `mapstructure:"operation_timeout"`
+	Enabled              bool   `mapstructure:"enabled"`
+	OperationTimeout     string `mapstructure:"operation_timeout"`
+	EffectObserveTimeout string `mapstructure:"effect_observe_timeout"`
 }
 
 // AgentCfg controls the operator agent mode (TASK-075): the agent bootstraps
