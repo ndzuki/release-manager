@@ -119,17 +119,17 @@ const (
 // with a different uid is a workload rebuild (update uid); anything else
 // conflicts and must keep the existing identity (fail closed, AC-088-03/07).
 func ResolveWorkloadIdentity(current, report store.WorkloadIdentity) WorkloadIdentityResolution {
-	if current.Kind == "" && current.Name == "" && current.Namespace == "" && current.UID == "" {
-		if report.Kind == "" || report.Name == "" || report.Namespace == "" || report.UID == "" {
-			// A report must never bind anything from an incomplete payload.
-			return WorkloadIdentityConflict
+	if !identityObserved(current) {
+		if identityComplete(report) {
+			return WorkloadIdentityBind
 		}
-		return WorkloadIdentityBind
+		// A report must never bind anything from an incomplete payload.
+		return WorkloadIdentityConflict
 	}
 	if current == report {
 		return WorkloadIdentityNoop
 	}
-	if report.Kind == "" || report.Name == "" || report.Namespace == "" || report.UID == "" {
+	if !identityComplete(report) {
 		// An incomplete report can never update or overwrite an existing
 		// identity — fail closed.
 		return WorkloadIdentityConflict
@@ -138,6 +138,18 @@ func ResolveWorkloadIdentity(current, report store.WorkloadIdentity) WorkloadIde
 		return WorkloadIdentityUpdateUID
 	}
 	return WorkloadIdentityConflict
+}
+
+// identityObserved reports whether an inventory row has already persisted a
+// workload identity (any of the four tuple fields set).
+func identityObserved(identity store.WorkloadIdentity) bool {
+	return identity.Kind != "" || identity.Name != "" || identity.Namespace != "" || identity.UID != ""
+}
+
+// identityComplete reports whether a reported identity carries every field of
+// the four-tuple (kind/name/namespace/uid) — the precondition for binding.
+func identityComplete(identity store.WorkloadIdentity) bool {
+	return identity.Kind != "" && identity.Name != "" && identity.Namespace != "" && identity.UID != ""
 }
 
 // applyWorkloadIdentityReport converges the reported authoritative identities
@@ -221,6 +233,14 @@ func (s *Service) applyReportToInventoryRow(ctx context.Context, customerID, clu
 	}
 	if _, err := s.applyIdentity(ctx, customerID, clusterID, row.Namespace, row.ReleaseName, rowWorkloadIdentity(row), identity, key); err != nil {
 		s.logger.Warn("failed to persist workload identity", "namespace_release", key, "error", err)
+		return
+	}
+	// A selectable report applied to the existing row supersedes any buffered
+	// pending identity for the same release. If a stale pending row were left
+	// behind, the sweep could later replay an OLDER report over the fresher
+	// row identity (regressing a uid update after a workload rebuild).
+	if err := s.store.PendingWorkloadIdentities().DeleteByReleaseKey(ctx, customerID, clusterID, row.Namespace, row.ReleaseName); err != nil {
+		s.logger.Debug("failed to clear superseded pending identity", "namespace_release", key, "error", err)
 	}
 }
 

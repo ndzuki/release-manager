@@ -1728,3 +1728,75 @@ func TestServiceIdentityMetricsCounting(t *testing.T) {
 	require.NoError(t, svc.ReconcilePendingIdentities(ctx))
 	assert.Equal(t, float64(1), counterValue(idMetrics.PendingPurged))
 }
+
+// REQ-088 D6/D4=C supersede hardening: when a selectable report arrives for a
+// row that now exists, any older buffered pending identity for the same
+// release is superseded and removed — a stale buffer must never replay over
+// the fresher row identity (which would regress a uid update after a workload
+// rebuild).
+func TestCommandStreamWorkloadIdentityReportSupersedesPending(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "definition-supersede", Name: "definition-supersede",
+		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "example",
+		Status: store.DefStatusActive,
+	}, nil))
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: "definition-supersede", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example", Status: "deployed", InventoryStatus: store.InventoryActive,
+		// Simulate a workload rebuild: the row already carries the newer uid.
+		WorkloadKind: "DEPLOYMENT", WorkloadName: "example", WorkloadNamespace: "apps", WorkloadUID: "uid-new",
+	}))
+	// A stale pending row from an earlier (pre-row) report still exists.
+	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, &store.PendingWorkloadIdentity{
+		ID: "pending-supersede", CustomerID: "cust-1", ClusterID: "clus-1",
+		Namespace: "apps", ReleaseName: "example",
+		WorkloadKind: "DEPLOYMENT", WorkloadName: "example", WorkloadNamespace: "apps", WorkloadUID: "uid-old",
+		CreatedAt: time.Now().UTC().Add(-time.Minute),
+	}))
+
+	// A newer report for the same release arrives when the row exists.
+	svc, err := operator.NewService(st, nil, operator.WithCA(testCA(t)))
+	require.NoError(t, err)
+	path, handler := operatorv1connect.NewOperatorServiceHandler(svc)
+	mux := http.NewServeMux()
+	mux.Handle(path, handler)
+	srv := httptest.NewUnstartedServer(mux)
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	client := operatorv1connect.NewOperatorServiceClient(srv.Client(), srv.URL)
+	stream := client.CommandStream(ctx)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_Hello{
+			Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+		},
+	}))
+	_, err = stream.Receive()
+	require.NoError(t, err)
+	require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_WorkloadIdentityReport{
+			WorkloadIdentityReport: &operatorv1.WorkloadIdentityReport{Items: []*operatorv1.WorkloadIdentityItem{{
+				ReleaseNamespace: "apps", ReleaseName: "example",
+				Kind: "DEPLOYMENT", Name: "example", Namespace: "apps", Uid: "uid-new",
+			}}},
+		},
+	}))
+	require.NoError(t, stream.CloseRequest())
+	for {
+		if _, err := stream.Receive(); err != nil {
+			break
+		}
+	}
+
+	// The stale pending is gone; the sweep can no longer regress the row.
+	_, err = st.PendingWorkloadIdentities().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.ErrorIs(t, err, store.ErrNotFound, "row-present report must supersede stale pending")
+
+	// A sweep after this state leaves the newer row identity untouched.
+	require.NoError(t, svc.ReconcilePendingIdentities(ctx))
+	row, err := st.Inventories().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Equal(t, "uid-new", row.WorkloadUID, "newer row identity must never be regressed by the stale buffer")
+}
