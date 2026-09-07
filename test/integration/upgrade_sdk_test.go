@@ -73,8 +73,10 @@ func TestUpgradeSDK(t *testing.T) {
 			BundleDigest: "sha256:bundle-aaa", ChartDigest: chartDigest,
 			EffectiveValuesDigest: "sha256:values-aaa", SecretSnapshotDigest: "sha256:secret-aaa",
 		}
-		_, fullDigest := expectedInputDigest(opts)
-		expectedLabel := fullDigest[:63]
+		expectedLabel := expectedLabelDigest(opts)
+		// The label is the 63-char prefix of the true 64-hex input digest.
+		assert.True(t, strings.HasPrefix(expectedInputDigest(opts), expectedLabel),
+			"label must be the encoded digest prefix")
 
 		rel, err := engine.Upgrade(t.Context(), opts)
 		require.NoError(t, err)
@@ -212,13 +214,19 @@ func helmReleaseSecret(
 }
 
 // expectedInputDigest reproduces the engine's input digest over the four
-// frozen upgrade digests and returns both the full 64-char hex and its
-// 63-char label encoding (REQ-086 D1: sha256 hex truncated to 63 chars).
-func expectedInputDigest(opts helmengine.UpgradeOptions) (fullHex, encoded string) {
-	fullHex = fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join([]string{
+// frozen upgrade digests: sha256 of their "|"-joined values, returned as the
+// full 64-char hex (REQ-086 D1). Callers derive the label value via
+// expectedLabelDigest, the 63-char truncation the engine persists.
+func expectedInputDigest(opts helmengine.UpgradeOptions) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join([]string{
 		opts.BundleDigest, opts.ChartDigest, opts.EffectiveValuesDigest, opts.SecretSnapshotDigest,
 	}, "|"))))
-	return fullHex, fullHex[:63]
+}
+
+// expectedLabelDigest is the 63-char label value the engine's
+// encodeLabelDigest produces from the full input digest.
+func expectedLabelDigest(opts helmengine.UpgradeOptions) string {
+	return expectedInputDigest(opts)[:validation.LabelValueMaxLength]
 }
 
 // packageChart tars and gzips a chart directory into a standard
