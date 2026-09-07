@@ -28,6 +28,12 @@ INSTALL_SDK_PATH ?= $(CURDIR)/.tmp-install-sdk-path
 INSTALL_SDK_BINARY ?= $(CURDIR)/.tmp-install-sdk.test
 INSTALL_SDK_HOME ?= $(CURDIR)/.tmp-install-sdk-home
 INSTALL_SDK_QUARANTINE ?= $(CURDIR)/install-sdk.quarantine.yaml
+UPGRADE_SDK_CLUSTER ?= rm-upgrade-sdk
+UPGRADE_SDK_KUBECONFIG ?= $(CURDIR)/.tmp-upgrade-sdk-kubeconfig
+UPGRADE_SDK_PATH ?= $(CURDIR)/.tmp-upgrade-sdk-path
+UPGRADE_SDK_BINARY ?= $(CURDIR)/.tmp-upgrade-sdk.test
+UPGRADE_SDK_HOME ?= $(CURDIR)/.tmp-upgrade-sdk-home
+UPGRADE_SDK_QUARANTINE ?= $(CURDIR)/upgrade-sdk.quarantine.yaml
 OPERATOR_IMAGE ?= release-operator:local
 OPERATOR_IMAGE_ARCHIVE ?= $(CURDIR)/.tmp-release-operator.tar
 
@@ -324,6 +330,36 @@ test-install-sdk: ## Run Helm Install SDK integration gate in an isolated kind c
 		mkdir -p "$(INSTALL_SDK_PATH)" "$(INSTALL_SDK_HOME)"; \
 		PATH="$(INSTALL_SDK_PATH)" HOME="$(INSTALL_SDK_HOME)" KUBECONFIG="$(INSTALL_SDK_KUBECONFIG)" \
 			"$(INSTALL_SDK_BINARY)" -test.v -test.count=1 -test.run '^TestInstallSDK$$'
+
+.PHONY: test-upgrade-sdk
+test-upgrade-sdk: ## Run Helm Upgrade SDK integration gate (REQ-086/REQ-062) in an isolated kind cluster
+	@set -eu; \
+		cleanup() { \
+			$(KIND) delete cluster --name "$(UPGRADE_SDK_CLUSTER)" >/dev/null 2>&1 || true; \
+			rm -rf "$(UPGRADE_SDK_BINARY)" "$(UPGRADE_SDK_KUBECONFIG)" "$(UPGRADE_SDK_PATH)" "$(UPGRADE_SDK_HOME)"; \
+		}; \
+		trap cleanup EXIT INT TERM; \
+		cleanup; \
+		if ! command -v $(KIND) >/dev/null 2>&1; then \
+			$(GO) run ./cmd/installgate \
+				--quarantine "$(UPGRADE_SDK_QUARANTINE)" \
+				--scenario cluster-readiness \
+				--rule-id cluster_unavailable \
+				--message "kind is required"; \
+			exit 0; \
+		fi; \
+		if ! $(KIND) create cluster --name "$(UPGRADE_SDK_CLUSTER)" --kubeconfig "$(UPGRADE_SDK_KUBECONFIG)" --wait 120s; then \
+			$(GO) run ./cmd/installgate \
+				--quarantine "$(UPGRADE_SDK_QUARANTINE)" \
+				--scenario cluster-readiness \
+				--rule-id cluster_unavailable \
+				--message "kind cluster creation failed"; \
+			exit 0; \
+		fi; \
+		$(GO) test -c -race -tags=integration -o "$(UPGRADE_SDK_BINARY)" ./test/integration/; \
+		mkdir -p "$(UPGRADE_SDK_PATH)" "$(UPGRADE_SDK_HOME)"; \
+		PATH="$(UPGRADE_SDK_PATH)" HOME="$(UPGRADE_SDK_HOME)" KUBECONFIG="$(UPGRADE_SDK_KUBECONFIG)" \
+			"$(UPGRADE_SDK_BINARY)" -test.v -test.count=1 -test.run '^TestUpgradeSDK$$'
 
 .PHONY: check-reqs
 check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
