@@ -713,6 +713,10 @@ func (s *orchSvc) Run(ctx context.Context) {
 	if s.emergency == nil {
 		return
 	}
+	// REQ-087 D5=B: slow-cycle stuck-lock observation (alert + audit only;
+	// never auto-releases). Started as its own goroutine so the 1s emergency
+	// deadline sweep below never delays it.
+	go s.startStuckLockScanner(ctx)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -721,6 +725,25 @@ func (s *orchSvc) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.emergency.ExpireEmergencyOperations(ctx)
+		}
+	}
+}
+
+// startStuckLockScanner runs the stuck-lock observer on a 60s cadence
+// (REQ-087 §4.1). Each scan lists stuck locks across the whole system and
+// alerts+audits each newly-stuck lock; a lock that resolves or is released
+// stops being alerted. The per-process dedup set resets on restart (repeated
+// alerts after restart are acceptable and idempotent in the audit store).
+func (s *orchSvc) startStuckLockScanner(ctx context.Context) {
+	alerted := orchestrator.NewAlertedStuckLocks()
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.emergency.ScanStuckEmergencyLocks(ctx, alerted)
 		}
 	}
 }
