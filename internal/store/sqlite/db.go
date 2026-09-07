@@ -61,6 +61,7 @@ type Store struct {
 	valuesLifecycle  *valuesLifecycleStore
 	prepareSessions  *prepareSessionStore
 	authorization    *authorizationStore
+	pendingWorkload  *pendingWorkloadIdentityStore
 	idem             *idempotencyStore
 }
 
@@ -132,6 +133,7 @@ func Open(dsn string) (*Store, error) {
 	s.valuesLifecycle = &valuesLifecycleStore{db: db}
 	s.prepareSessions = &prepareSessionStore{db: db}
 	s.authorization = &authorizationStore{db: db}
+	s.pendingWorkload = &pendingWorkloadIdentityStore{db: db}
 	s.preflightCycles = &preflightLifecycleStore{db: db}
 	s.executionResults = &operationExecutionResultStore{db: db}
 	s.rollouts = &rolloutTrackingStore{db: db}
@@ -303,6 +305,11 @@ func (s *Store) EmergencyConfig() store.EmergencyConfigStore { return s.emergenc
 
 // Authorization returns the durable authorization state module.
 func (s *Store) Authorization() store.AuthorizationStore { return s.authorization }
+
+// PendingWorkloadIdentities returns the REQ-088 identity buffer store.
+func (s *Store) PendingWorkloadIdentities() store.PendingWorkloadIdentityStore {
+	return s.pendingWorkload
+}
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error { return s.db.Close() }
@@ -1788,6 +1795,28 @@ var migrationStatements = []string{
 		updated_at      TEXT NOT NULL,
 		PRIMARY KEY (organization_id, customer_id)
 	)`,
+	// REQ-088 (TASK-088): orchestrator-side buffer for identity reports that
+	// arrive before their release_inventory row exists (D2=A). Mirrors
+	// migrations/000025_pending_workload_identity.up.sql.
+	`CREATE TABLE IF NOT EXISTS pending_workload_identity (
+		id                  TEXT PRIMARY KEY,
+		customer_id         TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+		cluster_id          TEXT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+		namespace           TEXT NOT NULL DEFAULT '',
+		release_name        TEXT NOT NULL,
+		workload_kind       TEXT NOT NULL DEFAULT '',
+		workload_name       TEXT NOT NULL DEFAULT '',
+		workload_namespace  TEXT NOT NULL DEFAULT '',
+		workload_uid        TEXT NOT NULL DEFAULT '',
+		created_at          TEXT NOT NULL,
+		UNIQUE(customer_id, cluster_id, namespace, release_name)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_pending_workload_identity_cluster
+	 ON pending_workload_identity(customer_id, cluster_id)`,
 }
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }
+
+// Compile-time assertion: the SQLite Store satisfies the full store.Store
+// contract (postgres keeps the same assertion in its db.go).
+var _ store.Store = (*Store)(nil)

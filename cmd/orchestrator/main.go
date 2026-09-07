@@ -61,6 +61,14 @@ type orchSvc struct {
 	// Operator streams after a committed management write (REQ-053). It is
 	// process-global by default; tests inject a private registry for isolation.
 	streamRegistry *operator.StreamRegistry
+
+	// operatorService is the OperatorService mounted on both the management
+	// mux and the agent gateway. Register keeps it on the host so Run can
+	// drive the REQ-088 pending identity sweep.
+	operatorService *operator.Service
+	// logger is the service logger captured during Register, reused by
+	// background loops that Run starts (identity sweep).
+	logger *slog.Logger
 }
 
 func (s *orchSvc) Name() string { return "release-orchestrator" }
@@ -74,7 +82,7 @@ func (s *orchSvc) Configure(cfg *config.ServiceConfig) { s.cfg = *cfg }
 // gateway listener itself is built later (buildGatewayServer) once the
 // orchestrator Service exists, because it also mounts SyncInventory
 // (TASK-080, D-107=A).
-func (s *orchSvc) newGatewayOperatorService(logger *slog.Logger) (*operator.Service, *ca.CA, config.GatewayCfg, error) {
+func (s *orchSvc) newGatewayOperatorService(logger *slog.Logger, identityMetrics *operator.IdentityMetrics) (*operator.Service, *ca.CA, config.GatewayCfg, error) {
 	gatewayCfg := s.cfg.Gateway.WithDefaults()
 	caInst, renewRatio, err := ca.LoadConfigured(context.Background(), s.cfg.CA)
 	if err != nil {
@@ -85,6 +93,7 @@ func (s *orchSvc) newGatewayOperatorService(logger *slog.Logger) (*operator.Serv
 		operator.WithRenewBeforeRatio(renewRatio),
 		operator.WithAudit(s.auditEmitter),
 		operator.WithStreamRegistry(s.operatorRegistry()),
+		operator.WithIdentityMetrics(identityMetrics),
 	}
 	// The gateway service shares the persisted CA so Enroll signs
 	// certificates from the same CA the listener verifies against.
@@ -301,8 +310,14 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		return fmt.Errorf("seed emergency config: %w", err)
 	}
 	logger.Info("emergency config seeded", "enabled", emergencyCfg.Enabled, "operation_timeout", emergencyCfg.OperationTimeout, "effect_observe_timeout", emergencyCfg.EffectObserveTimeout, "present", emergencyPresent)
-	metrics := authorization.NewMetrics(prometheus.NewRegistry())
+	// Shared registry so /metrics (mounted through the authorization gatherer)
+	// exposes both the REQ-027 auth instruments and the REQ-088 identity
+	// convergence instruments on one path.
+	registry := prometheus.NewRegistry()
+	metrics := authorization.NewMetrics(registry)
+	idMetrics := operator.NewIdentityMetrics(registry)
 	mux.Handle("GET /metrics", metrics.Handler())
+	s.logger = logger
 	s.traceShutdown = authorization.InstallTracing()
 	authzConfig := s.cfg.Authorization.WithDefaults()
 	if s.authURL != "" {
@@ -346,10 +361,11 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	// SyncInventory path (TASK-080). A persisted CA keeps the trust chain
 	// stable across restarts; the service shares it via WithCA so Enroll
 	// signs certificates from the same CA the listener verifies against.
-	operatorService, caInst, gatewayCfg, err := s.newGatewayOperatorService(logger)
+	operatorService, caInst, gatewayCfg, err := s.newGatewayOperatorService(logger, idMetrics)
 	if err != nil {
 		return fmt.Errorf("create operator control service: %w", err)
 	}
+	s.operatorService = operatorService
 	operatorPath, operatorHandler := operatorv1connect.NewOperatorServiceHandler(
 		operatorService,
 		connect.WithInterceptors(
@@ -372,6 +388,9 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		s.targetEnv,
 		s.auditEmitter,
 		emergencyDispatcher,
+		// REQ-088 D5=A: SyncInventory triggers the pending identity replay on
+		// the in-process operator service right after each Upsert.
+		orchestrator.NewPendingIdentityReplayer(operatorService),
 		orchestrator.NewProcessStreamRevoker(s.operatorRegistry()),
 		s.operatorEndpoint(),
 		createOperation,
@@ -704,6 +723,13 @@ func (s *orchSvc) Run(ctx context.Context) {
 	if s.validation != nil {
 		go s.validation.Run(ctx)
 	}
+	// REQ-088 D3=D5=A: the periodic pending-identity sweep (bind buffered
+	// identities whose row appeared, purge TTL orphans) runs on the mounted
+	// operator service as its own goroutine so it is independent of the
+	// cleanup/emergency early returns below. Maintenance mode skips it.
+	if s.operatorService != nil && !s.cfg.Maintenance {
+		go s.runPendingIdentitySweep(ctx)
+	}
 	if s.cfg.Maintenance || s.cleanup == nil {
 		return
 	}
@@ -725,6 +751,28 @@ func (s *orchSvc) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.emergency.ExpireEmergencyOperations(ctx)
+		}
+	}
+}
+
+// runPendingIdentitySweep drives the REQ-088 pending identity reconciliation
+// on a 30s ticker for the process lifetime. Reconciliation is idempotent and
+// best-effort: transient failures are logged and retried on the next tick.
+func (s *orchSvc) runPendingIdentitySweep(ctx context.Context) {
+	logger := s.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.operatorService.ReconcilePendingIdentities(ctx); err != nil {
+				logger.Warn("pending identity sweep failed", "error", err)
+			}
 		}
 	}
 }
