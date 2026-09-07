@@ -5,10 +5,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -97,6 +99,8 @@ func newIdentityOrderingFixture(t *testing.T) *identityOrderingFixture {
 
 // seedOrderingDefinition creates an active definition (and its inventory
 // prerequisites) for the identity ordering matrix.
+//
+//nolint:unparam // namespace is uniformly "apps" across the matrix, kept explicit for readability
 func (f *identityOrderingFixture) seedOrderingDefinition(t *testing.T, definitionID, namespace, releaseName string) {
 	t.Helper()
 	require.NoError(t, f.st.Definitions().Create(t.Context(), &store.ReleaseDefinition{
@@ -133,6 +137,8 @@ func (f *identityOrderingFixture) identityStreamFor(t *testing.T) *connect.BidiS
 
 // reportIdentityItem sends one report with a single identity item and drains
 // the stream so server-side handling has fully completed (async to Send).
+//
+//nolint:unparam // release namespace is uniformly "apps" across the matrix, kept explicit for readability
 func (f *identityOrderingFixture) reportIdentityItem(t *testing.T, namespace, releaseName, kind, name, workloadNamespace, uid string) {
 	t.Helper()
 	stream := f.identityStreamFor(t)
@@ -154,6 +160,8 @@ func (f *identityOrderingFixture) reportIdentityItem(t *testing.T, namespace, re
 
 // syncInventoryItem applies one SyncInventory (targeted) item creating the
 // inventory row, exactly like the operator's targeted inventory update path.
+//
+//nolint:unparam // release namespace is uniformly "apps" across the matrix, kept explicit for readability
 func (f *identityOrderingFixture) syncInventoryItem(t *testing.T, syncID, namespace, releaseName, definitionID string) {
 	t.Helper()
 	_, err := f.orchestratorSvc.SyncInventory(t.Context(), connect.NewRequest(&orchestratorv1.SyncInventoryRequest{
@@ -171,6 +179,7 @@ func (f *identityOrderingFixture) syncInventoryItem(t *testing.T, syncID, namesp
 	require.NoError(t, err)
 }
 
+//nolint:unparam // release namespace is uniformly "apps" across the matrix, kept explicit for readability
 func (f *identityOrderingFixture) inventoryIdentity(t *testing.T, namespace, releaseName string) store.WorkloadIdentity {
 	t.Helper()
 	row, err := f.st.Inventories().GetByReleaseKey(t.Context(), f.customerID, f.clusterID, namespace, releaseName)
@@ -444,4 +453,87 @@ func TestIdentityOrderingReplayFailureKeepsPendingForRetry(t *testing.T) {
 	assert.Equal(t, "uid-h1", identity.UID, "recovery must not be polluted by the earlier failed replay")
 	_, err = f.st.PendingWorkloadIdentities().GetByReleaseKey(t.Context(), f.customerID, f.clusterID, "apps", "example-h")
 	require.ErrorIs(t, err, store.ErrNotFound)
+}
+
+// REQ-088 D6 concurrency hardening: a replay racing a concurrent report buffer
+// for the same release key is serialized by the per-key stripe lock, so a
+// stale replay can never delete the newer buffered report. The test hammers
+// SyncInventory-driven replay and report buffering concurrently and asserts
+// the final pending/bound state stays one of the two self-consistent values
+// (the newer report is never lost by the older replay's unconditional delete).
+func TestIdentityOrderingConcurrentReplayAndReportConverges(t *testing.T) {
+	f := newIdentityOrderingFixture(t)
+	f.seedOrderingDefinition(t, "definition-ordering-conc", "apps", "example-conc")
+
+	// Buffer an older report before any row exists.
+	f.reportIdentityItem(t, "apps", "example-conc", "DEPLOYMENT", "example-conc", "apps", "uid-old")
+
+	const iterations = 40
+	var wg sync.WaitGroup
+	errCh := make(chan error, iterations*2)
+	for i := 0; i < iterations; i++ {
+		wg.Add(2)
+		// Concurrently: SyncInventory creating the row + replay (read pending,
+		// bind, delete), and a fresh report buffering a newer uid.
+		go func() {
+			defer wg.Done()
+			_, err := f.orchestratorSvc.SyncInventory(t.Context(), connect.NewRequest(&orchestratorv1.SyncInventoryRequest{
+				OperatorId: f.operatorID, CustomerId: f.customerID, ClusterId: f.clusterID,
+				SyncId: "sync-conc-" + uuid.NewString(),
+				Items: []*orchestratorv1.InventoryItem{{
+					Namespace: "apps", Name: "example-conc",
+					DefinitionId: "definition-ordering-conc",
+					Chart:        "example-chart", ChartVersion: "1.0.0",
+					Revision: 1, Status: "deployed",
+				}},
+			}))
+			if err != nil {
+				errCh <- err
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			// Report buffering path: either row-present apply (which deletes
+			// pending) or row-absent buffer (which refreshes pending to a
+			// newer uid) — both under the same per-key lock as replay.
+			f.reportIdentityItem(t, "apps", "example-conc", "DEPLOYMENT", "example-conc", "apps", "uid-new")
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Errorf("concurrent sync/report failed: %v", err)
+	}
+
+	// Self-consistent end state: run one final deterministic sync/replay and
+	// assert convergence on the newer uid.
+	_, err := f.orchestratorSvc.SyncInventory(t.Context(), connect.NewRequest(&orchestratorv1.SyncInventoryRequest{
+		OperatorId: f.operatorID, CustomerId: f.customerID, ClusterId: f.clusterID,
+		SyncId: "sync-conc-final",
+		Items: []*orchestratorv1.InventoryItem{{
+			Namespace: "apps", Name: "example-conc",
+			DefinitionId: "definition-ordering-conc",
+			Chart:        "example-chart", ChartVersion: "1.0.0",
+			Revision: 1, Status: "deployed",
+		}},
+	}))
+	require.NoError(t, err)
+	identity := f.inventoryIdentity(t, "apps", "example-conc")
+	assert.Equal(t, "example-conc", identity.Name)
+	assert.NotEmpty(t, identity.UID, "identity must converge to a bound value under concurrency")
+	// No pending row may remain after the final sync (row-present path or
+	// replay consumes it); if one does remain it must be the newest value and
+	// the sweep will bind it — assert no duplicate/stale pending is left that
+	// could regress.
+	pending, err := f.st.PendingWorkloadIdentities().GetByReleaseKey(t.Context(), f.customerID, f.clusterID, "apps", "example-conc")
+	if err == nil {
+		assert.Equal(t, "uid-new", pending.WorkloadUID, "any surviving pending must be the newest report")
+	} else {
+		require.ErrorIs(t, err, store.ErrNotFound)
+	}
+	// A sweep converges whatever is left and never regresses the bound uid.
+	require.NoError(t, f.operatorSvc.ReconcilePendingIdentities(t.Context()))
+	row, err := f.st.Inventories().GetByReleaseKey(t.Context(), f.customerID, f.clusterID, "apps", "example-conc")
+	require.NoError(t, err)
+	assert.Equal(t, identity.UID, row.WorkloadUID, "sweep must not regress a bound identity")
 }

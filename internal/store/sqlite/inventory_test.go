@@ -112,12 +112,12 @@ func seedPendingCustomerCluster(t *testing.T, st interface {
 
 // pendingIdentityFor builds the REQ-088 pending identity fixture. The row id
 // derives from the release name so independent release keys never collide on
-// the TEXT PRIMARY KEY.
-func pendingIdentityFor(t *testing.T, namespace, releaseName, uid string) *store.PendingWorkloadIdentity {
+// the TEXT PRIMARY KEY; the namespace is fixed to "apps" across the matrix.
+func pendingIdentityFor(t *testing.T, releaseName, uid string) *store.PendingWorkloadIdentity {
 	t.Helper()
 	return &store.PendingWorkloadIdentity{
 		ID: "pending-" + releaseName, CustomerID: "customer-1", ClusterID: "cluster-1",
-		Namespace: namespace, ReleaseName: releaseName,
+		Namespace: "apps", ReleaseName: releaseName,
 		WorkloadKind: "DEPLOYMENT", WorkloadName: "example", WorkloadNamespace: "apps", WorkloadUID: uid,
 		CreatedAt: time.Now().UTC(),
 	}
@@ -131,11 +131,11 @@ func TestPendingWorkloadIdentityUpsertIdempotentByReleaseKey(t *testing.T) {
 	ctx := t.Context()
 	seedPendingCustomerCluster(t, st)
 
-	first := pendingIdentityFor(t, "apps", "example", "uid-0001")
+	first := pendingIdentityFor(t, "example", "uid-0001")
 	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, first))
 
 	older := time.Now().UTC().Add(-time.Minute)
-	second := pendingIdentityFor(t, "apps", "example", "uid-0002")
+	second := pendingIdentityFor(t, "example", "uid-0002")
 	second.CreatedAt = older
 	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, second))
 
@@ -162,7 +162,7 @@ func TestPendingWorkloadIdentityGetAndDeleteByReleaseKey(t *testing.T) {
 	_, err := st.PendingWorkloadIdentities().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "missing")
 	require.ErrorIs(t, err, store.ErrNotFound)
 
-	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, pendingIdentityFor(t, "apps", "example", "uid-0001")))
+	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, pendingIdentityFor(t, "example", "uid-0001")))
 	require.NoError(t, st.PendingWorkloadIdentities().DeleteByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "example"))
 	_, err = st.PendingWorkloadIdentities().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "example")
 	require.ErrorIs(t, err, store.ErrNotFound)
@@ -178,11 +178,11 @@ func TestPendingWorkloadIdentityPurgeExpired(t *testing.T) {
 	ctx := t.Context()
 	seedPendingCustomerCluster(t, st)
 
-	fresh := pendingIdentityFor(t, "apps", "fresh", "uid-fresh")
+	fresh := pendingIdentityFor(t, "fresh", "uid-fresh")
 	fresh.CreatedAt = time.Now().UTC()
 	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, fresh))
 
-	stale := pendingIdentityFor(t, "apps", "stale", "uid-stale")
+	stale := pendingIdentityFor(t, "stale", "uid-stale")
 	stale.CreatedAt = time.Now().UTC().Add(-30 * time.Minute)
 	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, stale))
 

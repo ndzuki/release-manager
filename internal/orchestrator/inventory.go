@@ -72,6 +72,22 @@ func (s *Service) SyncInventory(
 	presentKeys := make([]string, 0, len(msg.Items))
 	acceptedCount := 0
 
+	// REQ-088 D5=A replay gate: only probe releases that actually have a
+	// buffered identity for this cluster. A full snapshot with no pending
+	// rows must not pay one GetByReleaseKey miss-lookup per item.
+	var pendingKeys map[string]struct{}
+	if s.pendingIdentity != nil {
+		pendings, listErr := s.store.PendingWorkloadIdentities().ListByCluster(ctx, msg.CustomerId, msg.ClusterId)
+		if listErr != nil {
+			s.logger.Warn("list pending workload identities for replay gate", "error", listErr)
+		} else {
+			pendingKeys = make(map[string]struct{}, len(pendings))
+			for _, pending := range pendings {
+				pendingKeys[pending.Namespace+"/"+pending.ReleaseName] = struct{}{}
+			}
+		}
+	}
+
 	for _, item := range msg.Items {
 		// AC-017-04: Log only digest, never values
 		s.logger.Debug("upserting inventory item",
@@ -103,11 +119,16 @@ func (s *Service) SyncInventory(
 		// REQ-088 D5=A: the inventory row now exists — event-driven replay of
 		// any buffered identity for this release key. Best-effort by design:
 		// a transient replay failure only keeps the pending row, which the
-		// periodic sweep retries; it must never fail the sync itself.
+		// periodic sweep retries; it must never fail the sync itself. Only
+		// releases the replay gate saw as pending are probed (a report
+		// buffered mid-sync for a key outside the gate is still picked up by
+		// the 30s sweep — the replay gate is an optimization, not the backstop).
 		if s.pendingIdentity != nil {
-			if err := s.pendingIdentity.ReplayAfterInventory(ctx, msg.CustomerId, msg.ClusterId, item.Namespace, item.Name); err != nil {
-				s.logger.Warn("pending workload identity replay failed after upsert",
-					"sync_id", msg.SyncId, "namespace", item.Namespace, "name", item.Name, "error", err)
+			if _, pending := pendingKeys[item.Namespace+"/"+item.Name]; pending {
+				if err := s.pendingIdentity.ReplayAfterInventory(ctx, msg.CustomerId, msg.ClusterId, item.Namespace, item.Name); err != nil {
+					s.logger.Warn("pending workload identity replay failed after upsert",
+						"sync_id", msg.SyncId, "namespace", item.Namespace, "name", item.Name, "error", err)
+				}
 			}
 		}
 

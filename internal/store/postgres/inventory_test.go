@@ -118,10 +118,10 @@ func seedPendingCustomerClusterPg(t *testing.T, st interface {
 	}))
 }
 
-func pendingIdentityPg(customerID, clusterID, namespace, releaseName, uid string, createdAt time.Time) *store.PendingWorkloadIdentity {
+func pendingIdentityPg(customerID, clusterID, releaseName, uid string, createdAt time.Time) *store.PendingWorkloadIdentity {
 	return &store.PendingWorkloadIdentity{
 		ID: "pending-" + uuid.NewString(), CustomerID: customerID, ClusterID: clusterID,
-		Namespace: namespace, ReleaseName: releaseName,
+		Namespace: "apps", ReleaseName: releaseName,
 		WorkloadKind: "DEPLOYMENT", WorkloadName: "example", WorkloadNamespace: "apps", WorkloadUID: uid,
 		CreatedAt: createdAt,
 	}
@@ -136,10 +136,10 @@ func TestPendingWorkloadIdentityUpsertIdempotentByReleaseKey(t *testing.T) {
 	const customerID, clusterID = "customer-pending", "cluster-pending"
 	seedPendingCustomerClusterPg(t, st, customerID, clusterID)
 
-	first := pendingIdentityPg(customerID, clusterID, "apps", "example", "uid-0001", time.Now().UTC())
+	first := pendingIdentityPg(customerID, clusterID, "example", "uid-0001", time.Now().UTC())
 	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, first))
 
-	second := pendingIdentityPg(customerID, clusterID, "apps", "example", "uid-0002", time.Now().UTC().Add(-time.Minute))
+	second := pendingIdentityPg(customerID, clusterID, "example", "uid-0002", time.Now().UTC().Add(-time.Minute))
 	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, second))
 
 	got, err := st.PendingWorkloadIdentities().GetByReleaseKey(ctx, customerID, clusterID, "apps", "example")
@@ -164,7 +164,7 @@ func TestPendingWorkloadIdentityGetAndDeleteByReleaseKey(t *testing.T) {
 	_, err := st.PendingWorkloadIdentities().GetByReleaseKey(ctx, customerID, clusterID, "apps", "missing")
 	require.ErrorIs(t, err, store.ErrNotFound)
 
-	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, pendingIdentityPg(customerID, clusterID, "apps", "example", "uid-0001", time.Now().UTC())))
+	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, pendingIdentityPg(customerID, clusterID, "example", "uid-0001", time.Now().UTC())))
 	require.NoError(t, st.PendingWorkloadIdentities().DeleteByReleaseKey(ctx, customerID, clusterID, "apps", "example"))
 	_, err = st.PendingWorkloadIdentities().GetByReleaseKey(ctx, customerID, clusterID, "apps", "example")
 	require.ErrorIs(t, err, store.ErrNotFound)
@@ -180,8 +180,8 @@ func TestPendingWorkloadIdentityPurgeExpired(t *testing.T) {
 	const customerID, clusterID = "customer-pending-purge", "cluster-pending-purge"
 	seedPendingCustomerClusterPg(t, st, customerID, clusterID)
 
-	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, pendingIdentityPg(customerID, clusterID, "apps", "fresh", "uid-fresh", time.Now().UTC())))
-	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, pendingIdentityPg(customerID, clusterID, "apps", "stale", "uid-stale", time.Now().UTC().Add(-30*time.Minute))))
+	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, pendingIdentityPg(customerID, clusterID, "fresh", "uid-fresh", time.Now().UTC())))
+	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, pendingIdentityPg(customerID, clusterID, "stale", "uid-stale", time.Now().UTC().Add(-30*time.Minute))))
 
 	purged, err := st.PendingWorkloadIdentities().PurgeExpired(ctx, time.Now().UTC().Add(-10*time.Minute))
 	require.NoError(t, err)

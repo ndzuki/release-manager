@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strings"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -198,13 +200,38 @@ func (s *Service) applyWorkloadIdentityReport(ctx context.Context, report *opera
 		groups[key] = append(groups[key], item)
 	}
 	for key, items := range groups {
+		// The CommandStream report handler and the SyncInventory replay path
+		// run on different goroutines of the same control-plane process.
+		// Every identity mutation for one release key happens under this
+		// per-key lock, so a replay can never observe a half-applied report
+		// (or vice versa) — the report-to-row and replay-to-row read-modify-
+		// writes are serialized per release (REQ-088 D6 convergence).
+		lock := s.identityStripeLock(op.CustomerID, op.ClusterID, items[0].GetReleaseNamespace(), items[0].GetReleaseName())
+		lock.Lock()
 		if row, ok := byRelease[key]; ok {
 			s.applyReportToInventoryRow(ctx, op.CustomerID, op.ClusterID, row, defByRelease[key], items, key)
-			continue
+		} else {
+			s.bufferWorkloadIdentityReport(ctx, op.CustomerID, op.ClusterID, defByRelease[key], key, items)
 		}
-		s.bufferWorkloadIdentityReport(ctx, op.CustomerID, op.ClusterID, defByRelease[key], key, items)
+		lock.Unlock()
 	}
 	return nil
+}
+
+// identityStripeLock returns the per-release-key stripe lock serializing all
+// identity convergence for one release (report buffering / row-present apply /
+// SyncInventory replay / sweep). A bounded stripe set keeps memory flat while
+// unrelated releases almost never contend.
+func (s *Service) identityStripeLock(customerID, clusterID, namespace, releaseName string) *sync.Mutex {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(customerID))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(clusterID))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(namespace))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(releaseName))
+	return &s.identityLocks[h.Sum32()%uint32(len(s.identityLocks))]
 }
 
 // applyReportToInventoryRow applies one release's reported identity items to
@@ -213,12 +240,14 @@ func (s *Service) applyWorkloadIdentityReport(ctx context.Context, report *opera
 // selection; a definition that cannot be loaded fails closed exactly as the
 // pre-REQ-088 behavior did (identity stays empty). A D4=C conflict is a
 // deterministic terminal state — the existing identity is kept and counted.
+// The caller must hold the release-key identityStripeLock.
 func (s *Service) applyReportToInventoryRow(ctx context.Context, customerID, clusterID string, row *store.ReleaseInventory, fallbackDef *store.ReleaseDefinition, items []*operatorv1.WorkloadIdentityItem, key string) {
 	var definition *store.ReleaseDefinition
 	if row.ReleaseDefinitionID != "" {
 		def, err := s.store.Definitions().Get(ctx, row.ReleaseDefinitionID)
 		if err != nil {
 			s.logger.Warn("workload identity selection failed", "namespace_release", key, "error", err)
+			s.countIdentityReportDropped()
 			return
 		}
 		definition = def
@@ -238,7 +267,8 @@ func (s *Service) applyReportToInventoryRow(ctx context.Context, customerID, clu
 	// A selectable report applied to the existing row supersedes any buffered
 	// pending identity for the same release. If a stale pending row were left
 	// behind, the sweep could later replay an OLDER report over the fresher
-	// row identity (regressing a uid update after a workload rebuild).
+	// row identity (regressing a uid update after a workload rebuild). Under
+	// the per-key lock no concurrent buffer can replace it in between.
 	if err := s.store.PendingWorkloadIdentities().DeleteByReleaseKey(ctx, customerID, clusterID, row.Namespace, row.ReleaseName); err != nil {
 		s.logger.Debug("failed to clear superseded pending identity", "namespace_release", key, "error", err)
 	}
@@ -248,7 +278,8 @@ func (s *Service) applyReportToInventoryRow(ctx context.Context, customerID, clu
 // release whose inventory row is not created yet (REQ-088 D2=A). The unique
 // release key makes re-reporting idempotent (D6=A). Only a selectable tuple is
 // buffered — ambiguous or incomplete reports are dropped fail closed
-// (AC-088-03), matching the row-present selection rule.
+// (AC-088-03), matching the row-present selection rule. The caller must hold
+// the release-key identityStripeLock.
 func (s *Service) bufferWorkloadIdentityReport(ctx context.Context, customerID, clusterID string, definition *store.ReleaseDefinition, key string, items []*operatorv1.WorkloadIdentityItem) {
 	identity, ok := SelectWorkloadIdentity(definition, items)
 	if !ok {
@@ -350,8 +381,20 @@ func (s *Service) applyIdentity(ctx context.Context, customerID, clusterID, name
 // nothing buffered (ErrNotFound) or the row still absent are nil (the periodic
 // sweep retries); a D4=C conflict is a deterministic terminal state and also
 // removes the pending row; only real store failures propagate and keep the
-// pending row for the next event or sweep.
+// pending row for the next event or sweep. Runs under the per-release-key lock
+// so it can never interleave with a concurrent report buffer/apply for the
+// same release (a stale replay must not delete a newer buffered report or
+// regress a fresher row bind).
 func (s *Service) ReplayAfterInventory(ctx context.Context, customerID, clusterID, namespace, releaseName string) error {
+	lock := s.identityStripeLock(customerID, clusterID, namespace, releaseName)
+	lock.Lock()
+	defer lock.Unlock()
+	return s.replayAfterInventoryLocked(ctx, customerID, clusterID, namespace, releaseName)
+}
+
+// replayAfterInventoryLocked is the replay body; the caller holds the
+// release-key identityStripeLock.
+func (s *Service) replayAfterInventoryLocked(ctx context.Context, customerID, clusterID, namespace, releaseName string) error {
 	key := reportReleaseKey(namespace, releaseName)
 	pending, err := s.store.PendingWorkloadIdentities().GetByReleaseKey(ctx, customerID, clusterID, namespace, releaseName)
 	if err != nil {
@@ -359,6 +402,20 @@ func (s *Service) ReplayAfterInventory(ctx context.Context, customerID, clusterI
 			return nil // nothing buffered for this release
 		}
 		return fmt.Errorf("load pending workload identity for replay: %w", err)
+	}
+	// A pending row that somehow lacks a complete four-tuple (defensive: the
+	// buffer path already validates completeness) must never be bound. Treat
+	// it as corrupt data: drop it so it cannot linger as an orphan.
+	if !identityComplete(store.WorkloadIdentity{
+		Kind: pending.WorkloadKind, Name: pending.WorkloadName,
+		Namespace: pending.WorkloadNamespace, UID: pending.WorkloadUID,
+	}) {
+		s.logger.Warn("dropping incomplete pending workload identity", "namespace_release", key)
+		if err := s.store.PendingWorkloadIdentities().DeleteByReleaseKey(ctx, customerID, clusterID, namespace, releaseName); err != nil {
+			return fmt.Errorf("delete incomplete pending workload identity: %w", err)
+		}
+		s.countIdentityReportDropped()
+		return nil
 	}
 	row, err := s.store.Inventories().GetByReleaseKey(ctx, customerID, clusterID, namespace, releaseName)
 	if err != nil {
@@ -389,41 +446,40 @@ func (s *Service) ReplayAfterInventory(ctx context.Context, customerID, clusterI
 
 // ReconcilePendingIdentities is the periodic convergence and orphan cleanup
 // pass driven by the orchestrator host (REQ-088 D3/D5). It first attempts the
-// replay/bind for every buffered identity (rows may have appeared since the
-// last sync), then purges pending rows whose created_at is older than the TTL
-// because their release never materialized as an inventory row. Safe to run
-// concurrently with report handling: binding deletes the pending row and the
-// release-key upsert is the only writer for a key.
+// replay/bind for every buffered identity under the per-release-key lock (rows
+// may have appeared since the last sync), then purges the remaining orphans —
+// pending rows older than the TTL whose release never materialized — with one
+// atomic store PurgeExpired call (single purge implementation).
 func (s *Service) ReconcilePendingIdentities(ctx context.Context) error {
 	pendings, err := s.store.PendingWorkloadIdentities().ListAll(ctx)
 	if err != nil {
 		return fmt.Errorf("list pending workload identities for sweep: %w", err)
 	}
-	cutoff := time.Now().UTC().Add(-s.bufferedIdentityTTL())
 	for _, pending := range pendings {
 		key := reportReleaseKey(pending.Namespace, pending.ReleaseName)
-		if err := s.ReplayAfterInventory(ctx, pending.CustomerID, pending.ClusterID, pending.Namespace, pending.ReleaseName); err != nil {
+		lock := s.identityStripeLock(pending.CustomerID, pending.ClusterID, pending.Namespace, pending.ReleaseName)
+		lock.Lock()
+		err := s.replayAfterInventoryLocked(ctx, pending.CustomerID, pending.ClusterID, pending.Namespace, pending.ReleaseName)
+		lock.Unlock()
+		if err != nil {
 			// Transient failure: keep the pending row; the next sweep retries.
 			s.logger.Warn("pending workload identity replay failed", "namespace_release", key, "error", err)
 			continue
 		}
-		still, err := s.store.PendingWorkloadIdentities().GetByReleaseKey(ctx, pending.CustomerID, pending.ClusterID, pending.Namespace, pending.ReleaseName)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				continue // replay bound and deleted it
-			}
-			s.logger.Warn("pending workload identity re-read failed", "namespace_release", key, "error", err)
-			continue
-		}
-		if still.CreatedAt.Before(cutoff) {
-			if err := s.store.PendingWorkloadIdentities().DeleteByReleaseKey(ctx, still.CustomerID, still.ClusterID, still.Namespace, still.ReleaseName); err != nil {
-				s.logger.Warn("pending workload identity purge failed", "namespace_release", key, "error", err)
-				continue
-			}
-			s.logger.Info("purged orphan pending workload identity past TTL",
-				"namespace_release", key, "created_at", still.CreatedAt.Format(time.RFC3339))
-			s.countIdentityPendingPurged()
-		}
+	}
+	// Replay handled every bindable row. Anything still pending whose
+	// created_at predates the TTL is an orphan (the release never appeared as
+	// an inventory row) — one atomic store purge is the single TTL
+	// implementation (the store PurgeExpired is exercised by this path).
+	cutoff := time.Now().UTC().Add(-s.bufferedIdentityTTL())
+	purged, err := s.store.PendingWorkloadIdentities().PurgeExpired(ctx, cutoff)
+	if err != nil {
+		return fmt.Errorf("purge expired pending workload identities: %w", err)
+	}
+	if purged > 0 {
+		s.logger.Info("purged orphan pending workload identities past TTL",
+			"purged", purged, "cutoff", cutoff.Format(time.RFC3339))
+		s.countIdentityPendingPurged(purged)
 	}
 	return nil
 }
@@ -472,9 +528,9 @@ func (s *Service) countIdentityReportDropped() {
 	}
 }
 
-func (s *Service) countIdentityPendingPurged() {
+func (s *Service) countIdentityPendingPurged(count int64) {
 	if s.identityMetrics != nil {
-		s.identityMetrics.PendingPurged.Inc()
+		s.identityMetrics.PendingPurged.Add(float64(count))
 	}
 }
 

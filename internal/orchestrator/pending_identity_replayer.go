@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"context"
-	"errors"
 )
 
 // PendingIdentityReplayer is the minimal seam through which SyncInventory
@@ -36,11 +35,5 @@ func NewPendingIdentityReplayer(service PendingIdentityReplayer) PendingIdentity
 }
 
 func (r *operatorPendingIdentityReplayer) ReplayAfterInventory(ctx context.Context, customerID, clusterID, namespace, releaseName string) error {
-	if r == nil || r.service == nil {
-		return errors.New("pending identity replayer is unavailable")
-	}
-	if err := r.service.ReplayAfterInventory(ctx, customerID, clusterID, namespace, releaseName); err != nil {
-		return err
-	}
-	return nil
+	return r.service.ReplayAfterInventory(ctx, customerID, clusterID, namespace, releaseName)
 }

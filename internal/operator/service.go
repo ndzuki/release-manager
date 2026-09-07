@@ -29,6 +29,11 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
+// identityLockStripes serializes identity convergence per release key across
+// the concurrent CommandStream report handler and SyncInventory replay paths
+// (REQ-088 D6). Bounded stripes keep memory flat; see identityStripeLock.
+type identityLockStripes [64]sync.Mutex
+
 // Service implements the OperatorServiceHandler Connect interface.
 type Service struct {
 	store              store.Store
@@ -46,6 +51,7 @@ type Service struct {
 	streams            *StreamRegistry
 	identityMetrics    *IdentityMetrics
 	pendingIdentityTTL time.Duration
+	identityLocks      identityLockStripes
 }
 
 // NewService creates a new operator Connect service. The signing CA must be

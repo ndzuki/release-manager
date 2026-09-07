@@ -139,6 +139,8 @@ func (s *inventoryStore) GetByDefinition(ctx context.Context, definitionID strin
 // (customer_id, cluster_id, namespace, release_name). Returns ErrNotFound when
 // no such row exists (REQ-088 replay reads the current row identity before a
 // D4=C tiered apply).
+//
+//nolint:dupl // inventory row scanners share the established 25-column decode structure
 func (s *inventoryStore) GetByReleaseKey(ctx context.Context, customerID, clusterID, namespace, releaseName string) (*store.ReleaseInventory, error) {
 	row := s.gorm.QueryRowContext(ctx, `
 		SELECT customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version,
