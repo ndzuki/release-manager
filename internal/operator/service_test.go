@@ -1610,8 +1610,9 @@ func TestServiceReconcilePendingIdentitiesPurgesOrphans(t *testing.T) {
 	require.NoError(t, err, "fresh pending within TTL must survive without an inventory row")
 }
 
-// D7=A: the convergence counters fire on buffered / conflict / purged /
-// bound-after-inventory events.
+// D7=A: the convergence counters fire on buffered / bound-after-inventory /
+// conflict / purged events. The buffered counter is exercised through the real
+// CommandStream report path (a report whose inventory row does not exist yet).
 func TestServiceIdentityMetricsCounting(t *testing.T) {
 	st := newTestSvc(t)
 	ctx := t.Context()
@@ -1625,18 +1626,49 @@ func TestServiceIdentityMetricsCounting(t *testing.T) {
 		CustomerID: "cust-1", ClusterID: "clus-1", Namespace: "apps", ReleaseName: "example",
 		Status: store.DefStatusActive,
 	}, nil))
-
-	// A buffered report increments report_buffered.
-	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, &store.PendingWorkloadIdentity{
-		ID: "pending-metrics", CustomerID: "cust-1", ClusterID: "clus-1",
-		Namespace: "apps", ReleaseName: "example",
-		WorkloadKind: "DEPLOYMENT", WorkloadName: "example", WorkloadNamespace: "apps", WorkloadUID: "uid-m1",
-		CreatedAt: time.Now().UTC(),
-	}))
 	counterValue := func(c prometheus.Counter) float64 {
 		return testutil.ToFloat64(c)
 	}
-	assert.Equal(t, float64(0), counterValue(idMetrics.ReportBuffered))
+
+	// A report over the CommandStream for a release without an inventory row
+	// is buffered → report_buffered.
+	reportStream := func() {
+		t.Helper()
+		path, handler := operatorv1connect.NewOperatorServiceHandler(svc)
+		mux := http.NewServeMux()
+		mux.Handle(path, handler)
+		srv := httptest.NewUnstartedServer(mux)
+		srv.EnableHTTP2 = true
+		srv.StartTLS()
+		t.Cleanup(srv.Close)
+		client := operatorv1connect.NewOperatorServiceClient(srv.Client(), srv.URL)
+		stream := client.CommandStream(ctx)
+		require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+			Payload: &operatorv1.CommandStreamRequest_Hello{
+				Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+			},
+		}))
+		_, err := stream.Receive()
+		require.NoError(t, err)
+		require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+			Payload: &operatorv1.CommandStreamRequest_WorkloadIdentityReport{
+				WorkloadIdentityReport: &operatorv1.WorkloadIdentityReport{Items: []*operatorv1.WorkloadIdentityItem{{
+					ReleaseNamespace: "apps", ReleaseName: "example",
+					Kind: "DEPLOYMENT", Name: "example", Namespace: "apps", Uid: "uid-m1",
+				}}},
+			},
+		}))
+		require.NoError(t, stream.CloseRequest())
+		for {
+			if _, err := stream.Receive(); err != nil {
+				break
+			}
+		}
+	}
+	reportStream()
+	_, err = st.PendingWorkloadIdentities().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.NoError(t, err, "report must be buffered")
+	assert.Equal(t, float64(1), counterValue(idMetrics.ReportBuffered))
 
 	// Bind after the row appears → bound_after_inventory.
 	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
@@ -1645,6 +1677,46 @@ func TestServiceIdentityMetricsCounting(t *testing.T) {
 	}))
 	require.NoError(t, svc.ReplayAfterInventory(ctx, "cust-1", "clus-1", "apps", "example"))
 	assert.Equal(t, float64(1), counterValue(idMetrics.BoundAfterInventory))
+
+	// A D4=C conflict (kind mismatch on the now-bound row) increments conflict.
+	conflictStream := func() {
+		t.Helper()
+		path, handler := operatorv1connect.NewOperatorServiceHandler(svc)
+		mux := http.NewServeMux()
+		mux.Handle(path, handler)
+		srv := httptest.NewUnstartedServer(mux)
+		srv.EnableHTTP2 = true
+		srv.StartTLS()
+		t.Cleanup(srv.Close)
+		client := operatorv1connect.NewOperatorServiceClient(srv.Client(), srv.URL)
+		stream := client.CommandStream(ctx)
+		require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+			Payload: &operatorv1.CommandStreamRequest_Hello{
+				Hello: &operatorv1.Hello{SessionId: "sess-1", OperatorId: "op-1", LastSeenSequence: 1},
+			},
+		}))
+		_, err := stream.Receive()
+		require.NoError(t, err)
+		require.NoError(t, stream.Send(&operatorv1.CommandStreamRequest{
+			Payload: &operatorv1.CommandStreamRequest_WorkloadIdentityReport{
+				WorkloadIdentityReport: &operatorv1.WorkloadIdentityReport{Items: []*operatorv1.WorkloadIdentityItem{{
+					ReleaseNamespace: "apps", ReleaseName: "example",
+					Kind: "STATEFUL_SET", Name: "example", Namespace: "apps", Uid: "uid-sts",
+				}}},
+			},
+		}))
+		require.NoError(t, stream.CloseRequest())
+		for {
+			if _, err := stream.Receive(); err != nil {
+				break
+			}
+		}
+	}
+	conflictStream()
+	row, err := st.Inventories().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Equal(t, "DEPLOYMENT", row.WorkloadKind, "conflict keeps existing identity")
+	assert.Equal(t, float64(1), counterValue(idMetrics.Conflict))
 
 	// A stale orphan purge increments pending_purged.
 	require.NoError(t, st.PendingWorkloadIdentities().Upsert(ctx, &store.PendingWorkloadIdentity{
