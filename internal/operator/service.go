@@ -805,11 +805,6 @@ func (s *Service) finishEmergencyResult(ctx context.Context, result *operatorv1.
 		s.logger.Warn("failed to load emergency intent result", "command_id", result.GetEmergencyCommandId(), "error", err)
 		return
 	}
-	op, err := s.store.Operations().Get(ctx, intent.OperationID)
-	if err != nil {
-		s.logger.Warn("failed to load emergency operation result", "operation_id", intent.OperationID, "error", err)
-		return
-	}
 	var snapshots struct {
 		Before json.RawMessage `json:"before"`
 		After  json.RawMessage `json:"after"`
@@ -818,24 +813,6 @@ func (s *Service) finishEmergencyResult(ctx context.Context, result *operatorv1.
 		if err := json.Unmarshal([]byte(result.GetResultJson()), &snapshots); err != nil {
 			s.logger.Warn("failed to decode emergency snapshots", "command_id", result.GetEmergencyCommandId(), "error", err)
 		}
-	}
-	if op.Status.IsTerminal() {
-		effectStatus := store.EmergencyEffectApplied
-		if result.GetStatus() == "failed" {
-			effectStatus = store.EmergencyEffectNotApplied
-		}
-		resolved, resolveErr := s.store.EmergencyIntents().ResolveEmergencyEffect(ctx, store.ResolveEmergencyEffectCommand{
-			OperationID: op.ID, ExpectedStateVersion: op.StateVersion, EffectStatus: effectStatus,
-			BeforeSnapshot: snapshots.Before, AfterSnapshot: snapshots.After, RequestID: result.GetEmergencyCommandId(),
-		})
-		if resolveErr != nil {
-			s.logger.Warn("failed to resolve late emergency effect", "operation_id", op.ID, "error", resolveErr)
-			return
-		}
-		if resolved.Resolved {
-			s.logger.Info("resolved late emergency effect", "operation_id", op.ID, "effect_status", effectStatus)
-		}
-		return
 	}
 	status := store.StatusSucceeded
 	lastError := ""
@@ -850,22 +827,59 @@ func (s *Service) finishEmergencyResult(ctx context.Context, result *operatorv1.
 	if status == store.StatusFailed {
 		effectStatus = store.EmergencyEffectNotApplied
 	}
-	finished, err := s.store.EmergencyIntents().Finish(
-		ctx,
-		intent.ID,
-		op.ID,
-		op.StateVersion,
-		status,
-		effectStatus,
-		lastError,
-		snapshots.Before,
-		snapshots.After,
-	)
+
+	// REQ-087 D1=D2 (AC-087-01/02/03): every authoritative terminal result
+	// converges through the single-CAS store seam. When the result beats the
+	// queued→running migration the store advances the intermediate hop inside
+	// the same transaction; a terminal op whose effect is still UNKNOWN is
+	// resolved exactly once. A concurrent writer (ACK running migration,
+	// timeout sweep, cancel) can move the state version between our read and
+	// the CAS — retry with a bounded budget after reloading the operation.
+	op, err := s.store.Operations().Get(ctx, intent.OperationID)
 	if err != nil {
-		s.logger.Warn("failed to finish emergency operation", "operation_id", op.ID, "error", err)
+		s.logger.Warn("failed to load emergency operation result", "operation_id", intent.OperationID, "error", err)
 		return
 	}
-	s.emitEmergencyTerminalAudit(finished, intent, snapshots.Before, snapshots.After, result.GetErrorCode())
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		outcome, convErr := s.store.EmergencyIntents().ConvergeEmergencyResult(ctx, store.EmergencyConvergeCommand{
+			IntentID:             intent.ID,
+			OperationID:          op.ID,
+			ExpectedStateVersion: op.StateVersion,
+			Status:               status,
+			EffectStatus:         effectStatus,
+			LastError:            lastError,
+			BeforeSnapshot:       snapshots.Before,
+			AfterSnapshot:        snapshots.After,
+			RequestID:            result.GetEmergencyCommandId(),
+		})
+		if convErr == nil {
+			if outcome.Resolved {
+				// Exactly-once terminal/effect-resolution audit. A late
+				// UNKNOWN→resolved result (AC-087-03) also emits — this is the
+				// audit the previous split implementation silently skipped.
+				s.emitEmergencyTerminalAudit(outcome.Operation, outcome.Intent, snapshots.Before, snapshots.After, result.GetErrorCode())
+				s.logger.Info("converged emergency result", "operation_id", op.ID, "status", status, "effect_status", effectStatus)
+			}
+			return
+		}
+		if errors.Is(convErr, store.ErrOptimisticLock) && attempt < maxAttempts-1 {
+			op, err = s.store.Operations().Get(ctx, intent.OperationID)
+			if err != nil {
+				s.logger.Warn("failed to reload emergency operation for retry", "operation_id", intent.OperationID, "error", err)
+				return
+			}
+			continue
+		}
+		// Terminal writers never drop a real result silently: ErrInvalidState
+		// (genuinely illegal hop / resolved-different-effect protocol
+		// conflict) and exhausted retries stay visible in the logs; the
+		// stuck-lock discovery path (ListStuckLocks + ReleaseEmergencyLock,
+		// REQ-087 D4) is the operator-facing recovery channel.
+		s.logger.Warn("failed to converge emergency operation",
+			"operation_id", op.ID, "state_version", op.StateVersion, "attempt", attempt+1, "error", convErr)
+		return
+	}
 }
 
 func (s *Service) emitEmergencyTerminalAudit(

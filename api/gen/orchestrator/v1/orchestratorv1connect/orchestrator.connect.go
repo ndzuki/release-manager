@@ -176,6 +176,12 @@ const (
 	// OrchestratorServiceListConvergenceTasksProcedure is the fully-qualified name of the
 	// OrchestratorService's ListConvergenceTasks RPC.
 	OrchestratorServiceListConvergenceTasksProcedure = "/orchestrator.v1.OrchestratorService/ListConvergenceTasks"
+	// OrchestratorServiceListStuckLocksProcedure is the fully-qualified name of the
+	// OrchestratorService's ListStuckLocks RPC.
+	OrchestratorServiceListStuckLocksProcedure = "/orchestrator.v1.OrchestratorService/ListStuckLocks"
+	// OrchestratorServiceReleaseEmergencyLockProcedure is the fully-qualified name of the
+	// OrchestratorService's ReleaseEmergencyLock RPC.
+	OrchestratorServiceReleaseEmergencyLockProcedure = "/orchestrator.v1.OrchestratorService/ReleaseEmergencyLock"
 	// OrchestratorServiceConfigureClusterRouteProcedure is the fully-qualified name of the
 	// OrchestratorService's ConfigureClusterRoute RPC.
 	OrchestratorServiceConfigureClusterRouteProcedure = "/orchestrator.v1.OrchestratorService/ConfigureClusterRoute"
@@ -396,6 +402,11 @@ type OrchestratorServiceClient interface {
 	CheckEmergencyConflict(context.Context, *connect.Request[v1.CheckEmergencyConflictRequest]) (*connect.Response[v1.CheckEmergencyConflictResponse], error)
 	ListCandidateArtifacts(context.Context, *connect.Request[v1.ListCandidateArtifactsRequest]) (*connect.Response[v1.ListCandidateArtifactsResponse], error)
 	ListConvergenceTasks(context.Context, *connect.Request[v1.ListConvergenceTasksRequest]) (*connect.Response[v1.ListConvergenceTasksResponse], error)
+	// Emergency stuck-lock observation and release (REQ-087): terminal
+	// operations whose effect is still UNKNOWN past the observe window surface
+	// as stuck locks for release_admin/platform_admin operators.
+	ListStuckLocks(context.Context, *connect.Request[v1.ListStuckLocksRequest]) (*connect.Response[v1.ListStuckLocksResponse], error)
+	ReleaseEmergencyLock(context.Context, *connect.Request[v1.ReleaseEmergencyLockRequest]) (*connect.Response[v1.ReleaseEmergencyLockResponse], error)
 	ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error)
 	GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error)
 	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
@@ -676,6 +687,18 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("ListConvergenceTasks")),
 			connect.WithClientOptions(opts...),
 		),
+		listStuckLocks: connect.NewClient[v1.ListStuckLocksRequest, v1.ListStuckLocksResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListStuckLocksProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListStuckLocks")),
+			connect.WithClientOptions(opts...),
+		),
+		releaseEmergencyLock: connect.NewClient[v1.ReleaseEmergencyLockRequest, v1.ReleaseEmergencyLockResponse](
+			httpClient,
+			baseURL+OrchestratorServiceReleaseEmergencyLockProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ReleaseEmergencyLock")),
+			connect.WithClientOptions(opts...),
+		),
 		configureClusterRoute: connect.NewClient[v1.ConfigureClusterRouteRequest, v1.ConfigureClusterRouteResponse](
 			httpClient,
 			baseURL+OrchestratorServiceConfigureClusterRouteProcedure,
@@ -766,6 +789,8 @@ type orchestratorServiceClient struct {
 	checkEmergencyConflict       *connect.Client[v1.CheckEmergencyConflictRequest, v1.CheckEmergencyConflictResponse]
 	listCandidateArtifacts       *connect.Client[v1.ListCandidateArtifactsRequest, v1.ListCandidateArtifactsResponse]
 	listConvergenceTasks         *connect.Client[v1.ListConvergenceTasksRequest, v1.ListConvergenceTasksResponse]
+	listStuckLocks               *connect.Client[v1.ListStuckLocksRequest, v1.ListStuckLocksResponse]
+	releaseEmergencyLock         *connect.Client[v1.ReleaseEmergencyLockRequest, v1.ReleaseEmergencyLockResponse]
 	configureClusterRoute        *connect.Client[v1.ConfigureClusterRouteRequest, v1.ConfigureClusterRouteResponse]
 	getClusterRoutes             *connect.Client[v1.GetClusterRoutesRequest, v1.GetClusterRoutesResponse]
 	deleteClusterRoute           *connect.Client[v1.DeleteClusterRouteRequest, v1.DeleteClusterRouteResponse]
@@ -991,6 +1016,16 @@ func (c *orchestratorServiceClient) ListConvergenceTasks(ctx context.Context, re
 	return c.listConvergenceTasks.CallUnary(ctx, req)
 }
 
+// ListStuckLocks calls orchestrator.v1.OrchestratorService.ListStuckLocks.
+func (c *orchestratorServiceClient) ListStuckLocks(ctx context.Context, req *connect.Request[v1.ListStuckLocksRequest]) (*connect.Response[v1.ListStuckLocksResponse], error) {
+	return c.listStuckLocks.CallUnary(ctx, req)
+}
+
+// ReleaseEmergencyLock calls orchestrator.v1.OrchestratorService.ReleaseEmergencyLock.
+func (c *orchestratorServiceClient) ReleaseEmergencyLock(ctx context.Context, req *connect.Request[v1.ReleaseEmergencyLockRequest]) (*connect.Response[v1.ReleaseEmergencyLockResponse], error) {
+	return c.releaseEmergencyLock.CallUnary(ctx, req)
+}
+
 // ConfigureClusterRoute calls orchestrator.v1.OrchestratorService.ConfigureClusterRoute.
 func (c *orchestratorServiceClient) ConfigureClusterRoute(ctx context.Context, req *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error) {
 	return c.configureClusterRoute.CallUnary(ctx, req)
@@ -1076,6 +1111,11 @@ type OrchestratorServiceHandler interface {
 	CheckEmergencyConflict(context.Context, *connect.Request[v1.CheckEmergencyConflictRequest]) (*connect.Response[v1.CheckEmergencyConflictResponse], error)
 	ListCandidateArtifacts(context.Context, *connect.Request[v1.ListCandidateArtifactsRequest]) (*connect.Response[v1.ListCandidateArtifactsResponse], error)
 	ListConvergenceTasks(context.Context, *connect.Request[v1.ListConvergenceTasksRequest]) (*connect.Response[v1.ListConvergenceTasksResponse], error)
+	// Emergency stuck-lock observation and release (REQ-087): terminal
+	// operations whose effect is still UNKNOWN past the observe window surface
+	// as stuck locks for release_admin/platform_admin operators.
+	ListStuckLocks(context.Context, *connect.Request[v1.ListStuckLocksRequest]) (*connect.Response[v1.ListStuckLocksResponse], error)
+	ReleaseEmergencyLock(context.Context, *connect.Request[v1.ReleaseEmergencyLockRequest]) (*connect.Response[v1.ReleaseEmergencyLockResponse], error)
 	ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error)
 	GetClusterRoutes(context.Context, *connect.Request[v1.GetClusterRoutesRequest]) (*connect.Response[v1.GetClusterRoutesResponse], error)
 	DeleteClusterRoute(context.Context, *connect.Request[v1.DeleteClusterRouteRequest]) (*connect.Response[v1.DeleteClusterRouteResponse], error)
@@ -1352,6 +1392,18 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("ListConvergenceTasks")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orchestratorServiceListStuckLocksHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListStuckLocksProcedure,
+		svc.ListStuckLocks,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListStuckLocks")),
+		connect.WithHandlerOptions(opts...),
+	)
+	orchestratorServiceReleaseEmergencyLockHandler := connect.NewUnaryHandler(
+		OrchestratorServiceReleaseEmergencyLockProcedure,
+		svc.ReleaseEmergencyLock,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ReleaseEmergencyLock")),
+		connect.WithHandlerOptions(opts...),
+	)
 	orchestratorServiceConfigureClusterRouteHandler := connect.NewUnaryHandler(
 		OrchestratorServiceConfigureClusterRouteProcedure,
 		svc.ConfigureClusterRoute,
@@ -1482,6 +1534,10 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceListCandidateArtifactsHandler.ServeHTTP(w, r)
 		case OrchestratorServiceListConvergenceTasksProcedure:
 			orchestratorServiceListConvergenceTasksHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListStuckLocksProcedure:
+			orchestratorServiceListStuckLocksHandler.ServeHTTP(w, r)
+		case OrchestratorServiceReleaseEmergencyLockProcedure:
+			orchestratorServiceReleaseEmergencyLockHandler.ServeHTTP(w, r)
 		case OrchestratorServiceConfigureClusterRouteProcedure:
 			orchestratorServiceConfigureClusterRouteHandler.ServeHTTP(w, r)
 		case OrchestratorServiceGetClusterRoutesProcedure:
@@ -1675,6 +1731,14 @@ func (UnimplementedOrchestratorServiceHandler) ListCandidateArtifacts(context.Co
 
 func (UnimplementedOrchestratorServiceHandler) ListConvergenceTasks(context.Context, *connect.Request[v1.ListConvergenceTasksRequest]) (*connect.Response[v1.ListConvergenceTasksResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListConvergenceTasks is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListStuckLocks(context.Context, *connect.Request[v1.ListStuckLocksRequest]) (*connect.Response[v1.ListStuckLocksResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListStuckLocks is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ReleaseEmergencyLock(context.Context, *connect.Request[v1.ReleaseEmergencyLockRequest]) (*connect.Response[v1.ReleaseEmergencyLockResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ReleaseEmergencyLock is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) ConfigureClusterRoute(context.Context, *connect.Request[v1.ConfigureClusterRouteRequest]) (*connect.Response[v1.ConfigureClusterRouteResponse], error) {

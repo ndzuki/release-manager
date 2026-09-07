@@ -1849,9 +1849,16 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 	assert.Equal(t, "preflight", createResp.Msg.GetState())
 
 	// AC-019-05: the lifecycle is running and the UOW first dispatch exists.
-	pl, err := svc.store.PreflightLifecycles().GetByOperationID(ctx, opID)
-	require.NoError(t, err)
-	assert.Equal(t, "running", pl.Overall)
+	// The "running" row is recorded by the detached preflight coordinator
+	// (Phase Start) in its own transaction after CreateOperation returns, so
+	// poll for it — the same two-transaction observation window that made the
+	// finalization poll necessary under CI's -race full suite (TASK-077).
+	// The outbox first dispatch below is created atomically in the operation
+	// UOW transaction and stays a strict read (D-87).
+	require.Eventually(t, func() bool {
+		pl, err := svc.store.PreflightLifecycles().GetByOperationID(ctx, opID)
+		return err == nil && pl.Overall == "running"
+	}, 5*time.Second, 50*time.Millisecond)
 	_, err = svc.store.Outbox().GetByCommandID(ctx, opID+":artifact")
 	require.NoError(t, err, "D-87 first dispatch must be pre-created by the creation transaction")
 
