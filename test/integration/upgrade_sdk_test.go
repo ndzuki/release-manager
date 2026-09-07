@@ -99,7 +99,7 @@ func TestUpgradeSDK(t *testing.T) {
 		assert.Equal(t, expectedLabel, label, "release Secret label must be the 63-char encoded digest")
 		assert.Len(t, label, 63)
 		assert.Empty(t, validation.IsValidLabelValue(label), "persisted label must satisfy K8s label value rules")
-		assert.NotContains(t, label, string(opts.BundleDigest), "label must not leak raw input segments")
+		assert.Regexp(t, `^[0-9a-f]{63}$`, label, "label must be pure hex — no raw input segment leaks")
 
 		items, err := engine.List(t.Context(), namespace)
 		require.NoError(t, err)
@@ -202,9 +202,9 @@ func helmReleaseSecret(
 		LabelSelector: "owner=helm,name=" + releaseName,
 	})
 	require.NoError(t, err)
-	for _, secret := range secrets.Items {
-		if secret.Labels["version"] == version {
-			return secret
+	for i := range secrets.Items {
+		if secrets.Items[i].Labels["version"] == version {
+			return secrets.Items[i]
 		}
 	}
 	t.Fatalf("release Secret %s/%s version %s not found (found %d)", namespace, releaseName, version, len(secrets.Items))
