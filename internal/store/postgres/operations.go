@@ -868,7 +868,7 @@ func buildOperation(id, opType, status, defID, idemKey, idemScope, reqHash strin
 		TerminalAt:            terminal,
 		LastError:             lastError,
 		EffectStatus: store.ProjectEffectStatus(
-			store.OperationType(opType), deliveryStatus.String, store.EmergencyEffectStatus(effectStatus.String),
+			store.OperationType(opType), store.OperationStatus(status), deliveryStatus.String, store.EmergencyEffectStatus(effectStatus.String),
 		),
 	}, nil
 }

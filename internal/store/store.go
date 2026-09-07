@@ -60,6 +60,14 @@ var (
 	ErrLastRootRemovalForbidden     = errors.New("last_root_removal_forbidden")
 	ErrBundleNotReady               = errors.New("store: bundle not ready")
 	ErrBundleRejected               = errors.New("store: bundle rejected")
+	// ErrConvergencePending reports a pending_promotion ConvergenceTask bound
+	// to an operation whose lock is being released (REQ-087 §4.2: an
+	// unresolved promotion obligation must converge first).
+	ErrConvergencePending = errors.New("store: convergence task pending promotion")
+	// ErrLockNotStuck reports an emergency lock that is not stuck (operation
+	// non-terminal, effect resolved, already released, or inside the observe
+	// window) and therefore cannot be released via the RPC (REQ-087 §10).
+	ErrLockNotStuck = errors.New("store: emergency lock not stuck or already released")
 )
 
 // ValuesRevision lifecycle sentinel errors.
@@ -1168,8 +1176,13 @@ type EmergencyIntent struct {
 	DeliveryStatus      string
 	EffectStatus        EmergencyEffectStatus
 	LastDeliveryAt      *time.Time
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	// LockReleasedAt records when the target lock was explicitly released via
+	// the release RPC (REQ-087 D4=A). A released intent whose operation is
+	// terminal with effect UNKNOWN no longer counts as holding the target
+	// lock (AUDITED_OVERRIDE) while still observing a late result.
+	LockReleasedAt *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // ResolveEmergencyEffectCommand carries one authoritative late EMERGENCY result.
@@ -1188,6 +1201,91 @@ type ResolveEmergencyEffectResult struct {
 	Intent    *EmergencyIntent
 	Timeline  *OperationTimelineEntry
 	Resolved  bool
+}
+
+// EmergencyConvergeCommand carries one authoritative terminal EMERGENCY
+// result that must converge the operation in a single CAS transaction
+// (REQ-087 D1=A/D2=A). When the operation is still non-terminal the store
+// first advances it along the legal EMERGENCY chain (pending→queued→running
+// as needed, each hop writing its own state-change event) and then applies
+// the terminal hop — a result that beats the queued→running migration never
+// produces a queued→succeeded/failed row or timeline entry (ADR-009/REQ-032
+// §475-487: no queued→terminal edge exists).
+type EmergencyConvergeCommand struct {
+	IntentID             string
+	OperationID          string
+	ExpectedStateVersion int
+	// Status is the terminal target: StatusSucceeded or StatusFailed.
+	Status OperationStatus
+	// EffectStatus is the authority effect: Applied or NotApplied.
+	EffectStatus   EmergencyEffectStatus
+	LastError      string
+	BeforeSnapshot json.RawMessage
+	AfterSnapshot  json.RawMessage
+	RequestID      string
+}
+
+// EmergencyConvergeResult reports the outcome of converging one authoritative
+// terminal EMERGENCY result. Resolved=false means the call was an idempotent
+// no-op (same effect already recorded); Resolved=true means the operation
+// reached its terminal state or an UNKNOWN effect was resolved exactly once.
+type EmergencyConvergeResult struct {
+	Operation *Operation
+	Intent    *EmergencyIntent
+	Resolved  bool
+}
+
+// StuckLockFilter scopes the derived stuck-lock query (REQ-087 D4/D5):
+// a stuck lock is a terminal EMERGENCY intent whose effect is still UNKNOWN,
+// was not explicitly released, and has been terminal longer than
+// ObserveTimeout.
+type StuckLockFilter struct {
+	DefinitionID string
+	// CustomerIDs restrict results to intents whose release definition
+	// belongs to one of these customers (empty = no customer filter).
+	CustomerIDs    []string
+	ObserveTimeout time.Duration
+}
+
+// StuckLock is one derived stuck lock (a projection, never a stored row).
+type StuckLock struct {
+	Intent *EmergencyIntent
+	// TerminalAt is the operation terminal_at driving the stuck derivation.
+	TerminalAt      time.Time
+	LockPathSummary string
+}
+
+// EmergencyReleaseMode selects how ReleaseLock releases a stuck lock
+// (REQ-087 §4.2).
+type EmergencyReleaseMode string
+
+const (
+	// EmergencyReleaseNotAppliedProven records NOT_APPLIED + releases
+	// (the operator proved the command never took effect).
+	EmergencyReleaseNotAppliedProven EmergencyReleaseMode = "NOT_APPLIED_PROVEN"
+	// EmergencyReleaseAuditedOverride releases while the effect stays UNKNOWN.
+	EmergencyReleaseAuditedOverride EmergencyReleaseMode = "AUDITED_OVERRIDE"
+)
+
+// ReleaseLockCommand releases one stuck emergency target lock (REQ-087 D4=A).
+type ReleaseLockCommand struct {
+	IntentID string
+	Mode     EmergencyReleaseMode
+	// Reason is the operator-supplied reason (trimmed, required).
+	Reason string
+	// Evidence is an optional unlock evidence summary.
+	Evidence string
+	// ObserveTimeout is the stuck window the caller enforces (from
+	// emergency.effect_observe_timeout); a lock younger than this window is
+	// rejected as not yet stuck.
+	ObserveTimeout time.Duration
+}
+
+// ReleaseLockResult reports the released intent (before/after effect is read
+// from the caller's pre-command copy vs the returned one for audit).
+type ReleaseLockResult struct {
+	Intent    *EmergencyIntent
+	Operation *Operation
 }
 
 type ConvergenceTask struct {
@@ -1230,6 +1328,7 @@ type EmergencyIntentStore interface {
 	// EMERGENCY branch commits operation + intent + convergence task +
 	// idempotency record atomically on the shared ADR-009 transaction seam.
 	GetReplay(ctx context.Context, scope, keyHash, requestHash string) (*EmergencyCreateResult, error)
+	GetByID(ctx context.Context, id string) (*EmergencyIntent, error)
 	GetByOperationID(ctx context.Context, operationID string) (*EmergencyIntent, error)
 	GetByCommandID(ctx context.Context, commandID string) (*EmergencyIntent, error)
 	GetActiveLocksForDefinition(ctx context.Context, definitionID string) ([]*EmergencyIntent, error)
@@ -1242,10 +1341,23 @@ type EmergencyIntentStore interface {
 	PersistAck(ctx context.Context, id string) (*OperationTimelineEntry, error)
 	Finish(ctx context.Context, intentID, operationID string, expectedStateVersion int, status OperationStatus, effectStatus EmergencyEffectStatus, lastError string, beforeSnapshot, afterSnapshot json.RawMessage) (*Operation, error)
 	ResolveEmergencyEffect(ctx context.Context, command ResolveEmergencyEffectCommand) (*ResolveEmergencyEffectResult, error)
+	// ConvergeEmergencyResult atomically converges one authoritative terminal
+	// EMERGENCY result (REQ-087 D1/D2, AC-087-01/02/03): see
+	// EmergencyConvergeCommand for the exact ordering semantics.
+	ConvergeEmergencyResult(ctx context.Context, command EmergencyConvergeCommand) (*EmergencyConvergeResult, error)
 	// HasUnresolvedForDefinition reports terminal EMERGENCY operations whose
 	// effect is still UNKNOWN for the definition (AC-067-20). It returns the
 	// operation IDs so the handler can attach typed detail.
 	HasUnresolvedForDefinition(ctx context.Context, definitionID string) (bool, []string, error)
+	// ListStuckLocks derives stuck locks (terminal op + effect UNKNOWN +
+	// unreleased + past the observe window) for the optional definition or
+	// customer scope (REQ-087 D4/D5, AC-087-07).
+	ListStuckLocks(ctx context.Context, filter StuckLockFilter) ([]*StuckLock, error)
+	// ReleaseLock releases one stuck emergency target lock through the
+	// ReleaseEmergencyLock RPC (REQ-087 D4=A, AC-087-08/09): NOT_APPLIED_PROVEN
+	// records NOT_APPLIED and releases; AUDITED_OVERRIDE releases while the
+	// effect stays UNKNOWN.
+	ReleaseLock(ctx context.Context, command ReleaseLockCommand) (*ReleaseLockResult, error)
 }
 
 type ConvergenceTaskStore interface {
@@ -1270,16 +1382,26 @@ type EmergencyConfig struct {
 	// D16). A missing or unparsable configuration value falls back to the
 	// default.
 	OperationTimeout time.Duration
+	// EffectObserveTimeout is the stuck-lock observation window (REQ-087
+	// D5=B, default 24h): a terminal EMERGENCY operation whose effect is
+	// still UNKNOWN past this window is derived as a stuck lock (alert +
+	// audit, never auto-released). A missing or unparsable configuration
+	// value falls back to the default.
+	EffectObserveTimeout time.Duration
 }
 
 // DefaultEmergencyOperationTimeout is the D16 default EMERGENCY deadline.
 const DefaultEmergencyOperationTimeout = 30 * time.Second
 
+// DefaultEmergencyEffectObserveTimeout is the D5=B default stuck-lock
+// observation window.
+const DefaultEmergencyEffectObserveTimeout = 24 * time.Hour
+
 // EmergencyConfigStore reads the kill switch and timeout configuration keys
 // from the shared application settings table (ADR-014).
 type EmergencyConfigStore interface {
 	GetEmergencyConfig(ctx context.Context) (EmergencyConfig, error)
-	// SetEmergencyConfig upserts the two configuration keys.
+	// SetEmergencyConfig upserts the emergency configuration keys.
 	SetEmergencyConfig(ctx context.Context, config EmergencyConfig) error
 }
 
@@ -2470,14 +2592,27 @@ func stableErrorCode(lastError string) string {
 	return "operation_failed"
 }
 
-// ProjectEffectStatus derives the authoritative effect_status projection for an
-// operation (AC-077-04/13). Non-EMERGENCY operations and EMERGENCY commands
-// that have not crossed the irrevocable delivery boundary (pending/queued/
-// undelivered) project NOT_STARTED; delivered/persisted intents project
-// UNKNOWN until a late result resolves the effect to APPLIED/NOT_APPLIED.
-func ProjectEffectStatus(operationType OperationType, deliveryStatus string, effectStatus EmergencyEffectStatus) EmergencyEffectStatus {
+// ProjectEffectStatus derives the authoritative effect_status projection for
+// an operation (AC-077-04/13, REQ-087 D7/AC-087-11). The lock-holding fact
+// source is the operation terminal state + the emergency_intents effect:
+// once an EMERGENCY operation is terminal the persisted effect_status is
+// authoritative (delivery_status only records delivery progress and no longer
+// influences the projection), so a dispatch-failed op finished with
+// effect=NOT_APPLIED while delivery_status is still pending/queued projects
+// NOT_APPLIED instead of NOT_STARTED. Non-EMERGENCY operations project
+// NOT_STARTED; non-terminal EMERGENCY ops that have not crossed the
+// irrevocable delivery boundary (pending/queued delivery) project NOT_STARTED,
+// delivered/persisted ones project UNKNOWN until a late result resolves the
+// effect to APPLIED/NOT_APPLIED.
+func ProjectEffectStatus(operationType OperationType, status OperationStatus, deliveryStatus string, effectStatus EmergencyEffectStatus) EmergencyEffectStatus {
 	if operationType != OperationEmergency {
 		return EmergencyEffectNotStarted
+	}
+	if status.IsTerminal() {
+		if effectStatus == EmergencyEffectApplied || effectStatus == EmergencyEffectNotApplied {
+			return effectStatus
+		}
+		return EmergencyEffectUnknown
 	}
 	switch deliveryStatus {
 	case "", "undelivered", "pending", "queued":

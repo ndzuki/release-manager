@@ -1688,15 +1688,17 @@ var migrationStatements = []string{
 		delivery_status       TEXT NOT NULL DEFAULT 'pending' CHECK (delivery_status IN ('pending','queued','delivered','persisted')),
 		effect_status         TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK (effect_status IN ('UNKNOWN','APPLIED','NOT_APPLIED')),
 		last_delivery_at      TEXT,
+		lock_released_at      TEXT,
 		created_at            TEXT NOT NULL,
 		updated_at            TEXT NOT NULL
 	)`,
 	`ALTER TABLE emergency_intents ADD COLUMN effect_status TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK (effect_status IN ('UNKNOWN','APPLIED','NOT_APPLIED'))`,
+	`ALTER TABLE emergency_intents ADD COLUMN lock_released_at TEXT`,
 	`CREATE INDEX IF NOT EXISTS idx_ei_operation ON emergency_intents(operation_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_ei_command ON emergency_intents(command_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_ei_definition ON emergency_intents(release_definition_id, created_at DESC)`,
 	`DROP INDEX IF EXISTS idx_ei_active_locks`,
-	`CREATE INDEX IF NOT EXISTS idx_ei_active_locks ON emergency_intents(release_definition_id, workload_kind, workload_name) WHERE effect_status = 'UNKNOWN'`,
+	`CREATE INDEX IF NOT EXISTS idx_ei_active_locks ON emergency_intents(release_definition_id, workload_kind, workload_name) WHERE effect_status = 'UNKNOWN' AND lock_released_at IS NULL`,
 	`CREATE TABLE IF NOT EXISTS convergence_tasks (
 		id                     TEXT PRIMARY KEY,
 		operation_id           TEXT NOT NULL UNIQUE REFERENCES operations(id) ON DELETE RESTRICT,
