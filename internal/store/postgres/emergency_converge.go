@@ -86,7 +86,17 @@ func (s *emergencyIntentStore) ConvergeEmergencyResult(ctx context.Context, comm
 	}
 	version := command.ExpectedStateVersion
 	step := current
-	for !step.Status.CanTransitionTo(store.StatusRunning) {
+	// Advance through the legal intermediate hops until running
+	// (pending→queued→running as needed). This mirrors the SQLite engine's
+	// loop exactly (sqlite emergency_converge.go `for step.Status !=
+	// store.StatusRunning`) — the loop must keep advancing while the step is
+	// NOT running. A `CanTransitionTo(running)` guard would stop at queued
+	// (queued.CanTransitionTo(running)=true) and hit the ErrInvalidState
+	// guard below for every non-terminal result (REQ-089 / AC-089-01~03:
+	// postgres/sqlite cross-engine convergence drift). Only EMERGENCY ops
+	// reach this method; cancelling is never reachable for EMERGENCY (Cancel
+	// rejects running EMERGENCY ops and direct-cancels queued/pending ones).
+	for step.Status != store.StatusRunning {
 		target := nextEmergencyHop(step.Status)
 		if target == "" || !step.Status.CanTransitionTo(target) {
 			return nil, store.ErrInvalidState
@@ -142,7 +152,13 @@ func lockEmergencyOperationTx(ctx context.Context, tx *Tx, operationID string) e
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM emergency_intents WHERE operation_id = ? FOR UPDATE`, operationID).Scan(&id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return store.ErrNotFound
+			// No intent row for this operation: not a locking failure. The
+			// caller validates the operation type after this lock — a
+			// non-EMERGENCY operation must reject with ErrInvalidState
+			// (sqlite parity), and a real EMERGENCY op always carries its
+			// intent row (created atomically on the UOW seam), which is
+			// locked above when present.
+			return nil
 		}
 		return fmt.Errorf("lock emergency intent: %w", err)
 	}
