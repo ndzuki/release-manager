@@ -121,6 +121,21 @@ dev-status: ## Print machine-readable data/dev-status.json
 .PHONY: dev-purge
 dev-purge: ## Delete every managed resource incl. registry (requires CONFIRM=1)
 	@$(DEV_SCRIPT) purge
+
+.PHONY: e2e-prerequisite
+e2e-prerequisite: dev-up dev-seed ## AC-066-17 prerequisite smoke (versioned gate for upstream chain changes)
+	@bash test/e2e/prerequisite/smoke.sh
+
+.PHONY: e2e-prerequisite-ci
+e2e-prerequisite-ci: ## AC-066-17 prerequisite smoke with artifact preservation and dev cleanup
+	@set -e; \
+	mkdir -p e2e-results; \
+	trap 'bash test/e2e/prerequisite/capture-logs.sh >/dev/null 2>&1 || true; cp -f data/smoke-result.json e2e-results/ 2>/dev/null || true; make dev-purge CONFIRM=1 >/dev/null 2>&1 || true' EXIT; \
+	$(MAKE) dev-up dev-seed; \
+	bash test/e2e/prerequisite/smoke.sh; \
+	bash test/e2e/prerequisite/capture-logs.sh >/dev/null 2>&1 || true; \
+	cp -f data/smoke-result.json e2e-results/ 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
 # Kulala integration — open .http files directly in Neovim
 # ---------------------------------------------------------------------------
