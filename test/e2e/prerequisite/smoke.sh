@@ -245,7 +245,7 @@ EFFECT="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/GetOpe
 [ "$EFFECT" = "EMERGENCY_EFFECT_STATUS_APPLIED" ] && ok "effect APPLIED" || bad "effect=$EFFECT (want APPLIED)"
 REPLICAS=""
 if command -v kubectl >/dev/null 2>&1 && [ -f "$DATA_DIR/kubeconfig.yaml" ]; then
-  REPLICAS="$(wait_replicas "$WNS" "$WNAME" "2/2" 30)"
+  REPLICAS="$(wait_replicas "$WNS" "$WNAME" "2/2" 30 || true)"
 fi
 if [ -n "$REPLICAS" ]; then
   [ "$REPLICAS" = "2/2" ] && ok "real replicas observed: $REPLICAS" || bad "replicas=$REPLICAS (want 2/2)"
@@ -260,7 +260,7 @@ EM_REST_ID="$(jq -r '.operationId // empty' <<<"$EM_REST")"
 [ -n "$EM_REST_ID" ] || fail "ExecuteEmergencyChange(restore=1) rejected: $EM_REST"
 wait_op "$EM_REST_ID" 'OPERATION_STATUS_SUCCEEDED' "emergency restore op=$EM_REST_ID" || true
 if command -v kubectl >/dev/null 2>&1 && [ -f "$DATA_DIR/kubeconfig.yaml" ]; then
-  REST="$(wait_replicas "$WNS" "$WNAME" "1/1" 30)"
+  REST="$(wait_replicas "$WNS" "$WNAME" "1/1" 30 || true)"
   [ "$REST" = "1/1" ] && ok "restore observed: $REST" || bad "restore replicas=$REST (want 1/1)"
 fi
 ok "Emergency restore to baseline replicas=1 (formal API)"
