@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"helm.sh/helm/v3/pkg/storage/driver"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 func TestRealEngine_Install(t *testing.T) {
@@ -666,4 +668,113 @@ func TestRealEngine_RollbackFailurePreservesRelease(t *testing.T) {
 	require.NoError(t, getErr2)
 	assert.Equal(t, release.StatusFailed, failedRel.Info.Status,
 		"rollback target should be failed")
+}
+
+// ── REQ-086: rm_input_digest label encoding (D-111 defect fix) ──
+
+// AC-086-01/02: encodeLabelDigest is a pure deterministic function that
+// truncates a 64-char sha256 hex digest to the first 63 characters (the K8s
+// label value limit) and never leaks the original digest beyond a hex prefix.
+func TestEncodeLabelDigest(t *testing.T) {
+	input := strings.Repeat("ab", 32) // 64-char lowercase hex digest
+	require.Len(t, input, 64)
+
+	first := encodeLabelDigest(input)
+	second := encodeLabelDigest(input)
+	assert.Equal(t, first, second, "encoding must be deterministic")
+	assert.Len(t, first, 63)
+	assert.Equal(t, input[:63], first, "label value is the 63-char hex prefix")
+	assert.NotEqual(t, input, first, "full 64-hex must never reach the label")
+	assert.Empty(t, validation.IsValidLabelValue(first), "encoded label must satisfy K8s label value rules")
+
+	// Defensive: values at or under the limit pass through unchanged.
+	assert.Equal(t, "", encodeLabelDigest(""))
+	short := "0123456789abcdef"
+	assert.Equal(t, short, encodeLabelDigest(short))
+
+	// AC-086-02: stable across repeated calls and never contains the tail.
+	assert.Equal(t, input[:63], encodeLabelDigest(first+"tail"))
+}
+
+// AC-086-01: a real-engine Upgrade persists the encoded (63-hex) label in the
+// release record — the exact value a Kubernetes Secret driver would write into
+// the release Secret metadata (REQ-086 D-111: the old 64-hex value exceeded
+// LabelValueMaxLength and was rejected by the API server on revision 2).
+func TestRealEngine_UpgradePersistsEncodedLabel(t *testing.T) {
+	engine, releases := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	})
+	chartPath := writeTestChart(t)
+	_, err := engine.Install(t.Context(), InstallOptions{
+		Namespace: "default", ReleaseName: "upgrade-label", ChartPath: chartPath,
+	})
+	require.NoError(t, err)
+
+	opts := UpgradeOptions{
+		Namespace: "default", ReleaseName: "upgrade-label", ChartPath: chartPath,
+		Values: map[string]interface{}{"message": "v2"}, ExpectedRevision: 1, Atomic: true,
+		OperationID: "operation-label", CommandID: "command-label",
+		BundleDigest:          "sha256:bundle",
+		EffectiveValuesDigest: "sha256:values", SecretSnapshotDigest: "sha256:secret",
+	}
+	inputDigest := digestString(strings.Join([]string{
+		opts.BundleDigest, opts.ChartDigest, opts.EffectiveValuesDigest, opts.SecretSnapshotDigest,
+	}, "|"))
+	require.Len(t, inputDigest, 64)
+
+	rel, err := engine.Upgrade(t.Context(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, 2, rel.Revision)
+	assert.Equal(t, encodeLabelDigest(inputDigest), rel.Labels["rm_input_digest"],
+		"returned model label must reflect the persisted Secret label")
+
+	stored, getErr := releases.Get("upgrade-label", 2)
+	require.NoError(t, getErr)
+	label := stored.Labels["rm_input_digest"]
+	assert.Equal(t, encodeLabelDigest(inputDigest), label, "persisted release label must be the encoded 63-hex value")
+	assert.Len(t, label, 63)
+	assert.Empty(t, validation.IsValidLabelValue(label))
+}
+
+// AC-086-02 / AC-062-06: crash-replay compares the persisted label through the
+// same encoder — a replayed command is idempotent (no revision increment) and
+// the label stays stable across the replay.
+func TestRealEngine_UpgradeCrashReplayEncodedLabel(t *testing.T) {
+	engine, releases := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	})
+	chartPath := writeTestChart(t)
+	_, err := engine.Install(t.Context(), InstallOptions{
+		Namespace: "default", ReleaseName: "upgrade-replay-label", ChartPath: chartPath,
+	})
+	require.NoError(t, err)
+
+	opts := UpgradeOptions{
+		Namespace: "default", ReleaseName: "upgrade-replay-label", ChartPath: chartPath,
+		Values: map[string]interface{}{"message": "v2"}, ExpectedRevision: 1, Atomic: true,
+		OperationID: "operation-replay-label", CommandID: "command-replay-label",
+		BundleDigest:          "sha256:bundle",
+		EffectiveValuesDigest: "sha256:values", SecretSnapshotDigest: "sha256:secret",
+	}
+	inputDigest := digestString(strings.Join([]string{
+		opts.BundleDigest, opts.ChartDigest, opts.EffectiveValuesDigest, opts.SecretSnapshotDigest,
+	}, "|"))
+
+	first, err := engine.Upgrade(t.Context(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, 2, first.Revision)
+	assert.Equal(t, encodeLabelDigest(inputDigest), first.Labels["rm_input_digest"])
+
+	replayed, err := engine.Upgrade(t.Context(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, first.Revision, replayed.Revision, "replay must not increment the revision")
+	assert.Equal(t, first.Labels["rm_input_digest"], replayed.Labels["rm_input_digest"])
+
+	history, err := releases.History("upgrade-replay-label")
+	require.NoError(t, err)
+	assert.Len(t, history, 2, "replay must not create a new revision record")
+
+	stored, getErr := releases.Get("upgrade-replay-label", 2)
+	require.NoError(t, getErr)
+	assert.Equal(t, encodeLabelDigest(inputDigest), stored.Labels["rm_input_digest"])
 }

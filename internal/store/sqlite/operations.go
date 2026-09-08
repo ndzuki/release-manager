@@ -455,6 +455,10 @@ func (s *operationStore) Cancel(ctx context.Context, command store.OperationCanc
 		if effectRows != 1 {
 			return nil, store.ErrNotFound
 		}
+		// The returned op must carry the authoritative projected effect for
+		// its now-terminal state (REQ-087 D7/AC-087-11); the pre-read
+		// projection was taken while the op was still non-terminal.
+		updated.EffectStatus = store.ProjectEffectStatus(updated.OperationType, updated.Status, "", effectStatus)
 	}
 	timelineData, err := json.Marshal(store.StateTransitionTimelineData{
 		RequestID: command.RequestID, FromState: string(current.Status), ToState: string(updated.Status),
@@ -971,7 +975,7 @@ func buildOperation(id, opType, status, defID, idemKey, idemScope, reqHash strin
 		PatchDigest: patchDigest, EffectiveValuesDigest: effectiveDigest, Reason: reason,
 		Actor: actor, CreatedAt: ct, UpdatedAt: ut, Deadline: dl, TerminalAt: terminal, LastError: lastError,
 		EffectStatus: store.ProjectEffectStatus(
-			store.OperationType(opType), deliveryStatus.String, store.EmergencyEffectStatus(effectStatus.String),
+			store.OperationType(opType), store.OperationStatus(status), deliveryStatus.String, store.EmergencyEffectStatus(effectStatus.String),
 		),
 	}, nil
 }

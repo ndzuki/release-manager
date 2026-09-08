@@ -50,6 +50,7 @@ type Service struct {
 	logger              *slog.Logger
 	authorizer          authorization.Authorizer
 	valuesConfig        ValuesConfig
+	pendingIdentity     PendingIdentityReplayer
 }
 
 func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args ...any) *Service {
@@ -57,6 +58,7 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 	var dispatcher emergencyDispatcher
 	var streamRevoker OperatorStreamRevoker
 	var createOperation OperationCreationUnitOfWork
+	var pendingIdentity PendingIdentityReplayer
 	operatorEndpoint := "http://operator:8084"
 	logger := slog.Default()
 	valuesConfig := DefaultValuesConfig()
@@ -71,6 +73,8 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 			streamRevoker = value
 		case OperationCreationUnitOfWork:
 			createOperation = value
+		case PendingIdentityReplayer:
+			pendingIdentity = value
 		case string:
 			if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
 				operatorEndpoint = strings.TrimRight(value, "/")
@@ -98,6 +102,7 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 		logger:              logger,
 		authorizer:          authorizer,
 		valuesConfig:        valuesConfig,
+		pendingIdentity:     pendingIdentity,
 	}
 }
 

@@ -167,6 +167,20 @@ func TestMapMethodToActionClassifiesValuesApprovalAsWrite(t *testing.T) {
 	})
 }
 
+// REQ-087: the stuck-lock RPCs must reach the handler with the right coarse
+// action — ListStuckLocks is a read, ReleaseEmergencyLock is a write. Without
+// the "Release" prefix branch ReleaseEmergencyLock would map to "" → 403
+// "unmapped procedure" (the same prefix-table gap as TASK-072).
+func TestMapMethodToActionClassifiesStuckLockRPCs(t *testing.T) {
+	object, action := mapProcedure(orchestratorv1connect.OrchestratorServiceListStuckLocksProcedure)
+	assert.Equal(t, "release", object)
+	assert.Equal(t, "read", action)
+
+	object, action = mapProcedure(orchestratorv1connect.OrchestratorServiceReleaseEmergencyLockProcedure)
+	assert.Equal(t, "release", object)
+	assert.Equal(t, "write", action)
+}
+
 func reasonFromConnectError(t *testing.T, err error) string {
 	t.Helper()
 	var connectErr *connect.Error

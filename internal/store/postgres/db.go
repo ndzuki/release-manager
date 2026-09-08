@@ -166,6 +166,7 @@ type Store struct {
 	authorization     *authorizationStore
 	idempotency       *idempotencyStore
 	cleanupIdempotency *cleanupIdempotencyStore
+	pendingWorkload   *pendingWorkloadIdentityStore
 	closeOnce         sync.Once
 	closeErr          error
 }
@@ -248,6 +249,7 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s.authorization = &authorizationStore{gorm: s.db}
 	s.idempotency = &idempotencyStore{db: s.db}
 	s.cleanupIdempotency = &cleanupIdempotencyStore{db: s.db}
+	s.pendingWorkload = &pendingWorkloadIdentityStore{gorm: s.db}
 	return s, nil
 }
 
@@ -280,6 +282,7 @@ var (
 	_ store.TimelineStore                = (*timelineStore)(nil)
 	_ store.ConvergenceTaskStore         = (*convergenceTaskStore)(nil)
 	_ store.CleanupIdempotencyStore     = (*cleanupIdempotencyStore)(nil)
+	_ store.PendingWorkloadIdentityStore = (*pendingWorkloadIdentityStore)(nil)
 )
 
 func (s *Store) Operations() store.OperationStore           { return s.ops }
@@ -343,6 +346,9 @@ func (s *Store) EmergencyConfig() store.EmergencyConfigStore        { return s.e
 
 // Authorization returns the durable authorization state module.
 func (s *Store) Authorization() store.AuthorizationStore { return s.authorization }
+
+// PendingWorkloadIdentities returns the REQ-088 identity buffer store.
+func (s *Store) PendingWorkloadIdentities() store.PendingWorkloadIdentityStore { return s.pendingWorkload }
 
 func (s *Store) Close() error {
 	if s == nil || s.sqlDB == nil {

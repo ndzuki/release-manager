@@ -22,6 +22,7 @@ import (
 	"helm.sh/helm/v3/pkg/storage"
 	"helm.sh/helm/v3/pkg/storage/driver"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // RealEngine implements Engine using the Helm Go SDK (helm.sh/helm/v3/pkg/action).
@@ -171,7 +172,7 @@ func (r *RealEngine) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release
 		opts.SecretSnapshotDigest,
 	}, "|"))
 	description := fmt.Sprintf("release-manager operation=%s command=%s", opts.OperationID, opts.CommandID)
-	if current.Info.Description == description && current.Labels["rm_input_digest"] == inputDigest {
+	if current.Info.Description == description && current.Labels["rm_input_digest"] == encodeLabelDigest(inputDigest) {
 		return decorateRelease(toEngineRelease(current), current, opts, inputDigest), nil
 	}
 	if opts.ExpectedRevision > 0 && current.Version != opts.ExpectedRevision {
@@ -256,7 +257,12 @@ func newUpgradeAction(cfg *action.Configuration, opts UpgradeOptions, descriptio
 	upgrade.WaitForJobs = true
 	upgrade.MaxHistory = 10
 	upgrade.Description = description
-	upgrade.Labels = map[string]string{"rm_input_digest": inputDigest}
+	// The full input digest is a 64-char sha256 hex string, which exceeds the
+	// Kubernetes label value limit (63). Helm writes action labels into the
+	// release Secret metadata, so the value must be encoded at this label
+	// boundary (REQ-086 D-111). The same encoder feeds the idempotency
+	// comparison so crash-replay never mismatches the persisted label.
+	upgrade.Labels = map[string]string{"rm_input_digest": encodeLabelDigest(inputDigest)}
 	if opts.MaxHistory > 0 {
 		upgrade.MaxHistory = opts.MaxHistory
 	}
@@ -524,7 +530,11 @@ func decorateRelease(result *Release, rel *release.Release, opts UpgradeOptions,
 	if result.Labels == nil {
 		result.Labels = map[string]string{}
 	}
-	result.Labels["rm_input_digest"] = inputDigest
+	// Reflect the label value actually persisted on the release Secret: the
+	// full 64-hex input digest is truncated to the 63-char K8s label value
+	// boundary (REQ-086). The returned model therefore matches what a
+	// subsequent Status/List read of the release returns.
+	result.Labels["rm_input_digest"] = encodeLabelDigest(inputDigest)
 	return result
 }
 
@@ -565,6 +575,22 @@ func digestString(value string) string {
 	}
 	hash := sha256.Sum256([]byte(value))
 	return fmt.Sprintf("%x", hash)
+}
+
+// encodeLabelDigest encodes a digest for use as a Kubernetes label value
+// (REQ-086). Kubernetes label values are limited to 63 characters
+// (validation.LabelValueMaxLength), so a full 64-char sha256 hex digest would
+// be rejected by the API server when Helm persists the release Secret. The
+// first 63 hex chars keep deterministic, comparable values (collision space
+// ~2^252) and stay within the valid label character set. It is a pure,
+// idempotent function applied at the label boundary only; the internal
+// 64-hex input digest contract is unchanged. Inputs at or under the limit
+// (including empty) are returned unchanged.
+func encodeLabelDigest(hexDigest string) string {
+	if len(hexDigest) <= validation.LabelValueMaxLength {
+		return hexDigest
+	}
+	return hexDigest[:validation.LabelValueMaxLength]
 }
 
 func digestValues(vals map[string]interface{}) string {

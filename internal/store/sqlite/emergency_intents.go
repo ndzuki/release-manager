@@ -174,6 +174,7 @@ func listActiveEmergencyIntents(ctx context.Context, queryer interface {
 		WHERE emergency_intents.release_definition_id = ?
 		  AND (operations.status NOT IN ('succeeded','failed','cancelled','timeout')
 		       OR emergency_intents.effect_status = 'UNKNOWN')
+		  AND emergency_intents.lock_released_at IS NULL
 		ORDER BY emergency_intents.created_at ASC
 	`, definitionID)
 	if err != nil {
@@ -190,6 +191,7 @@ func (s *emergencyIntentStore) HasUnresolvedForDefinition(ctx context.Context, d
 		JOIN operations AS o ON o.id = ei.operation_id
 		WHERE ei.release_definition_id = ?
 		  AND ei.effect_status = 'UNKNOWN'
+		  AND ei.lock_released_at IS NULL
 		  AND o.terminal_at IS NOT NULL
 		ORDER BY ei.operation_id
 	`, definitionID)
@@ -468,13 +470,14 @@ const emergencyIntentSelect = `
 		emergency_intents.promotion_paths, emergency_intents.before_snapshot,
 		emergency_intents.after_snapshot, emergency_intents.delivery_status,
 		emergency_intents.effect_status, emergency_intents.last_delivery_at,
+		emergency_intents.lock_released_at,
 		emergency_intents.created_at, emergency_intents.updated_at
 	FROM emergency_intents`
 
 func scanEmergencyIntent(row interface{ Scan(...any) error }) (*store.EmergencyIntent, error) {
 	var intent store.EmergencyIntent
 	var action, convergence, effectStatus string
-	var container, artifactID, imageReference, annotationScope, lastDeliveryAt sql.NullString
+	var container, artifactID, imageReference, annotationScope, lastDeliveryAt, lockReleasedAt sql.NullString
 	var targetReplicas sql.NullInt64
 	var annotationEntries, promotionPaths, beforeSnapshot, afterSnapshot []byte
 	var createdAt, updatedAt string
@@ -483,7 +486,7 @@ func scanEmergencyIntent(row interface{ Scan(...any) error }) (*store.EmergencyI
 		&intent.WorkloadKind, &intent.WorkloadName, &intent.WorkloadNamespace, &intent.WorkloadUID,
 		&container, &artifactID, &imageReference, &targetReplicas, &annotationScope,
 		&annotationEntries, &convergence, &promotionPaths, &beforeSnapshot, &afterSnapshot,
-		&intent.DeliveryStatus, &effectStatus, &lastDeliveryAt, &createdAt, &updatedAt,
+		&intent.DeliveryStatus, &effectStatus, &lastDeliveryAt, &lockReleasedAt, &createdAt, &updatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -516,6 +519,13 @@ func scanEmergencyIntent(row interface{ Scan(...any) error }) (*store.EmergencyI
 			return nil, fmt.Errorf("parse emergency last_delivery_at: %w", parseErr)
 		}
 		intent.LastDeliveryAt = &parsed
+	}
+	if lockReleasedAt.Valid {
+		parsed, parseErr := time.Parse(time.RFC3339Nano, lockReleasedAt.String)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse emergency lock_released_at: %w", parseErr)
+		}
+		intent.LockReleasedAt = &parsed
 	}
 	return &intent, nil
 }

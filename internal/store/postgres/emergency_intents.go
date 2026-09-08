@@ -170,6 +170,7 @@ func listActiveEmergencyIntents(ctx context.Context, queryer interface {
 		WHERE emergency_intents.release_definition_id = ?
 		  AND (operations.status NOT IN ('succeeded','failed','cancelled','timeout')
 		       OR emergency_intents.effect_status = 'UNKNOWN')
+		  AND emergency_intents.lock_released_at IS NULL
 		ORDER BY emergency_intents.created_at ASC
 	`, definitionID)
 	if err != nil {
@@ -186,6 +187,7 @@ func (s *emergencyIntentStore) HasUnresolvedForDefinition(ctx context.Context, d
 		JOIN operations AS o ON o.id = ei.operation_id
 		WHERE ei.release_definition_id = ?
 		  AND ei.effect_status = 'UNKNOWN'
+		  AND ei.lock_released_at IS NULL
 		  AND o.terminal_at IS NOT NULL
 		ORDER BY ei.operation_id
 	`, definitionID)
@@ -507,6 +509,7 @@ const emergencyIntentSelect = `
 		emergency_intents.promotion_paths, emergency_intents.before_snapshot,
 		emergency_intents.after_snapshot, emergency_intents.delivery_status,
 		emergency_intents.effect_status, emergency_intents.last_delivery_at,
+		emergency_intents.lock_released_at,
 		emergency_intents.created_at, emergency_intents.updated_at
 	FROM emergency_intents`
 
@@ -521,7 +524,7 @@ func scanEmergencyIntent(row interface{ Scan(...any) error }) (*store.EmergencyI
 		&intent.WorkloadKind, &intent.WorkloadName, &intent.WorkloadNamespace, &intent.WorkloadUID,
 		&container, &artifactID, &imageReference, &targetReplicas, &annotationScope,
 		&annotationEntries, &convergence, &promotionPaths, &beforeSnapshot, &afterSnapshot,
-		&intent.DeliveryStatus, &effectStatus, &intent.LastDeliveryAt, &intent.CreatedAt, &intent.UpdatedAt,
+		&intent.DeliveryStatus, &effectStatus, &intent.LastDeliveryAt, &intent.LockReleasedAt, &intent.CreatedAt, &intent.UpdatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -544,6 +547,10 @@ func scanEmergencyIntent(row interface{ Scan(...any) error }) (*store.EmergencyI
 	if intent.LastDeliveryAt != nil {
 		value := intent.LastDeliveryAt.UTC()
 		intent.LastDeliveryAt = &value
+	}
+	if intent.LockReleasedAt != nil {
+		value := intent.LockReleasedAt.UTC()
+		intent.LockReleasedAt = &value
 	}
 	return &intent, nil
 }

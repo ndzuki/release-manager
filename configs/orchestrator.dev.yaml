@@ -40,6 +40,11 @@ ca:
 
 # REQ-081 (D2=A): the orchestrator seeds these keys into app_settings at
 # startup — the dev environment runs with the emergency kill switch on.
+# REQ-087 (D5=B): effect_observe_timeout (default 24h) is the stuck-lock
+# observation window; a terminal EMERGENCY operation whose effect stays
+# UNKNOWN past this window surfaces as a stuck lock (alert+audit, never
+# auto-released).
 emergency:
   enabled: true
   operation_timeout: 30s
+  effect_observe_timeout: 24h

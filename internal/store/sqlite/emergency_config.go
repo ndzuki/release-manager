@@ -10,21 +10,23 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
-// Emergency configuration keys (REQ-079 D6/D16). Missing keys fail closed:
-// Enabled defaults to false and OperationTimeout to the D16 default.
+// Emergency configuration keys (REQ-079 D6/D16, REQ-087 D5=B). Missing keys
+// fail closed: Enabled defaults to false, OperationTimeout to the D16 default
+// and EffectObserveTimeout to the D5=B default (24h).
 const (
-	emergencyEnabledKey = "emergency.enabled"
-	emergencyTimeoutKey = "emergency.operation_timeout"
+	emergencyEnabledKey              = "emergency.enabled"
+	emergencyTimeoutKey              = "emergency.operation_timeout"
+	emergencyEffectObserveTimeoutKey = "emergency.effect_observe_timeout"
 )
 
 type emergencyConfigStore struct{ db *sql.DB }
 
 func (s *emergencyConfigStore) GetEmergencyConfig(ctx context.Context) (store.EmergencyConfig, error) {
-	cfg := store.EmergencyConfig{OperationTimeout: store.DefaultEmergencyOperationTimeout}
+	cfg := store.EmergencyConfig{OperationTimeout: store.DefaultEmergencyOperationTimeout, EffectObserveTimeout: store.DefaultEmergencyEffectObserveTimeout}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT key, value FROM app_settings
-		WHERE key IN (?, ?)
-	`, emergencyEnabledKey, emergencyTimeoutKey)
+		WHERE key IN (?, ?, ?)
+	`, emergencyEnabledKey, emergencyTimeoutKey, emergencyEffectObserveTimeoutKey)
 	if err != nil {
 		return cfg, fmt.Errorf("query emergency config: %w", err)
 	}
@@ -41,6 +43,10 @@ func (s *emergencyConfigStore) GetEmergencyConfig(ctx context.Context) (store.Em
 			if parsed, parseErr := time.ParseDuration(value); parseErr == nil && parsed > 0 {
 				cfg.OperationTimeout = parsed
 			}
+		case emergencyEffectObserveTimeoutKey:
+			if parsed, parseErr := time.ParseDuration(value); parseErr == nil && parsed > 0 {
+				cfg.EffectObserveTimeout = parsed
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -53,10 +59,14 @@ func (s *emergencyConfigStore) SetEmergencyConfig(ctx context.Context, config st
 	if config.OperationTimeout <= 0 {
 		config.OperationTimeout = store.DefaultEmergencyOperationTimeout
 	}
+	if config.EffectObserveTimeout <= 0 {
+		config.EffectObserveTimeout = store.DefaultEmergencyEffectObserveTimeout
+	}
 	now := time.Now().UTC()
 	entries := map[string]string{
-		emergencyEnabledKey: strconv.FormatBool(config.Enabled),
-		emergencyTimeoutKey: config.OperationTimeout.String(),
+		emergencyEnabledKey:              strconv.FormatBool(config.Enabled),
+		emergencyTimeoutKey:              config.OperationTimeout.String(),
+		emergencyEffectObserveTimeoutKey: config.EffectObserveTimeout.String(),
 	}
 	for key, value := range entries {
 		if _, err := s.db.ExecContext(ctx, `

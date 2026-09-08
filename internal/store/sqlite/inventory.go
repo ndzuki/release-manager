@@ -136,6 +136,44 @@ func (s *inventoryStore) GetByDefinition(ctx context.Context, definitionID strin
 	return &item, nil
 }
 
+// GetByReleaseKey returns the inventory row located by the unique key
+// (customer_id, cluster_id, namespace, release_name). Returns ErrNotFound when
+// no such row exists (REQ-088 replay reads the current row identity before a
+// D4=C tiered apply).
+//
+//nolint:dupl // inventory row scanners share the established 25-column decode structure
+func (s *inventoryStore) GetByReleaseKey(ctx context.Context, customerID, clusterID, namespace, releaseName string) (*store.ReleaseInventory, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version,
+		       revision, status, values_digest, observed_bundle_digest, observed_chart_digest,
+		       observed_effective_values_digest, observed_manifest_digest, live_status, last_operation_id,
+		       inventory_status, last_sync_id, snapshot_version,
+		       workload_kind, workload_name, workload_namespace, workload_uid, created_at, updated_at
+		FROM release_inventory
+		WHERE customer_id = ? AND cluster_id = ? AND namespace = ? AND release_name = ?
+	`, customerID, clusterID, namespace, releaseName)
+
+	var item store.ReleaseInventory
+	var createdAt, updatedAt string
+	if err := row.Scan(
+		&item.CustomerID, &item.ClusterID, &item.ReleaseDefinitionID, &item.Namespace, &item.ReleaseName,
+		&item.Chart, &item.ChartVersion, &item.Revision, &item.Status, &item.ValuesDigest,
+		&item.ObservedBundleDigest, &item.ObservedChartDigest, &item.ObservedEffectiveValuesDigest,
+		&item.ObservedManifestDigest, &item.LiveStatus, &item.LastOperationID, &item.InventoryStatus, &item.LastSyncID,
+		&item.SnapshotVersion,
+		&item.WorkloadKind, &item.WorkloadName, &item.WorkloadNamespace, &item.WorkloadUID,
+		&createdAt, &updatedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("get inventory by release key: %w", err)
+	}
+	item.CreatedAt, _ = time.Parse(time.RFC3339, createdAt) //nolint:errcheck // stored timestamps always valid RFC3339
+	item.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt) //nolint:errcheck // stored timestamps always valid RFC3339
+	return &item, nil
+}
+
 // UpdateWorkloadIdentity overwrites the authoritative workload identity on
 // the row located by the inventory unique key (REQ-085). Returns
 // store.ErrNotFound when the row does not exist — identity is never inserted

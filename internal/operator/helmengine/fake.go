@@ -116,7 +116,7 @@ func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, erro
 		opts.SecretSnapshotDigest,
 	}, "|"))
 	description := fmt.Sprintf("release-manager operation=%s command=%s", opts.OperationID, opts.CommandID)
-	if existing.Description == description && existing.Labels["rm_input_digest"] == inputDigest {
+	if existing.Description == description && existing.Labels["rm_input_digest"] == encodeLabelDigest(inputDigest) {
 		replayed := *existing
 		replayed.Labels = maps.Clone(existing.Labels)
 		return &replayed, nil
@@ -139,15 +139,19 @@ func (f *Fake) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release, erro
 		return nil, fmt.Errorf("manifest digest mismatch: %w", ErrRenderDrift)
 	}
 	rel := &Release{
-		Name:                  opts.ReleaseName,
-		Namespace:             opts.Namespace,
-		Revision:              newRev,
-		Status:                "deployed",
-		Chart:                 opts.ChartPath,
-		ManifestDigest:        manifestDigest,
-		Notes:                 fmt.Sprintf("upgraded %s/%s rev=%d", opts.Namespace, opts.ReleaseName, newRev),
-		Description:           description,
-		Labels:                map[string]string{"rm_input_digest": inputDigest},
+		Name:           opts.ReleaseName,
+		Namespace:      opts.Namespace,
+		Revision:       newRev,
+		Status:         "deployed",
+		Chart:          opts.ChartPath,
+		ManifestDigest: manifestDigest,
+		Notes:          fmt.Sprintf("upgraded %s/%s rev=%d", opts.Namespace, opts.ReleaseName, newRev),
+		Description:    description,
+		// Mirror the real engine's persisted Secret label: the full 64-hex
+		// input digest is encoded to the 63-char K8s label value boundary
+		// (REQ-086). The write and the idempotency comparison above share the
+		// same encoder so crash-replay never mismatches.
+		Labels:                map[string]string{"rm_input_digest": encodeLabelDigest(inputDigest)},
 		BundleDigest:          opts.BundleDigest,
 		ChartDigest:           opts.ChartDigest,
 		EffectiveValuesDigest: opts.EffectiveValuesDigest,

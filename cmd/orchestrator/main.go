@@ -61,6 +61,14 @@ type orchSvc struct {
 	// Operator streams after a committed management write (REQ-053). It is
 	// process-global by default; tests inject a private registry for isolation.
 	streamRegistry *operator.StreamRegistry
+
+	// operatorService is the OperatorService mounted on both the management
+	// mux and the agent gateway. Register keeps it on the host so Run can
+	// drive the REQ-088 pending identity sweep.
+	operatorService *operator.Service
+	// logger is the service logger captured during Register, reused by
+	// background loops that Run starts (identity sweep).
+	logger *slog.Logger
 }
 
 func (s *orchSvc) Name() string { return "release-orchestrator" }
@@ -74,7 +82,7 @@ func (s *orchSvc) Configure(cfg *config.ServiceConfig) { s.cfg = *cfg }
 // gateway listener itself is built later (buildGatewayServer) once the
 // orchestrator Service exists, because it also mounts SyncInventory
 // (TASK-080, D-107=A).
-func (s *orchSvc) newGatewayOperatorService(logger *slog.Logger) (*operator.Service, *ca.CA, config.GatewayCfg, error) {
+func (s *orchSvc) newGatewayOperatorService(logger *slog.Logger, identityMetrics *operator.IdentityMetrics) (*operator.Service, *ca.CA, config.GatewayCfg, error) {
 	gatewayCfg := s.cfg.Gateway.WithDefaults()
 	caInst, renewRatio, err := ca.LoadConfigured(context.Background(), s.cfg.CA)
 	if err != nil {
@@ -85,6 +93,7 @@ func (s *orchSvc) newGatewayOperatorService(logger *slog.Logger) (*operator.Serv
 		operator.WithRenewBeforeRatio(renewRatio),
 		operator.WithAudit(s.auditEmitter),
 		operator.WithStreamRegistry(s.operatorRegistry()),
+		operator.WithIdentityMetrics(identityMetrics),
 	}
 	// The gateway service shares the persisted CA so Enroll signs
 	// certificates from the same CA the listener verifies against.
@@ -300,9 +309,15 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if err := s.seedEmergencyConfig(context.Background(), emergencyCfg, emergencyPresent); err != nil {
 		return fmt.Errorf("seed emergency config: %w", err)
 	}
-	logger.Info("emergency config seeded", "enabled", emergencyCfg.Enabled, "operation_timeout", emergencyCfg.OperationTimeout, "present", emergencyPresent)
-	metrics := authorization.NewMetrics(prometheus.NewRegistry())
+	logger.Info("emergency config seeded", "enabled", emergencyCfg.Enabled, "operation_timeout", emergencyCfg.OperationTimeout, "effect_observe_timeout", emergencyCfg.EffectObserveTimeout, "present", emergencyPresent)
+	// Shared registry so /metrics (mounted through the authorization gatherer)
+	// exposes both the REQ-027 auth instruments and the REQ-088 identity
+	// convergence instruments on one path.
+	registry := prometheus.NewRegistry()
+	metrics := authorization.NewMetrics(registry)
+	idMetrics := operator.NewIdentityMetrics(registry)
 	mux.Handle("GET /metrics", metrics.Handler())
+	s.logger = logger
 	s.traceShutdown = authorization.InstallTracing()
 	authzConfig := s.cfg.Authorization.WithDefaults()
 	if s.authURL != "" {
@@ -346,10 +361,11 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	// SyncInventory path (TASK-080). A persisted CA keeps the trust chain
 	// stable across restarts; the service shares it via WithCA so Enroll
 	// signs certificates from the same CA the listener verifies against.
-	operatorService, caInst, gatewayCfg, err := s.newGatewayOperatorService(logger)
+	operatorService, caInst, gatewayCfg, err := s.newGatewayOperatorService(logger, idMetrics)
 	if err != nil {
 		return fmt.Errorf("create operator control service: %w", err)
 	}
+	s.operatorService = operatorService
 	operatorPath, operatorHandler := operatorv1connect.NewOperatorServiceHandler(
 		operatorService,
 		connect.WithInterceptors(
@@ -372,6 +388,9 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		s.targetEnv,
 		s.auditEmitter,
 		emergencyDispatcher,
+		// REQ-088 D5=A: SyncInventory triggers the pending identity replay on
+		// the in-process operator service right after each Upsert.
+		orchestrator.NewPendingIdentityReplayer(operatorService),
 		orchestrator.NewProcessStreamRevoker(s.operatorRegistry()),
 		s.operatorEndpoint(),
 		createOperation,
@@ -578,13 +597,17 @@ func defaultTrustConfig() trustConfig {
 }
 
 // loadEmergencyConfig reads the emergency.* keys from the service config
-// (REQ-081 D2=A): a missing section fails closed to enabled=false and the
-// D16 default operation timeout, reported via present=false so the startup
-// seed leaves an already-configured app_settings value untouched; an
-// unparsable/non-positive timeout falls back to the default while keeping
-// the configured enabled flag.
+// (REQ-081 D2=A, REQ-087 D5=B): a missing section fails closed to
+// enabled=false and the default operation timeout / observe window, reported
+// via present=false so the startup seed leaves an already-configured
+// app_settings value untouched; an unparsable/non-positive duration falls
+// back to the default while keeping the configured enabled flag.
 func (s *orchSvc) loadEmergencyConfig() (config.EmergencyCfg, bool, error) {
-	emergencyCfg := config.EmergencyCfg{Enabled: false, OperationTimeout: store.DefaultEmergencyOperationTimeout.String()}
+	emergencyCfg := config.EmergencyCfg{
+		Enabled:              false,
+		OperationTimeout:     store.DefaultEmergencyOperationTimeout.String(),
+		EffectObserveTimeout: store.DefaultEmergencyEffectObserveTimeout.String(),
+	}
 	if s.configPath == "" {
 		return emergencyCfg, false, nil
 	}
@@ -595,8 +618,9 @@ func (s *orchSvc) loadEmergencyConfig() (config.EmergencyCfg, bool, error) {
 		return emergencyCfg, false, fmt.Errorf("read emergency config: %w", err)
 	}
 	var raw struct {
-		Enabled          bool   `mapstructure:"enabled"`
-		OperationTimeout string `mapstructure:"operation_timeout"`
+		Enabled              bool   `mapstructure:"enabled"`
+		OperationTimeout     string `mapstructure:"operation_timeout"`
+		EffectObserveTimeout string `mapstructure:"effect_observe_timeout"`
 	}
 	if err := v.UnmarshalKey("emergency", &raw); err != nil {
 		return emergencyCfg, false, fmt.Errorf("unmarshal emergency config: %w", err)
@@ -606,6 +630,11 @@ func (s *orchSvc) loadEmergencyConfig() (config.EmergencyCfg, bool, error) {
 	if raw.OperationTimeout != "" {
 		if parsed, parseErr := time.ParseDuration(raw.OperationTimeout); parseErr == nil && parsed > 0 {
 			emergencyCfg.OperationTimeout = parsed.String()
+		}
+	}
+	if raw.EffectObserveTimeout != "" {
+		if parsed, parseErr := time.ParseDuration(raw.EffectObserveTimeout); parseErr == nil && parsed > 0 {
+			emergencyCfg.EffectObserveTimeout = parsed.String()
 		}
 	}
 	return emergencyCfg, present, nil
@@ -627,9 +656,14 @@ func (s *orchSvc) seedEmergencyConfig(ctx context.Context, cfg config.EmergencyC
 	if parsed, err := time.ParseDuration(cfg.OperationTimeout); err == nil && parsed > 0 {
 		timeout = parsed
 	}
+	observeTimeout := store.DefaultEmergencyEffectObserveTimeout
+	if parsed, err := time.ParseDuration(cfg.EffectObserveTimeout); err == nil && parsed > 0 {
+		observeTimeout = parsed
+	}
 	return s.store.EmergencyConfig().SetEmergencyConfig(ctx, store.EmergencyConfig{
-		Enabled:          cfg.Enabled,
-		OperationTimeout: timeout,
+		Enabled:              cfg.Enabled,
+		OperationTimeout:     timeout,
+		EffectObserveTimeout: observeTimeout,
 	})
 }
 
@@ -689,6 +723,13 @@ func (s *orchSvc) Run(ctx context.Context) {
 	if s.validation != nil {
 		go s.validation.Run(ctx)
 	}
+	// REQ-088 D3=D5=A: the periodic pending-identity sweep (bind buffered
+	// identities whose row appeared, purge TTL orphans) runs on the mounted
+	// operator service as its own goroutine so it is independent of the
+	// cleanup/emergency early returns below. Maintenance mode skips it.
+	if s.operatorService != nil && !s.cfg.Maintenance {
+		go s.runPendingIdentitySweep(ctx)
+	}
 	if s.cfg.Maintenance || s.cleanup == nil {
 		return
 	}
@@ -698,6 +739,10 @@ func (s *orchSvc) Run(ctx context.Context) {
 	if s.emergency == nil {
 		return
 	}
+	// REQ-087 D5=B: slow-cycle stuck-lock observation (alert + audit only;
+	// never auto-releases). Started as its own goroutine so the 1s emergency
+	// deadline sweep below never delays it.
+	go s.startStuckLockScanner(ctx)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -706,6 +751,47 @@ func (s *orchSvc) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.emergency.ExpireEmergencyOperations(ctx)
+		}
+	}
+}
+
+// runPendingIdentitySweep drives the REQ-088 pending identity reconciliation
+// on a 30s ticker for the process lifetime. Reconciliation is idempotent and
+// best-effort: transient failures are logged and retried on the next tick.
+func (s *orchSvc) runPendingIdentitySweep(ctx context.Context) {
+	logger := s.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.operatorService.ReconcilePendingIdentities(ctx); err != nil {
+				logger.Warn("pending identity sweep failed", "error", err)
+			}
+		}
+	}
+}
+
+// startStuckLockScanner runs the stuck-lock observer on a 60s cadence
+// (REQ-087 §4.1). Each scan lists stuck locks across the whole system and
+// alerts+audits each newly-stuck lock; a lock that resolves or is released
+// stops being alerted. The per-process dedup set resets on restart (repeated
+// alerts after restart are acceptable and idempotent in the audit store).
+func (s *orchSvc) startStuckLockScanner(ctx context.Context) {
+	alerted := orchestrator.NewAlertedStuckLocks()
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.emergency.ScanStuckEmergencyLocks(ctx, alerted)
 		}
 	}
 }

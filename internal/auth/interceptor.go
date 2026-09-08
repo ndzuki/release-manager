@@ -341,7 +341,10 @@ func mapMethodToAction(method string) string {
 		// branch mapMethodToAction returns "" → 403, the same prefix-table
 		// gap that hit SwitchOrganization in TASK-072 (per
 		// core/go/connect-rpc.md 踩坑实践).
-		strings.HasPrefix(method, "Execute"):
+		strings.HasPrefix(method, "Execute"),
+		// Release: emergency stuck-lock release RPC (REQ-087). Same prefix
+		// gap: without a branch ReleaseEmergencyLock maps to "" → 403.
+		strings.HasPrefix(method, "Release"):
 		return "write"
 	default:
 		return ""
