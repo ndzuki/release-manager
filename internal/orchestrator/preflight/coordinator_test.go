@@ -79,6 +79,39 @@ func newTestCoordinator(t *testing.T, st *sqlitestore.Store) *Coordinator {
 	return c
 }
 
+// seedRollbackFixture seeds the same preflight fixture as
+// seedPreflightFixture but with a ROLLBACK operation, so the coordinator can
+// be driven through the same stage pipeline (REQ-090: ROLLBACK executes real
+// helm rollback in the stage pipeline; casQueued then drives the terminal
+// chain deterministically, mirroring INSTALL).
+func seedRollbackFixture(t *testing.T, st *sqlitestore.Store) *store.Operation {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	cust := &store.Customer{ID: "cust-preflight", Name: "Preflight Customer", Slug: "preflight-cust", Status: store.CustomerActive}
+	require.NoError(t, st.Customers().Create(ctx, cust))
+	cluster := &store.Cluster{ID: "cluster-preflight", Name: "Preflight Cluster", CustomerID: cust.ID}
+	require.NoError(t, st.Clusters().Create(ctx, cluster))
+	def := &store.ReleaseDefinition{
+		ID: "def-preflight", Name: "Preflight Definition", CustomerID: cust.ID, ClusterID: cluster.ID,
+		Namespace: "default", ReleaseName: "preflight-rel", Status: store.DefStatusActive, OptimisticVersion: 1,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def, nil))
+	op := &store.Operator{
+		ID: "operator-preflight", Name: "preflight-operator", CustomerID: cust.ID, ClusterID: cluster.ID,
+		CertSerial: "serial-preflight", Status: store.OperatorActive,
+	}
+	require.NoError(t, st.Operators().Create(ctx, op))
+	operation := &store.Operation{
+		ID: uuid.NewString(), OperationType: store.OperationRollback, Status: store.StatusPreflight,
+		ReleaseDefinitionID: def.ID, IdempotencyKey: uuid.NewString(), RequestHash: "hash",
+		BundleID: "bundle-preflight", StateVersion: 1,
+		ExpectedRevision: 3, TargetRevision: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, st.Operations().Create(ctx, operation))
+	return operation
+}
+
 func waitForCommand(t *testing.T, st *sqlitestore.Store, commandID string) *store.OutboxEntry {
 	t.Helper()
 	var entry *store.OutboxEntry
@@ -308,6 +341,64 @@ func TestCoordinatorRun_AllPassedFinalizesLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "passed", pl.Overall)
 	assert.Equal(t, "artifact,render,dryrun,runtime_pull", pl.Stages, "canonical stage names in execution order")
+}
+
+// AC-090-01: a ROLLBACK operation that passes every preflight stage is driven
+// deterministically queued→running→succeeded by casQueued (INSTALL-symmetric),
+// without depending on the FinishOperation race. The rollback is the
+// execution — stage-1 already ran the real helm rollback and later stages
+// replay under the agent-side replay guard (AC-090-02).
+func TestCoordinatorRun_RollbackPassedFinalizesSucceeded(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	op := seedRollbackFixture(t, st)
+	c := newTestCoordinator(t, st)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() { c.Run(ctx, op); close(done) }()
+
+	for _, stage := range []string{"artifact", "render", "cluster", "runtime_pull"} {
+		entry := waitForCommand(t, st, op.ID+":"+stage)
+		require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("coordinator did not finish")
+	}
+
+	got, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusSucceeded, got.Status, "AC-090-01: ROLLBACK preflight passed → casQueued drives queued→running→succeeded without FinishOperation")
+}
+
+// AC-090-01 negative: casQueued must only drive INSTALL/ROLLBACK — an
+// operation of any other type that somehow passes every stage stays queued
+// instead of being mis-driven to a terminal state (ADR-009 legal hops only;
+// no accidental QUEUED→SUCCEEDED direct transition).
+func TestCoordinatorRun_NonInstallRollbackTypeStaysQueued(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	op := seedRollbackFixture(t, st)
+	op.OperationType = "NOT_INSTALL_OR_ROLLBACK"
+	c := newTestCoordinator(t, st)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() { c.Run(ctx, op); close(done) }()
+
+	for _, stage := range []string{"artifact", "render", "cluster", "runtime_pull"} {
+		entry := waitForCommand(t, st, op.ID+":"+stage)
+		require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("coordinator did not finish")
+	}
+
+	got, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusQueued, got.Status, "non-INSTALL/ROLLBACK type must not be driven past queued")
 }
 
 // AC-019-01/06: a required stage failure stops the pipeline and records failed.
