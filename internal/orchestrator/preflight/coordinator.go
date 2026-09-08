@@ -517,14 +517,20 @@ func (c *Coordinator) casQueued(ctx context.Context, op *store.Operation, _ Aggr
 	}
 
 	// The wire Command does not carry the preflight stage, so each stage
-	// command is an INSTALL that the operator executes; the first (artifact)
-	// stage already ran the real helm install and the release is deployed.
+	// command carries the operation type the operator executes against the
+	// real release; the first stage already ran the actual helm write and
+	// the release is converged, later stages replay (executeInstall /
+	// executeRollback replay guards, AC-090-02).
 	// There is no separate queued→running executor in this wiring, so an
-	// INSTALL operation would sit in `queued` forever and never reach a
-	// terminal state (real smoke 2026-08-27: the fixture release was
-	// deployed but the operation stayed QUEUED). Drive the standard
-	// queued→running→succeeded chain — the install was the execution.
-	if op.OperationType == store.OperationInstall {
+	// INSTALL/ROLLBACK operation would sit in `queued` forever and never
+	// reach a terminal state (real smoke 2026-08-27/2026-09-08: the fixture
+	// release was deployed/rolled back but the operation stayed QUEUED —
+	// REQ-090 run1/run5 stuck at OPERATION_STATUS_QUEUED, run4 only reached
+	// SUCCEEDED through a FinishOperation race). Drive the standard
+	// queued→running→succeeded chain — the install/rollback was the
+	// execution. The hop chain stays legal (EventBegin then EventComplete,
+	// ADR-009); a direct QUEUED→SUCCEEDED edge is never used.
+	if op.OperationType == store.OperationInstall || op.OperationType == store.OperationRollback {
 		running, err := operation.Transition(next, operation.EventBegin)
 		if err == nil {
 			runningOp, err := c.ops.UpdateStatus(ctx, op.ID, running, queuedOp.StateVersion, "")

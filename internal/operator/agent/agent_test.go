@@ -570,6 +570,91 @@ func TestAgent_RollbackCommand(t *testing.T) {
 	assert.Equal(t, "example", engine.lastRollback.ReleaseName)
 }
 
+// AC-090-02 first-run branch: when the deployed release revision still equals
+// expected_current_revision (no earlier stage has run the rollback yet), the
+// agent performs the real helm rollback exactly once.
+func TestAgent_RollbackFirstRunExecutesRealRollback(t *testing.T) {
+	engine := &recordingEngine{
+		history: []helmengine.ReleaseHistoryEntry{
+			{Revision: 1, Status: "superseded", Chart: "example-1.0.0"},
+			{Revision: 3, Status: "deployed", Chart: "example-3.0.0"},
+		},
+		// Deployed revision still at expected_current_revision=3 → real run.
+		status: &helmengine.Release{
+			Name: "example", Namespace: "apps", Revision: 3, Status: "deployed",
+			ManifestDigest: "sha256:pre-rollback",
+		},
+		release: &helmengine.Release{
+			Name: "example", Namespace: "apps", Revision: 4, Status: "deployed",
+			ManifestDigest: "sha256:post-rollback",
+		},
+	}
+	agent := newTestAgent(t, engine, newMemoryStore(), nil)
+	stream := newTestStream()
+
+	require.NoError(t, agent.handleCommand(t.Context(), stream, rollbackCommand("cmd-rollback-first")))
+	require.Len(t, stream.sent, 2)
+	assert.Equal(t, "succeeded", stream.sent[1].GetResult().GetStatus())
+	assert.Equal(t, 1, engine.rollbackCalls, "expected revision match must trigger the real rollback")
+	assert.Equal(t, 1, engine.statusCalls)
+	assert.Equal(t, 1, engine.lastRollback.TargetRevision)
+	assert.Contains(t, stream.sent[1].GetResult().GetResultJson(), `"revision":4`)
+}
+
+// AC-090-02 replay branch: a later preflight stage redelivers the same
+// ROLLBACK command after the first stage already executed the real rollback;
+// the deployed revision has advanced past expected_current_revision, so the
+// command is replayed as success without a second helm write.
+func TestAgent_RollbackReplaysWhenTargetAlreadyAchieved(t *testing.T) {
+	engine := &recordingEngine{
+		history: []helmengine.ReleaseHistoryEntry{
+			{Revision: 1, Status: "superseded", Chart: "example-1.0.0"},
+			{Revision: 3, Status: "deployed", Chart: "example-3.0.0"},
+			{Revision: 4, Status: "deployed", Chart: "example-3.0.0"},
+		},
+		// Deployed revision advanced past expected_current_revision=3 → the
+		// rollback from an earlier stage already achieved the target.
+		status: &helmengine.Release{
+			Name: "example", Namespace: "apps", Revision: 4, Status: "deployed",
+			ManifestDigest: "sha256:post-rollback",
+		},
+	}
+	agent := newTestAgent(t, engine, newMemoryStore(), nil)
+	stream := newTestStream()
+
+	require.NoError(t, agent.handleCommand(t.Context(), stream, rollbackCommand("cmd-rollback-replay")))
+	require.Len(t, stream.sent, 2)
+	assert.Equal(t, "succeeded", stream.sent[1].GetResult().GetStatus())
+	assert.Zero(t, engine.rollbackCalls, "achieved rollback target must not trigger a second helm rollback")
+	assert.Equal(t, 1, engine.statusCalls)
+	assert.Contains(t, stream.sent[1].GetResult().GetResultJson(), `"inventory_sync_hint":true`)
+	assert.Contains(t, stream.sent[1].GetResult().GetResultJson(), `"manifest_digest":"sha256:post-rollback"`)
+}
+
+// AC-090-02 guard-safety: the replay guard must not swallow errors. When the
+// status probe fails (or the deployed revision is still at expected), the
+// agent falls through to the real rollback path and its error contract
+// (rollbackErrorCode) is preserved.
+func TestAgent_RollbackReplayGuardDoesNotSwallowStatusError(t *testing.T) {
+	engine := &recordingEngine{
+		history: []helmengine.ReleaseHistoryEntry{
+			{Revision: 1, Status: "superseded", Chart: "example-1.0.0"},
+			{Revision: 3, Status: "deployed", Chart: "example-3.0.0"},
+		},
+		statusErr:   helmengine.ErrNotFound,
+		rollbackErr: helmengine.ErrActionFailed,
+	}
+	agent := newTestAgent(t, engine, newMemoryStore(), nil)
+	stream := newTestStream()
+
+	require.NoError(t, agent.handleCommand(t.Context(), stream, rollbackCommand("cmd-rollback-status-err")))
+	require.Len(t, stream.sent, 2)
+	assert.Equal(t, "failed", stream.sent[1].GetResult().GetStatus())
+	assert.Contains(t, stream.sent[1].GetResult().GetResultJson(), `"code":"helm_rollback_failed"`)
+	assert.Equal(t, 1, engine.rollbackCalls, "status probe failure must fall through to the real rollback")
+	assert.Equal(t, 1, engine.statusCalls)
+}
+
 func TestAgent_EmergencyCommandPersistsAcknowledgesAndExecutes(t *testing.T) {
 	store := newMemoryStore()
 	executor := &recordingEmergencyExecutor{resultJSON: `{"before":{"replicas":2},"after":{"replicas":3}}`}
@@ -848,6 +933,7 @@ type recordingEngine struct {
 	// with statusErr (TASK-084 second-Status failure matrix).
 	statusFailOnCall int
 	upgradeErr       error
+	rollbackErr      error
 	history          []helmengine.ReleaseHistoryEntry
 	release          *helmengine.Release
 	err              error
@@ -871,6 +957,9 @@ func (e *recordingEngine) Upgrade(_ context.Context, opts helmengine.UpgradeOpti
 func (e *recordingEngine) Rollback(_ context.Context, opts helmengine.RollbackOptions) (*helmengine.Release, error) {
 	e.rollbackCalls++
 	e.lastRollback = opts
+	if e.rollbackErr != nil {
+		return nil, e.rollbackErr
+	}
 	return e.release, e.err
 }
 func (e *recordingEngine) Status(_ context.Context, opts helmengine.StatusOptions) (*helmengine.Release, error) {
