@@ -342,11 +342,13 @@ if command -v kubectl >/dev/null 2>&1 && [ -f "$DATA_DIR/kubeconfig.yaml" ]; the
     kubectl_auth scale deployment auth --replicas=0 >/dev/null 2>&1 || bad "auth scale to 0 failed"
     D4_SCALE0=0
     for _ in $(seq 1 40); do
+      # When a Deployment is scaled to 0, status.readyReplicas is *absent*
+      # (empty), not "0" — treat empty as scaled-to-0 (real smoke 2026-09-08).
       rr="$(kubectl_auth get deployment auth -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
-      [ "${rr:-x}" = "0" ] && { D4_SCALE0=1; break; }
+      [ -z "${rr:-}" ] || [ "$rr" = "0" ] && { D4_SCALE0=1; break; }
       sleep 2
     done
-    [ "$D4_SCALE0" = "1" ] && ok "auth scaled to 0 (readyReplicas=0)" || bad "auth readyReplicas != 0 after scale-down"
+    [ "$D4_SCALE0" = "1" ] && ok "auth scaled to 0 (readyReplicas absent/0)" || bad "auth readyReplicas != 0 after scale-down"
     kubectl_auth scale deployment auth --replicas=1 >/dev/null 2>&1 || bad "auth scale to 1 failed"
     D4_READY=0
     for _ in $(seq 1 90); do
@@ -356,7 +358,6 @@ if command -v kubectl >/dev/null 2>&1 && [ -f "$DATA_DIR/kubeconfig.yaml" ]; the
       sleep 2
     done
     [ "$D4_READY" = "1" ] && ok "auth recovered after restart (readyReplicas=1, readyz 200)" || bad "auth not recovered after restart (readyReplicas=${rr:-?} readyz=${code:-?})"
-    # Old access token must still validate.
     VALID_OLD="$(curl -sS --fail -X POST "$AUTH_URL/auth.v1.AuthService/ValidateToken" \
       -H 'Content-Type: application/json' -d "{\"token\":\"$TOKEN\"}" 2>/dev/null || echo '{}')"
     if jq -e '.valid == true' <<<"$VALID_OLD" >/dev/null 2>&1; then
