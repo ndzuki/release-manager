@@ -6,7 +6,9 @@
 #
 # Smoke list (REQ-066 AC-066-17): dev-up/dev-seed, declared endpoints,
 # seed manifest, operator enrollment/reconnect, Upgrade, CancelOperation,
-# Rollback, Emergency SetReplicas (set then restore), e2e-runner login.
+# Rollback, Emergency SetReplicas (set then restore), e2e-runner login, and
+# the auth cross-restart token precheck (D-029 D4: ValidateToken + RefreshToken
+# on pre-restart tokens succeed after an Auth deployment restart).
 #
 # dev-up/dev-seed with their built-in enrollment/reconnect smoke
 # (AC-065-01/34) are driven by the caller via `make dev-up dev-seed`; this
@@ -151,6 +153,9 @@ LOGIN="$(curl -sS --fail -X POST "$AUTH_URL/auth.v1.AuthService/Login" \
 TOKEN="$(jq -r '.accessToken' <<<"$LOGIN")"
 [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ] || fail "login returned no access token"
 ok "login access token (len=${#TOKEN})"
+# D-029 D4: the auth cross-restart precheck needs the pre-restart refresh token.
+REFRESH_TOKEN="$(jq -r '.refreshToken' <<<"$LOGIN")"
+[ -n "$REFRESH_TOKEN" ] && [ "$REFRESH_TOKEN" != "null" ] || bad "login returned no refresh token (D4 precheck needs one)"
 # LoginResponse.user may be unset on this auth version; roles are read from
 # the authoritative ValidateToken projection (REQ-025).
 VALID="$(curl -sS --fail -X POST "$AUTH_URL/auth.v1.AuthService/ValidateToken" \
@@ -319,6 +324,58 @@ else
   [ -n "$RB_ID" ] || fail "RollbackRelease rejected: $RB"
   ok "Rollback created op=$RB_ID"
   wait_op "$RB_ID" 'OPERATION_STATUS_SUCCEEDED' "rollback op=$RB_ID" || true
+fi
+
+step "auth cross-restart token precheck (D-029 D4 / AC-066-17 D4)"
+# Restart the control-plane Auth deployment (replicas 0 -> ready 0 -> 1 ->
+# ready 1; the same patch semantics the restart Stage uses) and assert that
+# the PRE-restart access/refresh tokens still work: ValidateToken(old access)
+# and RefreshToken(old refresh) must succeed. This is the explicit runtime
+# precondition of restart Stage AC-066-03/26 assertions.
+if command -v kubectl >/dev/null 2>&1 && [ -f "$DATA_DIR/kubeconfig.yaml" ]; then
+  AUTH_NS="release-manager-dev"
+  AUTH_CTX="k3d-release-manager-control"
+  kubectl_auth() { KUBECONFIG="$DATA_DIR/kubeconfig.yaml" kubectl --context "$AUTH_CTX" -n "$AUTH_NS" "$@"; }
+  if ! kubectl_auth get deployment auth >/dev/null 2>&1; then
+    bad "auth deployment not found on $AUTH_CTX/$AUTH_NS (D4 precheck)"
+  else
+    kubectl_auth scale deployment auth --replicas=0 >/dev/null 2>&1 || bad "auth scale to 0 failed"
+    D4_SCALE0=0
+    for _ in $(seq 1 40); do
+      rr="$(kubectl_auth get deployment auth -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
+      [ "${rr:-x}" = "0" ] && { D4_SCALE0=1; break; }
+      sleep 2
+    done
+    [ "$D4_SCALE0" = "1" ] && ok "auth scaled to 0 (readyReplicas=0)" || bad "auth readyReplicas != 0 after scale-down"
+    kubectl_auth scale deployment auth --replicas=1 >/dev/null 2>&1 || bad "auth scale to 1 failed"
+    D4_READY=0
+    for _ in $(seq 1 90); do
+      rr="$(kubectl_auth get deployment auth -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
+      code="$(curl -s -o /dev/null -w '%{http_code}' --retry 2 --retry-connrefused "$AUTH_URL/readyz" 2>/dev/null || true)"
+      [ "${rr:-x}" = "1" ] && [ "$code" = "200" ] && { D4_READY=1; break; }
+      sleep 2
+    done
+    [ "$D4_READY" = "1" ] && ok "auth recovered after restart (readyReplicas=1, readyz 200)" || bad "auth not recovered after restart (readyReplicas=${rr:-?} readyz=${code:-?})"
+    # Old access token must still validate.
+    VALID_OLD="$(curl -sS --fail -X POST "$AUTH_URL/auth.v1.AuthService/ValidateToken" \
+      -H 'Content-Type: application/json' -d "{\"token\":\"$TOKEN\"}" 2>/dev/null || echo '{}')"
+    if jq -e '.valid == true' <<<"$VALID_OLD" >/dev/null 2>&1; then
+      ok "ValidateToken(old access) valid after Auth restart"
+    else
+      bad "ValidateToken(old access) after Auth restart: $VALID_OLD"
+    fi
+    # Old refresh token must still rotate to a fresh access token.
+    RF="$(curl -sS --fail -X POST "$AUTH_URL/auth.v1.AuthService/RefreshToken" \
+      -H 'Content-Type: application/json' -d "{\"refreshToken\":\"$REFRESH_TOKEN\"}" 2>/dev/null || echo '{}')"
+    NEW_ACCESS="$(jq -r '.accessToken // empty' <<<"$RF")"
+    if [ -n "$NEW_ACCESS" ]; then
+      ok "RefreshToken(old refresh) succeeded after Auth restart (new access len=${#NEW_ACCESS})"
+    else
+      bad "RefreshToken(old refresh) after Auth restart: $RF"
+    fi
+  fi
+else
+  skiprec "auth restart precheck (kubectl or kubeconfig unavailable)"
 fi
 
 if [ "$FAIL" -eq 0 ]; then
