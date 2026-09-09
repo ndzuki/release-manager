@@ -75,10 +75,15 @@ func TestCLIRejectsDuplicateStagesWithoutRunArtifact(t *testing.T) {
 	}
 }
 
-func TestCLIRunKeepsStdoutHumanAndArtifactsInOutputDir(t *testing.T) {
+// TestCLIRunFailsClosedWithoutLiveStageImplementations verifies that a run
+// whose selected stages have no wired live implementation reports an honest
+// failure (exit 1) instead of a vacuous pass, while still persisting the
+// baseline and per-stage artifacts and keeping stdout human-only (TASK-066
+// fail-closed contract; no fake green runs).
+func TestCLIRunFailsClosedWithoutLiveStageImplementations(t *testing.T) {
 	configPath := writeConfig(t)
 	outputDir := t.TempDir()
-	result := runCLI(t, map[string]string{"E2E_RUN_ID": "cli-success"},
+	result := runCLI(t, map[string]string{"E2E_RUN_ID": "cli-failclosed"},
 		"run",
 		"--env-config", configPath,
 		"--output-dir", outputDir,
@@ -90,10 +95,13 @@ func TestCLIRunKeepsStdoutHumanAndArtifactsInOutputDir(t *testing.T) {
 		"--snapshot-full",
 	)
 
-	if result.code != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%s", result.code, result.stderr)
+	// There is no live environment and no stage implementation is wired into
+	// the canonical harness: every selected stage must fail closed. A green
+	// exit here would be a fabricated pass and is a regression.
+	if result.code != 1 {
+		t.Fatalf("exit code = %d, want 1 (fail closed without implementations); stderr=%s", result.code, result.stderr)
 	}
-	if !strings.Contains(result.stdout, "E2E run cli-success") {
+	if !strings.Contains(result.stdout, "E2E run cli-failclosed") {
 		t.Fatalf("stdout = %q, want human summary", result.stdout)
 	}
 	if strings.Contains(result.stdout, "\"selected_stages\"") {
@@ -111,6 +119,8 @@ func TestCLIRunKeepsStdoutHumanAndArtifactsInOutputDir(t *testing.T) {
 	var artifact struct {
 		SelectedStages []string `json:"selected_stages"`
 		Pass           int      `json:"pass"`
+		Fail           int      `json:"fail"`
+		Skip           int      `json:"skip"`
 		ExitCode       int      `json:"exit_code"`
 	}
 	data, err := os.ReadFile(filepath.Join(outputDir, "run.json"))
@@ -123,8 +133,39 @@ func TestCLIRunKeepsStdoutHumanAndArtifactsInOutputDir(t *testing.T) {
 	if got, want := strings.Join(artifact.SelectedStages, ","), "control-plane,artifact"; got != want {
 		t.Fatalf("selected stages = %q, want %q", got, want)
 	}
-	if artifact.Pass != 2 || artifact.ExitCode != 0 {
-		t.Fatalf("run artifact = %+v, want two passes and exit 0", artifact)
+	// control-plane fails closed (not_implemented); artifact depends on it and
+	// is therefore stage_skipped with the dependency reason (AC-066-01/41).
+	if artifact.Pass != 0 || artifact.Fail != 1 || artifact.Skip != 1 || artifact.ExitCode != 1 {
+		t.Fatalf("run artifact = %+v, want fail=1 skip=1 exit 1", artifact)
+	}
+
+	var stage struct {
+		Status    string `json:"status"`
+		ErrorCode string `json:"error_code"`
+		RootCause string `json:"root_cause"`
+	}
+
+	stageData, err := os.ReadFile(filepath.Join(outputDir, "control-plane.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(stageData, &stage); err != nil {
+		t.Fatal(err)
+	}
+	if stage.Status != "fail" || stage.ErrorCode != "not_implemented" {
+		t.Fatalf("control-plane stage artifact = %+v, want fail/not_implemented", stage)
+	}
+
+	stageData, err = os.ReadFile(filepath.Join(outputDir, "artifact.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(stageData, &stage); err != nil {
+		t.Fatal(err)
+	}
+	if stage.Status != "skip" || stage.ErrorCode != "stage_skipped" ||
+		!strings.Contains(stage.RootCause, "dependency control-plane fail") {
+		t.Fatalf("artifact stage artifact = %+v, want skip with dependency reason", stage)
 	}
 }
 

@@ -152,10 +152,13 @@ func runStages(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// The deep stage implementations are still being delivered behind the
-	// test/e2e package. New(cfg) supplies the canonical dependency graph with
-	// deterministic no-op stage bodies, which keeps this CLI seam usable without
-	// shelling out to kubectl/helm or inventing a second runtime implementation.
+	// The live read/write stage implementations are delivered behind the
+	// test/e2e package. New(cfg) supplies the canonical dependency graph whose
+	// stage bodies fail closed with ErrStageNotImplemented until a real
+	// implementation is supplied through Scenario.Stages. This keeps the CLI
+	// honest: no selected stage ever reports a vacuous pass, so `make e2e-*`
+	// and CI go red (exit 1) while an implementation is missing rather than
+	// fabricating a green run (TASK-066 Step 8 fail-closed contract).
 	harness := e2e.New(*config)
 	report, runErr := harness.Run(ctx, e2e.Scenario{
 		SelectedStages: selected,

@@ -59,6 +59,53 @@ func NewStage(name string, fn func(ctx context.Context, fixture *Fixture) error)
 // ErrInvalidStageImplementation reports an unsupported stage implementation.
 var ErrInvalidStageImplementation = errors.New("invalid stage implementation")
 
+// ErrStageNotImplemented reports a canonical stage whose real implementation
+// has not been wired yet. A stage without an implementation must fail closed
+// rather than report a vacuous pass, so CI and local `make e2e-*` runs never
+// go green on a stage body that does nothing (TASK-066 Step 8 fail-closed
+// contract).
+var ErrStageNotImplemented = errors.New("stage not implemented")
+
+// NotImplementedError is the stable, serializable cause of a stage whose
+// canonical implementation is not yet available.
+type NotImplementedError struct {
+	Stage string
+}
+
+func (e *NotImplementedError) Error() string {
+	if e == nil || e.Stage == "" {
+		return ErrStageNotImplemented.Error()
+	}
+	return "stage " + e.Stage + " not implemented"
+}
+
+// Is allows errors.Is(err, ErrStageNotImplemented) to classify the cause.
+func (e *NotImplementedError) Is(target error) bool {
+	return target == ErrStageNotImplemented
+}
+
+// Code returns the stable machine-readable error code surfaced in stage
+// artifacts. It intentionally stays outside the live error-model table: it is
+// an internal implementation-availability marker, never an environment fact.
+func (e *NotImplementedError) Code() string { return "not_implemented" }
+
+// UnimplementedStage returns a Stage that always fails closed.
+func UnimplementedStage(name string) Stage {
+	return NewStage(name, func(context.Context, *Fixture) error {
+		return &NotImplementedError{Stage: name}
+	})
+}
+
+// UnimplementedSpec returns a canonical graph node that fails closed until a
+// real implementation replaces it.
+func UnimplementedSpec(name string, dependencies ...string) StageSpec {
+	return StageSpec{
+		Name:         name,
+		Stage:        UnimplementedStage(name),
+		Dependencies: append([]string(nil), dependencies...),
+	}
+}
+
 func (s *StageFunc) Name() string { return s.name }
 
 func (s *StageFunc) Run(ctx context.Context, fixture *Fixture) error {

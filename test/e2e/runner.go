@@ -218,10 +218,11 @@ type Scenario struct {
 
 // New constructs the deep Harness from the public Config seam. Config
 // validation remains the responsibility of the caller/config package; this
-// constructor does not perform I/O or expose environment clients.
+// constructor does not perform I/O or expose environment clients. Its
+// canonical stages fail closed until real implementations are supplied.
 func New(cfg Config) *Harness {
 	return &Harness{
-		Stages:       canonicalNoopSpecs(),
+		Stages:       canonicalDefaultSpecs(),
 		StageTimeout: 5 * time.Minute,
 		Logger:       slog.Default(),
 		config:       &cfg,
@@ -265,7 +266,7 @@ func NewHarness(inputs ...any) *Harness {
 		}
 	}
 	if len(h.Stages) == 0 {
-		h.Stages = canonicalNoopSpecs()
+		h.Stages = canonicalDefaultSpecs()
 	}
 	return h
 }
@@ -288,7 +289,7 @@ func (h *Harness) Run(ctx context.Context, scenario Scenario) (Report, error) {
 	return h.run(ctx, scenario)
 }
 
-// RunScenario executes a Scenario with canonical no-op stage defaults.
+// RunScenario executes a Scenario with canonical fail-closed stage defaults.
 func RunScenario(ctx context.Context, scenario Scenario) (Report, error) {
 	return NewHarness().Run(ctx, scenario)
 }
@@ -305,7 +306,7 @@ func (h *Harness) run(ctx context.Context, scenario Scenario) (Report, error) {
 		specs = append([]StageSpec(nil), h.Stages...)
 	}
 	if len(specs) == 0 {
-		specs = canonicalNoopSpecs()
+		specs = canonicalDefaultSpecs()
 	}
 	if len(scenario.Dependencies) != 0 {
 		for i := range specs {
@@ -570,25 +571,31 @@ func executeStage(
 
 	rootCause := "stage_failed"
 	cause := err.Error()
+	errorCode := ""
 	var panicErr *PanicError
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		rootCause = "e2e_timeout"
 		cause = "stage timeout"
+		errorCode = "e2e_timeout"
 	case errors.Is(err, context.Canceled):
 		rootCause = "e2e_canceled"
 		cause = "stage canceled"
+		errorCode = "e2e_canceled"
 	case errors.As(err, &panicErr):
 		rootCause = "panic"
 		cause = "stage panic"
+		errorCode = "panic"
 	default:
 		if stageErr, ok := err.(interface{ Code() string }); ok && stageErr.Code() != "" {
 			rootCause = stageErr.Code()
+			errorCode = stageErr.Code()
 		}
 	}
 	if logger != nil {
-		logger.Debug("e2e stage failed", "stage", name, "root_cause", rootCause)
+		logger.Debug("e2e stage failed", "stage", name, "root_cause", rootCause, "error_code", errorCode)
 	}
+	result.ErrorCode = errorCode
 	return finishStageResult(result, err, cause, started)
 }
 
@@ -795,16 +802,25 @@ func specsFromMap(stages map[string]Stage) []StageSpec {
 	return out
 }
 
-func canonicalNoopSpecs() []StageSpec {
+// canonicalDefaultSpecs returns the canonical dependency graph used when a
+// scenario supplies no stage implementations (for example `New(Config)` and
+// `RunScenario`). Every canonical stage fails closed with ErrStageNotImplemented:
+// a real implementation must be provided through Scenario.Stages before a run
+// can pass. This keeps `cmd/e2e run` honest while write/read-only live stages
+// are still being delivered — a stage body that does nothing must never report
+// a vacuous pass (TASK-066 Step 8 fail-closed contract).
+func canonicalDefaultSpecs() []StageSpec {
 	out := make([]StageSpec, 0, len(canonicalStageOrder))
 	for _, name := range canonicalStageOrder {
-		out = append(out, StageSpec{
-			Name:         name,
-			Dependencies: append([]string(nil), CanonicalDependencies[name]...),
-		})
+		out = append(out, UnimplementedSpec(name, CanonicalDependencies[name]...))
 	}
 	return out
 }
+
+// canonicalNoopSpecs is a deprecated compatibility alias. It now returns the
+// same fail-closed graph as canonicalDefaultSpecs; callers that need a
+// deterministic no-op stage must provide their own StageSpec.
+func canonicalNoopSpecs() []StageSpec { return canonicalDefaultSpecs() }
 
 func reportExitCode(result *RunResult) int {
 	if result == nil {
