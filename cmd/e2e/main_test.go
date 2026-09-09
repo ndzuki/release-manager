@@ -153,7 +153,7 @@ func TestCLIPreservesLockConflictExitCode(t *testing.T) {
 	}
 }
 
-func TestCLICleanupUsesBaselineOverride(t *testing.T) {
+func TestCLICleanupUsesBaselineOverrideAndFailsClosedWithoutLiveEnv(t *testing.T) {
 	configPath := writeConfig(t)
 	outputDir := t.TempDir()
 	baseline := filepath.Join(t.TempDir(), "baseline.json")
@@ -167,14 +167,21 @@ func TestCLICleanupUsesBaselineOverride(t *testing.T) {
 		"--output-dir", outputDir,
 		"--baseline-file", baseline,
 	)
-	if result.code != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%s", result.code, result.stderr)
+	// There is no live dev environment in unit tests: the cleanup subcommand
+	// validates the config seam and baseline file, then fails closed when the
+	// e2e-runner login cannot reach the Auth endpoint. A nonzero exit is the
+	// correct outcome; it must never silently claim a best-effort success.
+	if result.code != 1 {
+		t.Fatalf("exit code = %d, want 1 (cleanup must fail closed without a live environment); stderr=%s", result.code, result.stderr)
 	}
-	if !strings.Contains(result.stdout, baseline) {
-		t.Fatalf("stdout = %q, want baseline path", result.stdout)
+	if !strings.Contains(result.stderr, "cleanup is residual-only") {
+		t.Fatalf("stderr = %q, want baseline degradation warning", result.stderr)
 	}
-	if !strings.Contains(result.stderr, "baseline loaded for cleanup") {
-		t.Fatalf("stderr = %q, want cleanup log", result.stderr)
+	if !strings.Contains(result.stdout, "E2E cleanup failed") {
+		t.Fatalf("stdout = %q, want fail-closed summary", result.stdout)
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, "run.json")); !os.IsNotExist(err) {
+		t.Fatalf("run.json exists after cleanup: %v", err)
 	}
 }
 

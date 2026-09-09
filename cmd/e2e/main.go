@@ -242,10 +242,6 @@ func runCleanup(args []string, stdout, stderr io.Writer) int {
 		writeUsageError(stderr, errors.New("--output-dir must not be empty"))
 		return int(exitUsage)
 	}
-	if _, err := e2e.LoadConfig(options.envConfig); err != nil {
-		writeUsageError(stderr, err)
-		return int(exitUsage)
-	}
 	cleanupID, err := runID()
 	if err != nil {
 		writeUsageError(stderr, err)
@@ -256,32 +252,114 @@ func runCleanup(args []string, stdout, stderr io.Writer) int {
 		return reportLockError(stderr, err)
 	}
 	if lock != nil {
-		defer func() { _ = lock.Release() }()
+		defer func() {
+			if releaseErr := lock.Release(); releaseErr != nil {
+				slog.New(slog.NewTextHandler(stderr, nil)).Error("release e2e lock", "error", releaseErr)
+			}
+		}()
 	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	baselineData, readErr := os.ReadFile(options.baselineFile)
-	if readErr != nil {
-		if !errors.Is(readErr, os.ErrNotExist) {
-			logger.Warn("baseline unavailable; cleanup is residual-only", "error", readErr)
-		} else {
-			logger.Warn("baseline not found; cleanup is residual-only", "file", options.baselineFile)
-		}
-	} else {
-		var baseline baselineArtifact
-		if err := json.Unmarshal(baselineData, &baseline); err != nil {
-			logger.Warn("baseline invalid; cleanup is residual-only", "error", err)
-		} else {
-			logger.Info("baseline loaded for cleanup", "run_id", baseline.RunID)
-		}
-	}
 
-	// No cleanup client adapter is available in the current test/e2e surface.
-	// Keep this command deterministic and fail-closed: it validates the same
-	// config seam and reports the residual-only handoff instead of performing
-	// database, Helm, kubectl, or shell side effects.
-	fmt.Fprintf(stdout, "E2E cleanup: residual-only seam complete (baseline %s)\n", options.baselineFile)
+	recoveryTarget := loadCleanupBaseline(options.baselineFile, logger)
+
+	// Recover through the formal Connect APIs as e2e-runner. Generated clients
+	// and the access token stay behind the test/e2e surface; this command never
+	// patches Kubernetes, writes the database, or shells out (AC-066-34/38).
+	recovery, err := newCleanupRecovery(options.envConfig)
+	if err != nil {
+		writeUsageError(stderr, err)
+		return int(exitUsage)
+	}
+	cleanupCtx, cancel := e2e.CleanupDeadline(ctx, 0)
+	defer cancel()
+	runnerUserID, err := recovery.Login(cleanupCtx)
+	if err != nil {
+		logger.Error("e2e cleanup login failed", "error", safeErrorMessage(err))
+		fmt.Fprintf(stdout, "E2E cleanup failed: e2e-runner login unavailable (run make e2e-cleanup after the environment is up)\n")
+		return int(exitRuntime)
+	}
+	report, err := e2e.RunCleanup(cleanupCtx, recoveryTarget, runnerUserID, recovery, logger)
+	if err != nil {
+		logger.Error("e2e cleanup recovery failed", "error", safeErrorMessage(err))
+		fmt.Fprintf(stdout, "E2E cleanup failed: %s\n", safeErrorMessage(err))
+		return int(exitRuntime)
+	}
+	writeCleanupSummary(stdout, report)
 	return int(exitSuccess)
+}
+
+// loadCleanupBaseline parses {--baseline-file} as the recovery target. A
+// missing or invalid baseline degrades cleanup to residual-only (cancel
+// runner-owned non-terminal operations only) with an explicit warning, never
+// silently (AC-066-23/28, D-026 D4).
+func loadCleanupBaseline(baselineFile string, logger *slog.Logger) *e2e.BaselineRecovery {
+	baselineData, readErr := os.ReadFile(baselineFile)
+	switch {
+	case readErr != nil && !errors.Is(readErr, os.ErrNotExist):
+		logger.Warn("baseline unreadable; cleanup is residual-only", "error", readErr)
+		return nil
+	case readErr != nil:
+		logger.Warn("baseline not found; cleanup is residual-only", "file", baselineFile)
+		return nil
+	}
+	var baseline baselineArtifact
+	if err := json.Unmarshal(baselineData, &baseline); err != nil {
+		logger.Warn("baseline invalid; cleanup is residual-only", "error", err)
+		return nil
+	}
+	target := e2e.BaselineRecoveryFromSnapshots(baseline.FixtureSnapshot)
+	if len(target.Revisions) == 0 {
+		logger.Warn("baseline carries no revision recovery targets; cleanup is residual-only", "run_id", baseline.RunID)
+		return nil
+	}
+	logger.Info("baseline loaded for cleanup", "run_id", baseline.RunID, "revision_targets", len(target.Revisions))
+	return &target
+}
+
+// newCleanupRecovery builds the formal Connect recovery implementation from
+// the env-config.
+func newCleanupRecovery(envConfig string) (*e2e.LiveRecovery, error) {
+	config, err := e2e.LoadConfig(envConfig)
+	if err != nil {
+		return nil, err
+	}
+	clients, err := e2e.NewClientBundle(config)
+	if err != nil {
+		return nil, err
+	}
+	recovery, err := e2e.NewLiveRecovery(config, clients)
+	if err != nil {
+		return nil, err
+	}
+	return recovery, nil
+}
+
+func writeCleanupSummary(stdout io.Writer, report e2e.CleanupReport) {
+	fmt.Fprintf(stdout,
+		"E2E cleanup: cancelled=%d rolled_back=%d skipped_revision_restore=%d residual=%d replicas_restore_skipped=%v baseline_missing=%v\n",
+		len(report.CancelledOperationIDs),
+		len(report.RolledBackDefinitions),
+		len(report.SkippedRevisionRestore),
+		len(report.ResidualNonTerminal),
+		report.SkippedReplicasRestore,
+		report.BaselineMissing,
+	)
+	for _, id := range report.CancelledOperationIDs {
+		fmt.Fprintf(stdout, "- cancelled operation %s\n", id)
+	}
+	for _, definition := range report.RolledBackDefinitions {
+		fmt.Fprintf(stdout, "- rolled back definition %s\n", definition)
+	}
+	for _, definition := range report.SkippedRevisionRestore {
+		fmt.Fprintf(stdout, "- skipped revision restore for %s (no baseline target)\n", definition)
+	}
+	for _, id := range report.ResidualNonTerminal {
+		fmt.Fprintf(stdout, "- residual requires manual cleanup: %s\n", id)
+	}
 }
 
 func parseRunOptions(args []string, stderr io.Writer) (runOptions, error) {
