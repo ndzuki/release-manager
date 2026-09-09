@@ -1011,6 +1011,47 @@ func (a *Agent) executeRollback(ctx context.Context, command *operatorv1.Command
 		return result
 	}
 
+	// Idempotent rollback replay guard (REQ-090 / AC-090-02, mirroring
+	// executeInstall's "already deployed → replay success"). The preflight
+	// stage pipeline dispatches the same ROLLBACK command once per stage and
+	// only the first stage performs the real helm rollback; a real rollback
+	// always produces a new revision (deployed revision advances past
+	// expected_current_revision). A later stage (or an outbox redelivery)
+	// that observes the release already deployed at a revision strictly
+	// above the expected current revision has therefore already achieved the
+	// command target — replay success without a second helm write.
+	//
+	// The deployed release state (helm Status) is the sole authority; the
+	// replay is never inferred from revision equality alone (D-109 lesson:
+	// a revision-equality heuristic once fabricated rollback_succeeded). The
+	// replay predicate requires the deployed revision to have ADVANCED past
+	// the expected current revision (current.Revision > expected), not merely
+	// differ from it — a release observed below the expected revision is an
+	// inconsistent state that must not be misread as "already rolled back".
+	// When Status fails, the expected revision is unknown (0), or the
+	// deployed revision is at/below expected, fall through to the real
+	// rollback below so its error contract (rollbackErrorCode /
+	// target_revision_not_found) is preserved unchanged.
+	expected := command.GetExpectedCurrentRevision()
+	if expected > 0 {
+		if current, statusErr := a.engine.Status(ctx, helmengine.StatusOptions{
+			Namespace:   command.GetNamespace(),
+			ReleaseName: command.GetReleaseName(),
+		}); statusErr == nil && current != nil &&
+			current.Status == "deployed" &&
+			current.Revision > int(expected) {
+			a.logger.Info("rollback target already achieved; rollback replayed as success",
+				"namespace", command.GetNamespace(), "release", command.GetReleaseName(),
+				"command", command.GetCommandId())
+			result.Status = "succeeded"
+			result.InventorySync = true
+			if current.ManifestDigest != "" {
+				result.ResourceSummary.ManifestDigest = current.ManifestDigest
+			}
+			return result
+		}
+	}
+
 	timeout := a.installFlags.Timeout
 	if command.GetTimeoutSeconds() > 0 {
 		timeout = time.Duration(command.GetTimeoutSeconds()) * time.Second
