@@ -106,6 +106,46 @@ func (s *inventoryStore) ListByCluster(ctx context.Context, customerID, clusterI
 	return items, rows.Err()
 }
 
+// ListAll returns every inventory row across all customers and clusters in a
+// deterministic order (REQ-066 unfiltered E2E enumeration). Tenancy filtering
+// is the caller's responsibility.
+func (s *inventoryStore) ListAll(ctx context.Context) ([]*store.ReleaseInventory, error) {
+	rows, err := s.gorm.QueryContext(ctx,
+		`SELECT customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version,
+		        revision, status, values_digest, observed_bundle_digest, observed_chart_digest,
+		        observed_effective_values_digest, observed_manifest_digest, live_status, last_operation_id,
+		        inventory_status, last_sync_id, snapshot_version,
+		        workload_kind, workload_name, workload_namespace, workload_uid, created_at, updated_at
+		 FROM release_inventory
+		 ORDER BY customer_id, cluster_id, namespace, release_name`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list all inventory: %w", err)
+	}
+	defer rows.Close()
+
+	var items []*store.ReleaseInventory
+	for rows.Next() {
+		var item store.ReleaseInventory
+		var createdAt, updatedAt string
+		if err := rows.Scan(
+			&item.CustomerID, &item.ClusterID, &item.ReleaseDefinitionID, &item.Namespace, &item.ReleaseName,
+			&item.Chart, &item.ChartVersion, &item.Revision, &item.Status, &item.ValuesDigest,
+			&item.ObservedBundleDigest, &item.ObservedChartDigest, &item.ObservedEffectiveValuesDigest,
+			&item.ObservedManifestDigest, &item.LiveStatus, &item.LastOperationID, &item.InventoryStatus, &item.LastSyncID,
+			&item.SnapshotVersion,
+			&item.WorkloadKind, &item.WorkloadName, &item.WorkloadNamespace, &item.WorkloadUID,
+			&createdAt, &updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan inventory: %w", err)
+		}
+		item.CreatedAt, _ = time.Parse(time.RFC3339, createdAt) //nolint:errcheck // stored timestamps always valid RFC3339
+		item.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt) //nolint:errcheck // stored timestamps always valid RFC3339
+		items = append(items, &item)
+	}
+	return items, rows.Err()
+}
+
 // GetByDefinition returns the inventory row linked to a release definition.
 func (s *inventoryStore) GetByDefinition(ctx context.Context, definitionID string) (*store.ReleaseInventory, error) {
 	row := s.gorm.QueryRowContext(ctx, `

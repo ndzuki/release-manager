@@ -2352,6 +2352,10 @@ type InventoryStore interface {
 
 	// ListByCluster returns all inventory rows for a cluster.
 	ListByCluster(ctx context.Context, customerID, clusterID string) ([]*ReleaseInventory, error)
+	// ListAll returns every inventory row across all clusters and customers
+	// in a deterministic order (REQ-066 unfiltered E2E enumeration). Callers
+	// must apply their own tenancy filtering before exposing rows.
+	ListAll(ctx context.Context) ([]*ReleaseInventory, error)
 	// GetByDefinition returns the cached release snapshot for one release definition.
 	GetByDefinition(ctx context.Context, definitionID string) (*ReleaseInventory, error)
 	// GetByReleaseKey returns the cached release snapshot located by the

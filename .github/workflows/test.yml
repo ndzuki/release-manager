@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      run-e2e:
+        description: Run the E2E environment gate
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -304,3 +311,66 @@ jobs:
           name: e2e-prerequisite-diagnostics
           path: e2e-results/
           if-no-files-found: ignore
+
+  # TASK-066 formal E2E gate. Pull requests intentionally do not run this
+  # privileged integration job; push main and explicit dispatch are supported.
+  e2e:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run-e2e)
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    concurrency:
+      group: e2e-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      DEV_PROFILE: ci
+      E2E_RUN_ID: ${{ github.run_id }}
+      E2E_ENVIRONMENT: ci
+      E2E_RUNNER_PASSWORD: ${{ secrets.E2E_RUNNER_PASSWORD }}
+      DEV_ADMIN_PASSWORD: ${{ secrets.DEV_ADMIN_PASSWORD }}
+      DEV_DEPLOYER_PASSWORD: ${{ secrets.DEV_DEPLOYER_PASSWORD }}
+      DEV_READER_PASSWORD: ${{ secrets.DEV_READER_PASSWORD }}
+      DEV_JWT_SIGNING_KEY: ${{ secrets.DEV_JWT_SIGNING_KEY }}
+      DEV_WEBHOOK_SERVICE_TOKEN: ${{ secrets.DEV_WEBHOOK_SERVICE_TOKEN }}
+      DEV_M_TLS_CA_KEY: ${{ secrets.DEV_M_TLS_CA_KEY }}
+      DEV_M_TLS_CA_CERT: ${{ secrets.DEV_M_TLS_CA_CERT }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache: ${{ vars.RUNS_ON != 'self-hosted' }}
+
+      - name: Install dev environment tools
+        run: |
+          go install github.com/k3d-io/k3d/v5@v5.8.3
+          go install sigs.k8s.io/kustomize/kustomize/v5@v5.8.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          k3d version
+          kustomize version
+
+      - name: Start CI development environment
+        run: make dev-up
+
+      - name: Seed CI development fixture
+        run: make dev-seed
+
+      - name: Run all E2E stages
+        env:
+          E2E_RUNNER_PASSWORD: ${{ secrets.E2E_RUNNER_PASSWORD }}
+        run: make e2e-all
+
+      - name: Upload E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results-${{ github.run_id }}
+          path: e2e-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Purge CI development environment
+        if: always()
+        run: make dev-purge CONFIRM=1

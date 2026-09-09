@@ -10,6 +10,7 @@ import (
 	v1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -2163,11 +2164,211 @@ func (x *RenewCertificateResponse) GetTtlSeconds() int64 {
 	return 0
 }
 
+// GetActiveOperatorSessionRequest selects one operator's current active
+// persisted session. An absent active session is returned as not_found.
+type GetActiveOperatorSessionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OperatorId    string                 `protobuf:"bytes,1,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetActiveOperatorSessionRequest) Reset() {
+	*x = GetActiveOperatorSessionRequest{}
+	mi := &file_operator_v1_operator_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetActiveOperatorSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetActiveOperatorSessionRequest) ProtoMessage() {}
+
+func (x *GetActiveOperatorSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetActiveOperatorSessionRequest.ProtoReflect.Descriptor instead.
+func (*GetActiveOperatorSessionRequest) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *GetActiveOperatorSessionRequest) GetOperatorId() string {
+	if x != nil {
+		return x.OperatorId
+	}
+	return ""
+}
+
+// GetActiveOperatorSessionResponse contains only non-sensitive session
+// lifecycle fields; capabilities are intentionally omitted (REQ-066).
+type GetActiveOperatorSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Session       *OperatorSession       `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetActiveOperatorSessionResponse) Reset() {
+	*x = GetActiveOperatorSessionResponse{}
+	mi := &file_operator_v1_operator_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetActiveOperatorSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetActiveOperatorSessionResponse) ProtoMessage() {}
+
+func (x *GetActiveOperatorSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetActiveOperatorSessionResponse.ProtoReflect.Descriptor instead.
+func (*GetActiveOperatorSessionResponse) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *GetActiveOperatorSessionResponse) GetSession() *OperatorSession {
+	if x != nil {
+		return x.Session
+	}
+	return nil
+}
+
+type OperatorSession struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	SessionId           string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	OperatorId          string                 `protobuf:"bytes,2,opt,name=operator_id,json=operatorId,proto3" json:"operator_id,omitempty"`
+	Status              string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`
+	InstanceId          string                 `protobuf:"bytes,4,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	Version             string                 `protobuf:"bytes,5,opt,name=version,proto3" json:"version,omitempty"`
+	ActiveConfigVersion string                 `protobuf:"bytes,6,opt,name=active_config_version,json=activeConfigVersion,proto3" json:"active_config_version,omitempty"`
+	StartedAt           *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	LastHeartbeat       *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=last_heartbeat,json=lastHeartbeat,proto3" json:"last_heartbeat,omitempty"`
+	ExpiresAt           *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *OperatorSession) Reset() {
+	*x = OperatorSession{}
+	mi := &file_operator_v1_operator_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OperatorSession) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OperatorSession) ProtoMessage() {}
+
+func (x *OperatorSession) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OperatorSession.ProtoReflect.Descriptor instead.
+func (*OperatorSession) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *OperatorSession) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *OperatorSession) GetOperatorId() string {
+	if x != nil {
+		return x.OperatorId
+	}
+	return ""
+}
+
+func (x *OperatorSession) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *OperatorSession) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
+}
+
+func (x *OperatorSession) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *OperatorSession) GetActiveConfigVersion() string {
+	if x != nil {
+		return x.ActiveConfigVersion
+	}
+	return ""
+}
+
+func (x *OperatorSession) GetStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.StartedAt
+	}
+	return nil
+}
+
+func (x *OperatorSession) GetLastHeartbeat() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastHeartbeat
+	}
+	return nil
+}
+
+func (x *OperatorSession) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
 var File_operator_v1_operator_proto protoreflect.FileDescriptor
 
 const file_operator_v1_operator_proto_rawDesc = "" +
 	"\n" +
-	"\x1aoperator/v1/operator.proto\x12\voperator.v1\x1a\x16common/v1/domain.proto\x1a operator/v1/upgrade_result.proto\"\xb9\x02\n" +
+	"\x1aoperator/v1/operator.proto\x12\voperator.v1\x1a\x16common/v1/domain.proto\x1a operator/v1/upgrade_result.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb9\x02\n" +
 	"\rEnrollRequest\x12)\n" +
 	"\x10enrollment_token\x18\x01 \x01(\tR\x0fenrollmentToken\x12\x1f\n" +
 	"\vcustomer_id\x18\x02 \x01(\tR\n" +
@@ -2341,15 +2542,36 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x18RenewCertificateResponse\x12'\n" +
 	"\x0fcertificate_pem\x18\x01 \x01(\fR\x0ecertificatePem\x12\x1f\n" +
 	"\vttl_seconds\x18\x02 \x01(\x03R\n" +
-	"ttlSeconds*R\n" +
+	"ttlSeconds\"B\n" +
+	"\x1fGetActiveOperatorSessionRequest\x12\x1f\n" +
+	"\voperator_id\x18\x01 \x01(\tR\n" +
+	"operatorId\"Z\n" +
+	" GetActiveOperatorSessionResponse\x126\n" +
+	"\asession\x18\x01 \x01(\v2\x1c.operator.v1.OperatorSessionR\asession\"\x91\x03\n" +
+	"\x0fOperatorSession\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
+	"\voperator_id\x18\x02 \x01(\tR\n" +
+	"operatorId\x12\x16\n" +
+	"\x06status\x18\x03 \x01(\tR\x06status\x12\x1f\n" +
+	"\vinstance_id\x18\x04 \x01(\tR\n" +
+	"instanceId\x12\x18\n" +
+	"\aversion\x18\x05 \x01(\tR\aversion\x122\n" +
+	"\x15active_config_version\x18\x06 \x01(\tR\x13activeConfigVersion\x129\n" +
+	"\n" +
+	"started_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12A\n" +
+	"\x0elast_heartbeat\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\rlastHeartbeat\x129\n" +
+	"\n" +
+	"expires_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt*R\n" +
 	"\aAckType\x12\x18\n" +
 	"\x14ACK_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11ACK_TYPE_RECEIVED\x10\x01\x12\x16\n" +
-	"\x12ACK_TYPE_PERSISTED\x10\x022\x91\x02\n" +
+	"\x12ACK_TYPE_PERSISTED\x10\x022\x8a\x03\n" +
 	"\x0fOperatorService\x12A\n" +
 	"\x06Enroll\x12\x1a.operator.v1.EnrollRequest\x1a\x1b.operator.v1.EnrollResponse\x12_\n" +
 	"\x10RenewCertificate\x12$.operator.v1.RenewCertificateRequest\x1a%.operator.v1.RenewCertificateResponse\x12Z\n" +
-	"\rCommandStream\x12!.operator.v1.CommandStreamRequest\x1a\".operator.v1.CommandStreamResponse(\x010\x01BBZ@github.com/ndzuki/release-manager/api/gen/operator/v1;operatorv1b\x06proto3"
+	"\rCommandStream\x12!.operator.v1.CommandStreamRequest\x1a\".operator.v1.CommandStreamResponse(\x010\x01\x12w\n" +
+	"\x18GetActiveOperatorSession\x12,.operator.v1.GetActiveOperatorSessionRequest\x1a-.operator.v1.GetActiveOperatorSessionResponseBBZ@github.com/ndzuki/release-manager/api/gen/operator/v1;operatorv1b\x06proto3"
 
 var (
 	file_operator_v1_operator_proto_rawDescOnce sync.Once
@@ -2364,43 +2586,47 @@ func file_operator_v1_operator_proto_rawDescGZIP() []byte {
 }
 
 var file_operator_v1_operator_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_operator_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_operator_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
 var file_operator_v1_operator_proto_goTypes = []any{
-	(AckType)(0),                            // 0: operator.v1.AckType
-	(*EnrollRequest)(nil),                   // 1: operator.v1.EnrollRequest
-	(*EnrollResponse)(nil),                  // 2: operator.v1.EnrollResponse
-	(*CommandStreamRequest)(nil),            // 3: operator.v1.CommandStreamRequest
-	(*WorkloadIdentityReport)(nil),          // 4: operator.v1.WorkloadIdentityReport
-	(*WorkloadIdentityItem)(nil),            // 5: operator.v1.WorkloadIdentityItem
-	(*RolloutProgress)(nil),                 // 6: operator.v1.RolloutProgress
-	(*Hello)(nil),                           // 7: operator.v1.Hello
-	(*SessionEstablished)(nil),              // 8: operator.v1.SessionEstablished
-	(*Ack)(nil),                             // 9: operator.v1.Ack
-	(*Heartbeat)(nil),                       // 10: operator.v1.Heartbeat
-	(*Result)(nil),                          // 11: operator.v1.Result
-	(*EmergencyAck)(nil),                    // 12: operator.v1.EmergencyAck
-	(*EmergencyResult)(nil),                 // 13: operator.v1.EmergencyResult
-	(*CommandStreamResponse)(nil),           // 14: operator.v1.CommandStreamResponse
-	(*Command)(nil),                         // 15: operator.v1.Command
-	(*EmergencyCommand)(nil),                // 16: operator.v1.EmergencyCommand
-	(*EmergencySetContainerImage)(nil),      // 17: operator.v1.EmergencySetContainerImage
-	(*EmergencySetReplicas)(nil),            // 18: operator.v1.EmergencySetReplicas
-	(*EmergencySetApprovedAnnotations)(nil), // 19: operator.v1.EmergencySetApprovedAnnotations
-	(*EmergencyAnnotationEntry)(nil),        // 20: operator.v1.EmergencyAnnotationEntry
-	(*ResyncRequest)(nil),                   // 21: operator.v1.ResyncRequest
-	(*ResyncResponse)(nil),                  // 22: operator.v1.ResyncResponse
-	(*DuplicateResponse)(nil),               // 23: operator.v1.DuplicateResponse
-	(*SessionEvent)(nil),                    // 24: operator.v1.SessionEvent
-	(*RenewCertificateRequest)(nil),         // 25: operator.v1.RenewCertificateRequest
-	(*RenewCertificateResponse)(nil),        // 26: operator.v1.RenewCertificateResponse
-	nil,                                     // 27: operator.v1.EnrollRequest.CapabilitiesEntry
-	nil,                                     // 28: operator.v1.Hello.CapabilitiesEntry
-	(*CommandResult)(nil),                   // 29: operator.v1.CommandResult
-	(*v1.ReleaseBundle)(nil),                // 30: common.v1.ReleaseBundle
-	(*UpgradeCommand)(nil),                  // 31: operator.v1.UpgradeCommand
+	(AckType)(0),                             // 0: operator.v1.AckType
+	(*EnrollRequest)(nil),                    // 1: operator.v1.EnrollRequest
+	(*EnrollResponse)(nil),                   // 2: operator.v1.EnrollResponse
+	(*CommandStreamRequest)(nil),             // 3: operator.v1.CommandStreamRequest
+	(*WorkloadIdentityReport)(nil),           // 4: operator.v1.WorkloadIdentityReport
+	(*WorkloadIdentityItem)(nil),             // 5: operator.v1.WorkloadIdentityItem
+	(*RolloutProgress)(nil),                  // 6: operator.v1.RolloutProgress
+	(*Hello)(nil),                            // 7: operator.v1.Hello
+	(*SessionEstablished)(nil),               // 8: operator.v1.SessionEstablished
+	(*Ack)(nil),                              // 9: operator.v1.Ack
+	(*Heartbeat)(nil),                        // 10: operator.v1.Heartbeat
+	(*Result)(nil),                           // 11: operator.v1.Result
+	(*EmergencyAck)(nil),                     // 12: operator.v1.EmergencyAck
+	(*EmergencyResult)(nil),                  // 13: operator.v1.EmergencyResult
+	(*CommandStreamResponse)(nil),            // 14: operator.v1.CommandStreamResponse
+	(*Command)(nil),                          // 15: operator.v1.Command
+	(*EmergencyCommand)(nil),                 // 16: operator.v1.EmergencyCommand
+	(*EmergencySetContainerImage)(nil),       // 17: operator.v1.EmergencySetContainerImage
+	(*EmergencySetReplicas)(nil),             // 18: operator.v1.EmergencySetReplicas
+	(*EmergencySetApprovedAnnotations)(nil),  // 19: operator.v1.EmergencySetApprovedAnnotations
+	(*EmergencyAnnotationEntry)(nil),         // 20: operator.v1.EmergencyAnnotationEntry
+	(*ResyncRequest)(nil),                    // 21: operator.v1.ResyncRequest
+	(*ResyncResponse)(nil),                   // 22: operator.v1.ResyncResponse
+	(*DuplicateResponse)(nil),                // 23: operator.v1.DuplicateResponse
+	(*SessionEvent)(nil),                     // 24: operator.v1.SessionEvent
+	(*RenewCertificateRequest)(nil),          // 25: operator.v1.RenewCertificateRequest
+	(*RenewCertificateResponse)(nil),         // 26: operator.v1.RenewCertificateResponse
+	(*GetActiveOperatorSessionRequest)(nil),  // 27: operator.v1.GetActiveOperatorSessionRequest
+	(*GetActiveOperatorSessionResponse)(nil), // 28: operator.v1.GetActiveOperatorSessionResponse
+	(*OperatorSession)(nil),                  // 29: operator.v1.OperatorSession
+	nil,                                      // 30: operator.v1.EnrollRequest.CapabilitiesEntry
+	nil,                                      // 31: operator.v1.Hello.CapabilitiesEntry
+	(*CommandResult)(nil),                    // 32: operator.v1.CommandResult
+	(*v1.ReleaseBundle)(nil),                 // 33: common.v1.ReleaseBundle
+	(*UpgradeCommand)(nil),                   // 34: operator.v1.UpgradeCommand
+	(*timestamppb.Timestamp)(nil),            // 35: google.protobuf.Timestamp
 }
 var file_operator_v1_operator_proto_depIdxs = []int32{
-	27, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
+	30, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
 	7,  // 1: operator.v1.CommandStreamRequest.hello:type_name -> operator.v1.Hello
 	9,  // 2: operator.v1.CommandStreamRequest.ack:type_name -> operator.v1.Ack
 	10, // 3: operator.v1.CommandStreamRequest.heartbeat:type_name -> operator.v1.Heartbeat
@@ -2408,11 +2634,11 @@ var file_operator_v1_operator_proto_depIdxs = []int32{
 	22, // 5: operator.v1.CommandStreamRequest.resync_response:type_name -> operator.v1.ResyncResponse
 	12, // 6: operator.v1.CommandStreamRequest.emergency_ack:type_name -> operator.v1.EmergencyAck
 	13, // 7: operator.v1.CommandStreamRequest.emergency_result:type_name -> operator.v1.EmergencyResult
-	29, // 8: operator.v1.CommandStreamRequest.command_result:type_name -> operator.v1.CommandResult
+	32, // 8: operator.v1.CommandStreamRequest.command_result:type_name -> operator.v1.CommandResult
 	6,  // 9: operator.v1.CommandStreamRequest.rollout_progress:type_name -> operator.v1.RolloutProgress
 	4,  // 10: operator.v1.CommandStreamRequest.workload_identity_report:type_name -> operator.v1.WorkloadIdentityReport
 	5,  // 11: operator.v1.WorkloadIdentityReport.items:type_name -> operator.v1.WorkloadIdentityItem
-	28, // 12: operator.v1.Hello.capabilities:type_name -> operator.v1.Hello.CapabilitiesEntry
+	31, // 12: operator.v1.Hello.capabilities:type_name -> operator.v1.Hello.CapabilitiesEntry
 	0,  // 13: operator.v1.Ack.ack_type:type_name -> operator.v1.AckType
 	0,  // 14: operator.v1.EmergencyAck.ack_type:type_name -> operator.v1.AckType
 	15, // 15: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
@@ -2421,23 +2647,29 @@ var file_operator_v1_operator_proto_depIdxs = []int32{
 	23, // 18: operator.v1.CommandStreamResponse.duplicate_response:type_name -> operator.v1.DuplicateResponse
 	8,  // 19: operator.v1.CommandStreamResponse.session_established:type_name -> operator.v1.SessionEstablished
 	16, // 20: operator.v1.CommandStreamResponse.emergency_command:type_name -> operator.v1.EmergencyCommand
-	30, // 21: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
-	31, // 22: operator.v1.Command.upgrade:type_name -> operator.v1.UpgradeCommand
+	33, // 21: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
+	34, // 22: operator.v1.Command.upgrade:type_name -> operator.v1.UpgradeCommand
 	17, // 23: operator.v1.EmergencyCommand.set_container_image:type_name -> operator.v1.EmergencySetContainerImage
 	18, // 24: operator.v1.EmergencyCommand.set_replicas:type_name -> operator.v1.EmergencySetReplicas
 	19, // 25: operator.v1.EmergencyCommand.set_approved_annotations:type_name -> operator.v1.EmergencySetApprovedAnnotations
 	20, // 26: operator.v1.EmergencySetApprovedAnnotations.entries:type_name -> operator.v1.EmergencyAnnotationEntry
-	1,  // 27: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
-	25, // 28: operator.v1.OperatorService.RenewCertificate:input_type -> operator.v1.RenewCertificateRequest
-	3,  // 29: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
-	2,  // 30: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
-	26, // 31: operator.v1.OperatorService.RenewCertificate:output_type -> operator.v1.RenewCertificateResponse
-	14, // 32: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
-	30, // [30:33] is the sub-list for method output_type
-	27, // [27:30] is the sub-list for method input_type
-	27, // [27:27] is the sub-list for extension type_name
-	27, // [27:27] is the sub-list for extension extendee
-	0,  // [0:27] is the sub-list for field type_name
+	29, // 27: operator.v1.GetActiveOperatorSessionResponse.session:type_name -> operator.v1.OperatorSession
+	35, // 28: operator.v1.OperatorSession.started_at:type_name -> google.protobuf.Timestamp
+	35, // 29: operator.v1.OperatorSession.last_heartbeat:type_name -> google.protobuf.Timestamp
+	35, // 30: operator.v1.OperatorSession.expires_at:type_name -> google.protobuf.Timestamp
+	1,  // 31: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
+	25, // 32: operator.v1.OperatorService.RenewCertificate:input_type -> operator.v1.RenewCertificateRequest
+	3,  // 33: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
+	27, // 34: operator.v1.OperatorService.GetActiveOperatorSession:input_type -> operator.v1.GetActiveOperatorSessionRequest
+	2,  // 35: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
+	26, // 36: operator.v1.OperatorService.RenewCertificate:output_type -> operator.v1.RenewCertificateResponse
+	14, // 37: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
+	28, // 38: operator.v1.OperatorService.GetActiveOperatorSession:output_type -> operator.v1.GetActiveOperatorSessionResponse
+	35, // [35:39] is the sub-list for method output_type
+	31, // [31:35] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_operator_v1_operator_proto_init() }
@@ -2480,7 +2712,7 @@ func file_operator_v1_operator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_operator_v1_operator_proto_rawDesc), len(file_operator_v1_operator_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   28,
+			NumMessages:   31,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

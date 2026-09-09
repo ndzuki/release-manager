@@ -4,6 +4,7 @@ package operator.v1;
 
 import "common/v1/domain.proto";
 import "operator/v1/upgrade_result.proto";
+import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/ndzuki/release-manager/api/gen/operator/v1;operatorv1";
 
@@ -235,6 +236,9 @@ service OperatorService {
   rpc Enroll(EnrollRequest) returns (EnrollResponse);
   rpc RenewCertificate(RenewCertificateRequest) returns (RenewCertificateResponse);
   rpc CommandStream(stream CommandStreamRequest) returns (stream CommandStreamResponse);
+  // GetActiveOperatorSession exposes the persisted active session for E2E
+  // control-plane assertions without exposing capabilities (REQ-066).
+  rpc GetActiveOperatorSession(GetActiveOperatorSessionRequest) returns (GetActiveOperatorSessionResponse);
 }
 
 // RenewCertificateRequest rotates the current operator certificate without changing identity.
@@ -248,4 +252,28 @@ message RenewCertificateRequest {
 message RenewCertificateResponse {
   bytes certificate_pem = 1;
   int64 ttl_seconds = 2;
+}
+
+// GetActiveOperatorSessionRequest selects one operator's current active
+// persisted session. An absent active session is returned as not_found.
+message GetActiveOperatorSessionRequest {
+  string operator_id = 1;
+}
+
+// GetActiveOperatorSessionResponse contains only non-sensitive session
+// lifecycle fields; capabilities are intentionally omitted (REQ-066).
+message GetActiveOperatorSessionResponse {
+  OperatorSession session = 1;
+}
+
+message OperatorSession {
+  string session_id = 1;
+  string operator_id = 2;
+  string status = 3;
+  string instance_id = 4;
+  string version = 5;
+  string active_config_version = 6;
+  google.protobuf.Timestamp started_at = 7;
+  google.protobuf.Timestamp last_heartbeat = 8;
+  google.protobuf.Timestamp expires_at = 9;
 }

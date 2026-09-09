@@ -1,0 +1,71 @@
+# E2E environment configuration — non-secret template / schema fixture (REQ-066).
+#
+# This file is NOT a second runtime configuration source. The single runtime
+# env-config is assembled by the REQ-066 Makefile private target `e2e-env-config`
+# into `data/e2e-env-config.yaml` (0600) from REQ-065 outputs (dev-status.json /
+# dev-fixture.json / dev-credentials.env / kubeconfig) — see
+# Design/contracts/e2e-environment-config.md (D-023 D1, D-026 D6, D-031).
+#
+# This template exists so the strict YAML schema consumed by cmd/e2e
+# (test/e2e/config.go, KnownFields(true)) can be validated without a live dev
+# environment. Every value below is a placeholder shape; the Makefile assembly
+# derives real values from the seed manifest and must not hardcode them.
+environment: development
+environment_id: dev-local-e2e-template
+
+endpoints:
+  release_orchestrator: "http://localhost:8083"
+  release_webhook: "http://localhost:8082"
+  release_operator: "http://localhost:8084"
+  release_auth: "http://localhost:8085"
+  release_notifier: "http://localhost:8086"
+  release_api: "http://localhost:8087"
+
+credentials:
+  e2e_runner:
+    username: e2e-runner
+    password_env: E2E_RUNNER_PASSWORD
+
+k3d:
+  kubeconfig: "data/kubeconfig.yaml"
+  test_namespace: "release-manager-dev"
+  restart_targets:
+    namespace: "release-manager-dev"
+    # Deployment names are assembled by the Makefile from the REQ-065 dev-up
+    # manifests; the three entries here are the static shape (control-plane
+    # operator gateway / Orchestrator / Auth) and must not drift from the
+    # RBAC resourceNames allowlist.
+    deployments:
+      - "auth"
+      - "operator-gateway"
+      - "orchestrator"
+
+seed:
+  customers:
+    - "dev-customer-a"
+    - "dev-customer-b"
+  clusters_per_customer: 2
+  fixture_version: "vN"
+  expected_identity:
+    # Example shape only; the Makefile assembly derives all counts from the
+    # seed manifest and aligns them with fixture_version (AC-066-29, D-023 D4).
+    customers: 2
+    clusters: 4
+    routes_basic: 8
+    definitions_basic: 0
+    bundles: 1
+    e2e_definition_ids:
+      - "e2e-release-target"
+      - "e2e-isolation-target"
+      - "e2e-emergency-target"
+      - "e2e-restart-target"
+  e2e_upgrade_targets:
+    - definition_id: "e2e-release-target"
+      bundle_id: "<seed bundle id>"
+      values_revision_id: "<seed values revision id>"
+    - definition_id: "e2e-isolation-target"
+      bundle_id: "<seed bundle id>"
+      values_revision_id: "<seed values revision id>"
+    - definition_id: "e2e-restart-target"
+      bundle_id: "<seed bundle id>"
+      values_revision_id: "<seed values revision id>"
