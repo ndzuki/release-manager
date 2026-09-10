@@ -109,6 +109,19 @@ for v in RELEASE_DEF_ID RELEASE_VALUES_ID ISO_DEF_ID ISO_VALUES_ID EMERGENCY_DEF
   [ -n "${!v}" ] && [ "${!v}" != "null" ] || fail "manifest lacks $v"
 done
 
+# inventory_revision — read the current Helm revision for a release definition
+# from the TASK-066 ListReleaseInventory RPC. This keeps the prerequisite
+# smoke resilient to repeated runs (revision no longer assumed to be 1 after
+# a previous Upgrade/Rollback pass) and matches D-023 D6: e2e stages read
+# expected_current_revision from the live inventory row.
+inventory_revision() { # inventory_revision <release_definition_id>
+  local def_id="$1" inv rev
+  inv="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/ListReleaseInventory" \
+    "${AUTH_H[@]}" -d '{}')" || return 1
+  rev="$(jq -r --arg id "$def_id" '.rows[] | select(.releaseDefinitionId == $id) | .revision // empty' <<<"$inv" | head -1)"
+  echo "${rev:-}"
+}
+
 step "declared endpoints + /environment consistency"
 for port in 8082 8083 8085 8086 8087; do
   url="http://localhost:$port/readyz"
@@ -266,11 +279,11 @@ fi
 ok "Emergency restore to baseline replicas=1 (formal API)"
 
 step "Upgrade (CreateOperation UPGRADE -> succeeded)"
-# ListReleaseInventory is a TASK-066 deliverable (not on main yet); this gate
-# runs BEFORE that RPC lands, so expectedCurrentRevision is derived from the
-# seeded INSTALL (revision 1 per the AC-066-25 seed contract). The
-# post-Step-4 e2e stages read it dynamically from the inventory row.
-EXPECTED_REV=1
+# ListReleaseInventory is a TASK-066 deliverable and is available on this
+# branch; expectedCurrentRevision is read dynamically from the live inventory
+# row so the smoke is idempotent across repeated runs (D-023 D6).
+EXPECTED_REV="$(inventory_revision "$RELEASE_DEF_ID")"
+[ -n "$EXPECTED_REV" ] && [ "$EXPECTED_REV" -gt 0 ] 2>/dev/null || fail "cannot determine current revision for e2e-release-target via ListReleaseInventory"
 UP="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/CreateOperation" \
   "${AUTH_H[@]}" -H "$(IK upgrade)" \
   -d "{\"operationType\":\"UPGRADE\",\"bundleId\":\"$BUNDLE_ID\",\"releaseDefinitionId\":\"$RELEASE_DEF_ID\",\"valuesRevisionId\":\"$RELEASE_VALUES_ID\",\"expectedCurrentRevision\":$EXPECTED_REV}")"
@@ -286,9 +299,11 @@ step "CancelOperation (non-terminal UPGRADE cancelled to legal terminal state)"
 if [ "$UPGRADE_OK" != "1" ]; then
   skiprec "CancelOperation: cascade-skipped (upgrade failed, no revision/operation basis)"
 else
+  ISO_EXPECTED_REV="$(inventory_revision "$ISO_DEF_ID")"
+  [ -n "$ISO_EXPECTED_REV" ] && [ "$ISO_EXPECTED_REV" -gt 0 ] 2>/dev/null || fail "cannot determine current revision for e2e-isolation-target via ListReleaseInventory"
   CN="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/CreateOperation" \
     "${AUTH_H[@]}" -H "$(IK cancel-setup)" \
-    -d "{\"operationType\":\"UPGRADE\",\"bundleId\":\"$BUNDLE_ID\",\"releaseDefinitionId\":\"$ISO_DEF_ID\",\"valuesRevisionId\":\"$ISO_VALUES_ID\",\"expectedCurrentRevision\":1}")"
+    -d "{\"operationType\":\"UPGRADE\",\"bundleId\":\"$BUNDLE_ID\",\"releaseDefinitionId\":\"$ISO_DEF_ID\",\"valuesRevisionId\":\"$ISO_VALUES_ID\",\"expectedCurrentRevision\":$ISO_EXPECTED_REV}")"
   CN_ID="$(jq -r '.operationId // empty' <<<"$CN")"
   [ -n "$CN_ID" ] || fail "CreateOperation (cancel setup) rejected: $CN"
   CANCEL="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/CancelOperation" \
@@ -317,9 +332,12 @@ step "Rollback (release back to revision 1)"
 if [ "$UPGRADE_OK" != "1" ]; then
   skiprec "Rollback: cascade-skipped (no revision 2; upgrade failed)"
 else
+  # After Upgrade, the current revision is EXPECTED_REV + 1; rollback to
+  # targetRevision=1 with expectedCurrentRevision=EXPECTED_REV+1.
+  ROLLBACK_EXPECTED_REV=$((EXPECTED_REV + 1))
   RB="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/RollbackRelease" \
     "${AUTH_H[@]}" -H "$(IK rollback)" \
-    -d "{\"releaseDefinitionId\":\"$RELEASE_DEF_ID\",\"targetRevision\":1,\"expectedCurrentRevision\":2,\"reason\":\"AC-066-17 prerequisite smoke rollback\"}")"
+    -d "{\"releaseDefinitionId\":\"$RELEASE_DEF_ID\",\"targetRevision\":1,\"expectedCurrentRevision\":$ROLLBACK_EXPECTED_REV,\"reason\":\"AC-066-17 prerequisite smoke rollback\"}")"
   RB_ID="$(jq -r '.operationId // empty' <<<"$RB")"
   [ -n "$RB_ID" ] || fail "RollbackRelease rejected: $RB"
   ok "Rollback created op=$RB_ID"
