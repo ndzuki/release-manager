@@ -42,6 +42,9 @@ var (
 	ErrRestartTimeout = errors.New(CodeRestartTimeout)
 	// ErrRestartTriggerFailed is the stable root cause for a failed restart patch.
 	ErrRestartTriggerFailed = errors.New(CodeRestartTriggerFailed)
+	// ErrCrossTargetChanged is the stable root cause for a non-target that was
+	// perturbed by a write the stage did not intend for it.
+	ErrCrossTargetChanged = errors.New(CodeCrossTargetChanged)
 )
 
 // StageError is a sanitized, machine-readable stage failure.
@@ -94,6 +97,8 @@ func (e *StageError) Unwrap() error {
 		return ErrRestartTimeout
 	case CodeRestartTriggerFailed:
 		return ErrRestartTriggerFailed
+	case CodeCrossTargetChanged:
+		return ErrCrossTargetChanged
 	default:
 		return nil
 	}

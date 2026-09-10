@@ -52,7 +52,7 @@ func (s *ReleaseStage) Run(ctx context.Context, _ *e2e.Fixture) error {
 	if s == nil {
 		return newStageError(CodeSnapshotNotFound, "release", "release stage unavailable")
 	}
-	result, baseline, err := runUpgrade(ctx, "release", s.observer, s.writer, s.registry, s.target, CompensationReleaseRollback)
+	result, baseline, err := runUpgrade(ctx, "release", s.observer, s.writer, s.registry, s.target, CompensationReleaseRollback, nil)
 	if err != nil {
 		return err
 	}
@@ -75,4 +75,15 @@ func (s *ReleaseStage) BaselineRevision() int32 {
 		return 0
 	}
 	return s.baseline
+}
+
+// UpgradedRevision returns the revision this stage left behind after a
+// succeeded upgrade (baseline + 1), or 0 when the stage has not succeeded. A
+// downstream stage binds it with IsolationStage.WithReleaseInvariant to prove
+// the isolation write did not move the release target.
+func (s *ReleaseStage) UpgradedRevision() int32 {
+	if s == nil || !s.result.Succeeded() {
+		return 0
+	}
+	return s.baseline + 1
 }

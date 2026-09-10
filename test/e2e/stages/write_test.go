@@ -17,12 +17,25 @@ const (
 	wireQueued    = "OPERATION_STATUS_QUEUED"
 )
 
+// revisionDrift makes a definition report a different revision once it has been
+// queried at least afterCall times, so a test can simulate a non-target that
+// moved between two observations.
+type revisionDrift struct {
+	afterCall int
+	value     int32
+}
+
 // writeFake is a deterministic ReleaseObserver + OperationWriter + operation
 // driver. Every call is recorded so tests assert the formal request shape
 // rather than only the returned error.
 type writeFake struct {
 	revision    int32
 	revisionErr error
+	// revisions overrides the default revision per definition id.
+	revisions map[string]int32
+	// revisionDrift overrides a definition's revision from the Nth query on.
+	revisionDrift map[string]revisionDrift
+	revisionCalls map[string]int
 
 	active    ActiveOperation
 	hasActive bool
@@ -52,13 +65,26 @@ func newWriteFake() *writeFake {
 		rollbackRef: OperationRef{
 			ID: "op-rollback", DefinitionID: "def-release", Type: "ROLLBACK",
 		},
-		awaitErr: map[string]error{},
-		await:    map[string]OperationRef{},
+		revisions:     map[string]int32{},
+		revisionDrift: map[string]revisionDrift{},
+		revisionCalls: map[string]int{},
+		awaitErr:      map[string]error{},
+		await:         map[string]OperationRef{},
 	}
 }
 
-func (f *writeFake) Revision(context.Context, string) (int32, error) {
-	return f.revision, f.revisionErr
+func (f *writeFake) Revision(_ context.Context, definitionID string) (int32, error) {
+	if f.revisionErr != nil {
+		return 0, f.revisionErr
+	}
+	f.revisionCalls[definitionID]++
+	if drift, ok := f.revisionDrift[definitionID]; ok && f.revisionCalls[definitionID] >= drift.afterCall {
+		return drift.value, nil
+	}
+	if revision, ok := f.revisions[definitionID]; ok {
+		return revision, nil
+	}
+	return f.revision, nil
 }
 
 func (f *writeFake) ActiveOperation(context.Context, string) (ActiveOperation, bool, error) {
@@ -243,7 +269,7 @@ func TestRegistryHappyPathCompensation(t *testing.T) {
 	registry := e2e.NewCompensationRegistry()
 	target := releaseTarget()
 
-	result, baseline, err := runUpgrade(context.Background(), "release", fake, fake, registry, target, CompensationReleaseRollback)
+	result, baseline, err := runUpgrade(context.Background(), "release", fake, fake, registry, target, CompensationReleaseRollback, nil)
 	if err != nil {
 		t.Fatalf("runUpgrade() error = %v", err)
 	}

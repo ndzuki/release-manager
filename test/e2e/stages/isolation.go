@@ -2,6 +2,7 @@ package stages
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	e2e "github.com/ndzuki/release-manager/test/e2e"
@@ -20,6 +21,13 @@ type IsolationStage struct {
 	writer   OperationWriter
 	registry *e2e.CompensationRegistry
 	target   WriteTarget
+
+	// invariantDefinitionID and invariantRevision pin the release target that
+	// this stage must leave untouched. Empty means no invariance guard is
+	// configured, in which case the isolation assertion is limited to the
+	// distinct-definition check in ValidateIsolationTargets.
+	invariantDefinitionID string
+	invariantRevision     int32
 
 	result   OperationRef
 	baseline int32
@@ -42,6 +50,24 @@ func NewIsolation(observer ReleaseObserver, writer OperationWriter, registry *e2
 	return NewIsolationStage(observer, writer, registry, target)
 }
 
+// WithReleaseInvariant pins the release target's post-upgrade revision and
+// requires the isolation stage to observe it unchanged after its own upgrade
+// and again after its compensating rollback. Wire it from a succeeded
+// ReleaseStage with WithReleaseInvariant(releaseTarget.DefinitionID,
+// release.UpgradedRevision()).
+//
+// The guard is what makes "isolation" an observed property rather than a
+// naming convention: without it a mis-bound target would leave the release
+// inventory row moved and still be reported as passing.
+func (s *IsolationStage) WithReleaseInvariant(definitionID string, revision int32) *IsolationStage {
+	if s == nil {
+		return nil
+	}
+	s.invariantDefinitionID = strings.TrimSpace(definitionID)
+	s.invariantRevision = revision
+	return s
+}
+
 // Name implements e2e.Stage.
 func (s *IsolationStage) Name() string { return "isolation" }
 
@@ -50,12 +76,44 @@ func (s *IsolationStage) Run(ctx context.Context, _ *e2e.Fixture) error {
 	if s == nil {
 		return newStageError(CodeSnapshotNotFound, "isolation", "isolation stage unavailable")
 	}
-	result, baseline, err := runUpgrade(ctx, "isolation", s.observer, s.writer, s.registry, s.target, CompensationIsolationRollback)
+	if err := s.validateInvariant(); err != nil {
+		return err
+	}
+	result, baseline, err := runUpgrade(ctx, "isolation", s.observer, s.writer, s.registry, s.target, CompensationIsolationRollback, s.assertReleaseUnchanged)
 	if err != nil {
 		return err
 	}
 	s.result = result
 	s.baseline = baseline
+	return nil
+}
+
+// validateInvariant fails closed on a half-configured guard.
+func (s *IsolationStage) validateInvariant() error {
+	if s.invariantDefinitionID == "" {
+		return nil
+	}
+	if s.invariantRevision <= 0 {
+		return newStageError(CodeFixtureStale, "isolation", "release invariant revision must be positive")
+	}
+	if s.invariantDefinitionID == s.target.DefinitionID {
+		return newStageError(CodeFixtureStale, "isolation", "release invariant must not alias the isolation definition")
+	}
+	return nil
+}
+
+// assertReleaseUnchanged is the UpgradeGuard bound by WithReleaseInvariant.
+func (s *IsolationStage) assertReleaseUnchanged(ctx context.Context) error {
+	if s.invariantDefinitionID == "" {
+		return nil
+	}
+	revision, err := s.observer.Revision(ctx, s.invariantDefinitionID)
+	if err != nil {
+		return newStageError(CodeSnapshotNotFound, "isolation", "release target revision observation failed")
+	}
+	if revision != s.invariantRevision {
+		return newStageError(CodeCrossTargetChanged, "isolation", fmt.Sprintf("release definition %s revision expected %d got %d", s.invariantDefinitionID, s.invariantRevision, revision))
+	}
 	return nil
 }
 

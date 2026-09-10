@@ -149,7 +149,7 @@ func TestRunUpgradeCompensationFailureIsDirty(t *testing.T) {
 	fake.rollbackErr = errors.New("private rollback detail")
 	registry := e2e.NewCompensationRegistry()
 
-	if _, _, err := runUpgrade(context.Background(), "release", fake, fake, registry, releaseTarget(), CompensationReleaseRollback); err != nil {
+	if _, _, err := runUpgrade(context.Background(), "release", fake, fake, registry, releaseTarget(), CompensationReleaseRollback, nil); err != nil {
 		t.Fatalf("runUpgrade() error = %v", err)
 	}
 	err := registry.Run(context.Background())
@@ -165,7 +165,7 @@ func TestRunUpgradeCompensationNotSucceededIsDirty(t *testing.T) {
 	fake.await["op-rollback"] = OperationRef{ID: "op-rollback", Status: wireFailed}
 	registry := e2e.NewCompensationRegistry()
 
-	if _, _, err := runUpgrade(context.Background(), "release", fake, fake, registry, releaseTarget(), CompensationReleaseRollback); err != nil {
+	if _, _, err := runUpgrade(context.Background(), "release", fake, fake, registry, releaseTarget(), CompensationReleaseRollback, nil); err != nil {
 		t.Fatalf("runUpgrade() error = %v", err)
 	}
 	if err := registry.Run(context.Background()); !errors.Is(err, e2e.ErrCompensationDirty) {
@@ -241,6 +241,140 @@ func TestIsolationAndReleaseCompensationsCoexistLIFO(t *testing.T) {
 	}
 	if fake.rollbacks[0].DefinitionID != "def-isolation" || fake.rollbacks[1].DefinitionID != "def-release" {
 		t.Fatalf("rollback order = %#v, want isolation before release", fake.rollbacks)
+	}
+}
+
+func TestIsolationStageReleaseInvariantHolds(t *testing.T) {
+	t.Parallel()
+
+	fake := newWriteFake()
+	fake.revisions["def-release"] = 4
+	fake.revisions["def-isolation"] = 3
+	fake.await["op-upgrade"] = OperationRef{ID: "op-upgrade", Status: wireSucceeded}
+	fake.await["op-rollback"] = OperationRef{ID: "op-rollback", Status: wireSucceeded}
+	registry := e2e.NewCompensationRegistry()
+
+	stage := NewIsolationStage(fake, fake, registry, WriteTarget{
+		Name:             "e2e-isolation-target",
+		DefinitionID:     "def-isolation",
+		BundleID:         "bundle-1",
+		ValuesRevisionID: "values-1",
+	}).WithReleaseInvariant("def-release", 4)
+
+	if err := stage.Run(context.Background(), nil); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if err := registry.Run(context.Background()); err != nil {
+		t.Fatalf("registry.Run() error = %v", err)
+	}
+	// Two isolation reads (baseline) + two release invariant reads (after the
+	// upgrade and after the rollback).
+	if got := fake.revisionCalls["def-release"]; got != 2 {
+		t.Fatalf("release invariant observations = %d, want one after the upgrade and one after the rollback", got)
+	}
+}
+
+func TestIsolationStageReleaseInvariantViolatedAfterUpgrade(t *testing.T) {
+	t.Parallel()
+
+	fake := newWriteFake()
+	fake.revisionDrift["def-release"] = revisionDrift{afterCall: 1, value: 4}
+	fake.await["op-upgrade"] = OperationRef{ID: "op-upgrade", Status: wireSucceeded}
+	registry := e2e.NewCompensationRegistry()
+
+	stage := NewIsolationStage(fake, fake, registry, WriteTarget{
+		Name:             "e2e-isolation-target",
+		DefinitionID:     "def-isolation",
+		BundleID:         "bundle-1",
+		ValuesRevisionID: "values-1",
+	}).WithReleaseInvariant("def-release", 3)
+
+	err := stage.Run(context.Background(), nil)
+	if !errors.Is(err, ErrCrossTargetChanged) {
+		t.Fatalf("Run() error = %v, want ErrCrossTargetChanged", err)
+	}
+	if registry.Len() != 0 {
+		t.Fatalf("registry.Len() = %d, want no compensation after a cross-target change", registry.Len())
+	}
+}
+
+func TestIsolationStageReleaseInvariantViolatedByCompensation(t *testing.T) {
+	t.Parallel()
+
+	fake := newWriteFake()
+	fake.revisions["def-release"] = 3
+	// The invariant holds after the upgrade (call 1) and fails after the
+	// compensating rollback (call 2).
+	fake.revisionDrift["def-release"] = revisionDrift{afterCall: 2, value: 4}
+	fake.await["op-upgrade"] = OperationRef{ID: "op-upgrade", Status: wireSucceeded}
+	fake.await["op-rollback"] = OperationRef{ID: "op-rollback", Status: wireSucceeded}
+	registry := e2e.NewCompensationRegistry()
+
+	stage := NewIsolationStage(fake, fake, registry, WriteTarget{
+		Name:             "e2e-isolation-target",
+		DefinitionID:     "def-isolation",
+		BundleID:         "bundle-1",
+		ValuesRevisionID: "values-1",
+	}).WithReleaseInvariant("def-release", 3)
+
+	if err := stage.Run(context.Background(), nil); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if err := registry.Run(context.Background()); !errors.Is(err, e2e.ErrCompensationDirty) {
+		t.Fatalf("registry.Run() error = %v, want ErrCompensationDirty", err)
+	}
+}
+
+func TestIsolationStageReleaseInvariantConfiguration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		definition string
+		revision   int32
+		target     string
+		wantErr    bool
+	}{
+		{name: "valid", definition: "def-release", revision: 4, target: "def-isolation"},
+		{name: "non positive revision", definition: "def-release", revision: 0, target: "def-isolation", wantErr: true},
+		{name: "aliases isolation target", definition: "def-isolation", revision: 4, target: "def-isolation", wantErr: true},
+		{name: "unset guard is allowed", definition: "", revision: 0, target: "def-isolation"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			registry := e2e.NewCompensationRegistry()
+			fake := newWriteFake()
+			if test.definition != "" {
+				fake.revisions[test.definition] = test.revision
+			}
+			stage := NewIsolationStage(fake, fake, registry, WriteTarget{
+				Name:             "e2e-isolation-target",
+				DefinitionID:     test.target,
+				BundleID:         "bundle-1",
+				ValuesRevisionID: "values-1",
+			})
+			if test.definition != "" {
+				stage = stage.WithReleaseInvariant(test.definition, test.revision)
+			}
+			err := stage.Run(context.Background(), nil)
+			if test.wantErr {
+				if !errors.Is(err, ErrFixtureStale) {
+					t.Fatalf("Run() error = %v, want ErrFixtureStale", err)
+				}
+				if registry.Len() != 0 {
+					t.Fatalf("registry.Len() = %d, want no compensation for a rejected configuration", registry.Len())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Run() error = %v, want nil", err)
+			}
+			if registry.Len() != 1 {
+				t.Fatalf("registry.Len() = %d, want exactly one isolation compensation", registry.Len())
+			}
+		})
 	}
 }
 

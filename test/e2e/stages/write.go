@@ -28,6 +28,9 @@ const (
 	CodeEffectUnknown = "emergency_effect_unknown"
 	// CodeRestartTimeout identifies a restart barrier that did not converge.
 	CodeRestartTimeout = "restart_barrier_timeout"
+	// CodeCrossTargetChanged identifies a write that perturbed a target the
+	// stage did not intend to modify (non-target invariance violation).
+	CodeCrossTargetChanged = "cross_target_changed"
 )
 
 // RunnerActor is the stable principal string owned by the E2E dev account.
@@ -222,6 +225,13 @@ func takeover(ctx context.Context, name, definitionID string, observer activeOpe
 	return nil
 }
 
+// UpgradeGuard asserts an additional invariant around one reversible upgrade.
+// It runs after the upgrade reached a succeeded terminal state and again after
+// the compensating rollback, so a stage can prove that a target it did not
+// intend to write was not perturbed by either operation (non-target
+// invariance). A nil guard asserts nothing.
+type UpgradeGuard func(ctx context.Context) error
+
 // runUpgrade performs the shared reversible upgrade flow: startup takeover,
 // dynamic revision read, UPGRADE creation, terminal await, and LIFO
 // compensation registration that restores the observed baseline revision.
@@ -237,6 +247,7 @@ func runUpgrade(
 	registry *e2e.CompensationRegistry,
 	target WriteTarget,
 	compensationID string,
+	guard UpgradeGuard,
 ) (OperationRef, int32, error) {
 	if err := target.validateUpgrade(name); err != nil {
 		return OperationRef{}, 0, err
@@ -248,33 +259,19 @@ func runUpgrade(
 		return OperationRef{}, 0, err
 	}
 
-	baseline, err := observer.Revision(ctx, target.DefinitionID)
+	baseline, err := readBaselineRevision(ctx, name, observer, target.DefinitionID)
 	if err != nil {
-		return OperationRef{}, 0, newStageError(CodeSnapshotNotFound, name, "baseline revision observation failed")
-	}
-	if baseline <= 0 {
-		return OperationRef{}, 0, newStageError(CodeSnapshotNotFound, name, fmt.Sprintf("baseline revision %d is not positive", baseline))
+		return OperationRef{}, 0, err
 	}
 
-	created, err := writer.Upgrade(ctx, UpgradeRequest{
-		DefinitionID:     target.DefinitionID,
-		BundleID:         target.BundleID,
-		ValuesRevisionID: target.ValuesRevisionID,
-		ExpectedRevision: baseline,
-	})
+	terminal, err := executeUpgrade(ctx, name, writer, target, baseline)
 	if err != nil {
-		return OperationRef{}, baseline, newStageError(CodeOperationRejected, name, "upgrade request rejected")
+		return terminal, baseline, err
 	}
-	if strings.TrimSpace(created.ID) == "" {
-		return OperationRef{}, baseline, newStageError(CodeOperationRejected, name, "upgrade response carried no operation id")
-	}
-
-	terminal, err := writer.AwaitOperation(ctx, created.ID)
-	if err != nil {
-		return created, baseline, newStageError(CodeOperationFailed, name, "upgrade did not reach a terminal state")
-	}
-	if !terminal.Succeeded() {
-		return terminal, baseline, newStageError(CodeOperationFailed, name, "upgrade reached a non-succeeded terminal state")
+	if guard != nil {
+		if err := guard(ctx); err != nil {
+			return terminal, baseline, err
+		}
 	}
 
 	// Compensation restores the observed baseline revision. It is bounded by
@@ -285,8 +282,66 @@ func runUpgrade(
 		ExpectedRevision: baseline + 1,
 		Reason:           "e2e " + name + " compensation",
 	}
-	rollbackID := compensationID
-	if err := registry.Register(rollbackID, func(compCtx context.Context) error {
+	if err := registerUpgradeCompensation(registry, compensationID, name, writer, restore, guard); err != nil {
+		return terminal, baseline, err
+	}
+
+	return terminal, baseline, nil
+}
+
+// readBaselineRevision reads the target's live revision and rejects a value
+// that cannot serve as a compensation anchor. The value is never assumed from
+// the seed, which is what keeps expectedCurrentRevision honest across re-runs.
+func readBaselineRevision(ctx context.Context, name string, observer ReleaseObserver, definitionID string) (int32, error) {
+	baseline, err := observer.Revision(ctx, definitionID)
+	if err != nil {
+		return 0, newStageError(CodeSnapshotNotFound, name, "baseline revision observation failed")
+	}
+	if baseline <= 0 {
+		return 0, newStageError(CodeSnapshotNotFound, name, fmt.Sprintf("baseline revision %d is not positive", baseline))
+	}
+	return baseline, nil
+}
+
+// executeUpgrade creates the UPGRADE against the observed revision and waits
+// for a succeeded terminal state.
+func executeUpgrade(ctx context.Context, name string, writer OperationWriter, target WriteTarget, baseline int32) (OperationRef, error) {
+	created, err := writer.Upgrade(ctx, UpgradeRequest{
+		DefinitionID:     target.DefinitionID,
+		BundleID:         target.BundleID,
+		ValuesRevisionID: target.ValuesRevisionID,
+		ExpectedRevision: baseline,
+	})
+	if err != nil {
+		return OperationRef{}, newStageError(CodeOperationRejected, name, "upgrade request rejected")
+	}
+	if strings.TrimSpace(created.ID) == "" {
+		return OperationRef{}, newStageError(CodeOperationRejected, name, "upgrade response carried no operation id")
+	}
+
+	terminal, err := writer.AwaitOperation(ctx, created.ID)
+	if err != nil {
+		return created, newStageError(CodeOperationFailed, name, "upgrade did not reach a terminal state")
+	}
+	if !terminal.Succeeded() {
+		return terminal, newStageError(CodeOperationFailed, name, "upgrade reached a non-succeeded terminal state")
+	}
+	return terminal, nil
+}
+
+// registerUpgradeCompensation registers the stage's single compensation: a
+// rollback to the observed baseline. The guard, when set, is re-asserted after
+// the rollback so a compensation that perturbs a non-target becomes Dirty
+// instead of passing.
+func registerUpgradeCompensation(
+	registry *e2e.CompensationRegistry,
+	compensationID string,
+	name string,
+	writer OperationWriter,
+	restore RollbackRequest,
+	guard UpgradeGuard,
+) error {
+	if err := registry.Register(compensationID, func(compCtx context.Context) error {
 		compensation, err := writer.Rollback(compCtx, restore)
 		if err != nil {
 			return fmt.Errorf("%s: rollback compensation rejected", CodeCleanupTimeout)
@@ -298,10 +353,14 @@ func runUpgrade(
 		if !result.Succeeded() {
 			return fmt.Errorf("%s: rollback compensation did not succeed", CodeCleanupTimeout)
 		}
+		if guard != nil {
+			if err := guard(compCtx); err != nil {
+				return fmt.Errorf("%s: rollback compensation violated a stage invariant", CodeCleanupTimeout)
+			}
+		}
 		return nil
 	}); err != nil {
-		return terminal, baseline, newStageError(CodeCleanupTimeout, name, "compensation registration failed")
+		return newStageError(CodeCleanupTimeout, name, "compensation registration failed")
 	}
-
-	return terminal, baseline, nil
+	return nil
 }

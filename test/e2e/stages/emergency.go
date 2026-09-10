@@ -207,7 +207,10 @@ func (s *EmergencyStage) applyChange(ctx context.Context, workload EmergencyTarg
 }
 
 // selectTarget resolves the emergency workload from the formal target list.
-// Multiple targets are ambiguous and fail closed rather than picking one.
+// Multiple eligible targets are ambiguous and fail closed rather than picking
+// one, so the stage always operates on exactly one workload; non-target
+// invariance for emergency is therefore structural (see the package doc note in
+// restart.go for the cross-stage guards that do need an explicit assertion).
 func (s *EmergencyStage) selectTarget(ctx context.Context) (EmergencyTarget, error) {
 	targets, err := s.writer.Targets(ctx, s.target.DefinitionID)
 	if err != nil {
