@@ -27,6 +27,21 @@ var (
 	ErrFixtureStale = errors.New(CodeFixtureStale)
 	// ErrSnapshotNotFound is the stable root cause for missing observations.
 	ErrSnapshotNotFound = errors.New(CodeSnapshotNotFound)
+
+	// ErrOperationRejected is the stable root cause for a refused write.
+	ErrOperationRejected = errors.New(CodeOperationRejected)
+	// ErrOperationFailed is the stable root cause for a non-succeeded operation.
+	ErrOperationFailed = errors.New(CodeOperationFailed)
+	// ErrReleaseBusy is the stable root cause for a foreign active operation.
+	ErrReleaseBusy = errors.New(CodeReleaseBusy)
+	// ErrCleanupTimeout is the stable root cause for a bounded cleanup miss.
+	ErrCleanupTimeout = errors.New(CodeCleanupTimeout)
+	// ErrEffectUnknown is the stable root cause for an unobserved emergency effect.
+	ErrEffectUnknown = errors.New(CodeEffectUnknown)
+	// ErrRestartTimeout is the stable root cause for an unconverged restart.
+	ErrRestartTimeout = errors.New(CodeRestartTimeout)
+	// ErrRestartTriggerFailed is the stable root cause for a failed restart patch.
+	ErrRestartTriggerFailed = errors.New(CodeRestartTriggerFailed)
 )
 
 // StageError is a sanitized, machine-readable stage failure.
@@ -65,6 +80,20 @@ func (e *StageError) Unwrap() error {
 		return ErrFixtureStale
 	case CodeSnapshotNotFound:
 		return ErrSnapshotNotFound
+	case CodeOperationRejected:
+		return ErrOperationRejected
+	case CodeOperationFailed:
+		return ErrOperationFailed
+	case CodeReleaseBusy:
+		return ErrReleaseBusy
+	case CodeCleanupTimeout:
+		return ErrCleanupTimeout
+	case CodeEffectUnknown:
+		return ErrEffectUnknown
+	case CodeRestartTimeout:
+		return ErrRestartTimeout
+	case CodeRestartTriggerFailed:
+		return ErrRestartTriggerFailed
 	default:
 		return nil
 	}
