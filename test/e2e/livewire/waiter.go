@@ -1,0 +1,199 @@
+package livewire
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"k8s.io/apimachinery/pkg/util/wait"
+
+	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
+	e2e "github.com/ndzuki/release-manager/test/e2e"
+)
+
+// operatorSessionOnline is the session status that means the operator gateway
+// has re-established its control stream. It mirrors the store's SessionOnline
+// value; the E2E harness deliberately imports no internal package, so it
+// observes only the public API contract and restates the wire value here.
+const operatorSessionOnline = "online"
+
+// ControlPlaneWaiter observes control-plane recovery after a restart: every
+// declared service endpoint answers its health probe, and the operator gateway
+// reports an online session again.
+type ControlPlaneWaiter struct {
+	cfg        *e2e.Config
+	clients    *e2e.ClientBundle
+	session    *e2e.RunnerSession
+	httpClient *http.Client
+	poll       time.Duration
+}
+
+// NewControlPlaneWaiter builds the recovery barrier over the declared service
+// endpoints and the operator service client.
+func NewControlPlaneWaiter(cfg *e2e.Config, clients *e2e.ClientBundle, session *e2e.RunnerSession) (*ControlPlaneWaiter, error) {
+	if cfg == nil || clients == nil || session == nil {
+		return nil, errors.New("livewire: control-plane waiter requires a config, clients, and a session")
+	}
+	return &ControlPlaneWaiter{
+		cfg:        cfg,
+		clients:    clients,
+		session:    session,
+		httpClient: &http.Client{Timeout: 5 * time.Second},
+		poll:       defaultPollInterval,
+	}, nil
+}
+
+// WithPollInterval overrides the barrier poll cadence.
+func (w *ControlPlaneWaiter) WithPollInterval(interval time.Duration) *ControlPlaneWaiter {
+	if w == nil {
+		return nil
+	}
+	if interval > 0 {
+		w.poll = interval
+	}
+	return w
+}
+
+// WithHTTPClient injects the transport used for health probes.
+func (w *ControlPlaneWaiter) WithHTTPClient(client *http.Client) *ControlPlaneWaiter {
+	if w == nil {
+		return nil
+	}
+	if client != nil {
+		w.httpClient = client
+	}
+	return w
+}
+
+// AwaitServices implements stages.ControlPlaneWaiter. Every declared endpoint
+// must answer its health probe; an endpoint that never does keeps the barrier
+// closed instead of reporting a recovery the run cannot see.
+func (w *ControlPlaneWaiter) AwaitServices(ctx context.Context) error {
+	if w == nil || w.cfg == nil {
+		return errors.New("livewire: control-plane waiter is unavailable")
+	}
+	probes, err := w.healthProbes()
+	if err != nil {
+		return err
+	}
+	for _, probe := range probes {
+		probe := probe
+		pollErr := wait.PollUntilContextCancel(ctx, w.poll, true, func(condCtx context.Context) (bool, error) {
+			return w.healthProbeSucceeds(condCtx, probe)
+		})
+		if pollErr != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("livewire: control-plane endpoint %s never became ready: %w", probe.service, pollErr)
+		}
+	}
+	return nil
+}
+
+// AwaitOperatorSession implements stages.ControlPlaneWaiter. It waits for the
+// operator gateway to report an online session, which is the observable proof
+// that the operator's control stream reconnected after the restart.
+func (w *ControlPlaneWaiter) AwaitOperatorSession(ctx context.Context) error {
+	if w == nil || w.clients == nil || w.session == nil {
+		return errors.New("livewire: control-plane waiter is unavailable")
+	}
+	if err := w.session.EnsureLogin(ctx); err != nil {
+		return err
+	}
+	pollErr := wait.PollUntilContextCancel(ctx, w.poll, true, func(condCtx context.Context) (bool, error) {
+		response, err := w.clients.Operator().GetActiveOperatorSession(condCtx,
+			authorizedRequest(w.session.Token(), &operatorv1.GetActiveOperatorSessionRequest{}))
+		if err != nil {
+			// A gateway that has not yet re-established its control stream has
+			// no active session and answers with an error. That is the expected
+			// transient state this barrier waits through, and the caller's
+			// context deadline is what bounds it, so the error is deliberately
+			// not propagated here.
+			return false, nil //nolint:nilerr // transient not-yet-online session; bounded by the context deadline
+		}
+		session := response.Msg.GetSession()
+		return session != nil && strings.EqualFold(session.GetStatus(), operatorSessionOnline), nil
+	})
+	if pollErr != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("livewire: operator session never returned online: %w", pollErr)
+	}
+	return nil
+}
+
+// healthProbe is one declared service and its health URL.
+type healthProbe struct {
+	service string
+	url     string
+}
+
+// healthProbes resolves the health URL for every declared endpoint. Endpoints
+// are separate services, so each must be individually healthy.
+func (w *ControlPlaneWaiter) healthProbes() ([]healthProbe, error) {
+	declared := []struct {
+		service  string
+		endpoint string
+	}{
+		{service: "release_orchestrator", endpoint: w.cfg.Endpoints.ReleaseOrchestrator},
+		{service: "release_webhook", endpoint: w.cfg.Endpoints.ReleaseWebhook},
+		{service: "release_operator", endpoint: w.cfg.Endpoints.ReleaseOperator},
+		{service: "release_auth", endpoint: w.cfg.Endpoints.ReleaseAuth},
+		{service: "release_notifier", endpoint: w.cfg.Endpoints.ReleaseNotifier},
+		{service: "release_api", endpoint: w.cfg.Endpoints.ReleaseAPI},
+	}
+	probes := make([]healthProbe, 0, len(declared))
+	for _, item := range declared {
+		endpoint := strings.TrimSpace(item.endpoint)
+		if endpoint == "" {
+			continue
+		}
+		healthURL, err := healthURLFor(endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("livewire: %s: %w", item.service, err)
+		}
+		probes = append(probes, healthProbe{service: item.service, url: healthURL})
+	}
+	if len(probes) == 0 {
+		return nil, errors.New("livewire: no control-plane endpoints are declared")
+	}
+	return probes, nil
+}
+
+// healthURLFor resolves the health probe for one service endpoint.
+func healthURLFor(endpoint string) (string, error) {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("invalid endpoint %q: %w", endpoint, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("endpoint %q must be an absolute http or https URL", endpoint)
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("endpoint %q has no host", endpoint)
+	}
+	return strings.TrimSuffix(endpoint, "/") + "/health", nil
+}
+
+// healthProbeSucceeds performs one health probe and drains the body so the
+// connection can be reused.
+func (w *ControlPlaneWaiter) healthProbeSucceeds(ctx context.Context, probe healthProbe) (bool, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, probe.url, http.NoBody)
+	if err != nil {
+		return false, err
+	}
+	response, err := w.httpClient.Do(request)
+	if err != nil {
+		return false, nil
+	}
+	defer func() {
+		_ = response.Body.Close()
+	}()
+	return response.StatusCode == http.StatusOK, nil
+}

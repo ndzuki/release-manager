@@ -8,11 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	authv1 "github.com/ndzuki/release-manager/api/gen/auth/v1"
 	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
+	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
+	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	e2e "github.com/ndzuki/release-manager/test/e2e"
@@ -330,11 +334,60 @@ func (f *fakeOrchestrator) lastEmergencyReplicas(fallback int32) int32 {
 	return f.emergencies[len(f.emergencies)-1].GetSetReplicas()
 }
 
+// fakeOperator serves the operator gateway's session route so the control-plane
+// barrier can be exercised through the real generated client.
+type fakeOperator struct {
+	operatorv1connect.UnimplementedOperatorServiceHandler
+
+	mu       sync.Mutex
+	sessions []*operatorv1.OperatorSession
+	err      error
+	calls    int
+}
+
+func (f *fakeOperator) GetActiveOperatorSession(context.Context, *connect.Request[operatorv1.GetActiveOperatorSessionRequest]) (*connect.Response[operatorv1.GetActiveOperatorSessionResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.sessions) == 0 {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("no active session"))
+	}
+	// Serve the scripted progression, holding the last state once exhausted.
+	index := f.calls - 1
+	if index >= len(f.sessions) {
+		index = len(f.sessions) - 1
+	}
+	return connect.NewResponse(&operatorv1.GetActiveOperatorSessionResponse{Session: f.sessions[index]}), nil
+}
+
+func (f *fakeOperator) setSessions(sessions ...*operatorv1.OperatorSession) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sessions = sessions
+	f.calls = 0
+}
+
+func (f *fakeOperator) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
 // harness bundles the connector under test with the fakes it talks to.
 type harness struct {
 	connector *Connector
 	auth      *fakeAuth
 	orch      *fakeOrchestrator
+	operator  *fakeOperator
+
+	cfg     *e2e.Config
+	clients *e2e.ClientBundle
+	server  *httptest.Server
+
+	healthCode atomic.Int32
 }
 
 // newHarness wires a real Connector over in-process Connect handlers, so every
@@ -345,10 +398,18 @@ func newHarness(t *testing.T) *harness {
 
 	auth := &fakeAuth{}
 	orch := &fakeOrchestrator{operations: map[string]*orchestratorv1.Operation{}, emergency: map[string]*orchestratorv1.EmergencyResult{}}
+	operator := &fakeOperator{}
+
+	h := &harness{connector: nil, auth: auth, orch: orch, operator: operator}
+	h.healthCode.Store(http.StatusOK)
 
 	mux := http.NewServeMux()
 	mux.Handle(authv1connect.NewAuthServiceHandler(auth))
 	mux.Handle(orchestratorv1connect.NewOrchestratorServiceHandler(orch))
+	mux.Handle(operatorv1connect.NewOperatorServiceHandler(operator))
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(int(h.healthCode.Load()))
+	})
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
@@ -361,7 +422,28 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatalf("NewWithClients() error = %v", err)
 	}
-	return &harness{connector: connector, auth: auth, orch: orch}
+	h.connector = connector
+	h.cfg = cfg
+	h.clients = clients
+	h.server = server
+	return h
+}
+
+// setHealth controls the /health status served to the control-plane barrier.
+func (h *harness) setHealth(code int) { h.healthCode.Store(int32(code)) }
+
+// newWaiter builds the control-plane barrier over the harness server.
+func (h *harness) newWaiter(t *testing.T) *ControlPlaneWaiter {
+	t.Helper()
+	session, err := e2e.NewRunnerSession(h.cfg, h.clients)
+	if err != nil {
+		t.Fatalf("NewRunnerSession() error = %v", err)
+	}
+	waiter, err := NewControlPlaneWaiter(h.cfg, h.clients, session)
+	if err != nil {
+		t.Fatalf("NewControlPlaneWaiter() error = %v", err)
+	}
+	return waiter.WithHTTPClient(h.server.Client()).WithPollInterval(time.Millisecond)
 }
 
 // loadTestConfig writes the strict E2E config schema against the in-process
