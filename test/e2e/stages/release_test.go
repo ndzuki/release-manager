@@ -142,6 +142,50 @@ func TestReleaseStageNilRegistry(t *testing.T) {
 	}
 }
 
+func TestRunUpgradeCompensationUsesReportedRevision(t *testing.T) {
+	t.Parallel()
+
+	// Revisions can skip, so the rollback's optimistic lock must prefer the
+	// revision the terminal operation reported over the baseline+1 guess.
+	fake := newWriteFake()
+	fake.await["op-upgrade"] = OperationRef{ID: "op-upgrade", Status: wireSucceeded, Revision: 9}
+	fake.await["op-rollback"] = OperationRef{ID: "op-rollback", Status: wireSucceeded}
+	registry := e2e.NewCompensationRegistry()
+
+	if _, _, err := runUpgrade(context.Background(), "release", fake, fake, registry, releaseTarget(), CompensationReleaseRollback, nil); err != nil {
+		t.Fatalf("runUpgrade() error = %v", err)
+	}
+	if err := registry.Run(context.Background()); err != nil {
+		t.Fatalf("registry.Run() error = %v", err)
+	}
+	if len(fake.rollbacks) != 1 {
+		t.Fatalf("rollbacks = %d, want 1", len(fake.rollbacks))
+	}
+	if got := fake.rollbacks[0].ExpectedRevision; got != 9 {
+		t.Fatalf("ExpectedRevision = %d, want the reported revision 9", got)
+	}
+}
+
+func TestRunUpgradeCompensationFallsBackToBaselinePlusOne(t *testing.T) {
+	t.Parallel()
+
+	fake := newWriteFake()
+	// No reported revision: the adapter did not surface one.
+	fake.await["op-upgrade"] = OperationRef{ID: "op-upgrade", Status: wireSucceeded}
+	fake.await["op-rollback"] = OperationRef{ID: "op-rollback", Status: wireSucceeded}
+	registry := e2e.NewCompensationRegistry()
+
+	if _, _, err := runUpgrade(context.Background(), "release", fake, fake, registry, releaseTarget(), CompensationReleaseRollback, nil); err != nil {
+		t.Fatalf("runUpgrade() error = %v", err)
+	}
+	if err := registry.Run(context.Background()); err != nil {
+		t.Fatalf("registry.Run() error = %v", err)
+	}
+	if got := fake.rollbacks[0].ExpectedRevision; got != 4 {
+		t.Fatalf("ExpectedRevision = %d, want the baseline+1 fallback 4", got)
+	}
+}
+
 func TestRunUpgradeCompensationFailureIsDirty(t *testing.T) {
 	t.Parallel()
 

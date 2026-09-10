@@ -3,101 +3,52 @@ package e2e
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
-	"sync"
 
 	"connectrpc.com/connect"
-	authv1 "github.com/ndzuki/release-manager/api/gen/auth/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 )
 
-// ErrRunnerLogin reports an e2e-runner authentication failure.
-var ErrRunnerLogin = errors.New("e2e-runner login failed")
-
 // LiveRecovery implements Recovery over the formal Connect surface using the
 // e2e-runner development account (REQ-065). It performs no kubectl/helm/db
-// access; generated clients and the access token remain private to the struct.
+// access; generated clients and the access token remain private to the session.
 type LiveRecovery struct {
-	cfg     *Config
 	clients *ClientBundle
-
-	mu          sync.Mutex
-	accessToken string
-	userID      string
+	session *RunnerSession
 }
 
 // NewLiveRecovery constructs the formal-API recovery implementation. The
 // config must already be validated (LoadConfig resolves the password).
 func NewLiveRecovery(cfg *Config, clients *ClientBundle) (*LiveRecovery, error) {
-	if cfg == nil {
-		return nil, configInvalid("config", "nil config")
+	session, err := NewRunnerSession(cfg, clients)
+	if err != nil {
+		return nil, err
 	}
-	if clients == nil {
-		return nil, configInvalid("clients", "nil client bundle")
-	}
-	return &LiveRecovery{cfg: cfg, clients: clients}, nil
+	return &LiveRecovery{clients: clients, session: session}, nil
 }
 
 // Login authenticates as e2e-runner and resolves the authoritative user id.
-// The user id is read from ValidateToken because LoginResponse.user may be
-// unset on the current auth version (see smoke.sh D-029 D4).
 func (r *LiveRecovery) Login(ctx context.Context) (string, error) {
-	if r == nil || r.cfg == nil || r.clients == nil {
+	if r == nil || r.clients == nil {
 		return "", ErrRunnerLogin
 	}
-	password := r.cfg.Password()
-	if password == "" {
-		return "", fmt.Errorf("%w: password environment variable is not set", ErrRunnerLogin)
-	}
-	login, err := r.clients.auth.Login(ctx, connect.NewRequest(&authv1.LoginRequest{
-		Username: r.cfg.Credentials.E2ERunner.Username,
-		Password: password,
-	}))
-	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrRunnerLogin, err)
-	}
-	if login == nil || login.Msg == nil {
-		return "", fmt.Errorf("%w: empty login response", ErrRunnerLogin)
-	}
-	accessToken := login.Msg.AccessToken
-	if accessToken == "" {
-		return "", fmt.Errorf("%w: empty access token", ErrRunnerLogin)
-	}
-
-	userID := ""
-	if login.Msg.User != nil && login.Msg.User.Id != "" {
-		userID = login.Msg.User.Id
-	} else {
-		valid, err := r.clients.auth.ValidateToken(ctx, connect.NewRequest(&authv1.ValidateTokenRequest{Token: accessToken}))
-		if err != nil {
-			return "", fmt.Errorf("%w: validate token: %v", ErrRunnerLogin, err)
-		}
-		if valid.Msg == nil || !valid.Msg.Valid {
-			return "", fmt.Errorf("%w: token validation rejected", ErrRunnerLogin)
-		}
-		userID = valid.Msg.UserId
-	}
-
-	r.mu.Lock()
-	r.accessToken = accessToken
-	r.userID = userID
-	r.mu.Unlock()
-	return userID, nil
+	return r.session.Login(ctx)
 }
 
 // UserID returns the authenticated runner user id after a successful Login.
 func (r *LiveRecovery) UserID() string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.userID
+	if r == nil {
+		return ""
+	}
+	return r.session.UserID()
 }
 
 // token returns the current bearer token (empty before Login).
 func (r *LiveRecovery) token() string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.accessToken
+	if r == nil {
+		return ""
+	}
+	return r.session.Token()
 }
 
 // ListReleaseInventory implements Recovery.

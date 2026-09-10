@@ -28,16 +28,34 @@ type EmergencyTarget struct {
 	WorkloadName    string
 	Namespace       string
 	CurrentReplicas int32
-	// OperationVersion is the authoritative per-field snapshot token reported
-	// for the workload. It is echoed on the write so a stale observation is
-	// rejected server-side instead of silently overwriting a newer state.
+	// OperationVersion is an optional adapter-supplied version hint echoed on
+	// the write. The live API does not report one on ListEmergencyTargets, so
+	// the adapter leaves it empty and the server derives the authoritative
+	// version on acceptance (REQ-079 D4); when it is set it must match the
+	// server's semver-shaped OperationVersionSchema or the write is rejected.
 	OperationVersion string
+	// Reference is the authoritative "<gvr.resource>/<namespace>/<name>" string
+	// the formal emergency API expects. The adapter resolves it from the
+	// cluster's REST mapping (kind -> plural resource); the stage never guesses
+	// it, because "deployment/ns/name" is not the same reference as
+	// "deployments/ns/name" and a wrong form is rejected server-side.
+	Reference string
 }
 
-// WorkloadKey returns the "<kind>/<namespace>/<name>" reference the formal
-// emergency API expects.
+// WorkloadKey returns a stable "<kind>/<namespace>/<name>" diagnostic label.
+// It is for assertions and artifact detail only: it is NOT the API reference
+// (see Reference), which carries the plural GVR resource.
 func (t EmergencyTarget) WorkloadKey() string {
 	return fmt.Sprintf("%s/%s/%s", strings.ToLower(strings.TrimSpace(t.WorkloadKind)), strings.TrimSpace(t.Namespace), strings.TrimSpace(t.WorkloadName))
+}
+
+// WorkloadReference returns the authoritative API reference for this target,
+// falling back to the diagnostic key only when the adapter did not resolve one.
+func (t EmergencyTarget) WorkloadReference() string {
+	if reference := strings.TrimSpace(t.Reference); reference != "" {
+		return reference
+	}
+	return t.WorkloadKey()
 }
 
 // ReplicaObservation is the observed replica state of one workload.
@@ -49,8 +67,10 @@ type ReplicaObservation struct {
 
 // EmergencySetReplicasRequest is the formal input for one SET_REPLICAS change.
 type EmergencySetReplicasRequest struct {
-	DefinitionID     string
-	WorkloadKey      string
+	DefinitionID string
+	// WorkloadRef is the authoritative "<gvr.resource>/<namespace>/<name>"
+	// reference. Callers pass EmergencyTarget.WorkloadReference().
+	WorkloadRef      string
 	Replicas         int32
 	Convergence      string
 	OperationVersion string
@@ -177,7 +197,7 @@ func (s *EmergencyStage) resolveBaseline(ctx context.Context) (EmergencyTarget, 
 func (s *EmergencyStage) applyChange(ctx context.Context, workload EmergencyTarget) (OperationRef, error) {
 	created, err := s.writer.SetReplicas(ctx, EmergencySetReplicasRequest{
 		DefinitionID:     s.target.DefinitionID,
-		WorkloadKey:      workload.WorkloadKey(),
+		WorkloadRef:      workload.WorkloadReference(),
 		Replicas:         s.replicas,
 		Convergence:      EmergencyConvergenceRevertOnNextReconcile,
 		OperationVersion: workload.OperationVersion,
@@ -253,7 +273,7 @@ func (s *EmergencyStage) assertReplicas(ctx context.Context, workload EmergencyT
 func (s *EmergencyStage) registerRestore(workload EmergencyTarget, baseline int32) error {
 	restore := EmergencySetReplicasRequest{
 		DefinitionID: s.target.DefinitionID,
-		WorkloadKey:  workload.WorkloadKey(),
+		WorkloadRef:  workload.WorkloadReference(),
 		Replicas:     baseline,
 		Convergence:  EmergencyConvergenceRevertOnNextReconcile,
 	}

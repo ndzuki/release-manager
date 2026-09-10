@@ -47,6 +47,7 @@ func newEmergencyFake(replicas int32) *emergencyFake {
 			WorkloadName:     "release-fixture",
 			CurrentReplicas:  replicas,
 			OperationVersion: "v3",
+			Reference:        "deployments/release-fixture/release-fixture",
 		}},
 		setRef:   OperationRef{ID: "op-emergency", DefinitionID: "def-emergency", Type: "EMERGENCY"},
 		await:    map[string]OperationRef{},
@@ -206,8 +207,8 @@ func TestEmergencyStageRun(t *testing.T) {
 				if got := fake.sets[0].Convergence; got != EmergencyConvergenceRevertOnNextReconcile {
 					t.Fatalf("convergence = %q, want REVERT_ON_NEXT_RECONCILE", got)
 				}
-				if got := fake.sets[0].WorkloadKey; got != "deployment/release-fixture/release-fixture" {
-					t.Fatalf("workload key = %q", got)
+				if got := fake.sets[0].WorkloadRef; got != "deployments/release-fixture/release-fixture" {
+					t.Fatalf("workload ref = %q, want the adapter-resolved plural GVR reference", got)
 				}
 				if got := fake.sets[0].OperationVersion; got != "v3" {
 					t.Fatalf("operation version = %q, want the observed v3", got)
@@ -302,12 +303,22 @@ func TestEmergencyStageMissingDefinition(t *testing.T) {
 	}
 }
 
-func TestEmergencyTargetWorkloadKey(t *testing.T) {
+func TestEmergencyTargetWorkloadReference(t *testing.T) {
 	t.Parallel()
 
 	target := EmergencyTarget{WorkloadKind: "StatefulSet", Namespace: "ns", WorkloadName: "app"}
+	// The diagnostic key is lowercase-kind; it is never sent as the API ref.
 	if got := target.WorkloadKey(); got != "statefulset/ns/app" {
 		t.Fatalf("WorkloadKey() = %q", got)
+	}
+	// Without an adapter-resolved reference the fallback is the diagnostic key,
+	// which is why a live adapter must always populate Reference.
+	if got := target.WorkloadReference(); got != "statefulset/ns/app" {
+		t.Fatalf("WorkloadReference() fallback = %q", got)
+	}
+	target.Reference = "statefulsets/ns/app"
+	if got := target.WorkloadReference(); got != "statefulsets/ns/app" {
+		t.Fatalf("WorkloadReference() = %q, want the adapter-resolved plural resource", got)
 	}
 }
 

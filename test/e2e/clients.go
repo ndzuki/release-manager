@@ -41,6 +41,32 @@ type ClientBundle struct {
 // Clients is a compatibility alias for callers that prefer the shorter name.
 type Clients = ClientBundle
 
+// Orchestrator returns the release orchestrator client. Accessors keep the
+// bundle's fields private so a caller can read a client but cannot swap one out
+// mid-run or reach a client the bundle never declared.
+func (b *ClientBundle) Orchestrator() orchestratorv1connect.OrchestratorServiceClient {
+	if b == nil {
+		return nil
+	}
+	return b.orchestrator
+}
+
+// Operator returns the operator service client.
+func (b *ClientBundle) Operator() operatorv1connect.OperatorServiceClient {
+	if b == nil {
+		return nil
+	}
+	return b.operator
+}
+
+// Auth returns the authentication service client.
+func (b *ClientBundle) Auth() authv1connect.AuthServiceClient {
+	if b == nil {
+		return nil
+	}
+	return b.auth
+}
+
 // ClientOptions controls the HTTP transports used by generated clients. The
 // operator transport may be supplied separately so callers can install the
 // operator gateway's HTTPS/mTLS transport without changing other clients.

@@ -276,10 +276,17 @@ func runUpgrade(
 
 	// Compensation restores the observed baseline revision. It is bounded by
 	// the caller's cleanup context and must never be the seed's assumed value.
+	// The optimistic lock prefers the revision the terminal operation reported;
+	// baseline+1 is only the fallback for adapters that do not surface it, since
+	// revisions can legitimately skip.
+	current := baseline + 1
+	if terminal.Revision > 0 {
+		current = terminal.Revision
+	}
 	restore := RollbackRequest{
 		DefinitionID:     target.DefinitionID,
 		TargetRevision:   baseline,
-		ExpectedRevision: baseline + 1,
+		ExpectedRevision: current,
 		Reason:           "e2e " + name + " compensation",
 	}
 	if err := registerUpgradeCompensation(registry, compensationID, name, writer, restore, guard); err != nil {
