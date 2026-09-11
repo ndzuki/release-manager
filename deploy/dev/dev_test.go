@@ -694,23 +694,70 @@ func TestClusterCreateInjectsProxyEnv(t *testing.T) {
 		if !strings.HasPrefix(line, "build ") {
 			continue
 		}
-		if !strings.Contains(line, "--build-arg HTTP_PROXY=http://127.0.0.1:7890") ||
-			!strings.Contains(line, "--build-arg HTTPS_PROXY=http://127.0.0.1:7890") ||
-			// Real smoke 2026-08-27: the google default module host is
-			// unreachable directly from CN hosts and buildkit cannot reach a
-			// loopback host proxy — the build chain must prepend the
-			// directly-reachable goproxy.cn as the primary entry.
-			!strings.Contains(line, "--build-arg GOPROXY=https://goproxy.cn,https://proxy.golang.org,direct") {
-			t.Fatalf("docker build missing proxy/GOPROXY build-args: %s", line)
+		// The configured proxy is loopback-bound, so it cannot serve a RUN
+		// step (127.0.0.1 there is the build container itself). BuildKit
+		// forwards the client's proxy variables automatically, so dev.sh must
+		// clear them explicitly or every fetch inside the step fails
+		// (real smoke 2026-09-11: `npm ci` -> ECONNREFUSED 127.0.0.1:7890
+		// while registry.npmjs.org answered 200 directly).
+		if !strings.Contains(line, "--build-arg HTTP_PROXY= ") ||
+			!strings.Contains(line, "--build-arg HTTPS_PROXY= ") ||
+			!strings.Contains(line, "--build-arg http_proxy= ") ||
+			!strings.Contains(line, "--build-arg https_proxy= ") {
+			t.Fatalf("docker build did not clear the loopback proxy: %s", line)
 		}
-		// The first GOPROXY host must be exempted in NO_PROXY (module
-		// fetches go direct instead of through the loopback proxy).
-		if !strings.Contains(line, "--build-arg NO_PROXY=localhost,127.0.0.1,goproxy.cn") {
-			t.Fatalf("docker build NO_PROXY missing goproxy host exemption: %s", line)
+		if strings.Contains(line, "--build-arg HTTP_PROXY=http://127.0.0.1:7890") {
+			t.Fatalf("docker build injected an unreachable loopback proxy: %s", line)
+		}
+		// Real smoke 2026-08-27: the google default module host is
+		// unreachable directly from CN hosts — the build chain must prepend
+		// the directly-reachable goproxy.cn as the primary entry.
+		if !strings.Contains(line, "--build-arg GOPROXY=https://goproxy.cn,https://proxy.golang.org,direct") {
+			t.Fatalf("docker build missing GOPROXY build-arg: %s", line)
 		}
 		if strings.Contains(line, "release-web:") &&
 			!strings.Contains(line, "--build-arg NODE_IMAGE=docker.1ms.run/library/node:24-alpine") {
 			t.Fatalf("web build missing NODE_IMAGE mirror build-arg: %s", line)
+		}
+		buildInjected = true
+	}
+	if !buildInjected {
+		t.Fatalf("no docker build invocation recorded:\n%s", calls)
+	}
+}
+
+// TestClusterCreateInjectsReachableProxyEnv covers the other half of the proxy
+// contract: a proxy a build container CAN reach is injected into the build
+// args, and the GOPROXY host is exempted in NO_PROXY so module fetches bypass
+// it (real smoke 2026-08-27).
+func TestClusterCreateInjectsReachableProxyEnv(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	writeShim(t, binDir, "docker",
+		"#!/usr/bin/env bash\nif [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"network\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
+	env = append(env, "HTTP_PROXY=http://proxy.corp.internal:3128", "HTTPS_PROXY=http://proxy.corp.internal:3128",
+		"GOPROXY=", "DEV_DOCKER_MIRROR=docker.1ms.run/library/")
+
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("dev-up failed:\n%s", out)
+	}
+	calls, err := os.ReadFile(filepath.Join(stateDir, "docker-calls.log"))
+	if err != nil {
+		t.Fatalf("docker-calls.log not written: %v", err)
+	}
+	var buildInjected bool
+	for _, line := range strings.Split(strings.TrimSpace(string(calls)), "\n") {
+		if !strings.HasPrefix(line, "build ") {
+			continue
+		}
+		if !strings.Contains(line, "--build-arg HTTP_PROXY=http://proxy.corp.internal:3128") ||
+			!strings.Contains(line, "--build-arg HTTPS_PROXY=http://proxy.corp.internal:3128") {
+			t.Fatalf("docker build missing a reachable proxy build-arg: %s", line)
+		}
+		if !strings.Contains(line, "--build-arg NO_PROXY=localhost,127.0.0.1,goproxy.cn") {
+			t.Fatalf("docker build NO_PROXY missing the goproxy host exemption: %s", line)
 		}
 		buildInjected = true
 	}
