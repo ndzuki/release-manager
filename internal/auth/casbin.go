@@ -437,6 +437,15 @@ func roleRules(role, domain string) [][]string {
 			[]string{role, domain, "binding", "write"},
 			[]string{role, domain, "release", "read"},
 			[]string{role, domain, "release", "write"},
+			// Bundles are the artifact half of a release, and mapServiceToObject
+			// gives BundleService its own object, so release_admin needs an
+			// explicit rule to read them. Without it every BundleService read
+			// was admin-only, and the REQ-066 E2E runner — seeded as
+			// release_admin — could not validate the bundle artifact it exists
+			// to check (real smoke 2026-09-11: GetBundle/ListBundles answered
+			// permission_denied while every sibling read succeeded). Read only:
+			// bundle ingress stays admin-only.
+			[]string{role, domain, "bundle", "read"},
 			[]string{role, domain, "operator", "read"},
 			[]string{role, domain, "operator", "enroll"},
 			[]string{role, domain, "operator", "revoke"},
