@@ -194,6 +194,65 @@ func TestControlPlaneObserverReportsTransportFailureAsUnhealthyService(t *testin
 	}
 }
 
+// TestControlPlaneObserverAddressesTheSeededOperator covers the operator
+// binding: GetActiveOperatorSession selects a session by operator id and
+// rejects a blank one, so the observer must send the id the seed published
+// rather than an empty request (AC-066-17).
+func TestControlPlaneObserverAddressesTheSeededOperator(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.operator.setSessions(&operatorv1.OperatorSession{
+		SessionId:  "session-1",
+		OperatorId: "operator-1",
+		Status:     "ONLINE",
+	})
+
+	observation, err := h.newObserver(t).ObserveControlPlane(context.Background())
+	if err != nil {
+		t.Fatalf("ObserveControlPlane() error = %v", err)
+	}
+	if observation.OperatorSession.SessionID != "session-1" {
+		t.Fatalf("session id = %q, want session-1", observation.OperatorSession.SessionID)
+	}
+	requested := h.operator.requestedOperatorIDs()
+	if len(requested) != 1 || requested[0] != "operator-1" {
+		t.Fatalf("requested operator ids = %v, want [operator-1]", requested)
+	}
+}
+
+// TestControlPlaneObserverWithoutAnOperatorIDReportsNoSession covers the
+// fail-closed half: with no published operator id the observer cannot name a
+// session, so it reports none and the stage rejects the environment instead of
+// asking the API for an unnamed session.
+func TestControlPlaneObserverWithoutAnOperatorIDReportsNoSession(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.cfg.Seed.E2EOperatorID = ""
+	h.operator.setSessions(&operatorv1.OperatorSession{
+		SessionId:  "session-1",
+		OperatorId: "operator-1",
+		Status:     "ONLINE",
+	})
+
+	observer, err := NewControlPlaneObserver(h.cfg, h.connector)
+	if err != nil {
+		t.Fatalf("NewControlPlaneObserver() error = %v", err)
+	}
+	observer = observer.WithHTTPClient(h.server.Client())
+	observation, err := observer.ObserveControlPlane(context.Background())
+	if err != nil {
+		t.Fatalf("ObserveControlPlane() error = %v", err)
+	}
+	if observation.OperatorSession != (stages.OperatorSessionObservation{}) {
+		t.Fatalf("session = %+v, want an empty observation", observation.OperatorSession)
+	}
+	if ids := h.operator.requestedOperatorIDs(); len(ids) != 0 {
+		t.Fatalf("requested operator ids = %v, want no request", ids)
+	}
+}
+
 // controlPlaneStageError runs the control-plane stage and returns its typed
 // stage error.
 func controlPlaneStageError(t *testing.T, observer stages.ControlPlaneObserver) *stages.StageError {

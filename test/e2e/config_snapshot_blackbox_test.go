@@ -218,6 +218,40 @@ func TestLoadConfigRequiresTheEmergencyDefinitionID(t *testing.T) {
 	assert.Contains(t, err.Error(), "seed.e2e_emergency_definition_id")
 }
 
+// TestLoadConfigRequiresTheOperatorID covers the operator binding: the
+// control-plane stage addresses GetActiveOperatorSession by operator id, and
+// the orchestrator mints that id at enrollment, so a seed without the
+// dev-seed readback cannot satisfy the stage (AC-066-17).
+func TestLoadConfigRequiresTheOperatorID(t *testing.T) {
+	t.Setenv("E2E_RUNNER_PASSWORD", "pw")
+
+	withoutOperator := strings.Replace(
+		validConfigYAML,
+		"  e2e_operator_id: operator-1\n",
+		"",
+		1,
+	)
+	require.NotEqual(t, validConfigYAML, withoutOperator, "fixture no longer declares the operator id")
+
+	config, err := e2e.ParseConfig([]byte(withoutOperator))
+	assert.Nil(t, config)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, e2e.ErrConfigInvalid)
+	assert.Contains(t, err.Error(), "seed.e2e_operator_id")
+
+	blankOperator := strings.Replace(
+		validConfigYAML,
+		"  e2e_operator_id: operator-1\n",
+		"  e2e_operator_id: \"   \"\n",
+		1,
+	)
+	config, err = e2e.ParseConfig([]byte(blankOperator))
+	assert.Nil(t, config)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, e2e.ErrConfigInvalid)
+	assert.Contains(t, err.Error(), "seed.e2e_operator_id")
+}
+
 func TestRunIDValidation(t *testing.T) {
 	t.Parallel()
 
@@ -316,4 +350,5 @@ seed:
       bundle_id: bundle-1
       values_revision_id: values-1
   e2e_emergency_definition_id: 33333333-3333-3333-3333-333333333333
+  e2e_operator_id: operator-1
 `

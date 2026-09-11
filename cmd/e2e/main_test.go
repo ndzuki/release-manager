@@ -384,6 +384,7 @@ seed:
       bundle_id: bundle-1
       values_revision_id: values-1
   e2e_emergency_definition_id: 33333333-3333-3333-3333-333333333333
+  e2e_operator_id: operator-1
 `, kubeconfig)
 	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
 		t.Fatal(err)

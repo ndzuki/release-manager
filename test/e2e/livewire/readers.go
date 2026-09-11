@@ -71,6 +71,9 @@ type ControlPlaneObserver struct {
 	connector  *Connector
 	httpClient *http.Client
 	probes     []endpointProbe
+	// operatorID is the id the session read addresses. The API selects a
+	// session by operator id, so the seed must publish one.
+	operatorID string
 }
 
 var _ stages.ControlPlaneObserver = (*ControlPlaneObserver)(nil)
@@ -90,10 +93,12 @@ func NewControlPlaneObserver(cfg *e2e.Config, connector *Connector) (*ControlPla
 	if err != nil {
 		return nil, err
 	}
+	operatorID, _ := cfg.Seed.OperatorID()
 	return &ControlPlaneObserver{
 		connector:  connector,
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 		probes:     probes,
+		operatorID: operatorID,
 	}, nil
 }
 
@@ -308,8 +313,15 @@ func (o *ControlPlaneObserver) observeOperatorSession(ctx context.Context) (stag
 // that the environment is unusable. Only authentication failure is an error,
 // and it is raised by the caller before this read.
 func (o *ControlPlaneObserver) activeOperatorSession(ctx context.Context) *operatorv1.OperatorSession {
+	if o.operatorID == "" {
+		// The API selects a session by operator id and rejects a blank one, so
+		// there is nothing to ask for. The stage reports the missing identity.
+		return nil
+	}
 	response, err := o.connector.Clients().Operator().GetActiveOperatorSession(ctx,
-		authorizedRequest(o.connector.Session().Token(), &operatorv1.GetActiveOperatorSessionRequest{}))
+		authorizedRequest(o.connector.Session().Token(), &operatorv1.GetActiveOperatorSessionRequest{
+			OperatorId: o.operatorID,
+		}))
 	if err != nil || response == nil || response.Msg == nil {
 		return nil
 	}

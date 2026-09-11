@@ -86,3 +86,7 @@ seed:
   # The emergency stage submits an emergency replica change rather than an
   # UPGRADE, so its definition id is published separately.
   e2e_emergency_definition_id: "<server definition id for e2e-emergency-target>"
+  # The operator id the control-plane stage observes. The orchestrator mints it
+  # at enrollment, so dev-seed publishes the id it saw ONLINE
+  # (data/dev-fixture.json operators); it cannot be derived from a logical key.
+  e2e_operator_id: "<server operator id>"

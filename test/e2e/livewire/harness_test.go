@@ -525,12 +525,17 @@ type fakeOperator struct {
 	sessions []*operatorv1.OperatorSession
 	err      error
 	calls    int
+	// requested records the operator id of every session read, so tests can
+	// assert the runner addresses the operator the seed published rather than
+	// sending a blank request the API rejects.
+	requested []string
 }
 
-func (f *fakeOperator) GetActiveOperatorSession(context.Context, *connect.Request[operatorv1.GetActiveOperatorSessionRequest]) (*connect.Response[operatorv1.GetActiveOperatorSessionResponse], error) {
+func (f *fakeOperator) GetActiveOperatorSession(_ context.Context, req *connect.Request[operatorv1.GetActiveOperatorSessionRequest]) (*connect.Response[operatorv1.GetActiveOperatorSessionResponse], error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	f.requested = append(f.requested, req.Msg.GetOperatorId())
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -543,6 +548,13 @@ func (f *fakeOperator) GetActiveOperatorSession(context.Context, *connect.Reques
 		index = len(f.sessions) - 1
 	}
 	return connect.NewResponse(&operatorv1.GetActiveOperatorSessionResponse{Session: f.sessions[index]}), nil
+}
+
+// requestedOperatorIDs returns the operator id of every session read so far.
+func (f *fakeOperator) requestedOperatorIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.requested...)
 }
 
 func (f *fakeOperator) setSessions(sessions ...*operatorv1.OperatorSession) {
@@ -760,6 +772,7 @@ seed:
       bundle_id: "bundle-1"
       values_revision_id: "values-1"
   e2e_emergency_definition_id: "33333333-3333-3333-3333-333333333333"
+  e2e_operator_id: "operator-1"
 `, endpoint, endpoint, endpoint, endpoint, endpoint, endpoint, passwordEnv, kubeconfigPath)
 
 	path := filepath.Join(t.TempDir(), "e2e-env-config.yaml")

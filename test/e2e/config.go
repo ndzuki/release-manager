@@ -150,6 +150,20 @@ type SeedConfig struct {
 	// E2EEmergencyDefinitionKey. The emergency stage targets the API, which only
 	// accepts the minted id, so the logical key alone is not usable.
 	E2EEmergencyDefinitionID string `yaml:"e2e_emergency_definition_id" json:"e2e_emergency_definition_id"`
+	// E2EOperatorID is the operator id whose session the control-plane stage
+	// observes. The orchestrator mints it at enrollment, so it cannot be
+	// derived from a logical key; dev-seed publishes the id it saw online.
+	E2EOperatorID string `yaml:"e2e_operator_id" json:"e2e_operator_id"`
+}
+
+// OperatorID returns the operator id the control-plane stage observes. The
+// boolean is false when the seed does not declare one, so the stage can fail
+// closed instead of asking the API for a session it cannot name.
+func (s SeedConfig) OperatorID() (string, bool) {
+	if strings.TrimSpace(s.E2EOperatorID) == "" {
+		return "", false
+	}
+	return s.E2EOperatorID, true
 }
 
 // UpgradeTarget returns the binding for a canonical upgrade key. The boolean is
@@ -444,7 +458,15 @@ func validateE2EDefinitions(seed SeedConfig) error {
 			"binds "+E2EEmergencyDefinitionKey+" and "+other+" to the same definition id")
 	}
 	bound[seed.E2EEmergencyDefinitionID] = E2EEmergencyDefinitionKey
-	return validateDefinitionBoundIDs(seed.ExpectedIdentity.E2EDefinitionIDs, bound)
+	if err := validateDefinitionBoundIDs(seed.ExpectedIdentity.E2EDefinitionIDs, bound); err != nil {
+		return err
+	}
+	// The control-plane stage addresses the operator session by id, and no
+	// other input exposes one, so an unbound seed cannot satisfy AC-066-17.
+	if _, ok := seed.OperatorID(); !ok {
+		return configInvalid("seed.e2e_operator_id", "missing")
+	}
+	return nil
 }
 
 // validateUpgradeTargets checks the upgrade bindings and reports the definition
