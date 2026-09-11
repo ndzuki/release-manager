@@ -320,6 +320,7 @@ credentials:
     password_env: E2E_RUNNER_PASSWORD
 k3d:
   kubeconfig: /tmp/kubeconfig
+  context: k3d-release-manager-control
   test_namespace: release-manager-dev
   restart_targets:
     namespace: release-manager-dev

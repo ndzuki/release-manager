@@ -3,7 +3,13 @@ package livewire
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -149,5 +155,105 @@ func TestNewKubernetesClientRejectsMissingKubeconfig(t *testing.T) {
 	}
 	if _, err := NewKubernetesClient(nil); err == nil {
 		t.Fatal("NewKubernetesClient(nil) error = nil, want an error")
+	}
+}
+
+func TestNewKubernetesClientRejectsMissingContext(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	cfg := *h.cfg
+	cfg.K3d.Context = ""
+	if _, err := NewKubernetesClient(&cfg); err == nil {
+		t.Fatal("NewKubernetesClient() error = nil, want an error for an empty context")
+	}
+}
+
+func TestNewKubernetesClientRejectsUnknownContext(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	cfg := *h.cfg
+	cfg.K3d.Context = "k3d-does-not-exist"
+	_, err := NewKubernetesClient(&cfg)
+	if err == nil {
+		t.Fatal("NewKubernetesClient() error = nil, want an error for an unknown context")
+	}
+	if !strings.Contains(err.Error(), "k3d-does-not-exist") {
+		t.Errorf("error %v does not name the unknown context", err)
+	}
+}
+
+// TestNewKubernetesClientUsesTheConfiguredContext is the regression guard for
+// the merged dev kubeconfig. That file holds five clusters, so its
+// current-context is whichever merged last — a customer cluster — while this
+// client's consumers act on the management namespace. Pointing each context at
+// its own test server makes the cluster the client actually chose observable.
+func TestNewKubernetesClientUsesTheConfiguredContext(t *testing.T) {
+	t.Parallel()
+
+	var customerHits, managementHits atomic.Int32
+	newServer := func(hits *atomic.Int32) *httptest.Server {
+		t.Helper()
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			hits.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			if _, err := w.Write([]byte(`{"apiVersion":"v1","kind":"NamespaceList","metadata":{}}`)); err != nil {
+				t.Errorf("write response: %v", err)
+			}
+		}))
+	}
+	customer := newServer(&customerHits)
+	defer customer.Close()
+	management := newServer(&managementHits)
+	defer management.Close()
+
+	path := filepath.Join(t.TempDir(), "kubeconfig.yaml")
+	body := fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+  - name: customer
+    cluster:
+      server: %s
+  - name: management
+    cluster:
+      server: %s
+contexts:
+  - name: customer
+    context:
+      cluster: customer
+      user: test
+  - name: management
+    context:
+      cluster: management
+      user: test
+current-context: customer
+users:
+  - name: test
+    user:
+      token: test-token
+`, customer.URL, management.URL)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
+	}
+
+	h := newHarness(t)
+	cfg := *h.cfg
+	cfg.K3d.Kubeconfig = path
+	cfg.K3d.Context = "management"
+
+	client, err := NewKubernetesClient(&cfg)
+	if err != nil {
+		t.Fatalf("NewKubernetesClient() error = %v", err)
+	}
+	if _, err := client.CoreV1().Namespaces().List(context.Background(), metav1.ListOptions{}); err != nil {
+		t.Fatalf("Namespaces().List() error = %v, want a successful read from the configured context", err)
+	}
+
+	if got := managementHits.Load(); got == 0 {
+		t.Error("configured management context received no request")
+	}
+	if got := customerHits.Load(); got != 0 {
+		t.Errorf("current-context customer cluster received %d requests, want 0", got)
 	}
 }

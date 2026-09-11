@@ -152,9 +152,16 @@ func (c *Connector) NewRestartProbe(client kubernetes.Interface) (*stages.Kubern
 	return stages.NewKubernetesRestartProbe(client, targets)
 }
 
-// NewKubernetesClient builds a typed clientset from the configured kubeconfig.
-// It is the only place in the E2E harness that reads a kubeconfig, so the
-// cluster credential has a single owner.
+// NewKubernetesClient builds a typed clientset from the configured kubeconfig
+// and context. It is the only place in the E2E harness that reads a kubeconfig,
+// so the cluster credential has a single owner.
+//
+// The context is selected explicitly rather than taken from the kubeconfig's
+// current-context. The dev kubeconfig merges five clusters, so the ambient
+// current-context is whichever merged last — a customer cluster — while every
+// consumer of this client (the restart probe and the replica observer) acts on
+// the management namespace. Letting the ambient context decide would point
+// management writes at a customer cluster.
 func NewKubernetesClient(cfg *e2e.Config) (kubernetes.Interface, error) {
 	if cfg == nil {
 		return nil, errors.New("livewire: nil config")
@@ -163,9 +170,16 @@ func NewKubernetesClient(cfg *e2e.Config) (kubernetes.Interface, error) {
 	if path == "" {
 		return nil, errors.New("livewire: k3d.kubeconfig is empty")
 	}
-	restConfig, err := clientcmd.BuildConfigFromFlags("", path)
+	contextName := strings.TrimSpace(cfg.K3d.Context)
+	if contextName == "" {
+		return nil, errors.New("livewire: k3d.context is empty")
+	}
+	restConfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		&clientcmd.ClientConfigLoadingRules{ExplicitPath: path},
+		&clientcmd.ConfigOverrides{CurrentContext: contextName},
+	).ClientConfig()
 	if err != nil {
-		return nil, fmt.Errorf("livewire: load kubeconfig %s: %w", path, err)
+		return nil, fmt.Errorf("livewire: load kubeconfig %s context %s: %w", path, contextName, err)
 	}
 	client, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {

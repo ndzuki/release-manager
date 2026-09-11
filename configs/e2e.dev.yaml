@@ -28,6 +28,11 @@ credentials:
 
 k3d:
   kubeconfig: "data/kubeconfig.yaml"
+  # The merged dev kubeconfig holds five clusters, so its current-context is
+  # whichever merged last (a customer cluster). The harness must be told the
+  # management context explicitly, exactly as dev.sh's ctl_kubectl does, or
+  # management writes land on a customer cluster.
+  context: "k3d-release-manager-control"
   test_namespace: "release-manager-dev"
   restart_targets:
     namespace: "release-manager-dev"

@@ -88,7 +88,16 @@ type RestartTargets struct {
 
 // K3dConfig contains the Kubernetes inputs used by E2E.
 type K3dConfig struct {
-	Kubeconfig     string         `yaml:"kubeconfig" json:"kubeconfig"`
+	Kubeconfig string `yaml:"kubeconfig" json:"kubeconfig"`
+	// Context names the kubeconfig context the harness must use. The dev
+	// kubeconfig is a merge of five clusters, so relying on its current-context
+	// silently binds the harness to whichever cluster happened to merge last —
+	// a customer cluster. dev.sh already passes an explicit control context for
+	// its own kubectl calls for exactly this reason (`ctl_kubectl`); the harness
+	// needs the same guarantee, because the restart probe and replica observer
+	// patch the management namespace. Without it, management writes can land on
+	// a customer cluster (real smoke 2026-08-24 regression).
+	Context        string         `yaml:"context" json:"context"`
 	TestNamespace  string         `yaml:"test_namespace" json:"test_namespace"`
 	RestartTargets RestartTargets `yaml:"restart_targets" json:"restart_targets"`
 }
@@ -311,6 +320,14 @@ func (c *Config) resolveCredentials() error {
 func validateK3d(k3d K3dConfig) error {
 	if strings.TrimSpace(k3d.Kubeconfig) == "" {
 		return configInvalid("k3d.kubeconfig", "missing")
+	}
+	// Required, not defaulted: an ambient current-context is a mutable
+	// user-level setting, so falling back to it would let a stray
+	// `kubectl config use-context` silently retarget management writes. Presence
+	// in the kubeconfig is resolved when the client is built, which still
+	// happens before any stage runs or any artifact is written.
+	if strings.TrimSpace(k3d.Context) == "" {
+		return configInvalid("k3d.context", "missing")
 	}
 	if err := validateDNS1123Label(k3d.TestNamespace); err != nil {
 		return configInvalid("k3d.test_namespace", "must be a DNS-1123 label")

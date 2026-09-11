@@ -743,6 +743,7 @@ credentials:
     password_env: %q
 k3d:
   kubeconfig: %q
+  context: "livewire-test"
   test_namespace: "release-manager-dev"
   restart_targets:
     namespace: "release-manager-dev"

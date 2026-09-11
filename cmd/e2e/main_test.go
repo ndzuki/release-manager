@@ -355,6 +355,7 @@ credentials:
     password_env: E2E_RUNNER_PASSWORD
 k3d:
   kubeconfig: %s
+  context: cli-test
   test_namespace: release-manager-dev
   restart_targets:
     namespace: release-manager-dev
