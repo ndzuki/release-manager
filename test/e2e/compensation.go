@@ -91,9 +91,7 @@ func (r *CompensationRegistry) Run(ctx context.Context) error {
 	if r == nil {
 		return nil
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 
 	r.mu.Lock()
 	switch r.state {

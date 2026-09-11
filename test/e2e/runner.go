@@ -337,7 +337,7 @@ func (h *Harness) run(ctx context.Context, scenario Scenario) (Report, error) {
 	root, cancel := contextWithTimeout(ctx, totalTimeout)
 	defer cancel()
 
-	results, err := executeGraph(root, ordered, byName, selected, fixture, stageTimeout, parallel, h.logger())
+	results := executeGraph(root, ordered, byName, selected, fixture, stageTimeout, parallel, h.logger())
 	report := Report{
 		Results:      results,
 		TotalElapsed: time.Since(started),
@@ -351,9 +351,6 @@ func (h *Harness) run(ctx context.Context, scenario Scenario) (Report, error) {
 		case StageSkip:
 			report.Skipped++
 		}
-	}
-	if err != nil {
-		return report, err
 	}
 	for index := range report.Results {
 		var panicErr *PanicError
@@ -382,7 +379,7 @@ func executeGraph(
 	defaultTimeout time.Duration,
 	parallel bool,
 	logger *slog.Logger,
-) ([]StageResult, error) {
+) []StageResult {
 	results := make(map[string]StageResult, len(selected))
 	pending := make(map[string]bool, len(selected))
 	for name := range selected {
@@ -455,7 +452,7 @@ func executeGraph(
 			out = append(out, results[spec.Name])
 		}
 	}
-	return out, nil
+	return out
 }
 
 func dependencyState(

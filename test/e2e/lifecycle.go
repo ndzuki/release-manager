@@ -111,9 +111,7 @@ func (l *Lifecycle) Begin(ctx context.Context) (*Operation, error) {
 	if l == nil {
 		return nil, ErrLifecycleClosed
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -144,7 +142,10 @@ func (l *Lifecycle) Execute(ctx context.Context, fn func(context.Context) error)
 		return err
 	}
 	defer op.Done()
-	return fn(op.Context())
+	// op.Context() is derived from the caller's ctx in Begin (context.WithValue
+	// on the incoming ctx) and stored on the operation; contextcheck cannot
+	// follow it through the struct field.
+	return fn(op.Context()) //nolint:contextcheck // derived from the caller's context in Begin
 }
 
 // Close seals admission, drains in-flight work, and optionally runs cleanup.
@@ -223,13 +224,24 @@ func (l *Lifecycle) Close(ctx context.Context, cleanup ...func(context.Context) 
 
 // CleanupContext derives a bounded context that ignores parent cancellation.
 func CleanupContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if parent == nil {
-		parent = context.Background()
-	}
+	parent = contextOrBackground(parent)
 	if timeout <= 0 {
 		timeout = defaultCleanupTimeout
 	}
 	return context.WithTimeout(context.WithoutCancel(parent), timeout)
+}
+
+// contextOrBackground returns ctx unchanged, or a background context when the
+// caller passed none. The fallback keeps these entry points' zero value usable:
+// context.WithValue panics on a nil parent, so without it a defensive default
+// would become a crash. contextcheck reads the fallback as a new context that
+// ignores the caller, which is precisely what it is — there is no caller context
+// to inherit from.
+func contextOrBackground(ctx context.Context) context.Context { //nolint:contextcheck // no parent context exists to inherit from
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 func operationFromContext(ctx context.Context) (*Operation, bool) {
