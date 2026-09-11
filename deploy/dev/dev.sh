@@ -1629,12 +1629,35 @@ cmd_status() {
   cat "$status_file"
 }
 
+# fixture_counter counts the entries under one fixture key.
+#
+# Every collection in data/dev-fixture.json is an object (customers, clusters,
+# routes, operators, definitions, bundle), so matching only a scalar number
+# reported 0 for all of them: dev-status.json carried a whole block of false
+# zeros that read as "the fixture is empty". An object counts its keys, an array
+# its elements, and a number itself.
 fixture_counter() {
   local file="$1"
   local key="$2"
   local value=""
   if [ -f "$file" ]; then
-    value="$(sed -nE "s/.*\"$key\"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p" "$file" | sed -n '1p')"
+    if command -v jq >/dev/null 2>&1; then
+      value="$(jq -r --arg key "$key" '
+        (.[$key] // empty)
+        | if type == "object" then (keys | length)
+          elif type == "array" then length
+          elif type == "number" then .
+          else 0 end
+      ' "$file" 2>/dev/null | head -1)"
+    else
+      # Without jq an object count cannot be derived, so say so once instead of
+      # letting the fallback's zeros pass for measurements.
+      if [ "${FIXTURE_COUNTER_WARNED:-0}" -eq 0 ]; then
+        printf 'dev-status: jq is required to count fixture entries; collection counts will read as 0\n' >&2
+        FIXTURE_COUNTER_WARNED=1
+      fi
+      value="$(sed -nE "s/.*\"$key\"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p" "$file" | sed -n '1p')"
+    fi
   fi
   printf '%s' "${value:-0}"
 }

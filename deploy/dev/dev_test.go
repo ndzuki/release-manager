@@ -792,6 +792,38 @@ func TestStatusJSONSchema(t *testing.T) {
 // behind (the operator gateway was folded into the orchestrator container by
 // TASK-065). Only the control-plane write path is a target: web, notifier and
 // the datastores are present in the cluster but must not be restarted.
+// TestStatusCountsFixtureCollectionsByEntries covers the fixture_entities block.
+// Every collection in data/dev-fixture.json is an object, so a count that only
+// matched a scalar number reported 0 for all of them and dev-status.json read as
+// "the fixture is empty" while it was seeded. An object must count its keys.
+func TestStatusCountsFixtureCollectionsByEntries(t *testing.T) {
+	stateDir := t.TempDir()
+	env, _ := fakeEnv(t, stateDir)
+	fixture := `{
+	  "fixture_version": "fixture-v2",
+	  "customers": {"dev-customer-a": {}, "dev-customer-b": {}},
+	  "clusters": {"a": {}, "b": {}, "c": {}, "d": {}},
+	  "routes": {"r1": {}, "r2": {}, "r3": {}},
+	  "definitions": {"d1": {}, "d2": {}},
+	  "operators": 4
+	}`
+	if err := os.WriteFile(filepath.Join(stateDir, "dev-fixture.json"), []byte(fixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runDev(t, env, "status")
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		`"customers":2`, `"clusters":4`, `"routes":3`, `"definitions":2`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("status output missing %s:\n%s", want, out)
+		}
+	}
+}
+
 func TestStatusDerivesRestartTargetsFromTheControlPlane(t *testing.T) {
 	stateDir := t.TempDir()
 	env, binDir := fakeEnv(t, stateDir)
