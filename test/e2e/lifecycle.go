@@ -172,17 +172,7 @@ func (l *Lifecycle) Close(ctx context.Context, cleanup ...func(context.Context) 
 		done := l.closeDone
 		timeout := l.cleanupTimeout
 		l.mu.Unlock()
-		waitCtx, cancel := CleanupContext(ctx, timeout)
-		defer cancel()
-		select {
-		case <-done:
-			l.mu.Lock()
-			err := l.closeErr
-			l.mu.Unlock()
-			return err
-		case <-waitCtx.Done():
-			return fmt.Errorf("wait for lifecycle close: %w", ErrCleanupTimeout)
-		}
+		return l.waitForInflightClose(ctx, done, timeout)
 	}
 	l.state = LifecycleClosing
 	done := l.closeDone
@@ -201,17 +191,8 @@ func (l *Lifecycle) Close(ctx context.Context, cleanup ...func(context.Context) 
 		closeErr = errors.Join(closeErr, fmt.Errorf("drain lifecycle operations: %w", ErrCleanupTimeout))
 	}
 
-	if closeErr == nil && len(cleanup) == 1 {
-		cleanupDone := make(chan error, 1)
-		go func() { cleanupDone <- cleanup[0](cleanupCtx) }()
-		select {
-		case err := <-cleanupDone:
-			if err != nil {
-				closeErr = errors.Join(closeErr, fmt.Errorf("cleanup lifecycle: %w", err))
-			}
-		case <-cleanupCtx.Done():
-			closeErr = errors.Join(closeErr, fmt.Errorf("cleanup lifecycle: %w", ErrCleanupTimeout))
-		}
+	if closeErr == nil {
+		closeErr = runCleanup(cleanupCtx, cleanup)
 	}
 
 	l.mu.Lock()
@@ -220,6 +201,43 @@ func (l *Lifecycle) Close(ctx context.Context, cleanup ...func(context.Context) 
 	close(done)
 	l.mu.Unlock()
 	return closeErr
+}
+
+// waitForInflightClose blocks until a Close already in progress finishes,
+// returning the error that Close recorded. Waiting past the cleanup budget fails
+// closed rather than returning a success the caller cannot trust.
+func (l *Lifecycle) waitForInflightClose(ctx context.Context, done <-chan struct{}, timeout time.Duration) error {
+	waitCtx, cancel := CleanupContext(ctx, timeout)
+	defer cancel()
+	select {
+	case <-done:
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return l.closeErr
+	case <-waitCtx.Done():
+		return fmt.Errorf("wait for lifecycle close: %w", ErrCleanupTimeout)
+	}
+}
+
+// runCleanup invokes the optional cleanup function under the bounded lifecycle
+// context. A cleanup that outlives that budget is reported as a timeout; the
+// goroutine is abandoned deliberately, because the caller's deadline is the only
+// bound it can be held to.
+func runCleanup(cleanupCtx context.Context, cleanup []func(context.Context) error) error {
+	if len(cleanup) != 1 {
+		return nil
+	}
+	cleanupDone := make(chan error, 1)
+	go func() { cleanupDone <- cleanup[0](cleanupCtx) }()
+	select {
+	case err := <-cleanupDone:
+		if err != nil {
+			return fmt.Errorf("cleanup lifecycle: %w", err)
+		}
+		return nil
+	case <-cleanupCtx.Done():
+		return fmt.Errorf("cleanup lifecycle: %w", ErrCleanupTimeout)
+	}
 }
 
 // CleanupContext derives a bounded context that ignores parent cancellation.

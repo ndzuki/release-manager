@@ -728,7 +728,10 @@ func selectedNames(
 	return selected, nil
 }
 
-func orderSpecs(specs []StageSpec) ([]StageSpec, map[string]StageSpec) {
+// indexSpecs resolves each spec's stage name and canonical default dependencies
+// so the graph can be keyed by name. Specs whose name cannot be resolved are
+// dropped: they cannot be depended on or selected.
+func indexSpecs(specs []StageSpec) map[string]StageSpec {
 	byName := make(map[string]StageSpec, len(specs))
 	for _, spec := range specs {
 		if spec.Name == "" && spec.Stage != nil {
@@ -744,7 +747,14 @@ func orderSpecs(specs []StageSpec) ([]StageSpec, map[string]StageSpec) {
 		}
 		byName[spec.Name] = spec
 	}
+	return byName
+}
 
+// topologicalOrder returns the specs in dependency order: a spec always follows
+// everything it depends on. Canonical stages are visited first so the canonical
+// set keeps its documented order; every other spec is appended in name order,
+// which keeps the result deterministic for an arbitrary graph.
+func topologicalOrder(byName map[string]StageSpec) []StageSpec {
 	ordered := make([]StageSpec, 0, len(byName))
 	visited := make(map[string]bool, len(byName))
 	visiting := make(map[string]bool, len(byName))
@@ -754,8 +764,7 @@ func orderSpecs(specs []StageSpec) ([]StageSpec, map[string]StageSpec) {
 			return
 		}
 		visiting[name] = true
-		spec, ok := byName[name]
-		if ok {
+		if spec, ok := byName[name]; ok {
 			deps := spec.dependencies()
 			sort.Strings(deps)
 			for _, dep := range deps {
@@ -779,6 +788,12 @@ func orderSpecs(specs []StageSpec) ([]StageSpec, map[string]StageSpec) {
 	for _, name := range remaining {
 		visit(name)
 	}
+	return ordered
+}
+
+func orderSpecs(specs []StageSpec) (ordered []StageSpec, byName map[string]StageSpec) {
+	byName = indexSpecs(specs)
+	ordered = topologicalOrder(byName)
 	return ordered, byName
 }
 
