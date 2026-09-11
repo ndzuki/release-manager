@@ -66,10 +66,17 @@ const DefaultEmergencyReplicas int32 = 2
 // rejects a binding whose two halves disagree, so a stage that cannot resolve
 // its key fails closed with a build error.
 func Specs(cfg *e2e.Config) ([]e2e.StageSpec, error) {
+	return SpecsForRun(cfg, "")
+}
+
+// SpecsForRun builds the canonical graph for one run. runID scopes every write
+// stage's idempotency key to that run, so a later run is a new logical write
+// rather than an ADR-009 replay of an earlier run whose parameters repeated.
+func SpecsForRun(cfg *e2e.Config, runID string) ([]e2e.StageSpec, error) {
 	if cfg == nil {
 		return nil, errors.New("livewire: nil config")
 	}
-	assembled, err := newGraph(cfg)
+	assembled, err := newGraph(cfg, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +157,7 @@ func isNilStage(stage e2e.Stage) bool {
 // newGraph builds every live dependency and the stages over them. Each failure
 // aborts the whole graph: a stage whose client, clientset, or seed binding is
 // unavailable must never be replaced by a no-op.
-func newGraph(cfg *e2e.Config) (*graph, error) {
+func newGraph(cfg *e2e.Config, runID string) (*graph, error) {
 	clients, err := e2e.NewClientBundle(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("livewire: build connect clients: %w", err)
@@ -159,6 +166,7 @@ func newGraph(cfg *e2e.Config) (*graph, error) {
 	if err != nil {
 		return nil, fmt.Errorf("livewire: build connector: %w", err)
 	}
+	connector = connector.WithRunID(runID)
 	observer, err := NewControlPlaneObserver(cfg, connector)
 	if err != nil {
 		return nil, fmt.Errorf("livewire: build control-plane observer: %w", err)

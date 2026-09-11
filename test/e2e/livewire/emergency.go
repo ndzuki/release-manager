@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
-	e2e "github.com/ndzuki/release-manager/test/e2e"
 	"github.com/ndzuki/release-manager/test/e2e/stages"
 )
 
@@ -117,7 +116,7 @@ func (c *Connector) SetReplicas(ctx context.Context, request stages.EmergencySet
 			OperationVersion:    strings.TrimSpace(request.OperationVersion),
 			ConvergenceStrategy: convergenceStrategyFor(request.Convergence),
 			SetReplicas:         request.Replicas,
-			IdempotencyKey:      e2e.WriteIdempotencyKey("emergency-set-replicas", request.DefinitionID, strconv.FormatInt(int64(request.Replicas), 10)),
+			IdempotencyKey:      c.writeKey("emergency-set-replicas", request.DefinitionID, strconv.FormatInt(int64(request.Replicas), 10)),
 		}))
 	if err != nil {
 		return stages.OperationRef{}, err

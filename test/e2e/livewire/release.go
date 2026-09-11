@@ -10,7 +10,6 @@ import (
 
 	"connectrpc.com/connect"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
-	e2e "github.com/ndzuki/release-manager/test/e2e"
 	"github.com/ndzuki/release-manager/test/e2e/stages"
 )
 
@@ -108,7 +107,7 @@ func (c *Connector) Upgrade(ctx context.Context, request stages.UpgradeRequest) 
 		ValuesRevisionId:        request.ValuesRevisionID,
 		ExpectedCurrentRevision: request.ExpectedRevision,
 	})
-	rpc.Header().Set("Idempotency-Key", e2e.WriteIdempotencyKey("upgrade", request.DefinitionID, revisionQualifier(request.ExpectedRevision)))
+	rpc.Header().Set("Idempotency-Key", c.writeKey("upgrade", request.DefinitionID, revisionQualifier(request.ExpectedRevision)))
 	response, err := clients.Orchestrator().CreateOperation(ctx, rpc)
 	if err != nil {
 		return stages.OperationRef{}, err
@@ -152,7 +151,7 @@ func (c *Connector) Rollback(ctx context.Context, request stages.RollbackRequest
 		ExpectedCurrentRevision: request.ExpectedRevision,
 		Reason:                  request.Reason,
 	})
-	rpc.Header().Set("Idempotency-Key", e2e.WriteIdempotencyKey("rollback", request.DefinitionID, revisionQualifier(request.ExpectedRevision)))
+	rpc.Header().Set("Idempotency-Key", c.writeKey("rollback", request.DefinitionID, revisionQualifier(request.ExpectedRevision)))
 	response, err := clients.Orchestrator().RollbackRelease(ctx, rpc)
 	if err != nil {
 		return stages.OperationRef{}, err
@@ -185,7 +184,7 @@ func (c *Connector) Cancel(ctx context.Context, operationID string) error {
 		OperationId: operationID,
 		Reason:      "e2e stage takeover",
 	})
-	rpc.Header().Set("Idempotency-Key", e2e.WriteIdempotencyKey("cancel", operationID))
+	rpc.Header().Set("Idempotency-Key", c.writeKey("cancel", operationID))
 	_, err = clients.Orchestrator().CancelOperation(ctx, rpc)
 	if err != nil {
 		return fmt.Errorf("livewire: cancel operation %s: %w", operationID, err)

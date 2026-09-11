@@ -149,7 +149,7 @@ func runStages(args []string, stdout, stderr io.Writer) int {
 	// needs a usable config even for a partial stage selection; that is
 	// deliberate, because the graph is the single definition of the canonical
 	// stage set and its dependency edges (TASK-066 fail-closed contract).
-	stageSpecs, err := livewire.Specs(config)
+	stageSpecs, err := livewire.SpecsForRun(config, runID)
 	if err != nil {
 		logger.Error("assemble e2e stage graph", "error", err)
 		return int(exitRuntime)
@@ -421,11 +421,21 @@ func loadCleanupBaseline(baselineFile string, logger *slog.Logger) *e2e.Baseline
 		return nil
 	}
 	target := e2e.BaselineRecoveryFromSnapshots(baseline.FixtureSnapshot)
-	if len(target.Revisions) == 0 {
-		logger.Warn("baseline carries no revision recovery targets; cleanup is residual-only", "run_id", baseline.RunID)
+	// Degrade only when the baseline carries no recovery target at all. A
+	// baseline with replicas but no revisions is still usable: discarding it
+	// whole is what kept the replica restore degraded to a warning even after
+	// collection started recording replica counts (AC-066-34).
+	if len(target.Revisions) == 0 && len(target.Replicas) == 0 {
+		logger.Warn("baseline carries no recovery targets; cleanup is residual-only", "run_id", baseline.RunID)
 		return nil
 	}
-	logger.Info("baseline loaded for cleanup", "run_id", baseline.RunID, "revision_targets", len(target.Revisions))
+	if len(target.Revisions) == 0 {
+		logger.Warn("baseline carries no revision recovery targets; revision restore will be skipped", "run_id", baseline.RunID)
+	}
+	if len(target.Replicas) == 0 {
+		logger.Warn("baseline carries no workload replicas; replica restore will be skipped", "run_id", baseline.RunID)
+	}
+	logger.Info("baseline loaded for cleanup", "run_id", baseline.RunID, "revision_targets", len(target.Revisions), "replica_targets", len(target.Replicas))
 	return &target
 }
 

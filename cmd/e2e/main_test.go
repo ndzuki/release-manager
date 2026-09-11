@@ -272,6 +272,37 @@ func TestCLICleanupUsesBaselineOverrideAndFailsClosedWithoutLiveEnv(t *testing.T
 	}
 }
 
+// TestCLICleanupKeepsAReplicaOnlyBaseline pins the fix for the last degraded
+// path. Baseline collection records replica counts but no revision targets, and
+// discarding the whole baseline whenever the revisions were empty kept the
+// replica restore degraded to a warning even after collection started recording
+// replica counts (AC-066-34).
+func TestCLICleanupKeepsAReplicaOnlyBaseline(t *testing.T) {
+	configPath := writeConfig(t)
+	outputDir := t.TempDir()
+	baseline := filepath.Join(t.TempDir(), "baseline.json")
+	body := `{"run_id":"run-1","identity":{"workload_replicas":[` +
+		`{"release_definition_id":"def-1","workload_ref":"deployments/ns/app","replicas":1}]}}`
+	if err := os.WriteFile(baseline, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := runCLI(t, map[string]string{"E2E_RUN_ID": "cli-cleanup-replicas"},
+		"cleanup",
+		"--env-config", configPath,
+		"--output-dir", outputDir,
+		"--baseline-file", baseline,
+	)
+	// The replica baseline must survive loading, so cleanup degrades only the
+	// revision half instead of declaring the whole baseline missing.
+	if strings.Contains(result.stderr, "cleanup is residual-only") {
+		t.Fatalf("stderr = %q, want the replica baseline kept rather than degraded", result.stderr)
+	}
+	if !strings.Contains(result.stderr, "revision restore will be skipped") {
+		t.Fatalf("stderr = %q, want the explicit revision-skip warning", result.stderr)
+	}
+}
+
 type cliResult struct {
 	code   int
 	stdout string

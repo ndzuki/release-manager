@@ -14,6 +14,7 @@ package livewire
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	e2e "github.com/ndzuki/release-manager/test/e2e"
@@ -31,6 +32,39 @@ type Connector struct {
 	clients *e2e.ClientBundle
 	session *e2e.RunnerSession
 	poll    time.Duration
+	// runID scopes every write stage's idempotency key to one run. An E2E run
+	// performs a genuinely new write even when its parameters repeat, so a key
+	// that names only the parameters turns the second run into an ADR-009 replay
+	// of the first: the server returns the first run's terminal operation without
+	// applying anything, and the stage then asserts an effect that never happened
+	// (real smoke 2026-09-11: the emergency change was reported requested and
+	// SUCCEEDED while the workload stayed at its baseline for the whole run).
+	runID string
+}
+
+// WithRunID scopes this connector's write idempotency keys to one run, so a
+// retry inside the run still dedupes while the next run is a new write.
+func (c *Connector) WithRunID(runID string) *Connector {
+	if c != nil {
+		c.runID = strings.TrimSpace(runID)
+	}
+	return c
+}
+
+// writeKey renders the idempotency key for one write stage, scoped to this run
+// and qualified by the state the write starts from.
+//
+// The run scope is what makes two runs distinct logical writes. The state
+// qualifier is what makes two writes inside one run distinct when they start
+// from different states: an upgrade names its starting revision and a replica
+// change its requested count.
+func (c *Connector) writeKey(kind, target string, state ...string) string {
+	parts := make([]string, 0, len(state)+1)
+	if c != nil && c.runID != "" {
+		parts = append(parts, c.runID)
+	}
+	parts = append(parts, state...)
+	return e2e.WriteIdempotencyKey(kind, target, parts...)
 }
 
 // Compile-time proof that one Connector satisfies every stage seam it is wired
