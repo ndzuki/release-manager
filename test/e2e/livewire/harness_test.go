@@ -15,6 +15,7 @@ import (
 	"connectrpc.com/connect"
 	authv1 "github.com/ndzuki/release-manager/api/gen/auth/v1"
 	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
+	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
@@ -24,11 +25,17 @@ import (
 
 const testRunnerPassword = "e2e-test-password"
 
+// wrongRunnerPasswordEnv names a process-wide variable holding a password the
+// fake auth service rejects. It exists so the unauthenticated adapter path can
+// be tested without t.Setenv, which forbids t.Parallel.
+const wrongRunnerPasswordEnv = "LIVEWIRE_WRONG_RUNNER_PASSWORD"
+
 // TestMain publishes the runner password once. It is set here rather than with
 // t.Setenv because t.Setenv forbids t.Parallel, and these tests are independent
 // in-process servers that should run concurrently.
 func TestMain(m *testing.M) {
 	os.Setenv("E2E_RUNNER_PASSWORD", testRunnerPassword)
+	os.Setenv(wrongRunnerPasswordEnv, "not-the-password")
 	os.Exit(m.Run())
 }
 
@@ -104,6 +111,27 @@ type fakeOrchestrator struct {
 	emergencyResp    *orchestratorv1.ExecuteEmergencyChangeResponse
 	emergencyErr     error
 	emergencies      []*orchestratorv1.ExecuteEmergencyChangeRequest
+
+	// read-only inventory sources. The per-parent maps model the parent-scoped
+	// RPCs the reader must loop over; reads records each call so a test can
+	// assert the exact filters and identity that were sent.
+	customers             []*commonv1.Customer
+	customersErr          error
+	clustersByCustomer    map[string][]*commonv1.Cluster
+	clustersErr           error
+	definitionsByCustomer map[string][]*commonv1.ReleaseDefinition
+	definitionsErr        error
+	routesByCluster       map[string][]*orchestratorv1.ClusterRoute
+	routesErr             error
+	reads                 []readCall
+}
+
+// readCall records one read RPC: which route was called, the filter it carried,
+// and the Authorization header the adapter attached.
+type readCall struct {
+	name   string
+	filter string
+	auth   string
 }
 
 func (f *fakeOrchestrator) ListReleaseInventory(context.Context, *connect.Request[orchestratorv1.ListReleaseInventoryRequest]) (*connect.Response[orchestratorv1.ListReleaseInventoryResponse], error) {
@@ -211,6 +239,81 @@ func (f *fakeOrchestrator) ExecuteEmergencyChange(_ context.Context, req *connec
 		}
 	}
 	return connect.NewResponse(response), nil
+}
+
+// --- read-only routes -------------------------------------------------------
+
+func (f *fakeOrchestrator) ListCustomers(_ context.Context, req *connect.Request[orchestratorv1.ListCustomersRequest]) (*connect.Response[orchestratorv1.ListCustomersResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recordRead("customers", fmt.Sprintf("include_disabled=%t", req.Msg.GetIncludeDisabled()), req)
+	if f.customersErr != nil {
+		return nil, f.customersErr
+	}
+	return connect.NewResponse(&orchestratorv1.ListCustomersResponse{Customers: f.customers}), nil
+}
+
+func (f *fakeOrchestrator) ListClusters(_ context.Context, req *connect.Request[orchestratorv1.ListClustersRequest]) (*connect.Response[orchestratorv1.ListClustersResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recordRead("clusters", req.Msg.GetCustomerId(), req)
+	if f.clustersErr != nil {
+		return nil, f.clustersErr
+	}
+	return connect.NewResponse(&orchestratorv1.ListClustersResponse{
+		Clusters: f.clustersByCustomer[req.Msg.GetCustomerId()],
+	}), nil
+}
+
+func (f *fakeOrchestrator) ListReleaseDefinitions(_ context.Context, req *connect.Request[orchestratorv1.ListReleaseDefinitionsRequest]) (*connect.Response[orchestratorv1.ListReleaseDefinitionsResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recordRead("definitions", req.Msg.GetCustomerId(), req)
+	if f.definitionsErr != nil {
+		return nil, f.definitionsErr
+	}
+	return connect.NewResponse(&orchestratorv1.ListReleaseDefinitionsResponse{
+		Definitions: f.definitionsByCustomer[req.Msg.GetCustomerId()],
+	}), nil
+}
+
+func (f *fakeOrchestrator) GetClusterRoutes(_ context.Context, req *connect.Request[orchestratorv1.GetClusterRoutesRequest]) (*connect.Response[orchestratorv1.GetClusterRoutesResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recordRead("routes", req.Msg.GetClusterId(), req)
+	if f.routesErr != nil {
+		return nil, f.routesErr
+	}
+	return connect.NewResponse(&orchestratorv1.GetClusterRoutesResponse{
+		Routes: f.routesByCluster[req.Msg.GetClusterId()],
+	}), nil
+}
+
+// recordRead appends one observation. The caller holds f.mu.
+func (f *fakeOrchestrator) recordRead(name, filter string, req interface{ Header() http.Header }) {
+	f.reads = append(f.reads, readCall{name: name, filter: filter, auth: req.Header().Get("Authorization")})
+}
+
+// readObservations returns a copy of the recorded read calls.
+func (f *fakeOrchestrator) readObservations() []readCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]readCall(nil), f.reads...)
+}
+
+// setInventorySources installs the per-parent read sources.
+func (f *fakeOrchestrator) setInventorySources(
+	customers []*commonv1.Customer,
+	clusters map[string][]*commonv1.Cluster,
+	definitions map[string][]*commonv1.ReleaseDefinition,
+	routes map[string][]*orchestratorv1.ClusterRoute,
+) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.customers = customers
+	f.clustersByCustomer = clusters
+	f.definitionsByCustomer = definitions
+	f.routesByCluster = routes
 }
 
 // --- synchronized test accessors -------------------------------------------
@@ -334,6 +437,85 @@ func (f *fakeOrchestrator) lastEmergencyReplicas(fallback int32) int32 {
 	return f.emergencies[len(f.emergencies)-1].GetSetReplicas()
 }
 
+// fakeBundle serves the definition-scoped bundle routes.
+type fakeBundle struct {
+	orchestratorv1connect.UnimplementedBundleServiceHandler
+
+	mu sync.Mutex
+
+	bundlesByDefinition map[string][]*orchestratorv1.BundleSummary
+	listErr             error
+	listCalls           []readCall
+
+	details  map[string]*orchestratorv1.BundleDetail
+	getErr   error
+	getCalls []*orchestratorv1.GetBundleRequest
+	getAuth  []string
+}
+
+func (f *fakeBundle) ListBundles(_ context.Context, req *connect.Request[orchestratorv1.ListBundlesRequest]) (*connect.Response[orchestratorv1.ListBundlesResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listCalls = append(f.listCalls, readCall{
+		name:   "bundles",
+		filter: req.Msg.GetReleaseDefinitionId(),
+		auth:   req.Header().Get("Authorization"),
+	})
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return connect.NewResponse(&orchestratorv1.ListBundlesResponse{
+		Bundles: f.bundlesByDefinition[req.Msg.GetReleaseDefinitionId()],
+	}), nil
+}
+
+func (f *fakeBundle) GetBundle(_ context.Context, req *connect.Request[orchestratorv1.GetBundleRequest]) (*connect.Response[orchestratorv1.GetBundleResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.getCalls = append(f.getCalls, req.Msg)
+	f.getAuth = append(f.getAuth, req.Header().Get("Authorization"))
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	detail, ok := f.details[bundleKey(req.Msg.GetReleaseDefinitionId(), req.Msg.GetBundleId())]
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("bundle not found"))
+	}
+	return connect.NewResponse(&orchestratorv1.GetBundleResponse{Bundle: detail}), nil
+}
+
+// bundleKey scopes a bundle to its definition, because GetBundle is a
+// definition-scoped read.
+func bundleKey(definitionID, bundleID string) string {
+	return definitionID + "|" + bundleID
+}
+
+func (f *fakeBundle) bundleListObservations() []readCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]readCall(nil), f.listCalls...)
+}
+
+func (f *fakeBundle) bundleGetObservations() (requests []*orchestratorv1.GetBundleRequest, auth []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*orchestratorv1.GetBundleRequest(nil), f.getCalls...), append([]string(nil), f.getAuth...)
+}
+
+// setBundle installs one definition-scoped bundle and its detail.
+func (f *fakeBundle) setBundle(definitionID string, summary *orchestratorv1.BundleSummary, detail *orchestratorv1.BundleDetail) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.bundlesByDefinition == nil {
+		f.bundlesByDefinition = map[string][]*orchestratorv1.BundleSummary{}
+	}
+	f.bundlesByDefinition[definitionID] = append(f.bundlesByDefinition[definitionID], summary)
+	if f.details == nil {
+		f.details = map[string]*orchestratorv1.BundleDetail{}
+	}
+	f.details[bundleKey(definitionID, summary.GetId())] = detail
+}
+
 // fakeOperator serves the operator gateway's session route so the control-plane
 // barrier can be exercised through the real generated client.
 type fakeOperator struct {
@@ -376,18 +558,30 @@ func (f *fakeOperator) callCount() int {
 	return f.calls
 }
 
+// setError makes the session route fail, which is what an operator gateway
+// without an established control stream answers.
+func (f *fakeOperator) setError(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
+}
+
 // harness bundles the connector under test with the fakes it talks to.
 type harness struct {
 	connector *Connector
 	auth      *fakeAuth
 	orch      *fakeOrchestrator
 	operator  *fakeOperator
+	bundle    *fakeBundle
 
 	cfg     *e2e.Config
 	clients *e2e.ClientBundle
 	server  *httptest.Server
 
 	healthCode atomic.Int32
+	readyCode  atomic.Int32
+	envStatus  atomic.Int32
+	envBody    atomic.Value
 }
 
 // newHarness wires a real Connector over in-process Connect handlers, so every
@@ -399,16 +593,41 @@ func newHarness(t *testing.T) *harness {
 	auth := &fakeAuth{}
 	orch := &fakeOrchestrator{operations: map[string]*orchestratorv1.Operation{}, emergency: map[string]*orchestratorv1.EmergencyResult{}}
 	operator := &fakeOperator{}
+	bundle := &fakeBundle{}
 
-	h := &harness{connector: nil, auth: auth, orch: orch, operator: operator}
+	h := &harness{connector: nil, auth: auth, orch: orch, operator: operator, bundle: bundle}
 	h.healthCode.Store(http.StatusOK)
+	h.readyCode.Store(http.StatusOK)
+	h.envStatus.Store(http.StatusOK)
+	h.envBody.Store(defaultEnvironmentBody)
 
 	mux := http.NewServeMux()
 	mux.Handle(authv1connect.NewAuthServiceHandler(auth))
 	mux.Handle(orchestratorv1connect.NewOrchestratorServiceHandler(orch))
+	mux.Handle(orchestratorv1connect.NewBundleServiceHandler(bundle))
 	mux.Handle(operatorv1connect.NewOperatorServiceHandler(operator))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(int(h.healthCode.Load()))
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(int(h.readyCode.Load()))
+	})
+	mux.HandleFunc("/environment", func(w http.ResponseWriter, _ *http.Request) {
+		status := int(h.envStatus.Load())
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		body, ok := h.envBody.Load().(string)
+		if !ok {
+			body = defaultEnvironmentBody
+		}
+		written, writeErr := fmt.Fprint(w, body)
+		if writeErr != nil {
+			t.Logf("write environment body: wrote %d of %d bytes: %v", written, len(body), writeErr)
+		}
 	})
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
@@ -429,8 +648,44 @@ func newHarness(t *testing.T) *harness {
 	return h
 }
 
+// defaultEnvironmentBody is the /environment payload every healthy fake
+// endpoint answers. It mirrors the four-field contract of REQ-065.
+const defaultEnvironmentBody = `{"service":"release-orchestrator","environment":"test","environment_id":"livewire-unit","production":false}`
+
 // setHealth controls the /health status served to the control-plane barrier.
 func (h *harness) setHealth(code int) { h.healthCode.Store(int32(code)) }
+
+// setReady controls the /readyz status served to the control-plane observer.
+func (h *harness) setReady(code int) { h.readyCode.Store(int32(code)) }
+
+// setEnvironment controls the /environment status and body.
+func (h *harness) setEnvironment(status int, body string) {
+	h.envStatus.Store(int32(status))
+	if body != "" {
+		h.envBody.Store(body)
+	}
+}
+
+// newObserver builds the control-plane observer over the harness server.
+func (h *harness) newObserver(t *testing.T) *ControlPlaneObserver {
+	t.Helper()
+	observer, err := NewControlPlaneObserver(h.cfg, h.connector)
+	if err != nil {
+		t.Fatalf("NewControlPlaneObserver() error = %v", err)
+	}
+	return observer.WithHTTPClient(h.server.Client())
+}
+
+// newReader builds the read-only inventory/bundle reader over the harness
+// connector.
+func (h *harness) newReader(t *testing.T) *FormalReader {
+	t.Helper()
+	reader, err := NewFormalReader(h.connector)
+	if err != nil {
+		t.Fatalf("NewFormalReader() error = %v", err)
+	}
+	return reader
+}
 
 // newWaiter builds the control-plane barrier over the harness server.
 func (h *harness) newWaiter(t *testing.T) *ControlPlaneWaiter {
@@ -451,7 +706,16 @@ func (h *harness) newWaiter(t *testing.T) *ControlPlaneWaiter {
 // real run.
 func loadTestConfig(t *testing.T, endpoint string) *e2e.Config {
 	t.Helper()
+	return loadTestConfigWithPasswordEnv(t, endpoint, "E2E_RUNNER_PASSWORD")
+}
 
+// loadTestConfigWithPasswordEnv is loadTestConfig with an explicit password
+// environment variable, so a test can exercise the unauthenticated path without
+// t.Setenv (which forbids t.Parallel).
+func loadTestConfigWithPasswordEnv(t *testing.T, endpoint, passwordEnv string) *e2e.Config {
+	t.Helper()
+
+	kubeconfigPath := writeTestKubeconfig(t)
 	body := fmt.Sprintf(`environment: test
 environment_id: livewire-unit
 endpoints:
@@ -464,9 +728,9 @@ endpoints:
 credentials:
   e2e_runner:
     username: e2e-runner
-    password_env: E2E_RUNNER_PASSWORD
+    password_env: %q
 k3d:
-  kubeconfig: "data/kubeconfig.yaml"
+  kubeconfig: %q
   test_namespace: "release-manager-dev"
   restart_targets:
     namespace: "release-manager-dev"
@@ -481,7 +745,7 @@ seed:
     routes_basic: 1
     definitions_basic: 1
     bundles: 1
-    e2e_definition_ids: ["e2e-release-target", "e2e-isolation-target", "e2e-restart-target"]
+    e2e_definition_ids: ["e2e-release-target", "e2e-isolation-target", "e2e-emergency-target", "e2e-restart-target"]
   e2e_upgrade_targets:
     - definition_id: "e2e-release-target"
       bundle_id: "bundle-1"
@@ -492,7 +756,7 @@ seed:
     - definition_id: "e2e-restart-target"
       bundle_id: "bundle-1"
       values_revision_id: "values-1"
-`, endpoint, endpoint, endpoint, endpoint, endpoint, endpoint)
+`, endpoint, endpoint, endpoint, endpoint, endpoint, endpoint, passwordEnv, kubeconfigPath)
 
 	path := filepath.Join(t.TempDir(), "e2e-env-config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -503,6 +767,36 @@ seed:
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	return cfg
+}
+
+// writeTestKubeconfig writes a syntactically valid kubeconfig so the Specs
+// tests can build the typed clientset without a cluster: client-go parses the
+// config eagerly and connects lazily, so no API server is needed.
+func writeTestKubeconfig(t *testing.T) string {
+	t.Helper()
+
+	const body = `apiVersion: v1
+kind: Config
+clusters:
+  - name: livewire-test
+    cluster:
+      server: https://127.0.0.1:6443
+contexts:
+  - name: livewire-test
+    context:
+      cluster: livewire-test
+      user: livewire-test
+current-context: livewire-test
+users:
+  - name: livewire-test
+    user:
+      token: livewire-test-token
+`
+	path := filepath.Join(t.TempDir(), "kubeconfig.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
+	}
+	return path
 }
 
 // inventoryRow builds one inventory row for a definition.
