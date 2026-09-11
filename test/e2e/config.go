@@ -255,30 +255,23 @@ func ParseConfig(data []byte) (*Config, error) {
 	return &cfg, nil
 }
 
-// Validate checks the static schema and resolves the password named by
-// credentials.e2e_runner.password_env from the current process environment.
-func (c *Config) Validate() error {
-	if c == nil {
-		return configInvalid("config", "nil config")
-	}
-	if runID, ok := os.LookupEnv("E2E_RUN_ID"); ok {
-		if err := ValidateRunID(runID); err != nil {
-			return err
-		}
-	}
-	if strings.TrimSpace(c.Endpoints.ReleaseOrchestrator) == "" {
+// validateEndpoints requires the orchestrator endpoint and rejects any declared
+// endpoint that is not an absolute http(s) URL. Undeclared optional endpoints are
+// allowed and skipped.
+func validateEndpoints(endpoints Endpoints) error {
+	if strings.TrimSpace(endpoints.ReleaseOrchestrator) == "" {
 		return configInvalid("endpoints.release_orchestrator", "missing")
 	}
 	for _, endpoint := range []struct {
 		field string
 		value string
 	}{
-		{field: "endpoints.release_orchestrator", value: c.Endpoints.ReleaseOrchestrator},
-		{field: "endpoints.release_webhook", value: c.Endpoints.ReleaseWebhook},
-		{field: "endpoints.release_operator", value: c.Endpoints.ReleaseOperator},
-		{field: "endpoints.release_auth", value: c.Endpoints.ReleaseAuth},
-		{field: "endpoints.release_notifier", value: c.Endpoints.ReleaseNotifier},
-		{field: "endpoints.release_api", value: c.Endpoints.ReleaseAPI},
+		{field: "endpoints.release_orchestrator", value: endpoints.ReleaseOrchestrator},
+		{field: "endpoints.release_webhook", value: endpoints.ReleaseWebhook},
+		{field: "endpoints.release_operator", value: endpoints.ReleaseOperator},
+		{field: "endpoints.release_auth", value: endpoints.ReleaseAuth},
+		{field: "endpoints.release_notifier", value: endpoints.ReleaseNotifier},
+		{field: "endpoints.release_api", value: endpoints.ReleaseAPI},
 	} {
 		if endpoint.value == "" {
 			continue
@@ -287,12 +280,13 @@ func (c *Config) Validate() error {
 			return configInvalid(endpoint.field, "must be an absolute http or https URL")
 		}
 	}
-	if strings.TrimSpace(c.Environment) == "" {
-		return configInvalid("environment", "missing")
-	}
-	if strings.TrimSpace(c.EnvironmentID) == "" {
-		return configInvalid("environment_id", "missing")
-	}
+	return nil
+}
+
+// resolveCredentials validates the runner credential shape and resolves the
+// password named by its environment variable into the process-local field, which
+// is deliberately absent from the serialized representation.
+func (c *Config) resolveCredentials() error {
 	if strings.TrimSpace(c.Credentials.E2ERunner.Username) == "" {
 		return configInvalid("credentials.e2e_runner.username", "missing")
 	}
@@ -308,24 +302,31 @@ func (c *Config) Validate() error {
 		return configInvalid("credentials.e2e_runner.password_env", "environment variable is not set")
 	}
 	c.password = password
+	return nil
+}
 
-	if strings.TrimSpace(c.K3d.Kubeconfig) == "" {
+// validateK3d validates cluster access and the restart barrier targets derived
+// from the control plane. The barrier namespace must match the test namespace,
+// because the restart stage acts on what the same run deployed.
+func validateK3d(k3d K3dConfig) error {
+	if strings.TrimSpace(k3d.Kubeconfig) == "" {
 		return configInvalid("k3d.kubeconfig", "missing")
 	}
-	if err := validateDNS1123Label(c.K3d.TestNamespace); err != nil {
+	if err := validateDNS1123Label(k3d.TestNamespace); err != nil {
 		return configInvalid("k3d.test_namespace", "must be a DNS-1123 label")
 	}
-	if strings.TrimSpace(c.K3d.RestartTargets.Namespace) == "" {
+	if strings.TrimSpace(k3d.RestartTargets.Namespace) == "" {
 		return configInvalid("k3d.restart_targets.namespace", "missing")
 	}
-	if c.K3d.RestartTargets.Namespace != c.K3d.TestNamespace {
+	if k3d.RestartTargets.Namespace != k3d.TestNamespace {
 		return configInvalid("k3d.restart_targets.namespace", "must equal k3d.test_namespace")
 	}
-	if len(c.K3d.RestartTargets.Deployments) != 3 {
+	if len(k3d.RestartTargets.Deployments) != 3 {
 		return configInvalid("k3d.restart_targets.deployments", "must contain exactly three deployment names")
 	}
-	seenDeployments := make(map[string]struct{}, len(c.K3d.RestartTargets.Deployments))
-	for _, deployment := range c.K3d.RestartTargets.Deployments {
+	seenDeployments := make(map[string]struct{}, len(k3d.RestartTargets.Deployments))
+	for index := range k3d.RestartTargets.Deployments {
+		deployment := k3d.RestartTargets.Deployments[index]
 		if err := validateDNS1123Label(deployment); err != nil {
 			return configInvalid("k3d.restart_targets.deployments", "contains an invalid deployment name")
 		}
@@ -334,23 +335,53 @@ func (c *Config) Validate() error {
 		}
 		seenDeployments[deployment] = struct{}{}
 	}
+	return nil
+}
 
-	if len(c.Seed.Customers) == 0 {
+// validateSeed validates the fixture seeds and the identities bound to them.
+func validateSeed(seed SeedConfig) error {
+	if len(seed.Customers) == 0 {
 		return configInvalid("seed.customers", "missing")
 	}
-	if c.Seed.ClustersPerCustomer < 1 {
+	if seed.ClustersPerCustomer < 1 {
 		return configInvalid("seed.clusters_per_customer", "must be positive")
 	}
-	if strings.TrimSpace(c.Seed.FixtureVersion) == "" {
+	if strings.TrimSpace(seed.FixtureVersion) == "" {
 		return configInvalid("seed.fixture_version", "missing")
 	}
-	if err := validateExpectedIdentity(c.Seed.ExpectedIdentity); err != nil {
+	if err := validateExpectedIdentity(seed.ExpectedIdentity); err != nil {
 		return err
 	}
-	if err := validateE2EDefinitions(c.Seed); err != nil {
+	return validateE2EDefinitions(seed)
+}
+
+// Validate checks the static schema and resolves the password named by
+// credentials.e2e_runner.password_env from the current process environment.
+func (c *Config) Validate() error {
+	if c == nil {
+		return configInvalid("config", "nil config")
+	}
+	if runID, ok := os.LookupEnv("E2E_RUN_ID"); ok {
+		if err := ValidateRunID(runID); err != nil {
+			return err
+		}
+	}
+	if err := validateEndpoints(c.Endpoints); err != nil {
 		return err
 	}
-	return nil
+	if strings.TrimSpace(c.Environment) == "" {
+		return configInvalid("environment", "missing")
+	}
+	if strings.TrimSpace(c.EnvironmentID) == "" {
+		return configInvalid("environment_id", "missing")
+	}
+	if err := c.resolveCredentials(); err != nil {
+		return err
+	}
+	if err := validateK3d(c.K3d); err != nil {
+		return err
+	}
+	return validateSeed(c.Seed)
 }
 
 // Password returns the process-local e2e-runner password resolved by Validate.
