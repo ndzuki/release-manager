@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -115,7 +116,13 @@ func (r *LiveRecovery) CancelOperation(ctx context.Context, operationID, reason 
 		Reason:      reason,
 	})
 	request.Header().Set("Idempotency-Key", r.idempotencyKey("cleanup-cancel", operationID))
-	_, err := r.clients.orchestrator.CancelOperation(ctx, request)
+	_, err := recoveryWrite(ctx, func(ctx context.Context) (string, error) {
+		response, err := r.clients.orchestrator.CancelOperation(ctx, request)
+		if err != nil {
+			return "", err
+		}
+		return response.Msg.GetOperation().GetOperationId(), nil
+	})
 	return err
 }
 
@@ -132,7 +139,13 @@ func (r *LiveRecovery) RollbackRelease(ctx context.Context, definitionID string,
 		Reason:                  reason,
 	})
 	request.Header().Set("Idempotency-Key", r.idempotencyKey("cleanup-rollback", definitionID))
-	_, err := r.clients.orchestrator.RollbackRelease(ctx, request)
+	_, err := recoveryWrite(ctx, func(ctx context.Context) (string, error) {
+		response, err := r.clients.orchestrator.RollbackRelease(ctx, request)
+		if err != nil {
+			return "", err
+		}
+		return response.Msg.GetOperationId(), nil
+	})
 	return err
 }
 
@@ -144,6 +157,16 @@ func (r *LiveRecovery) RollbackRelease(ctx context.Context, definitionID string,
 // state is exactly the recovery semantics cleanup wants. The Idempotency-Key
 // header and the message-level key are both required by the write contract
 // (ADR-009).
+//
+// The restore is confirmed end to end, not just dispatched. Accepting the
+// command and applying it are separate steps: the orchestrator returns as soon
+// as it has written the command to the agent's stream, so a command accepted
+// while that stream is reconnecting can be accepted and never applied. Cleanup
+// then logged "restored baseline replicas" while the workload stayed at the count
+// the run had set (real smoke 2026-09-11). Each attempt therefore awaits the
+// operation's own terminal state, and an attempt that was accepted but never
+// applied is re-issued under a fresh key — the key must change or the server
+// dedupes the re-issue against the operation that just went nowhere.
 //
 // The Recovery interface takes a reason for symmetry with the other recovery
 // writes; ExecuteEmergencyChangeRequest carries no reason field, so it is
@@ -158,15 +181,172 @@ func (r *LiveRecovery) SetReplicas(ctx context.Context, definitionID, workloadRe
 	if replicas < 0 {
 		return errors.New("set replicas: negative replica count")
 	}
-	request := authorizedRequest(r.token(), &orchestratorv1.ExecuteEmergencyChangeRequest{
-		ReleaseDefinitionId: definitionID,
-		WorkloadRef:         workloadRef,
-		ConvergenceStrategy: orchestratorv1.ConvergenceStrategy_REVERT_ON_NEXT_RECONCILE,
-		SetReplicas:         replicas,
-		IdempotencyKey:      r.idempotencyKey("cleanup-set-replicas", definitionID+"/"+workloadRef),
-	})
-	_, err := r.clients.orchestrator.ExecuteEmergencyChange(ctx, request)
-	return err
+	deadline := time.Now().Add(recoveryDeliveryRetryWindow)
+	for attempt := 1; ; attempt++ {
+		request := authorizedRequest(r.token(), &orchestratorv1.ExecuteEmergencyChangeRequest{
+			ReleaseDefinitionId: definitionID,
+			WorkloadRef:         workloadRef,
+			ConvergenceStrategy: orchestratorv1.ConvergenceStrategy_REVERT_ON_NEXT_RECONCILE,
+			SetReplicas:         replicas,
+			IdempotencyKey:      r.emergencyAttemptKey(definitionID+"/"+workloadRef, attempt),
+		})
+		operationID, err := recoveryWrite(ctx, func(ctx context.Context) (string, error) {
+			response, err := r.clients.orchestrator.ExecuteEmergencyChange(ctx, request)
+			if err != nil {
+				return "", err
+			}
+			return response.Msg.GetOperationId(), nil
+		})
+		if err == nil {
+			err = r.awaitEmergencyApplied(ctx, operationID)
+		}
+		if err == nil {
+			return nil
+		}
+		// A rejected write is rejected identically forever; only a delivery
+		// failure or an operation that never reached success is worth re-issuing.
+		if !retryableEmergencyFailure(err) || ctx.Err() != nil || !time.Now().Before(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(recoveryDeliveryRetryInterval):
+		}
+	}
+}
+
+// emergencyAttemptKey scopes the emergency write to one delivery attempt. The
+// first attempt keeps the invocation's key so a re-entered cleanup still dedupes
+// against itself; later attempts must differ or the server replays the operation
+// whose effect never landed.
+func (r *LiveRecovery) emergencyAttemptKey(target string, attempt int) string {
+	key := r.idempotencyKey("cleanup-set-replicas", target)
+	if attempt <= 1 {
+		return key
+	}
+	return key + "-attempt-" + strconv.Itoa(attempt)
+}
+
+// awaitEmergencyApplied polls the emergency operation until it reaches a
+// successful terminal state. A terminal failure is returned as an error so the
+// caller reports the workload as residual instead of as restored.
+func (r *LiveRecovery) awaitEmergencyApplied(ctx context.Context, operationID string) error {
+	if strings.TrimSpace(operationID) == "" {
+		// Success without an operation identity cannot be confirmed, so it is a
+		// failure rather than an assumption.
+		return errors.New("emergency change: response carried no operation id")
+	}
+	ticker := time.NewTicker(emergencyApplyPollInterval)
+	defer ticker.Stop()
+	for {
+		response, err := r.clients.orchestrator.GetOperation(ctx,
+			authorizedRequest(r.token(), &orchestratorv1.GetOperationRequest{OperationId: operationID}))
+		if err != nil {
+			return err
+		}
+		operation := response.Msg.GetOperation()
+		state := operation.GetState().String()
+		if terminalState(state) {
+			if operationSucceeded(state) {
+				return nil
+			}
+			return fmt.Errorf("emergency change %s reached %s", operationID, state)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("emergency change %s still %s: %w", operationID, state, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+// operationSucceeded reports whether an operation state is the success terminal
+// state, using the same vocabulary as terminalState. The stage package would
+// answer this directly, but it imports this one.
+func operationSucceeded(state string) bool {
+	switch strings.ToUpper(strings.TrimSpace(state)) {
+	case "OPERATION_STATUS_SUCCEEDED", "SUCCEEDED":
+		return true
+	default:
+		return false
+	}
+}
+
+// retryableEmergencyFailure reports whether a failed restore is worth another
+// attempt. Delivery failures are retryable, and so is an operation that reached a
+// non-success terminal state, because that is exactly the accepted-but-never-
+// applied case this loop exists for. A rejected request is not: it fails the same
+// way every time.
+func retryableEmergencyFailure(err error) bool {
+	if transientRecoveryError(err) {
+		return true
+	}
+	// An operation that ended failed, cancelled, or timed out produced no error
+	// code, so it is recognised by its own wording.
+	return strings.HasPrefix(err.Error(), "emergency change ")
+}
+
+// emergencyApplyPollInterval is how often a confirmed restore re-reads the
+// operation. The orchestrator's own emergency operation timeout is 30s, so a
+// tighter poll only spends reads.
+const emergencyApplyPollInterval = 2 * time.Second
+
+// recoveryDeliveryRetryInterval is how long to wait before re-attempting a
+// recovery write the orchestrator could not deliver.
+const recoveryDeliveryRetryInterval = 5 * time.Second
+
+// recoveryDeliveryRetryWindow bounds how long a recovery write waits for the
+// operator agent to come back. The agent reconnects on its own backoff after the
+// restart stage restarts the orchestrator and drops every command stream, and
+// that backoff is measured in tens of seconds, so the window has to span it while
+// staying far below an unbounded wait.
+const recoveryDeliveryRetryWindow = 90 * time.Second
+
+// recoveryWrite performs one recovery write, re-attempting while the failure is a
+// delivery condition a later attempt can clear, and returns the operation id the
+// response carried. Repeating is safe because every recovery write is idempotent
+// under its key: the key and the body are fixed for the invocation, so the server
+// dedupes a repeat rather than applying it twice.
+//
+// It exists because the prompt flow is `make e2e-all` immediately followed by
+// `make e2e-cleanup`, and the run's own restart stage is what disconnects the
+// agent the cleanup then needs (real smoke 2026-09-11: that pairing failed with
+// "unavailable: emergency command delivery failed" and left the workload at the
+// count the run had set).
+func recoveryWrite(ctx context.Context, write func(context.Context) (string, error)) (string, error) {
+	deadline := time.Now().Add(recoveryDeliveryRetryWindow)
+	for {
+		operationID, err := write(ctx)
+		if err == nil {
+			return operationID, nil
+		}
+		if !transientRecoveryError(err) || ctx.Err() != nil || !time.Now().Before(deadline) {
+			return "", err
+		}
+		select {
+		case <-ctx.Done():
+			return "", err
+		case <-time.After(recoveryDeliveryRetryInterval):
+		}
+	}
+}
+
+// transientRecoveryError reports whether a recovery write failed for a reason a
+// later attempt can clear. Only delivery-level conditions qualify: a rejected
+// write (invalid argument, permission denied, failed precondition) would be
+// rejected identically forever and must surface on the first attempt.
+//
+// CodeUnknown is included because a transport-level failure that never reached
+// the server is reported as Unknown rather than as a status code, which is the
+// same reason the session waiter treats it as transient.
+func transientRecoveryError(err error) bool {
+	switch connect.CodeOf(err) {
+	case connect.CodeUnavailable, connect.CodeDeadlineExceeded, connect.CodeUnknown:
+		return true
+	default:
+		return false
+	}
 }
 
 // authorizedRequest builds a connect request carrying the runner bearer token

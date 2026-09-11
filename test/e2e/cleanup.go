@@ -41,9 +41,8 @@ type CleanupRow struct {
 // Recovery is the formal-API seam used by RunCleanup (AC-066-38/34/07/23/28).
 //
 // Implementations authenticate as e2e-runner and perform only formal writes:
-// CancelOperation, RollbackRelease, and (in a future revision once baseline
-// collection records replicas) EmergencyChange. They never patch Kubernetes,
-// write the database, or shell out.
+// CancelOperation, RollbackRelease, and EmergencyChange (the replica restore).
+// They never patch Kubernetes, write the database, or shell out.
 type Recovery interface {
 	ListReleaseInventory(ctx context.Context) ([]CleanupRow, error)
 	CancelOperation(ctx context.Context, operationID, reason string) error
@@ -326,14 +325,31 @@ func sanitizeError(err error) string {
 	return message
 }
 
-// CleanupDeadline returns a bounded cleanup context derived from root. The
-// cleanup grace is capped by the contract's 30s cleanup timeout (REQ-066).
+// defaultCleanupRecoveryTimeout bounds the standalone `cmd/e2e cleanup` recovery
+// command.
+//
+// It is deliberately not lifecycle.go's defaultCleanupTimeout (30s). That is the
+// REQ-066 `cleanup_timeout` grace, which bounds draining a stage's own
+// compensations; this budget has to span a window the run itself creates. The
+// restart stage restarts the orchestrator and drops every operator command
+// stream, so the agents reconnect on their own backoff — measured at ~32s in the
+// real smoke — and each replica restore then needs its own apply window on top.
+//
+// A 30s budget expired before the emergency cluster's agent returned, so every
+// restore failed however often it was retried, and cleanup reported a residual it
+// could not have avoided (real smoke 2026-09-11). D-032 separates the two budgets
+// and fixes this one at a value that spans the reconnect.
+const defaultCleanupRecoveryTimeout = 3 * time.Minute
+
+// CleanupDeadline returns a bounded recovery context derived from root, so
+// `make e2e-all` immediately followed by `make e2e-cleanup` is a supported
+// pairing rather than a race against the agent reconnect the run just caused.
 func CleanupDeadline(root context.Context, cleanupTimeout time.Duration) (context.Context, context.CancelFunc) {
 	if root == nil {
 		root = context.Background()
 	}
 	if cleanupTimeout <= 0 {
-		cleanupTimeout = 30 * time.Second
+		cleanupTimeout = defaultCleanupRecoveryTimeout
 	}
 	return context.WithTimeout(root, cleanupTimeout)
 }

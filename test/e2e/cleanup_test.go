@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 type recoveryFake struct {
@@ -309,5 +310,30 @@ func TestCleanupDeadlineBoundsContext(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("cleanup context expired immediately")
 	default:
+	}
+}
+
+// TestCleanupDeadlineSpansTheRunInducedAgentReconnect pins the property the
+// default exists for. The run's restart stage restarts the orchestrator and drops
+// every operator command stream, and the agents reconnect on their own backoff
+// (~32s in the real smoke) before any restore can be applied. A budget that
+// expires first makes every recovery write fail regardless of retries: cleanup
+// then reports residuals it could not have avoided.
+func TestCleanupDeadlineSpansTheRunInducedAgentReconnect(t *testing.T) {
+	t.Parallel()
+
+	// The smallest budget that must be exceeded: the observed reconnect delay
+	// plus one emergency operation apply window (the orchestrator's own
+	// operation timeout is 30s).
+	const mustExceed = 62 * time.Second
+
+	ctx, cancel := CleanupDeadline(context.Background(), 0)
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("CleanupDeadline() carries no deadline")
+	}
+	if budget := time.Until(deadline); budget <= mustExceed {
+		t.Fatalf("cleanup budget = %s, want more than %s so a restore can outlast the agent reconnect", budget, mustExceed)
 	}
 }
