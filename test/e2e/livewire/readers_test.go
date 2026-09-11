@@ -30,6 +30,10 @@ var declaredServiceNames = []string{
 	"release_api",
 }
 
+// tcpOnlyServiceName is the one declared endpoint with no HTTP read-only
+// surface: the orchestrator's mTLS agent gateway, observed by reachability.
+const tcpOnlyServiceName = "release_operator"
+
 // closedEndpoint returns an absolute URL that refuses connections: a listener
 // is bound and immediately closed, so the port is free and the refusal is
 // deterministic rather than dependent on the host's port allocation.
@@ -77,6 +81,17 @@ func TestControlPlaneObserverReportsEveryDeclaredService(t *testing.T) {
 		if !service.Ready {
 			t.Fatalf("service %s Ready = false, want true", service.Name)
 		}
+		if service.Name == tcpOnlyServiceName {
+			// The mTLS agent gateway has no HTTP read-only surface: it is
+			// observed by reachability and reports no environment metadata.
+			if service.Transport != stages.TransportTCP {
+				t.Fatalf("service %s Transport = %q, want %q", service.Name, service.Transport, stages.TransportTCP)
+			}
+			if service.Environment != (stages.EnvironmentObservation{}) {
+				t.Fatalf("service %s Environment = %+v, want an empty observation", service.Name, service.Environment)
+			}
+			continue
+		}
 		want := stages.EnvironmentObservation{
 			Service:       "release-orchestrator",
 			Environment:   "test",
@@ -122,6 +137,19 @@ func TestControlPlaneObserverObservesProbeFailuresWithoutError(t *testing.T) {
 		t.Fatalf("ObserveControlPlane() error = %v, want an observed failure", err)
 	}
 	for _, service := range observation.Services {
+		if service.Name == tcpOnlyServiceName {
+			// Reachability is independent of the HTTP probe statuses: the fake
+			// listener still accepts connections, so this service stays healthy
+			// and only the HTTP services report the injected failures.
+			if service.Transport != stages.TransportTCP {
+				t.Fatalf("service %s Transport = %q, want %q", service.Name, service.Transport, stages.TransportTCP)
+			}
+			if !service.Healthy || !service.Ready {
+				t.Fatalf("service %s reachability = healthy %t ready %t, want both true",
+					service.Name, service.Healthy, service.Ready)
+			}
+			continue
+		}
 		if service.Healthy {
 			t.Fatalf("service %s Healthy = true, want false", service.Name)
 		}

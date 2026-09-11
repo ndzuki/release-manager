@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -29,6 +30,9 @@ const maxProbeBody = 1 << 20
 // object, so anything larger is a protocol violation rather than a payload.
 const maxEnvironmentBody = 64 << 10
 
+// probeDialTimeout bounds the reachability probe of a TLS-only listener.
+const probeDialTimeout = 5 * time.Second
+
 // environmentPayload mirrors the GET /environment contract every management
 // plane service answers (REQ-065). The E2E harness deliberately imports no
 // internal package, so the four wire field names are restated here; the
@@ -46,6 +50,9 @@ type environmentPayload struct {
 type endpointProbe struct {
 	name     string
 	endpoint string
+	// tcpOnly marks a TLS-only listener with no read-only HTTP surface. It is
+	// observed by reachability alone (see stages.TransportTCP).
+	tcpOnly bool
 }
 
 // ControlPlaneObserver implements stages.ControlPlaneObserver over the declared
@@ -128,7 +135,9 @@ func declaredEndpoints(cfg *e2e.Config) ([]endpointProbe, error) {
 	declared := []endpointProbe{
 		{name: "release_orchestrator", endpoint: cfg.Endpoints.ReleaseOrchestrator},
 		{name: "release_webhook", endpoint: cfg.Endpoints.ReleaseWebhook},
-		{name: "release_operator", endpoint: cfg.Endpoints.ReleaseOperator},
+		// The operator endpoint is the orchestrator's mTLS agent gateway: it
+		// has no HTTP read-only surface, so it is observed by reachability.
+		{name: "release_operator", endpoint: cfg.Endpoints.ReleaseOperator, tcpOnly: true},
 		{name: "release_auth", endpoint: cfg.Endpoints.ReleaseAuth},
 		{name: "release_notifier", endpoint: cfg.Endpoints.ReleaseNotifier},
 		{name: "release_api", endpoint: cfg.Endpoints.ReleaseAPI},
@@ -148,14 +157,56 @@ func declaredEndpoints(cfg *e2e.Config) ([]endpointProbe, error) {
 }
 
 // observeService reports what one endpoint answered across the three read-only
-// routes.
+// routes, or — for the mTLS agent gateway — whether it accepted a connection.
 func (o *ControlPlaneObserver) observeService(ctx context.Context, probe endpointProbe) stages.ServiceObservation {
+	if probe.tcpOnly {
+		reachable := o.probeTCP(ctx, probe.endpoint)
+		return stages.ServiceObservation{
+			Name:      probe.name,
+			Healthy:   reachable,
+			Ready:     reachable,
+			Transport: stages.TransportTCP,
+		}
+	}
 	return stages.ServiceObservation{
 		Name:        probe.name,
 		Healthy:     o.probeOK(ctx, probe.endpoint, "health"),
 		Ready:       o.probeOK(ctx, probe.endpoint, "readyz"),
 		Environment: o.probeEnvironment(ctx, probe.endpoint),
 	}
+}
+
+// probeTCP reports whether an endpoint's host:port accepted a TCP connection.
+// This is the only observation the mTLS agent gateway supports: it terminates
+// TLS and serves the OperatorService handlers, so a plain-HTTP probe is
+// rejected by the server before any route is matched.
+func (o *ControlPlaneObserver) probeTCP(ctx context.Context, endpoint string) bool {
+	address, err := probeAddress(endpoint)
+	if err != nil {
+		return false
+	}
+	dialer := &net.Dialer{Timeout: probeDialTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return false
+	}
+	// The probe only needs the connection; the close error is not actionable.
+	_ = conn.Close()
+	return true
+}
+
+// probeAddress resolves the host:port a reachability probe dials. It shares
+// the endpoint validation used by the HTTP probes so a mis-declared endpoint
+// fails the same way in both seams.
+func probeAddress(endpoint string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil {
+		return "", err
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("livewire: endpoint %q has no host", endpoint)
+	}
+	return parsed.Host, nil
 }
 
 // probeOK reports whether one route answered 200. Any other outcome (refused

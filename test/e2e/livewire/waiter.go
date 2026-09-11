@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -131,6 +132,9 @@ func (w *ControlPlaneWaiter) AwaitOperatorSession(ctx context.Context) error {
 type healthProbe struct {
 	service string
 	url     string
+	// tcpAddress is set for a TLS-only listener; exactly one of url and
+	// tcpAddress is populated.
+	tcpAddress string
 }
 
 // healthProbes resolves the health URL for every declared endpoint. Endpoints
@@ -139,10 +143,14 @@ func (w *ControlPlaneWaiter) healthProbes() ([]healthProbe, error) {
 	declared := []struct {
 		service  string
 		endpoint string
+		tcpOnly  bool
 	}{
 		{service: "release_orchestrator", endpoint: w.cfg.Endpoints.ReleaseOrchestrator},
 		{service: "release_webhook", endpoint: w.cfg.Endpoints.ReleaseWebhook},
-		{service: "release_operator", endpoint: w.cfg.Endpoints.ReleaseOperator},
+		// The operator endpoint is the orchestrator's mTLS agent gateway: it
+		// serves TLS-only Connect handlers with no /health route, so recovery
+		// is asserted by reachability (see stages.TransportTCP).
+		{service: "release_operator", endpoint: w.cfg.Endpoints.ReleaseOperator, tcpOnly: true},
 		{service: "release_auth", endpoint: w.cfg.Endpoints.ReleaseAuth},
 		{service: "release_notifier", endpoint: w.cfg.Endpoints.ReleaseNotifier},
 		{service: "release_api", endpoint: w.cfg.Endpoints.ReleaseAPI},
@@ -151,6 +159,14 @@ func (w *ControlPlaneWaiter) healthProbes() ([]healthProbe, error) {
 	for _, item := range declared {
 		endpoint := strings.TrimSpace(item.endpoint)
 		if endpoint == "" {
+			continue
+		}
+		if item.tcpOnly {
+			address, err := probeAddress(endpoint)
+			if err != nil {
+				return nil, fmt.Errorf("livewire: %s: %w", item.service, err)
+			}
+			probes = append(probes, healthProbe{service: item.service, tcpAddress: address})
 			continue
 		}
 		healthURL, err := healthURLFor(endpoint)
@@ -173,8 +189,19 @@ func healthURLFor(endpoint string) (string, error) {
 }
 
 // healthProbeSucceeds performs one health probe and drains the body so the
-// connection can be reused.
+// connection can be reused. A probe with a TCP address asserts reachability
+// instead, which is the only recovery signal a TLS-only listener offers.
 func (w *ControlPlaneWaiter) healthProbeSucceeds(ctx context.Context, probe healthProbe) (bool, error) {
+	if probe.tcpAddress != "" {
+		dialer := &net.Dialer{Timeout: probeDialTimeout}
+		conn, err := dialer.DialContext(ctx, "tcp", probe.tcpAddress)
+		if err != nil {
+			return false, nil
+		}
+		// The probe only needs the connection; close errors are not actionable.
+		_ = conn.Close()
+		return true, nil
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, probe.url, http.NoBody)
 	if err != nil {
 		return false, err

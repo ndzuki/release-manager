@@ -130,13 +130,41 @@ type EnvironmentObservation struct {
 	Production    bool
 }
 
+// Service observation transports. Every control-plane service exposes the
+// read-only /health, /readyz and /environment routes except the operator
+// gateway, which is the orchestrator's mTLS agent listener: it serves the
+// OperatorService Connect handlers over TLS only, so REQ-065 observes it by
+// accepting a TCP connection (deploy/dev/dev.sh: "operator 8084 is the
+// orchestrator's mTLS agent gateway (HTTPS), not an HTTP /readyz endpoint",
+// recorded from the 2026-08-24 real smoke where a plain-HTTP probe received
+// "Client sent an HTTP request to an HTTPS server").
+const (
+	// TransportHTTP is a service probed through its read-only HTTP routes.
+	TransportHTTP = "http"
+	// TransportTCP is a TLS-only listener probed by reachability alone.
+	TransportTCP = "tcp"
+)
+
 // ServiceObservation is the read-only health and environment result for one
 // control-plane endpoint.
 type ServiceObservation struct {
-	Name        string
-	Healthy     bool
-	Ready       bool
+	Name    string
+	Healthy bool
+	Ready   bool
+	// Transport records how the service was observed. An empty value is
+	// treated as TransportHTTP so existing fakes stay valid.
+	Transport string
+	// Environment is the /environment metadata. It is only observable for
+	// TransportHTTP services; a TransportTCP service leaves it empty.
 	Environment EnvironmentObservation
+}
+
+// observedTransport normalizes the transport of one observation.
+func observedTransport(service ServiceObservation) string {
+	if service.Transport == TransportTCP {
+		return TransportTCP
+	}
+	return TransportHTTP
 }
 
 // OperatorSessionObservation is the safe subset of an active operator session
@@ -238,7 +266,8 @@ func validateControlPlane(observation ControlPlaneObservation, expectedServices 
 
 	seen := make(map[string]struct{}, len(observation.Services))
 	var reference EnvironmentObservation
-	for index, service := range observation.Services {
+	haveReference := false
+	for _, service := range observation.Services {
 		if strings.TrimSpace(service.Name) == "" {
 			return newStageError(CodeEnvironmentUnhealthy, "control-plane", "service name missing")
 		}
@@ -249,19 +278,29 @@ func validateControlPlane(observation ControlPlaneObservation, expectedServices 
 		if !service.Healthy || !service.Ready {
 			return newStageError(CodeEnvironmentUnhealthy, service.Name, "service is not healthy and ready")
 		}
+		// A TLS-only listener has no /environment route, so requiring metadata
+		// from it would fail on every environment. Reachability above is the
+		// whole assertion such a service can support.
+		if observedTransport(service) == TransportTCP {
+			continue
+		}
 		if strings.TrimSpace(service.Environment.EnvironmentID) == "" || strings.TrimSpace(service.Environment.Environment) == "" {
 			return newStageError(CodeEnvironmentUnhealthy, service.Name, "environment metadata missing")
 		}
 		if service.Environment.Production {
 			return newStageError(CodeEnvironmentUnhealthy, service.Name, "production environment rejected")
 		}
-		if index == 0 {
+		if !haveReference {
 			reference = service.Environment
+			haveReference = true
 			continue
 		}
 		if service.Environment.Environment != reference.Environment || service.Environment.EnvironmentID != reference.EnvironmentID {
 			return newStageError(CodeEnvironmentUnhealthy, service.Name, "environment metadata inconsistent")
 		}
+	}
+	if !haveReference {
+		return newStageError(CodeEnvironmentUnhealthy, "control-plane", "no service reported environment metadata")
 	}
 
 	session := observation.OperatorSession
