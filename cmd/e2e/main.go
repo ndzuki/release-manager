@@ -187,14 +187,16 @@ func runStages(args []string, stdout, stderr io.Writer) int {
 	})
 }
 
-// collectBaseline samples the pre-run replica counts, writes baseline.json, and
-// returns the artifact with its stable digest. The bool reports whether the
+// collectBaseline samples the pre-run recovery target — each release's current
+// revision and each emergency workload's replica count — writes baseline.json,
+// and returns the artifact with its stable digest. The bool reports whether the
 // caller may continue; a false value has already been logged.
 //
-// The replica sample is a recovery aid: a failed sample is recorded and the run
-// continues, because the "baseline carries no replicas" degradation is a
-// documented contract (cleanup reports it as skipped_replicas_restore) and
-// losing a recovery aid must not fail a run whose stages could still succeed.
+// Both samples are recovery aids: a failed sample is recorded and the run
+// continues, because the corresponding "baseline carries none" degradation is a
+// documented contract (cleanup reports it as skipped_revision_restore or
+// skipped_replicas_restore) and losing a recovery aid must not fail a run whose
+// stages could still succeed.
 func collectBaseline(config *e2e.Config, options runOptions, runID string, logger *slog.Logger) (baselineArtifact, string, bool) {
 	baseline := baselineArtifact{
 		RunID:          runID,
@@ -210,6 +212,16 @@ func collectBaseline(config *e2e.Config, options runOptions, runID string, logge
 		logger.Warn("baseline replica collection failed; cleanup replicas restore will degrade", "error", safeErrorMessage(replicaErr))
 	}
 	baseline.Identity.WorkloadReplicas = replicas
+	// The revision sample is the other half of the recovery target: cleanup rolls
+	// a definition back to the revision recorded here, so a baseline without it
+	// can only skip that restore.
+	revisionBaselineCtx, cancelRevisionBaseline := context.WithTimeout(context.Background(), baselineReplicaTimeout)
+	revisions, revisionErr := livewire.BaselineRevisions(revisionBaselineCtx, config)
+	cancelRevisionBaseline()
+	if revisionErr != nil {
+		logger.Warn("baseline revision collection failed; cleanup revision restore will degrade", "error", safeErrorMessage(revisionErr))
+	}
+	baseline.Identity.ReleaseInventories = revisions
 	// The embedded snapshot time is assigned after the literal because go1.26
 	// disallows promoted fields in a composite literal of the outer type.
 	baseline.CollectedAt = time.Now().UTC()

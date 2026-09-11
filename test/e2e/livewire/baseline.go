@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/ndzuki/release-manager/test/e2e"
 	"github.com/ndzuki/release-manager/test/e2e/stages"
@@ -66,6 +67,73 @@ func BaselineReplicas(ctx context.Context, cfg *e2e.Config) ([]e2e.WorkloadRepli
 // live ReplicaObserver satisfies it.
 type baselineReplicaSampler interface {
 	ObserveReplicas(ctx context.Context, cluster, namespace, workloadName string) (stages.ReplicaObservation, error)
+}
+
+// BaselineRevisions records the current Helm revision of every release the run
+// can move, so cleanup can roll a definition back to where the run found it
+// (AC-066-28).
+//
+// The rows come from the same ListReleaseInventory read cleanup itself uses, so
+// the baseline and the recovery target are one fact observed at two times rather
+// than two projections that can drift. Without this the baseline carried
+// revisions nowhere: cleanup reported skipped_revision_restore for every row and
+// the rollback half of the recovery contract could never run.
+//
+// As with the replica sample, an unreachable environment is not a programming
+// error; the caller decides, because losing a recovery aid must not abort a run
+// whose stages could still succeed.
+func BaselineRevisions(ctx context.Context, cfg *e2e.Config) ([]e2e.InventoryRef, error) {
+	if cfg == nil {
+		return nil, errors.New("livewire: nil config")
+	}
+	clients, err := e2e.NewClientBundle(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("livewire: build connect clients: %w", err)
+	}
+	recovery, err := e2e.NewLiveRecovery(cfg, clients)
+	if err != nil {
+		return nil, fmt.Errorf("livewire: build baseline recovery reader: %w", err)
+	}
+	if _, err := recovery.Login(ctx); err != nil {
+		return nil, fmt.Errorf("livewire: baseline login: %w", err)
+	}
+	rows, err := recovery.ListReleaseInventory(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("livewire: baseline release inventory: %w", err)
+	}
+	return inventoryRefsFromCleanupRows(rows), nil
+}
+
+// inventoryRefsFromCleanupRows projects recovery rows onto the baseline shape. A
+// row without a definition id or with a non-positive revision is dropped: it
+// names no rollback target, and BaselineRecoveryFromSnapshots would discard it
+// again on the way back.
+func inventoryRefsFromCleanupRows(rows []e2e.CleanupRow) []e2e.InventoryRef {
+	refs := make([]e2e.InventoryRef, 0, len(rows))
+	for index := range rows {
+		row := rows[index]
+		if strings.TrimSpace(row.DefinitionID) == "" || row.Revision < 1 {
+			continue
+		}
+		refs = append(refs, e2e.InventoryRef{
+			ReleaseDefinitionID: row.DefinitionID,
+			CustomerID:          row.CustomerID,
+			ClusterID:           row.ClusterID,
+			Namespace:           row.Namespace,
+			ReleaseName:         row.ReleaseName,
+			Revision:            int(row.Revision),
+		})
+	}
+	sort.SliceStable(refs, func(i, j int) bool {
+		if refs[i].ReleaseDefinitionID != refs[j].ReleaseDefinitionID {
+			return refs[i].ReleaseDefinitionID < refs[j].ReleaseDefinitionID
+		}
+		if refs[i].Namespace != refs[j].Namespace {
+			return refs[i].Namespace < refs[j].Namespace
+		}
+		return refs[i].ReleaseName < refs[j].ReleaseName
+	})
+	return refs
 }
 
 // sampleReplicas records the observed replica count of each target under the
