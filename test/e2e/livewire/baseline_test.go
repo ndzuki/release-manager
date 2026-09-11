@@ -145,26 +145,26 @@ func TestBaselineReplicasRejectsNilConfig(t *testing.T) {
 	}
 }
 
-// TestInventoryRefsFromReleaseDigestsKeepsOnlyAddressableRows proves the revision
-// baseline carries exactly what cleanup can act on, so the recovery target stops
-// being empty and skipped_revision_restore stops firing for every row.
-func TestInventoryRefsFromReleaseDigestsKeepsOnlyAddressableRows(t *testing.T) {
+// TestInventoryRefsFromCleanupRowsKeepsOnlyAddressableRows proves the revision
+// baseline carries exactly what cleanup can roll back, so the recovery target
+// stops being empty and skipped_revision_restore stops firing for every row.
+func TestInventoryRefsFromCleanupRowsKeepsOnlyAddressableRows(t *testing.T) {
 	t.Parallel()
 
-	refs := inventoryRefsFromReleaseDigests([]e2e.ReleaseDigest{
-		{ReleaseDefinitionID: "def-b", Revision: 2, ValuesDigest: "digest-b"},
-		{ReleaseDefinitionID: "def-a", Revision: 1, ValuesDigest: "digest-a"},
+	refs := inventoryRefsFromCleanupRows([]e2e.CleanupRow{
+		{DefinitionID: "def-b", Revision: 2, Namespace: "e2e-release", ReleaseName: "e2e-release", ClusterID: "c1"},
+		{DefinitionID: "def-a", Revision: 1, Namespace: "e2e-isolation", ReleaseName: "e2e-isolation"},
 		// A row with no definition id or no revision names no rollback target.
-		{ReleaseDefinitionID: "", Revision: 3, ValuesDigest: "digest-x"},
-		{ReleaseDefinitionID: "def-c", Revision: 0, ValuesDigest: "digest-c"},
+		{DefinitionID: "", Revision: 3},
+		{DefinitionID: "def-c", Revision: 0},
 	})
 	if len(refs) != 2 {
-		t.Fatalf("inventoryRefsFromReleaseDigests() = %+v, want only the two addressable rows", refs)
+		t.Fatalf("inventoryRefsFromCleanupRows() = %+v, want only the two addressable rows", refs)
 	}
-	if refs[0].ReleaseDefinitionID != "def-a" || refs[0].Revision != 1 || refs[0].ValuesDigest != "digest-a" {
-		t.Fatalf("refs[0] = %+v, want the rows sorted by definition id with the digest carried through", refs[0])
+	if refs[0].ReleaseDefinitionID != "def-a" || refs[0].Revision != 1 {
+		t.Fatalf("refs[0] = %+v, want the rows sorted by definition id", refs[0])
 	}
-	if refs[1].ReleaseDefinitionID != "def-b" || refs[1].Revision != 2 || refs[1].ValuesDigest != "digest-b" {
+	if refs[1].ReleaseDefinitionID != "def-b" || refs[1].Revision != 2 || refs[1].ClusterID != "c1" {
 		t.Fatalf("refs[1] = %+v, want the row identity carried through", refs[1])
 	}
 	// The projection must survive the round trip through the parser cleanup uses.
@@ -174,7 +174,7 @@ func TestInventoryRefsFromReleaseDigestsKeepsOnlyAddressableRows(t *testing.T) {
 	if len(recovered.Revisions) != 2 {
 		t.Fatalf("BaselineRecoveryFromSnapshots() revisions = %+v, want the baseline to be usable", recovered.Revisions)
 	}
-	if got := recovered.Revisions["def-b"]; got.Revision != 2 || got.ValuesDigest != "digest-b" {
-		t.Fatalf("recovered release for def-b = %+v, want revision 2 with its content identity", got)
+	if recovered.Revisions["def-b"] != 2 {
+		t.Fatalf("recovered revision for def-b = %d, want 2", recovered.Revisions["def-b"])
 	}
 }

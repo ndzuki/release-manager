@@ -97,37 +97,41 @@ func BaselineRevisions(ctx context.Context, cfg *e2e.Config) ([]e2e.InventoryRef
 	if _, err := recovery.Login(ctx); err != nil {
 		return nil, fmt.Errorf("livewire: baseline login: %w", err)
 	}
-	rows, err := recovery.ListReleaseDigests(ctx)
+	rows, err := recovery.ListReleaseInventory(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("livewire: baseline release digests: %w", err)
+		return nil, fmt.Errorf("livewire: baseline release inventory: %w", err)
 	}
-	return inventoryRefsFromReleaseDigests(rows), nil
+	return inventoryRefsFromCleanupRows(rows), nil
 }
 
-// inventoryRefsFromReleaseDigests projects the digest read onto the baseline
-// shape.
-//
-// The digest read is the source rather than ListReleaseInventory because cleanup
-// compares content, not revision numbers: a rollback advances the revision rather
-// than restoring it, so a baseline without a digest cannot say whether a release
-// is already back. A row without a definition id or with a non-positive revision
-// is dropped -- it names no rollback target, and
-// BaselineRecoveryFromSnapshots would discard it again on the way back.
-func inventoryRefsFromReleaseDigests(rows []e2e.ReleaseDigest) []e2e.InventoryRef {
+// inventoryRefsFromCleanupRows projects recovery rows onto the baseline shape. A
+// row without a definition id or with a non-positive revision is dropped: it
+// names no rollback target, and BaselineRecoveryFromSnapshots would discard it
+// again on the way back.
+func inventoryRefsFromCleanupRows(rows []e2e.CleanupRow) []e2e.InventoryRef {
 	refs := make([]e2e.InventoryRef, 0, len(rows))
 	for index := range rows {
 		row := rows[index]
-		if strings.TrimSpace(row.ReleaseDefinitionID) == "" || row.Revision < 1 {
+		if strings.TrimSpace(row.DefinitionID) == "" || row.Revision < 1 {
 			continue
 		}
 		refs = append(refs, e2e.InventoryRef{
-			ReleaseDefinitionID: row.ReleaseDefinitionID,
+			ReleaseDefinitionID: row.DefinitionID,
+			CustomerID:          row.CustomerID,
+			ClusterID:           row.ClusterID,
+			Namespace:           row.Namespace,
+			ReleaseName:         row.ReleaseName,
 			Revision:            int(row.Revision),
-			ValuesDigest:        row.ValuesDigest,
 		})
 	}
 	sort.SliceStable(refs, func(i, j int) bool {
-		return refs[i].ReleaseDefinitionID < refs[j].ReleaseDefinitionID
+		if refs[i].ReleaseDefinitionID != refs[j].ReleaseDefinitionID {
+			return refs[i].ReleaseDefinitionID < refs[j].ReleaseDefinitionID
+		}
+		if refs[i].Namespace != refs[j].Namespace {
+			return refs[i].Namespace < refs[j].Namespace
+		}
+		return refs[i].ReleaseName < refs[j].ReleaseName
 	})
 	return refs
 }

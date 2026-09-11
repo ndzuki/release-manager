@@ -414,7 +414,7 @@ func runCleanup(args []string, stdout, stderr io.Writer) int {
 	// reads the environment back to see whether the workload actually returned to
 	// the baseline. Merging them into one report keeps the artifact a single
 	// truthful account (AC-066-34).
-	verification := e2e.VerifyRestore(cleanupCtx, recoveryTarget, recovery, cleanupObserver(options.envConfig, logger), logger)
+	verification := e2e.VerifyRestore(cleanupCtx, recoveryTarget, cleanupObserver(options.envConfig, logger), logger)
 	report.MergeVerification(verification)
 	writeCleanupSummary(stdout, report)
 	return int(exitSuccess)
@@ -501,13 +501,11 @@ func newCleanupRecovery(envConfig string) (*e2e.LiveRecovery, error) {
 
 func writeCleanupSummary(stdout io.Writer, report e2e.CleanupReport) {
 	fmt.Fprintf(stdout,
-		"E2E cleanup: cancelled=%d rolled_back=%d skipped_revision_restore=%d residual=%d residual_revisions=%d unverified_revisions=%d residual_replicas=%d unverified_replicas=%d replicas_restore_skipped=%v baseline_missing=%v\n",
+		"E2E cleanup: cancelled=%d rolled_back=%d skipped_revision_restore=%d residual=%d residual_replicas=%d unverified_replicas=%d replicas_restore_skipped=%v baseline_missing=%v\n",
 		len(report.CancelledOperationIDs),
 		len(report.RolledBackDefinitions),
 		len(report.SkippedRevisionRestore),
 		len(report.ResidualNonTerminal),
-		len(report.ResidualRevisions),
-		len(report.UnverifiedRevisions),
 		len(report.ResidualReplicas),
 		len(report.UnverifiedReplicas),
 		report.SkippedReplicasRestore,
@@ -530,12 +528,6 @@ func writeCleanupSummary(stdout io.Writer, report e2e.CleanupReport) {
 	}
 	for _, workload := range report.UnverifiedReplicas {
 		fmt.Fprintf(stdout, "- unverified replicas: %s could not be read after recovery\n", workload)
-	}
-	for _, definition := range report.ResidualRevisions {
-		fmt.Fprintf(stdout, "- residual revision: %s is not back at the baseline content\n", definition)
-	}
-	for _, definition := range report.UnverifiedRevisions {
-		fmt.Fprintf(stdout, "- unverified revision: %s could not be compared with the baseline content\n", definition)
 	}
 }
 

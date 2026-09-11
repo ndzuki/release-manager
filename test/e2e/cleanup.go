@@ -52,32 +52,17 @@ type Recovery interface {
 	// because this package must not import test/e2e/stages (the stage packages
 	// import it), mirroring RollbackRelease.
 	SetReplicas(ctx context.Context, definitionID, workloadRef string, replicas int32, reason string) error
-	// ListReleaseDigests reads each release's content identity, which is what
-	// says whether a release is back at the baseline; the revision number cannot
-	// (see ReleaseDigest).
-	ListReleaseDigests(ctx context.Context) ([]ReleaseDigest, error)
-}
-
-// BaselineRelease is one release's recovery target.
-type BaselineRelease struct {
-	// Revision is the revision RollbackRelease is asked to restore.
-	Revision int32
-	// ValuesDigest is the content identity observed when the baseline was taken,
-	// and the fact a rollback actually restores. A rollback advances the revision
-	// number rather than restoring it, so only the digest can say whether the
-	// content is already back.
-	ValuesDigest string
 }
 
 // BaselineRecovery is the parsed {output-dir}/baseline.json recovery target.
 //
-// Revisions maps release_definition_id to the baseline release recorded when the
-// run started. Replicas carries the per-workload replica counts from the same
-// snapshot; when the baseline records none (an older baseline, or a run that
-// never reached collection) cleanup degrades the replicas restore with a stderr
-// warning and never fabricates a recovery target (AC-066-23/34).
+// Revisions maps release_definition_id to the baseline Helm revision recorded
+// when the run started. Replicas carries the per-workload replica counts from
+// the same snapshot; when the baseline records none (an older baseline, or a
+// run that never reached collection) cleanup degrades the replicas restore with
+// a stderr warning and never fabricates a recovery target (AC-066-23/34).
 type BaselineRecovery struct {
-	Revisions map[string]BaselineRelease
+	Revisions map[string]int32
 	// Replicas reuses the snapshot projection type: the recorded baseline and
 	// the recovery target are the same fact crossing the artifact boundary, so
 	// a second identical type would only invite them to drift.
@@ -89,16 +74,13 @@ type BaselineRecovery struct {
 // non-positive revision are ignored, as are replica rows without an identity or
 // with a negative count.
 func BaselineRecoveryFromSnapshots(snapshot FixtureSnapshot) BaselineRecovery {
-	revisions := make(map[string]BaselineRelease)
+	revisions := make(map[string]int32)
 	for index := range snapshot.Identity.ReleaseInventories {
 		row := snapshot.Identity.ReleaseInventories[index]
 		if row.ReleaseDefinitionID == "" || row.Revision < 1 || row.Revision > int(^uint32(0)>>1) {
 			continue
 		}
-		revisions[row.ReleaseDefinitionID] = BaselineRelease{
-			Revision:     int32(row.Revision),
-			ValuesDigest: row.ValuesDigest,
-		}
+		revisions[row.ReleaseDefinitionID] = int32(row.Revision)
 	}
 	replicas := make([]WorkloadReplicaRef, 0, len(snapshot.Identity.WorkloadReplicas))
 	for index := range snapshot.Identity.WorkloadReplicas {
@@ -130,12 +112,6 @@ type CleanupReport struct {
 	// RestoredReplicas lists the workloads whose baseline replica count was
 	// re-applied through the formal emergency API.
 	RestoredReplicas []string `json:"restored_replicas"`
-	// ResidualRevisions lists the definitions the outcome check read back with
-	// content that is not the baseline content.
-	ResidualRevisions []string `json:"residual_revisions"`
-	// UnverifiedRevisions lists the definitions the outcome check could not read,
-	// or could not compare because the baseline recorded no content identity.
-	UnverifiedRevisions []string `json:"unverified_revisions"`
 	// ResidualReplicas lists the workloads the outcome check read back at a
 	// replica count that still differs from the baseline. Action verification (a
 	// write reached a successful terminal state) is not outcome verification:
@@ -159,8 +135,6 @@ func (r CleanupReport) NonZero() bool {
 		len(r.SkippedRevisionRestore) != 0 ||
 		r.SkippedReplicasRestore ||
 		len(r.RestoredReplicas) != 0 ||
-		len(r.ResidualRevisions) != 0 ||
-		len(r.UnverifiedRevisions) != 0 ||
 		len(r.ResidualReplicas) != 0 ||
 		len(r.UnverifiedReplicas) != 0 ||
 		len(r.ResidualNonTerminal) != 0 ||
@@ -174,8 +148,6 @@ func (r *CleanupReport) MergeVerification(verification CleanupReport) {
 	if r == nil {
 		return
 	}
-	r.ResidualRevisions = append(r.ResidualRevisions, verification.ResidualRevisions...)
-	r.UnverifiedRevisions = append(r.UnverifiedRevisions, verification.UnverifiedRevisions...)
 	r.ResidualReplicas = append(r.ResidualReplicas, verification.ResidualReplicas...)
 	r.UnverifiedReplicas = append(r.UnverifiedReplicas, verification.UnverifiedReplicas...)
 }
@@ -205,86 +177,14 @@ type RecoveryObserver interface {
 // A nil observer, a workload row with no cluster, or a failed read all land in
 // UnverifiedReplicas: none of them is evidence of a mismatch, and none of them is
 // evidence of a match either.
-func VerifyRestore(ctx context.Context, baseline *BaselineRecovery, recovery Recovery, observer RecoveryObserver, logger *slog.Logger) CleanupReport {
+func VerifyRestore(ctx context.Context, baseline *BaselineRecovery, observer RecoveryObserver, logger *slog.Logger) CleanupReport {
 	report := CleanupReport{}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	if baseline == nil {
+	if baseline == nil || len(baseline.Replicas) == 0 {
 		return report
 	}
-	report.verifyRevisions(ctx, baseline, recovery, logger)
-	report.verifyReplicas(ctx, baseline, observer, logger)
-	return report
-}
-
-// verifyRevisions reads every release back and reports any whose content is not
-// the baseline content.
-//
-// The comparison is on the values digest, never on the revision number: a
-// rollback advances the number rather than restoring it, so requiring the number
-// to match the baseline would report every release a run moved as a permanent
-// mismatch.
-func (report *CleanupReport) verifyRevisions(
-	ctx context.Context,
-	baseline *BaselineRecovery,
-	recovery Recovery,
-	logger *slog.Logger,
-) {
-	if len(baseline.Revisions) == 0 {
-		return
-	}
-	definitionIDs := make([]string, 0, len(baseline.Revisions))
-	for definitionID := range baseline.Revisions {
-		definitionIDs = append(definitionIDs, definitionID)
-	}
-	sort.Strings(definitionIDs)
-
-	var digests []ReleaseDigest
-	if recovery == nil {
-		logger.Warn("cleanup verification could not read release digests; releases will report as unverified")
-	} else {
-		observed, err := recovery.ListReleaseDigests(ctx)
-		if err != nil {
-			logger.Warn("cleanup verification could not read release digests; releases will report as unverified",
-				"error", sanitizeError(err))
-		} else {
-			digests = observed
-		}
-	}
-	observed := make(map[string]string, len(digests))
-	for index := range digests {
-		if digests[index].ReleaseDefinitionID == "" || digests[index].ValuesDigest == "" {
-			continue
-		}
-		observed[digests[index].ReleaseDefinitionID] = digests[index].ValuesDigest
-	}
-
-	for _, definitionID := range definitionIDs {
-		want := baseline.Revisions[definitionID].ValuesDigest
-		got, read := observed[definitionID]
-		switch {
-		case want == "":
-			// An older baseline recorded a revision but no content identity, so
-			// there is nothing to compare against and equality cannot be faked
-			// from the revision number.
-			report.UnverifiedRevisions = append(report.UnverifiedRevisions, definitionID)
-		case !read || got == "":
-			report.UnverifiedRevisions = append(report.UnverifiedRevisions, definitionID)
-		case got != want:
-			report.ResidualRevisions = append(report.ResidualRevisions, definitionID)
-		}
-	}
-}
-
-// verifyReplicas reads every baseline workload back and reports any whose count
-// is not the baseline count.
-func (report *CleanupReport) verifyReplicas(
-	ctx context.Context,
-	baseline *BaselineRecovery,
-	observer RecoveryObserver,
-	logger *slog.Logger,
-) {
 	for index := range baseline.Replicas {
 		reference := baseline.Replicas[index]
 		namespace, name, ok := parseWorkloadRef(reference.WorkloadRef)
@@ -310,6 +210,7 @@ func (report *CleanupReport) verifyReplicas(
 			report.ResidualReplicas = append(report.ResidualReplicas, reference.WorkloadRef)
 		}
 	}
+	return report
 }
 
 // parseWorkloadRef splits the authoritative "<resource>/<namespace>/<name>"
@@ -369,10 +270,10 @@ func RunCleanup(ctx context.Context, baseline *BaselineRecovery, runnerUserID st
 	if baseline == nil {
 		report.BaselineMissing = true
 		logger.Warn("baseline.json missing; cleanup is residual-only (revision/replicas not restored)")
-		baseline = &BaselineRecovery{Revisions: make(map[string]BaselineRelease)}
+		baseline = &BaselineRecovery{Revisions: make(map[string]int32)}
 	}
 	if baseline.Revisions == nil {
-		baseline.Revisions = make(map[string]BaselineRelease)
+		baseline.Revisions = make(map[string]int32)
 	}
 
 	rows, err := recovery.ListReleaseInventory(ctx)
@@ -381,13 +282,9 @@ func RunCleanup(ctx context.Context, baseline *BaselineRecovery, runnerUserID st
 	}
 	sortCleanupRows(rows)
 
-	// One digest read answers for every row: whether a release still carries the
-	// run's content is what decides a rollback, and the revision number cannot
-	// answer it.
-	observedDigests := observedReleaseDigests(ctx, recovery, logger)
 	for index := range rows {
 		row := rows[index]
-		report.recoverRow(ctx, row, baseline, observedDigests, runnerUserID, recovery, logger)
+		report.recoverRow(ctx, row, baseline, runnerUserID, recovery, logger)
 	}
 
 	// Replicas restore: re-apply each baseline replica count through the formal
@@ -409,12 +306,12 @@ func RunCleanup(ctx context.Context, baseline *BaselineRecovery, runnerUserID st
 	return report, nil
 }
 
-// restoreReplicas re-applies one workload's baseline replica count. The restore
-// writes the target rather than comparing first: undoing whatever the run left
-// behind is the goal, a redundant write of the baseline value is harmless, and a
-// precondition read could itself fail. VerifyRestore reads the result back
-// afterwards, which is where a restore that did not take is caught. An entry that
-// cannot be addressed is reported, never silently dropped.
+// restoreReplicas re-applies one workload's baseline replica count. Cleanup
+// carries no replica observer: the point of the restore is to undo whatever the
+// run left behind, so the target is always written rather than compared first —
+// a redundant write to the baseline value is harmless and keeps the recovery
+// free of a second read that could itself fail. An entry that cannot be
+// addressed is reported, never silently dropped.
 func (report *CleanupReport) restoreReplicas(
 	ctx context.Context,
 	target WorkloadReplicaRef,
@@ -446,7 +343,6 @@ func (report *CleanupReport) recoverRow(
 	ctx context.Context,
 	row CleanupRow,
 	baseline *BaselineRecovery,
-	observedDigests map[string]string,
 	runnerUserID string,
 	recovery Recovery,
 	logger *slog.Logger,
@@ -464,68 +360,27 @@ func (report *CleanupReport) recoverRow(
 	if row.DefinitionID == "" || row.Revision < 1 {
 		return
 	}
-	baselineRelease, recorded := baseline.Revisions[row.DefinitionID]
-	if !recorded {
+	baselineRevision, recorded := baseline.Revisions[row.DefinitionID]
+	switch {
+	case recorded && baselineRevision == row.Revision:
+		return
+	case !recorded:
 		report.SkippedRevisionRestore = append(report.SkippedRevisionRestore, row.DefinitionID)
 		logger.Warn("cleanup revision restore skipped: no baseline revision for definition", "definition_id", row.DefinitionID)
 		return
-	}
-	if baselineRelease.Revision < 1 {
+	case baselineRevision < 1:
 		report.SkippedRevisionRestore = append(report.SkippedRevisionRestore, row.DefinitionID)
 		logger.Warn("cleanup revision restore skipped: baseline revision invalid", "definition_id", row.DefinitionID)
 		return
 	}
-	if alreadyAtBaseline(baselineRelease, row.Revision, observedDigests[row.DefinitionID]) {
-		return
-	}
-	reason := fmt.Sprintf("e2e cleanup rollback to baseline revision %d", baselineRelease.Revision)
-	if err := recovery.RollbackRelease(ctx, row.DefinitionID, baselineRelease.Revision, row.Revision, reason); err != nil {
+	reason := fmt.Sprintf("e2e cleanup rollback to baseline revision %d", baselineRevision)
+	if err := recovery.RollbackRelease(ctx, row.DefinitionID, baselineRevision, row.Revision, reason); err != nil {
 		logger.Error("cleanup rollback failed", "definition_id", row.DefinitionID, "error", sanitizeError(err))
 		report.ResidualNonTerminal = append(report.ResidualNonTerminal, row.DefinitionID)
 		return
 	}
 	report.RolledBackDefinitions = append(report.RolledBackDefinitions, row.DefinitionID)
-	logger.Info("cleanup rollback to baseline", "definition_id", row.DefinitionID, "target_revision", baselineRelease.Revision)
-}
-
-// alreadyAtBaseline reports whether a release's content is already the baseline
-// content, so a rollback would be a no-op.
-//
-// It compares the values digest when both sides carry one, because the revision
-// number cannot express this: RollbackRelease advances the counter instead of
-// restoring it, so after a rollback the number is permanently different from the
-// baseline and a number comparison rolls back again on every invocation. Observed
-// live: a rollback to revision 21 read back as 23, and as 24 after the next run,
-// so cleanup never converged and inflated the counter each time.
-//
-// The revision comparison remains as a documented degradation for a baseline
-// written before rows carried a digest, or when the digest read failed. Such a
-// baseline behaves as it always did, and collecting a fresh one resolves it.
-func alreadyAtBaseline(baselineRelease BaselineRelease, observedRevision int32, observedDigest string) bool {
-	if baselineRelease.ValuesDigest != "" && observedDigest != "" {
-		return baselineRelease.ValuesDigest == observedDigest
-	}
-	return baselineRelease.Revision == observedRevision
-}
-
-// observedReleaseDigests reads every release's content identity for the rollback
-// decision. A failed read degrades to the revision comparison rather than
-// aborting the recovery: the writes are still worth performing.
-func observedReleaseDigests(ctx context.Context, recovery Recovery, logger *slog.Logger) map[string]string {
-	digests, err := recovery.ListReleaseDigests(ctx)
-	if err != nil {
-		logger.Warn("cleanup could not read release digests; the rollback decision falls back to revision numbers",
-			"error", sanitizeError(err))
-		return nil
-	}
-	observed := make(map[string]string, len(digests))
-	for index := range digests {
-		if digests[index].ReleaseDefinitionID == "" || digests[index].ValuesDigest == "" {
-			continue
-		}
-		observed[digests[index].ReleaseDefinitionID] = digests[index].ValuesDigest
-	}
-	return observed
+	logger.Info("cleanup rollback to baseline", "definition_id", row.DefinitionID, "target_revision", baselineRevision)
 }
 
 // sortCleanupRows orders rows deterministically so reports are stable.
