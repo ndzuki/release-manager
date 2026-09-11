@@ -68,8 +68,13 @@ type InventoryRef struct {
 	Chart               string `json:"chart"`
 	ChartVersion        string `json:"chart_version"`
 	Revision            int    `json:"revision"`
-	Status              string `json:"status"`
-	SnapshotVersion     int64  `json:"snapshot_version"`
+	// ValuesDigest is the release's content identity when the baseline was taken.
+	// Cleanup compares it to decide whether a release is already back at the
+	// baseline, because RollbackRelease advances the revision number instead of
+	// restoring it.
+	ValuesDigest    string `json:"values_digest,omitempty"`
+	Status          string `json:"status"`
+	SnapshotVersion int64  `json:"snapshot_version"`
 }
 
 // SessionRef is the public operator-session observation.

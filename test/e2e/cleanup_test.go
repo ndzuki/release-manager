@@ -15,17 +15,31 @@ import (
 var errTestObservation = errors.New("observation unavailable")
 
 type recoveryFake struct {
-	rows       []CleanupRow
-	cancelled  []string
-	rolled     []string
-	replicas   []string
-	cancelErr  error
-	rollErr    error
-	replicaErr error
+	rows        []CleanupRow
+	cancelled   []string
+	rolled      []string
+	replicas    []string
+	cancelErr   error
+	rollErr     error
+	replicaErr  error
+	digests     []ReleaseDigest
+	digestErr   error
+	digestReads int
 }
 
 func (f *recoveryFake) ListReleaseInventory(context.Context) ([]CleanupRow, error) {
 	return f.rows, nil
+}
+
+// ListReleaseDigests answers with the content identities the rollback decision
+// and the revision check compare. Counting the reads lets a test pin that the
+// digest is read once per pass rather than once per row.
+func (f *recoveryFake) ListReleaseDigests(context.Context) ([]ReleaseDigest, error) {
+	f.digestReads++
+	if f.digestErr != nil {
+		return nil, f.digestErr
+	}
+	return f.digests, nil
 }
 
 func (f *recoveryFake) CancelOperation(_ context.Context, operationID, _ string) error {
@@ -109,7 +123,7 @@ func TestRunCleanupRestoresBaselineReplicas(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
 	fake := &recoveryFake{}
 	baseline := &BaselineRecovery{
-		Revisions: map[string]int32{},
+		Revisions: map[string]BaselineRelease{},
 		Replicas: []WorkloadReplicaRef{
 			{ReleaseDefinitionID: "def-emergency", WorkloadRef: "deployments/e2e-emergency/e2e-emergency", Replicas: 3},
 			{ReleaseDefinitionID: "def-release", WorkloadRef: "deployments/e2e-release/e2e-release", Replicas: 1},
@@ -151,7 +165,7 @@ func TestRunCleanupReportsFailedReplicaRestore(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
 	fake := &recoveryFake{replicaErr: context.DeadlineExceeded}
 	baseline := &BaselineRecovery{
-		Revisions: map[string]int32{},
+		Revisions: map[string]BaselineRelease{},
 		Replicas: []WorkloadReplicaRef{
 			{ReleaseDefinitionID: "def-emergency", WorkloadRef: "deployments/e2e-emergency/e2e-emergency", Replicas: 3},
 		},
@@ -222,7 +236,7 @@ func TestRunCleanupDoesNotCancelNonRunnerOrTerminal(t *testing.T) {
 func TestRunCleanupRollsBackRevisionDrift(t *testing.T) {
 	t.Parallel()
 
-	baseline := &BaselineRecovery{Revisions: map[string]int32{"e2e-release-target": 1}}
+	baseline := &BaselineRecovery{Revisions: map[string]BaselineRelease{"e2e-release-target": {Revision: 1}}}
 	fake := &recoveryFake{rows: []CleanupRow{
 		runnerRow("e2e-release-target", 2, nil),   // drifted to revision 2
 		runnerRow("e2e-isolation-target", 1, nil), // already at baseline (no target entry -> skip)
@@ -277,7 +291,7 @@ func TestRunCleanupReportsCancelAndRollbackFailures(t *testing.T) {
 		cancelErr: context.DeadlineExceeded,
 		rollErr:   context.DeadlineExceeded,
 	}
-	baseline := &BaselineRecovery{Revisions: map[string]int32{"e2e-isolation-target": 1}}
+	baseline := &BaselineRecovery{Revisions: map[string]BaselineRelease{"e2e-isolation-target": {Revision: 1}}}
 	report, err := RunCleanup(context.Background(), baseline, "runner-id", fake, slog.Default())
 	if err != nil {
 		t.Fatalf("RunCleanup() error = %v", err)
@@ -295,13 +309,17 @@ func TestBaselineRecoveryFromSnapshotsDerivesRevisions(t *testing.T) {
 
 	snapshot := FixtureSnapshot{}
 	snapshot.Identity.ReleaseInventories = []InventoryRef{
-		{ReleaseDefinitionID: "e2e-release-target", Revision: 2},
+		{ReleaseDefinitionID: "e2e-release-target", Revision: 2, ValuesDigest: "digest-2"},
 		{ReleaseDefinitionID: "e2e-emergency-target", Revision: 0},
 		{ReleaseDefinitionID: "", Revision: 3},
 	}
 	baseline := BaselineRecoveryFromSnapshots(snapshot)
-	if len(baseline.Revisions) != 1 || baseline.Revisions["e2e-release-target"] != 2 {
+	recorded, ok := baseline.Revisions["e2e-release-target"]
+	if len(baseline.Revisions) != 1 || !ok || recorded.Revision != 2 {
 		t.Fatalf("baseline revisions = %v, want only e2e-release-target:2", baseline.Revisions)
+	}
+	if recorded.ValuesDigest != "digest-2" {
+		t.Fatalf("baseline digest = %q, want the content identity carried through so cleanup can compare content rather than a revision number", recorded.ValuesDigest)
 	}
 }
 
@@ -376,7 +394,7 @@ func TestVerifyRestoreReportsAWorkloadThatNeverReturnedToTheBaseline(t *testing.
 		"dev-customer-a-direct/e2e-emergency/release-fixture": 2,
 	}}
 
-	report := VerifyRestore(context.Background(), baseline, observer, slog.Default())
+	report := VerifyRestore(context.Background(), baseline, nil, observer, slog.Default())
 	if len(report.ResidualReplicas) != 1 {
 		t.Fatalf("ResidualReplicas = %v, want the workload reported as still changed", report.ResidualReplicas)
 	}
@@ -402,7 +420,7 @@ func TestVerifyRestoreAcceptsAWorkloadBackAtTheBaseline(t *testing.T) {
 		"dev-customer-a-direct/e2e-emergency/release-fixture": 1,
 	}}
 
-	report := VerifyRestore(context.Background(), baseline, observer, slog.Default())
+	report := VerifyRestore(context.Background(), baseline, nil, observer, slog.Default())
 	if len(report.ResidualReplicas) != 0 || len(report.UnverifiedReplicas) != 0 {
 		t.Fatalf("report = %+v, want a workload at the baseline count to be neither residual nor unverified", report)
 	}
@@ -428,7 +446,7 @@ func TestVerifyRestoreNeverMistakesUnreadForRestored(t *testing.T) {
 	}
 	baseline := &BaselineRecovery{Replicas: rows}
 
-	report := VerifyRestore(context.Background(), baseline, nil, slog.Default())
+	report := VerifyRestore(context.Background(), baseline, nil, nil, slog.Default())
 	if len(report.UnverifiedReplicas) != len(rows) {
 		t.Fatalf("UnverifiedReplicas = %v, want all %d rows reported when no observer is wired", report.UnverifiedReplicas, len(rows))
 	}
@@ -437,7 +455,7 @@ func TestVerifyRestoreNeverMistakesUnreadForRestored(t *testing.T) {
 	}
 
 	failing := &replicaObserverFake{readErr: errTestObservation}
-	report = VerifyRestore(context.Background(), baseline, failing, slog.Default())
+	report = VerifyRestore(context.Background(), baseline, nil, failing, slog.Default())
 	if len(report.UnverifiedReplicas) != len(rows) {
 		t.Fatalf("UnverifiedReplicas = %v, want every unreadable row reported", report.UnverifiedReplicas)
 	}
@@ -456,5 +474,167 @@ func TestMergeVerificationKeepsOneReport(t *testing.T) {
 	})
 	if len(report.RestoredReplicas) != 1 || len(report.ResidualReplicas) != 1 || len(report.UnverifiedReplicas) != 1 {
 		t.Fatalf("merged report = %+v, want the recovery and verification fields together", report)
+	}
+}
+
+// TestRunCleanupLeavesAReleaseWhoseContentIsTheBaseline covers the defect that
+// made cleanup un-convergent.
+//
+// RollbackRelease advances the revision counter rather than restoring the number:
+// a rollback to revision 21 read back as 23, and as 24 after the next run. The
+// trigger compared that number, so it rolled back again on every invocation
+// forever and inflated the counter each time -- which also made "cleanup is
+// idempotent" false, and an automatic pre-run cleanup unsafe to build on. The
+// content is what a rollback restores, so the content is what decides.
+func TestRunCleanupLeavesAReleaseWhoseContentIsTheBaseline(t *testing.T) {
+	t.Parallel()
+
+	baseline := &BaselineRecovery{Revisions: map[string]BaselineRelease{
+		"e2e-release-target": {Revision: 21, ValuesDigest: "digest-baseline"},
+	}}
+	// The revision differs from the baseline while the content does not: exactly
+	// the state a completed rollback leaves behind.
+	fake := &recoveryFake{
+		rows:    []CleanupRow{runnerRow("e2e-release-target", 23, nil)},
+		digests: []ReleaseDigest{{ReleaseDefinitionID: "e2e-release-target", Revision: 23, ValuesDigest: "digest-baseline"}},
+	}
+	report, err := RunCleanup(context.Background(), baseline, "runner-id", fake, slog.Default())
+	if err != nil {
+		t.Fatalf("RunCleanup() error = %v", err)
+	}
+	if len(fake.rolled) != 0 {
+		t.Fatalf("rolled back %v, want no rollback when the content is already the baseline", fake.rolled)
+	}
+	if len(report.RolledBackDefinitions) != 0 || len(report.SkippedRevisionRestore) != 0 {
+		t.Fatalf("report = %+v, want a converged pass to report nothing to restore", report)
+	}
+}
+
+// TestRunCleanupRollsBackAReleaseWhoseContentDrifted is the other half: the
+// content comparison must still catch a release the run moved.
+func TestRunCleanupRollsBackAReleaseWhoseContentDrifted(t *testing.T) {
+	t.Parallel()
+
+	baseline := &BaselineRecovery{Revisions: map[string]BaselineRelease{
+		"e2e-release-target": {Revision: 21, ValuesDigest: "digest-baseline"},
+	}}
+	fake := &recoveryFake{
+		rows:    []CleanupRow{runnerRow("e2e-release-target", 22, nil)},
+		digests: []ReleaseDigest{{ReleaseDefinitionID: "e2e-release-target", Revision: 22, ValuesDigest: "digest-run"}},
+	}
+	report, err := RunCleanup(context.Background(), baseline, "runner-id", fake, slog.Default())
+	if err != nil {
+		t.Fatalf("RunCleanup() error = %v", err)
+	}
+	if len(fake.rolled) != 1 || len(report.RolledBackDefinitions) != 1 {
+		t.Fatalf("rolled=%v report=%+v, want the drifted release rolled back", fake.rolled, report)
+	}
+	if fake.digestReads != 1 {
+		t.Fatalf("digest reads = %d, want one read shared by every row", fake.digestReads)
+	}
+}
+
+// TestAlreadyAtBaselineDegradesToTheRevisionWithoutADigest pins the documented
+// fallback: a baseline written before rows carried a content identity, or a digest
+// read that failed, behaves as it always did instead of reporting a false match.
+func TestAlreadyAtBaselineDegradesToTheRevisionWithoutADigest(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		baseline   BaselineRelease
+		revision   int32
+		digest     string
+		wantAtBase bool
+	}{
+		{
+			name:       "content identity matches",
+			baseline:   BaselineRelease{Revision: 21, ValuesDigest: "same"},
+			revision:   24,
+			digest:     "same",
+			wantAtBase: true,
+		},
+		{
+			name:       "content identity differs",
+			baseline:   BaselineRelease{Revision: 21, ValuesDigest: "baseline"},
+			revision:   21,
+			digest:     "run",
+			wantAtBase: false,
+		},
+		{
+			name:       "no baseline digest falls back to the revision",
+			baseline:   BaselineRelease{Revision: 21},
+			revision:   21,
+			digest:     "run",
+			wantAtBase: true,
+		},
+		{
+			name:       "unread digest falls back to the revision",
+			baseline:   BaselineRelease{Revision: 21, ValuesDigest: "baseline"},
+			revision:   21,
+			digest:     "",
+			wantAtBase: true,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if got := alreadyAtBaseline(testCase.baseline, testCase.revision, testCase.digest); got != testCase.wantAtBase {
+				t.Fatalf("alreadyAtBaseline() = %v, want %v", got, testCase.wantAtBase)
+			}
+		})
+	}
+}
+
+// TestVerifyRestoreChecksReleaseContentNotRevisionNumbers covers the revision half
+// of the outcome check. Comparing revision numbers would report every release a
+// run moved as a permanent mismatch, so the check compares content.
+func TestVerifyRestoreChecksReleaseContentNotRevisionNumbers(t *testing.T) {
+	t.Parallel()
+
+	baseline := &BaselineRecovery{
+		Revisions: map[string]BaselineRelease{
+			"def-restored": {Revision: 21, ValuesDigest: "digest-baseline"},
+			"def-drifted":  {Revision: 21, ValuesDigest: "digest-baseline"},
+			"def-legacy":   {Revision: 21},
+		},
+	}
+	recovery := &recoveryFake{digests: []ReleaseDigest{
+		// A completed rollback: the number moved on, the content came back.
+		{ReleaseDefinitionID: "def-restored", Revision: 24, ValuesDigest: "digest-baseline"},
+		{ReleaseDefinitionID: "def-drifted", Revision: 22, ValuesDigest: "digest-run"},
+		{ReleaseDefinitionID: "def-legacy", Revision: 21, ValuesDigest: "digest-baseline"},
+	}}
+	report := VerifyRestore(context.Background(), baseline, recovery, nil, slog.Default())
+
+	if len(report.ResidualRevisions) != 1 || report.ResidualRevisions[0] != "def-drifted" {
+		t.Fatalf("ResidualRevisions = %v, want only the drifted definition", report.ResidualRevisions)
+	}
+	if len(report.UnverifiedRevisions) != 1 || report.UnverifiedRevisions[0] != "def-legacy" {
+		t.Fatalf("UnverifiedRevisions = %v, want the digest-less baseline row reported rather than assumed", report.UnverifiedRevisions)
+	}
+}
+
+// TestVerifyRestoreNeverMistakesAnUnreadRevisionForRestored keeps the honesty rule
+// on the revision half too.
+func TestVerifyRestoreNeverMistakesAnUnreadRevisionForRestored(t *testing.T) {
+	t.Parallel()
+
+	baseline := &BaselineRecovery{Revisions: map[string]BaselineRelease{
+		"def-1": {Revision: 1, ValuesDigest: "digest-1"},
+		"def-2": {Revision: 2, ValuesDigest: "digest-2"},
+	}}
+
+	report := VerifyRestore(context.Background(), baseline, &recoveryFake{digestErr: errTestObservation}, nil, slog.Default())
+	if len(report.UnverifiedRevisions) != 2 || len(report.ResidualRevisions) != 0 {
+		t.Fatalf("report = %+v, want a failed read reported as unverified rather than as a mismatch or a match", report)
+	}
+
+	// A digest the server did not report for a definition is also unverified.
+	report = VerifyRestore(context.Background(), baseline, &recoveryFake{digests: []ReleaseDigest{
+		{ReleaseDefinitionID: "def-1", Revision: 1, ValuesDigest: "digest-1"},
+	}}, nil, slog.Default())
+	if len(report.UnverifiedRevisions) != 1 || report.UnverifiedRevisions[0] != "def-2" {
+		t.Fatalf("UnverifiedRevisions = %v, want the definition the read did not cover", report.UnverifiedRevisions)
 	}
 }
