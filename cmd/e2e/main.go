@@ -82,24 +82,30 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return runStages(args, stdout, stderr)
 }
 
-func runStages(args []string, stdout, stderr io.Writer) int {
+// parseRunArgs parses and validates the run flags, returning a usage error for
+// the caller to report. parseRunOptions owns any error it already printed.
+func parseRunArgs(args []string, stderr io.Writer) (runOptions, []string, error) {
 	options, err := parseRunOptions(args, stderr)
 	if err != nil {
-		writeUsageError(stderr, err)
-		return int(exitUsage)
+		return runOptions{}, nil, err
 	}
 	if options.envConfig == "" {
-		writeUsageError(stderr, errors.New("--env-config is required"))
-		return int(exitUsage)
+		return runOptions{}, nil, errors.New("--env-config is required")
 	}
-
 	selected, err := parseStages(options.stages)
 	if err != nil {
-		writeUsageError(stderr, err)
-		return int(exitUsage)
+		return runOptions{}, nil, err
 	}
 	if options.timeout <= 0 || options.totalTimeout <= 0 {
-		writeUsageError(stderr, errors.New("--timeout and --total-timeout must be positive"))
+		return runOptions{}, nil, errors.New("--timeout and --total-timeout must be positive")
+	}
+	return options, selected, nil
+}
+
+func runStages(args []string, stdout, stderr io.Writer) int {
+	options, selected, err := parseRunArgs(args, stderr)
+	if err != nil {
+		writeUsageError(stderr, err)
 		return int(exitUsage)
 	}
 
@@ -149,6 +155,47 @@ func runStages(args []string, stdout, stderr io.Writer) int {
 		return int(exitRuntime)
 	}
 
+	baseline, baselineDigest, ok := collectBaseline(config, options, runID, logger)
+	if !ok {
+		return int(exitRuntime)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// The canonical graph assembled above supplies every stage body, so no
+	// selected stage can report a vacuous pass: a real adapter that cannot
+	// observe a healthy dependency fails the stage, and `make e2e-*` and CI go
+	// red (exit 1) instead of fabricating a green run (TASK-066 Step 8
+	// fail-closed contract).
+	report, runErr := runHarness(ctx, config, options, selected, stageSpecs, logger)
+
+	stageArtifacts, ok := writeStageArtifacts(report, options, runID, logger)
+	if !ok {
+		return int(exitRuntime)
+	}
+
+	return writeRunArtifact(stdout, logger, runOutcome{
+		options:        options,
+		runID:          runID,
+		selected:       selected,
+		baseline:       baseline,
+		baselineDigest: baselineDigest,
+		report:         report,
+		stageArtifacts: stageArtifacts,
+		runErr:         runErr,
+	})
+}
+
+// collectBaseline samples the pre-run replica counts, writes baseline.json, and
+// returns the artifact with its stable digest. The bool reports whether the
+// caller may continue; a false value has already been logged.
+//
+// The replica sample is a recovery aid: a failed sample is recorded and the run
+// continues, because the "baseline carries no replicas" degradation is a
+// documented contract (cleanup reports it as skipped_replicas_restore) and
+// losing a recovery aid must not fail a run whose stages could still succeed.
+func collectBaseline(config *e2e.Config, options runOptions, runID string, logger *slog.Logger) (baselineArtifact, string, bool) {
 	baseline := baselineArtifact{
 		RunID:          runID,
 		Environment:    config.Environment,
@@ -156,12 +203,6 @@ func runStages(args []string, stdout, stderr io.Writer) int {
 		FixtureVersion: config.Seed.FixtureVersion,
 		SnapshotFull:   options.snapshotFull,
 	}
-	// Sample the replica counts the emergency stage can change so cleanup has a
-	// recovery target even when this run never reaches its own compensation
-	// (AC-066-23/34). A failed sample is recorded and the run continues: the
-	// baseline degradation path is a documented contract, and losing a recovery
-	// aid must not fail a run whose stages could still succeed. Cleanup reports
-	// the resulting gap as `skipped_replicas_restore`.
 	replicaBaselineCtx, cancelReplicaBaseline := context.WithTimeout(context.Background(), baselineReplicaTimeout)
 	replicas, replicaErr := livewire.BaselineReplicas(replicaBaselineCtx, config)
 	cancelReplicaBaseline()
@@ -175,23 +216,26 @@ func runStages(args []string, stdout, stderr io.Writer) int {
 	baselineDigest, err := e2e.StableDigest(baseline)
 	if err != nil {
 		logger.Error("collect baseline", "error", err)
-		return int(exitRuntime)
+		return baseline, "", false
 	}
 	if err := e2e.WriteJSONAtomic(filepath.Join(options.outputDir, "baseline.json"), baseline); err != nil {
 		logger.Error("write baseline artifact", "error", err)
-		return int(exitRuntime)
+		return baseline, "", false
 	}
+	return baseline, baselineDigest, true
+}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	// The canonical graph assembled above supplies every stage body, so no
-	// selected stage can report a vacuous pass: a real adapter that cannot
-	// observe a healthy dependency fails the stage, and `make e2e-*` and CI go
-	// red (exit 1) instead of fabricating a green run (TASK-066 Step 8
-	// fail-closed contract).
-	harness := e2e.New(*config)
-	report, runErr := harness.Run(ctx, e2e.Scenario{
+// runHarness executes the canonical graph and normalizes the reported exit code
+// to a value the CLI contract allows.
+func runHarness(
+	ctx context.Context,
+	config *e2e.Config,
+	options runOptions,
+	selected []string,
+	stageSpecs []e2e.StageSpec,
+	logger *slog.Logger,
+) (e2e.Report, error) {
+	report, runErr := e2e.New(*config).Run(ctx, e2e.Scenario{
 		SelectedStages: selected,
 		Stages:         stageSpecs,
 		StageTimeout:   options.timeout,
@@ -207,7 +251,17 @@ func runStages(args []string, stdout, stderr io.Writer) int {
 	if report.ExitCode < 0 || report.ExitCode > int(exitUsage) {
 		report.ExitCode = int(exitRuntime)
 	}
+	return report, runErr
+}
 
+// writeStageArtifacts persists one artifact per stage result and returns the
+// index entries run.json carries. The bool reports whether writing succeeded.
+func writeStageArtifacts(
+	report e2e.Report,
+	options runOptions,
+	runID string,
+	logger *slog.Logger,
+) ([]e2e.StageArtifact, bool) {
 	stageArtifacts := make([]e2e.StageArtifact, 0, len(report.Results))
 	for index := range report.Results {
 		stage := report.Results[index].Stage
@@ -216,50 +270,70 @@ func runStages(args []string, stdout, stderr io.Writer) int {
 		}
 		if err := e2e.WriteJSONAtomic(filepath.Join(options.outputDir, stage+".json"), report.Results[index]); err != nil {
 			logger.Error("write stage artifact", "stage", stage, "error", err)
-			return int(exitRuntime)
+			return nil, false
 		}
 		stageArtifacts = append(stageArtifacts, e2e.StageArtifact{
 			Stage:  stage,
 			Status: report.Results[index].Status,
 			File:   stage + ".json",
 		})
-		if report.Results[index].Status == e2e.StageFail {
-			logger.Warn("e2e stage failed", "stage", stage, "root_cause", report.Results[index].RootCause)
-			if options.keepFailure {
-				if err := writeDiagnostic(options.outputDir, runID, report.Results[index]); err != nil {
-					logger.Error("write failure diagnostic", "stage", stage, "error", err)
-					return int(exitRuntime)
-				}
-			}
+		if report.Results[index].Status != e2e.StageFail {
+			continue
+		}
+		logger.Warn("e2e stage failed", "stage", stage, "root_cause", report.Results[index].RootCause)
+		if !options.keepFailure {
+			continue
+		}
+		if err := writeDiagnostic(options.outputDir, runID, report.Results[index]); err != nil {
+			logger.Error("write failure diagnostic", "stage", stage, "error", err)
+			return nil, false
 		}
 	}
+	return stageArtifacts, true
+}
 
+// runOutcome carries everything the final run artifact needs.
+type runOutcome struct {
+	options        runOptions
+	runID          string
+	selected       []string
+	baseline       baselineArtifact
+	baselineDigest string
+	report         e2e.Report
+	stageArtifacts []e2e.StageArtifact
+	runErr         error
+}
+
+// writeRunArtifact persists run.json, prints the summary, and returns the
+// process exit status.
+func writeRunArtifact(stdout io.Writer, logger *slog.Logger, outcome runOutcome) int {
+	report := outcome.report
 	runArtifact := e2e.RunArtifact{
-		RunID:          runID,
-		SelectedStages: append([]string(nil), selected...),
-		BaselineDigest: baselineDigest,
-		StartedAt:      startedAt(report, baseline.CollectedAt),
+		RunID:          outcome.runID,
+		SelectedStages: append([]string(nil), outcome.selected...),
+		BaselineDigest: outcome.baselineDigest,
+		StartedAt:      startedAt(report, outcome.baseline.CollectedAt),
 		FinishedAt:     time.Now().UTC(),
 		Pass:           report.Passed,
 		Fail:           report.Failed,
 		Skip:           report.Skipped,
 		ExitCode:       report.ExitCode,
-		Stages:         stageArtifacts,
+		Stages:         outcome.stageArtifacts,
 	}
-	if runErr != nil {
+	if outcome.runErr != nil {
 		runArtifact.Fatal = &e2e.ErrorCause{
 			Code:      "e2e_run_failed",
 			Component: "harness",
-			Message:   safeErrorMessage(runErr),
+			Message:   safeErrorMessage(outcome.runErr),
 		}
 	}
-	if err := e2e.WriteJSONAtomic(filepath.Join(options.outputDir, "run.json"), runArtifact); err != nil {
+	if err := e2e.WriteJSONAtomic(filepath.Join(outcome.options.outputDir, "run.json"), runArtifact); err != nil {
 		logger.Error("write run artifact", "error", err)
 		return int(exitRuntime)
 	}
 
 	writeSummary(stdout, runArtifact, report.Results)
-	logger.Info("e2e run finished", "run_id", runID, "exit_code", report.ExitCode)
+	logger.Info("e2e run finished", "run_id", outcome.runID, "exit_code", report.ExitCode)
 	return report.ExitCode
 }
 
