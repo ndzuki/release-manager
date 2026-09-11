@@ -175,7 +175,14 @@ func newGraph(cfg *e2e.Config) (*graph, error) {
 	if err != nil {
 		return nil, fmt.Errorf("livewire: build kubernetes client: %w", err)
 	}
-	replicas, err := NewReplicaObserver(kubernetesClient)
+	// The emergency workload belongs to the definition's customer cluster, so the
+	// replica observation resolves its client per cluster instead of reading the
+	// management plane.
+	clusterClients, err := NewClusterContextsClientProvider(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("livewire: build cluster client provider: %w", err)
+	}
+	replicas, err := NewClusterReplicaObserver(clusterClients)
 	if err != nil {
 		return nil, fmt.Errorf("livewire: build replica observer: %w", err)
 	}

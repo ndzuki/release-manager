@@ -49,7 +49,7 @@ func TestObserveReplicasReadsDeploymentStatus(t *testing.T) {
 	t.Parallel()
 
 	observer := observerFixture(t, deployment("release-fixture", "app", 5, 4))
-	observation, err := observer.ObserveReplicas(context.Background(), "release-fixture", "app")
+	observation, err := observer.ObserveReplicas(context.Background(), "dev-customer-a-direct", "release-fixture", "app")
 	if err != nil {
 		t.Fatalf("ObserveReplicas() error = %v", err)
 	}
@@ -67,7 +67,7 @@ func TestObserveReplicasFallsBackToOtherKinds(t *testing.T) {
 	t.Parallel()
 
 	observer := observerFixture(t, statefulSet("release-fixture", "db", 2, 2))
-	observation, err := observer.ObserveReplicas(context.Background(), "release-fixture", "db")
+	observation, err := observer.ObserveReplicas(context.Background(), "dev-customer-a-direct", "release-fixture", "db")
 	if err != nil {
 		t.Fatalf("ObserveReplicas() error = %v", err)
 	}
@@ -85,7 +85,7 @@ func TestObserveReplicasFailsClosedWhenAbsent(t *testing.T) {
 	observer := observerFixture(t)
 	// A missing workload must be an error, never a zero-replica observation:
 	// "0 observed" would otherwise look like a successful scale-to-zero.
-	if _, err := observer.ObserveReplicas(context.Background(), "release-fixture", "app"); err == nil {
+	if _, err := observer.ObserveReplicas(context.Background(), "dev-customer-a-direct", "release-fixture", "app"); err == nil {
 		t.Fatal("ObserveReplicas() error = nil, want a fail-closed error")
 	}
 }
@@ -97,7 +97,7 @@ func TestObserveReplicasFailsClosedWhenAmbiguous(t *testing.T) {
 		deployment("release-fixture", "app", 3, 3),
 		statefulSet("release-fixture", "app", 3, 3),
 	)
-	_, err := observer.ObserveReplicas(context.Background(), "release-fixture", "app")
+	_, err := observer.ObserveReplicas(context.Background(), "dev-customer-a-direct", "release-fixture", "app")
 	if err == nil {
 		t.Fatal("ObserveReplicas() error = nil, want an error for an ambiguous workload")
 	}
@@ -119,7 +119,7 @@ func TestObserveReplicasPropagatesReadFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReplicaObserver() error = %v", err)
 	}
-	if _, err := observer.ObserveReplicas(context.Background(), "release-fixture", "app"); err == nil {
+	if _, err := observer.ObserveReplicas(context.Background(), "dev-customer-a-direct", "release-fixture", "app"); err == nil {
 		t.Fatal("ObserveReplicas() error = nil, want the read failure to surface")
 	}
 }
@@ -128,10 +128,10 @@ func TestObserveReplicasRequiresCoordinates(t *testing.T) {
 	t.Parallel()
 
 	observer := observerFixture(t)
-	if _, err := observer.ObserveReplicas(context.Background(), " ", "app"); err == nil {
+	if _, err := observer.ObserveReplicas(context.Background(), "c", " ", "app"); err == nil {
 		t.Fatal("ObserveReplicas() error = nil, want an error for a missing namespace")
 	}
-	if _, err := observer.ObserveReplicas(context.Background(), "ns", ""); err == nil {
+	if _, err := observer.ObserveReplicas(context.Background(), "c", "ns", ""); err == nil {
 		t.Fatal("ObserveReplicas() error = nil, want an error for a missing workload name")
 	}
 }

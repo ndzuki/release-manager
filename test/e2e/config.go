@@ -100,6 +100,11 @@ type K3dConfig struct {
 	Context        string         `yaml:"context" json:"context"`
 	TestNamespace  string         `yaml:"test_namespace" json:"test_namespace"`
 	RestartTargets RestartTargets `yaml:"restart_targets" json:"restart_targets"`
+	// ClusterContexts maps a cluster name to the kubeconfig context that reaches
+	// it. Context above is the management cluster; a customer-cluster read (the
+	// emergency workload's replica count) needs that cluster's own context, and
+	// the merged dev kubeconfig carries all of them.
+	ClusterContexts map[string]string `yaml:"cluster_contexts" json:"cluster_contexts"`
 }
 
 // ExpectedIdentity is the manifest-derived identity contract consumed by the
@@ -328,6 +333,17 @@ func validateK3d(k3d K3dConfig) error {
 	// happens before any stage runs or any artifact is written.
 	if strings.TrimSpace(k3d.Context) == "" {
 		return configInvalid("k3d.context", "missing")
+	}
+	// Each declared cluster must resolve to a usable context: a blank context
+	// would silently fall back to the ambient current-context, which is exactly
+	// what k3d.context exists to prevent.
+	for cluster, contextName := range k3d.ClusterContexts {
+		if strings.TrimSpace(cluster) == "" {
+			return configInvalid("k3d.cluster_contexts", "contains an empty cluster name")
+		}
+		if strings.TrimSpace(contextName) == "" {
+			return configInvalid("k3d.cluster_contexts."+cluster, "missing")
+		}
 	}
 	if err := validateDNS1123Label(k3d.TestNamespace); err != nil {
 		return configInvalid("k3d.test_namespace", "must be a DNS-1123 label")

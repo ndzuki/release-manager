@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,11 +27,22 @@ var observableWorkloadKinds = []string{"Deployment", "StatefulSet", "DaemonSet"}
 
 // ReplicaObserver reads the applied replica effect of an emergency change from
 // the cluster's own status subresource. It is read-only by construction.
+//
+// An emergency target names the customer cluster its workload runs in, so the
+// observer resolves one client per cluster. An observer built over a single
+// client answers for every cluster: that is the management plane, where the
+// caller's cluster selection carries no meaning.
 type ReplicaObserver struct {
-	client kubernetes.Interface
+	client   kubernetes.Interface
+	provider ClusterClientProvider
 }
 
-// NewReplicaObserver builds the read-only observer over a typed client.
+// ClusterClientProvider resolves a read-only typed client for a cluster name.
+type ClusterClientProvider interface {
+	ClientFor(cluster string) (kubernetes.Interface, error)
+}
+
+// NewReplicaObserver builds the read-only observer over a single typed client.
 func NewReplicaObserver(client kubernetes.Interface) (*ReplicaObserver, error) {
 	if client == nil {
 		return nil, errors.New("livewire: nil kubernetes client")
@@ -38,19 +50,43 @@ func NewReplicaObserver(client kubernetes.Interface) (*ReplicaObserver, error) {
 	return &ReplicaObserver{client: client}, nil
 }
 
+// NewClusterReplicaObserver builds an observer that reads every target through
+// the client its own cluster resolves to.
+func NewClusterReplicaObserver(provider ClusterClientProvider) (*ReplicaObserver, error) {
+	if provider == nil {
+		return nil, errors.New("livewire: nil cluster client provider")
+	}
+	return &ReplicaObserver{provider: provider}, nil
+}
+
+// clientFor returns the client the named cluster reads through.
+func (o *ReplicaObserver) clientFor(cluster string) (kubernetes.Interface, error) {
+	if o.provider != nil {
+		return o.provider.ClientFor(cluster)
+	}
+	if o.client == nil {
+		return nil, errors.New("livewire: replica observer is unavailable")
+	}
+	return o.client, nil
+}
+
 // ObserveReplicas implements stages.ReplicaObserver.
 //
 // readyReplicas is reported alongside replicas because a replica-count change
 // is only a real applied effect once the pods are ready: a scale-up that never
 // becomes ready must not look like success.
-func (o *ReplicaObserver) ObserveReplicas(ctx context.Context, namespace, workloadName string) (stages.ReplicaObservation, error) {
-	if o == nil || o.client == nil {
+func (o *ReplicaObserver) ObserveReplicas(ctx context.Context, cluster, namespace, workloadName string) (stages.ReplicaObservation, error) {
+	if o == nil {
 		return stages.ReplicaObservation{}, errors.New("livewire: replica observer is unavailable")
 	}
 	namespace = strings.TrimSpace(namespace)
 	workloadName = strings.TrimSpace(workloadName)
 	if namespace == "" || workloadName == "" {
 		return stages.ReplicaObservation{}, errors.New("livewire: replica observation requires a namespace and a workload name")
+	}
+	client, err := o.clientFor(strings.TrimSpace(cluster))
+	if err != nil {
+		return stages.ReplicaObservation{}, err
 	}
 
 	type match struct {
@@ -60,7 +96,7 @@ func (o *ReplicaObserver) ObserveReplicas(ctx context.Context, namespace, worklo
 	var matches []match
 	var readErr error
 	for _, kind := range observableWorkloadKinds {
-		state, err := o.readWorkload(ctx, kind, namespace, workloadName)
+		state, err := readWorkload(ctx, client, kind, namespace, workloadName)
 		if err != nil {
 			if errors.Is(err, errWorkloadNotFound) {
 				continue
@@ -104,23 +140,23 @@ type workloadReplicaState struct {
 // probing the other kinds without masking a real error.
 var errWorkloadNotFound = errors.New("workload not found")
 
-// readWorkload reads one kind's status subresource.
-func (o *ReplicaObserver) readWorkload(ctx context.Context, kind, namespace, name string) (*workloadReplicaState, error) {
+// readWorkload reads one kind's status subresource through the cluster's client.
+func readWorkload(ctx context.Context, client kubernetes.Interface, kind, namespace, name string) (*workloadReplicaState, error) {
 	switch kind {
 	case "Deployment":
-		deployment, err := o.client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+		deployment, err := client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return nil, classifyReadError(err)
 		}
 		return &workloadReplicaState{replicas: deployment.Status.Replicas, ready: deployment.Status.ReadyReplicas}, nil
 	case "StatefulSet":
-		statefulSet, err := o.client.AppsV1().StatefulSets(namespace).Get(ctx, name, metav1.GetOptions{})
+		statefulSet, err := client.AppsV1().StatefulSets(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return nil, classifyReadError(err)
 		}
 		return &workloadReplicaState{replicas: statefulSet.Status.Replicas, ready: statefulSet.Status.ReadyReplicas}, nil
 	case "DaemonSet":
-		daemonSet, err := o.client.AppsV1().DaemonSets(namespace).Get(ctx, name, metav1.GetOptions{})
+		daemonSet, err := client.AppsV1().DaemonSets(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return nil, classifyReadError(err)
 		}
@@ -152,17 +188,25 @@ func (c *Connector) NewRestartProbe(client kubernetes.Interface) (*stages.Kubern
 	return stages.NewKubernetesRestartProbe(client, targets)
 }
 
-// NewKubernetesClient builds a typed clientset from the configured kubeconfig
-// and context. It is the only place in the E2E harness that reads a kubeconfig,
-// so the cluster credential has a single owner.
+// NewKubernetesClient builds a typed clientset for the management cluster's
+// context. It is the restart probe's client, which acts on the management
+// namespace.
 //
 // The context is selected explicitly rather than taken from the kubeconfig's
 // current-context. The dev kubeconfig merges five clusters, so the ambient
-// current-context is whichever merged last — a customer cluster — while every
-// consumer of this client (the restart probe and the replica observer) acts on
-// the management namespace. Letting the ambient context decide would point
-// management writes at a customer cluster.
+// current-context is whichever merged last — a customer cluster. Letting it
+// decide would point management reads and writes at a customer cluster.
 func NewKubernetesClient(cfg *e2e.Config) (kubernetes.Interface, error) {
+	if cfg == nil {
+		return nil, errors.New("livewire: nil config")
+	}
+	return NewKubernetesClientForContext(cfg, cfg.K3d.Context)
+}
+
+// NewKubernetesClientForContext builds a typed clientset for one explicit
+// kubeconfig context. It is the only place in the E2E harness that reads a
+// kubeconfig, so the cluster credential has a single owner.
+func NewKubernetesClientForContext(cfg *e2e.Config, contextName string) (kubernetes.Interface, error) {
 	if cfg == nil {
 		return nil, errors.New("livewire: nil config")
 	}
@@ -170,9 +214,9 @@ func NewKubernetesClient(cfg *e2e.Config) (kubernetes.Interface, error) {
 	if path == "" {
 		return nil, errors.New("livewire: k3d.kubeconfig is empty")
 	}
-	contextName := strings.TrimSpace(cfg.K3d.Context)
+	contextName = strings.TrimSpace(contextName)
 	if contextName == "" {
-		return nil, errors.New("livewire: k3d.context is empty")
+		return nil, errors.New("livewire: kubeconfig context is empty")
 	}
 	restConfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		&clientcmd.ClientConfigLoadingRules{ExplicitPath: path},
@@ -185,5 +229,53 @@ func NewKubernetesClient(cfg *e2e.Config) (kubernetes.Interface, error) {
 	if err != nil {
 		return nil, fmt.Errorf("livewire: build kubernetes client: %w", err)
 	}
+	return client, nil
+}
+
+// ClusterContextsClientProvider resolves one typed client per cluster from the
+// declared k3d.cluster_contexts map, building each lazily and caching it, so a
+// run keeps a single client per cluster.
+type ClusterContextsClientProvider struct {
+	cfg     *e2e.Config
+	mu      sync.Mutex
+	clients map[string]kubernetes.Interface
+}
+
+// NewClusterContextsClientProvider builds the provider over the configured map.
+func NewClusterContextsClientProvider(cfg *e2e.Config) (*ClusterContextsClientProvider, error) {
+	if cfg == nil {
+		return nil, errors.New("livewire: nil config")
+	}
+	if len(cfg.K3d.ClusterContexts) == 0 {
+		return nil, errors.New("livewire: k3d.cluster_contexts is empty")
+	}
+	return &ClusterContextsClientProvider{cfg: cfg, clients: make(map[string]kubernetes.Interface)}, nil
+}
+
+// ClientFor implements ClusterClientProvider. An unknown or unset cluster is
+// refused rather than falling back to the management plane: reading the wrong
+// cluster reports a healthy workload as absent.
+func (p *ClusterContextsClientProvider) ClientFor(cluster string) (kubernetes.Interface, error) {
+	if p == nil || p.cfg == nil {
+		return nil, errors.New("livewire: cluster client provider is unavailable")
+	}
+	name := strings.TrimSpace(cluster)
+	if name == "" {
+		return nil, errors.New("livewire: observation target carries no cluster")
+	}
+	contextName := strings.TrimSpace(p.cfg.K3d.ClusterContexts[name])
+	if contextName == "" {
+		return nil, fmt.Errorf("livewire: no kubeconfig context declared for cluster %q", name)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if client, ok := p.clients[name]; ok {
+		return client, nil
+	}
+	client, err := NewKubernetesClientForContext(p.cfg, contextName)
+	if err != nil {
+		return nil, err
+	}
+	p.clients[name] = client
 	return client, nil
 }

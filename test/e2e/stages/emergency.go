@@ -4,9 +4,17 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	e2e "github.com/ndzuki/release-manager/test/e2e"
 )
+
+// defaultEffectTimeout bounds how long the applied effect is polled before the
+// stage concludes it never converged.
+const defaultEffectTimeout = 90 * time.Second
+
+// replicaConvergenceInterval is the pause between effect observations.
+const replicaConvergenceInterval = 500 * time.Millisecond
 
 // Emergency convergence policies. REVERT_ON_NEXT_RECONCILE is the default for
 // reversible replica tests; REQUIRE_PROMOTION is only used by a deliberate
@@ -28,6 +36,11 @@ type EmergencyTarget struct {
 	WorkloadName    string
 	Namespace       string
 	CurrentReplicas int32
+	// Cluster names the cluster the workload runs in. The emergency workload
+	// lives in the definition's customer cluster, so reading it needs that
+	// cluster rather than the management plane. It is empty when the API did not
+	// report one, which fails closed at the point of use.
+	Cluster string
 	// OperationVersion is an optional adapter-supplied version hint echoed on
 	// the write. The live API does not report one on ListEmergencyTargets, so
 	// the adapter leaves it empty and the server derives the authoritative
@@ -87,8 +100,12 @@ type EmergencyWriter interface {
 
 // ReplicaObserver observes the applied cluster effect of a replica change. It
 // is read-only; a missing or unknown observation is fail-closed.
+//
+// The cluster is part of the observation because the workload belongs to the
+// definition's customer cluster, not the management plane: reading the wrong
+// control plane reports a healthy workload as absent.
 type ReplicaObserver interface {
-	ObserveReplicas(ctx context.Context, namespace, workloadName string) (ReplicaObservation, error)
+	ObserveReplicas(ctx context.Context, cluster, namespace, workloadName string) (ReplicaObservation, error)
 }
 
 // EmergencyStage performs one reversible SET_REPLICAS emergency change that is
@@ -103,9 +120,22 @@ type EmergencyStage struct {
 	baseline int32
 	workload EmergencyTarget
 	result   OperationRef
+	// effectTimeout bounds the wait for the applied effect to converge.
+	effectTimeout time.Duration
 }
 
 var _ e2e.Stage = (*EmergencyStage)(nil)
+
+// WithEffectTimeout overrides how long the applied effect is polled.
+func (s *EmergencyStage) WithEffectTimeout(timeout time.Duration) *EmergencyStage {
+	if s == nil {
+		return nil
+	}
+	if timeout > 0 {
+		s.effectTimeout = timeout
+	}
+	return s
+}
 
 // NewEmergencyStage creates the reversible emergency replica stage.
 func NewEmergencyStage(
@@ -115,7 +145,7 @@ func NewEmergencyStage(
 	target WriteTarget,
 	replicas int32,
 ) *EmergencyStage {
-	return &EmergencyStage{writer: writer, observer: observer, registry: registry, target: target, replicas: replicas}
+	return &EmergencyStage{writer: writer, observer: observer, registry: registry, target: target, replicas: replicas, effectTimeout: defaultEffectTimeout}
 }
 
 // NewEmergency is a concise alias for NewEmergencyStage.
@@ -143,12 +173,18 @@ func (s *EmergencyStage) Run(ctx context.Context, _ *e2e.Fixture) error {
 	if err != nil {
 		return err
 	}
+	// Register the restore as soon as the change is accepted, before asserting the
+	// effect: the cluster has already been changed, so every later failure must
+	// still restore the baseline. Registering after the assertion left the
+	// workload scaled whenever the assertion failed (real smoke 2026-09-11: a
+	// failed readiness assertion left the fixture at 2 replicas, and the next run
+	// then saw a target equal to its baseline and could not run at all).
+	if err := s.registerRestore(workload, baseline); err != nil {
+		return err
+	}
 	// The operation terminal state is not the cluster effect: assert the
 	// observed workload actually moved to the requested replica count.
 	if err := s.assertReplicas(ctx, workload, s.replicas); err != nil {
-		return err
-	}
-	if err := s.registerRestore(workload, baseline); err != nil {
 		return err
 	}
 
@@ -188,7 +224,7 @@ func (s *EmergencyStage) resolveBaseline(ctx context.Context) (EmergencyTarget, 
 	if err != nil {
 		return EmergencyTarget{}, 0, err
 	}
-	observation, err := s.observer.ObserveReplicas(ctx, workload.Namespace, workload.WorkloadName)
+	observation, err := s.observer.ObserveReplicas(ctx, workload.Cluster, workload.Namespace, workload.WorkloadName)
 	if err != nil {
 		return EmergencyTarget{}, 0, newStageError(CodeSnapshotNotFound, "emergency", "baseline replica observation failed")
 	}
@@ -264,18 +300,49 @@ func (s *EmergencyStage) selectTarget(ctx context.Context) (EmergencyTarget, err
 }
 
 // assertReplicas verifies the applied effect through the read-only observer.
+//
+// The effect is polled rather than sampled once. The emergency operation reaches
+// its terminal state when the replica count is accepted, but the new pods still
+// have to become ready, so a single read can legitimately see the requested count
+// with fewer ready replicas: a scale from 1 to 2 observed replicas 2 with ready 1
+// and failed a change that was applying correctly (real smoke 2026-09-11). The
+// wait is bounded by the effect timeout, and the last observation is what the
+// failure reports.
 func (s *EmergencyStage) assertReplicas(ctx context.Context, workload EmergencyTarget, want int32) error {
-	observation, err := s.observer.ObserveReplicas(ctx, workload.Namespace, workload.WorkloadName)
-	if err != nil {
-		return newStageError(CodeEffectUnknown, "emergency", "replica observation failed")
+	timeout := s.effectTimeout
+	if timeout <= 0 {
+		timeout = defaultEffectTimeout
 	}
+	deadline := time.Now().Add(timeout)
+	var last ReplicaObservation
+	for {
+		observation, err := s.observer.ObserveReplicas(ctx, workload.Cluster, workload.Namespace, workload.WorkloadName)
+		if err != nil {
+			return newStageError(CodeEffectUnknown, "emergency", "replica observation failed")
+		}
+		last = observation
+		if observation.Replicas == want && observation.Ready == want {
+			return nil
+		}
+		if !time.Now().Before(deadline) || ctx.Err() != nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return effectNotConverged(last, want)
+		case <-time.After(replicaConvergenceInterval):
+		}
+	}
+	return effectNotConverged(last, want)
+}
+
+// effectNotConverged reports the replica count that never converged, naming the
+// count that fell short so the failure is actionable.
+func effectNotConverged(observation ReplicaObservation, want int32) error {
 	if observation.Replicas != want {
 		return newStageError(CodeEffectUnknown, "emergency", fmt.Sprintf("replicas expected %d got %d", want, observation.Replicas))
 	}
-	if observation.Ready != want {
-		return newStageError(CodeEffectUnknown, "emergency", fmt.Sprintf("ready replicas expected %d got %d", want, observation.Ready))
-	}
-	return nil
+	return newStageError(CodeEffectUnknown, "emergency", fmt.Sprintf("ready replicas expected %d got %d", want, observation.Ready))
 }
 
 // registerRestore registers the single LIFO compensation that returns the

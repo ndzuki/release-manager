@@ -994,6 +994,11 @@ message EmergencyTarget {
   map<string, string> current_annotations = 7;
   bool hpa_managed = 8;
   int32 max_emergency_replicas = 9;
+  // Cluster the workload runs in. The emergency workload belongs to the release
+  // definition's customer cluster, not the management plane, so a caller that
+  // must read the workload itself (the E2E replica observer) needs the cluster
+  // identity to select the right control plane.
+  string cluster = 10;
 }
 
 message CheckEmergencyConflictRequest {

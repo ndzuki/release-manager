@@ -79,6 +79,7 @@ func (c *Connector) Targets(ctx context.Context, definitionID string) ([]stages.
 			WorkloadName:    reference.GetName(),
 			Namespace:       reference.GetNamespace(),
 			CurrentReplicas: target.GetCurrentReplicas(),
+			Cluster:         target.GetCluster(),
 			Reference:       rendered,
 		})
 	}

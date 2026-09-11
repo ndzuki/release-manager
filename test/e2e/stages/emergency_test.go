@@ -4,9 +4,14 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	e2e "github.com/ndzuki/release-manager/test/e2e"
 )
+
+// testEffectTimeout keeps the effect poll short. A case that never converges
+// would otherwise wait out the production timeout.
+const testEffectTimeout = 100 * time.Millisecond
 
 // replicaState is the simulated cluster replica count shared by the emergency
 // writer and the read-only observer, so the test exercises the real
@@ -41,6 +46,14 @@ type emergencyFake struct {
 	// baseline read that precedes it.
 	observeErrAfterChange bool
 	reconciled            bool
+	// observedClusters records the cluster each observation was made against, so
+	// a case can prove the target's cluster reaches the observer.
+	observedClusters []string
+	// observations counts the reads; readyAfter makes the first N-1 of them report
+	// the new pod as not ready yet, so a case can prove the stage waits for the
+	// scale-up to actually converge.
+	observations int
+	readyAfter   int
 }
 
 func newEmergencyFake(replicas int32) *emergencyFake {
@@ -55,6 +68,7 @@ func newEmergencyFake(replicas int32) *emergencyFake {
 			// must take its baseline from the observer. A regression to reading
 			// this field fails every case in TestEmergencyStageRun.
 			CurrentReplicas:  -1,
+			Cluster:          "dev-customer-a-direct",
 			OperationVersion: "v3",
 			Reference:        "deployments/release-fixture/release-fixture",
 		}},
@@ -102,13 +116,20 @@ func (f *emergencyFake) AwaitOperation(_ context.Context, operationID string) (O
 	return OperationRef{ID: operationID, Status: wireSucceeded}, nil
 }
 
-func (f *emergencyFake) ObserveReplicas(context.Context, string, string) (ReplicaObservation, error) {
+func (f *emergencyFake) ObserveReplicas(_ context.Context, cluster, _, _ string) (ReplicaObservation, error) {
+	f.observedClusters = append(f.observedClusters, cluster)
+	f.observations++
 	if f.observeErr != nil && (!f.observeErrAfterChange || f.reconciled) {
 		return ReplicaObservation{}, f.observeErr
 	}
+	ready := f.state.replicas - f.readyDelta
+	if f.readyAfter > 0 && f.observations < f.readyAfter {
+		// The scale-up has been accepted but the new pod is not ready yet.
+		ready = f.state.replicas - 1
+	}
 	return ReplicaObservation{
 		Replicas: f.state.replicas,
-		Ready:    f.state.replicas - f.readyDelta,
+		Ready:    ready,
 	}, nil
 }
 
@@ -177,6 +198,9 @@ func TestEmergencyStageRun(t *testing.T) {
 			name:   "effect not applied",
 			mutate: func(f *emergencyFake) { f.readyDelta = 1 },
 			want:   ErrEffectUnknown,
+			// The change was applied, so the failing assertion must still leave a
+			// restore behind.
+			wantReg: 1,
 		},
 		{
 			name: "effect unobservable",
@@ -184,7 +208,8 @@ func TestEmergencyStageRun(t *testing.T) {
 				f.observeErr = errors.New("private detail")
 				f.observeErrAfterChange = true
 			},
-			want: ErrEffectUnknown,
+			want:    ErrEffectUnknown,
+			wantReg: 1,
 		},
 		{
 			name: "foreign active operation",
@@ -204,7 +229,7 @@ func TestEmergencyStageRun(t *testing.T) {
 				test.mutate(fake)
 			}
 			registry := e2e.NewCompensationRegistry()
-			stage := NewEmergencyStage(fake, fake, registry, emergencyTarget(), 2)
+			stage := NewEmergencyStage(fake, fake, registry, emergencyTarget(), 2).WithEffectTimeout(testEffectTimeout).WithEffectTimeout(testEffectTimeout)
 
 			err := stage.Run(context.Background(), nil)
 			if test.want == nil {
@@ -216,6 +241,13 @@ func TestEmergencyStageRun(t *testing.T) {
 				}
 				if stage.BaselineReplicas() != 1 {
 					t.Fatalf("BaselineReplicas() = %d, want 1", stage.BaselineReplicas())
+				}
+				// The workload lives in a customer cluster, so every observation
+				// must carry that cluster rather than reading the management plane.
+				for _, cluster := range fake.observedClusters {
+					if cluster != "dev-customer-a-direct" {
+						t.Fatalf("observed cluster = %q, want the target's cluster", cluster)
+					}
 				}
 				if got := fake.sets[0].Convergence; got != EmergencyConvergenceRevertOnNextReconcile {
 					t.Fatalf("convergence = %q, want REVERT_ON_NEXT_RECONCILE", got)
@@ -236,6 +268,30 @@ func TestEmergencyStageRun(t *testing.T) {
 	}
 }
 
+func TestEmergencyStageWaitsForTheAppliedEffectToConverge(t *testing.T) {
+	t.Parallel()
+
+	// The operation reaches its terminal state when the replica count is
+	// accepted, but the new pod still has to become ready. Failing on the first
+	// read would reject a change that is applying correctly, which is what the
+	// live environment did (replicas 2, ready 1).
+	fake := newEmergencyFake(1)
+	fake.await["op-emergency"] = OperationRef{ID: "op-emergency", Status: wireSucceeded}
+	fake.readyAfter = 3
+	registry := e2e.NewCompensationRegistry()
+	stage := NewEmergencyStage(fake, fake, registry, emergencyTarget(), 2).WithEffectTimeout(testEffectTimeout).WithEffectTimeout(5 * time.Second)
+
+	if err := stage.Run(context.Background(), nil); err != nil {
+		t.Fatalf("Run() error = %v, want the stage to wait for readiness", err)
+	}
+	if fake.observations < fake.readyAfter {
+		t.Fatalf("observations = %d, want at least %d (the stage must poll)", fake.observations, fake.readyAfter)
+	}
+	if registry.Len() != 1 {
+		t.Fatalf("registry.Len() = %d, want the restore compensation", registry.Len())
+	}
+}
+
 func TestEmergencyStageRejectsPromotionConvergence(t *testing.T) {
 	t.Parallel()
 
@@ -246,7 +302,7 @@ func TestEmergencyStageRejectsPromotionConvergence(t *testing.T) {
 		Convergence: EmergencyConvergenceRequirePromotion,
 	}
 	registry := e2e.NewCompensationRegistry()
-	stage := NewEmergencyStage(fake, fake, registry, emergencyTarget(), 2)
+	stage := NewEmergencyStage(fake, fake, registry, emergencyTarget(), 2).WithEffectTimeout(testEffectTimeout)
 
 	err := stage.Run(context.Background(), nil)
 	if !errors.Is(err, ErrEffectUnknown) {
@@ -264,7 +320,7 @@ func TestEmergencyStageRestoreCompensation(t *testing.T) {
 	fake := newEmergencyFake(5)
 	fake.await["op-emergency"] = OperationRef{ID: "op-emergency", Status: wireSucceeded}
 	registry := e2e.NewCompensationRegistry()
-	stage := NewEmergencyStage(fake, fake, registry, emergencyTarget(), 2)
+	stage := NewEmergencyStage(fake, fake, registry, emergencyTarget(), 2).WithEffectTimeout(testEffectTimeout)
 
 	if err := stage.Run(context.Background(), nil); err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -292,7 +348,7 @@ func TestEmergencyStageRestoreFailureIsDirty(t *testing.T) {
 	fake := newEmergencyFake(1)
 	fake.await["op-emergency"] = OperationRef{ID: "op-emergency", Status: wireSucceeded}
 	registry := e2e.NewCompensationRegistry()
-	stage := NewEmergencyStage(fake, fake, registry, emergencyTarget(), 2)
+	stage := NewEmergencyStage(fake, fake, registry, emergencyTarget(), 2).WithEffectTimeout(testEffectTimeout)
 	if err := stage.Run(context.Background(), nil); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

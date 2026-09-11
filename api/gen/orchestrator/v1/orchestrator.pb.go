@@ -8277,8 +8277,13 @@ type EmergencyTarget struct {
 	CurrentAnnotations   map[string]string      `protobuf:"bytes,7,rep,name=current_annotations,json=currentAnnotations,proto3" json:"current_annotations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	HpaManaged           bool                   `protobuf:"varint,8,opt,name=hpa_managed,json=hpaManaged,proto3" json:"hpa_managed,omitempty"`
 	MaxEmergencyReplicas int32                  `protobuf:"varint,9,opt,name=max_emergency_replicas,json=maxEmergencyReplicas,proto3" json:"max_emergency_replicas,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Cluster the workload runs in. The emergency workload belongs to the release
+	// definition's customer cluster, not the management plane, so a caller that
+	// must read the workload itself (the E2E replica observer) needs the cluster
+	// identity to select the right control plane.
+	Cluster       string `protobuf:"bytes,10,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EmergencyTarget) Reset() {
@@ -8372,6 +8377,13 @@ func (x *EmergencyTarget) GetMaxEmergencyReplicas() int32 {
 		return x.MaxEmergencyReplicas
 	}
 	return 0
+}
+
+func (x *EmergencyTarget) GetCluster() string {
+	if x != nil {
+		return x.Cluster
+	}
+	return ""
 }
 
 type CheckEmergencyConflictRequest struct {
@@ -11529,7 +11541,7 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\x1bListEmergencyTargetsRequest\x122\n" +
 	"\x15release_definition_id\x18\x01 \x01(\tR\x13releaseDefinitionId\"Z\n" +
 	"\x1cListEmergencyTargetsResponse\x12:\n" +
-	"\atargets\x18\x01 \x03(\v2 .orchestrator.v1.EmergencyTargetR\atargets\"\xe9\x05\n" +
+	"\atargets\x18\x01 \x03(\v2 .orchestrator.v1.EmergencyTargetR\atargets\"\x83\x06\n" +
 	"\x0fEmergencyTarget\x12?\n" +
 	"\fworkload_ref\x18\x01 \x01(\v2\x1c.orchestrator.v1.WorkloadRefR\vworkloadRef\x12\x1e\n" +
 	"\n" +
@@ -11544,7 +11556,9 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\x13current_annotations\x18\a \x03(\v28.orchestrator.v1.EmergencyTarget.CurrentAnnotationsEntryR\x12currentAnnotations\x12\x1f\n" +
 	"\vhpa_managed\x18\b \x01(\bR\n" +
 	"hpaManaged\x124\n" +
-	"\x16max_emergency_replicas\x18\t \x01(\x05R\x14maxEmergencyReplicas\x1aC\n" +
+	"\x16max_emergency_replicas\x18\t \x01(\x05R\x14maxEmergencyReplicas\x12\x18\n" +
+	"\acluster\x18\n" +
+	" \x01(\tR\acluster\x1aC\n" +
 	"\x15CurrentImageRefsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1aE\n" +

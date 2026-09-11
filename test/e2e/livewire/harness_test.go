@@ -744,6 +744,8 @@ credentials:
 k3d:
   kubeconfig: %q
   context: "livewire-test"
+  cluster_contexts:
+    dev-customer-a-direct: "k3d-dev-customer-a-direct"
   test_namespace: "release-manager-dev"
   restart_targets:
     namespace: "release-manager-dev"

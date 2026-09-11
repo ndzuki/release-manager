@@ -93,6 +93,9 @@ func (s *Service) ListEmergencyTargets(
 
 	target := &orchestratorv1.EmergencyTarget{
 		WorkloadRef: workloadRef,
+		// The workload lives in the definition's customer cluster, so a caller
+		// that has to read the workload itself must know which cluster to read.
+		Cluster: inventory.ClusterID,
 		// D7=A unavailable sentinels.
 		CurrentReplicas:      -1,
 		Containers:           []string{},

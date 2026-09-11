@@ -58,6 +58,7 @@ func TestTargetsResolveGVRReference(t *testing.T) {
 	h.orch.setEmergencyTargets(&orchestratorv1.EmergencyTarget{
 		WorkloadRef:     &orchestratorv1.WorkloadRef{Kind: "Deployment", Name: "release-fixture", Namespace: "release-fixture"},
 		CurrentReplicas: 3,
+		Cluster:         "dev-customer-a-direct",
 	})
 
 	targets, err := h.connector.Targets(context.Background(), "e2e-emergency-target")
@@ -233,14 +234,14 @@ func TestAwaitOperationReportsEmergencyConvergence(t *testing.T) {
 // function-backed so the test can make the observed cluster state follow the
 // applied change instead of returning a constant.
 type replicaObserverFake struct {
-	observe func(namespace, workloadName string) (stages.ReplicaObservation, error)
+	observe func(cluster, namespace, workloadName string) (stages.ReplicaObservation, error)
 }
 
-func (f *replicaObserverFake) ObserveReplicas(_ context.Context, namespace, workloadName string) (stages.ReplicaObservation, error) {
+func (f *replicaObserverFake) ObserveReplicas(_ context.Context, cluster, namespace, workloadName string) (stages.ReplicaObservation, error) {
 	if f.observe == nil {
 		return stages.ReplicaObservation{}, errors.New("no observation")
 	}
-	return f.observe(namespace, workloadName)
+	return f.observe(cluster, namespace, workloadName)
 }
 
 // TestEmergencyStageRunsOverConnectAdapters proves the emergency writer seam
@@ -254,6 +255,7 @@ func TestEmergencyStageRunsOverConnectAdapters(t *testing.T) {
 	h.orch.setEmergencyTargets(&orchestratorv1.EmergencyTarget{
 		WorkloadRef:     &orchestratorv1.WorkloadRef{Kind: "Deployment", Name: "release-fixture", Namespace: "release-fixture"},
 		CurrentReplicas: 3,
+		Cluster:         "dev-customer-a-direct",
 	})
 	h.orch.setEmergencyResponse(&orchestratorv1.ExecuteEmergencyChangeResponse{
 		OperationId: "op-emergency",
@@ -276,7 +278,10 @@ func TestEmergencyStageRunsOverConnectAdapters(t *testing.T) {
 
 	// The observed cluster state follows the last accepted change, so the stage
 	// sees a real deviation and then a real restore.
-	observer := &replicaObserverFake{observe: func(_, workloadName string) (stages.ReplicaObservation, error) {
+	observer := &replicaObserverFake{observe: func(cluster, _, workloadName string) (stages.ReplicaObservation, error) {
+		if cluster == "" {
+			return stages.ReplicaObservation{}, errors.New("observation carried no cluster")
+		}
 		replicas := h.orch.lastEmergencyReplicas(3)
 		return stages.ReplicaObservation{Workload: workloadName, Replicas: replicas, Ready: replicas}, nil
 	}}

@@ -789,6 +789,15 @@ clusters_up() {
   done
   if [ "${#existing[@]}" -gt 0 ]; then
     k3d kubeconfig merge "${existing[@]}" -o "$DEV_DATA_DIR/kubeconfig.yaml" >/dev/null
+    # k3d kubeconfig merge rebuilds each cluster entry from k3d's own state, so
+    # the merge reintroduces https://0.0.0.0:<port> for every k3d-assigned API
+    # port even though cluster_up already rewrote the per-cluster files. This
+    # merged file is the one the E2E harness loads, so without the same rewrite
+    # here the harness cannot dial any customer cluster (real smoke 2026-09-11:
+    # the replica observer reached the control cluster and reported the
+    # emergency workload as absent, while https://127.0.0.1:<port>/api answered
+    # 401 for the cluster that actually hosts it).
+    sed -i 's#https://0\.0\.0\.0:#https://127.0.0.1:#g' "$DEV_DATA_DIR/kubeconfig.yaml"
     # Merged file carries the same admin credentials: 0600 too (AC-065-40).
     chmod 600 "$DEV_DATA_DIR/kubeconfig.yaml"
   fi

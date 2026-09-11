@@ -48,11 +48,14 @@ func BaselineReplicas(ctx context.Context, cfg *e2e.Config) ([]e2e.WorkloadRepli
 	if err != nil {
 		return nil, fmt.Errorf("livewire: baseline targets: %w", err)
 	}
-	client, err := NewKubernetesClient(cfg)
+	// The emergency workload runs in the definition's customer cluster, so the
+	// observation is resolved per cluster rather than read from the management
+	// plane.
+	provider, err := NewClusterContextsClientProvider(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("livewire: baseline kubernetes client: %w", err)
+		return nil, fmt.Errorf("livewire: baseline cluster client provider: %w", err)
 	}
-	observer, err := NewReplicaObserver(client)
+	observer, err := NewClusterReplicaObserver(provider)
 	if err != nil {
 		return nil, fmt.Errorf("livewire: baseline replica observer: %w", err)
 	}
@@ -62,7 +65,7 @@ func BaselineReplicas(ctx context.Context, cfg *e2e.Config) ([]e2e.WorkloadRepli
 // baselineReplicaSampler is the read-only observation the baseline needs; the
 // live ReplicaObserver satisfies it.
 type baselineReplicaSampler interface {
-	ObserveReplicas(ctx context.Context, namespace, workloadName string) (stages.ReplicaObservation, error)
+	ObserveReplicas(ctx context.Context, cluster, namespace, workloadName string) (stages.ReplicaObservation, error)
 }
 
 // sampleReplicas records the observed replica count of each target under the
@@ -79,7 +82,7 @@ func sampleReplicas(ctx context.Context, definitionID string, targets []stages.E
 		if reference == "" || target.Namespace == "" || target.WorkloadName == "" {
 			continue
 		}
-		observation, err := sampler.ObserveReplicas(ctx, target.Namespace, target.WorkloadName)
+		observation, err := sampler.ObserveReplicas(ctx, target.Cluster, target.Namespace, target.WorkloadName)
 		if err != nil {
 			return nil, fmt.Errorf("livewire: baseline observe %s: %w", reference, err)
 		}

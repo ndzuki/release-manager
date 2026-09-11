@@ -16,16 +16,17 @@ type baselineSamplerStub struct {
 	err      error
 }
 
-func (s baselineSamplerStub) ObserveReplicas(_ context.Context, namespace, workloadName string) (stages.ReplicaObservation, error) {
+func (s baselineSamplerStub) ObserveReplicas(_ context.Context, cluster, namespace, workloadName string) (stages.ReplicaObservation, error) {
 	if s.err != nil {
 		return stages.ReplicaObservation{}, s.err
 	}
-	return stages.ReplicaObservation{Replicas: s.replicas[namespace+"/"+workloadName]}, nil
+	return stages.ReplicaObservation{Replicas: s.replicas[cluster+"/"+namespace+"/"+workloadName]}, nil
 }
 
 // emergencyTargetsForBaseline returns targets whose CurrentReplicas is the live
 // unavailable sentinel, exactly as ListEmergencyTargets reports them. Reference
-// is the adapter-resolved plural GVR form the real connector sets.
+// is the adapter-resolved plural GVR form the real connector sets, and Cluster is
+// the customer cluster the workload runs in.
 func emergencyTargetsForBaseline(names ...string) []stages.EmergencyTarget {
 	targets := make([]stages.EmergencyTarget, 0, len(names))
 	for _, name := range names {
@@ -34,6 +35,7 @@ func emergencyTargetsForBaseline(names ...string) []stages.EmergencyTarget {
 			WorkloadName:    name,
 			Namespace:       "release-fixture",
 			CurrentReplicas: -1,
+			Cluster:         "dev-customer-a-direct",
 			Reference:       "deployments/release-fixture/" + name,
 		})
 	}
@@ -53,9 +55,11 @@ func TestBaselineReplicasSamplesEmergencyTargets(t *testing.T) {
 
 	const definitionID = "33333333-3333-3333-3333-333333333333"
 	targets := emergencyTargetsForBaseline("release-fixture", "alpha")
+	// Keyed by cluster too: a baseline that ignored the cluster would look up
+	// nothing and silently record zero rows.
 	sampler := baselineSamplerStub{replicas: map[string]int32{
-		"release-fixture/release-fixture": 3,
-		"release-fixture/alpha":           0,
+		"dev-customer-a-direct/release-fixture/release-fixture": 3,
+		"dev-customer-a-direct/release-fixture/alpha":           0,
 	}}
 
 	refs, err := sampleReplicas(context.Background(), definitionID, targets, sampler)
@@ -92,7 +96,7 @@ func TestBaselineReplicasSkipsAnUnavailableObservation(t *testing.T) {
 
 	targets := emergencyTargetsForBaseline("release-fixture")
 	sampler := baselineSamplerStub{replicas: map[string]int32{
-		"release-fixture/release-fixture": -1,
+		"dev-customer-a-direct/release-fixture/release-fixture": -1,
 	}}
 
 	refs, err := sampleReplicas(context.Background(), "def-emergency", targets, sampler)
