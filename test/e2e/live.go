@@ -3,7 +3,9 @@ package e2e
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
@@ -15,6 +17,13 @@ import (
 type LiveRecovery struct {
 	clients *ClientBundle
 	session *RunnerSession
+	// scope identifies this recovery invocation. Recovery writes are new logical
+	// operations each time cleanup runs: the next run changes the same definition
+	// and workload again, so a key built from the target alone replays the
+	// previous invocation's terminal operation and restores nothing (real smoke
+	// 2026-09-11: cleanup logged the replica restore while the workload stayed at
+	// the count the run had left behind).
+	scope string
 }
 
 // NewLiveRecovery constructs the formal-API recovery implementation. The
@@ -24,7 +33,19 @@ func NewLiveRecovery(cfg *Config, clients *ClientBundle) (*LiveRecovery, error) 
 	if err != nil {
 		return nil, err
 	}
-	return &LiveRecovery{clients: clients, session: session}, nil
+	return &LiveRecovery{clients: clients, session: session, scope: newRecoveryScope()}, nil
+}
+
+// newRecoveryScope returns a value that is fixed for one recovery invocation and
+// distinct from every other. It is computed once per invocation, so a retry
+// inside the invocation still dedupes onto one key.
+func newRecoveryScope() string {
+	return strconv.FormatInt(time.Now().UTC().UnixNano(), 36)
+}
+
+// idempotencyKey renders this invocation's key for one recovery write.
+func (r *LiveRecovery) idempotencyKey(kind, target string) string {
+	return idempotencyKey(kind, r.scope, target)
 }
 
 // Login authenticates as e2e-runner and resolves the authoritative user id.
@@ -93,7 +114,7 @@ func (r *LiveRecovery) CancelOperation(ctx context.Context, operationID, reason 
 		OperationId: operationID,
 		Reason:      reason,
 	})
-	request.Header().Set("Idempotency-Key", idempotencyKey("cleanup-cancel", operationID))
+	request.Header().Set("Idempotency-Key", r.idempotencyKey("cleanup-cancel", operationID))
 	_, err := r.clients.orchestrator.CancelOperation(ctx, request)
 	return err
 }
@@ -110,7 +131,7 @@ func (r *LiveRecovery) RollbackRelease(ctx context.Context, definitionID string,
 		ExpectedCurrentRevision: expectedCurrentRevision,
 		Reason:                  reason,
 	})
-	request.Header().Set("Idempotency-Key", idempotencyKey("cleanup-rollback", definitionID))
+	request.Header().Set("Idempotency-Key", r.idempotencyKey("cleanup-rollback", definitionID))
 	_, err := r.clients.orchestrator.RollbackRelease(ctx, request)
 	return err
 }
@@ -142,7 +163,7 @@ func (r *LiveRecovery) SetReplicas(ctx context.Context, definitionID, workloadRe
 		WorkloadRef:         workloadRef,
 		ConvergenceStrategy: orchestratorv1.ConvergenceStrategy_REVERT_ON_NEXT_RECONCILE,
 		SetReplicas:         replicas,
-		IdempotencyKey:      idempotencyKey("cleanup-set-replicas", definitionID+"/"+workloadRef),
+		IdempotencyKey:      r.idempotencyKey("cleanup-set-replicas", definitionID+"/"+workloadRef),
 	})
 	_, err := r.clients.orchestrator.ExecuteEmergencyChange(ctx, request)
 	return err
@@ -161,6 +182,10 @@ func authorizedRequest[T any](token string, message *T) *connect.Request[T] {
 // idempotencyKey returns a stable-per-target write key. Using the target id
 // (not a random suffix) makes cleanup exactly-once across replays while still
 // being unique per operation/definition (ADR-009 scoped idempotency).
-func idempotencyKey(kind, target string) string {
-	return "e2e-cleanup-" + kind + "-" + target
+func idempotencyKey(kind, scope, target string) string {
+	key := "e2e-cleanup-" + kind
+	if scope != "" {
+		key += "-" + scope
+	}
+	return key + "-" + target
 }
