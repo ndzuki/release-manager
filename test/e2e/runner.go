@@ -299,8 +299,10 @@ func (h *Harness) RunScenario(ctx context.Context, scenario Scenario) (Report, e
 	return h.Run(ctx, scenario)
 }
 
-func (h *Harness) run(ctx context.Context, scenario Scenario) (Report, error) {
-	started := time.Now()
+// resolveSpecs picks the stage list for one scenario: the scenario's own stages
+// first, then the harness's, then the canonical fail-closed default. Scenario
+// dependency overrides are applied last so they always win.
+func (h *Harness) resolveSpecs(scenario Scenario) []StageSpec {
 	specs := normalizeScenarioStages(scenario)
 	if len(specs) == 0 {
 		specs = append([]StageSpec(nil), h.Stages...)
@@ -308,14 +310,34 @@ func (h *Harness) run(ctx context.Context, scenario Scenario) (Report, error) {
 	if len(specs) == 0 {
 		specs = canonicalDefaultSpecs()
 	}
-	if len(scenario.Dependencies) != 0 {
-		for i := range specs {
-			if deps, ok := scenario.Dependencies[specs[i].Name]; ok {
-				specs[i].Dependencies = append([]string(nil), deps...)
-				specs[i].DependsOn = nil
-			}
+	// Ranging over a nil map yields nothing, so an absent override set needs no
+	// separate guard.
+	for index := range specs {
+		if deps, ok := scenario.Dependencies[specs[index].Name]; ok {
+			specs[index].Dependencies = append([]string(nil), deps...)
+			specs[index].DependsOn = nil
 		}
 	}
+	return specs
+}
+
+// runSettings resolves the per-run timeouts and parallelism, falling back from
+// the scenario to the harness defaults.
+func (h *Harness) runSettings(scenario Scenario) (stageTimeout, totalTimeout time.Duration, parallel bool) {
+	stageTimeout = scenario.StageTimeout
+	if stageTimeout == 0 {
+		stageTimeout = h.StageTimeout
+	}
+	totalTimeout = scenario.TotalTimeout
+	if totalTimeout == 0 {
+		totalTimeout = h.TotalTimeout
+	}
+	return stageTimeout, totalTimeout, scenario.Parallel || h.Parallel
+}
+
+func (h *Harness) run(ctx context.Context, scenario Scenario) (Report, error) {
+	started := time.Now()
+	specs := h.resolveSpecs(scenario)
 	ordered, byName := orderSpecs(specs)
 	selected, err := selectedNames(scenario, ordered, byName)
 	if err != nil {
@@ -325,15 +347,7 @@ func (h *Harness) run(ctx context.Context, scenario Scenario) (Report, error) {
 	if fixture == nil {
 		fixture = NewFixture()
 	}
-	stageTimeout := scenario.StageTimeout
-	if stageTimeout == 0 {
-		stageTimeout = h.StageTimeout
-	}
-	totalTimeout := scenario.TotalTimeout
-	if totalTimeout == 0 {
-		totalTimeout = h.TotalTimeout
-	}
-	parallel := scenario.Parallel || h.Parallel
+	stageTimeout, totalTimeout, parallel := h.runSettings(scenario)
 	root, cancel := contextWithTimeout(ctx, totalTimeout)
 	defer cancel()
 
