@@ -1,13 +1,18 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"sync"
 	"testing"
 
+	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 )
 
 func TestNewClientBundleConstructsTypedClients(t *testing.T) {
@@ -107,4 +112,54 @@ type recordingHTTPClient struct{}
 
 func (*recordingHTTPClient) Do(request *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: request}, nil
+}
+
+// urlRecordingHTTPClient captures the URL of every request so a test can assert
+// which declared endpoint a generated client actually addresses.
+type urlRecordingHTTPClient struct {
+	mu   sync.Mutex
+	urls []string
+}
+
+func (c *urlRecordingHTTPClient) Do(request *http.Request) (*http.Response, error) {
+	c.mu.Lock()
+	c.urls = append(c.urls, request.URL.String())
+	c.mu.Unlock()
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/proto"}},
+		Body:       http.NoBody,
+		Request:    request,
+	}, nil
+}
+
+func (c *urlRecordingHTTPClient) recorded() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.urls...)
+}
+
+// TestOperatorSessionReadUsesTheControlPlaneEndpoint pins the endpoint the
+// runner reads operator sessions from. release_operator is the TLS agent gateway
+// and answers no plain-HTTP request, so binding the OperatorService client to it
+// made every read fail and the control-plane stage report the session as missing
+// (real smoke 2026-09-11). The read belongs to release_orchestrator, like every
+// other control-plane client in the bundle.
+func TestOperatorSessionReadUsesTheControlPlaneEndpoint(t *testing.T) {
+	t.Parallel()
+
+	recorder := &urlRecordingHTTPClient{}
+	clients, err := NewClientBundleWithOptions(testClientConfig(), ClientOptions{HTTPClient: recorder})
+	require.NoError(t, err)
+
+	response, err := clients.Operator().GetActiveOperatorSession(context.Background(),
+		connect.NewRequest(&operatorv1.GetActiveOperatorSessionRequest{OperatorId: "operator-1"}))
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	require.NotNil(t, response.Msg)
+
+	requested := recorder.recorded()
+	require.Len(t, requested, 1)
+	assert.Contains(t, requested[0], "orchestrator.test")
+	assert.NotContains(t, requested[0], "operator.test")
 }

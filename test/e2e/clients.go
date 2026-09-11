@@ -78,8 +78,11 @@ func (b *ClientBundle) Auth() authv1connect.AuthServiceClient {
 }
 
 // ClientOptions controls the HTTP transports used by generated clients. The
-// operator transport may be supplied separately so callers can install the
-// operator gateway's HTTPS/mTLS transport without changing other clients.
+// operator transport may be supplied separately so callers can probe the agent
+// gateway with its HTTPS/mTLS transport: release_operator is TLS-only, so an
+// endpoint probe needs a transport the other clients must not use. It does not
+// select the OperatorService RPC transport — those calls are control-plane reads
+// and go to release_orchestrator with the same client as their siblings.
 type ClientOptions struct {
 	HTTPClient         connect.HTTPClient
 	OperatorHTTPClient connect.HTTPClient
@@ -135,8 +138,16 @@ func NewClientBundleWithOptions(cfg *Config, opts ClientOptions) (*ClientBundle,
 		cleanup:      orchestratorv1connect.NewCleanupServiceClient(client, cfg.Endpoints.ReleaseOrchestrator),
 		trust:        trustv1connect.NewTrustServiceClient(client, cfg.Endpoints.ReleaseOrchestrator),
 
-		webhook:  webhookv1connect.NewWebhookServiceClient(client, cfg.Endpoints.ReleaseWebhook),
-		operator: operatorv1connect.NewOperatorServiceClient(operatorClient, cfg.Endpoints.ReleaseOperator),
+		webhook: webhookv1connect.NewWebhookServiceClient(client, cfg.Endpoints.ReleaseWebhook),
+		// The runner reads operator sessions through the control-plane mux, not
+		// through the agent gateway. release_operator terminates TLS for operator
+		// agents (mTLS enrolment, heartbeat, command polling) and answers no
+		// plain-HTTP request, so binding this client to it made every
+		// GetActiveOperatorSession call fail and the control-plane stage report
+		// the session as missing (real smoke 2026-09-11). Every sibling client
+		// here — orchestrator, bundle, cleanup, trust — is served by
+		// release_orchestrator, and OperatorService is registered there too.
+		operator: operatorv1connect.NewOperatorServiceClient(client, cfg.Endpoints.ReleaseOrchestrator),
 		notifier: notifierv1connect.NewNotifierServiceClient(client, cfg.Endpoints.ReleaseNotifier),
 
 		httpClient:         client,
