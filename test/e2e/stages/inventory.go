@@ -278,16 +278,6 @@ func uniqueIdentityCount(items []IdentityObservation) int {
 	return len(seen)
 }
 
-func uniqueDefinitionCount(items []DefinitionObservation) int {
-	seen := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		if item.ID != "" {
-			seen[item.ID] = struct{}{}
-		}
-	}
-	return len(seen)
-}
-
 func uniqueBundleCount(items []BundleObservation) int {
 	seen := make(map[string]struct{}, len(items))
 	for _, item := range items {

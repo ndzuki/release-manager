@@ -209,24 +209,24 @@ func runStages(args []string, stdout, stderr io.Writer) int {
 	}
 
 	stageArtifacts := make([]e2e.StageArtifact, 0, len(report.Results))
-	for _, result := range report.Results {
-		stage := result.Stage
+	for index := range report.Results {
+		stage := report.Results[index].Stage
 		if stage == "" {
-			stage = result.Name
+			stage = report.Results[index].Name
 		}
-		if err := e2e.WriteJSONAtomic(filepath.Join(options.outputDir, stage+".json"), result); err != nil {
+		if err := e2e.WriteJSONAtomic(filepath.Join(options.outputDir, stage+".json"), report.Results[index]); err != nil {
 			logger.Error("write stage artifact", "stage", stage, "error", err)
 			return int(exitRuntime)
 		}
 		stageArtifacts = append(stageArtifacts, e2e.StageArtifact{
 			Stage:  stage,
-			Status: result.Status,
+			Status: report.Results[index].Status,
 			File:   stage + ".json",
 		})
-		if result.Status == e2e.StageFail {
-			logger.Warn("e2e stage failed", "stage", stage, "root_cause", result.RootCause)
+		if report.Results[index].Status == e2e.StageFail {
+			logger.Warn("e2e stage failed", "stage", stage, "root_cause", report.Results[index].RootCause)
 			if options.keepFailure {
-				if err := writeDiagnostic(options.outputDir, runID, result); err != nil {
+				if err := writeDiagnostic(options.outputDir, runID, report.Results[index]); err != nil {
 					logger.Error("write failure diagnostic", "stage", stage, "error", err)
 					return int(exitRuntime)
 				}
@@ -528,9 +528,9 @@ func writeDiagnostic(outputDir, runID string, result e2e.StageResult) error {
 }
 
 func startedAt(report e2e.Report, fallback time.Time) time.Time {
-	for _, result := range report.Results {
-		if !result.StartedAt.IsZero() {
-			return result.StartedAt
+	for index := range report.Results {
+		if !report.Results[index].StartedAt.IsZero() {
+			return report.Results[index].StartedAt
 		}
 	}
 	return fallback
@@ -554,8 +554,8 @@ func safeErrorMessage(err error) string {
 
 func writeSummary(stdout io.Writer, artifact e2e.RunArtifact, results []e2e.StageResult) {
 	fmt.Fprintf(stdout, "E2E run %s: pass=%d fail=%d skip=%d exit=%d\n", artifact.RunID, artifact.Pass, artifact.Fail, artifact.Skip, artifact.ExitCode)
-	for _, result := range results {
-		fmt.Fprintf(stdout, "- %s: %s (%dms)\n", result.Stage, result.Status, result.DurationMs)
+	for index := range results {
+		fmt.Fprintf(stdout, "- %s: %s (%dms)\n", results[index].Stage, results[index].Status, results[index].DurationMs)
 	}
 }
 

@@ -73,7 +73,12 @@ func AcquireProcessLock(path, owner string) (*ProcessLock, error) {
 
 	marker := LockOwner{Owner: owner, PID: os.Getpid(), AcquiredAt: time.Now().UTC()}
 	if err := writeLockOwner(file, marker); err != nil {
-		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		// The explicit release is best effort: closing the descriptor below
+		// drops the lock either way, so a failed unlock is reported alongside
+		// the original failure rather than replacing it.
+		if unlockErr := syscall.Flock(int(file.Fd()), syscall.LOCK_UN); unlockErr != nil {
+			err = errors.Join(err, fmt.Errorf("release process lock: %w", unlockErr))
+		}
 		_ = file.Close()
 		return nil, fmt.Errorf("write process lock owner: %w", err)
 	}

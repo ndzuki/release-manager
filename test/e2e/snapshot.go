@@ -199,29 +199,39 @@ func cloneRawJSON(raw json.RawMessage) json.RawMessage {
 // normalizeSnapshot sorts all identity collections by their stable public key
 // before serializing. It returns a detached value and never mutates its input.
 func normalizeSnapshot(snapshot FixtureSnapshot) FixtureSnapshot {
-	copy := snapshot.Immutable()
-	sort.Slice(copy.Identity.Customers, func(i, j int) bool {
-		return identityRefKey(copy.Identity.Customers[i]) < identityRefKey(copy.Identity.Customers[j])
+	normalized := snapshot.Immutable()
+	sort.Slice(normalized.Identity.Customers, func(i, j int) bool {
+		return identityRefKey(normalized.Identity.Customers[i]) < identityRefKey(normalized.Identity.Customers[j])
 	})
-	sort.Slice(copy.Identity.Clusters, func(i, j int) bool {
-		return identityRefKey(copy.Identity.Clusters[i]) < identityRefKey(copy.Identity.Clusters[j])
+	sort.Slice(normalized.Identity.Clusters, func(i, j int) bool {
+		return identityRefKey(normalized.Identity.Clusters[i]) < identityRefKey(normalized.Identity.Clusters[j])
 	})
-	sort.Slice(copy.Identity.ReleaseDefinitions, func(i, j int) bool {
-		return identityRefKey(copy.Identity.ReleaseDefinitions[i]) < identityRefKey(copy.Identity.ReleaseDefinitions[j])
+	sort.Slice(normalized.Identity.ReleaseDefinitions, func(i, j int) bool {
+		return identityRefKey(normalized.Identity.ReleaseDefinitions[i]) < identityRefKey(normalized.Identity.ReleaseDefinitions[j])
 	})
-	sort.Slice(copy.Identity.ReleaseInventories, func(i, j int) bool {
-		return inventoryRefKey(copy.Identity.ReleaseInventories[i]) < inventoryRefKey(copy.Identity.ReleaseInventories[j])
+	sort.Slice(normalized.Identity.ReleaseInventories, func(i, j int) bool {
+		return inventoryRefKey(normalized.Identity.ReleaseInventories[i]) < inventoryRefKey(normalized.Identity.ReleaseInventories[j])
 	})
-	sort.Slice(copy.Identity.OperatorSessions, func(i, j int) bool {
-		return copy.Identity.OperatorSessions[i].OperatorID < copy.Identity.OperatorSessions[j].OperatorID
+	sort.Slice(normalized.Identity.OperatorSessions, func(i, j int) bool {
+		return normalized.Identity.OperatorSessions[i].OperatorID < normalized.Identity.OperatorSessions[j].OperatorID
 	})
-	sort.Slice(copy.Identity.Operations, func(i, j int) bool {
-		return copy.Identity.Operations[i].ID < copy.Identity.Operations[j].ID
+	sort.Slice(normalized.Identity.Operations, func(i, j int) bool {
+		return normalized.Identity.Operations[i].ID < normalized.Identity.Operations[j].ID
 	})
-	return copy
+	// Workload replicas are part of the identity projection, so they need the
+	// same deterministic ordering as every other collection or the snapshot
+	// digest would depend on observation order.
+	sort.Slice(normalized.Identity.WorkloadReplicas, func(i, j int) bool {
+		return workloadReplicaKey(normalized.Identity.WorkloadReplicas[i]) < workloadReplicaKey(normalized.Identity.WorkloadReplicas[j])
+	})
+	return normalized
 }
 
 func identityRefKey(ref IdentityRef) string { return ref.ID + "\x00" + ref.Name }
+
+func workloadReplicaKey(ref WorkloadReplicaRef) string {
+	return ref.ReleaseDefinitionID + "\x00" + ref.WorkloadRef
+}
 
 func inventoryRefKey(ref InventoryRef) string {
 	return ref.ReleaseDefinitionID + "\x00" + ref.CustomerID + "\x00" + ref.ClusterID + "\x00" + ref.Namespace + "\x00" + ref.ReleaseName

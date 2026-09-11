@@ -25,14 +25,18 @@ func TestCheckReadinessChecksAllDeclaredEndpoints(t *testing.T) {
 		switch request.URL.Path {
 		case "/health", "/readyz":
 			writer.WriteHeader(http.StatusOK)
-			_, _ = writer.Write([]byte(`{"status":"ok"}`))
+			if _, err := writer.Write([]byte(`{"status":"ok"}`)); err != nil {
+				t.Errorf("write readiness body: %v", err)
+			}
 		case "/environment":
 			writer.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(writer).Encode(EnvironmentObservation{
+			if err := json.NewEncoder(writer).Encode(EnvironmentObservation{
 				Service:       strings.TrimPrefix(request.Host, "service-"),
 				Environment:   environment,
 				EnvironmentID: environmentID,
-			})
+			}); err != nil {
+				t.Errorf("encode environment observation: %v", err)
+			}
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
@@ -112,7 +116,9 @@ func TestCheckReadinessRejectsMissingEndpoint(t *testing.T) {
 func TestCheckReadinessHonorsContextTimeout(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	// The timeout is proven by the request context, so the handler never writes
+	// a response and does not need the ResponseWriter.
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
 		<-request.Context().Done()
 	}))
 	defer server.Close()
@@ -130,9 +136,11 @@ func TestReadinessErrorDoesNotExposeURLOrResponseBody(t *testing.T) {
 	t.Parallel()
 
 	secretBody := "password=do-not-log"
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusInternalServerError)
-		_, _ = writer.Write([]byte(secretBody))
+		if _, err := writer.Write([]byte(secretBody)); err != nil {
+			t.Errorf("write secret body: %v", err)
+		}
 	}))
 	defer server.Close()
 
@@ -164,10 +172,14 @@ func readinessServer(t *testing.T, environment EnvironmentObservation) *httptest
 		switch request.URL.Path {
 		case "/health", "/readyz":
 			writer.WriteHeader(http.StatusOK)
-			_, _ = writer.Write([]byte(`{"status":"ok"}`))
+			if _, err := writer.Write([]byte(`{"status":"ok"}`)); err != nil {
+				t.Errorf("write readiness body: %v", err)
+			}
 		case "/environment":
 			writer.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(writer).Encode(environment)
+			if err := json.NewEncoder(writer).Encode(environment); err != nil {
+				t.Errorf("encode environment observation: %v", err)
+			}
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}

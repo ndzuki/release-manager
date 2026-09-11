@@ -95,8 +95,8 @@ func NewRecoveryLedger(path string) (*RecoveryLedger, error) {
 	if err := json.Unmarshal(data, &ledger.entries); err != nil {
 		return nil, fmt.Errorf("decode recovery ledger: %w", ErrLedgerCorrupt)
 	}
-	for _, entry := range ledger.entries {
-		if entry.Status == "" || entry.RunID == "" {
+	for index := range ledger.entries {
+		if ledger.entries[index].Status == "" || ledger.entries[index].RunID == "" {
 			return nil, fmt.Errorf("decode recovery ledger: %w", ErrLedgerCorrupt)
 		}
 	}
@@ -132,9 +132,9 @@ func (l *RecoveryLedger) Entry(id string) (LedgerEntry, error) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	for _, entry := range l.entries {
-		if entry.OperationID == id || entry.CompensationID == id {
-			return entry, nil
+	for index := range l.entries {
+		if l.entries[index].OperationID == id || l.entries[index].CompensationID == id {
+			return l.entries[index], nil
 		}
 	}
 	return LedgerEntry{}, ErrLedgerNotFound
@@ -236,11 +236,11 @@ func (l *RecoveryLedger) Transition(id string, next RecoveryStatus) error {
 func (l *RecoveryLedger) append(entry LedgerEntry) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	for _, existing := range l.entries {
-		if entry.OperationID != "" && existing.OperationID == entry.OperationID {
+	for index := range l.entries {
+		if entry.OperationID != "" && l.entries[index].OperationID == entry.OperationID {
 			return fmt.Errorf("append recovery entry: %w", ErrInvalidLedgerEntry)
 		}
-		if entry.CompensationID != "" && existing.CompensationID == entry.CompensationID {
+		if entry.CompensationID != "" && l.entries[index].CompensationID == entry.CompensationID {
 			return fmt.Errorf("append recovery entry: %w", ErrInvalidLedgerEntry)
 		}
 	}

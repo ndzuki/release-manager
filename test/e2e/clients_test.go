@@ -3,6 +3,7 @@ package e2e
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,17 +45,24 @@ func TestNewClientBundleRejectsMissingEndpoint(t *testing.T) {
 	assert.ErrorContains(t, err, "endpoints.release_auth")
 }
 
+// TestClientBundleDoesNotSerializeRuntimeHandles asserts the structural reason a
+// bundle cannot leak: it exposes no exported field, so encoding/json has nothing
+// to encode. Marshalling it instead would be vacuous — the result is always
+// "{}" no matter what the bundle holds, so the assertion could never fail.
 func TestClientBundleDoesNotSerializeRuntimeHandles(t *testing.T) {
 	t.Parallel()
 
 	clients, err := NewClientBundle(testClientConfig())
 	require.NoError(t, err)
 
-	data, err := json.Marshal(clients)
-	require.NoError(t, err)
-	assert.NotContains(t, string(data), "E2E_RUNNER_PASSWORD")
-	assert.NotContains(t, string(data), "httpClient")
-	assert.NotContains(t, string(data), "release_orchestrator")
+	bundleType := reflect.TypeOf(clients).Elem()
+	require.Positive(t, bundleType.NumField(), "bundle unexpectedly has no fields")
+	for index := range bundleType.NumField() {
+		field := bundleType.Field(index)
+		if field.IsExported() {
+			t.Fatalf("ClientBundle.%s is exported; a runtime handle would become serializable", field.Name)
+		}
+	}
 }
 
 func TestConfigPasswordDoesNotSerialize(t *testing.T) {

@@ -81,9 +81,9 @@ func (r *RunResult) Result(name string) (StageResult, bool) {
 	if r == nil {
 		return StageResult{}, false
 	}
-	for _, result := range r.Results {
-		if result.Stage == name || result.Name == name {
-			return result, true
+	for index := range r.Results {
+		if r.Results[index].Stage == name || r.Results[index].Name == name {
+			return r.Results[index], true
 		}
 	}
 	return StageResult{}, false
@@ -238,12 +238,12 @@ func NewHarness(inputs ...any) *Harness {
 	for _, input := range inputs {
 		switch value := input.(type) {
 		case Config:
-			copy := value
-			h.config = &copy
+			configCopy := value
+			h.config = &configCopy
 		case *Config:
 			if value != nil {
-				copy := *value
-				h.config = &copy
+				configCopy := *value
+				h.config = &configCopy
 			}
 		case StageSpec:
 			h.Stages = append(h.Stages, value)
@@ -342,8 +342,8 @@ func (h *Harness) run(ctx context.Context, scenario Scenario) (Report, error) {
 		Results:      results,
 		TotalElapsed: time.Since(started),
 	}
-	for _, result := range results {
-		switch result.Status {
+	for index := range results {
+		switch results[index].Status {
 		case StagePass:
 			report.Passed++
 		case StageFail:
@@ -355,11 +355,11 @@ func (h *Harness) run(ctx context.Context, scenario Scenario) (Report, error) {
 	if err != nil {
 		return report, err
 	}
-	for _, result := range report.Results {
+	for index := range report.Results {
 		var panicErr *PanicError
-		if errors.As(result.Error, &panicErr) {
+		if errors.As(report.Results[index].Error, &panicErr) {
 			report.ExitCode = 1
-			return report, &RunError{Stage: result.Stage, Err: panicErr}
+			return report, &RunError{Stage: report.Results[index].Stage, Err: panicErr}
 		}
 	}
 	report.ExitCode = reportExitCode(&report)
@@ -443,9 +443,9 @@ func executeGraph(
 			}
 		}
 		batchResults := executeBatch(ctx, batch, fixture, defaultTimeout, logger)
-		for _, result := range batchResults {
-			results[result.Stage] = result
-			delete(pending, result.Stage)
+		for index := range batchResults {
+			results[batchResults[index].Stage] = batchResults[index]
+			delete(pending, batchResults[index].Stage)
 		}
 	}
 
@@ -479,10 +479,6 @@ func dependencyState(
 			continue
 		}
 		if result.Status != StagePass {
-			cause := result.RootCause
-			if cause == "" {
-				cause = result.Cause
-			}
 			return fmt.Sprintf("stage_skipped: dependency %s %s", dependency, result.Status), false
 		}
 	}
@@ -638,8 +634,6 @@ func finishStageResult(result StageResult, err error, cause string, started time
 	return result
 }
 
-func startedWithCause(start time.Time, _ string) time.Time { return start }
-
 func skippedResult(name, cause string) StageResult {
 	now := time.Now()
 	return StageResult{
@@ -681,18 +675,6 @@ func effectiveTimeout(spec StageSpec, defaultTimeout time.Duration) time.Duratio
 		return 10 * time.Minute
 	}
 	return defaultTimeout
-}
-
-func allCanonicalParallelSafe(specs []StageSpec) bool {
-	if len(specs) < 2 {
-		return false
-	}
-	for _, spec := range specs {
-		if spec.Name != StageInventory && spec.Name != StageArtifactName {
-			return false
-		}
-	}
-	return true
 }
 
 func normalizeScenarioStages(scenario Scenario) []StageSpec {
@@ -843,11 +825,6 @@ func canonicalDefaultSpecs() []StageSpec {
 	}
 	return out
 }
-
-// canonicalNoopSpecs is a deprecated compatibility alias. It now returns the
-// same fail-closed graph as canonicalDefaultSpecs; callers that need a
-// deterministic no-op stage must provide their own StageSpec.
-func canonicalNoopSpecs() []StageSpec { return canonicalDefaultSpecs() }
 
 func reportExitCode(result *RunResult) int {
 	if result == nil {

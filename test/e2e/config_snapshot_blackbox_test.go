@@ -32,7 +32,6 @@ func TestLoadConfigResolvesPasswordWithoutSerializingSecret(t *testing.T) {
 }
 
 func TestLoadConfigRejectsInvalidInputs(t *testing.T) {
-
 	tests := []struct {
 		name       string
 		configYAML string

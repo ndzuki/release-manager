@@ -152,37 +152,37 @@ func TestSpecsFailsClosedOnUnusableConfig(t *testing.T) {
 		{
 			name: "missing upgrade targets",
 			mutate: func(_ *testing.T, cfg *e2e.Config) {
-				cfg.Seed.E2EUpgradeTargets = nil
+				cfg.Seed.UpgradeTargets = nil
 			},
 		},
 		{
 			name: "one binding only",
 			mutate: func(_ *testing.T, cfg *e2e.Config) {
-				cfg.Seed.E2EUpgradeTargets = cfg.Seed.E2EUpgradeTargets[:1]
+				cfg.Seed.UpgradeTargets = cfg.Seed.UpgradeTargets[:1]
 			},
 		},
 		{
 			name: "aliased isolation target",
 			mutate: func(_ *testing.T, cfg *e2e.Config) {
-				targets := append([]e2e.E2EUpgradeTarget(nil), cfg.Seed.E2EUpgradeTargets...)
+				targets := append([]e2e.UpgradeTarget(nil), cfg.Seed.UpgradeTargets...)
 				for i := range targets {
 					if targets[i].LogicalKey == e2e.CanonicalE2EUpgradeKeys[1] {
 						targets[i].DefinitionID = "11111111-1111-1111-1111-111111111111"
 					}
 				}
-				cfg.Seed.E2EUpgradeTargets = targets
+				cfg.Seed.UpgradeTargets = targets
 			},
 		},
 		{
 			name: "upgrade binding without a bundle",
 			mutate: func(_ *testing.T, cfg *e2e.Config) {
-				targets := append([]e2e.E2EUpgradeTarget(nil), cfg.Seed.E2EUpgradeTargets...)
+				targets := append([]e2e.UpgradeTarget(nil), cfg.Seed.UpgradeTargets...)
 				for i := range targets {
 					if targets[i].LogicalKey == e2e.CanonicalE2EUpgradeKeys[0] {
 						targets[i].BundleID = ""
 					}
 				}
-				cfg.Seed.E2EUpgradeTargets = targets
+				cfg.Seed.UpgradeTargets = targets
 			},
 		},
 	}
@@ -257,11 +257,11 @@ func TestSeedUpgradeTargetsIsOrderIndependent(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	reversed := make([]e2e.E2EUpgradeTarget, 0, len(h.cfg.Seed.E2EUpgradeTargets))
-	for i := len(h.cfg.Seed.E2EUpgradeTargets) - 1; i >= 0; i-- {
-		reversed = append(reversed, h.cfg.Seed.E2EUpgradeTargets[i])
+	reversed := make([]e2e.UpgradeTarget, 0, len(h.cfg.Seed.UpgradeTargets))
+	for i := len(h.cfg.Seed.UpgradeTargets) - 1; i >= 0; i-- {
+		reversed = append(reversed, h.cfg.Seed.UpgradeTargets[i])
 	}
-	h.cfg.Seed.E2EUpgradeTargets = reversed
+	h.cfg.Seed.UpgradeTargets = reversed
 
 	release, isolation, err := seedUpgradeTargets(h.cfg)
 	if err != nil {
@@ -281,13 +281,13 @@ func TestSeedUpgradeTargetsFailsClosedOnUnboundKey(t *testing.T) {
 	h := newHarness(t)
 	// Drop the isolation binding: the release stage still resolves, but the
 	// missing key must fail closed rather than silently binding to a neighbour.
-	kept := make([]e2e.E2EUpgradeTarget, 0, len(h.cfg.Seed.E2EUpgradeTargets))
-	for _, definition := range h.cfg.Seed.E2EUpgradeTargets {
+	kept := make([]e2e.UpgradeTarget, 0, len(h.cfg.Seed.UpgradeTargets))
+	for _, definition := range h.cfg.Seed.UpgradeTargets {
 		if definition.LogicalKey != e2e.CanonicalE2EUpgradeKeys[1] {
 			kept = append(kept, definition)
 		}
 	}
-	h.cfg.Seed.E2EUpgradeTargets = kept
+	h.cfg.Seed.UpgradeTargets = kept
 
 	if _, _, err := seedUpgradeTargets(h.cfg); err == nil {
 		t.Fatal("seedUpgradeTargets() error = nil, want a fail-closed error")
@@ -298,9 +298,9 @@ func TestSpecsBindsArtifactToTheReleaseTarget(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	for i := range h.cfg.Seed.E2EUpgradeTargets {
-		if h.cfg.Seed.E2EUpgradeTargets[i].LogicalKey == e2e.CanonicalE2EUpgradeKeys[0] {
-			h.cfg.Seed.E2EUpgradeTargets[i].BundleID = "bundle-release"
+	for i := range h.cfg.Seed.UpgradeTargets {
+		if h.cfg.Seed.UpgradeTargets[i].LogicalKey == e2e.CanonicalE2EUpgradeKeys[0] {
+			h.cfg.Seed.UpgradeTargets[i].BundleID = "bundle-release"
 		}
 	}
 

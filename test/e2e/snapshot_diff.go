@@ -117,11 +117,11 @@ func compareIdentityRefs(diffs *[]SnapshotDiff, prefix string, expected, actual 
 func compareInventoryRefs(diffs *[]SnapshotDiff, expected, actual []InventoryRef) {
 	expectedMap := make(map[string]InventoryRef, len(expected))
 	actualMap := make(map[string]InventoryRef, len(actual))
-	for _, ref := range expected {
-		expectedMap[inventoryRefKey(ref)] = ref
+	for index := range expected {
+		expectedMap[inventoryRefKey(expected[index])] = expected[index]
 	}
-	for _, ref := range actual {
-		actualMap[inventoryRefKey(ref)] = ref
+	for index := range actual {
+		actualMap[inventoryRefKey(actual[index])] = actual[index]
 	}
 	keys := sortedKeys(expectedMap, actualMap)
 	for _, key := range keys {
@@ -285,4 +285,7 @@ func safeSnapshotPath(path string) string {
 	return path
 }
 
-var _ error = (*SnapshotMismatchError)(nil)
+// Compile-time proof that the typed snapshot error satisfies error. The blank
+// identifier is the whole point of the assertion, so errcheck must not read it
+// as a discarded result.
+var _ error = (*SnapshotMismatchError)(nil) //nolint:errcheck // compile-time interface assertion

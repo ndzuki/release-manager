@@ -65,10 +65,10 @@ type Endpoints struct {
 	ReleaseAPI          string `yaml:"release_api" json:"release_api,omitempty"`
 }
 
-// E2ERunnerCredentials contains a username and an environment variable name.
+// RunnerCredentials contains a username and an environment variable name.
 // The password itself is deliberately not represented in this serializable
 // type; Config keeps the resolved value private for the process lifetime.
-type E2ERunnerCredentials struct {
+type RunnerCredentials struct {
 	Username    string `yaml:"username" json:"username"`
 	PasswordEnv string `yaml:"password_env" json:"password_env"`
 }
@@ -76,7 +76,7 @@ type E2ERunnerCredentials struct {
 // Credentials contains credentials consumed by E2E. No operator credential
 // block is accepted by the strict YAML decoder.
 type Credentials struct {
-	E2ERunner E2ERunnerCredentials `yaml:"e2e_runner" json:"e2e_runner"`
+	E2ERunner RunnerCredentials `yaml:"e2e_runner" json:"e2e_runner"`
 }
 
 // RestartTargets is the static, least-privilege restart binding. The list is
@@ -105,7 +105,7 @@ type ExpectedIdentity struct {
 	E2EDefinitionIDs []string `yaml:"e2e_definition_ids" json:"e2e_definition_ids"`
 }
 
-// E2EUpgradeTarget contains the manifest-derived identifiers needed to submit
+// UpgradeTarget contains the manifest-derived identifiers needed to submit
 // an UPGRADE, bound to the fixture logical key that names the target.
 //
 // The binding is explicit because the two identifier spaces are disjoint and
@@ -118,7 +118,7 @@ type ExpectedIdentity struct {
 //
 // The current revision is intentionally absent and must be read from inventory
 // at runtime.
-type E2EUpgradeTarget struct {
+type UpgradeTarget struct {
 	LogicalKey       string `yaml:"logical_key" json:"logical_key"`
 	DefinitionID     string `yaml:"definition_id" json:"definition_id"`
 	BundleID         string `yaml:"bundle_id" json:"bundle_id"`
@@ -141,11 +141,11 @@ const E2EEmergencyDefinitionKey = "e2e-emergency-target"
 
 // SeedConfig contains the seed fixture identity and upgrade inputs.
 type SeedConfig struct {
-	Customers           []string           `yaml:"customers" json:"customers"`
-	ClustersPerCustomer int                `yaml:"clusters_per_customer" json:"clusters_per_customer"`
-	FixtureVersion      string             `yaml:"fixture_version" json:"fixture_version"`
-	ExpectedIdentity    ExpectedIdentity   `yaml:"expected_identity" json:"expected_identity"`
-	E2EUpgradeTargets   []E2EUpgradeTarget `yaml:"e2e_upgrade_targets" json:"e2e_upgrade_targets"`
+	Customers           []string         `yaml:"customers" json:"customers"`
+	ClustersPerCustomer int              `yaml:"clusters_per_customer" json:"clusters_per_customer"`
+	FixtureVersion      string           `yaml:"fixture_version" json:"fixture_version"`
+	ExpectedIdentity    ExpectedIdentity `yaml:"expected_identity" json:"expected_identity"`
+	UpgradeTargets      []UpgradeTarget  `yaml:"e2e_upgrade_targets" json:"e2e_upgrade_targets"`
 	// E2EEmergencyDefinitionID is the server-side id of the definition bound to
 	// E2EEmergencyDefinitionKey. The emergency stage targets the API, which only
 	// accepts the minted id, so the logical key alone is not usable.
@@ -170,17 +170,17 @@ func (s SeedConfig) OperatorID() (string, bool) {
 // false when the seed does not declare the key with the identifiers an UPGRADE
 // needs, so a caller can fail closed instead of targeting an unverified
 // definition.
-func (s SeedConfig) UpgradeTarget(logicalKey string) (E2EUpgradeTarget, bool) {
-	for _, target := range s.E2EUpgradeTargets {
+func (s SeedConfig) UpgradeTarget(logicalKey string) (UpgradeTarget, bool) {
+	for _, target := range s.UpgradeTargets {
 		if target.LogicalKey != logicalKey {
 			continue
 		}
 		if target.DefinitionID == "" || target.BundleID == "" || target.ValuesRevisionID == "" {
-			return E2EUpgradeTarget{}, false
+			return UpgradeTarget{}, false
 		}
 		return target, true
 	}
-	return E2EUpgradeTarget{}, false
+	return UpgradeTarget{}, false
 }
 
 // EmergencyDefinitionID returns the server-side id of the emergency stage's
@@ -446,7 +446,7 @@ func validateExpectedIdentity(identity ExpectedIdentity) error {
 func validateE2EDefinitions(seed SeedConfig) error {
 	// bound maps each declared server-side definition id to the logical key it
 	// was published under.
-	bound, err := validateUpgradeTargets(seed.E2EUpgradeTargets)
+	bound, err := validateUpgradeTargets(seed.UpgradeTargets)
 	if err != nil {
 		return err
 	}
@@ -471,7 +471,7 @@ func validateE2EDefinitions(seed SeedConfig) error {
 
 // validateUpgradeTargets checks the upgrade bindings and reports the definition
 // id each logical key was published under.
-func validateUpgradeTargets(targets []E2EUpgradeTarget) (map[string]string, error) {
+func validateUpgradeTargets(targets []UpgradeTarget) (map[string]string, error) {
 	if len(targets) == 0 {
 		return nil, configInvalid("seed.e2e_upgrade_targets", "missing")
 	}
