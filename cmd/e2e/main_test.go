@@ -369,17 +369,21 @@ seed:
     routes_basic: 0
     definitions_basic: 0
     bundles: 1
-    e2e_definition_ids: [e2e-release-target, e2e-isolation-target, e2e-emergency-target, e2e-restart-target]
+    e2e_definition_ids: [11111111-1111-1111-1111-111111111111, 22222222-2222-2222-2222-222222222222, 33333333-3333-3333-3333-333333333333, 44444444-4444-4444-4444-444444444444]
   e2e_upgrade_targets:
-    - definition_id: e2e-release-target
+    - logical_key: e2e-release-target
+      definition_id: 11111111-1111-1111-1111-111111111111
       bundle_id: bundle-1
       values_revision_id: values-1
-    - definition_id: e2e-isolation-target
+    - logical_key: e2e-isolation-target
+      definition_id: 22222222-2222-2222-2222-222222222222
       bundle_id: bundle-1
       values_revision_id: values-1
-    - definition_id: e2e-restart-target
+    - logical_key: e2e-restart-target
+      definition_id: 44444444-4444-4444-4444-444444444444
       bundle_id: bundle-1
       values_revision_id: values-1
+  e2e_emergency_definition_id: 33333333-3333-3333-3333-333333333333
 `, kubeconfig)
 	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
 		t.Fatal(err)

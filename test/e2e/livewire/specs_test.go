@@ -144,9 +144,9 @@ func TestSpecsFailsClosedOnUnusableConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "missing emergency definition",
+			name: "missing emergency definition id",
 			mutate: func(_ *testing.T, cfg *e2e.Config) {
-				cfg.Seed.ExpectedIdentity.E2EDefinitionIDs = []string{"e2e-release-target"}
+				cfg.Seed.E2EEmergencyDefinitionID = ""
 			},
 		},
 		{
@@ -156,7 +156,7 @@ func TestSpecsFailsClosedOnUnusableConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "one named target only",
+			name: "one binding only",
 			mutate: func(_ *testing.T, cfg *e2e.Config) {
 				cfg.Seed.E2EUpgradeTargets = cfg.Seed.E2EUpgradeTargets[:1]
 			},
@@ -165,7 +165,23 @@ func TestSpecsFailsClosedOnUnusableConfig(t *testing.T) {
 			name: "aliased isolation target",
 			mutate: func(_ *testing.T, cfg *e2e.Config) {
 				targets := append([]e2e.E2EUpgradeTarget(nil), cfg.Seed.E2EUpgradeTargets...)
-				targets[1].DefinitionID = targets[0].DefinitionID
+				for i := range targets {
+					if targets[i].LogicalKey == e2e.CanonicalE2EUpgradeKeys[1] {
+						targets[i].DefinitionID = "11111111-1111-1111-1111-111111111111"
+					}
+				}
+				cfg.Seed.E2EUpgradeTargets = targets
+			},
+		},
+		{
+			name: "upgrade binding without a bundle",
+			mutate: func(_ *testing.T, cfg *e2e.Config) {
+				targets := append([]e2e.E2EUpgradeTarget(nil), cfg.Seed.E2EUpgradeTargets...)
+				for i := range targets {
+					if targets[i].LogicalKey == e2e.CanonicalE2EUpgradeKeys[0] {
+						targets[i].BundleID = ""
+					}
+				}
 				cfg.Seed.E2EUpgradeTargets = targets
 			},
 		},
@@ -199,19 +215,13 @@ func TestSpecsRejectsNilConfig(t *testing.T) {
 	}
 }
 
-func TestSpecsAcceptsAssemblerOrderedServerIDs(t *testing.T) {
+// TestSpecsResolvesTargetsByLogicalKey locks the binding contract: the seed
+// publishes server-generated definition ids bound to the fixture's logical keys,
+// and each stage resolves its target through that binding.
+func TestSpecsResolvesTargetsByLogicalKey(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	// The env-config assembler publishes server-generated definition ids in the
-	// fixed order release, isolation, restart. validateUpgradeTargets currently
-	// only accepts the logical names, so the assembler shape is applied to the
-	// loaded config here.
-	h.cfg.Seed.E2EUpgradeTargets = []e2e.E2EUpgradeTarget{
-		{DefinitionID: "11111111-1111-1111-1111-111111111111", BundleID: "bundle-1", ValuesRevisionID: "values-1"},
-		{DefinitionID: "22222222-2222-2222-2222-222222222222", BundleID: "bundle-1", ValuesRevisionID: "values-1"},
-		{DefinitionID: "33333333-3333-3333-3333-333333333333", BundleID: "bundle-1", ValuesRevisionID: "values-1"},
-	}
 	specs, err := Specs(h.cfg)
 	if err != nil {
 		t.Fatalf("Specs() error = %v", err)
@@ -224,37 +234,61 @@ func TestSpecsAcceptsAssemblerOrderedServerIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seedUpgradeTargets() error = %v", err)
 	}
-	if release.Name != releaseDefinitionName || release.DefinitionID != "11111111-1111-1111-1111-111111111111" {
-		t.Fatalf("release target = %+v, want the first assembler slot", release)
+	if release.Name != e2e.CanonicalE2EUpgradeKeys[0] || release.DefinitionID != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("release target = %+v, want the release binding", release)
 	}
-	if isolation.Name != isolationDefinitionName || isolation.DefinitionID != "22222222-2222-2222-2222-222222222222" {
-		t.Fatalf("isolation target = %+v, want the second assembler slot", isolation)
+	if isolation.Name != e2e.CanonicalE2EUpgradeKeys[1] || isolation.DefinitionID != "22222222-2222-2222-2222-222222222222" {
+		t.Fatalf("isolation target = %+v, want the isolation binding", isolation)
+	}
+
+	emergency, err := seedEmergencyDefinitionID(h.cfg)
+	if err != nil {
+		t.Fatalf("seedEmergencyDefinitionID() error = %v", err)
+	}
+	if emergency != "33333333-3333-3333-3333-333333333333" {
+		t.Fatalf("emergency definition = %q, want the emergency binding", emergency)
 	}
 }
 
-func TestSeedUpgradeTargetsFailsClosedOnPartialNaming(t *testing.T) {
+// TestSeedUpgradeTargetsIsOrderIndependent proves resolution reads the logical
+// key rather than the declared position: a reordered seed must still bind each
+// stage to its own definition.
+func TestSeedUpgradeTargetsIsOrderIndependent(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	// Two logical names plus one opaque id: part of the set resolves by name, so
-	// the positional order cannot be cross-checked and selection fails closed.
-	h.cfg.Seed.E2EUpgradeTargets = []e2e.E2EUpgradeTarget{
-		{DefinitionID: releaseDefinitionName, BundleID: "bundle-1", ValuesRevisionID: "values-1"},
-		{DefinitionID: isolationDefinitionName, BundleID: "bundle-1", ValuesRevisionID: "values-1"},
-		{DefinitionID: "33333333-3333-3333-3333-333333333333", BundleID: "bundle-1", ValuesRevisionID: "values-1"},
+	reversed := make([]e2e.E2EUpgradeTarget, 0, len(h.cfg.Seed.E2EUpgradeTargets))
+	for i := len(h.cfg.Seed.E2EUpgradeTargets) - 1; i >= 0; i-- {
+		reversed = append(reversed, h.cfg.Seed.E2EUpgradeTargets[i])
 	}
-	if _, _, err := seedUpgradeTargets(h.cfg); err == nil {
-		t.Fatal("seedUpgradeTargets() error = nil, want a fail-closed error")
+	h.cfg.Seed.E2EUpgradeTargets = reversed
+
+	release, isolation, err := seedUpgradeTargets(h.cfg)
+	if err != nil {
+		t.Fatalf("seedUpgradeTargets() error = %v", err)
+	}
+	if release.DefinitionID != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("release target = %+v, want the release binding regardless of order", release)
+	}
+	if isolation.DefinitionID != "22222222-2222-2222-2222-222222222222" {
+		t.Fatalf("isolation target = %+v, want the isolation binding regardless of order", isolation)
 	}
 }
 
-func TestSeedUpgradeTargetsRequiresAllSlots(t *testing.T) {
+func TestSeedUpgradeTargetsFailsClosedOnUnboundKey(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	h.cfg.Seed.E2EUpgradeTargets = []e2e.E2EUpgradeTarget{
-		{DefinitionID: "11111111-1111-1111-1111-111111111111", BundleID: "bundle-1", ValuesRevisionID: "values-1"},
+	// Drop the isolation binding: the release stage still resolves, but the
+	// missing key must fail closed rather than silently binding to a neighbour.
+	kept := make([]e2e.E2EUpgradeTarget, 0, len(h.cfg.Seed.E2EUpgradeTargets))
+	for _, definition := range h.cfg.Seed.E2EUpgradeTargets {
+		if definition.LogicalKey != e2e.CanonicalE2EUpgradeKeys[1] {
+			kept = append(kept, definition)
+		}
 	}
+	h.cfg.Seed.E2EUpgradeTargets = kept
+
 	if _, _, err := seedUpgradeTargets(h.cfg); err == nil {
 		t.Fatal("seedUpgradeTargets() error = nil, want a fail-closed error")
 	}
@@ -264,7 +298,11 @@ func TestSpecsBindsArtifactToTheReleaseTarget(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	h.cfg.Seed.E2EUpgradeTargets[0].BundleID = "bundle-release"
+	for i := range h.cfg.Seed.E2EUpgradeTargets {
+		if h.cfg.Seed.E2EUpgradeTargets[i].LogicalKey == e2e.CanonicalE2EUpgradeKeys[0] {
+			h.cfg.Seed.E2EUpgradeTargets[i].BundleID = "bundle-release"
+		}
+	}
 
 	specs, err := Specs(h.cfg)
 	if err != nil {
@@ -278,8 +316,8 @@ func TestSpecsBindsArtifactToTheReleaseTarget(t *testing.T) {
 	if got := expectation.FieldByName("BundleID").String(); got != "bundle-release" {
 		t.Fatalf("artifact expectation BundleID = %q, want the release target bundle", got)
 	}
-	if got := expectation.FieldByName("ReleaseDefinitionID").String(); got != releaseDefinitionName {
-		t.Fatalf("artifact expectation ReleaseDefinitionID = %q, want the release definition", got)
+	if got := expectation.FieldByName("ReleaseDefinitionID").String(); got != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("artifact expectation ReleaseDefinitionID = %q, want the release definition's server id", got)
 	}
 	// Digest and Route are deliberately unset: the env-config schema publishes
 	// neither, and validateBundle/validateRoute only compare a set field.
@@ -296,7 +334,7 @@ func TestArtifactStageRejectsMissingBundle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFormalReader() error = %v", err)
 	}
-	if _, err := newArtifactStage(reader, stages.WriteTarget{DefinitionID: releaseDefinitionName}); err == nil {
+	if _, err := newArtifactStage(reader, stages.WriteTarget{DefinitionID: e2e.CanonicalE2EUpgradeKeys[0]}); err == nil {
 		t.Fatal("newArtifactStage() error = nil, want a fail-closed error for a missing bundle id")
 	}
 }
@@ -318,8 +356,8 @@ func TestSpecsWiresTheEmergencyReplicaTarget(t *testing.T) {
 		t.Fatalf("emergency replica target = %d, want DefaultEmergencyReplicas (%d)", got, DefaultEmergencyReplicas)
 	}
 	target := reflect.ValueOf(emergency).Elem().FieldByName("target")
-	if got := target.FieldByName("DefinitionID").String(); got != emergencyDefinitionName {
-		t.Fatalf("emergency definition = %q, want %s", got, emergencyDefinitionName)
+	if got := target.FieldByName("DefinitionID").String(); got != "33333333-3333-3333-3333-333333333333" {
+		t.Fatalf("emergency definition = %q, want the emergency binding's server id", got)
 	}
 }
 
@@ -338,8 +376,8 @@ func TestReleaseInvariantBindingBindsOnlyAfterRelease(t *testing.T) {
 	if binding.release == nil {
 		t.Fatal("binding has no release stage to read the invariant from")
 	}
-	if binding.definition != releaseDefinitionName {
-		t.Fatalf("binding definition = %q, want %q", binding.definition, releaseDefinitionName)
+	if binding.definition != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("binding definition = %q, want the release binding's server id", binding.definition)
 	}
 	// No release has run, so the invariant is deliberately unbound and the
 	// isolation stage keeps its documented distinct-definition fallback.

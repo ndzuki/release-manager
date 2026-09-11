@@ -65,6 +65,106 @@ func TestLoadConfigRejectsInvalidInputs(t *testing.T) {
 			),
 			wantField: "k3d.restart_targets.deployments",
 		},
+		{
+			name: "canonical upgrade target missing",
+			configYAML: strings.Replace(
+				validConfigYAML,
+				"    - logical_key: e2e-restart-target\n      definition_id: 44444444-4444-4444-4444-444444444444\n      bundle_id: bundle-1\n      values_revision_id: values-1\n",
+				"",
+				1,
+			),
+			wantField: "seed.e2e_upgrade_targets",
+		},
+		{
+			name: "emergency definition id aliases an upgrade target",
+			configYAML: strings.Replace(
+				validConfigYAML,
+				"  e2e_emergency_definition_id: 33333333-3333-3333-3333-333333333333",
+				"  e2e_emergency_definition_id: 11111111-1111-1111-1111-111111111111",
+				1,
+			),
+			wantField: "seed.e2e_emergency_definition_id",
+		},
+		{
+			name: "upgrade binding without a logical key",
+			configYAML: strings.Replace(
+				validConfigYAML,
+				"    - logical_key: e2e-release-target\n",
+				"    - logical_key: \"\"\n",
+				1,
+			),
+			wantField: "seed.e2e_upgrade_targets.logical_key",
+		},
+		{
+			name: "upgrade binding with an unknown logical key",
+			configYAML: strings.Replace(
+				validConfigYAML,
+				"    - logical_key: e2e-release-target\n",
+				"    - logical_key: e2e-not-a-real-target\n",
+				1,
+			),
+			wantField: "seed.e2e_upgrade_targets.logical_key",
+		},
+		{
+			name: "upgrade binding without a bundle",
+			configYAML: strings.Replace(
+				validConfigYAML,
+				"      definition_id: 11111111-1111-1111-1111-111111111111\n      bundle_id: bundle-1\n",
+				"      definition_id: 11111111-1111-1111-1111-111111111111\n",
+				1,
+			),
+			wantField: "seed.e2e_upgrade_targets.bundle_id",
+		},
+		{
+			name: "upgrade binding without a values revision",
+			configYAML: strings.Replace(
+				validConfigYAML,
+				"      definition_id: 11111111-1111-1111-1111-111111111111\n      bundle_id: bundle-1\n      values_revision_id: values-1\n",
+				"      definition_id: 11111111-1111-1111-1111-111111111111\n      bundle_id: bundle-1\n",
+				1,
+			),
+			wantField: "seed.e2e_upgrade_targets.values_revision_id",
+		},
+		{
+			name: "duplicate logical key",
+			configYAML: strings.Replace(
+				validConfigYAML,
+				"    - logical_key: e2e-isolation-target",
+				"    - logical_key: e2e-release-target",
+				1,
+			),
+			wantField: "seed.e2e_upgrade_targets.logical_key",
+		},
+		{
+			name: "two logical keys bound to one definition",
+			configYAML: strings.Replace(
+				validConfigYAML,
+				"      definition_id: 22222222-2222-2222-2222-222222222222",
+				"      definition_id: 11111111-1111-1111-1111-111111111111",
+				1,
+			),
+			wantField: "seed.e2e_upgrade_targets.definition_id",
+		},
+		{
+			name: "identity expectation names an unbound definition",
+			configYAML: strings.Replace(
+				validConfigYAML,
+				"44444444-4444-4444-4444-444444444444]",
+				"55555555-5555-5555-5555-555555555555]",
+				1,
+			),
+			wantField: "seed.expected_identity.e2e_definition_ids",
+		},
+		{
+			name: "identity expectation omits a bound definition",
+			configYAML: strings.Replace(
+				validConfigYAML,
+				", 44444444-4444-4444-4444-444444444444]",
+				"]",
+				1,
+			),
+			wantField: "seed.expected_identity.e2e_definition_ids",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -80,6 +180,42 @@ func TestLoadConfigRejectsInvalidInputs(t *testing.T) {
 			assert.Contains(t, err.Error(), test.wantField)
 		})
 	}
+}
+
+func TestLoadConfigRequiresTheDefinitionBinding(t *testing.T) {
+	// t.Setenv forbids t.Parallel, so this test runs in the sequential phase.
+	t.Setenv("E2E_RUNNER_PASSWORD", "pw")
+
+	// The e2e_upgrade_targets block is last in the fixture, so truncating at its
+	// key removes the whole binding and leaves the rest of the config intact.
+	start := strings.Index(validConfigYAML, "  e2e_upgrade_targets:")
+	require.GreaterOrEqual(t, start, 0, "fixture no longer declares e2e_upgrade_targets")
+	config, err := e2e.ParseConfig([]byte(validConfigYAML[:start]))
+	assert.Nil(t, config)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, e2e.ErrConfigInvalid)
+	assert.Contains(t, err.Error(), "seed.e2e_upgrade_targets")
+}
+
+// TestLoadConfigRequiresTheEmergencyDefinitionID covers the emergency binding,
+// which is a separate scalar because the emergency stage does not upgrade the
+// definition it targets.
+func TestLoadConfigRequiresTheEmergencyDefinitionID(t *testing.T) {
+	t.Setenv("E2E_RUNNER_PASSWORD", "pw")
+
+	withoutEmergency := strings.Replace(
+		validConfigYAML,
+		"  e2e_emergency_definition_id: 33333333-3333-3333-3333-333333333333\n",
+		"",
+		1,
+	)
+	require.NotEqual(t, validConfigYAML, withoutEmergency, "fixture no longer declares the emergency definition id")
+
+	config, err := e2e.ParseConfig([]byte(withoutEmergency))
+	assert.Nil(t, config)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, e2e.ErrConfigInvalid)
+	assert.Contains(t, err.Error(), "seed.e2e_emergency_definition_id")
 }
 
 func TestRunIDValidation(t *testing.T) {
@@ -165,15 +301,19 @@ seed:
     routes_basic: 8
     definitions_basic: 4
     bundles: 1
-    e2e_definition_ids: [e2e-release-target, e2e-isolation-target, e2e-emergency-target, e2e-restart-target]
+    e2e_definition_ids: [11111111-1111-1111-1111-111111111111, 22222222-2222-2222-2222-222222222222, 33333333-3333-3333-3333-333333333333, 44444444-4444-4444-4444-444444444444]
   e2e_upgrade_targets:
-    - definition_id: e2e-release-target
+    - logical_key: e2e-release-target
+      definition_id: 11111111-1111-1111-1111-111111111111
       bundle_id: bundle-1
       values_revision_id: values-1
-    - definition_id: e2e-isolation-target
+    - logical_key: e2e-isolation-target
+      definition_id: 22222222-2222-2222-2222-222222222222
       bundle_id: bundle-1
       values_revision_id: values-1
-    - definition_id: e2e-restart-target
+    - logical_key: e2e-restart-target
+      definition_id: 44444444-4444-4444-4444-444444444444
       bundle_id: bundle-1
       values_revision_id: values-1
+  e2e_emergency_definition_id: 33333333-3333-3333-3333-333333333333
 `

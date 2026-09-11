@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -105,13 +106,38 @@ type ExpectedIdentity struct {
 }
 
 // E2EUpgradeTarget contains the manifest-derived identifiers needed to submit
-// an UPGRADE. The current revision is intentionally absent and must be read
-// from inventory at runtime.
+// an UPGRADE, bound to the fixture logical key that names the target.
+//
+// The binding is explicit because the two identifier spaces are disjoint and
+// neither can be derived from the other: the fixture addresses its definitions
+// by stable logical key (dev-fixture.json `definitions` keys, e.g.
+// "e2e-release-target"), while the API only accepts the id the orchestrator
+// minted for it. Carrying both lets a stage resolve its target by key instead of
+// by declared position, and lets the schema reject a seed whose two halves
+// disagree.
+//
+// The current revision is intentionally absent and must be read from inventory
+// at runtime.
 type E2EUpgradeTarget struct {
+	LogicalKey       string `yaml:"logical_key" json:"logical_key"`
 	DefinitionID     string `yaml:"definition_id" json:"definition_id"`
 	BundleID         string `yaml:"bundle_id" json:"bundle_id"`
 	ValuesRevisionID string `yaml:"values_revision_id" json:"values_revision_id"`
 }
+
+// CanonicalE2EUpgradeKeys are the fixture logical keys the write stages upgrade,
+// in canonical order: the release, isolation and restart targets.
+var CanonicalE2EUpgradeKeys = []string{
+	"e2e-release-target",
+	"e2e-isolation-target",
+	"e2e-restart-target",
+}
+
+// E2EEmergencyDefinitionKey is the fixture logical key of the definition the
+// emergency stage targets. It is not an upgrade target (the emergency stage
+// submits an emergency replica change, not an UPGRADE), so its server id is
+// published separately in SeedConfig.E2EEmergencyDefinitionID.
+const E2EEmergencyDefinitionKey = "e2e-emergency-target"
 
 // SeedConfig contains the seed fixture identity and upgrade inputs.
 type SeedConfig struct {
@@ -120,6 +146,36 @@ type SeedConfig struct {
 	FixtureVersion      string             `yaml:"fixture_version" json:"fixture_version"`
 	ExpectedIdentity    ExpectedIdentity   `yaml:"expected_identity" json:"expected_identity"`
 	E2EUpgradeTargets   []E2EUpgradeTarget `yaml:"e2e_upgrade_targets" json:"e2e_upgrade_targets"`
+	// E2EEmergencyDefinitionID is the server-side id of the definition bound to
+	// E2EEmergencyDefinitionKey. The emergency stage targets the API, which only
+	// accepts the minted id, so the logical key alone is not usable.
+	E2EEmergencyDefinitionID string `yaml:"e2e_emergency_definition_id" json:"e2e_emergency_definition_id"`
+}
+
+// UpgradeTarget returns the binding for a canonical upgrade key. The boolean is
+// false when the seed does not declare the key with the identifiers an UPGRADE
+// needs, so a caller can fail closed instead of targeting an unverified
+// definition.
+func (s SeedConfig) UpgradeTarget(logicalKey string) (E2EUpgradeTarget, bool) {
+	for _, target := range s.E2EUpgradeTargets {
+		if target.LogicalKey != logicalKey {
+			continue
+		}
+		if target.DefinitionID == "" || target.BundleID == "" || target.ValuesRevisionID == "" {
+			return E2EUpgradeTarget{}, false
+		}
+		return target, true
+	}
+	return E2EUpgradeTarget{}, false
+}
+
+// EmergencyDefinitionID returns the server-side id of the emergency stage's
+// definition. The boolean is false when the seed does not declare it.
+func (s SeedConfig) EmergencyDefinitionID() (string, bool) {
+	if s.E2EEmergencyDefinitionID == "" {
+		return "", false
+	}
+	return s.E2EEmergencyDefinitionID, true
 }
 
 // Config is the runtime env-config consumed by cmd/e2e. Its resolved password
@@ -277,7 +333,7 @@ func (c *Config) Validate() error {
 	if err := validateExpectedIdentity(c.Seed.ExpectedIdentity); err != nil {
 		return err
 	}
-	if err := validateUpgradeTargets(c.Seed.E2EUpgradeTargets); err != nil {
+	if err := validateE2EDefinitions(c.Seed); err != nil {
 		return err
 	}
 	return nil
@@ -364,34 +420,104 @@ func validateExpectedIdentity(identity ExpectedIdentity) error {
 	return nil
 }
 
-func validateUpgradeTargets(targets []E2EUpgradeTarget) error {
-	if len(targets) == 0 {
-		return configInvalid("seed.e2e_upgrade_targets", "missing")
+// validateE2EDefinitions checks the logical-key to server-id bindings and that
+// they agree with the identity expectation.
+//
+// The halves of each binding are validated together because a seed that
+// declares them inconsistently is unusable in a way neither half reveals alone:
+// the write stages resolve targets by logical key, the inventory stage compares
+// server ids, and a mismatch would surface only as a confusing runtime failure
+// (a target that does not resolve, or an identity difference against a
+// definition that does exist).
+func validateE2EDefinitions(seed SeedConfig) error {
+	// bound maps each declared server-side definition id to the logical key it
+	// was published under.
+	bound, err := validateUpgradeTargets(seed.E2EUpgradeTargets)
+	if err != nil {
+		return err
 	}
-	seen := make(map[string]struct{}, len(targets))
+	if seed.E2EEmergencyDefinitionID == "" {
+		return configInvalid("seed.e2e_emergency_definition_id", "missing")
+	}
+	if other, ok := bound[seed.E2EEmergencyDefinitionID]; ok {
+		return configInvalid("seed.e2e_emergency_definition_id",
+			"binds "+E2EEmergencyDefinitionKey+" and "+other+" to the same definition id")
+	}
+	bound[seed.E2EEmergencyDefinitionID] = E2EEmergencyDefinitionKey
+	return validateDefinitionBoundIDs(seed.ExpectedIdentity.E2EDefinitionIDs, bound)
+}
+
+// validateUpgradeTargets checks the upgrade bindings and reports the definition
+// id each logical key was published under.
+func validateUpgradeTargets(targets []E2EUpgradeTarget) (map[string]string, error) {
+	if len(targets) == 0 {
+		return nil, configInvalid("seed.e2e_upgrade_targets", "missing")
+	}
+	canonical := make(map[string]struct{}, len(CanonicalE2EUpgradeKeys))
+	for _, key := range CanonicalE2EUpgradeKeys {
+		canonical[key] = struct{}{}
+	}
+
+	seenKeys := make(map[string]struct{}, len(targets))
+	seenIDs := make(map[string]string, len(targets))
 	for _, target := range targets {
+		key := strings.TrimSpace(target.LogicalKey)
+		if key == "" {
+			return nil, configInvalid("seed.e2e_upgrade_targets.logical_key", "missing")
+		}
+		if _, ok := canonical[key]; !ok {
+			return nil, configInvalid("seed.e2e_upgrade_targets.logical_key", "unknown target "+key)
+		}
+		if _, ok := seenKeys[key]; ok {
+			return nil, configInvalid("seed.e2e_upgrade_targets.logical_key", "contains duplicate logical keys")
+		}
 		if target.DefinitionID == "" {
-			return configInvalid("seed.e2e_upgrade_targets.definition_id", "missing")
+			return nil, configInvalid("seed.e2e_upgrade_targets.definition_id", "missing for "+key)
+		}
+		if other, ok := seenIDs[target.DefinitionID]; ok {
+			return nil, configInvalid("seed.e2e_upgrade_targets.definition_id",
+				"binds "+key+" and "+other+" to the same definition id")
 		}
 		if target.BundleID == "" {
-			return configInvalid("seed.e2e_upgrade_targets.bundle_id", "missing")
+			return nil, configInvalid("seed.e2e_upgrade_targets.bundle_id", "missing for "+key)
 		}
 		if target.ValuesRevisionID == "" {
-			return configInvalid("seed.e2e_upgrade_targets.values_revision_id", "missing")
+			return nil, configInvalid("seed.e2e_upgrade_targets.values_revision_id", "missing for "+key)
 		}
-		if _, ok := seen[target.DefinitionID]; ok {
-			return configInvalid("seed.e2e_upgrade_targets.definition_id", "contains duplicate definition ids")
-		}
-		seen[target.DefinitionID] = struct{}{}
+		seenKeys[key] = struct{}{}
+		seenIDs[target.DefinitionID] = key
 	}
-	for _, required := range []string{
-		"e2e-release-target",
-		"e2e-isolation-target",
-		"e2e-restart-target",
-	} {
-		if _, ok := seen[required]; !ok {
-			return configInvalid("seed.e2e_upgrade_targets", "missing "+required)
+	for _, key := range CanonicalE2EUpgradeKeys {
+		if _, ok := seenKeys[key]; !ok {
+			return nil, configInvalid("seed.e2e_upgrade_targets", "missing "+key)
 		}
 	}
-	return nil
+	return seenIDs, nil
+}
+
+// validateDefinitionBoundIDs checks that the identity expectation names exactly
+// the server ids the bindings declare: a difference in either direction means
+// one of the halves is stale.
+func validateDefinitionBoundIDs(ids []string, bound map[string]string) error {
+	declared := make(map[string]struct{}, len(bound))
+	for id := range bound {
+		declared[id] = struct{}{}
+	}
+	for _, id := range ids {
+		if _, ok := declared[id]; !ok {
+			return configInvalid("seed.expected_identity.e2e_definition_ids",
+				"declares "+id+", which the seed does not bind to a logical key")
+		}
+		delete(declared, id)
+	}
+	if len(declared) == 0 {
+		return nil
+	}
+	unbound := make([]string, 0, len(declared))
+	for id := range declared {
+		unbound = append(unbound, id)
+	}
+	sort.Strings(unbound)
+	return configInvalid("seed.expected_identity.e2e_definition_ids",
+		"is missing "+strings.Join(unbound, ", "))
 }

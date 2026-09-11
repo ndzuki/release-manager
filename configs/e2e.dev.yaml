@@ -54,18 +54,32 @@ seed:
     routes_basic: 8
     definitions_basic: 0
     bundles: 1
+    # Server-side definition ids of the seeded E2E definitions. Must name exactly
+    # the definition_id of every entry in seed.e2e_upgrade_targets below plus
+    # seed.e2e_emergency_definition_id; the schema rejects a seed where the two
+    # halves disagree.
     e2e_definition_ids:
-      - "e2e-release-target"
-      - "e2e-isolation-target"
-      - "e2e-emergency-target"
-      - "e2e-restart-target"
+      - "<server definition id for e2e-release-target>"
+      - "<server definition id for e2e-isolation-target>"
+      - "<server definition id for e2e-emergency-target>"
+      - "<server definition id for e2e-restart-target>"
+  # Logical-key to server-id binding for the three UPGRADE targets. The fixture
+  # addresses definitions by logical key while the API only accepts the id the
+  # orchestrator minted, so both are published here and the stage resolves its
+  # target by key rather than by declared position.
   e2e_upgrade_targets:
-    - definition_id: "e2e-release-target"
+    - logical_key: "e2e-release-target"
+      definition_id: "<server definition id>"
       bundle_id: "<seed bundle id>"
       values_revision_id: "<seed values revision id>"
-    - definition_id: "e2e-isolation-target"
+    - logical_key: "e2e-isolation-target"
+      definition_id: "<server definition id>"
       bundle_id: "<seed bundle id>"
       values_revision_id: "<seed values revision id>"
-    - definition_id: "e2e-restart-target"
+    - logical_key: "e2e-restart-target"
+      definition_id: "<server definition id>"
       bundle_id: "<seed bundle id>"
       values_revision_id: "<seed values revision id>"
+  # The emergency stage submits an emergency replica change rather than an
+  # UPGRADE, so its definition id is published separately.
+  e2e_emergency_definition_id: "<server definition id for e2e-emergency-target>"

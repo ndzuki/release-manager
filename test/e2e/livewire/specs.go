@@ -41,20 +41,11 @@ import (
 // validates the emergency policy. This constant is that place.
 const DefaultEmergencyReplicas int32 = 2
 
-// Canonical E2E definition names. They are the fixture's stable logical keys
-// (dev-fixture.json `definitions` keys), which is what the env-config publishes
-// in seed.expected_identity.e2e_definition_ids.
-const (
-	releaseDefinitionName   = "e2e-release-target"
-	isolationDefinitionName = "e2e-isolation-target"
-	emergencyDefinitionName = "e2e-emergency-target"
-	restartDefinitionName   = "e2e-restart-target"
-)
-
-// targetSlots is the canonical order the env-config assembler emits
-// seed.e2e_upgrade_targets in (Makefile target `e2e-env-config`): release,
-// isolation, restart.
-var targetSlots = []string{releaseDefinitionName, isolationDefinitionName, restartDefinitionName}
+// Canonical E2E definition names come from the e2e config vocabulary
+// (e2e.CanonicalE2EUpgradeKeys and e2e.E2EEmergencyDefinitionKey) so there is a
+// single source of truth for the fixture logical keys. The seed binds each of
+// them to the server-side definition id the orchestrator minted, so a stage can
+// address the API without ever guessing how a logical key maps onto a server id.
 
 // Specs builds the canonical stage graph over the live environment declared by
 // cfg.
@@ -67,12 +58,13 @@ var targetSlots = []string{releaseDefinitionName, isolationDefinitionName, resta
 // error and no specs at all, so a caller can never end up running a partially
 // wired graph.
 //
-// Note on identifier shapes: the specs carry the seed values verbatim. The
-// env-config publishes a mix of the fixture's stable logical keys
-// (e2e_definition_ids) and server-side definition ids (e2e_upgrade_targets),
-// and this function deliberately does not translate between them — an
-// invented translation would hide a contract gap that the affected stage
-// reports itself with a stable code.
+// Identifier shapes: the seed publishes an explicit binding from each fixture
+// logical key to the server-side definition id the orchestrator minted
+// (seed.e2e_upgrade_targets plus seed.e2e_emergency_definition_id), and every
+// stage here resolves its target through that binding. Nothing translates
+// between the two identifier spaces at runtime — the seed validator already
+// rejects a binding whose two halves disagree, so a stage that cannot resolve
+// its key fails closed with a build error.
 func Specs(cfg *e2e.Config) ([]e2e.StageSpec, error) {
 	if cfg == nil {
 		return nil, errors.New("livewire: nil config")
@@ -249,7 +241,7 @@ func newGraph(cfg *e2e.Config) (*graph, error) {
 // nothing the config could have provided is skipped.
 func newArtifactStage(reader stages.ArtifactReader, releaseTarget stages.WriteTarget) (*stages.ArtifactStage, error) {
 	if strings.TrimSpace(releaseTarget.BundleID) == "" {
-		return nil, fmt.Errorf("livewire: seed.e2e_upgrade_targets.%s.bundle_id is missing", releaseDefinitionName)
+		return nil, fmt.Errorf("livewire: seed.e2e_upgrade_targets.%s.bundle_id is missing", e2e.CanonicalE2EUpgradeKeys[0])
 	}
 	return stages.NewArtifactStage(reader, stages.ArtifactExpectation{
 		BundleID:            releaseTarget.BundleID,
@@ -276,69 +268,58 @@ func newArtifactStage(reader stages.ArtifactReader, releaseTarget stages.WriteTa
 // The restart target is deliberately not returned: the restart stage's input is
 // the K3d restart binding (namespaces and Deployment names), never an upgrade
 // target, so nothing consumes the third slot.
+// seedUpgradeTargets resolves the release and isolation write targets by
+// logical key.
+//
+// Resolution is by key rather than by position because the seed publishes an
+// explicit logical-key to server-id binding: position would silently bind a
+// stage to whatever definition happened to be declared first, and a reordered
+// seed would then upgrade the wrong definition instead of failing.
 func seedUpgradeTargets(cfg *e2e.Config) (release, isolation stages.WriteTarget, err error) {
-	targets := cfg.Seed.E2EUpgradeTargets
-	byName := make(map[string]e2e.E2EUpgradeTarget, len(targets))
-	for _, target := range targets {
-		if _, ok := byName[target.DefinitionID]; !ok {
-			byName[target.DefinitionID] = target
-		}
+	release, err = seedUpgradeTarget(cfg, e2e.CanonicalE2EUpgradeKeys[0])
+	if err != nil {
+		return stages.WriteTarget{}, stages.WriteTarget{}, err
 	}
-	named := make([]e2e.E2EUpgradeTarget, 0, len(targetSlots))
-	matched := 0
-	for _, slot := range targetSlots {
-		target, ok := byName[slot]
-		if ok {
-			matched++
-		}
-		named = append(named, target)
+	isolation, err = seedUpgradeTarget(cfg, e2e.CanonicalE2EUpgradeKeys[1])
+	if err != nil {
+		return stages.WriteTarget{}, stages.WriteTarget{}, err
 	}
-	switch {
-	case matched == len(targetSlots):
-		return writeTargetOf(targetSlots[0], named[0]), writeTargetOf(targetSlots[1], named[1]), nil
-	case matched != 0:
-		return stages.WriteTarget{}, stages.WriteTarget{}, fmt.Errorf(
-			"livewire: seed.e2e_upgrade_targets names %d of the %d canonical targets; it must name all of them or none",
-			matched, len(targetSlots))
-	case len(targets) < len(targetSlots):
-		return stages.WriteTarget{}, stages.WriteTarget{}, fmt.Errorf(
-			"livewire: seed.e2e_upgrade_targets has %d entries; the %d canonical targets must all be declared",
-			len(targets), len(targetSlots))
-	}
-	return writeTargetOf(targetSlots[0], targets[0]), writeTargetOf(targetSlots[1], targets[1]), nil
+	return release, isolation, nil
 }
 
-// writeTargetOf binds one seed entry to its canonical stage-facing name.
-func writeTargetOf(name string, target e2e.E2EUpgradeTarget) stages.WriteTarget {
+// seedUpgradeTarget resolves one upgrade binding, failing closed when the seed
+// does not declare the key with the bundle and values revision an UPGRADE needs.
+func seedUpgradeTarget(cfg *e2e.Config, logicalKey string) (stages.WriteTarget, error) {
+	target, ok := cfg.Seed.UpgradeTarget(logicalKey)
+	if !ok {
+		return stages.WriteTarget{}, fmt.Errorf(
+			"livewire: seed.e2e_upgrade_targets must declare logical_key %s with a definition_id, bundle_id and values_revision_id",
+			logicalKey)
+	}
 	return stages.WriteTarget{
-		Name:             name,
+		Name:             logicalKey,
 		DefinitionID:     target.DefinitionID,
 		BundleID:         target.BundleID,
 		ValuesRevisionID: target.ValuesRevisionID,
-	}
+	}, nil
 }
 
-// seedEmergencyDefinitionID resolves the emergency definition from the seed's
-// declared E2E definition ids.
+// seedEmergencyDefinitionID resolves the emergency definition's server-side id
+// from the seed's logical-key binding.
 //
-// The env-config publishes the fixture's stable logical keys in
-// seed.expected_identity.e2e_definition_ids, so the declared key is used
-// verbatim as the definition identifier — the same value expected_identity
-// already matches observed definitions against. This inherits the contract gap
-// described on Specs: the live orchestrator assigns its own definition ids
-// (internal/orchestrator/definition.go mints a UUID and keeps the release name
-// in ReleaseDefinition.Name), so a live run can only match this value once the
-// fixture and the API agree on publishing the server-side id for the logical
-// key. The lookup itself fails closed rather than guessing: a seed that does not
-// declare the emergency definition returns a build error instead of letting the
-// emergency stage target an unverified definition.
+// The stage targets the API, which only accepts the id the orchestrator minted,
+// so the published definition id is used directly; the logical key names which
+// definition it belongs to. A seed that does not bind the emergency key fails
+// closed rather than letting the emergency stage target an unverified
+// definition.
 func seedEmergencyDefinitionID(cfg *e2e.Config) (string, error) {
-	for _, id := range cfg.Seed.ExpectedIdentity.E2EDefinitionIDs {
-		if strings.TrimSpace(id) == emergencyDefinitionName {
-			return emergencyDefinitionName, nil
-		}
+	definitionID, ok := cfg.Seed.EmergencyDefinitionID()
+	if !ok {
+		return "", fmt.Errorf(
+			"livewire: seed.e2e_emergency_definition_id must bind %s to a definition_id",
+			e2e.E2EEmergencyDefinitionKey)
 	}
-	return "", fmt.Errorf("livewire: seed.expected_identity.e2e_definition_ids must declare %s", emergencyDefinitionName)
+	return definitionID, nil
 }
 
 // releaseInvariantBinding defers binding the isolation stage's release
