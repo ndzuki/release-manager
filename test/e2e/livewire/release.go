@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -107,7 +108,7 @@ func (c *Connector) Upgrade(ctx context.Context, request stages.UpgradeRequest) 
 		ValuesRevisionId:        request.ValuesRevisionID,
 		ExpectedCurrentRevision: request.ExpectedRevision,
 	})
-	rpc.Header().Set("Idempotency-Key", e2e.WriteIdempotencyKey("upgrade", request.DefinitionID))
+	rpc.Header().Set("Idempotency-Key", e2e.WriteIdempotencyKey("upgrade", request.DefinitionID, revisionQualifier(request.ExpectedRevision)))
 	response, err := clients.Orchestrator().CreateOperation(ctx, rpc)
 	if err != nil {
 		return stages.OperationRef{}, err
@@ -128,6 +129,15 @@ func (c *Connector) Upgrade(ctx context.Context, request stages.UpgradeRequest) 
 // The order of the stage's optimistic lock matters: ExpectedRevision is the
 // revision the rollback expects to be current, which is the revision the
 // upgrade left behind, not the baseline being restored.
+// revisionQualifier renders the revision a write starts from as an idempotency
+// key qualifier. The revision is what the request hash turns on — the server
+// compares the stored request hash and rejects a reused key whose body differs —
+// so qualifying by it keeps a replay from the same revision deduping while
+// letting a write from a different revision through as a new operation.
+func revisionQualifier(revision int32) string {
+	return strconv.FormatInt(int64(revision), 10)
+}
+
 func (c *Connector) Rollback(ctx context.Context, request stages.RollbackRequest) (stages.OperationRef, error) {
 	clients, err := c.clientsOrFail()
 	if err != nil {
@@ -142,7 +152,7 @@ func (c *Connector) Rollback(ctx context.Context, request stages.RollbackRequest
 		ExpectedCurrentRevision: request.ExpectedRevision,
 		Reason:                  request.Reason,
 	})
-	rpc.Header().Set("Idempotency-Key", e2e.WriteIdempotencyKey("rollback", request.DefinitionID))
+	rpc.Header().Set("Idempotency-Key", e2e.WriteIdempotencyKey("rollback", request.DefinitionID, revisionQualifier(request.ExpectedRevision)))
 	response, err := clients.Orchestrator().RollbackRelease(ctx, rpc)
 	if err != nil {
 		return stages.OperationRef{}, err

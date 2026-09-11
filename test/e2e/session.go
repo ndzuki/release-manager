@@ -123,10 +123,27 @@ func (s *RunnerSession) UserID() string {
 	return s.userID
 }
 
-// WriteIdempotencyKey returns a stable-per-target key for an E2E write stage.
+// WriteIdempotencyKey returns a stable key for an E2E write stage, optionally
+// scoped to the state the write starts from.
+//
 // Stability (rather than a random suffix) is what makes a replayed stage dedupe
 // to the same server-side operation instead of submitting a second write
 // (ADR-009 scoped idempotency).
-func WriteIdempotencyKey(kind, target string) string {
-	return "e2e-" + kind + "-" + target
+//
+// The state qualifier is what keeps a later run able to submit at all. The
+// server rejects a reused key whose request hash differs ("idempotency_conflict:
+// key already used with different request"), and these stages read their starting
+// revision fresh on every run, so a key that ignored it could only ever be used
+// once per target: the first successful upgrade changed the revision, and every
+// later run sent the same key with a different expected revision (real smoke
+// 2026-09-11). A write from a different state is a different write; a replay from
+// the same state still dedupes.
+func WriteIdempotencyKey(kind, target string, state ...string) string {
+	key := "e2e-" + kind + "-" + target
+	for _, part := range state {
+		if part != "" {
+			key += "-" + part
+		}
+	}
+	return key
 }

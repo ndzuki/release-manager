@@ -129,7 +129,10 @@ func TestSetReplicasSendsReplicaBranchContract(t *testing.T) {
 	if len(request.GetRequestHash()) != 0 {
 		t.Fatalf("request_hash = %x, want unset", request.GetRequestHash())
 	}
-	if request.GetIdempotencyKey() != "e2e-emergency-set-replicas-e2e-emergency-target" {
+	// Qualified by the requested replica count: replaying the same change
+	// dedupes, while a different replica count is a different write the server
+	// must not refuse as a same-key conflict.
+	if request.GetIdempotencyKey() != "e2e-emergency-set-replicas-e2e-emergency-target-5" {
 		t.Fatalf("idempotency_key = %q", request.GetIdempotencyKey())
 	}
 }

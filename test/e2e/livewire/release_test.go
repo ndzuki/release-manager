@@ -147,9 +147,43 @@ func TestUpgradeSendsOptimisticLockAndIdempotencyHeader(t *testing.T) {
 	if request.GetBundleId() != "bundle-1" || request.GetValuesRevisionId() != "values-1" {
 		t.Fatalf("bundle/values = %q/%q", request.GetBundleId(), request.GetValuesRevisionId())
 	}
-	// The key must be stable per definition so a replayed stage dedupes.
-	if got := h.orch.createKey(0); got != "e2e-upgrade-e2e-release-target" {
+	// The key must stay stable for a replay from the same revision so the stage
+	// dedupes, and carry that revision so a later run whose revision moved on is
+	// not rejected as a same-key/different-request conflict.
+	if got := h.orch.createKey(0); got != "e2e-upgrade-e2e-release-target-4" {
 		t.Fatalf("Idempotency-Key = %q", got)
+	}
+}
+
+// TestUpgradeIdempotencyKeyTracksTheStartingRevision pins the property a re-run
+// depends on. The server rejects a reused key whose request hash differs, and
+// each run reads the starting revision fresh, so a key that ignored the revision
+// could only ever submit one upgrade per target: the first success moved the
+// revision and every later run was refused as a conflict.
+func TestUpgradeIdempotencyKeyTracksTheStartingRevision(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	upgrade := func(revision int32) {
+		t.Helper()
+		if _, err := h.connector.Upgrade(context.Background(), stages.UpgradeRequest{
+			DefinitionID:     "e2e-release-target",
+			BundleID:         "bundle-1",
+			ValuesRevisionID: "values-1",
+			ExpectedRevision: revision,
+		}); err != nil {
+			t.Fatalf("Upgrade(revision %d) error = %v", revision, err)
+		}
+	}
+	upgrade(4)
+	upgrade(5)
+	if first, second := h.orch.createKey(0), h.orch.createKey(1); first != "e2e-upgrade-e2e-release-target-4" || second != "e2e-upgrade-e2e-release-target-5" {
+		t.Fatalf("keys = %q, %q; want a distinct key per starting revision", first, second)
+	}
+	// A replay from the same revision must still dedupe.
+	upgrade(4)
+	if replay := h.orch.createKey(2); replay != "e2e-upgrade-e2e-release-target-4" {
+		t.Fatalf("replayed key = %q, want the revision-4 key", replay)
 	}
 }
 
@@ -178,7 +212,7 @@ func TestRollbackCarriesTargetAndExpectedRevision(t *testing.T) {
 	if request.GetReason() != "compensation" {
 		t.Fatalf("reason = %q", request.GetReason())
 	}
-	if got := h.orch.rollbackKey(0); got != "e2e-rollback-e2e-release-target" {
+	if got := h.orch.rollbackKey(0); got != "e2e-rollback-e2e-release-target-5" {
 		t.Fatalf("Idempotency-Key = %q", got)
 	}
 }
