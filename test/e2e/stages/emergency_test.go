@@ -36,16 +36,25 @@ type emergencyFake struct {
 	// readyDelta makes the observer report readyReplicas != replicas.
 	readyDelta int32
 	observeErr error
+	// observeErrAfterChange defers observeErr until the change has been applied,
+	// so a case can make the *effect* unobservable without also failing the
+	// baseline read that precedes it.
+	observeErrAfterChange bool
+	reconciled            bool
 }
 
 func newEmergencyFake(replicas int32) *emergencyFake {
 	return &emergencyFake{
 		state: &replicaState{replicas: replicas},
 		targets: []EmergencyTarget{{
-			WorkloadKind:     "Deployment",
-			Namespace:        "release-fixture",
-			WorkloadName:     "release-fixture",
-			CurrentReplicas:  replicas,
+			WorkloadKind: "Deployment",
+			Namespace:    "release-fixture",
+			WorkloadName: "release-fixture",
+			// Mirrors the live contract (D7=A): ListEmergencyTargets always
+			// reports current_replicas as an unavailable sentinel, so the stage
+			// must take its baseline from the observer. A regression to reading
+			// this field fails every case in TestEmergencyStageRun.
+			CurrentReplicas:  -1,
 			OperationVersion: "v3",
 			Reference:        "deployments/release-fixture/release-fixture",
 		}},
@@ -85,6 +94,7 @@ func (f *emergencyFake) AwaitOperation(_ context.Context, operationID string) (O
 	if f.pending != nil {
 		f.state.replicas = *f.pending
 		f.pending = nil
+		f.reconciled = true
 	}
 	if ref, ok := f.await[operationID]; ok {
 		return ref, nil
@@ -93,7 +103,7 @@ func (f *emergencyFake) AwaitOperation(_ context.Context, operationID string) (O
 }
 
 func (f *emergencyFake) ObserveReplicas(context.Context, string, string) (ReplicaObservation, error) {
-	if f.observeErr != nil {
+	if f.observeErr != nil && (!f.observeErrAfterChange || f.reconciled) {
 		return ReplicaObservation{}, f.observeErr
 	}
 	return ReplicaObservation{
@@ -141,13 +151,13 @@ func TestEmergencyStageRun(t *testing.T) {
 		},
 		{
 			name:   "baseline not positive",
-			mutate: func(f *emergencyFake) { f.targets[0].CurrentReplicas = 0 },
+			mutate: func(f *emergencyFake) { f.state.replicas = 0 },
 			want:   ErrSnapshotNotFound,
 		},
 		{
 			name: "target equals baseline",
 			mutate: func(f *emergencyFake) {
-				f.targets[0].CurrentReplicas = 2
+				f.state.replicas = 2
 			},
 			want: ErrFixtureStale,
 		},
@@ -169,9 +179,12 @@ func TestEmergencyStageRun(t *testing.T) {
 			want:   ErrEffectUnknown,
 		},
 		{
-			name:   "effect unobservable",
-			mutate: func(f *emergencyFake) { f.observeErr = errors.New("private detail") },
-			want:   ErrEffectUnknown,
+			name: "effect unobservable",
+			mutate: func(f *emergencyFake) {
+				f.observeErr = errors.New("private detail")
+				f.observeErrAfterChange = true
+			},
+			want: ErrEffectUnknown,
 		},
 		{
 			name: "foreign active operation",

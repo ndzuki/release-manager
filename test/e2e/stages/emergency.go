@@ -177,12 +177,22 @@ func (s *EmergencyStage) validate() error {
 
 // resolveBaseline selects the single emergency workload and validates that its
 // observed replica count can serve as a meaningful baseline.
+//
+// The count comes from the read-only cluster observation, not from the target's
+// CurrentReplicas: ListEmergencyTargets reports that field as a D7=A unavailable
+// sentinel (-1) by contract, so treating it as an observation can only ever fail
+// as "not positive" (real smoke 2026-09-11: it rejected every emergency run
+// while the workload was running fine).
 func (s *EmergencyStage) resolveBaseline(ctx context.Context) (EmergencyTarget, int32, error) {
 	workload, err := s.selectTarget(ctx)
 	if err != nil {
 		return EmergencyTarget{}, 0, err
 	}
-	baseline := workload.CurrentReplicas
+	observation, err := s.observer.ObserveReplicas(ctx, workload.Namespace, workload.WorkloadName)
+	if err != nil {
+		return EmergencyTarget{}, 0, newStageError(CodeSnapshotNotFound, "emergency", "baseline replica observation failed")
+	}
+	baseline := observation.Replicas
 	if baseline <= 0 {
 		return EmergencyTarget{}, 0, newStageError(CodeSnapshotNotFound, "emergency", "baseline replica count is not positive")
 	}

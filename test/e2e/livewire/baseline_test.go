@@ -2,36 +2,68 @@ package livewire
 
 import (
 	"context"
+	"errors"
 	"testing"
 
-	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	"github.com/ndzuki/release-manager/test/e2e/stages"
 )
+
+// baselineSamplerStub stands in for the read-only cluster observation. The API
+// target list deliberately carries the D7=A sentinel (-1) rather than a count, so
+// the baseline must never read its replicas from there.
+type baselineSamplerStub struct {
+	replicas map[string]int32
+	err      error
+}
+
+func (s baselineSamplerStub) ObserveReplicas(_ context.Context, namespace, workloadName string) (stages.ReplicaObservation, error) {
+	if s.err != nil {
+		return stages.ReplicaObservation{}, s.err
+	}
+	return stages.ReplicaObservation{Replicas: s.replicas[namespace+"/"+workloadName]}, nil
+}
+
+// emergencyTargetsForBaseline returns targets whose CurrentReplicas is the live
+// unavailable sentinel, exactly as ListEmergencyTargets reports them. Reference
+// is the adapter-resolved plural GVR form the real connector sets.
+func emergencyTargetsForBaseline(names ...string) []stages.EmergencyTarget {
+	targets := make([]stages.EmergencyTarget, 0, len(names))
+	for _, name := range names {
+		targets = append(targets, stages.EmergencyTarget{
+			WorkloadKind:    "Deployment",
+			WorkloadName:    name,
+			Namespace:       "release-fixture",
+			CurrentReplicas: -1,
+			Reference:       "deployments/release-fixture/" + name,
+		})
+	}
+	return targets
+}
 
 // TestBaselineReplicasSamplesEmergencyTargets covers the pre-run sample cleanup
 // restores from (AC-066-23/34): the recorded reference must be the authoritative
 // plural GVR form a later restore sends, the order must be deterministic, and a
 // scaled-to-zero workload must survive as a real baseline.
+//
+// The counts come from the observer, never from the target's CurrentReplicas:
+// that field is a live D7=A unavailable sentinel, and reading it recorded no
+// replicas at all (real smoke 2026-09-11).
 func TestBaselineReplicasSamplesEmergencyTargets(t *testing.T) {
 	t.Parallel()
 
-	h := newHarness(t)
-	h.orch.setEmergencyTargets(
-		&orchestratorv1.EmergencyTarget{
-			WorkloadRef:     &orchestratorv1.WorkloadRef{Kind: "Deployment", Name: "release-fixture", Namespace: "release-fixture"},
-			CurrentReplicas: 3,
-		},
-		&orchestratorv1.EmergencyTarget{
-			WorkloadRef:     &orchestratorv1.WorkloadRef{Kind: "Deployment", Name: "alpha", Namespace: "release-fixture"},
-			CurrentReplicas: 0,
-		},
-	)
+	const definitionID = "33333333-3333-3333-3333-333333333333"
+	targets := emergencyTargetsForBaseline("release-fixture", "alpha")
+	sampler := baselineSamplerStub{replicas: map[string]int32{
+		"release-fixture/release-fixture": 3,
+		"release-fixture/alpha":           0,
+	}}
 
-	refs, err := BaselineReplicas(context.Background(), h.cfg)
+	refs, err := sampleReplicas(context.Background(), definitionID, targets, sampler)
 	if err != nil {
-		t.Fatalf("BaselineReplicas() error = %v", err)
+		t.Fatalf("sampleReplicas() error = %v", err)
 	}
 	if len(refs) != 2 {
-		t.Fatalf("BaselineReplicas() = %+v, want both targets", refs)
+		t.Fatalf("sampleReplicas() = %+v, want both targets", refs)
 	}
 	if refs[0].WorkloadRef != "deployments/release-fixture/alpha" {
 		t.Fatalf("refs[0].WorkloadRef = %q, want the plural GVR form", refs[0].WorkloadRef)
@@ -47,8 +79,41 @@ func TestBaselineReplicasSamplesEmergencyTargets(t *testing.T) {
 	}
 	// The recorded definition must be the server-minted id the write path
 	// expects, not the fixture's logical key.
-	if want := "33333333-3333-3333-3333-333333333333"; refs[0].ReleaseDefinitionID != want {
-		t.Fatalf("ReleaseDefinitionID = %q, want the seeded emergency definition %q", refs[0].ReleaseDefinitionID, want)
+	if refs[0].ReleaseDefinitionID != definitionID {
+		t.Fatalf("ReleaseDefinitionID = %q, want the seeded emergency definition %q", refs[0].ReleaseDefinitionID, definitionID)
+	}
+}
+
+// TestBaselineReplicasSkipsAnUnavailableObservation proves a sentinel count is
+// never recorded as a real baseline: a fabricated row would make cleanup restore
+// a replica count nobody observed.
+func TestBaselineReplicasSkipsAnUnavailableObservation(t *testing.T) {
+	t.Parallel()
+
+	targets := emergencyTargetsForBaseline("release-fixture")
+	sampler := baselineSamplerStub{replicas: map[string]int32{
+		"release-fixture/release-fixture": -1,
+	}}
+
+	refs, err := sampleReplicas(context.Background(), "def-emergency", targets, sampler)
+	if err != nil {
+		t.Fatalf("sampleReplicas() error = %v", err)
+	}
+	if len(refs) != 0 {
+		t.Fatalf("sampleReplicas() = %+v, want the unavailable observation dropped", refs)
+	}
+}
+
+// TestBaselineReplicasSurfacesAnObservationFailure proves a read failure is
+// reported rather than silently recorded as an empty baseline.
+func TestBaselineReplicasSurfacesAnObservationFailure(t *testing.T) {
+	t.Parallel()
+
+	targets := emergencyTargetsForBaseline("release-fixture")
+	sampler := baselineSamplerStub{err: errors.New("private detail")}
+
+	if _, err := sampleReplicas(context.Background(), "def-emergency", targets, sampler); err == nil {
+		t.Fatal("sampleReplicas() error = nil, want the observation failure surfaced")
 	}
 }
 
