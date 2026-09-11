@@ -34,6 +34,9 @@ certs/
 # Data directory (SQLite databases etc.)
 data/
 
+# E2E runner artifacts (baseline/run/stage JSON; uploaded by CI, never source)
+e2e-results/
+
 # Helm chart packages
 *.tgz
 
