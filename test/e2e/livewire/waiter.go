@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"connectrpc.com/connect"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
@@ -95,6 +96,25 @@ func (w *ControlPlaneWaiter) AwaitServices(ctx context.Context) error {
 	return nil
 }
 
+// transientSessionReadError reports whether a session-read failure is one the
+// restart barrier is expected to wait through. A session that is not registered
+// yet and a gateway that is still coming up both clear on their own; a rejected
+// request or a denied caller does not. Swallowing the latter hid exactly that
+// (real smoke 2026-09-11: a blank operator id polled invalid_argument every
+// 250ms until the 600s stage timeout, and the stage reported only a timeout).
+//
+// CodeUnknown covers a transport failure that never reached the server and
+// produced no Connect status, which is transient by nature.
+func transientSessionReadError(err error) bool {
+	switch connect.CodeOf(err) {
+	case connect.CodeUnknown, connect.CodeNotFound, connect.CodeUnavailable,
+		connect.CodeDeadlineExceeded, connect.CodeCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
 // AwaitOperatorSession implements stages.ControlPlaneWaiter. It waits for the
 // operator gateway to report an online session, which is the observable proof
 // that the operator's control stream reconnected after the restart.
@@ -102,19 +122,31 @@ func (w *ControlPlaneWaiter) AwaitOperatorSession(ctx context.Context) error {
 	if w == nil || w.clients == nil || w.session == nil {
 		return errors.New("livewire: control-plane waiter is unavailable")
 	}
+	operatorID, ok := w.cfg.Seed.OperatorID()
+	if !ok {
+		// The API selects a session by operator id and rejects a blank one, so a
+		// missing id is a configuration fault, not a state to wait through.
+		return errors.New("livewire: control-plane waiter requires a seeded operator id")
+	}
 	if err := w.session.EnsureLogin(ctx); err != nil {
 		return err
 	}
 	pollErr := wait.PollUntilContextCancel(ctx, w.poll, true, func(condCtx context.Context) (bool, error) {
 		response, err := w.clients.Operator().GetActiveOperatorSession(condCtx,
-			authorizedRequest(w.session.Token(), &operatorv1.GetActiveOperatorSessionRequest{}))
+			authorizedRequest(w.session.Token(), &operatorv1.GetActiveOperatorSessionRequest{
+				OperatorId: operatorID,
+			}))
 		if err != nil {
 			// A gateway that has not yet re-established its control stream has
-			// no active session and answers with an error. That is the expected
-			// transient state this barrier waits through, and the caller's
-			// context deadline is what bounds it, so the error is deliberately
-			// not propagated here.
-			return false, nil //nolint:nilerr // transient not-yet-online session; bounded by the context deadline
+			// no active session and answers with a transient error. That is the
+			// expected state this barrier waits through, and the caller's context
+			// deadline bounds it. A permanent error is a different thing: no
+			// amount of waiting fixes a rejected request, so it fails the bar
+			// instead of burning the stage timeout.
+			if transientSessionReadError(err) {
+				return false, nil //nolint:nilerr // transient not-yet-online session; bounded by the context deadline
+			}
+			return false, err
 		}
 		session := response.Msg.GetSession()
 		return session != nil && strings.EqualFold(session.GetStatus(), operatorSessionOnline), nil
