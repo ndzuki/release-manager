@@ -72,6 +72,20 @@ func (e *StageError) Error() string {
 	return strings.Join(parts, ": ")
 }
 
+// ErrorCode exposes the stable machine-readable failure code.
+//
+// The runner reads the code through an accessor rather than the Code field
+// because a Go method cannot share its name with a field, and the runner has to
+// recover the code from an error returned across the stage boundary. Without
+// this accessor every live stage failure degrades to the generic "stage_failed"
+// artifact code and the specific code survives only inside root_cause.
+func (e *StageError) ErrorCode() string {
+	if e == nil {
+		return ""
+	}
+	return e.Code
+}
+
 func (e *StageError) Unwrap() error {
 	if e == nil {
 		return nil

@@ -587,9 +587,9 @@ func executeStage(
 		cause = "stage panic"
 		errorCode = "panic"
 	default:
-		if stageErr, ok := err.(interface{ Code() string }); ok && stageErr.Code() != "" {
-			rootCause = stageErr.Code()
-			errorCode = stageErr.Code()
+		if code := stageFailureCode(err); code != "" {
+			rootCause = code
+			errorCode = code
 		}
 	}
 	if logger != nil {
@@ -597,6 +597,33 @@ func executeStage(
 	}
 	result.ErrorCode = errorCode
 	return finishStageResult(result, err, cause, started)
+}
+
+// stageFailureCode recovers the stable machine-readable code from a stage
+// failure.
+//
+// Two accessor shapes are accepted. ErrorCode() is the contract the stage
+// package implements, because StageError exposes its code as a field and a Go
+// method cannot share a field's name. Code() is the older shape kept for error
+// types declared inside this package, such as NotImplementedError.
+//
+// errors.As is used rather than a direct type assertion so a stage that wraps
+// its failure still reports the underlying code instead of the generic
+// "stage_failed".
+func stageFailureCode(err error) string {
+	var coder interface{ ErrorCode() string }
+	if errors.As(err, &coder) {
+		if code := coder.ErrorCode(); code != "" {
+			return code
+		}
+	}
+	var legacy interface{ Code() string }
+	if errors.As(err, &legacy) {
+		if code := legacy.Code(); code != "" {
+			return code
+		}
+	}
+	return ""
 }
 
 func finishStageResult(result StageResult, err error, cause string, started time.Time) StageResult {
