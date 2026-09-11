@@ -252,32 +252,39 @@ func (l *RecoveryLedger) append(entry LedgerEntry) error {
 	return nil
 }
 
+// recoveryTransitions is the authoritative state machine for a compensation
+// entry: each status maps to the statuses it may move to. RecoveryDirty is left
+// out of every target set because it is a terminal sink any non-dirty status may
+// enter, which validTransition expresses once instead of repeating per case.
+// A status absent from the table (including RecoveryDirty itself) has no legal
+// transition, so an unknown status fails closed.
+var recoveryTransitions = map[RecoveryStatus]map[RecoveryStatus]bool{
+	RecoveryPrepared:            statusSet(RecoveryAttempted, RecoveryAborted),
+	RecoveryAttempted:           statusSet(RecoveryApplied, RecoveryNotApplied, RecoveryUnknown, RecoveryAborted),
+	RecoveryUnknown:             statusSet(RecoveryUnknown, RecoveryApplied, RecoveryNotApplied, RecoveryStillUnknown),
+	RecoveryStillUnknown:        statusSet(RecoveryStillUnknown, RecoveryApplied, RecoveryNotApplied),
+	RecoveryApplied:             statusSet(RecoveryCompensating),
+	RecoveryCompensating:        statusSet(RecoveryCompensated, RecoveryCompensationUnknown),
+	RecoveryCompensationUnknown: statusSet(RecoveryCompensating, RecoveryCompensated),
+	RecoveryNotApplied:          statusSet(),
+	RecoveryAborted:             statusSet(),
+	RecoveryCompensated:         statusSet(),
+}
+
+// statusSet builds one row of the transition table.
+func statusSet(statuses ...RecoveryStatus) map[RecoveryStatus]bool {
+	set := make(map[RecoveryStatus]bool, len(statuses))
+	for _, status := range statuses {
+		set[status] = true
+	}
+	return set
+}
+
 func validTransition(from, to RecoveryStatus) bool {
 	if to == RecoveryDirty {
 		return from != "" && from != RecoveryDirty
 	}
-	switch from {
-	case RecoveryPrepared:
-		return to == RecoveryAttempted || to == RecoveryAborted
-	case RecoveryAttempted:
-		return to == RecoveryApplied || to == RecoveryNotApplied || to == RecoveryUnknown || to == RecoveryAborted
-	case RecoveryUnknown:
-		return to == RecoveryUnknown || to == RecoveryApplied || to == RecoveryNotApplied || to == RecoveryStillUnknown || to == RecoveryDirty
-	case RecoveryStillUnknown:
-		return to == RecoveryStillUnknown || to == RecoveryApplied || to == RecoveryNotApplied || to == RecoveryDirty
-	case RecoveryApplied:
-		return to == RecoveryCompensating || to == RecoveryDirty
-	case RecoveryCompensating:
-		return to == RecoveryCompensated || to == RecoveryCompensationUnknown || to == RecoveryDirty
-	case RecoveryCompensationUnknown:
-		return to == RecoveryCompensating || to == RecoveryCompensated || to == RecoveryDirty
-	case RecoveryNotApplied, RecoveryAborted, RecoveryCompensated:
-		return to == RecoveryDirty
-	case RecoveryDirty:
-		return false
-	default:
-		return false
-	}
+	return recoveryTransitions[from][to]
 }
 
 func (l *RecoveryLedger) persist(entries []LedgerEntry) error {

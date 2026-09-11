@@ -384,6 +384,71 @@ func (h *Harness) logger() *slog.Logger {
 	return slog.Default()
 }
 
+// skipAllPending marks every still-pending stage as skipped for cause and clears
+// it from pending. It is the single exit path for a run that cannot continue: a
+// cancelled context or a dependency cycle.
+func skipAllPending(results map[string]StageResult, pending map[string]bool, ordered []StageSpec, cause string) {
+	for index := range ordered {
+		name := ordered[index].Name
+		if !pending[name] {
+			continue
+		}
+		results[name] = skippedResult(name, cause)
+		delete(pending, name)
+	}
+}
+
+// collectReady returns the pending stages whose dependencies have all resolved.
+// A stage whose dependency failed is marked skipped here instead, and progressed
+// reports whether that happened, so the caller can tell "nothing ready yet" from
+// "made progress, loop again".
+func collectReady(
+	ordered []StageSpec,
+	pending map[string]bool,
+	selected map[string]bool,
+	results map[string]StageResult,
+	byName map[string]StageSpec,
+) (ready []StageSpec, progressed bool) {
+	ready = make([]StageSpec, 0, len(pending))
+	for index := range ordered {
+		spec := ordered[index]
+		if !pending[spec.Name] {
+			continue
+		}
+		depSkip, depPending := dependencyState(spec, selected, results, byName)
+		if depSkip != "" {
+			results[spec.Name] = skippedResult(spec.Name, depSkip)
+			delete(pending, spec.Name)
+			progressed = true
+			continue
+		}
+		if !depPending {
+			ready = append(ready, spec)
+		}
+	}
+	return ready, progressed
+}
+
+// batchFor picks the stages to run together: the first ready stage by default,
+// or the inventory/artifact pair when parallelism is enabled and both are ready
+// (they are the only canonical stages declared safe to overlap).
+func batchFor(ready []StageSpec, parallel bool) []StageSpec {
+	batch := ready[:1]
+	if !parallel {
+		return batch
+	}
+	parallelBatch := make([]StageSpec, 0, 2)
+	for index := range ready {
+		if ready[index].Name == StageInventory || ready[index].Name == StageArtifactName {
+			parallelBatch = append(parallelBatch, ready[index])
+		}
+	}
+	if len(parallelBatch) >= 2 {
+		return parallelBatch
+	}
+	return batch
+}
+
 func executeGraph(
 	ctx context.Context,
 	ordered []StageSpec,
@@ -402,58 +467,20 @@ func executeGraph(
 
 	for len(pending) > 0 {
 		if err := ctx.Err(); err != nil {
-			for _, spec := range ordered {
-				if pending[spec.Name] {
-					results[spec.Name] = skippedResult(spec.Name, timeoutRootCause(err))
-					delete(pending, spec.Name)
-				}
-			}
+			skipAllPending(results, pending, ordered, timeoutRootCause(err))
 			break
 		}
 
-		ready := make([]StageSpec, 0, len(pending))
-		progress := false
-		for _, spec := range ordered {
-			if !pending[spec.Name] {
-				continue
-			}
-			depSkip, depPending := dependencyState(spec, selected, results, byName)
-			if depSkip != "" {
-				results[spec.Name] = skippedResult(spec.Name, depSkip)
-				delete(pending, spec.Name)
-				progress = true
-				continue
-			}
-			if !depPending {
-				ready = append(ready, spec)
-			}
-		}
+		ready, progressed := collectReady(ordered, pending, selected, results, byName)
 		if len(ready) == 0 {
-			if progress {
+			if progressed {
 				continue
 			}
-			for _, spec := range ordered {
-				if pending[spec.Name] {
-					results[spec.Name] = skippedResult(spec.Name, "stage_skipped: dependency cycle")
-					delete(pending, spec.Name)
-				}
-			}
+			skipAllPending(results, pending, ordered, "stage_skipped: dependency cycle")
 			break
 		}
 
-		batch := ready[:1]
-		if parallel {
-			parallelBatch := make([]StageSpec, 0, 2)
-			for _, spec := range ready {
-				if spec.Name == StageInventory || spec.Name == StageArtifactName {
-					parallelBatch = append(parallelBatch, spec)
-				}
-			}
-			if len(parallelBatch) >= 2 {
-				batch = parallelBatch
-			}
-		}
-		batchResults := executeBatch(ctx, batch, fixture, defaultTimeout, logger)
+		batchResults := executeBatch(ctx, batchFor(ready, parallel), fixture, defaultTimeout, logger)
 		for index := range batchResults {
 			results[batchResults[index].Stage] = batchResults[index]
 			delete(pending, batchResults[index].Stage)
@@ -461,9 +488,9 @@ func executeGraph(
 	}
 
 	out := make([]StageResult, 0, len(selected))
-	for _, spec := range ordered {
-		if selected[spec.Name] {
-			out = append(out, results[spec.Name])
+	for index := range ordered {
+		if selected[ordered[index].Name] {
+			out = append(out, results[ordered[index].Name])
 		}
 	}
 	return out
