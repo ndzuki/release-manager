@@ -143,6 +143,17 @@ type BundleRef struct {
 	Digest string `json:"digest"`
 }
 
+// RouteRef is the manifest entry for one seeded artifact route.
+//
+// Routes are cluster-scoped: the public ClusterRoute surface carries no
+// release-definition identity, so a route is never attributed to a definition.
+// The manifest publishes them because the REQ-066 identity expectation asserts
+// a route count (AC-066-29) and no other input source exposes one.
+type RouteRef struct {
+	ID         string `json:"id"`
+	ClusterKey string `json:"cluster_key"`
+}
+
 // Manifest is the runtime identity manifest written to
 // data/dev-fixture.json (REQ-065): stable logical keys mapping to the
 // server-generated identifiers that later stages (REQ-066) reference.
@@ -151,6 +162,7 @@ type Manifest struct {
 	GeneratedAt    string                   `json:"generated_at"`
 	Customers      map[string]CustomerRef   `json:"customers"`
 	Clusters       map[string]ClusterRef    `json:"clusters"`
+	Routes         map[string]RouteRef      `json:"routes"`
 	Definitions    map[string]DefinitionRef `json:"definitions"`
 	Bundle         BundleRef                `json:"bundle"`
 }

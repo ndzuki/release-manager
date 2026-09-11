@@ -142,6 +142,17 @@ func TestRun_SeedsAllNinePhases(t *testing.T) {
 	require.NotEmpty(t, manifest.Bundle.ID)
 	require.True(t, strings.HasPrefix(manifest.Bundle.Digest, "sha256:"))
 
+	// Routes are published so the E2E identity expectation can assert a route
+	// count without a second input source (REQ-066 AC-066-29). Every seeded
+	// route appears exactly once, bound to the cluster it belongs to.
+	require.Len(t, manifest.Routes, len(routeSeeds))
+	for _, seed := range routeSeeds {
+		ref, ok := manifest.Routes[seed.id]
+		require.Truef(t, ok, "route %s published", seed.id)
+		require.Equal(t, seed.id, ref.ID)
+		require.Equal(t, seed.clusterKey, ref.ClusterKey)
+	}
+
 	// Entity write counts match the canonical fixture.
 	orch := fakes.orch
 	require.Equal(t, 2, orch.count("CreateCustomer"))

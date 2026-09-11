@@ -365,6 +365,10 @@ func (r *runner) buildManifest() *Manifest {
 	for _, seed := range clusterSeeds {
 		clusters[seed.id] = ClusterRef{ID: seed.id, Name: seed.name}
 	}
+	routes := make(map[string]RouteRef, len(routeSeeds))
+	for _, seed := range routeSeeds {
+		routes[seed.id] = RouteRef{ID: seed.id, ClusterKey: seed.clusterKey}
+	}
 	definitions := make(map[string]DefinitionRef, len(definitionSeeds))
 	for _, seed := range definitionSeeds {
 		record := r.state.definitions[seed.logicalKey]
@@ -379,6 +383,7 @@ func (r *runner) buildManifest() *Manifest {
 		GeneratedAt:    r.cfg.nowRFC3339(),
 		Customers:      customers,
 		Clusters:       clusters,
+		Routes:         routes,
 		Definitions:    definitions,
 		Bundle:         BundleRef{ID: r.state.bundle.id, Digest: r.state.bundle.digest},
 	}
