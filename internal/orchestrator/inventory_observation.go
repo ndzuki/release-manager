@@ -18,7 +18,7 @@ import (
 // deliberately not represented by the response contract (REQ-066).
 func (s *Service) ListReleaseInventory(
 	ctx context.Context,
-	req *connect.Request[orchestratorv1.ListReleaseInventoryRequest],
+	_ *connect.Request[orchestratorv1.ListReleaseInventoryRequest],
 ) (*connect.Response[orchestratorv1.ListReleaseInventoryResponse], error) {
 	actor, ok := authctx.ActorFromContext(ctx)
 	if !ok || actor.OrganizationID == "" {
