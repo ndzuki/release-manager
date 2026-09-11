@@ -166,6 +166,99 @@ func routesCarryDefinitionIdentity(routes []RouteObservation) bool {
 	return false
 }
 
+// e2eDefinitionSet returns the seeded E2E definition ids as a set.
+func e2eDefinitionSet(ids []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return set
+}
+
+// observedDefinitionIDs returns the observed definition ids, dropping blanks.
+func observedDefinitionIDs(definitions []DefinitionObservation) map[string]struct{} {
+	ids := make(map[string]struct{}, len(definitions))
+	for index := range definitions {
+		if definitions[index].ID != "" {
+			ids[definitions[index].ID] = struct{}{}
+		}
+	}
+	return ids
+}
+
+// observedRouteIDs returns the observed route ids together with any definition
+// id a route carries, so a binding can be checked from either side.
+func observedRouteIDs(routes []RouteObservation) map[string]struct{} {
+	ids := make(map[string]struct{}, len(routes))
+	for index := range routes {
+		if routes[index].ID != "" {
+			ids[routes[index].ID] = struct{}{}
+		}
+		if routes[index].DefinitionID != "" {
+			ids[routes[index].DefinitionID] = struct{}{}
+		}
+	}
+	return ids
+}
+
+// basicEntityCounts counts the observed definitions and routes that are not part
+// of the seeded E2E definition set — the fixture's "basic" entities.
+//
+// Routes are cluster-scoped artifact routes, not definition-scoped entities:
+// ClusterRoute carries no release-definition identity, so every observed route
+// counts as basic. The count assertion is therefore exact even though the
+// observation cannot attribute a route to a definition.
+func basicEntityCounts(
+	observation InventoryObservation,
+	routes []RouteObservation,
+	e2eDefinitions map[string]struct{},
+) (basicDefinitions, basicRoutes int) {
+	for index := range observation.Definitions {
+		if _, ok := e2eDefinitions[observation.Definitions[index].ID]; !ok {
+			basicDefinitions++
+		}
+	}
+	for index := range routes {
+		if _, ok := e2eDefinitions[routes[index].DefinitionID]; !ok {
+			basicRoutes++
+		}
+	}
+	return basicDefinitions, basicRoutes
+}
+
+// missingIdentityDifferences reports every expected E2E definition id the
+// observation does not carry, plus each missing route binding when the observed
+// surface expresses bindings at all (see routesBound at the call site).
+func missingIdentityDifferences(
+	expected []string,
+	definitionIDs, routeIDs map[string]struct{},
+	routesBound bool,
+) []IdentityDifference {
+	differences := make([]IdentityDifference, 0)
+	for _, id := range expected {
+		if _, ok := definitionIDs[id]; !ok {
+			differences = append(differences, IdentityDifference{
+				Entity:   "definition",
+				Field:    "id",
+				Expected: id,
+				Actual:   "missing",
+			})
+		}
+		if !routesBound {
+			continue
+		}
+		if _, ok := routeIDs[id]; !ok {
+			differences = append(differences, IdentityDifference{
+				Entity:   "route",
+				Field:    "definition_id",
+				Expected: id,
+				Actual:   "missing",
+			})
+		}
+	}
+	return differences
+}
+
 func compareIdentity(observation InventoryObservation, expected ExpectedIdentity) []IdentityDifference {
 	customers := uniqueIdentityCount(observation.Customers)
 	clusters := uniqueIdentityCount(observation.Clusters)
@@ -187,72 +280,23 @@ func compareIdentity(observation InventoryObservation, expected ExpectedIdentity
 	appendCountDifference("clusters", "count", expected.Clusters, clusters)
 	appendCountDifference("bundles", "count", expected.Bundles, bundles)
 
-	e2eDefinitions := make(map[string]struct{}, len(expected.E2EDefinitionIDs))
-	for _, id := range expected.E2EDefinitionIDs {
-		e2eDefinitions[id] = struct{}{}
-	}
-	basicDefinitions := 0
-	for _, definition := range observation.Definitions {
-		if _, ok := e2eDefinitions[definition.ID]; !ok {
-			basicDefinitions++
-		}
-	}
-	// Routes are cluster-scoped artifact routes, not definition-scoped
-	// entities: ClusterRoute carries no release-definition identity, so every
-	// observed route counts as basic. The count assertion below is therefore
-	// exact even though the observation cannot attribute a route to a
-	// definition.
-	basicRoutes := 0
-	for _, route := range routes {
-		if _, ok := e2eDefinitions[route.DefinitionID]; !ok {
-			basicRoutes++
-		}
-	}
+	e2eDefinitions := e2eDefinitionSet(expected.E2EDefinitionIDs)
+	basicDefinitions, basicRoutes := basicEntityCounts(observation, routes, e2eDefinitions)
 	appendCountDifference("definitions", "basic_count", expected.DefinitionsBasic, basicDefinitions)
 	appendCountDifference("routes", "basic_count", expected.RoutesBasic, basicRoutes)
 
-	definitionIDs := make(map[string]struct{}, len(observation.Definitions))
-	for _, definition := range observation.Definitions {
-		if definition.ID != "" {
-			definitionIDs[definition.ID] = struct{}{}
-		}
-	}
-	routeIDs := make(map[string]struct{}, len(routes))
-	for _, route := range routes {
-		if route.ID != "" {
-			routeIDs[route.ID] = struct{}{}
-		}
-		if route.DefinitionID != "" {
-			routeIDs[route.DefinitionID] = struct{}{}
-		}
-	}
 	// ClusterRoute carries no release-definition identity, so an adapter cannot
 	// attribute a route to a definition and asserting the binding would fail on
 	// every deployment regardless of the fixture. The requirement is applied
 	// only when the observed surface actually expresses a binding: that keeps it
 	// meaningful if the RPC ever gains the field, while refusing to invent an
 	// attribution the API cannot supply.
-	routesBound := routesCarryDefinitionIdentity(routes)
-	for _, id := range expected.E2EDefinitionIDs {
-		if _, ok := definitionIDs[id]; !ok {
-			differences = append(differences, IdentityDifference{
-				Entity:   "definition",
-				Field:    "id",
-				Expected: id,
-				Actual:   "missing",
-			})
-		}
-		if routesBound {
-			if _, ok := routeIDs[id]; !ok {
-				differences = append(differences, IdentityDifference{
-					Entity:   "route",
-					Field:    "definition_id",
-					Expected: id,
-					Actual:   "missing",
-				})
-			}
-		}
-	}
+	differences = append(differences, missingIdentityDifferences(
+		expected.E2EDefinitionIDs,
+		observedDefinitionIDs(observation.Definitions),
+		observedRouteIDs(routes),
+		routesCarryDefinitionIdentity(routes),
+	)...)
 	sort.Slice(differences, func(i, j int) bool {
 		if differences[i].Entity != differences[j].Entity {
 			return differences[i].Entity < differences[j].Entity

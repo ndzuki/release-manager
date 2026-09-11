@@ -187,46 +187,67 @@ func findArtifactRow(observation InventoryObservation, expectation ArtifactExpec
 	return InventoryRow{}, newStageError(CodeFixtureStale, "inventory.definition_id", fmt.Sprintf("expected %q got %q", expectation.ReleaseDefinitionID, "missing"))
 }
 
+// routeExpectationEmpty reports whether the expectation states no constraint at
+// all, in which case there is nothing to assert.
+func routeExpectationEmpty(expectation RouteExpectation) bool {
+	return expectation.ID == "" && expectation.CustomerID == "" && expectation.ClusterID == "" &&
+		expectation.DefinitionID == "" && expectation.Namespace == "" && expectation.SourcePrefix == ""
+}
+
+// validateRouteRow checks the inventory row's route fields, skipping every
+// constraint the expectation leaves open. The check order is fixed so the
+// reported field is stable.
+func validateRouteRow(row InventoryRow, expectation RouteExpectation) error {
+	for _, field := range []struct {
+		name     string
+		expected string
+		actual   string
+	}{
+		{"route.definition_id", expectation.DefinitionID, row.DefinitionID},
+		{"route.customer_id", expectation.CustomerID, row.CustomerID},
+		{"route.cluster_id", expectation.ClusterID, row.ClusterID},
+		{"route.namespace", expectation.Namespace, row.Namespace},
+	} {
+		if field.expected != "" && field.actual != field.expected {
+			return newStageError(CodeFixtureStale, field.name, fmt.Sprintf("expected %q got %q", field.expected, field.actual))
+		}
+	}
+	return nil
+}
+
+// routeSatisfies reports whether one observed route satisfies every constraint
+// the expectation states; open constraints are not checked.
+func routeSatisfies(route RouteObservation, expectation RouteExpectation) bool {
+	for _, constraint := range []struct{ expected, actual string }{
+		{expectation.ID, route.ID},
+		{expectation.CustomerID, route.CustomerID},
+		{expectation.ClusterID, route.ClusterID},
+		{expectation.DefinitionID, route.DefinitionID},
+		{expectation.Namespace, route.Namespace},
+		{expectation.SourcePrefix, route.SourcePrefix},
+	} {
+		if constraint.expected != "" && constraint.actual != constraint.expected {
+			return false
+		}
+	}
+	return true
+}
+
 func validateRoute(row InventoryRow, routes []RouteObservation, expectation RouteExpectation) error {
-	if expectation.ID == "" && expectation.CustomerID == "" && expectation.ClusterID == "" && expectation.DefinitionID == "" && expectation.Namespace == "" && expectation.SourcePrefix == "" {
+	if routeExpectationEmpty(expectation) {
 		return nil
 	}
-	if expectation.DefinitionID != "" && row.DefinitionID != expectation.DefinitionID {
-		return newStageError(CodeFixtureStale, "route.definition_id", fmt.Sprintf("expected %q got %q", expectation.DefinitionID, row.DefinitionID))
-	}
-	if expectation.CustomerID != "" && row.CustomerID != expectation.CustomerID {
-		return newStageError(CodeFixtureStale, "route.customer_id", fmt.Sprintf("expected %q got %q", expectation.CustomerID, row.CustomerID))
-	}
-	if expectation.ClusterID != "" && row.ClusterID != expectation.ClusterID {
-		return newStageError(CodeFixtureStale, "route.cluster_id", fmt.Sprintf("expected %q got %q", expectation.ClusterID, row.ClusterID))
-	}
-	if expectation.Namespace != "" && row.Namespace != expectation.Namespace {
-		return newStageError(CodeFixtureStale, "route.namespace", fmt.Sprintf("expected %q got %q", expectation.Namespace, row.Namespace))
+	if err := validateRouteRow(row, expectation); err != nil {
+		return err
 	}
 	if len(routes) == 0 {
 		// Route fields are optional in the current ListReleaseInventory RPC.
 		return nil
 	}
-	for _, route := range routes {
-		if expectation.ID != "" && route.ID != expectation.ID {
-			continue
+	for index := range routes {
+		if routeSatisfies(routes[index], expectation) {
+			return nil
 		}
-		if expectation.CustomerID != "" && route.CustomerID != expectation.CustomerID {
-			continue
-		}
-		if expectation.ClusterID != "" && route.ClusterID != expectation.ClusterID {
-			continue
-		}
-		if expectation.DefinitionID != "" && route.DefinitionID != expectation.DefinitionID {
-			continue
-		}
-		if expectation.Namespace != "" && route.Namespace != expectation.Namespace {
-			continue
-		}
-		if expectation.SourcePrefix != "" && route.SourcePrefix != expectation.SourcePrefix {
-			continue
-		}
-		return nil
 	}
 	return newStageError(CodeFixtureStale, "route", "expected route observation missing")
 }

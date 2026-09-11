@@ -243,58 +243,70 @@ func (s *ControlPlaneStage) Observation() ControlPlaneObservation {
 	return observation
 }
 
-func validateControlPlane(observation ControlPlaneObservation, expectedServices []string) error {
-	if len(observation.Services) == 0 {
+// validateServiceSet enforces the declared service surface: exactly the expected
+// set when the caller declares one, otherwise the canonical six services.
+func validateServiceSet(services []ServiceObservation, expectedServices []string) error {
+	if len(services) == 0 {
 		return newStageError(CodeSnapshotNotFound, "control-plane", "service observations missing")
 	}
-	if len(expectedServices) > 0 {
-		if len(observation.Services) != len(expectedServices) {
-			return newStageError(CodeEnvironmentUnhealthy, "control-plane", fmt.Sprintf("service count expected %d got %d", len(expectedServices), len(observation.Services)))
+	if len(expectedServices) == 0 {
+		if len(services) != 6 {
+			return newStageError(CodeEnvironmentUnhealthy, "control-plane", fmt.Sprintf("service count expected 6 got %d", len(services)))
 		}
-		expected := make(map[string]struct{}, len(expectedServices))
-		for _, name := range expectedServices {
-			expected[name] = struct{}{}
-		}
-		for _, service := range observation.Services {
-			if _, ok := expected[service.Name]; !ok {
-				return newStageError(CodeEnvironmentUnhealthy, service.Name, "unexpected service observation")
-			}
-		}
-	} else if len(observation.Services) != 6 {
-		return newStageError(CodeEnvironmentUnhealthy, "control-plane", fmt.Sprintf("service count expected 6 got %d", len(observation.Services)))
+		return nil
 	}
+	if len(services) != len(expectedServices) {
+		return newStageError(CodeEnvironmentUnhealthy, "control-plane", fmt.Sprintf("service count expected %d got %d", len(expectedServices), len(services)))
+	}
+	expected := make(map[string]struct{}, len(expectedServices))
+	for _, name := range expectedServices {
+		expected[name] = struct{}{}
+	}
+	for index := range services {
+		if _, ok := expected[services[index].Name]; !ok {
+			return newStageError(CodeEnvironmentUnhealthy, services[index].Name, "unexpected service observation")
+		}
+	}
+	return nil
+}
 
-	seen := make(map[string]struct{}, len(observation.Services))
+// validateServiceHealth requires every service to be uniquely named, healthy and
+// ready, and returns the environment reference the HTTP services agree on.
+//
+// A TLS-only listener has no /environment route, so requiring metadata from it
+// would fail on every environment; reachability is the whole assertion such a
+// service can support.
+func validateServiceHealth(services []ServiceObservation) (EnvironmentObservation, bool, error) {
+	seen := make(map[string]struct{}, len(services))
 	var reference EnvironmentObservation
 	haveReference := false
-	for _, service := range observation.Services {
+	for index := range services {
+		service := services[index]
 		if strings.TrimSpace(service.Name) == "" {
-			return newStageError(CodeEnvironmentUnhealthy, "control-plane", "service name missing")
+			return reference, false, newStageError(CodeEnvironmentUnhealthy, "control-plane", "service name missing")
 		}
 		if _, ok := seen[service.Name]; ok {
-			return newStageError(CodeEnvironmentUnhealthy, service.Name, "duplicate service observation")
+			return reference, false, newStageError(CodeEnvironmentUnhealthy, service.Name, "duplicate service observation")
 		}
 		seen[service.Name] = struct{}{}
 		if !service.Healthy || !service.Ready {
-			return newStageError(CodeEnvironmentUnhealthy, service.Name, "service is not healthy and ready")
+			return reference, false, newStageError(CodeEnvironmentUnhealthy, service.Name, "service is not healthy and ready")
 		}
-		// A TLS-only listener has no /environment route, so requiring metadata
-		// from it would fail on every environment. Reachability above is the
-		// whole assertion such a service can support.
 		if observedTransport(service) == TransportTCP {
 			continue
 		}
 		next, adopted, err := adoptServiceEnvironment(service, reference, haveReference)
 		if err != nil {
-			return err
+			return reference, false, err
 		}
 		reference, haveReference = next, adopted
 	}
-	if !haveReference {
-		return newStageError(CodeEnvironmentUnhealthy, "control-plane", "no service reported environment metadata")
-	}
+	return reference, haveReference, nil
+}
 
-	session := observation.OperatorSession
+// validateOperatorSession requires a named session that is actually online: an
+// anonymous or offline session cannot prove the agent plane is healthy.
+func validateOperatorSession(session OperatorSessionObservation) error {
 	if strings.TrimSpace(session.SessionID) == "" || strings.TrimSpace(session.OperatorID) == "" {
 		return newStageError(CodeEnvironmentUnhealthy, "operator-session", "active session identity missing")
 	}
@@ -302,6 +314,20 @@ func validateControlPlane(observation ControlPlaneObservation, expectedServices 
 		return newStageError(CodeEnvironmentUnhealthy, "operator-session", "operator session is offline")
 	}
 	return nil
+}
+
+func validateControlPlane(observation ControlPlaneObservation, expectedServices []string) error {
+	if err := validateServiceSet(observation.Services, expectedServices); err != nil {
+		return err
+	}
+	_, haveReference, err := validateServiceHealth(observation.Services)
+	if err != nil {
+		return err
+	}
+	if !haveReference {
+		return newStageError(CodeEnvironmentUnhealthy, "control-plane", "no service reported environment metadata")
+	}
+	return validateOperatorSession(observation.OperatorSession)
 }
 
 // adoptServiceEnvironment validates one HTTP service's /environment metadata
