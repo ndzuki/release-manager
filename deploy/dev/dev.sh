@@ -845,6 +845,29 @@ goproxy_no_proxy_host() {
   printf '%s' "$(build_goproxy)" | sed -nE 's#^https?://([^/,:]+).*#\1#p' | sed -n '1p'
 }
 
+# build_proxy_host — the hostname of the effective build proxy (HTTPS first,
+# then HTTP, upper or lower case). Empty when no proxy is configured.
+build_proxy_host() {
+  local proxy="${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-}}}}"
+  printf '%s' "$proxy" | sed -nE 's#^[a-zA-Z][a-zA-Z0-9+.-]*://([^/,:]+).*#\1#p' | sed -n '1p'
+}
+
+# build_proxy_is_container_reachable — whether the effective proxy can be used
+# from inside a buildkit RUN step. A proxy bound to the host's loopback cannot:
+# 127.0.0.1 inside the build container is the container itself (real smoke
+# 2026-08-27 for `go mod download`, 2026-09-11 for `npm ci`). Injecting such a
+# proxy turns every fetch into a connection refusal, so callers clear it
+# instead. An unset proxy reports false as well: there is nothing to inject.
+build_proxy_is_container_reachable() {
+  local host
+  host="$(build_proxy_host)"
+  [ -n "$host" ] || return 1
+  case "$host" in
+    127.*|localhost|::1|0.0.0.0) return 1 ;;
+  esac
+  return 0
+}
+
 # image_record <service> — compute the content hash, record it in IMAGE_TAGS
 # (so kustomize_apply can pin the exact digest), and report whether a build
 # is needed (0) or the manifest already exists in the registry (1).
@@ -884,8 +907,19 @@ build_push_now() {
   # behind a proxy must pass it into the build container or `go mod download`
   # inside the Dockerfile fails (Go modules resolve through the proxy). The
   # value is the caller's, matching the node injection (REQ-065 framework).
+  #
+  # A LOOPBACK proxy is a special case: the daemon (image pulls) reaches it,
+  # but a buildkit RUN step does not — 127.0.0.1 there is the build container
+  # itself. BuildKit forwards the client's proxy variables into every RUN step
+  # automatically, so leaving them in place breaks each fetch that the proxy
+  # cannot serve (real smoke 2026-09-11: `npm ci` died with
+  # "ECONNREFUSED 127.0.0.1:7890" while registry.npmjs.org answered 200
+  # directly). Clear them explicitly so RUN steps go direct; the pull still
+  # uses the client's proxy. The Go path worked around the same limitation by
+  # adding the GOPROXY host to NO_PROXY, which only helps fetches that honour
+  # NO_PROXY.
   local build_args=()
-  if [ -n "${HTTP_PROXY:-}${http_proxy:-}${HTTPS_PROXY:-}${https_proxy:-}" ]; then
+  if build_proxy_is_container_reachable; then
     build_args+=(
       --build-arg "HTTP_PROXY=${HTTP_PROXY:-${http_proxy:-}}"
       --build-arg "HTTPS_PROXY=${HTTPS_PROXY:-${https_proxy:-}}"
@@ -896,6 +930,13 @@ build_push_now() {
       # so module fetches bypass the proxy and go direct (goproxy.cn is
       # directly reachable from CN hosts, verified 200/52ms).
       --build-arg "NO_PROXY=localhost,127.0.0.1,$(goproxy_no_proxy_host)${NO_PROXY:+,$NO_PROXY}"
+    )
+  elif [ -n "$(build_proxy_host)" ]; then
+    build_args+=(
+      --build-arg "HTTP_PROXY="
+      --build-arg "HTTPS_PROXY="
+      --build-arg "http_proxy="
+      --build-arg "https_proxy="
     )
   fi
   # GOPROXY build-arg: the container's default proxy.golang.org is
