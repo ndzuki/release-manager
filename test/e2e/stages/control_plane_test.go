@@ -121,3 +121,65 @@ func TestControlPlaneStageExpectedServices(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 }
+
+// TestControlPlaneStageAcceptsTLSOnlyService covers the operator gateway: it
+// has no /environment route, so it is observed by reachability and must be
+// exempt from the environment-metadata assertions while still needing to be
+// reachable.
+func TestControlPlaneStageAcceptsTLSOnlyService(t *testing.T) {
+	t.Parallel()
+
+	observation := healthyControlPlane()
+	observation.Services[2] = ServiceObservation{
+		Name:      "operator",
+		Healthy:   true,
+		Ready:     true,
+		Transport: TransportTCP,
+	}
+	stage := NewControlPlaneStage(controlPlaneFake{observation: observation})
+	if err := stage.Run(context.Background(), nil); err != nil {
+		t.Fatalf("Run() rejected a reachable TLS-only service: %v", err)
+	}
+}
+
+// TestControlPlaneStageRejectsUnreachableTLSOnlyService proves the exemption is
+// limited to environment metadata: a TLS-only service that cannot be reached
+// is still fatal.
+func TestControlPlaneStageRejectsUnreachableTLSOnlyService(t *testing.T) {
+	t.Parallel()
+
+	observation := healthyControlPlane()
+	observation.Services[2] = ServiceObservation{
+		Name:      "operator",
+		Healthy:   false,
+		Ready:     false,
+		Transport: TransportTCP,
+	}
+	stage := NewControlPlaneStage(controlPlaneFake{observation: observation})
+	err := stage.Run(context.Background(), nil)
+	if !errors.Is(err, ErrEnvironmentUnhealthy) {
+		t.Fatalf("Run() error = %v, want errors.Is(..., ErrEnvironmentUnhealthy)", err)
+	}
+}
+
+// TestControlPlaneStageRejectsARunWithNoHTTPEnvironment covers the reference
+// rule: the environment reference comes from the first HTTP service, so a run
+// where every service is TLS-only cannot silently pass.
+func TestControlPlaneStageRejectsARunWithNoHTTPEnvironment(t *testing.T) {
+	t.Parallel()
+
+	observation := healthyControlPlane()
+	for index := range observation.Services {
+		observation.Services[index] = ServiceObservation{
+			Name:      observation.Services[index].Name,
+			Healthy:   true,
+			Ready:     true,
+			Transport: TransportTCP,
+		}
+	}
+	stage := NewControlPlaneStage(controlPlaneFake{observation: observation})
+	err := stage.Run(context.Background(), nil)
+	if !errors.Is(err, ErrEnvironmentUnhealthy) {
+		t.Fatalf("Run() error = %v, want errors.Is(..., ErrEnvironmentUnhealthy)", err)
+	}
+}

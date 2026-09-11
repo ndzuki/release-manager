@@ -284,20 +284,11 @@ func validateControlPlane(observation ControlPlaneObservation, expectedServices 
 		if observedTransport(service) == TransportTCP {
 			continue
 		}
-		if strings.TrimSpace(service.Environment.EnvironmentID) == "" || strings.TrimSpace(service.Environment.Environment) == "" {
-			return newStageError(CodeEnvironmentUnhealthy, service.Name, "environment metadata missing")
+		next, adopted, err := adoptServiceEnvironment(service, reference, haveReference)
+		if err != nil {
+			return err
 		}
-		if service.Environment.Production {
-			return newStageError(CodeEnvironmentUnhealthy, service.Name, "production environment rejected")
-		}
-		if !haveReference {
-			reference = service.Environment
-			haveReference = true
-			continue
-		}
-		if service.Environment.Environment != reference.Environment || service.Environment.EnvironmentID != reference.EnvironmentID {
-			return newStageError(CodeEnvironmentUnhealthy, service.Name, "environment metadata inconsistent")
-		}
+		reference, haveReference = next, adopted
 	}
 	if !haveReference {
 		return newStageError(CodeEnvironmentUnhealthy, "control-plane", "no service reported environment metadata")
@@ -311,4 +302,28 @@ func validateControlPlane(observation ControlPlaneObservation, expectedServices 
 		return newStageError(CodeEnvironmentUnhealthy, "operator-session", "operator session is offline")
 	}
 	return nil
+}
+
+// adoptServiceEnvironment validates one HTTP service's /environment metadata
+// and returns the reference the remaining services must match. The first HTTP
+// service observed establishes that reference; every later one must agree with
+// it, so a run split across two environments is rejected.
+func adoptServiceEnvironment(
+	service ServiceObservation,
+	reference EnvironmentObservation,
+	haveReference bool,
+) (EnvironmentObservation, bool, error) {
+	if strings.TrimSpace(service.Environment.EnvironmentID) == "" || strings.TrimSpace(service.Environment.Environment) == "" {
+		return reference, haveReference, newStageError(CodeEnvironmentUnhealthy, service.Name, "environment metadata missing")
+	}
+	if service.Environment.Production {
+		return reference, haveReference, newStageError(CodeEnvironmentUnhealthy, service.Name, "production environment rejected")
+	}
+	if !haveReference {
+		return service.Environment, true, nil
+	}
+	if service.Environment.Environment != reference.Environment || service.Environment.EnvironmentID != reference.EnvironmentID {
+		return reference, haveReference, newStageError(CodeEnvironmentUnhealthy, service.Name, "environment metadata inconsistent")
+	}
+	return reference, haveReference, nil
 }
