@@ -2,6 +2,7 @@ package main_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -21,7 +22,7 @@ func TestMain(m *testing.M) {
 		os.Exit(m.Run())
 	}
 	binary := filepath.Join(os.TempDir(), fmt.Sprintf("release-manager-e2e-%d", os.Getpid()))
-	command := exec.Command("go", "build", "-buildvcs=false", "-o", binary, ".")
+	command := exec.CommandContext(context.Background(), "go", "build", "-buildvcs=false", "-o", binary, ".")
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
 	if err := command.Run(); err != nil {
@@ -75,12 +76,12 @@ func TestCLIRejectsDuplicateStagesWithoutRunArtifact(t *testing.T) {
 	}
 }
 
-// TestCLIRunFailsClosedWithoutLiveStageImplementations verifies that a run
-// whose selected stages have no wired live implementation reports an honest
-// failure (exit 1) instead of a vacuous pass, while still persisting the
-// baseline and per-stage artifacts and keeping stdout human-only (TASK-066
-// fail-closed contract; no fake green runs).
-func TestCLIRunFailsClosedWithoutLiveStageImplementations(t *testing.T) {
+// TestCLIRunFailsClosedAgainstAnUnreachableEnvironment verifies that the wired
+// canonical stage graph reports an honest failure (exit 1) against a dead
+// environment instead of a vacuous pass, while still persisting the baseline
+// and per-stage artifacts and keeping stdout human-only (TASK-066 fail-closed
+// contract; no fake green runs).
+func TestCLIRunFailsClosedAgainstAnUnreachableEnvironment(t *testing.T) {
 	configPath := writeConfig(t)
 	outputDir := t.TempDir()
 	result := runCLI(t, map[string]string{"E2E_RUN_ID": "cli-failclosed"},
@@ -88,18 +89,18 @@ func TestCLIRunFailsClosedWithoutLiveStageImplementations(t *testing.T) {
 		"--env-config", configPath,
 		"--output-dir", outputDir,
 		"--stages", "artifact,control-plane",
-		"--timeout", "1s",
-		"--total-timeout", "2s",
+		"--timeout", "10s",
+		"--total-timeout", "20s",
 		"--parallel",
 		"--keep-on-failure",
 		"--snapshot-full",
 	)
 
-	// There is no live environment and no stage implementation is wired into
-	// the canonical harness: every selected stage must fail closed. A green
-	// exit here would be a fabricated pass and is a regression.
+	// There is no live environment: the control-plane observer must report the
+	// unreachable endpoints and the stage must fail on them. A green exit here
+	// would be a fabricated pass and is a regression.
 	if result.code != 1 {
-		t.Fatalf("exit code = %d, want 1 (fail closed without implementations); stderr=%s", result.code, result.stderr)
+		t.Fatalf("exit code = %d, want 1 (fail closed against a dead environment); stderr=%s", result.code, result.stderr)
 	}
 	if !strings.Contains(result.stdout, "E2E run cli-failclosed") {
 		t.Fatalf("stdout = %q, want human summary", result.stdout)
@@ -133,8 +134,8 @@ func TestCLIRunFailsClosedWithoutLiveStageImplementations(t *testing.T) {
 	if got, want := strings.Join(artifact.SelectedStages, ","), "control-plane,artifact"; got != want {
 		t.Fatalf("selected stages = %q, want %q", got, want)
 	}
-	// control-plane fails closed (not_implemented); artifact depends on it and
-	// is therefore stage_skipped with the dependency reason (AC-066-01/41).
+	// control-plane fails on the unreachable environment; artifact depends on it
+	// and is therefore stage_skipped with the dependency reason (AC-066-01/41).
 	if artifact.Pass != 0 || artifact.Fail != 1 || artifact.Skip != 1 || artifact.ExitCode != 1 {
 		t.Fatalf("run artifact = %+v, want fail=1 skip=1 exit 1", artifact)
 	}
@@ -152,8 +153,20 @@ func TestCLIRunFailsClosedWithoutLiveStageImplementations(t *testing.T) {
 	if err := json.Unmarshal(stageData, &stage); err != nil {
 		t.Fatal(err)
 	}
-	if stage.Status != "fail" || stage.ErrorCode != "not_implemented" {
-		t.Fatalf("control-plane stage artifact = %+v, want fail/not_implemented", stage)
+	if stage.Status != "fail" {
+		t.Fatalf("control-plane stage artifact = %+v, want a fail", stage)
+	}
+	// The stable stage code is asserted through root_cause rather than
+	// error_code on purpose: *stages.StageError exposes its code as a field,
+	// while test/e2e/runner.go duck-types a Code() string method, so only
+	// *NotImplementedError is mirrored into error_code today. Asserting the code
+	// text keeps this test honest and still passes once that classification is
+	// fixed.
+	if !strings.Contains(stage.RootCause, "environment_unhealthy") {
+		t.Fatalf("control-plane root cause = %q, want the environment_unhealthy code", stage.RootCause)
+	}
+	if stage.ErrorCode == "" {
+		t.Fatalf("control-plane stage artifact = %+v, want a machine-readable error code", stage)
 	}
 
 	stageData, err = os.ReadFile(filepath.Join(outputDir, "artifact.json"))
@@ -169,6 +182,35 @@ func TestCLIRunFailsClosedWithoutLiveStageImplementations(t *testing.T) {
 	}
 }
 
+// TestCLIRunFailsClosedWithoutUsableKubeconfig verifies that a config whose
+// kubeconfig cannot be read fails the run before any artifact is written: the
+// canonical graph needs the typed clientset, and a graph that cannot be
+// assembled must never produce a run directory that looks like a completed run.
+func TestCLIRunFailsClosedWithoutUsableKubeconfig(t *testing.T) {
+	configPath := writeConfigWithKubeconfig(t, filepath.Join(t.TempDir(), "absent-kubeconfig.yaml"))
+	outputDir := t.TempDir()
+	result := runCLI(t, map[string]string{"E2E_RUN_ID": "cli-no-kubeconfig"},
+		"run",
+		"--env-config", configPath,
+		"--output-dir", outputDir,
+		"--stages", "control-plane",
+		"--timeout", "1s",
+		"--total-timeout", "2s",
+	)
+
+	if result.code != 1 {
+		t.Fatalf("exit code = %d, want 1 (graph assembly must fail closed); stderr=%s", result.code, result.stderr)
+	}
+	if !strings.Contains(result.stderr, "assemble e2e stage graph") {
+		t.Fatalf("stderr = %q, want the graph assembly diagnostic", result.stderr)
+	}
+	for _, name := range []string{"run.json", "baseline.json", "control-plane.json"} {
+		if _, err := os.Stat(filepath.Join(outputDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("artifact %s exists after a graph assembly failure: %v", name, err)
+		}
+	}
+}
+
 func TestCLIPreservesLockConflictExitCode(t *testing.T) {
 	configPath := writeConfig(t)
 	outputDir := t.TempDir()
@@ -177,7 +219,11 @@ func TestCLIPreservesLockConflictExitCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = lock.Release() }()
+	t.Cleanup(func() {
+		if releaseErr := lock.Release(); releaseErr != nil {
+			t.Errorf("release lock: %v", releaseErr)
+		}
+	})
 
 	result := runCLI(t, map[string]string{
 		"E2E_RUN_ID":    "cli-locked",
@@ -234,7 +280,7 @@ type cliResult struct {
 
 func runCLI(t *testing.T, env map[string]string, args ...string) cliResult {
 	t.Helper()
-	command := exec.Command(e2eBinary, args...)
+	command := exec.CommandContext(context.Background(), e2eBinary, args...)
 	command.Dir = filepath.Dir(e2eBinary)
 	command.Env = append([]string{}, os.Environ()...)
 	for key, value := range env {
@@ -257,9 +303,44 @@ func runCLI(t *testing.T, env map[string]string, args ...string) cliResult {
 
 func writeConfig(t *testing.T) string {
 	t.Helper()
+	return writeConfigWithKubeconfig(t, writeTestKubeconfig(t))
+}
+
+// writeTestKubeconfig writes a syntactically valid kubeconfig so the CLI can
+// assemble the canonical stage graph without a cluster: client-go parses the
+// config eagerly and connects lazily.
+func writeTestKubeconfig(t *testing.T) string {
+	t.Helper()
+
+	const body = `apiVersion: v1
+kind: Config
+clusters:
+  - name: cli-test
+    cluster:
+      server: https://127.0.0.1:6443
+contexts:
+  - name: cli-test
+    context:
+      cluster: cli-test
+      user: cli-test
+current-context: cli-test
+users:
+  - name: cli-test
+    user:
+      token: cli-test-token
+`
+	path := filepath.Join(t.TempDir(), "kubeconfig.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
+	}
+	return path
+}
+
+func writeConfigWithKubeconfig(t *testing.T, kubeconfig string) string {
+	t.Helper()
 	t.Setenv("E2E_RUNNER_PASSWORD", "test-password")
 	path := filepath.Join(t.TempDir(), "env-config.yaml")
-	const config = `environment: ci
+	config := fmt.Sprintf(`environment: ci
 environment_id: ci-run
 endpoints:
   release_orchestrator: http://localhost:8083
@@ -273,7 +354,7 @@ credentials:
     username: e2e-runner
     password_env: E2E_RUNNER_PASSWORD
 k3d:
-  kubeconfig: /tmp/kubeconfig
+  kubeconfig: %s
   test_namespace: release-manager-dev
   restart_targets:
     namespace: release-manager-dev
@@ -299,7 +380,7 @@ seed:
     - definition_id: e2e-restart-target
       bundle_id: bundle-1
       values_revision_id: values-1
-`
+`, kubeconfig)
 	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}

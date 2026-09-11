@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ndzuki/release-manager/test/e2e"
+	"github.com/ndzuki/release-manager/test/e2e/livewire"
 )
 
 const (
@@ -129,6 +130,20 @@ func runStages(args []string, stdout, stderr io.Writer) int {
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	logger.Info("e2e run started", "run_id", runID, "stages", strings.Join(selected, ","))
 
+	// The live read/write stage implementations live in test/e2e/livewire. The
+	// canonical graph is assembled before any artifact is written, so a graph
+	// that cannot be assembled is a fail-closed runtime error (exit 1) that
+	// leaves no baseline or stage artifact behind, rather than a run that
+	// silently reports a vacuous pass. Assembling the whole graph means a run
+	// needs a usable config even for a partial stage selection; that is
+	// deliberate, because the graph is the single definition of the canonical
+	// stage set and its dependency edges (TASK-066 fail-closed contract).
+	stageSpecs, err := livewire.Specs(config)
+	if err != nil {
+		logger.Error("assemble e2e stage graph", "error", err)
+		return int(exitRuntime)
+	}
+
 	baseline := baselineArtifact{
 		RunID:          runID,
 		Environment:    config.Environment,
@@ -152,16 +167,15 @@ func runStages(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// The live read/write stage implementations are delivered behind the
-	// test/e2e package. New(cfg) supplies the canonical dependency graph whose
-	// stage bodies fail closed with ErrStageNotImplemented until a real
-	// implementation is supplied through Scenario.Stages. This keeps the CLI
-	// honest: no selected stage ever reports a vacuous pass, so `make e2e-*`
-	// and CI go red (exit 1) while an implementation is missing rather than
-	// fabricating a green run (TASK-066 Step 8 fail-closed contract).
+	// The canonical graph assembled above supplies every stage body, so no
+	// selected stage can report a vacuous pass: a real adapter that cannot
+	// observe a healthy dependency fails the stage, and `make e2e-*` and CI go
+	// red (exit 1) instead of fabricating a green run (TASK-066 Step 8
+	// fail-closed contract).
 	harness := e2e.New(*config)
 	report, runErr := harness.Run(ctx, e2e.Scenario{
 		SelectedStages: selected,
+		Stages:         stageSpecs,
 		StageTimeout:   options.timeout,
 		TotalTimeout:   options.totalTimeout,
 		Parallel:       options.parallel,
