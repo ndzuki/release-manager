@@ -3,12 +3,16 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
 )
+
+// errTestObservation stands in for a workload the outcome check cannot read.
+var errTestObservation = errors.New("observation unavailable")
 
 type recoveryFake struct {
 	rows       []CleanupRow
@@ -335,5 +339,122 @@ func TestCleanupDeadlineSpansTheRunInducedAgentReconnect(t *testing.T) {
 	}
 	if budget := time.Until(deadline); budget <= mustExceed {
 		t.Fatalf("cleanup budget = %s, want more than %s so a restore can outlast the agent reconnect", budget, mustExceed)
+	}
+}
+
+// replicaObserverFake records what the outcome check read and answers with a
+// count per workload reference.
+type replicaObserverFake struct {
+	counts  map[string]int32
+	readErr error
+	reads   []string
+}
+
+func (f *replicaObserverFake) ObserveReplicas(_ context.Context, cluster, namespace, workloadName string) (int32, error) {
+	key := cluster + "/" + namespace + "/" + workloadName
+	f.reads = append(f.reads, key)
+	if f.readErr != nil {
+		return 0, f.readErr
+	}
+	return f.counts[key], nil
+}
+
+// TestVerifyRestoreReportsAWorkloadThatNeverReturnedToTheBaseline covers the
+// hole this phase exists for: a replica restore whose write and operation both
+// succeeded while the workload kept the count the run had set. Action
+// verification cannot see that; only the read back can.
+func TestVerifyRestoreReportsAWorkloadThatNeverReturnedToTheBaseline(t *testing.T) {
+	t.Parallel()
+
+	baseline := &BaselineRecovery{Replicas: []WorkloadReplicaRef{{
+		ReleaseDefinitionID: "def-1",
+		Cluster:             "dev-customer-a-direct",
+		WorkloadRef:         "deployments/e2e-emergency/release-fixture",
+		Replicas:            1,
+	}}}
+	observer := &replicaObserverFake{counts: map[string]int32{
+		"dev-customer-a-direct/e2e-emergency/release-fixture": 2,
+	}}
+
+	report := VerifyRestore(context.Background(), baseline, observer, slog.Default())
+	if len(report.ResidualReplicas) != 1 {
+		t.Fatalf("ResidualReplicas = %v, want the workload reported as still changed", report.ResidualReplicas)
+	}
+	if len(report.UnverifiedReplicas) != 0 {
+		t.Fatalf("UnverifiedReplicas = %v, want a successful read to count as verified", report.UnverifiedReplicas)
+	}
+	if !report.NonZero() {
+		t.Fatal("NonZero() = false, want a residual to make the report non-empty")
+	}
+}
+
+// TestVerifyRestoreAcceptsAWorkloadBackAtTheBaseline pins the other direction, so
+// the check cannot be satisfied by reporting a residual unconditionally.
+func TestVerifyRestoreAcceptsAWorkloadBackAtTheBaseline(t *testing.T) {
+	t.Parallel()
+
+	baseline := &BaselineRecovery{Replicas: []WorkloadReplicaRef{{
+		Cluster:     "dev-customer-a-direct",
+		WorkloadRef: "deployments/e2e-emergency/release-fixture",
+		Replicas:    1,
+	}}}
+	observer := &replicaObserverFake{counts: map[string]int32{
+		"dev-customer-a-direct/e2e-emergency/release-fixture": 1,
+	}}
+
+	report := VerifyRestore(context.Background(), baseline, observer, slog.Default())
+	if len(report.ResidualReplicas) != 0 || len(report.UnverifiedReplicas) != 0 {
+		t.Fatalf("report = %+v, want a workload at the baseline count to be neither residual nor unverified", report)
+	}
+	if report.NonZero() {
+		t.Fatalf("NonZero() = true for a clean verification: %+v", report)
+	}
+	if len(observer.reads) != 1 {
+		t.Fatalf("reads = %v, want the workload read once", observer.reads)
+	}
+}
+
+// TestVerifyRestoreNeverMistakesUnreadForRestored covers the honesty rule. A
+// missing observer, an unreadable workload, and a baseline row with no cluster
+// are all "not verified" rather than "matched": reporting a silent pass would
+// recreate the false success this phase replaced.
+func TestVerifyRestoreNeverMistakesUnreadForRestored(t *testing.T) {
+	t.Parallel()
+
+	rows := []WorkloadReplicaRef{
+		{Cluster: "c", WorkloadRef: "deployments/ns/one", Replicas: 1},
+		{WorkloadRef: "deployments/ns/two", Replicas: 1},
+		{Cluster: "c", WorkloadRef: "not-a-workload-ref", Replicas: 1},
+	}
+	baseline := &BaselineRecovery{Replicas: rows}
+
+	report := VerifyRestore(context.Background(), baseline, nil, slog.Default())
+	if len(report.UnverifiedReplicas) != len(rows) {
+		t.Fatalf("UnverifiedReplicas = %v, want all %d rows reported when no observer is wired", report.UnverifiedReplicas, len(rows))
+	}
+	if len(report.ResidualReplicas) != 0 {
+		t.Fatalf("ResidualReplicas = %v, want an unread workload never reported as a mismatch", report.ResidualReplicas)
+	}
+
+	failing := &replicaObserverFake{readErr: errTestObservation}
+	report = VerifyRestore(context.Background(), baseline, failing, slog.Default())
+	if len(report.UnverifiedReplicas) != len(rows) {
+		t.Fatalf("UnverifiedReplicas = %v, want every unreadable row reported", report.UnverifiedReplicas)
+	}
+}
+
+// TestMergeVerificationKeepsOneReport pins that the two phases produce a single
+// account: a residual found by the outcome check must not appear in a separate
+// artifact a reader could miss.
+func TestMergeVerificationKeepsOneReport(t *testing.T) {
+	t.Parallel()
+
+	report := CleanupReport{RestoredReplicas: []string{"deployments/ns/one"}}
+	report.MergeVerification(CleanupReport{
+		ResidualReplicas:   []string{"deployments/ns/two"},
+		UnverifiedReplicas: []string{"deployments/ns/three"},
+	})
+	if len(report.RestoredReplicas) != 1 || len(report.ResidualReplicas) != 1 || len(report.UnverifiedReplicas) != 1 {
+		t.Fatalf("merged report = %+v, want the recovery and verification fields together", report)
 	}
 }

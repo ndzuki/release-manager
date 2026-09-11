@@ -39,6 +39,11 @@ type SnapshotIdentity struct {
 // WorkloadReplicaRef is the baseline replica count of one workload.
 type WorkloadReplicaRef struct {
 	ReleaseDefinitionID string `json:"release_definition_id"`
+	// Cluster is the customer cluster the workload runs in. The outcome check
+	// needs it to re-read the workload after recovery: the emergency target
+	// listing reports a sentinel count rather than a live one, so the observed
+	// value has to come from the cluster itself.
+	Cluster string `json:"cluster,omitempty"`
 	// WorkloadRef is the authoritative "<gvr.resource>/<namespace>/<name>"
 	// reference the emergency API accepts, not a diagnostic label.
 	WorkloadRef string `json:"workload_ref"`

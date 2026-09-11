@@ -409,8 +409,38 @@ func runCleanup(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "E2E cleanup failed: %s\n", safeErrorMessage(err))
 		return int(exitRuntime)
 	}
+	// Recovery and verification are separate phases because they answer separate
+	// questions: RunCleanup reports which recovery operations completed, and this
+	// reads the environment back to see whether the workload actually returned to
+	// the baseline. Merging them into one report keeps the artifact a single
+	// truthful account (AC-066-34).
+	verification := e2e.VerifyRestore(cleanupCtx, recoveryTarget, cleanupObserver(options.envConfig, logger), logger)
+	report.MergeVerification(verification)
 	writeCleanupSummary(stdout, report)
 	return int(exitSuccess)
+}
+
+// cleanupObserver builds the read-only observer the outcome check reads through.
+//
+// A failure to build one is not fatal: the check then reports the workload as
+// unverified, which is the truth, rather than skipping the check silently.
+func cleanupObserver(envConfig string, logger *slog.Logger) e2e.RecoveryObserver {
+	cfg, err := e2e.LoadConfig(envConfig)
+	if err != nil {
+		logger.Warn("cleanup verification cannot read the environment; workloads will report as unverified", "error", safeErrorMessage(err))
+		return nil
+	}
+	provider, err := livewire.NewClusterContextsClientProvider(cfg)
+	if err != nil {
+		logger.Warn("cleanup verification cannot build a cluster client provider; workloads will report as unverified", "error", safeErrorMessage(err))
+		return nil
+	}
+	observer, err := livewire.NewCleanupReplicaObserver(provider)
+	if err != nil {
+		logger.Warn("cleanup verification cannot build the replica observer; workloads will report as unverified", "error", safeErrorMessage(err))
+		return nil
+	}
+	return observer
 }
 
 // loadCleanupBaseline parses {--baseline-file} as the recovery target. A
@@ -471,11 +501,13 @@ func newCleanupRecovery(envConfig string) (*e2e.LiveRecovery, error) {
 
 func writeCleanupSummary(stdout io.Writer, report e2e.CleanupReport) {
 	fmt.Fprintf(stdout,
-		"E2E cleanup: cancelled=%d rolled_back=%d skipped_revision_restore=%d residual=%d replicas_restore_skipped=%v baseline_missing=%v\n",
+		"E2E cleanup: cancelled=%d rolled_back=%d skipped_revision_restore=%d residual=%d residual_replicas=%d unverified_replicas=%d replicas_restore_skipped=%v baseline_missing=%v\n",
 		len(report.CancelledOperationIDs),
 		len(report.RolledBackDefinitions),
 		len(report.SkippedRevisionRestore),
 		len(report.ResidualNonTerminal),
+		len(report.ResidualReplicas),
+		len(report.UnverifiedReplicas),
 		report.SkippedReplicasRestore,
 		report.BaselineMissing,
 	)
@@ -490,6 +522,12 @@ func writeCleanupSummary(stdout io.Writer, report e2e.CleanupReport) {
 	}
 	for _, id := range report.ResidualNonTerminal {
 		fmt.Fprintf(stdout, "- residual requires manual cleanup: %s\n", id)
+	}
+	for _, workload := range report.ResidualReplicas {
+		fmt.Fprintf(stdout, "- residual replicas: %s did not return to the baseline count\n", workload)
+	}
+	for _, workload := range report.UnverifiedReplicas {
+		fmt.Fprintf(stdout, "- unverified replicas: %s could not be read after recovery\n", workload)
 	}
 }
 

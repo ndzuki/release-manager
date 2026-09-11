@@ -159,6 +159,7 @@ func sampleReplicas(ctx context.Context, definitionID string, targets []stages.E
 		}
 		refs = append(refs, e2e.WorkloadReplicaRef{
 			ReleaseDefinitionID: definitionID,
+			Cluster:             target.Cluster,
 			WorkloadRef:         reference,
 			Replicas:            observation.Replicas,
 		})

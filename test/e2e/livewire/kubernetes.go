@@ -59,6 +59,42 @@ func NewClusterReplicaObserver(provider ClusterClientProvider) (*ReplicaObserver
 	return &ReplicaObserver{provider: provider}, nil
 }
 
+// CleanupReplicaObserver adapts the read-only observer to the cleanup outcome
+// check's narrower contract.
+//
+// ReplicaObserver cannot satisfy e2e.RecoveryObserver directly: the emergency
+// stage needs the full observation (requested, ready and available counts) while
+// the outcome check needs only the count it compares, and one method cannot carry
+// two return types. Adapting here keeps the adapters together and keeps the e2e
+// package from growing a Kubernetes dependency for a comparison it does not make.
+type CleanupReplicaObserver struct {
+	observer *ReplicaObserver
+}
+
+var _ e2e.RecoveryObserver = (*CleanupReplicaObserver)(nil)
+
+// NewCleanupReplicaObserver builds the outcome check's observer over the same
+// per-cluster client provider the baseline sample reads through.
+func NewCleanupReplicaObserver(provider ClusterClientProvider) (*CleanupReplicaObserver, error) {
+	observer, err := NewClusterReplicaObserver(provider)
+	if err != nil {
+		return nil, err
+	}
+	return &CleanupReplicaObserver{observer: observer}, nil
+}
+
+// ObserveReplicas reports the workload's applied replica count.
+func (o *CleanupReplicaObserver) ObserveReplicas(ctx context.Context, cluster, namespace, workloadName string) (int32, error) {
+	if o == nil || o.observer == nil {
+		return 0, errors.New("livewire: cleanup replica observer is unavailable")
+	}
+	observation, err := o.observer.ObserveReplicas(ctx, cluster, namespace, workloadName)
+	if err != nil {
+		return 0, err
+	}
+	return observation.Replicas, nil
+}
+
 // clientFor returns the client the named cluster reads through.
 func (o *ReplicaObserver) clientFor(cluster string) (kubernetes.Interface, error) {
 	if o.provider != nil {

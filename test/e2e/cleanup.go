@@ -112,6 +112,15 @@ type CleanupReport struct {
 	// RestoredReplicas lists the workloads whose baseline replica count was
 	// re-applied through the formal emergency API.
 	RestoredReplicas []string `json:"restored_replicas"`
+	// ResidualReplicas lists the workloads the outcome check read back at a
+	// replica count that still differs from the baseline. Action verification (a
+	// write reached a successful terminal state) is not outcome verification:
+	// only a fresh read says the workload is back.
+	ResidualReplicas []string `json:"residual_replicas"`
+	// UnverifiedReplicas lists the workloads the outcome check could not read.
+	// They are reported rather than omitted so that an unread workload is never
+	// mistaken for a workload that was confirmed restored.
+	UnverifiedReplicas []string `json:"unverified_replicas"`
 	// ResidualNonTerminal lists runner-owned non-terminal operations that could
 	// not be cancelled (cancel failed or did not reach a terminal state).
 	ResidualNonTerminal []string `json:"residual_nonterminal_remaining"`
@@ -126,8 +135,96 @@ func (r CleanupReport) NonZero() bool {
 		len(r.SkippedRevisionRestore) != 0 ||
 		r.SkippedReplicasRestore ||
 		len(r.RestoredReplicas) != 0 ||
+		len(r.ResidualReplicas) != 0 ||
+		len(r.UnverifiedReplicas) != 0 ||
 		len(r.ResidualNonTerminal) != 0 ||
 		r.BaselineMissing
+}
+
+// MergeVerification folds an outcome check into the report the recovery pass
+// produced, so the artifact stays one account of the cleanup rather than two that
+// a reader has to reconcile.
+func (r *CleanupReport) MergeVerification(verification CleanupReport) {
+	if r == nil {
+		return
+	}
+	r.ResidualReplicas = append(r.ResidualReplicas, verification.ResidualReplicas...)
+	r.UnverifiedReplicas = append(r.UnverifiedReplicas, verification.UnverifiedReplicas...)
+}
+
+// RecoveryObserver re-reads the state a recovery is supposed to have restored.
+//
+// Observation is a separate capability from recovery on purpose: an
+// implementation that can write but not read still performs every write, and the
+// outcome check reports what it could not confirm instead of assuming it. It is
+// declared here, where it is consumed, so the recovery implementation does not
+// have to grow a read it may not be able to serve.
+type RecoveryObserver interface {
+	ObserveReplicas(ctx context.Context, cluster, namespace, workloadName string) (int32, error)
+}
+
+// VerifyRestore re-reads the environment and reports every workload that still
+// differs from the baseline.
+//
+// It is a second phase rather than a refinement of RunCleanup's own reporting,
+// because the two answer different questions. RunCleanup reports which recovery
+// operations it completed; a completed operation means the orchestrator accepted
+// and finished the work, not that the workload now reads back at the baseline
+// count. Only a fresh read says that, and without one cleanup reported
+// "restored baseline replicas" while the workload kept the count the run had set
+// (real smoke 2026-09-11).
+//
+// A nil observer, a workload row with no cluster, or a failed read all land in
+// UnverifiedReplicas: none of them is evidence of a mismatch, and none of them is
+// evidence of a match either.
+func VerifyRestore(ctx context.Context, baseline *BaselineRecovery, observer RecoveryObserver, logger *slog.Logger) CleanupReport {
+	report := CleanupReport{}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if baseline == nil || len(baseline.Replicas) == 0 {
+		return report
+	}
+	for index := range baseline.Replicas {
+		reference := baseline.Replicas[index]
+		namespace, name, ok := parseWorkloadRef(reference.WorkloadRef)
+		if !ok || reference.Cluster == "" {
+			// Without a cluster or a parseable reference there is nothing to
+			// read. A baseline written before rows carried a cluster degrades
+			// here rather than being read against the wrong cluster.
+			report.UnverifiedReplicas = append(report.UnverifiedReplicas, reference.WorkloadRef)
+			continue
+		}
+		if observer == nil {
+			report.UnverifiedReplicas = append(report.UnverifiedReplicas, reference.WorkloadRef)
+			continue
+		}
+		observed, err := observer.ObserveReplicas(ctx, reference.Cluster, namespace, name)
+		if err != nil {
+			logger.Warn("cleanup verification could not observe a workload",
+				"workload_ref", reference.WorkloadRef, "cluster", reference.Cluster, "error", err)
+			report.UnverifiedReplicas = append(report.UnverifiedReplicas, reference.WorkloadRef)
+			continue
+		}
+		if observed != reference.Replicas {
+			report.ResidualReplicas = append(report.ResidualReplicas, reference.WorkloadRef)
+		}
+	}
+	return report
+}
+
+// parseWorkloadRef splits the authoritative "<resource>/<namespace>/<name>"
+// reference the emergency API accepts.
+func parseWorkloadRef(reference string) (namespace, name string, ok bool) {
+	parts := strings.Split(strings.TrimSpace(reference), "/")
+	if len(parts) != 3 {
+		return "", "", false
+	}
+	namespace, name = strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
+	if namespace == "" || name == "" {
+		return "", "", false
+	}
+	return namespace, name, true
 }
 
 // IsRunnerOwned reports whether an operation actor belongs to the E2E runner.
@@ -153,8 +250,15 @@ func IsRunnerOwned(actor, runnerUserID string) bool {
 //     exists; without a baseline revision the restore is skipped and reported
 //     (never guessed), matching the baseline.json degradation contract
 //     (AC-066-28, D-026 D4).
-//  3. Replicas restore degrades with a warning until baseline collection
-//     records replicas (AC-066-34).
+//  3. Each baseline workload replica count is re-applied through the formal
+//     emergency API; without a baseline replica row the restore is skipped and
+//     reported (AC-066-34).
+//
+// It reports which recovery operations completed. Whether the environment is
+// actually back at the baseline is a separate question that needs a fresh read,
+// so the caller follows this with VerifyRestore and merges the result; a
+// completed operation means the orchestrator finished the work, not that the
+// workload reads back at the baseline count.
 //
 // A nil baseline is treated as missing and triggers the residual-only path.
 // The context should already carry the caller's cleanup deadline.
