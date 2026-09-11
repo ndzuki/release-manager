@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -166,19 +165,11 @@ func (w *ControlPlaneWaiter) healthProbes() ([]healthProbe, error) {
 	return probes, nil
 }
 
-// healthURLFor resolves the health probe for one service endpoint.
+// healthURLFor resolves the health probe for one service endpoint. It shares
+// probeURL with the control-plane observer so both seams validate an endpoint
+// identically.
 func healthURLFor(endpoint string) (string, error) {
-	parsed, err := url.Parse(endpoint)
-	if err != nil {
-		return "", fmt.Errorf("invalid endpoint %q: %w", endpoint, err)
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", fmt.Errorf("endpoint %q must be an absolute http or https URL", endpoint)
-	}
-	if parsed.Host == "" {
-		return "", fmt.Errorf("endpoint %q has no host", endpoint)
-	}
-	return strings.TrimSuffix(endpoint, "/") + "/health", nil
+	return probeURL(endpoint, "health")
 }
 
 // healthProbeSucceeds performs one health probe and drains the body so the

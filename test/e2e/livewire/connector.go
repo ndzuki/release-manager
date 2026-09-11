@@ -88,6 +88,28 @@ func (c *Connector) UserID() string {
 	return c.session.UserID()
 }
 
+// Clients returns the shared client bundle. Read-only adapters (the control
+// plane observer and the inventory/bundle reader) reuse this bundle instead of
+// constructing a second one, so a run cannot end up talking to two different
+// endpoint sets.
+func (c *Connector) Clients() *e2e.ClientBundle {
+	if c == nil {
+		return nil
+	}
+	return c.clients
+}
+
+// Session returns the shared runner session. Callers that must authenticate as
+// the same principal (for example the control-plane waiter) reuse this session
+// rather than constructing a second one, so a run keeps exactly one identity
+// and one access token.
+func (c *Connector) Session() *e2e.RunnerSession {
+	if c == nil {
+		return nil
+	}
+	return c.session
+}
+
 // clientsOrFail returns the bundle or a transport error, keeping every adapter
 // free of repeated nil plumbing.
 func (c *Connector) clientsOrFail() (*e2e.ClientBundle, error) {

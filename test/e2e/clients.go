@@ -51,6 +51,16 @@ func (b *ClientBundle) Orchestrator() orchestratorv1connect.OrchestratorServiceC
 	return b.orchestrator
 }
 
+// Bundle returns the release bundle client. Bundle reads are definition-scoped
+// on the orchestrator, so ListBundles and GetBundle are bound to the
+// BundleService rather than the OrchestratorService.
+func (b *ClientBundle) Bundle() orchestratorv1connect.BundleServiceClient {
+	if b == nil {
+		return nil
+	}
+	return b.bundle
+}
+
 // Operator returns the operator service client.
 func (b *ClientBundle) Operator() operatorv1connect.OperatorServiceClient {
 	if b == nil {
