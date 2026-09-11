@@ -1495,6 +1495,31 @@ cmd_seed() {
   seed
 }
 
+# control_plane_restart_deployments — derive the REQ-066 restart targets from
+# the live management cluster instead of hardcoding them (D-029 D3).
+#
+# A restart target is a Deployment that serves one of the control-plane API
+# ports the E2E runner writes through: the release webhook (8082), the
+# orchestrator and its operator gateway (8083/8084) and auth (8085). `web`,
+# `notifier` and `notification-sink` are outside that write path and are
+# intentionally excluded, so the derived set is exactly three Deployments.
+# Deriving keeps the list correct when the control plane is reshaped — the
+# operator gateway was folded into the orchestrator container in TASK-065, and
+# a hardcoded name would have silently kept pointing at a Deployment that no
+# longer exists. An absent cluster yields no names; the caller validates.
+control_plane_restart_deployments() {
+  ctl_kubectl -n release-manager-dev get deployments \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{range .spec.template.spec.containers[*]}{range .ports[*]}{.containerPort}{" "}{end}{end}{"\n"}{end}' 2>/dev/null |
+    awk '
+      BEGIN { split("8082 8083 8084 8085", ports, " "); for (i in ports) wanted[ports[i]] = 1 }
+      {
+        for (i = 2; i <= NF; i++) {
+          if ($i in wanted) { print $1; break }
+        }
+      }
+    ' | sort -u
+}
+
 cmd_status() {
   acquire_lock status shared
   local status_file="$DEV_DATA_DIR/dev-status.json"
@@ -1542,7 +1567,15 @@ cmd_status() {
     "$sessions" "$FIXTURE_VERSION" >> "$status_file"
   printf '"customers":%s,"clusters":%s,"routes":%s,"definitions":%s,"values_revisions":%s,"bundles":%s},' \
     "$customers" "$clusters" "$routes" "$definitions" "$values" "$bundles" >> "$status_file"
-  printf '"bootstrap_installs":%s}\n' "$installs" >> "$status_file"
+  printf '"bootstrap_installs":%s,"restart_targets":{"namespace":"release-manager-dev","deployments":[' "$installs" >> "$status_file"
+  local first_restart=1 restart_deployment
+  while IFS= read -r restart_deployment; do
+    [ -n "$restart_deployment" ] || continue
+    [ "$first_restart" -eq 1 ] || printf ',' >> "$status_file"
+    printf '"%s"' "$restart_deployment" >> "$status_file"
+    first_restart=0
+  done < <(control_plane_restart_deployments)
+  printf ']}}\n' >> "$status_file"
   cat "$status_file"
 }
 

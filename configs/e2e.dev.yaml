@@ -31,14 +31,17 @@ k3d:
   test_namespace: "release-manager-dev"
   restart_targets:
     namespace: "release-manager-dev"
-    # Deployment names are assembled by the Makefile from the REQ-065 dev-up
-    # manifests; the three entries here are the static shape (control-plane
-    # operator gateway / Orchestrator / Auth) and must not drift from the
-    # RBAC resourceNames allowlist.
+    # Deployment names are derived by the Makefile from the REQ-065 dev-up
+    # artifact (dev-status restart_targets), never hardcoded; the three entries
+    # here are the static shape the derivation yields. The operator gateway
+    # (8084) is the orchestrator container's second port rather than its own
+    # Deployment (folded in by TASK-065), so the control-plane write path is
+    # the release webhook (8082), the orchestrator (8083/8084) and auth (8085).
+    # This list must not drift from the RBAC resourceNames allowlist.
     deployments:
       - "auth"
-      - "operator-gateway"
       - "orchestrator"
+      - "webhook"
 
 seed:
   customers:

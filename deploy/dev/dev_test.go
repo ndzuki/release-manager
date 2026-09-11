@@ -739,6 +739,49 @@ func TestStatusJSONSchema(t *testing.T) {
 	}
 }
 
+// TestStatusDerivesRestartTargetsFromTheControlPlane covers the D-029 D3
+// contract: the REQ-066 restart targets are derived from the live management
+// cluster, so a reshaped control plane cannot leave a stale Deployment name
+// behind (the operator gateway was folded into the orchestrator container by
+// TASK-065). Only the control-plane write path is a target: web, notifier and
+// the datastores are present in the cluster but must not be restarted.
+func TestStatusDerivesRestartTargetsFromTheControlPlane(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	writeShim(t, binDir, "kubectl", `#!/usr/bin/env bash
+cat <<'TABLE'
+auth	8085 
+notification-sink	8088 
+notifier	8086 
+orchestrator	8083 8084 
+postgres	5432 
+redis	6379 
+web	8087 
+webhook	8082 
+TABLE
+`)
+
+	out, err := runDev(t, env, "status")
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, out)
+	}
+	want := `"restart_targets":{"namespace":"release-manager-dev","deployments":["auth","orchestrator","webhook"]}`
+	if !strings.Contains(out, want) {
+		t.Fatalf("status output missing %s:\n%s", want, out)
+	}
+	// The exclusions are asserted on the restart_targets fragment alone: the
+	// same names legitimately appear in the endpoints block above it.
+	idx := strings.Index(out, `"restart_targets":`)
+	if idx < 0 {
+		t.Fatalf("status output has no restart_targets block:\n%s", out)
+	}
+	for _, unexpected := range []string{`"web"`, `"notifier"`, `"notification-sink"`, `"postgres"`, `"redis"`} {
+		if strings.Contains(out[idx:], unexpected) {
+			t.Fatalf("restart targets leaked %s:\n%s", unexpected, out)
+		}
+	}
+}
+
 func TestResetFailsWithoutRunningEnvironment(t *testing.T) {
 	stateDir := t.TempDir()
 	env, binDir := fakeEnv(t, stateDir)

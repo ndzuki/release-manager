@@ -358,7 +358,7 @@ k3d:
   test_namespace: release-manager-dev
   restart_targets:
     namespace: release-manager-dev
-    deployments: [auth, operator-gateway, orchestrator]
+    deployments: [auth, orchestrator, webhook]
 seed:
   customers: [dev-customer-a]
   clusters_per_customer: 1
