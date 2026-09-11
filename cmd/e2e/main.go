@@ -33,6 +33,11 @@ const (
 
 const exitLock exitCode = 3
 
+// baselineReplicaTimeout bounds the pre-run replica sample. It is deliberately
+// short: the sample is a recovery aid, and a slow environment must not delay the
+// run's own start beyond the point where cleanup could still be meaningful.
+const baselineReplicaTimeout = 30 * time.Second
+
 type exitCode int
 
 type runOptions struct {
@@ -151,6 +156,19 @@ func runStages(args []string, stdout, stderr io.Writer) int {
 		FixtureVersion: config.Seed.FixtureVersion,
 		SnapshotFull:   options.snapshotFull,
 	}
+	// Sample the replica counts the emergency stage can change so cleanup has a
+	// recovery target even when this run never reaches its own compensation
+	// (AC-066-23/34). A failed sample is recorded and the run continues: the
+	// baseline degradation path is a documented contract, and losing a recovery
+	// aid must not fail a run whose stages could still succeed. Cleanup reports
+	// the resulting gap as `skipped_replicas_restore`.
+	replicaBaselineCtx, cancelReplicaBaseline := context.WithTimeout(context.Background(), baselineReplicaTimeout)
+	replicas, replicaErr := livewire.BaselineReplicas(replicaBaselineCtx, config)
+	cancelReplicaBaseline()
+	if replicaErr != nil {
+		logger.Warn("baseline replica collection failed; cleanup replicas restore will degrade", "error", safeErrorMessage(replicaErr))
+	}
+	baseline.Identity.WorkloadReplicas = replicas
 	// The embedded snapshot time is assigned after the literal because go1.26
 	// disallows promoted fields in a composite literal of the outer type.
 	baseline.CollectedAt = time.Now().UTC()

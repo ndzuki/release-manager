@@ -3,17 +3,20 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
 )
 
 type recoveryFake struct {
-	rows      []CleanupRow
-	cancelled []string
-	rolled    []string
-	cancelErr error
-	rollErr   error
+	rows       []CleanupRow
+	cancelled  []string
+	rolled     []string
+	replicas   []string
+	cancelErr  error
+	rollErr    error
+	replicaErr error
 }
 
 func (f *recoveryFake) ListReleaseInventory(context.Context) ([]CleanupRow, error) {
@@ -33,6 +36,14 @@ func (f *recoveryFake) RollbackRelease(_ context.Context, definitionID string, _
 		return f.rollErr
 	}
 	f.rolled = append(f.rolled, definitionID)
+	return nil
+}
+
+func (f *recoveryFake) SetReplicas(_ context.Context, definitionID, workloadRef string, replicas int32, _ string) error {
+	if f.replicaErr != nil {
+		return f.replicaErr
+	}
+	f.replicas = append(f.replicas, fmt.Sprintf("%s|%s|%d", definitionID, workloadRef, replicas))
 	return nil
 }
 
@@ -80,6 +91,107 @@ func TestRunCleanupCancelsRunnerOwnedResiduals(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "replicas restore skipped") {
 		t.Fatalf("logs = %q, want replicas degradation warning", logs.String())
+	}
+}
+
+// TestRunCleanupRestoresBaselineReplicas covers the collected-baseline path:
+// with replicas recorded, cleanup re-applies each one through the formal
+// emergency API instead of degrading to a warning (AC-066-23/34).
+func TestRunCleanupRestoresBaselineReplicas(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	fake := &recoveryFake{}
+	baseline := &BaselineRecovery{
+		Revisions: map[string]int32{},
+		Replicas: []WorkloadReplicaRef{
+			{ReleaseDefinitionID: "def-emergency", WorkloadRef: "deployments/e2e-emergency/e2e-emergency", Replicas: 3},
+			{ReleaseDefinitionID: "def-release", WorkloadRef: "deployments/e2e-release/e2e-release", Replicas: 1},
+		},
+	}
+	report, err := RunCleanup(context.Background(), baseline, "runner-1", fake, logger)
+	if err != nil {
+		t.Fatalf("RunCleanup() error = %v", err)
+	}
+	want := []string{
+		"def-emergency|deployments/e2e-emergency/e2e-emergency|3",
+		"def-release|deployments/e2e-release/e2e-release|1",
+	}
+	if len(fake.replicas) != len(want) {
+		t.Fatalf("set replicas calls = %v, want %v", fake.replicas, want)
+	}
+	for index := range want {
+		if fake.replicas[index] != want[index] {
+			t.Fatalf("set replicas[%d] = %q, want %q", index, fake.replicas[index], want[index])
+		}
+	}
+	if report.SkippedReplicasRestore {
+		t.Fatal("SkippedReplicasRestore = true, want false when the baseline records replicas")
+	}
+	if len(report.RestoredReplicas) != 2 {
+		t.Fatalf("RestoredReplicas = %v, want both workloads", report.RestoredReplicas)
+	}
+	if len(report.ResidualNonTerminal) != 0 {
+		t.Fatalf("residual = %v, want none", report.ResidualNonTerminal)
+	}
+}
+
+// TestRunCleanupReportsFailedReplicaRestore proves a rejected restore is
+// reported as residual rather than counted as restored.
+func TestRunCleanupReportsFailedReplicaRestore(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	fake := &recoveryFake{replicaErr: context.DeadlineExceeded}
+	baseline := &BaselineRecovery{
+		Revisions: map[string]int32{},
+		Replicas: []WorkloadReplicaRef{
+			{ReleaseDefinitionID: "def-emergency", WorkloadRef: "deployments/e2e-emergency/e2e-emergency", Replicas: 3},
+		},
+	}
+	report, err := RunCleanup(context.Background(), baseline, "runner-1", fake, logger)
+	if err != nil {
+		t.Fatalf("RunCleanup() error = %v", err)
+	}
+	if len(report.RestoredReplicas) != 0 {
+		t.Fatalf("RestoredReplicas = %v, want none after a failed restore", report.RestoredReplicas)
+	}
+	if len(report.ResidualNonTerminal) != 1 || report.ResidualNonTerminal[0] != "deployments/e2e-emergency/e2e-emergency" {
+		t.Fatalf("residual = %v, want the failed workload", report.ResidualNonTerminal)
+	}
+	if report.SkippedReplicasRestore {
+		t.Fatal("SkippedReplicasRestore = true, want false: replicas were recorded, the write failed")
+	}
+}
+
+// TestBaselineRecoveryFromSnapshotsDerivesReplicas covers the projection from
+// baseline.json: addressable rows survive, incomplete ones are dropped rather
+// than guessed, and the result is deterministic.
+func TestBaselineRecoveryFromSnapshotsDerivesReplicas(t *testing.T) {
+	t.Parallel()
+
+	snapshot := FixtureSnapshot{Identity: SnapshotIdentity{
+		WorkloadReplicas: []WorkloadReplicaRef{
+			{ReleaseDefinitionID: "", WorkloadRef: "deployments/x/x", Replicas: 2},
+			{ReleaseDefinitionID: "def-b", WorkloadRef: "", Replicas: 2},
+			{ReleaseDefinitionID: "def-c", WorkloadRef: "deployments/c/c", Replicas: -1},
+			{ReleaseDefinitionID: "def-b", WorkloadRef: "deployments/b/b", Replicas: 2},
+			{ReleaseDefinitionID: "def-a", WorkloadRef: "deployments/a/a", Replicas: 0},
+		},
+	}}
+	recovery := BaselineRecoveryFromSnapshots(snapshot)
+	if len(recovery.Replicas) != 2 {
+		t.Fatalf("replicas = %+v, want only the two addressable rows", recovery.Replicas)
+	}
+	if recovery.Replicas[0].ReleaseDefinitionID != "def-a" || recovery.Replicas[1].ReleaseDefinitionID != "def-b" {
+		t.Fatalf("replicas = %+v, want deterministic [def-a def-b] ordering", recovery.Replicas)
+	}
+	// A zero replica count is a real baseline (a scaled-to-zero workload), so
+	// it must survive the projection.
+	if recovery.Replicas[0].Replicas != 0 {
+		t.Fatalf("def-a replicas = %d, want 0 preserved", recovery.Replicas[0].Replicas)
 	}
 }
 

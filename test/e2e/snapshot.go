@@ -29,6 +29,20 @@ type SnapshotIdentity struct {
 	ReleaseInventories []InventoryRef     `json:"release_inventories,omitempty"`
 	OperatorSessions   []SessionRef       `json:"operator_sessions"`
 	Operations         []OperationSummary `json:"operations"`
+	// WorkloadReplicas records the replica count of every emergency-eligible
+	// workload observed when the run started. Cleanup restores replicas from
+	// it, so a run that dies mid-flight still has a recovery target
+	// (AC-066-23/34).
+	WorkloadReplicas []WorkloadReplicaRef `json:"workload_replicas,omitempty"`
+}
+
+// WorkloadReplicaRef is the baseline replica count of one workload.
+type WorkloadReplicaRef struct {
+	ReleaseDefinitionID string `json:"release_definition_id"`
+	// WorkloadRef is the authoritative "<gvr.resource>/<namespace>/<name>"
+	// reference the emergency API accepts, not a diagnostic label.
+	WorkloadRef string `json:"workload_ref"`
+	Replicas    int32  `json:"replicas"`
 }
 
 // IdentityRef is a public entity identity. Name is optional for entities whose

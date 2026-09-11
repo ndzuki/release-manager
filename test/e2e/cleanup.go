@@ -48,22 +48,32 @@ type Recovery interface {
 	ListReleaseInventory(ctx context.Context) ([]CleanupRow, error)
 	CancelOperation(ctx context.Context, operationID, reason string) error
 	RollbackRelease(ctx context.Context, definitionID string, targetRevision, expectedCurrentRevision int32, reason string) error
+	// SetReplicas restores one workload to its baseline replica count through
+	// the formal emergency-change API (AC-066-23/34). Signature is primitive
+	// because this package must not import test/e2e/stages (the stage packages
+	// import it), mirroring RollbackRelease.
+	SetReplicas(ctx context.Context, definitionID, workloadRef string, replicas int32, reason string) error
 }
 
 // BaselineRecovery is the parsed {output-dir}/baseline.json recovery target.
 //
 // Revisions maps release_definition_id to the baseline Helm revision recorded
-// when the run started. Replicas are intentionally absent until the run-side
-// baseline collection records per-definition replicas; until then cleanup
-// degrades the replicas restore with a stderr warning and never fabricates a
-// recovery target (AC-066-23/34).
+// when the run started. Replicas carries the per-workload replica counts from
+// the same snapshot; when the baseline records none (an older baseline, or a
+// run that never reached collection) cleanup degrades the replicas restore with
+// a stderr warning and never fabricates a recovery target (AC-066-23/34).
 type BaselineRecovery struct {
 	Revisions map[string]int32
+	// Replicas reuses the snapshot projection type: the recorded baseline and
+	// the recovery target are the same fact crossing the artifact boundary, so
+	// a second identical type would only invite them to drift.
+	Replicas []WorkloadReplicaRef
 }
 
 // BaselineRecoveryFromSnapshots derives a recovery target from the identity
 // projection embedded in baseline.json. Rows without a definition id or with a
-// non-positive revision are ignored.
+// non-positive revision are ignored, as are replica rows without an identity or
+// with a negative count.
 func BaselineRecoveryFromSnapshots(snapshot FixtureSnapshot) BaselineRecovery {
 	revisions := make(map[string]int32)
 	for index := range snapshot.Identity.ReleaseInventories {
@@ -73,7 +83,21 @@ func BaselineRecoveryFromSnapshots(snapshot FixtureSnapshot) BaselineRecovery {
 		}
 		revisions[row.ReleaseDefinitionID] = int32(row.Revision)
 	}
-	return BaselineRecovery{Revisions: revisions}
+	replicas := make([]WorkloadReplicaRef, 0, len(snapshot.Identity.WorkloadReplicas))
+	for index := range snapshot.Identity.WorkloadReplicas {
+		row := snapshot.Identity.WorkloadReplicas[index]
+		if row.ReleaseDefinitionID == "" || strings.TrimSpace(row.WorkloadRef) == "" || row.Replicas < 0 {
+			continue
+		}
+		replicas = append(replicas, row)
+	}
+	sort.SliceStable(replicas, func(i, j int) bool {
+		if replicas[i].ReleaseDefinitionID != replicas[j].ReleaseDefinitionID {
+			return replicas[i].ReleaseDefinitionID < replicas[j].ReleaseDefinitionID
+		}
+		return replicas[i].WorkloadRef < replicas[j].WorkloadRef
+	})
+	return BaselineRecovery{Revisions: revisions, Replicas: replicas}
 }
 
 // CleanupReport is the machine-readable cleanup outcome.
@@ -86,6 +110,9 @@ type CleanupReport struct {
 	// SkippedReplicasRestore records the residual-only degradation when the
 	// baseline carries no replicas (AC-066-23/34).
 	SkippedReplicasRestore bool `json:"skipped_replicas_restore"`
+	// RestoredReplicas lists the workloads whose baseline replica count was
+	// re-applied through the formal emergency API.
+	RestoredReplicas []string `json:"restored_replicas"`
 	// ResidualNonTerminal lists runner-owned non-terminal operations that could
 	// not be cancelled (cancel failed or did not reach a terminal state).
 	ResidualNonTerminal []string `json:"residual_nonterminal_remaining"`
@@ -99,6 +126,7 @@ func (r CleanupReport) NonZero() bool {
 		len(r.RolledBackDefinitions) != 0 ||
 		len(r.SkippedRevisionRestore) != 0 ||
 		r.SkippedReplicasRestore ||
+		len(r.RestoredReplicas) != 0 ||
 		len(r.ResidualNonTerminal) != 0 ||
 		r.BaselineMissing
 }
@@ -156,16 +184,53 @@ func RunCleanup(ctx context.Context, baseline *BaselineRecovery, runnerUserID st
 		report.recoverRow(ctx, row, baseline, runnerUserID, recovery, logger)
 	}
 
-	// Replicas restore: degrade with an explicit warning until the run-side
-	// baseline collection records replicas (AC-066-23/34, D-026 D4).
-	report.SkippedReplicasRestore = true
-	logger.Warn("cleanup replicas restore skipped: baseline.json does not record replicas yet")
+	// Replicas restore: re-apply each baseline replica count through the formal
+	// emergency API. Without a recorded baseline the restore degrades with an
+	// explicit warning rather than guessing a target (AC-066-23/34, D-026 D4).
+	if len(baseline.Replicas) == 0 {
+		report.SkippedReplicasRestore = true
+		logger.Warn("cleanup replicas restore skipped: baseline.json records no workload replicas")
+	}
+	for index := range baseline.Replicas {
+		report.restoreReplicas(ctx, baseline.Replicas[index], recovery, logger)
+	}
 
 	sort.Strings(report.CancelledOperationIDs)
 	sort.Strings(report.RolledBackDefinitions)
 	sort.Strings(report.SkippedRevisionRestore)
+	sort.Strings(report.RestoredReplicas)
 	sort.Strings(report.ResidualNonTerminal)
 	return report, nil
+}
+
+// restoreReplicas re-applies one workload's baseline replica count. Cleanup
+// carries no replica observer: the point of the restore is to undo whatever the
+// run left behind, so the target is always written rather than compared first —
+// a redundant write to the baseline value is harmless and keeps the recovery
+// free of a second read that could itself fail. An entry that cannot be
+// addressed is reported, never silently dropped.
+func (report *CleanupReport) restoreReplicas(
+	ctx context.Context,
+	target WorkloadReplicaRef,
+	recovery Recovery,
+	logger *slog.Logger,
+) {
+	if strings.TrimSpace(target.ReleaseDefinitionID) == "" || strings.TrimSpace(target.WorkloadRef) == "" || target.Replicas < 0 {
+		logger.Warn("cleanup replicas restore skipped: incomplete baseline entry",
+			"definition_id", target.ReleaseDefinitionID, "workload_ref", target.WorkloadRef)
+		report.ResidualNonTerminal = append(report.ResidualNonTerminal, target.WorkloadRef)
+		return
+	}
+	reason := fmt.Sprintf("e2e cleanup restore baseline replicas %d", target.Replicas)
+	if err := recovery.SetReplicas(ctx, target.ReleaseDefinitionID, target.WorkloadRef, target.Replicas, reason); err != nil {
+		logger.Error("cleanup replicas restore failed",
+			"definition_id", target.ReleaseDefinitionID, "workload_ref", target.WorkloadRef, "error", sanitizeError(err))
+		report.ResidualNonTerminal = append(report.ResidualNonTerminal, target.WorkloadRef)
+		return
+	}
+	report.RestoredReplicas = append(report.RestoredReplicas, target.WorkloadRef)
+	logger.Info("cleanup restored baseline replicas",
+		"definition_id", target.ReleaseDefinitionID, "workload_ref", target.WorkloadRef, "replicas", target.Replicas)
 }
 
 // recoverRow applies the single-pass recovery decisions to one inventory row:

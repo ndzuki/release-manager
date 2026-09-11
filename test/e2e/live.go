@@ -115,6 +115,39 @@ func (r *LiveRecovery) RollbackRelease(ctx context.Context, definitionID string,
 	return err
 }
 
+// SetReplicas implements Recovery through the formal emergency-change API.
+//
+// The convergence policy matches the one the emergency stage uses for its own
+// restore compensation (REVERT_ON_NEXT_RECONCILE): the write is an emergency
+// change, so letting the next reconcile return the workload to its declared
+// state is exactly the recovery semantics cleanup wants. The Idempotency-Key
+// header and the message-level key are both required by the write contract
+// (ADR-009).
+//
+// The Recovery interface takes a reason for symmetry with the other recovery
+// writes; ExecuteEmergencyChangeRequest carries no reason field, so it is
+// accepted and unused rather than silently appended to another field.
+func (r *LiveRecovery) SetReplicas(ctx context.Context, definitionID, workloadRef string, replicas int32, _ string) error {
+	if strings.TrimSpace(definitionID) == "" {
+		return errors.New("set replicas: empty definition id")
+	}
+	if strings.TrimSpace(workloadRef) == "" {
+		return errors.New("set replicas: empty workload ref")
+	}
+	if replicas < 0 {
+		return errors.New("set replicas: negative replica count")
+	}
+	request := authorizedRequest(r.token(), &orchestratorv1.ExecuteEmergencyChangeRequest{
+		ReleaseDefinitionId: definitionID,
+		WorkloadRef:         workloadRef,
+		ConvergenceStrategy: orchestratorv1.ConvergenceStrategy_REVERT_ON_NEXT_RECONCILE,
+		SetReplicas:         replicas,
+		IdempotencyKey:      idempotencyKey("cleanup-set-replicas", definitionID+"/"+workloadRef),
+	})
+	_, err := r.clients.orchestrator.ExecuteEmergencyChange(ctx, request)
+	return err
+}
+
 // authorizedRequest builds a connect request carrying the runner bearer token
 // (package-level helper: generic methods need go1.27, go.mod declares 1.26).
 func authorizedRequest[T any](token string, message *T) *connect.Request[T] {
