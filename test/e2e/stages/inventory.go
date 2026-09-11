@@ -149,6 +149,23 @@ func (s *InventoryStage) Differences() []IdentityDifference {
 	return append([]IdentityDifference(nil), s.differences...)
 }
 
+// routesCarryDefinitionIdentity reports whether the observed route surface
+// expresses release-definition identity at all.
+//
+// ClusterRoute — the RPC behind RouteObservation — is a cluster-scoped artifact
+// route with no definition field, so a faithful adapter reports every route with
+// an empty DefinitionID. This probe keeps the route/definition assertion
+// meaningful on a surface that can express the binding without failing on one
+// that cannot.
+func routesCarryDefinitionIdentity(routes []RouteObservation) bool {
+	for _, route := range routes {
+		if route.DefinitionID != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func compareIdentity(observation InventoryObservation, expected ExpectedIdentity) []IdentityDifference {
 	customers := uniqueIdentityCount(observation.Customers)
 	clusters := uniqueIdentityCount(observation.Clusters)
@@ -180,6 +197,11 @@ func compareIdentity(observation InventoryObservation, expected ExpectedIdentity
 			basicDefinitions++
 		}
 	}
+	// Routes are cluster-scoped artifact routes, not definition-scoped
+	// entities: ClusterRoute carries no release-definition identity, so every
+	// observed route counts as basic. The count assertion below is therefore
+	// exact even though the observation cannot attribute a route to a
+	// definition.
 	basicRoutes := 0
 	for _, route := range routes {
 		if _, ok := e2eDefinitions[route.DefinitionID]; !ok {
@@ -204,6 +226,13 @@ func compareIdentity(observation InventoryObservation, expected ExpectedIdentity
 			routeIDs[route.DefinitionID] = struct{}{}
 		}
 	}
+	// ClusterRoute carries no release-definition identity, so an adapter cannot
+	// attribute a route to a definition and asserting the binding would fail on
+	// every deployment regardless of the fixture. The requirement is applied
+	// only when the observed surface actually expresses a binding: that keeps it
+	// meaningful if the RPC ever gains the field, while refusing to invent an
+	// attribution the API cannot supply.
+	routesBound := routesCarryDefinitionIdentity(routes)
 	for _, id := range expected.E2EDefinitionIDs {
 		if _, ok := definitionIDs[id]; !ok {
 			differences = append(differences, IdentityDifference{
@@ -213,7 +242,7 @@ func compareIdentity(observation InventoryObservation, expected ExpectedIdentity
 				Actual:   "missing",
 			})
 		}
-		if len(routes) > 0 {
+		if routesBound {
 			if _, ok := routeIDs[id]; !ok {
 				differences = append(differences, IdentityDifference{
 					Entity:   "route",

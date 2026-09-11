@@ -100,6 +100,67 @@ func TestInventoryStageRun(t *testing.T) {
 	}
 }
 
+// TestInventoryStageIgnoresRouteDefinitionBindingWhenTheSurfaceCannotExpressIt
+// covers the real ClusterRoute surface: routes are cluster-scoped artifact
+// routes that carry no release-definition identity, so an adapter reports them
+// with an empty DefinitionID. The stage must still pass on the counts — every
+// route legitimately counts as basic — and must not report a route/definition
+// difference it cannot observe (TASK-066).
+func TestInventoryStageIgnoresRouteDefinitionBindingWhenTheSurfaceCannotExpressIt(t *testing.T) {
+	t.Parallel()
+
+	observation := completeInventory()
+	// The adapter cannot attribute a route to a definition, so every route is
+	// reported without one while the count stays the fixture total.
+	observation.Routes = []RouteObservation{
+		{ID: "route-1"}, {ID: "route-2"}, {ID: "route-3"}, {ID: "route-4"},
+		{ID: "route-5"}, {ID: "route-6"}, {ID: "route-7"}, {ID: "route-8"},
+	}
+	stage := NewInventoryStage(inventoryFake{observation: observation}, completeExpectedIdentity())
+	if err := stage.Run(context.Background(), nil); err != nil {
+		t.Fatalf("Run() error = %v, want the basic route count to be satisfied", err)
+	}
+	for _, difference := range stage.Differences() {
+		if difference.Entity == "route" {
+			t.Fatalf("Run() reported an unobservable route difference: %+v", difference)
+		}
+	}
+}
+
+// TestInventoryStageStillAssertsRouteBindingWhenObservable guards the other
+// direction: a surface that does express the binding is still checked.
+func TestInventoryStageStillAssertsRouteBindingWhenObservable(t *testing.T) {
+	t.Parallel()
+
+	observation := completeInventory()
+	// Drop every route that carries an e2e definition binding, keeping the count
+	// right by replacing them with unattributed basic routes.
+	observation.Routes = []RouteObservation{
+		{ID: "route-1", DefinitionID: "definition-1"},
+		{ID: "route-2", DefinitionID: "definition-2"},
+		{ID: "route-3", DefinitionID: "definition-3"},
+		{ID: "route-4", DefinitionID: "definition-4"},
+		{ID: "route-5", DefinitionID: "definition-1"},
+		{ID: "route-6", DefinitionID: "definition-2"},
+		{ID: "route-7", DefinitionID: "definition-3"},
+		{ID: "route-8", DefinitionID: "definition-4"},
+	}
+	stage := NewInventoryStage(inventoryFake{observation: observation}, completeExpectedIdentity())
+	err := stage.Run(context.Background(), nil)
+	if !errors.Is(err, ErrFixtureStale) {
+		t.Fatalf("Run() error = %v, want errors.Is(..., %v)", err, ErrFixtureStale)
+	}
+	found := false
+	for _, difference := range stage.Differences() {
+		if difference.Entity == "route" && difference.Field == "definition_id" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("Run() did not report the missing route/definition binding")
+	}
+}
+
 func TestInventoryStageDifferencesAreStable(t *testing.T) {
 	t.Parallel()
 
