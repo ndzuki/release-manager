@@ -777,8 +777,9 @@ func TestStatusJSONSchema(t *testing.T) {
 		`"environment_id":"dev-local"`, `"profile":"local"`,
 		`"control":{"name":"release-manager-control"`,
 		`"endpoints":{"webhook":"http://localhost:8082"`,
-		`"operator_sessions":0`, `"fixture_entities":{"customers":0`,
-		`"bootstrap_installs":0`,
+		// A never-seeded environment reports no entities, not zeros shaped like
+		// measurements.
+		`"fixture_entities":{}`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("status output missing %s:\n%s", want, out)
@@ -792,38 +793,6 @@ func TestStatusJSONSchema(t *testing.T) {
 // behind (the operator gateway was folded into the orchestrator container by
 // TASK-065). Only the control-plane write path is a target: web, notifier and
 // the datastores are present in the cluster but must not be restarted.
-// TestStatusCountsFixtureCollectionsByEntries covers the fixture_entities block.
-// Every collection in data/dev-fixture.json is an object, so a count that only
-// matched a scalar number reported 0 for all of them and dev-status.json read as
-// "the fixture is empty" while it was seeded. An object must count its keys.
-func TestStatusCountsFixtureCollectionsByEntries(t *testing.T) {
-	stateDir := t.TempDir()
-	env, _ := fakeEnv(t, stateDir)
-	fixture := `{
-	  "fixture_version": "fixture-v2",
-	  "customers": {"dev-customer-a": {}, "dev-customer-b": {}},
-	  "clusters": {"a": {}, "b": {}, "c": {}, "d": {}},
-	  "routes": {"r1": {}, "r2": {}, "r3": {}},
-	  "definitions": {"d1": {}, "d2": {}},
-	  "operators": 4
-	}`
-	if err := os.WriteFile(filepath.Join(stateDir, "dev-fixture.json"), []byte(fixture), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	out, err := runDev(t, env, "status")
-	if err != nil {
-		t.Fatalf("status failed: %v\n%s", err, out)
-	}
-	for _, want := range []string{
-		`"customers":2`, `"clusters":4`, `"routes":3`, `"definitions":2`,
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("status output missing %s:\n%s", want, out)
-		}
-	}
-}
-
 func TestStatusDerivesRestartTargetsFromTheControlPlane(t *testing.T) {
 	stateDir := t.TempDir()
 	env, binDir := fakeEnv(t, stateDir)
@@ -858,6 +827,45 @@ TABLE
 		if strings.Contains(out[idx:], unexpected) {
 			t.Fatalf("restart targets leaked %s:\n%s", unexpected, out)
 		}
+	}
+}
+
+// TestStatusProjectsFixtureEntitiesFromTheFixture covers the fixture_entities
+// block. It used to be a hand-maintained list of eight names, four of which
+// (operator_sessions, bundles, bootstrap_installs, values_revisions) the fixture
+// does not have, so half the block reported a false zero however it was seeded.
+// It is now a projection of the fixture's own keys.
+//
+// The fixture mixes two object shapes and the projection has to tell them apart:
+// a keyed collection counts its entries, while a single resource (bundle) has
+// scalar fields and denotes one entity. Counting bundle's keys would report 2 for
+// the one bundle the fixture defines.
+func TestStatusProjectsFixtureEntitiesFromTheFixture(t *testing.T) {
+	stateDir := t.TempDir()
+	env, _ := fakeEnv(t, stateDir)
+	fixture := `{
+	  "fixture_version": "fixture-v2",
+	  "generated_at": "2026-01-01T00:00:00Z",
+	  "customers": {"dev-customer-a": {}, "dev-customer-b": {}},
+	  "clusters": {"a": {}, "b": {}, "c": {}, "d": {}},
+	  "routes": {"r1": {}, "r2": {}, "r3": {}},
+	  "definitions": {"d1": {}, "d2": {}},
+	  "bundle": {"id": "bundle-1", "values_revision_id": "vr-1"}
+	}`
+	if err := os.WriteFile(filepath.Join(stateDir, "dev-fixture.json"), []byte(fixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runDev(t, env, "status")
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, out)
+	}
+	// Asserted as one block so the test also pins what is absent: the metadata
+	// keys are not entities, the dead names are gone, and bundle counts one
+	// resource rather than its two fields.
+	want := `"fixture_entities":{"customers":2,"clusters":4,"routes":3,"definitions":2,"bundle":1}`
+	if !strings.Contains(out, want) {
+		t.Fatalf("status output missing %s:\n%s", want, out)
 	}
 }
 

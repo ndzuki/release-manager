@@ -205,7 +205,20 @@ e2e-stage: ## Run selected E2E stages (STAGES=comma-separated list)
 	exit $$rc
 
 .PHONY: e2e-all
-e2e-all: ## Run all E2E stages
+e2e-all: ## Run all E2E stages (restores a previous run's residue first)
+	@set -eu; \
+	if [ "$${E2E_SKIP_PREFLIGHT_CLEANUP:-0}" = "1" ]; then \
+	  printf 'e2e-all: pre-flight cleanup skipped (E2E_SKIP_PREFLIGHT_CLEANUP=1)\n' >&2; \
+	elif [ ! -f "$(BASELINE_FILE)" ]; then \
+	  printf 'e2e-all: no previous baseline at %s; skipping pre-flight cleanup\n' "$(BASELINE_FILE)" >&2; \
+	else \
+	  printf 'e2e-all: restoring a previous run residue before starting (make e2e-cleanup)\n' >&2; \
+	  if $(MAKE) --no-print-directory e2e-cleanup; then \
+	    printf 'e2e-all: pre-flight cleanup completed\n' >&2; \
+	  else \
+	    printf 'e2e-all: pre-flight cleanup did not complete; continuing, the run will fail its own checks if the environment is still drifted\n' >&2; \
+	  fi; \
+	fi
 	@$(MAKE) --no-print-directory e2e-stage STAGES=all
 
 .PHONY: e2e-cleanup

@@ -233,7 +233,13 @@ func (s *EmergencyStage) resolveBaseline(ctx context.Context) (EmergencyTarget, 
 		return EmergencyTarget{}, 0, newStageError(CodeSnapshotNotFound, "emergency", "baseline replica count is not positive")
 	}
 	if baseline == s.replicas {
-		return EmergencyTarget{}, 0, newStageError(CodeFixtureStale, "emergency", "target replica count equals the baseline; the change would not be observable")
+		// The remedy is named in the failure because this is the one cause a
+		// previous run manufactures: a restart-stage restart or a cleanup that
+		// could not finish leaves the workload at the emergency count, and the
+		// next run then fails here. A daemon-driven Run reaches an operator who
+		// did not read the workflow, so the failure has to say what to do.
+		return EmergencyTarget{}, 0, newStageError(CodeFixtureStale, "emergency",
+			"target replica count equals the baseline; a previous run left the workload changed. Run 'make e2e-cleanup' to restore the baseline, then re-run")
 	}
 	return workload, baseline, nil
 }

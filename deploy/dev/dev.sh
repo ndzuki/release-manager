@@ -1602,22 +1602,18 @@ cmd_status() {
     first=0
   done
   printf '},' >> "$status_file"
-  # Fixture-derived counters come from data/dev-fixture.json when present;
-  # a missing fixture (never seeded) reports zeros.
-  local sessions installs customers clusters routes definitions values bundles
-  sessions="$(fixture_counter "$fixture_file" operator_sessions)"
-  installs="$(fixture_counter "$fixture_file" bootstrap_installs)"
-  customers="$(fixture_counter "$fixture_file" customers)"
-  clusters="$(fixture_counter "$fixture_file" clusters)"
-  routes="$(fixture_counter "$fixture_file" routes)"
-  definitions="$(fixture_counter "$fixture_file" definitions)"
-  values="$(fixture_counter "$fixture_file" values_revisions)"
-  bundles="$(fixture_counter "$fixture_file" bundles)"
-  printf '"operator_sessions":%s,"fixture_version":"%s","fixture_entities":{' \
-    "$sessions" "$FIXTURE_VERSION" >> "$status_file"
-  printf '"customers":%s,"clusters":%s,"routes":%s,"definitions":%s,"values_revisions":%s,"bundles":%s},' \
-    "$customers" "$clusters" "$routes" "$definitions" "$values" "$bundles" >> "$status_file"
-  printf '"bootstrap_installs":%s,"restart_targets":{"namespace":"release-manager-dev","deployments":[' "$installs" >> "$status_file"
+  # fixture_entities is a projection of data/dev-fixture.json's own top-level
+  # keys, not a hand-maintained list of names: a list can disagree with the file
+  # it describes, and this one did — it asked for operator_sessions, bundles,
+  # bootstrap_installs and values_revisions, none of which the fixture has, so
+  # half the block reported 0 no matter how the fixture was seeded.
+  #
+  # Runtime counters (operator sessions online, bootstrap installs) are
+  # deliberately absent rather than reported as 0: they are not fixture facts and
+  # no zero of ours can stand in for them.
+  printf '"fixture_version":"%s","fixture_entities":%s,' \
+    "$FIXTURE_VERSION" "$(fixture_entity_counts "$fixture_file")" >> "$status_file"
+  printf '"restart_targets":{"namespace":"release-manager-dev","deployments":[' >> "$status_file"
   local first_restart=1 restart_deployment
   while IFS= read -r restart_deployment; do
     [ -n "$restart_deployment" ] || continue
@@ -1629,37 +1625,47 @@ cmd_status() {
   cat "$status_file"
 }
 
-# fixture_counter counts the entries under one fixture key.
+# fixture_entity_counts projects the fixture's own top-level keys onto entry
+# counts, so the report cannot disagree with the file it describes.
 #
-# Every collection in data/dev-fixture.json is an object (customers, clusters,
-# routes, operators, definitions, bundle), so matching only a scalar number
-# reported 0 for all of them: dev-status.json carried a whole block of false
-# zeros that read as "the fixture is empty". An object counts its keys, an array
-# its elements, and a number itself.
-fixture_counter() {
+# The rule is type-aware because the fixture mixes two object shapes. A keyed
+# collection (customers, clusters, routes, operators, definitions) maps a key to a
+# resource object, and counts its entries. A single resource (bundle) maps field
+# names to scalars: it denotes one entity, so it counts 1 even though it has
+# several fields. Arrays count their elements and scalars stand for themselves.
+#
+# Metadata (fixture_version, generated_at) is not an entity and is excluded; the
+# version is reported separately as a declared constant.
+#
+# A missing fixture (never seeded) yields {}: no entities, which is the truth,
+# rather than a block of zeros shaped like measurements.
+fixture_entity_counts() {
   local file="$1"
-  local key="$2"
-  local value=""
-  if [ -f "$file" ]; then
-    if command -v jq >/dev/null 2>&1; then
-      value="$(jq -r --arg key "$key" '
-        (.[$key] // empty)
-        | if type == "object" then (keys | length)
-          elif type == "array" then length
-          elif type == "number" then .
-          else 0 end
-      ' "$file" 2>/dev/null | head -1)"
-    else
-      # Without jq an object count cannot be derived, so say so once instead of
-      # letting the fallback's zeros pass for measurements.
-      if [ "${FIXTURE_COUNTER_WARNED:-0}" -eq 0 ]; then
-        printf 'dev-status: jq is required to count fixture entries; collection counts will read as 0\n' >&2
-        FIXTURE_COUNTER_WARNED=1
-      fi
-      value="$(sed -nE "s/.*\"$key\"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p" "$file" | sed -n '1p')"
-    fi
+  if [ ! -f "$file" ]; then
+    printf '{}'
+    return 0
   fi
-  printf '%s' "${value:-0}"
+  if ! command -v jq >/dev/null 2>&1; then
+    # Without jq neither the shape nor the counts can be derived, so say so and
+    # report nothing instead of letting zeros pass for measurements.
+    printf 'dev-status: jq is required to count fixture entities; fixture_entities will be empty\n' >&2
+    printf '{}'
+    return 0
+  fi
+  jq -c '
+    to_entries
+    | map(select(.key != "fixture_version" and .key != "generated_at"))
+    | map({ key: .key, value: (
+        .value
+        | if type == "array" then length
+          elif type == "number" then .
+          elif type == "object" then
+            ([.[] | select(type == "object")] | length) as $entries
+            | if $entries > 0 then $entries else 1 end
+          else 1
+          end ) })
+    | from_entries
+  ' "$file" 2>/dev/null || printf '{}'
 }
 
 cmd_reset_data() {
