@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -67,6 +68,58 @@ type BaselineRecovery struct {
 	// the recovery target are the same fact crossing the artifact boundary, so
 	// a second identical type would only invite them to drift.
 	Replicas []WorkloadReplicaRef
+	// Residue records the revision each definition was left at when the run
+	// ended, and is what makes the rollback decision converge.
+	//
+	// The revision number cannot do it alone. RollbackRelease advances the
+	// counter instead of restoring it -- a rollback to revision 21 was observed
+	// to read back as 23, and as 24 after the next one -- so "differs from the
+	// baseline" stays true forever, and cleanup rolls back again on every
+	// invocation while the counter climbs. Comparing against the residue asks
+	// the question that does have an answer: is the run's own residue still in
+	// place? Once a rollback replaces it, the answer is no.
+	//
+	// The values digest is not an alternative. It is not sensitive to what a run
+	// changes (all four e2e releases shared one digest while their revisions
+	// moved), so it reported drifted releases as restored (D-033).
+	Residue map[string]int32
+}
+
+// ResidueFromInventory projects a post-run inventory sample onto the residue
+// map. Rows without a definition id or with a revision outside int32 are
+// ignored, so a partial sample degrades that row to the baseline comparison
+// rather than fabricating a residue.
+func ResidueFromInventory(rows []InventoryRef) map[string]int32 {
+	residue := make(map[string]int32, len(rows))
+	for index := range rows {
+		row := rows[index]
+		if row.ReleaseDefinitionID == "" || row.Revision < 0 || row.Revision > math.MaxInt32 {
+			continue
+		}
+		residue[row.ReleaseDefinitionID] = int32(row.Revision)
+	}
+	return residue
+}
+
+// needsRollback reports whether a definition still carries the run's residue, so
+// that a rollback to the baseline would change something.
+//
+// It prefers the residue because that is the only signal which is both sensitive
+// to what the run changed and convergent once a rollback replaces it. Without a
+// residue -- a run that never sampled, or an artifact from before residues
+// existed -- it falls back to the revision comparison, which still restores but
+// never converges (see BaselineRecovery.Residue and D-033).
+func needsRollback(baselineRevision, residueRevision, observedRevision int32) bool {
+	if residueRevision > 0 {
+		// The run left it exactly where it found it, so there is nothing of the
+		// run's to undo. Without this the residue would equal the baseline and
+		// equal the observation, triggering a rollback that restores nothing.
+		if residueRevision == baselineRevision {
+			return false
+		}
+		return observedRevision == residueRevision
+	}
+	return observedRevision != baselineRevision
 }
 
 // BaselineRecoveryFromSnapshots derives a recovery target from the identity
@@ -362,8 +415,6 @@ func (report *CleanupReport) recoverRow(
 	}
 	baselineRevision, recorded := baseline.Revisions[row.DefinitionID]
 	switch {
-	case recorded && baselineRevision == row.Revision:
-		return
 	case !recorded:
 		report.SkippedRevisionRestore = append(report.SkippedRevisionRestore, row.DefinitionID)
 		logger.Warn("cleanup revision restore skipped: no baseline revision for definition", "definition_id", row.DefinitionID)
@@ -371,6 +422,13 @@ func (report *CleanupReport) recoverRow(
 	case baselineRevision < 1:
 		report.SkippedRevisionRestore = append(report.SkippedRevisionRestore, row.DefinitionID)
 		logger.Warn("cleanup revision restore skipped: baseline revision invalid", "definition_id", row.DefinitionID)
+		return
+	}
+	// The run's own residue decides, where it was sampled. The baseline revision
+	// cannot: a rollback advances the counter rather than restoring it, so the
+	// difference would outlive the rollback and fire again on every later
+	// invocation, inflating the counter each time (D-033).
+	if !needsRollback(baselineRevision, baseline.Residue[row.DefinitionID], row.Revision) {
 		return
 	}
 	reason := fmt.Sprintf("e2e cleanup rollback to baseline revision %d", baselineRevision)

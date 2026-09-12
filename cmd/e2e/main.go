@@ -66,6 +66,26 @@ type baselineArtifact struct {
 	SnapshotFull   bool   `json:"snapshot_full"`
 }
 
+// residueFileName is the post-run sample's artifact name. It sits beside
+// baseline.json because both describe the same run.
+const residueFileName = "residue.json"
+
+// residueArtifact is what the run left behind, sampled once the stages have run.
+//
+// It exists because the baseline revision cannot tell cleanup whether a release
+// still holds the run's change: RollbackRelease advances the counter instead of
+// restoring it, so a release that was rolled back once still differs from the
+// baseline and would be rolled back again on every later invocation (D-033).
+// The residue is the missing half of that comparison, and it is only
+// trustworthy because it was sampled while the state was known to be the run's
+// own.
+type residueArtifact struct {
+	RunID       string           `json:"run_id"`
+	Environment string           `json:"environment,omitempty"`
+	Residue     map[string]int32 `json:"residue"`
+	CollectedAt time.Time        `json:"collected_at"`
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -170,6 +190,13 @@ func runStages(args []string, stdout, stderr io.Writer) int {
 	// fail-closed contract).
 	report, runErr := runHarness(ctx, config, options, selected, stageSpecs, logger)
 
+	// Sample the residue the moment the run stops, whatever it decided. This is
+	// the only moment the changed state is known to be the run's own, and it is
+	// what lets a later cleanup tell the run's residue from its own earlier
+	// rollback. A failed sample is logged, not fatal: cleanup then degrades to
+	// the baseline revision comparison, which still restores (D-033).
+	collectResidue(config, options, runID, logger)
+
 	stageArtifacts, ok := writeStageArtifacts(report, options, runID, logger)
 	if !ok {
 		return int(exitRuntime)
@@ -235,6 +262,64 @@ func collectBaseline(config *e2e.Config, options runOptions, runID string, logge
 		return baseline, "", false
 	}
 	return baseline, baselineDigest, true
+}
+
+// collectResidue samples each release's revision after the run and writes
+// residue.json.
+//
+// It reuses the baseline read path, because the baseline and the residue are the
+// same observation taken at two moments; a second projection would only let them
+// drift apart. Nothing fails here: a run whose stages already decided its exit
+// code must not be turned red by a recovery aid it could do without.
+func collectResidue(config *e2e.Config, options runOptions, runID string, logger *slog.Logger) {
+	residueCtx, cancelResidue := context.WithTimeout(context.Background(), baselineReplicaTimeout)
+	rows, err := livewire.BaselineRevisions(residueCtx, config)
+	cancelResidue()
+	if err != nil {
+		logger.Warn("post-run residue collection failed; cleanup rollback degrades to the baseline revision comparison",
+			"error", safeErrorMessage(err))
+		return
+	}
+	residue := residueArtifact{
+		RunID:       runID,
+		Environment: config.Environment,
+		Residue:     e2e.ResidueFromInventory(rows),
+	}
+	residue.CollectedAt = time.Now().UTC()
+	if err := e2e.WriteJSONAtomic(filepath.Join(options.outputDir, residueFileName), residue); err != nil {
+		logger.Warn("write residue artifact failed; cleanup rollback degrades to the baseline revision comparison", "error", err)
+	}
+}
+
+// loadCleanupResidue parses the post-run sample of what the run left behind.
+//
+// Without it cleanup still restores, but it cannot tell "the run moved this" from
+// "an earlier cleanup already put it back", so it rolls back again on every
+// invocation and advances the revision counter each time (D-033).
+//
+// A residue naming a different run is refused: it describes state this cleanup
+// was never asked about, and comparing against it would let a stale artifact
+// decide whether to roll a release back.
+func loadCleanupResidue(residueFile, runID string, logger *slog.Logger) map[string]int32 {
+	residueData, readErr := os.ReadFile(residueFile)
+	switch {
+	case readErr != nil && !errors.Is(readErr, os.ErrNotExist):
+		logger.Warn("residue unreadable; cleanup rollback degrades to the baseline revision comparison", "error", readErr)
+		return nil
+	case readErr != nil:
+		return nil
+	}
+	var residue residueArtifact
+	if err := json.Unmarshal(residueData, &residue); err != nil {
+		logger.Warn("residue invalid; cleanup rollback degrades to the baseline revision comparison", "error", err)
+		return nil
+	}
+	if residue.RunID != "" && runID != "" && residue.RunID != runID {
+		logger.Warn("residue belongs to a different run; ignoring it",
+			"residue_run_id", residue.RunID, "baseline_run_id", runID)
+		return nil
+	}
+	return residue.Residue
 }
 
 // runHarness executes the canonical graph and normalizes the reported exit code
@@ -463,6 +548,13 @@ func loadCleanupBaseline(baselineFile string, logger *slog.Logger) *e2e.Baseline
 		return nil
 	}
 	target := e2e.BaselineRecoveryFromSnapshots(baseline.FixtureSnapshot)
+	// The residue lives beside the baseline: the same run writes both, and
+	// cleanup is always run against one run's artifacts.
+	target.Residue = loadCleanupResidue(filepath.Join(filepath.Dir(baselineFile), residueFileName), baseline.RunID, logger)
+	if len(target.Residue) == 0 {
+		logger.Warn("no usable run residue; cleanup rollback degrades to the baseline revision comparison",
+			"run_id", baseline.RunID)
+	}
 	// Degrade only when the baseline carries no recovery target at all. A
 	// baseline with replicas but no revisions is still usable: discarding it
 	// whole is what kept the replica restore degraded to a warning even after

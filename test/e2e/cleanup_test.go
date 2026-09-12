@@ -239,6 +239,135 @@ func TestRunCleanupRollsBackRevisionDrift(t *testing.T) {
 	}
 }
 
+// advancingRecovery models the behaviour that defeats the baseline comparison:
+// RollbackRelease advances the revision counter instead of restoring it, so a
+// release that was rolled back once still differs from the baseline.
+type advancingRecovery struct {
+	recoveryFake
+}
+
+func (f *advancingRecovery) RollbackRelease(_ context.Context, definitionID string, _, _ int32, _ string) error {
+	f.rolled = append(f.rolled, definitionID)
+	for index := range f.rows {
+		if f.rows[index].DefinitionID == definitionID {
+			f.rows[index].Revision++
+		}
+	}
+	return nil
+}
+
+// TestRunCleanupRollsBackOnlyWhileTheRunResidueIsInPlace is the convergence
+// contract: the second pass over an already-restored release must do nothing.
+//
+// The rollback advances the counter rather than restoring the number, so a
+// decision based on the baseline revision would fire on every pass forever and
+// inflate the counter each time. Asking whether the run's own residue is still
+// in place is a question a rollback actually answers (D-033).
+func TestRunCleanupRollsBackOnlyWhileTheRunResidueIsInPlace(t *testing.T) {
+	t.Parallel()
+
+	baseline := &BaselineRecovery{
+		Revisions: map[string]int32{"e2e-release-target": 1},
+		Residue:   map[string]int32{"e2e-release-target": 2},
+	}
+	recovery := &advancingRecovery{recoveryFake: recoveryFake{
+		rows: []CleanupRow{runnerRow("e2e-release-target", 2, nil)},
+	}}
+
+	first, err := RunCleanup(context.Background(), baseline, "runner-id", recovery, slog.Default())
+	if err != nil {
+		t.Fatalf("first RunCleanup() error = %v", err)
+	}
+	if len(first.RolledBackDefinitions) != 1 {
+		t.Fatalf("first rolled back = %v, want the run residue to be restored", first.RolledBackDefinitions)
+	}
+
+	second, err := RunCleanup(context.Background(), baseline, "runner-id", recovery, slog.Default())
+	if err != nil {
+		t.Fatalf("second RunCleanup() error = %v", err)
+	}
+	if len(second.RolledBackDefinitions) != 0 {
+		t.Fatalf("second rolled back = %v, want none: the run residue is gone", second.RolledBackDefinitions)
+	}
+	if len(recovery.rolled) != 1 {
+		t.Fatalf("rolled = %v, want exactly one rollback across both passes", recovery.rolled)
+	}
+}
+
+// TestRunCleanupWithoutAResidueRollsBackAgainOnEveryPass pins the degradation
+// rather than describing it as harmless.
+//
+// Without a residue cleanup cannot tell the run's change from its own earlier
+// rollback, so it rolls back again on every pass and the counter climbs. This is
+// what a residue removes; the test fails the day a better signal replaces it.
+func TestRunCleanupWithoutAResidueRollsBackAgainOnEveryPass(t *testing.T) {
+	t.Parallel()
+
+	baseline := &BaselineRecovery{Revisions: map[string]int32{"e2e-release-target": 1}}
+	recovery := &advancingRecovery{recoveryFake: recoveryFake{
+		rows: []CleanupRow{runnerRow("e2e-release-target", 2, nil)},
+	}}
+
+	for pass := 1; pass <= 2; pass++ {
+		report, err := RunCleanup(context.Background(), baseline, "runner-id", recovery, slog.Default())
+		if err != nil {
+			t.Fatalf("pass %d RunCleanup() error = %v", pass, err)
+		}
+		if len(report.RolledBackDefinitions) != 1 {
+			t.Fatalf("pass %d rolled back = %v, want the documented non-convergence", pass, report.RolledBackDefinitions)
+		}
+	}
+}
+
+// TestNeedsRollbackFollowsTheRunResidue covers the decision table directly.
+func TestNeedsRollbackFollowsTheRunResidue(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                        string
+		baseline, residue, observed int32
+		want                        bool
+	}{
+		{name: "the run residue is still in place", baseline: 1, residue: 2, observed: 2, want: true},
+		{name: "a rollback already replaced the residue", baseline: 1, residue: 2, observed: 3, want: false},
+		{name: "the run left it where it found it", baseline: 1, residue: 1, observed: 1, want: false},
+		{name: "no residue degrades to the baseline comparison", baseline: 1, residue: 0, observed: 2, want: true},
+		{name: "no residue and no drift needs nothing", baseline: 1, residue: 0, observed: 1, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := needsRollback(test.baseline, test.residue, test.observed); got != test.want {
+				t.Fatalf("needsRollback(%d, %d, %d) = %t, want %t",
+					test.baseline, test.residue, test.observed, got, test.want)
+			}
+		})
+	}
+}
+
+// TestResidueFromInventoryKeepsOnlyAddressableRows keeps a partial sample from
+// fabricating a residue: a row that cannot name a definition or a revision must
+// degrade to the baseline comparison, not become a bogus target.
+func TestResidueFromInventoryKeepsOnlyAddressableRows(t *testing.T) {
+	t.Parallel()
+
+	residue := ResidueFromInventory([]InventoryRef{
+		{ReleaseDefinitionID: "def-a", Revision: 7},
+		{ReleaseDefinitionID: "", Revision: 3},
+		{ReleaseDefinitionID: "def-b", Revision: -1},
+		{ReleaseDefinitionID: "def-c", Revision: 1},
+	})
+	want := map[string]int32{"def-a": 7, "def-c": 1}
+	if len(residue) != len(want) {
+		t.Fatalf("residue = %v, want %v", residue, want)
+	}
+	for definitionID, revision := range want {
+		if residue[definitionID] != revision {
+			t.Fatalf("residue[%q] = %d, want %d", definitionID, residue[definitionID], revision)
+		}
+	}
+}
+
 func TestRunCleanupSkipsRevisionRestoreWhenBaselineMissing(t *testing.T) {
 	t.Parallel()
 
