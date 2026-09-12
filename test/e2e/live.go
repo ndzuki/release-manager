@@ -74,13 +74,35 @@ func (r *LiveRecovery) token() string {
 }
 
 // ListReleaseInventory implements Recovery.
+//
+// The read re-attempts while the server reports a condition a later attempt can
+// clear. It has to: the orchestrator answers ListReleaseInventory with CodeInternal
+// for every row while any definition has a non-terminal operation, because the
+// Postgres GetActiveForDefinition still selects the pre-emergency 16-column set
+// while the shared scan reads 30 (the SQLite twin was updated; Postgres was not).
+// That state is one cleanup manufactures itself -- its own rollback is an
+// operation in flight -- so without this the second cleanup of a pair failed with
+// "list release inventory: internal: internal error" on an environment the first
+// one had just restored. A bounded retry is the runner-side answer; the engine
+// divergence belongs to the store and is recorded in D-033 rather than patched
+// from here.
+//
+// Retrying is safe because the read only observes. The retry lives here rather
+// than at the call sites so that cleanup, the baseline sample, and the post-run
+// residue sample all inherit it and none can be left on the failing path.
 func (r *LiveRecovery) ListReleaseInventory(ctx context.Context) ([]CleanupRow, error) {
-	response, err := r.clients.orchestrator.ListReleaseInventory(ctx, authorizedRequest(r.token(), &orchestratorv1.ListReleaseInventoryRequest{}))
+	response, err := retryInventoryRead(ctx, func(ctx context.Context) (*orchestratorv1.ListReleaseInventoryResponse, error) {
+		result, err := r.clients.orchestrator.ListReleaseInventory(ctx, authorizedRequest(r.token(), &orchestratorv1.ListReleaseInventoryRequest{}))
+		if err != nil {
+			return nil, err
+		}
+		return result.Msg, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	rows := make([]CleanupRow, 0, len(response.Msg.Rows))
-	for _, row := range response.Msg.Rows {
+	rows := make([]CleanupRow, 0, len(response.Rows))
+	for _, row := range response.Rows {
 		if row == nil {
 			continue
 		}
@@ -347,6 +369,65 @@ func transientRecoveryError(err error) bool {
 	default:
 		return false
 	}
+}
+
+// inventoryReadRetryInterval is how long to wait before re-reading the release
+// inventory after a failure a later attempt can clear.
+const inventoryReadRetryInterval = 5 * time.Second
+
+// inventoryReadRetryWindow caps how long one inventory read keeps re-attempting,
+// so a server failing for an unrelated reason cannot spend the whole cleanup
+// budget here. The caller's deadline bounds it further.
+const inventoryReadRetryWindow = 90 * time.Second
+
+// retryInventoryRead re-attempts an inventory read while the failure is one a
+// later attempt can clear, and returns the last failure once it cannot.
+//
+// CodeInternal is admitted here for a specific, documented reason rather than as
+// a general habit: the orchestrator answers ListReleaseInventory with CodeInternal
+// for every row whenever some definition has a non-terminal operation, because
+// Postgres GetActiveForDefinition still selects the pre-emergency 16-column set
+// while the shared scan reads 30 (D-033). That condition clears by itself -- an
+// operation always reaches a terminal state -- and the read only observes, so
+// repeating it cannot change what is being read.
+func retryInventoryRead(
+	ctx context.Context,
+	read func(context.Context) (*orchestratorv1.ListReleaseInventoryResponse, error),
+) (*orchestratorv1.ListReleaseInventoryResponse, error) {
+	return retryInventoryReadEvery(ctx, inventoryReadRetryInterval, inventoryReadRetryWindow, read)
+}
+
+// retryInventoryReadEvery is retryInventoryRead with an explicit cadence, so a
+// test can pin the retry contract without waiting out the production interval.
+func retryInventoryReadEvery(
+	ctx context.Context,
+	interval, window time.Duration,
+	read func(context.Context) (*orchestratorv1.ListReleaseInventoryResponse, error),
+) (*orchestratorv1.ListReleaseInventoryResponse, error) {
+	deadline := time.Now().Add(window)
+	for {
+		response, err := read(ctx)
+		if err == nil {
+			return response, nil
+		}
+		if !retryableInventoryReadFailure(err) || ctx.Err() != nil || !time.Now().Before(deadline) {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(interval):
+		}
+	}
+}
+
+// retryableInventoryReadFailure reports whether a failed inventory read can
+// succeed on a later attempt.
+func retryableInventoryReadFailure(err error) bool {
+	if transientRecoveryError(err) {
+		return true
+	}
+	return connect.CodeOf(err) == connect.CodeInternal
 }
 
 // authorizedRequest builds a connect request carrying the runner bearer token

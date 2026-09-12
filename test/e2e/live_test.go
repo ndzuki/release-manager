@@ -204,6 +204,79 @@ func TestLiveRecoverySetReplicasFailsWhenTheOperationNeverSucceeds(t *testing.T)
 	}
 }
 
+// TestRetryInventoryReadRetriesWhileTheServerSaysInternal pins the mitigation for
+// the Postgres engine divergence: while any definition has a non-terminal
+// operation the orchestrator answers ListReleaseInventory with CodeInternal for
+// every row, and cleanup manufactures that state itself with its own rollback.
+func TestRetryInventoryReadRetriesWhileTheServerSaysInternal(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	response, err := retryInventoryReadEvery(context.Background(), time.Millisecond, time.Second,
+		func(context.Context) (*orchestratorv1.ListReleaseInventoryResponse, error) {
+			attempts++
+			if attempts < 3 {
+				return nil, connect.NewError(connect.CodeInternal, errors.New("unable to read release inventory"))
+			}
+			return &orchestratorv1.ListReleaseInventoryResponse{
+				Rows: []*orchestratorv1.ReleaseInventoryRow{{ReleaseDefinitionId: "def-a"}},
+			}, nil
+		})
+	if err != nil {
+		t.Fatalf("retryInventoryReadEvery() error = %v, want the retry to land", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3 (the read must be repeated, not abandoned)", attempts)
+	}
+	if len(response.GetRows()) != 1 {
+		t.Fatalf("rows = %d, want the successful read", len(response.GetRows()))
+	}
+}
+
+// TestRetryInventoryReadDoesNotRepeatARejectedRead keeps the retry from hiding a
+// fault that repeating cannot fix: a rejected read would be rejected identically
+// forever, so it has to surface on the first attempt.
+func TestRetryInventoryReadDoesNotRepeatARejectedRead(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	_, err := retryInventoryReadEvery(context.Background(), time.Millisecond, time.Second,
+		func(context.Context) (*orchestratorv1.ListReleaseInventoryResponse, error) {
+			attempts++
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("bad request"))
+		})
+	if err == nil {
+		t.Fatal("retryInventoryReadEvery() error = nil, want the rejection to surface")
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1: a rejected read is not retried", attempts)
+	}
+}
+
+// TestRetryInventoryReadStopsAtTheDeadline keeps the retry bounded, so a server
+// failing for an unrelated reason cannot spend the whole cleanup budget here.
+func TestRetryInventoryReadStopsAtTheDeadline(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	attempts := 0
+	_, err := retryInventoryReadEvery(ctx, time.Millisecond, time.Hour,
+		func(context.Context) (*orchestratorv1.ListReleaseInventoryResponse, error) {
+			attempts++
+			return nil, connect.NewError(connect.CodeInternal, errors.New("still broken"))
+		})
+	if err == nil {
+		t.Fatal("retryInventoryReadEvery() error = nil, want the last failure")
+	}
+	if attempts < 2 {
+		t.Fatalf("attempts = %d, want the read repeated before giving up", attempts)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("ctx.Err() = nil, want the retry bounded by the caller's deadline")
+	}
+}
+
 // writeProto answers a Connect call with a proto-encoded message, the codec the
 // clients use.
 func writeProto(t *testing.T, writer http.ResponseWriter, message proto.Message) {
