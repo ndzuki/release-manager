@@ -86,7 +86,7 @@ MANIFEST="$DATA_DIR/dev-fixture.json"
 STATUS="$DATA_DIR/dev-status.json"
 CREDS="$DATA_DIR/dev-credentials.env"
 for f in "$MANIFEST" "$STATUS" "$CREDS"; do
-  [ -f "$f" ] || fail "missing $f (run make dev-up dev-seed first)"
+  [ -f "$f" ] || fail "missing $f (run make dev-up dev-seed dev-status first)"
 done
 
 # shellcheck disable=SC1090

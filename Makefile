@@ -178,7 +178,11 @@ e2e-env-config:
 	mv -f "$$tmp_config" "$(ENV_CONFIG)"
 
 .PHONY: e2e-prerequisite
-e2e-prerequisite: dev-up dev-seed ## AC-066-17 prerequisite smoke (versioned gate for upstream chain changes)
+# dev-status is not implied by dev-up/dev-seed: only `dev-status` writes
+# data/dev-status.json, which smoke.sh requires. Leaving it out lets this gate
+# pass on a machine that happens to still hold a copy from an earlier run, and
+# fail on a clean checkout.
+e2e-prerequisite: dev-up dev-seed dev-status ## AC-066-17 prerequisite smoke (versioned gate for upstream chain changes)
 	@bash test/e2e/prerequisite/smoke.sh
 
 .PHONY: e2e-prerequisite-ci
@@ -186,7 +190,7 @@ e2e-prerequisite-ci: ## AC-066-17 prerequisite smoke with artifact preservation 
 	@set -e; \
 	mkdir -p e2e-results; \
 	trap 'bash test/e2e/prerequisite/capture-logs.sh >/dev/null 2>&1 || true; cp -f data/smoke-result.json e2e-results/ 2>/dev/null || true; make dev-purge CONFIRM=1 >/dev/null 2>&1 || true' EXIT; \
-	$(MAKE) dev-up dev-seed; \
+	$(MAKE) dev-up dev-seed dev-status; \
 	bash test/e2e/prerequisite/smoke.sh; \
 	bash test/e2e/prerequisite/capture-logs.sh >/dev/null 2>&1 || true; \
 	cp -f data/smoke-result.json e2e-results/ 2>/dev/null || true
