@@ -18,6 +18,13 @@
 # download is required.
 set -euo pipefail
 
+# Generated artifacts must be byte-identical on every machine, so pin the
+# collation. Developer machines commonly run en_US.UTF-8 while CI runs C.UTF-8,
+# and that alone reorders the module sections of NOTICE (go.yaml.in before
+# gopkg.in under one locale, after it under the other), which made the freshness
+# check fail on the runner while passing locally.
+export LC_ALL=C
+
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 
