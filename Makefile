@@ -483,6 +483,10 @@ check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
 		printf "$(YELLOW)check-reqs: no REQ docs found in repo, skipping$(NC)\n"; \
 	fi
 
+.PHONY: check-licenses
+check-licenses: ## Check every shipped dependency's license against the project policy
+	bash scripts/check-licenses.sh
+
 
 .PHONY: test-rollback-sdk
 test-rollback-sdk: ## Run Rollback SDK quality gate (REQ-063)
@@ -511,7 +515,7 @@ test-operator-image-sdk-only: ## Run operator image SDK-only gate (REQ-061)
 			--policy imagecheck.operator.yaml \
 			--dockerfile deploy/docker/Dockerfile.operator
 .PHONY: quality
-quality: sdk-check test-coverage lint check-reqs ## Full quality gate run
+quality: sdk-check test-coverage lint check-reqs check-licenses ## Full quality gate run
 
 .PHONY: build-sdkcheck
 build-sdkcheck: proto ## Build sdkcheck
