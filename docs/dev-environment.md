@@ -145,9 +145,14 @@ identity → routing → accounts → trust → bundle → values → enrollment
 | `make dev-stage-full` | 无（导航目标） | 只打印两种全量启动方式，不启动任何进程 |
 
 推荐顺序（按业务依赖，来自各 target 的 REQ 标注）：shared → artifact → tenancy → config →
-operator → publish → auth → audit。等价的非分阶段入口是 `make run-<service>`；其中
-`run-orchestrator`/`run-auth` 与 `dev-stage-publish`/`dev-stage-auth` 传了服务未定义的 `--db`，
-实际可按 `go run ./cmd/orchestrator/ --config configs/orchestrator.dev.yaml` 的形式手工运行。
+operator → publish → auth → audit。tenancy / config / publish 三个 target 都启动 orchestrator 并占用
+同一个端口 `8083`，`fuser -k` 会先杀掉占用者，因此**一次只能跑一个**。
+
+等价的常驻入口是 `make run-<service>`：它先 `go build` 到 `bin/` 再跑二进制，`dev-stage-*` 则用
+`go run` 并自动清端口。两者传参一致——只有定义了 `--db` 的服务才带该 flag：
+`run-operator`/`dev-stage-operator` 传 `--db data/release-manager.db`，
+`run-api`/`dev-stage-audit` 传 `--db data/api.db --signing-key change-me-in-production`；
+orchestrator 与 auth 的 `run-*`/`dev-stage-*` 都只传 `--config`。
 
 ## 常见故障与边界
 

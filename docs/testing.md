@@ -57,23 +57,20 @@ Makefile 内没有对应的转发 target，需在 `web/` 目录内直接运行�
 | `make sdk-check` | SDK-only 静态门禁（REQ-037）：`os_exec_import`、`fork_exec`、`shell_wrapper`、`forbidden_binary_invocation`、`expired_exception` | 无 | 本地 + CI `sdk-check` job（同一命令、同一例外文件、同一扫描范围） |
 | `make check-reqs` | 校验原子需求文档结构（`find . -path '*/Requirements/REQ-*.md'` → `cmd/reqcheck`）；**找不到 REQ 文档时打印提示并跳过** | 无 | 本地（CI 未接入该 target） |
 | `make quality` | `sdk-check` + `test-coverage` + `lint` + `check-reqs` 的聚合门禁 | 同各子项 | 本地；CI 不直接调用，而是分 job 跑等价命令 |
-| `make test-install-sdk` | Helm Install SDK 链路 | Docker + kind + 网络 | 本地 + CI `install-sdk` job（15 分钟超时） |
-| `make test-upgrade-sdk` | Helm Upgrade SDK 链路 | Docker + kind | 本地 + CI `upgrade-sdk` job（15 分钟） |
+| `make test-install-sdk` / `test-upgrade-sdk` / `test-rollout-watch` | Helm Install / Upgrade / Rollout watch SDK 链路 | Docker + kind（rollout 另有 120 秒时长门禁） | 本地 + CI 对应 job（各 15 分钟超时） |
 | `make test-rollback-sdk` | Rollback SDK 链路 | 无（in-memory storage + `kubefake`） | 本地（CI 未接入） |
-| `make test-rollout-watch` | Rollout watch 链路 + 120 秒时长门禁 | Docker + kind | 本地 + CI `rollout-watch` job（15 分钟） |
-| `make test-operator-image-sdk-only` | operator 镜像合规 | Docker | 本地 + CI `operator-image-sdk-only` job |
-| `make docker-build-operator` | 构建并 `docker save` operator 镜像 tarball | Docker | 被上一个 target 调用 |
+| `make test-operator-image-sdk-only` | operator 镜像合规（内部先调 `make docker-build-operator` 产出并 `docker save` 镜像 tarball） | Docker | 本地 + CI `operator-image-sdk-only` job |
 
 ## E2E（分阶段 runner）
 
-唯一正式入口是 `cmd/e2e`（`make e2e-*` 只做薄转发与环境组装）。运行时业务写入**只经正式
-Connect API 与受限 client-go（restart 专用 patch 权限）**，不做数据库直写、不走测试旁路、
-不调用 helm/kubectl 子进程。
+唯一正式入口是 `cmd/e2e`（`make e2e-*` 只做薄转发与环境组装）。运行时业务写入**只经正式 Connect
+API 与受限 client-go（restart 专用 patch 权限）**，不做数据库直写、不走测试旁路、不调用
+helm/kubectl 子进程。
 
 ### 阶段模型
 
-七个 canonical 阶段，注册顺序与依赖固定（未显式选择的前置**不会**自动执行；已选前置
-fail/skip 会让下游记 `stage_skipped`）：
+七个 canonical 阶段，注册顺序与依赖固定（未显式选择的前置**不会**自动执行；已选前置 fail/skip
+会让下游记 `stage_skipped`）：
 
 ```
 control-plane ─┬─> inventory ─┬─> release
@@ -93,8 +90,8 @@ control-plane ─┬─> inventory ─┬─> release
 
 ### `make e2e-env-config` 与 env-config
 
-`e2e-env-config` 是**私有** target，由 `e2e-stage`/`e2e-all`/`e2e-cleanup` 在持锁后调用，
-把 REQ-065 的产物组装成唯一运行时配置 `data/e2e-env-config.yaml`：
+`e2e-env-config` 是**私有** target，由 `e2e-stage`/`e2e-all`/`e2e-cleanup` 在持锁后调用，把
+REQ-065 的产物组装成唯一运行时配置 `data/e2e-env-config.yaml`：
 
 | 字段 | 来源 |
 | --- | --- |
@@ -124,38 +121,36 @@ control-plane ─┬─> inventory ─┬─> release
 | `make e2e-all` | 先做 pre-flight 自愈：若 `$(OUTPUT_DIR)/baseline.json` 存在，先跑一次 `make e2e-cleanup` 回收上一轮残留（`E2E_SKIP_PREFLIGHT_CLEANUP=1` 可跳过；无 baseline 则跳过）。**该 pre-flight 是 best-effort，失败不中止**，Run 仍以自身 fail-closed 检查判定。随后等价于 `STAGES=all` |
 | `make e2e-cleanup` | 经 `cmd/e2e cleanup` 子命令、**只经正式业务 API**（`CancelOperation` / `RollbackRelease` / `EmergencyChange`）回收残留并恢复 baseline；缺 baseline 时降级为「只取消 runner 拥有的非终态 operation」并在 stderr 显式告警，不静默 |
 
-三个 target 都在 `cmd/e2e` 启动前对 `data/dev.lock` 取**共享锁**（`flock -s`），与 `dev-*` 的
-排他锁互斥；冲突立即以**退出码 3** 退出并打印 `environment_locked`（不写 `run.json`）。
-凭据通过 `data/dev-credentials.env`（存在则 source）或已注入的 `E2E_RUNNER_PASSWORD` 提供，
-缺失时 target 以 `: "${E2E_RUNNER_PASSWORD:?...}"` 直接失败。
+三个 target 都在 `cmd/e2e` 启动前对 `data/dev.lock` 取**共享锁**（`flock -s`），与 `dev-*` 的排他锁
+互斥；冲突立即以**退出码 3** 退出并打印 `environment_locked`（不写 `run.json`）。凭据来自
+`data/dev-credentials.env`（存在则 source）或已注入的 `E2E_RUNNER_PASSWORD`，缺失时 target 直接失败。
 
 回收语义有两处关键约束：
 
-- **恢复预算不是 30 秒**。阶段内补偿的 grace 是 30 秒（fail-fast 上界，超时追加
-  `cleanup_timeout` cause）；独立 `cmd/e2e cleanup` 命令的预算是 **3 分钟**——必须跨越 Run 自身
-  `restart` 阶段造成的 operator agent 重连窗口（实测约 32 秒）加至少一个 emergency operation 的
-  apply 窗口。两者不是同一个数，不得互相套用。
-- **是否回滚以 Run 自己采样到的 residue 为准**。Run 在最后一个阶段结束后写 `residue.json`，
-  cleanup 只在「当前 revision == residue」时回滚。不能用「与 baseline 比较」代替——
-  `RollbackRelease` 是推进版本号而非恢复编号，该比较在回滚后依然成立，会导致每次 cleanup 都
-  再回滚一次、版本号持续累加。
+- **恢复预算不是 30 秒**。阶段内补偿的 grace 是 30 秒（fail-fast 上界，超时追加 `cleanup_timeout`
+  cause）；独立 `cmd/e2e cleanup` 命令的预算是 **3 分钟**——必须跨越 Run 自身 `restart` 阶段造成的
+  operator agent 重连窗口（实测约 32 秒）加至少一个 emergency operation 的 apply 窗口。两者不是
+  同一个数，不得互相套用。
+- **是否回滚以 Run 自己采样到的 residue 为准**。Run 在最后一个阶段结束后写 `residue.json`，cleanup
+  只在「当前 revision == residue」时回滚。不能用「与 baseline 比较」代替——`RollbackRelease` 是推进
+  版本号而非恢复编号，该比较在回滚后依然成立，会导致每次 cleanup 都再回滚一次、版本号持续累加。
 
 ### 失败产物与退出码
 
-- 固定产物：`{output-dir}/run.json`（Run 级汇总，CI 只解析它）、`{stage}.json`（每个**已选**
-  阶段一份，因依赖传播而 skip 的阶段也写，状态 `skip`）、`baseline.json`、`residue.json`。
-- Run 进入执行前清空 `--output-dir` 内本 Run 将写的固定产物（不删其他用户文件），避免陈旧文件
-  误导排查。`e2e-results/` 已在 `.gitignore` 中。
+- 固定产物：`{output-dir}/run.json`（Run 级汇总，CI 只解析它）、`{stage}.json`（每个**已选**阶段
+  一份，因依赖传播而 skip 的阶段也写，状态 `skip`）、`baseline.json`、`residue.json`。Run 进入执行前
+  清空本 Run 将写的固定产物（不删其他用户文件），避免陈旧文件误导排查；`e2e-results/` 已在
+  `.gitignore` 中。
 - `--keep-on-failure=true` 时，失败阶段的诊断写 `{output-dir}/diagnostics/{run_id}/{stage}/`
-  （阶段 stderr 缓冲 + 关联 Operation/artifact 引用 + 环境摘要），随 CI artifact 上传。业务补偿
-  与非终态取消**始终执行**，不受该 flag 影响；Runner 不收集集群内 Pod 日志（权限边界）。
+  （阶段 stderr 缓冲 + 关联 Operation/artifact 引用 + 环境摘要），随 CI artifact 上传。业务补偿与
+  非终态取消**始终执行**，不受该 flag 影响；Runner 不收集集群内 Pod 日志（权限边界）。
 - 日志三面分离：stdout 只有人类摘要、stderr 是 `log/slog` 诊断、结构化结果只进 JSON artifact。
-- 退出码：`0` = 至少一个已选阶段 pass 且无 fail（允许部分 skip）；`1` = 至少一个阶段 fail，
-  或 run-fatal（`fixture_stale` / `snapshot_not_found`，`run.json` 写 `fatal` 字段）；
-  `2` = 全部已选阶段 skip，或启动校验/配置错误（不写 `run.json`，stderr 打印用法）。
-  `3` 是 **Makefile 目标级**退出码（`environment_locked`），不属于 `cmd/e2e` 进程退出码表。
-- 脱敏：`RootCause` / `ErrorCause.Message` 禁止输出堆栈、JWT、Secret payload、Values 内容、
-  内部 IP 与连接串；`safeErrorMessage` 命中敏感词时只回一句通用文案。
+- 退出码：`0` = 至少一个已选阶段 pass 且无 fail（允许部分 skip）；`1` = 至少一个阶段 fail，或
+  run-fatal（`fixture_stale` / `snapshot_not_found`，`run.json` 写 `fatal` 字段）；`2` = 全部已选阶段
+  skip，或启动校验/配置错误（不写 `run.json`）。`3` 是 **Makefile 目标级**退出码
+  （`environment_locked`），不属于 `cmd/e2e` 进程退出码表。
+- 脱敏：`RootCause` / `ErrorCause.Message` 禁止输出堆栈、JWT、Secret payload、Values 内容、内部 IP
+  与连接串；`safeErrorMessage` 命中敏感词时只回一句通用文案。
 
 ### AC-066-17 前置冒烟
 
@@ -166,15 +161,14 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 不隐含于 `dev-up`/`dev-seed`，漏掉它会让冒烟读到陈旧或缺失的 `data/dev-status.json`。结果落
 `data/smoke-result.json`。
 
-`make e2e-prerequisite-ci` 是它的 CI 变体：失败时先 `capture-logs.sh`、把 `smoke-result.json`
-复制到 `e2e-results/`，最后无条件 `make dev-purge CONFIRM=1`。**它是破坏性的**，本地跑会清掉
-自己的 dev 环境。
+`make e2e-prerequisite-ci` 是它的 CI 变体：失败时先 `capture-logs.sh`、把 `smoke-result.json` 复制到
+`e2e-results/`，最后无条件 `make dev-purge CONFIRM=1`。**它是破坏性的**，本地跑会清掉自己的 dev 环境。
 
 ## CI（`.github/workflows/test.yml`）
 
-触发条件：`push` 到 `main`、任意 `pull_request`、以及 `workflow_dispatch`
-（带 boolean 输入 `run-e2e`，默认 `true`）。`concurrency` 组按分支/PR 取消在跑的旧 run；
-runner 通过 `vars.RUNS_ON || 'ubuntu-latest'` 选择，便于在私有仓额度受限时切自托管。
+触发条件：`push` 到 `main`、任意 `pull_request`、以及 `workflow_dispatch`（带 boolean 输入
+`run-e2e`，默认 `true`）。`concurrency` 组按分支/PR 取消在跑的旧 run；runner 通过
+`vars.RUNS_ON || 'ubuntu-latest'` 选择，便于在私有仓额度受限时切自托管。
 
 | job | 跑什么 | 触发范围 |
 | --- | --- | --- |
@@ -209,22 +203,21 @@ runner 通过 `vars.RUNS_ON || 'ubuntu-latest'` 选择，便于在私有仓额�
   `t.Skip("POSTGRES_TEST_DSN is not set")`；两者都要——缺标签会让它在无数据库的机器上被编译执行，
   缺 skip 会让它在 CI 的默认 job 里失败。
 - **集成命令禁用 Go test cache**：各 SDK 门禁以 `-count=1` / `-test.count=1` 运行。
-- **SDK-only 约束对测试也生效**：`sdkcheck` 扫描 `cmd/`、`internal/`、`pkg/` 的 AST 与依赖图，
-  规则为 `os_exec_import`、`fork_exec`、`shell_wrapper`、`forbidden_binary_invocation`、
-  `expired_exception`。例外只能写在 `sdkcheck.exceptions.yaml`，每条必须含
-  `owner`/`reason`/`expires_at`/`path`/`rule`；任一字段缺失、规则未知、日期非法或已过期一律
-  **不抑制违规（fail closed）**。kind/docker 等 CLI 只允许出现在 Makefile/CI/开发环境生命周期脚本
-  中，不得进入运行时镜像或运行时业务代码。
+- **SDK-only 约束对测试也生效**：`sdkcheck` 扫描 `cmd/`、`internal/`、`pkg/` 的 AST 与依赖图，规则
+  为 `os_exec_import`、`fork_exec`、`shell_wrapper`、`forbidden_binary_invocation`、`expired_exception`。
+  例外只能写在 `sdkcheck.exceptions.yaml`，每条必须含 `owner`/`reason`/`expires_at`/`path`/`rule`；
+  任一字段缺失、规则未知、日期非法或已过期一律**不抑制违规（fail closed）**。kind/docker 等 CLI
+  只允许出现在 Makefile/CI/开发环境生命周期脚本中，不得进入运行时镜像或运行时业务代码。
 - **脱敏与清理**：测试与 runner 输出不得含密码、DSN、JWT、Secret payload、Values 内容或内部 IP；
   临时集群/容器/凭据必须由创建者清理（`trap` 保证中断也执行），优先复用 `make dev-purge CONFIRM=1`，
   不得为换取门禁通过而停用常驻服务。
 
-> 事实源：`.worktrees/t092/Makefile`（test* / sdk-check / lint / check-reqs / quality / e2e-* / docker-build-operator 目标逐条核对）、
+> 事实源：`.worktrees/t092/Makefile`（test* / sdk-check / lint / check-reqs / quality / e2e-* 目标逐条核对）、
 > `.worktrees/t092/.github/workflows/test.yml`（10 个 job 与触发条件）、
-> `.worktrees/t092/cmd/e2e/main.go`（flag、退出码常量 `exitSuccess=0`/`exitRuntime=1`/`exitUsage=2`/`exitLock=3`、cleanup 语义）、
+> `.worktrees/t092/cmd/e2e/main.go`（flag、退出码 0/1/2 与 `exitLock=3`、cleanup 语义）、
 > `.worktrees/t092/test/e2e/runner.go`（`canonicalStageOrder`、`CanonicalDependencies`、`batchFor`）、
 > `.worktrees/t092/test/e2e/prerequisite/smoke.sh`、`.worktrees/t092/test/integration/`、
-> `.worktrees/t092/internal/store/postgres/`、`.worktrees/t092/web/package.json`、
-> `Projects/001-release-manager/Requirements/REQ-037`、`REQ-061`、`REQ-062`、`REQ-063`、`REQ-064`、`REQ-066`、
-> `Design/contracts/e2e-runner-surface.md`、`Design/contracts/e2e-environment-config.md`、
+> `.worktrees/t092/internal/store/postgres/`、`.worktrees/t092/web/package.json`；
+> `Projects/001-release-manager/Requirements/REQ-037`、`REQ-061`~`REQ-064`、`REQ-066`；
+> `Design/contracts/e2e-runner-surface.md`、`Design/contracts/e2e-environment-config.md`；
 > `Design/decisions/D-021`、`D-032`、`D-033`、`D-034`。
