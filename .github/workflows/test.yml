@@ -313,9 +313,15 @@ jobs:
           if-no-files-found: ignore
 
   # TASK-066 formal E2E gate. Pull requests intentionally do not run this
-  # privileged integration job; push main and explicit dispatch are supported.
+  # privileged integration job.
+  #
+  # Temporary deviation (D-034): this job reads eight repository secrets that
+  # are not configured yet, so letting it run on push main would turn the first
+  # post-merge run red. It stays dispatch-only until those secrets exist and one
+  # manual run has passed; removing the `workflow_dispatch` condition below
+  # restores REQ-066's "runs on push main" behaviour (决策 ⑧).
   e2e:
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run-e2e)
+    if: github.event_name == 'workflow_dispatch' && inputs.run-e2e
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
