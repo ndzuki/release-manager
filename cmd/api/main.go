@@ -31,6 +31,11 @@ type apiSvc struct {
 	archiveWorker *audit.ArchiveWorker
 	closeOnce     sync.Once
 	closeErr      error
+
+	// auditFlushInterval overrides the audit emitter flush interval. Tests set a
+	// short interval so an emitted event becomes queryable without waiting for the
+	// production batch tick (audit.DefaultConfig uses 5s); zero keeps the default.
+	auditFlushInterval time.Duration
 }
 
 func (s *apiSvc) Name() string { return "release-api" }
@@ -44,7 +49,11 @@ func (s *apiSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 
 	jwtMgr := jwtauth.New([]byte(s.signingKey), 15*time.Minute)
 	s.store = st
-	s.emitter = audit.NewEmitter(st.AuditEvents(), logger, audit.DefaultConfig())
+	emitterCfg := audit.DefaultConfig()
+	if s.auditFlushInterval > 0 {
+		emitterCfg.FlushInterval = s.auditFlushInterval
+	}
+	s.emitter = audit.NewEmitter(st.AuditEvents(), logger, emitterCfg)
 	auditSvc := audit.NewAuditServiceHandler(st, s.emitter, logger)
 	auditPath, auditHandler := auditv1connect.NewAuditServiceHandler(
 		auditSvc,
