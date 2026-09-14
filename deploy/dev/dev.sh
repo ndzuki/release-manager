@@ -1280,6 +1280,16 @@ agents_up() {
   # (deploy/kustomize/services/orchestrator.yaml). agents_up copies the
   # LOCAL file — the orchestrator image is distroless (no cat/sh), so `exec
   # ... cat /data/gateway-ca.crt` can never work (real smoke 2026-08-27).
+  # The ci profile deletes the transient CA right after kustomize apply (批次5
+  # D1), and cmd_seed deliberately does not require the file to be present in
+  # ci mode — so both the seed embedded in `dev-up` and a standalone
+  # `dev-seed` reach this point with no CA on disk. It still travels in the
+  # environment as DEV_M_TLS_CA_CERT, so re-materialize it from there (the
+  # helper is idempotent) instead of failing a run that has everything it
+  # needs. Local mode keeps its fail-fast below: there the file must exist.
+  if [ ! -s "$(mtls_ca_cert_path)" ] && [ "${DEV_PROFILE:-local}" = "ci" ]; then
+    mtls_ca_ensure
+  fi
   if [ ! -s "$(mtls_ca_cert_path)" ]; then
     fail "$ERR_SERVICE_UNHEALTHY" "cannot read gateway CA from $(mtls_ca_cert_path)"
   fi
