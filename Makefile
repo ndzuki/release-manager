@@ -127,6 +127,117 @@ dev-status: ## Print machine-readable data/dev-status.json
 .PHONY: dev-purge
 dev-purge: ## Delete every managed resource incl. registry (requires CONFIRM=1)
 	@$(DEV_SCRIPT) purge
+
+# TASK-066 formal E2E wiring. The private target assembles the one runtime
+# config from REQ-065 status/fixture artifacts; passwords stay in the process
+# environment and are never written to this YAML.
+E2E_DATA_DIR ?= data
+E2E_ENV_CONFIG ?= data/e2e-env-config.yaml
+E2E_LOCK_FILE ?= data/dev.lock
+E2E_CREDENTIALS_FILE ?= data/dev-credentials.env
+E2E_TEST_NAMESPACE ?=
+# Restart targets must come from the REQ-065 deployment manifest; callers may
+# provide the three concrete names when that artifact is available.
+E2E_RESTART_DEPLOYMENTS ?=
+E2E_ENVIRONMENT ?=
+
+OUTPUT_DIR ?= ./e2e-results
+TIMEOUT ?= 5m
+TOTAL_TIMEOUT ?= 25m
+PARALLEL ?= false
+KEEP_ON_FAILURE ?= false
+SNAPSHOT_FULL ?= false
+STAGES ?= all
+BASELINE_FILE ?= $(OUTPUT_DIR)/baseline.json
+ENV_CONFIG ?= $(E2E_ENV_CONFIG)
+
+.PHONY: e2e-env-config
+e2e-env-config:
+	@set -eu; \
+	command -v jq >/dev/null 2>&1 || { echo 'e2e-env-config: jq is required' >&2; exit 2; }; \
+	$(MAKE) --no-print-directory dev-status >/dev/null; \
+	status_file="$(E2E_DATA_DIR)/dev-status.json"; \
+	fixture_file="$(E2E_DATA_DIR)/dev-fixture.json"; \
+	test -r "$$status_file" || { echo "e2e-env-config: missing $$status_file" >&2; exit 2; }; \
+	test -r "$$fixture_file" || { echo "e2e-env-config: missing $$fixture_file" >&2; exit 2; }; \
+	export E2E_RESTART_DEPLOYMENTS="$(E2E_RESTART_DEPLOYMENTS)" E2E_TEST_NAMESPACE="$(E2E_TEST_NAMESPACE)" E2E_ENVIRONMENT="$(E2E_ENVIRONMENT)" E2E_KUBECONFIG="$(abspath $(E2E_DATA_DIR)/kubeconfig.yaml)"; \
+	if [ -z "$$E2E_RESTART_DEPLOYMENTS" ] && [ -f "$(E2E_DATA_DIR)/dev-deployments.json" ]; then \
+		E2E_RESTART_DEPLOYMENTS="$$(jq -r '(.restart_targets.deployments // .k3d.restart_targets.deployments // []) | join(" ")' "$(E2E_DATA_DIR)/dev-deployments.json")"; export E2E_RESTART_DEPLOYMENTS; \
+	fi; \
+	if [ -z "$$E2E_RESTART_DEPLOYMENTS" ]; then \
+		E2E_RESTART_DEPLOYMENTS="$$(jq -r '(.restart_targets.deployments // .k3d.restart_targets.deployments // []) | join(" ")' "$$status_file")"; export E2E_RESTART_DEPLOYMENTS; \
+	fi; \
+	if [ -z "$$E2E_RESTART_DEPLOYMENTS" ]; then \
+		echo 'e2e-env-config: missing restart deployment manifest' >&2; exit 2; \
+	fi; \
+	mkdir -p "$$(dirname "$(ENV_CONFIG)")"; \
+	tmp_config="$$(mktemp "$(ENV_CONFIG).tmp.XXXXXX")"; \
+	trap 'rm -f "$$tmp_config"' EXIT; \
+	jq -s --arg environment "$(E2E_ENVIRONMENT)" --arg namespace "$(E2E_TEST_NAMESPACE)" --arg kubeconfig "$(abspath $(E2E_DATA_DIR)/kubeconfig.yaml)" --arg deployments "$$E2E_RESTART_DEPLOYMENTS" '.[0] as $$s | .[1] as $$f | ($$f.definitions // {}) as $$definitions | ($$deployments | split(" ") | map(select(length > 0))) as $$restart | (($$f.operators // {}) | to_entries | sort_by(.key) | map(.value.id) | map(select(length > 0)) | (.[0] // "")) as $$operator_id | if ($$s.environment_id // "") == "" then error("missing environment_id") elif ($$s.fixture_version // "") == "" then error("missing fixture_version") elif (($$s.endpoints.orchestrator // "") == "" or ($$s.endpoints.webhook // "") == "" or ($$s.endpoints.operator // "") == "" or ($$s.endpoints.auth // "") == "" or ($$s.endpoints.notifier // "") == "" or ($$s.endpoints.web // "") == "") then error("missing endpoint") elif ($$operator_id == "") then error("missing e2e operator id; run make dev-seed to publish data/dev-fixture.json operators") elif (($$s.clusters.control.name // "") == "") then error("missing control cluster name") elif (($$restart | length) != 3 or ($$restart | unique | length) != 3) then error("restart deployment manifest must contain exactly three distinct names") elif (($$definitions["e2e-release-target"].id // "") == "" or ($$definitions["e2e-release-target"].bundle_id // "") == "" or ($$definitions["e2e-release-target"].values_revision_id // "") == "" or ($$definitions["e2e-isolation-target"].id // "") == "" or ($$definitions["e2e-isolation-target"].bundle_id // "") == "" or ($$definitions["e2e-isolation-target"].values_revision_id // "") == "" or ($$definitions["e2e-restart-target"].id // "") == "" or ($$definitions["e2e-restart-target"].bundle_id // "") == "" or ($$definitions["e2e-restart-target"].values_revision_id // "") == "") then error("missing e2e definition field") else {environment: (if $$environment != "" then $$environment else ($$s.profile // "local") end), environment_id: $$s.environment_id, endpoints: {release_orchestrator: $$s.endpoints.orchestrator, release_webhook: $$s.endpoints.webhook, release_operator: $$s.endpoints.operator, release_auth: $$s.endpoints.auth, release_notifier: $$s.endpoints.notifier, release_api: $$s.endpoints.web}, credentials: {e2e_runner: {username: "e2e-runner", password_env: "E2E_RUNNER_PASSWORD"}}, k3d: {kubeconfig: $$kubeconfig, context: ("k3d-" + ($$s.clusters.control.name // "release-manager-control")), cluster_contexts: (($$f.clusters // {}) | keys | map({key: ., value: ("k3d-" + .)}) | from_entries), test_namespace: (if $$namespace != "" then $$namespace else "release-manager-dev" end), restart_targets: {namespace: (if $$namespace != "" then $$namespace else "release-manager-dev" end), deployments: $$restart}}, seed: {customers: (($$f.customers // {}) | keys | sort), clusters_per_customer: (if (($$f.customers // {}) | length) == 0 then 0 else (((($$f.clusters // {}) | length) / (($$f.customers // {}) | length)) | floor) end), fixture_version: $$s.fixture_version, expected_identity: {customers: (($$f.customers // {}) | length), clusters: (($$f.clusters // {}) | length), routes_basic: (($$f.routes // {}) | length), definitions_basic: ([($$definitions | keys[]) | select(startswith("e2e-") | not)] | length), bundles: (if ($$f.bundle.id // "") != "" then 1 else ($$s.fixture_entities.bundles // 0) end), e2e_definition_ids: ([($$definitions | to_entries[]) | select(.key | startswith("e2e-")) | .value.id] | sort)}, e2e_upgrade_targets: [($$definitions | to_entries[]) | select(.key | startswith("e2e-")) | select(.key != "e2e-emergency-target")] | sort_by(.key) | map({logical_key: .key, definition_id: .value.id, bundle_id: .value.bundle_id, values_revision_id: .value.values_revision_id}), e2e_emergency_definition_id: ($$definitions["e2e-emergency-target"].id // ""), e2e_operator_id: $$operator_id}} end' "$$status_file" "$$fixture_file" > "$$tmp_config"; \
+	chmod 600 "$$tmp_config"; \
+	mv -f "$$tmp_config" "$(ENV_CONFIG)"
+
+.PHONY: e2e-prerequisite
+# dev-status is not implied by dev-up/dev-seed: only `dev-status` writes
+# data/dev-status.json, which smoke.sh requires. Leaving it out lets this gate
+# pass on a machine that happens to still hold a copy from an earlier run, and
+# fail on a clean checkout.
+e2e-prerequisite: dev-up dev-seed dev-status ## AC-066-17 prerequisite smoke (versioned gate for upstream chain changes)
+	@bash test/e2e/prerequisite/smoke.sh
+
+.PHONY: e2e-prerequisite-ci
+e2e-prerequisite-ci: ## AC-066-17 prerequisite smoke with artifact preservation and dev cleanup
+	@set -e; \
+	mkdir -p e2e-results; \
+	trap 'bash test/e2e/prerequisite/capture-logs.sh >/dev/null 2>&1 || true; cp -f data/smoke-result.json e2e-results/ 2>/dev/null || true; make dev-purge CONFIRM=1 >/dev/null 2>&1 || true' EXIT; \
+	$(MAKE) dev-up dev-seed dev-status; \
+	bash test/e2e/prerequisite/smoke.sh; \
+	bash test/e2e/prerequisite/capture-logs.sh >/dev/null 2>&1 || true; \
+	cp -f data/smoke-result.json e2e-results/ 2>/dev/null || true
+
+.PHONY: e2e-stage
+e2e-stage: ## Run selected E2E stages (STAGES=comma-separated list)
+	@set -eu; \
+	if [ -f "$(E2E_CREDENTIALS_FILE)" ]; then set -a; . "$(E2E_CREDENTIALS_FILE)"; set +a; fi; \
+	: "$${E2E_RUNNER_PASSWORD:?E2E_RUNNER_PASSWORD must be set or provided by CI}"; \
+	export E2E_RUNNER_PASSWORD E2E_ENV_CONFIG_PATH="$(ENV_CONFIG)" E2E_OUTPUT_DIR="$(OUTPUT_DIR)" E2E_STAGES="$(STAGES)" E2E_TIMEOUT="$(TIMEOUT)" E2E_TOTAL_TIMEOUT="$(TOTAL_TIMEOUT)" E2E_PARALLEL="$(PARALLEL)" E2E_KEEP_ON_FAILURE="$(KEEP_ON_FAILURE)" E2E_SNAPSHOT_FULL="$(SNAPSHOT_FULL)"; \
+	set +e; \
+	flock -s -n -E 3 "$(E2E_LOCK_FILE)" sh -c '$(MAKE) --no-print-directory ENV_CONFIG="$$E2E_ENV_CONFIG_PATH" e2e-env-config && exec $(GO) run ./cmd/e2e run --stages="$$E2E_STAGES" --timeout="$$E2E_TIMEOUT" --total-timeout="$$E2E_TOTAL_TIMEOUT" --output-dir="$$E2E_OUTPUT_DIR" --parallel="$$E2E_PARALLEL" --keep-on-failure="$$E2E_KEEP_ON_FAILURE" --snapshot-full="$$E2E_SNAPSHOT_FULL" --env-config="$$E2E_ENV_CONFIG_PATH"'; \
+	rc=$$?; \
+	set -e; \
+	if [ $$rc -eq 3 ]; then printf 'environment_locked: data/dev.lock is held by another dev operation\\n' >&2; fi; \
+	exit $$rc
+
+.PHONY: e2e-all
+e2e-all: ## Run all E2E stages (restores a previous run's residue first)
+	@set -eu; \
+	if [ "$${E2E_SKIP_PREFLIGHT_CLEANUP:-0}" = "1" ]; then \
+	  printf 'e2e-all: pre-flight cleanup skipped (E2E_SKIP_PREFLIGHT_CLEANUP=1)\n' >&2; \
+	elif [ ! -f "$(BASELINE_FILE)" ]; then \
+	  printf 'e2e-all: no previous baseline at %s; skipping pre-flight cleanup\n' "$(BASELINE_FILE)" >&2; \
+	else \
+	  printf 'e2e-all: restoring a previous run residue before starting (make e2e-cleanup)\n' >&2; \
+	  if $(MAKE) --no-print-directory e2e-cleanup; then \
+	    printf 'e2e-all: pre-flight cleanup completed\n' >&2; \
+	  else \
+	    printf 'e2e-all: pre-flight cleanup did not complete; continuing, the run will fail its own checks if the environment is still drifted\n' >&2; \
+	  fi; \
+	fi
+	@$(MAKE) --no-print-directory e2e-stage STAGES=all
+
+.PHONY: e2e-cleanup
+e2e-cleanup: ## Recover E2E resources through the formal cleanup API
+	@set -eu; \
+	if [ -f "$(E2E_CREDENTIALS_FILE)" ]; then set -a; . "$(E2E_CREDENTIALS_FILE)"; set +a; fi; \
+	: "$${E2E_RUNNER_PASSWORD:?E2E_RUNNER_PASSWORD must be set or provided by CI}"; \
+	export E2E_RUNNER_PASSWORD E2E_ENV_CONFIG_PATH="$(ENV_CONFIG)" E2E_OUTPUT_DIR="$(OUTPUT_DIR)" E2E_BASELINE_FILE="$(BASELINE_FILE)"; \
+	set +e; \
+	flock -s -n -E 3 "$(E2E_LOCK_FILE)" sh -c '$(MAKE) --no-print-directory ENV_CONFIG="$$E2E_ENV_CONFIG_PATH" e2e-env-config && exec $(GO) run ./cmd/e2e cleanup --env-config="$$E2E_ENV_CONFIG_PATH" --output-dir="$$E2E_OUTPUT_DIR" --baseline-file="$$E2E_BASELINE_FILE"'; \
+	rc=$$?; \
+	set -e; \
+	if [ $$rc -eq 3 ]; then printf 'environment_locked: data/dev.lock is held by another dev operation\\n' >&2; fi; \
+	exit $$rc
+
 # ---------------------------------------------------------------------------
 # Kulala integration — open .http files directly in Neovim
 # ---------------------------------------------------------------------------

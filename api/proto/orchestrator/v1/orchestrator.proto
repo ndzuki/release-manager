@@ -902,6 +902,12 @@ service OrchestratorService {
   rpc GetClusterRoutes(GetClusterRoutesRequest) returns (GetClusterRoutesResponse);
   rpc DeleteClusterRoute(DeleteClusterRouteRequest) returns (DeleteClusterRouteResponse);
   rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
+  // E2E observability (REQ-066): unfiltered release-inventory enumeration.
+  // Each row carries the stable identity of one observed release plus its
+  // active (non-terminal) operation when present; used for identity checks,
+  // release_busy discovery and e2e-cleanup recovery. values_digest and
+  // internal sync data are intentionally not exposed.
+  rpc ListReleaseInventory(ListReleaseInventoryRequest) returns (ListReleaseInventoryResponse);
   // Operation query (REQ-056)
   rpc ListOperations(ListOperationsRequest) returns (ListOperationsResponse);
   rpc TriggerInventorySync(TriggerInventorySyncRequest) returns (TriggerInventorySyncResponse);
@@ -988,6 +994,11 @@ message EmergencyTarget {
   map<string, string> current_annotations = 7;
   bool hpa_managed = 8;
   int32 max_emergency_replicas = 9;
+  // Cluster the workload runs in. The emergency workload belongs to the release
+  // definition's customer cluster, not the management plane, so a caller that
+  // must read the workload itself (the E2E replica observer) needs the cluster
+  // identity to select the right control plane.
+  string cluster = 10;
 }
 
 message CheckEmergencyConflictRequest {
@@ -1298,4 +1309,45 @@ message BundleImage {
   string tag = 2;
   string digest = 3;
   string values_path = 4;
+}
+
+// ── E2E release-inventory observability (REQ-066) ────────────────
+
+// ListReleaseInventoryRequest requests the full, unfiltered release-inventory
+// view. All rows are returned; callers page at their own risk on very large
+// environments (E2E/dev scale is bounded).
+message ListReleaseInventoryRequest {}
+
+// ListReleaseInventoryResponse is the complete observed release inventory.
+message ListReleaseInventoryResponse {
+  repeated ReleaseInventoryRow rows = 1;
+}
+
+// ReleaseInventoryRow is one observed release row plus its stable identity.
+// values_digest and internal sync data (snapshot versions, sync ids, observed
+// digests, workload UID) are intentionally not exposed.
+message ReleaseInventoryRow {
+  string customer_id = 1;
+  string customer_name = 2;
+  string cluster_id = 3;
+  string cluster_name = 4;
+  string release_definition_id = 5;
+  string release_definition_name = 6;
+  string namespace = 7;
+  string release_name = 8;
+  int32 revision = 9;
+  ReleaseInventoryStatus status = 10;
+  // active_operation carries the release definition's current non-terminal
+  // Operation (REQ-066): E2E uses it for e2e-runner startup takeover and for
+  // release_busy detection when the actor is not e2e-runner.
+  ActiveOperationRef active_operation = 11;
+}
+
+// ActiveOperationRef is the minimal public identity of one operation.
+message ActiveOperationRef {
+  string operation_id = 1;
+  string operation_type = 2;
+  OperationStatus state = 3;
+  // actor is the stable principal string (e.g. "e2e-runner" or a user id).
+  string actor = 4;
 }

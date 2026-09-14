@@ -42,7 +42,12 @@ require_k3d() {
     "install k3d >= 5.8 (e.g. 'curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash') and ensure k3d is on PATH"
   local raw version
   raw="$(k3d version 2>/dev/null || true)"
-  version="$(printf '%s\n' "$raw" | sed -nE 's/.*v([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | sed -n '1p')"
+  # Read the version off the `k3d version` line only. Scanning the whole output
+  # for the first vX.Y.Z match silently reports the *k3s* version when the k3d
+  # line carries no patch component — a `go install` build reports "v5-dev"
+  # and the k3s line follows it — which turns "unknown" into a confidently
+  # wrong "too old" and sends the operator chasing the wrong tool.
+  version="$(printf '%s\n' "$raw" | sed -nE 's/^k3d version v([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | sed -n '1p')"
   if [ -z "$version" ]; then
     fail "$ERR_K3D_UNAVAILABLE" "cannot determine k3d version from: $raw"
   fi

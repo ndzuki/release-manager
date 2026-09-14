@@ -1082,6 +1082,7 @@ func TestServiceReadOnlyProcedures(t *testing.T) {
 	for _, procedure := range []string{
 		orchestratorv1connect.OrchestratorServiceGetReleaseDefinitionProcedure,
 		orchestratorv1connect.OrchestratorServiceListReleaseDefinitionsProcedure,
+		orchestratorv1connect.OrchestratorServiceListReleaseInventoryProcedure,
 		orchestratorv1connect.OrchestratorServiceGetCustomerProcedure,
 		orchestratorv1connect.OrchestratorServiceListCustomersProcedure,
 		orchestratorv1connect.OrchestratorServiceGetClusterProcedure,

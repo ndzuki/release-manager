@@ -41,6 +41,9 @@ const (
 	// OperatorServiceCommandStreamProcedure is the fully-qualified name of the OperatorService's
 	// CommandStream RPC.
 	OperatorServiceCommandStreamProcedure = "/operator.v1.OperatorService/CommandStream"
+	// OperatorServiceGetActiveOperatorSessionProcedure is the fully-qualified name of the
+	// OperatorService's GetActiveOperatorSession RPC.
+	OperatorServiceGetActiveOperatorSessionProcedure = "/operator.v1.OperatorService/GetActiveOperatorSession"
 )
 
 // OperatorServiceClient is a client for the operator.v1.OperatorService service.
@@ -48,6 +51,9 @@ type OperatorServiceClient interface {
 	Enroll(context.Context, *connect.Request[v1.EnrollRequest]) (*connect.Response[v1.EnrollResponse], error)
 	RenewCertificate(context.Context, *connect.Request[v1.RenewCertificateRequest]) (*connect.Response[v1.RenewCertificateResponse], error)
 	CommandStream(context.Context) *connect.BidiStreamForClient[v1.CommandStreamRequest, v1.CommandStreamResponse]
+	// GetActiveOperatorSession exposes the persisted active session for E2E
+	// control-plane assertions without exposing capabilities (REQ-066).
+	GetActiveOperatorSession(context.Context, *connect.Request[v1.GetActiveOperatorSessionRequest]) (*connect.Response[v1.GetActiveOperatorSessionResponse], error)
 }
 
 // NewOperatorServiceClient constructs a client for the operator.v1.OperatorService service. By
@@ -79,14 +85,21 @@ func NewOperatorServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(operatorServiceMethods.ByName("CommandStream")),
 			connect.WithClientOptions(opts...),
 		),
+		getActiveOperatorSession: connect.NewClient[v1.GetActiveOperatorSessionRequest, v1.GetActiveOperatorSessionResponse](
+			httpClient,
+			baseURL+OperatorServiceGetActiveOperatorSessionProcedure,
+			connect.WithSchema(operatorServiceMethods.ByName("GetActiveOperatorSession")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // operatorServiceClient implements OperatorServiceClient.
 type operatorServiceClient struct {
-	enroll           *connect.Client[v1.EnrollRequest, v1.EnrollResponse]
-	renewCertificate *connect.Client[v1.RenewCertificateRequest, v1.RenewCertificateResponse]
-	commandStream    *connect.Client[v1.CommandStreamRequest, v1.CommandStreamResponse]
+	enroll                   *connect.Client[v1.EnrollRequest, v1.EnrollResponse]
+	renewCertificate         *connect.Client[v1.RenewCertificateRequest, v1.RenewCertificateResponse]
+	commandStream            *connect.Client[v1.CommandStreamRequest, v1.CommandStreamResponse]
+	getActiveOperatorSession *connect.Client[v1.GetActiveOperatorSessionRequest, v1.GetActiveOperatorSessionResponse]
 }
 
 // Enroll calls operator.v1.OperatorService.Enroll.
@@ -104,11 +117,19 @@ func (c *operatorServiceClient) CommandStream(ctx context.Context) *connect.Bidi
 	return c.commandStream.CallBidiStream(ctx)
 }
 
+// GetActiveOperatorSession calls operator.v1.OperatorService.GetActiveOperatorSession.
+func (c *operatorServiceClient) GetActiveOperatorSession(ctx context.Context, req *connect.Request[v1.GetActiveOperatorSessionRequest]) (*connect.Response[v1.GetActiveOperatorSessionResponse], error) {
+	return c.getActiveOperatorSession.CallUnary(ctx, req)
+}
+
 // OperatorServiceHandler is an implementation of the operator.v1.OperatorService service.
 type OperatorServiceHandler interface {
 	Enroll(context.Context, *connect.Request[v1.EnrollRequest]) (*connect.Response[v1.EnrollResponse], error)
 	RenewCertificate(context.Context, *connect.Request[v1.RenewCertificateRequest]) (*connect.Response[v1.RenewCertificateResponse], error)
 	CommandStream(context.Context, *connect.BidiStream[v1.CommandStreamRequest, v1.CommandStreamResponse]) error
+	// GetActiveOperatorSession exposes the persisted active session for E2E
+	// control-plane assertions without exposing capabilities (REQ-066).
+	GetActiveOperatorSession(context.Context, *connect.Request[v1.GetActiveOperatorSessionRequest]) (*connect.Response[v1.GetActiveOperatorSessionResponse], error)
 }
 
 // NewOperatorServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -136,6 +157,12 @@ func NewOperatorServiceHandler(svc OperatorServiceHandler, opts ...connect.Handl
 		connect.WithSchema(operatorServiceMethods.ByName("CommandStream")),
 		connect.WithHandlerOptions(opts...),
 	)
+	operatorServiceGetActiveOperatorSessionHandler := connect.NewUnaryHandler(
+		OperatorServiceGetActiveOperatorSessionProcedure,
+		svc.GetActiveOperatorSession,
+		connect.WithSchema(operatorServiceMethods.ByName("GetActiveOperatorSession")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/operator.v1.OperatorService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case OperatorServiceEnrollProcedure:
@@ -144,6 +171,8 @@ func NewOperatorServiceHandler(svc OperatorServiceHandler, opts ...connect.Handl
 			operatorServiceRenewCertificateHandler.ServeHTTP(w, r)
 		case OperatorServiceCommandStreamProcedure:
 			operatorServiceCommandStreamHandler.ServeHTTP(w, r)
+		case OperatorServiceGetActiveOperatorSessionProcedure:
+			operatorServiceGetActiveOperatorSessionHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -163,4 +192,8 @@ func (UnimplementedOperatorServiceHandler) RenewCertificate(context.Context, *co
 
 func (UnimplementedOperatorServiceHandler) CommandStream(context.Context, *connect.BidiStream[v1.CommandStreamRequest, v1.CommandStreamResponse]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("operator.v1.OperatorService.CommandStream is not implemented"))
+}
+
+func (UnimplementedOperatorServiceHandler) GetActiveOperatorSession(context.Context, *connect.Request[v1.GetActiveOperatorSessionRequest]) (*connect.Response[v1.GetActiveOperatorSessionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("operator.v1.OperatorService.GetActiveOperatorSession is not implemented"))
 }

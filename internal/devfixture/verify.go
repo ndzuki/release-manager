@@ -264,9 +264,14 @@ func (r *runner) verifyEnrollment(ctx context.Context) error {
 		if info.Size() == 0 {
 			return fmt.Errorf("verify: enrollment token for %s is empty", seed.id)
 		}
-		if err := r.waitClusterOperatorOnline(ctx, seed); err != nil {
+		operatorID, err := r.waitClusterOperatorOnline(ctx, seed)
+		if err != nil {
 			return err
 		}
+		if r.state.operators == nil {
+			r.state.operators = map[string]string{}
+		}
+		r.state.operators[seed.id] = operatorID
 	}
 	return nil
 }
@@ -280,30 +285,33 @@ var operatorOnlinePollPeriod = 3 * time.Second
 // bootstraps asynchronously after its cluster is applied, so the first
 // probes are expected to report offline/suspect; the timeout is the
 // deterministic outer bound (AC-065-18/28).
-func (r *runner) waitClusterOperatorOnline(ctx context.Context, seed clusterSeed) error {
+func (r *runner) waitClusterOperatorOnline(ctx context.Context, seed clusterSeed) (string, error) {
 	deadline := time.Now().Add(r.cfg.OperatorOnlineTimeout)
 	for {
-		err := r.requireClusterOperatorOnline(ctx, seed)
+		operatorID, err := r.requireClusterOperatorOnline(ctx, seed)
 		if err == nil {
-			return nil
+			return operatorID, nil
 		}
 		if time.Now().After(deadline) {
-			return err
+			return "", err
 		}
 		select {
 		case <-time.After(operatorOnlinePollPeriod):
 		case <-ctx.Done():
-			return ctx.Err()
+			return "", ctx.Err()
 		}
 	}
 }
 
-// requireClusterOperatorOnline lists operators for the cluster and fails
-// unless at least one has an ONLINE session (AC-065-18). ListOperators is
-// customer-scoped for external actors (real smoke 2026-08-28:
-// invalid_argument: customer_id is required), so the request carries the
-// deterministic seed customer id (the readback state may be empty on resume).
-func (r *runner) requireClusterOperatorOnline(ctx context.Context, seed clusterSeed) error {
+// requireClusterOperatorOnline lists operators for the cluster and returns the
+// id of one whose session is ONLINE, failing when none is (AC-065-18). The
+// operator id is minted by the orchestrator at enrollment, so this readback is
+// the only way to learn it; the manifest publishes it for consumers (E2E) that
+// address the session by id. ListOperators is customer-scoped for external
+// actors (real smoke 2026-08-28: invalid_argument: customer_id is required), so
+// the request carries the deterministic seed customer id (the readback state
+// may be empty on resume).
+func (r *runner) requireClusterOperatorOnline(ctx context.Context, seed clusterSeed) (string, error) {
 	customerID := r.state.customers[seed.customerKey]
 	if customerID == "" {
 		for _, cs := range customerSeeds {
@@ -314,7 +322,7 @@ func (r *runner) requireClusterOperatorOnline(ctx context.Context, seed clusterS
 		}
 	}
 	if customerID == "" {
-		return fmt.Errorf("operator_not_online: customer id unknown for cluster %s", seed.id)
+		return "", fmt.Errorf("operator_not_online: customer id unknown for cluster %s", seed.id)
 	}
 	listReq := connect.NewRequest(&orchestratorv1.ListOperatorsRequest{
 		ClusterId:  seed.id,
@@ -324,18 +332,18 @@ func (r *runner) requireClusterOperatorOnline(ctx context.Context, seed clusterS
 	withAuth(listReq, r.state.deployerToken)
 	response, err := r.clients.orch.ListOperators(ctx, listReq)
 	if err != nil {
-		return fmt.Errorf("operator_not_online: list operators for cluster %s: %w", seed.id, err)
+		return "", fmt.Errorf("operator_not_online: list operators for cluster %s: %w", seed.id, err)
 	}
 	for _, operator := range response.Msg.GetOperators() {
 		if operator.GetSessionStatus() == orchestratorv1.OperatorSessionStatus_OPERATOR_SESSION_STATUS_ONLINE {
-			return nil
+			return operator.GetId(), nil
 		}
 	}
 	statuses := make([]string, 0, len(response.Msg.GetOperators()))
 	for _, operator := range response.Msg.GetOperators() {
 		statuses = append(statuses, operator.GetSessionStatus().String())
 	}
-	return fmt.Errorf("operator_not_online: no online operator session for cluster %s (sessions: %v)",
+	return "", fmt.Errorf("operator_not_online: no online operator session for cluster %s (sessions: %v)",
 		seed.id, statuses)
 }
 
@@ -365,6 +373,18 @@ func (r *runner) buildManifest() *Manifest {
 	for _, seed := range clusterSeeds {
 		clusters[seed.id] = ClusterRef{ID: seed.id, Name: seed.name}
 	}
+	routes := make(map[string]RouteRef, len(routeSeeds))
+	for _, seed := range routeSeeds {
+		routes[seed.id] = RouteRef{ID: seed.id, ClusterKey: seed.clusterKey}
+	}
+	operators := make(map[string]OperatorRef, len(clusterSeeds))
+	for _, seed := range clusterSeeds {
+		operatorID := r.state.operators[seed.id]
+		if operatorID == "" {
+			continue
+		}
+		operators[seed.id] = OperatorRef{ID: operatorID, ClusterKey: seed.id}
+	}
 	definitions := make(map[string]DefinitionRef, len(definitionSeeds))
 	for _, seed := range definitionSeeds {
 		record := r.state.definitions[seed.logicalKey]
@@ -379,6 +399,8 @@ func (r *runner) buildManifest() *Manifest {
 		GeneratedAt:    r.cfg.nowRFC3339(),
 		Customers:      customers,
 		Clusters:       clusters,
+		Routes:         routes,
+		Operators:      operators,
 		Definitions:    definitions,
 		Bundle:         BundleRef{ID: r.state.bundle.id, Digest: r.state.bundle.digest},
 	}

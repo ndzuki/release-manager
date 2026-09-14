@@ -1,0 +1,97 @@
+# E2E environment configuration — non-secret template / schema fixture (REQ-066).
+#
+# This file is NOT a second runtime configuration source. The single runtime
+# env-config is assembled by the REQ-066 Makefile private target `e2e-env-config`
+# into `data/e2e-env-config.yaml` (0600) from REQ-065 outputs (dev-status.json /
+# dev-fixture.json / dev-credentials.env / kubeconfig) — see
+# Design/contracts/e2e-environment-config.md (D-023 D1, D-026 D6, D-031).
+#
+# This template exists so the strict YAML schema consumed by cmd/e2e
+# (test/e2e/config.go, KnownFields(true)) can be validated without a live dev
+# environment. Every value below is a placeholder shape; the Makefile assembly
+# derives real values from the seed manifest and must not hardcode them.
+environment: development
+environment_id: dev-local-e2e-template
+
+endpoints:
+  release_orchestrator: "http://localhost:8083"
+  release_webhook: "http://localhost:8082"
+  release_operator: "http://localhost:8084"
+  release_auth: "http://localhost:8085"
+  release_notifier: "http://localhost:8086"
+  release_api: "http://localhost:8087"
+
+credentials:
+  e2e_runner:
+    username: e2e-runner
+    password_env: E2E_RUNNER_PASSWORD
+
+k3d:
+  kubeconfig: "data/kubeconfig.yaml"
+  # The merged dev kubeconfig holds five clusters, so its current-context is
+  # whichever merged last (a customer cluster). The harness must be told the
+  # management context explicitly, exactly as dev.sh's ctl_kubectl does, or
+  # management writes land on a customer cluster.
+  context: "k3d-release-manager-control"
+  test_namespace: "release-manager-dev"
+  restart_targets:
+    namespace: "release-manager-dev"
+    # Deployment names are derived by the Makefile from the REQ-065 dev-up
+    # artifact (dev-status restart_targets), never hardcoded; the three entries
+    # here are the static shape the derivation yields. The operator gateway
+    # (8084) is the orchestrator container's second port rather than its own
+    # Deployment (folded in by TASK-065), so the control-plane write path is
+    # the release webhook (8082), the orchestrator (8083/8084) and auth (8085).
+    # This list must not drift from the RBAC resourceNames allowlist.
+    deployments:
+      - "auth"
+      - "orchestrator"
+      - "webhook"
+
+seed:
+  customers:
+    - "dev-customer-a"
+    - "dev-customer-b"
+  clusters_per_customer: 2
+  fixture_version: "vN"
+  expected_identity:
+    # Example shape only; the Makefile assembly derives all counts from the
+    # seed manifest and aligns them with fixture_version (AC-066-29, D-023 D4).
+    customers: 2
+    clusters: 4
+    routes_basic: 8
+    definitions_basic: 0
+    bundles: 1
+    # Server-side definition ids of the seeded E2E definitions. Must name exactly
+    # the definition_id of every entry in seed.e2e_upgrade_targets below plus
+    # seed.e2e_emergency_definition_id; the schema rejects a seed where the two
+    # halves disagree.
+    e2e_definition_ids:
+      - "<server definition id for e2e-release-target>"
+      - "<server definition id for e2e-isolation-target>"
+      - "<server definition id for e2e-emergency-target>"
+      - "<server definition id for e2e-restart-target>"
+  # Logical-key to server-id binding for the three UPGRADE targets. The fixture
+  # addresses definitions by logical key while the API only accepts the id the
+  # orchestrator minted, so both are published here and the stage resolves its
+  # target by key rather than by declared position.
+  e2e_upgrade_targets:
+    - logical_key: "e2e-release-target"
+      definition_id: "<server definition id>"
+      bundle_id: "<seed bundle id>"
+      values_revision_id: "<seed values revision id>"
+    - logical_key: "e2e-isolation-target"
+      definition_id: "<server definition id>"
+      bundle_id: "<seed bundle id>"
+      values_revision_id: "<seed values revision id>"
+    - logical_key: "e2e-restart-target"
+      definition_id: "<server definition id>"
+      bundle_id: "<seed bundle id>"
+      values_revision_id: "<seed values revision id>"
+  # The emergency stage submits an emergency replica change rather than an
+  # UPGRADE, so its definition id is published separately.
+  e2e_emergency_definition_id: "<server definition id for e2e-emergency-target>"
+  # The operator id the control-plane stage observes. The orchestrator mints it
+  # at enrollment, so dev-seed publishes the id it saw ONLINE
+  # (data/dev-fixture.json operators); it cannot be derived from a logical key.
+  e2e_operator_id: "<server operator id>"

@@ -471,6 +471,16 @@ func TestIdentityOrderingConcurrentReplayAndReportConverges(t *testing.T) {
 	const iterations = 40
 	var wg sync.WaitGroup
 	errCh := make(chan error, iterations*2)
+	// The operator contract allows exactly one command stream per operator:
+	// StreamRegistry.Register cancels the previous stream for the same
+	// operatorID ("Register replaces any stale stream for the Operator"), so
+	// these report streams used to evict each other and the evicted Send failed
+	// with "write envelope: EOF". That race is lost only under scheduling
+	// pressure, which is why it surfaced on a loaded CI runner and not locally.
+	// Serialising the report stream lifecycle keeps the concurrency this test is
+	// about — reports racing SyncInventory and replay under the same per-key
+	// lock — while respecting the one-stream-per-operator contract.
+	var reportStreamMu sync.Mutex
 	for i := 0; i < iterations; i++ {
 		wg.Add(2)
 		// Concurrently: SyncInventory creating the row + replay (read pending,
@@ -496,6 +506,10 @@ func TestIdentityOrderingConcurrentReplayAndReportConverges(t *testing.T) {
 			// Report buffering path: either row-present apply (which deletes
 			// pending) or row-absent buffer (which refreshes pending to a
 			// newer uid) — both under the same per-key lock as replay.
+			// Serialised against the other report streams only: SyncInventory
+			// above still runs concurrently with each report.
+			reportStreamMu.Lock()
+			defer reportStreamMu.Unlock()
 			f.reportIdentityItem(t, "apps", "example-conc", "DEPLOYMENT", "example-conc", "apps", "uid-new")
 		}()
 	}

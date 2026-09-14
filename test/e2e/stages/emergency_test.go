@@ -1,0 +1,402 @@
+package stages
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	e2e "github.com/ndzuki/release-manager/test/e2e"
+)
+
+// testEffectTimeout keeps the effect poll short. A case that never converges
+// would otherwise wait out the production timeout.
+const testEffectTimeout = 100 * time.Millisecond
+
+// replicaState is the simulated cluster replica count shared by the emergency
+// writer and the read-only observer, so the test exercises the real
+// "operation terminal != effect applied" ordering.
+type replicaState struct{ replicas int32 }
+
+type emergencyFake struct {
+	state      *replicaState
+	targets    []EmergencyTarget
+	targetsErr error
+
+	active    ActiveOperation
+	hasActive bool
+	activeErr error
+
+	cancels   []string
+	cancelErr error
+
+	setRef OperationRef
+	setErr error
+	sets   []EmergencySetReplicasRequest
+
+	pending  *int32
+	await    map[string]OperationRef
+	awaitErr map[string]error
+
+	// readyDelta makes the observer report readyReplicas != replicas.
+	readyDelta int32
+	observeErr error
+	// observeErrAfterChange defers observeErr until the change has been applied,
+	// so a case can make the *effect* unobservable without also failing the
+	// baseline read that precedes it.
+	observeErrAfterChange bool
+	reconciled            bool
+	// observedClusters records the cluster each observation was made against, so
+	// a case can prove the target's cluster reaches the observer.
+	observedClusters []string
+	// observations counts the reads; readyAfter makes the first N-1 of them report
+	// the new pod as not ready yet, so a case can prove the stage waits for the
+	// scale-up to actually converge.
+	observations int
+	readyAfter   int
+}
+
+func newEmergencyFake(replicas int32) *emergencyFake {
+	return &emergencyFake{
+		state: &replicaState{replicas: replicas},
+		targets: []EmergencyTarget{{
+			WorkloadKind: "Deployment",
+			Namespace:    "release-fixture",
+			WorkloadName: "release-fixture",
+			// Mirrors the live contract (D7=A): ListEmergencyTargets always
+			// reports current_replicas as an unavailable sentinel, so the stage
+			// must take its baseline from the observer. A regression to reading
+			// this field fails every case in TestEmergencyStageRun.
+			CurrentReplicas:  -1,
+			Cluster:          "dev-customer-a-direct",
+			OperationVersion: "v3",
+			Reference:        "deployments/release-fixture/release-fixture",
+		}},
+		setRef:   OperationRef{ID: "op-emergency", DefinitionID: "def-emergency", Type: "EMERGENCY"},
+		await:    map[string]OperationRef{},
+		awaitErr: map[string]error{},
+	}
+}
+
+func (f *emergencyFake) ActiveOperation(context.Context, string) (ActiveOperation, bool, error) {
+	return f.active, f.hasActive, f.activeErr
+}
+
+func (f *emergencyFake) Targets(context.Context, string) ([]EmergencyTarget, error) {
+	return f.targets, f.targetsErr
+}
+
+func (f *emergencyFake) SetReplicas(_ context.Context, req EmergencySetReplicasRequest) (OperationRef, error) {
+	f.sets = append(f.sets, req)
+	if f.setErr != nil {
+		return OperationRef{}, f.setErr
+	}
+	value := req.Replicas
+	f.pending = &value
+	return f.setRef, nil
+}
+
+func (f *emergencyFake) Cancel(_ context.Context, operationID string) error {
+	f.cancels = append(f.cancels, operationID)
+	return f.cancelErr
+}
+
+func (f *emergencyFake) AwaitOperation(_ context.Context, operationID string) (OperationRef, error) {
+	if err, ok := f.awaitErr[operationID]; ok {
+		return OperationRef{ID: operationID}, err
+	}
+	if f.pending != nil {
+		f.state.replicas = *f.pending
+		f.pending = nil
+		f.reconciled = true
+	}
+	if ref, ok := f.await[operationID]; ok {
+		return ref, nil
+	}
+	return OperationRef{ID: operationID, Status: wireSucceeded}, nil
+}
+
+func (f *emergencyFake) ObserveReplicas(_ context.Context, cluster, _, _ string) (ReplicaObservation, error) {
+	f.observedClusters = append(f.observedClusters, cluster)
+	f.observations++
+	if f.observeErr != nil && (!f.observeErrAfterChange || f.reconciled) {
+		return ReplicaObservation{}, f.observeErr
+	}
+	ready := f.state.replicas - f.readyDelta
+	if f.readyAfter > 0 && f.observations < f.readyAfter {
+		// The scale-up has been accepted but the new pod is not ready yet.
+		ready = f.state.replicas - 1
+	}
+	return ReplicaObservation{
+		Replicas: f.state.replicas,
+		Ready:    ready,
+	}, nil
+}
+
+func emergencyTarget() WriteTarget {
+	return WriteTarget{Name: "e2e-emergency-target", DefinitionID: "def-emergency"}
+}
+
+func TestEmergencyStageRun(t *testing.T) {
+	t.Parallel()
+
+	base := func() *emergencyFake {
+		fake := newEmergencyFake(1)
+		fake.await["op-emergency"] = OperationRef{ID: "op-emergency", Status: wireSucceeded}
+		return fake
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*emergencyFake)
+		want    error
+		wantReg int
+	}{
+		{name: "pass", wantReg: 1},
+		{
+			name:   "targets unavailable",
+			mutate: func(f *emergencyFake) { f.targetsErr = errors.New("private detail") },
+			want:   ErrSnapshotNotFound,
+		},
+		{
+			name:   "no targets",
+			mutate: func(f *emergencyFake) { f.targets = nil },
+			want:   ErrSnapshotNotFound,
+		},
+		{
+			name: "ambiguous targets",
+			mutate: func(f *emergencyFake) {
+				f.targets = append(f.targets, EmergencyTarget{WorkloadKind: "Deployment", Namespace: "ns", WorkloadName: "other", CurrentReplicas: 1})
+			},
+			want: ErrEffectUnknown,
+		},
+		{
+			name:   "baseline not positive",
+			mutate: func(f *emergencyFake) { f.state.replicas = 0 },
+			want:   ErrSnapshotNotFound,
+		},
+		{
+			name: "target equals baseline",
+			mutate: func(f *emergencyFake) {
+				f.state.replicas = 2
+			},
+			want: ErrFixtureStale,
+		},
+		{
+			name:   "set replicas rejected",
+			mutate: func(f *emergencyFake) { f.setErr = errors.New("private detail") },
+			want:   ErrOperationRejected,
+		},
+		{
+			name: "operation failed terminally",
+			mutate: func(f *emergencyFake) {
+				f.await["op-emergency"] = OperationRef{ID: "op-emergency", Status: wireFailed}
+			},
+			want: ErrOperationFailed,
+		},
+		{
+			name:   "effect not applied",
+			mutate: func(f *emergencyFake) { f.readyDelta = 1 },
+			want:   ErrEffectUnknown,
+			// The change was applied, so the failing assertion must still leave a
+			// restore behind.
+			wantReg: 1,
+		},
+		{
+			name: "effect unobservable",
+			mutate: func(f *emergencyFake) {
+				f.observeErr = errors.New("private detail")
+				f.observeErrAfterChange = true
+			},
+			want:    ErrEffectUnknown,
+			wantReg: 1,
+		},
+		{
+			name: "foreign active operation",
+			mutate: func(f *emergencyFake) {
+				f.hasActive = true
+				f.active = ActiveOperation{ID: "op-other", Actor: "user-1", Status: wireQueued}
+			},
+			want: ErrReleaseBusy,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fake := base()
+			if test.mutate != nil {
+				test.mutate(fake)
+			}
+			registry := e2e.NewCompensationRegistry()
+			stage := NewEmergencyStage(fake, fake, registry, emergencyTarget(), 2).WithEffectTimeout(testEffectTimeout).WithEffectTimeout(testEffectTimeout)
+
+			err := stage.Run(context.Background(), nil)
+			if test.want == nil {
+				if err != nil {
+					t.Fatalf("Run() error = %v", err)
+				}
+				if !stage.Result().Succeeded() {
+					t.Fatalf("Result() = %#v, want succeeded", stage.Result())
+				}
+				if stage.BaselineReplicas() != 1 {
+					t.Fatalf("BaselineReplicas() = %d, want 1", stage.BaselineReplicas())
+				}
+				// The workload lives in a customer cluster, so every observation
+				// must carry that cluster rather than reading the management plane.
+				for _, cluster := range fake.observedClusters {
+					if cluster != "dev-customer-a-direct" {
+						t.Fatalf("observed cluster = %q, want the target's cluster", cluster)
+					}
+				}
+				if got := fake.sets[0].Convergence; got != EmergencyConvergenceRevertOnNextReconcile {
+					t.Fatalf("convergence = %q, want REVERT_ON_NEXT_RECONCILE", got)
+				}
+				if got := fake.sets[0].WorkloadRef; got != "deployments/release-fixture/release-fixture" {
+					t.Fatalf("workload ref = %q, want the adapter-resolved plural GVR reference", got)
+				}
+				if got := fake.sets[0].OperationVersion; got != "v3" {
+					t.Fatalf("operation version = %q, want the observed v3", got)
+				}
+			} else if !errors.Is(err, test.want) {
+				t.Fatalf("Run() error = %v, want errors.Is(..., %v)", err, test.want)
+			}
+			if registry.Len() != test.wantReg {
+				t.Fatalf("registry.Len() = %d, want %d", registry.Len(), test.wantReg)
+			}
+		})
+	}
+}
+
+func TestEmergencyStageWaitsForTheAppliedEffectToConverge(t *testing.T) {
+	t.Parallel()
+
+	// The operation reaches its terminal state when the replica count is
+	// accepted, but the new pod still has to become ready. Failing on the first
+	// read would reject a change that is applying correctly, which is what the
+	// live environment did (replicas 2, ready 1).
+	fake := newEmergencyFake(1)
+	fake.await["op-emergency"] = OperationRef{ID: "op-emergency", Status: wireSucceeded}
+	fake.readyAfter = 3
+	registry := e2e.NewCompensationRegistry()
+	stage := NewEmergencyStage(fake, fake, registry, emergencyTarget(), 2).WithEffectTimeout(testEffectTimeout).WithEffectTimeout(5 * time.Second)
+
+	if err := stage.Run(context.Background(), nil); err != nil {
+		t.Fatalf("Run() error = %v, want the stage to wait for readiness", err)
+	}
+	if fake.observations < fake.readyAfter {
+		t.Fatalf("observations = %d, want at least %d (the stage must poll)", fake.observations, fake.readyAfter)
+	}
+	if registry.Len() != 1 {
+		t.Fatalf("registry.Len() = %d, want the restore compensation", registry.Len())
+	}
+}
+
+func TestEmergencyStageRejectsPromotionConvergence(t *testing.T) {
+	t.Parallel()
+
+	fake := newEmergencyFake(1)
+	fake.await["op-emergency"] = OperationRef{
+		ID:          "op-emergency",
+		Status:      wireSucceeded,
+		Convergence: EmergencyConvergenceRequirePromotion,
+	}
+	registry := e2e.NewCompensationRegistry()
+	stage := NewEmergencyStage(fake, fake, registry, emergencyTarget(), 2).WithEffectTimeout(testEffectTimeout)
+
+	err := stage.Run(context.Background(), nil)
+	if !errors.Is(err, ErrEffectUnknown) {
+		t.Fatalf("Run() error = %v, want ErrEffectUnknown for a promotion-backed change", err)
+	}
+	if registry.Len() != 0 {
+		t.Fatalf("registry.Len() = %d, want no compensation after a rejected convergence policy", registry.Len())
+	}
+}
+
+func TestEmergencyStageRestoreCompensation(t *testing.T) {
+	t.Parallel()
+
+	// A non-unit baseline guards against a compensation that hardcodes 1.
+	fake := newEmergencyFake(5)
+	fake.await["op-emergency"] = OperationRef{ID: "op-emergency", Status: wireSucceeded}
+	registry := e2e.NewCompensationRegistry()
+	stage := NewEmergencyStage(fake, fake, registry, emergencyTarget(), 2).WithEffectTimeout(testEffectTimeout)
+
+	if err := stage.Run(context.Background(), nil); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if fake.state.replicas != 2 {
+		t.Fatalf("replicas after change = %d, want 2", fake.state.replicas)
+	}
+	if err := registry.Run(context.Background()); err != nil {
+		t.Fatalf("registry.Run() error = %v", err)
+	}
+	if len(fake.sets) != 2 {
+		t.Fatalf("set_replicas calls = %d, want change + restore", len(fake.sets))
+	}
+	if fake.sets[1].Replicas != 5 {
+		t.Fatalf("restore replicas = %d, want the observed baseline 5", fake.sets[1].Replicas)
+	}
+	if fake.state.replicas != 5 {
+		t.Fatalf("replicas after restore = %d, want 5", fake.state.replicas)
+	}
+}
+
+func TestEmergencyStageRestoreFailureIsDirty(t *testing.T) {
+	t.Parallel()
+
+	fake := newEmergencyFake(1)
+	fake.await["op-emergency"] = OperationRef{ID: "op-emergency", Status: wireSucceeded}
+	registry := e2e.NewCompensationRegistry()
+	stage := NewEmergencyStage(fake, fake, registry, emergencyTarget(), 2).WithEffectTimeout(testEffectTimeout)
+	if err := stage.Run(context.Background(), nil); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// The restore effect never lands: the operation reports success but the
+	// observer keeps reporting ready replicas below the requested count.
+	fake.readyDelta = 1
+	if err := registry.Run(context.Background()); !errors.Is(err, e2e.ErrCompensationDirty) {
+		t.Fatalf("registry.Run() error = %v, want ErrCompensationDirty", err)
+	}
+}
+
+func TestEmergencyStageMissingDefinition(t *testing.T) {
+	t.Parallel()
+
+	registry := e2e.NewCompensationRegistry()
+	stage := NewEmergencyStage(newEmergencyFake(1), newEmergencyFake(1), registry, WriteTarget{Name: "e2e-emergency-target"}, 2)
+	err := stage.Run(context.Background(), nil)
+	if !errors.Is(err, ErrSnapshotNotFound) {
+		t.Fatalf("Run() error = %v, want ErrSnapshotNotFound", err)
+	}
+}
+
+func TestEmergencyTargetWorkloadReference(t *testing.T) {
+	t.Parallel()
+
+	target := EmergencyTarget{WorkloadKind: "StatefulSet", Namespace: "ns", WorkloadName: "app"}
+	// The diagnostic key is lowercase-kind; it is never sent as the API ref.
+	if got := target.WorkloadKey(); got != "statefulset/ns/app" {
+		t.Fatalf("WorkloadKey() = %q", got)
+	}
+	// Without an adapter-resolved reference the fallback is the diagnostic key,
+	// which is why a live adapter must always populate Reference.
+	if got := target.WorkloadReference(); got != "statefulset/ns/app" {
+		t.Fatalf("WorkloadReference() fallback = %q", got)
+	}
+	target.Reference = "statefulsets/ns/app"
+	if got := target.WorkloadReference(); got != "statefulsets/ns/app" {
+		t.Fatalf("WorkloadReference() = %q, want the adapter-resolved plural resource", got)
+	}
+}
+
+func TestEmergencyStageInvalidReplicaCount(t *testing.T) {
+	t.Parallel()
+
+	registry := e2e.NewCompensationRegistry()
+	stage := NewEmergencyStage(newEmergencyFake(1), newEmergencyFake(1), registry, emergencyTarget(), 0)
+	if err := stage.Run(context.Background(), nil); !errors.Is(err, ErrSnapshotNotFound) {
+		t.Fatalf("Run() error = %v, want ErrSnapshotNotFound for a non-positive target count", err)
+	}
+}

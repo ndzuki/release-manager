@@ -18,6 +18,35 @@ type inventoryStore struct {
 	gorm *DB
 }
 
+// inventorySelectColumns is the canonical release_inventory projection. Every
+// read path that decodes a whole row selects these columns in this order, which
+// keeps them in lockstep with scanInventoryRow.
+const inventorySelectColumns = `customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version,
+	revision, status, values_digest, observed_bundle_digest, observed_chart_digest,
+	observed_effective_values_digest, observed_manifest_digest, live_status, last_operation_id,
+	inventory_status, last_sync_id, snapshot_version,
+	workload_kind, workload_name, workload_namespace, workload_uid, created_at, updated_at`
+
+// scanInventoryRow decodes one row selected with inventorySelectColumns.
+func scanInventoryRow(scanner interface{ Scan(dest ...any) error }) (*store.ReleaseInventory, error) {
+	var item store.ReleaseInventory
+	var createdAt, updatedAt string
+	if err := scanner.Scan(
+		&item.CustomerID, &item.ClusterID, &item.ReleaseDefinitionID, &item.Namespace, &item.ReleaseName,
+		&item.Chart, &item.ChartVersion, &item.Revision, &item.Status, &item.ValuesDigest,
+		&item.ObservedBundleDigest, &item.ObservedChartDigest, &item.ObservedEffectiveValuesDigest,
+		&item.ObservedManifestDigest, &item.LiveStatus, &item.LastOperationID, &item.InventoryStatus, &item.LastSyncID,
+		&item.SnapshotVersion,
+		&item.WorkloadKind, &item.WorkloadName, &item.WorkloadNamespace, &item.WorkloadUID,
+		&createdAt, &updatedAt,
+	); err != nil {
+		return nil, err
+	}
+	item.CreatedAt, _ = time.Parse(time.RFC3339, createdAt) //nolint:errcheck // stored timestamps always valid RFC3339
+	item.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt) //nolint:errcheck // stored timestamps always valid RFC3339
+	return &item, nil
+}
+
 // Upsert inserts or updates an inventory row by unique key.
 func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventory) error {
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -69,11 +98,7 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 // ListByCluster returns all inventory rows for a cluster.
 func (s *inventoryStore) ListByCluster(ctx context.Context, customerID, clusterID string) ([]*store.ReleaseInventory, error) {
 	rows, err := s.gorm.QueryContext(ctx,
-		`SELECT customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version,
-		        revision, status, values_digest, observed_bundle_digest, observed_chart_digest,
-		        observed_effective_values_digest, observed_manifest_digest, live_status, last_operation_id,
-		        inventory_status, last_sync_id, snapshot_version,
-		        workload_kind, workload_name, workload_namespace, workload_uid, created_at, updated_at
+		`SELECT `+inventorySelectColumns+`
 		 FROM release_inventory
 		 WHERE customer_id = ? AND cluster_id = ?
 		 ORDER BY namespace, release_name`,
@@ -86,22 +111,36 @@ func (s *inventoryStore) ListByCluster(ctx context.Context, customerID, clusterI
 
 	var items []*store.ReleaseInventory
 	for rows.Next() {
-		var item store.ReleaseInventory
-		var createdAt, updatedAt string
-		if err := rows.Scan(
-			&item.CustomerID, &item.ClusterID, &item.ReleaseDefinitionID, &item.Namespace, &item.ReleaseName,
-			&item.Chart, &item.ChartVersion, &item.Revision, &item.Status, &item.ValuesDigest,
-			&item.ObservedBundleDigest, &item.ObservedChartDigest, &item.ObservedEffectiveValuesDigest,
-			&item.ObservedManifestDigest, &item.LiveStatus, &item.LastOperationID, &item.InventoryStatus, &item.LastSyncID,
-			&item.SnapshotVersion,
-			&item.WorkloadKind, &item.WorkloadName, &item.WorkloadNamespace, &item.WorkloadUID,
-			&createdAt, &updatedAt,
-		); err != nil {
+		item, err := scanInventoryRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan inventory: %w", err)
 		}
-		item.CreatedAt, _ = time.Parse(time.RFC3339, createdAt) //nolint:errcheck // stored timestamps always valid RFC3339
-		item.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt) //nolint:errcheck // stored timestamps always valid RFC3339
-		items = append(items, &item)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// ListAll returns every inventory row across all customers and clusters in a
+// deterministic order (REQ-066 unfiltered E2E enumeration). Tenancy filtering
+// is the caller's responsibility.
+func (s *inventoryStore) ListAll(ctx context.Context) ([]*store.ReleaseInventory, error) {
+	rows, err := s.gorm.QueryContext(ctx,
+		`SELECT `+inventorySelectColumns+`
+		 FROM release_inventory
+		 ORDER BY customer_id, cluster_id, namespace, release_name`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list all inventory: %w", err)
+	}
+	defer rows.Close()
+
+	var items []*store.ReleaseInventory
+	for rows.Next() {
+		item, err := scanInventoryRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan inventory: %w", err)
+		}
+		items = append(items, item)
 	}
 	return items, rows.Err()
 }
@@ -109,67 +148,38 @@ func (s *inventoryStore) ListByCluster(ctx context.Context, customerID, clusterI
 // GetByDefinition returns the inventory row linked to a release definition.
 func (s *inventoryStore) GetByDefinition(ctx context.Context, definitionID string) (*store.ReleaseInventory, error) {
 	row := s.gorm.QueryRowContext(ctx, `
-		SELECT customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version,
-		       revision, status, values_digest, observed_bundle_digest, observed_chart_digest,
-		       observed_effective_values_digest, observed_manifest_digest, live_status, last_operation_id,
-		       inventory_status, last_sync_id, snapshot_version,
-		       workload_kind, workload_name, workload_namespace, workload_uid, created_at, updated_at
+		SELECT `+inventorySelectColumns+`
 		FROM release_inventory
 		WHERE release_definition_id = ?
 	`, definitionID)
-	var item store.ReleaseInventory
-	if err := row.Scan(
-		&item.CustomerID, &item.ClusterID, &item.ReleaseDefinitionID, &item.Namespace, &item.ReleaseName,
-		&item.Chart, &item.ChartVersion, &item.Revision, &item.Status, &item.ValuesDigest,
-		&item.ObservedBundleDigest, &item.ObservedChartDigest, &item.ObservedEffectiveValuesDigest,
-		&item.ObservedManifestDigest, &item.LiveStatus, &item.LastOperationID, &item.InventoryStatus, &item.LastSyncID,
-		&item.SnapshotVersion,
-		&item.WorkloadKind, &item.WorkloadName, &item.WorkloadNamespace, &item.WorkloadUID,
-		&item.CreatedAt, &item.UpdatedAt,
-	); err != nil {
+	item, err := scanInventoryRow(row)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
 		return nil, fmt.Errorf("get inventory by definition: %w", err)
 	}
-	return &item, nil
+	return item, nil
 }
 
 // GetByReleaseKey returns the inventory row located by the unique key
 // (customer_id, cluster_id, namespace, release_name). Returns ErrNotFound when
 // no such row exists (REQ-088 replay reads the current row identity before a
 // D4=C tiered apply).
-//
-//nolint:dupl // inventory row scanners share the established 25-column decode structure
 func (s *inventoryStore) GetByReleaseKey(ctx context.Context, customerID, clusterID, namespace, releaseName string) (*store.ReleaseInventory, error) {
 	row := s.gorm.QueryRowContext(ctx, `
-		SELECT customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version,
-		       revision, status, values_digest, observed_bundle_digest, observed_chart_digest,
-		       observed_effective_values_digest, observed_manifest_digest, live_status, last_operation_id,
-		       inventory_status, last_sync_id, snapshot_version,
-		       workload_kind, workload_name, workload_namespace, workload_uid, created_at, updated_at
+		SELECT `+inventorySelectColumns+`
 		FROM release_inventory
 		WHERE customer_id = ? AND cluster_id = ? AND namespace = ? AND release_name = ?
 	`, customerID, clusterID, namespace, releaseName)
-	var item store.ReleaseInventory
-	var createdAt, updatedAt string
-	if err := row.Scan(
-		&item.CustomerID, &item.ClusterID, &item.ReleaseDefinitionID, &item.Namespace, &item.ReleaseName,
-		&item.Chart, &item.ChartVersion, &item.Revision, &item.Status, &item.ValuesDigest,
-		&item.ObservedBundleDigest, &item.ObservedChartDigest, &item.ObservedEffectiveValuesDigest,
-		&item.ObservedManifestDigest, &item.LiveStatus, &item.LastOperationID, &item.InventoryStatus, &item.LastSyncID,
-		&item.SnapshotVersion,
-		&item.WorkloadKind, &item.WorkloadName, &item.WorkloadNamespace, &item.WorkloadUID,
-		&createdAt, &updatedAt,
-	); err != nil {
+	item, err := scanInventoryRow(row)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
 		return nil, fmt.Errorf("get inventory by release key: %w", err)
 	}
-	item.CreatedAt, _ = time.Parse(time.RFC3339, createdAt) //nolint:errcheck // stored timestamps always valid RFC3339
-	item.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt) //nolint:errcheck // stored timestamps always valid RFC3339
-	return &item, nil
+	return item, nil
 }
 
 // UpdateWorkloadIdentity overwrites the authoritative workload identity on

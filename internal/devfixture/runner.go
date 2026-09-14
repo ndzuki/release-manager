@@ -177,6 +177,10 @@ type runState struct {
 
 	customers map[string]string // logical key → server id
 	clusters  map[string]string // cluster id → server id (id == logical key)
+	// operators maps cluster id → the operator id whose session reached
+	// ONLINE during the enrollment wait. The operator id is minted by the
+	// orchestrator at enrollment, so it is only knowable from this readback.
+	operators map[string]string
 	// definitions maps logical key → definition record (ids filled in).
 	definitions map[string]definitionRecord
 	bundle      bundleRecord
@@ -395,6 +399,7 @@ func (r *runner) run(ctx context.Context) (*Manifest, error) {
 			r.state.definitions = map[string]definitionRecord{}
 			r.state.customers = map[string]string{}
 			r.state.clusters = map[string]string{}
+			r.state.operators = map[string]string{}
 			r.state.operations = r.progress.Phases["install"].Operations
 			r.state.bundle = bundleRecord{
 				id:     r.progress.Phases["bundle"].BundleID,

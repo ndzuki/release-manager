@@ -30,6 +30,65 @@ func seedInventoryItem(t *testing.T, st interface {
 	require.NoError(t, st.Inventories().Upsert(t.Context(), item))
 }
 
+func inventoryKey(item *store.ReleaseInventory) string {
+	return item.CustomerID + "/" + item.ClusterID + "/" + item.Namespace + "/" + item.ReleaseName
+}
+
+// TestInventoryListAllReturnsEveryScopeInStableOrder covers the observable
+// store seam only: callers receive every customer/cluster row in key order.
+func TestInventoryListAllReturnsEveryScopeInStableOrder(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+
+	for _, item := range []struct {
+		customerID string
+		clusterID  string
+		namespace  string
+		release    string
+	}{
+		{customerID: "customer-b", clusterID: "cluster-z", namespace: "ops", release: "zulu"},
+		{customerID: "customer-a", clusterID: "cluster-z", namespace: "apps", release: "beta"},
+		{customerID: "customer-a", clusterID: "cluster-a", namespace: "ops", release: "alpha"},
+		{customerID: "customer-a", clusterID: "cluster-a", namespace: "apps", release: "zulu"},
+		{customerID: "customer-a", clusterID: "cluster-a", namespace: "apps", release: "alpha"},
+	} {
+		seedInventoryItem(t, st, item.customerID, item.clusterID, item.namespace, item.release)
+	}
+
+	want := []string{
+		"customer-a/cluster-a/apps/alpha",
+		"customer-a/cluster-a/apps/zulu",
+		"customer-a/cluster-a/ops/alpha",
+		"customer-a/cluster-z/apps/beta",
+		"customer-b/cluster-z/ops/zulu",
+	}
+
+	list, err := st.Inventories().ListAll(ctx)
+	require.NoError(t, err)
+	require.Len(t, list, len(want))
+	got := make([]string, 0, len(list))
+	for _, item := range list {
+		got = append(got, inventoryKey(item))
+	}
+	assert.Equal(t, want, got)
+
+	list, err = st.Inventories().ListAll(ctx)
+	require.NoError(t, err)
+	got = got[:0]
+	for _, item := range list {
+		got = append(got, inventoryKey(item))
+	}
+	assert.Equal(t, want, got)
+}
+
+func TestInventoryListAllReturnsEmptyList(t *testing.T) {
+	st := setupStore(t)
+
+	list, err := st.Inventories().ListAll(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, list)
+}
+
 // AC-085-01/04 (store seam): UpdateWorkloadIdentity persists the authoritative
 // identity on the unique-key row and is idempotent; unknown rows return
 // store.ErrNotFound (fail-closed: identity is never inserted implicitly).

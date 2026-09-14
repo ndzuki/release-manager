@@ -689,6 +689,7 @@ func orchestratorReadOnlyProcedures() map[string]struct{} {
 	return map[string]struct{}{
 		orchestratorv1connect.OrchestratorServiceGetReleaseDefinitionProcedure:     {},
 		orchestratorv1connect.OrchestratorServiceListReleaseDefinitionsProcedure:   {},
+		orchestratorv1connect.OrchestratorServiceListReleaseInventoryProcedure:     {},
 		orchestratorv1connect.OrchestratorServiceGetCustomerProcedure:              {},
 		orchestratorv1connect.OrchestratorServiceListCustomersProcedure:            {},
 		orchestratorv1connect.OrchestratorServiceGetClusterProcedure:               {},

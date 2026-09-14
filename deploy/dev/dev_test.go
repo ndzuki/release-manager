@@ -393,6 +393,45 @@ func TestCiProfileRequiresE2ERunID(t *testing.T) {
 	}
 }
 
+// TestRequireK3dReadsTheK3dVersionLine pins the k3d guard against the
+// order-dependent parse it shipped with. `k3d version` prints two lines — k3d
+// first, then the k3s it bundles — and the guard took the first vX.Y.Z match
+// from the whole output. A k3d built by `go install` cannot embed its version
+// and reports "v5-dev" (no patch component), so that match fell through to the
+// k3s line and the guard rejected a perfectly good install with "k3d v1.21.7
+// is too old", naming a version that is not k3d's at all and sending the
+// operator after the wrong tool.
+//
+// The shims used by the other tests print the k3d line only, which is exactly
+// why this went unnoticed; this one reproduces the real two-line output.
+func TestRequireK3dReadsTheK3dVersionLine(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	writeShim(t, binDir, "flock", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "docker", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "k3d",
+		"#!/usr/bin/env bash\nprintf 'k3d version v5-dev\\nk3s version v1.21.7-k3s1 (default)\\n'\n")
+	writeShim(t, binDir, "curl", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "kubectl", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("expected the guard to reject an unparseable k3d version:\n%s", out)
+	}
+	if !strings.Contains(out, "k3d_unavailable") {
+		t.Fatalf("expected k3d_unavailable:\n%s", out)
+	}
+	if !strings.Contains(out, "cannot determine k3d version") {
+		t.Fatalf("expected an explicit version-parse failure:\n%s", out)
+	}
+	// The regression itself: the k3s line must never be reported as the k3d
+	// version. "too old" is the confidently wrong conclusion this bug drew.
+	if strings.Contains(out, "too old") {
+		t.Fatalf("guard reported the k3s version as an outdated k3d:\n%s", out)
+	}
+}
+
 // fakeK3d installs the stateful k3d shim from testdata/fake-k3d.sh: cluster
 // list/create/delete, registry list/create and kubeconfig get/merge all work
 // against a per-test state dir, so dev.sh up/down runs end-to-end without
@@ -694,23 +733,70 @@ func TestClusterCreateInjectsProxyEnv(t *testing.T) {
 		if !strings.HasPrefix(line, "build ") {
 			continue
 		}
-		if !strings.Contains(line, "--build-arg HTTP_PROXY=http://127.0.0.1:7890") ||
-			!strings.Contains(line, "--build-arg HTTPS_PROXY=http://127.0.0.1:7890") ||
-			// Real smoke 2026-08-27: the google default module host is
-			// unreachable directly from CN hosts and buildkit cannot reach a
-			// loopback host proxy — the build chain must prepend the
-			// directly-reachable goproxy.cn as the primary entry.
-			!strings.Contains(line, "--build-arg GOPROXY=https://goproxy.cn,https://proxy.golang.org,direct") {
-			t.Fatalf("docker build missing proxy/GOPROXY build-args: %s", line)
+		// The configured proxy is loopback-bound, so it cannot serve a RUN
+		// step (127.0.0.1 there is the build container itself). BuildKit
+		// forwards the client's proxy variables automatically, so dev.sh must
+		// clear them explicitly or every fetch inside the step fails
+		// (real smoke 2026-09-11: `npm ci` -> ECONNREFUSED 127.0.0.1:7890
+		// while registry.npmjs.org answered 200 directly).
+		if !strings.Contains(line, "--build-arg HTTP_PROXY= ") ||
+			!strings.Contains(line, "--build-arg HTTPS_PROXY= ") ||
+			!strings.Contains(line, "--build-arg http_proxy= ") ||
+			!strings.Contains(line, "--build-arg https_proxy= ") {
+			t.Fatalf("docker build did not clear the loopback proxy: %s", line)
 		}
-		// The first GOPROXY host must be exempted in NO_PROXY (module
-		// fetches go direct instead of through the loopback proxy).
-		if !strings.Contains(line, "--build-arg NO_PROXY=localhost,127.0.0.1,goproxy.cn") {
-			t.Fatalf("docker build NO_PROXY missing goproxy host exemption: %s", line)
+		if strings.Contains(line, "--build-arg HTTP_PROXY=http://127.0.0.1:7890") {
+			t.Fatalf("docker build injected an unreachable loopback proxy: %s", line)
+		}
+		// Real smoke 2026-08-27: the google default module host is
+		// unreachable directly from CN hosts — the build chain must prepend
+		// the directly-reachable goproxy.cn as the primary entry.
+		if !strings.Contains(line, "--build-arg GOPROXY=https://goproxy.cn,https://proxy.golang.org,direct") {
+			t.Fatalf("docker build missing GOPROXY build-arg: %s", line)
 		}
 		if strings.Contains(line, "release-web:") &&
 			!strings.Contains(line, "--build-arg NODE_IMAGE=docker.1ms.run/library/node:24-alpine") {
 			t.Fatalf("web build missing NODE_IMAGE mirror build-arg: %s", line)
+		}
+		buildInjected = true
+	}
+	if !buildInjected {
+		t.Fatalf("no docker build invocation recorded:\n%s", calls)
+	}
+}
+
+// TestClusterCreateInjectsReachableProxyEnv covers the other half of the proxy
+// contract: a proxy a build container CAN reach is injected into the build
+// args, and the GOPROXY host is exempted in NO_PROXY so module fetches bypass
+// it (real smoke 2026-08-27).
+func TestClusterCreateInjectsReachableProxyEnv(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	writeShim(t, binDir, "docker",
+		"#!/usr/bin/env bash\nif [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"network\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
+	env = append(env, "HTTP_PROXY=http://proxy.corp.internal:3128", "HTTPS_PROXY=http://proxy.corp.internal:3128",
+		"GOPROXY=", "DEV_DOCKER_MIRROR=docker.1ms.run/library/")
+
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("dev-up failed:\n%s", out)
+	}
+	calls, err := os.ReadFile(filepath.Join(stateDir, "docker-calls.log"))
+	if err != nil {
+		t.Fatalf("docker-calls.log not written: %v", err)
+	}
+	var buildInjected bool
+	for _, line := range strings.Split(strings.TrimSpace(string(calls)), "\n") {
+		if !strings.HasPrefix(line, "build ") {
+			continue
+		}
+		if !strings.Contains(line, "--build-arg HTTP_PROXY=http://proxy.corp.internal:3128") ||
+			!strings.Contains(line, "--build-arg HTTPS_PROXY=http://proxy.corp.internal:3128") {
+			t.Fatalf("docker build missing a reachable proxy build-arg: %s", line)
+		}
+		if !strings.Contains(line, "--build-arg NO_PROXY=localhost,127.0.0.1,goproxy.cn") {
+			t.Fatalf("docker build NO_PROXY missing the goproxy host exemption: %s", line)
 		}
 		buildInjected = true
 	}
@@ -730,12 +816,95 @@ func TestStatusJSONSchema(t *testing.T) {
 		`"environment_id":"dev-local"`, `"profile":"local"`,
 		`"control":{"name":"release-manager-control"`,
 		`"endpoints":{"webhook":"http://localhost:8082"`,
-		`"operator_sessions":0`, `"fixture_entities":{"customers":0`,
-		`"bootstrap_installs":0`,
+		// A never-seeded environment reports no entities, not zeros shaped like
+		// measurements.
+		`"fixture_entities":{}`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("status output missing %s:\n%s", want, out)
 		}
+	}
+}
+
+// TestStatusDerivesRestartTargetsFromTheControlPlane covers the D-029 D3
+// contract: the REQ-066 restart targets are derived from the live management
+// cluster, so a reshaped control plane cannot leave a stale Deployment name
+// behind (the operator gateway was folded into the orchestrator container by
+// TASK-065). Only the control-plane write path is a target: web, notifier and
+// the datastores are present in the cluster but must not be restarted.
+func TestStatusDerivesRestartTargetsFromTheControlPlane(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	writeShim(t, binDir, "kubectl", `#!/usr/bin/env bash
+cat <<'TABLE'
+auth	8085 
+notification-sink	8088 
+notifier	8086 
+orchestrator	8083 8084 
+postgres	5432 
+redis	6379 
+web	8087 
+webhook	8082 
+TABLE
+`)
+
+	out, err := runDev(t, env, "status")
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, out)
+	}
+	want := `"restart_targets":{"namespace":"release-manager-dev","deployments":["auth","orchestrator","webhook"]}`
+	if !strings.Contains(out, want) {
+		t.Fatalf("status output missing %s:\n%s", want, out)
+	}
+	// The exclusions are asserted on the restart_targets fragment alone: the
+	// same names legitimately appear in the endpoints block above it.
+	idx := strings.Index(out, `"restart_targets":`)
+	if idx < 0 {
+		t.Fatalf("status output has no restart_targets block:\n%s", out)
+	}
+	for _, unexpected := range []string{`"web"`, `"notifier"`, `"notification-sink"`, `"postgres"`, `"redis"`} {
+		if strings.Contains(out[idx:], unexpected) {
+			t.Fatalf("restart targets leaked %s:\n%s", unexpected, out)
+		}
+	}
+}
+
+// TestStatusProjectsFixtureEntitiesFromTheFixture covers the fixture_entities
+// block. It used to be a hand-maintained list of eight names, four of which
+// (operator_sessions, bundles, bootstrap_installs, values_revisions) the fixture
+// does not have, so half the block reported a false zero however it was seeded.
+// It is now a projection of the fixture's own keys.
+//
+// The fixture mixes two object shapes and the projection has to tell them apart:
+// a keyed collection counts its entries, while a single resource (bundle) has
+// scalar fields and denotes one entity. Counting bundle's keys would report 2 for
+// the one bundle the fixture defines.
+func TestStatusProjectsFixtureEntitiesFromTheFixture(t *testing.T) {
+	stateDir := t.TempDir()
+	env, _ := fakeEnv(t, stateDir)
+	fixture := `{
+	  "fixture_version": "fixture-v2",
+	  "generated_at": "2026-01-01T00:00:00Z",
+	  "customers": {"dev-customer-a": {}, "dev-customer-b": {}},
+	  "clusters": {"a": {}, "b": {}, "c": {}, "d": {}},
+	  "routes": {"r1": {}, "r2": {}, "r3": {}},
+	  "definitions": {"d1": {}, "d2": {}},
+	  "bundle": {"id": "bundle-1", "values_revision_id": "vr-1"}
+	}`
+	if err := os.WriteFile(filepath.Join(stateDir, "dev-fixture.json"), []byte(fixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runDev(t, env, "status")
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, out)
+	}
+	// Asserted as one block so the test also pins what is absent: the metadata
+	// keys are not entities, the dead names are gone, and bundle counts one
+	// resource rather than its two fields.
+	want := `"fixture_entities":{"customers":2,"clusters":4,"routes":3,"definitions":2,"bundle":1}`
+	if !strings.Contains(out, want) {
+		t.Fatalf("status output missing %s:\n%s", want, out)
 	}
 }
 

@@ -789,6 +789,15 @@ clusters_up() {
   done
   if [ "${#existing[@]}" -gt 0 ]; then
     k3d kubeconfig merge "${existing[@]}" -o "$DEV_DATA_DIR/kubeconfig.yaml" >/dev/null
+    # k3d kubeconfig merge rebuilds each cluster entry from k3d's own state, so
+    # the merge reintroduces https://0.0.0.0:<port> for every k3d-assigned API
+    # port even though cluster_up already rewrote the per-cluster files. This
+    # merged file is the one the E2E harness loads, so without the same rewrite
+    # here the harness cannot dial any customer cluster (real smoke 2026-09-11:
+    # the replica observer reached the control cluster and reported the
+    # emergency workload as absent, while https://127.0.0.1:<port>/api answered
+    # 401 for the cluster that actually hosts it).
+    sed -i 's#https://0\.0\.0\.0:#https://127.0.0.1:#g' "$DEV_DATA_DIR/kubeconfig.yaml"
     # Merged file carries the same admin credentials: 0600 too (AC-065-40).
     chmod 600 "$DEV_DATA_DIR/kubeconfig.yaml"
   fi
@@ -845,6 +854,29 @@ goproxy_no_proxy_host() {
   printf '%s' "$(build_goproxy)" | sed -nE 's#^https?://([^/,:]+).*#\1#p' | sed -n '1p'
 }
 
+# build_proxy_host — the hostname of the effective build proxy (HTTPS first,
+# then HTTP, upper or lower case). Empty when no proxy is configured.
+build_proxy_host() {
+  local proxy="${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-}}}}"
+  printf '%s' "$proxy" | sed -nE 's#^[a-zA-Z][a-zA-Z0-9+.-]*://([^/,:]+).*#\1#p' | sed -n '1p'
+}
+
+# build_proxy_is_container_reachable — whether the effective proxy can be used
+# from inside a buildkit RUN step. A proxy bound to the host's loopback cannot:
+# 127.0.0.1 inside the build container is the container itself (real smoke
+# 2026-08-27 for `go mod download`, 2026-09-11 for `npm ci`). Injecting such a
+# proxy turns every fetch into a connection refusal, so callers clear it
+# instead. An unset proxy reports false as well: there is nothing to inject.
+build_proxy_is_container_reachable() {
+  local host
+  host="$(build_proxy_host)"
+  [ -n "$host" ] || return 1
+  case "$host" in
+    127.*|localhost|::1|0.0.0.0) return 1 ;;
+  esac
+  return 0
+}
+
 # image_record <service> — compute the content hash, record it in IMAGE_TAGS
 # (so kustomize_apply can pin the exact digest), and report whether a build
 # is needed (0) or the manifest already exists in the registry (1).
@@ -884,8 +916,19 @@ build_push_now() {
   # behind a proxy must pass it into the build container or `go mod download`
   # inside the Dockerfile fails (Go modules resolve through the proxy). The
   # value is the caller's, matching the node injection (REQ-065 framework).
+  #
+  # A LOOPBACK proxy is a special case: the daemon (image pulls) reaches it,
+  # but a buildkit RUN step does not — 127.0.0.1 there is the build container
+  # itself. BuildKit forwards the client's proxy variables into every RUN step
+  # automatically, so leaving them in place breaks each fetch that the proxy
+  # cannot serve (real smoke 2026-09-11: `npm ci` died with
+  # "ECONNREFUSED 127.0.0.1:7890" while registry.npmjs.org answered 200
+  # directly). Clear them explicitly so RUN steps go direct; the pull still
+  # uses the client's proxy. The Go path worked around the same limitation by
+  # adding the GOPROXY host to NO_PROXY, which only helps fetches that honour
+  # NO_PROXY.
   local build_args=()
-  if [ -n "${HTTP_PROXY:-}${http_proxy:-}${HTTPS_PROXY:-}${https_proxy:-}" ]; then
+  if build_proxy_is_container_reachable; then
     build_args+=(
       --build-arg "HTTP_PROXY=${HTTP_PROXY:-${http_proxy:-}}"
       --build-arg "HTTPS_PROXY=${HTTPS_PROXY:-${https_proxy:-}}"
@@ -896,6 +939,13 @@ build_push_now() {
       # so module fetches bypass the proxy and go direct (goproxy.cn is
       # directly reachable from CN hosts, verified 200/52ms).
       --build-arg "NO_PROXY=localhost,127.0.0.1,$(goproxy_no_proxy_host)${NO_PROXY:+,$NO_PROXY}"
+    )
+  elif [ -n "$(build_proxy_host)" ]; then
+    build_args+=(
+      --build-arg "HTTP_PROXY="
+      --build-arg "HTTPS_PROXY="
+      --build-arg "http_proxy="
+      --build-arg "https_proxy="
     )
   fi
   # GOPROXY build-arg: the container's default proxy.golang.org is
@@ -1230,6 +1280,16 @@ agents_up() {
   # (deploy/kustomize/services/orchestrator.yaml). agents_up copies the
   # LOCAL file — the orchestrator image is distroless (no cat/sh), so `exec
   # ... cat /data/gateway-ca.crt` can never work (real smoke 2026-08-27).
+  # The ci profile deletes the transient CA right after kustomize apply (批次5
+  # D1), and cmd_seed deliberately does not require the file to be present in
+  # ci mode — so both the seed embedded in `dev-up` and a standalone
+  # `dev-seed` reach this point with no CA on disk. It still travels in the
+  # environment as DEV_M_TLS_CA_CERT, so re-materialize it from there (the
+  # helper is idempotent) instead of failing a run that has everything it
+  # needs. Local mode keeps its fail-fast below: there the file must exist.
+  if [ ! -s "$(mtls_ca_cert_path)" ] && [ "${DEV_PROFILE:-local}" = "ci" ]; then
+    mtls_ca_ensure
+  fi
   if [ ! -s "$(mtls_ca_cert_path)" ]; then
     fail "$ERR_SERVICE_UNHEALTHY" "cannot read gateway CA from $(mtls_ca_cert_path)"
   fi
@@ -1495,6 +1555,31 @@ cmd_seed() {
   seed
 }
 
+# control_plane_restart_deployments — derive the REQ-066 restart targets from
+# the live management cluster instead of hardcoding them (D-029 D3).
+#
+# A restart target is a Deployment that serves one of the control-plane API
+# ports the E2E runner writes through: the release webhook (8082), the
+# orchestrator and its operator gateway (8083/8084) and auth (8085). `web`,
+# `notifier` and `notification-sink` are outside that write path and are
+# intentionally excluded, so the derived set is exactly three Deployments.
+# Deriving keeps the list correct when the control plane is reshaped — the
+# operator gateway was folded into the orchestrator container in TASK-065, and
+# a hardcoded name would have silently kept pointing at a Deployment that no
+# longer exists. An absent cluster yields no names; the caller validates.
+control_plane_restart_deployments() {
+  ctl_kubectl -n release-manager-dev get deployments \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{range .spec.template.spec.containers[*]}{range .ports[*]}{.containerPort}{" "}{end}{end}{"\n"}{end}' 2>/dev/null |
+    awk '
+      BEGIN { split("8082 8083 8084 8085", ports, " "); for (i in ports) wanted[ports[i]] = 1 }
+      {
+        for (i = 2; i <= NF; i++) {
+          if ($i in wanted) { print $1; break }
+        }
+      }
+    ' | sort -u
+}
+
 cmd_status() {
   acquire_lock status shared
   local status_file="$DEV_DATA_DIR/dev-status.json"
@@ -1527,33 +1612,70 @@ cmd_status() {
     first=0
   done
   printf '},' >> "$status_file"
-  # Fixture-derived counters come from data/dev-fixture.json when present;
-  # a missing fixture (never seeded) reports zeros.
-  local sessions installs customers clusters routes definitions values bundles
-  sessions="$(fixture_counter "$fixture_file" operator_sessions)"
-  installs="$(fixture_counter "$fixture_file" bootstrap_installs)"
-  customers="$(fixture_counter "$fixture_file" customers)"
-  clusters="$(fixture_counter "$fixture_file" clusters)"
-  routes="$(fixture_counter "$fixture_file" routes)"
-  definitions="$(fixture_counter "$fixture_file" definitions)"
-  values="$(fixture_counter "$fixture_file" values_revisions)"
-  bundles="$(fixture_counter "$fixture_file" bundles)"
-  printf '"operator_sessions":%s,"fixture_version":"%s","fixture_entities":{' \
-    "$sessions" "$FIXTURE_VERSION" >> "$status_file"
-  printf '"customers":%s,"clusters":%s,"routes":%s,"definitions":%s,"values_revisions":%s,"bundles":%s},' \
-    "$customers" "$clusters" "$routes" "$definitions" "$values" "$bundles" >> "$status_file"
-  printf '"bootstrap_installs":%s}\n' "$installs" >> "$status_file"
+  # fixture_entities is a projection of data/dev-fixture.json's own top-level
+  # keys, not a hand-maintained list of names: a list can disagree with the file
+  # it describes, and this one did — it asked for operator_sessions, bundles,
+  # bootstrap_installs and values_revisions, none of which the fixture has, so
+  # half the block reported 0 no matter how the fixture was seeded.
+  #
+  # Runtime counters (operator sessions online, bootstrap installs) are
+  # deliberately absent rather than reported as 0: they are not fixture facts and
+  # no zero of ours can stand in for them.
+  printf '"fixture_version":"%s","fixture_entities":%s,' \
+    "$FIXTURE_VERSION" "$(fixture_entity_counts "$fixture_file")" >> "$status_file"
+  printf '"restart_targets":{"namespace":"release-manager-dev","deployments":[' >> "$status_file"
+  local first_restart=1 restart_deployment
+  while IFS= read -r restart_deployment; do
+    [ -n "$restart_deployment" ] || continue
+    [ "$first_restart" -eq 1 ] || printf ',' >> "$status_file"
+    printf '"%s"' "$restart_deployment" >> "$status_file"
+    first_restart=0
+  done < <(control_plane_restart_deployments)
+  printf ']}}\n' >> "$status_file"
   cat "$status_file"
 }
 
-fixture_counter() {
+# fixture_entity_counts projects the fixture's own top-level keys onto entry
+# counts, so the report cannot disagree with the file it describes.
+#
+# The rule is type-aware because the fixture mixes two object shapes. A keyed
+# collection (customers, clusters, routes, operators, definitions) maps a key to a
+# resource object, and counts its entries. A single resource (bundle) maps field
+# names to scalars: it denotes one entity, so it counts 1 even though it has
+# several fields. Arrays count their elements and scalars stand for themselves.
+#
+# Metadata (fixture_version, generated_at) is not an entity and is excluded; the
+# version is reported separately as a declared constant.
+#
+# A missing fixture (never seeded) yields {}: no entities, which is the truth,
+# rather than a block of zeros shaped like measurements.
+fixture_entity_counts() {
   local file="$1"
-  local key="$2"
-  local value=""
-  if [ -f "$file" ]; then
-    value="$(sed -nE "s/.*\"$key\"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p" "$file" | sed -n '1p')"
+  if [ ! -f "$file" ]; then
+    printf '{}'
+    return 0
   fi
-  printf '%s' "${value:-0}"
+  if ! command -v jq >/dev/null 2>&1; then
+    # Without jq neither the shape nor the counts can be derived, so say so and
+    # report nothing instead of letting zeros pass for measurements.
+    printf 'dev-status: jq is required to count fixture entities; fixture_entities will be empty\n' >&2
+    printf '{}'
+    return 0
+  fi
+  jq -c '
+    to_entries
+    | map(select(.key != "fixture_version" and .key != "generated_at"))
+    | map({ key: .key, value: (
+        .value
+        | if type == "array" then length
+          elif type == "number" then .
+          elif type == "object" then
+            ([.[] | select(type == "object")] | length) as $entries
+            | if $entries > 0 then $entries else 1 end
+          else 1
+          end ) })
+    | from_entries
+  ' "$file" 2>/dev/null || printf '{}'
 }
 
 cmd_reset_data() {
