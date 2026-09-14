@@ -5,3 +5,8 @@ exceptions:
     expires_at: "2099-12-31"
     path: "deploy/dev/dev_test.go"
     rule: "os_exec_import"
+  - owner: "release-manager"
+    reason: "TASK-066 e2e CLI contract tests: cmd/e2e/main_test.go builds and drives the e2e binary via os/exec to assert the documented process exit codes (0/1/2, plus 3 for lock conflict); test-only, never runtime"
+    expires_at: "2099-12-31"
+    path: "cmd/e2e/main_test.go"
+    rule: "os_exec_import"
