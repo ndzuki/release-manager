@@ -706,6 +706,17 @@ func (h *harness) newWaiter(t *testing.T) *ControlPlaneWaiter {
 	if err != nil {
 		t.Fatalf("NewRunnerSession() error = %v", err)
 	}
+	// Authenticate before handing the session to a waiter, on a budget of its
+	// own. EnsureLogin is cached and no-ops once a token exists, so tests that
+	// pass a deliberately tiny deadline — the barrier must honour the caller's
+	// context — exercise the poll loop instead of racing the login against that
+	// deadline. Under CPU pressure the login alone spent the budget and the
+	// barrier then reported a login error where the caller's deadline was due.
+	loginCtx, cancelLogin := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelLogin()
+	if err := session.EnsureLogin(loginCtx); err != nil {
+		t.Fatalf("EnsureLogin() error = %v", err)
+	}
 	waiter, err := NewControlPlaneWaiter(h.cfg, h.clients, session)
 	if err != nil {
 		t.Fatalf("NewControlPlaneWaiter() error = %v", err)

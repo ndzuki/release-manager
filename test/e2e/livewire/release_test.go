@@ -246,6 +246,14 @@ func TestAwaitOperationHonorsContextDeadline(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
+	// Authenticate before arming the deadline below. The connector logs in
+	// lazily on first use, and under CPU pressure that login alone could spend
+	// this 50ms budget — the barrier then reported a login error where the
+	// caller's deadline was due. Login is cached, so the call under test does
+	// not log in again and the deadline still bounds only the poll loop.
+	if err := h.connector.Login(t.Context()); err != nil {
+		t.Fatalf("Connector.Login() error = %v", err)
+	}
 	h.connector.WithPollInterval(time.Millisecond)
 	h.orch.setOperations(map[string]*orchestratorv1.Operation{
 		"op-stuck": runningOperation("op-stuck", "e2e-release-target"),
