@@ -367,6 +367,7 @@ jobs:
       DEV_WEBHOOK_SERVICE_TOKEN: ${{ secrets.DEV_WEBHOOK_SERVICE_TOKEN }}
       DEV_M_TLS_CA_KEY: ${{ secrets.DEV_M_TLS_CA_KEY }}
       DEV_M_TLS_CA_CERT: ${{ secrets.DEV_M_TLS_CA_CERT }}
+      DEV_TRUST_ROOT_PRIVATE_KEY: ${{ secrets.DEV_TRUST_ROOT_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v7
 
