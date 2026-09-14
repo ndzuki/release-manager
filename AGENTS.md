@@ -39,7 +39,7 @@ make quality     # 聚合门禁（含上述）
 
 - 需要真实 PostgreSQL 的测试必须打 `//go:build integration` 标签，并通过 `POSTGRES_TEST_DSN` 提供 DSN；**不得**为了本地通过而移除该标签或把断言放宽。
 - 生产路径的改动必须附回归测试；flutter/偶发失败要定位到根因（例如时间预算与异步刷盘竞争），不要靠加大超时掩盖。
-- `gofmt` 必须干净（`gofmt -l .` 无输出）。
+- `gofmt`：**你改动过的文件**必须干净（`gofmt -l <改动的文件>` 无输出）。仓库存在历史遗留的注释对齐差异（由不同 gofmt 版本产生，例如 `internal/devfixture/bundle.go`），CI 也尚未接入 gofmt 门禁，因此**不要顺手格式化无关文件**。
 
 ## 环境与资源纪律
 
