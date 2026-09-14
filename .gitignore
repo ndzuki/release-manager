@@ -40,6 +40,24 @@ e2e-results/
 # Helm chart packages
 *.tgz
 
+# Stray root-level service binaries from ad-hoc `go build ./cmd/<svc>` runs (the
+# Makefile builds into bin/). `auth` and `webhook` were committed this way once.
+# Patterns are root-anchored cmd/ basenames; `api` is deliberately absent because a
+# bare `api` pattern would also match the tracked api/ directory.
+/auth
+/devseed
+/e2e
+/imagecheck
+/installgate
+/notification-sink
+/notifier
+/operator
+/orchestrator
+/reqcheck
+/sdkcheck
+/store-migrate
+/webhook
+
 # Temporary files
 /tmp/
 /tmp-*/
