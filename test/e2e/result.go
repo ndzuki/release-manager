@@ -131,9 +131,15 @@ func WriteJSONAtomic(path string, value any) error {
 	return nil
 }
 
+// ResidueArtifactName is the post-run sample of what the run left behind. It is
+// named here, beside the other fixed artifacts, because PrepareOutputDir has to
+// clear it too: a residue left over from an earlier run describes state this run
+// never created.
+const ResidueArtifactName = "residue.json"
+
 // PrepareOutputDir removes only this runner's fixed artifacts.
 func PrepareOutputDir(dir string, stages []string) error {
-	fixed := append([]string{"run.json", "baseline.json"}, stageArtifactNames(stages)...)
+	fixed := append([]string{"run.json", "baseline.json", ResidueArtifactName}, stageArtifactNames(stages)...)
 	for _, name := range fixed {
 		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove stale artifact %s: %w", name, err)

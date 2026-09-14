@@ -66,10 +66,6 @@ type baselineArtifact struct {
 	SnapshotFull   bool   `json:"snapshot_full"`
 }
 
-// residueFileName is the post-run sample's artifact name. It sits beside
-// baseline.json because both describe the same run.
-const residueFileName = "residue.json"
-
 // residueArtifact is what the run left behind, sampled once the stages have run.
 //
 // It exists because the baseline revision cannot tell cleanup whether a release
@@ -286,7 +282,7 @@ func collectResidue(config *e2e.Config, options runOptions, runID string, logger
 		Residue:     e2e.ResidueFromInventory(rows),
 	}
 	residue.CollectedAt = time.Now().UTC()
-	if err := e2e.WriteJSONAtomic(filepath.Join(options.outputDir, residueFileName), residue); err != nil {
+	if err := e2e.WriteJSONAtomic(filepath.Join(options.outputDir, e2e.ResidueArtifactName), residue); err != nil {
 		logger.Warn("write residue artifact failed; cleanup rollback degrades to the baseline revision comparison", "error", err)
 	}
 }
@@ -555,7 +551,7 @@ func loadCleanupBaseline(baselineFile string, logger *slog.Logger) *e2e.Baseline
 	target := e2e.BaselineRecoveryFromSnapshots(baseline.FixtureSnapshot)
 	// The residue lives beside the baseline: the same run writes both, and
 	// cleanup is always run against one run's artifacts.
-	target.Residue = loadCleanupResidue(filepath.Join(filepath.Dir(baselineFile), residueFileName), baseline.RunID, logger)
+	target.Residue = loadCleanupResidue(filepath.Join(filepath.Dir(baselineFile), e2e.ResidueArtifactName), baseline.RunID, logger)
 	if len(target.Residue) == 0 {
 		logger.Warn("no usable run residue; cleanup rollback degrades to the baseline revision comparison",
 			"run_id", baseline.RunID)
