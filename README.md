@@ -93,6 +93,7 @@ make lint          # golangci-lint
 make quality       # 聚合质量门禁
 make sdk-check     # SDK-only 静态门禁
 make check-reqs    # 原子需求模板校验
+make check-licenses # 依赖许可门禁（GPL/AGPL/LGPL 等一律拒绝）
 make proto         # buf generate（生成 Go/TS 契约代码）
 ```
 
@@ -107,10 +108,11 @@ make proto         # buf generate（生成 Go/TS 契约代码）
 | `docs/testing.md` | 单元/集成/E2E 分层、命令矩阵与 CI 关系 |
 | `docs/decisions/` | ADR-000 ~ ADR-020 导出副本与索引 |
 | `docs/glossary.md` | 领域词汇表（含禁用说法） |
+| `docs/dependencies.md` | 依赖许可清单（生成产物，`make check-licenses` 校验） |
 | `docs/atomic-requirement-template.md` | 原子需求十段模板（`make check-reqs` 校验） |
 | `CONTRIBUTING.md` | 交付模型、分支/提交/PR 规范与门禁 |
 | `AGENTS.md` | 面向自动化代理的项目约束 |
 
 ## 许可
 
-Apache License 2.0，见 `LICENSE`。
+Apache License 2.0，见 `LICENSE`。第三方依赖的许可证清单见 `docs/dependencies.md`，其中自带 NOTICE 的上游声明汇总在根目录 `NOTICE`。

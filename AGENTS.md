@@ -25,6 +25,7 @@
 4. **双引擎 schema**：dev/test 用 SQLite、生产用 PostgreSQL。新增表/字段/查询必须同时兼容两者；迁移写在 `migrations/` 且编号连续，SQLite 侧结构在同一变更内对齐。
 5. **不可变输入与 Secret 边界**：ValuesRevision 一旦创建不可变；Secret 只以引用（SecretRef）形式进入执行链，禁止把明文写入库、日志或审计事件。
 6. **审计与脱敏**：审计事件必须经脱敏路径；不要绕过 emitter 直接写审计表。
+7. **依赖许可**：只接受宽松许可（Apache-2.0、MIT、BSD、ISC、MPL-2.0 等）。禁止引入 GPL/AGPL/LGPL、SSPL、BUSL、Elastic License 或**没有许可证文件**的依赖 —— Go 会把整个模块静态链接进二进制，`make check-licenses` 会拦截。`NOTICE` 与 `docs/dependencies.md` 是生成产物，改动依赖后用 `bash scripts/check-licenses.sh --write-notice NOTICE` 与 `--write docs/dependencies.md` 重生成。
 
 ## 质量门禁
 
@@ -34,6 +35,7 @@
 make test        # go test -race ./...
 make lint        # golangci-lint run
 make sdk-check   # SDK-only 静态门禁
+make check-licenses # 依赖许可门禁（GPL/AGPL/LGPL 等一律拒绝）
 make quality     # 聚合门禁（含上述）
 ```
 

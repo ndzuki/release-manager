@@ -60,6 +60,16 @@ make quality     # 聚合门禁
 
 CI（`.github/workflows/test.yml`）在 `push` 到 `main` 与 PR 上运行，全部 job 必须通过才能合并。E2E 门禁目前按设计为**手动触发**（workflow_dispatch 的 `run-e2e`），原因与解除条件见 `docs/decisions/ADR-013` 与知识库中的 D-034 记录。
 
+## 许可与依赖
+
+- 本仓库以 **Apache-2.0** 发布（`LICENSE`）。按 Apache-2.0 §5，贡献默认以同一许可证授权（inbound = outbound）；提交 PR 即表示你同意这一点。
+- **新增依赖先过许可门禁**：`make check-licenses` 校验所有会进入产物的依赖（Go 默认构建闭包 + 前端生产依赖），拒绝 GPL/AGPL/LGPL、SSPL、BUSL、Elastic License 以及**没有许可证文件**的依赖。
+- `NOTICE` 与 `docs/dependencies.md` 是**生成产物**，不要手工编辑：
+  `bash scripts/check-licenses.sh --write docs/dependencies.md`、
+  `bash scripts/check-licenses.sh --write-notice NOTICE`。
+- 确有必要引入清单外的许可证时，在 `license-exceptions.tsv` 登记模块与理由（会被评审）；**不要**放宽 `scripts/check-licenses.sh` 的默认允许集合。
+- AI 辅助生成的代码由提交者负责：确认所用工具的条款允许你授权该产出，并避免引入与既有第三方实现高度雷同的代码（尤其是 copyleft 代码）。
+
 ## 评审关注点
 
 - **边界**：是否越过执行边界（控制面直连集群）或引入命令行执行路径。

@@ -56,7 +56,8 @@ Makefile 内没有对应的转发 target，需在 `web/` 目录内直接运行�
 | `make lint` | `golangci-lint run` | `golangci-lint` | 本地；CI 用 `golangci-lint-action` v2.12.2 且仅 lint 变更（`--new-from-rev`） |
 | `make sdk-check` | SDK-only 静态门禁（REQ-037）：`os_exec_import`、`fork_exec`、`shell_wrapper`、`forbidden_binary_invocation`、`expired_exception` | 无 | 本地 + CI `sdk-check` job（同一命令、同一例外文件、同一扫描范围） |
 | `make check-reqs` | 校验原子需求文档结构（`find . -path '*/Requirements/REQ-*.md'` → `cmd/reqcheck`）；**找不到 REQ 文档时打印提示并跳过** | 无 | 本地（CI 未接入该 target） |
-| `make quality` | `sdk-check` + `test-coverage` + `lint` + `check-reqs` 的聚合门禁 | 同各子项 | 本地；CI 不直接调用，而是分 job 跑等价命令 |
+| `make check-licenses` | 校验所有**会进入产物**的依赖许可证（Go 默认构建闭包 + 前端生产依赖）：拒绝 GPL/AGPL/LGPL、SSPL、BUSL、Elastic 以及无许可证文件的依赖；同时校验根目录 `NOTICE` 未过期 | `go`（模块缓存）；前端部分需 `jq`，缺失时**显式报「未检查」**而非静默通过 | 本地 + CI `license-check` job（同一脚本、同一策略、同一例外文件 `license-exceptions.tsv`） |
+| `make quality` | `sdk-check` + `test-coverage` + `lint` + `check-reqs` + `check-licenses` 的聚合门禁 | 同各子项 | 本地；CI 不直接调用，而是分 job 跑等价命令 |
 | `make test-install-sdk` / `test-upgrade-sdk` / `test-rollout-watch` | Helm Install / Upgrade / Rollout watch SDK 链路 | Docker + kind（rollout 另有 120 秒时长门禁） | 本地 + CI 对应 job（各 15 分钟超时） |
 | `make test-rollback-sdk` | Rollback SDK 链路 | 无（in-memory storage + `kubefake`） | 本地（CI 未接入） |
 | `make test-operator-image-sdk-only` | operator 镜像合规（内部先调 `make docker-build-operator` 产出并 `docker save` 镜像 tarball） | Docker | 本地 + CI `operator-image-sdk-only` job |
@@ -173,6 +174,7 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 | job | 跑什么 | 触发范围 |
 | --- | --- | --- |
 | `sdk-check` | `go run ./cmd/sdkcheck/ -exceptions sdkcheck.exceptions.yaml ./...` | 全部触发 |
+| `license-check` | `make check-licenses`（10 分钟超时；读模块缓存里的 LICENSE 文本与前端 lockfile，不安装额外扫描器） | 全部触发 |
 | `install-sdk` | `make test-install-sdk` | 全部触发 |
 | `upgrade-sdk` | `make test-upgrade-sdk` | 全部触发 |
 | `operator-image-sdk-only` | `make test-operator-image-sdk-only` | 全部触发 |
