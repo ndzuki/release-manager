@@ -500,6 +500,11 @@ func runCleanup(args []string, stdout, stderr io.Writer) int {
 	// the baseline. Merging them into one report keeps the artifact a single
 	// truthful account (AC-066-34).
 	verification := e2e.VerifyRestore(cleanupCtx, recoveryTarget, cleanupObserver(options.envConfig, logger), logger)
+	// The release half reads the same inventory the recovery pass used. It is a
+	// separate call rather than a return value because it must read after the
+	// rollbacks, and it goes through the recovery seam so a read failure degrades
+	// to unverified instead of to a silent pass.
+	verification.MergeVerification(e2e.VerifyRevisions(cleanupCtx, recoveryTarget, recovery, logger))
 	report.MergeVerification(verification)
 	writeCleanupSummary(stdout, report)
 	return int(exitSuccess)
@@ -593,13 +598,15 @@ func newCleanupRecovery(envConfig string) (*e2e.LiveRecovery, error) {
 
 func writeCleanupSummary(stdout io.Writer, report e2e.CleanupReport) {
 	fmt.Fprintf(stdout,
-		"E2E cleanup: cancelled=%d rolled_back=%d skipped_revision_restore=%d residual=%d residual_replicas=%d unverified_replicas=%d replicas_restore_skipped=%v baseline_missing=%v\n",
+		"E2E cleanup: cancelled=%d rolled_back=%d skipped_revision_restore=%d residual=%d residual_replicas=%d unverified_replicas=%d residual_revisions=%d unverified_revisions=%d replicas_restore_skipped=%v baseline_missing=%v\n",
 		len(report.CancelledOperationIDs),
 		len(report.RolledBackDefinitions),
 		len(report.SkippedRevisionRestore),
 		len(report.ResidualNonTerminal),
 		len(report.ResidualReplicas),
 		len(report.UnverifiedReplicas),
+		len(report.ResidualRevisions),
+		len(report.UnverifiedRevisions),
 		report.SkippedReplicasRestore,
 		report.BaselineMissing,
 	)
@@ -620,6 +627,12 @@ func writeCleanupSummary(stdout io.Writer, report e2e.CleanupReport) {
 	}
 	for _, workload := range report.UnverifiedReplicas {
 		fmt.Fprintf(stdout, "- unverified replicas: %s could not be read after recovery\n", workload)
+	}
+	for _, definition := range report.ResidualRevisions {
+		fmt.Fprintf(stdout, "- residual revision: %s still carries the run residue\n", definition)
+	}
+	for _, definition := range report.UnverifiedRevisions {
+		fmt.Fprintf(stdout, "- unverified revision: %s could not be compared with the run residue\n", definition)
 	}
 }
 

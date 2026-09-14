@@ -174,6 +174,13 @@ type CleanupReport struct {
 	// They are reported rather than omitted so that an unread workload is never
 	// mistaken for a workload that was confirmed restored.
 	UnverifiedReplicas []string `json:"unverified_replicas"`
+	// ResidualRevisions lists the releases the outcome check read back still
+	// carrying the run's residue, so the rollback did not take.
+	ResidualRevisions []string `json:"residual_revisions"`
+	// UnverifiedRevisions lists the releases the outcome check could not decide:
+	// no residue was recorded for them, or the inventory read failed. Same rule as
+	// the replica half -- undecided is reported, never counted as restored.
+	UnverifiedRevisions []string `json:"unverified_revisions"`
 	// ResidualNonTerminal lists runner-owned non-terminal operations that could
 	// not be cancelled (cancel failed or did not reach a terminal state).
 	ResidualNonTerminal []string `json:"residual_nonterminal_remaining"`
@@ -190,6 +197,8 @@ func (r CleanupReport) NonZero() bool {
 		len(r.RestoredReplicas) != 0 ||
 		len(r.ResidualReplicas) != 0 ||
 		len(r.UnverifiedReplicas) != 0 ||
+		len(r.ResidualRevisions) != 0 ||
+		len(r.UnverifiedRevisions) != 0 ||
 		len(r.ResidualNonTerminal) != 0 ||
 		r.BaselineMissing
 }
@@ -203,6 +212,85 @@ func (r *CleanupReport) MergeVerification(verification CleanupReport) {
 	}
 	r.ResidualReplicas = append(r.ResidualReplicas, verification.ResidualReplicas...)
 	r.UnverifiedReplicas = append(r.UnverifiedReplicas, verification.UnverifiedReplicas...)
+	r.ResidualRevisions = append(r.ResidualRevisions, verification.ResidualRevisions...)
+	r.UnverifiedRevisions = append(r.UnverifiedRevisions, verification.UnverifiedRevisions...)
+}
+
+// VerifyRevisions reads the releases back and reports the ones that still carry
+// the run's residue.
+//
+// This is the release half of "a write reaching a successful terminal state is
+// not the same as the change being undone". It is only possible because the run
+// sampled its own residue: a rollback advances the revision counter rather than
+// restoring the number, so "differs from the baseline" is true of every release
+// the run touched, forever, and would report a permanent false residual (D-033).
+// "Still at the residue" is the question a rollback does answer, and it stops
+// being true the moment the rollback lands.
+//
+// A release the run left alone, a release with no recorded residue, and a failed
+// read all land in UnverifiedRevisions: none is evidence of a mismatch, and none
+// is evidence of a match either.
+func VerifyRevisions(ctx context.Context, baseline *BaselineRecovery, recovery Recovery, logger *slog.Logger) CleanupReport {
+	report := CleanupReport{}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if baseline == nil || len(baseline.Residue) == 0 {
+		return report
+	}
+	// Only the releases the run actually moved have something of the run's to
+	// look for. Checking the others would report "still at the residue" for a
+	// release that never left it.
+	definitionIDs := make([]string, 0, len(baseline.Residue))
+	for definitionID, residue := range baseline.Residue {
+		if baselineRevision, recorded := baseline.Revisions[definitionID]; recorded && residue == baselineRevision {
+			continue
+		}
+		definitionIDs = append(definitionIDs, definitionID)
+	}
+	sort.Strings(definitionIDs)
+	if len(definitionIDs) == 0 {
+		return report
+	}
+
+	observed, err := readObservedRevisions(ctx, recovery)
+	if err != nil {
+		logger.Warn("cleanup verification could not read the release inventory", "error", sanitizeError(err))
+		report.UnverifiedRevisions = append(report.UnverifiedRevisions, definitionIDs...)
+		return report
+	}
+	for _, definitionID := range definitionIDs {
+		current, read := observed[definitionID]
+		switch {
+		case !read:
+			report.UnverifiedRevisions = append(report.UnverifiedRevisions, definitionID)
+		case current == baseline.Residue[definitionID]:
+			report.ResidualRevisions = append(report.ResidualRevisions, definitionID)
+		}
+	}
+	return report
+}
+
+// readObservedRevisions reads the current revision of every release, keyed by
+// definition. A nil recovery is reported as an error so the caller degrades to
+// unverified rather than to a silent pass.
+func readObservedRevisions(ctx context.Context, recovery Recovery) (map[string]int32, error) {
+	if recovery == nil {
+		return nil, errors.New("no recovery implementation to read releases with")
+	}
+	rows, err := recovery.ListReleaseInventory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	observed := make(map[string]int32, len(rows))
+	for index := range rows {
+		row := rows[index]
+		if row.DefinitionID == "" {
+			continue
+		}
+		observed[row.DefinitionID] = row.Revision
+	}
+	return observed, nil
 }
 
 // RecoveryObserver re-reads the state a recovery is supposed to have restored.

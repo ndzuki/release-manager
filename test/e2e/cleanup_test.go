@@ -22,9 +22,13 @@ type recoveryFake struct {
 	cancelErr  error
 	rollErr    error
 	replicaErr error
+	readErr    error
 }
 
 func (f *recoveryFake) ListReleaseInventory(context.Context) ([]CleanupRow, error) {
+	if f.readErr != nil {
+		return nil, f.readErr
+	}
 	return f.rows, nil
 }
 
@@ -365,6 +369,66 @@ func TestResidueFromInventoryKeepsOnlyAddressableRows(t *testing.T) {
 		if residue[definitionID] != revision {
 			t.Fatalf("residue[%q] = %d, want %d", definitionID, residue[definitionID], revision)
 		}
+	}
+}
+
+// TestVerifyRevisionsReportsAReleaseStillAtTheRunResidue is the release half of
+// the outcome check: a successful rollback operation is not the same as the run's
+// residue being gone, and only a fresh read says which.
+func TestVerifyRevisionsReportsAReleaseStillAtTheRunResidue(t *testing.T) {
+	t.Parallel()
+
+	baseline := &BaselineRecovery{
+		Revisions: map[string]int32{"def-stuck": 1, "def-restored": 1, "def-untouched": 1},
+		Residue:   map[string]int32{"def-stuck": 2, "def-restored": 2, "def-untouched": 1},
+	}
+	recovery := &recoveryFake{rows: []CleanupRow{
+		runnerRow("def-stuck", 2, nil),     // the rollback did not take
+		runnerRow("def-restored", 3, nil),  // the rollback advanced the counter
+		runnerRow("def-untouched", 1, nil), // the run left it where it found it
+	}}
+	report := VerifyRevisions(context.Background(), baseline, recovery, slog.Default())
+	if len(report.ResidualRevisions) != 1 || report.ResidualRevisions[0] != "def-stuck" {
+		t.Fatalf("residual revisions = %v, want [def-stuck]", report.ResidualRevisions)
+	}
+	// def-restored is confirmed; def-untouched was never the run's to confirm, so
+	// neither may be reported as unverified.
+	if len(report.UnverifiedRevisions) != 0 {
+		t.Fatalf("unverified revisions = %v, want none", report.UnverifiedRevisions)
+	}
+}
+
+// TestVerifyRevisionsNeverMistakesUnreadForRestored keeps the same rule as the
+// replica half: a release the check could not decide is reported, never counted
+// as restored.
+func TestVerifyRevisionsNeverMistakesUnreadForRestored(t *testing.T) {
+	t.Parallel()
+
+	baseline := &BaselineRecovery{
+		Revisions: map[string]int32{"def-a": 1},
+		Residue:   map[string]int32{"def-a": 2},
+	}
+	recovery := &recoveryFake{readErr: errors.New("inventory unavailable")}
+	report := VerifyRevisions(context.Background(), baseline, recovery, slog.Default())
+	if len(report.UnverifiedRevisions) != 1 || report.UnverifiedRevisions[0] != "def-a" {
+		t.Fatalf("unverified revisions = %v, want [def-a]", report.UnverifiedRevisions)
+	}
+	if len(report.ResidualRevisions) != 0 {
+		t.Fatalf("residual revisions = %v, want none: an unread release is not a mismatch", report.ResidualRevisions)
+	}
+}
+
+// TestVerifyRevisionsNeedsAResidueToSayAnything pins the honest limit: without a
+// residue there is no signal that survives a rollback, so the check reports
+// nothing rather than inventing a verdict.
+func TestVerifyRevisionsNeedsAResidueToSayAnything(t *testing.T) {
+	t.Parallel()
+
+	baseline := &BaselineRecovery{Revisions: map[string]int32{"def-a": 1}}
+	recovery := &recoveryFake{rows: []CleanupRow{runnerRow("def-a", 9, nil)}}
+	report := VerifyRevisions(context.Background(), baseline, recovery, slog.Default())
+	if len(report.ResidualRevisions) != 0 || len(report.UnverifiedRevisions) != 0 {
+		t.Fatalf("report = %+v, want an empty verdict with no residue", report)
 	}
 }
 
