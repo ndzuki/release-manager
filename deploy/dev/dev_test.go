@@ -393,6 +393,45 @@ func TestCiProfileRequiresE2ERunID(t *testing.T) {
 	}
 }
 
+// TestRequireK3dReadsTheK3dVersionLine pins the k3d guard against the
+// order-dependent parse it shipped with. `k3d version` prints two lines — k3d
+// first, then the k3s it bundles — and the guard took the first vX.Y.Z match
+// from the whole output. A k3d built by `go install` cannot embed its version
+// and reports "v5-dev" (no patch component), so that match fell through to the
+// k3s line and the guard rejected a perfectly good install with "k3d v1.21.7
+// is too old", naming a version that is not k3d's at all and sending the
+// operator after the wrong tool.
+//
+// The shims used by the other tests print the k3d line only, which is exactly
+// why this went unnoticed; this one reproduces the real two-line output.
+func TestRequireK3dReadsTheK3dVersionLine(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	writeShim(t, binDir, "flock", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "docker", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "k3d",
+		"#!/usr/bin/env bash\nprintf 'k3d version v5-dev\\nk3s version v1.21.7-k3s1 (default)\\n'\n")
+	writeShim(t, binDir, "curl", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "kubectl", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("expected the guard to reject an unparseable k3d version:\n%s", out)
+	}
+	if !strings.Contains(out, "k3d_unavailable") {
+		t.Fatalf("expected k3d_unavailable:\n%s", out)
+	}
+	if !strings.Contains(out, "cannot determine k3d version") {
+		t.Fatalf("expected an explicit version-parse failure:\n%s", out)
+	}
+	// The regression itself: the k3s line must never be reported as the k3d
+	// version. "too old" is the confidently wrong conclusion this bug drew.
+	if strings.Contains(out, "too old") {
+		t.Fatalf("guard reported the k3s version as an outdated k3d:\n%s", out)
+	}
+}
+
 // fakeK3d installs the stateful k3d shim from testdata/fake-k3d.sh: cluster
 // list/create/delete, registry list/create and kubeconfig get/merge all work
 // against a per-test state dir, so dev.sh up/down runs end-to-end without
