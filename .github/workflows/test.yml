@@ -167,11 +167,17 @@ jobs:
       # Lint only the code this PR/commit introduces instead of the whole
       # repository: pre-existing issues on main (gocyclo/gosec debt from
       # other tasks) must not block new work, and the check is much faster.
+      # A workflow_dispatch run carries neither a pull-request base nor a push
+      # `before`, so the fallback chain below used to resolve to the empty
+      # string and golangci-lint compared against nothing: every manual
+      # dispatch linted the entire tree and failed on the very pre-existing
+      # debt this check exists to skip, even when the commit under test was
+      # already green on its pull request.
       - name: Run lint (changed code only)
         uses: golangci/golangci-lint-action@v9.3.0
         with:
           version: v2.12.2
-          args: --new-from-rev=${{ github.event.pull_request.base.sha || github.event.before }}
+          args: --new-from-rev=${{ github.event.pull_request.base.sha || github.event.before || format('origin/{0}', github.event.repository.default_branch) }}
 
   test-sqlite:
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
