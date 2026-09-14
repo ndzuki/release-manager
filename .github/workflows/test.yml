@@ -311,7 +311,17 @@ jobs:
       # GOTOOLCHAIN=local, so the pinned Go above must come from setup-go.
       - name: Install dev environment tools
         run: |
-          go install github.com/k3d-io/k3d/v5@v5.8.3
+          set -euo pipefail
+          # k3d must come from a release binary rather than `go install`: the
+          # module cannot embed its own version without -ldflags, so the built
+          # binary reports "v5-dev" and dev-up's version guard then misreads the
+          # k3s line as the k3d version and rejects it as too old.
+          base="https://github.com/k3d-io/k3d/releases/download/v5.8.3"
+          curl -fsSL -o /tmp/k3d-linux-amd64 "${base}/k3d-linux-amd64"
+          curl -fsSL -o /tmp/k3d-checksums.txt "${base}/checksums.txt"
+          (cd /tmp && grep -E ' _dist/k3d-linux-amd64$' k3d-checksums.txt | sed 's#_dist/##' | sha256sum -c -)
+          mkdir -p "$(go env GOPATH)/bin"
+          install -m 0755 /tmp/k3d-linux-amd64 "$(go env GOPATH)/bin/k3d"
           go install sigs.k8s.io/kustomize/kustomize/v5@v5.8.1
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
           k3d version
@@ -367,7 +377,17 @@ jobs:
 
       - name: Install dev environment tools
         run: |
-          go install github.com/k3d-io/k3d/v5@v5.8.3
+          set -euo pipefail
+          # k3d must come from a release binary rather than `go install`: the
+          # module cannot embed its own version without -ldflags, so the built
+          # binary reports "v5-dev" and dev-up's version guard then misreads the
+          # k3s line as the k3d version and rejects it as too old.
+          base="https://github.com/k3d-io/k3d/releases/download/v5.8.3"
+          curl -fsSL -o /tmp/k3d-linux-amd64 "${base}/k3d-linux-amd64"
+          curl -fsSL -o /tmp/k3d-checksums.txt "${base}/checksums.txt"
+          (cd /tmp && grep -E ' _dist/k3d-linux-amd64$' k3d-checksums.txt | sed 's#_dist/##' | sha256sum -c -)
+          mkdir -p "$(go env GOPATH)/bin"
+          install -m 0755 /tmp/k3d-linux-amd64 "$(go env GOPATH)/bin/k3d"
           go install sigs.k8s.io/kustomize/kustomize/v5@v5.8.1
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
           k3d version
