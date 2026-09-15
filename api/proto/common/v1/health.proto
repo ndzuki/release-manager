@@ -1,3 +1,13 @@
+// File: common/v1/health.proto
+// Package common.v1 health messages: a request/response pair shaped like the
+// gRPC health-checking contract, kept as shared vocabulary for probes and
+// admin tooling.
+// This file declares no service and no RPC. Readiness and liveness are plain
+// HTTP endpoints installed by the shared application wrapper on every service
+// binary: GET /health (liveness, plus a garbage-collection block on
+// release-orchestrator) and GET /readyz (per-dependency checks such as the
+// database), served on each service port, unauthenticated and unversioned.
+// The agent-gateway listener of release-orchestrator serves neither.
 syntax = "proto3";
 
 package common.v1;
@@ -9,7 +19,13 @@ message HealthCheckRequest {}
 
 // HealthCheckResponse contains the health status of a service.
 message HealthCheckResponse {
+  // Mirrors the gRPC health-checking vocabulary. The binaries in this
+  // repository answer probes with plain HTTP status codes and never fill this
+  // enum, so treat it as shared vocabulary for a future probe service rather
+  // than as something the current servers report.
   enum ServingStatus {
+    // Unknown state; fail closed on it, because the current HTTP probes never
+    // report it.
     SERVING_STATUS_UNSPECIFIED = 0;
     SERVING_STATUS_SERVING = 1;
     SERVING_STATUS_NOT_SERVING = 2;

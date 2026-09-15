@@ -1,3 +1,12 @@
+// File: webhook/v1/webhook.proto
+// Package webhook.v1 exposes the external ingress for CI-driven bundle
+// submissions.
+// release-webhook (dev port 8082) serves WebhookService and is the only
+// consumer. The binary authenticates nothing on this path itself: it forwards
+// each submission to release-orchestrator's BundleService, which enforces a
+// bearer token or a scoped service token.
+// Because authentication happens downstream, the network entry point must stay
+// reachable only from trusted CI runners.
 syntax = "proto3";
 
 package webhook.v1;
@@ -29,6 +38,21 @@ message SubmitReleaseBundleResponse {
 }
 
 // WebhookService authenticates and forwards CI bundle submissions.
+// WebhookService accepts a complete release bundle description from a CI
+// pipeline and forwards it for validation and persistence.
+// Callers: CI pipelines and registry web hooks. Trust boundary: unauthenticated
+// on this listener; the downstream BundleService decides whether to accept, and
+// an unauthenticated forward fails there as unauthenticated.
 service WebhookService {
+  // Proxies the submission to BundleService.SubmitBundle and re-projects its
+  // result; it stores nothing of its own, so all field validation and status
+  // transitions happen downstream.
+  // Replayable: the Idempotency-Key request header, when present, is forwarded
+  // verbatim, so a retry with the same key and payload replays the original
+  // submission with created false. Without a header, deduplication still happens
+  // on the canonical bundle digest, which yields created false.
+  // UNAVAILABLE when the orchestrator client is not configured; otherwise the
+  // downstream error and code are returned unchanged.
+  // No permission is checked at this hop.
   rpc SubmitReleaseBundle(SubmitReleaseBundleRequest) returns (SubmitReleaseBundleResponse);
 }

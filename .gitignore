@@ -64,9 +64,15 @@ e2e-results/
 
 # .env
 .env
+# Local environment files must never be committed, at any depth; `.env.example`
+# is the committable template that documents the expected keys.
+.env.*
+!.env.example
 
-# E2E test data (Helm chart tarballs)
-test/e2e/testdata/*.tgz
+# No chart-tarball rule needed: `*.tgz` above already ignores archives at any depth.
+# The path this rule used to name (`test/e2e/testdata/`) never existed - the Helm chart
+# archives the SDK integration tests use are created inside `t.TempDir()`, outside the
+# work tree - so the rule ignored nothing but a guess.
 release-*
 /sdkcheck
 /reqcheck

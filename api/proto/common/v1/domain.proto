@@ -1,3 +1,12 @@
+// File: common/v1/domain.proto
+// Package common.v1 canonical domain records: the release bundle and its
+// artifacts, customers, clusters, release definitions and immutable values
+// revisions that every service exchanges.
+// No service is declared here. release-orchestrator owns writes to these
+// records (management plane, JWT plus organization-scoped authorization); the
+// browser console and the customer-cluster operator agent read them through
+// orchestrator.v1 and operator.v1. Field semantics stated here are binding for
+// all of those surfaces.
 syntax = "proto3";
 
 package common.v1;
@@ -43,13 +52,21 @@ enum ArtifactType {
 // BundleImage maps a container image to its Helm values path.
 message BundleImage {
   string ref = 1;
+  // Digest-pinned identity of the image. A tag alone is mutable, so the digest
+  // is authoritative for verification, rollback and inventory comparison.
   string digest = 2;
+  // Path of the values file inside the bundle that pins this image; it must
+  // resolve inside the bundle, which is what ties an image to a values input.
   string values_path = 3;
+  // How the image reference is expressed: a pinned digest is authoritative,
+  // a tag is mutable and therefore only accepted when the policy allows it.
   ImageValueKind value_kind = 4;
 }
 
 // ArtifactReference identifies immutable evidence stored outside the service.
 message ArtifactReference {
+  // Pullable reference; a digest-pinned value is the authoritative identity and
+  // overrides the registry and repository fields, which exist for display.
   string ref = 1;
   string digest = 2;
 }
@@ -58,6 +75,8 @@ message ArtifactReference {
 message CandidateArtifact {
   ArtifactType artifact_type = 1;
   string ref = 2;
+  // Immutable identity of the candidate artifact; the (bundle, digest) pair is
+  // the natural key used when events are replayed.
   string digest = 3;
 }
 
@@ -105,7 +124,12 @@ message ReleaseDefinition {
   google.protobuf.Timestamp updated_at = 12;
   bool hpa_managed = 13;
   int32 max_emergency_replicas = 14;
+  // JSON-encoded bytes, not a nested message: the allow-list of release
+  // annotations a customer cluster may propagate. Decoding is the caller's job
+  // and an undecodable value is a contract violation, not a transport error.
   bytes approved_annotation_keys = 15;
+  // JSON-encoded bytes describing environment promotion rules, for the same
+  // reason as approved_annotation_keys.
   bytes promotion_mappings = 16;
 }
 
@@ -125,12 +149,19 @@ message ValuesRevision {
   string id = 1;
   string release_definition_id = 2;
   int64 version = 3;
+  // Byte-exact YAML as persisted; the digest is computed over these bytes, so
+  // reformatting on the client changes the revision identity.
   bytes canonical_document = 4;
   google.protobuf.Timestamp created_at = 5;
   ValuesStatus status = 6;
   string digest = 7;
   string parent_revision_id = 8;
+  // References only. A revision that names a Secret the target cluster cannot
+  // resolve fails at execution time rather than at creation time.
   repeated SecretRef secret_refs = 9;
+  // Monotonically increased by the server on every state transition and used as
+  // the compare-and-swap token by the review RPCs; a client must send back the
+  // value it observed and retry after a fresh read when the update is rejected.
   int64 state_version = 10;
   string created_by_user_id = 11;
   google.protobuf.Timestamp submitted_at = 12;
@@ -138,6 +169,8 @@ message ValuesRevision {
   // Convergence bindings (REQ-079 D10): operation ids of the Convergence
   // Tasks locking this revision, and the locked values paths.
   repeated string convergence_task_ids = 14;
+  // Values paths a promotion has frozen; a later revision that changes any of
+  // them is rejected so approved inputs cannot drift.
   repeated string locked_paths = 15;
 }
 
@@ -188,11 +221,16 @@ message Cluster {
   string id = 1;
   string name = 2;
   string customer_id = 3;
+  // Reference to where cluster credentials are held. Never a credential: no
+  // endpoint in this contract carries client credentials, and none may be added
+  // to the metadata fields.
   string kubeconfig_ref = 4;
   ClusterStatus status = 6;
   google.protobuf.Timestamp created_at = 5;
   google.protobuf.Timestamp updated_at = 7;
   int64 version = 8;
+  // Number of routing entries that bind this cluster to an operator agent; zero
+  // means no work can reach it, which is why it appears on the read model.
   int32 route_count = 9;
 }
 

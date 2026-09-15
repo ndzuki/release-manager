@@ -1,3 +1,12 @@
+// File: notifier/v1/notifier.proto
+// Package notifier.v1 schedules outbound notifications about release events,
+// with retry and dead-letter semantics owned by the server.
+// release-notifier (dev port 8086) serves NotifierService and consumes its own
+// queue in a background loop. The service installs no authentication
+// interceptor on this method set, so both RPCs are open to anyone who can reach
+// the listener and must stay on a trusted network.
+// Sending is asynchronous: a successful Send means a job was enqueued, not
+// delivered.
 syntax = "proto3";
 
 package notifier.v1;
@@ -8,6 +17,8 @@ option go_package = "github.com/ndzuki/release-manager/api/gen/notifier/v1;notif
 
 // NotificationChannel is the delivery channel for a notification.
 enum NotificationChannel {
+  // Not a valid choice. The server maps it to the generic webhook channel
+  // instead of rejecting the request, so always set the channel explicitly.
   NOTIFICATION_CHANNEL_UNSPECIFIED = 0;
   NOTIFICATION_CHANNEL_WEBHOOK = 1;
   NOTIFICATION_CHANNEL_EMAIL = 2;
@@ -16,11 +27,15 @@ enum NotificationChannel {
 
 // NotificationStatus tracks the delivery lifecycle of a notification job.
 enum NotificationStatus {
+  // Unknown state, returned when a stored job carries a status the running
+  // server does not recognise.
   NOTIFICATION_STATUS_UNSPECIFIED = 0;
   NOTIFICATION_STATUS_PENDING = 1;
   NOTIFICATION_STATUS_SENDING = 2;
   NOTIFICATION_STATUS_DELIVERED = 3;
   NOTIFICATION_STATUS_FAILED = 4;
+  // Retries are exhausted and no further attempt will happen without operator
+  // action.
   NOTIFICATION_STATUS_DEAD_LETTER = 5;
 }
 
@@ -54,7 +69,31 @@ message GetNotificationStatusResponse {
 
 // NotifierService dispatches notifications about release events with retry
 // and dead-letter queue support.
+// Callers: none in this repository today. The orchestrator never produces a job
+// through this RPC, and the test clients construct one without calling it, so the
+// queue is filled by whoever can reach the listener. Trust boundary: none there
+// either. cmd/notifier mounts the
+// service without an authentication or authorization interceptor, so both
+// procedures accept unauthenticated requests and a caller can only be limited by
+// network placement; the recipient address in a send is therefore an unvalidated
+// input that this service will act on.
 service NotifierService {
+  // Enqueues a delivery job and returns its identifier; delivery happens later
+  // on the notifier's own worker.
+  // Deduplicated by the natural key operation_id + channel + recipient rather
+  // than by an idempotency key. A duplicate submission is not replayed as a
+  // success: the storage layer rejects it and the RPC answers INTERNAL, so
+  // treat a repeated send for the same triple as an error, not as a no-op.
+  // Failure to enqueue surfaces as INTERNAL, and that response is also what a
+  // duplicate key produces. Authentication is not enforced by this binary.
+  // Delivery timing is not caller controlled: the retry budget and the pending
+  // state are set by the server, and the schedule is owned by this binary's
+  // worker loop.
   rpc Send(SendNotificationRequest) returns (SendNotificationResponse);
+  // Reads the delivery state, retry count and next retry time of one job.
+  // Read-only and replayable. An unknown, empty or malformed job_id is reported
+  // as NOT_FOUND, and any internal store fault is reported the same way, so the
+  // code does not distinguish "no such job" from "cannot answer".
+  // Authentication is not enforced by this binary.
   rpc GetStatus(GetNotificationStatusRequest) returns (GetNotificationStatusResponse);
 }

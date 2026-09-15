@@ -444,3 +444,61 @@ jobs:
       - name: Purge CI development environment
         if: always()
         run: make dev-purge CONFIRM=1
+
+  # ---------------------------------------------------------------------------
+  # Static gates. These two jobs are appended at the end on purpose: documents in
+  # this repository cite test.yml by line number, so inserting a job in the middle
+  # would invalidate dozens of citations unrelated to this change.
+  # ---------------------------------------------------------------------------
+
+  docs-check:
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # Documents assert facts: every `make <target>`, repository path, relative
+      # link and `file:line` citation written into docs/** or a README has to hold
+      # against the tree it sits in. Without this the documentation surface rots
+      # silently on the next rename or moved line, and a reader cannot tell a
+      # retired path from a current one. Only bash, grep and git are needed, so a
+      # documentation-only pull request fails in seconds rather than after a
+      # toolchain setup.
+      - name: Check documented facts
+        run: make check-docs
+
+  proto-check:
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: bufbuild/buf-setup-action@v1.50.0
+        with:
+          version: "1.71.0"
+          # Authenticate the release lookup; unauthenticated calls hit GitHub API
+          # rate limits. Same parameters as the jobs that already generate code.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      # buf.yaml has declared lint rules since the contract existed, but nothing
+      # ever executed `buf lint`, so naming failures accumulated invisibly. Note
+      # that a clean run here does not mean the contract is documented: the
+      # COMMENT_* family is deliberately off (see buf.yaml).
+      - name: Lint the contract
+        run: make lint-proto
+
+      # The jobs above run `make proto` and then test whatever they got, which
+      # quietly tolerates a committed api/gen that no longer matches api/proto -
+      # the regenerated code is what gets tested, and the stale committed one is
+      # never noticed. Here the regeneration must reproduce what is committed.
+      # `git status` rather than `git diff`, because a proto file that gained a
+      # brand-new generated sibling would otherwise show up as untracked noise.
+      - name: Require committed generated code to be current
+        run: |
+          make proto
+          out=$(git status --porcelain -- api/gen web/src/gen)
+          if [ -n "$out" ]; then
+            printf '%s\n' "$out"
+            echo "::error::generated code is stale; run 'make proto' and commit the result"
+            exit 1
+          fi

@@ -94,6 +94,8 @@ make quality       # 聚合质量门禁
 make sdk-check     # SDK-only 静态门禁
 make check-reqs    # 原子需求模板校验
 make check-licenses # 依赖许可门禁（GPL/AGPL/LGPL 等一律拒绝）
+make check-docs    # 文档事实门禁（文档写下的 make 目标、仓库路径、链接、行号引用必须真实）
+make lint-proto    # buf lint（契约命名与布局规则；COMMENT_* 故意不开，理由见 buf.yaml）
 make proto         # buf generate（生成 Go/TS 契约代码）
 ```
 
@@ -108,10 +110,22 @@ make proto         # buf generate（生成 Go/TS 契约代码）
 | `docs/testing.md` | 单元/集成/E2E 分层、命令矩阵与 CI 关系 |
 | `docs/decisions/` | ADR-000 ~ ADR-020 导出副本与索引 |
 | `docs/glossary.md` | 领域词汇表（含禁用说法） |
+| `docs/api.md` | Connect 契约面：服务、RPC、认证与错误约定 |
+| `docs/configuration.md` | 各服务配置键、层级与默认值 |
+| `docs/cli.md` | `cmd/*` 全部可执行文件的 flag、退出码与调用方式 |
+| `docs/runbook.md` | 运维手册：故障定位与处置步骤 |
+| `docs/observability.md` | 日志、指标与健康检查的可观测面 |
+| `docs/http-collections.md` | `api/kulala/*.http` 调试集合与当前可用性 |
 | `docs/dependencies.md` | 依赖许可清单（生成产物，`make check-licenses` 校验） |
 | `docs/atomic-requirement-template.md` | 原子需求十段模板（`make check-reqs` 校验） |
+| `.github/SECRETS.md` | CI 需要的 secret / variable 清单与配置步骤 |
+| `SECURITY.md` | 漏洞披露渠道与机密处理约定 |
+| `CHANGELOG.md` | 已合入 `main` 的变更按月归纳（首个 tag 前不用版本号） |
+| `CODE_OF_CONDUCT.md` | 协作行为约定与报告渠道 |
 | `CONTRIBUTING.md` | 交付模型、分支/提交/PR 规范与门禁 |
 | `AGENTS.md` | 面向自动化代理的项目约束 |
+
+目录级说明另有 `web/README.md`（前端构建与 feature flag）、`deploy/README.md`（k3d 与 kustomize 布局）、`migrations/README.md`（迁移编号与双引擎对齐）、`test/e2e/README.md`（分阶段 E2E runner）。
 
 ## 许可
 

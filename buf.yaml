@@ -3,6 +3,14 @@ modules:
   - path: api/proto
 lint:
   use:
+    # STANDARD deliberately excludes the COMMENT_* family, and it stays excluded.
+    # A blanket "every message / field / enum value needs a comment" gate would
+    # ask for roughly 1300 more comments and would reward comments that restate
+    # the declaration, which is the failure mode AGENTS.md warns against. The
+    # categories that carry real information are already at 100% (file headers
+    # 14/14, services 13/13, RPCs 104/104, enums 30/30, oneofs 7/7); enabling any
+    # COMMENT_* rule later should be a per-rule decision paired with a scripted
+    # coverage check rather than a category switch here.
     - STANDARD
   except:
     - RPC_REQUEST_RESPONSE_UNIQUE

@@ -184,10 +184,10 @@ orchestrator 与 auth 的 `run-*`/`dev-stage-*` 都只传 `--config`。
   `data/dev-jwt/`、`data/dev-ca/`、`data/dev-trust-root/`、`data/dev-service-tokens/`）；
   ci 从环境变量注入同名物料、不落盘，且失败/中断路径自动清理受管资源。
 
-> 事实源：`.worktrees/t092/deploy/dev/dev.sh`（cmd_up/cmd_down/cmd_seed/cmd_status/cmd_reset_data/cmd_purge、cleanup_trap、kustomize_apply、control_plane_restart_deployments）、
-> `.worktrees/t092/deploy/dev/lib/host.sh`、`deploy/dev/lib/errors.sh`、
-> `.worktrees/t092/Makefile`（dev-* / dev-stage-* / run-* 目标）、`.worktrees/t092/configs/*.dev.yaml`、
-> `.worktrees/t092/.github/workflows/test.yml`（e2e/e2e-prerequisite job 的工具安装与 env）、
+> 事实源：`deploy/dev/dev.sh`（cmd_up/cmd_down/cmd_seed/cmd_status/cmd_reset_data/cmd_purge、cleanup_trap、kustomize_apply、control_plane_restart_deployments）、
+> `deploy/dev/lib/host.sh`、`deploy/dev/lib/errors.sh`、
+> `Makefile`（dev-* / dev-stage-* / run-* 目标）、`configs/*.dev.yaml`、
+> `.github/workflows/test.yml`（e2e/e2e-prerequisite job 的工具安装与 env）、
 > `Projects/001-release-manager/Requirements/REQ-065-dev-environment.md`、
 > `Design/contracts/dev-environment-lifecycle.md`、`Design/contracts/dev-fixture-canonical.md`、
 > `Design/decisions/D-013`、`D-014`、`D-017`、`D-019`、`D-020`。
