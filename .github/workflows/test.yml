@@ -47,6 +47,26 @@ jobs:
       - name: Run SDK-only static gate
         run: go run ./cmd/sdkcheck/ -exceptions sdkcheck.exceptions.yaml ./...
 
+  license-check:
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache: ${{ vars.RUNS_ON != 'self-hosted' }}
+
+      # The checker classifies the license text of every module in the build
+      # closure straight out of the module cache and reads the license field of
+      # the frontend lockfile, so it needs jq (preinstalled on hosted runners)
+      # and no additional scanner. It also fails when NOTICE no longer matches
+      # the notices those modules ship, so a dependency bump cannot silently
+      # leave the release artifact stale.
+      - name: Check dependency licenses
+        run: make check-licenses
+
   install-sdk:
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 15

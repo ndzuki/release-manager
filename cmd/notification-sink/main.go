@@ -136,7 +136,7 @@ func (s *notificationSink) handleList(w http.ResponseWriter, _ *http.Request) {
 }
 
 func main() {
-	configPath := flag.String("config", "configs/notification-sink.dev.yaml", "path to config file")
+	configPath := flag.String("config", "deploy/kustomize/dev/configs/notification-sink.dev.yaml", "path to config file")
 	flag.Parse()
 	app.Run(*configPath, &notificationSink{capacity: 100})
 }

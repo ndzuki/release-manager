@@ -1,0 +1,10 @@
+# Dependency-license exceptions, reviewed by a human.
+#
+# One row per exception: <module-or-package><TAB><reason>. A key ending in "/"
+# matches every path below that prefix. A row here lets `make check-licenses`
+# pass for a dependency whose license is not on the default allow-list, so every
+# row must carry a reason a reviewer can verify. Delete the row once the
+# dependency is gone.
+#
+# Currently empty: every shipped dependency carries a recognised, allowed
+# license (see docs/dependencies.md for the generated inventory).

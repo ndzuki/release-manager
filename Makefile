@@ -38,7 +38,8 @@ OPERATOR_IMAGE ?= release-operator:local
 OPERATOR_IMAGE_ARCHIVE ?= $(CURDIR)/.tmp-release-operator.tar
 
 # Ports
-MANAGER_PORT := 8081
+# The single "manager" port is gone with cmd/release-manager (removed from the tree
+# long ago): each dev-stage-* target below echoes the port of the service it starts.
 
 # ---------------------------------------------------------------------------
 # Multi-service build & run
@@ -81,7 +82,7 @@ run-webhook: build-webhook ## Start release-webhook
 .PHONY: run-orchestrator
 run-orchestrator: build-orchestrator ## Start release-orchestrator
 	@mkdir -p data
-	./$(BIN_DIR)/release-orchestrator --config configs/orchestrator.dev.yaml --db data/release-manager.db
+	./$(BIN_DIR)/release-orchestrator --config configs/orchestrator.dev.yaml
 
 .PHONY: run-operator
 run-operator: build-operator ## Start release-operator
@@ -89,7 +90,7 @@ run-operator: build-operator ## Start release-operator
 
 .PHONY: run-auth
 run-auth: build-auth ## Start release-auth
-	./$(BIN_DIR)/release-auth --config configs/auth.dev.yaml --db data/release-manager.db
+	./$(BIN_DIR)/release-auth --config configs/auth.dev.yaml
 
 .PHONY: run-notifier
 run-notifier: build-notifier ## Start release-notifier
@@ -290,34 +291,34 @@ dev-stage-shared: proto ## REQ-009,010,039 — Shared contracts
 .PHONY: dev-stage-artifact
 dev-stage-artifact: proto ## REQ-011,012 — Artifact ingestion
 	@echo "$(YELLOW)Stage: Artifact$(NC)"
-	@echo "$(BLUE)  webhook: http://localhost:8080/health$(NC)"
-	@echo "$(BLUE)  ▸ api/webhook.http$(NC)"
-	@fuser -k 8080/tcp 2>/dev/null || true
+	@echo "$(BLUE)  webhook: http://localhost:8082/health$(NC)"
+	@echo "$(BLUE)  ▸ api/kulala/webhook.http$(NC)"
+	@fuser -k 8082/tcp 2>/dev/null || true
 	$(GO) run ./cmd/webhook/ --config configs/webhook.dev.yaml
 
 .PHONY: dev-stage-tenancy
 dev-stage-tenancy: proto ## REQ-013,014 — Customer & Cluster
 	@echo "$(YELLOW)Stage: Tenancy$(NC)"
-	@echo "$(BLUE)  Manager: http://localhost:$(MANAGER_PORT)/health$(NC)"
-	@echo "$(BLUE)  ▸ api/manager.http -> Customers / Clusters$(NC)"
-	@fuser -k $(MANAGER_PORT)/tcp 2>/dev/null || true
-	$(GO) run ./cmd/release-manager/ --config configs/manager.dev.yaml
+	@echo "$(BLUE)  Orchestrator: http://localhost:8083/health$(NC)"
+	@echo "$(BLUE)  ▸ api/kulala/manager.http -> Customers / Clusters$(NC)"
+	@fuser -k 8083/tcp 2>/dev/null || true
+	$(GO) run ./cmd/orchestrator/ --config configs/orchestrator.dev.yaml
 
 .PHONY: dev-stage-operator
 dev-stage-operator: proto ## REQ-015,044,016 — Operator control
 	@echo "$(YELLOW)Stage: Operator$(NC)"
 	@echo "$(BLUE)  Operator: http://localhost:8084/health$(NC)"
-	@echo "$(BLUE)  ▸ api/operator.http$(NC)"
+	@echo "$(BLUE)  ▸ api/kulala/operator.http$(NC)"
 	@fuser -k 8084/tcp 2>/dev/null || true
 	$(GO) run ./cmd/operator/ --config configs/operator.dev.yaml --db data/release-manager.db
 
 .PHONY: dev-stage-config
 dev-stage-config: proto ## REQ-040,018,068 — ReleaseDefinition & ValuesRevision
 	@echo "$(YELLOW)Stage: Release Config$(NC)"
-	@echo "$(BLUE)  Manager: http://localhost:$(MANAGER_PORT)/health$(NC)"
-	@echo "$(BLUE)  ▸ api/manager.http -> Release Definitions / ValuesRevision$(NC)"
-	@fuser -k $(MANAGER_PORT)/tcp 2>/dev/null || true
-	$(GO) run ./cmd/release-manager/ --config configs/manager.dev.yaml
+	@echo "$(BLUE)  Orchestrator: http://localhost:8083/health$(NC)"
+	@echo "$(BLUE)  ▸ api/kulala/manager.http -> Release Definitions / ValuesRevision$(NC)"
+	@fuser -k 8083/tcp 2>/dev/null || true
+	$(GO) run ./cmd/orchestrator/ --config configs/orchestrator.dev.yaml
 
 .PHONY: dev-stage-publish
 dev-stage-publish: proto ## REQ-023,067 — Core pipeline CreateOperation
@@ -327,15 +328,15 @@ dev-stage-publish: proto ## REQ-023,067 — Core pipeline CreateOperation
 	@echo "$(BLUE)  ▸ api/kulala/orchestrator.http$(NC)"
 	@mkdir -p data
 	@fuser -k 8083/tcp 2>/dev/null || true
-	$(GO) run ./cmd/orchestrator/ --config configs/orchestrator.dev.yaml --db data/release-manager.db
+	$(GO) run ./cmd/orchestrator/ --config configs/orchestrator.dev.yaml
 
 .PHONY: dev-stage-auth
 dev-stage-auth: proto ## REQ-025,026,049,027 — Auth & RBAC
 	@echo "$(YELLOW)Stage: Auth & RBAC$(NC)"
 	@echo "$(BLUE)  Auth: http://localhost:8085/health$(NC)"
-	@echo "$(BLUE)  ▸ api/auth.http -> Login / Orgs / Users$(NC)"
+	@echo "$(BLUE)  ▸ api/kulala/auth.http -> Login / Orgs / Users$(NC)"
 	@fuser -k 8085/tcp 2>/dev/null || true
-	$(GO) run ./cmd/auth/ --config configs/auth.dev.yaml --db data/release-manager.db
+	$(GO) run ./cmd/auth/ --config configs/auth.dev.yaml
 
 .PHONY: dev-stage-audit
 dev-stage-audit: proto ## REQ-050,029,030 — Audit, Export & Archive
@@ -347,12 +348,13 @@ dev-stage-audit: proto ## REQ-050,029,030 — Audit, Export & Archive
 	$(GO) run ./cmd/api/ --config configs/api.dev.yaml --db data/api.db --signing-key change-me-in-production
 
 .PHONY: dev-stage-full
-dev-stage-full: proto ## All services (equivalent to old dev-manager)
-	@echo "$(YELLOW)Stage: Full$(NC)"
-	@echo "$(BLUE)  Manager: http://localhost:$(MANAGER_PORT)/health$(NC)"
-	@echo "$(BLUE)  ▸ api/*.http — all collections$(NC)"
-	@fuser -k $(MANAGER_PORT)/tcp 2>/dev/null || true
-	$(GO) run ./cmd/release-manager/ --config configs/manager.dev.yaml
+dev-stage-full: ## All services — how to start them (the single-binary dev-manager no longer exists)
+	@echo "$(YELLOW)Stage: Full — all services$(NC)"
+	@echo "$(BLUE)  Whole environment (containers): make dev-up dev-seed dev-status$(NC)"
+	@echo "$(BLUE)  One service at a time (go run):  make dev-stage-shared dev-stage-artifact dev-stage-tenancy$(NC)"
+	@echo "$(BLUE)                                   make dev-stage-operator dev-stage-config dev-stage-publish$(NC)"
+	@echo "$(BLUE)                                   make dev-stage-auth dev-stage-audit$(NC)"
+	@echo "$(BLUE)  Collections: api/kulala/*.http$(NC)"
 
 # ---------------------------------------------------------------------------
 # Quality
@@ -481,6 +483,10 @@ check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
 		printf "$(YELLOW)check-reqs: no REQ docs found in repo, skipping$(NC)\n"; \
 	fi
 
+.PHONY: check-licenses
+check-licenses: ## Check every shipped dependency's license against the project policy
+	bash scripts/check-licenses.sh
+
 
 .PHONY: test-rollback-sdk
 test-rollback-sdk: ## Run Rollback SDK quality gate (REQ-063)
@@ -509,7 +515,7 @@ test-operator-image-sdk-only: ## Run operator image SDK-only gate (REQ-061)
 			--policy imagecheck.operator.yaml \
 			--dockerfile deploy/docker/Dockerfile.operator
 .PHONY: quality
-quality: sdk-check test-coverage lint check-reqs ## Full quality gate run
+quality: sdk-check test-coverage lint check-reqs check-licenses ## Full quality gate run
 
 .PHONY: build-sdkcheck
 build-sdkcheck: proto ## Build sdkcheck
