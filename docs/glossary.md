@@ -56,7 +56,7 @@
 | 术语 | 定义 | 出处 |
 | --- | --- | --- |
 | Operator | 部署在目标 Cluster 中、通过控制流接收并执行发布命令的已注册 agent identity。（避免：worker、executor、cluster agent） | CONTEXT.md › Language；设计词汇表：ADR-001 |
-| Operator Session | Operator 与控制面之间的有状态连接记录，包含 online、suspect、offline 生命周期。（避免：connection、agent session）**实现现状 ≠ 设计词汇**：协议与存储层把 `revoked` 定义为第 4 个会话状态、而非仅状态原因——wire 枚举 `OPERATOR_SESSION_STATUS_REVOKED`（`api/proto/orchestrator/v1/orchestrator.proto:580`）、store 常量 `SessionRevoked`（`internal/store/store.go:660`）、证书吊销级联将会话直接置为 `revoked`（`internal/store/sqlite/operator_lifecycle.go:120`、`internal/store/postgres/operator_lifecycle.go:124`）、proto↔store 双向映射一等公民（`internal/orchestrator/operator.go:478-479`、`internal/orchestrator/operator.go:506-507`）；CONTEXT.md 的生命周期枚举缺 revoked，差异已记录（见文末 D2），知识库侧修订归 owner。 | CONTEXT.md › Language；设计词汇表：REQ-044 |
+| Operator Session | Operator 与控制面之间的有状态连接记录，包含 online、suspect、offline、revoked 生命周期。（避免：connection、agent session）四态口径的依据在实现侧：wire 枚举 `OPERATOR_SESSION_STATUS_REVOKED`（`api/proto/orchestrator/v1/orchestrator.proto:580`）、store 常量 `SessionRevoked`（`internal/store/store.go:660`）、证书吊销级联将会话直接置为 `revoked`（`internal/store/sqlite/operator_lifecycle.go:120`、`internal/store/postgres/operator_lifecycle.go:124`）、proto↔store 双向映射一等公民（`internal/orchestrator/operator.go:478-479`、`internal/orchestrator/operator.go:506-507`）——`revoked` 是会话**状态**而非仅状态原因。 | CONTEXT.md › Language；设计词汇表：REQ-044 |
 | Operator Session Status Reason | Operator Session 当前在线状态的服务端权威原因枚举，用于解释 `online`、`suspect`、`offline` 或 `revoked`，前端不得仅凭时间戳自行推断。（避免：client-side offline reason、heartbeat message text） | CONTEXT.md › Language |
 | Command Outbox | 控制面数据库中的持久化待投递命令队列，作为待投递命令的权威存储；每行携带全局单调 sequence、command_id、operation_id、payload_version 与 deadline，状态按 pending → delivered → persisted → running → terminal 推进，MVP 每 Operator max_inflight=1；ACK_PERSISTED 在 Operator 本地 fsync 完成后才发送，中心据此释放重投责任；重连时 Operator 重报 last_seen_sequence 以检测 gap（ADR-005、REQ-016）。（避免：memory channel、仅 ACK_RECEIVED、网络 exactly-once） | CONTEXT.md › Language；设计词汇表：ADR-005, REQ-016 |
 | HelmEngine | Operator 内封装 Helm Go SDK（helm.sh/helm/v3/pkg/action）的执行引擎，提供 Install/Upgrade/Rollback/Status/History/GetValues/List 接口；每个 Operation 独立初始化 action.Configuration，不跨并发 Operation 共享可变 action client。（避免：helm CLI wrapper、共享 helm client、os/exec 调用 helm） | CONTEXT.md › Language；设计词汇表：ADR-004, REQ-041 |
@@ -225,7 +225,7 @@
 - 两侧说法：`Notes/CONTEXT.md` 生命周期 online/suspect/offline（revoked 只出现在 Status Reason 条目）；`Design/glossary.md` online/suspect/offline/revoked。
 - 代码证据：`revoked` 是会话**状态**而非状态原因——wire 枚举 `OPERATOR_SESSION_STATUS_REVOKED`（`api/proto/orchestrator/v1/orchestrator.proto:580`）、store 常量 `SessionRevoked`（`internal/store/store.go:660`）、证书吊销级联将会话置为 revoked 并附 reason `certificate_revoked`（`internal/store/sqlite/operator_lifecycle.go:120`、`internal/store/postgres/operator_lifecycle.go:124`）、proto↔store 一等公民双向映射（`internal/orchestrator/operator.go:478-479`、`internal/orchestrator/operator.go:506-507`）；仓库运维文档已按实现记录四态（`docs/runbook.md:168`）。
 - 处理：实现现状 ≠ 设计词汇。表格 Operator Session 条目保留 CONTEXT 定义并已在行内标注差异与证据。
-- 遗留（需人工）：`Notes/CONTEXT.md` 的 Operator Session 条目需要 owner 补入 revoked（或明确其仅为终态记录值）——知识库修改，不在本任务范围。
+- 遗留：**已闭合（2026-09-15）**——`Notes/CONTEXT.md` 的 Operator Session 条目已补入 `revoked`，改为四态。该修订不是改变设计意图，而是消除 CONTEXT.md 的内部矛盾：同一文件里的 **Operator Session Status Reason** 条目一直写着"解释 `online`、`suspect`、`offline` 或 `revoked`"，而生命周期条目只列三态。表格行与实现的依据见上。
 
 ### D3. 服务令牌的术语命名（同一 seam 三种名字） — 裁定：文档对齐（A）
 
