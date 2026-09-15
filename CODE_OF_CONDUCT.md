@@ -26,9 +26,11 @@ pull requests, discussions, review comments, and any interaction that represents
 
 ## 报告渠道
 
-请通过 `SECURITY.md` 列出的渠道报告；涉及行为问题的报告同样走该渠道。
-**注意**：本项目的公开联系渠道当前仍待维护者补充，若你无法投递，请通过 GitHub 向仓库所有者
-直接发送私有消息（Private issue / 私有报告）。
+报告统一走 `SECURITY.md` §1.2 声明的渠道：仓库 Security 页的 **Report a vulnerability**
+（GitHub 私有漏洞报告）。涉及行为问题的报告同样走该渠道——它不会公开被指控者的个人信息。
+**注意**：该开关由维护者在仓库设置中开启，本文无法代为断言它当前已开启；若表单不可见，
+请改用 GitHub 用户 `ndzuki` 个人页上公开的联系方式私下投递，**不要**开公开 issue 描述细节
+（核验与不足见 `SECURITY.md` §1.2、§1.3）。
 
 ## 处理与后果
 
