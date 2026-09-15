@@ -1,3 +1,11 @@
+// File: orchestrator/v1/cleanup.proto
+// Package orchestrator.v1 CleanupService: operator-driven artifact lifecycle
+// garbage collection and the undo path for archived bundles.
+// release-orchestrator (management listener, dev port 8083) serves it; the
+// orchestrator runs the same collection on its own timer, so an RPC trigger is
+// a manual advance of that cycle, not a separate mechanism.
+// Both RPCs need cleanup/write, effectively the platform_admin role, and are
+// refused while the orchestrator runs in maintenance mode.
 syntax = "proto3";
 
 package orchestrator.v1;
@@ -5,11 +13,37 @@ package orchestrator.v1;
 option go_package = "github.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1";
 
 // CleanupService handles artifact lifecycle GC operations.
+// CleanupService exposes the retention garbage collector and bundle restore.
+// Callers: administrators and operations tooling on the management plane.
+// Trust boundary: authenticated user token with organization-scoped
+// authorization; collection spans every customer's artifacts in the deployment,
+// so the permission is deliberately the coarsest one.
 service CleanupService {
     // RunCleanup triggers artifact lifecycle garbage collection.
     // The idempotency_key ensures the same key returns the same result
     // without re-executing the cleanup.
+    // Runs collection synchronously inside the call and returns the counters; the
+    // budget is up to about an hour, so a client timeout must be generous.
+    // A repeated key does not replay the first response while it is still inside
+    // the retention window (24 hours by default): it is refused with ALREADY_EXISTS
+    // (cleanup_already_requested), and an in-flight run of the same key is refused
+    // the same way. Concurrent replicas are serialised by a database lock, reported
+    // as RESOURCE_EXHAUSTED. Single-node deployments may lack the key table, in
+    // which case the recorded key is skipped and only the in-process guard applies.
+    // Per-phase problems are collected into errors (non-fatal) with a non-zero
+    // status code only for whole-run failures, so errors must be inspected even on
+    // a successful response. The counters are row counts, not freed bytes.
     rpc RunCleanup(RunCleanupRequest) returns (RunCleanupResponse);
+    // Restores a bundle the collector had archived, returning the status it was
+    // archived from. Only a bundle archived from the validated state can be
+    // restored; it comes back as validated, not re-received.
+    // Convergent rather than key-based: a replay after a successful restore answers
+    // success again with previous_status validated and writes nothing, so read the
+    // state as the stored origin rather than the status immediately before this
+    // call.
+    // Fails INVALID_ARGUMENT without a bundle_id, NOT_FOUND for an unknown bundle,
+    // FAILED_PRECONDITION for a rejected or otherwise unrestorable bundle.
+    // Requires cleanup/write, effectively platform_admin.
     rpc UnarchiveBundle(UnarchiveBundleRequest) returns (UnarchiveBundleResponse);
 }
 

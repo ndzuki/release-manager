@@ -1,3 +1,27 @@
+// File: orchestrator/v1/orchestrator.proto
+// Package orchestrator.v1 is the release control plane: bundle ingestion and
+// artifact events, release definitions, customers and clusters, operator and
+// enrollment records, artifact routing, values revisions and their approval
+// flow, release operations with a watched timeline, inventory observation, the
+// guard rails around the emergency entry point, and the retention-facing
+// queries that support all of that.
+// release-orchestrator serves BundleService and OrchestratorService on its
+// management listener (dev port 8083) for the browser console, CI and
+// administrative tooling. The customer-cluster operator agent reaches only one
+// procedure, SyncInventory, and only over the mTLS agent-gateway listener (dev
+// port 8084); everything else on this service is management-plane traffic.
+// Management-plane calls carry a bearer access token or the console's access
+// cookie. The shared interceptor requires that any organization_id in the
+// request match the token, maps each procedure to a Casbin object and action
+// (release, bundle, customer, binding, operator), and refuses any procedure it
+// cannot map, so a new RPC needs a policy mapping before it can be called.
+// Writes to release state are further gated by the caller's capability set and
+// by an explicit authorization snapshot, and most are rejected while the
+// orchestrator runs in maintenance mode.
+// Every mutation is either keyed by the Idempotency-Key request header or by a
+// natural key in the message; version fields are compare-and-swap tokens. Read
+// surfaces are paginated with an opaque cursor and a page size clamped to
+// [1, 100].
 syntax = "proto3";
 
 package orchestrator.v1;
@@ -13,16 +37,23 @@ option go_package = "github.com/ndzuki/release-manager/api/gen/orchestrator/v1;o
 // ── Release Bundle Ingestion and Query (REQ-011) ──────────────────
 
 message SubmitBundleRequest {
+  // Display name only; identity is the canonical digest, so the same content
+  // submitted under a different name is still the same bundle.
   string name = 1;
   string chart_ref = 2;
   string chart_version = 3;
+  // Must be in sha256 form. A chart reference without a digest is mutable and is
+  // rejected.
   string chart_digest = 4;
+  // Image-to-values bindings: between 1 and 100 entries, each pinned by digest
+  // with a values path inside this bundle.
   repeated common.v1.BundleImage images = 5;
   string git_commit = 6;
   string pipeline_id = 7;
   common.v1.ArtifactReference signature = 8;
   common.v1.ArtifactReference sbom = 9;
   common.v1.ArtifactReference provenance = 10;
+  // Optional candidate-artifact evidence, at most 500 entries.
   repeated common.v1.CandidateArtifact artifacts = 20;
 }
 
@@ -47,15 +78,23 @@ message BundleSummary {
 
 message SubmitBundleResponse {
   BundleSummary bundle = 1;
+  // False when the submission resolved to an existing bundle, so callers must read
+  // the bundle rather than assume this call made it.
   bool created = 2;
 }
 
 message RecordArtifactEventRequest {
   string source_id = 1;
+  // Registry-assigned identifier; with source_id it is the natural deduplication
+  // key, so a retry must reuse both unchanged.
   string event_id = 2;
   string event_type = 3;
+  // RFC 3339 string, deliberately not a Timestamp: it is the registry's own
+  // statement of when the event happened, kept verbatim for replay.
   string occurred_at = 4;
   string raw_payload = 5;
+  // Hex sha256 of raw_payload without the algorithm prefix; the server recomputes
+  // it and rejects a mismatch, which is what makes an accepted event reproducible.
   string payload_sha256 = 6;
   common.v1.ArtifactType artifact_type = 7;
   string repository = 8;
@@ -65,6 +104,8 @@ message RecordArtifactEventRequest {
 
 message RecordArtifactEventResponse {
   string event_record_id = 1;
+  // False for a redelivered event, in which case the counters describe the
+  // original recording.
   bool created = 2;
   int32 new_candidates = 3;
   int32 updated_locations = 4;
@@ -103,10 +144,57 @@ message GetBundleResponse {
   BundleDetail bundle = 1;
 }
 
+// BundleService is the ingress and query surface for release bundles and the
+// artifact events that describe candidate artifacts.
+// Callers: release-webhook forwarding CI submissions, the browser console, and
+// artifact registries or pipelines that record events directly.
+// Trust boundary: the management listener, so a bearer token authorized for
+// bundle/read or bundle/write, or the development service token that is scoped
+// to SubmitBundle alone. Bundles are global evidence: they are content-addressed
+// and not owned by an organization, while the query procedures are tenant
+// checked through the definition the caller names.
 service BundleService {
+  // Records a release bundle with its chart, image bindings and evidence
+  // references, and queues it for asynchronous validation. The bundle lands in the
+  // received state; the response is not a statement that it is deployable.
+  // Replay-safe through two mechanisms: the canonical digest of the submission is
+  // the natural key, so an identical submission returns the recorded bundle with
+  // created false, and an Idempotency-Key request header held for 24 hours makes
+  // the retry of the same key and payload return the original answer. The same
+  // key with a different payload is refused with ALREADY_EXISTS
+  // (idempotency_conflict) rather than silently replacing anything.
+  // INVALID_ARGUMENT carries the failing rule in the message prefix, such as a
+  // missing chart reference or digest, a digest that is not a sha256 form, an
+  // image list outside 1 to 100 entries, or a duplicate values path.
+  // Requires bundle/write; the scoped development service token is accepted here
+  // only.
   rpc SubmitBundle(SubmitBundleRequest) returns (SubmitBundleResponse);
+  // Records one artifact-registry event and folds the artifacts it mentions into
+  // the candidate-artifact pool, answering how many candidates were new and how
+  // many locations were refreshed.
+  // Deduplicated on the (source_id, event_id) pair: a redelivery with the same
+  // content answers created false, while the same pair with different content is
+  // refused with ALREADY_EXISTS (artifact_event_conflict) instead of overwriting
+  // history.
+  // INVALID_ARGUMENT for a missing field, an empty or oversized resource list
+  // (1 to 100 entries), an unspecified artifact type, an occurred_at that is not
+  // RFC 3339, a payload hash that does not match raw_payload, or a resource
+  // without a digest and reference.
+  // Requires bundle/write.
   rpc RecordArtifactEvent(RecordArtifactEventRequest) returns (RecordArtifactEventResponse);
+  // Lists bundles, optionally narrowed to one release definition and to a set of
+  // statuses, with cursor pagination.
+  // Read-only and replayable. Cursors are opaque and bound to the filter that
+  // produced them, so a filter change must restart from the first page.
+  // INVALID_ARGUMENT for a malformed page size or cursor; a bundle set the caller
+  // may not see is reported as PERMISSION_DENIED rather than as an empty page.
+  // Requires bundle/read.
   rpc ListBundles(ListBundlesRequest) returns (ListBundlesResponse);
+  // Reads one bundle in full, including its evidence references and digests, by
+  // bundle identifier or by release definition and bundle.
+  // Read-only and replayable; NOT_FOUND for an unknown bundle and PERMISSION_DENIED
+  // when the bundle is not reachable from the caller's organization.
+  // Requires bundle/read.
   rpc GetBundle(GetBundleRequest) returns (GetBundleResponse);
 }
 
@@ -119,11 +207,18 @@ message CreateOperationGateDetail {
 
 // CreateOperationRequest submits a new standard release operation for orchestration.
 message CreateOperationRequest {
+  // INSTALL or UPGRADE only; anything else is INVALID_ARGUMENT.
   string operation_type = 1;          // INSTALL or UPGRADE
   string bundle_id = 2;               // ReleaseBundle ID
   string release_definition_id = 3;
+  // Must be a revision in the approved state, which is the gate that keeps
+  // unreviewed inputs out of a cluster.
   string values_revision_id = 4;      // must be approved
+  // JSON merge patch applied over the revision's document; it is not persisted in
+  // the readable operation projection.
   google.protobuf.Struct values_patch = 5;  // JSON Merge Patch (nullable)
+  // Required for UPGRADE: the Helm revision the caller believes is live. A stale
+  // value is a conflict, not a silent override.
   int32 expected_current_revision = 6;// required for UPGRADE
   reserved 7, 8;
   reserved "idempotency_key", "actor";
@@ -190,12 +285,15 @@ message Operation {
   string release_definition_id = 2;
   string operation_type = 3;
   OperationStatus state = 4;
+  // Compare-and-swap token for cancellation: echo it as expected_state_version.
   int64 state_version = 5;
   string bundle_id = 6;
   string values_revision_id = 7;
   int32 expected_revision = 8;
   int32 target_revision = 9;
   common.v1.ActorContext actor = 10;
+  // Reserved for the projected creation time. The current projection leaves this
+  // and updated_at unset, so read terminal_at for finished operations.
   google.protobuf.Timestamp created_at = 11;
   google.protobuf.Timestamp updated_at = 12;
   google.protobuf.Timestamp terminal_at = 13;
@@ -218,6 +316,8 @@ message GetOperationResponse {
 message CancelOperationRequest {
   string operation_id = 1;
   string reason = 2;
+  // The state_version the caller observed. Zero is not a wildcard: a mismatch is
+  // reported as a conflict.
   int64 expected_state_version = 3;
   reserved 4;
   reserved "idempotency_key";
@@ -230,10 +330,16 @@ message CancelOperationResponse {
 
 message WatchOperationRequest {
   string operation_id = 1;
+  // Last timeline sequence already processed; zero replays the retained history
+  // from the beginning of the retention window.
   int64 after_sequence = 2;
 }
 
 message WatchOperationResponse {
+  // Exactly one member per frame. A snapshot is the state as of its own sequence
+  // and is what a client must apply before any entry, including the one that
+  // follows it in the same stream; entries then advance the view, and heartbeats
+  // carry no state and exist to keep intermediaries from closing an idle stream.
   oneof payload {
     OperationSnapshot snapshot = 1;
     TimelineEntry entry = 2;
@@ -247,7 +353,11 @@ message OperationSnapshot {
   int64 retained_from_sequence = 3;
 }
 
+// Labels what a retained operation timeline entry records, so a watcher can
+// decode the payload field it cares about without reparsing text.
 enum TimelineEntryKind {
+  // What the read path returns for a stored entry whose kind it does not
+  // recognise, so an older client sees an unknown label rather than a wrong one.
   TIMELINE_ENTRY_KIND_UNSPECIFIED = 0;
   TIMELINE_ENTRY_KIND_STATE_TRANSITION = 1;
   TIMELINE_ENTRY_KIND_ACK = 2;
@@ -550,12 +660,12 @@ message RevokeOperatorRequest {
   string customer_id = 1;
   string cluster_id = 2;
   string operator_id = 3;
-  string reason = 4; // trim后 5–500 Unicode characters
+  string reason = 4; // 5–500 Unicode characters after trimming
 }
 
 message RevokeOperatorResponse {
   OperatorSummary operator = 1;
-  bool changed = 2; // false表示重复吊销，状态仍为revoked
+  bool changed = 2; // false means the revocation was already recorded; the state stays revoked
 }
 
 // ── Enrollment Token Messages ──────────────────────────────────────
@@ -779,10 +889,16 @@ message GetPrepareSessionResponse {
 
 // ── Release Inventory Query and Manual Sync (REQ-054) ────────────
 
+// State of a release row in the inventory cache the agent last reported, not
+// the live Helm state of the cluster.
 enum ReleaseInventoryStatus {
+  // Means no status filter when sent as status_filter; it is never returned as
+  // the status of a release.
   RELEASE_INVENTORY_STATUS_UNSPECIFIED = 0;
   RELEASE_INVENTORY_STATUS_ACTIVE = 1;
   RELEASE_INVENTORY_STATUS_MISSING = 2;
+  // Accepted as a filter but reserved: nothing in the sync path writes it today,
+  // so filtering on it returns an empty page rather than an error.
   RELEASE_INVENTORY_STATUS_OUT_OF_SYNC = 3;
 }
 
@@ -841,78 +957,482 @@ message ListSecretsResponse {
 }
 
 message TriggerInventorySyncResponse {
+  // Correlates with the X-Sync-Request-ID response header; match it against the
+  // sync_id the agent eventually reports to confirm the request was acted on.
   string sync_request_id = 1;
 }
+// OrchestratorService is the release control plane: it creates and watches
+// release operations, owns release definitions, customers, clusters, operator
+// records, artifact routing, values revisions and their approval flow,
+// inventory observation, and the guard rails around emergency execution.
+// Callers: the browser console, administrative tooling and CI on the management
+// listener, plus the customer-cluster operator agent for the single inventory
+// reporting procedure on the mTLS agent gateway.
+// Trust boundary: management procedures carry a user token whose organization
+// must match every organization-scoped field, and are authorized per procedure
+// against Casbin (release, customer, binding, operator objects) plus the
+// handler's own capability check for values and execution writes. Agent
+// procedures are authorized by the verified client certificate instead.
+// Writes are versioned: an operation, values revision or record carries a state
+// or optimistic version the caller must echo, and a lost race is reported as a
+// conflict rather than resolved silently. Most writes carry an Idempotency-Key
+// request header; the ones that do not say so in their comment are ordered by a
+// natural key or by state instead.
 service OrchestratorService {
+  // Queues a release operation (install or upgrade) for a bundle and values
+  // revision against a release definition; the orchestrator, not the caller,
+  // decides when and how the operator agent executes it.
+  // Carries an Idempotency-Key request header. A retry with the same key and the
+  // same payload replays the operation created the first time; the same key with a
+  // different payload is refused with ALREADY_EXISTS, and a conflicting stored
+  // record is reported the same way rather than as a second operation.
+  // Refused while a cluster effect is unresolved or a convergence task is still
+  // running for the definition: FAILED_PRECONDITION with a machine reason and a
+  // typed detail naming the blocking work, which is the caller's signal to wait
+  // rather than to retry blindly.
+  // INVALID_ARGUMENT for an unsupported operation type or a missing input,
+  // NOT_FOUND for an unknown definition, bundle or revision, PERMISSION_DENIED for
+  // a disabled customer or cluster, and UNAVAILABLE when the authorization state
+  // cannot be read. The response reports the post-gate state, usually the
+  // preflight state, not the queued state.
+  // Requires release/write with the deployer or administrator capability.
   rpc CreateOperation(CreateOperationRequest) returns (CreateOperationResponse);
+  // Publishes a bundle to a release definition. It validates that the definition,
+  // customer and cluster can be targeted, but the publishing step itself is a
+  // skeleton: the response carries no operation identifier and a status of
+  // not_implemented.
+  // Because nothing is enqueued, calling it twice is harmless, and it must not be
+  // used as a way to trigger a deployment. Use CreateOperation for real work.
+  // NOT_FOUND for an unknown definition or cluster and PERMISSION_DENIED for a
+  // disabled customer or cluster are still enforced.
+  // Requires release/write.
   rpc PublishRelease(PublishReleaseRequest) returns (PublishReleaseResponse);
+  // Queues a rollback of a release definition to a previous Helm revision, as a
+  // new operation rather than an in-place mutation of the failed one.
+  // Carries an Idempotency-Key request header with the same replay and conflict
+  // semantics as CreateOperation.
+  // FAILED_PRECONDITION when the requested revision no longer matches what the
+  // cluster reports (a stale revision view), when the target is not operable, or
+  // when a cluster effect is unresolved; NOT_FOUND for an unknown definition.
+  // Requires release/write with the deployer or administrator capability.
   rpc RollbackRelease(RollbackReleaseRequest) returns (RollbackReleaseResponse);
+  // Reads one release operation: state, versions, targets and the last error,
+  // with the caller's own actor recorded.
+  // Read-only and replayable. The projection is intentionally public-safe: the
+  // values patch, the stored idempotency material and the request hash are never
+  // returned, so this is not the way to recover an input document.
+  // NOT_FOUND for an unknown operation or one belonging to another organization.
+  // Requires release/read.
   rpc GetOperation(GetOperationRequest) returns (GetOperationResponse);
+  // Streams an operation's timeline: a snapshot of the retained history, then live
+  // state entries as they are recorded, with periodic heartbeat frames to keep
+  // proxies alive.
+  // Resumable rather than idempotent: pass the last sequence you processed as
+  // after_sequence and the stream replays everything retained from that point, so
+  // reconnecting after a drop does not lose or duplicate state. The stream ends
+  // when the operation reaches a terminal state.
+  // A cursor older than the retention window answers OUT_OF_RANGE with reason
+  // cursor_expired and carries the current snapshot sequence, the oldest retained
+  // sequence and a base64 snapshot in error metadata, which lets a client rebuild
+  // state without a second round trip.
+  // NOT_FOUND for an unknown operation. Requires release/read. Note that streaming
+  // bypasses the unary maintenance-mode gate, so a watch keeps working during a
+  // cutover while writes are blocked.
   rpc WatchOperation(WatchOperationRequest) returns (stream WatchOperationResponse);
+  // Requests cancellation of a non-terminal operation and records the reason.
+  // Carries an Idempotency-Key request header.
+  // Versioned: expected_state_version must match the operation as the caller saw
+  // it, and a stale value is refused as a conflict so the caller re-reads. A
+  // terminal operation is refused with FAILED_PRECONDITION (cancel_not_allowed), as
+  // is an operation already cancelling or an in-flight emergency, which cannot be
+  // cancelled by design.
+  // NOT_FOUND for an unknown operation. Requires release/write.
   rpc CancelOperation(CancelOperationRequest) returns (CancelOperationResponse);
+  // Moves a values revision into the pending-approval state so an approver other
+  // than the author can decide on it.
+  // Versioned by expected_state_version; a stale value answers ABORTED
+  // (optimistic_lock_conflict). An Idempotency-Key request header is honoured but
+  // optional: without one there is no replay protection, so a client that retries
+  // must be prepared for the state check to reject the second attempt.
+  // NOT_FOUND (revision_not_found) for an unknown revision,
+  // FAILED_PRECONDITION (invalid_revision_state) when the revision is not in a
+  // submittable state, PERMISSION_DENIED when the caller lacks the role or is not
+  // an active member, FAILED_PRECONDITION when the customer or organization is
+  // disabled or the binding is revoked, and UNAVAILABLE when the authorization
+  // snapshot is stale.
+  // Requires the values-approval capability; the handler decides, not Casbin.
   rpc SubmitValuesRevision(SubmitValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
+  // Approves a pending values revision, making it eligible for execution.
+  // Versioned by expected_state_version, with ABORTED (optimistic_lock_conflict)
+  // on a lost race, and approval_already_pending or invalid_revision_state as
+  // FAILED_PRECONDITION when the revision is not awaiting a decision.
+  // An approver may not approve a revision they authored: PERMISSION_DENIED
+  // (self_approval_forbidden).
+  // Same optional Idempotency-Key and authorization-snapshot behaviour as the
+  // submit path. Requires the values-approval capability.
   rpc ApproveValuesRevision(ApproveValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
+  // Rejects a pending values revision with a mandatory reason, which is retained
+  // for audit.
+  // Versioned and state-checked exactly like approval: ABORTED on a stale
+  // expected_state_version, FAILED_PRECONDITION when the revision is not awaiting
+  // a decision, and INVALID_ARGUMENT when the reason is missing, too long or
+  // carries forbidden characters.
+  // Rejection is terminal for the revision: it cannot be resubmitted, so the
+  // author must create a successor. Requires the values-approval capability.
   rpc RejectValuesRevision(RejectValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
   // ValuesRevision CRUD and secret metadata (REQ-055)
+  // Submits an immutable values document for a release definition, optionally
+  // inside a prepare session, and returns the revision in its initial state.
+  // Carries an Idempotency-Key request header. Beyond replay protection, the
+  // revision itself never changes once created: correcting values means a new
+  // revision with a parent pointer.
+  // ABORTED (parent_conflict) when another revision became the chain head while
+  // this one was being written, FAILED_PRECONDITION for an expired prepare token,
+  // NOT_FOUND for an unknown definition or token, INVALID_ARGUMENT for a missing
+  // document or a malformed secret reference, and RESOURCE_EXHAUSTED when the
+  // document is over the size limit.
+  // Requires the values-creation capability on the definition's organization; the
+  // handler performs that check itself in addition to the policy gate.
   rpc CreateValuesRevision(CreateValuesRevisionRequest) returns (CreateValuesRevisionResponse);
+  // Reads one values revision, including its canonical document and secret
+  // references.
+  // Read-only and replayable; NOT_FOUND (revision_not_found) for an unknown
+  // identifier and INVALID_ARGUMENT for a missing one.
+  // Requires release/read on the owning definition.
   rpc GetValuesRevision(GetValuesRevisionRequest) returns (common.v1.ValuesRevision);
+  // Lists the revision history of a release definition, optionally filtered by
+  // status, with cursor pagination.
+  // Read-only and replayable while a cursor is valid.
+  // INVALID_ARGUMENT for a missing definition, a page size above 100, an unknown
+  // status filter or an undecodable cursor (invalid_cursor), the one place in this
+  // contract where a stale cursor is reported as a client error rather than
+  // internally.
+  // Requires release/read.
   rpc ListValuesRevisions(ListValuesRevisionsRequest) returns (ListValuesRevisionsResponse);
+  // Discards a values revision that is not yet executing, so it can never be
+  // approved or run.
+  // Carries an Idempotency-Key request header and a compare-and-swap on
+  // expected_state_version, which must be at least 1.
+  // FAILED_PRECONDITION when the revision's state does not allow discarding; the
+  // operation is not reversible, so a mistaken discard needs a new revision.
+  // NOT_FOUND for an unknown revision. Requires the values-creation capability on
+  // the owning definition.
   rpc DiscardValuesRevision(DiscardValuesRevisionRequest) returns (ValuesRevisionDecisionResponse);
+  // Opens a short-lived prepare session that resolves secret references and locks
+  // values paths before a revision is submitted, returning the token to pass to
+  // CreateValuesRevision.
+  // Not idempotent: each call opens a new session, and an unrecovered session
+  // simply expires.
+  // ABORTED when an in-flight convergence task conflicts with the paths being
+  // prepared, FAILED_PRECONDITION for a definition that cannot be prepared,
+  // NOT_FOUND for an unknown definition, PERMISSION_DENIED when the caller lacks
+  // the capability, and UNAVAILABLE when secret metadata cannot be resolved.
+  // Requires the values-creation capability.
   rpc CreatePrepareSession(CreatePrepareSessionRequest) returns (CreatePrepareSessionResponse);
+  // Reads a prepare session's resolved state and expiry.
+  // Read-only and replayable while the session exists; NOT_FOUND for an unknown
+  // token and FAILED_PRECONDITION once it has expired, at which point a new
+  // session must be opened rather than resumed.
+  // Requires the same authorization as the write it prepared.
   rpc GetPrepareSession(GetPrepareSessionRequest) returns (GetPrepareSessionResponse);
+  // Lists the secret metadata (paths and digests, never values) that a definition
+  // resolves in its target cluster.
+  // This is not a local database read: it enqueues a metadata command and waits
+  // for the agent to answer, for up to about fifteen seconds.
+  // Read-only but not replay-safe under pressure: an offline or slow agent answers
+  // UNAVAILABLE (operator_offline, or metadata temporarily unavailable) and the
+  // client should retry later, which is the intended back pressure rather than a
+  // bug.
+  // INVALID_ARGUMENT when the scope fields are missing and NOT_FOUND when the
+  // definition is not in the named cluster. Requires release/read.
   rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse);
 
   // Release definition management
+  // Creates the pairing of a bundle source with a customer, cluster, namespace
+  // and release name, which is the object every operation targets.
+  // Not idempotent: the same inputs submitted twice create two definitions unless
+  // the natural tuple already exists, in which case ALREADY_EXISTS is returned
+  // rather than the existing row.
+  // INVALID_ARGUMENT for a missing field or a cluster that does not belong to the
+  // named customer, NOT_FOUND for an unknown customer or cluster, and
+  // PERMISSION_DENIED when either is disabled.
+  // Requires release/write.
   rpc CreateReleaseDefinition(CreateReleaseDefinitionRequest) returns (CreateReleaseDefinitionResponse);
+  // Reads one release definition by identifier.
+  // Read-only and replayable; NOT_FOUND for an unknown identifier.
+  // Requires release/read.
   rpc GetReleaseDefinition(GetReleaseDefinitionRequest) returns (GetReleaseDefinitionResponse);
+  // Lists the release definitions visible to the caller's organization.
+  // Read-only and replayable; unpaginated, so the response grows with the tenant.
+  // Requires release/read.
   rpc ListReleaseDefinitions(ListReleaseDefinitionsRequest) returns (ListReleaseDefinitionsResponse);
+  // Updates a definition's mutable fields (namespace, release name, chart name,
+  // emergency guard rails, promotion configuration).
+  // Versioned when the caller supplies expected_version: a stale value answers
+  // FAILED_PRECONDITION (optimistic_lock_conflict). Leaving it at zero skips the
+  // check and writes unconditionally, so a caller that cares about lost updates
+  // must send the version it read.
+  // Unset fields are left alone rather than cleared, so this cannot remove an
+  // approved annotation key or mapping.
+  // NOT_FOUND for an unknown definition, FAILED_PRECONDITION when the definition
+  // is disabled, INTERNAL on a store fault.
+  // Requires release/write.
   rpc UpdateReleaseDefinition(UpdateReleaseDefinitionRequest) returns (UpdateReleaseDefinitionResponse);
+  // Disables a definition so no new operation can target it; existing history and
+  // inventory are kept.
+  // Convergent: an already disabled definition answers success again rather than
+  // reporting a conflict.
+  // NOT_FOUND for an unknown definition. Requires release/write.
   rpc DisableReleaseDefinition(DisableReleaseDefinitionRequest) returns (DisableReleaseDefinitionResponse);
+  // Registers a customer, the tenant that clusters, bindings and releases hang
+  // off.
+  // Not idempotent: no deduplication key and no natural key on the name, so a
+  // retry after a lost response can create a second customer. Check before
+  // retrying.
+  // The handler reports INVALID_ARGUMENT for a missing name, NOT_FOUND when the
+  // resolved owner organization is unknown and INTERNAL on a store fault.
+  // Requires customer access in the caller's organization.
   rpc CreateCustomer(CreateCustomerRequest) returns (CreateCustomerResponse);
+  // Reads one customer by identifier.
+  // Read-only and replayable; NOT_FOUND for an unknown customer.
+  // Requires customer/read.
   rpc GetCustomer(GetCustomerRequest) returns (GetCustomerResponse);
+  // Lists the customers the caller's organization can see.
+  // Read-only, replayable and unpaginated.
+  // Requires customer/read.
   rpc ListCustomers(ListCustomersRequest) returns (ListCustomersResponse);
+  // Updates a customer's mutable metadata under optimistic locking.
+  // Versioned: a stale expected_version is refused so a lost update cannot
+  // silently rename or reconfigure a tenant.
+  // NOT_FOUND for an unknown customer. Requires customer access in the caller's
+  // organization.
   rpc UpdateCustomer(UpdateCustomerRequest) returns (UpdateCustomerResponse);
+  // Disables a customer, which stops new work for every cluster beneath it while
+  // leaving already-applied releases running.
+  // Convergent: disabling an already disabled customer answers success again.
+  // Disabling cascades: outstanding enrollment tokens, operators and sessions are
+  // retired with it, which is why it is the kill switch for a tenant.
+  // NOT_FOUND for an unknown customer. Requires customer access.
   rpc DisableCustomer(DisableCustomerRequest) returns (DisableCustomerResponse);
+  // Reads the recorded lifecycle events of a customer, such as disable and
+  // re-enable transitions.
+  // Read-only and replayable; NOT_FOUND for an unknown customer.
+  // Requires customer/read.
   rpc ListCustomerEvents(ListCustomerEventsRequest) returns (ListCustomerEventsResponse);
+  // Registers a cluster beneath a customer, the target an operator agent will
+  // later enroll against.
+  // Not idempotent: there is no key, so a retry can create a second cluster row;
+  // the customer and name tuple is constrained by storage.
+  // NOT_FOUND for an unknown customer and PERMISSION_DENIED when that customer is
+  // disabled. Requires customer access.
   rpc CreateCluster(CreateClusterRequest) returns (CreateClusterResponse);
+  // Updates a cluster's mutable metadata under optimistic locking.
+  // ABORTED when expected_version is stale, so the caller re-reads instead of
+  // overwriting a concurrent change.
+  // INVALID_ARGUMENT for a malformed request, ALREADY_EXISTS for a name collision
+  // within the customer, NOT_FOUND for an unknown cluster.
+  // Requires customer access.
   rpc UpdateCluster(UpdateClusterRequest) returns (UpdateClusterResponse);
+  // Reads one cluster, including its route count and credential reference.
+  // Read-only and replayable; NOT_FOUND for an unknown cluster.
+  // Requires customer/read.
   rpc GetCluster(GetClusterRequest) returns (GetClusterResponse);
+  // Lists clusters, optionally narrowed to one customer.
+  // Read-only, replayable and unpaginated.
+  // Requires customer/read.
   rpc ListClusters(ListClustersRequest) returns (ListClustersResponse);
+  // Disables a cluster so it can no longer be targeted or routed to.
+  // Convergent: an already disabled cluster answers success again.
+  // NOT_FOUND for an unknown cluster. Requires customer access.
   rpc DisableCluster(DisableClusterRequest) returns (DisableClusterResponse);
 
   // Operator management (REQ-053)
+  // Lists the operator agents registered for a customer and cluster pair.
+  // Read-only and replayable. Both scope fields are required: INVALID_ARGUMENT
+  // rather than an unfiltered enumeration.
+  // Requires operator/read.
   rpc ListOperators(ListOperatorsRequest) returns (ListOperatorsResponse);
+  // Reads one operator record by identifier.
+  // Read-only and replayable; an unknown identifier is reported through the
+  // handler's own error mapping rather than as an empty record.
+  // Requires operator/read.
   rpc GetOperator(GetOperatorRequest) returns (GetOperatorResponse);
+  // Revokes an operator agent's identity so its certificate and session stop being
+  // accepted, and drops its live stream.
+  // Convergent: revoking an already revoked operator is not an error, and the
+  // changed flag on the response says whether this call is what revoked it, so a
+  // retry after a lost response is safe.
+  // INVALID_ARGUMENT when the reason is shorter than 5 or longer than 500
+  // characters, NOT_FOUND when the operator is not under the named customer and
+  // cluster, and UNAVAILABLE when the revocation is durable but the live stream
+  // could not be closed.
+  // Requires the operator/revoke permission, which the built-in model gives
+  // platform_admin and release_admin.
   rpc RevokeOperator(RevokeOperatorRequest) returns (RevokeOperatorResponse);
+  // Mints the single-use enrollment token an operator agent presents to the
+  // gateway in order to get its client certificate.
+  // Not idempotent: each call creates a new token. Issuing a second one does not
+  // revoke the first, so a token left over from a failed enrollment stays usable
+  // until it expires or is revoked.
+  // INVALID_ARGUMENT for a bad time-to-live (0 means the default, otherwise 5 to
+  // 1440 minutes), ALREADY_EXISTS when the requested operator name is already an
+  // active operator, NOT_FOUND for an unknown cluster, UNAUTHENTICATED without a
+  // resolvable caller and UNAVAILABLE when the enrollment state cannot be read.
+  // Requires the operator/enroll permission. The returned credential should be
+  // treated as a secret and delivered out of band.
   rpc CreateEnrollmentToken(CreateEnrollmentTokenRequest) returns (CreateEnrollmentTokenResponse);
+  // Reads the pending enrollment token outstanding for a customer and cluster,
+  // which is how an operator confirms a token is still waiting to be used.
+  // Read-only and replayable. Only a pending, unexpired token is reported: no
+  // pending token, or one past its expiry, answers with an unspecified state
+  // rather than NOT_FOUND, so this cannot tell used from revoked from absent.
+  // Requires operator/read.
   rpc GetEnrollmentTokenStatus(GetEnrollmentTokenStatusRequest) returns (GetEnrollmentTokenStatusResponse);
+  // Revokes an enrollment token that has not been used yet, so a leaked credential
+  // can be retired without enrolling anything.
+  // Convergent for a token already in the revoked state: the changed flag reports
+  // whether this call is what revoked it, so a replay is distinguishable instead of
+  // an error.
+  // Only a pending token can be revoked; one that was already used has no pending
+  // state to return to. Requires the operator/enroll permission.
   rpc RevokePendingEnrollmentToken(RevokePendingEnrollmentTokenRequest) returns (RevokePendingEnrollmentTokenResponse);
   // Emergency change (REQ-079 canonical contract; replaces the REQ-032 legacy call surface)
+  // Runs an out-of-band emergency action against a workload in a customer cluster,
+  // bypassing the normal bundle and values pipeline, and records it as an operation
+  // with an authoritative effect status.
+  // Keyed by the idempotency_key field of the request itself, not by the header:
+  // it is required, and a replay of the same key answers the recorded outcome
+  // instead of executing twice. A missing key is INVALID_ARGUMENT
+  // (idempotency_key_required).
+  // Refused before execution when the definition has an unresolved prior effect,
+  // when the caller lacks the emergency capability, when the target is outside the
+  // caller's organization, or when the emergency kill switch is off; those come
+  // back as FAILED_PRECONDITION or PERMISSION_DENIED with a machine reason code.
+  // UNAVAILABLE when no agent stream can accept the command.
+  // Requires the organization's emergency capability in addition to release/write;
+  // administrators only in the built-in model.
   rpc ExecuteEmergencyChange(ExecuteEmergencyChangeRequest) returns (ExecuteEmergencyChangeResponse);
+  // Lists the workloads an emergency action may target for a definition, built
+  // from the last observed inventory rather than by asking the cluster.
+  // Read-only and replayable, but the answer is only as fresh as the last
+  // inventory sync; use TriggerInventorySync when it must be current.
+  // NOT_FOUND for an unknown definition, INVALID_ARGUMENT for a malformed scope,
+  // INTERNAL on a store fault.
+  // Requires release/read.
   rpc ListEmergencyTargets(ListEmergencyTargetsRequest) returns (ListEmergencyTargetsResponse);
+  // Reports whether in-flight work would collide with a proposed emergency action,
+  // so a caller can resolve a conflict before executing.
+  // Read-only and replayable; it reserves nothing, so a clean answer is a
+  // statement about this instant and execution can still be refused later.
+  // INVALID_ARGUMENT for a malformed scope. Requires release/read.
   rpc CheckEmergencyConflict(CheckEmergencyConflictRequest) returns (CheckEmergencyConflictResponse);
+  // Lists the candidate artifacts validated for one release definition, narrowed
+  // by workload, container or operation version.
+  // Read-only and replayable. Requires a release definition: INVALID_ARGUMENT
+  // rather than an unbounded scan of every artifact ever recorded.
+  // Requires bundle/read.
   rpc ListCandidateArtifacts(ListCandidateArtifactsRequest) returns (ListCandidateArtifactsResponse);
+  // Lists the convergence tasks that reconcile a definition towards its approved
+  // inputs, which is what blocks new operations while they run.
+  // Read-only and replayable; an empty list is the normal answer for a definition
+  // with nothing pending.
+  // INVALID_ARGUMENT for a malformed scope. Requires release/read.
   rpc ListConvergenceTasks(ListConvergenceTasksRequest) returns (ListConvergenceTasksResponse);
   // Emergency stuck-lock observation and release (REQ-087): terminal
   // operations whose effect is still UNKNOWN past the observe window surface
   // as stuck locks for release_admin/platform_admin operators.
+  // Lists emergency operations whose cluster effect is still unknown past the
+  // observation window, the condition that keeps a definition from accepting new
+  // work.
+  // Read-only and replayable.
+  // UNAUTHENTICATED when the caller's identity cannot be resolved; the list is
+  // scoped to the caller's own organization.
+  // Requires release/read, and the release action itself requires an
+  // administrator role.
   rpc ListStuckLocks(ListStuckLocksRequest) returns (ListStuckLocksResponse);
+  // Records that a stuck emergency effect has been resolved out of band, clearing
+  // the block so the definition can accept work again.
+  // Not replayable as a success: the lock must still be stuck, so a second call
+  // after the release reports NOT_FOUND or a state conflict. There is no undo, so
+  // releasing wrongly reopens a definition whose cluster state is still unknown.
+  // INVALID_ARGUMENT for a missing identifier, NOT_FOUND for an unknown lock,
+  // UNAUTHENTICATED without a resolvable caller.
+  // Requires an administrator role.
   rpc ReleaseEmergencyLock(ReleaseEmergencyLockRequest) returns (ReleaseEmergencyLockResponse);
+  // Creates or replaces the routing entry that binds a cluster to the operator
+  // agent allowed to serve it, which is what makes delivery to that cluster
+  // possible at all.
+  // Keyed by the pair of cluster and artifact type, or by the supplied route
+  // identifier when one is given, which turns this into an update of that entry
+  // instead of an insertion; a retry converges rather than accumulating routes.
+  // INVALID_ARGUMENT for a rejected route shape, NOT_FOUND for an unknown cluster,
+  // ALREADY_EXISTS for a route that overlaps an existing one, PERMISSION_DENIED
+  // when the cluster is disabled.
+  // Requires release/write, and routing is an administrator concern.
   rpc ConfigureClusterRoute(ConfigureClusterRouteRequest) returns (ConfigureClusterRouteResponse);
+  // Lists the routing entries of a cluster.
+  // Read-only and replayable; an empty list means nothing can reach the cluster.
+  // Requires release/read.
   rpc GetClusterRoutes(GetClusterRoutesRequest) returns (GetClusterRoutesResponse);
+  // Removes a routing entry by identifier, so the cluster stops receiving
+  // dispatched work through it.
+  // Not convergent: an unknown or already deleted route answers NOT_FOUND, so a
+  // retry after a lost response must treat that as done.
+  // Requires release/write.
   rpc DeleteClusterRoute(DeleteClusterRouteRequest) returns (DeleteClusterRouteResponse);
+  // Lists the Helm releases recorded in the inventory of one cluster. The answer
+  // is the last snapshot the agent reported, not a live query, so freshness is
+  // governed by TriggerInventorySync and SyncInventory.
+  // Read-only and replayable, with an opaque cursor; a cursor the store cannot
+  // decode answers INVALID_ARGUMENT (invalid_cursor).
+  // INVALID_ARGUMENT for a missing customer or cluster, or a name search over
+  // 253 characters; NOT_FOUND for an unknown customer or cluster.
+  // Requires release/read.
   rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
   // E2E observability (REQ-066): unfiltered release-inventory enumeration.
   // Each row carries the stable identity of one observed release plus its
   // active (non-terminal) operation when present; used for identity checks,
   // release_busy discovery and e2e-cleanup recovery. values_digest and
   // internal sync data are intentionally not exposed.
+  // Enumerates observed release inventory, each row carrying the stable identity
+  // of one observed release plus its active operation when there is one.
+  // Read-only and replayable, and deliberately unfiltered so that reconciliation
+  // and cleanup tooling can walk the whole set; the values digest and internal sync
+  // data are not exposed.
+  // UNAUTHENTICATED when no caller identity can be resolved.
+  // Requires release/read.
   rpc ListReleaseInventory(ListReleaseInventoryRequest) returns (ListReleaseInventoryResponse);
   // Operation query (REQ-056)
+  // Declared for operation search across definitions, statuses and time.
+  // Not implemented in the release-orchestrator handler: every call answers
+  // UNIMPLEMENTED. Enumerate operations through GetOperation and WatchOperation
+  // for identifiers you already hold, or through the release definition's own
+  // history.
   rpc ListOperations(ListOperationsRequest) returns (ListOperationsResponse);
+  // Asks the orchestrator to schedule an inventory refresh for one cluster and
+  // returns immediately; the agent reports the result through SyncInventory
+  // later.
+  // Not idempotent: each call enqueues another request with its own identifier,
+  // which is harmless but means a retry doubles the work rather than replaying.
+  // NOT_FOUND when the cluster is unknown or not under the named customer, and
+  // UNAVAILABLE when no agent stream is online to take the request.
+  // The response identifier is also echoed in the X-Sync-Request-ID response
+  // header for log correlation.
+  // Requires release/write.
   rpc TriggerInventorySync(TriggerInventorySyncRequest) returns (TriggerInventorySyncResponse);
 
   // Inventory sync (REQ-017)
+  // Records an inventory snapshot reported by an operator agent, marking releases
+  // that disappeared from a full snapshot as missing, and answers the accepted and
+  // missing counts with the snapshot version.
+  // Idempotent on the sync_id field: a report replayed with the same identifier is
+  // answered from the recorded result with status duplicate and no second write.
+  // This is the only management procedure the customer-cluster agent may call, and
+  // it is served on the mTLS agent-gateway listener, where a verified client
+  // certificate naming this operator, customer and cluster is the credential; a
+  // caller without one is refused before the handler runs. The identity fields must
+  // match the certificate, so an agent cannot report for another cluster.
+  // INVALID_ARGUMENT for a malformed report or an over-large item list.
   rpc SyncInventory(SyncInventoryRequest) returns (SyncInventoryResponse);
 }
 
@@ -1115,7 +1635,12 @@ message EmergencyErrorDetail {
   bool retryable = 3;                  // client retry guidance (D3)
 }
 
+// Machine-readable reason attached to an emergency attempt, either in the
+// failure detail of the response or in the audit record, so an operator can
+// branch on why an emergency action was refused without parsing text.
 enum EmergencyReasonCode {
+  // Means no reason was attached, which is what a successful attempt records;
+  // never treat it as an internal-error code or as an unknown state.
   EMERGENCY_REASON_CODE_UNSPECIFIED = 0;
   EMERGENCY_REASON_CODE_KILL_SWITCH_DISABLED = 1;
   EMERGENCY_REASON_CODE_NO_CANDIDATE_ARTIFACT = 2;
@@ -1129,12 +1654,24 @@ enum EmergencyReasonCode {
   EMERGENCY_REASON_CODE_LOCKED_PATH = 10;
 }
 
+// The authoritative cluster effect of an emergency operation, as projected for
+// readers rather than stored verbatim: a non-emergency operation and an
+// emergency one that never crossed the delivery boundary both project the
+// never-started value, while an emergency operation whose effect no result has
+// confirmed projects unknown. It is the unknown case that keeps a definition
+// from accepting new work.
 enum EmergencyEffectStatus {
   EMERGENCY_EFFECT_STATUS_UNSPECIFIED = 0;
   EMERGENCY_EFFECT_STATUS_UNKNOWN = 1;
   EMERGENCY_EFFECT_STATUS_APPLIED = 2;
-  EMERGENCY_EFFECT_STATUS_NOT_APPLIED = 3;   // 既有
-  EMERGENCY_EFFECT_STATUS_NOT_STARTED = 4;   // 追加
+  // Terminal and resolved as "the cluster was not changed". A closed answer, not
+  // a pending one: it is distinct from unknown, which is what an unreconciled
+  // effect reports.
+  EMERGENCY_EFFECT_STATUS_NOT_APPLIED = 3;   // pre-existing value
+  // No cluster effect was ever attempted, either because the operation is not an
+  // emergency one or because it stopped before its command was delivered. Not the
+  // same as a checked-and-unchanged cluster.
+  EMERGENCY_EFFECT_STATUS_NOT_STARTED = 4;   // added later
 }
 
 message EmergencyResult {
@@ -1153,6 +1690,9 @@ message EmergencyResult {
 }
 
 message EmergencyTypedValues {
+  // The typed echo of what the request asked for, set according to the derived
+  // action; it is what makes a replay of a recorded intent show the change that
+  // was actually submitted rather than its text rendering.
   oneof values {
     ImageRefValues image_ref_values = 1;
     ReplicasValues replicas_values = 2;
@@ -1180,6 +1720,13 @@ message ConvergenceTaskSummary {
 
 // ── Emergency stuck locks (REQ-087) ───────────────────────────────
 
+// buf:lint:ignore ENUM_VALUE_PREFIX
+// NOT_APPLIED_PROVEN and AUDITED_OVERRIDE predate the enum-value prefix
+// convention but are already on the wire (their json_name is part of the
+// request/response shape) and mirrored by Go constants in the converge path.
+// Renaming them to RELEASE_MODE_* would spend a breaking contract change on a
+// naming nit; the ConvergenceStrategy enum above records the same trade-off for
+// its own REQ-pinned value names.
 // ReleaseMode classifies how a stuck emergency target lock is released
 // (REQ-087 §4.2, D4=A/D5=B). Both modes require a terminal operation whose
 // effect is still UNKNOWN past the observe window.
@@ -1260,8 +1807,14 @@ message SyncInventoryRequest {
   string operator_id = 1;
   string cluster_id = 2;
   string customer_id = 3;
+  // Agent-generated identifier that is the idempotency key for this report: a
+  // replayed sync_id is answered from the recorded result with status duplicate.
   string sync_id = 4; // unique per snapshot, used for idempotency
+  // At most 10000 entries; a larger report is rejected as INVALID_ARGUMENT
+  // (payload_too_large) rather than truncated.
   repeated InventoryItem items = 5;
+  // True declares the list complete, so inventory rows absent from it are marked
+  // missing; false updates only the items listed.
   bool full_snapshot = 6; // true = full sync, false = targeted update
 }
 
@@ -1270,6 +1823,9 @@ message SyncInventoryResponse {
   int32 accepted_count = 1;
   int32 missing_marked_count = 2;
   int64 snapshot_version = 3;
+  // One of applied or duplicate: applied recorded this sync identifier, duplicate
+  // replayed the earlier answer. A stale variant is declared in the shape but the
+  // implementation never produces it.
   string status = 4; // "applied", "duplicate", "stale"
 }
 

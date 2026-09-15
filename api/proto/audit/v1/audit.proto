@@ -1,3 +1,16 @@
+// File: audit/v1/audit.proto
+// Package audit.v1 is the audit trail: who did what to which resource, with
+// what outcome.
+// Only release-api (dev port 8087) serves AuditService over Connect. Every
+// other service records audit in process through the same emitter, so Emit is
+// intended for external collectors and side cars; the web console reads the
+// trail through QueryAuditEvents.
+// The service binary guards the whole method set with a bearer access token
+// only (no role evaluation, no cookie fallback) and does not narrow the
+// organization a caller asks about, so deployment must keep the listener on a
+// trusted network.
+// Events are persisted asynchronously: an accepted event is durable only after
+// the emitter flushes its buffer.
 syntax = "proto3";
 
 package audit.v1;
@@ -9,11 +22,15 @@ option go_package = "github.com/ndzuki/release-manager/api/gen/audit/v1;auditv1"
 
 // ActorKind classifies the principal that performed an action.
 enum ActorKind {
+  // Missing kind; reject rather than guess.
   ACTOR_KIND_UNSPECIFIED = 0;
   ACTOR_KIND_ANONYMOUS = 1;
   ACTOR_KIND_USER = 2;
   ACTOR_KIND_SERVICE = 3;
+  // A long-lived credential presented by a pipeline or integration; kind and id
+  // must describe the same principal the transport authenticated.
   ACTOR_KIND_API_KEY = 4;
+  // An internal worker such as a reconciler or the garbage collector.
   ACTOR_KIND_SYSTEM = 5;
 }
 
@@ -33,7 +50,10 @@ message AuditEvent {
   string resource_id = 4;
   string action = 5;
   string status = 6;
+  // Milliseconds. Not a Timestamp and not a duration message; do not confuse it
+  // with second-granularity expiry fields elsewhere in the contract.
   int64 duration_ms = 7;
+  // Human-readable diff summary. Secrets must be redacted before submission.
   string change_summary = 8;
   google.protobuf.Timestamp created_at = 9;
   // Metadata carries optional key-value context.
@@ -88,8 +108,39 @@ message ExportAuditEventsResponse {
 }
 
 // AuditService collects and queries audit events.
+// AuditService accepts audit events for asynchronous persistence and reads
+// back the trail for the console and for compliance tooling.
+// Callers: external collectors and side cars (write), the web console (read)
+// over release-api. Trust boundary: authenticated bearer token; the service
+// performs no role check of its own, so authorization is a deployment concern.
 service AuditService {
+  // Buffers audit events for asynchronous persistence and answers as soon as
+  // they are queued, before any write reaches the database.
+  // Not idempotent: there is no event-level deduplication, so a resend of the
+  // same event id appends a second row. Partial success is normal: accepted and
+  // rejected are counted per event and rejection_codes explains each rejection,
+  // which is why a non-zero rejected count is not an RPC failure.
+  // Fails with INVALID_ARGUMENT only when the request carries no events at all.
+  // Requires a valid access token; any authenticated principal may emit, and the
+  // actor recorded on each event is taken from the event itself.
   rpc Emit(EmitAuditRequest) returns (EmitAuditResponse);
+  // Reads the audit trail with keyset pagination, newest event first.
+  // Read-only and replayable.
+  // Every filter field, including organization_id, is taken from the request; the
+  // server does not inject or verify the caller's own organization, so an
+  // authenticated caller can read another tenant's trail. Treat this as a known
+  // gap rather than a guarantee.
+  // page_size is clamped to [1, 100] and defaults to 20; an unreadable
+  // page_token is reported as INTERNAL, not as a client error.
+  // Requires a valid access token (no role check).
   rpc QueryAuditEvents(QueryAuditEventsRequest) returns (QueryAuditEventsResponse);
+  // Registers an asynchronous export request and returns a receipt; it does not
+  // produce or hand back a file.
+  // Not idempotent: each call mints a new export_id, and repeating an identical
+  // request creates a second pending export.
+  // Only the filter's time range is recorded, defaulting to the last 30 days; no
+  // worker consumes the queue today, so status stays pending. Treat the
+  // identifier as a request receipt, not as a download handle.
+  // Requires a valid access token (no role check).
   rpc ExportAuditEvents(ExportAuditEventsRequest) returns (ExportAuditEventsResponse);
 }

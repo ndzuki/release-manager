@@ -1,3 +1,14 @@
+// File: trust/v1/trust.proto
+// Package trust.v1 manages the trust roots used to verify artifact signatures:
+// one root set per environment, each with a monotonic policy version and a
+// separate revocation epoch.
+// release-orchestrator (management listener, dev port 8083) serves TrustService
+// for platform administrators and the provisioning tooling; the customer-cluster
+// operator agent never reaches this surface, and the orchestrator's own
+// verifier reads roots straight from storage rather than calling these RPCs.
+// Writes need trust_root/write, so in practice the platform_admin role, and are
+// refused while the orchestrator runs in maintenance mode; GetTrustPolicy is the
+// single read-only exception.
 syntax = "proto3";
 
 package trust.v1;
@@ -6,12 +17,28 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/ndzuki/release-manager/api/gen/trust/v1;trustv1";
 
+// Lifecycle of a signing root within one environment. Verification does not
+// use the state machine's names but the set of roots it selects: a policy
+// answer carries the active root plus any root still in its grace window, so
+// rotation can retire a key without invalidating signatures already in flight.
 enum TrustRootState {
+  // Never stored. It appears when a client sends an unset state as a filter, or
+  // when a record carries a state the server does not recognise, so a caller must
+  // treat it as unknown rather than as a lifecycle step.
   TRUST_ROOT_STATE_UNSPECIFIED = 0;
+  // Reserved: the create and rotate paths activate a root immediately, so no
+  // implementation transition leaves a root pending.
   TRUST_ROOT_STATE_PENDING = 1;
+  // The single root per environment that signs new assertions; also part of the
+  // verification set.
   TRUST_ROOT_STATE_ACTIVE = 2;
+  // Superseded by a rotation but still verifying until grace_until, which is how
+  // in-flight work signed with the old key finishes.
   TRUST_ROOT_STATE_GRACE = 3;
+  // No longer verifying new signatures; scheduled for removal.
   TRUST_ROOT_STATE_RETIRED = 4;
+  // Distrusted immediately because the key was compromised. It never returns to
+  // service and its record is kept for verification history.
   TRUST_ROOT_STATE_REVOKED = 5;
 }
 
@@ -21,9 +48,13 @@ message TrustRoot {
   string key_id = 3;
   string public_key_pem = 4;
   string issuer = 5;
+  // Pattern the signer identity must match, so a valid signature from the right
+  // key but the wrong issuer is still rejected.
   string subject_pattern = 6;
   TrustRootState state = 7;
   google.protobuf.Timestamp valid_from = 8;
+  // End of the window during which this root still verifies, set only while the
+  // state is GRACE.
   google.protobuf.Timestamp grace_until = 9;
   google.protobuf.Timestamp created_at = 10;
   google.protobuf.Timestamp updated_at = 11;
@@ -32,7 +63,11 @@ message TrustRoot {
 
 message TrustPolicy {
   string environment = 1;
+  // Monotonic per-environment policy counter, bumped by every root mutation.
   int64 version = 2;
+  // Bumped only by a revocation. Cache holders must key their cache on this
+  // epoch as well as the version, because revoking a root does not create a new
+  // policy document that the version alone would reveal.
   int64 revocation_epoch = 3;
   repeated TrustRoot roots = 4;
 }
@@ -111,11 +146,69 @@ message GetTrustPolicyResponse {
   TrustPolicy policy = 1;
 }
 
+// TrustService owns the lifecycle of signature trust roots: create, rotate,
+// end a grace window, retire, revoke, and read the resulting policy.
+// Callers: the management plane (platform administrators, provisioning
+// tooling). Trust boundary: authenticated user token with organization-scoped
+// authorization; every response reports the whole environment's policy, which
+// any holder of trust_root/read may inspect.
+// Writes are neither idempotent nor version-checked: they are ordered by the
+// current root state, and a repeated call fails on that state rather than
+// replaying the first response.
 service TrustService {
+  // Registers a new trust root for an environment and returns the whole policy
+  // after the change.
+  // Not idempotent: the root is created active and ready to verify immediately.
+  // Replay fails because the key identifier or issuer now overlaps a live root
+  // (INVALID_ARGUMENT, reported as an overlap conflict) rather than returning the
+  // root created the first time.
+  // Fails INVALID_ARGUMENT on unparsable key material or a non-positive validity
+  // window, INTERNAL when storage rejects the write or the policy bump fails.
+  // Requires trust_root/write, effectively platform_admin.
   rpc CreateTrustRoot(CreateTrustRootRequest) returns (CreateTrustRootResponse);
+  // Introduces the replacement root and moves the old one into its grace window
+  // in one logical step; the caller receives the new root, the aged-out old root
+  // and the resulting policy.
+  // Requires the old root to be active, so a replay hits a root already in GRACE
+  // and fails FAILED_PRECONDITION instead of rotating twice.
+  // grace_until bounds how long the old key keeps verifying. Omitting it expires
+  // the old root's grace immediately, which is a hard cutover and not an
+  // open-ended window.
+  // Fails NOT_FOUND for an unknown old_root_id, INVALID_ARGUMENT when the new key
+  // overlaps another live root.
+  // Requires trust_root/write, effectively platform_admin.
   rpc RotateTrustRoot(RotateTrustRootRequest) returns (RotateTrustRootResponse);
+  // Ends a grace window early and retires the root; after it the old key no
+  // longer verifies anything.
+  // Requires the root to be in GRACE, so a replay fails FAILED_PRECONDITION.
+  // Refused when the root is the last live one for the environment, so a
+  // misconfigured policy cannot silently disable verification.
+  // Requires trust_root/write, effectively platform_admin.
   rpc EndGrace(EndGraceRequest) returns (EndGraceResponse);
+  // Planned retirement of an active or graced root: the root stops verifying but
+  // is not marked compromised, so already-verified artifacts keep their standing
+  // and the revocation epoch is untouched.
+  // Requires an active or graced root; a replay fails FAILED_PRECONDITION.
+  // Refused when it would remove the last live root.
+  // Requires trust_root/write, effectively platform_admin.
   rpc RetireTrustRoot(RetireTrustRootRequest) returns (RetireTrustRootResponse);
+  // Emergency distrust: the root stops verifying immediately, the revocation
+  // epoch is bumped so caches keyed on it invalidate, and the record is kept.
+  // Requires the root to be active or in GRACE and not already revoked; a replay
+  // fails FAILED_PRECONDITION rather than re-bumping the epoch.
+  // Refused when it would remove the last live root: retire or rotate a
+  // replacement first.
+  // Requires trust_root/write, effectively platform_admin.
   rpc RevokeTrustRoot(RevokeTrustRootRequest) returns (RevokeTrustRootResponse);
+  // Reads the whole policy snapshot for an environment: every root ever created,
+  // including retired and revoked ones, with the current version and revocation
+  // epoch. Clients diff against their own cache.
+  // Read-only and replayable; there is no conditional or delta form and no
+  // freshness hint.
+  // An unknown or empty environment is not an error: it answers version 1, epoch
+  // 0 and no roots, which reads as "nothing trusted yet" rather than
+  // "no such environment". Do not treat it as a typo guard.
+  // Requires trust_root/read; the only trust RPC still served while the
+  // orchestrator is in maintenance mode.
   rpc GetTrustPolicy(GetTrustPolicyRequest) returns (GetTrustPolicyResponse);
 }

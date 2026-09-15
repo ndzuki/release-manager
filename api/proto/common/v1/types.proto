@@ -1,3 +1,14 @@
+// File: common/v1/types.proto
+// Package common.v1 carries the vocabulary shared by every v1 contract in
+// this repository: pagination envelopes, a structured error payload, a closed
+// timestamp interval, request correlation identifiers, trust-verification
+// enums and the canonical domain records imported by orchestrator.v1, auth.v1,
+// webhook.v1 and operator.v1.
+// No service is declared here; these types are consumed by the Connect RPCs of
+// release-orchestrator, release-auth, release-api, release-webhook and
+// release-notifier, and by the browser console through the generated TypeScript.
+// Keep this package free of service-specific semantics: a change here is a
+// change to every contract that embeds it.
 syntax = "proto3";
 
 package common.v1;
@@ -8,18 +19,28 @@ option go_package = "github.com/ndzuki/release-manager/api/gen/common/v1;commonv
 
 // Pagination holds cursor-based pagination parameters.
 message Pagination {
+  // Server-side clamped to [1, 100]; zero or a negative value selects the
+  // default of 20 rather than an error, so omitting it is always safe.
   int32 page_size = 1;
+  // Opaque token previously returned as next_page_token. Never parse or build it
+  // client-side: the encoding differs per service (an offset for organization-
+  // scoped listings, a created_at/record key for audit) and is not part of the
+  // contract. An unknown or stale token is rejected.
   string page_token = 2;
 }
 
 // PaginationResponse holds cursor-based pagination response metadata.
 message PaginationResponse {
+  // Empty when the current page is the last one.
   string next_page_token = 1;
+  // Total records matching the filter, independent of the page that is returned.
   int32 total_size = 2;
 }
 
 // ErrorDetail is a structured error payload for API responses.
 message ErrorDetail {
+  // Stable machine-readable code; the human-readable text lives in message and
+  // is never a matching key.
   int32 code = 1;
   string message = 2;
   repeated FieldViolation details = 3;
@@ -39,6 +60,9 @@ message TimestampRange {
 
 // RequestMetadata carries tracing identifiers propagated across the system.
 message RequestMetadata {
+  // Correlation identifier also returned in the X-Request-Id response header.
   string request_id = 1;
+  // Set when the call created or referenced a release operation, so that logs,
+  // audit events and notifications can be joined on it.
   string operation_id = 2;
 }
