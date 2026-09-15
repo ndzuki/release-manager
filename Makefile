@@ -278,6 +278,13 @@ proto: ## Generate protobuf code (Connect + protobuf-go)
 	buf generate --template $(PROTO_DIR)/buf.gen.yaml; \
 	echo "$(GREEN)Proto code generated$(NC)"
 
+.PHONY: lint-proto
+lint-proto: ## Run buf lint over api/proto so naming rules cannot silently regress
+	@command -v buf >/dev/null 2>&1 || { go install github.com/bufbuild/buf/cmd/buf@latest && export PATH="$(GOBIN):$$PATH"; }; \
+	echo "$(YELLOW)Linting proto with buf...$(NC)"; \
+	buf lint; \
+	echo "$(GREEN)Proto lint clean$(NC)"
+
 # ---------------------------------------------------------------------------
 # Stage-by-stage local deployment
 # ---------------------------------------------------------------------------
@@ -487,6 +494,10 @@ check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
 check-licenses: ## Check every shipped dependency's license against the project policy
 	bash scripts/check-licenses.sh
 
+.PHONY: check-docs
+check-docs: ## Check that documented make targets and repository paths still exist
+	bash scripts/check-docs.sh
+
 
 .PHONY: test-rollback-sdk
 test-rollback-sdk: ## Run Rollback SDK quality gate (REQ-063)
@@ -515,7 +526,7 @@ test-operator-image-sdk-only: ## Run operator image SDK-only gate (REQ-061)
 			--policy imagecheck.operator.yaml \
 			--dockerfile deploy/docker/Dockerfile.operator
 .PHONY: quality
-quality: sdk-check test-coverage lint check-reqs check-licenses ## Full quality gate run
+quality: sdk-check test-coverage lint check-reqs check-licenses check-docs lint-proto ## Full quality gate run
 
 .PHONY: build-sdkcheck
 build-sdkcheck: proto ## Build sdkcheck
