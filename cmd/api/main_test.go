@@ -25,7 +25,9 @@ func TestAPISvcAuditConnectEndToEnd(t *testing.T) {
 	const signingKey = "test-signing-key"
 	dbPath := t.TempDir() + "/api.db"
 	mux := http.NewServeMux()
-	svc := &apiSvc{dbPath: dbPath, signingKey: signingKey}
+	// A short flush interval keeps the audit wait deterministic: the production
+	// default is 5s, which leaves under a second of slack in the Eventually budget.
+	svc := &apiSvc{dbPath: dbPath, signingKey: signingKey, auditFlushInterval: 10 * time.Millisecond}
 	require.NoError(t, svc.Register(mux, slog.Default()))
 	t.Cleanup(func() { require.NoError(t, svc.Close(context.Background())) })
 	server := httptest.NewServer(mux)
