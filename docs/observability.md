@@ -35,7 +35,7 @@
 
 **建议（当前不存在）**
 
-1. 把 `log_level` 真正接到 handler：`internal/app/app.go:123` 用配置值构造 `slog.HandlerOptions.Level`（改动面极小，收益是可控日志量与降噪）。
+1. 把 `log_level` 真正接到 handler：`internal/app/app.go:123` 用配置值构造 `slog.HandlerOptions.Level`（收益是可控日志量与降噪）。**这不是三行改动**：`Run` 被 6 个文档按行号引证约 30 处（`docs/cli.md:7,35,42-49,76,387`、本文件 `:16,17,93,197,220`、`docs/configuration.md:365`、`docs/http-collections.md:104`），在 `:123` 附近插入任何行都会整体下移这些锚点，而 `make check-docs` 只判引用是否越界、不校验语义，因此须连同引证一起改（或把逻辑放到 `Run` 末尾以保持上方行号不变）。
 2. 在日志侧统一注入 request-id（与 `NewRequestIDInterceptor` 同源），使「一次写请求 → 授权 → 审计 → outbox」可只用日志还原。
 3. 为致命启动错误加退出码约定与 `os.Exit` 前的最后一条结构化摘要（当前只有两行文本，见 §2 无指标可替代）。
 

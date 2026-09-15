@@ -202,7 +202,7 @@
 | `agent.cluster_id` | string | dev-customer-a-direct / -a-cache / -b-replicated / -b-mixed | 集群身份 | 必填 |
 | `agent.operator_name` | string | = cluster_id | 操作器名 | |
 | `ca.cert_path` | path | /data/gateway-ca.crt | 网关 CA 信任锚 | Secret `operator-gateway-ca` 挂载 |
-| `registry_plain_http` | bool | true（顶层） | 意图允许 HTTP OCI 拉取 | **放置位置与读取路径不符**（§7-5）：代码读的是 `agent.registry_plain_http` |
+| `registry_plain_http` | bool | true（顶层） | 意图允许 HTTP OCI 拉取 | **无任何读取者**（§7-5）：`internal/config/config.go:172` 与 `internal/operator/agent/agent.go:106` 仅是声明，全仓无消费点——写顶层或 `agent:` 都不生效 |
 
 令牌走环境变量 `ENROLLMENT_TOKEN`（Secret `operator-enrollment`，`agents_up` 命令式创建，文件名固定不参与 hash）；`enrollment_token_file` 键在这四个 overlay 中不存在。
 
