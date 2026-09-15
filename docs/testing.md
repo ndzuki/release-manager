@@ -57,7 +57,9 @@ Makefile 内没有对应的转发 target，需在 `web/` 目录内直接运行�
 | `make sdk-check` | SDK-only 静态门禁（REQ-037）：`os_exec_import`、`fork_exec`、`shell_wrapper`、`forbidden_binary_invocation`、`expired_exception` | 无 | 本地 + CI `sdk-check` job（同一命令、同一例外文件、同一扫描范围） |
 | `make check-reqs` | 校验原子需求文档结构（`find . -path '*/Requirements/REQ-*.md'` → `cmd/reqcheck`）；**找不到 REQ 文档时打印提示并跳过** | 无 | 本地（CI 未接入该 target） |
 | `make check-licenses` | 校验所有**会进入产物**的依赖许可证（Go 默认构建闭包 + 前端生产依赖）：拒绝 GPL/AGPL/LGPL、SSPL、BUSL、Elastic 以及无许可证文件的依赖；同时校验根目录 `NOTICE` 未过期 | `go`（模块缓存）；前端部分需 `jq`，缺失时**显式报「未检查」**而非静默通过 | 本地 + CI `license-check` job（同一脚本、同一策略、同一例外文件 `license-exceptions.tsv`） |
-| `make quality` | `sdk-check` + `test-coverage` + `lint` + `check-reqs` + `check-licenses` 的聚合门禁 | 同各子项 | 本地；CI 不直接调用，而是分 job 跑等价命令 |
+| `make check-docs` | 文档事实门禁：`docs/**` 与各级 README 里写出的 `make <target>`、仓库路径、相对链接、`文件:行号` 引用必须与当前代码一致；无匹配即失败，陈述"某物不存在"的行用同行 `<!-- check-docs:ignore 理由 -->` 豁免 | 无 | 本地（CI 未接入该 target）；`make quality` 已含 |
+| `make lint-proto` | `buf lint`（`buf.yaml` 的 `STANDARD` 减去 3 条命名规则）。**注意**：`STANDARD` 不含 `COMMENT_*`，因此它通过**不代表** proto 注释完整；注释覆盖靠人工与 `api/proto` 变更评审保证，`buf.yaml` 内记录了不开 `COMMENT_*` 的理由。当前基线干净（`ReleaseMode` 的两个历史枚举值用同行 `buf:lint:ignore` 定点豁免并写明原因） | `buf`（缺失时 `make` 会 `go install`） | 本地（`make quality` 已含；CI 未接入该 target） |
+| `make quality` | `sdk-check` + `test-coverage` + `lint` + `check-reqs` + `check-licenses` + `check-docs` + `lint-proto` 的聚合门禁 | 同各子项 | 本地；CI 不直接调用，而是分 job 跑等价命令 |
 | `make test-install-sdk` / `test-upgrade-sdk` / `test-rollout-watch` | Helm Install / Upgrade / Rollout watch SDK 链路 | Docker + kind（rollout 另有 120 秒时长门禁） | 本地 + CI 对应 job（各 15 分钟超时） |
 | `make test-rollback-sdk` | Rollback SDK 链路 | 无（in-memory storage + `kubefake`） | 本地（CI 未接入） |
 | `make test-operator-image-sdk-only` | operator 镜像合规（内部先调 `make docker-build-operator` 产出并 `docker save` 镜像 tarball） | Docker | 本地 + CI `operator-image-sdk-only` job |
@@ -214,12 +216,12 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   临时集群/容器/凭据必须由创建者清理（`trap` 保证中断也执行），优先复用 `make dev-purge CONFIRM=1`，
   不得为换取门禁通过而停用常驻服务。
 
-> 事实源：`.worktrees/t092/Makefile`（test* / sdk-check / lint / check-reqs / quality / e2e-* 目标逐条核对）、
-> `.worktrees/t092/.github/workflows/test.yml`（10 个 job 与触发条件）、
-> `.worktrees/t092/cmd/e2e/main.go`（flag、退出码 0/1/2 与 `exitLock=3`、cleanup 语义）、
-> `.worktrees/t092/test/e2e/runner.go`（`canonicalStageOrder`、`CanonicalDependencies`、`batchFor`）、
-> `.worktrees/t092/test/e2e/prerequisite/smoke.sh`、`.worktrees/t092/test/integration/`、
-> `.worktrees/t092/internal/store/postgres/`、`.worktrees/t092/web/package.json`；
+> 事实源：`Makefile`（test* / sdk-check / lint / check-reqs / quality / e2e-* 目标逐条核对）、
+> `.github/workflows/test.yml`（11 个 job 与触发条件）、
+> `cmd/e2e/main.go`（flag、退出码 0/1/2 与 `exitLock=3`、cleanup 语义）、
+> `test/e2e/runner.go`（`canonicalStageOrder`、`CanonicalDependencies`、`batchFor`）、
+> `test/e2e/prerequisite/smoke.sh`、`test/integration/`、
+> `internal/store/postgres/`、`web/package.json`；
 > `Projects/001-release-manager/Requirements/REQ-037`、`REQ-061`~`REQ-064`、`REQ-066`；
 > `Design/contracts/e2e-runner-surface.md`、`Design/contracts/e2e-environment-config.md`；
 > `Design/decisions/D-021`、`D-032`、`D-033`、`D-034`。

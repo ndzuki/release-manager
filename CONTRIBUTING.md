@@ -55,6 +55,7 @@ Verified: go test -race ./internal/orchestrator/... ; make sdk-check
 make test        # go test -race ./...
 make lint        # golangci-lint run
 make sdk-check   # SDK-only 静态门禁
+make check-docs  # 文档事实门禁（改动了文档或被文档引用的路径时必跑）
 make quality     # 聚合门禁
 ```
 

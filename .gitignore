@@ -64,6 +64,10 @@ e2e-results/
 
 # .env
 .env
+# Local environment files must never be committed, at any depth; `.env.example`
+# is the committable template that documents the expected keys.
+.env.*
+!.env.example
 
 # E2E test data (Helm chart tarballs)
 test/e2e/testdata/*.tgz
