@@ -186,6 +186,13 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 | `rollout-watch` | `make test-rollout-watch` | 全部触发 |
 | `e2e-prerequisite` | `make e2e-prerequisite-ci`（45 分钟超时，`if: always()` 上传 artifact） | 全部触发（不需要任何 secret） |
 | `e2e` | `make dev-up` → `make dev-seed` → `make e2e-all` → `if: always()` 上传 `e2e-results/` → `make dev-purge CONFIRM=1` | **push main + 手动触发；PR 不跑** |
+| `docs-check` | `make check-docs`（5 分钟超时；文档写出的 `make <target>`、仓库路径、相对链接、`文件:行号` 引用必须为真） | 全部触发（只需 bash/grep/git，不需要 Go 与任何 secret） |
+| `proto-check` | `make lint-proto` + `make proto` 后要求 `api/gen`、`web/src/gen` 与提交内容一致（10 分钟超时） | 全部触发（`GITHUB_TOKEN` 仅用于 buf 版本查询） |
+
+`proto-check` 存在的原因不是「多跑一次生成」，而是补齐一个真实的检查缺口：`test` 与
+`test-sqlite` 都会在测试前执行 `make proto`，于是**忘提交生成物**时它们测的是新生成的代码，
+永远绿；真正落到产物里的却是仓库里那份过期的 `api/gen`。这里用 `git status --porcelain`
+而非 `git diff` 判定，因为新增一个 proto 会带出**未跟踪**的生成文件，`git diff` 看不见它。
 
 `e2e` job 的触发条件是 `github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run-e2e)`，
 并设 `DEV_PROFILE=ci`、`E2E_RUN_ID`、`E2E_ENVIRONMENT=ci` 与 9 个 repository secret（4 个账号密码 +
@@ -217,7 +224,7 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   不得为换取门禁通过而停用常驻服务。
 
 > 事实源：`Makefile`（test* / sdk-check / lint / check-reqs / quality / e2e-* 目标逐条核对）、
-> `.github/workflows/test.yml`（11 个 job 与触发条件）、
+> `.github/workflows/test.yml`（13 个 job 与触发条件）、
 > `cmd/e2e/main.go`（flag、退出码 0/1/2 与 `exitLock=3`、cleanup 语义）、
 > `test/e2e/runner.go`（`canonicalStageOrder`、`CanonicalDependencies`、`batchFor`）、
 > `test/e2e/prerequisite/smoke.sh`、`test/integration/`、
