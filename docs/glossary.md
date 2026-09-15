@@ -6,7 +6,7 @@
 - 两个来源都有的术语，定义**以 `Notes/CONTEXT.md` 为准**；只出现在设计词汇表中的术语按原义保留，并在「出处」列注明来源。
 - `_Avoid_`（禁用/易混淆说法）在本表中保留为定义末尾的 `（避免：…）`：写代码、命名与评审时会实际用到这些反例，删掉会让术语边界的约束失效。
 - 分组仅为便于查阅，不代表依赖顺序或调用关系；同一术语只出现一次。
-- 两处说法**实质不一致**的术语不在此自行裁决：表格采用 CONTEXT.md 的定义，差异汇总在文末 `## 待核对差异`。
+- 两处说法**实质不一致**的术语已按仓库实现证据逐条裁定（D1–D5）：表格条目采用 CONTEXT.md 的定义；实现与设计词汇不一致的条目在行内标注「实现现状 ≠ 设计词汇」并附 `文件:行号` 证据，裁定结论与遗留问题见文末 `## 差异裁定`。
 
 ## 组织、授权与边界
 
@@ -23,9 +23,7 @@
 | Capability Grant | 覆盖默认角色矩阵的显式授权记录（organization_id、subject、action），持久化于 capability_grant 表；active grant 优先于角色默认规则，revoke 为软删除（revoked=true 可重新 active）。emergency_resolver 是 capability 而非第五个 Role，任意角色经显式 grant 后可执行 release.emergency.resolve。（避免：role upgrade、把 capability 当作新 Role、默认矩阵 grant） | CONTEXT.md › Language；设计词汇表：REQ-027/049 |
 | release_admin | 组织级发布管理角色（区别于平台级 platform_admin）：可查看审计事件中的完整 actor ID、role 与 displayName；普通成员仅见脱敏 actor；非 platform_admin 跨组织查询被服务端拒绝（REQ-059 AC-01/AC-05）。（避免：org admin、把 release_admin 当作 platform_admin） | CONTEXT.md › Language |
 | EnrollmentToken | 一次性注册凭证，明文只在创建响应中返回一次且持久化仅存不可逆 hash；状态 pending → used/expired/revoked，同一 Cluster 至多一个有效 pending token，替换/作废走同事务原子语义（REQ-015/REQ-053）。（避免：token 明文持久化、多 pending token、enrollment secret） | CONTEXT.md › Language；设计词汇表：REQ-015/053 |
-| Internal Service Token | 受信服务间 RPC 认证的独立静态令牌；SHA-256 hash + constant-time 比较验证，current+previous 双 hash 无停机轮换，actor = `service:release-webhook`。dev 范围内由 TASK-065 v21 最小接线实现（AC-33，D-100 裁决 B）；生产 Secret manager 通道仍归 REQ-011 owner。 | 设计词汇表：REQ-011, D-016 |
-| Bundle Ingress Service Token | webhook→orchestrator 的静态服务身份令牌：webhook 转发 orchestrator BundleService 请求时附加 `Authorization: Bearer <token>`，actor 解析为 service:release-webhook；orchestrator 以 current+previous 双 hash + constant-time comparison 校验支持无停机轮换（REQ-011 §562；REQ-065 dev 最小实现闭环 D-100）。（避免：API key、把服务令牌当作用户凭据、生产 Secret 通道由 REQ-011 owner 承接） | CONTEXT.md › Language |
-| bundle ingress 服务令牌 seam | webhook→orchestrator 内部静态 service token 认证 seam（REQ-011 §562）：D-100 已裁决 B（065 内最小 dev 接线）并由 TASK-065 v21 实现（webhook 透传 Bearer + orchestrator 双 hash 校验 + BundleService actor 分支，AC-33）；生产 CI 通道由 REQ-011 owner 新建任务承接。 | 设计词汇表：REQ-011, D-016 |
+| Bundle Ingress Service Token | webhook→orchestrator 的静态服务身份令牌：webhook 转发 orchestrator BundleService 请求时附加 `Authorization: Bearer <token>`（`internal/webhook/service.go:63-64`），actor 解析为 service:release-webhook；orchestrator 以 current+previous 双 hash + constant-time comparison 校验支持无停机轮换（通用机制 `ServiceTokenInterceptor`，`internal/auth/service_token.go:28`，挂载于 `cmd/orchestrator/main.go:487`；REQ-011 §562）。dev 最小实现闭环经 D-100 裁决 B、由 TASK-065 v21 落地（webhook 透传 Bearer + orchestrator 双 hash 校验 + BundleService actor 分支，AC-33）；生产 Secret manager 通道仍归 REQ-011 owner。代码 flag/env/注释统一写作 bundle ingress service token（`cmd/webhook/main.go:62`、`cmd/orchestrator/main.go:800`）。设计词汇表对同一 seam 的旧名 `Internal Service Token` 与 `bundle ingress 服务令牌 seam` 不再单列条目，仓库内亦无 `Internal Service Token` 标识符。（避免：API key、把服务令牌当作用户凭据、生产 Secret 通道由 REQ-011 owner 承接） | CONTEXT.md › Language；设计词汇表：REQ-011, D-016, D-100 |
 | seed identity | Initialize 首次引导阶段：创建组织 + platform_admin 用户 + 成员（dev 环境对应 dev-admin 账号）；此后本地用户创建走 CreateLocalUser 且拒绝 platform_admin 角色（D-16，REQ-025/REQ-065 共享）。（避免：dev admin bootstrap、直接 Create 首个管理员） | CONTEXT.md › Language；设计词汇表：REQ-025/065 |
 
 ## 发布输入与制品
@@ -58,7 +56,7 @@
 | 术语 | 定义 | 出处 |
 | --- | --- | --- |
 | Operator | 部署在目标 Cluster 中、通过控制流接收并执行发布命令的已注册 agent identity。（避免：worker、executor、cluster agent） | CONTEXT.md › Language；设计词汇表：ADR-001 |
-| Operator Session | Operator 与控制面之间的有状态连接记录，包含 online、suspect、offline 生命周期。（避免：connection、agent session） | CONTEXT.md › Language；设计词汇表：REQ-044 |
+| Operator Session | Operator 与控制面之间的有状态连接记录，包含 online、suspect、offline 生命周期。（避免：connection、agent session）**实现现状 ≠ 设计词汇**：协议与存储层把 `revoked` 定义为第 4 个会话状态、而非仅状态原因——wire 枚举 `OPERATOR_SESSION_STATUS_REVOKED`（`api/proto/orchestrator/v1/orchestrator.proto:580`）、store 常量 `SessionRevoked`（`internal/store/store.go:660`）、证书吊销级联将会话直接置为 `revoked`（`internal/store/sqlite/operator_lifecycle.go:120`、`internal/store/postgres/operator_lifecycle.go:124`）、proto↔store 双向映射一等公民（`internal/orchestrator/operator.go:478-479`、`internal/orchestrator/operator.go:506-507`）；CONTEXT.md 的生命周期枚举缺 revoked，差异已记录（见文末 D2），知识库侧修订归 owner。 | CONTEXT.md › Language；设计词汇表：REQ-044 |
 | Operator Session Status Reason | Operator Session 当前在线状态的服务端权威原因枚举，用于解释 `online`、`suspect`、`offline` 或 `revoked`，前端不得仅凭时间戳自行推断。（避免：client-side offline reason、heartbeat message text） | CONTEXT.md › Language |
 | Command Outbox | 控制面数据库中的持久化待投递命令队列，作为待投递命令的权威存储；每行携带全局单调 sequence、command_id、operation_id、payload_version 与 deadline，状态按 pending → delivered → persisted → running → terminal 推进，MVP 每 Operator max_inflight=1；ACK_PERSISTED 在 Operator 本地 fsync 完成后才发送，中心据此释放重投责任；重连时 Operator 重报 last_seen_sequence 以检测 gap（ADR-005、REQ-016）。（避免：memory channel、仅 ACK_RECEIVED、网络 exactly-once） | CONTEXT.md › Language；设计词汇表：ADR-005, REQ-016 |
 | HelmEngine | Operator 内封装 Helm Go SDK（helm.sh/helm/v3/pkg/action）的执行引擎，提供 Install/Upgrade/Rollback/Status/History/GetValues/List 接口；每个 Operation 独立初始化 action.Configuration，不跨并发 Operation 共享可变 action client。（避免：helm CLI wrapper、共享 helm client、os/exec 调用 helm） | CONTEXT.md › Language；设计词汇表：ADR-004, REQ-041 |
@@ -119,7 +117,7 @@
 | REQUIRE_PROMOTION | 收敛策略：须创建并批准 ValuesRevision 才标记 converged；APPLIED 后原子创建唯一 task。 | 设计词汇表：REQ-058, ADR-011 |
 | REVERT_ON_NEXT_RECONCILE | EMERGENCY Operation 的收敛策略之一：紧急变更在下次标准操作/对账时被吸收覆盖，不创建 Convergence Task、不触发收敛门禁；标准 Operation succeeded 后，后端以实际 applied manifest/inventory 与该 Operation 使用的 approved rendered value 对 Emergency 目标字段对账，相等才标记 reconciled。（避免：当作持久收敛任务、跳过对账、与 REQUIRE_PROMOTION 混淆） | CONTEXT.md › Language；设计词汇表：ADR-011, REQ-058 |
 | EmergencyOpType | SET_CONTAINER_IMAGE / SET_REPLICAS / SET_APPROVED_ANNOTATIONS。 | 设计词汇表：REQ-058 |
-| AnnotationScope | WORKLOAD_METADATA / POD_TEMPLATE_METADATA；annotation 目标锁按 key+scope。 | 设计词汇表：REQ-058 |
+| AnnotationScope | 紧急 annotation 变更落点的元数据位置枚举：WORKLOAD_METADATA / POD_TEMPLATE_METADATA。实现现状：scope 只决定执行时写入哪一层元数据（`internal/operator/emergency_executor.go:267-272`），**不**进入目标锁重叠判定——锁按 workload + annotation key 判重叠、锁条目仅含 key（`internal/store/sqlite/emergency_intents.go:576-578`、`internal/store/sqlite/emergency_intents.go:581-608`；PostgreSQL 侧同构 `internal/store/postgres/emergency_intents.go:606`），与 CONTEXT.md（Emergency Target Lock）「annotation 按 workload/key 判定重叠」一致；设计词汇表「按 key+scope」为实现未采纳的设计意图，差异裁定见文末 D4。（避免：把 key+scope 当作现行锁语义） | 设计词汇表：REQ-058；CONTEXT.md › Language（Emergency Target Lock） |
 | WorkloadKind | DEPLOYMENT / STATEFUL_SET / DAEMON_SET。 | 设计词汇表：REQ-058 |
 
 ## Inventory 与审计
@@ -211,38 +209,43 @@
 | 开发账号（dev accounts） | devseed 创建的 4 个本地账号：dev-admin platform_admin / dev-deployer deployer / dev-reader viewer / e2e-runner release_admin；密码 32 字符 `[A-Za-z0-9]` 落 `data/dev-credentials.env`（0600）或 ci Secret env。 | 设计词汇表：REQ-065 |
 | dev.lock 环境锁 | `data/dev.lock` 互斥锁文件：`dev-up`/`dev-down`/`dev-seed`/`dev-reset-data`/`dev-purge` 持排他锁（LOCK_EX）；`dev-status`/`e2e`/`e2e-cleanup` 持共享锁（LOCK_SH）；冲突立即退出码 3 `environment_locked`（stderr 附持有者 PID/started_at）。e2e 侧共享锁实现落点 = Makefile 层 flock 包装（退出码 3 为 Makefile 目标级，cmd/e2e 进程退出码 0/1/2，D-026 D1）。 | 设计词汇表：REQ-065, REQ-066, D-023, D-026 |
 
-## 待核对差异
+## 差异裁定（2026-09-15，按实现证据）
 
-以下术语在两个来源中的说法存在**实质不一致**（不只是措辞差异）。按合并规则，表格已采用 `Notes/CONTEXT.md` 的定义；此处逐条列出两种说法与来源路径，供人工裁决后再回填本表。
+原「待核对差异」D1–D5 已逐条以仓库代码为证据裁定。分类含义：**A｜文档对齐** = 仓库措辞向权威术语修正，无实现分歧；**B｜已记录差异** = CONTEXT 描述设计意图、仓库实现确实不同，保留实现事实并已在条目行内标注证据；**C｜未决** = 证据不能裁定"应当如何"，留下可执行问题。
 
-### D1. Convergence Task 绑定的 ValuesRevision 状态范围
+### D1. Convergence Task 绑定的 ValuesRevision 状态范围 — 裁定：无实质冲突（A）
 
-- `Notes/CONTEXT.md` › Language：至多绑定一个 active draft/pending ValuesRevision，只有同一个获批 ValuesRevision 完整吸收全部 paths 后才能进入 converged。
-- `Design/glossary.md` › 紧急变更与收敛：至多绑定一个 active revision。
-- 分歧点：glossary 的「active revision」是否包含 approved（已批准）状态；CONTEXT 明确限定为 draft/pending。
+- 两侧说法：`Notes/CONTEXT.md`「至多绑定一个 active draft/pending ValuesRevision」；`Design/glossary.md`「至多绑定一个 active revision」。
+- 代码证据：生产代码唯一的绑定创建点在消费 Prepare Session 时写入 `active_revision_status='draft'`（`internal/store/sqlite/values_lifecycle.go:311`、`internal/store/postgres/values_lifecycle.go:308`）；draft 被丢弃即解绑（`internal/store/sqlite/values_lifecycle.go:170`、`internal/store/postgres/values_lifecycle.go:160`）；`'approved'` 只随任务收敛在同一语句写入（`internal/store/sqlite/convergence_tasks.go:151`、`internal/store/postgres/convergence_tasks.go:142`），且通用改写接口 `BindRevision`（`internal/store/store.go:1371`）在仓库生产代码中没有任何调用方（仅测试使用）。
+- 结论：实现与 CONTEXT 一致——进行中绑定是 draft/pending，approved 仅是 converged 的终态戳而非长期驻留绑定；Design 侧「active revision」按此理解。表格条目维持 CONTEXT 定义，仓库侧无进一步改动。
+- 遗留：无实现分歧可裁；若需在 `Design/glossary.md` 给「active revision」补限定语，归 REQ-032/058 owner（知识库修改不在本任务范围）。
 
-### D2. Operator Session 生命周期是否包含 revoked
+### D2. Operator Session 生命周期是否包含 revoked — 裁定：已记录差异（B）
 
-- `Notes/CONTEXT.md` › Language（Operator Session）：生命周期为 online、suspect、offline；revoked 只出现在 Operator Session Status Reason 的枚举中。
-- `Design/glossary.md` › 执行域（Operator Session）：online/suspect/offline/revoked。
-- 分歧点：revoked 是 Session 的生命周期状态，还是仅是状态原因（Status Reason）；影响前端状态判定与后端枚举取值。
+- 两侧说法：`Notes/CONTEXT.md` 生命周期 online/suspect/offline（revoked 只出现在 Status Reason 条目）；`Design/glossary.md` online/suspect/offline/revoked。
+- 代码证据：`revoked` 是会话**状态**而非状态原因——wire 枚举 `OPERATOR_SESSION_STATUS_REVOKED`（`api/proto/orchestrator/v1/orchestrator.proto:580`）、store 常量 `SessionRevoked`（`internal/store/store.go:660`）、证书吊销级联将会话置为 revoked 并附 reason `certificate_revoked`（`internal/store/sqlite/operator_lifecycle.go:120`、`internal/store/postgres/operator_lifecycle.go:124`）、proto↔store 一等公民双向映射（`internal/orchestrator/operator.go:478-479`、`internal/orchestrator/operator.go:506-507`）；仓库运维文档已按实现记录四态（`docs/runbook.md:168`）。
+- 处理：实现现状 ≠ 设计词汇。表格 Operator Session 条目保留 CONTEXT 定义并已在行内标注差异与证据。
+- 遗留（需人工）：`Notes/CONTEXT.md` 的 Operator Session 条目需要 owner 补入 revoked（或明确其仅为终态记录值）——知识库修改，不在本任务范围。
 
-### D3. 服务令牌的术语命名（同一 seam 三种名字）
+### D3. 服务令牌的术语命名（同一 seam 三种名字） — 裁定：文档对齐（A）
 
-- `Notes/CONTEXT.md` › Language：Bundle Ingress Service Token。
-- `Design/glossary.md` › 组织、授权与边界：Internal Service Token；同文件 › 开发环境：bundle ingress 服务令牌 seam。
-- 分歧点：三者语义一致（静态 service token、current+previous 双 hash 轮换、actor = service:release-webhook），但术语名不统一，代码标识符与 ADR/REQ 引用容易分叉。
+- 两侧说法：`Notes/CONTEXT.md` 权威名 Bundle Ingress Service Token；`Design/glossary.md` 另用 Internal Service Token 与 bundle ingress 服务令牌 seam 指同一 seam。
+- 代码证据：flag/env 与注释统一写 bundle ingress service token（`cmd/webhook/main.go:62`、`cmd/orchestrator/main.go:800`），通用校验机制命名 `ServiceTokenInterceptor`（`internal/auth/service_token.go:28`）；`Internal Service Token` 在代码与其余文档中零匹配（本词汇表旧条目除外）。
+- 处理：三行合并为单条 Bundle Ingress Service Token（CONTEXT 权威名），两个设计侧旧名降为该条目内的别名说明；全仓 grep 确认其余文档（`docs/architecture.md` §3、`docs/api.md` §3.3、`docs/configuration.md`、`SECURITY.md`）本就未使用旧名，无需改动。
+- 遗留：`Design/glossary.md` 仍保留两个旧名条目，应由 REQ-011 owner 按本结论合并/改指——知识库修改，不在本任务范围。
 
-### D4. annotation 目标锁的判定粒度
+### D4. annotation 目标锁的判定粒度 — 裁定：仓库文档已对齐（A）+ 设计意图待确认（C）
 
-- `Notes/CONTEXT.md` › Language（Emergency Target Lock）：annotation 按 workload/key 判定重叠。
-- `Design/glossary.md` › 紧急变更与收敛（AnnotationScope）：annotation 目标锁按 key+scope，scope ∈ WORKLOAD_METADATA / POD_TEMPLATE_METADATA。
-- 分歧点：是否把 annotation 所在的元数据位置（scope）计入锁重叠判定；影响并发紧急变更是否被判为冲突。
+- 两侧说法：`Notes/CONTEXT.md`（Emergency Target Lock）annotation 按 workload/key 判定重叠；`Design/glossary.md`（AnnotationScope）锁按 key+scope。
+- 代码证据：锁条目结构仅含 `Key`（`internal/store/sqlite/emergency_intents.go:576-578`），重叠判定 = 同 workload（kind+name）且同 annotation key（`internal/store/sqlite/emergency_intents.go:581-608`，PostgreSQL 侧 `internal/store/postgres/emergency_intents.go:606`）；scope 只在执行期选择写入 workload metadata 还是 pod-template metadata（`internal/operator/emergency_executor.go:267-272`），不参与锁判定。
+- 处理：实现与 CONTEXT 一致；原表格 AnnotationScope 条目照抄了设计侧「key+scope」的说法，与 CONTEXT 和实现都不符，已改为实现事实并标注差异。
+- 遗留（需人工裁定，可执行问题）：REQ-058 owner 需确认「scope 不计入锁重叠」是有意的实现简化还是缺陷——若是有意（同一 key 在 workload metadata 与 pod-template metadata 允许并发变更），回填 `Design/glossary.md` 措辞为 workload/key；若是缺陷，立 REQ 修正 `emergencyIntentsConflict` 的判定键。两种走向不能由仓库代码单方面裁定。
 
-### D5. Fixture Snapshot 与 BaselineSnapshot 的概念边界
+### D5. Fixture Snapshot 与 BaselineSnapshot 的概念边界 — 裁定：分层概念，无冲突（A）
 
-- `Notes/CONTEXT.md` › Language（Fixture Snapshot）：E2E Run 开始或 Stage 前采集的不可变测试基线，包含 Customer、Cluster、ReleaseDefinition、Release、Operator Session 与 Operation 的非敏感状态。
-- `Design/glossary.md` › E2E 与治理（Fixture Snapshot 只保留一句；另设 BaselineSnapshot）：Run 开始时采集一次、全 Run 不可变的测试基线（含各 `e2e-*-target` 的 baseline revision/replicas），写 `{output-dir}/baseline.json`。
-- 分歧点：二者是同一概念的两个名字还是两个概念；采集时机（Run 开始 vs Stage 前）与内容范围（各实体状态 vs target revision/replicas）不一致。
+- 两侧说法：`Notes/CONTEXT.md`（Fixture Snapshot）Run 开始或 Stage 前采集、含各实体非敏感状态；`Design/glossary.md` 另设 BaselineSnapshot = Run 开始时采集一次、含 target revision/replicas、写 `{output-dir}/baseline.json`。
+- 代码证据：同一类型族的两个层次——领域观察类型 `FixtureSnapshot`（`test/e2e/snapshot.go:14-22`），其身份投影 `SnapshotIdentity` 恰含 CONTEXT 列举的实体维度（customers/clusters/release_definitions/release_inventories/operator_sessions/operations，`test/e2e/snapshot.go:25-37`）；Run 开始的基线工件 `baselineArtifact` **嵌入** `e2e.FixtureSnapshot` 并附 run/environment/fixture_version（`cmd/e2e/main.go:60-61`），由 `collectBaseline` 采集 revision/replicas 后原子写 baseline.json（`cmd/e2e/main.go:223`、`cmd/e2e/main.go:256`）；「Stage 前采集」对应 fixture guard 的身份比对（`test/e2e/stages/inventory.go:73-78`）。
+- 结论：二者是「领域概念（CONTEXT 词汇）」与「Run 开始工件载体（设计词汇 BaselineSnapshot/baseline.json）」的分层关系，不是互相矛盾的两说；表格两条目各按出处保留，无仓库改动。
+- 遗留：无；若需在 `Design/glossary.md` 将 BaselineSnapshot 显式标注为 Fixture Snapshot 的工件特化，归 REQ-066 owner。
 
-> 事实源：`/home/nd/src/repos/github.com/ndzuki/myNote/Projects/001-release-manager/Notes/CONTEXT.md`（权威）、`/home/nd/src/repos/github.com/ndzuki/myNote/Projects/001-release-manager/Design/glossary.md`（设计投影）
+> 事实源：`/home/nd/src/repos/github.com/ndzuki/myNote/Projects/001-release-manager/Notes/CONTEXT.md`（权威）、`/home/nd/src/repos/github.com/ndzuki/myNote/Projects/001-release-manager/Design/glossary.md`（设计投影）；裁定证据为本仓库代码（2026-09-15，分支 task/092-docs-batch3）。
