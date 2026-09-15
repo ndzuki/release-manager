@@ -69,8 +69,9 @@ e2e-results/
 .env.*
 !.env.example
 
-# E2E test data (Helm chart tarballs)
-test/e2e/testdata/*.tgz
+# No chart-tarball rule: nothing in this repository writes a `.tgz` into a
+# tracked path - the Helm chart archives the SDK integration tests use are
+# created inside `t.TempDir()`, outside the work tree.
 release-*
 /sdkcheck
 /reqcheck

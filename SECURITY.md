@@ -11,10 +11,11 @@ travels as a `SecretRef` pointing at an object already inside the customer clust
 - **Supported versions:** none. The repository has **0 git tags** and no release workflow, so only
   `main` (the HEAD of the branch you are reading) exists. `CHANGELOG.md` states the same fact and
   explains why its entries are month-based rather than version-based. See §2.
-- **Reporting:** the declared channel is GitHub's **private vulnerability reporting** ("Report a
-  vulnerability" form on `ndzuki/release-manager`) — see §1.2 for its current enablement state and the
-  command that verifies it. No email or PGP key is declared. **Do not open a public issue for a
-  vulnerability.**
+- **Reporting:** this repository has **no dedicated private disclosure channel**. GitHub
+  private-vulnerability reporting is unavailable for it (open-source/free plan; the endpoint
+  returns 404 for this repo), so reports must reach the maintainer (`ndzuki`) through contact
+  information published on their GitHub profile — see §1.2 for the exact route and its gaps.
+  **Do not open a public issue for a vulnerability.**
 - **Known gaps** (not implemented today): management-plane HTTP has no TLS implementation wired up;
   the `NotifierService` face has no authentication interceptor and delivers caller-chosen URLs from
   inside the control plane (SSRF surface, §3.11); some audit rows are written by raw SQL that bypasses
@@ -39,46 +40,40 @@ travels as a `SecretRef` pointing at an object already inside the customer clust
 review 或 commit message。本仓库是公开镜像（`https://github.com/ndzuki/release-manager`，GitCode 镜像见
 `.github/workflows/sync-to-gitcode.yaml:22`），公开 issue 等同于 0-day 公告。
 
-### 1.2 已声明渠道：GitHub 私有漏洞报告
+### 1.2 披露渠道现状：**无专用私密渠道**（GitHub 私有漏洞报告在本仓库不可用）
 
-**渠道**：在 `ndzuki/release-manager` 的 Security 页使用 **Report a vulnerability**
-（GitHub 私有漏洞报告）。报告内容与仓库公众不可见，仅维护者可读写，因此报告者不需要知道任何邮箱，
-仓库内也不落任何明文凭据。这是本仓库**唯一**声明的披露渠道。
+**结论**：本仓库当前**没有**专用私密披露渠道。GitHub 的 *Private vulnerability reporting*
+对开源/免费计划下的仓库不可用，维护者已裁定不再把它算作渠道（实测：
+`PUT /repos/ndzuki/release-manager/private_vulnerability_reporting` 返回 404，端点对该仓库不存在）。
 
-**开启状态（可核验，非断言）**：该设置是仓库级开关，仓库内没有对应文件，因此只能向 API 求证：
+**因此报告者可用的做法**（按优先级）：
 
-```bash
-gh api repos/ndzuki/release-manager \
-  --jq '.security_and_analysis.private_vulnerability_reporting.status'
-```
+1. 通过 GitHub 用户 `ndzuki` 个人页上公开的联系方式**私下**投递（该命名空间的依据见下方事实清单）。
+2. 若一时找不到可用联系方式：先只投递一句「我发现一个边界缺陷，需要私密渠道」，
+   **不要**在公开 issue、PR 或 commit message 里写任何细节（见 §1.1）。
 
-返回 `enabled` 才算开启；**没有任何输出**表示该键不存在，即未开启。本节撰写时（分支
-`task/092-project-docs-align`）即处于无输出状态（同一次调用可见 `secret_scanning` 与
-`secret_scanning_push_protection` 均为 `disabled`），即**渠道已声明、开关待开启**；
-开启动作由维护者在 GitHub Settings → Advanced Security → Private vulnerability reporting 完成，
-不属于本仓库代码变更，因此本文件无法代为断言它已生效。
-
-若该开关长期未开启，则本节给出的渠道不成立，需回落到 §1.3 的补充渠道。
+这是一个**已知缺口**而不是可接受状态：它意味着报告能否送达完全取决于维护者是否在看 GitHub，
+且没有任何投递回执。补齐动作见 §9 第 1 条。
 
 - 仓库内**不存在**任何披露渠道配置文件：此前没有 SECURITY.md（本文即第一份）、
   没有 `.github/ISSUE_TEMPLATE/`、没有 `.github/CODEOWNERS`、没有 `.github/dependabot.yml`。 <!-- check-docs:ignore 这三项按定义不存在，本行在陈述其缺失 -->
   （`.github/` 下只有 `SECRETS.md` 与 `workflows/`）。
-- `README.md` 全文（118 行）不含邮箱、不含支持链接、不含徽章之外的联系方式。
+- `README.md` 全文不含邮箱、不含支持链接、不含徽章之外的联系方式。
 - 可公开归属的身份只有：GitHub 命名空间 `ndzuki`（`go.mod:3` 的 module path
   `github.com/ndzuki/release-manager`、`git remote` 的 origin）、GitCode 命名空间 `ndmizuki`
-  （`.github/workflows/sync-to-gitcode.yaml:9`）。
+  （`.github/workflows/sync-to-gitcode.yaml:9`）。GitCode 镜像侧同样没有私密报告入口。
 - 提交者署名（`Nero Yang <281244945@qq.com>` 等）存在于 git 对象中，但那是提交元数据，
-  **不是**已声明的披露渠道；本文不把它写成联系方式。GitCode 镜像侧不存在等价的私有报告入口。
+  **不是**已声明的披露渠道；本文不把它写成联系方式。
 
-### 1.3 该渠道的已知不足（**建议**，非现状）
+### 1.3 该缺口的影响与补齐建议（**建议**，非现状）
 
-1. **无响应时限承诺**：私有漏洞报告只提供投递，本仓库未声明确认/修复/披露时限
+1. **无专用安全邮箱 / PGP**：投递依赖个人页信息，且无法验证报告者身份与消息完整性
+   （**建议**：公开一个安全邮箱 + PGP 指纹，作为正式渠道写进本节）。
+2. **无投递回执与时限**：没有确认/修复/披露 SLA，报告者无法判断是否送达
    （**建议**：写明「48 小时内确认、90 天内披露」，并说明是否接受非英语报告）。
-2. **无第二渠道**：若维护者不常看 GitHub 安全面板，报告即石沉大海，且报告者无法判断是否送达
-   （**建议**：补一个专用安全邮箱 + PGP 指纹，作为 §1.2 的补充而非替代）。
-3. **GitCode 镜像无对应机制**：镜像仓库（`gitcode.com/ndmizuki/release-manager`）不继承该设置，
-   从镜像侧发现的报告路径未定义（**建议**：在镜像 README 指回 GitHub 的私有报告入口）。
-3. **建议**在报告时附上：受影响的服务二进制（`cmd/` 下 6 个服务之一，清单见
+3. **GitCode 镜像无对应机制**：镜像侧（`gitcode.com/ndmizuki/release-manager`）没有私密报告入口
+   （**建议**：在镜像 README 指回本仓库的 §1.2）。
+4. **建议**在报告时附上：受影响的服务二进制（`cmd/` 下的服务，清单见
    `docs/architecture.md:62-73`）、复现请求的 Connect procedure 名、以及是否跨越 Customer 边界。
 
 ## 2. 适用范围与版本支持
@@ -480,7 +475,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 
 | # | 缺口 | 类型 | 证据 |
 | --- | --- | --- | --- |
-| 1 | 披露渠道已声明为 GitHub 私有漏洞报告，但仓库侧开关**尚未开启**（API 无 `private_vulnerability_reporting` 键）；无邮箱/PGP 第二渠道、无 SLA | 需维护者开启开关并补 §1.3 | §1.2、§1.3 |
+| 1 | **无专用私密披露渠道**：GitHub 私有漏洞报告在本仓库不可用（开源/免费计划，端点 404），且未提供安全邮箱/PGP；无投递回执与 SLA | 需维护者补渠道 | §1.2、§1.3 |
 | 2 | 无任何已发布版本，修复无版本语义 | 事实 | §2 |
 | 3 | 管理面 HTTP 无 TLS 实现（只有接缝） | 未见实现 | `internal/app/app.go:71,190-201` |
 | 4 | `ExternalIdentityService` 已声明已实现但未挂载 | 部分实现 | §3.8「未见实现（外部 IdP）」条 |
@@ -505,10 +500,11 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 
 ## 9. 需维护者补充（TODO）
 
-1. **打开 GitHub 私有漏洞报告开关**（§1.2 已把它写成唯一渠道，但开关待开启）。开启后本节即为事实，
-   核验命令见 §1.2；同时**建议**顺手评估 `secret_scanning` 与 `secret_scanning_push_protection`
-   ——两者当前均为 `disabled`，而本仓库是公开镜像且历史上出现过 dev 口令入库（§5）。
-2. 期望的确认/修复/披露时限（当前无任何 SLA 声明），以及是否需要安全邮箱 + PGP 作为第二渠道（§1.3 第 2 条）。
+1. **补一个真实可用的私密披露渠道**（§1.2 目前只能指向 GitHub 个人页联系方式）：安全邮箱 + PGP 指纹，
+   并声明 SLA。GitHub 私有漏洞报告已确认对本仓库不可用，不再作为待办项。
+   已完成的相邻设置（2026-09-15 实测）：`secret_scanning`、`secret_scanning_push_protection`、
+   Dependabot security updates 均已启用——它们降低「凭据继续流入历史」的风险，但**不替代**报告渠道。
+2. 期望的确认/修复/披露时限（当前无任何 SLA 声明），以及是否接受非英语报告（§1.3 第 2 条）。
 3. 版本与 backport 政策：首次发版后把 §2 换成受支持版本表。
 4. 生产部署侧的 TLS 终结由谁负责：Go 侧只有 `TLSCertificateFiles` 接缝（§3.8），web 入口
    `listen 8087` 为明文 HTTP（`web/nginx.conf:6-8`），同源设计本身不需要 CORS，但需要明确谁承担 TLS。
