@@ -53,8 +53,8 @@
 
 ### 审计写入收敛（Fixed）
 
-- 审计直写路径收敛：`internal/store/{sqlite,postgres}/operator_management.go` 的事务内审计写入改为经 `store.SanitizeAuditEvent` 兜底脱敏（字段名 + 内容双扫描，比异步 emitter 更严），并新增结构门禁——除登记的 6 个 store 文件外任何 `INSERT [OR IGNORE] INTO audit_events` 都失败，且事务写入者必须调用该兜底（含合成树负控制）（PR #111，TASK-097）。
-- `AuditService/Emit` 按事件 id 幂等：两引擎分别改为 `INSERT OR IGNORE` 与 `ON CONFLICT (id) DO NOTHING`，重放同一事件不再失败也不再写第二行；契约注释显式声明去重键（PR #111，TASK-097）。
+- 审计直写路径收敛：`internal/store/{sqlite,postgres}/operator_management.go` 的事务内审计写入改为经 `store.SanitizeAuditEvent` 兜底脱敏（字段名 + 内容双扫描，比异步 emitter 更严），并新增结构门禁——除登记的 6 个 store 文件外任何 `INSERT [OR IGNORE] INTO audit_events` 都失败，且事务写入者必须调用该兜底（含合成树负控制）（PR #117，TASK-097）。
+- `AuditService/Emit` 按事件 id 幂等：两引擎分别改为 `INSERT OR IGNORE` 与 `ON CONFLICT (id) DO NOTHING`，重放同一事件不再失败也不再写第二行；契约注释显式声明去重键（PR #117，TASK-097）。
 
 ### 供应链与 CI 加固（Added）
 
