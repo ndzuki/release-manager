@@ -170,7 +170,7 @@ HS256 对称签名，`internal/auth/jwt.go:22-29`（`NewJWTManager(signingKey, a
 5. `enforceRequestBinding`（customer 绑定/禁用一致性）→ `:88-97`。
 6. 策略行 `mode == modeCasbin` 时执行 `enforcer.Enforce(userID, domain, object, action)` → `:98-109`；`modeHandler` 的 procedure 跳过 Casbin，由 handler 自证授权。
 
-TASK-095 把旧的「服务名包含 + 方法名前缀」推断（`mapServiceToObject`/`mapMethodToAction`）整体删除，改为 `internal/auth/procedure_policy.go:66-185` 的**显式 procedure → 授权登记表**（104 行，一行一个 procedure）。每行的 `mode` 取值：`modeCasbin`（拦截器裁决）、`modeHandler`（handler 自证）、`modePublic`、`modePrincipalScope`（release-api 审计面）、`modeServiceToken`、`modeMTLS`、`modeUnintercepted`。两条门禁测试锁死这张表：`internal/auth/procedure_policy_test.go:90` 遍历 proto registry，新增 procedure 未登记即失败；`:121` 断言每个 `modeCasbin` 的 `(object, action)` 必须落在默认角色矩阵（非通配角色）的授予集合内，或显式标注 `adminOnly`。
+TASK-095 把旧的「服务名包含 + 方法名前缀」推断（`mapServiceToObject`/`mapMethodToAction`）整体删除，改为 `internal/auth/procedure_policy.go:66-185` 的**显式 procedure → 授权登记表**（104 行，一行一个 procedure）。每行的 `mode` 取值：`modeCasbin`（拦截器裁决）、`modeHandler`（handler 自证）、`modePublic`、`modePrincipalScope`（release-api 审计面）、`modeMTLS`、`modeUnintercepted`。两条门禁测试锁死这张表：`internal/auth/procedure_policy_test.go:90` 遍历 proto registry，新增 procedure 未登记即失败；`:121` 断言每个 `modeCasbin` 的 `(object, action)` 必须落在默认角色矩阵（非通配角色）的授予集合内，或显式标注 `adminOnly`。
 
 角色 → 策略规则（`internal/auth/casbin.go:425-477`，角色常量 `internal/store/store.go:807-812`，仅 4 个角色）：
 

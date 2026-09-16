@@ -35,8 +35,6 @@ const (
 	// modePrincipalScope: the owning listener (release-api) authenticates a JWT
 	// principal and scopes every request to principal.OrgID.
 	modePrincipalScope
-	// modeServiceToken: authenticated by a static service key on a non-JWT leg.
-	modeServiceToken
 	// modeMTLS: identity comes from a verified client certificate.
 	modeMTLS
 	// modeUnintercepted: the owning listener mounts no authentication
