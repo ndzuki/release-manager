@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
@@ -74,6 +75,10 @@ type Agent struct {
 	logger            *slog.Logger
 	installFlags      InstallFlags
 	registryPlainHTTP bool
+	// connected tracks whether a gateway command stream is currently live
+	// (TASK-099): the agent Pod must not report Ready while its reconnect loop
+	// is between sessions.
+	connected atomic.Bool
 }
 
 // InstallFlags contains operator-wide defaults for INSTALL commands.
@@ -170,6 +175,10 @@ func New(cfg Config) (*Agent, error) {
 	}, nil
 }
 
+// Connected reports whether a gateway command session is currently streaming
+// (TASK-099). It backs the agent Pod's /readyz check.
+func (a *Agent) Connected() bool { return a.connected.Load() }
+
 // Run connects to CommandStream and processes commands until the context is cancelled.
 func (a *Agent) Run(ctx context.Context) error {
 	// TASK-084 AC-084-03: every connection derives its own context so a
@@ -179,6 +188,8 @@ func (a *Agent) Run(ctx context.Context) error {
 	// agent acknowledgement (ADR-005 local persistence + replay).
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// TASK-099: whatever exits this stream, the Pod stops claiming readiness.
+	defer a.connected.Store(false)
 
 	lastSequence, err := a.store.LastSequence(ctx)
 	if err != nil {
@@ -203,6 +214,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.replayActive(ctx, stream); err != nil {
 		return err
 	}
+	// The gateway accepted our Hello and replay completed: the command
+	// session is live (TASK-099 readiness signal).
+	a.connected.Store(true)
 
 	// REQ-085 startup scan: report authoritative workload identities for the
 	// releases already deployed by this operator so the orchestrator's
