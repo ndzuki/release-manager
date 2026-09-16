@@ -266,7 +266,11 @@ func (s *Service) ExecuteEmergencyChange(
 			return nil, s.failEmergencyDelivery(ctx, created, &actor, msg.GetReleaseDefinitionId(), strategy, deliveryErr, time.Since(started))
 		}
 		if err := s.emergencyDispatcher.DispatchEmergency(ctx, operatorID, command); err != nil {
-			deliveryErr := emergencyError(connect.CodeUnavailable, "delivery_failed", "emergency command delivery failed")
+			// The dispatcher only fails when no live stream holds this operator
+			// (the map is in-process), which is the same condition the check above
+			// protects: report it as operator_offline so callers see one stable
+			// retryable reason instead of an internal-looking delivery error.
+			deliveryErr := emergencyError(connect.CodeUnavailable, "operator_offline", "operator is offline")
 			return nil, s.failEmergencyDelivery(ctx, created, &actor, msg.GetReleaseDefinitionId(), strategy, deliveryErr, time.Since(started))
 		}
 		if err := s.store.EmergencyIntents().UpdateDeliveryStatus(ctx, created.Intent.ID, "queued"); err != nil {
@@ -518,6 +522,16 @@ func (s *Service) onlineEmergencyOperator(ctx context.Context, definition *store
 	session, err := s.store.Sessions().GetActiveByOperator(ctx, operator.ID)
 	if err != nil || session.Status != store.SessionOnline {
 		return "", emergencyError(connect.CodeUnavailable, "operator_offline", "operator is offline")
+	}
+	// TASK-098: a persisted "online" row is only trustworthy while its heartbeat
+	// is fresh. After an orchestrator restart the in-process stream is gone while
+	// the row survives, so a stale heartbeat must read as offline here — the
+	// caller then gets the documented operator_offline instead of an opaque
+	// delivery failure further down the path (REQ-032 AC-032-20).
+	if offlineAfter := s.lifecyclePolicy.SessionOfflineAfter; offlineAfter > 0 {
+		if time.Since(session.LastHeartbeat) > offlineAfter {
+			return "", emergencyError(connect.CodeUnavailable, "operator_offline", "operator is offline")
+		}
 	}
 	return operator.ID, nil
 }

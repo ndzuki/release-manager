@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,6 +32,21 @@ import (
 const defaultInstallTimeout = 5 * time.Minute
 
 // Stream is the operator-side command stream contract used by Agent.
+// lockedStream serializes Send between the receive loop and the heartbeat
+// goroutine. A Connect bidirectional stream does not allow concurrent Send, and
+// TASK-098 makes the agent write heartbeats while commands are in flight.
+type lockedStream struct {
+	Stream
+	mu sync.Mutex
+}
+
+// Send implements Stream.
+func (s *lockedStream) Send(req *operatorv1.CommandStreamRequest) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Stream.Send(req)
+}
+
 type Stream interface {
 	Send(*operatorv1.CommandStreamRequest) error
 	Receive() (*operatorv1.CommandStreamResponse, error)
@@ -79,6 +95,10 @@ type Agent struct {
 	// (TASK-099): the agent Pod must not report Ready while its reconnect loop
 	// is between sessions.
 	connected atomic.Bool
+	// heartbeatOnce keeps exactly one heartbeat goroutine per connection
+	// (TASK-098): the cadence arrives with SessionEstablished, and a duplicate
+	// frame must not stack a second ticker.
+	heartbeatOnce sync.Once
 }
 
 // InstallFlags contains operator-wide defaults for INSTALL commands.
@@ -196,7 +216,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		return fmt.Errorf("load last command sequence: %w", err)
 	}
 
-	stream := a.client.CommandStream(ctx)
+	stream := &lockedStream{Stream: a.client.CommandStream(ctx)}
 	defer stream.CloseResponse() //nolint:errcheck // stream is already terminating
 
 	if err := stream.Send(&operatorv1.CommandStreamRequest{
@@ -260,6 +280,15 @@ func (a *Agent) Run(ctx context.Context) error {
 			a.logger.Debug("received duplicate command result",
 				"command_id", response.GetDuplicateResponse().GetCommandId(),
 			)
+		case response.GetSessionEstablished() != nil:
+			// REQ-044/TASK-098: the orchestrator negotiates the heartbeat cadence
+			// in SessionEstablished; the agent is the only writer of liveness.
+			interval := time.Duration(response.GetSessionEstablished().GetHeartbeatIntervalSeconds()) * time.Second
+			if interval <= 0 {
+				interval = defaultHeartbeatInterval
+			}
+			a.startHeartbeat(ctx, stream, interval)
+
 		case response.GetSessionEvent() != nil:
 			return fmt.Errorf("operator session %s: %s",
 				response.GetSessionEvent().GetType(),
@@ -267,6 +296,37 @@ func (a *Agent) Run(ctx context.Context) error {
 			)
 		}
 	}
+}
+
+// defaultHeartbeatInterval is used only when the orchestrator omits the
+// negotiated interval (it always sends SessionEstablished first).
+const defaultHeartbeatInterval = 15 * time.Second
+
+// startHeartbeat sends one Heartbeat frame per interval until the stream
+// context ends. Exactly one goroutine runs per connection: the first
+// SessionEstablished claims it.
+func (a *Agent) startHeartbeat(ctx context.Context, stream Stream, interval time.Duration) {
+	a.heartbeatOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := stream.Send(&operatorv1.CommandStreamRequest{
+						Payload: &operatorv1.CommandStreamRequest_Heartbeat{
+							Heartbeat: &operatorv1.Heartbeat{SessionId: a.sessionID},
+						},
+					}); err != nil {
+						a.logger.Warn("heartbeat send failed", "error", err)
+						return
+					}
+				}
+			}
+		}()
+	})
 }
 
 func (a *Agent) replayActive(ctx context.Context, stream Stream) error {

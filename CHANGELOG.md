@@ -14,7 +14,7 @@
 
 ## 2026-09
 
-里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 15 个 PR 合入。
+里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 16 个 PR 合入。
 
 ### 执行链路（升级 / 回滚）
 
@@ -50,6 +50,12 @@
 ### Bundle ingress 认证（Added）
 
 - `SubmitReleaseBundle` 由 CI API key 认证、新增 `POST /webhooks/harbor`（Harbor 独立 key）并挂载 Harbor adapter，出站以 `service:release-harbor` 调 `RecordArtifactEvent`（scope 仅该 procedure）；两把 key 与两条 procedure 不可互相替换（AC-011-04/16/17）。配套把 `ServiceTokenInterceptor` 对「不在本腿白名单的 token」改为 `unauthenticated` 以支持多凭证并存（保留「在白名单但越 scope → `permission_denied`」），并在 dev 生命周期/kustomize/CI 三处配齐凭据（PR #109，TASK-102）。
+
+### Operator 会话与生命周期（Fixed）
+
+- 心跳归属修正：agent 收到 `SessionEstablished` 后按协商周期发送 `Heartbeat`（发送与接收共用一把 Send 互斥），orchestrator **不再自写** `last_heartbeat`；`SessionRegistry` 首次接线（网关 operator service 构造 + `Run`），心跳停止即推进 `suspect`/`offline`。心跳阈值、suspect/offline 阈值改为可配置（`operator_session.*`，默认 15s/45s/90s）（PR #118，TASK-098）。
+- 紧急变更离线窗口确定性：除会话状态外还要求 `last_heartbeat` 足够新（重启后进程内流已空但会话行仍 `online`），dispatch 失败也归一到 `CodeUnavailable` + `operator_offline`，且拒绝不留非终态 Operation（REQ-032 AC-032-20）（PR #118，TASK-098）。
+- 标准 Operation（INSTALL/UPGRADE/ROLLBACK）获得 `operation.deadline`（默认 30m），非终态恢复扫描从「仅启动一次」改为按 `operation.recovery_interval`（默认 1m）周期执行（PR #118，TASK-098）。
 
 ### 审计写入收敛（Fixed）
 
