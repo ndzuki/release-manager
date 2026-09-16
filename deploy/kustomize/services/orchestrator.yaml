@@ -62,17 +62,31 @@ spec:
             # cluster agents can enroll and stream commands.
             - name: gateway
               containerPort: 8084
+          # TASK-099: startupProbe absorbs the synchronous store-open +
+          # migration window in app.Run before /health starts answering;
+          # liveness must never fight a slow-but-progressing startup.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 120
           readinessProbe:
             httpGet:
               path: /readyz
               port: http
             periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
           resources:
             requests:
               cpu: 10m
