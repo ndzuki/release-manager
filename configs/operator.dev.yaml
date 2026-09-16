@@ -1,14 +1,5 @@
 http_port: 8084
 log_level: debug
-runtime_pull_preflight:
-  enabled: false
-  namespace: ""
-  service_account: ""
-  timeout: 2m
-  cleanup_policy: always
-  probe_command:
-    - /bin/true
-
 agent:
   mode: agent
   customer_id: dev-customer-a
@@ -16,6 +7,7 @@ agent:
   operator_name: dev-customer-a-direct
   enrollment_token_file: data/enrollment.token
 ca:
+  # The operator only consumes ca.cert_path (agent-side mTLS trust anchor).
+  # ca.cert_ttl / ca.renew_before_ratio are orchestrator-side CA-authority
+  # settings; setting them here decodes but changes nothing (TASK-094 §7-6).
   cert_path: data/gateway-ca.crt
-  cert_ttl: 168h
-  renew_before_ratio: 0.5

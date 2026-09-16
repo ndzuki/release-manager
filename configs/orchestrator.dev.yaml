@@ -29,8 +29,6 @@ gc:
 gateway:
   enabled: false
   port: 8084
-  ca_key_path: data/gateway-ca.key
-  ca_cert_path: data/gateway-ca.crt
 
 ca:
   cert_path: data/gateway-ca.crt
