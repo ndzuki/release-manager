@@ -209,10 +209,12 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
   `internal/audit/sanitize.go:29-42`），查询投影也不返回 `change_summary`/`metadata`
   （`internal/audit/audit_service_handler.go:164-174`）。因此目前**未见明文泄露证据**，但「所有审计写入都过脱敏」
   并非结构性保证。**建议**：把直写改为经过 `Normalize`，或在 store 层再兜一道。
-- **状态：未见实现（审计租户边界由服务端强制）**。`QueryAuditEvents` 的 `organization_id` 取自请求而不是
-  已认证 principal（`internal/audit/audit_service_handler.go:60-61`），过滤值为空时 store 直接不加条件
-  （`internal/store/sqlite/audit.go:210-236`），而 `PrincipalFromContext`
-  （`internal/audit/interceptor.go:47`）在该查询路径无人调用。当前泄露面受上一条的窄投影限制。
+- **状态：已实现（审计租户边界由服务端强制，TASK-095）**。`QueryAuditEvents`/`ExportAuditEvents` 的组织过滤
+  由 principal 解析（`internal/audit/authorization.go:37-48`，缺省即 principal 组织，指向别的组织
+  `permission_denied`），`Emit` 拒收 actor 组织与 principal 不一致的请求
+  （`internal/audit/audit_service_handler.go:49-56`），导出记录按 principal 组织落库（`:167`）。
+  store 侧过滤为空时仍不加条件（`internal/store/sqlite/audit.go:210-236`），但空值已不可达——handler 必填
+  principal 组织。剩余：审计面仍无 Casbin 角色判定与会话撤销校验（见下方第 12 条），隔离维度是组织，不是角色。
 - 落库前的最后一道：操作时间线的错误文本同样脱敏（`internal/store/store.go:2616-2617`）。
 - 响应侧错误脱敏：`CodeInternal` 一律泛化为 `internal error`，`CodeUnavailable` 的 `%w` 链若不含已知
   稳定业务 sentinel 也降级为 internal，完整细节只写服务端日志：
@@ -242,7 +244,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 
 - 统一拦截链：JWT/Cookie → 组织域解析 → Cookie 写操作 CSRF 校验 → Casbin `Enforce` → 用户必须
   `UserActive` → 必须有活跃会话（store 出错即失败，不放行）：
-  `internal/auth/interceptor.go:26-131`（CSRF 判定 `:82-88`，用户激活与会话 fail-closed `:113-124`）。
+  `internal/auth/interceptor.go:26-136`（CSRF 判定 `:80-86`，用户激活与会话 fail-closed `:111-122`）。
 - 口令为 bcrypt cost 12：`internal/auth/password.go:9-19`；登录限流为**进程内** map
   （`internal/auth/ratelimit.go:18-54`），多副本部署时不共享（**建议**改用 Redis 或边缘限流）。
 - 浏览器会话 Cookie：三个 cookie 一律 `SameSite=Strict`；access/refresh 为 `HttpOnly=true`，
@@ -269,10 +271,13 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 - **Casbin 自身也是 fail closed**：`Enforce` 在字段为空时返回 `invalid_actor_context`
   （`internal/auth/casbin.go:70-72`），策略快照不健康时返回 `policy_unavailable`
   （`internal/auth/casbin.go:84-86`，健康位由 `internal/auth/casbin.go:132-136,169,175` 的热重载维护）；
-  procedure 未能映射到 `(object, action)` 时直接拒绝（`internal/auth/interceptor.go:74-81`）。
-  映射表按**服务名包含 + 方法名前缀**推断（`internal/auth/interceptor.go:274-298,300-318`），
-  因此新增 RPC 必须同步维护该表——这是「未映射即拒」的代价。
-  5 条 procedure 走处理器自裁决、跳过 Casbin（`internal/auth/interceptor.go:354-365`）。
+  procedure 未登记时直接拒绝（`internal/auth/interceptor.go:68-79`）。
+  映射不再是前缀推断，而是 `internal/auth/procedure_policy.go:66-185` 的**逐 procedure 显式登记表**：
+  新增 RPC 必须加一行，`TestProcedurePolicyRegistryIsExhaustive`（`internal/auth/procedure_policy_test.go:80-97`）
+  会在漏配时失败，且 `TestProcedurePolicyPairsAreGranted`（`:100-121`）要求每个 Casbin 对的
+  `(object, action)` 至少被一个非通配角色授予（否则必须显式标 `adminOnly`）——这正是 TASK-095 之前
+  5 条 procedure 恒 403 的根因。
+  7 条 procedure 走处理器自裁决、跳过 Casbin（`modeHandler`，`internal/auth/procedure_policy.go`）。
   策略持久化在 `casbin_rule` 表：`migrations/000011_authorization_persistence.up.sql:22-32`。
 - 服务间凭据：`BundleService.SubmitBundle` 接受 service token（SHA-256 摘要 +
   `subtle.ConstantTimeCompare`）或 JWT，actor 固定为 `service:release-webhook`：
@@ -381,7 +386,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 | 攻击者可控 | 控制点（证据） | 剩余风险与状态 |
 | --- | --- | --- |
 | 客户集群内的任意工作负载与 API（含被攻陷的租户） | Operator 只出站、TLS1.3、身份=证书序列（`docs/architecture.md:18`；`internal/operator/tls_clients.go:24-27`；`migrations/000013_*.up.sql:1-5`）；控制面不存 kubeconfig（`docs/architecture.md:12`） | 剩余：集群内 ClusterRole 可读写全集群 Secret（§3.3）。**已实现**边界，但爆炸半径=该客户集群 |
-| 单个 Customer 下的账号（低权用户） | 域绑定 + Casbin 逐 procedure 裁决（`internal/auth/interceptor.go:100-112`；`internal/auth/casbin.go:426-475`）；`viewer`/`deployer` 无 operator 写权限 | 剩余：`platform_admin` 为 `*,*` 通配（`internal/auth/casbin.go:429`），控制面内无二次制衡；异人审批只管 Values 批准（§3.5）。**已实现** |
+| 单个 Customer 下的账号（低权用户） | 域绑定 + Casbin 逐 procedure 裁决（`internal/auth/interceptor.go:98-109`；`internal/auth/casbin.go:426-475`）；`viewer`/`deployer` 无 operator 写权限 | 剩余：`platform_admin` 为 `*,*` 通配（`internal/auth/casbin.go:429`），控制面内无二次制衡；异人审批只管 Values 批准（§3.5）。**已实现** |
 | 已批准 ValuesRevision 被事后篡改 | 不可变 revision + `self_approval_forbidden`（`internal/orchestrator/values_approval.go:286-292`）+ 幂等键唯一（`migrations/000001_legacy_baseline.up.sql:46`）+ 「同一 ReleaseDefinition 只允许一个活跃标准 Operation」 | 剩余：**该互斥在两个引擎上强度不同**——PostgreSQL 有数据库级部分唯一索引（`migrations/000001_legacy_baseline.up.sql:62-63`），SQLite 侧**没有**对应索引（`internal/store/sqlite/db.go` 内无 `one_active_standard`），只靠应用层计数检查（`internal/store/sqlite/uow.go:89-100` 与 `internal/store/postgres/uow.go:84-95` 同一 SQL）。因此 dev/test 掩盖不了竞态，但**生产强度高于 dev 验证强度**，与 `AGENTS.md:25` 的双引擎等价要求存在偏差。**部分实现** |
 | 注册令牌泄露 | 只存 SHA-256、短 TTL、一次性（§3.2） | 剩余：令牌在 `data/dev-enrollment-tokens/` 明文落盘（仅 dev，`.gitignore:35`）。**已实现**（生产不落盘） |
 | Webhook 请求体（Harbor 等外部制品源） | 入口边缘只做 request-id + 错误脱敏（无鉴权拦截器）：`cmd/webhook/main.go:45-51`；转发时原样复制 `Signature`/`Sbom`/`Provenance` 并保留 `Idempotency-Key` 与可选 bearer：`internal/webhook/service.go:50-65`；真正鉴权在 `BundleService`（§3.8） | 剩余：`signature`/`sbom`/`provenance` 是请求方可填的 `ArtifactReference`（`api/proto/webhook/v1/webhook.proto:28-30`），信任判定发生在 preflight/trust（§3.9），因此「未认证请求体」可造成 bundle 记录污染；非 production 标签下还能被降级为 `policy_warning` 放行。**部分实现** |
@@ -486,10 +491,10 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 | 9 | Actions 无 SHA 固定；仅 1/16 基础镜像按 digest 固定 | 事实/建议 | §6 表 |
 | 10 | `sync-to-gitcode.yaml` 无 `permissions:`、无 `concurrency`、无 `timeout-minutes` | 事实/建议 | `.github/workflows/sync-to-gitcode.yaml:11-25` |
 | 11 | 登录限流为进程内、多副本不共享 | 事实/建议 | `internal/auth/ratelimit.go:18-54` |
-| 12 | `release-api` 审计面只验 JWT（独立 `internal/jwtauth` 实现），不做 Casbin 与会话撤销校验 | 部分实现 | `cmd/api/main.go:65-73`；`internal/audit/interceptor.go:21-41`；对比 `internal/auth/interceptor.go:113-126` |
+| 12 | `release-api` 审计面只验 JWT（独立 `internal/jwtauth` 实现）与组织域归属（TASK-095 已补），仍不做 Casbin 角色判定与会话撤销校验；原因是 release-api 的库没有 membership/policy 数据源（ADR-015 每库一个权威） | 部分实现 | `cmd/api/main.go:65-73`；`internal/audit/interceptor.go:21-41`；`internal/audit/authorization.go:22-48`；对比 `internal/auth/interceptor.go:111-122` |
 | 13 | 客户集群内 operator 用 ClusterRole 且可读写全集群 Secret（Helm release 存储模型的必然结果，未用 `resourceNames` 收窄） | 事实/建议 | §3.3 |
 | 14 | **审计有绕过 emitter 的直写路径**，与 `AGENTS.md:27` 硬约束 6 不符（当前无明文泄露证据，但无结构性保证） | 部分实现 | §3.6 第 3 条 |
-| 15 | 审计查询/导出的组织过滤取自请求，可为空；principal 未被使用 | 未见实现 | `internal/audit/audit_service_handler.go:60-61`；`internal/store/sqlite/audit.go:210-236`；`internal/audit/interceptor.go:47` |
+| 15 | 审计查询/导出的组织过滤取自请求，可为空；principal 未被使用（TASK-095 已修：principal 组织成为唯一可读写范围，跨组织 `permission_denied`） | 已实现 | `internal/audit/authorization.go:22-48`；`internal/audit/audit_service_handler.go:42-56,97,142`；回归 `internal/audit/authorization_test.go:22-128` |
 | 16 | `NotifierService` 无认证拦截器 + 投递目标无白名单 → 控制面可被当作任意 URL 的 HTTP 出站源，metadata 原文外发 | 未见实现 | §3.11 |
 | 17 | ADR-020 的 Vault SecretResolver 适配器未实现（notifier 出站因此恒在无鉴权分支） | 未见实现 | `docs/decisions/ADR-020-use-hashicorp-vault-go-api-for-notifier-secretresolver.md:14-15`；`cmd/notifier/main.go:81` |
 | 18 | 「一个活跃标准 Operation」的数据库级唯一索引只在 PostgreSQL，SQLite 侧仅应用层计数（双引擎强度不等价） | 部分实现 | `migrations/000001_legacy_baseline.up.sql:62-63` ↔ `internal/store/sqlite/uow.go:89-100` |

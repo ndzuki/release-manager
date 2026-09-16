@@ -15,7 +15,7 @@
 | `auth.v1` | `OrganizationService` | 9 | `api/proto/auth/v1/auth.proto:392` | `release-auth` | 8085 |
 | `auth.v1` | `BindingService` | 4 | `api/proto/auth/v1/auth.proto:516` | `release-auth` | 8085 |
 | `auth.v1` | `AuthorizationService` | 2 | `api/proto/auth/v1/auth.proto:599` | `release-auth` | 8085 |
-| `auth.v1` | `ExternalIdentityService` | 3 | `api/proto/auth/v1/auth.proto:668` | 无（未见挂载，见 3.7） | — |
+| `auth.v1` | `ExternalIdentityService` | 3 | `api/proto/auth/v1/auth.proto:668` | 无（未见挂载，见 3.8） | — |
 | `notifier.v1` | `NotifierService` | 2 | `api/proto/notifier/v1/notifier.proto:80` | `release-notifier`（`cmd/notifier`） | 8086 |
 | `operator.v1` | `OperatorService` | 4 | `api/proto/operator/v1/operator.proto:284` | `release-orchestrator` 网关/管理端口、`release-operator` gateway 模式 | 8083 / 8084 |
 | `orchestrator.v1` | `BundleService` | 4 | `api/proto/orchestrator/v1/orchestrator.proto:156` | `release-orchestrator`（`cmd/orchestrator`） | 8083 |
@@ -58,7 +58,7 @@ dev 端口取 `configs/*.dev.yaml` 的 `http_port`：`configs/webhook.dev.yaml:1
 - **所有 104 个 RPC 只能 POST**。connect-go 只在 unary + `option idempotency = no_side_effects` 时才注册 GET 方法（`protocol_connect.go:70-76`，模块 `connectrpc.com/connect@v1.20.0`），而本仓库 `api/proto/**` 中 `option idempotency`/`option timeout`/任何 rpc 级 option 出现次数为 0（14 个 proto 文件、104 条 `rpc` 声明全部无 option）（检索 `api/proto/*/*/*.proto` 的 `option ` 行，只有 `syntax`/`go_package`/`file` 级 option）。因此 GET 一律 **405 + `Allow: POST`**，而不是 404：业务服务用生成代码返回的子树 pattern 注册（例如 `api/gen/auth/v1/authv1connect/auth.connect.go:383` 返回 `"/auth.v1.AuthService/"`，`cmd/auth/main.go:191` 原样 `mux.Handle`），请求会进到 connect handler 再由它按方法表拒绝（`handler.go:274-279`）；只有网关上 `cmd/orchestrator/main.go:191` 用了 `"POST "` 前缀 pattern，此时 405 由 `http.ServeMux` 自己给出。附带一条：`Content-Type` 不在协议表内会返回 **415 Unsupported Media Type**（`handler.go:291-294`），所以漏写 `-H 'Content-Type: application/json'` 的 curl 不会得到业务错误而是 415。
 - 编码：`Content-Type: application/json`（Connect JSON）或 `application/proto`（Connect 二进制）；gRPC 用 `application/grpc(+proto)`；gRPC-Web 用 `application/grpc-web(+proto)`。仓库内真实用例统一用 `Content-Type: application/json`（`test/e2e/prerequisite/smoke.sh:164`、`:175`、`:180`）。
 - 追踪/关联头：`X-Request-ID`（`internal/contracts/errors.go:14`）。入站带头则沿用、否则生成 UUID，并在响应头与错误 metadata 中回显（`internal/contracts/interceptor/requestid.go:28-42`）。
-- 浏览器会话相关：Cookie `rm_access`/`rm_refresh` 与 CSRF 双提交头 `X-CSRF-Token`（`internal/auth/service.go:17-20`，`internal/auth/interceptor.go:82-88`）。仅当 cookie 认证且 action 非 `read` 时才校验 CSRF。
+- 浏览器会话相关：Cookie `rm_access`/`rm_refresh` 与 CSRF 双提交头 `X-CSRF-Token`（`internal/auth/service.go:17-20`，`internal/auth/interceptor.go:80-86`）。仅当 cookie 认证且 action 非 `read` 时才校验 CSRF。
 - 写幂等：`Idempotency-Key` 请求头，见 5.5。
 
 ### 2.3 可运行的 curl 示例
@@ -97,7 +97,7 @@ curl -sS http://127.0.0.1:8083/environment
 
 - Go：`orchestratorv1connect.NewOrchestratorServiceClient(httpClient, url)`，需要 gRPC 线格式时加 `connect.WithGRPC()`——仓库内实例见 `cmd/webhook/main.go:39-43`（`release-webhook` → `release-orchestrator` 的 `BundleService`）。
 - TypeScript：`@connectrpc/connect` 的 `createClient` + `createConnectTransport`，见 `web/src/connect/client.ts:50-61`（`useBinaryFormat: true`、`fetch: browserFetch`）。浏览器侧固定 `credentials: include`（`web/src/connect/client.ts:46-48`），并由 `sessionInterceptor` 从 `rm_csrf` cookie 注入 `X-CSRF-Token`（`web/src/connect/client.ts:29-33`），该拦截器在 `unauthenticated`/`permission_denied` 时回调 `authErrorHandler`（`web/src/connect/client.ts:37-43`）。
-- 调试集合：`api/kulala` 下的 `.http` 文件，配合仓库根的 `http-client.env.json`（不在 `api/kulala/` 内），用 `make api-auth`、`make api-orchestrator`、`make api-audit`、`make api-webhook`、`make api-operator` 打开。注意这些集合与当前实现不一致，见 3.7 最后一行。
+- 调试集合：`api/kulala` 下的 `.http` 文件，配合仓库根的 `http-client.env.json`（不在 `api/kulala/` 内），用 `make api-auth`、`make api-orchestrator`、`make api-audit`、`make api-webhook`、`make api-operator` 打开。注意这些集合与当前实现不一致，见 3.8。
 
 ### 2.5 代理与同源
 
@@ -145,9 +145,9 @@ curl -sS http://127.0.0.1:8083/environment
 
 HS256 对称签名，`internal/auth/jwt.go:22-29`（`NewJWTManager(signingKey, accessTTL, refreshTTL)`），claims 为 `sub`/`uid`/`roles`/`org_id` + `jti`（`:32-37`）。`cmd/auth/main.go:140` 以 15 分钟 access / 7 天 refresh 构造。签名密钥来源：`--signing-key` flag，回退到 `JWT_SIGNING_KEY` 环境变量，默认值 `change-me-in-production`（`cmd/orchestrator/main.go:833`；`cmd/api/main.go` 同样以 flag 接收）。
 
-校验链在 `internal/auth/interceptor.go:55-68`：取 `Authorization: Bearer`，无则回退 `rm_access` cookie，两者皆空 `unauthenticated`；`ValidateAccessToken` 失败 `unauthenticated: invalid token`。放行前还要过两道会话检查：`internal/auth/interceptor.go:113-116` 查库确认用户存在且 `status == active`，`:117-124` 确认存在未过期的 auth session（查库失败本身返回 `internal: session validation failed`），否则都是 `unauthenticated: session revoked`。
+校验链在 `internal/auth/interceptor.go:53-66`：取 `Authorization: Bearer`，无则回退 `rm_access` cookie，两者皆空 `unauthenticated`；`ValidateAccessToken` 失败 `unauthenticated: invalid token`。放行前还要过两道会话检查：`internal/auth/interceptor.go:111-114` 查库确认用户存在且 `status == active`，`:115-122` 确认存在未过期的 auth session（查库失败本身返回 `internal: session validation failed`），否则都是 `unauthenticated: session revoked`。
 
-审计服务用的是**另一套**独立实现：`internal/jwtauth/jwt.go` 的 `Manager` + `internal/audit/interceptor.go:23-34`，只验签、**不查会话、不做授权**。因此 `PrincipalFromContext` 在生产代码中无调用者（检索 `PrincipalFromContext` 仅命中 `internal/audit/interceptor.go` 自身与测试），`QueryAuditEvents` 的 `filter.organization_id` 直接取自请求（`internal/audit/audit_service_handler.go:60-61`）。**任何持有效 JWT 的调用方都能查询任意组织的审计流水**；同理 `Emit` 接受调用方自报的任意 actor（含 `ACTOR_KIND_SYSTEM`）。这是当前实现的既有事实，非本文推测。
+审计服务用的是**另一套**独立实现：`internal/jwtauth/jwt.go` 的 `Manager` + `internal/audit/interceptor.go:23-34`，只验签、**不查会话、不做 Casbin**。TASK-095 给这条路径补上了域归属判定：`internal/audit/authorization.go:22-35` 从 principal 取组织，`:37-48` 把请求的组织过滤解析到 principal 的组织（缺省即 principal 组织，指向别的组织 `permission_denied`），`Emit` 拒收 actor 组织与 principal 不一致的事件（`internal/audit/audit_service_handler.go:42-56`），`ExportAuditEvents` 把 principal 组织写进导出记录（`:142-144`、`:167`、`:178`）。`PrincipalFromContext` 因此有了生产调用者。仍未做的是 Casbin 角色判定与会话撤销校验——release-api 的 SQLite 库没有 membership/policy 数据源（ADR-015 每库一个权威），见 3.8。
 
 ### 3.3 service token（仅 BundleService）
 
@@ -161,16 +161,16 @@ HS256 对称签名，`internal/auth/jwt.go:22-29`（`NewJWTManager(signingKey, a
 
 ### 3.5 Casbin 授权模型
 
-`NewAuthInterceptor` 的裁决顺序（`internal/auth/interceptor.go:45-125`）：
+`NewAuthInterceptor` 的裁决顺序（`internal/auth/interceptor.go:44-133`）：
 
-1. `publicMethods[procedure]` → 直接放行。release-auth 声明 5 个公开方法：`GetInitStatus`、`Initialize`、`ValidateToken`、`Login`、`RefreshToken`（`cmd/auth/main.go:173-179`）。release-orchestrator 四处挂载全部传 `map[string]bool{}`，即**没有公开方法**（`cmd/orchestrator/main.go:450`、`:468`、`:482`、`:517`）。
-2. 解析 JWT（`:55-68`：`Authorization: Bearer` 缺失则回退 `rm_access` cookie，两者皆空 `unauthenticated: missing authentication credentials`，验签失败 `unauthenticated: invalid token`），再解析 domain（`internal/auth/interceptor.go:239-251`：请求带 `org_id` 时必须等于 token 的 `org_id`，否则 `permission_denied`；token 无 `org_id` 且请求也无 → `invalid_actor_context`）。`BundleService` 两个读方法与 `GetOrganization`/`UpdateOrganization`/`DisableOrganization` 的归属由 `enforceRequestBinding`（`:253-272`）另行反查。
-3. `mapProcedure(procedure)` → (object, action)（`internal/auth/interceptor.go:300-319`）。**任一为空立即 `permission_denied` + `X-Reason-Code: invalid_actor_context`**（`:74-81`），而这一步发生在 `usesHandlerAuthorization` 之前——所以「handler 自己会做授权」的例外救不了未被映射的 procedure。反例说明：`Login` 与 `Initialize` 同样映射不到 action，但它们在第 1 步就被 `publicMethods` 放行，因此不受影响；`RefreshToken` 靠 `Refresh` 前缀映射到 `auth/write`。
-4. cookie 会话下的非 read 请求校验 CSRF（`:82-88`）。
-5. `enforceRequestBinding`（customer 绑定/禁用一致性）→ `:90-99`。
-6. 若 procedure 不在 `usesHandlerAuthorization` 且不是 `Logout`，执行 `enforcer.Enforce(userID, domain, object, action)` → `:100-111`。5 个例外由 handler 自证授权：`GetAuthorizationSnapshot`、`SetCapabilityGrant`、`SubmitValuesRevision`、`ApproveValuesRevision`、`RejectValuesRevision`（`internal/auth/interceptor.go:354-365`）。
+1. `publicMethods[procedure]` → 直接放行（`:49-51`）。release-auth 声明 5 个公开方法：`GetInitStatus`、`Initialize`、`ValidateToken`、`Login`、`RefreshToken`（`cmd/auth/main.go:173-179`）。release-orchestrator 四处挂载全部传 `map[string]bool{}`，即**没有公开方法**（`cmd/orchestrator/main.go:450`、`:468`、`:482`、`:517`）。
+2. 解析 JWT（`:53-66`：`Authorization: Bearer` 缺失则回退 `rm_access` cookie，两者皆空 `unauthenticated: missing authentication credentials`，验签失败 `unauthenticated: invalid token`）。
+3. 查显式登记表并解析 domain（`:68-79`）：`lookupProcedure(procedure)`（`internal/auth/procedure_policy.go:187-190`）取该 procedure 的策略行，未登记 → `permission_denied` + `X-Reason-Code: invalid_actor_context`；`resolveDomain`（`internal/auth/interceptor.go:243-255`）默认要求请求 `org_id` 等于 token 的 `org_id`，只有登记为 `targetOrg` 的 procedure（仅 `SwitchOrganization`）允许取请求里的目标组织；两者都无 → `invalid_actor_context`。`BundleService` 两个读方法与 `GetOrganization`/`UpdateOrganization`/`DisableOrganization` 的归属由 `enforceRequestBinding`（`:257-274`）另行反查。
+4. cookie 会话下的非 read 请求校验 CSRF（`:80-86`）。
+5. `enforceRequestBinding`（customer 绑定/禁用一致性）→ `:88-97`。
+6. 策略行 `mode == modeCasbin` 时执行 `enforcer.Enforce(userID, domain, object, action)` → `:98-109`；`modeHandler` 的 procedure 跳过 Casbin，由 handler 自证授权。
 
-object 映射 `internal/auth/interceptor.go:274-298`：`OrganizationService→organization`、`BindingService→binding`、`AuthService`/`AuthorizationService→auth`、`TrustService→trust_root`、`BundleService→bundle`、`OrchestratorService→release`、`CleanupService→cleanup`，其他 → `""`。action 映射 `:321-352`：read 前缀 `List`/`Get`/`Watch`/`Validate`；write 前缀 `Create`/`Add`/`Update`/`Disable`/`Remove`/`Revoke`/`Delete`/`Change`/`Emergency`/`Publish`/`Rollback`/`Rotate`/`Configure`/`Sync`/`Logout`/`Cancel`/`Discard`/`Refresh`/`Authenticate`/`Submit`/`Approve`/`Reject`/`End`/`Retire`/`Run`/`Unarchive`/`Execute`/`Release`；另有 6 条按方法名硬编码的 operator 例外（`ListOperators`/`GetOperator` → `operator/read`，`CreateEnrollmentToken`/`GetEnrollmentTokenStatus`/`RevokePendingEnrollmentToken` → `operator/enroll`，`RevokeOperator` → `operator/revoke`，`:306-313`）。
+TASK-095 把旧的「服务名包含 + 方法名前缀」推断（`mapServiceToObject`/`mapMethodToAction`）整体删除，改为 `internal/auth/procedure_policy.go:66-185` 的**显式 procedure → 授权登记表**（104 行，一行一个 procedure）。每行的 `mode` 取值：`modeCasbin`（拦截器裁决）、`modeHandler`（handler 自证）、`modePublic`、`modePrincipalScope`（release-api 审计面）、`modeServiceToken`、`modeMTLS`、`modeUnintercepted`。两条门禁测试锁死这张表：`internal/auth/procedure_policy_test.go:80-97` 遍历 proto registry，新增 procedure 未登记即失败；`:100-121` 断言每个 `modeCasbin` 的 `(object, action)` 必须落在默认角色矩阵（非通配角色）的授予集合内，或显式标注 `adminOnly`。
 
 角色 → 策略规则（`internal/auth/casbin.go:425-477`，角色常量 `internal/store/store.go:807-812`，仅 4 个角色）：
 
@@ -191,10 +191,11 @@ object 映射 `internal/auth/interceptor.go:274-298`：`OrganizationService→or
 
 读法与后果（逐条对照上表，均由 `internal/auth/casbin.go:428-471` 的分支直接得出）：
 
-- `CleanupService` 的两个 RPC 映射到 `cleanup/write`，`BundleService.SubmitBundle` 映射到 `bundle/write`，`AuthService`/`OrganizationService` 之外的 `auth` 对象写面（`ChangePassword` 等）与 `customer` 写面：**四角色里只有 `platform_admin` 命中**（它拿的是 `*`/`*`，`internal/auth/casbin.go:429`）。
+- `CleanupService` 的两个 RPC 映射到 `cleanup/write`，`BundleService.SubmitBundle`/`RecordArtifactEvent` 映射到 `bundle/write`，`AuthService` 的本地用户管理（`CreateLocalUser`/`GetLocalUser`/`ListLocalUsers`）映射到 `auth/read|write`，`customer` 写面：**四角色里只有 `platform_admin` 命中**（它拿的是 `*`/`*`，`internal/auth/casbin.go:429`）。登记表把这一类显式标为 `adminOnly`，门禁会拒绝把「有非通配角色授予」的对标成 `adminOnly`。
 - `release_admin` 有 `bundle` 的 **read 但没有 write**（`:448`）——bundle 入库刻意保持 admin 专属，注释里写明了原因（`:440-447`）。
 - `deployer` 与 `viewer` 完全读不到 `organization`/`member`/`binding`/`auth`/`cleanup`，只能在 `release`/`operator`/`customer`/`trust_root` 上按上表行动。
-- `operator` 对象的三个 action（`read`/`enroll`/`revoke`）是硬编码在 `mapProcedure` 的特殊分支里的（`internal/auth/interceptor.go:307-312`），不走前缀推断，因此 `RevokeOperator` 是 `operator/revoke` 而不是 `release/write`。
+- `operator` 对象的三个 action（`read`/`enroll`/`revoke`）在登记表里逐条写明（`internal/auth/procedure_policy.go` 的 `ListOperators`/`GetOperator`/`CreateEnrollmentToken`/`GetEnrollmentTokenStatus`/`RevokePendingEnrollmentToken`/`RevokeOperator` 行），因此 `RevokeOperator` 是 `operator/revoke` 而不是 `release/write`。
+- `ChangePassword` 与 `Logout` 是 `modeHandler`：拦截器只做认证与会话校验，handler 用旧口令/当前会话自证（`ChangePassword` 在 TASK-095 之前落在 `auth/write`，只有 `platform_admin` 能改自己的口令，属实测缺陷，已一并修复）。
 - 这张表是**基线**：`roleRules` 之后还会追加 `roleCapabilityRules` 的细粒度授权（`internal/auth/casbin.go:473-475`），即 `SetCapabilityGrant` 可以在角色之外临时放行。
 - 快照按 organization（Casbin 的 `dom`）构建，唯一调用点是 `internal/auth/casbin.go:380`；快照不健康时 `Enforce` 一律返回 `policy_unavailable`（`:84-86`），写操作 fail closed。
 
@@ -211,23 +212,41 @@ object 映射 `internal/auth/interceptor.go:274-298`：`OrganizationService→or
 - **`BundleService` 未挂 `MaintenanceInterceptor`**（`cmd/orchestrator/main.go:477-491`），维护期仍可提交 bundle。
 - 它是 `UnaryInterceptorFunc`，**流式 RPC 绕过维护模式**；`OperatorService` 与 `NotifierService`/`WebhookService`/`AuditService` 均未挂该拦截器。
 
-### 3.7 契约有声明、当前未见挂载 / 无法到达
+### 3.7 授权映射缺陷与修复证据（TASK-095）
 
-| 项 | 事实 | 检索依据 |
+TASK-095 之前，`(object, action)` 由服务名包含 + 方法名前缀推断，5 个 procedure 因此恒 `permission_denied`。穷尽审计（遍历 proto registry 跑登记表）测得 **104 个 procedure 中 7 个「有 object 无 action」**：`Login`/`Initialize` 属公开路径不受影响，其余 5 个是真缺陷；另有 1 个（`ChangePassword`）虽 action 非空但落在无人被授予的 `auth` 对象上。现已全部改为显式登记（`internal/auth/procedure_policy.go:66-185`）：
+
+| procedure | 修复前 | 修复后与证据 |
 | --- | --- | --- |
-| `auth.v1.ExternalIdentityService`（3 个 RPC：`AuthenticateLDAP`、`GetOIDCAuthURL`、`GetDingTalkAuthURL`） | 契约存在，Go 侧类型 `ExternalIdentityService` 已定义（`internal/auth/external_idp_service.go:28`）并实现了三个 handler 方法（`:55`、`:69`、`:80`），构造函数 `NewExternalIdentityService` 也在（`:36`），文件末尾还有接口断言（`:325`），但**从未被构造、从未被挂载** | `cmd/auth/main.go:189-203` 只 new/挂载 4 个 service；检索 `NewExternalIdentityService(`、`ExternalIdentityServiceHandler`、`mux.Handle` 于 `cmd/**`、`internal/**` 的非测试代码中零命中，唯一残留是维护白名单里两条永不命中的条目（`cmd/auth/main.go:227-228`）。`docs/architecture.md:80` 已把它记为遗留项 |
-| `orchestrator.v1.OrchestratorService/ListOperations` | 已挂载但 handler 是桩，恒返回 `unimplemented` | `internal/orchestrator/service.go:1531-1533`（`CodeUnimplemented` at `:1532`） |
-| `orchestrator.v1.OrchestratorService/PublishRelease` | 已挂载，校验通过后返回 `Status: "not_implemented"`、`OperationId: ""`，不产生 Operation | `internal/orchestrator/service.go:498-502` |
-| `auth.v1.AuthService/SwitchOrganization` | 已挂载且 handler 有实现，但 `mapMethodToAction` 无 `Switch` 前缀 → 恒 `permission_denied(invalid_actor_context)` | `internal/auth/interceptor.go:321-352`；测试注释同样承认：`internal/auth/local_users_test.go:139-142` |
-| `auth.v1.AuthorizationService/SetCapabilityGrant` | 同上：`Set` 前缀未映射，恒 403；它在 `usesHandlerAuthorization` 例外表里，但那一步在第 3 步之后，永远走不到 | `internal/auth/interceptor.go:74-81`（先）与 `:100`（后）、`:354-365` |
-| `orchestrator.v1.OrchestratorService/CheckEmergencyConflict` | 已挂载有实现（`internal/orchestrator/emergency_queries.go:148`），但 `Check` 前缀未映射 → 恒 403；web 前端在调用它（`web/src/connect/emergency-api.ts:151`） | 同 `mapMethodToAction` |
-| `orchestrator.v1.OrchestratorService/TriggerInventorySync` | 已挂载有实现（`internal/orchestrator/inventory_query.go:112`），`Trigger` 前缀未映射 → 恒 403 | 同 `mapMethodToAction` |
-| `orchestrator.v1.BundleService/RecordArtifactEvent` | JWT 路径 `Record` 前缀未映射 → 403；service-token 路径 scope 只含 `SubmitBundle` → 403。两条路都不通 | `internal/auth/interceptor.go:321-352`、`cmd/orchestrator/main.go:487-488` |
+| `auth.v1.AuthService/SwitchOrganization` | 恒 `permission_denied`：`resolveDomain` 先拒绝「请求组织 ≠ token 组织」，即使过了这关 `mapMethodToAction` 也没有 `Switch` 前缀 | 登记为 `modeCasbin` + `targetOrg`：domain 取请求的目标组织，动作 `(organization, write)`，handler 再校验目标组织成员资格。集成证据 `internal/auth/switch_organization_test.go:18-68`（真实 JWT 切换成功、返回 token 的组织 claim 与后续请求都落在目标组织）；语义证据 `:74-113`（按目标组织的角色判定） |
+| `auth.v1.AuthorizationService/SetCapabilityGrant` | `Set` 前缀未映射，恒 403；它在 handler 自证表里，但那一步在映射之后，永远走不到 | 登记为 `modeHandler`：拦截器只认证与会话校验，handler 要求 `platform_admin`/`release_admin` 成员资格（`internal/auth/authorization_snapshot.go:147-150`） |
+| `orchestrator.v1.OrchestratorService/CheckEmergencyConflict` | `Check` 前缀未映射 → 恒 403（web 前端在调用，`web/src/connect/emergency-api.ts:151`） | 登记 `(release, read)`；集成矩阵 `internal/auth/interceptor_unmapped_test.go:96-112` |
+| `orchestrator.v1.OrchestratorService/TriggerInventorySync` | `Trigger` 前缀未映射 → 恒 403 | 登记 `(release, write)`；集成矩阵 `internal/auth/interceptor_unmapped_test.go:114-130` |
+| `orchestrator.v1.BundleService/RecordArtifactEvent` | JWT 路缺 `Record` 前缀；service-token 路 scope 只含 `SubmitBundle` | JWT 路登记 `(bundle, write)`（`adminOnly`，与 `SubmitBundle` 对称，`internal/auth/interceptor_unmapped_test.go:132-148`）。Harbor 独立 key 未落地，登记为 REQ-011 后续项（见 3.8） |
+| `auth.v1.AuthService/ChangePassword` | 落在 `auth/write`，而 `auth` 对象没有任何非通配授予 → 只有 `platform_admin` 能改自己的口令 | 登记为 `modeHandler`（handler 校验旧口令并吊销本人会话）；回归 `internal/auth/change_password_test.go:22-53` |
+
+`Login`/`Initialize` 是审计中另外两个「有 object 无 action」的 procedure，第 1 步 `publicMethods` 即放行，不受影响。
+
+### 3.8 契约有声明、当前未见挂载 / 未实现（登记项）
+
+以下每一项都是「不受 Casbin 管」或「尚未实现」的显式登记，不是推测：认证归属逐个核实过，未实现项注明归属 REQ。
+
+| 项 | 认证归属 / 事实 | 检索依据 |
+| --- | --- | --- |
+| `auth.v1.ExternalIdentityService`（3 个 RPC：`AuthenticateLDAP`、`GetOIDCAuthURL`、`GetDingTalkAuthURL`） | **预认证** IdP 入口（登录前调用），登记为 `modePublic`；契约存在，Go 侧类型 `ExternalIdentityService` 已定义（`internal/auth/external_idp_service.go:28`）并实现了三个 handler 方法（`:55`、`:69`、`:80`），构造函数 `NewExternalIdentityService` 也在（`:36`），文件末尾还有接口断言（`:325`），但**从未被构造、从未被挂载**；归属 REQ-028 | `cmd/auth/main.go:189-203` 只 new/挂载 4 个 service；检索 `NewExternalIdentityService(`、`ExternalIdentityServiceHandler`、`mux.Handle` 于 `cmd/**`、`internal/**` 的非测试代码中零命中，唯一残留是维护白名单里两条永不命中的条目（`cmd/auth/main.go:227-228`）。`docs/architecture.md:80` 已把它记为遗留项 |
+| `orchestrator.v1.OrchestratorService/PublishRelease` | 已挂载，校验通过后返回 `Status: "not_implemented"`、`OperationId: ""`，不产生 Operation；发布流水线属 REQ-014/REQ-040 的后续实现 | `internal/orchestrator/service.go:498-502` |
+| `orchestrator.v1.OrchestratorService/SyncInventory` | 两条挂载：JWT 面按 `(release, write)` 裁决；agent 网关面走客户端证书身份（见 3.4） | `internal/auth/procedure_policy.go` 的 `SyncInventory` 行、`cmd/orchestrator/main.go:167-187` |
+| `audit.v1.AuditService/ExportAuditEvents` | 只登记一行 `pending` 导出记录（现按 principal 组织归属），仓库内**没有消费者**，导出不会真正完成 | `internal/audit/audit_service_handler.go:142-195`；检索 `AuditExports()` 的非测试命中只有接口与实现自身 |
+| `orchestrator.v1.BundleService/RecordArtifactEvent` 的 Harbor 入口 | REQ-011 §562 要求 Harbor 用**独立** key（仅该 procedure，AC-011-04 要求与 CI key 不可混用）。当前只有 `DEV_WEBHOOK_SERVICE_TOKEN`（scope 仅 `SubmitBundle`），Harbor adapter `NewHarborHandler` 无生产调用者，登记为 REQ-011 后续项 | `internal/webhook/harbor_adapter.go:41`、`cmd/orchestrator/main.go:485-488`、`cmd/orchestrator/main.go:808-819` |
+| `webhook.v1.WebhookService/SubmitReleaseBundle` | 登记为 `modeUnintercepted`：release-webhook 挂载面**不校验任何凭证**，`internal/webhook/service.go:35` 只做转发校验；REQ-011 §562 的 CI API key 尚未实现 | `cmd/webhook/main.go:44-52`；§7 的鉴权列 |
+| `notifier.v1.NotifierService/Send`、`GetStatus` | 登记为 `modeUnintercepted`：release-notifier 挂载面没有认证拦截器（内部监听器） | `cmd/notifier/main.go:71-78` |
+| `operator.v1.OperatorService/Enroll`、`RenewCertificate`、`CommandStream`、`GetActiveOperatorSession` | 登记为 `modeMTLS`：agent 网关以可验证客户端证书为身份（`Enroll` 在建证书前另带一次性 enrollment token）。`GetActiveOperatorSession` 在网关证书中间件下有零凭证可达面，见 3.1 | `cmd/orchestrator/main.go:167-174`、`internal/operator/identity_handler.go:8-19` |
 | `common.v1.HealthCheckRequest`/`HealthCheckResponse` | 只有消息定义、无 `service`，且没有任何消费者 | `api/proto/common/v1/health.proto:18`、`:21`；检索 `HealthCheckRequest` 除 `api/gen/**` 外零命中。真实探活是 Go 手写 JSON handler（`internal/handler/health.go:12`） |
 | 浏览器 cookie 会话分支 | `internal/auth/browser_session.go` 实现了 `rm_access`/`rm_refresh`/`rm_csrf` 下发，但 `cmd/auth/main.go:189` 调用 `NewAuthService` 时**未传**可选的 `BrowserSessionConfig`，使 `browserEnabled=false`（`internal/auth/service.go:43-49`）→ cookie 被拦截器接受却从不签发 | 参数为可变长 `browser ...BrowserSessionConfig`，`enabled := len(browser) > 0` |
 | `auth.v1.BindingService/CreateBinding` | 已挂载，但 release-auth 注入的是 `auth.StubResolver{}`（`cmd/auth/main.go:155`），`Resolve` 恒 `ErrNotFound` → 恒 `not_found: customer_not_found`；`ConnectCustomerResolver` 无生产调用者 | `internal/auth/customer_resolver.go:20-53`、`:57-64` |
-| `cmd/api` 归档 worker | `apiSvc.RunBackground(ctx, *slog.Logger)`（`cmd/api/main.go:72`）与 `Close(ctx) error`（`:78`）签名不匹配 `internal/app/app.go:42-48` 期望的 `Run(context.Context)` / `Close() error` → 归档 worker 从未被启动 | `internal/app/app.go:184-186` 只做类型断言 |
 | `api/kulala/*.http` | `auth.http`、`manager.http`、`webhook.http` 仍使用已删除的 REST 路径 `/api/v1/...`（`api/kulala/manager.http:28`、`api/kulala/auth.http:12`），且各文件头注释与 `http-client.env.json:4-5` 把 `BASE_URL` 钉在 8081，而仓库里没有任何进程监听 8081；`operator.http`、`orchestrator.http` 还用 `GRPC` 线格式打 `:8447`/`:8446` 上的 `grpc.health.v1.Health/Check`（`api/kulala/operator.http:26`、`api/kulala/orchestrator.http:18`、`http-client.env.json:18-22`），而没有任何进程注册 gRPC health 服务。检索 `"/api/v1` 于 Go 代码只有 1 处测试命中、`grpc.health` 零命中 → 这些集合已失效，照抄必然失败 | 同左 |
+
+已修复、不再属于缺口的历史项：`cmd/api` 归档 worker 的 `Run`/`Close` 签名不匹配（TASK-094；现由 `cmd/api/main.go:45-48` 的编译期断言保证）。
 
 ## 4. 错误语义
 
@@ -250,18 +269,18 @@ object 映射 `internal/auth/interceptor.go:274-298`：`OrganizationService→or
 
 | Connect code | 计数 | 惯用场景 |
 | --- | --- | --- |
-| `InvalidArgument` | 176（构造 47） | 字段缺失/格式非法/枚举越界/cursor 非法 |
+| `InvalidArgument` | 180（构造 47） | 字段缺失/格式非法/枚举越界/cursor 非法 |
 | `Internal` | 265（构造 225） | 存储与依赖异常；经 sanitizer 收敛为 `internal error` |
-| `PermissionDenied` | 108（构造 43） | Casbin 拒绝、scope 不匹配、CSRF 失败、证书身份不符 |
-| `Unauthenticated` | 89（构造 57） | 缺 token、token 无效、会话被吊销、service token 缺失 |
-| `NotFound` | 77（构造 44） | 实体不存在；跨租户越权读取也返回 `not_found`（ADR-006 的 scope mismatch 语义） |
+| `PermissionDenied` | 110（构造 45） | Casbin 拒绝、scope 不匹配、CSRF 失败、证书身份不符 |
+| `Unauthenticated` | 92（构造 59） | 缺 token、token 无效、会话被吊销、service token 缺失 |
+| `NotFound` | 78（构造 44） | 实体不存在；跨租户越权读取也返回 `not_found`（ADR-006 的 scope mismatch 语义） |
 | `FailedPrecondition` | 90（构造 47） | 状态机不允许、乐观锁冲突（definition/customer 路径）、审批与门禁拒绝 |
 | `Unavailable` | 53（构造 16） | 维护模式、授权快照不健康、依赖未接线 |
 | `AlreadyExists` | 33（构造 13） | 幂等键冲突、重名、初始化已完成 |
 | `Aborted` | 22（构造 9） | 乐观锁冲突（organization/cluster/`RevokeBinding` 路径） |
 | `ResourceExhausted` | 5（构造 3） | 登录限流（`internal/auth/service.go:66`）、values 体积超限（`internal/orchestrator/values_revision.go:89`、`:415`）、cleanup 并发配额（`internal/orchestrator/cleanup.go:218`） |
 | `OutOfRange` | 1（构造 1） | `WatchOperation` 游标过期（`internal/orchestrator/service.go:629`） |
-| `Unimplemented` | 1（构造 1） | `ListOperations`（`internal/orchestrator/service.go:1532`） |
+| `Unimplemented` | **0**（构造 0） | 未使用：唯一的桩 `ListOperations` 已由 TASK-095 实现 |
 | `DeadlineExceeded` | 2（构造 0） | 仅出现在比较/透传，不作主动返回 |
 | `Conflict` | **0**（构造 0） | 未使用：冲突一律映射到 `Aborted`/`FailedPrecondition`/`AlreadyExists` |
 | `Canceled` | **0**（构造 0） | 未使用：取消是业务动作（`CancelOperation`），不用 code 表达 |
@@ -281,8 +300,8 @@ object 映射 `internal/auth/interceptor.go:274-298`：`OrganizationService→or
 
 未见使用 Google `errdetails`（检索 `google.golang.org/genproto/googleapis/rpc/errdetails` 零命中）。更常见的是 **metadata 承载 reason**：
 
-- `X-Reason-Code` — 写入点包括 `internal/operator/errors.go:30`、`internal/orchestrator/values_revision.go:476-479`、`internal/orchestrator/emergency.go:731-742`、`internal/orchestrator/service.go:630`、`internal/auth/interceptor.go:386`。取值如 `invalid_actor_context`、`policy_unavailable`、`cursor_expired`、`size_exceeded`、`optimistic_lock_conflict`。
-- `X-Policy-Version`（授权策略版本，`internal/auth/interceptor.go:387`）、`X-Conflict-Task-Ids`、`X-Sync-Request-ID`、`X-Snapshot-Sequence`、`X-Retained-From-Sequence`、`X-Snapshot-Proto`（base64 protojson 快照，`internal/orchestrator/service.go:628-638`）。
+- `X-Reason-Code` — 写入点包括 `internal/operator/errors.go:30`、`internal/orchestrator/values_revision.go:476-479`、`internal/orchestrator/emergency.go:731-742`、`internal/orchestrator/service.go:630`、`internal/auth/interceptor.go:293-302`。取值如 `invalid_actor_context`、`policy_unavailable`、`cursor_expired`、`size_exceeded`、`optimistic_lock_conflict`。
+- `X-Policy-Version`（授权策略版本，`internal/auth/interceptor.go:300`）、`X-Conflict-Task-Ids`、`X-Sync-Request-ID`、`X-Snapshot-Sequence`、`X-Retained-From-Sequence`、`X-Snapshot-Proto`（base64 protojson 快照，`internal/orchestrator/service.go:628-638`）。
 
 reason code 风格不统一：同一份代码里存在三种做法——类型化 detail、纯 metadata、把 reason 拼进 message 前缀（`internal/orchestrator/bundle_service.go:589-591`）。写新代码时按所在包的既有风格对齐，不要跨包发明第四种。
 
@@ -356,7 +375,7 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 2. **兼容演进规则**（`docs/decisions/ADR-002-connect-protobuf-single-port-contract.md:28-30`、`docs/architecture.md:106-107`）：新增字段/RPC 向后兼容；未知字段忽略、缺失字段 fail closed；删除必须做到 proto/生成代码/handler/测试/调用方**零匹配**后干净移除，禁止留兼容壳。
 3. **字段号纪律**（观察到的既有做法，无 ADR 成文）：移除的编号与名字一律 `reserved`，绝不复用（`api/proto/operator/v1/operator.proto:33-34`；`api/proto/orchestrator/v1/orchestrator.proto` 多处）；新增字段用高位号段分组（例如 `artifacts = 20`）。有意保留的 `[deprecated = true]` 字段不 reserved，作为拒绝探测点——`RollbackRelease` 会主动拒绝带 deprecated 字段的请求（`internal/orchestrator/rollback.go:38-42`）。
 4. **响应类型命名**：本仓库不要求 `<Method>Response` 唯一（`buf.yaml:6` 豁免了 `RPC_REQUEST_RESPONSE_UNIQUE` 与两个 STANDARD_NAME 规则），共享响应消息与直接返回 `common.v1.*` 实体是可接受的既有做法。
-5. **改完必须同步的下游**：新增/改名 RPC → 若走 JWT 面，必须同时给 `internal/auth/interceptor.go:321-352` 的前缀表或 `:306-313` 的例外表加映射，否则 RPC 上线即 403（3.7 列出的 5 个活体案例）；新增 store 哨兵 → 同步 `errorsanitize.go` 白名单；新增带写语义 RPC 且需要维护期可用 → 加入对应 `*ReadOnlyProcedures()`；web 侧 TS 由 `make proto` 全量生成（当前 `web/src/gen` 下 14 个 `_pb.ts`）；仓库里另有一份限定 6 个 path 的 web-only 子集模板 `api/proto/buf.gen.web.yaml`，但没有任何 Makefile 目标或脚本引用它（`grep -rn buf.gen.web Makefile scripts/ .github/` 零命中），不要以为改它就够了。
+5. **改完必须同步的下游**：新增/改名 RPC → 必须在 `internal/auth/procedure_policy.go` 的显式登记表里加一行（`mode` + `object`/`action` 或非 Casbin 归属），否则 `TestProcedurePolicyRegistryIsExhaustive`（`internal/auth/procedure_policy_test.go:80-97`）失败，运行时也会以 `permission_denied(invalid_actor_context)` 拒绝；新增 store 哨兵 → 同步 `errorsanitize.go` 白名单；新增带写语义 RPC 且需要维护期可用 → 加入对应 `*ReadOnlyProcedures()`；web 侧 TS 由 `make proto` 全量生成（当前 `web/src/gen` 下 14 个 `_pb.ts`）；仓库里另有一份限定 6 个 path 的 web-only 子集模板 `api/proto/buf.gen.web.yaml`，但没有任何 Makefile 目标或脚本引用它（`grep -rn buf.gen.web Makefile scripts/ .github/` 零命中），不要以为改它就够了。
 6. **验证**：`make sdk-check`、`make test`、`make lint`、`make check-licenses`、`make check-docs`。`make quality` 是聚合目标，依赖为 `sdk-check test-coverage lint check-reqs check-licenses check-docs`（`Makefile:522`）——注意它跑的是 `test-coverage`（带 coverprofile 的全量 `go test -race ./...`）而不是 `test`，且额外含 `check-reqs`。本文与 `docs/**` 里每个 `make <target>`、每个代码路径、每个 `path:line` 引用都受 `make check-docs` 校验，改代码后要重跑。
 7. **消费方门禁**：实现任何新客户端之前，先过生成符号的编译 fixture（`tsc --noEmit`）+ `buf lint`/`buf breaking` + 旧符号零匹配（`docs/architecture.md:115`）。
 
@@ -368,9 +387,9 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 
 | RPC | 作用 | 鉴权 | 位置 | 关键错误 |
 | --- | --- | --- | --- | --- |
-| `Emit` | 异步缓冲写入审计事件（**不是**同步落库，见 7.1 注） | JWT | `internal/audit/audit_service_handler.go:37` | `invalid_argument`（`:39`，空事件列表） |
-| `QueryAuditEvents` | 按 filter + 游标分页查询审计事件 | JWT | `internal/audit/audit_service_handler.go:56` | `internal`（`:89`）；filter 的 `organization_id` 由调用方给定，未见归属校验 |
-| `ExportAuditEvents` | 登记导出任务 | JWT | `internal/audit/audit_service_handler.go:112` | `internal`（`:155`）；只插 `audit_exports` 行（`:134-156`），**未见消费者**，导出不会真正完成 → 未实现 |
+| `Emit` | 异步缓冲写入审计事件（**不是**同步落库，见 7.1 注） | JWT + 域归属（actor 组织必须等于 principal 组织） | `internal/audit/audit_service_handler.go:38` | `invalid_argument`（`:40`，空事件列表）、`unauthenticated`（`:42`）、`permission_denied`（`:51`） |
+| `QueryAuditEvents` | 按 filter + 游标分页查询审计事件 | JWT + 域归属（principal 组织，见 3.8 上方的 TASK-095 说明） | `internal/audit/audit_service_handler.go:72` | `internal`（`:113`）、`permission_denied`（`:97` 的组织不匹配）、`unauthenticated`（`:42`） |
+| `ExportAuditEvents` | 登记导出任务 | JWT + 域归属（导出记录按 principal 组织落库） | `internal/audit/audit_service_handler.go:136` | `internal`（`:188`）；只插 `audit_exports` 行（`:165-172`），**未见消费者**，导出不会真正完成 → 未实现（见 3.8） |
 
 `Emit` 的三点语义必须写清（都经代码核实）：
 
@@ -387,14 +406,14 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 | `GetInitStatus` | 查询是否已初始化 | 公开 | `internal/auth/service.go:361` | `internal`（`:367`） |
 | `Initialize` | 首次初始化（建组织 + platform_admin） | 公开 | `internal/auth/service.go:376` | `already_exists`（`:387`）、`internal`（`:384`） |
 | `Login` | 用户名口令换取双 token | 公开 | `internal/auth/service.go:54` | `resource_exhausted`（`:66` 限流）、`unauthenticated`（`:72`）、`internal`（`:84`） |
-| `Logout` | 撤销当前会话 | JWT；`Enforce` 被跳过（`internal/auth/interceptor.go:100`），由 handler 自证 | `internal/auth/service.go:116` | `unauthenticated`（`:151`） |
+| `Logout` | 撤销当前会话 | JWT，handler 自证（`modeHandler`；`internal/auth/interceptor.go:98` 只在 `modeCasbin` 时 Enforce） | `internal/auth/service.go:116` | `unauthenticated`（`:151`） |
 | `RefreshToken` | 轮换 refresh token | 公开 | `internal/auth/service.go:161` | `internal`（`:184`） |
 | `ValidateToken` | 供内部服务校验 access token | 公开 | `internal/auth/service.go:256` | `unauthenticated`（`:265`） |
-| `SwitchOrganization` | 切换当前组织上下文 | authz（无法映射） | `internal/auth/service.go:496` | **恒 `permission_denied`**，见 3.7 |
-| `ChangePassword` | 修改本人口令 | authz(auth/write) | `internal/auth/service.go:276` | `unauthenticated`（`:284`）、`internal`（`:289`） |
-| `CreateLocalUser` | 创建本地用户 | authz(auth/write) | `internal/auth/local_users.go:23` | `invalid_argument`（`:35`）、`permission_denied`（`:59`）、`internal`（`:69`）；`Idempotency-Key` 仅校验长度 |
-| `GetLocalUser` | 查询单个本地用户 | authz(auth/read) | `internal/auth/local_users.go:206` | `not_found`（`:213`）、`internal`（`:215`） |
-| `ListLocalUsers` | 分页列出租户用户 | authz(auth/read) | `internal/auth/local_users.go:225` | `invalid_argument`（`:235` 游标）、`internal`（`:237`） |
+| `SwitchOrganization` | 切换当前组织上下文 | authz(organization/write)，按**目标**组织裁决（登记为 `targetOrg`） | `internal/auth/service.go:496` | `permission_denied`（非目标组织成员，或对目标组织无写权限） |
+| `ChangePassword` | 修改本人口令 | JWT，handler 自证（`modeHandler`：校验旧口令 + 吊销本人会话） | `internal/auth/service.go:276` | `unauthenticated`（`:284`）、`internal`（`:289`） |
+| `CreateLocalUser` | 创建本地用户 | authz(auth/write，`adminOnly`) | `internal/auth/local_users.go:23` | `invalid_argument`（`:35`）、`permission_denied`（`:59`）、`internal`（`:69`）；`Idempotency-Key` 仅校验长度 |
+| `GetLocalUser` | 查询单个本地用户 | authz(auth/read，`adminOnly`) | `internal/auth/local_users.go:206` | `not_found`（`:213`）、`internal`（`:215`） |
+| `ListLocalUsers` | 分页列出租户用户 | authz(auth/read，`adminOnly`) | `internal/auth/local_users.go:225` | `invalid_argument`（`:235` 游标）、`internal`（`:237`） |
 
 ### 7.3 auth.v1.OrganizationService（9 个，`release-auth` 8085）
 
@@ -414,7 +433,7 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 
 | RPC | 作用 | 鉴权 | 位置 | 关键错误 |
 | --- | --- | --- | --- | --- |
-| `CreateBinding` | 绑定组织与 Customer | authz(binding/write) | `internal/auth/binding_service.go:30` | `invalid_argument`（`:36`）、`already_exists`（`:60`）、`internal`（`:50`）；**恒 `not_found`**（`StubResolver`，见 3.7） |
+| `CreateBinding` | 绑定组织与 Customer | authz(binding/write) | `internal/auth/binding_service.go:30` | `invalid_argument`（`:36`）、`already_exists`（`:60`）、`internal`（`:50`）；**恒 `not_found`**（`StubResolver`，见 3.8） |
 | `GetBinding` | 查询绑定 | authz(binding/read) | `internal/auth/binding_service.go:70` | 由 `getBinding`/`authorize` 决定 |
 | `ListBindings` | 列出绑定 | authz(binding/read) | `internal/auth/binding_service.go:87` | `invalid_argument`（`:93`）、`internal`（`:101`）；无分页 |
 | `RevokeBinding` | 吊销绑定 | authz(binding/write) | `internal/auth/binding_service.go:113` | `aborted`（`:126`）、`failed_precondition`（`:129`）、`internal`（`:139`） |
@@ -424,7 +443,7 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 | RPC | 作用 | 鉴权 | 位置 | 关键错误 |
 | --- | --- | --- | --- | --- |
 | `GetAuthorizationSnapshot` | 向业务服务发布版本化授权快照 | JWT，跳过 Enforce，handler 自校验 | `internal/auth/authorization_snapshot.go:40` | `unauthenticated`（`:55`）、`invalid_argument`（`:60`）、`permission_denied`（`:63`）、`unavailable`（`:68`） |
-| `SetCapabilityGrant` | 增删显式能力授权 | authz（无法映射） | `internal/auth/authorization_snapshot.go:128` | **恒 `permission_denied`**，见 3.7 |
+| `SetCapabilityGrant` | 增删显式能力授权 | JWT，handler 自证（`modeHandler`：要求 platform_admin/release_admin） | `internal/auth/authorization_snapshot.go:128` | `unauthenticated`（`:134`）、`invalid_argument`（`:138`、`:145`）、`permission_denied`（`:141`、`:149`、`:152`） |
 
 ### 7.6 auth.v1.ExternalIdentityService（3 个，**未见挂载**）
 
@@ -464,7 +483,7 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 | RPC | 作用 | 鉴权 | 位置 | 关键错误 |
 | --- | --- | --- | --- | --- |
 | `SubmitBundle` | 提交发布 bundle 入库（CI 入口） | service token（scope 仅此一条）或 JWT+authz(bundle/write) | `internal/orchestrator/bundle_service.go:54` | `already_exists`（`:110` 幂等冲突）；`Idempotency-Key` |
-| `RecordArtifactEvent` | 记录制品生命周期事件 | 两条路径都拒绝（见 3.7） | `internal/orchestrator/bundle_service.go:120` | `invalid_argument`（`:126`）、`already_exists`（`:172`）；**当前不可达** |
+| `RecordArtifactEvent` | 记录制品生命周期事件 | authz(bundle/write，`adminOnly`)；service-token 路仍只放行 `SubmitBundle`（Harbor key 未落地，见 3.8） | `internal/orchestrator/bundle_service.go:120` | `invalid_argument`（`:126`）、`already_exists`（`:172`） |
 | `ListBundles` | 分页查询 bundle | authz(bundle/read) | `internal/orchestrator/bundle_service.go:183` | `permission_denied`（`:189`）、`invalid_argument`（`:200`）；SQLite 下恒失败 |
 | `GetBundle` | 查询单个 bundle（可带 definition 归属校验） | authz(bundle/read) | `internal/orchestrator/bundle_service.go:230` | `invalid_argument`（`:235`）、`permission_denied`（`:240`）、`not_found`（`:251`） |
 
@@ -504,7 +523,7 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 | `GetOperation` | 查询 Operation 详情 | authz(release/read) | `internal/orchestrator/service.go:507` | `unauthenticated`（`:513`）、`not_found`（`:517`）、`internal`（`:521`） |
 | `WatchOperation` | **server-streaming** 订阅状态流转 | authz(release/read)；流式由 `NewAuthStreamInterceptor` 裁决 | `internal/orchestrator/service.go:543` | `unauthenticated`（`:550`）、`invalid_argument`（`:553`）、`not_found`（`:557`）、`internal`（`:560`）；游标过界 `out_of_range`+`cursor_expired`（`:628-638`）；维护模式**不拦截**流式 |
 | `CancelOperation` | 取消非终态 Operation | authz(release/write) | `internal/orchestrator/service.go:820` | `unauthenticated`（`:829`）、`not_found`（`:838`）、`failed_precondition`（`:855`）、`internal`（`:842`）；`Idempotency-Key` |
-| `SubmitValuesRevision` | 提交 values revision 进入审批 | JWT，handler 自校验（`internal/auth/interceptor.go:358-360`） | `internal/orchestrator/values_approval.go:41` | 由 `handleValuesApproval` 决定：`unauthenticated`（`:99`）、`not_found`（`:108`）、`unavailable`（`:124`）、`invalid_argument`（`:187`）；`Idempotency-Key` |
+| `SubmitValuesRevision` | 提交 values revision 进入审批 | JWT，handler 自校验（`modeHandler`，登记表 `internal/auth/procedure_policy.go`） | `internal/orchestrator/values_approval.go:41` | 由 `handleValuesApproval` 决定：`unauthenticated`（`:99`）、`not_found`（`:108`）、`unavailable`（`:124`）、`invalid_argument`（`:187`）；`Idempotency-Key` |
 | `ApproveValuesRevision` | 批准 | JWT，handler 自校验 | `internal/orchestrator/values_approval.go:56` | 同上 + `failed_precondition`（`:241`、`:245`、`:256`）、`permission_denied`（`:249`） |
 | `RejectValuesRevision` | 驳回 | JWT，handler 自校验 | `internal/orchestrator/values_approval.go:71` | 同上；`reason` 必填（`:198`）；`Idempotency-Key` |
 | `CreateValuesRevision` | 直接创建 values revision | authz(release/write) | `internal/orchestrator/values_revision.go:67` | `unauthenticated`（`:75`）、`invalid_argument`（`:78`）、`resource_exhausted`（`:89` 体积超限）、`not_found`（`:94`）；`Idempotency-Key` |
@@ -538,7 +557,7 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 | `RevokePendingEnrollmentToken` | 吊销未使用的 token（幂等，返回 `changed`/`final_state`） | authz(operator/enroll) | `internal/orchestrator/operator.go:198` | `invalid_argument`/`not_found`/`internal`/`permission_denied` 全部来自共享的 `validateOperatorScope`（`:226`、`:229`、`:233`、`:236`、`:239`）；存储错误经 `mapOperatorStoreError`（`:215`） |
 | `ExecuteEmergencyChange` | 执行紧急变更（唯一权威入口） | authz(release/write) | `internal/orchestrator/emergency.go:77` | `unauthenticated`（`:87`）、`permission_denied`（`:122`）、`failed_precondition`（`:104`）、`internal`（`:100`）；幂等键在**请求体**；`EmergencyErrorDetail` |
 | `ListEmergencyTargets` | 列出可执行紧急变更的目标 | authz(release/read) | `internal/orchestrator/emergency_queries.go:50` | `invalid_argument`（`:55`）、`not_found`（`:64`）、`internal`（`:67`）；无分页 |
-| `CheckEmergencyConflict` | 探测与在途 Operation 的冲突 | authz（无法映射） | `internal/orchestrator/emergency_queries.go:148` | `invalid_argument`（`:154`）、`internal`（`:161`）；**恒 `permission_denied`**，见 3.7 |
+| `CheckEmergencyConflict` | 探测与在途 Operation 的冲突 | authz(release/read) | `internal/orchestrator/emergency_queries.go:148` | `invalid_argument`（`:154`）、`internal`（`:161`）；handler 另要求 active binding |
 | `ListCandidateArtifacts` | 列出候选制品 | authz(release/read) | `internal/orchestrator/emergency_queries.go:178` | `invalid_argument`（`:183`）、`internal`（`:195`）；无分页 |
 | `ListConvergenceTasks` | 列出收敛任务 | authz(release/read) | `internal/orchestrator/emergency_queries.go:211` | `invalid_argument`（`:217`）、`internal`（`:227`）；无分页 |
 | `ListStuckLocks` | 列出卡住的锁 | authz(release/read) | `internal/orchestrator/emergency_stuck.go:77` | `unauthenticated`（`:83`）、`internal`（`:87`）；无分页 |
@@ -548,8 +567,8 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 | `DeleteClusterRoute` | 删除路由 | authz(release/write) | `internal/orchestrator/route.go:134` | `not_found`（`:140`）、`internal`（`:143`） |
 | `ListReleases` | 分页查询发布清单视图 | authz(release/read) | `internal/orchestrator/inventory_query.go:31` | `invalid_argument`（`:37`）、`not_found`（`:54`）、`internal`（`:57`）；维护期**不放行**（白名单无此项） |
 | `ListReleaseInventory` | 返回全部清单快照 | authz(release/read) | `internal/orchestrator/inventory_observation.go:19` | `unauthenticated`（`:25`）；无请求字段、无分页；维护期放行 |
-| `ListOperations` | 分页查询 Operation | authz(release/read) | `internal/orchestrator/service.go:1531` | 恒 `unimplemented`（`:1532`）→ **未实现** |
-| `TriggerInventorySync` | 主动触发清单同步 | authz（无法映射） | `internal/orchestrator/inventory_query.go:112` | `invalid_argument`（`:116` 起）；**恒 `permission_denied`**，见 3.7 |
+| `ListOperations` | 分页查询 Operation（最新在前，keyset 游标） | authz(release/read) | `internal/orchestrator/operations_query.go:22` | `invalid_argument`（`:32`、`:39`、`:56`、`:135`）、`not_found`（`:44`）、`permission_denied`（binding/membership） |
+| `TriggerInventorySync` | 主动触发清单同步 | authz(release/write) | `internal/orchestrator/inventory_query.go:112` | `invalid_argument`（`:116` 起）、`unavailable`（operator offline）、`already_exists`（sync in progress） |
 | `SyncInventory` | agent 上报集群清单（快照 + 对账） | 网关 8084：证书；管理端口 8083：authz(release/write) | `internal/orchestrator/inventory.go:21` | `unauthenticated`/`permission_denied`（`internal/orchestrator/sync_inventory_auth.go:30-60`）、`invalid_argument`（`sync_id` 必填，`:40-42`） |
 
 ## 8. 事实源

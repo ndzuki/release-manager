@@ -155,10 +155,18 @@ func TestMapProcedure(t *testing.T) {
 	}
 }
 
-func TestMapMethodToActionClassifiesValuesApprovalAsWrite(t *testing.T) {
-	assert.Equal(t, "write", mapMethodToAction("ApproveValuesRevision"))
-	assert.Equal(t, "write", mapMethodToAction("RejectValuesRevision"))
-	assert.Equal(t, "read", mapMethodToAction("ListSecrets"))
+func TestMapProcedureClassifiesValuesApprovalAsWrite(t *testing.T) {
+	for _, procedure := range []string{
+		orchestratorv1connect.OrchestratorServiceApproveValuesRevisionProcedure,
+		orchestratorv1connect.OrchestratorServiceRejectValuesRevisionProcedure,
+	} {
+		object, action := mapProcedure(procedure)
+		assert.Equal(t, "release", object)
+		assert.Equal(t, "write", action)
+	}
+	object, action := mapProcedure(orchestratorv1connect.OrchestratorServiceListSecretsProcedure)
+	assert.Equal(t, "release", object)
+	assert.Equal(t, "read", action)
 
 	t.Run("orchestrator discard values revision", func(t *testing.T) {
 		object, action := mapProcedure(orchestratorv1connect.OrchestratorServiceDiscardValuesRevisionProcedure)
@@ -171,7 +179,7 @@ func TestMapMethodToActionClassifiesValuesApprovalAsWrite(t *testing.T) {
 // action — ListStuckLocks is a read, ReleaseEmergencyLock is a write. Without
 // the "Release" prefix branch ReleaseEmergencyLock would map to "" → 403
 // "unmapped procedure" (the same prefix-table gap as TASK-072).
-func TestMapMethodToActionClassifiesStuckLockRPCs(t *testing.T) {
+func TestMapProcedureClassifiesStuckLockRPCs(t *testing.T) {
 	object, action := mapProcedure(orchestratorv1connect.OrchestratorServiceListStuckLocksProcedure)
 	assert.Equal(t, "release", object)
 	assert.Equal(t, "read", action)

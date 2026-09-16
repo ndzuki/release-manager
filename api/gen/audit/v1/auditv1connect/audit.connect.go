@@ -66,15 +66,17 @@ type AuditServiceClient interface {
 	// rejected are counted per event and rejection_codes explains each rejection,
 	// which is why a non-zero rejected count is not an RPC failure.
 	// Fails with INVALID_ARGUMENT only when the request carries no events at all.
-	// Requires a valid access token; any authenticated principal may emit, and the
-	// actor recorded on each event is taken from the event itself.
+	// Requires a valid access token. Any authenticated principal may emit, and the
+	// actor recorded on each event is taken from the event itself; an event whose
+	// actor carries a different organization than the principal is rejected with
+	// PERMISSION_DENIED for the whole request.
 	Emit(context.Context, *connect.Request[v1.EmitAuditRequest]) (*connect.Response[v1.EmitAuditResponse], error)
 	// Reads the audit trail with keyset pagination, newest event first.
 	// Read-only and replayable.
-	// Every filter field, including organization_id, is taken from the request; the
-	// server does not inject or verify the caller's own organization, so an
-	// authenticated caller can read another tenant's trail. Treat this as a known
-	// gap rather than a guarantee.
+	// organization_id is resolved from the principal: an omitted value means the
+	// principal's own organization, and a value naming another organization is
+	// rejected with PERMISSION_DENIED. Other filter fields (resource, actor,
+	// action, status, time range) are taken from the request.
 	// page_size is clamped to [1, 100] and defaults to 20; an unreadable
 	// page_token is reported as INTERNAL, not as a client error.
 	// Requires a valid access token (no role check).
@@ -83,9 +85,11 @@ type AuditServiceClient interface {
 	// produce or hand back a file.
 	// Not idempotent: each call mints a new export_id, and repeating an identical
 	// request creates a second pending export.
-	// Only the filter's time range is recorded, defaulting to the last 30 days; no
-	// worker consumes the queue today, so status stays pending. Treat the
-	// identifier as a request receipt, not as a download handle.
+	// Only the filter's time range is recorded, defaulting to the last 30 days;
+	// the export is scoped to the principal's organization, and a filter naming
+	// another organization is rejected with PERMISSION_DENIED. No worker consumes
+	// the queue today, so status stays pending. Treat the identifier as a request
+	// receipt, not as a download handle.
 	// Requires a valid access token (no role check).
 	ExportAuditEvents(context.Context, *connect.Request[v1.ExportAuditEventsRequest]) (*connect.Response[v1.ExportAuditEventsResponse], error)
 }
@@ -153,15 +157,17 @@ type AuditServiceHandler interface {
 	// rejected are counted per event and rejection_codes explains each rejection,
 	// which is why a non-zero rejected count is not an RPC failure.
 	// Fails with INVALID_ARGUMENT only when the request carries no events at all.
-	// Requires a valid access token; any authenticated principal may emit, and the
-	// actor recorded on each event is taken from the event itself.
+	// Requires a valid access token. Any authenticated principal may emit, and the
+	// actor recorded on each event is taken from the event itself; an event whose
+	// actor carries a different organization than the principal is rejected with
+	// PERMISSION_DENIED for the whole request.
 	Emit(context.Context, *connect.Request[v1.EmitAuditRequest]) (*connect.Response[v1.EmitAuditResponse], error)
 	// Reads the audit trail with keyset pagination, newest event first.
 	// Read-only and replayable.
-	// Every filter field, including organization_id, is taken from the request; the
-	// server does not inject or verify the caller's own organization, so an
-	// authenticated caller can read another tenant's trail. Treat this as a known
-	// gap rather than a guarantee.
+	// organization_id is resolved from the principal: an omitted value means the
+	// principal's own organization, and a value naming another organization is
+	// rejected with PERMISSION_DENIED. Other filter fields (resource, actor,
+	// action, status, time range) are taken from the request.
 	// page_size is clamped to [1, 100] and defaults to 20; an unreadable
 	// page_token is reported as INTERNAL, not as a client error.
 	// Requires a valid access token (no role check).
@@ -170,9 +176,11 @@ type AuditServiceHandler interface {
 	// produce or hand back a file.
 	// Not idempotent: each call mints a new export_id, and repeating an identical
 	// request creates a second pending export.
-	// Only the filter's time range is recorded, defaulting to the last 30 days; no
-	// worker consumes the queue today, so status stays pending. Treat the
-	// identifier as a request receipt, not as a download handle.
+	// Only the filter's time range is recorded, defaulting to the last 30 days;
+	// the export is scoped to the principal's organization, and a filter naming
+	// another organization is rejected with PERMISSION_DENIED. No worker consumes
+	// the queue today, so status stays pending. Treat the identifier as a request
+	// receipt, not as a download handle.
 	// Requires a valid access token (no role check).
 	ExportAuditEvents(context.Context, *connect.Request[v1.ExportAuditEventsRequest]) (*connect.Response[v1.ExportAuditEventsResponse], error)
 }
