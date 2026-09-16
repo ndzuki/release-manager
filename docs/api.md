@@ -170,7 +170,7 @@ HS256 对称签名，`internal/auth/jwt.go:22-29`（`NewJWTManager(signingKey, a
 5. `enforceRequestBinding`（customer 绑定/禁用一致性）→ `:88-97`。
 6. 策略行 `mode == modeCasbin` 时执行 `enforcer.Enforce(userID, domain, object, action)` → `:98-109`；`modeHandler` 的 procedure 跳过 Casbin，由 handler 自证授权。
 
-TASK-095 把旧的「服务名包含 + 方法名前缀」推断（`mapServiceToObject`/`mapMethodToAction`）整体删除，改为 `internal/auth/procedure_policy.go:66-185` 的**显式 procedure → 授权登记表**（104 行，一行一个 procedure）。每行的 `mode` 取值：`modeCasbin`（拦截器裁决）、`modeHandler`（handler 自证）、`modePublic`、`modePrincipalScope`（release-api 审计面）、`modeServiceToken`、`modeMTLS`、`modeUnintercepted`。两条门禁测试锁死这张表：`internal/auth/procedure_policy_test.go:80-97` 遍历 proto registry，新增 procedure 未登记即失败；`:100-121` 断言每个 `modeCasbin` 的 `(object, action)` 必须落在默认角色矩阵（非通配角色）的授予集合内，或显式标注 `adminOnly`。
+TASK-095 把旧的「服务名包含 + 方法名前缀」推断（`mapServiceToObject`/`mapMethodToAction`）整体删除，改为 `internal/auth/procedure_policy.go:66-185` 的**显式 procedure → 授权登记表**（104 行，一行一个 procedure）。每行的 `mode` 取值：`modeCasbin`（拦截器裁决）、`modeHandler`（handler 自证）、`modePublic`、`modePrincipalScope`（release-api 审计面）、`modeServiceToken`、`modeMTLS`、`modeUnintercepted`。两条门禁测试锁死这张表：`internal/auth/procedure_policy_test.go:90` 遍历 proto registry，新增 procedure 未登记即失败；`:121` 断言每个 `modeCasbin` 的 `(object, action)` 必须落在默认角色矩阵（非通配角色）的授予集合内，或显式标注 `adminOnly`。
 
 角色 → 策略规则（`internal/auth/casbin.go:425-477`，角色常量 `internal/store/store.go:807-812`，仅 4 个角色）：
 
@@ -218,12 +218,12 @@ TASK-095 之前，`(object, action)` 由服务名包含 + 方法名前缀推断�
 
 | procedure | 修复前 | 修复后与证据 |
 | --- | --- | --- |
-| `auth.v1.AuthService/SwitchOrganization` | 恒 `permission_denied`：`resolveDomain` 先拒绝「请求组织 ≠ token 组织」，即使过了这关 `mapMethodToAction` 也没有 `Switch` 前缀 | 登记为 `modeCasbin` + `targetOrg`：domain 取请求的目标组织，动作 `(organization, write)`，handler 再校验目标组织成员资格。集成证据 `internal/auth/switch_organization_test.go:18-68`（真实 JWT 切换成功、返回 token 的组织 claim 与后续请求都落在目标组织）；语义证据 `:74-113`（按目标组织的角色判定） |
+| `auth.v1.AuthService/SwitchOrganization` | 恒 `permission_denied`：`resolveDomain` 先拒绝「请求组织 ≠ token 组织」，即使过了这关 `mapMethodToAction` 也没有 `Switch` 前缀 | 登记为 `modeCasbin` + `targetOrg`：domain 取请求的目标组织，动作 `(organization, write)`，handler 再校验目标组织成员资格。集成证据 `internal/auth/switch_organization_test.go:23-71`（真实 JWT 切换成功、返回 token 的组织 claim 与后续请求都落在目标组织）；语义证据 `:74-109`（按目标组织的角色判定） |
 | `auth.v1.AuthorizationService/SetCapabilityGrant` | `Set` 前缀未映射，恒 403；它在 handler 自证表里，但那一步在映射之后，永远走不到 | 登记为 `modeHandler`：拦截器只认证与会话校验，handler 要求 `platform_admin`/`release_admin` 成员资格（`internal/auth/authorization_snapshot.go:147-150`） |
-| `orchestrator.v1.OrchestratorService/CheckEmergencyConflict` | `Check` 前缀未映射 → 恒 403（web 前端在调用，`web/src/connect/emergency-api.ts:151`） | 登记 `(release, read)`；集成矩阵 `internal/auth/interceptor_unmapped_test.go:96-112` |
-| `orchestrator.v1.OrchestratorService/TriggerInventorySync` | `Trigger` 前缀未映射 → 恒 403 | 登记 `(release, write)`；集成矩阵 `internal/auth/interceptor_unmapped_test.go:114-130` |
-| `orchestrator.v1.BundleService/RecordArtifactEvent` | JWT 路缺 `Record` 前缀；service-token 路 scope 只含 `SubmitBundle` | JWT 路登记 `(bundle, write)`（`adminOnly`，与 `SubmitBundle` 对称，`internal/auth/interceptor_unmapped_test.go:132-148`）。Harbor 独立 key 未落地，登记为 REQ-011 后续项（见 3.8） |
-| `auth.v1.AuthService/ChangePassword` | 落在 `auth/write`，而 `auth` 对象没有任何非通配授予 → 只有 `platform_admin` 能改自己的口令 | 登记为 `modeHandler`（handler 校验旧口令并吊销本人会话）；回归 `internal/auth/change_password_test.go:22-53` |
+| `orchestrator.v1.OrchestratorService/CheckEmergencyConflict` | `Check` 前缀未映射 → 恒 403（web 前端在调用，`web/src/connect/emergency-api.ts:151`） | 登记 `(release, read)`；集成矩阵 `internal/auth/interceptor_unmapped_test.go:88-96` |
+| `orchestrator.v1.OrchestratorService/TriggerInventorySync` | `Trigger` 前缀未映射 → 恒 403 | 登记 `(release, write)`；集成矩阵 `internal/auth/interceptor_unmapped_test.go:97-112` |
+| `orchestrator.v1.BundleService/RecordArtifactEvent` | JWT 路缺 `Record` 前缀；service-token 路 scope 只含 `SubmitBundle` | JWT 路登记 `(bundle, write)`（`adminOnly`，与 `SubmitBundle` 对称，`internal/auth/interceptor_unmapped_test.go:113-128`）。Harbor 独立 key 未落地，登记为 REQ-011 后续项（见 3.8） |
+| `auth.v1.AuthService/ChangePassword` | 落在 `auth/write`，而 `auth` 对象没有任何非通配授予 → 只有 `platform_admin` 能改自己的口令 | 登记为 `modeHandler`（handler 校验旧口令并吊销本人会话）；回归 `internal/auth/change_password_test.go:21-53` |
 
 `Login`/`Initialize` 是审计中另外两个「有 object 无 action」的 procedure，第 1 步 `publicMethods` 即放行，不受影响。
 

@@ -273,8 +273,8 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
   （`internal/auth/casbin.go:84-86`，健康位由 `internal/auth/casbin.go:132-136,169,175` 的热重载维护）；
   procedure 未登记时直接拒绝（`internal/auth/interceptor.go:68-79`）。
   映射不再是前缀推断，而是 `internal/auth/procedure_policy.go:66-185` 的**逐 procedure 显式登记表**：
-  新增 RPC 必须加一行，`TestProcedurePolicyRegistryIsExhaustive`（`internal/auth/procedure_policy_test.go:80-97`）
-  会在漏配时失败，且 `TestProcedurePolicyPairsAreGranted`（`:100-121`）要求每个 Casbin 对的
+  新增 RPC 必须加一行，`TestProcedurePolicyRegistryIsExhaustive`（`internal/auth/procedure_policy_test.go:90`）
+  会在漏配时失败，且 `TestProcedurePolicyPairsAreGranted`（`:121`）要求每个 Casbin 对的
   `(object, action)` 至少被一个非通配角色授予（否则必须显式标 `adminOnly`）——这正是 TASK-095 之前
   5 条 procedure 恒 403 的根因。
   7 条 procedure 走处理器自裁决、跳过 Casbin（`modeHandler`，`internal/auth/procedure_policy.go`）。
@@ -494,7 +494,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 | 12 | `release-api` 审计面只验 JWT（独立 `internal/jwtauth` 实现）与组织域归属（TASK-095 已补），仍不做 Casbin 角色判定与会话撤销校验；原因是 release-api 的库没有 membership/policy 数据源（ADR-015 每库一个权威） | 部分实现 | `cmd/api/main.go:65-73`；`internal/audit/interceptor.go:21-41`；`internal/audit/authorization.go:22-48`；对比 `internal/auth/interceptor.go:111-122` |
 | 13 | 客户集群内 operator 用 ClusterRole 且可读写全集群 Secret（Helm release 存储模型的必然结果，未用 `resourceNames` 收窄） | 事实/建议 | §3.3 |
 | 14 | **审计有绕过 emitter 的直写路径**，与 `AGENTS.md:27` 硬约束 6 不符（当前无明文泄露证据，但无结构性保证） | 部分实现 | §3.6 第 3 条 |
-| 15 | 审计查询/导出的组织过滤取自请求，可为空；principal 未被使用（TASK-095 已修：principal 组织成为唯一可读写范围，跨组织 `permission_denied`） | 已实现 | `internal/audit/authorization.go:22-48`；`internal/audit/audit_service_handler.go:42-56,97,142`；回归 `internal/audit/authorization_test.go:22-128` |
+| 15 | 审计查询/导出的组织过滤取自请求，可为空；principal 未被使用（TASK-095 已修：principal 组织成为唯一可读写范围，跨组织 `permission_denied`） | 已实现 | `internal/audit/authorization.go:22-48`；`internal/audit/audit_service_handler.go:42-56,97,142`；回归 `internal/audit/authorization_test.go:21-128` |
 | 16 | `NotifierService` 无认证拦截器 + 投递目标无白名单 → 控制面可被当作任意 URL 的 HTTP 出站源，metadata 原文外发 | 未见实现 | §3.11 |
 | 17 | ADR-020 的 Vault SecretResolver 适配器未实现（notifier 出站因此恒在无鉴权分支） | 未见实现 | `docs/decisions/ADR-020-use-hashicorp-vault-go-api-for-notifier-secretresolver.md:14-15`；`cmd/notifier/main.go:81` |
 | 18 | 「一个活跃标准 Operation」的数据库级唯一索引只在 PostgreSQL，SQLite 侧仅应用层计数（双引擎强度不等价） | 部分实现 | `migrations/000001_legacy_baseline.up.sql:62-63` ↔ `internal/store/sqlite/uow.go:89-100` |
