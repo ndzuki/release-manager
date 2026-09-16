@@ -487,8 +487,8 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 | 5 | 制品漏洞准入未接线，nil evaluator 会放行 | 未见实现 | `internal/orchestrator/vulnerability.go:11-23` |
 | 6 | 遗留 `verifier.go` 仅格式校验，注释指向不存在的 `CosignVerifier` | 部分实现 | `internal/trust/verifier.go:216-219` |
 | 7 | 应用日志与 CI artifact 不经脱敏 | 未见实现 | `internal/app/app.go:123`；`test/e2e/prerequisite/capture-logs.sh:30` |
-| 8 | 无 govulncheck / SBOM / 签名 / attestation / 依赖机器人 | 未见实现 | §6 表 |
-| 9 | Actions 无 SHA 固定；仅 1/16 基础镜像按 digest 固定 | 事实/建议 | §6 表 |
+| 8 | 依赖漏洞扫描已接线（TASK-101：`make vulncheck` + CI `vulncheck` job，无上游修复的公告走 `vulncheck.exceptions.yaml` 复审期）+ 依赖机器人（`.github/dependabot.yml`：actions / docker / gomod）；**SBOM / 镜像签名 / attestation 仍未实现** | 部分实现 | `scripts/vulncheck.sh`、`vulncheck.exceptions.yaml`、`.github/workflows/test.yml`、`.github/dependabot.yml` |
+| 9 | Actions 已固定：第三方 action（`bufbuild/buf-setup-action`、`golangci/golangci-lint-action`）按 commit SHA + 版本注释；`actions/*` 保持主版本标签。基础镜像按 **index digest** 固定（`golang:1.26.4`、`distroless/static-debian13:nonroot`、web 的 node/nginx ARG 默认值），轮换交给 dependabot 的 docker 生态 | 已实现 | `deploy/docker/Dockerfile.*`、`.github/workflows/test.yml`、`.github/dependabot.yml` |
 | 10 | `sync-to-gitcode.yaml` 无 `permissions:`、无 `concurrency`、无 `timeout-minutes` | 事实/建议 | `.github/workflows/sync-to-gitcode.yaml:11-25` |
 | 11 | 登录限流为进程内、多副本不共享 | 事实/建议 | `internal/auth/ratelimit.go:18-54` |
 | 12 | `release-api` 审计面按 ADR-021 接入 release-auth 的角色判定与窗口策略（TASK-103）：不内嵌 Casbin、不复制策略，判定不可用时 fail closed；release-api 仍不本地校验会话撤销（由 release-auth 的裁决覆盖） | 已实现 | `cmd/api/main.go:69-90`；`internal/audit/decision.go:44-76`；`internal/audit/authorization.go:41-105`；`internal/auth/authorization_decision.go:43-137` |
@@ -498,7 +498,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 | 16 | `NotifierService` 无认证拦截器 + 投递目标无白名单 → 控制面可被当作任意 URL 的 HTTP 出站源，metadata 原文外发 | 未见实现 | §3.11 |
 | 17 | ADR-020 的 Vault SecretResolver 适配器未实现（notifier 出站因此恒在无鉴权分支） | 未见实现 | `docs/decisions/ADR-020-use-hashicorp-vault-go-api-for-notifier-secretresolver.md:14-15`；`cmd/notifier/main.go:81` |
 | 18 | 「一个活跃标准 Operation」的数据库级唯一索引只在 PostgreSQL，SQLite 侧仅应用层计数（双引擎强度不等价） | 部分实现 | `migrations/000001_legacy_baseline.up.sql:62-63` ↔ `internal/store/sqlite/uow.go:89-100` |
-| 19 | 迁移编号连续性/up-down 成对只在运行时校验，无 make/CI 静态门禁 | 未见实现 | `internal/postgres/migrate.go:53,205-212` |
+| 19 | 迁移编号连续性与 up/down 成对已有静态门禁（TASK-101：`make check-migrations`，覆盖两个内嵌集合，含负控制） | 已实现 | `migrations/continuity_test.go`、`Makefile` 的 `check-migrations` |
 | 20 | 无 HTTP 安全响应头（CSP / X-Content-Type-Options / X-Frame-Options / HSTS） | 未见实现 | `web/nginx.conf:1-106` 无 `add_header`；Go 侧无相关中间件 |
 | 21 | 未使用 PostgreSQL RLS / `CREATE POLICY` / `GRANT`，租户隔离完全依赖应用层过滤 | 事实（设计选择） | 全仓检索 0 命中；§3.10 |
 | 22 | `README.md:69` 称前端「Node 版本见 `web/package.json`」，但该文件没有 `engines` 字段（全文件无 `engines` 键） | 文档缺陷（未修，本文只报告） | `README.md:69`、`web/package.json:1-51` |

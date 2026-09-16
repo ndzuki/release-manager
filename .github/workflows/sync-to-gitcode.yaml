@@ -5,11 +5,22 @@ on:
     branches:
       - main # 如果你默认的分支是 master，请修改为 master
 
+# A mirror sync only needs to read this repository; the token comes from a Secret.
+permissions:
+  contents: read
+
+# Mirrors must not overlap: a second push waits for the first to finish instead of
+# being cancelled (a cancelled mirror push can leave GitCode mid-update).
+concurrency:
+  group: sync-to-gitcode
+  cancel-in-progress: false
+
 env:
   GITCODE_USER: ndmizuki
 jobs:
   gitcode-sync:
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    timeout-minutes: 15
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -17,9 +28,13 @@ jobs:
           fetch-depth: 0 # 获取完整提交历史，防止强制推送失败
 
       - name: Push to GitCode
-        # Credentials travel via the environment, never on the command line.
+        # The credential travels inside an HTTP header, never in the remote URL:
+        # a URL-embedded token shows up in process listings and git error output.
         env:
-          GITCODE_REMOTE: "https://${{ env.GITCODE_USER }}:${{ secrets.GITCODE_TOKEN }}@gitcode.com/${{ env.GITCODE_USER }}/${{ github.event.repository.name }}.git"
+          GITCODE_USER: ${{ env.GITCODE_USER }}
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+          GITCODE_REPO: ${{ github.event.repository.name }}
         run: |
           # 强制将本地全部分支与标签推送到 GitCode
-          git push --mirror "$GITCODE_REMOTE"
+          git -c http.extraHeader="Authorization: Basic $(printf '%s' "${GITCODE_USER}:${GITCODE_TOKEN}" | base64 | tr -d '\n')" \
+            push --mirror "https://gitcode.com/${GITCODE_USER}/${GITCODE_REPO}.git"

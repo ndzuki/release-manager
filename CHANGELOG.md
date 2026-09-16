@@ -14,7 +14,7 @@
 
 ## 2026-09
 
-里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 13 个 PR 合入。
+里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 14 个 PR 合入。
 
 ### 执行链路（升级 / 回滚）
 
@@ -46,6 +46,16 @@
 ### 审计面角色授权（Added）
 
 - 审计面按 ADR-021 接入服务端权威判定：`auth.v1.AuthorizationService/AuthorizeAccess` 由 release-auth 按持久 membership + 版本化 policy 回答 `(object, action)`，并返回有效组织、跨组织许可与 31/366 天窗口；release-api 透传调用方 JWT 消费该判定，判定不可用即 fail closed，不内嵌 Casbin、不用 JWT claims 推导角色。补齐 REQ-029 的 `platform_admin` 跨组织（AC-029-01）与窗口超限 `range_too_large`（AC-029-02）；`Emit`/`ExportAuditEvents` 收紧为需要 `audit/write`（`release_admin`/`platform_admin`）（PR #108，TASK-103）。
+
+### Bundle ingress 认证（Added）
+
+- `SubmitReleaseBundle` 由 CI API key 认证、新增 `POST /webhooks/harbor`（Harbor 独立 key）并挂载 Harbor adapter，出站以 `service:release-harbor` 调 `RecordArtifactEvent`（scope 仅该 procedure）；两把 key 与两条 procedure 不可互相替换（AC-011-04/16/17）。配套把 `ServiceTokenInterceptor` 对「不在本腿白名单的 token」改为 `unauthenticated` 以支持多凭证并存（保留「在白名单但越 scope → `permission_denied`」），并在 dev 生命周期/kustomize/CI 三处配齐凭据（PR #109，TASK-102）。
+
+### 供应链与 CI 加固（Added）
+
+- 依赖漏洞扫描接线：`make vulncheck` + CI `vulncheck` job，只对**代码实际调用**的漏洞失败；无上游修复的公告（Helm SDK 依赖的弃用 openpgp，`GO-2026-5932`）走 `vulncheck.exceptions.yaml` 的 owner + 补偿控制 + 复审期，过期即失败，并带「去掉例外即失败 / 例外过期即失败」两类负控制（PR #110，TASK-101）。
+- 第三方 action 固定到 commit SHA（`actions/*` 保持主版本标签）、基础镜像固定到 index digest、新增 dependabot（actions/docker/gomod）承接轮换；`sync-to-gitcode` 补 `permissions`/`concurrency`/`timeout-minutes` 且 token 不再进 URL（PR #110，TASK-101）。
+- 新增迁移静态门禁 `make check-migrations`：两个内嵌迁移集合编号连续、up/down 成对、文件名合规（PR #110，TASK-101）。
 
 ## 2026-08
 

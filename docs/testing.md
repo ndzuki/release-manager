@@ -56,12 +56,14 @@ Makefile 内没有对应的转发 target，需在 `web/` 目录内直接运行�
 | `make lint` | `golangci-lint run` | `golangci-lint` | 本地；CI 用 `golangci-lint-action` v2.12.2 且仅 lint 变更（`--new-from-rev`） |
 | `make sdk-check` | SDK-only 静态门禁（REQ-037）：`os_exec_import`、`fork_exec`、`shell_wrapper`、`forbidden_binary_invocation`、`expired_exception` | 无 | 本地 + CI `sdk-check` job（同一命令、同一例外文件、同一扫描范围） |
 | `make check-reqs` | 校验原子需求文档结构（`find . -path '*/Requirements/REQ-*.md'` → `cmd/reqcheck`）；**找不到 REQ 文档时打印提示并跳过** | 无 | 本地（CI 未接入该 target） |
+| `make vulncheck` | 对模块跑 govulncheck（REQ-008 §8-8），只对**代码实际调用**的漏洞失败；无上游修复的公告在 `vulncheck.exceptions.yaml` 登记（owner + 补偿控制 + 复审日期，过期即失败），CI 另跑 `vulncheck` job | `govulncheck`（`make vulncheck` 自动安装 `GOVULNCHECK_VERSION`）+ 漏洞库网络 | 本地 + CI `vulncheck` job（`scripts/vulncheck.sh`） |
+| `make check-migrations` | 静态门禁：`migrations/` 两个内嵌集合（release_manager、release_notifier）编号连续、每个版本 up/down 成对、文件名合规（REQ-008 §8-19）；负控制在 `migrations/continuity_test.go` 内 | 无（读 `//go:embed` 的文件系统） | 本地 + `make quality` + CI `test` job 的全量 `go test` |
 | `make check-licenses` | 校验所有**会进入产物**的依赖许可证（Go 默认构建闭包 + 前端生产依赖）：拒绝 GPL/AGPL/LGPL、SSPL、BUSL、Elastic 以及无许可证文件的依赖；同时校验根目录 `NOTICE` 未过期 | `go`（模块缓存）；前端部分需 `jq`，缺失时**显式报「未检查」**而非静默通过 | 本地 + CI `license-check` job（同一脚本、同一策略、同一例外文件 `license-exceptions.tsv`） |
 | `make check-docs` | 文档事实门禁：`docs/**` 与各级 README 里写出的 `make <target>`、仓库路径、相对链接、`文件:行号` 引用必须与当前代码一致；无匹配即失败，陈述"某物不存在"的行用同行 `<!-- check-docs:ignore 理由 -->` 豁免 | 无 | 本地（CI 未接入该 target）；`make quality` 已含 |
 | `make check-config-keys` | 配置键真实性门禁（REQ-094/TASK-094）：双向——①每个服务配置文件（`configs/*.dev.yaml`、`deploy/kustomize/**/configs/*.yaml`）的叶子键必须解析到 `ServiceConfig` 的 mapstructure 路径或 orchestrator 自有结构体 raw 段（`gc`/`emergency`/`trust`）；②`ServiceConfig` 每个叶子字段必须在 `cmd/`+`internal/` 非测试代码中存在选择器引用（allowlist 需附理由）。`TestFakeKeyFailsTheGate` 为负控制。实现：`internal/config/configkeys_gate_test.go` | 无（Go 测试） | 本地；`make quality` 已含（CI 未接入） |
 | `make check-probes` | kustomize 探针真实性门禁（REQ-099/TASK-099）：`deploy/kustomize` 下每个 Deployment 容器必须有 `startupProbe`、每个探针显式 `timeoutSeconds`、readiness/liveness 路径分离（`/readyz` vs `/health`；配对例外须登记）。`TestProbeGateRejectsHistoricalShape` 用 REQ-099 前的真实形态作负控制。实现：`deploy/dev/probes_gate_test.go` | 无（Go 测试） | 本地；`make quality` 已含（CI 未接入） |
 | `make lint-proto` | `buf lint`（`buf.yaml` 的 `STANDARD` 减去 3 条命名规则）。**注意**：`STANDARD` 不含 `COMMENT_*`，因此它通过**不代表** proto 注释完整；注释覆盖靠人工与 `api/proto` 变更评审保证，`buf.yaml` 内记录了不开 `COMMENT_*` 的理由。当前基线干净（`ReleaseMode` 的两个历史枚举值用同行 `buf:lint:ignore` 定点豁免并写明原因） | `buf`（缺失时 `make` 会 `go install`） | 本地（`make quality` 已含；CI 未接入该 target） |
-| `make quality` | `sdk-check` + `test-coverage` + `lint` + `check-reqs` + `check-licenses` + `check-docs` + `check-config-keys` + `check-probes` + `lint-proto` 的聚合门禁 | 同各子项 | 本地；CI 不直接调用，而是分 job 跑等价命令 |
+| `make quality` | `sdk-check` + `test-coverage` + `lint` + `check-reqs` + `check-licenses` + `check-docs` + `check-config-keys` + `check-migrations` + `check-probes` + `lint-proto` 的聚合门禁 | 同各子项 | 本地；CI 不直接调用，而是分 job 跑等价命令 |
 | `make test-install-sdk` / `test-upgrade-sdk` / `test-rollout-watch` | Helm Install / Upgrade / Rollout watch SDK 链路 | Docker + kind（rollout 另有 120 秒时长门禁） | 本地 + CI 对应 job（各 15 分钟超时） |
 | `make test-rollback-sdk` | Rollback SDK 链路 | 无（in-memory storage + `kubefake`） | 本地（CI 未接入） |
 | `make test-operator-image-sdk-only` | operator 镜像合规（内部先调 `make docker-build-operator` 产出并 `docker save` 镜像 tarball） | Docker | 本地 + CI `operator-image-sdk-only` job |
@@ -178,6 +180,7 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 | job | 跑什么 | 触发范围 |
 | --- | --- | --- |
 | `sdk-check` | `go run ./cmd/sdkcheck/ -exceptions sdkcheck.exceptions.yaml ./...` | 全部触发 |
+| `vulncheck` | `make vulncheck`（安装固定版本 govulncheck 后跑 `scripts/vulncheck.sh`） | 全部触发 |
 | `license-check` | `make check-licenses`（10 分钟超时；读模块缓存里的 LICENSE 文本与前端 lockfile，不安装额外扫描器） | 全部触发 |
 | `install-sdk` | `make test-install-sdk` | 全部触发 |
 | `upgrade-sdk` | `make test-upgrade-sdk` | 全部触发 |
