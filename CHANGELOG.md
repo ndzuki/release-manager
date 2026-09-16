@@ -14,7 +14,7 @@
 
 ## 2026-09
 
-里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 14 个 PR 合入。
+里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 15 个 PR 合入。
 
 ### 执行链路（升级 / 回滚）
 
@@ -50,6 +50,11 @@
 ### Bundle ingress 认证（Added）
 
 - `SubmitReleaseBundle` 由 CI API key 认证、新增 `POST /webhooks/harbor`（Harbor 独立 key）并挂载 Harbor adapter，出站以 `service:release-harbor` 调 `RecordArtifactEvent`（scope 仅该 procedure）；两把 key 与两条 procedure 不可互相替换（AC-011-04/16/17）。配套把 `ServiceTokenInterceptor` 对「不在本腿白名单的 token」改为 `unauthenticated` 以支持多凭证并存（保留「在白名单但越 scope → `permission_denied`」），并在 dev 生命周期/kustomize/CI 三处配齐凭据（PR #109，TASK-102）。
+
+### 审计写入收敛（Fixed）
+
+- 审计直写路径收敛：`internal/store/{sqlite,postgres}/operator_management.go` 的事务内审计写入改为经 `store.SanitizeAuditEvent` 兜底脱敏（字段名 + 内容双扫描，比异步 emitter 更严），并新增结构门禁——除登记的 6 个 store 文件外任何 `INSERT [OR IGNORE] INTO audit_events` 都失败，且事务写入者必须调用该兜底（含合成树负控制）（PR #117，TASK-097）。
+- `AuditService/Emit` 按事件 id 幂等：两引擎分别改为 `INSERT OR IGNORE` 与 `ON CONFLICT (id) DO NOTHING`，重放同一事件不再失败也不再写第二行；契约注释显式声明去重键（PR #117，TASK-097）。
 
 ### 供应链与 CI 加固（Added）
 

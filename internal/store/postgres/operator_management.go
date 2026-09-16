@@ -435,6 +435,10 @@ func insertOperatorAuditEvent(ctx context.Context, tx *Tx, event *store.AuditEve
 	if event.ID == "" || event.ActorID == "" || event.OrganizationID == "" || event.Action == "" {
 		return store.ErrAuditUnavailable
 	}
+	// Transactional audit row (ADR-009): it cannot go through the asynchronous
+	// emitter, so it is redacted here instead — no path into audit_events may
+	// store unsanitized text (AGENTS.md hard constraint 6, TASK-097).
+	event = store.SanitizeAuditEvent(event)
 	metadata, err := json.Marshal(event.Metadata)
 	if err != nil {
 		return fmt.Errorf("marshal operator audit metadata: %w", err)

@@ -173,3 +173,35 @@ func TestAuditEventCountFiltersOrganizationAndTimeRange(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), count)
 }
+
+// TestAuditEventInsertIsIdempotentByID covers REQ-050/TASK-097 AC4: the event id
+// is the deduplication key, so replaying the same event (a collector retry, or
+// the emitter's spool replay after a crash) must not fail the batch nor store the
+// row twice. Before this, a duplicate id failed the whole batch and the emitter
+// retried it forever.
+func TestAuditEventInsertIsIdempotentByID(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+	event := &store.AuditEvent{
+		ID: "event-idempotent", ActorKind: store.AuditActorSystem, ActorID: "system",
+		OrganizationID: "org-1", ResourceType: "operator", ResourceID: "op-1",
+		Action: "operator.revoked", Status: "succeeded", CreatedAt: time.Now().UTC(),
+	}
+
+	require.NoError(t, st.AuditEvents().Create(ctx, event))
+	// A replay with different content keeps the original row (first write wins).
+	replay := *event
+	replay.Action = "operator.revoked.again"
+	require.NoError(t, st.AuditEvents().Create(ctx, &replay), "a duplicate id must not fail the insert")
+
+	require.NoError(t, st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{event, event}),
+		"a batch containing duplicates must not fail")
+
+	stored, err := st.AuditEvents().GetByID(ctx, "event-idempotent")
+	require.NoError(t, err)
+	assert.Equal(t, "operator.revoked", stored.Action, "the first write wins; a replay does not overwrite")
+
+	page, err := st.AuditEvents().Query(ctx, store.AuditEventFilter{ResourceType: "operator", ResourceID: "op-1"}, "", 10)
+	require.NoError(t, err)
+	assert.Len(t, page.Events, 1, "the deduplication key is the event id")
+}
