@@ -120,7 +120,7 @@ func environmentHandler(service string) http.HandlerFunc {
 //
 //nolint:gocyclo // Service startup keeps lifecycle and shutdown gates explicit in one owner.
 func Run(configPath string, svc Service) {
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger, logLevel := startupLogger()
 
 	cfg, err := config.LoadService(configPath)
 	if err != nil {
@@ -130,7 +130,7 @@ func Run(configPath string, svc Service) {
 	if aware, ok := svc.(configAwareService); ok {
 		aware.Configure(cfg)
 	}
-
+	applyLogLevel(cfg.LogLevel, logLevel, logger)
 	readinessChecks := map[string]func() error{
 		"noop": func() error { return nil },
 	}
@@ -255,4 +255,30 @@ func shutdownExtraServers(ctx context.Context, extra []*http.Server, logger *slo
 			logger.Error("extra server shutdown error", "addr", extraSrv.Addr, "error", err)
 		}
 	}
+}
+
+// startupLogger builds the process-wide JSON logger (stderr) behind a mutable
+// level and installs it as the slog default so packages logging through
+// slog.Default() / slog.Info (the majority) share the configured level. The
+// level starts at Debug (the pre-wiring hardcoded value) and is adjusted by
+// applyLogLevel once the config is loaded.
+func startupLogger() (*slog.Logger, *slog.LevelVar) {
+	level := new(slog.LevelVar)
+	level.Set(config.DefaultLogLevel)
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	slog.SetDefault(logger)
+	return logger, level
+}
+
+// applyLogLevel honors the configured log_level (TASK-094, REQ-094 AC2):
+// different values observably change the shared handler's level. An invalid
+// value keeps the Debug default and is surfaced as a warning instead of
+// failing startup, so a typo cannot lock anybody out of the logs.
+func applyLogLevel(raw string, level *slog.LevelVar, logger *slog.Logger) {
+	parsed, err := config.ParseLogLevel(raw)
+	if err != nil {
+		logger.Warn("invalid log_level, keeping debug", "log_level", raw, "error", err)
+		return
+	}
+	level.Set(parsed)
 }

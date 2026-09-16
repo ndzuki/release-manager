@@ -21,7 +21,7 @@
 | operator 网关（orchestrator 的第二个监听） | 8084 | 8084 → 30084 | 无 HTTP 路由 | mTLS only，`cmd/orchestrator/main.go:194-205` |
 | release-auth | 8085 | 8085 → 30085 | `/readyz` + `/health` | `deploy/kustomize/services/auth.yaml:43-53` |
 | release-notifier | 8086 | 8086 → 30086 | `/readyz` + `/health` | `deploy/kustomize/services/notifier.yaml:36-46` |
-| release-web | 8087 | 8087 → 30087 | `/`（SPA 首页） | `deploy/kustomize/services/web.yaml:27-37` |
+| release-web | 8087 | 8087 → 30087 | `/`（SPA 首页） | `deploy/kustomize/services/web.yaml:27-50` |
 | release-notification-sink | 8088 | 无（仅 ClusterIP） | `/readyz` + `/health` | `deploy/kustomize/services/notification-sink.yaml:32-42` |
 | 客户集群 operator agent | 8084 | 无 | `/readyz` + `/health` | `deploy/kustomize/customer-agent/base/deployment.yaml:57-67` |
 | postgres / redis | 5432 / 6379 | 无 | `pg_isready` / `redis-cli ping` | `deploy/kustomize/postgres/deployment.yaml:38-47`、`deploy/kustomize/redis/deployment.yaml:27-35` |
@@ -68,13 +68,13 @@
   - orchestrator：`database`（2s 超时的 ping）+ `cleanup_gc`（`cmd/orchestrator/main.go:248-266`）；
   - auth：`database` + `redis`（`cmd/auth/main.go:67-87`）；
   - notifier：`database`（`cmd/notifier/main.go:50-61`）；
-  - **webhook、notification-sink、operator agent 没有实现 `ReadinessChecks`**（`grep ReadinessChecks` 在 `cmd/` 下只命中 auth/notifier/orchestrator 三个 main），因此它们的 `/readyz` 只有启动时注入的 `noop` 检查（`internal/app/app.go:134-136,152-158`），**恒为 200**。
-- `/health`（liveness 目标）**没有任何失败路径**：无条件 `WriteHeader(200)` + `{"status":"ok"}`（`internal/handler/health.go:12-28`）。orchestrator 额外挂一个 `gc` 子对象（`internal/app/app.go:139-143` + `cmd/orchestrator/main.go:268-289`，字段 `status`/`last_success_at`/`last_attempt_at`，Unix 秒）。结论：liveness 失败只可能是**进程已死、启动未完成、或 1 秒内没答完**，不代表依赖健康。
+  - **webhook、notification-sink、operator agent 现已实现 `ReadinessChecks`**（TASK-099；`grep ReadinessChecks cmd/` 命中六个 main）：webhook 检查上游 orchestrator 的 `/readyz`（`cmd/webhook/main.go:90`）——**orchestrator NotReady 会级联使 webhook NotReady，这是设计**（它没有转发对象时接客无意义）；operator agent 检查 gateway 会话存活（`cmd/operator/main.go:382`，重连窗口内 NotReady 是真实状态）；notification-sink 检查配置可用（`cmd/notification-sink/main.go:151`）。未实现检查的进程仍回 `noop` 恒 200（`internal/app/app.go:134-136,152-158`），但 kustomize 内已无此类服务。
+- `/health`（liveness 目标）**没有任何失败路径**（REQ-099 裁定：可失败性一律归 `/readyz`）：无条件 `WriteHeader(200)` + `{"status":"ok"}`（`internal/handler/health.go:12-28`）。orchestrator 额外挂一个 `gc` 子对象（`internal/app/app.go:139-143` + `cmd/orchestrator/main.go:268-289`，字段 `status`/`last_success_at`/`last_attempt_at`，Unix 秒）。结论：liveness 失败只可能是**进程已死、启动未完成（超出 startupProbe 预算）、或 3 秒内没答完**，不代表依赖健康。
 - 启动期任何一步失败都会直接退出进程：配置加载失败 `failed to load config` → `os.Exit(1)`；`Register` 失败（含 store 打开、PostgreSQL 迁移、Redis ping）`failed to register service` → `os.Exit(1)`（`internal/app/app.go:125-149`）。这两条日志就是 CrashLoop 的第一现场。
-- 探针时间预算是 K8s 默认值：manifest 里只设置了 `periodSeconds`（readiness 5s）与 `initialDelaySeconds: 10` + `periodSeconds: 10`（liveness），**全仓 `deploy/kustomize/` 没有任何 `timeoutSeconds` / `failureThreshold` / `startupProbe`**（grep 无命中）。默认 `timeoutSeconds=1`、`failureThreshold=3` ⇒ 容器启动约 40s 后仍未答 `/health` 就会被杀。而迁移是在 `Register` 内同步跑完才开始监听（`internal/app/app.go:146` → `cmd/orchestrator/main.go:524-545`），所以**一次慢迁移可能被 liveness 打断，表现为反复 CrashLoop 且每轮日志都从头重放迁移**。
+- 探针时间预算是显式的（TASK-099）：每个应用容器有 `startupProbe`（httpGet `/health`，period 5s，HTTP `timeoutSeconds: 3`）——orchestrator/auth/notifier/webhook/notification-sink `failureThreshold: 120`（10 分钟启动预算），customer agent 60；startup 通过后 liveness 才有发言权。`readinessProbe` 指 `/readyz`（timeout 3s、failureThreshold 3；agent 为 12 以容忍重连窗），`livenessProbe` 指 `/health`（timeout 3s、failureThreshold 3）。防漂移：`make check-probes`。**曾经的形态（迁移前的风险）**：全树无 `startupProbe`、K8s 默认 `timeoutSeconds=1`，而迁移在 `Register` 内同步跑完才开始监听（`internal/app/app.go:146` → `cmd/orchestrator/main.go:524-545`）⇒ 一次慢迁移可能被 liveness 打断，表现为反复 CrashLoop 且每轮日志都从头重放迁移——若再次看到该形态，说明 manifest 被回退。
 - 关停预算只有 5 秒（HTTP server + extra 网关 + `Shutdowner` + `Close`，`internal/app/app.go:215-231`）。审计刷盘超过 5s 会留下 `audit emitter shutdown: context deadline exceeded`（`internal/audit/emitter.go:115-120`）。
 - 8084 网关不是 HTTP 服务：只有 OperatorService 与 SyncInventory 两条路由，`ReadHeaderTimeout: 10s`、TLS1.3、`VerifyClientCertIfGiven`（`cmd/orchestrator/main.go:166-205`）。用普通 HTTP 探测它会得到 `Client sent an HTTP request to an HTTPS server`，dev 生命周期因此只做 TCP 连通性探测（`deploy/dev/dev.sh:1176-1180`）。**对 8084 做 HTTP 探针失败不是故障**。
-- web 的探针指向 `/`（`deploy/kustomize/services/web.yaml:27-37`），nginx 才把 `/health`、`/readyz`、`/environment` 反代到 orchestrator（`web/nginx.conf:77-101`）：所以 **8087 的 `/readyz` 报的是 orchestrator 的健康度**，不要据此判断 web 自身。
+- web 的探针指向 `/`（`deploy/kustomize/services/web.yaml:27-50`），nginx 才把 `/health`、`/readyz`、`/environment` 反代到 orchestrator（`web/nginx.conf:77-101`）：所以 **8087 的 `/readyz` 报的是 orchestrator 的健康度**，不要据此判断 web 自身。
 
 **处置动作**
 
@@ -111,8 +111,8 @@ curl -sS http://127.0.0.1:8083/readyz                                     # 期�
 
 **确认依据（现状）**
 
-- 配置键与位置：`database.driver`、`database.dsn`、`database.max_open_conns`、`database.max_idle_conns`、`database.conn_max_lifetime`、`database.conn_max_idle_time`（`internal/config/config.go:24-31`）。环境变量覆盖映射：`DATABASE_DRIVER`、`DATABASE_DSN`、`DATABASE_MAX_OPEN_CONNS`、`DATABASE_MAX_IDLE_CONNS`、`DATABASE_CONN_MAX_LIFETIME`（`internal/config/config.go:271-278`）。
-- 集群内取值：`deploy/kustomize/dev/configs/orchestrator.dev.yaml:3-5`（`postgres://release_manager:dev-release-manager@postgres:5432/release_manager?sslmode=disable`）、`deploy/kustomize/dev/configs/auth.dev.yaml:3-5`、`deploy/kustomize/dev/configs/notifier.dev.yaml:3-5`（后者指向独立库 `release_notifier`）。凭据来自静态 Secret `release-manager-dev-credentials`（`deploy/kustomize/base/secret.yaml:2-15`）；`release_notifier` 库由 `deploy/kustomize/postgres/init.sql:4` 创建。
+- 配置键与位置：`database.driver`、`database.dsn`、`database.max_open_conns`、`database.max_idle_conns`、`database.conn_max_lifetime`、`database.conn_max_idle_time`（`internal/config/config.go:24-31`）。环境变量覆盖映射：`DATABASE_DRIVER`、`DATABASE_DSN`、`DATABASE_MAX_OPEN_CONNS`、`DATABASE_MAX_IDLE_CONNS`、`DATABASE_CONN_MAX_LIFETIME`（`internal/config/config.go:272-279`）。
+- 集群内取值：`deploy/kustomize/dev/configs/orchestrator.dev.yaml:3-5`（`postgres://release_manager:dev-release-manager@postgres:5432/release_manager?sslmode=disable`）、`deploy/kustomize/dev/configs/auth.dev.yaml:3-5`、`deploy/kustomize/dev/configs/notifier.dev.yaml:3-5`（后者指向独立库 `release_notifier`）。凭据来自静态 Secret `release-manager-dev-credentials`（`deploy/kustomize/base/secret.yaml:4-17`）；`release_notifier` 库由 `deploy/kustomize/postgres/init.sql:4` 创建。
 - **连接池参数只对 PostgreSQL 生效**：`internal/postgres/db.go:46-49` 才调用 `SetMaxOpenConns/SetMaxIdleConns/SetConnMaxLifetime/SetConnMaxIdleTime`；SQLite 路径的 `Open(dsn)` 只接受 DSN（`internal/store/sqlite/db.go:70-95`），并固定注入 `_pragma=busy_timeout(5000)&_txlock=immediate` + `journal_mode=WAL` + `foreign_keys=ON`（`internal/store/sqlite/db.go:75-89`）。**在 SQLite 路径上调池参数是无效操作**。
 - 池默认值：`max_open_conns` 缺省 25、`max_idle_conns` 缺省 10（`internal/postgres/config.go:26-34`）；`conn_max_lifetime` / `conn_max_idle_time` 无默认（0 = 不限制）。当前 `deploy/kustomize/dev/configs/*.dev.yaml` 都没写这些键，即跑默认值。
 - DSN 校验很硬：必须以 `postgres://` 或 `postgresql://` 开头且 scheme/host/path 完整（`internal/postgres/config.go:12-24`），driver 只接受 `postgres|sqlite`（`internal/config/config.go:41-56`）。任一不满足 → `dsn_invalid: ...` → 服务不起。
@@ -123,7 +123,7 @@ curl -sS http://127.0.0.1:8083/readyz                                     # 期�
   3. SQLite：**不走 `migrations/`**。启动时执行内嵌 Go DDL/ALTER（`internal/store/sqlite/db.go:91-94` → `internal/store/sqlite/db.go:1116+`）。所以「`migrations/` 里加了列但 SQLite 没有」是真实可能，双引擎必须两边都改（`docs/architecture.md:119-126` 的分环境引擎约束）。
   4. 显式回滚：`RunMigrationsDown`（`internal/postgres/migrate.go:31-40`，注释明确「never normal service startup」），在 dev 生命周期里唯一使用者是 `devseed --reset`（`internal/devfixture/reset.go:47-75`），入口 `make dev-reset-data CONFIRM=1`（`deploy/dev/dev.sh:1681-1861`）。
   5. `cmd/store-migrate` 是 **SQLite → PostgreSQL 的数据搬迁 CLI**（`--source`、`--target-dsn`、`--migrations`；目标 DSN 走 `RELEASE_MANAGER_DATABASE_DSN` 或 flag，`cmd/store-migrate/main.go:35-41`），错误分类 `connection_unavailable|migration_failed|data_import_mismatch`（`cmd/store-migrate/main.go:81-90`），校验不过整体事务回滚（`internal/migration/migrate.go:41-45,105-135`）。它**不在 dev 生命周期内**，且 `--target-dsn` 含明文口令，注意不要写进共享终端历史。
-- 持久性现状（决定处置顺序）：postgres 的数据目录是 `emptyDir`（`deploy/kustomize/postgres/deployment.yaml:56-60`），redis 是 `--appendonly no`（`deploy/kustomize/redis/deployment.yaml:23`）。⇒ **`dev-down`（删集群）即丢全部业务数据**；只有 orchestrator 有 PVC `release-manager-orchestrator-data`（`deploy/kustomize/base/pvc.yaml:1-13`，挂到 `/data`，`deploy/kustomize/services/orchestrator.yaml:87-88,104-106`），其中存放 agent 网关 CA（`/data/gateway-ca.*`）与审计 spool（§4）。
+- 持久性现状（决定处置顺序）：postgres 的数据目录是 `emptyDir`（`deploy/kustomize/postgres/deployment.yaml:56-60`），redis 是 `--appendonly no`（`deploy/kustomize/redis/deployment.yaml:23`）。⇒ **`dev-down`（删集群）即丢全部业务数据**；只有 orchestrator 有 PVC `release-manager-orchestrator-data`（`deploy/kustomize/base/pvc.yaml:1-13`，挂到 `/data`，`deploy/kustomize/services/orchestrator.yaml:102,118-120`），其中存放 agent 网关 CA（`/data/gateway-ca.*`）与审计 spool（§4）。
 
 **处置动作**
 
@@ -170,7 +170,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 - 落库语义：`Heartbeat` 只在 `status IN ('online','suspect')` 时更新，并把 `status_reason` 置回 NULL；影响 0 行返回 `ErrNotFound`（`internal/store/postgres/operators.go:743-759`）。`UpdateStatus` 把 `suspect → heartbeat_delayed`、`offline → heartbeat_timeout`，且跳过 `revoked` 行（`internal/store/postgres/operators.go:761-785`）。
 - **判定的真实形状（重要，容易误判）**：
   - 服务端有自驱动心跳：`hbTicker = heartbeatMaxAge/2`（15s）在流存活期间**由 orchestrator 自己**调 `Sessions().Heartbeat`（`internal/operator/service.go:536-539,576-585`）。也就是说 `last_heartbeat` 新鲜 ⇒ 只证明「orchestrator 进程内的这条流处理协程还活着」，**不证明 agent 活着**。
-  - agent 侧（`internal/operator/agent`，即 `make dev-up` 部署的那个）**不发送 `Heartbeat` 消息**：`Heartbeat` 在 `CommandStreamRequest` oneof 里存在（`api/proto/operator/v1/operator.proto`），服务端也有处理分支（`internal/operator/service.go:622-625`），但 `internal/operator/agent/agent.go` 的全部发送点里没有 Heartbeat：Hello（`internal/operator/agent/agent.go:191-192`）、ResyncResponse（`:238-239`）、WorkloadIdentityReport（`:584-585`）、CommandResult（`:1127`）、Ack（`:1144`）、EmergencyAck（`:1157`）、EmergencyResult（`:1165`）、Result（`:1174`）；`RolloutProgress` 不在 `agent.go` 里，而由独立的 rollout reporter 发送（`internal/operator/agent/rollout_progress.go:56,73-74,94`，在 agent 路径里已接线：`cmd/operator/main.go:220`）⇒ 标准 Operation 期间 timeline 应当出现 `ROLLOUT_PROGRESS`，它的缺失才是有效信号。
+  - agent 侧（`internal/operator/agent`，即 `make dev-up` 部署的那个）**不发送 `Heartbeat` 消息**：`Heartbeat` 在 `CommandStreamRequest` oneof 里存在（`api/proto/operator/v1/operator.proto`），服务端也有处理分支（`internal/operator/service.go:622-625`），但 `internal/operator/agent/agent.go` 的全部发送点里没有 Heartbeat：Hello（`internal/operator/agent/agent.go:202-203`）、ResyncResponse（`:252-253`）、WorkloadIdentityReport（`:598-599`）、CommandResult（`:1141`）、Ack（`:1158`）、EmergencyAck（`:1171`）、EmergencyResult（`:1179`）、Result（`:1188`）；`RolloutProgress` 不在 `agent.go` 里，而由独立的 rollout reporter 发送（`internal/operator/agent/rollout_progress.go:56,73-74,94`，在 agent 路径里已接线：`cmd/operator/main.go:220`）⇒ 标准 Operation 期间 timeline 应当出现 `ROLLOUT_PROGRESS`，它的缺失才是有效信号。
   - `SessionRegistry`（按 `age >= offlineAfter`/`age >= suspectAfter` 评估在线性并调 `UpdateStatus`，`internal/operator/session_registry.go:27-45,72-104`，`checkEvery = suspectAfter/2`）在 `cmd/` 与生产装配路径里**没有任何调用者**（`grep NewSessionRegistry` 只命中定义本身）⇒ 这套在线性推进器不运行。唯一会主动改 session 状态的后台循环是 `runSessionExpiry`（30s tick + `ListExpiredSuspect(60s)`，`cmd/operator/main.go:303-336`），但它依赖 `s.st`，而 SQLite store 只在 `agent.mode == gateway` 时打开（`cmd/operator/main.go:243-251`）⇒ 部署形态里这个循环每次 tick 都 `s.st == nil` 直接 continue（`cmd/operator/main.go:87,312-314`）。
   - ⇒ **现状结论**：会话从 `online` 掉出来的真实触发只有三种：① 心跳落库失败（`internal/operator/service.go:579-584`）；② 流结束（`ctx.Done()`，`internal/operator/service.go:611-615`）；③ 重连时新会话替换旧会话（`session_replaced`，`internal/store/sqlite/operators.go:442-448`）。`suspect` 与 `expires_at` 主要作为**读侧展示值**存在，不要把它们当告警依据。
 - 重连与恢复（现状）：
@@ -210,16 +210,16 @@ KUBECONFIG=data/kubeconfigs/dev-customer-a-direct.yaml kubectl -n release-manage
 
 **确认依据（现状）**
 
-- 全部参数是**硬编码默认值，不可配置**：`BufferSize: 4096`、`FlushInterval: 5 * time.Second`、`BatchSize: 200`、`SpoolPath: "data/audit_spool.jsonl"`（`internal/audit/emitter.go:43-46`），三个装配点都只用 `audit.DefaultConfig()`（`cmd/orchestrator/main.go:343`、`cmd/operator/main.go:254`、`cmd/api/main.go:47`）。
+- 全部参数是**硬编码默认值，不可配置**：`BufferSize: 4096`、`FlushInterval: 5 * time.Second`、`BatchSize: 200`、`SpoolPath: "data/audit_spool.jsonl"`（`internal/audit/emitter.go:43-46`），三个装配点都只用 `audit.DefaultConfig()`（`cmd/orchestrator/main.go:343`、`cmd/operator/main.go:254`、`cmd/api/main.go:59`）。
 - `Emit` 非阻塞：归一化失败 → `invalid_event`；已关停 → `store_unavailable`；缓冲满 → `buffer_full` 并打 Warn `audit buffer full`（带 `event_id`/`resource_type`/`action`）后**丢弃该事件**（`internal/audit/emitter.go:69-98`）。
 - worker 行为：攒够 200 条或每 5s 落一次；`CreateBatch` 失败打 Error `audit batch persistence failed`（带 `count`/`error`），并**把失败批次重新插回队首无界重试**（`internal/audit/emitter.go:123-157`）⇒ 库长时间不可写时进程内存单调上涨。通道关闭时先 flush，残余写 spool（`internal/audit/emitter.go:141-147`）。
-- spool 落盘：JSONL、文件 0600、目录 0700、显式 `Sync`（`internal/audit/emitter.go:168-198`）。路径是**相对**的，解析到容器 `WORKDIR /data`（`deploy/docker/Dockerfile.orchestrator:14`）⇒ 实际写入 `/data/data/audit_spool.jsonl`，落在 orchestrator 的 PVC 上（`deploy/kustomize/services/orchestrator.yaml:87-88`）。
+- spool 落盘：JSONL、文件 0600、目录 0700、显式 `Sync`（`internal/audit/emitter.go:168-198`）。路径是**相对**的，解析到容器 `WORKDIR /data`（`deploy/docker/Dockerfile.orchestrator:14`）⇒ 实际写入 `/data/data/audit_spool.jsonl`，落在 orchestrator 的 PVC 上（`deploy/kustomize/services/orchestrator.yaml:100-102`）。
 - **spool 只写不回灌**：`NewSpoolRecoverer(...).Recover(ctx, path)` 只在测试里被调用（`internal/audit/spool.go:20-28`；全仓非测试调用者为 0）⇒ 一旦事件进了 spool，就永久留在文件里，不会自动补进 `audit_events`。
 - 审计是 best-effort：业务写路径提交后 `Emit`，被拒只 Warn（`internal/orchestrator/service.go:1516-1528`），例如 `emergency timeout audit event rejected`（`internal/orchestrator/emergency.go:355-357`）。**这与 `docs/decisions/ADR-011-controlled-emergency-change-and-convergence.md` 里「审计写入失败会阻塞业务提交」的表述不一致**，见 §10。
 - 三个「整体没有审计」的现状：
   1. 维护模式下**根本不创建 emitter**（`cmd/orchestrator/main.go:342-344`），此时所有 `emitAudit` 直接 return（`internal/orchestrator/service.go:1516-1519`）⇒ 维护窗口内的写操作无审计。
-  2. `release-api` 的归档 worker 不会被启动：`app.Run` 只认 `Run(context.Context)`（`internal/app/app.go:42-44,184-186`），而 `apiSvc` 实现的是 `RunBackground(ctx, *slog.Logger)`（`cmd/api/main.go:72-76`）⇒ 签名不匹配，retention 归档实际不跑。同理 `apiSvc.Close(ctx)` 不满足 `Close() error`（`internal/app/app.go:46-48` vs `cmd/api/main.go:78`）⇒ **release-api 关停时不 flush、不关 emitter**，最后 ≤5s 的事件随进程消失。
-  3. 归档 worker 只有在 `retention_days > 0` 时运行（`internal/audit/archive_config.go:19-29,31+`，`internal/audit/archive_worker.go:26-50`），且**唯一的配置来源是 `configs/api.dev.yaml:3-10`**（`audit.archive.*`，由 `cmd/api/main.go:96-108` 读取）。集群里没有 release-api Deployment ⇒ 现网没有归档执行者。
+  2. ~~worker 签名不匹配不启动~~ **TASK-094 §7-9 已修复**：`apiSvc.Run(context.Context)`/`Close() error` 现与 `internal/app/app.go:42-48` 的 `backgroundService`/`closeService` 精确匹配并有编译期断言（`cmd/api/main.go:45-48`），本地 `make run-api` 归档循环与关停 flush 真实执行。剩余现实见下条：集群里没有 release-api Deployment。
+  3. 归档 worker 只有在 `retention_days > 0` 时运行（`internal/audit/archive_config.go:19-29,31+`，`internal/audit/archive_worker.go:26-50`），且**唯一的配置来源是 `configs/api.dev.yaml:3-10`**（`audit.archive.*`，由 `cmd/api/main.go:123-136` 读取）。集群里没有 release-api Deployment ⇒ **部署形态**下没有归档执行者（本地 `make run-api` 已有，见上条）。
 - 积压的可观测信号只有日志与文件（`internal/audit/metrics.go:6-26` 的计数器没有任何生产者导出，见 observability 文档）。
 
 **处置动作**
@@ -324,9 +324,9 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
   - `deadline + DeadlineGracePeriod(30s)` 已过 ⇒ 转 `timeout`；
   - 其余 ⇒ **有意保留**，日志 `recovery: non-terminal operation left running for operator reconnect`。看到这条日志 = 系统认为「不算故障」。
   - preflight 的恢复同理：`ResumePreflights` 只在启动时（`cmd/orchestrator/main.go:418`，日志 `preflight operations resumed on restart`）。⇒ **没有周期性收敛**：不重启就不会推进。
-- 投递停滞的真实原因分层：`max_inflight = 1` 会阻塞后续命令下发（`internal/operator/service.go:1278-1287`）；agent 执行超时默认 5 分钟（`internal/operator/agent/agent.go:30` `defaultInstallTimeout`，可被命令 `TimeoutSeconds` 覆盖，`internal/operator/agent/agent.go:702-704`；进程 flag `--install-timeout`，`cmd/operator/main.go:359-366`）；`RolloutProgress`（`internal/operator/service.go:742-745`）缺失意味着 agent 侧 observer 未上报。
+- 投递停滞的真实原因分层：`max_inflight = 1` 会阻塞后续命令下发（`internal/operator/service.go:1278-1287`）；agent 执行超时默认 5 分钟（`internal/operator/agent/agent.go:31` `defaultInstallTimeout`，可被命令 `TimeoutSeconds` 覆盖，`internal/operator/agent/agent.go:716-718`；进程 flag `--install-timeout`，`cmd/operator/main.go:359-366`）；`RolloutProgress`（`internal/operator/service.go:742-745`）缺失意味着 agent 侧 observer 未上报。
 - 「设计内的等待态」清单（现状）：`preflight`（等 preflight 通过/重启恢复）、`queued`/`running` 且 operator 处于重连退避窗口、`cancelling` 且未超 5m、`convergence_tasks.status = pending_promotion`（`internal/orchestrator/rollback.go:95-102` 会因此拒绝新回滚并报 `release_convergence_pending`）、values revision 处于 `pending_approval`（`internal/store/store.go:207`）。
-- 「真故障」清单（现状）：outbox 长期 `pending`/`delivered` 且会话 `offline`；EMERGENCY 越过 deadline 后 `effect_status = UNKNOWN` 且超过 `effect_observe_timeout`（dev 24h，`configs/orchestrator.dev.yaml:47-50`）⇒ stuck lock，日志 `emergency target lock is stuck`（`internal/orchestrator/emergency_stuck.go:290-299`，60s 一轮，`cmd/orchestrator/main.go:786-798`，**只告警+审计，绝不自动解锁**）；`cleanup_gc` 不健康拖垮 readiness（§1）。
+- 「真故障」清单（现状）：outbox 长期 `pending`/`delivered` 且会话 `offline`；EMERGENCY 越过 deadline 后 `effect_status = UNKNOWN` 且超过 `effect_observe_timeout`（dev 24h，`configs/orchestrator.dev.yaml:47-48`）⇒ stuck lock，日志 `emergency target lock is stuck`（`internal/orchestrator/emergency_stuck.go:290-299`，60s 一轮，`cmd/orchestrator/main.go:786-798`，**只告警+审计，绝不自动解锁**）；`cleanup_gc` 不健康拖垮 readiness（§1）。
 - 枚举能力的现状缺口：**`ListOperations` 服务端未实现**，返回 `unimplemented`（`internal/orchestrator/service.go:1531-1533`），Web 也没有调用它（只存在生成的类型）。⇒ 值班没有「列出所有非终态 Operation」的 API 路径，只能按已知 `operation_id` 查，或直接跑只读 SQL（§2、§9）。
 - timeline 的读取路径只有 `WatchOperation`（服务端流，`api/proto/orchestrator/v1/orchestrator.proto:851`）；`last_error` 与 timeline 里的错误摘要都经 `redact.Sanitize` + `redact.Truncate(..., 500)` 脱敏（`internal/store/store.go:2611-2627`）。⇒ 日志/时间线里看到 `****REDACTED****` 是预期，不是数据损坏。
 
@@ -440,7 +440,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 - apply 时才把 manifest 里的 `release-<svc>:dev` 就地替换成内容寻址 tag（内存里 sed，仓库文件不变，`deploy/dev/dev.sh:1104-1118`），客户 agent overlay 同理（`deploy/dev/dev.sh:1298-1330`）。⇒ **`deploy/kustomize/**` 里永远写着 `:dev`，不要据此判断线上镜像**。
 - 已核实存在的 `make` 入口（`Makefile`）：`dev-up`（:108-110）、`dev-down`（:112-114）、`dev-seed`（:116-118）、`dev-status`（:124-126）、`dev-reset-data`（:120-122）、`dev-purge`（:128-130）、`build-all`/`build-<svc>`（:50-76）、`run-<svc>`（:78-101）、`proto`（:274-275）、`dev-stage-*`（:285-357）、`e2e-*`（:155-243）、`api-*`（:247-268）、`quality`（:517-518）、`docker-build-operator`（:496-500）、`test-operator-image-sdk-only`（:502-516）、`check-docs`（:490-492）、`clean`（:533）、`help`（:540）。
 - ⚠️ **`make docker-build-operator` 不是升级入口**：它 build 后 `docker save` 成 tarball，产物与 tag 是 `$(OPERATOR_IMAGE)`，供 REQ-061 的 SDK-only 镜像门禁（`Makefile:496-516`，门禁变量见 `Makefile:37-38`），不 push、不参与 `deploy/kustomize` 渲染。全仓**没有** `make docker-build`/`make docker-push`/`make images-up` 这类目标（`grep -E '^[a-z][a-zA-Z0-9_.-]*:' Makefile` 全量核对）。 <!-- check-docs:ignore 在陈述这些 make 目标不存在，不是可运行入口 -->
-- 配置兼容性现状：viper 只反序列化已知键，**未写的键取 Go 零值/默认**（`internal/config/config.go:15-40`）；`log_level` 是**有键无消费**（定义 `internal/config/config.go:16,131`，全仓无读取点；日志级别被写死 Debug，`internal/app/app.go:123`）⇒ 别指望升级后用它可以调日志量。`gc.*` 是 GC 唯一真读的段（`cmd/orchestrator/main.go:547-560`），`retention:` 块**没有任何消费者**（全仓 `UnmarshalKey` 只有 `gc`/`emergency`/`trust`），而 `deploy/kustomize/dev/configs/orchestrator.dev.yaml:16-21` 恰好只写了 `retention:` ⇒ 集群内 GC 全跑默认值，见 §10。
+- 配置兼容性现状：viper 只反序列化已知键，**未写的键取 Go 零值/默认**（`internal/config/config.go:15-40`）；`log_level` 已接线（TASK-094：`startupLogger`/`applyLogLevel`，`internal/app/app.go:123/133`——空/非法值回落 debug）。`gc.*` 是 GC 唯一真读的段（`cmd/orchestrator/main.go:547-560`），`retention:` 块**没有任何消费者**（全仓 `UnmarshalKey` 只有 `gc`/`emergency`/`trust`）——dev overlay 曾恰好只写 `retention:` 导致集群 GC 跑默认值，TASK-094 已换成规范 `gc:` 块（`deploy/kustomize/dev/configs/orchestrator.dev.yaml:23-31`，§7-3），写错键名会被 `make check-config-keys` 拒绝。
 - 迁移与回退风险：升级会在新进程启动时自动 `m.Up()`（§2.现状）；**没有与镜像同批的 schema 降级通道**（`RunMigrationsDown` 只被 dev 重置路径使用）。因此「新 schema + 旧二进制」通常是**不可逆**的（旧代码不认识新列/新约束）。
 
 **处置动作（推荐顺序）**
@@ -533,7 +533,7 @@ curl -sS http://127.0.0.1:5001/v2/release-orchestrator/tags/list | head -c 500
 | Operation 无 deadline 长期非终态 | 发布 owner（**属设计内等待**，先别升级级处理） | `internal/orchestrator/operation/recover.go:71-87` |
 | `emergency target lock is stuck` | 需要 `release_admin`/`platform_admin` 级别决策（§7.3） | `internal/orchestrator/emergency_stuck.go:290-309`、`docs/glossary.md:112` |
 | 审计缺失且日志 `audit buffer full` | 平台 owner + 合规 owner（审计完整性影响评估） | `internal/audit/emitter.go:86-98` |
-| 通知没送达 | 通知 owner；先看 sink（`GET http://127.0.0.1:8088/notifications`，含 `dropped_count`）再看出站重试 | `cmd/notification-sink/main.go:86-131`、`internal/notifier/consumer.go:42-52` |
+| 通知没送达 | 通知 owner；先看 sink（`GET http://127.0.0.1:8088/notifications`，含 `dropped_count`）再看出站重试 | `cmd/notification-sink/main.go:87-132`、`internal/notifier/consumer.go:42-52` |
 
 叫级判据（现状）：影响「写路径正确性」（错误回滚、错误紧急放行、审计丢失）→ 立即升级；只影响「可读性/及时性」（timeline 不动、通知延迟、`sequence gap detected` 噪声）→ 记录并观察。通知侧现状参数：轮询 10s、投递上限 10 次、指数退避 5s→24h、任务 deadline 24h 后 dead-letter、dead-letter 保留 30 天（`internal/notifier/consumer.go:42-52`、`internal/notifier/retry.go:24-32`）。
 
@@ -542,9 +542,9 @@ curl -sS http://127.0.0.1:5001/v2/release-orchestrator/tags/list | head -c 500
 以下是读码过程中发现的「文档/配置与代码不一致」，值班时以**代码**为准：
 
 1. **审计失败是否阻塞业务提交**：`docs/decisions/ADR-011-controlled-emergency-change-and-convergence.md` 主张审计写入失败会阻塞对应业务提交；实现是异步 best-effort（`internal/orchestrator/service.go:1516-1528`，失败仅 Warn）。影响：合规叙述比实现更强。
-2. **`retention:` 死配置**：`deploy/kustomize/dev/configs/orchestrator.dev.yaml:16-21` 写的 `retention.*` 键无人读取（真实键段是 `gc.*`，`cmd/orchestrator/main.go:547-560`；全仓 `UnmarshalKey` 只有 `gc`/`emergency`/`trust`）⇒ 集群 GC 跑默认 6h 间隔、90/30/90/7 天保留（`internal/orchestrator/cleanup.go:43-52`）。
-3. **`log_level` 有键无实现**：`internal/config/config.go:16,131` 定义，无消费者；实际级别写死 Debug（`internal/app/app.go:123`）⇒ 现网日志量无法用配置收敛（详见 observability 文档）。
-4. **`release-api` 的归档 worker 与关停刷盘不会被触发**：`cmd/api/main.go:72-94` 的方法签名与 `internal/app/app.go:42-48` 的 `backgroundService`/`closeService` 不匹配 ⇒ `RunBackground`/`Close` 均不被调用；且集群里没有 `release-api` Deployment（`deploy/kustomize/services/kustomization.yaml:3-9`）。影响：审计 retention 与导出在部署形态下无执行者。
+2. ~~**`retention:` 死配置**~~ **TASK-094 已闭环**（§7-3）：dev overlay 已改为规范 `gc:` 块（`deploy/kustomize/dev/configs/orchestrator.dev.yaml:23-31`），集群 GC 真实按文件值跑（当前与默认同值：6h、90/30/90/7，`internal/orchestrator/cleanup.go:43-52`）；写回 `retention:` 会被 `make check-config-keys` 拒绝。
+3. ~~**`log_level` 有键无实现**~~ **TASK-094 已闭环**：级别经 `applyLogLevel` 生效（`internal/app/app.go:133`），空/非法回落 debug；现网可用配置收敛日志量（详见 observability 文档 §1）。
+4. ~~**`release-api` 的归档 worker 与关停刷盘不会被触发**~~ **TASK-094 已闭环**（签名匹配 + 编译期断言，`cmd/api/main.go:93,103`）；**部署形态仍无执行者**：集群里没有 `release-api` Deployment（`deploy/kustomize/services/kustomization.yaml:3-9`）。影响：审计 retention 与导出在集群环境仍无人跑——这是产品决策缺口，不是签名缺陷。
 5. **spool 只写不读**：`internal/audit/spool.go:20-28` 的恢复器无生产调用者 ⇒ 落进 `audit_spool.jsonl` 的事件目前没有任何官方回灌路径。
 6. **`ListOperations` 未实现**：`internal/orchestrator/service.go:1531-1533` ⇒ 没有「列出非终态 Operation」的 API，跨单排查只能走只读 SQL 或已知 ID。
 7. **维护模式不覆盖流式 RPC**：`internal/app/maintenance.go:14-28` 使用 `connect.UnaryInterceptorFunc`（仅包 unary）⇒ 维护窗口内 `WatchOperation`、`CommandStream` 不受门禁（`api/proto/orchestrator/v1/orchestrator.proto:851`、`api/proto/operator/v1/operator.proto:238`）。

@@ -24,15 +24,26 @@ spec:
           ports:
             - name: redis
               containerPort: 6379
+          # TASK-099: explicit probe timeouts + boot budget (REQ-099 AC2).
+          startupProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
           readinessProbe:
             exec:
               command: ["redis-cli", "ping"]
             periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
           livenessProbe:
             exec:
               command: ["redis-cli", "ping"]
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
           resources:
             requests:
               cpu: 10m

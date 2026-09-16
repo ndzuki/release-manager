@@ -4,9 +4,11 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"connectrpc.com/connect"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
@@ -29,11 +31,10 @@ func (s *webhookSvc) Name() string { return "release-webhook" }
 
 func (s *webhookSvc) Configure(_ *config.ServiceConfig) {}
 
+func (s *webhookSvc) Shutdown(_ context.Context) error { return nil }
+
 func (s *webhookSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
-	url := s.orchestratorURL
-	if url == "" {
-		url = "http://localhost:8083"
-	}
+	url := s.orchestratorBaseURL()
 	client := orchestratorv1connect.NewBundleServiceClient(
 		http.DefaultClient,
 		url,
@@ -50,8 +51,6 @@ func (s *webhookSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	mux.Handle(path, handler)
 	return nil
 }
-
-func (s *webhookSvc) Shutdown(_ context.Context) error { return nil }
 
 func main() {
 	configPath := flag.String("config", "configs/webhook.dev.yaml", "path to config file")
@@ -71,4 +70,41 @@ func envOr(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// orchestratorBaseURL is the single source of truth for the upstream
+// orchestrator endpoint, shared by Register's BundleService client and the
+// /readyz probe (TASK-099).
+func (s *webhookSvc) orchestratorBaseURL() string {
+	if s.orchestratorURL != "" {
+		return s.orchestratorURL
+	}
+	return "http://localhost:8083"
+}
+
+// ReadinessChecks implements app's readinessContributor (TASK-099 AC3): the
+// webhook only exists to forward bundle-ingress traffic to the orchestrator,
+// so "Ready" must mean that upstream answers its own /readyz with 200 — not
+// the previous vacuous noop.
+func (s *webhookSvc) ReadinessChecks() map[string]func() error {
+	base := s.orchestratorBaseURL()
+	return map[string]func() error{
+		"orchestrator": func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/readyz", http.NoBody)
+			if err != nil {
+				return err
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return fmt.Errorf("orchestrator %s not reachable: %w", base, err)
+			}
+			defer resp.Body.Close() //nolint:errcheck // the status code is the signal; draining the body is not
+			if resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("orchestrator %s/readyz answered %d (not ready)", base, resp.StatusCode)
+			}
+			return nil
+		},
+	}
 }

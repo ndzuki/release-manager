@@ -16,7 +16,7 @@ deploy/
 ├── fixtures/                  dev 夹具工作负载：Helm chart（chart/）、静态文件 server（cmd/server/main.go）、Dockerfile
 ├── k3d/registries.yaml        k3d registry 配置（docker.io mirror），dev-up 建集群时以 --registry-config 注入（dev.sh:700）
 └── kustomize/
-    ├── base/                  namespace + 共享 ConfigMap/Secret + PVC（base/kustomization.yaml:3-7）
+    ├── base/                  namespace + 共享 Secret + PVC（base/kustomization.yaml:3-6）
     ├── dev/                   管理集群 overlay：聚合 base/postgres/redis/services + configMap/secretGenerator（dev/kustomization.yaml:3-70）
     ├── services/              6 个 Deployment/Service：webhook、orchestrator、auth、notifier、notification-sink、web（services/kustomization.yaml:3-8）
     ├── postgres/ redis/       dev 集群内 PostgreSQL / Redis（postgres 用 emptyDir，无 PVC——dev.sh:1521-1527 注释）
@@ -69,7 +69,7 @@ dev-up 的镜像集合固定为 8 个 service（dev.sh:1009、1023）：`webhook
 
 - **集群内 dev 的权威是 `deploy/kustomize/dev/configs/*.dev.yaml`**：`configMapGenerator` 逐服务生成 `webhook-config`、`orchestrator-config`、`auth-config`、`notifier-config`、`notification-sink-config`（deploy/kustomize/dev/kustomization.yaml:11-31），由 `deploy/kustomize/services/*.yaml` 的 Deployment 挂载。
 - **仓库根 `configs/*.dev.yaml` 是本地进程配置**（`make run-webhook` 等直接 `--config configs/<svc>.dev.yaml`，Makefile:79-101），不是集群配置的副本。两者语义同源、值不同：例如 auth 的数据库，根配置是 `driver: sqlite` + `dsn: data/auth.db`（configs/auth.dev.yaml:3-4），kustomize 配置是 `driver: postgres` + `postgres://...@postgres:5432/release_manager`（deploy/kustomize/dev/configs/auth.dev.yaml:3-6）；orchestrator 的 `authorization.auth_url` 分别是 `http://localhost:8085`（configs/orchestrator.dev.yaml:6）与 `http://auth:8085`（deploy/kustomize/dev/configs/orchestrator.dev.yaml:6）。这正是「dev=SQLite / prod=PostgreSQL」双引擎约束（docs/architecture.md:121-123）在配置层的体现。
-- **Secret 注入**：`secretGenerator` 从 `data/` 下的运行时分段文件取内容——JWT signing key（`data/dev-jwt/jwt-signing-key.pem`）、webhook 服务令牌（`data/dev-service-tokens/webhook-service-token`）、dev mTLS CA（`data/dev-ca/ca.{key,crt}`）（deploy/kustomize/dev/kustomization.yaml:39-70）。kustomize 的 hash 后缀使轮换自动滚动消费方 Deployment；ci profile 下这些文件由环境变量瞬态物化、apply 后即删（deploy/kustomize/dev/kustomization.yaml:32-37 注释、dev.sh:81-86）。共享 dev 凭据（POSTGRES_* 等）在 `deploy/kustomize/base/secret.yaml`（deploy/kustomize/base/secret.yaml:1-10），静态 env 在 `deploy/kustomize/base/configmap.yaml`（deploy/kustomize/base/configmap.yaml:6-10）。
+- **Secret 注入**：`secretGenerator` 从 `data/` 下的运行时分段文件取内容——JWT signing key（`data/dev-jwt/jwt-signing-key.pem`）、webhook 服务令牌（`data/dev-service-tokens/webhook-service-token`）、dev mTLS CA（`data/dev-ca/ca.{key,crt}`）（deploy/kustomize/dev/kustomization.yaml:39-70）。kustomize 的 hash 后缀使轮换自动滚动消费方 Deployment；ci profile 下这些文件由环境变量瞬态物化、apply 后即删（deploy/kustomize/dev/kustomization.yaml:32-37 注释、dev.sh:81-86）。共享 dev 凭据（POSTGRES_* 等）在 `deploy/kustomize/base/secret.yaml`（deploy/kustomize/base/secret.yaml:1-10）。曾有过一个装静态 env 的 `deploy/kustomize/base/configmap.yaml`——零消费者，TASK-094 已删（见 `docs/configuration.md` §7-7）。<!-- check-docs:ignore 陈述已删除文件不存在 -->
 - **客户集群 agent 配置**：`deploy/kustomize/customer-agent/*/configs/operator.dev.yaml` 随 overlay 生成（c1-direct…c4-mixed，与集群的映射在 dev.sh:1198-1203）；单用 enrollment token 与 gateway CA 两个 Secret 由 `agents_up` 命令式注入，不走 secretGenerator（deploy/kustomize/customer-agent/base/kustomization.yaml:9-13 注释、dev.sh:1330 起）。
 
 ## 5. 改部署清单后的校验方式（只读）
@@ -92,4 +92,4 @@ go test ./deploy/dev/...
 
 仓库内**未找到**生产发布流水线：`.github/workflows/` 只有 `test.yml`（测试门禁）与 `sync-to-gitcode.yaml`（镜像同步），没有任何 deploy/publish job；`deploy/kustomize/` 也只有 dev 与 customer-agent 两套 overlay，无 production overlay。生产部署的实际发布流程以知识库（`myNote/Projects/001-release-manager/`）与其它文档为准，本 README 不做描述。
 
-> 事实源：`deploy/dev/dev.sh`、`deploy/dev/dev_test.go`、`deploy/kustomize/**/kustomization.yaml`、`deploy/kustomize/base/{configmap,secret,pvc}.yaml`、`deploy/kustomize/services/*.yaml`、`deploy/kustomize/customer-agent/base/kustomization.yaml`、`deploy/docker/Dockerfile.*`、`deploy/fixtures/**`、`deploy/k3d/registries.yaml`、`Makefile`、`configs/*.dev.yaml`、`.github/workflows/test.yml`、`docs/dev-environment.md`、`docs/architecture.md`、`cmd/imagecheck/main.go`
+> 事实源：`deploy/dev/dev.sh`、`deploy/dev/dev_test.go`、`deploy/dev/probes_gate_test.go`、`deploy/kustomize/**/kustomization.yaml`、`deploy/kustomize/base/{secret,pvc}.yaml`、`deploy/kustomize/services/*.yaml`、`deploy/kustomize/customer-agent/base/kustomization.yaml`、`deploy/docker/Dockerfile.*`、`deploy/fixtures/**`、`deploy/k3d/registries.yaml`、`Makefile`、`configs/*.dev.yaml`、`.github/workflows/test.yml`、`docs/dev-environment.md`、`docs/architecture.md`、`cmd/imagecheck/main.go`

@@ -223,11 +223,12 @@ func (c CAConfig) Validate() error {
 // TLS listener that serves only the OperatorService handler for customer
 // cluster agents. Enroll accepts certificate-less requests; CommandStream
 // enforces client certificates (mixed mTLS contract, plan v1 Step 3).
+// The CA trust anchor lives in the top-level CAConfig (ADR-017); the legacy
+// ca_key_path/ca_cert_path fields were dead config with zero readers and are
+// removed (TASK-094 §7-4).
 type GatewayCfg struct {
-	Enabled    bool   `mapstructure:"enabled"`
-	Port       int    `mapstructure:"port"`
-	CAKeyPath  string `mapstructure:"ca_key_path"`
-	CACertPath string `mapstructure:"ca_cert_path"`
+	Enabled bool `mapstructure:"enabled"`
+	Port    int  `mapstructure:"port"`
 }
 
 // WithDefaults returns bounded defaults for omitted gateway configuration.
@@ -285,8 +286,6 @@ func bindDatabaseEnvironment(v *viper.Viper) error {
 		"authorization.policy_reload_interval": "AUTHORIZATION_POLICY_RELOAD_INTERVAL",
 		"gateway.enabled":                      "GATEWAY_ENABLED",
 		"gateway.port":                         "GATEWAY_PORT",
-		"gateway.ca_key_path":                  "GATEWAY_CA_KEY_PATH",
-		"gateway.ca_cert_path":                 "GATEWAY_CA_CERT_PATH",
 		"agent.customer_id":                    "CUSTOMER_ID",
 		"agent.cluster_id":                     "CLUSTER_ID",
 		"agent.operator_name":                  "OPERATOR_NAME",

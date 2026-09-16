@@ -374,3 +374,22 @@ func main() {
 		installTimeout:  *installTimeout,
 	})
 }
+
+// ReadinessChecks implements app's readinessContributor (TASK-099 AC3). The
+// agent Pod previously served a vacuous noop /readyz, so "Pod Ready" said
+// nothing about the operator being online. Gateway mode has no outbound
+// session; it keeps the noop baseline.
+func (s *operatorSvc) ReadinessChecks() map[string]func() error {
+	if s.agent == nil {
+		return nil
+	}
+	agent := s.agent
+	return map[string]func() error{
+		"gateway_session": func() error {
+			if !agent.Connected() {
+				return errors.New("no live gateway command session (enrolling or reconnecting)")
+			}
+			return nil
+		},
+	}
+}

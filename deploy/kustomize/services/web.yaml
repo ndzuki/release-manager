@@ -24,17 +24,30 @@ spec:
           ports:
             - name: http
               containerPort: 8087
+          # TASK-099: static asset server — / is the only endpoint; the
+          # startupProbe replaces the liveness initialDelay as the boot budget.
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 3
+            timeoutSeconds: 3
+            failureThreshold: 20
           readinessProbe:
             httpGet:
               path: /
               port: http
             periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
           resources:
             requests:
               cpu: 10m

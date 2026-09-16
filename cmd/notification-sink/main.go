@@ -11,6 +11,7 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -139,4 +140,21 @@ func main() {
 	configPath := flag.String("config", "deploy/kustomize/dev/configs/notification-sink.dev.yaml", "path to config file")
 	flag.Parse()
 	app.Run(*configPath, &notificationSink{capacity: 100})
+}
+
+// ReadinessChecks implements app's readinessContributor (TASK-099 AC3). The
+// sink is a dev-only test double with no database or upstream, so the old
+// noop /readyz could not fail at all. Its one real precondition is a decoded,
+// servable configuration: without a valid http_port the ring endpoints would
+// not be where the notifier and e2e probes expect them, so /readyz fails
+// closed on that instead of pretending nothing can break.
+func (s *notificationSink) ReadinessChecks() map[string]func() error {
+	return map[string]func() error{
+		"config": func() error {
+			if s.cfg.HTTPPort <= 0 {
+				return fmt.Errorf("config: http_port must be positive, decoded %d", s.cfg.HTTPPort)
+			}
+			return nil
+		},
+	}
 }

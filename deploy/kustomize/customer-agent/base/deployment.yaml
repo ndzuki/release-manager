@@ -54,17 +54,32 @@ spec:
           ports:
             - name: http
               containerPort: 8084
+          # TASK-099: /readyz now gates on a live gateway session, so the Pod
+          # only becomes Ready once the agent has enrolled and streamed.
+          # startupProbe covers process boot; readiness failureThreshold lets
+          # brief reconnect windows ride out without flapping Ready.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
           readinessProbe:
             httpGet:
               path: /readyz
               port: http
             periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
           livenessProbe:
             httpGet:
               path: /health
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
           resources:
             requests:
               cpu: 10m

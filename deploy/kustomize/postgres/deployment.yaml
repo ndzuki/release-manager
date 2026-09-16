@@ -35,16 +35,28 @@ spec:
             - name: init
               mountPath: /docker-entrypoint-initdb.d/init.sql
               subPath: init.sql
+          # TASK-099: first-boot initdb can outlive the old initialDelay-only
+          # setup; startupProbe gives it a bounded budget, timeouts are explicit.
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
           readinessProbe:
             exec:
               command: ["sh", "-c", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
           livenessProbe:
             exec:
               command: ["sh", "-c", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
             initialDelaySeconds: 15
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             requests:
               cpu: 50m

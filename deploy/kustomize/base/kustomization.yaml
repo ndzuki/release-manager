@@ -3,5 +3,4 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - secret.yaml
-  - configmap.yaml
   - pvc.yaml

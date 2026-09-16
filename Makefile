@@ -161,7 +161,7 @@ e2e-env-config:
 	fixture_file="$(E2E_DATA_DIR)/dev-fixture.json"; \
 	test -r "$$status_file" || { echo "e2e-env-config: missing $$status_file" >&2; exit 2; }; \
 	test -r "$$fixture_file" || { echo "e2e-env-config: missing $$fixture_file" >&2; exit 2; }; \
-	export E2E_RESTART_DEPLOYMENTS="$(E2E_RESTART_DEPLOYMENTS)" E2E_TEST_NAMESPACE="$(E2E_TEST_NAMESPACE)" E2E_ENVIRONMENT="$(E2E_ENVIRONMENT)" E2E_KUBECONFIG="$(abspath $(E2E_DATA_DIR)/kubeconfig.yaml)"; \
+	export E2E_RESTART_DEPLOYMENTS="$(E2E_RESTART_DEPLOYMENTS)" E2E_TEST_NAMESPACE="$(E2E_TEST_NAMESPACE)" E2E_ENVIRONMENT="$(E2E_ENVIRONMENT)"; \
 	if [ -z "$$E2E_RESTART_DEPLOYMENTS" ] && [ -f "$(E2E_DATA_DIR)/dev-deployments.json" ]; then \
 		E2E_RESTART_DEPLOYMENTS="$$(jq -r '(.restart_targets.deployments // .k3d.restart_targets.deployments // []) | join(" ")' "$(E2E_DATA_DIR)/dev-deployments.json")"; export E2E_RESTART_DEPLOYMENTS; \
 	fi; \
@@ -498,6 +498,14 @@ check-licenses: ## Check every shipped dependency's license against the project 
 check-docs: ## Check that documented make targets and repository paths still exist
 	bash scripts/check-docs.sh
 
+.PHONY: check-config-keys
+check-config-keys: ## Gate config-key truthfulness: every service config leaf decodes to a real reader (REQ-094)
+	$(GO) test -race -count=1 -run 'TestConfigFilesKeysResolveToLoaderPaths|TestFakeKeyFailsTheGate|TestStructLeavesHaveReaders|TestTrustVerificationTimeoutReader|TestCustomerAgentOverlaysWirePlainHTTPRegistry' ./internal/config/
+
+.PHONY: check-probes
+check-probes: ## Gate kustomize probe truthfulness: startupProbe + explicit timeouts + split readiness/liveness (REQ-099)
+	$(GO) test -race -count=1 -run 'TestKustomizeProbesAreTruthful|TestProbeGateRejectsHistoricalShape' ./deploy/dev/
+
 
 .PHONY: test-rollback-sdk
 test-rollback-sdk: ## Run Rollback SDK quality gate (REQ-063)
@@ -526,7 +534,7 @@ test-operator-image-sdk-only: ## Run operator image SDK-only gate (REQ-061)
 			--policy imagecheck.operator.yaml \
 			--dockerfile deploy/docker/Dockerfile.operator
 .PHONY: quality
-quality: sdk-check test-coverage lint check-reqs check-licenses check-docs lint-proto ## Full quality gate run
+quality: sdk-check test-coverage lint check-reqs check-licenses check-docs check-config-keys check-probes lint-proto ## Full quality gate run
 
 .PHONY: build-sdkcheck
 build-sdkcheck: proto ## Build sdkcheck

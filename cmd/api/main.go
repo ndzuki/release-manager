@@ -40,6 +40,13 @@ type apiSvc struct {
 
 func (s *apiSvc) Name() string { return "release-api" }
 
+// Compile-time proof that app.Run's optional lifecycle interfaces are actually
+// satisfied (TASK-094 §7-9: RunBackground/Close silently matched nothing).
+var (
+	_ interface{ Run(context.Context) } = (*apiSvc)(nil)
+	_ interface{ Close() error }        = (*apiSvc)(nil)
+)
+
 func (s *apiSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	st, err := sqlitestore.Open(s.dbPath)
 	if err != nil {
@@ -78,14 +85,25 @@ func (s *apiSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	return nil
 }
 
-func (s *apiSvc) RunBackground(ctx context.Context, _ *slog.Logger) {
+// Run implements app.Run's optional backgroundService interface
+// (Run(context.Context)) and starts the audit archive worker loop. The
+// previous RunBackground(ctx, *slog.Logger) signature never matched the
+// interface, so the worker never started and the audit.archive.* config keys
+// had no runtime effect (TASK-094 §7-9).
+func (s *apiSvc) Run(ctx context.Context) {
 	if s.archiveWorker != nil {
 		s.archiveWorker.Run(ctx)
 	}
 }
 
-func (s *apiSvc) Close(ctx context.Context) error {
+// Close implements app.Run's optional closeService interface (Close() error)
+// so shutdown flushes the audit emitter and closes the store. The old
+// Close(ctx) error signature did not match either, which silently dropped the
+// last events on exit. The flush budget mirrors app.Run's 5s shutdown window.
+func (s *apiSvc) Close() error {
 	s.closeOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		var errs []error
 		if s.emitter != nil {
 			if err := s.emitter.Shutdown(ctx); err != nil {

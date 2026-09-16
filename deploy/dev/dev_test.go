@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ndzuki/release-manager/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 // repoRoot resolves the repository root from the test working directory
@@ -2146,12 +2147,27 @@ func TestOrchestratorDevConfigWiresTopLevelCA(t *testing.T) {
 	if err := cfg.CA.Validate(); err != nil {
 		t.Fatalf("dev orchestrator CA config must validate: %v", err)
 	}
-	// Anti-drift: the legacy gateway CA keys have zero consumers and must not
-	// return — they silently shadow the real contract (this exact trap caused
-	// the audit failure).
-	if cfg.Gateway.CAKeyPath != "" || cfg.Gateway.CACertPath != "" {
-		t.Fatalf("legacy gateway.ca_key_path/ca_cert_path dead keys must not be set in the dev overlay (decoded CAKeyPath=%q CACertPath=%q)",
-			cfg.Gateway.CAKeyPath, cfg.Gateway.CACertPath)
+	// Anti-drift: the legacy gateway.ca_key_path/ca_cert_path dead fields had
+	// zero consumers and were removed from GatewayCfg (TASK-094 §7-4). The raw
+	// dev overlay must not reintroduce keys nothing decodes — that is the
+	// exact trap that caused the 2026-08-28 audit failure (they silently
+	// shadow the top-level ca: contract). Decoding the gateway block into a
+	// plain map keeps this assertion independent of the struct that no longer
+	// carries the fields.
+	raw := struct {
+		Gateway map[string]any `yaml:"gateway"`
+	}{}
+	overlayBytes, err := os.ReadFile(overlay)
+	if err != nil {
+		t.Fatalf("reading dev orchestrator overlay: %v", err)
+	}
+	if err := yaml.Unmarshal(overlayBytes, &raw); err != nil {
+		t.Fatalf("decoding dev orchestrator overlay: %v", err)
+	}
+	for _, deadKey := range []string{"ca_key_path", "ca_cert_path"} {
+		if _, present := raw.Gateway[deadKey]; present {
+			t.Fatalf("legacy gateway.%s dead key must not return to the dev overlay (GatewayCfg no longer decodes it)", deadKey)
+		}
 	}
 }
 
