@@ -53,9 +53,9 @@
 
 ### Operator 会话与生命周期（Fixed）
 
-- 心跳归属修正：agent 收到 `SessionEstablished` 后按协商周期发送 `Heartbeat`（发送与接收共用一把 Send 互斥），orchestrator **不再自写** `last_heartbeat`；`SessionRegistry` 首次接线（网关 operator service 构造 + `Run`），心跳停止即推进 `suspect`/`offline`。心跳阈值、suspect/offline 阈值改为可配置（`operator_session.*`，默认 15s/45s/90s）（PR #NNN，TASK-098）。
-- 紧急变更离线窗口确定性：除会话状态外还要求 `last_heartbeat` 足够新（重启后进程内流已空但会话行仍 `online`），dispatch 失败也归一到 `CodeUnavailable` + `operator_offline`，且拒绝不留非终态 Operation（REQ-032 AC-032-20）（PR #NNN，TASK-098）。
-- 标准 Operation（INSTALL/UPGRADE/ROLLBACK）获得 `operation.deadline`（默认 30m），非终态恢复扫描从「仅启动一次」改为按 `operation.recovery_interval`（默认 1m）周期执行（PR #NNN，TASK-098）。
+- 心跳归属修正：agent 收到 `SessionEstablished` 后按协商周期发送 `Heartbeat`（发送与接收共用一把 Send 互斥），orchestrator **不再自写** `last_heartbeat`；`SessionRegistry` 首次接线（网关 operator service 构造 + `Run`），心跳停止即推进 `suspect`/`offline`。心跳阈值、suspect/offline 阈值改为可配置（`operator_session.*`，默认 15s/45s/90s）（PR #118，TASK-098）。
+- 紧急变更离线窗口确定性：除会话状态外还要求 `last_heartbeat` 足够新（重启后进程内流已空但会话行仍 `online`），dispatch 失败也归一到 `CodeUnavailable` + `operator_offline`，且拒绝不留非终态 Operation（REQ-032 AC-032-20）（PR #118，TASK-098）。
+- 标准 Operation（INSTALL/UPGRADE/ROLLBACK）获得 `operation.deadline`（默认 30m），非终态恢复扫描从「仅启动一次」改为按 `operation.recovery_interval`（默认 1m）周期执行（PR #118，TASK-098）。
 
 ### 审计写入收敛（Fixed）
 
