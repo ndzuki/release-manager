@@ -1,41 +1,31 @@
 # =============================================================================
-# Release Manager — Operator gRPC endpoints (Kulala GRPC support)
-# Environment: dev (Operator gRPC :8447)
+# operator.v1.OperatorService — NOT REACHABLE FROM THIS COLLECTION
 #
-# @grpc-plaintext        ← REQUIRED: server has no TLS
+#   make api-check      validate the paths below against api/proto
+#   make api-operator   open this file (nvim) — see docs/http-collections.md
 #
-# gRPC service: operator.v1.OperatorService
-# =============================================================================
-
-### Operator — Enroll
-# @name OperatorEnroll
-GRPC {{OP_GRPC_HOST}}:{{OP_GRPC_PORT}} operator.v1.OperatorService/Enroll
-Content-Type: application/grpc
-
-{
-  "operator_id": "{{OPERATOR_NAME}}",
-  "cluster_id": "{{CLUSTER_NAME}}",
-  "capabilities": {
-    "helm": "v3",
-    "preflight": "true"
-  }
-}
-
-### Operator — Health Check
-# @name OperatorHealth
-GRPC {{OP_GRPC_HOST}}:{{OP_GRPC_PORT}} grpc.health.v1.Health/Check
-Content-Type: application/grpc
-
-{}
-
-### Operator — Enroll (missing cluster)
-# Expected: some error
-# @name EnrollMissingCluster
-GRPC {{OP_GRPC_HOST}}:{{OP_GRPC_PORT}} operator.v1.OperatorService/Enroll
-Content-Type: application/grpc
-
-{
-  "operator_id": "test-op",
-  "cluster_id": "",
-  "capabilities": {}
-}
+# Why nothing here is runnable: OperatorService is served by the release-orchestrator
+# **agent gateway**, a separate TLS listener whose identity comes from the client
+# certificate (`cmd/orchestrator/main.go`, `operator.NewCertificateIdentityHandler`;
+# ADR-001/ADR-018). It is deliberately not exposed on the plain management port, so
+# a Kulala collection cannot present the operator certificate and enrollment token
+# the gateway requires — and the mTLS port is not the same as the operator agent's
+# own local listener.
+#
+# The four RPCs and their real authentication path:
+#   Enroll                    enrollment token (one-time), no client certificate yet
+#   RenewCertificate          verified client certificate; renew invalidates the old serial
+#   CommandStream             verified client certificate; long-lived bidi stream
+#   GetActiveOperatorSession  verified client certificate
+#
+# Reachable evidence for these lives in the Go tests and the staged E2E gates
+# (make install-sdk / upgrade-sdk / rollout-watch), not in api/kulala.
+# Contract reference:
+#   api/proto/operator/v1/operator.proto
+#
+# If a runnable probe is needed, point it at the gateway with a client
+# certificate — for example:
+#   openssl s_client -connect localhost:30084 -cert agent.crt -key agent.key \
+#     -CAfile data/dev-ca/ca.crt -quiet
+# and keep that out of the tracked collection: the certificate and key are
+# per-operator secrets.

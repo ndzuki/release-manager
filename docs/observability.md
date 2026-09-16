@@ -35,7 +35,7 @@
 
 **建议（当前不存在）**
 
-1. ~~把 `log_level` 真正接到 handler~~ **已实现（TASK-094）**：`startupLogger` + `applyLogLevel`（`internal/app/app.go:123/133`）。当初提示的实现陷阱如实留档：`Run` 被 6 个文档按行号引证约 30 处（`docs/cli.md:7,35,42-49,76,387`、本文件 `:16,17,93,197,220`、`docs/configuration.md:365`、`docs/http-collections.md:104`），在 `:123` 附近插入行会整体下移这些锚点且 `make check-docs` 不校验语义——因此接线采用「`:123` 原位单行替换 + 空行槽位放 `applyLogLevel` 调用 + helper 追加到文件尾部」的零位移方案，上方引证行号全部保持。
+1. ~~把 `log_level` 真正接到 handler~~ **已实现（TASK-094）**：`startupLogger` + `applyLogLevel`（`internal/app/app.go:123/133`）。当初提示的实现陷阱如实留档：`Run` 被若干文档按行号引证（`docs/cli.md:7,35,42-49,76,387`、本文件 `:16,17,93,197,220`、`docs/configuration.md:365`），在 `:123` 附近插入行会整体下移这些锚点且 `make check-docs` 不校验语义——因此接线采用「`:123` 原位单行替换 + 空行槽位放 `applyLogLevel` 调用 + helper 追加到文件尾部」的零位移方案，上方引证行号全部保持。
 2. 在日志侧统一注入 request-id（与 `NewRequestIDInterceptor` 同源），使「一次写请求 → 授权 → 审计 → outbox」可只用日志还原。
 3. 为致命启动错误加退出码约定与 `os.Exit` 前的最后一条结构化摘要（当前只有两行文本，见 §2 无指标可替代）。
 

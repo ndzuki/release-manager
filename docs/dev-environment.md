@@ -136,7 +136,7 @@ identity → routing → accounts → trust → bundle → values → enrollment
 | --- | --- | --- |
 | `make dev-stage-shared` | 无运行时服务 | 只跑 proto 生成，并提示 `golangci-lint run` |
 | `make dev-stage-artifact` | webhook `8082` | 使用 `configs/webhook.dev.yaml`；集合 `api/kulala/webhook.http` |
-| `make dev-stage-tenancy` | orchestrator `8083` | 使用 `configs/orchestrator.dev.yaml`；集合 `api/kulala/manager.http`（客户与集群） |
+| `make dev-stage-tenancy` | orchestrator `8083` | 使用 `configs/orchestrator.dev.yaml`；集合 `api/kulala/orchestrator.http`（客户与集群） |
 | `make dev-stage-operator` | operator `8084` | 使用 `configs/operator.dev.yaml` |
 | `make dev-stage-config` | orchestrator `8083` | 同上（ReleaseDefinition 与 ValuesRevision 同属 orchestrator） |
 | `make dev-stage-publish` | orchestrator `8083` | 使用 `configs/orchestrator.dev.yaml` |
