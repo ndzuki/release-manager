@@ -29,7 +29,7 @@ func TestAPISvcAuditConnectEndToEnd(t *testing.T) {
 	// default is 5s, which leaves under a second of slack in the Eventually budget.
 	svc := &apiSvc{dbPath: dbPath, signingKey: signingKey, auditFlushInterval: 10 * time.Millisecond}
 	require.NoError(t, svc.Register(mux, slog.Default()))
-	t.Cleanup(func() { require.NoError(t, svc.Close(context.Background())) })
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
@@ -109,7 +109,7 @@ func TestAPISvcCloseDrainsAuditEmitter(t *testing.T) {
 		Metadata:       map[string]string{},
 	})
 	require.True(t, result.Accepted)
-	require.NoError(t, svc.Close(context.Background()))
+	require.NoError(t, svc.Close())
 
 	st, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
