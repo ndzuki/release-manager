@@ -1,104 +1,218 @@
 # =============================================================================
-# Release Manager — Auth APIs
-# Environment: dev (Manager :8081)
+# release-auth — Connect collection (ADR-002 single-port contract)
+#
+#   make api-check    validate every path below against api/proto
+#   make api-auth     open this file (nvim) — see docs/http-collections.md
+#
+# Environment: select the `dev` profile (host-run services, configs/*.dev.yaml)
+# or `cluster` (k3d NodePorts). Everything is Connect over HTTP/1.1:
+#   POST http://host:port/<package>.<Service>/<Method>
+#   Content-Type: application/json      (protobuf JSON mapping: camelCase fields)
+#
+# Credentials: Login captures an access token into {{AUTH_TOKEN}}; later requests
+# send it as a bearer token. No secret is stored in this file.
 # =============================================================================
 
+@ORG_ID = 00000000-0000-0000-0000-000000000000
+@USERNAME = dev-admin
+# Password comes from the environment: `set -a; . data/dev-credentials.env; set +a`
+# (dev.sh writes it there) so no credential is committed.
+@PASSWORD = {{DEV_ADMIN_PASSWORD}}
+
 # =============================================================================
-# Init & Auth
+# AuthService — public entrypoints and the self-service surface
 # =============================================================================
 
-### Check Init Status
-# @name CheckInit
-GET {{BASE_URL}}/api/v1/init
-
-### Initialize System (first-time setup)
-# @name Initialize
-POST {{BASE_URL}}/api/v1/init
+### GetInitStatus (public: no token required)
+# @name GetInitStatus
+# @kulala-expect-status-code 200
+POST {{AUTH_URL}}/auth.v1.AuthService/GetInitStatus
 Content-Type: application/json
 
-{
-  "username": "{{ADMIN_USER}}",
-  "password": "{{ADMIN_PASS}}",
-  "email": "admin@dev.local"
-}
+{}
 
-### Login
+### Login (public) — captures the access token for every request below
 # @name Login
-POST {{BASE_URL}}/api/v1/auth/login
+# @kulala-expect-status-code 200
+POST {{AUTH_URL}}/auth.v1.AuthService/Login
 Content-Type: application/json
 
 {
-  "username": "{{ADMIN_USER}}",
-  "password": "{{ADMIN_PASS}}"
+  "username": "{{USERNAME}}",
+  "password": "{{PASSWORD}}"
 }
 
-### Refresh Session
-# @name Refresh
-POST {{BASE_URL}}/api/v1/auth/refresh
+> {%
+  client.test("login returns a token", function () {
+    client.assert(response.status === 200, "expected 200, got " + response.status);
+    client.assert(response.body.accessToken, "accessToken missing");
+  });
+  client.global.set("AUTH_TOKEN", response.body.accessToken);
+%}
+
+### ValidateToken (public)
+# @name ValidateToken
+POST {{AUTH_URL}}/auth.v1.AuthService/ValidateToken
 Content-Type: application/json
-Authorization: Bearer {{token}}
+Authorization: Bearer {{AUTH_TOKEN}}
 
 {}
 
-### Get Current User
-# @name GetMe
-GET {{BASE_URL}}/api/v1/auth/me
-Authorization: Bearer {{token}}
-
-### Logout
-# @name Logout
-POST {{BASE_URL}}/api/v1/auth/logout
+### GetLocalUser (admin: the auth/read object is platform_admin-only)
+# @name GetLocalUser
+POST {{AUTH_URL}}/auth.v1.AuthService/GetLocalUser
 Content-Type: application/json
-Authorization: Bearer {{token}}
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "username": "{{USERNAME}}"
+}
+
+### ListLocalUsers (admin)
+# @name ListLocalUsers
+POST {{AUTH_URL}}/auth.v1.AuthService/ListLocalUsers
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "pageSize": 20
+}
+
+### SwitchOrganization (target organization: judged as organization/write there)
+# @name SwitchOrganization
+# @kulala-expect-status-code 200
+POST {{AUTH_URL}}/auth.v1.AuthService/SwitchOrganization
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "orgId": "{{ORG_ID}}"
+}
+
+> {%
+  client.global.set("AUTH_TOKEN", response.body.accessToken);
+%}
+
+# Mutating self-service calls are listed but not pre-filled, so a stray "run all"
+# does not change credentials or sessions:
+#   POST {{AUTH_URL}}/auth.v1.AuthService/ChangePassword   {"oldPassword": "...", "newPassword": "..."}
+#   POST {{AUTH_URL}}/auth.v1.AuthService/Logout           {}
+#   POST {{AUTH_URL}}/auth.v1.AuthService/CreateLocalUser  {"username": "...", "password": "...", "roles": ["viewer"]}
+#   POST {{AUTH_URL}}/auth.v1.AuthService/RefreshToken     {"refreshToken": "..."}
+
+# =============================================================================
+# OrganizationService
+# =============================================================================
+
+### ListOrganizations
+# @name ListOrganizations
+# @kulala-expect-status-code 200
+POST {{AUTH_URL}}/auth.v1.OrganizationService/ListOrganizations
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
 
 {}
 
-# =============================================================================
-# Organizations
-# =============================================================================
-
-### List Organizations
-# @name ListOrgs
-GET {{BASE_URL}}/api/v1/organizations
-Authorization: Bearer {{token}}
-
-### Create Organization
-# @name CreateOrg
-POST {{BASE_URL}}/api/v1/organizations
+### GetOrganization
+# @name GetOrganization
+POST {{AUTH_URL}}/auth.v1.OrganizationService/GetOrganization
 Content-Type: application/json
-Authorization: Bearer {{token}}
+Authorization: Bearer {{AUTH_TOKEN}}
 
 {
-  "name": "DevOps Team"
+  "orgId": "{{ORG_ID}}"
 }
 
-# =============================================================================
-# Users
-# =============================================================================
-
-### List Users
-# @name ListUsers
-GET {{BASE_URL}}/api/v1/users
-Authorization: Bearer {{token}}
-
-### Create User
-# @name CreateUser
-POST {{BASE_URL}}/api/v1/users
+### ListMembers
+# @name ListMembers
+POST {{AUTH_URL}}/auth.v1.OrganizationService/ListMembers
 Content-Type: application/json
-Authorization: Bearer {{token}}
+Authorization: Bearer {{AUTH_TOKEN}}
 
 {
-  "username": "deployer01",
-  "email": "deployer01@example.com",
-  "role": "deployer"
+  "orgId": "{{ORG_ID}}"
 }
 
-### Update User Role
-# @name UpdateUserRole
-PUT {{BASE_URL}}/api/v1/users/deployer01
+# Mutating organization calls (write a fresh body before running):
+#   CreateOrganization, UpdateOrganization, DisableOrganization,
+#   AddMember, RemoveMember, UpdateMemberRole
+
+# =============================================================================
+# BindingService
+# =============================================================================
+
+### ListBindings
+# @name ListBindings
+# @kulala-expect-status-code 200
+POST {{AUTH_URL}}/auth.v1.BindingService/ListBindings
 Content-Type: application/json
-Authorization: Bearer {{token}}
+Authorization: Bearer {{AUTH_TOKEN}}
 
 {
-  "role": "release_admin"
+  "orgId": "{{ORG_ID}}"
 }
+
+### GetBinding
+# @name GetBinding
+POST {{AUTH_URL}}/auth.v1.BindingService/GetBinding
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "bindingId": "00000000-0000-0000-0000-000000000000"
+}
+
+# CreateBinding resolves the customer through the configured resolver (dev uses
+# StubResolver, so it answers not_found until the REQ-011 dev wiring lands);
+# RevokeBinding is destructive — both are listed, not pre-filled.
+
+# =============================================================================
+# AuthorizationService
+# =============================================================================
+
+### GetAuthorizationSnapshot (requires organization + customer scope)
+# @name GetAuthorizationSnapshot
+POST {{AUTH_URL}}/auth.v1.AuthorizationService/GetAuthorizationSnapshot
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "organizationId": "{{ORG_ID}}",
+  "customerId": "{{CUSTOMER_ID}}"
+}
+
+### AuthorizeAccess (TASK-103 / ADR-021: the decision RPC the audit surface uses)
+# @name AuthorizeAccess
+# @kulala-expect-status-code 200
+POST {{AUTH_URL}}/auth.v1.AuthorizationService/AuthorizeAccess
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "organizationId": "{{ORG_ID}}",
+  "object": "audit",
+  "action": "read"
+}
+
+> {%
+  client.test("decision carries the effective scope", function () {
+    client.assert(response.status === 200, "expected 200, got " + response.status);
+    client.assert(typeof response.body.allowed === "boolean", "allowed missing");
+    client.assert(response.body.organizationId, "organizationId missing");
+  });
+%}
+
+# SetCapabilityGrant (platform_admin / release_admin only) is a write and is
+# listed here without a body: organizationId + subject + action + revoked.
+
+# =============================================================================
+# ExternalIdentityService — NOT MOUNTED (REQ-028)
+# =============================================================================
+
+# The three RPCs (GetOIDCAuthURL, GetDingTalkAuthURL, AuthenticateLDAP) exist in
+# the contract and have handlers, but cmd/auth never constructs or mounts the
+# service, so these paths answer 404 at the Connect mux. They are recorded as
+# unreachable rather than exercised (docs/api.md §3.8):
+#   POST {{AUTH_URL}}/auth.v1.ExternalIdentityService/GetOIDCAuthURL
+#   POST {{AUTH_URL}}/auth.v1.ExternalIdentityService/GetDingTalkAuthURL
+#   POST {{AUTH_URL}}/auth.v1.ExternalIdentityService/AuthenticateLDAP

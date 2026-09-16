@@ -14,7 +14,7 @@
 
 ## 2026-09
 
-里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 16 个 PR 合入。
+里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 17 个 PR 合入。
 
 ### 执行链路（升级 / 回滚）
 
@@ -50,6 +50,11 @@
 ### Bundle ingress 认证（Added）
 
 - `SubmitReleaseBundle` 由 CI API key 认证、新增 `POST /webhooks/harbor`（Harbor 独立 key）并挂载 Harbor adapter，出站以 `service:release-harbor` 调 `RecordArtifactEvent`（scope 仅该 procedure）；两把 key 与两条 procedure 不可互相替换（AC-011-04/16/17）。配套把 `ServiceTokenInterceptor` 对「不在本腿白名单的 token」改为 `unauthenticated` 以支持多凭证并存（保留「在白名单但越 scope → `permission_denied`」），并在 dev 生命周期/kustomize/CI 三处配齐凭据（PR #109，TASK-102）。
+
+### 调试集合（Fixed）
+
+- `api/kulala` 六个集合从 Connect 迁移前的 REST/gRPC 形状重写为单端口 Connect 形状：路径改为 `<package>.<Service>/<Method>`、`Login` 的 post-request 脚本自动把 token 写进 `{{AUTH_TOKEN}}`、端口改由 `configs/*.dev.yaml` 与 kustomize NodePort 派生；`manager.http`（针对已移除的 Manager 进程）删除，新增 `notifier.http`，`operator.http` 明确声明 mTLS 不可达（PR #NNN，TASK-093）。
+- 新增 `make api-check` 结构门禁：每条请求必须是 `api/proto` 里真实存在的 RPC、每个占位符必须可解析、env 端口必须来自事实源、空集合必须说明原因（含三类负控制），并入 `make quality` 且随 CI 的 `go test ./...` 执行；六个只做 `nvim` 的 `api-*` 目标删除（PR #NNN，TASK-093）。
 
 ### Operator 会话与生命周期（Fixed）
 

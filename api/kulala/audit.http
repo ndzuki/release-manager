@@ -1,43 +1,64 @@
 # =============================================================================
-# Release Manager — Audit Collection API
-# Environment: orchestrator :8083
+# release-api — audit surface (Connect, ADR-002 + ADR-021)
+#
+#   make api-check    validate every path below against api/proto
+#   make api-audit    open this file (nvim) — see docs/http-collections.md
+#
+# The audit surface lives on release-api (dev :8087, host-run only — see
+# docs/api.md §1 note 2). Every procedure needs a bearer token AND a release-auth
+# decision (ADR-021), so auth.http's Login and a running release-auth are
+# prerequisites; when release-auth is unreachable the surface answers
+# `unavailable` instead of guessing a role locally.
 # =============================================================================
 
-### Emit API key and service audit events
-# @name EmitAudit
-POST http://localhost:8083/audit.v1.AuditService/Emit
+@AUDIT_ACTION = create
+@AUDIT_RESOURCE_TYPE = release_operation
+
+### QueryAuditEvents (audit/read: every role, own organization + 31-day window)
+# @name QueryAuditEvents
+# @kulala-expect-status-code 200
+POST {{API_URL}}/audit.v1.AuditService/QueryAuditEvents
 Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
 
 {
-  "events": [
-    {
-      "actor": {
-        "kind": "ACTOR_KIND_API_KEY",
-        "id": "key-ci-release",
-        "organizationId": "org-001"
-      },
-      "resourceType": "release",
-      "resourceId": "release-001",
-      "action": "update",
-      "status": "accepted",
-      "changeSummary": "password=must-not-persist",
-      "metadata": {
-        "token": "must-not-persist",
-        "request_id": "req-001"
-      }
-    },
-    {
-      "actor": {
-        "kind": "ACTOR_KIND_SERVICE",
-        "id": "release-orchestrator"
-      },
-      "resourceType": "operation",
-      "resourceId": "op-001",
-      "action": "create",
-      "status": "accepted"
-    }
-  ]
+  "filter": {
+    "organizationId": "{{ORGANIZATION_ID}}",
+    "resourceType": "{{AUDIT_RESOURCE_TYPE}}",
+    "action": "{{AUDIT_ACTION}}"
+  },
+  "pagination": {"pageSize": 20}
 }
 
-### Health
-GET http://localhost:8083/health
+> {%
+  client.test("audit query answered", function () {
+    client.assert(response.status === 200, "expected 200, got " + response.status);
+  });
+%}
+
+# A range wider than the decision's ceiling answers 400 + range_too_large:
+#   {"filter": {"timeRange": {"start": "2026-01-01T00:00:00Z", "end": "2026-09-01T00:00:00Z"}}}
+# A filter naming another organization answers 403 + permission_denied (only
+# platform_admin may cross organizations).
+
+# =============================================================================
+# Writes — audit/write (release_admin / platform_admin)
+# =============================================================================
+
+# Emit is idempotent by event id (TASK-097): replaying the same id leaves the
+# original row and never fails. Build a fresh id per attempt.
+#   POST {{API_URL}}/audit.v1.AuditService/Emit
+#   {"events": [{
+#      "id": "00000000-0000-0000-0000-000000000001",
+#      "actor": {"kind": "ACTOR_KIND_USER", "id": "dev-admin", "organizationId": "{{ORGANIZATION_ID}}"},
+#      "resourceType": "release_operation", "resourceId": "op-1",
+#      "action": "create", "status": "accepted"
+#   }]}
+
+# ExportAuditEvents registers an asynchronous job (no consumer yet, so it stays
+# pending — docs/api.md §3.8):
+#   POST {{API_URL}}/audit.v1.AuditService/ExportAuditEvents
+#   {"filter": {"organizationId": "{{ORGANIZATION_ID}}"}}
+
+# Health (unauthenticated, plain JSON from the Go handler, not a Connect path)
+#   GET {{API_URL}}/health
