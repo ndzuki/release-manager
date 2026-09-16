@@ -129,21 +129,18 @@ func TestCreateLocalUser_EmptyOrgUsesActiveOrganization(t *testing.T) {
 	}))
 	_, err := h.enforcer.RefreshPolicies(ctx)
 	require.NoError(t, err)
-	// The direct switch below mints a token without a Login session row; the
-	// interceptor requires an active session for the user, so create one.
-	require.NoError(t, h.st.AuthSessions().Create(ctx, &store.AuthSession{
-		ID: "sess-admin-1", UserID: "admin-1", TokenFamily: "tf-1",
-		RefreshTokenHash: "h", ExpiresAt: time.Now().Add(time.Hour), CreatedAt: time.Now(),
-	}))
 
-	// SwitchOrganization is not mapped in the interceptor's action table
-	// (pre-existing on main: "Switch" matches no action prefix), so the switch
-	// happens through the service directly with the interceptor's user context —
-	// the minted token is identical to what the production flow would use, and
-	// CreateLocalUser below still runs through the real HTTP + interceptor stack.
-	switchCtx := context.WithValue(ctx, userIDKey, "admin-1")
-	switched, err := h.svc.SwitchOrganization(switchCtx, connect.NewRequest(&authv1.SwitchOrganizationRequest{OrgId: "org-2"}))
+	// TASK-095: the switch now runs through the real HTTP + interceptor stack
+	// (SwitchOrganization is registered with modeCasbin and targetOrg, so the
+	// decision is (organization, write) on org-2) instead of being called
+	// directly on the service to dodge the unmapped action prefix.
+	adminToken := h.login(t, "admin")
+	switchReq := connect.NewRequest(&authv1.SwitchOrganizationRequest{OrgId: "org-2"})
+	switchReq.Header().Set("Authorization", "Bearer "+adminToken)
+	switched, err := h.client.SwitchOrganization(ctx, switchReq)
 	require.NoError(t, err)
+	require.NotNil(t, switched.Msg.GetUser())
+	assert.Equal(t, "org-2", switched.Msg.GetUser().GetActiveOrgId())
 	switchedToken := switched.Msg.GetAccessToken()
 
 	// Empty org_id: the new user must land in the active org (org-2), not the

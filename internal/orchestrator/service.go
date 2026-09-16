@@ -1034,6 +1034,12 @@ func (s *Service) authorizeReadOperation(ctx context.Context, op *store.Operatio
 	if err != nil {
 		return cancelOperationError(connect.CodeInternal, "internal_error", fmt.Errorf("definition lookup: %w", err))
 	}
+	return s.authorizeReadDefinition(ctx, def, actor)
+}
+
+// authorizeReadDefinition verifies an active organization-customer binding and
+// an active membership for a read scoped to one release definition.
+func (s *Service) authorizeReadDefinition(ctx context.Context, def *store.ReleaseDefinition, actor authctx.Actor) error {
 	if err := s.store.Bindings().RequireActive(ctx, actor.OrganizationID, def.CustomerID); err != nil {
 		return cancelOperationError(connect.CodePermissionDenied, "binding_revoked", errors.New("organization-customer binding is revoked"))
 	}
@@ -1527,10 +1533,8 @@ func (s *Service) emitAudit(ev *store.AuditEvent) {
 	}
 }
 
-// ListOperations returns operations for a release definition.
-func (s *Service) ListOperations(_ context.Context, _ *connect.Request[orchestratorv1.ListOperationsRequest]) (*connect.Response[orchestratorv1.ListOperationsResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ListOperations is not implemented"))
-}
+// ListOperations lives in operations_query.go: the handler is implemented
+// (REQ-056), not the previous CodeUnimplemented stub (TASK-095).
 
 // bundleToProto converts a store bundle into the common proto shape used by
 // preflight dispatch payloads.

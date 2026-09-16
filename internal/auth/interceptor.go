@@ -12,8 +12,6 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
-	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/store"
 )
@@ -67,19 +65,19 @@ func NewAuthInterceptor(
 				return nil, connect.NewError(connect.CodeUnauthenticated, fmt.Errorf("invalid token: %w", err))
 			}
 
-			domain, err := resolveDomain(req.Any(), claims.OrgID)
+			policy, registered := lookupProcedure(procedure)
+			domain, err := resolveDomain(req.Any(), claims.OrgID, policy.targetOrg)
 			if err != nil {
 				return nil, authorizationConnectError(err, enforcer.PolicyVersion())
 			}
-			object, action := mapProcedure(procedure)
-			if object == "" || action == "" {
+			if !registered {
 				return nil, authorizationConnectError(newInvalidActorContext(
 					claims.UserID,
 					domain,
 					fmt.Errorf("unmapped procedure %q", procedure),
 				), enforcer.PolicyVersion())
 			}
-			if cookieAuthenticated && action != "read" {
+			if cookieAuthenticated && policy.action != "read" {
 				cookieToken := cookieValue(req.Header(), CSRFCookieName)
 				headerToken := req.Header().Get(CSRFHeaderName)
 				if cookieToken == "" || headerToken == "" || subtle.ConstantTimeCompare([]byte(cookieToken), []byte(headerToken)) != 1 {
@@ -97,8 +95,8 @@ func NewAuthInterceptor(
 				)
 				return nil, authorizationConnectError(err, enforcer.PolicyVersion())
 			}
-			if !usesHandlerAuthorization(procedure) && procedure != authv1connect.AuthServiceLogoutProcedure {
-				if err := enforcer.Enforce(claims.UserID, domain, object, action); err != nil {
+			if policy.mode == modeCasbin {
+				if err := enforcer.Enforce(claims.UserID, domain, policy.object, policy.action); err != nil {
 					logger.Warn(
 						"access denied",
 						"user_id", claims.UserID,
@@ -189,14 +187,16 @@ func (i streamAuthInterceptor) WrapStreamingHandler(next connect.StreamingHandle
 		if domain == "" {
 			return authorizationConnectError(newInvalidActorContext(claims.UserID, "", errors.New("organization is required")), i.enforcer.PolicyVersion())
 		}
-		object, action := mapProcedure(procedure)
-		if object == "" || action == "" {
+		policy, registered := lookupProcedure(procedure)
+		if !registered {
 			return authorizationConnectError(newInvalidActorContext(claims.UserID, domain, fmt.Errorf("unmapped procedure %q", procedure)), i.enforcer.PolicyVersion())
 		}
-		if err := i.enforcer.Enforce(claims.UserID, domain, object, action); err != nil {
-			i.logger.Warn("stream access denied", "user_id", claims.UserID, "organization_id", domain,
-				"procedure", procedure, "reason_code", authorizationReason(err))
-			return authorizationConnectError(err, i.enforcer.PolicyVersion())
+		if policy.mode == modeCasbin {
+			if err := i.enforcer.Enforce(claims.UserID, domain, policy.object, policy.action); err != nil {
+				i.logger.Warn("stream access denied", "user_id", claims.UserID, "organization_id", domain,
+					"procedure", procedure, "reason_code", authorizationReason(err))
+				return authorizationConnectError(err, i.enforcer.PolicyVersion())
+			}
 		}
 		user, err := i.store.Users().Get(ctx, claims.UserID)
 		if err != nil || user.Status != store.UserActive {
@@ -236,10 +236,14 @@ func extractToken(authHeader string) string {
 	return strings.TrimPrefix(authHeader, "Bearer ")
 }
 
-func resolveDomain(request any, tokenOrgID string) (string, error) {
+// resolveDomain returns the organization domain used for the Casbin decision.
+// The request org_id may differ from the token org only for a procedure
+// registered with targetOrg (SwitchOrganization): there the request field names
+// the organization being switched into, and the handler verifies membership.
+func resolveDomain(request any, tokenOrgID string, targetOrg bool) (string, error) {
 	requestOrgID := protoStringField(request, "org_id")
 	if requestOrgID != "" {
-		if tokenOrgID != "" && tokenOrgID != requestOrgID {
+		if tokenOrgID != "" && tokenOrgID != requestOrgID && !targetOrg {
 			return "", newPermissionDenied("", requestOrgID, "organization", "access")
 		}
 		return requestOrgID, nil
@@ -269,100 +273,9 @@ func enforceRequestBinding(
 	return nil
 }
 
-// mapProcedure maps a Connect RPC procedure to a Casbin object and action.
-
-func mapServiceToObject(service string) string {
-	switch {
-	case strings.Contains(service, "Organization"):
-		return "organization"
-	case strings.Contains(service, "Binding"):
-		return "binding"
-	case strings.Contains(service, "Auth"):
-		return "auth"
-	case strings.Contains(service, "Trust"):
-		return "trust_root"
-	case strings.Contains(service, "Bundle"):
-		// BundleService (REQ-011 §562 bundle ingress): the JWT path needs a
-		// stable object so a JWT-authenticated caller reaches the Casbin
-		// policy gate with a meaningful object instead of invalid_actor_context
-		// (D-100 选项 B wiring). The service-token path bypasses mapProcedure
-		// entirely (ServiceTokenInterceptor injects the actor directly).
-		return "bundle"
-	case strings.Contains(service, "Orchestrator"):
-		return "release"
-	case strings.Contains(service, "Cleanup"):
-		return "cleanup"
-	default:
-		return ""
-	}
-}
-
-func mapProcedure(procedure string) (object, action string) {
-	parts := strings.Split(strings.TrimPrefix(procedure, "/"), "/")
-	if len(parts) != 2 {
-		return "", ""
-	}
-	method := parts[1]
-	switch method {
-	case "ListOperators", "GetOperator":
-		return "operator", "read"
-	case "CreateEnrollmentToken", "GetEnrollmentTokenStatus", "RevokePendingEnrollmentToken":
-		return "operator", "enroll"
-	case "RevokeOperator":
-		return "operator", "revoke"
-	}
-	serviceName := parts[0]
-	if dot := strings.LastIndex(serviceName, "."); dot >= 0 {
-		serviceName = serviceName[dot+1:]
-	}
-	return mapServiceToObject(serviceName), mapMethodToAction(method)
-}
-
-func mapMethodToAction(method string) string {
-	switch {
-	case strings.HasPrefix(method, "List"), strings.HasPrefix(method, "Get"),
-		strings.HasPrefix(method, "Watch"), strings.HasPrefix(method, "Validate"):
-		return "read"
-	case strings.HasPrefix(method, "Create"), strings.HasPrefix(method, "Add"),
-		strings.HasPrefix(method, "Update"), strings.HasPrefix(method, "Disable"),
-		strings.HasPrefix(method, "Remove"), strings.HasPrefix(method, "Revoke"),
-		strings.HasPrefix(method, "Delete"), strings.HasPrefix(method, "Change"),
-		strings.HasPrefix(method, "Emergency"), strings.HasPrefix(method, "Publish"),
-		strings.HasPrefix(method, "Rollback"), strings.HasPrefix(method, "Rotate"),
-		strings.HasPrefix(method, "Configure"), strings.HasPrefix(method, "Sync"),
-		strings.HasPrefix(method, "Logout"), strings.HasPrefix(method, "Cancel"),
-		strings.HasPrefix(method, "Discard"),
-		strings.HasPrefix(method, "Refresh"), strings.HasPrefix(method, "Authenticate"),
-		strings.HasPrefix(method, "Submit"), strings.HasPrefix(method, "Approve"),
-		strings.HasPrefix(method, "Reject"), strings.HasPrefix(method, "End"),
-		strings.HasPrefix(method, "Retire"), strings.HasPrefix(method, "Run"),
-		strings.HasPrefix(method, "Unarchive"),
-		// Execute: canonical emergency execution RPC (REQ-079). Without this
-		// branch mapMethodToAction returns "" → 403, the same prefix-table
-		// gap that hit SwitchOrganization in TASK-072 (per
-		// core/go/connect-rpc.md 踩坑实践).
-		strings.HasPrefix(method, "Execute"),
-		// Release: emergency stuck-lock release RPC (REQ-087). Same prefix
-		// gap: without a branch ReleaseEmergencyLock maps to "" → 403.
-		strings.HasPrefix(method, "Release"):
-		return "write"
-	default:
-		return ""
-	}
-}
-
-func usesHandlerAuthorization(procedure string) bool {
-	switch procedure {
-	case authv1connect.AuthorizationServiceGetAuthorizationSnapshotProcedure,
-		authv1connect.AuthorizationServiceSetCapabilityGrantProcedure,
-		orchestratorv1connect.OrchestratorServiceSubmitValuesRevisionProcedure,
-		orchestratorv1connect.OrchestratorServiceApproveValuesRevisionProcedure,
-		orchestratorv1connect.OrchestratorServiceRejectValuesRevisionProcedure:
-		return true
-	default:
-		return false
-	}
-}
+// mapProcedure and the procedure→authorization registry live in
+// procedure_policy.go: the mapping is explicit per procedure, with no
+// string-prefix fallback.
 
 func protoStringField(request any, name protoreflect.Name) string {
 	message, ok := request.(interface{ ProtoReflect() protoreflect.Message })

@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -34,9 +35,24 @@ func NewAuditServiceHandler(st store.Store, emitter Sink, logger *slog.Logger) a
 // Emit delegates to the underlying emitter.
 //
 //nolint:dupl // This full handler intentionally mirrors the lightweight collector response contract.
-func (h *auditServiceHandler) Emit(_ context.Context, req *connect.Request[auditv1.EmitAuditRequest]) (*connect.Response[auditv1.EmitAuditResponse], error) {
+func (h *auditServiceHandler) Emit(ctx context.Context, req *connect.Request[auditv1.EmitAuditRequest]) (*connect.Response[auditv1.EmitAuditResponse], error) {
 	if req.Msg == nil || len(req.Msg.GetEvents()) == 0 {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%s: events are required", ErrorInvalidEvent))
+	}
+	organizationID, err := principalOrganization(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// TASK-095 AC-4: an emitted event may not claim another tenant. Events with
+	// no organization stay allowed so infrastructure-level audit entries are not
+	// blocked, but they cannot carry data into another organization either.
+	for _, protoEvent := range req.Msg.GetEvents() {
+		if eventOrg := protoEvent.GetActor().GetOrganizationId(); eventOrg != "" && eventOrg != organizationID {
+			denied := connect.NewError(connect.CodePermissionDenied,
+				errors.New("event organization does not match principal"))
+			denied.Meta().Set("X-Reason-Code", "permission_denied")
+			return nil, denied
+		}
 	}
 	response := &auditv1.EmitAuditResponse{}
 	for _, protoEvent := range req.Msg.GetEvents() {
@@ -76,6 +92,14 @@ func (h *auditServiceHandler) QueryAuditEvents(ctx context.Context, req *connect
 		}
 	}
 
+	// TASK-095 AC-4: the principal's organization is the only readable scope;
+	// a request that names another organization is denied rather than honored.
+	scopedOrganization, err := authorizeOrganizationScope(ctx, filter.OrganizationID)
+	if err != nil {
+		return nil, err
+	}
+	filter.OrganizationID = scopedOrganization
+
 	limit := int(contracts.NormalizePageSize(0))
 	cursor := ""
 	if p := msg.GetPagination(); p != nil {
@@ -113,6 +137,13 @@ func (h *auditServiceHandler) ExportAuditEvents(ctx context.Context, req *connec
 	msg := req.Msg
 	now := time.Now().UTC()
 
+	// TASK-095 AC-4: an export is tenant-scoped; the organization recorded on
+	// the job comes from the principal, never from the request.
+	scopedOrganization, err := authorizeOrganizationScope(ctx, msg.GetFilter().GetOrganizationId())
+	if err != nil {
+		return nil, err
+	}
+
 	var since, until time.Time
 	if f := msg.GetFilter(); f != nil {
 		if tr := f.GetTimeRange(); tr != nil {
@@ -132,22 +163,24 @@ func (h *auditServiceHandler) ExportAuditEvents(ctx context.Context, req *connec
 	}
 
 	export := &store.AuditExport{
-		ID:        uuid.New().String(),
-		Since:     since,
-		Until:     until,
-		Status:    "pending",
-		CreatedAt: now,
+		ID:             uuid.New().String(),
+		OrganizationID: scopedOrganization,
+		Since:          since,
+		Until:          until,
+		Status:         "pending",
+		CreatedAt:      now,
 	}
 
 	event := &store.AuditEvent{
-		ID:           uuid.New().String(),
-		ActorKind:    store.AuditActorSystem,
-		ActorID:      "system",
-		ResourceType: "audit_export",
-		ResourceID:   export.ID,
-		Action:       "export.created",
-		Status:       "success",
-		CreatedAt:    now,
+		ID:             uuid.New().String(),
+		ActorKind:      store.AuditActorSystem,
+		ActorID:        "system",
+		OrganizationID: scopedOrganization,
+		ResourceType:   "audit_export",
+		ResourceID:     export.ID,
+		Action:         "export.created",
+		Status:         "success",
+		CreatedAt:      now,
 	}
 
 	if err := h.store.AuditExports().CreateWithEvent(ctx, export, event); err != nil {
