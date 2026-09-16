@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	connectrpc.com/connect v1.20.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/alicebob/miniredis/v2 v2.38.0
+	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/bmatcuk/doublestar/v4 v4.6.1
 	github.com/casbin/casbin/v2 v2.135.0
 	github.com/coreos/go-oidc/v3 v3.20.0
