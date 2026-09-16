@@ -99,12 +99,12 @@ func TestServiceTokenInterceptor_RejectsInvalidAndMissingTokens(t *testing.T) {
 		return nil, nil
 	}
 
-	t.Run("wrong token", func(t *testing.T) {
+	t.Run("wrong token is unauthenticated so another leg may try it", func(t *testing.T) {
 		req := connect.NewRequest(&orchestratorv1.SubmitBundleRequest{Name: "bundle"})
 		req.Header().Set("Authorization", "Bearer wrong-token")
 		_, err := interceptor(next)(context.Background(), req)
 		require.Error(t, err)
-		assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+		assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
 	})
 
 	t.Run("missing token", func(t *testing.T) {
@@ -114,11 +114,22 @@ func TestServiceTokenInterceptor_RejectsInvalidAndMissingTokens(t *testing.T) {
 		assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
 	})
 
-	t.Run("empty allowed set", func(t *testing.T) {
+	t.Run("empty allowed set matches nothing", func(t *testing.T) {
 		empty := ServiceTokenInterceptor("release-webhook", nil, discardLogger())
 		req := connect.NewRequest(&orchestratorv1.SubmitBundleRequest{Name: "bundle"})
 		req.Header().Set("Authorization", "Bearer dev-service-token")
 		_, err := empty(next)(context.Background(), req)
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
+	})
+
+	t.Run("recognized token outside its scope is permission denied", func(t *testing.T) {
+		scoped := ServiceTokenInterceptor("release-webhook",
+			[]string{SHA256Hash([]byte("dev-service-token"))}, discardLogger(),
+			"/orchestrator.v1.BundleService/SubmitBundle")
+		req := connect.NewRequest(&orchestratorv1.GetBundleRequest{BundleId: "bundle-1"})
+		req.Header().Set("Authorization", "Bearer dev-service-token")
+		_, err := scoped(next)(context.Background(), req)
 		require.Error(t, err)
 		assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 	})

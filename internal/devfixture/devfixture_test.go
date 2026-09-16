@@ -42,6 +42,7 @@ func testRunner(t *testing.T, fakes *fakeServices, mutate ...func(*Config)) *run
 		Mode:              ModeLocal,
 		OrchestratorURL:   "http://orchestrator.test",
 		WebhookURL:        "http://webhook.test",
+		WebhookAPIKey:     "test-ci-api-key",
 		AuthURL:           "http://auth.test",
 		DataDir:           t.TempDir(),
 		ChartDir:          filepath.Join(t.TempDir(), "missing-chart"),

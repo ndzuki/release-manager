@@ -333,25 +333,42 @@ jwt_ci_temp_cleanup() {
 # kustomize build (never persisted). Lifetime is independent from the JWT key
 # and Dev Trust Root directories (REQ-065 security boundary).
 # ---------------------------------------------------------------------------
+# Bundle ingress credentials (REQ-011 §562, TASK-102): one file per credential,
+# each rotatable independently. The CI key only authorizes SubmitReleaseBundle,
+# the Harbor key only POST /webhooks/harbor + RecordArtifactEvent, and the
+# webhook service token is the outbound bearer for SubmitBundle.
+SERVICE_TOKEN_FILES="webhook-service-token:DEV_WEBHOOK_SERVICE_TOKEN ci-api-key:DEV_CI_API_KEY harbor-service-token:DEV_HARBOR_SERVICE_TOKEN"
+
 service_token_path() { printf '%s' "$DEV_DATA_DIR/dev-service-tokens/webhook-service-token"; }
+service_token_path_for() { printf '%s' "$DEV_DATA_DIR/dev-service-tokens/$1"; }
 
 service_token_ensure() {
-  local token_path
-  token_path="$(service_token_path)"
+  local pair name env_name
+  for pair in $SERVICE_TOKEN_FILES; do
+    name="${pair%%:*}"
+    env_name="${pair##*:}"
+    service_token_ensure_one "$name" "$env_name" || return 1
+  done
+}
+
+service_token_ensure_one() {
+  local name="$1" env_name="$2" token_path env_value
+  token_path="$(service_token_path_for "$name")"
+  env_value="${!env_name:-}"
   if [ "${DEV_PROFILE:-local}" = "ci" ]; then
-    if [ -z "${DEV_WEBHOOK_SERVICE_TOKEN:-}" ]; then
-      fail "$ERR_SERVICE_UNHEALTHY" "ci profile requires DEV_WEBHOOK_SERVICE_TOKEN (bundle ingress service token is not written to disk)"
+    if [ -z "$env_value" ]; then
+      fail "$ERR_SERVICE_UNHEALTHY" "ci profile requires $env_name ($name is not written to disk)"
     fi
     # ci: materialized only for the kustomize build/apply duration (D2: not
     # persisted) and removed by service_token_ci_temp_cleanup on every exit.
     mkdir -p "$DEV_DATA_DIR/dev-service-tokens"
     umask 077
-    printf '%s' "$DEV_WEBHOOK_SERVICE_TOKEN" > "$token_path"
+    printf '%s' "$env_value" > "$token_path"
     chmod 600 "$token_path"
     return 0
   fi
   if [ -f "$token_path" ] && [ -s "$token_path" ]; then
-    log "  webhook service token (reused) .. $token_path"
+    log "  $name (reused) .. $token_path"
     return 0
   fi
   mkdir -p "$DEV_DATA_DIR/dev-service-tokens"
@@ -362,7 +379,7 @@ service_token_ensure() {
   umask 077
   head -c 1024 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32 > "$token_path"
   chmod 600 "$token_path"
-  log "  webhook service token (generated) . $token_path"
+  log "  $name (generated) . $token_path"
 }
 
 # service_token_ci_temp_cleanup — remove the transient ci service token file
@@ -370,7 +387,28 @@ service_token_ensure() {
 # disk). No-op for local.
 service_token_ci_temp_cleanup() {
   [ "${DEV_PROFILE:-local}" = "ci" ] || return 0
-  rm -f "$(service_token_path)" 2>/dev/null || true
+  local pair
+  for pair in $SERVICE_TOKEN_FILES; do
+    rm -f "$(service_token_path_for "${pair%%:*}")" 2>/dev/null || true
+  done
+}
+
+# export_seed_service_tokens — hand the fixture the same ingress credentials the
+# deployments received, so `dev.sh seed` can authenticate to the now-guarded
+# webhook ingress (TASK-102). Values already present in the environment win.
+export_seed_service_tokens() {
+  local pair name env_name path value
+  for pair in $SERVICE_TOKEN_FILES; do
+    name="${pair%%:*}"
+    env_name="${pair##*:}"
+    if [ -n "${!env_name:-}" ]; then
+      continue
+    fi
+    path="$(service_token_path_for "$name")"
+    [ -s "$path" ] || continue
+    value="$(cat "$path")"
+    export "$env_name=$value"
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -1399,6 +1437,7 @@ smoke_fixture_version() {
 # on exhaustion so callers can map the error code.
 run_seed_leg() {
   local attempt output delay="${DEV_SEED_RETRY_DELAY:-5}"
+  export_seed_service_tokens
   for attempt in 1 2; do
     if output="$(go run ./cmd/devseed/ "$@" 2>&1)"; then
       printf '%s\n' "$output"
@@ -1546,8 +1585,15 @@ cmd_seed() {
   if [ "${DEV_PROFILE:-local}" != "ci" ] && { [ ! -f "$(jwt_key_path)" ] || [ ! -s "$(jwt_key_path)" ]; }; then
     fail "$ERR_SERVICE_UNHEALTHY" "JWT signing key $(jwt_key_path) missing; run make dev-up first"
   fi
-  if [ "${DEV_PROFILE:-local}" != "ci" ] && { [ ! -f "$(service_token_path)" ] || [ ! -s "$(service_token_path)" ]; }; then
-    fail "$ERR_SERVICE_UNHEALTHY" "webhook service token $(service_token_path) missing; run make dev-up first"
+  if [ "${DEV_PROFILE:-local}" != "ci" ]; then
+    local pair name token_path
+    for pair in $SERVICE_TOKEN_FILES; do
+      name="${pair%%:*}"
+      token_path="$(service_token_path_for "$name")"
+      if [ ! -s "$token_path" ]; then
+        fail "$ERR_SERVICE_UNHEALTHY" "dev ingress credential $name ($token_path) missing; run make dev-up first"
+      fi
+    done
   fi
   if [ "${DEV_PROFILE:-local}" != "ci" ] && { [ ! -s "$(mtls_ca_key_path)" ] || [ ! -s "$(mtls_ca_cert_path)" ]; }; then
     fail "$ERR_SERVICE_UNHEALTHY" "dev mTLS CA $DEV_DATA_DIR/dev-ca missing; run make dev-up first"

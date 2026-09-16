@@ -53,6 +53,22 @@ spec:
                   name: release-manager-webhook-service-token
                   key: WEBHOOK_SERVICE_TOKEN_PREVIOUS
                   optional: true
+            # TASK-102 (REQ-011 §562): the Harbor ingress key, scoped to
+            # BundleService/RecordArtifactEvent only. Optional so an overlay
+            # without the Secret keeps that path closed instead of failing to
+            # start; the optional PREVIOUS key supports zero-downtime rotation.
+            - name: DEV_HARBOR_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: release-manager-harbor-service-token
+                  key: HARBOR_SERVICE_TOKEN
+                  optional: true
+            - name: DEV_HARBOR_SERVICE_TOKEN_PREVIOUS
+              valueFrom:
+                secretKeyRef:
+                  name: release-manager-harbor-service-token
+                  key: HARBOR_SERVICE_TOKEN_PREVIOUS
+                  optional: true
           ports:
             # Management-plane Connect HTTP listener.
             - name: http

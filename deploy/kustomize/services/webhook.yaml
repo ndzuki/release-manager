@@ -41,6 +41,29 @@ spec:
                 secretKeyRef:
                   name: release-manager-webhook-service-token
                   key: WEBHOOK_SERVICE_TOKEN
+            # TASK-102 (REQ-011 §562): the CI key guards the SubmitReleaseBundle
+            # entrypoint; the Harbor key guards POST /webhooks/harbor and is
+            # forwarded to the orchestrator as the Harbor service identity.
+            # optional: an overlay that does not provision the Secret leaves the
+            # ingress closed (an empty allowlist matches nothing).
+            - name: DEV_CI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: release-manager-ci-api-key
+                  key: CI_API_KEY
+                  optional: true
+            - name: DEV_HARBOR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: release-manager-harbor-service-token
+                  key: HARBOR_SERVICE_TOKEN
+                  optional: true
+            - name: DEV_HARBOR_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: release-manager-harbor-service-token
+                  key: HARBOR_SERVICE_TOKEN
+                  optional: true
           ports:
             - name: http
               containerPort: 8082
