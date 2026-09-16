@@ -4,6 +4,9 @@
 # Single-port HTTP — serves gRPC, gRPC-Web, and Connect (JSON) from one handler.
 
 GO          := go
+# govulncheck is pinned so the scan is reproducible; bump deliberately (or via
+# the dependabot gomod PR for golang.org/x/vuln).
+GOVULNCHECK_VERSION := v1.8.0
 BUF         := $(shell which buf 2>/dev/null || echo buf)
 PROTO_DIR   := api/proto
 GEN_DIR     := api/gen
@@ -490,6 +493,18 @@ check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
 		printf "$(YELLOW)check-reqs: no REQ docs found in repo, skipping$(NC)\n"; \
 	fi
 
+.PHONY: check-migrations
+check-migrations: ## Static gate: migration numbering is contiguous and every version has up+down (REQ-008 §8-19)
+	$(GO) test -race -count=1 -run TestMigrationVersionsAreContinuousAndPaired ./migrations/
+
+.PHONY: vulncheck
+vulncheck: ## Scan the module against the Go vulnerability database (REQ-008 §8-8)
+	@command -v govulncheck >/dev/null 2>&1 || { \
+		printf "$(YELLOW)installing govulncheck $(GOVULNCHECK_VERSION)...$(NC)\n"; \
+		$(GO) install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION); \
+	}
+	@PATH="$$PATH:$$($(GO) env GOPATH)/bin" bash scripts/vulncheck.sh
+
 .PHONY: check-licenses
 check-licenses: ## Check every shipped dependency's license against the project policy
 	bash scripts/check-licenses.sh
@@ -534,7 +549,7 @@ test-operator-image-sdk-only: ## Run operator image SDK-only gate (REQ-061)
 			--policy imagecheck.operator.yaml \
 			--dockerfile deploy/docker/Dockerfile.operator
 .PHONY: quality
-quality: sdk-check test-coverage lint check-reqs check-licenses check-docs check-config-keys check-probes lint-proto ## Full quality gate run
+quality: sdk-check test-coverage lint check-reqs check-licenses check-docs check-config-keys check-migrations check-probes lint-proto ## Full quality gate run
 
 .PHONY: build-sdkcheck
 build-sdkcheck: proto ## Build sdkcheck

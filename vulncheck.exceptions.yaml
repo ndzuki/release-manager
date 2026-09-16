@@ -1,0 +1,26 @@
+version: "1"
+# govulncheck exceptions (REQ-008 §8-8, TASK-101).
+#
+# `make vulncheck` fails when govulncheck reports a vulnerability that this
+# module's code actually calls. An entry here suppresses exactly one advisory and
+# must carry: why it is accepted, what compensating control exists, an owner, and
+# a review date. Unlike sdkcheck.exceptions.yaml the expiry is a *review* date:
+# govulncheck has no automatic invalidation, so the date records when the team
+# agreed to look again (and to remove the entry once upstream ships a fix).
+exceptions:
+  - id: "GO-2026-5932"
+    owner: "release-manager"
+    module: "golang.org/x/crypto/openpgp"
+    reason: >-
+      The advisory states that golang.org/x/crypto/openpgp is unmaintained,
+      unsafe by design, and has no fixed version. Every call path runs through
+      the Helm Go SDK (helm.sh/helm/v3/pkg/action chart provenance verification)
+      plus incidental init/error paths; ADR-004 forbids executing helm/kubectl as
+      a process, so the SDK cannot be replaced, and the openpgp package cannot be
+      dropped without dropping chart provenance support entirely.
+    compensating_control: >-
+      Charts reach the operator only from source registries on the server-side
+      allowlist with digest pinning (REQ-011 §562, internal/preflight/oci.go);
+      provenance signatures are an additional check, not the perimeter. The
+      exposure is a malicious chart's own signature material, not remote input.
+    expires_at: "2027-03-31"
