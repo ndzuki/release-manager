@@ -14,7 +14,7 @@
 
 ## 2026-09
 
-里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 11 个 PR 合入。
+里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 12 个 PR 合入。
 
 ### 执行链路（升级 / 回滚）
 
@@ -36,6 +36,12 @@
 
 - 分阶段（phased）E2E runner、环境清理收敛与 CI 门禁接线：`make dev-stage-*` 阶段目标与 `e2e-stage`/`e2e-prerequisite`（AC-066-17 前置冒烟门禁）（PR #101，TASK-066）。
 - E2E 门禁 CI 接线修复：向 E2E gate 传递 `DEV_TRUST_ROOT_PRIVATE_KEY`、门禁变绿后恢复 push-main 触发、阻止尚不可通过的正式 E2E 门禁抢跑（2026-09-14 系列提交，TASK-066）。
+
+### 授权与未兑现契约收口（Fixed）
+
+- 前缀推断式授权映射换成逐 procedure 的显式登记表：修复 `SwitchOrganization`（目标组织域 + `organization/write`）、`SetCapabilityGrant`、`CheckEmergencyConflict`、`TriggerInventorySync`、`RecordArtifactEvent` 五个恒 403 的 procedure，并修复 `ChangePassword` 只有 `platform_admin` 能改本人口令的缺陷；新增「proto 新增 procedure 未登记即失败」与「授权对必须落在默认角色矩阵」两条门禁（PR #106，TASK-095）。
+- `ListOperations` 由恒 `unimplemented` 桩改为真实实现（keyset 游标 + 状态过滤 + 租户校验），兑现 REQ-056 的依赖（PR #106，TASK-095）。
+- release-api 审计面补 principal 组织域归属：查询/导出按 principal 组织收敛，`Emit` 拒收跨组织事件，导出记录按 principal 组织落库（PR #106，TASK-095）。
 
 ## 2026-08
 
