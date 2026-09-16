@@ -404,7 +404,8 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 
 1. **异步**：handler 只把事件推进内存缓冲并立刻返回计数（`internal/audit/audit_service_handler.go:41-51` → `internal/audit/emitter.go:69-90`），`accepted` 表示「已入队」，不表示「已持久化」。落库发生在后台 worker 的批量 flush（`internal/audit/emitter.go:128-157`），失败时整批回灌重试（`:134-137`），进程退出时残余批次写入 spool 文件（`:145`、`spool` `:168-197`）。
 2. **无幂等去重**：`id` 若由调用方给出则原样使用（`internal/audit/service.go:57`，仅空值才补 UUID，见 `internal/audit/normalize.go:30-33`），而 INSERT 语句没有 `ON CONFLICT`/`INSERT OR IGNORE`（`internal/store/sqlite/audit.go:93-120`、`internal/store/postgres/audit.go:94-98`）。因此重复 `id` 不是幂等重放，而是让整批事务失败并无限重试——不要把 `Emit` 当幂等接口用。
-3. **永不返回业务错误码**：只要请求非空，恒返回 200 与 accepted/rejected 计数（`internal/audit/audit_service_handler.go:52`）；单条事件被拒只体现在 `rejection_codes` 里（`:49-50`）。
+3. **按事件 id 幂等**（TASK-097）：`audit_events.id` 是去重键，两引擎分别是 `INSERT OR IGNORE`（SQLite）与 `ON CONFLICT (id) DO NOTHING`（PostgreSQL），重放同一事件不失败也不写第二行（首发内容保留）。
+4. **永不返回业务错误码**：只要请求非空，恒返回 200 与 accepted/rejected 计数（`internal/audit/audit_service_handler.go:52`）；单条事件被拒只体现在 `rejection_codes` 里（`:49-50`）。
 
 `QueryAuditEvents` 的响应只回传 `id`/`action`/`status`/`duration_ms`——`toProtoAuditEvent` 丢弃 actor、resource、organization、timestamp 与 metadata（`internal/audit/audit_service_handler.go:164-174`），所以调用方拿不到「谁在什么时间对哪个资源做了什么」，只能拿到动作名与结果。`ExportAuditEvents` 只登记一行 `audit_exports`（`:134-161`，status 恒为 `pending`），仓库内没有任何 worker 消费该表（检索 `AuditExports()` 的非测试命中只有接口与实现自身），导出永远不会真正完成。
 
