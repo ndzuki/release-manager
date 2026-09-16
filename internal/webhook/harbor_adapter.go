@@ -38,7 +38,11 @@ type HarborResource struct {
 
 // NewHarborHandler returns an HTTP handler that parses CloudEvents 1.0
 // from Harbor and forwards them to orchestrator as RecordArtifactEvent.
-func NewHarborHandler(client orchestratorv1connect.BundleServiceClient, sourceID string) http.Handler {
+// serviceToken authenticates that outbound call as the Harbor service identity
+// (REQ-011 §562: the Harbor key is scoped to RecordArtifactEvent only, and the
+// CI key cannot take this path). An empty token leaves the header absent, which
+// the orchestrator rejects.
+func NewHarborHandler(client orchestratorv1connect.BundleServiceClient, sourceID, serviceToken string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -92,6 +96,9 @@ func NewHarborHandler(client orchestratorv1connect.BundleServiceClient, sourceID
 			Resources:     resources,
 		})
 
+		if serviceToken != "" {
+			req.Header().Set("Authorization", "Bearer "+serviceToken)
+		}
 		resp, err := client.RecordArtifactEvent(r.Context(), req)
 		if err != nil {
 			code := connect.CodeOf(err)

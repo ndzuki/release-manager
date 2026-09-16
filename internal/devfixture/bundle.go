@@ -126,7 +126,7 @@ func normalizeChartTgz(tgzPath string) error {
 	// gzip.Header struct field and the explicit form reads clearly (kept
 	// intentional: matches helm's save.go output byte-for-byte).
 	zw.Header.Extra = []byte("+aHR0cHM6Ly95b3V0dS5iZS96OVV6MWljandyTQo=") //nolint:staticcheck // explicit Header field reads clearly
-	zw.Header.Comment = "Helm"                                                //nolint:staticcheck // explicit Header field reads clearly
+	zw.Header.Comment = "Helm"                                            //nolint:staticcheck // explicit Header field reads clearly
 	tw := tar.NewWriter(zw)
 	const fixedModTime = int64(0) // epoch: deterministic regardless of when packaged
 	for {
@@ -257,6 +257,10 @@ func (r *runner) phaseBundle(ctx context.Context) error {
 		PipelineId: bundlePipeline,
 	})
 	req.Header().Set("Idempotency-Key", idempotencyKey("bundle", "submit"))
+	if r.cfg.WebhookAPIKey == "" {
+		return fmt.Errorf("submit release bundle: the CI ingress key is required (set --ci-api-key or DEV_CI_API_KEY; the release-webhook ingress authenticates SubmitReleaseBundle)")
+	}
+	req.Header().Set("Authorization", "Bearer "+r.cfg.WebhookAPIKey)
 	response, err := r.clients.webhook.SubmitReleaseBundle(ctx, req)
 	if err != nil {
 		return fmt.Errorf("submit release bundle: %w", err)

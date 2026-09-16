@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"hash"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"connectrpc.com/connect"
@@ -52,7 +53,12 @@ func ServiceTokenInterceptor(serviceName string, allowedTokens []string, logger 
 				return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("missing service token"))
 			}
 			if !constantTimeMatch(token, hashes) {
-				return nil, connect.NewError(connect.CodePermissionDenied, errors.New("invalid service token"))
+				// An unrecognized credential is unauthenticated, not denied: a
+				// caller composing several credential legs (TryAllInterceptor)
+				// must let the next leg try this token. Only a recognized token
+				// presented to a procedure outside its scope is permission
+				// denied, and that check follows.
+				return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid service token"))
 			}
 			if len(allowed) > 0 && !allowed[req.Spec().Procedure] {
 				return nil, connect.NewError(connect.CodePermissionDenied, errors.New("procedure not allowed for service token"))
@@ -122,6 +128,36 @@ func constantTimeMatch(candidate string, hashes [][]byte) bool {
 		}
 	}
 	return false
+}
+
+// TokenHashes builds the SHA-256 hex-digest allowlist for one credential leg
+// from raw configured values, skipping empty ones (an unset secret leaves the
+// leg with an empty allowlist, which matches nothing).
+func TokenHashes(tokens ...string) []string {
+	var hashes []string
+	for _, token := range tokens {
+		if token = strings.TrimSpace(token); token == "" {
+			continue
+		}
+		hashes = append(hashes, SHA256Hash([]byte(token)))
+	}
+	return hashes
+}
+
+// VerifyTokenHash reports whether candidate matches one of the hex-encoded
+// SHA-256 digests, in constant time. Plain-HTTP entrypoints (the Harbor
+// ingress, which is not a Connect procedure) use it to enforce the same
+// credential contract as ServiceTokenInterceptor.
+func VerifyTokenHash(candidate string, hexHashes []string) bool {
+	hashes := make([][]byte, 0, len(hexHashes))
+	for _, encoded := range hexHashes {
+		decoded, err := hex.DecodeString(encoded)
+		if err != nil {
+			continue
+		}
+		hashes = append(hashes, decoded)
+	}
+	return constantTimeMatch(candidate, hashes)
 }
 
 // SHA256Hash hex-encodes the SHA-256 digest of data.

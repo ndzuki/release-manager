@@ -46,6 +46,7 @@ func main() {
 	flag.BoolVar(&resetMode, "reset", false, "rebuild databases and re-seed (dev-reset-data)")
 	flag.StringVar(&cfg.OrchestratorURL, "orchestrator", defaultOrchestratorURL, "Orchestrator Connect URL")
 	flag.StringVar(&cfg.WebhookURL, "webhook", defaultWebhookURL, "Webhook Connect URL")
+	flag.StringVar(&cfg.WebhookAPIKey, "ci-api-key", os.Getenv("DEV_CI_API_KEY"), "CI ingress key presented to WebhookService/SubmitReleaseBundle (env DEV_CI_API_KEY; TASK-102)")
 	flag.StringVar(&cfg.AuthURL, "auth", defaultAuthURL, "Auth Connect URL")
 	flag.StringVar(&cfg.AdminUser, "admin-user", envOr("DEV_ADMIN_USER", "dev-admin"), "platform admin username (env DEV_ADMIN_USER; REQ-065 contract name dev-admin)")
 	flag.StringVar(&cfg.AdminPassword, "admin-password", os.Getenv("DEV_ADMIN_PASSWORD"), "platform admin password (env DEV_ADMIN_PASSWORD; falls back to data/dev-credentials.env)")

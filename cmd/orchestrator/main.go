@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -486,6 +485,12 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 				// SubmitReleaseBundle only (REQ-011 §561, v21 Step 6 风险行).
 				auth.ServiceTokenInterceptor("release-webhook", s.serviceTokens(), logger,
 					orchestratorv1connect.BundleServiceSubmitBundleProcedure),
+				// REQ-011 §562: the Harbor ingress uses its own key, scoped to
+				// RecordArtifactEvent. A key outside its scope is refused by the
+				// leg that recognizes it, so the two credentials can never be
+				// substituted for each other (AC-011-04/16/17).
+				auth.ServiceTokenInterceptor("release-harbor", s.harborServiceTokens(), logger,
+					orchestratorv1connect.BundleServiceRecordArtifactEventProcedure),
 			),
 		),
 	)
@@ -806,16 +811,20 @@ func (s *orchSvc) startStuckLockScanner(ctx context.Context) {
 // production/non-dev behavior is unchanged (bundle ingress keeps requiring
 // the JWT path, and no token is silently accepted).
 func (s *orchSvc) serviceTokens() []string {
-	current := strings.TrimSpace(os.Getenv("DEV_WEBHOOK_SERVICE_TOKEN"))
-	previous := strings.TrimSpace(os.Getenv("DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS"))
-	var tokens []string
-	if current != "" {
-		tokens = append(tokens, auth.SHA256Hash([]byte(current)))
-	}
-	if previous != "" {
-		tokens = append(tokens, auth.SHA256Hash([]byte(previous)))
-	}
-	return tokens
+	return tokenHashesFromEnv("DEV_WEBHOOK_SERVICE_TOKEN", "DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS")
+}
+
+// harborServiceTokens returns the Harbor ingress key hashes (REQ-011 §562). The
+// Harbor key only authorizes RecordArtifactEvent, so it stays separate from the
+// webhook bundle-ingress token.
+func (s *orchSvc) harborServiceTokens() []string {
+	return tokenHashesFromEnv("DEV_HARBOR_SERVICE_TOKEN", "DEV_HARBOR_SERVICE_TOKEN_PREVIOUS")
+}
+
+// tokenHashesFromEnv reads one rotatable credential pair from the environment.
+// An unset pair yields an empty allowlist, which matches nothing.
+func tokenHashesFromEnv(currentEnv, previousEnv string) []string {
+	return auth.TokenHashes(os.Getenv(currentEnv), os.Getenv(previousEnv))
 }
 
 func loadSourceRegistries(logger *slog.Logger) []orchestrator.SourceRegistry {

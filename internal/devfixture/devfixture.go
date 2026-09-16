@@ -69,6 +69,11 @@ type Config struct {
 	OrchestratorURL string
 	WebhookURL      string
 	AuthURL         string
+	// WebhookAPIKey is the CI ingress key the fixture presents to
+	// WebhookService/SubmitReleaseBundle (REQ-011 §562, TASK-102). The webhook
+	// ingress is authenticated, so a missing key fails the seed with a clear
+	// error instead of an opaque 401.
+	WebhookAPIKey string
 
 	DataDir string
 

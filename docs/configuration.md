@@ -315,7 +315,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 **「Secret 只以引用进入执行链」在配置层的实现**（`AGENTS.md` 约束 5）：
 
 1. **文件不落库**：所有运行时生成的机密都在 `data/`（`.gitignore` 的 `data/`、`certs/`、`.env`、`e2e-results/` 条目），仓库只提交生成物路径的**约定**。
-2. **kustomize `secretGenerator` 走内容 hash**（`deploy/kustomize/dev/kustomization.yaml:39-70`）：`JWT_SIGNING_KEY` ← `data/dev-jwt/jwt-signing-key.pem`；`WEBHOOK_SERVICE_TOKEN` ← `data/dev-service-tokens/webhook-service-token`；`ca.key`/`ca.crt` ← `data/dev-ca/`。名字带 hash ⇒ 轮换密钥/令牌即滚动消费方 Deployment，无需手工 restart。文件路径引用（`../../../data/...`）也是 dev kustomize 需要 `--load-restrictor LoadRestrictionsNone` 的原因（dev.sh apply 处）。
+2. **kustomize `secretGenerator` 走内容 hash**（`deploy/kustomize/dev/kustomization.yaml:39-70`）：`JWT_SIGNING_KEY` ← `data/dev-jwt/jwt-signing-key.pem`；`WEBHOOK_SERVICE_TOKEN` ← `data/dev-service-tokens/webhook-service-token`；`CI_API_KEY` ← `data/dev-service-tokens/ci-api-key`；`HARBOR_SERVICE_TOKEN` ← `data/dev-service-tokens/harbor-service-token`（TASK-102 的两把 ingress 凭据）；`ca.key`/`ca.crt` ← `data/dev-ca/`。名字带 hash ⇒ 轮换密钥/令牌即滚动消费方 Deployment，无需手工 restart。文件路径引用（`../../../data/...`）也是 dev kustomize 需要 `--load-restrictor LoadRestrictionsNone` 的原因（dev.sh apply 处）。
 3. **Pod 侧只以 env/挂载引用出现**：orchestrator 的 CA 不写在 YAML 值里，而是 Secret 以 subPath 挂到 `ca.key_path=/data/gateway-ca.key`（0600）与 `ca.cert_path=/data/gateway-ca.crt`（0644），配置只引用挂载点；agent 令牌经 `ENROLLMENT_TOKEN` 注入；一次性令牌消费即删（`internal/operator/bootstrap/bootstrap.go:96-99`）。
 4. **E2E 口令零落盘**：`credentials.e2e_runner.password_env` 只存**环境变量名**，值 `os.LookupEnv` 现取（§3.9）；`data/e2e-env-config.yaml` 0600。
 5. **prod 路径**：CA 支持 `ca.vault_path`（Vault KV）替代文件对（ADR-017）；Values 明文机密由 `values.secret_patterns` + SecretRef 校验拦截（§3.5）。

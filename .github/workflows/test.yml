@@ -392,6 +392,11 @@ jobs:
       DEV_READER_PASSWORD: ${{ secrets.DEV_READER_PASSWORD }}
       DEV_JWT_SIGNING_KEY: ${{ secrets.DEV_JWT_SIGNING_KEY }}
       DEV_WEBHOOK_SERVICE_TOKEN: ${{ secrets.DEV_WEBHOOK_SERVICE_TOKEN }}
+      # TASK-102 (REQ-011 §562): the CI ingress key and the Harbor ingress key
+      # are independent credentials; the fixture presents the CI key and the
+      # Harbor path forwards its own service token.
+      DEV_CI_API_KEY: ${{ secrets.DEV_CI_API_KEY }}
+      DEV_HARBOR_SERVICE_TOKEN: ${{ secrets.DEV_HARBOR_SERVICE_TOKEN }}
       DEV_M_TLS_CA_KEY: ${{ secrets.DEV_M_TLS_CA_KEY }}
       DEV_M_TLS_CA_CERT: ${{ secrets.DEV_M_TLS_CA_CERT }}
       DEV_TRUST_ROOT_PRIVATE_KEY: ${{ secrets.DEV_TRUST_ROOT_PRIVATE_KEY }}

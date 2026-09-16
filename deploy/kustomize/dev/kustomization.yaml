@@ -55,6 +55,19 @@ secretGenerator:
     namespace: release-manager-dev
     files:
       - WEBHOOK_SERVICE_TOKEN=../../../data/dev-service-tokens/webhook-service-token
+  # TASK-102 (REQ-011 §562): the CI ingress key and the Harbor ingress key are
+  # independent, separately rotatable credentials. The CI key only opens
+  # WebhookService/SubmitReleaseBundle; the Harbor key only opens
+  # POST /webhooks/harbor and BundleService/RecordArtifactEvent, so neither can
+  # be substituted for the other (AC-011-04/16/17).
+  - name: release-manager-ci-api-key
+    namespace: release-manager-dev
+    files:
+      - CI_API_KEY=../../../data/dev-service-tokens/ci-api-key
+  - name: release-manager-harbor-service-token
+    namespace: release-manager-dev
+    files:
+      - HARBOR_SERVICE_TOKEN=../../../data/dev-service-tokens/harbor-service-token
   # 批次5 D1 (AC-065-36): the dev mTLS CA travels through this Secret into
   # the orchestrator gateway mount (/data/gateway-ca.key + /data/gateway-ca.crt,
   # the ca.key_path/ca.cert_path config targets). The local profile sources

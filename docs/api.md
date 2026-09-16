@@ -139,7 +139,7 @@ curl -sS http://127.0.0.1:8083/environment
 | `SyncInventory` 单路径 @8084 网关 | `RequestID`, `ErrorSanitize`, `NewSyncInventoryCertAuthInterceptor` | `cmd/orchestrator/main.go:183-192` |
 | `OperatorService` @8084（`release-operator` gateway 模式） | `RequestID`, `ErrorSanitize` | `cmd/operator/main.go:259-266` |
 
-**没有任何鉴权的真实挂载面**：`NotifierService`、`WebhookService`、`OperatorService`（三个监听器全部）。这不是推测：上表三行的拦截器列表里没有 `NewAuthInterceptor`/`ServiceTokenInterceptor`。直接后果是 `operator.v1.OperatorService/GetActiveOperatorSession` 可被匿名调用——handler 自己只做 `operator_id` 空值与存在性检查（`internal/operator/active_session.go:16-31`），而网关的证书身份中间件只守 `CommandStream` 与 `RenewCertificate` 两条路径（`internal/operator/identity_handler.go:8-19`）。注意 `OperatorService` 并非「完全无防护」：`Enroll` 以一次性 enrollment token 为凭证、`CommandStream` 在网关侧走证书、`RenewCertificate` 在 handler 内要求证书身份，细节见 7.8。真正零凭证可达的是 `GetActiveOperatorSession`。
+**没有任何鉴权的真实挂载面**：`NotifierService` 与 `OperatorService`（网关监听器）。`WebhookService` 自 TASK-102 起由 CI API key 认证（见 3.3），已不属此列。直接后果是 `operator.v1.OperatorService/GetActiveOperatorSession` 可被匿名调用——handler 自己只做 `operator_id` 空值与存在性检查（`internal/operator/active_session.go:16-31`），而网关的证书身份中间件只守 `CommandStream` 与 `RenewCertificate` 两条路径（`internal/operator/identity_handler.go:8-19`）。注意 `OperatorService` 并非「完全无防护」：`Enroll` 以一次性 enrollment token 为凭证、`CommandStream` 在网关侧走证书、`RenewCertificate` 在 handler 内要求证书身份，细节见 7.8。真正零凭证可达的是 `GetActiveOperatorSession`。
 
 ### 3.2 JWT
 
@@ -149,11 +149,20 @@ HS256 对称签名，`internal/auth/jwt.go:22-29`（`NewJWTManager(signingKey, a
 
 审计服务用的是**另一套**独立实现：`internal/jwtauth/jwt.go` 的 `Manager` + `internal/audit/interceptor.go:23-45`，只验签；它不内嵌 Casbin，也不读 release-auth 的库（ADR-015 每库一个权威）。TASK-095 先补了域归属（principal 组织），TASK-103 按 **ADR-021** 把角色判定也接到 release-auth：审计 interceptor 把调用方**自己的** Bearer 一并注入 principal（`internal/audit/interceptor.go:36-45`），handler 每个请求经 `internal/audit/decision.go:44-76` 调 `auth.v1.AuthorizationService/AuthorizeAccess`（200ms 超时），拿到 `allowed`/`reason`/有效组织/`allow_cross_organization`/`max_window_days` 后执行（`internal/audit/authorization.go:41-84`），无法取得判定即 `unavailable`（fail closed，不回落本地角色猜测）。窗口上限来自 release-auth 的返回值而非本地硬编码，超限 → `invalid_argument` + `range_too_large`（`internal/audit/authorization.go:86-105`，REQ-029 AC-029-02）。`Emit` 仍拒收 actor 组织与有效组织不一致的事件。仍未做：会话撤销的本地校验（由 release-auth 侧裁决覆盖），见 3.8。
 
-### 3.3 service token（仅 BundleService）
+### 3.3 service token（bundle ingress 与 Harbor ingress）
 
-`auth.ServiceTokenInterceptor("release-webhook", tokens, logger, BundleServiceSubmitBundleProcedure)`（`cmd/orchestrator/main.go:487-488`），实现见 `internal/auth/service_token.go:28-67`：`Authorization: Bearer` 缺失 → `unauthenticated`；hash 不在白名单 → `permission_denied: invalid service token`；procedure 不在 scope → `permission_denied: procedure not allowed for service token`；通过则注入 actor `service:release-webhook` 并**跳过 Casbin Enforce**。token 明文来自环境变量 `DEV_WEBHOOK_SERVICE_TOKEN` / `DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS`，服务端只存 SHA-256 摘要（`cmd/orchestrator/main.go:800-819`）。
+TASK-102 之后 bundle/Harbor ingress 共三把独立、可分别轮换的凭据（REQ-011 §562）：
 
-`TryAllInterceptor`（`internal/auth/multi_auth.go:22-42`）先试 JWT、仅当失败为 `unauthenticated` 时才试 service token；JWT 路径的 `permission_denied`（例如 Casbin 拒绝）会直接返回而不回退。
+| 凭据 | 环境变量 | 作用面 | 落点 |
+| --- | --- | --- | --- |
+| webhook service token | `DEV_WEBHOOK_SERVICE_TOKEN(+_PREVIOUS)` | **出站**：webhook → orchestrator `SubmitBundle`（actor `service:release-webhook`） | `cmd/webhook/main.go`、`cmd/orchestrator/main.go` 的 `serviceTokens()` |
+| CI API key | `DEV_CI_API_KEY(+_PREVIOUS)` | **入站**：只放行 `WebhookService/SubmitReleaseBundle` | `cmd/webhook/main.go` 的 `auth.ServiceTokenInterceptor("release-ci", …)` |
+| Harbor API key | `DEV_HARBOR_API_KEY(+_PREVIOUS)` | **入站**：只放行 `POST /webhooks/harbor`（`internal/webhook/token_auth.go` 的 `RequireToken`） | `cmd/webhook/main.go` |
+| Harbor service token | `DEV_HARBOR_SERVICE_TOKEN(+_PREVIOUS)` | **出站**：Harbor 入口 → orchestrator `RecordArtifactEvent`（actor `service:release-harbor`） | `cmd/orchestrator/main.go` 的 `harborServiceTokens()` |
+
+`auth.ServiceTokenInterceptor`（`internal/auth/service_token.go:28-70`）语义：`Authorization: Bearer` 缺失 → `unauthenticated`；**不在本腿白名单** → `unauthenticated`（让 `TryAllInterceptor` 继续尝试下一腿，这是多凭证并存的前提）；**在白名单但 procedure 不在 scope** → `permission_denied: procedure not allowed for service token`；通过则注入 actor 并跳过 Casbin Enforce。服务端只存 SHA-256 摘要，明文只来自环境/Secret（`cmd/orchestrator/main.go` 的 `tokenHashesFromEnv`）。AC-011-04/16/17 由 `internal/auth/service_token_routing_test.go` 的交叉用例钉死：CI key 打 Harbor procedure、Harbor key 打 `SubmitBundle` 均 `permission_denied`。
+
+`TryAllInterceptor`（`internal/auth/multi_auth.go:22-42`）逐腿尝试，仅在 `unauthenticated` 时回退；JWT 路径的 `permission_denied`（例如 Casbin 拒绝）直接返回。
 
 ### 3.4 客户端证书（网关）
 
@@ -237,8 +246,8 @@ TASK-095 之前，`(object, action)` 由服务名包含 + 方法名前缀推断�
 | `orchestrator.v1.OrchestratorService/PublishRelease` | 已挂载，校验通过后返回 `Status: "not_implemented"`、`OperationId: ""`，不产生 Operation；发布流水线属 REQ-014/REQ-040 的后续实现 | `internal/orchestrator/service.go:498-502` |
 | `orchestrator.v1.OrchestratorService/SyncInventory` | 两条挂载：JWT 面按 `(release, write)` 裁决；agent 网关面走客户端证书身份（见 3.4） | `internal/auth/procedure_policy.go` 的 `SyncInventory` 行、`cmd/orchestrator/main.go:167-187` |
 | `audit.v1.AuditService/ExportAuditEvents` | 只登记一行 `pending` 导出记录（按 release-auth 判定的有效组织归属），仓库内**没有消费者**，导出不会真正完成 | `internal/audit/audit_service_handler.go:144-209`；检索 `AuditExports()` 的非测试命中只有接口与实现自身 |
-| `orchestrator.v1.BundleService/RecordArtifactEvent` 的 Harbor 入口 | REQ-011 §562 要求 Harbor 用**独立** key（仅该 procedure，AC-011-04 要求与 CI key 不可混用）。当前只有 `DEV_WEBHOOK_SERVICE_TOKEN`（scope 仅 `SubmitBundle`），Harbor adapter `NewHarborHandler` 无生产调用者，登记为 REQ-011 后续项 | `internal/webhook/harbor_adapter.go:41`、`cmd/orchestrator/main.go:485-488`、`cmd/orchestrator/main.go:808-819` |
-| `webhook.v1.WebhookService/SubmitReleaseBundle` | 登记为 `modeUnintercepted`：release-webhook 挂载面**不校验任何凭证**，`internal/webhook/service.go:35` 只做转发校验；REQ-011 §562 的 CI API key 尚未实现 | `cmd/webhook/main.go:44-52`；§7 的鉴权列 |
+| `orchestrator.v1.BundleService/RecordArtifactEvent` 的 Harbor 入口 | **TASK-102 已实现**：`POST /webhooks/harbor` 由 Harbor key 认证并挂载 adapter，出站以 `service:release-harbor` 调 `RecordArtifactEvent`（scope 仅该 procedure） | `cmd/webhook/main.go`、`internal/webhook/harbor_adapter.go`、`internal/webhook/harbor_ingress_test.go`、`cmd/orchestrator/main.go` 的 Harbor 腿 |
+| `webhook.v1.WebhookService/SubmitReleaseBundle` | **TASK-102 已实现入站认证**：CI API key（`DEV_CI_API_KEY`）经 `ServiceTokenInterceptor` 收窄到本 procedure，其它 procedure 不可达 | `cmd/webhook/main.go` 的 `NewWebhookServiceHandler` 拦截器链；`internal/auth/service_token_routing_test.go` |
 | `notifier.v1.NotifierService/Send`、`GetStatus` | 登记为 `modeUnintercepted`：release-notifier 挂载面没有认证拦截器（内部监听器） | `cmd/notifier/main.go:71-78` |
 | `operator.v1.OperatorService/Enroll`、`RenewCertificate`、`CommandStream`、`GetActiveOperatorSession` | 登记为 `modeMTLS`：agent 网关以可验证客户端证书为身份（`Enroll` 在建证书前另带一次性 enrollment token）。`GetActiveOperatorSession` 在网关证书中间件下有零凭证可达面，见 3.1 | `cmd/orchestrator/main.go:167-174`、`internal/operator/identity_handler.go:8-19` |
 | `common.v1.HealthCheckRequest`/`HealthCheckResponse` | 只有消息定义、无 `service`，且没有任何消费者 | `api/proto/common/v1/health.proto:18`、`:21`；检索 `HealthCheckRequest` 除 `api/gen/**` 外零命中。真实探活是 Go 手写 JSON handler（`internal/handler/health.go:12`） |
@@ -512,7 +521,7 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 
 | RPC | 作用 | 鉴权 | 位置 | 关键错误 |
 | --- | --- | --- | --- | --- |
-| `SubmitReleaseBundle` | 接收制品源回调并转发到 `BundleService.SubmitBundle` | 无（本服务不校验任何凭证；service token 只用于**出站**转发） | `internal/webhook/service.go:35` | `unavailable`（`:40`，未配置下游 client）；其余透传 orchestrator 的 `bundleError` 形态；`Idempotency-Key` 透传 |
+| `SubmitReleaseBundle` | 接收 CI 回调并转发到 `BundleService.SubmitBundle` | CI API key（`ServiceTokenInterceptor` 收窄到本 procedure；出站另用 webhook service token） | `internal/webhook/service.go:35` | `unauthenticated`（缺/错 key）、`permission_denied`（key 无权访问该 procedure）、`unavailable`（未配置下游 client）；其余透传 orchestrator 的 `bundleError` 形态；`Idempotency-Key` 透传 |
 
 ### 7.13 orchestrator.v1.OrchestratorService（53 个，`release-orchestrator` 8083）
 
