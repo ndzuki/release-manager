@@ -13,10 +13,10 @@
 
 **现状**
 
-- 库与格式：标准库 `log/slog`，**JSON handler，输出到 `os.Stderr`**（`internal/app/app.go:123`）。所有常驻服务共用这一个入口（`app.Run` 是每个 `cmd/*/main.go` 的唯一启动函数，例如 `cmd/auth/main.go:240`、`cmd/orchestrator/main.go:836`、`cmd/operator/main.go:368`、`cmd/webhook/main.go:65`、`cmd/notifier/main.go:126`、`cmd/api/main.go:116`、`cmd/notification-sink/main.go:141`）⇒ 采集侧就是容器 stderr，无文件日志、无日志级别路由、无异步 sink。
-- **级别不可配置**：handler 的 `Level` 写死 `slog.LevelDebug`（`internal/app/app.go:123`）。`log_level` 配置键存在（`internal/config/config.go:16`、`internal/config/config.go:131`）但**全仓没有任何读取点**（`grep LogLevel` 仅命中这两处定义）⇒ 各服务配置里的 `log_level: debug`（例如 `deploy/kustomize/dev/configs/orchestrator.dev.yaml:2`、`configs/auth.dev.yaml:2`）是**装饰性字段**。信息级/警告级无法在生产上收敛，日志量与敏感信息暴露面无法用配置控制。
+- 库与格式：标准库 `log/slog`，**JSON handler，输出到 `os.Stderr`**（`internal/app/app.go:123` 的 `startupLogger()`）。所有常驻服务共用这一个入口（`app.Run` 是每个 `cmd/*/main.go` 的唯一启动函数，例如 `cmd/auth/main.go:240`、`cmd/orchestrator/main.go:836`、`cmd/operator/main.go:368`、`cmd/webhook/main.go:65`、`cmd/notifier/main.go:126`、`cmd/api/main.go:143`、`cmd/notification-sink/main.go:142`）⇒ 采集侧就是容器 stderr，无文件日志、无日志级别路由、无异步 sink。
+- **级别可配置（TASK-094 闭环）**：`startupLogger` 用 `slog.LevelVar` 构造 handler 并经 `slog.SetDefault` 安装为进程默认 logger（此前 `slog.SetDefault` 全仓零调用），`applyLogLevel`（`internal/app/app.go:133`）在 `LoadService` 之后把 `ServiceConfig.LogLevel`（`internal/config/config.go:131`）解析并写进 LevelVar（`config.ParseLogLevel`，`internal/config/loglevel.go`）：debug/info/warn/error 大小写不敏感；**空或非法 = debug + Warn 一条**——与接线前的硬编码行为一致，属向后兼容的缺省。行为测试 `internal/app/loglevel_test.go`；`make check-config-keys` 保证 `log_level` 不再有"有键无实现"的漂移。各服务配置里的 `log_level: debug`（例如 `deploy/kustomize/dev/configs/orchestrator.dev.yaml:2`、`configs/auth.dev.yaml:2`）从此是真实开关。
 - 结构化字段约定（观察自实际调用点，非文档规定）：
-  - 关系标识：`operator_id`、`session_id`、`cluster_id`、`customer_id`、`last_seen_sequence`（`internal/operator/service.go:466-472`）、`outbox_id`、`command_id`、`sequence`（`internal/operator/service.go:600-603`、`internal/operator/service.go:629-633`）、`op_id`（`internal/orchestrator/operation/recover.go:62-64`）、`operation_id`（`internal/orchestrator/emergency.go:325`）、`definition_id`（`internal/orchestrator/emergency_stuck.go:293`）、`intent_id`、`lock_path`、`terminal_at`（`internal/orchestrator/emergency_stuck.go:290-297`）、`command_id`/`retry_after`（`cmd/operator/main.go:104-105`）、`db`/`driver`（`cmd/orchestrator/main.go:299`、`cmd/api/main.go:43`）。
+  - 关系标识：`operator_id`、`session_id`、`cluster_id`、`customer_id`、`last_seen_sequence`（`internal/operator/service.go:466-472`）、`outbox_id`、`command_id`、`sequence`（`internal/operator/service.go:600-603`、`internal/operator/service.go:629-633`）、`op_id`（`internal/orchestrator/operation/recover.go:62-64`）、`operation_id`（`internal/orchestrator/emergency.go:325`）、`definition_id`（`internal/orchestrator/emergency_stuck.go:293`）、`intent_id`、`lock_path`、`terminal_at`（`internal/orchestrator/emergency_stuck.go:290-297`）、`command_id`/`retry_after`（`cmd/operator/main.go:104-105`）、`db`/`driver`（`cmd/orchestrator/main.go:299`、`cmd/api/main.go:55`）。
   - 通用：`error`（绝大多数 Warn/Error）、`count`、`code`、`status`。
   - request-id：拦截器 `contractsinterceptor.NewRequestIDInterceptor` 同时覆盖 unary 与 streaming（`internal/contracts/interceptor/requestid.go:26-33,50-59`），头名 `X-Request-ID`（`internal/contracts/errors.go:14`）；它把 request-id 写回响应头与错误 metadata，并**只在请求失败时**打日志：`request failed`（字段 `request_id`/`procedure`/`error`，`internal/contracts/interceptor/requestid.go:67-71`）⇒ **成功请求没有统一 request-id 日志行**，跨组件只能用 `operation_id` / `operator_id` / `session_id` 关联。
   - 审计 metadata 里带 `request_id`（`internal/operator/service.go:1405,1413,1431`），但只有 operator 侧审计这么做。
@@ -35,7 +35,7 @@
 
 **建议（当前不存在）**
 
-1. 把 `log_level` 真正接到 handler：`internal/app/app.go:123` 用配置值构造 `slog.HandlerOptions.Level`（收益是可控日志量与降噪）。**这不是三行改动**：`Run` 被 6 个文档按行号引证约 30 处（`docs/cli.md:7,35,42-49,76,387`、本文件 `:16,17,93,197,220`、`docs/configuration.md:365`、`docs/http-collections.md:104`），在 `:123` 附近插入任何行都会整体下移这些锚点，而 `make check-docs` 只判引用是否越界、不校验语义，因此须连同引证一起改（或把逻辑放到 `Run` 末尾以保持上方行号不变）。
+1. ~~把 `log_level` 真正接到 handler~~ **已实现（TASK-094）**：`startupLogger` + `applyLogLevel`（`internal/app/app.go:123/133`）。当初提示的实现陷阱如实留档：`Run` 被 6 个文档按行号引证约 30 处（`docs/cli.md:7,35,42-49,76,387`、本文件 `:16,17,93,197,220`、`docs/configuration.md:365`、`docs/http-collections.md:104`），在 `:123` 附近插入行会整体下移这些锚点且 `make check-docs` 不校验语义——因此接线采用「`:123` 原位单行替换 + 空行槽位放 `applyLogLevel` 调用 + helper 追加到文件尾部」的零位移方案，上方引证行号全部保持。
 2. 在日志侧统一注入 request-id（与 `NewRequestIDInterceptor` 同源），使「一次写请求 → 授权 → 审计 → outbox」可只用日志还原。
 3. 为致命启动错误加退出码约定与 `os.Exit` 前的最后一条结构化摘要（当前只有两行文本，见 §2 无指标可替代）。
 
@@ -90,7 +90,7 @@
 - 传播能力是真的存在一半：`TraceInterceptor()`（注释「unary」，`internal/authorization/tracing.go:29-30`）被装在 auth（`cmd/auth/main.go:184`）、orchestrator 管理面（`cmd/orchestrator/main.go:448,515`）以及 orchestrator→auth 的**客户端**（`cmd/orchestrator/main.go:329`）⇒ auth 与 orchestrator 之间的 unary 调用可携带/透传 W3C traceparent；但：
   - 流式 RPC 不被 tracing 覆盖：`TraceInterceptor()` 返回 `connect.UnaryInterceptorFunc`（`internal/authorization/tracing.go:30`），因此 `WatchOperation`、`CommandStream` 不产生 span；网关 handler 只挂 request-id 与 error-sanitize（`cmd/orchestrator/main.go:371-374`）；
   - agent ↔ 网关这条最关键链路没有安装 tracing（`cmd/operator/main.go` 无 `InstallTracing` 调用）；
-  - trace id **不进日志**（slog handler 无 trace 关联，`internal/app/app.go:123`）⇒ 即使将来有 exporter，也无法从日志跳到 trace。
+  - trace id **不进日志**（`startupLogger` 构造的 handler 无 trace 关联，`internal/app/app.go:123`）⇒ 即使将来有 exporter，也无法从日志跳到 trace。
 - 结论：**无可用追踪面**。可用的是「两个服务之间的 trace context 透传骨架」，其余为空白。
 
 **建议（未实现）**
@@ -110,21 +110,21 @@
 | `GET /readyz` | readiness 目标；全通过 200，任一失败 503 + `{"status":"degraded","checks":{...}}` | 可能 | `internal/handler/ready.go:11-34`、`internal/app/app.go:152-158` |
 | `GET /environment` | 环境指纹（service/environment/environment_id/production） | 不可能 | `internal/app/app.go:91-116,144` |
 | `GET /metrics` | Prometheus 文本 | 不可能 | `cmd/auth/main.go:136-137`、`cmd/orchestrator/main.go:316-319` |
-| `GET /notifications` | notification-sink 的 dev 投递观测（含 `dropped_count`） | 可能 5xx | `cmd/notification-sink/main.go:86-131` |
+| `GET /notifications` | notification-sink 的 dev 投递观测（含 `dropped_count`） | 可能 5xx | `cmd/notification-sink/main.go:87-132` |
 
-- readiness 贡献项（现状只有三个服务有实质检查）：orchestrator `database`（2s 超时 ping）+ `cleanup_gc`（`cmd/orchestrator/main.go:248-266`，GC 不健康的定义是「距上次成功 ≥ 2×interval」，`internal/orchestrator/gc_health.go:113`）；auth `database` + `redis`（`cmd/auth/main.go:67-87`）；notifier `database`（`cmd/notifier/main.go:50-61`）。
-- **`noop` 检查意味着假就绪**：没有实现 `ReadinessChecks` 的服务（webhook、notification-sink、operator agent，`grep ReadinessChecks cmd/` 只有 auth/notifier/orchestrator）只有 `{"noop": ok}`（`internal/app/app.go:134-136`）⇒ `/readyz` 恒 200，与依赖无关。operator agent 尤其要注意：它的 `/readyz` **与网关连接状态无关**，Pod Ready 不代表 operator 在线。
-- `/health` 的 `gc` 子对象语义：`disabled` 被改写为 `healthy` 上报（`cmd/orchestrator/main.go:275-277`），`status` 取值 `healthy|degraded|disabled`（`internal/orchestrator/gc_health.go:12-14`）⇒ 「GC 关掉」和「GC 正常」在 `/health` 上不可区分。
-- 探针配置现状：`readinessProbe` 只设 `periodSeconds: 5`，`livenessProbe` 只设 `initialDelaySeconds: 10` + `periodSeconds: 10`（`deploy/kustomize/services/orchestrator.yaml:65-75`；auth `deploy/kustomize/services/auth.yaml:43-53`、notifier `deploy/kustomize/services/notifier.yaml:36-46`、webhook `deploy/kustomize/services/webhook.yaml:47-57`、notification-sink `deploy/kustomize/services/notification-sink.yaml:32-42`、customer agent `deploy/kustomize/customer-agent/base/deployment.yaml:57-67` 同形）；**没有任何 `timeoutSeconds`/`failureThreshold`/`startupProbe`**（`grep deploy/kustomize` 零命中）⇒ 采用 K8s 默认 `timeoutSeconds=1`、`failureThreshold=3`。因为启动期同步跑迁移（`internal/app/app.go:146` → `cmd/orchestrator/main.go:524-545`），这套默认值构成「慢迁移被 liveness 打断」的结构性风险（处置见 `docs/runbook.md` §1）。
-- postgres/redis 用镜像自带客户端探测（`pg_isready`、`redis-cli ping`）：`deploy/kustomize/postgres/deployment.yaml:38-47`、`deploy/kustomize/redis/deployment.yaml:27-35`——这两个是**全环境里唯二带真实失败语义的 liveness**。
+- readiness 贡献项（TASK-099 后**七个进程全部有真实检查**）：orchestrator `database`（2s 超时 ping）+ `cleanup_gc`（`cmd/orchestrator/main.go:248-266`，GC 不健康的定义是「距上次成功 ≥ 2×interval」，`internal/orchestrator/gc_health.go:113`）；auth `database` + `redis`（`cmd/auth/main.go:67-87`）；notifier `database`（`cmd/notifier/main.go:50-61`）；**webhook `orchestrator`**——GET 上游 `/readyz`，非 200/不可达即 NotReady（`cmd/webhook/main.go:90`，超时 2s，上游地址与 Register 客户端同源 `orchestratorBaseURL` `cmd/webhook/main.go:79`）；**operator agent `gateway_session`**——agent 与网关的 CommandStream 存活才 Ready，重连退避期间如实 NotReady（`cmd/operator/main.go:382` + `Agent.Connected()`，`internal/operator/agent/connected_test.go` 锁定生命周期；gateway 模式无出站会话，保持无检查）；**notification-sink `config`**——dev 测试替身无外部依赖，唯一前置是解码出的 `http_port` 可用，缺失即 fail-closed（`cmd/notification-sink/main.go:151`）。
+- **`noop` 假就绪已退出集群路径**：没有实现 `ReadinessChecks` 的进程仍会得到 `{"noop": ok}`（`internal/app/app.go:134-136`），但 kustomize 里的六个 Deployment（含 customer agent）现已全部贡献真实检查；剩余 noop 只影响非集群进程（如本地 `cmd/api`）⇒ 历史上「Pod Ready 不代表 operator 在线」的误判面已闭环（TASK-099 AC3）。
+- `/health` 的 `gc` 子对象语义：`disabled` 被改写为 `healthy` 上报（`cmd/orchestrator/main.go:275-277`），`status` 取值 `healthy|degraded|disabled`（`internal/orchestrator/gc_health.go:12-14`）⇒ 「GC 关掉」和「GC 正常」在 `/health` 上不可区分。**语义裁定（REQ-099 AC1 修订）**：`/health` 定位为纯 liveness——进程活着就无条件 200 是设计而非缺陷，「可失败性」一律落 `/readyz`（把依赖失败塞进 liveness 会在依赖抖动时引发重启风暴而非摘流量）。
+- 探针配置现状（TASK-099 重写）：每个应用容器都有 **`startupProbe`（httpGet `/health`）**吸收启动/同步迁移窗口（`deploy/kustomize/services/orchestrator.yaml:65-90`：period 5s × failureThreshold 120 = 最长 10 分钟启动预算；auth/notifier/webhook/notification-sink/customer-agent 同形，见各 yaml），`readinessProbe` 指向 `/readyz`、`livenessProbe` 指向 `/health`，全部探针**显式 `timeoutSeconds`**（HTTP 3s、exec 5s）与显式 `failureThreshold`（startup 120/60，其余 3；customer agent readiness 12 以容忍重连窗）。此前全树零 `startupProbe`/零显式超时（K8s 默认 `timeoutSeconds=1`），叠加启动期同步跑迁移（`internal/app/app.go:146` → `cmd/orchestrator/main.go:524-545`）构成「慢迁移被 liveness 打断」的结构性风险，已消除。门禁：`make check-probes`（`deploy/dev/probes_gate_test.go`）遍历 `deploy/kustomize` 断言 startupProbe/显式超时/readiness-liveness 路径分离，负控制 `TestProbeGateRejectsHistoricalShape` 证明其可失败。
+- postgres/redis 用镜像自带客户端探测（`pg_isready`、`redis-cli ping`）：`deploy/kustomize/postgres/deployment.yaml:40-59`、`deploy/kustomize/redis/deployment.yaml:28-45`——这两个仍是**全环境里唯二带真实失败语义的 liveness**（应用侧 liveness 恒 200 是上面的显式裁定）。
 - 网关端口 8084 没有任何 HTTP 观测面（只有 OperatorService + SyncInventory 两条路由，`cmd/orchestrator/main.go:166-192`）⇒ 观测只能靠 TCP（`deploy/dev/dev.sh:1176-1180`）。
 - 授权新鲜度在就绪之外**没有任何观测**：`auth_policy_health`（`internal/authorization/metrics.go:45-48`）是唯一信号，且 `/readyz` 不含它 ⇒ 授权快照陈旧时 Pod 仍 100% Ready，只有客户端拿到 `unavailable: authorization_snapshot_stale` 才知道（`internal/orchestrator/rollback.go:166-169`）。
 
 **建议（未实现）**
 
-1. `/health` 加一个「进程不再前进」的判据（例如最近一次成功推进后台循环的时间戳超龄），否则它只回答「进程还在」。
-2. 为慢启动补 `startupProbe`（manifest 层，一处加、全服务复用），把 readiness 的 `failureThreshold` 显式化。
-3. 给 operator agent 的 `/readyz` 加「与网关的流是否存活」检查项——这是当前最容易造成误判的假就绪。
+1. `/health` 加一个「进程不再前进」的判据（例如最近一次成功推进后台循环的时间戳超龄），否则它只回答「进程还在」。注意与上面的 liveness 裁定保持一致：新判据若引入，应进 `/readyz` 或独立端点，而不是把失败语义塞回 liveness。
+2. ~~为慢启动补 `startupProbe`、显式化 readiness `failureThreshold`~~ **已实现（TASK-099）**：全 kustomize 覆盖 + `make check-probes` 门禁（见上方现状）。
+3. ~~给 operator agent 的 `/readyz` 加「与网关的流是否存活」检查项~~ **已实现（TASK-099）**：`gateway_session`（`cmd/operator/main.go:382`）。
 4. 把 `auth_policy_health` 与「审计落盘是否前进」做成 readiness 或独立的 `/healthz/dependency`（谨慎：会让依赖抖动直接摘流量，需先定 SLO）。
 
 ## 5. 审计事件
@@ -146,9 +146,9 @@
 - 保留与归档（现状）：
   - 配置键与默认：`audit.archive.retention_days`（默认 90）、`poll_interval`（6h）、`batch_size`（1000）、`archive_dir`（`data/archives`）、`compression`（只接受 `gzip_jsonl`）、`checksum_algorithm`（只接受 `sha256`）（`internal/audit/archive_config.go:8-29`）；`retention_days <= 0` 即关闭（`internal/audit/archive_config.go:19-29` + `internal/audit/archive_worker.go:28-33`）。
   - 动作：按 `created_at < cutoff` 分批读出 → gzip JSONL + sha256 sidecar → 已存在且校验匹配则只补删除（幂等）→ 任何编码/IO/校验失败**不删除任何事件**（`internal/audit/archiver.go:38-120`，归档前再次 `sanitizeAuditEvent`，`internal/audit/archiver.go:80` + `internal/audit/sanitize.go:29-42`）。
-  - 但**执行者不存在**：唯一装配点是 `release-api`（`cmd/api/main.go:59-76`），而 worker 的启动方法签名与 `internal/app/app.go:42-44` 的 `backgroundService` 不匹配 ⇒ 不会被调用；且集群里没有 `release-api` Deployment（`deploy/kustomize/services/kustomization.yaml:3-9`）。⇒ **现状：retention 归档不运行**（详见 `docs/runbook.md` §10 第 4 条）。
+  - **执行者的启动面已修复（TASK-094 §7-9）**：`apiSvc` 原 `RunBackground(ctx, *slog.Logger)` 与 `internal/app/app.go:42-44` 的 `backgroundService`（`Run(context.Context)`）签名不匹配 ⇒ worker 从不启动；现已改为精确匹配并加编译期断言（`cmd/api/main.go:45-48/93`）。剩余现实：**集群里没有 `release-api` Deployment**（`deploy/kustomize/services/kustomization.yaml:3-9`）⇒ 归档只在本地 `make run-api` 进程里运行（详见 `docs/runbook.md` §10 第 4 条）。
 - 查询与导出（现状有接口、能力不完整）：
-  - 契约：`AuditService { Emit; QueryAuditEvents; ExportAuditEvents }`（`api/proto/audit/v1/audit.proto`），唯一挂载点 `cmd/api/main.go:48-57`（整个方法集用 bearer access token 保护：`audit.NewJWTInterceptor`）；`internal/audit/service.go:16-19` 的轻量变体只实现 `Emit`，Query/Export 由内嵌 `UnimplementedAuditServiceHandler` 返回 unimplemented。
+  - 契约：`AuditService { Emit; QueryAuditEvents; ExportAuditEvents }`（`api/proto/audit/v1/audit.proto`），唯一挂载点 `cmd/api/main.go:65-73`（整个方法集用 bearer access token 保护：`audit.NewJWTInterceptor`）；`internal/audit/service.go:16-19` 的轻量变体只实现 `Emit`，Query/Export 由内嵌 `UnimplementedAuditServiceHandler` 返回 unimplemented。
   - 存储侧能力齐全：`Create/CreateBatch/Query/GetByID/Count/ListByResource/ListOlderThan/DeleteByIDs`（`internal/store/postgres/audit.go:18,86,133,190,196,269,300`；SQLite 同名方法齐全），过滤维度 `organization/resource_type/resource_id/actor_id/action/status/time range` + cursor 分页（`internal/audit/audit_service_handler.go:56-108`）。
   - **查询响应丢字段**：`toProtoAuditEvent` 只返回 `id/action/status/duration_ms`（`internal/audit/audit_service_handler.go:164-174`），proto 里声明的 `actor`、`resource_type`、`resource_id`、`change_summary`、`metadata`、`created_at` 全部不填（`api/proto/audit/v1/audit.proto` 的 `AuditEvent`）⇒ 取证必须回到 SQL 层（见 `docs/runbook.md` §9.1 第 5 组命令）。
   - **导出是占位**：`ExportAuditEvents` 只 insert 一条 `status="pending"` 记录 + 一条 `export.created` 审计事件（`internal/audit/audit_service_handler.go:111-162`，默认时间窗 30 天）；`AuditExportStore` 接口只有 `CreateWithEvent`，全仓没有任何 worker 读取或推进该状态 ⇒ 没有文件、没有下载入口、没有状态查询。
@@ -169,9 +169,9 @@
 - 仓库内没有任何告警规则、Alertmanager、通知规则文件或 SLO 定义（`grep -i "alert\|slo" deploy/` 无告警产物；`docs/dependencies.md` 亦无可观测后端依赖）。
 - 唯一与「告警」同名的代码是 stuck-lock 的**进程内去重集合**（`internal/orchestrator/emergency_stuck.go:8-16` 的 `AlertedStuckLocks`）与其副作用：**一条 Warn 日志 + 一条审计事件**（`internal/orchestrator/emergency_stuck.go:290-299,312-330`，日志文案 `emergency target lock is stuck`，审计 `resource_type=operation`/`action=emergency_lock_stuck`/`status=stuck`）。扫描 60s 一轮、按 `intent_id` 去重、重启后去重集清空（`cmd/orchestrator/main.go:746,781-798`）。⇒ 「告警」的落地形态是**日志与审计**，没有任何东西会主动找人。
 - 其他内置观测副产物：`make dev-status` 的 `data/dev-status.json`（`deploy/dev/dev.sh:1583-1636`）与生命周期失败时自动落盘的 `data/diagnostics/<ISO8601>/`（`deploy/dev/dev.sh:114-159`）；两者都是**事后取证**，不是告警。
-- 探针是唯一「自动发现」机制，但 §4 已说明其语义（`/health` 不失败、部分服务 `/readyz` 假就绪、无 startupProbe）。
+- 探针是唯一「自动发现」机制：`/health` 按裁定恒 200（纯 liveness），`/readyz` 已全服务真实化（§4），startupProbe 兜住慢启动，`make check-probes` 防漂移。
 - 授权链路的「健康」只有指标（`auth_policy_health`），无人消费 ⇒ 等同于没有。
-- 现状下可用的「人肉告警路径」只有通知子系统本身：notifier 消费 `notification_jobs`（轮询 10s、上限 10 次、退避 5s→24h、24h 后 dead-letter、dead-letter 保留 30 天，`internal/notifier/consumer.go:42-52`、`internal/notifier/retry.go:24-32`），sender 只有 webhook 一种实现，投递目标取自 job 的 `recipient` 字段（`cmd/notifier/main.go:80-81`、`internal/notifier/webhook.go:46-47,60-77`，HTTP 客户端超时 30s 见 `internal/notifier/webhook.go:51-53`），非 webhook 通道一律 `ErrCodeInvalidRecipient`（`internal/notifier/webhook.go:75-77`）⇒ dev 里事件能落到 sink，只是因为 fixture 把 recipient 写成了 sink 地址（sink 缓冲容量 100，`cmd/notification-sink/main.go:141`）⇒ **它是「发布事件的用户通知」，不是运维告警**，且 sink 有容量上限并会报 `dropped_count`（`cmd/notification-sink/main.go:107-130`）。
+- 现状下可用的「人肉告警路径」只有通知子系统本身：notifier 消费 `notification_jobs`（轮询 10s、上限 10 次、退避 5s→24h、24h 后 dead-letter、dead-letter 保留 30 天，`internal/notifier/consumer.go:42-52`、`internal/notifier/retry.go:24-32`），sender 只有 webhook 一种实现，投递目标取自 job 的 `recipient` 字段（`cmd/notifier/main.go:80-81`、`internal/notifier/webhook.go:46-47,60-77`，HTTP 客户端超时 30s 见 `internal/notifier/webhook.go:51-53`），非 webhook 通道一律 `ErrCodeInvalidRecipient`（`internal/notifier/webhook.go:75-77`）⇒ dev 里事件能落到 sink，只是因为 fixture 把 recipient 写成了 sink 地址（sink 缓冲容量 100，`cmd/notification-sink/main.go:142`）⇒ **它是「发布事件的用户通知」，不是运维告警**，且 sink 有容量上限并会报 `dropped_count`（`cmd/notification-sink/main.go:108-131`）。
 
 **建议（最小告警集，未实现）**
 
@@ -194,17 +194,17 @@
 
 | 信号 | 现状 | 证据 | 缺口 |
 | --- | --- | --- | --- |
-| 日志 | slog JSON → stderr，级别恒 Debug | `internal/app/app.go:123` | 无级别控制（`log_level` 有键无实现：`internal/config/config.go:16,131`）；无 request-id 字段 |
+| 日志 | slog JSON → stderr，级别由 `log_level` 控制（缺省/非法=debug） | `internal/app/app.go:123`（`startupLogger`/`applyLogLevel`）、`internal/config/loglevel.go` | 无 request-id 字段；级别收敛已可用（TASK-094 闭环） |
 | 指标 | 仅授权 + 身份收敛，仅 auth/orchestrator 两个 `/metrics` | `internal/authorization/metrics.go:23-71`、`internal/operator/identity_metrics.go:42-58`、`cmd/auth/main.go:136-137`、`cmd/orchestrator/main.go:316-319` | 无运行时/进程指标（`grep collectors\.` 零命中）；无抓取配置；其余 5 类进程 0 指标 |
 | 追踪 | 只装 provider + W3C 传播，无 exporter | `internal/authorization/tracing.go:15-27` | 无跨进程追踪能力；agent 侧未装配；trace id 不进日志 |
-| liveness | `/health` 恒 200（orchestrator 附 `gc`） | `internal/handler/health.go:12-28` | 无失败语义；`gc` 的 disabled 被报成 healthy（`cmd/orchestrator/main.go:275-277`） |
-| readiness | `/readyz` 200/503 + checks | `internal/handler/ready.go:11-34` | 无 startupProbe、`timeoutSeconds`/`failureThreshold` 全默认（`deploy/kustomize/services/orchestrator.yaml:65-75`） |
-| readiness 覆盖面 | database / redis / cleanup_gc 三项 | `cmd/orchestrator/main.go:248-266`、`cmd/auth/main.go:67-87`、`cmd/notifier/main.go:50-61` | webhook、notification-sink、operator agent 只有 `noop`（`internal/app/app.go:134-136`）⇒ 假就绪 |
+| liveness | `/health` 恒 200＝纯 liveness（REQ-099 裁定），orchestrator 附 `gc` | `internal/handler/health.go:12-28` | 无「前进性」判据（§4 建议 1）；`gc` 的 disabled 被报成 healthy（`cmd/orchestrator/main.go:275-277`） |
+| readiness | `/readyz` 200/503 + checks；七进程全真实 | `internal/handler/ready.go:11-34` | 探针层已有 startupProbe + 显式超时（`make check-probes`）；`auth_policy_health` 未入检查 |
+| readiness 覆盖面 | database / redis / cleanup_gc / orchestrator-upstream / gateway_session / sink-config | `cmd/orchestrator/main.go:248-266`、`cmd/auth/main.go:67-87`、`cmd/notifier/main.go:50-61`、`cmd/webhook/main.go:90`、`cmd/operator/main.go:382`、`cmd/notification-sink/main.go:151` | 本地 `cmd/api` 仍是 `noop`（`internal/app/app.go:134-136`，非集群路径） |
 | 环境指纹 | `GET /environment` | `internal/app/app.go:91-116` | 无版本/commit 字段（镜像用内容寻址 tag，`deploy/dev/dev.sh:809-828`，但运行时读不到自身版本） |
 | 审计事件 | 写路径强制脱敏 + 异步批量落库 | `internal/audit/normalize.go:12-28`、`internal/redact/sanitize.go:23-26`、`internal/audit/emitter.go:123-157` | 无指标、spool 无回灌（`internal/audit/spool.go:20-28`）、维护模式不创建 emitter（`cmd/orchestrator/main.go:342-344`） |
 | 审计查询 | RPC + 双引擎 store 齐全 | `api/proto/audit/v1/audit.proto`、`internal/store/postgres/audit.go:133,196` | 响应只回 4 字段（`internal/audit/audit_service_handler.go:164-174`）；部署形态无路由/无服务（`web/nginx.conf:17-71`） |
 | 审计导出 | 只落一条 `pending` 记录 | `internal/audit/audit_service_handler.go:111-162` | 无消费者、无产物、无状态推进 |
-| 审计保留/归档 | 实现完整（gzip+sha256+幂等） | `internal/audit/archiver.go:38-120`、`internal/audit/archive_config.go:19-29` | 唯一装配点的方法签名不匹配 ⇒ worker 不启动（`cmd/api/main.go:72-76` vs `internal/app/app.go:42-44`）；集群无 release-api |
+| 审计保留/归档 | 实现完整（gzip+sha256+幂等），worker 随 api 进程启动（`cmd/api/main.go:93`，TASK-094 闭环） | `internal/audit/archiver.go:38-120`、`internal/audit/archive_config.go:19-29` | 集群无 release-api Deployment ⇒ 只在本地进程跑 |
 | Timeline（单 Operation） | snapshot + timeline + heartbeat 流；`ROLLOUT_PROGRESS` 由 agent 的 rollout reporter 上报（`internal/operator/agent/rollout_progress.go:56,73-74`，接线 `cmd/operator/main.go:220`） | `api/proto/orchestrator/v1/orchestrator.proto`（`WatchOperation`）、`internal/store/store.go:361-370` | 只有 `WatchOperation` 一条路；`ListOperations` 未实现（`internal/orchestrator/service.go:1531-1533`）⇒ 无全局视角 |
 | 授权新鲜度 | 2 个 gauge + 1 个 counter | `internal/authorization/metrics.go:37-48`、`internal/authorization/module.go:286-291` | 不在 readiness 内 ⇒ Pod 全绿也可能整片 `authorization_snapshot_stale` |
 | 会话/投递健康 | 只有日志 | `internal/operator/service.go:580,1123` | 无指标；在线性评估器未接线（`internal/operator/session_registry.go:27-104`） |
@@ -223,12 +223,12 @@
 5. **指标抓取 / 告警规则 / SLO**：无（`deploy/` 内无任何可观测后端对象）。
 6. **审计发射器指标的对外暴露**：无（`internal/audit/metrics.go:6-26` 无生产调用者）。
 7. **审计 spool 自动回灌**：无（`internal/audit/spool.go:20-28` 仅测试调用）。
-8. **审计归档的运行时执行**：无（`cmd/api/main.go:72-76` 与 `internal/app/app.go:42-44` 接口不匹配；集群无 release-api Deployment）。
+8. ~~**审计归档的运行时执行**：无~~ **TASK-094 闭环**：`apiSvc.Run/Close` 已匹配 app 生命周期接口（`cmd/api/main.go:93/103` + 编译期断言），本地 api 进程内归档循环真实启动；「集群环境无归档」仍成立（无 release-api Deployment）。
 9. **审计导出的产物与状态机**：无（`AuditExportStore` 只有 `CreateWithEvent`）。
 10. **审计查询的完整字段返回**：无（`internal/audit/audit_service_handler.go:164-174`）。
 11. **Operation 全局枚举能力**：无（`internal/orchestrator/service.go:1531-1533`）。
 12. **会话在线性的生产判定（suspect/offline 推进器）**：无（`internal/operator/session_registry.go:27-104` 的构造与 `Run`/`evaluate` 无生产调用者；`cmd/operator/main.go:303-336` 在 agent 模式下 `s.st == nil` 空转）。
-13. **日志级别控制、DB 池使用率指标、迁移耗时指标、startupProbe**：均无（各自证据见 §1、§2、§4）。
+13. **DB 池使用率指标、迁移耗时指标**：无（证据见 §2）。日志级别控制与 startupProbe 已不再是缺口——TASK-094/TASK-099 分别落地（§1、§4）。
 
 无法从代码判定（需环境验证或产品决策）：
 
@@ -236,4 +236,4 @@
 - `NewRequestIDInterceptor` 是否另有日志输出（未逐行读完该文件）。
 - 「全局 outbox sequence 造成跨 operator gap 误判」是设计还是缺陷（`internal/operator/service.go:1111`）。
 
-> 事实源：`internal/app/app.go`、`internal/handler/health.go`、`internal/handler/ready.go`、`internal/config/config.go`、`internal/authorization/metrics.go`、`internal/authorization/module.go`、`internal/authorization/tracing.go`、`internal/operator/identity_metrics.go`、`internal/operator/service.go`、`internal/operator/session_registry.go`、`internal/operator/agent/agent.go`、`internal/orchestrator/service.go`、`internal/orchestrator/emergency_stuck.go`、`internal/orchestrator/gc_health.go`、`internal/orchestrator/cleanup.go`、`internal/orchestrator/operation/recover.go`、`internal/audit/emitter.go`、`internal/audit/metrics.go`、`internal/audit/spool.go`、`internal/audit/normalize.go`、`internal/audit/sanitize.go`、`internal/audit/event.go`、`internal/audit/archive_config.go`、`internal/audit/archive_worker.go`、`internal/audit/archiver.go`、`internal/audit/audit_service_handler.go`、`internal/audit/service.go`、`internal/redact/sanitize.go`、`internal/notifier/consumer.go`、`internal/notifier/retry.go`、`internal/store/store.go`、`internal/store/postgres/audit.go`、`internal/store/postgres/operators.go`、`internal/auth/interceptor.go`、`internal/auth/service_token.go`、`internal/postgres/db.go`、`internal/migration/migrate.go`、`cmd/auth/main.go`、`cmd/orchestrator/main.go`、`cmd/operator/main.go`、`cmd/notifier/main.go`、`cmd/api/main.go`、`cmd/notification-sink/main.go`、`go.mod`、`migrations/embed.go`、`api/proto/audit/v1/audit.proto`、`api/proto/orchestrator/v1/orchestrator.proto`、`web/nginx.conf`、`web/src/connect/client.ts`、`web/src/stores/audit.ts`、`deploy/kustomize/services/orchestrator.yaml`、`deploy/kustomize/services/kustomization.yaml`、`deploy/kustomize/postgres/deployment.yaml`、`deploy/kustomize/redis/deployment.yaml`、`deploy/kustomize/customer-agent/base/deployment.yaml`、`deploy/dev/dev.sh`、`deploy/dev/lib/host.sh`、`Makefile`、`docs/dependencies.md`、`docs/decisions/ADR-016-prometheus-otel.md`、`docs/decisions/ADR-011-controlled-emergency-change-and-convergence.md`、`docs/architecture.md`
+> 事实源：`internal/app/app.go`、`internal/config/loglevel.go`、`internal/app/loglevel_test.go`、`internal/operator/agent/connected_test.go`、`deploy/dev/probes_gate_test.go`、`internal/handler/health.go`、`internal/handler/ready.go`、`internal/config/config.go`、`internal/authorization/metrics.go`、`internal/authorization/module.go`、`internal/authorization/tracing.go`、`internal/operator/identity_metrics.go`、`internal/operator/service.go`、`internal/operator/session_registry.go`、`internal/operator/agent/agent.go`、`internal/orchestrator/service.go`、`internal/orchestrator/emergency_stuck.go`、`internal/orchestrator/gc_health.go`、`internal/orchestrator/cleanup.go`、`internal/orchestrator/operation/recover.go`、`internal/audit/emitter.go`、`internal/audit/metrics.go`、`internal/audit/spool.go`、`internal/audit/normalize.go`、`internal/audit/sanitize.go`、`internal/audit/event.go`、`internal/audit/archive_config.go`、`internal/audit/archive_worker.go`、`internal/audit/archiver.go`、`internal/audit/audit_service_handler.go`、`internal/audit/service.go`、`internal/redact/sanitize.go`、`internal/notifier/consumer.go`、`internal/notifier/retry.go`、`internal/store/store.go`、`internal/store/postgres/audit.go`、`internal/store/postgres/operators.go`、`internal/auth/interceptor.go`、`internal/auth/service_token.go`、`internal/postgres/db.go`、`internal/migration/migrate.go`、`cmd/auth/main.go`、`cmd/orchestrator/main.go`、`cmd/operator/main.go`、`cmd/notifier/main.go`、`cmd/api/main.go`、`cmd/notification-sink/main.go`、`go.mod`、`migrations/embed.go`、`api/proto/audit/v1/audit.proto`、`api/proto/orchestrator/v1/orchestrator.proto`、`web/nginx.conf`、`web/src/connect/client.ts`、`web/src/stores/audit.ts`、`deploy/kustomize/services/orchestrator.yaml`、`deploy/kustomize/services/kustomization.yaml`、`deploy/kustomize/postgres/deployment.yaml`、`deploy/kustomize/redis/deployment.yaml`、`deploy/kustomize/customer-agent/base/deployment.yaml`、`deploy/dev/dev.sh`、`deploy/dev/lib/host.sh`、`Makefile`、`docs/dependencies.md`、`docs/decisions/ADR-016-prometheus-otel.md`、`docs/decisions/ADR-011-controlled-emergency-change-and-convergence.md`、`docs/architecture.md`

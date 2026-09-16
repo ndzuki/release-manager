@@ -30,11 +30,11 @@
 
 ### 1.2 端口与监听器
 
-dev 端口取 `configs/*.dev.yaml` 的 `http_port`：`configs/webhook.dev.yaml:1` 8082、`configs/orchestrator.dev.yaml:1` 8083、`configs/operator.dev.yaml:1` 8084、`configs/auth.dev.yaml:1` 8085、`configs/notifier.dev.yaml:1` 8086、`configs/api.dev.yaml:1` 8087。`release-orchestrator` 另有第二个监听器 `gateway.port: 8084`（`configs/orchestrator.dev.yaml`，host dev 默认 `gateway.enabled: false`）；k3d dev 环境里网关开启：`deploy/kustomize/dev/configs/orchestrator.dev.yaml:22-24`。
+dev 端口取 `configs/*.dev.yaml` 的 `http_port`：`configs/webhook.dev.yaml:1` 8082、`configs/orchestrator.dev.yaml:1` 8083、`configs/operator.dev.yaml:1` 8084、`configs/auth.dev.yaml:1` 8085、`configs/notifier.dev.yaml:1` 8086、`configs/api.dev.yaml:1` 8087。`release-orchestrator` 另有第二个监听器 `gateway.port: 8084`（`configs/orchestrator.dev.yaml`，host dev 默认 `gateway.enabled: false`）；k3d dev 环境里网关开启：`deploy/kustomize/dev/configs/orchestrator.dev.yaml:32-34`。
 
 三点必须注意：
 
-1. **8084 在 host dev 模式下属于 `release-operator`**（`configs/operator.dev.yaml:1`，`agent.mode: agent` 见 `configs/operator.dev.yaml:12-13`），与 `release-orchestrator` 的网关端口号相同但默认不同进程（网关本地关闭）。
+1. **8084 在 host dev 模式下属于 `release-operator`**（`configs/operator.dev.yaml:1`，`agent.mode: agent` 见 `configs/operator.dev.yaml:3-4`），与 `release-orchestrator` 的网关端口号相同但默认不同进程（网关本地关闭）。
 2. **8087 在 k3d dev 环境里是 web SPA 的 nginx，不是 `release-api`**：k3d 把宿主 8082-8087 映射到 NodePort 30082-30087（`deploy/dev/dev.sh:726`），而 `deploy/kustomize/services/web.yaml:26` 的 `containerPort: 8087` 与 `:59` 的 `nodePort: 30087` 属于 web；`web/nginx.conf:7` 监听 8087。因此 `release-api` 的审计面只在 host 直跑模式（`make run-api`、`make dev-stage-audit`）下可达 8087。
 3. **网关监听器不提供任何探测端点**：`GET /health`、`GET /readyz`、`GET /environment` 由共享启动包装注册在主 mux 上（`internal/app/app.go:140`、`:142`、`:144`、`:158`），网关用的是独立的 `gmux`（`cmd/orchestrator/main.go:166`），只做 TLS + 过程路径注册。`api/proto/common/v1/health.proto:5-10` 的文件注释也明确说明这一点。
 
@@ -95,7 +95,7 @@ curl -sS http://127.0.0.1:8083/environment
 
 ### 2.4 代码客户端
 
-- Go：`orchestratorv1connect.NewOrchestratorServiceClient(httpClient, url)`，需要 gRPC 线格式时加 `connect.WithGRPC()`——仓库内实例见 `cmd/webhook/main.go:37-41`（`release-webhook` → `release-orchestrator` 的 `BundleService`）。
+- Go：`orchestratorv1connect.NewOrchestratorServiceClient(httpClient, url)`，需要 gRPC 线格式时加 `connect.WithGRPC()`——仓库内实例见 `cmd/webhook/main.go:39-43`（`release-webhook` → `release-orchestrator` 的 `BundleService`）。
 - TypeScript：`@connectrpc/connect` 的 `createClient` + `createConnectTransport`，见 `web/src/connect/client.ts:50-61`（`useBinaryFormat: true`、`fetch: browserFetch`）。浏览器侧固定 `credentials: include`（`web/src/connect/client.ts:46-48`），并由 `sessionInterceptor` 从 `rm_csrf` cookie 注入 `X-CSRF-Token`（`web/src/connect/client.ts:29-33`），该拦截器在 `unauthenticated`/`permission_denied` 时回调 `authErrorHandler`（`web/src/connect/client.ts:37-43`）。
 - 调试集合：`api/kulala` 下的 `.http` 文件，配合仓库根的 `http-client.env.json`（不在 `api/kulala/` 内），用 `make api-auth`、`make api-orchestrator`、`make api-audit`、`make api-webhook`、`make api-operator` 打开。注意这些集合与当前实现不一致，见 3.7 最后一行。
 
@@ -116,7 +116,7 @@ curl -sS http://127.0.0.1:8083/environment
 - `release-orchestrator` 网关监听器通过 TLS ALPN `NextProtos: {h2, http/1.1}` 提供 h2（`cmd/orchestrator/main.go:198-204`）。
 - `release-orchestrator` 管理端口 8083 **未见**任何 h2/h2c 配置（`cmd/orchestrator/main.go` 无 `ConfigureServer`，而 `internal/app/app.go:165-170` 只在服务实现 `serverConfigurer` 时才配置）。按代码推导：在 8083 上以明文 HTTP/1.1 调 `CommandStream` 会得到 505；此项属静态推导，**未做运行时验证**（本任务禁止启动服务）。
 
-同一原因也影响 `cmd/webhook/main.go:37-41`：它以 `connect.WithGRPC()` 拨明文 `http://localhost:8083`，而 gRPC 线格式需要 HTTP/2；`release-orchestrator` 主端口未启用明文 h2。该链路在 dev 默认配置下预期不可用，属**运行时未验证疑点**。
+同一原因也影响 `cmd/webhook/main.go:39-43`：它以 `connect.WithGRPC()` 拨明文 `http://localhost:8083`，而 gRPC 线格式需要 HTTP/2；`release-orchestrator` 主端口未启用明文 h2。该链路在 dev 默认配置下预期不可用，属**运行时未验证疑点**（webhook 的 `/readyz` 用普通 HTTP GET 探测同一上游的 `/readyz`，不受线格式约束，见 `cmd/webhook/main.go:90`）。
 
 ## 3. 认证与鉴权（逐服务事实）
 
@@ -126,7 +126,7 @@ curl -sS http://127.0.0.1:8083/environment
 
 | 挂载点 | 拦截器（外 → 内） | 定义位置 |
 | --- | --- | --- |
-| `AuditService` @8087 | `RequestID`, `ErrorSanitize`, `audit.NewJWTInterceptor` | `cmd/api/main.go:49-56` |
+| `AuditService` @8087 | `RequestID`, `ErrorSanitize`, `audit.NewJWTInterceptor` | `cmd/api/main.go:65-72` |
 | 4 个 `auth.v1` service @8085 | `RequestID`, `ErrorSanitize`, `TraceInterceptor`, `MaintenanceInterceptor`, `auth.NewAuthInterceptor` | `cmd/auth/main.go:181-187` |
 | `NotifierService` @8086 | `RequestID`, `ErrorSanitize` | `cmd/notifier/main.go:71-77` |
 | `WebhookService` @8082 | `RequestID`, `ErrorSanitize` | `cmd/webhook/main.go:43-49` |
@@ -202,7 +202,7 @@ object 映射 `internal/auth/interceptor.go:274-298`：`OrganizationService→or
 
 ### 3.6 维护模式白名单
 
-`app.MaintenanceInterceptor(enabled, readOnly, logger)` 在 `maintenance: true` 时对不在白名单内的 unary procedure 返回 `unavailable`，message 恰为 `"maintenance"`（`internal/app/maintenance.go:14-28`）。配置项 `maintenance`（`internal/config/config.go:135` 的 `ServiceConfig.Maintenance`），env 名 `MAINTENANCE` 在 `internal/config/config.go:281` 的绑定表里登记（该表由 `bindDatabaseEnvironment` `:271` 装载）。
+`app.MaintenanceInterceptor(enabled, readOnly, logger)` 在 `maintenance: true` 时对不在白名单内的 unary procedure 返回 `unavailable`，message 恰为 `"maintenance"`（`internal/app/maintenance.go:14-28`）。配置项 `maintenance`（`internal/config/config.go:135` 的 `ServiceConfig.Maintenance`），env 名 `MAINTENANCE` 在 `internal/config/config.go:282` 的绑定表里登记（该表由 `bindDatabaseEnvironment` `:272` 装载）。
 
 - release-auth 白名单 12 条（`cmd/auth/main.go:215-230`），其中 `Login`/`RefreshToken`/`ChangePassword`/成员与绑定写操作被刻意挡住。
 - release-orchestrator 的 `OrchestratorService` 白名单 15 条读方法（`cmd/orchestrator/main.go:688-706`）。

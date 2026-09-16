@@ -34,8 +34,8 @@
 
 7 个服务共用 `internal/app.Run`（`internal/app/app.go:122`）：
 
-- 读 `--config` 指向的 YAML（`internal/config.LoadService`，`internal/config/config.go:307-325`，viper）。
-  多个键支持环境变量覆盖（`bindDatabaseEnvironment`，`internal/config/config.go:271-304`）：
+- 读 `--config` 指向的 YAML（`internal/config.LoadService`，`internal/config/config.go:306-324`，viper）。
+  多个键支持环境变量覆盖（`bindDatabaseEnvironment`，`internal/config/config.go:272-303`）：
   `DATABASE_DRIVER`、`DATABASE_DSN`、`REDIS_ADDRESS`、`MAINTENANCE`、`AUTHORIZATION_AUTH_URL`、
   `GATEWAY_ENABLED`、`GATEWAY_PORT`、`CUSTOMER_ID`、`CLUSTER_ID`、`OPERATOR_NAME`、
   `ENROLLMENT_TOKEN_FILE`、`CA_CERT_PATH`、`VALUES_MAX_DOCUMENT_BYTES` 等。
@@ -50,14 +50,15 @@
 
 ## cmd/webhook
 
-常驻服务。`webhook.v1.WebhookService/SubmitReleaseBundle`（`cmd/webhook/main.go:43-50`；
+常驻服务。`webhook.v1.WebhookService/SubmitReleaseBundle`（`cmd/webhook/main.go:45-52`；
 proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 service token 以
 `Authorization: Bearer` 转发给 orchestrator BundleService（`internal/webhook/service.go:64`）。
+该上游同时是 readiness 检查 `orchestrator` 的目标（GET `<base>/readyz`，TASK-099，`cmd/webhook/main.go:90`）。
 
 | flag | 默认值 | 必填 | 含义 | 出处 |
 | --- | --- | --- | --- | --- |
 | `--config` | `configs/webhook.dev.yaml` | 否 | 配置文件（`http_port: 8082`，`configs/webhook.dev.yaml:1`） | `main.go:57` |
-| `--orchestrator-url` | `""`（空时代码回退 `http://localhost:8083`） | 否 | orchestrator Connect URL | `main.go:58`，回退 `main.go:34-36` |
+| `--orchestrator-url` | `""`（空时代码回退 `http://localhost:8083`） | 否 | orchestrator Connect URL | `main.go:58`，回退 `main.go:79-85` |
 | `--service-token` | `env DEV_WEBHOOK_SERVICE_TOKEN`，缺省 `""` | 否 | dev bundle-ingress token（REQ-065 D-100 选项 B） | `main.go:62` |
 
 - 无数据库 flag（该服务不落库）。
@@ -83,11 +84,11 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 
 - 无 `--db` flag：数据库来自配置文件 `database:` 段或环境变量覆盖
   （本地 dev 为 sqlite `data/orchestrator.db`，`configs/orchestrator.dev.yaml:3-5`）。
-- gateway 与 CA 也全部来自配置：`gateway.enabled/port`（本地默认关，`configs/orchestrator.dev.yaml:29-33`；
-  dev 集群里开在 8084 并暴露 NodePort 30084，`deploy/kustomize/dev/configs/orchestrator.dev.yaml:22-24`），
-  `ca.cert_path/key_path`（`configs/orchestrator.dev.yaml:35-39`；CA 缺失 fail-closed，`main.go:85-90`）。
+- gateway 与 CA 也全部来自配置：`gateway.enabled/port`（本地默认关，`configs/orchestrator.dev.yaml:29-31`；
+  dev 集群里开在 8084 并暴露 NodePort 30084，`deploy/kustomize/dev/configs/orchestrator.dev.yaml:32-34`），
+  `ca.cert_path/key_path`（`configs/orchestrator.dev.yaml:33-37`；CA 缺失 fail-closed，`main.go:85-90`）。
 - 鉴权快照拉取走配置 `authorization.auth_url`（`configs/orchestrator.dev.yaml:7`；
-  默认 `http://localhost:8085`，`internal/config/config.go:250-265`——`--auth-url` flag **不存在**，
+  默认 `http://localhost:8085`，`internal/config/config.go:251-266`——`--auth-url` flag **不存在**，
   `authURL` 字段没有任何赋值来源，见 `main.go:45,323-324`）。
 - 环境变量：`JWT_SIGNING_KEY`、`DEV_WEBHOOK_SERVICE_TOKEN`、`DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS`
   （`main.go:808-819`）。
@@ -101,7 +102,7 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 
 常驻服务，双模式：配置 `agent.mode: gateway` 走管理面 OperatorService（含 SQLite 权威库），
 其它值走 agent 运行时（`cmd/operator/main.go:35-38,63-72,125-133`）。dev 配置默认 `agent`
-（`configs/operator.dev.yaml:12-13`）。agent 模式经 mTLS 双向流 `CommandStream` 连接 gateway，
+（`configs/operator.dev.yaml:3-4`）。agent 模式经 mTLS 双向流 `CommandStream` 连接 gateway，
 断线以 1s→30s 指数退避重连（`main.go:93-115`；`CommandStream` 定义
 `api/proto/operator/v1/operator.proto:335`）。HTTP 端口启用 h2c 以支持明文 gRPC
 （`main.go:74-81`）。
@@ -117,11 +118,12 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 | `--install-timeout` | `5m` | 否 | Helm install 默认超时 | `main.go:365` |
 
 - agent 模式硬性前置：`agent.customer_id` 与 `agent.cluster_id` 必须非空，否则启动失败
-  （`main.go:152-155`；可用环境变量 `CUSTOMER_ID`/`CLUSTER_ID` 覆盖，`internal/config/config.go:290-291`）；
+  （`main.go:152-155`；可用环境变量 `CUSTOMER_ID`/`CLUSTER_ID` 覆盖，`internal/config/config.go:289-290`）；
   enrollment token 来自 `agent.enrollment_token_file`（dev 为 `data/enrollment.token`，
-  `configs/operator.dev.yaml:16`）或环境变量 `ENROLLMENT_TOKEN`（`cmd/operator/main.go:157-167`、
+  `configs/operator.dev.yaml:8`）或环境变量 `ENROLLMENT_TOKEN`（`cmd/operator/main.go:157-167`、
   `internal/operator/bootstrap/token.go:14-27`，用后删除 token 文件 `bootstrap.go:96-100`）；
-  CA 证书 `data/gateway-ca.crt`（`configs/operator.dev.yaml:18-19`，校验 `main.go:158`）。
+  CA 证书 `data/gateway-ca.crt`（`configs/operator.dev.yaml:9-13`，校验 `main.go:158`）。
+- agent 模式的 `/readyz` 挂 `gateway_session` 检查（CommandStream 存活才 Ready，TASK-099，`main.go:382`）。
 - gateway 模式额外起一个 mTLS listener（`main.go:168-245`）并周期吊销过期 operator session
   （`main.go:303-336`，30s 一次）。
 - 退出码：同公共服务。
@@ -167,16 +169,16 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 
 ## cmd/api
 
-常驻服务。注册 `audit.v1.AuditService`（Emit/Query/Export，`cmd/api/main.go:49-57`；
-`api/proto/audit/v1/audit.proto:116,126,136,145`），后台跑审计归档 worker（`main.go:72-76`；归档参数见
+常驻服务。注册 `audit.v1.AuditService`（Emit/Query/Export，`cmd/api/main.go:65-73`；
+`api/proto/audit/v1/audit.proto:116,126,136,145`），后台跑审计归档 worker（`main.go:93-101`；归档参数见
 `configs/api.dev.yaml:3-9`，输出 `data/archives`）。AuditService 全方法挂 JWT Bearer 拦截器，
-缺 `Authorization` 即 Unauthenticated（`main.go:54`、`internal/audit/interceptor.go:23-44`）。
+缺 `Authorization` 即 Unauthenticated（`main.go:70`、`internal/audit/interceptor.go:23-44`）。
 
 | flag | 默认值 | 必填 | 含义 | 出处 |
 | --- | --- | --- | --- | --- |
-| `--config` | `configs/api.dev.yaml` | 否 | 配置文件（`http_port: 8087`，`configs/api.dev.yaml:1`） | `main.go:111` |
-| `--db` | `data/api.db` | 否 | SQLite 审计库 | `main.go:112` |
-| `--signing-key` | `change-me-in-production` | 否 | 校验审计 API JWT 的签名 key（须与 auth 一致） | `main.go:113` |
+| `--config` | `configs/api.dev.yaml` | 否 | 配置文件（`http_port: 8087`，`configs/api.dev.yaml:1`） | `main.go:138` |
+| `--db` | `data/api.db` | 否 | SQLite 审计库 | `main.go:139` |
+| `--signing-key` | `change-me-in-production` | 否 | 校验审计 API JWT 的签名 key（须与 auth 一致） | `main.go:140` |
 
 - 退出码：同公共服务。
 - 调用：`make run-api`（`Makefile:100-101`）、`make dev-stage-audit`（`Makefile:342-349`）、
@@ -185,13 +187,13 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 ## cmd/notification-sink
 
 常驻服务，**dev-only**：notifier 的 webhook 汇聚端。`POST /webhook` 收通知（202/400 语义，
-`cmd/notification-sink/main.go:97-105`），`GET /notifications` 读回容量 100 的环形缓冲与溢出计数
-（环形缓冲 `main.go:36-66`，读回 `main.go:117-136`，容量写死 `main.go:141`）。dev 里 email/slack 渠道关闭，sink 是通知投递的
-唯一观测点（`main.go:1-9`）。
+`cmd/notification-sink/main.go:98-106`），`GET /notifications` 读回容量 100 的环形缓冲与溢出计数
+（环形缓冲 `main.go:37-67`，读回 `main.go:118-137`，容量写死 `main.go:142`）。dev 里 email/slack 渠道关闭，sink 是通知投递的
+唯一观测点（`main.go:1-9`）。`/readyz` 检查 `config`（`http_port` 缺失即 fail-closed，TASK-099，`main.go:151`）。
 
 | flag | 默认值 | 必填 | 含义 | 出处 |
 | --- | --- | --- | --- | --- |
-| `--config` | `deploy/kustomize/dev/configs/notification-sink.dev.yaml` | 否 | 配置文件（`http_port: 8088`，该文件 `:1`） | `main.go:139` |
+| `--config` | `deploy/kustomize/dev/configs/notification-sink.dev.yaml` | 否 | 配置文件（`http_port: 8088`，该文件 `:1`） | `main.go:140` |
 
 - 退出码：同公共服务。
 - 无 make build/run target（未找到）。镜像与部署：`deploy/docker/Dockerfile.notification-sink:10,16`、 <!-- check-docs:ignore 陈述该 target 不存在，不是可用性断言 -->

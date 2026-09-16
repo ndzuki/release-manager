@@ -175,11 +175,11 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 - 字面机密特征库（key 名正则 + 值形态：`AKIA…`、`BEGIN … PRIVATE KEY`、`scheme://user:pass@host`、
   高熵 hex/base64 ≥32）：`internal/values/secret.go:10-17`；双通道检测说明见 `internal/values/secret.go:19-21`；生产可追加正则
   `values.secret_patterns`（dev 默认为空：`configs/orchestrator.dev.yaml:12`；env 注入
-  `VALUES_SECRET_PATTERNS`：`internal/config/config.go:296`）。
+  `VALUES_SECRET_PATTERNS`：`internal/config/config.go:295`）。
 - 执行侧只在客户集群内解析引用，并绑定 `uid` / `resourceVersion` / 值指纹三重漂移检测，任一变化即
   `ErrSecretRefChanged` 拒绝执行：`internal/operator/k8s/secrets.go:27-58`、调用点
-  `internal/operator/agent/agent.go:941`、错误语义 `internal/operator/helmengine/engine.go:79`、
-  分支处理 `internal/operator/agent/agent.go:1215`。
+  `internal/operator/agent/agent.go:955`、错误语义 `internal/operator/helmengine/engine.go:79`、
+  分支处理 `internal/operator/agent/agent.go:1229`。
 - 设计依据与禁止项（中心不存明文/不解密、不允许原地编辑已批准 revision）：
   `docs/decisions/ADR-007-immutable-values-and-secret-reference-boundary.md:16-18,22-23`。
 - 异人审批：创建者可以提交自己的 ValuesRevision，但**不能批准自己的**：
@@ -384,7 +384,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 | 单个 Customer 下的账号（低权用户） | 域绑定 + Casbin 逐 procedure 裁决（`internal/auth/interceptor.go:100-112`；`internal/auth/casbin.go:426-475`）；`viewer`/`deployer` 无 operator 写权限 | 剩余：`platform_admin` 为 `*,*` 通配（`internal/auth/casbin.go:429`），控制面内无二次制衡；异人审批只管 Values 批准（§3.5）。**已实现** |
 | 已批准 ValuesRevision 被事后篡改 | 不可变 revision + `self_approval_forbidden`（`internal/orchestrator/values_approval.go:286-292`）+ 幂等键唯一（`migrations/000001_legacy_baseline.up.sql:46`）+ 「同一 ReleaseDefinition 只允许一个活跃标准 Operation」 | 剩余：**该互斥在两个引擎上强度不同**——PostgreSQL 有数据库级部分唯一索引（`migrations/000001_legacy_baseline.up.sql:62-63`），SQLite 侧**没有**对应索引（`internal/store/sqlite/db.go` 内无 `one_active_standard`），只靠应用层计数检查（`internal/store/sqlite/uow.go:89-100` 与 `internal/store/postgres/uow.go:84-95` 同一 SQL）。因此 dev/test 掩盖不了竞态，但**生产强度高于 dev 验证强度**，与 `AGENTS.md:25` 的双引擎等价要求存在偏差。**部分实现** |
 | 注册令牌泄露 | 只存 SHA-256、短 TTL、一次性（§3.2） | 剩余：令牌在 `data/dev-enrollment-tokens/` 明文落盘（仅 dev，`.gitignore:35`）。**已实现**（生产不落盘） |
-| Webhook 请求体（Harbor 等外部制品源） | 入口边缘只做 request-id + 错误脱敏（无鉴权拦截器）：`cmd/webhook/main.go:43-49`；转发时原样复制 `Signature`/`Sbom`/`Provenance` 并保留 `Idempotency-Key` 与可选 bearer：`internal/webhook/service.go:50-65`；真正鉴权在 `BundleService`（§3.8） | 剩余：`signature`/`sbom`/`provenance` 是请求方可填的 `ArtifactReference`（`api/proto/webhook/v1/webhook.proto:28-30`），信任判定发生在 preflight/trust（§3.9），因此「未认证请求体」可造成 bundle 记录污染；非 production 标签下还能被降级为 `policy_warning` 放行。**部分实现** |
+| Webhook 请求体（Harbor 等外部制品源） | 入口边缘只做 request-id + 错误脱敏（无鉴权拦截器）：`cmd/webhook/main.go:45-51`；转发时原样复制 `Signature`/`Sbom`/`Provenance` 并保留 `Idempotency-Key` 与可选 bearer：`internal/webhook/service.go:50-65`；真正鉴权在 `BundleService`（§3.8） | 剩余：`signature`/`sbom`/`provenance` 是请求方可填的 `ArtifactReference`（`api/proto/webhook/v1/webhook.proto:28-30`），信任判定发生在 preflight/trust（§3.9），因此「未认证请求体」可造成 bundle 记录污染；非 production 标签下还能被降级为 `policy_warning` 放行。**部分实现** |
 | 单条 procedure 被塞进非法输入 | 契约生成物唯一入口 `api/gen/**`、`web/src/gen/**`（禁止手改，`AGENTS.md:24`）；错误码泛化（§3.6） | 剩余：SQL 拼接只出现在编译期列名/占位符白名单，值全部参数化（`internal/store/postgres/commands.go:124-132`、`internal/store/sqlite/inventory.go:230-245`、`internal/store/postgres/inventory.go:239-245`、审计 where 构造 `internal/store/sqlite/audit.go:210-236`）；迁移工具的标识符插值带引号转义（`internal/migration/copy.go:470-480`）。**已实现** |
 | 能访问 web 同源入口的任何调用方 | 入口把五个 Connect 前缀反向代理到集群内服务（`web/nginx.conf:17,28,39,50,61`），auth/orchestrator/trust 面各有 JWT+Casbin（§3.8） | 剩余：**`/notifier.v1.` 与 `/operator.v1.` 两条前缀后面没有 JWT/Casbin**（`cmd/notifier/main.go:71-78`、`cmd/operator/main.go:259-266`）；`/notifier.v1./Send` 可把控制面变成任意 URL 的 HTTP 出站源（§3.11）。**未见实现（该面的认证）** |
 | 数据库快照（离线读到 audit / values / 令牌） | audit 文本入库前脱敏（§3.6）、口令 bcrypt（`internal/auth/password.go:9-19`）、令牌只存摘要（§3.2）、Values 无机密字面（§3.5） | 剩余：应用日志面不过脱敏（§3.6），CI artifact 含原始容器日志（`test/e2e/prerequisite/capture-logs.sh:30`）。**未见实现（日志面）** |
@@ -407,7 +407,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 
 其他**明确接受**的现状（不是缺陷，是范围选择）：
 
-- dev 环境用固定弱凭据：`deploy/kustomize/base/secret.yaml:12-13` 提交了 dev-only PostgreSQL
+- dev 环境用固定弱凭据：`deploy/kustomize/base/secret.yaml:15-17` 提交了 dev-only PostgreSQL
   用户/口令字面量（文件头 `:7-11` 声明仅 dev），同一常量内联在 `deploy/dev/dev.sh:1739,1834,1836`；
   `http-client.env.json:7-8,29-30` 是占位口令与 `dev-key`/`test-key` 假 API key（`:16` 为假摘要）。
   CI 的 `DEV_PROFILE=ci` 永不把这些写进磁盘（凭据必须由 env 注入，见
@@ -486,7 +486,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 | 9 | Actions 无 SHA 固定；仅 1/16 基础镜像按 digest 固定 | 事实/建议 | §6 表 |
 | 10 | `sync-to-gitcode.yaml` 无 `permissions:`、无 `concurrency`、无 `timeout-minutes` | 事实/建议 | `.github/workflows/sync-to-gitcode.yaml:11-25` |
 | 11 | 登录限流为进程内、多副本不共享 | 事实/建议 | `internal/auth/ratelimit.go:18-54` |
-| 12 | `release-api` 审计面只验 JWT（独立 `internal/jwtauth` 实现），不做 Casbin 与会话撤销校验 | 部分实现 | `cmd/api/main.go:45,49-56`；`internal/audit/interceptor.go:21-41`；对比 `internal/auth/interceptor.go:113-126` |
+| 12 | `release-api` 审计面只验 JWT（独立 `internal/jwtauth` 实现），不做 Casbin 与会话撤销校验 | 部分实现 | `cmd/api/main.go:65-73`；`internal/audit/interceptor.go:21-41`；对比 `internal/auth/interceptor.go:113-126` |
 | 13 | 客户集群内 operator 用 ClusterRole 且可读写全集群 Secret（Helm release 存储模型的必然结果，未用 `resourceNames` 收窄） | 事实/建议 | §3.3 |
 | 14 | **审计有绕过 emitter 的直写路径**，与 `AGENTS.md:27` 硬约束 6 不符（当前无明文泄露证据，但无结构性保证） | 部分实现 | §3.6 第 3 条 |
 | 15 | 审计查询/导出的组织过滤取自请求，可为空；principal 未被使用 | 未见实现 | `internal/audit/audit_service_handler.go:60-61`；`internal/store/sqlite/audit.go:210-236`；`internal/audit/interceptor.go:47` |
