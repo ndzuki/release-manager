@@ -224,6 +224,7 @@ func authReadOnlyProcedures() map[string]struct{} {
 		authv1connect.BindingServiceGetBindingProcedure:                     {},
 		authv1connect.BindingServiceListBindingsProcedure:                   {},
 		authv1connect.AuthorizationServiceGetAuthorizationSnapshotProcedure: {},
+		authv1connect.AuthorizationServiceAuthorizeAccessProcedure:          {},
 		authv1connect.ExternalIdentityServiceGetOIDCAuthURLProcedure:        {},
 		authv1connect.ExternalIdentityServiceGetDingTalkAuthURLProcedure:    {},
 	}

@@ -15,11 +15,30 @@ import (
 	auditv1 "github.com/ndzuki/release-manager/api/gen/audit/v1"
 	auditv1connect "github.com/ndzuki/release-manager/api/gen/audit/v1/auditv1connect"
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
+	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/auth"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// stubDecision allows every audit request and resolves the effective scope to the
+// caller's own organization, which is what release-auth answers for a
+// release_admin of that organization (ADR-021). The release-api test injects it
+// instead of standing up release-auth.
+type stubDecision struct {
+	organization  string
+	maxWindowDays int32
+}
+
+func (s stubDecision) Authorize(
+	_ context.Context, _, _, _, _ string,
+) (audit.AccessDecision, error) {
+	return audit.AccessDecision{
+		Allowed: true, Reason: "ok", OrganizationID: s.organization,
+		MaxWindowDays: s.maxWindowDays, PolicyVersion: 3,
+	}, nil
+}
 
 func TestAPISvcAuditConnectEndToEnd(t *testing.T) {
 	const signingKey = "test-signing-key"
@@ -27,7 +46,10 @@ func TestAPISvcAuditConnectEndToEnd(t *testing.T) {
 	mux := http.NewServeMux()
 	// A short flush interval keeps the audit wait deterministic: the production
 	// default is 5s, which leaves under a second of slack in the Eventually budget.
-	svc := &apiSvc{dbPath: dbPath, signingKey: signingKey, auditFlushInterval: 10 * time.Millisecond}
+	svc := &apiSvc{
+		dbPath: dbPath, signingKey: signingKey, auditFlushInterval: 10 * time.Millisecond,
+		decisionClient: stubDecision{organization: "org-001", maxWindowDays: 31},
+	}
 	require.NoError(t, svc.Register(mux, slog.Default()))
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 	server := httptest.NewServer(mux)

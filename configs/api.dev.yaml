@@ -8,3 +8,7 @@ audit:
     archive_dir: data/archives
     compression: gzip_jsonl
     checksum_algorithm: sha256
+# release-api asks release-auth for the caller's role-aware audit scope
+# (ADR-021); the default matches the dev release-auth port.
+authorization:
+  auth_url: http://localhost:8085

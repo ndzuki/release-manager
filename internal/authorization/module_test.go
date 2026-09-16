@@ -28,6 +28,12 @@ type snapshotHandler struct {
 	delay    time.Duration
 }
 
+// AuthorizeAccess keeps the stub a full AuthorizationServiceHandler; these tests
+// only exercise the snapshot polling path (ADR-021 added the decision RPC).
+func (h *snapshotHandler) AuthorizeAccess(context.Context, *connect.Request[authv1.AuthorizeAccessRequest]) (*connect.Response[authv1.AuthorizeAccessResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("AuthorizeAccess is not used by authorization module tests"))
+}
+
 func (h *snapshotHandler) GetAuthorizationSnapshot(context.Context, *connect.Request[authv1.GetAuthorizationSnapshotRequest]) (*connect.Response[authv1.GetAuthorizationSnapshotResponse], error) {
 	if h.delay > 0 {
 		time.Sleep(h.delay)

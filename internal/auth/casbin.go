@@ -451,6 +451,13 @@ func roleRules(role, domain string) [][]string {
 			[]string{role, domain, "operator", "revoke"},
 			[]string{role, domain, "customer", "read"},
 			[]string{role, domain, "trust_root", "read"},
+			// Audit trail (REQ-029): every role may read its own organization's
+			// trail, while emitting events and registering exports stay with the
+			// administrator roles. The audit object exists so the release-api
+			// audit surface can ask release-auth for a role-aware decision
+			// (ADR-021) instead of trusting the JWT role claim.
+			[]string{role, domain, "audit", "read"},
+			[]string{role, domain, "audit", "write"},
 		)
 	case store.RoleDeployer:
 		rules = append(rules,
@@ -459,6 +466,7 @@ func roleRules(role, domain string) [][]string {
 			[]string{role, domain, "operator", "read"},
 			[]string{role, domain, "customer", "read"},
 			[]string{role, domain, "trust_root", "read"},
+			[]string{role, domain, "audit", "read"},
 		)
 	case store.RoleViewer:
 		rules = append(rules,
@@ -468,6 +476,7 @@ func roleRules(role, domain string) [][]string {
 			[]string{role, domain, "operator", "read"},
 			[]string{role, domain, "customer", "read"},
 			[]string{role, domain, "trust_root", "read"},
+			[]string{role, domain, "audit", "read"},
 		)
 	}
 	for _, capability := range roleCapabilityRules(store.Role(role), domain) {

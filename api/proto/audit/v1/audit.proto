@@ -123,17 +123,23 @@ service AuditService {
   // rejected are counted per event and rejection_codes explains each rejection,
   // which is why a non-zero rejected count is not an RPC failure.
   // Fails with INVALID_ARGUMENT only when the request carries no events at all.
-  // Requires a valid access token. Any authenticated principal may emit, and the
-  // actor recorded on each event is taken from the event itself; an event whose
-  // actor carries a different organization than the principal is rejected with
-  // PERMISSION_DENIED for the whole request.
+  // Requires a valid access token and a write decision for the audit object from
+  // release-auth (ADR-021): release_admin and platform_admin may emit, other roles
+  // are refused with PERMISSION_DENIED. The actor recorded on each event is taken
+  // from the event itself; an event whose actor carries a different organization
+  // than the decision's effective organization is rejected with PERMISSION_DENIED
+  // for the whole request. An unavailable or slow decision authority answers
+  // UNAVAILABLE rather than falling back to a local role guess.
   rpc Emit(EmitAuditRequest) returns (EmitAuditResponse);
   // Reads the audit trail with keyset pagination, newest event first.
   // Read-only and replayable.
-  // organization_id is resolved from the principal: an omitted value means the
-  // principal's own organization, and a value naming another organization is
-  // rejected with PERMISSION_DENIED. Other filter fields (resource, actor,
-  // action, status, time range) are taken from the request.
+  // organization_id is resolved by release-auth (ADR-021): an omitted value means
+  // the caller's own organization, another organization is allowed only for
+  // platform_admin (otherwise PERMISSION_DENIED), and the response then reads the
+  // effective organization. The time range is capped by the policy-owned window
+  // the decision returns (31 days, or 366 for platform_admin); a wider range is
+  // rejected with INVALID_ARGUMENT and the reason code range_too_large. Other
+  // filter fields (resource, actor, action, status) are taken from the request.
   // page_size is clamped to [1, 100] and defaults to 20; an unreadable
   // page_token is reported as INTERNAL, not as a client error.
   // Requires a valid access token (no role check).
@@ -143,9 +149,11 @@ service AuditService {
   // Not idempotent: each call mints a new export_id, and repeating an identical
   // request creates a second pending export.
   // Only the filter's time range is recorded, defaulting to the last 30 days;
-  // the export is scoped to the principal's organization, and a filter naming
-  // another organization is rejected with PERMISSION_DENIED. No worker consumes
-  // the queue today, so status stays pending. Treat the identifier as a request
+  // the export needs a write decision for the audit object and is scoped to the
+  // effective organization release-auth returns (ADR-021), so a filter naming
+  // another organization is rejected with PERMISSION_DENIED for every role but
+  // platform_admin. The policy window cap applies here too. No worker consumes the
+  // queue today, so status stays pending. Treat the identifier as a request
   // receipt, not as a download handle.
   // Requires a valid access token (no role check).
   rpc ExportAuditEvents(ExportAuditEventsRequest) returns (ExportAuditEventsResponse);

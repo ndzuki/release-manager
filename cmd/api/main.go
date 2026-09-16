@@ -13,6 +13,7 @@ import (
 	"connectrpc.com/connect"
 
 	auditv1connect "github.com/ndzuki/release-manager/api/gen/audit/v1/auditv1connect"
+	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/config"
@@ -31,6 +32,10 @@ type apiSvc struct {
 	archiveWorker *audit.ArchiveWorker
 	closeOnce     sync.Once
 	closeErr      error
+
+	// decisionClient overrides the release-auth authorization client. Tests inject
+	// a stub; production builds it from authorization.auth_url (ADR-021).
+	decisionClient audit.DecisionClient
 
 	// auditFlushInterval overrides the audit emitter flush interval. Tests set a
 	// short interval so an emitted event becomes queryable without waiting for the
@@ -56,12 +61,29 @@ func (s *apiSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 
 	jwtMgr := jwtauth.New([]byte(s.signingKey), 15*time.Minute)
 	s.store = st
+	svcCfg, loadErr := config.LoadService(s.configPath)
+	if loadErr != nil {
+		logger.Warn("cannot load service config, using defaults", "error", loadErr)
+	}
 	emitterCfg := audit.DefaultConfig()
 	if s.auditFlushInterval > 0 {
 		emitterCfg.FlushInterval = s.auditFlushInterval
 	}
 	s.emitter = audit.NewEmitter(st.AuditEvents(), logger, emitterCfg)
-	auditSvc := audit.NewAuditServiceHandler(st, s.emitter, logger)
+	decisions := s.decisionClient
+	if decisions == nil {
+		authzCfg := config.AuthorizationCfg{}
+		if svcCfg != nil {
+			authzCfg = svcCfg.Authorization
+		}
+		authzCfg = authzCfg.WithDefaults()
+		decisions = audit.NewConnectDecisionClient(authv1connect.NewAuthorizationServiceClient(
+			http.DefaultClient,
+			authzCfg.AuthURL,
+		))
+		logger.Info("audit authorization decisions wired", "auth_url", authzCfg.AuthURL)
+	}
+	auditSvc := audit.NewAuditServiceHandler(st, s.emitter, logger, decisions)
 	auditPath, auditHandler := auditv1connect.NewAuditServiceHandler(
 		auditSvc,
 		connect.WithInterceptors(
@@ -73,10 +95,6 @@ func (s *apiSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	mux.Handle(auditPath, auditHandler)
 
 	// Wire archive worker.
-	svcCfg, loadErr := config.LoadService(s.configPath)
-	if loadErr != nil {
-		logger.Warn("cannot load config for archive worker, using defaults", "error", loadErr)
-	}
 	archCfg := archiveConfigFromService(svcCfg)
 	sink := audit.NewFileSystemSink()
 	archiver := audit.NewArchiver(st.AuditEvents(), sink)

@@ -60,7 +60,7 @@
 | `configs/operator.dev.yaml` | 8 | 本地 `make run-operator` |
 | `configs/auth.dev.yaml` | 6 | 本地 `make run-auth` |
 | `configs/notifier.dev.yaml` | 4 | 本地 `make run-notifier` |
-| `configs/api.dev.yaml` | 8 | 本地 `make run-api`（api 无集群 Deployment，见 §2.3） |
+| `configs/api.dev.yaml` | 10 | 本地 `make run-api`（api 无集群 Deployment，见 §2.3） |
 | `configs/e2e.dev.yaml` | 27 | **非运行时配置源**，见 §3.9 |
 | `deploy/kustomize/dev/configs/webhook.dev.yaml` | 2 | 集群 webhook Deployment（configMapGenerator） |
 | `deploy/kustomize/dev/configs/orchestrator.dev.yaml` | 26 | 集群 orchestrator |
@@ -194,7 +194,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 
 令牌走环境变量 `ENROLLMENT_TOKEN`（Secret `operator-enrollment`，`agents_up` 命令式创建，文件名固定不参与 hash）；`enrollment_token_file` 键在这四个 overlay 中不存在。
 
-### 3.7 release-api（`configs/api.dev.yaml`，8 键）
+### 3.7 release-api（`configs/api.dev.yaml`，10 键）
 
 | 键 | 类型/取值 | 默认值 | 含义 | 备注 |
 |---|---|---|---|---|
@@ -206,6 +206,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 | `audit.archive.archive_dir` | path | data/archives | 归档输出目录 | 要求非空 |
 | `audit.archive.compression` | `gzip_jsonl` | gzip_jsonl | 归档编码 | 仅支持此值，其它值 Validate 报错 |
 | `audit.archive.checksum_algorithm` | `sha256` | sha256 | 校验算法 | 仅支持此值 |
+| `authorization.auth_url` | url | `http://localhost:8085`（`AuthorizationCfg.WithDefaults` `internal/config/config.go:253`） | release-auth 的 Connect 地址；审计面按 ADR-021 调 `AuthorizeAccess` 取授权判定 | env `AUTHORIZATION_AUTH_URL`（`internal/config/config.go:283`）；判定 200ms 超时，失败即 `unavailable`（fail closed） |
 
 ### 3.8 release-notification-sink（kustomize 唯一副本，2 键）
 
