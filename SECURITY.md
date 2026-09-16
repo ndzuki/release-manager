@@ -209,12 +209,12 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
   `internal/audit/sanitize.go:29-42`），查询投影也不返回 `change_summary`/`metadata`
   （`internal/audit/audit_service_handler.go:164-174`）。因此目前**未见明文泄露证据**，但「所有审计写入都过脱敏」
   并非结构性保证。**建议**：把直写改为经过 `Normalize`，或在 store 层再兜一道。
-- **状态：已实现（审计租户边界由服务端强制，TASK-095）**。`QueryAuditEvents`/`ExportAuditEvents` 的组织过滤
-  由 principal 解析（`internal/audit/authorization.go:37-48`，缺省即 principal 组织，指向别的组织
-  `permission_denied`），`Emit` 拒收 actor 组织与 principal 不一致的请求
-  （`internal/audit/audit_service_handler.go:49-56`），导出记录按 principal 组织落库（`:167`）。
-  store 侧过滤为空时仍不加条件（`internal/store/sqlite/audit.go:210-236`），但空值已不可达——handler 必填
-  principal 组织。剩余：审计面仍无 Casbin 角色判定与会话撤销校验（见下方第 12 条），隔离维度是组织，不是角色。
+- **状态：已实现（审计租户边界与角色判定由服务端强制；TASK-095 组织域 + TASK-103/ADR-021 角色判定）**。
+  release-api 不内嵌 Casbin、不读 release-auth 的库；它把调用方自己的 Bearer 透传给 release-auth 的
+  `AuthorizeAccess`（`internal/audit/decision.go:44-76`，200ms 超时），由对方按持久 membership + 版本化 policy
+  裁决，再按返回的有效组织/窗口执行（`internal/audit/authorization.go:41-105`）。组织越权 → `permission_denied`，
+  窗口超限 → `invalid_argument` + `range_too_large`，判定不可用 → `unavailable`（fail closed，不回落本地角色猜测）。
+  `Emit` 另拒收 actor 组织与有效组织不一致的事件（`internal/audit/audit_service_handler.go:54-61`）。
 - 落库前的最后一道：操作时间线的错误文本同样脱敏（`internal/store/store.go:2616-2617`）。
 - 响应侧错误脱敏：`CodeInternal` 一律泛化为 `internal error`，`CodeUnavailable` 的 `%w` 链若不含已知
   稳定业务 sentinel 也降级为 internal，完整细节只写服务端日志：
@@ -491,7 +491,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 | 9 | Actions 无 SHA 固定；仅 1/16 基础镜像按 digest 固定 | 事实/建议 | §6 表 |
 | 10 | `sync-to-gitcode.yaml` 无 `permissions:`、无 `concurrency`、无 `timeout-minutes` | 事实/建议 | `.github/workflows/sync-to-gitcode.yaml:11-25` |
 | 11 | 登录限流为进程内、多副本不共享 | 事实/建议 | `internal/auth/ratelimit.go:18-54` |
-| 12 | `release-api` 审计面只验 JWT（独立 `internal/jwtauth` 实现）与组织域归属（TASK-095 已补），仍不做 Casbin 角色判定与会话撤销校验；原因是 release-api 的库没有 membership/policy 数据源（ADR-015 每库一个权威） | 部分实现 | `cmd/api/main.go:65-73`；`internal/audit/interceptor.go:21-41`；`internal/audit/authorization.go:22-48`；对比 `internal/auth/interceptor.go:111-122` |
+| 12 | `release-api` 审计面按 ADR-021 接入 release-auth 的角色判定与窗口策略（TASK-103）：不内嵌 Casbin、不复制策略，判定不可用时 fail closed；release-api 仍不本地校验会话撤销（由 release-auth 的裁决覆盖） | 已实现 | `cmd/api/main.go:69-90`；`internal/audit/decision.go:44-76`；`internal/audit/authorization.go:41-105`；`internal/auth/authorization_decision.go:43-137` |
 | 13 | 客户集群内 operator 用 ClusterRole 且可读写全集群 Secret（Helm release 存储模型的必然结果，未用 `resourceNames` 收窄） | 事实/建议 | §3.3 |
 | 14 | **审计有绕过 emitter 的直写路径**，与 `AGENTS.md:27` 硬约束 6 不符（当前无明文泄露证据，但无结构性保证） | 部分实现 | §3.6 第 3 条 |
 | 15 | 审计查询/导出的组织过滤取自请求，可为空；principal 未被使用（TASK-095 已修：principal 组织成为唯一可读写范围，跨组织 `permission_denied`） | 已实现 | `internal/audit/authorization.go:22-48`；`internal/audit/audit_service_handler.go:42-56,97,142`；回归 `internal/audit/authorization_test.go:21-128` |

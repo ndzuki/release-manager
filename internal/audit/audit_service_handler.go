@@ -21,15 +21,18 @@ import (
 // delegates Emit to an emitter and QueryAuditEvents / ExportAuditEvents to the store.
 type auditServiceHandler struct {
 	auditv1connect.UnimplementedAuditServiceHandler
-	store   store.Store
-	emitter Sink
-	logger  *slog.Logger
+	store     store.Store
+	emitter   Sink
+	logger    *slog.Logger
+	decisions DecisionClient
 }
 
 // NewAuditServiceHandler creates a handler that satisfies the full
-// audit.v1.AuditServiceHandler interface.
-func NewAuditServiceHandler(st store.Store, emitter Sink, logger *slog.Logger) auditv1connect.AuditServiceHandler {
-	return &auditServiceHandler{store: st, emitter: emitter, logger: logger}
+// audit.v1.AuditServiceHandler interface. decisions is the release-auth
+// authorization authority the handler asks for the caller's role-aware scope
+// (ADR-021); it must not be nil, and a nil client fails closed.
+func NewAuditServiceHandler(st store.Store, emitter Sink, logger *slog.Logger, decisions DecisionClient) auditv1connect.AuditServiceHandler {
+	return &auditServiceHandler{store: st, emitter: emitter, logger: logger, decisions: decisions}
 }
 
 // Emit delegates to the underlying emitter.
@@ -39,10 +42,12 @@ func (h *auditServiceHandler) Emit(ctx context.Context, req *connect.Request[aud
 	if req.Msg == nil || len(req.Msg.GetEvents()) == 0 {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%s: events are required", ErrorInvalidEvent))
 	}
-	organizationID, err := principalOrganization(ctx)
+	// TASK-103 / ADR-021: only a role allowed to write the audit trail may emit.
+	decision, err := resolveAuditScope(ctx, h.decisions, "", auditObject, auditWrite)
 	if err != nil {
 		return nil, err
 	}
+	organizationID := decision.OrganizationID
 	// TASK-095 AC-4: an emitted event may not claim another tenant. Events with
 	// no organization stay allowed so infrastructure-level audit entries are not
 	// blocked, but they cannot carry data into another organization either.
@@ -92,13 +97,16 @@ func (h *auditServiceHandler) QueryAuditEvents(ctx context.Context, req *connect
 		}
 	}
 
-	// TASK-095 AC-4: the principal's organization is the only readable scope;
-	// a request that names another organization is denied rather than honored.
-	scopedOrganization, err := authorizeOrganizationScope(ctx, filter.OrganizationID)
+	// TASK-103 / ADR-021: release-auth decides whether the caller may read the
+	// audit trail in the requested organization and returns the effective scope.
+	decision, err := resolveAuditScope(ctx, h.decisions, filter.OrganizationID, auditObject, auditRead)
 	if err != nil {
 		return nil, err
 	}
-	filter.OrganizationID = scopedOrganization
+	filter.OrganizationID = decision.OrganizationID
+	if err := enforceAuditWindow(filter.Since, filter.Until, decision.MaxWindowDays, time.Now().UTC()); err != nil {
+		return nil, err
+	}
 
 	limit := int(contracts.NormalizePageSize(0))
 	cursor := ""
@@ -137,12 +145,14 @@ func (h *auditServiceHandler) ExportAuditEvents(ctx context.Context, req *connec
 	msg := req.Msg
 	now := time.Now().UTC()
 
-	// TASK-095 AC-4: an export is tenant-scoped; the organization recorded on
-	// the job comes from the principal, never from the request.
-	scopedOrganization, err := authorizeOrganizationScope(ctx, msg.GetFilter().GetOrganizationId())
+	// TASK-103 / ADR-021: registering an export is a write against the trail, so
+	// it needs the write decision; the recorded organization is the decision's
+	// effective scope, never the raw request value.
+	exportDecision, err := resolveAuditScope(ctx, h.decisions, msg.GetFilter().GetOrganizationId(), auditObject, auditWrite)
 	if err != nil {
 		return nil, err
 	}
+	scopedOrganization := exportDecision.OrganizationID
 
 	var since, until time.Time
 	if f := msg.GetFilter(); f != nil {
@@ -160,6 +170,10 @@ func (h *auditServiceHandler) ExportAuditEvents(ctx context.Context, req *connec
 	}
 	if until.IsZero() {
 		until = now
+	}
+
+	if err := enforceAuditWindow(&since, &until, exportDecision.MaxWindowDays, now); err != nil {
+		return nil, err
 	}
 
 	export := &store.AuditExport{

@@ -89,7 +89,7 @@ func nonWildcardGrants() map[string]bool {
 // its procedure.
 func TestProcedurePolicyRegistryIsExhaustive(t *testing.T) {
 	procedures := declaredProcedures(t)
-	require.Len(t, procedures, 104, "the contract procedure count changed; classify the new/removed RPCs")
+	require.Len(t, procedures, 105, "the contract procedure count changed; classify the new/removed RPCs")
 	for _, problem := range registryProblems(procedures) {
 		t.Error(problem)
 	}

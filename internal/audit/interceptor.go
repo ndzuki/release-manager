@@ -17,6 +17,10 @@ type Principal struct {
 	UserID string
 	Roles  []string
 	OrgID  string
+	// Authorization is the caller's own bearer credential, forwarded verbatim to
+	// release-auth so the authorization decision is made about the caller rather
+	// than about this service (ADR-021).
+	Authorization string
 }
 
 // NewJWTInterceptor validates access tokens and injects the audit principal.
@@ -34,9 +38,10 @@ func NewJWTInterceptor(jwt *jwtauth.Manager) connect.UnaryInterceptorFunc {
 				return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid token"))
 			}
 			ctx = context.WithValue(ctx, principalContextKey{}, Principal{
-				UserID: claims.UserID,
-				Roles:  claims.Roles,
-				OrgID:  claims.OrgID,
+				UserID:        claims.UserID,
+				Roles:         claims.Roles,
+				OrgID:         claims.OrgID,
+				Authorization: value,
 			})
 			return next(ctx, req)
 		}

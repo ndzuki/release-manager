@@ -904,6 +904,12 @@ type testAuthorizationHandler struct {
 	jwt   *auth.JWTManager
 }
 
+// AuthorizeAccess keeps the stub a full AuthorizationServiceHandler; these tests
+// use it for the snapshot path only (ADR-021 added the decision RPC).
+func (h *testAuthorizationHandler) AuthorizeAccess(context.Context, *connect.Request[authv1.AuthorizeAccessRequest]) (*connect.Response[authv1.AuthorizeAccessResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("AuthorizeAccess is not used by orchestrator tests"))
+}
+
 // testCAConfig points the operator service at a per-test CA file pair so the
 // fail-closed CA loading (ADR-017) has a dev backend in integration tests.
 func testCAConfig(t *testing.T) config.CAConfig {

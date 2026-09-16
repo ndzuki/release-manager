@@ -134,6 +134,9 @@ const (
 	// AuthorizationServiceSetCapabilityGrantProcedure is the fully-qualified name of the
 	// AuthorizationService's SetCapabilityGrant RPC.
 	AuthorizationServiceSetCapabilityGrantProcedure = "/auth.v1.AuthorizationService/SetCapabilityGrant"
+	// AuthorizationServiceAuthorizeAccessProcedure is the fully-qualified name of the
+	// AuthorizationService's AuthorizeAccess RPC.
+	AuthorizationServiceAuthorizeAccessProcedure = "/auth.v1.AuthorizationService/AuthorizeAccess"
 	// ExternalIdentityServiceAuthenticateLDAPProcedure is the fully-qualified name of the
 	// ExternalIdentityService's AuthenticateLDAP RPC.
 	ExternalIdentityServiceAuthenticateLDAPProcedure = "/auth.v1.ExternalIdentityService/AuthenticateLDAP"
@@ -1259,6 +1262,19 @@ type AuthorizationServiceClient interface {
 	// Requires an administrator role in the target organization; nothing in the
 	// product currently calls it, so it exists for operators and future tooling.
 	SetCapabilityGrant(context.Context, *connect.Request[v1.SetCapabilityGrantRequest]) (*connect.Response[v1.SetCapabilityGrantResponse], error)
+	// Answers whether the caller may act with (object, action) in one organization,
+	// and returns the policy-owned scope the caller must apply: whether it may
+	// address an organization other than its session organization, and the maximum
+	// query window in days.
+	// Answers 200 with allowed=false for an ordinary refusal so the caller can map
+	// the reason to its own error code; only a malformed request
+	// (INVALID_ARGUMENT), a missing identity (UNAUTHENTICATED), or an unreadable
+	// policy (UNAVAILABLE / policy_unavailable) is an RPC error, so a caller always
+	// fails closed rather than guessing.
+	// Authorization is evaluated inside the handler against the caller's persistent
+	// membership and the requested scope; the request may not assert an identity or
+	// a role.
+	AuthorizeAccess(context.Context, *connect.Request[v1.AuthorizeAccessRequest]) (*connect.Response[v1.AuthorizeAccessResponse], error)
 }
 
 // NewAuthorizationServiceClient constructs a client for the auth.v1.AuthorizationService service.
@@ -1284,6 +1300,12 @@ func NewAuthorizationServiceClient(httpClient connect.HTTPClient, baseURL string
 			connect.WithSchema(authorizationServiceMethods.ByName("SetCapabilityGrant")),
 			connect.WithClientOptions(opts...),
 		),
+		authorizeAccess: connect.NewClient[v1.AuthorizeAccessRequest, v1.AuthorizeAccessResponse](
+			httpClient,
+			baseURL+AuthorizationServiceAuthorizeAccessProcedure,
+			connect.WithSchema(authorizationServiceMethods.ByName("AuthorizeAccess")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -1291,6 +1313,7 @@ func NewAuthorizationServiceClient(httpClient connect.HTTPClient, baseURL string
 type authorizationServiceClient struct {
 	getAuthorizationSnapshot *connect.Client[v1.GetAuthorizationSnapshotRequest, v1.GetAuthorizationSnapshotResponse]
 	setCapabilityGrant       *connect.Client[v1.SetCapabilityGrantRequest, v1.SetCapabilityGrantResponse]
+	authorizeAccess          *connect.Client[v1.AuthorizeAccessRequest, v1.AuthorizeAccessResponse]
 }
 
 // GetAuthorizationSnapshot calls auth.v1.AuthorizationService.GetAuthorizationSnapshot.
@@ -1301,6 +1324,11 @@ func (c *authorizationServiceClient) GetAuthorizationSnapshot(ctx context.Contex
 // SetCapabilityGrant calls auth.v1.AuthorizationService.SetCapabilityGrant.
 func (c *authorizationServiceClient) SetCapabilityGrant(ctx context.Context, req *connect.Request[v1.SetCapabilityGrantRequest]) (*connect.Response[v1.SetCapabilityGrantResponse], error) {
 	return c.setCapabilityGrant.CallUnary(ctx, req)
+}
+
+// AuthorizeAccess calls auth.v1.AuthorizationService.AuthorizeAccess.
+func (c *authorizationServiceClient) AuthorizeAccess(ctx context.Context, req *connect.Request[v1.AuthorizeAccessRequest]) (*connect.Response[v1.AuthorizeAccessResponse], error) {
+	return c.authorizeAccess.CallUnary(ctx, req)
 }
 
 // AuthorizationServiceHandler is an implementation of the auth.v1.AuthorizationService service.
@@ -1327,6 +1355,19 @@ type AuthorizationServiceHandler interface {
 	// Requires an administrator role in the target organization; nothing in the
 	// product currently calls it, so it exists for operators and future tooling.
 	SetCapabilityGrant(context.Context, *connect.Request[v1.SetCapabilityGrantRequest]) (*connect.Response[v1.SetCapabilityGrantResponse], error)
+	// Answers whether the caller may act with (object, action) in one organization,
+	// and returns the policy-owned scope the caller must apply: whether it may
+	// address an organization other than its session organization, and the maximum
+	// query window in days.
+	// Answers 200 with allowed=false for an ordinary refusal so the caller can map
+	// the reason to its own error code; only a malformed request
+	// (INVALID_ARGUMENT), a missing identity (UNAUTHENTICATED), or an unreadable
+	// policy (UNAVAILABLE / policy_unavailable) is an RPC error, so a caller always
+	// fails closed rather than guessing.
+	// Authorization is evaluated inside the handler against the caller's persistent
+	// membership and the requested scope; the request may not assert an identity or
+	// a role.
+	AuthorizeAccess(context.Context, *connect.Request[v1.AuthorizeAccessRequest]) (*connect.Response[v1.AuthorizeAccessResponse], error)
 }
 
 // NewAuthorizationServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -1348,12 +1389,20 @@ func NewAuthorizationServiceHandler(svc AuthorizationServiceHandler, opts ...con
 		connect.WithSchema(authorizationServiceMethods.ByName("SetCapabilityGrant")),
 		connect.WithHandlerOptions(opts...),
 	)
+	authorizationServiceAuthorizeAccessHandler := connect.NewUnaryHandler(
+		AuthorizationServiceAuthorizeAccessProcedure,
+		svc.AuthorizeAccess,
+		connect.WithSchema(authorizationServiceMethods.ByName("AuthorizeAccess")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/auth.v1.AuthorizationService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case AuthorizationServiceGetAuthorizationSnapshotProcedure:
 			authorizationServiceGetAuthorizationSnapshotHandler.ServeHTTP(w, r)
 		case AuthorizationServiceSetCapabilityGrantProcedure:
 			authorizationServiceSetCapabilityGrantHandler.ServeHTTP(w, r)
+		case AuthorizationServiceAuthorizeAccessProcedure:
+			authorizationServiceAuthorizeAccessHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -1369,6 +1418,10 @@ func (UnimplementedAuthorizationServiceHandler) GetAuthorizationSnapshot(context
 
 func (UnimplementedAuthorizationServiceHandler) SetCapabilityGrant(context.Context, *connect.Request[v1.SetCapabilityGrantRequest]) (*connect.Response[v1.SetCapabilityGrantResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthorizationService.SetCapabilityGrant is not implemented"))
+}
+
+func (UnimplementedAuthorizationServiceHandler) AuthorizeAccess(context.Context, *connect.Request[v1.AuthorizeAccessRequest]) (*connect.Response[v1.AuthorizeAccessResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthorizationService.AuthorizeAccess is not implemented"))
 }
 
 // ExternalIdentityServiceClient is a client for the auth.v1.ExternalIdentityService service.

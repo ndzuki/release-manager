@@ -588,6 +588,36 @@ message SetCapabilityGrantResponse {
   uint64 policy_version = 2;
 }
 
+message AuthorizeAccessRequest {
+  // Target organization scope. Empty means the caller's own session organization.
+  string organization_id = 1;
+  // Casbin object the caller is about to act under (for example "audit").
+  string object = 2;
+  // Casbin action the caller is about to act with (for example "read").
+  string action = 3;
+}
+
+message AuthorizeAccessResponse {
+  // Whether the caller may act with (object, action) in organization_id.
+  bool allowed = 1;
+  // Machine reason code: "ok", "permission_denied", "cross_organization_denied",
+  // "membership_inactive", or "policy_unavailable".
+  string reason = 2;
+  // Policy ruleset version the decision was computed from.
+  uint64 policy_version = 3;
+  // Effective organization scope after resolution: the requested organization, or
+  // the caller's own organization when the request left it empty.
+  string organization_id = 4;
+  // True when the caller may address an organization other than its session
+  // organization (platform_admin). False for every other role.
+  bool allow_cross_organization = 5;
+  // Policy-owned ceiling for a query time range: 366 for platform_admin, 31
+  // otherwise. Callers must apply the returned value instead of hardcoding roles.
+  int32 max_window_days = 6;
+  // The caller's role in its session organization.
+  string role = 7;
+}
+
 // AuthorizationService exposes the authorization decision a caller is about to
 // act under as a readable snapshot, and lets an administrator toggle one capability
 // grant.
@@ -619,6 +649,19 @@ service AuthorizationService {
   // Requires an administrator role in the target organization; nothing in the
   // product currently calls it, so it exists for operators and future tooling.
   rpc SetCapabilityGrant(SetCapabilityGrantRequest) returns (SetCapabilityGrantResponse);
+  // Answers whether the caller may act with (object, action) in one organization,
+  // and returns the policy-owned scope the caller must apply: whether it may
+  // address an organization other than its session organization, and the maximum
+  // query window in days.
+  // Answers 200 with allowed=false for an ordinary refusal so the caller can map
+  // the reason to its own error code; only a malformed request
+  // (INVALID_ARGUMENT), a missing identity (UNAUTHENTICATED), or an unreadable
+  // policy (UNAVAILABLE / policy_unavailable) is an RPC error, so a caller always
+  // fails closed rather than guessing.
+  // Authorization is evaluated inside the handler against the caller's persistent
+  // membership and the requested scope; the request may not assert an identity or
+  // a role.
+  rpc AuthorizeAccess(AuthorizeAccessRequest) returns (AuthorizeAccessResponse);
 }
 
 // --- External IdP (REQ-028) ---

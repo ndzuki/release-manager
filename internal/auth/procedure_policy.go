@@ -96,6 +96,7 @@ var procedurePolicies = map[string]procedurePolicy{
 	// AuthorizationService
 	authv1connect.AuthorizationServiceGetAuthorizationSnapshotProcedure: {mode: modeHandler, object: "organization", action: "read", reason: "handler re-derives scope from the actor context and requires membership plus an active binding"},
 	authv1connect.AuthorizationServiceSetCapabilityGrantProcedure:       {mode: modeHandler, object: "organization", action: "write", reason: "handler requires platform_admin or release_admin membership of the actor"},
+	authv1connect.AuthorizationServiceAuthorizeAccessProcedure:          {mode: modeHandler, object: "audit", action: "read", reason: "the handler is the decision point (ADR-021): it resolves the caller's membership role and enforces the requested (object, action) itself, so the interceptor only authenticates and validates the session"},
 	// ExternalIdentityService
 	authv1connect.ExternalIdentityServiceAuthenticateLDAPProcedure:   {mode: modePublic, reason: "pre-authentication IdP entrypoint (REQ-028); implemented but not mounted"},
 	authv1connect.ExternalIdentityServiceGetOIDCAuthURLProcedure:     {mode: modePublic, reason: "pre-authentication IdP entrypoint (REQ-028); implemented but not mounted"},
