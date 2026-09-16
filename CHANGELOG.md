@@ -14,7 +14,7 @@
 
 ## 2026-09
 
-里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 12 个 PR 合入。
+里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 13 个 PR 合入。
 
 ### 执行链路（升级 / 回滚）
 
@@ -42,6 +42,10 @@
 - 前缀推断式授权映射换成逐 procedure 的显式登记表：修复 `SwitchOrganization`（目标组织域 + `organization/write`）、`SetCapabilityGrant`、`CheckEmergencyConflict`、`TriggerInventorySync`、`RecordArtifactEvent` 五个恒 403 的 procedure，并修复 `ChangePassword` 只有 `platform_admin` 能改本人口令的缺陷；新增「proto 新增 procedure 未登记即失败」与「授权对必须落在默认角色矩阵」两条门禁（PR #106，TASK-095）。
 - `ListOperations` 由恒 `unimplemented` 桩改为真实实现（keyset 游标 + 状态过滤 + 租户校验），兑现 REQ-056 的依赖（PR #106，TASK-095）。
 - release-api 审计面补 principal 组织域归属：查询/导出按 principal 组织收敛，`Emit` 拒收跨组织事件，导出记录按 principal 组织落库（PR #106，TASK-095）。
+
+### 审计面角色授权（Added）
+
+- 审计面按 ADR-021 接入服务端权威判定：`auth.v1.AuthorizationService/AuthorizeAccess` 由 release-auth 按持久 membership + 版本化 policy 回答 `(object, action)`，并返回有效组织、跨组织许可与 31/366 天窗口；release-api 透传调用方 JWT 消费该判定，判定不可用即 fail closed，不内嵌 Casbin、不用 JWT claims 推导角色。补齐 REQ-029 的 `platform_admin` 跨组织（AC-029-01）与窗口超限 `range_too_large`（AC-029-02）；`Emit`/`ExportAuditEvents` 收紧为需要 `audit/write`（`release_admin`/`platform_admin`）（PR #108，TASK-103）。
 
 ## 2026-08
 
