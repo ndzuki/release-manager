@@ -52,3 +52,17 @@ emergency:
   enabled: true
   operation_timeout: 30s
   effect_observe_timeout: 24h
+
+# TASK-098 (REQ-044): operator liveness. The agent is the only writer of
+# last_heartbeat; these are the thresholds the orchestrator negotiates and
+# enforces (defaults 15s/45s/90s tolerate two lost heartbeats before suspect and
+# four before offline).
+operator_session:
+  heartbeat_interval: 15s
+  suspect_after: 45s
+  offline_after: 90s
+# TASK-098 (REQ-023): standard operations get a deadline, and the non-terminal
+# recovery sweep now runs periodically instead of once at startup.
+operation:
+  deadline: 30m
+  recovery_interval: 1m

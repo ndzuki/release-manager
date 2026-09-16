@@ -143,7 +143,7 @@
 
 TASK-094 前本文件还写有 `runtime_pull_preflight.*`（6 键，整块无读取，§7-2）与 `ca.cert_ttl`/`ca.renew_before_ratio`（operator 进程只读 `CA.CertPath`，二者仅 orchestrator `ca.LoadConfigured` 消费，§7-6）；8 个死键均已从文件删除，`ca:` 块留有注释说明，防再犯。
 
-### 3.5 release-orchestrator（本地 28 键；overlay 键路径为其子集，合并 28 个不同键路径）
+### 3.5 release-orchestrator（本地 33 键；overlay 键路径为其子集，合并 33 个不同键路径）
 
 | 键 | 类型/取值 | 默认值 | 含义 | 备注 |
 |---|---|---|---|---|
@@ -175,6 +175,11 @@ TASK-094 前本文件还写有 `runtime_pull_preflight.*`（6 键，整块无读
 | `emergency.enabled` | bool | 缺块=fail-closed false | 紧急变更 kill switch | dev 本地与集群都 true（REQ-081 D2=A）；启动种入 app_settings（`cmd/orchestrator/main.go:305-309`）；仅文件 |
 | `emergency.operation_timeout` | duration | 30s（`store.DefaultEmergencyOperationTimeout`，`internal/store/store.go:1394`） | 非终态 EMERGENCY 操作时限 | 解析失败回落默认；仅文件 |
 | `emergency.effect_observe_timeout` | duration | 24h（`internal/store/store.go:1398`） | 卡锁观察窗 | 仅文件 |
+| `operator_session.heartbeat_interval` | duration | 15s（`OperatorSessionCfg.WithDefaults`） | 下发给 agent 的心跳周期（`SessionEstablished` 里协商） | TASK-098；0 值回落默认 |
+| `operator_session.suspect_after` | duration | 45s | 超过该时长无心跳 → `suspect` | 容忍两次丢失（30s 周期） |
+| `operator_session.offline_after` | duration | 90s | 超过该时长无心跳 → `offline`（紧急路径的 `operator_offline`） | 容忍四次丢失；会话行心跳陈旧也按离线处理（重启窗口） |
+| `operation.deadline` | duration | 30m | 标准 Operation（INSTALL/UPGRADE/ROLLBACK）的端到端时限；超时由恢复扫描转 `timeout` | TASK-098；EMERGENCY 用自己的 30s |
+| `operation.recovery_interval` | duration | 1m | 非终态 Operation 恢复扫描周期 | 此前只在启动时跑一次 |
 TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candidate_artifact_days`/`preflight_result_hours`/`prepare_session_hours`/`gc_interval_hours`），已整块换成规范 `gc:` 块（§7-3）。`gateway.ca_key_path`/`gateway.ca_cert_path` 则连字段带 env 绑定一起删除（§7-4）。
 
 代码支持但未在任何文件出现的键：`ca.vault_path`（生产 CA 源，Vault KV，客户端走 `VAULT_ADDR` 环境，`internal/operator/ca/config.go:19`、`vault.go:38`）。

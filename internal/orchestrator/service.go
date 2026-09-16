@@ -34,10 +34,32 @@ import (
 	"github.com/ndzuki/release-manager/internal/vulnerability"
 )
 
+// LifecyclePolicy carries the REQ-023/REQ-044 lifecycle bounds TASK-098 wires
+// up: the standard-operation deadline, the grace before a persisted session with
+// a stale heartbeat is treated as offline, and the recovery sweep period.
+// EMERGENCY operations keep their own shorter deadline.
+type LifecyclePolicy struct {
+	OperationDeadline   time.Duration
+	SessionOfflineAfter time.Duration
+	RecoveryInterval    time.Duration
+}
+
+// DefaultLifecyclePolicy is the documented default set: a 30-minute operation
+// bound (the install budget), a 90-second session offline grace (four missed
+// 15-second heartbeats), and a 1-minute recovery sweep.
+func DefaultLifecyclePolicy() LifecyclePolicy {
+	return LifecyclePolicy{
+		OperationDeadline:   30 * time.Minute,
+		SessionOfflineAfter: 90 * time.Second,
+		RecoveryInterval:    time.Minute,
+	}
+}
+
 // Service implements the OrchestratorServiceHandler Connect interface.
 type Service struct {
 	store               store.Store
 	createOperation     OperationCreationUnitOfWork
+	lifecyclePolicy     LifecyclePolicy
 	verifier            trust.Verifier
 	targetEnv           string
 	coordinator         *preflight.Coordinator
@@ -63,6 +85,7 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 	logger := slog.Default()
 	valuesConfig := DefaultValuesConfig()
 	var authorizer authorization.Authorizer
+	lifecyclePolicy := DefaultLifecyclePolicy()
 	for _, arg := range args {
 		switch value := arg.(type) {
 		case audit.Sink:
@@ -75,6 +98,8 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 			createOperation = value
 		case PendingIdentityReplayer:
 			pendingIdentity = value
+		case LifecyclePolicy:
+			lifecyclePolicy = value
 		case string:
 			if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
 				operatorEndpoint = strings.TrimRight(value, "/")
@@ -103,7 +128,18 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 		authorizer:          authorizer,
 		valuesConfig:        valuesConfig,
 		pendingIdentity:     pendingIdentity,
+		lifecyclePolicy:     lifecyclePolicy,
 	}
+}
+
+// standardOperationDeadline returns the deadline to persist on a standard
+// operation, or nil when no bound is configured.
+func (s *Service) standardOperationDeadline(now time.Time) *time.Time {
+	if s.lifecyclePolicy.OperationDeadline <= 0 {
+		return nil
+	}
+	deadline := now.Add(s.lifecyclePolicy.OperationDeadline)
+	return &deadline
 }
 
 // CreateOperation creates a new release operation from the given request.
@@ -355,6 +391,7 @@ func (s *Service) CreateOperation(
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
+		Deadline:  s.standardOperationDeadline(now),
 	}
 
 	// Preflight dispatch: coordinator publishes in-process; a coordinator
