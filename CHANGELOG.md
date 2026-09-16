@@ -53,8 +53,8 @@
 
 ### 调试集合（Fixed）
 
-- `api/kulala` 六个集合从 Connect 迁移前的 REST/gRPC 形状重写为单端口 Connect 形状：路径改为 `<package>.<Service>/<Method>`、`Login` 的 post-request 脚本自动把 token 写进 `{{AUTH_TOKEN}}`、端口改由 `configs/*.dev.yaml` 与 kustomize NodePort 派生；`manager.http`（针对已移除的 Manager 进程）删除，新增 `notifier.http`，`operator.http` 明确声明 mTLS 不可达（PR #NNN，TASK-093）。
-- 新增 `make api-check` 结构门禁：每条请求必须是 `api/proto` 里真实存在的 RPC、每个占位符必须可解析、env 端口必须来自事实源、空集合必须说明原因（含三类负控制），并入 `make quality` 且随 CI 的 `go test ./...` 执行；六个只做 `nvim` 的 `api-*` 目标删除（PR #NNN，TASK-093）。
+- `api/kulala` 六个集合从 Connect 迁移前的 REST/gRPC 形状重写为单端口 Connect 形状：路径改为 `<package>.<Service>/<Method>`、`Login` 的 post-request 脚本自动把 token 写进 `{{AUTH_TOKEN}}`、端口改由 `configs/*.dev.yaml` 与 kustomize NodePort 派生；`manager.http`（针对已移除的 Manager 进程）删除，新增 `notifier.http`，`operator.http` 明确声明 mTLS 不可达（PR #119，TASK-093）。
+- 新增 `make api-check` 结构门禁：每条请求必须是 `api/proto` 里真实存在的 RPC、每个占位符必须可解析、env 端口必须来自事实源、空集合必须说明原因（含三类负控制），并入 `make quality` 且随 CI 的 `go test ./...` 执行；六个只做 `nvim` 的 `api-*` 目标删除（PR #119，TASK-093）。
 
 ### Operator 会话与生命周期（Fixed）
 
