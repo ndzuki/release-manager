@@ -13,7 +13,7 @@
 - `docs/architecture.md`：系统边界与数据权威。
 - `docs/dev-environment.md`：本地环境如何起、如何清。
 - `docs/testing.md`：测试分层与如何跑门禁。
-- `docs/decisions/`：已接受的架构决策（ADR-000 ~ ADR-020）。
+- `docs/decisions/`：已接受的架构决策（ADR-000 ~ ADR-021）。
 
 需求、任务与决策的**权威记录在知识库** `myNote/Projects/001-release-manager/`。改变需求语义必须回知识库改 REQ/TASK，而不是在本仓库就地改文档。
 

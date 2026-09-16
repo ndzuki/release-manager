@@ -19,7 +19,7 @@
 | 审计 | 独立、脱敏、异步入库的审计流水线，支持归档与导出 |
 | 紧急变更 | 受控紧急变更必须显式收敛，不允许「发完即结束」 |
 
-每条约束的完整决策记录见 `docs/decisions/`（ADR-000 ~ ADR-020）。
+每条约束的完整决策记录见 `docs/decisions/`（ADR-000 ~ ADR-021）。
 
 ## 服务与工具
 
@@ -108,7 +108,7 @@ make proto         # buf generate（生成 Go/TS 契约代码）
 | `docs/architecture.md` | 系统组成、执行边界、数据权威与交付波次 |
 | `docs/dev-environment.md` | 本地环境生命周期、夹具与逐服务调试 |
 | `docs/testing.md` | 单元/集成/E2E 分层、命令矩阵与 CI 关系 |
-| `docs/decisions/` | ADR-000 ~ ADR-020 导出副本与索引 |
+| `docs/decisions/` | ADR-000 ~ ADR-021 导出副本与索引 |
 | `docs/glossary.md` | 领域词汇表（含禁用说法） |
 | `docs/api.md` | Connect 契约面：服务、RPC、认证与错误约定 |
 | `docs/configuration.md` | 各服务配置键、层级与默认值 |
