@@ -121,13 +121,17 @@ func checkDeploymentProbes(obj map[string]any) []string {
 	}
 	pod := asMap(spec["template"])
 	podSpec := asMap(pod["spec"])
-	containers, _ := podSpec["containers"].([]any)
-	if len(containers) == 0 {
+	containers, ok := podSpec["containers"].([]any)
+	if !ok || len(containers) == 0 {
 		return []string{"no containers"}
 	}
 	for _, raw := range containers {
 		c := asMap(raw)
-		name, _ := c["name"].(string)
+		name, ok := c["name"].(string)
+		if !ok || name == "" {
+			problems = append(problems, "container without a string name")
+			continue
+		}
 		if c["startupProbe"] == nil {
 			problems = append(problems, name+": missing startupProbe (boot/migration window must not fight liveness)")
 		}
@@ -139,17 +143,24 @@ func checkDeploymentProbes(obj map[string]any) []string {
 			if probe == nil {
 				continue
 			}
-			if to, _ := probe["timeoutSeconds"].(int); to <= 0 {
+			timeout, ok := probe["timeoutSeconds"].(int)
+			if !ok || timeout <= 0 {
 				problems = append(problems, name+": "+p[1]+"Probe missing explicit timeoutSeconds (k8s default 1s fails under load)")
 			}
-			if http := asMap(probe["httpGet"]); http != nil {
-				path, _ := http["path"].(string)
-				switch p[1] {
-				case "readiness":
-					readinessPath, readinessIsHTTP = path, true
-				case "liveness":
-					livenessPath, livenessIsHTTP = path, true
-				}
+			httpGet := asMap(probe["httpGet"])
+			if httpGet == nil {
+				continue
+			}
+			path, ok := httpGet["path"].(string)
+			if !ok {
+				problems = append(problems, name+": "+p[1]+"Probe httpGet without a string path")
+				continue
+			}
+			switch p[1] {
+			case "readiness":
+				readinessPath, readinessIsHTTP = path, true
+			case "liveness":
+				livenessPath, livenessIsHTTP = path, true
 			}
 		}
 		if readinessIsHTTP && livenessIsHTTP {
@@ -193,6 +204,9 @@ func deploymentFiles(t *testing.T, root string) []string {
 }
 
 func asMap(v any) map[string]any {
-	m, _ := v.(map[string]any)
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
 	return m
 }

@@ -245,8 +245,7 @@ func serviceConfigFiles(t *testing.T, root string) []string {
 }
 
 func reasonOf(rel string) string {
-	switch filepath.Base(rel) {
-	case "e2e.dev.yaml":
+	if filepath.Base(rel) == "e2e.dev.yaml" {
 		return "consumed by cmd/e2e with yaml.KnownFields(true) (test/e2e/config.go) — strict decoding already fails on unknown keys"
 	}
 	return ""
@@ -362,8 +361,9 @@ func productionSelectorNames(t *testing.T, root string) map[string]struct{} {
 			}
 			file, err := parser.ParseFile(fset, path, nil, 0)
 			if err != nil {
-				// Syntax errors are the compiler's problem, not the gate's.
-				return nil
+				// A production file that does not parse would make the reader
+				// scan silently incomplete, so the gate fails loudly instead.
+				return fmt.Errorf("parse %s: %w", path, err)
 			}
 			ast.Inspect(file, func(n ast.Node) bool {
 				if sel, ok := n.(*ast.SelectorExpr); ok {

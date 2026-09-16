@@ -5,7 +5,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -93,7 +92,7 @@ func (s *webhookSvc) ReadinessChecks() map[string]func() error {
 		"orchestrator": func() error {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/readyz", nil)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/readyz", http.NoBody)
 			if err != nil {
 				return err
 			}
@@ -101,8 +100,7 @@ func (s *webhookSvc) ReadinessChecks() map[string]func() error {
 			if err != nil {
 				return fmt.Errorf("orchestrator %s not reachable: %w", base, err)
 			}
-			defer resp.Body.Close() //nolint:errcheck // best-effort close after probe
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+			defer resp.Body.Close() //nolint:errcheck // the status code is the signal; draining the body is not
 			if resp.StatusCode != http.StatusOK {
 				return fmt.Errorf("orchestrator %s/readyz answered %d (not ready)", base, resp.StatusCode)
 			}
