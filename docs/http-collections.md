@@ -49,7 +49,7 @@
 | `orchestrator.http` | `orchestrator.v1.CleanupService` | **无只读 RPC**：`RunCleanup`/`UnarchiveBundle` 均为 platform_admin 写操作，只给形状 |
 | `audit.http` | `audit.v1.AuditService` | `QueryAuditEvents`（`audit/read`，本组织 + 31 天窗口）；`Emit`/`ExportAuditEvents` 给形状 |
 | `webhook.http` | `webhook.v1.WebhookService` | `SubmitReleaseBundle`（CI key + `Idempotency-Key`），以及非 Connect 的 `POST /webhooks/harbor`（Harbor key） |
-| `notifier.http` | `notifier.v1.NotifierService` | `GetStatus`（该服务当前**没有任何认证**，`Send` 只给形状——这正是 TASK-096 要收的口子） |
+| `notifier.http` | `notifier.v1.NotifierService` | `GetStatus`（TASK-096 起需要 `DEV_NOTIFIER_SERVICE_TOKEN` 服务令牌；`Send` 只给形状） |
 | `operator.http` | `operator.v1.OperatorService` | **不可达**：只挂在 mTLS agent gateway 上，需要客户端证书，Kulala 无法提供 |
 
 ## 4. `make api-check` 校验什么

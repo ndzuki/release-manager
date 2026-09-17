@@ -337,7 +337,7 @@ jwt_ci_temp_cleanup() {
 # each rotatable independently. The CI key only authorizes SubmitReleaseBundle,
 # the Harbor key only POST /webhooks/harbor + RecordArtifactEvent, and the
 # webhook service token is the outbound bearer for SubmitBundle.
-SERVICE_TOKEN_FILES="webhook-service-token:DEV_WEBHOOK_SERVICE_TOKEN ci-api-key:DEV_CI_API_KEY harbor-service-token:DEV_HARBOR_SERVICE_TOKEN"
+SERVICE_TOKEN_FILES="webhook-service-token:DEV_WEBHOOK_SERVICE_TOKEN ci-api-key:DEV_CI_API_KEY harbor-service-token:DEV_HARBOR_SERVICE_TOKEN notifier-service-token:DEV_NOTIFIER_SERVICE_TOKEN"
 
 service_token_path() { printf '%s' "$DEV_DATA_DIR/dev-service-tokens/webhook-service-token"; }
 service_token_path_for() { printf '%s' "$DEV_DATA_DIR/dev-service-tokens/$1"; }

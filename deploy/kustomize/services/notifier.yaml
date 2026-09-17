@@ -30,6 +30,23 @@ spec:
           envFrom:
             - secretRef:
                 name: release-manager-jwt
+          env:
+            # TASK-096 (REQ-031): NotifierService is machine-to-machine and now
+            # requires a scoped service token (auth.ServiceTokenInterceptor).
+            # optional: an overlay without the Secret leaves the surface closed
+            # rather than open — an absent allowlist matches nothing.
+            - name: DEV_NOTIFIER_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: release-manager-notifier-service-token
+                  key: NOTIFIER_SERVICE_TOKEN
+                  optional: true
+            - name: DEV_NOTIFIER_SERVICE_TOKEN_PREVIOUS
+              valueFrom:
+                secretKeyRef:
+                  name: release-manager-notifier-service-token
+                  key: NOTIFIER_SERVICE_TOKEN_PREVIOUS
+                  optional: true
           ports:
             - name: http
               containerPort: 8086

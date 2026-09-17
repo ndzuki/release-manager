@@ -1028,7 +1028,7 @@ func TestAgentsUpDeploysOperatorWithCorrectKubectlContract(t *testing.T) {
 	if err := os.WriteFile(tokenPath, []byte("service-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for name, value := range map[string]string{"ci-api-key": "ci-api-key-value", "harbor-service-token": "harbor-service-token-value"} {
+	for name, value := range map[string]string{"ci-api-key": "ci-api-key-value", "harbor-service-token": "harbor-service-token-value", "notifier-service-token": "notifier-service-token-value"} {
 		extra := filepath.Join(filepath.Dir(tokenPath), name)
 		if err := os.WriteFile(extra, []byte(value), 0o600); err != nil {
 			t.Fatal(err)
@@ -1191,7 +1191,7 @@ func TestSeedLegRetriesTransientDevseedFailure(t *testing.T) {
 	if err := os.WriteFile(tokenPath, []byte("service-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for name, value := range map[string]string{"ci-api-key": "ci-api-key-value", "harbor-service-token": "harbor-service-token-value"} {
+	for name, value := range map[string]string{"ci-api-key": "ci-api-key-value", "harbor-service-token": "harbor-service-token-value", "notifier-service-token": "notifier-service-token-value"} {
 		extra := filepath.Join(filepath.Dir(tokenPath), name)
 		if err := os.WriteFile(extra, []byte(value), 0o600); err != nil {
 			t.Fatal(err)
@@ -1258,7 +1258,7 @@ func TestCiProfileAutoPurgesOnExit(t *testing.T) {
 	env, binDir := fakeEnv(t, stateDir)
 	fakeK3d(t, binDir, stateDir)
 	happyShims(t, binDir)
-	env = append(env, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-001", "DEV_JWT_SIGNING_KEY=ci-jwt-key", "DEV_WEBHOOK_SERVICE_TOKEN=ci-service-token", "DEV_CI_API_KEY=ci-api-key-value", "DEV_HARBOR_SERVICE_TOKEN=ci-harbor-token",
+	env = append(env, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-001", "DEV_JWT_SIGNING_KEY=ci-jwt-key", "DEV_WEBHOOK_SERVICE_TOKEN=ci-service-token", "DEV_CI_API_KEY=ci-api-key-value", "DEV_HARBOR_SERVICE_TOKEN=ci-harbor-token", "DEV_NOTIFIER_SERVICE_TOKEN=ci-notifier-token",
 		"DEV_M_TLS_CA_KEY=ci-ca-key", "DEV_M_TLS_CA_CERT=ci-ca-cert")
 
 	if out, err := runDev(t, env, "up"); err != nil {
@@ -1281,7 +1281,7 @@ func TestCiProfileAutoPurgesOnExit(t *testing.T) {
 	happyShims(t, binDir2)
 	writeShim(t, binDir2, "docker",
 		"#!/usr/bin/env bash\nfor a in \"$@\"; do if [ \"$a\" = \"inspect\" ]; then exit 1; fi; done\nif [ \"$1\" = \"build\" ]; then exit 1; fi\nexit 0\n")
-	env2 = append(env2, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-002", "DEV_JWT_SIGNING_KEY=ci-jwt-key", "DEV_WEBHOOK_SERVICE_TOKEN=ci-service-token", "DEV_CI_API_KEY=ci-api-key-value", "DEV_HARBOR_SERVICE_TOKEN=ci-harbor-token",
+	env2 = append(env2, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-002", "DEV_JWT_SIGNING_KEY=ci-jwt-key", "DEV_WEBHOOK_SERVICE_TOKEN=ci-service-token", "DEV_CI_API_KEY=ci-api-key-value", "DEV_HARBOR_SERVICE_TOKEN=ci-harbor-token", "DEV_NOTIFIER_SERVICE_TOKEN=ci-notifier-token",
 		"DEV_M_TLS_CA_KEY=ci-ca-key", "DEV_M_TLS_CA_CERT=ci-ca-cert")
 
 	out, err := runDev(t, env2, "up")
@@ -1537,6 +1537,7 @@ func TestPurgeRemovesDataRuntimeFilesKeepsArchive(t *testing.T) {
 		"dev-service-tokens/webhook-service-token",
 		"dev-service-tokens/ci-api-key",
 		"dev-service-tokens/harbor-service-token",
+		"dev-service-tokens/notifier-service-token",
 		"dev-enrollment-tokens/dev-customer-a-direct.token",
 		"dev-ca/ca.key",
 		"dev-ca/ca.crt",
@@ -1835,7 +1836,7 @@ func TestDevSeedPassesTimeoutRetryOverrides(t *testing.T) {
 	if err := os.WriteFile(tokenPath, []byte("service-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for name, value := range map[string]string{"ci-api-key": "ci-api-key-value", "harbor-service-token": "harbor-service-token-value"} {
+	for name, value := range map[string]string{"ci-api-key": "ci-api-key-value", "harbor-service-token": "harbor-service-token-value", "notifier-service-token": "notifier-service-token-value"} {
 		extra := filepath.Join(filepath.Dir(tokenPath), name)
 		if err := os.WriteFile(extra, []byte(value), 0o600); err != nil {
 			t.Fatal(err)
@@ -1941,7 +1942,7 @@ func TestKustomizeBuildJwtSecretAndNoPostgresPVC(t *testing.T) {
 	if err := os.WriteFile(tokenPath, []byte("test-service-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for name, value := range map[string]string{"ci-api-key": "ci-api-key-value", "harbor-service-token": "harbor-service-token-value"} {
+	for name, value := range map[string]string{"ci-api-key": "ci-api-key-value", "harbor-service-token": "harbor-service-token-value", "notifier-service-token": "notifier-service-token-value"} {
 		extra := filepath.Join(filepath.Dir(tokenPath), name)
 		if err := os.WriteFile(extra, []byte(value), 0o600); err != nil {
 			t.Fatal(err)
@@ -2130,7 +2131,7 @@ func TestCiProfileMtlsCaTransientFilesRemoved(t *testing.T) {
 	fakeK3d(t, binDir, stateDir)
 	happyShims(t, binDir)
 	env = append(env, "DEV_PROFILE=ci", "E2E_RUN_ID=ci-run-003", "DEV_JWT_SIGNING_KEY=ci-jwt-key",
-		"DEV_WEBHOOK_SERVICE_TOKEN=ci-service-token", "DEV_CI_API_KEY=ci-api-key-value", "DEV_HARBOR_SERVICE_TOKEN=ci-harbor-token", "DEV_M_TLS_CA_KEY=ci-ca-key", "DEV_M_TLS_CA_CERT=ci-ca-cert")
+		"DEV_WEBHOOK_SERVICE_TOKEN=ci-service-token", "DEV_CI_API_KEY=ci-api-key-value", "DEV_HARBOR_SERVICE_TOKEN=ci-harbor-token", "DEV_NOTIFIER_SERVICE_TOKEN=ci-notifier-token", "DEV_M_TLS_CA_KEY=ci-ca-key", "DEV_M_TLS_CA_CERT=ci-ca-cert")
 
 	if out, err := runDev(t, env, "up"); err != nil {
 		t.Fatalf("ci dev-up failed:\n%s", out)
@@ -2292,7 +2293,7 @@ exit 0
 	if err := os.WriteFile(tokenPath, []byte("stale-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for name, value := range map[string]string{"ci-api-key": "ci-api-key-value", "harbor-service-token": "harbor-service-token-value"} {
+	for name, value := range map[string]string{"ci-api-key": "ci-api-key-value", "harbor-service-token": "harbor-service-token-value", "notifier-service-token": "notifier-service-token-value"} {
 		extra := filepath.Join(filepath.Dir(tokenPath), name)
 		if err := os.WriteFile(extra, []byte(value), 0o600); err != nil {
 			t.Fatal(err)
