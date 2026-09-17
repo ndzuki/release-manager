@@ -411,6 +411,12 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 			MaxDocumentBytes: valuesConfig.MaxDocumentBytes,
 			SecretPatterns:   valuesConfig.SecretPatterns,
 		},
+		// TASK-105: artifact admission mode. shadow (the default) records what
+		// enforce would block without changing the outcome; enforce is an explicit
+		// opt-in per deployment.
+		orchestrator.VulnerabilityAdmissionPolicy{
+			Mode: orchestrator.AdmissionMode(s.cfg.VulnerabilityAdmission.WithDefaults().Mode),
+		},
 		// TASK-098 (REQ-023/REQ-044): standard-operation deadline + the session
 		// offline grace the emergency path reads for operator_offline.
 		orchestrator.LifecyclePolicy{
@@ -550,6 +556,20 @@ func (s *orchSvc) openStore() error {
 	if err := s.cfg.Database.Validate(); err != nil {
 		return err
 	}
+	// TASK-105: a typo in the admission mode decides whether releases are blocked,
+	// so it fails startup instead of falling back to a default silently.
+	if err := s.cfg.VulnerabilityAdmission.Validate(); err != nil {
+		return err
+	}
+	// A test may build orchSvc without a logger; logging must not be the thing
+	// that panics on an otherwise valid configuration.
+	logger := s.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Info("artifact admission mode configured",
+		"mode", s.cfg.VulnerabilityAdmission.WithDefaults().Mode,
+	)
 	var err error
 	switch s.cfg.Database.Driver {
 	case "postgres":

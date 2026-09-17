@@ -147,7 +147,7 @@
 
 TASK-094 前本文件还写有 `runtime_pull_preflight.*`（6 键，整块无读取，§7-2）与 `ca.cert_ttl`/`ca.renew_before_ratio`（operator 进程只读 `CA.CertPath`，二者仅 orchestrator `ca.LoadConfigured` 消费，§7-6）；8 个死键均已从文件删除，`ca:` 块留有注释说明，防再犯。
 
-### 3.5 release-orchestrator（本地 33 键；overlay 键路径为其子集，合并 33 个不同键路径）
+### 3.5 release-orchestrator（本地 34 键；overlay 键路径为其子集，合并 34 个不同键路径）
 
 | 键 | 类型/取值 | 默认值 | 含义 | 备注 |
 |---|---|---|---|---|
@@ -184,6 +184,7 @@ TASK-094 前本文件还写有 `runtime_pull_preflight.*`（6 键，整块无读
 | `operator_session.offline_after` | duration | 90s | 超过该时长无心跳 → `offline`（紧急路径的 `operator_offline`） | 容忍四次丢失；会话行心跳陈旧也按离线处理（重启窗口） |
 | `operation.deadline` | duration | 30m | 标准 Operation（INSTALL/UPGRADE/ROLLBACK）的端到端时限；超时由恢复扫描转 `timeout` | TASK-098；EMERGENCY 用自己的 30s |
 | `operation.recovery_interval` | duration | 1m | 非终态 Operation 恢复扫描周期 | 此前只在启动时跑一次 |
+| `vulnerability_admission.mode` | `off`\|`shadow`\|`enforce` | `shadow`（`VulnerabilityAdmissionCfg.WithDefaults`） | 制品准入如何对待漏洞评估结论（TASK-105） | `off` 不评估；`shadow` 放行但产出 `would_block` 审计/计数/日志；`enforce` 对 reject 与「评估不可用」分别以 `vulnerability_policy_failed`/`vulnerability_policy_unavailable` 拒绝。未知值启动即失败。**无 scanner 时不要设 enforce**（评估恒不可用 ⇒ 全量拒绝） |
 TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candidate_artifact_days`/`preflight_result_hours`/`prepare_session_hours`/`gc_interval_hours`），已整块换成规范 `gc:` 块（§7-3）。`gateway.ca_key_path`/`gateway.ca_cert_path` 则连字段带 env 绑定一起删除（§7-4）。
 
 代码支持但未在任何文件出现的键：`ca.vault_path`（生产 CA 源，Vault KV，客户端走 `VAULT_ADDR` 环境，`internal/operator/ca/config.go:19`、`vault.go:38`）。

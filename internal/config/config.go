@@ -150,6 +150,40 @@ type ServiceConfig struct {
 	// Notifier carries the REQ-031 notifier policy (TASK-096): the outbound
 	// webhook egress allowlist and the ADR-020 secret resolver settings.
 	Notifier NotifierCfg `mapstructure:"notifier"`
+	// VulnerabilityAdmission carries the artifact admission mode (TASK-105).
+	VulnerabilityAdmission VulnerabilityAdmissionCfg `mapstructure:"vulnerability_admission"`
+}
+
+// VulnerabilityAdmissionCfg is how artifact admission treats the vulnerability
+// evaluator's answer (TASK-105).
+type VulnerabilityAdmissionCfg struct {
+	// Mode is one of off, shadow, enforce.
+	//
+	// shadow is the default on purpose: the admission step used to be unwired, so
+	// switching straight to enforce would start blocking releases in deployments
+	// whose scanner is not configured yet. shadow keeps the outcome identical and
+	// records what would have been blocked, which is the evidence an operator needs
+	// before opting into enforce. off skips the evaluation entirely.
+	Mode string `mapstructure:"mode"`
+}
+
+// WithDefaults fills the mode when the section is absent or empty.
+func (c VulnerabilityAdmissionCfg) WithDefaults() VulnerabilityAdmissionCfg {
+	if strings.TrimSpace(c.Mode) == "" {
+		c.Mode = "shadow"
+	}
+	return c
+}
+
+// Validate rejects an unknown mode instead of silently falling back to a default:
+// a typo in this value decides whether releases are blocked.
+func (c VulnerabilityAdmissionCfg) Validate() error {
+	switch c.WithDefaults().Mode {
+	case "off", "shadow", "enforce":
+		return nil
+	default:
+		return fmt.Errorf("vulnerability_admission.mode must be off, shadow or enforce, got %q", c.Mode)
+	}
 }
 
 // NotifierCfg is the REQ-031 notifier surface policy (TASK-096).

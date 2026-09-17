@@ -31,7 +31,6 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 	"github.com/ndzuki/release-manager/internal/trust"
 	valueutil "github.com/ndzuki/release-manager/internal/values"
-	"github.com/ndzuki/release-manager/internal/vulnerability"
 )
 
 // LifecyclePolicy carries the REQ-023/REQ-044 lifecycle bounds TASK-098 wires
@@ -42,6 +41,19 @@ type LifecyclePolicy struct {
 	OperationDeadline   time.Duration
 	SessionOfflineAfter time.Duration
 	RecoveryInterval    time.Duration
+}
+
+// VulnerabilityAdmissionPolicy carries the artifact admission mode (TASK-105).
+type VulnerabilityAdmissionPolicy struct {
+	Mode AdmissionMode
+}
+
+// DefaultVulnerabilityAdmissionPolicy is shadow: the admission step is newly
+// wired, so it records what enforce would block without changing the outcome.
+// Blocking by default would start rejecting releases in deployments whose
+// scanner is not configured yet.
+func DefaultVulnerabilityAdmissionPolicy() VulnerabilityAdmissionPolicy {
+	return VulnerabilityAdmissionPolicy{Mode: AdmissionShadow}
 }
 
 // DefaultLifecyclePolicy is the documented default set: a 30-minute operation
@@ -57,14 +69,23 @@ func DefaultLifecyclePolicy() LifecyclePolicy {
 
 // Service implements the OrchestratorServiceHandler Connect interface.
 type Service struct {
-	store               store.Store
-	createOperation     OperationCreationUnitOfWork
-	lifecyclePolicy     LifecyclePolicy
-	verifier            trust.Verifier
-	targetEnv           string
-	coordinator         *preflight.Coordinator
-	preflightRunner     *preflight.Runner
-	vulnEval            *vulnerability.Evaluator
+	store           store.Store
+	createOperation OperationCreationUnitOfWork
+	lifecyclePolicy LifecyclePolicy
+	// admissionMode is how the artifact admission step treats the vulnerability
+	// evaluator's answer (TASK-105). Empty means shadow.
+	admissionMode AdmissionMode
+	// admissionCounters counts admission decisions; lazily created so a Service
+	// built as a struct literal in tests still works.
+	admissionCounters *AdmissionMetrics
+	verifier          trust.Verifier
+	targetEnv         string
+	coordinator       *preflight.Coordinator
+	preflightRunner   *preflight.Runner
+	// vulnEval is the artifact admission evaluator. The interface (rather than
+	// *vulnerability.Evaluator) keeps the admission step testable without a
+	// store, a scanner and a policy (TASK-105).
+	vulnEval            artifactEvaluator
 	auditEmitter        audit.Sink
 	emergencyDispatcher emergencyDispatcher
 	streamRevoker       OperatorStreamRevoker
@@ -86,6 +107,7 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 	valuesConfig := DefaultValuesConfig()
 	var authorizer authorization.Authorizer
 	lifecyclePolicy := DefaultLifecyclePolicy()
+	admissionPolicy := DefaultVulnerabilityAdmissionPolicy()
 	for _, arg := range args {
 		switch value := arg.(type) {
 		case audit.Sink:
@@ -100,6 +122,8 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 			pendingIdentity = value
 		case LifecyclePolicy:
 			lifecyclePolicy = value
+		case VulnerabilityAdmissionPolicy:
+			admissionPolicy = value
 		case string:
 			if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
 				operatorEndpoint = strings.TrimRight(value, "/")
@@ -129,6 +153,8 @@ func NewService(st store.Store, verifier trust.Verifier, targetEnv string, args 
 		valuesConfig:        valuesConfig,
 		pendingIdentity:     pendingIdentity,
 		lifecyclePolicy:     lifecyclePolicy,
+		admissionMode:       admissionPolicy.Mode,
+		admissionCounters:   &AdmissionMetrics{},
 	}
 }
 
@@ -340,6 +366,16 @@ func (s *Service) CreateOperation(
 		responseStatus = store.VerificationPolicyWarning
 	}
 	verifyResult := trust.StatusToProto(responseStatus)
+
+	// TASK-105: artifact admission. Each image digest is evaluated through the
+	// configured mode; the default shadow mode records what enforce would block
+	// without changing the outcome. The chart digest stays with the trust path
+	// above: vulnerability scanning covers images.
+	for _, image := range bundle.Images {
+		if err := s.EvaluateArtifactAdmission(ctx, image.Digest, bundle.SBOMRef); err != nil {
+			return nil, err
+		}
+	}
 
 	// REQ-067 rule 11: values revision approved and bound to the definition.
 	revision, err := s.checkValuesRevision(ctx, def, msg.GetValuesRevisionId())
