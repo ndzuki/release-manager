@@ -79,15 +79,15 @@ func TestVaultResolverAuthenticatesWithKubernetesAndReadsKVv2(t *testing.T) {
 	var loginCalls, secretCalls atomic.Int64
 	var sawRole, sawJWT, sawToken atomic.Value
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v1/auth/kubernetes/login":
+		switch r.URL.Path {
+		case "/v1/auth/kubernetes/login":
 			loginCalls.Add(1)
 			var body map[string]string
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 			sawRole.Store(body["role"])
 			sawJWT.Store(body["jwt"])
 			writeJSON(t, w, `{"auth":{"client_token":"vault-token","lease_duration":3600,"renewable":true}}`)
-		case r.URL.Path == "/v1/secret/data/release-manager/webhook":
+		case "/v1/secret/data/release-manager/webhook":
 			secretCalls.Add(1)
 			sawToken.Store(r.Header.Get("X-Vault-Token"))
 			writeJSON(t, w, `{"data":{"data":{"webhook_secret":"s3cr3t-value"},"metadata":{"version":1}}}`)
