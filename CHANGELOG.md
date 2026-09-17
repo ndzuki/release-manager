@@ -53,9 +53,9 @@
 
 ### 通知面认证与出站（Fixed）
 
-- notifier 面接入服务令牌：`NotifierService/Send`、`GetStatus` 由 `auth.ServiceTokenInterceptor` 守卫并收窄 scope，支持 current/previous 轮换；同源入口（`web/nginx.conf` 的 `/notifier.v1.` 代理）不再构成绕过（PR #NNN，TASK-096）。
-- 出站投递改为**默认拒绝**的 `scheme+host+port` 白名单：未登记目标（含 `169.254.169.254`、回环、RFC1918、集群 DNS）在解析凭据前即被拒绝，job 以稳定错误码 `egress_blocked` 落库并计数、打结构化 WARN；外发 metadata 过 `internal/redact`（PR #NNN，TASK-096）。
-- 落实 ADR-020：Vault KV v2 + Kubernetes auth 的 SecretResolver 适配器（引用缺失即启动失败、错误不携带秘密、租约续期），未启用时按 ADR/REQ 明文保持无鉴权投递（PR #NNN，TASK-096）。
+- notifier 面接入服务令牌：`NotifierService/Send`、`GetStatus` 由 `auth.ServiceTokenInterceptor` 守卫并收窄 scope，支持 current/previous 轮换；同源入口（`web/nginx.conf` 的 `/notifier.v1.` 代理）不再构成绕过（PR #120，TASK-096）。
+- 出站投递改为**默认拒绝**的 `scheme+host+port` 白名单：未登记目标（含 `169.254.169.254`、回环、RFC1918、集群 DNS）在解析凭据前即被拒绝，job 以稳定错误码 `egress_blocked` 落库并计数、打结构化 WARN；外发 metadata 过 `internal/redact`（PR #120，TASK-096）。
+- 落实 ADR-020：Vault KV v2 + Kubernetes auth 的 SecretResolver 适配器（引用缺失即启动失败、错误不携带秘密、租约续期），未启用时按 ADR/REQ 明文保持无鉴权投递（PR #120，TASK-096）。
 
 ### 调试集合（Fixed）
 
