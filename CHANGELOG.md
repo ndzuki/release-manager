@@ -53,9 +53,9 @@
 
 ### 制品准入（Added）
 
-- 漏洞准入接线为真实步骤：`CreateOperation` 对 bundle 的每个 image digest 调用 `vulnerability.Evaluator`，并由 `vulnerability_admission.mode` 三态决定其对发布的影响——`off` 不评估、`shadow`（**默认**）放行但产出「本应拒绝」的审计/计数/WARN、`enforce` 对策略拒绝与「评估不可用」分别以 `vulnerability_policy_failed`/`vulnerability_policy_unavailable` 拒绝（未知模式启动即失败）。默认取 `shadow` 是因为该步骤此前从未接线，直接 `enforce` 会在未配置 scanner 的部署上阻断全部发布（PR #NNN，TASK-105）。
-- `internal/trust/policy.go` 的 `FailClosed` 语义**未改**：准入模式只作用于新步骤，不得削弱既有安全控制（PR #NNN，TASK-105）。
-- 如实登记：仓库只有 `vulnerability.Scanner` 接口、**无生产 scanner 实现**，故未接入 scanner 时评估恒为 unavailable；`docs/runbook.md` §3bis 给出影子→enforce 的判读、切换流程与需留痕的逃生门（PR #NNN，TASK-105）。
+- 漏洞准入接线为真实步骤：`CreateOperation` 对 bundle 的每个 image digest 调用 `vulnerability.Evaluator`，并由 `vulnerability_admission.mode` 三态决定其对发布的影响——`off` 不评估、`shadow`（**默认**）放行但产出「本应拒绝」的审计/计数/WARN、`enforce` 对策略拒绝与「评估不可用」分别以 `vulnerability_policy_failed`/`vulnerability_policy_unavailable` 拒绝（未知模式启动即失败）。默认取 `shadow` 是因为该步骤此前从未接线，直接 `enforce` 会在未配置 scanner 的部署上阻断全部发布（PR #127，TASK-105）。
+- `internal/trust/policy.go` 的 `FailClosed` 语义**未改**：准入模式只作用于新步骤，不得削弱既有安全控制（PR #127，TASK-105）。
+- 如实登记：仓库只有 `vulnerability.Scanner` 接口、**无生产 scanner 实现**，故未接入 scanner 时评估恒为 unavailable；`docs/runbook.md` §3bis 给出影子→enforce 的判读、切换流程与需留痕的逃生门（PR #127，TASK-105）。
 
 ### 工具链（Changed）
 
