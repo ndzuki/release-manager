@@ -247,29 +247,15 @@ e2e-cleanup: ## Recover E2E resources through the formal cleanup API
 # ---------------------------------------------------------------------------
 KULALA_DIR := api/kulala
 
-.PHONY: api-auth
-api-auth: ## Open Auth API collection (Kulala)
-	@nvim $(KULALA_DIR)/auth.http
+.PHONY: api-check
+api-check: ## Validate the Kulala collections against api/proto and the dev ports (TASK-093)
+	$(GO) test -race -count=1 -run 'TestCollectionsPointAtMountedProcedures|TestCollectionGateRejectsHistoricalShape|TestCollectionGateRejectsDeadPorts|TestUnreachableSurfaceIsAllowed' ./internal/quality/httpcollections/
 
-.PHONY: api-manager
-api-manager: ## Open Manager API collection (Kulala)
-	@nvim $(KULALA_DIR)/manager.http
-
-.PHONY: api-webhook
-api-webhook: ## Open Webhook simulation collection (Kulala)
-	@nvim $(KULALA_DIR)/webhook.http
-
-.PHONY: api-operator
-api-operator: ## Open Operator gRPC collection (Kulala)
-	@nvim $(KULALA_DIR)/operator.http
-
-.PHONY: api-orchestrator
-api-orchestrator: ## Open Orchestrator gRPC collection (Kulala)
-	@nvim $(KULALA_DIR)/orchestrator.http
-
-.PHONY: api-audit
-api-audit: ## Open Audit/Notification collection (Kulala)
-	@nvim $(KULALA_DIR)/audit.http
+# Opening a collection is just an editor call — no target needed:
+#   nvim api/kulala/auth.http      (select the `dev` or `cluster` profile in Kulala)
+# The six `make api-<service>` targets were removed by TASK-093: they only opened
+# a file and let the collections rot against the contract. `make api-check` is the
+# reproducible replacement; see docs/http-collections.md.
 
 # ---------------------------------------------------------------------------
 # Proto generation
@@ -549,7 +535,7 @@ test-operator-image-sdk-only: ## Run operator image SDK-only gate (REQ-061)
 			--policy imagecheck.operator.yaml \
 			--dockerfile deploy/docker/Dockerfile.operator
 .PHONY: quality
-quality: sdk-check test-coverage lint check-reqs check-licenses check-docs check-config-keys check-migrations check-probes lint-proto ## Full quality gate run
+quality: sdk-check test-coverage lint check-reqs check-licenses check-docs check-config-keys check-migrations check-probes api-check lint-proto ## Full quality gate run
 
 .PHONY: build-sdkcheck
 build-sdkcheck: proto ## Build sdkcheck

@@ -79,7 +79,7 @@
 ### 2.2 逐文件 diff 实测结论（`diff configs/<svc>.dev.yaml deploy/kustomize/dev/configs/<svc>.dev.yaml`）
 
 - **webhook**：完全相同。
-- **auth**：kustomize 版把 `database.driver: sqlite`+`dsn: data/auth.db` 换成 `driver: postgres`+`dsn: postgres://release_manager:dev-release-manager@postgres:5432/release_manager?sslmode=disable`；新增 `redis.address: redis:6379`、`login_rate_limit: {max_attempts: 1000, window: 1m}`（文件内注释：dev fixture 复位时高频重登，生产默认 5/min 会触发 `resource_exhausted`）。
+- **auth**：kustomize 版把 `database.driver: sqlite`+`dsn: data/management.db`（TASK-104 起与 orchestrator 共享同一权威库）换成 `driver: postgres`+`dsn: postgres://release_manager:dev-release-manager@postgres:5432/release_manager?sslmode=disable`；新增 `redis.address: redis:6379`、`login_rate_limit: {max_attempts: 1000, window: 1m}`（文件内注释：dev fixture 复位时高频重登，生产默认 5/min 会触发 `resource_exhausted`）。
 - **notifier**：仅换 postgres，DSN 指向**独立库** `.../release_notifier?sslmode=disable`。
 - **orchestrator**：driver/dsn→postgres；`authorization.auth_url` `http://localhost:8085`→`http://auth:8085`；`gateway.enabled: false→true`；`ca.key_path/cert_path` 从 `data/gateway-ca.*` 改为 `/data/gateway-ca.key|crt`（由 Secret `release-manager-mtls-ca` 以 subPath 挂入）。TASK-094 后两处同型：本地 `gateway:` 的 `ca_key_path/ca_cert_path` 两行已删（字段与 env 绑定一并移除，§7-4）；overlay 的 `retention:` 死块已换成与本地同构的规范 `gc:` 8 键块（集群 GC 从此真实受文件控制，§7-3）。防漂移测试 `TestOrchestratorDevConfigWiresTopLevelCA`（`deploy/dev/dev_test.go`）现改为断言 overlay 的 `gateway:` 里不得再出现 `ca_key_path`/`ca_cert_path`。
 - **api、e2e**：无 kustomize 对应文件。**notification-sink**：反向——只有 kustomize 文件。
@@ -119,14 +119,18 @@
 
 代码支持但任何配置文件都未出现的同族键：`redis.password`、`redis.db`（env `REDIS_PASSWORD`/`REDIS_DB`）、`database.max_open_conns`/`max_idle_conns`/`conn_max_lifetime`/`conn_max_idle_time`（池默认 25/10，`internal/postgres/config.go:25`）。不计入键数自检。
 
-### 3.3 release-notifier（4 键，两处仅 driver/dsn 不同）
+### 3.3 release-notifier（6 键，两处仅 driver/dsn 与 egress 目标不同）
 
 | 键 | 类型/取值 | 默认值 | 含义 | 备注 |
 |---|---|---|---|---|
 | `http_port` | int | 无 | 监听端口 | dev 8086。必填 |
 | `log_level` | — | — | | 生效（§7-1 闭环） |
-| `database.driver` | `sqlite`\|`postgres` | 无 | | 必填；`cmd/notifier/main.go:101` 校验 |
+| `database.driver` | `sqlite`\|`postgres` | 无 | | 必填；`cmd/notifier/main.go` 校验 |
 | `database.dsn` | string | 无 | | 集群指独立库 `release_notifier`；postgres 路径启动跑 `migrations.ReleaseNotifierFS()`，迁移失败即退出 |
+| `notifier.egress_allowlist` | []string（`scheme://host:port`） | 空 = **拒绝一切出站** | 出站 webhook 投递白名单（REQ-031/TASK-096） | 缺省端口按 scheme 取 443/80；格式错误启动即失败；本地写 `http://localhost:8088`（dev sink），集群写 `http://notification-sink:8088` |
+| `notifier.vault.enabled` | bool | false | 是否启用 ADR-020 的 Vault SecretResolver | false 时投递**故意**无鉴权（ADR-020/REQ-031 明文）；置 true 后缺任一引用即启动失败（fail closed） |
+
+代码支持但文件未出现的同族键（TASK-096，ADR-020）：`notifier.vault.address`/`namespace`/`auth_mount`（默认 `kubernetes`）/`role`/`token_path`（默认投影 SA token 路径）/`kv_mount`（默认 `secret`）/`secret_path`/`secret_key`；启用时 `address`/`role`/`secret_path`/`secret_key` 为必填。入站服务令牌走环境变量（`DEV_NOTIFIER_SERVICE_TOKEN(_PREVIOUS)`，由 Secret `release-manager-notifier-service-token` 注入），不是配置文件键。
 
 ### 3.4 release-operator：本地 `configs/operator.dev.yaml`（8 键）
 
@@ -143,14 +147,14 @@
 
 TASK-094 前本文件还写有 `runtime_pull_preflight.*`（6 键，整块无读取，§7-2）与 `ca.cert_ttl`/`ca.renew_before_ratio`（operator 进程只读 `CA.CertPath`，二者仅 orchestrator `ca.LoadConfigured` 消费，§7-6）；8 个死键均已从文件删除，`ca:` 块留有注释说明，防再犯。
 
-### 3.5 release-orchestrator（本地 28 键；overlay 键路径为其子集，合并 28 个不同键路径）
+### 3.5 release-orchestrator（本地 33 键；overlay 键路径为其子集，合并 33 个不同键路径）
 
 | 键 | 类型/取值 | 默认值 | 含义 | 备注 |
 |---|---|---|---|---|
 | `http_port` | int | 无 | 管理面监听端口 | dev 8083（集群 NodePort 30083）。必填 |
 | `log_level` | — | — | | 生效（§7-1 闭环） |
 | `database.driver` | `sqlite`\|`postgres` | 无 | | 必填；`cmd/orchestrator/main.go:525` 校验；postgres 路径跑 `migrations.FS` |
-| `database.dsn` | string | 无 | | 机密（含口令）；本地 `data/orchestrator.db`，集群 `postgres://...@postgres:5432/release_manager` |
+| `database.dsn` | string | 无 | | 机密（含口令）；本地 `data/management.db`（与 release-auth 同一个文件，TASK-104 的共享权威库契约），集群 `postgres://...@postgres:5432/release_manager` |
 | `authorization.auth_url` | URL | `http://localhost:8085`（`internal/config/config.go:252`） | 授权快照拉取源（release-auth） | 集群 `http://auth:8085`；env `AUTHORIZATION_AUTH_URL` |
 | `authorization.pull_interval` | duration | 1s | 授权快照轮询周期 | env `AUTHORIZATION_PULL_INTERVAL` |
 | `authorization.pull_backoff_max` | duration | 30s | 拉取失败退避上限 | env `AUTHORIZATION_PULL_BACKOFF_MAX` |
@@ -175,6 +179,11 @@ TASK-094 前本文件还写有 `runtime_pull_preflight.*`（6 键，整块无读
 | `emergency.enabled` | bool | 缺块=fail-closed false | 紧急变更 kill switch | dev 本地与集群都 true（REQ-081 D2=A）；启动种入 app_settings（`cmd/orchestrator/main.go:305-309`）；仅文件 |
 | `emergency.operation_timeout` | duration | 30s（`store.DefaultEmergencyOperationTimeout`，`internal/store/store.go:1394`） | 非终态 EMERGENCY 操作时限 | 解析失败回落默认；仅文件 |
 | `emergency.effect_observe_timeout` | duration | 24h（`internal/store/store.go:1398`） | 卡锁观察窗 | 仅文件 |
+| `operator_session.heartbeat_interval` | duration | 15s（`OperatorSessionCfg.WithDefaults`） | 下发给 agent 的心跳周期（`SessionEstablished` 里协商） | TASK-098；0 值回落默认 |
+| `operator_session.suspect_after` | duration | 45s | 超过该时长无心跳 → `suspect` | 容忍两次丢失（30s 周期） |
+| `operator_session.offline_after` | duration | 90s | 超过该时长无心跳 → `offline`（紧急路径的 `operator_offline`） | 容忍四次丢失；会话行心跳陈旧也按离线处理（重启窗口） |
+| `operation.deadline` | duration | 30m | 标准 Operation（INSTALL/UPGRADE/ROLLBACK）的端到端时限；超时由恢复扫描转 `timeout` | TASK-098；EMERGENCY 用自己的 30s |
+| `operation.recovery_interval` | duration | 1m | 非终态 Operation 恢复扫描周期 | 此前只在启动时跑一次 |
 TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candidate_artifact_days`/`preflight_result_hours`/`prepare_session_hours`/`gc_interval_hours`），已整块换成规范 `gc:` 块（§7-3）。`gateway.ca_key_path`/`gateway.ca_cert_path` 则连字段带 env 绑定一起删除（§7-4）。
 
 代码支持但未在任何文件出现的键：`ca.vault_path`（生产 CA 源，Vault KV，客户端走 `VAULT_ADDR` 环境，`internal/operator/ca/config.go:19`、`vault.go:38`）。

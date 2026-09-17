@@ -14,7 +14,7 @@
 
 ## 2026-09
 
-里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 14 个 PR 合入。
+里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 20 个 PR 合入。
 
 ### 执行链路（升级 / 回滚）
 
@@ -50,6 +50,37 @@
 ### Bundle ingress 认证（Added）
 
 - `SubmitReleaseBundle` 由 CI API key 认证、新增 `POST /webhooks/harbor`（Harbor 独立 key）并挂载 Harbor adapter，出站以 `service:release-harbor` 调 `RecordArtifactEvent`（scope 仅该 procedure）；两把 key 与两条 procedure 不可互相替换（AC-011-04/16/17）。配套把 `ServiceTokenInterceptor` 对「不在本腿白名单的 token」改为 `unauthenticated` 以支持多凭证并存（保留「在白名单但越 scope → `permission_denied`」），并在 dev 生命周期/kustomize/CI 三处配齐凭据（PR #109，TASK-102）。
+
+### PostgreSQL 覆盖与平权（Fixed）
+
+- CI 新增 `test-postgres-integration` job：真实 PostgreSQL 16 + `POSTGRES_TEST_DSN`，跑 `internal/store/postgres` 与 `internal/postgres` 的 `integration` 用例——此前这些用例在 CI 里全部 skip，生产引擎的 SQL 从未被 CI 执行过（PR #123，TASK-107）。
+- 修掉两处双引擎平权缺陷：PostgreSQL 迁移从未创建 `inventory_sync_requests`（PG store 却在查询它，生产首次使用即 `relation does not exist`），以及导入器 `booleanColumns` 漏登记 4 张表的布尔列；剩余端到端导入缺口登记为 TASK-108 并在 job 的 scope note 里写明（PR #123，TASK-107）。
+
+### 开发环境自举（Fixed）
+
+- 修复 host-run dev 路径的授权自举死锁：release-auth 与 release-orchestrator 此前各用各的 SQLite 文件，而 orchestrator 的 Casbin 投影是**从本库的 `organizations`/`org_members` 行编译**的，于是策略为空、连 `ListCustomers`/`CreateCustomer` 都恒 `permission_denied`，`devseed` 第一步即失败。两者现共享 `data/management.db`（集群路径天然共享同一个 Postgres），并新增 `internal/config` 门禁钉死该契约（含 notifier 独立库的例外与负控制），运行时在投影为空时打印可操作警告（PR #122，TASK-104）。
+
+### 通知面认证与出站（Fixed）
+
+- notifier 面接入服务令牌：`NotifierService/Send`、`GetStatus` 由 `auth.ServiceTokenInterceptor` 守卫并收窄 scope，支持 current/previous 轮换；同源入口（`web/nginx.conf` 的 `/notifier.v1.` 代理）不再构成绕过（PR #120，TASK-096）。
+- 出站投递改为**默认拒绝**的 `scheme+host+port` 白名单：未登记目标（含 `169.254.169.254`、回环、RFC1918、集群 DNS）在解析凭据前即被拒绝，job 以稳定错误码 `egress_blocked` 落库并计数、打结构化 WARN；外发 metadata 过 `internal/redact`（PR #120，TASK-096）。
+- 落实 ADR-020：Vault KV v2 + Kubernetes auth 的 SecretResolver 适配器（引用缺失即启动失败、错误不携带秘密、租约续期），未启用时按 ADR/REQ 明文保持无鉴权投递（PR #120，TASK-096）。
+
+### 调试集合（Fixed）
+
+- `api/kulala` 六个集合从 Connect 迁移前的 REST/gRPC 形状重写为单端口 Connect 形状：路径改为 `<package>.<Service>/<Method>`、`Login` 的 post-request 脚本自动把 token 写进 `{{AUTH_TOKEN}}`、端口改由 `configs/*.dev.yaml` 与 kustomize NodePort 派生；`manager.http`（针对已移除的 Manager 进程）删除，新增 `notifier.http`，`operator.http` 明确声明 mTLS 不可达（PR #119，TASK-093）。
+- 新增 `make api-check` 结构门禁：每条请求必须是 `api/proto` 里真实存在的 RPC、每个占位符必须可解析、env 端口必须来自事实源、空集合必须说明原因（含三类负控制），并入 `make quality` 且随 CI 的 `go test ./...` 执行；六个只做 `nvim` 的 `api-*` 目标删除（PR #119，TASK-093）。
+
+### Operator 会话与生命周期（Fixed）
+
+- 心跳归属修正：agent 收到 `SessionEstablished` 后按协商周期发送 `Heartbeat`（发送与接收共用一把 Send 互斥），orchestrator **不再自写** `last_heartbeat`；`SessionRegistry` 首次接线（网关 operator service 构造 + `Run`），心跳停止即推进 `suspect`/`offline`。心跳阈值、suspect/offline 阈值改为可配置（`operator_session.*`，默认 15s/45s/90s）（PR #118，TASK-098）。
+- 紧急变更离线窗口确定性：除会话状态外还要求 `last_heartbeat` 足够新（重启后进程内流已空但会话行仍 `online`），dispatch 失败也归一到 `CodeUnavailable` + `operator_offline`，且拒绝不留非终态 Operation（REQ-032 AC-032-20）（PR #118，TASK-098）。
+- 标准 Operation（INSTALL/UPGRADE/ROLLBACK）获得 `operation.deadline`（默认 30m），非终态恢复扫描从「仅启动一次」改为按 `operation.recovery_interval`（默认 1m）周期执行（PR #118，TASK-098）。
+
+### 审计写入收敛（Fixed）
+
+- 审计直写路径收敛：`internal/store/{sqlite,postgres}/operator_management.go` 的事务内审计写入改为经 `store.SanitizeAuditEvent` 兜底脱敏（字段名 + 内容双扫描，比异步 emitter 更严），并新增结构门禁——除登记的 6 个 store 文件外任何 `INSERT [OR IGNORE] INTO audit_events` 都失败，且事务写入者必须调用该兜底（含合成树负控制）（PR #117，TASK-097）。
+- `AuditService/Emit` 按事件 id 幂等：两引擎分别改为 `INSERT OR IGNORE` 与 `ON CONFLICT (id) DO NOTHING`，重放同一事件不再失败也不再写第二行；契约注释显式声明去重键（PR #117，TASK-097）。
 
 ### 供应链与 CI 加固（Added）
 

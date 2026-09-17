@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
+	"github.com/ndzuki/release-manager/internal/redact"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -22,6 +25,10 @@ const (
 	ErrCodeCredentialError  = "credential_invalid" //nolint:gosec // stable error code, not a credential
 	ErrCodeTimeout          = "timeout"
 	ErrCodeInternal         = "internal"
+	// ErrCodeEgressBlocked is a non-retryable configuration/authorization
+	// outcome: the destination is not on the configured egress allowlist
+	// (REQ-031, TASK-096). Retrying cannot help, so it dead-letters.
+	ErrCodeEgressBlocked = "egress_blocked"
 )
 
 // webhookSender delivers notifications via HTTP POST (JSON).
@@ -29,6 +36,12 @@ type webhookSender struct {
 	client    *http.Client
 	resolver  SecretResolver
 	secretKey string // key passed to SecretResolver for the webhook secret
+	// policy is the outbound allowlist. A nil policy denies everything: the
+	// zero value must be safe, because getting this wrong is an SSRF, not a
+	// delivery hiccup.
+	policy  *EgressPolicy
+	logger  *slog.Logger
+	metrics *EgressMetrics
 }
 
 // WebhookSenderOption configures the webhook sender.
@@ -43,10 +56,35 @@ func WithSecretResolution(resolver SecretResolver, secretKey string) WebhookSend
 	}
 }
 
+// WithEgressPolicy sets the outbound allowlist (REQ-031/TASK-096). Without it
+// the sender denies every destination.
+func WithEgressPolicy(policy *EgressPolicy) WebhookSenderOption {
+	return func(s *webhookSender) {
+		s.policy = policy
+	}
+}
+
+// WithLogger attaches the structured logger used for denial records.
+func WithLogger(logger *slog.Logger) WebhookSenderOption {
+	return func(s *webhookSender) {
+		if logger != nil {
+			s.logger = logger
+		}
+	}
+}
+
+// WithEgressMetrics attaches the admission counters.
+func WithEgressMetrics(metrics *EgressMetrics) WebhookSenderOption {
+	return func(s *webhookSender) {
+		s.metrics = metrics
+	}
+}
+
 // NewWebhookSender creates a sender that POSTs JSON to the job recipient URL.
 func NewWebhookSender(client *http.Client, opts ...WebhookSenderOption) Sender {
 	s := &webhookSender{
 		client: client,
+		logger: slog.Default(),
 	}
 	if s.client == nil {
 		s.client = &http.Client{Timeout: 30 * time.Second}
@@ -81,7 +119,7 @@ func (s *webhookSender) Send(ctx context.Context, job *store.NotificationJob) (
 		OperationID: job.OperationID,
 		Channel:     string(job.Channel),
 		Recipient:   job.Recipient,
-		Metadata:    job.Metadata,
+		Metadata:    redactMetadata(job.Metadata),
 		JobID:       job.ID,
 	}
 	body, err := json.Marshal(payload)
@@ -99,6 +137,23 @@ func (s *webhookSender) Send(ctx context.Context, job *store.NotificationJob) (
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", job.ID)
+
+	// Outbound admission (REQ-031/TASK-096): a destination must be explicitly
+	// allowlisted. This runs after the URL is known to be well formed (so a
+	// malformed recipient stays a recipient error) and before any credential is
+	// resolved or any connection is attempted.
+	allowed, reason := s.policy.Allow(job.Recipient)
+	if !allowed {
+		s.metrics.recordDenied()
+		s.logger.Warn("webhook delivery blocked by egress policy",
+			"job_id", job.ID,
+			"operation_id", job.OperationID,
+			"reason", reason,
+			"recipient", safeTarget(job.Recipient),
+		)
+		return ErrCodeEgressBlocked, true, fmt.Errorf("egress blocked: %s", reason)
+	}
+	s.metrics.recordAllowed()
 
 	// Resolve and inject webhook secret if configured.
 	if s.resolver != nil && s.secretKey != "" {
@@ -159,4 +214,33 @@ func classifyNetworkError(err error) (errorCode string, classifiedErr error) {
 	default:
 		return ErrCodeNetworkError, fmt.Errorf("webhook network error: %w", err)
 	}
+}
+
+// redactMetadata returns a copy of the outbound metadata with every value run
+// through the shared redaction path (AGENTS.md hard constraint 6, REQ-031): a
+// notification body must not be the place a secret escapes, even when a caller
+// forgot to scrub it. The durable job row keeps the original values.
+func redactMetadata(metadata map[string]string) map[string]string {
+	if metadata == nil {
+		return nil
+	}
+	out := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		out[key] = redact.Sensitive(key, value)
+		if sanitized, changed := redact.Sanitize(out[key]); changed {
+			out[key] = sanitized
+		}
+	}
+	return out
+}
+
+// safeTarget strips URL userinfo before a destination is logged, so a
+// credential embedded in a recipient URL never reaches the log stream.
+func safeTarget(target string) string {
+	parsed, err := url.Parse(strings.TrimSpace(target))
+	if err != nil || parsed.User == nil {
+		return target
+	}
+	parsed.User = nil
+	return parsed.String()
 }

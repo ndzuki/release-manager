@@ -1,0 +1,38 @@
+# =============================================================================
+# release-notifier — NotifierService (Connect, service-token authenticated)
+#
+#   make api-check    validate every path below against api/proto
+#   make api-notifier open this file (nvim) — see docs/http-collections.md
+#
+# TASK-096 closed the anonymous surface: both procedures now require a scoped
+# service token (auth.ServiceTokenInterceptor). Export it first:
+#   export DEV_NOTIFIER_SERVICE_TOKEN="$(cat data/dev-service-tokens/notifier-service-token)"
+# The same-origin console proxy (web/nginx.conf, ^~ /notifier.v1.) reaches the
+# same guard, so it is not a way around it.
+#
+# Outbound delivery is deny-by-default: the recipient must be in
+# `notifier.egress_allowlist` (scheme://host:port) or the job is dead-lettered
+# with error_code `egress_blocked` and never contacted.
+# =============================================================================
+
+### GetStatus (read-only; requires the notifier service token)
+# @name GetStatus
+# @kulala-expect-status-code 200
+POST {{NOTIFIER_URL}}/notifier.v1.NotifierService/GetStatus
+Content-Type: application/json
+Authorization: Bearer {{DEV_NOTIFIER_SERVICE_TOKEN}}
+
+{"jobId": ""}
+
+### Unauthenticated control: the same call without a credential must answer 401
+# @name GetStatusNoToken
+POST {{NOTIFIER_URL}}/notifier.v1.NotifierService/GetStatus
+Content-Type: application/json
+
+{"jobId": ""}
+
+# Send enqueues a delivery job; the recipient must be allowlisted. Body shape:
+#   POST {{NOTIFIER_URL}}/notifier.v1.NotifierService/Send
+#   Authorization: Bearer {{DEV_NOTIFIER_SERVICE_TOKEN}}
+#   {"operationId": "...", "channel": "NOTIFICATION_CHANNEL_WEBHOOK",
+#    "recipient": "http://localhost:8088/webhook", "metadata": {}}

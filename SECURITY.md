@@ -357,29 +357,37 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 3. 没有使用 PostgreSQL RLS / `CREATE POLICY` / `GRANT` 做行级隔离（全仓检索 0 命中）；
    租户隔离完全依赖应用层的 `organization_id`/`customer_id` 过滤。
 
-### 3.11 通知出站（部分实现，风险面明确）
+### 3.11 通知出站（TASK-096 收口：入站认证 + 出站白名单 + 脱敏 + ADR-020 适配器）
 
-- `NotifierService` 挂载时只带 request-id 与错误脱敏两个拦截器，**没有** JWT/Casbin 裁决：
-  `cmd/notifier/main.go:71-78`（对比 `cmd/auth/main.go:181-187`、`cmd/orchestrator/main.go:512-519`）。
-  同时同源入口把 `/notifier.v1.` 直接代理到 `notifier:8086`（`web/nginx.conf:61-62`），
-  所以「能访问 web 入口」就等价于「能创建通知任务」；契约只有 `Send` 与 `GetStatus`
-  两个 RPC（`api/proto/notifier/v1/notifier.proto:72,81,87`）。
-- 投递目标与 payload 全部来自请求，且没有目标地址白名单：`internal/notifier/service.go:36-47`
-  直接落 `Recipient`/`Metadata`，`internal/notifier/webhook.go:80-92` 把 `job.Metadata` 原样
-  JSON POST 到 `job.Recipient`（在 `internal/notifier/` 内检索 `url.Parse`、allowlist、
-  `127.0.0.1`、`169.254`、`localhost` 均 0 命中）。这意味着**控制面本身成为一个由调用方选择目标 URL 的
-  HTTP 出站源**（SSRF 面），且出站 metadata 不经过 §3.6 的脱敏管道。
-- **状态：未见实现（ADR-020 的 Vault 适配器）**。`docs/decisions/ADR-020-use-hashicorp-vault-go-api-for-notifier-secretresolver.md:3,14-15`
-  已 accepted，要求用 Vault KV v2 + Kubernetes auth 实现 notifier 的 production SecretResolver 适配器，
-  并规定「未配置 resolver 时投递**故意**保持无鉴权」（同文件 `:15`）；
-  本仓库只有接缝与选项（`internal/notifier/delivery.go:16-21`、`internal/notifier/webhook.go:37-45`），
-  构造点是 `sender := notifier.NewWebhookSender(nil)`（`cmd/notifier/main.go:81`）→
-  适配器从未接线，因此现状正好落在 ADR 允许的「无鉴权」分支里，缺的是 production 路径本身
-  （全仓唯一的 vault 客户端在 CA 侧，`internal/operator/ca/vault.go`）。
-- **建议**（均未见实现）：给出站加目标白名单与私网/link-local 屏蔽（含 `169.254.169.254`）、
-  把 metadata 过一遍 `redact.Sanitize`、并落实或显式撤回 ADR-020。
+**已实现（2026-09-17，TASK-096 交付）**：
 
-## 4. 威胁模型摘要
+- **入站认证**：`cmd/notifier` 挂载 `auth.ServiceTokenInterceptor("release-notifier", …)` 并把它
+  的作用域收窄到本服务两个 procedure（`Send`、`GetStatus`）。语义与 bundle ingress 同一机制：
+  `Authorization: Bearer` 缺失 → `unauthenticated`；不在白名单 → `unauthenticated`；
+  在白名单但 procedure 越 scope → `permission_denied`。服务端只比较 SHA-256 摘要，
+  支持 `DEV_NOTIFIER_SERVICE_TOKEN` / `_PREVIOUS` 双 token 轮换。同源入口
+  （`web/nginx.conf` 的 `^~ /notifier.v1.`）不再构成绕过：守卫在服务里，代理前后都要过同一道门。
+- **出站白名单（默认拒绝）**：`internal/notifier/egress.go` 把目标规范化为
+  `scheme://host:port`（缺省端口按 scheme 取 443/80）并与配置白名单精确比对；
+  白名单为空即拒绝一切目标。`169.254.169.254`、`127.0.0.1`/`::1`、RFC1918、集群 DNS 与
+  `file://`/`gopher://` 等一律在默认配置下不可达（表格驱动用例钉死）。命中拒绝时：
+  job 以稳定错误码 `egress_blocked` 落库（consumer 判为不可重试 → dead-letter）、
+  计数 +1、并输出结构化 WARN 日志（含原因码与去凭据的目标），**且在解析凭据之前返回**。
+- **出站脱敏**：payload 的 metadata 每个值都过 `internal/redact`（字段名规则 + 内容扫描），
+  持久化的 job 行保留原值，只有外发副本被脱敏。
+- **ADR-020 SecretResolver 适配器已实现**：`internal/notifier/vault_resolver.go` 用
+  `github.com/hashicorp/vault/api` 的 Kubernetes auth（读取投影的 service-account JWT）换取
+  Vault token，按 KV v2 读取并以调用方 ctx 取消；租约续期失败会重新登录；引用缺失或 JWT 为空
+  在**启动时**失败（fail closed）。配置里只有引用与路径，没有秘密值；错误不携带 Vault 响应体。
+  未启用 resolver 时投递**故意保持无鉴权**——这是 ADR-020/REQ-031 的明文行为，不是遗漏。
+
+**仍未闭合（如实登记）**：notifier 的数据库只有 `notification_jobs` 一张表，没有
+`audit_events`；而中央审计面 `AuditService/Emit` 需要 `audit/write`（人类角色 JWT，
+TASK-103/ADR-021），service 身份无法写入。因此出站拒绝的「审计事件」目前落在**本服务权威记录**
+（job 行 + 稳定错误码 + 结构化日志 + 计数快照），而不是中央审计轨迹。若要求进入中央轨迹，
+需要新的 REQ 决策（service actor 的审计写入路径）。
+
+## 4. 威胁模型摘要## 4. 威胁模型摘要
 
 下表只列「攻击者可控的东西 → 本仓库里的控制点 → 剩余风险/状态」。状态含义见 §0。
 
@@ -493,7 +501,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 | 11 | 登录限流为进程内、多副本不共享 | 事实/建议 | `internal/auth/ratelimit.go:18-54` |
 | 12 | `release-api` 审计面按 ADR-021 接入 release-auth 的角色判定与窗口策略（TASK-103）：不内嵌 Casbin、不复制策略，判定不可用时 fail closed；release-api 仍不本地校验会话撤销（由 release-auth 的裁决覆盖） | 已实现 | `cmd/api/main.go:69-90`；`internal/audit/decision.go:44-76`；`internal/audit/authorization.go:41-105`；`internal/auth/authorization_decision.go:43-137` |
 | 13 | 客户集群内 operator 用 ClusterRole 且可读写全集群 Secret（Helm release 存储模型的必然结果，未用 `resourceNames` 收窄） | 事实/建议 | §3.3 |
-| 14 | **审计有绕过 emitter 的直写路径**，与 `AGENTS.md:27` 硬约束 6 不符（当前无明文泄露证据，但无结构性保证） | 部分实现 | §3.6 第 3 条 |
+| 14 | 审计直写路径已收敛（TASK-097）：`internal/store/{sqlite,postgres}/operator_management.go` 的事务内写入改为经 `store.SanitizeAuditEvent` 兜底脱敏（比异步 emitter 更严：字段名 + 内容双扫描），结构门禁 `internal/store/audit_write_gate_test.go` 限定 `INSERT ... INTO audit_events` 只能出现在登记的 6 个 store 文件、且事务写入者必须调用该兜底 | 已实现 | `internal/store/audit_sanitize.go`、`internal/store/audit_write_gate_test.go`、§3.6 第 3 条 |
 | 15 | 审计查询/导出的组织过滤取自请求，可为空；principal 未被使用（TASK-095 已修：principal 组织成为唯一可读写范围，跨组织 `permission_denied`） | 已实现 | `internal/audit/authorization.go:22-48`；`internal/audit/audit_service_handler.go:42-56,97,142`；回归 `internal/audit/authorization_test.go:21-128` |
 | 16 | `NotifierService` 无认证拦截器 + 投递目标无白名单 → 控制面可被当作任意 URL 的 HTTP 出站源，metadata 原文外发 | 未见实现 | §3.11 |
 | 17 | ADR-020 的 Vault SecretResolver 适配器未实现（notifier 出站因此恒在无鉴权分支） | 未见实现 | `docs/decisions/ADR-020-use-hashicorp-vault-go-api-for-notifier-secretresolver.md:14-15`；`cmd/notifier/main.go:81` |

@@ -2,7 +2,16 @@ http_port: 8083
 log_level: debug
 database:
   driver: sqlite
-  dsn: data/orchestrator.db
+  # TASK-104: the management-plane authority database. release-auth and
+  # release-orchestrator MUST open the same database, because the orchestrator
+  # compiles its Casbin projection from the organizations/org_members rows that
+  # release-auth owns (internal/auth/casbin.go compileAuthorizationRules) and
+  # checks org-customer bindings through the same store. With separate files the
+  # orchestrator's policy is empty and every Casbin procedure — including the
+  # bootstrap reads — answers permission_denied.
+  # The k3d profile gets this for free: both services point at the same
+  # PostgreSQL database (deploy/kustomize/dev/configs/*.dev.yaml).
+  dsn: data/management.db
 authorization:
   auth_url: http://localhost:8085
   pull_interval: 1s
@@ -46,3 +55,17 @@ emergency:
   enabled: true
   operation_timeout: 30s
   effect_observe_timeout: 24h
+
+# TASK-098 (REQ-044): operator liveness. The agent is the only writer of
+# last_heartbeat; these are the thresholds the orchestrator negotiates and
+# enforces (defaults 15s/45s/90s tolerate two lost heartbeats before suspect and
+# four before offline).
+operator_session:
+  heartbeat_interval: 15s
+  suspect_after: 45s
+  offline_after: 90s
+# TASK-098 (REQ-023): standard operations get a deadline, and the non-terminal
+# recovery sweep now runs periodically instead of once at startup.
+operation:
+  deadline: 30m
+  recovery_interval: 1m

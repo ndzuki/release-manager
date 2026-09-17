@@ -37,7 +37,7 @@
 | `github.com/cenkalti/backoff/v4` | v4.3.0 | MIT |  |
 | `github.com/cespare/xxhash/v2` | v2.3.0 | MIT |  |
 | `github.com/chai2010/gettext-go` | v1.0.2 | BSD-3-Clause |  |
-| `github.com/coreos/go-oidc/v3` | v3.20.0 | Apache-2.0 |  |
+| `github.com/coreos/go-oidc/v3` | v3.21.0 | Apache-2.0 |  |
 | `github.com/cyphar/filepath-securejoin` | v0.7.0 | BSD-3-Clause|MPL-2.0 |  |
 | `github.com/davecgh/go-spew` | v1.1.2-0.20180830191138-d8f796af33cc | ISC |  |
 | `github.com/dustin/go-humanize` | v1.0.1 | MIT |  |
@@ -52,7 +52,7 @@
 | `github.com/go-gorp/gorp/v3` | v3.1.0 | MIT |  |
 | `github.com/go-jose/go-jose/v4` | v4.1.4 | Apache-2.0 |  |
 | `github.com/go-ldap/ldap/v3` | v3.4.14 | MIT |  |
-| `github.com/go-logr/logr` | v1.4.3 | Apache-2.0 |  |
+| `github.com/go-logr/logr` | v1.4.4 | Apache-2.0 |  |
 | `github.com/go-logr/stdr` | v1.2.2 | Apache-2.0 |  |
 | `github.com/go-openapi/jsonpointer` | v0.21.0 | Apache-2.0 |  |
 | `github.com/go-openapi/jsonreference` | v0.20.2 | Apache-2.0 |  |
@@ -131,13 +131,13 @@
 | `github.com/xlab/treeprint` | v1.2.0 | MIT |  |
 | `go.etcd.io/bbolt` | v1.5.0 | MIT |  |
 | `go.opentelemetry.io/auto/sdk` | v1.2.1 | Apache-2.0 |  |
-| `go.opentelemetry.io/otel` | v1.44.0 | Apache-2.0 |  |
-| `go.opentelemetry.io/otel/metric` | v1.44.0 | Apache-2.0 |  |
+| `go.opentelemetry.io/otel` | v1.46.0 | Apache-2.0 |  |
+| `go.opentelemetry.io/otel/metric` | v1.46.0 | Apache-2.0 |  |
 | `go.opentelemetry.io/otel/sdk` | v1.44.0 | Apache-2.0 |  |
-| `go.opentelemetry.io/otel/trace` | v1.44.0 | Apache-2.0 |  |
+| `go.opentelemetry.io/otel/trace` | v1.46.0 | Apache-2.0 |  |
 | `go.uber.org/atomic` | v1.11.0 | MIT |  |
 | `go.yaml.in/yaml/v2` | v2.4.4 | Apache-2.0|MIT |  |
-| `go.yaml.in/yaml/v3` | v3.0.4 | Apache-2.0 |  |
+| `go.yaml.in/yaml/v3` | v3.0.5 | Apache-2.0 |  |
 | `golang.org/x/crypto` | v0.54.0 | BSD-3-Clause |  |
 | `golang.org/x/mod` | v0.38.0 | BSD-3-Clause |  |
 | `golang.org/x/net` | v0.57.0 | BSD-3-Clause |  |

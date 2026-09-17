@@ -3,3 +3,12 @@ log_level: debug
 database:
   driver: postgres
   dsn: postgres://release_manager:dev-release-manager@postgres:5432/release_notifier?sslmode=disable
+
+# TASK-096 (REQ-031): deny-by-default outbound allowlist. The dev overlay admits
+# only the in-cluster sink; anything else (including 169.254.169.254 and the
+# cluster network) is denied before a connection is attempted.
+notifier:
+  egress_allowlist:
+    - http://notification-sink:8088
+  vault:
+    enabled: false

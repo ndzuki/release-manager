@@ -14,6 +14,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// allowTarget is the test-side admission declaration: production denies every
+// destination that is not configured, so a delivery test must opt its httptest
+// server in (REQ-031/TASK-096).
+func allowTarget(t *testing.T, target string) notifier.WebhookSenderOption {
+	t.Helper()
+	policy, err := notifier.NewEgressPolicy([]string{target})
+	require.NoError(t, err)
+	return notifier.WithEgressPolicy(policy)
+}
+
 func TestWebhookSender_Success(t *testing.T) {
 	var capturedMethod, capturedContentType, capturedIdempotency string
 	var capturedBody []byte
@@ -29,7 +39,7 @@ func TestWebhookSender_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	sender := notifier.NewWebhookSender(nil)
+	sender := notifier.NewWebhookSender(nil, allowTarget(t, srv.URL))
 	job := &store.NotificationJob{
 		ID:          "job-1",
 		OperationID: "op-1",
@@ -55,7 +65,7 @@ func TestWebhookSender_429RateLimited(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	sender := notifier.NewWebhookSender(nil)
+	sender := notifier.NewWebhookSender(nil, allowTarget(t, srv.URL))
 	job := &store.NotificationJob{
 		ID:        "job-2",
 		Channel:   store.NotificationChannelWebhook,
@@ -77,7 +87,7 @@ func TestWebhookSender_5xxRetryable(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			sender := notifier.NewWebhookSender(nil)
+			sender := notifier.NewWebhookSender(nil, allowTarget(t, srv.URL))
 			job := &store.NotificationJob{
 				ID:        "job-5xx",
 				Channel:   store.NotificationChannelWebhook,
@@ -101,7 +111,7 @@ func TestWebhookSender_401403DeadLetter(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			sender := notifier.NewWebhookSender(nil)
+			sender := notifier.NewWebhookSender(nil, allowTarget(t, srv.URL))
 			job := &store.NotificationJob{
 				ID:        "job-auth",
 				Channel:   store.NotificationChannelWebhook,
@@ -123,7 +133,7 @@ func TestWebhookSender_400InvalidRecipient(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	sender := notifier.NewWebhookSender(nil)
+	sender := notifier.NewWebhookSender(nil, allowTarget(t, srv.URL))
 	job := &store.NotificationJob{
 		ID:        "job-bad",
 		Channel:   store.NotificationChannelWebhook,
@@ -157,7 +167,7 @@ func TestWebhookSender_Timeout(t *testing.T) {
 	defer srv.Close()
 
 	client := &http.Client{Timeout: 10 * time.Millisecond}
-	sender := notifier.NewWebhookSender(client)
+	sender := notifier.NewWebhookSender(client, allowTarget(t, srv.URL))
 	job := &store.NotificationJob{
 		ID:        "job-timeout",
 		Channel:   store.NotificationChannelWebhook,

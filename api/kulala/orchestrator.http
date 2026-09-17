@@ -1,230 +1,340 @@
 # =============================================================================
-# Release Manager — Orchestrator gRPC endpoints (Kulala GRPC support)
-# Environment: dev (Orchestrator gRPC :8446)
+# release-orchestrator — Connect collection (ADR-002 single-port contract)
 #
-# Before testing, start the orchestrator:
-#   make run-orchestrator
-# or:
-#   make dev-stage-publish
+#   make api-check          validate every path below against api/proto
+#   make api-orchestrator   open this file (nvim) — see docs/http-collections.md
 #
-# gRPC service: orchestrator.v1.OrchestratorService
-# =============================================================================
+# Mounted services on this listener:
+#   orchestrator.v1.OrchestratorService, orchestrator.v1.CleanupService,
+#   orchestrator.v1.BundleService, trust.v1.TrustService
 #
-# @grpc-plaintext        ← REQUIRED: server has no TLS
-#
-# =============================================================================
-### Orchestrator — Health Check
-# @name OrchestratorHealth
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} grpc.health.v1.Health/Check
-Content-Type: application/grpc
-
-{}
-
-###
-# =============================================================================
-# Test flow:
-#   1. First create a ReleaseDefinition (POST /api/v1/release-definitions on API)
-#   2. Then CreateOperation here →
-#   3. Verify with Get Operation on API
-#   Makefile target: make dev-stage-publish (starts orchestrator)
+# Everything needs `Authorization: Bearer {{AUTH_TOKEN}}` from auth.http's Login.
+# Ids below are placeholders: replace them with a value from the list requests in
+# this file (or from `make dev-seed`'s fixture output in data/dev-fixture.json).
 # =============================================================================
 
-### Orchestrator — Create INSTALL Operation
-# @name CreateInstallOperation
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/CreateOperation
-Content-Type: application/grpc
+@CUSTOMER_ID = 00000000-0000-0000-0000-000000000000
+@CLUSTER_ID = 00000000-0000-0000-0000-000000000000
+@DEFINITION_ID = 00000000-0000-0000-0000-000000000000
+@OPERATION_ID = 00000000-0000-0000-0000-000000000000
+@BUNDLE_ID = 00000000-0000-0000-0000-000000000000
+@ORGANIZATION_ID = 00000000-0000-0000-0000-000000000000
 
-{
-  "operation_type": "INSTALL",
-  "bundle_id": "bundle-001",
-  "release_definition_id": "{{DEFINITION_ID}}",
-  "values_revision_id": "{{REVISION_ID}}",
-  "idempotency_key": "install-{{DEFINITION_ID}}-v1"
-}
-
-### Orchestrator — Create UPGRADE Operation
-# @name CreateUpgradeOperation
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/CreateOperation
-Content-Type: application/grpc
-
-{
-  "operation_type": "UPGRADE",
-  "bundle_id": "bundle-002",
-  "release_definition_id": "{{DEFINITION_ID}}",
-  "values_revision_id": "{{REVISION_ID}}",
-  "expected_current_revision": 1,
-  "idempotency_key": "upgrade-{{DEFINITION_ID}}-v2"
-}
-
-### Orchestrator — Create EMERGENCY Operation
-# Emergency skips preflight and goes pending → queued.
-# @name CreateEmergencyOperation
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/CreateOperation
-Content-Type: application/grpc
-
-{
-  "operation_type": "EMERGENCY",
-  "bundle_id": "bundle-003",
-  "release_definition_id": "{{DEFINITION_ID}}",
-  "values_revision_id": "{{REVISION_ID}}",
-  "idempotency_key": "emergency-{{DEFINITION_ID}}-v1"
-}
-
-### Orchestrator — Idempotency Check
-# Resend with same idempotency_key → must return same operation_id.
-# @name IdempotencyCheck
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/CreateOperation
-Content-Type: application/grpc
-
-{
-  "operation_type": "INSTALL",
-  "bundle_id": "bundle-001",
-  "release_definition_id": "{{DEFINITION_ID}}",
-  "values_revision_id": "{{REVISION_ID}}",
-  "idempotency_key": "install-{{DEFINITION_ID}}-v1"
-}
-
-### Orchestrator — PublishRelease (skeleton)
-# @name PublishRelease
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/PublishRelease
-Content-Type: application/grpc
-
-{
-  "release_definition_id": "{{DEFINITION_ID}}"
-}
-
-### Orchestrator — CreateOperation (missing definition)
-# Expected: NOT_FOUND error.
-# @name CreateOpMissingDef
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/CreateOperation
-Content-Type: application/grpc
-
-{
-  "operation_type": "INSTALL",
-  "bundle_id": "bundle-001",
-  "release_definition_id": "nonexistent-def",
-  "idempotency_key": "missing-def-test"
-}
-
-### Orchestrator — CreateOperation (invalid type)
-# Expected: INVALID_ARGUMENT error.
-# @name CreateOpInvalidType
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/CreateOperation
-Content-Type: application/grpc
-
-{
-  "operation_type": "INVALID",
-  "bundle_id": "bundle-001",
-  "release_definition_id": "{{DEFINITION_ID}}",
-  "idempotency_key": "invalid-type-test"
-}
-
-### Orchestrator — Release Busy (send two different ops for same definition)
-# First request:
-# @name ReleaseBusy1
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/CreateOperation
-Content-Type: application/grpc
-
-{
-  "operation_type": "INSTALL",
-  "bundle_id": "bundle-004",
-  "release_definition_id": "{{DEFINITION_ID}}",
-  "idempotency_key": "busy-test-1"
-}
-
-### Orchestrator — Release Busy (second request, must fail)
-# Expected: FAILED_PRECONDITION / release_busy.
-# @name ReleaseBusy2
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/CreateOperation
-Content-Type: application/grpc
-
-{
-  "operation_type": "UPGRADE",
-  "bundle_id": "bundle-005",
-  "release_definition_id": "{{DEFINITION_ID}}",
-  "idempotency_key": "busy-test-2"
-}
-
-###
 # =============================================================================
-# Release Definition management (TASK-040)
+# OrchestratorService — customer / cluster / definition inventory
 # =============================================================================
 
-### Orchestrator — CreateReleaseDefinition (active)
-# @name CreateActiveDefinition
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/CreateReleaseDefinition
-Content-Type: application/grpc
+### ListCustomers
+# @name ListCustomers
+# @kulala-expect-status-code 200
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/ListCustomers
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
 
 {
-  "customer_id": "{{CUSTOMER_ID}}",
-  "cluster_id": "{{CLUSTER_ID}}",
-  "namespace": "default",
-  "release_name": "nginx-stable",
-  "chart_name": "nginx",
-  "enabled": true
+  "includeDisabled": false
 }
 
-### Orchestrator — CreateReleaseDefinition (draft)
-# @name CreateDraftDefinition
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/CreateReleaseDefinition
-Content-Type: application/grpc
+> {%
+  if (response.body.customers && response.body.customers.length > 0) {
+    client.global.set("CUSTOMER_ID", response.body.customers[0].id);
+  }
+%}
+
+### ListClusters
+# @name ListClusters
+# @kulala-expect-status-code 200
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/ListClusters
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
 
 {
-  "customer_id": "{{CUSTOMER_ID}}",
-  "cluster_id": "{{CLUSTER_ID}}",
-  "namespace": "staging",
-  "release_name": "nginx-canary",
-  "chart_name": "nginx",
-  "enabled": false
+  "customerId": "{{CUSTOMER_ID}}"
 }
 
-### Orchestrator — GetReleaseDefinition
-# @name GetDefinition
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/GetReleaseDefinition
-Content-Type: application/grpc
+### ListReleaseDefinitions
+# @name ListReleaseDefinitions
+# @kulala-expect-status-code 200
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/ListReleaseDefinitions
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
 
 {
-  "definition_id": "{{DEFINITION_ID}}"
+  "customerId": "{{CUSTOMER_ID}}",
+  "clusterId": "{{CLUSTER_ID}}",
+  "includeDisabled": false
 }
 
-### Orchestrator — ListReleaseDefinitions (by customer)
-# @name ListDefinitionsByCustomer
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/ListReleaseDefinitions
-Content-Type: application/grpc
+### GetReleaseDefinition
+# @name GetReleaseDefinition
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/GetReleaseDefinition
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
 
 {
-  "customer_id": "{{CUSTOMER_ID}}",
-  "include_disabled": false
+  "definitionId": "{{DEFINITION_ID}}"
 }
 
-### Orchestrator — UpdateReleaseDefinition
-# @name UpdateDefinition
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/UpdateReleaseDefinition
-Content-Type: application/grpc
+### GetClusterRoutes
+# @name GetClusterRoutes
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/GetClusterRoutes
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
 
 {
-  "definition_id": "{{DEFINITION_ID}}",
-  "namespace": "production",
-  "expected_version": 1
+  "clusterId": "{{CLUSTER_ID}}"
 }
 
-### Orchestrator — DisableReleaseDefinition
-# @name DisableDefinition
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/DisableReleaseDefinition
-Content-Type: application/grpc
+# =============================================================================
+# OrchestratorService — operators and enrollment
+# =============================================================================
+
+### ListOperators
+# @name ListOperators
+# @kulala-expect-status-code 200
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/ListOperators
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
 
 {
-  "definition_id": "{{DEFINITION_ID}}"
+  "customerId": "{{CUSTOMER_ID}}",
+  "clusterId": "{{CLUSTER_ID}}",
+  "pageSize": 20
 }
 
-### Orchestrator — CreateOperation on disabled definition (must fail)
-# @name CreateOpOnDisabledDef
-GRPC {{ORCH_HOST}}:{{ORCH_GRPC_PORT}} orchestrator.v1.OrchestratorService/CreateOperation
-Content-Type: application/grpc
+### GetOperator
+# @name GetOperator
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/GetOperator
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
 
 {
-  "operation_type": "INSTALL",
-  "bundle_id": "bundle-001",
-  "release_definition_id": "{{DEFINITION_ID}}",
-  "idempotency_key": "disabled-def-test"
+  "operatorId": "00000000-0000-0000-0000-000000000000"
 }
+
+### GetEnrollmentTokenStatus
+# @name GetEnrollmentTokenStatus
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/GetEnrollmentTokenStatus
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "tokenId": "00000000-0000-0000-0000-000000000000"
+}
+
+# Writes on this service (need a fresh body; several are destructive):
+#   CreateCustomer / UpdateCustomer / DisableCustomer
+#   CreateCluster / UpdateCluster / DisableCluster
+#   CreateReleaseDefinition / UpdateReleaseDefinition / DisableReleaseDefinition
+#   CreateEnrollmentToken / RevokePendingEnrollmentToken / RevokeOperator
+#   ConfigureClusterRoute / DeleteClusterRoute
+
+# =============================================================================
+# OrchestratorService — operations (TASK-095 implemented ListOperations)
+# =============================================================================
+
+### ListOperations
+# @name ListOperations
+# @kulala-expect-status-code 200
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/ListOperations
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "releaseDefinitionId": "{{DEFINITION_ID}}",
+  "limit": 20
+}
+
+### GetOperation
+# @name GetOperation
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/GetOperation
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "operationId": "{{OPERATION_ID}}"
+}
+
+# CreateOperation (INSTALL/UPGRADE) needs Idempotency-Key plus a bundleId and
+# valuesRevisionId; RollbackRelease / CancelOperation / PublishRelease are writes.
+#   POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/CreateOperation
+#   Idempotency-Key: <uuid>
+#   {"operationType": "INSTALL", "releaseDefinitionId": "...", "bundleId": "...", "valuesRevisionId": "..."}
+
+# =============================================================================
+# OrchestratorService — values revisions and prepare sessions
+# =============================================================================
+
+### ListValuesRevisions
+# @name ListValuesRevisions
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/ListValuesRevisions
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "releaseDefinitionId": "{{DEFINITION_ID}}"
+}
+
+### GetValuesRevision
+# @name GetValuesRevision
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/GetValuesRevision
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "valuesRevisionId": "00000000-0000-0000-0000-000000000000"
+}
+
+### ListSecrets
+# @name ListSecrets
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/ListSecrets
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "releaseDefinitionId": "{{DEFINITION_ID}}"
+}
+
+# CreateValuesRevision / SubmitValuesRevision / ApproveValuesRevision /
+# RejectValuesRevision / DiscardValuesRevision are writes (REQ-055/068).
+
+# =============================================================================
+# OrchestratorService — emergency, convergence, inventory
+# =============================================================================
+
+### ListEmergencyTargets
+# @name ListEmergencyTargets
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/ListEmergencyTargets
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "releaseDefinitionId": "{{DEFINITION_ID}}"
+}
+
+### CheckEmergencyConflict (TASK-095: previously permanently forbidden)
+# @name CheckEmergencyConflict
+# @kulala-expect-status-code 200
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/CheckEmergencyConflict
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "releaseDefinitionId": "{{DEFINITION_ID}}"
+}
+
+### ListConvergenceTasks
+# @name ListConvergenceTasks
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/ListConvergenceTasks
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "releaseDefinitionId": "{{DEFINITION_ID}}"
+}
+
+### ListStuckLocks
+# @name ListStuckLocks
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/ListStuckLocks
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "releaseDefinitionId": "{{DEFINITION_ID}}"
+}
+
+### ListCandidateArtifacts
+# @name ListCandidateArtifacts
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/ListCandidateArtifacts
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "organizationId": "{{ORGANIZATION_ID}}",
+  "releaseDefinitionId": "{{DEFINITION_ID}}"
+}
+
+### ListReleases (release inventory)
+# @name ListReleases
+# @kulala-expect-status-code 200
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/ListReleases
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "customerId": "{{CUSTOMER_ID}}",
+  "clusterId": "{{CLUSTER_ID}}",
+  "pageSize": 20
+}
+
+### TriggerInventorySync (TASK-095: previously permanently forbidden; a release write)
+# @name TriggerInventorySync
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.OrchestratorService/TriggerInventorySync
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "customerId": "{{CUSTOMER_ID}}",
+  "clusterId": "{{CLUSTER_ID}}"
+}
+
+# ExecuteEmergencyChange / ReleaseEmergencyLock are careful writes: build the
+# workload_ref ("deployments/<ns>/<name>") and confirm the target first.
+
+# =============================================================================
+# CleanupService — destructive maintenance, no read-only RPCs
+# =============================================================================
+
+# Both RPCs change data and are platform_admin-only (the `cleanup` object has no
+# non-wildcard grant), so they are listed rather than pre-filled:
+#   POST {{ORCHESTRATOR_URL}}/orchestrator.v1.CleanupService/RunCleanup       {"retentionDays": 90}
+#   POST {{ORCHESTRATOR_URL}}/orchestrator.v1.CleanupService/UnarchiveBundle  {"bundleId": "..."}
+
+# =============================================================================
+# BundleService — bundle reads; ingress is a service-identity path
+# =============================================================================
+
+### ListBundles
+# @name ListBundles
+# @kulala-expect-status-code 200
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.BundleService/ListBundles
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "releaseDefinitionId": "{{DEFINITION_ID}}",
+  "pagination": {"pageSize": 20}
+}
+
+### GetBundle
+# @name GetBundle
+POST {{ORCHESTRATOR_URL}}/orchestrator.v1.BundleService/GetBundle
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "bundleId": "{{BUNDLE_ID}}",
+  "releaseDefinitionId": "{{DEFINITION_ID}}"
+}
+
+# SubmitBundle (TASK-102: CI API key) and RecordArtifactEvent (Harbor key) are
+# service-identity ingress paths, not console reads; see webhook.http for the CI
+# entrypoint and docs/api.md §3.3 for the credential matrix.
+
+# =============================================================================
+# TrustService
+# =============================================================================
+
+### GetTrustPolicy
+# @name GetTrustPolicy
+# @kulala-expect-status-code 200
+POST {{ORCHESTRATOR_URL}}/trust.v1.TrustService/GetTrustPolicy
+Content-Type: application/json
+Authorization: Bearer {{AUTH_TOKEN}}
+
+{
+  "environment": "{{TRUST_ENVIRONMENT}}"
+}
+
+# CreateTrustRoot / RotateTrustRoot / EndGrace / RetireTrustRoot /
+# RevokeTrustRoot are platform_admin-only trust-root writes (REQ-043).

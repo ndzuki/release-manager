@@ -43,6 +43,8 @@ type Service struct {
 	sessionTTL         time.Duration
 	heartbeatMaxAge    time.Duration
 	suspectAfter       time.Duration
+	offlineAfter       time.Duration
+	sessionRegistry    *SessionRegistry
 	inventorySyncer    *InventorySyncer
 	commandExecutor    CommandExecutor
 	auditEmitter       audit.Sink
@@ -66,7 +68,8 @@ func NewService(st store.Store, logger *slog.Logger, opts ...Option) (*Service, 
 		logger:           logger,
 		sessionTTL:       15 * time.Minute,
 		heartbeatMaxAge:  30 * time.Second,
-		suspectAfter:     60 * time.Second,
+		suspectAfter:     45 * time.Second,
+		offlineAfter:     90 * time.Second,
 		emergencyStreams: make(map[string]chan *operatorv1.EmergencyCommand),
 		streams:          NewStreamRegistry(),
 	}
@@ -107,6 +110,37 @@ func WithRenewBeforeRatio(ratio float64) Option {
 func WithAudit(sink audit.Sink) Option {
 	return func(s *Service) {
 		s.auditEmitter = sink
+	}
+}
+
+// WithSessionTimings sets the heartbeat negotiation and the disconnect
+// thresholds (REQ-044): the agent is asked to heartbeat every
+// heartbeatMaxAge/2, a session without a heartbeat for suspectAfter becomes
+// suspect, and one without a heartbeat for offlineAfter becomes offline (the
+// state the emergency path treats as "operator offline"). The defaults
+// (30s / 45s / 90s) tolerate two lost heartbeats before suspect and four
+// before offline, so a single dropped frame or a brief network blip cannot
+// take a healthy cluster out of the emergency path.
+func WithSessionTimings(heartbeatMaxAge, suspectAfter, offlineAfter time.Duration) Option {
+	return func(s *Service) {
+		if heartbeatMaxAge > 0 {
+			s.heartbeatMaxAge = heartbeatMaxAge
+		}
+		if suspectAfter > 0 {
+			s.suspectAfter = suspectAfter
+		}
+		if offlineAfter > 0 {
+			s.offlineAfter = offlineAfter
+		}
+	}
+}
+
+// WithSessionRegistry attaches the heartbeat registry that expires sessions
+// which stop heartbeating (REQ-044). Without it, liveness is only refreshed by
+// the frames that do arrive, so a dead agent keeps looking online.
+func WithSessionRegistry(registry *SessionRegistry) Option {
+	return func(s *Service) {
+		s.sessionRegistry = registry
 	}
 }
 
@@ -528,15 +562,20 @@ func (s *Service) CommandStream(
 		return err
 	}
 
+	// Heartbeat liveness (REQ-044, TASK-098): the agent is the only writer of
+	// last_heartbeat. The registry expires a session that stops heartbeating, so
+	// a dead agent becomes suspect and then offline instead of looking online
+	// forever because the orchestrator kept refreshing its own row.
+	if s.sessionRegistry != nil {
+		s.sessionRegistry.Register(sessionID, time.Now().UTC())
+	}
+
 	// ── Reconnect: detect sequence gap and re-deliver ──
 	if err := s.handleReconnect(ctx, stream, operatorID, lastSeenSeq); err != nil {
 		return err
 	}
 
 	// ── Main loop ──
-	// Heartbeat ticker.
-	hbTicker := time.NewTicker(s.heartbeatMaxAge / 2)
-	defer hbTicker.Stop()
 
 	// Deliver pending commands in a background goroutine.
 	deliverCh := make(chan *store.OutboxEntry, 16)
@@ -575,15 +614,6 @@ func (s *Service) CommandStream(
 
 	for {
 		select {
-		case <-hbTicker.C:
-			if err := s.store.Sessions().Heartbeat(ctx, sessionID); err != nil {
-				s.logger.Warn("heartbeat failed", "error", err)
-				if statusErr := s.store.Sessions().UpdateStatus(ctx, sessionID, store.SessionOffline); statusErr != nil {
-					s.logger.Warn("failed to mark session offline", "error", statusErr)
-				}
-				return nil
-			}
-
 		case command := <-emergencyCh:
 			if err := stream.Send(&operatorv1.CommandStreamResponse{
 				Payload: &operatorv1.CommandStreamResponse_EmergencyCommand{EmergencyCommand: command},
@@ -620,6 +650,10 @@ func (s *Service) CommandStream(
 			}
 			switch {
 			case req.GetHeartbeat() != nil:
+				now := time.Now().UTC()
+				if s.sessionRegistry != nil {
+					s.sessionRegistry.Heartbeat(sessionID, now)
+				}
 				if err := s.store.Sessions().Heartbeat(ctx, sessionID); err != nil {
 					s.logger.Warn("heartbeat update failed", "error", err)
 				}

@@ -136,7 +136,7 @@ identity → routing → accounts → trust → bundle → values → enrollment
 | --- | --- | --- |
 | `make dev-stage-shared` | 无运行时服务 | 只跑 proto 生成，并提示 `golangci-lint run` |
 | `make dev-stage-artifact` | webhook `8082` | 使用 `configs/webhook.dev.yaml`；集合 `api/kulala/webhook.http` |
-| `make dev-stage-tenancy` | orchestrator `8083` | 使用 `configs/orchestrator.dev.yaml`；集合 `api/kulala/manager.http`（客户与集群） |
+| `make dev-stage-tenancy` | orchestrator `8083` | 使用 `configs/orchestrator.dev.yaml`；集合 `api/kulala/orchestrator.http`（客户与集群） |
 | `make dev-stage-operator` | operator `8084` | 使用 `configs/operator.dev.yaml` |
 | `make dev-stage-config` | orchestrator `8083` | 同上（ReleaseDefinition 与 ValuesRevision 同属 orchestrator） |
 | `make dev-stage-publish` | orchestrator `8083` | 使用 `configs/orchestrator.dev.yaml` |
@@ -161,7 +161,15 @@ orchestrator 与 auth 的 `run-*`/`dev-stage-*` 都只传 `--config`。
   （`data/*.db`）；而 `make dev-up` 走 `deploy/kustomize/dev` overlay，在集群内运行
   **PostgreSQL（单实例双库 `release_manager` + `release_notifier`）+ Redis**，且不使用
   `configs/` 下的文件（容器不 COPY 它们，配置由 kustomize generator 提供）。两者出现行为差异时
-  先确认自己跑在哪条路径上——例如 `ListReleaseInventory` 在 definition 存在非终态 operation 时，
+  先确认自己跑在哪条路径上。**TASK-104 的共享权威库契约**：`release-auth` 与
+  `release-orchestrator` **必须开同一个库**——orchestrator 的 Casbin 投影是从
+  `organizations`/`org_members` 行编译出来的（这些行由 release-auth 拥有），org→customer 绑定
+  校验也读同一个 store。host-run 下两者都指向 `data/management.db`（同一个 SQLite 文件，
+  WAL + `busy_timeout` 已开启）；集群下天然满足（同一个 `release_manager` Postgres）。
+  把两者拆成两个库会让 orchestrator 的策略为空，**连 `ListCustomers`/`CreateCustomer` 都恒
+  `permission_denied`**，全新环境无法自举（表现为「所有 orchestrator 读都 403」）。
+  这个契约由 `internal/config` 的 `TestManagementPlaneSharesOneAuthorityDatabase` 钉死；
+  运行时会打印「authorization projection is empty」警告作为线索。——例如 `ListReleaseInventory` 在 definition 存在非终态 operation 时，
   PostgreSQL 引擎会因列数不一致返回 `internal`，而 SQLite 路径已对齐。
 - **残留状态导致的误判**：`dev-down` 后若手工保留 `data/dev-seed-progress.json` 等种子状态，
   下次 `dev-up` 会因 identity drift 报 `fixture_conflict`。不要手工修补，跑

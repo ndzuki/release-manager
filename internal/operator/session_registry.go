@@ -103,6 +103,12 @@ func (r *SessionRegistry) evaluate(ctx context.Context, now time.Time) {
 	r.mu.RUnlock()
 
 	for _, transition := range transitions {
+		if transition.status == store.SessionOffline {
+			// The entry has served its purpose: the durable session row now
+			// carries the offline state, so keeping the in-process entry would
+			// leak memory for every agent that ever connected.
+			r.Unregister(transition.sessionID)
+		}
 		if err := r.sessions.UpdateStatus(ctx, transition.sessionID, transition.status); err != nil {
 			r.logger.Warn(
 				"session state transition failed",

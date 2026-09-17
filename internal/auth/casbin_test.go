@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -249,4 +250,48 @@ func TestEnforcer_ConcurrentRefreshPoliciesSerializes(t *testing.T) {
 		require.NoError(t, <-errs)
 	}
 	assert.Greater(t, e.PolicyVersion(), first)
+}
+
+// TestEnforcer_EmptyProjectionIsReported documents TASK-104's diagnostic: when
+// the service's own database holds no organizations, the compiled projection is
+// empty and every Casbin procedure would answer permission_denied. The enforcer
+// must say why instead of leaving a wall of denials.
+func TestEnforcer_EmptyProjectionIsReported(t *testing.T) {
+	st, err := sqlitestore.Open(t.TempDir() + "/auth.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+
+	var logs bytes.Buffer
+	enforcer, err := NewEnforcer(st, slog.New(slog.NewTextHandler(&logs, nil)))
+	require.NoError(t, err)
+
+	require.NoError(t, enforcer.LoadPolicies(t.Context()))
+	assert.Contains(t, logs.String(), "authorization projection is empty")
+	assert.Contains(t, logs.String(), "share one authority database")
+
+	// And the fail-closed behaviour stands: no projection, no access.
+	err = enforcer.Enforce("user-1", "org-1", "release", "read")
+	require.Error(t, err)
+	assert.Equal(t, "permission_denied", authorizationReason(err))
+}
+
+// TestEnforcer_ProjectionIsStoreLocal is the positive half of the same contract:
+// once THIS store holds the organization and its membership, the identical
+// request is allowed. The policy is compiled from the store the process opened,
+// which is why release-auth and release-orchestrator must share one database.
+func TestEnforcer_ProjectionIsStoreLocal(t *testing.T) {
+	enforcer, st := setupEnforcer(t)
+	ctx := t.Context()
+
+	// release_admin, because that role carries the release/read rule the
+	// orchestrator's inventory procedures need.
+	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: "org-104", Name: "Org 104"}))
+	require.NoError(t, st.Users().Create(ctx, &store.User{ID: "user-104", Username: "user-104", PasswordHash: "hash"}))
+	require.NoError(t, st.OrgMembers().Create(ctx, &store.OrganizationMember{
+		OrgID: "org-104", UserID: "user-104", Role: store.RoleReleaseAdmin,
+	}))
+	require.NoError(t, enforcer.LoadPolicies(ctx))
+
+	require.NoError(t, enforcer.Enforce("user-104", "org-104", "release", "read"),
+		"the bootstrap read must be allowed once the authority rows are visible")
 }
