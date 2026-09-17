@@ -134,9 +134,9 @@ func validateSyncInventoryRequest(msg *orchestratorv1.SyncInventoryRequest) erro
 // for the releases the replay gate saw as pending.
 func (s *Service) applyInventoryItems(
 	ctx context.Context, msg *orchestratorv1.SyncInventoryRequest,
-) ([]string, int, error) {
-	presentKeys := make([]string, 0, len(msg.Items))
-	acceptedCount := 0
+) (presentKeys []string, acceptedCount int, err error) {
+	presentKeys = make([]string, 0, len(msg.Items))
+	acceptedCount = 0
 
 	// REQ-088 D5=A replay gate: only probe releases that actually have a
 	// buffered identity for this cluster. A full snapshot with no pending
