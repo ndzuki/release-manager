@@ -129,10 +129,13 @@ jobs:
 
       # v1.50.0 is the latest upstream release, so the Node 20 deprecation warning
       # this action triggers on Node 24 runners cannot be fixed by upgrading it
-      # (verified 2026-09-17). Migrating to bufbuild/buf-action or to a pinned
-      # release binary is a separate decision from the Go toolchain bump, so it is
-      # recorded rather than improvised here — and the insecure
-      # ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION escape hatch stays unused.
+      # (verified 2026-09-17). Decision (TASK-109): keep it. The successor
+      # bufbuild/buf-action v1.5.0 is a higher-level action (its inputs are
+      # input/paths/lint/format/breaking/push/archive — there is no setup-only
+      # mode), so adopting it means redesigning the proto jobs, not fixing a
+      # runtime; the warning is informational and the runner already forces Node
+      # 24. Revisit only if GitHub turns it into a hard failure, and never by
+      # setting ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION.
       - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
         with:
           version: "1.71.0"
