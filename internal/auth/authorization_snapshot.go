@@ -165,7 +165,7 @@ func (s *AuthorizationService) SetCapabilityGrant(
 			Revoked:        msg.GetRevoked(),
 			UpdatedAt:      time.Now().UTC(),
 		})
-		rules, compileErr := compileAuthorizationRules(ctx, s.store, grants, durable.Rules)
+		rules, compileErr := compileAuthorizationRules(ctx, s.logger, s.store, grants, durable.Rules)
 		if compileErr != nil {
 			return nil, snapshotError(connect.CodeUnavailable, "POLICY_UNAVAILABLE", durable.SourceVersion, durable.PolicyVersion, errors.New("authorization policy unavailable"))
 		}

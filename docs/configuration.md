@@ -79,7 +79,7 @@
 ### 2.2 逐文件 diff 实测结论（`diff configs/<svc>.dev.yaml deploy/kustomize/dev/configs/<svc>.dev.yaml`）
 
 - **webhook**：完全相同。
-- **auth**：kustomize 版把 `database.driver: sqlite`+`dsn: data/auth.db` 换成 `driver: postgres`+`dsn: postgres://release_manager:dev-release-manager@postgres:5432/release_manager?sslmode=disable`；新增 `redis.address: redis:6379`、`login_rate_limit: {max_attempts: 1000, window: 1m}`（文件内注释：dev fixture 复位时高频重登，生产默认 5/min 会触发 `resource_exhausted`）。
+- **auth**：kustomize 版把 `database.driver: sqlite`+`dsn: data/management.db`（TASK-104 起与 orchestrator 共享同一权威库）换成 `driver: postgres`+`dsn: postgres://release_manager:dev-release-manager@postgres:5432/release_manager?sslmode=disable`；新增 `redis.address: redis:6379`、`login_rate_limit: {max_attempts: 1000, window: 1m}`（文件内注释：dev fixture 复位时高频重登，生产默认 5/min 会触发 `resource_exhausted`）。
 - **notifier**：仅换 postgres，DSN 指向**独立库** `.../release_notifier?sslmode=disable`。
 - **orchestrator**：driver/dsn→postgres；`authorization.auth_url` `http://localhost:8085`→`http://auth:8085`；`gateway.enabled: false→true`；`ca.key_path/cert_path` 从 `data/gateway-ca.*` 改为 `/data/gateway-ca.key|crt`（由 Secret `release-manager-mtls-ca` 以 subPath 挂入）。TASK-094 后两处同型：本地 `gateway:` 的 `ca_key_path/ca_cert_path` 两行已删（字段与 env 绑定一并移除，§7-4）；overlay 的 `retention:` 死块已换成与本地同构的规范 `gc:` 8 键块（集群 GC 从此真实受文件控制，§7-3）。防漂移测试 `TestOrchestratorDevConfigWiresTopLevelCA`（`deploy/dev/dev_test.go`）现改为断言 overlay 的 `gateway:` 里不得再出现 `ca_key_path`/`ca_cert_path`。
 - **api、e2e**：无 kustomize 对应文件。**notification-sink**：反向——只有 kustomize 文件。
@@ -154,7 +154,7 @@ TASK-094 前本文件还写有 `runtime_pull_preflight.*`（6 键，整块无读
 | `http_port` | int | 无 | 管理面监听端口 | dev 8083（集群 NodePort 30083）。必填 |
 | `log_level` | — | — | | 生效（§7-1 闭环） |
 | `database.driver` | `sqlite`\|`postgres` | 无 | | 必填；`cmd/orchestrator/main.go:525` 校验；postgres 路径跑 `migrations.FS` |
-| `database.dsn` | string | 无 | | 机密（含口令）；本地 `data/orchestrator.db`，集群 `postgres://...@postgres:5432/release_manager` |
+| `database.dsn` | string | 无 | | 机密（含口令）；本地 `data/management.db`（与 release-auth 同一个文件，TASK-104 的共享权威库契约），集群 `postgres://...@postgres:5432/release_manager` |
 | `authorization.auth_url` | URL | `http://localhost:8085`（`internal/config/config.go:252`） | 授权快照拉取源（release-auth） | 集群 `http://auth:8085`；env `AUTHORIZATION_AUTH_URL` |
 | `authorization.pull_interval` | duration | 1s | 授权快照轮询周期 | env `AUTHORIZATION_PULL_INTERVAL` |
 | `authorization.pull_backoff_max` | duration | 30s | 拉取失败退避上限 | env `AUTHORIZATION_PULL_BACKOFF_MAX` |
