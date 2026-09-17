@@ -23,7 +23,7 @@
 | Capability Grant | 覆盖默认角色矩阵的显式授权记录（organization_id、subject、action），持久化于 capability_grant 表；active grant 优先于角色默认规则，revoke 为软删除（revoked=true 可重新 active）。emergency_resolver 是 capability 而非第五个 Role，任意角色经显式 grant 后可执行 release.emergency.resolve。（避免：role upgrade、把 capability 当作新 Role、默认矩阵 grant） | CONTEXT.md › Language；设计词汇表：REQ-027/049 |
 | release_admin | 组织级发布管理角色（区别于平台级 platform_admin）：可查看审计事件中的完整 actor ID、role 与 displayName；普通成员仅见脱敏 actor；非 platform_admin 跨组织查询被服务端拒绝（REQ-059 AC-01/AC-05）。（避免：org admin、把 release_admin 当作 platform_admin） | CONTEXT.md › Language |
 | EnrollmentToken | 一次性注册凭证，明文只在创建响应中返回一次且持久化仅存不可逆 hash；状态 pending → used/expired/revoked，同一 Cluster 至多一个有效 pending token，替换/作废走同事务原子语义（REQ-015/REQ-053）。（避免：token 明文持久化、多 pending token、enrollment secret） | CONTEXT.md › Language；设计词汇表：REQ-015/053 |
-| Bundle Ingress Service Token | webhook→orchestrator 的静态服务身份令牌：webhook 转发 orchestrator BundleService 请求时附加 `Authorization: Bearer <token>`（`internal/webhook/service.go:63-64`），actor 解析为 service:release-webhook；orchestrator 以 current+previous 双 hash + constant-time comparison 校验支持无停机轮换（通用机制 `ServiceTokenInterceptor`，`internal/auth/service_token.go:28`，挂载于 `cmd/orchestrator/main.go:487`；REQ-011 §562）。dev 最小实现闭环经 D-100 裁决 B、由 TASK-065 v21 落地（webhook 透传 Bearer + orchestrator 双 hash 校验 + BundleService actor 分支，AC-33）；生产 Secret manager 通道仍归 REQ-011 owner。代码 flag/env/注释统一写作 bundle ingress service token（`cmd/webhook/main.go:62`、`cmd/orchestrator/main.go:800`）。设计词汇表对同一 seam 的旧名 `Internal Service Token` 与 `bundle ingress 服务令牌 seam` 不再单列条目，仓库内亦无 `Internal Service Token` 标识符。（避免：API key、把服务令牌当作用户凭据、生产 Secret 通道由 REQ-011 owner 承接） | CONTEXT.md › Language；设计词汇表：REQ-011, D-016, D-100 |
+| Bundle Ingress Service Token | webhook→orchestrator 的静态服务身份令牌：webhook 转发 orchestrator BundleService 请求时附加 `Authorization: Bearer <token>`（`internal/webhook/service.go:63-64`），actor 解析为 service:release-webhook；orchestrator 以 current+previous 双 hash + constant-time comparison 校验支持无停机轮换（通用机制 `ServiceTokenInterceptor`，`internal/auth/service_token.go:28`，挂载于 `cmd/orchestrator/main.go:487`；REQ-011 §562）。dev 最小实现闭环经 D-100 裁决 B、由 TASK-065 v21 落地（webhook 透传 Bearer + orchestrator 双 hash 校验 + BundleService actor 分支，AC-33）；生产 Secret manager 通道仍归 REQ-011 owner。代码 flag/env/注释统一写作 bundle ingress service token（`cmd/webhook/main.go:62`、`cmd/orchestrator/main.go:826`）。设计词汇表对同一 seam 的旧名 `Internal Service Token` 与 `bundle ingress 服务令牌 seam` 不再单列条目，仓库内亦无 `Internal Service Token` 标识符。（避免：API key、把服务令牌当作用户凭据、生产 Secret 通道由 REQ-011 owner 承接） | CONTEXT.md › Language；设计词汇表：REQ-011, D-016, D-100 |
 | seed identity | Initialize 首次引导阶段：创建组织 + platform_admin 用户 + 成员（dev 环境对应 dev-admin 账号）；此后本地用户创建走 CreateLocalUser 且拒绝 platform_admin 角色（D-16，REQ-025/REQ-065 共享）。（避免：dev admin bootstrap、直接 Create 首个管理员） | CONTEXT.md › Language；设计词汇表：REQ-025/065 |
 
 ## 发布输入与制品
@@ -117,7 +117,7 @@
 | REQUIRE_PROMOTION | 收敛策略：须创建并批准 ValuesRevision 才标记 converged；APPLIED 后原子创建唯一 task。 | 设计词汇表：REQ-058, ADR-011 |
 | REVERT_ON_NEXT_RECONCILE | EMERGENCY Operation 的收敛策略之一：紧急变更在下次标准操作/对账时被吸收覆盖，不创建 Convergence Task、不触发收敛门禁；标准 Operation succeeded 后，后端以实际 applied manifest/inventory 与该 Operation 使用的 approved rendered value 对 Emergency 目标字段对账，相等才标记 reconciled。（避免：当作持久收敛任务、跳过对账、与 REQUIRE_PROMOTION 混淆） | CONTEXT.md › Language；设计词汇表：ADR-011, REQ-058 |
 | EmergencyOpType | SET_CONTAINER_IMAGE / SET_REPLICAS / SET_APPROVED_ANNOTATIONS。 | 设计词汇表：REQ-058 |
-| AnnotationScope | 紧急 annotation 变更落点的元数据位置枚举：WORKLOAD_METADATA / POD_TEMPLATE_METADATA。实现现状：scope 只决定执行时写入哪一层元数据（`internal/operator/emergency_executor.go:267-272`），**不**进入目标锁重叠判定——锁按 workload + annotation key 判重叠、锁条目仅含 key（`internal/store/sqlite/emergency_intents.go:576-578`、`internal/store/sqlite/emergency_intents.go:581-608`；PostgreSQL 侧同构 `internal/store/postgres/emergency_intents.go:606`），与 CONTEXT.md（Emergency Target Lock）「annotation 按 workload/key 判定重叠」一致；设计词汇表「按 key+scope」为实现未采纳的设计意图，差异裁定见文末 D4。（避免：把 key+scope 当作现行锁语义） | 设计词汇表：REQ-058；CONTEXT.md › Language（Emergency Target Lock） |
+| AnnotationScope | 紧急 annotation 变更落点的元数据位置枚举：WORKLOAD_METADATA / POD_TEMPLATE_METADATA。实现现状：scope 只决定执行时写入哪一层元数据（`internal/operator/emergency_executor.go:286-291`），**不**进入目标锁重叠判定——锁按 workload + annotation key 判重叠、锁条目仅含 key（`internal/store/sqlite/emergency_intents.go:573-575`、`internal/store/sqlite/emergency_intents.go:578-605`；PostgreSQL 侧同构 `internal/store/postgres/emergency_intents.go:614`），与 CONTEXT.md（Emergency Target Lock）「annotation 按 workload/key 判定重叠」一致；设计词汇表「按 key+scope」为实现未采纳的设计意图，差异裁定见文末 D4。（避免：把 key+scope 当作现行锁语义） | 设计词汇表：REQ-058；CONTEXT.md › Language（Emergency Target Lock） |
 | WorkloadKind | DEPLOYMENT / STATEFUL_SET / DAEMON_SET。 | 设计词汇表：REQ-058 |
 
 ## Inventory 与审计
@@ -230,14 +230,14 @@
 ### D3. 服务令牌的术语命名（同一 seam 三种名字） — 裁定：文档对齐（A）
 
 - 两侧说法：`Notes/CONTEXT.md` 权威名 Bundle Ingress Service Token；`Design/glossary.md` 另用 Internal Service Token 与 bundle ingress 服务令牌 seam 指同一 seam。
-- 代码证据：flag/env 与注释统一写 bundle ingress service token（`cmd/webhook/main.go:62`、`cmd/orchestrator/main.go:800`），通用校验机制命名 `ServiceTokenInterceptor`（`internal/auth/service_token.go:28`）；`Internal Service Token` 在代码与其余文档中零匹配（本词汇表旧条目除外）。
+- 代码证据：flag/env 与注释统一写 bundle ingress service token（`cmd/webhook/main.go:62`、`cmd/orchestrator/main.go:826`），通用校验机制命名 `ServiceTokenInterceptor`（`internal/auth/service_token.go:28`）；`Internal Service Token` 在代码与其余文档中零匹配（本词汇表旧条目除外）。
 - 处理：三行合并为单条 Bundle Ingress Service Token（CONTEXT 权威名），两个设计侧旧名降为该条目内的别名说明；全仓 grep 确认其余文档（`docs/architecture.md` §3、`docs/api.md` §3.3、`docs/configuration.md`、`SECURITY.md`）本就未使用旧名，无需改动。
 - 遗留：`Design/glossary.md` 仍保留两个旧名条目，应由 REQ-011 owner 按本结论合并/改指——知识库修改，不在本任务范围。
 
 ### D4. annotation 目标锁的判定粒度 — 裁定：仓库文档已对齐（A）+ 设计意图待确认（C）
 
 - 两侧说法：`Notes/CONTEXT.md`（Emergency Target Lock）annotation 按 workload/key 判定重叠；`Design/glossary.md`（AnnotationScope）锁按 key+scope。
-- 代码证据：锁条目结构仅含 `Key`（`internal/store/sqlite/emergency_intents.go:576-578`），重叠判定 = 同 workload（kind+name）且同 annotation key（`internal/store/sqlite/emergency_intents.go:581-608`，PostgreSQL 侧 `internal/store/postgres/emergency_intents.go:606`）；scope 只在执行期选择写入 workload metadata 还是 pod-template metadata（`internal/operator/emergency_executor.go:267-272`），不参与锁判定。
+- 代码证据：锁条目结构仅含 `Key`（`internal/store/sqlite/emergency_intents.go:573-575`），重叠判定 = 同 workload（kind+name）且同 annotation key（`internal/store/sqlite/emergency_intents.go:578-605`，PostgreSQL 侧 `internal/store/postgres/emergency_intents.go:614`）；scope 只在执行期选择写入 workload metadata 还是 pod-template metadata（`internal/operator/emergency_executor.go:286-291`），不参与锁判定。
 - 处理：实现与 CONTEXT 一致；原表格 AnnotationScope 条目照抄了设计侧「key+scope」的说法，与 CONTEXT 和实现都不符，已改为实现事实并标注差异。
 - 遗留（需人工裁定，可执行问题）：REQ-058 owner 需确认「scope 不计入锁重叠」是有意的实现简化还是缺陷——若是有意（同一 key 在 workload metadata 与 pod-template metadata 允许并发变更），回填 `Design/glossary.md` 措辞为 workload/key；若是缺陷，立 REQ 修正 `emergencyIntentsConflict` 的判定键。两种走向不能由仓库代码单方面裁定。
 
