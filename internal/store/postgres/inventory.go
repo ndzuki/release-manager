@@ -398,7 +398,15 @@ func (s *inventoryStore) Query(ctx context.Context, query store.InventoryQuery) 
 		return nil, err
 	}
 
-	nextCursor, err := inventoryNextCursor(items, updatedAts, pageSize, queryHash, snapshotVersion)
+	// A page of pageSize+1 rows proves another page exists: drop the overflow
+	// row before it reaches the caller, and encode the cursor from the last row
+	// actually returned.
+	hasMore := len(items) > pageSize
+	if hasMore {
+		items = items[:pageSize]
+		updatedAts = updatedAts[:pageSize]
+	}
+	nextCursor, err := inventoryNextCursor(items, updatedAts, hasMore, queryHash, snapshotVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -463,16 +471,14 @@ func scanInventoryPage(rows *sql.Rows, pageSize, totalCount int) ([]*store.Relea
 	return items, updatedAts, nil
 }
 
-// inventoryNextCursor trims the overflow row and encodes the keyset cursor for
-// the next page, or returns "" when this page is the last one.
+// inventoryNextCursor encodes the keyset cursor for the next page from the last
+// row of the trimmed page, or returns "" when this page is the last one.
 func inventoryNextCursor(
-	items []*store.ReleaseInventory, updatedAts []string, pageSize int, queryHash string, snapshotVersion int64,
+	items []*store.ReleaseInventory, updatedAts []string, hasMore bool, queryHash string, snapshotVersion int64,
 ) (string, error) {
-	if len(items) <= pageSize {
+	if !hasMore {
 		return "", nil
 	}
-	items = items[:pageSize]
-	updatedAts = updatedAts[:pageSize]
 	last := items[len(items)-1]
 	return encodeInventoryCursor(inventoryCursor{
 		QueryHash:       queryHash,
