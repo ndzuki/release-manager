@@ -394,9 +394,11 @@ export const AuditService: GenService<{
   /**
    * Buffers audit events for asynchronous persistence and answers as soon as
    * they are queued, before any write reaches the database.
-   * Not idempotent: there is no event-level deduplication, so a resend of the
-   * same event id appends a second row. Partial success is normal: accepted and
-   * rejected are counted per event and rejection_codes explains each rejection,
+   * Idempotent by event id: the id is the deduplication key, so replaying the
+   * same event id leaves the original row untouched and never fails the request
+   * (a collector retry or a crash-replay of the emitter spool is safe). Partial
+   * success is normal: accepted and rejected are counted per event and
+   * rejection_codes explains each rejection,
    * which is why a non-zero rejected count is not an RPC failure.
    * Fails with INVALID_ARGUMENT only when the request carries no events at all.
    * Requires a valid access token and a write decision for the audit object from

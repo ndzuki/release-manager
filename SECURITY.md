@@ -493,7 +493,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 | 11 | 登录限流为进程内、多副本不共享 | 事实/建议 | `internal/auth/ratelimit.go:18-54` |
 | 12 | `release-api` 审计面按 ADR-021 接入 release-auth 的角色判定与窗口策略（TASK-103）：不内嵌 Casbin、不复制策略，判定不可用时 fail closed；release-api 仍不本地校验会话撤销（由 release-auth 的裁决覆盖） | 已实现 | `cmd/api/main.go:69-90`；`internal/audit/decision.go:44-76`；`internal/audit/authorization.go:41-105`；`internal/auth/authorization_decision.go:43-137` |
 | 13 | 客户集群内 operator 用 ClusterRole 且可读写全集群 Secret（Helm release 存储模型的必然结果，未用 `resourceNames` 收窄） | 事实/建议 | §3.3 |
-| 14 | **审计有绕过 emitter 的直写路径**，与 `AGENTS.md:27` 硬约束 6 不符（当前无明文泄露证据，但无结构性保证） | 部分实现 | §3.6 第 3 条 |
+| 14 | 审计直写路径已收敛（TASK-097）：`internal/store/{sqlite,postgres}/operator_management.go` 的事务内写入改为经 `store.SanitizeAuditEvent` 兜底脱敏（比异步 emitter 更严：字段名 + 内容双扫描），结构门禁 `internal/store/audit_write_gate_test.go` 限定 `INSERT ... INTO audit_events` 只能出现在登记的 6 个 store 文件、且事务写入者必须调用该兜底 | 已实现 | `internal/store/audit_sanitize.go`、`internal/store/audit_write_gate_test.go`、§3.6 第 3 条 |
 | 15 | 审计查询/导出的组织过滤取自请求，可为空；principal 未被使用（TASK-095 已修：principal 组织成为唯一可读写范围，跨组织 `permission_denied`） | 已实现 | `internal/audit/authorization.go:22-48`；`internal/audit/audit_service_handler.go:42-56,97,142`；回归 `internal/audit/authorization_test.go:21-128` |
 | 16 | `NotifierService` 无认证拦截器 + 投递目标无白名单 → 控制面可被当作任意 URL 的 HTTP 出站源，metadata 原文外发 | 未见实现 | §3.11 |
 | 17 | ADR-020 的 Vault SecretResolver 适配器未实现（notifier 出站因此恒在无鉴权分支） | 未见实现 | `docs/decisions/ADR-020-use-hashicorp-vault-go-api-for-notifier-secretresolver.md:14-15`；`cmd/notifier/main.go:81` |

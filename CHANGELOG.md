@@ -14,7 +14,7 @@
 
 ## 2026-09
 
-里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 14 个 PR 合入。
+里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 17 个 PR 合入。
 
 ### 执行链路（升级 / 回滚）
 
@@ -50,6 +50,22 @@
 ### Bundle ingress 认证（Added）
 
 - `SubmitReleaseBundle` 由 CI API key 认证、新增 `POST /webhooks/harbor`（Harbor 独立 key）并挂载 Harbor adapter，出站以 `service:release-harbor` 调 `RecordArtifactEvent`（scope 仅该 procedure）；两把 key 与两条 procedure 不可互相替换（AC-011-04/16/17）。配套把 `ServiceTokenInterceptor` 对「不在本腿白名单的 token」改为 `unauthenticated` 以支持多凭证并存（保留「在白名单但越 scope → `permission_denied`」），并在 dev 生命周期/kustomize/CI 三处配齐凭据（PR #109，TASK-102）。
+
+### 调试集合（Fixed）
+
+- `api/kulala` 六个集合从 Connect 迁移前的 REST/gRPC 形状重写为单端口 Connect 形状：路径改为 `<package>.<Service>/<Method>`、`Login` 的 post-request 脚本自动把 token 写进 `{{AUTH_TOKEN}}`、端口改由 `configs/*.dev.yaml` 与 kustomize NodePort 派生；`manager.http`（针对已移除的 Manager 进程）删除，新增 `notifier.http`，`operator.http` 明确声明 mTLS 不可达（PR #119，TASK-093）。
+- 新增 `make api-check` 结构门禁：每条请求必须是 `api/proto` 里真实存在的 RPC、每个占位符必须可解析、env 端口必须来自事实源、空集合必须说明原因（含三类负控制），并入 `make quality` 且随 CI 的 `go test ./...` 执行；六个只做 `nvim` 的 `api-*` 目标删除（PR #119，TASK-093）。
+
+### Operator 会话与生命周期（Fixed）
+
+- 心跳归属修正：agent 收到 `SessionEstablished` 后按协商周期发送 `Heartbeat`（发送与接收共用一把 Send 互斥），orchestrator **不再自写** `last_heartbeat`；`SessionRegistry` 首次接线（网关 operator service 构造 + `Run`），心跳停止即推进 `suspect`/`offline`。心跳阈值、suspect/offline 阈值改为可配置（`operator_session.*`，默认 15s/45s/90s）（PR #118，TASK-098）。
+- 紧急变更离线窗口确定性：除会话状态外还要求 `last_heartbeat` 足够新（重启后进程内流已空但会话行仍 `online`），dispatch 失败也归一到 `CodeUnavailable` + `operator_offline`，且拒绝不留非终态 Operation（REQ-032 AC-032-20）（PR #118，TASK-098）。
+- 标准 Operation（INSTALL/UPGRADE/ROLLBACK）获得 `operation.deadline`（默认 30m），非终态恢复扫描从「仅启动一次」改为按 `operation.recovery_interval`（默认 1m）周期执行（PR #118，TASK-098）。
+
+### 审计写入收敛（Fixed）
+
+- 审计直写路径收敛：`internal/store/{sqlite,postgres}/operator_management.go` 的事务内审计写入改为经 `store.SanitizeAuditEvent` 兜底脱敏（字段名 + 内容双扫描，比异步 emitter 更严），并新增结构门禁——除登记的 6 个 store 文件外任何 `INSERT [OR IGNORE] INTO audit_events` 都失败，且事务写入者必须调用该兜底（含合成树负控制）（PR #117，TASK-097）。
+- `AuditService/Emit` 按事件 id 幂等：两引擎分别改为 `INSERT OR IGNORE` 与 `ON CONFLICT (id) DO NOTHING`，重放同一事件不再失败也不再写第二行；契约注释显式声明去重键（PR #117，TASK-097）。
 
 ### 供应链与 CI 加固（Added）
 

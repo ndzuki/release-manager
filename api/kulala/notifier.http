@@ -1,0 +1,28 @@
+# =============================================================================
+# release-notifier — NotifierService (Connect, no authentication)
+#
+#   make api-check   validate every path below against api/proto
+#   make api-notifier open this file (nvim) — see docs/http-collections.md
+#
+# release-notifier mounts these procedures WITHOUT an authentication or
+# authorization interceptor (cmd/notifier/main.go), so no credential is needed —
+# and none is checked. That is a registered gap, not a convenience:
+#   - TASK-096 covers the inbound authentication + the egress allowlist;
+#   - SECURITY.md §3.11 records that a caller can turn the control plane into an
+#     HTTP client for an arbitrary URL.
+# Only the read-only GetStatus is pre-filled; Send is listed, not armed.
+# =============================================================================
+
+### GetStatus (read-only; unauthenticated by design today)
+# @name GetStatus
+# @kulala-expect-status-code 200
+POST {{NOTIFIER_URL}}/notifier.v1.NotifierService/GetStatus
+Content-Type: application/json
+
+{}
+
+# Send enqueues a delivery job to a caller-supplied recipient — the SSRF surface
+# TASK-096 closes. Body shape:
+#   POST {{NOTIFIER_URL}}/notifier.v1.NotifierService/Send
+#   {"operationId": "...", "channel": "NOTIFICATION_CHANNEL_WEBHOOK",
+#    "recipient": "https://example.invalid/hook", "metadata": {}}

@@ -139,6 +139,67 @@ type ServiceConfig struct {
 	Agent          AgentCfg          `mapstructure:"agent"`
 	CA             CAConfig          `mapstructure:"ca"`
 	LoginRateLimit LoginRateLimitCfg `mapstructure:"login_rate_limit"`
+	// OperatorSession carries the REQ-044 liveness thresholds (TASK-098): the
+	// agent heartbeat cadence the orchestrator negotiates, and how long a
+	// session may miss heartbeats before it becomes suspect / offline.
+	OperatorSession OperatorSessionCfg `mapstructure:"operator_session"`
+	// Operation carries the REQ-023 standard-operation deadline and the
+	// recovery sweep cadence (TASK-098). A zero value falls back to
+	// WithDefaults.
+	Operation OperationCfg `mapstructure:"operation"`
+}
+
+// OperatorSessionCfg are the operator liveness thresholds (REQ-044).
+type OperatorSessionCfg struct {
+	// HeartbeatInterval is how often the agent must send a heartbeat; the
+	// orchestrator negotiates it in SessionEstablished.
+	HeartbeatInterval time.Duration `mapstructure:"heartbeat_interval"`
+	// SuspectAfter marks a session whose heartbeats stopped.
+	SuspectAfter time.Duration `mapstructure:"suspect_after"`
+	// OfflineAfter marks a session offline; the emergency path treats this as
+	// "operator offline" (REQ-032 operator_offline).
+	OfflineAfter time.Duration `mapstructure:"offline_after"`
+}
+
+// WithDefaults returns bounded REQ-044 defaults. 15s/45s/90s tolerate two lost
+// heartbeats before suspect and four before offline, so one dropped frame or a
+// brief network blip cannot remove a healthy cluster from the emergency path,
+// while a dead agent still reaches `operator_offline` inside 90 seconds.
+func (c OperatorSessionCfg) WithDefaults() OperatorSessionCfg {
+	if c.HeartbeatInterval <= 0 {
+		c.HeartbeatInterval = 15 * time.Second
+	}
+	if c.SuspectAfter <= 0 {
+		c.SuspectAfter = 45 * time.Second
+	}
+	if c.OfflineAfter <= 0 {
+		c.OfflineAfter = 90 * time.Second
+	}
+	return c
+}
+
+// OperationCfg carries the standard-operation lifecycle bounds (REQ-023).
+type OperationCfg struct {
+	// Deadline bounds an INSTALL/UPGRADE/ROLLBACK operation end to end; a
+	// non-terminal operation past it (plus the recovery grace period) is
+	// transitioned to timeout by the recovery sweep.
+	Deadline time.Duration `mapstructure:"deadline"`
+	// RecoveryInterval is the period of the non-terminal recovery sweep.
+	RecoveryInterval time.Duration `mapstructure:"recovery_interval"`
+}
+
+// WithDefaults returns the REQ-023 defaults: a 30-minute operation deadline and
+// a 1-minute recovery sweep. The deadline matches the E2E install budget; the
+// sweep is frequent enough that a stuck operation is collected within a minute
+// of becoming stale (and it is idempotent, so a tighter period is safe).
+func (c OperationCfg) WithDefaults() OperationCfg {
+	if c.Deadline <= 0 {
+		c.Deadline = 30 * time.Minute
+	}
+	if c.RecoveryInterval <= 0 {
+		c.RecoveryInterval = time.Minute
+	}
+	return c
 }
 
 // EmergencyCfg carries the emergency change kill switch and operation
