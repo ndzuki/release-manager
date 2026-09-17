@@ -192,41 +192,15 @@ func (s *bundleStore) List(ctx context.Context, filter store.BundleListFilter) (
 		statuses = []store.BundleStatus{store.BundleReceived, store.BundleValidated}
 	}
 
-	where := []string{"b.status IN ?"}
-	args := []any{statuses}
-	if filter.ReleaseDefinitionID != "" {
-		where = append(where, `EXISTS (
-			SELECT 1 FROM release_definitions AS d
-			WHERE d.id = ? AND (d.chart_name = '' OR b.chart_ref LIKE '%' || d.chart_name || '%')
-		)`)
-		args = append(args, filter.ReleaseDefinitionID)
-	}
-	if filter.ChartName != "" {
-		where = append(where, `b.chart_ref LIKE '%' || ? || '%'`)
-		args = append(args, filter.ChartName)
-	}
 	queryHash := bundleQueryHash(filter, statuses)
-	if filter.PageToken != "" {
-		cursor, err := decodeBundleCursor(filter.PageToken, queryHash)
-		if err != nil {
-			return nil, err
-		}
-		where = append(where, `(b.created_at, b.id) < (?, ?)`)
-		args = append(args, cursor.CreatedAt, cursor.ID)
+	where, args, err := bundleListWhere(filter, statuses, queryHash)
+	if err != nil {
+		return nil, err
 	}
 
-	var total int64
-	countArgs := append([]any(nil), args...)
-	if filter.PageToken != "" {
-		countArgs = countArgs[:len(countArgs)-2]
-	}
-	countWhere := where
-	if filter.PageToken != "" {
-		countWhere = where[:len(where)-1]
-	}
-	if err := s.gorm.gorm.WithContext(ctx).Raw(`
-		SELECT COUNT(*) FROM release_bundles AS b WHERE `+strings.Join(countWhere, " AND "), countArgs...).Scan(&total).Error; err != nil {
-		return nil, fmt.Errorf("count release bundles: %w", err)
+	total, err := s.countBundles(ctx, where, args, filter.PageToken != "")
+	if err != nil {
+		return nil, err
 	}
 
 	rows, err := s.gorm.gorm.WithContext(ctx).Raw(`
@@ -247,16 +221,9 @@ func (s *bundleStore) List(ctx context.Context, filter store.BundleListFilter) (
 	}
 	defer rows.Close()
 
-	bundles := make([]*store.ReleaseBundle, 0, pageSize+1)
-	for rows.Next() {
-		bundle, err := scanBundle(rows)
-		if err != nil {
-			return nil, err
-		}
-		bundles = append(bundles, bundle)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate release bundles: %w", err)
+	bundles, err := scanBundles(rows, pageSize)
+	if err != nil {
+		return nil, err
 	}
 
 	hasMore := len(bundles) > pageSize
@@ -276,18 +243,87 @@ func (s *bundleStore) List(ctx context.Context, filter store.BundleListFilter) (
 	}
 
 	page := &store.BundlePage{Bundles: bundles, TotalSize: boundedInt32(total)}
-	if hasMore {
-		last := bundles[len(bundles)-1]
-		page.NextPageToken, err = encodeBundleCursor(bundleCursor{
-			QueryHash: queryHash,
-			CreatedAt: last.CreatedAt.UTC().Format(time.RFC3339Nano),
-			ID:        last.ID,
-		})
+	page.NextPageToken, err = bundleNextPageToken(bundles, hasMore, queryHash)
+	if err != nil {
+		return nil, err
+	}
+	return page, nil
+}
+
+// bundleListWhere builds the WHERE fragments for the bundle list and count
+// queries. The keyset cursor predicate is appended last so the count query can
+// drop exactly one fragment and two arguments when a page token is present.
+func bundleListWhere(
+	filter store.BundleListFilter, statuses []store.BundleStatus, queryHash string,
+) ([]string, []any, error) {
+	where := []string{"b.status IN ?"}
+	args := []any{statuses}
+	if filter.ReleaseDefinitionID != "" {
+		where = append(where, `EXISTS (
+			SELECT 1 FROM release_definitions AS d
+			WHERE d.id = ? AND (d.chart_name = '' OR b.chart_ref LIKE '%' || d.chart_name || '%')
+		)`)
+		args = append(args, filter.ReleaseDefinitionID)
+	}
+	if filter.ChartName != "" {
+		where = append(where, `b.chart_ref LIKE '%' || ? || '%'`)
+		args = append(args, filter.ChartName)
+	}
+	if filter.PageToken != "" {
+		cursor, err := decodeBundleCursor(filter.PageToken, queryHash)
+		if err != nil {
+			return nil, nil, err
+		}
+		where = append(where, `(b.created_at, b.id) < (?, ?)`)
+		args = append(args, cursor.CreatedAt, cursor.ID)
+	}
+	return where, args, nil
+}
+
+// countBundles counts the filtered set. A page token contributes the trailing
+// cursor fragment plus its two arguments, which the count must not apply.
+func (s *bundleStore) countBundles(ctx context.Context, where []string, args []any, hasPageToken bool) (int64, error) {
+	var total int64
+	countArgs := append([]any(nil), args...)
+	countWhere := where
+	if hasPageToken {
+		countArgs = countArgs[:len(countArgs)-2]
+		countWhere = where[:len(where)-1]
+	}
+	if err := s.gorm.gorm.WithContext(ctx).Raw(`
+		SELECT COUNT(*) FROM release_bundles AS b WHERE `+strings.Join(countWhere, " AND "), countArgs...).Scan(&total).Error; err != nil {
+		return 0, fmt.Errorf("count release bundles: %w", err)
+	}
+	return total, nil
+}
+
+// scanBundles drains the bundle page rows.
+func scanBundles(rows *sql.Rows, pageSize int) ([]*store.ReleaseBundle, error) {
+	bundles := make([]*store.ReleaseBundle, 0, pageSize+1)
+	for rows.Next() {
+		bundle, err := scanBundle(rows)
 		if err != nil {
 			return nil, err
 		}
+		bundles = append(bundles, bundle)
 	}
-	return page, nil
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate release bundles: %w", err)
+	}
+	return bundles, nil
+}
+
+// bundleNextPageToken encodes the keyset cursor when the page overflowed.
+func bundleNextPageToken(bundles []*store.ReleaseBundle, hasMore bool, queryHash string) (string, error) {
+	if !hasMore {
+		return "", nil
+	}
+	last := bundles[len(bundles)-1]
+	return encodeBundleCursor(bundleCursor{
+		QueryHash: queryHash,
+		CreatedAt: last.CreatedAt.UTC().Format(time.RFC3339Nano),
+		ID:        last.ID,
+	})
 }
 
 func bundleQueryHash(filter store.BundleListFilter, statuses []store.BundleStatus) string {
