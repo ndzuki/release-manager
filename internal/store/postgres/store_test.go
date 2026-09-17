@@ -816,6 +816,10 @@ func TestValuesLifecycleConcurrentIdempotentCreateReplaysFirstResult(t *testing.
 	}
 	close(start)
 
+	// Flake note: this interleaving is timing dependent. Before the post-lock
+	// replay re-check in CreateDraft it failed roughly one run in ten (it failed
+	// on CI the first time the suite ran against a real PostgreSQL, TASK-107), so
+	// use -count to exercise it densely when touching the idempotent create path.
 	created := make([]*store.CreateValuesDraftResult, 0, 2)
 	for range 2 {
 		require.NoError(t, <-errs)
