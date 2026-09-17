@@ -37,7 +37,7 @@
 | `github.com/cenkalti/backoff/v4` | v4.3.0 | MIT |  |
 | `github.com/cespare/xxhash/v2` | v2.3.0 | MIT |  |
 | `github.com/chai2010/gettext-go` | v1.0.2 | BSD-3-Clause |  |
-| `github.com/coreos/go-oidc/v3` | v3.20.0 | Apache-2.0 |  |
+| `github.com/coreos/go-oidc/v3` | v3.21.0 | Apache-2.0 |  |
 | `github.com/cyphar/filepath-securejoin` | v0.7.0 | BSD-3-Clause|MPL-2.0 |  |
 | `github.com/davecgh/go-spew` | v1.1.2-0.20180830191138-d8f796af33cc | ISC |  |
 | `github.com/dustin/go-humanize` | v1.0.1 | MIT |  |
