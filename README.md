@@ -66,7 +66,7 @@ docs/         本文档目录
 
 ## 快速开始（本地开发环境）
 
-前置：Go 版本以 `go.mod` 为准（当前 `go 1.26.4`）、Docker、k3d、kubectl、`buf`；前端另需 Node（版本见 `web/package.json`）。环境脚本的前置检查以 `deploy/dev/dev.sh` 为准。
+前置：Go 版本以 `go.mod` 为准（当前 `go 1.27.1`）、Docker、k3d、kubectl、`buf`；前端另需 Node（版本见 `web/package.json`）。环境脚本的前置检查以 `deploy/dev/dev.sh` 为准。
 
 ```bash
 make dev-up        # 起 k3d 集群 + registry + 全部服务（容器）

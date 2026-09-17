@@ -14,7 +14,7 @@
 
 ## 2026-09
 
-里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 21 个 PR 合入。
+里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 22 个 PR 合入。
 
 ### 执行链路（升级 / 回滚）
 
@@ -50,6 +50,12 @@
 ### Bundle ingress 认证（Added）
 
 - `SubmitReleaseBundle` 由 CI API key 认证、新增 `POST /webhooks/harbor`（Harbor 独立 key）并挂载 Harbor adapter，出站以 `service:release-harbor` 调 `RecordArtifactEvent`（scope 仅该 procedure）；两把 key 与两条 procedure 不可互相替换（AC-011-04/16/17）。配套把 `ServiceTokenInterceptor` 对「不在本腿白名单的 token」改为 `unauthenticated` 以支持多凭证并存（保留「在白名单但越 scope → `permission_denied`」），并在 dev 生命周期/kustomize/CI 三处配齐凭据（PR #109，TASK-102）。
+
+### 工具链（Changed）
+
+- 工具链成套升到 **Go 1.27**：`go.mod` 的 go 指令 → `1.27.1`；CI 的 `actions/setup-go` 13 处 `go-version` → `1.27`；7 个 Dockerfile 的 golang 构建镜像按 index digest 固定到 `golang:1.27.1`（`imagecheck.operator.yaml` 审的是 distroless 终态镜像，无需改动）。升级动机是 dependabot PR #111 与本地 `make lint` 在 Go 1.27 下的 panic（`honnef.co/go/tools@v0.7.0` 的 `purity`/`sa5012`）（PR #125，TASK-109）。
+- `golangci-lint` → **v2.13.2**（上游最新，实测在 Go 1.27.1 下无 panic；旧版 v2.12.2 必 panic）。全量 `make lint` 因此会报约 **45 条既有告警**基线（gocyclo 19/dupl 6/gocritic 6/unused 4/errcheck 3/unparam 3/contextcheck 1/rowserrcheck 1/staticcheck 1/unconvert 1），已登记待独立清理；新增 `make lint-changed` 与 CI 完全同口径（`--new-from-rev`），并把该基线写进 `docs/testing.md`（PR #125，TASK-109）。
+- 如实登记一处**上游阻塞**：`bufbuild/buf-setup-action` 最新版本即当前固定的 v1.50.0，因此它在 Node 24 runner 上的 Node 20 弃用警告无法靠升级消除；已核实并在 workflow 里写明，未使用 `ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION` 掩盖（PR #125，TASK-109）。
 
 ### SQLite→PostgreSQL 导入器（Fixed）
 

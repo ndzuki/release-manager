@@ -403,8 +403,19 @@ test-coverage: ## Run tests with coverage report
 	@printf "$(GREEN)Coverage report written to coverage.out$(NC)\n"
 
 .PHONY: lint
-lint: ## Run linters
+lint: ## Run linters (whole tree; see lint-changed for the CI-equivalent scope)
 	golangci-lint run
+
+.PHONY: lint-changed
+# Mirrors the CI gate exactly (same tool version, same --new-from-rev scope), so
+# "does my change pass lint?" is answerable locally. The whole-tree run above
+# reports a known pre-existing baseline since the Go 1.27 / golangci-lint v2.13.2
+# bump (TASK-109): ~45 findings that predate that change (gocyclo/dupl/gocritic
+# and friends) and are tracked for separate cleanup. CI has always linted only
+# the changed range, so the baseline never gated a pull request.
+LINT_BASE ?= origin/main
+lint-changed: ## Run linters on the changed range only (CI-equivalent)
+	golangci-lint run --new-from-rev=$(LINT_BASE)
 
 .PHONY: sdk-check
 sdk-check: build-sdkcheck ## Run SDK-only static gate (REQ-037)
