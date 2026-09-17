@@ -14,7 +14,7 @@
 
 ## 2026-09
 
-里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 19 个 PR 合入。
+里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 20 个 PR 合入。
 
 ### 执行链路（升级 / 回滚）
 
@@ -50,6 +50,11 @@
 ### Bundle ingress 认证（Added）
 
 - `SubmitReleaseBundle` 由 CI API key 认证、新增 `POST /webhooks/harbor`（Harbor 独立 key）并挂载 Harbor adapter，出站以 `service:release-harbor` 调 `RecordArtifactEvent`（scope 仅该 procedure）；两把 key 与两条 procedure 不可互相替换（AC-011-04/16/17）。配套把 `ServiceTokenInterceptor` 对「不在本腿白名单的 token」改为 `unauthenticated` 以支持多凭证并存（保留「在白名单但越 scope → `permission_denied`」），并在 dev 生命周期/kustomize/CI 三处配齐凭据（PR #109，TASK-102）。
+
+### PostgreSQL 覆盖与平权（Fixed）
+
+- CI 新增 `test-postgres-integration` job：真实 PostgreSQL 16 + `POSTGRES_TEST_DSN`，跑 `internal/store/postgres` 与 `internal/postgres` 的 `integration` 用例——此前这些用例在 CI 里全部 skip，生产引擎的 SQL 从未被 CI 执行过（PR #NNN，TASK-107）。
+- 修掉两处双引擎平权缺陷：PostgreSQL 迁移从未创建 `inventory_sync_requests`（PG store 却在查询它，生产首次使用即 `relation does not exist`），以及导入器 `booleanColumns` 漏登记 4 张表的布尔列；剩余端到端导入缺口登记为 TASK-108 并在 job 的 scope note 里写明（PR #NNN，TASK-107）。
 
 ### 开发环境自举（Fixed）
 

@@ -341,11 +341,15 @@ func isJSONColumn(table, column string) bool {
 }
 
 var booleanColumns = map[string]map[string]struct{}{
-	"audit_outbox":        {"delivered": {}},
-	"auth_sessions":       {"revoked": {}},
-	"enrollment_tokens":   {"used": {}},
-	"inventory_sync_log":  {"is_full_snapshot": {}},
-	"notification_outbox": {"delivered": {}},
+	"audit_outbox":                 {"delivered": {}},
+	"auth_sessions":                {"revoked": {}},
+	"authorization_checkpoints":    {"id": {}, "fresh": {}},
+	"authorization_source_version": {"id": {}},
+	"capability_grants":            {"revoked": {}},
+	"enrollment_tokens":            {"used": {}},
+	"inventory_sync_log":           {"is_full_snapshot": {}},
+	"notification_outbox":          {"delivered": {}},
+	"release_definitions":          {"hpa_managed": {}},
 }
 
 func isBooleanColumn(table, column string) bool {
