@@ -980,55 +980,86 @@ func (s *Service) FinishOperation(ctx context.Context, operationID, resultStatus
 		return
 	}
 	if current == store.StatusPending {
-		if resultStatus == "failed" {
-			if _, err := s.store.Operations().UpdateStatus(ctx, op.ID, store.StatusFailed, op.StateVersion, resultJSON); err != nil {
-				s.logger.Warn("failed to persist pending preflight failure", "operation_id", operationID, "error", err)
-			}
-			return
-		}
-		s.logger.Warn("ignoring successful command result for pending operation", "operation_id", operationID)
+		s.finishPendingOperation(ctx, op, resultStatus, resultJSON)
 		return
 	}
 	if current == store.StatusQueued {
-		current, err = operation.Transition(current, operation.EventBegin)
-		if err == nil {
-			op, err = s.store.Operations().UpdateStatus(ctx, op.ID, current, op.StateVersion, "")
-		}
+		op, current, err = s.beginQueuedOperation(ctx, op)
 		if err != nil {
-			s.logger.Warn("failed to begin operation", "operation_id", operationID, "error", err)
 			return
 		}
 	}
 	if current == store.StatusCancelling {
-		// TASK-084 AC-084-03: only the agent's authoritative cancellation
-		// result acknowledges CANCELLING → cancelled (AC-023-04); any other
-		// result records a definitive failure — the cancel intent wins over a
-		// late success. Both legacy (`cancelled`) and typed-normalized
-		// (`helm_cancelled`) cancellation codes acknowledge, so a future
-		// legacy-code unification cannot silently misclassify the cancel.
-		var parsed struct {
-			Code string `json:"code"`
-		}
-		event := operation.EventError
-		if json.Unmarshal([]byte(resultJSON), &parsed) == nil &&
-			(parsed.Code == "cancelled" || parsed.Code == "helm_cancelled") {
-			event = operation.EventAcknowledgeCancel
-		}
-		next, transitionErr := operation.Transition(current, event)
-		if transitionErr != nil {
-			s.logger.Warn("failed to transition cancelling operation result", "operation_id", operationID, "error", transitionErr)
-			return
-		}
-		lastError := ""
-		if event == operation.EventError {
-			lastError = resultJSON
-		}
-		if _, err := s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, lastError); err != nil {
-			s.logger.Warn("failed to persist cancelling operation result", "operation_id", operationID, "error", err)
-		}
+		s.finishCancellingOperation(ctx, op, resultJSON)
 		return
 	}
+	s.finishTerminalOperation(ctx, op, current, resultStatus, resultJSON)
+}
 
+// finishPendingOperation records a definitive failure for a pending operation.
+// A successful result for an operation that never started is ignored on purpose.
+func (s *Service) finishPendingOperation(ctx context.Context, op *store.Operation, resultStatus, resultJSON string) {
+	if resultStatus != "failed" {
+		s.logger.Warn("ignoring successful command result for pending operation", "operation_id", op.ID)
+		return
+	}
+	if _, err := s.store.Operations().UpdateStatus(ctx, op.ID, store.StatusFailed, op.StateVersion, resultJSON); err != nil {
+		s.logger.Warn("failed to persist pending preflight failure", "operation_id", op.ID, "error", err)
+	}
+}
+
+// beginQueuedOperation transitions a queued operation to running and returns the
+// reloaded operation together with its new status.
+func (s *Service) beginQueuedOperation(
+	ctx context.Context, op *store.Operation,
+) (*store.Operation, store.OperationStatus, error) {
+	next, err := operation.Transition(op.Status, operation.EventBegin)
+	if err == nil {
+		op, err = s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, "")
+	}
+	if err != nil {
+		s.logger.Warn("failed to begin operation", "operation_id", op.ID, "error", err)
+		return nil, "", err
+	}
+	return op, next, nil
+}
+
+// finishCancellingOperation resolves a CANCELLING operation from the agent's
+// authoritative result.
+func (s *Service) finishCancellingOperation(ctx context.Context, op *store.Operation, resultJSON string) {
+	// TASK-084 AC-084-03: only the agent's authoritative cancellation
+	// result acknowledges CANCELLING → cancelled (AC-023-04); any other
+	// result records a definitive failure — the cancel intent wins over a
+	// late success. Both legacy (`cancelled`) and typed-normalized
+	// (`helm_cancelled`) cancellation codes acknowledge, so a future
+	// legacy-code unification cannot silently misclassify the cancel.
+	var parsed struct {
+		Code string `json:"code"`
+	}
+	event := operation.EventError
+	if json.Unmarshal([]byte(resultJSON), &parsed) == nil &&
+		(parsed.Code == "cancelled" || parsed.Code == "helm_cancelled") {
+		event = operation.EventAcknowledgeCancel
+	}
+	next, err := operation.Transition(op.Status, event)
+	if err != nil {
+		s.logger.Warn("failed to transition cancelling operation result", "operation_id", op.ID, "error", err)
+		return
+	}
+	lastError := ""
+	if event == operation.EventError {
+		lastError = resultJSON
+	}
+	if _, err := s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, lastError); err != nil {
+		s.logger.Warn("failed to persist cancelling operation result", "operation_id", op.ID, "error", err)
+	}
+}
+
+// finishTerminalOperation applies the completion/error transition for a
+// queued-turned-running or running operation.
+func (s *Service) finishTerminalOperation(
+	ctx context.Context, op *store.Operation, current store.OperationStatus, resultStatus, resultJSON string,
+) {
 	event := operation.EventComplete
 	lastError := ""
 	if resultStatus == "failed" {
@@ -1037,31 +1068,45 @@ func (s *Service) FinishOperation(ctx context.Context, operationID, resultStatus
 	}
 	next, err := operation.Transition(current, event)
 	if err != nil {
-		s.logger.Warn("failed to transition operation result", "operation_id", operationID, "error", err)
+		s.logger.Warn("failed to transition operation result", "operation_id", op.ID, "error", err)
 		return
 	}
 	if _, err := s.store.Operations().UpdateStatus(ctx, op.ID, next, op.StateVersion, lastError); err != nil {
-		s.logger.Warn("failed to persist operation result", "operation_id", operationID, "error", err)
+		s.logger.Warn("failed to persist operation result", "operation_id", op.ID, "error", err)
 	}
 }
 
-// HandleCommandResult atomically applies one typed Upgrade result.
-func (s *Service) HandleCommandResult(ctx context.Context, result *operatorv1.CommandResult) error {
+// loadResultOperation validates the result identifiers and returns the operation
+// to finalize. It returns (nil, nil) when the operation is already terminal and
+// the result must be ignored.
+func (s *Service) loadResultOperation(ctx context.Context, result *operatorv1.CommandResult) (*store.Operation, error) {
 	if result == nil || result.GetOperationId() == "" || result.GetCommandId() == "" {
-		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("command_result identifiers are required"))
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("command_result identifiers are required"))
 	}
 	op, err := s.store.Operations().Get(ctx, result.GetOperationId())
 	if err != nil {
-		return connect.NewError(connect.CodeInternal, fmt.Errorf("load operation for result: %w", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("load operation for result: %w", err))
 	}
 	if op.Status.IsTerminal() {
-		return nil
+		return nil, nil
 	}
 	if op.Status == store.StatusQueued {
 		op, err = s.store.Operations().UpdateStatus(ctx, op.ID, store.StatusRunning, op.StateVersion, "")
 		if err != nil {
-			return connect.NewError(connect.CodeAborted, fmt.Errorf("begin operation: %w", err))
+			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf("begin operation: %w", err))
 		}
+	}
+	return op, nil
+}
+
+// HandleCommandResult atomically applies one typed Upgrade result.
+func (s *Service) HandleCommandResult(ctx context.Context, result *operatorv1.CommandResult) error {
+	op, err := s.loadResultOperation(ctx, result)
+	if err != nil {
+		return err
+	}
+	if op == nil {
+		return nil
 	}
 	definition, err := s.store.Definitions().Get(ctx, op.ReleaseDefinitionID)
 	if err != nil {
