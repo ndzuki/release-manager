@@ -470,8 +470,8 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 
 | RPC | 作用 | 鉴权 | 位置 | 关键错误 |
 | --- | --- | --- | --- | --- |
-| `Send` | 为终态 Operation 创建通知任务（按 `(operation_id, channel, recipient)` 去重） | 无 | `internal/notifier/service.go:29` | `internal`（`:55`） |
-| `GetStatus` | 查询通知任务投递状态 | 无 | `internal/notifier/service.go:71` | `not_found`（`:78`）、`internal`（`:80`） |
+| `Send` | 为终态 Operation 创建通知任务（按 `(operation_id, channel, recipient)` 去重）；recipient 必须命中出站白名单，否则任务记 `egress_blocked` 并 dead-letter | 服务令牌（scope = 本服务两 procedure，TASK-096） | `internal/notifier/service.go:29` | `internal`（`:55`）；投递期 `egress_blocked` |
+| `GetStatus` | 查询通知任务投递状态 | 服务令牌（同上） | `internal/notifier/service.go:71` | `not_found`（`:78`）、`internal`（`:80`） |
 
 ### 7.8 operator.v1.OperatorService（4 个；8083 管理端口 / 8084 网关 / 8084 `release-operator` gateway 模式）
 
