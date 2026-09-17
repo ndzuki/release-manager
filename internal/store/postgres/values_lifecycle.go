@@ -59,6 +59,16 @@ func (s *valuesLifecycleStore) CreateDraft(ctx context.Context, command store.Cr
 		}
 		return nil, fmt.Errorf("lock release definition: %w", err)
 	}
+	// The row lock above is the serialization point for concurrent creates of the
+	// same definition, so by the time it is acquired any competing create has
+	// committed and its idempotency record is visible under READ COMMITTED.
+	// Re-check before inserting: without this second look the loser raced past the
+	// optimistic check at the top of the transaction and failed with a duplicate
+	// key instead of replaying the winner's result (found by running this suite
+	// against a real PostgreSQL in CI, TASK-107).
+	if replay, err := lookupCreateValuesReplay(ctx, tx, command); err != nil || replay != nil {
+		return replay, err
+	}
 	nextVersion, err := validateValuesParent(ctx, tx, command.Revision.ReleaseDefinitionID, command.Revision.ParentRevisionID, command.ExpectedParentVersion)
 	if err != nil {
 		// REQ-018 D18/校验顺序 8: a converged initial create rechecks the

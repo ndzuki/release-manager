@@ -199,6 +199,66 @@ jobs:
           version: v2.12.2
           args: --new-from-rev=${{ github.event.pull_request.base.sha || github.event.before || format('origin/{0}', github.event.repository.default_branch) }}
 
+  # PostgreSQL is the production engine (ADR-015), but every integration test in
+  # the store is tagged `integration` and skips unless POSTGRES_TEST_DSN is set —
+  # so CI never exercised the PostgreSQL SQL at all. This job runs a real
+  # PostgreSQL 16 and the DB-backed suites against it.
+  #
+  # Scope note: ./internal/migration/... is deliberately NOT included yet. Its
+  # end-to-end SQLite->PostgreSQL import test exposes a backlog of parity gaps
+  # (TASK-108) that is being worked separately; running it here would keep this
+  # job red for reasons unrelated to the code under review.
+  test-postgres-integration:
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache: ${{ vars.RUNS_ON != 'self-hosted' }}
+
+      - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          version: "1.71.0"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate proto
+        run: make proto
+
+      # docker run rather than a services: block so the job also works on the
+      # self-hosted runner (service containers require a Docker-capable runner
+      # configuration we do not control). Port 55432 avoids a host PostgreSQL.
+      - name: Start PostgreSQL
+        run: |
+          docker run -d --name ci-postgres \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=release_manager \
+            -p 55432:5432 postgres:16-alpine
+          for _ in $(seq 1 30); do
+            if docker exec ci-postgres pg_isready -U postgres >/dev/null 2>&1; then
+              echo "postgres ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "postgres did not become ready" >&2
+          docker logs ci-postgres >&2 || true
+          exit 1
+
+      - name: Run PostgreSQL integration tests
+        env:
+          POSTGRES_TEST_DSN: postgres://postgres:postgres@localhost:55432/release_manager?sslmode=disable
+        run: |
+          go test -tags integration -count=1 ./internal/store/postgres/... ./internal/postgres/...
+
+      - name: Stop PostgreSQL
+        if: always()
+        run: docker rm -f ci-postgres || true
+
   test-sqlite:
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     steps:
