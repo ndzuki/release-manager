@@ -41,7 +41,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Run SDK-only static gate
@@ -55,7 +55,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       # The checker classifies the license text of every module in the build
@@ -75,7 +75,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Install kind
@@ -92,7 +92,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Install kind
@@ -109,7 +109,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Run operator image SDK-only gate
@@ -124,9 +124,15 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
+      # v1.50.0 is the latest upstream release, so the Node 20 deprecation warning
+      # this action triggers on Node 24 runners cannot be fixed by upgrading it
+      # (verified 2026-09-17). Migrating to bufbuild/buf-action or to a pinned
+      # release binary is a separate decision from the Go toolchain bump, so it is
+      # recorded rather than improvised here — and the insecure
+      # ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION escape hatch stays unused.
       - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
         with:
           version: "1.71.0"
@@ -196,7 +202,7 @@ jobs:
       - name: Run lint (changed code only)
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.12.2
+          version: v2.13.2
           args: --new-from-rev=${{ github.event.pull_request.base.sha || github.event.before || format('origin/{0}', github.event.repository.default_branch) }}
 
   # PostgreSQL is the production engine (ADR-015), but every integration test in
@@ -218,7 +224,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
@@ -268,7 +274,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
@@ -310,7 +316,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       # REQ-008 §8-8: dependency vulnerabilities must fail the pipeline, not be
@@ -327,7 +333,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       # Wipe first: restoring over read-only module files fails (see test job).
@@ -365,7 +371,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Install kind v0.32.0
@@ -405,7 +411,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       # dev-up requires k3d >= 5.8 and kustomize on PATH, but only detects them
@@ -481,7 +487,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Install dev environment tools

@@ -39,7 +39,7 @@
 | Go 工具链 | 构建服务镜像、`go run ./cmd/devseed/ -print-fixture-version` | `FIXTURE_VERSION` 回退到脚本内置默认值 |
 | `buf` | `make proto` 生成 protobuf 代码（缺失时 target 自动 `go install ...@latest`） | proto 生成失败 |
 
-Go 版本以 `go.mod` 为准（当前声明 `go 1.26.4`）；CI 使用 `actions/setup-go` 的 `1.26`。
+Go 版本以 `go.mod` 为准（当前声明 `go 1.27.1`）；CI 使用 `actions/setup-go` 的 `1.27`，Dockerfile 的 golang 构建镜像按 index digest 固定到同一版本（TASK-109）。
 k3d 必须使用 release 二进制而非 `go install` 构建：后者报告 `v5-dev`，会让版本解析误读
 随后的 k3s 版本行并报「k3d 过旧」。其余工具版本要求以 `deploy/dev/dev.sh` 的前置检查为准。
 
