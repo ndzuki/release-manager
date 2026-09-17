@@ -219,8 +219,11 @@ TASK-105 把「漏洞准入」接成了真实步骤（`CreateOperation` 内，�
 2. 看证据：审计里 `action=admit_artifact` 的事件按 `metadata.reason` 聚合——`vulnerability_policy_failed`
    是策略拒绝，`vulnerability_policy_unavailable` 是「评估不可用」。
 3. **先消灭 unavailable**：仓库当前只有 `vulnerability.Scanner` 接口、**没有生产 scanner 实现**，
-   因此未接入 scanner 的部署里每次评估都不可用；此时切 `enforce` 等于**全量拒绝发布**。
-   接好 scanner（或确认评估稳定可用）后再继续。
+   而且 `SetVulnerabilityEvaluator` 尚无生产调用者 ⇒ 现状下 `vulnEval == nil`，每次评估都落
+   `vulnerability_policy_unavailable`；此时切 `enforce` 等于**全量拒绝发布**。
+   注意区分另一类：若接入了 evaluator 但扫描结果缺失/过期或 scanner 报错，`Evaluate` 会返回
+   **reject**（原因里带 `scanner_unavailable`/`sbom_missing`/`no scan result`/`scan_stale`），
+   enforce 下按 `vulnerability_policy_failed` 拒绝。两类都要先看影子证据清零再切。
 4. 把 `vulnerability_admission.mode` 改成 `enforce`（配置文件变更 + 滚动重启），并观察
    `blocked` 计数与发布成功率。
 5. **逃生门**：把模式改回 `shadow` 即可立即恢复放行；这是一次**需要留痕**的降级（配置变更本身
@@ -228,6 +231,8 @@ TASK-105 把「漏洞准入」接成了真实步骤（`CreateOperation` 内，�
 
 **判读要点**：`warn` 在任何模式下都放行（策略的「可接受但需注意」）；`pass`/`warn` 不产生证据事件。
 `off` 与 `shadow` 都不改变发布结果——`shadow` 与 `off` 的唯一差别是前者留下证据。
+`Evaluate` 本身是**读存储的扫描结果 + 套策略**（`Evaluator.Evaluate` → `ResultStore.GetLatest`），
+不是同步扫描，所以每次 `CreateOperation` 对每个镜像只多一次 DB 读，不引入扫描延迟。
 
 ## 4. 审计异步刷盘积压与丢失
 
