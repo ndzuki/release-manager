@@ -41,6 +41,12 @@ const (
 	// interceptor. Registered explicitly so an unauthenticated surface is a
 	// recorded decision rather than an omission.
 	modeUnintercepted
+	// modeServiceToken: identity comes from a scoped service token
+	// (auth.ServiceTokenInterceptor): the presented token must match a
+	// configured SHA-256 digest and the procedure must be inside that
+	// credential's scope. Used by machine-to-machine ingress surfaces
+	// (bundle ingress, notifier).
+	modeServiceToken
 )
 
 // procedurePolicy is one registry row.
@@ -102,8 +108,8 @@ var procedurePolicies = map[string]procedurePolicy{
 	authv1connect.ExternalIdentityServiceGetOIDCAuthURLProcedure:     {mode: modePublic, reason: "pre-authentication IdP entrypoint (REQ-028); implemented but not mounted"},
 	authv1connect.ExternalIdentityServiceGetDingTalkAuthURLProcedure: {mode: modePublic, reason: "pre-authentication IdP entrypoint (REQ-028); implemented but not mounted"},
 	// NotifierService
-	notifierv1connect.NotifierServiceSendProcedure:      {mode: modeUnintercepted, reason: "release-notifier mounts the handler without an authentication interceptor"},
-	notifierv1connect.NotifierServiceGetStatusProcedure: {mode: modeUnintercepted, reason: "release-notifier mounts the handler without an authentication interceptor"},
+	notifierv1connect.NotifierServiceSendProcedure:      {mode: modeServiceToken, reason: "TASK-096: release-notifier mounts auth.ServiceTokenInterceptor scoped to this procedure; the token digest comes from DEV_NOTIFIER_SERVICE_TOKEN"},
+	notifierv1connect.NotifierServiceGetStatusProcedure: {mode: modeServiceToken, reason: "TASK-096: release-notifier mounts auth.ServiceTokenInterceptor scoped to this procedure; the token digest comes from DEV_NOTIFIER_SERVICE_TOKEN"},
 	// OperatorService
 	operatorv1connect.OperatorServiceEnrollProcedure:                   {mode: modeMTLS, reason: "agent gateway: identity from the verified client certificate; Enroll also carries an enrollment token before a certificate exists"},
 	operatorv1connect.OperatorServiceRenewCertificateProcedure:         {mode: modeMTLS, reason: "agent gateway: identity from the verified client certificate; Enroll also carries an enrollment token before a certificate exists"},
@@ -179,7 +185,7 @@ var procedurePolicies = map[string]procedurePolicy{
 	trustv1connect.TrustServiceRevokeTrustRootProcedure: {mode: modeCasbin, object: "trust_root", action: "write", adminOnly: true, reason: "trust root rotation is platform_admin-only: no non-wildcard role holds trust_root write"},
 	trustv1connect.TrustServiceGetTrustPolicyProcedure:  {mode: modeCasbin, object: "trust_root", action: "read"},
 	// WebhookService
-	webhookv1connect.WebhookServiceSubmitReleaseBundleProcedure: {mode: modeUnintercepted, reason: "release-webhook enforces no credential; the REQ-011 section 562 CI API key is not implemented (registered gap)"},
+	webhookv1connect.WebhookServiceSubmitReleaseBundleProcedure: {mode: modeServiceToken, reason: "TASK-102: release-webhook enforces the REQ-011 section 562 CI API key (auth.ServiceTokenInterceptor scoped to this procedure); the Harbor ingress is a non-Connect route with its own key"},
 }
 
 // lookupProcedure returns the registered row for a Connect procedure.

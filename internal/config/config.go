@@ -147,6 +147,79 @@ type ServiceConfig struct {
 	// recovery sweep cadence (TASK-098). A zero value falls back to
 	// WithDefaults.
 	Operation OperationCfg `mapstructure:"operation"`
+	// Notifier carries the REQ-031 notifier policy (TASK-096): the outbound
+	// webhook egress allowlist and the ADR-020 secret resolver settings.
+	Notifier NotifierCfg `mapstructure:"notifier"`
+}
+
+// NotifierCfg is the REQ-031 notifier surface policy (TASK-096).
+type NotifierCfg struct {
+	// EgressAllowlist is the complete set of destinations outbound webhook
+	// delivery may reach, as "scheme://host:port" entries (the port may be
+	// omitted for the scheme default). It is deny-by-default: an empty list
+	// blocks every outbound destination, so enabling delivery is an explicit
+	// configuration act. Widening it is a configuration change, never a
+	// request-side parameter.
+	EgressAllowlist []string `mapstructure:"egress_allowlist"`
+	// Vault is the ADR-020 Kubernetes-auth KV v2 resolver. Disabled by default;
+	// when enabled, missing or invalid settings fail startup (fail closed)
+	// rather than silently delivering without a credential.
+	Vault VaultResolverCfg `mapstructure:"vault"`
+}
+
+// VaultResolverCfg carries the ADR-020 resolver references. Every field is a
+// reference or a path: no secret value belongs in configuration.
+type VaultResolverCfg struct {
+	Enabled    bool   `mapstructure:"enabled"`
+	Address    string `mapstructure:"address"`
+	Namespace  string `mapstructure:"namespace"`
+	AuthMount  string `mapstructure:"auth_mount"`
+	Role       string `mapstructure:"role"`
+	TokenPath  string `mapstructure:"token_path"`
+	KVMount    string `mapstructure:"kv_mount"`
+	SecretPath string `mapstructure:"secret_path"`
+	SecretKey  string `mapstructure:"secret_key"`
+}
+
+// WithDefaults fills the ADR-020 resolver defaults: the Kubernetes auth mount,
+// the projected service-account token path and the KV v2 mount. Address, role,
+// path and key stay empty on purpose — they name a deployment's secret, so the
+// operator must supply them, and Validate reports what is missing.
+func (c VaultResolverCfg) WithDefaults() VaultResolverCfg {
+	if c.AuthMount == "" {
+		c.AuthMount = "kubernetes"
+	}
+	if c.TokenPath == "" {
+		c.TokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+	}
+	if c.KVMount == "" {
+		c.KVMount = "secret"
+	}
+	return c
+}
+
+// Validate reports the first missing reference when the resolver is enabled.
+// A disabled resolver is always valid: ADR-020 keeps unauthenticated delivery
+// when no resolver is configured (REQ-031), and that branch is explicit.
+func (c VaultResolverCfg) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	missing := []struct {
+		name  string
+		value string
+	}{
+		{"address", c.Address},
+		{"role", c.Role},
+		{"secret_path", c.SecretPath},
+		{"secret_key", c.SecretKey},
+	}
+	for _, field := range missing {
+		if strings.TrimSpace(field.value) == "" {
+			return fmt.Errorf("notifier.vault.%s is required when the resolver is enabled", field.name)
+		}
+	}
+	return nil
 }
 
 // OperatorSessionCfg are the operator liveness thresholds (REQ-044).

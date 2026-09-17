@@ -3,3 +3,15 @@ log_level: debug
 database:
   driver: sqlite
   dsn: data/notifier.db
+
+# TASK-096 (REQ-031): outbound webhook delivery is deny-by-default. The dev sink
+# (cmd/notification-sink, :8088) is listed so the delivery path is exercisable
+# locally; widening this list is a configuration change, never a request field.
+notifier:
+  egress_allowlist:
+    - http://localhost:8088
+  vault:
+    # ADR-020 resolver: disabled locally, where a delivery without a resolved
+    # credential is the specified behaviour. Enable it with the Kubernetes auth
+    # references in a deployment that must authenticate outbound calls.
+    enabled: false

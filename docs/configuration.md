@@ -119,14 +119,18 @@
 
 代码支持但任何配置文件都未出现的同族键：`redis.password`、`redis.db`（env `REDIS_PASSWORD`/`REDIS_DB`）、`database.max_open_conns`/`max_idle_conns`/`conn_max_lifetime`/`conn_max_idle_time`（池默认 25/10，`internal/postgres/config.go:25`）。不计入键数自检。
 
-### 3.3 release-notifier（4 键，两处仅 driver/dsn 不同）
+### 3.3 release-notifier（6 键，两处仅 driver/dsn 与 egress 目标不同）
 
 | 键 | 类型/取值 | 默认值 | 含义 | 备注 |
 |---|---|---|---|---|
 | `http_port` | int | 无 | 监听端口 | dev 8086。必填 |
 | `log_level` | — | — | | 生效（§7-1 闭环） |
-| `database.driver` | `sqlite`\|`postgres` | 无 | | 必填；`cmd/notifier/main.go:101` 校验 |
+| `database.driver` | `sqlite`\|`postgres` | 无 | | 必填；`cmd/notifier/main.go` 校验 |
 | `database.dsn` | string | 无 | | 集群指独立库 `release_notifier`；postgres 路径启动跑 `migrations.ReleaseNotifierFS()`，迁移失败即退出 |
+| `notifier.egress_allowlist` | []string（`scheme://host:port`） | 空 = **拒绝一切出站** | 出站 webhook 投递白名单（REQ-031/TASK-096） | 缺省端口按 scheme 取 443/80；格式错误启动即失败；本地写 `http://localhost:8088`（dev sink），集群写 `http://notification-sink:8088` |
+| `notifier.vault.enabled` | bool | false | 是否启用 ADR-020 的 Vault SecretResolver | false 时投递**故意**无鉴权（ADR-020/REQ-031 明文）；置 true 后缺任一引用即启动失败（fail closed） |
+
+代码支持但文件未出现的同族键（TASK-096，ADR-020）：`notifier.vault.address`/`namespace`/`auth_mount`（默认 `kubernetes`）/`role`/`token_path`（默认投影 SA token 路径）/`kv_mount`（默认 `secret`）/`secret_path`/`secret_key`；启用时 `address`/`role`/`secret_path`/`secret_key` 为必填。入站服务令牌走环境变量（`DEV_NOTIFIER_SERVICE_TOKEN(_PREVIOUS)`，由 Secret `release-manager-notifier-service-token` 注入），不是配置文件键。
 
 ### 3.4 release-operator：本地 `configs/operator.dev.yaml`（8 键）
 

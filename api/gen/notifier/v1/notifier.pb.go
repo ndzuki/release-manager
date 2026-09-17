@@ -2,9 +2,10 @@
 // Package notifier.v1 schedules outbound notifications about release events,
 // with retry and dead-letter semantics owned by the server.
 // release-notifier (dev port 8086) serves NotifierService and consumes its own
-// queue in a background loop. The service installs no authentication
-// interceptor on this method set, so both RPCs are open to anyone who can reach
-// the listener and must stay on a trusted network.
+// queue in a background loop. Both procedures require a scoped service token
+// (auth.ServiceTokenInterceptor, REQ-031/TASK-096): the presented credential
+// must match a configured SHA-256 digest and the procedure must be inside that
+// credential's scope, so the surface is machine-to-machine only.
 // Sending is asynchronous: a successful Send means a job was enqueued, not
 // delivered.
 

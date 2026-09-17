@@ -59,10 +59,11 @@ var (
 //
 //nolint:gosec // G101: variable names paired with their source, not secrets
 var processVariables = map[string]string{
-	"AUTH_TOKEN":         "captured by Login's post-request script",
-	"DEV_CI_API_KEY":     "exported from data/dev-service-tokens/ci-api-key",
-	"DEV_HARBOR_API_KEY": "exported from data/dev-service-tokens/harbor-service-token",
-	"DEV_ADMIN_PASSWORD": "exported by dev.sh into data/dev-credentials.env",
+	"AUTH_TOKEN":                 "captured by Login's post-request script",
+	"DEV_CI_API_KEY":             "exported from data/dev-service-tokens/ci-api-key",
+	"DEV_HARBOR_API_KEY":         "exported from data/dev-service-tokens/harbor-service-token",
+	"DEV_ADMIN_PASSWORD":         "exported by dev.sh into data/dev-credentials.env",
+	"DEV_NOTIFIER_SERVICE_TOKEN": "exported from data/dev-service-tokens/notifier-service-token (TASK-096)",
 }
 
 // EnvProfiles are the required profiles of http-client.env.json.
