@@ -94,7 +94,7 @@ func (s *CleanupService) runGC(ctx context.Context) (*orchestratorv1.RunCleanupR
 	for batch := 1; ; batch++ {
 		if stopped, reason := guard(); stopped {
 			resp, errs := stop(append(errs, reason))
-		return resp, errs, nil
+			return resp, errs, nil
 		}
 		ids, err := s.store.Bundles().ListForArchive(ctx, s.config.BundleRetentionDays, terminalStates, gcBatchLimit)
 		if err != nil {
@@ -126,7 +126,7 @@ func (s *CleanupService) runGC(ctx context.Context) (*orchestratorv1.RunCleanupR
 	for batch := 1; ; batch++ {
 		if stopped, reason := guard(); stopped {
 			resp, errs := stop(append(errs, reason))
-		return resp, errs, nil
+			return resp, errs, nil
 		}
 		n, err := s.store.Bundles().DeleteExpiredBefore(ctx, archiveCutoff, gcBatchLimit)
 		if err != nil {
@@ -148,7 +148,7 @@ func (s *CleanupService) runGC(ctx context.Context) (*orchestratorv1.RunCleanupR
 	for batch := 1; ; batch++ {
 		if stopped, reason := guard(); stopped {
 			resp, errs := stop(append(errs, reason))
-		return resp, errs, nil
+			return resp, errs, nil
 		}
 		n, err := s.store.CandidateArtifacts().DeleteOrphanBefore(ctx, candidateCutoff, gcBatchLimit)
 		if err != nil {
@@ -171,7 +171,7 @@ func (s *CleanupService) runGC(ctx context.Context) (*orchestratorv1.RunCleanupR
 	for batch := 1; ; batch++ {
 		if stopped, reason := guard(); stopped {
 			resp, errs := stop(append(errs, reason))
-		return resp, errs, nil
+			return resp, errs, nil
 		}
 		n, err := s.store.PreflightLifecycles().DeleteExpired(ctx, preflightTTL, orphanPreflightTTL, gcBatchLimit)
 		if err != nil {
@@ -194,7 +194,7 @@ func (s *CleanupService) runGC(ctx context.Context) (*orchestratorv1.RunCleanupR
 		for batch := 1; ; batch++ {
 			if stopped, reason := guard(); stopped {
 				resp, errs := stop(append(errs, reason))
-		return resp, errs, nil
+				return resp, errs, nil
 			}
 			n, err := idem.DeleteExpiredBefore(ctx, idempotencyCutoff, gcBatchLimit)
 			if err != nil {
@@ -242,7 +242,10 @@ func (s *CleanupService) acquireGCLock(ctx context.Context) (release func() erro
 		return nil, false, nil
 	}
 	return func() error {
-		unlockErr := lock.Unlock()
+		// Detach from the cycle deadline: the session-level advisory lock must be
+		// released even when the GC context has already expired, otherwise it
+		// stays held on the pooled connection.
+		unlockErr := lock.Unlock(context.WithoutCancel(ctx))
 		s.gcMu.Unlock()
 		return unlockErr
 	}, true, nil

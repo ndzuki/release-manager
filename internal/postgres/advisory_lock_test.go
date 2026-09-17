@@ -29,8 +29,8 @@ func TestTryAcquireAdvisoryLock_NilDatabase(t *testing.T) {
 func TestAdvisoryLock_NilReceiver(t *testing.T) {
 	l := (*AdvisoryLock)(nil)
 	assert.Equal(t, int64(0), l.Key())
-	assert.NoError(t, l.Unlock())
-	assert.NoError(t, l.Unlock()) // idempotent
+	assert.NoError(t, l.Unlock(context.Background()))
+	assert.NoError(t, l.Unlock(context.Background())) // idempotent
 }
 
 func TestAcquireAdvisoryLock_Success(t *testing.T) {
@@ -120,12 +120,12 @@ func TestAdvisoryLock_UnlockAndClose(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, lock)
 
-	require.NoError(t, lock.Unlock())
+	require.NoError(t, lock.Unlock(context.Background()))
 	assert.Equal(t, int64(0), lock.Key()) // key cleared after unlock
 	assert.Nil(t, lock.conn)              // conn nil after close
 
 	// Idempotent — second call is a no-op.
-	assert.NoError(t, lock.Unlock())
+	assert.NoError(t, lock.Unlock(context.Background()))
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

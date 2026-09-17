@@ -146,7 +146,7 @@ func insertApprovalOutboxTx(tx *gorm.DB, entry *store.ApprovalOutboxEntry) error
 	result := tx.Exec(`
 		INSERT INTO audit_outbox (id, event_type, payload_json, created_at, delivered, delivered_at)
 		VALUES (?, ?, ?::jsonb, ?, FALSE, NULL)
-	`, entry.ID, entry.EventType, []byte(entry.PayloadJSON), entry.CreatedAt.UTC())
+	`, entry.ID, entry.EventType, entry.PayloadJSON, entry.CreatedAt.UTC())
 	if result.Error != nil {
 		return fmt.Errorf("insert bundle audit outbox: %w", result.Error)
 	}
