@@ -53,9 +53,9 @@
 
 ### 工具链（Changed）
 
-- 工具链成套升到 **Go 1.27**：`go.mod` 的 go 指令 → `1.27.1`；CI 的 `actions/setup-go` 13 处 `go-version` → `1.27`；7 个 Dockerfile 的 golang 构建镜像按 index digest 固定到 `golang:1.27.1`（`imagecheck.operator.yaml` 审的是 distroless 终态镜像，无需改动）。升级动机是 dependabot PR #111 与本地 `make lint` 在 Go 1.27 下的 panic（`honnef.co/go/tools@v0.7.0` 的 `purity`/`sa5012`）（PR #NNN，TASK-109）。
-- `golangci-lint` → **v2.13.2**（上游最新，实测在 Go 1.27.1 下无 panic；旧版 v2.12.2 必 panic）。全量 `make lint` 因此会报约 **45 条既有告警**基线（gocyclo 19/dupl 6/gocritic 6/unused 4/errcheck 3/unparam 3/contextcheck 1/rowserrcheck 1/staticcheck 1/unconvert 1），已登记待独立清理；新增 `make lint-changed` 与 CI 完全同口径（`--new-from-rev`），并把该基线写进 `docs/testing.md`（PR #NNN，TASK-109）。
-- 如实登记一处**上游阻塞**：`bufbuild/buf-setup-action` 最新版本即当前固定的 v1.50.0，因此它在 Node 24 runner 上的 Node 20 弃用警告无法靠升级消除；已核实并在 workflow 里写明，未使用 `ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION` 掩盖（PR #NNN，TASK-109）。
+- 工具链成套升到 **Go 1.27**：`go.mod` 的 go 指令 → `1.27.1`；CI 的 `actions/setup-go` 13 处 `go-version` → `1.27`；7 个 Dockerfile 的 golang 构建镜像按 index digest 固定到 `golang:1.27.1`（`imagecheck.operator.yaml` 审的是 distroless 终态镜像，无需改动）。升级动机是 dependabot PR #111 与本地 `make lint` 在 Go 1.27 下的 panic（`honnef.co/go/tools@v0.7.0` 的 `purity`/`sa5012`）（PR #125，TASK-109）。
+- `golangci-lint` → **v2.13.2**（上游最新，实测在 Go 1.27.1 下无 panic；旧版 v2.12.2 必 panic）。全量 `make lint` 因此会报约 **45 条既有告警**基线（gocyclo 19/dupl 6/gocritic 6/unused 4/errcheck 3/unparam 3/contextcheck 1/rowserrcheck 1/staticcheck 1/unconvert 1），已登记待独立清理；新增 `make lint-changed` 与 CI 完全同口径（`--new-from-rev`），并把该基线写进 `docs/testing.md`（PR #125，TASK-109）。
+- 如实登记一处**上游阻塞**：`bufbuild/buf-setup-action` 最新版本即当前固定的 v1.50.0，因此它在 Node 24 runner 上的 Node 20 弃用警告无法靠升级消除；已核实并在 workflow 里写明，未使用 `ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION` 掩盖（PR #125，TASK-109）。
 
 ### SQLite→PostgreSQL 导入器（Fixed）
 
