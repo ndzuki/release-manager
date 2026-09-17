@@ -14,7 +14,7 @@
 
 ## 2026-09
 
-里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 20 个 PR 合入。
+里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 21 个 PR 合入。
 
 ### 执行链路（升级 / 回滚）
 
@@ -50,6 +50,11 @@
 ### Bundle ingress 认证（Added）
 
 - `SubmitReleaseBundle` 由 CI API key 认证、新增 `POST /webhooks/harbor`（Harbor 独立 key）并挂载 Harbor adapter，出站以 `service:release-harbor` 调 `RecordArtifactEvent`（scope 仅该 procedure）；两把 key 与两条 procedure 不可互相替换（AC-011-04/16/17）。配套把 `ServiceTokenInterceptor` 对「不在本腿白名单的 token」改为 `unauthenticated` 以支持多凭证并存（保留「在白名单但越 scope → `permission_denied`」），并在 dev 生命周期/kustomize/CI 三处配齐凭据（PR #109，TASK-102）。
+
+### SQLite→PostgreSQL 导入器（Fixed）
+
+- 一次性导入路径端到端修通（此前从未在真实 PostgreSQL 上跑过）：迁移预置的单行表改为「源库为准」的 upsert；搬迁列（`candidate_artifacts.ref`/`bundle_id`）按显式登记规则写入新归属表（含 FK 拓扑排序）；补齐数组列（`values_revisions.locked_paths` 等 JSON→ARRAY）与 JSONB 列登记；删除已冗余且用旧列名的 join backfill、修正 `values_superseded` 的 `revision`→`version`（000012 改名）；派生表豁免「行数必须相等」但保留「不得少于源库」的负控制；同时修正两处随 schema 漂移失效的集成断言（PR #124，TASK-108）。
+- `./internal/migration/...` 纳入 CI 的 `test-postgres-integration` job（scope note 更新），使该路径此后受真实 PostgreSQL 门禁保护（PR #124，TASK-108）。
 
 ### PostgreSQL 覆盖与平权（Fixed）
 

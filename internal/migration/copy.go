@@ -56,6 +56,10 @@ var fkTopology = map[string][]string{
 	"cluster_routes":                       {"clusters"},
 	// Tier 3: cross-cutting (FKs in PostgreSQL schema from migrations)
 	"bundle_candidate_artifacts": {"release_bundles", "candidate_artifacts"},
+	// candidate_artifacts itself has no FK to release_bundles in PostgreSQL (the
+	// link moved to bundle_candidate_artifacts), but copying it now also writes
+	// the relocated link row, so the bundle must exist first.
+	"candidate_artifacts": {"release_bundles"},
 }
 
 // orderTables returns tables sorted so that referenced tables precede referencing tables.
@@ -229,8 +233,11 @@ func copyTable(
 	defer rows.Close()
 
 	// Build INSERT statement with placeholders, adding PostgreSQL-only columns
-	// derived from legacy SQLite values.
-	targetCols, defaults := appendTargetColumns(table, cols)
+	// derived from legacy SQLite values. Columns the PostgreSQL schema no longer
+	// keeps on this row are dropped from the INSERT (their values still travel in
+	// `converted` so a relocation rule can write them where they now live).
+	insertCols, insertPosition := insertableColumns(table, cols)
+	targetCols, defaults := appendTargetColumns(table, insertCols)
 	placeholders := make([]string, len(targetCols))
 	for i := range placeholders {
 		placeholders[i] = fmt.Sprintf("$%d", i+1)
@@ -241,6 +248,9 @@ func copyTable(
 		strings.Join(quoteIdentifiers(targetCols), ", "),
 		strings.Join(placeholders, ", "),
 	)
+	if primaryKey, ok := preSeededTables[table]; ok {
+		insertSQL += upsertClause(primaryKey, targetCols)
+	}
 
 	var count int64
 	for rows.Next() {
@@ -254,13 +264,15 @@ func copyTable(
 		}
 
 		args := make([]any, len(targetCols))
-		converted := make(map[string]any, len(targetCols))
+		converted := make(map[string]any, len(cols))
 		for i, value := range values {
 			convertedValue, err := convertSQLiteValue(table, cols[i], value, timeCols[i], blobCols[i])
 			if err != nil {
 				return count, err
 			}
-			args[i] = convertedValue
+			if position, kept := insertPosition[cols[i]]; kept {
+				args[position] = convertedValue
+			}
 			converted[cols[i]] = convertedValue
 		}
 		for i, column := range defaults {
@@ -268,11 +280,14 @@ func copyTable(
 			if derive, ok := value.(func(map[string]any) any); ok {
 				value = derive(converted)
 			}
-			args[len(cols)+i] = value
+			args[len(insertCols)+i] = value
 		}
 
 		if _, err := tx.ExecContext(ctx, insertSQL, args...); err != nil {
 			return count, fmt.Errorf("insert into %s: %w", table, err)
+		}
+		if err := relocateColumns(ctx, tx, table, converted); err != nil {
+			return count, err
 		}
 		count++
 	}
@@ -300,6 +315,13 @@ func convertSQLiteValue(table, column string, value any, timeColumn, blobColumn 
 		}
 		return converted, nil
 	}
+	if isJSONArrayColumn(table, column) {
+		decoded, err := decodeJSONArray(sqliteText(value))
+		if err != nil {
+			return nil, fmt.Errorf("decode array column %s.%s: %w", table, column, err)
+		}
+		return decoded, nil
+	}
 	if isJSONColumn(table, column) {
 		text := sqliteText(value)
 		if !json.Valid([]byte(text)) {
@@ -320,6 +342,33 @@ func convertSQLiteValue(table, column string, value any, timeColumn, blobColumn 
 	return value, nil
 }
 
+// jsonArrayColumns are columns PostgreSQL stores as an ARRAY while SQLite keeps a
+// JSON array in TEXT. The importer decodes the JSON so the driver can encode the
+// array; leaving the JSON text in place produced `malformed array literal "[]"`.
+var jsonArrayColumns = map[string]map[string]struct{}{
+	"values_revisions": {"convergence_task_ids": {}, "locked_paths": {}},
+}
+
+func isJSONArrayColumn(table, column string) bool {
+	_, ok := jsonArrayColumns[table][column]
+	return ok
+}
+
+// decodeJSONArray turns a JSON array of strings into the Go slice the driver
+// encodes as a PostgreSQL array. An empty column yields an empty array, matching
+// the store's own notion of "no locked paths".
+func decodeJSONArray(text string) ([]string, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return []string{}, nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(text), &values); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
 var jsonColumns = map[string]map[string]struct{}{
 	"audit_outbox":        {"payload_json": {}},
 	"notification_outbox": {"payload_json": {}},
@@ -328,8 +377,14 @@ var jsonColumns = map[string]map[string]struct{}{
 	"sessions":            {"capabilities": {}},
 	"audit_events":        {"metadata": {}},
 	"notification_jobs":   {"metadata": {}},
-	"release_bundles":     {"images": {}},
-	"scan_results":        {"severity_json": {}, "findings_json": {}},
+	// JSONB columns that SQLite keeps as TEXT: registered so the importer
+	// validates them before handing them to PostgreSQL.
+	"convergence_prepare_sessions": {"locked_paths": {}, "task_ids": {}},
+	"convergence_tasks":            {"promotion_paths": {}},
+	"operation_execution_results":  {"result_payload": {}},
+	"release_definitions":          {"approved_annotation_keys": {}, "promotion_mappings": {}},
+	"release_bundles":              {"images": {}},
+	"scan_results":                 {"severity_json": {}, "findings_json": {}},
 	"emergency_intents": {
 		"annotation_entries": {}, "promotion_paths": {}, "before_snapshot": {}, "after_snapshot": {},
 	},
@@ -348,6 +403,7 @@ var booleanColumns = map[string]map[string]struct{}{
 	"capability_grants":            {"revoked": {}},
 	"enrollment_tokens":            {"used": {}},
 	"inventory_sync_log":           {"is_full_snapshot": {}},
+	"policy_version":               {"id": {}},
 	"notification_outbox":          {"delivered": {}},
 	"release_definitions":          {"hpa_managed": {}},
 }
@@ -410,6 +466,113 @@ func parseTimeUTC(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("unrecognized time format: %q", s)
 }
 
+// sourceOnlyColumns are source columns the PostgreSQL schema intentionally no
+// longer keeps on the row: their data moved to another table, and
+// relocatedColumns writes it there. Everything else must be inserted as-is — a
+// column the target lacks but that is not registered here still fails the import
+// with PostgreSQL's own "column does not exist", which is the parity signal we
+// want to keep.
+var sourceOnlyColumns = map[string]map[string]struct{}{
+	// 000007 moved the legacy single location into candidate_artifact_locations
+	// and the bundle link into bundle_candidate_artifacts; both are relocated
+	// below rather than dropped.
+	"candidate_artifacts": {"ref": {}, "bundle_id": {}},
+	// Legacy column of the SQLite DDL only: no reader or writer touches it (the
+	// orphan state lives on candidate_artifacts.orphaned_at), so it is not
+	// imported and nothing is lost.
+	"bundle_candidate_artifacts": {"orphaned_at": {}},
+}
+
+// relocationRule writes one moved source column into the table that now owns it.
+type relocationRule struct {
+	description  string
+	statement    string
+	sourceColumn []string
+}
+
+// relocatedColumns maps a table to the statements that re-home its moved columns.
+// The rules run in the same transaction as the row copy, so a failure rolls the
+// whole table back rather than leaving half-migrated data.
+var relocatedColumns = map[string][]relocationRule{
+	"candidate_artifacts": {
+		{
+			description: "candidate_artifact_locations.ref",
+			statement: `INSERT INTO candidate_artifact_locations (artifact_id, ref, source_id, first_seen_at, last_seen_at)
+				VALUES ($1, $2, 'legacy', $3, $3)
+				ON CONFLICT (artifact_id, ref) DO NOTHING`,
+			sourceColumn: []string{"id", "ref", "created_at"},
+		},
+		{
+			description: "bundle_candidate_artifacts.bundle_id",
+			statement: `INSERT INTO bundle_candidate_artifacts (bundle_id, artifact_id, linked_at)
+				SELECT $1::text, $2::text, $3::timestamptz WHERE $1 IS NOT NULL AND $1 <> ''
+				ON CONFLICT (bundle_id, artifact_id) DO NOTHING`,
+			sourceColumn: []string{"bundle_id", "id", "created_at"},
+		},
+	},
+}
+
+// insertableColumns splits the source columns into the ones the target still has
+// (with their INSERT positions) and the moved ones, which the caller handles
+// through relocatedColumns.
+func insertableColumns(table string, columns []string) (kept []string, positions map[string]int) {
+	moved := sourceOnlyColumns[table]
+	kept = make([]string, 0, len(columns))
+	positions = make(map[string]int, len(columns))
+	for _, column := range columns {
+		if _, isMoved := moved[column]; isMoved {
+			continue
+		}
+		positions[column] = len(kept)
+		kept = append(kept, column)
+	}
+	return kept, positions
+}
+
+// relocateColumns applies the table's relocation rules to one converted row.
+func relocateColumns(ctx context.Context, tx *sql.Tx, table string, converted map[string]any) error {
+	for _, rule := range relocatedColumns[table] {
+		args := make([]any, len(rule.sourceColumn))
+		for i, name := range rule.sourceColumn {
+			args[i] = converted[name]
+		}
+		if _, err := tx.ExecContext(ctx, rule.statement, args...); err != nil {
+			return fmt.Errorf("relocate %s into %s: %w", table, rule.description, err)
+		}
+	}
+	return nil
+}
+
+// preSeededTables are tables whose PostgreSQL migrations insert canonical rows
+// (literal VALUES) before any SQLite data is copied, so a plain INSERT collides
+// on the primary key. For exactly these tables the imported instance is the
+// authority for the *data*: the source row replaces the migration's default,
+// because a migrated instance must keep its own policy/source version — reseeding
+// 0 there would make clients holding newer checkpoints observe a regression.
+//
+// Anywhere else a conflict stays a hard error: silently dropping a row would turn
+// data loss into a green import.
+var preSeededTables = map[string]string{
+	"authorization_source_version": "id",
+	"policy_version":               "id",
+}
+
+// upsertClause builds the ON CONFLICT branch for a pre-seeded singleton: the
+// source value wins for every column that is not the conflict key.
+func upsertClause(primaryKey string, columns []string) string {
+	assignments := make([]string, 0, len(columns))
+	for _, column := range columns {
+		if column == primaryKey {
+			continue
+		}
+		assignments = append(assignments, fmt.Sprintf("%s = EXCLUDED.%s", quoteIdentifier(column), quoteIdentifier(column)))
+	}
+	if len(assignments) == 0 {
+		return fmt.Sprintf(" ON CONFLICT (%s) DO NOTHING", quoteIdentifier(primaryKey))
+	}
+	return fmt.Sprintf(" ON CONFLICT (%s) DO UPDATE SET %s", quoteIdentifier(primaryKey), strings.Join(assignments, ", "))
+}
+
 // runBackfills executes data transformations that migrations applied before
 // SQLite rows were copied into the PostgreSQL transaction.
 func runBackfills(ctx context.Context, tx *sql.Tx) ([]string, error) {
@@ -423,13 +586,11 @@ func runBackfills(ctx context.Context, tx *sql.Tx) ([]string, error) {
 				SET terminal_at = updated_at
 				WHERE status IN ('succeeded', 'failed', 'cancelled', 'timeout') AND terminal_at IS NULL`,
 		},
-		{
-			name: "candidate_artifacts_join",
-			query: `INSERT INTO bundle_candidate_artifacts (bundle_id, candidate_artifact_id)
-				SELECT bundle_id, id FROM candidate_artifacts
-				WHERE bundle_id IS NOT NULL AND bundle_id <> ''
-				ON CONFLICT DO NOTHING`,
-		},
+		// The former "candidate_artifacts_join" backfill is gone: it wrote the
+		// legacy join column name (candidate_artifact_id) and read the legacy
+		// candidate_artifacts.bundle_id, neither of which the target has. The link
+		// rows are now written by the relocation rule while candidate_artifacts is
+		// copied, so the backfill would be redundant even if it still compiled.
 		{
 			name: "values_state_version",
 			query: `UPDATE values_revisions
@@ -454,8 +615,8 @@ func runBackfills(ctx context.Context, tx *sql.Tx) ([]string, error) {
 					SELECT 1 FROM values_revisions AS newer
 					WHERE newer.release_definition_id = current.release_definition_id
 					  AND newer.status = 'approved'
-					  AND (newer.revision > current.revision
-						OR (newer.revision = current.revision AND newer.id > current.id))
+					  AND (newer.version > current.version
+						OR (newer.version = current.version AND newer.id > current.id))
 				  )`,
 		},
 	}

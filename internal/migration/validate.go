@@ -29,6 +29,16 @@ func validateMigration(
 		if err != nil {
 			return fmt.Errorf("data_import_mismatch: count target %s: %w", tbl, err)
 		}
+		if reason, derived := derivedTargetTables[tbl]; derived {
+			// The target builds these rows from legacy columns instead of copying
+			// them one-for-one, so an exact count match is the wrong assertion.
+			// Losing rows is still a failure: that is what a broken derivation
+			// looks like.
+			if tgtCount < srcCount {
+				return fmt.Errorf("data_import_mismatch: derived table %s lost rows: source=%d, target=%d (%s)", tbl, srcCount, tgtCount, reason)
+			}
+			continue
+		}
 		if srcCount != tgtCount {
 			return fmt.Errorf("data_import_mismatch: table %s row count mismatch: source=%d, target=%d", tbl, srcCount, tgtCount)
 		}
@@ -49,6 +59,15 @@ func validateMigration(
 	}
 
 	return nil
+}
+
+// derivedTargetTables are tables PostgreSQL fills by transformation rather than by
+// copying rows one-for-one: a migration moved legacy columns into them, and the
+// importer writes those rows while copying the source table. They are exempt from
+// exact count equality, but never allowed to hold fewer rows than the source.
+var derivedTargetTables = map[string]string{
+	"bundle_candidate_artifacts":   "rebuilt from the legacy candidate_artifacts.bundle_id link",
+	"candidate_artifact_locations": "rebuilt from the legacy candidate_artifacts.ref location",
 }
 
 func countRows(ctx context.Context, db interface {

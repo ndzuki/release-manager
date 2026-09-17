@@ -204,10 +204,10 @@ jobs:
   # so CI never exercised the PostgreSQL SQL at all. This job runs a real
   # PostgreSQL 16 and the DB-backed suites against it.
   #
-  # Scope note: ./internal/migration/... is deliberately NOT included yet. Its
-  # end-to-end SQLite->PostgreSQL import test exposes a backlog of parity gaps
-  # (TASK-108) that is being worked separately; running it here would keep this
-  # job red for reasons unrelated to the code under review.
+  # ./internal/migration/... is included since TASK-108: its end-to-end
+  # SQLite->PostgreSQL import test used to expose a backlog of parity gaps (a
+  # missing table, unregistered boolean/array/JSONB columns, pre-seeded singletons
+  # and stale backfills), all of which are fixed.
   test-postgres-integration:
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 25
@@ -253,7 +253,7 @@ jobs:
         env:
           POSTGRES_TEST_DSN: postgres://postgres:postgres@localhost:55432/release_manager?sslmode=disable
         run: |
-          go test -tags integration -count=1 ./internal/store/postgres/... ./internal/postgres/...
+          go test -tags integration -count=1 ./internal/store/postgres/... ./internal/postgres/... ./internal/migration/...
 
       - name: Stop PostgreSQL
         if: always()
