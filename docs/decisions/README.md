@@ -4,7 +4,7 @@
 ADR 的权威源在知识库 Vault：`Projects/001-release-manager/Notes/adr/`；
 本仓库副本不独立演进，决策内容的修订、状态变更与关联关系更新以知识库版本为准。
 
-共 22 篇：ADR-000 ～ ADR-021，按编号升序索引如下。
+共 23 篇：ADR-000 ～ ADR-022，按编号升序索引如下。
 
 | ADR | 标题 | 状态 | 日期 |
 | --- | --- | --- | --- |
@@ -30,6 +30,7 @@ ADR 的权威源在知识库 Vault：`Projects/001-release-manager/Notes/adr/`�
 | [ADR-019](ADR-019-use-redis-as-auth-session-cache-and-refresh-token-blacklist-with-postgresql-authority-and-fail-closed-semantics.md) | Use Redis as auth session cache and refresh-token blacklist with PostgreSQL authority and fail-closed semantics | accepted | 2026-08-05 |
 | [ADR-020](ADR-020-use-hashicorp-vault-go-api-for-notifier-secretresolver.md) | Use HashiCorp Vault Go API for notifier SecretResolver | accepted | 2026-08-05 |
 | [ADR-021](ADR-021-release-api-synchronous-authorization-decision.md) | release-api 审计授权经同步判定 RPC（透传用户 JWT） | accepted | 2026-09-16 |
+| [ADR-022](ADR-022-artifact-signature-verification-stays-ed25519.md) | 制品签名校验保持 Ed25519 信任根主路径 | accepted | 2026-09-17 |
 
 ## ADR → 相关任务
 
@@ -60,3 +61,4 @@ ADR 的权威源在知识库 Vault：`Projects/001-release-manager/Notes/adr/`�
 | ADR-019 | TASK-073 |
 | ADR-020 | TASK-031 |
 | ADR-021 | TASK-103 |
+| ADR-022 | TASK-106 |
