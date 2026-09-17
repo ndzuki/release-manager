@@ -658,15 +658,7 @@ func (s *operationStore) List(ctx context.Context, definitionID string) ([]*stor
 	}
 	defer rows.Close()
 
-	var ops []*store.Operation
-	for rows.Next() {
-		op, err := scanOperationFromRows(rows)
-		if err != nil {
-			return nil, err
-		}
-		ops = append(ops, op)
-	}
-	return ops, rows.Err()
+	return collectRows(rows, scanOperationFromRows)
 }
 
 // ListNonTerminal returns all operations that are not in a terminal state.
@@ -683,15 +675,7 @@ func (s *operationStore) ListNonTerminal(ctx context.Context) ([]*store.Operatio
 	}
 	defer rows.Close()
 
-	var ops []*store.Operation
-	for rows.Next() {
-		op, err := scanOperationFromRows(rows)
-		if err != nil {
-			return nil, err
-		}
-		ops = append(ops, op)
-	}
-	return ops, rows.Err()
+	return collectRows(rows, scanOperationFromRows)
 }
 
 type operationQueryer interface {
@@ -755,7 +739,7 @@ func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operatio
 		deliveryStatus, effectStatus)
 }
 
-func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
+func scanOperationFromRows(row rowScanner) (*store.Operation, error) {
 	var (
 		id, opType, status, defID, idemKey, idemScope, reqHash string
 		stateVer, expectedRev, targetRev                       int
@@ -771,7 +755,7 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 		deliveryStatus, effectStatus                           sql.NullString
 	)
 
-	err := rows.Scan(
+	err := row.Scan(
 		&id, &opType, &status, &defID,
 		&idemKey, &idemScope, &reqHash, &stateVer,
 		&bundleID, &bundleChartRef, &bundleChartDigest, &imageRefsJSON, &imageDigestsJSON, &policyVersion,

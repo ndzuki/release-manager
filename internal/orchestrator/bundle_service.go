@@ -58,10 +58,7 @@ func (s *BundleService) SubmitBundle(
 	if err := s.validateSubmitBundle(req.Msg); err != nil {
 		return nil, err
 	}
-	bundle, candidates, err := bundleFromProto(req.Msg)
-	if err != nil {
-		return nil, err
-	}
+	bundle, candidates := bundleFromProto(req.Msg)
 	requestHash := canonicalBundleDigest(req.Msg)
 	bundle.DigestAlg = "sha256"
 	bundle.DigestValue = requestHash
@@ -363,7 +360,9 @@ func (s *BundleService) validateSourceRef(raw string, chart bool) error {
 	return bundleError(connect.CodeInvalidArgument, "source_not_allowed", fmt.Errorf("source %q is not in the allowlist", parsed.Host))
 }
 
-func bundleFromProto(msg *orchestratorv1.SubmitBundleRequest) (*store.ReleaseBundle, []*store.CandidateArtifact, error) {
+// bundleFromProto maps the request message onto the store model. Every field is
+// copied verbatim, so it cannot fail; validation lives in validateSubmitBundle.
+func bundleFromProto(msg *orchestratorv1.SubmitBundleRequest) (*store.ReleaseBundle, []*store.CandidateArtifact) {
 	bundle := &store.ReleaseBundle{
 		Name: strings.TrimSpace(msg.GetName()), ChartRef: msg.GetChartRef(), ChartVersion: strings.TrimSpace(msg.GetChartVersion()),
 		ChartDigest: msg.GetChartDigest(), GitCommit: strings.TrimSpace(msg.GetGitCommit()), PipelineID: strings.TrimSpace(msg.GetPipelineId()),
@@ -384,7 +383,7 @@ func bundleFromProto(msg *orchestratorv1.SubmitBundleRequest) (*store.ReleaseBun
 	if evidence := msg.GetProvenance(); evidence != nil {
 		bundle.ProvenanceRef, bundle.ProvenanceDigest = evidence.GetRef(), evidence.GetDigest()
 	}
-	return bundle, deriveCandidates(msg), nil
+	return bundle, deriveCandidates(msg)
 }
 
 func deriveCandidates(msg *orchestratorv1.SubmitBundleRequest) []*store.CandidateArtifact {

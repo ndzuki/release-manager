@@ -40,7 +40,7 @@ const upgradeTimeout = 90 * time.Second
 func TestUpgradeSDK(t *testing.T) {
 	t.Parallel()
 
-	_, adminConfig, adminClient := loadCluster(t)
+	adminConfig, adminClient := loadCluster(t)
 	assertNoHelmOrKubectl(t)
 
 	t.Run("revision 2 upgrade persists valid 63-char rm_input_digest label", func(t *testing.T) {

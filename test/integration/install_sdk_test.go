@@ -35,7 +35,7 @@ const installTimeout = 30 * time.Second
 func TestInstallSDK(t *testing.T) {
 	t.Parallel()
 
-	_, adminConfig, adminClient := loadCluster(t)
+	adminConfig, adminClient := loadCluster(t)
 	assertNoHelmOrKubectl(t)
 
 	t.Run("installs without helm or kubectl", func(t *testing.T) {
@@ -206,7 +206,7 @@ func TestInstallSDK(t *testing.T) {
 	})
 }
 
-func loadCluster(t *testing.T) (string, *rest.Config, kubernetes.Interface) {
+func loadCluster(t *testing.T) (*rest.Config, kubernetes.Interface) {
 	t.Helper()
 
 	kubeconfig := os.Getenv("KUBECONFIG")
@@ -220,7 +220,7 @@ func loadCluster(t *testing.T) (string, *rest.Config, kubernetes.Interface) {
 	require.NoError(t, err)
 	_, err = client.Discovery().ServerVersion()
 	require.NoError(t, err)
-	return kubeconfig, config, client
+	return config, client
 }
 
 func assertNoHelmOrKubectl(t *testing.T) {
@@ -240,12 +240,12 @@ func assertNoHelmOrKubectl(t *testing.T) {
 	}
 }
 
-func isolatedTarget(t *testing.T, client kubernetes.Interface, suffix string) (string, string) {
+func isolatedTarget(t *testing.T, client kubernetes.Interface, suffix string) (namespace, releaseName string) {
 	t.Helper()
 
 	unique := fmt.Sprintf("%d", time.Now().UnixNano())
-	namespace := "sdk-install-" + suffix + "-" + unique
-	releaseName := "release-" + suffix + "-" + unique
+	namespace = "sdk-install-" + suffix + "-" + unique
+	releaseName = "release-" + suffix + "-" + unique
 
 	_, err := client.CoreV1().Namespaces().Create(t.Context(), &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{Name: namespace},

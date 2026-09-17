@@ -142,11 +142,11 @@ func (s *orchSvc) operatorEndpoint() string {
 // internal/app.ExtraServersProvider interface, and unexported method names
 // are package-scoped in Go — an unexported method here could never satisfy
 // the cross-package interface (smoke-test catch, 2026-08-11).
-func (s *orchSvc) ExtraServers() ([]*http.Server, error) {
+func (s *orchSvc) ExtraServers() []*http.Server {
 	if s.gateway == nil {
-		return nil, nil
+		return nil
 	}
-	return []*http.Server{s.gateway}, nil
+	return []*http.Server{s.gateway}
 }
 
 // buildGatewayServer assembles the mTLS agent gateway listener (TASK-075 plan

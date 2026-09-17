@@ -82,9 +82,9 @@ func kubernetesRESTConfig(kubeConfig string) (*rest.Config, error) {
 }
 
 type emergencyWorkload struct {
-	uid                string
-	containers         *[]corev1.Container
-	replicas           **int32
+	uid                 string
+	containers          *[]corev1.Container
+	replicas            **int32
 	workloadAnnotations *map[string]string
 	podAnnotations      *map[string]string
 	update              func(context.Context) error
@@ -96,8 +96,8 @@ type emergencySnapshotEnvelope struct {
 }
 
 type emergencyImageSnapshot struct {
-	WorkloadUID   string `json:"workload_uid"`
-	Container     string `json:"container"`
+	WorkloadUID    string `json:"workload_uid"`
+	Container      string `json:"container"`
 	ImageReference string `json:"image_reference"`
 }
 
@@ -118,6 +118,7 @@ type emergencyAnnotationsSnapshot struct {
 }
 
 // Execute verifies workload identity, applies one typed update, and returns sanitized before/after JSON.
+//
 //nolint:gocyclo // emergency executor maps 3 oneof branches through common load/apply/snapshot flow.
 func (e *EmergencyCommandExecutor) Execute(ctx context.Context, command *operatorv1.EmergencyCommand) (string, error) {
 	if e == nil || e.client == nil {
@@ -194,40 +195,58 @@ func (e *EmergencyCommandExecutor) loadWorkload(ctx context.Context, command *op
 	}
 }
 
-func deploymentWorkload(client kubernetes.Interface, resource *appsv1.Deployment) *emergencyWorkload {
+// newEmergencyWorkload assembles the shared handle for one typed workload.
+// Deployment, StatefulSet and DaemonSet expose the same fields to the emergency
+// executor, so only the kind-specific Update call differs between them.
+func newEmergencyWorkload(
+	uid string,
+	containers *[]corev1.Container,
+	replicas **int32,
+	//nolint:gocritic // ptrToRefParam: the handle stores the pointer so applyEmergencyAnnotations can replace a nil map in place.
+	workloadAnnotations, podAnnotations *map[string]string,
+	update func(context.Context) error,
+) *emergencyWorkload {
 	return &emergencyWorkload{
-		uid: string(resource.UID), containers: &resource.Spec.Template.Spec.Containers, replicas: &resource.Spec.Replicas,
-		workloadAnnotations: &resource.Annotations, podAnnotations: &resource.Spec.Template.Annotations,
-		update: func(ctx context.Context) error {
+		uid: uid, containers: containers, replicas: replicas,
+		workloadAnnotations: workloadAnnotations, podAnnotations: podAnnotations,
+		update: update,
+	}
+}
+
+func deploymentWorkload(client kubernetes.Interface, resource *appsv1.Deployment) *emergencyWorkload {
+	return newEmergencyWorkload(
+		string(resource.UID), &resource.Spec.Template.Spec.Containers, &resource.Spec.Replicas,
+		&resource.Annotations, &resource.Spec.Template.Annotations,
+		func(ctx context.Context) error {
 			_, err := client.AppsV1().Deployments(resource.Namespace).Update(ctx, resource, metav1.UpdateOptions{})
 			return err
 		},
-	}
+	)
 }
 
 func statefulSetWorkload(client kubernetes.Interface, resource *appsv1.StatefulSet) *emergencyWorkload {
-	return &emergencyWorkload{
-		uid: string(resource.UID), containers: &resource.Spec.Template.Spec.Containers, replicas: &resource.Spec.Replicas,
-		workloadAnnotations: &resource.Annotations, podAnnotations: &resource.Spec.Template.Annotations,
-		update: func(ctx context.Context) error {
+	return newEmergencyWorkload(
+		string(resource.UID), &resource.Spec.Template.Spec.Containers, &resource.Spec.Replicas,
+		&resource.Annotations, &resource.Spec.Template.Annotations,
+		func(ctx context.Context) error {
 			_, err := client.AppsV1().StatefulSets(resource.Namespace).Update(ctx, resource, metav1.UpdateOptions{})
 			return err
 		},
-	}
+	)
 }
 
 func daemonSetWorkload(client kubernetes.Interface, resource *appsv1.DaemonSet) *emergencyWorkload {
-	return &emergencyWorkload{
-		uid: string(resource.UID), containers: &resource.Spec.Template.Spec.Containers,
-		workloadAnnotations: &resource.Annotations, podAnnotations: &resource.Spec.Template.Annotations,
-		update: func(ctx context.Context) error {
+	return newEmergencyWorkload(
+		string(resource.UID), &resource.Spec.Template.Spec.Containers, nil,
+		&resource.Annotations, &resource.Spec.Template.Annotations,
+		func(ctx context.Context) error {
 			_, err := client.AppsV1().DaemonSets(resource.Namespace).Update(ctx, resource, metav1.UpdateOptions{})
 			return err
 		},
-	}
+	)
 }
 
-func applyEmergencyImage(workload *emergencyWorkload, change *operatorv1.EmergencySetContainerImage) (any, any, error) {
+func applyEmergencyImage(workload *emergencyWorkload, change *operatorv1.EmergencySetContainerImage) (before, after any, err error) {
 	if change == nil || strings.TrimSpace(change.GetContainer()) == "" || strings.TrimSpace(change.GetImageReference()) == "" {
 		return nil, nil, emergencyExecutionError("invalid_command", errors.New("container and image reference are required"))
 	}
@@ -236,15 +255,15 @@ func applyEmergencyImage(workload *emergencyWorkload, change *operatorv1.Emergen
 		if container.Name != change.GetContainer() {
 			continue
 		}
-		before := emergencyImageSnapshot{WorkloadUID: workload.uid, Container: container.Name, ImageReference: container.Image}
+		beforeImage := emergencyImageSnapshot{WorkloadUID: workload.uid, Container: container.Name, ImageReference: container.Image}
 		container.Image = change.GetImageReference()
-		after := emergencyImageSnapshot{WorkloadUID: workload.uid, Container: container.Name, ImageReference: container.Image}
-		return before, after, nil
+		afterImage := emergencyImageSnapshot{WorkloadUID: workload.uid, Container: container.Name, ImageReference: container.Image}
+		return beforeImage, afterImage, nil
 	}
 	return nil, nil, emergencyExecutionError("container_not_found", errors.New("container was not found in workload"))
 }
 
-func applyEmergencyReplicas(workload *emergencyWorkload, change *operatorv1.EmergencySetReplicas) (any, any, error) {
+func applyEmergencyReplicas(workload *emergencyWorkload, change *operatorv1.EmergencySetReplicas) (before, after any, err error) {
 	if change == nil || workload.replicas == nil {
 		return nil, nil, emergencyExecutionError("workload_kind_not_supported", errors.New("workload does not support replicas"))
 	}
@@ -252,14 +271,14 @@ func applyEmergencyReplicas(workload *emergencyWorkload, change *operatorv1.Emer
 	if *workload.replicas != nil {
 		beforeReplicas = **workload.replicas
 	}
-	before := emergencyReplicasSnapshot{WorkloadUID: workload.uid, Replicas: beforeReplicas}
+	beforeSnapshot := emergencyReplicasSnapshot{WorkloadUID: workload.uid, Replicas: beforeReplicas}
 	replicas := change.GetReplicas()
 	*workload.replicas = &replicas
-	after := emergencyReplicasSnapshot{WorkloadUID: workload.uid, Replicas: replicas}
-	return before, after, nil
+	afterSnapshot := emergencyReplicasSnapshot{WorkloadUID: workload.uid, Replicas: replicas}
+	return beforeSnapshot, afterSnapshot, nil
 }
 
-func applyEmergencyAnnotations(workload *emergencyWorkload, change *operatorv1.EmergencySetApprovedAnnotations) (any, any, error) {
+func applyEmergencyAnnotations(workload *emergencyWorkload, change *operatorv1.EmergencySetApprovedAnnotations) (before, after any, err error) {
 	if change == nil || len(change.GetEntries()) == 0 {
 		return nil, nil, emergencyExecutionError("invalid_command", errors.New("annotation entries are required"))
 	}

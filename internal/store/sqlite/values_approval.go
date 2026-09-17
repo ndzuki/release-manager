@@ -202,6 +202,7 @@ func (s *valuesApprovalStore) transition(
 	return approvalResult, nil
 }
 
+//nolint:dupl // Values approval mirrors the shared transactional idempotency record protocol (see lookupOperationCancelIdempotency).
 func lookupIdempotency(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -228,6 +229,8 @@ func lookupIdempotency(
 	}
 	return &result, nil
 }
+
+//nolint:dupl // Values approval mirrors the shared transactional idempotency record protocol (see insertOperationCancelIdempotency).
 func insertIdempotency(
 	ctx context.Context,
 	tx *sql.Tx,

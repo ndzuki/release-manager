@@ -71,8 +71,8 @@ func (s *validationOutboxStore) ClaimPending(ctx context.Context, now time.Time,
 			return fmt.Errorf("mark validation outbox entries running: %w", err)
 		}
 		entries = make([]store.ValidationOutboxEntry, len(rows))
-		for index, row := range rows {
-			entries[index] = row.toStore()
+		for index := range rows {
+			entries[index] = rows[index].toStore()
 			entries[index].Status = store.ValidationRunning
 			entries[index].UpdatedAt = now.UTC()
 		}

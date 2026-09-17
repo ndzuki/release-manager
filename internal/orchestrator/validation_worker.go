@@ -71,8 +71,8 @@ func (w *ValidationWorker) processOutbox(ctx context.Context) {
 		w.logger.Error("claim validation outbox entries", "error", err)
 		return
 	}
-	for _, e := range entries {
-		w.processEntry(ctx, e)
+	for index := range entries {
+		w.processEntry(ctx, entries[index])
 	}
 }
 
