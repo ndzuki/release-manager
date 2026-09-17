@@ -53,8 +53,8 @@
 
 ### PostgreSQL 覆盖与平权（Fixed）
 
-- CI 新增 `test-postgres-integration` job：真实 PostgreSQL 16 + `POSTGRES_TEST_DSN`，跑 `internal/store/postgres` 与 `internal/postgres` 的 `integration` 用例——此前这些用例在 CI 里全部 skip，生产引擎的 SQL 从未被 CI 执行过（PR #NNN，TASK-107）。
-- 修掉两处双引擎平权缺陷：PostgreSQL 迁移从未创建 `inventory_sync_requests`（PG store 却在查询它，生产首次使用即 `relation does not exist`），以及导入器 `booleanColumns` 漏登记 4 张表的布尔列；剩余端到端导入缺口登记为 TASK-108 并在 job 的 scope note 里写明（PR #NNN，TASK-107）。
+- CI 新增 `test-postgres-integration` job：真实 PostgreSQL 16 + `POSTGRES_TEST_DSN`，跑 `internal/store/postgres` 与 `internal/postgres` 的 `integration` 用例——此前这些用例在 CI 里全部 skip，生产引擎的 SQL 从未被 CI 执行过（PR #123，TASK-107）。
+- 修掉两处双引擎平权缺陷：PostgreSQL 迁移从未创建 `inventory_sync_requests`（PG store 却在查询它，生产首次使用即 `relation does not exist`），以及导入器 `booleanColumns` 漏登记 4 张表的布尔列；剩余端到端导入缺口登记为 TASK-108 并在 job 的 scope note 里写明（PR #123，TASK-107）。
 
 ### 开发环境自举（Fixed）
 
