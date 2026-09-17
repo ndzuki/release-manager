@@ -53,8 +53,8 @@ Makefile 内没有对应的转发 target，需在 `web/` 目录内直接运行�
 | --- | --- | --- | --- |
 | `make test` | 全部包 `go test -race ./...` | 无 | 本地 + CI（CI 拆包见上） |
 | `make test-coverage` | 同上 + coverage profile | 无 | 本地 + CI（`test`/`test-sqlite`/`test-sdkcheck` job 各自产覆盖） |
-| `make lint-changed` | 与 CI 完全同口径的 lint（同工具版本 + `--new-from-rev=$(LINT_BASE)`，默认 `origin/main`）；工具链升到 Go 1.27 + golangci-lint v2.13.2 后，`make lint`（全量）会报约 45 条**既有**告警基线（gocyclo/dupl/gocritic 等，TASK-109 登记待清理），CI 从来只 lint 变更范围 | `golangci-lint`（v2.13.2） | 本地；等价于 CI 的 `Run lint (changed code only)` |
-| `make lint` | `golangci-lint run` | `golangci-lint` | 本地；CI 用 `golangci-lint-action` v2.12.2 且仅 lint 变更（`--new-from-rev`） |
+| `make lint-changed` | 与 CI 完全同口径的 lint（同工具版本 + `--new-from-rev=$(LINT_BASE)`，默认 `origin/main`）；只 lint 变更范围，所以不会让无关的既有告警阻塞 PR | `golangci-lint`（v2.13.2） | 本地；等价于 CI 的 `Run lint (changed code only)` |
+| `make lint` | `golangci-lint run`（全量，0 issues）。TASK-109 的 Go 1.27 + golangci-lint v2.13.2 升级曾暴露约 45 条既有告警（gocyclo/dupl/gocritic 等），TASK-110 已逐条修复或定点抑制，全量 lint 重新成为可用信号 | `golangci-lint`（v2.13.2） | 本地；CI 用 `golangci-lint-action`（`version: v2.13.2`）且仅 lint 变更（`--new-from-rev`） |
 | `make sdk-check` | SDK-only 静态门禁（REQ-037）：`os_exec_import`、`fork_exec`、`shell_wrapper`、`forbidden_binary_invocation`、`expired_exception` | 无 | 本地 + CI `sdk-check` job（同一命令、同一例外文件、同一扫描范围） |
 | `make check-reqs` | 校验原子需求文档结构（`find . -path '*/Requirements/REQ-*.md'` → `cmd/reqcheck`）；**找不到 REQ 文档时打印提示并跳过** | 无 | 本地（CI 未接入该 target） |
 | `make vulncheck` | 对模块跑 govulncheck（REQ-008 §8-8），只对**代码实际调用**的漏洞失败；无上游修复的公告在 `vulncheck.exceptions.yaml` 登记（owner + 补偿控制 + 复审日期，过期即失败），CI 另跑 `vulncheck` job | `govulncheck`（`make vulncheck` 自动安装 `GOVULNCHECK_VERSION`）+ 漏洞库网络 | 本地 + CI `vulncheck` job（`scripts/vulncheck.sh`） |
