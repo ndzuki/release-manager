@@ -53,7 +53,7 @@
 
 ### 开发环境自举（Fixed）
 
-- 修复 host-run dev 路径的授权自举死锁：release-auth 与 release-orchestrator 此前各用各的 SQLite 文件，而 orchestrator 的 Casbin 投影是**从本库的 `organizations`/`org_members` 行编译**的，于是策略为空、连 `ListCustomers`/`CreateCustomer` 都恒 `permission_denied`，`devseed` 第一步即失败。两者现共享 `data/management.db`（集群路径天然共享同一个 Postgres），并新增 `internal/config` 门禁钉死该契约（含 notifier 独立库的例外与负控制），运行时在投影为空时打印可操作警告（PR #NNN，TASK-104）。
+- 修复 host-run dev 路径的授权自举死锁：release-auth 与 release-orchestrator 此前各用各的 SQLite 文件，而 orchestrator 的 Casbin 投影是**从本库的 `organizations`/`org_members` 行编译**的，于是策略为空、连 `ListCustomers`/`CreateCustomer` 都恒 `permission_denied`，`devseed` 第一步即失败。两者现共享 `data/management.db`（集群路径天然共享同一个 Postgres），并新增 `internal/config` 门禁钉死该契约（含 notifier 独立库的例外与负控制），运行时在投影为空时打印可操作警告（PR #122，TASK-104）。
 
 ### 通知面认证与出站（Fixed）
 
