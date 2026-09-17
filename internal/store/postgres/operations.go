@@ -535,12 +535,32 @@ func (s *operationStore) transition(
 	}
 
 	now := nowUTC()
+	updated, err := applyOperationTransition(ctx, tx, current, status, stateVersion, lastError, now)
+	if err != nil {
+		return nil, err
+	}
+	if err := recordOperationTransition(ctx, tx, current, updated, lastError, now); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit operation transition: %w", err)
+	}
+	return updated, nil
+}
+
+// applyOperationTransition writes the new status row and returns the updated
+// in-memory operation. The WHERE clause repeats the optimistic-lock check so a
+// concurrent writer cannot slip between the read and the update.
+func applyOperationTransition(
+	ctx context.Context, tx *Tx, current *store.Operation,
+	status store.OperationStatus, stateVersion int, lastError, now string,
+) (*store.Operation, error) {
 	result, err := tx.ExecContext(ctx, `
 		UPDATE operations
 		SET status = ?, state_version = state_version + 1, last_error = ?, updated_at = ?,
 		    terminal_at = CASE WHEN ? THEN ? ELSE terminal_at END
 		WHERE id = ? AND state_version = ?
-	`, string(status), lastError, now, status.IsTerminal(), now, id, stateVersion)
+	`, string(status), lastError, now, status.IsTerminal(), now, current.ID, stateVersion)
 	if err != nil {
 		return nil, fmt.Errorf("update operation status: %w", err)
 	}
@@ -564,7 +584,33 @@ func (s *operationStore) transition(
 		terminalAt := updated.UpdatedAt
 		updated.TerminalAt = &terminalAt
 	}
+	return &updated, nil
+}
 
+// recordOperationTransition stamps the preflight lifecycle terminal time and
+// records the state change for one transition.
+func recordOperationTransition(
+	ctx context.Context, tx *Tx, current, updated *store.Operation, lastError, now string,
+) error {
+	if updated.Status.IsTerminal() {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE preflight_lifecycles
+			SET operation_terminal_at = ?
+			WHERE operation_id = ? AND operation_terminal_at IS NULL
+		`, now, updated.ID); err != nil {
+			return fmt.Errorf("set preflight operation terminal: %w", err)
+		}
+	}
+	return recordOperationStateChange(ctx, tx, current, updated, lastError)
+}
+
+// recordOperationStateChange writes the state-change event and the timeline
+// entries (including the error entry for a failed/timeout transition). It is
+// shared by the standard transition path and the emergency finish path, which
+// both commit it inside the same transaction as the status update.
+func recordOperationStateChange(
+	ctx context.Context, tx *Tx, current, updated *store.Operation, lastError string,
+) error {
 	ev := &store.OperationStateChangedEvent{
 		ID:            uuid.New().String(),
 		OperationID:   updated.ID,
@@ -576,44 +622,32 @@ func (s *operationStore) transition(
 		CreatedAt:     updated.UpdatedAt,
 	}
 	if err := insertOperationEvent(ctx, tx, ev); err != nil {
-		return nil, err
+		return err
 	}
 
-	if status.IsTerminal() {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE preflight_lifecycles
-			SET operation_terminal_at = ?
-			WHERE operation_id = ? AND operation_terminal_at IS NULL
-		`, now, id); err != nil {
-			return nil, fmt.Errorf("set preflight operation terminal: %w", err)
-		}
-	}
 	timelineData, err := json.Marshal(store.StateTransitionTimelineData{
 		FromState: string(current.Status), ToState: string(updated.Status), ErrorCode: lastError,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("encode operation transition timeline: %w", err)
+		return fmt.Errorf("encode operation transition timeline: %w", err)
 	}
 	if _, err := appendTimelineEntry(ctx, tx, &store.OperationTimelineEntry{
 		OperationID: updated.ID, OperationStateVersion: updated.StateVersion,
 		Kind: string(store.TimelineEntryStateTransition), Data: timelineData, CreatedAt: updated.UpdatedAt,
 	}); err != nil {
-		return nil, err
+		return err
 	}
 	if (updated.Status == store.StatusFailed || updated.Status == store.StatusTimeout) && lastError != "" {
 		errorEntry, err := store.ErrorTimelineEntry(updated.ID, updated.StateVersion, lastError)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		errorEntry.CreatedAt = updated.UpdatedAt
 		if _, err := appendTimelineEntry(ctx, tx, errorEntry); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit operation transition: %w", err)
-	}
-	return &updated, nil
+	return nil
 }
 
 func (s *operationStore) HasActiveForDefinition(ctx context.Context, definitionID string) (bool, error) {

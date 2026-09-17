@@ -414,9 +414,9 @@ func (s *inventoryStore) Query(ctx context.Context, query store.InventoryQuery) 
 // inventoryFilterWhere builds the shared WHERE fragments for the count and page
 // queries. statusExpression is the computed consistency-status expression, which
 // the status filter compares against.
-func inventoryFilterWhere(query store.InventoryQuery, statusExpression string) ([]string, []any) {
-	where := []string{"ri.customer_id = ?", "ri.cluster_id = ?"}
-	args := []any{query.CustomerID, query.ClusterID}
+func inventoryFilterWhere(query store.InventoryQuery, statusExpression string) (where []string, args []any) {
+	where = []string{"ri.customer_id = ?", "ri.cluster_id = ?"}
+	args = []any{query.CustomerID, query.ClusterID}
 	if query.Status != "" {
 		where = append(where, statusExpression+" = ?")
 		args = append(args, string(query.Status))

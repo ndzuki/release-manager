@@ -255,9 +255,9 @@ func (s *bundleStore) List(ctx context.Context, filter store.BundleListFilter) (
 // drop exactly one fragment and two arguments when a page token is present.
 func bundleListWhere(
 	filter store.BundleListFilter, statuses []store.BundleStatus, queryHash string,
-) ([]string, []any, error) {
-	where := []string{"b.status IN ?"}
-	args := []any{statuses}
+) (where []string, args []any, err error) {
+	where = []string{"b.status IN ?"}
+	args = []any{statuses}
 	if filter.ReleaseDefinitionID != "" {
 		where = append(where, `EXISTS (
 			SELECT 1 FROM release_definitions AS d
