@@ -43,18 +43,21 @@ type orchSvc struct {
 	configPath string
 	authURL    string
 
-	gateway       *http.Server
-	store         store.Store
-	cleanup       *orchestrator.CleanupService
-	emergency     *orchestrator.Service
-	pingDB        func(context.Context) error
-	bundleSvc     *orchestrator.BundleService
-	validation    *orchestrator.ValidationWorker
-	auditEmitter  audit.Sink
-	authorizer    *authorization.Module
-	enforcer      *auth.Enforcer
-	traceShutdown func(context.Context) error
-	trustResolver trust.RootResolver
+	gateway      *http.Server
+	store        store.Store
+	cleanup      *orchestrator.CleanupService
+	emergency    *orchestrator.Service
+	pingDB       func(context.Context) error
+	bundleSvc    *orchestrator.BundleService
+	validation   *orchestrator.ValidationWorker
+	auditEmitter audit.Sink
+	// sessionRegistry expires operator sessions that stop heartbeating
+	// (REQ-044/TASK-098); the agent is the only writer of last_heartbeat.
+	sessionRegistry *operator.SessionRegistry
+	authorizer      *authorization.Module
+	enforcer        *auth.Enforcer
+	traceShutdown   func(context.Context) error
+	trustResolver   trust.RootResolver
 
 	// streamRegistry is the shared command-stream registry used to revoke live
 	// Operator streams after a committed management write (REQ-053). It is
@@ -87,12 +90,22 @@ func (s *orchSvc) newGatewayOperatorService(logger *slog.Logger, identityMetrics
 	if err != nil {
 		return nil, nil, gatewayCfg, fmt.Errorf("load operator CA: %w", err)
 	}
+	// TASK-098 (REQ-044): the heartbeat cadence and the disconnect thresholds
+	// are configured (with documented defaults), and the registry is what turns
+	// "heartbeats stopped" into the durable suspect/offline state the emergency
+	// path depends on.
+	sessionCfg := s.cfg.OperatorSession.WithDefaults()
+	s.sessionRegistry = operator.NewSessionRegistry(
+		s.store.Sessions(), sessionCfg.SuspectAfter, sessionCfg.OfflineAfter, logger,
+	)
 	gatewayOpts := []operator.Option{
 		operator.WithCA(caInst),
 		operator.WithRenewBeforeRatio(renewRatio),
 		operator.WithAudit(s.auditEmitter),
 		operator.WithStreamRegistry(s.operatorRegistry()),
 		operator.WithIdentityMetrics(identityMetrics),
+		operator.WithSessionTimings(sessionCfg.HeartbeatInterval*2, sessionCfg.SuspectAfter, sessionCfg.OfflineAfter),
+		operator.WithSessionRegistry(s.sessionRegistry),
 	}
 	// The gateway service shares the persisted CA so Enroll signs
 	// certificates from the same CA the listener verifies against.
@@ -397,6 +410,13 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		orchestrator.ValuesConfig{
 			MaxDocumentBytes: valuesConfig.MaxDocumentBytes,
 			SecretPatterns:   valuesConfig.SecretPatterns,
+		},
+		// TASK-098 (REQ-023/REQ-044): standard-operation deadline + the session
+		// offline grace the emergency path reads for operator_offline.
+		orchestrator.LifecyclePolicy{
+			OperationDeadline:   s.cfg.Operation.WithDefaults().Deadline,
+			SessionOfflineAfter: s.cfg.OperatorSession.WithDefaults().OfflineAfter,
+			RecoveryInterval:    s.cfg.Operation.WithDefaults().RecoveryInterval,
 		},
 		logger,
 	)
@@ -717,6 +737,27 @@ func trustReadOnlyProcedures() map[string]struct{} {
 }
 
 // Run starts background cleanup and emergency timeout scanning.
+// runOperationRecovery sweeps non-terminal operations on a fixed cadence
+// (REQ-023 AC-023-05, TASK-098). It is idempotent and best-effort: a sweep
+// failure is logged and retried on the next tick.
+func (s *orchSvc) runOperationRecovery(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if recovered := operation.RecoverNonTerminal(ctx, s.store, s.logger, operation.DefaultRecoverOptions()); recovered > 0 {
+				s.logger.Warn("operations recovered by periodic sweep", "count", recovered)
+			}
+		}
+	}
+}
+
 func (s *orchSvc) Run(ctx context.Context) {
 	if s.authorizer != nil {
 		go s.authorizer.Run(ctx)
@@ -728,6 +769,20 @@ func (s *orchSvc) Run(ctx context.Context) {
 	}
 	if s.validation != nil {
 		go s.validation.Run(ctx)
+	}
+	lifecyclePolicy := orchestrator.LifecyclePolicy{
+		OperationDeadline:   s.cfg.Operation.WithDefaults().Deadline,
+		SessionOfflineAfter: s.cfg.OperatorSession.WithDefaults().OfflineAfter,
+		RecoveryInterval:    s.cfg.Operation.WithDefaults().RecoveryInterval,
+	}
+	if s.sessionRegistry != nil && !s.cfg.Maintenance {
+		go s.sessionRegistry.Run(ctx)
+	}
+	if !s.cfg.Maintenance {
+		// REQ-023 AC-023-05 + TASK-098: the non-terminal sweep used to run once
+		// at startup, so an operation that got stuck later stayed stuck until the
+		// next restart. It is idempotent, so it runs on a configurable cadence.
+		go s.runOperationRecovery(ctx, lifecyclePolicy.RecoveryInterval)
 	}
 	// REQ-088 D3=D5=A: the periodic pending-identity sweep (bind buffered
 	// identities whose row appeared, purge TTL orphans) runs on the mounted

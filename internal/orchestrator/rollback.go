@@ -108,7 +108,6 @@ func (s *Service) RollbackRelease(
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("idempotency_key is required"))
 	}
 
-
 	// REQ-067 rule 5: idempotent replay or conflict (same scope + key).
 	scope := idempotencyScope(actor.OrganizationID, def.ID)
 	scopedKey := operationIdempotencyKey(scope, idempotencyKey)
@@ -162,6 +161,7 @@ func (s *Service) RollbackRelease(
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
+		Deadline:  s.standardOperationDeadline(now),
 	}
 	expectedAuthorizationVersion, ok := authorization.SourceVersionFromContext(ctx)
 	if !ok {
@@ -174,7 +174,7 @@ func (s *Service) RollbackRelease(
 			Scope: scope, Key: hashIdempotencyKey(idempotencyKey), RequestHash: requestHash,
 			ExpiresAt: now.Add(24 * time.Hour),
 		},
-		CheckAvailable:             true,
+		CheckAvailable:               true,
 		ExpectedAuthorizationVersion: expectedAuthorizationVersion,
 	})
 	if err != nil {

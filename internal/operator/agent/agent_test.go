@@ -60,7 +60,7 @@ func TestAgent_InstallReportsWorkloadIdentityBeforeTerminalResult(t *testing.T) 
 	agent, err := New(Config{
 		Client: noopClient{}, Engine: engine, Store: store,
 		SessionID: "session-1", OperatorID: "operator-1", KubeClient: kube,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 		InstallFlags: InstallFlags{Atomic: true, Timeout: time.Minute},
 	})
 	require.NoError(t, err)
@@ -95,7 +95,7 @@ func TestAgent_InstallWithoutWorkloadsSendsNoIdentityReport(t *testing.T) {
 	agent, err := New(Config{
 		Client: noopClient{}, Engine: engine, Store: store,
 		SessionID: "session-1", OperatorID: "operator-1", KubeClient: kube,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 		InstallFlags: InstallFlags{Atomic: true, Timeout: time.Minute},
 	})
 	require.NoError(t, err)
@@ -143,7 +143,7 @@ func TestAgent_UpgradeAndRollbackReportWorkloadIdentity(t *testing.T) {
 			agent, err := New(Config{
 				Client: noopClient{}, Engine: engine, Store: store,
 				SessionID: "session-1", OperatorID: "operator-1", KubeClient: kube,
-				Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+				Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 				InstallFlags: InstallFlags{Atomic: true, Timeout: time.Minute},
 			})
 			require.NoError(t, err)
@@ -191,7 +191,7 @@ func TestAgent_StartupScanReportsWorkloadIdentity(t *testing.T) {
 	agent, err := New(Config{
 		Client: scriptedClient{stream: stream}, Engine: engine, Store: newMemoryStore(),
 		SessionID: "session-1", OperatorID: "operator-1", KubeClient: kube,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 		InstallFlags: InstallFlags{Atomic: true, Timeout: time.Minute},
 	})
 	require.NoError(t, err)
@@ -224,8 +224,8 @@ func TestAgent_StartupScanFailureDoesNotBreakLoop(t *testing.T) {
 	agent, err := New(Config{
 		Client: scriptedClient{stream: stream}, Engine: engine, Store: newMemoryStore(),
 		SessionID: "session-1", OperatorID: "operator-1",
-		KubeClient: kubernetesfake.NewSimpleClientset(),
-		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		KubeClient:   kubernetesfake.NewSimpleClientset(),
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 		InstallFlags: InstallFlags{Atomic: true, Timeout: time.Minute},
 	})
 	require.NoError(t, err)
@@ -1478,4 +1478,46 @@ func TestStreamDisconnectCancelsInFlightUpgrade(t *testing.T) {
 	require.NotNil(t, replayed)
 	assert.Equal(t, "helm_cancelled", replayed.GetError().GetCode())
 	require.NotNil(t, replayed.GetUpgrade(), "replayed cancel result must carry CommandResult.upgrade")
+}
+
+// TestAgentSendsNegotiatedHeartbeats covers REQ-044/TASK-098: the agent is the
+// only writer of session liveness, and it heartbeats at the cadence the
+// orchestrator negotiates in SessionEstablished.
+func TestAgentSendsNegotiatedHeartbeats(t *testing.T) {
+	stream := newScriptedStream(&operatorv1.CommandStreamResponse{
+		Payload: &operatorv1.CommandStreamResponse_SessionEstablished{
+			SessionEstablished: &operatorv1.SessionEstablished{
+				SessionId:                "session-1",
+				HeartbeatIntervalSeconds: 1,
+			},
+		},
+	})
+	agent, err := New(Config{
+		Client: scriptedClient{stream: stream}, Engine: newBlockingEngine(), Store: newMemoryStore(),
+		SessionID: "session-1", OperatorID: "operator-1",
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	runDone := make(chan error, 1)
+	go func() { runDone <- agent.Run(ctx) }()
+
+	// Hello plus at least one heartbeat: the ticker fires once per negotiated
+	// interval (1s here), so a 5s budget tolerates a slow CI runner.
+	require.Eventually(t, func() bool { return stream.sentCount() >= 2 }, 5*time.Second, 25*time.Millisecond)
+	heartbeats := 0
+	stream.mu.Lock()
+	for _, sent := range stream.sent {
+		if heartbeat := sent.GetHeartbeat(); heartbeat != nil {
+			assert.Equal(t, "session-1", heartbeat.GetSessionId())
+			heartbeats++
+		}
+	}
+	stream.mu.Unlock()
+	assert.GreaterOrEqual(t, heartbeats, 1, "the agent must send Heartbeat frames after SessionEstablished")
+
+	cancel()
+	close(stream.done)
+	require.NoError(t, <-runDone)
 }

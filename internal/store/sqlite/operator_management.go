@@ -221,6 +221,7 @@ func (s *operatorManagementStore) EnrollOperator(
 // enrollOperator runs the atomic enrollment transaction: consume the token
 // (pending→used CAS), supersede any active identity, create the operator and
 // its session in one all-or-nothing step.
+//
 //nolint:gocyclo // Enrollment atomically validates and mutates token, identity, session, and supersession state.
 func (s *operatorManagementStore) enrollOperator(
 	ctx context.Context,
@@ -462,6 +463,10 @@ func insertOperatorAuditEvent(ctx context.Context, tx *sql.Tx, event *store.Audi
 	if event.ID == "" || event.ActorID == "" || event.OrganizationID == "" || event.Action == "" {
 		return store.ErrAuditUnavailable
 	}
+	// Transactional audit row (ADR-009): it cannot go through the asynchronous
+	// emitter, so it is redacted here instead — no path into audit_events may
+	// store unsanitized text (AGENTS.md hard constraint 6, TASK-097).
+	event = store.SanitizeAuditEvent(event)
 	metadata, err := json.Marshal(event.Metadata)
 	if err != nil {
 		return fmt.Errorf("marshal operator audit metadata: %w", err)

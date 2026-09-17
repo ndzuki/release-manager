@@ -29,6 +29,7 @@ func (s *auditEventStore) Create(ctx context.Context, e *store.AuditEvent) error
 			resource_type, resource_id, action, status, duration_ms,
 			change_summary, metadata, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO NOTHING
 	`,
 		e.ID, string(e.ActorKind), e.ActorID, e.OrganizationID, e.Role,
 		e.ResourceType, e.ResourceID, e.Action, e.Status, e.DurationMs,
@@ -95,6 +96,7 @@ func (s *auditEventStore) CreateBatch(ctx context.Context, events []*store.Audit
 			resource_type, resource_id, action, status, duration_ms,
 			change_summary, metadata, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO NOTHING
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare batch insert: %w", err)

@@ -25,7 +25,7 @@ func (s *auditEventStore) Create(ctx context.Context, e *store.AuditEvent) error
 	}
 
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO audit_events (id, actor_kind, actor_id, organization_id, role,
+		INSERT OR IGNORE INTO audit_events (id, actor_kind, actor_id, organization_id, role,
 			resource_type, resource_id, action, status, duration_ms,
 			change_summary, metadata, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -91,7 +91,7 @@ func (s *auditEventStore) CreateBatch(ctx context.Context, events []*store.Audit
 	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO audit_events (id, actor_kind, actor_id, organization_id, role,
+		INSERT OR IGNORE INTO audit_events (id, actor_kind, actor_id, organization_id, role,
 			resource_type, resource_id, action, status, duration_ms,
 			change_summary, metadata, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
