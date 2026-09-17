@@ -14,7 +14,7 @@
 
 ## 2026-09
 
-里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 22 个 PR 合入。
+里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 23 个 PR 合入。
 
 ### 执行链路（升级 / 回滚）
 
@@ -50,6 +50,12 @@
 ### Bundle ingress 认证（Added）
 
 - `SubmitReleaseBundle` 由 CI API key 认证、新增 `POST /webhooks/harbor`（Harbor 独立 key）并挂载 Harbor adapter，出站以 `service:release-harbor` 调 `RecordArtifactEvent`（scope 仅该 procedure）；两把 key 与两条 procedure 不可互相替换（AC-011-04/16/17）。配套把 `ServiceTokenInterceptor` 对「不在本腿白名单的 token」改为 `unauthenticated` 以支持多凭证并存（保留「在白名单但越 scope → `permission_denied`」），并在 dev 生命周期/kustomize/CI 三处配齐凭据（PR #109，TASK-102）。
+
+### 制品准入（Added）
+
+- 漏洞准入接线为真实步骤：`CreateOperation` 对 bundle 的每个 image digest 调用 `vulnerability.Evaluator`，并由 `vulnerability_admission.mode` 三态决定其对发布的影响——`off` 不评估、`shadow`（**默认**）放行但产出「本应拒绝」的审计/计数/WARN、`enforce` 对策略拒绝与「评估不可用」分别以 `vulnerability_policy_failed`/`vulnerability_policy_unavailable` 拒绝（未知模式启动即失败）。默认取 `shadow` 是因为该步骤此前从未接线，直接 `enforce` 会在未配置 scanner 的部署上阻断全部发布（PR #127，TASK-105）。
+- `internal/trust/policy.go` 的 `FailClosed` 语义**未改**：准入模式只作用于新步骤，不得削弱既有安全控制（PR #127，TASK-105）。
+- 如实登记：仓库只有 `vulnerability.Scanner` 接口、**无生产 scanner 实现**，故未接入 scanner 时评估恒为 unavailable；`docs/runbook.md` §3bis 给出影子→enforce 的判读、切换流程与需留痕的逃生门（PR #127，TASK-105）。
 
 ### 工具链（Changed）
 

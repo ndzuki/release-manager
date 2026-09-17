@@ -66,3 +66,11 @@ operator_session:
 operation:
   deadline: 30m
   recovery_interval: 1m
+
+# TASK-105: artifact admission mode. shadow (the default) runs the vulnerability
+# evaluation and records what enforce would block without changing the outcome;
+# off skips the evaluation; enforce blocks on a rejection or on an unavailable
+# evaluation. Do not set enforce before a scanner is configured: without one every
+# evaluation is unavailable, and enforce would then block every release.
+vulnerability_admission:
+  mode: shadow

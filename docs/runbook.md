@@ -202,6 +202,38 @@ KUBECONFIG=data/kubeconfigs/dev-customer-a-direct.yaml kubectl -n release-manage
 
 业务侧验证：`ListOperators` / `GetOperator`（`api/gen/orchestrator/v1/orchestratorv1connect`，procedure 路径 `/orchestrator.v1.OrchestratorService/ListOperators`），请求样例在 `api/kulala/orchestrator.http`。
 
+## 3bis. 制品准入（漏洞）从 shadow 切到 enforce
+
+TASK-105 把「漏洞准入」接成了真实步骤（`CreateOperation` 内，对 bundle 的每个 image digest 调
+`vulnerability.Evaluator`），并由 `vulnerability_admission.mode` 决定它如何影响发布：
+
+| 模式 | 评估 | 结论为 reject / 不可用 | 证据 |
+| --- | --- | --- | --- |
+| `off` | 不评估 | 放行 | 只有 `skipped` 计数 |
+| `shadow`（默认） | 评估 | **放行** | 审计 `admit_artifact` + `status=would_block`、`would_block` 计数、WARN 日志 |
+| `enforce` | 评估 | **拒绝**（`failed_precondition` / `unavailable`） | 审计 `status=blocked` + `blocked` 计数 + WARN 日志 |
+
+**切换流程（建议）**：
+
+1. 保持默认 `shadow` 跑一段真实流量（预检/发布照常）。
+2. 看证据：审计里 `action=admit_artifact` 的事件按 `metadata.reason` 聚合——`vulnerability_policy_failed`
+   是策略拒绝，`vulnerability_policy_unavailable` 是「评估不可用」。
+3. **先消灭 unavailable**：仓库当前只有 `vulnerability.Scanner` 接口、**没有生产 scanner 实现**，
+   而且 `SetVulnerabilityEvaluator` 尚无生产调用者 ⇒ 现状下 `vulnEval == nil`，每次评估都落
+   `vulnerability_policy_unavailable`；此时切 `enforce` 等于**全量拒绝发布**。
+   注意区分另一类：若接入了 evaluator 但扫描结果缺失/过期或 scanner 报错，`Evaluate` 会返回
+   **reject**（原因里带 `scanner_unavailable`/`sbom_missing`/`no scan result`/`scan_stale`），
+   enforce 下按 `vulnerability_policy_failed` 拒绝。两类都要先看影子证据清零再切。
+4. 把 `vulnerability_admission.mode` 改成 `enforce`（配置文件变更 + 滚动重启），并观察
+   `blocked` 计数与发布成功率。
+5. **逃生门**：把模式改回 `shadow` 即可立即恢复放行；这是一次**需要留痕**的降级（配置变更本身
+   走正常变更流程），不要用关闭审计或放宽策略来绕过。
+
+**判读要点**：`warn` 在任何模式下都放行（策略的「可接受但需注意」）；`pass`/`warn` 不产生证据事件。
+`off` 与 `shadow` 都不改变发布结果——`shadow` 与 `off` 的唯一差别是前者留下证据。
+`Evaluate` 本身是**读存储的扫描结果 + 套策略**（`Evaluator.Evaluate` → `ResultStore.GetLatest`），
+不是同步扫描，所以每次 `CreateOperation` 对每个镜像只多一次 DB 读，不引入扫描延迟。
+
 ## 4. 审计异步刷盘积压与丢失
 
 **症状**：审计查询里事件缺失；orchestrator 内存持续增长；PVC 上出现 spool 文件；日志有 `audit buffer full` 或 `audit batch persistence failed`。
