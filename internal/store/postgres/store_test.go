@@ -1544,18 +1544,18 @@ func TestAdvisoryLockCompetesAcrossConnections(t *testing.T) {
 	first, acquired, err := postgres.TryAcquireAdvisoryLock(ctx, st.SQLDB(), key)
 	require.NoError(t, err)
 	require.True(t, acquired)
-	t.Cleanup(func() { require.NoError(t, first.Unlock()) })
+	t.Cleanup(func() { require.NoError(t, first.Unlock(ctx)) })
 
 	second, acquired, err := postgres.TryAcquireAdvisoryLock(ctx, st.SQLDB(), key)
 	require.NoError(t, err)
 	assert.False(t, acquired)
 	assert.Nil(t, second)
-	require.NoError(t, first.Unlock())
+	require.NoError(t, first.Unlock(ctx))
 
 	third, acquired, err := postgres.TryAcquireAdvisoryLock(ctx, st.SQLDB(), key)
 	require.NoError(t, err)
 	require.True(t, acquired)
-	require.NoError(t, third.Unlock())
+	require.NoError(t, third.Unlock(ctx))
 }
 
 func TestUserListKeysetPagination(t *testing.T) {

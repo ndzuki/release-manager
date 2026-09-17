@@ -254,48 +254,59 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 			return fmt.Errorf("receive operator command: %w", err)
 		}
-
-		switch {
-		case response.GetCommand() != nil:
-			if err := a.handleCommand(ctx, stream, response.GetCommand()); err != nil {
-				return err
-			}
-		case response.GetEmergencyCommand() != nil:
-			if err := a.handleEmergencyCommand(ctx, stream, response.GetEmergencyCommand()); err != nil {
-				return err
-			}
-		case response.GetResyncRequest() != nil:
-			lastSequence, err := a.store.LastSequence(ctx)
-			if err != nil {
-				return fmt.Errorf("load sequence for resync: %w", err)
-			}
-			if err := stream.Send(&operatorv1.CommandStreamRequest{
-				Payload: &operatorv1.CommandStreamRequest_ResyncResponse{
-					ResyncResponse: &operatorv1.ResyncResponse{OperatorLastSequence: lastSequence},
-				},
-			}); err != nil {
-				return fmt.Errorf("send resync response: %w", err)
-			}
-		case response.GetDuplicateResponse() != nil:
-			a.logger.Debug("received duplicate command result",
-				"command_id", response.GetDuplicateResponse().GetCommandId(),
-			)
-		case response.GetSessionEstablished() != nil:
-			// REQ-044/TASK-098: the orchestrator negotiates the heartbeat cadence
-			// in SessionEstablished; the agent is the only writer of liveness.
-			interval := time.Duration(response.GetSessionEstablished().GetHeartbeatIntervalSeconds()) * time.Second
-			if interval <= 0 {
-				interval = defaultHeartbeatInterval
-			}
-			a.startHeartbeat(ctx, stream, interval)
-
-		case response.GetSessionEvent() != nil:
-			return fmt.Errorf("operator session %s: %s",
-				response.GetSessionEvent().GetType(),
-				response.GetSessionEvent().GetMessage(),
-			)
+		if err := a.handleStreamResponse(ctx, stream, response); err != nil {
+			return err
 		}
 	}
+}
+
+// handleStreamResponse dispatches one gateway frame. A nil return keeps the
+// command loop running.
+func (a *Agent) handleStreamResponse(ctx context.Context, stream Stream, response *operatorv1.CommandStreamResponse) error {
+	switch {
+	case response.GetCommand() != nil:
+		return a.handleCommand(ctx, stream, response.GetCommand())
+	case response.GetEmergencyCommand() != nil:
+		return a.handleEmergencyCommand(ctx, stream, response.GetEmergencyCommand())
+	case response.GetResyncRequest() != nil:
+		return a.sendResyncResponse(ctx, stream)
+	case response.GetDuplicateResponse() != nil:
+		a.logger.Debug("received duplicate command result",
+			"command_id", response.GetDuplicateResponse().GetCommandId(),
+		)
+		return nil
+	case response.GetSessionEstablished() != nil:
+		// REQ-044/TASK-098: the orchestrator negotiates the heartbeat cadence
+		// in SessionEstablished; the agent is the only writer of liveness.
+		interval := time.Duration(response.GetSessionEstablished().GetHeartbeatIntervalSeconds()) * time.Second
+		if interval <= 0 {
+			interval = defaultHeartbeatInterval
+		}
+		a.startHeartbeat(ctx, stream, interval)
+		return nil
+	case response.GetSessionEvent() != nil:
+		return fmt.Errorf("operator session %s: %s",
+			response.GetSessionEvent().GetType(),
+			response.GetSessionEvent().GetMessage(),
+		)
+	}
+	return nil
+}
+
+// sendResyncResponse answers a ResyncRequest with the agent's own last sequence.
+func (a *Agent) sendResyncResponse(ctx context.Context, stream Stream) error {
+	lastSequence, err := a.store.LastSequence(ctx)
+	if err != nil {
+		return fmt.Errorf("load sequence for resync: %w", err)
+	}
+	if err := stream.Send(&operatorv1.CommandStreamRequest{
+		Payload: &operatorv1.CommandStreamRequest_ResyncResponse{
+			ResyncResponse: &operatorv1.ResyncResponse{OperatorLastSequence: lastSequence},
+		},
+	}); err != nil {
+		return fmt.Errorf("send resync response: %w", err)
+	}
+	return nil
 }
 
 // defaultHeartbeatInterval is used only when the orchestrator omits the
@@ -1045,6 +1056,26 @@ func sha256Hex(data []byte) string {
 	return fmt.Sprintf("%x", digest)
 }
 
+// rollbackAlreadyApplied reports whether the deployed release has already
+// advanced past the expected current revision — meaning this ROLLBACK command's
+// target was achieved by an earlier stage or an outbox redelivery — and returns
+// the deployed manifest digest when it has.
+func (a *Agent) rollbackAlreadyApplied(
+	ctx context.Context, command *operatorv1.Command, expected int64,
+) (string, bool) {
+	if expected <= 0 {
+		return "", false
+	}
+	current, statusErr := a.engine.Status(ctx, helmengine.StatusOptions{
+		Namespace:   command.GetNamespace(),
+		ReleaseName: command.GetReleaseName(),
+	})
+	if statusErr != nil || current == nil || current.Status != "deployed" || current.Revision <= int(expected) {
+		return "", false
+	}
+	return current.ManifestDigest, true
+}
+
 func (a *Agent) executeRollback(ctx context.Context, command *operatorv1.Command, reporter *rolloutReporter) Result {
 	result := Result{
 		OperationID:  command.GetOperationId(),
@@ -1107,23 +1138,16 @@ func (a *Agent) executeRollback(ctx context.Context, command *operatorv1.Command
 	// rollback below so its error contract (rollbackErrorCode /
 	// target_revision_not_found) is preserved unchanged.
 	expected := command.GetExpectedCurrentRevision()
-	if expected > 0 {
-		if current, statusErr := a.engine.Status(ctx, helmengine.StatusOptions{
-			Namespace:   command.GetNamespace(),
-			ReleaseName: command.GetReleaseName(),
-		}); statusErr == nil && current != nil &&
-			current.Status == "deployed" &&
-			current.Revision > int(expected) {
-			a.logger.Info("rollback target already achieved; rollback replayed as success",
-				"namespace", command.GetNamespace(), "release", command.GetReleaseName(),
-				"command", command.GetCommandId())
-			result.Status = "succeeded"
-			result.InventorySync = true
-			if current.ManifestDigest != "" {
-				result.ResourceSummary.ManifestDigest = current.ManifestDigest
-			}
-			return result
+	if digest, replayed := a.rollbackAlreadyApplied(ctx, command, expected); replayed {
+		a.logger.Info("rollback target already achieved; rollback replayed as success",
+			"namespace", command.GetNamespace(), "release", command.GetReleaseName(),
+			"command", command.GetCommandId())
+		result.Status = "succeeded"
+		result.InventorySync = true
+		if digest != "" {
+			result.ResourceSummary.ManifestDigest = digest
 		}
+		return result
 	}
 
 	timeout := a.installFlags.Timeout

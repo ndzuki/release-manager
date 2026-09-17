@@ -58,10 +58,7 @@ func (s *BundleService) SubmitBundle(
 	if err := s.validateSubmitBundle(req.Msg); err != nil {
 		return nil, err
 	}
-	bundle, candidates, err := bundleFromProto(req.Msg)
-	if err != nil {
-		return nil, err
-	}
+	bundle, candidates := bundleFromProto(req.Msg)
 	requestHash := canonicalBundleDigest(req.Msg)
 	bundle.DigestAlg = "sha256"
 	bundle.DigestValue = requestHash
@@ -122,34 +119,15 @@ func (s *BundleService) RecordArtifactEvent(
 	req *connect.Request[orchestratorv1.RecordArtifactEventRequest],
 ) (*connect.Response[orchestratorv1.RecordArtifactEventResponse], error) {
 	msg := req.Msg
-	if msg.GetSourceId() == "" || msg.GetEventId() == "" || msg.GetEventType() == "" || msg.GetRawPayload() == "" {
-		return nil, bundleError(connect.CodeInvalidArgument, "missing_required_field", errors.New("artifact event required fields are missing"))
-	}
-	if len(msg.GetResources()) == 0 || len(msg.GetResources()) > 100 {
-		return nil, bundleError(connect.CodeInvalidArgument, "invalid_artifact", errors.New("resources count must be between 1 and 100"))
-	}
-	if msg.GetArtifactType() == commonv1.ArtifactType_ARTIFACT_TYPE_UNSPECIFIED {
-		return nil, bundleError(connect.CodeInvalidArgument, "invalid_artifact", errors.New("artifact_type is required"))
-	}
-	occurredAt, err := time.Parse(time.RFC3339, msg.GetOccurredAt())
+	occurredAt, err := validateArtifactEventRequest(msg)
 	if err != nil {
-		return nil, bundleError(connect.CodeInvalidArgument, "invalid_artifact", errors.New("occurred_at must be RFC3339"))
-	}
-	payloadHash := sha256.Sum256([]byte(msg.GetRawPayload()))
-	if hex.EncodeToString(payloadHash[:]) != msg.GetPayloadSha256() {
-		return nil, bundleError(connect.CodeInvalidArgument, "invalid_artifact", errors.New("payload_sha256 does not match raw_payload"))
+		return nil, err
 	}
 
 	artifactType := artifactTypeFromCommonProto(msg.GetArtifactType())
-	candidates := make([]*store.CandidateArtifact, 0, len(msg.GetResources()))
-	for index, resource := range msg.GetResources() {
-		if !sha256DigestPattern.MatchString(resource.GetDigest()) || strings.TrimSpace(resource.GetRef()) == "" {
-			return nil, bundleError(connect.CodeInvalidArgument, "invalid_artifact",
-				fmt.Errorf("resources[%d] must include a valid digest and ref", index))
-		}
-		candidates = append(candidates, &store.CandidateArtifact{
-			ArtifactType: artifactType, Ref: resource.GetRef(), Digest: resource.GetDigest(),
-		})
+	candidates, err := candidateArtifactsFromProto(msg, artifactType)
+	if err != nil {
+		return nil, err
 	}
 	now := time.Now().UTC()
 	event := &store.ArtifactEvent{
@@ -178,6 +156,47 @@ func (s *BundleService) RecordArtifactEvent(
 		EventRecordId: result.Event.ID, Created: result.Created,
 		NewCandidates: result.NewCandidates, UpdatedLocations: result.UpdatedLocations,
 	}), nil
+}
+
+// validateArtifactEventRequest checks the artifact-event envelope and returns
+// the parsed occurrence time.
+func validateArtifactEventRequest(msg *orchestratorv1.RecordArtifactEventRequest) (time.Time, error) {
+	if msg.GetSourceId() == "" || msg.GetEventId() == "" || msg.GetEventType() == "" || msg.GetRawPayload() == "" {
+		return time.Time{}, bundleError(connect.CodeInvalidArgument, "missing_required_field", errors.New("artifact event required fields are missing"))
+	}
+	if len(msg.GetResources()) == 0 || len(msg.GetResources()) > 100 {
+		return time.Time{}, bundleError(connect.CodeInvalidArgument, "invalid_artifact", errors.New("resources count must be between 1 and 100"))
+	}
+	if msg.GetArtifactType() == commonv1.ArtifactType_ARTIFACT_TYPE_UNSPECIFIED {
+		return time.Time{}, bundleError(connect.CodeInvalidArgument, "invalid_artifact", errors.New("artifact_type is required"))
+	}
+	occurredAt, err := time.Parse(time.RFC3339, msg.GetOccurredAt())
+	if err != nil {
+		return time.Time{}, bundleError(connect.CodeInvalidArgument, "invalid_artifact", errors.New("occurred_at must be RFC3339"))
+	}
+	payloadHash := sha256.Sum256([]byte(msg.GetRawPayload()))
+	if hex.EncodeToString(payloadHash[:]) != msg.GetPayloadSha256() {
+		return time.Time{}, bundleError(connect.CodeInvalidArgument, "invalid_artifact", errors.New("payload_sha256 does not match raw_payload"))
+	}
+	return occurredAt, nil
+}
+
+// candidateArtifactsFromProto maps the event resources onto candidate
+// artifacts, rejecting any resource without a well-formed digest and ref.
+func candidateArtifactsFromProto(
+	msg *orchestratorv1.RecordArtifactEventRequest, artifactType store.ArtifactType,
+) ([]*store.CandidateArtifact, error) {
+	candidates := make([]*store.CandidateArtifact, 0, len(msg.GetResources()))
+	for index, resource := range msg.GetResources() {
+		if !sha256DigestPattern.MatchString(resource.GetDigest()) || strings.TrimSpace(resource.GetRef()) == "" {
+			return nil, bundleError(connect.CodeInvalidArgument, "invalid_artifact",
+				fmt.Errorf("resources[%d] must include a valid digest and ref", index))
+		}
+		candidates = append(candidates, &store.CandidateArtifact{
+			ArtifactType: artifactType, Ref: resource.GetRef(), Digest: resource.GetDigest(),
+		})
+	}
+	return candidates, nil
 }
 
 func (s *BundleService) ListBundles(
@@ -268,7 +287,30 @@ func (s *BundleService) GetBundle(
 	return connect.NewResponse(&orchestratorv1.GetBundleResponse{Bundle: detail}), nil
 }
 
+// validateSubmitBundle rejects a submission before any persistence happens. The
+// checks run in contract order so the first reported error stays stable; each
+// section lives in its own helper to keep that order readable.
 func (s *BundleService) validateSubmitBundle(msg *orchestratorv1.SubmitBundleRequest) error {
+	if err := validateBundleIdentity(msg); err != nil {
+		return err
+	}
+	if err := validateBundleCounts(msg); err != nil {
+		return err
+	}
+	if err := s.validateSourceRef(msg.GetChartRef(), true); err != nil {
+		return err
+	}
+	if err := s.validateBundleImages(msg); err != nil {
+		return err
+	}
+	if err := validateBundleEvidence(msg); err != nil {
+		return err
+	}
+	return validateBundleArtifacts(msg)
+}
+
+// validateBundleIdentity checks the scalar bundle fields.
+func validateBundleIdentity(msg *orchestratorv1.SubmitBundleRequest) error {
 	if strings.TrimSpace(msg.GetName()) == "" {
 		return bundleError(connect.CodeInvalidArgument, "missing_required_field", errors.New("name is required"))
 	}
@@ -287,15 +329,23 @@ func (s *BundleService) validateSubmitBundle(msg *orchestratorv1.SubmitBundleReq
 	if !sha256DigestPattern.MatchString(msg.GetChartDigest()) {
 		return bundleError(connect.CodeInvalidArgument, "invalid_digest_format", errors.New("chart_digest must be sha256:<64 lowercase hex>"))
 	}
+	return nil
+}
+
+// validateBundleCounts bounds the repeated fields before the per-element checks
+// walk them.
+func validateBundleCounts(msg *orchestratorv1.SubmitBundleRequest) error {
 	if len(msg.GetImages()) == 0 || len(msg.GetImages()) > 100 {
 		return bundleError(connect.CodeInvalidArgument, "too_many_images", fmt.Errorf("images count %d must be between 1 and 100", len(msg.GetImages())))
 	}
 	if len(msg.GetArtifacts()) > 500 {
 		return bundleError(connect.CodeInvalidArgument, "invalid_artifact", fmt.Errorf("artifacts count %d exceeds maximum 500", len(msg.GetArtifacts())))
 	}
-	if err := s.validateSourceRef(msg.GetChartRef(), true); err != nil {
-		return err
-	}
+	return nil
+}
+
+// validateBundleImages checks every image and rejects duplicate values paths.
+func (s *BundleService) validateBundleImages(msg *orchestratorv1.SubmitBundleRequest) error {
 	paths := make(map[string]struct{}, len(msg.GetImages()))
 	for index, image := range msg.GetImages() {
 		if image.GetDigest() == "" {
@@ -318,6 +368,11 @@ func (s *BundleService) validateSubmitBundle(msg *orchestratorv1.SubmitBundleReq
 			return err
 		}
 	}
+	return nil
+}
+
+// validateBundleEvidence checks the optional signature/sbom/provenance refs.
+func validateBundleEvidence(msg *orchestratorv1.SubmitBundleRequest) error {
 	for _, evidence := range []struct {
 		name string
 		ref  *commonv1.ArtifactReference
@@ -329,6 +384,11 @@ func (s *BundleService) validateSubmitBundle(msg *orchestratorv1.SubmitBundleReq
 			return bundleError(connect.CodeInvalidArgument, "invalid_artifact", fmt.Errorf("%s ref and digest are required", evidence.name))
 		}
 	}
+	return nil
+}
+
+// validateBundleArtifacts checks the optional generic artifact list.
+func validateBundleArtifacts(msg *orchestratorv1.SubmitBundleRequest) error {
 	for index, artifact := range msg.GetArtifacts() {
 		if artifact.GetArtifactType() == commonv1.ArtifactType_ARTIFACT_TYPE_UNSPECIFIED ||
 			strings.TrimSpace(artifact.GetRef()) == "" || !sha256DigestPattern.MatchString(artifact.GetDigest()) {
@@ -363,7 +423,9 @@ func (s *BundleService) validateSourceRef(raw string, chart bool) error {
 	return bundleError(connect.CodeInvalidArgument, "source_not_allowed", fmt.Errorf("source %q is not in the allowlist", parsed.Host))
 }
 
-func bundleFromProto(msg *orchestratorv1.SubmitBundleRequest) (*store.ReleaseBundle, []*store.CandidateArtifact, error) {
+// bundleFromProto maps the request message onto the store model. Every field is
+// copied verbatim, so it cannot fail; validation lives in validateSubmitBundle.
+func bundleFromProto(msg *orchestratorv1.SubmitBundleRequest) (*store.ReleaseBundle, []*store.CandidateArtifact) {
 	bundle := &store.ReleaseBundle{
 		Name: strings.TrimSpace(msg.GetName()), ChartRef: msg.GetChartRef(), ChartVersion: strings.TrimSpace(msg.GetChartVersion()),
 		ChartDigest: msg.GetChartDigest(), GitCommit: strings.TrimSpace(msg.GetGitCommit()), PipelineID: strings.TrimSpace(msg.GetPipelineId()),
@@ -384,7 +446,7 @@ func bundleFromProto(msg *orchestratorv1.SubmitBundleRequest) (*store.ReleaseBun
 	if evidence := msg.GetProvenance(); evidence != nil {
 		bundle.ProvenanceRef, bundle.ProvenanceDigest = evidence.GetRef(), evidence.GetDigest()
 	}
-	return bundle, deriveCandidates(msg), nil
+	return bundle, deriveCandidates(msg)
 }
 
 func deriveCandidates(msg *orchestratorv1.SubmitBundleRequest) []*store.CandidateArtifact {

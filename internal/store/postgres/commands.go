@@ -67,15 +67,7 @@ func (s *outboxStore) GetDeliveredNotAcked(ctx context.Context, operatorID strin
 	}
 	defer rows.Close()
 
-	var entries []*store.OutboxEntry
-	for rows.Next() {
-		entry, err := scanOutboxEntry(rows)
-		if err != nil {
-			return nil, err
-		}
-		entries = append(entries, entry)
-	}
-	return entries, rows.Err()
+	return collectRows(rows, scanOutboxEntry)
 }
 
 func (s *outboxStore) GetInflightForOperator(ctx context.Context, operatorID string) (*store.OutboxEntry, error) {
@@ -186,7 +178,7 @@ func (s *outboxStore) GetNextPending(ctx context.Context, operatorID string) (*s
 	return scanOutboxEntry(row)
 }
 
-func scanOutboxEntry(row interface{ Scan(...interface{}) error }) (*store.OutboxEntry, error) {
+func scanOutboxEntry(row rowScanner) (*store.OutboxEntry, error) {
 	var (
 		id, commandID, operationID, operationType, operatorID, status, resultJSON, createdAt, updatedAt string
 		maxInFlight                                                                                     int

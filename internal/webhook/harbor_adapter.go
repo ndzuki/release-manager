@@ -72,7 +72,13 @@ func NewHarborHandler(client orchestratorv1connect.BundleServiceClient, sourceID
 			return
 		}
 
-		rawPayload, _ := json.Marshal(event)
+		rawPayload, err := json.Marshal(event)
+		if err != nil {
+			// The canonical payload hash is the idempotency key downstream, so a
+			// marshal failure must not be silently turned into an empty payload.
+			http.Error(w, "failed to encode cloud event", http.StatusInternalServerError)
+			return
+		}
 		payloadHash := sha256.Sum256(rawPayload)
 
 		resources := make([]*commonv1.EventResource, len(data.Resources))
@@ -104,6 +110,7 @@ func NewHarborHandler(client orchestratorv1connect.BundleServiceClient, sourceID
 			code := connect.CodeOf(err)
 			if code == connect.CodeAlreadyExists {
 				w.WriteHeader(http.StatusOK)
+				//nolint:errcheck // response encoding failure after headers are sent is not actionable
 				json.NewEncoder(w).Encode(map[string]string{"status": "duplicate"})
 				return
 			}
@@ -114,6 +121,7 @@ func NewHarborHandler(client orchestratorv1connect.BundleServiceClient, sourceID
 		_ = resp
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
+		//nolint:errcheck // response encoding failure after headers are sent is not actionable
 		json.NewEncoder(w).Encode(map[string]string{"status": "recorded"})
 	})
 }

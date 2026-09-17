@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -302,98 +300,65 @@ func (s *emergencyIntentStore) Finish(
 		return nil, store.ErrInvalidState
 	}
 
-	if effectStatus == "" {
-		effectStatus = store.EmergencyEffectUnknown
-	}
-	if !validEmergencyEffectStatus(effectStatus) {
-		return nil, fmt.Errorf("finish emergency: invalid effect status %q", effectStatus)
+	if effectStatus, err = normalizeEmergencyEffectStatus(effectStatus); err != nil {
+		return nil, err
 	}
 	now := nowUTC()
-	result, err := tx.ExecContext(ctx, `
-		UPDATE operations
-		SET status = ?, state_version = state_version + 1, last_error = ?, updated_at = ?,
-		    terminal_at = CASE WHEN ? THEN ? ELSE terminal_at END
-		WHERE id = ? AND state_version = ?
-	`, string(status), lastError, now, status.IsTerminal(), now, operationID, expectedStateVersion)
+	updated, err := applyOperationTransition(ctx, tx, current, status, expectedStateVersion, lastError, now)
 	if err != nil {
-		return nil, fmt.Errorf("finish emergency operation: %w", err)
+		return nil, err
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return nil, fmt.Errorf("finish emergency rows affected: %w", err)
+	if err := finishEmergencySnapshotsTx(ctx, tx, intentID, operationID, effectStatus, beforeSnapshot, afterSnapshot, now); err != nil {
+		return nil, err
 	}
-	if rows == 0 {
-		return nil, store.ErrOptimisticLock
+	if err := recordOperationStateChange(ctx, tx, current, updated, lastError); err != nil {
+		return nil, err
 	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit finish emergency: %w", err)
+	}
+	return updated, nil
+}
 
-	result, err = tx.ExecContext(ctx, `
+// normalizeEmergencyEffectStatus defaults an empty status to UNKNOWN and rejects
+// values outside the effect-status enum.
+func normalizeEmergencyEffectStatus(status store.EmergencyEffectStatus) (store.EmergencyEffectStatus, error) {
+	if status == "" {
+		return store.EmergencyEffectUnknown, nil
+	}
+	if !validEmergencyEffectStatus(status) {
+		return "", fmt.Errorf("finish emergency: invalid effect status %q", status)
+	}
+	return status, nil
+}
+
+// finishEmergencySnapshotsTx records the observed before/after snapshots and the
+// resolved effect status on the intent row.
+func finishEmergencySnapshotsTx(
+	ctx context.Context, tx *Tx, intentID, operationID string, effectStatus store.EmergencyEffectStatus,
+	beforeSnapshot, afterSnapshot json.RawMessage, now string,
+) error {
+	result, err := tx.ExecContext(ctx, `
 		UPDATE emergency_intents
 		SET before_snapshot = ?, after_snapshot = ?, effect_status = ?, updated_at = ?
 		WHERE id = ? AND operation_id = ?
 	`, nullableJSON(beforeSnapshot), nullableJSON(afterSnapshot), string(effectStatus), now, intentID, operationID)
 	if err != nil {
-		return nil, fmt.Errorf("finish emergency snapshots: %w", err)
+		return fmt.Errorf("finish emergency snapshots: %w", err)
 	}
-	rows, err = result.RowsAffected()
+	rows, err := result.RowsAffected()
 	if err != nil {
-		return nil, fmt.Errorf("finish emergency snapshot rows affected: %w", err)
+		return fmt.Errorf("finish emergency snapshot rows affected: %w", err)
 	}
 	if rows == 0 {
-		return nil, store.ErrNotFound
+		return store.ErrNotFound
 	}
-
-	updated := *current
-	updated.Status = status
-	updated.StateVersion++
-	updated.LastError = lastError
-	updated.UpdatedAt, err = time.Parse(time.RFC3339Nano, now)
-	if err != nil {
-		return nil, fmt.Errorf("parse emergency finish time: %w", err)
-	}
-	if status.IsTerminal() {
-		terminalAt := updated.UpdatedAt
-		updated.TerminalAt = &terminalAt
-	}
-	event := &store.OperationStateChangedEvent{
-		ID: uuid.NewString(), OperationID: updated.ID, OperationType: updated.OperationType,
-		DefinitionID: updated.ReleaseDefinitionID, OldStatus: current.Status, NewStatus: updated.Status,
-		StateVersion: updated.StateVersion, CreatedAt: updated.UpdatedAt,
-	}
-	if err := insertOperationEvent(ctx, tx, event); err != nil {
-		return nil, err
-	}
-	timeline, err := json.Marshal(store.StateTransitionTimelineData{
-		FromState: string(current.Status), ToState: string(updated.Status), ErrorCode: lastError,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("encode emergency finish timeline: %w", err)
-	}
-	if _, err := appendTimelineEntry(ctx, tx, &store.OperationTimelineEntry{
-		OperationID: updated.ID, OperationStateVersion: updated.StateVersion,
-		Kind: string(store.TimelineEntryStateTransition), Data: timeline, CreatedAt: updated.UpdatedAt,
-	}); err != nil {
-		return nil, err
-	}
-	if (updated.Status == store.StatusFailed || updated.Status == store.StatusTimeout) && lastError != "" {
-		errorEntry, err := store.ErrorTimelineEntry(updated.ID, updated.StateVersion, lastError)
-		if err != nil {
-			return nil, err
-		}
-		errorEntry.CreatedAt = updated.UpdatedAt
-		if _, err := appendTimelineEntry(ctx, tx, errorEntry); err != nil {
-			return nil, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit finish emergency: %w", err)
-	}
-	return &updated, nil
+	return nil
 }
 
 func (s *emergencyIntentStore) ResolveEmergencyEffect(ctx context.Context, command store.ResolveEmergencyEffectCommand) (*store.ResolveEmergencyEffectResult, error) {
-	if command.OperationID == "" || command.ExpectedStateVersion < 1 ||
-		(command.EffectStatus != store.EmergencyEffectApplied && command.EffectStatus != store.EmergencyEffectNotApplied) {
-		return nil, fmt.Errorf("resolve emergency effect: invalid command")
+	if err := validateResolveEmergencyCommand(command); err != nil {
+		return nil, err
 	}
 	tx, err := s.gorm.BeginTx(ctx, nil)
 	if err != nil {
@@ -404,32 +369,11 @@ func (s *emergencyIntentStore) ResolveEmergencyEffect(ctx context.Context, comma
 	if err != nil {
 		return nil, err
 	}
-	if current.OperationType != store.OperationEmergency || (current.Status != store.StatusFailed && current.Status != store.StatusCancelled && current.Status != store.StatusTimeout) {
-		return nil, store.ErrInvalidState
-	}
-
-	// Lock operation and intent rows to serialize concurrent resolve calls.
-	if err := tx.QueryRowContext(ctx, `SELECT id FROM operations WHERE id = ? FOR UPDATE`, command.OperationID).Scan(new(string)); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("lock operation for resolve: %w", err)
-	}
-	if err := tx.QueryRowContext(ctx, `SELECT id FROM emergency_intents WHERE operation_id = ? FOR UPDATE`, command.OperationID).Scan(new(string)); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("lock intent for resolve: %w", err)
-	}
-	// Re-read intent after acquiring locks to see committed state.
-	current, err = getOperation(ctx, tx, command.OperationID)
-	if err != nil {
+	if err := validateEmergencyResolveTarget(current); err != nil {
 		return nil, err
 	}
-	if current.OperationType != store.OperationEmergency || !current.Status.IsTerminal() {
-		return nil, store.ErrInvalidState
-	}
-	intent, err := getEmergencyIntentByOperation(ctx, tx, command.OperationID)
+
+	current, intent, err := loadLockedEmergencyTarget(ctx, tx, command.OperationID)
 	if err != nil {
 		return nil, err
 	}
@@ -440,6 +384,73 @@ func (s *emergencyIntentStore) ResolveEmergencyEffect(ctx context.Context, comma
 		return nil, store.ErrOptimisticLock
 	}
 	now := time.Now().UTC()
+	result, err := resolveEmergencyEffectTx(ctx, tx, current, intent, command, now)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit resolve emergency effect: %w", err)
+	}
+	return result, nil
+}
+
+// validateResolveEmergencyCommand checks the resolve command's own fields.
+func validateResolveEmergencyCommand(command store.ResolveEmergencyEffectCommand) error {
+	if command.OperationID == "" || command.ExpectedStateVersion < 1 ||
+		(command.EffectStatus != store.EmergencyEffectApplied && command.EffectStatus != store.EmergencyEffectNotApplied) {
+		return fmt.Errorf("resolve emergency effect: invalid command")
+	}
+	return nil
+}
+
+// validateEmergencyResolveTarget rejects a resolve against an operation that is
+// not a finished emergency before any row lock is taken.
+func validateEmergencyResolveTarget(current *store.Operation) error {
+	if current.OperationType != store.OperationEmergency ||
+		(current.Status != store.StatusFailed && current.Status != store.StatusCancelled && current.Status != store.StatusTimeout) {
+		return store.ErrInvalidState
+	}
+	return nil
+}
+
+// loadLockedEmergencyTarget locks the operation and intent rows to serialize
+// concurrent resolve calls, then re-reads them so the decision sees the
+// committed state.
+func loadLockedEmergencyTarget(
+	ctx context.Context, tx *Tx, operationID string,
+) (*store.Operation, *store.EmergencyIntent, error) {
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM operations WHERE id = ? FOR UPDATE`, operationID).Scan(new(string)); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, store.ErrNotFound
+		}
+		return nil, nil, fmt.Errorf("lock operation for resolve: %w", err)
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM emergency_intents WHERE operation_id = ? FOR UPDATE`, operationID).Scan(new(string)); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, store.ErrNotFound
+		}
+		return nil, nil, fmt.Errorf("lock intent for resolve: %w", err)
+	}
+	current, err := getOperation(ctx, tx, operationID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if current.OperationType != store.OperationEmergency || !current.Status.IsTerminal() {
+		return nil, nil, store.ErrInvalidState
+	}
+	intent, err := getEmergencyIntentByOperation(ctx, tx, operationID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return current, intent, nil
+}
+
+// resolveEmergencyEffectTx advances the operation state version, records the
+// resolved effect on the intent and appends the effect timeline entry.
+func resolveEmergencyEffectTx(
+	ctx context.Context, tx *Tx, current *store.Operation, intent *store.EmergencyIntent,
+	command store.ResolveEmergencyEffectCommand, now time.Time,
+) (*store.ResolveEmergencyEffectResult, error) {
 	result, err := tx.ExecContext(ctx, `
 		UPDATE operations SET state_version = state_version + 1, updated_at = ?
 		WHERE id = ? AND state_version = ?
@@ -489,9 +500,6 @@ func (s *emergencyIntentStore) ResolveEmergencyEffect(ctx context.Context, comma
 	})
 	if err != nil {
 		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit resolve emergency effect: %w", err)
 	}
 	return &store.ResolveEmergencyEffectResult{
 		Operation: &updatedOperation, Intent: &updatedIntent, Timeline: timeline, Resolved: true,

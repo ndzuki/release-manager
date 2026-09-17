@@ -355,7 +355,7 @@ func TestRollbackRelease_ValuesNotAllowed(t *testing.T) {
 		TargetRevision:          1,
 		ExpectedCurrentRevision: 3,
 		Reason:                  "test",
-		ValuesRevisionId:        "vr-001",
+		ValuesRevisionId:        "vr-001", //nolint:staticcheck // AC-067-16 sends the deprecated field on purpose: the server must reject it, so removing the field would delete the assertion.
 	}), "idem-rb-values"))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))

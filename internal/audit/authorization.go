@@ -26,18 +26,6 @@ const (
 	auditWrite  = "write"
 )
 
-// principalOrganization returns the authenticated principal's organization.
-func principalOrganization(ctx context.Context) (string, error) {
-	principal, ok := PrincipalFromContext(ctx)
-	if !ok {
-		return "", connect.NewError(connect.CodeUnauthenticated, errors.New("missing audit principal"))
-	}
-	if principal.OrgID == "" {
-		return "", connect.NewError(connect.CodeUnauthenticated, errors.New("principal has no organization"))
-	}
-	return principal.OrgID, nil
-}
-
 // resolveAuditScope asks release-auth for a decision on (object, action) and
 // returns the effective organization scope. An empty requested organization
 // means "the caller's own organization"; a different organization is allowed

@@ -57,11 +57,16 @@ func TryAcquireAdvisoryLock(ctx context.Context, db *sql.DB, key int64) (*Adviso
 
 // Unlock releases the advisory lock and returns the connection to the pool.
 // It is safe to call multiple times; subsequent calls are no-ops.
-func (l *AdvisoryLock) Unlock() error {
+//
+// The caller owns the context: a session-level advisory lock must be released
+// even when the request that acquired it has already timed out, so a
+// request-scoped caller should pass context.WithoutCancel(ctx) rather than the
+// cancellable context itself.
+func (l *AdvisoryLock) Unlock(ctx context.Context) error {
 	if l == nil || l.conn == nil {
 		return nil
 	}
-	_, err := l.conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", l.key)
+	_, err := l.conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", l.key)
 	closeErr := l.conn.Close()
 	l.conn = nil
 	k := l.key

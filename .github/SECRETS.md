@@ -20,7 +20,7 @@
 | `DEV_DEPLOYER_PASSWORD` | `test.yml:391` | `dev-deployer` 口令（`cmd/devseed/main.go:52-53`），deployer token 用于 `GetOperation` 轮询（`internal/devfixture/accounts_trust.go:170-172`） | **是** | 同上（四个口令一次性汇总报错） |
 | `DEV_READER_PASSWORD` | `test.yml:392` | `dev-reader`（viewer 角色，无写权限）口令，`cmd/devseed/main.go:54`、`internal/devfixture/runner.go:27-28` | **是** | 同上 |
 | `DEV_JWT_SIGNING_KEY` | `test.yml:393` | HS256 JWT 签名密钥。ci profile 把它临时写成 kustomize 源文件（`deploy/dev/dev.sh:293-304`），经 `secretGenerator`（`deploy/kustomize/dev/kustomization.yaml:39-43`）成为 Secret `release-manager-jwt` 的 `JWT_SIGNING_KEY`，再注入 orchestrator（`deploy/kustomize/services/orchestrator.yaml:35-39`）与 webhook/auth（`envFrom`，`deploy/kustomize/services/webhook.yaml:31-34`） | **是**（泄露即可伪造任意身份 token） | `make dev-up`（`test.yml:424-425`）以 `ERR_SERVICE_UNHEALTHY: ci profile requires DEV_JWT_SIGNING_KEY` 失败（`deploy/dev/dev.sh:294-295`） |
-| `DEV_WEBHOOK_SERVICE_TOKEN` | `test.yml:394` | bundle ingress 的服务令牌：webhook 侧作为 `Authorization: Bearer <token>` 转发（`cmd/webhook/main.go:61-62`），orchestrator 侧取 SHA-256 摘要做常量时间比对（`cmd/orchestrator/main.go:808-816`、`internal/auth/service_token.go:108-126`） | **是** | `make dev-up` 以 `ci profile requires DEV_WEBHOOK_SERVICE_TOKEN` 失败（`deploy/dev/dev.sh:342-343`） |
+| `DEV_WEBHOOK_SERVICE_TOKEN` | `test.yml:394` | bundle ingress 的服务令牌：webhook 侧作为 `Authorization: Bearer <token>` 转发（`cmd/webhook/main.go:61-62`），orchestrator 侧取 SHA-256 摘要做常量时间比对（`cmd/orchestrator/main.go:898-911`、`internal/auth/service_token.go:108-126`） | **是** | `make dev-up` 以 `ci profile requires DEV_WEBHOOK_SERVICE_TOKEN` 失败（`deploy/dev/dev.sh:342-343`） |
 | `DEV_M_TLS_CA_KEY` | `test.yml:395` | dev mTLS CA 私钥，签 operator 客户端证书与网关服务端证书（`internal/operator/ca/ca.go:205`、`internal/operator/ca/ca.go:252`、`cmd/orchestrator/main.go:154-157`） | **是**（集群侧身份的信任锚） | `make dev-up` 以 `ci profile requires DEV_M_TLS_CA_KEY and DEV_M_TLS_CA_CERT` 失败（`deploy/dev/dev.sh:394-395`） |
 | `DEV_M_TLS_CA_CERT` | `test.yml:396` | 与上配对的 CA 证书；同一 Secret 挂载为网关 `/data/gateway-ca.crt`（`deploy/kustomize/services/orchestrator.yaml:94-98,107-113`），并被复制给客户集群 agent 做校验（`deploy/dev/dev.sh:1296`） | 证书本身是公开材料，但**必须与私钥成对**，故与 KEY 同级管理 | 同 `DEV_M_TLS_CA_KEY`；只给证书不给私钥同样失败（`deploy/dev/dev.sh:394` 用 `-z ... || -z ...` 同时判定） |
 | `DEV_TRUST_ROOT_PRIVATE_KEY` | `test.yml:397` | Dev Trust Root Ed25519 私钥：seed 把它的公钥经 `TrustService.CreateTrustRoot` 激活（`internal/devfixture/accounts_trust.go:96-107`），并用它对 bundle digest 签名（`internal/devfixture/accounts_trust.go:149-151`） | **是** | `make dev-seed` 以 `ci profile requires DEV_TRUST_ROOT_PRIVATE_KEY` 失败（`internal/devfixture/files.go:258-261`） |
@@ -127,14 +127,14 @@ gh secret set DEV_M_TLS_CA_CERT       --body "$(cat data/dev-ca/ca.crt)"   --rep
 
 - **格式要求：非空任意字节串即可**。dev.sh 只判 `-z`（`deploy/dev/dev.sh:294`），随后原样写成 0600 文件（`:300-303`）；auth 侧把它当 raw bytes 直接喂给 HS256（`internal/auth/jwt.go:22-27,56`），**没有长度、编码或字符集校验**。
 - 仓库内的参照格式：本地 `dev-up` 生成 **64 随机字节的 base64**（`deploy/dev/dev.sh:311-317`，含换行 88 字符），注释同时声明「任何非空值都有效」与「轮换 = 删文件重跑 dev-up」（`:311-314`）。
-- **建议**：CI 值沿用同一生成方式（≥32 字节随机、base64 承载），并**不要**依赖 `change-me-in-production` 兜底默认——该默认仍留在 `cmd/auth/main.go:237`、`cmd/orchestrator/main.go:833`、`cmd/api/main.go:113` 三处 flag 默认值里；`cmd/api` 那一处**没有** env 回退。
+- **建议**：CI 值沿用同一生成方式（≥32 字节随机、base64 承载），并**不要**依赖 `change-me-in-production` 兜底默认——该默认仍留在 `cmd/auth/main.go:237`、`cmd/orchestrator/main.go:851`、`cmd/api/main.go:113` 三处 flag 默认值里；`cmd/api` 那一处**没有** env 回退。
 - 落盘语义：只在 kustomize build/apply 期间存在，apply 完立即删除（`deploy/dev/dev.sh:323-326` 由 `:1122` 调用）。
 
 ### 5.3 `DEV_WEBHOOK_SERVICE_TOKEN`
 
 - dev 侧只要求非空（`deploy/dev/dev.sh:342`），原样写成 0600 文件（`:347-350`）。
 - 仓库内的参照格式：本地生成 **32 字符 `[A-Za-z0-9]`**，`head -c 1024 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32`（`deploy/dev/dev.sh:357-363`），注释说明与 `dev-credentials.env` 的口令同一字符集契约（`:358-360`）。
-- 服务端对值本身无校验：orchestrator 取 **SHA-256 hex 摘要**保存（`cmd/orchestrator/main.go:802-816`），入站 Bearer 也摘要后做**常量时间**比对（`internal/auth/service_token.go:108-126`，`subtle.ConstantTimeCompare` 见 `:120`）。因此唯一要求是 webhook 侧与 orchestrator 侧同源（两者都来自同一个 Secret：`deploy/kustomize/services/webhook.yaml:39-43` 与 `deploy/kustomize/services/orchestrator.yaml:45-49`）。
+- 服务端对值本身无校验：orchestrator 取 **SHA-256 hex 摘要**保存（`cmd/orchestrator/main.go:898-911`），入站 Bearer 也摘要后做**常量时间**比对（`internal/auth/service_token.go:108-126`，`subtle.ConstantTimeCompare` 见 `:120`）。因此唯一要求是 webhook 侧与 orchestrator 侧同源（两者都来自同一个 Secret：`deploy/kustomize/services/webhook.yaml:39-43` 与 `deploy/kustomize/services/orchestrator.yaml:45-49`）。
 - 作用域是收窄的：该 token 只被允许调用 `BundleService.SubmitBundle` 一个 procedure，actor 记为 `service:release-webhook`（`cmd/orchestrator/main.go:477-492`，作用域声明在 `:487-489`）。
 - **建议**：按 32 字符字母数字生成，与 dev 契约一致；长度上限无约束（不进 DB，只存摘要）。
 
@@ -176,7 +176,7 @@ gh secret set DEV_M_TLS_CA_CERT       --body "$(cat data/dev-ca/ca.crt)"   --rep
 ### 6.1 已实现（有代码/配置支撑）
 
 1. **内容变化即滚动重启**：四个 `secretGenerator` 条目按文件内容哈希命名 Secret（`deploy/kustomize/dev/kustomization.yaml:30-38,39-70`），改值后滚动消费方 Deployment——这是仓库内唯一的「自动生效」机制。
-2. **服务令牌支持双密钥并存（零停机轮换）**：Secret 的可选 key `WEBHOOK_SERVICE_TOKEN_PREVIOUS` → env `DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS`（`deploy/kustomize/services/orchestrator.yaml:50-56`，`optional: true`），verifier 同时接受 current+previous 两个摘要（`cmd/orchestrator/main.go:800-816`）。dev-test 显式把这条接缝当契约测（`deploy/dev/dev_test.go:1970-1972`）。注意：`secretGenerator` 只生成一个 key（`deploy/kustomize/dev/kustomization.yaml:54-57`），PREVIOUS 需由外部 Secret manager 叠加（注释 `:51-53`），**GitHub Actions 侧没有这条叠加路径**。
+2. **服务令牌支持双密钥并存（零停机轮换）**：Secret 的可选 key `WEBHOOK_SERVICE_TOKEN_PREVIOUS` → env `DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS`（`deploy/kustomize/services/orchestrator.yaml:50-56`，`optional: true`），verifier 同时接受 current+previous 两个摘要（`cmd/orchestrator/main.go:898-911`）。dev-test 显式把这条接缝当契约测（`deploy/dev/dev_test.go:1970-1972`）。注意：`secretGenerator` 只生成一个 key（`deploy/kustomize/dev/kustomization.yaml:54-57`），PREVIOUS 需由外部 Secret manager 叠加（注释 `:51-53`），**GitHub Actions 侧没有这条叠加路径**。
 3. **Trust Root 有完整的轮换/宽限/退休/撤销 API**：`RotateTrustRoot`（新 root 立即 active、旧 root 进入 `grace_until` 窗口，`internal/trust/service.go:84-135`）、`EndGrace`（`:157`）、`RetireTrustRoot`（`:210`）、`RevokeTrustRoot`（`:260`）、`GetTrustPolicy`（`:312`），每次变更都走审计（`:483`）。契约声明见 `api/proto/trust/v1/trust.proto:115-120`，服务真实挂载在 orchestrator 上（`cmd/orchestrator/main.go:505-519`）。
 4. **CI 侧的清理兜底**：`make dev-purge CONFIRM=1` 在 `if: always()` 的 post-step 执行（`test.yml:444-446`），`PURGE_DATA_PATHS` 含 `dev-credentials.env`、`dev-trust-root`、`dev-jwt`、`dev-service-tokens`、`dev-enrollment-tokens`、`dev-ca`、`backups`（`deploy/dev/dev.sh:42`）。**这只清 CI runner 上的临时文件，不撤销 GitHub secret。**
 5. **ci profile 不落盘**：JWT key / service token / mTLS CA 只在 kustomize build 期间存在，apply 后删除（`deploy/dev/dev.sh:323-326,371-374,422-425`，调用点 `:1122-1124`）。

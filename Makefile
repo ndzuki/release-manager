@@ -408,11 +408,10 @@ lint: ## Run linters (whole tree; see lint-changed for the CI-equivalent scope)
 
 .PHONY: lint-changed
 # Mirrors the CI gate exactly (same tool version, same --new-from-rev scope), so
-# "does my change pass lint?" is answerable locally. The whole-tree run above
-# reports a known pre-existing baseline since the Go 1.27 / golangci-lint v2.13.2
-# bump (TASK-109): ~45 findings that predate that change (gocyclo/dupl/gocritic
-# and friends) and are tracked for separate cleanup. CI has always linted only
-# the changed range, so the baseline never gated a pull request.
+# "does my change pass lint?" is answerable locally. The whole-tree run above is
+# clean since TASK-110 cleared the 45 findings that the Go 1.27 / golangci-lint
+# v2.13.2 bump exposed (TASK-109); CI still lints only the changed range so an
+# unrelated breakage on main cannot block a pull request.
 LINT_BASE ?= origin/main
 lint-changed: ## Run linters on the changed range only (CI-equivalent)
 	golangci-lint run --new-from-rev=$(LINT_BASE)

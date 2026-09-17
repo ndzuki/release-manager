@@ -4,7 +4,7 @@
 `文件:行号`（以 `task/092-project-docs-align` 分支工作树为准）；核实不到的写明「未找到」。
 
 分类依据：常驻 = 走 `internal/app` 的 `app.Run`，启动 HTTP 监听并阻塞到收到信号
-（`internal/app/app.go:122-233`）；一次性 = `main` 跑完即退。
+（`internal/app/app.go:122-229`）；一次性 = `main` 跑完即退。
 
 ## 总览
 
@@ -64,7 +64,7 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 - 无数据库 flag（该服务不落库）。
 - 前置：orchestrator 可达；dev 里 token 由 `dev-up` 生成注入，orchestrator 侧以
   `DEV_WEBHOOK_SERVICE_TOKEN` / `DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS` 的 SHA-256 哈希做常数时间比对
-  （`cmd/orchestrator/main.go:800-819`）。
+  （`cmd/orchestrator/main.go:898-911`）。
 - 退出码：同公共服务（无自定义码）。
 - 调用：`make run-webhook`（`Makefile:79-81`）、`make dev-stage-artifact`（`Makefile:292`）或
   `go run ./cmd/webhook/ --config configs/webhook.dev.yaml`。

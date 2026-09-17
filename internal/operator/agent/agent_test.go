@@ -788,15 +788,6 @@ func (l recordingSecretLister) List(context.Context, string) ([]secretmetadata.S
 	return l.secrets, nil
 }
 
-type recordingSyncExecutor struct {
-	calls int
-	err   error
-}
-
-func (e *recordingSyncExecutor) SyncNow(context.Context) error {
-	e.calls++
-	return e.err
-}
 func newTestAgent(
 	t *testing.T,
 	engine helmengine.Engine,

@@ -37,10 +37,6 @@ const (
 	modePrincipalScope
 	// modeMTLS: identity comes from a verified client certificate.
 	modeMTLS
-	// modeUnintercepted: the owning listener mounts no authentication
-	// interceptor. Registered explicitly so an unauthenticated surface is a
-	// recorded decision rather than an omission.
-	modeUnintercepted
 	// modeServiceToken: identity comes from a scoped service token
 	// (auth.ServiceTokenInterceptor): the presented token must match a
 	// configured SHA-256 digest and the procedure must be inside that

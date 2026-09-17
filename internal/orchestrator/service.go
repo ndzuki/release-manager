@@ -649,18 +649,42 @@ func (s *Service) WatchOperation(
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("operation timeline replay: %w", err))
 	}
 	lastSequence := req.Msg.GetAfterSequence()
-	for _, entry := range entries {
-		if err := stream.Send(&orchestratorv1.WatchOperationResponse{
-			Payload: &orchestratorv1.WatchOperationResponse_Entry{Entry: toProtoTimelineEntry(entry)},
-		}); err != nil {
-			return err
-		}
-		lastSequence = entry.Sequence
+	lastSequence, err = sendTimelineEntries(stream, entries, lastSequence)
+	if err != nil {
+		return err
 	}
 	if lastSequence < snapshot.SnapshotSequence {
 		lastSequence = snapshot.SnapshotSequence
 	}
+	return s.streamOperationUpdates(ctx, stream, snapshot.Operation.ID, requestID, lastSequence)
+}
 
+// sendTimelineEntries forwards each timeline entry to the client and returns the
+// sequence of the last entry sent (unchanged when the slice is empty).
+func sendTimelineEntries(
+	stream *connect.ServerStream[orchestratorv1.WatchOperationResponse],
+	entries []*store.OperationTimelineEntry,
+	lastSequence int64,
+) (int64, error) {
+	for _, entry := range entries {
+		if err := stream.Send(&orchestratorv1.WatchOperationResponse{
+			Payload: &orchestratorv1.WatchOperationResponse_Entry{Entry: toProtoTimelineEntry(entry)},
+		}); err != nil {
+			return lastSequence, err
+		}
+		lastSequence = entry.Sequence
+	}
+	return lastSequence, nil
+}
+
+// streamOperationUpdates polls the timeline until the client disconnects,
+// forwarding new entries and periodic heartbeats.
+func (s *Service) streamOperationUpdates(
+	ctx context.Context,
+	stream *connect.ServerStream[orchestratorv1.WatchOperationResponse],
+	operationID, requestID string,
+	lastSequence int64,
+) error {
 	pollTicker := time.NewTicker(operationWatchPollInterval)
 	defer pollTicker.Stop()
 	heartbeatTicker := time.NewTicker(operationWatchHeartbeat)
@@ -670,20 +694,17 @@ func (s *Service) WatchOperation(
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-pollTicker.C:
-			latest, listErr := s.store.Timeline().List(ctx, snapshot.Operation.ID, lastSequence, 0)
+			latest, listErr := s.store.Timeline().List(ctx, operationID, lastSequence, 0)
 			if listErr != nil {
 				return connect.NewError(connect.CodeInternal, fmt.Errorf("operation timeline live read: %w", listErr))
 			}
-			for _, entry := range latest {
-				if err := stream.Send(&orchestratorv1.WatchOperationResponse{
-					Payload: &orchestratorv1.WatchOperationResponse_Entry{Entry: toProtoTimelineEntry(entry)},
-				}); err != nil {
-					return err
-				}
-				lastSequence = entry.Sequence
+			updated, sendErr := sendTimelineEntries(stream, latest, lastSequence)
+			if sendErr != nil {
+				return sendErr
 			}
+			lastSequence = updated
 		case sentAt := <-heartbeatTicker.C:
-			latestSequence, latestErr := s.store.Timeline().LatestSequence(ctx, snapshot.Operation.ID)
+			latestSequence, latestErr := s.store.Timeline().LatestSequence(ctx, operationID)
 			if latestErr != nil {
 				return connect.NewError(connect.CodeInternal, fmt.Errorf("operation timeline heartbeat: %w", latestErr))
 			}

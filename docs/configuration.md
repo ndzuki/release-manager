@@ -26,9 +26,9 @@
 | release-webhook | `--config` | `configs/webhook.dev.yaml`（`cmd/webhook/main.go:57`） | 配置文件路径 |
 | | `--orchestrator-url` | ""（空则回退 `http://localhost:8083`，`cmd/webhook/main.go:79`） | BundleService 上游（Register 与 /readyz 检查同源） |
 | | `--service-token` | `envOr("DEV_WEBHOOK_SERVICE_TOKEN", "")`（`cmd/webhook/main.go:62`） | 包入库服务令牌 |
-| release-orchestrator | `--config` | `configs/orchestrator.dev.yaml`（`cmd/orchestrator/main.go:827`） | 配置文件路径 |
-| | `--target-env` | `staging`（`cmd/orchestrator/main.go:828`） | 目标环境标签（传入 `orchestrator.NewService`） |
-| | `--signing-key` | `envOr("JWT_SIGNING_KEY", "change-me-in-production")`（`:833`） | JWT 签名密钥 |
+| release-orchestrator | `--config` | `configs/orchestrator.dev.yaml`（`cmd/orchestrator/main.go:845`） | 配置文件路径 |
+| | `--target-env` | `staging`（`cmd/orchestrator/main.go:846`） | 目标环境标签（传入 `orchestrator.NewService`） |
+| | `--signing-key` | `envOr("JWT_SIGNING_KEY", "change-me-in-production")`（`:851`） | JWT 签名密钥 |
 | release-operator | `--config` | `configs/operator.dev.yaml`（`cmd/operator/main.go:359`） | 配置文件路径 |
 | | `--db` | `data/operator.db`（gateway 模式） | 本地 SQLite |
 | | `--command-db` | `data/operator-commands.db` | 命令/身份持久化（agent 与 gateway 都用） |
@@ -271,7 +271,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 
 | 变量 | 读取点 | 用途 | 机密 |
 |---|---|---|---|
-| `JWT_SIGNING_KEY` | `cmd/auth/main.go:237`、`cmd/orchestrator/main.go:833` | flag 默认值 | 是 |
+| `JWT_SIGNING_KEY` | `cmd/auth/main.go:237`、`cmd/orchestrator/main.go:851` | flag 默认值 | 是 |
 | `DEV_WEBHOOK_SERVICE_TOKEN` | `cmd/webhook/main.go:62` | flag 默认值 | 是 |
 | （orchestrator 侧）`DEV_WEBHOOK_SERVICE_TOKEN` + `DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS` | `cmd/orchestrator` serviceTokens | 校验入站服务令牌（双令牌=零停机轮换） | 是 |
 | `ENROLLMENT_TOKEN` | `internal/operator/bootstrap/token.go:24-27`（`TokenEnv`，`cmd/operator/main.go:161`） | 一次性注册令牌（文件缺位时） | 是 |

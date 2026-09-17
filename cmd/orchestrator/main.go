@@ -142,11 +142,11 @@ func (s *orchSvc) operatorEndpoint() string {
 // internal/app.ExtraServersProvider interface, and unexported method names
 // are package-scoped in Go — an unexported method here could never satisfy
 // the cross-package interface (smoke-test catch, 2026-08-11).
-func (s *orchSvc) ExtraServers() ([]*http.Server, error) {
+func (s *orchSvc) ExtraServers() []*http.Server {
 	if s.gateway == nil {
-		return nil, nil
+		return nil
 	}
-	return []*http.Server{s.gateway}, nil
+	return []*http.Server{s.gateway}
 }
 
 // buildGatewayServer assembles the mTLS agent gateway listener (TASK-075 plan
@@ -779,38 +779,13 @@ func (s *orchSvc) runOperationRecovery(ctx context.Context, interval time.Durati
 }
 
 func (s *orchSvc) Run(ctx context.Context) {
-	if s.authorizer != nil {
-		go s.authorizer.Run(ctx)
-	}
-	// Durable authorization policy hot-reload (shared interceptor freshness;
-	// see the enforcer wiring above). Maintenance mode skips background work.
-	if s.enforcer != nil && !s.cfg.Maintenance {
-		go s.enforcer.StartPolicyReloader(ctx, s.cfg.Authorization.WithDefaults().PolicyReloadInterval)
-	}
-	if s.validation != nil {
-		go s.validation.Run(ctx)
-	}
+	s.startOrchestratorWorkers(ctx)
 	lifecyclePolicy := orchestrator.LifecyclePolicy{
 		OperationDeadline:   s.cfg.Operation.WithDefaults().Deadline,
 		SessionOfflineAfter: s.cfg.OperatorSession.WithDefaults().OfflineAfter,
 		RecoveryInterval:    s.cfg.Operation.WithDefaults().RecoveryInterval,
 	}
-	if s.sessionRegistry != nil && !s.cfg.Maintenance {
-		go s.sessionRegistry.Run(ctx)
-	}
-	if !s.cfg.Maintenance {
-		// REQ-023 AC-023-05 + TASK-098: the non-terminal sweep used to run once
-		// at startup, so an operation that got stuck later stayed stuck until the
-		// next restart. It is idempotent, so it runs on a configurable cadence.
-		go s.runOperationRecovery(ctx, lifecyclePolicy.RecoveryInterval)
-	}
-	// REQ-088 D3=D5=A: the periodic pending-identity sweep (bind buffered
-	// identities whose row appeared, purge TTL orphans) runs on the mounted
-	// operator service as its own goroutine so it is independent of the
-	// cleanup/emergency early returns below. Maintenance mode skips it.
-	if s.operatorService != nil && !s.cfg.Maintenance {
-		go s.runPendingIdentitySweep(ctx)
-	}
+	s.startLifecycleWorkers(ctx, lifecyclePolicy)
 	if s.cfg.Maintenance || s.cleanup == nil {
 		return
 	}
@@ -824,6 +799,49 @@ func (s *orchSvc) Run(ctx context.Context) {
 	// never auto-releases). Started as its own goroutine so the 1s emergency
 	// deadline sweep below never delays it.
 	go s.startStuckLockScanner(ctx)
+	s.runEmergencyExpiryLoop(ctx)
+}
+
+// startOrchestratorWorkers launches the authorization, policy hot-reload and
+// validation workers.
+func (s *orchSvc) startOrchestratorWorkers(ctx context.Context) {
+	if s.authorizer != nil {
+		go s.authorizer.Run(ctx)
+	}
+	// Durable authorization policy hot-reload (shared interceptor freshness;
+	// see the enforcer wiring above). Maintenance mode skips background work.
+	if s.enforcer != nil && !s.cfg.Maintenance {
+		go s.enforcer.StartPolicyReloader(ctx, s.cfg.Authorization.WithDefaults().PolicyReloadInterval)
+	}
+	if s.validation != nil {
+		go s.validation.Run(ctx)
+	}
+}
+
+// startLifecycleWorkers launches the session, recovery and pending-identity
+// workers that maintenance mode disables.
+func (s *orchSvc) startLifecycleWorkers(ctx context.Context, lifecyclePolicy orchestrator.LifecyclePolicy) {
+	if s.sessionRegistry != nil && !s.cfg.Maintenance {
+		go s.sessionRegistry.Run(ctx)
+	}
+	if !s.cfg.Maintenance {
+		// REQ-023 AC-023-05 + TASK-098: the non-terminal sweep used to run once
+		// at startup, so an operation that got stuck later stayed stuck until the
+		// next restart. It is idempotent, so it runs on a configurable cadence.
+		go s.runOperationRecovery(ctx, lifecyclePolicy.RecoveryInterval)
+	}
+	// REQ-088 D3=D5=A: the periodic pending-identity sweep (bind buffered
+	// identities whose row appeared, purge TTL orphans) runs on the mounted
+	// operator service as its own goroutine so it is independent of the
+	// cleanup/emergency early returns. Maintenance mode skips it.
+	if s.operatorService != nil && !s.cfg.Maintenance {
+		go s.runPendingIdentitySweep(ctx)
+	}
+}
+
+// runEmergencyExpiryLoop drives the 1s emergency deadline sweep until the
+// context ends.
+func (s *orchSvc) runEmergencyExpiryLoop(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {

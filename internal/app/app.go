@@ -52,7 +52,7 @@ type closeService interface {
 // orchestrator agent gateway on its own mTLS port). Extra servers share the
 // primary server's startup, error reporting, and graceful shutdown.
 type ExtraServersProvider interface {
-	ExtraServers() ([]*http.Server, error)
+	ExtraServers() []*http.Server
 }
 
 // gcJSONProvider is an optional interface services implement to contribute a
@@ -171,15 +171,11 @@ func Run(configPath string, svc Service) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Build extra listeners (e.g. the orchestrator agent gateway) before
-	// starting anything so configuration errors surface synchronously.
+	// Collect extra listeners (e.g. the orchestrator agent gateway) before
+	// starting anything so they share the primary server's lifecycle.
 	var extra []*http.Server
 	if provider, ok := svc.(ExtraServersProvider); ok {
-		extra, err = provider.ExtraServers()
-		if err != nil {
-			logger.Error("failed to configure extra servers", "error", err)
-			return
-		}
+		extra = provider.ExtraServers()
 	}
 	if background, ok := svc.(backgroundService); ok {
 		go background.Run(ctx)

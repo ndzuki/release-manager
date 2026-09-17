@@ -354,16 +354,7 @@ func (s *inventoryStore) Query(ctx context.Context, query store.InventoryQuery) 
 		ELSE 'active'
 	END`
 
-	where := []string{"ri.customer_id = ?", "ri.cluster_id = ?"}
-	args := []any{query.CustomerID, query.ClusterID}
-	if query.Status != "" {
-		where = append(where, statusExpression+" = ?")
-		args = append(args, string(query.Status))
-	}
-	if search := strings.TrimSpace(query.NameSearch); search != "" {
-		where = append(where, "LOWER(ri.release_name) LIKE ?")
-		args = append(args, "%"+strings.ToLower(search)+"%")
-	}
+	where, args := inventoryFilterWhere(query, statusExpression)
 
 	var totalCount int
 	countQuery := `SELECT COUNT(*) FROM release_inventory ri WHERE ` + strings.Join(where, " AND ")
@@ -402,6 +393,52 @@ func (s *inventoryStore) Query(ctx context.Context, query store.InventoryQuery) 
 	}
 	defer rows.Close()
 
+	items, updatedAts, err := scanInventoryPage(rows, pageSize, totalCount)
+	if err != nil {
+		return nil, err
+	}
+
+	// A page of pageSize+1 rows proves another page exists: drop the overflow
+	// row before it reaches the caller, and encode the cursor from the last row
+	// actually returned.
+	hasMore := len(items) > pageSize
+	if hasMore {
+		items = items[:pageSize]
+		updatedAts = updatedAts[:pageSize]
+	}
+	nextCursor, err := inventoryNextCursor(items, updatedAts, hasMore, queryHash, snapshotVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	return &store.InventoryPage{
+		Items:      items,
+		NextCursor: nextCursor,
+		TotalCount: totalCount,
+		LastSyncAt: lastSyncAt,
+	}, nil
+}
+
+// inventoryFilterWhere builds the shared WHERE fragments for the count and page
+// queries. statusExpression is the computed consistency-status expression, which
+// the status filter compares against.
+func inventoryFilterWhere(query store.InventoryQuery, statusExpression string) (where []string, args []any) {
+	where = []string{"ri.customer_id = ?", "ri.cluster_id = ?"}
+	args = []any{query.CustomerID, query.ClusterID}
+	if query.Status != "" {
+		where = append(where, statusExpression+" = ?")
+		args = append(args, string(query.Status))
+	}
+	if search := strings.TrimSpace(query.NameSearch); search != "" {
+		where = append(where, "LOWER(ri.release_name) LIKE ?")
+		args = append(args, "%"+strings.ToLower(search)+"%")
+	}
+	return where, args
+}
+
+// scanInventoryPage drains the inventory page rows, parsing the RFC3339
+// timestamps that the keyset cursor also needs.
+func scanInventoryPage(rows *sql.Rows, pageSize, totalCount int) ([]*store.ReleaseInventory, []string, error) {
 	items := make([]*store.ReleaseInventory, 0, min(pageSize, totalCount))
 	updatedAts := make([]string, 0, pageSize+1)
 	for rows.Next() {
@@ -414,46 +451,42 @@ func (s *inventoryStore) Query(ctx context.Context, query store.InventoryQuery) 
 			&item.ObservedManifestDigest, &item.LiveStatus, &item.LastOperationID, &item.InventoryStatus, &item.LastSyncID,
 			&item.SnapshotVersion, &createdAt, &updatedAt,
 		); err != nil {
-			return nil, fmt.Errorf("scan inventory page: %w", err)
+			return nil, nil, fmt.Errorf("scan inventory page: %w", err)
 		}
+		var err error
 		item.CreatedAt, err = time.Parse(time.RFC3339, createdAt)
 		if err != nil {
-			return nil, fmt.Errorf("parse inventory created_at: %w", err)
+			return nil, nil, fmt.Errorf("parse inventory created_at: %w", err)
 		}
 		item.UpdatedAt, err = time.Parse(time.RFC3339, updatedAt)
 		if err != nil {
-			return nil, fmt.Errorf("parse inventory updated_at: %w", err)
+			return nil, nil, fmt.Errorf("parse inventory updated_at: %w", err)
 		}
 		items = append(items, &item)
 		updatedAts = append(updatedAts, updatedAt)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate inventory page: %w", err)
+		return nil, nil, fmt.Errorf("iterate inventory page: %w", err)
 	}
+	return items, updatedAts, nil
+}
 
-	var nextCursor string
-	if len(items) > pageSize {
-		items = items[:pageSize]
-		updatedAts = updatedAts[:pageSize]
-		last := items[len(items)-1]
-		nextCursor, err = encodeInventoryCursor(inventoryCursor{
-			QueryHash:       queryHash,
-			SnapshotVersion: snapshotVersion,
-			UpdatedAt:       updatedAts[len(updatedAts)-1],
-			Namespace:       last.Namespace,
-			ReleaseName:     last.ReleaseName,
-		})
-		if err != nil {
-			return nil, err
-		}
+// inventoryNextCursor encodes the keyset cursor for the next page from the last
+// row of the trimmed page, or returns "" when this page is the last one.
+func inventoryNextCursor(
+	items []*store.ReleaseInventory, updatedAts []string, hasMore bool, queryHash string, snapshotVersion int64,
+) (string, error) {
+	if !hasMore {
+		return "", nil
 	}
-
-	return &store.InventoryPage{
-		Items:      items,
-		NextCursor: nextCursor,
-		TotalCount: totalCount,
-		LastSyncAt: lastSyncAt,
-	}, nil
+	last := items[len(items)-1]
+	return encodeInventoryCursor(inventoryCursor{
+		QueryHash:       queryHash,
+		SnapshotVersion: snapshotVersion,
+		UpdatedAt:       updatedAts[len(updatedAts)-1],
+		Namespace:       last.Namespace,
+		ReleaseName:     last.ReleaseName,
+	})
 }
 
 func (s *inventoryStore) inventoryVersion(ctx context.Context, customerID, clusterID string) (int64, time.Time, error) {

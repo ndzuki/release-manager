@@ -194,8 +194,10 @@ jobs:
         run: go tool cover -func=coverage.out
 
       # Lint only the code this PR/commit introduces instead of the whole
-      # repository: pre-existing issues on main (gocyclo/gosec debt from
-      # other tasks) must not block new work, and the check is much faster.
+      # repository: the check stays fast, and an issue that lands on main cannot
+      # block an unrelated pull request. The whole-tree run is clean since
+      # TASK-110 (see `make lint`), so widening this gate is a separate decision
+      # rather than a prerequisite.
       # A workflow_dispatch run carries neither a pull-request base nor a push
       # `before`, so the fallback chain below used to resolve to the empty
       # string and golangci-lint compared against nothing: every manual

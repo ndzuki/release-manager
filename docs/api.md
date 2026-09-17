@@ -143,11 +143,11 @@ curl -sS http://127.0.0.1:8083/environment
 
 ### 3.2 JWT
 
-HS256 对称签名，`internal/auth/jwt.go:22-29`（`NewJWTManager(signingKey, accessTTL, refreshTTL)`），claims 为 `sub`/`uid`/`roles`/`org_id` + `jti`（`:32-37`）。`cmd/auth/main.go:140` 以 15 分钟 access / 7 天 refresh 构造。签名密钥来源：`--signing-key` flag，回退到 `JWT_SIGNING_KEY` 环境变量，默认值 `change-me-in-production`（`cmd/orchestrator/main.go:833`；`cmd/api/main.go` 同样以 flag 接收）。
+HS256 对称签名，`internal/auth/jwt.go:22-29`（`NewJWTManager(signingKey, accessTTL, refreshTTL)`），claims 为 `sub`/`uid`/`roles`/`org_id` + `jti`（`:32-37`）。`cmd/auth/main.go:140` 以 15 分钟 access / 7 天 refresh 构造。签名密钥来源：`--signing-key` flag，回退到 `JWT_SIGNING_KEY` 环境变量，默认值 `change-me-in-production`（`cmd/orchestrator/main.go:851`；`cmd/api/main.go` 同样以 flag 接收）。
 
 校验链在 `internal/auth/interceptor.go:53-66`：取 `Authorization: Bearer`，无则回退 `rm_access` cookie，两者皆空 `unauthenticated`；`ValidateAccessToken` 失败 `unauthenticated: invalid token`。放行前还要过两道会话检查：`internal/auth/interceptor.go:111-114` 查库确认用户存在且 `status == active`，`:115-122` 确认存在未过期的 auth session（查库失败本身返回 `internal: session validation failed`），否则都是 `unauthenticated: session revoked`。
 
-审计服务用的是**另一套**独立实现：`internal/jwtauth/jwt.go` 的 `Manager` + `internal/audit/interceptor.go:23-45`，只验签；它不内嵌 Casbin，也不读 release-auth 的库（ADR-015 每库一个权威）。TASK-095 先补了域归属（principal 组织），TASK-103 按 **ADR-021** 把角色判定也接到 release-auth：审计 interceptor 把调用方**自己的** Bearer 一并注入 principal（`internal/audit/interceptor.go:36-45`），handler 每个请求经 `internal/audit/decision.go:44-76` 调 `auth.v1.AuthorizationService/AuthorizeAccess`（200ms 超时），拿到 `allowed`/`reason`/有效组织/`allow_cross_organization`/`max_window_days` 后执行（`internal/audit/authorization.go:41-84`），无法取得判定即 `unavailable`（fail closed，不回落本地角色猜测）。窗口上限来自 release-auth 的返回值而非本地硬编码，超限 → `invalid_argument` + `range_too_large`（`internal/audit/authorization.go:86-105`，REQ-029 AC-029-02）。`Emit` 仍拒收 actor 组织与有效组织不一致的事件。仍未做：会话撤销的本地校验（由 release-auth 侧裁决覆盖），见 3.8。
+审计服务用的是**另一套**独立实现：`internal/jwtauth/jwt.go` 的 `Manager` + `internal/audit/interceptor.go:23-45`，只验签；它不内嵌 Casbin，也不读 release-auth 的库（ADR-015 每库一个权威）。TASK-095 先补了域归属（principal 组织），TASK-103 按 **ADR-021** 把角色判定也接到 release-auth：审计 interceptor 把调用方**自己的** Bearer 一并注入 principal（`internal/audit/interceptor.go:36-45`），handler 每个请求经 `internal/audit/decision.go:44-76` 调 `auth.v1.AuthorizationService/AuthorizeAccess`（200ms 超时），拿到 `allowed`/`reason`/有效组织/`allow_cross_organization`/`max_window_days` 后执行（`internal/audit/authorization.go:29-72`），无法取得判定即 `unavailable`（fail closed，不回落本地角色猜测）。窗口上限来自 release-auth 的返回值而非本地硬编码，超限 → `invalid_argument` + `range_too_large`（`internal/audit/authorization.go:74-93`，REQ-029 AC-029-02）。`Emit` 仍拒收 actor 组织与有效组织不一致的事件。仍未做：会话撤销的本地校验（由 release-auth 侧裁决覆盖），见 3.8。
 
 ### 3.3 service token（bundle ingress 与 Harbor ingress）
 
@@ -174,12 +174,12 @@ TASK-102 之后 bundle/Harbor ingress 共三把独立、可分别轮换的凭据
 
 1. `publicMethods[procedure]` → 直接放行（`:49-51`）。release-auth 声明 5 个公开方法：`GetInitStatus`、`Initialize`、`ValidateToken`、`Login`、`RefreshToken`（`cmd/auth/main.go:173-179`）。release-orchestrator 四处挂载全部传 `map[string]bool{}`，即**没有公开方法**（`cmd/orchestrator/main.go:450`、`:468`、`:482`、`:517`）。
 2. 解析 JWT（`:53-66`：`Authorization: Bearer` 缺失则回退 `rm_access` cookie，两者皆空 `unauthenticated: missing authentication credentials`，验签失败 `unauthenticated: invalid token`）。
-3. 查显式登记表并解析 domain（`:68-79`）：`lookupProcedure(procedure)`（`internal/auth/procedure_policy.go:187-190`）取该 procedure 的策略行，未登记 → `permission_denied` + `X-Reason-Code: invalid_actor_context`；`resolveDomain`（`internal/auth/interceptor.go:243-255`）默认要求请求 `org_id` 等于 token 的 `org_id`，只有登记为 `targetOrg` 的 procedure（仅 `SwitchOrganization`）允许取请求里的目标组织；两者都无 → `invalid_actor_context`。`BundleService` 两个读方法与 `GetOrganization`/`UpdateOrganization`/`DisableOrganization` 的归属由 `enforceRequestBinding`（`:257-274`）另行反查。
+3. 查显式登记表并解析 domain（`:68-79`）：`lookupProcedure(procedure)`（`internal/auth/procedure_policy.go:183-186`）取该 procedure 的策略行，未登记 → `permission_denied` + `X-Reason-Code: invalid_actor_context`；`resolveDomain`（`internal/auth/interceptor.go:243-255`）默认要求请求 `org_id` 等于 token 的 `org_id`，只有登记为 `targetOrg` 的 procedure（仅 `SwitchOrganization`）允许取请求里的目标组织；两者都无 → `invalid_actor_context`。`BundleService` 两个读方法与 `GetOrganization`/`UpdateOrganization`/`DisableOrganization` 的归属由 `enforceRequestBinding`（`:257-274`）另行反查。
 4. cookie 会话下的非 read 请求校验 CSRF（`:80-86`）。
 5. `enforceRequestBinding`（customer 绑定/禁用一致性）→ `:88-97`。
 6. 策略行 `mode == modeCasbin` 时执行 `enforcer.Enforce(userID, domain, object, action)` → `:98-109`；`modeHandler` 的 procedure 跳过 Casbin，由 handler 自证授权。
 
-TASK-095 把旧的「服务名包含 + 方法名前缀」推断（`mapServiceToObject`/`mapMethodToAction`）整体删除，改为 `internal/auth/procedure_policy.go:66-186` 的**显式 procedure → 授权登记表**（105 行，一行一个 procedure；TASK-103 新增 `AuthorizationService/AuthorizeAccess`）。每行的 `mode` 取值：`modeCasbin`（拦截器裁决）、`modeHandler`（handler 自证）、`modePublic`、`modePrincipalScope`（release-api 审计面）、`modeMTLS`、`modeUnintercepted`。两条门禁测试锁死这张表：`internal/auth/procedure_policy_test.go:90` 遍历 proto registry，新增 procedure 未登记即失败；`:121` 断言每个 `modeCasbin` 的 `(object, action)` 必须落在默认角色矩阵（非通配角色）的授予集合内，或显式标注 `adminOnly`。
+TASK-095 把旧的「服务名包含 + 方法名前缀」推断（`mapServiceToObject`/`mapMethodToAction`）整体删除，改为 `internal/auth/procedure_policy.go:62-182` 的**显式 procedure → 授权登记表**（105 行，一行一个 procedure；TASK-103 新增 `AuthorizationService/AuthorizeAccess`）。每行的 `mode` 取值：`modeCasbin`（拦截器裁决）、`modeHandler`（handler 自证）、`modePublic`、`modePrincipalScope`（release-api 审计面）、`modeMTLS`、`modeUnintercepted`。两条门禁测试锁死这张表：`internal/auth/procedure_policy_test.go:90` 遍历 proto registry，新增 procedure 未登记即失败；`:121` 断言每个 `modeCasbin` 的 `(object, action)` 必须落在默认角色矩阵（非通配角色）的授予集合内，或显式标注 `adminOnly`。
 
 角色 → 策略规则（`internal/auth/casbin.go:425-477`，角色常量 `internal/store/store.go:807-812`，仅 4 个角色）：
 
@@ -223,7 +223,7 @@ TASK-095 把旧的「服务名包含 + 方法名前缀」推断（`mapServiceToO
 
 ### 3.7 授权映射缺陷与修复证据（TASK-095）
 
-TASK-095 之前，`(object, action)` 由服务名包含 + 方法名前缀推断，5 个 procedure 因此恒 `permission_denied`。穷尽审计（遍历 proto registry 跑登记表）测得 **104 个 procedure 中 7 个「有 object 无 action」**：`Login`/`Initialize` 属公开路径不受影响，其余 5 个是真缺陷；另有 1 个（`ChangePassword`）虽 action 非空但落在无人被授予的 `auth` 对象上。现已全部改为显式登记（`internal/auth/procedure_policy.go:66-185`）：
+TASK-095 之前，`(object, action)` 由服务名包含 + 方法名前缀推断，5 个 procedure 因此恒 `permission_denied`。穷尽审计（遍历 proto registry 跑登记表）测得 **104 个 procedure 中 7 个「有 object 无 action」**：`Login`/`Initialize` 属公开路径不受影响，其余 5 个是真缺陷；另有 1 个（`ChangePassword`）虽 action 非空但落在无人被授予的 `auth` 对象上。现已全部改为显式登记（`internal/auth/procedure_policy.go:62-181`）：
 
 | procedure | 修复前 | 修复后与证据 |
 | --- | --- | --- |
@@ -304,7 +304,7 @@ TASK-095 之前，`(object, action)` 由服务名包含 + 方法名前缀推断�
 | --- | --- | --- |
 | `orchestrator.v1.OperatorErrorDetail` | `api/proto/orchestrator/v1/orchestrator.proto:719-721` | `internal/orchestrator/operator.go:426-436` |
 | `orchestrator.v1.EmergencyErrorDetail` | `api/proto/orchestrator/v1/orchestrator.proto:1632-1635` | `internal/orchestrator/emergency.go:740-752` |
-| `orchestrator.v1.CreateOperationGateDetail` | `api/proto/orchestrator/v1/orchestrator.proto:203-205` | `internal/orchestrator/service.go:1306-1314` |
+| `orchestrator.v1.CreateOperationGateDetail` | `api/proto/orchestrator/v1/orchestrator.proto:203-205` | `internal/orchestrator/service.go:1327-1335` |
 | `orchestrator.v1.RouteValidationDetail` | `api/proto/orchestrator/v1/orchestrator.proto:759-763` | `internal/orchestrator/cluster.go:323-330` |
 
 未见使用 Google `errdetails`（检索 `google.golang.org/genproto/googleapis/rpc/errdetails` 零命中）。更常见的是 **metadata 承载 reason**：
@@ -312,7 +312,7 @@ TASK-095 之前，`(object, action)` 由服务名包含 + 方法名前缀推断�
 - `X-Reason-Code` — 写入点包括 `internal/operator/errors.go:30`、`internal/orchestrator/values_revision.go:476-479`、`internal/orchestrator/emergency.go:731-742`、`internal/orchestrator/service.go:630`、`internal/auth/interceptor.go:293-302`。取值如 `invalid_actor_context`、`policy_unavailable`、`cursor_expired`、`size_exceeded`、`optimistic_lock_conflict`。
 - `X-Policy-Version`（授权策略版本，`internal/auth/interceptor.go:300`）、`X-Conflict-Task-Ids`、`X-Sync-Request-ID`、`X-Snapshot-Sequence`、`X-Retained-From-Sequence`、`X-Snapshot-Proto`（base64 protojson 快照，`internal/orchestrator/service.go:628-638`）。
 
-reason code 风格不统一：同一份代码里存在三种做法——类型化 detail、纯 metadata、把 reason 拼进 message 前缀（`internal/orchestrator/bundle_service.go:589-591`）。写新代码时按所在包的既有风格对齐，不要跨包发明第四种。
+reason code 风格不统一：同一份代码里存在三种做法——类型化 detail、纯 metadata、把 reason 拼进 message 前缀（`internal/orchestrator/bundle_service.go:651-653`）。写新代码时按所在包的既有风格对齐，不要跨包发明第四种。
 
 ### 4.4 存储层错误映射
 
@@ -338,7 +338,7 @@ reason code 风格不统一：同一份代码里存在三种做法——类型�
 - 越界报错：`ListOperators` 对 `<0 || >100` 返回 `invalid_argument: page_size must be between 1 and 100`（`internal/orchestrator/operator.go:54-60`）；`ListValuesRevisions` 同样报错（`internal/orchestrator/values_revision.go:246-248`）。
 - 引擎差异：`ListBundles` 在 SQLite 下恒失败（`internal/store/sqlite/bundles.go:379-381` 返回 `sqlite bundle listing is unsupported`），即该 RPC **仅 PostgreSQL 可用**。
 
-游标实现：`EncodeCursor` 把 `"<unixnano>|<id>"` 做 base64url（`internal/contracts/pagination.go:25-28`），`KeysetPredicate` 生成 `(created_at < ? OR (created_at = ? AND id < ?))` 形式的严格排除条件（`:65-71`），因此排序稳定、翻页期间新增行不影响已取页。游标与查询形状绑定（bundle/values/inventory/operators 都把 filter 或 snapshot 版本编进 query_hash，例如 `internal/store/postgres/bundles.go:293-301`、`internal/orchestrator/operator.go:377-391`），改 filter 会被拒绝而不是悄悄重定位。非法/过期游标一律 `invalid_argument`（`invalid_cursor`、`invalid_page_token`、`invalid or expired cursor`）。
+游标实现：`EncodeCursor` 把 `"<unixnano>|<id>"` 做 base64url（`internal/contracts/pagination.go:25-28`），`KeysetPredicate` 生成 `(created_at < ? OR (created_at = ? AND id < ?))` 形式的严格排除条件（`:65-71`），因此排序稳定、翻页期间新增行不影响已取页。游标与查询形状绑定（bundle/values/inventory/operators 都把 filter 或 snapshot 版本编进 query_hash，例如 `internal/store/postgres/bundles.go:329-337`、`internal/orchestrator/operator.go:377-391`），改 filter 会被拒绝而不是悄悄重定位。非法/过期游标一律 `invalid_argument`（`invalid_cursor`、`invalid_page_token`、`invalid or expired cursor`）。
 
 流式续传是另一套机制：`WatchOperation` 的 `after_sequence`（`api/proto/orchestrator/v1/orchestrator.proto:331` 的 `WatchOperationRequest`，字段在 `:335`），游标过界返回 `out_of_range` + `X-Reason-Code: cursor_expired` 及快照 metadata（`internal/orchestrator/service.go:628-638`）。
 
@@ -348,7 +348,7 @@ reason code 风格不统一：同一份代码里存在三种做法——类型�
 
 标准是 `google.protobuf.Timestamp`（`api/proto/common/v1/types.proto:16` 等 9 个文件导入）。JSON 线上渲染为 RFC 3339 `Z` 字符串；Go 侧统一 `time.Now().UTC()`（`cmd/**` 与 `internal/**` 非测试代码里 319 处，占全部 353 处 `time.Now()` 的绝大多数；余下多为时延测量与已在 UTC 值上的算术），SQLite 写 RFC3339(Nano) 文本、PostgreSQL 用 `TIMESTAMPTZ`。
 
-四例非 Timestamp，务必区分：`auth.v1` 的 `int64 expires_at` 是 **Unix 秒**（`api/proto/auth/v1/auth.proto:45`）；`operator.v1.EnrollResponse.certificate_expires_at` 是 RFC3339 字符串；`SubmitBundle` 的 `occurred_at` 是必须为 RFC3339 的字符串，否则 `invalid_argument`（`internal/orchestrator/bundle_service.go:134-137`）；`observe_timeout_display` 是 `time.Duration.String()` 的展示值。全仓库唯一的 `google.protobuf.Duration` 字段是 `UpgradeCommand.timeout`（`api/proto/operator/v1/upgrade_result.proto:78`）。其余时长一律 `_seconds` 后缀标量（`ttl_seconds`、`heartbeat_interval_seconds`、`duration_ms`）。契约里**不存在毫秒 epoch 字段**。
+四例非 Timestamp，务必区分：`auth.v1` 的 `int64 expires_at` 是 **Unix 秒**（`api/proto/auth/v1/auth.proto:45`）；`operator.v1.EnrollResponse.certificate_expires_at` 是 RFC3339 字符串；`SubmitBundle` 的 `occurred_at` 是必须为 RFC3339 的字符串，否则 `invalid_argument`（`internal/orchestrator/bundle_service.go:173-175`）；`observe_timeout_display` 是 `time.Duration.String()` 的展示值。全仓库唯一的 `google.protobuf.Duration` 字段是 `UpgradeCommand.timeout`（`api/proto/operator/v1/upgrade_result.proto:78`）。其余时长一律 `_seconds` 后缀标量（`ttl_seconds`、`heartbeat_interval_seconds`、`duration_ms`）。契约里**不存在毫秒 epoch 字段**。
 
 ### 5.3 枚举
 
@@ -364,7 +364,7 @@ ID 归属不统一：多数由服务端生成（`CreateReleaseDefinitionRequest`
 
 ### 5.5 幂等
 
-写 RPC 的幂等键是 **HTTP 头 `Idempotency-Key`**（`docs/architecture.md:92`），适用范围：`CreateOperation`（`internal/orchestrator/service.go:118`）、`RollbackRelease`（`internal/orchestrator/rollback.go:30`）、`CancelOperation`（`internal/orchestrator/service.go:825`）、`CreateValuesRevision`（`internal/orchestrator/values_revision.go:83`）、`SubmitValuesRevision`/`Approve`/`Reject`（`internal/orchestrator/values_approval.go:47`、`:62`、`:77`）、`SubmitBundle`（`internal/orchestrator/bundle_service.go:73`）。长度限制 1-64 字符（`internal/orchestrator/values_revision.go:402-408`、`internal/auth/local_users.go:41-43`）。
+写 RPC 的幂等键是 **HTTP 头 `Idempotency-Key`**（`docs/architecture.md:92`），适用范围：`CreateOperation`（`internal/orchestrator/service.go:118`）、`RollbackRelease`（`internal/orchestrator/rollback.go:30`）、`CancelOperation`（`internal/orchestrator/service.go:846`）、`CreateValuesRevision`（`internal/orchestrator/values_revision.go:83`）、`SubmitValuesRevision`/`Approve`/`Reject`（`internal/orchestrator/values_approval.go:47`、`:62`、`:77`）、`SubmitBundle`（`internal/orchestrator/bundle_service.go:70`）。长度限制 1-64 字符（`internal/orchestrator/values_revision.go:402-408`、`internal/auth/local_users.go:41-43`）。
 
 两个例外把键放在**请求体字段**：`ExecuteEmergencyChangeRequest.idempotency_key`（`internal/orchestrator/emergency.go:447-448`）与 `RunCleanupRequest.idempotency_key`（`api/proto/orchestrator/v1/cleanup.proto:50-51`，`internal/orchestrator/cleanup.go:185`）。同键同请求 → 静默重放首次结果；同键不同请求 → `already_exists` + `idempotency_conflict`。`CreateLocalUser` 只校验长度、未见幂等去重（`internal/auth/local_users.go:41-43`）。`RunCleanup` 的幂等在 SQLite 下不可用（`internal/store/sqlite/cleanup_idempotency_unsupported.go` 整文件返回 `ErrCleanupIdempotencyUnavailable`）。
 
@@ -478,7 +478,7 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 | RPC | 作用 | 鉴权 | 位置 | 关键错误 |
 | --- | --- | --- | --- | --- |
 | `Enroll` | 用一次性 enrollment token + CSR 注册 agent 并签发客户端证书 | 无（token 即凭证） | `internal/operator/service.go:181` | `unauthenticated`（`:192`）、`permission_denied`（`:217`）、`invalid_argument`（`:243`）、`internal`（`:194`） |
-| `RenewCertificate` | 用既有证书续期（ADR-018） | 网关：证书；管理端口：无 | `internal/operator/service.go:1323` | `unauthenticated`（`:1329`）、`failed_precondition`（`:1350`）、`invalid_argument`（`:1354`）、`permission_denied`（`:1363`） |
+| `RenewCertificate` | 用既有证书续期（ADR-018） | 网关：证书；管理端口：无 | `internal/operator/service.go:1368` | `unauthenticated`（`:1329`）、`failed_precondition`（`:1350`）、`invalid_argument`（`:1354`）、`permission_denied`（`:1363`） |
 | `CommandStream` | **bidi-streaming**：Hello/Heartbeat/Ack/Result/Resync/EmergencyStop + 命令下发 | 网关：客户端证书；管理端口：仅 `session_id` 查库存在性 | `internal/operator/service.go:375` | `invalid_argument`（`:387` 首帧必须是 Hello）；证书分支 `unauthenticated`（`:398`、`:403`）、`permission_denied`（`:433`、`:435`、`:438`）、`already_exists`（`:460` 单 operator 只允许一个在线会话）；非证书分支 `unauthenticated`（`:478` 会话不存在）、`permission_denied`（`:481` 会话与 operator 不符）；需 HTTP/2，见 2.6 |
 | `GetActiveOperatorSession` | 读取 operator 当前活跃会话 | 无（网关中间件也不覆盖此路径） | `internal/operator/active_session.go:16` | `invalid_argument`（`:22`）、`not_found`（`:27`）、`internal`（`:30`） |
 
@@ -487,16 +487,16 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 - **有 TLS 状态时**（网关监听器，`internal/operator/service.go:396-440`）：要求客户端证书，SAN 必须编码 operator 身份，并与登记记录的 `cert_serial` 一致；`operator_id` 由证书推导而非请求体。
 - **无 TLS 状态时**（管理端口 8083 与 `release-operator` gateway 模式，同一 handler：`cmd/orchestrator/main.go:369-376`、`cmd/operator/main.go:259-266`）：走 `else` 分支，只做「`hello.session_id` 在库里存在且 `session.OperatorID` 匹配」的检查（`internal/operator/service.go:473-482`）——没有 JWT、没有证书。注释里写明该路径由后续任务移除（`internal/operator/service.go:474-475`），当前是既有事实。
 
-网关的 `NewCertificateIdentityHandler` 只强制校验 `CommandStream` 与 `RenewCertificate` 两条路径（`internal/operator/identity_handler.go:8-19`，路径字符串比较在 `:10-11`），其余 procedure 直接 `next.ServeHTTP`。`RenewCertificate` 则在 handler 内部再要求证书身份上下文（`internal/operator/service.go:1327-1330`），所以它在管理端口上恒 `unauthenticated`。
+网关的 `NewCertificateIdentityHandler` 只强制校验 `CommandStream` 与 `RenewCertificate` 两条路径（`internal/operator/identity_handler.go:8-19`，路径字符串比较在 `:10-11`），其余 procedure 直接 `next.ServeHTTP`。`RenewCertificate` 则在 handler 内部再要求证书身份上下文（`internal/operator/service.go:1372-1375`），所以它在管理端口上恒 `unauthenticated`。
 
 ### 7.9 orchestrator.v1.BundleService（4 个，`release-orchestrator` 8083）
 
 | RPC | 作用 | 鉴权 | 位置 | 关键错误 |
 | --- | --- | --- | --- | --- |
 | `SubmitBundle` | 提交发布 bundle 入库（CI 入口） | service token（scope 仅此一条）或 JWT+authz(bundle/write) | `internal/orchestrator/bundle_service.go:54` | `already_exists`（`:110` 幂等冲突）；`Idempotency-Key` |
-| `RecordArtifactEvent` | 记录制品生命周期事件 | authz(bundle/write，`adminOnly`)；service-token 路仍只放行 `SubmitBundle`（Harbor key 未落地，见 3.8） | `internal/orchestrator/bundle_service.go:120` | `invalid_argument`（`:126`）、`already_exists`（`:172`） |
-| `ListBundles` | 分页查询 bundle | authz(bundle/read) | `internal/orchestrator/bundle_service.go:183` | `permission_denied`（`:189`）、`invalid_argument`（`:200`）；SQLite 下恒失败 |
-| `GetBundle` | 查询单个 bundle（可带 definition 归属校验） | authz(bundle/read) | `internal/orchestrator/bundle_service.go:230` | `invalid_argument`（`:235`）、`permission_denied`（`:240`）、`not_found`（`:251`） |
+| `RecordArtifactEvent` | 记录制品生命周期事件 | authz(bundle/write，`adminOnly`)；service-token 路仍只放行 `SubmitBundle`（Harbor key 未落地，见 3.8） | `internal/orchestrator/bundle_service.go:117` | `invalid_argument`（`:126`）、`already_exists`（`:172`） |
+| `ListBundles` | 分页查询 bundle | authz(bundle/read) | `internal/orchestrator/bundle_service.go:202` | `permission_denied`（`:189`）、`invalid_argument`（`:200`）；SQLite 下恒失败 |
+| `GetBundle` | 查询单个 bundle（可带 definition 归属校验） | authz(bundle/read) | `internal/orchestrator/bundle_service.go:249` | `invalid_argument`（`:235`）、`permission_denied`（`:240`）、`not_found`（`:251`） |
 
 ### 7.10 orchestrator.v1.CleanupService（2 个，`release-orchestrator` 8083）
 
@@ -533,7 +533,7 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 | `RollbackRelease` | 回滚到指定 revision | authz(release/write) | `internal/orchestrator/rollback.go:24` | `unauthenticated`（`:35`）、`invalid_argument`（`:41`）、`not_found`（`:66`）、`internal`（`:70`）；`Idempotency-Key` |
 | `GetOperation` | 查询 Operation 详情 | authz(release/read) | `internal/orchestrator/service.go:507` | `unauthenticated`（`:513`）、`not_found`（`:517`）、`internal`（`:521`） |
 | `WatchOperation` | **server-streaming** 订阅状态流转 | authz(release/read)；流式由 `NewAuthStreamInterceptor` 裁决 | `internal/orchestrator/service.go:543` | `unauthenticated`（`:550`）、`invalid_argument`（`:553`）、`not_found`（`:557`）、`internal`（`:560`）；游标过界 `out_of_range`+`cursor_expired`（`:628-638`）；维护模式**不拦截**流式 |
-| `CancelOperation` | 取消非终态 Operation | authz(release/write) | `internal/orchestrator/service.go:820` | `unauthenticated`（`:829`）、`not_found`（`:838`）、`failed_precondition`（`:855`）、`internal`（`:842`）；`Idempotency-Key` |
+| `CancelOperation` | 取消非终态 Operation | authz(release/write) | `internal/orchestrator/service.go:841` | `unauthenticated`（`:829`）、`not_found`（`:838`）、`failed_precondition`（`:855`）、`internal`（`:842`）；`Idempotency-Key` |
 | `SubmitValuesRevision` | 提交 values revision 进入审批 | JWT，handler 自校验（`modeHandler`，登记表 `internal/auth/procedure_policy.go`） | `internal/orchestrator/values_approval.go:41` | 由 `handleValuesApproval` 决定：`unauthenticated`（`:99`）、`not_found`（`:108`）、`unavailable`（`:124`）、`invalid_argument`（`:187`）；`Idempotency-Key` |
 | `ApproveValuesRevision` | 批准 | JWT，handler 自校验 | `internal/orchestrator/values_approval.go:56` | 同上 + `failed_precondition`（`:241`、`:245`、`:256`）、`permission_denied`（`:249`） |
 | `RejectValuesRevision` | 驳回 | JWT，handler 自校验 | `internal/orchestrator/values_approval.go:71` | 同上；`reason` 必填（`:198`）；`Idempotency-Key` |

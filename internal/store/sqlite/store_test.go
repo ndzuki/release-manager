@@ -439,6 +439,7 @@ func TestOperationTransition_OptimisticLockAndEvent(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, columns, "values_patch")
 	assert.NotContains(t, columns, "actor")
+	require.NoError(t, rows.Err())
 
 	persisted, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)

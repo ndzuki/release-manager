@@ -267,3 +267,45 @@ func TestInventoryGetByReleaseKey(t *testing.T) {
 	_, err = st.Inventories().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "missing")
 	require.ErrorIs(t, err, store.ErrNotFound)
 }
+
+// TestInventoryQueryPagesWithoutDuplicatingTheOverflowRow pins the page-size
+// contract on the PostgreSQL engine: a page never returns more than PageSize
+// rows, and the overflow row that proves a next page exists must not reappear
+// as the first row of that page. Query selects LIMIT pageSize+1, so the trim is
+// the only thing keeping the two engines in agreement; the SQLite engine covers
+// the same contract in TestInventoryQueryUsesDefaultPageSizeAndSyncLogTimestamp.
+func TestInventoryQueryPagesWithoutDuplicatingTheOverflowRow(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+
+	for _, release := range []string{"alpha", "beta", "gamma"} {
+		seedInventoryRow(t, st, "customer-1", "cluster-1", "apps", release)
+	}
+
+	first, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-1",
+		ClusterID:  "cluster-1",
+		PageSize:   2,
+	})
+	require.NoError(t, err)
+	require.Len(t, first.Items, 2, "the LIMIT pageSize+1 overflow row must be trimmed")
+	require.NotEmpty(t, first.NextCursor)
+	assert.Equal(t, 3, first.TotalCount)
+
+	second, err := st.Inventories().Query(ctx, store.InventoryQuery{
+		CustomerID: "customer-1",
+		ClusterID:  "cluster-1",
+		PageSize:   2,
+		Cursor:     first.NextCursor,
+	})
+	require.NoError(t, err)
+	require.Len(t, second.Items, 1)
+	assert.Empty(t, second.NextCursor)
+
+	seen := map[string]int{}
+	for _, item := range append(append([]*store.ReleaseInventory{}, first.Items...), second.Items...) {
+		seen[item.ReleaseName]++
+	}
+	assert.Equal(t, map[string]int{"alpha": 1, "beta": 1, "gamma": 1}, seen,
+		"each release must appear on exactly one page")
+}

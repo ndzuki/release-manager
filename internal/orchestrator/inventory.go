@@ -24,28 +24,8 @@ func (s *Service) SyncInventory(
 ) (*connect.Response[orchestratorv1.SyncInventoryResponse], error) {
 	msg := req.Msg
 
-	// 1. Validate required fields
-	if msg.OperatorId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("operator_id is required"))
-	}
-	if msg.ClusterId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("cluster_id is required"))
-	}
-	if msg.CustomerId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("customer_id is required"))
-	}
-	if msg.SyncId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("sync_id is required"))
-	}
-
-	// 2. Payload size check
-	if len(msg.Items) > maxInventoryPayload {
-		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("payload_too_large: %d items exceeds limit of %d", len(msg.Items), maxInventoryPayload))
+	if err := validateSyncInventoryRequest(msg); err != nil {
+		return nil, err
 	}
 
 	// 3. Idempotency — check if this sync_id has already been applied (AC-017-03)
@@ -69,72 +49,9 @@ func (s *Service) SyncInventory(
 	}
 
 	// 4. Collect present keys for MarkMissing
-	presentKeys := make([]string, 0, len(msg.Items))
-	acceptedCount := 0
-
-	// REQ-088 D5=A replay gate: only probe releases that actually have a
-	// buffered identity for this cluster. A full snapshot with no pending
-	// rows must not pay one GetByReleaseKey miss-lookup per item.
-	var pendingKeys map[string]struct{}
-	if s.pendingIdentity != nil {
-		pendings, listErr := s.store.PendingWorkloadIdentities().ListByCluster(ctx, msg.CustomerId, msg.ClusterId)
-		if listErr != nil {
-			s.logger.Warn("list pending workload identities for replay gate", "error", listErr)
-		} else {
-			pendingKeys = make(map[string]struct{}, len(pendings))
-			for _, pending := range pendings {
-				pendingKeys[pending.Namespace+"/"+pending.ReleaseName] = struct{}{}
-			}
-		}
-	}
-
-	for _, item := range msg.Items {
-		// AC-017-04: Log only digest, never values
-		s.logger.Debug("upserting inventory item",
-			"namespace", item.Namespace,
-			"name", item.Name,
-			"digest", item.ValuesDigest,
-		)
-
-		inventory := &store.ReleaseInventory{
-			CustomerID:          msg.CustomerId,
-			ClusterID:           msg.ClusterId,
-			Namespace:           item.Namespace,
-			ReleaseDefinitionID: item.DefinitionId,
-			ReleaseName:         item.Name,
-			Chart:               item.Chart,
-			ChartVersion:        item.ChartVersion,
-			Revision:            int(item.Revision),
-			Status:              item.Status,
-			ValuesDigest:        item.ValuesDigest,
-			InventoryStatus:     store.InventoryActive,
-			LastSyncID:          msg.SyncId,
-			SnapshotVersion:     0, // set below after sync log
-		}
-
-		if err := s.store.Inventories().Upsert(ctx, inventory); err != nil {
-			return nil, connect.NewError(connect.CodeInternal,
-				fmt.Errorf("upsert inventory item %s/%s: %w", item.Namespace, item.Name, err))
-		}
-		// REQ-088 D5=A: the inventory row now exists — event-driven replay of
-		// any buffered identity for this release key. Best-effort by design:
-		// a transient replay failure only keeps the pending row, which the
-		// periodic sweep retries; it must never fail the sync itself. Only
-		// releases the replay gate saw as pending are probed (a report
-		// buffered mid-sync for a key outside the gate is still picked up by
-		// the 30s sweep — the replay gate is an optimization, not the backstop).
-		if s.pendingIdentity != nil {
-			if _, pending := pendingKeys[item.Namespace+"/"+item.Name]; pending {
-				if err := s.pendingIdentity.ReplayAfterInventory(ctx, msg.CustomerId, msg.ClusterId, item.Namespace, item.Name); err != nil {
-					s.logger.Warn("pending workload identity replay failed after upsert",
-						"sync_id", msg.SyncId, "namespace", item.Namespace, "name", item.Name, "error", err)
-				}
-			}
-		}
-
-		key := item.Namespace + "/" + item.Name
-		presentKeys = append(presentKeys, key)
-		acceptedCount++
+	presentKeys, acceptedCount, err := s.applyInventoryItems(ctx, msg)
+	if err != nil {
+		return nil, err
 	}
 
 	// 5. Mark missing — releases not in this snapshot get marked InventoryMissing (AC-017-02)
@@ -186,4 +103,103 @@ func (s *Service) SyncInventory(
 		SnapshotVersion:    snapshotVersion,
 		Status:             "applied",
 	}), nil
+}
+
+// validateSyncInventoryRequest checks the required identifiers and the payload
+// bound before any store call.
+func validateSyncInventoryRequest(msg *orchestratorv1.SyncInventoryRequest) error {
+	for _, required := range []struct {
+		value string
+		field string
+	}{
+		{msg.OperatorId, "operator_id"},
+		{msg.ClusterId, "cluster_id"},
+		{msg.CustomerId, "customer_id"},
+		{msg.SyncId, "sync_id"},
+	} {
+		if required.value == "" {
+			return connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("%s is required", required.field))
+		}
+	}
+	if len(msg.Items) > maxInventoryPayload {
+		return connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("payload_too_large: %d items exceeds limit of %d", len(msg.Items), maxInventoryPayload))
+	}
+	return nil
+}
+
+// applyInventoryItems upserts every reported release and returns the present
+// keys plus the accepted count. It also replays any buffered workload identity
+// for the releases the replay gate saw as pending.
+func (s *Service) applyInventoryItems(
+	ctx context.Context, msg *orchestratorv1.SyncInventoryRequest,
+) (presentKeys []string, acceptedCount int, err error) {
+	presentKeys = make([]string, 0, len(msg.Items))
+	acceptedCount = 0
+
+	// REQ-088 D5=A replay gate: only probe releases that actually have a
+	// buffered identity for this cluster. A full snapshot with no pending
+	// rows must not pay one GetByReleaseKey miss-lookup per item.
+	var pendingKeys map[string]struct{}
+	if s.pendingIdentity != nil {
+		pendings, listErr := s.store.PendingWorkloadIdentities().ListByCluster(ctx, msg.CustomerId, msg.ClusterId)
+		if listErr != nil {
+			s.logger.Warn("list pending workload identities for replay gate", "error", listErr)
+		} else {
+			pendingKeys = make(map[string]struct{}, len(pendings))
+			for _, pending := range pendings {
+				pendingKeys[pending.Namespace+"/"+pending.ReleaseName] = struct{}{}
+			}
+		}
+	}
+
+	for _, item := range msg.Items {
+		// AC-017-04: Log only digest, never values
+		s.logger.Debug("upserting inventory item",
+			"namespace", item.Namespace,
+			"name", item.Name,
+			"digest", item.ValuesDigest,
+		)
+
+		inventory := &store.ReleaseInventory{
+			CustomerID:          msg.CustomerId,
+			ClusterID:           msg.ClusterId,
+			Namespace:           item.Namespace,
+			ReleaseDefinitionID: item.DefinitionId,
+			ReleaseName:         item.Name,
+			Chart:               item.Chart,
+			ChartVersion:        item.ChartVersion,
+			Revision:            int(item.Revision),
+			Status:              item.Status,
+			ValuesDigest:        item.ValuesDigest,
+			InventoryStatus:     store.InventoryActive,
+			LastSyncID:          msg.SyncId,
+			SnapshotVersion:     0, // set below after sync log
+		}
+
+		if err := s.store.Inventories().Upsert(ctx, inventory); err != nil {
+			return nil, 0, connect.NewError(connect.CodeInternal,
+				fmt.Errorf("upsert inventory item %s/%s: %w", item.Namespace, item.Name, err))
+		}
+		// REQ-088 D5=A: the inventory row now exists — event-driven replay of
+		// any buffered identity for this release key. Best-effort by design:
+		// a transient replay failure only keeps the pending row, which the
+		// periodic sweep retries; it must never fail the sync itself. Only
+		// releases the replay gate saw as pending are probed (a report
+		// buffered mid-sync for a key outside the gate is still picked up by
+		// the 30s sweep — the replay gate is an optimization, not the backstop).
+		if s.pendingIdentity != nil {
+			if _, pending := pendingKeys[item.Namespace+"/"+item.Name]; pending {
+				if err := s.pendingIdentity.ReplayAfterInventory(ctx, msg.CustomerId, msg.ClusterId, item.Namespace, item.Name); err != nil {
+					s.logger.Warn("pending workload identity replay failed after upsert",
+						"sync_id", msg.SyncId, "namespace", item.Namespace, "name", item.Name, "error", err)
+				}
+			}
+		}
+
+		presentKeys = append(presentKeys, item.Namespace+"/"+item.Name)
+		acceptedCount++
+	}
+	return presentKeys, acceptedCount, nil
 }
