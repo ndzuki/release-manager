@@ -56,7 +56,13 @@ func TestRunMigratesCurrentSQLiteSchemaEndToEnd(t *testing.T) {
 	require.NoError(t, targetDB.QueryRowContext(ctx,
 		`SELECT state_version, created_by_user_id FROM values_revisions WHERE id = 'values-legacy'`,
 	).Scan(&stateVersion, &createdByUserID))
-	assert.EqualValues(t, 3, stateVersion)
+	// 1, not the historical 3: migration 000012 renamed the legacy `revision`
+	// column to `version`, and a root revision must now satisfy
+	// `parent_revision_id IS NOT NULL OR version = 1`, so the legacy "revision 3"
+	// row the old expectation modelled is no longer representable in the source
+	// schema. What this asserts is unchanged: the values_state_version backfill
+	// runs and derives state_version from version instead of leaving 0.
+	assert.EqualValues(t, 1, stateVersion)
 	assert.Equal(t, "creator-legacy", createdByUserID)
 
 	var candidateDerived, candidateCreated time.Time
@@ -75,7 +81,7 @@ func TestRunMigratesCurrentSQLiteSchemaEndToEnd(t *testing.T) {
 	assert.Equal(t, "verify", preflightStages)
 	var linked int
 	require.NoError(t, targetDB.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM bundle_candidate_artifacts WHERE bundle_id = 'bundle-migrate' AND candidate_artifact_id = 'candidate-migrate'`,
+		`SELECT COUNT(*) FROM bundle_candidate_artifacts WHERE bundle_id = 'bundle-migrate' AND artifact_id = 'candidate-migrate'`,
 	).Scan(&linked))
 	assert.Equal(t, 1, linked)
 }
