@@ -53,8 +53,8 @@
 
 ### SQLite→PostgreSQL 导入器（Fixed）
 
-- 一次性导入路径端到端修通（此前从未在真实 PostgreSQL 上跑过）：迁移预置的单行表改为「源库为准」的 upsert；搬迁列（`candidate_artifacts.ref`/`bundle_id`）按显式登记规则写入新归属表（含 FK 拓扑排序）；补齐数组列（`values_revisions.locked_paths` 等 JSON→ARRAY）与 JSONB 列登记；删除已冗余且用旧列名的 join backfill、修正 `values_superseded` 的 `revision`→`version`（000012 改名）；派生表豁免「行数必须相等」但保留「不得少于源库」的负控制；同时修正两处随 schema 漂移失效的集成断言（PR #NNN，TASK-108）。
-- `./internal/migration/...` 纳入 CI 的 `test-postgres-integration` job（scope note 更新），使该路径此后受真实 PostgreSQL 门禁保护（PR #NNN，TASK-108）。
+- 一次性导入路径端到端修通（此前从未在真实 PostgreSQL 上跑过）：迁移预置的单行表改为「源库为准」的 upsert；搬迁列（`candidate_artifacts.ref`/`bundle_id`）按显式登记规则写入新归属表（含 FK 拓扑排序）；补齐数组列（`values_revisions.locked_paths` 等 JSON→ARRAY）与 JSONB 列登记；删除已冗余且用旧列名的 join backfill、修正 `values_superseded` 的 `revision`→`version`（000012 改名）；派生表豁免「行数必须相等」但保留「不得少于源库」的负控制；同时修正两处随 schema 漂移失效的集成断言（PR #124，TASK-108）。
+- `./internal/migration/...` 纳入 CI 的 `test-postgres-integration` job（scope note 更新），使该路径此后受真实 PostgreSQL 门禁保护（PR #124，TASK-108）。
 
 ### PostgreSQL 覆盖与平权（Fixed）
 
