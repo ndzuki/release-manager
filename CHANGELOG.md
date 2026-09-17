@@ -14,7 +14,7 @@
 
 ## 2026-09
 
-里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 18 个 PR 合入。
+里程碑主题：升级/回滚/紧急变更执行链路的真实集群收敛修复，以及分阶段 E2E 门禁落地。本月 19 个 PR 合入。
 
 ### 执行链路（升级 / 回滚）
 
@@ -50,6 +50,10 @@
 ### Bundle ingress 认证（Added）
 
 - `SubmitReleaseBundle` 由 CI API key 认证、新增 `POST /webhooks/harbor`（Harbor 独立 key）并挂载 Harbor adapter，出站以 `service:release-harbor` 调 `RecordArtifactEvent`（scope 仅该 procedure）；两把 key 与两条 procedure 不可互相替换（AC-011-04/16/17）。配套把 `ServiceTokenInterceptor` 对「不在本腿白名单的 token」改为 `unauthenticated` 以支持多凭证并存（保留「在白名单但越 scope → `permission_denied`」），并在 dev 生命周期/kustomize/CI 三处配齐凭据（PR #109，TASK-102）。
+
+### 开发环境自举（Fixed）
+
+- 修复 host-run dev 路径的授权自举死锁：release-auth 与 release-orchestrator 此前各用各的 SQLite 文件，而 orchestrator 的 Casbin 投影是**从本库的 `organizations`/`org_members` 行编译**的，于是策略为空、连 `ListCustomers`/`CreateCustomer` 都恒 `permission_denied`，`devseed` 第一步即失败。两者现共享 `data/management.db`（集群路径天然共享同一个 Postgres），并新增 `internal/config` 门禁钉死该契约（含 notifier 独立库的例外与负控制），运行时在投影为空时打印可操作警告（PR #NNN，TASK-104）。
 
 ### 通知面认证与出站（Fixed）
 

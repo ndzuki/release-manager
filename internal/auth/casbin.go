@@ -141,7 +141,7 @@ func (e *Enforcer) loadPolicies(ctx context.Context) error {
 		e.setPolicyState(false, e.PolicyVersion())
 		return fmt.Errorf("load durable authorization snapshot: %w", err)
 	}
-	rules, compileErr := compileAuthorizationRules(ctx, e.store, durable.Grants, durable.Rules)
+	rules, compileErr := compileAuthorizationRules(ctx, e.logger, e.store, durable.Grants, durable.Rules)
 	if compileErr != nil {
 		e.setPolicyState(false, durable.PolicyVersion)
 		return compileErr
@@ -190,7 +190,7 @@ func (e *Enforcer) RefreshPolicies(ctx context.Context) (uint64, error) {
 	if err != nil {
 		return e.PolicyVersion(), fmt.Errorf("load authorization state: %w", err)
 	}
-	rules, err := compileAuthorizationRules(ctx, e.store, durable.Grants, durable.Rules)
+	rules, err := compileAuthorizationRules(ctx, e.logger, e.store, durable.Grants, durable.Rules)
 	if err != nil {
 		return e.PolicyVersion(), err
 	}
@@ -361,13 +361,27 @@ func (a *storeAdapter) RemoveFilteredPolicy(_, _ string, _ int, _ ...string) err
 //nolint:gocyclo // Rule compilation walks membership, grants, and preserved service rules explicitly.
 func compileAuthorizationRules(
 	ctx context.Context,
+	logger *slog.Logger,
 	st store.Store,
 	grants []store.CapabilityGrant,
 	current []store.CasbinRule,
 ) ([]store.CasbinRule, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	organizations, err := st.Organizations().List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list organizations: %w", err)
+	}
+	if len(organizations) == 0 {
+		// The projection is derived from THIS store's organizations and
+		// org_members rows (release-auth owns them). A service that opens its own
+		// empty database therefore compiles an empty policy and denies every
+		// Casbin procedure, including the bootstrap reads — which is invisible
+		// except as a wall of permission_denied. TASK-104: say it out loud.
+		logger.Warn("authorization projection is empty: no organizations are visible in this service's database",
+			"contract", "release-auth and release-orchestrator must share one authority database",
+			"docs", "docs/dev-environment.md")
 	}
 	rules := make([]store.CasbinRule, 0)
 	for _, organization := range organizations {

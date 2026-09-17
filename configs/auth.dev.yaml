@@ -2,7 +2,16 @@ http_port: 8085
 log_level: debug
 database:
   driver: sqlite
-  dsn: data/auth.db
+  # TASK-104: the management-plane authority database. release-auth and
+  # release-orchestrator MUST open the same database, because the orchestrator
+  # compiles its Casbin projection from the organizations/org_members rows that
+  # release-auth owns (internal/auth/casbin.go compileAuthorizationRules) and
+  # checks org-customer bindings through the same store. With separate files the
+  # orchestrator's policy is empty and every Casbin procedure — including the
+  # bootstrap reads — answers permission_denied.
+  # The k3d profile gets this for free: both services point at the same
+  # PostgreSQL database (deploy/kustomize/dev/configs/*.dev.yaml).
+  dsn: data/management.db
 authorization:
   policy_reload_interval: 5s
 maintenance: false

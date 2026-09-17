@@ -83,7 +83,7 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 | `--signing-key` | `env JWT_SIGNING_KEY`，缺省 `change-me-in-production` | 否 | JWT 签名 key | `main.go:829-833` |
 
 - 无 `--db` flag：数据库来自配置文件 `database:` 段或环境变量覆盖
-  （本地 dev 为 sqlite `data/orchestrator.db`，`configs/orchestrator.dev.yaml:3-5`）。
+  （本地 dev 为 sqlite `data/management.db`——与 release-auth 共享的权威库，`configs/orchestrator.dev.yaml`）。
 - gateway 与 CA 也全部来自配置：`gateway.enabled/port`（本地默认关，`configs/orchestrator.dev.yaml:29-31`；
   dev 集群里开在 8084 并暴露 NodePort 30084，`deploy/kustomize/dev/configs/orchestrator.dev.yaml:32-34`），
   `ca.cert_path/key_path`（`configs/orchestrator.dev.yaml:33-37`；CA 缺失 fail-closed，`main.go:85-90`）。
@@ -138,7 +138,7 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 
 | flag | 默认值 | 必填 | 含义 | 出处 |
 | --- | --- | --- | --- | --- |
-| `--config` | `configs/auth.dev.yaml` | 否 | 配置文件（`http_port: 8085`；sqlite `data/auth.db`，`configs/auth.dev.yaml:1-5`） | `main.go:232` |
+| `--config` | `configs/auth.dev.yaml` | 否 | 配置文件（`http_port: 8085`；sqlite `data/management.db`（与 release-orchestrator 共享的权威库），`configs/auth.dev.yaml`） | `main.go:232` |
 | `--signing-key` | `env JWT_SIGNING_KEY`，缺省 `change-me-in-production` | 否 | JWT 签名 key（TTL 15m / refresh 7d，`main.go:140`） | `main.go:233-237` |
 
 - **没有** `--db` flag：数据库由配置 `database:` 或 `DATABASE_DRIVER`/`DATABASE_DSN` 决定；
