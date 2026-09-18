@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -592,4 +593,47 @@ func TestActiveLockFactSourceTerminalEffectAuthority(t *testing.T) {
 	result, err := st.OperationCreationUnitOfWork()(ctx, store.OperationCreationRequest{Operation: next.Operation, Emergency: &next})
 	require.NoError(t, err)
 	assert.False(t, result.Replayed)
+}
+
+// AC-068-29: rejecting a revision that a convergence task is bound to clears the
+// active binding, while the task stays pending_promotion and records why.
+func TestValuesRejectClearsConvergenceBinding(t *testing.T) {
+	st := OpenTest(t)
+	ctx := context.Background()
+	seedEmergencyDefinition(t, st, "def-reject-binding")
+	command := emergencyCreateCommand(t, "def-reject-binding", "idem-reject-binding", "hash-rb", store.EmergencySetContainerImage)
+	result := createEmergencyViaUOW(t, st, command)
+	require.NotNil(t, result.ConvergenceTask)
+
+	revision := &store.ValuesRevision{
+		ID:                  uuid.New().String(),
+		ReleaseDefinitionID: "def-reject-binding",
+		Version:             1,
+		StateVersion:        1,
+		Status:              store.ValuesStatusPendingApproval,
+		CanonicalDocument:   []byte(`{"key":"value"}`),
+		Digest:              "sha256:reject-binding",
+		CreatedByUserID:     "creator",
+	}
+	require.NoError(t, st.Values().Create(ctx, revision))
+	require.NoError(t, st.ConvergenceTasks().BindRevision(
+		ctx, result.ConvergenceTask.ID, revision.ID, string(store.ValuesStatusPendingApproval)))
+
+	bound, err := st.ConvergenceTasks().GetByOperationID(ctx, result.Operation.ID)
+	require.NoError(t, err)
+	require.NotNil(t, bound.ActiveRevisionID, "fixture must bind the revision")
+
+	_, err = st.ValuesApproval().Reject(ctx, store.ValuesApprovalCommand{
+		RevisionID: revision.ID, ExpectedStateVersion: 1, ActorUserID: "approver",
+		Authorized: true, Reason: "not ready",
+	})
+	require.NoError(t, err)
+
+	task, err := st.ConvergenceTasks().GetByOperationID(ctx, result.Operation.ID)
+	require.NoError(t, err)
+	assert.Nil(t, task.ActiveRevisionID, "AC-068-29: rejecting the bound revision must clear the binding")
+	assert.Nil(t, task.ActiveRevisionStatus)
+	assert.Equal(t, "pending_promotion", task.Status, "AC-068-29: the task stays pending_promotion")
+	require.NotNil(t, task.LastRejectionReason)
+	assert.Equal(t, "not ready", *task.LastRejectionReason)
 }
