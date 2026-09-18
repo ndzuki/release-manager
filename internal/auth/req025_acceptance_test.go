@@ -115,3 +115,44 @@ func TestAuthService_ExpiredRefreshRevokesTokenFamily(t *testing.T) {
 		assert.True(t, session.Revoked, "expiry must revoke the whole family (AC-025-07)")
 	}
 }
+
+// AC-025-04: an unknown username, a wrong password and a disabled account all
+// produce the same 401 with the same message, so Login cannot be used to
+// enumerate accounts. The three paths are separate branches in Login (the first
+// two share one), which is why the assertion compares the rendered errors
+// rather than only the status code.
+func TestAuthService_LoginErrorsDoNotRevealAccountExistence(t *testing.T) {
+	st := openAuthStore(t)
+	ctx := context.Background()
+	createAuthUser(t, st, "alice", "correct-password", store.UserActive)
+	createAuthUser(t, st, "carol", "correct-password", store.UserDisabled)
+	svc := newAuthService(st)
+
+	cases := []struct {
+		name     string
+		username string
+		password string
+	}{
+		{name: "unknown username", username: "nobody", password: "correct-password"},
+		{name: "wrong password", username: "alice", password: "wrong-password"},
+		{name: "disabled account", username: "carol", password: "correct-password"},
+	}
+
+	var first string
+	for _, tc := range cases {
+		_, err := svc.Login(ctx, connect.NewRequest(&authv1.LoginRequest{
+			Username: tc.username,
+			Password: tc.password,
+		}))
+		require.Error(t, err, tc.name)
+		assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err), tc.name)
+
+		if first == "" {
+			first = err.Error()
+			continue
+		}
+		assert.Equal(t, first, err.Error(),
+			"%s must be indistinguishable from the other failures (AC-025-04)", tc.name)
+	}
+	assert.Contains(t, first, "invalid credentials")
+}
