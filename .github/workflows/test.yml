@@ -484,6 +484,13 @@ jobs:
       # Harbor path forwards its own service token.
       DEV_CI_API_KEY: ${{ secrets.DEV_CI_API_KEY }}
       DEV_HARBOR_SERVICE_TOKEN: ${{ secrets.DEV_HARBOR_SERVICE_TOKEN }}
+      # TASK-096 made the notifier surface authenticate with a rotatable service
+      # token pair and added notifier-service-token to dev.sh's SERVICE_TOKEN_FILES;
+      # the ci profile refuses to generate it, so dev-up fails (service_unhealthy)
+      # unless this env is present. The previous-token slot stays unset here: the
+      # notifier tolerates an empty pair entry, and rotation is exercised by its
+      # own tests rather than by the CI development environment.
+      DEV_NOTIFIER_SERVICE_TOKEN: ${{ secrets.DEV_NOTIFIER_SERVICE_TOKEN }}
       DEV_M_TLS_CA_KEY: ${{ secrets.DEV_M_TLS_CA_KEY }}
       DEV_M_TLS_CA_CERT: ${{ secrets.DEV_M_TLS_CA_CERT }}
       DEV_TRUST_ROOT_PRIVATE_KEY: ${{ secrets.DEV_TRUST_ROOT_PRIVATE_KEY }}
