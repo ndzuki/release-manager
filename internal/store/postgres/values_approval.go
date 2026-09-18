@@ -126,6 +126,17 @@ func (s *valuesApprovalStore) transition(
 	if err != nil {
 		return nil, err
 	}
+	if transition.action == store.ValuesDecisionRejected {
+		// AC-068-29: rejecting a bound revision clears the active binding while the
+		// convergence tasks stay pending_promotion, and records why it was rejected.
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE convergence_tasks
+			SET active_revision_id = NULL, active_revision_status = NULL, last_rejection_reason = ?
+			WHERE active_revision_id = ?
+		`, command.Reason, revision.ID); err != nil {
+			return nil, fmt.Errorf("clear convergence binding: %w", err)
+		}
+	}
 	if transition.action == store.ValuesDecisionApproved {
 		updated, err := tx.ExecContext(ctx, `
 			UPDATE release_definitions SET approved_revision_id = ? WHERE id = ?
