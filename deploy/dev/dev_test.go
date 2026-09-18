@@ -3054,3 +3054,57 @@ exit 0
 		t.Fatalf("AC-065-15: the failing image must be named:\n%s", out)
 	}
 }
+
+// AC-065-31: a local-profile failure must KEEP the partial managed resources so
+// the next dev-up can converge, and that rerun must not recreate them.
+func TestLocalFailureKeepsPartialResourcesAndResumes(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	// Fail after the clusters exist: kustomize is stage 5, clusters are stage 3.
+	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 1\n")
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("dev-up must fail when kustomize build fails:\n%s", out)
+	}
+
+	clustersPath := filepath.Join(stateDir, "clusters.txt")
+	createsPath := filepath.Join(stateDir, "k3d-creates.log")
+	clustersAfterFailure, readErr := os.ReadFile(clustersPath)
+	if readErr != nil {
+		t.Fatalf("the fixture must have created clusters before the failure: %v", readErr)
+	}
+	created := strings.Count(string(clustersAfterFailure), "\n")
+	if created == 0 {
+		t.Fatalf("fixture created no clusters, the test would prove nothing")
+	}
+	firstCreates, readErr := os.ReadFile(createsPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+
+	// The local profile must not auto-clean on failure (D6=A): the clusters are
+	// still recorded.
+	stillThere, readErr := os.ReadFile(clustersPath)
+	if readErr != nil {
+		t.Fatalf("AC-065-31: a local failure must keep the partial resources: %v", readErr)
+	}
+	if got := strings.Count(string(stillThere), "\n"); got != created {
+		t.Fatalf("AC-065-31: expected %d clusters retained, got %d:\n%s", created, got, stillThere)
+	}
+
+	// A rerun converges: the same clusters are reused rather than recreated.
+	if _, err := runDev(t, env, "up"); err == nil {
+		t.Fatalf("dev-up should still fail while kustomize is broken")
+	}
+	secondCreates, readErr := os.ReadFile(createsPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(secondCreates, firstCreates) {
+		t.Fatalf("AC-065-31: the rerun must resume, not recreate clusters.\nfirst:\n%s\nsecond:\n%s",
+			firstCreates, secondCreates)
+	}
+}
