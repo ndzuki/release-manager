@@ -200,7 +200,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 | `agent.cluster_id` | string | dev-customer-a-direct / -a-cache / -b-replicated / -b-mixed | 集群身份 | 必填 |
 | `agent.operator_name` | string | = cluster_id | 操作器名 | |
 | `ca.cert_path` | path | /data/gateway-ca.crt | 网关 CA 信任锚 | Secret `operator-gateway-ca` 挂载 |
-| `agent.registry_plain_http` | bool | true | 允许对 HTTP-only OCI registry 拉 chart | **生效**（§7-5 闭环）：读取链 `AgentCfg.RegistryPlainHTTP`（`internal/config/config.go:172`）→ `cmd/operator/main.go:70` → `internal/operator/agent/agent.go` Install/UpgradeOptions → `internal/operator/helmengine/real.go:118/248`（helm SDK `PlainHTTP`）；放错位置（顶层）时静默为 false。解码断言测试 `TestCustomerAgentOverlaysWirePlainHTTPRegistry` |
+| `agent.registry_plain_http` | bool | true | 允许对 HTTP-only OCI registry 拉 chart | **生效**（§7-5 闭环）：读取链 `AgentCfg.RegistryPlainHTTP`（`internal/config/config.go:340`）→ `cmd/operator/main.go:70` → `internal/operator/agent/agent.go` Install/UpgradeOptions → `internal/operator/helmengine/real.go:118/248`（helm SDK `PlainHTTP`）；放错位置（顶层）时静默为 false。解码断言测试 `TestCustomerAgentOverlaysWirePlainHTTPRegistry` |
 
 令牌走环境变量 `ENROLLMENT_TOKEN`（Secret `operator-enrollment`，`agents_up` 命令式创建，文件名固定不参与 hash）；`enrollment_token_file` 键在这四个 overlay 中不存在。
 
