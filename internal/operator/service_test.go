@@ -301,6 +301,39 @@ func TestDecodeCommandPayload(t *testing.T) {
 	assert.JSONEq(t, `{"replicas":2}`, string(command.GetValuesPatch()))
 }
 
+// TASK-114: the orchestrator has always written the preflight stage into the
+// outbox payload, but the operator's decoder dropped it, so a stage dispatch
+// arrived looking like an ordinary INSTALL command and was executed as one --
+// every stage performed a real install instead of running its check.
+func TestDecodeCommandPayload_CarriesPreflightStage(t *testing.T) {
+	payload := []byte(`{
+		"stage":"cluster",
+		"definition_id":"definition-1",
+		"namespace":"apps",
+		"release_name":"example",
+		"timeout_seconds":600
+	}`)
+	command := new(operatorv1.Command)
+
+	require.NoError(t, operator.DecodeCommandPayload(payload, command))
+	assert.Equal(t, "cluster", command.GetStage())
+}
+
+// A normal execution command carries no stage; the empty value is what keeps
+// the install/upgrade path untouched.
+func TestDecodeCommandPayload_ExecutionCommandHasNoStage(t *testing.T) {
+	payload := []byte(`{
+		"definition_id":"definition-1",
+		"namespace":"apps",
+		"release_name":"example",
+		"payload_version":2
+	}`)
+	command := new(operatorv1.Command)
+
+	require.NoError(t, operator.DecodeCommandPayload(payload, command))
+	assert.Empty(t, command.GetStage())
+}
+
 func TestDecodeCommandPayload_RollbackFields(t *testing.T) {
 	payload := []byte(`{
 		"definition_id":"def-001",

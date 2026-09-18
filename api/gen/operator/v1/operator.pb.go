@@ -1346,6 +1346,15 @@ type Command struct {
 	ValuesPatch             []byte                 `protobuf:"bytes,16,opt,name=values_patch,json=valuesPatch,proto3" json:"values_patch,omitempty"`           // JSON merge patch
 	TargetRevision          int64                  `protobuf:"varint,17,opt,name=target_revision,json=targetRevision,proto3" json:"target_revision,omitempty"` // target revision for ROLLBACK
 	PayloadVersion          uint32                 `protobuf:"varint,18,opt,name=payload_version,json=payloadVersion,proto3" json:"payload_version,omitempty"`
+	// Preflight stage this command executes (REQ-019 artifact/render/cluster/runtime_pull).
+	// Empty for a normal execution command. When set, the agent runs that stage's
+	// validation and reports its result instead of installing or upgrading: a stage
+	// is a check, not a release write.
+	//
+	// The stage used to travel only inside the outbox JSON payload, which the
+	// agent's decoder dropped, so every stage silently fell through to the
+	// operation-type branch and performed a real install (TASK-114).
+	Stage string `protobuf:"bytes,21,opt,name=stage,proto3" json:"stage,omitempty"`
 	// Structured form of the command input, as an alternative to the flat fields on
 	// the same message: the two describe one intent, so an agent reads whichever
 	// form its payload version understands instead of merging both. Only an upgrade
@@ -1513,6 +1522,13 @@ func (x *Command) GetPayloadVersion() uint32 {
 		return x.PayloadVersion
 	}
 	return 0
+}
+
+func (x *Command) GetStage() string {
+	if x != nil {
+		return x.Stage
+	}
+	return ""
 }
 
 func (x *Command) GetTypedPayload() isCommand_TypedPayload {
@@ -2523,7 +2539,7 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x12duplicate_response\x18\x04 \x01(\v2\x1e.operator.v1.DuplicateResponseH\x00R\x11duplicateResponse\x12R\n" +
 	"\x13session_established\x18\x05 \x01(\v2\x1f.operator.v1.SessionEstablishedH\x00R\x12sessionEstablished\x12L\n" +
 	"\x11emergency_command\x18\x06 \x01(\v2\x1d.operator.v1.EmergencyCommandH\x00R\x10emergencyCommandB\t\n" +
-	"\apayload\"\xf0\x05\n" +
+	"\apayload\"\x86\x06\n" +
 	"\aCommand\x12\x1b\n" +
 	"\toutbox_id\x18\x01 \x01(\tR\boutboxId\x12\x1d\n" +
 	"\n" +
@@ -2544,7 +2560,8 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x06atomic\x18\x0f \x01(\bR\x06atomic\x12!\n" +
 	"\fvalues_patch\x18\x10 \x01(\fR\vvaluesPatch\x12'\n" +
 	"\x0ftarget_revision\x18\x11 \x01(\x03R\x0etargetRevision\x12'\n" +
-	"\x0fpayload_version\x18\x12 \x01(\rR\x0epayloadVersion\x127\n" +
+	"\x0fpayload_version\x18\x12 \x01(\rR\x0epayloadVersion\x12\x14\n" +
+	"\x05stage\x18\x15 \x01(\tR\x05stage\x127\n" +
 	"\aupgrade\x18\x14 \x01(\v2\x1b.operator.v1.UpgradeCommandH\x00R\aupgradeB\x0f\n" +
 	"\rtyped_payload\"\x9f\x04\n" +
 	"\x10EmergencyCommand\x12\x1d\n" +

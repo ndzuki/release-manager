@@ -1286,20 +1286,25 @@ func (s *Service) sendCommand(
 }
 
 type commandPayload struct {
-	DefinitionID            string                     `json:"definition_id"`
-	Namespace               string                     `json:"namespace"`
-	ReleaseName             string                     `json:"release_name"`
-	CreateNamespace         bool                       `json:"create_namespace"`
-	TimeoutSeconds          int64                      `json:"timeout_seconds"`
-	Bundle                  *commonv1.ReleaseBundle    `json:"bundle"`
-	Values                  json.RawMessage            `json:"values"`
-	ValuesRevisionID        string                     `json:"values_revision_id"`
-	ExpectedCurrentRevision int64                      `json:"expected_current_revision"`
-	TargetRevision          int64                      `json:"target_revision"`
-	Atomic                  bool                       `json:"atomic"`
-	ValuesPatch             json.RawMessage            `json:"values_patch"`
-	PayloadVersion          uint32                     `json:"payload_version"`
-	Upgrade                 *operatorv1.UpgradeCommand `json:"upgrade"`
+	DefinitionID            string                  `json:"definition_id"`
+	Namespace               string                  `json:"namespace"`
+	ReleaseName             string                  `json:"release_name"`
+	CreateNamespace         bool                    `json:"create_namespace"`
+	TimeoutSeconds          int64                   `json:"timeout_seconds"`
+	Bundle                  *commonv1.ReleaseBundle `json:"bundle"`
+	Values                  json.RawMessage         `json:"values"`
+	ValuesRevisionID        string                  `json:"values_revision_id"`
+	ExpectedCurrentRevision int64                   `json:"expected_current_revision"`
+	TargetRevision          int64                   `json:"target_revision"`
+	Atomic                  bool                    `json:"atomic"`
+	// Stage carries the preflight stage this command executes (REQ-019). The
+	// orchestrator has always written it into the outbox payload; the operator
+	// used to drop it here, so a stage dispatch arrived looking like an ordinary
+	// INSTALL command and was executed as one (TASK-114).
+	Stage          string                     `json:"stage"`
+	ValuesPatch    json.RawMessage            `json:"values_patch"`
+	PayloadVersion uint32                     `json:"payload_version"`
+	Upgrade        *operatorv1.UpgradeCommand `json:"upgrade"`
 }
 
 // DecodeCommandPayload populates command fields from an outbox JSON payload.
@@ -1325,6 +1330,7 @@ func DecodeCommandPayload(payload []byte, command *operatorv1.Command) error {
 	command.Atomic = envelope.Atomic
 	command.ValuesPatch = []byte(envelope.ValuesPatch)
 	command.PayloadVersion = envelope.PayloadVersion
+	command.Stage = envelope.Stage
 	if envelope.Upgrade != nil {
 		command.TypedPayload = &operatorv1.Command_Upgrade{Upgrade: envelope.Upgrade}
 	}
