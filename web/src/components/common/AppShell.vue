@@ -2,13 +2,28 @@
 import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
+import { useCustomerStore } from '@/stores/customers';
+import { useEmergencyAuthorizationStore } from '@/stores/emergencyAuthorization';
+import { useOrganizationScope } from '@/composables/useOrganizationScope';
 import OrganizationSwitcher from './OrganizationSwitcher.vue';
 
 const route = useRoute();
 const auth = useAuthStore();
+const customers = useCustomerStore();
+const authorization = useEmergencyAuthorizationStore();
 const router = useRouter();
 const customerId = computed(() => typeof route.params.customerId === 'string' ? route.params.customerId : '');
 const clusterRoutingEnabled = import.meta.env.VITE_FEATURE_CLUSTER_ROUTING !== 'false';
+
+// REQ-033 D-72: relink the customer selection, reload the bootstrap snapshot and
+// drop the organization-domain caches whenever SwitchOrganization completes.
+useOrganizationScope({
+  resetCustomers: () => customers.reset(),
+  reloadCustomers: () => customers.loadList(),
+  resetAuthorization: () => authorization.reset(),
+  reloadAuthorization: (organizationId, scopedCustomerId) => authorization.load(organizationId, scopedCustomerId),
+  customerId: () => customerId.value,
+});
 
 async function handleLogout(): Promise<void> {
   await auth.logout();

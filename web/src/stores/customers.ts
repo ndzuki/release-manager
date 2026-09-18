@@ -33,6 +33,29 @@ export const useCustomerStore = defineStore('customers', () => {
 
   const hasCustomers = computed(() => customers.value.length > 0);
 
+  /**
+   * Drops every organization-scoped cache. Called when the active organization
+   * changes: no page may keep rendering the previous organization's customers,
+   * history or draft (REQ-033 D-72).
+   */
+  function reset(): void {
+    customers.value = [];
+    loading.value = false;
+    error.value = null;
+    forbidden.value = false;
+    notFound.value = false;
+    current.value = null;
+    history.value = [];
+    historyLoading.value = false;
+    historyError.value = null;
+    draft.value = null;
+    serverVersion.value = null;
+    saving.value = false;
+    saveError.value = null;
+    disabling.value = false;
+    disableError.value = null;
+  }
+
   async function loadList(includeDisabled = false) {
     loading.value = true;
     error.value = null;
@@ -187,5 +210,6 @@ export const useCustomerStore = defineStore('customers', () => {
     refreshCustomer,
     clearSaveError,
     clearDisableError,
+    reset,
   };
 });
