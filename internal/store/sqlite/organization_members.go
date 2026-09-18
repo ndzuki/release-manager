@@ -35,6 +35,11 @@ func (s *organizationMemberStore) Create(ctx context.Context, m *store.Organizat
 		m.CreatedAt.UTC().Format(time.RFC3339), m.UpdatedAt.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
+		// AC-026-06: the (org_id, user_id) primary key makes a duplicate a domain
+		// conflict, so the service can report duplicate_member instead of internal.
+		if isUniqueConstraint(err) {
+			return store.ErrDuplicateKey
+		}
 		return fmt.Errorf("insert organization member: %w", err)
 	}
 	if err := bumpAuthorizationSourceVersion(ctx, tx); err != nil {
