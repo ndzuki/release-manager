@@ -460,7 +460,9 @@ func (s *Service) CommandStream(
 			return connect.NewError(connect.CodeInternal, fmt.Errorf("get operator by cluster: %w", err))
 		}
 		if op.CustomerID != customerID {
-			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("certificate identity does not match operator"))
+			// D-53 (2026-08-07): same reason code as the renew-path guard, so the
+			// two identity guards report one condition with one code.
+			return operatorError(connect.CodePermissionDenied, reasonIdentityMismatch, "certificate identity does not match operator")
 		}
 		switch op.Status {
 		case store.OperatorSuperseded:

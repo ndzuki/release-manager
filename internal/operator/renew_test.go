@@ -93,16 +93,22 @@ func TestRenewCertificateEnforcesWindowIdentityStatusAndSerial(t *testing.T) {
 // TestCertificateIdentityGuardRejectsSupersededRevokedAndReplaced covers
 // AC-015-03/11 at the guard seam: superseded/revoked identities and replaced
 // certificates are rejected with the stable reason codes.
-func TestCertificateIdentityGuardRejectsSupersededRevokedAndReplaced(t *testing.T) {
+func TestCertificateIdentityGuardRejectsMismatchedIdentities(t *testing.T) {
 	tests := []struct {
-		name       string
-		status     store.OperatorStatus
-		peerSerial string
-		wantReason string
+		name         string
+		status       store.OperatorStatus
+		peerSerial   string
+		peerCustomer string
+		peerCluster  string
+		wantReason   string
 	}{
 		{name: "superseded", status: store.OperatorSuperseded, wantReason: reasonOperatorSuperseded},
 		{name: "revoked", status: store.OperatorRevoked, wantReason: reasonOperatorRevoked},
 		{name: "replaced", status: store.OperatorActive, peerSerial: "old-certificate", wantReason: reasonCertReplaced},
+		// D-53 (2026-08-07): the certificate's declared scope must equal the scope
+		// on the operator record, and a mismatch reuses identity_mismatch.
+		{name: "customer scope mismatch", status: store.OperatorActive, peerCustomer: "customer-other", wantReason: reasonIdentityMismatch},
+		{name: "cluster scope mismatch", status: store.OperatorActive, peerCluster: "cluster-other", wantReason: reasonIdentityMismatch},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -118,6 +124,12 @@ func TestCertificateIdentityGuardRejectsSupersededRevokedAndReplaced(t *testing.
 			}
 			if test.peerSerial != "" {
 				identity.Serial = test.peerSerial
+			}
+			if test.peerCustomer != "" {
+				identity.CustomerID = test.peerCustomer
+			}
+			if test.peerCluster != "" {
+				identity.ClusterID = test.peerCluster
 			}
 			err := validateCertificateIdentity(operatorRecord, identity)
 			require.Error(t, err)

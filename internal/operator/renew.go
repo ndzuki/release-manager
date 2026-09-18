@@ -47,6 +47,14 @@ func validateCertificateIdentity(operator *store.Operator, identity certificateI
 	case store.OperatorRevoked:
 		return operatorError(connect.CodePermissionDenied, reasonOperatorRevoked, "operator is revoked")
 	}
+	// D-53 (2026-08-07): the certificate's declared scope must equal the scope on
+	// the operator record, and a mismatch reuses identity_mismatch rather than
+	// adding a code. The CommandStream guard reports the same reason for the same
+	// condition.
+	if identity.CustomerID != operator.CustomerID || identity.ClusterID != operator.ClusterID {
+		return operatorError(connect.CodePermissionDenied, reasonIdentityMismatch,
+			"certificate identity does not match the registered operator scope")
+	}
 	if identity.Serial != operator.CertSerial {
 		return operatorError(connect.CodePermissionDenied, reasonCertReplaced, "client certificate was replaced")
 	}
