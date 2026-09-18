@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -203,6 +204,12 @@ func (s *OrgService) AddMember(
 		Role:   targetRole,
 	}
 	if err := s.store.OrgMembers().Create(ctx, member); err != nil {
+		// AC-026-06: an existing (org, user) pair is a domain conflict the caller
+		// can act on, not an internal failure. The store translates the primary-key
+		// violation into ErrDuplicateKey.
+		if errors.Is(err, store.ErrDuplicateKey) {
+			return nil, orgError(connect.CodeAlreadyExists, "duplicate_member", "user is already a member of this organization")
+		}
 		s.logger.Error("add member failed", "error", err)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("add member: %w", err))
 	}
@@ -406,3 +413,12 @@ func toProtoMember(m *store.OrganizationMember) *authv1.OrganizationMember {
 }
 
 var _ authv1connect.OrganizationServiceHandler = (*OrgService)(nil)
+
+// orgError carries a stable reason code alongside the Connect status, the shape
+// the other services use (inventoryError, bundleError, auditQueryError), so a
+// client branches on X-Reason-Code instead of matching message text.
+func orgError(code connect.Code, reason, message string) *connect.Error {
+	err := connect.NewError(code, errors.New(message))
+	err.Meta().Set("X-Reason-Code", reason)
+	return err
+}
