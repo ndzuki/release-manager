@@ -583,8 +583,38 @@ func applyOperationTransition(
 	if status.IsTerminal() {
 		terminalAt := updated.UpdatedAt
 		updated.TerminalAt = &terminalAt
+		// AC-031-05 / AC-031-06: queue the OperationTerminal notification in the SAME
+		// transaction as the terminal transition (ADR-009). Only a real state change
+		// queues one, so an EMERGENCY late result -- which bumps state_version without
+		// changing the state -- does not produce a second notification.
+		if current.Status != status {
+			if err := insertOperationTerminalOutbox(ctx, tx, &updated); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return &updated, nil
+}
+
+// insertOperationTerminalOutbox queues the OperationTerminal notification for a
+// terminal operation transition (AC-031-05).
+func insertOperationTerminalOutbox(ctx context.Context, tx *Tx, op *store.Operation) error {
+	payload, err := json.Marshal(map[string]any{
+		"event_type":            "OperationTerminal",
+		"operation_id":          op.ID,
+		"release_definition_id": op.ReleaseDefinitionID,
+		"status":                string(op.Status),
+	})
+	if err != nil {
+		return fmt.Errorf("marshal operation terminal payload: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO notification_outbox (id, event_type, payload_json, created_at, delivered, delivered_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		uuid.New().String(), "OperationTerminal", payload, op.UpdatedAt.UTC(), false, nil,
+	); err != nil {
+		return fmt.Errorf("insert OperationTerminal outbox: %w", err)
+	}
+	return nil
 }
 
 // recordOperationTransition stamps the preflight lifecycle terminal time and
