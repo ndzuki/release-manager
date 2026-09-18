@@ -14,6 +14,9 @@ import (
 	auditv1connect "github.com/ndzuki/release-manager/api/gen/audit/v1/auditv1connect"
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	"github.com/ndzuki/release-manager/internal/contracts"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -133,9 +136,10 @@ func (h *auditServiceHandler) QueryAuditEvents(ctx context.Context, req *connect
 		h.logger.Warn("audit count failed", "error", err)
 	}
 
+	canSeeActorDetails := canSeeAuditActorDetails(ctx)
 	events := make([]*auditv1.AuditEvent, len(page.Events))
 	for i, ev := range page.Events {
-		events[i] = toProtoAuditEvent(ev)
+		events[i] = toProtoAuditEvent(ev, canSeeActorDetails)
 	}
 
 	return connect.NewResponse(&auditv1.QueryAuditEventsResponse{
@@ -215,16 +219,83 @@ func (h *auditServiceHandler) ExportAuditEvents(ctx context.Context, req *connec
 	}), nil
 }
 
-func toProtoAuditEvent(ev *store.AuditEvent) *auditv1.AuditEvent {
+// toProtoAuditEvent projects a stored audit event onto the wire message.
+//
+// canSeeActorDetails gates the actor fields: a caller without platform_admin or
+// release_admin sees a masked actor id and no role (AC-059-05). The masking was
+// lost in the cascading merges that 088fd53 repaired, which is why this projects
+// the whole event again rather than only the four fields the query needs.
+func toProtoAuditEvent(ev *store.AuditEvent, canSeeActorDetails bool) *auditv1.AuditEvent {
 	if ev == nil {
 		return nil
 	}
-	return &auditv1.AuditEvent{
-		Id:         ev.ID,
-		Action:     ev.Action,
-		Status:     ev.Status,
-		DurationMs: ev.DurationMs,
+	actorID, role := ev.ActorID, ev.Role
+	if !canSeeActorDetails {
+		actorID, role = maskActorID(actorID), ""
 	}
+	out := &auditv1.AuditEvent{
+		Id: ev.ID,
+		Actor: &auditv1.AuditActor{
+			Kind:           actorKindToProto(ev.ActorKind),
+			Id:             actorID,
+			OrganizationId: ev.OrganizationID,
+			Role:           role,
+		},
+		ResourceType:  ev.ResourceType,
+		ResourceId:    ev.ResourceID,
+		Action:        ev.Action,
+		Status:        ev.Status,
+		DurationMs:    ev.DurationMs,
+		ChangeSummary: ev.ChangeSummary,
+		Metadata:      ev.Metadata,
+	}
+	if !ev.CreatedAt.IsZero() {
+		out.CreatedAt = timestamppb.New(ev.CreatedAt)
+	}
+	return out
+}
+
+// maskActorID keeps a leading and trailing fragment so an operator can still
+// correlate entries, without disclosing the principal.
+func maskActorID(actorID string) string {
+	if len(actorID) <= 4 {
+		return "***"
+	}
+	return actorID[:1] + "***" + actorID[len(actorID)-3:]
+}
+
+// actorKindToProto maps the store's actor kind onto the wire enum. An unknown kind
+// becomes UNSPECIFIED rather than being guessed at.
+func actorKindToProto(kind store.AuditActorKind) auditv1.ActorKind {
+	switch kind {
+	case store.AuditActorAnonymous:
+		return auditv1.ActorKind_ACTOR_KIND_ANONYMOUS
+	case store.AuditActorUser:
+		return auditv1.ActorKind_ACTOR_KIND_USER
+	case store.AuditActorService:
+		return auditv1.ActorKind_ACTOR_KIND_SERVICE
+	case store.AuditActorAPIKey:
+		return auditv1.ActorKind_ACTOR_KIND_API_KEY
+	case store.AuditActorSystem:
+		return auditv1.ActorKind_ACTOR_KIND_SYSTEM
+	default:
+		return auditv1.ActorKind_ACTOR_KIND_UNSPECIFIED
+	}
+}
+
+// canSeeAuditActorDetails reports whether the caller may see unmasked actor
+// fields (AC-059-05).
+func canSeeAuditActorDetails(ctx context.Context) bool {
+	actor, ok := authctx.ActorFromContext(ctx)
+	if !ok {
+		return false
+	}
+	for _, role := range actor.Roles {
+		if role == string(store.RolePlatformAdmin) || role == string(store.RoleReleaseAdmin) {
+			return true
+		}
+	}
+	return false
 }
 
 func boundedAuditCount(total int64) int32 {
