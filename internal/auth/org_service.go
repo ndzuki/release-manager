@@ -119,14 +119,14 @@ func (s *OrgService) UpdateOrganization(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("organization not found"))
 	}
 	if org.Status == store.OrgDisabled {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("organization is disabled"))
+		return nil, orgError(connect.CodeFailedPrecondition, reasonOrganizationDisabled, "organization is disabled")
 	}
 
 	org.Name = msg.GetName()
 	org.OptimisticVersion = msg.GetExpectedVersion()
 	if err := s.store.Organizations().Update(ctx, org); err != nil {
 		if err == store.ErrOptimisticLock {
-			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf("optimistic lock conflict"))
+			return nil, orgError(connect.CodeAborted, reasonOptimisticLockConflict, "optimistic lock conflict")
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update organization: %w", err))
 	}
@@ -183,7 +183,7 @@ func (s *OrgService) AddMember(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("organization not found"))
 	}
 	if org.Status == store.OrgDisabled {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("organization is disabled"))
+		return nil, orgError(connect.CodeFailedPrecondition, reasonOrganizationDisabled, "organization is disabled")
 	}
 
 	// Get caller's role in this org.
@@ -208,7 +208,7 @@ func (s *OrgService) AddMember(
 		// can act on, not an internal failure. The store translates the primary-key
 		// violation into ErrDuplicateKey.
 		if errors.Is(err, store.ErrDuplicateKey) {
-			return nil, orgError(connect.CodeAlreadyExists, "duplicate_member", "user is already a member of this organization")
+			return nil, orgError(connect.CodeAlreadyExists, reasonDuplicateMember, "user is already a member of this organization")
 		}
 		s.logger.Error("add member failed", "error", err)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("add member: %w", err))
@@ -252,8 +252,8 @@ func (s *OrgService) RemoveMember(
 			}
 		}
 		if adminCount <= 1 {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("cannot remove the last platform_admin"))
+			return nil, orgError(connect.CodeFailedPrecondition, reasonLastPlatformAdminForbidden,
+				"cannot remove the last platform_admin")
 		}
 	}
 
@@ -330,8 +330,8 @@ func (s *OrgService) UpdateMemberRole(
 			}
 		}
 		if adminCount <= 1 {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("cannot demote the last platform_admin"))
+			return nil, orgError(connect.CodeFailedPrecondition, reasonLastPlatformAdminForbidden,
+				"cannot demote the last platform_admin")
 		}
 	}
 
@@ -413,6 +413,16 @@ func toProtoMember(m *store.OrganizationMember) *authv1.OrganizationMember {
 }
 
 var _ authv1connect.OrganizationServiceHandler = (*OrgService)(nil)
+
+// REQ-026 domain reason codes. The REQ's error model names these, and carrying
+// them on X-Reason-Code lets a client branch on the code instead of matching
+// message text — the same gap that made duplicate_member unusable (TASK-121).
+const (
+	reasonDuplicateMember            = "duplicate_member"
+	reasonOrganizationDisabled       = "organization_disabled"
+	reasonLastPlatformAdminForbidden = "last_platform_admin_forbidden"
+	reasonOptimisticLockConflict     = "optimistic_lock_conflict"
+)
 
 // orgError carries a stable reason code alongside the Connect status, the shape
 // the other services use (inventoryError, bundleError, auditQueryError), so a
