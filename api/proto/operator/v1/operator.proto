@@ -202,6 +202,15 @@ message Command {
   bytes values_patch = 16;            // JSON merge patch
   int64 target_revision = 17;         // target revision for ROLLBACK
   uint32 payload_version = 18;
+  // Preflight stage this command executes (REQ-019 artifact/render/cluster/runtime_pull).
+  // Empty for a normal execution command. When set, the agent runs that stage's
+  // validation and reports its result instead of installing or upgrading: a stage
+  // is a check, not a release write.
+  //
+  // The stage used to travel only inside the outbox JSON payload, which the
+  // agent's decoder dropped, so every stage silently fell through to the
+  // operation-type branch and performed a real install (TASK-114).
+  string stage = 21;
   // Structured form of the command input, as an alternative to the flat fields on
   // the same message: the two describe one intent, so an agent reads whichever
   // form its payload version understands instead of merging both. Only an upgrade
