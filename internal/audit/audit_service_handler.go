@@ -117,6 +117,13 @@ func (h *auditServiceHandler) QueryAuditEvents(ctx context.Context, req *connect
 
 	page, err := h.store.AuditEvents().Query(ctx, filter, cursor, limit)
 	if err != nil {
+		// AC-029-05: a cursor the server cannot decode is the caller's fault, so
+		// it must stay distinguishable instead of collapsing into internal. The
+		// store already returns ErrInvalidCursor for it; the reason code mirrors
+		// the other list RPCs so a client can branch without parsing the message.
+		if errors.Is(err, store.ErrInvalidCursor) {
+			return nil, auditQueryError(connect.CodeInvalidArgument, "invalid_cursor", "audit cursor is invalid or expired")
+		}
 		h.logger.Error("query audit events failed", "error", err)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("query audit events: %w", err))
 	}
@@ -229,4 +236,13 @@ func boundedAuditCount(total int64) int32 {
 		return int32(maxInt32)
 	}
 	return int32(total) //nolint:gosec // Value is explicitly bounded to the int32 range.
+}
+
+// auditQueryError carries a stable reason code alongside the Connect status, the
+// same shape the other list RPCs use (inventoryError, bundleError), so clients
+// can branch on X-Reason-Code instead of matching message text.
+func auditQueryError(code connect.Code, reason, message string) *connect.Error {
+	err := connect.NewError(code, errors.New(message))
+	err.Meta().Set("X-Reason-Code", reason)
+	return err
 }
