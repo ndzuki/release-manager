@@ -7,6 +7,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import AuthorizationStaleNotice from '@/components/common/AuthorizationStaleNotice.vue';
 import ConvergenceTaskList from '@/components/emergency/ConvergenceTaskList.vue';
 import { listValuesRevisions } from '@/connect/values-revision';
 import { useAuthStore } from '@/stores/auth';
@@ -17,6 +18,9 @@ const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const authorization = useEmergencyAuthorizationStore();
+// AC-033-10: convergence tasks stay readable, but the state is surfaced so a
+// disabled write entry is explained rather than mysterious.
+const writeBlocked = computed(() => !authorization.writeAllowed);
 const selection = useConvergenceSelectionStore();
 
 const releaseDefinitionId = computed(() => String(route.params.releaseId ?? ''));
@@ -86,6 +90,7 @@ function continueToRevision(): void {
 
 <template>
   <section class="convergence-page">
+    <AuthorizationStaleNotice :stale="writeBlocked" />
     <nav class="breadcrumbs" aria-label="Breadcrumb">
       <RouterLink
         :to="{ name: 'ReleaseInventory', params: { customerId, clusterId: route.params.clusterId } }"

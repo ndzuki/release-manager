@@ -8,6 +8,7 @@ import { useRoute, useRouter } from 'vue-router';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import AuthorizationStaleNotice from '@/components/common/AuthorizationStaleNotice.vue';
 import EmergencyArtifactSelector from '@/components/emergency/EmergencyArtifactSelector.vue';
 import EmergencyChangeForm from '@/components/emergency/EmergencyChangeForm.vue';
 import EmergencyConfirmDialog from '@/components/emergency/EmergencyConfirmDialog.vue';
@@ -32,6 +33,10 @@ const routeScope = computed(() =>
 );
 
 const gate = computed(() => authorization.gateFor('execute'));
+// AC-033-10: a stale authorization snapshot closes the NEW emergency entry. The
+// convergence and existing-operation paths stay readable, so this only gates the
+// write path — the server still rejects a call that ignores it.
+const writeBlocked = computed(() => !authorization.writeAllowed);
 const selectedTarget = computed(() => store.selectedTargetDisplay);
 
 const submittingError = computed(() => store.submitError);
@@ -127,6 +132,7 @@ async function onConfirm(): Promise<void> {
       </RouterLink>
     </div>
     <div v-else class="emergency-flow">
+      <AuthorizationStaleNotice :stale="writeBlocked" />
       <h2>选择变更目标</h2>
       <EmergencyTargetSelector
         :targets="store.targets"
@@ -164,7 +170,7 @@ async function onConfirm(): Promise<void> {
           <button
             type="button"
             class="primary"
-            :disabled="!store.canConfirm"
+            :disabled="!store.canConfirm || writeBlocked"
             @click="store.openConfirm()"
           >
             确认变更
