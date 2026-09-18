@@ -174,7 +174,7 @@ func (s *OrgService) AddMember(
 
 	targetRole := store.Role(msg.GetRole())
 	if !targetRole.Valid() {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid role: %s", targetRole))
+		return nil, orgError(connect.CodeInvalidArgument, reasonInvalidRole, fmt.Sprintf("invalid role: %s", targetRole))
 	}
 
 	// Check org is not disabled.
@@ -297,7 +297,7 @@ func (s *OrgService) UpdateMemberRole(
 
 	newRole := store.Role(msg.GetNewRole())
 	if !newRole.Valid() {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid role: %s", newRole))
+		return nil, orgError(connect.CodeInvalidArgument, reasonInvalidRole, fmt.Sprintf("invalid role: %s", newRole))
 	}
 
 	// Get caller's role.
@@ -419,6 +419,7 @@ var _ authv1connect.OrganizationServiceHandler = (*OrgService)(nil)
 // message text — the same gap that made duplicate_member unusable (TASK-121).
 const (
 	reasonDuplicateMember            = "duplicate_member"
+	reasonInvalidRole                = "invalid_role"
 	reasonOrganizationDisabled       = "organization_disabled"
 	reasonLastPlatformAdminForbidden = "last_platform_admin_forbidden"
 	reasonOptimisticLockConflict     = "optimistic_lock_conflict"
