@@ -785,11 +785,16 @@ func applyOperationTransition(
 // insertOperationTerminalOutbox queues the OperationTerminal notification for a
 // terminal operation transition (AC-031-05).
 func insertOperationTerminalOutbox(ctx context.Context, tx *sql.Tx, op *store.Operation) error {
+	// Field names follow REQ-031's OperationTerminal payload contract:
+	// terminal_status, not status. channel and recipient are deliberately absent:
+	// neither the operations table nor any configuration carries them today, so the
+	// delivery side supplies them (see the wiring note in REQ-031).
 	payload, err := json.Marshal(map[string]any{
 		"event_type":            "OperationTerminal",
 		"operation_id":          op.ID,
+		"operation_type":        string(op.OperationType),
+		"terminal_status":       string(op.Status),
 		"release_definition_id": op.ReleaseDefinitionID,
-		"status":                string(op.Status),
 	})
 	if err != nil {
 		return fmt.Errorf("marshal operation terminal payload: %w", err)
