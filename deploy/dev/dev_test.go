@@ -2875,3 +2875,68 @@ func TestDevUpFailsWhenADevPortIsOccupied(t *testing.T) {
 		t.Fatalf("AC-065-07: expected port_conflict, got:\n%s", out)
 	}
 }
+
+// AC-065-09: the registry readiness probe must fail with its own code, not fall
+// through to a later stage.
+func TestDevUpFailsWhenRegistryIsUnreachable(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	// The registry probe is the only curl that hits /v2/.
+	writeShim(t, binDir, "curl", `#!/usr/bin/env bash
+if [[ "$*" == *"/v2/"* ]]; then exit 7; fi
+if [[ "$*" == *"/version"* ]]; then printf '{"version":"fixture-v2"}\n'; exit 0; fi
+exit 0
+`)
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("dev-up must fail when the registry is unreachable:\n%s", out)
+	}
+	if !strings.Contains(out, "registry_unreachable") {
+		t.Fatalf("AC-065-09: expected registry_unreachable, got:\n%s", out)
+	}
+}
+
+// AC-065-17: a failing k3d create must surface cluster_create_failed.
+func TestDevUpFailsWhenClusterCreateFails(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	// Keep the fake-k3d behaviour for reads, but make creation fail.
+	writeShim(t, binDir, "k3d", `#!/usr/bin/env bash
+# Answer the version probe so require_k3d passes; fail only on creation.
+if [ "$1" = "version" ]; then printf 'k3d version v5.8.3\nk3s version v1.31.5-k3s1\n'; exit 0; fi
+for a in "$@"; do
+  if [ "$a" = "create" ]; then printf 'k3d: failed to create cluster\n' >&2; exit 1; fi
+done
+exit 0
+`)
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("dev-up must fail when cluster creation fails:\n%s", out)
+	}
+	if !strings.Contains(out, "cluster_create_failed") {
+		t.Fatalf("AC-065-17: expected cluster_create_failed, got:\n%s", out)
+	}
+}
+
+// AC-065-16: a failing kustomize build must surface kustomize_build_failed.
+func TestDevUpFailsWhenKustomizeBuildFails(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nprintf 'kustomize: no such file\\n' >&2\nexit 1\n")
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("dev-up must fail when kustomize build fails:\n%s", out)
+	}
+	if !strings.Contains(out, "kustomize_build_failed") {
+		t.Fatalf("AC-065-16: expected kustomize_build_failed, got:\n%s", out)
+	}
+}
