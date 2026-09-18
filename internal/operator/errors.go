@@ -18,6 +18,7 @@ const (
 	reasonDuplicateOperatorName    = "duplicate_operator_name"
 	reasonOperatorNameCrossCluster = "operator_name_cross_cluster"
 	reasonCertificateInvalid       = "certificate_invalid"
+	reasonIdentityMismatch         = "identity_mismatch"
 	reasonOperatorSuperseded       = "operator_superseded"
 	reasonOperatorRevoked          = "operator_revoked"
 	reasonRenewTooEarly            = "renew_too_early"
