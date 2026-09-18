@@ -2849,3 +2849,29 @@ printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/fake 100
 		t.Fatalf("AC-065-21: expected host_disk_insufficient, got:\n%s", out)
 	}
 }
+
+// AC-065-07: the port gate must name the conflict. port_in_use probes with the
+// bash /dev/tcp builtin, which cannot be shimmed, so the fixture occupies the
+// port for real and the gate has to notice.
+func TestDevUpFailsWhenADevPortIsOccupied(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+
+	// fakeEnv overrides the dev ports to 19082-19087 so a real dev environment
+	// can run alongside the test.
+	listener, listenErr := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:19082")
+	if listenErr != nil {
+		t.Skipf("port 19082 is not free on this host, cannot build the fixture: %v", listenErr)
+	}
+	defer func() { _ = listener.Close() }()
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("dev-up must fail when a dev port is occupied:\n%s", out)
+	}
+	if !strings.Contains(out, "port_conflict") {
+		t.Fatalf("AC-065-07: expected port_conflict, got:\n%s", out)
+	}
+}
