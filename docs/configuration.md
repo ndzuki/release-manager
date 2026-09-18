@@ -6,10 +6,10 @@
 
 ### 1.1 统一入口与优先级
 
-除 `cmd/e2e`、`cmd/devseed`、`cmd/store-migrate` 与各 CI 质量工具外，所有服务二进制都经 `internal/app/app.go` 的 `Run(configPath, svc)` 启动（`internal/app/app.go:122`），真实加载器是 `config.LoadService`（`internal/config/config.go:306`，基于 viper）。生效优先级：
+除 `cmd/e2e`、`cmd/devseed`、`cmd/store-migrate` 与各 CI 质量工具外，所有服务二进制都经 `internal/app/app.go` 的 `Run(configPath, svc)` 启动（`internal/app/app.go:122`），真实加载器是 `config.LoadService`（`internal/config/config.go:474`，基于 viper）。生效优先级：
 
 1. **CLI flag**（显式传入的 flag 值）——注意：flag 只决定「读哪个文件」和少量进程参数（signing key、db 路径等），**没有** `BindPFlag`，flag 不进 viper。
-2. **环境变量**——`LoadService` 内的 `bindDatabaseEnvironment`（`internal/config/config.go:272`）对 22 个键做 `viper.BindEnv`，绑定键一旦在环境中存在即**覆盖文件值**（viper 语义：env > config file）。
+2. **环境变量**——`LoadService` 内的 `bindDatabaseEnvironment`（`internal/config/config.go:440`）对 22 个键做 `viper.BindEnv`，绑定键一旦在环境中存在即**覆盖文件值**（viper 语义：env > config file）。
 3. **YAML 文件**（`--config` 指定路径）。
 4. **代码默认值**——各配置块的 `WithDefaults()`（如 `internal/config/config.go:176/195/236/252`）。
 
@@ -17,7 +17,7 @@
 
 **例外（原始二次读取，env 不参与）**：`cmd/orchestrator` 在 `LoadService` 之外另起裸 viper 直接重读同一个 YAML 文件解析 `gc`（`cmd/orchestrator/main.go:555`）、`emergency`（`:625`）、`trust`（`:677`）三个块（`UnmarshalKey`）。这三块只能改文件，不能用环境变量覆盖。
 
-**死代码（勿作依据）**：`config.Load` 与包级 `Config` 结构体（含 `RuntimePullPreflight` 字段，`internal/config/config.go:66/93`）无任何调用方；`WatchConfigFile`（`internal/config/config.go:329`，fsnotify 防抖 500ms 的热加载工具）在 `cmd/` 中无调用方——本仓库**没有**运行时热改配置机制，改文件必须重启进程或滚动 Deployment。TASK-094 已把配置文件侧对应的死键删除（§7-2/§7-3/§7-4），结构体保留待后续独立重构；`make check-config-keys` 门禁保证任何配置键不得再指向无人读取的声明。
+**死代码（勿作依据）**：`config.Load` 与包级 `Config` 结构体（含 `RuntimePullPreflight` 字段，`internal/config/config.go:66/93`）无任何调用方；`WatchConfigFile`（`internal/config/config.go:497`，fsnotify 防抖 500ms 的热加载工具）在 `cmd/` 中无调用方——本仓库**没有**运行时热改配置机制，改文件必须重启进程或滚动 Deployment。TASK-094 已把配置文件侧对应的死键删除（§7-2/§7-3/§7-4），结构体保留待后续独立重构；`make check-config-keys` 门禁保证任何配置键不得再指向无人读取的声明。
 
 ### 1.2 各二进制的 CLI flag（摘自 `cmd/*/main.go` 的 `flag.` 定义）
 
@@ -27,7 +27,7 @@
 | | `--orchestrator-url` | ""（空则回退 `http://localhost:8083`，`cmd/webhook/main.go:79`） | BundleService 上游（Register 与 /readyz 检查同源） |
 | | `--service-token` | `envOr("DEV_WEBHOOK_SERVICE_TOKEN", "")`（`cmd/webhook/main.go:62`） | 包入库服务令牌 |
 | release-orchestrator | `--config` | `configs/orchestrator.dev.yaml`（`cmd/orchestrator/main.go:845`） | 配置文件路径 |
-| | `--target-env` | `staging`（`cmd/orchestrator/main.go:846`） | 目标环境标签（传入 `orchestrator.NewService`） |
+| | `--target-env` | `staging`（`cmd/orchestrator/main.go:930`） | 目标环境标签（传入 `orchestrator.NewService`） |
 | | `--signing-key` | `envOr("JWT_SIGNING_KEY", "change-me-in-production")`（`:851`） | JWT 签名密钥 |
 | release-operator | `--config` | `configs/operator.dev.yaml`（`cmd/operator/main.go:359`） | 配置文件路径 |
 | | `--db` | `data/operator.db`（gateway 模式） | 本地 SQLite |
@@ -138,7 +138,7 @@
 |---|---|---|---|---|
 | `http_port` | int | 无 | 监听端口 | 8084。必填 |
 | `log_level` | — | — | | 生效（§7-1 闭环） |
-| `agent.mode` | `agent`\|`gateway` | `agent`（`AgentCfg.WithDefaults`，`internal/config/config.go:176`） | 运行模式 | `gateway` 为管理面遗留模式（`cmd/operator/main.go:38`）；env 无绑定 |
+| `agent.mode` | `agent`\|`gateway` | `agent`（`AgentCfg.WithDefaults`，`internal/config/config.go:344`） | 运行模式 | `gateway` 为管理面遗留模式（`cmd/operator/main.go:38`）；env 无绑定 |
 | `agent.customer_id` | string/UUID | 无 | 客户身份 | **agent 模式必填**：与 cluster_id 任一为空则 Register 失败（`cmd/operator/main.go:154`）；env `CUSTOMER_ID` |
 | `agent.cluster_id` | string | 无 | 集群身份 | 同上；env `CLUSTER_ID` |
 | `agent.operator_name` | string | 无 | 操作器显示名 | env `OPERATOR_NAME`；空则 bootstrap 用 cluster_id 兜底 |
@@ -160,7 +160,7 @@ TASK-094 前本文件还写有 `runtime_pull_preflight.*`（6 键，整块无读
 | `authorization.pull_backoff_max` | duration | 30s | 拉取失败退避上限 | env `AUTHORIZATION_PULL_BACKOFF_MAX` |
 | `values.max_document_bytes` | int | 1 MiB（`ValuesConfig.WithDefaults`，`internal/config/config.go:82`） | ValuesRevision 文档大小上限 | 必填性无——缺省安全；env `VALUES_MAX_DOCUMENT_BYTES` |
 | `values.secret_patterns` | []string | [] | Values 明文机密拦截模式 | 消费点 `internal/orchestrator/values_revision.go:154`；env `VALUES_SECRET_PATTERNS`（逗号分隔） |
-| `trust.verification_timeout` | duration | 5s（`trust.DefaultVerificationTimeout`，`internal/trust/ed25519.go:22`） | 信任策略解析/根查找超时 | 仅文件（裸 viper `UnmarshalKey("trust")`，`cmd/orchestrator/main.go:677`），无 env 绑定 |
+| `trust.verification_timeout` | duration | 5s（`trust.DefaultVerificationTimeout`，`internal/trust/ed25519.go:22`） | 信任策略解析/根查找超时 | 仅文件（裸 viper `UnmarshalKey("trust")`，`cmd/orchestrator/main.go:722`），无 env 绑定 |
 | `maintenance` | bool | false | 维护模式：拦截写 RPC、跳过启动恢复与策略热载 | `cmd/orchestrator/main.go:449/467/516` 三类拦截器；env `MAINTENANCE` |
 | `gc.interval` | duration | 6h（`DefaultGcConfig`，`internal/orchestrator/gc_config.go:28`） | 周期 GC 间隔 | 0=停用周期 GC；非法（0<x<5m）启动失败；仅文件，无 env 绑定。**TASK-094 后 dev overlay 也写真实的 `gc:` 块**（此前是无人读的 `retention:`，集群 GC 实际跑默认值；§7-3） |
 | `gc.bundle_retention_days` | int | 90 | Bundle 保留天数 | `Validate()` 最小 7（`internal/orchestrator/gc_config.go:41`），低于即启动失败 |
@@ -171,8 +171,8 @@ TASK-094 前本文件还写有 `runtime_pull_preflight.*`（6 键，整块无读
 | `gc.gc_max_duration_minutes` | int | 55 | 单轮 GC 时长预算 | min 5 |
 | `gc.cleanup_idempotency_retention_hours` | int | 24 | cleanup 幂等记录保留 | min 1 |
 | `gateway.enabled` | bool | false | 是否启 agent mTLS 网关（:8084） | dev 本地 false、集群 overlay true（agent 接入必需）；env `GATEWAY_ENABLED` |
-| `gateway.port` | int | 8084（`GatewayCfg.WithDefaults`，`internal/config/config.go:236`） | 网关端口 | 集群 NodePort 30084；env `GATEWAY_PORT` |
-| `ca.key_path` | path | 无 | CA 私钥文件（dev 文件模式） | **机密**；与 `ca.cert_path` 成对，`ca.LoadConfigured` 缺失即 Register 失败（`cmd/orchestrator/main.go:87`、`CAConfig.Validate` `internal/config/config.go:204-216`）；集群由 Secret `release-manager-mtls-ca` 挂到 `/data/gateway-ca.key`（0600） |
+| `gateway.port` | int | 8084（`GatewayCfg.WithDefaults`，`internal/config/config.go:404`） | 网关端口 | 集群 NodePort 30084；env `GATEWAY_PORT` |
+| `ca.key_path` | path | 无 | CA 私钥文件（dev 文件模式） | **机密**；与 `ca.cert_path` 成对，`ca.LoadConfigured` 缺失即 Register 失败（`cmd/orchestrator/main.go:89`、`CAConfig.Validate` `internal/config/config.go:204-216`）；集群由 Secret `release-manager-mtls-ca` 挂到 `/data/gateway-ca.key`（0600） |
 | `ca.cert_path` | path | 无 | CA 证书（网关信任锚） | 与 key_path 成对；网关启用时两者都必须可得 |
 | `ca.cert_ttl` | duration | 168h | 签发操作器证书有效期 | 消费方仅 orchestrator（`LoadConfigured`） |
 | `ca.renew_before_ratio` | float (0,1] | 0.5 | 到期前续租比例 | 越界报 `ca_invalid` 启动失败 |
@@ -210,13 +210,13 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 |---|---|---|---|---|
 | `http_port` | int | 无 | 监听端口 | dev 8087（仅本地；集群 8087 是 web/nginx）。必填 |
 | `log_level` | — | — | | 生效（§7-1 闭环） |
-| `audit.archive.retention_days` | int | 90（`audit.DefaultArchiveConfig`，`internal/audit/archive_config.go:20`；**注意**：文件能读到但键缺失时按零值拷贝即 0=停用归档，见 `archiveConfigFromService` `cmd/api/main.go:123`） | 保留天数，0 关闭归档 | 读取仅发生在 `cmd/api.Register` 的二次 `LoadService`（`cmd/api/main.go:76`），失败只 Warn 回落默认 |
+| `audit.archive.retention_days` | int | 90（`audit.DefaultArchiveConfig`，`internal/audit/archive_config.go:20`；**注意**：文件能读到但键缺失时按零值拷贝即 0=停用归档，见 `archiveConfigFromService` `cmd/api/main.go:123`） | 保留天数，0 关闭归档 | 读取仅发生在 `cmd/api.Register` 的二次 `LoadService`（`cmd/api/main.go:64`），失败只 Warn 回落默认 |
 | `audit.archive.poll_interval` | duration | 6h | 归档轮询周期 | `Validate()` 要求 >0（`internal/audit/archive_config.go:32`） |
 | `audit.archive.batch_size` | int | 1000 | 单批归档条数 | 要求 >0 |
 | `audit.archive.archive_dir` | path | data/archives | 归档输出目录 | 要求非空 |
 | `audit.archive.compression` | `gzip_jsonl` | gzip_jsonl | 归档编码 | 仅支持此值，其它值 Validate 报错 |
 | `audit.archive.checksum_algorithm` | `sha256` | sha256 | 校验算法 | 仅支持此值 |
-| `authorization.auth_url` | url | `http://localhost:8085`（`AuthorizationCfg.WithDefaults` `internal/config/config.go:253`） | release-auth 的 Connect 地址；审计面按 ADR-021 调 `AuthorizeAccess` 取授权判定 | env `AUTHORIZATION_AUTH_URL`（`internal/config/config.go:283`）；判定 200ms 超时，失败即 `unavailable`（fail closed） |
+| `authorization.auth_url` | url | `http://localhost:8085`（`AuthorizationCfg.WithDefaults` `internal/config/config.go:420`） | release-auth 的 Connect 地址；审计面按 ADR-021 调 `AuthorizeAccess` 取授权判定 | env `AUTHORIZATION_AUTH_URL`（`internal/config/config.go:283`）；判定 200ms 超时，失败即 `unavailable`（fail closed） |
 
 ### 3.8 release-notification-sink（kustomize 唯一副本，2 键）
 

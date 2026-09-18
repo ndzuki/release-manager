@@ -118,8 +118,8 @@ review 或 commit message。本仓库是公开镜像（`https://github.com/ndzuk
   （`internal/operator/identity_handler.go:24-29`）。
 - 网关面最小挂载：只注册 `OperatorService` 与**精确一条**
   `POST /orchestrator.v1.OrchestratorService/SyncInventory`（证书身份鉴权拦截器），其余 Orchestrator procedure 在该端口 404：
-  `cmd/orchestrator/main.go:164-191`；服务端 `ClientAuth: tls.VerifyClientCertIfGiven` 与
-  `MinVersion: tls.VersionTLS13` 见 `cmd/orchestrator/main.go:198-203`。
+  `cmd/orchestrator/main.go:176-203`；服务端 `ClientAuth: tls.VerifyClientCertIfGiven` 与
+  `MinVersion: tls.VersionTLS13` 见 `cmd/orchestrator/main.go:210-215`。
 - 吊销后拒绝一切会话恢复与重连：`internal/operator/service.go:410-435,498-499,612`
   （`OperatorRevoked` → `permission_denied`）。
 - 注册令牌只存不可逆 SHA-256，TTL 5–1440 分钟，一次性状态机 pending/used/revoked：
@@ -311,7 +311,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 - 两道闸门的强度不同，必须分开说：**preflight 无条件 fail closed**
   （`internal/preflight/service.go:145-169`：`Trusted`/`PolicyWarning` 放行，缺失/不可用/无效一律拒），
   而 **`SubmitReleaseBundle` 的闸门跟随 trust policy 的 `FailClosed` 位**
-  （`internal/orchestrator/service.go:258-305`：`VerificationRejected` 恒拒；
+  （`internal/orchestrator/service.go:320-367`：`VerificationRejected` 恒拒；
   `SignatureMissing`/`VerificationUnavailable`/其他状态仅在 `FailClosed=true` 时拒，否则降级为
   `PolicyWarning` 放行）。默认策略里**只有 `env == "production"` 才 `FailClosed: true`**，
   staging/development 默认 fail-open：`internal/trust/policy.go:8-28`；
@@ -322,7 +322,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
   （`internal/trust/service.go:84,157,210,260`）。
 - **状态：部分实现（遗留验签器）**。`internal/trust/verifier.go:216-219` 只做格式检查，注释明确写
   「实际密码学校验交给 `CosignVerifier`」，而 `CosignVerifier` 在本仓库不存在（全仓仅此一处注释引用）。
-  当前被挂载的是 §3.9 首条的 `Ed25519Verifier`（`cmd/orchestrator/main.go:353`）。
+  当前被挂载的是 §3.9 首条的 `Ed25519Verifier`（`cmd/orchestrator/main.go:365`）。
 - **状态：未见实现（漏洞准入）**。`internal/vulnerability/` 只有 `NoopScanner`（恒返回 0 findings，
   `internal/vulnerability/scanner.go:5-18`），且 orchestrator 侧的
   `Service.EvaluateArtifactVulnerability` 既无调用者（全仓仅定义处出现），又在 evaluator 为 nil 时
