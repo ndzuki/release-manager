@@ -637,3 +637,40 @@ func TestValuesRejectClearsConvergenceBinding(t *testing.T) {
 	require.NotNil(t, task.LastRejectionReason)
 	assert.Equal(t, "not ready", *task.LastRejectionReason)
 }
+
+// AC-068-30: approving a revision converges every convergence task bound to it,
+// in the same transaction as the revision state change.
+func TestValuesApproveConvergesBoundTasks(t *testing.T) {
+	st := OpenTest(t)
+	ctx := context.Background()
+	seedEmergencyDefinition(t, st, "def-approve-converges")
+	command := emergencyCreateCommand(t, "def-approve-converges", "idem-approve-converges", "hash-ac", store.EmergencySetContainerImage)
+	result := createEmergencyViaUOW(t, st, command)
+	require.NotNil(t, result.ConvergenceTask)
+
+	revision := &store.ValuesRevision{
+		ID:                  uuid.New().String(),
+		ReleaseDefinitionID: "def-approve-converges",
+		Version:             1,
+		StateVersion:        1,
+		Status:              store.ValuesStatusPendingApproval,
+		CanonicalDocument:   []byte(`{"key":"value"}`),
+		Digest:              "sha256:approve-converges",
+		CreatedByUserID:     "creator",
+	}
+	require.NoError(t, st.Values().Create(ctx, revision))
+	require.NoError(t, st.ConvergenceTasks().BindRevision(
+		ctx, result.ConvergenceTask.ID, revision.ID, string(store.ValuesStatusPendingApproval)))
+
+	_, err := st.ValuesApproval().Approve(ctx, store.ValuesApprovalCommand{
+		RevisionID: revision.ID, ExpectedStateVersion: 1, ActorUserID: "approver", Authorized: true,
+	})
+	require.NoError(t, err)
+
+	task, err := st.ConvergenceTasks().GetByOperationID(ctx, result.Operation.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "converged", task.Status, "AC-068-30: the bound task must be converged")
+	require.NotNil(t, task.ActiveRevisionStatus)
+	assert.Equal(t, "approved", *task.ActiveRevisionStatus)
+	assert.NotNil(t, task.ConvergedAt)
+}

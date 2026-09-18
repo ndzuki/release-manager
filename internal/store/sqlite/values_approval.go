@@ -128,6 +128,20 @@ func (s *valuesApprovalStore) transition(
 	if err != nil {
 		return nil, err
 	}
+	if transition.action == store.ValuesDecisionApproved {
+		// AC-068-30: approving a revision converges every convergence task bound to
+		// it, in the same transaction as the revision state change and the approved
+		// pointer update, so the three can never diverge. This mirrors
+		// ConvergenceTasks().MarkConverged but selects by binding and runs inside the
+		// approval transaction, which MarkConverged (s.db, not tx) cannot do.
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE convergence_tasks
+			SET status = 'converged', active_revision_status = 'approved', converged_at = ?
+			WHERE active_revision_id = ? AND status = 'pending_promotion'
+		`, now.Format(time.RFC3339Nano), revision.ID); err != nil {
+			return nil, fmt.Errorf("converge bound tasks: %w", err)
+		}
+	}
 	if transition.action == store.ValuesDecisionRejected {
 		// AC-068-29: rejecting a bound revision clears the active binding while the
 		// convergence tasks stay pending_promotion, and records why it was rejected.
