@@ -1,0 +1,66 @@
+version: "1"
+# Accepted unemitted error codes for `make check-error-codes` (TASK-125).
+#
+# Every entry needs a reason and an expires_at; an expired entry stops excepting,
+# so the code is checked again and the gate fails until it is fixed or the
+# exception is renewed. Codes listed here are asserted by an AC but have no
+# emitter, which means a client cannot branch on them.
+#
+# The list is deliberately tied to the 2026-09-18 audit
+# (Notes/Audit-2026-09-18/05-error-code-emittability.md): each entry is a known
+# gap with an owning requirement, not a permanent allowance.
+exceptions:
+  - owner: "release-manager"
+    code: "non_bundle_image"
+    reason: "REQ-056: the backend half of the non-bundle-image rejection is not wired; the frontend maps it but internal/ has no such code. Tracked as REQ-056 partial (audit bucket A/B)."
+    expires_at: "2026-12-31"
+
+  - owner: "release-manager"
+    code: "annotation_key_not_allowed"
+    reason: "REQ-058: server-side annotation validation is missing; the codes exist only in the web client. Tracked as REQ-058 partial (audit bucket C, canonical-contract family)."
+    expires_at: "2026-12-31"
+
+  - owner: "release-manager"
+    code: "annotation_scope_mismatch"
+    reason: "REQ-058: server-side annotation validation is missing; the codes exist only in the web client. Tracked as REQ-058 partial (audit bucket C)."
+    expires_at: "2026-12-31"
+
+  - owner: "release-manager"
+    code: "duplicate_annotation_key"
+    reason: "REQ-058: server-side annotation validation is missing; the codes exist only in the web client. Tracked as REQ-058 partial (audit bucket C)."
+    expires_at: "2026-12-31"
+
+  - owner: "release-manager"
+    code: "emergency_feature_disabled"
+    reason: "REQ-058: server-side annotation validation is missing; the codes exist only in the web client. Tracked as REQ-058 partial (audit bucket C)."
+    expires_at: "2026-12-31"
+
+  - owner: "release-manager"
+    code: "invalid_annotation_entries"
+    reason: "REQ-058: server-side annotation validation is missing; the codes exist only in the web client. Tracked as REQ-058 partial (audit bucket C)."
+    expires_at: "2026-12-31"
+
+  - owner: "release-manager"
+    code: "target_changed"
+    reason: "REQ-058: server-side annotation validation is missing; the codes exist only in the web client. Tracked as REQ-058 partial (audit bucket C)."
+    expires_at: "2026-12-31"
+
+  - owner: "release-manager"
+    code: "unresolved_effect"
+    reason: "REQ-058: server-side annotation validation is missing; the codes exist only in the web client. Tracked as REQ-058 partial (audit bucket C)."
+    expires_at: "2026-12-31"
+
+  - owner: "release-manager"
+    code: "job_not_found"
+    reason: "REQ-060 is not delivered: the notification job service never existed (audit bucket A, first item). The code is asserted by an AC on a feature that was never implemented."
+    expires_at: "2026-12-31"
+
+  - owner: "release-manager"
+    code: "retry_not_allowed"
+    reason: "REQ-060 is not delivered: the notification job service never existed (audit bucket A, first item)."
+    expires_at: "2026-12-31"
+
+  - owner: "release-manager"
+    code: "invalid_stage_selection"
+    reason: "REQ-066: the staged E2E runner validates --stages but does not emit this stable code. Tracked as REQ-066 partial (audit bucket D)."
+    expires_at: "2026-12-31"

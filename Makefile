@@ -489,6 +489,15 @@ check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
 		printf "$(YELLOW)check-reqs: no REQ docs found in repo, skipping$(NC)\n"; \
 	fi
 
+.PHONY: check-error-codes
+check-error-codes: ## Check that every error code an AC asserts is emittable (TASK-125)
+	@REQS=$${REQS_DIR:-$$(find . -path '*/Requirements/REQ-*.md' 2>/dev/null)}; \
+	if [ -n "$$REQS" ]; then \
+		$(GO) run ./cmd/errcodecheck/ -repo . -exceptions errcodes.exceptions.yaml $$REQS; \
+	else \
+		printf "$(YELLOW)check-error-codes: no REQ docs in this checkout; set REQS_DIR to the vault Requirements directory$(NC)\n"; \
+	fi
+
 .PHONY: check-migrations
 check-migrations: ## Static gate: migration numbering is contiguous and every version has up+down (REQ-008 §8-19)
 	$(GO) test -race -count=1 -run TestMigrationVersionsAreContinuousAndPaired ./migrations/
@@ -545,7 +554,7 @@ test-operator-image-sdk-only: ## Run operator image SDK-only gate (REQ-061)
 			--policy imagecheck.operator.yaml \
 			--dockerfile deploy/docker/Dockerfile.operator
 .PHONY: quality
-quality: sdk-check test-coverage lint check-reqs check-licenses check-docs check-config-keys check-migrations check-probes api-check lint-proto ## Full quality gate run
+quality: sdk-check test-coverage lint check-reqs check-error-codes check-licenses check-docs check-config-keys check-migrations check-probes api-check lint-proto ## Full quality gate run
 
 .PHONY: build-sdkcheck
 build-sdkcheck: proto ## Build sdkcheck
