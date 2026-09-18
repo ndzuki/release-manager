@@ -674,3 +674,50 @@ func TestValuesApproveConvergesBoundTasks(t *testing.T) {
 	assert.Equal(t, "approved", *task.ActiveRevisionStatus)
 	assert.NotNil(t, task.ConvergedAt)
 }
+
+// AC-068-28: discarding a bound draft unbinds its convergence tasks in the same
+// transaction as the state change.
+func TestValuesDiscardUnbindsConvergenceTasks(t *testing.T) {
+	st := OpenTest(t)
+	ctx := context.Background()
+	seedEmergencyDefinition(t, st, "def-discard-unbind")
+	command := emergencyCreateCommand(t, "def-discard-unbind", "idem-discard-unbind", "hash-du", store.EmergencySetContainerImage)
+	result := createEmergencyViaUOW(t, st, command)
+	require.NotNil(t, result.ConvergenceTask)
+
+	created, err := st.ValuesLifecycle().CreateDraft(ctx, store.CreateValuesDraftCommand{
+		Revision: &store.ValuesRevision{
+			ID:                  uuid.NewString(),
+			ReleaseDefinitionID: "def-discard-unbind",
+			CanonicalDocument:   []byte(`{"replicas":1}`),
+			Digest:              "sha256:discard-unbind",
+		},
+		ActorUserID: "creator",
+	})
+	require.NoError(t, err)
+	require.NoError(t, st.ConvergenceTasks().BindRevision(
+		ctx, result.ConvergenceTask.ID, created.Revision.ID, string(store.ValuesStatusDraft)))
+
+	bound, err := st.ConvergenceTasks().GetByOperationID(ctx, result.Operation.ID)
+	require.NoError(t, err)
+	require.NotNil(t, bound.ActiveRevisionID, "fixture must bind the draft")
+
+	_, err = st.ValuesLifecycle().Discard(ctx, store.DiscardValuesCommand{
+		RevisionID:           created.Revision.ID,
+		ExpectedStateVersion: created.Revision.StateVersion,
+		ActorUserID:          "creator",
+		IdempotencyScope:     "discard-values:creator:" + created.Revision.ID,
+		IdempotencyKeyHash:   "discard-unbind-key",
+		RequestHash:          "discard-unbind-request",
+	})
+	require.NoError(t, err)
+
+	task, err := st.ConvergenceTasks().GetByOperationID(ctx, result.Operation.ID)
+	require.NoError(t, err)
+	assert.Nil(t, task.ActiveRevisionID, "AC-068-28: discarding the draft must unbind the task")
+	assert.Nil(t, task.ActiveRevisionStatus)
+
+	revision, err := st.Values().Get(ctx, created.Revision.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.ValuesStatusDiscarded, revision.Status)
+}
