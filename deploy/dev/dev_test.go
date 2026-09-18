@@ -3018,3 +3018,39 @@ func TestNginxConfProxiesHealthAndEnvironmentBeforeSPAFallback(t *testing.T) {
 		}
 	}
 }
+
+// AC-065-15: when every build succeeds and a push fails, the failure class must
+// be docker_push_failed and must name the image.
+func TestDevUpFailsWithPushFailureCode(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	// A missing manifest forces the build path; builds succeed, release pushes
+	// fail (the k3s component prewarm pushes still pass).
+	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "manifest" ] && [ "$2" = "inspect" ]; then exit 1; fi
+if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then exit 1; fi
+if [ "$1" = "network" ] && [ "$2" = "inspect" ]; then exit 1; fi
+if [ "$1" = "build" ]; then exit 0; fi
+if [ "$1" = "push" ]; then
+  if [[ "$*" == *"release-"* ]]; then printf 'push denied\n' >&2; exit 1; fi
+  exit 0
+fi
+exit 0
+`)
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("dev-up must fail when an image push fails:\n%s", out)
+	}
+	if !strings.Contains(out, "docker_push_failed") {
+		t.Fatalf("AC-065-15: expected docker_push_failed, got:\n%s", out)
+	}
+	if strings.Contains(out, "docker_build_failed") {
+		t.Fatalf("AC-065-15: builds succeeded, so the class must not be a build failure:\n%s", out)
+	}
+	if !strings.Contains(out, "release-") {
+		t.Fatalf("AC-065-15: the failing image must be named:\n%s", out)
+	}
+}

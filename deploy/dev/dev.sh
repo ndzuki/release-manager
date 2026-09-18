@@ -1030,8 +1030,13 @@ build_and_push() {
   if ! image_record "$service"; then
     return 0
   fi
-  if ! build_push_now "$service"; then
-    rc=$?
+  # `|| rc=$?` captures the call's own status. The old `if ! build_push_now; then
+  # rc=$?` read the NEGATED status, so rc was always 0 and the push/build
+  # distinction below could never be made (AC-065-15 was unreachable). The `||`
+  # form is also what keeps `set -e` from aborting before rc is read.
+  rc=0
+  build_push_now "$service" || rc=$?
+  if [ "$rc" -ne 0 ]; then
     if [ "$rc" -eq 11 ]; then
       fail "$ERR_DOCKER_PUSH_FAILED" "push failed for release-$service:content-sha256-${IMAGE_TAGS[$service]:-}"
     fi
@@ -1077,8 +1082,9 @@ images_up_parallel() {
     if [ "$i" -ge "$par" ]; then
       local j=0
       for j in "${!pids[@]}"; do
-        if ! wait "${pids[$j]}"; then
-          rc=$?
+        rc=0
+        wait "${pids[$j]}" || rc=$?
+        if [ "$rc" -ne 0 ]; then
           if [ -z "$first_fail" ]; then
             first_fail="${names[$j]}"
             first_rc=$rc
@@ -1093,8 +1099,9 @@ images_up_parallel() {
   if [ "${#pids[@]}" -gt 0 ]; then
     local j=0
     for j in "${!pids[@]}"; do
-      if ! wait "${pids[$j]}"; then
-        rc=$?
+      rc=0
+      wait "${pids[$j]}" || rc=$?
+      if [ "$rc" -ne 0 ]; then
         if [ -z "$first_fail" ]; then
           first_fail="${names[$j]}"
           first_rc=$rc
