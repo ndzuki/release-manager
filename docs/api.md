@@ -24,7 +24,7 @@
 | `trust.v1` | `TrustService` | 6 | `api/proto/trust/v1/trust.proto:158` | `release-orchestrator` | 8083 |
 | `webhook.v1` | `WebhookService` | 1 | `api/proto/webhook/v1/webhook.proto:46` | `release-webhook`（`cmd/webhook`） | 8082 |
 
-合计 3+11+9+4+2+3+2+4+4+53+2+6+1 = 104。RPC 类型：102 个 unary、1 个 server-streaming（`WatchOperation`，`api/proto/orchestrator/v1/orchestrator.proto:1041`）、1 个 bidirectional-streaming（`CommandStream`，`api/proto/operator/v1/operator.proto:335`），无 client-streaming。
+合计 3+11+9+4+2+3+2+4+4+53+2+6+1 = 104。RPC 类型：102 个 unary、1 个 server-streaming（`WatchOperation`，`api/proto/orchestrator/v1/orchestrator.proto:1041`）、1 个 bidirectional-streaming（`CommandStream`，`api/proto/operator/v1/operator.proto:344`），无 client-streaming。
 
 `api/proto/common/v1/domain.proto`、`api/proto/common/v1/health.proto`、`api/proto/common/v1/trust.proto`、`api/proto/common/v1/types.proto`、`api/proto/operator/v1/upgrade_result.proto`、`api/proto/orchestrator/v1/vulnerability.proto` 只定义共享消息/枚举，`service` 计数为 0。
 
@@ -370,7 +370,7 @@ ID 归属不统一：多数由服务端生成（`CreateReleaseDefinitionRequest`
 
 ### 5.6 并发与 patch 语义
 
-并发控制是**请求内的期望版本字段**，不是 ETag/If-Match：`expected_version`、`expected_state_version`、`version`、`expected_current_revision`。错误 code 目前不统一：`UpdateReleaseDefinition` 用 `failed_precondition`（`internal/orchestrator/definition.go:181-184`），`UpdateCluster` 与 `UpdateOrganization` 用 `aborted`（`internal/orchestrator/cluster.go:86-94`、`internal/auth/org_service.go:128`），`UpdateMemberRole`/`AddMember`/`RevokeBinding` 用 `aborted`。`expected_version` 语义也有差异：definition 允许 0 跳过检查，customer 要求精确匹配。
+并发控制是**请求内的期望版本字段**，不是 ETag/If-Match：`expected_version`、`expected_state_version`、`version`、`expected_current_revision`。错误 code 目前不统一：`UpdateReleaseDefinition` 用 `failed_precondition`（`internal/orchestrator/definition.go:181-184`），`UpdateCluster` 与 `UpdateOrganization` 用 `aborted`（`internal/orchestrator/cluster.go:86-94`、`internal/auth/org_service.go:129`），`UpdateMemberRole`/`AddMember`/`RevokeBinding` 用 `aborted`。`expected_version` 语义也有差异：definition 允许 0 跳过检查，customer 要求精确匹配。
 
 更新 RPC 有四类不同 patch 语义，别按一个模板套：`UpdateReleaseDefinition` 是可选字段级 patch（`optional` 标量的 absent = 不变、显式 `false`/`0` = 写入，`internal/orchestrator/definition.go:186-206`）；`UpdateCustomer` 是「空字符串 = 不变、无法清空」；`UpdateCluster` 是全量替换（`routes` 整体覆盖，`internal/orchestrator/cluster.go:64`起）；`UpdateOrganization` 无条件赋值（`""` 会清空 name，`internal/auth/org_service.go:124`）。契约里没有任何 `google.protobuf.*Value` 包装类型，只有 4 个 proto3 `optional` 字段：`hpa_managed`、`max_emergency_replicas`、`lifecycle_status`、`session_status`（`api/proto/orchestrator/v1/orchestrator.proto:439-440`、`:635-636`）。唯一真正的「置 null 即清空」是 `google.protobuf.Struct values_patch`，按 RFC 7386 merge 执行（`internal/orchestrator/preflight/command.go:146-178`）。
 
@@ -430,14 +430,14 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 | RPC | 作用 | 鉴权 | 位置 | 关键错误 |
 | --- | --- | --- | --- | --- |
 | `CreateOrganization` | 创建组织 | authz(organization/write) | `internal/auth/org_service.go:33` | `unauthenticated`（`:53`）、`internal`（`:47`） |
-| `GetOrganization` | 查询组织 | authz(organization/read) | `internal/auth/org_service.go:77` | `not_found`（`:83`） |
-| `ListOrganizations` | 列出当前用户可见组织 | authz(organization/read) | `internal/auth/org_service.go:93` | `internal`（`:99`）；无分页 |
-| `UpdateOrganization` | 改名（无条件赋值） | authz(organization/write) | `internal/auth/org_service.go:111` | `aborted`（`:128` 乐观锁）、`failed_precondition`（`:121`）、`not_found`（`:118`）、`internal`（`:130`） |
-| `DisableOrganization` | 停用组织 | authz(organization/write) | `internal/auth/org_service.go:140` | `aborted`（`:154`）、`not_found`（`:147`）、`internal`（`:156`） |
+| `GetOrganization` | 查询组织 | authz(organization/read) | `internal/auth/org_service.go:78` | `not_found`（`:83`） |
+| `ListOrganizations` | 列出当前用户可见组织 | authz(organization/read) | `internal/auth/org_service.go:94` | `internal`（`:99`）；无分页 |
+| `UpdateOrganization` | 改名（无条件赋值） | authz(organization/write) | `internal/auth/org_service.go:112` | `aborted`（`:128` 乐观锁）、`failed_precondition`（`:121`）、`not_found`（`:118`）、`internal`（`:130`） |
+| `DisableOrganization` | 停用组织 | authz(organization/write) | `internal/auth/org_service.go:141` | `aborted`（`:154`）、`not_found`（`:147`）、`internal`（`:156`） |
 | `AddMember` | 加入成员并赋角色 | authz(member/write) | `internal/auth/org_service.go:164` | `invalid_argument`（`:176`）、`not_found`（`:182`）、`failed_precondition`（`:185`）、`unauthenticated`（`:171`） |
-| `RemoveMember` | 移除成员 | authz(member/write) | `internal/auth/org_service.go:220` | `not_found`（`:233`）、`failed_precondition`（`:248`）、`internal`（`:239`）、`unauthenticated`（`:227`） |
-| `ListMembers` | 列出成员 | authz(member/read) | `internal/auth/org_service.go:265` | `internal`（`:271`）；无分页 |
-| `UpdateMemberRole` | 变更成员角色 | authz(member/write) | `internal/auth/org_service.go:281` | `invalid_argument`（`:293`）、`permission_denied`（`:299`）、`not_found`（`:311`）、`unauthenticated`（`:288`） |
+| `RemoveMember` | 移除成员 | authz(member/write) | `internal/auth/org_service.go:227` | `not_found`（`:233`）、`failed_precondition`（`:248`）、`internal`（`:239`）、`unauthenticated`（`:227`） |
+| `ListMembers` | 列出成员 | authz(member/read) | `internal/auth/org_service.go:272` | `internal`（`:271`）；无分页 |
+| `UpdateMemberRole` | 变更成员角色 | authz(member/write) | `internal/auth/org_service.go:288` | `invalid_argument`（`:293`）、`permission_denied`（`:299`）、`not_found`（`:311`）、`unauthenticated`（`:288`） |
 
 ### 7.4 auth.v1.BindingService（4 个，`release-auth` 8085）
 
@@ -478,7 +478,7 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 | RPC | 作用 | 鉴权 | 位置 | 关键错误 |
 | --- | --- | --- | --- | --- |
 | `Enroll` | 用一次性 enrollment token + CSR 注册 agent 并签发客户端证书 | 无（token 即凭证） | `internal/operator/service.go:181` | `unauthenticated`（`:192`）、`permission_denied`（`:217`）、`invalid_argument`（`:243`）、`internal`（`:194`） |
-| `RenewCertificate` | 用既有证书续期（ADR-018） | 网关：证书；管理端口：无 | `internal/operator/service.go:1402` | `unauthenticated`（`:1329`）、`failed_precondition`（`:1350`）、`invalid_argument`（`:1354`）、`permission_denied`（`:1363`） |
+| `RenewCertificate` | 用既有证书续期（ADR-018） | 网关：证书；管理端口：无 | `internal/operator/service.go:1410` | `unauthenticated`（`:1329`）、`failed_precondition`（`:1350`）、`invalid_argument`（`:1354`）、`permission_denied`（`:1363`） |
 | `CommandStream` | **bidi-streaming**：Hello/Heartbeat/Ack/Result/Resync/EmergencyStop + 命令下发 | 网关：客户端证书；管理端口：仅 `session_id` 查库存在性 | `internal/operator/service.go:375` | `invalid_argument`（`:387` 首帧必须是 Hello）；证书分支 `unauthenticated`（`:398`、`:403`）、`permission_denied`（`:433`、`:435`、`:438`）、`already_exists`（`:460` 单 operator 只允许一个在线会话）；非证书分支 `unauthenticated`（`:478` 会话不存在）、`permission_denied`（`:481` 会话与 operator 不符）；需 HTTP/2，见 2.6 |
 | `GetActiveOperatorSession` | 读取 operator 当前活跃会话 | 无（网关中间件也不覆盖此路径） | `internal/operator/active_session.go:16` | `invalid_argument`（`:22`）、`not_found`（`:27`）、`internal`（`:30`） |
 
@@ -487,7 +487,7 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 - **有 TLS 状态时**（网关监听器，`internal/operator/service.go:396-440`）：要求客户端证书，SAN 必须编码 operator 身份，并与登记记录的 `cert_serial` 一致；`operator_id` 由证书推导而非请求体。
 - **无 TLS 状态时**（管理端口 8083 与 `release-operator` gateway 模式，同一 handler：`cmd/orchestrator/main.go:369-376`、`cmd/operator/main.go:259-266`）：走 `else` 分支，只做「`hello.session_id` 在库里存在且 `session.OperatorID` 匹配」的检查（`internal/operator/service.go:473-482`）——没有 JWT、没有证书。注释里写明该路径由后续任务移除（`internal/operator/service.go:474-475`），当前是既有事实。
 
-网关的 `NewCertificateIdentityHandler` 只强制校验 `CommandStream` 与 `RenewCertificate` 两条路径（`internal/operator/identity_handler.go:8-19`，路径字符串比较在 `:10-11`），其余 procedure 直接 `next.ServeHTTP`。`RenewCertificate` 则在 handler 内部再要求证书身份上下文（`internal/operator/service.go:1406-1409`），所以它在管理端口上恒 `unauthenticated`。
+网关的 `NewCertificateIdentityHandler` 只强制校验 `CommandStream` 与 `RenewCertificate` 两条路径（`internal/operator/identity_handler.go:8-19`，路径字符串比较在 `:10-11`），其余 procedure 直接 `next.ServeHTTP`。`RenewCertificate` 则在 handler 内部再要求证书身份上下文（`internal/operator/service.go:1414-1417`），所以它在管理端口上恒 `unauthenticated`。
 
 ### 7.9 orchestrator.v1.BundleService（4 个，`release-orchestrator` 8083）
 
