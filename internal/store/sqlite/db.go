@@ -1431,7 +1431,12 @@ var migrationStatements = []string{
 		updated_at     TEXT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_notification_jobs_status ON notification_jobs(status)`,
-	`CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_jobs_dedup ON notification_jobs(operation_id, channel, recipient)`,
+	// REQ-031 AC-031-10: dedupe only NON-terminal jobs, so a dead_letter job no
+	// longer blocks a new one for the same triple. The index is dropped first because
+	// IF NOT EXISTS would otherwise leave the old unconditional index in place on an
+	// existing database.
+	`DROP INDEX IF EXISTS idx_notification_jobs_dedup`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_jobs_dedup ON notification_jobs(operation_id, channel, recipient) WHERE status NOT IN ('delivered', 'dead_letter')`,
 
 	// REQ-031: Add columns that may be missing from existing DBs (idempotent ALTER TABLE).
 	`ALTER TABLE notification_jobs ADD COLUMN next_retry_at TEXT`,

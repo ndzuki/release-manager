@@ -38,7 +38,7 @@ dev/test 使用的 **SQLite** 引擎的 schema **不在这里**——它内建�
 AGENTS.md 约束 4 要求「迁移写在 `migrations/` 且编号连续，SQLite 侧结构在同一变更内对齐」。**照着的真实例子**——`notification_jobs` 表两侧的同构写法：
 
 - PostgreSQL 侧：`migrations/release_notifier/000001_create_notification_jobs.up.sql:1-5` 的文件头注释就是对齐声明（"Column set mirrors the SQLite schema (internal/store/sqlite/db.go) with PostgreSQL types: TIMESTAMPTZ time columns, JSONB metadata, table-level UNIQUE"）；表级类型见 :6-27（如 `next_retry_at TIMESTAMPTZ`、`metadata JSONB NOT NULL DEFAULT '{}'`、`UNIQUE (operation_id, channel, recipient)`）。
-- SQLite 侧同一变更：`internal/store/sqlite/db.go:1415` 起 `CREATE TABLE IF NOT EXISTS notification_jobs`，时间列用 `TEXT`、BLOB/TEXT 存 JSON，去重用**独立唯一索引** `idx_notification_jobs_dedup`（:1434），后续列增补写成 `ALTER TABLE notification_jobs ADD COLUMN next_retry_at TEXT` 等（:1437-1439）。
+- SQLite 侧同一变更：`internal/store/sqlite/db.go:1415` 起 `CREATE TABLE IF NOT EXISTS notification_jobs`，时间列用 `TEXT`、BLOB/TEXT 存 JSON，去重用**独立部分唯一索引** `idx_notification_jobs_dedup`（:1439，`WHERE status NOT IN ('delivered', 'dead_letter')` —— 仅非终态去重，REQ-031 AC-031-10），后续列增补写成 `ALTER TABLE notification_jobs ADD COLUMN next_retry_at TEXT` 等（:1442-1445）。
 
 类型映射约定（由上述对照归纳，均可在两侧文件中逐行验证）：`TIMESTAMPTZ ↔ TEXT`、`JSONB ↔ BLOB/TEXT`、表级 `UNIQUE(...) ↔ CREATE UNIQUE INDEX`、`BIGINT ↔ INTEGER`。
 
