@@ -34,7 +34,7 @@
 
 7 个服务共用 `internal/app.Run`（`internal/app/app.go:122`）：
 
-- 读 `--config` 指向的 YAML（`internal/config.LoadService`，`internal/config/config.go:306-324`，viper）。
+- 读 `--config` 指向的 YAML（`internal/config.LoadService`，`internal/config/config.go:474-492`，viper）。
   多个键支持环境变量覆盖（`bindDatabaseEnvironment`，`internal/config/config.go:272-303`）：
   `DATABASE_DRIVER`、`DATABASE_DSN`、`REDIS_ADDRESS`、`MAINTENANCE`、`AUTHORIZATION_AUTH_URL`、
   `GATEWAY_ENABLED`、`GATEWAY_PORT`、`CUSTOMER_ID`、`CLUSTER_ID`、`OPERATOR_NAME`、
@@ -50,7 +50,7 @@
 
 ## cmd/webhook
 
-常驻服务。`webhook.v1.WebhookService/SubmitReleaseBundle`（`cmd/webhook/main.go:45-52`；
+常驻服务。`webhook.v1.WebhookService/SubmitReleaseBundle`（`cmd/webhook/main.go:55-66`；
 proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 service token 以
 `Authorization: Bearer` 转发给 orchestrator BundleService（`internal/webhook/service.go:64`）。
 该上游同时是 readiness 检查 `orchestrator` 的目标（GET `<base>/readyz`，TASK-099，`cmd/webhook/main.go:90`）。
@@ -153,7 +153,7 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 
 ## cmd/notifier
 
-常驻服务。注册 `notifier.v1.NotifierService`（`cmd/notifier/main.go:71-78`），并跑通知消费循环
+常驻服务。注册 `notifier.v1.NotifierService`（`cmd/notifier/main.go:176-188`），并跑通知消费循环
 （`Run`，`main.go:45-48`）。
 
 | flag | 默认值 | 必填 | 含义 | 出处 |
@@ -169,7 +169,7 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 
 ## cmd/api
 
-常驻服务。注册 `audit.v1.AuditService`（Emit/Query/Export，`cmd/api/main.go:65-73`；
+常驻服务。注册 `audit.v1.AuditService`（Emit/Query/Export，`cmd/api/main.go:87-95`；
 `api/proto/audit/v1/audit.proto:116,126,136,145`），后台跑审计归档 worker（`main.go:93-101`；归档参数见
 `configs/api.dev.yaml:3-9`，输出 `data/archives`）。AuditService 全方法挂 JWT Bearer 拦截器，
 缺 `Authorization` 即 Unauthenticated（`main.go:70`、`internal/audit/interceptor.go:23-44`）。
