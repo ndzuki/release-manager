@@ -489,6 +489,10 @@ check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
 		printf "$(YELLOW)check-reqs: no REQ docs found in repo, skipping$(NC)\n"; \
 	fi
 
+.PHONY: audit-citations
+audit-citations: ## Read-only audit: symbols named next to a code citation should sit near the cited line (TASK-112)
+	$(GO) run ./cmd/docscheck/ -root . -max 40
+
 .PHONY: check-error-codes
 check-error-codes: ## Check that every error code an AC asserts is emittable (TASK-125)
 	@REQS=$${REQS_DIR:-$$(find . -path '*/Requirements/REQ-*.md' 2>/dev/null)}; \
