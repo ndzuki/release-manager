@@ -28,6 +28,9 @@ export const useAuthStore = defineStore('auth', () => {
   const expiresAt = shallowRef<number | null>(null);
   const returnUrl = shallowRef<string | null>(null);
   const forbiddenMessage = shallowRef<string | null>(null);
+  // AC-033-09: fences overlapping organization switches so the last REQUESTED
+  // one wins, not the last one to respond.
+  let switchGeneration = 0;
 
   const isAuthenticated = computed(() => status.value === 'authenticated' && user.value !== null);
   const activeOrganization = computed(
@@ -55,6 +58,9 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function clearSession(nextStatus: AuthStatus = 'anonymous'): void {
+    // A switch that is still in flight must not resurrect a session that was
+    // cleared in the meantime (logout, expiry).
+    switchGeneration += 1;
     user.value = null;
     organizations.value = [];
     expiresAt.value = null;
@@ -123,7 +129,12 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function switchOrganization(organizationId: string): Promise<void> {
+    const generation = ++switchGeneration;
     const session = await authClient.switchOrganization({ orgId: organizationId });
+    // AC-033-09: a later switch wins even when it completes first. Without this
+    // fence a slow earlier response would overwrite the newer organization, and
+    // the pages would end up driven by a scope the user has already left.
+    if (generation !== switchGeneration) return;
     applySession(session);
     globalThis.dispatchEvent?.(new CustomEvent(organizationChangedEvent, { detail: { organizationId } }));
   }
