@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -39,4 +40,16 @@ func TestOperationTransition_QueuesTerminalNotification(t *testing.T) {
 	_, err := st.Operations().Transition(ctx, op.ID, store.StatusSucceeded, op.StateVersion, "")
 	require.NoError(t, err)
 	assert.Equal(t, 1, count(), "a terminal transition must queue exactly one notification")
+
+	// The payload must follow REQ-031's OperationTerminal contract: the status is
+	// terminal_status, not status.
+	var payload string
+	require.NoError(t, st.DB().QueryRowContext(ctx,
+		`SELECT payload_json FROM notification_outbox WHERE event_type = 'OperationTerminal'`).Scan(&payload))
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal([]byte(payload), &decoded))
+	assert.Equal(t, "OperationTerminal", decoded["event_type"])
+	assert.Equal(t, "succeeded", decoded["terminal_status"], "REQ-031 names this field terminal_status")
+	assert.Equal(t, string(store.OperationInstall), decoded["operation_type"])
+	assert.NotContains(t, decoded, "status", "the contract has no bare status field")
 }
