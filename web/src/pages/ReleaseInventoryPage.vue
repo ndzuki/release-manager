@@ -3,6 +3,7 @@ import { computed, onActivated, onBeforeUnmount, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
+import AuthorizationStaleNotice from '@/components/common/AuthorizationStaleNotice.vue';
 import ReleaseInventorySkeleton from '@/components/releases/ReleaseInventorySkeleton.vue';
 import ReleaseInventoryTable from '@/components/releases/ReleaseInventoryTable.vue';
 import { useAuthStore } from '@/stores/auth';
@@ -22,7 +23,11 @@ const customerName = computed(() => String(route.query.customerName ?? customerI
 const clusterName = computed(() => String(route.query.clusterName ?? clusterId.value));
 const canSync = computed(() => auth.user?.roles.some((role) => ['platform_admin', 'release_admin', 'deployer'].includes(role)) === true);
 const operationsEnabled = import.meta.env.VITE_ENABLE_RELEASE_OPERATIONS !== 'false';
-const canCreateOperation = computed(() => operationsEnabled && auth.canCreateReleaseOperation);
+// AC-033-10: a stale authorization snapshot closes the NEW operation entry. The
+// inventory, existing operations and late results stay readable — only the write
+// entry is gated, and the server still rejects a call that ignores it.
+const writeBlocked = computed(() => !authorization.writeAllowed);
+const canCreateOperation = computed(() => operationsEnabled && auth.canCreateReleaseOperation && !writeBlocked.value);
 
 // One scoped Authorization Snapshot per page — the emergency/convergence
 // entry columns derive from it; no per-row authorization RPC (AC-058-04/08).
@@ -94,6 +99,8 @@ function handleSearchInput(event: Event): void {
         </button>
       </div>
     </header>
+
+    <AuthorizationStaleNotice :stale="writeBlocked" />
 
     <div v-if="inventory.syncError" class="notice notice--warning" role="alert">{{ inventory.syncError }}</div>
     <div v-else-if="inventory.syncRequestId" class="notice" role="status">

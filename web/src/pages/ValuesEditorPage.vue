@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import ErrorState from '@/components/common/ErrorState.vue';
+import AuthorizationStaleNotice from '@/components/common/AuthorizationStaleNotice.vue';
 import ConvergenceLockedPathsPanel from '@/components/emergency/ConvergenceLockedPathsPanel.vue';
 import SecretRefEditor from '@/components/values/SecretRefEditor.vue';
 import ValuesCodeEditor from '@/components/values/ValuesCodeEditor.vue';
@@ -18,6 +19,9 @@ const route = useRoute();
 const auth = useAuthStore();
 const editor = useValuesEditorStore();
 const authorization = useEmergencyAuthorizationStore();
+// AC-033-10: the values/convergence path stays readable, but the state is
+// surfaced so a disabled write entry is explained rather than mysterious.
+const writeBlocked = computed(() => !authorization.writeAllowed);
 const reloadingParent = shallowRef(false);
 const discardConfirmOpen = ref(false);
 
@@ -95,6 +99,7 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="values-page">
+    <AuthorizationStaleNotice :stale="writeBlocked" />
     <nav class="breadcrumbs" aria-label="Breadcrumb">
       <span>{{ customerName }}</span><span aria-hidden="true">/</span>
       <span>{{ clusterName }}</span><span aria-hidden="true">/</span>
