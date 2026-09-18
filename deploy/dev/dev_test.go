@@ -2940,3 +2940,81 @@ func TestDevUpFailsWhenKustomizeBuildFails(t *testing.T) {
 		t.Fatalf("AC-065-16: expected kustomize_build_failed, got:\n%s", out)
 	}
 }
+
+// AC-065-19: a failing seed leg must surface seed_write_failed with the
+// devseed output, so the failing stage is visible.
+func TestDevUpFailsWhenSeedLegFails(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	// devseed runs through `go run ./cmd/devseed`; fail only that invocation so
+	// the earlier `go env` probe still passes.
+	// The seed leg is the devseed invocation carrying --seed-retries. The shim keeps
+	// happyShims' behaviour (mTLS CA files, service tokens) for every other call,
+	// because the CA helper runs the same binary earlier.
+	writeShim(t, binDir, "go", `#!/usr/bin/env bash
+for a in "$@"; do
+  if [ "$a" = "--seed-retries" ]; then printf 'devseed: write failed\n' >&2; exit 1; fi
+done
+#!/usr/bin/env bash
+if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-mtls-ca-dir" ]; then
+    mkdir -p "$a"
+    printf 'fake-ca-key\n' > "$a/ca.key"
+    printf 'fake-ca-cert\n' > "$a/ca.crt"
+    chmod 600 "$a/ca.key" "$a/ca.crt"
+    exit 0
+  fi
+  prev="$a"
+done
+mkdir -p "$DEV_DATA_DIR/dev-enrollment-tokens"
+for c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed; do
+  printf 'fake-token\n' > "$DEV_DATA_DIR/dev-enrollment-tokens/$c.token"
+done
+exit 0
+`)
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("dev-up must fail when the seed leg fails:\n%s", out)
+	}
+	if !strings.Contains(out, "seed_write_failed") {
+		t.Fatalf("AC-065-19: expected seed_write_failed, got:\n%s", out)
+	}
+}
+
+// AC-065-35: the SPA fallback must not swallow the orchestrator's health and
+// environment endpoints. The three proxy locations use `^~` so prefix matching
+// wins over `location /`, and nginx.conf is what the web image installs.
+func TestNginxConfProxiesHealthAndEnvironmentBeforeSPAFallback(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "web", "nginx.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := string(raw)
+
+	fallback := strings.Index(conf, "location / {")
+	if fallback < 0 {
+		t.Fatalf("nginx.conf must keep the SPA fallback location /")
+	}
+	for _, path := range []string{"/health", "/readyz", "/environment"} {
+		marker := "location ^~ " + path + " {"
+		at := strings.Index(conf, marker)
+		if at < 0 {
+			t.Fatalf("AC-065-35: nginx.conf must proxy %s with ^~ so it beats the SPA fallback", path)
+		}
+		if at > fallback {
+			t.Fatalf("AC-065-35: %s must be declared before location / or the fallback wins", path)
+		}
+		block := conf[at:]
+		if end := strings.Index(block, "}"); end > 0 {
+			block = block[:end]
+		}
+		if !strings.Contains(block, "proxy_pass http://orchestrator:8083;") {
+			t.Fatalf("AC-065-35: %s must proxy to the orchestrator, got:\n%s", path, block)
+		}
+	}
+}
