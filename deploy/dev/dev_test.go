@@ -2807,3 +2807,45 @@ exit 0
 		t.Fatalf("expected service_unhealthy with unexpected payload:\n%s", out)
 	}
 }
+
+// AC-065-14: the docker gate must name the daemon-unreachable case, not fall
+// through to a later stage or a generic failure.
+func TestDevUpFailsWhenDockerDaemonIsUnreachable(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	writeShim(t, binDir, "flock", "#!/usr/bin/env bash\nexit 0\n")
+	// docker is on PATH but `docker info` fails: the daemon is not running.
+	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+for a in "$@"; do
+  if [ "$a" = "info" ]; then exit 1; fi
+done
+exit 0
+`)
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("dev-up must fail when the docker daemon is unreachable:\n%s", out)
+	}
+	if !strings.Contains(out, "docker_unavailable") {
+		t.Fatalf("AC-065-14: expected docker_unavailable, got:\n%s", out)
+	}
+}
+
+// AC-065-21: the disk gate must fire with its own code and report the shortfall.
+func TestDevUpFailsWhenDiskIsBelowTheFloor(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	writeShim(t, binDir, "flock", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "docker", "#!/usr/bin/env bash\nexit 0\n")
+	fakeK3d(t, binDir, stateDir)
+	// 1 GiB free, far below the 20 GiB floor.
+	writeShim(t, binDir, "df", `#!/usr/bin/env bash
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/fake 100000 99000 1048576 99%% /\n'
+`)
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("dev-up must fail when free disk is below the floor:\n%s", out)
+	}
+	if !strings.Contains(out, "host_disk_insufficient") {
+		t.Fatalf("AC-065-21: expected host_disk_insufficient, got:\n%s", out)
+	}
+}
