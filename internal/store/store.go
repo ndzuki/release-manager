@@ -2518,6 +2518,17 @@ type ValidationOutboxStore interface {
 	UpdateTx(tx *gorm.DB, entry *ValidationOutboxEntry) error
 }
 
+// NotificationOutboxStore delivers queued terminal notifications (REQ-031
+// AC-031-12). The writer is the operation terminal transition; this is the
+// consumer side, kept separate so the worker can be tested without a notifier.
+type NotificationOutboxStore interface {
+	// ListUndelivered returns the oldest undelivered entries, up to limit.
+	ListUndelivered(ctx context.Context, limit int) ([]*ApprovalOutboxEntry, error)
+	// MarkDelivered acknowledges one entry. It is idempotent: acknowledging an
+	// already-delivered entry succeeds.
+	MarkDelivered(ctx context.Context, id string, at time.Time) error
+}
+
 // ── Preflight lifecycle domain types (REQ-069) ─────────────────────
 
 // PreflightLifecycle records the lifecycle of a preflight check (REQ-019).
@@ -2571,6 +2582,7 @@ type Store interface {
 	Operators() OperatorStore
 	Sessions() SessionStore
 	Outbox() OutboxStore
+	NotificationOutbox() NotificationOutboxStore
 	Users() UserStore
 	AuthSessions() AuthSessionStore
 	Organizations() OrganizationStore
