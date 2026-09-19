@@ -16,6 +16,7 @@ import (
 
 	"connectrpc.com/connect"
 	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
+	notifierv1connect "github.com/ndzuki/release-manager/api/gen/notifier/v1/notifierv1connect"
 	operatorv1connect "github.com/ndzuki/release-manager/api/gen/operator/v1/operatorv1connect"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	trustv1connect "github.com/ndzuki/release-manager/api/gen/trust/v1/trustv1connect"
@@ -43,14 +44,17 @@ type orchSvc struct {
 	configPath string
 	authURL    string
 
-	gateway      *http.Server
-	store        store.Store
-	cleanup      *orchestrator.CleanupService
-	emergency    *orchestrator.Service
-	pingDB       func(context.Context) error
-	bundleSvc    *orchestrator.BundleService
-	validation   *orchestrator.ValidationWorker
-	auditEmitter audit.Sink
+	gateway    *http.Server
+	store      store.Store
+	cleanup    *orchestrator.CleanupService
+	emergency  *orchestrator.Service
+	pingDB     func(context.Context) error
+	bundleSvc  *orchestrator.BundleService
+	validation *orchestrator.ValidationWorker
+	// notificationWorker drains the terminal-notification outbox (REQ-031
+	// AC-031-12). Nil when no notifier address/recipient is configured.
+	notificationWorker *orchestrator.NotificationOutboxWorker
+	auditEmitter       audit.Sink
 	// sessionRegistry expires operator sessions that stop heartbeating
 	// (REQ-044/TASK-098); the agent is the only writer of last_heartbeat.
 	sessionRegistry *operator.SessionRegistry
@@ -529,6 +533,27 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		s.validation = orchestrator.NewValidationWorker(s.store, nil, logger, orchestrator.DefaultValidationWorkerConfig())
 	}
 
+	// REQ-031 AC-031-12 / D-N: deliver queued terminal notifications. Without an
+	// address and a recipient the worker stays disabled and the entries remain
+	// queued -- they are never acknowledged without being sent.
+	notifierCfg := s.cfg.Notifier.WithDeliveryDefaults()
+	if notifierCfg.DeliveryEnabled() {
+		sender, senderErr := orchestrator.NewNotifierClientSender(
+			notifierv1connect.NewNotifierServiceClient(http.DefaultClient, notifierCfg.URL),
+			notifierCfg.Recipient, notifierCfg.DeliveryChannel,
+		)
+		if senderErr != nil {
+			return fmt.Errorf("wire terminal notification sender: %w", senderErr)
+		}
+		s.notificationWorker = orchestrator.NewNotificationOutboxWorker(
+			s.store.NotificationOutbox(), sender, logger,
+			orchestrator.NotificationOutboxWorkerConfig{PollInterval: notifierCfg.PollInterval},
+		)
+		logger.Info("terminal notification worker wired", "notifier_url", notifierCfg.URL)
+	} else {
+		logger.Info("terminal notification worker disabled: notifier.url and notifier.recipient must both be set")
+	}
+
 	return nil
 }
 
@@ -815,6 +840,9 @@ func (s *orchSvc) startOrchestratorWorkers(ctx context.Context) {
 	}
 	if s.validation != nil {
 		go s.validation.Run(ctx)
+	}
+	if s.notificationWorker != nil {
+		go s.notificationWorker.Run(ctx)
 	}
 }
 

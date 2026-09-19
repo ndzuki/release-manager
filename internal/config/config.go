@@ -188,6 +188,21 @@ func (c VulnerabilityAdmissionCfg) Validate() error {
 
 // NotifierCfg is the REQ-031 notifier surface policy (TASK-096).
 type NotifierCfg struct {
+	// URL is the notifier service the orchestrator's terminal-notification
+	// outbox worker calls over Connect (REQ-031 AC-031-12). Empty leaves the
+	// worker disabled: entries stay queued rather than being acknowledged
+	// without being sent.
+	URL string `mapstructure:"url"`
+	// Recipient is the webhook URL carried into SendNotificationRequest.
+	// REQ-031's payload contract names channel and recipient but not where they
+	// come from, and no per-organization notification settings exist yet, so
+	// D-N (2026-09-19) chose a single deployment-wide default for now.
+	Recipient string `mapstructure:"recipient"`
+	// DeliveryChannel is the channel name the worker sends on; webhook is the
+	// only one the notifier implements today.
+	DeliveryChannel string `mapstructure:"delivery_channel"`
+	// PollInterval is how often the worker drains the outbox.
+	PollInterval time.Duration `mapstructure:"poll_interval"`
 	// EgressAllowlist is the complete set of destinations outbound webhook
 	// delivery may reach, as "scheme://host:port" entries (the port may be
 	// omitted for the scheme default). It is deny-by-default: an empty list
@@ -199,6 +214,24 @@ type NotifierCfg struct {
 	// when enabled, missing or invalid settings fail startup (fail closed)
 	// rather than silently delivering without a credential.
 	Vault VaultResolverCfg `mapstructure:"vault"`
+}
+
+// WithDeliveryDefaults returns bounded REQ-031 delivery defaults for omitted
+// configuration.
+func (c NotifierCfg) WithDeliveryDefaults() NotifierCfg {
+	if c.DeliveryChannel == "" {
+		c.DeliveryChannel = "webhook"
+	}
+	if c.PollInterval <= 0 {
+		c.PollInterval = 30 * time.Second
+	}
+	return c
+}
+
+// DeliveryEnabled reports whether the terminal-notification worker can run: it
+// needs both an address to call and a recipient to send to.
+func (c NotifierCfg) DeliveryEnabled() bool {
+	return c.URL != "" && c.Recipient != ""
 }
 
 // VaultResolverCfg carries the ADR-020 resolver references. Every field is a
@@ -449,6 +482,10 @@ func bindDatabaseEnvironment(v *viper.Viper) error {
 		"redis.db":                             "REDIS_DB",
 		"maintenance":                          "MAINTENANCE",
 		"authorization.auth_url":               "AUTHORIZATION_AUTH_URL",
+		"notifier.url":                         "NOTIFIER_URL",
+		"notifier.recipient":                   "NOTIFIER_RECIPIENT",
+		"notifier.delivery_channel":            "NOTIFIER_DELIVERY_CHANNEL",
+		"notifier.poll_interval":               "NOTIFIER_POLL_INTERVAL",
 		"authorization.pull_interval":          "AUTHORIZATION_PULL_INTERVAL",
 		"authorization.pull_backoff_max":       "AUTHORIZATION_PULL_BACKOFF_MAX",
 		"authorization.policy_reload_interval": "AUTHORIZATION_POLICY_RELOAD_INTERVAL",
