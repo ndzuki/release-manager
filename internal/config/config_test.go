@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -85,4 +87,24 @@ func TestValuesConfigWithDefaults(t *testing.T) {
 	configured := (ValuesConfig{MaxDocumentBytes: 2048, SecretPatterns: []string{"credential"}}).WithDefaults()
 	require.Equal(t, int64(2048), configured.MaxDocumentBytes)
 	require.Equal(t, []string{"credential"}, configured.SecretPatterns)
+}
+
+// D-N: the terminal-notification worker is enabled only when it has both an
+// address to call and a recipient to send to; either alone leaves it disabled
+// rather than acknowledging entries that were never sent.
+func TestNotifierDeliveryDefaultsAndEnabled(t *testing.T) {
+	zero := NotifierCfg{}
+	assert.False(t, zero.DeliveryEnabled(), "no url and no recipient is disabled")
+
+	assert.False(t, NotifierCfg{URL: "http://notifier:8086"}.DeliveryEnabled(), "url without a recipient is disabled")
+	assert.False(t, NotifierCfg{Recipient: "https://hooks.example/ops"}.DeliveryEnabled(), "recipient without a url is disabled")
+	assert.True(t, NotifierCfg{URL: "http://notifier:8086", Recipient: "https://hooks.example/ops"}.DeliveryEnabled())
+
+	defaulted := NotifierCfg{URL: "http://notifier:8086", Recipient: "https://hooks.example/ops"}.WithDeliveryDefaults()
+	assert.Equal(t, "webhook", defaulted.DeliveryChannel)
+	assert.Equal(t, 30*time.Second, defaulted.PollInterval)
+
+	custom := NotifierCfg{DeliveryChannel: "slack", PollInterval: time.Minute}.WithDeliveryDefaults()
+	assert.Equal(t, "slack", custom.DeliveryChannel)
+	assert.Equal(t, time.Minute, custom.PollInterval)
 }
