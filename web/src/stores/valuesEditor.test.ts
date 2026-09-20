@@ -230,3 +230,48 @@ describe('values editor store', () => {
   });
 
 });
+
+// AC-055-13: locked paths are read-only in convergence mode. The server
+// re-verifies them inside the approval transaction, but the client must not
+// submit a draft that changed one, and must say which path is locked.
+describe('locked paths are read-only (AC-055-13)', () => {
+  const preparedSession = {
+    releaseDefinitionId: 'definition-1',
+    parentRevisionId: 'parent-1',
+    document: 'replicas: 5',
+    lockedPaths: ['replicas'],
+    expiresAt: null,
+    taskIds: ['t1'],
+    lockedPathsHash: 'hash-1',
+    parentVersion: 3n,
+  };
+
+  async function loadedStore() {
+    vi.mocked(getPrepareSession).mockResolvedValue(preparedSession);
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1');
+    await store.loadConvergence('token-1');
+    return store;
+  }
+
+  it('refuses to submit a draft that changed a locked path', async () => {
+    const store = await loadedStore();
+    vi.mocked(submitValuesRevision).mockClear();
+    store.editorContent = 'replicas: 99';
+
+    expect(await store.submit()).toBe(false);
+    expect(store.error).toContain('replicas');
+    expect(store.error).toContain('锁定路径');
+    expect(submitValuesRevision).not.toHaveBeenCalled();
+  });
+
+  it('allows a submit that leaves the locked paths untouched', async () => {
+    const store = await loadedStore();
+    vi.mocked(submitValuesRevision).mockResolvedValue({ ...draft, status: 'pending_approval' });
+    vi.mocked(submitValuesRevision).mockClear();
+    store.editorContent = 'replicas: 5\nimage:\n  tag: v2';
+
+    expect(await store.submit()).toBe(true);
+    expect(submitValuesRevision).toHaveBeenCalledTimes(1);
+  });
+});
