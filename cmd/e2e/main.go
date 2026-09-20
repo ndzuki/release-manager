@@ -165,7 +165,7 @@ func runStages(args []string, stdout, stderr io.Writer) int {
 	// needs a usable config even for a partial stage selection; that is
 	// deliberate, because the graph is the single definition of the canonical
 	// stage set and its dependency edges (TASK-066 fail-closed contract).
-	stageSpecs, err := livewire.SpecsForRun(config, runID)
+	stageSpecs, compensations, err := livewire.SpecsForRun(config, runID)
 	if err != nil {
 		logger.Error("assemble e2e stage graph", "error", err)
 		return int(exitRuntime)
@@ -192,6 +192,17 @@ func runStages(args []string, stdout, stderr io.Writer) int {
 	// rollback. A failed sample is logged, not fatal: cleanup then degrades to
 	// the baseline revision comparison, which still restores (D-033).
 	collectResidue(config, options, runID, logger)
+
+	// Run the compensations the stages registered -- restoring a workload's
+	// replica count, for one. They run AFTER the residue sample, because the
+	// sample is only meaningful while the changed state is still the run's own
+	// (D-033), and they run whatever the run decided, because a failed assertion
+	// has already changed the cluster (AC-066-15).
+	if compensations != nil && compensations.Len() > 0 {
+		if compensationErr := compensations.Run(ctx); compensationErr != nil {
+			logger.Error("run e2e compensations", "error", compensationErr)
+		}
+	}
 
 	stageArtifacts, ok := writeStageArtifacts(report, options, runID, logger)
 	if !ok {

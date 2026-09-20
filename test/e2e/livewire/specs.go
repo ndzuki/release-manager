@@ -66,21 +66,26 @@ const DefaultEmergencyReplicas int32 = 2
 // rejects a binding whose two halves disagree, so a stage that cannot resolve
 // its key fails closed with a build error.
 func Specs(cfg *e2e.Config) ([]e2e.StageSpec, error) {
-	return SpecsForRun(cfg, "")
+	specs, _, err := SpecsForRun(cfg, "")
+	return specs, err
 }
 
 // SpecsForRun builds the canonical graph for one run. runID scopes every write
 // stage's idempotency key to that run, so a later run is a new logical write
 // rather than an ADR-009 replay of an earlier run whose parameters repeated.
-func SpecsForRun(cfg *e2e.Config, runID string) ([]e2e.StageSpec, error) {
+func SpecsForRun(cfg *e2e.Config, runID string) ([]e2e.StageSpec, *e2e.CompensationRegistry, error) {
 	if cfg == nil {
-		return nil, errors.New("livewire: nil config")
+		return nil, nil, errors.New("livewire: nil config")
 	}
 	assembled, err := newGraph(cfg, runID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return assembled.specs()
+	specs, err := assembled.specs()
+	if err != nil {
+		return nil, nil, err
+	}
+	return specs, assembled.registry, nil
 }
 
 // graph holds the run-scoped stage implementations. Exactly one instance of
@@ -94,6 +99,11 @@ type graph struct {
 	isolation    *releaseInvariantBinding
 	emergency    *stages.EmergencyStage
 	restart      *stages.RestartStage
+	// registry records the compensations the stages register (restoring a
+	// workload's replica count, for one). It is returned to the caller because
+	// nothing runs it otherwise: the stages register and the process exits, so a
+	// failed assertion leaves the fixture scaled (real smoke 2026-09-11).
+	registry *e2e.CompensationRegistry
 }
 
 // implementations maps each canonical stage name onto its implementation.
@@ -243,6 +253,7 @@ func newGraph(cfg *e2e.Config, runID string) (*graph, error) {
 		isolation:    &releaseInvariantBinding{IsolationStage: isolation, release: release, definition: releaseTarget.DefinitionID},
 		emergency:    emergency,
 		restart:      restart,
+		registry:     registry,
 	}, nil
 }
 
