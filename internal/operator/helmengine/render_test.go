@@ -99,3 +99,26 @@ func mustMarshalJSON(t *testing.T, value interface{}) string {
 	require.NoError(t, err)
 	return string(data)
 }
+
+// TASK-114: the cluster preflight stage renders for itself and needs the parsed
+// objects, which RenderResult deliberately does not carry (AC-046-02). The
+// rendered files come back beside the same result RenderPreflight returns.
+func TestRenderManifestsReturnsTheRenderedFiles(t *testing.T) {
+	opts := RenderOptions{
+		ReleaseName: "app", Namespace: "default", Chart: mustLoadChart(t, writeTestChart(t)),
+		ChartDigest: "sha256:chart", ValuesDigest: "sha256:values",
+		Values: []byte("{}"),
+	}
+
+	rendered, result, err := RenderManifests(t.Context(), opts)
+	require.NoError(t, err)
+
+	// The public result is exactly what RenderPreflight returns: no manifest.
+	preflight, err := RenderPreflight(t.Context(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, preflight.RenderDigest, result.RenderDigest)
+	assert.Equal(t, preflight.Resources, result.Resources)
+
+	// And the rendered files are available for the caller to decode.
+	assert.NotEmpty(t, rendered, "the rendered files must be returned")
+}
