@@ -9,6 +9,7 @@ import ValuesCodeEditor from '@/components/values/ValuesCodeEditor.vue';
 import ValuesConflictDialog from '@/components/values/ValuesConflictDialog.vue';
 import ValuesDiffPanel from '@/components/values/ValuesDiffPanel.vue';
 import ValuesEditorSkeleton from '@/components/values/ValuesEditorSkeleton.vue';
+import RejectRevisionDialog from '@/components/values/RejectRevisionDialog.vue';
 import ValuesRevisionActions from '@/components/values/ValuesRevisionActions.vue';
 import { useAuthStore } from '@/stores/auth';
 import { useEmergencyAuthorizationStore } from '@/stores/emergencyAuthorization';
@@ -24,6 +25,8 @@ const authorization = useEmergencyAuthorizationStore();
 const writeBlocked = computed(() => !authorization.writeAllowed);
 const reloadingParent = shallowRef(false);
 const discardConfirmOpen = ref(false);
+// AC-055-11: the reject reason is captured in a dialog, not submitted blind.
+const rejectDialogOpen = ref(false);
 
 const customerId = computed(() => String(route.params.customerId ?? ''));
 const clusterId = computed(() => String(route.params.clusterId ?? ''));
@@ -80,6 +83,15 @@ async function reloadParent(): Promise<void> {
   } finally {
     reloadingParent.value = false;
   }
+}
+
+function requestReject(): void {
+  rejectDialogOpen.value = true;
+}
+
+async function confirmReject(reason: string): Promise<void> {
+  rejectDialogOpen.value = false;
+  await editor.reject(reason);
 }
 
 function requestDiscard(): void {
@@ -183,8 +195,15 @@ onBeforeUnmount(() => {
         @save="editor.save"
         @submit="editor.submit"
         @approve="editor.approve"
-        @reject="editor.reject"
+        @reject="requestReject"
         @discard="requestDiscard"
+      />
+
+      <RejectRevisionDialog
+        v-if="rejectDialogOpen"
+        :submitting="editor.approving"
+        @submit="confirmReject"
+        @close="rejectDialogOpen = false"
       />
 
       <div v-if="discardConfirmOpen" class="discard-dialog" role="dialog" aria-modal="true" aria-label="确认丢弃 Draft">

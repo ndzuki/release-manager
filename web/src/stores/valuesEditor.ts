@@ -334,13 +334,13 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
   }
 
   /** Reject: atomically unbinds the convergence tasks (AC-058-40). */
-  async function reject(): Promise<boolean> {
+  async function reject(reason = ''): Promise<boolean> {
     const revision = currentRevision.value;
     if (!revision || approving.value) return false;
     approving.value = true;
     error.value = null;
     try {
-      currentRevision.value = await rejectValuesRevision(revision.id, revision.stateVersion);
+      currentRevision.value = await rejectValuesRevision(revision.id, revision.stateVersion, reason);
       toast.value = '已拒绝，任务已解绑';
       return true;
     } catch (requestError) {

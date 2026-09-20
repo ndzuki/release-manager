@@ -136,3 +136,69 @@ describe('ValuesEditorPage', () => {
     expect(mocks.editor.load).toHaveBeenCalledTimes(2);
   });
 });
+
+// AC-055-11: the reject action opens the reason dialog, and the reason the user
+// typed reaches the store. Before this the dialog existed but was never mounted,
+// so reject() was called with no reason at all.
+describe('ValuesEditorPage reject reason (AC-055-11)', () => {
+  function mountWithEmittingStubs() {
+    return mount(ValuesEditorPage, {
+      global: {
+        stubs: {
+          ValuesEditorSkeleton: true,
+          ValuesCodeEditor: { props: ['modelValue'], template: '<pre>{{ modelValue }}</pre>' },
+          ValuesDiffPanel: true,
+          SecretRefEditor: true,
+          ValuesConflictDialog: true,
+          ErrorState: true,
+          ValuesRevisionActions: {
+            emits: ['approve', 'reject'],
+            template: '<div><button data-testid="reject" @click="$emit(\'reject\')">reject</button></div>',
+          },
+          RejectRevisionDialog: {
+            props: ['submitting'],
+            emits: ['submit', 'close'],
+            template: '<div data-testid="reject-dialog"><button data-testid="submit" @click="$emit(\'submit\', \'needs a smaller image\')">submit</button></div>',
+          },
+        },
+      },
+    });
+  }
+
+  beforeEach(() => {
+    Object.assign(mocks.editor, {
+      currentRevision: { id: 'rev-1', status: 'pending_approval', stateVersion: '1' },
+      parentRevision: null,
+      editorContent: '{}',
+      loading: false,
+      error: null,
+      canonicalCurrent: {},
+      restoredDraft: false,
+      toast: null,
+      showConflictDialog: false,
+      approving: false,
+      discarding: false,
+      saving: false,
+      saveDisabled: false,
+      preparedTaskIds: [],
+      reject: vi.fn().mockResolvedValue(true),
+    });
+    vi.clearAllMocks();
+  });
+
+  it('opens the dialog on reject and forwards the typed reason to the store', async () => {
+    const wrapper = mountWithEmittingStubs();
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="reject-dialog"]').exists()).toBe(false);
+
+    await wrapper.find('[data-testid="reject"]').trigger('click');
+    expect(wrapper.find('[data-testid="reject-dialog"]').exists()).toBe(true);
+
+    await wrapper.find('[data-testid="submit"]').trigger('click');
+    await flushPromises();
+
+    expect(mocks.editor.reject).toHaveBeenCalledWith('needs a smaller image');
+    expect(wrapper.find('[data-testid="reject-dialog"]').exists()).toBe(false);
+  });
+});
