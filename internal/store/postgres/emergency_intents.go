@@ -518,6 +518,7 @@ const emergencyIntentSelect = `
 		emergency_intents.after_snapshot, emergency_intents.delivery_status,
 		emergency_intents.effect_status, emergency_intents.last_delivery_at,
 		emergency_intents.lock_released_at,
+		emergency_intents.revert_status, emergency_intents.reconciled_by_operation_id,
 		emergency_intents.created_at, emergency_intents.updated_at
 	FROM emergency_intents`
 
@@ -532,7 +533,8 @@ func scanEmergencyIntent(row interface{ Scan(...any) error }) (*store.EmergencyI
 		&intent.WorkloadKind, &intent.WorkloadName, &intent.WorkloadNamespace, &intent.WorkloadUID,
 		&container, &artifactID, &imageReference, &targetReplicas, &annotationScope,
 		&annotationEntries, &convergence, &promotionPaths, &beforeSnapshot, &afterSnapshot,
-		&intent.DeliveryStatus, &effectStatus, &intent.LastDeliveryAt, &intent.LockReleasedAt, &intent.CreatedAt, &intent.UpdatedAt,
+		&intent.DeliveryStatus, &effectStatus, &intent.LastDeliveryAt, &intent.LockReleasedAt,
+		&intent.RevertStatus, &intent.ReconciledByOperationID, &intent.CreatedAt, &intent.UpdatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -638,4 +640,19 @@ func emergencyIntentsConflict(left, right *store.EmergencyIntent) bool {
 		}
 	}
 	return false
+}
+
+// SaveRevertReconciliation records the REVERT reconciliation outcome
+// (TASK-148 / REQ-058 AC-058-33).
+func (s *emergencyIntentStore) SaveRevertReconciliation(ctx context.Context, intentID, revertStatus, reconciledByOperationID string) error {
+	result, err := s.gorm.ExecContext(ctx,
+		`UPDATE emergency_intents SET revert_status = ?, reconciled_by_operation_id = ?, updated_at = ? WHERE id = ?`,
+		revertStatus, reconciledByOperationID, time.Now().UTC(), intentID)
+	if err != nil {
+		return fmt.Errorf("save revert reconciliation: %w", err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr == nil && rows == 0 {
+		return store.ErrNotFound
+	}
+	return nil
 }

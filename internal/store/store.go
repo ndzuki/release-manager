@@ -1181,8 +1181,14 @@ type EmergencyIntent struct {
 	// terminal with effect UNKNOWN no longer counts as holding the target
 	// lock (AUDITED_OVERRIDE) while still observing a late result.
 	LockReleasedAt *time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// RevertStatus and ReconciledByOperationID record the REVERT reconciliation
+	// outcome (REQ-058 AC-058-33): awaiting_standard_release until a later
+	// standard operation actually converges the cluster back to the approved
+	// rendered value, then reconciled plus the operation that did it.
+	RevertStatus            string
+	ReconciledByOperationID string
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
 }
 
 // ResolveEmergencyEffectCommand carries one authoritative late EMERGENCY result.
@@ -1345,6 +1351,10 @@ type EmergencyIntentStore interface {
 	// EMERGENCY result (REQ-087 D1/D2, AC-087-01/02/03): see
 	// EmergencyConvergeCommand for the exact ordering semantics.
 	ConvergeEmergencyResult(ctx context.Context, command EmergencyConvergeCommand) (*EmergencyConvergeResult, error)
+	// SaveRevertReconciliation records the REVERT reconciliation outcome
+	// (REQ-058 AC-058-33): the revert status and, once a later standard
+	// operation converged the cluster, the operation that did it.
+	SaveRevertReconciliation(ctx context.Context, intentID, revertStatus, reconciledByOperationID string) error
 	// HasUnresolvedForDefinition reports terminal EMERGENCY operations whose
 	// effect is still UNKNOWN for the definition (AC-067-20). It returns the
 	// operation IDs so the handler can attach typed detail.
