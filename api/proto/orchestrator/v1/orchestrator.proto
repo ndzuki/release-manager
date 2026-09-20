@@ -1605,6 +1605,13 @@ message ExecuteEmergencyChangeRequest {
   // The request-level operation_version (field 4) also governs this branch
   // (D5=A); idempotency key + request hash are reused unchanged (ADR-009).
   int32 set_replicas = 10;
+  // REQ-058 annotations action (TASK-126 / D15 follow-up): the annotation
+  // entries to set, and the scope they belong to. Every key must be on the
+  // definition's approved-annotation-key whitelist for that scope, so the
+  // request cannot widen its own authority. Mutually exclusive with the image
+  // branch and with set_replicas.
+  repeated AnnotationEntry annotations = 11;
+  string annotation_scope = 12;
 }
 
 message ExecuteEmergencyChangeResponse {

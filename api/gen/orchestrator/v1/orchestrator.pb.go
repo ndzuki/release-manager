@@ -9095,9 +9095,16 @@ type ExecuteEmergencyChangeRequest struct {
 	// (flat scalar has no presence; scale-to-zero needs a contract revisit).
 	// The request-level operation_version (field 4) also governs this branch
 	// (D5=A); idempotency key + request hash are reused unchanged (ADR-009).
-	SetReplicas   int32 `protobuf:"varint,10,opt,name=set_replicas,json=setReplicas,proto3" json:"set_replicas,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SetReplicas int32 `protobuf:"varint,10,opt,name=set_replicas,json=setReplicas,proto3" json:"set_replicas,omitempty"`
+	// REQ-058 annotations action (TASK-126 / D15 follow-up): the annotation
+	// entries to set, and the scope they belong to. Every key must be on the
+	// definition's approved-annotation-key whitelist for that scope, so the
+	// request cannot widen its own authority. Mutually exclusive with the image
+	// branch and with set_replicas.
+	Annotations     []*AnnotationEntry `protobuf:"bytes,11,rep,name=annotations,proto3" json:"annotations,omitempty"`
+	AnnotationScope string             `protobuf:"bytes,12,opt,name=annotation_scope,json=annotationScope,proto3" json:"annotation_scope,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ExecuteEmergencyChangeRequest) Reset() {
@@ -9198,6 +9205,20 @@ func (x *ExecuteEmergencyChangeRequest) GetSetReplicas() int32 {
 		return x.SetReplicas
 	}
 	return 0
+}
+
+func (x *ExecuteEmergencyChangeRequest) GetAnnotations() []*AnnotationEntry {
+	if x != nil {
+		return x.Annotations
+	}
+	return nil
+}
+
+func (x *ExecuteEmergencyChangeRequest) GetAnnotationScope() string {
+	if x != nil {
+		return x.AnnotationScope
+	}
+	return ""
 }
 
 type ExecuteEmergencyChangeResponse struct {
@@ -11722,7 +11743,7 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"selectable\x18\n" +
 	" \x01(\bR\n" +
 	"selectable\x125\n" +
-	"\x16incompatibility_reason\x18\v \x01(\tR\x15incompatibilityReason\"\xcf\x03\n" +
+	"\x16incompatibility_reason\x18\v \x01(\tR\x15incompatibilityReason\"\xbe\x04\n" +
 	"\x1dExecuteEmergencyChangeRequest\x122\n" +
 	"\x15release_definition_id\x18\x01 \x01(\tR\x13releaseDefinitionId\x12!\n" +
 	"\fworkload_ref\x18\x02 \x01(\tR\vworkloadRef\x12\x1c\n" +
@@ -11734,7 +11755,9 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\x0fidempotency_key\x18\b \x01(\tR\x0eidempotencyKey\x12!\n" +
 	"\frequest_hash\x18\t \x01(\fR\vrequestHash\x12!\n" +
 	"\fset_replicas\x18\n" +
-	" \x01(\x05R\vsetReplicas\"\xaa\x01\n" +
+	" \x01(\x05R\vsetReplicas\x12B\n" +
+	"\vannotations\x18\v \x03(\v2 .orchestrator.v1.AnnotationEntryR\vannotations\x12)\n" +
+	"\x10annotation_scope\x18\f \x01(\tR\x0fannotationScope\"\xaa\x01\n" +
 	"\x1eExecuteEmergencyChangeResponse\x128\n" +
 	"\x06result\x18\x01 \x01(\v2 .orchestrator.v1.EmergencyResultR\x06result\x12!\n" +
 	"\foperation_id\x18\x02 \x01(\tR\voperationId\x12+\n" +
@@ -12368,152 +12391,153 @@ var file_orchestrator_v1_orchestrator_proto_depIdxs = []int32{
 	9,   // 118: orchestrator.v1.ConvergenceTaskDetail.op_type:type_name -> orchestrator.v1.EmergencyAction
 	178, // 119: orchestrator.v1.ConvergenceTaskDetail.submitted_at:type_name -> google.protobuf.Timestamp
 	11,  // 120: orchestrator.v1.ExecuteEmergencyChangeRequest.convergence_strategy:type_name -> orchestrator.v1.ConvergenceStrategy
-	145, // 121: orchestrator.v1.ExecuteEmergencyChangeResponse.result:type_name -> orchestrator.v1.EmergencyResult
-	12,  // 122: orchestrator.v1.EmergencyErrorDetail.reason_code:type_name -> orchestrator.v1.EmergencyReasonCode
-	9,   // 123: orchestrator.v1.EmergencyResult.op_type:type_name -> orchestrator.v1.EmergencyAction
-	10,  // 124: orchestrator.v1.EmergencyResult.convergence_policy:type_name -> orchestrator.v1.EmergencyConvergence
-	146, // 125: orchestrator.v1.EmergencyResult.before:type_name -> orchestrator.v1.EmergencyTypedValues
-	146, // 126: orchestrator.v1.EmergencyResult.after:type_name -> orchestrator.v1.EmergencyTypedValues
-	150, // 127: orchestrator.v1.EmergencyResult.convergence_tasks:type_name -> orchestrator.v1.ConvergenceTaskSummary
-	13,  // 128: orchestrator.v1.EmergencyResult.effect_status:type_name -> orchestrator.v1.EmergencyEffectStatus
-	147, // 129: orchestrator.v1.EmergencyTypedValues.image_ref_values:type_name -> orchestrator.v1.ImageRefValues
-	148, // 130: orchestrator.v1.EmergencyTypedValues.replicas_values:type_name -> orchestrator.v1.ReplicasValues
-	149, // 131: orchestrator.v1.EmergencyTypedValues.annotation_values:type_name -> orchestrator.v1.AnnotationValues
-	128, // 132: orchestrator.v1.AnnotationValues.annotations:type_name -> orchestrator.v1.AnnotationEntry
-	153, // 133: orchestrator.v1.ListStuckLocksResponse.locks:type_name -> orchestrator.v1.StuckLock
-	9,   // 134: orchestrator.v1.StuckLock.action:type_name -> orchestrator.v1.EmergencyAction
-	13,  // 135: orchestrator.v1.StuckLock.effect_status:type_name -> orchestrator.v1.EmergencyEffectStatus
-	178, // 136: orchestrator.v1.StuckLock.terminal_at:type_name -> google.protobuf.Timestamp
-	178, // 137: orchestrator.v1.StuckLock.stuck_since:type_name -> google.protobuf.Timestamp
-	14,  // 138: orchestrator.v1.ReleaseEmergencyLockRequest.mode:type_name -> orchestrator.v1.ReleaseMode
-	13,  // 139: orchestrator.v1.ReleaseEmergencyLockResponse.effect_status:type_name -> orchestrator.v1.EmergencyEffectStatus
-	156, // 140: orchestrator.v1.SyncInventoryRequest.items:type_name -> orchestrator.v1.InventoryItem
-	156, // 141: orchestrator.v1.TargetedInventoryUpdate.item:type_name -> orchestrator.v1.InventoryItem
-	162, // 142: orchestrator.v1.ListOperationsResponse.operations:type_name -> orchestrator.v1.OperationSummary
-	178, // 143: orchestrator.v1.OperationSummary.created_at:type_name -> google.protobuf.Timestamp
-	166, // 144: orchestrator.v1.ListReleaseInventoryResponse.rows:type_name -> orchestrator.v1.ReleaseInventoryRow
-	8,   // 145: orchestrator.v1.ReleaseInventoryRow.status:type_name -> orchestrator.v1.ReleaseInventoryStatus
-	167, // 146: orchestrator.v1.ReleaseInventoryRow.active_operation:type_name -> orchestrator.v1.ActiveOperationRef
-	0,   // 147: orchestrator.v1.ActiveOperationRef.state:type_name -> orchestrator.v1.OperationStatus
-	15,  // 148: orchestrator.v1.BundleService.SubmitBundle:input_type -> orchestrator.v1.SubmitBundleRequest
-	19,  // 149: orchestrator.v1.BundleService.RecordArtifactEvent:input_type -> orchestrator.v1.RecordArtifactEventRequest
-	21,  // 150: orchestrator.v1.BundleService.ListBundles:input_type -> orchestrator.v1.ListBundlesRequest
-	23,  // 151: orchestrator.v1.BundleService.GetBundle:input_type -> orchestrator.v1.GetBundleRequest
-	27,  // 152: orchestrator.v1.OrchestratorService.CreateOperation:input_type -> orchestrator.v1.CreateOperationRequest
-	29,  // 153: orchestrator.v1.OrchestratorService.PublishRelease:input_type -> orchestrator.v1.PublishReleaseRequest
-	31,  // 154: orchestrator.v1.OrchestratorService.RollbackRelease:input_type -> orchestrator.v1.RollbackReleaseRequest
-	34,  // 155: orchestrator.v1.OrchestratorService.GetOperation:input_type -> orchestrator.v1.GetOperationRequest
-	38,  // 156: orchestrator.v1.OrchestratorService.WatchOperation:input_type -> orchestrator.v1.WatchOperationRequest
-	36,  // 157: orchestrator.v1.OrchestratorService.CancelOperation:input_type -> orchestrator.v1.CancelOperationRequest
-	100, // 158: orchestrator.v1.OrchestratorService.SubmitValuesRevision:input_type -> orchestrator.v1.SubmitValuesRevisionRequest
-	101, // 159: orchestrator.v1.OrchestratorService.ApproveValuesRevision:input_type -> orchestrator.v1.ApproveValuesRevisionRequest
-	102, // 160: orchestrator.v1.OrchestratorService.RejectValuesRevision:input_type -> orchestrator.v1.RejectValuesRevisionRequest
-	104, // 161: orchestrator.v1.OrchestratorService.CreateValuesRevision:input_type -> orchestrator.v1.CreateValuesRevisionRequest
-	106, // 162: orchestrator.v1.OrchestratorService.GetValuesRevision:input_type -> orchestrator.v1.GetValuesRevisionRequest
-	107, // 163: orchestrator.v1.OrchestratorService.ListValuesRevisions:input_type -> orchestrator.v1.ListValuesRevisionsRequest
-	109, // 164: orchestrator.v1.OrchestratorService.DiscardValuesRevision:input_type -> orchestrator.v1.DiscardValuesRevisionRequest
-	110, // 165: orchestrator.v1.OrchestratorService.CreatePrepareSession:input_type -> orchestrator.v1.CreatePrepareSessionRequest
-	112, // 166: orchestrator.v1.OrchestratorService.GetPrepareSession:input_type -> orchestrator.v1.GetPrepareSessionRequest
-	118, // 167: orchestrator.v1.OrchestratorService.ListSecrets:input_type -> orchestrator.v1.ListSecretsRequest
-	43,  // 168: orchestrator.v1.OrchestratorService.CreateReleaseDefinition:input_type -> orchestrator.v1.CreateReleaseDefinitionRequest
-	45,  // 169: orchestrator.v1.OrchestratorService.GetReleaseDefinition:input_type -> orchestrator.v1.GetReleaseDefinitionRequest
-	47,  // 170: orchestrator.v1.OrchestratorService.ListReleaseDefinitions:input_type -> orchestrator.v1.ListReleaseDefinitionsRequest
-	49,  // 171: orchestrator.v1.OrchestratorService.UpdateReleaseDefinition:input_type -> orchestrator.v1.UpdateReleaseDefinitionRequest
-	51,  // 172: orchestrator.v1.OrchestratorService.DisableReleaseDefinition:input_type -> orchestrator.v1.DisableReleaseDefinitionRequest
-	53,  // 173: orchestrator.v1.OrchestratorService.CreateCustomer:input_type -> orchestrator.v1.CreateCustomerRequest
-	55,  // 174: orchestrator.v1.OrchestratorService.GetCustomer:input_type -> orchestrator.v1.GetCustomerRequest
-	57,  // 175: orchestrator.v1.OrchestratorService.ListCustomers:input_type -> orchestrator.v1.ListCustomersRequest
-	59,  // 176: orchestrator.v1.OrchestratorService.UpdateCustomer:input_type -> orchestrator.v1.UpdateCustomerRequest
-	61,  // 177: orchestrator.v1.OrchestratorService.DisableCustomer:input_type -> orchestrator.v1.DisableCustomerRequest
-	63,  // 178: orchestrator.v1.OrchestratorService.ListCustomerEvents:input_type -> orchestrator.v1.ListCustomerEventsRequest
-	65,  // 179: orchestrator.v1.OrchestratorService.CreateCluster:input_type -> orchestrator.v1.CreateClusterRequest
-	67,  // 180: orchestrator.v1.OrchestratorService.UpdateCluster:input_type -> orchestrator.v1.UpdateClusterRequest
-	69,  // 181: orchestrator.v1.OrchestratorService.GetCluster:input_type -> orchestrator.v1.GetClusterRequest
-	71,  // 182: orchestrator.v1.OrchestratorService.ListClusters:input_type -> orchestrator.v1.ListClustersRequest
-	73,  // 183: orchestrator.v1.OrchestratorService.DisableCluster:input_type -> orchestrator.v1.DisableClusterRequest
-	77,  // 184: orchestrator.v1.OrchestratorService.ListOperators:input_type -> orchestrator.v1.ListOperatorsRequest
-	79,  // 185: orchestrator.v1.OrchestratorService.GetOperator:input_type -> orchestrator.v1.GetOperatorRequest
-	81,  // 186: orchestrator.v1.OrchestratorService.RevokeOperator:input_type -> orchestrator.v1.RevokeOperatorRequest
-	83,  // 187: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:input_type -> orchestrator.v1.CreateEnrollmentTokenRequest
-	85,  // 188: orchestrator.v1.OrchestratorService.GetEnrollmentTokenStatus:input_type -> orchestrator.v1.GetEnrollmentTokenStatusRequest
-	88,  // 189: orchestrator.v1.OrchestratorService.RevokePendingEnrollmentToken:input_type -> orchestrator.v1.RevokePendingEnrollmentTokenRequest
-	141, // 190: orchestrator.v1.OrchestratorService.ExecuteEmergencyChange:input_type -> orchestrator.v1.ExecuteEmergencyChangeRequest
-	129, // 191: orchestrator.v1.OrchestratorService.ListEmergencyTargets:input_type -> orchestrator.v1.ListEmergencyTargetsRequest
-	132, // 192: orchestrator.v1.OrchestratorService.CheckEmergencyConflict:input_type -> orchestrator.v1.CheckEmergencyConflictRequest
-	135, // 193: orchestrator.v1.OrchestratorService.ListCandidateArtifacts:input_type -> orchestrator.v1.ListCandidateArtifactsRequest
-	138, // 194: orchestrator.v1.OrchestratorService.ListConvergenceTasks:input_type -> orchestrator.v1.ListConvergenceTasksRequest
-	151, // 195: orchestrator.v1.OrchestratorService.ListStuckLocks:input_type -> orchestrator.v1.ListStuckLocksRequest
-	154, // 196: orchestrator.v1.OrchestratorService.ReleaseEmergencyLock:input_type -> orchestrator.v1.ReleaseEmergencyLockRequest
-	94,  // 197: orchestrator.v1.OrchestratorService.ConfigureClusterRoute:input_type -> orchestrator.v1.ConfigureClusterRouteRequest
-	96,  // 198: orchestrator.v1.OrchestratorService.GetClusterRoutes:input_type -> orchestrator.v1.GetClusterRoutesRequest
-	98,  // 199: orchestrator.v1.OrchestratorService.DeleteClusterRoute:input_type -> orchestrator.v1.DeleteClusterRouteRequest
-	115, // 200: orchestrator.v1.OrchestratorService.ListReleases:input_type -> orchestrator.v1.ListReleasesRequest
-	164, // 201: orchestrator.v1.OrchestratorService.ListReleaseInventory:input_type -> orchestrator.v1.ListReleaseInventoryRequest
-	160, // 202: orchestrator.v1.OrchestratorService.ListOperations:input_type -> orchestrator.v1.ListOperationsRequest
-	117, // 203: orchestrator.v1.OrchestratorService.TriggerInventorySync:input_type -> orchestrator.v1.TriggerInventorySyncRequest
-	157, // 204: orchestrator.v1.OrchestratorService.SyncInventory:input_type -> orchestrator.v1.SyncInventoryRequest
-	18,  // 205: orchestrator.v1.BundleService.SubmitBundle:output_type -> orchestrator.v1.SubmitBundleResponse
-	20,  // 206: orchestrator.v1.BundleService.RecordArtifactEvent:output_type -> orchestrator.v1.RecordArtifactEventResponse
-	22,  // 207: orchestrator.v1.BundleService.ListBundles:output_type -> orchestrator.v1.ListBundlesResponse
-	25,  // 208: orchestrator.v1.BundleService.GetBundle:output_type -> orchestrator.v1.GetBundleResponse
-	28,  // 209: orchestrator.v1.OrchestratorService.CreateOperation:output_type -> orchestrator.v1.CreateOperationResponse
-	30,  // 210: orchestrator.v1.OrchestratorService.PublishRelease:output_type -> orchestrator.v1.PublishReleaseResponse
-	32,  // 211: orchestrator.v1.OrchestratorService.RollbackRelease:output_type -> orchestrator.v1.RollbackReleaseResponse
-	35,  // 212: orchestrator.v1.OrchestratorService.GetOperation:output_type -> orchestrator.v1.GetOperationResponse
-	39,  // 213: orchestrator.v1.OrchestratorService.WatchOperation:output_type -> orchestrator.v1.WatchOperationResponse
-	37,  // 214: orchestrator.v1.OrchestratorService.CancelOperation:output_type -> orchestrator.v1.CancelOperationResponse
-	103, // 215: orchestrator.v1.OrchestratorService.SubmitValuesRevision:output_type -> orchestrator.v1.ValuesRevisionDecisionResponse
-	103, // 216: orchestrator.v1.OrchestratorService.ApproveValuesRevision:output_type -> orchestrator.v1.ValuesRevisionDecisionResponse
-	103, // 217: orchestrator.v1.OrchestratorService.RejectValuesRevision:output_type -> orchestrator.v1.ValuesRevisionDecisionResponse
-	105, // 218: orchestrator.v1.OrchestratorService.CreateValuesRevision:output_type -> orchestrator.v1.CreateValuesRevisionResponse
-	192, // 219: orchestrator.v1.OrchestratorService.GetValuesRevision:output_type -> common.v1.ValuesRevision
-	108, // 220: orchestrator.v1.OrchestratorService.ListValuesRevisions:output_type -> orchestrator.v1.ListValuesRevisionsResponse
-	103, // 221: orchestrator.v1.OrchestratorService.DiscardValuesRevision:output_type -> orchestrator.v1.ValuesRevisionDecisionResponse
-	111, // 222: orchestrator.v1.OrchestratorService.CreatePrepareSession:output_type -> orchestrator.v1.CreatePrepareSessionResponse
-	113, // 223: orchestrator.v1.OrchestratorService.GetPrepareSession:output_type -> orchestrator.v1.GetPrepareSessionResponse
-	120, // 224: orchestrator.v1.OrchestratorService.ListSecrets:output_type -> orchestrator.v1.ListSecretsResponse
-	44,  // 225: orchestrator.v1.OrchestratorService.CreateReleaseDefinition:output_type -> orchestrator.v1.CreateReleaseDefinitionResponse
-	46,  // 226: orchestrator.v1.OrchestratorService.GetReleaseDefinition:output_type -> orchestrator.v1.GetReleaseDefinitionResponse
-	48,  // 227: orchestrator.v1.OrchestratorService.ListReleaseDefinitions:output_type -> orchestrator.v1.ListReleaseDefinitionsResponse
-	50,  // 228: orchestrator.v1.OrchestratorService.UpdateReleaseDefinition:output_type -> orchestrator.v1.UpdateReleaseDefinitionResponse
-	52,  // 229: orchestrator.v1.OrchestratorService.DisableReleaseDefinition:output_type -> orchestrator.v1.DisableReleaseDefinitionResponse
-	54,  // 230: orchestrator.v1.OrchestratorService.CreateCustomer:output_type -> orchestrator.v1.CreateCustomerResponse
-	56,  // 231: orchestrator.v1.OrchestratorService.GetCustomer:output_type -> orchestrator.v1.GetCustomerResponse
-	58,  // 232: orchestrator.v1.OrchestratorService.ListCustomers:output_type -> orchestrator.v1.ListCustomersResponse
-	60,  // 233: orchestrator.v1.OrchestratorService.UpdateCustomer:output_type -> orchestrator.v1.UpdateCustomerResponse
-	62,  // 234: orchestrator.v1.OrchestratorService.DisableCustomer:output_type -> orchestrator.v1.DisableCustomerResponse
-	64,  // 235: orchestrator.v1.OrchestratorService.ListCustomerEvents:output_type -> orchestrator.v1.ListCustomerEventsResponse
-	66,  // 236: orchestrator.v1.OrchestratorService.CreateCluster:output_type -> orchestrator.v1.CreateClusterResponse
-	68,  // 237: orchestrator.v1.OrchestratorService.UpdateCluster:output_type -> orchestrator.v1.UpdateClusterResponse
-	70,  // 238: orchestrator.v1.OrchestratorService.GetCluster:output_type -> orchestrator.v1.GetClusterResponse
-	72,  // 239: orchestrator.v1.OrchestratorService.ListClusters:output_type -> orchestrator.v1.ListClustersResponse
-	74,  // 240: orchestrator.v1.OrchestratorService.DisableCluster:output_type -> orchestrator.v1.DisableClusterResponse
-	78,  // 241: orchestrator.v1.OrchestratorService.ListOperators:output_type -> orchestrator.v1.ListOperatorsResponse
-	80,  // 242: orchestrator.v1.OrchestratorService.GetOperator:output_type -> orchestrator.v1.GetOperatorResponse
-	82,  // 243: orchestrator.v1.OrchestratorService.RevokeOperator:output_type -> orchestrator.v1.RevokeOperatorResponse
-	84,  // 244: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:output_type -> orchestrator.v1.CreateEnrollmentTokenResponse
-	87,  // 245: orchestrator.v1.OrchestratorService.GetEnrollmentTokenStatus:output_type -> orchestrator.v1.GetEnrollmentTokenStatusResponse
-	89,  // 246: orchestrator.v1.OrchestratorService.RevokePendingEnrollmentToken:output_type -> orchestrator.v1.RevokePendingEnrollmentTokenResponse
-	142, // 247: orchestrator.v1.OrchestratorService.ExecuteEmergencyChange:output_type -> orchestrator.v1.ExecuteEmergencyChangeResponse
-	130, // 248: orchestrator.v1.OrchestratorService.ListEmergencyTargets:output_type -> orchestrator.v1.ListEmergencyTargetsResponse
-	133, // 249: orchestrator.v1.OrchestratorService.CheckEmergencyConflict:output_type -> orchestrator.v1.CheckEmergencyConflictResponse
-	136, // 250: orchestrator.v1.OrchestratorService.ListCandidateArtifacts:output_type -> orchestrator.v1.ListCandidateArtifactsResponse
-	139, // 251: orchestrator.v1.OrchestratorService.ListConvergenceTasks:output_type -> orchestrator.v1.ListConvergenceTasksResponse
-	152, // 252: orchestrator.v1.OrchestratorService.ListStuckLocks:output_type -> orchestrator.v1.ListStuckLocksResponse
-	155, // 253: orchestrator.v1.OrchestratorService.ReleaseEmergencyLock:output_type -> orchestrator.v1.ReleaseEmergencyLockResponse
-	95,  // 254: orchestrator.v1.OrchestratorService.ConfigureClusterRoute:output_type -> orchestrator.v1.ConfigureClusterRouteResponse
-	97,  // 255: orchestrator.v1.OrchestratorService.GetClusterRoutes:output_type -> orchestrator.v1.GetClusterRoutesResponse
-	99,  // 256: orchestrator.v1.OrchestratorService.DeleteClusterRoute:output_type -> orchestrator.v1.DeleteClusterRouteResponse
-	116, // 257: orchestrator.v1.OrchestratorService.ListReleases:output_type -> orchestrator.v1.ListReleasesResponse
-	165, // 258: orchestrator.v1.OrchestratorService.ListReleaseInventory:output_type -> orchestrator.v1.ListReleaseInventoryResponse
-	161, // 259: orchestrator.v1.OrchestratorService.ListOperations:output_type -> orchestrator.v1.ListOperationsResponse
-	121, // 260: orchestrator.v1.OrchestratorService.TriggerInventorySync:output_type -> orchestrator.v1.TriggerInventorySyncResponse
-	158, // 261: orchestrator.v1.OrchestratorService.SyncInventory:output_type -> orchestrator.v1.SyncInventoryResponse
-	205, // [205:262] is the sub-list for method output_type
-	148, // [148:205] is the sub-list for method input_type
-	148, // [148:148] is the sub-list for extension type_name
-	148, // [148:148] is the sub-list for extension extendee
-	0,   // [0:148] is the sub-list for field type_name
+	128, // 121: orchestrator.v1.ExecuteEmergencyChangeRequest.annotations:type_name -> orchestrator.v1.AnnotationEntry
+	145, // 122: orchestrator.v1.ExecuteEmergencyChangeResponse.result:type_name -> orchestrator.v1.EmergencyResult
+	12,  // 123: orchestrator.v1.EmergencyErrorDetail.reason_code:type_name -> orchestrator.v1.EmergencyReasonCode
+	9,   // 124: orchestrator.v1.EmergencyResult.op_type:type_name -> orchestrator.v1.EmergencyAction
+	10,  // 125: orchestrator.v1.EmergencyResult.convergence_policy:type_name -> orchestrator.v1.EmergencyConvergence
+	146, // 126: orchestrator.v1.EmergencyResult.before:type_name -> orchestrator.v1.EmergencyTypedValues
+	146, // 127: orchestrator.v1.EmergencyResult.after:type_name -> orchestrator.v1.EmergencyTypedValues
+	150, // 128: orchestrator.v1.EmergencyResult.convergence_tasks:type_name -> orchestrator.v1.ConvergenceTaskSummary
+	13,  // 129: orchestrator.v1.EmergencyResult.effect_status:type_name -> orchestrator.v1.EmergencyEffectStatus
+	147, // 130: orchestrator.v1.EmergencyTypedValues.image_ref_values:type_name -> orchestrator.v1.ImageRefValues
+	148, // 131: orchestrator.v1.EmergencyTypedValues.replicas_values:type_name -> orchestrator.v1.ReplicasValues
+	149, // 132: orchestrator.v1.EmergencyTypedValues.annotation_values:type_name -> orchestrator.v1.AnnotationValues
+	128, // 133: orchestrator.v1.AnnotationValues.annotations:type_name -> orchestrator.v1.AnnotationEntry
+	153, // 134: orchestrator.v1.ListStuckLocksResponse.locks:type_name -> orchestrator.v1.StuckLock
+	9,   // 135: orchestrator.v1.StuckLock.action:type_name -> orchestrator.v1.EmergencyAction
+	13,  // 136: orchestrator.v1.StuckLock.effect_status:type_name -> orchestrator.v1.EmergencyEffectStatus
+	178, // 137: orchestrator.v1.StuckLock.terminal_at:type_name -> google.protobuf.Timestamp
+	178, // 138: orchestrator.v1.StuckLock.stuck_since:type_name -> google.protobuf.Timestamp
+	14,  // 139: orchestrator.v1.ReleaseEmergencyLockRequest.mode:type_name -> orchestrator.v1.ReleaseMode
+	13,  // 140: orchestrator.v1.ReleaseEmergencyLockResponse.effect_status:type_name -> orchestrator.v1.EmergencyEffectStatus
+	156, // 141: orchestrator.v1.SyncInventoryRequest.items:type_name -> orchestrator.v1.InventoryItem
+	156, // 142: orchestrator.v1.TargetedInventoryUpdate.item:type_name -> orchestrator.v1.InventoryItem
+	162, // 143: orchestrator.v1.ListOperationsResponse.operations:type_name -> orchestrator.v1.OperationSummary
+	178, // 144: orchestrator.v1.OperationSummary.created_at:type_name -> google.protobuf.Timestamp
+	166, // 145: orchestrator.v1.ListReleaseInventoryResponse.rows:type_name -> orchestrator.v1.ReleaseInventoryRow
+	8,   // 146: orchestrator.v1.ReleaseInventoryRow.status:type_name -> orchestrator.v1.ReleaseInventoryStatus
+	167, // 147: orchestrator.v1.ReleaseInventoryRow.active_operation:type_name -> orchestrator.v1.ActiveOperationRef
+	0,   // 148: orchestrator.v1.ActiveOperationRef.state:type_name -> orchestrator.v1.OperationStatus
+	15,  // 149: orchestrator.v1.BundleService.SubmitBundle:input_type -> orchestrator.v1.SubmitBundleRequest
+	19,  // 150: orchestrator.v1.BundleService.RecordArtifactEvent:input_type -> orchestrator.v1.RecordArtifactEventRequest
+	21,  // 151: orchestrator.v1.BundleService.ListBundles:input_type -> orchestrator.v1.ListBundlesRequest
+	23,  // 152: orchestrator.v1.BundleService.GetBundle:input_type -> orchestrator.v1.GetBundleRequest
+	27,  // 153: orchestrator.v1.OrchestratorService.CreateOperation:input_type -> orchestrator.v1.CreateOperationRequest
+	29,  // 154: orchestrator.v1.OrchestratorService.PublishRelease:input_type -> orchestrator.v1.PublishReleaseRequest
+	31,  // 155: orchestrator.v1.OrchestratorService.RollbackRelease:input_type -> orchestrator.v1.RollbackReleaseRequest
+	34,  // 156: orchestrator.v1.OrchestratorService.GetOperation:input_type -> orchestrator.v1.GetOperationRequest
+	38,  // 157: orchestrator.v1.OrchestratorService.WatchOperation:input_type -> orchestrator.v1.WatchOperationRequest
+	36,  // 158: orchestrator.v1.OrchestratorService.CancelOperation:input_type -> orchestrator.v1.CancelOperationRequest
+	100, // 159: orchestrator.v1.OrchestratorService.SubmitValuesRevision:input_type -> orchestrator.v1.SubmitValuesRevisionRequest
+	101, // 160: orchestrator.v1.OrchestratorService.ApproveValuesRevision:input_type -> orchestrator.v1.ApproveValuesRevisionRequest
+	102, // 161: orchestrator.v1.OrchestratorService.RejectValuesRevision:input_type -> orchestrator.v1.RejectValuesRevisionRequest
+	104, // 162: orchestrator.v1.OrchestratorService.CreateValuesRevision:input_type -> orchestrator.v1.CreateValuesRevisionRequest
+	106, // 163: orchestrator.v1.OrchestratorService.GetValuesRevision:input_type -> orchestrator.v1.GetValuesRevisionRequest
+	107, // 164: orchestrator.v1.OrchestratorService.ListValuesRevisions:input_type -> orchestrator.v1.ListValuesRevisionsRequest
+	109, // 165: orchestrator.v1.OrchestratorService.DiscardValuesRevision:input_type -> orchestrator.v1.DiscardValuesRevisionRequest
+	110, // 166: orchestrator.v1.OrchestratorService.CreatePrepareSession:input_type -> orchestrator.v1.CreatePrepareSessionRequest
+	112, // 167: orchestrator.v1.OrchestratorService.GetPrepareSession:input_type -> orchestrator.v1.GetPrepareSessionRequest
+	118, // 168: orchestrator.v1.OrchestratorService.ListSecrets:input_type -> orchestrator.v1.ListSecretsRequest
+	43,  // 169: orchestrator.v1.OrchestratorService.CreateReleaseDefinition:input_type -> orchestrator.v1.CreateReleaseDefinitionRequest
+	45,  // 170: orchestrator.v1.OrchestratorService.GetReleaseDefinition:input_type -> orchestrator.v1.GetReleaseDefinitionRequest
+	47,  // 171: orchestrator.v1.OrchestratorService.ListReleaseDefinitions:input_type -> orchestrator.v1.ListReleaseDefinitionsRequest
+	49,  // 172: orchestrator.v1.OrchestratorService.UpdateReleaseDefinition:input_type -> orchestrator.v1.UpdateReleaseDefinitionRequest
+	51,  // 173: orchestrator.v1.OrchestratorService.DisableReleaseDefinition:input_type -> orchestrator.v1.DisableReleaseDefinitionRequest
+	53,  // 174: orchestrator.v1.OrchestratorService.CreateCustomer:input_type -> orchestrator.v1.CreateCustomerRequest
+	55,  // 175: orchestrator.v1.OrchestratorService.GetCustomer:input_type -> orchestrator.v1.GetCustomerRequest
+	57,  // 176: orchestrator.v1.OrchestratorService.ListCustomers:input_type -> orchestrator.v1.ListCustomersRequest
+	59,  // 177: orchestrator.v1.OrchestratorService.UpdateCustomer:input_type -> orchestrator.v1.UpdateCustomerRequest
+	61,  // 178: orchestrator.v1.OrchestratorService.DisableCustomer:input_type -> orchestrator.v1.DisableCustomerRequest
+	63,  // 179: orchestrator.v1.OrchestratorService.ListCustomerEvents:input_type -> orchestrator.v1.ListCustomerEventsRequest
+	65,  // 180: orchestrator.v1.OrchestratorService.CreateCluster:input_type -> orchestrator.v1.CreateClusterRequest
+	67,  // 181: orchestrator.v1.OrchestratorService.UpdateCluster:input_type -> orchestrator.v1.UpdateClusterRequest
+	69,  // 182: orchestrator.v1.OrchestratorService.GetCluster:input_type -> orchestrator.v1.GetClusterRequest
+	71,  // 183: orchestrator.v1.OrchestratorService.ListClusters:input_type -> orchestrator.v1.ListClustersRequest
+	73,  // 184: orchestrator.v1.OrchestratorService.DisableCluster:input_type -> orchestrator.v1.DisableClusterRequest
+	77,  // 185: orchestrator.v1.OrchestratorService.ListOperators:input_type -> orchestrator.v1.ListOperatorsRequest
+	79,  // 186: orchestrator.v1.OrchestratorService.GetOperator:input_type -> orchestrator.v1.GetOperatorRequest
+	81,  // 187: orchestrator.v1.OrchestratorService.RevokeOperator:input_type -> orchestrator.v1.RevokeOperatorRequest
+	83,  // 188: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:input_type -> orchestrator.v1.CreateEnrollmentTokenRequest
+	85,  // 189: orchestrator.v1.OrchestratorService.GetEnrollmentTokenStatus:input_type -> orchestrator.v1.GetEnrollmentTokenStatusRequest
+	88,  // 190: orchestrator.v1.OrchestratorService.RevokePendingEnrollmentToken:input_type -> orchestrator.v1.RevokePendingEnrollmentTokenRequest
+	141, // 191: orchestrator.v1.OrchestratorService.ExecuteEmergencyChange:input_type -> orchestrator.v1.ExecuteEmergencyChangeRequest
+	129, // 192: orchestrator.v1.OrchestratorService.ListEmergencyTargets:input_type -> orchestrator.v1.ListEmergencyTargetsRequest
+	132, // 193: orchestrator.v1.OrchestratorService.CheckEmergencyConflict:input_type -> orchestrator.v1.CheckEmergencyConflictRequest
+	135, // 194: orchestrator.v1.OrchestratorService.ListCandidateArtifacts:input_type -> orchestrator.v1.ListCandidateArtifactsRequest
+	138, // 195: orchestrator.v1.OrchestratorService.ListConvergenceTasks:input_type -> orchestrator.v1.ListConvergenceTasksRequest
+	151, // 196: orchestrator.v1.OrchestratorService.ListStuckLocks:input_type -> orchestrator.v1.ListStuckLocksRequest
+	154, // 197: orchestrator.v1.OrchestratorService.ReleaseEmergencyLock:input_type -> orchestrator.v1.ReleaseEmergencyLockRequest
+	94,  // 198: orchestrator.v1.OrchestratorService.ConfigureClusterRoute:input_type -> orchestrator.v1.ConfigureClusterRouteRequest
+	96,  // 199: orchestrator.v1.OrchestratorService.GetClusterRoutes:input_type -> orchestrator.v1.GetClusterRoutesRequest
+	98,  // 200: orchestrator.v1.OrchestratorService.DeleteClusterRoute:input_type -> orchestrator.v1.DeleteClusterRouteRequest
+	115, // 201: orchestrator.v1.OrchestratorService.ListReleases:input_type -> orchestrator.v1.ListReleasesRequest
+	164, // 202: orchestrator.v1.OrchestratorService.ListReleaseInventory:input_type -> orchestrator.v1.ListReleaseInventoryRequest
+	160, // 203: orchestrator.v1.OrchestratorService.ListOperations:input_type -> orchestrator.v1.ListOperationsRequest
+	117, // 204: orchestrator.v1.OrchestratorService.TriggerInventorySync:input_type -> orchestrator.v1.TriggerInventorySyncRequest
+	157, // 205: orchestrator.v1.OrchestratorService.SyncInventory:input_type -> orchestrator.v1.SyncInventoryRequest
+	18,  // 206: orchestrator.v1.BundleService.SubmitBundle:output_type -> orchestrator.v1.SubmitBundleResponse
+	20,  // 207: orchestrator.v1.BundleService.RecordArtifactEvent:output_type -> orchestrator.v1.RecordArtifactEventResponse
+	22,  // 208: orchestrator.v1.BundleService.ListBundles:output_type -> orchestrator.v1.ListBundlesResponse
+	25,  // 209: orchestrator.v1.BundleService.GetBundle:output_type -> orchestrator.v1.GetBundleResponse
+	28,  // 210: orchestrator.v1.OrchestratorService.CreateOperation:output_type -> orchestrator.v1.CreateOperationResponse
+	30,  // 211: orchestrator.v1.OrchestratorService.PublishRelease:output_type -> orchestrator.v1.PublishReleaseResponse
+	32,  // 212: orchestrator.v1.OrchestratorService.RollbackRelease:output_type -> orchestrator.v1.RollbackReleaseResponse
+	35,  // 213: orchestrator.v1.OrchestratorService.GetOperation:output_type -> orchestrator.v1.GetOperationResponse
+	39,  // 214: orchestrator.v1.OrchestratorService.WatchOperation:output_type -> orchestrator.v1.WatchOperationResponse
+	37,  // 215: orchestrator.v1.OrchestratorService.CancelOperation:output_type -> orchestrator.v1.CancelOperationResponse
+	103, // 216: orchestrator.v1.OrchestratorService.SubmitValuesRevision:output_type -> orchestrator.v1.ValuesRevisionDecisionResponse
+	103, // 217: orchestrator.v1.OrchestratorService.ApproveValuesRevision:output_type -> orchestrator.v1.ValuesRevisionDecisionResponse
+	103, // 218: orchestrator.v1.OrchestratorService.RejectValuesRevision:output_type -> orchestrator.v1.ValuesRevisionDecisionResponse
+	105, // 219: orchestrator.v1.OrchestratorService.CreateValuesRevision:output_type -> orchestrator.v1.CreateValuesRevisionResponse
+	192, // 220: orchestrator.v1.OrchestratorService.GetValuesRevision:output_type -> common.v1.ValuesRevision
+	108, // 221: orchestrator.v1.OrchestratorService.ListValuesRevisions:output_type -> orchestrator.v1.ListValuesRevisionsResponse
+	103, // 222: orchestrator.v1.OrchestratorService.DiscardValuesRevision:output_type -> orchestrator.v1.ValuesRevisionDecisionResponse
+	111, // 223: orchestrator.v1.OrchestratorService.CreatePrepareSession:output_type -> orchestrator.v1.CreatePrepareSessionResponse
+	113, // 224: orchestrator.v1.OrchestratorService.GetPrepareSession:output_type -> orchestrator.v1.GetPrepareSessionResponse
+	120, // 225: orchestrator.v1.OrchestratorService.ListSecrets:output_type -> orchestrator.v1.ListSecretsResponse
+	44,  // 226: orchestrator.v1.OrchestratorService.CreateReleaseDefinition:output_type -> orchestrator.v1.CreateReleaseDefinitionResponse
+	46,  // 227: orchestrator.v1.OrchestratorService.GetReleaseDefinition:output_type -> orchestrator.v1.GetReleaseDefinitionResponse
+	48,  // 228: orchestrator.v1.OrchestratorService.ListReleaseDefinitions:output_type -> orchestrator.v1.ListReleaseDefinitionsResponse
+	50,  // 229: orchestrator.v1.OrchestratorService.UpdateReleaseDefinition:output_type -> orchestrator.v1.UpdateReleaseDefinitionResponse
+	52,  // 230: orchestrator.v1.OrchestratorService.DisableReleaseDefinition:output_type -> orchestrator.v1.DisableReleaseDefinitionResponse
+	54,  // 231: orchestrator.v1.OrchestratorService.CreateCustomer:output_type -> orchestrator.v1.CreateCustomerResponse
+	56,  // 232: orchestrator.v1.OrchestratorService.GetCustomer:output_type -> orchestrator.v1.GetCustomerResponse
+	58,  // 233: orchestrator.v1.OrchestratorService.ListCustomers:output_type -> orchestrator.v1.ListCustomersResponse
+	60,  // 234: orchestrator.v1.OrchestratorService.UpdateCustomer:output_type -> orchestrator.v1.UpdateCustomerResponse
+	62,  // 235: orchestrator.v1.OrchestratorService.DisableCustomer:output_type -> orchestrator.v1.DisableCustomerResponse
+	64,  // 236: orchestrator.v1.OrchestratorService.ListCustomerEvents:output_type -> orchestrator.v1.ListCustomerEventsResponse
+	66,  // 237: orchestrator.v1.OrchestratorService.CreateCluster:output_type -> orchestrator.v1.CreateClusterResponse
+	68,  // 238: orchestrator.v1.OrchestratorService.UpdateCluster:output_type -> orchestrator.v1.UpdateClusterResponse
+	70,  // 239: orchestrator.v1.OrchestratorService.GetCluster:output_type -> orchestrator.v1.GetClusterResponse
+	72,  // 240: orchestrator.v1.OrchestratorService.ListClusters:output_type -> orchestrator.v1.ListClustersResponse
+	74,  // 241: orchestrator.v1.OrchestratorService.DisableCluster:output_type -> orchestrator.v1.DisableClusterResponse
+	78,  // 242: orchestrator.v1.OrchestratorService.ListOperators:output_type -> orchestrator.v1.ListOperatorsResponse
+	80,  // 243: orchestrator.v1.OrchestratorService.GetOperator:output_type -> orchestrator.v1.GetOperatorResponse
+	82,  // 244: orchestrator.v1.OrchestratorService.RevokeOperator:output_type -> orchestrator.v1.RevokeOperatorResponse
+	84,  // 245: orchestrator.v1.OrchestratorService.CreateEnrollmentToken:output_type -> orchestrator.v1.CreateEnrollmentTokenResponse
+	87,  // 246: orchestrator.v1.OrchestratorService.GetEnrollmentTokenStatus:output_type -> orchestrator.v1.GetEnrollmentTokenStatusResponse
+	89,  // 247: orchestrator.v1.OrchestratorService.RevokePendingEnrollmentToken:output_type -> orchestrator.v1.RevokePendingEnrollmentTokenResponse
+	142, // 248: orchestrator.v1.OrchestratorService.ExecuteEmergencyChange:output_type -> orchestrator.v1.ExecuteEmergencyChangeResponse
+	130, // 249: orchestrator.v1.OrchestratorService.ListEmergencyTargets:output_type -> orchestrator.v1.ListEmergencyTargetsResponse
+	133, // 250: orchestrator.v1.OrchestratorService.CheckEmergencyConflict:output_type -> orchestrator.v1.CheckEmergencyConflictResponse
+	136, // 251: orchestrator.v1.OrchestratorService.ListCandidateArtifacts:output_type -> orchestrator.v1.ListCandidateArtifactsResponse
+	139, // 252: orchestrator.v1.OrchestratorService.ListConvergenceTasks:output_type -> orchestrator.v1.ListConvergenceTasksResponse
+	152, // 253: orchestrator.v1.OrchestratorService.ListStuckLocks:output_type -> orchestrator.v1.ListStuckLocksResponse
+	155, // 254: orchestrator.v1.OrchestratorService.ReleaseEmergencyLock:output_type -> orchestrator.v1.ReleaseEmergencyLockResponse
+	95,  // 255: orchestrator.v1.OrchestratorService.ConfigureClusterRoute:output_type -> orchestrator.v1.ConfigureClusterRouteResponse
+	97,  // 256: orchestrator.v1.OrchestratorService.GetClusterRoutes:output_type -> orchestrator.v1.GetClusterRoutesResponse
+	99,  // 257: orchestrator.v1.OrchestratorService.DeleteClusterRoute:output_type -> orchestrator.v1.DeleteClusterRouteResponse
+	116, // 258: orchestrator.v1.OrchestratorService.ListReleases:output_type -> orchestrator.v1.ListReleasesResponse
+	165, // 259: orchestrator.v1.OrchestratorService.ListReleaseInventory:output_type -> orchestrator.v1.ListReleaseInventoryResponse
+	161, // 260: orchestrator.v1.OrchestratorService.ListOperations:output_type -> orchestrator.v1.ListOperationsResponse
+	121, // 261: orchestrator.v1.OrchestratorService.TriggerInventorySync:output_type -> orchestrator.v1.TriggerInventorySyncResponse
+	158, // 262: orchestrator.v1.OrchestratorService.SyncInventory:output_type -> orchestrator.v1.SyncInventoryResponse
+	206, // [206:263] is the sub-list for method output_type
+	149, // [149:206] is the sub-list for method input_type
+	149, // [149:149] is the sub-list for extension type_name
+	149, // [149:149] is the sub-list for extension extendee
+	0,   // [0:149] is the sub-list for field type_name
 }
 
 func init() { file_orchestrator_v1_orchestrator_proto_init() }
