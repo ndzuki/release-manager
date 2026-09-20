@@ -168,6 +168,24 @@ func (s *Service) standardOperationDeadline(now time.Time) *time.Time {
 	return &deadline
 }
 
+// releaseBusyError builds the release_busy refusal with the two headers the web
+// client needs to link to the operation that is holding the release
+// (REQ-056 AC-056-12): the stable reason code, and the id of the in-flight
+// operation.
+//
+// The id is looked up rather than carried on the error: ErrReleaseBusy is a
+// sentinel raised deep in the store, and the gate that raises it does not know
+// the operation's identity. A failed lookup still returns release_busy with its
+// reason code -- the link degrades, the refusal does not.
+func (s *Service) releaseBusyError(ctx context.Context, definitionID, message string) error {
+	err := connect.NewError(connect.CodeFailedPrecondition, errors.New(message))
+	err.Meta().Set("X-Reason-Code", "release_busy")
+	if active, lookupErr := s.store.Operations().GetActiveForDefinition(ctx, definitionID); lookupErr == nil && active != nil {
+		err.Meta().Set("X-Operation-ID", active.ID)
+	}
+	return err
+}
+
 // CreateOperation creates a new release operation from the given request.
 //
 //nolint:gocyclo // operation creation validates multiple independent policy gates
@@ -487,7 +505,7 @@ func (s *Service) CreateOperation(
 	}); err != nil {
 		switch {
 		case errors.Is(err, store.ErrReleaseBusy):
-			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("release_busy"))
+			return nil, s.releaseBusyError(ctx, msg.GetReleaseDefinitionId(), "release_busy")
 		case errors.Is(err, store.ErrDuplicateKey):
 			return nil, connect.NewError(connect.CodeAlreadyExists, errors.New("idempotency_conflict"))
 		case errors.Is(err, store.ErrBundleNotReady):
@@ -1387,8 +1405,8 @@ func (s *Service) checkNoActiveOperation(ctx context.Context, defID string) erro
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("active check: %w", err))
 	}
 	if active {
-		return connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("release_busy: definition %s has active operation", defID))
+		return s.releaseBusyError(ctx, defID,
+			fmt.Sprintf("release_busy: definition %s has active operation", defID))
 	}
 	activeEmergency, err := s.store.Operations().HasActiveEmergencyForDefinition(ctx, defID)
 	if err != nil {
