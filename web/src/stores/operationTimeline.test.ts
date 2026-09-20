@@ -965,4 +965,29 @@ describe('operationTimeline store', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(mockedGet).not.toHaveBeenCalled();
   });
+  it('does not reschedule the degraded poll after the operation reaches a terminal state', async () => {
+    const store = setupStore();
+    mockedWatch.mockResolvedValueOnce(streamOf(snapshot('op-1', 1n, 3n)));
+    await store.load('op-1');
+    await flush();
+
+    // Degrade: the stream drops, so the store falls back to polling.
+    await vi.advanceTimersByTimeAsync(30_000); // heartbeat timeout → disconnected
+    await flush();
+    expect(store.streamStatus).toBe('disconnected');
+
+    // The first poll observes a terminal operation.
+    mockedGet.mockResolvedValue({ operationId: 'op-1', state: 'succeeded', stateVersion: 4n } as never);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flush();
+    expect(store.operation?.state).toBe('succeeded');
+
+    const callsAfterTerminal = mockedGet.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(30_000); // six more poll intervals
+    await flush();
+
+    expect(mockedGet.mock.calls.length, 'AC-056-10: a terminal operation must stop polling')
+      .toBe(callsAfterTerminal);
+  });
 });
+
