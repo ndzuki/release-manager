@@ -298,9 +298,52 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
   }
 
   /** Submit the current draft → pending_approval (explicit only, AC-058-38). */
+/**
+ * resolvePath walks a dotted YAML path (e.g. "api.image.digest") through a
+ * parsed document. Returns undefined when any segment is missing, which is
+ * itself a difference: a locked path that disappeared has changed.
+ */
+function resolvePath(document: unknown, path: string): unknown {
+  let cursor: unknown = document;
+  for (const segment of path.split('.')) {
+    if (cursor === null || typeof cursor !== 'object') return undefined;
+    cursor = (cursor as Record<string, unknown>)[segment];
+  }
+  return cursor;
+}
+
+/**
+ * changedLockedPaths returns the locked paths whose value in the current draft
+ * differs from the baseline the convergence session loaded (AC-055-13).
+ *
+ * The server re-verifies every locked path inside the approval transaction, so
+ * this is not the security boundary -- it is the client-side guard that stops a
+ * doomed submit and tells the user which path is locked.
+ */
+function changedLockedPaths(current: unknown, baseline: unknown, paths: string[]): string[] {
+  const changed: string[] = [];
+  for (const path of paths) {
+    const before = resolvePath(baseline, path);
+    const after = resolvePath(current, path);
+    if (JSON.stringify(before) !== JSON.stringify(after)) changed.push(path);
+  }
+  return changed;
+}
+
   async function submit(): Promise<boolean> {
     const revision = currentRevision.value;
     if (!revision || approving.value) return false;
+    // AC-055-13: locked paths are read-only in convergence mode. Refuse a draft
+    // that changed one, and name it, instead of letting the server reject the
+    // whole transaction without saying which path was at fault.
+    if (convergenceMode.value && lockedPaths.value.length > 0) {
+      const parsed = validateValuesDocument(editorContent.value);
+      const changed = changedLockedPaths(parsed.canonical.value, canonicalCurrent.value, lockedPaths.value);
+      if (changed.length > 0) {
+        error.value = `锁定路径不可修改：${changed.join('、')}`;
+        return false;
+      }
+    }
     approving.value = true;
     error.value = null;
     try {
