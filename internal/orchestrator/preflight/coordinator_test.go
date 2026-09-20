@@ -2,6 +2,7 @@ package preflight
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"testing"
 	"time"
@@ -235,6 +236,19 @@ func TestCoordinatorRun_StageUnavailableFailsClosed(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "failed", pl.Overall)
 	assert.Equal(t, "artifact", pl.Stages)
+
+	// TASK-149 / AC-056-03: the stage results are persisted on the operation, not
+	// only logged, so the detail page can name the failed stage and its error.
+	stored, err := st.Operations().GetPreflightResult(ctx, op.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored, "the preflight stage results must be persisted")
+	var aggregate struct {
+		Overall   string `json:"overall"`
+		ErrorCode string `json:"error_code"`
+	}
+	require.NoError(t, json.Unmarshal(stored, &aggregate))
+	assert.Equal(t, "failed", aggregate.Overall)
+	assert.Equal(t, "stage_unavailable", aggregate.ErrorCode)
 }
 
 // AC-019-02 regression: a cluster whose operators are all revoked must fail

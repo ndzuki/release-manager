@@ -914,3 +914,36 @@ func buildOperation(id, opType, status, defID, idemKey, idemScope, reqHash strin
 		),
 	}, nil
 }
+
+// SavePreflightResult persists the preflight stage results (TASK-149).
+func (s *operationStore) SavePreflightResult(ctx context.Context, operationID string, result json.RawMessage) error {
+	payload := string(result)
+	if len(result) == 0 {
+		payload = "{}"
+	}
+	result2, err := s.gorm.ExecContext(ctx,
+		`UPDATE operations SET preflight_result_json = ?::jsonb WHERE id = ?`, payload, operationID)
+	if err != nil {
+		return fmt.Errorf("save preflight result: %w", err)
+	}
+	if rows, rowsErr := result2.RowsAffected(); rowsErr == nil && rows == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// GetPreflightResult reads the persisted preflight stage results (TASK-149).
+func (s *operationStore) GetPreflightResult(ctx context.Context, operationID string) (json.RawMessage, error) {
+	var raw string
+	if err := s.gorm.QueryRowContext(ctx,
+		`SELECT preflight_result_json::text FROM operations WHERE id = ?`, operationID).Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("get preflight result: %w", err)
+	}
+	if raw == "" || raw == "{}" {
+		return nil, nil
+	}
+	return json.RawMessage(raw), nil
+}

@@ -246,6 +246,7 @@ func (c *Coordinator) runUpgrade(ctx context.Context, op *store.Operation) Stage
 	c.casQueued(ctx, op, AggregateResult{OperationID: op.ID, Overall: StagePassed})
 	return StagePassed
 }
+
 // runStage dispatches a PRECHECK command for one stage and polls for its result.
 func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage StageDef) (StageResult, error) {
 	emptyResult := StageResult{Stage: stage.Name, Status: StageFailed}
@@ -473,6 +474,23 @@ func (c *Coordinator) resolveOperator(ctx context.Context, op *store.Operation) 
 }
 
 // casFailed transitions the operation to failed via EventError.
+// persistPreflightResult records the stage results so the detail page can show
+// which stage failed and what its checks said (TASK-149 / REQ-056 AC-056-03).
+//
+// Best effort by design: the operation's own transition is the contract, and the
+// detail page degrades to the flat last_error if this write is lost. Failing the
+// preflight because a diagnostic could not be stored would be worse.
+func (c *Coordinator) persistPreflightResult(ctx context.Context, op *store.Operation, result AggregateResult) {
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		c.logger.Error("encode preflight result", "op_id", op.ID, "err", err)
+		return
+	}
+	if err := c.ops.SavePreflightResult(ctx, op.ID, encoded); err != nil {
+		c.logger.Error("persist preflight result", "op_id", op.ID, "err", err)
+	}
+}
+
 func (c *Coordinator) casFailed(ctx context.Context, op *store.Operation, result AggregateResult) {
 	c.logger.Error("preflight failed",
 		"op_id", op.ID,
@@ -480,6 +498,7 @@ func (c *Coordinator) casFailed(ctx context.Context, op *store.Operation, result
 		"error_code", result.ErrorCode,
 	)
 
+	c.persistPreflightResult(ctx, op, result)
 	_, err := c.ops.UpdateStatus(ctx, op.ID, store.StatusFailed, op.StateVersion, result.ErrorCode)
 	if err != nil {
 		c.logger.Error("CAS failed transition failed", "op_id", op.ID, "err", err)
@@ -502,7 +521,8 @@ func (c *Coordinator) casCancelled(ctx context.Context, op *store.Operation, res
 	}
 }
 
-func (c *Coordinator) casQueued(ctx context.Context, op *store.Operation, _ AggregateResult) {
+func (c *Coordinator) casQueued(ctx context.Context, op *store.Operation, result AggregateResult) {
+	c.persistPreflightResult(ctx, op, result)
 	c.logger.Info("preflight passed, enqueuing operation", "op_id", op.ID)
 
 	next, err := operation.Transition(op.Status, operation.EventPreflightPassed)
