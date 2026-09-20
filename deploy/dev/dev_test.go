@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	e2e "github.com/ndzuki/release-manager/test/e2e"
+
 	"github.com/ndzuki/release-manager/internal/config"
 	"gopkg.in/yaml.v3"
 )
@@ -3106,5 +3108,151 @@ func TestLocalFailureKeepsPartialResourcesAndResumes(t *testing.T) {
 	if !bytes.Equal(secondCreates, firstCreates) {
 		t.Fatalf("AC-065-31: the rerun must resume, not recreate clusters.\nfirst:\n%s\nsecond:\n%s",
 			firstCreates, secondCreates)
+	}
+}
+
+// runMake runs a Makefile target from the repository root with an explicit
+// environment, the same way CI does.
+func runMake(t *testing.T, env []string, target string) (string, error) {
+	t.Helper()
+	root := repoRoot(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "make", "--no-print-directory", target)
+	cmd.Dir = root
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// e2eEnvConfigFixture writes the two inputs `make e2e-env-config` assembles
+// from, into an isolated data directory. It never touches the repository's own
+// data/ directory.
+func e2eEnvConfigFixture(t *testing.T, dir string) {
+	t.Helper()
+	fixture := `{
+  "customers": {"customer-a": {"id": "cust-1"}, "customer-b": {"id": "cust-2"}},
+  "clusters": {"release-manager-control": {}, "dev-customer-a-direct": {}, "dev-customer-b-replicated": {}},
+  "routes": {"route-1": {}, "route-2": {}, "route-3": {}},
+  "bundle": {"id": "bundle-1"},
+  "operators": {"op-a": {"id": "operator-1"}},
+  "definitions": {
+    "app-basic": {"id": "def-basic", "bundle_id": "bundle-1", "values_revision_id": "rev-1"},
+    "e2e-release-target": {"id": "def-release", "bundle_id": "bundle-1", "values_revision_id": "rev-1"},
+    "e2e-isolation-target": {"id": "def-isolation", "bundle_id": "bundle-1", "values_revision_id": "rev-1"},
+    "e2e-restart-target": {"id": "def-restart", "bundle_id": "bundle-1", "values_revision_id": "rev-1"},
+    "e2e-emergency-target": {"id": "def-emergency", "bundle_id": "bundle-1", "values_revision_id": "rev-1"}
+  }
+}`
+	if err := os.WriteFile(filepath.Join(dir, "dev-fixture.json"), []byte(fixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// AC-066-29: `make e2e-env-config` assembles the runtime config from the status
+// and fixture artifacts, writes it 0600, and never carries the password.
+func TestE2EEnvConfigAssemblesTheManifest(t *testing.T) {
+	dir := t.TempDir()
+	e2eEnvConfigFixture(t, dir)
+	configPath := filepath.Join(dir, "e2e-env-config.yaml")
+
+	// AC-066-43: the manifest names this variable and never carries the secret.
+	// Set it on the test process too, because LoadConfig resolves it from there
+	// while the child inherits it through os.Environ below.
+	t.Setenv("E2E_RUNNER_PASSWORD", "from-the-environment")
+
+	env := append(os.Environ(),
+		"DEV_DATA_DIR="+dir,
+		"E2E_DATA_DIR="+dir,
+		"E2E_ENV_CONFIG="+configPath,
+		"E2E_RESTART_DEPLOYMENTS=release-auth release-operator-gateway release-orchestrator",
+		"E2E_TEST_NAMESPACE=release-manager-dev",
+	)
+	if out, err := runMake(t, env, "e2e-env-config"); err != nil {
+		t.Fatalf("make e2e-env-config failed: %v\n%s", err, out)
+	}
+
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("config was not written: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("config mode = %o, want 0600 (AC-066-29)", perm)
+	}
+
+	manifest, err := e2e.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("the assembled manifest must load: %v", err)
+	}
+	// expected_identity is derived from the fixture, not copied from it.
+	if manifest.Seed.ExpectedIdentity.Customers != 2 {
+		t.Fatalf("expected_identity.customers = %d, want 2", manifest.Seed.ExpectedIdentity.Customers)
+	}
+	if manifest.Seed.ExpectedIdentity.RoutesBasic != 3 {
+		t.Fatalf("expected_identity.routes_basic = %d, want 3", manifest.Seed.ExpectedIdentity.RoutesBasic)
+	}
+	if len(manifest.Seed.ExpectedIdentity.E2EDefinitionIDs) != 4 {
+		t.Fatalf("expected_identity.e2e_definition_ids = %v, want 4 entries", manifest.Seed.ExpectedIdentity.E2EDefinitionIDs)
+	}
+	// The emergency target is excluded from the upgrade targets.
+	if len(manifest.Seed.UpgradeTargets) != 3 {
+		t.Fatalf("e2e_upgrade_targets = %d entries, want 3 (emergency excluded)", len(manifest.Seed.UpgradeTargets))
+	}
+	// AC-066-43: the manifest names the variable, never the secret.
+	if manifest.Credentials.E2ERunner.PasswordEnv != "E2E_RUNNER_PASSWORD" {
+		t.Fatalf("password_env = %q", manifest.Credentials.E2ERunner.PasswordEnv)
+	}
+}
+
+// AC-066-29: a fixture missing a required definition field fails the assembly
+// instead of producing a manifest with an empty id.
+func TestE2EEnvConfigRejectsAnIncompleteFixture(t *testing.T) {
+	dir := t.TempDir()
+	e2eEnvConfigFixture(t, dir)
+	broken := `{"customers": {}, "clusters": {}, "operators": {}, "definitions": {}}`
+	if err := os.WriteFile(filepath.Join(dir, "dev-fixture.json"), []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "e2e-env-config.yaml")
+
+	env := append(os.Environ(),
+		"DEV_DATA_DIR="+dir,
+		"E2E_DATA_DIR="+dir,
+		"E2E_ENV_CONFIG="+configPath,
+		"E2E_RESTART_DEPLOYMENTS=release-auth release-operator-gateway release-orchestrator",
+	)
+	if out, err := runMake(t, env, "e2e-env-config"); err == nil {
+		t.Fatalf("an incomplete fixture must fail the assembly:\n%s", out)
+	}
+	if _, err := os.Stat(configPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("no config may be written when the fixture is incomplete, stat err=%v", err)
+	}
+}
+
+// AC-066-43: e2e-stage and e2e-cleanup fail closed when the runner password is
+// neither in the environment nor in the credentials file. The guard runs before
+// anything is launched, so this is assertable without a cluster.
+func TestE2EStageFailsClosedWithoutTheRunnerPassword(t *testing.T) {
+	for _, target := range []string{"e2e-stage", "e2e-cleanup"} {
+		t.Run(target, func(t *testing.T) {
+			dir := t.TempDir()
+			e2eEnvConfigFixture(t, dir)
+			// Point the credentials file at a path that does not exist, so the
+			// only possible source of the password is the environment.
+			env := append(os.Environ(),
+				"DEV_DATA_DIR="+dir,
+				"E2E_DATA_DIR="+dir,
+				"E2E_CREDENTIALS_FILE="+filepath.Join(dir, "absent-credentials.env"),
+				"E2E_ENV_CONFIG="+filepath.Join(dir, "e2e-env-config.yaml"),
+				"E2E_RUNNER_PASSWORD=",
+			)
+			out, err := runMake(t, env, target)
+			if err == nil {
+				t.Fatalf("%s must fail closed without the runner password:\n%s", target, out)
+			}
+			if !strings.Contains(out, "E2E_RUNNER_PASSWORD must be set") {
+				t.Fatalf("%s must report the documented guard, got:\n%s", target, out)
+			}
+		})
 	}
 }
