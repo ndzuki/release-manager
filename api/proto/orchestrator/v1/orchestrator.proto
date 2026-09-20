@@ -311,6 +311,31 @@ message GetOperationRequest {
 message GetOperationResponse {
   Operation operation = 1;
   EmergencyResult emergency_result = 2;
+  // PreflightResult carries the stage-level outcome of the preflight pipeline
+  // (TASK-149 / REQ-056 AC-056-03). It is present only once preflight has
+  // concluded; before that the operation is still in flight.
+  PreflightResult preflight_result = 3;
+}
+
+// PreflightStageResult is one preflight stage's outcome.
+message PreflightStageResult {
+  string stage = 1;
+  // passed | failed | skipped | timeout | cancelled.
+  string status = 2;
+  // Human-readable detail, e.g. the stable error code for a failed stage.
+  string detail = 3;
+}
+
+// PreflightResult summarizes the preflight pipeline so the detail page can
+// highlight the failed stage and expand its checks.
+message PreflightResult {
+  // passed | failed.
+  string overall = 1;
+  // The stage that failed, empty when the pipeline passed.
+  string failed_stage = 2;
+  repeated PreflightStageResult stages = 3;
+  // Pipeline-level code such as stage_timeout or stage_unavailable.
+  string error_code = 4;
 }
 
 message CancelOperationRequest {

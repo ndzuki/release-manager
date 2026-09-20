@@ -201,6 +201,14 @@ func TestCreateOperation_ReleaseBusyCarriesTheActiveOperationID(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
+	// An active operator keeps the first operation in preflight instead of
+	// letting the async coordinator fail it closed before the second call, which
+	// would make the second create succeed and this test flaky (the same reason
+	// TestRollbackRelease_ReleaseBusy seeds one).
+	require.NoError(t, st.Operators().Create(context.Background(), &store.Operator{
+		ID: "operator-create-busy", Name: "operator-create-busy", CustomerID: "cust-001", ClusterID: "cls-001",
+		CertSerial: "serial-create-busy", Status: store.OperatorActive,
+	}))
 
 	first, err := svc.CreateOperation(adminCtx(), installRequest())
 	require.NoError(t, err)
