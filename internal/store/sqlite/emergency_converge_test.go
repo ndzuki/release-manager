@@ -721,3 +721,38 @@ func TestValuesDiscardUnbindsConvergenceTasks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.ValuesStatusDiscarded, revision.Status)
 }
+
+// AC-031-06: resolving a late EMERGENCY result bumps state_version without
+// changing the terminal status, and must NOT queue a second terminal
+// notification. The terminal transition wrote one (AC-031-05); the late-result
+// path updates operations directly and never goes through the transition
+// writer.
+func TestConvergeEmergencyResult_DoesNotNotifyTwice(t *testing.T) {
+	st := OpenTest(t)
+	ctx := context.Background()
+	seedEmergencyDefinition(t, st, "def-late-notify")
+	created := createEmergencyViaUOW(t, st, emergencyCreateCommand(t, "def-late-notify", "idem-late-notify", "hash-late-notify", store.EmergencySetReplicas))
+	queued, err := st.Operations().UpdateStatus(ctx, created.Operation.ID, store.StatusQueued, 1, "")
+	require.NoError(t, err)
+
+	countTerminalNotifications := func() int {
+		var n int
+		require.NoError(t, st.DB().QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM notification_outbox WHERE event_type = 'OperationTerminal'`).Scan(&n))
+		return n
+	}
+
+	// Terminal timeout with an UNKNOWN effect: the terminal transition queues one.
+	finished, err := st.EmergencyIntents().Finish(ctx, created.Intent.ID, created.Operation.ID, queued.StateVersion, store.StatusTimeout, store.EmergencyEffectUnknown, "operation_timeout", nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, store.StatusTimeout, finished.Status)
+	require.Equal(t, 1, countTerminalNotifications(), "AC-031-05: the terminal transition queues one notification")
+
+	// The late result resolves the effect: state_version+1, status unchanged.
+	resolve, err := st.EmergencyIntents().ConvergeEmergencyResult(ctx, convergeCmd(t, created, store.StatusSucceeded, store.EmergencyEffectApplied, finished.StateVersion, ""))
+	require.NoError(t, err)
+	require.True(t, resolve.Resolved)
+	assert.Equal(t, store.StatusTimeout, resolve.Operation.Status, "the terminal status must not change")
+	assert.Equal(t, finished.StateVersion+1, resolve.Operation.StateVersion)
+	assert.Equal(t, 1, countTerminalNotifications(), "AC-031-06: a late result must not queue a second notification")
+}
