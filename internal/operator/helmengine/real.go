@@ -34,6 +34,34 @@ type RealEngine struct {
 	releaseStorage *storage.Storage
 }
 
+// LocateChart resolves a chart reference (including an OCI reference) and loads
+// it, without touching a cluster, a release, or a subprocess.
+//
+// It is the same two steps the install path takes before it renders
+// (LocateChart + loader.Load), exposed for the preflight render stage: that
+// stage needs the chart to render, and rendering is a check rather than a
+// release write (TASK-114).
+func (r *RealEngine) LocateChart(chartRef, chartVersion string, plainHTTP bool) (*chart.Chart, error) {
+	if r == nil || r.settings == nil {
+		return nil, fmt.Errorf("helm engine settings are required")
+	}
+	if strings.TrimSpace(chartRef) == "" {
+		return nil, fmt.Errorf("chart reference is required")
+	}
+	locator := action.NewInstall(&action.Configuration{})
+	locator.Version = chartVersion
+	locator.PlainHTTP = plainHTTP
+	chartPath, err := locator.LocateChart(chartRef, r.settings)
+	if err != nil {
+		return nil, fmt.Errorf("locate Helm chart %q: %w", chartRef, err)
+	}
+	loaded, err := loader.Load(chartPath)
+	if err != nil {
+		return nil, fmt.Errorf("load Helm chart %q: %w", chartPath, err)
+	}
+	return loaded, nil
+}
+
 // NewRealEngine creates a new RealEngine.
 // kubeConfig is the path to a kubeconfig file; if empty, in-cluster config is used.
 func NewRealEngine(kubeConfig string, logger *slog.Logger) *RealEngine {
