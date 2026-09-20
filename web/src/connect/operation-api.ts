@@ -22,6 +22,7 @@ import {
   type OperationState,
   type OperationType,
   type PatchOverride,
+  type PreflightResult,
 } from '@/types/operation';
 
 export interface CreateOperationInput {
@@ -122,6 +123,23 @@ export async function getOperation(operationId: string): Promise<Operation> {
   const response = await operationClient.getOperation(create(GetOperationRequestSchema, { operationId }));
   if (!response.operation) throw new ConnectError('operation response is empty', Code.Internal);
   return mapOperation(response.operation);
+}
+
+/**
+ * Reads the preflight stage results (TASK-149 / REQ-056 AC-056-03). Returns null
+ * while preflight is still in flight, so the caller renders nothing rather than
+ * an empty panel.
+ */
+export async function getPreflightResult(operationId: string): Promise<PreflightResult | null> {
+  const response = await operationClient.getOperation(create(GetOperationRequestSchema, { operationId }));
+  const result = response.preflightResult;
+  if (!result) return null;
+  return {
+    overall: result.overall,
+    failedStage: result.failedStage,
+    errorCode: result.errorCode,
+    stages: result.stages.map((stage) => ({ stage: stage.stage, status: stage.status, detail: stage.detail })),
+  };
 }
 
 /**

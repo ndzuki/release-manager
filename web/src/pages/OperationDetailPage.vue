@@ -4,16 +4,19 @@ import { useRoute, useRouter } from 'vue-router';
 import CancelOperationDialog from '@/components/operations/CancelOperationDialog.vue';
 import DisconnectBanner from '@/components/operations/DisconnectBanner.vue';
 import OperationTimeline from '@/components/operations/OperationTimeline.vue';
+import PreflightResultPanel from '@/components/operations/PreflightResultPanel.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import EmergencyResultPanel from '@/components/emergency/EmergencyResultPanel.vue';
 import { getEmergencyResult } from '@/connect/emergency-api';
+import { getPreflightResult } from '@/connect/operation-api';
 import { useEmergencyEffectObservation } from '@/composables/useEmergencyEffectObservation';
 import { useAuthStore } from '@/stores/auth';
 import { useEmergencyAuthorizationStore } from '@/stores/emergencyAuthorization';
 import { useOperationTimelineStore } from '@/stores/operationTimeline';
 import type { EmergencyResultDisplay } from '@/features/emergency/model';
+import type { PreflightResult } from '@/types/operation';
 
 const route = useRoute();
 const router = useRouter();
@@ -30,6 +33,29 @@ const routeScope = computed(() =>
 );
 
 const liveUpdatesEnabled = import.meta.env.VITE_OPERATION_LIVE_UPDATES !== 'false';
+
+// ── Preflight stage results (TASK-149 / AC-056-03) ─────────────────────────
+// The preflight outcome is part of GetOperation, not of the stream snapshot, so
+// it is fetched alongside the stream and re-fetched when the operation moves on
+// (the coordinator persists it as preflight concludes).
+const preflightResult = ref<PreflightResult | null>(null);
+
+async function loadPreflightResult(): Promise<void> {
+  const current = operationId.value;
+  if (!current) {
+    preflightResult.value = null;
+    return;
+  }
+  try {
+    const result = await getPreflightResult(current);
+    // A late response for a previous operation must not overwrite the current
+    // one (same guard the store applies to its own async reads).
+    if (operationId.value === current) preflightResult.value = result;
+  } catch {
+    // Best effort: the operation and its last_error still render.
+    if (operationId.value === current) preflightResult.value = null;
+  }
+}
 
 // Configure store-level seams once (production defaults, no-ops).
 store.configure({ liveUpdatesEnabled: () => liveUpdatesEnabled });
@@ -111,7 +137,15 @@ watch(routeScope, (current, previous) => {
     store.reset();
   }
   void store.load(nextOperationId);
+  void loadPreflightResult();
 }, { immediate: true });
+
+// The coordinator persists the preflight result as the pipeline concludes, so
+// re-read it whenever the operation moves on (AC-056-03).
+watch(
+  () => [operationId.value, store.operation?.stateVersion] as const,
+  () => void loadPreflightResult(),
+);
 onBeforeUnmount(() => {
   effectObservation.stop();
   store.reset();
@@ -168,6 +202,8 @@ function formatTimestamp(value: string | null): string {
       @action="store.retryInitial"
     />
     <template v-else>
+      <PreflightResultPanel :result="preflightResult" />
+
       <header class="operation-detail__header">
         <div>
           <p class="operation-detail__eyebrow">{{ store.operation?.operationType }} operation</p>

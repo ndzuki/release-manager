@@ -233,3 +233,24 @@ export function mapOperationSnapshot(snapshot: ProtoOperationSnapshot): Operatio
     retainedFromSequence: snapshot.retainedFromSequence,
   };
 }
+
+/**
+ * One preflight stage's outcome (TASK-149 / REQ-056 AC-056-03).
+ */
+export interface PreflightStageResult {
+  stage: string;
+  status: 'passed' | 'failed' | 'skipped' | 'timeout' | 'cancelled' | string;
+  detail: string;
+}
+
+/**
+ * The preflight pipeline's stage-level outcome, present only once preflight has
+ * concluded. It is what lets the detail page name the failed stage and expand
+ * its checks, instead of showing only the operation's flat last_error.
+ */
+export interface PreflightResult {
+  overall: 'passed' | 'failed' | string;
+  failedStage: string;
+  stages: PreflightStageResult[];
+  errorCode: string;
+}
