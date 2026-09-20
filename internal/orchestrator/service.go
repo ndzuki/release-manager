@@ -615,6 +615,20 @@ func (s *Service) GetOperation(
 		return nil, err
 	}
 	response := &orchestratorv1.GetOperationResponse{Operation: toProtoOperation(op)}
+	// TASK-149 / AC-056-03: the stage-level preflight outcome, once the pipeline
+	// has concluded. A read or decode failure degrades to no result rather than
+	// failing the whole detail page -- the same best-effort rule the write side
+	// follows, and the page still has the operation and its flat last_error.
+	if stored, resultErr := s.store.Operations().GetPreflightResult(ctx, op.ID); resultErr != nil {
+		s.logger.Error("read preflight result", "operation_id", op.ID, "error", resultErr)
+	} else if len(stored) > 0 {
+		mapped, mapErr := toProtoPreflightResult(stored)
+		if mapErr != nil {
+			s.logger.Error("map preflight result", "operation_id", op.ID, "error", mapErr)
+		} else {
+			response.PreflightResult = mapped
+		}
+	}
 	if op.OperationType == store.OperationEmergency {
 		emergencyResult, resultErr := s.emergencyOperationResult(ctx, op)
 		if resultErr != nil {
@@ -623,6 +637,35 @@ func (s *Service) GetOperation(
 		response.EmergencyResult = emergencyResult
 	}
 	return connect.NewResponse(response), nil
+}
+
+// toProtoPreflightResult maps the persisted preflight aggregate onto the read
+// model (TASK-149 / AC-056-03). The JSON shape is
+// internal/orchestrator/preflight.AggregateResult.
+func toProtoPreflightResult(raw json.RawMessage) (*orchestratorv1.PreflightResult, error) {
+	var aggregate struct {
+		Overall     string `json:"overall"`
+		FailedStage string `json:"failed_stage"`
+		ErrorCode   string `json:"error_code"`
+		Stages      []struct {
+			Stage  string `json:"stage"`
+			Status string `json:"status"`
+			Detail string `json:"detail"`
+		} `json:"stages"`
+	}
+	if err := json.Unmarshal(raw, &aggregate); err != nil {
+		return nil, fmt.Errorf("decode preflight result: %w", err)
+	}
+	result := &orchestratorv1.PreflightResult{
+		Overall: aggregate.Overall, FailedStage: aggregate.FailedStage, ErrorCode: aggregate.ErrorCode,
+		Stages: make([]*orchestratorv1.PreflightStageResult, 0, len(aggregate.Stages)),
+	}
+	for _, stage := range aggregate.Stages {
+		result.Stages = append(result.Stages, &orchestratorv1.PreflightStageResult{
+			Stage: stage.Stage, Status: stage.Status, Detail: stage.Detail,
+		})
+	}
+	return result, nil
 }
 
 const (
