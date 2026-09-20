@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -62,8 +63,19 @@ type emergencyResolvedChange struct {
 	artifactID     string
 	imageReference string
 	replicas       *int32
-	promotionPaths []string
-	targetSummary  string
+	// annotations is the validated entry list for the SET_APPROVED_ANNOTATION
+	// action, and annotationScope the whitelist scope it was validated against.
+	annotations     []emergencyAnnotationEntry
+	annotationScope string
+	promotionPaths  []string
+	targetSummary   string
+}
+
+// emergencyAnnotationEntry is one validated annotation, in the shape the intent
+// column stores (the dispatch path unmarshals the same {Key,Value} pairs).
+type emergencyAnnotationEntry struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 // ExecuteEmergencyChange validates and persists a canonical emergency
@@ -209,6 +221,18 @@ func (s *Service) ExecuteEmergencyChange(
 		TargetReplicas: resolved.replicas,
 		Convergence:    convergence, PromotionPaths: promotionPaths,
 		DeliveryStatus: "pending", CreatedAt: now, UpdatedAt: now,
+	}
+	// The annotation action's payload: the dispatch path unmarshals exactly
+	// these {key,value} pairs, so an unset column would silently send an empty
+	// change to the operator.
+	if resolved.action == store.EmergencySetApprovedAnnotations {
+		encoded, encodeErr := json.Marshal(resolved.annotations)
+		if encodeErr != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("encode annotation entries: %w", encodeErr))
+		}
+		scope := resolved.annotationScope
+		intent.AnnotationEntries = encoded
+		intent.AnnotationScope = &scope
 	}
 	op := &store.Operation{
 		ID: opID, OperationType: store.OperationEmergency, Status: store.StatusPending,
@@ -459,12 +483,8 @@ func validateExecuteEmergencyRequest(msg *orchestratorv1.ExecuteEmergencyChangeR
 	// selects the SET_REPLICAS branch and is mutually exclusive with the
 	// image change fields; otherwise the image branch keeps the AC-079-G8
 	// mandatory artifact_ref contract (D14) unchanged.
-	if deriveRequestedEmergencyAction(msg) == store.EmergencySetReplicas {
-		if strings.TrimSpace(msg.GetContainer()) != "" || strings.TrimSpace(msg.GetArtifactRef()) != "" {
-			return emergencyError(connect.CodeInvalidArgument, "conflicting_change", "set_replicas is mutually exclusive with container/artifact_ref")
-		}
-	} else if strings.TrimSpace(msg.GetArtifactRef()) == "" {
-		return emergencyError(connect.CodeInvalidArgument, "artifact_ref_required", "artifact_ref is required")
+	if err := validateEmergencyBranchExclusivity(msg); err != nil {
+		return err
 	}
 	// AC-079-G9 / D12: REQUIRE_PROMOTION requires target locks.
 	if msg.GetConvergenceStrategy() == orchestratorv1.ConvergenceStrategy_REQUIRE_PROMOTION && len(msg.GetTargetLocks()) == 0 {
@@ -552,6 +572,9 @@ func (s *Service) resolveExecuteEmergencyChange(
 	if deriveRequestedEmergencyAction(msg) == store.EmergencySetReplicas {
 		return resolveEmergencyReplicas(msg, definition, workload)
 	}
+	if requestCarriesAnnotations(msg) {
+		return resolveEmergencyAnnotations(msg, definition, workload)
+	}
 	return s.resolveEmergencyImage(ctx, msg, definition, workload)
 }
 
@@ -590,6 +613,71 @@ func (s *Service) resolveEmergencyWorkloadIdentity(ctx context.Context, definiti
 // (REQ-081, REQ-032 §171): deployment/statefulset kinds only, no live HPA
 // target, 0 <= replicas <= max_emergency_replicas, and — for
 // REQUIRE_PROMOTION — a field="replicas" promotion mapping path.
+// resolveEmergencyAnnotations validates the SET_APPROVED_ANNOTATION action
+// against the definition's approved-key whitelist (REQ-058, TASK-126).
+//
+// The whitelist is the authority: a request may only set keys the definition
+// already approved, in the scope that key was approved for. The scope is taken
+// from the request and must match the whitelist entry, so a caller cannot widen
+// its own authority by claiming a different scope.
+func resolveEmergencyAnnotations(
+	msg *orchestratorv1.ExecuteEmergencyChangeRequest,
+	definition *store.ReleaseDefinition,
+	workload parsedWorkloadRef,
+) (emergencyResolvedChange, error) {
+	scope := strings.TrimSpace(msg.GetAnnotationScope())
+	if scope == "" {
+		return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument,
+			"invalid_annotation_entries", "annotation_scope is required")
+	}
+	if len(msg.GetAnnotations()) == 0 {
+		return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument,
+			"invalid_annotation_entries", "annotations must not be empty")
+	}
+	approved := make(map[string]store.ApprovedAnnotationKey, len(definition.ApprovedAnnotationKeys))
+	for _, entry := range definition.ApprovedAnnotationKeys {
+		approved[entry.Key] = entry
+	}
+
+	var promotionPaths []string
+	entries := make([]emergencyAnnotationEntry, 0, len(msg.GetAnnotations()))
+	seen := make(map[string]struct{}, len(msg.GetAnnotations()))
+	for _, entry := range msg.GetAnnotations() {
+		key := strings.TrimSpace(entry.GetKey())
+		if key == "" {
+			return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument,
+				"invalid_annotation_entries", "annotation key must not be empty")
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument,
+				"duplicate_annotation_key", fmt.Sprintf("annotation key %s appears more than once", key))
+		}
+		seen[key] = struct{}{}
+		allowed, ok := approved[key]
+		if !ok {
+			return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument,
+				"annotation_key_not_allowed", fmt.Sprintf("annotation key %s is not on the approved whitelist", key))
+		}
+		if allowed.Scope != scope {
+			return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument,
+				"annotation_scope_mismatch", fmt.Sprintf("annotation key %s is approved for scope %s", key, allowed.Scope))
+		}
+		entries = append(entries, emergencyAnnotationEntry{Key: key, Value: entry.GetValue()})
+		if allowed.PromotionValuesPath != "" {
+			promotionPaths = append(promotionPaths, allowed.PromotionValuesPath)
+		}
+	}
+	sort.Strings(promotionPaths)
+	return emergencyResolvedChange{
+		action:          store.EmergencySetApprovedAnnotations,
+		workload:        workload,
+		annotations:     entries,
+		annotationScope: scope,
+		promotionPaths:  promotionPaths,
+		targetSummary:   fmt.Sprintf("%s/%s, annotations=%d, scope=%s", workload.Kind, workload.Name, len(entries), scope),
+	}, nil
+}
+
 func resolveEmergencyReplicas(
 	msg *orchestratorv1.ExecuteEmergencyChangeRequest,
 	definition *store.ReleaseDefinition,
@@ -823,6 +911,41 @@ func valueOrZero(value *int32) int32 {
 // the payload before resolution (REQ-081 D3=A): non-zero set_replicas selects
 // SET_REPLICAS, everything else keeps the canonical image action. Used for
 // audit events emitted before/at resolution failure points.
+// validateEmergencyBranchExclusivity enforces one action per request: the
+// SET_REPLICAS payload, the SET_APPROVED_ANNOTATION payload and the image
+// branch each reject the others' fields. A request that carries none of the
+// optional payloads is the image branch, which keeps the mandatory
+// artifact_ref contract (AC-079-G8 / D14).
+func validateEmergencyBranchExclusivity(msg *orchestratorv1.ExecuteEmergencyChangeRequest) error {
+	hasContainer := strings.TrimSpace(msg.GetContainer()) != ""
+	hasArtifact := strings.TrimSpace(msg.GetArtifactRef()) != ""
+	switch {
+	case deriveRequestedEmergencyAction(msg) == store.EmergencySetReplicas:
+		if hasContainer || hasArtifact {
+			return emergencyError(connect.CodeInvalidArgument, "conflicting_change", "set_replicas is mutually exclusive with container/artifact_ref")
+		}
+	case requestCarriesAnnotations(msg):
+		// TASK-126: the annotation branch takes neither artifact_ref nor
+		// container; the whitelist validation decides what may be set.
+		if hasArtifact || hasContainer {
+			return emergencyError(connect.CodeInvalidArgument, "conflicting_change", "annotations are mutually exclusive with container/artifact_ref")
+		}
+	case !hasArtifact:
+		return emergencyError(connect.CodeInvalidArgument, "artifact_ref_required", "artifact_ref is required")
+	}
+	return nil
+}
+
+// requestCarriesAnnotations reports whether the request selects the
+// SET_APPROVED_ANNOTATION action. The branch is selected by payload shape, the
+// same way SET_REPLICAS is (REQ-081 D3=A).
+func requestCarriesAnnotations(msg *orchestratorv1.ExecuteEmergencyChangeRequest) bool {
+	if msg == nil {
+		return false
+	}
+	return len(msg.GetAnnotations()) > 0 || strings.TrimSpace(msg.GetAnnotationScope()) != ""
+}
+
 func deriveRequestedEmergencyAction(msg *orchestratorv1.ExecuteEmergencyChangeRequest) store.EmergencyAction {
 	if msg != nil && msg.GetSetReplicas() != 0 {
 		return store.EmergencySetReplicas

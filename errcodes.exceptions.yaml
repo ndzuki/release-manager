@@ -15,30 +15,14 @@ exceptions:
     reason: "REQ-056: the backend half of the non-bundle-image rejection is not wired; the frontend maps it but internal/ has no such code. Tracked as REQ-056 partial (audit bucket A/B)."
     expires_at: "2026-12-31"
 
-  - owner: "release-manager"
-    code: "annotation_key_not_allowed"
-    reason: "REQ-058: server-side annotation validation is missing; the codes exist only in the web client. Tracked as REQ-058 partial (audit bucket C, canonical-contract family)."
-    expires_at: "2026-12-31"
 
-  - owner: "release-manager"
-    code: "annotation_scope_mismatch"
-    reason: "REQ-058: server-side annotation validation is missing; the codes exist only in the web client. Tracked as REQ-058 partial (audit bucket C)."
-    expires_at: "2026-12-31"
 
-  - owner: "release-manager"
-    code: "duplicate_annotation_key"
-    reason: "REQ-058: server-side annotation validation is missing; the codes exist only in the web client. Tracked as REQ-058 partial (audit bucket C)."
-    expires_at: "2026-12-31"
 
   - owner: "release-manager"
     code: "emergency_feature_disabled"
     reason: "REQ-058: server-side annotation validation is missing; the codes exist only in the web client. Tracked as REQ-058 partial (audit bucket C)."
     expires_at: "2026-12-31"
 
-  - owner: "release-manager"
-    code: "invalid_annotation_entries"
-    reason: "REQ-058: server-side annotation validation is missing; the codes exist only in the web client. Tracked as REQ-058 partial (audit bucket C)."
-    expires_at: "2026-12-31"
 
   - owner: "release-manager"
     code: "target_changed"
