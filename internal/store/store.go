@@ -1895,6 +1895,14 @@ type OperationStore interface {
 	List(ctx context.Context, definitionID string) ([]*Operation, error)
 	GetActiveForDefinition(ctx context.Context, definitionID string) (*Operation, error)
 	ListNonTerminal(ctx context.Context) ([]*Operation, error)
+	// SavePreflightResult persists the preflight stage results for an operation
+	// (TASK-149 / REQ-056 AC-056-03). The coordinator computes them but only the
+	// error code reaches last_error, so a failed preflight could not show which
+	// stage failed or what its checks said.
+	SavePreflightResult(ctx context.Context, operationID string, result json.RawMessage) error
+	// GetPreflightResult reads them back; a nil result means the operation has
+	// not finished preflight yet.
+	GetPreflightResult(ctx context.Context, operationID string) (json.RawMessage, error)
 }
 
 // OperationStateChangedEvent is emitted when an operation's status changes (REQ-023).

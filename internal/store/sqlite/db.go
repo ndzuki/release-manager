@@ -1139,6 +1139,9 @@ var migrationStatements = []string{
 	`ALTER TABLE operations ADD COLUMN bundle_chart_ref TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE operations ADD COLUMN bundle_chart_digest TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE operations ADD COLUMN image_refs_json BLOB NOT NULL DEFAULT '[]'`,
+	// TASK-149 (REQ-056 AC-056-03): the preflight stage results, so a failed
+	// preflight can show which stage failed and what its checks said.
+	`ALTER TABLE operations ADD COLUMN preflight_result_json BLOB NOT NULL DEFAULT ''`,
 	`ALTER TABLE operations ADD COLUMN image_digests_json BLOB NOT NULL DEFAULT '[]'`,
 	`ALTER TABLE operations ADD COLUMN policy_version TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE operations ADD COLUMN patch_digest TEXT NOT NULL DEFAULT ''`,
