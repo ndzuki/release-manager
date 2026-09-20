@@ -15,29 +15,42 @@ import (
 // RenderPreflight renders a verified chart using only local Helm SDK APIs.
 // It never creates a Kubernetes client, release storage, or subprocess.
 func RenderPreflight(ctx context.Context, opts RenderOptions) (*RenderResult, error) {
+	_, result, err := RenderManifests(ctx, opts)
+	return result, err
+}
+
+// RenderManifests renders a verified chart and additionally returns the
+// rendered files.
+//
+// It exists for the cluster preflight stage (TASK-114): that stage is a separate
+// command from the render stage, so it must render for itself, and it needs the
+// parsed objects to dry-run. Those objects deliberately never reach
+// RenderResult, which carries only safe summaries (AC-046-02) -- so the rendered
+// files are returned beside the result and the caller decodes them.
+func RenderManifests(ctx context.Context, opts RenderOptions) (map[string]string, *RenderResult, error) {
 	if err := validateRenderOptions(opts); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := renderContextError(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	values, err := mergeRenderValues(opts.Values, opts.ValuesPatch, opts.ImageOverrides)
 	if err != nil {
-		return nil, &RenderError{Code: RenderCodeRenderFailed, Err: fmt.Errorf("merge render values: %w", err)}
+		return nil, nil, &RenderError{Code: RenderCodeRenderFailed, Err: fmt.Errorf("merge render values: %w", err)}
 	}
 	if err := renderContextError(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	chartCopy := cloneChart(opts.Chart)
 	if err := chartutil.ProcessDependenciesWithMerge(chartCopy, values); err != nil {
-		return nil, &RenderError{Code: RenderCodeRenderFailed, Err: fmt.Errorf("process chart dependencies: %w", err)}
+		return nil, nil, &RenderError{Code: RenderCodeRenderFailed, Err: fmt.Errorf("process chart dependencies: %w", err)}
 	}
 
 	capabilities, err := renderCapabilities(opts.Capabilities)
 	if err != nil {
-		return nil, &RenderError{Code: RenderCodeRenderFailed, Err: err}
+		return nil, nil, &RenderError{Code: RenderCodeRenderFailed, Err: err}
 	}
 	valuesToRender, err := chartutil.ToRenderValuesWithSchemaValidation(
 		chartCopy,
@@ -52,33 +65,33 @@ func RenderPreflight(ctx context.Context, opts RenderOptions) (*RenderResult, er
 		false,
 	)
 	if err != nil {
-		return nil, &RenderError{Code: RenderCodeValuesSchemaFailed, Err: fmt.Errorf("%w: %v", ErrValuesSchemaFailed, err)}
+		return nil, nil, &RenderError{Code: RenderCodeValuesSchemaFailed, Err: fmt.Errorf("%w: %v", ErrValuesSchemaFailed, err)}
 	}
 	if err := renderContextError(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	rendered, err := helmtemplate.Render(chartCopy, valuesToRender)
 	if err != nil {
-		return nil, &RenderError{Code: RenderCodeRenderFailed, Err: fmt.Errorf("%w: %v", ErrRenderFailed, err)}
+		return nil, nil, &RenderError{Code: RenderCodeRenderFailed, Err: fmt.Errorf("%w: %v", ErrRenderFailed, err)}
 	}
 	if opts.IncludeCRDs {
 		addCRDs(rendered, chartCopy)
 	}
 	if err := renderContextError(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	resources, warnings, err := summarizeRenderedManifests(rendered, opts.Namespace, opts.MaxManifestBytes)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	digest, err := renderDigest(opts, values, resources, warnings)
 	if err != nil {
-		return nil, &RenderError{Code: RenderCodeRenderFailed, Err: err}
+		return nil, nil, &RenderError{Code: RenderCodeRenderFailed, Err: err}
 	}
 
-	return &RenderResult{
+	return rendered, &RenderResult{
 		RenderDigest: digest,
 		Resources:    resources,
 		Warnings:     warnings,
