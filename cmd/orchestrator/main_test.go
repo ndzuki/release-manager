@@ -605,7 +605,14 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 		customerID       = "5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b"
 		definitionID     = "definition-trust-epoch"
 		valuesRevisionID = "values-trust-epoch"
-		bundleID         = "bundle-trust-epoch"
+		// The second submission runs against its own definition: it shares the
+		// bundle and the signature (so the digest-keyed verification cache is
+		// what is exercised), but it must not be answered by the release_busy
+		// gate that the first operation, still holding its definition, would
+		// otherwise trip (CI flake).
+		secondDefinitionID     = "definition-trust-epoch-second"
+		secondValuesRevisionID = "values-trust-epoch-second"
+		bundleID               = "bundle-trust-epoch"
 	)
 	ctx := t.Context()
 	dbPath := t.TempDir() + "/orchestrator.db"
@@ -635,6 +642,15 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 	require.NoError(t, seedStore.Bundles().Create(ctx, &store.ReleaseBundle{
 		ID: bundleID, Name: "Trust Epoch Bundle", DigestAlg: "sha256", DigestValue: bundleDigest,
 		Status: store.BundleValidated, ChartRef: "fixture", CreatedAt: time.Now().UTC(),
+	}))
+	require.NoError(t, seedStore.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: secondDefinitionID, Name: "Trust Epoch Definition Second", CustomerID: customerID, ClusterID: "cluster-trust-epoch",
+		Namespace: "trust", ReleaseName: "trust-epoch-second", ChartName: "fixture", Status: store.DefStatusActive,
+		OwnerOrganizationID: &ownerOrganizationID,
+	}, nil))
+	require.NoError(t, seedStore.Values().Create(ctx, &store.ValuesRevision{
+		ID: secondValuesRevisionID, ReleaseDefinitionID: secondDefinitionID, Version: 1, StateVersion: 1,
+		Status: store.ValuesStatusApproved, CanonicalDocument: []byte(`{"replicas":1}`), Digest: "sha256:values-trust-epoch-second",
 	}))
 	require.NoError(t, seedStore.Close())
 
@@ -686,10 +702,10 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 
 	operationClient := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
 	warmAuthorization(ctx, t, operationClient, adminToken, definitionID, "warm-epoch")
-	newRequest := func(idempotencyKey string) *connect.Request[orchestratorv1.CreateOperationRequest] {
+	newRequest := func(definition, valuesRevision, idempotencyKey string) *connect.Request[orchestratorv1.CreateOperationRequest] {
 		req := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
-			OperationType: "INSTALL", BundleId: bundleID, ReleaseDefinitionId: definitionID,
-			ValuesRevisionId: valuesRevisionID,
+			OperationType: "INSTALL", BundleId: bundleID, ReleaseDefinitionId: definition,
+			ValuesRevisionId: valuesRevision,
 			SignatureRef: &commonv1.SignatureRef{
 				Digest: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(digest))),
 				Issuer: "release-manager-ci", Subject: "repo:release-manager:ref:refs/heads/main",
@@ -701,7 +717,7 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 	}
 
 	// 首次提交：受信。
-	first, err := operationClient.CreateOperation(ctx, newRequest("trust-epoch-first"))
+	first, err := operationClient.CreateOperation(ctx, newRequest(definitionID, valuesRevisionID, "trust-epoch-first"))
 	require.NoError(t, err)
 	assert.Equal(t, commonv1.VerificationResult_VERIFICATION_RESULT_TRUSTED, first.Msg.GetVerificationResult())
 
@@ -712,7 +728,7 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 	require.NoError(t, err)
 
 	// 同 digest、同签名、新幂等键再次提交：缓存不复用 → 重新验证 → untrusted_issuer rejected。
-	_, err = operationClient.CreateOperation(ctx, newRequest("trust-epoch-second"))
+	_, err = operationClient.CreateOperation(ctx, newRequest(secondDefinitionID, secondValuesRevisionID, "trust-epoch-second"))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.ErrorContains(t, err, "untrusted_issuer")
