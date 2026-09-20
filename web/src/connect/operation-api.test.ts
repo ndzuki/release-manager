@@ -22,6 +22,7 @@ import {
   mapOperationError,
   setOperationClientForTest,
   watchOperation,
+  getPreflightResult,
 } from './operation-api';
 
 function bundleClientMock(): Client<typeof BundleService> {
@@ -222,5 +223,35 @@ describe('operation API', () => {
     expect(mapped.snapshotSequence).toBe(42n);
     expect(mapped.retainedFromSequence).toBe(10n);
     expect(mapped.snapshotProto).toBe('eyJvcGVyYXRpb24iOnsiaWQiOiIxIn19');
+  });
+});
+
+// TASK-149 / AC-056-03: the preflight stage results are read from GetOperation.
+describe('getPreflightResult', () => {
+  it('maps the read model and returns null while preflight is in flight', async () => {
+    const client = operationClientMock({
+      getOperation: vi.fn().mockResolvedValue({
+        operation: { operationId: 'op-1', state: 'running', stateVersion: 1n },
+        preflightResult: undefined,
+      }),
+    });
+    setOperationClientForTest(client);
+    expect(await getPreflightResult('op-1')).toBeNull();
+
+    client.getOperation = vi.fn().mockResolvedValue({
+      operation: { operationId: 'op-1', state: 'failed', stateVersion: 2n },
+      preflightResult: {
+        overall: 'failed',
+        failedStage: 'render',
+        errorCode: 'render_failed',
+        stages: [{ stage: 'render', status: 'failed', detail: 'render_failed' }],
+      },
+    });
+    expect(await getPreflightResult('op-1')).toEqual({
+      overall: 'failed',
+      failedStage: 'render',
+      errorCode: 'render_failed',
+      stages: [{ stage: 'render', status: 'failed', detail: 'render_failed' }],
+    });
   });
 });
