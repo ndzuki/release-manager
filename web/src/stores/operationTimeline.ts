@@ -143,6 +143,11 @@ export const useOperationTimelineStore = defineStore('operationTimeline', () => 
   let reconnectAttempts = 0;
   let cancelledByUser = false;
   const isTerminal = computed(() => operation.value !== null && TERMINAL_STATES[operation.value.state] === true);
+  // AC-056-10: polling stops once there is nothing left to observe. A terminal
+  // EMERGENCY whose effect is still UNKNOWN is the exception -- the page keeps
+  // watching for EMERGENCY_EFFECT_RESOLVED (AC-057-19/20), so it must keep
+  // polling/reconnecting even though the operation itself is terminal.
+  const observationComplete = computed(() => isTerminal.value && emergencyEffectStatus.value !== 'watching');
 
   // AC-057-07: no write role (local projection or server denial) → no cancel
   // UI at all, including the disabled terminal/cancelling affordances.
@@ -219,6 +224,10 @@ export const useOperationTimelineStore = defineStore('operationTimeline', () => 
     disposeStream();
     clearTimeoutHandle(heartbeatTimer);
     heartbeatTimer = null;
+    // AC-056-10: nothing left to poll or reconnect for. This guard is what
+    // actually holds, because the reconnect loop re-enters here and would
+    // otherwise restart the poll the scheduler just stopped.
+    if (observationComplete.value) return;
     if (operationId.value && !cancelledByUser) {
       schedulePoll();
       scheduleReconnect();
@@ -230,6 +239,13 @@ export const useOperationTimelineStore = defineStore('operationTimeline', () => 
     pollTimer = setTimeoutHandle(() => {
       pollTimer = null;
       void refresh().then(() => {
+        // AC-056-10: stop once the observation is complete. Without this the
+        // degraded poll runs every 5s forever once the stream drops, because
+        // the reschedule condition only looked at stream status.
+        if (observationComplete.value) {
+          stopPolling();
+          return;
+        }
         // Keep the unique 5s poll alive while degraded (AC-057-05/24):
         // reconnect success, scope change, or user teardown stops it.
         if (streamStatus.value === 'disconnected' && operationId.value && !cancelledByUser) {
