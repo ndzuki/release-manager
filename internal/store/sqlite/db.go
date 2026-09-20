@@ -1709,6 +1709,10 @@ var migrationStatements = []string{
 	)`,
 	`ALTER TABLE emergency_intents ADD COLUMN effect_status TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK (effect_status IN ('UNKNOWN','APPLIED','NOT_APPLIED'))`,
 	`ALTER TABLE emergency_intents ADD COLUMN lock_released_at TEXT`,
+	// TASK-148 (REQ-058 AC-058-33): the REVERT reconciliation outcome. This must
+	// follow the CREATE TABLE above, not the operations block.
+	`ALTER TABLE emergency_intents ADD COLUMN revert_status TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE emergency_intents ADD COLUMN reconciled_by_operation_id TEXT NOT NULL DEFAULT ''`,
 	`CREATE INDEX IF NOT EXISTS idx_ei_operation ON emergency_intents(operation_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_ei_command ON emergency_intents(command_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_ei_definition ON emergency_intents(release_definition_id, created_at DESC)`,
