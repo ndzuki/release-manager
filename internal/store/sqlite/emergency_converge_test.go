@@ -756,3 +756,38 @@ func TestConvergeEmergencyResult_DoesNotNotifyTwice(t *testing.T) {
 	assert.Equal(t, finished.StateVersion+1, resolve.Operation.StateVersion)
 	assert.Equal(t, 1, countTerminalNotifications(), "AC-031-06: a late result must not queue a second notification")
 }
+
+// AC-058-31: when the authoritative effect is NOT_APPLIED, the convergence task
+// created at admission must not survive at pending_promotion. Leaving it there
+// blocks the definition's standard operations forever
+// (release_convergence_pending) and also prevents the target lock from being
+// released, which requires the task to be non-pending.
+func TestConvergeEmergencyResult_NotAppliedAbandonsThePendingTask(t *testing.T) {
+	st := OpenTest(t)
+	ctx := context.Background()
+	seedEmergencyDefinition(t, st, "def-not-applied")
+	created := createEmergencyViaUOW(t, st, emergencyCreateCommand(t, "def-not-applied", "idem-not-applied", "hash-not-applied", store.EmergencySetReplicas))
+
+	// Admission created the task, because the outcome is not known yet.
+	pending, err := st.ConvergenceTasks().ListByDefinition(ctx, "def-not-applied", "pending_promotion")
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "admission creates the convergence task unconditionally")
+
+	queued, err := st.Operations().UpdateStatus(ctx, created.Operation.ID, store.StatusQueued, 1, "")
+	require.NoError(t, err)
+	finished, err := st.EmergencyIntents().Finish(ctx, created.Intent.ID, created.Operation.ID, queued.StateVersion, store.StatusTimeout, store.EmergencyEffectUnknown, "operation_timeout", nil, nil)
+	require.NoError(t, err)
+
+	resolve, err := st.EmergencyIntents().ConvergeEmergencyResult(ctx, convergeCmd(t, created, store.StatusSucceeded, store.EmergencyEffectNotApplied, finished.StateVersion, ""))
+	require.NoError(t, err)
+	require.True(t, resolve.Resolved)
+
+	remaining, err := st.ConvergenceTasks().ListByDefinition(ctx, "def-not-applied", "pending_promotion")
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "AC-058-31: NOT_APPLIED must not leave a pending convergence task")
+
+	// The standard-operation gate is exactly this query, so it now passes.
+	hasPending, err := st.ConvergenceTasks().HasPendingPromotionForDefinition(ctx, "def-not-applied")
+	require.NoError(t, err)
+	assert.False(t, hasPending, "AC-058-31: the definition must no longer be blocked")
+}
