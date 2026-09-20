@@ -472,3 +472,29 @@ func TestIsNilStageDetectsTypedNil(t *testing.T) {
 		t.Fatal("isNilStage(stage) = true, want false")
 	}
 }
+
+// AC-066-15: the graph must hand the caller the compensation registry the
+// stages registered into. Before this the registry was created inside newGraph,
+// passed to the stages and then dropped, so every registered compensation --
+// restoring a workload's replica count, for one -- was never executed.
+func TestSpecsForRunReturnsTheSharedCompensationRegistry(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	_, registry, err := SpecsForRun(h.cfg, "run-compensation")
+	if err != nil {
+		t.Fatalf("SpecsForRun() error = %v", err)
+	}
+	if registry == nil {
+		t.Fatal("AC-066-15: SpecsForRun must return the registry the stages register into")
+	}
+	// A freshly assembled graph has no compensations yet: they are registered as
+	// stages run. An empty registry is the correct starting state, and running it
+	// must be a no-op rather than an error.
+	if registry.Len() != 0 {
+		t.Fatalf("a fresh registry has %d compensations, want 0", registry.Len())
+	}
+	if err := registry.Run(context.Background()); err != nil {
+		t.Fatalf("running an empty registry: %v", err)
+	}
+}
