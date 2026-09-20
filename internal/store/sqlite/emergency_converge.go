@@ -110,6 +110,12 @@ func (s *emergencyIntentStore) ConvergeEmergencyResult(ctx context.Context, comm
 		if err != nil {
 			return err
 		}
+		// AC-058-31: the same rule on the direct-to-terminal path.
+		if command.EffectStatus == store.EmergencyEffectNotApplied {
+			if err := abandonConvergenceTaskTx(ctx, tx, command.OperationID); err != nil {
+				return err
+			}
+		}
 		updatedIntent, err := getEmergencyIntentByOperation(ctx, tx, command.OperationID)
 		if err != nil {
 			return err
@@ -229,6 +235,34 @@ func emergencyHopTx(
 	return &updated, nil
 }
 
+// abandonConvergenceTaskTx removes the convergence task of an operation whose
+// authoritative effect resolved to NOT_APPLIED (REQ-058 AC-058-31: "不创建
+// task"). The task is created unconditionally when the emergency change is
+// accepted, because the outcome is not known yet, so "not created" can only mean
+// "does not survive".
+//
+// Leaving it at pending_promotion blocks the definition permanently: the
+// standard-operation gate refuses with release_convergence_pending, and
+// releasing the target lock requires the task to be non-pending. Removing it in
+// the same transaction as the effect keeps the two consistent.
+//
+// The row is deleted rather than moved to a terminal status because the status
+// column's CHECK constraint admits only pending_promotion and converged, and
+// nothing references convergence_tasks by foreign key. The effect resolution
+// itself stays in the operation timeline, so no audit record is lost.
+//
+// A no-op when there is no pending task: REVERT_ON_NEXT_RECONCILE never creates
+// one, and a replay has already moved it out of pending_promotion.
+func abandonConvergenceTaskTx(ctx context.Context, tx *sql.Tx, operationID string) error {
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM convergence_tasks
+		WHERE operation_id = ? AND status = 'pending_promotion'
+	`, operationID); err != nil {
+		return fmt.Errorf("remove convergence task after NOT_APPLIED: %w", err)
+	}
+	return nil
+}
+
 // resolveUnknownEffectTx resolves a terminal op's UNKNOWN effect to
 // APPLIED/NOT_APPLIED exactly once (REQ-032 §465 EMERGENCY_EFFECT_RESOLVED +
 // stateVersion+1, REQ-087 AC-087-03). Caller holds the transaction and has
@@ -257,6 +291,13 @@ func resolveUnknownEffectTx(
 	}
 	if err := writeEmergencyIntentEffect(ctx, tx, current.ID, command.EffectStatus, command.BeforeSnapshot, command.AfterSnapshot, now.Format(time.RFC3339Nano)); err != nil {
 		return nil, nil, err
+	}
+	// AC-058-31: a NOT_APPLIED effect must not leave a pending convergence task
+	// behind, or the definition stays blocked forever.
+	if command.EffectStatus == store.EmergencyEffectNotApplied {
+		if err := abandonConvergenceTaskTx(ctx, tx, current.ID); err != nil {
+			return nil, nil, err
+		}
 	}
 	updatedOperation := *current
 	updatedOperation.StateVersion++
