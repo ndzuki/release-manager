@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
-	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 	"github.com/ndzuki/release-manager/internal/store"
+	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
 
 // seedUnresolvedEmergencyEffect inserts a terminal EMERGENCY operation whose
@@ -191,4 +191,28 @@ func TestCreateOperation_EmergencyGateDetailCarriesBothIDArrays(t *testing.T) {
 	detail := gateDetail(t, err)
 	assert.Equal(t, []string{"op-both-emergency"}, detail.GetUnresolvedOperationIds())
 	assert.Equal(t, []string{task.ID}, detail.GetConvergenceTaskIds())
+}
+
+// AC-056-12: a release_busy refusal must carry the stable reason code and the id
+// of the operation that is holding the release, so the web client can link to
+// it. The client already reads X-Reason-Code and X-Operation-ID
+// (web/src/connect/operation-api.ts); the server sent neither.
+func TestCreateOperation_ReleaseBusyCarriesTheActiveOperationID(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	first, err := svc.CreateOperation(adminCtx(), installRequest())
+	require.NoError(t, err)
+	activeID := first.Msg.GetOperationId()
+
+	_, err = svc.CreateOperation(adminCtx(), installRequest())
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, "release_busy", connectErr.Meta().Get("X-Reason-Code"))
+	assert.Equal(t, activeID, connectErr.Meta().Get("X-Operation-ID"),
+		"AC-056-12: the refusal must name the operation that is holding the release")
 }

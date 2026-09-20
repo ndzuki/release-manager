@@ -180,8 +180,8 @@ func (s *Service) RollbackRelease(
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrReleaseBusy):
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("release_busy: definition %s has active operation", msg.ReleaseDefinitionId))
+			return nil, s.releaseBusyError(ctx, msg.GetReleaseDefinitionId(),
+				fmt.Sprintf("release_busy: definition %s has active operation", msg.GetReleaseDefinitionId()))
 		case errors.Is(err, store.ErrIdempotencyConflict):
 			return nil, connect.NewError(connect.CodeAlreadyExists,
 				errors.New("idempotency_conflict: key already used with different request"))

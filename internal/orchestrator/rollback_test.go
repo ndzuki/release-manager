@@ -179,6 +179,13 @@ func TestRollbackRelease_ReleaseBusy(t *testing.T) {
 	}), "idem-rb-busy-2"))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	// AC-056-12: the refusal carries the stable reason code and the id of the
+	// operation holding the release, which is what the web client links to.
+	var busyErr *connect.Error
+	require.ErrorAs(t, err, &busyErr)
+	assert.Equal(t, "release_busy", busyErr.Meta().Get("X-Reason-Code"))
+	assert.NotEmpty(t, busyErr.Meta().Get("X-Operation-ID"),
+		"AC-056-12: the refusal must name the operation holding the release")
 	assert.Contains(t, err.Error(), "release_busy")
 }
 
