@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import ErrorState from '@/components/common/ErrorState.vue';
 import AuthorizationStaleNotice from '@/components/common/AuthorizationStaleNotice.vue';
 import ConvergenceLockedPathsPanel from '@/components/emergency/ConvergenceLockedPathsPanel.vue';
@@ -17,6 +17,7 @@ import { useValuesEditorStore } from '@/stores/valuesEditor';
 import type { EditorLanguage, SecretRef } from '@/types/valuesRevision';
 
 const route = useRoute();
+const router = useRouter();
 const auth = useAuthStore();
 const editor = useValuesEditorStore();
 const authorization = useEmergencyAuthorizationStore();
@@ -85,13 +86,29 @@ async function reloadParent(): Promise<void> {
   }
 }
 
+// AC-055-15: a successful Reject or Discard returns to the convergence task
+// list. Leaving the page on its own must NOT discard, so this is called only
+// after the store reports success.
+async function returnToConvergenceTasks(): Promise<void> {
+  await router.push({
+    name: 'ConvergenceTasks',
+    params: {
+      customerId: customerId.value,
+      clusterId: clusterId.value,
+      releaseId: releaseDefinitionId.value,
+    },
+  });
+}
+
 function requestReject(): void {
   rejectDialogOpen.value = true;
 }
 
 async function confirmReject(reason: string): Promise<void> {
   rejectDialogOpen.value = false;
-  await editor.reject(reason);
+  if (await editor.reject(reason)) {
+    await returnToConvergenceTasks();
+  }
 }
 
 function requestDiscard(): void {
@@ -100,7 +117,9 @@ function requestDiscard(): void {
 
 async function confirmDiscard(): Promise<void> {
   discardConfirmOpen.value = false;
-  await editor.discard();
+  if (await editor.discard()) {
+    await returnToConvergenceTasks();
+  }
 }
 
 onBeforeUnmount(() => {

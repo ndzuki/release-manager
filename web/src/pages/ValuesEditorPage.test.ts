@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ValuesEditorPage from './ValuesEditorPage.vue';
 
 const mocks = vi.hoisted(() => ({
+  push: vi.fn(async () => undefined),
   route: {
     params: { customerId: 'customer-1', clusterId: 'cluster-1', releaseId: 'definition-1' },
     query: { customerName: 'Customer One', clusterName: 'Cluster One', releaseName: 'Release One' },
@@ -59,7 +60,7 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('vue-router', () => ({ useRoute: () => mocks.route }));
+vi.mock('vue-router', () => ({ useRoute: () => mocks.route, useRouter: () => ({ push: mocks.push }) }));
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => mocks.auth }));
 vi.mock('@/stores/valuesEditor', () => ({ useValuesEditorStore: () => mocks.editor }));
 vi.mock('@/stores/emergencyAuthorization', () => ({ useEmergencyAuthorizationStore: () => mocks.authorization }));
@@ -200,5 +201,94 @@ describe('ValuesEditorPage reject reason (AC-055-11)', () => {
 
     expect(mocks.editor.reject).toHaveBeenCalledWith('needs a smaller image');
     expect(wrapper.find('[data-testid="reject-dialog"]').exists()).toBe(false);
+  });
+});
+
+// AC-055-15: a successful Reject or Discard returns to the convergence task
+// list, and merely leaving the page never discards.
+describe('ValuesEditorPage return to task list (AC-055-15)', () => {
+  function mountWithActions() {
+    return mount(ValuesEditorPage, {
+      global: {
+        stubs: {
+          ValuesEditorSkeleton: true,
+          ValuesCodeEditor: { props: ['modelValue'], template: '<pre>{{ modelValue }}</pre>' },
+          ValuesDiffPanel: true,
+          SecretRefEditor: true,
+          ValuesConflictDialog: true,
+          ErrorState: true,
+          ConvergenceLockedPathsPanel: true,
+          ValuesRevisionActions: {
+            emits: ['approve', 'reject', 'discard'],
+            template: '<div><button data-testid="reject" @click="$emit(\'reject\')">r</button><button data-testid="discard" @click="$emit(\'discard\')">d</button></div>',
+          },
+          RejectRevisionDialog: {
+            props: ['submitting'],
+            emits: ['submit', 'close'],
+            template: '<div data-testid="reject-dialog"><button data-testid="submit" @click="$emit(\'submit\', \'why\')">s</button></div>',
+          },
+        },
+      },
+    });
+  }
+
+  beforeEach(() => {
+    Object.assign(mocks.editor, {
+      currentRevision: { id: 'rev-1', status: 'pending_approval', stateVersion: '1' },
+      parentRevision: null,
+      editorContent: '{}',
+      loading: false,
+      error: null,
+      canonicalCurrent: {},
+      restoredDraft: false,
+      toast: null,
+      showConflictDialog: false,
+      approving: false,
+      discarding: false,
+      saving: false,
+      saveDisabled: false,
+      preparedTaskIds: [],
+      reject: vi.fn(async () => true),
+      discard: vi.fn(async () => true),
+    });
+    vi.clearAllMocks();
+  });
+
+  it('navigates to the convergence tasks after a successful reject', async () => {
+    const wrapper = mountWithActions();
+    await flushPromises();
+    await wrapper.find('[data-testid="reject"]').trigger('click');
+    await wrapper.find('[data-testid="submit"]').trigger('click');
+    await flushPromises();
+
+    expect(mocks.push).toHaveBeenCalledWith({
+      name: 'ConvergenceTasks',
+      params: { customerId: 'customer-1', clusterId: 'cluster-1', releaseId: 'definition-1' },
+    });
+  });
+
+  it('does not navigate when the reject fails', async () => {
+    mocks.editor.reject.mockResolvedValue(false);
+    const wrapper = mountWithActions();
+    await flushPromises();
+    await wrapper.find('[data-testid="reject"]').trigger('click');
+    await wrapper.find('[data-testid="submit"]').trigger('click');
+    await flushPromises();
+
+    expect(mocks.push).not.toHaveBeenCalled();
+  });
+
+  it('navigates to the convergence tasks after a successful discard', async () => {
+    const wrapper = mountWithActions();
+    await flushPromises();
+    await wrapper.find('[data-testid="discard"]').trigger('click');
+    const confirm = wrapper.findAll('button').find((b) => b.text() === '确认丢弃');
+    expect(confirm, 'the discard confirmation must be rendered').toBeTruthy();
+    await confirm!.trigger('click');
+    await flushPromises();
+
+    expect(mocks.push).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'ConvergenceTasks' }),
+    );
   });
 });
