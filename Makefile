@@ -493,6 +493,22 @@ REQS_RESOLVE = if [ -n "$$REQS_DIR" ]; then \
 		else REQS="$$REQS_DIR"; fi; \
 	else REQS="$$(find . -path '*/Requirements/REQ-*.md' 2>/dev/null)"; fi
 
+# TASKS_DIR points at the vault Tasks directory (or a whitespace-separated file
+# list). It is derived from REQS_DIR (the sibling Tasks directory) when unset, so
+# a vault run only has to pass REQS_DIR.
+TASKS_DIR ?=
+TASKS_RESOLVE = if [ -n "$$TASKS_DIR" ]; then \
+		if [ -d "$$TASKS_DIR" ]; then TASKS="$$(ls "$$TASKS_DIR"/TASK-*.md 2>/dev/null)"; \
+		else TASKS="$$TASKS_DIR"; fi; \
+	elif [ -n "$$REQS_DIR" ] && [ -d "$$REQS_DIR/../Tasks" ]; then TASKS="$$(ls "$$REQS_DIR/../Tasks"/TASK-*.md 2>/dev/null)"; \
+	else TASKS="$$(find . -path '*/Tasks/TASK-*.md' 2>/dev/null)"; fi
+
+# ALLOW_UNVERIFIED_TASKS=1 downgrades check-tasks' UNVERIFIED findings (a PR
+# whose merge cannot be proven because gh is unavailable and the local git
+# history does not name it) from fatal to advisory. It never downgrades a ledger
+# contradiction.
+ALLOW_UNVERIFIED_TASKS ?=
+
 .PHONY: check-reqs
 check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
 	@$(REQS_RESOLVE); \
@@ -526,6 +542,29 @@ check-error-codes: ## Check that every error code an AC asserts is emittable (TA
 .PHONY: check-migrations
 check-migrations: ## Static gate: migration numbering is contiguous and every version has up+down (REQ-008 §8-19)
 	$(GO) test -race -count=1 -run TestMigrationVersionsAreContinuousAndPaired ./migrations/
+
+.PHONY: check-schema-parity
+check-schema-parity: ## Dual-engine parity gate: SQLite inline DDL vs PostgreSQL migrations, table+column+type diff (D-ε/ε-1)
+	$(GO) run ./cmd/schemaparity/ -migrations migrations
+
+.PHONY: check-tasks
+check-tasks: ## Ledger↔git gate: every done/closed card must be merged with a PR that exists in git (D-η/η-1)
+	@$(TASKS_RESOLVE); \
+	if [ -z "$$TASKS" ]; then \
+		if [ "$${ALLOW_NO_REQS:-}" = "1" ]; then \
+			printf "$(YELLOW)SKIP check-tasks: no TASK documents found (ALLOW_NO_REQS=1)$(NC)\n"; \
+		else \
+			printf "$(RED)FAIL check-tasks: no TASK documents found — set TASKS_DIR (or REQS_DIR) to the vault project directory, or ALLOW_NO_REQS=1 to skip explicitly$(NC)\n"; exit 1; \
+		fi; \
+	else \
+		gitlog="$$(mktemp)"; ghprs="$$(mktemp)"; \
+		trap 'rm -f "$$gitlog" "$$ghprs"' EXIT INT TERM; \
+		git log --all --format='%H%x09%s' > "$$gitlog"; \
+		if command -v gh >/dev/null 2>&1; then \
+			gh pr list --state all --limit 1000 --json number,state,mergeCommit > "$$ghprs" 2>/dev/null || : > "$$ghprs"; \
+		fi; \
+		$(GO) run ./cmd/taskcheck/ -git-log "$$gitlog" -gh-prs "$$ghprs" $(if $(filter 1,$(ALLOW_UNVERIFIED_TASKS)),-allow-unverified,) $$TASKS; \
+	fi
 
 .PHONY: vulncheck
 vulncheck: ## Scan the module against the Go vulnerability database (REQ-008 §8-8)
@@ -579,7 +618,7 @@ test-operator-image-sdk-only: ## Run operator image SDK-only gate (REQ-061)
 			--policy imagecheck.operator.yaml \
 			--dockerfile deploy/docker/Dockerfile.operator
 .PHONY: quality
-quality: sdk-check test-coverage lint check-reqs check-error-codes check-licenses check-docs check-config-keys check-migrations check-probes api-check lint-proto ## Full quality gate run
+quality: sdk-check test-coverage lint check-reqs check-error-codes check-tasks check-schema-parity check-licenses check-docs check-config-keys check-migrations check-probes api-check lint-proto ## Full quality gate run
 
 .PHONY: quality-vault
 quality-vault: ## `make quality` that REQUIRES the vault REQ documents (fails when REQS_DIR is unset)
