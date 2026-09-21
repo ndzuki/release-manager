@@ -743,3 +743,39 @@ func TestCheck_IgnoresRetractedStruckThroughCriteria(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, result.Violations)
 }
+
+// TASK-159: a line that merely MENTIONS an AC id is prose (a deferral note, a
+// change record), not a malformed criterion. Only a line that IS a criterion --
+// it starts with an AC id -- is flagged when it lacks the checklist form.
+// Restoring acceptanceMarkerRe in isAcceptanceCandidate makes this test fail.
+func TestCheck_DoesNotFlagProseThatMentionsAnAcceptanceId(t *testing.T) {
+	t.Parallel()
+
+	note := writeTemp(t, `## 目标
+无。
+
+## 验收标准
+- [ ] AC-910-01 Given 渲染结果含 Secret，When 持久化，Then 仅摘要无 data。
+  - **当前不可达，已显式延后**：后半段依赖 AC-910-02 的守卫，结构上不可达。
+
+## 非目标
+无。
+`)
+	result, err := Check(note)
+	require.NoError(t, err)
+	assert.Empty(t, result.Violations, "a note mentioning an AC id is not a criterion")
+
+	bad := writeTemp(t, `## 目标
+无。
+
+## 验收标准
+- AC-910-03 Given x，When y，Then z。
+
+## 非目标
+无。
+`)
+	badResult, err := Check(bad)
+	require.NoError(t, err)
+	require.NotEmpty(t, badResult.Violations, "a criterion without the checklist form is still flagged")
+	assert.Contains(t, badResult.Violations[0].Message, "must be an AC-XXX-NN checklist item")
+}

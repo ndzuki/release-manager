@@ -106,9 +106,8 @@ var (
 	// The vault writes acceptance ids in bold (`- [x] **AC-077-01** Given ...`),
 	// so the markers are optional: requiring the bare form flagged 117 findings
 	// that were all formatting, not missing criteria (TASK-159).
-	acceptanceRe       = regexp.MustCompile(`^-\s*\[[ xX]\]\s+\*{0,2}AC-\d{3}-\d{2}\*{0,2}(?:\s|:|$)`)
-	acceptanceMarkerRe = regexp.MustCompile(`(?i)AC-[A-Z0-9-]+`)
-	checkboxRe         = regexp.MustCompile(`^(?:[-*+]\s*)?\[[ xX]\]`)
+	acceptanceRe = regexp.MustCompile(`^-\s*\[[ xX]\]\s+\*{0,2}AC-\d{3}-\d{2}\*{0,2}(?:\s|:|$)`)
+	checkboxRe   = regexp.MustCompile(`^(?:[-*+]\s*)?\[[ xX]\]`)
 	// A checklist item whose acceptance id is wrapped in ~~ (retracted).
 	struckThroughRe = regexp.MustCompile(`^(?:[-*+]\s*)?\[[ xX]\]\s*~~`)
 	givenWhenThenRe = regexp.MustCompile(`(?is)\bgiven\b.*\bwhen\b.*\bthen\b`)
@@ -290,6 +289,12 @@ func validateAcceptance(result *Result, line string, lineNum int) bool {
 	return true
 }
 
+// acceptanceItemRe matches a line that IS an acceptance criterion: it starts
+// with an AC id, optionally after a list marker and bold markers. A line that
+// merely MENTIONS an AC id mid-sentence is prose (a deferral note, a change
+// record), not a malformed criterion.
+var acceptanceItemRe = regexp.MustCompile(`^(?:[-*+]\s+)?\*{0,2}AC-\d{3}-\d{2}`)
+
 func isAcceptanceCandidate(line string) bool {
 	// A blockquote is a note ABOUT the criteria, not a criterion: REQ-010's
 	// "采纳建议 auto" note merely names AC-039-01 and was reported as a
@@ -306,7 +311,7 @@ func isAcceptanceCandidate(line string) bool {
 	if struckThroughRe.MatchString(trimmed) {
 		return false
 	}
-	return acceptanceMarkerRe.MatchString(line) || checkboxRe.MatchString(line)
+	return acceptanceItemRe.MatchString(strings.TrimSpace(line)) || checkboxRe.MatchString(line)
 }
 
 func validateRequiredSections(result *Result) {
