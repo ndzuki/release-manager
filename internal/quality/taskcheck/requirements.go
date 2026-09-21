@@ -27,6 +27,11 @@ type Requirement struct {
 	Status            string
 	Verified          bool
 	HasDeliveryRecord bool
+	// PartialRecord reports that the delivery record states it is incomplete
+	// (its heading carries 部分). A partial record is evidence-in-progress, not
+	// a claim of delivery: REQ-065 documents "10/11 AC 有可复现证据" while two
+	// criteria are still open, and forcing `delivered` there would be a lie.
+	PartialRecord bool
 }
 
 // ParseRequirement reads a REQ card: the frontmatter status/verified fields and
@@ -76,7 +81,10 @@ func CheckRequirements(reqs []Requirement) *Result {
 		}
 		result.Checked++
 
-		if req.HasDeliveryRecord && req.Status != "delivered" {
+		// A record that states it is partial is evidence-in-progress: the gate
+		// requires the partiality to be STATED (not silent), then accepts it for a
+		// REQ that is not yet delivered.
+		if req.HasDeliveryRecord && req.Status != "delivered" && !req.PartialRecord {
 			result.Findings = append(result.Findings, Finding{
 				Path:     req.Path,
 				Kind:     KindDeliveryRecordNotDelivered,
@@ -85,7 +93,7 @@ func CheckRequirements(reqs []Requirement) *Result {
 					req.Status),
 			})
 		}
-		if req.HasDeliveryRecord && !req.Verified {
+		if req.HasDeliveryRecord && !req.Verified && !req.PartialRecord {
 			result.Findings = append(result.Findings, Finding{
 				Path:     req.Path,
 				Kind:     KindDeliveryRecordNotVerified,
@@ -148,6 +156,7 @@ func scanRequirementLine(req *Requirement, line string, state reqScanState) (req
 	case reqInBody:
 		if strings.HasPrefix(trimmed, "## ") && strings.Contains(trimmed, "交付记录") {
 			req.HasDeliveryRecord = true
+			req.PartialRecord = strings.Contains(trimmed, "部分")
 		}
 	}
 	return state, false

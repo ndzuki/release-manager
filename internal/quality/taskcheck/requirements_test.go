@@ -92,3 +92,29 @@ func TestCheckRequirementsSkipsUntrackedRequirements(t *testing.T) {
 	assert.Empty(t, result.Findings)
 	assert.Zero(t, result.Checked)
 }
+
+// A delivery record that STATES it is partial is evidence-in-progress, not a
+// claim of delivery: REQ-065 documents "10/11 AC 有可复现证据" while two
+// criteria are still open. The partiality must be stated -- a record that does
+// not say so is still a violation for a non-delivered REQ. Removing the
+// PartialRecord branch from CheckRequirements makes this test fail.
+func TestCheckRequirementsAcceptsAStatedPartialRecord(t *testing.T) {
+	partial := writeREQ(t, "REQ-908-partial.md",
+		"id: \"908\"\nstatus: accepted\n",
+		"## 交付记录（部分，2026-09-19）—— 10/11 AC 有可复现证据，未达 delivered\n\n| AC | 证据 |\n| --- | --- |\n")
+	req, err := ParseRequirement(partial)
+	require.NoError(t, err)
+	require.True(t, req.HasDeliveryRecord)
+	require.True(t, req.PartialRecord)
+	assert.Empty(t, CheckRequirements([]Requirement{req}).Findings,
+		"a stated-partial record must not be treated as a delivery claim")
+
+	silent := writeREQ(t, "REQ-909-silent.md",
+		"id: \"909\"\nstatus: accepted\n",
+		"## 交付记录\n\n判定：delivered\n")
+	silentReq, err := ParseRequirement(silent)
+	require.NoError(t, err)
+	require.False(t, silentReq.PartialRecord)
+	assert.NotEmpty(t, CheckRequirements([]Requirement{silentReq}).Findings,
+		"a record that does not state partiality still requires delivered + verified")
+}
