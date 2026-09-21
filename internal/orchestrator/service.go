@@ -524,6 +524,7 @@ func (s *Service) CreateOperation(
 	}
 
 	// Transition pending → preflight and launch the coordinator.
+	var launchPreflight bool
 	next, err := operation.Transition(op.Status, operation.EventStartPreflight)
 	if err != nil {
 		s.logger.Error("preflight transition failed", "op_id", op.ID, "err", err)
@@ -534,9 +535,7 @@ func (s *Service) CreateOperation(
 		} else {
 			op.Status = updated.Status
 			op.StateVersion = updated.StateVersion
-			//nolint:contextcheck // preflight must outlive the request context; Runner.Start detaches deliberately (AC-019-03).
-			s.startPreflight(op)
-			s.logger.Info("preflight coordinator launched", "op_id", op.ID)
+			launchPreflight = true
 		}
 	}
 	s.logger.Info("operation created",
@@ -545,7 +544,17 @@ func (s *Service) CreateOperation(
 		"definition", op.ReleaseDefinitionID,
 	)
 
-	return connect.NewResponse(s.toResponse(op, &verifyResult)), nil
+	// Build the response BEFORE launching the coordinator: a synchronous
+	// response must report the state this request CASed the operation to, not a
+	// state the detached goroutine raced to (a rollback's preflight is a single
+	// local artifact check since D-V/V-1, so it can reach queued immediately).
+	response := connect.NewResponse(s.toResponse(op, &verifyResult))
+	if launchPreflight {
+		//nolint:contextcheck // preflight must outlive the request context; Runner.Start detaches deliberately (AC-019-03).
+		s.startPreflight(op)
+		s.logger.Info("preflight coordinator launched", "op_id", op.ID)
+	}
+	return response, nil
 }
 
 // PublishRelease triggers the release pipeline for a definition (skeleton).
