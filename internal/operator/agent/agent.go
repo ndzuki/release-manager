@@ -96,10 +96,6 @@ type Agent struct {
 	// (TASK-099): the agent Pod must not report Ready while its reconnect loop
 	// is between sessions.
 	connected atomic.Bool
-	// heartbeatOnce keeps exactly one heartbeat goroutine per connection
-	// (TASK-098): the cadence arrives with SessionEstablished, and a duplicate
-	// frame must not stack a second ticker.
-	heartbeatOnce sync.Once
 }
 
 // InstallFlags contains operator-wide defaults for INSTALL commands.
@@ -256,6 +252,12 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.logger.Warn("startup workload identity scan failed", "error", err)
 	}
 
+	// TASK-155: the heartbeat guard is per connection, not per Agent. A
+	// long-lived Agent serves many connections (cmd/operator's runAgentLoop
+	// reuses one Agent across reconnects), so a guard held on the Agent would be
+	// consumed by the first connection and silently disable every later one.
+	heartbeats := &heartbeatGate{}
+
 	for {
 		response, err := stream.Receive()
 		if err != nil {
@@ -264,7 +266,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 			return fmt.Errorf("receive operator command: %w", err)
 		}
-		if err := a.handleStreamResponse(ctx, stream, response); err != nil {
+		if err := a.handleStreamResponse(ctx, stream, response, heartbeats); err != nil {
 			return err
 		}
 	}
@@ -272,7 +274,12 @@ func (a *Agent) Run(ctx context.Context) error {
 
 // handleStreamResponse dispatches one gateway frame. A nil return keeps the
 // command loop running.
-func (a *Agent) handleStreamResponse(ctx context.Context, stream Stream, response *operatorv1.CommandStreamResponse) error {
+func (a *Agent) handleStreamResponse(
+	ctx context.Context,
+	stream Stream,
+	response *operatorv1.CommandStreamResponse,
+	heartbeats *heartbeatGate,
+) error {
 	switch {
 	case response.GetCommand() != nil:
 		return a.handleCommand(ctx, stream, response.GetCommand())
@@ -292,7 +299,7 @@ func (a *Agent) handleStreamResponse(ctx context.Context, stream Stream, respons
 		if interval <= 0 {
 			interval = defaultHeartbeatInterval
 		}
-		a.startHeartbeat(ctx, stream, interval)
+		a.startHeartbeat(ctx, stream, interval, heartbeats)
 		return nil
 	case response.GetSessionEvent() != nil:
 		return fmt.Errorf("operator session %s: %s",
@@ -323,11 +330,33 @@ func (a *Agent) sendResyncResponse(ctx context.Context, stream Stream) error {
 // negotiated interval (it always sends SessionEstablished first).
 const defaultHeartbeatInterval = 15 * time.Second
 
-// startHeartbeat sends one Heartbeat frame per interval until the stream
+// heartbeatGate keeps exactly one heartbeat goroutine alive per connection.
+//
+// It is created per Run and must never live on the Agent: a long-lived Agent
+// serves many connections, and a connection-scoped guard that outlives its
+// connection silently disables every later connection's heartbeat (TASK-155:
+// after an orchestrator restart the operator reconnected successfully but
+// stopped reporting liveness, so its session was judged offline — and
+// `ExecuteEmergencyChange` refused it with "operator is offline" — while the
+// command stream itself was still alive).
+type heartbeatGate struct {
+	once sync.Once
+}
+
+// startHeartbeat sends one Heartbeat frame per interval until the connection's
 // context ends. Exactly one goroutine runs per connection: the first
-// SessionEstablished claims it.
-func (a *Agent) startHeartbeat(ctx context.Context, stream Stream, interval time.Duration) {
-	a.heartbeatOnce.Do(func() {
+// SessionEstablished claims it, and a duplicate frame must not stack a second
+// ticker.
+func (a *Agent) startHeartbeat(
+	ctx context.Context,
+	stream Stream,
+	interval time.Duration,
+	heartbeats *heartbeatGate,
+) {
+	if heartbeats == nil {
+		return
+	}
+	heartbeats.once.Do(func() {
 		go func() {
 			ticker := time.NewTicker(interval)
 			defer ticker.Stop()
