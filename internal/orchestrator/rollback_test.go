@@ -36,10 +36,14 @@ func TestRollbackRelease_Success(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 	seedRollbackInventory(t, st)
-	// Preflight runs asynchronously (REQ-019); an active operator keeps the
-	// operation in preflight while the artifact stage awaits its result.
-	// Without one the coordinator fail-closes the operation to a terminal
-	// state, making the transient preflight assertion racy.
+	// Preflight runs asynchronously (REQ-019). An active operator is still
+	// seeded so the coordinator does not fail-closed on stage_unavailable.
+	//
+	// Since D-V/V-1 a rollback's preflight is a single local artifact check, so
+	// the detached coordinator can reach `queued` before this handler returns.
+	// The response is built BEFORE the coordinator is launched, which is what
+	// makes the `preflight` assertion below deterministic (it used to flake in
+	// CI: expected "preflight", actual "queued").
 	require.NoError(t, st.Operators().Create(context.Background(), &store.Operator{
 		ID: "operator-rollback-success", Name: "operator-rollback-success", CustomerID: "cust-001", ClusterID: "cls-001",
 		CertSerial: "serial-rollback-success", Status: store.OperatorActive,

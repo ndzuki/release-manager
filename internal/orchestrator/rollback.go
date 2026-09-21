@@ -208,11 +208,18 @@ func (s *Service) RollbackRelease(
 		} else {
 			op.Status = updated.Status
 			op.StateVersion = updated.StateVersion
+			// Build the response BEFORE launching the coordinator: a synchronous
+			// response must report the state this request CASed the operation to,
+			// not a state the detached goroutine raced to. A rollback's preflight
+			// is a single local artifact check (D-V/V-1), so the coordinator can
+			// reach `queued` in microseconds and used to win this race in CI.
+			response := rollbackResponse(op)
 			// The rollback path has no pre-created first dispatch row
 			// (CreateIdempotent, not the UOW) — the coordinator creates the
 			// artifact command on demand (D-87).
 			//nolint:contextcheck // preflight must outlive the request context; Runner.Start detaches deliberately (AC-019-03).
 			s.startPreflight(op)
+			return response, nil
 		}
 	}
 
