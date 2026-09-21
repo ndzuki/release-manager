@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,17 +26,26 @@ func pullStageCommand() *operatorv1.Command {
 	}
 }
 
-// TASK-114 AC 2: a stage that cannot run fails closed. The ordinary execution
-// path treats a disabled pull as "nothing to check" because it is a gate on the
-// way to a release write; a runtime_pull *stage* exists to check, so a disabled
-// executor must not report a pass it did not earn.
-func TestRuntimePullStageFailsClosedWhenPullIsDisabled(t *testing.T) {
+// ADR-025 (Plan A), superseding TASK-114 AC 2: a stage that cannot run must not
+// report a PASS, but it reports skipped rather than failing. The distinction is
+// what lets the control plane block on a stage that ran and failed (REQ-048)
+// while still allowing a cluster that has the capability disabled.
+func TestRuntimePullStageReportsSkippedWhenPullIsDisabled(t *testing.T) {
 	// A disabled executor with no prober: Run returns ErrPullDisabled.
 	executor := NewRuntimePullStageExecutor(preflight.NewRuntimePullExecutor(nil, preflight.RuntimePullConfig{Enabled: false}), nil)
 
-	_, err := executor.ExecuteStage(context.Background(), pullStageCommand())
-	require.Error(t, err, "a stage that did not run must not report success")
-	assert.Contains(t, err.Error(), "runtime pull stage")
+	result, err := executor.ExecuteStage(context.Background(), pullStageCommand())
+	require.NoError(t, err, "disabled is not a failure (ADR-025)")
+
+	var decoded struct {
+		Status string `json:"status"`
+		Detail string `json:"detail"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(result), &decoded))
+	// The control plane's StageStatus value; literal here because the
+	// operator package must not import the orchestrator's preflight package.
+	assert.Equal(t, "skipped", decoded.Status)
+	assert.Equal(t, "runtime_pull_disabled", decoded.Detail)
 }
 
 // A nil pull executor is a configuration error, not a silent pass.

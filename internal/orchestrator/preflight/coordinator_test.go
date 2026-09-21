@@ -649,3 +649,70 @@ func TestCoordinatorRun_CancelFinalizesCancelledLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusPreflight, got.Status)
 }
+
+// ADR-025 (Plan A): runtime_pull is the only statically-optional stage, and
+// "required" is now decided at runtime. A stage that RAN and failed must block
+// even though Required is false; a stage that could not run reports skipped and
+// the pipeline continues. Restoring the old `!stage.Required -> continue`
+// shortcut makes the first test fail.
+func TestCoordinatorRun_OptionalStageThatRanAndFailedBlocks(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	op := seedPreflightFixture(t, st)
+	c := newTestCoordinator(t, st)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() { c.Run(ctx, op); close(done) }()
+
+	for _, stage := range []string{"render", "cluster"} {
+		entry := waitForCommand(t, st, op.ID+":"+stage)
+		require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
+	}
+	pull := waitForCommand(t, st, op.ID+":runtime_pull")
+	require.NoError(t, st.Outbox().UpdateStatus(ctx, pull.ID, store.CommandFailed,
+		`{"status":"failed","code":"runtime_pull_failed","detail":"runtime_pull_failed"}`))
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("coordinator did not finish")
+	}
+
+	_, err := st.Outbox().GetByCommandID(ctx, op.ID+":execute")
+	assert.ErrorIs(t, err, store.ErrNotFound, "a failed runtime_pull must not dispatch the release write")
+
+	got, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusFailed, got.Status)
+}
+
+func TestCoordinatorRun_SkippedOptionalStageContinues(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	op := seedPreflightFixture(t, st)
+	c := newTestCoordinator(t, st)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() { c.Run(ctx, op); close(done) }()
+
+	for _, stage := range []string{"render", "cluster"} {
+		entry := waitForCommand(t, st, op.ID+":"+stage)
+		require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
+	}
+	pull := waitForCommand(t, st, op.ID+":runtime_pull")
+	require.NoError(t, st.Outbox().UpdateStatus(ctx, pull.ID, store.CommandPersisted,
+		`{"status":"skipped","detail":"runtime_pull_disabled"}`))
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("coordinator did not finish")
+	}
+
+	_, err := st.Outbox().GetByCommandID(ctx, op.ID+":execute")
+	require.NoError(t, err, "a skipped stage must not block the release write")
+
+	got, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusQueued, got.Status)
+}
