@@ -1297,12 +1297,43 @@ mgmt_node_connect() {
   fi
 }
 
-# agents_deployed — 1 when every customer cluster runs the operator agent.
+# agents_deployed — 1 when every customer cluster runs the operator agent at
+# the image digest this run recorded in IMAGE_TAGS.
+#
+# Existence alone is not convergence. The operator image is content-addressed
+# (image_record records content-sha256-<hash>, and agents_up pins the applied
+# manifest to that tag), so an existence-only check skipped the re-apply
+# forever once the Deployment existed: a rebuilt operator image never reached
+# the customer clusters while the management plane rolled forward, and every
+# "change operator code, re-run dev-up, observe" loop silently observed the
+# old code (D-iota / iota-1, 2026-09-27 design review). AC-065-02 requires
+# that unchanged images are not rebuilt, re-pushed or re-applied; it does not
+# license skipping a changed one.
+#
+# When this run recorded no operator digest (a standalone `dev-seed` never
+# runs images_up) there is nothing to compare against, so the historical
+# existence-only semantics are kept rather than re-applying an unpinned
+# manifest.
 agents_deployed() {
-  local cluster
+  local cluster want_digest image
+  want_digest="${IMAGE_TAGS[operator]:-}"
   for cluster in "${CUSTOMER_CLUSTERS[@]}"; do
-    if ! customer_kubectl "$cluster" -n release-manager-customer get deployment operator >/dev/null 2>&1; then
+    # A real cluster never answers this probe with an empty string: an absent
+    # Deployment exits non-zero and a present one always carries an image.
+    # Treat "no image reported" as not deployed so the caller converges
+    # instead of trusting a probe it could not read.
+    if ! image="$(customer_kubectl "$cluster" -n release-manager-customer get deployment operator \
+      -o 'jsonpath={.spec.template.spec.containers[*].image}' 2>/dev/null)"; then
       return 1
+    fi
+    if [ -z "$image" ]; then
+      return 1
+    fi
+    if [ -n "$want_digest" ]; then
+      case "$image" in
+        *"release-operator:content-sha256-$want_digest"*) ;;
+        *) return 1 ;;
+      esac
     fi
   done
   return 0
@@ -1311,8 +1342,9 @@ agents_deployed() {
 # agents_up — deploy the agent-only overlay to every customer cluster and
 # inject the per-cluster secrets: the single-use enrollment token (generated
 # by devseed in the enrollment phase) and the management gateway CA (from the
-# orchestrator's /data/gateway-ca.crt). Idempotent: already-deployed agents
-# are left untouched (AC-065-02).
+# orchestrator's /data/gateway-ca.crt). Idempotent: an already-deployed agent
+# is left untouched only while it already runs this run's operator digest;
+# a changed digest is re-applied (AC-065-02).
 agents_up() {
   log "[6.5/7] customer agents ................. "
   if agents_deployed; then

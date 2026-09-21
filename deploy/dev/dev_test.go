@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -161,6 +162,31 @@ func writeShim(t *testing.T, dir, name, body string) {
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// dockerIPProbeShim returns the docker shim fragment that answers the
+// per-customer-network IP probes agents_up performs: the management node and
+// the registry are bridged into every customer network, and the agent overlay
+// resolves its operator-gateway / registry hostAliases from those addresses.
+//
+// A docker shim that models "no managed object exists" must still answer these
+// two probes. agents_up reads them from the cluster it is deploying into, and
+// a fake that exits non-zero there aborts the stage under `set -e` before it
+// can report anything — which is exactly how the agents_up deploy path stayed
+// untested (D-iota / iota-1, 2026-09-27 design review).
+//
+// The fragment matches only the network-IP format string, so unrelated
+// `--format` probes (the registry label/volume/state probes) keep their own
+// answers.
+func dockerIPProbeShim() string {
+	return `if [ "$1" = "container" ] && [ "$2" = "inspect" ] && [ "$3" = "--format" ] && [[ "$4" == *NetworkSettings.Networks* ]]; then
+  case "$5" in
+    k3d-release-manager-control-server-0) printf '172.18.0.2\n'; exit 0 ;;
+    k3d-release-manager-registry) printf '172.18.0.3\n'; exit 0 ;;
+  esac
+  exit 1
+fi
+`
 }
 
 // runDev runs deploy/dev/dev.sh with the given env; returns combined output.
@@ -688,9 +714,11 @@ func TestClusterCreateInjectsProxyEnv(t *testing.T) {
 	happyShims(t, binDir)
 	// Record docker invocations so the build proxy injection can be
 	// asserted. manifest inspect fails (registry empty) so every service
-	// actually goes through docker build; build/push pass through.
+	// actually goes through docker build; build/push pass through. The
+	// network-IP probes still answer: agents_up resolves the customer-agent
+	// hostAliases from them.
 	writeShim(t, binDir, "docker",
-		"#!/usr/bin/env bash\nif [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"network\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
+		"#!/usr/bin/env bash\n"+dockerIPProbeShim()+"if [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"network\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
 	// GOPROXY is explicitly cleared so dev.sh takes the `go env GOPROXY`
 	// fallback path and the shim's fixed output is asserted — otherwise an
 	// inherited host GOPROXY (e.g. goproxy.cn) makes the assertion
@@ -782,7 +810,7 @@ func TestClusterCreateInjectsReachableProxyEnv(t *testing.T) {
 	fakeK3d(t, binDir, stateDir)
 	happyShims(t, binDir)
 	writeShim(t, binDir, "docker",
-		"#!/usr/bin/env bash\nif [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"network\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
+		"#!/usr/bin/env bash\n"+dockerIPProbeShim()+"if [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"network\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
 	env = append(env, "HTTP_PROXY=http://proxy.corp.internal:3128", "HTTPS_PROXY=http://proxy.corp.internal:3128",
 		"GOPROXY=", "DEV_DOCKER_MIRROR=docker.1ms.run/library/")
 
@@ -979,6 +1007,21 @@ exit 0
 	writeShim(t, binDir, "pg_dump", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "pg_restore", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "psql", "#!/usr/bin/env bash\nexit 0\n")
+	// reset-data rebuilds the customer clusters and then really deploys the
+	// agents, so the dev mTLS CA a prior dev-up generated must be on disk
+	// (agents_up copies it into the agent overlay's gateway-CA secret). The
+	// fixture never generates it: reset-data, like the real target, assumes
+	// dev-up already did.
+	caDir := filepath.Join(stateDir, "dev-ca")
+	if err := os.MkdirAll(caDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(caDir, "ca.key"), []byte("fake-ca-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(caDir, "ca.crt"), []byte("fake-ca-cert"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	env = append(env, "CONFIRM=1")
 
 	out, err := runDev(t, env, "reset-data")
@@ -1171,6 +1214,194 @@ printf 'apiVersion: v1\nkind: Pod\nmetadata:\n  name: operator\nspec:\n  hostAli
 	}
 }
 
+// resetDataAgentsEnv prepares a reset-data run whose interesting stage is
+// agents_up. reset-data is the flow that reaches agents_up with IMAGE_TAGS
+// populated (it calls images_up first), so the operator's content digest is
+// available for the skip decision.
+//
+// The kubectl shim answers the operator Deployment probe from
+// $DEV_DATA_DIR/operator-image.txt — absent file means "no Deployment" — and
+// records every non-empty `apply -f -` in $DEV_DATA_DIR/agent-applies.log. The
+// empty `kubectl create secret | kubectl apply -f -` pipelines are not
+// recorded, exactly like a real cluster.
+func resetDataAgentsEnv(t *testing.T) (stateDir string, env []string) {
+	t.Helper()
+	stateDir = t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	writeShim(t, binDir, "go", `#!/usr/bin/env bash
+if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
+if [[ "$*" == *"-print-fixture-version"* ]]; then printf 'v22\n'; exit 0; fi
+if [[ "$*" == *"--stop-after enrollment"* ]]; then
+  mkdir -p "$DEV_DATA_DIR/dev-enrollment-tokens"
+  for c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed; do
+    printf 'fake-token\n' > "$DEV_DATA_DIR/dev-enrollment-tokens/$c.token"
+  done
+fi
+exit 0
+`)
+	writeShim(t, binDir, "pg_dump", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "pg_restore", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "psql", "#!/usr/bin/env bash\nexit 0\n")
+	// The customer-agent overlay carries the operator image under its static
+	// `:dev` tag; agents_up substitutes the recorded content digest into it.
+	writeShim(t, binDir, "kustomize", `#!/usr/bin/env bash
+cat <<'YAML'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: operator
+spec:
+  template:
+    spec:
+      containers:
+      - name: operator
+        image: localhost:5001/release-operator:dev
+      hostAliases:
+      - ip: "172.18.0.2"
+        hostnames:
+        - operator-gateway.dev.release-manager.local
+      - ip: "172.18.0.3"
+        hostnames:
+        - registry.dev.release-manager.local
+YAML
+`)
+	writeShim(t, binDir, "kubectl", `#!/usr/bin/env bash
+for a in "$@"; do
+  if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
+done
+if [[ "$*" == *"get deployment operator"* ]]; then
+  if [ -s "$DEV_DATA_DIR/operator-image.txt" ]; then cat "$DEV_DATA_DIR/operator-image.txt"; exit 0; fi
+  exit 1
+fi
+if [ "$1" = "apply" ] && [ "$2" = "-f" ] && [ "$3" = "-" ]; then
+  if IFS= read -r first_line; then
+    cluster="$(basename "${KUBECONFIG:-unknown}" .yaml)"
+    mkdir -p "$DEV_DATA_DIR/applied"
+    printf '%s\n' "$first_line" > "$DEV_DATA_DIR/applied/$cluster.yaml"
+    cat >> "$DEV_DATA_DIR/applied/$cluster.yaml"
+    printf '%s\n' "$cluster" >> "$DEV_DATA_DIR/agent-applies.log"
+  fi
+  exit 0
+fi
+exit 0
+`)
+	// A prior dev-up generated the dev mTLS CA that agents_up copies into the
+	// agent overlay's gateway-CA secret.
+	caDir := filepath.Join(stateDir, "dev-ca")
+	if err := os.MkdirAll(caDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(caDir, "ca.key"), []byte("fake-ca-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(caDir, "ca.crt"), []byte("fake-ca-cert"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return stateDir, append(env, "CONFIRM=1")
+}
+
+// agentApplyCount counts the customer-agent manifest applies recorded by the
+// kubectl shim.
+func agentApplyCount(t *testing.T, stateDir string) int {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(stateDir, "agent-applies.log"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatal(err)
+	}
+	return len(strings.Fields(string(data)))
+}
+
+// operatorDigestFromApplied reads the operator image digest agents_up pinned
+// into the applied agent manifest.
+func operatorDigestFromApplied(t *testing.T, stateDir string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(stateDir, "applied", "dev-customer-a-direct.yaml"))
+	if err != nil {
+		t.Fatalf("applied agent manifest missing: %v", err)
+	}
+	match := regexp.MustCompile(`release-operator:content-sha256-([0-9a-f]{64})`).FindStringSubmatch(string(data))
+	if match == nil {
+		t.Fatalf("applied agent manifest is not pinned to an operator digest:\n%s", data)
+	}
+	return match[1]
+}
+
+// TestAgentsUpSkipsOnlyWhenOperatorImageDigestMatches is the regression for
+// D-iota / iota-1: agents_deployed used to skip whenever the operator
+// Deployment existed, so a rebuilt operator image never reached the customer
+// clusters while the management plane rolled forward — every "change operator
+// code, re-run dev-up, observe" loop silently observed the old code.
+//
+// reset-data runs images_up before agents_up, so IMAGE_TAGS carries the
+// operator's content digest and the skip decision can be driven in both
+// directions by a kubectl shim that reports the Deployment's image:
+//
+//	phase 1  Deployment absent                 -> agents_up applies
+//	phase 2  Deployment at the recorded digest -> agents_up skips
+//	phase 3  Deployment at a stale digest      -> agents_up applies again
+//
+// Phase 3 is the negative control: restore the existence-only check and it
+// reports "already deployed", so no apply is recorded and the phase fails.
+func TestAgentsUpSkipsOnlyWhenOperatorImageDigestMatches(t *testing.T) {
+	stateDir, env := resetDataAgentsEnv(t)
+
+	// Phase 1: no Deployment yet -> the agents must be deployed.
+	out, err := runDev(t, env, "reset-data")
+	if err != nil {
+		t.Fatalf("reset-data (phase 1) failed:\n%s", out)
+	}
+	if got := agentApplyCount(t, stateDir); got != len(customerClustersForTest) {
+		t.Fatalf("phase 1: expected %d agent manifest applies, got %d", len(customerClustersForTest), got)
+	}
+	digest := operatorDigestFromApplied(t, stateDir)
+
+	// Phase 2: the Deployment already runs this run's digest -> skip.
+	if err := os.WriteFile(filepath.Join(stateDir, "operator-image.txt"),
+		[]byte("localhost:5001/release-operator:content-sha256-"+digest+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(stateDir, "agent-applies.log")); err != nil {
+		t.Fatal(err)
+	}
+	out, err = runDev(t, env, "reset-data")
+	if err != nil {
+		t.Fatalf("reset-data (phase 2) failed:\n%s", out)
+	}
+	if !strings.Contains(out, "customer agents (already deployed)") {
+		t.Fatalf("phase 2: a matching digest must skip the agent deploy:\n%s", out)
+	}
+	if got := agentApplyCount(t, stateDir); got != 0 {
+		t.Fatalf("phase 2: expected no agent manifest applies, got %d", got)
+	}
+
+	// Phase 3 (negative control): a stale digest -> re-apply.
+	if err := os.WriteFile(filepath.Join(stateDir, "operator-image.txt"),
+		[]byte("localhost:5001/release-operator:content-sha256-"+strings.Repeat("0", 64)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err = runDev(t, env, "reset-data")
+	if err != nil {
+		t.Fatalf("reset-data (phase 3) failed:\n%s", out)
+	}
+	if got := agentApplyCount(t, stateDir); got != len(customerClustersForTest) {
+		t.Fatalf("phase 3: a stale operator image must be re-applied (%d applies recorded):\n%s",
+			got, out)
+	}
+	if again := operatorDigestFromApplied(t, stateDir); again != digest {
+		t.Fatalf("phase 3: re-applied manifest pinned %s, want %s", again, digest)
+	}
+}
+
+// customerClustersForTest mirrors dev.sh's CUSTOMER_CLUSTERS.
+var customerClustersForTest = []string{
+	"dev-customer-a-direct", "dev-customer-a-cache", "dev-customer-b-replicated", "dev-customer-b-mixed",
+}
+
 // TestSeedLegRetriesTransientDevseedFailure locks the run_seed_leg retry
 // contract (real smoke 2026-08-27: `get init status: unavailable: unexpected
 // EOF` — a fresh seed connection routed to a just-terminated pod right after
@@ -1319,7 +1550,7 @@ func TestCleanCheckoutCreatesDataDirBeforeDiskGate(t *testing.T) {
 	dataDir := filepath.Join(stateDir, "data")
 	env = append(env, "DEV_DATA_DIR="+dataDir)
 	fakeK3d(t, binDir, stateDir)
-	writeShim(t, binDir, "docker", "#!/usr/bin/env bash\nfor a in \"$@\"; do if [ \"$a\" = \"inspect\" ]; then exit 1; fi; done\nexit 0\n")
+	writeShim(t, binDir, "docker", "#!/usr/bin/env bash\n"+dockerIPProbeShim()+"for a in \"$@\"; do if [ \"$a\" = \"inspect\" ]; then exit 1; fi; done\nexit 0\n")
 	writeShim(t, binDir, "curl", `#!/usr/bin/env bash
 if [[ "$*" == *"/version"* ]]; then printf '{"version":"fixture-v2"}\n'; exit 0; fi
 exit 0
@@ -1718,6 +1949,13 @@ func TestRegistryRelabelAdoptsWhitelistedLegacyContainer(t *testing.T) {
 	// label (label probe fails), but exposes image/volume/state probes. Any
 	// other container name reports absent so the cluster conflict gates pass.
 	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "container" ] && [ "$2" = "inspect" ] && [ "$3" = "--format" ] && [[ "$4" == *NetworkSettings.Networks* ]]; then
+  case "$5" in
+    k3d-release-manager-control-server-0) printf '172.18.0.2\n'; exit 0 ;;
+    k3d-release-manager-registry) printf '172.18.0.3\n'; exit 0 ;;
+  esac
+  exit 1
+fi
 if [ "$1" = "container" ] && [ "$2" = "create" ]; then
   printf '%s\n' "$*" >> "$DEV_DATA_DIR/docker-create.log"
   exit 0
@@ -2536,6 +2774,13 @@ func TestBuildParallelismSequentialParallelInvalid(t *testing.T) {
 		fakeK3d(t, binDir, stateDir)
 		happyShims(t, binDir)
 		writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "container" ] && [ "$2" = "inspect" ] && [ "$3" = "--format" ] && [[ "$4" == *NetworkSettings.Networks* ]]; then
+  case "$5" in
+    k3d-release-manager-control-server-0) printf '172.18.0.2\n'; exit 0 ;;
+    k3d-release-manager-registry) printf '172.18.0.3\n'; exit 0 ;;
+  esac
+  exit 1
+fi
 if [ "$1" = "manifest" ] && [ "$2" = "inspect" ]; then exit 1; fi
 if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then exit 1; fi
 if [ "$1" = "network" ] && [ "$2" = "inspect" ]; then exit 1; fi
