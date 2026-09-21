@@ -410,7 +410,8 @@ func (s *operatorSvc) buildStageDispatcher(
 		string(orchestratorpreflight.StageRender): operator.NewRenderStageExecutor(
 			engine, s.registryPlainHTTP, logger),
 		string(orchestratorpreflight.StageCluster): operator.NewClusterStageExecutor(
-			engine, operatorpreflight.NewDryRunExecutor(mapper), s.registryPlainHTTP, logger),
+			engine, operatorpreflight.NewDryRunExecutor(mapper), operator.NewKubeNamespaceEnsurer(kubeClient),
+			s.registryPlainHTTP, logger),
 		string(orchestratorpreflight.StageRuntimePull): operator.NewRuntimePullStageExecutor(pull, logger),
 	}), nil
 }
