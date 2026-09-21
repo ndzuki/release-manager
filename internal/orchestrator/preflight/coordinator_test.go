@@ -82,9 +82,9 @@ func newTestCoordinator(t *testing.T, st *sqlitestore.Store) *Coordinator {
 
 // seedRollbackFixture seeds the same preflight fixture as
 // seedPreflightFixture but with a ROLLBACK operation, so the coordinator can
-// be driven through the same stage pipeline (REQ-090: ROLLBACK executes real
-// helm rollback in the stage pipeline; casQueued then drives the terminal
-// chain deterministically, mirroring INSTALL).
+// be driven through the same stage pipeline. TASK-114/U-1: the stages are
+// checks; the real helm rollback is dispatched as a separate non-stage
+// :execute command after they pass.
 func seedRollbackFixture(t *testing.T, st *sqlitestore.Store) *store.Operation {
 	t.Helper()
 	ctx := context.Background()
@@ -127,8 +127,23 @@ func waitForCommand(t *testing.T, st *sqlitestore.Store, commandID string) *stor
 	return entry
 }
 
+// driveOperatorStages drives the three operator-side preflight stages
+// (render/cluster/runtime_pull) to a passed result. The artifact stage is
+// consumed by the coordinator itself, so it has no operator command to drive
+// (TASK-114/U-1).
+func driveOperatorStages(t *testing.T, st *sqlitestore.Store, opID string) {
+	t.Helper()
+	for _, stage := range []string{"render", "cluster", "runtime_pull"} {
+		entry := waitForCommand(t, st, opID+":"+stage)
+		require.NoError(t, st.Outbox().UpdateStatus(
+			context.Background(), entry.ID, store.CommandPersisted, `{"status":"passed"}`))
+	}
+}
+
 // D-87: the artifact command pre-created by the operation creation transaction
 // is consumed, not duplicated, and restarts stay idempotent on the identity.
+// TASK-114/U-1: the artifact row is a durable record — the coordinator consumes
+// it locally and the release write is a separate non-stage :execute command.
 func TestCoordinatorRun_ConsumesPreCreatedArtifactDispatch(t *testing.T) {
 	st := sqlitestore.OpenTest(t)
 	op := seedPreflightFixture(t, st)
@@ -146,12 +161,8 @@ func TestCoordinatorRun_ConsumesPreCreatedArtifactDispatch(t *testing.T) {
 	done := make(chan struct{})
 	go func() { c.Run(ctx, op); close(done) }()
 
-	// Drive the artifact stage through the pre-created row, then the rest.
-	require.NoError(t, st.Outbox().UpdateStatus(ctx, first.ID, store.CommandPersisted, `{"status":"passed"}`))
-	for _, stage := range []string{"render", "cluster", "runtime_pull"} {
-		entry := waitForCommand(t, st, op.ID+":"+stage)
-		require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
-	}
+	// The artifact stage is consumed locally; the operator stages follow.
+	driveOperatorStages(t, st, op.ID)
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
@@ -162,9 +173,39 @@ func TestCoordinatorRun_ConsumesPreCreatedArtifactDispatch(t *testing.T) {
 	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM outbox WHERE command_id = ?`, op.ID+":artifact").Scan(&count))
 	assert.Equal(t, 1, count, "the pre-created dispatch must be consumed, not duplicated")
 
+	// The artifact record is closed as succeeded, and the release write is a
+	// separate command that carries no stage.
+	artifact, err := st.Outbox().GetByCommandID(ctx, op.ID+":artifact")
+	require.NoError(t, err)
+	assert.Equal(t, store.CommandSucceeded, artifact.Status, "the record-only artifact row is closed by the coordinator")
+
+	execute, err := st.Outbox().GetByCommandID(ctx, op.ID+":execute")
+	require.NoError(t, err, "the release write must be dispatched after preflight passes")
+	payload, err := UnmarshalCommandPayload(execute.Payload)
+	require.NoError(t, err)
+	assert.Empty(t, payload.Stage, "the release write must not carry a preflight stage")
+
 	got, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)
-	assert.Equal(t, store.StatusSucceeded, got.Status, "INSTALL preflight passed == install executed; operation reaches succeeded")
+	assert.Equal(t, store.StatusQueued, got.Status, "preflight passed == the release write is queued, not already done")
+}
+
+// TASK-114/U-1: the artifact dispatch row is a durable record, never a
+// deliverable command. Delivering it would send an operator a stage=artifact
+// command, which before this change ran a real Helm install for it.
+func TestCoordinatorDispatch_ArtifactRowIsRecordOnly(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	op := seedPreflightFixture(t, st)
+	c := newTestCoordinator(t, st)
+	ctx := context.Background()
+
+	entry, err := c.Dispatch(ctx, op, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, op.ID+":artifact", entry.CommandID)
+	assert.Empty(t, entry.OperatorID, "the artifact row must not be dispatchable to an operator")
+
+	_, err = st.Outbox().GetNextPending(ctx, "operator-preflight")
+	assert.ErrorIs(t, err, store.ErrNotFound, "the record-only artifact row must never be delivered")
 }
 
 // D-87 restart replay: a Run over an outbox that already carries the
@@ -190,10 +231,7 @@ func TestCoordinatorRun_RestartReusesExistingDispatches(t *testing.T) {
 	go func() { c.Run(ctx, op); close(done) }()
 
 	// Drive all stages through the pre-existing rows.
-	for _, stage := range []string{"artifact", "render", "cluster", "runtime_pull"} {
-		entry := waitForCommand(t, st, op.ID+":"+stage)
-		require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
-	}
+	driveOperatorStages(t, st, op.ID)
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
@@ -208,7 +246,7 @@ func TestCoordinatorRun_RestartReusesExistingDispatches(t *testing.T) {
 
 	got, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)
-	assert.Equal(t, store.StatusSucceeded, got.Status, "INSTALL preflight passed == install executed; operation reaches succeeded")
+	assert.Equal(t, store.StatusQueued, got.Status, "resumed run dispatches the release write instead of finalizing it")
 }
 
 // AC-019-02: a required stage with no available operator fail-closes the
@@ -231,11 +269,13 @@ func TestCoordinatorRun_StageUnavailableFailsClosed(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusFailed, got.Status, "AC-019-02: fail closed with no operator")
 
-	// The lifecycle records the failure and the attempted stage.
+	// The lifecycle records the failure and the attempted stage. The artifact
+	// stage is consumed locally, so the first operator stage is the one that
+	// reports the missing operator.
 	pl, err := st.PreflightLifecycles().GetByOperationID(ctx, op.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "failed", pl.Overall)
-	assert.Equal(t, "artifact", pl.Stages)
+	assert.Equal(t, "artifact,render", pl.Stages)
 
 	// TASK-149 / AC-056-03: the stage results are persisted on the operation, not
 	// only logged, so the detail page can name the failed stage and its error.
@@ -306,10 +346,9 @@ func TestCoordinatorRun_StageTimeoutCancelsOperation(t *testing.T) {
 	done := make(chan struct{})
 	go func() { c.Run(ctx, op); close(done) }()
 
-	// Drive artifact to passed, then let render time out (short StageDef).
-	entry := waitForCommand(t, st, op.ID+":artifact")
-	require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
-	entry = waitForCommand(t, st, op.ID+":render")
+	// The artifact stage is consumed locally; let the render stage time out
+	// (short StageDef).
+	entry := waitForCommand(t, st, op.ID+":render")
 	require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"timeout"}`))
 	select {
 	case <-done:
@@ -337,10 +376,7 @@ func TestCoordinatorRun_AllPassedFinalizesLifecycle(t *testing.T) {
 	done := make(chan struct{})
 	go func() { c.Run(ctx, op); close(done) }()
 
-	for _, stage := range []string{"artifact", "render", "cluster", "runtime_pull"} {
-		entry := waitForCommand(t, st, op.ID+":"+stage)
-		require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
-	}
+	driveOperatorStages(t, st, op.ID)
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
@@ -349,7 +385,16 @@ func TestCoordinatorRun_AllPassedFinalizesLifecycle(t *testing.T) {
 
 	got, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)
-	assert.Equal(t, store.StatusSucceeded, got.Status, "AC-019-04: INSTALL operation CAS to succeeded after install executed")
+	assert.Equal(t, store.StatusQueued, got.Status, "AC-019-04: preflight passed queues the release write; the operation is not terminal yet")
+
+	// TASK-114/U-1: the release write is a separate command that carries no
+	// stage, so the operator runs an INSTALL and never a check.
+	execute, err := st.Outbox().GetByCommandID(ctx, op.ID+":execute")
+	require.NoError(t, err, "the release write must be dispatched")
+	assert.Equal(t, string(store.OperationInstall), execute.OperationType)
+	payload, err := UnmarshalCommandPayload(execute.Payload)
+	require.NoError(t, err)
+	assert.Empty(t, payload.Stage, "the release write must not carry a preflight stage")
 
 	pl, err := st.PreflightLifecycles().GetByOperationID(ctx, op.ID)
 	require.NoError(t, err)
@@ -357,11 +402,14 @@ func TestCoordinatorRun_AllPassedFinalizesLifecycle(t *testing.T) {
 	assert.Equal(t, "artifact,render,dryrun,runtime_pull", pl.Stages, "canonical stage names in execution order")
 }
 
-// AC-090-01: a ROLLBACK operation that passes every preflight stage is driven
-// deterministically queued→running→succeeded by casQueued (INSTALL-symmetric),
-// without depending on the FinishOperation race. The rollback is the
-// execution — stage-1 already ran the real helm rollback and later stages
-// replay under the agent-side replay guard (AC-090-02).
+// AC-090-01: a ROLLBACK operation queues its real helm rollback as a separate
+// command (INSTALL-symmetric). Before TASK-114 the first stage ran the rollback
+// itself and casQueued drove the operation to succeeded without a separate
+// execution; now a stage is a check, so the rollback must be its own non-stage
+// command.
+//
+// A rollback carries no bundle, so it has no chart to render: its stage set is
+// the artifact stage only (D-V / V-1), and the rollback runs as :execute.
 func TestCoordinatorRun_RollbackPassedFinalizesSucceeded(t *testing.T) {
 	st := sqlitestore.OpenTest(t)
 	op := seedRollbackFixture(t, st)
@@ -370,26 +418,41 @@ func TestCoordinatorRun_RollbackPassedFinalizesSucceeded(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() { c.Run(ctx, op); close(done) }()
-
-	for _, stage := range []string{"artifact", "render", "cluster", "runtime_pull"} {
-		entry := waitForCommand(t, st, op.ID+":"+stage)
-		require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
-	}
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("coordinator did not finish")
 	}
 
+	// The chart-dependent stages must not be dispatched for a bundle-less
+	// rollback: they would fail a required stage on an operation with no chart.
+	for _, stage := range []string{"render", "cluster", "runtime_pull"} {
+		_, err := st.Outbox().GetByCommandID(ctx, op.ID+":"+stage)
+		assert.ErrorIs(t, err, store.ErrNotFound,
+			"a bundle-less ROLLBACK must not dispatch the %s stage", stage)
+	}
+
+	execute, err := st.Outbox().GetByCommandID(ctx, op.ID+":execute")
+	require.NoError(t, err, "AC-090-01: ROLLBACK must dispatch its own release write")
+	assert.Equal(t, string(store.OperationRollback), execute.OperationType)
+	payload, err := UnmarshalCommandPayload(execute.Payload)
+	require.NoError(t, err)
+	assert.Empty(t, payload.Stage, "the rollback write must not carry a preflight stage")
+	assert.Equal(t, int64(1), payload.TargetRevision)
+
 	got, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)
-	assert.Equal(t, store.StatusSucceeded, got.Status, "AC-090-01: ROLLBACK preflight passed → casQueued drives queued→running→succeeded without FinishOperation")
+	assert.Equal(t, store.StatusQueued, got.Status, "the rollback write is queued, not already done")
+
+	pl, err := st.PreflightLifecycles().GetByOperationID(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "artifact", pl.Stages, "a bundle-less rollback has only the artifact stage")
 }
 
-// AC-090-01 negative: casQueued must only drive INSTALL/ROLLBACK — an
-// operation of any other type that somehow passes every stage stays queued
-// instead of being mis-driven to a terminal state (ADR-009 legal hops only;
-// no accidental QUEUED→SUCCEEDED direct transition).
+// AC-090-01 negative: only INSTALL/ROLLBACK get a post-preflight release write
+// — an operation of any other type that somehow passes every stage stays queued
+// instead of being mis-dispatched (ADR-009 legal hops only; no accidental
+// QUEUED→SUCCEEDED direct transition).
 func TestCoordinatorRun_NonInstallRollbackTypeStaysQueued(t *testing.T) {
 	st := sqlitestore.OpenTest(t)
 	op := seedRollbackFixture(t, st)
@@ -400,10 +463,7 @@ func TestCoordinatorRun_NonInstallRollbackTypeStaysQueued(t *testing.T) {
 	done := make(chan struct{})
 	go func() { c.Run(ctx, op); close(done) }()
 
-	for _, stage := range []string{"artifact", "render", "cluster", "runtime_pull"} {
-		entry := waitForCommand(t, st, op.ID+":"+stage)
-		require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
-	}
+	driveOperatorStages(t, st, op.ID)
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
@@ -413,9 +473,14 @@ func TestCoordinatorRun_NonInstallRollbackTypeStaysQueued(t *testing.T) {
 	got, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusQueued, got.Status, "non-INSTALL/ROLLBACK type must not be driven past queued")
+
+	_, err = st.Outbox().GetByCommandID(ctx, op.ID+":execute")
+	assert.ErrorIs(t, err, store.ErrNotFound, "a non-INSTALL/ROLLBACK type must not get a release write")
 }
 
 // AC-019-01/06: a required stage failure stops the pipeline and records failed.
+// The operator's stable `detail` code survives into the persisted result, so a
+// fail-closed stage is attributable (TASK-114 AC 4).
 func TestCoordinatorRun_RequiredFailureStopsPipeline(t *testing.T) {
 	st := sqlitestore.OpenTest(t)
 	op := seedPreflightFixture(t, st)
@@ -425,16 +490,21 @@ func TestCoordinatorRun_RequiredFailureStopsPipeline(t *testing.T) {
 	done := make(chan struct{})
 	go func() { c.Run(ctx, op); close(done) }()
 
-	entry := waitForCommand(t, st, op.ID+":artifact")
-	require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandFailed, "artifact_failed: digest mismatch"))
+	// The artifact stage passes locally; the render stage fails closed with the
+	// operator's stable code (the shape the agent now reports for a stage).
+	entry := waitForCommand(t, st, op.ID+":render")
+	require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandFailed,
+		`{"status":"failed","code":"preflight_stage_failed","detail":"preflight_stage_failed"}`))
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("coordinator did not finish")
 	}
 
-	_, err := st.Outbox().GetByCommandID(ctx, op.ID+":render")
+	_, err := st.Outbox().GetByCommandID(ctx, op.ID+":cluster")
 	assert.ErrorIs(t, err, store.ErrNotFound, "AC-019-01: later stages must not run")
+	_, err = st.Outbox().GetByCommandID(ctx, op.ID+":execute")
+	assert.ErrorIs(t, err, store.ErrNotFound, "a failed preflight must not dispatch the release write")
 
 	got, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)
@@ -443,7 +513,21 @@ func TestCoordinatorRun_RequiredFailureStopsPipeline(t *testing.T) {
 	pl, err := st.PreflightLifecycles().GetByOperationID(ctx, op.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "failed", pl.Overall)
-	assert.Equal(t, "artifact", pl.Stages)
+	assert.Equal(t, "artifact,render", pl.Stages)
+
+	stored, err := st.Operations().GetPreflightResult(ctx, op.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	var aggregate struct {
+		Overall     string `json:"overall"`
+		FailedStage string `json:"failed_stage"`
+		ErrorCode   string `json:"error_code"`
+	}
+	require.NoError(t, json.Unmarshal(stored, &aggregate))
+	assert.Equal(t, "failed", aggregate.Overall)
+	assert.Equal(t, "render", aggregate.FailedStage)
+	assert.Equal(t, "preflight_stage_failed", aggregate.ErrorCode,
+		"the operator's stable stage code must survive into the persisted result")
 }
 
 // TestCoordinatorRun_SucceededCommandResultPassesStage locks the operator
@@ -461,14 +545,12 @@ func TestCoordinatorRun_SucceededCommandResultPassesStage(t *testing.T) {
 	done := make(chan struct{})
 	go func() { c.Run(ctx, op); close(done) }()
 
-	// Drive artifact to CommandSucceeded with the operator's helm-shaped JSON.
-	entry := waitForCommand(t, st, op.ID+":artifact")
-	require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandSucceeded,
-		`{"operation_id":"`+op.ID+`","status":"succeeded","release":{"name":"preflight-rel"}}`))
-	// Remaining stages: same succeeded result.
+	// The artifact stage is consumed locally; the operator stages report the
+	// operator's helm-shaped succeeded JSON.
 	for _, stage := range []string{"render", "cluster", "runtime_pull"} {
-		e := waitForCommand(t, st, op.ID+":"+stage)
-		require.NoError(t, st.Outbox().UpdateStatus(ctx, e.ID, store.CommandSucceeded, `{"status":"succeeded"}`))
+		entry := waitForCommand(t, st, op.ID+":"+stage)
+		require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandSucceeded,
+			`{"operation_id":"`+op.ID+`","status":"succeeded","release":{"name":"preflight-rel"}}`))
 	}
 	select {
 	case <-done:
@@ -478,7 +560,9 @@ func TestCoordinatorRun_SucceededCommandResultPassesStage(t *testing.T) {
 
 	got, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)
-	assert.Equal(t, store.StatusSucceeded, got.Status, "all stages passed via succeeded results must succeed the INSTALL operation")
+	assert.Equal(t, store.StatusQueued, got.Status, "all stages passed via succeeded results must queue the release write")
+	_, err = st.Outbox().GetByCommandID(ctx, op.ID+":execute")
+	require.NoError(t, err, "the release write must be dispatched once every stage passed")
 }
 
 // TestCoordinatorRun_StageCommandsCarryBundle locks the stage-command
@@ -501,17 +585,31 @@ func TestCoordinatorRun_StageCommandsCarryBundle(t *testing.T) {
 	done := make(chan struct{})
 	go func() { c.Run(ctx, op); close(done) }()
 
-	// Drive each stage to passed and decode its payload: every command must
-	// carry the bundle (chart_ref + image).
-	for _, stage := range []string{"artifact", "render", "cluster", "runtime_pull"} {
+	// Drive each operator stage to passed and decode its payload: every command
+	// must carry the bundle (chart_ref + image), and every stage command must
+	// carry its stage name.
+	for _, stage := range []string{"render", "cluster", "runtime_pull"} {
 		entry := waitForCommand(t, st, op.ID+":"+stage)
 		payload, err := UnmarshalCommandPayload(entry.Payload)
 		require.NoError(t, err)
 		require.NotNil(t, payload.Bundle, "stage %s command must carry the bundle", stage)
 		assert.Equal(t, "oci://registry.example.com/charts/example", payload.Bundle.GetChartRef())
 		assert.Len(t, payload.Bundle.GetImages(), 1)
+		assert.Equal(t, StageName(stage), payload.Stage)
 		require.NoError(t, st.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
 	}
+
+	// TASK-114/U-1: the release write carries the same execution context but no
+	// stage — a stage-typed command is a check and must never install.
+	execute := waitForCommand(t, st, op.ID+":execute")
+	payload, err := UnmarshalCommandPayload(execute.Payload)
+	require.NoError(t, err)
+	require.NotNil(t, payload.Bundle, "the release write must carry the bundle")
+	assert.Equal(t, "oci://registry.example.com/charts/example", payload.Bundle.GetChartRef())
+	assert.Len(t, payload.Bundle.GetImages(), 1)
+	assert.Empty(t, payload.Stage, "the release write must not carry a preflight stage")
+	assert.True(t, payload.CreateNamespace, "INSTALL still creates the target namespace")
+
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
@@ -530,8 +628,9 @@ func TestCoordinatorRun_CancelFinalizesCancelledLifecycle(t *testing.T) {
 	done := make(chan struct{})
 	go func() { c.Run(runCtx, op); close(done) }()
 
-	// Cancel while the artifact stage is polling for a result.
-	waitForCommand(t, st, op.ID+":artifact")
+	// Cancel while an operator stage is polling for a result. The artifact
+	// stage is consumed locally, so the first polled command is render.
+	waitForCommand(t, st, op.ID+":render")
 	cancel()
 	select {
 	case <-done:

@@ -1885,8 +1885,10 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 	_, err = svc.store.Outbox().GetByCommandID(ctx, opID+":artifact")
 	require.NoError(t, err, "D-87 first dispatch must be pre-created by the creation transaction")
 
-	// Drive the four stages to passed through the outbox.
-	for _, stage := range []string{"artifact", "render", "cluster", "runtime_pull"} {
+	// Drive the three operator stages to passed through the outbox. The
+	// artifact stage is consumed by the coordinator itself (TASK-114/U-1), so
+	// it has no operator command to drive.
+	for _, stage := range []string{"render", "cluster", "runtime_pull"} {
 		var entry *store.OutboxEntry
 		require.Eventually(t, func() bool {
 			e, err := svc.store.Outbox().GetByCommandID(ctx, opID+":"+stage)
@@ -1899,13 +1901,25 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 		require.NoError(t, svc.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPersisted, `{"status":"passed"}`))
 	}
 
-	// AC-019-04/06: operation CAS to succeeded for INSTALL (the precheck
-	// artifact stage executed the real install — no separate executor exists;
-	// real smoke 2026-08-28), lifecycle passed with canonical stages.
+	// AC-019-04/06: preflight passing CASes the operation to queued and
+	// dispatches the real release write as a separate command carrying no
+	// preflight stage (TASK-114/U-1). Before that change the artifact stage
+	// itself ran the install and the coordinator drove the operation straight to
+	// succeeded — the "fake pass" this removes. This test wires no operator
+	// gateway, so the write's own result (which drives queued→running→succeeded)
+	// is exercised by the operator gateway tests.
 	require.Eventually(t, func() bool {
 		op, err := svc.store.Operations().Get(ctx, opID)
-		return err == nil && op.Status == store.StatusSucceeded
+		return err == nil && op.Status == store.StatusQueued
 	}, 5*time.Second, 50*time.Millisecond)
+
+	execute, err := svc.store.Outbox().GetByCommandID(ctx, opID+":execute")
+	require.NoError(t, err, "the release write must be dispatched after preflight passes")
+	require.Equal(t, string(store.OperationInstall), execute.OperationType)
+	require.NotEmpty(t, execute.OperatorID, "the release write must be dispatchable to the operator")
+	var executeCommand operatorv1.Command
+	require.NoError(t, operator.DecodeCommandPayload(execute.Payload, &executeCommand))
+	assert.Empty(t, executeCommand.GetStage(), "the release write must not carry a preflight stage")
 	// The lifecycle finalization is a separate transaction from the operation
 	// CAS (observational write), so poll for the terminal result too — the
 	// two-transaction commit window made this flaky under CI's -race full

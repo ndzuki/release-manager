@@ -4,7 +4,9 @@ import (
 	"context"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,6 +14,17 @@ import (
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	"github.com/ndzuki/release-manager/internal/operator/preflight"
 )
+
+// recordingNamespaceEnsurer records the namespaces it was asked to create.
+type recordingNamespaceEnsurer struct {
+	created []string
+	err     error
+}
+
+func (e *recordingNamespaceEnsurer) EnsureNamespace(_ context.Context, name string) error {
+	e.created = append(e.created, name)
+	return e.err
+}
 
 // fakeDryRunner records what it was asked to dry-run and returns a canned batch.
 type fakeDryRunner struct {
@@ -40,7 +53,7 @@ func clusterStageCommand() *operatorv1.Command {
 // stream, and asks the cluster to dry-run every object.
 func TestClusterStageDryRunsEveryRenderedObject(t *testing.T) {
 	runner := &fakeDryRunner{batch: &preflight.BatchResult{Passed: true, ResourceCount: 1}}
-	executor := NewClusterStageExecutor(&fakeChartLocator{}, runner, false, nil)
+	executor := NewClusterStageExecutor(&fakeChartLocator{}, runner, nil, false, nil)
 
 	result, err := executor.ExecuteStage(context.Background(), clusterStageCommand())
 	require.NoError(t, err)
@@ -59,7 +72,7 @@ func TestClusterStageFailsWhenTheClusterRejects(t *testing.T) {
 		Passed: false, ResourceCount: 2,
 		Results: []preflight.ResourceResult{{Rejected: true}, {Rejected: true}},
 	}}
-	executor := NewClusterStageExecutor(&fakeChartLocator{}, runner, false, nil)
+	executor := NewClusterStageExecutor(&fakeChartLocator{}, runner, nil, false, nil)
 
 	_, err := executor.ExecuteStage(context.Background(), clusterStageCommand())
 	require.Error(t, err)
@@ -69,7 +82,7 @@ func TestClusterStageFailsWhenTheClusterRejects(t *testing.T) {
 // A dry-runner failure surfaces as a stage failure, not a silent pass.
 func TestClusterStagePropagatesADryRunFailure(t *testing.T) {
 	runner := &fakeDryRunner{err: assert.AnError}
-	executor := NewClusterStageExecutor(&fakeChartLocator{}, runner, false, nil)
+	executor := NewClusterStageExecutor(&fakeChartLocator{}, runner, nil, false, nil)
 
 	_, err := executor.ExecuteStage(context.Background(), clusterStageCommand())
 	require.Error(t, err)
@@ -77,7 +90,7 @@ func TestClusterStagePropagatesADryRunFailure(t *testing.T) {
 }
 
 func TestClusterStageRejectsIncompleteCommands(t *testing.T) {
-	executor := NewClusterStageExecutor(&fakeChartLocator{}, &fakeDryRunner{}, false, nil)
+	executor := NewClusterStageExecutor(&fakeChartLocator{}, &fakeDryRunner{}, nil, false, nil)
 
 	noBundle := clusterStageCommand()
 	noBundle.Bundle = nil
@@ -87,7 +100,7 @@ func TestClusterStageRejectsIncompleteCommands(t *testing.T) {
 	_, err = executor.ExecuteStage(context.Background(), nil)
 	assert.Error(t, err)
 
-	noRunner := NewClusterStageExecutor(&fakeChartLocator{}, nil, false, nil)
+	noRunner := NewClusterStageExecutor(&fakeChartLocator{}, nil, nil, false, nil)
 	_, err = noRunner.ExecuteStage(context.Background(), clusterStageCommand())
 	assert.Error(t, err)
 }
@@ -104,6 +117,71 @@ func TestManifestStreamIsStableAndSkipsNotes(t *testing.T) {
 	assert.NotContains(t, stream, "install notes")
 	assert.Less(t, indexOf(stream, "ConfigMap"), indexOf(stream, "Service"),
 		"the stream must be ordered by filename, not by map iteration")
+}
+
+// TASK-114: an INSTALL creates its target namespace, so the cluster stage must
+// create it before dry-running. Without this a first INSTALL into a fresh
+// namespace is rejected as namespace_missing and can never pass its own
+// preflight (real CI run 2026-09-21: the dev fixture's e2e-release namespace
+// does not pre-exist in the customer clusters).
+func TestClusterStageEnsuresTheNamespaceWhenTheCommandCreatesIt(t *testing.T) {
+	runner := &fakeDryRunner{batch: &preflight.BatchResult{Passed: true, ResourceCount: 1}}
+	ensurer := &recordingNamespaceEnsurer{}
+	executor := NewClusterStageExecutor(&fakeChartLocator{}, runner, ensurer, false, nil)
+
+	command := clusterStageCommand()
+	command.CreateNamespace = true
+	_, err := executor.ExecuteStage(context.Background(), command)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{command.GetNamespace()}, ensurer.created,
+		"the stage must create the target namespace before dry-running into it")
+	assert.Equal(t, 1, runner.objects, "the dry-run still runs after the namespace exists")
+}
+
+// A command that does not create its namespace must not create one: a missing
+// namespace stays namespace_missing (REQ-047).
+func TestClusterStageLeavesTheNamespaceAloneOtherwise(t *testing.T) {
+	runner := &fakeDryRunner{batch: &preflight.BatchResult{Passed: true, ResourceCount: 1}}
+	ensurer := &recordingNamespaceEnsurer{}
+	executor := NewClusterStageExecutor(&fakeChartLocator{}, runner, ensurer, false, nil)
+
+	command := clusterStageCommand()
+	command.CreateNamespace = false
+	_, err := executor.ExecuteStage(context.Background(), command)
+	require.NoError(t, err)
+
+	assert.Empty(t, ensurer.created, "a command that does not create its namespace must not create one")
+}
+
+// A command that creates its namespace fails closed when no ensurer is wired,
+// rather than dry-running into a namespace that may not exist.
+func TestClusterStageRequiresANamespaceEnsurerWhenTheCommandCreatesIt(t *testing.T) {
+	runner := &fakeDryRunner{batch: &preflight.BatchResult{Passed: true, ResourceCount: 1}}
+	executor := NewClusterStageExecutor(&fakeChartLocator{}, runner, nil, false, nil)
+
+	command := clusterStageCommand()
+	command.CreateNamespace = true
+	_, err := executor.ExecuteStage(context.Background(), command)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "namespace ensurer")
+	assert.Zero(t, runner.objects, "the dry-run must not run without the namespace")
+}
+
+// KubeNamespaceEnsurer is idempotent: AlreadyExists is success, an empty name is
+// not.
+func TestKubeNamespaceEnsurerIsIdempotent(t *testing.T) {
+	client := kubefake.NewSimpleClientset()
+	ensurer := NewKubeNamespaceEnsurer(client)
+
+	require.NoError(t, ensurer.EnsureNamespace(context.Background(), "e2e-release"))
+	require.NoError(t, ensurer.EnsureNamespace(context.Background(), "e2e-release"),
+		"a retry must treat AlreadyExists as success")
+
+	_, err := client.CoreV1().Namespaces().Get(context.Background(), "e2e-release", metav1.GetOptions{})
+	require.NoError(t, err)
+
+	require.Error(t, ensurer.EnsureNamespace(context.Background(), "  "))
 }
 
 func indexOf(haystack, needle string) int {

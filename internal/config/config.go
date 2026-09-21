@@ -152,6 +152,12 @@ type ServiceConfig struct {
 	Notifier NotifierCfg `mapstructure:"notifier"`
 	// VulnerabilityAdmission carries the artifact admission mode (TASK-105).
 	VulnerabilityAdmission VulnerabilityAdmissionCfg `mapstructure:"vulnerability_admission"`
+	// RuntimePullPreflight carries the REQ-048 runtime-pull preflight policy
+	// (TASK-114): the operator builds its preflight runtime_pull stage executor
+	// from it. Disabled by default — the stage is optional in the production
+	// pipeline, so a disabled executor fails that stage without blocking the
+	// release.
+	RuntimePullPreflight RuntimePullConfig `mapstructure:"runtime_pull_preflight"`
 }
 
 // VulnerabilityAdmissionCfg is how artifact admission treats the vulnerability

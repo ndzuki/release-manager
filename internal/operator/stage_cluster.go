@@ -8,7 +8,11 @@ import (
 	"sort"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/kubernetes"
 
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
@@ -22,6 +26,50 @@ type ClusterDryRunner interface {
 	DryRunAll(ctx context.Context, resources []*unstructured.Unstructured, input preflight.Input) (*preflight.BatchResult, error)
 }
 
+// NamespaceEnsurer makes the target namespace exist before the cluster stage
+// dry-runs objects into it.
+//
+// The install path creates the target namespace as part of the install (Helm's
+// CreateNamespace, which the orchestrator sets for INSTALL), so a first INSTALL
+// into a namespace that does not exist yet must still pass preflight. A
+// server-side dry-run cannot run against a missing namespace — the API server
+// answers NotFound, which classifies as namespace_missing (REQ-047) — so the
+// stage creates it first, exactly as the install will. A command that does not
+// create its namespace is left alone: a missing namespace stays namespace_missing.
+type NamespaceEnsurer interface {
+	EnsureNamespace(ctx context.Context, name string) error
+}
+
+// KubeNamespaceEnsurer creates the target namespace with client-go.
+type KubeNamespaceEnsurer struct {
+	client kubernetes.Interface
+}
+
+// NewKubeNamespaceEnsurer builds a namespace ensurer over a Kubernetes client.
+func NewKubeNamespaceEnsurer(client kubernetes.Interface) *KubeNamespaceEnsurer {
+	return &KubeNamespaceEnsurer{client: client}
+}
+
+// EnsureNamespace creates the namespace, treating AlreadyExists as success so
+// the call is idempotent across preflight retries.
+func (e *KubeNamespaceEnsurer) EnsureNamespace(ctx context.Context, name string) error {
+	if e == nil || e.client == nil {
+		return fmt.Errorf("namespace ensurer requires a Kubernetes client")
+	}
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("namespace name is required")
+	}
+	_, err := e.client.CoreV1().Namespaces().Create(ctx,
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}},
+		metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("ensure namespace %q: %w", name, err)
+	}
+	return nil
+}
+
+var _ NamespaceEnsurer = (*KubeNamespaceEnsurer)(nil)
+
 // ClusterStageExecutor runs the preflight cluster stage: it renders the approved
 // chart and asks the cluster itself whether the objects would be accepted.
 //
@@ -30,18 +78,29 @@ type ClusterDryRunner interface {
 // through RenderManifests rather than RenderPreflight because the objects must
 // never reach RenderResult, which carries only safe summaries (AC-046-02).
 type ClusterStageExecutor struct {
-	charts    ChartLocator
-	dryRunner ClusterDryRunner
-	plainHTTP bool
-	logger    *slog.Logger
+	charts     ChartLocator
+	dryRunner  ClusterDryRunner
+	namespaces NamespaceEnsurer
+	plainHTTP  bool
+	logger     *slog.Logger
 }
 
-// NewClusterStageExecutor builds the cluster stage executor.
-func NewClusterStageExecutor(charts ChartLocator, dryRunner ClusterDryRunner, plainHTTP bool, logger *slog.Logger) *ClusterStageExecutor {
+// NewClusterStageExecutor builds the cluster stage executor. namespaces may be
+// nil only for commands that do not create their target namespace.
+func NewClusterStageExecutor(
+	charts ChartLocator,
+	dryRunner ClusterDryRunner,
+	namespaces NamespaceEnsurer,
+	plainHTTP bool,
+	logger *slog.Logger,
+) *ClusterStageExecutor {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &ClusterStageExecutor{charts: charts, dryRunner: dryRunner, plainHTTP: plainHTTP, logger: logger}
+	return &ClusterStageExecutor{
+		charts: charts, dryRunner: dryRunner, namespaces: namespaces,
+		plainHTTP: plainHTTP, logger: logger,
+	}
 }
 
 // ExecuteStage renders the command's chart and dry-runs every rendered object.
@@ -70,6 +129,20 @@ func (e *ClusterStageExecutor) ExecuteStage(ctx context.Context, command *operat
 	stream, objects, result, err := e.renderForDryRun(ctx, command, bundle, chartRef)
 	if err != nil {
 		return "", err
+	}
+
+	// Mirror the install's CreateNamespace before dry-running: the rendered
+	// objects are pinned to the target namespace, and a server-side dry-run
+	// against a namespace that does not exist yet is rejected as
+	// namespace_missing. Without this a first INSTALL could never pass its own
+	// preflight (real CI run 2026-09-21).
+	if command.GetCreateNamespace() {
+		if e.namespaces == nil {
+			return "", fmt.Errorf("cluster stage requires a namespace ensurer for a command that creates its namespace")
+		}
+		if err := e.namespaces.EnsureNamespace(ctx, command.GetNamespace()); err != nil {
+			return "", fmt.Errorf("cluster stage: %w", err)
+		}
 	}
 
 	batch, err := e.dryRunner.DryRunAll(ctx, objects, preflight.Input{
