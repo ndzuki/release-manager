@@ -720,3 +720,26 @@ func TestCheck_DeliveredRequirementIsNotForcedToRewriteItsCriteria(t *testing.T)
 	require.NotEmpty(t, activeResult.Violations, "a non-delivered REQ must still be flagged")
 	assert.Contains(t, activeResult.Violations[0].Message, "lacks Given/When/Then")
 }
+
+// TASK-159: a struck-through criterion is a RETRACTED one kept for history --
+// REQ-018 records a user-confirmed deletion of AC-018-03 that way. It must not
+// be reported as malformed, and the gate must not push anyone to delete the
+// line (the project never overwrites history). Removing the struck-through
+// check makes this test fail.
+func TestCheck_IgnoresRetractedStruckThroughCriteria(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, `## 目标
+无。
+
+## 验收标准
+- [ ] ~~AC-907-01 Given 数组 patch，When 合并，Then 整体替换。~~（已删除，见变更说明）
+- [ ] AC-907-02 Given 完整 document，When 创建，Then 不可变。
+
+## 非目标
+无。
+`)
+	result, err := Check(path)
+	require.NoError(t, err)
+	assert.Empty(t, result.Violations)
+}

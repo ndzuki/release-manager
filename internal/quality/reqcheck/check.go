@@ -109,7 +109,9 @@ var (
 	acceptanceRe       = regexp.MustCompile(`^-\s*\[[ xX]\]\s+\*{0,2}AC-\d{3}-\d{2}\*{0,2}(?:\s|:|$)`)
 	acceptanceMarkerRe = regexp.MustCompile(`(?i)AC-[A-Z0-9-]+`)
 	checkboxRe         = regexp.MustCompile(`^(?:[-*+]\s*)?\[[ xX]\]`)
-	givenWhenThenRe    = regexp.MustCompile(`(?is)\bgiven\b.*\bwhen\b.*\bthen\b`)
+	// A checklist item whose acceptance id is wrapped in ~~ (retracted).
+	struckThroughRe = regexp.MustCompile(`^(?:[-*+]\s*)?\[[ xX]\]\s*~~`)
+	givenWhenThenRe = regexp.MustCompile(`(?is)\bgiven\b.*\bwhen\b.*\bthen\b`)
 )
 
 // Check validates a single requirement document.
@@ -292,7 +294,16 @@ func isAcceptanceCandidate(line string) bool {
 	// A blockquote is a note ABOUT the criteria, not a criterion: REQ-010's
 	// "采纳建议 auto" note merely names AC-039-01 and was reported as a
 	// malformed acceptance item (TASK-159).
-	if strings.HasPrefix(strings.TrimSpace(line), ">") {
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, ">") {
+		return false
+	}
+	// A struck-through criterion is a RETRACTED one kept for history: REQ-018
+	// records a user-confirmed deletion of AC-018-03 that way and documents it
+	// in a change note. It is not a live criterion, so it must not be reported
+	// as malformed -- and the project's "never overwrite history" rule means the
+	// gate must not push anyone to delete the line either.
+	if struckThroughRe.MatchString(trimmed) {
 		return false
 	}
 	return acceptanceMarkerRe.MatchString(line) || checkboxRe.MatchString(line)
