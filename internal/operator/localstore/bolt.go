@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	bolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 )
 
 // bucket names
@@ -19,12 +22,32 @@ var (
 	identityKey    = []byte("__identity__")
 )
 
+// boltLockTimeout bounds how long OpenBolt waits for the store's file lock.
+//
+// bbolt's zero Timeout means "wait forever", so a second agent process on the
+// same store blocked inside bolt.Open before it could log anything: during a
+// RollingUpdate the new Pod held no log line, never became Ready, and the old
+// Pod was never replaced — the rollout deadlocked on the shared
+// ReadWriteOnce operator-identity volume (TASK-156). Failing in bounded time
+// turns that silent hang into a diagnosable CrashLoopBackOff.
+//
+// It is a variable so tests can exercise the timeout path without waiting the
+// production duration.
+var boltLockTimeout = 5 * time.Second
+
+// ErrStoreLocked reports that another process holds the store's file lock.
+var ErrStoreLocked = errors.New("localstore: store is locked by another process")
+
 // OpenBolt opens (or creates) a BoltDB-backed command + identity store at the
 // given path. The returned store implements both Store (commands) and
 // IdentityStore (bootstrap identity).
 func OpenBolt(path string) (*BoltStore, error) {
-	db, err := bolt.Open(path, 0o600, nil)
+	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: boltLockTimeout})
 	if err != nil {
+		if errors.Is(err, bolterrors.ErrTimeout) {
+			return nil, fmt.Errorf("%w: %s (a shared ReadWriteOnce identity volume cannot host two operators; "+
+				"the second process must be replaced, not run alongside the first)", ErrStoreLocked, path)
+		}
 		return nil, fmt.Errorf("open bbolt store: %w", err)
 	}
 
