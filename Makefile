@@ -480,13 +480,30 @@ test-upgrade-sdk: ## Run Helm Upgrade SDK integration gate (REQ-086/REQ-062) in 
 		PATH="$(UPGRADE_SDK_PATH)" HOME="$(UPGRADE_SDK_HOME)" KUBECONFIG="$(UPGRADE_SDK_KUBECONFIG)" \
 			"$(UPGRADE_SDK_BINARY)" -test.v -test.count=1 -test.run '^TestUpgradeSDK$$'
 
+# REQS_DIR points at the vault Requirements directory (or a whitespace-separated
+# file list). The authoritative REQ documents live in the knowledge base, not in
+# this repository, so a bare checkout cannot run the vault-backed gates. Those
+# gates therefore print a loud SKIP instead of a silent pass, and
+# `make quality-vault` demands the vault so a "full" run cannot quietly skip
+# them (a skipped gate that looks like a passing one is how the 2026-09 audit
+# shipped a "green" tree with two gates that never ran).
+REQS_DIR ?=
+REQS_RESOLVE = if [ -n "$$REQS_DIR" ]; then \
+		if [ -d "$$REQS_DIR" ]; then REQS="$$(ls "$$REQS_DIR"/REQ-*.md 2>/dev/null)"; \
+		else REQS="$$REQS_DIR"; fi; \
+	else REQS="$$(find . -path '*/Requirements/REQ-*.md' 2>/dev/null)"; fi
+
 .PHONY: check-reqs
 check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
-	@REQS=$$(find . -path '*/Requirements/REQ-*.md' 2>/dev/null); \
-	if [ -n "$$REQS" ]; then \
-		$(GO) run ./cmd/reqcheck/ $$REQS; \
+	@$(REQS_RESOLVE); \
+	if [ -z "$$REQS" ]; then \
+		if [ "$${ALLOW_NO_REQS:-}" = "1" ]; then \
+			printf "$(YELLOW)SKIP check-reqs: no REQ documents found (ALLOW_NO_REQS=1)$(NC)\n"; \
+		else \
+			printf "$(RED)FAIL check-reqs: no REQ documents found — set REQS_DIR to the vault Requirements directory, or ALLOW_NO_REQS=1 to skip explicitly$(NC)\n"; exit 1; \
+		fi; \
 	else \
-		printf "$(YELLOW)check-reqs: no REQ docs found in repo, skipping$(NC)\n"; \
+		$(GO) run ./cmd/reqcheck/ $$REQS; \
 	fi
 
 .PHONY: audit-citations
@@ -495,11 +512,15 @@ audit-citations: ## Read-only audit: symbols named next to a code citation shoul
 
 .PHONY: check-error-codes
 check-error-codes: ## Check that every error code an AC asserts is emittable (TASK-125)
-	@REQS=$${REQS_DIR:-$$(find . -path '*/Requirements/REQ-*.md' 2>/dev/null)}; \
-	if [ -n "$$REQS" ]; then \
-		$(GO) run ./cmd/errcodecheck/ -repo . -exceptions errcodes.exceptions.yaml $$REQS; \
+	@$(REQS_RESOLVE); \
+	if [ -z "$$REQS" ]; then \
+		if [ "$${ALLOW_NO_REQS:-}" = "1" ]; then \
+			printf "$(YELLOW)SKIP check-error-codes: no REQ documents found (ALLOW_NO_REQS=1)$(NC)\n"; \
+		else \
+			printf "$(RED)FAIL check-error-codes: no REQ documents found — set REQS_DIR to the vault Requirements directory, or ALLOW_NO_REQS=1 to skip explicitly$(NC)\n"; exit 1; \
+		fi; \
 	else \
-		printf "$(YELLOW)check-error-codes: no REQ docs in this checkout; set REQS_DIR to the vault Requirements directory$(NC)\n"; \
+		$(GO) run ./cmd/errcodecheck/ -repo . -exceptions errcodes.exceptions.yaml $$REQS; \
 	fi
 
 .PHONY: check-migrations
@@ -559,6 +580,11 @@ test-operator-image-sdk-only: ## Run operator image SDK-only gate (REQ-061)
 			--dockerfile deploy/docker/Dockerfile.operator
 .PHONY: quality
 quality: sdk-check test-coverage lint check-reqs check-error-codes check-licenses check-docs check-config-keys check-migrations check-probes api-check lint-proto ## Full quality gate run
+
+.PHONY: quality-vault
+quality-vault: ## `make quality` that REQUIRES the vault REQ documents (fails when REQS_DIR is unset)
+	@test -n "$(REQS_DIR)" || { printf "$(RED)quality-vault requires REQS_DIR (the vault Requirements directory); run: make quality-vault REQS_DIR=/path/to/myNote/Projects/001-release-manager/Requirements$(NC)\n"; exit 1; }
+	@$(MAKE) quality REQS_DIR="$(REQS_DIR)"
 
 .PHONY: build-sdkcheck
 build-sdkcheck: proto ## Build sdkcheck
