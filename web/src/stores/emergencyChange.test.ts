@@ -265,6 +265,41 @@ describe('emergencyChange store', () => {
     expect(store.confirmedIntent?.idempotencyKey).not.toBe(firstKey);
   });
 
+  it('clears the selection and reloads candidates after artifact_not_trusted (AC-058-11)', async () => {
+    setActivePinia(createPinia());
+    const store = useEmergencyChangeStore();
+    const untrusted = new ConnectError(
+      'untrusted',
+      Code.FailedPrecondition,
+      new Headers({ 'X-Reason-Code': 'artifact_not_trusted' }),
+    );
+    const loadArtifacts = vi.fn(async () => [artifact()]);
+    store.configure({
+      loadConflict: async () => noConflict(),
+      loadTargets: async () => [target()],
+      loadArtifacts,
+      execute: vi.fn().mockRejectedValue(untrusted),
+    });
+
+    await store.loadScope(SCOPE);
+    store.selectContainer('app');
+    await vi.waitFor(() => expect(store.artifacts).toHaveLength(1));
+    store.selectArtifact(store.artifacts[0]);
+    store.setReason('x');
+    store.openConfirm();
+    store.setRiskAccepted(true);
+    const callsBeforeSubmit = loadArtifacts.mock.calls.length;
+
+    await store.submit();
+
+    expect(store.submitError?.code).toBe('artifact_not_trusted');
+    // The listed artifact passed verification but its trust was revoked before
+    // submit: the stale selection must be dropped and the candidates refreshed.
+    expect(loadArtifacts.mock.calls.length).toBeGreaterThan(callsBeforeSubmit);
+    expect(store.selectedArtifact).toBeNull();
+    expect(store.confirmedIntent).toBeNull();
+  });
+
   it('requires container + artifact + valid reason before confirmation', async () => {
     setActivePinia(createPinia());
     const store = useEmergencyChangeStore();
