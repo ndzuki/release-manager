@@ -8,6 +8,16 @@ metadata:
     app.kubernetes.io/part-of: release-manager
 spec:
   replicas: 1
+  # Recreate, not the default RollingUpdate (TASK-156). The operator is the
+  # single logical instance for its cluster (REQ-044) and its command/identity
+  # store is a single-writer bbolt file on the shared ReadWriteOnce
+  # operator-identity volume, so a surge Pod cannot run alongside the old one:
+  # with RollingUpdate the new Pod blocked on the store lock, never became
+  # Ready, and the old Pod was never replaced — the rollout deadlocked.
+  # Recreate costs a short offline window during upgrades, which the agent's
+  # exponential reconnect (REQ-044) already covers.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: operator
