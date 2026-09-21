@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -191,4 +192,46 @@ func seedInventoryScope(t *testing.T, st store.Store, customerID, clusterID stri
 	ctx := context.Background()
 	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: customerID, Name: customerID, Slug: customerID}))
 	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: clusterID, Name: clusterID, CustomerID: customerID}))
+}
+
+// AC-058-08: the inventory page greys out releases that conflict with an
+// emergency change and badges those awaiting convergence. ListReleases left both
+// fields at their zero value, so the UI could never show either. Removing the
+// enrichment from ListReleases makes this test fail.
+func TestListReleasesReportsEmergencyConflictAndPendingConvergence(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	ctx := context.Background()
+	seedInventoryScope(t, st, "customer-conflict", "cluster-conflict")
+
+	now := time.Date(2026, time.September, 27, 10, 0, 0, 0, time.UTC)
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "def-conflict", Name: "conflict", CustomerID: "customer-conflict", ClusterID: "cluster-conflict",
+		Namespace: "apps", ReleaseName: "api", Status: store.DefStatusActive,
+	}, nil))
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		ReleaseDefinitionID: "def-conflict", CustomerID: "customer-conflict", ClusterID: "cluster-conflict",
+		Namespace: "apps", ReleaseName: "api", Chart: "api", ChartVersion: "1.0.0", Revision: 1,
+		InventoryStatus: store.InventoryActive,
+	}))
+
+	// A running STANDARD operation is the conflict CheckEmergencyConflict reports.
+	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
+		ID: "op-running", OperationType: store.OperationInstall, Status: store.StatusRunning,
+		ReleaseDefinitionID: "def-conflict", IdempotencyKey: "idem-conflict",
+	}))
+	require.NoError(t, st.ConvergenceTasks().Create(ctx, &store.ConvergenceTask{
+		ID: "task-pending", OperationID: "op-running", ReleaseDefinitionID: "def-conflict",
+		Action: "set_image", TargetSummary: "registry/app:latest", Reason: "emergency",
+		PromotionPaths: json.RawMessage(`[]`), Status: "pending_promotion", SubmittedAt: now, CreatedAt: now,
+	}))
+
+	resp, err := svc.ListReleases(ctx, connect.NewRequest(&orchestratorv1.ListReleasesRequest{
+		CustomerId: "customer-conflict", ClusterId: "cluster-conflict",
+	}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.GetReleases(), 1)
+	summary := resp.Msg.GetReleases()[0]
+	assert.True(t, summary.GetEmergencyConflict(), "a running standard operation must report a conflict")
+	assert.Equal(t, int32(1), summary.GetPendingConvergenceCount())
 }
