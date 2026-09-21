@@ -646,17 +646,100 @@ func TestCheck_MixedCaseGivenWhenThen(t *testing.T) {
 }
 
 func TestCheck_MultipleViolations(t *testing.T) {
-	// A doc missing multiple sections should report all of them.
+	// TASK-159: a lite document is judged against the lite core, while a
+	// `tier: full` document must still carry all ten sections.
 	t.Parallel()
 
-	path := writeTemp(t, `# 某需求
+	lite := writeTemp(t, `# 某需求
 
 ## 目标
 做了个事。
 `)
+	result, err := Check(lite)
+	require.NoError(t, err)
+	require.False(t, result.Skipped)
+	assert.GreaterOrEqual(t, len(result.Violations), 2, "the lite core sections are still required")
+	assert.Less(t, len(result.Violations), 9,
+		"a lite document must not be judged against the full template")
 
+	full := writeTemp(t, `---
+tier: full
+---
+
+# 某需求
+
+## 目标
+做了个事。
+`)
+	fullResult, err := Check(full)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(fullResult.Violations), 9,
+		"a tier: full document must still carry every section")
+}
+
+// TASK-159 negative control: a roadmap/domain index or an archived record is
+// not an implementable REQ and must be skipped, not failed. Removing the
+// delivery_scope check makes this test fail.
+func TestCheck_SkipsIndexAndArchivedScopes(t *testing.T) {
+	t.Parallel()
+
+	for _, scope := range []string{"index", "archived"} {
+		path := writeTemp(t, "---\ndelivery_scope: "+scope+"\n---\n\n# 索引\n\n没有验收标准，也没有目标小节。\n")
+		result, err := Check(path)
+		require.NoError(t, err)
+		assert.True(t, result.Skipped, "delivery_scope=%s must be skipped", scope)
+		assert.Empty(t, result.Violations, "a skipped document must report no violations")
+	}
+}
+
+// TASK-159: a delivered REQ's acceptance text is frozen history -- its delivery
+// evidence was recorded against that exact wording -- so the Given/When/Then
+// style rule must not force a rewrite of a delivered requirement. It must still
+// apply to a REQ that is not yet delivered. Removing the status check from
+// validateAcceptance makes this test fail.
+func TestCheck_DeliveredRequirementIsNotForcedToRewriteItsCriteria(t *testing.T) {
+	t.Parallel()
+
+	body := `## 目标
+无。
+
+## 验收标准
+- [ ] AC-906-01 多镜像 Bundle 正确绑定到 values path。
+
+## 非目标
+无。
+`
+	delivered := writeTemp(t, "---\nstatus: delivered\n---\n\n"+body)
+	result, err := Check(delivered)
+	require.NoError(t, err)
+	assert.Empty(t, result.Violations, "a delivered REQ must not be flagged for AC style")
+
+	active := writeTemp(t, "---\nstatus: accepted\n---\n\n"+body)
+	activeResult, err := Check(active)
+	require.NoError(t, err)
+	require.NotEmpty(t, activeResult.Violations, "a non-delivered REQ must still be flagged")
+	assert.Contains(t, activeResult.Violations[0].Message, "lacks Given/When/Then")
+}
+
+// TASK-159: a struck-through criterion is a RETRACTED one kept for history --
+// REQ-018 records a user-confirmed deletion of AC-018-03 that way. It must not
+// be reported as malformed, and the gate must not push anyone to delete the
+// line (the project never overwrites history). Removing the struck-through
+// check makes this test fail.
+func TestCheck_IgnoresRetractedStruckThroughCriteria(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, `## 目标
+无。
+
+## 验收标准
+- [ ] ~~AC-907-01 Given 数组 patch，When 合并，Then 整体替换。~~（已删除，见变更说明）
+- [ ] AC-907-02 Given 完整 document，When 创建，Then 不可变。
+
+## 非目标
+无。
+`)
 	result, err := Check(path)
 	require.NoError(t, err)
-	// 9 missing sections + empty acceptance → at least 9 violations
-	assert.GreaterOrEqual(t, len(result.Violations), 9)
+	assert.Empty(t, result.Violations)
 }
