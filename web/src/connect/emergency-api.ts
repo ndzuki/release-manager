@@ -248,7 +248,10 @@ export async function listConvergenceTasks(
   const response = await orchestratorEmergencyClient.listConvergenceTasks(
     create(ListConvergenceTasksRequestSchema, {
       releaseDefinitionId,
-      statusFilter: 'PENDING_PROMOTION',
+      // The server accepts only the snake_case values (internal/orchestrator/
+      // emergency_queries.go rejects anything else with invalid_status_filter),
+      // so the uppercase literal made this page fail to load every time.
+      statusFilter: 'pending_promotion',
     }),
     { signal },
   );
