@@ -67,10 +67,23 @@ func (s Severity) String() string {
 
 // Card is the frontmatter subset this gate reads.
 type Card struct {
-	Path        string
-	Status      string
-	MergeStatus string
-	PRURL       string
+	Path          string
+	Status        string
+	MergeStatus   string
+	PRURL         string
+	ClosureReason string
+}
+
+// NonPRClosureReasons are documented closures that do not imply a merge, so the
+// merge evidence rule cannot apply to them: a card closed because the work was
+// already implemented, superseded, or landed before this project used pull
+// requests has no PR to point at. The reason itself is the evidence, and it
+// must be present -- this is an alternative record, not a bypass.
+var NonPRClosureReasons = map[string]bool{
+	"already-implemented": true,
+	"already_implemented": true,
+	"superseded":          true,
+	"pre-pr-workflow":     true,
 }
 
 // Merged reports whether the card claims a completed delivery.
@@ -232,6 +245,15 @@ func Check(cards []Card, ev *Evidence) *Result {
 		}
 		result.Checked++
 
+		// A documented non-PR closure is the alternative record: the work was
+		// already implemented, superseded, or landed before the project used
+		// pull requests, so there is no PR to verify. The gate still requires
+		// the reason to be stated.
+		if NonPRClosureReasons[card.ClosureReason] {
+			result.Verified++
+			continue
+		}
+
 		var findings []Finding
 		if card.MergeStatus != "merged" {
 			findings = append(findings, Finding{
@@ -377,6 +399,8 @@ func ParseCard(path string) (Card, error) {
 			card.MergeStatus = value
 		case "pr_url":
 			card.PRURL = value
+		case "closure_reason":
+			card.ClosureReason = value
 		}
 	}
 	if err := scanner.Err(); err != nil {
