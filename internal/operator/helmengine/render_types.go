@@ -8,19 +8,17 @@ import (
 
 // Render error codes are stable persistence and API values for preflight failures.
 const (
-	RenderCodeValuesSchemaFailed    = "values_schema_failed"
-	RenderCodeRenderFailed          = "render_failed"
-	RenderCodeDeprecatedAPI         = "deprecated_api"
-	RenderCodeSecretOutputForbidden = "secret_output_forbidden"
-	RenderCodeSizeExceeded          = "size_exceeded"
-	RenderCodeCancelled             = "cancelled"
+	RenderCodeValuesSchemaFailed = "values_schema_failed"
+	RenderCodeRenderFailed       = "render_failed"
+	RenderCodeDeprecatedAPI      = "deprecated_api"
+	RenderCodeSizeExceeded       = "size_exceeded"
+	RenderCodeCancelled          = "cancelled"
 )
 
 var (
-	ErrValuesSchemaFailed    = errors.New("helm: values schema failed")
-	ErrDeprecatedAPI         = errors.New("helm: deprecated api")
-	ErrSecretOutputForbidden = errors.New("helm: secret output forbidden")
-	ErrSizeExceeded          = errors.New("helm: render size exceeded")
+	ErrValuesSchemaFailed = errors.New("helm: values schema failed")
+	ErrDeprecatedAPI      = errors.New("helm: deprecated api")
+	ErrSizeExceeded       = errors.New("helm: render size exceeded")
 )
 
 // RenderError exposes a stable code while retaining the internal error chain.
