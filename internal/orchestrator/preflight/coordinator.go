@@ -73,9 +73,8 @@ var errNoOperator = fmt.Errorf("no operator available")
 
 func (c *Coordinator) Dispatch(ctx context.Context, op *store.Operation, bundle *commonv1.ReleaseBundle, values []byte) (*store.OutboxEntry, error) {
 	stage := ProductionStages()[0]
-	operatorID, dispatchErr := c.resolveOperator(ctx, op)
+	_, dispatchErr := c.resolveOperator(ctx, op)
 	if dispatchErr != nil {
-		operatorID = ""
 		dispatchErr = errNoOperator
 	}
 	payload, err := c.commandPayload(ctx, op, stage.Name, bundle, values)
@@ -86,9 +85,17 @@ func (c *Coordinator) Dispatch(ctx context.Context, op *store.Operation, bundle 
 	if err != nil {
 		return nil, fmt.Errorf("marshal payload: %w", err)
 	}
+	// TASK-114/U-1: the artifact stage is consumed by the orchestrator, not by
+	// an operator — the artifact checks (trust, bundle validation, admission)
+	// run synchronously while the operation is created. This row is therefore a
+	// durable record only (AC-067-13) and must never be delivered: an empty
+	// operator_id is the outbox's existing "persisted but not dispatchable"
+	// mechanism (GetNextPending filters on operator_id), so the row can never be
+	// mistaken for a release write. resolveOperator is still consulted for the
+	// no-operator signal the caller records.
 	return &store.OutboxEntry{
 		ID: uuid.New().String(), CommandID: fmt.Sprintf("%s:%s", op.ID, stage.Name),
-		OperationID: op.ID, OperationType: string(op.OperationType), OperatorID: operatorID, Payload: encoded,
+		OperationID: op.ID, OperationType: string(op.OperationType), OperatorID: "", Payload: encoded,
 	}, dispatchErr
 }
 
@@ -132,13 +139,21 @@ func (c *Coordinator) runPipeline(ctx context.Context, op *store.Operation) (Sta
 		default:
 		}
 
-		result, err := c.runStage(ctx, op, stage)
-		if err != nil {
-			c.logger.Error("stage execution error",
-				"op_id", op.ID,
-				"stage", stage.Name,
-				"err", err,
-			)
+		var result StageResult
+		if stage.Name == StageArtifact {
+			// The artifact stage is consumed here, not by an operator: its
+			// checks run while the operation is created (see runArtifactStage).
+			result = c.runArtifactStage(ctx, op)
+		} else {
+			var err error
+			result, err = c.runStage(ctx, op, stage)
+			if err != nil {
+				c.logger.Error("stage execution error",
+					"op_id", op.ID,
+					"stage", stage.Name,
+					"err", err,
+				)
+			}
 		}
 		results = append(results, result)
 
@@ -191,7 +206,28 @@ func (c *Coordinator) runPipeline(ctx context.Context, op *store.Operation) (Sta
 		c.logger.Info("optional stage passed", "op_id", op.ID, "stage", stage.Name)
 	}
 
-	// All stages passed → CAS to queued.
+	// All stages passed. INSTALL/ROLLBACK still need their release write: the
+	// preflight stage commands are checks now, so the write is a separate
+	// non-stage command (TASK-114/U-1). Without it the operation would reach
+	// succeeded with nothing installed.
+	if op.OperationType == store.OperationInstall || op.OperationType == store.OperationRollback {
+		if err := c.dispatchExecution(ctx, op); err != nil {
+			c.logger.Error("execution dispatch failed", "op_id", op.ID, "err", err)
+			c.casFailed(ctx, op, AggregateResult{
+				OperationID: op.ID,
+				Overall:     StageFailed,
+				FailedStage: executionStageName,
+				Stages:      results,
+				ErrorCode:   "dispatch_failed",
+			})
+			return StageFailed, results
+		}
+	}
+
+	// CAS to queued. The release write is now an ordinary command, so the
+	// gateway's FinishOperation drives queued→running→succeeded/failed when its
+	// result arrives — exactly the UPGRADE path (runUpgrade dispatches its
+	// :execute entry and CASes queued the same way).
 	result := AggregateResult{
 		OperationID: op.ID,
 		Overall:     StagePassed,
@@ -199,6 +235,94 @@ func (c *Coordinator) runPipeline(ctx context.Context, op *store.Operation) (Sta
 	}
 	c.casQueued(ctx, op, result)
 	return StagePassed, results
+}
+
+// executionStageName is the synthetic stage name used when the post-preflight
+// release write cannot be dispatched. It is not a preflight stage; it exists so
+// the failure is attributable in the persisted stage results.
+const executionStageName StageName = "execute"
+
+// runArtifactStage records the artifact preflight stage.
+//
+// The artifact checks are not an operator round trip. Artifact trust, bundle
+// validation and vulnerability admission all run synchronously while the
+// operation is created (orchestrator CreateOperation), and the dispatch row the
+// operation-creation unit of work persisted for AC-067-13 is a durable record
+// only: it carries no operator_id, so the outbox never delivers it and it can
+// never be mistaken for a release write.
+//
+// REQ-045's routing/digest-parity resolver (internal/preflight) is still not
+// wired into the production path; that gap stays tracked by TASK-115. It is not
+// made worse here: before this change the artifact stage ran a real Helm install
+// instead of any artifact check.
+func (c *Coordinator) runArtifactStage(ctx context.Context, op *store.Operation) StageResult {
+	commandID := fmt.Sprintf("%s:%s", op.ID, StageArtifact)
+	entry, err := c.outbox.GetByCommandID(ctx, commandID)
+	switch {
+	case err == nil:
+		if err := c.outbox.UpdateStatus(ctx, entry.ID, store.CommandSucceeded, artifactStageResultJSON); err != nil {
+			c.logger.Warn("failed to record the artifact stage result", "op_id", op.ID, "err", err)
+		}
+	case !errors.Is(err, store.ErrNotFound):
+		return StageResult{
+			Stage:  StageArtifact,
+			Status: StageFailed,
+			Detail: "artifact_dispatch_lookup_failed",
+		}
+	}
+	return StageResult{Stage: StageArtifact, Status: StagePassed, Detail: artifactStageResultJSON}
+}
+
+// artifactStageResultJSON is the recorded artifact stage result. It states where
+// the checks ran instead of claiming a check this stage did not perform.
+const artifactStageResultJSON = `{"status":"passed","detail":"artifact preconditions verified at operation admission"}`
+
+// dispatchExecution writes the real release write for an INSTALL/ROLLBACK
+// operation after every preflight stage passed.
+//
+// The command deliberately carries no stage: the operator's stage dispatcher
+// routes every stage-typed command to a check and fails closed for one it does
+// not know, so the release write must be an ordinary command (TASK-114 AC 2).
+// The command id is stable so a resumed run reuses the existing row (D-87).
+func (c *Coordinator) dispatchExecution(ctx context.Context, op *store.Operation) error {
+	commandID := op.ID + ":execute"
+	if _, err := c.outbox.GetByCommandID(ctx, commandID); err == nil {
+		c.logger.Debug("consuming existing execution dispatch", "op_id", op.ID, "command_id", commandID)
+		return nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("execution dispatch lookup: %w", err)
+	}
+
+	operatorID, err := c.resolveOperator(ctx, op)
+	if err != nil {
+		return err
+	}
+	var bundleProto *commonv1.ReleaseBundle
+	var effective []byte
+	if bundle, bundleErr := c.bundles.Get(ctx, op.BundleID); bundleErr == nil {
+		bundleProto = bundleToProto(bundle)
+		if op.ValuesRevisionID != "" {
+			if revision, revErr := c.values.Get(ctx, op.ValuesRevisionID); revErr == nil {
+				effective = revision.CanonicalDocument
+			}
+		}
+	}
+	payload, err := c.commandPayload(ctx, op, "", bundleProto, effective)
+	if err != nil {
+		return err
+	}
+	encoded, err := payload.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal execution payload: %w", err)
+	}
+	if err := c.outbox.Create(ctx, &store.OutboxEntry{
+		ID: uuid.NewString(), CommandID: commandID, OperationID: op.ID,
+		OperationType: string(op.OperationType), OperatorID: operatorID, Payload: encoded,
+	}); err != nil {
+		return fmt.Errorf("create execution dispatch: %w", err)
+	}
+	c.logger.Info("release execution dispatched", "op_id", op.ID, "command_id", commandID)
+	return nil
 }
 func (c *Coordinator) runUpgrade(ctx context.Context, op *store.Operation) StageStatus {
 	operatorID, err := c.resolveOperator(ctx, op)
@@ -429,17 +553,30 @@ func (c *Coordinator) pollStage(ctx context.Context, commandID string, stage Sta
 				return result, nil
 
 			case store.CommandFailed:
-				return StageResult{
-					Stage:  stage.Name,
-					Status: StageFailed,
-					Detail: entry.ResultJSON,
-				}, fmt.Errorf("command %s failed", commandID)
+				return failedStageResult(stage.Name, entry.ResultJSON), fmt.Errorf("command %s failed", commandID)
 
 			default:
 				// pending, delivered, running → continue polling
 			}
 		}
 	}
+}
+
+// failedStageResult builds a failed stage result from the operator's raw result
+// JSON.
+//
+// The operator reports a stable failure code in its result's `detail`
+// (TASK-114), so prefer that over the whole JSON: errorCodeFromStatus would
+// otherwise split the JSON at its first colon and record a meaningless code.
+func failedStageResult(stage StageName, resultJSON string) StageResult {
+	failed := StageResult{Stage: stage, Status: StageFailed, Detail: resultJSON}
+	var reported StageResult
+	if resultJSON != "" &&
+		json.Unmarshal([]byte(resultJSON), &reported) == nil &&
+		reported.Detail != "" {
+		failed.Detail = reported.Detail
+	}
+	return failed
 }
 
 // resolveOperator finds an active operator for the operation's target cluster.
@@ -530,43 +667,8 @@ func (c *Coordinator) casQueued(ctx context.Context, op *store.Operation, result
 		c.logger.Error("preflight→queued transition invalid", "op_id", op.ID, "err", err)
 		return
 	}
-	queuedOp, err := c.ops.UpdateStatus(ctx, op.ID, next, op.StateVersion, "")
-	if err != nil {
+	if _, err := c.ops.UpdateStatus(ctx, op.ID, next, op.StateVersion, ""); err != nil {
 		c.logger.Error("CAS queued transition failed", "op_id", op.ID, "err", err)
-		return
-	}
-
-	// The wire Command does not carry the preflight stage, so each stage
-	// command carries the operation type the operator executes against the
-	// real release; the first stage already ran the actual helm write and
-	// the release is converged, later stages replay (executeInstall /
-	// executeRollback replay guards, AC-090-02).
-	// There is no separate queued→running executor in this wiring, so an
-	// INSTALL/ROLLBACK operation would sit in `queued` forever and never
-	// reach a terminal state (real smoke 2026-08-27/2026-09-08: the fixture
-	// release was deployed/rolled back but the operation stayed QUEUED —
-	// REQ-090 run1/run5 stuck at OPERATION_STATUS_QUEUED, run4 only reached
-	// SUCCEEDED through a FinishOperation race). Drive the standard
-	// queued→running→succeeded chain — the install/rollback was the
-	// execution. The hop chain stays legal (EventBegin then EventComplete,
-	// ADR-009); a direct QUEUED→SUCCEEDED edge is never used.
-	if op.OperationType == store.OperationInstall || op.OperationType == store.OperationRollback {
-		running, err := operation.Transition(next, operation.EventBegin)
-		if err == nil {
-			runningOp, err := c.ops.UpdateStatus(ctx, op.ID, running, queuedOp.StateVersion, "")
-			if err != nil {
-				c.logger.Error("CAS running transition failed", "op_id", op.ID, "err", err)
-				return
-			}
-			succeeded, err := operation.Transition(running, operation.EventComplete)
-			if err == nil {
-				if _, err = c.ops.UpdateStatus(ctx, op.ID, succeeded, runningOp.StateVersion, ""); err != nil {
-					c.logger.Error("CAS succeeded transition failed", "op_id", op.ID, "err", err)
-				}
-				return
-			}
-		}
-		c.logger.Warn("preflight→succeeded chain invalid; operation stays queued", "op_id", op.ID, "err", err)
 	}
 }
 

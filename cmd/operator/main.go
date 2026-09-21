@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -27,7 +28,9 @@ import (
 	"github.com/ndzuki/release-manager/internal/operator/helmengine"
 	"github.com/ndzuki/release-manager/internal/operator/localstore"
 	operatorobserver "github.com/ndzuki/release-manager/internal/operator/observer"
+	operatorpreflight "github.com/ndzuki/release-manager/internal/operator/preflight"
 	"github.com/ndzuki/release-manager/internal/operator/secretmetadata"
+	orchestratorpreflight "github.com/ndzuki/release-manager/internal/orchestrator/preflight"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
@@ -51,11 +54,14 @@ type operatorSvc struct {
 	registryPlainHTTP   bool
 	installAtomic       bool
 	installTimeout      time.Duration
-	st                  *sqlitestore.Store
-	syncer              *operator.InventorySyncer
-	agent               *operatoragent.Agent
-	commandStore        localstore.Store
-	auditEmitter        *audit.Emitter
+	// runtimePull is the REQ-048 preflight policy the operator builds its
+	// runtime_pull stage executor from (TASK-114).
+	runtimePull  config.RuntimePullConfig
+	st           *sqlitestore.Store
+	syncer       *operator.InventorySyncer
+	agent        *operatoragent.Agent
+	commandStore localstore.Store
+	auditEmitter *audit.Emitter
 }
 
 func (s *operatorSvc) Name() string { return "release-operator" }
@@ -68,6 +74,7 @@ func (s *operatorSvc) Configure(cfg *config.ServiceConfig) {
 	s.operatorName = agentCfg.OperatorName
 	s.enrollmentTokenFile = agentCfg.EnrollmentTokenFile
 	s.registryPlainHTTP = agentCfg.RegistryPlainHTTP
+	s.runtimePull = cfg.RuntimePullPreflight
 	s.caCertPath = cfg.CA.CertPath
 }
 
@@ -177,17 +184,28 @@ func (s *operatorSvc) registerAgent(logger *slog.Logger) error {
 	operatorClient := operatorv1connect.NewOperatorServiceClient(httpClient, s.orchestratorURL)
 
 	engine := helmengine.NewRealEngine(s.kubeConfig, logger)
-	secretClient, err := newSecretClient(s.kubeConfig)
+	restConfig, err := loadRESTConfig(s.kubeConfig)
+	if err != nil {
+		return fmt.Errorf("load Kubernetes REST config: %w", err)
+	}
+	secretClient, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
 		return fmt.Errorf("create Kubernetes secret client: %w", err)
 	}
-	kubernetesClient, err := operator.NewKubernetesClient(s.kubeConfig)
+	kubernetesClient, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
 		return fmt.Errorf("create emergency Kubernetes client: %w", err)
 	}
 	secretLister, err := secretmetadata.NewForKubeConfig(s.kubeConfig)
 	if err != nil {
 		return fmt.Errorf("create secret metadata lister: %w", err)
+	}
+	// TASK-114 AC 3: assemble the preflight stage dispatcher. It is built here,
+	// before the agent, because a stage that reaches the agent without its
+	// executor fails closed and would block every INSTALL.
+	stageDispatcher, err := s.buildStageDispatcher(engine, restConfig, kubernetesClient, logger)
+	if err != nil {
+		return err
 	}
 
 	// TASK-080: reuse the mTLS httpClient (gateway CA trust anchor + enrolled
@@ -217,6 +235,7 @@ func (s *operatorSvc) registerAgent(logger *slog.Logger) error {
 		Secrets:           secretClient.CoreV1(),
 		EmergencyExecutor: operator.NewEmergencyCommandExecutor(kubernetesClient),
 		SecretLister:      secretLister,
+		Stages:            stageDispatcher,
 		Observer:          operatorobserver.New(secretClient),
 		KubeClient:        secretClient,
 		SessionID:         identity.SessionID,
@@ -335,24 +354,65 @@ func (s *operatorSvc) runSessionExpiry(ctx context.Context, logger *slog.Logger)
 	}
 }
 
-func newSecretClient(kubeConfig string) (kubernetes.Interface, error) {
-	var (
-		restConfig *rest.Config
-		err        error
-	)
+// loadRESTConfig resolves the operator's cluster REST config from an explicit
+// kubeconfig path or, in-cluster, from the service account.
+func loadRESTConfig(kubeConfig string) (*rest.Config, error) {
 	if kubeConfig != "" {
-		restConfig, err = clientcmd.BuildConfigFromFlags("", kubeConfig)
-	} else {
-		restConfig, err = rest.InClusterConfig()
+		restConfig, err := clientcmd.BuildConfigFromFlags("", kubeConfig)
+		if err != nil {
+			return nil, fmt.Errorf("load Kubernetes REST config: %w", err)
+		}
+		return restConfig, nil
 	}
+	restConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, fmt.Errorf("load Kubernetes REST config: %w", err)
 	}
-	client, err := kubernetes.NewForConfig(restConfig)
+	return restConfig, nil
+}
+
+// buildStageDispatcher assembles the operator-side preflight stage executors
+// (TASK-114 AC 3).
+//
+// All three stages are registered together on purpose. The agent fails a stage
+// closed when its executor is missing, and a failed required stage aborts the
+// release, so a partially assembled dispatcher would break every INSTALL.
+//
+// The dispatcher's inner executor is deliberately nil: the agent only routes a
+// command here when it carries a stage, and a stage must never reach the
+// ordinary release-write path (TASK-114 AC 2).
+func (s *operatorSvc) buildStageDispatcher(
+	engine *helmengine.RealEngine,
+	restConfig *rest.Config,
+	kubeClient kubernetes.Interface,
+	logger *slog.Logger,
+) (*operator.StageDispatcher, error) {
+	dynamicClient, err := dynamic.NewForConfig(restConfig)
 	if err != nil {
-		return nil, fmt.Errorf("initialize Kubernetes clientset: %w", err)
+		return nil, fmt.Errorf("create dynamic client for the cluster preflight stage: %w", err)
 	}
-	return client, nil
+	mapper, err := operatorpreflight.NewGKVMapper(restConfig, dynamicClient)
+	if err != nil {
+		return nil, fmt.Errorf("create REST mapper for the cluster preflight stage: %w", err)
+	}
+	pull := operatorpreflight.NewRuntimePullExecutor(
+		operatorpreflight.NewPullProber(kubeClient, logger),
+		operatorpreflight.RuntimePullConfig{
+			Enabled:        s.runtimePull.Enabled,
+			Namespace:      s.runtimePull.Namespace,
+			ServiceAccount: s.runtimePull.ServiceAccount,
+			Timeout:        s.runtimePull.Timeout,
+			CleanupPolicy:  operatorpreflight.CleanupPolicy(s.runtimePull.CleanupPolicy),
+			ProbeCommand:   s.runtimePull.ProbeCommand,
+		},
+	)
+	return operator.NewStageDispatcher(nil, map[string]operator.StageExecutor{
+		string(orchestratorpreflight.StageRender): operator.NewRenderStageExecutor(
+			engine, s.registryPlainHTTP, logger),
+		string(orchestratorpreflight.StageCluster): operator.NewClusterStageExecutor(
+			engine, operatorpreflight.NewDryRunExecutor(mapper), s.registryPlainHTTP, logger),
+		string(orchestratorpreflight.StageRuntimePull): operator.NewRuntimePullStageExecutor(pull, logger),
+	}), nil
 }
 
 func main() {

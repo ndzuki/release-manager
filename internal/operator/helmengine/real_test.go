@@ -497,6 +497,42 @@ func newTestRealEngine(t *testing.T, kubeClient kube.Interface) (*RealEngine, *s
 	return engine, releases
 }
 
+// TASK-114: the preflight render and cluster stages resolve the bundle's chart
+// through RealEngine.LocateChart. Helm refuses an OCI reference outright when
+// the locator carries no registry client ("missing registry client"), so the
+// locator must build one even though it never talks to a cluster — otherwise
+// every OCI bundle's render stage fails before it renders anything (found by
+// the first live preflight run: the render stage failed every time while the
+// install path, which builds its configuration through actionConfig, worked).
+func TestRealEngine_LocateChartCarriesARegistryClientForOCI(t *testing.T) {
+	engine := NewRealEngine("", slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	_, err := engine.LocateChart("oci://registry.invalid/release-fixture", "0.1.0", true)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "missing registry client",
+		"an OCI reference must reach the downloader; Helm refuses it without a registry client")
+}
+
+// TASK-114: LocateChart still resolves a local chart directory, so the same
+// helper serves the render and cluster stages for local and OCI charts alike.
+func TestRealEngine_LocateChartLoadsALocalChart(t *testing.T) {
+	engine := NewRealEngine("", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	chartPath := writeTestChart(t)
+
+	loaded, err := engine.LocateChart(chartPath, "", false)
+	require.NoError(t, err)
+	assert.Equal(t, "example-chart", loaded.Name())
+}
+
+// TASK-114: an empty reference is rejected before any registry work.
+func TestRealEngine_LocateChartRequiresAReference(t *testing.T) {
+	engine := NewRealEngine("", slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	_, err := engine.LocateChart("  ", "", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "chart reference is required")
+}
+
 func writeTestChart(t *testing.T) string {
 	t.Helper()
 

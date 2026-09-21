@@ -41,6 +41,14 @@ type RealEngine struct {
 // (LocateChart + loader.Load), exposed for the preflight render stage: that
 // stage needs the chart to render, and rendering is a check rather than a
 // release write (TASK-114).
+//
+// The locator needs a registry client even though it never talks to a cluster:
+// Helm's ChartPathOptions.LocateChart refuses an OCI reference outright with
+// "missing registry client" when there is none, so a locator built on an empty
+// action.Configuration could never resolve the OCI chart every fixture and every
+// OCI-packaged bundle uses (found by the first live preflight run — the render
+// stage failed every time while the install path, which builds its
+// configuration through actionConfig, worked).
 func (r *RealEngine) LocateChart(chartRef, chartVersion string, plainHTTP bool) (*chart.Chart, error) {
 	if r == nil || r.settings == nil {
 		return nil, fmt.Errorf("helm engine settings are required")
@@ -48,7 +56,13 @@ func (r *RealEngine) LocateChart(chartRef, chartVersion string, plainHTTP bool) 
 	if strings.TrimSpace(chartRef) == "" {
 		return nil, fmt.Errorf("chart reference is required")
 	}
-	locator := action.NewInstall(&action.Configuration{})
+	registryClient, err := registry.NewClient(
+		registry.ClientOptCredentialsFile(r.settings.RegistryConfig),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initialize Helm registry client: %w", err)
+	}
+	locator := action.NewInstall(&action.Configuration{RegistryClient: registryClient})
 	locator.Version = chartVersion
 	locator.PlainHTTP = plainHTTP
 	chartPath, err := locator.LocateChart(chartRef, r.settings)

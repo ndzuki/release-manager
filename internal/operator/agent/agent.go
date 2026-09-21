@@ -81,6 +81,7 @@ type Agent struct {
 	store             localstore.Store
 	notifier          InventoryNotifier
 	syncExecutor      InventorySyncExecutor
+	stages            *operatorruntime.StageDispatcher
 	secrets           corev1client.CoreV1Interface
 	emergencyExecutor EmergencyExecutor
 	secretLister      secretmetadata.Lister
@@ -109,11 +110,15 @@ type InstallFlags struct {
 
 // Config contains Agent dependencies and session identity.
 type Config struct {
-	Client            StreamClient
-	Engine            helmengine.Engine
-	Store             localstore.Store
-	Notifier          InventoryNotifier
-	SyncExecutor      InventorySyncExecutor
+	Client       StreamClient
+	Engine       helmengine.Engine
+	Store        localstore.Store
+	Notifier     InventoryNotifier
+	SyncExecutor InventorySyncExecutor
+	// Stages routes a delivered command that carries a preflight stage to that
+	// stage's executor (TASK-114). Nil is the safe default: a stage command
+	// then fails closed instead of falling back to a release write.
+	Stages            *operatorruntime.StageDispatcher
 	Secrets           corev1client.CoreV1Interface
 	EmergencyExecutor EmergencyExecutor
 	SecretLister      secretmetadata.Lister
@@ -133,17 +138,21 @@ type Config struct {
 
 // Result is persisted locally and sent to the orchestrator for idempotent replay.
 type Result struct {
-	OperationID     string                    `json:"operation_id"`
-	CommandID       string                    `json:"command_id"`
-	DefinitionID    string                    `json:"definition_id"`
-	Status          string                    `json:"status"`
-	Upgrade         *operatorv1.UpgradeResult `json:"upgrade,omitempty"`
-	Code            string                    `json:"code,omitempty"`
-	Message         string                    `json:"message,omitempty"`
-	Release         *helmengine.Release       `json:"release,omitempty"`
-	Secrets         []secretmetadata.Secret   `json:"secrets,omitempty"`
-	InventorySync   bool                      `json:"inventory_sync_hint"`
-	ResourceSummary ResourceSummary           `json:"resource_summary"`
+	OperationID  string                    `json:"operation_id"`
+	CommandID    string                    `json:"command_id"`
+	DefinitionID string                    `json:"definition_id"`
+	Status       string                    `json:"status"`
+	Upgrade      *operatorv1.UpgradeResult `json:"upgrade,omitempty"`
+	Code         string                    `json:"code,omitempty"`
+	Message      string                    `json:"message,omitempty"`
+	// Detail carries a preflight stage's own result document. The orchestrator
+	// decodes this result into preflight.StageResult, whose `detail` field
+	// surfaces it on the operation detail page (TASK-114 / TASK-149).
+	Detail          string                  `json:"detail,omitempty"`
+	Release         *helmengine.Release     `json:"release,omitempty"`
+	Secrets         []secretmetadata.Secret `json:"secrets,omitempty"`
+	InventorySync   bool                    `json:"inventory_sync_hint"`
+	ResourceSummary ResourceSummary         `json:"resource_summary"`
 }
 
 // ResourceSummary contains non-sensitive output metadata.
@@ -182,6 +191,7 @@ func New(cfg Config) (*Agent, error) {
 		store:             cfg.Store,
 		notifier:          cfg.Notifier,
 		syncExecutor:      cfg.SyncExecutor,
+		stages:            cfg.Stages,
 		secrets:           cfg.Secrets,
 		emergencyExecutor: cfg.EmergencyExecutor,
 		secretLister:      cfg.SecretLister,
@@ -518,7 +528,7 @@ func (a *Agent) executeEntry(ctx context.Context, stream Stream, entry *localsto
 	}
 
 	reporter := newRolloutReporter(stream, command.GetOperationId(), a.logger)
-	result := a.execute(ctx, &command, reporter)
+	result := a.executeCommand(ctx, &command, reporter)
 	resultJSON, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("marshal command result %q: %w", entry.CommandID, err)
@@ -555,6 +565,57 @@ func (a *Agent) executeEntry(ctx context.Context, stream Stream, entry *localsto
 		return stream.Send(commandResultRequest(&command, result))
 	}
 	return stream.Send(resultRequest(&command, result, resultJSON))
+}
+
+// executeCommand routes one delivered command. A command carrying a preflight
+// stage is a check, not a release write, so it is dispatched before the
+// operation-type switch and can never reach executeInstall/executeUpgrade
+// (TASK-114 AC 2). A command without a stage keeps its previous behaviour.
+func (a *Agent) executeCommand(ctx context.Context, command *operatorv1.Command, reporter *rolloutReporter) Result {
+	if strings.TrimSpace(command.GetStage()) != "" {
+		return a.executeStage(ctx, command)
+	}
+	return a.execute(ctx, command, reporter)
+}
+
+// executeStage runs one preflight stage through the dispatcher.
+//
+// The dispatcher fails closed for a stage it does not know, and a missing
+// dispatcher fails closed too: executing a stage as an ordinary command would
+// install or upgrade the release while the caller believes a check ran.
+func (a *Agent) executeStage(ctx context.Context, command *operatorv1.Command) Result {
+	result := Result{
+		OperationID:  command.GetOperationId(),
+		CommandID:    command.GetCommandId(),
+		DefinitionID: command.GetDefinitionId(),
+		Status:       "failed",
+	}
+	if a.stages == nil {
+		result.Code = "preflight_stage_unavailable"
+		result.Message = "preflight stage dispatcher is unavailable"
+		result.Detail = result.Code
+		return result
+	}
+	output, err := a.stages.Execute(ctx, command)
+	if err != nil {
+		result.Code = "preflight_stage_failed"
+		result.Message = err.Error()
+		// Keep the stable code first — the orchestrator reads this result's
+		// `detail` as the preflight error code — and the executor's message
+		// after it, so the stage stays attributable AND diagnosable. Without
+		// the message the orchestrator only ever sees the code, and the
+		// operator log is the only place the cause would remain.
+		result.Detail = result.Code + ": " + result.Message
+		a.logger.Warn("preflight stage failed",
+			"operation_id", command.GetOperationId(),
+			"stage", command.GetStage(),
+			"error", err,
+		)
+		return result
+	}
+	result.Status = "succeeded"
+	result.Detail = output
+	return result
 }
 
 func (a *Agent) execute(ctx context.Context, command *operatorv1.Command, reporter *rolloutReporter) Result {
