@@ -390,6 +390,13 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
         // (AC-058-16/17); transient errors keep the key for retry reuse.
         confirmedIntent.value = null;
       }
+      if (mapped.code === 'artifact_not_trusted') {
+        // AC-058-11: the artifact was VERIFIED when it was listed, but its trust
+        // was revoked before submit. The selection is now invalid, so clear it
+        // and reload the candidates rather than let the user retry a stale
+        // choice. loadArtifactsForSelection already resets the selection.
+        await loadArtifactsForSelection();
+      }
       return null;
     } finally {
       if (captured === generation) submitting.value = false;
