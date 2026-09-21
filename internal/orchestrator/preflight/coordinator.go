@@ -125,7 +125,7 @@ func (c *Coordinator) runPipeline(ctx context.Context, op *store.Operation) (Sta
 		overall := c.runUpgrade(ctx, op)
 		return overall, nil
 	}
-	stages := ProductionStages()
+	stages := stagesForOperation(op)
 	results := make([]StageResult, 0, len(stages))
 
 	for _, stage := range stages {
@@ -241,6 +241,33 @@ func (c *Coordinator) runPipeline(ctx context.Context, op *store.Operation) (Sta
 // release write cannot be dispatched. It is not a preflight stage; it exists so
 // the failure is attributable in the persisted stage results.
 const executionStageName StageName = "execute"
+
+// stagesForOperation selects the preflight stages an operation has inputs for.
+//
+// A ROLLBACK restores a revision Helm already stores: the orchestrator creates
+// it without a bundle (rollback.go), so the chart-dependent stages (render,
+// cluster, runtime_pull) have nothing to render, dry-run or pull — dispatching
+// them would fail a *required* stage on an operation that has no chart to check
+// at all (real CI run 2026-09-21: `render stage requires a bundle`). A
+// rollback's real preconditions (active inventory, expected revision, no
+// concurrent operation) are validated when it is created (REQ-067 rule 13), and
+// the rollback itself runs as a separate non-stage :execute command — the route
+// AC-090-01 explicitly allows.
+//
+// INSTALL and the other staged operation types keep the full pipeline.
+func stagesForOperation(op *store.Operation) []StageDef {
+	stages := ProductionStages()
+	if op == nil || op.OperationType != store.OperationRollback {
+		return stages
+	}
+	selected := make([]StageDef, 0, 1)
+	for _, stage := range stages {
+		if stage.Name == StageArtifact {
+			selected = append(selected, stage)
+		}
+	}
+	return selected
+}
 
 // runArtifactStage records the artifact preflight stage.
 //

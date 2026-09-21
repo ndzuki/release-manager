@@ -402,11 +402,14 @@ func TestCoordinatorRun_AllPassedFinalizesLifecycle(t *testing.T) {
 	assert.Equal(t, "artifact,render,dryrun,runtime_pull", pl.Stages, "canonical stage names in execution order")
 }
 
-// AC-090-01: a ROLLBACK operation that passes every preflight stage queues its
-// real helm rollback as a separate command (INSTALL-symmetric). Before
-// TASK-114 the first stage ran the rollback itself and casQueued drove the
-// operation to succeeded without a separate execution; now a stage is a check,
-// so the rollback must be its own non-stage command.
+// AC-090-01: a ROLLBACK operation queues its real helm rollback as a separate
+// command (INSTALL-symmetric). Before TASK-114 the first stage ran the rollback
+// itself and casQueued drove the operation to succeeded without a separate
+// execution; now a stage is a check, so the rollback must be its own non-stage
+// command.
+//
+// A rollback carries no bundle, so it has no chart to render: its stage set is
+// the artifact stage only (D-V / V-1), and the rollback runs as :execute.
 func TestCoordinatorRun_RollbackPassedFinalizesSucceeded(t *testing.T) {
 	st := sqlitestore.OpenTest(t)
 	op := seedRollbackFixture(t, st)
@@ -415,12 +418,18 @@ func TestCoordinatorRun_RollbackPassedFinalizesSucceeded(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() { c.Run(ctx, op); close(done) }()
-
-	driveOperatorStages(t, st, op.ID)
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("coordinator did not finish")
+	}
+
+	// The chart-dependent stages must not be dispatched for a bundle-less
+	// rollback: they would fail a required stage on an operation with no chart.
+	for _, stage := range []string{"render", "cluster", "runtime_pull"} {
+		_, err := st.Outbox().GetByCommandID(ctx, op.ID+":"+stage)
+		assert.ErrorIs(t, err, store.ErrNotFound,
+			"a bundle-less ROLLBACK must not dispatch the %s stage", stage)
 	}
 
 	execute, err := st.Outbox().GetByCommandID(ctx, op.ID+":execute")
@@ -434,6 +443,10 @@ func TestCoordinatorRun_RollbackPassedFinalizesSucceeded(t *testing.T) {
 	got, err := st.Operations().Get(ctx, op.ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusQueued, got.Status, "the rollback write is queued, not already done")
+
+	pl, err := st.PreflightLifecycles().GetByOperationID(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "artifact", pl.Stages, "a bundle-less rollback has only the artifact stage")
 }
 
 // AC-090-01 negative: only INSTALL/ROLLBACK get a post-preflight release write
