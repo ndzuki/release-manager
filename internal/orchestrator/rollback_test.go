@@ -298,7 +298,17 @@ func TestRollbackRelease_Idempotency(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, resp1.Msg.OperationId, resp2.Msg.OperationId)
-	assert.Equal(t, resp1.Msg.State, resp2.Msg.State)
+
+	// The replay reports the operation's CURRENT state, and the detached
+	// preflight coordinator may already have advanced it: a rollback's preflight
+	// is a single local artifact check since D-V/V-1, so it can reach `queued`
+	// before the second call arrives. Equality of the two states is therefore
+	// not part of the idempotency contract -- one operation with one id is --
+	// and asserting it flaked in CI (expected "preflight", actual "queued").
+	assert.NotEmpty(t, resp2.Msg.State)
+	assert.Contains(t,
+		[]string{"pending", "preflight", "queued", "running", "succeeded", "failed", "cancelled"},
+		resp2.Msg.State, "the replay must report a legal operation state")
 
 	// Verify only one operation exists
 	ops, err := st.Operations().List(context.Background(), "def-001")
