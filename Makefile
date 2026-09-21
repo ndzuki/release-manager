@@ -567,6 +567,10 @@ check-tasks: ## Ledger↔git gate: every done/closed card must be merged with a 
 		$(GO) run ./cmd/taskcheck/ -git-log "$$gitlog" -gh-prs "$$ghprs" $(if $(filter 1,$(ALLOW_UNVERIFIED_TASKS)),-allow-unverified,) -requirements "$$REQS" $$TASKS; \
 	fi
 
+.PHONY: pr-merge-check
+pr-merge-check: ## Refuse to merge a PR whose checks are not all green (PR=<number>)
+	@bash scripts/pr-merge-check.sh "$(PR)"
+
 .PHONY: vulncheck
 vulncheck: ## Scan the module against the Go vulnerability database (REQ-008 §8-8)
 	@command -v govulncheck >/dev/null 2>&1 || { \
