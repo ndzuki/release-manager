@@ -122,3 +122,33 @@ func TestRenderManifestsReturnsTheRenderedFiles(t *testing.T) {
 	// And the rendered files are available for the caller to decode.
 	assert.NotEmpty(t, rendered, "the rendered files must be returned")
 }
+
+// A positive MaxManifestBytes is what makes the size check reachable at all
+// (summarizeRenderedManifests only enforces it when maxBytes > 0). The render
+// stage passes DefaultMaxManifestBytes so a bundle the cluster stage would
+// refuse to decode cannot pass preflight; without it REQ-046's size_exceeded
+// was unreachable on the production path.
+func TestRenderPreflight_SizeExceededIsEnforced(t *testing.T) {
+	t.Parallel()
+
+	_, err := RenderPreflight(t.Context(), RenderOptions{
+		Chart:            renderFixtureChart(t),
+		ReleaseName:      "release",
+		Namespace:        "default",
+		ChartDigest:      "sha256:chart",
+		ValuesDigest:     "sha256:values",
+		MaxManifestBytes: 1, // every rendered manifest exceeds a single byte
+	})
+	require.Error(t, err)
+
+	var renderErr *RenderError
+	require.ErrorAs(t, err, &renderErr)
+	assert.Equal(t, RenderCodeSizeExceeded, renderErr.Code)
+}
+
+// The default limit must be positive, or the check above is silently disabled
+// again (the production path passes this constant).
+func TestDefaultMaxManifestBytesIsPositive(t *testing.T) {
+	t.Parallel()
+	assert.Positive(t, DefaultMaxManifestBytes)
+}

@@ -73,6 +73,12 @@ type RenderOptions struct {
 	IncludeCRDs      bool
 }
 
+// DefaultMaxManifestBytes is the production limit for the total rendered
+// manifest size. It matches internal/operator/preflight's MaxManifestBytes
+// (50 MiB): the render stage must reject a bundle the cluster stage would later
+// refuse to decode, so the two limits are deliberately the same.
+const DefaultMaxManifestBytes int64 = 50 * 1024 * 1024
+
 // ResourceSummary is the safe, persistable identity of one rendered resource.
 type ResourceSummary struct {
 	APIVersion string `json:"api_version"`

@@ -75,6 +75,10 @@ func (e *RenderStageExecutor) ExecuteStage(ctx context.Context, command *operato
 		Values:       values,
 		ValuesDigest: digestOf(values),
 		ValuesPatch:  command.GetValuesPatch(),
+		// Without a limit the render stage never enforces it (the check needs a
+		// positive bound), which made REQ-046's size_exceeded unreachable on the
+		// production path.
+		MaxManifestBytes: helmengine.DefaultMaxManifestBytes,
 		// No CapabilitiesSnapshot: the render stage renders against Helm's
 		// defaults. Cluster-aware validation is the cluster stage's job, and
 		// inventing a snapshot here would make the two stages disagree.
