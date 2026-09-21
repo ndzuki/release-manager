@@ -280,6 +280,9 @@ func TestCancelRequiresOperationID(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
+	// Cancel reads the operation first to send the CAS guard the server requires
+	// (expected_state_version >= 1), so the operation must exist.
+	h.orch.operations["op-live"] = &orchestratorv1.Operation{OperationId: "op-live", StateVersion: 1}
 	if err := h.connector.Cancel(context.Background(), " "); err == nil {
 		t.Fatal("Cancel() error = nil, want an error for an empty operation id")
 	}

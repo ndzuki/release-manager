@@ -180,9 +180,19 @@ func (c *Connector) Cancel(ctx context.Context, operationID string) error {
 	if err := c.Login(ctx); err != nil {
 		return err
 	}
+	// The cancel write is a CAS and the server rejects expected_state_version < 1
+	// (internal/orchestrator/service.go:1259), so the previous call failed every
+	// time with invalid_argument (REQ-066 cancel-leg gap). Read the current
+	// version first.
+	current, err := clients.Orchestrator().GetOperation(ctx,
+		authorizedRequest(c.session.Token(), &orchestratorv1.GetOperationRequest{OperationId: operationID}))
+	if err != nil {
+		return fmt.Errorf("livewire: read operation %s: %w", operationID, err)
+	}
 	rpc := authorizedRequest(c.session.Token(), &orchestratorv1.CancelOperationRequest{
-		OperationId: operationID,
-		Reason:      "e2e stage takeover",
+		OperationId:          operationID,
+		Reason:               "e2e stage takeover",
+		ExpectedStateVersion: current.Msg.GetOperation().GetStateVersion(),
 	})
 	rpc.Header().Set("Idempotency-Key", c.writeKey("cancel", operationID))
 	_, err = clients.Orchestrator().CancelOperation(ctx, rpc)
