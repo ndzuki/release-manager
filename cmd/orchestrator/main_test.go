@@ -147,10 +147,19 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
 	assert.ErrorContains(t, err, "authorization snapshot stale")
-	_, err = client.SubmitValuesRevision(ctx, viewerRequest)
-	require.Error(t, err)
-	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
-	assert.ErrorContains(t, err, "insufficient for submit")
+	// The authorization snapshot refreshes asynchronously (Module.checkSnapshot
+	// requires it initialized and fresh, internal/authorization/module.go:175).
+	// Assuming the refresh lands between two consecutive calls flaked in CI on a
+	// slow -race run: the second call still saw "snapshot stale" instead of
+	// "insufficient for submit", and the audit outbox was still empty. Wait for
+	// the freshness to land instead of assuming a time budget.
+	var submitErr error
+	require.Eventually(t, func() bool {
+		_, submitErr = client.SubmitValuesRevision(ctx, viewerRequest)
+		return connect.CodeOf(submitErr) == connect.CodePermissionDenied
+	}, 10*time.Second, 50*time.Millisecond,
+		"the authorization snapshot must become fresh")
+	assert.ErrorContains(t, submitErr, "insufficient for submit")
 	viewerAudit, err := svc.store.ValuesApprovalEvidence().ListAuditOutbox(ctx, viewerRevisionID)
 	require.NoError(t, err)
 	require.Len(t, viewerAudit, 1)
