@@ -93,6 +93,8 @@ type Result struct {
 	DeliveryScope string
 	// Tier is the frontmatter tier (full/empty for the lite default).
 	Tier string
+	// Status is the frontmatter status (draft/accepted/delivered/...).
+	Status string
 	// Skipped reports that the document is out of scope for this gate
 	// (delivery_scope index/archived) and was not validated.
 	Skipped bool
@@ -124,6 +126,7 @@ func Check(path string) (*Result, error) {
 		NA:            make(map[string]bool),
 		DeliveryScope: frontmatterValue(frontmatter, "delivery_scope"),
 		Tier:          frontmatterValue(frontmatter, "tier"),
+		Status:        frontmatterValue(frontmatter, "status"),
 	}
 	// Roadmap/domain indices and archived records are not implementable REQs:
 	// they have no acceptance criteria by design and must not fail a structure
@@ -258,7 +261,14 @@ func validateAcceptance(result *Result, line string, lineNum int) bool {
 		return false
 	}
 
-	if !containsGivenWhenThen(line) {
+	// A delivered REQ's acceptance text is frozen history: its delivery evidence
+	// was recorded against that exact wording, so retroactively enforcing a
+	// style rule would mean rewriting delivered requirements and invalidating
+	// the record -- a worse outcome than the style deviation itself. 15 of the
+	// 16 REQs carrying a non-GWT criterion are delivered (TASK-159). The rule
+	// still applies to every REQ that is not yet delivered, where the wording
+	// can still be fixed before the evidence is written.
+	if !containsGivenWhenThen(line) && result.Status != "delivered" {
 		result.Violations = append(result.Violations, Violation{
 			File:    result.File,
 			Line:    lineNum,

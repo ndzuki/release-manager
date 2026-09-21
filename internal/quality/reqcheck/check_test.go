@@ -691,3 +691,32 @@ func TestCheck_SkipsIndexAndArchivedScopes(t *testing.T) {
 		assert.Empty(t, result.Violations, "a skipped document must report no violations")
 	}
 }
+
+// TASK-159: a delivered REQ's acceptance text is frozen history -- its delivery
+// evidence was recorded against that exact wording -- so the Given/When/Then
+// style rule must not force a rewrite of a delivered requirement. It must still
+// apply to a REQ that is not yet delivered. Removing the status check from
+// validateAcceptance makes this test fail.
+func TestCheck_DeliveredRequirementIsNotForcedToRewriteItsCriteria(t *testing.T) {
+	t.Parallel()
+
+	body := `## 目标
+无。
+
+## 验收标准
+- [ ] AC-906-01 多镜像 Bundle 正确绑定到 values path。
+
+## 非目标
+无。
+`
+	delivered := writeTemp(t, "---\nstatus: delivered\n---\n\n"+body)
+	result, err := Check(delivered)
+	require.NoError(t, err)
+	assert.Empty(t, result.Violations, "a delivered REQ must not be flagged for AC style")
+
+	active := writeTemp(t, "---\nstatus: accepted\n---\n\n"+body)
+	activeResult, err := Check(active)
+	require.NoError(t, err)
+	require.NotEmpty(t, activeResult.Violations, "a non-delivered REQ must still be flagged")
+	assert.Contains(t, activeResult.Violations[0].Message, "lacks Given/When/Then")
+}
