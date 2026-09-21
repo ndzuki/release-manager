@@ -73,6 +73,13 @@ type emergencyResolvedChange struct {
 
 // emergencyAnnotationEntry is one validated annotation, in the shape the intent
 // column stores (the dispatch path unmarshals the same {Key,Value} pairs).
+// AC-058-13 batch bounds (REQ-058 详细技术规格: annotations 1-50, value 1-2048
+// UTF-8 bytes).
+const (
+	emergencyMaxAnnotations          = 50
+	emergencyMaxAnnotationValueBytes = 2048
+)
+
 type emergencyAnnotationEntry struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
@@ -634,6 +641,14 @@ func resolveEmergencyAnnotations(
 		return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument,
 			"invalid_annotation_entries", "annotations must not be empty")
 	}
+	// AC-058-13 bounds the batch: the request must carry 1..50 entries and each
+	// value 1..2048 UTF-8 bytes (REQ-058 详细技术规格). Only the empty case was
+	// checked, so an oversized batch or value reached the operator.
+	if len(msg.GetAnnotations()) > emergencyMaxAnnotations {
+		return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument,
+			"invalid_annotation_entries",
+			fmt.Sprintf("at most %d annotations are allowed, got %d", emergencyMaxAnnotations, len(msg.GetAnnotations())))
+	}
 	approved := make(map[string]store.ApprovedAnnotationKey, len(definition.ApprovedAnnotationKeys))
 	for _, entry := range definition.ApprovedAnnotationKeys {
 		approved[entry.Key] = entry
@@ -662,7 +677,13 @@ func resolveEmergencyAnnotations(
 			return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument,
 				"annotation_scope_mismatch", fmt.Sprintf("annotation key %s is approved for scope %s", key, allowed.Scope))
 		}
-		entries = append(entries, emergencyAnnotationEntry{Key: key, Value: entry.GetValue()})
+		value := entry.GetValue()
+		if value == "" || len(value) > emergencyMaxAnnotationValueBytes {
+			return emergencyResolvedChange{}, emergencyError(connect.CodeInvalidArgument,
+				"invalid_annotation_entries",
+				fmt.Sprintf("annotation value must be 1..%d UTF-8 bytes, got %d", emergencyMaxAnnotationValueBytes, len(value)))
+		}
+		entries = append(entries, emergencyAnnotationEntry{Key: key, Value: value})
 		if allowed.PromotionValuesPath != "" {
 			promotionPaths = append(promotionPaths, allowed.PromotionValuesPath)
 		}

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -81,6 +82,33 @@ func TestExecuteEmergencyChangeAnnotationValidation(t *testing.T) {
 			whitelist: nil,
 			mutate:    func(*orchestratorv1.ExecuteEmergencyChangeRequest) {},
 			wantCode:  "annotation_key_not_allowed",
+		},
+		// AC-058-13 bounds: the batch is 1..50 and each value 1..2048 bytes.
+		// Only the empty batch was checked before, so 51 entries and an
+		// oversized value reached the operator.
+		"too many annotations": {
+			whitelist: whitelist,
+			mutate: func(r *orchestratorv1.ExecuteEmergencyChangeRequest) {
+				r.Annotations = make([]*orchestratorv1.AnnotationEntry, 0, 51)
+				for i := 0; i < 51; i++ {
+					r.Annotations = append(r.Annotations, &orchestratorv1.AnnotationEntry{Key: "team", Value: "payments"})
+				}
+			},
+			wantCode: "invalid_annotation_entries",
+		},
+		"annotation value too long": {
+			whitelist: whitelist,
+			mutate: func(r *orchestratorv1.ExecuteEmergencyChangeRequest) {
+				r.Annotations[0].Value = strings.Repeat("a", 2049)
+			},
+			wantCode: "invalid_annotation_entries",
+		},
+		"annotation value empty": {
+			whitelist: whitelist,
+			mutate: func(r *orchestratorv1.ExecuteEmergencyChangeRequest) {
+				r.Annotations[0].Value = ""
+			},
+			wantCode: "invalid_annotation_entries",
 		},
 	}
 
