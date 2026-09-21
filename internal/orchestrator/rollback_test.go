@@ -67,7 +67,13 @@ func TestRollbackRelease_Success(t *testing.T) {
 	assert.Equal(t, store.OperationRollback, op.OperationType)
 	assert.Equal(t, 3, op.ExpectedRevision)
 	assert.Equal(t, 1, op.TargetRevision)
-	assert.Equal(t, store.StatusPreflight, op.Status)
+
+	// The read-back races the detached coordinator: a rollback's preflight is a
+	// single local artifact check since D-V/V-1, so the operation can already be
+	// queued by the time this Get runs (CI: expected "preflight", actual
+	// "queued"). The stable contract is the type and the revisions asserted
+	// above; the status must be a legal non-terminal state of the rollback path.
+	assert.Contains(t, []store.OperationStatus{store.StatusPreflight, store.StatusQueued}, op.Status)
 }
 
 func TestRollbackRelease_TargetRevisionInvalid(t *testing.T) {
