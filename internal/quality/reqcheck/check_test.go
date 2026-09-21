@@ -646,17 +646,48 @@ func TestCheck_MixedCaseGivenWhenThen(t *testing.T) {
 }
 
 func TestCheck_MultipleViolations(t *testing.T) {
-	// A doc missing multiple sections should report all of them.
+	// TASK-159: a lite document is judged against the lite core, while a
+	// `tier: full` document must still carry all ten sections.
 	t.Parallel()
 
-	path := writeTemp(t, `# 某需求
+	lite := writeTemp(t, `# 某需求
 
 ## 目标
 做了个事。
 `)
-
-	result, err := Check(path)
+	result, err := Check(lite)
 	require.NoError(t, err)
-	// 9 missing sections + empty acceptance → at least 9 violations
-	assert.GreaterOrEqual(t, len(result.Violations), 9)
+	require.False(t, result.Skipped)
+	assert.GreaterOrEqual(t, len(result.Violations), 2, "the lite core sections are still required")
+	assert.Less(t, len(result.Violations), 9,
+		"a lite document must not be judged against the full template")
+
+	full := writeTemp(t, `---
+tier: full
+---
+
+# 某需求
+
+## 目标
+做了个事。
+`)
+	fullResult, err := Check(full)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(fullResult.Violations), 9,
+		"a tier: full document must still carry every section")
+}
+
+// TASK-159 negative control: a roadmap/domain index or an archived record is
+// not an implementable REQ and must be skipped, not failed. Removing the
+// delivery_scope check makes this test fail.
+func TestCheck_SkipsIndexAndArchivedScopes(t *testing.T) {
+	t.Parallel()
+
+	for _, scope := range []string{"index", "archived"} {
+		path := writeTemp(t, "---\ndelivery_scope: "+scope+"\n---\n\n# 索引\n\n没有验收标准，也没有目标小节。\n")
+		result, err := Check(path)
+		require.NoError(t, err)
+		assert.True(t, result.Skipped, "delivery_scope=%s must be skipped", scope)
+		assert.Empty(t, result.Violations, "a skipped document must report no violations")
+	}
 }
