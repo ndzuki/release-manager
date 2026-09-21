@@ -101,6 +101,34 @@ func (s *Service) ListReleases(
 		if !page.LastSyncAt.IsZero() {
 			summary.LastSyncAt = timestamppb.New(page.LastSyncAt)
 		}
+
+		// AC-058-08: the inventory page greys out releases that conflict with an
+		// emergency change and badges those awaiting convergence. Both fields
+		// were left at their zero value, so the UI could never show either --
+		// the same shape as the statusFilter bug: the data existed, the wiring
+		// did not.
+		operations, err := s.store.Operations().List(ctx, item.ReleaseDefinitionID)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list release operations: %w", err))
+		}
+		for _, operation := range operations {
+			if operation.OperationType.IsStandard() && !operation.Status.IsTerminal() {
+				summary.EmergencyConflict = true
+				break
+			}
+		}
+
+		pending, err := s.store.ConvergenceTasks().ListByDefinition(ctx, item.ReleaseDefinitionID, "pending_promotion")
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list pending convergence tasks: %w", err))
+		}
+		summary.PendingConvergenceCount = int32(len(pending)) //nolint:gosec // bounded by the row count
+
+		// operation_version and revert_status_summary are deliberately left
+		// empty: neither has a production data source yet (the revert
+		// reconciliation has no writer, and no operation version is defined for
+		// a release summary). Filling them with a plausible-looking value would
+		// be worse than leaving them unset -- see REQ-058 R5/R7.
 		resp.Releases = append(resp.Releases, summary)
 	}
 	return connect.NewResponse(resp), nil
