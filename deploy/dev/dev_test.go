@@ -461,7 +461,11 @@ func happyShims(t *testing.T, binDir string) {
 	// for the --format IP probes used by agents_up (management node /
 	// registry hostAliases); `container create` invocations are logged to
 	// $DEV_DATA_DIR/docker-create.log so tests can assert the AC-065-32
-	// label contract; other verbs (start/rm) pass through.
+	// label contract. Every other verb exits 0 at the end of the shim — it
+	// never reaches the real Docker daemon, so a purge inside a test cannot
+	// touch the developer's containers (TASK-150 verification: the previous
+	// comment claimed start/rm "pass through", which the code below does not
+	// do).
 	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
 if [ "$1" = "container" ] && [ "$2" = "create" ]; then
   printf '%s\n' "$*" >> "$DEV_DATA_DIR/docker-create.log"
