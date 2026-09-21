@@ -11,6 +11,11 @@ version: "1"
 # gap with an owning requirement, not a permanent allowance.
 exceptions:
   - owner: "release-manager"
+    code: "secret_output_forbidden"
+    reason: "REQ-046 AC-046-07: explicitly deferred (TASK-162). RenderResult has no manifest field and raw manifests are consumed by the cluster stage and never persisted, so a Secret-data check at the persistence boundary is structurally unreachable; moving the guard into the render path would violate AC-046-02 (rendering a Secret must succeed with only a summary). The dead constants were removed."
+    expires_at: "2027-03-31"
+
+  - owner: "release-manager"
     code: "non_bundle_image"
     reason: "REQ-056: the backend half of the non-bundle-image rejection is not wired; the frontend maps it but internal/ has no such code. Tracked as REQ-056 partial (audit bucket A/B)."
     expires_at: "2026-12-31"
