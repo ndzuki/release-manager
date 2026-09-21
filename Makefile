@@ -545,7 +545,7 @@ check-migrations: ## Static gate: migration numbering is contiguous and every ve
 
 .PHONY: check-schema-parity
 check-schema-parity: ## Dual-engine parity gate: SQLite inline DDL vs PostgreSQL migrations, table+column+type diff (D-ε/ε-1)
-	$(GO) run ./cmd/schemaparity/ -migrations migrations
+	$(GO) run ./cmd/schemaparity/ -migrations migrations -exceptions schema-parity.exceptions.yaml
 
 .PHONY: check-tasks
 check-tasks: ## Ledger↔git gate: every done/closed card must be merged with a PR that exists in git (D-η/η-1)

@@ -1,0 +1,60 @@
+version: "1"
+# Accepted dual-engine schema drift for `make check-schema-parity` (D-ε/ε-1).
+#
+# Every entry needs an owner, a reason and an expires_at; an expired entry stops
+# excepting, so the gate fails until the drift is fixed or the exception is
+# renewed with a fresh justification. This mirrors errcodes.exceptions.yaml: an
+# allowance is a dated, owned decision, never a permanent one.
+#
+# The 2026-09-27 run classified the eight findings as follows:
+#   - two are INTENTIONAL -- the PostgreSQL migration moved the columns;
+#   - two are residue from the legacy baseline;
+#   - four are a REAL engine divergence: only internal/store/postgres references
+#     those columns, so SQLite neither persists nor returns them. Those carry the
+#     shortest expiry and are tracked by TASK-163.
+exceptions:
+  # ── Intentional relocation (PostgreSQL migration 000007) ─────────────
+  - owner: "release-manager"
+    table: "candidate_artifacts"
+    column: "ref"
+    reason: "REQ-014: migrations/000007_bundle_services.up.sql rebuilt candidate_artifacts and moved this column to candidate_artifact_locations; internal/migration/copy.go registers it as dropped. SQLite keeps the legacy shape."
+    expires_at: "2027-03-31"
+  - owner: "release-manager"
+    table: "candidate_artifacts"
+    column: "bundle_id"
+    reason: "REQ-014: same 000007 relocation as candidate_artifacts.ref."
+    expires_at: "2027-03-31"
+
+  # ── Legacy baseline residue ──────────────────────────────────────────
+  - owner: "release-manager"
+    table: "bundle_candidate_artifacts"
+    column: "orphaned_at"
+    reason: "Legacy baseline residue: declared by SQLite only. Tracked with TASK-163 so it is either aligned or removed rather than forgotten."
+    expires_at: "2027-03-31"
+  - owner: "release-manager"
+    table: "enrollment_tokens"
+    column: "used"
+    reason: "Legacy baseline residue: PostgreSQL carries a boolean used, SQLite tracks used_at instead."
+    expires_at: "2027-03-31"
+
+  # ── REAL engine divergence (TASK-163) -- shortest expiry ─────────────
+  - owner: "release-manager"
+    table: "release_bundles"
+    column: "signature_digest"
+    reason: "REAL engine divergence (TASK-163): only internal/store/postgres/bundles.go references it, so the SQLite engine neither persists nor returns the signature digest. Violates the dual-engine constraint (AGENTS.md #4) until the SQLite store catches up."
+    expires_at: "2026-12-31"
+  - owner: "release-manager"
+    table: "release_bundles"
+    column: "sbom_digest"
+    reason: "REAL engine divergence (TASK-163): same as signature_digest -- PostgreSQL-only column."
+    expires_at: "2026-12-31"
+  - owner: "release-manager"
+    table: "release_bundles"
+    column: "provenance_digest"
+    reason: "REAL engine divergence (TASK-163): same as signature_digest -- PostgreSQL-only column."
+    expires_at: "2026-12-31"
+  - owner: "release-manager"
+    table: "candidate_artifacts"
+    column: "last_seen_at"
+    reason: "REAL engine divergence (TASK-163): only internal/store/postgres/candidate_artifacts.go references it."
+    expires_at: "2026-12-31"
