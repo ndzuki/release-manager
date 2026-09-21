@@ -306,19 +306,62 @@ else
     -d "{\"operationType\":\"UPGRADE\",\"bundleId\":\"$BUNDLE_ID\",\"releaseDefinitionId\":\"$ISO_DEF_ID\",\"valuesRevisionId\":\"$ISO_VALUES_ID\",\"expectedCurrentRevision\":$ISO_EXPECTED_REV}")"
   CN_ID="$(jq -r '.operationId // empty' <<<"$CN")"
   [ -n "$CN_ID" ] || fail "CreateOperation (cancel setup) rejected: $CN"
-  CANCEL="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/CancelOperation" \
-    "${AUTH_H[@]}" -H "$(IK cancel)" \
-    -d "{\"operationId\":\"$CN_ID\",\"reason\":\"AC-066-17 prerequisite smoke cancel check\"}")"
-  ok "CancelOperation accepted for op=$CN_ID"
-  # Cancel may land on CANCELLED (normal) or race to SUCCEEDED/FAILED (legal
-  # terminal states); the D-109 regression is STUCK CANCELLING. Poll directly.
+
+  # TASK-157: the cancel RPC requires the state_version the caller observed
+  # (REQ-067 canonical: zero is not a wildcard, orchestrator.proto:344-345) and
+  # its response must be asserted. The previous version sent no version and
+  # reported ok unconditionally, so a rejected cancel still read as PASS (real
+  # smoke 2026-09-21: `invalid_argument: expected_state_version must be >= 1`,
+  # while the script printed "CancelOperation accepted" and the operation then
+  # raced to SUCCEEDED, which the terminal-state set below accepted).
+  #
+  # The version is re-read per attempt because the operation may advance between
+  # the read and the CAS; the server reports that as a conflict.
+  CANCEL_OK=0
+  CANCEL_STATE=""
+  for _ in 1 2 3 4 5 6 7 8; do
+    CN_SNAPSHOT="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/GetOperation" \
+      "${AUTH_H[@]}" -d "{\"operationId\":\"$CN_ID\"}")"
+    CN_NOW="$(jq -r '.operation.state // empty' <<<"$CN_SNAPSHOT")"
+    case "$CN_NOW" in
+      OPERATION_STATUS_CANCELLED|OPERATION_STATUS_SUCCEEDED|OPERATION_STATUS_FAILED|OPERATION_STATUS_TIMEOUT)
+        break ;;
+    esac
+    CN_VERSION="$(jq -r '.operation.stateVersion // empty' <<<"$CN_SNAPSHOT")"
+    [ -n "$CN_VERSION" ] && [ "$CN_VERSION" -ge 1 ] 2>/dev/null || fail "cannot read state_version for cancel setup op=$CN_ID"
+    CANCEL="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/CancelOperation" \
+      "${AUTH_H[@]}" -H "$(IK cancel)" \
+      -d "{\"operationId\":\"$CN_ID\",\"reason\":\"AC-066-17 prerequisite smoke cancel check\",\"expectedStateVersion\":$CN_VERSION}")"
+    CANCEL_ERR="$(jq -r '.code // empty' <<<"$CANCEL")"
+    CANCEL_STATE="$(jq -r '.operation.state // empty' <<<"$CANCEL")"
+    if [ -z "$CANCEL_ERR" ]; then
+      CANCEL_OK=1
+      break
+    fi
+    sleep 1
+  done
+  [ "$CANCEL_OK" = "1" ] || fail "CancelOperation never accepted for op=$CN_ID (last=${CANCEL:-no response})"
+  case "$CANCEL_STATE" in
+    OPERATION_STATUS_CANCELLING|OPERATION_STATUS_CANCELLED)
+      ok "CancelOperation accepted for op=$CN_ID (state=$CANCEL_STATE)" ;;
+    *)
+      fail "CancelOperation returned no cancelling state for op=$CN_ID: $CANCEL" ;;
+  esac
+
+  # The operation now has to reach a terminal state. CANCELLED is the normal
+  # outcome; a race to SUCCEEDED/FAILED/TIMEOUT is legal, but only because the
+  # cancel RPC above was accepted and the state machine entered CANCELLING —
+  # that acceptance, not the terminal state, is what verifies the cancel path.
+  # The D-109 regression is STUCK CANCELLING. Poll directly.
   CN_DEADLINE=$((SECONDS + 300))
   while [ $SECONDS -lt $CN_DEADLINE ]; do
     CN_STATE="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/GetOperation" \
       "${AUTH_H[@]}" -d "{\"operationId\":\"$CN_ID\"}" | jq -r '.operation.state // empty')"
     case "$CN_STATE" in
-      OPERATION_STATUS_CANCELLED|OPERATION_STATUS_SUCCEEDED|OPERATION_STATUS_FAILED|OPERATION_STATUS_TIMEOUT)
-        ok "cancel terminal state $CN_STATE"; break ;;
+      OPERATION_STATUS_CANCELLED)
+        ok "cancel terminal state $CN_STATE (cancellation took effect)"; break ;;
+      OPERATION_STATUS_SUCCEEDED|OPERATION_STATUS_FAILED|OPERATION_STATUS_TIMEOUT)
+        ok "cancel raced to $CN_STATE after the cancel RPC was accepted (legal terminal state)"; break ;;
     esac
     sleep 3
   done
