@@ -200,7 +200,22 @@ func frontmatterValue(frontmatter, key string) string {
 // anyPresent reports whether any of the accepted headings was seen.
 func anyPresent(result *Result, headings []string) bool {
 	for _, heading := range headings {
-		if result.Sections[heading] {
+		if hasSection(result, heading) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasSection reports whether a heading for name is present. A heading may carry
+// a clarifying suffix -- REQ-086 writes "验收标准（D1~D7 = A 细化）" -- so the
+// match is by prefix, not equality.
+func hasSection(result *Result, name string) bool {
+	if result.Sections[name] {
+		return true
+	}
+	for heading := range result.Sections {
+		if strings.HasPrefix(heading, name) {
 			return true
 		}
 	}
@@ -284,7 +299,7 @@ func validateRequiredSections(result *Result) {
 		return
 	}
 	for _, section := range FullOnlySections {
-		if result.Sections[section] {
+		if hasSection(result, section) {
 			continue
 		}
 		result.Violations = append(result.Violations, missingSection(result, section))
