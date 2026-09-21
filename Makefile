@@ -563,7 +563,8 @@ check-tasks: ## Ledger↔git gate: every done/closed card must be merged with a 
 		if command -v gh >/dev/null 2>&1; then \
 			gh pr list --state all --limit 1000 --json number,state,mergeCommit > "$$ghprs" 2>/dev/null || : > "$$ghprs"; \
 		fi; \
-		$(GO) run ./cmd/taskcheck/ -git-log "$$gitlog" -gh-prs "$$ghprs" $(if $(filter 1,$(ALLOW_UNVERIFIED_TASKS)),-allow-unverified,) $$TASKS; \
+		$(REQS_RESOLVE); \
+		$(GO) run ./cmd/taskcheck/ -git-log "$$gitlog" -gh-prs "$$ghprs" $(if $(filter 1,$(ALLOW_UNVERIFIED_TASKS)),-allow-unverified,) -requirements "$$REQS" $$TASKS; \
 	fi
 
 .PHONY: vulncheck
