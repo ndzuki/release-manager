@@ -216,3 +216,23 @@ func TestFailedPassesWhenEverythingVerified(t *testing.T) {
 	result := Check([]Card{card}, mergedEvidence())
 	assert.False(t, result.Failed(Options{}))
 }
+
+// A card closed for a documented non-PR reason -- already implemented,
+// superseded, or landed before this project used pull requests -- has no PR to
+// verify, so the merge-evidence rule cannot apply; the stated reason is the
+// record. The rule still bites when no reason is given. Removing the
+// NonPRClosureReasons branch from Check makes this test fail.
+func TestCheck_AcceptsDocumentedNonPRClosures(t *testing.T) {
+	t.Parallel()
+
+	for _, reason := range []string{"already-implemented", "superseded", "pre-pr-workflow"} {
+		card := Card{Path: "TASK-900-" + reason + ".md", Status: "closed", ClosureReason: reason}
+		result := Check([]Card{card}, NewEvidence())
+		assert.Empty(t, result.Findings, "reason %q must be accepted", reason)
+		assert.Equal(t, 1, result.Verified, "reason %q must count as verified", reason)
+	}
+
+	plain := Card{Path: "TASK-901-no-reason.md", Status: "closed"}
+	plainResult := Check([]Card{plain}, NewEvidence())
+	require.NotEmpty(t, plainResult.Findings, "without a reason the merge evidence is still required")
+}
