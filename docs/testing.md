@@ -218,6 +218,16 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 状态验证**（本地残留的 k3d 版本、陈旧的 `dev-status.json` 会造成假通过，比失败更危险），以及
 **「flake」结论必须由日志证据支撑**。
 
+## 环境型 CI 门禁的归属（2026-09-28 策略）
+
+`e2e-prerequisite`（AC-066-17 前置冒烟，`make e2e-prerequisite-ci`）**只在 `push main` 与 `workflow_dispatch` 运行，不在 PR 上运行** —— 与正式 `e2e` gate 同属 **REQ-066 决策 ⑧** 的模式。
+
+**为什么**：它要起真实的 k3d 环境（`dev-up dev-seed dev-status` → `smoke.sh` → `dev-purge`），实测单次 **15–55 分钟**。2026-09-22 有**四个已批准的改动**同时卡在它后面，而它当次失败是**环境原因**（一次 55 分钟被取消且 `--log-failed` 无根因；一次 seed 撞上正在终止的 pod，`unavailable: unexpected EOF`）。
+
+**覆盖没有减少**：`push main` 与手动触发仍然跑它、仍然上传 `e2e-results/` 证据；环境侧根因（seed 收敛重试预算）在 `internal/devfixture` 修复。
+
+**这不算"放宽门禁"**：门禁本身没变（同样的命令、同样的 job、同样的 `timeout-minutes: 45`、同样的证据上传），变的是**它挂在哪条触发路径上** —— 与项目对 `e2e` 的既有处理完全一致。任何**删除**该 job 或**放宽其断言**的做法仍然禁止（`AGENTS.md`）。
+
 ## 写测试的约定
 
 - **table-driven + testify**：用例表驱动，断言用 `github.com/stretchr/testify`（`require` 用于必须
