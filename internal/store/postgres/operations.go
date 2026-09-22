@@ -523,6 +523,27 @@ func (s *operationStore) transition(
 	}
 	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
 
+	updated, err := s.transitionInTx(ctx, tx, id, status, stateVersion, lastError)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit operation transition: %w", err)
+	}
+	return updated, nil
+}
+
+// transitionInTx performs the CAS inside a caller-owned transaction. It is the
+// body of transition without the transaction boundary, so a unit of work can
+// commit the transition together with another write (D-γ / γ-1a).
+func (s *operationStore) transitionInTx(
+	ctx context.Context,
+	tx *Tx,
+	id string,
+	status store.OperationStatus,
+	stateVersion int,
+	lastError string,
+) (*store.Operation, error) {
 	current, err := getOperation(ctx, tx, id)
 	if err != nil {
 		return nil, err
@@ -541,9 +562,6 @@ func (s *operationStore) transition(
 	}
 	if err := recordOperationTransition(ctx, tx, current, updated, lastError, now); err != nil {
 		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit operation transition: %w", err)
 	}
 	return updated, nil
 }

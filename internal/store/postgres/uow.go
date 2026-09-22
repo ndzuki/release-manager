@@ -388,3 +388,29 @@ func linkCandidateArtifacts(ctx context.Context, tx *Tx, bundleID string, digest
 	}
 	return result.RowsAffected()
 }
+
+// QueueOperation implements store.OperationStore: it commits the transition to
+// queued and the :execute dispatch in one transaction (D-γ / γ-1a), so a
+// delivered command cannot exist for an operation whose queue transition did not
+// commit. Mirrors the SQLite adapter.
+func (s *operationStore) QueueOperation(ctx context.Context, req store.OperationQueueRequest) error {
+	tx, err := s.gorm.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin operation queue: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
+
+	if _, err := s.transitionInTx(ctx, tx, req.OperationID, req.NextStatus, req.StateVersion, ""); err != nil {
+		return err
+	}
+	if req.Dispatch != nil {
+		normalizeOutboxEntry(req.Dispatch)
+		if err := createOutboxEntryTx(ctx, tx, req.Dispatch); err != nil {
+			return fmt.Errorf("create execution dispatch: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit operation queue: %w", err)
+	}
+	return nil
+}

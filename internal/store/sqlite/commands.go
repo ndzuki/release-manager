@@ -15,6 +15,14 @@ type outboxStore struct{ db *sql.DB }
 const outboxColumns = `id, command_id, operation_id, operation_type, operator_id, payload, status, max_inflight, sequence, result_json, created_at, updated_at, delivered_at, acked_at`
 
 func (s *outboxStore) Create(ctx context.Context, e *store.OutboxEntry) error {
+	normalizeOutboxEntry(e)
+	return createOutboxEntry(ctx, s.db, e)
+}
+
+// normalizeOutboxEntry applies the defaults Create guarantees, so a unit of work
+// that inserts a dispatch directly produces the identical row -- without this the
+// row's status stays empty and GetNextPending (status='pending') never sees it.
+func normalizeOutboxEntry(e *store.OutboxEntry) {
 	if e.CreatedAt.IsZero() {
 		e.CreatedAt = time.Now().UTC()
 	}
@@ -30,8 +38,6 @@ func (s *outboxStore) Create(ctx context.Context, e *store.OutboxEntry) error {
 	if e.CommandID == "" {
 		e.CommandID = e.ID
 	}
-
-	return createOutboxEntry(ctx, s.db, e)
 }
 
 type outboxExecer interface {
