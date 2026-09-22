@@ -563,9 +563,6 @@ func (s *operationStore) transitionInTx(
 	if err := recordOperationTransition(ctx, tx, current, updated, lastError, now); err != nil {
 		return nil, err
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit operation transition: %w", err)
-	}
 	return updated, nil
 }
 
