@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"gopkg.in/yaml.v3"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -137,12 +140,26 @@ func (s *Service) handleValuesApproval(
 		RequestID:                    requestIDOrNew(ctx),
 		// Scope includes the organization so the same raw key under different
 		// tenants never collides (AC-010-05).
-		IdempotencyScope:             fmt.Sprintf("%s:%s:%s:%s", actor.orgID, actor.userID, action, revisionID),
-		IdempotencyKeyHash:           hashApprovalIdempotencyKey(idempotencyKey),
-		RequestHash:                  hashApprovalRequest(action, revisionID, expectedStateVersion, trimmedComment, strings.TrimSpace(reason)),
+		IdempotencyScope:   fmt.Sprintf("%s:%s:%s:%s", actor.orgID, actor.userID, action, revisionID),
+		IdempotencyKeyHash: hashApprovalIdempotencyKey(idempotencyKey),
+		RequestHash:        hashApprovalRequest(action, revisionID, expectedStateVersion, trimmedComment, strings.TrimSpace(reason)),
 	}
 	if trimmedComment != "" {
 		command.Comment = &trimmedComment
+	}
+
+	// AC-058-41 (TASK-166): approving a revision that converges tasks must carry
+	// a canonical document covering every locked values path; any mismatch rolls
+	// the whole decision back. The revision and its locked paths are immutable
+	// (ADR-007), so checking here -- before the write -- is equivalent to
+	// checking inside the transaction and cannot leave an approved-but-
+	// unconverged revision behind.
+	if action == approvalActionApprove {
+		if coverageErr := validateLockedPathCoverage(revision.CanonicalDocument, revision.LockedPaths); coverageErr != nil {
+			connectErr := valuesApprovalError(connect.CodeInvalidArgument, "locked_path_coverage_mismatch", coverageErr)
+			s.recordFailedApprovalAttempt(ctx, revision, actorContext, action, connectErr)
+			return nil, connectErr
+		}
 	}
 
 	var result *store.ValuesApprovalResult
@@ -478,4 +495,95 @@ func valuesStatusToProto(status store.ValuesStatus) commonv1.ValuesStatus {
 	default:
 		return commonv1.ValuesStatus_VALUES_STATUS_UNSPECIFIED
 	}
+}
+
+// lockedPathIsValuesPath reports whether a lock key is a values path rather than
+// a lock-only key. PROJECT-CONVENTIONS reserves the `<kind>/` prefix for lock
+// keys (currently `annotations/`); values paths are written bare. A coverage
+// check must not look for a lock-only key in the document -- doing so would fail
+// every annotation approval whose key has no promotion mapping (TASK-166).
+func lockedPathIsValuesPath(path string) bool {
+	return !strings.Contains(path, "/")
+}
+
+// validateLockedPathCoverage checks that every locked values path is present in
+// the canonical document with a non-null value. A missing or null path means the
+// approved document does not actually cover what the convergence tasks locked.
+func validateLockedPathCoverage(document []byte, lockedPaths []string) error {
+	values := map[string]any{}
+	if len(document) > 0 {
+		if err := yaml.Unmarshal(document, &values); err != nil {
+			return fmt.Errorf("canonical document is not parseable: %w", err)
+		}
+	}
+	for _, path := range lockedPaths {
+		if !lockedPathIsValuesPath(path) {
+			continue
+		}
+		value, ok := lookupValuesPath(values, splitValuesPath(path))
+		if !ok {
+			return fmt.Errorf("locked path %q is not present in the approved canonical document", path)
+		}
+		if value == nil {
+			return fmt.Errorf("locked path %q is null in the approved canonical document", path)
+		}
+	}
+	return nil
+}
+
+// lookupValuesPath walks a dotted values path, accepting map keys and numeric
+// slice indices.
+func lookupValuesPath(current any, segments []string) (any, bool) {
+	if len(segments) == 0 {
+		return current, true
+	}
+	switch node := current.(type) {
+	case map[string]any:
+		next, ok := node[segments[0]]
+		if !ok {
+			return nil, false
+		}
+		return lookupValuesPath(next, segments[1:])
+	case []any:
+		index, err := strconv.Atoi(segments[0])
+		if err != nil || index < 0 || index >= len(node) {
+			return nil, false
+		}
+		return lookupValuesPath(node[index], segments[1:])
+	default:
+		return nil, false
+	}
+}
+
+// splitValuesPath splits a locked values path into segments. The lock paths the
+// platform actually produces use the bracket form
+// (spec.template.spec.containers[0].image, see values_revision_test.go), so a
+// plain strings.Split on "." would treat "containers[0]" as one map key and
+// reject a document that does cover the path. A dotted numeric segment
+// (…containers.0.image) is accepted too.
+func splitValuesPath(path string) []string {
+	segments := make([]string, 0, 4)
+	for _, part := range strings.Split(path, ".") {
+		name := part
+		for {
+			open := strings.IndexByte(name, '[')
+			if open < 0 {
+				break
+			}
+			if head := name[:open]; head != "" {
+				segments = append(segments, head)
+			}
+			rest := name[open+1:]
+			closing := strings.IndexByte(rest, ']')
+			if closing < 0 {
+				break
+			}
+			segments = append(segments, rest[:closing])
+			name = rest[closing+1:]
+		}
+		if name != "" {
+			segments = append(segments, name)
+		}
+	}
+	return segments
 }

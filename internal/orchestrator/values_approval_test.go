@@ -794,3 +794,54 @@ func approvalNotificationEntries(t *testing.T, f approvalFixture) []*store.Appro
 	require.NoError(t, err)
 	return entries
 }
+
+// AC-058-41 / TASK-166: the approved canonical document must cover every locked
+// values path. Boundary cases are pinned here, including the convention that a
+// lock-only key (a `<kind>/` prefixed key such as annotations/deployment/team)
+// is NOT looked up in the document -- requiring it would fail every annotation
+// approval whose key has no promotion mapping.
+func TestValidateLockedPathCoverage(t *testing.T) {
+	t.Parallel()
+
+	document := []byte("api:\n  image:\n    digest: sha256:abc\nlist:\n  - name: first\n  - name: second\nempty: null\nspec:\n  template:\n    spec:\n      containers:\n        - image: registry/app:1\n")
+
+	cases := map[string]struct {
+		paths   []string
+		wantErr bool
+	}{
+		"covered":                            {[]string{"api.image.digest"}, false},
+		"nested path missing":                {[]string{"api.image.tag"}, true},
+		"null value does not cover":          {[]string{"empty"}, true},
+		"array index":                        {[]string{"list.1.name"}, false},
+		"array index out of range":           {[]string{"list.9.name"}, true},
+		"lock-only key is not a values path": {[]string{"annotations/deployment/team"}, false},
+		"mixed lock-only and covered":        {[]string{"annotations/deployment/team", "api.image.digest"}, false},
+		"mixed lock-only and missing":        {[]string{"annotations/deployment/team", "api.image.tag"}, true},
+		"no locked paths":                    {nil, false},
+		"scalar cannot be descended into":    {[]string{"api.image.digest.deeper"}, true},
+		// The bracket form the platform actually produces for lock paths.
+		"bracket index":          {[]string{"spec.template.spec.containers[0].image"}, false},
+		"bracket index missing":  {[]string{"spec.template.spec.containers[3].image"}, true},
+		"bracket dotted numeric": {[]string{"spec.template.spec.containers.0.image"}, false},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := validateLockedPathCoverage(document, tc.paths)
+			if tc.wantErr {
+				require.Error(t, err, "locked path %v must not be considered covered", tc.paths)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+// A document that cannot be parsed cannot be shown to cover anything.
+func TestValidateLockedPathCoverageRejectsUnparseableDocument(t *testing.T) {
+	t.Parallel()
+	err := validateLockedPathCoverage([]byte("\tnot: [valid"), []string{"api.image.digest"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not parseable")
+}
