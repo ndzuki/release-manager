@@ -156,3 +156,38 @@ func TestExecuteEmergencyChangeAnnotationAccepted(t *testing.T) {
 	require.Len(t, stored, 1, "the entries must be persisted, not left empty")
 	assert.Equal(t, emergencyAnnotationEntry{Key: "team", Value: "payments"}, stored[0])
 }
+
+// AC-058-25 / TASK-165 (plan A): the annotation lock is per scope+key. An
+// approved key with NO promotion mapping previously produced no lock at all --
+// HasPendingPromotionPath short-circuits on an empty list -- so the same
+// scope/key could be changed twice concurrently. Dropping the synthesized lock
+// key makes this test fail.
+func TestExecuteEmergencyChangeAnnotationLocksWithoutAPromotionMapping(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedEmergencyImageIdentity(t, st)
+	svc, _, _ = emergencyTestServiceFromExisting(t, svc, st)
+
+	// Approved for scope "deployment", deliberately WITHOUT a promotion path.
+	seedApprovedAnnotationKeys(t, st, store.ApprovedAnnotationKey{Key: "team", Scope: "deployment"})
+
+	submit := func(key string) error {
+		req := annotationRequest(key)
+		req.Msg.ConvergenceStrategy = orchestratorv1.ConvergenceStrategy_REQUIRE_PROMOTION
+		// REQUIRE_PROMOTION requires a non-empty target_locks
+		// (emergency.go:497). The server validates it but derives the actual
+		// lock from the approved key's promotion path -- which is the
+		// synthesized scope+key here (TASK-165 plan A).
+		req.Msg.TargetLocks = []string{"deployment/team"}
+		_, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), req)
+		return err
+	}
+
+	require.NoError(t, submit("annotation-lock-first"))
+
+	err := submit("annotation-lock-second")
+	require.Error(t, err, "the same scope/key must be locked while a promotion is pending")
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Equal(t, "LOCKED_PATH", connectErrorReason(err))
+}
