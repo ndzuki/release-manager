@@ -665,3 +665,25 @@ func TestDecodeManifestStream_OverSized(t *testing.T) {
 	_, err := DecodeManifestStream(huge)
 	assert.ErrorIs(t, err, ErrOverSizedManifest)
 }
+
+// ADR-026: an empty capability version cannot prove freshness, so the cache must
+// be a MISS for it. It used to skip the staleness check when its tracked version
+// was empty and serve whatever matched, which replayed an unversioned "passed"
+// after the cluster's capabilities had changed -- a fail-open. Removing the
+// empty-version guard from Get makes this test fail.
+func TestCache_EmptyCapabilityVersionIsAlwaysAMiss(t *testing.T) {
+	c := NewCache()
+
+	// Even a Put with the same empty version must not become a hit.
+	c.Put(&BatchResult{RenderDigest: "d-empty", CapabilityVersion: "", Passed: true}, "")
+	_, ok := c.Get("d-empty", "")
+	assert.False(t, ok, "an unversioned result must never be served")
+
+	// A real version still caches and still invalidates on change.
+	c.Put(&BatchResult{RenderDigest: "d-real", CapabilityVersion: "v1", Passed: true}, "v1")
+	_, ok = c.Get("d-real", "v1")
+	assert.True(t, ok, "a versioned result must still hit")
+
+	_, ok = c.Get("d-real", "v2")
+	assert.False(t, ok, "a changed capability version must miss")
+}
