@@ -150,9 +150,13 @@ func (e *ClusterStageExecutor) ExecuteStage(ctx context.Context, command *operat
 		RenderDigest:    result.RenderDigest,
 		ManifestStream:  stream,
 		TargetNamespace: command.GetNamespace(),
-		// CapabilityVersion is deliberately empty: this executor has no cluster
-		// capability snapshot, and the dry-run cache treats a version it cannot
-		// match as a miss, so an empty one can never produce a false hit.
+		// CapabilityVersion is empty because this executor has no cluster
+		// capability snapshot yet (ADR-026 V1 will add the discovery probe).
+		// An empty version now makes the dry-run cache a MISS rather than a hit
+		// (internal/operator/preflight/cache.go): the previous comment claimed
+		// that was already true, but the cache skipped validation when its
+		// tracked version was empty, so an unversioned "passed" was replayed
+		// after the cluster's capabilities changed.
 	})
 	if err != nil {
 		return "", fmt.Errorf("cluster stage: %w", err)

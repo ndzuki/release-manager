@@ -44,7 +44,15 @@ func (c *Cache) Get(renderDigest, capabilityVersion string) (*BatchResult, bool)
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.latestCV != "" && capabilityVersion != c.latestCV {
+	// ADR-026: an empty capability version cannot prove freshness. The check
+	// used to be skipped entirely when latestCV was empty, so a cached "passed"
+	// was replayed even after the cluster's capabilities had changed (e.g. a CRD
+	// removed) -- a fail-open, not just a stale read. Until a real version is
+	// produced (ADR-026 V1), refuse to serve a hit.
+	if capabilityVersion == "" {
+		return nil, false
+	}
+	if capabilityVersion != c.latestCV {
 		return nil, false
 	}
 
@@ -62,6 +70,11 @@ func (c *Cache) Put(result *BatchResult, capabilityVersion string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Nothing may be cached without a version to invalidate it against
+	// (ADR-026): storing an unversioned result is what the fail-open served.
+	if capabilityVersion == "" {
+		return
+	}
 	if capabilityVersion != c.latestCV {
 		c.entries = make(map[cacheKey]*cacheEntry)
 		c.latestCV = capabilityVersion
