@@ -133,12 +133,22 @@ func (r *LiveRecovery) CancelOperation(ctx context.Context, operationID, reason 
 	if strings.TrimSpace(operationID) == "" {
 		return errors.New("cancel operation: empty operation id")
 	}
+	// The cancel write is a CAS: internal/orchestrator/service.go:1259 rejects
+	// expected_state_version < 1 with invalid_argument, so omitting it failed
+	// every cancel (the audit's REQ-066 cancel-leg gap). Read the current
+	// version first; a concurrent change still surfaces as conflict.
+	current, err := r.clients.orchestrator.GetOperation(ctx,
+		authorizedRequest(r.token(), &orchestratorv1.GetOperationRequest{OperationId: operationID}))
+	if err != nil {
+		return fmt.Errorf("cancel operation: read state version: %w", err)
+	}
 	request := authorizedRequest(r.token(), &orchestratorv1.CancelOperationRequest{
-		OperationId: operationID,
-		Reason:      reason,
+		OperationId:          operationID,
+		Reason:               reason,
+		ExpectedStateVersion: current.Msg.GetOperation().GetStateVersion(),
 	})
 	request.Header().Set("Idempotency-Key", r.idempotencyKey("cleanup-cancel", operationID))
-	_, err := recoveryWrite(ctx, func(ctx context.Context) (string, error) {
+	_, err = recoveryWrite(ctx, func(ctx context.Context) (string, error) {
 		response, err := r.clients.orchestrator.CancelOperation(ctx, request)
 		if err != nil {
 			return "", err
