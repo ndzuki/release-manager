@@ -121,10 +121,6 @@ func (c *Coordinator) Run(ctx context.Context, op *store.Operation) {
 }
 
 func (c *Coordinator) runPipeline(ctx context.Context, op *store.Operation) (StageStatus, []StageResult) {
-	if op.OperationType == store.OperationUpgrade {
-		overall := c.runUpgrade(ctx, op)
-		return overall, nil
-	}
 	stages := stagesForOperation(op)
 	results := make([]StageResult, 0, len(stages))
 
@@ -218,18 +214,30 @@ func (c *Coordinator) runPipeline(ctx context.Context, op *store.Operation) (Sta
 	// preflight stage commands are checks now, so the write is a separate
 	// non-stage command (TASK-114/U-1). Without it the operation would reach
 	// succeeded with nothing installed.
-	if op.OperationType == store.OperationInstall || op.OperationType == store.OperationRollback {
-		if err := c.dispatchExecution(ctx, op); err != nil {
-			c.logger.Error("execution dispatch failed", "op_id", op.ID, "err", err)
-			c.casFailed(ctx, op, AggregateResult{
-				OperationID: op.ID,
-				Overall:     StageFailed,
-				FailedStage: executionStageName,
-				Stages:      results,
-				ErrorCode:   "dispatch_failed",
-			})
-			return StageFailed, results
-		}
+	var (
+		dispatchErr  error
+		dispatchCode = "dispatch_failed"
+	)
+	switch op.OperationType {
+	case store.OperationInstall, store.OperationRollback:
+		dispatchErr = c.dispatchExecution(ctx, op)
+	case store.OperationUpgrade:
+		// ADR-027: UPGRADE runs the full pipeline too (D-108 ①b retracted --
+		// its cause, the poisoned first dispatch row, was removed by TASK-114's
+		// stage dispatch), so its release write is dispatched here like
+		// INSTALL's. It still uses the UPGRADE payload, hence a separate call.
+		dispatchCode, dispatchErr = c.dispatchUpgrade(ctx, op)
+	}
+	if dispatchErr != nil {
+		c.logger.Error("execution dispatch failed", "op_id", op.ID, "err", dispatchErr)
+		c.casFailed(ctx, op, AggregateResult{
+			OperationID: op.ID,
+			Overall:     StageFailed,
+			FailedStage: executionStageName,
+			Stages:      results,
+			ErrorCode:   dispatchCode,
+		})
+		return StageFailed, results
 	}
 
 	// CAS to queued. The release write is now an ordinary command, so the
@@ -359,51 +367,48 @@ func (c *Coordinator) dispatchExecution(ctx context.Context, op *store.Operation
 	c.logger.Info("release execution dispatched", "op_id", op.ID, "command_id", commandID)
 	return nil
 }
-func (c *Coordinator) runUpgrade(ctx context.Context, op *store.Operation) StageStatus {
+
+// dispatchUpgrade writes the UPGRADE release write. ADR-027 restored UPGRADE to
+// the full preflight pipeline, so this runs after the stages pass -- like
+// dispatchExecution for INSTALL/ROLLBACK -- and the pipeline owns the queued CAS
+// (this function no longer CASes). The error code is returned rather than applied
+// so the pipeline reports the same specific codes the old short-circuit did.
+func (c *Coordinator) dispatchUpgrade(ctx context.Context, op *store.Operation) (string, error) {
 	operatorID, err := c.resolveOperator(ctx, op)
 	if err != nil {
-		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "stage_unavailable"})
-		return StageFailed
+		return "stage_unavailable", err
 	}
 	definition, err := c.defs.Get(ctx, op.ReleaseDefinitionID)
 	if err != nil {
-		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "release_not_found"})
-		return StageFailed
+		return "release_not_found", err
 	}
 	if _, err := c.invs.GetByDefinition(ctx, op.ReleaseDefinitionID); err != nil {
-		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "release_not_found"})
-		return StageFailed
+		return "release_not_found", err
 	}
 	bundle, err := c.bundles.Get(ctx, op.BundleID)
 	if err != nil {
-		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "bundle_not_found"})
-		return StageFailed
+		return "bundle_not_found", err
 	}
 	revision, err := c.values.Get(ctx, op.ValuesRevisionID)
 	if err != nil {
-		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "revision_not_approved"})
-		return StageFailed
+		return "revision_not_approved", err
 	}
 	commandID := op.ID + ":execute"
 	payload, err := BuildUpgradePayload(op, definition, bundle, revision, commandID)
 	if err != nil {
-		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "render_failed"})
-		return StageFailed
+		return "render_failed", err
 	}
 	encoded, err := payload.Marshal()
 	if err != nil {
-		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "invalid_command"})
-		return StageFailed
+		return "invalid_command", err
 	}
 	if err := c.outbox.Create(ctx, &store.OutboxEntry{
 		ID: uuid.NewString(), CommandID: commandID, OperationID: op.ID,
 		OperationType: string(store.OperationUpgrade), OperatorID: operatorID, Payload: encoded,
 	}); err != nil {
-		c.casFailed(ctx, op, AggregateResult{OperationID: op.ID, Overall: StageFailed, ErrorCode: "dispatch_failed"})
-		return StageFailed
+		return "dispatch_failed", err
 	}
-	c.casQueued(ctx, op, AggregateResult{OperationID: op.ID, Overall: StagePassed})
-	return StagePassed
+	return "", nil
 }
 
 // runStage dispatches a PRECHECK command for one stage and polls for its result.

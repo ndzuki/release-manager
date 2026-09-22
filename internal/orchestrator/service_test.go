@@ -553,7 +553,27 @@ func TestCreateOperation_UpgradeDoesNotMutateOtherDefinition(t *testing.T) {
 // upgrade command. A stage-shaped :artifact first row poisoned the operator
 // stream with unsupported_command_version and left the operation stuck in
 // RUNNING / CANCELLING (real smoke op 27f05688).
-func TestCreateOperation_UpgradeDispatchesExecuteOnly(t *testing.T) {
+// driveUpgradeStages passes the operator-side preflight stages that ADR-027
+// restored to the UPGRADE path. Without it the release write is never
+// dispatched: UPGRADE now waits for render/cluster/runtime_pull like INSTALL.
+func driveUpgradeStages(t *testing.T, st store.Store, opID string) {
+	t.Helper()
+	for _, stage := range []string{"render", "cluster", "runtime_pull"} {
+		var entry *store.OutboxEntry
+		require.Eventually(t, func() bool {
+			e, err := st.Outbox().GetByCommandID(context.Background(), opID+":"+stage)
+			if err != nil {
+				return false
+			}
+			entry = e
+			return true
+		}, 5*time.Second, 20*time.Millisecond, "UPGRADE must dispatch the %s stage", stage)
+		require.NoError(t, st.Outbox().UpdateStatus(
+			context.Background(), entry.ID, store.CommandPersisted, `{"status":"passed"}`))
+	}
+}
+
+func TestCreateOperation_UpgradeRunsPreflightThenDispatchesExecute(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
@@ -585,8 +605,12 @@ func TestCreateOperation_UpgradeDispatchesExecuteOnly(t *testing.T) {
 	require.NoError(t, err)
 	opID := resp.Msg.OperationId
 
-	// runUpgrade builds the :execute entry in the background coordinator
-	// goroutine; the merge tolerates the missing image object (AC-082-01).
+	// ADR-027: the pipeline runs the preflight stages first; drive them so the
+	// coordinator reaches the release write.
+	driveUpgradeStages(t, st, opID)
+
+	// The :execute entry is built after the stages pass; the merge tolerates the
+	// missing image object (AC-082-01).
 	var execute *store.OutboxEntry
 	require.Eventually(t, func() bool {
 		entry, err := st.Outbox().GetByCommandID(context.Background(), opID+":execute")
@@ -611,9 +635,9 @@ func TestCreateOperation_UpgradeDispatchesExecuteOnly(t *testing.T) {
 		return err == nil && op.Status == store.StatusQueued
 	}, 5*time.Second, 20*time.Millisecond, "UPGRADE must reach queued")
 
-	// No :artifact row may exist for UPGRADE. The dispatch is committed
-	// atomically with the operation, so checking after queued is reached is
-	// deterministic: a poison row would already be there.
+	// UPGRADE still persists no :artifact dispatch: the operation-creation unit
+	// of work passes a nil Dispatch for it, and runArtifactStage tolerates the
+	// missing row (ADR-027 kept that shape -- only the stage pipeline changed).
 	_, err = st.Outbox().GetByCommandID(context.Background(), opID+":artifact")
 	assert.ErrorIs(t, err, store.ErrNotFound, "UPGRADE must not persist an :artifact dispatch")
 
@@ -660,6 +684,8 @@ func TestCreateOperation_UpgradeTerminalAndCancelRegression(t *testing.T) {
 			ExpectedCurrentRevision: 1,
 		}), key))
 		require.NoError(t, err)
+		// ADR-027: UPGRADE waits for the preflight stages now.
+		driveUpgradeStages(t, st, resp.Msg.OperationId)
 		return resp.Msg.OperationId
 	}
 	waitQueued := func(opID string) *store.Operation {
@@ -2467,4 +2493,47 @@ func TestToProtoTimelineEntryNewKinds(t *testing.T) {
 	assert.Equal(t, "req-err", errorEntry.RequestId)
 	assert.Equal(t, "helm_upgrade_failed", errorEntry.ErrorCode)
 	assert.Equal(t, "sanitized", errorEntry.ErrorMessage)
+}
+
+// ADR-027: UPGRADE must not dispatch its release write before the preflight
+// stages pass. Restoring the D-108 ①b short-circuit (runPipeline calling
+// runUpgrade directly) makes this test fail: :execute would appear immediately.
+func TestCreateOperation_UpgradeWaitsForPreflight(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedUpgradeInventory(t, st)
+	require.NoError(t, st.Operators().Create(context.Background(), &store.Operator{
+		ID: "operator-upgrade", Name: "upgrade-operator", CustomerID: "cust-001",
+		ClusterID: "cls-001", CertSerial: "serial-upgrade", Status: store.OperatorActive,
+	}))
+	digest := fmt.Sprintf("%064x", 77)
+	require.NoError(t, st.Bundles().Create(context.Background(), &store.ReleaseBundle{
+		ID: "bundle-upgrade-wait", Name: "upgrade bundle", DigestAlg: "sha256", DigestValue: digest,
+		Status: store.BundleValidated, ChartRef: "nginx", ChartDigest: "sha256:" + digest,
+		CreatedAt: time.Now().UTC(),
+	}))
+
+	resp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:           "UPGRADE",
+		BundleId:                "bundle-upgrade-wait",
+		ReleaseDefinitionId:     "def-001",
+		ValuesRevisionId:        "vr-001",
+		ExpectedCurrentRevision: 1,
+	}), "idem-upgrade-waits"))
+	require.NoError(t, err)
+	opID := resp.Msg.OperationId
+
+	// The pipeline is at the render stage and no operator has answered it.
+	require.Eventually(t, func() bool {
+		_, err := st.Outbox().GetByCommandID(context.Background(), opID+":render")
+		return err == nil
+	}, 5*time.Second, 20*time.Millisecond, "UPGRADE must dispatch the render stage")
+
+	_, err = st.Outbox().GetByCommandID(context.Background(), opID+":execute")
+	assert.ErrorIs(t, err, store.ErrNotFound, "the release write must wait for preflight")
+
+	op, err := st.Operations().Get(context.Background(), opID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusPreflight, op.Status, "UPGRADE must stay in preflight while a stage is outstanding")
 }
