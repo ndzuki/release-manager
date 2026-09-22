@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -395,6 +396,13 @@ func (s *operatorSvc) buildStageDispatcher(
 	if err != nil {
 		return nil, fmt.Errorf("create REST mapper for the cluster preflight stage: %w", err)
 	}
+	// ADR-026 V1: the dry-run cache invalidates against a capability version
+	// derived from live discovery. Without it the cache would have nothing to
+	// invalidate against, which is the fail-open the audit found.
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("create discovery client for the capability version: %w", err)
+	}
 	pull := operatorpreflight.NewRuntimePullExecutor(
 		operatorpreflight.NewPullProber(kubeClient, logger),
 		operatorpreflight.RuntimePullConfig{
@@ -411,7 +419,8 @@ func (s *operatorSvc) buildStageDispatcher(
 			engine, s.registryPlainHTTP, logger),
 		string(orchestratorpreflight.StageCluster): operator.NewClusterStageExecutor(
 			engine, operatorpreflight.NewDryRunExecutor(mapper), operator.NewKubeNamespaceEnsurer(kubeClient),
-			s.registryPlainHTTP, logger),
+			s.registryPlainHTTP, logger).
+			WithCapabilityVersioner(operator.NewDiscoveryCapabilityVersioner(discoveryClient)),
 		string(orchestratorpreflight.StageRuntimePull): operator.NewRuntimePullStageExecutor(pull, logger),
 	}), nil
 }

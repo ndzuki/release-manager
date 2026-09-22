@@ -78,11 +78,20 @@ var _ NamespaceEnsurer = (*KubeNamespaceEnsurer)(nil)
 // through RenderManifests rather than RenderPreflight because the objects must
 // never reach RenderResult, which carries only safe summaries (AC-046-02).
 type ClusterStageExecutor struct {
-	charts     ChartLocator
-	dryRunner  ClusterDryRunner
-	namespaces NamespaceEnsurer
-	plainHTTP  bool
-	logger     *slog.Logger
+	charts       ChartLocator
+	dryRunner    ClusterDryRunner
+	namespaces   NamespaceEnsurer
+	capabilities CapabilityVersioner
+	plainHTTP    bool
+	logger       *slog.Logger
+}
+
+// WithCapabilityVersioner attaches the ADR-026 V1 capability probe. Without it
+// the stage reports an empty capability version, which makes the dry-run cache a
+// miss (fail-closed) rather than reusing a result it cannot invalidate.
+func (e *ClusterStageExecutor) WithCapabilityVersioner(v CapabilityVersioner) *ClusterStageExecutor {
+	e.capabilities = v
+	return e
 }
 
 // NewClusterStageExecutor builds the cluster stage executor. namespaces may be
@@ -145,18 +154,17 @@ func (e *ClusterStageExecutor) ExecuteStage(ctx context.Context, command *operat
 		}
 	}
 
+	capabilityVersion := e.capabilityVersion(ctx, command.GetOperationId())
 	batch, err := e.dryRunner.DryRunAll(ctx, objects, preflight.Input{
-		OperationID:     command.GetOperationId(),
-		RenderDigest:    result.RenderDigest,
-		ManifestStream:  stream,
-		TargetNamespace: command.GetNamespace(),
-		// CapabilityVersion is empty because this executor has no cluster
-		// capability snapshot yet (ADR-026 V1 will add the discovery probe).
-		// An empty version now makes the dry-run cache a MISS rather than a hit
-		// (internal/operator/preflight/cache.go): the previous comment claimed
-		// that was already true, but the cache skipped validation when its
-		// tracked version was empty, so an unversioned "passed" was replayed
-		// after the cluster's capabilities changed.
+		OperationID:       command.GetOperationId(),
+		RenderDigest:      result.RenderDigest,
+		ManifestStream:    stream,
+		CapabilityVersion: capabilityVersion,
+		TargetNamespace:   command.GetNamespace(),
+		// ADR-026 V1: the discovery probe supplies the version the dry-run cache
+		// invalidates against. A probe failure degrades to an empty version,
+		// which the cache treats as a MISS -- safe, and it does not block the
+		// release on a discovery hiccup.
 	})
 	if err != nil {
 		return "", fmt.Errorf("cluster stage: %w", err)
@@ -252,4 +260,21 @@ func rejectedCount(batch *preflight.BatchResult) int {
 		}
 	}
 	return rejected
+}
+
+// capabilityVersion probes the cluster capability version the dry-run cache
+// invalidates against (ADR-026 V1). A probe failure degrades to an empty version
+// -- the cache treats that as a MISS, which is the safe direction -- rather than
+// failing the stage on a discovery hiccup.
+func (e *ClusterStageExecutor) capabilityVersion(ctx context.Context, operationID string) string {
+	if e.capabilities == nil {
+		return ""
+	}
+	probed, err := e.capabilities.CapabilityVersion(ctx)
+	if err != nil {
+		e.logger.Warn("capability version probe failed; dry-run cache disabled for this run",
+			"operation_id", operationID, "err", err)
+		return ""
+	}
+	return probed
 }
