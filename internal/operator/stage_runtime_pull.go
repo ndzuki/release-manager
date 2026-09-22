@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -14,10 +15,16 @@ import (
 // RuntimePullStageExecutor runs the preflight runtime_pull stage: it pulls the
 // bundle's images into the node-local cache and reports the batch result.
 //
-// A stage that cannot run must fail, not pass: the ordinary execution path
-// treats a disabled pull as "nothing to check" because it is a gate on the way
-// to a release write, but a runtime_pull *stage* exists to check, so a disabled
-// executor is an error here (TASK-114 AC 2 -- a stage is a check, and a check
+// A stage that cannot run must NOT report a pass -- but since ADR-025 it reports
+// StageSkipped rather than failing: the ordinary execution path treats a
+// disabled pull as "nothing to check" because it is a gate on the way to a
+// release write, and a runtime_pull *stage* exists to check. Reporting skipped
+// lets the control plane tell "not enabled" apart from "ran and failed", which
+// must block (REQ-048). This supersedes TASK-114 AC 2's "disabled is an error"
+// (TASK-114's assembly work stands; only this decision changed).
+//
+// Historical note (kept for traceability): the previous wording read "a
+// disabled executor is an error here (TASK-114 AC 2 -- a stage is a check, and a check
 // that did not happen must not report success).
 type RuntimePullStageExecutor struct {
 	pull   *preflight.RuntimePullExecutor
@@ -50,8 +57,12 @@ func (e *RuntimePullStageExecutor) ExecuteStage(ctx context.Context, command *op
 
 	result, err := e.pull.Run(ctx, command.GetOperationId(), images)
 	if err != nil {
-		// Includes ErrPullDisabled: a stage that cannot run fails closed rather
-		// than reporting a pass it did not earn.
+		if errors.Is(err, preflight.ErrPullDisabled) {
+			// ADR-025 (Plan A): "not enabled" is not a failure. Reporting it as
+			// skipped keeps it distinguishable from a stage that ran and failed,
+			// and the control plane blocks on the latter (REQ-048).
+			return `{"status":"skipped","detail":"runtime_pull_disabled"}`, nil
+		}
 		return "", fmt.Errorf("runtime pull stage: %w", err)
 	}
 	if !e.pull.AllowsExecution(result) {

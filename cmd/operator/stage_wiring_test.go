@@ -85,7 +85,7 @@ func TestBuildStageDispatcherLeavesRuntimePullDisabledWithoutPolicy(t *testing.T
 		helmengine.NewRealEngine("", logger), restConfig, kubeClient, logger)
 	require.NoError(t, err)
 
-	_, err = dispatcher.Execute(t.Context(), &operatorv1.Command{
+	result, err := dispatcher.Execute(t.Context(), &operatorv1.Command{
 		CommandId: "cmd-pull", OperationId: "op-1", Stage: "runtime_pull",
 		Bundle: &commonv1.ReleaseBundle{
 			ChartRef: "oci://registry.example.com/charts/example",
@@ -95,6 +95,10 @@ func TestBuildStageDispatcherLeavesRuntimePullDisabledWithoutPolicy(t *testing.T
 			}},
 		},
 	})
-	require.Error(t, err, "a disabled runtime pull stage must not report success")
-	assert.Contains(t, err.Error(), "runtime pull preflight is disabled")
+	// ADR-025 (Plan A) supersedes TASK-114 AC 2's "disabled is an error": the
+	// stage reports skipped, which is what lets the control plane block on a
+	// stage that RAN and failed while still allowing a cluster without the
+	// capability. Reporting an error here would make the two indistinguishable.
+	require.NoError(t, err, "a disabled runtime pull stage must not fail")
+	assert.JSONEq(t, `{"status":"skipped","detail":"runtime_pull_disabled"}`, result)
 }

@@ -172,13 +172,13 @@ func (c *Coordinator) runPipeline(ctx context.Context, op *store.Operation) (Sta
 			return StageCancelled, results
 		}
 		if result.Status == StageFailed || result.Status == StageTimeout {
-			if !stage.Required {
-				// Optional stage failure: record the policy result and continue
-				// — only required stage failures fail the operation (REQ-019).
-				c.logger.Info("optional stage failed, continuing",
-					"op_id", op.ID, "stage", stage.Name, "status", result.Status)
-				continue
-			}
+			// ADR-025 (Plan A): "required" is a runtime property, not a static
+			// one. A stage that RAN and failed must block, whatever its static
+			// Required flag says — the old `!stage.Required -> continue`
+			// shortcut is exactly what let a real runtime_pull failure through
+			// (REQ-048). A stage that could not run reports StageSkipped
+			// (handled below) instead of failing, so nothing is lost by
+			// removing it.
 			errorCode := errorCodeFromStatus(result)
 
 			if result.Status == StageTimeout {
@@ -203,7 +203,15 @@ func (c *Coordinator) runPipeline(ctx context.Context, op *store.Operation) (Sta
 			})
 			return StageFailed, results
 		}
-		c.logger.Info("optional stage passed", "op_id", op.ID, "stage", stage.Name)
+		if result.Status == StageSkipped {
+			// The stage did not run (e.g. runtime_pull is not enabled in this
+			// cluster): it is not a pass and not a failure. ADR-025 makes this
+			// the only way a stage is allowed to be "not required".
+			c.logger.Info("stage skipped, continuing",
+				"op_id", op.ID, "stage", stage.Name, "detail", result.Detail)
+			continue
+		}
+		c.logger.Info("stage passed", "op_id", op.ID, "stage", stage.Name)
 	}
 
 	// All stages passed. INSTALL/ROLLBACK still need their release write: the
