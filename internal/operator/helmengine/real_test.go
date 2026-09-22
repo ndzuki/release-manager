@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"encoding/hex"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"helm.sh/helm/v3/pkg/action"
@@ -813,4 +814,48 @@ func TestRealEngine_UpgradeCrashReplayEncodedLabel(t *testing.T) {
 	stored, getErr := releases.Get("upgrade-replay-label", 2)
 	require.NoError(t, getErr)
 	assert.Equal(t, encodeLabelDigest(inputDigest), stored.Labels["rm_input_digest"])
+}
+
+// The chart digest is checked for every ref kind. The old guard skipped the
+// check for `oci://` refs entirely (the 2026-09 audit's hole); this pins the
+// check itself -- a wrong digest fails closed before any write, the archive's
+// real digest passes, and the rejected attempt writes no revision.
+func TestRealEngine_UpgradeVerifiesChartDigest(t *testing.T) {
+	engine, releases := newTestRealEngine(t, &kubefake.FailingKubeClient{
+		PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard},
+	})
+	// The digest is sha256 over the chart ARCHIVE, so the test needs a packaged
+	// .tgz -- writeTestChart returns an unpacked directory, and reading a
+	// directory with os.ReadFile fails (which is what a digest check on a
+	// directory path would hit).
+	chartDir := writeTestChart(t)
+	chrt, err := loader.LoadDir(chartDir)
+	require.NoError(t, err)
+	chartPath, err := chartutil.Save(chrt, t.TempDir())
+	require.NoError(t, err)
+	raw, err := os.ReadFile(chartPath)
+	require.NoError(t, err)
+	sum := sha256.Sum256(raw)
+	correct := "sha256:" + hex.EncodeToString(sum[:])
+
+	_, err = engine.Install(t.Context(), InstallOptions{
+		Namespace: "default", ReleaseName: "digest-check", ChartPath: chartPath,
+	})
+	require.NoError(t, err)
+
+	_, err = engine.Upgrade(t.Context(), UpgradeOptions{
+		Namespace: "default", ReleaseName: "digest-check", ChartPath: chartPath,
+		ChartDigest: "sha256:" + strings.Repeat("0", 64),
+	})
+	require.ErrorIs(t, err, ErrDigestMismatch, "a wrong chart digest must fail closed")
+
+	_, err = engine.Upgrade(t.Context(), UpgradeOptions{
+		Namespace: "default", ReleaseName: "digest-check", ChartPath: chartPath,
+		ChartDigest: correct,
+	})
+	require.NoError(t, err, "the archive's own digest must pass")
+
+	stored, getErr := releases.Get("digest-check", 1)
+	require.NoError(t, getErr)
+	assert.Equal(t, 1, stored.Version, "the rejected upgrade must not write a new revision")
 }
