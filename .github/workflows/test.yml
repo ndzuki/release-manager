@@ -404,13 +404,28 @@ jobs:
           WORKLOAD_IMAGE: ${{ vars.RUNS_ON == 'self-hosted' && 'busybox:1.36@sha256:b7f3d86d6e84fc17718c48bcde1450807faa2d56704205c697b4bd5df7b9e29f' || 'busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662' }}
         run: make test-rollout-watch
 
-  # AC-066-17 prerequisite smoke as a versioned merge gate for upstream chain
-  # changes. The target preserves data/smoke-result.json under e2e-results/
-  # and always purges the dev environment, so a merge can gate on real
-  # Upgrade/Rollback/Emergency/devseed evidence rather than "local tests pass".
+  # AC-066-17 prerequisite smoke. The target preserves data/smoke-result.json
+  # under e2e-results/ and always purges the dev environment, so the gate rests
+  # on real Upgrade/Rollback/Emergency/devseed evidence rather than "local tests
+  # pass".
+  #
+  # Pull requests intentionally do NOT run it -- the same pattern REQ-066 决策 ⑧
+  # already applies to the `e2e` job below. It builds a real k3d environment, so
+  # it is a 15-55 minute long tail: on 2026-09-22 four approved changes sat
+  # behind it while it failed for environment reasons (one 55-minute run
+  # cancelled with no root cause, and one seed that raced a terminating pod and
+  # died with `unavailable: unexpected EOF`). The coverage is kept -- it still
+  # runs on push main and on demand -- and the environment-specific root cause is
+  # fixed in internal/devfixture (convergence retry budget).
   e2e-prerequisite:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     timeout-minutes: 45
+    permissions:
+      contents: read
+    concurrency:
+      group: e2e-prerequisite-${{ github.repository }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
 
