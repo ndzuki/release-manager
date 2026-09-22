@@ -684,9 +684,21 @@ func resolveEmergencyAnnotations(
 				fmt.Sprintf("annotation value must be 1..%d UTF-8 bytes, got %d", emergencyMaxAnnotationValueBytes, len(value)))
 		}
 		entries = append(entries, emergencyAnnotationEntry{Key: key, Value: value})
-		if allowed.PromotionValuesPath != "" {
-			promotionPaths = append(promotionPaths, allowed.PromotionValuesPath)
+		// AC-058-25: the lock is per scope+key. An approved key with no
+		// promotion mapping previously produced NO lock at all --
+		// HasPendingPromotionPath short-circuits on an empty list -- so the same
+		// scope/key could be changed twice concurrently. Synthesize a lock key
+		// from scope+key in that case (TASK-165 plan A).
+		//
+		// Safe because every consumer compares these paths as opaque strings
+		// (internal/store/values_convergence.go:42,98 and
+		// internal/orchestrator/prepare_sessions.go:262,324); none parses them as
+		// a values path, and the convergence-task detail only echoes them.
+		lockPath := allowed.PromotionValuesPath
+		if lockPath == "" {
+			lockPath = "annotations/" + scope + "/" + key
 		}
+		promotionPaths = append(promotionPaths, lockPath)
 	}
 	sort.Strings(promotionPaths)
 	return emergencyResolvedChange{
