@@ -1362,43 +1362,154 @@ func (s *Service) deliverPending(
 		case <-done:
 			return
 		case <-ticker.C:
-			// Check for inflight command (max_inflight=1 enforcement).
-			inflight, err := s.store.Outbox().GetInflightForOperator(ctx, operatorID)
-			if err != nil && err != store.ErrNotFound {
-				s.logger.Warn("failed to check inflight", "error", err)
-				continue
-			}
-			if inflight != nil {
-				// An inflight command exists; skip this poll cycle.
-				continue
-			}
-
-			entry, err := s.store.Outbox().GetNextPending(ctx, operatorID)
-			if err != nil || entry == nil {
-				continue
-			}
-
-			// Assign sequence number to new pending entries.
-			if entry.Sequence == 0 {
-				seq, err := s.store.Outbox().GetNextSequence(ctx)
-				if err != nil {
-					s.logger.Warn("failed to get next sequence", "error", err)
-					continue
-				}
-				entry.Sequence = seq
-				if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPending, ""); err != nil {
-					s.logger.Warn("failed to persist command sequence", "error", err)
-					continue
-				}
-			}
-
-			select {
-			case deliverCh <- entry:
-			case <-done:
+			if s.deliverNextPending(ctx, operatorID, deliverCh, done) {
 				return
 			}
 		}
 	}
+}
+
+// deliverNextPending runs one delivery poll cycle: it enforces max_inflight,
+// applies the γ-1b delivery fence to the head pending row, assigns its sequence
+// number and hands it to the delivery channel. It reports true when the stream
+// closed while the cycle was blocked on the channel.
+func (s *Service) deliverNextPending(
+	ctx context.Context,
+	operatorID string,
+	deliverCh chan<- *store.OutboxEntry,
+	done <-chan struct{},
+) bool {
+	// Check for inflight command (max_inflight=1 enforcement).
+	inflight, err := s.store.Outbox().GetInflightForOperator(ctx, operatorID)
+	if err != nil && err != store.ErrNotFound {
+		s.logger.Warn("failed to check inflight", "error", err)
+		return false
+	}
+	if inflight != nil {
+		// An inflight command exists; skip this poll cycle.
+		return false
+	}
+
+	entry, err := s.store.Outbox().GetNextPending(ctx, operatorID)
+	if err != nil || entry == nil {
+		return false
+	}
+
+	// D-γ / γ-1b: the delivery fence decides whether this row may reach a
+	// cluster at all (see fenceDelivery).
+	switch decision, reason := s.fenceDelivery(ctx, entry); decision {
+	case fenceDeliveryRefuse:
+		s.logger.Warn("refusing fenced command delivery",
+			"outbox_id", entry.ID, "command_id", entry.CommandID,
+			"operation_id", entry.OperationID, "reason", reason)
+		// Fail the row so it leaves the pending queue: it can never be legal,
+		// and holding it would stall every command behind it.
+		if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandFailed, reason); err != nil {
+			s.logger.Warn("failed to persist fenced command", "outbox_id", entry.ID, "error", err)
+		}
+		return false
+	case fenceDeliveryHold:
+		// Leave the row pending. The coordinator's queued CAS is what makes it
+		// deliverable, and it consumes this existing dispatch row instead of
+		// creating a new one, so the row must survive.
+		s.logger.Debug("holding fenced command delivery",
+			"outbox_id", entry.ID, "command_id", entry.CommandID,
+			"operation_id", entry.OperationID)
+		return false
+	}
+
+	// Assign sequence number to new pending entries.
+	if entry.Sequence == 0 {
+		seq, err := s.store.Outbox().GetNextSequence(ctx)
+		if err != nil {
+			s.logger.Warn("failed to get next sequence", "error", err)
+			return false
+		}
+		entry.Sequence = seq
+		if err := s.store.Outbox().UpdateStatus(ctx, entry.ID, store.CommandPending, ""); err != nil {
+			s.logger.Warn("failed to persist command sequence", "error", err)
+			return false
+		}
+	}
+
+	select {
+	case deliverCh <- entry:
+		return false
+	case <-done:
+		return true
+	}
+}
+
+// fenceDeliveryDecision is the delivery fence's verdict for one pending row.
+type fenceDeliveryDecision int
+
+const (
+	// fenceDeliveryAllow hands the row to the operator.
+	fenceDeliveryAllow fenceDeliveryDecision = iota
+	// fenceDeliveryHold leaves the row pending until its operation is queued.
+	fenceDeliveryHold
+	// fenceDeliveryRefuse fails the row: its release write can never be legal.
+	fenceDeliveryRefuse
+)
+
+// fenceDelivery applies the γ-1b delivery-side fence (D-γ).
+//
+// The write side (γ-1a) commits the queued transition and the :execute dispatch
+// in one transaction, so a *new* dispatch cannot exist for an operation that
+// never queued. The fence covers what the write side cannot: dispatch rows that
+// already exist in the database from before γ-1a, and rows whose operation left
+// queued before the command was delivered. Cancelling a queued operation only
+// rewrites the operations row, and it is allowed while the operator is offline,
+// so the row can outlive the state it was created for. Delivering either one
+// applies a Helm release write on a customer cluster for an operation the
+// gateway will not record: FinishOperation drops the result for a non-queued or
+// terminal operation.
+//
+// The fence is scoped to the release write by command id, never by payload:
+//
+//   - a preflight stage command (`<operation_id>:<stage>`) must be delivered
+//     while the operation is still preflight -- that is the pipeline itself --
+//     so fencing stage commands would break it;
+//   - the operator control commands (INVENTORY_SYNC, SECRET_METADATA_LIST) are
+//     non-stage too, but carry a synthetic operation id with no operation row,
+//     so a status lookup would refuse them and they would never be delivered.
+//
+// A non-terminal operation that has not queued yet (pending/preflight) holds
+// the row rather than failing it, because the coordinator can still queue that
+// operation -- ResumePreflights resumes it after a restart -- and it consumes
+// the existing dispatch row instead of inserting a new one. That hold is the
+// one case where the fence leaves the head of the operator's pending queue
+// blocked; the alternative is delivering the release write the fence exists to
+// stop.
+func (s *Service) fenceDelivery(ctx context.Context, entry *store.OutboxEntry) (decision fenceDeliveryDecision, reason string) {
+	if !isReleaseWriteDispatch(entry) {
+		return fenceDeliveryAllow, ""
+	}
+	op, err := s.store.Operations().Get(ctx, entry.OperationID)
+	if err != nil {
+		// Fail closed: a release write for an operation the gateway cannot
+		// account for must never reach a cluster.
+		return fenceDeliveryRefuse, `{"code":"delivery_fenced","detail":"operation_not_found"}`
+	}
+	switch op.Status {
+	case store.StatusQueued, store.StatusRunning:
+		return fenceDeliveryAllow, ""
+	case store.StatusPending, store.StatusPreflight:
+		return fenceDeliveryHold, ""
+	default:
+		// Every other status is terminal or cancelling: the release write is
+		// dead, and holding it would block the operator's queue forever.
+		return fenceDeliveryRefuse, fmt.Sprintf(`{"code":"delivery_fenced","detail":"operation_%s"}`, op.Status)
+	}
+}
+
+// isReleaseWriteDispatch reports whether a pending row is the non-stage release
+// write of a standard operation -- the `<operation_id>:execute` dispatch that
+// γ-1a commits atomically with the queued transition (D-γ). Preflight stage
+// commands, the deferred :artifact record and the operator control commands
+// never match.
+func isReleaseWriteDispatch(entry *store.OutboxEntry) bool {
+	return entry != nil && entry.OperationID != "" && entry.CommandID == entry.OperationID+":execute"
 }
 
 // RenewCertificate replaces the current operator certificate without changing
