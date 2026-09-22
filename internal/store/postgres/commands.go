@@ -14,7 +14,20 @@ type outboxStore struct{ gorm *DB }
 
 const outboxColumns = `id, command_id, operation_id, operation_type, operator_id, payload, status, max_inflight, sequence, result_json, created_at, updated_at, delivered_at, acked_at`
 
+// outboxExecer is satisfied by both *DB and *Tx, so the same insert serves a
+// standalone write and a unit of work.
+type outboxExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 func (s *outboxStore) Create(ctx context.Context, e *store.OutboxEntry) error {
+	normalizeOutboxEntry(e)
+	return createOutboxEntryTx(ctx, s.gorm, e)
+}
+
+// normalizeOutboxEntry applies the defaults Create guarantees, so a unit of work
+// that inserts a dispatch directly produces the identical row.
+func normalizeOutboxEntry(e *store.OutboxEntry) {
 	if e.CreatedAt.IsZero() {
 		e.CreatedAt = time.Now().UTC()
 	}
@@ -30,8 +43,12 @@ func (s *outboxStore) Create(ctx context.Context, e *store.OutboxEntry) error {
 	if e.CommandID == "" {
 		e.CommandID = e.ID
 	}
+}
 
-	_, err := s.gorm.ExecContext(ctx, `
+// createOutboxEntryTx inserts one outbox row on a caller-supplied handle, so a
+// unit of work can commit it together with another write (D-γ / γ-1a).
+func createOutboxEntryTx(ctx context.Context, db outboxExecer, e *store.OutboxEntry) error {
+	_, err := db.ExecContext(ctx, `
 INSERT INTO outbox (id, command_id, operation_id, operation_type, operator_id, payload, status, max_inflight, sequence, result_json, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `,

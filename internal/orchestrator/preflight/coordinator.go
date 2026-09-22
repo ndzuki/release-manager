@@ -214,19 +214,23 @@ func (c *Coordinator) runPipeline(ctx context.Context, op *store.Operation) (Sta
 	// preflight stage commands are checks now, so the write is a separate
 	// non-stage command (TASK-114/U-1). Without it the operation would reach
 	// succeeded with nothing installed.
+	// D-γ / γ-1a: build the release write first (reads only), then commit the
+	// queued transition and the dispatch in ONE transaction. A delivered command
+	// must never exist for an operation whose queue transition did not commit.
 	var (
+		dispatch     *store.OutboxEntry
 		dispatchErr  error
 		dispatchCode = "dispatch_failed"
 	)
 	switch op.OperationType {
 	case store.OperationInstall, store.OperationRollback:
-		dispatchErr = c.dispatchExecution(ctx, op)
+		dispatch, dispatchErr = c.buildExecutionDispatch(ctx, op)
 	case store.OperationUpgrade:
 		// ADR-027: UPGRADE runs the full pipeline too (D-108 ①b retracted --
 		// its cause, the poisoned first dispatch row, was removed by TASK-114's
 		// stage dispatch), so its release write is dispatched here like
 		// INSTALL's. It still uses the UPGRADE payload, hence a separate call.
-		dispatchCode, dispatchErr = c.dispatchUpgrade(ctx, op)
+		dispatch, dispatchCode, dispatchErr = c.buildUpgradeDispatch(ctx, op)
 	}
 	if dispatchErr != nil {
 		c.logger.Error("execution dispatch failed", "op_id", op.ID, "err", dispatchErr)
@@ -249,7 +253,17 @@ func (c *Coordinator) runPipeline(ctx context.Context, op *store.Operation) (Sta
 		Overall:     StagePassed,
 		Stages:      results,
 	}
-	c.casQueued(ctx, op, result)
+	if err := c.queueOperation(ctx, op, result, dispatch); err != nil {
+		c.logger.Error("queue transition failed", "op_id", op.ID, "err", err)
+		c.casFailed(ctx, op, AggregateResult{
+			OperationID: op.ID,
+			Overall:     StageFailed,
+			FailedStage: executionStageName,
+			Stages:      results,
+			ErrorCode:   "dispatch_failed",
+		})
+		return StageFailed, results
+	}
 	return StagePassed, results
 }
 
@@ -327,18 +341,19 @@ const artifactStageResultJSON = `{"status":"passed","detail":"artifact precondit
 // routes every stage-typed command to a check and fails closed for one it does
 // not know, so the release write must be an ordinary command (TASK-114 AC 2).
 // The command id is stable so a resumed run reuses the existing row (D-87).
-func (c *Coordinator) dispatchExecution(ctx context.Context, op *store.Operation) error {
+func (c *Coordinator) buildExecutionDispatch(ctx context.Context, op *store.Operation) (*store.OutboxEntry, error) {
 	commandID := op.ID + ":execute"
 	if _, err := c.outbox.GetByCommandID(ctx, commandID); err == nil {
 		c.logger.Debug("consuming existing execution dispatch", "op_id", op.ID, "command_id", commandID)
-		return nil
+		// Already dispatched: nothing to insert, but the queued transition still runs.
+		return nil, nil
 	} else if !errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf("execution dispatch lookup: %w", err)
+		return nil, fmt.Errorf("execution dispatch lookup: %w", err)
 	}
 
 	operatorID, err := c.resolveOperator(ctx, op)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var bundleProto *commonv1.ReleaseBundle
 	var effective []byte
@@ -352,20 +367,17 @@ func (c *Coordinator) dispatchExecution(ctx context.Context, op *store.Operation
 	}
 	payload, err := c.commandPayload(ctx, op, "", bundleProto, effective)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	encoded, err := payload.Marshal()
 	if err != nil {
-		return fmt.Errorf("marshal execution payload: %w", err)
+		return nil, fmt.Errorf("marshal execution payload: %w", err)
 	}
-	if err := c.outbox.Create(ctx, &store.OutboxEntry{
+	// Built, not written: queueOperation commits it with the queued transition.
+	return &store.OutboxEntry{
 		ID: uuid.NewString(), CommandID: commandID, OperationID: op.ID,
 		OperationType: string(op.OperationType), OperatorID: operatorID, Payload: encoded,
-	}); err != nil {
-		return fmt.Errorf("create execution dispatch: %w", err)
-	}
-	c.logger.Info("release execution dispatched", "op_id", op.ID, "command_id", commandID)
-	return nil
+	}, nil
 }
 
 // dispatchUpgrade writes the UPGRADE release write. ADR-027 restored UPGRADE to
@@ -373,42 +385,40 @@ func (c *Coordinator) dispatchExecution(ctx context.Context, op *store.Operation
 // dispatchExecution for INSTALL/ROLLBACK -- and the pipeline owns the queued CAS
 // (this function no longer CASes). The error code is returned rather than applied
 // so the pipeline reports the same specific codes the old short-circuit did.
-func (c *Coordinator) dispatchUpgrade(ctx context.Context, op *store.Operation) (string, error) {
+func (c *Coordinator) buildUpgradeDispatch(ctx context.Context, op *store.Operation) (*store.OutboxEntry, string, error) {
 	operatorID, err := c.resolveOperator(ctx, op)
 	if err != nil {
-		return "stage_unavailable", err
+		return nil, "stage_unavailable", err
 	}
 	definition, err := c.defs.Get(ctx, op.ReleaseDefinitionID)
 	if err != nil {
-		return "release_not_found", err
+		return nil, "release_not_found", err
 	}
 	if _, err := c.invs.GetByDefinition(ctx, op.ReleaseDefinitionID); err != nil {
-		return "release_not_found", err
+		return nil, "release_not_found", err
 	}
 	bundle, err := c.bundles.Get(ctx, op.BundleID)
 	if err != nil {
-		return "bundle_not_found", err
+		return nil, "bundle_not_found", err
 	}
 	revision, err := c.values.Get(ctx, op.ValuesRevisionID)
 	if err != nil {
-		return "revision_not_approved", err
+		return nil, "revision_not_approved", err
 	}
 	commandID := op.ID + ":execute"
 	payload, err := BuildUpgradePayload(op, definition, bundle, revision, commandID)
 	if err != nil {
-		return "render_failed", err
+		return nil, "render_failed", err
 	}
 	encoded, err := payload.Marshal()
 	if err != nil {
-		return "invalid_command", err
+		return nil, "invalid_command", err
 	}
-	if err := c.outbox.Create(ctx, &store.OutboxEntry{
+	// Built, not written: queueOperation commits it with the queued transition.
+	return &store.OutboxEntry{
 		ID: uuid.NewString(), CommandID: commandID, OperationID: op.ID,
 		OperationType: string(store.OperationUpgrade), OperatorID: operatorID, Payload: encoded,
-	}); err != nil {
-		return "dispatch_failed", err
-	}
-	return "", nil
+	}, "", nil
 }
 
 // runStage dispatches a PRECHECK command for one stage and polls for its result.
@@ -698,18 +708,26 @@ func (c *Coordinator) casCancelled(ctx context.Context, op *store.Operation, res
 	}
 }
 
-func (c *Coordinator) casQueued(ctx context.Context, op *store.Operation, result AggregateResult) {
+// queueOperation commits the transition to queued and the release write in one
+// transaction (D-γ / γ-1a), then records the preflight result. Splitting the CAS
+// from the dispatch -- the previous shape -- left a window where a delivered
+// command belonged to an operation that was still in preflight, and
+// FinishOperation drops a result for a non-queued operation, so the release
+// could be applied without the operation ever recording it.
+func (c *Coordinator) queueOperation(ctx context.Context, op *store.Operation, result AggregateResult, dispatch *store.OutboxEntry) error {
 	c.persistPreflightResult(ctx, op, result)
 	c.logger.Info("preflight passed, enqueuing operation", "op_id", op.ID)
 
 	next, err := operation.Transition(op.Status, operation.EventPreflightPassed)
 	if err != nil {
-		c.logger.Error("preflight→queued transition invalid", "op_id", op.ID, "err", err)
-		return
+		return fmt.Errorf("preflight→queued transition invalid: %w", err)
 	}
-	if _, err := c.ops.UpdateStatus(ctx, op.ID, next, op.StateVersion, ""); err != nil {
-		c.logger.Error("CAS queued transition failed", "op_id", op.ID, "err", err)
-	}
+	return c.ops.QueueOperation(ctx, store.OperationQueueRequest{
+		OperationID:  op.ID,
+		NextStatus:   next,
+		StateVersion: op.StateVersion,
+		Dispatch:     dispatch,
+	})
 }
 
 // startLifecycle records the running state before any dispatch (REQ-019 Phase Start).

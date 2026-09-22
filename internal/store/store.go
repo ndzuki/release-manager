@@ -1889,8 +1889,24 @@ type CleanupIdempotencyStore interface {
 }
 
 // OperationStore defines the persistence contract for operations.
+// OperationQueueRequest is one atomic queue transition plus its dispatch row.
+//
+// D-γ / γ-1a: the transition to queued and the :execute dispatch are committed
+// together, because a delivered command must never exist for an operation whose
+// queue transition did not commit. Dispatch may be nil (an idempotent replay
+// already dispatched it), but it is never committed on its own.
+type OperationQueueRequest struct {
+	OperationID  string
+	NextStatus   OperationStatus
+	StateVersion int
+	Dispatch     *OutboxEntry
+}
+
 type OperationStore interface {
 	Create(ctx context.Context, op *Operation) error
+	// QueueOperation atomically applies NextStatus to the operation and persists
+	// Dispatch in the same transaction.
+	QueueOperation(ctx context.Context, req OperationQueueRequest) error
 	CreateIfAvailable(ctx context.Context, op *Operation) error
 	CreateIdempotent(ctx context.Context, command OperationCreateCommand) (*OperationCreateResult, error)
 	Get(ctx context.Context, id string) (*Operation, error)

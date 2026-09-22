@@ -240,3 +240,31 @@ func ensureOperationAvailable(ctx context.Context, tx *sql.Tx, op *store.Operati
 	}
 	return nil
 }
+
+// QueueOperation implements store.OperationStore: it commits the transition to
+// queued and the :execute dispatch in one transaction (D-γ / γ-1a), so a
+// delivered command cannot exist for an operation whose queue transition did not
+// commit.
+func (s *operationStore) QueueOperation(ctx context.Context, req store.OperationQueueRequest) error {
+	return retryBusy(ctx, func() error {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin operation queue: %w", err)
+		}
+		defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
+
+		if _, err := s.transitionInTx(ctx, tx, req.OperationID, req.NextStatus, req.StateVersion, ""); err != nil {
+			return err
+		}
+		if req.Dispatch != nil {
+			normalizeOutboxEntry(req.Dispatch)
+			if err := createOutboxEntry(ctx, tx, req.Dispatch); err != nil {
+				return fmt.Errorf("create execution dispatch: %w", err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit operation queue: %w", err)
+		}
+		return nil
+	})
+}

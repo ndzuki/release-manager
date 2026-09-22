@@ -716,3 +716,52 @@ func TestCoordinatorRun_SkippedOptionalStageContinues(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusQueued, got.Status)
 }
+
+// D-γ / γ-1a: the queued transition and the :execute dispatch commit in ONE
+// transaction, so a failed CAS must leave no dispatch row. The previous shape
+// created the dispatch first, which is what let a release write be delivered for
+// an operation that never reached queued. Splitting them back into two writes
+// makes this test fail.
+func TestQueueOperationLeavesNoDispatchWhenTheCasFails(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	op := seedPreflightFixture(t, st)
+	ctx := context.Background()
+
+	dispatch := &store.OutboxEntry{
+		ID: "entry-queue-fail", CommandID: op.ID + ":execute", OperationID: op.ID,
+		OperationType: string(store.OperationInstall), OperatorID: "operator-preflight",
+		Payload: []byte(`{}`),
+	}
+	// A stale state version: the CAS must reject the transition.
+	err := st.Operations().QueueOperation(ctx, store.OperationQueueRequest{
+		OperationID:  op.ID,
+		NextStatus:   store.StatusQueued,
+		StateVersion: op.StateVersion + 99,
+		Dispatch:     dispatch,
+	})
+	require.Error(t, err, "a stale state version must fail the CAS")
+
+	_, err = st.Outbox().GetByCommandID(ctx, op.ID+":execute")
+	assert.ErrorIs(t, err, store.ErrNotFound,
+		"a failed CAS must not leave a dispatch row behind")
+
+	// The happy path commits both: the transition and the (normalized) row.
+	require.NoError(t, st.Operations().QueueOperation(ctx, store.OperationQueueRequest{
+		OperationID:  op.ID,
+		NextStatus:   store.StatusQueued,
+		StateVersion: op.StateVersion,
+		Dispatch: &store.OutboxEntry{
+			ID: "entry-queue-ok", CommandID: op.ID + ":execute", OperationID: op.ID,
+			OperationType: string(store.OperationInstall), OperatorID: "operator-preflight",
+			Payload: []byte(`{}`),
+		},
+	}))
+	queued, err := st.Operations().Get(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusQueued, queued.Status)
+
+	entry, err := st.Outbox().GetByCommandID(ctx, op.ID+":execute")
+	require.NoError(t, err)
+	assert.Equal(t, store.CommandPending, entry.Status,
+		"the dispatch must be normalized like Create does, or GetNextPending never sees it")
+}
