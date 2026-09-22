@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
+	"connectrpc.com/connect"
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx-backed database/sql driver for PostgreSQL
 	"github.com/ndzuki/release-manager/internal/postgres"
 	"github.com/ndzuki/release-manager/migrations"
@@ -196,18 +198,31 @@ func (r *runner) runPhaseWithRetry(ctx context.Context, name string, run func(co
 		retries = 0
 	}
 	var lastErr error
-	for attempt := 0; attempt <= retries; attempt++ {
+	attempt := 0
+	for {
 		err := run(ctx)
 		if err == nil {
 			return nil
 		}
 		lastErr = err
-		if attempt == retries {
-			break
-		}
 		// fixture_conflict (canonical drift) is deterministic; retrying it
 		// would only burn the backoff window before reporting the conflict.
 		if errors.Is(err, ErrFixtureConflict) {
+			break
+		}
+		budget := retries
+		if isTransientConvergenceError(err) {
+			// The seed runs immediately after dev-up reports readiness, and
+			// readiness (rollout status + /readyz) can hold while a terminating
+			// pod is still in the service endpoints, so the first RPCs die with
+			// `unavailable: unexpected EOF` (real CI 2026-09-22: the identity
+			// phase exhausted 3 retries in ~7s and failed the whole dev-up).
+			// That is a transient convergence class and gets a convergence
+			// budget -- still bounded, and deterministic failures keep the
+			// short one, so this does not mask a real rejection.
+			budget = seedConvergenceRetries
+		}
+		if attempt >= budget {
 			break
 		}
 		if attempt > 0 {
@@ -219,6 +234,27 @@ func (r *runner) runPhaseWithRetry(ctx context.Context, name string, run func(co
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+		attempt++
 	}
-	return fmt.Errorf("%s phase (after %d retries): %w", name, retries, lastErr)
+	return fmt.Errorf("%s phase (after %d retries): %w", name, attempt, lastErr)
+}
+
+// seedConvergenceRetries bounds the retries granted to a transient convergence
+// failure. It is larger than SeedRetries because the endpoint settles over
+// seconds, not milliseconds, and it stays bounded so a genuinely unavailable
+// endpoint still fails.
+const seedConvergenceRetries = 8
+
+// isTransientConvergenceError reports whether a phase failure is the endpoint
+// still converging rather than a deterministic rejection. Deterministic errors
+// (ErrFixtureConflict, validation) are never retried on this budget.
+func isTransientConvergenceError(err error) bool {
+	var connectErr *connect.Error
+	if errors.As(err, &connectErr) {
+		switch connectErr.Code() {
+		case connect.CodeUnavailable, connect.CodeDeadlineExceeded:
+			return true
+		}
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
