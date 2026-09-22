@@ -50,30 +50,65 @@ type RealEngine struct {
 // stage failed every time while the install path, which builds its
 // configuration through actionConfig, worked).
 func (r *RealEngine) LocateChart(chartRef, chartVersion string, plainHTTP bool) (*chart.Chart, error) {
-	if r == nil || r.settings == nil {
-		return nil, fmt.Errorf("helm engine settings are required")
-	}
-	if strings.TrimSpace(chartRef) == "" {
-		return nil, fmt.Errorf("chart reference is required")
-	}
-	registryClient, err := registry.NewClient(
-		registry.ClientOptCredentialsFile(r.settings.RegistryConfig),
-	)
+	chartPath, err := r.locateChartPath(chartRef, chartVersion, plainHTTP)
 	if err != nil {
-		return nil, fmt.Errorf("initialize Helm registry client: %w", err)
-	}
-	locator := action.NewInstall(&action.Configuration{RegistryClient: registryClient})
-	locator.Version = chartVersion
-	locator.PlainHTTP = plainHTTP
-	chartPath, err := locator.LocateChart(chartRef, r.settings)
-	if err != nil {
-		return nil, fmt.Errorf("locate Helm chart %q: %w", chartRef, err)
+		return nil, err
 	}
 	loaded, err := loader.Load(chartPath)
 	if err != nil {
 		return nil, fmt.Errorf("load Helm chart %q: %w", chartPath, err)
 	}
 	return loaded, nil
+}
+
+// LocateChartArchive resolves a chart reference to the raw bytes of the chart
+// archive it points at, without loading or rendering it.
+//
+// It exists for the artifact preflight stage (ADR-024): the bundle's
+// chart_digest is the content sha256 of the chart archive bytes
+// (internal/devfixture/bundle.go archiveDigest computes and publishes it that
+// way), and ChartPathOptions.LocateChart downloads a remote reference --
+// including an oci:// reference -- to a readable local file, so reading that
+// file yields exactly the bytes the digest covers. Reading a file is not a
+// subprocess: this path stays SDK-only.
+func (r *RealEngine) LocateChartArchive(chartRef, chartVersion string, plainHTTP bool) ([]byte, error) {
+	chartPath, err := r.locateChartPath(chartRef, chartVersion, plainHTTP)
+	if err != nil {
+		return nil, err
+	}
+	archive, err := os.ReadFile(chartPath)
+	if err != nil {
+		return nil, fmt.Errorf("read Helm chart archive %q: %w", chartPath, err)
+	}
+	return archive, nil
+}
+
+// locateChartPath resolves a chart reference to a local path: a directory for a
+// local chart, or a downloaded archive for a remote (including OCI) reference.
+// LocateChart and LocateChartArchive share it so both take the identical
+// settings and registry client path, and a reference resolves the same way
+// whichever of the two asks for it.
+func (r *RealEngine) locateChartPath(chartRef, chartVersion string, plainHTTP bool) (string, error) {
+	if r == nil || r.settings == nil {
+		return "", fmt.Errorf("helm engine settings are required")
+	}
+	if strings.TrimSpace(chartRef) == "" {
+		return "", fmt.Errorf("chart reference is required")
+	}
+	registryClient, err := registry.NewClient(
+		registry.ClientOptCredentialsFile(r.settings.RegistryConfig),
+	)
+	if err != nil {
+		return "", fmt.Errorf("initialize Helm registry client: %w", err)
+	}
+	locator := action.NewInstall(&action.Configuration{RegistryClient: registryClient})
+	locator.Version = chartVersion
+	locator.PlainHTTP = plainHTTP
+	chartPath, err := locator.LocateChart(chartRef, r.settings)
+	if err != nil {
+		return "", fmt.Errorf("locate Helm chart %q: %w", chartRef, err)
+	}
+	return chartPath, nil
 }
 
 // NewRealEngine creates a new RealEngine.

@@ -73,7 +73,7 @@ var errNoOperator = fmt.Errorf("no operator available")
 
 func (c *Coordinator) Dispatch(ctx context.Context, op *store.Operation, bundle *commonv1.ReleaseBundle, values []byte) (*store.OutboxEntry, error) {
 	stage := ProductionStages()[0]
-	_, dispatchErr := c.resolveOperator(ctx, op)
+	operatorID, dispatchErr := c.resolveOperator(ctx, op)
 	if dispatchErr != nil {
 		dispatchErr = errNoOperator
 	}
@@ -85,17 +85,18 @@ func (c *Coordinator) Dispatch(ctx context.Context, op *store.Operation, bundle 
 	if err != nil {
 		return nil, fmt.Errorf("marshal payload: %w", err)
 	}
-	// TASK-114/U-1: the artifact stage is consumed by the orchestrator, not by
-	// an operator — the artifact checks (trust, bundle validation, admission)
-	// run synchronously while the operation is created. This row is therefore a
-	// durable record only (AC-067-13) and must never be delivered: an empty
-	// operator_id is the outbox's existing "persisted but not dispatchable"
-	// mechanism (GetNextPending filters on operator_id), so the row can never be
-	// mistaken for a release write. resolveOperator is still consulted for the
-	// no-operator signal the caller records.
+	// ADR-024: the artifact preflight is executed by the operator, so the row
+	// the operation-creation unit of work persists for it is a real stage
+	// command, not a local record. It therefore carries the resolved
+	// operator_id — the outbox's delivery filter (GetNextPending) — and the
+	// stage payload the operator routes to its artifact executor.
+	//
+	// When no operator is available the id stays empty: the row is still the
+	// durable record AC-067-13 requires, but it is not dispatchable, and the
+	// pipeline fails closed with stage_unavailable (AC-019-02).
 	return &store.OutboxEntry{
 		ID: uuid.New().String(), CommandID: fmt.Sprintf("%s:%s", op.ID, stage.Name),
-		OperationID: op.ID, OperationType: string(op.OperationType), OperatorID: "", Payload: encoded,
+		OperationID: op.ID, OperationType: string(op.OperationType), OperatorID: operatorID, Payload: encoded,
 	}, dispatchErr
 }
 
@@ -135,21 +136,13 @@ func (c *Coordinator) runPipeline(ctx context.Context, op *store.Operation) (Sta
 		default:
 		}
 
-		var result StageResult
-		if stage.Name == StageArtifact {
-			// The artifact stage is consumed here, not by an operator: its
-			// checks run while the operation is created (see runArtifactStage).
-			result = c.runArtifactStage(ctx, op)
-		} else {
-			var err error
-			result, err = c.runStage(ctx, op, stage)
-			if err != nil {
-				c.logger.Error("stage execution error",
-					"op_id", op.ID,
-					"stage", stage.Name,
-					"err", err,
-				)
-			}
+		result, err := c.runStage(ctx, op, stage)
+		if err != nil {
+			c.logger.Error("stage execution error",
+				"op_id", op.ID,
+				"stage", stage.Name,
+				"err", err,
+			)
 		}
 		results = append(results, result)
 
@@ -274,65 +267,37 @@ const executionStageName StageName = "execute"
 
 // stagesForOperation selects the preflight stages an operation has inputs for.
 //
-// A ROLLBACK restores a revision Helm already stores: the orchestrator creates
-// it without a bundle (rollback.go), so the chart-dependent stages (render,
-// cluster, runtime_pull) have nothing to render, dry-run or pull — dispatching
-// them would fail a *required* stage on an operation that has no chart to check
-// at all (real CI run 2026-09-21: `render stage requires a bundle`). A
-// rollback's real preconditions (active inventory, expected revision, no
-// concurrent operation) are validated when it is created (REQ-067 rule 13), and
-// the rollback itself runs as a separate non-stage :execute command — the route
+// The selection is driven by the operation's INPUTS, not by its type. Every
+// production stage is chart-dependent: artifact verifies the bundle's chart
+// archive digest (ADR-024), render/cluster render or dry-run the chart, and
+// runtime_pull pulls it. An operation with no bundle therefore has nothing for
+// any of them to check, and dispatching one anyway fails a *required* stage on
+// an operation that has no chart at all (real CI run 2026-09-21: `render stage
+// requires a bundle`; ADR-024's operator-side artifact check fails closed with
+// `artifact stage requires a bundle`).
+//
+// ADR-024 made the artifact stage chart-dependent, so the rule is stated over
+// the bundle and not over the operation type: a bundle-less operation of any
+// type dispatches no stage, and an operation that carries a bundle keeps the
+// full pipeline. Expressing it as "ROLLBACK runs the artifact stage only"
+// (the pre-ADR-024 shape) would dispatch a stage that has no subject and would
+// have to be re-decided for every future operation type.
+//
+// A ROLLBACK is the operation that exercises this today: it restores a revision
+// Helm already stores, the orchestrator creates it without a bundle
+// (rollback.go), and its real preconditions (active inventory, expected
+// revision, no concurrent operation) are validated when it is created (REQ-067
+// rule 13). It runs as a separate non-stage :execute command — the route
 // AC-090-01 explicitly allows.
 //
-// INSTALL and the other staged operation types keep the full pipeline.
+// INSTALL and the other staged operation types carry a bundle and keep the full
+// pipeline.
 func stagesForOperation(op *store.Operation) []StageDef {
-	stages := ProductionStages()
-	if op == nil || op.OperationType != store.OperationRollback {
-		return stages
+	if op == nil || op.BundleID == "" {
+		return nil
 	}
-	selected := make([]StageDef, 0, 1)
-	for _, stage := range stages {
-		if stage.Name == StageArtifact {
-			selected = append(selected, stage)
-		}
-	}
-	return selected
+	return ProductionStages()
 }
-
-// runArtifactStage records the artifact preflight stage.
-//
-// The artifact checks are not an operator round trip. Artifact trust, bundle
-// validation and vulnerability admission all run synchronously while the
-// operation is created (orchestrator CreateOperation), and the dispatch row the
-// operation-creation unit of work persisted for AC-067-13 is a durable record
-// only: it carries no operator_id, so the outbox never delivers it and it can
-// never be mistaken for a release write.
-//
-// REQ-045's routing/digest-parity resolver (internal/preflight) is still not
-// wired into the production path; that gap stays tracked by TASK-115. It is not
-// made worse here: before this change the artifact stage ran a real Helm install
-// instead of any artifact check.
-func (c *Coordinator) runArtifactStage(ctx context.Context, op *store.Operation) StageResult {
-	commandID := fmt.Sprintf("%s:%s", op.ID, StageArtifact)
-	entry, err := c.outbox.GetByCommandID(ctx, commandID)
-	switch {
-	case err == nil:
-		if err := c.outbox.UpdateStatus(ctx, entry.ID, store.CommandSucceeded, artifactStageResultJSON); err != nil {
-			c.logger.Warn("failed to record the artifact stage result", "op_id", op.ID, "err", err)
-		}
-	case !errors.Is(err, store.ErrNotFound):
-		return StageResult{
-			Stage:  StageArtifact,
-			Status: StageFailed,
-			Detail: "artifact_dispatch_lookup_failed",
-		}
-	}
-	return StageResult{Stage: StageArtifact, Status: StagePassed, Detail: artifactStageResultJSON}
-}
-
-// artifactStageResultJSON is the recorded artifact stage result. It states where
-// the checks ran instead of claiming a check this stage did not perform.
-const artifactStageResultJSON = `{"status":"passed","detail":"artifact preconditions verified at operation admission"}`
 
 // dispatchExecution writes the real release write for an INSTALL/ROLLBACK
 // operation after every preflight stage passed.
@@ -467,6 +432,19 @@ func (c *Coordinator) runStage(ctx context.Context, op *store.Operation, stage S
 	// row left by a previous Run before an interruption is likewise resumed
 	// instead of duplicated. The stable command_id makes restarts idempotent.
 	if existing, err := c.outbox.GetByCommandID(ctx, commandID); err == nil {
+		// A reused row must be deliverable. The outbox delivers by operator_id
+		// (GetNextPending filters on it), so the pre-created artifact row
+		// persisted while no operator was available (AC-067-13) can never reach
+		// an operator. Polling it would burn the whole stage timeout and report
+		// a timeout instead of the real cause, so fail closed with the code the
+		// missing-operator path already uses.
+		if existing.OperatorID == "" {
+			return StageResult{
+				Stage:  stage.Name,
+				Status: StageFailed,
+				Detail: "stage_unavailable: dispatch has no operator",
+			}, nil
+		}
 		c.logger.Debug("consuming existing precheck dispatch",
 			"op_id", op.ID, "command_id", commandID, "entry_id", existing.ID)
 		return c.pollStage(ctx, commandID, stage)
