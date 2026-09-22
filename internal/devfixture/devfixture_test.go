@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	authv1 "github.com/ndzuki/release-manager/api/gen/auth/v1"
@@ -886,4 +887,45 @@ func TestRun_EmergencyTargetCarriesMaxEmergencyReplicas(t *testing.T) {
 		}
 		t.Fatal("e2e-emergency definition missing from ListReleaseDefinitions readback")
 	})
+}
+
+// The seed runs immediately after dev-up reports readiness, and readiness
+// (rollout status + /readyz) can hold while a terminating pod is still in the
+// service endpoints -- so the first RPCs die with `unavailable: unexpected EOF`
+// (real CI 2026-09-22: the identity phase exhausted 3 retries in ~7s and failed
+// the whole dev-up). That class gets a convergence budget; a deterministic
+// rejection keeps the short one. Removing isTransientConvergenceError makes the
+// convergence case fail.
+func TestRunPhaseWithRetryGivesTransientConvergenceFailuresABiggerBudget(t *testing.T) {
+	r := testRunner(t, newFakeServices())
+
+	// More failures than SeedRetries (3) but fewer than the convergence budget.
+	attempts := 0
+	err := r.runPhaseWithRetry(t.Context(), "identity", func(context.Context) error {
+		attempts++
+		if attempts <= 5 {
+			return connect.NewError(connect.CodeUnavailable, errors.New("unexpected EOF"))
+		}
+		return nil
+	})
+	require.NoError(t, err, "a transient convergence failure must be retried through")
+	assert.Equal(t, 6, attempts)
+
+	// A deterministic rejection is not retried at all.
+	deterministic := 0
+	err = r.runPhaseWithRetry(t.Context(), "identity", func(context.Context) error {
+		deterministic++
+		return ErrFixtureConflict
+	})
+	require.Error(t, err)
+	assert.Equal(t, 1, deterministic, "a deterministic conflict must not be retried")
+
+	// A deterministic non-conflict error keeps the short budget.
+	short := 0
+	err = r.runPhaseWithRetry(t.Context(), "identity", func(context.Context) error {
+		short++
+		return errors.New("validation rejected the fixture")
+	})
+	require.Error(t, err)
+	assert.Equal(t, r.cfg.SeedRetries+1, short, "a deterministic failure keeps the SeedRetries budget")
 }
