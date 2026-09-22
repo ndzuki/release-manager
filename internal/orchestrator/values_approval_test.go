@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -844,4 +845,177 @@ func TestValidateLockedPathCoverageRejectsUnparseableDocument(t *testing.T) {
 	err := validateLockedPathCoverage([]byte("\tnot: [valid"), []string{"api.image.digest"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not parseable")
+}
+
+// AC-166-03 (TASK-166): the equivalence between checking before the write and
+// checking inside the transaction rests on the coverage gate being a pure
+// function of immutable revision data. Purity of the check itself is pinned
+// here: a future refactor that let the gate rewrite the document or the locked
+// paths slice would invalidate the argument and fails this test.
+func TestValidateLockedPathCoverageIsPure(t *testing.T) {
+	t.Parallel()
+
+	document := []byte("api:\n  image:\n    digest: sha256:abc\n")
+	documentBefore := append([]byte(nil), document...)
+	paths := []string{"api.image.digest", "annotations/deployment/team"}
+	pathsBefore := append([]string(nil), paths...)
+
+	require.NoError(t, validateLockedPathCoverage(document, paths))
+	assert.Equal(t, documentBefore, document, "coverage check must not rewrite the canonical document")
+	assert.Equal(t, pathsBefore, paths, "coverage check must not rewrite the locked paths")
+
+	require.Error(t, validateLockedPathCoverage(document, []string{"api.image.tag"}))
+	assert.Equal(t, documentBefore, document, "a rejected document must be left untouched too")
+}
+
+// AC-166-04 (TASK-166) fixture constants: the revision under test locks one
+// values path plus one lock-only key (the TASK-165 `annotations/` namespace,
+// which is deliberately not looked up in the document).
+const (
+	lockedPathCoveragePath        = "api.image.digest"
+	lockedPathCoverageLockOnlyKey = "annotations/deployment/team"
+	lockedPathCoverageTaskID      = "convergence-166"
+	lockedPathCoverageOperationID = "operation-166"
+)
+
+// newLockedPathApprovalFixture builds the approval fixture with a revision that
+// carries locked paths from creation time, plus a pending_promotion convergence
+// task bound to that revision -- the shape ApproveValuesRevision converges on
+// success. The document is what the test varies.
+func newLockedPathApprovalFixture(t *testing.T, document string) approvalFixture {
+	t.Helper()
+
+	f := newApprovalFixture(t)
+	// Re-create the revision through the store API so the locked paths are part
+	// of the immutable creation payload, as in production.
+	_, err := f.st.DB().ExecContext(f.ctx, `DELETE FROM values_revisions WHERE id = ?`, f.revisionID)
+	require.NoError(t, err)
+	require.NoError(t, f.st.Values().Create(f.ctx, &store.ValuesRevision{
+		ID: f.revisionID, ReleaseDefinitionID: f.defID, Version: 1, StateVersion: 1,
+		Status: store.ValuesStatusDraft, CanonicalDocument: []byte(document), Digest: "sha256:166",
+		CreatedByUserID: f.creatorID,
+		LockedPaths:     []string{lockedPathCoveragePath, lockedPathCoverageLockOnlyKey},
+	}))
+
+	now := time.Now().UTC()
+	require.NoError(t, f.st.Operations().Create(f.ctx, &store.Operation{
+		ID: lockedPathCoverageOperationID, ReleaseDefinitionID: f.defID,
+		OperationType: store.OperationEmergency, Status: store.StatusSucceeded,
+		IdempotencyKey: "seed-" + lockedPathCoverageOperationID,
+		TerminalAt:     &now, CreatedAt: now, UpdatedAt: now,
+	}))
+	revisionID := f.revisionID
+	revisionStatus := string(store.ValuesStatusDraft)
+	require.NoError(t, f.st.ConvergenceTasks().Create(f.ctx, &store.ConvergenceTask{
+		ID: lockedPathCoverageTaskID, OperationID: lockedPathCoverageOperationID,
+		ReleaseDefinitionID: f.defID, Action: store.EmergencySetContainerImage,
+		TargetSummary: "registry/app:1", Reason: "emergency convergence",
+		PromotionPaths: json.RawMessage(`["` + lockedPathCoveragePath + `"]`),
+		Status:         "pending_promotion", ActiveRevisionID: &revisionID,
+		ActiveRevisionStatus: &revisionStatus, SubmittedAt: now, CreatedAt: now,
+	}))
+	return f
+}
+
+// AC-166-04 (TASK-166) positive control: the same fixture approves and converges
+// when the document does cover the locked values path. Without this control the
+// no-side-effect assertions below could pass for an unrelated reason (for
+// example a fixture that never reaches the approval path at all).
+func TestApproveValuesRevision_LockedPathCoverageControlApprovesAndConverges(t *testing.T) {
+	t.Parallel()
+
+	f := newLockedPathApprovalFixture(t, `{"api":{"image":{"digest":"sha256:abc"}}}`)
+	f.submit(t)
+
+	resp, err := f.svc.ApproveValuesRevision(
+		f.actorContext(f.adminID, store.RoleReleaseAdmin), f.approveRequest("coverage-covered", 2),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, commonv1.ValuesStatus_VALUES_STATUS_APPROVED, resp.Msg.GetNewState())
+
+	task, err := f.st.ConvergenceTasks().Get(f.ctx, lockedPathCoverageTaskID)
+	require.NoError(t, err)
+	assert.Equal(t, "converged", task.Status)
+	require.NotNil(t, task.ConvergedAt)
+
+	definition, err := f.st.Definitions().Get(f.ctx, f.defID)
+	require.NoError(t, err)
+	require.NotNil(t, definition.ApprovedRevisionID)
+	assert.Equal(t, f.revisionID, *definition.ApprovedRevisionID)
+}
+
+// AC-166-04 (TASK-166): a canonical document that misses (or nulls) a locked
+// values path must be rejected end to end by ApproveValuesRevision with zero
+// side effects -- the revision stays pending_approval, its bound convergence
+// task stays pending_promotion, and the approved-revision pointer stays unset.
+// The only permitted write is the sanitized failed-attempt audit entry
+// (AC-068-16); no approval decision and no convergence notification may appear.
+// Removing the coverage gate makes this test fail, which is what makes it
+// falsifiable.
+func TestApproveValuesRevision_LockedPathCoverageHasNoSideEffects(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		document string
+	}{
+		{name: "locked path missing", document: `{"api":{"image":{"tag":"1.2.3"}}}`},
+		{name: "locked path is null", document: `{"api":{"image":{"digest":null}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newLockedPathApprovalFixture(t, tc.document)
+			f.submit(t)
+
+			beforeRevision, err := f.st.Values().Get(f.ctx, f.revisionID)
+			require.NoError(t, err)
+			require.Equal(t, store.ValuesStatusPendingApproval, beforeRevision.Status)
+			beforeDefinition, err := f.st.Definitions().Get(f.ctx, f.defID)
+			require.NoError(t, err)
+			beforeTask, err := f.st.ConvergenceTasks().Get(f.ctx, lockedPathCoverageTaskID)
+			require.NoError(t, err)
+			beforeDecisions, err := f.st.ValuesApprovalEvidence().ListDecisions(f.ctx, f.revisionID)
+			require.NoError(t, err)
+			beforeAudit := approvalAuditEntries(t, f)
+			beforeNotifications := approvalNotificationEntries(t, f)
+
+			_, err = f.svc.ApproveValuesRevision(
+				f.actorContext(f.adminID, store.RoleReleaseAdmin), f.approveRequest("coverage-mismatch", 2),
+			)
+			require.Error(t, err)
+			assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+			assert.Equal(t, "locked_path_coverage_mismatch", approvalReasonCode(t, err))
+
+			afterRevision, err := f.st.Values().Get(f.ctx, f.revisionID)
+			require.NoError(t, err)
+			assert.Equal(t, store.ValuesStatusPendingApproval, afterRevision.Status, "revision must not become approved")
+			assert.Equal(t, beforeRevision.StateVersion, afterRevision.StateVersion)
+			assert.Equal(t, beforeRevision.CanonicalDocument, afterRevision.CanonicalDocument)
+			assert.Equal(t, beforeRevision.LockedPaths, afterRevision.LockedPaths)
+
+			afterDefinition, err := f.st.Definitions().Get(f.ctx, f.defID)
+			require.NoError(t, err)
+			assert.Equal(t, beforeDefinition.ApprovedRevisionID, afterDefinition.ApprovedRevisionID)
+			assert.Nil(t, afterDefinition.ApprovedRevisionID, "approved-revision pointer must stay unset")
+
+			afterTask, err := f.st.ConvergenceTasks().Get(f.ctx, lockedPathCoverageTaskID)
+			require.NoError(t, err)
+			assert.Equal(t, "pending_promotion", afterTask.Status, "bound convergence task must not converge")
+			assert.Equal(t, beforeTask.ActiveRevisionID, afterTask.ActiveRevisionID)
+			assert.Equal(t, beforeTask.ActiveRevisionStatus, afterTask.ActiveRevisionStatus)
+			assert.Equal(t, beforeTask.ConvergedAt, afterTask.ConvergedAt)
+
+			afterDecisions, err := f.st.ValuesApprovalEvidence().ListDecisions(f.ctx, f.revisionID)
+			require.NoError(t, err)
+			assert.Len(t, afterDecisions, len(beforeDecisions), "no approval decision may be recorded")
+			assert.Len(t, approvalNotificationEntries(t, f), len(beforeNotifications), "no convergence notification may be emitted")
+
+			afterAudit := approvalAuditEntries(t, f)
+			require.Len(t, afterAudit, len(beforeAudit)+1, "only the sanitized failed-attempt audit entry may be added")
+			var attempt map[string]any
+			require.NoError(t, json.Unmarshal(afterAudit[len(afterAudit)-1].PayloadJSON, &attempt))
+			assert.Equal(t, "locked_path_coverage_mismatch", attempt["reason_code"])
+		})
+	}
 }

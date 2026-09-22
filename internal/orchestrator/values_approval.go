@@ -150,10 +150,29 @@ func (s *Service) handleValuesApproval(
 
 	// AC-058-41 (TASK-166): approving a revision that converges tasks must carry
 	// a canonical document covering every locked values path; any mismatch rolls
-	// the whole decision back. The revision and its locked paths are immutable
-	// (ADR-007), so checking here -- before the write -- is equivalent to
-	// checking inside the transaction and cannot leave an approved-but-
-	// unconverged revision behind.
+	// the whole decision back.
+	//
+	// AC-166-03: the gate runs before the write. That is equivalent to running
+	// it inside the approval transaction, for three reasons that are all
+	// mechanically checkable:
+	//
+	//  1. A revision's canonical document and locked paths are written only by
+	//     the INSERT in Values().Create. Every UPDATE on values_revisions in
+	//     both engines sets only status/state_version/submitted_at/decided_at/
+	//     updated_at -- never "values" (the canonical document column) or
+	//     locked_paths (sqlite|postgres values_approval.go, values_lifecycle.go).
+	//     ADR-007 makes that immutability a contract rather than an accident.
+	//  2. validateLockedPathCoverage is a pure function of (document, paths): it
+	//     reads no other input and does not mutate its arguments, pinned by
+	//     TestValidateLockedPathCoverageIsPure.
+	//  3. The store transition re-reads this same row inside its own transaction
+	//     and commits under `WHERE id = ? AND status = ? AND state_version = ?`,
+	//     so it cannot approve a document other than the one just checked.
+	//
+	// Hence no interleaving can pass the gate and then commit an uncovered
+	// document, and on mismatch the request returns before touching the store:
+	// revision state, convergence tasks and the approved-revision pointer all
+	// stay untouched (TestApproveValuesRevision_LockedPathCoverageHasNoSideEffects).
 	if action == approvalActionApprove {
 		if coverageErr := validateLockedPathCoverage(revision.CanonicalDocument, revision.LockedPaths); coverageErr != nil {
 			connectErr := valuesApprovalError(connect.CodeInvalidArgument, "locked_path_coverage_mismatch", coverageErr)
