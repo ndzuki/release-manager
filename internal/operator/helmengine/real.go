@@ -226,7 +226,13 @@ func (r *RealEngine) Upgrade(ctx context.Context, opts UpgradeOptions) (*Release
 	if err != nil {
 		return nil, fmt.Errorf("locate Helm chart %q: %w", opts.ChartPath, err)
 	}
-	if opts.ChartDigest != "" && !strings.HasPrefix(opts.ChartPath, "oci://") {
+	// The digest is sha256 over the chart archive bytes for every ref kind,
+	// including oci:// (internal/devfixture/bundle.go:archiveDigest computes it
+	// that way and pushes the identical archive to the registry), and
+	// ChartPathOptions.LocateChart downloads an OCI chart to a readable local
+	// path. The old `!strings.HasPrefix(..., "oci://")` guard therefore skipped
+	// verification for OCI charts entirely -- the hole the 2026-09 audit found.
+	if opts.ChartDigest != "" {
 		chartBytes, err := os.ReadFile(chartPath)
 		if err != nil {
 			return nil, fmt.Errorf("read Helm chart %q: %w", chartPath, err)
