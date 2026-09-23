@@ -222,12 +222,48 @@ func TestAdmissionDefaultsToShadow(t *testing.T) {
 	assert.EqualValues(t, 1, svc.AdmissionMetricsSnapshot().WouldBlock)
 }
 
-// TestAdmissionIgnoresEmptyDigest keeps the step from inventing a decision for an
-// artifact the bundle contract should have rejected already.
-func TestAdmissionIgnoresEmptyDigest(t *testing.T) {
-	eval := &fakeEvaluator{result: &vulnerability.AdmissionResult{Decision: vulnerability.AdmissionReject}}
-	svc := admissionService(AdmissionEnforce, eval, nil)
+// REQ-042 (D): an artifact without a digest fails closed.
+//
+// It used to return nil ("not an admission decision") on the strength of an
+// upstream invariant — the bundle contract rejects an empty image digest, so the
+// branch is unreachable on a valid flow (see
+// TestBundleValidationRejectsEmptyImageDigestSoAdmissionNeverSeesIt). An allow
+// that rests on an upstream invariant is one broken invariant away from a silent
+// pass, so the digest-less artifact is now reported as undecidable and the mode
+// decides. The evaluator is never consulted: there is nothing to evaluate.
+func TestAdmissionEmptyDigestFailsClosed(t *testing.T) {
+	t.Run("enforce blocks", func(t *testing.T) {
+		eval := &fakeEvaluator{result: &vulnerability.AdmissionResult{Decision: vulnerability.AdmissionPass}}
+		svc := admissionService(AdmissionEnforce, eval, nil)
 
-	require.NoError(t, svc.EvaluateArtifactAdmission(t.Context(), "", "sbom://ref"))
-	assert.Zero(t, eval.callCount())
+		err := svc.EvaluateArtifactAdmission(t.Context(), "", "sbom://ref")
+		require.Error(t, err, "a digest-less artifact must never be allowed")
+		assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+		assert.Contains(t, err.Error(), ReasonAdmissionUnavailable)
+		assert.Zero(t, eval.callCount(), "there is nothing to evaluate without a digest")
+		assert.EqualValues(t, 1, svc.AdmissionMetricsSnapshot().Blocked)
+	})
+
+	t.Run("shadow records without counting an allow", func(t *testing.T) {
+		eval := &fakeEvaluator{result: &vulnerability.AdmissionResult{Decision: vulnerability.AdmissionPass}}
+		sink := &recordingSink{}
+		svc := admissionService(AdmissionShadow, eval, sink)
+
+		require.NoError(t, svc.EvaluateArtifactAdmission(t.Context(), "", "sbom://ref"))
+
+		snapshot := svc.AdmissionMetricsSnapshot()
+		assert.EqualValues(t, 1, snapshot.WouldBlock)
+		assert.Zero(t, snapshot.Allowed)
+		require.Len(t, sink.all(), 1, "an undecidable artifact must leave evidence")
+		assert.Zero(t, eval.callCount())
+	})
+
+	t.Run("off still skips", func(t *testing.T) {
+		eval := &fakeEvaluator{result: &vulnerability.AdmissionResult{Decision: vulnerability.AdmissionReject}}
+		svc := admissionService(AdmissionOff, eval, nil)
+
+		require.NoError(t, svc.EvaluateArtifactAdmission(t.Context(), "", "sbom://ref"))
+		assert.EqualValues(t, 1, svc.AdmissionMetricsSnapshot().Skipped)
+		assert.Zero(t, eval.callCount())
+	})
 }
