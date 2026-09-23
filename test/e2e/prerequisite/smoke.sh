@@ -29,6 +29,12 @@
 #   BASE_URL / DATA_DIR env vars are honored as fallbacks.
 set -euo pipefail
 
+# JWT header inspection + downgrade probe (REQ-065 AC-065-01 / TASK-065 D1=A:
+# the management-plane token must be EdDSA, not HMAC). Shared with the unit
+# tests in deploy/dev/dev_test.go so the assertion has one implementation.
+# shellcheck source=../../../deploy/dev/lib/jwt.sh
+source "$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/../../../deploy/dev/lib/jwt.sh"
+
 BASE_URL="${BASE_URL:-http://localhost:8083}"   # orchestrator
 AUTH_URL="${AUTH_URL:-http://localhost:8085}"   # auth
 DATA_DIR="${DATA_DIR:-data}"
@@ -176,6 +182,31 @@ VALID="$(curl -sS --fail -X POST "$AUTH_URL/auth.v1.AuthService/ValidateToken" \
 jq -e '.valid == true' <<<"$VALID" >/dev/null && ok "ValidateToken valid=true" || bad "validate token: $VALID"
 ROLES="$(jq -c '.roles // .user.roles // empty' <<<"$VALID")"
 [[ "$ROLES" == *"release_admin"* ]] && ok "roles contain release_admin" || bad "roles=$ROLES"
+
+# REQ-065 AC-065-01 / TASK-065 D1=A: the management-plane token must be signed
+# with EdDSA (Ed25519). Assert the JWT *header* algorithm — the access-token
+# length is only a proxy (450 under EdDSA vs 407 under the old HS256) and a
+# length-only check would not fail a revert to symmetric signing.
+TOKEN_ALG="$(jwt_alg "$TOKEN")"
+[ "$TOKEN_ALG" = "EdDSA" ] \
+  && ok "access token alg=EdDSA (Ed25519)" \
+  || bad "access token alg='$TOKEN_ALG' (want EdDSA)"
+
+# Downgrade probe: a well-formed HS256 token signed with the legacy default
+# secret must be refused. Without it, reverting auth to HMAC signing would keep
+# every other assertion in this script green.
+if command -v openssl >/dev/null 2>&1; then
+  HS256_TOKEN="$(jwt_hs256_token "change-me-in-production")"
+  DOWNGRADE="$(curl -sS -X POST "$AUTH_URL/auth.v1.AuthService/ValidateToken" \
+    -H 'Content-Type: application/json' -d "{\"token\":\"$HS256_TOKEN\"}" 2>/dev/null || echo '{}')"
+  if jq -e '.valid == true' <<<"$DOWNGRADE" >/dev/null 2>&1; then
+    bad "HS256 token accepted by ValidateToken (algorithm downgrade)"
+  else
+    ok "HS256 downgrade probe rejected"
+  fi
+else
+  skiprec "HS256 downgrade probe (openssl unavailable)"
+fi
 
 AUTH_H=(-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json')
 IK() { printf 'Idempotency-Key: smoke-%s-%s' "$1" "$(date +%s)-$RANDOM"; }
