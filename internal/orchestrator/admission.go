@@ -20,10 +20,20 @@ type AdmissionMode string
 
 const (
 	// AdmissionOff skips the evaluation entirely: the pre-TASK-105 behaviour.
+	// It is an explicit operator configuration, not a fail-open default, so it
+	// is out of scope for REQ-042's silent-pass sweep — an operator who selects
+	// "off" has said they do not want the gate.
 	AdmissionOff AdmissionMode = "off"
 	// AdmissionShadow runs the evaluation and records what would have been
 	// blocked, but never changes the outcome. It is the default because the step
 	// is newly wired: an operator quantifies the blast radius first, then opts in.
+	//
+	// It is a documented, non-silent default (REQ-042, confirmed E): an
+	// unavailable or rejected outcome under shadow still increments the
+	// would-block counter, writes a warn log and emits an audit event, so it can
+	// never be mistaken for a clean pass. Do not reclassify it as an A-class
+	// fail-open default and do not make it block: that would change the
+	// documented rollout contract.
 	AdmissionShadow AdmissionMode = "shadow"
 	// AdmissionEnforce blocks on a rejection or on an unavailable evaluation.
 	AdmissionEnforce AdmissionMode = "enforce"
@@ -34,9 +44,15 @@ const (
 type admissionOutcome string
 
 const (
-	outcomePass        admissionOutcome = "pass"
-	outcomeWarn        admissionOutcome = "warn"
-	outcomeReject      admissionOutcome = "reject"
+	outcomePass   admissionOutcome = "pass"
+	outcomeWarn   admissionOutcome = "warn"
+	outcomeReject admissionOutcome = "reject"
+	// outcomeUnavailable means no decision could be made: no evaluator is
+	// configured, the evaluation failed, or it returned no result. It is never
+	// folded into outcomePass — enforce blocks it and shadow records it — so an
+	// unconfigured or broken gate can never masquerade as a passing one
+	// (REQ-042). See evaluateArtifact for why a NoopScanner must not be wired
+	// in to "make the gate pass".
 	outcomeUnavailable admissionOutcome = "unavailable"
 )
 
@@ -146,11 +162,6 @@ func (s *Service) EvaluateArtifactAdmission(ctx context.Context, artifactDigest,
 		s.admissionMetrics().skipped.Add(1)
 		return nil
 	}
-	if artifactDigest == "" {
-		// Nothing to evaluate: an artifact without a digest is rejected earlier by
-		// the bundle contract, so this is not an admission decision.
-		return nil
-	}
 
 	outcome, policyVersion, evaluateErr := s.evaluateArtifact(ctx, artifactDigest, sbomRef)
 	verdict := applyAdmissionMode(mode, outcome)
@@ -192,10 +203,31 @@ func (s *Service) EvaluateArtifactAdmission(ctx context.Context, artifactDigest,
 // evaluateArtifact runs the evaluator when one is configured and normalises the
 // answer. A missing evaluator and an evaluation failure are both "unavailable":
 // the mode decides whether that is fatal, and the caller must not have to guess.
+//
+// A nil evaluator is the production default (cmd/orchestrator never calls
+// SetVulnerabilityEvaluator) and it is deliberate: nothing scanned the artifact,
+// so the only honest answer is unavailable. Do NOT "fix" a failing gate by
+// wiring a vulnerability.NoopScanner-backed evaluator here — an empty scan
+// result is indistinguishable from a clean one and would turn "unknown" into
+// "pass" (REQ-042). A real scanner cannot be shelled out either: `make
+// sdk-check` rejects `import "os/exec"`, and ADR-004/ADR-001 keep cluster
+// execution on the Go SDK behind the operator boundary. See the NoopScanner doc.
 func (s *Service) evaluateArtifact(
 	ctx context.Context,
 	artifactDigest, sbomRef string,
 ) (admissionOutcome, string, error) {
+	if artifactDigest == "" {
+		// REQ-042 (D): fail closed. This used to return "not an admission
+		// decision" (= allow) on the strength of an upstream invariant — the
+		// bundle contract rejects an empty image digest (BundleService
+		// .validateBundleImages), so this is unreachable on a valid flow. An
+		// allow that depends on an upstream invariant becomes a silent pass the
+		// moment that invariant breaks, so the digest-less artifact is reported
+		// as an undecidable input and the mode decides: enforce blocks it,
+		// shadow records it. See TestAdmissionEmptyDigestFailsClosed, and the
+		// NoopScanner doc for the rest of the chain.
+		return outcomeUnavailable, "", errors.New("artifact digest is required")
+	}
 	if s.vulnEval == nil {
 		return outcomeUnavailable, "", errors.New("no vulnerability evaluator is configured")
 	}
