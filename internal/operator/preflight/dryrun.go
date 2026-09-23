@@ -2,11 +2,18 @@ package preflight
 
 import (
 	"context"
+	"fmt"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/dynamic"
 )
+
+// preflightFieldManager is the field manager every dry-run write is attributed
+// to. It is constant so a dry-run can never be confused with a real write.
+const preflightFieldManager = "release-manager-preflight"
 
 // DryRunExecutor performs server-side dry-run requests against the target
 // cluster using the operator's own ServiceAccount credentials.
@@ -29,12 +36,14 @@ func (e *DryRunExecutor) SetTimeout(d time.Duration) {
 	e.timeout = d
 }
 
-// DryRunOne performs a single resource dry-run Create or Update against the
-// target cluster. It returns a ResourceResult containing only safe fields.
+// DryRunOne performs a single resource dry-run against the target cluster. It
+// returns a ResourceResult containing only safe fields.
 //
 // The caller must provide the parsed unstructured object. The executor resolves
-// the GVR from the mapper, determines namespace/scope, and executes exactly
-// ONE API call with DryRunAll set.
+// the GVR from the mapper, determines namespace/scope, and executes the dry-run
+// with DryRunAll set. DryRunAuto probes the object first so the call matches its
+// lifecycle (Update when it exists, Create otherwise); DryRunUpdate also reads
+// the current resourceVersion. No option ever writes to the cluster.
 func (e *DryRunExecutor) DryRunOne(
 	ctx context.Context,
 	obj *unstructured.Unstructured,
@@ -62,39 +71,13 @@ func (e *DryRunExecutor) DryRunOne(
 		rr.Namespace = obj.GetNamespace()
 	}
 
-	// Build options.
-	opts := metav1.CreateOptions{
-		DryRun:       []string{dryRunAll},
-		FieldManager: "release-manager-preflight",
-	}
-
 	resourceCtx, cancel := context.WithTimeout(ctx, e.timeout)
 	defer cancel()
 
 	client := e.mapper.ResourceClient(gvr, rr.Namespace)
 	sanitized := sanitizeResource(obj)
 
-	var result *unstructured.Unstructured
-
-	switch option {
-	case DryRunCreate:
-		result, err = client.Create(resourceCtx, sanitized, opts)
-	case DryRunUpdate:
-		existing, getErr := client.Get(resourceCtx, obj.GetName(), metav1.GetOptions{})
-		if getErr != nil {
-			rr.Rejected = true
-			rr.ErrorCode = ErrorCodeFromAPIError(getErr)
-			rr.Reason = getErr.Error()
-			rr.Duration = time.Since(start)
-			return rr
-		}
-		obj.SetResourceVersion(existing.GetResourceVersion())
-		updateOpts := metav1.UpdateOptions{
-			DryRun:       []string{dryRunAll},
-			FieldManager: "release-manager-preflight",
-		}
-		result, err = client.Update(resourceCtx, sanitized, updateOpts)
-	}
+	result, err := e.dryRunWrite(resourceCtx, client, sanitized, option)
 
 	rr.Duration = time.Since(start)
 
@@ -109,6 +92,48 @@ func (e *DryRunExecutor) DryRunOne(
 
 	rr.Accepted = true
 	return rr
+}
+
+// dryRunWrite performs the one server-side dry-run write for an object.
+//
+// DryRunAuto picks the semantics from the object's lifecycle: an existing object
+// is dry-run Updated, a missing one is dry-run Created. This matters because the
+// API server rejects a Create for a name that already exists (AlreadyExists), so
+// a preflight that always Creates can only ever pass before the release's first
+// install — every UPGRADE would fail its cluster stage (ADR-027 restores the full
+// preflight for UPGRADE). DryRunUpdate requires the current resourceVersion,
+// which is read here and set on the object that is actually sent (sanitizeResource
+// returns a copy for Secrets).
+//
+// Every branch sends DryRun=All: the request is validated by the API server and
+// never persisted.
+func (e *DryRunExecutor) dryRunWrite(
+	ctx context.Context,
+	client dynamic.ResourceInterface,
+	obj *unstructured.Unstructured,
+	option DryRunOption,
+) (*unstructured.Unstructured, error) {
+	createOpts := metav1.CreateOptions{DryRun: []string{dryRunAll}, FieldManager: preflightFieldManager}
+	updateOpts := metav1.UpdateOptions{DryRun: []string{dryRunAll}, FieldManager: preflightFieldManager}
+
+	switch option {
+	case DryRunCreate:
+		return client.Create(ctx, obj, createOpts)
+	case DryRunUpdate, DryRunAuto:
+		existing, err := client.Get(ctx, obj.GetName(), metav1.GetOptions{})
+		if err != nil {
+			// Only the auto option may fall back to Create, and only for a
+			// genuinely absent object. Any other read failure fails closed: we
+			// cannot prove which semantics the apply will need.
+			if option == DryRunAuto && apierrors.IsNotFound(err) {
+				return client.Create(ctx, obj, createOpts)
+			}
+			return nil, err
+		}
+		obj.SetResourceVersion(existing.GetResourceVersion())
+		return client.Update(ctx, obj, updateOpts)
+	}
+	return nil, fmt.Errorf("unsupported dry-run option %d", option)
 }
 
 // DryRunAll executes a dry-run for each resource in the manifest stream.
@@ -145,7 +170,10 @@ func (e *DryRunExecutor) DryRunAll(
 			obj.SetNamespace(input.TargetNamespace)
 		}
 
-		rr := e.DryRunOne(ctx, obj, DryRunCreate)
+		// DryRunAuto matches each object's lifecycle: an object a previous
+		// install already created is dry-run Updated, a new one Created. Both
+		// are server-side dry-runs, so the API server still validates the write.
+		rr := e.DryRunOne(ctx, obj, DryRunAuto)
 
 		// Sanitize before storing.
 		rr = sanitizeResourceResult(rr)

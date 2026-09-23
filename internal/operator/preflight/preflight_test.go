@@ -441,6 +441,202 @@ func TestDryRunOne_SecretNoDataInResult(t *testing.T) {
 	assert.NotContains(t, reason, "c2VjcmV0", "Secret base64 should not appear in result")
 }
 
+// ── Dry-run semantics for an object that already exists ──
+//
+// These two tests pin the API semantics the cluster stage depends on, before
+// any implementation relies on them: a server-side dry-run CREATE for a name
+// that already exists is rejected (AlreadyExists), while a server-side dry-run
+// UPDATE of the same object is accepted. An UPGRADE dry-runs the objects a
+// previous INSTALL already created, so the Create semantics can never pass for
+// it — that was the e2e failure this pair exists to prevent from regressing.
+
+func TestDryRunOne_CreateRejectsExistingObject(t *testing.T) {
+	gvk := schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
+	dynClient := fake.NewSimpleDynamicClient(testScheme(), makeUnstructured(gvk, "dep-1", "default"))
+
+	m := GKVMapperWithFake(dynClient, newDefaultMapper([]schema.GroupVersion{
+		{Group: "apps", Version: "v1"},
+	}))
+	exec := NewDryRunExecutor(m)
+
+	rr := exec.DryRunOne(context.Background(), makeUnstructured(gvk, "dep-1", "default"), DryRunCreate)
+
+	require.True(t, rr.Rejected, "a dry-run Create for an existing name must be rejected")
+	assert.Contains(t, rr.Reason, "already exists", "the rejection reason must name the conflict")
+	assert.False(t, rr.Accepted)
+}
+
+func TestDryRunOne_UpdateAcceptsExistingObject(t *testing.T) {
+	gvk := schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
+	dynClient := fake.NewSimpleDynamicClient(testScheme(), makeUnstructured(gvk, "dep-1", "default"))
+
+	m := GKVMapperWithFake(dynClient, newDefaultMapper([]schema.GroupVersion{
+		{Group: "apps", Version: "v1"},
+	}))
+	exec := NewDryRunExecutor(m)
+
+	rr := exec.DryRunOne(context.Background(), makeUnstructured(gvk, "dep-1", "default"), DryRunUpdate)
+
+	require.False(t, rr.Rejected, "a dry-run Update of an existing object must be accepted: %s", rr.Reason)
+	assert.True(t, rr.Accepted)
+}
+
+// TestDryRunAll_ExistingObjectsUseUpdateSemantics is the regression gate for the
+// e2e UPGRADE failure: the objects a previous install created already exist, so
+// an always-Create batch rejects the first one (AlreadyExists) and the cluster
+// stage fails forever after the first release. The same batch must pass when the
+// executor picks the Update semantics for existing objects.
+//
+// Mutation check: forcing DryRunCreate in DryRunAll makes this test fail.
+func TestDryRunAll_ExistingObjectsUseUpdateSemantics(t *testing.T) {
+	s := testScheme()
+	existing := []runtime.Object{
+		makeUnstructured(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}, "cm-1", "default"),
+		makeUnstructured(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, "dep-1", "default"),
+	}
+	dynClient := fake.NewSimpleDynamicClient(s, existing...)
+
+	m := GKVMapperWithFake(dynClient, newDefaultMapper([]schema.GroupVersion{
+		{Group: "", Version: "v1"},
+		{Group: "apps", Version: "v1"},
+	}))
+	exec := NewDryRunExecutor(m)
+
+	// The rendered objects are the same ones that are already deployed.
+	resources := []*unstructured.Unstructured{
+		makeUnstructured(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}, "cm-1", "default"),
+		makeUnstructured(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, "dep-1", "default"),
+	}
+
+	result, err := exec.DryRunAll(context.Background(), resources, Input{OperationID: "op-upgrade", TargetNamespace: "default"})
+	require.NoError(t, err)
+
+	require.True(t, result.Passed, "an already-deployed release must pass its dry-run: %+v", result.Results)
+	assert.Equal(t, 2, result.ResourceCount)
+	assert.True(t, Gate(result))
+
+	// Both objects were validated as Updates, never as Creates.
+	verbs := recordedWriteVerbs(dynClient)
+	assert.Equal(t, []string{"update", "update"}, verbs)
+}
+
+// TestDryRunAll_FreshObjectsUseCreateSemantics keeps the first-install path
+// honest: an object that does not exist yet is dry-run Created (an Update of a
+// missing object would be rejected with NotFound).
+func TestDryRunAll_FreshObjectsUseCreateSemantics(t *testing.T) {
+	s := testScheme()
+	dynClient := fake.NewSimpleDynamicClient(s)
+
+	m := GKVMapperWithFake(dynClient, newDefaultMapper([]schema.GroupVersion{
+		{Group: "", Version: "v1"},
+		{Group: "apps", Version: "v1"},
+	}))
+	exec := NewDryRunExecutor(m)
+
+	resources := []*unstructured.Unstructured{
+		makeUnstructured(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}, "cm-1", "default"),
+		makeUnstructured(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, "dep-1", "default"),
+	}
+
+	result, err := exec.DryRunAll(context.Background(), resources, Input{OperationID: "op-install", TargetNamespace: "default"})
+	require.NoError(t, err)
+
+	require.True(t, result.Passed, "a first install must pass its dry-run: %+v", result.Results)
+	assert.Equal(t, []string{"create", "create"}, recordedWriteVerbs(dynClient))
+}
+
+// TestDryRunAll_EveryWriteIsAServerSideDryRun is the guard against "make it pass
+// by not really validating": whichever semantics is chosen, the request that
+// reaches the API server must carry DryRun=All. A client-side validation or a
+// skipped object would leave the write actions with an empty DryRun list.
+func TestDryRunAll_EveryWriteIsAServerSideDryRun(t *testing.T) {
+	s := testScheme()
+	// cm-1 exists (Update path), dep-1 does not (Create path): both branches run
+	// in one batch.
+	dynClient := fake.NewSimpleDynamicClient(s,
+		makeUnstructured(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}, "cm-1", "default"))
+
+	m := GKVMapperWithFake(dynClient, newDefaultMapper([]schema.GroupVersion{
+		{Group: "", Version: "v1"},
+		{Group: "apps", Version: "v1"},
+	}))
+	exec := NewDryRunExecutor(m)
+
+	resources := []*unstructured.Unstructured{
+		makeUnstructured(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}, "cm-1", "default"),
+		makeUnstructured(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, "dep-1", "default"),
+	}
+	result, err := exec.DryRunAll(context.Background(), resources, Input{OperationID: "op-mixed"})
+	require.NoError(t, err)
+	require.True(t, result.Passed)
+
+	var verbs []string
+	for _, action := range dynClient.Actions() {
+		switch action.GetVerb() {
+		case "create", "update":
+			verbs = append(verbs, action.GetVerb())
+			assert.Contains(t, dryRunOptionOf(action), metav1.DryRunAll,
+				"the %s must be a server-side dry-run", action.GetVerb())
+		}
+	}
+	assert.ElementsMatch(t, []string{"create", "update"}, verbs,
+		"one branch of each semantics must run")
+}
+
+// dryRunOptionOf extracts the DryRun option list a fake-client write action was
+// built with. The options live on the concrete action implementations.
+func dryRunOptionOf(action ktesting.Action) []string {
+	switch a := action.(type) {
+	case ktesting.CreateActionImpl:
+		return a.CreateOptions.DryRun
+	case *ktesting.CreateActionImpl:
+		return a.CreateOptions.DryRun
+	case ktesting.UpdateActionImpl:
+		return a.UpdateOptions.DryRun
+	case *ktesting.UpdateActionImpl:
+		return a.UpdateOptions.DryRun
+	}
+	return nil
+}
+
+// TestDryRunAll_ProbeFailureFailsClosed: only a genuine NotFound may fall back to
+// Create. A probe that fails for any other reason (here: Forbidden) cannot prove
+// the object's lifecycle, so the stage must fail closed instead of guessing.
+func TestDryRunAll_ProbeFailureFailsClosed(t *testing.T) {
+	s := testScheme()
+	dynClient := fake.NewSimpleDynamicClient(s)
+	dynClient.PrependReactor("get", "configmaps", func(_ ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Resource: "configmaps"}, "cm-1", assert.AnError)
+	})
+
+	m := GKVMapperWithFake(dynClient, newDefaultMapper([]schema.GroupVersion{
+		{Group: "", Version: "v1"},
+	}))
+	exec := NewDryRunExecutor(m)
+
+	result, err := exec.DryRunAll(context.Background(), []*unstructured.Unstructured{
+		makeUnstructured(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}, "cm-1", "default"),
+	}, Input{OperationID: "op-probe-fail"})
+	require.NoError(t, err)
+
+	require.False(t, result.Passed, "an unprovable lifecycle must not be certified")
+	assert.Equal(t, ErrKubernetesForbidden, result.Results[0].ErrorCode)
+}
+
+// recordedWriteVerbs returns the verbs of the write actions the fake client saw,
+// in order.
+func recordedWriteVerbs(dynClient *fake.FakeDynamicClient) []string {
+	verbs := make([]string, 0, len(dynClient.Actions()))
+	for _, action := range dynClient.Actions() {
+		switch action.GetVerb() {
+		case "create", "update":
+			verbs = append(verbs, action.GetVerb())
+		}
+	}
+	return verbs
+}
+
 // ── Batch / Gate Tests ──
 
 func TestDryRunAll_AllAccepted(t *testing.T) {

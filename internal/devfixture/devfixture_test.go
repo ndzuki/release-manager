@@ -214,6 +214,8 @@ func TestRun_SeedsAllNinePhases(t *testing.T) {
 	for _, tok := range fakes.orch.enrollTokens {
 		require.Equalf(t, tok.GetClusterId(), tok.GetOperatorName(),
 			"enrollment token for %s must carry operator_name = cluster id", tok.GetClusterId())
+		require.Equalf(t, int32(24*60), tok.GetTtlMinutes(),
+			"AC-065-18: devseed must request the 24h dev TTL for %s", tok.GetClusterId())
 	}
 
 	// Manifest persisted on disk.
@@ -761,6 +763,28 @@ func TestRun_WriteRetryReusesSameIdempotencyKey(t *testing.T) {
 	require.Equal(t, "devseed-bundle-submit", fakes.webhook.idemKeys[0])
 	require.Equal(t, fakes.webhook.idemKeys[0], fakes.webhook.idemKeys[1],
 		"retry must replay the same idempotency key")
+}
+
+// TestRun_EnrollmentTokensCarryThe24hDevTTL pins AC-065-18: devseed must ask
+// for the 24-hour dev enrollment TTL explicitly. The orchestrator treats
+// ttl_minutes = 0 as "use the server default" (60 minutes), so omitting the
+// field silently produced a one-hour token — too short to resume a dev-up that
+// was interrupted across the enrollment/install boundary.
+//
+// Mutation check: dropping TtlMinutes from the request makes this fail.
+func TestRun_EnrollmentTokensCarryThe24hDevTTL(t *testing.T) {
+	fakes := newFakeServices()
+	r := testRunner(t, fakes, func(c *Config) { c.StopAfterPhase = "enrollment" })
+
+	_, err := r.run(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, fakes.orch.enrollTokens, len(clusterSeeds))
+	for _, tok := range fakes.orch.enrollTokens {
+		require.Equalf(t, int32(24*60), tok.GetTtlMinutes(),
+			"AC-065-18: the enrollment token for %s must request 24h, not the 60m server default",
+			tok.GetClusterId())
+	}
 }
 
 // TestRun_StopAfterPhaseCommitsUpToAndStops covers the split-seed contract:

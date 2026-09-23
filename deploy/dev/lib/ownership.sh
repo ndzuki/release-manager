@@ -51,6 +51,12 @@ ownership_read() {
   fi
 }
 
+# ownership_manifest_path — the manifest path, for messages that must name the
+# file a user has to inspect or edit.
+ownership_manifest_path() {
+  printf '%s' "$OWNERSHIP_FILE"
+}
+
 # ownership_contains <json-array-key> <name> — 1 when name is in the array.
 ownership_contains() {
   local key="$1"

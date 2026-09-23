@@ -76,6 +76,12 @@ const (
 	DryRunCreate DryRunOption = iota
 	// DryRunUpdate sends a server-side dry-run Update; caller must provide resourceVersion.
 	DryRunUpdate
+	// DryRunAuto probes the object first and sends a server-side dry-run Update
+	// when it already exists, Create when it does not. A dry-run Create for a
+	// name that already exists is rejected with AlreadyExists, so only the auto
+	// option can certify an apply against a release that is already deployed
+	// (every UPGRADE, per ADR-027's full preflight).
+	DryRunAuto
 )
 
 // Classification of API server responses into stable error codes.

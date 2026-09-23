@@ -10,6 +10,17 @@ import (
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 )
 
+// enrollmentTokenTTLMinutes is the TTL devseed requests for every dev
+// enrollment token (REQ-065 批次2 D7 / AC-065-18): 24 hours.
+//
+// The orchestrator default (ttl_minutes = 0 → 60 minutes) is too short for the
+// window this seed is built for: dev-up creates the token in the enrollment
+// phase while the agent only consumes it in the install phase, so an
+// interrupted local run (or a CI retry the next day) must still be able to
+// resume. A finite 24h TTL keeps AC-065-18's expired-token failure scenario
+// reproducible, which an unbounded token would not.
+const enrollmentTokenTTLMinutes = 24 * 60
+
 // phaseEnrollment creates one pending enrollment token per dev cluster and
 // writes it to a 0600 file (REQ-065: devseed injects the token via Secret
 // into each customer cluster; the file is the local stand-in until the
@@ -28,6 +39,9 @@ func (r *runner) phaseEnrollment(ctx context.Context) error {
 			CustomerId:   customerID,
 			ClusterId:    seed.id,
 			OperatorName: seed.id,
+			// AC-065-18: an explicit 24h TTL. Leaving this unset silently
+			// accepted the server default of 60 minutes.
+			TtlMinutes: enrollmentTokenTTLMinutes,
 		})
 		withAuth(req, r.state.adminToken)
 		req.Header().Set("Idempotency-Key", idempotencyKey("enrollment", seed.id))

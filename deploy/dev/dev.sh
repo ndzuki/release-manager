@@ -226,6 +226,68 @@ ci_residual_manifest() {
   done
 }
 
+# ---------------------------------------------------------------------------
+# AC-065-10: a readiness failure must name the faulting Pod and show its recent
+# log lines. The diagnostics bundle (collect_diagnostics) lands in
+# data/diagnostics/, but stderr only carried "rollout did not converge", so the
+# cause had to be dug out of the bundle afterwards — and a CI run that purges
+# the environment has no bundle left to read.
+# ---------------------------------------------------------------------------
+
+# sanitize_log_lines — best-effort redaction of credential-looking material
+# before log lines are echoed to stderr. The REQ-065 Secret boundary forbids
+# plaintext Secret material in logs; the services already keep it out, so this
+# is defense in depth over whatever a container happened to print.
+sanitize_log_lines() {
+  sed -E \
+    -e 's/(password|passwd|token|secret|authorization|api[_-]?key|private[_-]?key)([[:space:]]*[:=][[:space:]]*)[^[:space:]",}]+/\1\2[REDACTED]/Ig' \
+    -e 's/(bearer[[:space:]]+)[A-Za-z0-9._~+\/=-]{8,}/\1[REDACTED]/Ig' \
+    | tr '\n' '|' \
+    | sed -E 's/\|+$//'
+}
+
+# readiness_failure_detail — "<pod> (<recent log lines>); ..." for the pods that
+# are not Ready, bounded to max_pods pods with max_lines lines each. Prints
+# nothing when kubectl is unavailable or the environment has no merged
+# kubeconfig yet (a failure before apply has no Pods to report), so the caller
+# falls back to its plain message.
+readiness_failure_detail() {
+  local max_pods="${1:-3}" max_lines="${2:-5}"
+  command -v kubectl >/dev/null 2>&1 || return 0
+  [ -f "$DEV_DATA_DIR/kubeconfig.yaml" ] || return 0
+  local pods
+  # Select the Pods whose Ready condition is False (CrashLoopBackOff and
+  # friends). `head` may SIGPIPE the producer; the `|| true` keeps the partial
+  # list instead of aborting under `set -e`.
+  pods="$(ctl_kubectl -n release-manager-dev get pods \
+      -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>/dev/null \
+    | sed -nE 's/^([^ ]+) False$/\1/p' \
+    | head -n "$max_pods" || true)"
+  [ -n "$pods" ] || return 0
+  local pod lines detail=""
+  while IFS= read -r pod; do
+    [ -n "$pod" ] || continue
+    lines="$(ctl_kubectl -n release-manager-dev logs "pod/$pod" --all-containers --tail="$max_lines" 2>/dev/null \
+      | sanitize_log_lines || true)"
+    detail="${detail}${detail:+; }${pod}"
+    if [ -n "$lines" ]; then
+      detail="${detail} (${lines})"
+    fi
+  done <<<"$pods"
+  printf '%s' "$detail"
+}
+
+# service_unhealthy_fail <message> — fail service_unhealthy, appending the
+# AC-065-10 Pod/log diagnostic whenever it can be collected.
+service_unhealthy_fail() {
+  local message="$1" detail
+  detail="$(readiness_failure_detail)"
+  if [ -n "$detail" ]; then
+    fail "$ERR_SERVICE_UNHEALTHY" "$message; failing pods: $detail"
+  fi
+  fail "$ERR_SERVICE_UNHEALTHY" "$message"
+}
+
 # wait_for_endpoint <url> <seconds> — poll an HTTP endpoint until 200.
 wait_for_endpoint() {
   local url="$1"
@@ -246,7 +308,7 @@ require_readyz() {
   local service="$1"
   local port="$2"
   if ! wait_for_endpoint "http://127.0.0.1:$port/readyz" "$DEV_TIMEOUT_READY"; then
-    fail "$ERR_SERVICE_UNHEALTHY" "$service /readyz did not return 200 on port $port"
+    service_unhealthy_fail "$service /readyz did not return 200 on port $port"
   fi
   log "  $service       http://localhost:$port/readyz  200"
 }
@@ -276,7 +338,7 @@ require_tcp_ready() {
     fi
     sleep 2
   done
-  fail "$ERR_SERVICE_UNHEALTHY" "$service gateway did not accept TCP on port $port"
+  service_unhealthy_fail "$service gateway did not accept TCP on port $port"
 }
 
 # ---------------------------------------------------------------------------
@@ -715,12 +777,20 @@ node_resources_apply() {
 cluster_up() {
   local cluster="$1"
   if cluster_exists "$cluster"; then
-    # Owned clusters keep their resource caps current on resume (AC-065-37);
-    # a same-named foreign cluster is never touched (AC-065-22 boundary).
-    if ownership_contains k3d_clusters "$cluster"; then
-      node_resources_apply "$cluster"
-      mgmt_node_connect "$cluster"
+    # AC-065-22 / 批次2 D2: a k3d cluster carries no Docker ownership label
+    # (k3d sets its own), so data/dev-ownership.json's k3d_clusters[] is the
+    # only ownership evidence. A same-named cluster that is NOT in that
+    # whitelist belongs to someone else: fail resource_conflict instead of
+    # silently reusing it. The previous behaviour logged "(exists)" and
+    # returned 0 for a foreign cluster, which let dev-up converge on top of a
+    # cluster this module must never touch (and never delete).
+    if ! ownership_contains k3d_clusters "$cluster"; then
+      fail "$ERR_RESOURCE_CONFLICT" \
+        "k3d cluster '$cluster' already exists but is not registered in $(ownership_manifest_path); refusing to reuse a foreign cluster — delete it manually (k3d cluster delete $cluster) or confirm ownership, then retry"
     fi
+    # Owned clusters keep their resource caps current on resume (AC-065-37).
+    node_resources_apply "$cluster"
+    mgmt_node_connect "$cluster"
     log "  $cluster (exists)"
     return 0
   fi
@@ -1184,7 +1254,7 @@ require_pg_ready() {
     fi
     sleep 2
   done
-  fail "$ERR_SERVICE_UNHEALTHY" "postgres did not pass pg_isready within ${DEV_TIMEOUT_READY}s"
+  service_unhealthy_fail "postgres did not pass pg_isready within ${DEV_TIMEOUT_READY}s"
 }
 
 require_redis_ready() {
@@ -1197,7 +1267,7 @@ require_redis_ready() {
     fi
     sleep 2
   done
-  fail "$ERR_SERVICE_UNHEALTHY" "redis did not answer redis-cli ping PONG within ${DEV_TIMEOUT_READY}s"
+  service_unhealthy_fail "redis did not answer redis-cli ping PONG within ${DEV_TIMEOUT_READY}s"
 }
 
 readiness() {
@@ -1211,7 +1281,7 @@ readiness() {
   if ! ctl_kubectl -n release-manager-dev rollout status \
     deployment/webhook deployment/orchestrator deployment/auth deployment/notifier deployment/web deployment/notification-sink \
     --timeout="${DEV_TIMEOUT_READY}s" >/dev/null; then
-    fail "$ERR_SERVICE_UNHEALTHY" "management-plane rollout did not converge within ${DEV_TIMEOUT_READY}s"
+    service_unhealthy_fail "management-plane rollout did not converge within ${DEV_TIMEOUT_READY}s"
   fi
   # Probe ports come from DEV_PORTS (host.sh) so the DEV_PORTS_OVERRIDE
   # test-isolation seam applies to the readiness stage too — fake-CLI tests
@@ -1227,7 +1297,7 @@ readiness() {
   require_readyz notifier "${DEV_PORTS[4]}"
   # web has no /readyz; the root page is the probe.
   if ! wait_for_endpoint "http://127.0.0.1:${DEV_PORTS[5]}" "$DEV_TIMEOUT_READY"; then
-    fail "$ERR_SERVICE_UNHEALTHY" "web did not answer on port ${DEV_PORTS[5]}"
+    service_unhealthy_fail "web did not answer on port ${DEV_PORTS[5]}"
   fi
   log "  web           http://localhost:${DEV_PORTS[5]}         200"
   # Cluster-internal databases (批次5 D3): kubectl exec probes against the
