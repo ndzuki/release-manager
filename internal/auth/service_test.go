@@ -77,7 +77,7 @@ func TestAuthService_LoginAndRefreshPreserveOrganization(t *testing.T) {
 	}))
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	jwtManager := NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour)
+	jwtManager := NewJWTManager(testJWTPrivateKey, time.Hour, time.Hour)
 	service := NewAuthService(st, jwtManager, NewRateLimiter(10, time.Minute), logger, nil)
 
 	login, err := service.Login(ctx, connect.NewRequest(&authv1.LoginRequest{
@@ -134,7 +134,7 @@ func TestAuthService_LoginErrorsAreUniform(t *testing.T) {
 func TestAuthService_LoginPersistsSessionAcrossRestart(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "auth.db")
 	ctx := context.Background()
-	jwt := NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour)
+	jwt := NewJWTManager(testJWTPrivateKey, time.Hour, time.Hour)
 
 	st, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
@@ -167,7 +167,7 @@ func TestAuthServiceRedisUnavailableFailsClosed(t *testing.T) {
 	st := authSessionStoreOverride{Store: base, authSessions: unavailableAuthSessionStore{}}
 	svc := NewAuthService(
 		st,
-		NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour),
+		NewJWTManager(testJWTPrivateKey, time.Hour, time.Hour),
 		NewRateLimiter(10, time.Minute),
 		slog.New(slog.DiscardHandler),
 		nil,
@@ -212,7 +212,7 @@ func TestAuthServiceRedisOutageKeepsPasswordChangeRevocationDurable(t *testing.T
 	st := authSessionStoreOverride{Store: base, authSessions: redisstore.New(client, base.AuthSessions())}
 	svc := NewAuthService(
 		st,
-		NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour),
+		NewJWTManager(testJWTPrivateKey, time.Hour, time.Hour),
 		NewRateLimiter(10, time.Minute),
 		slog.New(slog.DiscardHandler),
 		nil,
@@ -498,7 +498,7 @@ func openAuthStore(t *testing.T) *sqlitestore.Store {
 func newAuthService(st *sqlitestore.Store) *AuthService {
 	return NewAuthService(
 		st,
-		NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour),
+		NewJWTManager(testJWTPrivateKey, time.Hour, time.Hour),
 		NewRateLimiter(10, time.Minute),
 		slog.New(slog.DiscardHandler),
 		nil,

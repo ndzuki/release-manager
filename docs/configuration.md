@@ -13,7 +13,7 @@
 3. **YAML 文件**（`--config` 指定路径）。
 4. **代码默认值**——各配置块的 `WithDefaults()`（如 `internal/config/config.go:176/195/236/252`）。
 
-部分 flag 的**默认值本身**来自环境变量（`envOr`/`os.Getenv` 模式，如 `--signing-key` 默认 `envOr("JWT_SIGNING_KEY", "change-me-in-production")`，`cmd/auth/main.go:237`），所以这类参数上的链条是：显式 flag > 对应环境变量 > flag 默认常量。
+部分 flag 的**默认值本身**来自环境变量（`envOr`/`os.Getenv` 模式，如 `--jwt-private-key` 默认 `envOr("JWT_PRIVATE_KEY", "")`，`cmd/auth/main.go:248`），所以这类参数上的链条是：显式 flag > 对应环境变量 > flag 默认常量。
 
 **例外（原始二次读取，env 不参与）**：`cmd/orchestrator` 在 `LoadService` 之外另起裸 viper 直接重读同一个 YAML 文件解析 `gc`（`cmd/orchestrator/main.go:555`）、`emergency`（`:625`）、`trust`（`:677`）三个块（`UnmarshalKey`）。这三块只能改文件，不能用环境变量覆盖。
 
@@ -28,7 +28,7 @@
 | | `--service-token` | `envOr("DEV_WEBHOOK_SERVICE_TOKEN", "")`（`cmd/webhook/main.go:62`） | 包入库服务令牌 |
 | release-orchestrator | `--config` | `configs/orchestrator.dev.yaml`（`cmd/orchestrator/main.go:845`） | 配置文件路径 |
 | | `--target-env` | `staging`（`cmd/orchestrator/main.go:930`） | 目标环境标签（传入 `orchestrator.NewService`） |
-| | `--signing-key` | `envOr("JWT_SIGNING_KEY", "change-me-in-production")`（`:851`） | JWT 签名密钥 |
+| | `--jwt-public-key` | `envOr("JWT_PUBLIC_KEY", "")`（`:969`） | JWT **校验公钥**（Ed25519；orchestrator 只校验、不签发） |
 | release-operator | `--config` | `configs/operator.dev.yaml`（`cmd/operator/main.go:359`） | 配置文件路径 |
 | | `--db` | `data/operator.db`（gateway 模式） | 本地 SQLite |
 | | `--command-db` | `data/operator-commands.db` | 命令/身份持久化（agent 与 gateway 都用） |
@@ -37,11 +37,11 @@
 | | `--install-atomic` | true | Helm install atomic |
 | | `--install-timeout` | 5m | Helm 超时 |
 | release-auth | `--config` | `configs/auth.dev.yaml`（`cmd/auth/main.go:232`） | 配置文件路径 |
-| | `--signing-key` | `envOr("JWT_SIGNING_KEY", ...)` | JWT 签名密钥 |
+| | `--jwt-private-key` | `envOr("JWT_PRIVATE_KEY", "")`（`:248`） | JWT 签名私钥（PKCS#8 Ed25519 PEM；唯一持有者） |
 | release-notifier | `--config` | `configs/notifier.dev.yaml`（`cmd/notifier/main.go:124`） | 配置文件路径（仅此一个） |
 | release-api | `--config` | `configs/api.dev.yaml`（`cmd/api/main.go:138`） | 配置文件路径 |
 | | `--db` | `data/api.db` | SQLite |
-| | `--signing-key` | `"change-me-in-production"`（**无** env 回退，`cmd/api/main.go:140`） | JWT 签名密钥 |
+| | `--jwt-public-key` | `envOr("JWT_PUBLIC_KEY", "")`（`:175`） | JWT **校验公钥**（Ed25519） |
 | release-notification-sink | `--config` | `deploy/kustomize/dev/configs/notification-sink.dev.yaml`（`cmd/notification-sink/main.go:140`） | 配置文件路径（注意默认值直接指向 kustomize 目录） |
 | e2e | `--env-config`（必填）、`--stages`（all）、`--timeout` 5m、`--total-timeout` 25m、`--output-dir` `./e2e-results`、`--parallel`、`--keep-on-failure`、`--snapshot-full`；cleanup 子命令 `--env-config`、`--output-dir`、`--baseline-file`（`cmd/e2e/main.go:637-680`） | | E2E harness |
 | devseed | 见 `cmd/devseed/main.go:36-58`（`-print-fixture-version`、`-ensure-mtls-ca`、`-mtls-ca-dir`、`-operator-timeout`、`-seed-retries`、`-stop-after`、`-reset`、`-orchestrator/-webhook/-auth`、`-admin-user`、`-admin-password`、`-deployer-user`、`-deployer-password`、`-reader-password`、`-e2e-runner-password`、`-trust-root-private-key`、`-data-dir`、`-database-dsn`） | 多个默认值取 `envOr`/`os.Getenv`（见 §4.2） | dev 播种 |
@@ -74,7 +74,7 @@
 ### 2.1 权威关系
 
 - **集群（dev k3d）内权威**是 `deploy/kustomize/dev/configs/*.yaml` 与 `deploy/kustomize/customer-agent/*/configs/*.yaml`：`deploy/kustomize/dev/kustomization.yaml:11-31` 用 `configMapGenerator` 把它们逐服务生成为 `*-config` ConfigMap，由 `deploy/kustomize/services/*.yaml` 挂到 `/configs/` 并以 `--config /configs/<svc>.dev.yaml` 启动。`configs/` 根目录同名文件是**本地进程配置**，不是集群配置的副本。
-- **本地 `make run-*` / `dev-stage-*` 权威**是 `configs/*.dev.yaml`（Makefile 中显式传参，如 `make run-api` 即 `release-api --config configs/api.dev.yaml --db data/api.db --signing-key change-me-in-production`，`Makefile:100-101`）。
+- **本地 `make run-*` / `dev-stage-*` 权威**是 `configs/*.dev.yaml`（Makefile 中显式传参，如 `make run-api` 即 `release-api --config configs/api.dev.yaml --db data/api.db --jwt-public-key "$(cat data/dev-jwt/jwt-public-key.pem)"`，`Makefile:111-112`；密钥对由 `make dev-jwt-keys` 预先生成）。
 
 ### 2.2 逐文件 diff 实测结论（`diff configs/<svc>.dev.yaml deploy/kustomize/dev/configs/<svc>.dev.yaml`）
 
@@ -271,7 +271,8 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 
 | 变量 | 读取点 | 用途 | 机密 |
 |---|---|---|---|
-| `JWT_SIGNING_KEY` | `cmd/auth/main.go:237`、`cmd/orchestrator/main.go:851` | flag 默认值 | 是 |
+| `JWT_PRIVATE_KEY` | `cmd/auth/main.go:248` | flag 默认值；**仅 auth 持有**（Ed25519 签名私钥） | 是 |
+| `JWT_PUBLIC_KEY` | `cmd/orchestrator/main.go:969`、`cmd/api/main.go:175` | flag 默认值（Ed25519 校验公钥） | 否（公钥） |
 | `DEV_WEBHOOK_SERVICE_TOKEN` | `cmd/webhook/main.go:62` | flag 默认值 | 是 |
 | （orchestrator 侧）`DEV_WEBHOOK_SERVICE_TOKEN` + `DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS` | `cmd/orchestrator` serviceTokens | 校验入站服务令牌（双令牌=零停机轮换） | 是 |
 | `ENROLLMENT_TOKEN` | `internal/operator/bootstrap/token.go:24-27`（`TokenEnv`，`cmd/operator/main.go:161`） | 一次性注册令牌（文件缺位时） | 是 |
@@ -302,7 +303,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 | `DEV_DOCKER_MIRROR` | 空 | 基础镜像 registry 前缀（`deploy/docker/Dockerfile.web` 的 NODE_IMAGE/NGINX_IMAGE build-args） | 否 |
 | `DEV_OPERATOR_GATEWAY_PORT` | 30084 | 网关 TCP 探测端口（测试 seam） | 否 |
 | `DEV_RESET_PG_PORT` | 5432 | reset-data port-forward 本地端口 | 否 |
-| `DEV_JWT_SIGNING_KEY` | （unset） | **ci profile 必注入**的 JWT 密钥，瞬态写 `data/dev-jwt/jwt-signing-key.pem` 后删除 | 是 |
+| `DEV_JWT_PRIVATE_KEY` | （unset） | **ci profile 必注入**的 Ed25519 JWT 私钥；devseed `-ensure-jwt-keys` 瞬态物化 `data/dev-jwt/jwt-private-key.pem` + 派生 `jwt-public-key.pem`，apply 后删除 | 是 |
 | `DEV_WEBHOOK_SERVICE_TOKEN` | （unset） | ci profile 令牌（同上瞬态物化） | 是 |
 | `DEV_M_TLS_CA_KEY` / `DEV_M_TLS_CA_CERT` | （unset） | ci profile dev CA 对（瞬态物化 `data/dev-ca/`） | 是 |
 | `E2E_RUN_ID` | （unset） | ci profile 必需，DNS-1123（lib/host.sh:128-137），environment_id=`ci-<run_id>` | 否 |
@@ -313,8 +314,8 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 ### 4.4 Makefile 与 CI
 
 - E2E 段 Makefile 变量（可 env 覆盖）：`E2E_DATA_DIR`、`E2E_ENV_CONFIG`（=`data/e2e-env-config.yaml`）、`E2E_LOCK_FILE`（=`data/dev.lock`）、`E2E_CREDENTIALS_FILE`（=`data/dev-credentials.env`，recipe 里 `source` 后要求 `E2E_RUNNER_PASSWORD` 非空）、`E2E_TEST_NAMESPACE`、`E2E_RESTART_DEPLOYMENTS`、`E2E_ENVIRONMENT`、`OUTPUT_DIR`、`STAGES`、`TIMEOUT`、`TOTAL_TIMEOUT`、`PARALLEL`、`KEEP_ON_FAILURE`、`SNAPSHOT_FULL`、`BASELINE_FILE`、`ENV_CONFIG`。`e2e-env-config` recipe 内的 `E2E_ENV_CONFIG_PATH`/`E2E_OUTPUT_DIR`/`E2E_STAGES`/`E2E_TIMEOUT`/`E2E_TOTAL_TIMEOUT`/`E2E_PARALLEL`/`E2E_KEEP_ON_FAILURE`/`E2E_SNAPSHOT_FULL` 是跨 flock 子 shell 的瞬态传参。曾经 export 的 `E2E_KUBECONFIG` 已删除——全仓无消费者，jq 汇编直接展开 Makefile 变量（§7-8 闭环）。<!-- check-docs:ignore 陈述该 env 已不存在 --> `e2e-all` 认 `E2E_SKIP_PREFLIGHT_CLEANUP=1` 跳过预清理。
-- `.github/workflows/test.yml` 把 CI Secrets 映射为 env：`E2E_RUNNER_PASSWORD`、`DEV_ADMIN_PASSWORD`、`DEV_DEPLOYER_PASSWORD`、`DEV_READER_PASSWORD`、`DEV_JWT_SIGNING_KEY`、`DEV_WEBHOOK_SERVICE_TOKEN`、`DEV_M_TLS_CA_KEY`、`DEV_M_TLS_CA_CERT`、`DEV_TRUST_ROOT_PRIVATE_KEY`、`E2E_RUN_ID`、`E2E_ENVIRONMENT`、`DEV_PROFILE=ci`。CI Secret 名录见 `.github/SECRETS.md`。
-- kustomize 注入到 Pod 的 env：`JWT_SIGNING_KEY`（auth/orchestrator，Secret `release-manager-jwt`）、`DEV_WEBHOOK_SERVICE_TOKEN`（webhook/orchestrator）、`DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS`（orchestrator，可选）、`ENROLLMENT_TOKEN`（customer agent，Secret `operator-enrollment`）、postgres 容器经 `envFrom` 得 `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`（Secret `release-manager-dev-credentials`；TASK-094 已删其中无人读取的 `DATABASE_DRIVER` 键，§7-10）加静态 `POSTGRES_INITDB_ARGS`。
+- `.github/workflows/test.yml` 把 CI Secrets 映射为 env：`E2E_RUNNER_PASSWORD`、`DEV_ADMIN_PASSWORD`、`DEV_DEPLOYER_PASSWORD`、`DEV_READER_PASSWORD`、`DEV_JWT_PRIVATE_KEY`、`DEV_WEBHOOK_SERVICE_TOKEN`、`DEV_M_TLS_CA_KEY`、`DEV_M_TLS_CA_CERT`、`DEV_TRUST_ROOT_PRIVATE_KEY`、`E2E_RUN_ID`、`E2E_ENVIRONMENT`、`DEV_PROFILE=ci`。CI Secret 名录见 `.github/SECRETS.md`。
+- kustomize 注入到 Pod 的 env：`JWT_PRIVATE_KEY`（**仅 auth**，Secret `release-manager-jwt-private`）、`JWT_PUBLIC_KEY`（orchestrator，Secret `release-manager-jwt-public`；webhook/notifier 不再挂任何 JWT 密钥——它们本来就不校验 token）、`DEV_WEBHOOK_SERVICE_TOKEN`（webhook/orchestrator）、`DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS`（orchestrator，可选）、`ENROLLMENT_TOKEN`（customer agent，Secret `operator-enrollment`）、postgres 容器经 `envFrom` 得 `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`（Secret `release-manager-dev-credentials`；TASK-094 已删其中无人读取的 `DATABASE_DRIVER` 键，§7-10）加静态 `POSTGRES_INITDB_ARGS`。
 - 集成测试专用：`POSTGRES_TEST_DSN`（`//go:build integration` 用例的 DSN 门，AGENTS.md 质量门禁；未设即 skip）。
 - 前端构建期：`VITE_ENABLE_RELEASE_INVENTORY`、`VITE_ENABLE_VALUES_REVISION`、`VITE_ENABLE_RELEASE_OPERATIONS`、`VITE_FEATURE_CLUSTER_ROUTING`、`VITE_FEATURE_OPERATOR_MANAGEMENT`、`VITE_ARTIFACT_CACHE_ENDPOINT`（`web/src/` 内 `import.meta.env`；未设即默认值，仅影响 web 镜像）。
 
@@ -325,7 +326,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 **「Secret 只以引用进入执行链」在配置层的实现**（`AGENTS.md` 约束 5）：
 
 1. **文件不落库**：所有运行时生成的机密都在 `data/`（`.gitignore` 的 `data/`、`certs/`、`.env`、`e2e-results/` 条目），仓库只提交生成物路径的**约定**。
-2. **kustomize `secretGenerator` 走内容 hash**（`deploy/kustomize/dev/kustomization.yaml:39-70`）：`JWT_SIGNING_KEY` ← `data/dev-jwt/jwt-signing-key.pem`；`WEBHOOK_SERVICE_TOKEN` ← `data/dev-service-tokens/webhook-service-token`；`CI_API_KEY` ← `data/dev-service-tokens/ci-api-key`；`HARBOR_SERVICE_TOKEN` ← `data/dev-service-tokens/harbor-service-token`（TASK-102 的两把 ingress 凭据）；`ca.key`/`ca.crt` ← `data/dev-ca/`。名字带 hash ⇒ 轮换密钥/令牌即滚动消费方 Deployment，无需手工 restart。文件路径引用（`../../../data/...`）也是 dev kustomize 需要 `--load-restrictor LoadRestrictionsNone` 的原因（dev.sh apply 处）。
+2. **kustomize `secretGenerator` 走内容 hash**（`deploy/kustomize/dev/kustomization.yaml:39-70`）：`JWT_PRIVATE_KEY` ← `data/dev-jwt/jwt-private-key.pem`（仅 auth）、`JWT_PUBLIC_KEY` ← `data/dev-jwt/jwt-public-key.pem`（orchestrator）；`WEBHOOK_SERVICE_TOKEN` ← `data/dev-service-tokens/webhook-service-token`；`CI_API_KEY` ← `data/dev-service-tokens/ci-api-key`；`HARBOR_SERVICE_TOKEN` ← `data/dev-service-tokens/harbor-service-token`（TASK-102 的两把 ingress 凭据）；`ca.key`/`ca.crt` ← `data/dev-ca/`。名字带 hash ⇒ 轮换密钥/令牌即滚动消费方 Deployment，无需手工 restart。文件路径引用（`../../../data/...`）也是 dev kustomize 需要 `--load-restrictor LoadRestrictionsNone` 的原因（dev.sh apply 处）。
 3. **Pod 侧只以 env/挂载引用出现**：orchestrator 的 CA 不写在 YAML 值里，而是 Secret 以 subPath 挂到 `ca.key_path=/data/gateway-ca.key`（0600）与 `ca.cert_path=/data/gateway-ca.crt`（0644），配置只引用挂载点；agent 令牌经 `ENROLLMENT_TOKEN` 注入；一次性令牌消费即删（`internal/operator/bootstrap/bootstrap.go:96-99`）。
 4. **E2E 口令零落盘**：`credentials.e2e_runner.password_env` 只存**环境变量名**，值 `os.LookupEnv` 现取（§3.9）；`data/e2e-env-config.yaml` 0600。
 5. **prod 路径**：CA 支持 `ca.vault_path`（Vault KV）替代文件对（ADR-017）；Values 明文机密由 `values.secret_patterns` + SecretRef 校验拦截（§3.5）。
@@ -334,7 +335,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 - `deploy/kustomize/base/secret.yaml` 把 `POSTGRES_PASSWORD: dev-release-manager` 等明文提交进仓库——文件自述为 dev-only 共享凭据；它只喂 postgres 容器（`deploy/kustomize/postgres/deployment.yaml:26` envFrom）。其中曾经混入的 `DATABASE_DRIVER` 键无任何工作负载读取，已在 TASK-094 删除（§7-10）。
 - kustomize overlay 的 auth/orchestrator/notifier DSN 内嵌 `dev-release-manager` 口令（§2.2）。
 - `deploy/dev/dev.sh` reset-data 段硬编码 `PGPASSWORD=dev-release-manager`。
-- `configs/api.dev.yaml` 侧 `--signing-key` 默认 `change-me-in-production`（api/orchestrator/auth 同款哨兵值）。这些在引入真实生产部署前都应被 Secret 后端替代。
+- 曾经存在一条 JWT 哨兵默认值：api/orchestrator/auth 的 `--signing-key` 都默认 `change-me-in-production`。REQ-065 AC-065-01 把管理面 token 改为 Ed25519 后**该哨兵已删除**——三个 flag（`--jwt-private-key`/`--jwt-public-key`）默认空值，缺失或非 Ed25519 即**启动失败**（fail-closed），密钥只能来自 Secret（dev 由 `make dev-jwt-keys` 生成）。其余 dev 明文凭据（上面的 postgres 口令等）在引入真实生产部署前仍应被 Secret 后端替代。
 
 ## 6. 如何正确地改配置
 

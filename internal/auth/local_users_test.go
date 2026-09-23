@@ -47,7 +47,7 @@ func newLocalUserHarness(t *testing.T) *localUserHarness {
 	require.NoError(t, enforcer.LoadPolicies(ctx))
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	jwtManager := NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour)
+	jwtManager := NewJWTManager(testJWTPrivateKey, time.Hour, time.Hour)
 	interceptor := NewAuthInterceptor(jwtManager, st, enforcer, map[string]bool{
 		authv1connect.AuthServiceLoginProcedure: true,
 	}, logger)
@@ -418,7 +418,7 @@ func TestInitialize_AdminImmediatelyAuthorized(t *testing.T) {
 	enforcer, st := setupEnforcer(t)
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	jwtManager := NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour)
+	jwtManager := NewJWTManager(testJWTPrivateKey, time.Hour, time.Hour)
 	interceptor := NewAuthInterceptor(jwtManager, st, enforcer, map[string]bool{
 		authv1connect.AuthServiceInitializeProcedure: true,
 		authv1connect.AuthServiceLoginProcedure:      true,

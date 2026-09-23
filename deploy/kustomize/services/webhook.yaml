@@ -28,10 +28,10 @@ spec:
             - /configs/webhook.dev.yaml
             - --orchestrator-url
             - http://orchestrator:8083
-          # D3: every management-plane service consumes release-manager-jwt.
-          envFrom:
-            - secretRef:
-                name: release-manager-jwt
+          # REQ-065 AC-065-01: the webhook does NOT mount any JWT key. It only
+          # forwards a service token to the orchestrator, so the old
+          # release-manager-jwt mount handed it signing material it never read
+          # (exposure with zero benefit).
           # 批次3 D2 (AC-065-33): sender-side bundle ingress service token —
           # forwarded as `Authorization: Bearer <token>` to the orchestrator
           # BundleService (actor service:release-webhook, REQ-011 §562).

@@ -19,13 +19,13 @@
 | `DEV_ADMIN_PASSWORD` | `e2e` job 级 env（`test.yml:390`） | `dev-admin` 账号口令（用户名默认 `dev-admin`，`cmd/devseed/main.go:50`），seed 用它登录并初始化系统（`internal/devfixture/runner.go:315`） | **是** | `make dev-seed`（`test.yml:427-428`）以 `ci profile requires env-injected passwords: DEV_ADMIN_PASSWORD` 失败（`internal/devfixture/files.go:200-215`） |
 | `DEV_DEPLOYER_PASSWORD` | `test.yml:391` | `dev-deployer` 口令（`cmd/devseed/main.go:52-53`），deployer token 用于 `GetOperation` 轮询（`internal/devfixture/accounts_trust.go:170-172`） | **是** | 同上（四个口令一次性汇总报错） |
 | `DEV_READER_PASSWORD` | `test.yml:392` | `dev-reader`（viewer 角色，无写权限）口令，`cmd/devseed/main.go:54`、`internal/devfixture/runner.go:27-28` | **是** | 同上 |
-| `DEV_JWT_SIGNING_KEY` | `test.yml:393` | HS256 JWT 签名密钥。ci profile 把它临时写成 kustomize 源文件（`deploy/dev/dev.sh:293-304`），经 `secretGenerator`（`deploy/kustomize/dev/kustomization.yaml:39-43`）成为 Secret `release-manager-jwt` 的 `JWT_SIGNING_KEY`，再注入 orchestrator（`deploy/kustomize/services/orchestrator.yaml:35-39`）与 webhook/auth（`envFrom`，`deploy/kustomize/services/webhook.yaml:31-34`） | **是**（泄露即可伪造任意身份 token） | `make dev-up`（`test.yml:424-425`）以 `ERR_SERVICE_UNHEALTHY: ci profile requires DEV_JWT_SIGNING_KEY` 失败（`deploy/dev/dev.sh:294-295`） |
+| `DEV_JWT_PRIVATE_KEY` | `test.yml:497` | **Ed25519（EdDSA）JWT 签名私钥，PKCS#8 PEM**（REQ-065 AC-065-01 / D1=A）。ci profile 由 devseed helper 物化：私钥写成 `data/dev-jwt/jwt-private-key.pem` 并**派生**公钥（`deploy/dev/dev.sh:360-383`、`cmd/devseed/jwt_keys.go`），经两个 `secretGenerator`（`deploy/kustomize/dev/kustomization.yaml:44-51`）成为 Secret `release-manager-jwt-private`（`JWT_PRIVATE_KEY`，**仅 auth**：`deploy/kustomize/services/auth.yaml:36-40`）与 `release-manager-jwt-public`（`JWT_PUBLIC_KEY`，**仅 orchestrator**：`deploy/kustomize/services/orchestrator.yaml:35-39`）；webhook/notifier **不挂任何 JWT 密钥** | **是**（私钥泄露即可伪造任意身份 token；公钥不是机密） | `make dev-up` 以 `ERR_SERVICE_UNHEALTHY: ci profile requires DEV_JWT_PRIVATE_KEY` 失败（`deploy/dev/dev.sh:365`）；值不是合法 Ed25519 PEM 时 helper 拒绝并失败 |
 | `DEV_WEBHOOK_SERVICE_TOKEN` | `test.yml:394` | bundle ingress 的服务令牌：webhook 侧作为 `Authorization: Bearer <token>` 转发（`cmd/webhook/main.go:61-62`），orchestrator 侧取 SHA-256 摘要做常量时间比对（`cmd/orchestrator/main.go:898-911`、`internal/auth/service_token.go:108-126`） | **是** | `make dev-up` 以 `ci profile requires DEV_WEBHOOK_SERVICE_TOKEN` 失败（`deploy/dev/dev.sh:342-343`） |
 | `DEV_M_TLS_CA_KEY` | `test.yml:395` | dev mTLS CA 私钥，签 operator 客户端证书与网关服务端证书（`internal/operator/ca/ca.go:205`、`internal/operator/ca/ca.go:252`、`cmd/orchestrator/main.go:154-157`） | **是**（集群侧身份的信任锚） | `make dev-up` 以 `ci profile requires DEV_M_TLS_CA_KEY and DEV_M_TLS_CA_CERT` 失败（`deploy/dev/dev.sh:394-395`） |
 | `DEV_M_TLS_CA_CERT` | `test.yml:396` | 与上配对的 CA 证书；同一 Secret 挂载为网关 `/data/gateway-ca.crt`（`deploy/kustomize/services/orchestrator.yaml:94-98,107-113`），并被复制给客户集群 agent 做校验（`deploy/dev/dev.sh:1296`） | 证书本身是公开材料，但**必须与私钥成对**，故与 KEY 同级管理 | 同 `DEV_M_TLS_CA_KEY`；只给证书不给私钥同样失败（`deploy/dev/dev.sh:394` 用 `-z ... || -z ...` 同时判定） |
 | `DEV_TRUST_ROOT_PRIVATE_KEY` | `test.yml:397` | Dev Trust Root Ed25519 私钥：seed 把它的公钥经 `TrustService.CreateTrustRoot` 激活（`internal/devfixture/accounts_trust.go:96-107`），并用它对 bundle digest 签名（`internal/devfixture/accounts_trust.go:149-151`） | **是** | `make dev-seed` 以 `ci profile requires DEV_TRUST_ROOT_PRIVATE_KEY` 失败（`internal/devfixture/files.go:258-261`） |
 
-合计：**14 处 `secrets.*` 引用，去重后 11 个名字**（`GITHUB_TOKEN` 独占 3 处，别把"引用数"读成"需配置数"）。其中 `GITHUB_TOKEN` 是自动提供、无需配置；**需要人工配置的 repository secret 共 10 个**：`GITCODE_TOKEN` + `test.yml:389-397` 的 9 个。这 9 个与既有权威口径一致（`docs/testing.md:188-191`：「4 个账号密码 + `DEV_JWT_SIGNING_KEY` + `DEV_WEBHOOK_SERVICE_TOKEN` + `DEV_M_TLS_CA_KEY`/`DEV_M_TLS_CA_CERT` + `DEV_TRUST_ROOT_PRIVATE_KEY`」）。
+合计：**14 处 `secrets.*` 引用，去重后 11 个名字**（`GITHUB_TOKEN` 独占 3 处，别把"引用数"读成"需配置数"）。其中 `GITHUB_TOKEN` 是自动提供、无需配置；**需要人工配置的 repository secret 共 10 个**：`GITCODE_TOKEN` + `test.yml:389-397` 的 9 个。这 9 个与既有权威口径一致（`docs/testing.md:188-191`：「4 个账号密码 + `DEV_JWT_PRIVATE_KEY` + `DEV_WEBHOOK_SERVICE_TOKEN` + `DEV_M_TLS_CA_KEY`/`DEV_M_TLS_CA_CERT` + `DEV_TRUST_ROOT_PRIVATE_KEY`」）。
 
 ## 2. 全部 `vars.*` 引用
 
@@ -68,7 +68,7 @@ gh variable set RUNS_ON --body ubuntu-latest --repo ndzuki/release-manager
 
 # 机密：三种输入形态按需选用
 gh secret set GITCODE_TOKEN --repo ndzuki/release-manager                       # 交互式隐藏输入
-printf '%s' "$LOCAL_VALUE" | gh secret set DEV_JWT_SIGNING_KEY --repo ndzuki/release-manager
+printf '%s' "$LOCAL_VALUE" | gh secret set DEV_JWT_PRIVATE_KEY --repo ndzuki/release-manager
 gh secret set DEV_M_TLS_CA_CERT --body "$(cat data/dev-ca/ca.crt)" --repo ndzuki/release-manager
 
 # 核对（只列名字，永不返回值；GitHub 也不提供任何读回明文的 API）
@@ -85,7 +85,7 @@ for name in DEV_ADMIN_PASSWORD DEV_DEPLOYER_PASSWORD DEV_READER_PASSWORD E2E_RUN
 done
 printf '%s' "$(cat data/dev-trust-root/dev-trust-root.key)" | base64 -w0 \
   | gh secret set DEV_TRUST_ROOT_PRIVATE_KEY --repo ndzuki/release-manager
-gh secret set DEV_JWT_SIGNING_KEY     --body "$(cat data/dev-jwt/jwt-signing-key.pem)"   --repo ndzuki/release-manager
+gh secret set DEV_JWT_PRIVATE_KEY     --body "$(cat data/dev-jwt/jwt-private-key.pem)"   --repo ndzuki/release-manager
 gh secret set DEV_WEBHOOK_SERVICE_TOKEN --body "$(cat data/dev-service-tokens/webhook-service-token)" --repo ndzuki/release-manager
 gh secret set DEV_M_TLS_CA_KEY        --body "$(cat data/dev-ca/ca.key)"   --repo ndzuki/release-manager
 gh secret set DEV_M_TLS_CA_CERT       --body "$(cat data/dev-ca/ca.crt)"   --repo ndzuki/release-manager
@@ -123,83 +123,17 @@ gh secret set DEV_M_TLS_CA_CERT       --body "$(cat data/dev-ca/ca.crt)"   --rep
 - 四个值必须两两不同（`internal/devfixture/files.go:90-96` 分别独立生成）。
 - 口令强度不在 auth 侧二次校验：seed 走的是正式 `Login`/`CreateLocalUser` API（`internal/devfixture/accounts_trust.go:40-59`），格式契约只在 devfixture 里强制。
 
-### 5.2 `DEV_JWT_SIGNING_KEY`
+### 5.2 `DEV_JWT_PRIVATE_KEY`
 
-- **格式要求：非空任意字节串即可**。dev.sh 只判 `-z`（`deploy/dev/dev.sh:294`），随后原样写成 0600 文件（`:300-303`）；auth 侧把它当 raw bytes 直接喂给 HS256（`internal/auth/jwt.go:22-27,56`），**没有长度、编码或字符集校验**。
-- 仓库内的参照格式：本地 `dev-up` 生成 **64 随机字节的 base64**（`deploy/dev/dev.sh:311-317`，含换行 88 字符），注释同时声明「任何非空值都有效」与「轮换 = 删文件重跑 dev-up」（`:311-314`）。
-- **建议**：CI 值沿用同一生成方式（≥32 字节随机、base64 承载），并**不要**依赖 `change-me-in-production` 兜底默认——该默认仍留在 `cmd/auth/main.go:237`、`cmd/orchestrator/main.go:851`、`cmd/api/main.go:113` 三处 flag 默认值里；`cmd/api` 那一处**没有** env 回退。
-- 落盘语义：只在 kustomize build/apply 期间存在，apply 完立即删除（`deploy/dev/dev.sh:323-326` 由 `:1122` 调用）。
-
-### 5.3 `DEV_WEBHOOK_SERVICE_TOKEN`
-
-- dev 侧只要求非空（`deploy/dev/dev.sh:342`），原样写成 0600 文件（`:347-350`）。
-- 仓库内的参照格式：本地生成 **32 字符 `[A-Za-z0-9]`**，`head -c 1024 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32`（`deploy/dev/dev.sh:357-363`），注释说明与 `dev-credentials.env` 的口令同一字符集契约（`:358-360`）。
-- 服务端对值本身无校验：orchestrator 取 **SHA-256 hex 摘要**保存（`cmd/orchestrator/main.go:898-911`），入站 Bearer 也摘要后做**常量时间**比对（`internal/auth/service_token.go:108-126`，`subtle.ConstantTimeCompare` 见 `:120`）。因此唯一要求是 webhook 侧与 orchestrator 侧同源（两者都来自同一个 Secret：`deploy/kustomize/services/webhook.yaml:39-43` 与 `deploy/kustomize/services/orchestrator.yaml:45-49`）。
-- 作用域是收窄的：该 token 只被允许调用 `BundleService.SubmitBundle` 一个 procedure，actor 记为 `service:release-webhook`（`cmd/orchestrator/main.go:477-492`，作用域声明在 `:487-489`）。
-- **建议**：按 32 字符字母数字生成，与 dev 契约一致；长度上限无约束（不进 DB，只存摘要）。
-
-### 5.4 `DEV_M_TLS_CA_KEY` / `DEV_M_TLS_CA_CERT`
-
-- **必须是 PEM 原文，不是 base64(PEM)**：dev.sh 用 `printf '%s'` 原样落盘为 `ca.key` / `ca.crt` 并 chmod 600（`deploy/dev/dev.sh:397-401`），随后由 `secretGenerator` 直接读这两个文件（`deploy/kustomize/dev/kustomization.yaml:66-70`）。
-- **可加载性 = 硬格式要求**，消费方是 `internal/operator/ca.Load`：
-  - key：PEM block type 必须是 `PRIVATE KEY`（`internal/operator/ca/ca.go:147-150`）、PKCS#8 解析（`:151`）、**必须是 Ed25519**，其它类型直接拒（`:155-158`）。
-  - cert：PEM block type 必须是 `CERTIFICATE`（`:160-163`）、`IsCA` 必须为真（`:167-169`）、且**与私钥匹配 + 自签有效**（`:171-181`）。
-  - 结论：塞一把 RSA/ECDSA 的 CA 会让 `make dev-up` 在网关启动前失败（CA 不合法时 `ca.Load` fail closed，见 `deploy/dev/dev.sh:404-414` 的复用/重生成语义）。
-- 仓库内的参照产物：`cmd/devseed/mtls_ca.go:78-115` 生成的自签 CA——`CommonName: release-manager-dev-ca`（`:90`）、`KeyUsage: CertSign|CRLSign`（`:96`）、有效期 10 年（`:91-95`）、serial 为 ≤128 bit 随机（`:83-86`）；生成后**先用真实 loader 验一遍再落盘**（`:111-115`）。
-- 网关签出的客户端证书 TTL 默认 7 天（`internal/operator/ca/ca.go:41-42,46-48`），CA 自身是长期锚点（`cmd/devseed/mtls_ca.go:91-93` 注释）。
-- 复用条件：已存在且可解析则原样复用，损坏则重生成（`cmd/devseed/mtls_ca.go:60-72`）。CI 场景下没有本地文件，只能靠这两个 secret 提供成对材料。
-
-### 5.5 `DEV_TRUST_ROOT_PRIVATE_KEY`
-
-- **两种形态都被接受**：PKCS#8 PEM 原文，**或** 该 PEM 的 base64 编码（专门为 CI secret 注入留的口子，注释见 `internal/devfixture/files.go:299-301`）。解析顺序：先试 PEM，失败再试 base64→PEM（`:301-312`）。
-- **算法必须是 Ed25519**：`x509.ParsePKCS8PrivateKey` 后做类型断言，不是 Ed25519 直接报 `dev trust root key must be Ed25519`（`internal/devfixture/files.go:313-320`）。
-- 仓库内的参照格式：本地生成走 `ed25519.GenerateKey` + `MarshalPKCS8PrivateKey` + PEM `PRIVATE KEY`（`internal/devfixture/files.go:276-297`），落盘 `data/dev-trust-root/dev-trust-root.key`（`:22-23,249-252`，0600 见 `:34-48`）。
-- 服务端侧对应契约：seed 提交的公钥是 PKIX PEM（`internal/devfixture/accounts_trust.go:153-159`），key id 固定 `dev-trust-root`（`internal/devfixture/runner.go:50-52`）。**注意一致性风险**：CI 里配的私钥必须与已经在该环境激活的 trust root 公钥配对，否则签名验证失败——重配 secret 后需要重新播种/轮换 trust root（见第 6.3 条）。
-
-### 5.6 `GITCODE_TOKEN`
-
-- **格式要求未在仓库中找到，按上游 GitCode 的要求配置**：仓库内没有任何脚本或 Go 代码校验它的长度/前缀/字符集。
-- 仓库内可核实的事实只有：它被当作 HTTPS basic auth 的**口令段**使用（`sync-to-gitcode.yaml:22`，`https://<user>:<token>@gitcode.com/...`），因此值中**不得含 `@`、`:`、`/` 或空白**，否则 URL 解析会被破坏（这是从该行 URL 模板推出的约束，非仓库明文规定）。
-- **建议**：在 GitCode 侧新建仅对 `ndmizuki/release-manager` 有写权限的最小范围个人访问令牌并设置过期时间；GitCode 的 PAT 页面通常提供 `read`/`write` 两类，镜像只需要写。上游具体命名需在 GitCode 站点核实。
-
-### 5.7 `GITHUB_TOKEN`
-
-- 无需配置，自动提供；权限由 `permissions:` 决定（见第 7 节）。当前两处用法只要求只读的 release 元数据。
-
-### 5.8 `RUNS_ON`
-
-- 取值语义由代码判定，**必须精确匹配字符串**：`!= 'self-hosted'`（`test.yml:45,157,166,...`）与 `== 'self-hosted'`（`test.yml:301,317`）；`runs-on` 直接用其值或 `ubuntu-latest` 兜底（`test.yml:38`）。因此可用值实际是 `{未设置, ubuntu-latest, self-hosted, <runner 标签>}`；写错不会报错，只会**静默把缓存步骤全跳过**。
-- runner 标签需与自托管 runner 注册名一致。仓库注释里给出的自托管机器与 service 名在 `test.yml:30-32`（`arch-dev-1` / systemd user service `actions-runner-release-manager`）。**建议**：对外公开文档里不重复主机名；本文按项目纪律只引用位置。
-
-## 6. 轮换与撤销：仓库真实支持到什么程度
-
-### 6.1 已实现（有代码/配置支撑）
-
-1. **内容变化即滚动重启**：四个 `secretGenerator` 条目按文件内容哈希命名 Secret（`deploy/kustomize/dev/kustomization.yaml:30-38,39-70`），改值后滚动消费方 Deployment——这是仓库内唯一的「自动生效」机制。
-2. **服务令牌支持双密钥并存（零停机轮换）**：Secret 的可选 key `WEBHOOK_SERVICE_TOKEN_PREVIOUS` → env `DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS`（`deploy/kustomize/services/orchestrator.yaml:50-56`，`optional: true`），verifier 同时接受 current+previous 两个摘要（`cmd/orchestrator/main.go:898-911`）。dev-test 显式把这条接缝当契约测（`deploy/dev/dev_test.go:1970-1972`）。注意：`secretGenerator` 只生成一个 key（`deploy/kustomize/dev/kustomization.yaml:54-57`），PREVIOUS 需由外部 Secret manager 叠加（注释 `:51-53`），**GitHub Actions 侧没有这条叠加路径**。
-3. **Trust Root 有完整的轮换/宽限/退休/撤销 API**：`RotateTrustRoot`（新 root 立即 active、旧 root 进入 `grace_until` 窗口，`internal/trust/service.go:84-135`）、`EndGrace`（`:157`）、`RetireTrustRoot`（`:210`）、`RevokeTrustRoot`（`:260`）、`GetTrustPolicy`（`:312`），每次变更都走审计（`:483`）。契约声明见 `api/proto/trust/v1/trust.proto:115-120`，服务真实挂载在 orchestrator 上（`cmd/orchestrator/main.go:505-519`）。
-4. **CI 侧的清理兜底**：`make dev-purge CONFIRM=1` 在 `if: always()` 的 post-step 执行（`test.yml:444-446`），`PURGE_DATA_PATHS` 含 `dev-credentials.env`、`dev-trust-root`、`dev-jwt`、`dev-service-tokens`、`dev-enrollment-tokens`、`dev-ca`、`backups`（`deploy/dev/dev.sh:42`）。**这只清 CI runner 上的临时文件，不撤销 GitHub secret。**
-5. **ci profile 不落盘**：JWT key / service token / mTLS CA 只在 kustomize build 期间存在，apply 后删除（`deploy/dev/dev.sh:323-326,371-374,422-425`，调用点 `:1122-1124`）。
-
-### 6.2 缺口（明确说没有）
-
-- **没有任何轮换入口**：无轮换脚本、无 schedule workflow（`.github/workflows` 只有 `test.yml` 与 `sync-to-gitcode.yaml`，两者 `on:` 均无 `schedule`）、无到期登记。GitHub repository secret 本身也不带过期字段。
-- **没有撤销通道**：`GITCODE_TOKEN` 的撤销只能去 GitCode 侧吊销 PAT；仓库内无相关 runbook。**建议**：在第 8 节登记固定周期（例如季度）人工轮换 9 个 dev/e2e secret + `GITCODE_TOKEN`，并在 PR 描述里留痕。
-- **dev/e2e 夹具类 secret 不做「撤销」语义**：它们只作用于一次 CI run 临时起的 k3d 环境，环境随 `dev-purge` 销毁（`test.yml:444-446`），因此真正的风险面是**这些值被复用**——见第 7.3 条。
-- **JWT signing key 无轮换接缝**：只有「换 secret 值 + 滚动重启」一条路，且**没有** current/previous 双 key；换 key 会让所有在册 JWT 立刻失效（`internal/auth/jwt.go:15-27` 只持单 key）。**建议**：把 JWT key 轮换排到维护窗口（维护模式按 procedure allowlist 停写，`docs/architecture.md:147`）。
-- **mTLS CA 轮换是破坏性操作**：本地契约写的是「删 `data/dev-ca/` 重跑 dev-up」（`deploy/dev/dev.sh:384-386`）。CI 换 `DEV_M_TLS_CA_KEY/CERT` 等价于换信任锚——已注册 agent 的证书立即不再被网关接受，必须走重新 enrollment。仓库内**没有**CA 双锚并存的实现。
-- **dev trust root 没有自动轮换接线**：seed 只调用 `CreateTrustRoot` 与 `GetTrustPolicy`（`internal/devfixture/accounts_trust.go:83-116`），`Rotate/EndGrace/Retire/Revoke` 在产品侧可用但未接入任何脚本。
-
-## 7. 本地开发对应关系与「本地值 ≠ CI 值」约定
-
-### 7.1 同名物料的两条路径
-
-`DEV_PROFILE` 决定走哪条（校验见 `cmd/devseed/main.go:77-80`，只接受 `local` / `ci`）；权威口径在 `docs/dev-environment.md:183-185`：local 写 0600 文件，ci 从环境变量注入同名物料、**不落盘**。
+- **格式要求：必须是 PKCS#8 Ed25519 私钥 PEM**（`-----BEGIN PRIVATE KEY-----`，块类型 `PRIVATE KEY`）。dev.sh 把值交给 `cmd/devseed -ensure-jwt-keys`，helper 用**服务同款解析器**（`jwtauth.ParseEd25519PrivateKeyPEM`）校验并**派生公钥**写入 `jwt-public-key.pem`（`deploy/dev/dev.sh:360-383`、`cmd/devseed/jwt_keys.go`）⇒ 两半永不可能不一致，且**非法值直接失败**（fail-closed，不再"任何非空字节串都有效"）。
+- ⚠️ **旧值不可复用**：`DEV_JWT_SIGNING_KEY` 时代的值是 `head -c 64 /dev/urandom | base64`（64 随机字节的 base64，88 字符），**不是** PEM，helper 会拒绝。轮换这一项必须**重新生成一对 Ed25519 密钥**：本地跑 `make dev-jwt-keys`（或 `go run ./cmd/devseed/ -ensure-jwt-keys -jwt-key-dir data/dev-jwt`），再把 `data/dev-jwt/jwt-private-key.pem` 的内容设为 secret 值。
+- 三处 flag 默认值**已无哨兵**：`--jwt-private-key`（auth）/`--jwt-public-key`（orchestrator、api）默认空值，缺失或非 Ed25519 PEM 即**启动失败**（`cmd/auth/main.go:248`、`cmd/orchestrator/main.go:969`、`cmd/api/main.go:175`）。
+- 落盘语义：ci 下只在 kustomize build/apply 期间存在，apply 完**两个**文件立即删除（`deploy/dev/dev.sh:387-390`，调用点 `:84`/`:1239`）。
 
 | CI secret | 本地对应物（`data/` 下，全部 gitignore：`.gitignore:35`） | 谁生成 |
 | --- | --- | --- |
 | `DEV_ADMIN_PASSWORD` / `DEV_DEPLOYER_PASSWORD` / `DEV_READER_PASSWORD` / `E2E_RUNNER_PASSWORD` | `data/dev-credentials.env` | `dev-seed`（`internal/devfixture/files.go:183-195`，渲染 `:79-86`） |
-| `DEV_JWT_SIGNING_KEY` | `data/dev-jwt/jwt-signing-key.pem`（`deploy/dev/dev.sh:288`） | `dev-up`（`deploy/dev/dev.sh:306-318`） |
+| `DEV_JWT_PRIVATE_KEY` | `data/dev-jwt/jwt-private-key.pem`（+ 派生的 `jwt-public-key.pem`，`deploy/dev/dev.sh:356-358`） | `dev-up` → `cmd/devseed -ensure-jwt-keys`（`deploy/dev/dev.sh:360-383`） |
 | `DEV_WEBHOOK_SERVICE_TOKEN` | `data/dev-service-tokens/webhook-service-token`（`deploy/dev/dev.sh:336`） | `dev-up`（`deploy/dev/dev.sh:353-365`） |
 | `DEV_M_TLS_CA_KEY` / `DEV_M_TLS_CA_CERT` | `data/dev-ca/ca.key` + `data/dev-ca/ca.crt`（`deploy/dev/dev.sh:388-389`） | `dev-up` → `cmd/devseed -ensure-mtls-ca`（`deploy/dev/dev.sh:404-417`、`cmd/devseed/main.go:41-42`） |
 | `DEV_TRUST_ROOT_PRIVATE_KEY` | `data/dev-trust-root/dev-trust-root.key`（`internal/devfixture/files.go:22-23,249-252`） | `dev-seed`（`internal/devfixture/files.go:264-289`） |

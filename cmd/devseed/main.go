@@ -32,6 +32,9 @@ func main() {
 		seedRetries         int
 		ensureMTLSCA        bool
 		mtlsCADir           string
+		ensureJWTKeys       bool
+		jwtKeyDir           string
+		jwtPrivateKeyInput  string
 	)
 	flag.BoolVar(&printFixtureVersion, "print-fixture-version", false, "print the authoritative fixture version constant and exit (AC-065-30)")
 	// AC-065-36 (批次5 D1): generate/reuse the dev mTLS CA in <dir> and exit.
@@ -40,6 +43,14 @@ func main() {
 	// format the operator gateway's ca.Load consumes.
 	flag.BoolVar(&ensureMTLSCA, "ensure-mtls-ca", false, "ensure the dev mTLS CA exists in -mtls-ca-dir (generate/reuse, AC-065-36) and exit")
 	flag.StringVar(&mtlsCADir, "mtls-ca-dir", "", "target directory for -ensure-mtls-ca (ca.key + ca.crt)")
+	// REQ-065 AC-065-01 / D1=A: generate/reuse the dev Ed25519 JWT key pair in
+	// <dir> and exit. The helper owns the full contract — an explicit
+	// DEV_JWT_PRIVATE_KEY wins and its public half is derived, an existing
+	// parseable pair is reused, a missing or corrupt pair is regenerated — in
+	// the exact PEM format the auth service and the orchestrator parser consume.
+	flag.BoolVar(&ensureJWTKeys, "ensure-jwt-keys", false, "ensure the dev Ed25519 JWT key pair exists in -jwt-key-dir (generate/reuse, AC-065-01) and exit")
+	flag.StringVar(&jwtKeyDir, "jwt-key-dir", "", "target directory for -ensure-jwt-keys (jwt-private-key.pem + jwt-public-key.pem)")
+	flag.StringVar(&jwtPrivateKeyInput, "jwt-private-key", os.Getenv("DEV_JWT_PRIVATE_KEY"), "PKCS#8 Ed25519 JWT private key (PEM) to materialize instead of generating one (env DEV_JWT_PRIVATE_KEY; ci profile)")
 	flag.IntVar(&operatorTimeoutSecs, "operator-timeout", 0, "operator-online wait timeout in seconds (env DEV_TIMEOUT_OPERATOR, default 180; AC-065-28)")
 	flag.IntVar(&seedRetries, "seed-retries", 0, "seed phase-write retry count with 1s/2s/4s backoff (env DEV_TIMEOUT_SEED_RETRIES, default 3; AC-065-28)")
 	flag.StringVar(&cfg.StopAfterPhase, "stop-after", "", "commit phases up to and including this phase, then exit cleanly (e.g. enrollment; dev.sh resumes with a later run)")
@@ -71,6 +82,15 @@ func main() {
 	if ensureMTLSCA {
 		if err := ensureDevMTLSCA(mtlsCADir); err != nil {
 			fail(fmt.Sprintf("ensure dev mTLS CA: %v", err))
+		}
+		return
+	}
+
+	// AC-065-01: the dev JWT key helper runs standalone (no profile, no
+	// clients) and exits once the pair is ensured.
+	if ensureJWTKeys {
+		if _, _, err := ensureDevJWTKeys(jwtKeyDir, jwtPrivateKeyInput); err != nil {
+			fail(fmt.Sprintf("ensure dev JWT keys: %v", err))
 		}
 		return
 	}

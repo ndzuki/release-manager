@@ -39,7 +39,7 @@ func TestRBACSmoke_NextRequestUsesUpdatedPolicy(t *testing.T) {
 	require.NoError(t, enforcer.LoadPolicies(ctx))
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	jwtManager := NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour)
+	jwtManager := NewJWTManager(testJWTPrivateKey, time.Hour, time.Hour)
 	interceptor := NewAuthInterceptor(jwtManager, st, enforcer, map[string]bool{
 		authv1connect.AuthServiceLoginProcedure: true,
 	}, logger)

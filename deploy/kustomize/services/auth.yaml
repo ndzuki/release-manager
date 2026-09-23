@@ -26,17 +26,18 @@ spec:
           args:
             - --config
             - /configs/auth.dev.yaml
-          # D3: the JWT signing key travels via the JWT_SIGNING_KEY env var
-          # (release-manager-jwt Secret); cmd/auth falls back to it for the
-          # --signing-key flag default. Kubernetes cannot expand
-          # secretKeyRef values inside args ($(VAR) only sees env `value`),
-          # and the key rotation rolls the Deployment via the Secret hash.
+          # REQ-065 AC-065-01 / D1=A: cmd/auth is the ONLY holder of the Ed25519
+          # signing key — it signs the management-plane access tokens. The key
+          # travels via the JWT_PRIVATE_KEY env var (release-manager-jwt-private
+          # Secret); Kubernetes cannot expand secretKeyRef values inside args
+          # ($(VAR) only sees env `value`), and key rotation rolls this
+          # Deployment via the Secret hash.
           env:
-            - name: JWT_SIGNING_KEY
+            - name: JWT_PRIVATE_KEY
               valueFrom:
                 secretKeyRef:
-                  name: release-manager-jwt
-                  key: JWT_SIGNING_KEY
+                  name: release-manager-jwt-private
+                  key: JWT_PRIVATE_KEY
           ports:
             - name: http
               containerPort: 8085

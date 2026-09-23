@@ -2,7 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
 	"database/sql"
+	"encoding/base64"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -57,6 +62,21 @@ func TestAuthReadOnlyProcedures(t *testing.T) {
 	}
 }
 
+// authTestJWTPrivateKeyPEM is the Ed25519 signing key every cmd/auth test
+// registers with (REQ-065 AC-065-01): Register parses PEM key material, so the
+// tests need a real key rather than a placeholder string.
+var authTestJWTPrivateKeyPEM = func() string {
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic("generate test JWT key: " + err.Error())
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		panic("marshal test JWT key: " + err.Error())
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+}()
+
 func TestAuthPostgreSQLSessionPersistsAcrossRestart(t *testing.T) {
 	baseDSN := os.Getenv("POSTGRES_TEST_DSN")
 	if baseDSN == "" {
@@ -65,9 +85,8 @@ func TestAuthPostgreSQLSessionPersistsAcrossRestart(t *testing.T) {
 	ctx := t.Context()
 	dsn := authTestSchema(ctx, t, baseDSN)
 	logger := slog.New(slog.DiscardHandler)
-	const signingKey = "auth-postgresql-signing-key"
 
-	first := &authSvc{signingKey: signingKey}
+	first := &authSvc{jwtPrivateKey: authTestJWTPrivateKeyPEM}
 	first.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "postgres", DSN: dsn}, Maintenance: true})
 	firstMux := http.NewServeMux()
 	require.NoError(t, first.Register(firstMux, logger))
@@ -78,7 +97,7 @@ func TestAuthPostgreSQLSessionPersistsAcrossRestart(t *testing.T) {
 	require.NoError(t, first.store.AuthSessions().Create(ctx, session))
 	require.NoError(t, first.Close())
 
-	second := &authSvc{signingKey: signingKey}
+	second := &authSvc{jwtPrivateKey: authTestJWTPrivateKeyPEM}
 	second.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "postgres", DSN: dsn}, Maintenance: true})
 	secondMux := http.NewServeMux()
 	require.NoError(t, second.Register(secondMux, logger))
@@ -97,8 +116,30 @@ func TestAuthPostgreSQLSessionPersistsAcrossRestart(t *testing.T) {
 	assert.True(t, status.Msg.GetInitialized())
 }
 
+// REQ-065 AC-065-01: cmd/auth is the only service holding the Ed25519 signing
+// key, and a missing or non-Ed25519 key must fail startup. The regression this
+// pins is the previous dev contract: dev-up minted 64 random bytes, base64
+// encoded, as the HS256 secret. That material must no longer configure a signing
+// manager — otherwise the AC would pass on paper while the process still ran on
+// a symmetric key.
+func TestAuthRegisterFailsClosedOnNonEd25519Key(t *testing.T) {
+	legacy := make([]byte, 64)
+	_, err := rand.Read(legacy)
+	require.NoError(t, err)
+
+	svc := &authSvc{jwtPrivateKey: base64.StdEncoding.EncodeToString(legacy)}
+	svc.Configure(&config.ServiceConfig{
+		Database: config.DatabaseConfig{Driver: "sqlite", DSN: t.TempDir() + "/auth.db"},
+	})
+
+	err = svc.Register(http.NewServeMux(), slog.New(slog.DiscardHandler))
+	require.Error(t, err, "the legacy symmetric key format must not configure a signing manager")
+	assert.Contains(t, err.Error(), "jwt signing key")
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+}
+
 func TestAuthDatabaseOnlySessionLifecycle(t *testing.T) {
-	svc := &authSvc{signingKey: "auth-database-only-signing-key"}
+	svc := &authSvc{jwtPrivateKey: authTestJWTPrivateKeyPEM}
 	svc.Configure(&config.ServiceConfig{
 		Database: config.DatabaseConfig{Driver: "sqlite", DSN: t.TempDir() + "/auth.db"},
 		Redis:    config.RedisConfig{},
@@ -130,7 +171,7 @@ func TestAuthDatabaseOnlySessionLifecycle(t *testing.T) {
 func TestAuthRedisSessionAdapterLifecycle(t *testing.T) {
 	mini := miniredis.RunT(t)
 	dbPath := t.TempDir() + "/auth.db"
-	svc := &authSvc{signingKey: "auth-redis-signing-key"}
+	svc := &authSvc{jwtPrivateKey: authTestJWTPrivateKeyPEM}
 	svc.Configure(&config.ServiceConfig{
 		Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath},
 		Redis:    config.RedisConfig{Address: mini.Addr()},

@@ -29,18 +29,26 @@ configMapGenerator:
     namespace: release-manager-dev
     files:
       - configs/notification-sink.dev.yaml
-# D3: the JWT signing key secret is sourced by dev-up before apply — local
-# profile generates/reuses data/dev-jwt/jwt-signing-key.pem (0600); the ci
-# profile writes the DEV_JWT_SIGNING_KEY env value to the same path
-# transiently (removed right after apply, never persisted). kustomize names
-# the Secret release-manager-jwt-<hash> and rewrites every reference in the
-# built manifest, so a rotated key changes the hash and rolls the consuming
-# Deployments automatically.
+# REQ-065 AC-065-01 / D1=A: the management-plane JWT is EdDSA (Ed25519), so the
+# two halves travel as two Secrets — the private key only to cmd/auth, the
+# public key only to cmd/orchestrator. Splitting them puts least privilege in
+# the manifest itself: webhook/notifier mount neither (they never verified
+# tokens), and a compromised verifier holds no signing material.
+# dev-up sources these before apply — the local profile generates/reuses
+# data/dev-jwt/jwt-{private,public}-key.pem (0700 dir) through the devseed
+# helper; the ci profile materializes DEV_JWT_PRIVATE_KEY transiently (removed
+# right after apply, never persisted). kustomize names each Secret
+# <name>-<hash> and rewrites every reference in the built manifest, so a rotated
+# key changes the hash and rolls only the consuming Deployment.
 secretGenerator:
-  - name: release-manager-jwt
+  - name: release-manager-jwt-private
     namespace: release-manager-dev
     files:
-      - JWT_SIGNING_KEY=../../../data/dev-jwt/jwt-signing-key.pem
+      - JWT_PRIVATE_KEY=../../../data/dev-jwt/jwt-private-key.pem
+  - name: release-manager-jwt-public
+    namespace: release-manager-dev
+    files:
+      - JWT_PUBLIC_KEY=../../../data/dev-jwt/jwt-public-key.pem
   # 批次3 D2 (AC-065-33): the bundle ingress service token travels through
   # this Secret into the webhook Deployment (sender side, env
   # DEV_WEBHOOK_SERVICE_TOKEN) and the orchestrator Deployment (verifier

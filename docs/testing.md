@@ -208,7 +208,7 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 
 `e2e` job 的触发条件是 `github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run-e2e)`，
 并设 `DEV_PROFILE=ci`、`E2E_RUN_ID`、`E2E_ENVIRONMENT=ci` 与 9 个 repository secret（4 个账号密码 +
-`DEV_JWT_SIGNING_KEY` + `DEV_WEBHOOK_SERVICE_TOKEN` + `DEV_M_TLS_CA_KEY`/`DEV_M_TLS_CA_CERT` +
+`DEV_JWT_PRIVATE_KEY`（PKCS#8 Ed25519 PEM；REQ-065 AC-065-01，公钥由 devseed helper 派生）+ `DEV_WEBHOOK_SERVICE_TOKEN` + `DEV_M_TLS_CA_KEY`/`DEV_M_TLS_CA_CERT` +
 `DEV_TRUST_ROOT_PRIVATE_KEY`）。清理兜底在 `if: always()` 的 post-step 执行，失败/取消也会尝试拆环境。
 
 关于 D-034：该 job 曾因上述 secret 未配置、而原 `if:` 会在 push main 时并行独立执行，被**临时**

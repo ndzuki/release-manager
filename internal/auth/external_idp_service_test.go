@@ -37,7 +37,7 @@ func newExternalServiceTest(t *testing.T, provider ExternalIdP, cfg ExternalIden
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, st.Close()) })
 
-	jwt := NewJWTManager([]byte("test-signing-key-long-enough"), time.Minute, time.Hour)
+	jwt := NewJWTManager(testJWTPrivateKey, time.Minute, time.Hour)
 	service := NewExternalIdentityService(st, jwt, map[string]ExternalIdP{provider.Provider(): provider}, cfg, slog.Default())
 	return service, st
 }

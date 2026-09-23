@@ -64,7 +64,7 @@ func TestAuthInterceptor_PreviouslyUnmappedProcedures(t *testing.T) {
 	enforcer, err := NewEnforcer(st, logger)
 	require.NoError(t, err)
 	require.NoError(t, enforcer.LoadPolicies(ctx))
-	jwtManager := NewJWTManager([]byte("unmapped-signing-key"), time.Hour, time.Hour)
+	jwtManager := NewJWTManager(testJWTPrivateKey, time.Hour, time.Hour)
 	interceptor := NewAuthInterceptor(jwtManager, st, enforcer, map[string]bool{}, logger)
 	call := interceptor(func(_ context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
 		return connect.NewResponse(&orchestratorv1.CheckEmergencyConflictResponse{}), nil
