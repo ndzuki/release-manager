@@ -143,17 +143,31 @@ async function onConfirm(): Promise<void> {
       />
 
       <template v-if="selectedTarget">
-        <h2>选择容器与制品</h2>
-        <EmergencyArtifactSelector
-          :containers="selectedTarget.containers"
-          :selected-container="store.selectedContainer"
-          :artifacts="store.artifacts"
-          :selected-artifact-id="store.selectedArtifact?.id ?? null"
-          :loading="store.loadingArtifacts"
-          :error="store.loadError?.message ?? null"
-          @select-container="store.selectContainer"
-          @select-artifact="onSelectArtifact"
-        />
+        <!--
+          The container/artifact picker is only meaningful when the read model
+          actually carries container data, and it does not yet: the target API
+          fills CurrentReplicas with a sentinel and leaves Containers empty
+          because release_inventory has no workload field values (TASK-168).
+          Rendering the picker anyway produced a dead dropdown that looked
+          usable while the target card beside it already reported the image
+          capability as unavailable. State that plainly until observation lands.
+        -->
+        <template v-if="selectedTarget.containers.length > 0">
+          <h2>选择容器与制品</h2>
+          <EmergencyArtifactSelector
+            :containers="selectedTarget.containers"
+            :selected-container="store.selectedContainer"
+            :artifacts="store.artifacts"
+            :selected-artifact-id="store.selectedArtifact?.id ?? null"
+            :loading="store.loadingArtifacts"
+            :error="store.loadError?.message ?? null"
+            @select-container="store.selectContainer"
+            @select-artifact="onSelectArtifact"
+          />
+        </template>
+        <p v-else class="unavailable-notice" role="status">
+          镜像变更暂不可用：平台尚未采集到该工作负载的容器信息，因此无法选择容器与制品。
+        </p>
 
         <h2>填写变更信息</h2>
         <EmergencyChangeForm
@@ -202,6 +216,7 @@ async function onConfirm(): Promise<void> {
 .conflict-block { display: grid; gap: 0.75rem; padding: 1rem; border: 1px solid #fde68a; border-radius: 0.5rem; background: #fffbeb; }
 .emergency-flow { display: grid; gap: 1.25rem; }
 .submit-row { display: flex; justify-content: flex-end; }
+.unavailable-notice { margin: 0; padding: 0.75rem 1rem; border: 1px solid #e2e8f0; border-radius: 0.5rem; background: #f8fafc; color: #475569; }
 .primary { padding: 0.6rem 1.25rem; border: 0; border-radius: 0.375rem; background: #dc2626; color: #fff; }
 .primary:disabled { background: #fca5a5; cursor: not-allowed; }
 </style>
