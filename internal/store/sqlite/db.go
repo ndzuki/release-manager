@@ -1543,6 +1543,15 @@ var migrationStatements = []string{
 	`ALTER TABLE release_inventory ADD COLUMN workload_name TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE release_inventory ADD COLUMN workload_namespace TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE release_inventory ADD COLUMN workload_uid TEXT NOT NULL DEFAULT ''`,
+	// TASK-168 (REQ-058 C1/R1): observed workload field projection reported by
+	// the operator; mirrors migrations/000030_observed_workload.up.sql. The two
+	// JSON columns use the TEXT-encoded JSON convention (same as
+	// promotion_mappings); observed_replicas/observed_at stay NULL until an
+	// observation arrives. Empty list/map and NULL both mean "not observed".
+	`ALTER TABLE release_inventory ADD COLUMN observed_containers TEXT NOT NULL DEFAULT '[]'`,
+	`ALTER TABLE release_inventory ADD COLUMN observed_image_refs TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE release_inventory ADD COLUMN observed_replicas INTEGER`,
+	`ALTER TABLE release_inventory ADD COLUMN observed_at TEXT`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_cluster ON release_inventory(customer_id, cluster_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_status ON release_inventory(inventory_status)`,
 

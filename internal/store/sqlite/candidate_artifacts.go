@@ -60,8 +60,17 @@ func (s *candidateArtifactStore) Get(ctx context.Context, id string) (*store.Can
 	return scanCandidateArtifact(s.db.QueryRowContext(ctx, candidateArtifactSelect+` WHERE id = ?`, id))
 }
 
+// ListValidated returns the candidate artifacts that passed validation.
+//
+// G11 dual-engine contract (TASK-168 follow-up): "validated" means the artifact
+// passed validation, NOT that it currently has a resolvable location. This
+// engine has no location table, so validated_at IS NOT NULL is the definition
+// the PostgreSQL engine must match
+// (internal/store/postgres/candidate_artifacts.go). The ordering
+// (validated_at DESC, id ASC) is also part of the contract: it is deterministic
+// in both engines.
 func (s *candidateArtifactStore) ListValidated(ctx context.Context) ([]*store.CandidateArtifact, error) {
-	rows, err := s.db.QueryContext(ctx, candidateArtifactSelect+` WHERE validated_at IS NOT NULL ORDER BY validated_at DESC`)
+	rows, err := s.db.QueryContext(ctx, candidateArtifactSelect+` WHERE validated_at IS NOT NULL ORDER BY validated_at DESC, id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list validated candidate artifacts: %w", err)
 	}

@@ -25,12 +25,17 @@ const inventorySelectColumns = `customer_id, cluster_id, release_definition_id, 
 	revision, status, values_digest, observed_bundle_digest, observed_chart_digest,
 	observed_effective_values_digest, observed_manifest_digest, live_status, last_operation_id,
 	inventory_status, last_sync_id, snapshot_version,
-	workload_kind, workload_name, workload_namespace, workload_uid, created_at, updated_at`
+	workload_kind, workload_name, workload_namespace, workload_uid,
+	observed_containers, observed_image_refs, observed_replicas, observed_at,
+	created_at, updated_at`
 
 // scanInventoryRow decodes one row selected with inventorySelectColumns.
 func scanInventoryRow(scanner interface{ Scan(dest ...any) error }) (*store.ReleaseInventory, error) {
 	var item store.ReleaseInventory
 	var createdAt, updatedAt string
+	var observedContainers, observedImageRefs sql.NullString
+	var observedReplicas sql.NullInt32
+	var observedAt sql.NullTime
 	if err := scanner.Scan(
 		&item.CustomerID, &item.ClusterID, &item.ReleaseDefinitionID, &item.Namespace, &item.ReleaseName,
 		&item.Chart, &item.ChartVersion, &item.Revision, &item.Status, &item.ValuesDigest,
@@ -38,12 +43,21 @@ func scanInventoryRow(scanner interface{ Scan(dest ...any) error }) (*store.Rele
 		&item.ObservedManifestDigest, &item.LiveStatus, &item.LastOperationID, &item.InventoryStatus, &item.LastSyncID,
 		&item.SnapshotVersion,
 		&item.WorkloadKind, &item.WorkloadName, &item.WorkloadNamespace, &item.WorkloadUID,
+		&observedContainers, &observedImageRefs, &observedReplicas, &observedAt,
 		&createdAt, &updatedAt,
 	); err != nil {
 		return nil, err
 	}
 	item.CreatedAt, _ = time.Parse(time.RFC3339, createdAt) //nolint:errcheck // stored timestamps always valid RFC3339
 	item.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt) //nolint:errcheck // stored timestamps always valid RFC3339
+	item.ObservedContainers = decodeObservedContainers(observedContainers)
+	item.ObservedImageRefs = decodeObservedImageRefs(observedImageRefs)
+	if observedReplicas.Valid {
+		item.ObservedReplicas = &observedReplicas.Int32
+	}
+	if observedAt.Valid {
+		item.ObservedAt = observedAt.Time.UTC()
+	}
 	return &item, nil
 }
 
@@ -55,12 +69,22 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 	}
 	item.UpdatedAt = time.Now().UTC()
 
+	observedContainers, err := encodeObservedContainers(item.ObservedContainers)
+	if err != nil {
+		return err
+	}
+	observedImageRefs, err := encodeObservedImageRefs(item.ObservedImageRefs)
+	if err != nil {
+		return err
+	}
+
 	const stmt = `INSERT INTO release_inventory AS current_inventory
 		(customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version, revision, status,
 		 values_digest, observed_bundle_digest, observed_chart_digest, observed_effective_values_digest,
 		 observed_manifest_digest, live_status, last_operation_id, inventory_status, last_sync_id, snapshot_version,
-		 workload_kind, workload_name, workload_namespace, workload_uid, created_at, updated_at)
-	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 workload_kind, workload_name, workload_namespace, workload_uid,
+		 observed_containers, observed_image_refs, observed_replicas, observed_at, created_at, updated_at)
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	 ON CONFLICT(customer_id, cluster_id, namespace, release_name) DO UPDATE SET
 		release_definition_id = COALESCE(NULLIF(excluded.release_definition_id, ''), current_inventory.release_definition_id),
 		chart = excluded.chart,
@@ -81,15 +105,20 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 		workload_name = COALESCE(NULLIF(excluded.workload_name, ''), current_inventory.workload_name),
 		workload_namespace = COALESCE(NULLIF(excluded.workload_namespace, ''), current_inventory.workload_namespace),
 		workload_uid = COALESCE(NULLIF(excluded.workload_uid, ''), current_inventory.workload_uid),
+		observed_containers = CASE WHEN excluded.observed_containers = '[]'::jsonb THEN current_inventory.observed_containers ELSE excluded.observed_containers END,
+		observed_image_refs = CASE WHEN excluded.observed_image_refs = '{}'::jsonb THEN current_inventory.observed_image_refs ELSE excluded.observed_image_refs END,
+		observed_replicas = COALESCE(excluded.observed_replicas, current_inventory.observed_replicas),
+		observed_at = COALESCE(excluded.observed_at, current_inventory.observed_at),
 		updated_at = excluded.updated_at`
 
-	_, err := s.gorm.ExecContext(ctx, stmt,
+	_, err = s.gorm.ExecContext(ctx, stmt,
 		item.CustomerID, item.ClusterID, item.ReleaseDefinitionID, item.Namespace, item.ReleaseName,
 		item.Chart, item.ChartVersion, item.Revision, item.Status, item.ValuesDigest,
 		item.ObservedBundleDigest, item.ObservedChartDigest, item.ObservedEffectiveValuesDigest,
 		item.ObservedManifestDigest, item.LiveStatus, item.LastOperationID, string(item.InventoryStatus),
 		item.LastSyncID, item.SnapshotVersion,
 		item.WorkloadKind, item.WorkloadName, item.WorkloadNamespace, item.WorkloadUID,
+		observedContainers, observedImageRefs, observedReplicasValue(item.ObservedReplicas), observedAtValue(item.ObservedAt),
 		item.CreatedAt.UTC().Format(time.RFC3339), now,
 	)
 	return err
@@ -206,6 +235,115 @@ func (s *inventoryStore) UpdateWorkloadIdentity(ctx context.Context, customerID,
 		return store.ErrNotFound
 	}
 	return nil
+}
+
+// UpdateWorkloadObservation overwrites the observed workload field projection
+// on the row located by the inventory unique key (TASK-168, REQ-058 C1/R1).
+// Returns store.ErrNotFound when the row does not exist — an observation is
+// never inserted for releases the inventory does not know.
+func (s *inventoryStore) UpdateWorkloadObservation(ctx context.Context, customerID, clusterID, namespace, releaseName string, observation store.WorkloadObservation) error {
+	containers, err := encodeObservedContainers(observation.Containers)
+	if err != nil {
+		return err
+	}
+	imageRefs, err := encodeObservedImageRefs(observation.ImageRefs)
+	if err != nil {
+		return err
+	}
+	result, err := s.gorm.ExecContext(ctx, `
+		UPDATE release_inventory
+		SET observed_containers = ?, observed_image_refs = ?, observed_replicas = ?, observed_at = ?, updated_at = ?
+		WHERE customer_id = ? AND cluster_id = ? AND namespace = ? AND release_name = ?`,
+		containers, imageRefs, observedReplicasValue(observation.Replicas), observedAtValue(observation.ObservedAt),
+		time.Now().UTC().Format(time.RFC3339),
+		customerID, clusterID, namespace, releaseName,
+	)
+	if err != nil {
+		return fmt.Errorf("update workload observation: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update workload observation rows: %w", err)
+	}
+	if affected == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// encodeObservedContainers JSON-encodes the observed container names. A nil or
+// empty slice encodes to "[]" — the column default and the "not observed"
+// sentinel the upsert preservation relies on.
+func encodeObservedContainers(containers []string) (string, error) {
+	if len(containers) == 0 {
+		return "[]", nil
+	}
+	payload, err := json.Marshal(containers)
+	if err != nil {
+		return "", fmt.Errorf("encode observed containers: %w", err)
+	}
+	return string(payload), nil
+}
+
+// encodeObservedImageRefs JSON-encodes the observed image refs. A nil or empty
+// map encodes to "{}" (the "not observed" sentinel).
+func encodeObservedImageRefs(imageRefs map[string]string) (string, error) {
+	if len(imageRefs) == 0 {
+		return "{}", nil
+	}
+	payload, err := json.Marshal(imageRefs)
+	if err != nil {
+		return "", fmt.Errorf("encode observed image refs: %w", err)
+	}
+	return string(payload), nil
+}
+
+// decodeObservedContainers decodes the JSON container list. A NULL, empty or
+// malformed value decodes to nil ("not observed") rather than failing the row
+// read: an observation is best-effort data and must never make the inventory
+// unreadable. A bad value fails closed by being dropped, never by being
+// invented.
+func decodeObservedContainers(raw sql.NullString) []string {
+	if !raw.Valid || raw.String == "" || raw.String == "[]" {
+		return nil
+	}
+	var containers []string
+	if err := json.Unmarshal([]byte(raw.String), &containers); err != nil {
+		return nil
+	}
+	return containers
+}
+
+// decodeObservedImageRefs decodes the JSON image-ref map with the same
+// fail-closed rules as decodeObservedContainers.
+func decodeObservedImageRefs(raw sql.NullString) map[string]string {
+	if !raw.Valid || raw.String == "" || raw.String == "{}" {
+		return nil
+	}
+	var imageRefs map[string]string
+	if err := json.Unmarshal([]byte(raw.String), &imageRefs); err != nil {
+		return nil
+	}
+	return imageRefs
+}
+
+// observedReplicasValue converts the optional replica count to a SQL value:
+// nil ("not observed") becomes NULL so it cannot be mistaken for a real zero.
+func observedReplicasValue(replicas *int32) any {
+	if replicas == nil {
+		return nil
+	}
+	return *replicas
+}
+
+// observedAtValue converts the observation time to a SQL value: the zero time
+// ("not observed") becomes NULL, otherwise RFC3339 text (the format every
+// timestamp in this engine is written with).
+func observedAtValue(observedAt time.Time) any {
+	if observedAt.IsZero() {
+		return nil
+	}
+	return observedAt.UTC().Format(time.RFC3339)
 }
 
 // MarkMissing sets InventoryMissing for all rows in a cluster not present in the given set.

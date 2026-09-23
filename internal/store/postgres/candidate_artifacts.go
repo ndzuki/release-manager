@@ -114,15 +114,28 @@ func (s *candidateArtifactStore) UpsertTx(tx *gorm.DB, candidate *store.Candidat
 		CreatedAt    time.Time  `gorm:"column:created_at"`
 		LastSeenAt   time.Time  `gorm:"column:last_seen_at"`
 		OrphanedAt   *time.Time `gorm:"column:orphaned_at"`
+		ValidatedAt  *time.Time `gorm:"column:validated_at"`
 	}
-	row := candidateRow{ID: candidate.ID, ArtifactType: string(candidate.ArtifactType), Digest: candidate.Digest, CreatedAt: candidate.CreatedAt.UTC(), LastSeenAt: candidate.LastSeenAt.UTC(), OrphanedAt: candidate.OrphanedAt}
+	row := candidateRow{
+		ID: candidate.ID, ArtifactType: string(candidate.ArtifactType), Digest: candidate.Digest,
+		CreatedAt: candidate.CreatedAt.UTC(), LastSeenAt: candidate.LastSeenAt.UTC(),
+		OrphanedAt: candidate.OrphanedAt, ValidatedAt: candidate.ValidatedAt,
+	}
+	// validated_at is part of the domain record: SQLite's Create persists it
+	// (internal/store/sqlite/candidate_artifacts.go), so dropping it here was a
+	// dual-engine divergence that left PostgreSQL unable to ever satisfy
+	// ListValidated's validated_at predicate. COALESCE mirrors SQLite: an upsert
+	// that carries no validation timestamp must not clear an existing one.
 	if err := tx.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "digest"}, {Name: "artifact_type"}},
-		DoUpdates: clause.Assignments(map[string]any{"last_seen_at": candidate.LastSeenAt.UTC()}),
+		Columns: []clause.Column{{Name: "digest"}, {Name: "artifact_type"}},
+		DoUpdates: clause.Assignments(map[string]any{
+			"last_seen_at": candidate.LastSeenAt.UTC(),
+			"validated_at": gorm.Expr("COALESCE(excluded.validated_at, candidate_artifacts.validated_at)"),
+		}),
 	}, clause.Returning{}).Table("candidate_artifacts").Create(&row).Error; err != nil {
 		return fmt.Errorf("upsert candidate artifact: %w", err)
 	}
-	candidate.ID, candidate.CreatedAt, candidate.LastSeenAt, candidate.OrphanedAt = row.ID, row.CreatedAt, row.LastSeenAt, row.OrphanedAt
+	candidate.ID, candidate.CreatedAt, candidate.LastSeenAt, candidate.OrphanedAt, candidate.ValidatedAt = row.ID, row.CreatedAt, row.LastSeenAt, row.OrphanedAt, row.ValidatedAt
 	return nil
 }
 
@@ -130,8 +143,19 @@ func (s *candidateArtifactStore) Get(ctx context.Context, id string) (*store.Can
 	return scanCandidateArtifact(s.gorm.QueryRowContext(ctx, candidateArtifactSelect+` WHERE ca.id = ?`, id))
 }
 
+// ListValidated returns the candidate artifacts that passed validation.
+//
+// G11 dual-engine alignment (TASK-168 follow-up): "validated" means the
+// artifact passed validation, NOT that it currently has a resolvable location.
+// The predicate is therefore validated_at IS NOT NULL, exactly as in
+// internal/store/sqlite/candidate_artifacts.go. Do not "fix" this back to a
+// candidate_artifact_locations subset: that would hide artifacts which passed
+// validation but have no location row (yet, or ever) — a missing fetch address,
+// not a failed validation — and would make the two engines return different
+// result sets for the same data. The ordering (validated_at DESC, id ASC) is
+// also part of the contract: it is deterministic in both engines.
 func (s *candidateArtifactStore) ListValidated(ctx context.Context) ([]*store.CandidateArtifact, error) {
-	rows, err := s.gorm.QueryContext(ctx, candidateArtifactSelect+` WHERE ca.id IN (SELECT artifact_id FROM candidate_artifact_locations) ORDER BY ca.created_at DESC`)
+	rows, err := s.gorm.QueryContext(ctx, candidateArtifactSelect+` WHERE ca.validated_at IS NOT NULL ORDER BY ca.validated_at DESC, ca.id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list candidate artifacts: %w", err)
 	}
@@ -220,7 +244,7 @@ func (s *candidateArtifactStore) DeleteOrphanBefore(ctx context.Context, cutoff 
 }
 
 const candidateArtifactSelect = `
-	SELECT ca.id, ca.artifact_type, loc.ref, ca.digest, ca.created_at, ca.last_seen_at, ca.orphaned_at, loc.source_id
+	SELECT ca.id, ca.artifact_type, loc.ref, ca.digest, ca.created_at, ca.last_seen_at, ca.orphaned_at, ca.validated_at, loc.source_id
 	FROM candidate_artifacts AS ca
 	LEFT JOIN LATERAL (
 		SELECT ref, source_id FROM candidate_artifact_locations
@@ -231,7 +255,8 @@ func scanCandidateArtifact(row interface{ Scan(...any) error }) (*store.Candidat
 	var artifact store.CandidateArtifact
 	var artifactType string
 	var ref, sourceID sql.NullString
-	if err := row.Scan(&artifact.ID, &artifactType, &ref, &artifact.Digest, &artifact.CreatedAt, &artifact.LastSeenAt, &artifact.OrphanedAt, &sourceID); err != nil {
+	var validatedAt sql.NullTime
+	if err := row.Scan(&artifact.ID, &artifactType, &ref, &artifact.Digest, &artifact.CreatedAt, &artifact.LastSeenAt, &artifact.OrphanedAt, &validatedAt, &sourceID); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, store.ErrNotFound
 		}
@@ -249,6 +274,10 @@ func scanCandidateArtifact(row interface{ Scan(...any) error }) (*store.Candidat
 	if artifact.OrphanedAt != nil {
 		value := artifact.OrphanedAt.UTC()
 		artifact.OrphanedAt = &value
+	}
+	if validatedAt.Valid {
+		value := validatedAt.Time.UTC()
+		artifact.ValidatedAt = &value
 	}
 	return &artifact, nil
 }

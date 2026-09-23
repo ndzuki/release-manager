@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubernetesfake "k8s.io/client-go/kubernetes/fake"
 
@@ -259,6 +260,143 @@ func waitForStreamSend(t *testing.T, stream *scriptedStream, n int, runDone <-ch
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
+}
+
+// TASK-168 W2 (operator data plane): the identity report also carries the
+// observed mutable workload fields — container names, each container's current
+// image ref, the replica count and the read timestamp — projected from the same
+// live object that supplies the UID (no extra cluster API call).
+func TestAgent_WorkloadIdentityReportCarriesObservation(t *testing.T) {
+	three := int32(3)
+	zero := int32(0)
+	kube := kubernetesfake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "apps", UID: "uid-api"},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: &three,
+				Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{
+					{Name: "api", Image: "registry.example/team/api:1.0.0"},
+					{Name: "sidecar", Image: "registry.example/team/sidecar:2.0.0"},
+				}}},
+			},
+		},
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "scaled-to-zero", Namespace: "apps", UID: "uid-zero"},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: &zero,
+				Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{
+					{Name: "api", Image: "registry.example/team/api:1.0.0"},
+				}}},
+			},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-agent", Namespace: "apps", UID: "uid-daemon"},
+			Spec: appsv1.DaemonSetSpec{
+				Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{
+					{Name: "agent", Image: "registry.example/team/agent:3.0.0"},
+				}}},
+			},
+		},
+	)
+	agent, err := New(Config{
+		Client: noopClient{}, Engine: &recordingEngine{}, Store: newMemoryStore(),
+		SessionID: "session-1", OperatorID: "operator-1", KubeClient: kube,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	require.NoError(t, err)
+
+	items := agent.buildWorkloadIdentityItems(t.Context(), &helmengine.Release{
+		Name: "example", Namespace: "apps",
+		Workloads: []helmengine.WorkloadSummary{
+			{Kind: "Deployment", Name: "api", Namespace: "apps"},
+			{Kind: "Deployment", Name: "scaled-to-zero", Namespace: "apps"},
+			{Kind: "DaemonSet", Name: "node-agent", Namespace: "apps"},
+		},
+	})
+	require.Len(t, items, 3)
+	byName := make(map[string]*operatorv1.WorkloadIdentityItem, len(items))
+	for _, item := range items {
+		byName[item.GetName()] = item
+	}
+
+	api := byName["api"]
+	require.NotNil(t, api)
+	assert.Equal(t, "uid-api", api.GetUid())
+	assert.Equal(t, []string{"api", "sidecar"}, api.GetContainers())
+	assert.Equal(t, map[string]string{
+		"api":     "registry.example/team/api:1.0.0",
+		"sidecar": "registry.example/team/sidecar:2.0.0",
+	}, api.GetCurrentImageRefs())
+	require.NotNil(t, api.CurrentReplicas, "an observed replica count must keep proto presence")
+	assert.Equal(t, int32(3), api.GetCurrentReplicas())
+	require.NotNil(t, api.GetObservedAt(), "the observation must be timestamped")
+	assert.False(t, api.GetObservedAt().AsTime().IsZero())
+
+	scaled := byName["scaled-to-zero"]
+	require.NotNil(t, scaled)
+	require.NotNil(t, scaled.CurrentReplicas, "a real observed 0 must not collapse into absent")
+	assert.Equal(t, int32(0), scaled.GetCurrentReplicas())
+
+	daemon := byName["node-agent"]
+	require.NotNil(t, daemon)
+	assert.Nil(t, daemon.CurrentReplicas, "a DaemonSet has no replica count: absent, never 0")
+	assert.Equal(t, []string{"agent"}, daemon.GetContainers())
+	require.NotNil(t, daemon.GetObservedAt())
+}
+
+// TASK-168 W2 (periodic trigger): observation reporting must not depend on a
+// release write happening. Run re-reports on a fixed cadence, so the
+// orchestrator's 15-minute staleness window cannot expire on a cluster that
+// simply stopped deploying.
+func TestAgent_PeriodicObservationReport(t *testing.T) {
+	engine := &recordingEngine{
+		list: []*helmengine.ReleaseListItem{{Namespace: "apps", Name: "example", Revision: 1}},
+		statusRelease: &helmengine.Release{
+			Name: "example", Namespace: "apps", Revision: 1, Status: "deployed",
+			Workloads: []helmengine.WorkloadSummary{{Kind: "Deployment", Name: "api", Namespace: "apps"}},
+		},
+	}
+	kube := kubernetesfake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "apps", UID: "uid-periodic"},
+	})
+	stream := newScriptedStream(&operatorv1.CommandStreamResponse{
+		Payload: &operatorv1.CommandStreamResponse_SessionEstablished{
+			SessionEstablished: &operatorv1.SessionEstablished{SessionId: "session-1"},
+		},
+	})
+	agent, err := New(Config{
+		Client: scriptedClient{stream: stream}, Engine: engine, Store: newMemoryStore(),
+		SessionID: "session-1", OperatorID: "operator-1", KubeClient: kube,
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ObservationInterval: 20 * time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	runDone := make(chan error, 1)
+	go func() { runDone <- agent.Run(ctx) }()
+	// Hello + startup scan report + at least one periodic report. No command is
+	// delivered and no release write happens in between: only the ticker can
+	// produce the third frame.
+	waitForStreamSend(t, stream, 3, runDone)
+	cancel()
+	close(stream.done)
+	require.NoError(t, <-runDone)
+
+	reports := 0
+	stream.mu.Lock()
+	for _, sent := range stream.sent {
+		report := sent.GetWorkloadIdentityReport()
+		if report == nil {
+			continue
+		}
+		reports++
+		require.NotEmpty(t, report.GetItems())
+		assert.NotNil(t, report.GetItems()[0].GetObservedAt(),
+			"every identity report must carry the observation timestamp")
+	}
+	stream.mu.Unlock()
+	assert.GreaterOrEqual(t, reports, 2, "startup scan and the periodic tick must both report")
 }
 
 func TestAgent_InstallReplaysDeployedRelease(t *testing.T) {

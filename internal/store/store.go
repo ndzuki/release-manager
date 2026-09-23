@@ -1721,6 +1721,22 @@ type WorkloadIdentity struct {
 	UID       string
 }
 
+// WorkloadObservation is the observed live-cluster field projection of one
+// workload (TASK-168, REQ-058 C1/R1). It travels on the same operator report as
+// WorkloadIdentity and is persisted on the release_inventory row so the
+// emergency read model can derive real current values (D7=A).
+//
+// Not observed is represented by an empty Containers slice, an empty ImageRefs
+// map, a nil Replicas and a zero ObservedAt; a zero value therefore means "no
+// observation" and must fail closed. Replicas is a pointer because proto3
+// presence distinguishes "not observed" from a real zero.
+type WorkloadObservation struct {
+	Containers []string
+	ImageRefs  map[string]string
+	Replicas   *int32
+	ObservedAt time.Time
+}
+
 // PendingWorkloadIdentity buffers an authoritative identity report whose
 // release_inventory row does not exist yet (REQ-088, D2=A). The unique key
 // (customer_id, cluster_id, namespace, release_name) matches the inventory
@@ -1797,8 +1813,17 @@ type ReleaseInventory struct {
 	WorkloadName      string
 	WorkloadNamespace string
 	WorkloadUID       string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	// Observed workload field projection (TASK-168, REQ-058 C1/R1): the live
+	// container names, their image refs, the replica count and the observation
+	// time reported by the operator. An empty container list or image-ref map,
+	// a nil replica count and a zero ObservedAt all mean "not observed" —
+	// consumers must fail closed and never read them as real current values.
+	ObservedContainers []string
+	ObservedImageRefs  map[string]string
+	ObservedReplicas   *int32
+	ObservedAt         time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // InventorySyncLog records the application of a sync snapshot for idempotency.
@@ -2409,6 +2434,14 @@ type InventoryStore interface {
 	// release_name). Returns ErrNotFound when no such inventory row exists.
 	// Idempotent: reapplying the same identity is a no-op write.
 	UpdateWorkloadIdentity(ctx context.Context, customerID, clusterID, namespace, releaseName string, identity WorkloadIdentity) error
+
+	// UpdateWorkloadObservation overwrites the observed workload field
+	// projection (containers / image refs / replicas / observed_at) on the row
+	// located by (customer_id, cluster_id, namespace, release_name). Returns
+	// ErrNotFound when no such inventory row exists — an observation is never
+	// inserted for a release the inventory does not know. Last write wins; an
+	// inventory sync Upsert never clobbers a previously reported observation.
+	UpdateWorkloadObservation(ctx context.Context, customerID, clusterID, namespace, releaseName string, observation WorkloadObservation) error
 
 	// Query returns one filtered page and validates that an opaque cursor still
 	// belongs to the same scope, filters, and inventory snapshot.

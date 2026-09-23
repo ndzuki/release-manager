@@ -522,6 +522,15 @@ func (x *WorkloadIdentityReport) GetItems() []*WorkloadIdentityItem {
 // (DEPLOYMENT/STATEFUL_SET/DAEMON_SET). namespace is the workload's
 // Kubernetes namespace; release_namespace/release_name locate the Helm
 // release the workload belongs to.
+//
+// Fields 7..11 are the observed field projection (TASK-168, REQ-058 C1/R1):
+// the same report that carries the identity also carries the current container
+// names, their image refs, the replica count and the observation time, so the
+// orchestrator can derive real current values instead of unavailable
+// sentinels. Every field is additive: an older operator that omits them leaves
+// the orchestrator on the fail-closed "not observed" path. Empty containers /
+// current_image_refs and an absent current_replicas mean "not observed", never
+// a real empty value.
 type WorkloadIdentityItem struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	ReleaseNamespace string                 `protobuf:"bytes,1,opt,name=release_namespace,json=releaseNamespace,proto3" json:"release_namespace,omitempty"`
@@ -530,8 +539,24 @@ type WorkloadIdentityItem struct {
 	Name             string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
 	Namespace        string                 `protobuf:"bytes,5,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	Uid              string                 `protobuf:"bytes,6,opt,name=uid,proto3" json:"uid,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Live container names of the workload's pod template, in the order the
+	// operator read them. Empty means "not observed".
+	Containers []string `protobuf:"bytes,7,rep,name=containers,proto3" json:"containers,omitempty"`
+	// Current image ref per container name (key = container name). Empty means
+	// "not observed".
+	CurrentImageRefs map[string]string `protobuf:"bytes,8,rep,name=current_image_refs,json=currentImageRefs,proto3" json:"current_image_refs,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Observed replica count. proto3 explicit presence is required to tell
+	// "not observed" (absent) apart from a real zero (e.g. a scaled-to-zero
+	// Deployment); DaemonSets have no replica count and leave it absent.
+	CurrentReplicas *int32 `protobuf:"varint,9,opt,name=current_replicas,json=currentReplicas,proto3,oneof" json:"current_replicas,omitempty"`
+	// Field 10 is intentionally unused: it is reserved for
+	// current_annotations, whose data plane is deferred (annotation values may
+	// carry sensitive data and need a whitelist decision first — TASK-168).
+	// Time the operator took this observation, used for staleness decisions.
+	// Absent means "not observed".
+	ObservedAt    *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WorkloadIdentityItem) Reset() {
@@ -604,6 +629,34 @@ func (x *WorkloadIdentityItem) GetUid() string {
 		return x.Uid
 	}
 	return ""
+}
+
+func (x *WorkloadIdentityItem) GetContainers() []string {
+	if x != nil {
+		return x.Containers
+	}
+	return nil
+}
+
+func (x *WorkloadIdentityItem) GetCurrentImageRefs() map[string]string {
+	if x != nil {
+		return x.CurrentImageRefs
+	}
+	return nil
+}
+
+func (x *WorkloadIdentityItem) GetCurrentReplicas() int32 {
+	if x != nil && x.CurrentReplicas != nil {
+		return *x.CurrentReplicas
+	}
+	return 0
+}
+
+func (x *WorkloadIdentityItem) GetObservedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ObservedAt
+	}
+	return nil
 }
 
 // RolloutProgress reports observed workload readiness during a standard operation.
@@ -2469,14 +2522,25 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	" \x01(\v2#.operator.v1.WorkloadIdentityReportH\x00R\x16workloadIdentityReportB\t\n" +
 	"\apayload\"Q\n" +
 	"\x16WorkloadIdentityReport\x127\n" +
-	"\x05items\x18\x01 \x03(\v2!.operator.v1.WorkloadIdentityItemR\x05items\"\xbe\x01\n" +
+	"\x05items\x18\x01 \x03(\v2!.operator.v1.WorkloadIdentityItemR\x05items\"\x8c\x04\n" +
 	"\x14WorkloadIdentityItem\x12+\n" +
 	"\x11release_namespace\x18\x01 \x01(\tR\x10releaseNamespace\x12!\n" +
 	"\frelease_name\x18\x02 \x01(\tR\vreleaseName\x12\x12\n" +
 	"\x04kind\x18\x03 \x01(\tR\x04kind\x12\x12\n" +
 	"\x04name\x18\x04 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x05 \x01(\tR\tnamespace\x12\x10\n" +
-	"\x03uid\x18\x06 \x01(\tR\x03uid\"\x87\x01\n" +
+	"\x03uid\x18\x06 \x01(\tR\x03uid\x12\x1e\n" +
+	"\n" +
+	"containers\x18\a \x03(\tR\n" +
+	"containers\x12e\n" +
+	"\x12current_image_refs\x18\b \x03(\v27.operator.v1.WorkloadIdentityItem.CurrentImageRefsEntryR\x10currentImageRefs\x12.\n" +
+	"\x10current_replicas\x18\t \x01(\x05H\x00R\x0fcurrentReplicas\x88\x01\x01\x12;\n" +
+	"\vobserved_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"observedAt\x1aC\n" +
+	"\x15CurrentImageRefsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x13\n" +
+	"\x11_current_replicas\"\x87\x01\n" +
 	"\x0fRolloutProgress\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12!\n" +
 	"\fworkload_ref\x18\x02 \x01(\tR\vworkloadRef\x12\x14\n" +
@@ -2653,7 +2717,7 @@ func file_operator_v1_operator_proto_rawDescGZIP() []byte {
 }
 
 var file_operator_v1_operator_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_operator_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
+var file_operator_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
 var file_operator_v1_operator_proto_goTypes = []any{
 	(AckType)(0),                             // 0: operator.v1.AckType
 	(*EnrollRequest)(nil),                    // 1: operator.v1.EnrollRequest
@@ -2686,11 +2750,12 @@ var file_operator_v1_operator_proto_goTypes = []any{
 	(*GetActiveOperatorSessionResponse)(nil), // 28: operator.v1.GetActiveOperatorSessionResponse
 	(*OperatorSession)(nil),                  // 29: operator.v1.OperatorSession
 	nil,                                      // 30: operator.v1.EnrollRequest.CapabilitiesEntry
-	nil,                                      // 31: operator.v1.Hello.CapabilitiesEntry
-	(*CommandResult)(nil),                    // 32: operator.v1.CommandResult
-	(*v1.ReleaseBundle)(nil),                 // 33: common.v1.ReleaseBundle
-	(*UpgradeCommand)(nil),                   // 34: operator.v1.UpgradeCommand
-	(*timestamppb.Timestamp)(nil),            // 35: google.protobuf.Timestamp
+	nil,                                      // 31: operator.v1.WorkloadIdentityItem.CurrentImageRefsEntry
+	nil,                                      // 32: operator.v1.Hello.CapabilitiesEntry
+	(*CommandResult)(nil),                    // 33: operator.v1.CommandResult
+	(*timestamppb.Timestamp)(nil),            // 34: google.protobuf.Timestamp
+	(*v1.ReleaseBundle)(nil),                 // 35: common.v1.ReleaseBundle
+	(*UpgradeCommand)(nil),                   // 36: operator.v1.UpgradeCommand
 }
 var file_operator_v1_operator_proto_depIdxs = []int32{
 	30, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
@@ -2701,42 +2766,44 @@ var file_operator_v1_operator_proto_depIdxs = []int32{
 	22, // 5: operator.v1.CommandStreamRequest.resync_response:type_name -> operator.v1.ResyncResponse
 	12, // 6: operator.v1.CommandStreamRequest.emergency_ack:type_name -> operator.v1.EmergencyAck
 	13, // 7: operator.v1.CommandStreamRequest.emergency_result:type_name -> operator.v1.EmergencyResult
-	32, // 8: operator.v1.CommandStreamRequest.command_result:type_name -> operator.v1.CommandResult
+	33, // 8: operator.v1.CommandStreamRequest.command_result:type_name -> operator.v1.CommandResult
 	6,  // 9: operator.v1.CommandStreamRequest.rollout_progress:type_name -> operator.v1.RolloutProgress
 	4,  // 10: operator.v1.CommandStreamRequest.workload_identity_report:type_name -> operator.v1.WorkloadIdentityReport
 	5,  // 11: operator.v1.WorkloadIdentityReport.items:type_name -> operator.v1.WorkloadIdentityItem
-	31, // 12: operator.v1.Hello.capabilities:type_name -> operator.v1.Hello.CapabilitiesEntry
-	0,  // 13: operator.v1.Ack.ack_type:type_name -> operator.v1.AckType
-	0,  // 14: operator.v1.EmergencyAck.ack_type:type_name -> operator.v1.AckType
-	15, // 15: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
-	24, // 16: operator.v1.CommandStreamResponse.session_event:type_name -> operator.v1.SessionEvent
-	21, // 17: operator.v1.CommandStreamResponse.resync_request:type_name -> operator.v1.ResyncRequest
-	23, // 18: operator.v1.CommandStreamResponse.duplicate_response:type_name -> operator.v1.DuplicateResponse
-	8,  // 19: operator.v1.CommandStreamResponse.session_established:type_name -> operator.v1.SessionEstablished
-	16, // 20: operator.v1.CommandStreamResponse.emergency_command:type_name -> operator.v1.EmergencyCommand
-	33, // 21: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
-	34, // 22: operator.v1.Command.upgrade:type_name -> operator.v1.UpgradeCommand
-	17, // 23: operator.v1.EmergencyCommand.set_container_image:type_name -> operator.v1.EmergencySetContainerImage
-	18, // 24: operator.v1.EmergencyCommand.set_replicas:type_name -> operator.v1.EmergencySetReplicas
-	19, // 25: operator.v1.EmergencyCommand.set_approved_annotations:type_name -> operator.v1.EmergencySetApprovedAnnotations
-	20, // 26: operator.v1.EmergencySetApprovedAnnotations.entries:type_name -> operator.v1.EmergencyAnnotationEntry
-	29, // 27: operator.v1.GetActiveOperatorSessionResponse.session:type_name -> operator.v1.OperatorSession
-	35, // 28: operator.v1.OperatorSession.started_at:type_name -> google.protobuf.Timestamp
-	35, // 29: operator.v1.OperatorSession.last_heartbeat:type_name -> google.protobuf.Timestamp
-	35, // 30: operator.v1.OperatorSession.expires_at:type_name -> google.protobuf.Timestamp
-	1,  // 31: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
-	25, // 32: operator.v1.OperatorService.RenewCertificate:input_type -> operator.v1.RenewCertificateRequest
-	3,  // 33: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
-	27, // 34: operator.v1.OperatorService.GetActiveOperatorSession:input_type -> operator.v1.GetActiveOperatorSessionRequest
-	2,  // 35: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
-	26, // 36: operator.v1.OperatorService.RenewCertificate:output_type -> operator.v1.RenewCertificateResponse
-	14, // 37: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
-	28, // 38: operator.v1.OperatorService.GetActiveOperatorSession:output_type -> operator.v1.GetActiveOperatorSessionResponse
-	35, // [35:39] is the sub-list for method output_type
-	31, // [31:35] is the sub-list for method input_type
-	31, // [31:31] is the sub-list for extension type_name
-	31, // [31:31] is the sub-list for extension extendee
-	0,  // [0:31] is the sub-list for field type_name
+	31, // 12: operator.v1.WorkloadIdentityItem.current_image_refs:type_name -> operator.v1.WorkloadIdentityItem.CurrentImageRefsEntry
+	34, // 13: operator.v1.WorkloadIdentityItem.observed_at:type_name -> google.protobuf.Timestamp
+	32, // 14: operator.v1.Hello.capabilities:type_name -> operator.v1.Hello.CapabilitiesEntry
+	0,  // 15: operator.v1.Ack.ack_type:type_name -> operator.v1.AckType
+	0,  // 16: operator.v1.EmergencyAck.ack_type:type_name -> operator.v1.AckType
+	15, // 17: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
+	24, // 18: operator.v1.CommandStreamResponse.session_event:type_name -> operator.v1.SessionEvent
+	21, // 19: operator.v1.CommandStreamResponse.resync_request:type_name -> operator.v1.ResyncRequest
+	23, // 20: operator.v1.CommandStreamResponse.duplicate_response:type_name -> operator.v1.DuplicateResponse
+	8,  // 21: operator.v1.CommandStreamResponse.session_established:type_name -> operator.v1.SessionEstablished
+	16, // 22: operator.v1.CommandStreamResponse.emergency_command:type_name -> operator.v1.EmergencyCommand
+	35, // 23: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
+	36, // 24: operator.v1.Command.upgrade:type_name -> operator.v1.UpgradeCommand
+	17, // 25: operator.v1.EmergencyCommand.set_container_image:type_name -> operator.v1.EmergencySetContainerImage
+	18, // 26: operator.v1.EmergencyCommand.set_replicas:type_name -> operator.v1.EmergencySetReplicas
+	19, // 27: operator.v1.EmergencyCommand.set_approved_annotations:type_name -> operator.v1.EmergencySetApprovedAnnotations
+	20, // 28: operator.v1.EmergencySetApprovedAnnotations.entries:type_name -> operator.v1.EmergencyAnnotationEntry
+	29, // 29: operator.v1.GetActiveOperatorSessionResponse.session:type_name -> operator.v1.OperatorSession
+	34, // 30: operator.v1.OperatorSession.started_at:type_name -> google.protobuf.Timestamp
+	34, // 31: operator.v1.OperatorSession.last_heartbeat:type_name -> google.protobuf.Timestamp
+	34, // 32: operator.v1.OperatorSession.expires_at:type_name -> google.protobuf.Timestamp
+	1,  // 33: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
+	25, // 34: operator.v1.OperatorService.RenewCertificate:input_type -> operator.v1.RenewCertificateRequest
+	3,  // 35: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
+	27, // 36: operator.v1.OperatorService.GetActiveOperatorSession:input_type -> operator.v1.GetActiveOperatorSessionRequest
+	2,  // 37: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
+	26, // 38: operator.v1.OperatorService.RenewCertificate:output_type -> operator.v1.RenewCertificateResponse
+	14, // 39: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
+	28, // 40: operator.v1.OperatorService.GetActiveOperatorSession:output_type -> operator.v1.GetActiveOperatorSessionResponse
+	37, // [37:41] is the sub-list for method output_type
+	33, // [33:37] is the sub-list for method input_type
+	33, // [33:33] is the sub-list for extension type_name
+	33, // [33:33] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_operator_v1_operator_proto_init() }
@@ -2757,6 +2824,7 @@ func file_operator_v1_operator_proto_init() {
 		(*CommandStreamRequest_RolloutProgress)(nil),
 		(*CommandStreamRequest_WorkloadIdentityReport)(nil),
 	}
+	file_operator_v1_operator_proto_msgTypes[4].OneofWrappers = []any{}
 	file_operator_v1_operator_proto_msgTypes[13].OneofWrappers = []any{
 		(*CommandStreamResponse_Command)(nil),
 		(*CommandStreamResponse_SessionEvent)(nil),
@@ -2779,7 +2847,7 @@ func file_operator_v1_operator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_operator_v1_operator_proto_rawDesc), len(file_operator_v1_operator_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   31,
+			NumMessages:   32,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
