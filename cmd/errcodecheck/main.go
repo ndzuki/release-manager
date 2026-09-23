@@ -51,10 +51,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The canonical reason-code vocabulary is declared by the contract REQ
+	// (REQ-079), which is a different document from most of the ones being
+	// checked, so derive it from the whole requirement set once.
+	vocabulary, err := errcodes.CanonicalVocabulary(flag.Args())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "errcodecheck: %v\n", err)
+		os.Exit(1)
+	}
+
 	exitCode := 0
 	checked := 0
 	for _, path := range flag.Args() {
-		result, err := errcodes.Check(path, errcodes.Options{RepoRoot: *repo, Exceptions: exceptions})
+		result, err := errcodes.Check(path, errcodes.Options{
+			RepoRoot:   *repo,
+			Exceptions: exceptions,
+			Vocabulary: vocabulary,
+		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "errcodecheck: %s: %v\n", path, err)
 			exitCode = 1
