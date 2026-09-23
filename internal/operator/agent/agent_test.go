@@ -1650,3 +1650,30 @@ func TestAgentSendsNegotiatedHeartbeats(t *testing.T) {
 	close(stream.done)
 	require.NoError(t, <-runDone)
 }
+
+// Regression: an UPGRADE command carrying a preflight stage is a check, so its
+// result must travel as a stage result. Routing the send shape by operation type
+// instead sent it as a typed upgrade result, the centre answered
+// "successful upgrade result requires active snapshot" and dropped the whole
+// CommandStream, and every UPGRADE stalled at preflight. The defect was latent
+// until ADR-024 made UPGRADE's stage rows deliverable.
+func TestResultIsStageShaped(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		command *operatorv1.Command
+		want    bool
+	}{
+		{"upgrade stage command is stage shaped", &operatorv1.Command{OperationType: "UPGRADE", Stage: "artifact"}, true},
+		{"install stage command is stage shaped", &operatorv1.Command{OperationType: "INSTALL", Stage: "render"}, true},
+		{"upgrade execute command is not stage shaped", &operatorv1.Command{OperationType: "UPGRADE"}, false},
+		{"install execute command is not stage shaped", &operatorv1.Command{OperationType: "INSTALL"}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, resultIsStageShaped(tc.command))
+		})
+	}
+}

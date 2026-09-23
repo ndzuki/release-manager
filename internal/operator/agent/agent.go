@@ -644,10 +644,28 @@ func (a *Agent) executeEntry(ctx context.Context, stream Stream, entry *localsto
 		)
 	}
 
-	if command.GetOperationType() == "UPGRADE" {
-		return stream.Send(commandResultRequest(&command, result))
+	// The send shape follows the same rule as execution: a command carrying a
+	// preflight stage is a check, whatever its operation type. Selecting the shape
+	// by operation type sent an UPGRADE stage result as a typed upgrade result,
+	// and the centre rejected the whole CommandStream request with
+	// "successful upgrade result requires active snapshot" (service.go) and
+	// dropped the stream -- every UPGRADE then stalled at preflight. That defect
+	// was latent while UPGRADE's stage rows were record-only; ADR-024 made them
+	// deliverable and exposed it.
+	return sendCommandResult(stream, &command, result, resultJSON)
+}
+
+// sendCommandResult reports one command's result in the shape its command
+// requires. It is separate from executeEntry so the shape rule lives in one
+// place and the executor's cyclomatic complexity does not grow with it.
+func sendCommandResult(stream Stream, command *operatorv1.Command, result Result, resultJSON []byte) error {
+	if resultIsStageShaped(command) {
+		return stream.Send(resultRequest(command, result, resultJSON))
 	}
-	return stream.Send(resultRequest(&command, result, resultJSON))
+	if command.GetOperationType() == "UPGRADE" {
+		return stream.Send(commandResultRequest(command, result))
+	}
+	return stream.Send(resultRequest(command, result, resultJSON))
 }
 
 // executeCommand routes one delivered command. A command carrying a preflight
@@ -1354,6 +1372,14 @@ func (a *Agent) finishFailure(ctx context.Context, stream Stream, entry *localst
 		return stream.Send(commandResultRequest(command, result))
 	}
 	return stream.Send(resultRequest(command, result, resultJSON))
+}
+
+// resultIsStageShaped reports whether a command's result must travel as a stage
+// result rather than as a typed operation result. A command carrying a preflight
+// stage is a check whatever its operation type, so the send shape follows the
+// same rule as execution.
+func resultIsStageShaped(command *operatorv1.Command) bool {
+	return command.GetStage() != ""
 }
 
 func commandResultRequest(command *operatorv1.Command, result Result) *operatorv1.CommandStreamRequest {
