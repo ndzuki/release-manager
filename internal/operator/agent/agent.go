@@ -652,13 +652,20 @@ func (a *Agent) executeEntry(ctx context.Context, stream Stream, entry *localsto
 	// dropped the stream -- every UPGRADE then stalled at preflight. That defect
 	// was latent while UPGRADE's stage rows were record-only; ADR-024 made them
 	// deliverable and exposed it.
-	if resultIsStageShaped(&command) {
-		return stream.Send(resultRequest(&command, result, resultJSON))
+	return sendCommandResult(stream, &command, result, resultJSON)
+}
+
+// sendCommandResult reports one command's result in the shape its command
+// requires. It is separate from executeEntry so the shape rule lives in one
+// place and the executor's cyclomatic complexity does not grow with it.
+func sendCommandResult(stream Stream, command *operatorv1.Command, result Result, resultJSON []byte) error {
+	if resultIsStageShaped(command) {
+		return stream.Send(resultRequest(command, result, resultJSON))
 	}
 	if command.GetOperationType() == "UPGRADE" {
-		return stream.Send(commandResultRequest(&command, result))
+		return stream.Send(commandResultRequest(command, result))
 	}
-	return stream.Send(resultRequest(&command, result, resultJSON))
+	return stream.Send(resultRequest(command, result, resultJSON))
 }
 
 // executeCommand routes one delivered command. A command carrying a preflight
