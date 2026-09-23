@@ -1668,6 +1668,57 @@ func TestRegistryContainerCreatedWithManagedLabels(t *testing.T) {
 	}
 }
 
+// AC-065-22 (批次2 D2): a k3d cluster carries no Docker ownership label (k3d
+// sets its own), so data/dev-ownership.json's k3d_clusters[] is the only
+// ownership evidence. A same-named cluster that is NOT in that whitelist
+// belongs to someone else and must fail resource_conflict — never be silently
+// reused. The previous behaviour logged "(exists)" and returned 0, so dev-up
+// converged on top of a foreign cluster it must never touch or delete.
+func TestForeignSameNameK3dClusterConflicts(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+
+	// A cluster with a managed name already exists ...
+	if err := os.WriteFile(filepath.Join(stateDir, "clusters.txt"),
+		[]byte("release-manager-control\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// ... but this run's ownership manifest does not list it.
+	manifest := `{"profile":"local","created_at":"2026-01-01T00:00:00Z","fixture_version":"v2",` +
+		`"k3d_clusters":[],"docker_containers":[],"docker_networks":[]}` + "\n"
+	if err := os.WriteFile(filepath.Join(stateDir, "dev-ownership.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("expected resource_conflict for a foreign cluster, got success:\n%s", out)
+	}
+	if code := exitCode(t, err); code != 1 {
+		t.Fatalf("expected exit 1, got %d:\n%s", code, out)
+	}
+	if !strings.Contains(out, "resource_conflict") {
+		t.Fatalf("expected resource_conflict in stderr:\n%s", out)
+	}
+	if !strings.Contains(out, "release-manager-control") {
+		t.Fatalf("the conflict must name the foreign cluster:\n%s", out)
+	}
+	// The foreign cluster must not be adopted into the whitelist, and no
+	// cluster may be created in its place.
+	after, readErr := os.ReadFile(filepath.Join(stateDir, "dev-ownership.json"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(after), "release-manager-control") {
+		t.Fatalf("a foreign cluster must never be adopted into the whitelist:\n%s", after)
+	}
+	if creates := clusterCreates(k3dCreates(stateDir)); len(creates) != 0 {
+		t.Fatalf("a conflicting run must not create clusters, got %v", creates)
+	}
+}
+
 // TestUnlabeledSameNameResourceConflicts covers AC-065-22: a same-named
 // Docker container / network WITHOUT the managed label and absent from the
 // ownership whitelist stops dev-up with exit 1 + resource_conflict naming
@@ -2937,6 +2988,67 @@ exit 0
 			t.Fatalf("expected service_unhealthy naming the pg_isready probe:\n%s", out)
 		}
 	})
+}
+
+// TestReadinessFailureNamesTheFaultingPodAndLogs covers AC-065-10: when the
+// management-plane rollout does not converge, stderr must carry the faulting
+// Pod name and its recent log lines, not just "rollout did not converge" (the
+// cause used to be recoverable only from data/diagnostics/, which a purged CI
+// environment no longer has).
+//
+// The fixture also pins the Secret boundary: a credential-looking line is
+// redacted before it reaches stderr.
+func TestReadinessFailureNamesTheFaultingPodAndLogs(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+
+	// Only the rollout gate fails; the Pod probe then reports one not-Ready
+	// Pod (auth-abc123) and one Ready Pod (web-def456) so the test also pins
+	// that Ready Pods are not reported.
+	writeShim(t, binDir, "kubectl", `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DEV_DATA_DIR/kubectl.log"
+case "$*" in
+  *"rollout status"*) exit 1 ;;
+  *"jsonpath="*) printf 'auth-abc123 False\nweb-def456 True\n'; exit 0 ;;
+  *"logs pod/auth-abc123"*) printf 'starting auth\nbearer eyJhbGciOiJIUzI1NiJ9.leaktoken\n'; exit 0 ;;
+  *"logs pod/web-def456"*) printf 'web is fine\n'; exit 0 ;;
+esac
+for a in "$@"; do
+  if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
+  if [ "$a" = "redis-cli" ]; then printf 'PONG\n'; exit 0; fi
+done
+exit 0
+`)
+	env = append(env, "DEV_TIMEOUT_READY=1")
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("expected a readiness failure, got success:\n%s", out)
+	}
+	if code := exitCode(t, err); code != 1 {
+		t.Fatalf("expected exit 1, got %d:\n%s", code, out)
+	}
+	for _, want := range []string{
+		"service_unhealthy",
+		"management-plane rollout did not converge",
+		"auth-abc123",
+		"starting auth",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("AC-065-10: stderr must contain %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "web-def456") {
+		t.Fatalf("only not-Ready Pods may be reported:\n%s", out)
+	}
+	if strings.Contains(out, "eyJhbGciOiJIUzI1NiJ9") {
+		t.Fatalf("AC-065-10/Secret boundary: a credential-looking log line must be redacted:\n%s", out)
+	}
+	if !strings.Contains(out, "[REDACTED]") {
+		t.Fatalf("expected the redaction marker in the diagnostic:\n%s", out)
+	}
 }
 
 // TestDiagnosticsCollectedBeforeKubeconfig covers the AC-065-39 pre-kubeconfig
