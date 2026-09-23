@@ -6,6 +6,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/stretchr/testify/assert"
@@ -77,6 +78,53 @@ func TestClusterStageFailsWhenTheClusterRejects(t *testing.T) {
 	_, err := executor.ExecuteStage(context.Background(), clusterStageCommand())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "rejected 2 of 2")
+}
+
+// A rejected dry-run must name WHICH object the cluster refused and WHY. A bare
+// count left the operator log and the stage result without a root cause, so the
+// cause had to be recovered from a fresh environment run with extra logging
+// (the e2e UPGRADE cluster-stage failure).
+//
+// The diagnostic is built from preflight.ResourceResult only — GVK, name,
+// namespace, stable error code and the API server's already-sanitized reason —
+// so no object body or Secret value can reach the stage error.
+func TestClusterStageFailureNamesTheRejectedObject(t *testing.T) {
+	runner := &fakeDryRunner{batch: &preflight.BatchResult{
+		Passed: false, ResourceCount: 1,
+		Results: []preflight.ResourceResult{{
+			GVK:       schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"},
+			Name:      "release-fixture",
+			Namespace: "e2e-release",
+			Rejected:  true,
+			ErrorCode: preflight.ErrUnknown,
+			Reason:    `deployments.apps "release-fixture" already exists`,
+		}},
+	}}
+	executor := NewClusterStageExecutor(&fakeChartLocator{}, runner, nil, false, nil)
+
+	_, err := executor.ExecuteStage(context.Background(), clusterStageCommand())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rejected 1 of 1")
+	assert.Contains(t, err.Error(), "apps/v1/Deployment release-fixture")
+	assert.Contains(t, err.Error(), "namespace e2e-release")
+	assert.Contains(t, err.Error(), "[preflight_unknown]")
+	assert.Contains(t, err.Error(), "already exists")
+}
+
+// A batch that carries no rejected detail must still render a readable
+// diagnostic instead of an empty suffix.
+func TestDescribeRejectedFallbacks(t *testing.T) {
+	assert.Equal(t, "no rejected resource recorded", describeRejected(&preflight.BatchResult{}))
+	assert.Equal(t, "unknown resource", describeRejected(&preflight.BatchResult{
+		Results: []preflight.ResourceResult{{Rejected: true}},
+	}))
+	assert.Equal(t, "v1/ConfigMap cm-1", describeRejected(&preflight.BatchResult{
+		Results: []preflight.ResourceResult{{
+			GVK:      schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+			Name:     "cm-1",
+			Rejected: true,
+		}},
+	}))
 }
 
 // A dry-runner failure surfaces as a stage failure, not a silent pass.

@@ -170,8 +170,8 @@ func (e *ClusterStageExecutor) ExecuteStage(ctx context.Context, command *operat
 		return "", fmt.Errorf("cluster stage: %w", err)
 	}
 	if !batch.Passed {
-		return "", fmt.Errorf("cluster stage: server-side dry-run rejected %d of %d objects",
-			rejectedCount(batch), batch.ResourceCount)
+		return "", fmt.Errorf("cluster stage: server-side dry-run rejected %d of %d objects: %s",
+			rejectedCount(batch), batch.ResourceCount, describeRejected(batch))
 	}
 	encoded, err := json.Marshal(batch)
 	if err != nil {
@@ -260,6 +260,52 @@ func rejectedCount(batch *preflight.BatchResult) int {
 		}
 	}
 	return rejected
+}
+
+// describeRejected renders the first rejected resource into a bounded diagnostic
+// for the stage error. A bare count ("rejected 1 of 1") left the field unable to
+// tell WHICH object the cluster refused and WHY — the cause had to be recovered
+// from a fresh run with extra logging.
+//
+// The text is built only from ResourceResult, which by contract carries the GVK,
+// name, namespace, stable error code and the API server's already-sanitized
+// reason: no object body, no Secret data, no manifest. sanitizeResourceResult has
+// already truncated the reason before the batch is handed back here.
+func describeRejected(batch *preflight.BatchResult) string {
+	rejected := batch.FailureFirst()
+	if rejected == nil {
+		return "no rejected resource recorded"
+	}
+	detail := resourceIdentifier(rejected.GVK.Kind, rejected.GVK.GroupVersion().String())
+	if rejected.Name != "" {
+		detail += " " + rejected.Name
+	}
+	if rejected.Namespace != "" {
+		detail += " (namespace " + rejected.Namespace + ")"
+	}
+	if rejected.ErrorCode != "" {
+		detail += " [" + rejected.ErrorCode + "]"
+	}
+	if rejected.Reason != "" {
+		detail += ": " + rejected.Reason
+	}
+	return detail
+}
+
+// resourceIdentifier renders "apiVersion/Kind", falling back to the bare kind
+// and finally to a placeholder, so a result that lost its type information still
+// produces a readable diagnostic instead of an empty string.
+func resourceIdentifier(kind, apiVersion string) string {
+	switch {
+	case apiVersion != "" && kind != "":
+		return apiVersion + "/" + kind
+	case kind != "":
+		return kind
+	case apiVersion != "":
+		return apiVersion
+	default:
+		return "unknown resource"
+	}
 }
 
 // capabilityVersion probes the cluster capability version the dry-run cache
