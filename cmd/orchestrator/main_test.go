@@ -52,7 +52,6 @@ import (
 )
 
 func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
-	const signingKey = "test-signing-key"
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/orchestrator.db"
 	seedStore, err := sqlitestore.Open(dbPath)
@@ -115,16 +114,16 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 	authStore, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
-	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+	authServer := newTestAuthorizationServer(t, authStore, jwtTestPrivateKey)
 
-	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	svc := &orchSvc{targetEnv: "staging", jwtPublicKey: jwtTestPublicKeyPEM, authURL: authServer.URL}
 	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}, CA: testCAConfig(t)})
 	require.NoError(t, svc.Register(mux, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))))
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
-	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	jwtManager := auth.NewJWTManager(jwtTestPrivateKey, time.Hour, time.Hour)
 	creatorToken, _, err := jwtManager.GenerateAccessToken(
 		creatorID, organizationID, []string{string(store.RoleDeployer)},
 	)
@@ -196,7 +195,6 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 
 func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 	const (
-		signingKey       = "trust-test-signing-key"
 		organizationID   = "0f7e6d3e-8a2b-4f6e-9a1c-3d5b7e9f1a2b"
 		platformAdminID  = "platform-admin-trust"
 		deployerID       = "deployer-trust"
@@ -246,8 +244,8 @@ func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 	authStore, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
-	authServer := newTestAuthorizationServer(t, authStore, signingKey)
-	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	authServer := newTestAuthorizationServer(t, authStore, jwtTestPrivateKey)
+	svc := &orchSvc{targetEnv: "staging", jwtPublicKey: jwtTestPublicKeyPEM, authURL: authServer.URL}
 	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}, CA: testCAConfig(t)})
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
 	// Bump the authorization source version so the Module snapshot is fresh
@@ -265,7 +263,7 @@ func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
-	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	jwtManager := auth.NewJWTManager(jwtTestPrivateKey, time.Hour, time.Hour)
 	platformToken, _, err := jwtManager.GenerateAccessToken(platformAdminID, organizationID, []string{string(store.RolePlatformAdmin)})
 	require.NoError(t, err)
 	deployerToken, _, err := jwtManager.GenerateAccessToken(deployerID, organizationID, []string{string(store.RoleDeployer)})
@@ -387,7 +385,6 @@ func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 
 func TestTrustServiceMaintenanceGate(t *testing.T) {
 	const (
-		signingKey      = "trust-maintenance-signing-key"
 		organizationID  = "org-trust-maintenance"
 		platformAdminID = "platform-admin-maintenance"
 	)
@@ -408,8 +405,8 @@ func TestTrustServiceMaintenanceGate(t *testing.T) {
 	authStore, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
-	authServer := newTestAuthorizationServer(t, authStore, signingKey)
-	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	authServer := newTestAuthorizationServer(t, authStore, jwtTestPrivateKey)
+	svc := &orchSvc{targetEnv: "staging", jwtPublicKey: jwtTestPublicKeyPEM, authURL: authServer.URL}
 	svc.Configure(&config.ServiceConfig{
 		Database:    config.DatabaseConfig{Driver: "sqlite", DSN: dbPath},
 		Maintenance: true,
@@ -421,7 +418,7 @@ func TestTrustServiceMaintenanceGate(t *testing.T) {
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
-	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	jwtManager := auth.NewJWTManager(jwtTestPrivateKey, time.Hour, time.Hour)
 	adminToken, _, err := jwtManager.GenerateAccessToken(platformAdminID, organizationID, []string{string(store.RolePlatformAdmin)})
 	require.NoError(t, err)
 	trustClient := trustv1connect.NewTrustServiceClient(server.Client(), server.URL)
@@ -502,7 +499,6 @@ func TestTrustServiceMaintenanceGate(t *testing.T) {
 
 func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
 	const (
-		signingKey       = "trust-unavailable-signing-key"
 		organizationID   = "2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d"
 		deployerID       = "deployer-trust-unavailable"
 		customerID       = "3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f"
@@ -542,10 +538,10 @@ func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
 	authStore, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
-	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+	authServer := newTestAuthorizationServer(t, authStore, jwtTestPrivateKey)
 	mux := http.NewServeMux()
 	svc := &orchSvc{
-		targetEnv: "production", signingKey: signingKey, authURL: authServer.URL,
+		targetEnv: "production", jwtPublicKey: jwtTestPublicKeyPEM, authURL: authServer.URL,
 		trustResolver: failingTrustResolver{err: errors.New("trust store offline")},
 	}
 	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}, CA: testCAConfig(t)})
@@ -563,7 +559,7 @@ func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
-	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	jwtManager := auth.NewJWTManager(jwtTestPrivateKey, time.Hour, time.Hour)
 	adminToken, _, err := jwtManager.GenerateAccessToken(deployerID, organizationID, []string{string(store.RoleReleaseAdmin)})
 	require.NoError(t, err)
 	digest := "sha256:" + bundleDigest
@@ -607,7 +603,6 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 	// 全部经正式 Connect API（ADR-013）：platform_admin 激活 root、deployer 提交带签名 operation、
 	// revoke 提升 epoch、同签名再次提交被 untrusted_issuer 拒绝。
 	const (
-		signingKey       = "trust-epoch-signing-key"
 		organizationID   = "4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a"
 		platformAdminID  = "platform-admin-epoch"
 		deployerID       = "deployer-trust-epoch"
@@ -667,8 +662,8 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 	authStore, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
-	authServer := newTestAuthorizationServer(t, authStore, signingKey)
-	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	authServer := newTestAuthorizationServer(t, authStore, jwtTestPrivateKey)
+	svc := &orchSvc{targetEnv: "staging", jwtPublicKey: jwtTestPublicKeyPEM, authURL: authServer.URL}
 	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}, CA: testCAConfig(t)})
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
 	// Bump the authorization source version so the Module snapshot is fresh.
@@ -685,7 +680,7 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
-	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	jwtManager := auth.NewJWTManager(jwtTestPrivateKey, time.Hour, time.Hour)
 	adminToken, _, err := jwtManager.GenerateAccessToken(platformAdminID, organizationID, []string{string(store.RolePlatformAdmin)})
 	require.NoError(t, err)
 
@@ -762,6 +757,28 @@ func warmAuthorization(ctx context.Context, t *testing.T, client orchestratorv1c
 	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
 }
 
+// Management-plane JWT key material for the orchestrator tests (REQ-065
+// AC-065-01). cmd/orchestrator verifies with the public half (jwtPublicKey);
+// the test authorization server mints the tokens it accepts with the private
+// half. One pair per package is enough: every test is independent.
+var (
+	jwtTestPublicKeyPEM string
+	jwtTestPrivateKey   ed25519.PrivateKey
+)
+
+func init() {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic("generate test JWT key pair: " + err.Error())
+	}
+	publicDER, err := x509.MarshalPKIXPublicKey(publicKey)
+	if err != nil {
+		panic("marshal test JWT public key: " + err.Error())
+	}
+	jwtTestPublicKeyPEM = string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: publicDER}))
+	jwtTestPrivateKey = privateKey
+}
+
 func testEd25519KeyPair(t *testing.T) (string, ed25519.PrivateKey) {
 	t.Helper()
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
@@ -784,7 +801,6 @@ func (r failingTrustResolver) GetPolicyMeta(context.Context, string) (*store.Tru
 }
 
 func TestOrchestratorValuesRevisionManagementEndToEnd(t *testing.T) {
-	const signingKey = "test-signing-key"
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/orchestrator.db"
 	seedStore, err := sqlitestore.Open(dbPath)
@@ -827,9 +843,9 @@ func TestOrchestratorValuesRevisionManagementEndToEnd(t *testing.T) {
 	authStore, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
-	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+	authServer := newTestAuthorizationServer(t, authStore, jwtTestPrivateKey)
 
-	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	svc := &orchSvc{targetEnv: "staging", jwtPublicKey: jwtTestPublicKeyPEM, authURL: authServer.URL}
 	svc.Configure(&config.ServiceConfig{
 		Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath},
 		Values:   config.ValuesConfig{MaxDocumentBytes: 1 << 20},
@@ -843,7 +859,7 @@ func TestOrchestratorValuesRevisionManagementEndToEnd(t *testing.T) {
 	t.Cleanup(cancelRun)
 	go svc.Run(runCtx)
 
-	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	jwtManager := auth.NewJWTManager(jwtTestPrivateKey, time.Hour, time.Hour)
 	creatorToken, _, err := jwtManager.GenerateAccessToken(
 		creatorID,
 		organizationID,
@@ -948,12 +964,12 @@ func testCAConfig(t *testing.T) config.CAConfig {
 	}
 }
 
-func newTestAuthorizationServer(t *testing.T, st store.Store, signingKey string) *httptest.Server {
+func newTestAuthorizationServer(t *testing.T, st store.Store, privateKey ed25519.PrivateKey) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	path, handler := authv1connect.NewAuthorizationServiceHandler(&testAuthorizationHandler{
 		store: st,
-		jwt:   auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour),
+		jwt:   auth.NewJWTManager(privateKey, time.Hour, time.Hour),
 	})
 	mux.Handle(path, handler)
 	server := httptest.NewServer(mux)
@@ -1032,7 +1048,6 @@ func TestOrchestratorPostgreSQLCutoverAuthority(t *testing.T) {
 	seedStore, err := postgresstore.New(database.SQLDB(), database.GORM())
 	require.NoError(t, err)
 	const (
-		signingKey     = "postgres-cutover-signing-key"
 		organizationID = "org-070-cutover"
 		userID         = "user-070-cutover"
 		customerID     = "customer-070-cutover"
@@ -1045,7 +1060,7 @@ func TestOrchestratorPostgreSQLCutoverAuthority(t *testing.T) {
 	}))
 	require.NoError(t, seedStore.Close())
 
-	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey}
+	svc := &orchSvc{targetEnv: "staging", jwtPublicKey: jwtTestPublicKeyPEM}
 	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "postgres", DSN: dsn}, CA: testCAConfig(t)})
 	mux := http.NewServeMux()
 	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
@@ -1053,7 +1068,7 @@ func TestOrchestratorPostgreSQLCutoverAuthority(t *testing.T) {
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
-	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	jwtManager := auth.NewJWTManager(jwtTestPrivateKey, time.Hour, time.Hour)
 	token, _, err := jwtManager.GenerateAccessToken(userID, organizationID, []string{string(store.RolePlatformAdmin)})
 	require.NoError(t, err)
 	request := connect.NewRequest(&orchestratorv1.CreateCustomerRequest{Id: customerID, Name: "PostgreSQL Customer", Slug: "postgresql-customer"})
@@ -1312,15 +1327,14 @@ func TestOperatorManagementPostgreSQLFlow(t *testing.T) {
 	require.NoError(t, seedStore.Close())
 	require.NoError(t, database.Close())
 
-	const signingKey = "operator-smoke-signing-key"
 	mux := http.NewServeMux()
 	authStore, err := sqlitestore.Open(t.TempDir() + "/auth.db")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
-	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+	authServer := newTestAuthorizationServer(t, authStore, jwtTestPrivateKey)
 	svc := &orchSvc{
 		targetEnv:      "staging",
-		signingKey:     signingKey,
+		jwtPublicKey:   jwtTestPublicKeyPEM,
 		authURL:        authServer.URL,
 		streamRegistry: operator.NewStreamRegistry(),
 	}
@@ -1330,7 +1344,7 @@ func TestOperatorManagementPostgreSQLFlow(t *testing.T) {
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
-	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	jwtManager := auth.NewJWTManager(jwtTestPrivateKey, time.Hour, time.Hour)
 	adminToken, _, err := jwtManager.GenerateAccessToken(adminID, organizationID, []string{string(store.RoleReleaseAdmin)})
 	require.NoError(t, err)
 	viewerToken, _, err := jwtManager.GenerateAccessToken(viewerID, organizationID, []string{string(store.RoleViewer)})
@@ -1487,7 +1501,6 @@ func TestOperatorReadOnlyProcedures(t *testing.T) {
 // idempotency double-branch under the REQ-018 D14 scope (same key + same
 // request_hash replay vs same key + different request_hash).
 func TestValuesCreateListIdempotencyConnectEndToEnd(t *testing.T) {
-	const signingKey = "test-signing-key"
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/orchestrator.db"
 	seedStore, err := sqlitestore.Open(dbPath)
@@ -1557,9 +1570,9 @@ func TestValuesCreateListIdempotencyConnectEndToEnd(t *testing.T) {
 	authStore, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
-	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+	authServer := newTestAuthorizationServer(t, authStore, jwtTestPrivateKey)
 
-	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	svc := &orchSvc{targetEnv: "staging", jwtPublicKey: jwtTestPublicKeyPEM, authURL: authServer.URL}
 	svc.Configure(&config.ServiceConfig{
 		Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath},
 		Values:   config.ValuesConfig{MaxDocumentBytes: 1 << 20},
@@ -1573,7 +1586,7 @@ func TestValuesCreateListIdempotencyConnectEndToEnd(t *testing.T) {
 	t.Cleanup(cancelRun)
 	go svc.Run(runCtx)
 
-	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	jwtManager := auth.NewJWTManager(jwtTestPrivateKey, time.Hour, time.Hour)
 	creatorToken, _, err := jwtManager.GenerateAccessToken(
 		creatorID, organizationID, []string{string(store.RoleDeployer)},
 	)
@@ -1784,7 +1797,6 @@ func TestValuesCreateListIdempotencyConnectEndToEnd(t *testing.T) {
 // results via the outbox, first-dispatch consumption (D-87), and restart
 // recovery of operations left in preflight (ADR-009).
 func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
-	const signingKey = "test-signing-key"
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/orchestrator.db"
 	seedStore, err := sqlitestore.Open(dbPath)
@@ -1834,9 +1846,9 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 	authStore, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, authStore.Close()) })
-	authServer := newTestAuthorizationServer(t, authStore, signingKey)
+	authServer := newTestAuthorizationServer(t, authStore, jwtTestPrivateKey)
 
-	svc := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	svc := &orchSvc{targetEnv: "staging", jwtPublicKey: jwtTestPublicKeyPEM, authURL: authServer.URL}
 	svc.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}, CA: testCAConfig(t)})
 	require.NoError(t, svc.Register(mux, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))))
 	server := httptest.NewServer(mux)
@@ -1854,7 +1866,7 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, time.Hour)
+	jwtManager := auth.NewJWTManager(jwtTestPrivateKey, time.Hour, time.Hour)
 	token, _, err := jwtManager.GenerateAccessToken(userID, organizationID, []string{string(store.RoleReleaseAdmin)})
 	require.NoError(t, err)
 	client := orchestratorv1connect.NewOrchestratorServiceClient(http.DefaultClient, server.URL)
@@ -1954,7 +1966,7 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 
 	// Second generation on the same DB: Register resumes the preflight op.
 	mux2 := http.NewServeMux()
-	svc2 := &orchSvc{targetEnv: "staging", signingKey: signingKey, authURL: authServer.URL}
+	svc2 := &orchSvc{targetEnv: "staging", jwtPublicKey: jwtTestPublicKeyPEM, authURL: authServer.URL}
 	svc2.Configure(&config.ServiceConfig{Database: config.DatabaseConfig{Driver: "sqlite", DSN: dbPath}, CA: testCAConfig(t)})
 	require.NoError(t, svc2.Register(mux2, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))))
 	server2 := httptest.NewServer(mux2)

@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -25,7 +27,7 @@ import (
 
 type apiSvc struct {
 	dbPath        string
-	signingKey    string
+	jwtPublicKey  string
 	configPath    string
 	store         *sqlitestore.Store
 	emitter       *audit.Emitter
@@ -59,7 +61,11 @@ func (s *apiSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	}
 	logger.Info("store opened", "db", s.dbPath)
 
-	jwtMgr := jwtauth.New([]byte(s.signingKey), 15*time.Minute)
+	jwtPublicKey, err := jwtauth.ParseEd25519PublicKeyPEM(s.jwtPublicKey)
+	if err != nil {
+		return fmt.Errorf("jwt verification key: %w", err)
+	}
+	jwtMgr := jwtauth.New(jwtPublicKey, 15*time.Minute)
 	s.store = st
 	svcCfg, loadErr := config.LoadService(s.configPath)
 	if loadErr != nil {
@@ -152,15 +158,26 @@ func archiveConfigFromService(cfg *config.ServiceConfig) audit.ArchiveConfig {
 	}
 }
 
+// envOr returns the environment value or the fallback when unset.
+func envOr(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+
 func main() {
 	configPath := flag.String("config", "configs/api.dev.yaml", "path to config file")
 	dbPath := flag.String("db", "data/api.db", "path to SQLite database")
-	signingKey := flag.String("signing-key", "change-me-in-production", "JWT signing key")
+	// REQ-065 AC-065-01 / D1=A: the audit API only verifies management-plane
+	// access tokens, so it holds the Ed25519 public key and never the signing
+	// key. See internal/jwtauth.
+	publicKeyPEM := flag.String("jwt-public-key", envOr("JWT_PUBLIC_KEY", ""), "PEM-encoded Ed25519 JWT verification key")
 	flag.Parse()
 
 	app.Run(*configPath, &apiSvc{
-		dbPath:     *dbPath,
-		signingKey: *signingKey,
-		configPath: *configPath,
+		dbPath:       *dbPath,
+		jwtPublicKey: *publicKeyPEM,
+		configPath:   *configPath,
 	})
 }

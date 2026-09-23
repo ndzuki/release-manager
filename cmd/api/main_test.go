@@ -2,6 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -40,14 +45,34 @@ func (s stubDecision) Authorize(
 	}, nil
 }
 
+// apiTestJWTKeys is the Ed25519 management-plane key pair every cmd/api test
+// uses (REQ-065 AC-065-01): the audit API is configured with the public half
+// and the tests mint tokens with the private half.
+var (
+	apiTestJWTPublicKeyPEM string
+	apiTestJWTPrivateKey   ed25519.PrivateKey
+)
+
+func init() {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic("generate test JWT key pair: " + err.Error())
+	}
+	der, err := x509.MarshalPKIXPublicKey(publicKey)
+	if err != nil {
+		panic("marshal test JWT public key: " + err.Error())
+	}
+	apiTestJWTPublicKeyPEM = string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
+	apiTestJWTPrivateKey = privateKey
+}
+
 func TestAPISvcAuditConnectEndToEnd(t *testing.T) {
-	const signingKey = "test-signing-key"
 	dbPath := t.TempDir() + "/api.db"
 	mux := http.NewServeMux()
 	// A short flush interval keeps the audit wait deterministic: the production
 	// default is 5s, which leaves under a second of slack in the Eventually budget.
 	svc := &apiSvc{
-		dbPath: dbPath, signingKey: signingKey, auditFlushInterval: 10 * time.Millisecond,
+		dbPath: dbPath, jwtPublicKey: apiTestJWTPublicKeyPEM, auditFlushInterval: 10 * time.Millisecond,
 		decisionClient: stubDecision{organization: "org-001", maxWindowDays: 31},
 	}
 	require.NoError(t, svc.Register(mux, slog.Default()))
@@ -55,7 +80,7 @@ func TestAPISvcAuditConnectEndToEnd(t *testing.T) {
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
-	jwtManager := auth.NewJWTManager([]byte(signingKey), time.Hour, 24*time.Hour)
+	jwtManager := auth.NewJWTManager(apiTestJWTPrivateKey, time.Hour, 24*time.Hour)
 	token, _, err := jwtManager.GenerateAccessToken(
 		"user-001",
 		"org-001",
@@ -113,11 +138,26 @@ func TestAPISvcAuditConnectEndToEnd(t *testing.T) {
 	assert.Equal(t, "pending", exportResponse.Msg.GetStatus())
 }
 
+// REQ-065 AC-065-01: cmd/api verifies EdDSA tokens with a public key, and a
+// missing or non-Ed25519 key must fail startup rather than leave the service
+// accepting nothing (or, worse, something it cannot check).
+func TestAPIRegisterFailsClosedOnNonEd25519Key(t *testing.T) {
+	legacy := make([]byte, 64)
+	_, err := rand.Read(legacy)
+	require.NoError(t, err)
+
+	svc := &apiSvc{dbPath: t.TempDir() + "/api.db", jwtPublicKey: base64.StdEncoding.EncodeToString(legacy)}
+
+	err = svc.Register(http.NewServeMux(), slog.New(slog.DiscardHandler))
+	require.Error(t, err, "the legacy symmetric key format must not configure a verifier")
+	assert.Contains(t, err.Error(), "jwt verification key")
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+}
+
 func TestAPISvcCloseDrainsAuditEmitter(t *testing.T) {
-	const signingKey = "test-signing-key"
 	dbPath := t.TempDir() + "/api.db"
 	mux := http.NewServeMux()
-	svc := &apiSvc{dbPath: dbPath, signingKey: signingKey}
+	svc := &apiSvc{dbPath: dbPath, jwtPublicKey: apiTestJWTPublicKeyPEM}
 	require.NoError(t, svc.Register(mux, slog.Default()))
 
 	result := svc.emitter.Emit(&store.AuditEvent{

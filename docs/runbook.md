@@ -301,8 +301,9 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 
 配置与常量（现状）：
 
-- 签名密钥来源：`--signing-key`，默认值取环境变量 `JWT_SIGNING_KEY`，再默认 `change-me-in-production`（`cmd/auth/main.go:237`、`cmd/orchestrator/main.go:848-854`）。集群里由 Secret `release-manager-jwt` 注入（`deploy/kustomize/services/orchestrator.yaml:34-39`、`deploy/kustomize/services/auth.yaml:35-39`），Secret 内容由 `data/dev-jwt/jwt-signing-key.pem` 生成（`deploy/kustomize/dev/kustomization.yaml:39-43`）。
-- ⇒ **auth 与 orchestrator 各持一个 `JWTManager`，必须同 key**（`cmd/auth/main.go:140`、`cmd/orchestrator/main.go:425`）。两者不一致 ⇒ 全站 401 `invalid token`，且**只有 401 一个症状**（`/readyz` 全绿）。
+- 签名算法与密钥（REQ-065 AC-065-01 / D1=A）：管理面 access token 是 **EdDSA（Ed25519）**。`cmd/auth` 是**唯一**持有私钥的服务（`--jwt-private-key`，默认取 `JWT_PRIVATE_KEY`；`cmd/auth/main.go:248`）；`cmd/orchestrator` 与 `cmd/api` **只校验**（`--jwt-public-key`，默认取 `JWT_PUBLIC_KEY`；`cmd/orchestrator/main.go:969`、`cmd/api/main.go:175`）。三个 flag **默认空值**，缺失或非 Ed25519 PEM 即**启动失败**（fail-closed，无哨兵默认值）。
+- 集群里拆成**两把** Secret：`release-manager-jwt-private`（仅 auth，`deploy/kustomize/services/auth.yaml:35-39`）与 `release-manager-jwt-public`（仅 orchestrator，`deploy/kustomize/services/orchestrator.yaml:34-39`）；webhook/notifier **不挂任何 JWT 密钥**（它们本来就不校验 token）。两半由 `data/dev-jwt/jwt-{private,public}-key.pem` 生成（`deploy/kustomize/dev/kustomization.yaml:39-53`）。
+- ⇒ **auth 签发、orchestrator/api 校验，必须来自同一对密钥**（`cmd/auth/main.go:145`、`cmd/orchestrator/main.go:459`）。公钥与私钥不配对 ⇒ 全站 401 `invalid token`，且**只有 401 一个症状**（`/readyz` 全绿）。**校验方持有的是公钥，无法伪造 token**——这正是换 Ed25519 的目的。
 - TTL 硬编码：access 15 分钟、refresh 7 天（`cmd/auth/main.go:140`），无配置键。cookie 名 `rm_access` / `rm_refresh` / `rm_csrf` + header `X-CSRF-Token`（`internal/auth/service.go:17-20`）。
 - 限流默认 5 次/60s（按用户名），可用 `login_rate_limit.max_attempts` / `.window` 覆盖（`cmd/auth/main.go:141-154`；键定义 `internal/config/config.go:123-126`）。集群 dev 配置已把它调高，dev 播种重试因此不会触发（`deploy/kustomize/dev/configs/auth.dev.yaml`）。
 - 会话缓存 fail-closed（ADR-019）：Redis 只作缓存 + refresh 黑名单，键前缀 `auth:sess:` / `auth:blacklist:` / `auth:user:`（`internal/store/redis/adapter.go:17-21`）。`Create` 在 Redis 发布失败时**回滚权威行的 family**（`internal/store/redis/adapter.go:39-56`）；黑名单读取的非 `redis.Nil` 错误转成 `unavailable(...)`（`internal/store/redis/adapter.go:63-81`）。Redis 客户端超时是 1s 级（dial/read/write，`cmd/auth/main.go:113-127`），启动 ping 失败 ⇒ `Register` 失败 ⇒ 进程退出（`cmd/auth/main.go:128-130`）。
@@ -312,7 +313,8 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 
 **处置动作**
 
-1. `invalid token` 大面积出现：先比对两个 Deployment 的 key 指纹（下面验证段）；若不同 ⇒ 以 `release-manager-jwt` Secret 为准，改 `data/dev-jwt/jwt-signing-key.pem`（轮转 = 删文件后重跑 `make dev-up`，`deploy/dev/dev.sh:311-317`）。⚠️ **轮转是破坏性的**：所有已签发 access token 立即失效，在线用户全部被踢到登录页；前置确认：① 无人正在跑 E2E；② 不在维护窗口中；③ 通知会掉登录。
+1. `invalid token` 大面积出现：先确认 auth 与 orchestrator 用的是**同一对**密钥（下面验证段比对指纹）；不配对 ⇒ 以 `release-manager-jwt-private`/`-public` 两把 Secret 为准重新生成 `data/dev-jwt/jwt-{private,public}-key.pem`（轮转 = 删 `data/dev-jwt/` 后重跑 `make dev-up`，`deploy/dev/dev.sh:294-330`）。
+   ⚠️ **轮转影响面（实测口径，勿照抄旧说法）**：已签发的 access token 立即失效，但 **refresh token 是不透明随机串（DB 存 SHA-256）且 `RefreshToken` 是公开 RPC** ⇒ **不强制重新登录**；Web SPA 在 401 时自动刷新（`web/src/stores/auth.ts:85-90`），用户只会经历**最坏 15 分钟（access TTL）的抖动**。只有**不刷新 token** 的非浏览器客户端才会需要重新登录。前置确认：① 无人正在跑 E2E；② 不在维护窗口中；③ 通知会掉登录的说法**不成立**（无需按"掉登录"预案）。
 2. `too many login attempts`：是**保护机制生效**，优先查上游客户端是否在循环重登（前端刷新逻辑/脚本死循环）。确需放宽时改 `login_rate_limit`（有配置键，安全）而不是改代码。
 3. `session revoked` 但用户确实 active：说明 `auth_sessions` 里会话没了——按 `auth.StartSessionCleanup`（1h 周期，`cmd/auth/main.go:167`）与 access TTL 判断是否只是过期；若刚登录就出现，查 Redis 是否被清空（`redis --appendonly no`，`deploy/kustomize/redis/deployment.yaml:23` ⇒ 重启即全丢）。
 4. `session validation failed` / Redis 抖动：确认 `deployment/redis` 状态（`redis-cli ping` 判据 `PONG`，`deploy/dev/dev.sh:1145-1156`）。⚠️ 不要「顺手重启 Redis 恢复缓存」——重启即清空 ⇒ 所有 refresh 会话失效。

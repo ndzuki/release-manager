@@ -46,7 +46,7 @@ func TestAuthInterceptor_HTTPContracts(t *testing.T) {
 			seedAuthorization(t, st)
 			require.NoError(t, e.LoadPolicies(context.Background()))
 
-			jwtManager := NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour)
+			jwtManager := NewJWTManager(testJWTPrivateKey, time.Hour, time.Hour)
 			token, _, err := jwtManager.GenerateAccessToken("user-1", "org-1", []string{"viewer"})
 			require.NoError(t, err)
 
@@ -79,7 +79,7 @@ func TestAuthInterceptor_BindingMissing(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, e.LoadPolicies(ctx))
 
-	jwtManager := NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour)
+	jwtManager := NewJWTManager(testJWTPrivateKey, time.Hour, time.Hour)
 	token, _, err := jwtManager.GenerateAccessToken("user-1", "org-1", []string{"viewer"})
 	require.NoError(t, err)
 

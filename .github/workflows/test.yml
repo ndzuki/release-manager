@@ -492,7 +492,9 @@ jobs:
       DEV_ADMIN_PASSWORD: ${{ secrets.DEV_ADMIN_PASSWORD }}
       DEV_DEPLOYER_PASSWORD: ${{ secrets.DEV_DEPLOYER_PASSWORD }}
       DEV_READER_PASSWORD: ${{ secrets.DEV_READER_PASSWORD }}
-      DEV_JWT_SIGNING_KEY: ${{ secrets.DEV_JWT_SIGNING_KEY }}
+      # REQ-065 AC-065-01: the management-plane JWT is EdDSA (Ed25519), so the
+      # ci Secret carries a PKCS#8 PEM private key (the public half is derived).
+      DEV_JWT_PRIVATE_KEY: ${{ secrets.DEV_JWT_PRIVATE_KEY }}
       DEV_WEBHOOK_SERVICE_TOKEN: ${{ secrets.DEV_WEBHOOK_SERVICE_TOKEN }}
       # TASK-102 (REQ-011 §562): the CI ingress key and the Harbor ingress key
       # are independent credentials; the fixture presents the CI key and the

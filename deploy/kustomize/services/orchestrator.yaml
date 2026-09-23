@@ -26,17 +26,17 @@ spec:
           args:
             - --config
             - /configs/orchestrator.dev.yaml
-          # D3: the JWT signing key travels via the JWT_SIGNING_KEY env var
-          # (release-manager-jwt Secret); cmd/orchestrator falls back to it
-          # for the --signing-key flag default. Kubernetes cannot expand
-          # secretKeyRef values inside args; the key rotation rolls the
-          # Deployment via the Secret hash.
+          # REQ-065 AC-065-01 / D1=A: the orchestrator only VERIFIES access
+          # tokens, so it mounts the Ed25519 public half
+          # (release-manager-jwt-public) and never the signing key. This is the
+          # security property the asymmetric scheme buys: a compromised
+          # orchestrator cannot mint user/organization/role identities.
           env:
-            - name: JWT_SIGNING_KEY
+            - name: JWT_PUBLIC_KEY
               valueFrom:
                 secretKeyRef:
-                  name: release-manager-jwt
-                  key: JWT_SIGNING_KEY
+                  name: release-manager-jwt-public
+                  key: JWT_PUBLIC_KEY
             # 批次3 D2 (AC-065-33): verifier-side bundle ingress service
             # tokens. serviceTokens() loads current+previous as SHA-256
             # hashes and compares constant-time (REQ-011 §562); the optional

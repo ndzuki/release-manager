@@ -2,6 +2,8 @@ package auth_test
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -19,11 +21,22 @@ import (
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
 
+// browserTestJWTPrivateKey is the Ed25519 signing key for the external
+// (auth_test) browser-session tests (REQ-065 AC-065-01). The internal test
+// package has its own key; this package cannot see it.
+var browserTestJWTPrivateKey = func() ed25519.PrivateKey {
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic("generate test JWT key: " + err.Error())
+	}
+	return privateKey
+}()
+
 func TestAuthService_BrowserSessionLifecycle(t *testing.T) {
 	st, err := sqlitestore.Open("file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, st.Close()) })
-	jwtManager := auth.NewJWTManager([]byte("0123456789abcdef0123456789abcdef"), 15*time.Minute, 24*time.Hour)
+	jwtManager := auth.NewJWTManager(browserTestJWTPrivateKey, 15*time.Minute, 24*time.Hour)
 	service := auth.NewAuthService(
 		st,
 		jwtManager,

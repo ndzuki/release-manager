@@ -26,6 +26,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/authorization"
 	"github.com/ndzuki/release-manager/internal/config"
 	contractsinterceptor "github.com/ndzuki/release-manager/internal/contracts/interceptor"
+	"github.com/ndzuki/release-manager/internal/jwtauth"
 	"github.com/ndzuki/release-manager/internal/operator"
 	"github.com/ndzuki/release-manager/internal/operator/ca"
 	"github.com/ndzuki/release-manager/internal/orchestrator"
@@ -38,11 +39,11 @@ import (
 )
 
 type orchSvc struct {
-	cfg        config.ServiceConfig
-	targetEnv  string
-	signingKey string
-	configPath string
-	authURL    string
+	cfg          config.ServiceConfig
+	targetEnv    string
+	jwtPublicKey string
+	configPath   string
+	authURL      string
 
 	gateway    *http.Server
 	store      store.Store
@@ -451,7 +452,11 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 			logger.Warn("preflight operations resumed on restart", "count", resumed)
 		}
 	}
-	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)
+	jwtPublicKey, err := jwtauth.ParseEd25519PublicKeyPEM(s.jwtPublicKey)
+	if err != nil {
+		return fmt.Errorf("jwt verification key: %w", err)
+	}
+	jwtMgr := auth.NewJWTVerifier(jwtPublicKey, 15*time.Minute, 7*24*time.Hour)
 	enforcer, err := auth.NewEnforcer(s.store, logger)
 	if err != nil {
 		return fmt.Errorf("create orchestrator enforcer: %w", err)
@@ -956,14 +961,15 @@ func loadSourceRegistries(logger *slog.Logger) []orchestrator.SourceRegistry {
 func main() {
 	configPath := flag.String("config", "configs/orchestrator.dev.yaml", "path to config file")
 	targetEnv := flag.String("target-env", "staging", "target environment (production, staging)")
-	// REQ-065 D3: the dev lifecycle injects the JWT signing key through the
-	// release-manager-jwt Secret as the JWT_SIGNING_KEY env var; the flag
-	// default falls back to it so the Kustomize Deployment needs no static
-	// key in args (Kubernetes cannot expand secretKeyRef values in args).
-	signingKey := flag.String("signing-key", envOr("JWT_SIGNING_KEY", "change-me-in-production"), "JWT signing key")
+	// REQ-065 AC-065-01 / D1=A: the orchestrator only *verifies* management-plane
+	// access tokens, so it is given the Ed25519 public key and never the signing
+	// key. Keeping the private half out of this process is the security property
+	// the asymmetric scheme buys: a compromised orchestrator cannot mint
+	// user/organization/role identities.
+	publicKeyPEM := flag.String("jwt-public-key", envOr("JWT_PUBLIC_KEY", ""), "PEM-encoded Ed25519 JWT verification key")
 	flag.Parse()
 
-	app.Run(*configPath, &orchSvc{targetEnv: *targetEnv, configPath: *configPath, signingKey: *signingKey})
+	app.Run(*configPath, &orchSvc{targetEnv: *targetEnv, configPath: *configPath, jwtPublicKey: *publicKeyPEM})
 }
 
 // envOr returns the environment value or the fallback when unset.

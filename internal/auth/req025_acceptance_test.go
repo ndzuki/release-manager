@@ -57,7 +57,7 @@ func TestRateLimiter_WindowSlidesBackOpen(t *testing.T) {
 func TestInitialize_SecondCallReturnsAlreadyExists(t *testing.T) {
 	enforcer, st := setupEnforcer(t)
 	ctx := context.Background()
-	svc := NewAuthService(st, NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour),
+	svc := NewAuthService(st, NewJWTManager(testJWTPrivateKey, time.Hour, time.Hour),
 		NewRateLimiter(10, time.Minute), slog.New(slog.DiscardHandler), enforcer)
 
 	first, err := svc.Initialize(ctx, connect.NewRequest(&authv1.InitializeRequest{

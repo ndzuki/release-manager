@@ -342,49 +342,51 @@ require_tcp_ready() {
 }
 
 # ---------------------------------------------------------------------------
-# JWT signing key (REQ-065 D3): local profile generates/reuses a 0600
-# data/dev-jwt/jwt-signing-key.pem before deployment; the ci profile injects
-# the DEV_JWT_SIGNING_KEY Secret env into the same source path transiently
-# (removed right after apply, never persisted).
+# JWT key pair (REQ-065 AC-065-01 / D1=A): management-plane access tokens are
+# EdDSA (Ed25519), so the dev environment needs a real key pair rather than the
+# symmetric secret it used to mint. The local profile generates/reuses
+# data/dev-jwt/jwt-private-key.pem + jwt-public-key.pem through the devseed
+# helper (no external tool dependency); the ci profile materializes
+# DEV_JWT_PRIVATE_KEY transiently and the helper derives the public half, so the
+# two files can never disagree. apply 后即删，不落盘。
+# The private half is mounted only into cmd/auth, the public half only into
+# cmd/orchestrator — webhook/notifier no longer mount either (they never
+# verified tokens; see deploy/kustomize/services/).
 # ---------------------------------------------------------------------------
-jwt_key_path() { printf '%s' "$DEV_DATA_DIR/dev-jwt/jwt-signing-key.pem"; }
+jwt_key_dir() { printf '%s' "$DEV_DATA_DIR/dev-jwt"; }
+jwt_private_key_path() { printf '%s/jwt-private-key.pem' "$(jwt_key_dir)"; }
+jwt_public_key_path() { printf '%s/jwt-public-key.pem' "$(jwt_key_dir)"; }
 
 jwt_signing_key_ensure() {
-  local key_path
-  key_path="$(jwt_key_path)"
+  local dir
+  dir="$(jwt_key_dir)"
   if [ "${DEV_PROFILE:-local}" = "ci" ]; then
-    if [ -z "${DEV_JWT_SIGNING_KEY:-}" ]; then
-      fail "$ERR_SERVICE_UNHEALTHY" "ci profile requires DEV_JWT_SIGNING_KEY (JWT signing key is not written to disk)"
+    if [ -z "${DEV_JWT_PRIVATE_KEY:-}" ]; then
+      fail "$ERR_SERVICE_UNHEALTHY" "ci profile requires DEV_JWT_PRIVATE_KEY (PKCS#8 Ed25519 JWT private key PEM; never written to disk)"
     fi
-    # ci: the Secret env value is materialized to the kustomize source path
-    # only for the duration of the build/apply (D3: not persisted) and is
+    # ci: the Secret env value is materialized (private key + derived public
+    # key) only for the duration of the build/apply (D3: not persisted) and is
     # removed by jwt_ci_temp_cleanup on every exit path.
-    mkdir -p "$DEV_DATA_DIR/dev-jwt"
-    umask 077
-    printf '%s' "$DEV_JWT_SIGNING_KEY" > "$key_path"
-    chmod 600 "$key_path"
+    if ! go run ./cmd/devseed/ -ensure-jwt-keys -jwt-key-dir "$dir" -jwt-private-key "$DEV_JWT_PRIVATE_KEY" >/dev/null; then
+      fail "$ERR_SERVICE_UNHEALTHY" "ci profile JWT key materialization failed: DEV_JWT_PRIVATE_KEY must be a PKCS#8 Ed25519 PEM"
+    fi
+    log "  jwt key pair (ci, transient) ...... $dir"
     return 0
   fi
-  if [ -f "$key_path" ] && [ -s "$key_path" ]; then
-    log "  jwt signing key (reused) .......... $key_path"
-    return 0
+  # The helper owns generate/reuse/repair and validates through the same parsers
+  # the services use, so a corrupt or mismatched pair is regenerated here rather
+  # than at service boot. Rotation = delete the directory and re-run dev-up.
+  if ! go run ./cmd/devseed/ -ensure-jwt-keys -jwt-key-dir "$dir" >/dev/null; then
+    fail "$ERR_SERVICE_UNHEALTHY" "dev JWT key pair generation failed"
   fi
-  mkdir -p "$DEV_DATA_DIR/dev-jwt"
-  # 88-char base64 of 64 random bytes; no external tool dependency. The key
-  # is consumed as raw bytes by the auth JWT manager (any non-empty value is
-  # valid); rotation = delete the file and re-run dev-up (kustomize then
-  # regenerates the Secret hash and rolls the consuming Deployments).
-  umask 077
-  head -c 64 /dev/urandom | base64 > "$key_path"
-  chmod 600 "$key_path"
-  log "  jwt signing key (generated) ....... $key_path"
+  log "  jwt key pair ...................... $dir"
 }
 
-# jwt_ci_temp_cleanup — remove the transient ci JWT key file after apply
+# jwt_ci_temp_cleanup — remove the transient ci JWT key files after apply
 # (D3: the ci profile never leaves secret material on disk). No-op for local.
 jwt_ci_temp_cleanup() {
   [ "${DEV_PROFILE:-local}" = "ci" ] || return 0
-  rm -f "$(jwt_key_path)" 2>/dev/null || true
+  rm -f "$(jwt_private_key_path)" "$(jwt_public_key_path)" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -1691,8 +1693,8 @@ cmd_seed() {
   # already be injected — dev-up generates all three before deployment. Seed
   # never generates them itself: a missing key/token/CA means dev-up has not
   # converged yet.
-  if [ "${DEV_PROFILE:-local}" != "ci" ] && { [ ! -f "$(jwt_key_path)" ] || [ ! -s "$(jwt_key_path)" ]; }; then
-    fail "$ERR_SERVICE_UNHEALTHY" "JWT signing key $(jwt_key_path) missing; run make dev-up first"
+  if [ "${DEV_PROFILE:-local}" != "ci" ] && { [ ! -s "$(jwt_private_key_path)" ] || [ ! -s "$(jwt_public_key_path)" ]; }; then
+    fail "$ERR_SERVICE_UNHEALTHY" "JWT key pair $(jwt_key_dir) missing; run make dev-up first"
   fi
   if [ "${DEV_PROFILE:-local}" != "ci" ]; then
     local pair name token_path

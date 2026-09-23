@@ -21,6 +21,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/authorization"
 	"github.com/ndzuki/release-manager/internal/config"
 	contractsinterceptor "github.com/ndzuki/release-manager/internal/contracts/interceptor"
+	"github.com/ndzuki/release-manager/internal/jwtauth"
 	"github.com/ndzuki/release-manager/internal/store"
 	postgresstore "github.com/ndzuki/release-manager/internal/store/postgres"
 	redisstore "github.com/ndzuki/release-manager/internal/store/redis"
@@ -30,7 +31,7 @@ import (
 
 type authSvc struct {
 	cfg           config.ServiceConfig
-	signingKey    string
+	jwtPrivateKey string
 	store         store.Store
 	redisClient   *redis.Client
 	pingDB        func(context.Context) error
@@ -137,7 +138,11 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	mux.Handle("GET /metrics", metrics.Handler())
 	s.traceShutdown = authorization.InstallTracing()
 	authzConfig := s.cfg.Authorization.WithDefaults()
-	jwtMgr := auth.NewJWTManager([]byte(s.signingKey), 15*time.Minute, 7*24*time.Hour)
+	jwtPrivateKey, err := jwtauth.ParseEd25519PrivateKeyPEM(s.jwtPrivateKey)
+	if err != nil {
+		return fmt.Errorf("jwt signing key: %w", err)
+	}
+	jwtMgr := auth.NewJWTManager(jwtPrivateKey, 15*time.Minute, 7*24*time.Hour)
 	// Per-username login rate limit: the production default is 5 attempts /
 	// minute; the dev environment configures a higher bound because the
 	// fixture re-authenticates every account during seed/resume and retries
@@ -231,14 +236,19 @@ func authReadOnlyProcedures() map[string]struct{} {
 }
 func main() {
 	configPath := flag.String("config", "configs/auth.dev.yaml", "path to config file")
-	// REQ-065 D3: the dev lifecycle injects the JWT signing key through the
-	// release-manager-jwt Secret as the JWT_SIGNING_KEY env var; the flag
-	// default falls back to it so the Kustomize Deployment needs no static
-	// key in args (Kubernetes cannot expand secretKeyRef values in args).
-	signingKey := flag.String("signing-key", envOr("JWT_SIGNING_KEY", "change-me-in-production"), "JWT signing key")
+	// REQ-065 AC-065-01 / D1=A: management-plane access tokens are EdDSA
+	// (Ed25519). cmd/auth is the only service that holds the private key; every
+	// verifier gets the public half (JWT_PUBLIC_KEY). The key travels as PEM
+	// content through the release-manager-jwt Secret, so the Kustomize
+	// Deployment needs no static key in args (Kubernetes cannot expand
+	// secretKeyRef values in args).
+	//
+	// There is deliberately no default: a missing or non-Ed25519 key fails
+	// startup instead of silently falling back to a weaker scheme.
+	privateKeyPEM := flag.String("jwt-private-key", envOr("JWT_PRIVATE_KEY", ""), "PEM-encoded PKCS#8 Ed25519 JWT signing key")
 	flag.Parse()
 
-	app.Run(*configPath, &authSvc{signingKey: *signingKey})
+	app.Run(*configPath, &authSvc{jwtPrivateKey: *privateKeyPEM})
 }
 
 // envOr returns the environment value or the fallback when unset.

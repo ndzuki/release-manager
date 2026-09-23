@@ -49,6 +49,10 @@ OPERATOR_IMAGE_ARCHIVE ?= $(CURDIR)/.tmp-release-operator.tar
 # ---------------------------------------------------------------------------
 SERVICES := webhook orchestrator operator auth notifier api
 BIN_DIR  := bin
+# Dev Ed25519 JWT key pair (REQ-065 AC-065-01): generated/reused by the devseed
+# helper, mounted as two Secrets by dev-up. `run-api`/`dev-stage-audit` read the
+# public half from here because the audit API only verifies tokens.
+DEV_JWT_DIR ?= data/dev-jwt
 
 .PHONY: build-all
 build-all: $(addprefix build-,$(SERVICES)) ## Build all microservices
@@ -99,9 +103,13 @@ run-auth: build-auth ## Start release-auth
 run-notifier: build-notifier ## Start release-notifier
 	./$(BIN_DIR)/release-notifier --config configs/notifier.dev.yaml
 
+.PHONY: dev-jwt-keys
+dev-jwt-keys: ## Generate/reuse the dev Ed25519 JWT key pair (REQ-065 AC-065-01)
+	@$(GO) run ./cmd/devseed/ -ensure-jwt-keys -jwt-key-dir $(DEV_JWT_DIR)
+
 .PHONY: run-api
-run-api: build-api ## Start release-api
-	./$(BIN_DIR)/release-api --config configs/api.dev.yaml --db data/api.db --signing-key change-me-in-production
+run-api: build-api dev-jwt-keys ## Start release-api
+	./$(BIN_DIR)/release-api --config configs/api.dev.yaml --db data/api.db --jwt-public-key "$$(cat $(DEV_JWT_DIR)/jwt-public-key.pem)"
 
 # ---------------------------------------------------------------------------
 # Development environment (single lifecycle module: deploy/dev/dev.sh)
@@ -335,13 +343,13 @@ dev-stage-auth: proto ## REQ-025,026,049,027 — Auth & RBAC
 	$(GO) run ./cmd/auth/ --config configs/auth.dev.yaml
 
 .PHONY: dev-stage-audit
-dev-stage-audit: proto ## REQ-050,029,030 — Audit, Export & Archive
+dev-stage-audit: proto dev-jwt-keys ## REQ-050,029,030 — Audit, Export & Archive
 	@echo "$(YELLOW)Stage: Audit$(NC)"
 	@echo "$(BLUE)  API: http://localhost:8087/health$(NC)"
 	@echo "$(BLUE)  ▸ api/kulala/audit.http -> Audit Query / Export$(NC)"
 	@echo "$(BLUE)  Archive: retention=$(shell grep retention_days configs/api.dev.yaml 2>/dev/null | awk '{print $$2}')d → data/archives/$(NC)"
 	@fuser -k 8087/tcp 2>/dev/null || true
-	$(GO) run ./cmd/api/ --config configs/api.dev.yaml --db data/api.db --signing-key change-me-in-production
+	$(GO) run ./cmd/api/ --config configs/api.dev.yaml --db data/api.db --jwt-public-key "$$(cat $(DEV_JWT_DIR)/jwt-public-key.pem)"
 
 .PHONY: dev-stage-full
 dev-stage-full: ## All services — how to start them (the single-binary dev-manager no longer exists)

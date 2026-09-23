@@ -62,7 +62,7 @@ func TestAuthInterceptor_OrchestratorExecuteEmergencyChange(t *testing.T) {
 	enforcer, err := NewEnforcer(st, logger)
 	require.NoError(t, err)
 	require.NoError(t, enforcer.LoadPolicies(ctx))
-	jwtManager := NewJWTManager([]byte("test-signing-key"), time.Hour, time.Hour)
+	jwtManager := NewJWTManager(testJWTPrivateKey, time.Hour, time.Hour)
 	interceptor := NewAuthInterceptor(jwtManager, st, enforcer, map[string]bool{}, logger)
 	call := interceptor(func(_ context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
 		return connect.NewResponse(&orchestratorv1.ExecuteEmergencyChangeResponse{}), nil
@@ -175,7 +175,7 @@ func TestAuthInterceptor_OperatorWritePermission(t *testing.T) {
 	enforcer, err := NewEnforcer(st, logger)
 	require.NoError(t, err)
 	require.NoError(t, enforcer.LoadPolicies(ctx))
-	jwtManager := NewJWTManager([]byte("operator-signing-key"), time.Hour, time.Hour)
+	jwtManager := NewJWTManager(testJWTPrivateKey, time.Hour, time.Hour)
 	interceptor := NewAuthInterceptor(jwtManager, st, enforcer, map[string]bool{}, logger)
 	call := interceptor(func(_ context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
 		return connect.NewResponse(&orchestratorv1.CreateEnrollmentTokenResponse{}), nil

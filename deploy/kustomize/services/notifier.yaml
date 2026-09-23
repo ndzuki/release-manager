@@ -26,10 +26,10 @@ spec:
           args:
             - --config
             - /configs/notifier.dev.yaml
-          # D3: every management-plane service consumes release-manager-jwt.
-          envFrom:
-            - secretRef:
-                name: release-manager-jwt
+          # REQ-065 AC-065-01: the notifier does NOT mount any JWT key. It
+          # authenticates with its own service token, so the old
+          # release-manager-jwt mount handed it signing material it never read
+          # (exposure with zero benefit).
           env:
             # TASK-096 (REQ-031): NotifierService is machine-to-machine and now
             # requires a scoped service token (auth.ServiceTokenInterceptor).
