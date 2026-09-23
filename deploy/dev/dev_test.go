@@ -8,8 +8,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -2265,6 +2268,148 @@ exit 0
 	}
 	if !strings.Contains(all, "--seed-retries 7") {
 		t.Fatalf("expected --seed-retries 7 forwarded to devseed:\n%s", all)
+	}
+}
+
+// runJwtHelper sources deploy/dev/lib/jwt.sh and evaluates one expression,
+// returning its trimmed stdout. The smoke script uses the same library, so
+// these tests guard the exact helper the smoke asserts with.
+func runJwtHelper(t *testing.T, expr string) string {
+	t.Helper()
+	lib := filepath.Join(repoRoot(t), "deploy", "dev", "lib", "jwt.sh")
+	script := "set -euo pipefail\nsource " + lib + "\n" + expr + "\n"
+	out, err := exec.CommandContext(context.Background(), "bash", "-c", script).Output()
+	if err != nil {
+		t.Fatalf("jwt helper %q failed: %v", expr, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestJwtAlgHelperDetectsTheSigningAlgorithm is the falsifiable core of the
+// smoke's EdDSA assertion (REQ-065 AC-065-01 / TASK-065 D1=A). It pins that the
+// helper reports the header algorithm — including HS256 — so a revert to
+// symmetric signing cannot pass the smoke unnoticed.
+//
+// Mutation check: making jwt_alg return "EdDSA" unconditionally (or reading the
+// token length instead of the header) makes the HS256 case fail here.
+func TestJwtAlgHelperDetectsTheSigningAlgorithm(t *testing.T) {
+	b64 := func(header string) string {
+		return base64.RawURLEncoding.EncodeToString([]byte(header))
+	}
+	tests := []struct {
+		name  string
+		token string
+		want  string
+	}{
+		{"eddsa header", b64(`{"alg":"EdDSA","typ":"JWT"}`) + ".e30.sig", "EdDSA"},
+		{"hs256 header", b64(`{"alg":"HS256","typ":"JWT"}`) + ".e30.sig", "HS256"},
+		{"hs256 with key order reversed", b64(`{"typ":"JWT","alg":"HS256"}`) + ".e30.sig", "HS256"},
+		{"header without alg", b64(`{"typ":"JWT"}`) + ".e30.sig", ""},
+		{"malformed token", "not-a-jwt", ""},
+		{"empty token", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := runJwtHelper(t, "jwt_alg '"+tt.token+"'")
+			if got != tt.want {
+				t.Fatalf("jwt_alg(%q) = %q, want %q", tt.token, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestJwtHs256ProbeTokenIsAWellFormedHs256Jwt proves the smoke's downgrade
+// probe is a *genuine* HS256 token: three segments, an HS256 header and a
+// signature that verifies with the secret it was signed with. Otherwise a
+// service rejection could just mean "malformed token" and the probe would
+// assert nothing about the algorithm.
+func TestJwtHs256ProbeTokenIsAWellFormedHs256Jwt(t *testing.T) {
+	if _, err := exec.LookPath("openssl"); err != nil {
+		t.Skip("openssl not installed: the HMAC probe cannot be built")
+	}
+	const secret = "change-me-in-production"
+	token := runJwtHelper(t, "jwt_hs256_token "+secret)
+
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("expected a three-segment JWT, got %d segments: %q", len(parts), token)
+	}
+	if alg := runJwtHelper(t, "jwt_alg '"+token+"'"); alg != "HS256" {
+		t.Fatalf("probe header alg = %q, want HS256", alg)
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(parts[0] + "." + parts[1]))
+	want := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	if parts[2] != want {
+		t.Fatalf("probe signature does not verify with its secret: got %q want %q", parts[2], want)
+	}
+}
+
+// TestLengthOnlyAssertionWouldMissHs256 is the negative evidence for the
+// assertion the smoke actually uses. An HS256 token's length is fully
+// controllable through its payload, so a length check cannot be written
+// robustly:
+//
+//   - a pinned equality is brittle (450 is the length this session observed,
+//     but it is a property of the e2e-runner claims, not of EdDSA — and for
+//     this header shape an HS256 token can only reach lengths ≡ 1 (mod 4), so
+//     450 is not even reachable for it);
+//   - any threshold or range check is fooled by padding the payload.
+//
+// This test proves the second point concretely: HS256 tokens can be produced
+// with lengths straddling the observed EdDSA length (below AND above), while
+// remaining HS256. Asserting the header algorithm is what closes the hole.
+func TestLengthOnlyAssertionWouldMissHs256(t *testing.T) {
+	if _, err := exec.LookPath("openssl"); err != nil {
+		t.Skip("openssl not installed: the HMAC probe cannot be built")
+	}
+	// 450 is the access-token length the Ed25519 migration produces (407 under
+	// the previous HS256 scheme).
+	const eddsaTokenLen = 450
+
+	lengthOf := func(pad int) (int, string) {
+		claims := fmt.Sprintf(`{"sub":"downgrade-probe","pad":%q}`, strings.Repeat("x", pad))
+		token := runJwtHelper(t, fmt.Sprintf("jwt_hs256_token change-me-in-production '%s'", claims))
+		return len(token), token
+	}
+
+	var below, above string
+	for pad := 0; pad <= 400 && (below == "" || above == ""); pad++ {
+		n, token := lengthOf(pad)
+		if n < eddsaTokenLen && below == "" {
+			below = token
+		}
+		if n > eddsaTokenLen && above == "" {
+			above = token
+		}
+	}
+	if below == "" || above == "" {
+		t.Skip("could not produce HS256 tokens straddling the EdDSA length")
+	}
+	for _, token := range []string{below, above} {
+		if alg := runJwtHelper(t, "jwt_alg '"+token+"'"); alg != "HS256" {
+			t.Fatalf("the padded token must still be HS256, got %q", alg)
+		}
+	}
+	// Both tokens sit on opposite sides of 450: no length-only predicate can
+	// reject one without rejecting the other, yet both are symmetric-signed.
+	if len(below) >= eddsaTokenLen || len(above) <= eddsaTokenLen {
+		t.Fatalf("expected lengths to straddle %d, got %d and %d",
+			eddsaTokenLen, len(below), len(above))
+	}
+
+	// The two candidate assertion forms, evaluated on the same HS256 token.
+	// The weakened form (length only) records a pass — it is exactly the
+	// mutation the smoke must be immune to; the real form fails it.
+	weakOut := runJwtHelper(t, "TOKEN='"+above+"'\n"+
+		`if [ ${#TOKEN} -ge 400 ]; then printf pass; else printf fail; fi`)
+	if weakOut != "pass" {
+		t.Fatalf("the weakened (length-only) assertion must accept an HS256 token, got %q", weakOut)
+	}
+	realOut := runJwtHelper(t, "TOKEN='"+above+"'\n"+
+		`if [ "$(jwt_alg "$TOKEN")" = "EdDSA" ]; then printf pass; else printf fail; fi`)
+	if realOut != "fail" {
+		t.Fatalf("the real (alg) assertion must reject an HS256 token, got %q", realOut)
 	}
 }
 
