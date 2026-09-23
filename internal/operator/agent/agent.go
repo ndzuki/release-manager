@@ -25,6 +25,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/operator/observer"
 	"github.com/ndzuki/release-manager/internal/operator/secretmetadata"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/client-go/kubernetes"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 )
@@ -92,6 +93,9 @@ type Agent struct {
 	logger            *slog.Logger
 	installFlags      InstallFlags
 	registryPlainHTTP bool
+	// observationInterval is the periodic workload-observation cadence
+	// (TASK-168 W2); zero means defaultObservationInterval.
+	observationInterval time.Duration
 	// connected tracks whether a gateway command stream is currently live
 	// (TASK-099): the agent Pod must not report Ready while its reconnect loop
 	// is between sessions.
@@ -130,6 +134,10 @@ type Config struct {
 	// RegistryPlainHTTP allows OCI chart pulls from a plain HTTP registry
 	// (dev fixture only; production keeps HTTPS — see helmengine options).
 	RegistryPlainHTTP bool
+	// ObservationInterval overrides the periodic workload-observation cadence
+	// (TASK-168 W2). Zero keeps defaultObservationInterval; tests shorten it to
+	// assert the ticker without waiting minutes.
+	ObservationInterval time.Duration
 }
 
 // Result is persisted locally and sent to the orchestrator for idempotent replay.
@@ -182,22 +190,23 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	return &Agent{
-		client:            cfg.Client,
-		engine:            cfg.Engine,
-		store:             cfg.Store,
-		notifier:          cfg.Notifier,
-		syncExecutor:      cfg.SyncExecutor,
-		stages:            cfg.Stages,
-		secrets:           cfg.Secrets,
-		emergencyExecutor: cfg.EmergencyExecutor,
-		secretLister:      cfg.SecretLister,
-		observer:          cfg.Observer,
-		kubeClient:        cfg.KubeClient,
-		sessionID:         cfg.SessionID,
-		operatorID:        cfg.OperatorID,
-		logger:            logger,
-		installFlags:      cfg.InstallFlags,
-		registryPlainHTTP: cfg.RegistryPlainHTTP,
+		client:              cfg.Client,
+		engine:              cfg.Engine,
+		store:               cfg.Store,
+		notifier:            cfg.Notifier,
+		syncExecutor:        cfg.SyncExecutor,
+		stages:              cfg.Stages,
+		secrets:             cfg.Secrets,
+		emergencyExecutor:   cfg.EmergencyExecutor,
+		secretLister:        cfg.SecretLister,
+		observer:            cfg.Observer,
+		kubeClient:          cfg.KubeClient,
+		sessionID:           cfg.SessionID,
+		operatorID:          cfg.OperatorID,
+		logger:              logger,
+		installFlags:        cfg.InstallFlags,
+		registryPlainHTTP:   cfg.RegistryPlainHTTP,
+		observationInterval: cfg.ObservationInterval,
 	}, nil
 }
 
@@ -251,6 +260,14 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.scanWorkloadIdentity(ctx, stream); err != nil {
 		a.logger.Warn("startup workload identity scan failed", "error", err)
 	}
+
+	// TASK-168 W2: identity/observation reports used to be emitted only at
+	// startup and after a successful release write, so a cluster that stopped
+	// receiving releases stopped refreshing its observation and the
+	// orchestrator's 15-minute staleness window flipped the emergency read
+	// model back to fail-closed. Re-report on a fixed cadence, independent of
+	// release traffic. Best-effort: a failed tick only logs.
+	a.startWorkloadObservation(ctx, stream)
 
 	// TASK-155: the heartbeat guard is per connection, not per Agent. A
 	// long-lived Agent serves many connections (cmd/operator's runAgentLoop
@@ -329,6 +346,43 @@ func (a *Agent) sendResyncResponse(ctx context.Context, stream Stream) error {
 // defaultHeartbeatInterval is used only when the orchestrator omits the
 // negotiated interval (it always sends SessionEstablished first).
 const defaultHeartbeatInterval = 15 * time.Second
+
+// defaultObservationInterval is the periodic workload-observation cadence
+// (TASK-168 W2). It matches the inventory sync interval
+// (internal/operator/inventory.go) and sits well inside the orchestrator's
+// 15-minute observation staleness window, so a long release-write silence can
+// never make the emergency read model fail closed on a healthy cluster.
+const defaultObservationInterval = 5 * time.Minute
+
+// startWorkloadObservation re-reports workload identity and the observed field
+// projection for every deployed release once per interval until the connection
+// ends (TASK-168 W2). It mirrors startHeartbeat: a plain ticker bound to the
+// connection context, sending through the same lockedStream, so it can never
+// race the receive loop's Send. Exactly one goroutine runs per Run, and Run is
+// already connection-scoped.
+func (a *Agent) startWorkloadObservation(ctx context.Context, stream Stream) {
+	if a.kubeClient == nil {
+		return // nothing to observe: the scan would fail on every tick
+	}
+	interval := a.observationInterval
+	if interval <= 0 {
+		interval = defaultObservationInterval
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := a.scanWorkloadIdentity(ctx, stream); err != nil {
+					a.logger.Warn("periodic workload observation failed", "error", err)
+				}
+			}
+		}
+	}()
+}
 
 // heartbeatGate keeps exactly one heartbeat goroutine alive per connection.
 //
@@ -717,10 +771,11 @@ func (a *Agent) executeSecretMetadataList(ctx context.Context, command *operator
 	return result
 }
 
-// buildWorkloadIdentityItems resolves live UIDs for one release's workloads
-// (REQ-085). Workloads outside the emergency whitelist (e.g. Job) and
-// workloads whose live UID cannot be read are skipped — an identity item
-// with an empty uid must never reach the orchestrator (D-110 ③ fail closed).
+// buildWorkloadIdentityItems resolves live UIDs and the observed field
+// projection for one release's workloads (REQ-085 + TASK-168 W2). Workloads
+// outside the emergency whitelist (e.g. Job) and workloads whose live UID
+// cannot be read are skipped — an identity item with an empty uid must never
+// reach the orchestrator (D-110 ③ fail closed).
 func (a *Agent) buildWorkloadIdentityItems(ctx context.Context, release *helmengine.Release) []*operatorv1.WorkloadIdentityItem {
 	items := make([]*operatorv1.WorkloadIdentityItem, 0, len(release.Workloads))
 	for _, workload := range release.Workloads {
@@ -731,20 +786,32 @@ func (a *Agent) buildWorkloadIdentityItems(ctx context.Context, release *helmeng
 		if workload.Namespace == "" || workload.Name == "" {
 			continue
 		}
-		uid, err := operatorruntime.WorkloadUID(ctx, a.kubeClient, kind, workload.Namespace, workload.Name)
+		uid, observation, err := operatorruntime.WorkloadObservation(ctx, a.kubeClient, kind, workload.Namespace, workload.Name)
 		if err != nil || uid == "" {
 			a.logger.Debug("skipping workload without live uid",
 				"kind", kind, "namespace", workload.Namespace, "name", workload.Name, "error", err)
 			continue
 		}
-		items = append(items, &operatorv1.WorkloadIdentityItem{
+		item := &operatorv1.WorkloadIdentityItem{
 			ReleaseNamespace: release.Namespace,
 			ReleaseName:      release.Name,
 			Kind:             kind,
 			Name:             workload.Name,
 			Namespace:        workload.Namespace,
 			Uid:              uid,
-		})
+			Containers:       observation.Containers,
+			CurrentImageRefs: observation.ImageRefs,
+		}
+		// The proto field is optional so presence survives the wire: a real
+		// observed 0 must not be flattened into "not observed" (and a DaemonSet,
+		// which has no replica count, must leave it absent).
+		if observation.Replicas != nil {
+			item.CurrentReplicas = observation.Replicas
+		}
+		if !observation.ObservedAt.IsZero() {
+			item.ObservedAt = timestamppb.New(observation.ObservedAt)
+		}
+		items = append(items, item)
 	}
 	return items
 }

@@ -263,8 +263,8 @@ jobs:
       - name: Run PostgreSQL integration tests
         env:
           POSTGRES_TEST_DSN: postgres://postgres:postgres@localhost:55432/release_manager?sslmode=disable
-        run: |
-          go test -tags integration -count=1 ./internal/store/postgres/... ./internal/postgres/... ./internal/migration/...
+        run: | # TASK-168: ./internal/orchestrator/... added so its integration-tagged emergency candidate-list parity gate (TestListCandidateArtifactsEngineParity) runs; its PostgreSQL half never executed while the package was outside this list.
+          go test -tags integration -count=1 ./internal/store/postgres/... ./internal/postgres/... ./internal/migration/... ./internal/orchestrator/...
 
       - name: Stop PostgreSQL
         if: always()

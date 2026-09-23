@@ -86,6 +86,15 @@ message WorkloadIdentityReport {
 // (DEPLOYMENT/STATEFUL_SET/DAEMON_SET). namespace is the workload's
 // Kubernetes namespace; release_namespace/release_name locate the Helm
 // release the workload belongs to.
+//
+// Fields 7..11 are the observed field projection (TASK-168, REQ-058 C1/R1):
+// the same report that carries the identity also carries the current container
+// names, their image refs, the replica count and the observation time, so the
+// orchestrator can derive real current values instead of unavailable
+// sentinels. Every field is additive: an older operator that omits them leaves
+// the orchestrator on the fail-closed "not observed" path. Empty containers /
+// current_image_refs and an absent current_replicas mean "not observed", never
+// a real empty value.
 message WorkloadIdentityItem {
   string release_namespace = 1;
   string release_name = 2;
@@ -93,6 +102,22 @@ message WorkloadIdentityItem {
   string name = 4;
   string namespace = 5;
   string uid = 6;
+  // Live container names of the workload's pod template, in the order the
+  // operator read them. Empty means "not observed".
+  repeated string containers = 7;
+  // Current image ref per container name (key = container name). Empty means
+  // "not observed".
+  map<string, string> current_image_refs = 8;
+  // Observed replica count. proto3 explicit presence is required to tell
+  // "not observed" (absent) apart from a real zero (e.g. a scaled-to-zero
+  // Deployment); DaemonSets have no replica count and leave it absent.
+  optional int32 current_replicas = 9;
+  // Field 10 is intentionally unused: it is reserved for
+  // current_annotations, whose data plane is deferred (annotation values may
+  // carry sensitive data and need a whitelist decision first — TASK-168).
+  // Time the operator took this observation, used for staleness decisions.
+  // Absent means "not observed".
+  google.protobuf.Timestamp observed_at = 11;
 }
 
 // RolloutProgress reports observed workload readiness during a standard operation.

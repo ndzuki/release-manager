@@ -157,6 +157,139 @@ func TestInventoryUpsertPreservesWorkloadIdentity(t *testing.T) {
 	assert.Equal(t, "uid-sts", items[0].WorkloadUID)
 }
 
+// ── TASK-168 (REQ-058 C1/R1): observed workload field projection (migration 000030) ──
+
+// TestInventoryUpdateWorkloadObservation (postgres seam, migration 000030): the
+// observed projection round-trips through the unique-key row, a later
+// observation replaces the earlier one, a real zero replica count survives as
+// zero rather than collapsing into "not observed", and an unknown row returns
+// store.ErrNotFound.
+func TestInventoryUpdateWorkloadObservation(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	seedInventoryRow(t, st, "customer-1", "cluster-1", "apps", "example")
+
+	replicas := int32(3)
+	observedAt := time.Now().UTC().Truncate(time.Second)
+	observation := store.WorkloadObservation{
+		Containers: []string{"api", "sidecar"},
+		ImageRefs: map[string]string{
+			"api":     "registry.example.com/api:1.2.3",
+			"sidecar": "registry.example.com/sidecar:0.4.0",
+		},
+		Replicas:   &replicas,
+		ObservedAt: observedAt,
+	}
+	require.NoError(t, st.Inventories().UpdateWorkloadObservation(ctx, "customer-1", "cluster-1", "apps", "example", observation))
+
+	got, err := st.Inventories().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"api", "sidecar"}, got.ObservedContainers)
+	assert.Equal(t, observation.ImageRefs, got.ObservedImageRefs)
+	require.NotNil(t, got.ObservedReplicas)
+	assert.Equal(t, int32(3), *got.ObservedReplicas)
+	assert.True(t, got.ObservedAt.Equal(observedAt), "observed_at must round-trip: got %s want %s", got.ObservedAt, observedAt)
+
+	// Last write wins, and a real zero replica count is preserved as zero.
+	zero := int32(0)
+	require.NoError(t, st.Inventories().UpdateWorkloadObservation(ctx, "customer-1", "cluster-1", "apps", "example", store.WorkloadObservation{
+		Containers: []string{"api"},
+		ImageRefs:  map[string]string{"api": "registry.example.com/api:1.2.4"},
+		Replicas:   &zero,
+		ObservedAt: observedAt.Add(time.Minute),
+	}))
+	got, err = st.Inventories().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"api"}, got.ObservedContainers)
+	assert.Equal(t, map[string]string{"api": "registry.example.com/api:1.2.4"}, got.ObservedImageRefs)
+	require.NotNil(t, got.ObservedReplicas)
+	assert.Equal(t, int32(0), *got.ObservedReplicas, "a real zero must not collapse into not-observed")
+
+	// Unknown row → ErrNotFound, no implicit insert.
+	err = st.Inventories().UpdateWorkloadObservation(ctx, "customer-1", "cluster-1", "apps", "missing", observation)
+	require.ErrorIs(t, err, store.ErrNotFound)
+	_, err = st.Inventories().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "missing")
+	require.ErrorIs(t, err, store.ErrNotFound)
+}
+
+// TestInventoryObservedWorkloadDefaultsToNotObserved pins the fail-closed
+// representation on the postgres engine too: NULL observed_at/observed_replicas
+// and the defaulted JSON columns decode to the "not observed" zero values.
+func TestInventoryObservedWorkloadDefaultsToNotObserved(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	seedInventoryRow(t, st, "customer-1", "cluster-1", "apps", "example")
+
+	got, err := st.Inventories().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Nil(t, got.ObservedContainers)
+	assert.Nil(t, got.ObservedImageRefs)
+	assert.Nil(t, got.ObservedReplicas)
+	assert.True(t, got.ObservedAt.IsZero())
+}
+
+// TestInventoryUpsertPreservesWorkloadObservation (postgres, migration 000030):
+// an inventory sync Upsert must not clobber a previously reported observation,
+// while an Upsert that carries one writes it on the INSERT path.
+func TestInventoryUpsertPreservesWorkloadObservation(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	seedInventoryRow(t, st, "customer-1", "cluster-1", "apps", "example")
+
+	replicas := int32(4)
+	observedAt := time.Now().UTC().Truncate(time.Second)
+	require.NoError(t, st.Inventories().UpdateWorkloadObservation(ctx, "customer-1", "cluster-1", "apps", "example", store.WorkloadObservation{
+		Containers: []string{"api"},
+		ImageRefs:  map[string]string{"api": "registry.example.com/api:2.0.0"},
+		Replicas:   &replicas,
+		ObservedAt: observedAt,
+	}))
+
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		CustomerID:      "customer-1",
+		ClusterID:       "cluster-1",
+		Namespace:       "apps",
+		ReleaseName:     "example",
+		Chart:           "example-chart",
+		Revision:        2,
+		Status:          "deployed",
+		InventoryStatus: store.InventoryActive,
+	}))
+
+	got, err := st.Inventories().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Equal(t, 2, got.Revision)
+	assert.Equal(t, []string{"api"}, got.ObservedContainers, "sync upsert must not clobber the observation")
+	assert.Equal(t, map[string]string{"api": "registry.example.com/api:2.0.0"}, got.ObservedImageRefs)
+	require.NotNil(t, got.ObservedReplicas)
+	assert.Equal(t, int32(4), *got.ObservedReplicas)
+	assert.True(t, got.ObservedAt.Equal(observedAt))
+
+	inserted := int32(1)
+	insertedAt := observedAt.Add(2 * time.Minute)
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		CustomerID:         "customer-1",
+		ClusterID:          "cluster-1",
+		Namespace:          "apps",
+		ReleaseName:        "fresh",
+		Chart:              "example-chart",
+		Revision:           1,
+		Status:             "deployed",
+		InventoryStatus:    store.InventoryActive,
+		ObservedContainers: []string{"fresh-api"},
+		ObservedImageRefs:  map[string]string{"fresh-api": "registry.example.com/fresh:1.0.0"},
+		ObservedReplicas:   &inserted,
+		ObservedAt:         insertedAt,
+	}))
+	got, err = st.Inventories().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "fresh")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"fresh-api"}, got.ObservedContainers)
+	assert.Equal(t, map[string]string{"fresh-api": "registry.example.com/fresh:1.0.0"}, got.ObservedImageRefs)
+	require.NotNil(t, got.ObservedReplicas)
+	assert.Equal(t, int32(1), *got.ObservedReplicas)
+	assert.True(t, got.ObservedAt.Equal(insertedAt))
+}
+
 // ── REQ-088 (TASK-088): pending workload identity buffer ──
 
 // seedPendingCustomerClusterPg creates the customer/cluster FK targets that
