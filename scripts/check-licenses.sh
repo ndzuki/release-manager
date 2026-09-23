@@ -410,12 +410,24 @@ fi
 if [ -s "$failures" ]; then
   echo "check-licenses: FAIL"
   sed 's/^/  /' "$failures"
-  cat <<'EOF'
+  # Match the guidance to the failure. A stale generated artifact is not a
+  # licence problem, and printing "a strong-copyleft dependency cannot be
+  # shipped" for it sends the reader looking for a licence that is not there --
+  # the summary above already reports denied=0 no-license=0.
+  if grep -qE '^(missing|denied|review) ' "$failures"; then
+    cat <<'EOF'
   A strong-copyleft or unlicensed dependency cannot be shipped in a binary.
   An unrecognised license must be identified by a human first. When an entry is
   genuinely acceptable, record it in license-exceptions.tsv as
   `<module-or-package><TAB><reason>` and re-run.
 EOF
+  fi
+  if grep -q '^stale ' "$failures"; then
+    cat <<'EOF'
+  A generated artifact is stale. This is not a licence problem: regenerate it
+  with the command named above and commit the result.
+EOF
+  fi
   exit 1
 fi
 
