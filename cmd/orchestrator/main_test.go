@@ -1894,10 +1894,10 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 	_, err = svc.store.Outbox().GetByCommandID(ctx, opID+":artifact")
 	require.NoError(t, err, "D-87 first dispatch must be pre-created by the creation transaction")
 
-	// Drive the three operator stages to passed through the outbox. The
-	// artifact stage is consumed by the coordinator itself (TASK-114/U-1), so
-	// it has no operator command to drive.
-	for _, stage := range []string{"render", "cluster", "runtime_pull"} {
+	// Drive every operator stage to passed through the outbox. ADR-024 moved the
+	// artifact stage into the operator, so it is dispatched and polled like the
+	// others instead of being consumed locally by the coordinator (TASK-114/U-1).
+	for _, stage := range []string{"artifact", "render", "cluster", "runtime_pull"} {
 		var entry *store.OutboxEntry
 		require.Eventually(t, func() bool {
 			e, err := svc.store.Outbox().GetByCommandID(ctx, opID+":"+stage)
@@ -1942,6 +1942,10 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 	restartOpID := "op-restart-preflight-e2e"
 	require.NoError(t, svc.store.Operations().Create(ctx, &store.Operation{
 		ID: restartOpID, OperationType: store.OperationInstall, Status: store.StatusPreflight,
+		// ADR-024 made stage selection input-driven: a bundle-less operation
+		// dispatches no chart-dependent stage, so without a bundle the resumed
+		// preflight would finish instantly and race the running-poll below.
+		BundleID:            bundleID,
 		ReleaseDefinitionID: definitionID, IdempotencyKey: "idem-restart-preflight-e2e",
 		RequestHash: "hash-restart-preflight-e2e", StateVersion: 1,
 	}))

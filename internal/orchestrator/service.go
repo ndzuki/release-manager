@@ -457,11 +457,21 @@ func (s *Service) CreateOperation(
 	// unsupported_command_version), so no :artifact entry is created for
 	// UPGRADE (AC-067-13 / D-87 first-row semantics stay unchanged for
 	// INSTALL and the other staged operation types).
+	//
+	// ADR-024: for every other staged type this first row is a real stage
+	// command — the operator runs the artifact check — so Dispatch resolves the
+	// target operator and stamps it on the row (the outbox delivers by
+	// operator_id). It stays a durable record even when no operator is
+	// available, which is the only case that leaves the row undeliverable.
 	var dispatch *store.OutboxEntry
 	var dispatchErr error
 	if op.OperationType != store.OperationUpgrade {
 		dispatch, dispatchErr = s.coordinator.Dispatch(ctx, op, bundleToProto(bundle), merged.effective)
-		if dispatchErr != nil {
+		if dispatchErr != nil && dispatch == nil {
+			// Dispatch could not even build the payload (the coordinator's
+			// definition lookup failed): persist a deferred record so AC-067-13
+			// still holds. The no-operator case returns a usable entry above, so
+			// its resolved (empty) operator id is not thrown away here.
 			payload, marshalErr := (&preflight.CommandPayload{
 				Stage: preflight.StageArtifact, OperationID: op.ID, BundleID: op.BundleID, DefinitionID: def.ID,
 				Bundle: bundleToProto(bundle), Namespace: def.Namespace, ReleaseName: def.ReleaseName, Values: merged.effective,
@@ -546,8 +556,9 @@ func (s *Service) CreateOperation(
 
 	// Build the response BEFORE launching the coordinator: a synchronous
 	// response must report the state this request CASed the operation to, not a
-	// state the detached goroutine raced to (a rollback's preflight is a single
-	// local artifact check since D-V/V-1, so it can reach queued immediately).
+	// state the detached goroutine raced to (a bundle-less rollback dispatches
+	// no chart-dependent stage since ADR-024, so its coordinator can reach
+	// queued in microseconds).
 	response := connect.NewResponse(s.toResponse(op, &verifyResult))
 	if launchPreflight {
 		//nolint:contextcheck // preflight must outlive the request context; Runner.Start detaches deliberately (AC-019-03).

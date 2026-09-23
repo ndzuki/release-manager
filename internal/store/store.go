@@ -271,7 +271,13 @@ type Operation struct {
 // operation, emergency intent, convergence task and idempotency record in one
 // transaction and skips bundle selection/outbox dispatch.
 type OperationCreationRequest struct {
-	Operation                    *Operation
+	Operation *Operation
+	// Dispatch is the operation's first preflight stage command (ADR-024):
+	// the artifact check the operator executes. It is committed in the same
+	// transaction as the operation, so it must carry the resolved operator_id
+	// to be deliverable; an empty operator_id keeps it as the durable
+	// non-deliverable record AC-067-13 requires when no operator is available.
+	// A nil Dispatch commits no outbox row (UPGRADE builds its own :execute).
 	Dispatch                     *OutboxEntry
 	CandidateArtifactDigests     []string
 	ExpectedAuthorizationVersion uint64
@@ -290,7 +296,8 @@ type OperationCreationResult struct {
 }
 
 // OperationCreationUnitOfWork atomically creates an operation, persists its
-// preflight dispatch, selects its bundle, and links candidate artifacts.
+// preflight dispatch (a deliverable artifact stage command when an operator is
+// available — ADR-024), selects its bundle, and links candidate artifacts.
 type OperationCreationUnitOfWork func(
 	ctx context.Context,
 	req OperationCreationRequest,

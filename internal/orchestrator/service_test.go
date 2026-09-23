@@ -555,10 +555,13 @@ func TestCreateOperation_UpgradeDoesNotMutateOtherDefinition(t *testing.T) {
 // RUNNING / CANCELLING (real smoke op 27f05688).
 // driveUpgradeStages passes the operator-side preflight stages that ADR-027
 // restored to the UPGRADE path. Without it the release write is never
-// dispatched: UPGRADE now waits for render/cluster/runtime_pull like INSTALL.
+// dispatched: UPGRADE now waits for artifact/render/cluster/runtime_pull like
+// INSTALL. ADR-024 made the artifact stage a real operator round trip, so it is
+// driven here too (UPGRADE has no pre-created :artifact row — the coordinator
+// dispatches it on demand like any other stage).
 func driveUpgradeStages(t *testing.T, st store.Store, opID string) {
 	t.Helper()
-	for _, stage := range []string{"render", "cluster", "runtime_pull"} {
+	for _, stage := range []string{"artifact", "render", "cluster", "runtime_pull"} {
 		var entry *store.OutboxEntry
 		require.Eventually(t, func() bool {
 			e, err := st.Outbox().GetByCommandID(context.Background(), opID+":"+stage)
@@ -635,14 +638,27 @@ func TestCreateOperation_UpgradeRunsPreflightThenDispatchesExecute(t *testing.T)
 		return err == nil && op.Status == store.StatusQueued
 	}, 5*time.Second, 20*time.Millisecond, "UPGRADE must reach queued")
 
-	// UPGRADE still persists no :artifact dispatch: the operation-creation unit
-	// of work passes a nil Dispatch for it, and runArtifactStage tolerates the
-	// missing row (ADR-027 kept that shape -- only the stage pipeline changed).
-	_, err = st.Outbox().GetByCommandID(context.Background(), opID+":artifact")
-	assert.ErrorIs(t, err, store.ErrNotFound, "UPGRADE must not persist an :artifact dispatch")
+	// ADR-027/D-108 ①b: the operation-creation unit of work still passes a nil
+	// Dispatch for UPGRADE, so no :artifact row is pre-created by the creation
+	// transaction (that stage-shaped first row was the poison; the prohibition
+	// is asserted directly by
+	// TestCreateOperation_UpgradeCreationPreCreatesNoArtifactDispatch).
+	//
+	// ADR-024 supersedes the rest of that shape: the artifact stage is a real
+	// operator check now, so the coordinator dispatches it on demand like every
+	// other stage. The row therefore exists here — written by the pipeline and
+	// addressed to the operator, never by the creation transaction.
+	artifact, err := st.Outbox().GetByCommandID(context.Background(), opID+":artifact")
+	require.NoError(t, err, "ADR-024: UPGRADE runs the artifact stage like every staged operation")
+	artifactPayload, err := preflight.UnmarshalCommandPayload(artifact.Payload)
+	require.NoError(t, err)
+	assert.Equal(t, preflight.StageArtifact, artifactPayload.Stage)
+	assert.Equal(t, "operator-upgrade", artifact.OperatorID,
+		"the artifact stage command must be addressed to the operator")
 
-	// deliverPending first delivery: GetNextPending must return the :execute
-	// upgrade command (OperationType/阶段一致), never a stage-shaped payload.
+	// deliverPending first delivery: the artifact stage row was driven to
+	// persisted above, so the only pending row is the :execute upgrade command
+	// (OperationType/阶段一致).
 	next, err := st.Outbox().GetNextPending(context.Background(), "operator-upgrade")
 	require.NoError(t, err)
 	assert.Equal(t, opID+":execute", next.CommandID)
@@ -651,6 +667,45 @@ func TestCreateOperation_UpgradeRunsPreflightThenDispatchesExecute(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, uint32(2), decoded.PayloadVersion)
 	assert.NotNil(t, decoded.Upgrade)
+}
+
+// ADR-027/D-108 ①b: the UPGRADE creation transaction must not carry a
+// pre-created :artifact dispatch. That stage-shaped first row was delivered
+// before the upgrade command and the agent rejected it with
+// unsupported_command_version (real smoke op 27f05688).
+//
+// ADR-024 supersedes the rest of that shape — the artifact stage is a real
+// operator check now, so the coordinator dispatches it on demand — but keeps the
+// prohibition. With no operator the prohibition is directly observable: the
+// coordinator's artifact stage fails closed at operator resolution before it can
+// write a row, so a row can only exist if the creation unit of work created one.
+func TestCreateOperation_UpgradeCreationPreCreatesNoArtifactDispatch(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedUpgradeInventory(t, st)
+
+	// No operators registered.
+	resp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:           "UPGRADE",
+		BundleId:                "bundle-upgrade",
+		ReleaseDefinitionId:     "def-001",
+		ValuesRevisionId:        "vr-001",
+		ExpectedCurrentRevision: 1,
+	}), "idem-upgrade-no-artifact"))
+	require.NoError(t, err)
+	opID := resp.Msg.OperationId
+
+	// The detached coordinator fails the operation closed at its first stage
+	// without ever writing an :artifact row.
+	require.Eventually(t, func() bool {
+		op, getErr := st.Operations().Get(context.Background(), opID)
+		return getErr == nil && op.Status == store.StatusFailed
+	}, 5*time.Second, 20*time.Millisecond, "UPGRADE preflight must fail closed without an operator")
+
+	_, err = st.Outbox().GetByCommandID(context.Background(), opID+":artifact")
+	assert.ErrorIs(t, err, store.ErrNotFound,
+		"the UPGRADE creation unit of work must not pre-create an :artifact dispatch")
 }
 
 // TASK-082 AC-082-03 (D-108): with the dispatch fix in place the full UPGRADE
@@ -1384,12 +1439,16 @@ func deployerCtx() context.Context {
 	})
 }
 
+// seedCancelableOperation creates a synthetic INSTALL operation. It carries a
+// bundle because the production path always has one and ADR-024 made the stage
+// selection input-driven: a bundle-less operation dispatches no stage, so a
+// resumed preflight on this fixture would finish before a test could observe it.
 func seedCancelableOperation(t *testing.T, st store.Store, id string, status store.OperationStatus) {
 	t.Helper()
 	require.NoError(t, st.Operations().Create(context.Background(), &store.Operation{
 		ID: id, OperationType: store.OperationInstall, Status: status,
-		ReleaseDefinitionID: "def-001",
-		IdempotencyKey:      id + "-key", RequestHash: id + "-hash", StateVersion: 1,
+		ReleaseDefinitionID: "def-001", BundleID: "bundle-001",
+		IdempotencyKey: id + "-key", RequestHash: id + "-hash", StateVersion: 1,
 	}))
 }
 
@@ -2524,11 +2583,12 @@ func TestCreateOperation_UpgradeWaitsForPreflight(t *testing.T) {
 	require.NoError(t, err)
 	opID := resp.Msg.OperationId
 
-	// The pipeline is at the render stage and no operator has answered it.
+	// The pipeline is at the artifact stage (ADR-024: the first operator round
+	// trip) and no operator has answered it.
 	require.Eventually(t, func() bool {
-		_, err := st.Outbox().GetByCommandID(context.Background(), opID+":render")
+		_, err := st.Outbox().GetByCommandID(context.Background(), opID+":artifact")
 		return err == nil
-	}, 5*time.Second, 20*time.Millisecond, "UPGRADE must dispatch the render stage")
+	}, 5*time.Second, 20*time.Millisecond, "UPGRADE must dispatch the artifact stage")
 
 	_, err = st.Outbox().GetByCommandID(context.Background(), opID+":execute")
 	assert.ErrorIs(t, err, store.ErrNotFound, "the release write must wait for preflight")

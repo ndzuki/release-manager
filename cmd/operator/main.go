@@ -375,7 +375,7 @@ func loadRESTConfig(kubeConfig string) (*rest.Config, error) {
 // buildStageDispatcher assembles the operator-side preflight stage executors
 // (TASK-114 AC 3).
 //
-// All three stages are registered together on purpose. The agent fails a stage
+// All four stages are registered together on purpose. The agent fails a stage
 // closed when its executor is missing, and a failed required stage aborts the
 // release, so a partially assembled dispatcher would break every INSTALL.
 //
@@ -415,6 +415,8 @@ func (s *operatorSvc) buildStageDispatcher(
 		},
 	)
 	return operator.NewStageDispatcher(nil, map[string]operator.StageExecutor{
+		string(orchestratorpreflight.StageArtifact): operator.NewArtifactStageExecutor(
+			engine, s.registryPlainHTTP, logger),
 		string(orchestratorpreflight.StageRender): operator.NewRenderStageExecutor(
 			engine, s.registryPlainHTTP, logger),
 		string(orchestratorpreflight.StageCluster): operator.NewClusterStageExecutor(

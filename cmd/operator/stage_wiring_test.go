@@ -39,6 +39,7 @@ func TestBuildStageDispatcherWiresEveryPreflightStage(t *testing.T) {
 	// error. That is how the test tells routing from a fall-through to the
 	// dispatcher's (nil) ordinary path.
 	stageErrors := map[string]string{
+		"artifact":     "artifact stage",
 		"render":       "render stage",
 		"cluster":      "cluster stage",
 		"runtime_pull": "runtime pull stage",
@@ -56,9 +57,14 @@ func TestBuildStageDispatcherWiresEveryPreflightStage(t *testing.T) {
 	}
 
 	// TASK-114 AC 2: an unregistered stage fails closed instead of executing as
-	// a release write. `artifact` is consumed by the orchestrator, so it is
-	// deliberately not registered here.
-	for _, stage := range []string{"artifact", "not-a-stage"} {
+	// a release write.
+	//
+	// `artifact` used to be listed here: it was consumed by the orchestrator
+	// locally and was deliberately not registered on the operator side. ADR-024
+	// supersedes that design -- the artifact preflight must run on the operator
+	// against the real chart archive -- so `artifact` is now registered (see
+	// stageErrors above) and only a genuinely unknown stage reaches this loop.
+	for _, stage := range []string{"not-a-stage"} {
 		t.Run("unregistered-"+stage, func(t *testing.T) {
 			_, err := dispatcher.Execute(t.Context(), &operatorv1.Command{
 				CommandId: "cmd-" + stage, OperationId: "op-1", Stage: stage,
