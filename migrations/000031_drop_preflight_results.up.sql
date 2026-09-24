@@ -1,0 +1,13 @@
+-- D1 (2026-09-28): drop the cache-based preflight_results table.
+--
+-- The artifact-preflight code that produced these rows (internal/preflight/**)
+-- was deleted under V1: ADR-024 moved artifact preflight to the operator side,
+-- the package had zero importers, and store.PreflightStore / PreflightResults()
+-- plus both engine implementations are removed in this same change. V1 deferred
+-- the DROP until production was confirmed empty; the owner has confirmed there is
+-- no production database, so that precondition is met and the table can go.
+--
+-- This drops exactly ONE table. operations.preflight_result_json (migration
+-- 000028) belongs to a different, live feature, and preflight_lifecycles
+-- (REQ-019) is a different table — neither is touched here.
+DROP TABLE IF EXISTS preflight_results;
