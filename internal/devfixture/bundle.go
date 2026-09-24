@@ -24,11 +24,15 @@ import (
 )
 
 // bundle image constants (REQ-065: the bundle carries the fixture chart plus
-// one image artifact; the chart's values reference localhost:5001/release-fixture).
+// one image artifact; the chart's values reference the host-side fixture image).
 const (
-	bundleImageRef        = "localhost:5001/release-fixture:dev"
 	bundleImageValuesPath = "image.repository"
 )
+
+// bundleImageRef is the fixture image reference devseed resolves and the bundle
+// advertises. A function, not a constant: it follows DEV_REGISTRY_HOST (see
+// devRegistryHost) so the ref matches the port the image was actually pushed to.
+func bundleImageRef() string { return devRegistryHost() + "/release-fixture:dev" }
 
 // chartPackager produces the deterministic chart digest for the bundle.
 // Package performs side effects (packaging + registry push); Digest is the
@@ -186,7 +190,7 @@ func pushChartArchive(_ context.Context, tgzPath string) error {
 	if err != nil {
 		return fmt.Errorf("create helm registry client: %w", err)
 	}
-	ref := bundleChartHostRef + ":" + bundleChartVer
+	ref := bundleChartHostRef() + ":" + bundleChartVer
 	if _, err := client.Push(raw, ref); err != nil {
 		return fmt.Errorf("push fixture chart to %s: %w", ref, err)
 	}
@@ -213,12 +217,12 @@ func fixtureImageDigest() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("create helm registry client: %w", err)
 	}
-	desc, err := client.Resolve(bundleImageRef)
+	desc, err := client.Resolve(bundleImageRef())
 	if err != nil {
-		return "", fmt.Errorf("resolve fixture image %s: %w", bundleImageRef, err)
+		return "", fmt.Errorf("resolve fixture image %s: %w", bundleImageRef(), err)
 	}
 	if desc.Digest == "" {
-		return "", fmt.Errorf("resolve fixture image %s: empty digest", bundleImageRef)
+		return "", fmt.Errorf("resolve fixture image %s: empty digest", bundleImageRef())
 	}
 	return desc.Digest.String(), nil
 }
@@ -240,7 +244,7 @@ func (r *runner) phaseBundle(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	r.cfg.log().Info("fixture image digest resolved", "ref", bundleImageRef, "digest", imageDigest)
+	r.cfg.log().Info("fixture image digest resolved", "ref", bundleImageRef(), "digest", imageDigest)
 
 	req := connect.NewRequest(&webhookv1.SubmitReleaseBundleRequest{
 		Name:         bundleName,
@@ -248,7 +252,7 @@ func (r *runner) phaseBundle(ctx context.Context) error {
 		ChartVersion: bundleChartVer,
 		ChartDigest:  chartDigest,
 		Images: []*commonv1.BundleImage{{
-			Ref:        bundleImageRef,
+			Ref:        bundleImageRef(),
 			Digest:     imageDigest,
 			ValuesPath: bundleImageValuesPath,
 			ValueKind:  commonv1.ImageValueKind_IMAGE_VALUE_KIND_FULL_REFERENCE,

@@ -622,6 +622,7 @@ exit 0
 		t.Fatalf("resolve real go for the devseed shim: %v", lookErr)
 	}
 	writeShim(t, binDir, "go", fmt.Sprintf(`#!/usr/bin/env bash
+printf '%%s\n' "${DEV_REGISTRY_HOST:-}" >> "$DEV_DATA_DIR/go-registry-host.log"
 if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
 for a in "$@"; do
   if [ "$a" = "-ensure-jwt-keys" ]; then exec %s "$@"; fi
@@ -896,6 +897,15 @@ func TestRegistryPortOverrideDerivesEveryReference(t *testing.T) {
 	if !strings.Contains(string(dockerCreates), "127.0.0.1:5009:5000") {
 		t.Fatalf("the registry container must publish the overridden port:\n%s", dockerCreates)
 	}
+	// devseed embeds the host-side registry endpoint in the fixture refs it
+	// resolves and pushes, so it must receive the same port.
+	hostEnv, err := os.ReadFile(filepath.Join(stateDir, "go-registry-host.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(hostEnv), "localhost:5009") || strings.Contains(string(hostEnv), "localhost:5001") {
+		t.Fatalf("devseed must be told the overridden registry host:\n%s", hostEnv)
+	}
 }
 
 // TestDefaultRegistryPortUsesTheRepositoryMirror pins the "defaults unchanged"
@@ -933,6 +943,13 @@ func TestDefaultRegistryPortUsesTheRepositoryMirror(t *testing.T) {
 	}
 	if !strings.Contains(string(applied), "localhost:5001/release-") {
 		t.Fatalf("default image references must stay localhost:5001:\n%s", applied)
+	}
+	hostEnv, err := os.ReadFile(filepath.Join(stateDir, "go-registry-host.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(hostEnv), "localhost:5001") {
+		t.Fatalf("devseed must receive the default registry host:\n%s", hostEnv)
 	}
 }
 
@@ -1277,6 +1294,7 @@ func TestResetDataSplitsSeedAroundEnrollmentAndDeploysAgents(t *testing.T) {
 	// probe, and write the four enrollment tokens on the --stop-after
 	// enrollment leg (the split-seed agents_up stage consumes them).
 	writeShim(t, binDir, "go", `#!/usr/bin/env bash
+printf '%s\n' "${DEV_REGISTRY_HOST:-}" >> "$DEV_DATA_DIR/go-registry-host.log"
 if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
 prev=""
 for a in "$@"; do
@@ -1385,6 +1403,7 @@ func TestAgentsUpDeploysOperatorWithCorrectKubectlContract(t *testing.T) {
 	// devseed shim: record invocations and write the four enrollment tokens
 	// (agents_up consumes them).
 	writeShim(t, binDir, "go", `#!/usr/bin/env bash
+printf '%s\n' "${DEV_REGISTRY_HOST:-}" >> "$DEV_DATA_DIR/go-registry-host.log"
 if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
 printf '%s\n' "$*" >> "$DEV_DATA_DIR/go-calls.log"
 if [[ "$*" == *"-print-fixture-version"* ]]; then printf 'v22\n'; exit 0; fi
@@ -1520,6 +1539,7 @@ func resetDataAgentsEnv(t *testing.T) (stateDir string, env []string) {
 	fakeK3d(t, binDir, stateDir)
 	happyShims(t, binDir)
 	writeShim(t, binDir, "go", `#!/usr/bin/env bash
+printf '%s\n' "${DEV_REGISTRY_HOST:-}" >> "$DEV_DATA_DIR/go-registry-host.log"
 if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
 if [[ "$*" == *"-print-fixture-version"* ]]; then printf 'v22\n'; exit 0; fi
 if [[ "$*" == *"--stop-after enrollment"* ]]; then
@@ -1730,6 +1750,7 @@ func TestSeedLegRetriesTransientDevseedFailure(t *testing.T) {
 	// devseed shim: record invocations, fail the FIRST enrollment leg with a
 	// transient unavailable error, then succeed and write the tokens.
 	writeShim(t, binDir, "go", `#!/usr/bin/env bash
+printf '%s\n' "${DEV_REGISTRY_HOST:-}" >> "$DEV_DATA_DIR/go-registry-host.log"
 if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
 if [[ "$*" == *"-print-fixture-version"* ]]; then printf 'v22\n'; exit 0; fi
 printf '%s\n' "$*" >> "$DEV_DATA_DIR/go-calls.log"
@@ -1847,6 +1868,7 @@ exit 0
 `)
 	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "go", `#!/usr/bin/env bash
+printf '%s\n' "${DEV_REGISTRY_HOST:-}" >> "$DEV_DATA_DIR/go-registry-host.log"
 if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
 prev=""
 for a in "$@"; do
@@ -2032,6 +2054,7 @@ exit 0
 		// The mTLS CA ensure (批次5 D1) runs before the registry stage; the
 		// shim writes the dummy CA pair so the conflict gate is the failure.
 		writeShim(t, binDir, "go", `#!/usr/bin/env bash
+printf '%s\n' "${DEV_REGISTRY_HOST:-}" >> "$DEV_DATA_DIR/go-registry-host.log"
 if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
 prev=""
 for a in "$@"; do
@@ -2346,6 +2369,7 @@ exit 0
 `)
 	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "go", `#!/usr/bin/env bash
+printf '%s\n' "${DEV_REGISTRY_HOST:-}" >> "$DEV_DATA_DIR/go-registry-host.log"
 if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
 prev=""
 for a in "$@"; do
@@ -2816,6 +2840,7 @@ func TestMtlsCaGeneratedAndReused(t *testing.T) {
 	// The shim parses -mtls-ca-dir as a value-taking flag, matching the real
 	// Go flag semantics of cmd/devseed.
 	writeShim(t, binDir, "go", `#!/usr/bin/env bash
+printf '%s\n' "${DEV_REGISTRY_HOST:-}" >> "$DEV_DATA_DIR/go-registry-host.log"
 if [ "$1" = "env" ]; then printf 'https://proxy.golang.org,direct\n'; exit 0; fi
 printf '%s\n' "$*" >> "$DEV_DATA_DIR/go-calls.log"
 prev=""
