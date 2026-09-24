@@ -90,6 +90,20 @@ Ed25519 公钥验签（`cmd/api/main.go:64` 的 `jwtauth.ParseEd25519PublicKeyPE
 缺失或非 Ed25519 时的启动 fail-closed）由 e2e 真实执行：`make dev-up` 等待它的 rollout 并探它的
 `/readyz`，冒烟再带 e2e-runner 的 bearer 调 `QueryAuditEvents`（并断言无 bearer 时 401）。
 
+> ✅ **live smoke 已跑通（2026-09-24）：`SMOKE SUMMARY: 44 pass, 0 fail`**，命令
+> `REGISTRY_PORT=5009 DEV_K3D_API_PORT=6449 make e2e-prerequisite-ci`（非冲突端口），退出码 0；
+> 4 条 api 断言在真实环境全部通过：`api /readyz 200 (http://localhost:8088/readyz)`、
+> `api verified the EdDSA bearer against the public key (HTTP 200)`、
+> `api rejects a tampered bearer (invalid token)`、`api rejects a missing bearer`；
+> `/environment` 一致性也已扩到 **6 个服务**（含 api）。
+>
+> 途中修掉两个真实缺陷（都曾让 live smoke 跑不通，均非"环境不便"）：
+> ① `deploy/docker/Dockerfile.api` **缺 `ARG GOPROXY`**（其它 Go Dockerfile 都有）⇒ 容器内回落到不可达的
+> `proxy.golang.org`，`go mod download` 约 6 分钟后 `i/o timeout`（`docker_build_failed: build failed for release-api`）；
+> ② fixture 的镜像/chart 引用**硬编码 `localhost:5001`**（`internal/devfixture/bundle.go`、`runner.go`）⇒
+> `REGISTRY_PORT` 覆盖时 seed 报 `resolve fixture image localhost:5001/release-fixture:dev: not found`；
+> 现由 `DEV_REGISTRY_HOST` seam 派生（`dev.sh` 从 `REGISTRY_PORT` 传入，**默认 5001 行为不变**）。
+
 - **端口**：8082–8087 由原来那六个服务占满（8087 是 `web`），因此 api 用 **8088**，NodePort **30088**
   （`deploy/dev/lib/host.sh` 的 `DEV_PORTS` 含 8088，`dev.sh` 的 loadbalancer 映射为
   `8082-8088:30082-30088`）。

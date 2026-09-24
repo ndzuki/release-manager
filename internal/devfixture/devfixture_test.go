@@ -688,7 +688,7 @@ func TestRun_BundleImageDigestIsResolvedFromRegistry(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, fakes.webhook.lastImages, 1)
 	img := fakes.webhook.lastImages[0]
-	require.Equal(t, bundleImageRef, img.GetRef())
+	require.Equal(t, bundleImageRef(), img.GetRef())
 	require.Equal(t, resolved, img.GetDigest())
 	require.Equal(t, commonv1.ImageValueKind_IMAGE_VALUE_KIND_FULL_REFERENCE, img.GetValueKind())
 }
@@ -763,6 +763,32 @@ func TestRun_WriteRetryReusesSameIdempotencyKey(t *testing.T) {
 	require.Equal(t, "devseed-bundle-submit", fakes.webhook.idemKeys[0])
 	require.Equal(t, fakes.webhook.idemKeys[0], fakes.webhook.idemKeys[1],
 		"retry must replay the same idempotency key")
+}
+
+// TestFixtureRefsFollowTheRegistryHostSeam covers the devseed half of the
+// registry-port seam (REQ-065 D2): devseed resolves the fixture image and pushes
+// the fixture chart at the HOST-side registry endpoint, so those references must
+// follow DEV_REGISTRY_HOST. Otherwise an overridden port pushes the image to
+// :5009 while devseed still resolves :5001 — real run 2026-09-24:
+// `resolve fixture image localhost:5001/release-fixture:dev: not found`.
+//
+// Mutation check: restoring the hardcoded `localhost:5001` constants makes the
+// override case fail here.
+func TestFixtureRefsFollowTheRegistryHostSeam(t *testing.T) {
+	t.Run("default stays localhost:5001", func(t *testing.T) {
+		t.Setenv(devRegistryHostEnv, "")
+		assert.Equal(t, "localhost:5001/release-fixture:dev", bundleImageRef())
+		assert.Equal(t, "localhost:5001/release-fixture", bundleChartHostRef())
+	})
+	t.Run("override follows the environment", func(t *testing.T) {
+		t.Setenv(devRegistryHostEnv, "localhost:5009")
+		assert.Equal(t, "localhost:5009/release-fixture:dev", bundleImageRef())
+		assert.Equal(t, "localhost:5009/release-fixture", bundleChartHostRef())
+	})
+	t.Run("blank value keeps the default", func(t *testing.T) {
+		t.Setenv(devRegistryHostEnv, "   ")
+		assert.Equal(t, "localhost:5001/release-fixture:dev", bundleImageRef())
+	})
 }
 
 // TestRun_EnrollmentTokensCarryThe24hDevTTL pins AC-065-18: devseed must ask

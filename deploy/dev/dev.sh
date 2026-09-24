@@ -73,6 +73,14 @@ REGISTRY_CONTAINER="k3d-$REGISTRY_NAME"
 # second session could not start at all (`registry_unreachable: Bind for
 # 0.0.0.0:5001 failed`).
 REGISTRY_PORT="${REGISTRY_PORT:-5001}"
+# The fixture references devseed embeds (the image ref it resolves and the
+# host-side chart push target) must follow the registry port: otherwise the
+# image is pushed to the overridden port while devseed resolves localhost:5001
+# (real run 2026-09-24: `resolve fixture image localhost:5001/release-fixture:dev:
+# not found`). Composed here from REGISTRY_PORT — the single source — and
+# EXPORTED so the devseed child process inherits it. Unset keeps the documented
+# localhost:5001 inside devseed, so the default path is unchanged.
+export DEV_REGISTRY_HOST="localhost:${REGISTRY_PORT}"
 # k3d control-cluster API port, same rationale: 6443 is the k3d default and is
 # routinely taken by another local cluster. Only the control cluster binds it
 # (customer clusters get k3d-assigned ports).

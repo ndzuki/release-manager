@@ -17,6 +17,33 @@ import (
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 )
 
+// devRegistryHostEnv / defaultDevRegistryHost — the HOST-side registry endpoint
+// the fixture references embed (the image ref devseed resolves and the chart
+// push target). dev.sh exports DEV_REGISTRY_HOST=localhost:$REGISTRY_PORT so a
+// second dev environment on a non-conflicting port pushes AND resolves the
+// fixture at the same endpoint; unset keeps the documented localhost:5001, so
+// the default path is byte-identical. Without this seam an overridden port
+// pushed the image to :5009 while devseed still resolved :5001 — real run
+// 2026-09-24: `resolve fixture image localhost:5001/release-fixture:dev: not found`.
+const (
+	devRegistryHostEnv     = "DEV_REGISTRY_HOST"
+	defaultDevRegistryHost = "localhost:5001"
+)
+
+// devRegistryHost returns the host-side registry endpoint (host:port).
+func devRegistryHost() string {
+	if host := strings.TrimSpace(os.Getenv(devRegistryHostEnv)); host != "" {
+		return host
+	}
+	return defaultDevRegistryHost
+}
+
+// bundleChartHostRef is the HOST-side chart push reference (devseed pushes the
+// chart archive into the local registry from the dev host). A function, not a
+// constant: it follows DEV_REGISTRY_HOST. Same registry as bundleChartRef,
+// different reachable endpoint.
+func bundleChartHostRef() string { return devRegistryHost() + "/release-fixture" }
+
 // DevelopmentFixture is the canonical seed contract (REQ-065): stable
 // logical identities, deterministic client-supplied ids where the contract
 // allows them (CreateCustomer/CreateCluster), and the nine-phase execution
@@ -31,21 +58,16 @@ const (
 	// / emergency changes; 批次4 D1/D2, AC-065-34).
 	e2eRunnerUser = "e2e-runner"
 
-	bundleName      = "dev-release-bundle"
+	bundleName = "dev-release-bundle"
 	// bundleChartRef is the OCI reference the OPERATOR pulls (installed into
 	// the customer cluster). It must be reachable from the operator pod, so it
 	// uses the registry.dev.release-manager.local hostAlias injected into the
 	// agent deployment (real smoke 2026-08-27: localhost:5001 resolved to the
 	// pod's own loopback → helm_install_failed connection refused).
 	bundleChartRef  = "oci://registry.dev.release-manager.local:5000/release-fixture"
-	// bundleChartHostRef is the HOST-side push reference (devseed pushes the
-	// chart archive into the local registry from the dev host, where the
-	// registry is published as localhost:5001). Same registry, different
-	// reachable endpoint.
-	bundleChartHostRef = "localhost:5001/release-fixture"
-	bundleChartVer   = "0.1.0"
-	bundleGitCommit  = "dev"
-	bundlePipeline   = "dev-seed"
+	bundleChartVer  = "0.1.0"
+	bundleGitCommit = "dev"
+	bundlePipeline  = "dev-seed"
 
 	// devTrustRootKeyID is the stable key id of the Dev Trust Root.
 	devTrustRootKeyID = "dev-trust-root"

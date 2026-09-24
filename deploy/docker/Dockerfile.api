@@ -1,4 +1,12 @@
 FROM golang:1.27.1@sha256:f44f6e88636cfb311f9ebace870ded69d943f227bb3cb27d32ffd84ea18c43ea AS builder
+# GOPROXY build-arg: dev.sh injects the host's `go env GOPROXY`; the image's
+# built-in default (proxy.golang.org) is unreachable from CN hosts. Without
+# this ARG the --build-arg is silently dropped for THIS image only (every other
+# Go Dockerfile declares it), so `go mod download` dials proxy.golang.org and
+# dies with `dial tcp …:443: i/o timeout` after ~6 minutes — the 2026-09-24
+# `docker_build_failed: build failed for release-api`.
+ARG GOPROXY
+ENV GOPROXY=$GOPROXY
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
