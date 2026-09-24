@@ -1,8 +1,8 @@
 # release-manager
 
-面向多客户 Kubernetes 集群的 **Helm 发布管理控制面**：把「发布什么、发到哪个客户的哪个集群、谁批准的、结果如何」收敛为一条可审计、可回滚、可显式收敛的执行链。
+面向多个 Kubernetes 集群的 **Helm 发布管理控制面**：把「发布什么、发到哪个集群、谁批准的、结果如何」收敛为一条可审计、可回滚、可显式收敛的执行链。
 
-控制面负责编排、授权、审批、审计与状态权威；客户集群侧只运行一个 **Operator**，以**出站**连接回控制面，并在集群内使用 **Helm Go SDK** 执行安装/升级/回滚（运行时禁止调用命令行）。
+控制面负责编排、授权、审批、审计与状态权威；目标集群侧只运行一个 **Operator**，以**出站**连接回控制面，并在集群内使用 **Helm Go SDK** 执行安装/升级/回滚（运行时禁止调用命令行）。
 
 > 需求、任务与架构决策的**权威记录**在知识库 `myNote/Projects/001-release-manager/`（Requirements / Tasks / Design / Notes）。本仓库的 `docs/` 是面向代码读者的**发布面**文档，`docs/decisions/` 是 ADR 的导出副本。
 
@@ -10,7 +10,7 @@
 
 | 约束 | 说明 |
 |---|---|
-| 执行边界 | 中心控制面不直接访问客户集群；Operator 出站连接 + 持久命令 Outbox 与本地重放 |
+| 执行边界 | 中心控制面不直接访问目标集群；Operator 出站连接 + 持久命令 Outbox 与本地重放 |
 | SDK-only | 集群内执行一律走 Helm Go SDK；`make sdk-check` 静态门禁拦截 `os/exec` 类路径 |
 | 单一契约面 | protobuf + Connect 单端口统一协议；Go/TS 客户端由 `buf` 生成，手写客户端不入库 |
 | 数据权威 | 生产 PostgreSQL 为单一权威；SQLite 仅用于 dev/test，**schema 必须双引擎兼容** |
@@ -30,7 +30,7 @@
 | 二进制 | 职责 | dev 端口 |
 |---|---|---|
 | `release-orchestrator` | 发布编排：Operation 生命周期、客户/集群/发布定义、Values、紧急变更 | 8083 |
-| `release-operator` | 客户集群侧 agent：mTLS 双向流、集群内 Helm 执行 | 8084 |
+| `release-operator` | 目标集群侧 agent：mTLS 双向流、集群内 Helm 执行 | 8084 |
 | `release-auth` | 认证、组织与成员、客户绑定、授权快照 | 8085 |
 | `release-notifier` | 通知投递与死信 | 8086 |
 | `release-api` | 审计查询/导出与只读 API | 8087 |
