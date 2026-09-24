@@ -22,7 +22,7 @@
 
 ## 2. 怎么用
 
-1. 起环境：`make dev-up`（host-run 形态，端口 8082–8087）或 k3d 集群形态（NodePort 30082–30087，
+1. 起环境：`make dev-up`（host-run 形态，端口 8082–8088）或 k3d 集群形态（NodePort 30082–30088，
    见 `docs/dev-environment.md`）。profile 对应关系：`dev` → host-run，`cluster` → k3d。
 2. 导出凭据（都不入库、不进集合文件）：
    - 管理员口令：`set -a; . data/dev-credentials.env; set +a`（`dev.sh` 生成，含 `DEV_ADMIN_PASSWORD`）

@@ -81,17 +81,23 @@ Makefile 内没有对应的转发 target，需在 `web/` 目录内直接运行�
 API 与受限 client-go（restart 专用 patch 权限）**，不做数据库直写、不走测试旁路、不调用
 helm/kubectl 子进程。
 
-### 覆盖边界：`cmd/api` 不在 dev 环境内
+### 覆盖范围：`cmd/api` 已纳入 dev 环境（REQ-065 D2）
 
-e2e（含 `make e2e-prerequisite`）只覆盖 `deploy/kustomize/services/kustomization.yaml` 部署的那组
-服务：webhook / orchestrator / auth / notifier / notification-sink / web。**`cmd/api` 不在其中**，
-因此它的 Ed25519 JWT 验签（`cmd/api/main.go:64` 的 `jwtauth.ParseEd25519PublicKeyPEM`，以及
-`-jwt-public-key` 缺失或非 Ed25519 时的启动 fail-closed）**不被任何 e2e 阶段执行**，只由 `cmd/api`
-的单元测试覆盖（例如 `cmd/api/main_test.go:144` 的 `TestAPIRegisterFailsClosedOnNonEd25519Key`）。
-不要被端口号误导：dev 的 8082–8087 端口带由上面那组 kustomize 服务占用（8087 是 `web`），`cmd/api`
-只有本地 `make run-api` 的手工入口，不属于 `dev-up`/`dev-seed` 拉起的环境。
-这是**已知的覆盖边界，不是回归**：把 `cmd/api` 加进 dev 环境是一次独立的环境变更，需另行评估，
-本文件只记录现状。
+e2e（含 `make e2e-prerequisite`）覆盖 `deploy/kustomize/services/kustomization.yaml` 部署的**全部**服务：
+webhook / orchestrator / auth / notifier / notification-sink / web **以及 `cmd/api`**（release-api，
+`deploy/kustomize/services/api.yaml`）。api 是除 orchestrator 之外唯一的管理面**验签方**，纳入后它的
+Ed25519 公钥验签（`cmd/api/main.go:64` 的 `jwtauth.ParseEd25519PublicKeyPEM`，以及 `-jwt-public-key`
+缺失或非 Ed25519 时的启动 fail-closed）由 e2e 真实执行：`make dev-up` 等待它的 rollout 并探它的
+`/readyz`，冒烟再带 e2e-runner 的 bearer 调 `QueryAuditEvents`（并断言无 bearer 时 401）。
+
+- **端口**：8082–8087 由原来那六个服务占满（8087 是 `web`），因此 api 用 **8088**，NodePort **30088**
+  （`deploy/dev/lib/host.sh` 的 `DEV_PORTS` 含 8088，`dev.sh` 的 loadbalancer 映射为
+  `8082-8088:30082-30088`）。
+- **挂载**：只挂公钥 `release-manager-jwt-public`（与 orchestrator 同口径），**不挂**私钥；webhook /
+  notifier 仍不挂任何 JWT key。该 least-privilege 划分由 `deploy/dev/dev_test.go` 在真实
+  `kustomize build` 产物上断言。
+- 单元测试仍是第一道防线（例如 `cmd/api/main_test.go:144` 的
+  `TestAPIRegisterFailsClosedOnNonEd25519Key`）。
 
 ### 阶段模型
 
@@ -244,6 +250,12 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 
 - **table-driven + testify**：用例表驱动，断言用 `github.com/stretchr/testify`（`require` 用于必须
   中止的前置断言，`assert` 用于可继续的取值断言）。
+- **断言必须排除"没有响应"这一分支**：只断言"响应里没有错误串"的检查，在 **HTTP 000 / 空响应**
+  （服务没起来、端口不通、curl 直接失败）时会**假通过** —— 空 body 天然不含任何错误串，于是"没有
+  验证"被记成了 PASS。实测例：`test/e2e/prerequisite/smoke.sh` 的 `release-api` 公钥验签断言最初
+  写成"body 不含 `invalid token` / `missing authorization header`"，指向**死端口**时它照样 PASS；
+  加上 `code != 000` 守卫后才 FAIL。凡"没有 X 就算通过"的断言，都必须同时钉住"**确实拿到了响应**"
+  （HTTP 状态码、非空 body、或明确的成功码），否则它与不检查等价。
 - **live-DB 测试必须打 `//go:build integration`**，并在 `POSTGRES_TEST_DSN` 未设置时
   `t.Skip("POSTGRES_TEST_DSN is not set")`；两者都要——缺标签会让它在无数据库的机器上被编译执行，
   缺 skip 会让它在 CI 的默认 job 里失败。

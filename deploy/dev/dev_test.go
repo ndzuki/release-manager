@@ -199,9 +199,9 @@ func fakeEnv(t *testing.T, stateDir string) (env []string, binDir string) {
 		// was never reported. The real probe returns "v2", so this is
 		// behavior-identical and makes every fake-CLI test deterministic.
 		"FIXTURE_VERSION=v2",
-		// Probe idle test ports, not the real 8082-8087: the actual dev
+		// Probe idle test ports, not the real 8082-8088: the actual dev
 		// environment may be running on the host during tests.
-		"DEV_PORTS_OVERRIDE=19082 19083 19084 19085 19086 19087",
+		"DEV_PORTS_OVERRIDE=19082 19083 19084 19085 19086 19087 19088",
 		// The operator gateway readiness is a TCP probe without an HTTP
 		// endpoint to shim; point dev.sh's probe at the shared loopback
 		// listener above.
@@ -700,7 +700,7 @@ func TestDevUpCreatesFiveClustersAndMergedKubeconfig(t *testing.T) {
 	}
 	// The loadbalancer port mapping belongs to the control cluster only.
 	for _, c := range creates {
-		if strings.HasPrefix(c, "release-manager-control|") && !strings.Contains(c, "8082-8087:30082-30087@loadbalancer") {
+		if strings.HasPrefix(c, "release-manager-control|") && !strings.Contains(c, "8082-8088:30082-30088@loadbalancer") {
 			t.Fatalf("control cluster create missing port mapping: %s", c)
 		}
 	}
@@ -750,6 +750,228 @@ func TestDevUpCreatesFiveClustersAndMergedKubeconfig(t *testing.T) {
 	} {
 		if !strings.Contains(string(manifest), want) {
 			t.Fatalf("ownership manifest missing %s:\n%s", want, manifest)
+		}
+	}
+}
+
+// TestDevUpWaitsForReleaseAPI covers REQ-065 D2: cmd/api is part of the dev
+// environment, so dev-up must wait for its rollout and probe its /readyz on the
+// 8088 band entry. Without this, a manifest that silently dropped the api
+// Deployment would leave its Ed25519 public-key verification uncovered while
+// every other gate stayed green.
+//
+// Mutation check: removing `deployment/api` from the rollout list or the
+// `require_readyz api` call makes this fail.
+func TestDevUpWaitsForReleaseAPI(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	// Log both the kubectl invocations and the probe URLs so the wiring is
+	// observable; the fixture /version payload still has to answer.
+	writeShim(t, binDir, "kubectl", `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DEV_DATA_DIR/kubectl.log"
+for a in "$@"; do
+  if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
+  if [ "$a" = "redis-cli" ]; then printf 'PONG\n'; exit 0; fi
+done
+exit 0
+`)
+	writeShim(t, binDir, "curl", `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DEV_DATA_DIR/curl.log"
+if [[ "$*" == *"/version"* ]]; then printf '{"version":"fixture-v2"}\n'; exit 0; fi
+exit 0
+`)
+
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("dev-up failed:\n%s", out)
+	}
+
+	kubectlLog, err := os.ReadFile(filepath.Join(stateDir, "kubectl.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(kubectlLog), "deployment/api") {
+		t.Fatalf("dev-up must wait for the api rollout:\n%s", kubectlLog)
+	}
+	curlLog, err := os.ReadFile(filepath.Join(stateDir, "curl.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 19088 is the DEV_PORTS_OVERRIDE entry for the api band slot (8088).
+	if !strings.Contains(string(curlLog), "19088/readyz") {
+		t.Fatalf("dev-up must probe the api /readyz on the 8088 band slot:\n%s", curlLog)
+	}
+}
+
+// capturingKubectlShim replaces the kubectl shim with one that records every
+// apply's stdin (so tests can assert the applied image references) and still
+// answers the port-forward / redis-cli probes the happy path needs. It pairs
+// with manifestKustomizeShim: the default kustomize shim prints nothing, so
+// there would be no image reference to inspect.
+func capturingKubectlShim(t *testing.T, binDir string) {
+	t.Helper()
+	writeShim(t, binDir, "kubectl", `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DEV_DATA_DIR/kubectl.log"
+if [[ "$*" == *"apply -f -"* ]]; then cat >> "$DEV_DATA_DIR/applied.yaml"; exit 0; fi
+for a in "$@"; do
+  if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
+  if [ "$a" = "redis-cli" ]; then printf 'PONG\n'; exit 0; fi
+done
+exit 0
+`)
+}
+
+// manifestKustomizeShim emits one Deployment carrying the registry image
+// reference the repository manifests use, so an apply can be inspected.
+func manifestKustomizeShim(t *testing.T, binDir string) {
+	t.Helper()
+	writeShim(t, binDir, "kustomize", `#!/usr/bin/env bash
+cat <<'YAML'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook
+spec:
+  template:
+    spec:
+      containers:
+        - name: webhook
+          image: localhost:5001/release-webhook:dev
+YAML
+`)
+}
+
+// TestRegistryPortOverrideDerivesEveryReference covers the concurrency defect
+// this seam fixes: REGISTRY_PORT and the k3d control-plane API port were
+// hardcoded, so a second dev environment on the same host could not start at
+// all (`registry_unreachable: Bind for 0.0.0.0:5001 failed`). With the
+// overrides, every derived value must follow the variables — the container
+// publish, the applied image references, the containerd mirror and the k3d API
+// port — so two sessions can coexist on distinct ports.
+func TestRegistryPortOverrideDerivesEveryReference(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	manifestKustomizeShim(t, binDir)
+	capturingKubectlShim(t, binDir)
+	env = append(env, "REGISTRY_PORT=5009", "DEV_K3D_API_PORT=6449")
+
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("dev-up with port overrides failed:\n%s", out)
+	}
+
+	creates := strings.Join(clusterCreates(k3dCreates(stateDir)), "\n")
+	if !strings.Contains(creates, "--api-port 127.0.0.1:6449") {
+		t.Fatalf("k3d must bind the overridden API port:\n%s", creates)
+	}
+	if strings.Contains(creates, "--api-port 127.0.0.1:6443") {
+		t.Fatalf("the hardcoded API port must be gone:\n%s", creates)
+	}
+	if strings.Contains(creates, "k3d/registries.yaml") || !strings.Contains(creates, "--registry-config /tmp/") {
+		t.Fatalf("an overridden registry port must use a materialized mirror config:\n%s", creates)
+	}
+	mirror, err := os.ReadFile(filepath.Join(stateDir, "registry-config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(mirror), "localhost:5009") || strings.Contains(string(mirror), "localhost:5001") {
+		t.Fatalf("the mirror key must follow REGISTRY_PORT:\n%s", mirror)
+	}
+	applied, err := os.ReadFile(filepath.Join(stateDir, "applied.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(applied), "localhost:5009/release-") {
+		t.Fatalf("applied image references must follow REGISTRY_PORT:\n%s", applied)
+	}
+	if strings.Contains(string(applied), "localhost:5001/") {
+		t.Fatalf("no applied reference may keep the hardcoded registry port:\n%s", applied)
+	}
+	dockerCreates, err := os.ReadFile(filepath.Join(stateDir, "docker-create.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(dockerCreates), "127.0.0.1:5009:5000") {
+		t.Fatalf("the registry container must publish the overridden port:\n%s", dockerCreates)
+	}
+}
+
+// TestDefaultRegistryPortUsesTheRepositoryMirror pins the "defaults unchanged"
+// half of the seam: without overrides the repository mirror file is used as-is
+// and every reference keeps the documented localhost:5001.
+func TestDefaultRegistryPortUsesTheRepositoryMirror(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	manifestKustomizeShim(t, binDir)
+	capturingKubectlShim(t, binDir)
+
+	if out, err := runDev(t, env, "up"); err != nil {
+		t.Fatalf("default dev-up failed:\n%s", out)
+	}
+
+	creates := strings.Join(clusterCreates(k3dCreates(stateDir)), "\n")
+	if !strings.Contains(creates, "--api-port 127.0.0.1:6443") {
+		t.Fatalf("the default API port must stay 6443:\n%s", creates)
+	}
+	if !strings.Contains(creates, "k3d/registries.yaml") || strings.Contains(creates, "--registry-config /tmp/") {
+		t.Fatalf("the default path must use the repository mirror config:\n%s", creates)
+	}
+	mirror, err := os.ReadFile(filepath.Join(stateDir, "registry-config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(mirror), "localhost:5001") {
+		t.Fatalf("the default mirror key must stay localhost:5001:\n%s", mirror)
+	}
+	applied, err := os.ReadFile(filepath.Join(stateDir, "applied.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(applied), "localhost:5001/release-") {
+		t.Fatalf("default image references must stay localhost:5001:\n%s", applied)
+	}
+}
+
+// TestImageBuildTimeoutFailsFastWithDiagnostics covers the robustness gap the
+// 2026-09-24 run exposed: `docker build` has no deadline of its own, so a
+// stalled build step makes dev-up wait forever (the release-api image sat in
+// `RUN go mod download` and never returned). DEV_BUILD_TIMEOUT bounds each
+// build and the failure names the image and the budget instead of hanging.
+//
+// Mutation check: dropping the 124/137 mapping (so a timeout degrades to the
+// generic "build failed") makes this fail on the missing diagnostic.
+func TestImageBuildTimeoutFailsFastWithDiagnostics(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	// `build` outlives the budget; `manifest inspect` must fail so the image is
+	// actually rebuilt rather than skipped as unchanged; every other verb keeps
+	// the happy-path answer so the run reaches the images stage.
+	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "build" ]; then sleep 30; exit 0; fi
+if [ "$1" = "manifest" ] && [ "$2" = "inspect" ]; then exit 1; fi
+if [ "$1" = "container" ] && [ "$2" = "create" ]; then printf '%s\n' "$*" >> "$DEV_DATA_DIR/docker-create.log"; exit 0; fi
+if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then exit 1; fi
+if [ "$1" = "network" ] && [ "$2" = "inspect" ]; then exit 1; fi
+exit 0
+`)
+	env = append(env, "DEV_BUILD_TIMEOUT=1")
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("expected the build timeout to fail dev-up, got success:\n%s", out)
+	}
+	if code := exitCode(t, err); code != 1 {
+		t.Fatalf("expected exit 1, got %d:\n%s", code, out)
+	}
+	for _, want := range []string{"docker_build_failed", "timed out", "release-webhook"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected %q in the timeout diagnostic:\n%s", want, out)
 		}
 	}
 }
@@ -2415,9 +2637,9 @@ func TestLengthOnlyAssertionWouldMissHs256(t *testing.T) {
 
 // TestKustomizeBuildJwtSecretAndNoPostgresPVC covers AC-065-29 + AC-065-01 at
 // the manifest level with the real kustomize: the dev overlay materializes the
-// two JWT Secrets from the local key pair (private -> auth only, public ->
-// orchestrator only) and no longer declares a PostgreSQL PVC. Skipped when
-// kustomize is not on PATH.
+// two JWT Secrets from the local key pair (private -> auth only, public -> the
+// verifiers cmd/orchestrator and cmd/api) and no longer declares a PostgreSQL
+// PVC. Skipped when kustomize is not on PATH.
 //
 // The build runs in an isolated temp tree (symlinked deploy/kustomize +
 // temp data/dev-jwt) — an earlier version wrote the key into the REAL repo
@@ -2514,11 +2736,27 @@ func TestKustomizeBuildJwtSecretAndNoPostgresPVC(t *testing.T) {
 		strings.Contains(orchDoc, "JWT_PRIVATE_KEY") || strings.Contains(orchDoc, "release-manager-jwt-private") {
 		t.Fatalf("orchestrator Deployment must mount only the public key:\n%s", orchDoc)
 	}
+	// cmd/api is the second management-plane verifier (REQ-065 D2): the dev
+	// environment deploys it so its Ed25519 public-key verification is covered
+	// by the e2e smoke, and it must hold the public half only.
+	if apiDoc := docFor("api"); !strings.Contains(apiDoc, "JWT_PUBLIC_KEY") ||
+		strings.Contains(apiDoc, "JWT_PRIVATE_KEY") || strings.Contains(apiDoc, "release-manager-jwt-private") {
+		t.Fatalf("api Deployment must mount only the public key:\n%s", apiDoc)
+	}
 	for _, name := range []string{"webhook", "notifier"} {
 		doc := docFor(name)
 		if strings.Contains(doc, "JWT_") || strings.Contains(doc, "release-manager-jwt") {
 			t.Fatalf("%s Deployment must not mount any JWT key (exposure with zero benefit):\n%s", name, doc)
 		}
+	}
+	// The release-api Service must publish the port the dev host band maps to
+	// it: NodePort 30088 (host 8088), the only free entry above the six
+	// original services (8087 is web). docs/testing.md states the same number.
+	if !strings.Contains(manifest, "nodePort: 30088") {
+		t.Fatalf("api Service must expose nodePort 30088:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, "name: api-config-") {
+		t.Fatalf("expected generated api-config-<hash> ConfigMap in built manifest:\n%s", manifest)
 	}
 	if strings.Contains(manifest, "release-manager-postgres-data") {
 		t.Fatalf("postgres PVC must be gone (AC-065-29):\n%s", manifest)
@@ -3107,8 +3345,10 @@ exit 0
 		if strings.Contains(order, "B\nB") {
 			t.Fatalf("default builds must be sequential, got overlap:\n%s", order)
 		}
-		if got := strings.Count(order, "B"); got != 8 {
-			t.Fatalf("expected 8 builds, got %d:\n%s", got, order)
+		// 9 images: webhook/orchestrator/operator/auth/notifier/api/web +
+		// fixture + notification-sink.
+		if got := strings.Count(order, "B"); got != 9 {
+			t.Fatalf("expected 9 builds, got %d:\n%s", got, order)
 		}
 	})
 	t.Run("parallelism 2", func(t *testing.T) {
@@ -3119,8 +3359,10 @@ exit 0
 		if strings.Contains(order, "B\nB\nB") {
 			t.Fatalf("parallelism 2 must cap concurrency at 2, got:\n%s", order)
 		}
-		if got := strings.Count(order, "B"); got != 8 {
-			t.Fatalf("expected 8 builds, got %d:\n%s", got, order)
+		// 9 images: webhook/orchestrator/operator/auth/notifier/api/web +
+		// fixture + notification-sink.
+		if got := strings.Count(order, "B"); got != 9 {
+			t.Fatalf("expected 9 builds, got %d:\n%s", got, order)
 		}
 	})
 	t.Run("invalid falls back sequential", func(t *testing.T) {

@@ -35,7 +35,7 @@ dev 端口取 `configs/*.dev.yaml` 的 `http_port`：`configs/webhook.dev.yaml:1
 三点必须注意：
 
 1. **8084 在 host dev 模式下属于 `release-operator`**（`configs/operator.dev.yaml:1`，`agent.mode: agent` 见 `configs/operator.dev.yaml:3-4`），与 `release-orchestrator` 的网关端口号相同但默认不同进程（网关本地关闭）。
-2. **8087 在 k3d dev 环境里是 web SPA 的 nginx，不是 `release-api`**：k3d 把宿主 8082-8087 映射到 NodePort 30082-30087（`deploy/dev/dev.sh:726`），而 `deploy/kustomize/services/web.yaml:26` 的 `containerPort: 8087` 与 `:59` 的 `nodePort: 30087` 属于 web；`web/nginx.conf:7` 监听 8087。因此 `release-api` 的审计面只在 host 直跑模式（`make run-api`、`make dev-stage-audit`）下可达 8087。
+2. **8087 在 k3d dev 环境里是 web SPA 的 nginx，`release-api` 是 8088**：k3d 把宿主 8082-8088 映射到 NodePort 30082-30088（`deploy/dev/dev.sh:836`），其中 `deploy/kustomize/services/web.yaml:26` 的 `containerPort: 8087` 与 `:72` 的 `nodePort: 30087` 属于 web（`web/nginx.conf:7` 监听 8087）。`release-api` 自 REQ-065 D2 起也部署进 dev 环境，占 **8088**（NodePort **30088**，`deploy/kustomize/services/api.yaml`）；host 直跑模式（`make run-api`、`make dev-stage-audit`）仍用 8087。
 3. **网关监听器不提供任何探测端点**：`GET /health`、`GET /readyz`、`GET /environment` 由共享启动包装注册在主 mux 上（`internal/app/app.go:140`、`:142`、`:144`、`:158`），网关用的是独立的 `gmux`（`cmd/orchestrator/main.go:166`），只做 TLS + 过程路径注册。`api/proto/common/v1/health.proto:5-10` 的文件注释也明确说明这一点。
 
 `/metrics` 只有两个进程暴露：`cmd/auth/main.go:137`、`cmd/orchestrator/main.go:319`。

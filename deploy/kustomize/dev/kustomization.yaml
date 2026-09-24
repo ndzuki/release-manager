@@ -29,11 +29,16 @@ configMapGenerator:
     namespace: release-manager-dev
     files:
       - configs/notification-sink.dev.yaml
+  - name: api-config
+    namespace: release-manager-dev
+    files:
+      - configs/api.dev.yaml
 # REQ-065 AC-065-01 / D1=A: the management-plane JWT is EdDSA (Ed25519), so the
 # two halves travel as two Secrets — the private key only to cmd/auth, the
-# public key only to cmd/orchestrator. Splitting them puts least privilege in
-# the manifest itself: webhook/notifier mount neither (they never verified
-# tokens), and a compromised verifier holds no signing material.
+# public key only to the verifiers (cmd/orchestrator and cmd/api). Splitting
+# them puts least privilege in the manifest itself: webhook/notifier mount
+# neither (they never verified tokens), and a compromised verifier holds no
+# signing material.
 # dev-up sources these before apply — the local profile generates/reuses
 # data/dev-jwt/jwt-{private,public}-key.pem (0700 dir) through the devseed
 # helper; the ci profile materializes DEV_JWT_PRIVATE_KEY transiently (removed

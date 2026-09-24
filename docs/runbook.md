@@ -28,8 +28,8 @@
 
 现状要点：
 
-- 管理面 services overlay 只包含 webhook、orchestrator、auth、notifier、notification-sink、web 六个 Deployment（`deploy/kustomize/services/kustomization.yaml:3-9`）。**没有独立的 `operator` Deployment，也没有 `release-api` Deployment**：operator 网关折叠进 orchestrator（`deploy/kustomize/services/orchestrator.yaml:60-64`），审计服务 `release-api` 只有本地进程入口（`Makefile:342-348`）。
-- 宿主 8082–8087 端口段由控制面集群的 loadbalancer 映射（`deploy/dev/dev.sh:721-727`），端口表来自 `deploy/dev/lib/host.sh:16`。
+- 管理面 services overlay 包含 webhook、orchestrator、auth、notifier、notification-sink、web、**api** 七个 Deployment（`deploy/kustomize/services/kustomization.yaml:3-14`）。**没有独立的 `operator` Deployment**：operator 网关折叠进 orchestrator（`deploy/kustomize/services/orchestrator.yaml:60-64`）；审计服务 `release-api` 自 REQ-065 D2 起有 `deploy/kustomize/services/api.yaml`，同时保留本地进程入口（`Makefile:342-348`）。
+- 宿主 8082–8088 端口段由控制面集群的 loadbalancer 映射（`deploy/dev/dev.sh:833-836`），端口表来自 `deploy/dev/lib/host.sh:20`。
 - 管理面 kubectl 入口固定为合并 kubeconfig + 显式 context（`deploy/dev/dev.sh:48-54`）：
 
   ```bash

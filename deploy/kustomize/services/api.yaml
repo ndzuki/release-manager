@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: release-manager-dev
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: release-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api
+        app.kubernetes.io/part-of: release-manager
+    spec:
+      securityContext:
+        fsGroup: 65532
+      containers:
+        - name: api
+          image: localhost:5001/release-api:dev
+          imagePullPolicy: IfNotPresent
+          # Dockerfile.api bakes its flags into ENTRYPOINT (it predates the
+          # args-from-Kustomize convention the other services use), so the
+          # command is pinned here: `args` alone would be APPENDED to the baked
+          # ENTRYPOINT argv and duplicate every flag. /configs/api.dev.yaml is
+          # the ConfigMap below, which shadows the copy baked into the image.
+          command:
+            - /release-api
+          args:
+            - --config
+            - /configs/api.dev.yaml
+            - --db
+            - /data/api.db
+          # REQ-065 AC-065-01 / D1=A (D2): cmd/api only VERIFIES management-plane
+          # access tokens, so it holds the Ed25519 public key and never the
+          # signing key — the same least-privilege split as cmd/orchestrator.
+          env:
+            - name: JWT_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: release-manager-jwt-public
+                  key: JWT_PUBLIC_KEY
+          ports:
+            - name: http
+              containerPort: 8088
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 120
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /configs/api.dev.yaml
+              subPath: api.dev.yaml
+            # cmd/api opens a SQLite store (cmd/api/main.go) — the only dev
+            # service that does. An emptyDir keeps it ephemeral, matching the
+            # PostgreSQL/Redis no-persistent-volume rule (批次5 D6).
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: config
+          configMap:
+            name: api-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: release-manager-dev
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: api
+  ports:
+    - name: http
+      port: 8088
+      targetPort: http
+      nodePort: 30088

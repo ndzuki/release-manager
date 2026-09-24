@@ -13,7 +13,11 @@ source "$SCRIPT_DIR/lib/errors.sh"
 MIN_MEM_AVAILABLE_GB=12
 MIN_DISK_AVAILABLE_GB=20
 MIN_CPU_COUNT=4
-DEV_PORTS=(8082 8083 8084 8085 8086 8087)
+# Host ports probed for availability and mapped to the management cluster's
+# NodePort band (8082 -> 30082 ...). The six original entries are the services
+# that predate cmd/api; 8088 is release-api, which needed its own port because
+# 8082-8087 are all taken (8087 is web) — see docs/testing.md.
+DEV_PORTS=(8082 8083 8084 8085 8086 8087 8088)
 # Test isolation: DEV_PORTS_OVERRIDE env (space-separated) lets fake-CLI
 # tests probe idle ports on hosts where the real dev environment is up.
 # A distinct name avoids bash arrays shadowing a same-named scalar.
@@ -142,6 +146,16 @@ require_flock() {
     "install util-linux (flock) and ensure it is on PATH"
 }
 
+# require_timeout — coreutils `timeout` bounds every image build. `docker build`
+# has no deadline of its own, so a stalled build step (module download, registry
+# fetch) makes dev-up wait forever — real smoke 2026-09-24: the release-api
+# image sat in `RUN go mod download` and never returned. Requiring the binary
+# keeps that bound non-optional instead of silently degrading to unbounded.
+require_timeout() {
+  require_command timeout "$ERR_DOCKER_UNAVAILABLE" \
+    "install coreutils (timeout) and ensure it is on PATH; it bounds each image build"
+}
+
 # require_pg_tools — pg_dump/pg_restore for dev-reset-data snapshot safety.
 require_pg_tools() {
   require_command pg_dump "$ERR_DOCKER_UNAVAILABLE" \
@@ -164,6 +178,7 @@ preflight_up() {
     require_e2e_run_id
   fi
   require_flock
+  require_timeout
   require_docker
   require_k3d
   require_disk

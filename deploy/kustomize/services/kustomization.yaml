@@ -7,3 +7,8 @@ resources:
   - notifier.yaml
   - notification-sink.yaml
   - web.yaml
+  # cmd/api (release-api): the audit query surface, and the only other
+  # management-plane verifier besides cmd/orchestrator. Deploying it keeps its
+  # Ed25519 public-key verification under e2e coverage (docs/testing.md,
+  # REQ-065 D2).
+  - api.yaml
