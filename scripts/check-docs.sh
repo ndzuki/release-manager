@@ -35,6 +35,10 @@
 # pattern would let real drift back in unnoticed. If the same string also
 # appears on a line that is not exempt, it is still reported.
 #
+# This spelling is markdown-only. Non-markdown files use `cite_ignore:` instead
+# (see check 5), but the invariant is the same in both: an exemption without a
+# reason is an ERROR, never a silent pass. Do not "unify" the two spellings.
+#
 # Usage:
 #   scripts/check-docs.sh                  check every markdown file
 #   scripts/check-docs.sh docs README.md   check the given files or directories
