@@ -754,3 +754,45 @@ func connectErrorReason(err error) string {
 	}
 	return ""
 }
+
+// AC-032-19 (typed form): a pending promotion on the same path blocks another
+// promotion with the canonical reason code. The wire reason string is already
+// asserted by TestExecuteEmergencyChangeLockedPathRejected (emergency_evidence_test.go);
+// this pins the TYPED enum so the AC's outcome is checked at the same layer as
+// the other reason codes in this file (KILL_SWITCH_DISABLED, VERSION_INVALID,
+// ARTIFACT_NOT_FOUND, OPERATION_IN_PROGRESS) — the reason code the AC now names
+// is LOCKED_PATH, after the 2026-09-28 alignment from the stale
+// `promotion_path_blocked` literal.
+func TestExecuteEmergencyChangeLockedPathReasonCode(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedEmergencyImageIdentity(t, st)
+	svc, _, _ = emergencyTestServiceFromExisting(t, svc, st)
+
+	// The promotion path must exist on the definition for the lock to resolve.
+	definition, err := st.Definitions().Get(t.Context(), "def-001")
+	require.NoError(t, err)
+	definition.PromotionMappings = []store.PromotionMapping{{
+		WorkloadKind: workloadDeployment, WorkloadName: "api", Container: "api",
+		Field: "image_digest", ValuesPath: "api.image.digest",
+	}}
+	_, err = st.Definitions().Update(t.Context(), definition, nil)
+	require.NoError(t, err)
+
+	promotion := func(key string) *connect.Request[orchestratorv1.ExecuteEmergencyChangeRequest] {
+		req := emergencyImageRequest(key)
+		req.Msg.ConvergenceStrategy = orchestratorv1.ConvergenceStrategy_REQUIRE_PROMOTION
+		req.Msg.TargetLocks = []string{"api.image.digest"}
+		return req
+	}
+	_, err = svc.ExecuteEmergencyChange(emergencyAdminContext(), promotion("typed-locked-path-first"))
+	require.NoError(t, err)
+
+	_, err = svc.ExecuteEmergencyChange(emergencyAdminContext(), promotion("typed-locked-path-second"))
+	require.Error(t, err, "AC-032-19: a pending promotion on the path must block another")
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Equal(t, "LOCKED_PATH", connectErrorReason(err))
+	detail := emergencyDetailFrom(t, err)
+	assert.Equal(t, orchestratorv1.EmergencyReasonCode_EMERGENCY_REASON_CODE_LOCKED_PATH, detail.GetReasonCode())
+}
