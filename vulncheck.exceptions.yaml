@@ -28,17 +28,22 @@ exceptions:
       an additional check rather than the perimeter. Route/allowlist configuration
       is validated when a cluster route is saved (artifact type and mode, non-empty
       and whitespace-free prefixes, no conflicting prefix per cluster+type:
-      internal/orchestrator/route_validate.go:22-70).
+      internal/orchestrator/route_validate.go:22-70) — that check is
+      CONFIGURATION-TIME ONLY.
       ⚠️ STRENGTH NEEDS OWNER RE-EVALUATION (V14, 2026-09-28): this entry used to
       cite `internal/preflight/oci.go` for "charts reach the operator only from
       source registries on the server-side allowlist". That package was dead code
-      (zero importers) and has been deleted, and the claim does not hold as stated
-      today: the operator's chart-fetch path does not consult cluster_routes at all
-      (no SourcePrefix/ClusterRoutes use under internal/operator/), and the
-      execution-time `routing_no_match` producer is a recorded gap (REQ-045
-      AC-045-02). Digest pinning is real and enforced; the source-registry
-      allowlist is configuration-time only. Whether the two together are an
-      equivalent compensating control for this advisory is an owner security
-      judgement, not something this file may assert.
+      (zero importers) and has been deleted (V1, 2026-09-28), and the claim does not
+      hold as stated today: the operator's chart-fetch path does not consult
+      cluster_routes at all (no SourcePrefix/ClusterRoutes use under
+      internal/operator/), and the execution-time `routing_no_match` producer is a
+      recorded gap (REQ-045 AC-045-02, explicitly deferred 2026-09-28). Digest
+      pinning is real and enforced; the source-registry allowlist is
+      configuration-time only. Whether the two together are an equivalent
+      compensating control for this advisory is an owner security judgement, not
+      something this file may assert.
       The exposure remains a malicious chart's own signature material, not remote input.
+    cite_ignore:
+      - "internal/preflight/oci.go"  # names a package DELETED by V1 (2026-09-28) as historical basis for the re-evaluation above; S1's check #5 requires a reasoned exemption for a reference to something absent, not the removal of the reference
+
     expires_at: "2027-03-31"

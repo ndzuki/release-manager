@@ -26,7 +26,7 @@
 5. **不可变输入与 Secret 边界**：ValuesRevision 一旦创建不可变；Secret 只以引用（SecretRef）形式进入执行链，禁止把明文写入库、日志或审计事件。
 6. **审计与脱敏**：审计事件必须经脱敏路径；不要绕过 emitter 直接写审计表。
 7. **依赖许可**：只接受宽松许可（Apache-2.0、MIT、BSD、ISC、MPL-2.0 等）。禁止引入 GPL/AGPL/LGPL、SSPL、BUSL、Elastic License 或**没有许可证文件**的依赖 —— Go 会把整个模块静态链接进二进制，`make check-licenses` 会拦截。`NOTICE` 与 `docs/dependencies.md` 是生成产物，改动依赖后用 `bash scripts/check-licenses.sh --write-notice NOTICE` 与 `--write docs/dependencies.md` 重生成。
-8. **文档即断言**：`docs/**` 与各级 README 里写出的 `make <target>`、仓库路径、相对链接和 `文件:行号` 引用都是可验证断言，代码演进使其失效时 `make check-docs` 会失败。修文档或补实现，**不得靠放宽检查、删引用或改脚本绕过**；确实是在陈述"某物不存在/已删除"时，在该行加 `<!-- check-docs:ignore 理由 -->`。
+8. **文档即断言**：`docs/**` 与各级 README 里写出的 `make <target>`、仓库路径、相对链接和 `文件:行号` 引用都是可验证断言，代码演进使其失效时 `make check-docs` 会失败。修文档或补实现，**不得靠放宽检查、删引用或改脚本绕过**；确实是在陈述"某物不存在/已删除"时，在该行加 `<!-- check-docs:ignore 理由 -->`。非 markdown 文件（如 `vulncheck.exceptions.yaml`）用条目级 `cite_ignore:` + 同行理由；**两者共同的不变量 = 豁免必须带理由，无理由即报错**（细节见 `scripts/check-docs.sh` 的注释）。
 
 ## 质量门禁
 

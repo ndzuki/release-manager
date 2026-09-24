@@ -35,6 +35,10 @@
 # pattern would let real drift back in unnoticed. If the same string also
 # appears on a line that is not exempt, it is still reported.
 #
+# This spelling is markdown-only. Non-markdown files use `cite_ignore:` instead
+# (see check 5), but the invariant is the same in both: an exemption without a
+# reason is an ERROR, never a silent pass. Do not "unify" the two spellings.
+#
 # Usage:
 #   scripts/check-docs.sh                  check every markdown file
 #   scripts/check-docs.sh docs README.md   check the given files or directories
@@ -262,7 +266,118 @@ for f in "${md[@]}"; do
   done < <(grep -oE '\]\([^) ]+\)' "$f" 2>/dev/null | sed -E 's/^\]\(//; s/\)$//' | sort -u || true)
 done
 
-echo "check-docs: ${#md[@]} markdown files; ${#targets[@]} Makefile rules; $n_spans code spans inspected ($n_cites with line numbers); $n_exempt line exemptions"
+# ---------------------------------------------------------------------------
+# 5. citations inside vulncheck.exceptions.yaml
+#
+# That file is not markdown, so the span walk above never sees it, and
+# `scripts/vulncheck.sh` reads only its `id:` fields. A compensating_control that
+# cites code which no longer exists therefore rots in silence (recorded as V14 in
+# the audit). This closes that hole: every repository path the file names must
+# exist, and a cited line number must fit inside its file.
+#
+# Two exemption forms, BOTH requiring a reason -- an exemption without one is an
+# error, never a silent pass:
+#   * `# check-cite-ignore: <reason>` on the citation's own line, and
+#   * an exact path under the entry's `cite_ignore:` list, with `# <reason>` on
+#     that same line.
+# The second form exists because a citation inside a `>-` block scalar cannot
+# carry a YAML comment: a `#` there is literal content, so an inline marker would
+# silently become part of the recorded compensating_control text.
+#
+# DO NOT "tighten" this to inline-only. A citation inside a block scalar would
+# then be unexemptable, and the only ways to satisfy the check would be to corrupt
+# the recorded reason (append a literal `#`) or to delete the citation -- both
+# worse than an exemption that is an EXACT PATH (never a pattern) and is unusable
+# without a reason.
+#
+# How this relates to the markdown exemption above -- two spellings, ON PURPOSE:
+#   * markdown documents        -> `<!-- check-docs:ignore: <reason> -->` on the line
+#   * vulncheck.exceptions.yaml -> an exact path under the entry's `cite_ignore:`
+#     list, with `# <reason>` on that same line
+# They are not historical drift; the two formats force them. An HTML comment
+# cannot exist in YAML at all, and a `#` inside a `>-` block scalar is literal
+# content rather than a comment. Unifying the spelling would mean changing the
+# gate's mechanism for no gain beyond cosmetics.
+# The INVARIANT they share is what matters, and it is identical in both: an
+# exemption MUST carry a reason, and one without a reason is an ERROR rather than
+# a silent pass. Never let either spelling become a silent bypass.
+# ---------------------------------------------------------------------------
+bad_cite_yaml=()
+bad_exempt=()
+n_yaml_cites=0
+# Overridable so the mechanism can be exercised against a fixture: the real file
+# may legitimately have no dangling citation, which would otherwise make this
+# check unprovable.
+VULN_EXC=${CHECK_DOCS_CITE_FILE:-vulncheck.exceptions.yaml}
+if [ -f "$VULN_EXC" ]; then
+  cite_ignore_paths=" "
+  exempt_lines=" "
+  # Pass 1: read the exemption declarations, and reject any that carries no reason.
+  lno=0
+  in_ignore_block=0
+  while IFS= read -r text; do
+    lno=$((lno + 1))
+    if printf '%s' "$text" | grep -qE '^[[:space:]]*cite_ignore:'; then
+      in_ignore_block=1
+      continue
+    fi
+    if [ "$in_ignore_block" = 1 ]; then
+      if printf '%s' "$text" | grep -qE '^[[:space:]]*-[[:space:]]*"'; then
+        ip=$(printf '%s' "$text" | sed -E 's/^[[:space:]]*-[[:space:]]*"([^"]+)".*/\1/')
+        ireason=$(printf '%s' "$text" | sed -nE 's/^[^#]*#[[:space:]]*(.+)$/\1/p')
+        if [ -z "$ireason" ]; then
+          bad_exempt+=("$VULN_EXC:$lno: cite_ignore entry \"$ip\" carries no reason (append: # <reason>)")
+        fi
+        cite_ignore_paths="$cite_ignore_paths$ip "
+      elif [ -n "$(printf '%s' "$text" | tr -d '[:space:]')" ]; then
+        in_ignore_block=0
+      fi
+    fi
+    if printf '%s' "$text" | grep -q 'check-cite-ignore:'; then
+      lreason=$(printf '%s' "$text" | sed -nE 's/^.*check-cite-ignore:[[:space:]]*(.+)$/\1/p')
+      if [ -z "$lreason" ]; then
+        bad_exempt+=("$VULN_EXC:$lno: check-cite-ignore carries no reason")
+      fi
+      exempt_lines="$exempt_lines$lno "
+    fi
+  done < "$VULN_EXC"
+
+  # Pass 2: every repository path the file names must exist.
+  while IFS= read -r hit; do
+    [ -n "$hit" ] || continue
+    hlno=${hit%%:*}
+    raw=${hit#*:}
+    case "$exempt_lines" in *" $hlno "*) continue ;; esac
+    span=$raw
+    lines_part=""
+    if [[ $span =~ ^(.*):([0-9][0-9,./-]*)$ ]]; then
+      span=${BASH_REMATCH[1]}
+      lines_part=${BASH_REMATCH[2]}
+    fi
+    span=${span%/}
+    case "$cite_ignore_paths" in *" $span "*) continue ;; esac
+    n_yaml_cites=$((n_yaml_cites + 1))
+    if ! exists_as "$span" "."; then
+      bad_cite_yaml+=("$VULN_EXC:$hlno: \`$raw\`")
+      continue
+    fi
+    if [ -n "$lines_part" ] && [ -f "$span" ]; then
+      max=$(printf '%s' "$lines_part" | tr -c '0-9' '\n' | sort -n | tail -1)
+      [ -n "$max" ] || continue
+      ylen=$(wc -l < "$span")
+      if [ "$max" -gt $((ylen + 1)) ]; then
+        bad_cite_yaml+=("$VULN_EXC:$hlno: \`$raw\` — $span has $ylen lines")
+      fi
+    fi
+  done < <(grep -noE '(cmd|internal|api|web|docs|deploy|migrations|scripts|test|configs)/[A-Za-z0-9_./*-]+(:[0-9][0-9,./-]*)?' "$VULN_EXC" 2>/dev/null || true)
+fi
+
+echo "check-docs: ${#md[@]} markdown files; ${#targets[@]} Makefile rules; $n_spans code spans inspected; $n_exempt line exemptions"
+# Weak guarantee, stated so nobody reads more into the count than it earns: the
+# line-number citations are checked for the LINE EXISTING, not for the cited line
+# actually being about the named symbol (V13).
+echo "check-docs: $n_cites line-number citations checked for line existence ONLY (weak guarantee: cited-line content is not verified)"
+echo "check-docs: $n_yaml_cites citations checked in $VULN_EXC"
 fail=0
 if [ ${#bad_target[@]} -gt 0 ]; then
   fail=1; echo "  missing make target  ${#bad_target[@]}"
@@ -280,11 +395,22 @@ if [ ${#bad_cite[@]} -gt 0 ]; then
   fail=1; echo "  citation beyond the end of its file  ${#bad_cite[@]}"
   printf '    %s\n' "${bad_cite[@]}"
 fi
+if [ ${#bad_cite_yaml[@]} -gt 0 ]; then
+  fail=1; echo "  citation in $VULN_EXC with no such path/line  ${#bad_cite_yaml[@]}"
+  printf '    %s\n' "${bad_cite_yaml[@]}"
+fi
+if [ ${#bad_exempt[@]} -gt 0 ]; then
+  fail=1; echo "  citation exemption without a reason  ${#bad_exempt[@]}"
+  printf '    %s\n' "${bad_exempt[@]}"
+fi
 if [ "$fail" = 1 ]; then
   echo "check-docs: FAIL"
   echo "  Either fix the document, or ship what it promises. When a mention is"
   echo "  intentionally not a repository path, mark that same line with"
   echo "  <!-- check-docs:ignore <what it is> --> and say why."
+  echo "  In $VULN_EXC, use '# check-cite-ignore: <reason>' on the citation's line,"
+  echo "  or list the exact path under 'cite_ignore:' with '# <reason>' — the"
+  echo "  reason is required in both forms."
   exit 1
 fi
 echo "check-docs: PASS"
