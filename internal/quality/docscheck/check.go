@@ -102,7 +102,15 @@ func repoFiles(root string) (*fileTree, error) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "gen", "bin":
+			// `.worktrees` holds this repository's own git worktrees: each one is a
+			// full checkout, so auditing them reports every finding N times over
+			// (13 copies made 93.6% of this audit's output duplicate noise and hid
+			// the real ones). They are local scratch state, excluded from git via
+			// .git/info/exclude, not documentation.
+			// `data` and `e2e-results` join `bin`: all three are gitignored build/run
+			// output, not documentation, so a citation inside them is not a claim
+			// about the repository.
+			case ".git", ".worktrees", "node_modules", "gen", "bin", "data", "e2e-results":
 				return filepath.SkipDir
 			}
 			return nil
