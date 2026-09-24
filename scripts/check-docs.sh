@@ -285,6 +285,18 @@ done
 # the recorded reason (append a literal `#`) or to delete the citation -- both
 # worse than an exemption that is an EXACT PATH (never a pattern) and is unusable
 # without a reason.
+#
+# How this relates to the markdown exemption above -- two spellings, ON PURPOSE:
+#   * markdown documents        -> `<!-- check-docs:ignore: <reason> -->` on the line
+#   * vulncheck.exceptions.yaml -> an exact path under the entry's `cite_ignore:`
+#     list, with `# <reason>` on that same line
+# They are not historical drift; the two formats force them. An HTML comment
+# cannot exist in YAML at all, and a `#` inside a `>-` block scalar is literal
+# content rather than a comment. Unifying the spelling would mean changing the
+# gate's mechanism for no gain beyond cosmetics.
+# The INVARIANT they share is what matters, and it is identical in both: an
+# exemption MUST carry a reason, and one without a reason is an ERROR rather than
+# a silent pass. Never let either spelling become a silent bypass.
 # ---------------------------------------------------------------------------
 bad_cite_yaml=()
 bad_exempt=()
