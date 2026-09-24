@@ -81,6 +81,18 @@ Makefile 内没有对应的转发 target，需在 `web/` 目录内直接运行�
 API 与受限 client-go（restart 专用 patch 权限）**，不做数据库直写、不走测试旁路、不调用
 helm/kubectl 子进程。
 
+### 覆盖边界：`cmd/api` 不在 dev 环境内
+
+e2e（含 `make e2e-prerequisite`）只覆盖 `deploy/kustomize/services/kustomization.yaml` 部署的那组
+服务：webhook / orchestrator / auth / notifier / notification-sink / web。**`cmd/api` 不在其中**，
+因此它的 Ed25519 JWT 验签（`cmd/api/main.go:64` 的 `jwtauth.ParseEd25519PublicKeyPEM`，以及
+`-jwt-public-key` 缺失或非 Ed25519 时的启动 fail-closed）**不被任何 e2e 阶段执行**，只由 `cmd/api`
+的单元测试覆盖（例如 `cmd/api/main_test.go:144` 的 `TestAPIRegisterFailsClosedOnNonEd25519Key`）。
+不要被端口号误导：dev 的 8082–8087 端口带由上面那组 kustomize 服务占用（8087 是 `web`），`cmd/api`
+只有本地 `make run-api` 的手工入口，不属于 `dev-up`/`dev-seed` 拉起的环境。
+这是**已知的覆盖边界，不是回归**：把 `cmd/api` 加进 dev 环境是一次独立的环境变更，需另行评估，
+本文件只记录现状。
+
 ### 阶段模型
 
 七个 canonical 阶段，注册顺序与依赖固定（未显式选择的前置**不会**自动执行；已选前置 fail/skip

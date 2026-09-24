@@ -265,6 +265,40 @@ describe('emergencyChange store', () => {
     expect(store.confirmedIntent?.idempotencyKey).not.toBe(firstKey);
   });
 
+  // TASK-014: `target_changed` has no producer on the server (grep in internal/
+  // and cmd/ is empty), so the store must not special-case it as a
+  // key-invalidating rejection. It behaves like any other unrecognised code and
+  // the frozen key is kept for retry. Re-adding it to KEY_INVALIDATING_CODES
+  // makes this assertion fail on purpose.
+  it('keeps the frozen key for the unproduced target_changed code (TASK-014)', async () => {
+    setActivePinia(createPinia());
+    const store = useEmergencyChangeStore();
+    const changedError = new ConnectError(
+      'changed',
+      Code.FailedPrecondition,
+      new Headers({ 'X-Reason-Code': 'target_changed' }),
+    );
+    store.configure({
+      loadConflict: async () => noConflict(),
+      loadTargets: async () => [target()],
+      loadArtifacts: async () => [artifact()],
+      execute: vi.fn().mockRejectedValue(changedError),
+    });
+
+    await store.loadScope(SCOPE);
+    store.selectContainer('app');
+    await vi.waitFor(() => expect(store.artifacts).toHaveLength(1));
+    store.selectArtifact(store.artifacts[0]);
+    store.setReason('x');
+    store.openConfirm();
+    const key = store.confirmedIntent?.idempotencyKey;
+    store.setRiskAccepted(true);
+
+    await store.submit();
+    expect(store.submitError?.code).toBe('target_changed');
+    expect(store.confirmedIntent?.idempotencyKey).toBe(key); // not a key-invalidating code
+  });
+
   it('clears the selection and reloads candidates after artifact_not_trusted (AC-058-11)', async () => {
     setActivePinia(createPinia());
     const store = useEmergencyChangeStore();

@@ -44,7 +44,6 @@ const REASON_MESSAGES: Record<string, string> = {
   annotation_scope_mismatch: '注解 scope 不一致',
   invalid_annotation_entries: '注解条目不合法',
   artifact_not_trusted: '制品未通过信任验证',
-  target_changed: '目标已变化，请刷新后重试',
   operator_offline: 'Operator 离线，请稍后重试',
   idempotency_conflict: '幂等键已绑定其他请求内容，请重新确认',
   invalid_cursor: '分页游标已失效',

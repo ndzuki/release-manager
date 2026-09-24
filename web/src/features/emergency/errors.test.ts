@@ -100,4 +100,11 @@ describe('mapEmergencyError', () => {
     expect(reasonMessageFor('network_error', 'fallback')).toBe('网络错误，请检查连接后重试');
     expect(reasonMessageFor('made_up_code', 'fallback')).toBe('fallback');
   });
+
+  // TASK-014: `target_changed` has no producer in internal/ or cmd/, so it was
+  // a display key for a code the server can never send. Re-adding it to
+  // REASON_MESSAGES makes this assertion fail on purpose.
+  it('no longer maps the unproduced target_changed code', () => {
+    expect(reasonMessageFor('target_changed', 'fallback')).toBe('fallback');
+  });
 });
