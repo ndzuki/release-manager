@@ -26,7 +26,7 @@ exceptions:
 
   - owner: "release-manager"
     code: "target_changed"
-    reason: "REQ-058 AC-058-18: the server never returns this code; only the web client maps it (web/src/features/emergency/errors.ts). Emitting it needs an emergency confirmation-token contract that does not exist (emergency.go:493-500 validates operation_version shape only; ListEmergencyTargets is read-only and mints no token) plus the target observation capability (D-R / TASK-154 / TASK-168). Tracked as REQ-058 partial (audit bucket C)."
+    reason: "REQ-058 AC-058-18: the server never returns this code, and as of task-14 the web client no longer maps it either (the display key was deleted from web/src/features/emergency/errors.ts; nothing emits it). The drift assertion is explicitly deferred (2026-09-28 scope-change) and the literal stays on the AC line so this exception keeps being tracked. Emitting it needs an emergency confirmation-token contract that does not exist (emergency.go:500-503 validates operation_version shape only; ListEmergencyTargets is read-only and mints no token) plus the target observation capability (D-R / TASK-154 / TASK-168). Tracked as REQ-058 partial (audit bucket C)."
     expires_at: "2026-12-31"
 
   - owner: "release-manager"
