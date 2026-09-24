@@ -59,7 +59,6 @@ export interface EmergencyChangeOptions {
 // Transient failures (network, stale snapshot, offline operator) keep the key.
 const KEY_INVALIDATING_CODES = new Set<string>([
   'idempotency_conflict',
-  'target_changed',
   'artifact_not_trusted',
   'artifact_not_found',
   'no_candidate_artifact',
