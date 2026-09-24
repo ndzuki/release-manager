@@ -107,4 +107,36 @@ describe('mapEmergencyError', () => {
   it('no longer maps the unproduced target_changed code', () => {
     expect(reasonMessageFor('target_changed', 'fallback')).toBe('fallback');
   });
+
+  // TASK-014 follow-up: the same cleanup applied to the remaining display keys
+  // whose literal has no emitter. Each one is either retired by an AC
+  // (`manifest_inventory_unavailable`, AC-081-01) or superseded by a canonical
+  // code in REQ-058's own mapping table (`unresolved_effect` /
+  // `promotion_path_blocked` -> LOCKED_PATH, `conflicting_emergency` /
+  // `target_lock_conflict` -> OPERATION_IN_PROGRESS). Re-adding any of them to
+  // REASON_MESSAGES makes this test fail on purpose.
+  it('no longer maps display keys whose literal has no emitter (TASK-014)', () => {
+    for (const code of [
+      'target_lock_conflict',
+      'conflicting_emergency',
+      'unresolved_effect',
+      'promotion_path_blocked',
+      'manifest_inventory_unavailable',
+    ]) {
+      expect(reasonMessageFor(code, 'fallback')).toBe('fallback');
+    }
+  });
+
+  // The same keys must not stay retryable either: `manifest_inventory_unavailable`
+  // was the only one in RETRYABLE_CODES, and it was retired by AC-081-01.
+  it('no longer treats the retired manifest_inventory_unavailable code as retryable (TASK-014)', () => {
+    const error = new ConnectError(
+      'unavailable',
+      Code.Internal,
+      new Headers({ 'X-Reason-Code': 'manifest_inventory_unavailable' }),
+    );
+    const display = mapEmergencyError(error);
+    expect(display.code).toBe('manifest_inventory_unavailable');
+    expect(display.retryable).toBe(false);
+  });
 });
