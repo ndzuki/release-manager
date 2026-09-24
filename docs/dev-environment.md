@@ -23,10 +23,20 @@
 | CPU | ≥ 4 核 | `host_memory_insufficient` |
 | 磁盘 | `data/` 所在文件系统可用空间 ≥ 20 GiB | `host_disk_insufficient` |
 | 内存 | `MemAvailable` ≥ 12 GiB | `host_memory_insufficient` |
-| 宿主端口 | 8082–8087 空闲 | `port_conflict` |
+| 宿主端口 | 8082–8088 空闲 | `port_conflict` |
 
 两条检查是**续跑感知**的：当任一受管集群已存在时，内存门禁与端口门禁**跳过**——5 个 k3d
-集群自身的负载均衡器按设计占用 8082–8087，中断后重跑 `dev-up` 不应被自己已提交的占用判失败。
+集群自身的负载均衡器按设计占用 8082–8088，中断后重跑 `dev-up` 不应被自己已提交的占用判失败。
+
+**两个端口可经环境变量覆盖**（默认值不变，用于同机并行跑两套 dev 环境 —— 5001/6443 被他人
+占用时，硬编码会让第二套环境**根本起不来**，表现为 `registry_unreachable`/`cluster_create_failed`）：
+
+| 变量 | 默认 | 作用与派生 |
+| --- | --- | --- |
+| `REGISTRY_PORT` | `5001` | 宿主侧 registry 端口。容器 publish、push/tag 目标、**apply 的镜像引用**与 containerd mirror（`deploy/k3d/registries.yaml` 的 mirror key，覆盖时物化为临时文件并由退出 trap 清理）全部由它派生 |
+| `DEV_K3D_API_PORT` | `6443` | 控制面集群的 k3d `--api-port`（客户集群用 k3d 自动分配端口） |
+
+例：`REGISTRY_PORT=5009 DEV_K3D_API_PORT=6449 make e2e-prerequisite-ci`。
 
 以下工具不在 `preflight_up` 电池内，但会被后续阶段调用，缺失时表现为**阶段级失败而非前置失败**：
 
@@ -174,7 +184,7 @@ orchestrator 与 auth 的 `run-*`/`dev-stage-*` 都只传 `--config`。
 - **残留状态导致的误判**：`dev-down` 后若手工保留 `data/dev-seed-progress.json` 等种子状态，
   下次 `dev-up` 会因 identity drift 报 `fixture_conflict`。不要手工修补，跑
   `make dev-reset-data CONFIRM=1`。
-- **端口冲突**：8082–8087 被外部进程占用 → `port_conflict`（`/proc` 可解析时脚本会报占用 pid）。
+- **端口冲突**：8082–8088 被外部进程占用 → `port_conflict`（`/proc` 可解析时脚本会报占用 pid）。
   `dev-reset-data` 的 PostgreSQL port-forward 默认用 5432，若宿主已有别的 postgres 占用，
   必须设 `DEV_RESET_PG_PORT` 换端口，否则 `pg_dump` 会连到错误的实例。
 - **锁冲突**：任何 `dev-*` 排他操作与 E2E 的共享锁互斥，冲突立即以退出码 3 +
@@ -182,7 +192,7 @@ orchestrator 与 auth 的 `run-*`/`dev-stage-*` 都只传 `--config`。
 - **不要用裸 `docker inspect <name>` 判断对象存在**：容器的同名 network/volume 会让判断
   失真。脚本统一使用 `docker container inspect` / `docker network inspect`，手工排查时保持一致。
 - **端点全部 loopback-only**：registry `127.0.0.1:5001`、k3d API `127.0.0.1:6443`、
-  管理面 `127.0.0.1:8082–8087`（→ NodePort 30082–30087）。`release_operator`(8084) 是 mTLS
+  管理面 `127.0.0.1:8082–8088`（→ NodePort 30082–30088）。`release_operator`(8084) 是 mTLS
   agent gateway，只有 OperatorService + SyncInventory 路由，**没有** `/health`、`/readyz`、
   `/environment`，只能用 TCP 可达性探测。
 - **失败诊断自动落盘**：`dev-up`/`dev-seed`/`dev-reset-data` 失败（以及 ci profile 下任意非零

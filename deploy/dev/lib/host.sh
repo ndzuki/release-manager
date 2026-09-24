@@ -13,7 +13,11 @@ source "$SCRIPT_DIR/lib/errors.sh"
 MIN_MEM_AVAILABLE_GB=12
 MIN_DISK_AVAILABLE_GB=20
 MIN_CPU_COUNT=4
-DEV_PORTS=(8082 8083 8084 8085 8086 8087)
+# Host ports probed for availability and mapped to the management cluster's
+# NodePort band (8082 -> 30082 ...). The six original entries are the services
+# that predate cmd/api; 8088 is release-api, which needed its own port because
+# 8082-8087 are all taken (8087 is web) — see docs/testing.md.
+DEV_PORTS=(8082 8083 8084 8085 8086 8087 8088)
 # Test isolation: DEV_PORTS_OVERRIDE env (space-separated) lets fake-CLI
 # tests probe idle ports on hosts where the real dev environment is up.
 # A distinct name avoids bash arrays shadowing a same-named scalar.

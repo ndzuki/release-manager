@@ -10,5 +10,9 @@ USER nonroot:nonroot
 WORKDIR /data
 COPY --from=builder /out/release-api /release-api
 COPY configs/api.dev.yaml /configs/api.dev.yaml
-EXPOSE 8087
+# 8088, not 8087: 8087 is the web SPA in the dev environment (the Kustomize
+# Deployment mounts its own config over the baked copy and sets the container
+# port). EXPOSE is documentation only, but a wrong port here is a wrong
+# statement — REQ-065 D2.
+EXPOSE 8088
 ENTRYPOINT ["/release-api", "--config", "/configs/api.dev.yaml", "--db", "/data/api.db"]

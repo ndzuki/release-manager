@@ -56,7 +56,21 @@ ctl_kubectl() {
 # reach it as k3d-<name>:5000 on the cluster network (REQ-065 registry).
 REGISTRY_NAME="release-manager-registry"
 REGISTRY_CONTAINER="k3d-$REGISTRY_NAME"
-REGISTRY_PORT=5001
+# Host-side registry port. Overridable so two dev environments (or a busy host
+# whose 5001 belongs to something else) can coexist: the default keeps the
+# documented behaviour, and every derived value — the container publish, the
+# push/tag targets, the applied image references and the containerd mirror —
+# follows this one variable. Before this seam the port was hardcoded, so a
+# second session could not start at all (`registry_unreachable: Bind for
+# 0.0.0.0:5001 failed`).
+REGISTRY_PORT="${REGISTRY_PORT:-5001}"
+# k3d control-cluster API port, same rationale: 6443 is the k3d default and is
+# routinely taken by another local cluster. Only the control cluster binds it
+# (customer clusters get k3d-assigned ports).
+DEV_K3D_API_PORT="${DEV_K3D_API_PORT:-6443}"
+# Transient containerd mirror config materialized when REGISTRY_PORT is
+# overridden (see registry_config_path); removed by cleanup_trap.
+REGISTRY_CONFIG_FILE=""
 KUSTOMIZE_DIR="deploy/kustomize/dev"
 # IMAGE_TAGS maps each service to the content-sha256 tag recorded by
 # build_and_push so kustomize_apply can substitute the static `:dev`
@@ -84,6 +98,12 @@ cleanup_trap() {
   jwt_ci_temp_cleanup
   service_token_ci_temp_cleanup
   mtls_ca_ci_temp_cleanup
+  # The mirror config materialized for an overridden REGISTRY_PORT is transient
+  # (registry_config_prepare); on the default path the variable holds the
+  # repository file, which must never be removed.
+  if [ -n "$REGISTRY_CONFIG_FILE" ] && [ "$REGISTRY_CONFIG_FILE" != "$SCRIPT_DIR/../k3d/registries.yaml" ]; then
+    rm -f "$REGISTRY_CONFIG_FILE"
+  fi
   # Failure diagnostics (批次5 D6, AC-065-39): collect describe/get/logs
   # BEFORE any ci auto-purge so the evidence survives the teardown (REQ-065:
   # "ci profile 失败自动清理路径同样先落盘诊断再清理"). Collection runs in a
@@ -537,7 +557,7 @@ stage_preflight() {
   ownership_init
   preflight_up
   # The port gate (AC-065-07) targets foreign occupiers on a clean host.
-  # When a managed cluster already exists its loadbalancer owns 8082-8087
+  # When a managed cluster already exists its loadbalancer owns 8082-8088
   # by design — an interrupted dev-up must resume idempotently (AC-065-02)
   # instead of failing its own port mapping. Port checks after preflight_up
   # so k3d availability is already verified.
@@ -604,6 +624,30 @@ registry_volume_remove() {
 # identification labels above keep `k3d registry list` /
 # `k3d cluster create --registry-use` working unchanged. The named volume
 # makes the image cache survive dev-down and relabeling.
+# registry_config_prepare — materialize the containerd mirror config for the
+# active registry port, ONCE per run and in the parent shell: the exit trap has
+# to know the path, and a command substitution's subshell would not preserve the
+# assignment. The repository file declares the documented `localhost:5001`
+# mirror (nodes resolve that host-side name to the registry container instead of
+# their own loopback); with REGISTRY_PORT overridden the mirror key must follow
+# the image references. The default keeps the repository file untouched, so the
+# documented behaviour stays byte-identical.
+registry_config_prepare() {
+  if [ "$REGISTRY_PORT" = "5001" ]; then
+    REGISTRY_CONFIG_FILE="$SCRIPT_DIR/../k3d/registries.yaml"
+    return 0
+  fi
+  [ -n "$REGISTRY_CONFIG_FILE" ] && return 0
+  REGISTRY_CONFIG_FILE="$(mktemp)"
+  sed "s#localhost:5001#localhost:${REGISTRY_PORT}#g" "$SCRIPT_DIR/../k3d/registries.yaml" > "$REGISTRY_CONFIG_FILE"
+}
+
+# registry_config_path — the prepared mirror config path. Callers must have run
+# registry_config_prepare (cluster_up does, in the parent shell).
+registry_config_path() {
+  printf '%s' "$REGISTRY_CONFIG_FILE"
+}
+
 registry_create() {
   local volume_source="$REGISTRY_CONTAINER"
   # shellcheck disable=SC2086 # label arguments are deliberately word-split
@@ -778,6 +822,9 @@ node_resources_apply() {
 
 cluster_up() {
   local cluster="$1"
+  # Materialize the mirror config once, in the parent shell: the exit trap needs
+  # the path and a `$(...)` subshell would not keep the assignment.
+  registry_config_prepare
   if cluster_exists "$cluster"; then
     # AC-065-22 / 批次2 D2: a k3d cluster carries no Docker ownership label
     # (k3d sets its own), so data/dev-ownership.json's k3d_clusters[] is the
@@ -807,7 +854,7 @@ cluster_up() {
     # <name> [flags]` — there is no --name flag (REQ-065 k3d >= 5.8).
     cluster create "$cluster"
     --registry-use "$REGISTRY_NAME"
-    --registry-config "$SCRIPT_DIR/../k3d/registries.yaml"
+    --registry-config "$(registry_config_path)"
     # AC-065-37 (批次5 D2): deterministic server-node memory. k3d has no
     # CPU flag — the CPU cap is applied via docker update after creation
     # (node_resources_apply).
@@ -830,10 +877,10 @@ cluster_up() {
   )
   if [ "$cluster" = "$CONTROL_CLUSTER" ]; then
     # The control cluster owns the fixed local API port and the
-    # loadbalancer mapping 8082-8087 -> NodePort 30082-30087. Customer
+    # loadbalancer mapping 8082-8088 -> NodePort 30082-30088. Customer
     # clusters get k3d-assigned API ports (127.0.0.1-bound by default).
-    args+=(--api-port "127.0.0.1:6443")
-    args+=(--port "8082-8087:30082-30087@loadbalancer")
+    args+=(--api-port "127.0.0.1:$DEV_K3D_API_PORT")
+    args+=(--port "8082-8088:30082-30088@loadbalancer")
   fi
   # k3d-auto wrapper equivalent: when the host runs behind a proxy, inject
   # it into the node containers and force NO_PROXY to cover the registry
@@ -1117,11 +1164,11 @@ build_and_push() {
 }
 
 # images_up_sequential — the deterministic default: every image is built in
-# order (AC-065-38: 5 clusters stay resident while 8 Go builds run; parallel
+# order (AC-065-38: 5 clusters stay resident while 9 Go builds run; parallel
 # Go builds risk OOM).
 images_up_sequential() {
   local service
-  for service in webhook orchestrator operator auth notifier web fixture notification-sink; do
+  for service in webhook orchestrator operator auth notifier api web fixture notification-sink; do
     build_and_push "$service"
   done
 }
@@ -1135,7 +1182,7 @@ images_up_parallel() {
   local par="$1"
   log "[4/7] docker images (parallelism $par) .... "
   local service pending=()
-  for service in webhook orchestrator operator auth notifier web fixture notification-sink; do
+  for service in webhook orchestrator operator auth notifier api web fixture notification-sink; do
     if image_record "$service"; then
       pending+=("$service")
     fi
@@ -1230,6 +1277,10 @@ kustomize_apply() {
     [ -n "$hash" ] || continue
     manifest="$(printf '%s\n' "$manifest" | sed "s#release-$svc:dev#release-$svc:content-sha256-$hash#g")"
   done
+  # The manifests name the registry as localhost:5001 (the documented default);
+  # when REGISTRY_PORT is overridden the applied references must follow it, or
+  # the nodes would pull from a port nothing publishes. No-op on the default.
+  manifest="$(printf '%s\n' "$manifest" | sed "s#localhost:5001/#localhost:${REGISTRY_PORT}/#g")"
   if ! printf '%s\n' "$manifest" | ctl_kubectl apply -f -; then
     fail "$ERR_SERVICE_UNHEALTHY" "kubectl apply failed for $KUSTOMIZE_DIR"
   fi
@@ -1281,13 +1332,13 @@ readiness() {
   # right after apply). rollout status is the deterministic convergence
   # signal the probes alone are not.
   if ! ctl_kubectl -n release-manager-dev rollout status \
-    deployment/webhook deployment/orchestrator deployment/auth deployment/notifier deployment/web deployment/notification-sink \
+    deployment/webhook deployment/orchestrator deployment/auth deployment/notifier deployment/api deployment/web deployment/notification-sink \
     --timeout="${DEV_TIMEOUT_READY}s" >/dev/null; then
     service_unhealthy_fail "management-plane rollout did not converge within ${DEV_TIMEOUT_READY}s"
   fi
   # Probe ports come from DEV_PORTS (host.sh) so the DEV_PORTS_OVERRIDE
   # test-isolation seam applies to the readiness stage too — fake-CLI tests
-  # probe the overridden ports instead of the production 8082-8087 band.
+  # probe the overridden ports instead of the production 8082-8088 band.
   require_readyz webhook "${DEV_PORTS[0]}"
   require_readyz orchestrator "${DEV_PORTS[1]}"
   # operator 8084 is the orchestrator's mTLS agent gateway (HTTPS), not an
@@ -1297,6 +1348,10 @@ readiness() {
   require_tcp_ready operator "${DEV_PORTS[2]}"
   require_readyz auth "${DEV_PORTS[3]}"
   require_readyz notifier "${DEV_PORTS[4]}"
+  # cmd/api (release-api) serves /readyz like the other HTTP services; its port
+  # is the extra band entry 8088 (8082-8087 are all taken by the six services
+  # above, 8087 being web).
+  require_readyz api "${DEV_PORTS[6]}"
   # web has no /readyz; the root page is the probe.
   if ! wait_for_endpoint "http://127.0.0.1:${DEV_PORTS[5]}" "$DEV_TIMEOUT_READY"; then
     service_unhealthy_fail "web did not answer on port ${DEV_PORTS[5]}"
@@ -1467,6 +1522,8 @@ agents_up() {
       [ -n "$hash" ] || continue
       manifest="$(printf '%s\n' "$manifest" | sed "s#release-$svc:dev#release-$svc:content-sha256-$hash#g")"
     done
+    # Same registry-port derivation as the management-plane apply.
+    manifest="$(printf '%s\n' "$manifest" | sed "s#localhost:5001/#localhost:${REGISTRY_PORT}/#g")"
     mgmt_ip="$(mgmt_node_ip_on "$cluster")"
     reg_ip="$(registry_ip_on "$cluster")"
     if [ -z "$mgmt_ip" ] || [ -z "$reg_ip" ]; then

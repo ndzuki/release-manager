@@ -37,8 +37,17 @@ case "$1" in
         # One line per create invocation: name followed by the full argv.
         argv="$*"
         name=""
+        reg_config=""
         while [ "$#" -gt 0 ]; do
           if [ "$1" = "--name" ]; then name="$2"; shift 2; continue; fi
+          # Capture the containerd mirror config dev.sh passed, so tests can
+          # assert the mirror key follows an overridden REGISTRY_PORT (the real
+          # k3d consumes the file; the shim keeps a copy in the state dir).
+          if [ "$1" = "--registry-config" ]; then
+            reg_config="$2"
+            shift 2
+            continue
+          fi
           # Real k3d v5 takes the cluster name positionally: `k3d cluster
           # create <name> [flags]`. Fall back to the first positional arg
           # (the name precedes any flag values in dev.sh's invocation).
@@ -46,6 +55,9 @@ case "$1" in
           shift
         done
         printf '%s|%s\n' "$name" "$argv" >> "$STATE/k3d-creates.log"
+        if [ -n "$reg_config" ]; then
+          cp "$reg_config" "$STATE/registry-config.yaml" 2>/dev/null || true
+        fi
         printf '%s\n' "$name" >> "$STATE/clusters.txt"
         ;;
       delete)
