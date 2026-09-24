@@ -37,6 +37,15 @@ DEV_DATA_DIR="${DEV_DATA_DIR:-$SCRIPT_DIR/../../data}"
 DEV_TIMEOUT_READY="${DEV_TIMEOUT_READY:-300}"
 DEV_TIMEOUT_OPERATOR="${DEV_TIMEOUT_OPERATOR:-180}"
 DEV_TIMEOUT_SEED_RETRIES="${DEV_TIMEOUT_SEED_RETRIES:-3}"
+# DEV_BUILD_TIMEOUT — wall-clock budget for ONE image build (seconds). `docker
+# build` has no deadline of its own, so a stalled step (module download,
+# registry fetch) makes dev-up wait forever (real smoke 2026-09-24: the
+# release-api image sat in `RUN go mod download` and never returned). The
+# default is generous — a cold Go or npm build on a slow host must still fit —
+# but finite: on expiry the build fails with the image name and the budget
+# instead of hanging. Raise it only for a genuinely slower host; it is not a
+# workaround for a stalled network.
+DEV_BUILD_TIMEOUT="${DEV_BUILD_TIMEOUT:-900}"
 # Runtime files dev-purge removes (AC-065-26): credentials, keys, kubeconfigs
 # and state documents. data/archive/ is explicitly preserved.
 PURGE_DATA_PATHS=(dev-credentials.env dev-trust-root dev-jwt dev-service-tokens dev-enrollment-tokens dev-ca diagnostics kubeconfigs kubeconfig.yaml dev-ownership.json dev-fixture.json dev-seed-progress.json dev-status.json backups)
@@ -1120,7 +1129,19 @@ build_push_now() {
       --build-arg "NGINX_IMAGE=${DEV_DOCKER_MIRROR}nginx:1.27-alpine"
     )
   fi
-  if ! docker build "${build_args[@]}" --file "$dockerfile" --tag "localhost:${REGISTRY_PORT}/release-$service:$tag" .; then
+  # Bounded build: `timeout` (required by the preflight battery) kills the
+  # client at the deadline, which cancels the buildkit build. 124 = the TERM
+  # deadline fired, 137 = the kill-after grace also expired; both are the
+  # timeout class, reported separately so the operator is not sent looking for
+  # a compile error. The build output above already names the stalled step
+  # (buildkit prints `#N [builder ...]`).
+  local build_rc=0
+  timeout --signal=TERM --kill-after=30s "${DEV_BUILD_TIMEOUT}s" \
+    docker build "${build_args[@]}" --file "$dockerfile" --tag "localhost:${REGISTRY_PORT}/release-$service:$tag" . || build_rc=$?
+  if [ "$build_rc" -eq 124 ] || [ "$build_rc" -eq 137 ]; then
+    return 12
+  fi
+  if [ "$build_rc" -ne 0 ]; then
     return 10
   fi
   if ! docker push "localhost:${REGISTRY_PORT}/release-$service:$tag"; then
@@ -1156,6 +1177,9 @@ build_and_push() {
   rc=0
   build_push_now "$service" || rc=$?
   if [ "$rc" -ne 0 ]; then
+    if [ "$rc" -eq 12 ]; then
+      fail "$ERR_DOCKER_BUILD_FAILED" "build timed out for release-$service after ${DEV_BUILD_TIMEOUT}s: a build step stalled (see the last '#N [builder ...]' line above); raise DEV_BUILD_TIMEOUT only if this host is genuinely that slow"
+    fi
     if [ "$rc" -eq 11 ]; then
       fail "$ERR_DOCKER_PUSH_FAILED" "push failed for release-$service:content-sha256-${IMAGE_TAGS[$service]:-}"
     fi
@@ -1229,6 +1253,9 @@ images_up_parallel() {
     done
   fi
   if [ -n "$first_fail" ]; then
+    if [ "$first_rc" -eq 12 ]; then
+      fail "$ERR_DOCKER_BUILD_FAILED" "build timed out for release-$first_fail after ${DEV_BUILD_TIMEOUT}s: a build step stalled (see the last '#N [builder ...]' line above); raise DEV_BUILD_TIMEOUT only if this host is genuinely that slow"
+    fi
     if [ "$first_rc" -eq 11 ]; then
       fail "$ERR_DOCKER_PUSH_FAILED" "push failed for release-$first_fail:content-sha256-${IMAGE_TAGS[$first_fail]:-}"
     fi

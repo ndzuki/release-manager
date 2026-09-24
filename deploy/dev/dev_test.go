@@ -936,6 +936,46 @@ func TestDefaultRegistryPortUsesTheRepositoryMirror(t *testing.T) {
 	}
 }
 
+// TestImageBuildTimeoutFailsFastWithDiagnostics covers the robustness gap the
+// 2026-09-24 run exposed: `docker build` has no deadline of its own, so a
+// stalled build step makes dev-up wait forever (the release-api image sat in
+// `RUN go mod download` and never returned). DEV_BUILD_TIMEOUT bounds each
+// build and the failure names the image and the budget instead of hanging.
+//
+// Mutation check: dropping the 124/137 mapping (so a timeout degrades to the
+// generic "build failed") makes this fail on the missing diagnostic.
+func TestImageBuildTimeoutFailsFastWithDiagnostics(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+	// `build` outlives the budget; `manifest inspect` must fail so the image is
+	// actually rebuilt rather than skipped as unchanged; every other verb keeps
+	// the happy-path answer so the run reaches the images stage.
+	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
+if [ "$1" = "build" ]; then sleep 30; exit 0; fi
+if [ "$1" = "manifest" ] && [ "$2" = "inspect" ]; then exit 1; fi
+if [ "$1" = "container" ] && [ "$2" = "create" ]; then printf '%s\n' "$*" >> "$DEV_DATA_DIR/docker-create.log"; exit 0; fi
+if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then exit 1; fi
+if [ "$1" = "network" ] && [ "$2" = "inspect" ]; then exit 1; fi
+exit 0
+`)
+	env = append(env, "DEV_BUILD_TIMEOUT=1")
+
+	out, err := runDev(t, env, "up")
+	if err == nil {
+		t.Fatalf("expected the build timeout to fail dev-up, got success:\n%s", out)
+	}
+	if code := exitCode(t, err); code != 1 {
+		t.Fatalf("expected exit 1, got %d:\n%s", code, out)
+	}
+	for _, want := range []string{"docker_build_failed", "timed out", "release-webhook"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected %q in the timeout diagnostic:\n%s", want, out)
+		}
+	}
+}
+
 func TestDevUpIsIdempotent(t *testing.T) {
 	stateDir := t.TempDir()
 	env, binDir := fakeEnv(t, stateDir)

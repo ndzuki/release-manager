@@ -146,7 +146,8 @@ for url in \
   "http://localhost:8083/environment" \
   "http://localhost:8085/environment" \
   "http://localhost:8086/environment" \
-  "http://localhost:8087/environment"; do
+  "http://localhost:8087/environment" \
+  "http://localhost:8088/environment"; do
   env_json="$(curl -s --fail --retry 5 --retry-delay 2 --retry-connrefused "$url" || true)"
   [ -n "$env_json" ] || bad "environment $url"
   prod="$(jq -r '.production' <<<"$env_json")"
@@ -155,7 +156,7 @@ for url in \
   ENV_IDS="$ENV_IDS $eid"
 done
 UNIQ_COUNT="$(tr ' ' '\n' <<<"$ENV_IDS" | grep -v '^$' | sort -u | wc -l)"
-[ "$UNIQ_COUNT" = "1" ] && ok "5 services /environment consistent ($(tr ' ' '\n' <<<"$ENV_IDS" | grep -v '^$' | sort -u | head -1), production=false)" \
+[ "$UNIQ_COUNT" = "1" ] && ok "6 services /environment consistent ($(tr ' ' '\n' <<<"$ENV_IDS" | grep -v '^$' | sort -u | head -1), production=false)" \
   || bad "environment_id mismatch:$ENV_IDS"
 
 step "seed manifest shape (AC-066-25 counters)"
@@ -206,6 +207,61 @@ if command -v openssl >/dev/null 2>&1; then
   fi
 else
   skiprec "HS256 downgrade probe (openssl unavailable)"
+fi
+
+# REQ-065 D2: cmd/api (release-api) is part of the dev environment, so its
+# Ed25519 PUBLIC-key verification is executed here instead of being left to unit
+# tests. It is the second management-plane verifier (with cmd/orchestrator) and
+# the only one that can be probed with a real bearer over the host band: port
+# 8088, because 8082-8087 are taken by the six older services (8087 is web).
+step "release-api (cmd/api): Ed25519 public-key verification (REQ-065 D2)"
+API_URL="${API_URL:-http://localhost:8088}"
+if curl -fsS --max-time 5 "$API_URL/readyz" >/dev/null 2>&1; then
+  ok "api /readyz 200 ($API_URL/readyz)"
+else
+  bad "api /readyz did not answer 200 ($API_URL/readyz)"
+fi
+# The AuditService JWT interceptor verifies the bearer against the Ed25519
+# public key only (release-manager-jwt-public). QueryAuditEvents then asks
+# release-auth for the caller's audit scope, so the assertion targets the
+# interceptor's own verdict: a valid bearer must NOT be rejected as a token
+# failure, while a tampered signature must be. That proves public-key
+# verification without depending on the authorization policy's answer.
+API_QUERY="$API_URL/audit.v1.AuditService/QueryAuditEvents"
+API_AUTH_RAW="$(curl -sS -w '\n%{http_code}' --max-time 10 \
+  -X POST "$API_QUERY" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{}' 2>/dev/null || printf '\n000')"
+API_AUTH_CODE="${API_AUTH_RAW##*$'\n'}"
+API_AUTH_BODY="${API_AUTH_RAW%$'\n'*}"
+if [ "$API_AUTH_CODE" = "000" ]; then
+  # No HTTP response at all: the service is unreachable, which must never be
+  # read as "the signature verified" (an empty body contains no error string).
+  bad "api did not answer the authenticated query (no HTTP response)"
+elif [[ "$API_AUTH_BODY" == *"invalid token"* || "$API_AUTH_BODY" == *"missing authorization header"* ]]; then
+  bad "api rejected the EdDSA bearer at the token interceptor (HTTP $API_AUTH_CODE): $API_AUTH_BODY"
+else
+  ok "api verified the EdDSA bearer against the public key (HTTP $API_AUTH_CODE)"
+fi
+# A tampered signature must be refused. This is also what proves the verifier
+# is live: without it, an api that accepted anything would pass the check above.
+TAMPER_LAST="${TOKEN: -1}"
+if [ "$TAMPER_LAST" = "A" ]; then TAMPER_LAST="B"; else TAMPER_LAST="A"; fi
+TAMPERED_TOKEN="${TOKEN%?}${TAMPER_LAST}"
+API_TAMPER_BODY="$(curl -sS --max-time 10 -X POST "$API_QUERY" \
+  -H "Authorization: Bearer $TAMPERED_TOKEN" -H 'Content-Type: application/json' \
+  -d '{}' 2>/dev/null || true)"
+if [[ "$API_TAMPER_BODY" == *"invalid token"* ]]; then
+  ok "api rejects a tampered bearer (invalid token)"
+else
+  bad "api accepted a tampered bearer: $API_TAMPER_BODY"
+fi
+# Negative control: without a bearer the interceptor must answer 401.
+API_ANON_BODY="$(curl -sS --max-time 10 -X POST "$API_QUERY" \
+  -H 'Content-Type: application/json' -d '{}' 2>/dev/null || true)"
+if [[ "$API_ANON_BODY" == *"missing authorization header"* ]]; then
+  ok "api rejects a missing bearer"
+else
+  bad "api without a bearer did not report a missing authorization header: $API_ANON_BODY"
 fi
 
 AUTH_H=(-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json')

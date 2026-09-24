@@ -20,6 +20,7 @@
 | Docker | CLI 在 PATH 且 daemon 可达 | `docker_unavailable` |
 | k3d | ≥ 5.8，且 `k3d version` 行可解析出 `vX.Y.Z` | `k3d_unavailable` |
 | flock | util-linux `flock` 在 PATH（环境锁） | `docker_unavailable` |
+| timeout | coreutils `timeout` 在 PATH（**镜像构建有界超时**；缺它则拒绝启动，而不是退化为无界构建） | `docker_unavailable` |
 | CPU | ≥ 4 核 | `host_memory_insufficient` |
 | 磁盘 | `data/` 所在文件系统可用空间 ≥ 20 GiB | `host_disk_insufficient` |
 | 内存 | `MemAvailable` ≥ 12 GiB | `host_memory_insufficient` |
@@ -37,6 +38,15 @@
 | `DEV_K3D_API_PORT` | `6443` | 控制面集群的 k3d `--api-port`（客户集群用 k3d 自动分配端口） |
 
 例：`REGISTRY_PORT=5009 DEV_K3D_API_PORT=6449 make e2e-prerequisite-ci`。
+
+**dev-up 的超时语义** —— 每一段都是**有界失败**，不靠"加大超时"掩盖：
+
+| 变量 | 默认 | 作用 |
+| --- | --- | --- |
+| `DEV_BUILD_TIMEOUT` | `900`（秒，**单个镜像**） | 包裹每次 `docker build`。`docker build` 自身**没有**超时，所以一个停顿的构建步骤会让 `dev-up` 无限等待（2026-09-24 实测：`release-api` 卡在 `RUN go mod download` 48 分钟不返回）。到期即以 `docker_build_failed: build timed out for release-<svc> after <N>s` 失败并给出镜像名与预算（构建输出里最后一行 `#N [builder ...]` 就是卡住的那步），**不会挂住**；只有宿主机确实更慢时才调大它 |
+| `DEV_TIMEOUT_READY` | `300` | rollout / `/readyz` / PG / Redis 就绪预算 |
+| `DEV_TIMEOUT_OPERATOR` | `180` | operator online 等待预算 |
+| `DEV_TIMEOUT_SEED_RETRIES` | `3` | devseed 各腿的瞬时失败重试次数 |
 
 以下工具不在 `preflight_up` 电池内，但会被后续阶段调用，缺失时表现为**阶段级失败而非前置失败**：
 

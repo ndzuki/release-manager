@@ -250,6 +250,12 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 
 - **table-driven + testify**：用例表驱动，断言用 `github.com/stretchr/testify`（`require` 用于必须
   中止的前置断言，`assert` 用于可继续的取值断言）。
+- **断言必须排除"没有响应"这一分支**：只断言"响应里没有错误串"的检查，在 **HTTP 000 / 空响应**
+  （服务没起来、端口不通、curl 直接失败）时会**假通过** —— 空 body 天然不含任何错误串，于是"没有
+  验证"被记成了 PASS。实测例：`test/e2e/prerequisite/smoke.sh` 的 `release-api` 公钥验签断言最初
+  写成"body 不含 `invalid token` / `missing authorization header`"，指向**死端口**时它照样 PASS；
+  加上 `code != 000` 守卫后才 FAIL。凡"没有 X 就算通过"的断言，都必须同时钉住"**确实拿到了响应**"
+  （HTTP 状态码、非空 body、或明确的成功码），否则它与不检查等价。
 - **live-DB 测试必须打 `//go:build integration`**，并在 `POSTGRES_TEST_DSN` 未设置时
   `t.Skip("POSTGRES_TEST_DSN is not set")`；两者都要——缺标签会让它在无数据库的机器上被编译执行，
   缺 skip 会让它在 CI 的默认 job 里失败。
