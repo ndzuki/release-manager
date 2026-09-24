@@ -83,3 +83,43 @@ func TestAudit_IgnoresWeakAnchors(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.Checked, "a single-hump name is not a strong symbol")
 }
+
+// The repository keeps its own git worktrees under .worktrees/. Each is a full
+// checkout, so auditing them re-reports every finding once per worktree — 13
+// copies once made 93.6% of this audit's output duplicate noise. The copy must
+// not be counted as a second file, and must not produce a second finding.
+func TestAudit_SkipsTheRepositorysOwnWorktreeCopies(t *testing.T) {
+	body := "- 入口是 `CreateTrustRoot`（`internal/x/x.go:1`）。\n"
+	root := write(t, map[string]string{
+		"internal/x/x.go":           "package x\n",
+		"docs/a.md":                 body,
+		".worktrees/t093/docs/a.md": body,
+	})
+
+	result, err := Audit(root)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Files, "the worktree copy must not be counted as a markdown file")
+	require.Len(t, result.Findings, 1, "the real citation is still reported exactly once")
+	assert.Contains(t, result.Findings[0].String(), "docs/a.md",
+		"the surviving finding must be the real document, not the worktree copy")
+}
+
+// `data` and `e2e-results` are gitignored build/run output, like `bin`. A
+// citation inside them is not a claim about the repository, so they must not be
+// audited (they contributed findings that no one could act on).
+func TestAudit_SkipsGeneratedOutputDirectories(t *testing.T) {
+	body := "- 入口是 `CreateTrustRoot`（`internal/x/x.go:1`）。\n"
+	root := write(t, map[string]string{
+		"internal/x/x.go":              "package x\n",
+		"docs/a.md":                    body,
+		"data/evidence/REPORT.md":      body,
+		"e2e-results/AC-066-report.md": body,
+	})
+
+	result, err := Audit(root)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Files, "only docs/a.md is documentation")
+	require.Len(t, result.Findings, 1, "the real citation is still reported exactly once")
+	assert.Contains(t, result.Findings[0].String(), "docs/a.md",
+		"the surviving finding must be the real document, not a generated report")
+}
