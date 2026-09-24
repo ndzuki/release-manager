@@ -308,14 +308,16 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 - Bundle 验签是**真实** Ed25519 验签（对活跃 trust root 逐条 `ed25519.Verify`），并带 5s 上界：
   `internal/trust/ed25519.go:21,44-145`；verifier 为 nil、根不可用或超时都产出
   `VerificationUnavailable` 而不是放行（同文件的 `unavailableOutput` 路径）。
-- 两道闸门的强度不同，必须分开说：**preflight 无条件 fail closed**
-  （`internal/preflight/service.go:145-169`：`Trusted`/`PolicyWarning` 放行，缺失/不可用/无效一律拒），
-  而 **`SubmitReleaseBundle` 的闸门跟随 trust policy 的 `FailClosed` 位**
+- **在产的只有一道闸门**：`SubmitReleaseBundle` 的信任判定跟随 trust policy 的 `FailClosed` 位
   （`internal/orchestrator/service.go:320-367`：`VerificationRejected` 恒拒；
   `SignatureMissing`/`VerificationUnavailable`/其他状态仅在 `FailClosed=true` 时拒，否则降级为
   `PolicyWarning` 放行）。默认策略里**只有 `env == "production"` 才 `FailClosed: true`**，
   staging/development 默认 fail-open：`internal/trust/policy.go:8-28`；
   紧急变更走同一条信任判定：`internal/orchestrator/emergency.go:662`。
+  ⚠️ **更正（V1 处置，2026-09-28）**：本节曾声称存在第二道"**preflight 无条件 fail closed**"闸门（引 `internal/preflight/service.go:145-169`）。<!-- check-docs:ignore 该文件已随 V1 处置删除，此处是历史引用的更正说明 -->
+  该包**零 importer、从未在生产路径上生效**，已随
+  ADR-024 的 V1 处置删除（`Notes/adr/ADR-024-artifact-preflight-executes-in-operator.md`）⇒
+  **本次删除不改变运行时安全姿态**，只是消除了"文档声称有一道更强闸门"的误导。
   剩余风险：**目标环境标签由服务端配置决定**（`internal/orchestrator/service.go:268` 使用 `s.targetEnv`），
   非 production 标签下的未签名/不可验证制品会被放行到执行链（只留 `policy_warning` 审计）。
 - 根轮换四态：`RotateTrustRoot` / `EndGrace` / `RetireTrustRoot` / `RevokeTrustRoot`
@@ -542,7 +544,7 @@ TASK-103/ADR-021），service 身份无法写入。因此出站拒绝的「审�
 > `internal/operator/agent/agent.go`、`internal/operator/ca/{ca,config,provider,vault}.go`、
 > `internal/operator/{k8s/secrets,helmengine/engine,preflight/pod_builder,tls_clients,session_client,workload_identity}.go`、
 > `internal/operator/bootstrap/bootstrap.go`、`internal/orchestrator/{emergency,values_approval,enrollment,vulnerability,service}.go`、
-> `internal/preflight/service.go`、`internal/trust/{ed25519,verifier,service}.go`、
+> `internal/trust/{ed25519,verifier,service}.go`、
 > `internal/vulnerability/{doc,scanner,evaluator,service}.go`、`internal/store/{store,redis/adapter,postgres/commands,postgres/inventory,sqlite/inventory,sqlite/audit}.go`、
 > `internal/quality/sdkcheck/analyzer.go`、`internal/contracts/interceptor/errorsanitize.go`、
 > `internal/config/config.go`、`internal/devfixture/{files,accounts_trust,runner}.go`、
