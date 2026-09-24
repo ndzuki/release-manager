@@ -49,7 +49,6 @@ type Store struct {
 	custEvents       *customerEventStore
 	customerCreates  *customerBindingCreateStore
 	defEvents        *definitionEventStore
-	preflight        *preflightStore
 	candidateArts    *candidateArtifactStore
 	preflightCycles  *preflightLifecycleStore
 	auditExports     *auditExportStore
@@ -99,7 +98,6 @@ func Open(dsn string) (*Store, error) {
 	s.timeline = &timelineStore{db: db}
 	s.defs = &definitionStore{db: db}
 	s.defEvents = &definitionEventStore{db: db}
-	s.preflight = &preflightStore{db: db}
 	s.vals = &valuesStore{db: db}
 	s.valuesApproval = &valuesApprovalStore{db: db}
 	s.customers = &customerStore{db: db}
@@ -196,9 +194,6 @@ func (s *Store) Definitions() store.DefinitionStore { return s.defs }
 
 // DefinitionEvents returns the DefinitionEventStore.
 func (s *Store) DefinitionEvents() store.DefinitionEventStore { return s.defEvents }
-
-// PreflightResults returns the PreflightStore.
-func (s *Store) PreflightResults() store.PreflightStore { return s.preflight }
 
 // Values returns the ValuesStore.
 func (s *Store) Values() store.ValuesStore { return s.vals }
@@ -1834,6 +1829,16 @@ var migrationStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_pending_workload_identity_cluster
 	 ON pending_workload_identity(customer_id, cluster_id)`,
+
+	// D1 (2026-09-28): the cache-based preflight_results table is dead — its
+	// producing package (internal/preflight/**) was deleted under V1, and
+	// store.PreflightStore / PreflightResults() plus both engine implementations
+	// are removed in this same change. The CREATE above stays as history; this
+	// DROP is what removes the table from existing (legacy) databases, and
+	// buildFreshSchema folds both statements into the same end-state snapshot, so
+	// fresh databases match. Mirrors
+	// migrations/000031_drop_preflight_results.up.sql.
+	`DROP TABLE IF EXISTS preflight_results`,
 }
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }

@@ -1617,23 +1617,6 @@ type VerificationRecord struct {
 	CreatedAt         time.Time
 }
 
-// PreflightCacheKey identifies an artifact preflight result.
-type PreflightCacheKey struct {
-	OperationID        string
-	RoutingVersion     string
-	BundleDigest       string
-	TrustPolicyVersion string
-	SBOMPolicyVersion  string
-}
-
-// PreflightRecord stores the serialized result for an idempotent preflight key.
-type PreflightRecord struct {
-	ID         string
-	Key        PreflightCacheKey
-	ResultJSON []byte
-	CreatedAt  time.Time
-}
-
 // ScanResultRecord is the serializable domain type for a vulnerability scan result.
 type ScanResultRecord struct {
 	ID             string
@@ -2333,22 +2316,6 @@ type VerificationStore interface {
 	GetByDigestAndPolicy(ctx context.Context, artifactDigest, policyVersion string) (*VerificationRecord, error)
 }
 
-// PreflightStore defines the persistence contract for artifact preflight results.
-//
-// LEGACY (V1, 2026-09-28): the artifact-preflight code that produced these
-// records — internal/preflight/** — has been deleted (ADR-024 moved artifact
-// preflight to the operator side; the package had zero importers and was already
-// unreachable). The table and this contract are deliberately KEPT: dropping a
-// table is an irreversible data-model operation and production may still hold
-// rows. No production caller exists. Removal is a separate, later decision that
-// must first confirm the table is empty in production and then ship its own down
-// migration — see Notes/adr/ADR-024-artifact-preflight-executes-in-operator.md
-// ("未决 / 需用户裁定" #4, settled as: code deleted, table deferred).
-type PreflightStore interface {
-	Create(ctx context.Context, rec *PreflightRecord) error
-	GetByKey(ctx context.Context, key PreflightCacheKey) (*PreflightRecord, error)
-}
-
 // ScanResultStore defines the persistence contract for vulnerability scan results.
 type ScanResultStore interface {
 	Create(ctx context.Context, rec *ScanResultRecord) error
@@ -2682,11 +2649,6 @@ type Store interface {
 	ScanResults() ScanResultStore
 	VulnerabilityExceptions() VulnerabilityExceptionStore
 	Verifications() VerificationStore
-	// PreflightResults is LEGACY (V1, 2026-09-28): the producing package
-	// internal/preflight/** is deleted and no production caller remains. The
-	// accessor stays so the table can be read/audited before its deferred
-	// removal — see PreflightStore.
-	PreflightResults() PreflightStore
 	CustomerEvents() CustomerEventStore
 	ClusterRoutes() ClusterRouteStore
 	Inventories() InventoryStore
