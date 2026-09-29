@@ -774,6 +774,31 @@ func (s *Service) resolveEmergencyImage(
 	}, nil
 }
 
+// verdictRootIsLive reports whether a trusted verdict is attributable to a trust root that is
+// still live for the environment.
+//
+// A verdict with neither a root id nor a key id is refused: nothing can show it is still
+// authoritative. The shipping Ed25519 verifier always records the root it matched; the
+// test-only StubVerifier records a root only on the path where a resolver is configured, which
+// is another reason a stub verdict must not reach a production gate.
+func verdictRootIsLive(liveRoots []*store.TrustRoot, verdict *store.VerificationRecord) bool {
+	if verdict == nil {
+		return false
+	}
+	for _, root := range liveRoots {
+		if root == nil {
+			continue
+		}
+		if verdict.RootID != "" && root.ID == verdict.RootID {
+			return true
+		}
+		if verdict.RootID == "" && verdict.KeyID != "" && root.KeyID == verdict.KeyID {
+			return true
+		}
+	}
+	return false
+}
+
 // trustedVerificationForArtifact resolves the trust record that authorises an emergency
 // change for a candidate artifact.
 //
@@ -876,6 +901,20 @@ func (s *Service) resolveEmergencyArtifact(ctx context.Context, artifactID strin
 	}
 	if verification.RevocationEpoch < meta.RevocationEpoch {
 		return nil, emergencyError(connect.CodeFailedPrecondition, "artifact_not_trusted", "candidate artifact verification is revoked")
+	}
+	// The epoch covers revocation only. Retirement is handled elsewhere by accident: the
+	// transition bumps the policy version, which is this gate's LOOKUP KEY, so a verdict a
+	// retired root signed stops being found at all. The gap is expiry: a grace window that
+	// simply runs out moves nothing -- the version stays, the verdict stays visible, and the
+	// verifier meanwhile stops treating the root as live (GetActiveByEnvironment filters
+	// grace_until > now). So ask the verifier's own question: the root must be live -- active,
+	// or in grace with the window still open -- for this environment.
+	liveRoots, err := s.store.TrustRoots().GetActiveByEnvironment(ctx, s.targetEnv, time.Now().UTC())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("load live trust roots: %w", err))
+	}
+	if !verdictRootIsLive(liveRoots, verification) {
+		return nil, emergencyError(connect.CodeFailedPrecondition, "artifact_not_trusted", "candidate artifact verification root is no longer live")
 	}
 	if strings.Contains(artifact.Ref, "@sha256:") {
 		return artifact, nil

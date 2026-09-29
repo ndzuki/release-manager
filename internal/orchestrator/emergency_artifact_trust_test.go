@@ -39,9 +39,13 @@ func seedArtifactTrustedThroughBundle(
 		Status:      store.BundleValidated, CreatedAt: now,
 	}
 	require.NoError(t, st.Bundles().Create(t.Context(), bundle))
+	// A trusted verdict names the root that signed it, as the shipping verifier records: the
+	// emergency gate refuses a verdict it cannot attribute to a live root (TASK-225).
+	root := seedEmergencyLiveRoot(t, st)
 	require.NoError(t, st.Verifications().Create(t.Context(), &store.VerificationRecord{
 		ID: uuid.NewString(), ArtifactDigest: bundle.DigestAlg + ":" + bundle.DigestValue,
 		PolicyVersion: emergencyTestPolicyVersion(t, st), Status: status, RevocationEpoch: 0, CreatedAt: now,
+		RootID: root.ID, KeyID: root.KeyID,
 	}))
 	if link {
 		require.NoError(t, st.CandidateArtifacts().LinkToBundle(t.Context(), artifactID, bundle.ID))
@@ -147,9 +151,10 @@ func TestEmergencyArtifactTrustResolvesThroughItsBundle(t *testing.T) {
 			Ref: "registry.example.com/team/api@sha256:own-trusted", Digest: "sha256:own-trusted",
 			CreatedAt: now, LastSeenAt: now, ValidatedAt: &now,
 		}))
+		root := seedEmergencyLiveRoot(t, st)
 		require.NoError(t, st.Verifications().Create(t.Context(), &store.VerificationRecord{
 			ID: uuid.NewString(), ArtifactDigest: "sha256:own-trusted", PolicyVersion: emergencyTestPolicyVersion(t, st),
-			Status: store.VerificationTrusted, CreatedAt: now,
+			Status: store.VerificationTrusted, CreatedAt: now, RootID: root.ID, KeyID: root.KeyID,
 		}))
 
 		resp, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyImageRequestForArtifact("own-trusted", "artifact-own-trusted"))
