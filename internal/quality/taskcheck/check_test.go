@@ -99,6 +99,28 @@ func TestGithubPRNumber(t *testing.T) {
 	}
 }
 
+func TestGithubPRNumbers(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want []int
+		ok   bool
+	}{
+		{"single", "https://github.com/o/r/pull/5", []int{5}, true},
+		{"comma separated", "https://github.com/o/r/pull/5,https://github.com/o/r/pull/7", []int{5, 7}, true},
+		{"mixed separators keep the order", "https://github.com/o/r/pull/7; https://github.com/o/r/pull/5", []int{7, 5}, true},
+		{"one bad segment invalidates the value", "https://github.com/o/r/pull/5, nope", nil, false},
+		{"empty", "", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := githubPRNumbers(tt.raw)
+			assert.Equal(t, tt.ok, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func mergedEvidence() *Evidence {
 	ev := NewEvidence()
 	ev.AddCommit("aaaa", "Merge pull request #12 from ndzuki/task/x")
@@ -153,6 +175,32 @@ func TestCheck(t *testing.T) {
 		{
 			name:         "non-GitHub pr_url is unverified",
 			card:         Card{Path: "TASK-7.md", Status: "done", MergeStatus: "merged", PRURL: "https://gitlab.example.com/o/r/-/merge_requests/3"},
+			wantKinds:    []string{KindPRUnverified},
+			wantSeverity: []Severity{SeverityUnverified},
+		},
+		{
+			// TASK-227: one delivery can land in two pull requests. Every listed PR needs its
+			// own evidence, so both merged PRs verify the card.
+			name:         "two merged PRs both verified pass",
+			card:         Card{Path: "TASK-8.md", Status: "done", MergeStatus: "merged", PRURL: "https://github.com/o/r/pull/12, https://github.com/o/r/pull/20"},
+			wantVerified: 1,
+		},
+		{
+			name:         "the second PR having no evidence fails",
+			card:         Card{Path: "TASK-9.md", Status: "done", MergeStatus: "merged", PRURL: "https://github.com/o/r/pull/12 https://github.com/o/r/pull/999"},
+			wantKinds:    []string{KindPRUnverified},
+			wantSeverity: []Severity{SeverityUnverified},
+		},
+		{
+			name:         "the second PR being open is a violation",
+			card:         Card{Path: "TASK-10.md", Status: "done", MergeStatus: "merged", PRURL: "https://github.com/o/r/pull/12; https://github.com/o/r/pull/21"},
+			wantKinds:    []string{KindPRNotMerged},
+			wantSeverity: []Severity{SeverityViolation},
+		},
+		{
+			// A malformed entry must not hide behind a good one.
+			name:         "a non-GitHub entry makes the whole value unverifiable",
+			card:         Card{Path: "TASK-11.md", Status: "done", MergeStatus: "merged", PRURL: "https://github.com/o/r/pull/12 https://gitlab.example.com/o/r/-/merge_requests/3"},
 			wantKinds:    []string{KindPRUnverified},
 			wantSeverity: []Severity{SeverityUnverified},
 		},

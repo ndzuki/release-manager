@@ -8,8 +8,9 @@
 // drifts silently is how a "done" claim ships without a merged change.
 //
 // The rule is deliberately narrow and mechanical: a card whose status is done or
-// closed must declare merge_status merged and carry a non-empty pr_url, and that
-// PR must be provably merged. Two independent evidence sources are accepted:
+// closed must declare merge_status merged and carry a non-empty pr_url, and EVERY
+// pull request it cites must be provably merged (a delivery can land in more than
+// one, TASK-227). Two independent evidence sources are accepted:
 //
 //   - gh pr list output (number/state/mergeCommit), whose mergeCommit OID must
 //     also exist in the local git history; and
@@ -287,26 +288,42 @@ func Check(cards []Card, ev *Evidence) *Result {
 	return result
 }
 
-// verifyPR checks that the card's pr_url is a merged PR whose merge commit is
+// verifyPR checks that every pull request the card names is merged with a merge commit
 // present in the local history.
+//
+// A delivery can genuinely land in more than one pull request (TASK-227: the server half and
+// the console half of one task shipped separately), so pr_url may list several URLs separated
+// by commas, semicolons or whitespace. The rule is not relaxed by that: EACH PR needs its own
+// evidence, so listing more PRs can only ever make a card harder to verify, never easier. The
+// card's PR URL is the primary one, and it should be listed first.
 func verifyPR(card Card, ev *Evidence) (bool, *Finding) {
-	n, ok := githubPRNumber(card.PRURL)
+	numbers, ok := githubPRNumbers(card.PRURL)
 	if !ok {
 		return false, &Finding{
 			Path:     card.Path,
 			Kind:     KindPRUnverified,
 			Severity: SeverityUnverified,
-			Message:  fmt.Sprintf("pr_url %q is not a GitHub pull request URL; cannot verify the merge", card.PRURL),
+			Message:  fmt.Sprintf("pr_url %q is not a GitHub pull request URL (or lists one that is not); cannot verify the merge", card.PRURL),
 		}
 	}
+	for _, n := range numbers {
+		if finding := verifyOnePR(card, ev, n); finding != nil {
+			return false, finding
+		}
+	}
+	return true, nil
+}
 
+// verifyOnePR checks one PR number and returns the finding that stops the card, if any.
+func verifyOnePR(card Card, ev *Evidence, n int) *Finding {
+	ref := fmt.Sprintf("pull/%d", n)
 	if pr, known := ev.prs[n]; known {
 		if !strings.EqualFold(pr.State, "MERGED") {
-			return false, &Finding{
+			return &Finding{
 				Path:     card.Path,
 				Kind:     KindPRNotMerged,
 				Severity: SeverityViolation,
-				Message:  fmt.Sprintf("pr_url %q is %s, not MERGED", card.PRURL, strings.ToUpper(pr.State)),
+				Message:  fmt.Sprintf("%s (%s) is %s, not MERGED", ref, card.PRURL, strings.ToUpper(pr.State)),
 			}
 		}
 		oid := ""
@@ -314,34 +331,34 @@ func verifyPR(card Card, ev *Evidence) (bool, *Finding) {
 			oid = pr.MergeCommit.OID
 		}
 		if ev.HasCommit(oid) {
-			return true, nil
+			return nil
 		}
 		if local, found := ev.prFromSubject[n]; found {
-			return true, &Finding{
+			return &Finding{
 				Path:     card.Path,
 				Kind:     KindPRUnverified,
 				Severity: SeverityUnverified,
-				Message: fmt.Sprintf("pr_url %q is MERGED but its merge commit %s is not in the local history; matched local merge commit %s instead",
-					card.PRURL, oid, local),
+				Message: fmt.Sprintf("%s is MERGED but its merge commit %s is not in the local history; matched local merge commit %s instead",
+					ref, oid, local),
 			}
 		}
-		return false, &Finding{
+		return &Finding{
 			Path:     card.Path,
 			Kind:     KindPRUnverified,
 			Severity: SeverityUnverified,
-			Message: fmt.Sprintf("pr_url %q is MERGED but merge commit %s is not reachable in the local history",
-				card.PRURL, oid),
+			Message: fmt.Sprintf("%s is MERGED but merge commit %s is not reachable in the local history",
+				ref, oid),
 		}
 	}
 
 	if _, found := ev.prFromSubject[n]; found {
-		return true, nil
+		return nil
 	}
-	return false, &Finding{
+	return &Finding{
 		Path:     card.Path,
 		Kind:     KindPRUnverified,
 		Severity: SeverityUnverified,
-		Message:  fmt.Sprintf("pr_url %q has no merge evidence in the local git history and no gh PR data", card.PRURL),
+		Message:  fmt.Sprintf("%s has no merge evidence in the local git history and no gh PR data", ref),
 	}
 }
 
@@ -357,6 +374,28 @@ func githubPRNumber(url string) (int, bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+// githubPRNumbers extracts every pull request number a card names. Segments are separated by
+// commas, semicolons or whitespace. A segment that is not a GitHub pull request URL makes the
+// whole value invalid instead of being skipped: silently ignoring one would let an
+// unverifiable PR hide behind a verifiable one.
+func githubPRNumbers(raw string) ([]int, bool) {
+	segments := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\t' || r == '\n'
+	})
+	if len(segments) == 0 {
+		return nil, false
+	}
+	numbers := make([]int, 0, len(segments))
+	for _, segment := range segments {
+		n, ok := githubPRNumber(segment)
+		if !ok {
+			return nil, false
+		}
+		numbers = append(numbers, n)
+	}
+	return numbers, true
 }
 
 // ParseCard reads the frontmatter subset the gate needs. The frontmatter is the
