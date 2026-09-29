@@ -77,3 +77,28 @@ func TestDerivedTargetTablesStayNarrow(t *testing.T) {
 	assert.NotContains(t, derivedTargetTables, "customers")
 	assert.NotContains(t, derivedTargetTables, "operations")
 }
+
+// TASK-163: the cutover copies every source column it does not have a registered drop
+// for. This pins the artefact digests (and last_seen_at) against being registered as
+// dropped -- it is a shape test on insertableColumns, NOT a run of the cutover; the
+// end-to-end path is covered by TestRunMigratesCurrentSQLiteSchemaEndToEnd (integration).
+func TestArtifactDigestColumnsAreNotRegisteredAsDropped(t *testing.T) {
+	source := []string{
+		"id", "name", "digest_alg", "digest_value", "status",
+		"signature_ref", "signature_digest",
+		"sbom_ref", "sbom_digest",
+		"provenance_ref", "provenance_digest",
+		"created_at",
+	}
+
+	insertable, _ := insertableColumns("release_bundles", source)
+
+	for _, column := range []string{"signature_digest", "sbom_digest", "provenance_digest"} {
+		assert.Contains(t, insertable, column, "the cutover must carry %s", column)
+	}
+
+	// Same for the candidate artifact's own timestamps: last_seen_at is the column whose
+	// absence used to be synthesized from created_at, and modern sources carry it.
+	candidate, _ := insertableColumns("candidate_artifacts", []string{"id", "artifact_type", "digest", "created_at", "last_seen_at"})
+	assert.Contains(t, candidate, "last_seen_at")
+}

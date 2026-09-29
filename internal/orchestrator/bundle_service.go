@@ -226,10 +226,18 @@ func (s *BundleService) ListBundles(
 		pageSize = int(pagination.GetPageSize())
 		pageToken = pagination.GetPageToken()
 	}
-	page, err := s.store.Bundles().List(ctx, store.BundleListFilter{
+	filter := store.BundleListFilter{
 		ReleaseDefinitionID: req.Msg.GetReleaseDefinitionId(), Statuses: statuses,
 		ChartName: req.Msg.GetChartNameFilter(), PageSize: pageSize, PageToken: pageToken,
-	})
+	}
+	if !internal {
+		// TASK-199: the page is scoped to what the caller's organization may read. An
+		// empty organization is impossible here (the definition authorization above
+		// requires an organization binding), and leaving it empty for an internal caller
+		// is what makes the service-to-service view complete.
+		filter.OrganizationID = actor.OrganizationID
+	}
+	page, err := s.store.Bundles().List(ctx, filter)
 	if err != nil {
 		if errors.Is(err, store.ErrInvalidCursor) {
 			return nil, bundleError(connect.CodeInvalidArgument, "invalid_page_token", errors.New("page_token does not match the current filters"))
@@ -273,7 +281,24 @@ func (s *BundleService) GetBundle(
 	if err != nil {
 		return nil, internalBundleError("get bundle", err)
 	}
-	showEvidenceRefs := internal || actorHasRole(actor, string(store.RolePlatformAdmin))
+
+	// TASK-199: authorizing the NAMED definition is not enough -- it only proves the
+	// caller may read SOMETHING. The bundle itself has to be reachable from the caller's
+	// organization, otherwise any readable definition id would unlock every bundle id.
+	// Platform admins and internal service callers keep the global view.
+	isPlatformAdmin := actorHasRole(actor, string(store.RolePlatformAdmin))
+	if !internal && !isPlatformAdmin {
+		reachable, reachErr := s.store.Bundles().ReachableFromOrganization(ctx, bundle.ID, actor.OrganizationID)
+		if reachErr != nil {
+			return nil, internalBundleError("check bundle reachability", reachErr)
+		}
+		if !reachable {
+			return nil, bundleError(connect.CodePermissionDenied, "not_authorized",
+				errors.New("bundle is not reachable from the caller's organization"))
+		}
+	}
+
+	showEvidenceRefs := internal || isPlatformAdmin
 	detail := &orchestratorv1.BundleDetail{
 		Summary: bundleSummaryToProto(bundle), GitCommit: bundle.GitCommit, PipelineId: bundle.PipelineID,
 		SignatureDigest: bundle.SignatureDigest, SbomDigest: bundle.SBOMDigest,

@@ -2,47 +2,38 @@ package auth_test
 
 import (
 	"context"
-	"io"
-	"log/slog"
-	"net/http"
-	"net/http/httptest"
+	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/google/uuid"
 
-	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/auth"
-	"github.com/ndzuki/release-manager/internal/orchestrator"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
 
-func TestConnectCustomerResolver_ResolveIncludesDisabledStatus(t *testing.T) {
-	st, err := sqlitestore.Open("file:resolver-" + t.Name() + "?mode=memory&cache=shared")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, st.Close()) })
-
-	customer := &store.Customer{
-		ID:     "customer-disabled",
-		Name:   "Disabled Customer",
-		Slug:   "disabled-customer",
-		Status: store.CustomerDisabled,
+func TestStoreCustomerResolver_ResolveAndNotFound(t *testing.T) {
+	st, err := sqlitestore.Open("file:" + uuid.New().String() + "?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
 	}
-	require.NoError(t, st.Customers().Create(context.Background(), customer))
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := orchestrator.NewService(st, nil, "staging", nil, logger)
-	path, handler := orchestratorv1connect.NewOrchestratorServiceHandler(svc)
-	mux := http.NewServeMux()
-	mux.Handle(path, handler)
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
+	resolver := auth.NewStoreCustomerResolver(st)
+	if _, err := resolver.Resolve(ctx, "missing"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown customer: err = %v, want store.ErrNotFound", err)
+	}
 
-	client := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
-	resolver := auth.NewConnectCustomerResolver(client)
-	resolved, err := resolver.Resolve(context.Background(), customer.ID)
-	require.NoError(t, err)
-	assert.Equal(t, customer.ID, resolved.ID)
-	assert.Equal(t, store.CustomerDisabled, resolved.Status)
+	customer := &store.Customer{ID: "c-1", Name: "Acme", Slug: "acme", Status: store.CustomerDisabled}
+	if err := st.Customers().Create(ctx, customer); err != nil {
+		t.Fatalf("seed customer: %v", err)
+	}
+	got, err := resolver.Resolve(ctx, "c-1")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if got.Status != store.CustomerDisabled {
+		t.Fatalf("status = %q, want %q", got.Status, store.CustomerDisabled)
+	}
 }

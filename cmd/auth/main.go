@@ -157,7 +157,11 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		window = s.cfg.LoginRateLimit.Window
 	}
 	limiter := auth.NewRateLimiter(maxAttempts, window)
-	resolver := auth.StubResolver{}
+	// TASK-191: the binding service validates the target customer before writing. The
+	// process already holds the authoritative store (ADR-014: shared PostgreSQL pool), so
+	// resolution is a local read — a remote resolver would need a service principal that a
+	// background call does not have, and StubResolver made every write answer NOT_FOUND.
+	resolver := auth.NewStoreCustomerResolver(s.store)
 
 	enforcer, err := auth.NewEnforcer(s.store, logger, metrics)
 	if err != nil {
@@ -191,7 +195,16 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, publicMethods, logger),
 	)
 
-	authService := auth.NewAuthService(s.store, jwtMgr, limiter, logger, enforcer)
+	// ADR-028: enable the browser cookie-session branch, in dual mode. Without
+	// a BrowserSessionConfig the service runs token-only and the web console
+	// (cookie-only) can never authenticate — the console was unreachable beyond
+	// /login. The branch still returns the bearer pair, so devseed, the E2E
+	// runner and the kulala collections are unaffected.
+	//
+	// SecureCookies defaults to true; only an explicit
+	// `browser_session.secure_cookies: false` (plain-HTTP dev) disables it.
+	browserCfg := auth.BrowserSessionConfig{SecureCookies: s.cfg.BrowserSession.SecureCookiesOrDefault()}
+	authService := auth.NewAuthService(s.store, jwtMgr, limiter, logger, enforcer, browserCfg)
 	authPath, authHandler := authv1connect.NewAuthServiceHandler(authService, interceptorOpt)
 	mux.Handle(authPath, authHandler)
 

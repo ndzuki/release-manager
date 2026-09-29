@@ -165,9 +165,13 @@ func TestGetBundleHidesEvidenceRefsFromNonAdmins(t *testing.T) {
 	}))
 	require.NoError(t, st.Organizations().Create(t.Context(), &store.Organization{ID: "org-1", Name: "org-1"}))
 	require.NoError(t, st.Users().Create(t.Context(), &store.User{ID: "user-1", Username: "user-1", Status: store.UserActive}))
+	// TASK-199: the caller reads the bundle THROUGH this definition, so the definition has
+	// to own it. Before the reachability check this link did not exist and the test still
+	// passed -- that is exactly the hole being closed.
 	require.NoError(t, st.Definitions().Create(t.Context(), &store.ReleaseDefinition{
 		ID: "def-1", Name: "app", CustomerID: "cust-1", ClusterID: "cls-1", Namespace: "default",
 		ReleaseName: "app", ChartName: "app", Status: store.DefStatusActive, CreatedAt: now,
+		CurrentBundleID: &archived.ID,
 	}, nil))
 	require.NoError(t, st.Bindings().Create(t.Context(), &store.OrgCustomerBinding{
 		ID: uuid.NewString(), OrgID: "org-1", CustomerID: "cust-1", Status: store.BindingActive,
@@ -183,4 +187,245 @@ func TestGetBundleHidesEvidenceRefsFromNonAdmins(t *testing.T) {
 	assert.Empty(t, callerResp.Msg.GetBundle().GetSignatureRef(),
 		"AC-011-18: evidence refs are hidden from a non-admin caller")
 	assert.Empty(t, callerResp.Msg.GetBundle().GetSbomRef())
+}
+
+// ── TASK-199: bundle reachability (the tenant boundary) ──────────────
+
+// bundleTenantFixture seeds one organization with a customer, a cluster, an active
+// binding, a user and a release definition reachable through that binding. (The
+// owner_organization_id variant is covered by TestReachableFromOrganizationAcceptsAnOwnedDefinition,
+// which exercises the predicate directly.)
+func bundleTenantFixture(t *testing.T, st store.Store, suffix string) *store.ReleaseDefinition {
+	t.Helper()
+	ctx := t.Context()
+	orgID := "org-" + suffix
+	customerID := "cust-" + suffix
+	require.NoError(t, st.Customers().Create(ctx, &store.Customer{
+		ID: customerID, Name: customerID, Slug: customerID, Status: store.CustomerActive,
+	}))
+	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{
+		ID: "cls-" + suffix, CustomerID: customerID, Name: "cls-" + suffix, Status: store.ClusterActive,
+	}))
+	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: orgID, Name: orgID}))
+	require.NoError(t, st.Users().Create(ctx, &store.User{ID: "user-" + suffix, Username: "user-" + suffix, Status: store.UserActive}))
+	definition := &store.ReleaseDefinition{
+		ID: "def-" + suffix, Name: "app", CustomerID: customerID, ClusterID: "cls-" + suffix,
+		Namespace: "default", ReleaseName: "app", ChartName: "app", Status: store.DefStatusActive,
+		CreatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, st.Definitions().Create(ctx, definition, nil))
+	require.NoError(t, st.Bindings().Create(ctx, &store.OrgCustomerBinding{
+		ID: uuid.NewString(), OrgID: orgID, CustomerID: customerID, Status: store.BindingActive,
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}))
+	return definition
+}
+
+// setCurrentBundle links a bundle to its definition through the real seam: the submission
+// UoW calls this for a validated bundle. Definitions().Update deliberately does NOT write
+// current_bundle_id, so a fixture that set the field directly would silently prove nothing.
+func setCurrentBundle(t *testing.T, st store.Store, definitionID, bundleID string) {
+	t.Helper()
+	_, err := st.Definitions().SetCurrentBundle(t.Context(), definitionID, bundleID)
+	require.NoError(t, err)
+}
+
+// The reported vulnerability: any readable definition id plus any bundle id returned a
+// foreign tenant's bundle. The definition authorizes the caller; the BUNDLE has to be
+// reachable from the caller's organization.
+func TestGetBundleRefusesAnotherOrganizationsBundle(t *testing.T) {
+	st := bundleServiceStore(t)
+	svc := NewBundleService(st, nil, nil)
+
+	foreign := bundleTenantFixture(t, st, "foreign")
+	own := bundleTenantFixture(t, st, "own")
+	foreignBundle := seedQueryableBundle(t, st, store.BundleValidated, "app")
+	setCurrentBundle(t, st, foreign.ID, foreignBundle.ID)
+
+	// The foreign organization reads its own bundle.
+	foreignActor := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-foreign", OrganizationID: "org-foreign", Roles: []string{string(store.RoleReleaseAdmin)},
+	})
+	resp, err := svc.GetBundle(foreignActor, connect.NewRequest(&orchestratorv1.GetBundleRequest{
+		BundleId: foreignBundle.ID, ReleaseDefinitionId: foreign.ID,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, foreignBundle.ID, resp.Msg.GetBundle().GetSummary().GetId())
+
+	// The other organization may read its OWN definition, but that must not unlock the
+	// foreign bundle.
+	otherActor := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-own", OrganizationID: "org-own", Roles: []string{string(store.RoleReleaseAdmin)},
+	})
+	_, err = svc.GetBundle(otherActor, connect.NewRequest(&orchestratorv1.GetBundleRequest{
+		BundleId: foreignBundle.ID, ReleaseDefinitionId: own.ID,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "not_authorized")
+}
+
+// The exception decision C asks for: a bundle that no operation has used yet is still
+// readable once it is the definition's current bundle (the submission UoW sets that for a
+// validated bundle).
+func TestGetBundleAllowsTheDefinitionsCurrentBundleWithoutAnOperation(t *testing.T) {
+	st := bundleServiceStore(t)
+	svc := NewBundleService(st, nil, nil)
+	tenant := bundleTenantFixture(t, st, "current")
+	fresh := seedQueryableBundle(t, st, store.BundleValidated, "app")
+	setCurrentBundle(t, st, tenant.ID, fresh.ID)
+
+	actor := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-current", OrganizationID: "org-current", Roles: []string{string(store.RoleReleaseAdmin)},
+	})
+	resp, err := svc.GetBundle(actor, connect.NewRequest(&orchestratorv1.GetBundleRequest{
+		BundleId: fresh.ID, ReleaseDefinitionId: tenant.ID,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, fresh.ID, resp.Msg.GetBundle().GetSummary().GetId())
+}
+
+// The predicate has two ways to tie a definition to an organization. The service-level
+// authorization (authorizeDefinition) already requires an active customer binding, so the
+// owner branch is implied in the GetBundle path -- it is a statement about the DATA, and
+// this store-level test pins it directly.
+func TestReachableFromOrganizationAcceptsAnOwnedDefinition(t *testing.T) {
+	st := bundleServiceStore(t)
+	ctx := t.Context()
+	customerID := "cust-owned"
+	require.NoError(t, st.Customers().Create(ctx, &store.Customer{
+		ID: customerID, Name: customerID, Slug: customerID, Status: store.CustomerActive,
+	}))
+	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{
+		ID: "cls-owned", CustomerID: customerID, Name: "cls-owned", Status: store.ClusterActive,
+	}))
+	owner := "org-owned"
+	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: owner, Name: owner}))
+	bundle := seedQueryableBundle(t, st, store.BundleValidated, "app")
+	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
+		ID: "def-owned", Name: "app", CustomerID: customerID, ClusterID: "cls-owned", Namespace: "default",
+		ReleaseName: "app", ChartName: "app", Status: store.DefStatusActive, CreatedAt: time.Now().UTC(),
+		OwnerOrganizationID: &owner, CurrentBundleID: &bundle.ID,
+	}, nil))
+
+	owned, err := st.Bundles().ReachableFromOrganization(ctx, bundle.ID, owner)
+	require.NoError(t, err)
+	assert.True(t, owned, "a definition owned by the organization reaches its current bundle")
+
+	// No ownership and no binding: the same organization may not read it.
+	other, err := st.Bundles().ReachableFromOrganization(ctx, bundle.ID, "org-stranger")
+	require.NoError(t, err)
+	assert.False(t, other, "an unrelated organization must not reach the bundle")
+
+	// An unknown bundle id is never reachable.
+	missing, err := st.Bundles().ReachableFromOrganization(ctx, "no-such-bundle", owner)
+	require.NoError(t, err)
+	assert.False(t, missing)
+}
+
+// The platform admin keeps the global view (the decision's exemption).
+func TestGetBundlePlatformAdminKeepsTheGlobalView(t *testing.T) {
+	st := bundleServiceStore(t)
+	svc := NewBundleService(st, nil, nil)
+	bundle := seedQueryableBundle(t, st, store.BundleValidated, "app")
+
+	actor := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "admin-1", OrganizationID: "org-nowhere", Roles: []string{string(store.RolePlatformAdmin)},
+	})
+	resp, err := svc.GetBundle(actor, connect.NewRequest(&orchestratorv1.GetBundleRequest{
+		BundleId: bundle.ID, ReleaseDefinitionId: "def-nowhere",
+	}))
+	// The definition does not exist, so the definition authorization still refuses: the
+	// exemption is about the BUNDLE boundary, not about skipping authorization entirely.
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+
+	tenant := bundleTenantFixture(t, st, "adminview")
+	adminOnTenant := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "admin-2", OrganizationID: "org-adminview", Roles: []string{string(store.RolePlatformAdmin)},
+	})
+	// This bundle is not linked to the tenant's definition at all; an admin may still read it.
+	unlinked := seedQueryableBundle(t, st, store.BundleValidated, "other")
+	adminResp, err := svc.GetBundle(adminOnTenant, connect.NewRequest(&orchestratorv1.GetBundleRequest{
+		BundleId: unlinked.ID, ReleaseDefinitionId: tenant.ID,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, unlinked.ID, adminResp.Msg.GetBundle().GetSummary().GetId())
+	_ = resp
+}
+
+// The listing used to match on the chart NAME, so a same-named chart leaked across
+// tenants and an unrelated bundle that merely looked similar appeared. It is now scoped to
+// the relationship: the definition's current bundle, or a bundle an operation used.
+func TestListBundlesExcludesBundlesTheDefinitionDoesNotOwn(t *testing.T) {
+	st := bundleServiceStore(t)
+	svc := NewBundleService(st, nil, nil)
+	tenant := bundleTenantFixture(t, st, "list")
+
+	owned := seedQueryableBundle(t, st, store.BundleValidated, "app")
+	setCurrentBundle(t, st, tenant.ID, owned.ID)
+	// Same chart ref prefix, no relationship to the definition.
+	unrelated := seedQueryableBundle(t, st, store.BundleValidated, "app")
+
+	actor := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-list", OrganizationID: "org-list", Roles: []string{string(store.RoleReleaseAdmin)},
+	})
+	resp, err := svc.ListBundles(actor, connect.NewRequest(&orchestratorv1.ListBundlesRequest{
+		ReleaseDefinitionId: tenant.ID,
+	}))
+	require.NoError(t, err)
+
+	ids := map[string]bool{}
+	for _, summary := range resp.Msg.GetBundles() {
+		ids[summary.GetId()] = true
+	}
+	assert.True(t, ids[owned.ID], "the definition's current bundle must be listed")
+	assert.False(t, ids[unrelated.ID], "a same-chart bundle with no relationship must not be listed")
+}
+
+// A bundle that is NOT the definition's current bundle but that one of its operations
+// used is reachable too -- that is the half of decision C an independent review showed had
+// no test at all (disabling the `operations` branch left every test green). Both engines
+// share store.ReachableBundlePredicate, so this pins the PostgreSQL side of the same rule.
+func TestGetBundleAllowsABundleAnOperationUsed(t *testing.T) {
+	st := bundleServiceStore(t)
+	svc := NewBundleService(st, nil, nil)
+	tenant := bundleTenantFixture(t, st, "opused")
+
+	// Deliberately NOT set as the definition's current bundle.
+	used := seedQueryableBundle(t, st, store.BundleValidated, "app")
+	require.NoError(t, st.Operations().Create(t.Context(), &store.Operation{
+		ID: uuid.NewString(), ReleaseDefinitionID: tenant.ID, BundleID: used.ID,
+		Status: store.StatusPending, CreatedAt: time.Now().UTC(),
+	}))
+
+	actor := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-opused", OrganizationID: "org-opused", Roles: []string{string(store.RoleReleaseAdmin)},
+	})
+	resp, err := svc.GetBundle(actor, connect.NewRequest(&orchestratorv1.GetBundleRequest{
+		BundleId: used.ID, ReleaseDefinitionId: tenant.ID,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, used.ID, resp.Msg.GetBundle().GetSummary().GetId())
+
+	// And it appears in the definition's page, which uses the same branch.
+	listed, err := svc.ListBundles(actor, connect.NewRequest(&orchestratorv1.ListBundlesRequest{
+		ReleaseDefinitionId: tenant.ID,
+	}))
+	require.NoError(t, err)
+	ids := map[string]bool{}
+	for _, summary := range listed.Msg.GetBundles() {
+		ids[summary.GetId()] = true
+	}
+	assert.True(t, ids[used.ID], "an operation-used bundle must be listed")
+
+	// A different organization still cannot read it.
+	other := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-other", OrganizationID: "org-opused-other", Roles: []string{string(store.RoleReleaseAdmin)},
+	})
+	_, err = svc.GetBundle(other, connect.NewRequest(&orchestratorv1.GetBundleRequest{
+		BundleId: used.ID, ReleaseDefinitionId: tenant.ID,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 }

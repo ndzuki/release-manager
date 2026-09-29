@@ -244,9 +244,16 @@ else
 fi
 # A tampered signature must be refused. This is also what proves the verifier
 # is live: without it, an api that accepted anything would pass the check above.
-TAMPER_LAST="${TOKEN: -1}"
-if [ "$TAMPER_LAST" = "A" ]; then TAMPER_LAST="B"; else TAMPER_LAST="A"; fi
-TAMPERED_TOKEN="${TOKEN%?}${TAMPER_LAST}"
+# Tamper a MIDDLE character, not the last one: the final base64url character of
+# a 64-byte Ed25519 signature carries only 2 significant bits (the other 4 are
+# ignored by the decoder), so flipping it has a ~1/4 chance of decoding to the
+# SAME signature bytes — the "tampered" token stays valid and this check failed
+# for the wrong reason (~25% flake, hit 2026-09-28 while verifying TASK-174).
+# A middle character always changes the signed bytes.
+TAMPER_POS=$(( ${#TOKEN} / 2 ))
+TAMPER_CHAR="${TOKEN:$TAMPER_POS:1}"
+if [ "$TAMPER_CHAR" = "A" ]; then TAMPER_CHAR="B"; else TAMPER_CHAR="A"; fi
+TAMPERED_TOKEN="${TOKEN:0:$TAMPER_POS}${TAMPER_CHAR}${TOKEN:$((TAMPER_POS + 1))}"
 API_TAMPER_BODY="$(curl -sS --max-time 10 -X POST "$API_QUERY" \
   -H "Authorization: Bearer $TAMPERED_TOKEN" -H 'Content-Type: application/json' \
   -d '{}' 2>/dev/null || true)"

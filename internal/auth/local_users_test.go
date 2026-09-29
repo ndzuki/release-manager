@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -206,7 +207,34 @@ func TestCreateLocalUser_IdempotentRetryReturnsSameUser(t *testing.T) {
 	assert.Equal(t, 1, count, "username must not be duplicated")
 }
 
-// AC-072-02: Given 已创建用户，When GetLocalUser/ListLocalUsers，Then 可查询（含角色信息）。
+// A stale cursor must be distinguishable from a bad page size: the console branches on
+// X-Reason-Code to restart from page one instead of retrying the same token.
+func TestListLocalUsers_StaleCursorCarriesReasonCode(t *testing.T) {
+	h := newLocalUserHarness(t)
+	token := h.login(t, "admin")
+	if _, err := h.createLocalUser(t, token, "cursor-user", "password-123", nil, ""); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	// A cursor the store cannot decode is the case the console must recognise.
+	badReq := connect.NewRequest(&authv1.ListLocalUsersRequest{Cursor: "%%%", PageSize: 10})
+	badReq.Header().Set("Authorization", "Bearer "+token)
+	_, err := h.client.ListLocalUsers(context.Background(), badReq)
+	if err == nil {
+		t.Fatal("expected an error for an undecodable cursor")
+	}
+	if got := connect.CodeOf(err); got != connect.CodeInvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument", got)
+	}
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		t.Fatalf("error is not a *connect.Error: %T", err)
+	}
+	if reason := connectErr.Meta().Get("X-Reason-Code"); reason != "invalid_cursor" {
+		t.Fatalf("X-Reason-Code = %q, want invalid_cursor", reason)
+	}
+}
+
 func TestGetAndListLocalUsers_IncludeRoles(t *testing.T) {
 	h := newLocalUserHarness(t)
 	token := h.login(t, "admin")

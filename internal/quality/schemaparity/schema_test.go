@@ -266,3 +266,32 @@ func TestRealSnapshotsParse(t *testing.T) {
 		}
 	}
 }
+
+// TestDiffNegativeControlColumnMutation is AC-163-05: adding a column on ONE side (the
+// mutation that TASK-163 found for real: PostgreSQL carried three release_bundles
+// digests and candidate_artifacts.last_seen_at that SQLite never declared) must make the
+// gate fail, in both directions. If column presence stops being compared, this fails.
+func TestDiffNegativeControlColumnMutation(t *testing.T) {
+	sqlite := schemaWith(map[string]string{"id": "TEXT"})
+	pg := pgSchemaWith(map[string]string{"id": "TEXT"})
+
+	report := Diff(sqlite, pg)
+	require.False(t, report.Failed(), "identical schemas must be clean")
+	require.Empty(t, report.Drift)
+
+	// Mutation A: PostgreSQL declares a column SQLite lacks.
+	pgExtra := pgSchemaWith(map[string]string{"id": "TEXT", "signature_digest": "TEXT"})
+	report = Diff(sqlite, pgExtra)
+	require.True(t, report.Failed(), "a PostgreSQL-only column must be reported")
+	require.Len(t, report.Drift, 1)
+	assert.Equal(t, KindColumnMissingInSQLite, report.Drift[0].Kind)
+	assert.Equal(t, "signature_digest", report.Drift[0].Column)
+
+	// Mutation B: the mirror image, so neither direction can be dropped silently.
+	sqliteExtra := schemaWith(map[string]string{"id": "TEXT", "last_seen_at": "TEXT"})
+	report = Diff(sqliteExtra, pg)
+	require.True(t, report.Failed(), "a SQLite-only column must be reported")
+	require.Len(t, report.Drift, 1)
+	assert.Equal(t, KindColumnMissingInPG, report.Drift[0].Kind)
+	assert.Equal(t, "last_seen_at", report.Drift[0].Column)
+}

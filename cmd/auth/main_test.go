@@ -251,3 +251,49 @@ func authTestSchema(ctx context.Context, t *testing.T, baseDSN string) string {
 	parsed.RawQuery = query.Encode()
 	return parsed.String()
 }
+
+// TASK-191: the binding write path must resolve customers through the process's own
+// store. This test drives the REAL registration and the REAL RPC, so wiring the service
+// with a StubResolver (which always answers ErrNotFound) turns it red — that is the
+// regression the original bug shipped silently, because no test touched the wiring.
+func TestAuthBindingServiceResolvesCustomersFromItsStore(t *testing.T) {
+	svc := &authSvc{jwtPrivateKey: authTestJWTPrivateKeyPEM}
+	svc.Configure(&config.ServiceConfig{
+		Database: config.DatabaseConfig{Driver: "sqlite", DSN: t.TempDir() + "/auth-binding.db"},
+		Redis:    config.RedisConfig{},
+	})
+	mux := http.NewServeMux()
+	require.NoError(t, svc.Register(mux, slog.New(slog.DiscardHandler)))
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	ctx := t.Context()
+
+	authClient := authv1connect.NewAuthServiceClient(server.Client(), server.URL)
+	initialized, err := authClient.Initialize(ctx, connect.NewRequest(&authv1.InitializeRequest{
+		Username: "binding-admin", Password: "password", OrganizationName: "Binding Org",
+	}))
+	require.NoError(t, err)
+
+	orgs := initialized.Msg.GetOrganizations()
+	require.NotEmpty(t, orgs, "Initialize must return the organization it created")
+	orgID := orgs[0].GetId()
+	customer := &store.Customer{ID: uuid.New().String(), Name: "Acme", Slug: "acme", Status: store.CustomerActive}
+	require.NoError(t, svc.store.Customers().Create(ctx, customer))
+
+	bindingClient := authv1connect.NewBindingServiceClient(server.Client(), server.URL)
+	create := connect.NewRequest(&authv1.CreateBindingRequest{OrgId: orgID, CustomerId: customer.ID})
+	create.Header().Set("Authorization", "Bearer "+initialized.Msg.GetAccessToken())
+	created, err := bindingClient.CreateBinding(ctx, create)
+	require.NoError(t, err, "binding a real customer must succeed; a StubResolver answers 404 customer_not_found")
+	assert.Equal(t, string(store.BindingActive), created.Msg.GetBinding().GetStatus())
+
+	// The duplicate answer is part of the same contract: an active pairing is NOT_FOUND's
+	// opposite, and it must stay reachable now that resolution works.
+	again := connect.NewRequest(&authv1.CreateBindingRequest{OrgId: orgID, CustomerId: customer.ID})
+	again.Header().Set("Authorization", "Bearer "+initialized.Msg.GetAccessToken())
+	_, err = bindingClient.CreateBinding(ctx, again)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+}

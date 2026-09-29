@@ -15,3 +15,8 @@ database:
 authorization:
   policy_reload_interval: 5s
 maintenance: false
+# ADR-028: the host-run dev console is served over plain HTTP, so the
+# rm_access/rm_refresh/rm_csrf cookies cannot be Secure here. Production keeps
+# the default (Secure) by omitting this key.
+browser_session:
+  secure_cookies: false

@@ -125,6 +125,23 @@ type LoginRateLimitCfg struct {
 	Window      time.Duration `mapstructure:"window"`
 }
 
+// BrowserSessionCfg carries the release-auth browser cookie-session policy
+// (ADR-028; auth service only, other services ignore it).
+//
+// SecureCookies is a POINTER on purpose: an absent key must keep the
+// production-safe default (Secure), while an explicit `false` is the only way
+// to turn it off for plain-HTTP development. A plain bool would decode an
+// absent key to false and silently ship insecure cookies.
+type BrowserSessionCfg struct {
+	SecureCookies *bool `mapstructure:"secure_cookies"`
+}
+
+// SecureCookiesOrDefault reports the effective Secure cookie flag: only an
+// explicit false disables it.
+func (c BrowserSessionCfg) SecureCookiesOrDefault() bool {
+	return c.SecureCookies == nil || *c.SecureCookies
+}
+
 // ServiceConfig holds flat configuration for individual microservices.
 type ServiceConfig struct {
 	HTTPPort       int               `mapstructure:"http_port"`
@@ -139,6 +156,12 @@ type ServiceConfig struct {
 	Agent          AgentCfg          `mapstructure:"agent"`
 	CA             CAConfig          `mapstructure:"ca"`
 	LoginRateLimit LoginRateLimitCfg `mapstructure:"login_rate_limit"`
+	// BrowserSession carries the ADR-028 browser cookie-session policy
+	// (release-auth). Passing it is what enables the cookie branch at all:
+	// NewAuthService only turns the browser session on when it receives a
+	// BrowserSessionConfig, which is why the console could never log in before
+	// ADR-028.
+	BrowserSession BrowserSessionCfg `mapstructure:"browser_session"`
 	// OperatorSession carries the REQ-044 liveness thresholds (TASK-098): the
 	// agent heartbeat cadence the orchestrator negotiates, and how long a
 	// session may miss heartbeats before it becomes suspect / offline.

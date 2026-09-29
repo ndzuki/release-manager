@@ -1659,6 +1659,17 @@ var migrationStatements = []string{
 	// Artifact lifecycle (REQ-069) — ALTER TABLEs are idempotent (migrate() skips "duplicate column").
 	`ALTER TABLE release_bundles ADD COLUMN archived_at TEXT`,
 	`ALTER TABLE release_bundles ADD COLUMN archived_from_status TEXT NOT NULL DEFAULT ''`,
+	// TASK-163 (hard constraint 4, dual-engine schema): PostgreSQL carries the three
+	// artifact-reference digests (migrations/000007_bundle_services.up.sql) and
+	// candidate_artifacts.last_seen_at (migrations/000003_create_lifecycle_tables.up.sql).
+	// SQLite stored only the refs, so any bundle written or read through the SQLite store
+	// lost them -- the store contract disagreed with itself per engine. (SQLite's bundle
+	// *ingestion* RPC is unsupported and returns errPostgresIngestionRequired, so the loss
+	// surfaced through the shared store contract, not through a production SubmitBundle on
+	// SQLite.) ALTERs are idempotent here (migrate() skips "duplicate column").
+	`ALTER TABLE release_bundles ADD COLUMN signature_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_bundles ADD COLUMN sbom_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_bundles ADD COLUMN provenance_digest TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE release_definitions ADD COLUMN current_bundle_id TEXT`,
 
 	// Candidate artifacts (REQ-069)
@@ -1674,6 +1685,18 @@ var migrationStatements = []string{
 	`ALTER TABLE candidate_artifacts ADD COLUMN validated_at TEXT`,
 	`ALTER TABLE candidate_artifacts ADD COLUMN source_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE candidate_artifacts ADD COLUMN orphaned_at TEXT`,
+	// TASK-163: PostgreSQL has had last_seen_at since
+	// migrations/000003_create_lifecycle_tables.up.sql; SQLite dropped it. The ALTER must
+	// follow the CREATE above (buildFreshSchema folds statements in order).
+	//
+	// The column is added WITHOUT a default, so rows written before this change would keep
+	// NULL -- and PostgreSQL declares the column TIMESTAMPTZ NOT NULL
+	// (migrations/000007_bundle_services.up.sql), so a maintenance-window cutover would
+	// fail on those rows. Backfill from created_at, which is the value the cutover's
+	// derived default used to synthesize (internal/migration/copy.go). Idempotent: the
+	// WHERE clause makes the second run a no-op.
+	`ALTER TABLE candidate_artifacts ADD COLUMN last_seen_at TEXT`,
+	`UPDATE candidate_artifacts SET last_seen_at = created_at WHERE last_seen_at IS NULL`,
 	`CREATE TABLE IF NOT EXISTS bundle_candidate_artifacts (
 		bundle_id   TEXT NOT NULL REFERENCES release_bundles(id) ON DELETE CASCADE,
 		artifact_id TEXT NOT NULL REFERENCES candidate_artifacts(id) ON DELETE CASCADE,

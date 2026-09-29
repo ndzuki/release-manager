@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -11,6 +12,7 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	"github.com/ndzuki/release-manager/internal/store"
+	"google.golang.org/protobuf/proto"
 )
 
 func seedCustomer(t *testing.T, st store.Store, id, name string) {
@@ -261,8 +263,8 @@ func TestUpdateReleaseDefinition_Success(t *testing.T) {
 	updateResp, err := svc.UpdateReleaseDefinition(context.Background(), connect.NewRequest(
 		&orchestratorv1.UpdateReleaseDefinitionRequest{
 			DefinitionId:    defID,
-			Namespace:       "new-ns",
-			ReleaseName:     "upd-rel-renamed",
+			Namespace:       ptr("new-ns"),
+			ReleaseName:     ptr("upd-rel-renamed"),
 			ExpectedVersion: 1,
 		},
 	))
@@ -290,7 +292,7 @@ func TestUpdateReleaseDefinition_OptimisticLockConflict(t *testing.T) {
 	_, err = svc.UpdateReleaseDefinition(context.Background(), connect.NewRequest(
 		&orchestratorv1.UpdateReleaseDefinitionRequest{
 			DefinitionId:    defID,
-			Namespace:       "ns-2",
+			Namespace:       ptr("ns-2"),
 			ExpectedVersion: 999,
 		},
 	))
@@ -466,6 +468,7 @@ func TestCreateOperation_ValidationFlow(t *testing.T) {
 	// Seed approved values revision for INSTALL validation.
 	seedValuesRevision(t, st, "vr-flow", defID, store.ValuesStatusApproved)
 	seedBundle(t, st, "bundle-flow")
+	linkCurrentBundle(t, st, defID, "bundle-flow")
 	createOpResp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(
 		&orchestratorv1.CreateOperationRequest{
 			OperationType:       "INSTALL",
@@ -495,4 +498,240 @@ func seedBundle(t *testing.T, st store.Store, id string) {
 			ValuesPath: "image",
 		}},
 	}))
+}
+
+// ptr builds the pointer an `optional` proto3 field decodes into, so a test can say
+// "present" (the pointer is non-nil, even when it points at "") rather than only "non-empty".
+func ptr[T any](value T) *T { return &value }
+
+// TASK-214: presence must decide the outcome. These three cases are the contract: absent
+// leaves the stored value alone, present-and-empty CLEARS it, present-and-set replaces it.
+// Before the fields were optional, the middle case silently kept the old value while the
+// call still answered 200.
+func TestUpdateReleaseDefinition_PresenceSemantics(t *testing.T) {
+	tests := []struct {
+		name      string
+		request   *orchestratorv1.UpdateReleaseDefinitionRequest
+		wantNS    string
+		wantRel   string
+		wantChart string
+	}{
+		{
+			name:      "absent fields leave the stored values alone",
+			request:   &orchestratorv1.UpdateReleaseDefinitionRequest{},
+			wantNS:    "ns-presence",
+			wantRel:   "rel-presence",
+			wantChart: "chart-presence",
+		},
+		{
+			name:      "present and empty clears",
+			request:   &orchestratorv1.UpdateReleaseDefinitionRequest{Namespace: ptr(""), ReleaseName: ptr(""), ChartName: ptr("")},
+			wantNS:    "",
+			wantRel:   "",
+			wantChart: "",
+		},
+		{
+			name:      "present and set replaces",
+			request:   &orchestratorv1.UpdateReleaseDefinitionRequest{Namespace: ptr("ns-next"), ReleaseName: ptr("rel-next"), ChartName: ptr("chart-next")},
+			wantNS:    "ns-next",
+			wantRel:   "rel-next",
+			wantChart: "chart-next",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, st, cleanup := setupService(t)
+			defer cleanup()
+			seedCustomer(t, st, "cust-presence", "presence")
+			seedCluster(t, st, "cls-presence", "cust-presence")
+
+			createResp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+				&orchestratorv1.CreateReleaseDefinitionRequest{
+					CustomerId: "cust-presence", ClusterId: "cls-presence",
+					Namespace: "ns-presence", ReleaseName: "rel-presence", ChartName: "chart-presence", Enabled: true,
+				},
+			))
+			require.NoError(t, err)
+
+			tt.request.DefinitionId = createResp.Msg.Definition.Id
+			tt.request.ExpectedVersion = 1
+			updateResp, err := svc.UpdateReleaseDefinition(context.Background(), connect.NewRequest(tt.request))
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantNS, updateResp.Msg.Definition.Namespace)
+			assert.Equal(t, tt.wantRel, updateResp.Msg.Definition.ReleaseName)
+			assert.Equal(t, tt.wantChart, updateResp.Msg.Definition.ChartName)
+		})
+	}
+}
+
+// The repeated fields cannot express presence, so the wrappers carry it: `items: []` is a
+// deliberate clear, a non-empty wrapper replaces, and the wrapper wins over the legacy
+// field. The legacy field itself keeps working (replacing with at least one entry).
+func TestUpdateReleaseDefinition_ListReplacementAndClearing(t *testing.T) {
+	newServiceWithMapping := func(t *testing.T) (*Service, string) {
+		t.Helper()
+		svc, st, cleanup := setupService(t)
+		t.Cleanup(cleanup)
+		seedCustomer(t, st, "cust-lists", "lists")
+		seedCluster(t, st, "cls-lists", "cust-lists")
+		createResp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+			&orchestratorv1.CreateReleaseDefinitionRequest{
+				CustomerId: "cust-lists", ClusterId: "cls-lists", Namespace: "ns", ReleaseName: "rel", Enabled: true,
+				PromotionMappings: []*orchestratorv1.PromotionMapping{{WorkloadKind: "Deployment", WorkloadName: "api", Container: "api", Field: "image", ValuesPath: "image.tag"}},
+			},
+		))
+		require.NoError(t, err)
+		require.Len(t, decodePromotionMappings(t, createResp.Msg.Definition.PromotionMappings), 1, "the fixture must start with a mapping")
+		return svc, createResp.Msg.Definition.Id
+	}
+
+	t.Run("absent wrapper and absent legacy list leave the list alone", func(t *testing.T) {
+		svc, defID := newServiceWithMapping(t)
+		resp, err := svc.UpdateReleaseDefinition(context.Background(), connect.NewRequest(
+			&orchestratorv1.UpdateReleaseDefinitionRequest{DefinitionId: defID, ExpectedVersion: 1},
+		))
+		require.NoError(t, err)
+		assert.Len(t, decodePromotionMappings(t, resp.Msg.Definition.PromotionMappings), 1)
+	})
+
+	t.Run("empty wrapper clears the list", func(t *testing.T) {
+		svc, defID := newServiceWithMapping(t)
+		resp, err := svc.UpdateReleaseDefinition(context.Background(), connect.NewRequest(
+			&orchestratorv1.UpdateReleaseDefinitionRequest{
+				DefinitionId: defID, ExpectedVersion: 1,
+				PromotionMappingsReplace: &orchestratorv1.PromotionMappingList{},
+			},
+		))
+		require.NoError(t, err)
+		assert.Empty(t, decodePromotionMappings(t, resp.Msg.Definition.PromotionMappings), "an empty wrapper must clear, not be ignored")
+	})
+
+	t.Run("wrapper wins over the legacy field", func(t *testing.T) {
+		svc, defID := newServiceWithMapping(t)
+		resp, err := svc.UpdateReleaseDefinition(context.Background(), connect.NewRequest(
+			&orchestratorv1.UpdateReleaseDefinitionRequest{
+				DefinitionId: defID, ExpectedVersion: 1,
+				PromotionMappings: []*orchestratorv1.PromotionMapping{{WorkloadKind: "Deployment", WorkloadName: "api", Container: "api", Field: "image", ValuesPath: "legacy.path"}},
+				PromotionMappingsReplace: &orchestratorv1.PromotionMappingList{
+					Items: []*orchestratorv1.PromotionMapping{{WorkloadKind: "Deployment", WorkloadName: "api", Container: "api", Field: "image", ValuesPath: "wrapper.path"}},
+				},
+			},
+		))
+		require.NoError(t, err)
+		mappings := decodePromotionMappings(t, resp.Msg.Definition.PromotionMappings)
+		require.Len(t, mappings, 1)
+		assert.Equal(t, "wrapper.path", mappings[0].ValuesPath)
+	})
+
+	t.Run("legacy non-empty list still replaces", func(t *testing.T) {
+		svc, defID := newServiceWithMapping(t)
+		resp, err := svc.UpdateReleaseDefinition(context.Background(), connect.NewRequest(
+			&orchestratorv1.UpdateReleaseDefinitionRequest{
+				DefinitionId: defID, ExpectedVersion: 1,
+				PromotionMappings: []*orchestratorv1.PromotionMapping{{WorkloadKind: "Deployment", WorkloadName: "api", Container: "api", Field: "image", ValuesPath: "legacy.path"}},
+			},
+		))
+		require.NoError(t, err)
+		mappings := decodePromotionMappings(t, resp.Msg.Definition.PromotionMappings)
+		require.Len(t, mappings, 1)
+		assert.Equal(t, "legacy.path", mappings[0].ValuesPath)
+	})
+
+	t.Run("empty wrapper clears the annotation keys too", func(t *testing.T) {
+		svc, st, cleanup := setupService(t)
+		defer cleanup()
+		seedCustomer(t, st, "cust-keys", "keys")
+		seedCluster(t, st, "cls-keys", "cust-keys")
+		createResp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+			&orchestratorv1.CreateReleaseDefinitionRequest{
+				CustomerId: "cust-keys", ClusterId: "cls-keys", Namespace: "ns", ReleaseName: "rel", Enabled: true,
+				ApprovedAnnotationKeys: []*orchestratorv1.ApprovedAnnotationKey{{Key: "team", Scope: "example.com/team"}},
+			},
+		))
+		require.NoError(t, err)
+		require.Len(t, decodeAnnotationKeys(t, createResp.Msg.Definition.ApprovedAnnotationKeys), 1)
+
+		resp, err := svc.UpdateReleaseDefinition(context.Background(), connect.NewRequest(
+			&orchestratorv1.UpdateReleaseDefinitionRequest{
+				DefinitionId: createResp.Msg.Definition.Id, ExpectedVersion: 1,
+				ApprovedAnnotationKeysReplace: &orchestratorv1.ApprovedAnnotationKeyList{},
+			},
+		))
+		require.NoError(t, err)
+		assert.Empty(t, decodeAnnotationKeys(t, resp.Msg.Definition.ApprovedAnnotationKeys))
+	})
+}
+
+// The response carries these two as JSON-encoded bytes (common.v1.ReleaseDefinition), so
+// assertions decode them; an absent or cleared list decodes to an empty slice.
+func decodePromotionMappings(t *testing.T, raw []byte) []store.PromotionMapping {
+	t.Helper()
+	if len(raw) == 0 {
+		return nil
+	}
+	var out []store.PromotionMapping
+	require.NoError(t, json.Unmarshal(raw, &out))
+	return out
+}
+
+func decodeAnnotationKeys(t *testing.T, raw []byte) []store.ApprovedAnnotationKey {
+	t.Helper()
+	if len(raw) == 0 {
+		return nil
+	}
+	var out []store.ApprovedAnnotationKey
+	require.NoError(t, json.Unmarshal(raw, &out))
+	return out
+}
+
+// TASK-214 fixes a WIRE-level false success: the request fields have to survive
+// serialization for a clear to reach the server at all. The other tests construct Go
+// structs directly, which cannot catch a presence that is lost on the wire (an
+// `optional` removed from the proto, a codegen change, a client that omits the field).
+func TestUpdateReleaseDefinition_PresenceSurvivesTheWire(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedCustomer(t, st, "cust-wire", "wire")
+	seedCluster(t, st, "cls-wire", "cust-wire")
+
+	createResp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+		&orchestratorv1.CreateReleaseDefinitionRequest{
+			CustomerId: "cust-wire", ClusterId: "cls-wire", Namespace: "ns-wire", ReleaseName: "rel-wire",
+			ChartName: "chart-wire", Enabled: true,
+			PromotionMappings: []*orchestratorv1.PromotionMapping{{WorkloadKind: "Deployment", WorkloadName: "api", Field: "image", ValuesPath: "image.tag"}},
+		},
+	))
+	require.NoError(t, err)
+	definitionID := createResp.Msg.Definition.Id
+
+	// What the console actually sends when the operator clears everything.
+	sent := &orchestratorv1.UpdateReleaseDefinitionRequest{
+		DefinitionId:             definitionID,
+		ExpectedVersion:          1,
+		Namespace:                ptr(""),
+		ChartName:                ptr(""),
+		PromotionMappingsReplace: &orchestratorv1.PromotionMappingList{},
+	}
+	encoded, err := proto.Marshal(sent)
+	require.NoError(t, err)
+
+	decoded := &orchestratorv1.UpdateReleaseDefinitionRequest{}
+	require.NoError(t, proto.Unmarshal(encoded, decoded))
+	require.NotNil(t, decoded.Namespace, "an empty namespace must survive the wire as PRESENT")
+	require.NotNil(t, decoded.ChartName)
+	require.Nil(t, decoded.ReleaseName, "a field the caller never set must stay absent")
+	// An empty wrapper has to stay present, otherwise the server reads "leave it alone".
+	require.NotNil(t, decoded.PromotionMappingsReplace)
+
+	updateResp, err := svc.UpdateReleaseDefinition(context.Background(), connect.NewRequest(decoded))
+	require.NoError(t, err)
+	assert.Empty(t, updateResp.Msg.Definition.Namespace)
+	assert.Empty(t, updateResp.Msg.Definition.ChartName)
+	assert.Equal(t, "rel-wire", updateResp.Msg.Definition.ReleaseName, "absent fields stay untouched")
+	assert.Empty(t, decodePromotionMappings(t, updateResp.Msg.Definition.PromotionMappings))
+
+	// And the response has to say "empty list", not "null": the console treats a
+	// non-array JSON payload as a contract violation and would show an error banner.
+	assert.JSONEq(t, "[]", string(updateResp.Msg.Definition.PromotionMappings))
 }

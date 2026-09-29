@@ -183,27 +183,7 @@ func (s *Service) UpdateReleaseDefinition(
 			fmt.Errorf("optimistic_lock_conflict: expected version %d, current %d", expectedVer, def.OptimisticVersion))
 	}
 
-	if ns := msg.GetNamespace(); ns != "" {
-		def.Namespace = ns
-	}
-	if rn := msg.GetReleaseName(); rn != "" {
-		def.ReleaseName = rn
-	}
-	if cn := msg.GetChartName(); cn != "" {
-		def.ChartName = cn
-	}
-	if msg.HpaManaged != nil {
-		def.HPAManaged = msg.GetHpaManaged()
-	}
-	if msg.MaxEmergencyReplicas != nil {
-		def.MaxEmergencyReplicas = msg.GetMaxEmergencyReplicas()
-	}
-	if msg.ApprovedAnnotationKeys != nil {
-		def.ApprovedAnnotationKeys = approvedAnnotationKeysFromProto(msg.GetApprovedAnnotationKeys())
-	}
-	if msg.PromotionMappings != nil {
-		def.PromotionMappings = promotionMappingsFromProto(msg.GetPromotionMappings())
-	}
+	applyDefinitionUpdate(def, msg)
 
 	updated, err := s.store.Definitions().Update(ctx, def, nil)
 	if err != nil {
@@ -223,6 +203,47 @@ func (s *Service) UpdateReleaseDefinition(
 	return connect.NewResponse(&orchestratorv1.UpdateReleaseDefinitionResponse{
 		Definition: toProtoDefinition(updated),
 	}), nil
+}
+
+// applyDefinitionUpdate copies the presence-aware fields of an update request onto def.
+//
+// Presence decides, and that is the whole point of TASK-214: an ABSENT field leaves the
+// stored value alone, while a field that is PRESENT replaces it even when it is empty
+// (which is how a caller clears a value). The two list fields cannot carry presence in
+// proto3, so they have explicit replacement wrappers: a present wrapper replaces the list,
+// including with an empty one, and it wins over the legacy field. The legacy fields stay
+// supported for callers that predate the wrappers, replacing only when non-empty.
+//
+// Note the precision: on the WIRE an empty repeated field decodes to a nil slice, so the
+// old `!= nil` test could never fire for a clear attempt (which is how the silent false
+// success happened). An in-process Go caller that passed a non-nil empty slice did clear
+// the list before this change and no longer does; no such caller exists in the tree.
+func applyDefinitionUpdate(def *store.ReleaseDefinition, msg *orchestratorv1.UpdateReleaseDefinitionRequest) {
+	if msg.Namespace != nil {
+		def.Namespace = msg.GetNamespace()
+	}
+	if msg.ReleaseName != nil {
+		def.ReleaseName = msg.GetReleaseName()
+	}
+	if msg.ChartName != nil {
+		def.ChartName = msg.GetChartName()
+	}
+	if msg.HpaManaged != nil {
+		def.HPAManaged = msg.GetHpaManaged()
+	}
+	if msg.MaxEmergencyReplicas != nil {
+		def.MaxEmergencyReplicas = msg.GetMaxEmergencyReplicas()
+	}
+	if replace := msg.GetApprovedAnnotationKeysReplace(); replace != nil {
+		def.ApprovedAnnotationKeys = approvedAnnotationKeysFromProto(replace.GetItems())
+	} else if len(msg.GetApprovedAnnotationKeys()) > 0 {
+		def.ApprovedAnnotationKeys = approvedAnnotationKeysFromProto(msg.GetApprovedAnnotationKeys())
+	}
+	if replace := msg.GetPromotionMappingsReplace(); replace != nil {
+		def.PromotionMappings = promotionMappingsFromProto(replace.GetItems())
+	} else if len(msg.GetPromotionMappings()) > 0 {
+		def.PromotionMappings = promotionMappingsFromProto(msg.GetPromotionMappings())
+	}
 }
 
 // DisableReleaseDefinition disables a definition with optimistic locking and emits a domain event.

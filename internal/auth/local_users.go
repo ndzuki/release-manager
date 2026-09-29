@@ -232,7 +232,12 @@ func (s *AuthService) ListLocalUsers(
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrInvalidCursor) {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid or expired cursor"))
+			// Carry the stable reason code the console branches on (the other list
+			// RPCs set X-Reason-Code for exactly this: a stale cursor means "restart
+			// from page one", which is NOT the same as invalid page_size).
+			cursorErr := connect.NewError(connect.CodeInvalidArgument, errors.New("invalid or expired cursor"))
+			cursorErr.Meta().Set("X-Reason-Code", "invalid_cursor")
+			return nil, cursorErr
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list users: %w", err))
 	}

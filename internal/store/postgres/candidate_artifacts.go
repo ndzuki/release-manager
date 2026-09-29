@@ -194,6 +194,29 @@ func (s *candidateArtifactStore) UpsertLocationTx(tx *gorm.DB, artifactID, ref, 
 	return nil
 }
 
+// MarkValidatedForBundleTx implements the writer TASK-218 was missing; see
+// store.CandidateArtifactStore for the contract. Candidates are linked to the bundle
+// through bundle_candidate_artifacts (candidate_artifacts.bundle_id is the legacy column),
+// and an artifact that already carries validated_at keeps its original timestamp.
+func (s *candidateArtifactStore) MarkValidatedForBundleTx(tx *gorm.DB, bundleID string, now time.Time) (int64, error) {
+	if tx == nil {
+		return 0, fmt.Errorf("mark candidate artifacts validated: nil transaction")
+	}
+	if bundleID == "" {
+		return 0, fmt.Errorf("mark candidate artifacts validated: empty bundle id")
+	}
+	result := tx.Exec(`
+		UPDATE candidate_artifacts AS ca
+		SET validated_at = ?
+		FROM bundle_candidate_artifacts AS link
+		WHERE link.bundle_id = ? AND link.artifact_id = ca.id AND ca.validated_at IS NULL
+	`, now.UTC(), bundleID)
+	if result.Error != nil {
+		return 0, fmt.Errorf("mark candidate artifacts validated: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
 func (s *candidateArtifactStore) LinkToBundleTx(tx *gorm.DB, bundleID string, digests []store.ArtifactDigest) error {
 	if tx == nil {
 		return fmt.Errorf("link candidate artifacts: nil transaction")

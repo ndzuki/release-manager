@@ -301,6 +301,43 @@ func (s *Service) CreateOperation(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("bundle lookup: %w", err))
 	}
+	// TASK-215: authorizing the NAMED definition proves the caller may deploy SOMETHING; it
+	// does not make an arbitrary bundle theirs. Before this check the only relationship was
+	// a chart-NAME match, so an operation could be pointed at another organization's
+	// same-named-chart bundle.
+	//
+	// The rule cannot be plain reachability: a definition only becomes the bundle's owner
+	// WHEN the operation is created (`setCurrentBundle` runs inside the operation-creation
+	// unit of work), so a freshly submitted bundle is claimed by nobody and every first
+	// install would be refused (the dev seed failed exactly that way). What must be refused
+	// is TAKING a bundle another tenant already claims:
+	//
+	//   reachable from this organization           -> allowed (its own bundle)
+	//   unclaimed by anyone                        -> allowed (first install; the UoW then
+	//                                                 makes this definition the owner)
+	//   claimed by a definition of another tenant  -> refused
+	//
+	// Two organizations bound to the SAME customer stay allowed: reachability succeeds
+	// first, because such a bundle is theirs too.
+	//
+	// The check runs BEFORE the status switch on purpose: a foreign caller must not learn
+	// the bundle's status from `bundle_not_ready`/`bundle_rejected`.
+	if actor.Service == "" && !actorHasRole(actor, string(store.RolePlatformAdmin)) {
+		reachable, reachErr := s.store.Bundles().ReachableFromOrganization(ctx, bundle.ID, actor.OrganizationID)
+		if reachErr != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("bundle reachability: %w", reachErr))
+		}
+		if !reachable {
+			claimedElsewhere, claimErr := s.store.Bundles().BundleClaimedOutsideOrganization(ctx, bundle.ID, actor.OrganizationID)
+			if claimErr != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("bundle ownership: %w", claimErr))
+			}
+			if claimedElsewhere {
+				return nil, connect.NewError(connect.CodePermissionDenied,
+					fmt.Errorf("bundle_not_reachable: bundle %s belongs to another organization", bundle.ID))
+			}
+		}
+	}
 	switch bundle.Status {
 	case store.BundleReceived:
 		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("bundle_not_ready"))

@@ -250,6 +250,40 @@ func (s *bundleStore) List(ctx context.Context, filter store.BundleListFilter) (
 	return page, nil
 }
 
+// ReachableFromOrganization implements the tenant boundary for reading a bundle
+// (TASK-199). See store.BundleStore for the contract.
+func (s *bundleStore) ReachableFromOrganization(ctx context.Context, bundleID, orgID string) (bool, error) {
+	if bundleID == "" || orgID == "" {
+		return false, nil
+	}
+	var reachable bool
+	err := s.gorm.gorm.WithContext(ctx).Raw(store.ReachableBundlePredicate,
+		orgID, orgID, string(store.BindingActive), bundleID, bundleID,
+	).Scan(&reachable).Error
+	if err != nil {
+		return false, fmt.Errorf("check bundle reachability: %w", err)
+	}
+	return reachable, nil
+}
+
+// see store.ReachableBundlePredicate for the contract
+
+// BundleClaimedOutsideOrganization implements the write path's tenant boundary; see
+// store.BundleClaimedOutsideOrganization for the contract.
+func (s *bundleStore) BundleClaimedOutsideOrganization(ctx context.Context, bundleID, orgID string) (bool, error) {
+	if bundleID == "" || orgID == "" {
+		return false, nil
+	}
+	var claimed bool
+	err := s.gorm.gorm.WithContext(ctx).Raw(store.ClaimedBundleOutsideOrganizationPredicate,
+		bundleID, bundleID, orgID, orgID, string(store.BindingActive),
+	).Scan(&claimed).Error
+	if err != nil {
+		return false, fmt.Errorf("check bundle ownership: %w", err)
+	}
+	return claimed, nil
+}
+
 // bundleListWhere builds the WHERE fragments for the bundle list and count
 // queries. The keyset cursor predicate is appended last so the count query can
 // drop exactly one fragment and two arguments when a page token is present.
@@ -259,11 +293,45 @@ func bundleListWhere(
 	where = []string{"b.status IN ?"}
 	args = []any{statuses}
 	if filter.ReleaseDefinitionID != "" {
+		// TASK-199: the previous predicate matched on the definition's chart NAME, which is
+		// a guess rather than a relationship -- two tenants using the same chart name saw
+		// each other's bundles, and a bundle that merely looked similar leaked in. The
+		// relationship is explicit now: the definition's current bundle, or a bundle one of
+		// its operations used.
 		where = append(where, `EXISTS (
 			SELECT 1 FROM release_definitions AS d
-			WHERE d.id = ? AND (d.chart_name = '' OR b.chart_ref LIKE '%' || d.chart_name || '%')
+			WHERE d.id = ?
+			  AND (
+				d.current_bundle_id = b.id
+				OR EXISTS (
+					SELECT 1 FROM operations AS o
+					WHERE o.release_definition_id = d.id AND o.bundle_id = b.id
+				)
+			  )
 		)`)
 		args = append(args, filter.ReleaseDefinitionID)
+	}
+	if filter.OrganizationID != "" {
+		// Same tenant boundary GetBundle enforces, so the page cannot show a row the
+		// caller would be refused when fetching it directly.
+		where = append(where, `EXISTS (
+			SELECT 1 FROM release_definitions AS d
+			WHERE (
+				COALESCE(d.owner_organization_id, '') = ?
+				OR EXISTS (
+					SELECT 1 FROM org_customer_bindings AS bind
+					WHERE bind.org_id = ? AND bind.customer_id = d.customer_id AND bind.status = ?
+				)
+			)
+			AND (
+				d.current_bundle_id = b.id
+				OR EXISTS (
+					SELECT 1 FROM operations AS o
+					WHERE o.release_definition_id = d.id AND o.bundle_id = b.id
+				)
+			)
+		)`)
+		args = append(args, filter.OrganizationID, filter.OrganizationID, string(store.BindingActive))
 	}
 	if filter.ChartName != "" {
 		where = append(where, `b.chart_ref LIKE '%' || ? || '%'`)
@@ -331,7 +399,8 @@ func bundleQueryHash(filter store.BundleListFilter, statuses []store.BundleStatu
 	for index, status := range statuses {
 		values[index] = string(status)
 	}
-	payload := strings.Join([]string{filter.ReleaseDefinitionID, strings.Join(values, ","), filter.ChartName}, "\n")
+	payload := strings.Join(
+		[]string{filter.ReleaseDefinitionID, filter.OrganizationID, strings.Join(values, ","), filter.ChartName}, "\n")
 	sum := sha256.Sum256([]byte(payload))
 	return hex.EncodeToString(sum[:])
 }

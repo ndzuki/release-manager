@@ -28,12 +28,20 @@ func (s *AuthService) loginBrowserSession(ctx context.Context, req *connect.Requ
 	if err != nil {
 		return nil, err
 	}
-	principal, organizations, expiresAt, cookies, err := s.issueBrowserSession(ctx, user, orgID)
+	session, err := s.issueBrowserSession(ctx, user, orgID)
 	if err != nil {
 		return nil, err
 	}
-	response := connect.NewResponse(&authv1.LoginResponse{User: principal, Organizations: organizations, ExpiresAt: expiresAt.Unix()})
-	setResponseCookies(response.Header(), cookies)
+	accessToken, refreshToken, tokenType := bearerPair(req.Header(), session)
+	response := connect.NewResponse(&authv1.LoginResponse{
+		User:          session.principal,
+		Organizations: session.organizations,
+		ExpiresAt:     session.expiresAt.Unix(),
+		AccessToken:   accessToken,
+		RefreshToken:  refreshToken,
+		TokenType:     tokenType,
+	})
+	setResponseCookies(response.Header(), session.cookies)
 	return response, nil
 }
 
@@ -66,12 +74,20 @@ func (s *AuthService) refreshBrowserSession(ctx context.Context, req *connect.Re
 	if err != nil {
 		return nil, err
 	}
-	principal, organizations, expiresAt, cookies, err := s.issueBrowserSession(ctx, user, orgID)
+	issued, err := s.issueBrowserSession(ctx, user, orgID)
 	if err != nil {
 		return nil, err
 	}
-	response := connect.NewResponse(&authv1.RefreshTokenResponse{User: principal, Organizations: organizations, ExpiresAt: expiresAt.Unix()})
-	setResponseCookies(response.Header(), cookies)
+	accessToken, refreshToken, tokenType := bearerPair(req.Header(), issued)
+	response := connect.NewResponse(&authv1.RefreshTokenResponse{
+		User:          issued.principal,
+		Organizations: issued.organizations,
+		ExpiresAt:     issued.expiresAt.Unix(),
+		AccessToken:   accessToken,
+		RefreshToken:  refreshToken,
+		TokenType:     tokenType,
+	})
+	setResponseCookies(response.Header(), issued.cookies)
 	return response, nil
 }
 
@@ -103,40 +119,93 @@ func (s *AuthService) switchBrowserOrganization(ctx context.Context, req *connec
 	if err != nil || user.Status != store.UserActive {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("user is unavailable"))
 	}
-	principal, organizations, expiresAt, cookies, err := s.issueBrowserSession(ctx, user, req.Msg.GetOrgId())
+	session, err := s.issueBrowserSession(ctx, user, req.Msg.GetOrgId())
 	if err != nil {
 		return nil, err
 	}
-	response := connect.NewResponse(&authv1.SwitchOrganizationResponse{User: principal, Organizations: organizations, ExpiresAt: expiresAt.Unix()})
-	setResponseCookies(response.Header(), cookies)
+	accessToken, refreshToken, tokenType := bearerPair(req.Header(), session)
+	response := connect.NewResponse(&authv1.SwitchOrganizationResponse{
+		User:          session.principal,
+		Organizations: session.organizations,
+		ExpiresAt:     session.expiresAt.Unix(),
+		AccessToken:   accessToken,
+		RefreshToken:  refreshToken,
+		TokenType:     tokenType,
+	})
+	setResponseCookies(response.Header(), session.cookies)
 	return response, nil
 }
 
-func (s *AuthService) issueBrowserSession(ctx context.Context, user *store.User, organizationID string) (*authv1.SessionUser, []*authv1.Organization, time.Time, []*http.Cookie, error) {
+// browserSession is everything one browser login mints: the response projection,
+// the cookie set the console carries, and the raw bearer pair.
+//
+// Dual mode (ADR-028): the tokens are part of the result on purpose. Callers
+// that authenticate with `Authorization: Bearer` — devseed, the E2E runner, the
+// kulala collections — read Login.AccessToken, so serving cookies only would
+// silently break all of them.
+type browserSession struct {
+	principal     *authv1.SessionUser
+	organizations []*authv1.Organization
+	expiresAt     time.Time
+	cookies       []*http.Cookie
+	accessToken   string
+	refreshToken  string
+}
+
+// browserCaller reports whether the request comes from a browser page rather
+// than from a CLI/CI client.
+//
+// ADR-028 clause 6: the console must stay HttpOnly-cookie-only, so the bearer
+// pair is returned ONLY to callers that need it (devseed, the E2E runner, the
+// kulala collections). Handing tokens to a browser response body would let any
+// XSS in the console origin read them, which is exactly what the HttpOnly cookie
+// exists to prevent. Browsers always send Origin on a cross-origin-capable POST,
+// so its presence is the discriminator.
+func browserCaller(header http.Header) bool {
+	return header.Get("Origin") != "" || header.Get("Sec-Fetch-Mode") != ""
+}
+
+// bearerPair returns the token fields to embed in a response: the pair for a
+// non-browser caller, empty strings for a browser caller (ADR-028 clause 6).
+func bearerPair(header http.Header, session browserSession) (accessToken, refreshToken, tokenType string) {
+	if browserCaller(header) {
+		return "", "", ""
+	}
+	return session.accessToken, session.refreshToken, "Bearer"
+}
+
+func (s *AuthService) issueBrowserSession(ctx context.Context, user *store.User, organizationID string) (browserSession, error) {
 	principal, organizations, err := s.sessionPrincipal(ctx, user, organizationID)
 	if err != nil {
-		return nil, nil, time.Time{}, nil, err
+		return browserSession{}, err
 	}
 	accessToken, accessExpiresAt, err := s.jwt.GenerateAccessToken(user.ID, organizationID, principal.Roles)
 	if err != nil {
-		return nil, nil, time.Time{}, nil, connect.NewError(connect.CodeInternal, errors.New("token generation failed"))
+		return browserSession{}, connect.NewError(connect.CodeInternal, errors.New("token generation failed"))
 	}
 	refreshToken, family, refreshHash, err := s.jwt.GenerateRefreshToken()
 	if err != nil {
-		return nil, nil, time.Time{}, nil, connect.NewError(connect.CodeInternal, errors.New("token generation failed"))
+		return browserSession{}, connect.NewError(connect.CodeInternal, errors.New("token generation failed"))
 	}
 	refreshExpiresAt := time.Now().UTC().Add(s.jwt.RefreshTTL())
 	if err := s.store.AuthSessions().Create(ctx, &store.AuthSession{ID: newID(), UserID: user.ID, TokenFamily: family, RefreshTokenHash: refreshHash, ExpiresAt: refreshExpiresAt}); err != nil {
-		return nil, nil, time.Time{}, nil, mapStoreError(err, "session creation failed")
+		return browserSession{}, mapStoreError(err, "session creation failed")
 	}
 	csrfToken, err := randomToken(32)
 	if err != nil {
-		return nil, nil, time.Time{}, nil, connect.NewError(connect.CodeInternal, errors.New("session creation failed"))
+		return browserSession{}, connect.NewError(connect.CodeInternal, errors.New("session creation failed"))
 	}
-	return principal, organizations, accessExpiresAt, []*http.Cookie{
-		s.sessionCookie(AccessCookieName, accessToken, accessExpiresAt, true),
-		s.sessionCookie(RefreshCookieName, refreshToken, refreshExpiresAt, true),
-		s.sessionCookie(CSRFCookieName, csrfToken, refreshExpiresAt, false),
+	return browserSession{
+		principal:     principal,
+		organizations: organizations,
+		expiresAt:     accessExpiresAt,
+		cookies: []*http.Cookie{
+			s.sessionCookie(AccessCookieName, accessToken, accessExpiresAt, true),
+			s.sessionCookie(RefreshCookieName, refreshToken, refreshExpiresAt, true),
+			s.sessionCookie(CSRFCookieName, csrfToken, refreshExpiresAt, false),
+		},
+		accessToken:  accessToken,
+		refreshToken: refreshToken,
 	}, nil
 }
 

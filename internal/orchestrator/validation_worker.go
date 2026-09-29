@@ -127,6 +127,13 @@ func (w *ValidationWorker) processEntry(ctx context.Context, entry store.Validat
 			if statusErr := w.store.Bundles().UpdateStatusTx(tx, entry.BundleID, store.BundleReceived, store.BundleValidated, ""); statusErr != nil {
 				return statusErr
 			}
+			// TASK-218: the bundle's candidate artifacts become candidates in the same
+			// transaction. The read side (ListValidated, the emergency artifact selection)
+			// has always required validated_at, and nothing else writes it -- without this
+			// the emergency change flow could never offer an artifact.
+			if _, markErr := w.store.CandidateArtifacts().MarkValidatedForBundleTx(tx, entry.BundleID, time.Now().UTC()); markErr != nil {
+				return markErr
+			}
 			return w.store.ValidationOutbox().UpdateTx(tx, &store.ValidationOutboxEntry{
 				ID: entry.ID, BundleID: entry.BundleID,
 				Status: store.ValidationCompleted, Attempts: entry.Attempts + 1,

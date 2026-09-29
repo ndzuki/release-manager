@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,13 +49,16 @@ type cacheKey struct {
 }
 
 type cacheEntry struct {
-	actor         authctx.Actor
-	authorization string
-	snapshot      Snapshot
-	initialized   bool
-	backoff       time.Duration
-	nextPull      time.Time
-	pullMu        sync.Mutex
+	actor authctx.Actor
+	// credential is the verified bearer or browser-cookie token of the last
+	// request seen for this actor+scope. It is what the background refresh
+	// forwards; see ADR-028 clause 5.
+	credential  string
+	snapshot    Snapshot
+	initialized bool
+	backoff     time.Duration
+	nextPull    time.Time
+	pullMu      sync.Mutex
 }
 
 // Module maintains active actor snapshots and persisted scope checkpoints.
@@ -147,15 +151,22 @@ func (m *Module) AuthorizeWrite(ctx context.Context, actor authctx.Actor, custom
 		return invalidActorError("actor identity is required")
 	}
 	key := cacheKey{actorID: actorID, organizationID: actor.OrganizationID, customerID: customerID}
-	authorizationHeader := authctx.AuthorizationHeaderFromContext(ctx)
+	// ADR-028 clause 5: the background snapshot refresh needs a credential that
+	// was verified for THIS request. The raw inbound Authorization header is
+	// empty for a cookie-authenticated console, which left the cached entry
+	// without any credential and made every browser write fail closed (B4).
+	credential := authctx.VerifiedCredentialFromContext(ctx)
+	if credential == "" {
+		credential = bearerCredential(authctx.AuthorizationHeaderFromContext(ctx))
+	}
 
 	m.mu.Lock()
 	entry, exists := m.entries[key]
 	if !exists {
-		entry = &cacheEntry{actor: actor, authorization: authorizationHeader}
+		entry = &cacheEntry{actor: actor, credential: credential}
 		m.entries[key] = entry
-	} else if authorizationHeader != "" {
-		entry.authorization = authorizationHeader
+	} else if credential != "" {
+		entry.credential = credential
 	}
 	m.mu.Unlock()
 
@@ -164,7 +175,12 @@ func (m *Module) AuthorizeWrite(ctx context.Context, actor authctx.Actor, custom
 			"organization_id", actor.OrganizationID, "customer_id", customerID,
 			"action", action, "reason", reasonCode(err), "error", err)
 		m.recordDecision(actorID, actorType, actor.OrganizationID, customerID, action, "deny", reasonCode(err), Snapshot{})
-		return err
+		// Return a stable, non-leaking error. The raw pull failure can carry
+		// credential text — the browser used to read
+		// "invalid token: parse access token: token is expired" while its own
+		// session was healthy. The cause stays in the WARN above and in the
+		// decision record.
+		return staleError(0, 0, 0)
 	}
 
 	m.mu.RLock()
@@ -198,7 +214,7 @@ func (m *Module) pull(ctx context.Context, key cacheKey) error {
 	entry.pullMu.Lock()
 	defer entry.pullMu.Unlock()
 	m.mu.RLock()
-	authorizationHeader := entry.authorization
+	credential := entry.credential
 	m.mu.RUnlock()
 	if m.client == nil {
 		return staleError(0, 0, 0)
@@ -208,8 +224,8 @@ func (m *Module) pull(ctx context.Context, key cacheKey) error {
 		OrganizationId: key.organizationID,
 		CustomerId:     key.customerID,
 	})
-	if authorizationHeader != "" {
-		request.Header().Set("Authorization", authorizationHeader)
+	if credential != "" {
+		request.Header().Set("Authorization", "Bearer "+credential)
 	}
 	callCtx, cancel := context.WithTimeout(ctx, snapshotDeadline)
 	defer cancel()
@@ -408,6 +424,17 @@ func reasonCode(err error) string {
 		}
 	}
 	return connect.CodeOf(err).String()
+}
+
+// bearerCredential extracts the token from a "Bearer <token>" header. It returns
+// "" for an absent header — the shape a browser session sends — so callers can
+// treat "no header" and "no credential" the same way.
+func bearerCredential(authorizationHeader string) string {
+	const prefix = "Bearer "
+	if !strings.HasPrefix(authorizationHeader, prefix) {
+		return ""
+	}
+	return strings.TrimPrefix(authorizationHeader, prefix)
 }
 
 var _ Authorizer = (*Module)(nil)

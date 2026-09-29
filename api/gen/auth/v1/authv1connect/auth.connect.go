@@ -687,20 +687,25 @@ type OrganizationServiceClient interface {
 	// succeeds again.
 	// Requires organization/write.
 	DisableOrganization(context.Context, *connect.Request[v1.DisableOrganizationRequest]) (*connect.Response[v1.DisableOrganizationResponse], error)
-	// Grants a user a role in an organization, or updates the role of an existing
-	// member.
-	// Not convergent: the (organization, user) pair is the primary key and the
-	// insert has no upsert, so re-adding an existing member fails as INTERNAL
-	// instead of updating its role; use the role-update procedure for that.
+	// Grants a user a role in an organization. NOT convergent: the (organization,
+	// user) pair is the primary key and the insert has no upsert, so re-adding an
+	// existing member fails with ALREADY_EXISTS (+ X-Reason-Code: duplicate_member)
+	// instead of updating its role; use the role-update procedure for that. (This
+	// comment used to claim INTERNAL, which the implementation never returned.)
 	// Fails INVALID_ARGUMENT on an unknown role, NOT_FOUND on an unknown
-	// organization, FAILED_PRECONDITION when it is disabled, and PERMISSION_DENIED
-	// when the caller is not a member or may not grant the requested role.
+	// organization, FAILED_PRECONDITION when it is disabled (+ X-Reason-Code:
+	// organization_disabled), and PERMISSION_DENIED when the caller is not a member
+	// or may not grant the requested role.
 	// Requires organization/write.
 	AddMember(context.Context, *connect.Request[v1.AddMemberRequest]) (*connect.Response[v1.AddMemberResponse], error)
 	// Revokes a user's membership in an organization; the account itself survives.
-	// Convergent: removing a member that is already gone answers success.
-	// Refused with FAILED_PRECONDITION when it would remove the last platform_admin
-	// of the organization, so an organization cannot lose its only administrator.
+	// NOT convergent: removing a member that is already gone answers NOT_FOUND
+	// (this comment used to claim it answered success).
+	// Refused with FAILED_PRECONDITION (+ X-Reason-Code:
+	// last_platform_admin_forbidden) when it would remove the last platform_admin of
+	// the organization, so an organization cannot lose its only administrator. The
+	// last-admin check and the delete are not one transaction, so a concurrent pair
+	// of removals can still race.
 	// expected_version is not consulted by the current implementation, so it
 	// provides no protection against a lost update here.
 	// Requires organization/write.
@@ -883,20 +888,25 @@ type OrganizationServiceHandler interface {
 	// succeeds again.
 	// Requires organization/write.
 	DisableOrganization(context.Context, *connect.Request[v1.DisableOrganizationRequest]) (*connect.Response[v1.DisableOrganizationResponse], error)
-	// Grants a user a role in an organization, or updates the role of an existing
-	// member.
-	// Not convergent: the (organization, user) pair is the primary key and the
-	// insert has no upsert, so re-adding an existing member fails as INTERNAL
-	// instead of updating its role; use the role-update procedure for that.
+	// Grants a user a role in an organization. NOT convergent: the (organization,
+	// user) pair is the primary key and the insert has no upsert, so re-adding an
+	// existing member fails with ALREADY_EXISTS (+ X-Reason-Code: duplicate_member)
+	// instead of updating its role; use the role-update procedure for that. (This
+	// comment used to claim INTERNAL, which the implementation never returned.)
 	// Fails INVALID_ARGUMENT on an unknown role, NOT_FOUND on an unknown
-	// organization, FAILED_PRECONDITION when it is disabled, and PERMISSION_DENIED
-	// when the caller is not a member or may not grant the requested role.
+	// organization, FAILED_PRECONDITION when it is disabled (+ X-Reason-Code:
+	// organization_disabled), and PERMISSION_DENIED when the caller is not a member
+	// or may not grant the requested role.
 	// Requires organization/write.
 	AddMember(context.Context, *connect.Request[v1.AddMemberRequest]) (*connect.Response[v1.AddMemberResponse], error)
 	// Revokes a user's membership in an organization; the account itself survives.
-	// Convergent: removing a member that is already gone answers success.
-	// Refused with FAILED_PRECONDITION when it would remove the last platform_admin
-	// of the organization, so an organization cannot lose its only administrator.
+	// NOT convergent: removing a member that is already gone answers NOT_FOUND
+	// (this comment used to claim it answered success).
+	// Refused with FAILED_PRECONDITION (+ X-Reason-Code:
+	// last_platform_admin_forbidden) when it would remove the last platform_admin of
+	// the organization, so an organization cannot lose its only administrator. The
+	// last-admin check and the delete are not one transaction, so a concurrent pair
+	// of removals can still race.
 	// expected_version is not consulted by the current implementation, so it
 	// provides no protection against a lost update here.
 	// Requires organization/write.
@@ -1259,8 +1269,9 @@ type AuthorizationServiceClient interface {
 	// Fails INVALID_ARGUMENT on a malformed scope or an unsupported action, and
 	// PERMISSION_DENIED when the caller is not an administrator, the subject is not
 	// an active member, or the scope is unavailable.
-	// Requires an administrator role in the target organization; nothing in the
-	// product currently calls it, so it exists for operators and future tooling.
+	// Requires an administrator role in the target organization. The web console is
+	// the caller (A3 of the UX revamp); it can only apply a grant/revoke because this
+	// service exposes no way to list existing grants.
 	SetCapabilityGrant(context.Context, *connect.Request[v1.SetCapabilityGrantRequest]) (*connect.Response[v1.SetCapabilityGrantResponse], error)
 	// Answers whether the caller may act with (object, action) in one organization,
 	// and returns the policy-owned scope the caller must apply: whether it may
@@ -1352,8 +1363,9 @@ type AuthorizationServiceHandler interface {
 	// Fails INVALID_ARGUMENT on a malformed scope or an unsupported action, and
 	// PERMISSION_DENIED when the caller is not an administrator, the subject is not
 	// an active member, or the scope is unavailable.
-	// Requires an administrator role in the target organization; nothing in the
-	// product currently calls it, so it exists for operators and future tooling.
+	// Requires an administrator role in the target organization. The web console is
+	// the caller (A3 of the UX revamp); it can only apply a grant/revoke because this
+	// service exposes no way to list existing grants.
 	SetCapabilityGrant(context.Context, *connect.Request[v1.SetCapabilityGrantRequest]) (*connect.Response[v1.SetCapabilityGrantResponse], error)
 	// Answers whether the caller may act with (object, action) in one organization,
 	// and returns the policy-owned scope the caller must apply: whether it may

@@ -2,12 +2,7 @@ package auth
 
 import (
 	"context"
-	"fmt"
 
-	"connectrpc.com/connect"
-
-	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
-	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -16,44 +11,42 @@ type CustomerResolver interface {
 	Resolve(ctx context.Context, customerID string) (*store.Customer, error)
 }
 
-// ConnectCustomerResolver resolves customers through release-orchestrator.
-type ConnectCustomerResolver struct {
-	client orchestratorv1connect.OrchestratorServiceClient
+// StoreCustomerResolver resolves customer lifecycle state from this process's store.
+//
+// This is the resolver the binding service runs with. Three facts decide it:
+//   - release-auth and release-orchestrator MUST open the same database (the invariant
+//     recorded in configs/auth.dev.yaml, TASK-104), so the orchestrator's customer writes
+//     are visible to this read;
+//   - this process already reads the customers table directly
+//     (internal/auth/authorization_snapshot.go, internal/authorization/store_authorizer.go),
+//     and validateWritableTarget already reads organizations through this same store, so
+//     the coupling exists and this adds none;
+//   - a remote resolver needs a service principal holding `release read` in the
+//     customer's organization domain, and a background resolution has no principal. The
+//     Connect implementation that tried was never wired, so the process shipped with
+//     StubResolver and every binding write answered NOT_FOUND customer_not_found
+//     (TASK-191).
+type StoreCustomerResolver struct {
+	store store.Store
 }
 
-// NewConnectCustomerResolver creates a customer resolver backed by a Connect client.
-func NewConnectCustomerResolver(client orchestratorv1connect.OrchestratorServiceClient) *ConnectCustomerResolver {
-	return &ConnectCustomerResolver{client: client}
+// NewStoreCustomerResolver creates a resolver backed by the process's own store.
+func NewStoreCustomerResolver(st store.Store) *StoreCustomerResolver {
+	return &StoreCustomerResolver{store: st}
 }
 
-// Resolve returns the customer, including disabled lifecycle state.
-func (r *ConnectCustomerResolver) Resolve(ctx context.Context, customerID string) (*store.Customer, error) {
-	resp, err := r.client.GetCustomer(ctx, connect.NewRequest(&orchestratorv1.GetCustomerRequest{
-		CustomerId: customerID,
-	}))
-	if err != nil {
-		if connect.CodeOf(err) == connect.CodeNotFound {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("get customer: %w", err)
-	}
-
-	customer := resp.Msg.GetCustomer()
-	if customer == nil {
-		return nil, fmt.Errorf("get customer: empty response")
-	}
-	return &store.Customer{
-		ID:     customer.GetId(),
-		Name:   customer.GetName(),
-		Slug:   customer.GetSlug(),
-		Status: store.CustomerStatus(customer.GetStatus()),
-	}, nil
+// Resolve returns the customer, preserving store.ErrNotFound for an unknown id.
+func (r *StoreCustomerResolver) Resolve(ctx context.Context, customerID string) (*store.Customer, error) {
+	return r.store.Customers().Get(ctx, customerID)
 }
 
-var _ CustomerResolver = (*ConnectCustomerResolver)(nil)
+var _ CustomerResolver = (*StoreCustomerResolver)(nil)
 
 // StubResolver is a no-op CustomerResolver that returns ErrNotFound.
-// It is used when no remote orchestrator is available for customer resolution.
+//
+// It is NOT a production default any more: wiring it made every binding write fail with
+// `NOT_FOUND customer_not_found` (TASK-191). It survives for tests that need a resolver
+// which refuses everything.
 type StubResolver struct{}
 
 // Resolve always returns ErrNotFound.

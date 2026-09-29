@@ -30,15 +30,19 @@ func (s *bundleStore) Create(ctx context.Context, b *store.ReleaseBundle) error 
 			chart_ref, chart_version, chart_digest,
 			images,
 			git_commit, pipeline_id,
-			signature_ref, sbom_ref, provenance_ref,
+			signature_ref, signature_digest,
+			sbom_ref, sbom_digest,
+			provenance_ref, provenance_digest,
 			created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		b.ID, b.Name, b.DigestAlg, b.DigestValue, string(b.Status),
 		b.ChartRef, b.ChartVersion, b.ChartDigest,
 		string(imagesJSON),
 		b.GitCommit, b.PipelineID,
-		b.SignatureRef, b.SBOMRef, b.ProvenanceRef,
+		b.SignatureRef, b.SignatureDigest,
+		b.SBOMRef, b.SBOMDigest,
+		b.ProvenanceRef, b.ProvenanceDigest,
 		b.CreatedAt.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
@@ -53,7 +57,9 @@ func (s *bundleStore) Get(ctx context.Context, id string) (*store.ReleaseBundle,
 			chart_ref, chart_version, chart_digest,
 			images,
 			git_commit, pipeline_id,
-			signature_ref, sbom_ref, provenance_ref,
+			signature_ref, signature_digest,
+			sbom_ref, sbom_digest,
+			provenance_ref, provenance_digest,
 			archived_at, archived_from_status, created_at
 		FROM release_bundles WHERE id = ?
 	`, id)
@@ -66,7 +72,9 @@ func (s *bundleStore) GetByDigest(ctx context.Context, alg, value string) (*stor
 			chart_ref, chart_version, chart_digest,
 			images,
 			git_commit, pipeline_id,
-			signature_ref, sbom_ref, provenance_ref,
+			signature_ref, signature_digest,
+			sbom_ref, sbom_digest,
+			provenance_ref, provenance_digest,
 			archived_at, archived_from_status, created_at
 		FROM release_bundles WHERE digest_alg = ? AND digest_value = ?
 	`, alg, value)
@@ -79,7 +87,8 @@ func scanBundle(row interface{ Scan(...interface{}) error }) (*store.ReleaseBund
 		chartRef, chartVersion, chartDigest      string
 		imagesJSON                               string
 		gitCommit, pipelineID                    string
-		sigRef, sbomRef, provRef                 string
+		sigRef, sigDigest, sbomRef               string
+		sbomDigest, provRef, provDigest          string
 		archivedAt, archivedFromStatus           *string
 		createdAt                                string
 	)
@@ -89,7 +98,7 @@ func scanBundle(row interface{ Scan(...interface{}) error }) (*store.ReleaseBund
 		&chartRef, &chartVersion, &chartDigest,
 		&imagesJSON,
 		&gitCommit, &pipelineID,
-		&sigRef, &sbomRef, &provRef,
+		&sigRef, &sigDigest, &sbomRef, &sbomDigest, &provRef, &provDigest,
 		&archivedAt, &archivedFromStatus,
 		&createdAt,
 	); err != nil {
@@ -138,8 +147,11 @@ func scanBundle(row interface{ Scan(...interface{}) error }) (*store.ReleaseBund
 		GitCommit:          gitCommit,
 		PipelineID:         pipelineID,
 		SignatureRef:       sigRef,
+		SignatureDigest:    sigDigest,
 		SBOMRef:            sbomRef,
+		SBOMDigest:         sbomDigest,
 		ProvenanceRef:      provRef,
+		ProvenanceDigest:   provDigest,
 		ArchivedAt:         archived,
 		ArchivedFromStatus: archivedFrom,
 		CreatedAt:          ts,
@@ -376,6 +388,39 @@ func (s *bundleStore) GetByAlias(ctx context.Context, alias string) (*store.Rele
 	return s.Get(ctx, alias)
 }
 
+// ReachableFromOrganization implements the tenant boundary for reading a bundle
+// (TASK-199). The predicate is shared with PostgreSQL (see store.ReachableBundlePredicate) so
+// the two engines cannot disagree about who may read what.
+func (s *bundleStore) ReachableFromOrganization(ctx context.Context, bundleID, orgID string) (bool, error) {
+	if bundleID == "" || orgID == "" {
+		return false, nil
+	}
+	var reachable bool
+	err := s.db.QueryRowContext(ctx, store.ReachableBundlePredicate,
+		orgID, orgID, string(store.BindingActive), bundleID, bundleID,
+	).Scan(&reachable)
+	if err != nil {
+		return false, fmt.Errorf("check bundle reachability: %w", err)
+	}
+	return reachable, nil
+}
+
+// BundleClaimedOutsideOrganization implements the write path's tenant boundary; see
+// store.BundleClaimedOutsideOrganization for the contract.
+func (s *bundleStore) BundleClaimedOutsideOrganization(ctx context.Context, bundleID, orgID string) (bool, error) {
+	if bundleID == "" || orgID == "" {
+		return false, nil
+	}
+	var claimed bool
+	err := s.db.QueryRowContext(ctx, store.ClaimedBundleOutsideOrganizationPredicate,
+		bundleID, bundleID, orgID, orgID, string(store.BindingActive),
+	).Scan(&claimed)
+	if err != nil {
+		return false, fmt.Errorf("check bundle ownership: %w", err)
+	}
+	return claimed, nil
+}
+
 func (s *bundleStore) List(context.Context, store.BundleListFilter) (*store.BundlePage, error) {
 	return nil, errors.New("sqlite bundle listing is unsupported")
 }
@@ -383,3 +428,5 @@ func (s *bundleStore) List(context.Context, store.BundleListFilter) (*store.Bund
 func (s *bundleStore) UpdateStatusTx(_ *gorm.DB, _ string, _, _ store.BundleStatus, _ string) error {
 	return errors.New("sqlite bundle status transactions are unsupported")
 }
+
+// see store.ReachableBundlePredicate for the contract

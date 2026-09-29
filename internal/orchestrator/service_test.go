@@ -172,6 +172,14 @@ func seedDefinition(t *testing.T, st store.Store) {
 	err := st.Definitions().Create(context.Background(), def, nil)
 	require.NoError(t, err)
 
+	// TASK-215: an operation may only reference a bundle its organization can reach.
+	// Real deployments get that from the submission flow, which sets the definition's
+	// current_bundle_id; the fixture has to say the same thing. Harnesses that never seed
+	// bundles (the cancel/revoke ones) keep working -- nothing to link.
+	if _, bundleErr := st.Bundles().Get(context.Background(), "bundle-001"); bundleErr == nil {
+		linkCurrentBundle(t, st, def.ID, "bundle-001")
+	}
+
 	revision := &store.ValuesRevision{
 		ID:                  "vr-001",
 		ReleaseDefinitionID: def.ID,
@@ -225,7 +233,11 @@ func seedValuesRevision(
 	}
 }
 
-func upgradeRequest(valuesRevisionID string) *connect.Request[orchestratorv1.CreateOperationRequest] {
+func upgradeRequest(t *testing.T, st store.Store, valuesRevisionID string) *connect.Request[orchestratorv1.CreateOperationRequest] {
+	t.Helper()
+	// TASK-215: the upgrade bundle becomes the definition's current bundle in the real
+	// submission flow; without that the operation would reference an unreachable bundle.
+	linkCurrentBundle(t, st, "def-001", "bundle-upgrade")
 	req := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:           "UPGRADE",
 		BundleId:                "bundle-upgrade",
@@ -354,6 +366,7 @@ func TestCreateOperation_ConcurrentUpgradeOnlyOneAccepted(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
+	linkCurrentBundle(t, st, "def-001", "bundle-upgrade")
 	seedUpgradeInventory(t, st)
 	seedValuesRevision(t, st, "vr-concurrent", "def-001", store.ValuesStatusApproved)
 	// An active operator keeps the accepted operation non-terminal (runUpgrade
@@ -370,7 +383,7 @@ func TestCreateOperation_ConcurrentUpgradeOnlyOneAccepted(t *testing.T) {
 	results := make(chan error, requests)
 	for i := range requests {
 		go func(i int) {
-			req := upgradeRequest("vr-concurrent")
+			req := upgradeRequest(t, st, "vr-concurrent")
 			req.Header().Set("Idempotency-Key", fmt.Sprintf("idem-concurrent-%d", i))
 			_, err := svc.CreateOperation(adminCtx(), req)
 			results <- err
@@ -490,7 +503,7 @@ func TestCreateOperation_UpgradeValidation(t *testing.T) {
 			case "values revision must belong to definition":
 				valuesID = "vr-other"
 			}
-			req := upgradeRequest(valuesID)
+			req := upgradeRequest(t, st, valuesID)
 			if tt.mutate != nil {
 				tt.mutate(req.Msg)
 			}
@@ -538,7 +551,7 @@ func TestCreateOperation_UpgradeDoesNotMutateOtherDefinition(t *testing.T) {
 	}
 	require.NoError(t, st.Definitions().Create(context.Background(), other, nil))
 
-	resp, err := svc.CreateOperation(adminCtx(), upgradeRequest("vr-approved"))
+	resp, err := svc.CreateOperation(adminCtx(), upgradeRequest(t, st, "vr-approved"))
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
@@ -597,6 +610,7 @@ func TestCreateOperation_UpgradeRunsPreflightThenDispatchesExecute(t *testing.T)
 		CreatedAt: time.Now().UTC(),
 		Images:    []store.BundleImage{{Ref: "registry.example.com/app", Digest: "sha256:img", ValuesPath: "image.repository"}},
 	}))
+	linkCurrentBundle(t, st, "def-001", "bundle-upgrade-img")
 
 	resp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:           "UPGRADE",
@@ -683,6 +697,7 @@ func TestCreateOperation_UpgradeCreationPreCreatesNoArtifactDispatch(t *testing.
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
+	linkCurrentBundle(t, st, "def-001", "bundle-upgrade")
 	seedUpgradeInventory(t, st)
 
 	// No operators registered.
@@ -729,6 +744,7 @@ func TestCreateOperation_UpgradeTerminalAndCancelRegression(t *testing.T) {
 		CreatedAt: time.Now().UTC(),
 		Images:    []store.BundleImage{{Ref: "registry.example.com/app", Digest: "sha256:img", ValuesPath: "image.repository"}},
 	}))
+	linkCurrentBundle(t, st, "def-001", "bundle-upgrade-img")
 
 	createUpgrade := func(key string) string {
 		resp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
@@ -1009,6 +1025,33 @@ func seedTestBundle(t *testing.T, st store.Store, id string) string {
 		ChartRef: "nginx", ChartDigest: "sha256:" + digest, CreatedAt: time.Now().UTC(),
 	}))
 	return "sha256:" + digest
+}
+
+// linkCurrentBundle gives a fixture the relationship the OPERATION-CREATION unit of work
+// will establish (TASK-215): the definition owns the bundle. It is a fixture convenience,
+// NOT a mirror of some earlier product step -- no product path sets current_bundle_id
+// before CreateOperation (an independent review proved that, which is why requiring
+// reachability up front was a deadlock).
+func linkCurrentBundle(t *testing.T, st store.Store, definitionID, bundleID string) {
+	t.Helper()
+	_, err := st.Definitions().SetCurrentBundle(context.Background(), definitionID, bundleID)
+	require.NoError(t, err)
+}
+
+// forceCurrentBundle writes the column directly to build a state the fixture needs and the
+// product does not produce: a definition whose current bundle is not validated.
+// SetCurrentBundle applies the REQ-067 decision table and refuses those, and an
+// independent review found no writer that turns a validated bundle back into
+// received/rejected, so this shape is effectively unreachable in production. That is why
+// it is named "force": assertions resting on it (the status-gate cases, and the
+// claimed-by-another-organization case) say so explicitly.
+func forceCurrentBundle(t *testing.T, st store.Store, definitionID, bundleID string) {
+	t.Helper()
+	sqliteStore, ok := st.(*sqlitestore.Store)
+	require.True(t, ok, "the raw fallback needs the SQLite store")
+	_, err := sqliteStore.DB().ExecContext(context.Background(),
+		`UPDATE release_definitions SET current_bundle_id = ? WHERE id = ?`, bundleID, definitionID)
+	require.NoError(t, err)
 }
 
 func TestCreateOperation_InstallRequiresApprovedRevision(t *testing.T) {
@@ -2190,7 +2233,7 @@ func TestCreateOperation_RevisionConflict(t *testing.T) {
 	seedUpgradeInventory(t, st) // inventory revision = 1
 	seedValuesRevision(t, st, "vr-revconf", "def-001", store.ValuesStatusApproved)
 
-	req := upgradeRequest("vr-revconf")
+	req := upgradeRequest(t, st, "vr-revconf")
 	req.Msg.ExpectedCurrentRevision = 5 // does not match inventory revision 1
 	_, err := svc.CreateOperation(adminCtx(), req)
 	require.Error(t, err)
@@ -2213,6 +2256,7 @@ func TestCreateOperation_ChartMismatch(t *testing.T) {
 		DigestValue: fmt.Sprintf("%064x", 91), Status: store.BundleValidated,
 		ChartRef: "nginx-ingress", CreatedAt: time.Now().UTC(),
 	}))
+	linkCurrentBundle(t, st, "def-001", "bundle-chart-mismatch")
 
 	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INSTALL",
@@ -2235,6 +2279,7 @@ func TestCreateOperation_BundleNotReady(t *testing.T) {
 		DigestValue: fmt.Sprintf("%064x", 92), Status: store.BundleReceived,
 		ChartRef: "nginx", CreatedAt: time.Now().UTC(),
 	}))
+	forceCurrentBundle(t, st, "def-001", "bundle-received")
 
 	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INSTALL",
@@ -2257,6 +2302,7 @@ func TestCreateOperation_BundleRejected(t *testing.T) {
 		DigestValue: fmt.Sprintf("%064x", 93), Status: store.BundleRejected,
 		ChartRef: "nginx", CreatedAt: time.Now().UTC(),
 	}))
+	forceCurrentBundle(t, st, "def-001", "bundle-rejected")
 
 	_, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INSTALL",
@@ -2572,6 +2618,7 @@ func TestCreateOperation_UpgradeWaitsForPreflight(t *testing.T) {
 		Status: store.BundleValidated, ChartRef: "nginx", ChartDigest: "sha256:" + digest,
 		CreatedAt: time.Now().UTC(),
 	}))
+	linkCurrentBundle(t, st, "def-001", "bundle-upgrade-wait")
 
 	resp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:           "UPGRADE",
