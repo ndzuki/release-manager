@@ -45,6 +45,7 @@ e2e-results/
 # Patterns are root-anchored cmd/ basenames; `api` is deliberately absent because a
 # bare `api` pattern would also match the tracked api/ directory.
 /auth
+/storesurface
 /devseed
 /e2e
 /imagecheck
