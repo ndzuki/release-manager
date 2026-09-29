@@ -24,7 +24,7 @@
 # web/, docs/, deploy/, migrations/, scripts/, test/, configs/, .github/) or ends
 # with a known file extension. Bare names (`dev.sh`, `baseline.json`), Go and npm
 # import paths (`os/exec`, `@connectrpc/connect`) and
-# knowledge-base references (`Design/glossary.md`, `Notes/CONTEXT.md`) are
+# knowledge-base references (`Notes/CONTEXT.md`, `Notes/decisions/ADR-*.md`) are
 # therefore not asserted about, and neither are generated output roots (bin/,
 # dist/, data/, coverage/), which exist only after a build.
 #

@@ -316,7 +316,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
   紧急变更走同一条信任判定：`internal/orchestrator/emergency.go:662`。
   ⚠️ **更正（V1 处置，2026-09-28）**：本节曾声称存在第二道"**preflight 无条件 fail closed**"闸门（引 `internal/preflight/service.go:145-169`）。<!-- check-docs:ignore 该文件已随 V1 处置删除，此处是历史引用的更正说明 -->
   该包**零 importer、从未在生产路径上生效**，已随
-  ADR-024 的 V1 处置删除（`Notes/adr/ADR-024-artifact-preflight-executes-in-operator.md`）⇒
+  ADR-024 的 V1 处置删除（`Notes/decisions/ADR-024-artifact-preflight-executes-in-operator.md`）⇒
   **本次删除不改变运行时安全姿态**，只是消除了"文档声称有一道更强闸门"的误导。
   剩余风险：**目标环境标签由服务端配置决定**（`internal/orchestrator/service.go:268` 使用 `s.targetEnv`），
   非 production 标签下的未签名/不可验证制品会被放行到执行链（只留 `policy_warning` 审计）。
@@ -454,7 +454,7 @@ TASK-103/ADR-021），service 身份无法写入。因此出站拒绝的「审�
 | `npm audit` / `dependency-review-action` / OpenSSF Scorecard | **无** | workflow 与 package scripts 中均无 |
 | `vendor/` 锁定源码 | **无**（依赖 proxy/网络拉取） | 仓库无 `vendor/` 目录 |
 | 二进制版本注入（`-ldflags` version/commit） | **无** version stamp | `Makefile:54-76` 的 6 个 `build-*` target 与 `grep -c ldflags Makefile`（=0）；镜像构建只传 `-s -w`（`deploy/docker/Dockerfile.operator:8`） |
-| Actions 提交固定（SHA pin） | **无**：全部按 tag 引用（`checkout@v7` ×12、`setup-go@v7` ×11、`buf-setup-action@v1.50.0`、`upload-artifact@v7`、`cache@v6`、`golangci-lint-action@v9.3.0`，共 0 处 `@sha256:`） | `grep -n "uses:" .github/workflows/*` |
+| Actions 提交固定（SHA pin） | **部分**：两个非官方 action 固定到完整 commit SHA —— `bufbuild/buf-setup-action` ×4、`golangci/golangci-lint-action` ×1（共 **5** 处 40 位 SHA，且两者分别等于各自最新 tag `v1.50.0` / `v9.3.0`）；官方 `actions/*` 与 `github/codeql-action` 仍按 major tag（`checkout@v7` ×17、`setup-go@v7` ×13、`upload-artifact@v7` ×2、`cache/restore@v6` ×2、`cache@v6` ×1、`codeql-action@v4` ×2；工作树另有**尚未提交**的 `setup-node@v7` ×1） | `git show HEAD:.github/workflows/test.yml \| grep -c '@[0-9a-f]\{40\}'`（=5）、`grep -rhoE "uses: [^ ]+" .github/workflows/*.yml` |
 | 基础镜像按 digest 固定 | **1 / 16**：仅 `deploy/docker/Dockerfile.operator:10`；其余 `FROM` 仅 tag | 各 `deploy/docker/Dockerfile.*` |
 | 产品侧漏洞扫描适配器 | 只有 `NoopScanner`（恒 0 findings）且未挂载 | §3.9 末条 |
 
