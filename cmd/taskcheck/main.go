@@ -65,7 +65,7 @@ func main() {
 		}
 		reqResult := taskcheck.CheckRequirements(reqs)
 		result.Findings = append(result.Findings, reqResult.Findings...)
-		result.Checked += reqResult.Checked
+		result.RequirementsChecked += reqResult.Checked
 	}
 	taskcheck.SortFindings(result.Findings)
 
@@ -83,14 +83,25 @@ func main() {
 		}
 	}
 
-	fmt.Printf("taskcheck: %d completed card(s) checked, %d verified, %d violation(s), %d unverified\n",
-		result.Checked, result.Verified, violations, unverified)
+	fmt.Println(summaryLine(*result, violations, unverified))
 	if result.Failed(opts) {
 		if violations == 0 && unverified > 0 {
 			fmt.Fprintln(os.Stderr, "taskcheck: set ALLOW_UNVERIFIED_TASKS=1 to accept unverified merge evidence explicitly")
 		}
 		os.Exit(1)
 	}
+}
+
+// summaryLine renders the run summary. It reports cards and requirement records separately:
+// they are different populations, and folding one into the other made the reported "card"
+// count describe neither.
+func summaryLine(result taskcheck.Result, violations, unverified int) string {
+	checked := fmt.Sprintf("%d completed card(s)", result.Checked)
+	if result.RequirementsChecked > 0 {
+		checked += fmt.Sprintf(" and %d requirement record(s)", result.RequirementsChecked)
+	}
+	return fmt.Sprintf("taskcheck: %s checked, %d verified, %d violation(s), %d unverified",
+		checked, result.Verified, violations, unverified)
 }
 
 // loadEvidence reads the git and gh evidence files. gh evidence is best-effort:

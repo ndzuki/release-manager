@@ -222,9 +222,15 @@ func (f Finding) String() string {
 
 // Result is the outcome of a check run.
 type Result struct {
-	Checked  int
-	Verified int
-	Findings []Finding
+	// Checked counts the task cards this run looked at.
+	Checked int
+	// RequirementsChecked counts the requirement records when the caller asked for the REQ
+	// side of the ledger as well. It is a separate counter on purpose: the two are different
+	// things, and adding them together made the summary claim a card count that no longer
+	// described the card set (review of TASK-227 surfaced the 265-vs-203 mismatch).
+	RequirementsChecked int
+	Verified            int
+	Findings            []Finding
 }
 
 // Failed reports whether the run should exit non-zero.
