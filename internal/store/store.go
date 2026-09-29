@@ -1472,7 +1472,6 @@ type TrustRootStore interface {
 	Update(ctx context.Context, r *TrustRoot) error
 	GetPolicy(ctx context.Context, env string) (*TrustPolicyMeta, error)
 	BumpPolicy(ctx context.Context, env string) (version int64, epoch int64, err error)
-	BumpRevocationEpoch(ctx context.Context, env string) (int64, error)
 	// TransitionLiveRoot atomically moves a live root (active or grace) to the
 	// given terminal state and bumps the environment's policy version — or the
 	// revocation epoch when bumpRevocation is true — in a single transaction.

@@ -175,54 +175,6 @@ SELECT version, revocation_epoch FROM trust_policies WHERE environment = ?
 	return version, epoch, nil
 }
 
-// BumpRevocationEpoch atomically increments the revocation epoch.
-func (s *trustRootStore) BumpRevocationEpoch(ctx context.Context, env string) (int64, error) {
-	tx, err := s.gorm.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // Rollback on committed tx is a no-op.
-
-	// Ensure the policy row exists.
-	_, err = tx.ExecContext(ctx, `
-INSERT INTO trust_policies (environment, version, revocation_epoch, updated_at)
-VALUES (?, 0, 0, ?)
-ON CONFLICT (environment) DO NOTHING
-`, env, time.Now().UTC().Format(time.RFC3339))
-	if err != nil {
-		return 0, fmt.Errorf("ensure trust_policy: %w", err)
-	}
-
-	result, err := tx.ExecContext(ctx, `
-UPDATE trust_policies
-SET revocation_epoch = revocation_epoch + 1, updated_at = ?
-WHERE environment = ?
-`, time.Now().UTC().Format(time.RFC3339), env)
-	if err != nil {
-		return 0, fmt.Errorf("bump revocation epoch: %w", err)
-	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("bump epoch rows_affected: %w", err)
-	}
-	if n == 0 {
-		return 0, fmt.Errorf("trust_policy not found for env %q", env)
-	}
-
-	row := tx.QueryRowContext(ctx, `
-SELECT revocation_epoch FROM trust_policies WHERE environment = ?
-`, env)
-	var newEpoch int64
-	if err := row.Scan(&newEpoch); err != nil {
-		return 0, fmt.Errorf("read bumped epoch: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit bump epoch: %w", err)
-	}
-	return newEpoch, nil
-}
-
 // TransitionLiveRoot atomically moves a live root (active or grace) to a
 // terminal state, enforcing the "at least one live root" invariant and bumping
 // the policy version or revocation epoch in the same transaction (AC-043-03).

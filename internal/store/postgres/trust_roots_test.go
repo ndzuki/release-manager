@@ -15,8 +15,9 @@ import (
 )
 
 // Trust root store contract tests (REQ-043). These mirror the sqlite suite and
-// additionally exercise transaction atomicity of BumpPolicy / BumpRevocationEpoch
-// against a real PostgreSQL server (POSTGRES_TEST_DSN, skipped when unset).
+// additionally exercise transaction atomicity of BumpPolicy and of the
+// revocation-epoch advance through TransitionLiveRoot against a real PostgreSQL
+// server (POSTGRES_TEST_DSN, skipped when unset).
 // Per extended/databases/sql-guide.md: transactions must be atomic; concurrent
 // bumps must not lose updates.
 
@@ -152,14 +153,34 @@ func TestTrustRootBumpPolicy(t *testing.T) {
 func TestTrustRootBumpRevocationEpoch(t *testing.T) {
 	st := setupStore(t)
 	ctx := t.Context()
+	now := time.Now().UTC()
 
-	epoch, err := st.TrustRoots().BumpRevocationEpoch(ctx, "production")
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), epoch)
+	// Revocations advance the environment's revocation epoch through the canonical
+	// transition (production path: trust/service.go RevokeRoot ->
+	// TransitionLiveRoot(..., bumpRevocation=true)). A keeper root keeps the
+	// environment live so the last-root guard does not refuse the transition.
+	require.NoError(t, st.TrustRoots().Create(ctx, &store.TrustRoot{
+		ID: uuid.NewString(), Environment: "production", KeyID: uuid.NewString(), Issuer: "ci",
+		State: store.TrustRootActive, ValidFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
+	}))
 
-	epoch, err = st.TrustRoots().BumpRevocationEpoch(ctx, "production")
+	first := &store.TrustRoot{
+		ID: uuid.NewString(), Environment: "production", KeyID: uuid.NewString(), Issuer: "ci",
+		State: store.TrustRootActive, ValidFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, st.TrustRoots().Create(ctx, first))
+	meta, err := st.TrustRoots().TransitionLiveRoot(ctx, first.ID, "production", store.TrustRootRevoked, &now, true)
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), epoch)
+	assert.Equal(t, int64(1), meta.RevocationEpoch)
+
+	second := &store.TrustRoot{
+		ID: uuid.NewString(), Environment: "production", KeyID: uuid.NewString(), Issuer: "ci",
+		State: store.TrustRootActive, ValidFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, st.TrustRoots().Create(ctx, second))
+	meta, err = st.TrustRoots().TransitionLiveRoot(ctx, second.ID, "production", store.TrustRootRevoked, &now, true)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), meta.RevocationEpoch)
 }
 
 func TestTrustRootGetPolicyDefault(t *testing.T) {
@@ -205,18 +226,37 @@ func TestTrustRootBumpPolicyConcurrent(t *testing.T) {
 
 // TestTrustRootBumpRevocationEpochConcurrent mirrors the policy test for the
 // revocation epoch (AC-043-04 depends on epoch monotonicity for cache invalidation).
+// Each worker revokes its own root through the canonical transition while a set of
+// keeper roots keeps the environment live (TransitionLiveRoot refuses a revocation
+// that would leave the environment with no live root).
 func TestTrustRootBumpRevocationEpochConcurrent(t *testing.T) {
 	st := setupStore(t)
 	ctx := t.Context()
+	now := time.Now().UTC()
 
 	const workers = 8
+	for range workers {
+		require.NoError(t, st.TrustRoots().Create(ctx, &store.TrustRoot{
+			ID: uuid.NewString(), Environment: "concurrent-env", KeyID: uuid.NewString(), Issuer: "ci",
+			State: store.TrustRootActive, ValidFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
+		}))
+	}
+	roots := make([]*store.TrustRoot, workers)
+	for i := range roots {
+		roots[i] = &store.TrustRoot{
+			ID: uuid.NewString(), Environment: "concurrent-env", KeyID: uuid.NewString(), Issuer: "ci",
+			State: store.TrustRootActive, ValidFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
+		}
+		require.NoError(t, st.TrustRoots().Create(ctx, roots[i]))
+	}
+
 	var wg sync.WaitGroup
 	errs := make(chan error, workers)
-	for range workers {
+	for i := range roots {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := st.TrustRoots().BumpRevocationEpoch(ctx, "concurrent-env")
+			_, err := st.TrustRoots().TransitionLiveRoot(ctx, roots[i].ID, "concurrent-env", store.TrustRootRevoked, &now, true)
 			errs <- err
 		}()
 	}
@@ -228,8 +268,8 @@ func TestTrustRootBumpRevocationEpochConcurrent(t *testing.T) {
 
 	meta, err := st.TrustRoots().GetPolicy(ctx, "concurrent-env")
 	require.NoError(t, err)
-	assert.Equal(t, int64(workers), meta.RevocationEpoch, "no lost update: epoch must equal bump count")
-	// BumpRevocationEpoch only touches the epoch; the lazy bootstrap row keeps
+	assert.Equal(t, int64(workers), meta.RevocationEpoch, "no lost update: epoch must equal revocation count")
+	// The revocation transition only touches the epoch; the lazy bootstrap row keeps
 	// version 0 until a BumpPolicy happens (REQ-043: revoke bumps epoch, not version).
 	assert.Equal(t, int64(0), meta.Version)
 }

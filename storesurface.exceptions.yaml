@@ -221,10 +221,6 @@ exceptions:
     method: VulnerabilityExceptions
     reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
     review_by: "2026-12-31"
-  - interface: TrustRootStore
-    method: BumpRevocationEpoch
-    reason: "[superseded] revocation epoch 推进走 TrustRoots().TransitionLiveRoot(..., bumpRevocation=true)（trust/service.go），该方法无调用者"
-    review_by: "2026-12-31"
   - interface: ValuesApprovalReader
     method: ListAuditOutbox
     reason: "[unwired-read] 审计 outbox 读取无调用者"

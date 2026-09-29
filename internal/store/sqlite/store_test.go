@@ -1740,14 +1740,34 @@ func TestTrustRootBumpPolicy(t *testing.T) {
 func TestTrustRootBumpRevocationEpoch(t *testing.T) {
 	st := setupStore(t)
 	ctx := t.Context()
+	now := time.Now().UTC()
 
-	epoch, err := st.TrustRoots().BumpRevocationEpoch(ctx, "production")
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), epoch)
+	// Revocations advance the environment's revocation epoch through the canonical
+	// transition (production path: trust/service.go RevokeRoot ->
+	// TransitionLiveRoot(..., bumpRevocation=true)). A keeper root keeps the
+	// environment live so the last-root guard does not refuse the transition.
+	require.NoError(t, st.TrustRoots().Create(ctx, &store.TrustRoot{
+		ID: "root-epoch-keeper", Environment: "production", KeyID: "key-epoch-keeper", Issuer: "ci",
+		State: store.TrustRootActive, ValidFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
+	}))
 
-	epoch, err = st.TrustRoots().BumpRevocationEpoch(ctx, "production")
+	first := &store.TrustRoot{
+		ID: "root-epoch-1", Environment: "production", KeyID: "key-epoch-1", Issuer: "ci",
+		State: store.TrustRootActive, ValidFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, st.TrustRoots().Create(ctx, first))
+	meta, err := st.TrustRoots().TransitionLiveRoot(ctx, first.ID, "production", store.TrustRootRevoked, &now, true)
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), epoch)
+	assert.Equal(t, int64(1), meta.RevocationEpoch)
+
+	second := &store.TrustRoot{
+		ID: "root-epoch-2", Environment: "production", KeyID: "key-epoch-2", Issuer: "ci",
+		State: store.TrustRootActive, ValidFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, st.TrustRoots().Create(ctx, second))
+	meta, err = st.TrustRoots().TransitionLiveRoot(ctx, second.ID, "production", store.TrustRootRevoked, &now, true)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), meta.RevocationEpoch)
 }
 
 func TestTrustRootGetPolicyDefault(t *testing.T) {
