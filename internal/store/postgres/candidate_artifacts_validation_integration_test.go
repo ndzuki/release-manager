@@ -95,3 +95,43 @@ func TestMarkValidatedForBundleStampsLinkedCandidates(t *testing.T) {
 	_, err = st.CandidateArtifacts().MarkValidatedForBundleTx(st.GORM(), "", markedAt)
 	assert.ErrorContains(t, err, "empty bundle id")
 }
+
+// TASK-220: production binds a candidate artifact to its bundle through
+// bundle_candidate_artifacts (the artifact row has no bundle column on this engine), so
+// anything resolving trust through the delivering bundle has to read that table.
+func TestBundlesForArtifactReadsTheLinkTable(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+
+	bundle := &store.ReleaseBundle{
+		ID: uuid.NewString(), Name: "link-bundle", DigestAlg: "sha256",
+		DigestValue: uuid.NewString(), Status: store.BundleValidated, CreatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, st.Bundles().Create(ctx, bundle))
+
+	linked := &store.CandidateArtifact{
+		ID: uuid.NewString(), ArtifactType: store.ArtifactImage, Digest: uuid.NewString(),
+		Ref:       "registry.example.com/team/api@" + uuid.NewString(),
+		CreatedAt: time.Now().UTC(), LastSeenAt: time.Now().UTC(),
+	}
+	unlinked := &store.CandidateArtifact{
+		ID: uuid.NewString(), ArtifactType: store.ArtifactImage, Digest: uuid.NewString(),
+		Ref:       "registry.example.com/team/other@" + uuid.NewString(),
+		CreatedAt: time.Now().UTC(), LastSeenAt: time.Now().UTC(),
+	}
+	require.NoError(t, st.CandidateArtifacts().Create(ctx, linked))
+	require.NoError(t, st.CandidateArtifacts().Create(ctx, unlinked))
+	require.NoError(t, st.CandidateArtifacts().LinkToBundle(ctx, linked.ID, bundle.ID))
+
+	bundleIDs, err := st.CandidateArtifacts().BundlesForArtifact(ctx, linked.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{bundle.ID}, bundleIDs)
+
+	none, err := st.CandidateArtifacts().BundlesForArtifact(ctx, unlinked.ID)
+	require.NoError(t, err)
+	assert.Empty(t, none, "an artifact no bundle delivered resolves to no bundle")
+
+	unknown, err := st.CandidateArtifacts().BundlesForArtifact(ctx, uuid.NewString())
+	require.NoError(t, err)
+	assert.Empty(t, unknown)
+}

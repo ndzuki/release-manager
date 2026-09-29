@@ -16,6 +16,7 @@ import (
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	"github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/store"
+	"github.com/ndzuki/release-manager/internal/trust"
 )
 
 type recordingEmergencyDispatcher struct {
@@ -33,6 +34,16 @@ func (d *recordingEmergencyDispatcher) DispatchEmergency(_ context.Context, _ st
 
 // seedEmergencyTestArtifact seeds a validated + trusted candidate image so the
 // canonical ExecuteEmergencyChange artifact resolution succeeds.
+// emergencyTestPolicyVersion derives the policy version the way the production writer does.
+// Fixtures that hard-code it are how the gate's "v1" stub stayed undetected: the records
+// matched the stub instead of the writer, so a green suite proved nothing (TASK-220).
+func emergencyTestPolicyVersion(t *testing.T, st store.Store) string {
+	t.Helper()
+	meta, err := st.TrustRoots().GetPolicy(t.Context(), "staging")
+	require.NoError(t, err)
+	return trust.PolicyVersion(meta.Version)
+}
+
 func seedEmergencyTestArtifact(t *testing.T, st store.Store) {
 	t.Helper()
 	validatedAt := time.Now().UTC()
@@ -42,7 +53,7 @@ func seedEmergencyTestArtifact(t *testing.T, st store.Store) {
 		ValidatedAt: &validatedAt, SourceID: "source-1",
 	}))
 	require.NoError(t, st.Verifications().Create(t.Context(), &store.VerificationRecord{
-		ID: uuid.NewString(), ArtifactDigest: "sha256:abc", PolicyVersion: "v1",
+		ID: uuid.NewString(), ArtifactDigest: "sha256:abc", PolicyVersion: emergencyTestPolicyVersion(t, st),
 		Status: store.VerificationTrusted, RevocationEpoch: 0,
 	}))
 }

@@ -125,26 +125,18 @@ test('Inventory → Emergency → Execute → Operation Detail (REQUIRE_PROMOTIO
   await page.getByRole('checkbox', { name: /我已确认/ }).check();
   await page.getByRole('button', { name: '确认提交' }).click();
 
-  if (process.env.E2E_TRUST_GATE_OPEN === '1') {
-    // TASK-220 landed: the submit is accepted and the console moves to the operation.
-    // Transaction acceptance → Operation Detail, not the Operator result.
-    await page.waitForURL(/\/operations\//);
-    await expect(page.getByText('紧急变更结果')).toBeVisible();
-    await expect(page.getByText('已受理（执行异步进行）')).toBeVisible();
-    return;
-  }
-
-  // TASK-220 (open): the server looks the artifact up by IMAGE digest while the only
-  // production writer stores the BUNDLE digest, so submit is refused with
-  // artifact_not_trusted unless the artifact was verified under its own digest. Asserting
-  // that refusal here keeps this spec green *and* keeps the walk up to the gate under
-  // regression; whoever fixes TASK-220 flips E2E_TRUST_GATE_OPEN=1 and gets the success
-  // path above. Do not delete this branch before TASK-220 lands.
-  // The refusal is rendered both in the page summary bar and inside the dialog; scope to
-  // the dialog so the assertion names the exact control the operator is looking at.
-  const dialog = page.getByLabel('确认紧急变更');
-  await expect(dialog.getByText('制品未通过信任验证')).toBeVisible();
-  await expect(dialog.getByRole('button', { name: '确认提交' })).toBeDisabled();
+  // Transaction acceptance → Operation Detail, not the Operator result.
+  //
+  // This used to be unreachable: the trust gate looked the artifact up by image digest with
+  // a hard-coded policy version ("v1") while the only writer stored the bundle digest under
+  // the live version ("1"), so a correctly signed release was refused with
+  // artifact_not_trusted (TASK-220). The gate now resolves the delivering bundle and reads
+  // the live policy version, and this assertion is the end-to-end check that a signed
+  // release can actually be changed in an emergency. It cannot run without a bound release
+  // and a fresh observation; when those preconditions are missing the case skips above.
+  await page.waitForURL(/\/operations\//);
+  await expect(page.getByText('紧急变更结果')).toBeVisible();
+  await expect(page.getByText('已受理（执行异步进行）')).toBeVisible();
 });
 
 test('Convergence: Prepare → ValuesEditor draft → Submit → cross-actor Approve', async ({ browser }) => {

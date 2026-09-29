@@ -106,6 +106,24 @@ func (s *stubStore) GetByDigestPolicyAndSignature(
 	return rec, nil
 }
 
+// GetLatestVerdictByDigestAndPolicy mirrors the real store's verdict-only lookup: a record
+// that states no verdict (signature_missing, verification_unavailable) is not a verdict, so
+// it is reported as absent (TASK-220).
+func (s *stubStore) GetLatestVerdictByDigestAndPolicy(
+	ctx context.Context,
+	artifactDigest string,
+	policyVersion string,
+) (*store.VerificationRecord, error) {
+	rec, err := s.GetByDigestAndPolicy(ctx, artifactDigest, policyVersion)
+	if err != nil {
+		return nil, err
+	}
+	if rec.Status != store.VerificationTrusted && rec.Status != store.VerificationRejected {
+		return nil, store.ErrNotFound
+	}
+	return rec, nil
+}
+
 // AC-012-01: Digest mismatch → rejected.
 func TestVerify_DigestMismatch(t *testing.T) {
 	v := NewStubVerifier(newStubStore(), nil, logger())

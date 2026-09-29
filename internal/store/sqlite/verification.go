@@ -25,6 +25,23 @@ func (s *verificationStore) Create(ctx context.Context, rec *store.VerificationR
 }
 
 // GetByDigestPolicyAndSignature retrieves the latest verification record for one signature identity.
+// GetLatestVerdictByDigestAndPolicy: see the interface comment.
+func (s *verificationStore) GetLatestVerdictByDigestAndPolicy(
+	ctx context.Context,
+	artifactDigest string,
+	policyVersion string,
+) (*store.VerificationRecord, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, artifact_digest, policy_version, signature_identity, status, issuer, subject, summary, root_id, key_id, revocation_epoch, created_at
+		 FROM verification_records
+		 WHERE artifact_digest = ? AND policy_version = ? AND status IN (?, ?)
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT 1`,
+		artifactDigest, policyVersion, string(store.VerificationTrusted), string(store.VerificationRejected),
+	)
+	return scanVerificationRecord(row)
+}
+
 func (s *verificationStore) GetByDigestPolicyAndSignature(
 	ctx context.Context,
 	artifactDigest string,
