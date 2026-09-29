@@ -60,20 +60,25 @@ in-memory storage + `kubefake`，**不需要集群**：
 （直接 `store.X().Create`），写侧的用例只验证自己写的那部分，于是「没有写入者」或
 「写入键与查询键不一致」都能长期不被发现。2026-09-29 一次系统性排查
 （TASK-221）分四遍扫描（读侧谓词 21 项、扩展表 5 张、store 接口 225 个方法、契约面 105 个 rpc）
-共查出 **4 处**这类缺陷：
+共查出 **3 处**这类缺陷（另有 1 处曾被判为同类、经复核为**假阳性**并已撤回，见下）：
 
 | 缺陷 | 读侧要求 | 写侧实际 | 方向 |
 | --- | --- | --- | --- |
 | TASK-218 | `candidate_artifacts.validated_at IS NOT NULL` | **修复前**生产代码无人写入（现已由 `MarkValidatedForBundleTx` + validation worker 补齐） | fail-closed（功能不可用） |
 | TASK-220 | `verifications` 按**镜像** digest 查 `Trusted` | 唯一写入者按 **bundle** digest 写 | fail-closed（功能不可用） |
-| TASK-222 | `convergence_tasks` 的 `pending_promotion` | 生产代码无人创建 | **fail-open（门禁静默失效）** |
 | TASK-223 | `bundle_aliases` 的 `GetByAlias` 回落 | 全仓（含迁移）无任何 INSERT | 死路（legacy id/digest 永远 404） |
 
 **落地方式**（写这类测试时的最小形态）：
 1. 用**生产写入路径**造数据（如 `validation_worker` 的 outbox 周期、bundle 提交的 UoW），
    而不是直接 `Create` 夹具行；确实只能直接构造时，在测试名/注释里写明「这是夹具捷径」；
 2. 断言**读侧**（门禁函数、列表接口、RPC 响应）能看到或拒绝；
-3. 至少一条**负控制**：不该写入/不该触发的情况必须不写入、不触发（TASK-222 的 fail-open 正是缺这类断言）。
+3. 至少一条**负控制**：不该写入/不该触发的情况必须不写入、不触发。
+
+> **撤回的一例（方法论教训，2026-09-29）**：曾有第 4 处判断认为 `convergence_tasks` 在生产中无人创建
+> （`ConvergenceTasks().Create` 只有测试调用）⇒ 待收敛门禁 fail-open。复核发现该功能经**操作创建 UoW** 落库：
+> `internal/store/postgres/uow.go:127` 调 `insertConvergenceTask`（两引擎同形），而 `Create` 只是**未被使用的重复方法**。
+> 教训：按「接口方法的调用点」审计时，**同包内被 UoW/helper 调用的写路径不会出现在接口方法的调用点上**，
+> 会把「功能正常」误判为「无人实现」；下结论前必须回到 `INSERT`/`UPDATE` 语句本身核对。
 
 ## 命令矩阵
 
