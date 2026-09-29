@@ -42,9 +42,16 @@ type Verifier interface {
 	Verify(ctx context.Context, in Input) (*Output, error)
 }
 
-// StubVerifier is a test double for policy and cache semantics.
-// It does not perform cryptographic verification; production assembly uses
-// Ed25519Verifier with a live RootResolver.
+// StubVerifier is a test double for policy and cache semantics. It is constructed only by
+// tests (internal/orchestrator, internal/trust); production wires Ed25519Verifier with a live
+// RootResolver.
+//
+// It does not perform cryptographic verification, so it records no root: its verdicts carry
+// neither RootID nor KeyID. It also stores records under the policy version its caller passes
+// in (the pipeline input), which for these tests is trust.DefaultPolicy's static name rather
+// than the live meta version the Ed25519 verifier renders. Both differences are why a
+// StubVerifier verdict must never be relied on by a production gate -- the emergency gate
+// refuses an unattributable verdict outright (TASK-225).
 type StubVerifier struct {
 	st       store.VerificationStore
 	resolver RootResolver
@@ -233,53 +240,6 @@ func isTrustedIssuer(issuer string, trusted []string) bool {
 	return false
 }
 
-// StoreVerifier is a test-oriented persistence wrapper around another Verifier.
-// Production assembly uses Ed25519Verifier, which owns live-policy caching.
-type StoreVerifier struct {
-	inner  Verifier
-	st     store.VerificationStore
-	logger *slog.Logger
-}
-
-// NewStoreVerifier creates a StoreVerifier that caches results.
-func NewStoreVerifier(inner Verifier, st store.VerificationStore, logger *slog.Logger) *StoreVerifier {
-	return &StoreVerifier{inner: inner, st: st, logger: logger}
-}
-
-// Verify delegates to the inner verifier and persists the result.
-func (v *StoreVerifier) Verify(ctx context.Context, in Input) (*Output, error) {
-	out, err := v.inner.Verify(ctx, in)
-	if err != nil {
-		return nil, err
-	}
-
-	// Persist the verification result for future idempotent reuse.
-	// Use a deterministic ID based on digest + policy_version.
-	rec := out.Record
-	if rec == nil {
-		rec = &store.VerificationRecord{
-			ArtifactDigest:    in.Digest,
-			PolicyVersion:     in.Policy.PolicyVersion,
-			SignatureIdentity: signatureIdentity(in.SignatureRef),
-			Status:            out.Status,
-			Issuer:            issuerFromRef(in.SignatureRef),
-			Subject:           subjectFromRef(in.SignatureRef),
-			Summary:           out.Summary,
-			RootID:            out.RootID,
-			KeyID:             out.KeyID,
-			RevocationEpoch:   out.RevocationEpoch,
-		}
-	}
-
-	if err := v.st.Create(ctx, rec); err != nil {
-		v.logger.Warn("failed to persist verification record", "err", err)
-		// Non-fatal: verification result is still valid, just not cached.
-	}
-
-	out.Record = rec
-	return out, nil
-}
-
 func issuerFromRef(ref *commonv1.SignatureRef) string {
 	if ref == nil {
 		return ""
@@ -314,4 +274,3 @@ func StatusToProto(s store.VerificationStatus) commonv1.VerificationResult {
 
 // Compile-time check: StubVerifier implements Verifier.
 var _ Verifier = (*StubVerifier)(nil)
-var _ Verifier = (*StoreVerifier)(nil)

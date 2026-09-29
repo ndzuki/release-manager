@@ -44,9 +44,30 @@ func emergencyTestPolicyVersion(t *testing.T, st store.Store) string {
 	return trust.PolicyVersion(meta.Version)
 }
 
+// emergencyTestRoot is the live trust root the seeded verdict is attributed to, mirroring the
+// shipping verifier, which always records the root it matched (TASK-225: a verdict that cannot
+// be attributed to a live root is refused by the emergency gate).
+const emergencyTestRootID = "root-emergency-live"
+
+// seedEmergencyLiveRoot seeds the active root that trusted verdicts must be attributable to.
+func seedEmergencyLiveRoot(t *testing.T, st store.Store) *store.TrustRoot {
+	t.Helper()
+	if existing, err := st.TrustRoots().Get(t.Context(), emergencyTestRootID); err == nil {
+		return existing
+	}
+	root := &store.TrustRoot{
+		ID: emergencyTestRootID, Environment: "staging", KeyID: emergencyTestRootID + "-key",
+		PublicKeyPEM: "test-public-key", Issuer: "release-manager-ci", SubjectPattern: "*",
+		State: store.TrustRootActive, ValidFrom: time.Now().UTC().Add(-time.Hour),
+	}
+	require.NoError(t, st.TrustRoots().Create(t.Context(), root))
+	return root
+}
+
 func seedEmergencyTestArtifact(t *testing.T, st store.Store) {
 	t.Helper()
 	validatedAt := time.Now().UTC()
+	root := seedEmergencyLiveRoot(t, st)
 	require.NoError(t, st.CandidateArtifacts().Create(t.Context(), &store.CandidateArtifact{
 		ID: "artifact-img", ArtifactType: store.ArtifactImage,
 		Ref: "registry.example/team/api:1.0.0", Digest: "sha256:abc",
@@ -55,7 +76,66 @@ func seedEmergencyTestArtifact(t *testing.T, st store.Store) {
 	require.NoError(t, st.Verifications().Create(t.Context(), &store.VerificationRecord{
 		ID: uuid.NewString(), ArtifactDigest: "sha256:abc", PolicyVersion: emergencyTestPolicyVersion(t, st),
 		Status: store.VerificationTrusted, RevocationEpoch: 0,
+		RootID: root.ID, KeyID: root.KeyID,
 	}))
+}
+
+// TestExecuteEmergencyChangeRejectsVerdictFromRootThatIsNoLongerLive is the TASK-225 negative
+// control, and it pins the reachable shape of the defect: a root whose grace window has expired
+// is no longer used by the verifier (GetActiveByEnvironment excludes it), but expiry is not a
+// transition, so the policy version does not move and the stored verdict stays visible to the
+// gate's lookup. Before the liveness check, the epoch comparison alone accepted it.
+func TestExecuteEmergencyChangeRejectsVerdictFromRootThatIsNoLongerLive(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	seedEmergencyImageIdentity(t, st)
+	svc, _, _ = emergencyTestServiceFromExisting(t, svc, st)
+
+	root, err := st.TrustRoots().Get(t.Context(), emergencyTestRootID)
+	require.NoError(t, err)
+	expired := time.Now().UTC().Add(-time.Hour)
+	root.State = store.TrustRootGrace
+	root.GraceUntil = &expired
+	require.NoError(t, st.TrustRoots().Update(t.Context(), root))
+
+	// The verdict is still findable under the current policy version: this refusal is the
+	// liveness rule at work, not a lookup miss.
+	policy := emergencyTestPolicyVersion(t, st)
+	verdict, err := st.Verifications().GetLatestVerdictByDigestAndPolicy(t.Context(), "sha256:abc", policy)
+	require.NoError(t, err)
+	require.Equal(t, store.VerificationTrusted, verdict.Status)
+	live, err := st.TrustRoots().GetActiveByEnvironment(t.Context(), "staging", time.Now().UTC())
+	require.NoError(t, err)
+	require.Empty(t, live, "an expired grace window must not count as live")
+
+	_, err = svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyImageRequest("expired-grace-root"))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "no longer live")
+}
+
+// verdictRootIsLive is the rule behind the control above; it is also checked directly so the
+// key-id fallback cannot rot silently.
+func TestVerdictRootIsLive(t *testing.T) {
+	live := []*store.TrustRoot{{ID: "root-a", KeyID: "key-a"}}
+	tests := []struct {
+		name    string
+		verdict *store.VerificationRecord
+		want    bool
+	}{
+		{"root id matches a live root", &store.VerificationRecord{RootID: "root-a", KeyID: "key-a"}, true},
+		{"unknown root id is not live", &store.VerificationRecord{RootID: "root-b", KeyID: "key-a"}, false},
+		{"key id fallback when no root id", &store.VerificationRecord{KeyID: "key-a"}, true},
+		{"unknown key id is not live", &store.VerificationRecord{KeyID: "key-b"}, false},
+		{"unattributable verdict is not live", &store.VerificationRecord{}, false},
+		{"nil verdict is not live", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, verdictRootIsLive(live, tt.verdict))
+		})
+	}
 }
 
 func emergencyTestService(t *testing.T) (*Service, store.Store, *recordingEmergencyDispatcher) {
