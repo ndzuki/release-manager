@@ -778,9 +778,9 @@ func (s *Service) resolveEmergencyImage(
 // still live for the environment.
 //
 // A verdict with neither a root id nor a key id is refused: nothing can show it is still
-// authoritative, and the only shipping writer (the Ed25519 verifier) always records the root it
-// matched. The test-only StoreVerifier and StubVerifier do not, which is exactly why their
-// verdicts must not reach a production gate.
+// authoritative. The shipping Ed25519 verifier always records the root it matched; the
+// test-only StubVerifier records a root only on the path where a resolver is configured, which
+// is another reason a stub verdict must not reach a production gate.
 func verdictRootIsLive(liveRoots []*store.TrustRoot, verdict *store.VerificationRecord) bool {
 	if verdict == nil {
 		return false
@@ -902,11 +902,13 @@ func (s *Service) resolveEmergencyArtifact(ctx context.Context, artifactID strin
 	if verification.RevocationEpoch < meta.RevocationEpoch {
 		return nil, emergencyError(connect.CodeFailedPrecondition, "artifact_not_trusted", "candidate artifact verification is revoked")
 	}
-	// The epoch covers revocation. Retirement is separate and, until TASK-225, invisible here:
-	// retiring a root deliberately does NOT bump the epoch, so a verdict it signed still reads
-	// trusted and would authorise a change. The authoritative notion of "still trusted" is the
-	// same one the verifier uses when it refuses a cached record -- the root must be live
-	// (active, or in grace) for this environment -- so ask the same question here.
+	// The epoch covers revocation only. Retirement is handled elsewhere by accident: the
+	// transition bumps the policy version, which is this gate's LOOKUP KEY, so a verdict a
+	// retired root signed stops being found at all. The gap is expiry: a grace window that
+	// simply runs out moves nothing -- the version stays, the verdict stays visible, and the
+	// verifier meanwhile stops treating the root as live (GetActiveByEnvironment filters
+	// grace_until > now). So ask the verifier's own question: the root must be live -- active,
+	// or in grace with the window still open -- for this environment.
 	liveRoots, err := s.store.TrustRoots().GetActiveByEnvironment(ctx, s.targetEnv, time.Now().UTC())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("load live trust roots: %w", err))

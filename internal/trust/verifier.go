@@ -46,12 +46,13 @@ type Verifier interface {
 // tests (internal/orchestrator, internal/trust); production wires Ed25519Verifier with a live
 // RootResolver.
 //
-// It does not perform cryptographic verification, so it records no root: its verdicts carry
-// neither RootID nor KeyID. It also stores records under the policy version its caller passes
-// in (the pipeline input), which for these tests is trust.DefaultPolicy's static name rather
-// than the live meta version the Ed25519 verifier renders. Both differences are why a
-// StubVerifier verdict must never be relied on by a production gate -- the emergency gate
-// refuses an unattributable verdict outright (TASK-225).
+// It does not perform cryptographic verification. With a resolver configured it resolves live
+// roots and records RootID/KeyID like the Ed25519 verifier does; without one it verifies against
+// the policy alone and records NO root, so those verdicts are unattributable. It also stores
+// records under the policy version its caller passes in (the pipeline input), which in these
+// tests is trust.DefaultPolicy's static name rather than the live meta version the Ed25519
+// verifier renders. Either difference is why a StubVerifier verdict must not be relied on by a
+// production gate -- the emergency gate refuses an unattributable verdict outright (TASK-225).
 type StubVerifier struct {
 	st       store.VerificationStore
 	resolver RootResolver

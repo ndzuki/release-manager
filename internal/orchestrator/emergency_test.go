@@ -887,3 +887,35 @@ func TestExecuteEmergencyChangeLockedPathReasonCode(t *testing.T) {
 	detail := emergencyDetailFrom(t, err)
 	assert.Equal(t, orchestratorv1.EmergencyReasonCode_EMERGENCY_REASON_CODE_LOCKED_PATH, detail.GetReasonCode())
 }
+
+// failingTrustRoots makes the live-root query fail, so the fail-closed branch of the liveness
+// check has a negative control of its own (review of TASK-225 found it untested).
+type failingTrustRoots struct {
+	store.TrustRootStore
+}
+
+func (f failingTrustRoots) GetActiveByEnvironment(context.Context, string, time.Time) ([]*store.TrustRoot, error) {
+	return nil, errors.New("live root query failed")
+}
+
+type failingLiveRootStore struct {
+	store.Store
+	roots store.TrustRootStore
+}
+
+func (f failingLiveRootStore) TrustRoots() store.TrustRootStore { return f.roots }
+
+func TestExecuteEmergencyChangeFailsClosedWhenLiveRootsCannotBeRead(t *testing.T) {
+	svc, _, dispatcher := emergencyTestService(t)
+
+	// Same service, same data, but the live-root query fails: the gate must refuse with an
+	// internal error rather than fall through to "authorised".
+	backing := svc.store
+	svc.store = failingLiveRootStore{Store: backing, roots: failingTrustRoots{TrustRootStore: backing.TrustRoots()}}
+
+	_, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyImageRequest("live-root-read-failure"))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInternal, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "load live trust roots")
+	assert.Empty(t, dispatcher.commands, "a refused change must not reach the dispatcher")
+}
