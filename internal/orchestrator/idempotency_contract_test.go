@@ -304,12 +304,14 @@ func TestCreateOperationAdoptsAnUnclaimedBundleFromAnotherOrganization(t *testin
 		ChartRef: "nginx", CreatedAt: time.Now().UTC(),
 	}))
 
-	// org-002 (a different organization, a different customer) adopts it.
+	// org-002 (a different organization, a different customer) adopts it. The bundle is
+	// UNATTRIBUTED (created directly in the store, like a row written before migration
+	// 000032), and TASK-216 deliberately keeps first-come-first-served for those.
 	req, ctx := createOperationRequestForScope(
 		"adopt-unclaimed", "user-002", "org-002", "def-002", "bundle-unclaimed-foreign", "values-def-002",
 	)
 	_, err := svc.CreateOperation(ctx, req)
-	require.NoError(t, err, "KNOWN LIMITATION: an unclaimed bundle is adoptable (TASK-216)")
+	require.NoError(t, err, "an unattributed, unclaimed bundle stays adoptable (TASK-216)")
 
 	// And the owner of the definition it was submitted for can no longer adopt it.
 	ownerReq, ownerCtx := createOperationRequestForScope(
@@ -319,4 +321,94 @@ func TestCreateOperationAdoptsAnUnclaimedBundleFromAnotherOrganization(t *testin
 	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err),
 		"the adoption above now blocks the original organization: that is why TASK-216 matters")
+}
+
+// TASK-216: a bundle another organization submitted is not adoptable merely because no
+// definition has claimed it yet -- adopting it would block that submitter's own first install.
+func TestCreateOperationRefusesABundleAnotherOrganizationSubmitted(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	t.Cleanup(cleanup)
+	seedDefinition(t, st)
+	seedActorScope(t, st)
+	seedDefinitionForScope(t, st)
+
+	require.NoError(t, st.Bundles().Create(t.Context(), &store.ReleaseBundle{
+		ID: "bundle-submitted-by-org-001", Name: "submitted", DigestAlg: "sha256",
+		DigestValue: fmt.Sprintf("%064x", 59), Status: store.BundleValidated,
+		ChartRef: "nginx", CreatedAt: time.Now().UTC(),
+		SubmittedByOrganizationID: "org-001", SubmittedByUserID: "user-001",
+	}))
+
+	// org-002 (a different organization, a different customer) must be refused even though no
+	// definition has claimed the bundle yet.
+	req, ctx := createOperationRequestForScope(
+		"adopt-submitted", "user-002", "org-002", "def-002", "bundle-submitted-by-org-001", "values-def-002",
+	)
+	_, err := svc.CreateOperation(ctx, req)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "was submitted by another organization")
+
+	// The submitting organization can still use its own bundle (the UoW then claims it).
+	ownerReq, ownerCtx := createOperationRequestForScope(
+		"use-own-submitted", "user-001", "org-001", "def-001", "bundle-submitted-by-org-001", "vr-001",
+	)
+	_, err = svc.CreateOperation(ownerCtx, ownerReq)
+	require.NoError(t, err, "the submitter must keep access to the bundle it submitted")
+}
+
+// TASK-216: the tightening is not limited to "another customer". Before anything claims a
+// bundle, reachability is false for every organization, so an attributed bundle is refused to a
+// different organization of the SAME customer as well. Adopting it would block the submitter's
+// own first install, and the submitter is the organization with a claim to it. The counterpart
+// case is pinned too: an UNATTRIBUTED bundle stays adoptable across organizations.
+func TestBundleSubmitterAttributionAppliesWithinOneCustomer(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	t.Cleanup(cleanup)
+	seedDefinition(t, st) // org-001, cust-001
+
+	// org-003 is a second organization bound to the SAME customer cust-001, with its own
+	// definition.
+	require.NoError(t, st.Organizations().Create(t.Context(), &store.Organization{ID: "org-003", Name: "org-003"}))
+	require.NoError(t, st.Users().Create(t.Context(), &store.User{ID: "user-003", Username: "user-003", Status: store.UserActive}))
+	require.NoError(t, st.Bindings().Create(t.Context(), &store.OrgCustomerBinding{
+		ID: "binding-org-003", OrgID: "org-003", CustomerID: "cust-001",
+	}))
+	require.NoError(t, st.OrgMembers().Create(t.Context(), &store.OrganizationMember{
+		OrgID: "org-003", UserID: "user-003", Role: store.RoleReleaseAdmin,
+	}))
+	require.NoError(t, st.Clusters().Create(t.Context(), &store.Cluster{ID: "cluster-003", CustomerID: "cust-001", Name: "cluster-003", Status: store.ClusterActive}))
+	ownerOrg := "org-003"
+	require.NoError(t, st.Definitions().Create(t.Context(), &store.ReleaseDefinition{
+		ID: "def-003", Name: "def-003", CustomerID: "cust-001", ClusterID: "cluster-003",
+		Namespace: "default", ReleaseName: "def-003", ChartName: "nginx", Status: store.DefStatusActive,
+		OwnerOrganizationID: &ownerOrg,
+	}, nil))
+	seedValuesRevision(t, st, "values-def-003", "def-003", store.ValuesStatusApproved)
+
+	require.NoError(t, st.Bundles().Create(t.Context(), &store.ReleaseBundle{
+		ID: "bundle-same-customer-attributed", Name: "same-customer", DigestAlg: "sha256",
+		DigestValue: fmt.Sprintf("%064x", 60), Status: store.BundleValidated,
+		ChartRef: "nginx", CreatedAt: time.Now().UTC(), SubmittedByOrganizationID: "org-001",
+	}))
+
+	req, ctx := createOperationRequestForScope(
+		"same-customer-attributed", "user-003", "org-003", "def-003", "bundle-same-customer-attributed", "values-def-003",
+	)
+	_, err := svc.CreateOperation(ctx, req)
+	require.Error(t, err, "an attributed, unclaimed bundle is not adoptable inside one customer either")
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "was submitted by another organization")
+
+	// The same construction with an unattributed bundle: first-come-first-served still holds.
+	require.NoError(t, st.Bundles().Create(t.Context(), &store.ReleaseBundle{
+		ID: "bundle-same-customer-unattributed", Name: "same-customer-legacy", DigestAlg: "sha256",
+		DigestValue: fmt.Sprintf("%064x", 61), Status: store.BundleValidated,
+		ChartRef: "nginx", CreatedAt: time.Now().UTC(),
+	}))
+	req, ctx = createOperationRequestForScope(
+		"same-customer-unattributed", "user-003", "org-003", "def-003", "bundle-same-customer-unattributed", "values-def-003",
+	)
+	_, err = svc.CreateOperation(ctx, req)
+	require.NoError(t, err, "an unattributed bundle keeps the first-come-first-served rule")
 }

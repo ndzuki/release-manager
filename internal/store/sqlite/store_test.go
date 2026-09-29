@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -2412,4 +2413,34 @@ func TestFinalizeUpgradeFallbackCode(t *testing.T) {
 	var errorData store.ErrorTimelineData
 	require.NoError(t, json.Unmarshal(entries[1].Data, &errorData))
 	assert.Equal(t, "operation_failed", errorData.ErrorCode)
+}
+
+// TASK-216: the submitter attribution must survive a write/read round-trip, and a row written
+// before migration 000032 (empty attribution) must read back as "unknown" rather than error.
+func TestReleaseBundleSubmitterAttributionRoundTrip(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	attributed := &store.ReleaseBundle{
+		ID: "bundle-attributed", Name: "attributed", DigestAlg: "sha256",
+		DigestValue: strings.Repeat("a", 64), Status: store.BundleValidated,
+		SubmittedByOrganizationID: "org-submitter", SubmittedByUserID: "user-submitter",
+		CreatedAt: now,
+	}
+	require.NoError(t, st.Bundles().Create(ctx, attributed))
+	got, err := st.Bundles().Get(ctx, attributed.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "org-submitter", got.SubmittedByOrganizationID)
+	assert.Equal(t, "user-submitter", got.SubmittedByUserID)
+
+	legacy := &store.ReleaseBundle{
+		ID: "bundle-legacy", Name: "legacy", DigestAlg: "sha256",
+		DigestValue: strings.Repeat("b", 64), Status: store.BundleValidated, CreatedAt: now,
+	}
+	require.NoError(t, st.Bundles().Create(ctx, legacy))
+	got, err = st.Bundles().Get(ctx, legacy.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.SubmittedByOrganizationID, "pre-000032 rows are unattributed")
+	assert.Empty(t, got.SubmittedByUserID)
 }
