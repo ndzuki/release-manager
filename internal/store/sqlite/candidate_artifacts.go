@@ -37,18 +37,30 @@ func (s *candidateArtifactStore) Create(ctx context.Context, ca *store.Candidate
 	if bundleID != nil {
 		orphanedAt = ""
 	}
+
+	// TASK-163: PostgreSQL persists last_seen_at from the domain record, defaulting to
+	// NOW (not to created_at) when the caller left it zero
+	// (internal/store/postgres/candidate_artifacts.go: `if candidate.LastSeenAt.IsZero()
+	// { candidate.LastSeenAt = now }`). SQLite dropped the column entirely; mirroring the
+	// PostgreSQL rule — including which clock the fallback reads — is the point of the fix.
+	lastSeenAt := ca.LastSeenAt
+	if lastSeenAt.IsZero() {
+		lastSeenAt = time.Now().UTC()
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO candidate_artifacts (id, artifact_type, ref, digest, bundle_id, orphaned_at, created_at, validated_at, source_id)
-		VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?)
+		INSERT INTO candidate_artifacts (id, artifact_type, ref, digest, bundle_id, orphaned_at, created_at, validated_at, source_id, last_seen_at)
+		VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?)
 		ON CONFLICT(digest, artifact_type) DO UPDATE SET
 			ref = excluded.ref,
 			orphaned_at = COALESCE(excluded.orphaned_at, candidate_artifacts.orphaned_at),
 			validated_at = COALESCE(excluded.validated_at, candidate_artifacts.validated_at),
-			source_id = CASE WHEN excluded.source_id = '' THEN candidate_artifacts.source_id ELSE excluded.source_id END
+			source_id = CASE WHEN excluded.source_id = '' THEN candidate_artifacts.source_id ELSE excluded.source_id END,
+			last_seen_at = excluded.last_seen_at
 	`,
 		ca.ID, string(ca.ArtifactType), ca.Ref, ca.Digest,
 		bundleID, orphanedAt,
 		ca.CreatedAt.UTC().Format(time.RFC3339Nano), validatedAt, ca.SourceID,
+		lastSeenAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return fmt.Errorf("insert candidate artifact: %w", err)
@@ -184,20 +196,26 @@ func (s *candidateArtifactStore) UpsertLocationTx(_ *gorm.DB, _, _, _ string, _ 
 	return errors.New("sqlite candidate location transactions are unsupported")
 }
 
+// MarkValidatedForBundleTx: bundle ingestion (and therefore validation) only exists on
+// PostgreSQL in this engine, which is the same reason LinkToBundleTx is unsupported here.
+func (s *candidateArtifactStore) MarkValidatedForBundleTx(_ *gorm.DB, _ string, _ time.Time) (int64, error) {
+	return 0, errors.New("sqlite candidate validation marking is unsupported")
+}
+
 func (s *candidateArtifactStore) LinkToBundleTx(_ *gorm.DB, _ string, _ []store.ArtifactDigest) error {
 	return errors.New("sqlite candidate link transactions are unsupported")
 }
 
 const candidateArtifactSelect = `
-	SELECT id, artifact_type, ref, digest, bundle_id, created_at, validated_at, source_id, orphaned_at
+	SELECT id, artifact_type, ref, digest, bundle_id, created_at, validated_at, source_id, orphaned_at, last_seen_at
 	FROM candidate_artifacts`
 
 func scanCandidateArtifact(row interface{ Scan(...any) error }) (*store.CandidateArtifact, error) {
 	var artifact store.CandidateArtifact
 	var artifactType, createdAt string
-	var bundleID, validatedAt, orphanedAt sql.NullString
+	var bundleID, validatedAt, orphanedAt, lastSeenAt sql.NullString
 	if err := row.Scan(&artifact.ID, &artifactType, &artifact.Ref, &artifact.Digest, &bundleID,
-		&createdAt, &validatedAt, &artifact.SourceID, &orphanedAt); err != nil {
+		&createdAt, &validatedAt, &artifact.SourceID, &orphanedAt, &lastSeenAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, store.ErrNotFound
 		}
@@ -211,6 +229,13 @@ func scanCandidateArtifact(row interface{ Scan(...any) error }) (*store.Candidat
 	artifact.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
 		return nil, fmt.Errorf("parse candidate created_at: %w", err)
+	}
+	if lastSeenAt.Valid {
+		value, parseErr := time.Parse(time.RFC3339Nano, lastSeenAt.String)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse candidate last_seen_at: %w", parseErr)
+		}
+		artifact.LastSeenAt = value
 	}
 	if validatedAt.Valid {
 		value, parseErr := time.Parse(time.RFC3339Nano, validatedAt.String)

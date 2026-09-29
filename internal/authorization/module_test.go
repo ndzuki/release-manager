@@ -26,6 +26,12 @@ type snapshotHandler struct {
 	response *authv1.GetAuthorizationSnapshotResponse
 	err      error
 	delay    time.Duration
+	// lastAuthorization records the credential the module forwarded, so tests
+	// can pin which carrier reached the internal RPC (ADR-028 clause 5).
+	lastAuthorization string
+	// calls counts snapshot RPCs, so tests can assert the background refresh
+	// backs off instead of hammering (TASK-172 AC-2).
+	calls int
 }
 
 // AuthorizeAccess keeps the stub a full AuthorizationServiceHandler; these tests
@@ -34,7 +40,9 @@ func (h *snapshotHandler) AuthorizeAccess(context.Context, *connect.Request[auth
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("AuthorizeAccess is not used by authorization module tests"))
 }
 
-func (h *snapshotHandler) GetAuthorizationSnapshot(context.Context, *connect.Request[authv1.GetAuthorizationSnapshotRequest]) (*connect.Response[authv1.GetAuthorizationSnapshotResponse], error) {
+func (h *snapshotHandler) GetAuthorizationSnapshot(_ context.Context, req *connect.Request[authv1.GetAuthorizationSnapshotRequest]) (*connect.Response[authv1.GetAuthorizationSnapshotResponse], error) {
+	h.lastAuthorization = req.Header().Get("Authorization")
+	h.calls++
 	if h.delay > 0 {
 		time.Sleep(h.delay)
 	}

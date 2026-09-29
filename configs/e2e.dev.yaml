@@ -4,7 +4,7 @@
 # env-config is assembled by the REQ-066 Makefile private target `e2e-env-config`
 # into `data/e2e-env-config.yaml` (0600) from REQ-065 outputs (dev-status.json /
 # dev-fixture.json / dev-credentials.env / kubeconfig) — see
-# Design/contracts/e2e-environment-config.md (D-023 D1, D-026 D6, D-031).
+# Notes/contracts/e2e-environment-config.md (D-023 D1, D-026 D6, D-031).
 #
 # This template exists so the strict YAML schema consumed by cmd/e2e
 # (test/e2e/config.go, KnownFields(true)) can be validated without a live dev

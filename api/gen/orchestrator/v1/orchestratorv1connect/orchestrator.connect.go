@@ -263,18 +263,37 @@ type BundleServiceClient interface {
 	// without a digest and reference.
 	// Requires bundle/write.
 	RecordArtifactEvent(context.Context, *connect.Request[v1.RecordArtifactEventRequest]) (*connect.Response[v1.RecordArtifactEventResponse], error)
-	// Lists bundles, optionally narrowed to one release definition and to a set of
+	// Lists bundles for one release definition, optionally narrowed to a set of
 	// statuses, with cursor pagination.
+	// `release_definition_id` is REQUIRED for non-internal callers: it is both the
+	// scope and the authorization key, so omitting it answers PERMISSION_DENIED
+	// (`not_authorized`) rather than listing everything the tenant can see.
 	// Read-only and replayable. Cursors are opaque and bound to the filter that
-	// produced them, so a filter change must restart from the first page.
-	// INVALID_ARGUMENT for a malformed page size or cursor; a bundle set the caller
-	// may not see is reported as PERMISSION_DENIED rather than as an empty page.
-	// Requires bundle/read.
+	// produced them, so a filter change must restart from the first page; an unusable
+	// token answers INVALID_ARGUMENT (`invalid_page_token`). Page size is clamped to
+	// [1, 100] rather than rejected (contracts.NormalizePageSize).
+	// The page is scoped to bundles the caller's organization can reach (the same
+	// relationship GetBundle enforces): the named definition's current bundle, or a bundle
+	// one of its operations used. A bundle outside that scope is ABSENT from the page
+	// rather than an error — a list over an organization-scoped resource cannot refuse
+	// row by row — and omitting `release_definition_id` is still the only case that
+	// answers PERMISSION_DENIED (`not_authorized`), because there the caller asked for an
+	// unbounded view (TASK-199).
+	// Requires bundle/read (platform_admin via *, and release_admin by explicit rule;
+	// deployer and viewer have no bundle read rule).
 	ListBundles(context.Context, *connect.Request[v1.ListBundlesRequest]) (*connect.Response[v1.ListBundlesResponse], error)
-	// Reads one bundle in full, including its evidence references and digests, by
-	// bundle identifier or by release definition and bundle.
-	// Read-only and replayable; NOT_FOUND for an unknown bundle and PERMISSION_DENIED
-	// when the bundle is not reachable from the caller's organization.
+	// Reads one bundle in full, including its evidence references and digests.
+	// A non-internal caller must send BOTH `bundle_id` (INVALID_ARGUMENT
+	// `missing_required_field` when empty) and `release_definition_id`, which is what
+	// the caller is authorized against (PERMISSION_DENIED `not_authorized` when empty);
+	// the identifier alone is not enough.
+	// Read-only and replayable; NOT_FOUND for an unknown bundle.
+	// The named definition authorizes the caller, and the BUNDLE must then be reachable
+	// from the caller's organization: it is the current bundle of one of that
+	// organization's definitions, or an operation of one of those definitions used it. An
+	// unreachable bundle answers PERMISSION_DENIED (`not_authorized`) even when it exists
+	// (TASK-199). Platform admins and internal service callers keep the global view, which
+	// is also what unlocks the evidence references.
 	// Requires bundle/read.
 	GetBundle(context.Context, *connect.Request[v1.GetBundleRequest]) (*connect.Response[v1.GetBundleResponse], error)
 }
@@ -375,18 +394,37 @@ type BundleServiceHandler interface {
 	// without a digest and reference.
 	// Requires bundle/write.
 	RecordArtifactEvent(context.Context, *connect.Request[v1.RecordArtifactEventRequest]) (*connect.Response[v1.RecordArtifactEventResponse], error)
-	// Lists bundles, optionally narrowed to one release definition and to a set of
+	// Lists bundles for one release definition, optionally narrowed to a set of
 	// statuses, with cursor pagination.
+	// `release_definition_id` is REQUIRED for non-internal callers: it is both the
+	// scope and the authorization key, so omitting it answers PERMISSION_DENIED
+	// (`not_authorized`) rather than listing everything the tenant can see.
 	// Read-only and replayable. Cursors are opaque and bound to the filter that
-	// produced them, so a filter change must restart from the first page.
-	// INVALID_ARGUMENT for a malformed page size or cursor; a bundle set the caller
-	// may not see is reported as PERMISSION_DENIED rather than as an empty page.
-	// Requires bundle/read.
+	// produced them, so a filter change must restart from the first page; an unusable
+	// token answers INVALID_ARGUMENT (`invalid_page_token`). Page size is clamped to
+	// [1, 100] rather than rejected (contracts.NormalizePageSize).
+	// The page is scoped to bundles the caller's organization can reach (the same
+	// relationship GetBundle enforces): the named definition's current bundle, or a bundle
+	// one of its operations used. A bundle outside that scope is ABSENT from the page
+	// rather than an error — a list over an organization-scoped resource cannot refuse
+	// row by row — and omitting `release_definition_id` is still the only case that
+	// answers PERMISSION_DENIED (`not_authorized`), because there the caller asked for an
+	// unbounded view (TASK-199).
+	// Requires bundle/read (platform_admin via *, and release_admin by explicit rule;
+	// deployer and viewer have no bundle read rule).
 	ListBundles(context.Context, *connect.Request[v1.ListBundlesRequest]) (*connect.Response[v1.ListBundlesResponse], error)
-	// Reads one bundle in full, including its evidence references and digests, by
-	// bundle identifier or by release definition and bundle.
-	// Read-only and replayable; NOT_FOUND for an unknown bundle and PERMISSION_DENIED
-	// when the bundle is not reachable from the caller's organization.
+	// Reads one bundle in full, including its evidence references and digests.
+	// A non-internal caller must send BOTH `bundle_id` (INVALID_ARGUMENT
+	// `missing_required_field` when empty) and `release_definition_id`, which is what
+	// the caller is authorized against (PERMISSION_DENIED `not_authorized` when empty);
+	// the identifier alone is not enough.
+	// Read-only and replayable; NOT_FOUND for an unknown bundle.
+	// The named definition authorizes the caller, and the BUNDLE must then be reachable
+	// from the caller's organization: it is the current bundle of one of that
+	// organization's definitions, or an operation of one of those definitions used it. An
+	// unreachable bundle answers PERMISSION_DENIED (`not_authorized`) even when it exists
+	// (TASK-199). Platform admins and internal service callers keep the global view, which
+	// is also what unlocks the evidence references.
 	// Requires bundle/read.
 	GetBundle(context.Context, *connect.Request[v1.GetBundleRequest]) (*connect.Response[v1.GetBundleResponse], error)
 }
@@ -470,10 +508,24 @@ type OrchestratorServiceClient interface {
 	// running for the definition: FAILED_PRECONDITION with a machine reason and a
 	// typed detail naming the blocking work, which is the caller's signal to wait
 	// rather than to retry blindly.
-	// INVALID_ARGUMENT for an unsupported operation type or a missing input,
-	// NOT_FOUND for an unknown definition, bundle or revision, PERMISSION_DENIED for
-	// a disabled customer or cluster, and UNAVAILABLE when the authorization state
-	// cannot be read. The response reports the post-gate state, usually the
+	// INVALID_ARGUMENT for an unsupported operation type, a missing input or a bundle
+	// whose chart does not match the definition, NOT_FOUND for an unknown definition,
+	// bundle or revision, PERMISSION_DENIED for a disabled customer or cluster OR for a
+	// bundle that another organization already owns (`bundle_not_reachable`). A bundle is
+	// claimed once it is a definition's current bundle or an operation of a definition used
+	// it -- and creating an operation is itself what establishes the claim, so the practical
+	// effect is: the first organization to queue work for a bundle owns it, and every other
+	// organization is then refused (regardless of chart names, which this gate no longer
+	// consults).
+	//
+	// KNOWN LIMITATION, not a promise: a bundle nobody has claimed yet may be adopted by any
+	// caller, because ownership is established BY this call (the definition's
+	// current_bundle_id is written by the same unit of work) and a bundle carries no
+	// submitter attribution to check. Closing that needs a product decision on recording who
+	// submitted a bundle; the read path stays stricter (it requires reachability, so an
+	// unclaimed bundle is readable only by admins and internal callers).
+	//
+	// Also UNAVAILABLE when the authorization state cannot be read. The response reports the post-gate state, usually the
 	// preflight state, not the queued state.
 	// Requires release/write with the deployer or administrator capability.
 	CreateOperation(context.Context, *connect.Request[v1.CreateOperationRequest]) (*connect.Response[v1.CreateOperationResponse], error)
@@ -881,11 +933,14 @@ type OrchestratorServiceClient interface {
 	// Requires release/read.
 	ListReleaseInventory(context.Context, *connect.Request[v1.ListReleaseInventoryRequest]) (*connect.Response[v1.ListReleaseInventoryResponse], error)
 	// Operation query (REQ-056)
-	// Declared for operation search across definitions, statuses and time.
-	// Not implemented in the release-orchestrator handler: every call answers
-	// UNIMPLEMENTED. Enumerate operations through GetOperation and WatchOperation
-	// for identifiers you already hold, or through the release definition's own
-	// history.
+	// One release definition's operation history, newest first, keyset-paginated
+	// on (created_at, id): pass the previous response's next_cursor to continue.
+	// limit defaults to 20 and is capped at 100 (contracts.NormalizePageSize). A
+	// MALFORMED cursor fails with INVALID_ARGUMENT + X-Reason-Code: invalid_cursor;
+	// a well-formed cursor that matches no row yields an empty page rather than a
+	// duplicate page (contracts.DecodeCursor keeps no expiry window).
+	// Implemented since TASK-095 (internal/orchestrator/operations_query.go); the
+	// "always UNIMPLEMENTED" note that used to sit here was stale.
 	ListOperations(context.Context, *connect.Request[v1.ListOperationsRequest]) (*connect.Response[v1.ListOperationsResponse], error)
 	// Asks the orchestrator to schedule an inventory refresh for one cluster and
 	// returns immediately; the agent reports the result through SyncInventory
@@ -1582,10 +1637,24 @@ type OrchestratorServiceHandler interface {
 	// running for the definition: FAILED_PRECONDITION with a machine reason and a
 	// typed detail naming the blocking work, which is the caller's signal to wait
 	// rather than to retry blindly.
-	// INVALID_ARGUMENT for an unsupported operation type or a missing input,
-	// NOT_FOUND for an unknown definition, bundle or revision, PERMISSION_DENIED for
-	// a disabled customer or cluster, and UNAVAILABLE when the authorization state
-	// cannot be read. The response reports the post-gate state, usually the
+	// INVALID_ARGUMENT for an unsupported operation type, a missing input or a bundle
+	// whose chart does not match the definition, NOT_FOUND for an unknown definition,
+	// bundle or revision, PERMISSION_DENIED for a disabled customer or cluster OR for a
+	// bundle that another organization already owns (`bundle_not_reachable`). A bundle is
+	// claimed once it is a definition's current bundle or an operation of a definition used
+	// it -- and creating an operation is itself what establishes the claim, so the practical
+	// effect is: the first organization to queue work for a bundle owns it, and every other
+	// organization is then refused (regardless of chart names, which this gate no longer
+	// consults).
+	//
+	// KNOWN LIMITATION, not a promise: a bundle nobody has claimed yet may be adopted by any
+	// caller, because ownership is established BY this call (the definition's
+	// current_bundle_id is written by the same unit of work) and a bundle carries no
+	// submitter attribution to check. Closing that needs a product decision on recording who
+	// submitted a bundle; the read path stays stricter (it requires reachability, so an
+	// unclaimed bundle is readable only by admins and internal callers).
+	//
+	// Also UNAVAILABLE when the authorization state cannot be read. The response reports the post-gate state, usually the
 	// preflight state, not the queued state.
 	// Requires release/write with the deployer or administrator capability.
 	CreateOperation(context.Context, *connect.Request[v1.CreateOperationRequest]) (*connect.Response[v1.CreateOperationResponse], error)
@@ -1993,11 +2062,14 @@ type OrchestratorServiceHandler interface {
 	// Requires release/read.
 	ListReleaseInventory(context.Context, *connect.Request[v1.ListReleaseInventoryRequest]) (*connect.Response[v1.ListReleaseInventoryResponse], error)
 	// Operation query (REQ-056)
-	// Declared for operation search across definitions, statuses and time.
-	// Not implemented in the release-orchestrator handler: every call answers
-	// UNIMPLEMENTED. Enumerate operations through GetOperation and WatchOperation
-	// for identifiers you already hold, or through the release definition's own
-	// history.
+	// One release definition's operation history, newest first, keyset-paginated
+	// on (created_at, id): pass the previous response's next_cursor to continue.
+	// limit defaults to 20 and is capped at 100 (contracts.NormalizePageSize). A
+	// MALFORMED cursor fails with INVALID_ARGUMENT + X-Reason-Code: invalid_cursor;
+	// a well-formed cursor that matches no row yields an empty page rather than a
+	// duplicate page (contracts.DecodeCursor keeps no expiry window).
+	// Implemented since TASK-095 (internal/orchestrator/operations_query.go); the
+	// "always UNIMPLEMENTED" note that used to sit here was stale.
 	ListOperations(context.Context, *connect.Request[v1.ListOperationsRequest]) (*connect.Response[v1.ListOperationsResponse], error)
 	// Asks the orchestrator to schedule an inventory refresh for one cluster and
 	// returns immediately; the agent reports the result through SyncInventory

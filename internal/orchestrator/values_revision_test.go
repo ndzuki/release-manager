@@ -138,6 +138,10 @@ func TestCreateValuesRevision_InitialCanBeApprovedAndUsedForInstall(t *testing.T
 		DigestAlg: "sha256", DigestValue: fmt.Sprintf("%064x", 42), Status: store.BundleValidated,
 		CreatedAt: time.Now().UTC(),
 	}))
+	// TASK-215: the submission flow makes a validated bundle the definition's current
+	// bundle; the fixture says the same thing so the operation references a reachable one.
+	_, err = f.st.Definitions().SetCurrentBundle(f.ctx, f.defID, "bundle-initial-install")
+	require.NoError(t, err)
 
 	operationRequest := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INSTALL",

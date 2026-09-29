@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -50,12 +51,7 @@ func NewAuthInterceptor(
 				return next(ctx, req)
 			}
 
-			token := extractToken(req.Header().Get("Authorization"))
-			cookieAuthenticated := false
-			if token == "" {
-				token = cookieValue(req.Header(), AccessCookieName)
-				cookieAuthenticated = token != ""
-			}
+			token, cookieAuthenticated := resolveRequestToken(req.Header())
 			if token == "" {
 				return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("missing authentication credentials"))
 			}
@@ -129,6 +125,10 @@ func NewAuthInterceptor(
 				UserID: claims.UserID, OrganizationID: domain, Roles: claims.Roles,
 			})
 			ctx = authctx.WithAuthorizationHeader(ctx, req.Header().Get("Authorization"))
+			// ADR-028 clause 5: hand downstream internal RPCs the credential
+			// that was actually verified (bearer OR browser-cookie token). The
+			// raw header above is empty for a cookie-authenticated console.
+			ctx = authctx.WithVerifiedCredential(ctx, token)
 			return next(ctx, req)
 		})
 	}
@@ -175,7 +175,10 @@ func (i streamAuthInterceptor) WrapStreamingHandler(next connect.StreamingHandle
 		if i.publicMethods[procedure] {
 			return next(ctx, conn)
 		}
-		token := extractToken(conn.RequestHeader().Get("Authorization"))
+		// ADR-028: the streaming path accepts the same carriers as the unary
+		// path. Without the cookie fallback a cookie-authenticated console could
+		// never open WatchOperation (B3).
+		token, _ := resolveRequestToken(conn.RequestHeader())
 		if token == "" {
 			return connect.NewError(connect.CodeUnauthenticated, errors.New("missing authorization header"))
 		}
@@ -210,6 +213,10 @@ func (i streamAuthInterceptor) WrapStreamingHandler(next connect.StreamingHandle
 			return connect.NewError(connect.CodeUnauthenticated, errors.New("session revoked"))
 		}
 		ctx = authctx.WithActor(ctx, authctx.Actor{UserID: claims.UserID, OrganizationID: domain, Roles: claims.Roles})
+		// ADR-028 clause 5: same verified-credential handoff as the unary path,
+		// so a streaming handler that performs internal RPCs is not left with an
+		// empty credential.
+		ctx = authctx.WithVerifiedCredential(ctx, token)
 		return next(ctx, conn)
 	}
 }
@@ -234,6 +241,26 @@ func extractToken(authHeader string) string {
 		return ""
 	}
 	return strings.TrimPrefix(authHeader, "Bearer ")
+}
+
+// resolveRequestToken returns the credential the request carries: the
+// Authorization header first, then the rm_access browser cookie.
+//
+// ADR-028 makes the cookie an accepted carrier on *every* procedure — the
+// streaming path included. Before this helper the unary path fell back to the
+// cookie while the streaming path did not, so a cookie-authenticated console
+// could read lists but never open WatchOperation (the operation timeline showed
+// "实时更新已断开，正在重连…" forever). cookieAuthenticated reports which
+// carrier matched: callers apply the CSRF double-submit rule only to
+// cookie-authenticated non-read actions.
+func resolveRequestToken(header http.Header) (token string, cookieAuthenticated bool) {
+	if token = extractToken(header.Get("Authorization")); token != "" {
+		return token, false
+	}
+	if token = cookieValue(header, AccessCookieName); token != "" {
+		return token, true
+	}
+	return "", false
 }
 
 // resolveDomain returns the organization domain used for the Casbin decision.

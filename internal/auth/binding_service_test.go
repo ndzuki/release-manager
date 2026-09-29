@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -16,14 +17,6 @@ import (
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
 
-type storeCustomerResolver struct {
-	store store.Store
-}
-
-func (r storeCustomerResolver) Resolve(ctx context.Context, customerID string) (*store.Customer, error) {
-	return r.store.Customers().Get(ctx, customerID)
-}
-
 func setupBindingService(t *testing.T) (*BindingService, *sqlitestore.Store) {
 	t.Helper()
 
@@ -32,7 +25,7 @@ func setupBindingService(t *testing.T) (*BindingService, *sqlitestore.Store) {
 	t.Cleanup(func() { require.NoError(t, st.Close()) })
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return NewBindingService(st, storeCustomerResolver{store: st}, logger), st
+	return NewBindingService(st, NewStoreCustomerResolver(st), logger), st
 }
 
 func bindingActorContext(userID string) context.Context {
@@ -252,4 +245,33 @@ func TestBindingService_RevokeRejectsStaleVersion(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeAborted, connect.CodeOf(err))
 	assert.ErrorContains(t, err, "optimistic_lock_conflict")
+}
+
+type failingCustomerResolver struct{ err error }
+
+func (r failingCustomerResolver) Resolve(context.Context, string) (*store.Customer, error) {
+	return nil, r.err
+}
+
+// A resolver outage is NOT "customer not found": the two answer different codes, and
+// collapsing them would tell an operator to fix the wrong thing.
+func TestBindingService_ResolverOutageIsUnavailableNotNotFound(t *testing.T) {
+	st, err := sqlitestore.Open("file:" + uuid.New().String() + "?mode=memory&cache=shared")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+
+	const (
+		orgID      = "org-outage"
+		customerID = "customer-outage"
+		userID     = "admin-outage"
+	)
+	seedBindingOrganization(t, st, orgID)
+	seedBindingActor(t, st, orgID, userID, store.RolePlatformAdmin)
+
+	svc := NewBindingService(st, failingCustomerResolver{err: errors.New("store down")}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, err = svc.CreateBinding(bindingActorContext(userID), connect.NewRequest(&authv1.CreateBindingRequest{
+		OrgId: orgID, CustomerId: customerID,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
 }

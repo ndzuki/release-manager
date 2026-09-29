@@ -65,6 +65,22 @@ func TestListValidatedParityAcrossEngines(t *testing.T) {
 	require.NoError(t, err)
 
 	want := []string{"artifact-no-location", "artifact-older"}
+	// TASK-163: last_seen_at is part of the row for lifecycle decisions, and SQLite used to
+	// drop it entirely. Compare against the FIXTURE's values on both engines -- comparing a
+	// list result with a Get on the same engine would agree even with the column missing,
+	// because both read the same SELECT.
+	expected := map[string]time.Time{}
+	for _, candidate := range candidateParityFixture(base) {
+		expected[candidate.ID] = candidate.LastSeenAt
+	}
+	for name, engine := range map[string]store.Store{"sqlite": sq, "postgres": pg} {
+		for id, wantSeen := range expected {
+			stored, err := engine.CandidateArtifacts().Get(ctx, id)
+			require.NoError(t, err)
+			assert.WithinDuration(t, wantSeen, stored.LastSeenAt, time.Second, "%s: %s last_seen_at", name, id)
+		}
+	}
+
 	assert.Equal(t, want, candidateArtifactIDs(sqliteList), "SQLite is the reference definition")
 	assert.Equal(t, want, candidateArtifactIDs(postgresList),
 		"PostgreSQL must return the same validated set in the same order")

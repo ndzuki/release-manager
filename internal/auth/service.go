@@ -117,7 +117,7 @@ func (s *AuthService) Logout(
 	ctx context.Context,
 	req *connect.Request[authv1.LogoutRequest],
 ) (*connect.Response[authv1.LogoutResponse], error) {
-	if s.browserEnabled {
+	if s.browserEnabled && cookieValue(req.Header(), AccessCookieName) != "" {
 		if err := s.validateCSRF(req.Header()); err != nil {
 			return nil, err
 		}
@@ -162,7 +162,7 @@ func (s *AuthService) RefreshToken(
 	ctx context.Context,
 	req *connect.Request[authv1.RefreshTokenRequest],
 ) (*connect.Response[authv1.RefreshTokenResponse], error) {
-	if s.browserEnabled {
+	if s.browserEnabled && cookieValue(req.Header(), RefreshCookieName) != "" {
 		return s.refreshBrowserSession(ctx, req)
 	}
 	ss, err := s.refreshSessionForRotation(ctx, s.jwt.HashRefreshToken(req.Msg.GetRefreshToken()))
@@ -257,7 +257,7 @@ func (s *AuthService) ValidateToken(
 	ctx context.Context,
 	req *connect.Request[authv1.ValidateTokenRequest],
 ) (*connect.Response[authv1.ValidateTokenResponse], error) {
-	if s.browserEnabled {
+	if s.browserEnabled && cookieValue(req.Header(), AccessCookieName) != "" {
 		return s.validateBrowserSession(ctx, req)
 	}
 	claims, err := s.jwt.ValidateAccessToken(req.Msg.GetToken())
@@ -429,14 +429,16 @@ func (s *AuthService) Initialize(
 	}
 
 	if s.browserEnabled {
-		principal, organizations, expiresAt, cookies, sessionErr := s.issueBrowserSession(ctx, user, orgID)
+		session, sessionErr := s.issueBrowserSession(ctx, user, orgID)
 		if sessionErr != nil {
 			return nil, sessionErr
 		}
+		accessToken, refreshToken, tokenType := bearerPair(req.Header(), session)
 		response := connect.NewResponse(&authv1.InitializeResponse{
-			User: principal, Organizations: organizations, ExpiresAt: expiresAt.Unix(),
+			User: session.principal, Organizations: session.organizations, ExpiresAt: session.expiresAt.Unix(),
+			AccessToken: accessToken, RefreshToken: refreshToken, TokenType: tokenType,
 		})
-		setResponseCookies(response.Header(), cookies)
+		setResponseCookies(response.Header(), session.cookies)
 		return response, nil
 	}
 	orgID2, roles := s.userAuthorizationContext(ctx, userID)
@@ -497,7 +499,7 @@ func (s *AuthService) SwitchOrganization(
 	ctx context.Context,
 	req *connect.Request[authv1.SwitchOrganizationRequest],
 ) (*connect.Response[authv1.SwitchOrganizationResponse], error) {
-	if s.browserEnabled {
+	if s.browserEnabled && cookieValue(req.Header(), AccessCookieName) != "" {
 		return s.switchBrowserOrganization(ctx, req)
 	}
 	userID, err := s.userIDFromCtx(ctx)

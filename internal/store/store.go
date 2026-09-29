@@ -1562,13 +1562,79 @@ type ReleaseBundle struct {
 	CreatedAt          time.Time
 }
 
+// ClaimedBundleOutsideOrganizationPredicate reports whether a bundle is claimed by a
+// release definition that does NOT belong to the organization: "claimed" means the
+// definition's current bundle, or a bundle one of its operations used.
+//
+// The write path needs this in addition to ReachableBundlePredicate, because a definition
+// only becomes the bundle's owner WHEN the operation is created
+// (internal/store/postgres/uow.go calls setCurrentBundle inside the operation-creation
+// unit of work). So a freshly submitted bundle is claimed by nobody yet, and requiring
+// reachability up front would refuse every first install. The write rule is therefore:
+// a bundle nobody has claimed may be adopted, a bundle another tenant already claims may
+// not (and a shared customer, where both organizations are bound to it, stays allowed
+// because reachability succeeds first).
+//
+// Arguments, in order: bundle id, bundle id, organization, organization, active status.
+const ClaimedBundleOutsideOrganizationPredicate = `
+	SELECT EXISTS (
+		SELECT 1 FROM release_definitions AS d
+		WHERE (
+			d.current_bundle_id = ?
+			OR EXISTS (
+				SELECT 1 FROM operations AS o
+				WHERE o.release_definition_id = d.id AND o.bundle_id = ?
+			)
+		)
+		AND NOT (
+			COALESCE(d.owner_organization_id, '') = ?
+			OR EXISTS (
+				SELECT 1 FROM org_customer_bindings AS bind
+				WHERE bind.org_id = ? AND bind.customer_id = d.customer_id AND bind.status = ?
+			)
+		)
+	)`
+
+// ReachableBundlePredicate is the single tenant-reachability predicate for reading a
+// bundle (TASK-199). Both engines run this exact text with the same five arguments in this
+// order: organization, organization, active binding status, bundle id, bundle id.
+//
+// An independent review found the two engines had copied the text into two separate
+// constants, which is how a security boundary drifts apart; it lives here so the two
+// engines share one string. The PostgreSQL list filter derives the same relationship as a
+// WHERE fragment (it cannot reuse a SELECT EXISTS verbatim); its equivalence is pinned by
+// TestBundleListMatchesReachability in internal/store/postgres, so the two cannot silently
+// disagree about who may see what.
+const ReachableBundlePredicate = `
+	SELECT EXISTS (
+		SELECT 1 FROM release_definitions AS d
+		WHERE (
+			COALESCE(d.owner_organization_id, '') = ?
+			OR EXISTS (
+				SELECT 1 FROM org_customer_bindings AS bind
+				WHERE bind.org_id = ? AND bind.customer_id = d.customer_id AND bind.status = ?
+			)
+		)
+		AND (
+			d.current_bundle_id = ?
+			OR EXISTS (
+				SELECT 1 FROM operations AS o
+				WHERE o.release_definition_id = d.id AND o.bundle_id = ?
+			)
+		)
+	)`
+
 // BundleListFilter narrows bundle queries and binds opaque pagination tokens.
 type BundleListFilter struct {
 	ReleaseDefinitionID string
-	Statuses            []BundleStatus
-	ChartName           string
-	PageSize            int
-	PageToken           string
+	// OrganizationID scopes the page to bundles reachable from that organization
+	// (see ReachableFromOrganization). Empty means "no tenant filter", which only an
+	// internal caller may ask for.
+	OrganizationID string
+	Statuses       []BundleStatus
+	ChartName      string
+	PageSize       int
+	PageToken      string
 }
 
 // BundlePage is one stable page of ReleaseBundles.
@@ -1586,6 +1652,21 @@ type BundleStore interface {
 	GetByDigest(ctx context.Context, alg, value string) (*ReleaseBundle, error)
 	GetByAlias(ctx context.Context, alias string) (*ReleaseBundle, error)
 	List(ctx context.Context, filter BundleListFilter) (*BundlePage, error)
+	// ReachableFromOrganization reports whether a caller acting for orgID may read the
+	// bundle: it is the current bundle of one of that organization's release definitions,
+	// or an operation of one of those definitions used it. A definition belongs to the
+	// organization when it names it (owner_organization_id) or when the organization holds
+	// an active customer binding for the definition's customer.
+	//
+	// This is the tenant boundary for GetBundle (TASK-199). It is deliberately not a
+	// "is it safe to expose" heuristic: the same predicate decides the definition-scoped
+	// list, and both are implemented on both engines.
+	ReachableFromOrganization(ctx context.Context, bundleID, orgID string) (bool, error)
+	// BundleClaimedOutsideOrganization reports whether the bundle is claimed by a release
+	// definition that does not belong to orgID (see
+	// ClaimedBundleOutsideOrganizationPredicate). It is the write path's tenant boundary:
+	// see CreateOperation.
+	BundleClaimedOutsideOrganization(ctx context.Context, bundleID, orgID string) (bool, error)
 	UpdateStatusTx(tx *gorm.DB, id string, from, to BundleStatus, validationErr string) error
 	ListForArchive(ctx context.Context, retentionDays int, terminalStates []OperationStatus, limit ...int) ([]string, error)
 	Archive(ctx context.Context, ids []string) (int64, error)
@@ -2554,6 +2635,14 @@ type CandidateArtifactStore interface {
 	LinkToBundleTx(tx *gorm.DB, bundleID string, digests []ArtifactDigest) error
 	DeleteOrphanBefore(ctx context.Context, cutoff time.Time, limit ...int) (int64, error)
 	LinkCandidateArtifacts(ctx context.Context, bundleID string, digests []string) (int64, error)
+	// MarkValidatedForBundleTx stamps validated_at on the candidate artifacts linked to a
+	// bundle. It is the writer the read side has always assumed: ListValidated and the
+	// emergency artifact selection require validated_at, and until this method existed
+	// nothing in production ever set it (TASK-218: the emergency change artifact list was
+	// therefore permanently empty). Called from the validation worker inside the same
+	// transaction that flips the bundle to validated, so "the bundle passed validation"
+	// and "its artifacts are candidates" cannot disagree.
+	MarkValidatedForBundleTx(tx *gorm.DB, bundleID string, now time.Time) (int64, error)
 }
 
 // ArtifactEventStore persists externally observed artifact events.

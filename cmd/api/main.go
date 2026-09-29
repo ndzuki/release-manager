@@ -18,6 +18,7 @@ import (
 	authv1connect "github.com/ndzuki/release-manager/api/gen/auth/v1/authv1connect"
 	"github.com/ndzuki/release-manager/internal/app"
 	"github.com/ndzuki/release-manager/internal/audit"
+	"github.com/ndzuki/release-manager/internal/auth"
 	"github.com/ndzuki/release-manager/internal/config"
 	contractsinterceptor "github.com/ndzuki/release-manager/internal/contracts/interceptor"
 
@@ -95,7 +96,14 @@ func (s *apiSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		connect.WithInterceptors(
 			contractsinterceptor.NewRequestIDInterceptor(logger),
 			contractsinterceptor.NewErrorSanitizeInterceptor(logger),
-			audit.NewJWTInterceptor(jwtMgr),
+			// ADR-028: the console authenticates with the rm_access cookie, so the
+			// audit gate accepts that carrier as well as a bearer header. Cookie
+			// callers to a write procedure must also pass the CSRF double-submit.
+			audit.NewJWTInterceptor(jwtMgr, audit.BrowserSessionCarrier{
+				AccessCookie: auth.AccessCookieName,
+				CSRFCookie:   auth.CSRFCookieName,
+				CSRFHeader:   auth.CSRFHeaderName,
+			}),
 		),
 	)
 	mux.Handle(auditPath, auditHandler)

@@ -65,11 +65,12 @@ func TestRunMigratesCurrentSQLiteSchemaEndToEnd(t *testing.T) {
 	assert.EqualValues(t, 1, stateVersion)
 	assert.Equal(t, "creator-legacy", createdByUserID)
 
-	var candidateDerived, candidateCreated time.Time
+	var candidateSeen, candidateCreated time.Time
 	require.NoError(t, targetDB.QueryRowContext(ctx,
 		`SELECT last_seen_at, created_at FROM candidate_artifacts WHERE id = 'candidate-migrate'`,
-	).Scan(&candidateDerived, &candidateCreated))
-	assert.True(t, candidateDerived.Equal(candidateCreated))
+	).Scan(&candidateSeen, &candidateCreated))
+	assert.True(t, candidateSeen.Equal(cutoverArtifactSeen), "the cutover must carry the source last_seen_at, not derive it")
+	assert.True(t, candidateCreated.Equal(cutoverArtifactCreated), "the cutover must carry the source created_at")
 
 	var preflightUpdated, preflightCreated time.Time
 	var preflightOverall, preflightStages string
@@ -142,6 +143,14 @@ func createMigrationSchema(ctx context.Context, t *testing.T, baseDSN string) st
 	return parsed.String()
 }
 
+// TASK-163: fixed source timestamps. The cutover must carry candidate_artifacts'
+// last_seen_at across rather than derive it, so the fixture and the assertion read the
+// same values.
+var (
+	cutoverArtifactCreated = time.Date(2026, 9, 28, 10, 0, 0, 0, time.UTC)
+	cutoverArtifactSeen    = cutoverArtifactCreated.Add(45 * time.Minute)
+)
+
 func createMigrationSource(ctx context.Context, t *testing.T) string {
 	t.Helper()
 	path := t.TempDir() + "/orchestrator.db"
@@ -172,8 +181,12 @@ func createMigrationSource(ctx context.Context, t *testing.T) string {
 		Status: store.BundleValidated, Images: []store.BundleImage{{Ref: "registry/app:v1", Digest: "sha256:image"}},
 	}))
 	bundleID := "bundle-migrate"
+	// TASK-163: give the row explicit timestamps. The cutover must carry the SOURCE's
+	// last_seen_at across; the previous expectation derived it from created_at, which only
+	// held while SQLite had no such column.
 	require.NoError(t, st.CandidateArtifacts().Create(ctx, &store.CandidateArtifact{
 		ID: "candidate-migrate", ArtifactType: store.ArtifactImage, Ref: "registry/app:v1", Digest: "sha256:candidate", BundleID: &bundleID,
+		CreatedAt: cutoverArtifactCreated, LastSeenAt: cutoverArtifactSeen,
 	}))
 	_, lifecycleErr := st.PreflightLifecycles().CreateOrReset(ctx, "operation-migrate")
 	require.NoError(t, lifecycleErr)
