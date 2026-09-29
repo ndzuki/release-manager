@@ -63,9 +63,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "taskcheck: %v\n", err)
 			os.Exit(2)
 		}
-		reqResult := taskcheck.CheckRequirements(reqs)
-		result.Findings = append(result.Findings, reqResult.Findings...)
-		result.RequirementsChecked += reqResult.Checked
+		mergeResults(result, taskcheck.CheckRequirements(reqs))
 	}
 	taskcheck.SortFindings(result.Findings)
 
@@ -90,6 +88,18 @@ func main() {
 		}
 		os.Exit(1)
 	}
+}
+
+// mergeResults folds the requirement side of the ledger into the card result. It exists as a
+// seam because the defect this fixes was the accumulation itself: the two populations must
+// stay in separate fields, and a reviewer showed that reverting the addition kept every test
+// green while the summary silently went back to reporting requirements as cards.
+func mergeResults(cards, reqs *taskcheck.Result) {
+	if reqs == nil {
+		return
+	}
+	cards.Findings = append(cards.Findings, reqs.Findings...)
+	cards.RequirementsChecked += reqs.Checked
 }
 
 // summaryLine renders the run summary. It reports cards and requirement records separately:
