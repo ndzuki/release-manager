@@ -252,7 +252,7 @@ render passed {"render_digest":"a36d52d3…","resources":[{"api_version":"apps/v
 并把浏览器 E2E 作为**可选** job（需要真实栈，建议 nightly 或 `workflow_dispatch`）。
 理由：B1/B4/B5 都是「没有任何自动化在浏览器里点过一次」的直接产物。
 
-**顺带发现**：`web/dist` 是 2026-07-16 的陈旧产物（仅 4 个 chunk，当前 20 个页面），
+**顺带发现**：`web/dist` 是 2026-07-16 的陈旧产物（仅 4 个 chunk，当前 20 个页面），<!-- check-docs:ignore web/dist 构建产物目录，gitignore 掉，干净检出中本就不存在 -->
 **不能**用作首屏体积证据；首屏体积需在沙箱内 `npm run build` 后重新测量。
 
 ## 5. 已经做对、不要回退的部分
