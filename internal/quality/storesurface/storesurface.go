@@ -2,12 +2,21 @@
 // interface in internal/store must have an attributable call site in shipping code, unless it
 // is registered in storesurface.exceptions.yaml with a reason and a future review date.
 //
-// A call site is attributable in two shapes: the method is selected through its interface
-// (including method expressions), or a concrete type EXPLICITLY BOUND to that interface calls
-// the same name with an identical signature. The binding requirement is what keeps two
-// interfaces with the same method set from masking each other -- a structural
-// types.Implements check would let a call on the shared implementer keep a dead method of the
-// other interface alive, which is a counter-example review found and the fixture now pins.
+// A call site is attributable in two shapes: the method is selected through its interface (a
+// method value or call, including interface method expressions such as store.BundleStore.Get),
+// or a concrete type EXPLICITLY BOUND to that interface (see collectBindings) calls the same
+// name with an identical signature. The binding requirement is what keeps two interfaces with
+// the same method set from masking each other -- a structural types.Implements check would let
+// a call on the shared implementer keep a dead method of the other interface alive, which is a
+// counter-example review found and the fixture now pins.
+//
+// Known limits, all of which report a method that is in fact called (the safe direction for a
+// gate that hunts dead surface) and are listed here so nobody mistakes them for coverage:
+// a binding written inside a function body (including init), a binding inherited through an
+// embedded interface, a conversion to the interface, a struct-literal field, a multi-value
+// return, a package-level func literal, assignments and named-result writes, and concrete
+// method expressions. A method caught by one of these lands in the report, where an operator
+// registers it or extends the collector.
 //
 // Why this gate exists: TASK-221's audit found methods with no call sites at all, and a later
 // fix orphaned another. A method nobody calls is either dead weight or a missing wire-up, and
@@ -188,6 +197,11 @@ func interfaceMethods(pkg *types.Package) (targets []target, interfaceCount int)
 		if !ok {
 			continue
 		}
+		// An alias of an interface is not a second interface: counting it would inflate the
+		// reported surface and duplicate its methods (review found this with a synthetic alias).
+		if typeName.IsAlias() {
+			continue
+		}
 		iface, ok := typeName.Type().Underlying().(*types.Interface)
 		if !ok {
 			continue
@@ -215,9 +229,10 @@ func interfaceMethods(pkg *types.Package) (targets []target, interfaceCount int)
 //
 //   - the method is selected on the interface itself (any caller doing s.store.Bundles().Get),
 //     and method expressions such as store.BundleStore.Get; and
-//   - a concrete receiver that IMPLEMENTS the interface calls the same name with an identical
-//     signature. The store package calls its own concrete types inside units of work, and a
-//     method those call is not dead just because no caller goes through the interface.
+//   - a concrete receiver BOUND to the interface (see collectBindings) calls the same name with
+//     an identical signature. The store package calls its own concrete types inside units of
+//     work, and a method those call is not dead just because no caller goes through the
+//     interface; a type that merely happens to implement the interface does NOT count.
 //
 // Both shapes come from go/types, so comments and string literals cannot keep a method alive,
 // and a same-named method on an unrelated type cannot either.
@@ -287,15 +302,18 @@ func markUse(info *types.Info, selector *ast.SelectorExpr, targets []target, byN
 	}
 }
 
-// bindings records which concrete types are explicitly bound to which interface: a return
-// whose result type is the interface (the store's accessors return their concrete field as the
-// interface), a variable declared with the interface type, or a conversion to it.
+// bindings records the concrete types that shipping code explicitly binds to an interface.
+// collectBindings fills it from exactly two forms -- a function whose declared result is the
+// interface and whose body returns a concrete named type, and a file-level
+// `var x Iface = <concrete>` -- because broader collection was tried and falsified: catching
+// assignments, named-result writes and conversions produced both false-alive and false-dead
+// results, and walking into nested function literals fabricated bindings outright.
 //
 // Structural types.Implements is not enough on its own. Two interfaces with the same method set
 // are implemented by the same type, so a call on that type would keep a dead method of the
 // OTHER interface alive. That counter-example was found in review; requiring an explicit
-// binding removes it, because a type only counts for an interface some code actually assigns
-// it to.
+// binding removes it, because a type only counts for an interface some code actually binds it
+// to.
 type bindings map[*types.Interface]map[string]bool
 
 func (b bindings) add(iface *types.Interface, concrete types.Type) {

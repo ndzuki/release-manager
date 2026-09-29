@@ -3,8 +3,9 @@
 #
 # The list is produced by `go run ./cmd/storesurface/`, which loads the packages with
 # go/packages and matches calls against the interfaces' *types.Func objects: comments,
-# string literals and same-named methods on unrelated types do not count, and a method the
-# store package calls on its own concrete type is alive. Every entry needs a reason and a
+# string literals and same-named methods on unrelated types do not count, and a method a
+# concrete type EXPLICITLY BOUND to the interface calls (anywhere in the module, not just the
+# store package) is alive. Every entry needs a reason and a
 # review date; the gate fails when a dead method is missing here, when an entry no longer
 # matches a dead method, when a reason is missing, or when review_by has passed.
 #
