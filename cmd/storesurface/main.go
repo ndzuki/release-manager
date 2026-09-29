@@ -29,7 +29,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "storesurface: %v\n", err)
 		os.Exit(2)
 	}
-	fmt.Printf("storesurface: %d interface(s), %d declared method(s), %d not called through the interface, %d exception(s)\n",
+	fmt.Printf("storesurface: %d interface(s), %d declared method(s), %d without an attributable call site, %d exception(s)\n",
 		report.Interfaces, report.Declared, len(report.Dead), report.Exceptions)
 	for _, method := range report.Dead {
 		fmt.Printf("  dead  %s.%s", method.Interface, method.Name)
@@ -45,6 +45,6 @@ func main() {
 	for _, finding := range report.Findings {
 		fmt.Fprintf(os.Stderr, "  - %s\n", finding)
 	}
-	fmt.Fprintln(os.Stderr, "\nA method nobody calls through its interface is dead weight or a missing wire-up. Delete it, wire it, or register it in the exceptions file with a reason and a review date.")
+	fmt.Fprintln(os.Stderr, "\nA method with no attributable call site is dead weight or a missing wire-up: nothing selects it through its interface, and no type bound to that interface calls it. Delete it, wire it, or register it in the exceptions file with a reason and a review date.")
 	os.Exit(1)
 }

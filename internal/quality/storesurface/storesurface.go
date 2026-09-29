@@ -1,6 +1,13 @@
 // Package storesurface gates the store interface surface: every method declared by an
-// interface in internal/store must be called through that interface in shipping code, unless
-// it is registered in storesurface.exceptions.yaml with a reason and a future review date.
+// interface in internal/store must have an attributable call site in shipping code, unless it
+// is registered in storesurface.exceptions.yaml with a reason and a future review date.
+//
+// A call site is attributable in two shapes: the method is selected through its interface
+// (including method expressions), or a concrete type EXPLICITLY BOUND to that interface calls
+// the same name with an identical signature. The binding requirement is what keeps two
+// interfaces with the same method set from masking each other -- a structural
+// types.Implements check would let a call on the shared implementer keep a dead method of the
+// other interface alive, which is a counter-example review found and the fixture now pins.
 //
 // Why this gate exists: TASK-221's audit found methods with no call sites at all, and a later
 // fix orphaned another. A method nobody calls is either dead weight or a missing wire-up, and
@@ -142,9 +149,10 @@ func Analyze(root, storePackage string) (*Analysis, error) {
 	for index, t := range targets {
 		byName[t.method.Name] = append(byName[t.method.Name], index)
 	}
+	bound := collectBindings(pkgs)
 	called := map[int]bool{}
 	for _, pkg := range pkgs {
-		markCalls(pkg, targets, byName, called)
+		markCalls(pkg, targets, byName, bound, called)
 	}
 
 	var dead []Method
@@ -212,8 +220,8 @@ func interfaceMethods(pkg *types.Package) (targets []target, interfaceCount int)
 //
 // Both shapes come from go/types, so comments and string literals cannot keep a method alive,
 // and a same-named method on an unrelated type cannot either.
-func markCalls(pkg *packages.Package, targets []target, byName map[string][]int, called map[int]bool) {
-	if pkg == nil || pkg.TypesInfo == nil {
+func markCalls(pkg *packages.Package, targets []target, byName map[string][]int, bound bindings, called map[int]bool) {
+	if pkg == nil || pkg.TypesInfo == nil || isVendored(pkg.PkgPath) {
 		return
 	}
 	for _, file := range pkg.Syntax {
@@ -222,11 +230,17 @@ func markCalls(pkg *packages.Package, targets []target, byName map[string][]int,
 			if !ok {
 				return true
 			}
-			markSelection(pkg.TypesInfo, selector, targets, byName, called)
+			markSelection(pkg.TypesInfo, selector, targets, byName, bound, called)
 			markUse(pkg.TypesInfo, selector, targets, byName, called)
 			return true
 		})
 	}
+}
+
+// isVendored keeps third-party Go that happens to live in the tree (a checked-in
+// web/node_modules package) out of the analysis, so the local and CI package sets agree.
+func isVendored(path string) bool {
+	return strings.Contains(path, "/node_modules/") || strings.Contains(path, "/vendor/")
 }
 
 // markSelection covers method calls and method values: either the receiver IS the interface,
@@ -234,7 +248,7 @@ func markCalls(pkg *packages.Package, targets []target, byName map[string][]int,
 // calls its own concrete types inside units of work).
 func markSelection(
 	info *types.Info, selector *ast.SelectorExpr,
-	targets []target, byName map[string][]int, called map[int]bool,
+	targets []target, byName map[string][]int, bound bindings, called map[int]bool,
 ) {
 	selection, ok := info.Selections[selector]
 	if !ok || selection.Kind() != types.MethodVal {
@@ -252,7 +266,7 @@ func markSelection(
 		// types.Identical, not string equality: the concrete method lives in another package,
 		// so the two signatures render with different qualifiers even when they are the same.
 		case isSignature && targets[index].sig != nil && types.Identical(signature, targets[index].sig) &&
-			selection.Recv() != nil && types.Implements(selection.Recv(), targets[index].iface):
+			bound.covers(targets[index].iface, selection.Recv()):
 			called[index] = true
 		}
 	}
@@ -272,6 +286,169 @@ func markUse(info *types.Info, selector *ast.SelectorExpr, targets []target, byN
 	}
 }
 
+// bindings records which concrete types are explicitly bound to which interface: a return
+// whose result type is the interface (the store's accessors return their concrete field as the
+// interface), a variable declared with the interface type, or a conversion to it.
+//
+// Structural types.Implements is not enough on its own. Two interfaces with the same method set
+// are implemented by the same type, so a call on that type would keep a dead method of the
+// OTHER interface alive. That counter-example was found in review; requiring an explicit
+// binding removes it, because a type only counts for an interface some code actually assigns
+// it to.
+type bindings map[*types.Interface]map[string]bool
+
+func (b bindings) add(iface *types.Interface, concrete types.Type) {
+	if iface == nil || concrete == nil || isInterfaceType(concrete) {
+		return
+	}
+	key := concreteKey(concrete)
+	if key == "" {
+		return
+	}
+	if b[iface] == nil {
+		b[iface] = map[string]bool{}
+	}
+	b[iface][key] = true
+}
+
+// covers reports whether the receiver is a concrete type explicitly bound to the interface.
+func (b bindings) covers(iface *types.Interface, recv types.Type) bool {
+	if iface == nil || recv == nil {
+		return false
+	}
+	return b[iface][concreteKey(recv)]
+}
+
+func concreteKey(t types.Type) string {
+	if pointer, ok := t.(*types.Pointer); ok {
+		t = pointer.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return ""
+	}
+	return named.Obj().Pkg().Path() + "." + named.Obj().Name()
+}
+
+func isInterfaceType(t types.Type) bool {
+	if pointer, ok := t.(*types.Pointer); ok {
+		t = pointer.Elem()
+	}
+	_, ok := t.Underlying().(*types.Interface)
+	return ok
+}
+
+// collectBindings walks every shipping package and records the explicit interface bindings.
+func collectBindings(pkgs []*packages.Package) bindings {
+	bound := bindings{}
+	for _, pkg := range pkgs {
+		if pkg == nil || pkg.TypesInfo == nil || isVendored(pkg.PkgPath) {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			for _, decl := range file.Decls {
+				funcDecl, ok := decl.(*ast.FuncDecl)
+				if !ok || funcDecl.Body == nil {
+					continue
+				}
+				bindReturns(pkg.TypesInfo, funcDecl, bound)
+				ast.Inspect(funcDecl.Body, func(node ast.Node) bool {
+					switch stmt := node.(type) {
+					case *ast.ValueSpec:
+						bindValueSpec(pkg.TypesInfo, stmt, bound)
+					case *ast.CallExpr:
+						bindConversion(pkg.TypesInfo, stmt, bound)
+					}
+					return true
+				})
+			}
+		}
+	}
+	return bound
+}
+
+func bindReturns(info *types.Info, decl *ast.FuncDecl, bound bindings) {
+	if decl.Type.Results == nil {
+		return
+	}
+	ast.Inspect(decl.Body, func(node ast.Node) bool {
+		stmt, ok := node.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+		for position, result := range stmt.Results {
+			expected := resultTypeAt(info, decl, position)
+			iface := interfaceOf(expected)
+			if iface == nil {
+				continue
+			}
+			bound.add(iface, staticType(info, result))
+		}
+		return true
+	})
+}
+
+// resultTypeAt resolves the declared result type at position i, or "" when the function uses
+// named results in a way this walker cannot line up.
+func resultTypeAt(info *types.Info, decl *ast.FuncDecl, position int) types.Type {
+	results := decl.Type.Results.List
+	if len(results) == 0 {
+		return nil
+	}
+	// Named results make the positions explicit; otherwise the statement order matches.
+	fields := 0
+	for _, field := range results {
+		count := len(field.Names)
+		if count == 0 {
+			count = 1
+		}
+		if position >= fields && position < fields+count {
+			return info.TypeOf(field.Type)
+		}
+		fields += count
+	}
+	return nil
+}
+
+func bindValueSpec(info *types.Info, spec *ast.ValueSpec, bound bindings) {
+	if spec.Type == nil {
+		return
+	}
+	iface := interfaceOf(info.TypeOf(spec.Type))
+	if iface == nil {
+		return
+	}
+	for _, value := range spec.Values {
+		bound.add(iface, staticType(info, value))
+	}
+}
+
+func bindConversion(info *types.Info, call *ast.CallExpr, bound bindings) {
+	iface := interfaceOf(info.TypeOf(call.Fun))
+	if iface == nil || len(call.Args) != 1 {
+		return
+	}
+	bound.add(iface, staticType(info, call.Args[0]))
+}
+
+func interfaceOf(t types.Type) *types.Interface {
+	if t == nil {
+		return nil
+	}
+	iface, ok := t.Underlying().(*types.Interface)
+	if !ok {
+		return nil
+	}
+	return iface.Complete()
+}
+
+func staticType(info *types.Info, expr ast.Expr) types.Type {
+	if tv, ok := info.Types[expr]; ok {
+		return tv.Type
+	}
+	return nil
+}
+
 func findPackage(pkgs []*packages.Package, path string) *packages.Package {
 	for _, pkg := range pkgs {
 		if pkg.PkgPath == path {
@@ -287,6 +464,9 @@ func findPackage(pkgs []*packages.Package, path string) *packages.Package {
 func loadFailures(pkgs []*packages.Package) []string {
 	var failures []string
 	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+		if isVendored(pkg.PkgPath) {
+			return
+		}
 		for _, err := range pkg.Errors {
 			failures = append(failures, fmt.Sprintf("%s: %s", pkg.PkgPath, err.Msg))
 		}

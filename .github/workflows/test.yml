@@ -666,8 +666,9 @@ jobs:
   # TASK-224: the store interfaces are where "the reader expects X while the writer produces
   # Y" defects live (TASK-218 had no writer at all, TASK-222's writer hid behind a
   # unit-of-work helper, TASK-223's reader joined a table nothing populated). This job loads
-  # the packages with go/packages and fails when an interface method is never called through
-  # its interface (nor on a concrete implementer) and is not registered in
+  # the packages with go/packages and fails when an interface method has no attributable call
+  # site -- nothing selects it through its interface, and no type explicitly bound to that
+  # interface calls it -- and is not registered in
   # storesurface.exceptions.yaml with a reason and a review date. The analysis is type-based:
   # a comment, a string literal or a same-named method on another interface cannot make a
   # dead method look alive.

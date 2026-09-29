@@ -83,9 +83,10 @@ func TestValidateRejectsStaleEntryForAliveMethod(t *testing.T) {
 	}
 }
 
-// The synthetic module below is what a text search cannot get right: two interfaces declare a
-// method with the same name, a comment and a string literal mention a third, a concrete
-// implementer is called directly, and one call exists only in a test file.
+// The synthetic module below is what a text search cannot get right, and what structural
+// types.Implements gets wrong as well: CStore's method set is a subset of AStore's, so the
+// concrete implementer of AStore implements CStore too, and a call on it must not keep
+// CStore.Ping alive (review's counter-example, kept as a regression test).
 func writeModule(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -97,24 +98,28 @@ import "context"
 
 type AStore interface {
 	Ping(ctx context.Context) error
-	Dead(ctx context.Context) error
+	ConcreteOnly(ctx context.Context) error
 }
 
 type BStore interface {
 	Ping(ctx context.Context) error
-	AlsoDead(ctx context.Context) error
+	Dead(ctx context.Context) error
+}
+
+// CStore's method set is a strict subset of AStore's: the same concrete type implements both.
+type CStore interface {
+	Ping(ctx context.Context) error
 }
 
 type AStoreImpl struct{}
 
+// NewAStore binds *AStoreImpl to AStore, which is what makes its concrete calls count.
 func NewAStore() AStore { return &AStoreImpl{} }
 
-func (s *AStoreImpl) Ping(ctx context.Context) error     { return nil }
-func (s *AStoreImpl) Dead(ctx context.Context) error     { return nil }
-func (s *AStoreImpl) AlsoDead(ctx context.Context) error { return nil }
+func (s *AStoreImpl) Ping(ctx context.Context) error         { return nil }
+func (s *AStoreImpl) ConcreteOnly(ctx context.Context) error { return nil }
 `,
-		// AStore.Ping is called through the interface; BStore.Ping shares the name and must
-		// stay dead.
+		// AStore.Ping is called through the interface.
 		"internal/app/app.go": `package app
 
 import (
@@ -125,14 +130,8 @@ import (
 
 func use(a store.AStore) error { return a.Ping(context.Background()) }
 `,
-		// Comments and string literals must not keep Dead alive.
-		"internal/app/comment.go": `package app
-
-// x.Dead( is how you would call it.
-const deadMention = ".Dead("
-`,
-		// A concrete implementer call keeps a method alive: this is how the store package calls
-		// its own types inside a unit of work.
+		// A call on the concrete type bound to AStore keeps AStore.ConcreteOnly alive, and the
+		// same call shape must NOT keep the subset interface's CStore.Ping alive.
 		"internal/app/concrete.go": `package app
 
 import (
@@ -141,7 +140,15 @@ import (
 	"example.com/fake/internal/store"
 )
 
-func useConcrete() error { return (&store.AStoreImpl{}).AlsoDead(context.Background()) }
+func useConcrete() error { return (&store.AStoreImpl{}).ConcreteOnly(context.Background()) }
+
+func useConcretePing() error { return (&store.AStoreImpl{}).Ping(context.Background()) }
+`,
+		// Comments and string literals must not keep BStore.Dead alive.
+		"internal/app/comment.go": `package app
+
+// x.Dead( is how you would call it.
+const deadMention = ".Dead("
 `,
 		// A call that exists only in a test file is not a shipping call site.
 		"internal/app/app_test.go": `package app
@@ -152,7 +159,7 @@ import (
 	"example.com/fake/internal/store"
 )
 
-func helper(a store.AStore) error { return a.Dead(context.Background()) }
+func helper(b store.BStore) error { return b.Dead(context.Background()) }
 `,
 	}
 	for rel, content := range files {
@@ -173,23 +180,21 @@ func TestAnalyzeIsTypeBased(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
-	if analysis.Interfaces != 2 || analysis.Declared != 4 {
-		t.Fatalf("want 2 interfaces / 4 declarations, got %d / %d", analysis.Interfaces, analysis.Declared)
+	if analysis.Interfaces != 3 || analysis.Declared != 5 {
+		t.Fatalf("want 3 interfaces / 5 declarations, got %d / %d", analysis.Interfaces, analysis.Declared)
 	}
 	dead := map[string]bool{}
 	for _, m := range analysis.Dead {
 		dead[m.Interface+"."+m.Name] = true
 	}
-	if dead["AStore.Ping"] {
-		t.Error("AStore.Ping is called through the interface")
+	for _, alive := range []string{"AStore.Ping", "AStore.ConcreteOnly"} {
+		if dead[alive] {
+			t.Errorf("%s has a call site and must not be dead", alive)
+		}
 	}
-	if dead["BStore.AlsoDead"] {
-		t.Error("BStore.AlsoDead is called on a concrete implementer")
-	}
-	if !dead["AStore.Dead"] {
-		t.Error("AStore.Dead is only called from a test file and must stay dead")
-	}
-	if !dead["BStore.Ping"] {
-		t.Error("BStore.Ping shares its name with AStore.Ping but is never called")
+	for _, wantDead := range []string{"BStore.Ping", "BStore.Dead", "CStore.Ping"} {
+		if !dead[wantDead] {
+			t.Errorf("%s has no attributable call site and must stay dead", wantDead)
+		}
 	}
 }

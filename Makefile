@@ -565,7 +565,9 @@ check-migrations: ## Static gate: migration numbering is contiguous and every ve
 
 .PHONY: check-store-surface
 check-store-surface: ## Gate the store interface surface: every method needs a caller or a registered exception (TASK-224)
-	$(GO) run ./cmd/storesurface/ -root . -exceptions storesurface.exceptions.yaml
+	@mkdir -p bin
+	@$(GO) build -buildvcs=false -o bin/storesurface ./cmd/storesurface/
+	@./bin/storesurface -root . -exceptions storesurface.exceptions.yaml
 
 .PHONY: check-schema-parity
 check-schema-parity: ## Dual-engine parity gate: SQLite inline DDL vs PostgreSQL migrations, table+column+type diff (D-ε/ε-1)
