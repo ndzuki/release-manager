@@ -94,8 +94,8 @@ function stripIdentifierPositions(text: string): string {
 }
 
 function sections(text: string): { template: string; script: string } {
-  const template = /<template>([\s\S]*)<\/template>/i.exec(text)?.[1];
-  const script = /<script[^>]*>([\s\S]*?)<\/script>/i.exec(text)?.[1];
+  const template = /<template[^>]*>([\s\S]*)<\/template\s*>/i.exec(text)?.[1];
+  const script = /<script[^>]*>([\s\S]*?)<\/script\s*>/i.exec(text)?.[1];
   // A plain .ts module has neither tag: treat the whole file as script, otherwise the
   // helper modules that render user copy (utils/*.ts) are invisible to this detector.
   if (template === undefined && script === undefined) return { template: '', script: text };
