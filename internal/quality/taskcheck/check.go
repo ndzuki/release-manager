@@ -8,8 +8,9 @@
 // drifts silently is how a "done" claim ships without a merged change.
 //
 // The rule is deliberately narrow and mechanical: a card whose status is done or
-// closed must declare merge_status merged and carry a non-empty pr_url, and that
-// PR must be provably merged. Two independent evidence sources are accepted:
+// closed must declare merge_status merged and carry a non-empty pr_url, and EVERY
+// pull request it cites must be provably merged (a delivery can land in more than
+// one, TASK-227). Two independent evidence sources are accepted:
 //
 //   - gh pr list output (number/state/mergeCommit), whose mergeCommit OID must
 //     also exist in the local git history; and
