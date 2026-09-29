@@ -168,10 +168,9 @@ func TestEmergencyArtifactTrustResolvesThroughItsBundle(t *testing.T) {
 		seedArtifactTrustedThroughBundle(t, st, "artifact-revoked", "sha256:revoked", store.VerificationTrusted, true)
 		// Revoking a root bumps the environment's revocation epoch; a record written before
 		// that no longer authorises anything (AC-220-02). trust/service.go performs the
-		// production revoke through TransitionLiveRoot(..., bumpRevocation=true), which
-		// refuses to remove the last live root — hence the keeper below, created first so
-		// the verdict's own root (emergencyTestRootID) is the one being revoked.
-		verdictRoot := seedEmergencyLiveRoot(t, st)
+		// production revoke through TransitionLiveRoot(..., bumpRevocation=true). The root
+		// being revoked is a keeper, not the root that signed the verdict: the verdict's
+		// root stays live, so the only reason left for the refusal is the stale epoch.
 		now := time.Now().UTC()
 		require.NoError(t, st.TrustRoots().Create(t.Context(), &store.TrustRoot{
 			ID: "root-epoch-keeper", Environment: "staging", KeyID: "root-epoch-keeper-key",
@@ -179,7 +178,7 @@ func TestEmergencyArtifactTrustResolvesThroughItsBundle(t *testing.T) {
 			ValidFrom: now.Add(-time.Hour),
 		}))
 		_, err := st.TrustRoots().TransitionLiveRoot(
-			t.Context(), verdictRoot.ID, "staging", store.TrustRootRevoked, &now, true)
+			t.Context(), "root-epoch-keeper", "staging", store.TrustRootRevoked, &now, true)
 		require.NoError(t, err)
 
 		_, err = svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyImageRequestForArtifact("revoked", "artifact-revoked"))
