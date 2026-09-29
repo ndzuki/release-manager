@@ -1759,6 +1759,9 @@ func TestTrustRootBumpRevocationEpoch(t *testing.T) {
 	meta, err := st.TrustRoots().TransitionLiveRoot(ctx, first.ID, "production", store.TrustRootRevoked, &now, true)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), meta.RevocationEpoch)
+	// REQ-043's invariant, pinned here rather than only in the DSN-gated postgres test:
+	// revoking advances the revocation epoch and must NOT move the policy version.
+	assert.Equal(t, int64(0), meta.Version, "revocation must not bump the policy version")
 
 	second := &store.TrustRoot{
 		ID: "root-epoch-2", Environment: "production", KeyID: "key-epoch-2", Issuer: "ci",
@@ -1768,6 +1771,7 @@ func TestTrustRootBumpRevocationEpoch(t *testing.T) {
 	meta, err = st.TrustRoots().TransitionLiveRoot(ctx, second.ID, "production", store.TrustRootRevoked, &now, true)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), meta.RevocationEpoch)
+	assert.Equal(t, int64(0), meta.Version, "revocation must not bump the policy version")
 }
 
 func TestTrustRootGetPolicyDefault(t *testing.T) {
