@@ -118,27 +118,6 @@ func (s *candidateArtifactStore) LinkToBundle(ctx context.Context, artifactID, b
 	return nil
 }
 
-func (s *candidateArtifactStore) LinkCandidateArtifacts(ctx context.Context, bundleID string, digests []string) (int64, error) {
-	var linked int64
-	err := retryBusy(ctx, func() error {
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin link candidate artifacts: %w", err)
-		}
-		defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
-
-		linked, err = linkCandidateArtifacts(ctx, tx, bundleID, digests)
-		if err != nil {
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit link candidate artifacts: %w", err)
-		}
-		return nil
-	})
-	return linked, err
-}
-
 func linkCandidateArtifacts(ctx context.Context, tx *sql.Tx, bundleID string, digests []string) (int64, error) {
 	if len(digests) == 0 {
 		return 0, nil

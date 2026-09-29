@@ -54,10 +54,6 @@ exceptions:
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
   - interface: CandidateArtifactStore
-    method: LinkCandidateArtifacts
-    reason: "[superseded] 候选制品与 bundle 关联走 LinkToBundleTx / LinkToBundle，此方法无调用者"
-    review_by: "2026-12-31"
-  - interface: CandidateArtifactStore
     method: LinkToBundle
     reason: "[superseded-by-Tx] 生产链路只用事务版 LinkToBundleTx，非事务版仅测试使用"
     review_by: "2026-12-31"

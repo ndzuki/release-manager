@@ -2635,7 +2635,6 @@ type CandidateArtifactStore interface {
 	UpsertLocationTx(tx *gorm.DB, artifactID, ref, sourceID string, now time.Time) error
 	LinkToBundleTx(tx *gorm.DB, bundleID string, digests []ArtifactDigest) error
 	DeleteOrphanBefore(ctx context.Context, cutoff time.Time, limit ...int) (int64, error)
-	LinkCandidateArtifacts(ctx context.Context, bundleID string, digests []string) (int64, error)
 	// MarkValidatedForBundleTx stamps validated_at on the candidate artifacts linked to a
 	// bundle. It is the writer the read side has always assumed: ListValidated and the
 	// emergency artifact selection require validated_at, and until this method existed
