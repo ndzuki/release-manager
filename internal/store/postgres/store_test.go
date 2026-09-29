@@ -1389,8 +1389,13 @@ func TestNotificationStoreLifecycle(t *testing.T) {
 	}
 	require.NoError(t, st.Notifications().Create(ctx, job))
 	// The dispatcher consumes jobs through the atomic claim (notifier/consumer.go);
-	// GetPending (the non-claiming listing) has no production caller.
-	claimed, err := st.Notifications().ClaimNext(ctx, now)
+	// GetPending (the non-claiming listing) has no production caller. The claim honours the
+	// retry schedule, so the job is not claimable before next_retry_at and is at that instant.
+	notYet, err := st.Notifications().ClaimNext(ctx, now)
+	require.NoError(t, err)
+	assert.Nil(t, notYet, "a job scheduled for later must not be claimable yet")
+
+	claimed, err := st.Notifications().ClaimNext(ctx, nextRetry)
 	require.NoError(t, err)
 	require.NotNil(t, claimed)
 	assert.Equal(t, job.ID, claimed.ID)
@@ -1405,7 +1410,8 @@ func TestNotificationStoreLifecycle(t *testing.T) {
 	// instants, not Location pointers.
 	assert.True(t, stored.NextRetryAt.Equal(nextRetry), "next_retry_at round-trip")
 	assert.True(t, stored.CreatedAt.Equal(now), "created_at round-trip")
-	assert.True(t, stored.UpdatedAt.Equal(now), "updated_at round-trip")
+	// The claim stamps updated_at with the instant it was claimed at.
+	assert.True(t, stored.UpdatedAt.Equal(nextRetry), "updated_at round-trip")
 
 	// Same (operation_id, channel, recipient) triple must be rejected by the
 	// UNIQUE constraint (idempotency fallback, AC-031-01).
