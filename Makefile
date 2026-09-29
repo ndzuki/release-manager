@@ -271,15 +271,15 @@ api-check: ## Validate the Kulala collections against api/proto and the dev port
 .PHONY: proto
 proto: ## Generate protobuf code (Connect + protobuf-go)
 	@command -v buf >/dev/null 2>&1 || { go install github.com/bufbuild/buf/cmd/buf@latest && export PATH="$(GOBIN):$$PATH"; }; \
-	echo "$(YELLOW)Generating Connect + protobuf code...$(NC)"; \
-	buf generate --template $(PROTO_DIR)/buf.gen.yaml; \
+	echo "$(YELLOW)Generating Connect + protobuf code...$(NC)" && \
+	buf generate --template $(PROTO_DIR)/buf.gen.yaml && \
 	echo "$(GREEN)Proto code generated$(NC)"
 
 .PHONY: lint-proto
 lint-proto: ## Run buf lint over api/proto so naming rules cannot silently regress
 	@command -v buf >/dev/null 2>&1 || { go install github.com/bufbuild/buf/cmd/buf@latest && export PATH="$(GOBIN):$$PATH"; }; \
-	echo "$(YELLOW)Linting proto with buf...$(NC)"; \
-	buf lint; \
+	echo "$(YELLOW)Linting proto with buf...$(NC)" && \
+	buf lint && \
 	echo "$(GREEN)Proto lint clean$(NC)"
 
 # ---------------------------------------------------------------------------
@@ -404,6 +404,18 @@ test-rollout-watch: ## Create a kind cluster, run integration tests, and tear do
 		exit 1; \
 	fi; \
 	printf "$(GREEN)test-rollout-watch pass (%s.%03ds)$(NC)\n" "$$(( $$ELAPSED_NS / 1000000000 ))" "$$(( ($$ELAPSED_NS / 1000000) % 1000 ))"
+.PHONY: web-install
+web-install: ## Install web dependencies from the lockfile (npm ci)
+	@command -v npm >/dev/null 2>&1 || { printf "$(YELLOW)npm is required for the web gates$(NC)\n"; exit 1; }
+	cd web && npm ci
+
+.PHONY: web-check
+web-check: ## Front-end gates: eslint + vitest + vue-tsc/vite build (TASK-175)
+	@command -v npm >/dev/null 2>&1 || { printf "$(YELLOW)npm is required for the web gates$(NC)\n"; exit 1; }
+	@test -d web/node_modules || { printf "$(YELLOW)web/node_modules is missing; run 'make web-install' first$(NC)\n"; exit 1; }
+	cd web && npm run lint && npm test && npm run build
+	@printf "$(GREEN)web gates pass (lint + test + build)$(NC)\n"
+
 .PHONY: test-coverage
 test-coverage: ## Run tests with coverage report
 	$(GO) test -race -coverprofile=coverage.out ./...
@@ -631,7 +643,7 @@ test-operator-image-sdk-only: ## Run operator image SDK-only gate (REQ-061)
 			--policy imagecheck.operator.yaml \
 			--dockerfile deploy/docker/Dockerfile.operator
 .PHONY: quality
-quality: sdk-check test-coverage lint check-reqs check-error-codes check-tasks check-schema-parity check-licenses check-docs check-config-keys check-migrations check-probes api-check lint-proto ## Full quality gate run
+quality: sdk-check test-coverage lint check-reqs check-error-codes check-tasks check-schema-parity check-licenses check-docs check-config-keys check-migrations check-probes api-check lint-proto web-check ## Full quality gate run (web-check needs Node; run 'make web-install' once)
 
 .PHONY: quality-vault
 quality-vault: ## `make quality` that REQUIRES the vault REQ documents (fails when REQS_DIR is unset)

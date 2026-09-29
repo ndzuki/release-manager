@@ -562,7 +562,7 @@ jobs:
         run: make dev-purge CONFIRM=1
 
   # ---------------------------------------------------------------------------
-  # Static gates. These two jobs are appended at the end on purpose: documents in
+  # Static gates. These jobs are appended at the end on purpose: documents in
   # this repository cite test.yml by line number, so inserting a job in the middle
   # would invalidate dozens of citations unrelated to this change.
   # ---------------------------------------------------------------------------
@@ -618,3 +618,47 @@ jobs:
             echo "::error::generated code is stale; run 'make proto' and commit the result"
             exit 1
           fi
+
+  # TASK-175 (REQ-008 maintenance work, ADR-023): the web console had NO gate at
+  # all — every one of the jobs above is Go, so `vue-tsc`, `eslint`, `vitest` and
+  # the production build only ever ran on someone's laptop. That is how the
+  # console shipped unable to authenticate (TASK-171/B1), with a write path that
+  # failed closed (TASK-172/B4) and an audit page that answered 405
+  # (TASK-174/B5): nothing automated ever loaded it in a browser.
+  #
+  # Scope: lint + type-check + unit tests + production build. The Playwright
+  # suite (web/e2e) needs the full dev stack (`make dev-up`) and stays out of
+  # this job; it belongs to the e2e job family.
+  web:
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+
+      # Node version follows web/package.json `engines`: ^20 || ^22 || >=24.
+      # 22 is the current LTS in that range.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # `npm ci` (not `npm install`): the lockfile is the contract. A drifting
+      # node_modules hid a real mismatch before (package.json asked for
+      # js-yaml ^5.2.2 while the tree had 5.2.1).
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      # `vue-tsc -b` (project references) + `vite build`: the only type gate the
+      # web surface has. Its inputs are source only, so it is safe in CI.
+      - name: Type-check and build
+        run: npm run build
