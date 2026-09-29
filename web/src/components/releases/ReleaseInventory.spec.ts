@@ -6,8 +6,8 @@ import ReleaseInventoryTable from './ReleaseInventoryTable.vue';
 
 describe('release inventory presentation', () => {
   it.each([
-    ['missing', 'Release 已从集群中消失', 'Missing'],
-    ['out_of_sync', '配置与期望不一致', 'Out of sync'],
+    ['missing', 'Release 已从集群中消失', '缺失'],
+    ['out_of_sync', '配置与期望不一致', '不同步'],
   ] as const)('explains %s status without relying on color', (status, tooltip, label) => {
     const wrapper = mount(ReleaseStatusBadge, { props: { status } });
 

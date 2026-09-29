@@ -1,3 +1,4 @@
+import { t } from '@/i18n/messages';
 import type { EnrollmentFormInput, OperatorFieldViolation } from '@/types/operator';
 
 export interface OperatorValidationResult {
@@ -11,11 +12,11 @@ export function validateEnrollmentForm(input: EnrollmentFormInput): OperatorVali
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(name)) {
     violations.push({
       field: 'operatorName',
-      description: 'Operator name must be a lowercase DNS-compatible label with 1 to 63 characters.',
+      description: t('operator.validation.name'),
     });
   }
   if (input.ttlMinutes !== 0 && (input.ttlMinutes < 5 || input.ttlMinutes > 1440)) {
-    violations.push({ field: 'ttlMinutes', description: 'TTL must be 0 or between 5 and 1440 minutes.' });
+    violations.push({ field: 'ttlMinutes', description: t('operator.validation.ttl') });
   }
   return { valid: violations.length === 0, violations };
 }
@@ -23,7 +24,7 @@ export function validateEnrollmentForm(input: EnrollmentFormInput): OperatorVali
 export function validateRevokeReason(reason: string): OperatorFieldViolation | null {
   const length = [...reason.trim()].length;
   if (length < 5 || length > 500) {
-    return { field: 'reason', description: 'Revocation reason must contain 5 to 500 characters.' };
+    return { field: 'reason', description: t('operator.validation.reason') };
   }
   return null;
 }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import type { PatchOverride } from '@/types/operation';
 
 const model = defineModel<PatchOverride[]>({ required: true });
@@ -15,8 +16,8 @@ function removeRow(index: number): void {
 
 <template>
   <fieldset class="patch-editor">
-    <legend>Patch 覆盖</legend>
-    <p class="patch-editor__hint">只允许 dot-path。Secret 类字段必须使用 Secret 引用，不保存明文。</p>
+    <legend>{{ t('operation.patch.title') }}</legend>
+    <p class="patch-editor__hint">{{ t('operation.patch.help') }}</p>
     <div
       v-for="(override, index) in model"
       :key="index"
@@ -30,8 +31,8 @@ function removeRow(index: number): void {
         placeholder="image.tag"
       />
       <select v-model="override.kind" :aria-label="`Patch ${index + 1} kind`">
-        <option value="LITERAL">Literal</option>
-        <option value="SECRET_REF">Secret ref</option>
+        <option value="LITERAL">{{ t('operation.patch.literal') }}</option>
+        <option value="SECRET_REF">{{ t('operation.patch.secretRef') }}</option>
       </select>
       <input
         v-model="override.value"
@@ -39,23 +40,23 @@ function removeRow(index: number): void {
         :aria-invalid="props.errorIndex === index"
         :placeholder="override.kind === 'SECRET_REF' ? 'secret-name' : 'value'"
       />
-      <button type="button" class="patch-editor__remove" @click="removeRow(index)">移除</button>
+      <button type="button" class="patch-editor__remove" @click="removeRow(index)">{{ t('cluster.rules.remove') }}</button>
       <p v-if="props.error && props.errorIndex === index" class="patch-editor__row-error" role="alert">
         {{ props.error }}
       </p>
     </div>
-    <button type="button" class="patch-editor__add" @click="addRow">添加 Patch</button>
+    <button type="button" class="patch-editor__add" @click="addRow">{{ t('operation.patch.add') }}</button>
   </fieldset>
 </template>
 
 <style scoped>
-.patch-editor { display: grid; gap: 0.75rem; padding: 1rem; border: 1px solid #cbd5e1; border-radius: 0.75rem; }
-.patch-editor__hint { margin: 0; color: #64748b; font-size: 0.875rem; }
+.patch-editor { display: grid; gap: 0.75rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
+.patch-editor__hint { margin: 0; color: var(--color-muted); font-size: var(--font-size-md); }
 .patch-editor__row { display: grid; grid-template-columns: 2fr 1fr 2fr auto; gap: 0.5rem; }
-.patch-editor__row--error { padding: 0.65rem; border: 1px solid #dc2626; border-radius: 0.5rem; background: #fef2f2; }
-.patch-editor__row-error { grid-column: 1 / -1; margin: 0; color: #b91c1c; }
-.patch-editor input, .patch-editor select { min-width: 0; padding: 0.6rem; border: 1px solid #94a3b8; border-radius: 0.375rem; }
-.patch-editor__add, .patch-editor__remove { width: fit-content; padding: 0.55rem 0.75rem; border: 1px solid #94a3b8; border-radius: 0.375rem; background: #fff; }
-.patch-editor__remove { color: #b91c1c; }
+.patch-editor__row--error { padding: 0.65rem; border: 1px solid var(--color-danger); border-radius: 0.5rem; background: var(--color-danger-soft); }
+.patch-editor__row-error { grid-column: 1 / -1; margin: 0; color: var(--color-error); }
+.patch-editor input, .patch-editor select { min-width: 0; padding: 0.6rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; }
+.patch-editor__add, .patch-editor__remove { width: fit-content; padding: 0.55rem 0.75rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); }
+.patch-editor__remove { color: var(--color-error); }
 @media (max-width: 48rem) { .patch-editor__row { grid-template-columns: 1fr; } }
 </style>

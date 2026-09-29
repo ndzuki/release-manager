@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 // Emergency change page (plan v3 Step 4): thin composition surface —
 // scoped authorization gate → conflict check → target/artifact/form flow →
 // frozen confirmation → Execute → Operation Detail. All business logic lives
@@ -98,13 +99,13 @@ async function onConfirm(): Promise<void> {
 
 <template>
   <section class="emergency-page">
-    <nav class="breadcrumbs" aria-label="Breadcrumb">
+    <nav class="breadcrumbs" :aria-label="t('values.page.breadcrumb')">
       <RouterLink
         :to="{ name: 'ReleaseInventory', params: { customerId, clusterId: route.params.clusterId } }"
       >
-        Releases
+        {{ t('cluster.detail.releases') }}
       </RouterLink>
-      <span aria-hidden="true">/</span><strong>Emergency Change</strong>
+      <span aria-hidden="true">/</span><strong>{{ t('emergency.page.title') }}</strong>
     </nav>
 
     <LoadingState v-if="gate === 'loading'" message="正在加载授权与目标…" />
@@ -119,16 +120,13 @@ async function onConfirm(): Promise<void> {
       message="紧急变更不可用：功能已关闭或发布定义不存在。"
     />
     <div v-else-if="store.conflict?.hasConflict" class="conflict-block">
-      <h2>存在进行中的标准操作</h2>
-      <p>
-        发布定义存在 running
-        {{ store.conflict.runningOperation?.type }} 操作，紧急变更入口已阻断（AC-058-08）。
-      </p>
+      <h2>{{ t('emergency.page.blockedTitle') }}</h2>
+      <p>{{ t('emergency.page.blockedBody') }} {{ store.conflict.runningOperation?.type }}</p>
       <RouterLink
         v-if="store.conflict.runningOperation"
         :to="operationRoute(store.conflict.runningOperation.operationId)"
       >
-        查看 Operation {{ store.conflict.runningOperation.operationId }}
+        {{ t('emergency.page.viewOperation') }} {{ store.conflict.runningOperation.operationId }}
       </RouterLink>
     </div>
     <div v-else class="emergency-flow">
@@ -212,11 +210,11 @@ async function onConfirm(): Promise<void> {
 
 <style scoped>
 .emergency-page { display: grid; gap: 1.25rem; padding: 1.25rem; }
-.breadcrumbs { display: flex; gap: 0.5rem; color: #64748b; }
-.conflict-block { display: grid; gap: 0.75rem; padding: 1rem; border: 1px solid #fde68a; border-radius: 0.5rem; background: #fffbeb; }
+.breadcrumbs { display: flex; gap: 0.5rem; color: var(--color-muted); }
+.conflict-block { display: grid; gap: 0.75rem; padding: 1rem; border: 1px solid var(--color-warning-border-strong); border-radius: 0.5rem; background: var(--color-warning-surface); }
 .emergency-flow { display: grid; gap: 1.25rem; }
 .submit-row { display: flex; justify-content: flex-end; }
-.unavailable-notice { margin: 0; padding: 0.75rem 1rem; border: 1px solid #e2e8f0; border-radius: 0.5rem; background: #f8fafc; color: #475569; }
-.primary { padding: 0.6rem 1.25rem; border: 0; border-radius: 0.375rem; background: #dc2626; color: #fff; }
-.primary:disabled { background: #fca5a5; cursor: not-allowed; }
+.unavailable-notice { margin: 0; padding: 0.75rem 1rem; border: 1px solid var(--color-border); border-radius: 0.5rem; background: var(--color-bg); color: var(--color-muted-strong); }
+.primary { padding: 0.6rem 1.25rem; border: 0; border-radius: 0.375rem; background: var(--color-danger); color: var(--color-on-accent); }
+.primary:disabled { background: var(--color-danger-border-strong); cursor: not-allowed; }
 </style>

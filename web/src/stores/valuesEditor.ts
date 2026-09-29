@@ -93,6 +93,65 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
   const editable = ref(true);
   const saveDisabled = computed(() => saving.value || !editable.value || !canEdit.value || Boolean(validationError.value) || Boolean(secretRefsError.value));
 
+  /** Canonical JSON of the persisted document, or null when it does not parse. */
+  const persistedCanonical = computed(() => {
+    const document = currentRevision.value?.document;
+    if (!document) return null;
+    const parsed = validateValuesDocument(document);
+    return parsed.issue ? null : JSON.stringify(parsed.canonical.value);
+  });
+
+  /**
+   * Canonical form of the approved parent document — the baseline locked paths are
+   * read-only against.
+   */
+  const parentCanonical = computed<unknown | null>(() => {
+    const document = parentRevision.value?.document;
+    if (!document) return null;
+    const parsed = validateValuesDocument(document);
+    return parsed.issue ? null : parsed.canonical.value;
+  });
+
+  /**
+   * UX-003 (blocker): `submit` sends the PERSISTED revision id/stateVersion, so
+   * submitting while the editor holds unsaved or invalid content silently approves
+   * the previous saved draft instead of what the user is looking at. Anything that
+   * is not the persisted document counts as unsaved.
+   */
+  /**
+   * The persisted SecretRefs, canonicalised for comparison (order-insensitive).
+   * Only name+key: `mapSecretRef` (connect/values-revision.ts) drops `path` and
+   * `namespace`, so comparing those fields would report "unsaved" forever once a
+   * ref exists.
+   */
+  function secretRefsKey(items: { name: string; key: string }[]): string {
+    return JSON.stringify(
+      items
+        .map((item) => ({ name: item.name, key: item.key }))
+        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+    );
+  }
+
+  const persistedSecretRefs = computed(() => secretRefsKey(currentRevision.value?.secretRefs ?? []));
+  const editedSecretRefs = computed(() => secretRefsKey(secretRefs.value));
+
+  const hasUnsavedChanges = computed(() => {
+    const revision = currentRevision.value;
+    if (!revision) return false;
+    if (secretRefsError.value) return true;
+    // A valid-but-EDITED SecretRef is also unsaved: submitValuesRevision carries no
+    // secretRefs, so submitting would drop the change just like a document edit.
+    if (persistedSecretRefs.value !== editedSecretRefs.value) return true;
+    // Canonicalise the LIVE editor content instead of reading canonicalCurrent:
+    // that one is recomputed on a 500ms debounce, so during the typing window it
+    // still describes the previous content and the guard would report "saved".
+    const parsed = validateValuesDocument(editorContent.value);
+    if (parsed.issue) return true;
+    const persisted = persistedCanonical.value;
+    if (persisted === null) return editorContent.value.trim() !== revision.document.trim();
+    return JSON.stringify(parsed.canonical.value) !== persisted;
+  });
+
   function clearTimers(): void {
     if (editorTimer) clearTimeout(editorTimer);
     if (draftTimer) clearTimeout(draftTimer);
@@ -186,7 +245,12 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
     error.value = null;
     try {
       const revisions = await listValuesRevisions(releaseDefinitionId.value);
-      parentRevision.value = revisions.find((revision) => revision.status === 'approved') ?? null;
+      // In convergence mode the authoritative parent is the prepared session's
+      // parent, not "the first approved in the list" (several may exist).
+      const preparedParent = convergenceParentRevisionId.value
+        ? revisions.find((revision) => revision.id === convergenceParentRevisionId.value)
+        : undefined;
+      parentRevision.value = preparedParent ?? revisions.find((revision) => revision.status === 'approved') ?? null;
       currentRevision.value = revisions.find((revision) => revision.status === 'draft') ?? null;
       // Convergence mode never reads browser drafts — prepared payloads are
       // rebuilt from the canonical API only (AC-058-35/48).
@@ -227,13 +291,16 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
   async function loadConvergence(token: string): Promise<void> {
     convergenceMode.value = true;
     prepareToken.value = token;
-    await load();
     try {
       const prepared = await getPrepareSession(token);
       lockedPaths.value = [...prepared.lockedPaths];
       preparedTaskIds.value = [...prepared.taskIds];
+      // Set the parent id BEFORE load(): load() picks the locked-path baseline from
+      // it, and picking "the first approved revision in the list" instead would use
+      // the wrong parent whenever more than one approved revision exists.
       convergenceParentRevisionId.value = prepared.parentRevisionId;
       convergenceParentVersion.value = Number(prepared.parentVersion);
+      await load();
       editorContent.value = prepared.document;
       canonicalizeAndDiff();
     } catch (requestError) {
@@ -332,13 +399,31 @@ function changedLockedPaths(current: unknown, baseline: unknown, paths: string[]
 
   async function submit(): Promise<boolean> {
     const revision = currentRevision.value;
-    if (!revision || approving.value) return false;
+    if (!revision || approving.value || saving.value) return false;
+    // UX-003: never submit something other than what the user sees.
+    if (saveDisabled.value) {
+      error.value = '当前内容未通过校验，请修正后再提交';
+      return false;
+    }
+    if (hasUnsavedChanges.value) {
+      error.value = '请先保存 Draft；提交的是已保存的 Revision';
+      return false;
+    }
     // AC-055-13: locked paths are read-only in convergence mode. Refuse a draft
     // that changed one, and name it, instead of letting the server reject the
     // whole transaction without saying which path was at fault.
     if (convergenceMode.value && lockedPaths.value.length > 0) {
       const parsed = validateValuesDocument(editorContent.value);
-      const changed = changedLockedPaths(parsed.canonical.value, canonicalCurrent.value, lockedPaths.value);
+      // Baseline is the APPROVED parent, not canonicalCurrent: the latter tracks
+      // the editor (debounced recompute), so after the debounce the comparison was
+      // the editor against itself and the guard silently passed. Falling back to
+      // canonicalCurrent would restore exactly that hole, so a missing baseline is
+      // fail-closed instead.
+      if (parentCanonical.value === null) {
+        error.value = '缺少已批准父 Revision 的基线，无法校验锁定路径；请刷新后重试';
+        return false;
+      }
+      const changed = changedLockedPaths(parsed.canonical.value, parentCanonical.value, lockedPaths.value);
       if (changed.length > 0) {
         error.value = `锁定路径不可修改：${changed.join('、')}`;
         return false;
@@ -448,6 +533,7 @@ function changedLockedPaths(current: unknown, baseline: unknown, paths: string[]
     canEdit,
     editable,
     saveDisabled,
+    hasUnsavedChanges,
     resetScope,
     load,
     loadConvergence,

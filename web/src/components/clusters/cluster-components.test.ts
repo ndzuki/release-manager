@@ -66,8 +66,8 @@ describe('RouteRuleEditor', () => {
 
     const option = wrapper.get('option[value="pull_through_cache"]');
     expect(option.attributes('disabled')).toBeDefined();
-    expect(option.attributes('title')).toContain('capability testing');
-    expect(wrapper.text()).toContain('Pull-through cache requires capability testing.');
+    expect(option.attributes('title')).toContain('能力测试');
+    expect(wrapper.text()).toContain('Pull-through cache 需要先通过能力测试。');
   });
 
   it('does not render a credential input', () => {
@@ -83,6 +83,43 @@ describe('RouteRuleEditor', () => {
     expect(wrapper.find('input[name*="credential" i]').exists()).toBe(false);
     expect(wrapper.find('input[name*="token" i]').exists()).toBe(false);
     expect(wrapper.text().toLowerCase()).not.toContain('bearer token');
+  });
+});
+
+describe('RouteRuleEditor branches the review found uncovered', () => {
+  // The empty state, the read-only mode and the inline field error were untested.
+  it('shows the empty state from the catalog', () => {
+    const wrapper = mount(RouteRuleEditor, {
+      props: { title: '镜像路由', artifactType: 'image', rules: [], endpoints, violations: [], readonly: false },
+    });
+
+    expect(wrapper.text()).toContain('未配置规则。');
+    expect(wrapper.text()).toContain('新增规则');
+  });
+
+  it('hides the add and remove controls in read-only mode', () => {
+    const wrapper = mount(RouteRuleEditor, {
+      props: { title: '镜像路由', artifactType: 'image', rules: [rule()], endpoints, violations: [], readonly: true },
+    });
+
+    expect(wrapper.text()).not.toContain('新增规则');
+    expect(wrapper.text()).not.toContain('移除');
+  });
+
+  it('renders a field violation next to the rule heading', () => {
+    const wrapper = mount(RouteRuleEditor, {
+      props: {
+        title: '镜像路由',
+        artifactType: 'image',
+        rules: [rule()],
+        endpoints,
+        violations: [{ field: 'imageRules[0].sourcePrefix', description: 'Route source prefix conflicts with another rule' }],
+        readonly: false,
+      },
+    });
+
+    expect(wrapper.text()).toContain('规则 1');
+    expect(wrapper.find('.field-error').exists()).toBe(true);
   });
 });
 

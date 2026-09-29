@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { computed } from 'vue';
 import type { CustomerFormInput, FieldViolation } from '@/types/customer';
 
@@ -11,7 +12,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   readonly: false,
   submitting: false,
-  submitLabel: 'Save customer',
+  submitLabel: t('customer.form.save'),
   fieldViolations: () => [],
 });
 
@@ -32,7 +33,7 @@ function updateField(field: 'name' | 'slug', value: string) {
 <template>
   <form class="customer-form" @submit.prevent="emit('submit')">
     <label class="customer-form__field">
-      <span>Name</span>
+      <span>{{ t('customer.form.name') }}</span>
       <input
         :value="modelValue.name"
         type="text"
@@ -46,7 +47,7 @@ function updateField(field: 'name' | 'slug', value: string) {
     </label>
 
     <label class="customer-form__field">
-      <span>Slug</span>
+      <span>{{ t('customer.form.slug') }}</span>
       <input
         :value="modelValue.slug"
         type="text"
@@ -59,9 +60,9 @@ function updateField(field: 'name' | 'slug', value: string) {
       <small v-if="slugError" class="customer-form__error">{{ slugError }}</small>
     </label>
 
-    <p v-if="readonly" class="customer-form__readonly">Read-only access. Customer fields cannot be changed.</p>
+    <p v-if="readonly" class="customer-form__readonly">{{ t('customer.form.readonly') }}</p>
     <button v-else class="customer-form__submit" type="submit" :disabled="!canSubmit">
-      {{ submitting ? 'Saving…' : submitLabel }}
+      {{ submitting ? t('customer.form.saving') : submitLabel }}
     </button>
   </form>
 </template>
@@ -69,10 +70,10 @@ function updateField(field: 'name' | 'slug', value: string) {
 <style scoped>
 .customer-form { display: grid; gap: 1rem; }
 .customer-form__field { display: grid; gap: 0.375rem; font-weight: 600; }
-.customer-form__field input { padding: 0.625rem 0.75rem; border: 1px solid #94a3b8; border-radius: 0.375rem; font: inherit; }
-.customer-form__field input:disabled { background: #f1f5f9; color: #475569; }
-.customer-form__error { color: #b91c1c; font-weight: 500; }
-.customer-form__readonly { margin: 0; color: #64748b; }
-.customer-form__submit { justify-self: start; padding: 0.625rem 0.875rem; border: 0; border-radius: 0.375rem; background: #2563eb; color: #fff; font-weight: 700; cursor: pointer; }
+.customer-form__field input { padding: 0.625rem 0.75rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; font: inherit; }
+.customer-form__field input:disabled { background: var(--color-surface-muted); color: var(--color-muted-strong); }
+.customer-form__error { color: var(--color-error); font-weight: 500; }
+.customer-form__readonly { margin: 0; color: var(--color-muted); }
+.customer-form__submit { justify-self: start; padding: 0.625rem 0.875rem; border: 0; border-radius: 0.375rem; background: var(--color-primary); color: var(--color-on-accent); font-weight: 700; cursor: pointer; }
 .customer-form__submit:disabled { opacity: 0.55; cursor: not-allowed; }
 </style>

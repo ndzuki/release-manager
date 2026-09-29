@@ -1,3 +1,4 @@
+import { t } from '@/i18n/messages';
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
 import type { Client } from '@connectrpc/connect';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
@@ -86,7 +87,7 @@ function mapSummary(value: ProtoOperatorSummary): OperatorPage['operators'][numb
 }
 
 function requireDetail(value: ProtoOperatorDetail | undefined): OperatorDetail {
-  if (!value?.summary) throw new ConnectError('operator response is missing', Code.Internal);
+  if (!value?.summary) throw new ConnectError(t('operator.api.missingResponse'), Code.Internal);
   return {
     ...mapSummary(value.summary),
     supersededBy: value.supersededBy || null,
@@ -186,7 +187,7 @@ export async function revokePendingEnrollmentToken(customerId: string, clusterId
 
 export async function revokeOperator(customerId: string, clusterId: string, operatorId: string, reason: string): Promise<OperatorRevocationResult> {
   const response = await client.revokeOperator({ customerId, clusterId, operatorId, reason: reason.trim() });
-  if (!response.operator) throw new ConnectError('operator response is missing', Code.Internal);
+  if (!response.operator) throw new ConnectError(t('operator.api.missingResponse'), Code.Internal);
   return { operator: mapSummary(response.operator), changed: response.changed };
 }
 
@@ -208,7 +209,7 @@ export function mapOperatorError(error: unknown): OperatorApiError {
   const networkFailure = directNetworkFailure || (connectError.code === Code.Unavailable && code !== 'audit_unavailable');
   return {
     code: networkFailure ? 'network_error' : code,
-    message: connectError.rawMessage || 'Operator request failed.',
+    message: connectError.rawMessage || t('operator.api.requestFailed'),
     fieldViolations: detail?.fieldViolations.map((violation) => ({
       field: violation.field,
       description: violation.description,

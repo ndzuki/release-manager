@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { computed, shallowRef } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
@@ -23,7 +24,7 @@ async function handleSubmit(): Promise<void> {
     auth.clearReturnUrl();
     await router.replace(destination);
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'Unable to sign in.';
+    errorMessage.value = error instanceof Error ? error.message : t('login.failedFallback');
   } finally {
     submitting.value = false;
   }
@@ -35,22 +36,22 @@ async function handleSubmit(): Promise<void> {
     <form class="login-page__form" @submit.prevent="handleSubmit">
       <div>
         <p class="login-page__eyebrow">Release Manager</p>
-        <h1 class="login-page__title">Sign in</h1>
-        <p class="login-page__description">Use your server-managed session to continue.</p>
+        <h1 class="login-page__title">{{ t('login.title') }}</h1>
+        <p class="login-page__description">{{ t('login.description') }}</p>
       </div>
 
       <p v-if="sessionExpired" class="login-page__notice" role="status">
-        Your session expired. Sign in again to return to your previous page.
+        {{ t('login.sessionExpired') }}
       </p>
-      <ErrorState v-if="errorMessage" title="Sign in failed" :message="errorMessage" />
+      <ErrorState v-if="errorMessage" :title="t('login.failedTitle')" :message="errorMessage" />
 
       <label class="login-page__field">
-        <span>Username</span>
+        <span>{{ t('login.username') }}</span>
         <input v-model="username" autocomplete="username" required :disabled="submitting" />
       </label>
 
       <label class="login-page__field">
-        <span>Password</span>
+        <span>{{ t('login.password') }}</span>
         <input
           v-model="password"
           type="password"
@@ -61,7 +62,7 @@ async function handleSubmit(): Promise<void> {
       </label>
 
       <button type="submit" :disabled="submitting" class="login-page__submit">
-        {{ submitting ? 'Signing in…' : 'Sign in' }}
+        {{ submitting ? t('login.submitting') : t('login.submit') }}
       </button>
     </form>
   </main>
@@ -73,7 +74,7 @@ async function handleSubmit(): Promise<void> {
   min-height: 100vh;
   place-items: center;
   padding: 1.5rem;
-  background: var(--color-bg, #f8fafc);
+  background: var(--color-bg);
 }
 
 .login-page__form {
@@ -81,20 +82,20 @@ async function handleSubmit(): Promise<void> {
   width: min(100%, 26rem);
   gap: 1rem;
   padding: 2rem;
-  border: 1px solid var(--color-border, #e2e8f0);
+  border: 1px solid var(--color-border);
   border-radius: 0.75rem;
-  background: var(--color-surface, #fff);
+  background: var(--color-surface);
   box-shadow: 0 0.75rem 2rem rgb(15 23 42 / 8%);
 }
 
 .login-page__eyebrow,
 .login-page__description {
   margin: 0;
-  color: var(--color-muted, #64748b);
+  color: var(--color-muted);
 }
 
 .login-page__eyebrow {
-  font-size: 0.75rem;
+  font-size: var(--font-size-xs);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -102,27 +103,27 @@ async function handleSubmit(): Promise<void> {
 
 .login-page__title {
   margin: 0.25rem 0;
-  font-size: 1.5rem;
+  font-size: var(--font-size-xl);
 }
 
 .login-page__notice {
   margin: 0;
   padding: 0.75rem;
   border-radius: 0.375rem;
-  background: #eff6ff;
-  color: #1d4ed8;
-  font-size: 0.875rem;
+  background: var(--color-info-soft);
+  color: var(--color-primary-hover);
+  font-size: var(--font-size-md);
 }
 
 .login-page__field {
   display: grid;
   gap: 0.35rem;
-  font-size: 0.875rem;
+  font-size: var(--font-size-md);
 }
 
 .login-page__field input {
   padding: 0.65rem 0.75rem;
-  border: 1px solid var(--color-border, #cbd5e1);
+  border: 1px solid var(--color-border-strong);
   border-radius: 0.375rem;
 }
 
@@ -130,8 +131,8 @@ async function handleSubmit(): Promise<void> {
   padding: 0.7rem 1rem;
   border: 0;
   border-radius: 0.375rem;
-  background: var(--color-primary, #2563eb);
-  color: #fff;
+  background: var(--color-primary);
+  color: var(--color-on-accent);
   font-weight: 600;
   cursor: pointer;
 }

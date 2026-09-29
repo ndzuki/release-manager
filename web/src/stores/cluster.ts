@@ -1,3 +1,4 @@
+import { t } from '@/i18n/messages';
 import { computed, ref, toRaw } from 'vue';
 import { defineStore } from 'pinia';
 import {
@@ -81,7 +82,7 @@ export const useClusterStore = defineStore('cluster', () => {
     if (!validation.valid) {
       saveError.value = {
         code: 'client_validation',
-        message: 'Fix the highlighted fields before saving.',
+        message: t('cluster.form.fixFields'),
         fieldViolations: validation.violations,
       };
       return null;

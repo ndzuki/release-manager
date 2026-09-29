@@ -12,6 +12,10 @@ const draft: ValuesRevision = {
   convergenceTaskIds: [], lockedPaths: [],
 };
 
+// Submit/Save/Discard only render for a draft; `draft` above is pending_approval
+// (used by the approval-action cases).
+const editableDraft: ValuesRevision = { ...draft, status: 'draft' };
+
 describe('values editor presentation', () => {
   it('explains when canonical diff has no changes', () => {
     const wrapper = mount(ValuesDiffPanel, { props: { result: { changes: [], hasChanges: false } } });
@@ -35,25 +39,59 @@ describe('values editor presentation', () => {
     const wrapper = mount(ValuesRevisionActions, {
       props: {
         revision: draft, saving: false, approving: false, discarding: false, saveDisabled: false,
+        submitDisabled: false,
         canApprove: false, selfApproval: true, readOnly: false,
       },
     });
 
     expect(wrapper.text()).toContain('不可审批自己创建的 Revision');
-    expect(wrapper.text()).not.toContain('Approve');
-    expect(wrapper.text()).not.toContain('Reject');
+    expect(wrapper.text()).not.toContain('审批通过');
+    expect(wrapper.text()).not.toContain('驳回');
+  });
+
+  // UX-003: submit approves the PERSISTED revision, so the button must be off
+  // while the editor holds content that has not been saved (or is invalid).
+  it('disables Submit and explains why when the draft has unsaved changes', () => {
+    const wrapper = mount(ValuesRevisionActions, {
+      props: {
+        revision: editableDraft, saving: false, approving: false, discarding: false,
+        saveDisabled: false, submitDisabled: true,
+        canApprove: false, selfApproval: false, readOnly: false,
+      },
+    });
+
+    const submit = wrapper.findAll('button').find((button) => button.text() === '提交')!;
+    expect(submit.attributes('disabled')).toBeDefined();
+    expect(submit.attributes('title')).toContain('保存');
+    expect(wrapper.emitted('submit')).toBeUndefined();
+  });
+
+  it('enables Submit once the draft is saved and valid', async () => {
+    const wrapper = mount(ValuesRevisionActions, {
+      props: {
+        revision: editableDraft, saving: false, approving: false, discarding: false,
+        saveDisabled: false, submitDisabled: false,
+        canApprove: false, selfApproval: false, readOnly: false,
+      },
+    });
+
+    const submit = wrapper.findAll('button').find((button) => button.text() === '提交')!;
+    expect(submit.attributes('disabled')).toBeUndefined();
+    await submit.trigger('click');
+    expect(wrapper.emitted('submit')).toHaveLength(1);
   });
 
   it('renders approve and reject only for an eligible draft', () => {
     const wrapper = mount(ValuesRevisionActions, {
       props: {
         revision: draft, saving: false, approving: false, discarding: false, saveDisabled: false,
+        submitDisabled: false,
         canApprove: true, selfApproval: false, readOnly: false,
       },
     });
 
-    expect(wrapper.text()).toContain('Approve');
-    expect(wrapper.text()).toContain('Reject');
+    expect(wrapper.text()).toContain('审批通过');
+    expect(wrapper.text()).toContain('驳回');
   });
   it('renders rejected status with its decision timestamp', () => {
     const wrapper = mount(ValuesRevisionActions, {
@@ -67,13 +105,14 @@ describe('values editor presentation', () => {
         approving: false,
         discarding: false,
         saveDisabled: true,
+        submitDisabled: true,
         canApprove: false,
         selfApproval: false,
         readOnly: false,
       },
     });
 
-    expect(wrapper.text()).toContain('Rejected');
+    expect(wrapper.text()).toContain('驳回');
     expect(wrapper.text()).toContain('2026');
   });
 

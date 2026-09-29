@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { computed, shallowRef, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useRoute, useRouter } from 'vue-router';
@@ -42,45 +43,45 @@ useOperatorPolling({ heartbeatIntervalSeconds, refresh });
 
 <template>
   <section class="page">
-    <LoadingState v-if="store.loading && !store.current" message="Loading operator…" />
+    <LoadingState v-if="store.loading && !store.current" :message="t('operator.detail.loading')" />
     <ForbiddenState v-else-if="store.forbidden" />
     <ErrorState
       v-else-if="store.notFound || (store.error && !store.current)"
-      :title="store.notFound ? 'Operator not found' : 'Unable to load operator'"
+      :title="store.notFound ? t('operator.detail.notFound') : t('operator.detail.loadFailed')"
       :message="store.error?.message"
     >
-      <button type="button" @click="router.push({ name: 'OperatorList', params: { customerId, clusterId } })">Back to operators</button>
+      <button type="button" @click="router.push({ name: 'OperatorList', params: { customerId, clusterId } })">{{ t('operator.enroll.back') }}</button>
     </ErrorState>
 
     <template v-else-if="store.current">
       <header class="page__header">
         <div>
-          <p class="eyebrow">Operator detail</p>
+          <p class="eyebrow">{{ t('operator.detail.title') }}</p>
           <h1>{{ store.current.name || store.current.id }}</h1>
           <p>{{ store.current.id }}</p>
         </div>
         <div class="actions">
-          <button type="button" @click="refresh">Refresh</button>
+          <button type="button" @click="refresh">{{ t('action.refresh') }}</button>
           <button
             v-if="auth.canRevokeOperators && store.current.lifecycleStatus !== 'revoked'"
             type="button"
             class="danger"
             @click="showRevoke = true"
-          >Revoke operator</button>
+          >{{ t('operator.detail.revokeOperator') }}</button>
         </div>
       </header>
 
       <p v-if="store.error" class="warning" role="alert">
-        {{ store.error.message }} Existing data remains visible; use Refresh to retry.
+        {{ store.error.message }} {{ t('operator.detail.stale') }}
       </p>
 
       <section class="card" aria-labelledby="status-title">
-        <h2 id="status-title">Status</h2>
+        <h2 id="status-title">{{ t('operator.detail.status') }}</h2>
         <dl class="summary">
-          <div><dt>Lifecycle</dt><dd><OperatorStatusBadge :lifecycle-status="store.current.lifecycleStatus" /></dd></div>
-          <div><dt>Session</dt><dd><OperatorStatusBadge :session-status="store.current.sessionStatus" /></dd></div>
-          <div><dt>Last heartbeat</dt><dd>{{ formatOperatorTime(store.current.lastHeartbeat) }}</dd></div>
-          <div><dt>Registered</dt><dd>{{ formatOperatorTime(store.current.registeredAt) }}</dd></div>
+          <div><dt>{{ t('operator.filters.lifecycle') }}</dt><dd><OperatorStatusBadge :lifecycle-status="store.current.lifecycleStatus" /></dd></div>
+          <div><dt>{{ t('operator.filters.session') }}</dt><dd><OperatorStatusBadge :session-status="store.current.sessionStatus" /></dd></div>
+          <div><dt>{{ t('operator.table.lastHeartbeat') }}</dt><dd>{{ formatOperatorTime(store.current.lastHeartbeat) }}</dd></div>
+          <div><dt>{{ t('operator.table.registered') }}</dt><dd>{{ formatOperatorTime(store.current.registeredAt) }}</dd></div>
         </dl>
         <p v-if="operatorSessionReasonLabel(store.current.sessionStatusReason)" class="reason">
           {{ operatorSessionReasonLabel(store.current.sessionStatusReason) }}
@@ -88,17 +89,17 @@ useOperatorPolling({ heartbeatIntervalSeconds, refresh });
       </section>
 
       <section class="card" aria-labelledby="identity-title">
-        <h2 id="identity-title">Identity and runtime</h2>
+        <h2 id="identity-title">{{ t('operator.detail.identity') }}</h2>
         <dl class="details">
-          <div><dt>Customer</dt><dd>{{ store.current.customerId }}</dd></div>
-          <div><dt>Cluster</dt><dd>{{ store.current.clusterName }} · {{ store.current.clusterId }}</dd></div>
-          <div><dt>Instance</dt><dd>{{ store.current.instanceId ?? 'Not reported' }}</dd></div>
-          <div><dt>Version</dt><dd>{{ store.current.version ?? 'Not reported' }}</dd></div>
-          <div><dt>Superseded by</dt><dd>{{ store.current.supersededBy ?? '—' }}</dd></div>
-          <div><dt>Revoked at</dt><dd>{{ formatOperatorTime(store.current.revokedAt) }}</dd></div>
+          <div><dt>{{ t('operator.detail.customer') }}</dt><dd>{{ store.current.customerId }}</dd></div>
+          <div><dt>{{ t('operator.detail.cluster') }}</dt><dd>{{ store.current.clusterName }} · {{ store.current.clusterId }}</dd></div>
+          <div><dt>{{ t('operator.detail.instance') }}</dt><dd>{{ store.current.instanceId ?? t('operator.detail.notReported') }}</dd></div>
+          <div><dt>{{ t('operator.detail.version') }}</dt><dd>{{ store.current.version ?? t('operator.detail.notReported') }}</dd></div>
+          <div><dt>{{ t('operator.detail.supersededBy') }}</dt><dd>{{ store.current.supersededBy ?? '—' }}</dd></div>
+          <div><dt>{{ t('operator.detail.revokedAt') }}</dt><dd>{{ formatOperatorTime(store.current.revokedAt) }}</dd></div>
         </dl>
         <div v-if="Object.keys(store.current.capabilities).length" class="capabilities">
-          <h3>Capabilities</h3>
+          <h3>{{ t('operator.detail.capabilities') }}</h3>
           <ul>
             <li v-for="(value, key) in store.current.capabilities" :key="key"><strong>{{ key }}</strong>: {{ value }}</li>
           </ul>
@@ -106,7 +107,7 @@ useOperatorPolling({ heartbeatIntervalSeconds, refresh });
       </section>
 
       <section v-if="store.current.revokeReason" class="card danger-card" aria-labelledby="revoke-title">
-        <h2 id="revoke-title">Revocation</h2>
+        <h2 id="revoke-title">{{ t('operator.detail.revocation') }}</h2>
         <p>{{ store.current.revokeReason }}</p>
       </section>
     </template>
@@ -126,17 +127,17 @@ useOperatorPolling({ heartbeatIntervalSeconds, refresh });
 .page { display: grid; gap: 1.5rem; max-width: 72rem; margin: 0 auto; }
 .page__header, .actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 h1, h2, h3, p { margin: 0; }
-.page__header > div:first-child > p:last-child { margin-top: 0.375rem; color: #64748b; }
-.eyebrow { color: #2563eb; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; }
-.actions button { padding: 0.55rem 0.8rem; border: 1px solid #94a3b8; border-radius: 0.375rem; background: #fff; cursor: pointer; }
-.actions .danger { border-color: #ef4444; color: #b91c1c; }
-.warning { padding: 0.75rem; border-radius: 0.5rem; background: #fff7ed; color: #9a3412; }
-.card { display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid #cbd5e1; border-radius: 0.75rem; }
+.page__header > div:first-child > p:last-child { margin-top: 0.375rem; color: var(--color-muted); }
+.eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; text-transform: uppercase; }
+.actions button { padding: 0.55rem 0.8rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); cursor: pointer; }
+.actions .danger { border-color: var(--color-danger-border); color: var(--color-error); }
+.warning { padding: 0.75rem; border-radius: 0.5rem; background: var(--color-warning-soft); color: var(--color-warning-ink); }
+.card { display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
 .summary, .details { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; margin: 0; }
-dt { color: #64748b; }
+dt { color: var(--color-muted); }
 dd { margin: 0.25rem 0 0; font-weight: 700; overflow-wrap: anywhere; }
-.reason { padding: 0.75rem; border-radius: 0.5rem; background: #f8fafc; color: #475569; }
+.reason { padding: 0.75rem; border-radius: 0.5rem; background: var(--color-bg); color: var(--color-muted-strong); }
 .capabilities { display: grid; gap: 0.5rem; }
 .capabilities ul { margin: 0; padding-left: 1.25rem; }
-.danger-card { border-color: #fecaca; background: #fef2f2; }
+.danger-card { border-color: var(--color-danger-border-soft); background: var(--color-danger-soft); }
 </style>

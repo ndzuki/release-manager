@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
+import { statusLabel } from '@/i18n/status-labels';
 import type { AuditExportTask } from '@/stores/audit';
 
 const props = defineProps<{
@@ -7,17 +9,16 @@ const props = defineProps<{
 </script>
 
 <template>
-  <section v-if="props.tasks.length > 0" class="audit-exports" aria-label="Audit exports">
+  <section v-if="props.tasks.length > 0" class="audit-exports" :aria-label="t('audit.export.title')">
     <header>
-      <h2>Exports</h2>
-      <p>Export tasks are created asynchronously. The wire contract returns a receipt only;
-        status polling is not available yet, and payloads are never cached in browser storage.</p>
+      <h2>{{ t('audit.export.title') }}</h2>
+      <p>{{ t('audit.export.note') }}</p>
     </header>
     <ul>
       <li v-for="task in props.tasks" :key="task.taskId" class="audit-exports__task">
         <div>
           <strong>{{ task.taskId }}</strong>
-          <span class="audit-exports__status">{{ task.status }}</span>
+          <span class="audit-exports__status">{{ statusLabel('export', task.status) }}</span>
         </div>
       </li>
     </ul>
@@ -29,9 +30,9 @@ const props = defineProps<{
   display: grid;
   gap: 1rem;
   padding: 1rem;
-  border: 1px solid #86efac;
+  border: 1px solid var(--color-success-border);
   border-radius: 0.75rem;
-  background: #f0fdf4;
+  background: var(--color-success-surface-soft);
 }
 
 .audit-exports header h2,
@@ -39,8 +40,8 @@ const props = defineProps<{
   margin: 0;
 }
 .audit-exports header p {
-  color: #166534;
-  font-size: 0.85rem;
+  color: var(--color-success-ink);
+  font-size: var(--font-size-sm);
 }
 
 .audit-exports ul {
@@ -57,9 +58,9 @@ const props = defineProps<{
   justify-content: space-between;
   gap: 1rem;
   padding: 0.75rem;
-  border: 1px solid #bbf7d0;
+  border: 1px solid var(--color-success-border-soft);
   border-radius: 0.5rem;
-  background: #fff;
+  background: var(--color-surface);
 }
 
 .audit-exports__task strong {
@@ -70,8 +71,8 @@ const props = defineProps<{
   margin-left: 0.5rem;
   padding: 0.15rem 0.45rem;
   border-radius: 999px;
-  background: #dcfce7;
-  color: #166534;
+  background: var(--color-success-surface);
+  color: var(--color-success-ink);
 }
 </style>
 

@@ -1,3 +1,4 @@
+import { t } from '@/i18n/messages';
 import deepDiff from 'deep-diff';
 import { load } from 'js-yaml';
 import type { CanonicalResult, DiffChange, DiffResult } from '@/types/valuesRevision';
@@ -17,7 +18,7 @@ function parseIssue(error: unknown): { line?: number; column?: number; message: 
     return {
       line: candidate.mark?.line === undefined ? undefined : candidate.mark.line + 1,
       column: candidate.mark?.column === undefined ? undefined : candidate.mark.column + 1,
-      message: candidate.reason || candidate.message || 'invalid YAML',
+      message: candidate.reason || candidate.message || t('values.canonical.invalidYaml'),
     };
   }
   return { message: String(error) };

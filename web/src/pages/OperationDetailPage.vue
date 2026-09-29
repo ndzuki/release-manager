@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { statusLabel } from '@/i18n/status-labels';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { t } from '@/i18n/messages';
 import { useRoute, useRouter } from 'vue-router';
 import CancelOperationDialog from '@/components/operations/CancelOperationDialog.vue';
 import DisconnectBanner from '@/components/operations/DisconnectBanner.vue';
@@ -170,7 +172,7 @@ function formatTimestamp(value: string | null): string {
 
 <template>
   <section class="operation-detail">
-    <nav class="operation-detail__breadcrumbs" aria-label="Breadcrumb">
+    <nav class="operation-detail__breadcrumbs" :aria-label="t('values.page.breadcrumb')">
       <RouterLink
         :to="{
           name: 'ReleaseInventory',
@@ -178,6 +180,19 @@ function formatTimestamp(value: string | null): string {
         }"
       >
         Releases
+      </RouterLink>
+      <span aria-hidden="true">/</span>
+      <RouterLink
+        :to="{
+          name: 'OperationList',
+          params: {
+            customerId: route.params.customerId,
+            clusterId: route.params.clusterId,
+            releaseId: route.params.releaseId,
+          },
+        }"
+      >
+        操作历史
       </RouterLink>
       <span aria-hidden="true">/</span><span>{{ releaseName }}</span><span aria-hidden="true">/</span>
       <strong>{{ operationId }}</strong>
@@ -206,13 +221,13 @@ function formatTimestamp(value: string | null): string {
 
       <header class="operation-detail__header">
         <div>
-          <p class="operation-detail__eyebrow">{{ store.operation?.operationType }} operation</p>
+          <p class="operation-detail__eyebrow">{{ statusLabel('operationType', store.operation?.operationType) }}操作</p>
           <h1>{{ releaseName }}</h1>
           <p><code>{{ store.operation?.operationId }}</code></p>
         </div>
         <div class="operation-detail__header-actions">
           <span v-if="store.operation" class="operation-detail__state" :class="`operation-detail__state--${store.operation.state}`">
-            {{ store.operation.state }}
+            {{ statusLabel('operation', store.operation.state) }}
           </span>
           <template v-if="store.showCancel">
             <button
@@ -260,7 +275,7 @@ function formatTimestamp(value: string | null): string {
         <div><dt>ReleaseDefinition</dt><dd>{{ store.operation?.releaseDefinitionId }}</dd></div>
         <div><dt>StateVersion</dt><dd>{{ store.operation?.stateVersion.toString() }}</dd></div>
         <div v-if="store.operation?.operationType === 'EMERGENCY'">
-          <dt>EffectStatus</dt><dd>{{ store.operation?.effectStatus }}</dd>
+          <dt>{{ t('emergency.result.effectStatus') }}</dt><dd>{{ statusLabel('effect', store.operation?.effectStatus ?? undefined) }}</dd>
         </div>
         <div><dt>TargetRevision</dt><dd>{{ store.operation?.targetRevision || '—' }}</dd></div>
         <div><dt>创建时间</dt><dd>{{ formatTimestamp(store.operation?.createdAt ?? null) }}</dd></div>
@@ -301,21 +316,21 @@ function formatTimestamp(value: string | null): string {
 
 <style scoped>
 .operation-detail { display: grid; gap: 1.5rem; max-width: 70rem; margin: 0 auto; }
-.operation-detail__breadcrumbs { display: flex; flex-wrap: wrap; gap: 0.45rem; color: #64748b; font-size: 0.85rem; }
-.operation-detail__breadcrumbs a { color: #2563eb; }
+.operation-detail__breadcrumbs { display: flex; flex-wrap: wrap; gap: 0.45rem; color: var(--color-muted); font-size: var(--font-size-sm); }
+.operation-detail__breadcrumbs a { color: var(--color-primary); }
 .operation-detail__header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
 .operation-detail__header h1, .operation-detail__header p { margin: 0; }
-.operation-detail__eyebrow { color: #2563eb; font-size: 0.75rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
-.operation-detail__state { padding: 0.45rem 0.7rem; border-radius: 999px; background: #e2e8f0; text-transform: uppercase; font-size: 0.75rem; font-weight: 800; }
-.operation-detail__state--failed, .operation-detail__state--timeout { background: #fee2e2; color: #b91c1c; }
-.operation-detail__state--succeeded { background: #dcfce7; color: #166534; }
+.operation-detail__eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+.operation-detail__state { padding: 0.45rem 0.7rem; border-radius: 999px; background: var(--color-border); text-transform: uppercase; font-size: var(--font-size-xs); font-weight: 800; }
+.operation-detail__state--failed, .operation-detail__state--timeout { background: var(--color-danger-surface); color: var(--color-error); }
+.operation-detail__state--succeeded { background: var(--color-success-surface); color: var(--color-success-ink); }
 .operation-detail__header-actions { display: flex; align-items: center; gap: 0.75rem; }
-.operation-detail__cancel { min-height: 2.4rem; padding: 0.45rem 0.85rem; border: 1px solid #dc2626; border-radius: 0.45rem; background: #fff; color: #dc2626; cursor: pointer; font-weight: 700; }
-.operation-detail__cancel--disabled { border-color: #cbd5e1; color: #94a3b8; cursor: not-allowed; }
-.operation-detail__refresh { min-height: 2.4rem; padding: 0.45rem 0.85rem; border: 1px solid #cbd5e1; border-radius: 0.45rem; background: #fff; color: #334155; cursor: pointer; font-weight: 600; }
-.operation-detail__summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; border: 1px solid #cbd5e1; border-radius: 0.7rem; background: #fff; }
-.operation-detail__summary div { padding: 1rem; border-bottom: 1px solid #e2e8f0; }
-.operation-detail__summary dt { color: #64748b; font-size: 0.8rem; }
+.operation-detail__cancel { min-height: 2.4rem; padding: 0.45rem 0.85rem; border: 1px solid var(--color-danger); border-radius: 0.45rem; background: var(--color-surface); color: var(--color-danger); cursor: pointer; font-weight: 700; }
+.operation-detail__cancel--disabled { border-color: var(--color-border-strong); color: var(--color-subtle); cursor: not-allowed; }
+.operation-detail__refresh { min-height: 2.4rem; padding: 0.45rem 0.85rem; border: 1px solid var(--color-border-strong); border-radius: 0.45rem; background: var(--color-surface); color: var(--color-text-secondary); cursor: pointer; font-weight: 600; }
+.operation-detail__summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; border: 1px solid var(--color-border-strong); border-radius: 0.7rem; background: var(--color-surface); }
+.operation-detail__summary div { padding: 1rem; border-bottom: 1px solid var(--color-border); }
+.operation-detail__summary dt { color: var(--color-muted); font-size: var(--font-size-sm); }
 .operation-detail__summary dd { margin: 0.25rem 0 0; font-weight: 650; overflow-wrap: anywhere; }
 @media (max-width: 52rem) { .operation-detail__summary { grid-template-columns: 1fr; } }
 </style>

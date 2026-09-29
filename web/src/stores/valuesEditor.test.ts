@@ -231,47 +231,183 @@ describe('values editor store', () => {
 
 });
 
-// AC-055-13: locked paths are read-only in convergence mode. The server
-// re-verifies them inside the approval transaction, but the client must not
-// submit a draft that changed one, and must say which path is locked.
-describe('locked paths are read-only (AC-055-13)', () => {
-  const preparedSession = {
-    releaseDefinitionId: 'definition-1',
-    parentRevisionId: 'parent-1',
-    document: 'replicas: 5',
-    lockedPaths: ['replicas'],
-    expiresAt: null,
-    taskIds: ['t1'],
-    lockedPathsHash: 'hash-1',
-    parentVersion: 3n,
-  };
+// AC-055-13: locked paths are read-only in convergence mode. UX-003: submit sends
+// the PERSISTED revision, so unsaved editor content must be refused instead of
+// quietly approving the previous saved draft.
+describe('locked paths and unsaved content (AC-055-13 / UX-003)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
 
-  async function loadedStore() {
-    vi.mocked(getPrepareSession).mockResolvedValue(preparedSession);
+  // Convergence mode never reads the browser draft: the editor starts from the
+  // PREPARED payload, so `save()` (which creates the bound draft) must run before
+  // a submit can be accepted. Documents are JSON-in-YAML here for brevity.
+  function preparedSession(document = '{"replicas":5}') {
+    return {
+      releaseDefinitionId: 'definition-1',
+      parentRevisionId: 'parent-1',
+      document,
+      lockedPaths: ['replicas'],
+      expiresAt: null,
+      taskIds: ['t1'],
+      lockedPathsHash: 'hash-1',
+      parentVersion: 3n,
+    };
+  }
+
+  async function storeWith(preparedDocument = '{"replicas":5}') {
+    vi.mocked(getPrepareSession).mockResolvedValue(preparedSession(preparedDocument) as never);
+    vi.mocked(listValuesRevisions).mockResolvedValue([parent, draft]);
+    vi.mocked(listSecrets).mockResolvedValue([]);
     const store = useValuesEditorStore();
     store.resetScope('definition-1', 'cluster-1');
     await store.loadConvergence('token-1');
     return store;
   }
 
-  it('refuses to submit a draft that changed a locked path', async () => {
-    const store = await loadedStore();
-    vi.mocked(submitValuesRevision).mockClear();
-    store.editorContent = 'replicas: 99';
+  /** Runs the real convergence flow up to a saved draft bound to the prepared doc. */
+  async function savedStore(preparedDocument = '{"replicas":5}') {
+    const store = await storeWith(preparedDocument);
+    vi.mocked(createValuesRevision).mockResolvedValue({
+      ...draft,
+      document: preparedDocument,
+      convergenceTaskIds: ['t1'],
+    });
+    expect(await store.save()).toBe(true);
+    return store;
+  }
 
+  it('refuses a saved draft whose locked path differs from the approved parent', async () => {
+    // save() does not check locks, so a prepared payload that changes a locked path
+    // reaches submit as a saved draft. The baseline must be the APPROVED parent —
+    // comparing canonicalCurrent (which tracks the editor) against itself made this
+    // guard unreachable in production.
+    const store = await savedStore('{"replicas":99}');
+    vi.mocked(submitValuesRevision).mockClear();
+
+    expect(store.hasUnsavedChanges).toBe(false);
     expect(await store.submit()).toBe(false);
     expect(store.error).toContain('replicas');
     expect(store.error).toContain('锁定路径');
     expect(submitValuesRevision).not.toHaveBeenCalled();
   });
 
-  it('allows a submit that leaves the locked paths untouched', async () => {
-    const store = await loadedStore();
-    vi.mocked(submitValuesRevision).mockResolvedValue({ ...draft, status: 'pending_approval' });
+  it('submits when the saved draft keeps the locked paths at the parent values', async () => {
+    const store = await savedStore('{"replicas":1}');
     vi.mocked(submitValuesRevision).mockClear();
-    store.editorContent = 'replicas: 5\nimage:\n  tag: v2';
+    vi.mocked(submitValuesRevision).mockResolvedValue({ ...draft, status: 'pending_approval' });
 
     expect(await store.submit()).toBe(true);
     expect(submitValuesRevision).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a submit before the prepared payload has been saved (UX-003)', async () => {
+    const store = await storeWith();
+    vi.mocked(submitValuesRevision).mockClear();
+
+    // The editor holds the prepared payload but no draft carries it yet, so
+    // submitting would approve the PARENT draft instead of what is on screen.
+    expect(store.hasUnsavedChanges).toBe(true);
+    expect(await store.submit()).toBe(false);
+    expect(store.error).toContain('保存');
+    expect(submitValuesRevision).not.toHaveBeenCalled();
+  });
+
+  it('refuses unsaved edits made after the save (UX-003)', async () => {
+    const store = await savedStore();
+    vi.mocked(submitValuesRevision).mockClear();
+    store.editorContent = '{"replicas": 42}';
+
+    expect(store.hasUnsavedChanges).toBe(true);
+    expect(await store.submit()).toBe(false);
+    expect(store.error).toContain('保存');
+    expect(submitValuesRevision).not.toHaveBeenCalled();
+  });
+
+  it('refuses to submit invalid content (UX-003)', async () => {
+    const store = await savedStore();
+    vi.mocked(submitValuesRevision).mockClear();
+    store.editorContent = 'replicas: [unclosed';
+
+    expect(await store.submit()).toBe(false);
+    expect(submitValuesRevision).not.toHaveBeenCalled();
+  });
+
+  it('treats a valid but edited SecretRef as unsaved (UX-003)', async () => {
+    const store = await savedStore();
+    vi.mocked(submitValuesRevision).mockClear();
+    store.addSecretRef();
+    store.updateSecretRef(store.secretRefs[0]!.id, { name: 'database', key: 'password', namespace: 'default' });
+
+    expect(store.hasUnsavedChanges).toBe(true);
+    expect(await store.submit()).toBe(false);
+    expect(submitValuesRevision).not.toHaveBeenCalled();
+  });
+
+  it('takes the locked-path baseline from the prepared session parent, not the first approved', async () => {
+    // Two approved revisions with DIFFERENT values at the locked path. If the
+    // baseline were "the first approved in the list", this saved draft would look
+    // like it changed the locked path and the submit would be refused.
+    const olderApproved: ValuesRevision = { ...parent, id: 'parent-0', revision: 1, document: '{"replicas":1}' };
+    const preparedParent: ValuesRevision = { ...parent, id: 'parent-9', revision: 3, document: '{"replicas":7}' };
+    vi.mocked(getPrepareSession).mockResolvedValue({
+      ...preparedSession('{"replicas":7}'),
+      parentRevisionId: 'parent-9',
+    } as never);
+    vi.mocked(listValuesRevisions).mockResolvedValue([olderApproved, preparedParent, draft]);
+    vi.mocked(listSecrets).mockResolvedValue([]);
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1');
+    await store.loadConvergence('token-1');
+    vi.mocked(createValuesRevision).mockResolvedValue({ ...draft, document: '{"replicas":7}' });
+    expect(await store.save()).toBe(true);
+    vi.mocked(submitValuesRevision).mockClear();
+    vi.mocked(submitValuesRevision).mockResolvedValue({ ...draft, status: 'pending_approval' });
+
+    expect(await store.submit()).toBe(true);
+    expect(submitValuesRevision).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to submit when the approved parent baseline is missing (fail-closed)', async () => {
+    vi.mocked(getPrepareSession).mockResolvedValue(preparedSession('{"replicas":5}') as never);
+    // No approved revision is returned, so there is nothing to compare locked paths
+    // against; the guard must refuse rather than fall back to the editor itself.
+    vi.mocked(listValuesRevisions).mockResolvedValue([draft]);
+    vi.mocked(listSecrets).mockResolvedValue([]);
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1');
+    await store.loadConvergence('token-1');
+    vi.mocked(createValuesRevision).mockResolvedValue({ ...draft, document: '{"replicas":5}' });
+    await store.save();
+    vi.mocked(submitValuesRevision).mockClear();
+
+    expect(await store.submit()).toBe(false);
+    expect(store.error).toContain('基线');
+    expect(submitValuesRevision).not.toHaveBeenCalled();
+  });
+
+  it('does not call secretRefs unsaved when only server-persisted fields match', async () => {
+    const withRefs: ValuesRevision = {
+      ...draft,
+      secretRefs: [{ path: '.secrets.db.password', name: 'database', key: 'password' }],
+    };
+    vi.mocked(getPrepareSession).mockResolvedValue(preparedSession('{"replicas":5}') as never);
+    vi.mocked(listValuesRevisions).mockResolvedValue([parent, withRefs]);
+    // The ref must be valid, otherwise saveDisabled (secretRefsError) blocks save.
+    vi.mocked(listSecrets).mockResolvedValue([{ name: 'database', keys: ['password'] }]);
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1');
+    await store.loadConvergence('token-1');
+    vi.mocked(createValuesRevision).mockResolvedValue({ ...withRefs, document: '{"replicas":5}' });
+    expect(await store.save()).toBe(true);
+
+    // namespace/path are dropped by mapSecretRef, so they must not count as edits.
+    expect(store.secretRefs).toHaveLength(1);
+    expect(store.hasUnsavedChanges).toBe(false);
+  });
+
+  it('reports no unsaved changes once the saved draft carries the prepared payload', async () => {
+    const store = await savedStore();
+    expect(store.hasUnsavedChanges).toBe(false);
   });
 });

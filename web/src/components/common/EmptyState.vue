@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
+
 interface EmptyStateProps {
   title?: string;
   message?: string;
@@ -6,7 +8,7 @@ interface EmptyStateProps {
 }
 
 withDefaults(defineProps<EmptyStateProps>(), {
-  title: 'No data',
+  title: t('state.noData'),
   message: '',
   actionLabel: '',
 });
@@ -39,8 +41,8 @@ const emit = defineEmits<{ action: [] }>();
 }
 
 .empty-state__icon {
-  font-size: 2rem;
-  color: var(--color-muted, #94a3b8);
+  font-size: var(--font-size-2xl);
+  color: var(--color-subtle);
 }
 
 .empty-state__title,
@@ -49,20 +51,20 @@ const emit = defineEmits<{ action: [] }>();
 }
 
 .empty-state__title {
-  font-size: 1rem;
+  font-size: var(--font-size-base);
 }
 
 .empty-state__text {
-  color: var(--color-muted, #64748b);
-  font-size: 0.875rem;
+  color: var(--color-muted);
+  font-size: var(--font-size-md);
 }
 
 .empty-state__action {
   margin-top: 0.5rem;
   padding: 0.45rem 0.75rem;
-  border: 1px solid var(--color-border, #cbd5e1);
+  border: 1px solid var(--color-border-strong);
   border-radius: 0.375rem;
-  background: var(--color-surface, #fff);
+  background: var(--color-surface);
   cursor: pointer;
 }
 </style>

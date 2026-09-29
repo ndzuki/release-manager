@@ -64,10 +64,10 @@ const emergencyResolved = computed(() => {
 
 <style scoped>
 .operation-timeline { display: grid; gap: 0.75rem; }
-.operation-timeline h2 { margin: 0; font-size: 1rem; }
+.operation-timeline h2 { margin: 0; font-size: var(--font-size-base); }
 .operation-timeline__list { display: grid; gap: 0.5rem; padding: 0; margin: 0; list-style: none; }
 .operation-timeline__gap,
-.operation-timeline__truncated { margin: 0; padding: 0.5rem 0.75rem; border-radius: 0.4rem; background: #fffbeb; color: #92400e; font-size: 0.85rem; }
-.operation-timeline__truncated { background: #f8fafc; color: #64748b; }
-.operation-timeline__waiting { margin: 0; padding: 0.6rem 0.75rem; border: 1px solid #bfdbfe; border-radius: 0.5rem; background: #eff6ff; color: #1d4ed8; font-size: 0.85rem; }
+.operation-timeline__truncated { margin: 0; padding: 0.5rem 0.75rem; border-radius: 0.4rem; background: var(--color-warning-surface); color: var(--color-warning-ink-strong); font-size: var(--font-size-sm); }
+.operation-timeline__truncated { background: var(--color-bg); color: var(--color-muted); }
+.operation-timeline__waiting { margin: 0; padding: 0.6rem 0.75rem; border: 1px solid var(--color-info-border-soft); border-radius: 0.5rem; background: var(--color-info-soft); color: var(--color-primary-hover); font-size: var(--font-size-sm); }
 </style>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { computed } from 'vue';
 import type { ReleaseStatus } from '@/stores/releaseInventory';
 
@@ -7,11 +8,11 @@ const props = defineProps<{ status: ReleaseStatus }>();
 const details = computed(() => {
   switch (props.status) {
     case 'missing':
-      return { label: 'Missing', icon: '!', tooltip: 'Release 已从集群中消失' };
+      return { label: t('release.status.missing'), icon: '!', tooltip: 'Release 已从集群中消失' };
     case 'out_of_sync':
-      return { label: 'Out of sync', icon: '↯', tooltip: '配置与期望不一致' };
+      return { label: t('release.status.outOfSync'), icon: '↯', tooltip: '配置与期望不一致' };
     default:
-      return { label: 'Active', icon: '✓', tooltip: 'Release 与最近一次同步结果一致' };
+      return { label: t('release.status.active'), icon: '✓', tooltip: 'Release 与最近一次同步结果一致' };
   }
 });
 </script>
@@ -31,10 +32,10 @@ const details = computed(() => {
   padding: 0.25rem 0.55rem;
   border: 1px solid currentColor;
   border-radius: 999px;
-  font-size: 0.75rem;
+  font-size: var(--font-size-xs);
   font-weight: 700;
 }
-.release-status--active { color: #166534; background: #f0fdf4; }
-.release-status--missing { color: #991b1b; background: #fef2f2; }
-.release-status--out_of_sync { color: #9a3412; background: #fff7ed; }
+.release-status--active { color: var(--color-success-ink); background: var(--color-success-surface-soft); }
+.release-status--missing { color: var(--color-error-strong); background: var(--color-danger-soft); }
+.release-status--out_of_sync { color: var(--color-warning-ink); background: var(--color-warning-soft); }
 </style>

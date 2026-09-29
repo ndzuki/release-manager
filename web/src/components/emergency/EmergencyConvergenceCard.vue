@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
+import { statusLabel } from '@/i18n/status-labels';
 // REQUIRE_PROMOTION / REVERT convergence card (plan v3 Step 5): the two
 // policies are mutually exclusive CTAs. REQUIRE_PROMOTION shows the single
 // operation-atomic Convergence Task (or the Create-ValuesRevision entry);
@@ -17,48 +19,48 @@ const emit = defineEmits<{ 'open-convergence': [] }>();
 
 function revertLabel(result: EmergencyResultDisplay): string {
   if (result.revertStatus === 'RECONCILED') {
-    return `已对账（Operation ${result.reconciledByOperationId}）`;
+    return t('convergence.card.reconciled', { operationId: result.reconciledByOperationId ?? '' });
   }
   if (result.revertStatus === 'AWAITING_STANDARD_RELEASE') {
-    return '等待标准发布对账';
+    return t('convergence.card.awaitingStandardRelease');
   }
-  return '等待回退对账';
+  return t('convergence.card.awaitingRevert');
 }
 </script>
 
 <template>
   <div class="convergence-card">
     <template v-if="result.convergencePolicy === 'REQUIRE_PROMOTION'">
-      <h4>收敛任务（REQUIRE_PROMOTION）</h4>
+      <h4>{{ t('convergence.card.title') }}</h4>
       <ul v-if="result.convergenceTasks.length > 0" class="task-list">
         <li v-for="task in result.convergenceTasks" :key="task.taskId">
           <code>{{ task.taskId }}</code>
-          <span class="status">{{ task.status }}</span>
+          <span class="status">{{ statusLabel('convergence', task.status) }}</span>
         </li>
       </ul>
-      <p v-else-if="applied" class="hint">结果已生效，等待创建收敛任务。</p>
-      <p v-else class="hint">结果未确认生效前不会创建收敛任务。</p>
+      <p v-else-if="applied" class="hint">{{ t('convergence.card.awaitingCreate') }}</p>
+      <p v-else class="hint">{{ t('convergence.card.notConfirmed') }}</p>
       <button
         v-if="applied && result.convergenceTasks.length === 0 && canCreateValuesRevision"
         type="button"
         class="primary"
         @click="emit('open-convergence')"
       >
-        创建 ValuesRevision 收敛
+        {{ t('convergence.card.create') }}
       </button>
     </template>
     <template v-else>
-      <h4>回退策略（REVERT_ON_NEXT_RECONCILE）</h4>
+      <h4>{{ t('convergence.card.revertPolicy') }}</h4>
       <p class="status">{{ revertLabel(result) }}</p>
-      <p class="hint">该策略不创建收敛任务，也不阻断标准发布（AC-058-32）。</p>
+      <p class="hint">{{ t('convergence.card.revertNote') }}</p>
     </template>
   </div>
 </template>
 
 <style scoped>
-.convergence-card { display: grid; gap: 0.6rem; padding: 0.9rem; border: 1px solid #e2e8f0; border-radius: 0.5rem; background: #fff; }
+.convergence-card { display: grid; gap: 0.6rem; padding: 0.9rem; border: 1px solid var(--color-border); border-radius: 0.5rem; background: var(--color-surface); }
 .task-list { display: grid; gap: 0.35rem; padding-left: 1.1rem; }
-.status { color: #475569; font-size: 0.85rem; }
-.hint { color: #64748b; font-size: 0.85rem; }
-.primary { justify-self: start; padding: 0.5rem 1rem; border: 0; border-radius: 0.375rem; background: #2563eb; color: #fff; }
+.status { color: var(--color-muted-strong); font-size: var(--font-size-sm); }
+.hint { color: var(--color-muted); font-size: var(--font-size-sm); }
+.primary { justify-self: start; padding: 0.5rem 1rem; border: 0; border-radius: 0.375rem; background: var(--color-primary); color: var(--color-on-accent); }
 </style>

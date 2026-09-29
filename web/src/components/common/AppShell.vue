@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { t } from '@/i18n/messages';
 import { useAuthStore } from '@/stores/auth';
 import { useCustomerStore } from '@/stores/customers';
 import { useEmergencyAuthorizationStore } from '@/stores/emergencyAuthorization';
 import { useOrganizationScope } from '@/composables/useOrganizationScope';
 import OrganizationSwitcher from './OrganizationSwitcher.vue';
+
+// The stuck-lock route is behind the release-operations kill switch, so its entry
+// must be too (otherwise the link is visible and answers NotFound).
+const operationsEnabled = import.meta.env.VITE_ENABLE_RELEASE_OPERATIONS !== 'false';
 
 const route = useRoute();
 const auth = useAuthStore();
@@ -35,11 +40,18 @@ async function handleLogout(): Promise<void> {
   <div class="app-shell">
     <header class="app-shell__header">
       <RouterLink class="app-shell__brand" :to="{ name: 'Home' }">Release Manager</RouterLink>
-      <nav class="app-shell__nav" aria-label="Primary navigation">
-        <RouterLink :to="{ name: 'CustomerList' }">Customers</RouterLink>
-        <RouterLink v-if="clusterRoutingEnabled && customerId" :to="{ name: 'ClusterList', params: { customerId } }">Clusters</RouterLink>
-        <RouterLink :to="{ name: 'Audit' }">Audit</RouterLink>
-        <slot name="nav" />
+      <nav class="app-shell__nav" :aria-label="t('shell.nav.label')">
+        <RouterLink :to="{ name: 'CustomerList' }">{{ t('nav.customers') }}</RouterLink>
+        <RouterLink v-if="clusterRoutingEnabled && customerId" :to="{ name: 'ClusterList', params: { customerId } }">{{ t('nav.clusters') }}</RouterLink>
+        <!-- Audit needs no capability gate: the read policy is modePrincipalScope
+             (any authenticated principal, scoped to their own organization) and
+             the default role matrix grants `audit read` to all four roles — see
+             internal/auth/procedure_policy.go and internal/auth/casbin.go. The
+             remaining 403/503 comes from release-auth's own Authorize call
+             (fail-closed), which the server owns. The plan's N3 assumed a 403
+             here; that observation came from the bearer-only audit interceptor
+             that TASK-174 fixed. -->
+        <RouterLink :to="{ name: 'Audit' }">{{ t('nav.audit') }}</RouterLink>
       </nav>
       <div class="app-shell__session">
         <OrganizationSwitcher />
@@ -47,7 +59,20 @@ async function handleLogout(): Promise<void> {
           <strong>{{ auth.user?.username }}</strong>
           <span>{{ auth.activeOrganization?.name }}</span>
         </div>
-        <button class="app-shell__logout" type="button" @click="handleLogout">Sign out</button>
+        <RouterLink v-if="operationsEnabled && auth.canRunCleanup" class="app-shell__password" :to="{ name: 'ArtifactLifecycle' }">制品生命周期</RouterLink>
+        <RouterLink v-if="operationsEnabled && auth.canReadBundles" class="app-shell__password" :to="{ name: 'Bundles' }">发布 Bundle</RouterLink>
+        <RouterLink v-if="operationsEnabled" class="app-shell__password" :to="{ name: 'Definitions' }">发布定义</RouterLink>
+        <RouterLink v-if="operationsEnabled" class="app-shell__password" :to="{ name: 'StuckLocks' }">紧急锁</RouterLink>
+        <RouterLink class="app-shell__password" :to="{ name: 'TrustPolicy' }">信任根</RouterLink>
+        <RouterLink v-if="auth.canReadBindings" class="app-shell__password" :to="{ name: 'GovernanceBindings' }">授权绑定</RouterLink>
+        <RouterLink class="app-shell__password" :to="{ name: 'OrganizationMembers' }">组织成员</RouterLink>
+        <RouterLink
+          v-if="auth.canManageLocalUsers"
+          class="app-shell__password"
+          :to="{ name: 'LocalUsers' }"
+        >{{ t('localUser.page.title') }}</RouterLink>
+        <RouterLink class="app-shell__password" :to="{ name: 'ChangePassword' }">修改密码</RouterLink>
+        <button class="app-shell__logout" type="button" @click="handleLogout">{{ t('shell.signOut') }}</button>
       </div>
     </header>
     <main class="app-shell__main">
@@ -61,7 +86,7 @@ async function handleLogout(): Promise<void> {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  background: var(--color-bg, #f8fafc);
+  background: var(--color-bg);
 }
 
 .app-shell__header {
@@ -71,13 +96,13 @@ async function handleLogout(): Promise<void> {
   gap: 2rem;
   min-height: 4.5rem;
   padding: 0.75rem 1.5rem;
-  border-bottom: 1px solid var(--color-border, #e2e8f0);
-  background: var(--color-surface, #fff);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
 }
 
 .app-shell__brand {
-  color: #0f172a;
-  font-size: 1.125rem;
+  color: var(--color-text);
+  font-size: var(--font-size-lg);
   font-weight: 700;
   text-decoration: none;
 }
@@ -88,7 +113,7 @@ async function handleLogout(): Promise<void> {
 }
 
 .app-shell__nav a {
-  color: #334155;
+  color: var(--color-text-secondary);
   text-decoration: none;
 }
 
@@ -101,18 +126,22 @@ async function handleLogout(): Promise<void> {
 .app-shell__identity {
   display: grid;
   min-width: 8rem;
-  font-size: 0.8rem;
+  font-size: var(--font-size-sm);
 }
 
 .app-shell__identity span {
-  color: var(--color-muted, #64748b);
+  color: var(--color-muted);
 }
 
-.app-shell__logout {
-  padding: 0.45rem 0.75rem;
-  border: 1px solid var(--color-border, #cbd5e1);
-  border-radius: 0.375rem;
-  background: var(--color-surface, #fff);
+.app-shell__logout,
+.app-shell__password {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  text-decoration: none;
   cursor: pointer;
 }
 

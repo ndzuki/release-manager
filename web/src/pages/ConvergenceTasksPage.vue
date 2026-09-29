@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 // Convergence tasks page (plan v3 Step 7, AC-058-34~37/42): thin composition
 // surface over the convergenceSelection store. The client pre-check is UX
 // only; CreatePrepareSession stays the authoritative consistency boundary.
@@ -91,13 +92,13 @@ function continueToRevision(): void {
 <template>
   <section class="convergence-page">
     <AuthorizationStaleNotice :stale="writeBlocked" />
-    <nav class="breadcrumbs" aria-label="Breadcrumb">
+    <nav class="breadcrumbs" :aria-label="t('values.page.breadcrumb')">
       <RouterLink
         :to="{ name: 'ReleaseInventory', params: { customerId, clusterId: route.params.clusterId } }"
       >
-        Releases
+        {{ t('cluster.detail.releases') }}
       </RouterLink>
-      <span aria-hidden="true">/</span><strong>Convergence Tasks</strong>
+      <span aria-hidden="true">/</span><strong>{{ t('convergence.page.title') }}</strong>
     </nav>
 
     <LoadingState v-if="gate === 'loading'" message="正在加载收敛任务…" />
@@ -107,7 +108,7 @@ function continueToRevision(): void {
       message="你没有创建 ValuesRevision 收敛的权限（canCreateValuesRevision）。"
     />
     <div v-else class="convergence-body">
-      <h1>待收敛任务（{{ releaseDefinitionId }}）</h1>
+      <h1>{{ t('convergence.page.pending') }}（{{ releaseDefinitionId }}）</h1>
       <p v-if="selection.loadError" class="error-text" role="alert">{{ selection.loadError.message }}</p>
 
       <ConvergenceTaskList
@@ -132,7 +133,7 @@ function continueToRevision(): void {
           :disabled="!selection.canPrepare"
           @click="prepare"
         >
-          {{ preparing ? '准备中…' : 'Prepare 收敛' }}
+          {{ preparing ? '准备中…' : t('convergence.page.prepare') }}
         </button>
       </div>
     </div>
@@ -141,10 +142,10 @@ function continueToRevision(): void {
 
 <style scoped>
 .convergence-page { display: grid; gap: 1.25rem; padding: 1.25rem; }
-.breadcrumbs { display: flex; gap: 0.5rem; color: #64748b; }
+.breadcrumbs { display: flex; gap: 0.5rem; color: var(--color-muted); }
 .convergence-body { display: grid; gap: 1rem; }
 .prepare-row { display: flex; justify-content: space-between; align-items: center; }
-.primary { padding: 0.6rem 1.25rem; border: 0; border-radius: 0.375rem; background: #7c3aed; color: #fff; }
-.primary:disabled { background: #c4b5fd; cursor: not-allowed; }
-.error-text { color: #b91c1c; }
+.primary { padding: 0.6rem 1.25rem; border: 0; border-radius: 0.375rem; background: var(--color-violet); color: var(--color-on-accent); }
+.primary:disabled { background: var(--color-violet-border); cursor: not-allowed; }
+.error-text { color: var(--color-error); }
 </style>

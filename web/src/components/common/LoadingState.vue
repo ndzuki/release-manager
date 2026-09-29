@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
+
 interface LoadingStateProps {
   message?: string;
   label?: string;
@@ -6,7 +8,7 @@ interface LoadingStateProps {
 
 withDefaults(defineProps<LoadingStateProps>(), {
   message: '',
-  label: 'Loading',
+  label: t('state.loading.label'),
 });
 </script>
 
@@ -30,16 +32,16 @@ withDefaults(defineProps<LoadingStateProps>(), {
 .loading-state__spinner {
   width: 2rem;
   height: 2rem;
-  border: 3px solid var(--color-border, #e2e8f0);
-  border-top-color: var(--color-primary, #2563eb);
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
 }
 
 .loading-state__text {
   margin: 0;
-  color: var(--color-muted, #64748b);
-  font-size: 0.875rem;
+  color: var(--color-muted);
+  font-size: var(--font-size-md);
 }
 
 @keyframes spin {

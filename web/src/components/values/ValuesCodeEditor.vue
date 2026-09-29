@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { onBeforeUnmount, onMounted, useTemplateRef, watch } from 'vue';
 import { Compartment, EditorState } from '@codemirror/state';
 import { bracketMatching, defaultHighlightStyle, indentOnInput, syntaxHighlighting } from '@codemirror/language';
@@ -47,7 +48,7 @@ function diagnostics(state: EditorState): Diagnostic[] {
     to: Math.max(from, line.to),
     severity: issue.code === 'secret_literal_forbidden' ? 'warning' : 'error',
     message: issue.message,
-    source: 'values validation',
+    source: t('values.editor.validationAria'),
   }];
 }
 
@@ -76,11 +77,11 @@ onMounted(() => {
           if (update.docChanged) emit('update:modelValue', update.state.doc.toString());
         }),
         EditorView.theme({
-          '&': { minHeight: '30rem', backgroundColor: '#0f172a', color: '#e2e8f0' },
-          '.cm-content': { minHeight: '30rem', padding: '1rem', caretColor: '#f8fafc', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.875rem' },
-          '.cm-gutters': { backgroundColor: '#111827', color: '#64748b', border: 'none' },
-          '.cm-activeLine': { backgroundColor: '#1e293b80' },
-          '.cm-activeLineGutter': { backgroundColor: '#1e293b' },
+          '&': { minHeight: '30rem', backgroundColor: 'var(--editor-surface)', color: 'var(--editor-text)' },
+          '.cm-content': { minHeight: '30rem', padding: '1rem', caretColor: 'var(--editor-caret)', fontFamily: 'var(--font-family-mono)', fontSize: 'var(--font-size-md)' },
+          '.cm-gutters': { backgroundColor: 'var(--editor-gutter-surface)', color: 'var(--editor-gutter-text)', border: 'none' },
+          '.cm-activeLine': { backgroundColor: 'var(--editor-active-line)' },
+          '.cm-activeLineGutter': { backgroundColor: 'var(--editor-active-line-gutter)' },
           '.cm-scroller': { overflow: 'auto' },
         }, { dark: true }),
       ],
@@ -112,13 +113,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="host" class="values-code-editor" aria-label="Values document editor" />
+  <div ref="host" class="values-code-editor" :aria-label="t('values.editor.aria')" />
 </template>
 
 <style scoped>
 .values-code-editor {
   overflow: hidden;
-  border: 1px solid #334155;
+  border: 1px solid var(--color-text-secondary);
   border-radius: 0.75rem;
 }
 </style>

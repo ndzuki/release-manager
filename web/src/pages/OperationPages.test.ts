@@ -61,6 +61,7 @@ async function mountCreatePage(clients: TestClients) {
     routes: [
       { path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations/new', name: 'OperationCreate', component: OperationCreatePage },
       { path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations/:operationId', name: 'OperationDetail', component: OperationDetailPage },
+      { path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations', name: 'OperationList', component: { template: '<div />' } },
       { path: '/customers/:customerId/clusters/:clusterId/releases', name: 'ReleaseInventory', component: { template: '<div />' } },
     ],
   });
@@ -75,7 +76,7 @@ async function mountCreatePage(clients: TestClients) {
 
 async function fillBundleAndValues(wrapper: VueWrapper): Promise<void> {
   await wrapper.find('select').setValue('bundle-1');
-  await wrapper.find('input[aria-label="ValuesRevision ID"]').setValue('vr-1');
+  await wrapper.find('input[aria-label="ValuesRevision 标识"]').setValue('vr-1');
 }
 
 function emptyOptionsClients(): TestClients {
@@ -144,7 +145,8 @@ describe('operation pages', () => {
       history: createMemoryHistory(),
       routes: [
         { path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations/new', name: 'OperationCreate', component: OperationCreatePage },
-        { path: '/customers/:customerId/clusters/:clusterId/releases', name: 'ReleaseInventory', component: { template: '<div />' } },
+        { path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations', name: 'OperationList', component: { template: '<div />' } },
+      { path: '/customers/:customerId/clusters/:clusterId/releases', name: 'ReleaseInventory', component: { template: '<div />' } },
       ],
     });
     await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/new');
@@ -220,7 +222,8 @@ describe('operation pages', () => {
       history: createMemoryHistory(),
       routes: [
         { path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations/:operationId', name: 'OperationDetail', component: OperationDetailPage },
-        { path: '/customers/:customerId/clusters/:clusterId/releases', name: 'ReleaseInventory', component: { template: '<div />' } },
+        { path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations', name: 'OperationList', component: { template: '<div />' } },
+      { path: '/customers/:customerId/clusters/:clusterId/releases', name: 'ReleaseInventory', component: { template: '<div />' } },
       ],
     });
     await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-active');
@@ -239,6 +242,12 @@ describe('operation pages', () => {
       path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations/:operationId',
       name: 'OperationDetail',
       component: OperationDetailPage,
+    });
+    // OperationDetailPage's breadcrumb links to the operation list (W3/N5).
+    router.addRoute({
+      path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations',
+      name: 'OperationList',
+      component: { template: '<div />' },
     });
     router.addRoute({
       path: '/customers/:customerId/clusters/:clusterId/releases',
@@ -364,7 +373,7 @@ describe('operation pages', () => {
     await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-viewer');
     await router.isReady();
     const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
-    await vi.waitFor(() => expect(wrapper.text()).toContain('succeeded'));
+    await vi.waitFor(() => expect(wrapper.text()).toContain('成功'));
 
     expect(wrapper.text()).not.toContain('取消操作');
     expect(wrapper.text()).not.toContain('取消中');
@@ -450,7 +459,7 @@ describe('operation pages', () => {
     await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-terminal');
     await router.isReady();
     const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
-    await vi.waitFor(() => expect(wrapper.text()).toContain('succeeded'));
+    await vi.waitFor(() => expect(wrapper.text()).toContain('成功'));
 
     const button = wrapper.findAll('button').find((b) => b.text() === '取消操作');
     expect(button?.attributes('disabled')).toBeDefined();
@@ -513,8 +522,17 @@ describe('operation pages', () => {
     // A real cancel submit while disconnected must use the last
     // authoritative state_version (AC-057-27).
     await button?.trigger('click');
-    await wrapper.find('textarea').setValue('断线取消');
-    await wrapper.findAll('button').find((b) => b.text() === '确认取消')?.trigger('click');
+    // The cancel dialog is teleported to body by AppDialog, so drive the real
+    // overlay in the document instead of the page wrapper.
+    const dialog = document.querySelector<HTMLElement>('.app-dialog__panel');
+    expect(dialog).not.toBeNull();
+    const textarea = dialog!.querySelector('textarea')!;
+    textarea.value = '断线取消';
+    textarea.dispatchEvent(new Event('input'));
+    await wrapper.vm.$nextTick();
+    Array.from(dialog!.querySelectorAll('button'))
+      .find((element) => element.textContent?.trim() === '确认取消')
+      ?.click();
     await vi.waitFor(() => expect(cancelOperation).toHaveBeenCalledTimes(1));
     const [request] = cancelOperation.mock.calls[0] as [never, never];
     expect(request).toEqual(expect.objectContaining({
@@ -522,7 +540,10 @@ describe('operation pages', () => {
       reason: '断线取消',
       expectedStateVersion: 3n,
     }));
-    expect(timelineStore.operation?.state).toBe('cancelling');
+    // The optimistic state lands after the response is processed; the synthetic
+    // click path resolves with fewer microtask turns than trigger() did, so wait
+    // for the state instead of asserting on it immediately.
+    await vi.waitFor(() => expect(timelineStore.operation?.state).toBe('cancelling'));
     wrapper.unmount();
   });
 });

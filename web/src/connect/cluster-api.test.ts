@@ -59,7 +59,7 @@ describe('mapSaveError', () => {
   it('maps a network failure to a retryable draft-preserving error', () => {
     expect(mapSaveError(ConnectError.from(new TypeError('Failed to fetch'), Code.Unavailable))).toEqual({
       code: 'network_error',
-      message: 'Unable to connect to the server. Your draft has been preserved.',
+      message: '无法连接服务器，草稿已保留。',
     });
   });
 

@@ -33,8 +33,8 @@ describe('ClusterListPage', () => {
 
     const wrapper = mount(ClusterListPage, { global: { plugins: [router] } });
     await vi.waitFor(() => {
-      expect(wrapper.text()).toContain('No clusters are configured for this customer.');
-      expect(wrapper.text()).toContain('Create the first cluster');
+      expect(wrapper.text()).toContain('该客户下还没有集群。');
+      expect(wrapper.text()).toContain('新建第一个集群');
     });
   });
 });

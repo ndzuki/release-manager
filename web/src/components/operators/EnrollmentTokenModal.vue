@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { computed, onMounted, onUnmounted, shallowRef } from 'vue';
+import AppDialog from '@/components/common/AppDialog.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import { useOperatorStore } from '@/stores/operator';
 import type { EnrollmentTokenMetadata } from '@/types/operator';
@@ -18,6 +20,13 @@ const plaintext = shallowRef<string | null>(null);
 const savedConfirmed = shallowRef(false);
 const discardConfirmed = shallowRef(false);
 const generating = shallowRef(false);
+// The dialog owns one title (AppDialog renders the labelled heading), so the
+// heading follows the state instead of only existing in the result branch.
+const title = computed(() => {
+  if (generating.value) return t('operator.token.generating');
+  if (result.value && plaintext.value) return t('operator.token.title');
+  return t('operator.token.failedTitle');
+});
 const installCommand = computed(() => {
   if (!result.value || !plaintext.value) return '';
   return result.value.installCommandTemplate.replace('${ENROLLMENT_TOKEN}', plaintext.value);
@@ -68,69 +77,132 @@ onUnmounted(clearPlaintext);
 </script>
 
 <template>
-  <div class="backdrop" role="presentation">
-    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="token-title">
-      <LoadingState v-if="generating" message="Generating the one-time token…" />
-      <template v-else-if="result && plaintext">
-        <header>
-          <p class="eyebrow">One-time secret</p>
-          <h2 id="token-title">Save the enrollment token now</h2>
-          <p>Closing this dialog permanently removes the plaintext from the browser.</p>
-        </header>
+  <!-- One-time secret: the plaintext is removed on close, so neither a stray
+       backdrop click nor Escape may dismiss this dialog. Closing is an explicit
+       acknowledgement (see the two checkboxes). -->
+  <AppDialog
+    :open="true"
+    :title="title"
+    :close-on-backdrop="false"
+    :close-on-escape="false"
+    @close="emit('close')"
+  >
+    <LoadingState v-if="generating" :message="t('operator.token.generating')" />
+    <template v-else-if="result && plaintext">
+      <p class="eyebrow">{{ t('operator.token.oneTimeSecret') }}</p>
+      <p class="modal-note">{{ t('operator.token.closeWarning') }}</p>
 
-        <div class="secret">
-          <code>{{ plaintext }}</code>
-          <button type="button" @click="copy(plaintext)">Copy token</button>
-        </div>
+      <div class="secret">
+        <code>{{ plaintext }}</code>
+        <button type="button" class="modal-button" @click="copy(plaintext)">{{ t('operator.token.copy') }}</button>
+      </div>
 
-        <details>
-          <summary>Deployment command</summary>
-          <p>Template {{ result.installCommandTemplateVersion }} · {{ result.operatorEndpoint }}</p>
-          <pre>{{ installCommand }}</pre>
-          <button type="button" @click="copy(installCommand)">Copy command</button>
-        </details>
+      <details>
+        <summary>{{ t('operator.token.deploymentCommand') }}</summary>
+        <p>{{ t('operator.token.template') }} {{ result.installCommandTemplateVersion }} · {{ result.operatorEndpoint }}</p>
+        <pre>{{ installCommand }}</pre>
+        <button type="button" class="modal-button" @click="copy(installCommand)">{{ t('operator.token.copyCommand') }}</button>
+      </details>
 
-        <p v-if="store.error" class="error" role="alert">{{ store.error.message }}</p>
+      <p v-if="store.error" class="error" role="alert">{{ store.error.message }}</p>
 
-        <label class="confirmation">
-          <input v-model="savedConfirmed" type="checkbox" />
-          I saved the token in an approved secret store.
-        </label>
-        <button type="button" :disabled="!savedConfirmed" @click="close">Close and forget token</button>
+      <label class="confirmation">
+        <input v-model="savedConfirmed" type="checkbox" />
+        {{ t('operator.token.saved') }}
+      </label>
+      <button type="button" class="modal-button" :disabled="!savedConfirmed" @click="close">
+        {{ t('operator.token.closeAndForget') }}
+      </button>
 
-        <hr />
-        <label class="confirmation">
-          <input v-model="discardConfirmed" type="checkbox" />
-          I understand discarding revokes this pending token.
-        </label>
-        <button type="button" class="danger" :disabled="!discardConfirmed || store.saving" @click="discard">
-          {{ store.saving ? 'Discarding…' : 'Discard token' }}
-        </button>
-      </template>
+      <hr />
+      <label class="confirmation">
+        <input v-model="discardConfirmed" type="checkbox" />
+        {{ t('operator.token.discardAck') }}
+      </label>
+      <button
+        type="button"
+        class="modal-button modal-button--danger"
+        :disabled="!discardConfirmed || store.saving"
+        @click="discard"
+      >
+        {{ store.saving ? t('operator.token.discarding') : t('operator.token.discard') }}
+      </button>
+    </template>
 
-      <template v-else>
-        <h2 id="token-title">Token generation did not complete</h2>
-        <p class="error" role="alert">{{ store.error?.message ?? 'No token was returned.' }}</p>
-        <div class="actions">
-          <button type="button" :disabled="generating" @click="generate">Retry generation</button>
-          <button type="button" @click="emit('close')">Cancel</button>
-        </div>
-      </template>
-    </section>
-  </div>
+    <template v-else>
+      <p class="error" role="alert">{{ store.error?.message ?? t('operator.token.noToken') }}</p>
+      <div class="actions">
+        <button type="button" class="modal-button" :disabled="generating" @click="generate">{{ t('operator.token.retryGeneration') }}</button>
+        <button type="button" class="modal-button" @click="emit('close')">{{ t('action.cancel') }}</button>
+      </div>
+    </template>
+  </AppDialog>
 </template>
 
 <style scoped>
-.backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 1rem; background: rgb(15 23 42 / 0.72); }
-.modal { display: grid; width: min(46rem, 100%); max-height: 90vh; gap: 1rem; overflow: auto; padding: 1.5rem; border-radius: 0.75rem; background: #fff; box-shadow: 0 20px 50px rgb(15 23 42 / 0.35); }
-.modal h2, .modal p { margin: 0; }
-.eyebrow { color: #b91c1c; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; }
-.secret { display: grid; gap: 0.75rem; padding: 1rem; border: 1px solid #f59e0b; border-radius: 0.5rem; background: #fffbeb; }
-.secret code, pre { overflow-wrap: anywhere; white-space: pre-wrap; }
-.actions { display: flex; gap: 0.75rem; justify-content: flex-end; }
-button { padding: 0.55rem 0.8rem; border: 1px solid #94a3b8; border-radius: 0.375rem; background: #fff; cursor: pointer; }
-button:disabled { cursor: not-allowed; opacity: 0.5; }
-.confirmation { display: flex; gap: 0.5rem; align-items: flex-start; }
-.danger { border-color: #ef4444; color: #b91c1c; }
-.error { color: #b91c1c; }
+.eyebrow {
+  margin: 0;
+  color: var(--color-error);
+  font-size: var(--font-size-xs);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.modal-note {
+  margin: 0;
+}
+
+.secret {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--color-warning-solid);
+  border-radius: var(--radius-lg);
+  background: var(--color-warning-surface);
+}
+
+.secret code,
+pre {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-3);
+  justify-content: flex-end;
+}
+
+.confirmation {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+/* Body buttons are not slotted into AppDialog's footer, so they carry their own
+   baseline rather than inheriting the footer's. */
+.modal-button {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.modal-button--danger {
+  border-color: var(--color-danger-border);
+  color: var(--color-error);
+}
+
+.modal-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.error {
+  margin: 0;
+  color: var(--color-error);
+}
 </style>

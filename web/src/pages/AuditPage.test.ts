@@ -1,4 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils';
+import { Code, ConnectError } from '@connectrpc/connect';
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
@@ -128,5 +129,51 @@ describe('AuditPage', () => {
       }),
     );
     expect(store.events.map((event) => event.id)).toEqual(['b']);
+  });
+
+  // B5 regression: a failed request used to be rendered *next to* the empty
+  // state, so "Audit request failed" and "No audit events" appeared together
+  // and the failure read as "there is nothing to see".
+  it('renders only the error state when the first query fails', async () => {
+    signInAs('org-1');
+    queryAuditEvents.mockRejectedValue(new ConnectError('audit unavailable', Code.Unavailable));
+
+    const wrapper = mountAuditPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('审计请求失败');
+    expect(wrapper.text()).not.toContain('暂无审计事件');
+  });
+
+  it('renders the 403 state for permission_denied instead of an empty result', async () => {
+    signInAs('org-1');
+    queryAuditEvents.mockRejectedValue(new ConnectError('denied', Code.PermissionDenied));
+
+    const wrapper = mountAuditPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('403');
+    expect(wrapper.text()).not.toContain('暂无审计事件');
+    expect(wrapper.text()).not.toContain('Audit request failed');
+  });
+
+  it('keeps the loaded page and reports the failure inline when a refresh fails (AC-059-08)', async () => {
+    signInAs('org-1');
+    queryAuditEvents
+      .mockResolvedValueOnce(queryResponse([auditEvent('a')]))
+      .mockRejectedValueOnce(new ConnectError('audit unavailable', Code.Unavailable));
+
+    const wrapper = mountAuditPage();
+    await flushPromises();
+    const store = useAuditStore();
+    expect(store.events.map((event) => event.id)).toEqual(['a']);
+
+    await store.query('org-1', 'first');
+    await flushPromises();
+
+    // The page is still there, and the failure is reported next to it.
+    expect(store.events.map((event) => event.id)).toEqual(['a']);
+    expect(wrapper.text()).toContain('a');
+    expect(wrapper.text()).not.toContain('暂无审计事件');
   });
 });

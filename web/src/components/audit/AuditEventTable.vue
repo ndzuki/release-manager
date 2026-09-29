@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
+import { statusLabel } from '@/i18n/status-labels';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { ActorKind, type AuditEvent } from '@/gen/audit/v1/audit_pb';
 
@@ -17,12 +19,12 @@ const emit = defineEmits<{
 }>();
 
 const actorKindLabels: Record<ActorKind, string> = {
-  [ActorKind.UNSPECIFIED]: 'unknown',
-  [ActorKind.ANONYMOUS]: 'anonymous',
-  [ActorKind.USER]: 'user',
-  [ActorKind.SERVICE]: 'service',
-  [ActorKind.API_KEY]: 'api_key',
-  [ActorKind.SYSTEM]: 'system',
+  [ActorKind.UNSPECIFIED]: t('audit.table.unknownActor'),
+  [ActorKind.ANONYMOUS]: t('audit.actor.anonymous'),
+  [ActorKind.USER]: t('audit.actor.user'),
+  [ActorKind.SERVICE]: t('audit.actor.service'),
+  [ActorKind.API_KEY]: t('audit.actor.apiKey'),
+  [ActorKind.SYSTEM]: t('audit.actor.service'),
 };
 
 function formatTime(event: AuditEvent): string {
@@ -32,23 +34,23 @@ function formatTime(event: AuditEvent): string {
 function actorLabel(event: AuditEvent): string {
   const actor = event.actor;
   if (!actor) return 'unknown';
-  return `${actorKindLabels[actor.kind]}:${actor.id || 'unknown'}`;
+  return `${actorKindLabels[actor.kind]}:${actor.id || t('audit.table.unknownActor')}`;
 }
 </script>
 
 <template>
-  <section class="audit-results" aria-label="Audit results">
-    <p class="audit-results__count">Showing {{ props.events.length }} of {{ props.totalSize }} events</p>
+  <section class="audit-results" :aria-label="t('audit.table.results')">
+    <p class="audit-results__count">{{ t('audit.table.showing') }} {{ props.events.length }} / {{ props.totalSize }}</p>
     <div class="audit-results__table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Time</th>
-            <th>Actor</th>
-            <th>Resource</th>
-            <th>Action</th>
-            <th>Status</th>
-            <th>Duration</th>
+            <th>{{ t('audit.table.time') }}</th>
+            <th>{{ t('audit.table.actor') }}</th>
+            <th>{{ t('audit.table.resource') }}</th>
+            <th>{{ t('audit.table.action') }}</th>
+            <th>{{ t('audit.table.status') }}</th>
+            <th>{{ t('audit.table.duration') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -71,15 +73,15 @@ function actorLabel(event: AuditEvent): string {
             <td>
               {{ event.action || '—' }}
             </td>
-            <td><span class="audit-status">{{ event.status || '—' }}</span></td>
+            <td><span class="audit-status">{{ statusLabel('audit', event.status) || '—' }}</span></td>
             <td>{{ event.durationMs }} ms</td>
           </tr>
         </tbody>
       </table>
     </div>
-    <div class="audit-results__pagination" aria-label="Audit pagination">
-      <button type="button" :disabled="!props.hasPrevious || props.loading" @click="emit('previous')">Previous</button>
-      <button type="button" :disabled="!props.hasMore || props.loading" @click="emit('next')">Next</button>
+    <div class="audit-results__pagination" :aria-label="t('audit.table.pagination')">
+      <button type="button" :disabled="!props.hasPrevious || props.loading" @click="emit('previous')">{{ t('audit.table.previous') }}</button>
+      <button type="button" :disabled="!props.hasMore || props.loading" @click="emit('next')">{{ t('audit.table.next') }}</button>
     </div>
   </section>
 </template>
@@ -92,35 +94,35 @@ function actorLabel(event: AuditEvent): string {
 
 .audit-results__count {
   margin: 0;
-  color: var(--color-muted, #64748b);
-  font-size: 0.85rem;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
 }
 
 .audit-results__table-wrap {
   overflow-x: auto;
-  border: 1px solid var(--color-border, #e2e8f0);
+  border: 1px solid var(--color-border);
   border-radius: 0.75rem;
-  background: var(--color-surface, #fff);
+  background: var(--color-surface);
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.85rem;
+  font-size: var(--font-size-sm);
 }
 
 th,
 td {
   padding: 0.75rem;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--color-border);
   text-align: left;
   vertical-align: top;
 }
 
 th {
-  background: #f8fafc;
-  color: #475569;
-  font-size: 0.75rem;
+  background: var(--color-bg);
+  color: var(--color-muted-strong);
+  font-size: var(--font-size-xs);
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -128,7 +130,7 @@ th {
 td small {
   display: block;
   margin-top: 0.2rem;
-  color: var(--color-muted, #64748b);
+  color: var(--color-muted);
 }
 
 .audit-results__row {
@@ -137,7 +139,7 @@ td small {
 
 .audit-results__row:hover,
 .audit-results__row:focus-visible {
-  background: #eff6ff;
+  background: var(--color-info-soft);
   outline: none;
 }
 
@@ -145,7 +147,7 @@ td small {
   display: inline-block;
   padding: 0.15rem 0.45rem;
   border-radius: 999px;
-  background: #e2e8f0;
+  background: var(--color-border);
 }
 
 .audit-results__pagination {
@@ -156,10 +158,10 @@ td small {
 
 .audit-results__pagination button {
   padding: 0.5rem 0.8rem;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--color-border-strong);
   border-radius: 0.375rem;
-  background: #fff;
-  color: #334155;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
   cursor: pointer;
 }
 

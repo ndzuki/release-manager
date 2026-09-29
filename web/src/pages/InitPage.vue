@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { shallowRef } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
@@ -8,7 +9,7 @@ const auth = useAuthStore();
 const router = useRouter();
 
 const username = shallowRef('admin');
-const organizationName = shallowRef('Default Organization');
+const organizationName = shallowRef(t('init.defaultOrganization'));
 const password = shallowRef('');
 const errorMessage = shallowRef('');
 const submitting = shallowRef(false);
@@ -20,7 +21,7 @@ async function handleSubmit(): Promise<void> {
     await auth.initializeSystem(username.value, password.value, organizationName.value);
     await router.replace({ name: 'Home' });
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'Unable to initialize the system.';
+    errorMessage.value = error instanceof Error ? error.message : t('init.failedFallback');
   } finally {
     submitting.value = false;
   }
@@ -31,25 +32,25 @@ async function handleSubmit(): Promise<void> {
   <main class="init-page">
     <form class="init-page__form" @submit.prevent="handleSubmit">
       <div>
-        <p class="init-page__eyebrow">First-time setup</p>
-        <h1 class="init-page__title">Initialize Release Manager</h1>
-        <p class="init-page__description">Create the first platform administrator and organization.</p>
+        <p class="init-page__eyebrow">{{ t('init.eyebrow') }}</p>
+        <h1 class="init-page__title">{{ t('init.title') }}</h1>
+        <p class="init-page__description">{{ t('init.description') }}</p>
       </div>
 
-      <ErrorState v-if="errorMessage" title="Initialization failed" :message="errorMessage" />
+      <ErrorState v-if="errorMessage" :title="t('init.failed')" :message="errorMessage" />
 
       <label class="init-page__field">
-        <span>Administrator username</span>
+        <span>{{ t('init.adminUsername') }}</span>
         <input v-model="username" autocomplete="username" required :disabled="submitting" />
       </label>
 
       <label class="init-page__field">
-        <span>Organization name</span>
+        <span>{{ t('init.organizationName') }}</span>
         <input v-model="organizationName" autocomplete="organization" required :disabled="submitting" />
       </label>
 
       <label class="init-page__field">
-        <span>Password</span>
+        <span>{{ t('init.password') }}</span>
         <input
           v-model="password"
           type="password"
@@ -61,7 +62,7 @@ async function handleSubmit(): Promise<void> {
       </label>
 
       <button class="init-page__submit" type="submit" :disabled="submitting">
-        {{ submitting ? 'Initializing…' : 'Initialize system' }}
+        {{ submitting ? t('init.inProgress') : t('init.submit') }}
       </button>
     </form>
   </main>
@@ -73,7 +74,7 @@ async function handleSubmit(): Promise<void> {
   min-height: 100vh;
   place-items: center;
   padding: 1.5rem;
-  background: var(--color-bg, #f8fafc);
+  background: var(--color-bg);
 }
 
 .init-page__form {
@@ -81,20 +82,20 @@ async function handleSubmit(): Promise<void> {
   width: min(100%, 28rem);
   gap: 1rem;
   padding: 2rem;
-  border: 1px solid var(--color-border, #e2e8f0);
+  border: 1px solid var(--color-border);
   border-radius: 0.75rem;
-  background: var(--color-surface, #fff);
+  background: var(--color-surface);
   box-shadow: 0 0.75rem 2rem rgb(15 23 42 / 8%);
 }
 
 .init-page__eyebrow,
 .init-page__description {
   margin: 0;
-  color: var(--color-muted, #64748b);
+  color: var(--color-muted);
 }
 
 .init-page__eyebrow {
-  font-size: 0.75rem;
+  font-size: var(--font-size-xs);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -102,18 +103,18 @@ async function handleSubmit(): Promise<void> {
 
 .init-page__title {
   margin: 0.25rem 0;
-  font-size: 1.5rem;
+  font-size: var(--font-size-xl);
 }
 
 .init-page__field {
   display: grid;
   gap: 0.35rem;
-  font-size: 0.875rem;
+  font-size: var(--font-size-md);
 }
 
 .init-page__field input {
   padding: 0.65rem 0.75rem;
-  border: 1px solid var(--color-border, #cbd5e1);
+  border: 1px solid var(--color-border-strong);
   border-radius: 0.375rem;
 }
 
@@ -121,8 +122,8 @@ async function handleSubmit(): Promise<void> {
   padding: 0.7rem 1rem;
   border: 0;
   border-radius: 0.375rem;
-  background: var(--color-primary, #2563eb);
-  color: #fff;
+  background: var(--color-primary);
+  color: var(--color-on-accent);
   font-weight: 600;
   cursor: pointer;
 }

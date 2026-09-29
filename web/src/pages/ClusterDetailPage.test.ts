@@ -46,6 +46,9 @@ async function mountPage() {
       { path: '/customers/:customerId/clusters/:clusterId', name: 'ClusterDetail', component: ClusterDetailPage },
       { path: '/customers/:customerId/clusters/:clusterId/operators', name: 'OperatorList', component: { template: '<div />' } },
       { path: '/customers/:customerId/clusters/:clusterId/edit', name: 'ClusterEdit', component: { template: '<div />' } },
+      // The page links into the release subtree (W3); an unregistered target
+      // makes RouterLink throw and takes the whole header down.
+      { path: '/customers/:customerId/clusters/:clusterId/releases', name: 'ReleaseInventory', component: { template: '<div />' } },
     ],
   });
   await router.push('/customers/customer-1/clusters/cluster-1');
@@ -59,9 +62,9 @@ describe('ClusterDetailPage operator navigation', () => {
   it('shows the read-only Operators entry to a viewer when the feature is enabled', async () => {
     const wrapper = await mountPage();
 
-    const operatorsLink = wrapper.findAll('a').find((link) => link.text() === 'Operators');
+    const operatorsLink = wrapper.findAll('a').find((link) => link.text() === 'Operator 列表');
     expect(operatorsLink?.attributes('href')).toBe('/customers/customer-1/clusters/cluster-1/operators');
-    expect(wrapper.text()).not.toContain('Edit');
+    expect(wrapper.text()).not.toContain('编辑');
   });
 
   it('removes the Operators entry when the feature is disabled', async () => {

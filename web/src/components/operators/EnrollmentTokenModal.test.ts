@@ -55,6 +55,9 @@ beforeEach(() => {
 describe('EnrollmentTokenModal', () => {
   it('keeps plaintext local to the modal and clears it after confirmed close', async () => {
     const wrapper = mount(EnrollmentTokenModal, {
+      // The overlay is teleported by AppDialog; this test is about secret
+      // handling, so keep the content in the wrapper's tree.
+      global: { stubs: { Teleport: true } },
       props: { customerId: 'customer-1', clusterId: 'cluster-1' },
     });
     await flushPromises();
@@ -66,10 +69,15 @@ describe('EnrollmentTokenModal', () => {
     expect(JSON.stringify(window.localStorage)).not.toContain('plaintext-token');
     expect(JSON.stringify(window.sessionStorage)).not.toContain('plaintext-token');
 
-    const closeButton = wrapper.findAll('button').find((button) => button.text().includes('Close and forget'));
+    const closeButton = wrapper.findAll('button').find((button) => button.text().includes('关闭并忘记'));
     expect(closeButton?.attributes('disabled')).toBeDefined();
     await wrapper.find('input[type="checkbox"]').setValue(true);
-    await closeButton?.trigger('click');
+    // Re-query: the footer/body button lives inside AppDialog's slot, so the
+    // re-render after the checkbox replaces the node — and the captured one was
+    // still the disabled instance.
+    const enabledClose = wrapper.findAll('button').find((button) => button.text().includes('关闭并忘记'))!;
+    expect(enabledClose.attributes('disabled')).toBeUndefined();
+    await enabledClose.trigger('click');
 
     expect(wrapper.emitted('close')).toHaveLength(1);
     expect(wrapper.text()).not.toContain('plaintext-token');
@@ -80,12 +88,15 @@ describe('EnrollmentTokenModal', () => {
   it('keeps the modal open after a failed discard so the user can retry manually', async () => {
     vi.mocked(revokePendingEnrollmentToken).mockRejectedValueOnce(new TypeError('Failed to fetch'));
     const wrapper = mount(EnrollmentTokenModal, {
+      // The overlay is teleported by AppDialog; this test is about secret
+      // handling, so keep the content in the wrapper's tree.
+      global: { stubs: { Teleport: true } },
       props: { customerId: 'customer-1', clusterId: 'cluster-1' },
     });
     await flushPromises();
 
     await wrapper.findAll('input[type="checkbox"]')[1]?.setValue(true);
-    const discardButton = wrapper.findAll('button').find((button) => button.text().includes('Discard token'));
+    const discardButton = wrapper.findAll('button').find((button) => button.text().includes('丢弃令牌'));
     await discardButton?.trigger('click');
     await flushPromises();
 

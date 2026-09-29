@@ -18,10 +18,10 @@ defineProps<{ stale: boolean }>();
 .auth-stale-notice {
   margin: 0 0 1rem;
   padding: 0.65rem 0.85rem;
-  border: 1px solid #fdba74;
+  border: 1px solid var(--color-warning-border);
   border-radius: 0.5rem;
-  background: #fff7ed;
-  color: #9a3412;
-  font-size: 0.85rem;
+  background: var(--color-warning-soft);
+  color: var(--color-warning-ink);
+  font-size: var(--font-size-sm);
 }
 </style>

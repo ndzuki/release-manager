@@ -45,8 +45,11 @@ export default defineConfig({
         target: 'http://127.0.0.1:8084',
         changeOrigin: true,
       },
+      // AuditService is served by release-api. 8087 is release-web itself in
+      // the dev cluster (release-api is 8088), so pointing this at 8087 sent
+      // audit calls back into the SPA and answered 405 (B5).
       '/audit.v1.AuditService': {
-        target: 'http://127.0.0.1:8087',
+        target: 'http://127.0.0.1:8088',
         changeOrigin: true,
       },
       '/notifier.v1.NotifierService': {

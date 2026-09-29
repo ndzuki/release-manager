@@ -1,0 +1,138 @@
+/*
+ * Global baseline (ADR-029).
+ *
+ * web/src had no stylesheet at all: no reset, no body typography, no focus
+ * policy, no motion policy. Everything lived in 69 <style scoped> blocks, which
+ * is why default UA styles (8px body margin, default focus rings, default font)
+ * leaked into every page. This file is the smallest baseline that fixes that
+ * — components keep their scoped rules and migrate to the tokens incrementally
+ * (TASK-176). It DOES change inherited defaults on purpose: body text moves from
+ * the UA 16px to the 14px token, line-height becomes 1.5, and box-sizing becomes
+ * border-box globally. Those three are the intended baseline, not incidental.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: inherit;
+}
+
+html {
+  box-sizing: border-box;
+  /* The console is a desktop tool (ADR-029 clause 5): keep text at its
+     authored size when a mobile browser would otherwise inflate it. */
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-base);
+}
+
+/* Form controls kept the UA default (13.33px) because only some components set
+   `font: inherit`, so the type scale did not reach them. One rule here makes the
+   scale apply everywhere. */
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+/* One focus policy for the whole console. Only two `:focus-visible` rules
+   existed before, so most of the 93 buttons and 55 form controls relied on the
+   UA outline — which `border-radius`/`overflow` clipping can eat. */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
+
+/* Do not remove outlines wholesale; only suppress the mouse-click ring. */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Motion policy: three @keyframes (spinner + two skeletons) ran with no
+   reduced-motion escape hatch before. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Accessible-only text (used by screenshots/status labels that need a caption
+   without occupying layout). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Boot-failure surface (B2). Global on purpose: it must render when no
+   component library is available because the app never mounted. */
+.boot-failure {
+  display: grid;
+  gap: var(--space-3);
+  place-content: center;
+  min-height: 100vh;
+  padding: var(--space-6);
+  text-align: center;
+}
+
+.boot-failure__title {
+  margin: 0;
+  font-size: var(--font-size-xl);
+}
+
+.boot-failure__message {
+  max-width: 40rem;
+  margin: 0 auto;
+  color: var(--color-muted);
+}
+
+.boot-failure__detail {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: var(--space-3);
+  overflow-wrap: anywhere;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-muted);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  white-space: pre-wrap;
+}
+
+.boot-failure__retry {
+  justify-self: center;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-primary);
+  color: #fff;
+  font: inherit;
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+}
+
+.boot-failure__retry:hover {
+  background: var(--color-primary-hover);
+}
+

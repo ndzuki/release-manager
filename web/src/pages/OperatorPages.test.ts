@@ -61,10 +61,12 @@ describe('Operator pages', () => {
     const wrapper = mount(OperatorListPage, { global: { plugins: [router] } });
     await flushPromises();
 
-    expect(wrapper.text()).toContain('No operators registered');
-    expect(wrapper.text()).not.toContain('Generate token');
-    expect(wrapper.text()).not.toContain('Generate the first token');
-    expect(wrapper.text()).not.toContain('Revoke');
+    expect(wrapper.text()).toContain('暂无已注册的 Operator');
+    expect(wrapper.text()).not.toContain('生成令牌');
+    expect(wrapper.text()).not.toContain('生成第一个令牌');
+    expect(wrapper.text()).not.toContain('撤销 Operator');
+    expect(wrapper.text()).not.toContain('确认撤销');
+    expect(wrapper.text()).not.toContain('撤销待用令牌');
   });
 
   it('renders the server-owned offline reason and heartbeat without deriving status', async () => {
@@ -104,9 +106,9 @@ describe('Operator pages', () => {
     const wrapper = mount(OperatorDetailPage, { global: { plugins: [router] } });
     await flushPromises();
 
-    expect(wrapper.text().toLowerCase()).toContain('offline');
-    expect(wrapper.text()).toContain('Heartbeat timed out.');
-    expect(wrapper.text()).not.toContain('Revoke operator');
+    expect(wrapper.text()).toContain('离线');
+    expect(wrapper.text()).toContain('心跳超时。');
+    expect(wrapper.text()).not.toContain('撤销 Operator');
   });
 
   it('hides enrollment, replacement, and pending-token revocation controls from viewers', async () => {
@@ -130,9 +132,9 @@ describe('Operator pages', () => {
     const wrapper = mount(OperatorEnrollPage, { global: { plugins: [router] } });
     await flushPromises();
 
-    expect(wrapper.text()).toContain('Access denied');
-    expect(wrapper.text()).not.toContain('Replace token');
-    expect(wrapper.text()).not.toContain('Revoke pending token');
-    expect(wrapper.text()).not.toContain('Generate enrollment token');
+    expect(wrapper.text()).toContain('无权访问');
+    expect(wrapper.text()).not.toContain('替换令牌');
+    expect(wrapper.text()).not.toContain('撤销待用令牌');
+    expect(wrapper.text()).not.toContain('生成注册令牌');
   });
 });
