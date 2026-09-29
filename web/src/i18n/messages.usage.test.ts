@@ -1,7 +1,7 @@
 import { globSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { bareCopy, referencedKeys } from './copy-lint';
+import { bareCopy, referencedKeys, stripComments } from './copy-lint';
 import { hasMessage, messageKeys } from './messages';
 
 /*
@@ -35,10 +35,10 @@ describe('message catalog usage', () => {
       // A key can also be consumed through a lookup table (`LABEL_KEYS = { x: 'a.b' }`),
       // where it never appears inside a t(...) call. Comments are stripped first, so a
       // commented-out mention does not count as a consumer.
-      const withoutComments = text
-        .replace(/<!--[\s\S]*?-->/g, '')
-        .replace(/\/\*[\s\S]*?\*\//g, '')
-        .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+      // One shared implementation: the detector and this gate must agree on what a
+      // comment is, and two regex strippers had already drifted (the inline one here
+      // stripped `//` unconditionally, so a URL in a string counted as a comment).
+      const withoutComments = stripComments(text);
       for (const key of messageKeys()) {
         if (key.startsWith('reason.')) continue;
         if (withoutComments.includes(`'${key}'`) || withoutComments.includes('`' + key + '`')) used.add(key);

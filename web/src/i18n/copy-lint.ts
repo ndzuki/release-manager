@@ -25,10 +25,33 @@ const NON_COPY_ATTRIBUTES = new Set([
   'slot', 'lang', 'dir', 'tabindex', 'autofocus',
 ]);
 
-function stripComments(text: string): string {
-  return text
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
+/**
+ * Removes comments in one forward scan.
+ *
+ * A regex stripper is the obvious implementation and the wrong one: `<!--[\s\S]*?-->`
+ * leaves an unterminated `<!--` behind, and the same holds for a block comment -- the
+ * class of defect CodeQL reports as js/incomplete-multi-character-sanitization. The scan
+ * consumes an unterminated comment to the end of the input, which is what a lexer does
+ * with the same input, so no marker can survive into the text this detector inspects.
+ */
+export function stripComments(text: string): string {
+  let scanned = '';
+  let index = 0;
+  while (index < text.length) {
+    if (text.startsWith('<!--', index)) {
+      const end = text.indexOf('-->', index + 4);
+      index = end === -1 ? text.length : end + 3;
+      continue;
+    }
+    if (text.startsWith('/*', index)) {
+      const end = text.indexOf('*/', index + 2);
+      index = end === -1 ? text.length : end + 2;
+      continue;
+    }
+    scanned += text[index];
+    index += 1;
+  }
+  return scanned
     // Only a line comment: `//` that is not part of a URL AND whose line carries no
     // string quote before it. The first version ate everything after an inline `//`,
     // including copy that lived inside a string on the same line.
@@ -71,8 +94,8 @@ function stripIdentifierPositions(text: string): string {
 }
 
 function sections(text: string): { template: string; script: string } {
-  const template = /<template>([\s\S]*)<\/template>/.exec(text)?.[1];
-  const script = /<script[^>]*>([\s\S]*?)<\/script>/.exec(text)?.[1];
+  const template = /<template>([\s\S]*)<\/template>/i.exec(text)?.[1];
+  const script = /<script[^>]*>([\s\S]*?)<\/script>/i.exec(text)?.[1];
   // A plain .ts module has neither tag: treat the whole file as script, otherwise the
   // helper modules that render user copy (utils/*.ts) are invisible to this detector.
   if (template === undefined && script === undefined) return { template: '', script: text };
