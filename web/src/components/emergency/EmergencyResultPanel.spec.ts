@@ -30,7 +30,9 @@ describe('EmergencyResultPanel (AC-058-20~33)', () => {
         canCreateValuesRevision: false,
       },
     });
-    expect(wrapper.text()).toContain('SET_CONTAINER_IMAGE / REQUIRE_PROMOTION');
+    // The operation kind stays a wire value; the convergence strategy is display copy.
+    expect(wrapper.text()).toContain('SET_CONTAINER_IMAGE');
+    expect(wrapper.text()).toContain('生成收敛任务，需异人审批');
     expect(wrapper.text()).toContain('目标字段已写入集群');
     expect(wrapper.text()).toContain('repo/app:v2');
     expect(wrapper.text()).toContain('t1');

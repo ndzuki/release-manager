@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import ErrorState from '@/components/common/ErrorState.vue';
@@ -56,48 +57,48 @@ async function handleSave() {
 
 <template>
   <section class="page">
-    <LoadingState v-if="store.loading" message="Loading cluster…" />
+    <LoadingState v-if="store.loading" :message="t('state.loading.cluster')" />
     <ForbiddenState v-else-if="store.forbidden" />
-    <ErrorState v-else-if="store.notFound" message="Cluster not found">
-      <RouterLink :to="{ name: 'ClusterList', params: { customerId } }">Back to clusters</RouterLink>
+    <ErrorState v-else-if="store.notFound" :message="t('cluster.notFound')">
+      <RouterLink :to="{ name: 'ClusterList', params: { customerId } }">{{ t('cluster.detail.back') }}</RouterLink>
     </ErrorState>
 
     <form v-else-if="store.draft" class="cluster-form" @submit.prevent="handleSave">
       <header class="page__header">
         <div>
-          <p class="eyebrow">{{ isCreate ? 'New cluster' : 'Edit cluster' }}</p>
-          <h1>{{ isCreate ? 'Create cluster' : store.current?.name }}</h1>
-          <p>Registry credentials are intentionally not accepted or stored.</p>
+          <p class="eyebrow">{{ isCreate ? t('cluster.edit.newLabel') : t('cluster.edit.editLabel') }}</p>
+          <h1>{{ isCreate ? t('cluster.edit.createTitle') : store.current?.name }}</h1>
+          <p>{{ t('cluster.edit.credentials') }}</p>
         </div>
         <div class="actions">
-          <RouterLink :to="clusterId ? { name: 'ClusterDetail', params: { customerId, clusterId } } : { name: 'ClusterList', params: { customerId } }">Cancel</RouterLink>
+          <RouterLink :to="clusterId ? { name: 'ClusterDetail', params: { customerId, clusterId } } : { name: 'ClusterList', params: { customerId } }">{{ t('action.cancel') }}</RouterLink>
           <button type="submit" class="primary" :disabled="store.saving">
-            {{ store.saving ? 'Saving…' : 'Save cluster' }}
+            {{ store.saving ? t('cluster.edit.saving') : t('cluster.edit.save') }}
           </button>
         </div>
       </header>
 
       <div v-if="store.saveError" class="save-error" role="alert">
-        <strong>{{ store.saveError.code === 'optimistic_lock_conflict' ? 'Data was modified by another user.' : store.saveError.message }}</strong>
-        <span v-if="store.saveError.code === 'optimistic_lock_conflict'">Your draft is preserved. Refresh to compare with the server version.</span>
-        <button v-if="store.saveError.code === 'network_error'" type="submit">Retry save</button>
-        <button v-if="store.saveError.code === 'optimistic_lock_conflict' && clusterId" type="button" @click="store.refreshCluster(clusterId)">Refresh server version</button>
+        <strong>{{ store.saveError.code === 'optimistic_lock_conflict' ? t('cluster.edit.conflict') : store.saveError.message }}</strong>
+        <span v-if="store.saveError.code === 'optimistic_lock_conflict'">{{ t('cluster.edit.draftPreserved') }}</span>
+        <button v-if="store.saveError.code === 'network_error'" type="submit">{{ t('cluster.edit.retrySave') }}</button>
+        <button v-if="store.saveError.code === 'optimistic_lock_conflict' && clusterId" type="button" @click="store.refreshCluster(clusterId)">{{ t('cluster.edit.refreshVersion') }}</button>
       </div>
 
       <section class="cluster-fields">
         <label>
-          Cluster name
+          {{ t('cluster.edit.name') }}
           <input v-model="store.draft.name" maxlength="254" :aria-invalid="Boolean(store.saveError?.fieldViolations?.some((item) => item.field === 'name'))" />
           <small v-for="error in store.saveError?.fieldViolations?.filter((item) => item.field === 'name')" :key="error.description" class="field-error">{{ error.description }}</small>
         </label>
         <label class="checkbox">
           <input v-model="store.draft.enabled" type="checkbox" />
-          Enabled as release target
+          {{ t('cluster.edit.enabled') }}
         </label>
       </section>
 
       <RouteRuleEditor
-        title="Image routes"
+        :title="t('cluster.edit.imageRoutes')"
         artifact-type="image"
         :rules="store.draft.imageRules"
         :violations="store.saveError?.fieldViolations"
@@ -107,7 +108,7 @@ async function handleSave() {
         @remove="removeRule('image', $event)"
       />
       <RouteRuleEditor
-        title="Chart routes"
+        :title="t('cluster.edit.chartRoutes')"
         artifact-type="chart"
         :rules="store.draft.chartRules"
         :violations="store.saveError?.fieldViolations"
@@ -124,14 +125,14 @@ async function handleSave() {
 .page, .cluster-form { display: grid; gap: 1.5rem; max-width: 72rem; margin: 0 auto; }
 .page__header, .actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 h1, p { margin: 0; }
-.eyebrow { color: #2563eb; font-weight: 700; text-transform: uppercase; font-size: 0.75rem; }
-.page__header p:last-child { margin-top: 0.375rem; color: #64748b; }
-.cluster-fields { display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; padding: 1rem; border: 1px solid #cbd5e1; border-radius: 0.75rem; }
+.eyebrow { color: var(--color-primary); font-weight: 700; text-transform: uppercase; font-size: var(--font-size-xs); }
+.page__header p:last-child { margin-top: 0.375rem; color: var(--color-muted); }
+.cluster-fields { display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
 label { display: grid; gap: 0.375rem; font-weight: 600; }
 .checkbox { display: flex; align-items: center; }
-input { padding: 0.625rem; border: 1px solid #cbd5e1; border-radius: 0.375rem; font: inherit; }
-.save-error { display: grid; gap: 0.5rem; padding: 1rem; border: 1px solid #f87171; border-radius: 0.5rem; background: #fef2f2; color: #991b1b; }
-.field-error { color: #dc2626; }
-.actions a, button { padding: 0.5rem 0.75rem; border: 1px solid #94a3b8; border-radius: 0.375rem; background: #fff; }
-.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+input { padding: 0.625rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; font: inherit; }
+.save-error { display: grid; gap: 0.5rem; padding: 1rem; border: 1px solid var(--color-danger-border-bright); border-radius: 0.5rem; background: var(--color-danger-soft); color: var(--color-error-strong); }
+.field-error { color: var(--color-danger); }
+.actions a, button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); }
+.primary { background: var(--color-primary); color: var(--color-on-accent); border-color: var(--color-primary); }
 </style>

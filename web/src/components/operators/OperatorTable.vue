@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import OperatorStatusBadge from './OperatorStatusBadge.vue';
 import type { OperatorSummary } from '@/types/operator';
 import { formatOperatorTime, operatorSessionReasonLabel } from '@/utils/operator-format';
@@ -19,7 +20,7 @@ const emit = defineEmits<{
   <div class="table-wrap">
     <table class="operators">
       <thead>
-        <tr><th>Name</th><th>Lifecycle</th><th>Session</th><th>Last heartbeat</th><th>Registered</th><th>Actions</th></tr>
+        <tr><th>{{ t('operator.table.name') }}</th><th>{{ t('operator.filters.lifecycle') }}</th><th>{{ t('operator.filters.session') }}</th><th>{{ t('operator.table.lastHeartbeat') }}</th><th>{{ t('operator.table.registered') }}</th><th>{{ t('operator.table.actions') }}</th></tr>
       </thead>
       <tbody>
         <tr v-for="operator in operators" :key="operator.id">
@@ -31,7 +32,7 @@ const emit = defineEmits<{
           </td>
           <td>{{ formatOperatorTime(operator.lastHeartbeat) }}</td>
           <td>{{ formatOperatorTime(operator.registeredAt) }}</td>
-          <td><button v-if="canRevoke && operator.lifecycleStatus !== 'revoked'" type="button" class="danger" @click="emit('revoke', operator)">Revoke</button></td>
+          <td><button v-if="canRevoke && operator.lifecycleStatus !== 'revoked'" type="button" class="danger" @click="emit('revoke', operator)">{{ t('operator.table.revoke') }}</button></td>
         </tr>
       </tbody>
     </table>
@@ -39,11 +40,11 @@ const emit = defineEmits<{
 </template>
 
 <style scoped>
-.table-wrap { overflow-x: auto; border: 1px solid #cbd5e1; border-radius: 0.75rem; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
 .operators { width: 100%; border-collapse: collapse; }
-.operators th, .operators td { padding: 0.8rem; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; white-space: nowrap; }
-.operators th { background: #f8fafc; color: #475569; font-size: 0.8rem; text-transform: uppercase; }
-.operators small { display: block; max-width: 18rem; margin-top: 0.35rem; color: #64748b; white-space: normal; }
-.link { border: 0; background: transparent; color: #2563eb; cursor: pointer; font-weight: 700; }
-.danger { padding: 0.35rem 0.6rem; border: 1px solid #ef4444; border-radius: 0.375rem; background: #fff; color: #b91c1c; cursor: pointer; }
+.operators th, .operators td { padding: 0.8rem; border-bottom: 1px solid var(--color-border); text-align: left; vertical-align: top; white-space: nowrap; }
+.operators th { background: var(--color-bg); color: var(--color-muted-strong); font-size: var(--font-size-sm); text-transform: uppercase; }
+.operators small { display: block; max-width: 18rem; margin-top: 0.35rem; color: var(--color-muted); white-space: normal; }
+.link { border: 0; background: transparent; color: var(--color-primary); cursor: pointer; font-weight: 700; }
+.danger { padding: 0.35rem 0.6rem; border: 1px solid var(--color-danger-border); border-radius: 0.375rem; background: var(--color-surface); color: var(--color-error); cursor: pointer; }
 </style>

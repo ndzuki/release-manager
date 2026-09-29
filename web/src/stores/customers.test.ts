@@ -87,7 +87,7 @@ describe('customer store list', () => {
     await store.loadList();
 
     expect(store.forbidden).toBe(false);
-    expect(store.error).toBe('Unable to connect to the server. Your draft has been preserved.');
+    expect(store.error).toBe('无法连接服务器，草稿已保留。');
   });
 });
 

@@ -275,6 +275,53 @@ describe('operationTimeline store', () => {
     expect(mockedWatch.mock.calls[1]![1]).toBe(4n);
   });
 
+  // TASK-173 AC-3: a dropped stream must be reconnected on a bounded
+  // exponential backoff (never a tight loop), and the eventual reconnect must
+  // still resume from the last accepted sequence. setupStore pins
+  // random()=0, so the jitter factor is exactly 0.8 and the delays are
+  // deterministic: 800ms, then 1600ms.
+  it('AC-03: repeated reconnect failures back off exponentially and the resume keeps after_sequence', async () => {
+    const store = setupStore();
+    mockedWatch.mockResolvedValueOnce(streamOf(snapshot('op-1', 1n, 3n), entry('op-1', 4n)));
+
+    await store.load('op-1');
+    await flush();
+    expect(store.streamStatus).toBe('connected');
+    expect(mockedWatch).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flush();
+    expect(store.streamStatus).toBe('disconnected');
+
+    // Attempt 1 starts at base × 0.8 = 800ms and fails.
+    mockedWatch.mockRejectedValueOnce(new ConnectError('unavailable', Code.Unavailable));
+    await vi.advanceTimersByTimeAsync(799);
+    expect(mockedWatch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await flush();
+    expect(mockedWatch).toHaveBeenCalledTimes(2);
+    expect(store.streamStatus).toBe('disconnected');
+
+    // Attempt 2 must wait 1600ms (doubled), not another 800ms.
+    mockedWatch.mockRejectedValueOnce(new ConnectError('unavailable', Code.Unavailable));
+    await vi.advanceTimersByTimeAsync(1_599);
+    expect(mockedWatch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    await flush();
+    expect(mockedWatch).toHaveBeenCalledTimes(3);
+
+    // Recovery: the stream reconnects and still resumes from the latest
+    // accepted sequence (4n), not from the snapshot sequence (3n).
+    mockedWatch.mockResolvedValueOnce(streamOf(snapshot('op-1', 2n, 4n)));
+    await vi.advanceTimersByTimeAsync(3_200);
+    await flush();
+
+    expect(store.streamStatus).toBe('connected');
+    const lastCall = mockedWatch.mock.calls.at(-1);
+    expect(lastCall?.[0]).toBe('op-1');
+    expect(lastCall?.[1]).toBe(4n);
+  });
+
   it('AC-12: cursor_expired clears entries, sets historyGap, rebuilds with carried snapshot sequence', async () => {
     const store = setupStore();
     mockedWatch.mockResolvedValueOnce(streamOf(snapshot('op-1', 1n, 3n), entry('op-1', 4n)));

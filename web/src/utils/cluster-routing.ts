@@ -1,3 +1,4 @@
+import { t } from '@/i18n/messages';
 import type {
   ArtifactType,
   ClusterFormInput,
@@ -25,9 +26,9 @@ export function validateClusterForm(input: ClusterFormInput): ClusterValidationR
   const violations: FieldViolation[] = [];
   const name = input.name.trim();
   if (name.length === 0) {
-    addViolation(violations, 'name', 'Cluster name is required');
+    addViolation(violations, 'name', t('cluster.validation.nameRequired'));
   } else if (name.length > 253) {
-    addViolation(violations, 'name', 'Cluster name must contain at most 253 characters');
+    addViolation(violations, 'name', t('cluster.validation.nameTooLong'));
   }
 
   validateRules(input.imageRules, 'image', 'imageRules', violations);
@@ -50,25 +51,25 @@ function validateRules(
         violations,
         `${path}.mode`,
         artifactType === 'chart'
-          ? 'Chart Pull-Through Cache has not passed capability testing'
-          : 'Unsupported image routing mode',
+          ? t('cluster.validation.capability')
+          : t('cluster.validation.unsupportedMode'),
       );
     }
     if (!isValidPrefix(rule.sourcePrefix)) {
-      addViolation(violations, `${path}.sourcePrefix`, 'Invalid source prefix');
+      addViolation(violations, `${path}.sourcePrefix`, t('cluster.validation.sourcePrefix'));
     }
     if (!isValidPrefix(rule.targetPrefix)) {
-      addViolation(violations, `${path}.targetPrefix`, 'Invalid target prefix');
+      addViolation(violations, `${path}.targetPrefix`, t('cluster.validation.targetPrefix'));
     }
 
     const normalizedSource = rule.sourcePrefix.trim();
     const previousIndex = sourceIndexes.get(normalizedSource);
     if (normalizedSource && previousIndex !== undefined) {
-      addViolation(violations, `${path}.sourcePrefix`, 'Route source prefix conflicts with another rule');
+      addViolation(violations, `${path}.sourcePrefix`, t('cluster.validation.sourceConflict'));
       addViolation(
         violations,
         `${fieldPrefix}[${previousIndex}].sourcePrefix`,
-        'Route source prefix conflicts with another rule',
+        t('cluster.validation.sourceConflict'),
       );
     } else if (normalizedSource) {
       sourceIndexes.set(normalizedSource, index);

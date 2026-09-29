@@ -86,7 +86,7 @@ describe('ReleaseInventoryPage authorization freshness (REQ-033 AC-033-10)', () 
     const notice = wrapper.get('[role="status"]');
     expect(notice.text()).toContain('授权数据未同步');
     // The inventory itself stays readable — only the write entry closes.
-    expect(wrapper.text()).toContain('Release inventory');
+    expect(wrapper.get('.eyebrow').text()).toBe('发布清单');
   });
 
   it('renders no stale notice once the snapshot is fresh', async () => {

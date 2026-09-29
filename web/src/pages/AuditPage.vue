@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { computed, onMounted, reactive, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
+import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import AuditEventDetail from '@/components/audit/AuditEventDetail.vue';
 import AuditEventTable from '@/components/audit/AuditEventTable.vue';
@@ -84,12 +86,12 @@ watch(organizationId, (next, previous) => {
   <section class="audit-page">
     <header class="audit-page__heading">
       <div>
-        <p class="audit-page__eyebrow">Organization audit trail</p>
-        <h1>Audit events</h1>
-        <p>Search server-redacted events for {{ auth.activeOrganization?.name ?? 'the active organization' }}.</p>
+        <p class="audit-page__eyebrow">{{ t('audit.page.title') }}</p>
+        <h1>{{ t('audit.page.subtitle') }}</h1>
+        <p>{{ t('audit.page.description') }} {{ auth.activeOrganization?.name ?? t('shell.organization.choose') }}.</p>
       </div>
       <button type="button" :disabled="!canQuery || audit.exporting" @click="createExport">
-        {{ audit.exporting ? 'Creating export…' : 'Export current query' }}
+        {{ audit.exporting ? t('audit.page.creatingExport') : t('audit.page.export') }}
       </button>
     </header>
 
@@ -97,30 +99,45 @@ watch(organizationId, (next, previous) => {
     <AuditFilters v-model="form" @submit="submit" @reset="reset" />
     <AuditExportPanel :tasks="audit.exportTasks" />
 
-    <ErrorState
-      v-if="audit.error"
-      :title="audit.error.reason === 'range_too_large' ? 'Narrow the time range' : 'Audit request failed'"
+    <!-- One chain, so a failed request can never be rendered as an empty
+         result: the previous shape chained LoadingState/EmptyState to each
+         other and left ErrorState outside the chain, which printed
+         "Audit request failed" and "No audit events" at the same time (B5). -->
+    <ForbiddenState
+      v-if="audit.error && audit.error.reason === 'permission_denied'"
       :message="audit.error.message"
-      action-label="Retry"
+    />
+    <ErrorState
+      v-else-if="audit.error && audit.events.length === 0"
+      :title="audit.error.reason === 'range_too_large' ? t('audit.page.narrowRange') : t('audit.page.failedTitle')"
+      :message="audit.error.message"
+      :action-label="t('action.retry')"
       @action="submit"
     />
-    <LoadingState v-if="audit.loading && audit.events.length === 0" message="Loading audit events…" />
+    <LoadingState v-else-if="audit.loading && audit.events.length === 0" :message="t('audit.page.loading')" />
     <EmptyState
       v-else-if="!audit.loading && audit.events.length === 0"
-      title="No audit events"
-      message="No events matched the active organization and filters. Audit payloads are never cached in browser storage."
+      :title="t('audit.page.empty')"
+      :message="t('audit.page.emptyHint')"
     />
-    <AuditEventTable
-      v-else
-      :events="audit.events"
-      :total-size="audit.totalSize"
-      :loading="audit.loading"
-      :has-previous="audit.hasPrevious"
-      :has-more="audit.hasMore"
-      @select="audit.selectEvent"
-      @previous="audit.query(organizationId, 'previous')"
-      @next="audit.query(organizationId, 'next')"
-    />
+    <template v-else>
+      <!-- AC-059-08: a failed refresh keeps the loaded page, so the failure is
+           reported inline instead of replacing the table. -->
+      <div v-if="audit.error" class="notice notice--warning" role="alert">
+        {{ audit.error.message }}
+        <button type="button" @click="submit">{{ t('action.retry') }}</button>
+      </div>
+      <AuditEventTable
+        :events="audit.events"
+        :total-size="audit.totalSize"
+        :loading="audit.loading"
+        :has-previous="audit.hasPrevious"
+        :has-more="audit.hasMore"
+        @select="audit.selectEvent"
+        @previous="audit.query(organizationId, 'previous')"
+        @next="audit.query(organizationId, 'next')"
+      />
+    </template>
     <AuditEventDetail v-if="audit.selectedEvent" :event="audit.selectedEvent" @close="audit.selectEvent(null)" />
   </section>
 </template>
@@ -129,6 +146,25 @@ watch(organizationId, (next, previous) => {
 .audit-page {
   display: grid;
   gap: 1.5rem;
+}
+
+/* Inline partial-failure notice: the loaded page stays, the failure is
+   reported next to it (same pattern as ReleaseInventoryPage). */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--color-info-border);
+  border-radius: 0.5rem;
+  background: var(--color-info-soft);
+  color: var(--color-info-ink);
+}
+
+.notice--warning {
+  border-color: var(--color-warning-border);
+  background: var(--color-warning-soft);
+  color: var(--color-warning-ink);
 }
 
 .audit-page__heading {
@@ -144,8 +180,8 @@ watch(organizationId, (next, previous) => {
 }
 
 .audit-page__eyebrow {
-  color: var(--color-muted, #64748b);
-  font-size: 0.75rem;
+  color: var(--color-muted);
+  font-size: var(--font-size-xs);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -153,10 +189,10 @@ watch(organizationId, (next, previous) => {
 
 .audit-page__heading button {
   padding: 0.55rem 0.85rem;
-  border: 1px solid #1d4ed8;
+  border: 1px solid var(--color-primary-hover);
   border-radius: 0.375rem;
-  background: #2563eb;
-  color: #fff;
+  background: var(--color-primary);
+  color: var(--color-on-accent);
   cursor: pointer;
   font: inherit;
   font-weight: 600;

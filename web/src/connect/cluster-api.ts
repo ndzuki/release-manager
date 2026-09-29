@@ -1,3 +1,4 @@
+import { t } from '@/i18n/messages';
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
 import type { Client } from '@connectrpc/connect';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
@@ -76,7 +77,7 @@ function routeToRpc(rule: RouteRuleInput) {
 }
 
 function requireCluster(cluster: ProtoCluster | undefined): ProtoCluster {
-  if (!cluster) throw new ConnectError('cluster response is missing', Code.Internal);
+  if (!cluster) throw new ConnectError(t('cluster.api.missingResponse'), Code.Internal);
   return cluster;
 }
 
@@ -145,7 +146,7 @@ function mapViolationField(field: string, input?: ClusterFormInput): string {
 export function mapSaveError(error: unknown, input?: ClusterFormInput): SaveError {
   const connectError = ConnectError.from(error);
   if (connectError.code === Code.Unavailable) {
-    return { code: 'network_error', message: 'Unable to connect to the server. Your draft has been preserved.' };
+    return { code: 'network_error', message: t('cluster.api.connectFailed') };
   }
 
   const detail = connectError.findDetails(RouteValidationDetailSchema)[0];
@@ -153,7 +154,7 @@ export function mapSaveError(error: unknown, input?: ClusterFormInput): SaveErro
   const messageCode = rawMessage.match(/^(routing_conflict|invalid_uri|mode_not_supported|optimistic_lock_conflict|credential_not_allowed|invalid_name):/)?.[1];
   return {
     code: detail?.errorCode || messageCode || ERROR_CODE_NAMES[connectError.code] || 'unknown',
-    message: detail?.description || rawMessage || 'Save failed',
+    message: detail?.description || rawMessage || t('cluster.api.saveFailed'),
     fieldViolations: detail?.field
       ? [{ field: mapViolationField(detail.field, input), description: detail.description || rawMessage }]
       : undefined,

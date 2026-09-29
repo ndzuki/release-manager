@@ -6,6 +6,7 @@ import {
   CancelOperationRequestSchema,
   CreateOperationRequestSchema,
   GetOperationRequestSchema,
+  ListOperationsRequestSchema,
   ListBundlesRequestSchema,
   OrchestratorService,
   WatchOperationRequestSchema,
@@ -119,6 +120,64 @@ export async function createOperation(input: CreateOperationInput): Promise<Crea
     acceptedAt: response.acceptedAt ? timestampDate(response.acceptedAt).toISOString() : null,
   };
 }
+/**
+ * One release definition's operation history, newest first (REQ-056).
+ *
+ * Keyset-paginated on (created_at, id): pass the previous response's `nextCursor`
+ * to continue. Implemented server-side since TASK-095
+ * (internal/orchestrator/operations_query.go); the proto comment that claimed it
+ * always answers UNIMPLEMENTED was corrected in TASK-184.
+ *
+ * Page size is NOT the generic 50 from connect-surface: `contracts.NormalizePageSize`
+ * defaults to 20 and caps at 100.
+ */
+const OPERATION_STATES: OperationState[] = [
+  'pending', 'preflight', 'queued', 'running', 'cancelling', 'succeeded', 'failed', 'cancelled', 'timeout',
+];
+
+/** The summary carries the STORE status string ("succeeded"), not the proto enum. */
+function summaryState(raw: string): OperationState {
+  const value = (raw ?? '').trim().toLowerCase();
+  return (OPERATION_STATES as string[]).includes(value) ? (value as OperationState) : 'pending';
+}
+
+export interface OperationSummaryItem {
+  operationId: string;
+  operationType: OperationType;
+  state: OperationState;
+  revision: number;
+  createdAt: string | null;
+}
+
+export interface OperationHistoryPage {
+  operations: OperationSummaryItem[];
+  nextCursor: string;
+}
+
+export async function listOperations(
+  releaseDefinitionId: string,
+  options: { statusFilter?: string; limit?: number; cursor?: string } = {},
+): Promise<OperationHistoryPage> {
+  const response = await operationClient.listOperations(create(ListOperationsRequestSchema, {
+    releaseDefinitionId,
+    statusFilter: options.statusFilter ?? '',
+    limit: options.limit ?? 20,
+    cursor: options.cursor ?? '',
+  }));
+  return {
+    operations: response.operations.map((item) => ({
+      operationId: item.operationId,
+      operationType: item.operationType === 'UPGRADE' || item.operationType === 'ROLLBACK' || item.operationType === 'EMERGENCY'
+        ? item.operationType
+        : 'INSTALL',
+      state: summaryState(item.state),
+      revision: item.revision,
+      createdAt: item.createdAt ? timestampDate(item.createdAt).toISOString() : null,
+    })),
+    nextCursor: response.nextCursor,
+  };
+}
+
 export async function getOperation(operationId: string): Promise<Operation> {
   const response = await operationClient.getOperation(create(GetOperationRequestSchema, { operationId }));
   if (!response.operation) throw new ConnectError('operation response is empty', Code.Internal);
@@ -188,6 +247,7 @@ export function mapOperationError(error: unknown): OperationAPIError {
     cancel_not_allowed: '当前状态不允许取消',
     optimistic_lock_conflict: '操作状态已变更，正在刷新最新状态',
     cursor_expired: '历史事件已超出服务端保留窗口',
+    invalid_cursor: '页码已过期，已重新从第一页加载',
     stream_disconnected: '实时连接已断开',
     rollout_timeout: '发布超时，请检查集群状态',
     dependency_unavailable: '服务暂时不可用，请稍后重试',
@@ -202,6 +262,7 @@ export function mapOperationError(error: unknown): OperationAPIError {
       retryable:
         stableCode === 'optimistic_lock_conflict' ||
         stableCode === 'cursor_expired' ||
+        stableCode === 'invalid_cursor' ||
         stableCode === 'stream_disconnected' ||
         stableCode === 'dependency_unavailable',
       snapshotSequence: parseBigIntHeader(connectError.metadata.get('X-Snapshot-Sequence')),

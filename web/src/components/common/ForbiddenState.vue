@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
+
 interface ForbiddenStateProps {
   title?: string;
   message?: string;
@@ -6,8 +8,8 @@ interface ForbiddenStateProps {
 }
 
 withDefaults(defineProps<ForbiddenStateProps>(), {
-  title: 'Access denied',
-  message: 'You do not have permission to access this resource.',
+  title: t('state.accessDenied'),
+  message: t('state.accessDeniedMessage'),
   actionLabel: '',
 });
 
@@ -39,8 +41,8 @@ const emit = defineEmits<{ action: [] }>();
 }
 
 .forbidden-state__code {
-  color: var(--color-muted, #94a3b8);
-  font-size: 3rem;
+  color: var(--color-subtle);
+  font-size: var(--font-size-3xl);
   font-weight: 800;
 }
 
@@ -50,20 +52,20 @@ const emit = defineEmits<{ action: [] }>();
 }
 
 .forbidden-state__title {
-  font-size: 1.2rem;
+  font-size: var(--font-size-lg);
 }
 
 .forbidden-state__text {
   max-width: 32rem;
-  color: var(--color-muted, #64748b);
+  color: var(--color-muted);
 }
 
 .forbidden-state__action {
   margin-top: 0.5rem;
   padding: 0.45rem 0.75rem;
-  border: 1px solid var(--color-border, #cbd5e1);
+  border: 1px solid var(--color-border-strong);
   border-radius: 0.375rem;
-  background: var(--color-surface, #fff);
+  background: var(--color-surface);
   cursor: pointer;
 }
 </style>

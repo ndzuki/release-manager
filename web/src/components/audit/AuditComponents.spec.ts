@@ -45,8 +45,8 @@ describe('audit event components', () => {
     });
 
     const text = wrapper.text();
-    expect(text).toContain('user:user-abc123');
-    expect(text).toContain('user:user-u***d3f');
+    expect(text).toContain('用户:user-abc123');
+    expect(text).toContain('用户:user-u***d3f');
     // Sensitive fields must never leak into the rendered DOM.
     expect(text).not.toContain('release_admin');
     expect(text).not.toContain('displayName');
@@ -56,10 +56,10 @@ describe('audit event components', () => {
     const wrapper = mount(AuditEventDetail, { props: { event: fullIdEvent } });
 
     const text = wrapper.text();
-    expect(text).toContain('user:user-abc123');
+    expect(text).toContain('用户:user-abc123');
     expect(text).toContain('operation:operation-abc123');
     expect(text).toContain('upgrade');
-    expect(text).toContain('succeeded');
+    expect(text).toContain('成功');
     // No role, no display name, no operation/request id columns — the wire
     // contract has none of these on AuditEvent, and role is redacted.
     expect(text).not.toContain('release_admin');
@@ -82,7 +82,7 @@ describe('audit event components', () => {
     expect(wrapper.emitted('select')).toHaveLength(1);
     expect(wrapper.emitted('select')![0]).toEqual([fullIdEvent]);
 
-    await wrapper.get('[aria-label="Audit pagination"] button:last-child').trigger('click');
+    await wrapper.get('[aria-label="审计分页"] button:last-child').trigger('click');
     expect(wrapper.emitted('next')).toHaveLength(1);
   });
 
@@ -97,7 +97,7 @@ describe('audit event components', () => {
       },
     });
 
-    const buttons = wrapper.get('[aria-label="Audit pagination"]').findAll('button');
+    const buttons = wrapper.get('[aria-label="审计分页"]').findAll('button');
     expect(buttons[0].attributes('disabled')).toBeDefined();
     expect(buttons[1].attributes('disabled')).toBeDefined();
   });
@@ -109,7 +109,7 @@ describe('audit event components', () => {
 
     const text = wrapper.text();
     expect(text).toContain('export-7');
-    expect(text).toContain('pending');
+    expect(text).toContain('等待中');
     // Receipt only: no download link, no status polling button.
     expect(wrapper.find('a').exists()).toBe(false);
     expect(wrapper.find('button').exists()).toBe(false);

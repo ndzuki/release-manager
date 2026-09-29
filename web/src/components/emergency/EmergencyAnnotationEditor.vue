@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 // Annotation batch editor (plan v3 Step 4, AC-058-02/13): rows are bound to
 // the server-approved annotation keys only (whitelist), share one scope, use
 // stable local IDs, and validate through the pure rules in
@@ -64,9 +65,9 @@ watch(
     <table class="annotation-table">
       <thead>
         <tr>
-          <th scope="col">Key（白名单）</th>
-          <th scope="col">Value</th>
-          <th scope="col">Scope</th>
+          <th scope="col">{{ t('annotation.keyWhitelist') }}</th>
+          <th scope="col">{{ t('annotation.value') }}</th>
+          <th scope="col">{{ t('annotation.scope') }}</th>
           <th scope="col"></th>
         </tr>
       </thead>
@@ -98,7 +99,7 @@ watch(
         </tr>
       </tbody>
     </table>
-    <button type="button" :disabled="!canAdd" @click="addRow">添加注解</button>
+    <button type="button" :disabled="!canAdd" @click="addRow">{{ t('annotation.add') }}</button>
     <p v-if="!validation.valid" class="error-text">{{ validation.message }}</p>
   </div>
 </template>
@@ -106,9 +107,9 @@ watch(
 <style scoped>
 .annotation-editor { display: grid; gap: 0.75rem; }
 .annotation-table { width: 100%; border-collapse: collapse; }
-.annotation-table th, .annotation-table td { padding: 0.4rem 0.5rem; border: 1px solid #e2e8f0; text-align: left; }
-.field-input { width: 100%; padding: 0.4rem; border: 1px solid #cbd5e1; border-radius: 0.375rem; }
-.row-remove { color: #b91c1c; }
-.hint { color: #64748b; }
-.error-text { color: #b91c1c; }
+.annotation-table th, .annotation-table td { padding: 0.4rem 0.5rem; border: 1px solid var(--color-border); text-align: left; }
+.field-input { width: 100%; padding: 0.4rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; }
+.row-remove { color: var(--color-error); }
+.hint { color: var(--color-muted); }
+.error-text { color: var(--color-error); }
 </style>

@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import AppDialog from '@/components/common/AppDialog.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import AuthorizationStaleNotice from '@/components/common/AuthorizationStaleNotice.vue';
 import ConvergenceLockedPathsPanel from '@/components/emergency/ConvergenceLockedPathsPanel.vue';
@@ -131,21 +133,21 @@ onBeforeUnmount(() => {
 <template>
   <section class="values-page">
     <AuthorizationStaleNotice :stale="writeBlocked" />
-    <nav class="breadcrumbs" aria-label="Breadcrumb">
+    <nav class="breadcrumbs" :aria-label="t('values.page.breadcrumb')">
       <span>{{ customerName }}</span><span aria-hidden="true">/</span>
       <span>{{ clusterName }}</span><span aria-hidden="true">/</span>
       <span>{{ releaseName }}</span><span aria-hidden="true">/</span>
-      <strong>Values</strong>
+      <strong>{{ t('values.page.title') }}</strong>
     </nav>
 
     <header class="values-page__header">
       <div>
-        <p class="eyebrow">ValuesRevision editor</p>
-        <h1>{{ releaseName }} Values</h1>
+        <p class="eyebrow">{{ t('values.page.editor') }}</p>
+        <h1>{{ releaseName }} {{ t('values.page.title') }}</h1>
         <p>编辑 canonical values 并通过 SecretRef 引用集群 Secret。</p>
       </div>
       <label class="language-select">
-        Language
+        {{ t('values.page.language') }}
         <select :value="editor.editorLanguage" :disabled="readOnly" @change="handleLanguage">
           <option value="yaml">YAML</option>
           <option value="json">JSON</option>
@@ -208,6 +210,7 @@ onBeforeUnmount(() => {
         :approving="editor.approving"
         :discarding="editor.discarding"
         :save-disabled="editor.saveDisabled"
+        :submit-disabled="editor.saveDisabled || editor.saving || editor.hasUnsavedChanges"
         :can-approve="canApprove"
         :self-approval="selfApproval"
         :read-only="readOnly"
@@ -225,13 +228,21 @@ onBeforeUnmount(() => {
         @close="rejectDialogOpen = false"
       />
 
-      <div v-if="discardConfirmOpen" class="discard-dialog" role="dialog" aria-modal="true" aria-label="确认丢弃 Draft">
-        <p>确认丢弃当前 Draft？绑定的 {{ editor.preparedTaskIds.length }} 个收敛任务将被解绑。</p>
-        <div class="discard-actions">
+      <AppDialog
+        :open="discardConfirmOpen"
+        title="确认丢弃 Draft"
+        danger
+        :close-on-backdrop="false"
+        @close="discardConfirmOpen = false"
+      >
+        <p class="discard-dialog__body">
+          确认丢弃当前 Draft？绑定的 {{ editor.preparedTaskIds.length }} 个收敛任务将被解绑。
+        </p>
+        <template #footer>
           <button type="button" @click="discardConfirmOpen = false">取消</button>
-          <button type="button" class="danger" @click="confirmDiscard">确认丢弃</button>
-        </div>
-      </div>
+          <button type="button" class="discard-dialog__danger" @click="confirmDiscard">确认丢弃</button>
+        </template>
+      </AppDialog>
     </template>
 
     <ValuesConflictDialog
@@ -245,35 +256,33 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .values-page { display: grid; gap: 1.25rem; max-width: 96rem; margin: 0 auto; }
-.breadcrumbs { display: flex; flex-wrap: wrap; gap: 0.45rem; color: #64748b; font-size: 0.85rem; }
+.breadcrumbs { display: flex; flex-wrap: wrap; gap: 0.45rem; color: var(--color-muted); font-size: var(--font-size-sm); }
 .values-page__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1.5rem; }
 .values-page__header h1, .values-page__header p { margin: 0; }
 .values-page__header > div { display: grid; gap: 0.35rem; }
-.values-page__header > div > p:last-child { color: #64748b; }
-.eyebrow { color: #2563eb; font-size: 0.75rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
-.language-select { display: grid; gap: 0.35rem; color: #475569; font-size: 0.75rem; font-weight: 700; }
-.language-select select, .notice button, .save-bar button { min-height: 2.4rem; padding: 0.45rem 0.65rem; border: 1px solid #cbd5e1; border-radius: 0.4rem; background: #fff; }
-.save-bar button.primary { border-color: #2563eb; background: #2563eb; color: #fff; }
+.values-page__header > div > p:last-child { color: var(--color-muted); }
+.eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+.language-select { display: grid; gap: 0.35rem; color: var(--color-muted-strong); font-size: var(--font-size-xs); font-weight: 700; }
+.language-select select, .notice button, .save-bar button { min-height: 2.4rem; padding: 0.45rem 0.65rem; border: 1px solid var(--color-border-strong); border-radius: 0.4rem; background: var(--color-surface); }
+.save-bar button.primary { border-color: var(--color-primary); background: var(--color-primary); color: var(--color-on-accent); }
 .save-bar button:disabled { cursor: not-allowed; opacity: 0.6; }
 .editor-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(22rem, 0.65fr); gap: 1rem; align-items: start; }
 .editor-column { display: grid; gap: 0.55rem; }
-.validation-message { margin: 0; padding: 0.65rem 0.8rem; border-left: 3px solid #dc2626; background: #fef2f2; color: #991b1b; font-size: 0.85rem; }
-.notice { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.75rem 0.9rem; border: 1px solid #93c5fd; border-radius: 0.5rem; background: #eff6ff; color: #1e3a8a; }
-.notice--warning { border-color: #fbbf24; background: #fffbeb; color: #92400e; }
-.notice--error { border-color: #fca5a5; background: #fef2f2; color: #991b1b; }
-.save-bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; border: 1px solid #e2e8f0; border-radius: 0.75rem; background: #fff; }
+.validation-message { margin: 0; padding: 0.65rem 0.8rem; border-left: 3px solid var(--color-danger); background: var(--color-danger-soft); color: var(--color-error-strong); font-size: var(--font-size-sm); }
+.notice { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.75rem 0.9rem; border: 1px solid var(--color-info-border); border-radius: 0.5rem; background: var(--color-info-soft); color: var(--color-info-ink); }
+.notice--warning { border-color: var(--color-warning-border-bright); background: var(--color-warning-surface); color: var(--color-warning-ink-strong); }
+.notice--error { border-color: var(--color-danger-border-strong); background: var(--color-danger-soft); color: var(--color-error-strong); }
+.save-bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: 0.75rem; background: var(--color-surface); }
 .status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin: 0; }
-.status-line code { color: #64748b; font-size: 0.75rem; overflow-wrap: anywhere; }
-.status { padding: 0.2rem 0.45rem; border-radius: 999px; font-size: 0.7rem; font-weight: 800; }
-.status--draft { background: #e0f2fe; color: #075985; }
-.status--approved { background: #dcfce7; color: #166534; }
-.status--rejected { background: #fee2e2; color: #991b1b; }
-.status--superseded { background: #e2e8f0; color: #475569; }
-.status--pending_approval { background: #fef3c7; color: #92400e; }
-.discard-dialog { display: grid; gap: 0.75rem; padding: 1rem; border: 1px solid #fca5a5; border-radius: 0.65rem; background: #fef2f2; }
-.discard-actions { display: flex; justify-content: flex-end; gap: 0.6rem; }
-.discard-actions button { min-height: 2.4rem; padding: 0.45rem 0.8rem; border: 1px solid #cbd5e1; border-radius: 0.4rem; background: #fff; }
-.discard-actions button.danger { border-color: #b91c1c; background: #b91c1c; color: #fff; }
+.status-line code { color: var(--color-muted); font-size: var(--font-size-xs); overflow-wrap: anywhere; }
+.status { padding: 0.2rem 0.45rem; border-radius: 999px; font-size: var(--font-size-xs); font-weight: 800; }
+.status--draft { background: var(--color-info-subtle); color: var(--color-info-ink-strong); }
+.status--approved { background: var(--color-success-surface); color: var(--color-success-ink); }
+.status--rejected { background: var(--color-danger-surface); color: var(--color-error-strong); }
+.status--superseded { background: var(--color-border); color: var(--color-muted-strong); }
+.status--pending_approval { background: var(--color-warning-subtle); color: var(--color-warning-ink-strong); }
+.discard-dialog__body { margin: 0; }
+.discard-dialog__danger { border-color: var(--color-error); background: var(--color-error); color: var(--color-on-accent); }
 @media (max-width: 72rem) { .editor-grid { grid-template-columns: 1fr; } }
 @media (max-width: 48rem) { .values-page__header, .save-bar { flex-direction: column; } }
 </style>

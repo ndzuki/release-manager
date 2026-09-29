@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { computed, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import ErrorState from '@/components/common/ErrorState.vue';
@@ -34,13 +35,13 @@ function openGenerate(replace = false): void {
 }
 
 async function replacePending(): Promise<void> {
-  if (window.confirm('Replacing the pending token immediately revokes the old token. Continue?')) {
+  if (window.confirm(t('operator.enroll.replaceConfirm'))) {
     openGenerate(true);
   }
 }
 
 async function discardPending(): Promise<void> {
-  if (!window.confirm('Revoke the pending enrollment token? This cannot be undone.')) return;
+  if (!window.confirm(t('operator.enroll.revokeConfirm'))) return;
   await store.discardPending(customerId.value, clusterId.value);
 }
 
@@ -63,17 +64,17 @@ watch([customerId, clusterId], async () => {
   <section class="page">
     <header class="page__header">
       <div>
-        <p class="eyebrow">Operator enrollment</p>
-        <h1>Generate a one-time token</h1>
-        <p>The plaintext is displayed only inside the next modal and cannot be recovered after closing.</p>
+        <p class="eyebrow">{{ t('operator.enroll.eyebrow') }}</p>
+        <h1>{{ t('operator.enroll.title') }}</h1>
+        <p>{{ t('operator.enroll.note') }}</p>
       </div>
-      <button type="button" @click="router.push({ name: 'OperatorList', params: { customerId, clusterId } })">Back to operators</button>
+      <button type="button" @click="router.push({ name: 'OperatorList', params: { customerId, clusterId } })">{{ t('operator.enroll.back') }}</button>
     </header>
 
     <ForbiddenState v-if="!auth.canEnrollOperators || store.forbidden" />
-    <LoadingState v-else-if="pendingLoading" message="Checking pending token status…" />
+    <LoadingState v-else-if="pendingLoading" :message="t('operator.enroll.checking')" />
     <ErrorState v-else-if="store.error && !store.pending" :message="store.error.message">
-      <button type="button" @click="loadPending">Retry</button>
+      <button type="button" @click="loadPending">{{ t('action.retry') }}</button>
     </ErrorState>
 
     <template v-else>
@@ -87,28 +88,28 @@ watch([customerId, clusterId], async () => {
       />
 
       <form class="card" @submit.prevent="openGenerate(false)">
-        <h2>Enrollment parameters</h2>
+        <h2>{{ t('operator.enroll.parameters') }}</h2>
         <label>
-          Operator name
+          {{ t('operator.enroll.name') }}
           <input v-model="store.enrollmentForm.operatorName" type="text" maxlength="63" autocomplete="off" placeholder="operator-staging" />
-          <small>Lowercase DNS-compatible label, 1–63 characters.</small>
+          <small>{{ t('operator.enroll.nameHint') }}</small>
           <span v-if="store.error?.fieldViolations?.find((item) => item.field === 'operatorName')" class="error">
             {{ store.error.fieldViolations.find((item) => item.field === 'operatorName')?.description }}
           </span>
         </label>
         <label>
-          TTL minutes
+          {{ t('operator.enroll.ttl') }}
           <input v-model.number="store.enrollmentForm.ttlMinutes" type="number" min="0" max="1440" />
-          <small>0 uses the 60-minute default; otherwise use 5–1440.</small>
+          <small>{{ t('operator.enroll.ttlHint') }}</small>
           <span v-if="store.error?.fieldViolations?.find((item) => item.field === 'ttlMinutes')" class="error">
             {{ store.error.fieldViolations.find((item) => item.field === 'ttlMinutes')?.description }}
           </span>
         </label>
         <p v-if="store.error" class="error" role="alert">{{ store.error.message }}</p>
         <button type="submit" class="primary" :disabled="store.saving || store.pending?.state === 'pending'">
-          Generate enrollment token
+          {{ t('operator.enroll.submit') }}
         </button>
-        <p v-if="store.pending?.state === 'pending'" class="hint">Revoke or explicitly replace the pending token before generating another.</p>
+        <p v-if="store.pending?.state === 'pending'" class="hint">{{ t('operator.enroll.pendingBlocked') }}</p>
       </form>
     </template>
 
@@ -126,14 +127,14 @@ watch([customerId, clusterId], async () => {
 .page { display: grid; gap: 1.5rem; max-width: 54rem; margin: 0 auto; }
 .page__header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 h1, h2, p { margin: 0; }
-.page__header > div > p:last-child { margin-top: 0.375rem; color: #64748b; }
-.eyebrow { color: #2563eb; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; }
-.page__header button, .card button { padding: 0.6rem 0.85rem; border: 1px solid #94a3b8; border-radius: 0.375rem; background: #fff; cursor: pointer; }
-.card { display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid #cbd5e1; border-radius: 0.75rem; }
+.page__header > div > p:last-child { margin-top: 0.375rem; color: var(--color-muted); }
+.eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; text-transform: uppercase; }
+.page__header button, .card button { padding: 0.6rem 0.85rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); cursor: pointer; }
+.card { display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
 .card label { display: grid; gap: 0.35rem; font-weight: 700; }
-.card input { padding: 0.65rem; border: 1px solid #94a3b8; border-radius: 0.375rem; font: inherit; }
-.card small, .hint { color: #64748b; font-weight: 400; }
-.card .primary { border-color: #2563eb; background: #2563eb; color: #fff; }
+.card input { padding: 0.65rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; font: inherit; }
+.card small, .hint { color: var(--color-muted); font-weight: 400; }
+.card .primary { border-color: var(--color-primary); background: var(--color-primary); color: var(--color-on-accent); }
 .card button:disabled { cursor: not-allowed; opacity: 0.5; }
-.error { color: #b91c1c; }
+.error { color: var(--color-error); }
 </style>

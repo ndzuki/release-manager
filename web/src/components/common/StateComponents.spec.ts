@@ -9,7 +9,7 @@ describe('common state components', () => {
   it('exposes an accessible loading status', () => {
     const wrapper = mount(LoadingState, { props: { message: 'Loading releases' } });
 
-    expect(wrapper.get('[role="status"]').attributes('aria-label')).toBe('Loading');
+    expect(wrapper.get('[role="status"]').attributes('aria-label')).toBe('加载中');
     expect(wrapper.text()).toContain('Loading releases');
   });
 

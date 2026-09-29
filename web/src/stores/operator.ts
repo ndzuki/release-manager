@@ -1,3 +1,4 @@
+import { t } from '@/i18n/messages';
 import { computed, ref, shallowRef } from 'vue';
 import { defineStore } from 'pinia';
 import {
@@ -95,7 +96,7 @@ export const useOperatorStore = defineStore('operator', () => {
     if (!validation.valid) {
       error.value = {
         code: 'client_validation',
-        message: 'Fix the highlighted fields before generating a token.',
+        message: t('operator.form.fixFields'),
         fieldViolations: validation.violations,
         retryable: false,
       };

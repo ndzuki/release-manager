@@ -9,5 +9,5 @@ defineProps<{ visible: boolean }>();
 </template>
 
 <style scoped>
-.disconnect-banner { padding: 0.7rem 1rem; border: 1px solid #fdba74; border-radius: 0.5rem; background: #fff7ed; color: #9a3412; font-size: 0.88rem; }
+.disconnect-banner { padding: 0.7rem 1rem; border: 1px solid var(--color-warning-border); border-radius: 0.5rem; background: var(--color-warning-soft); color: var(--color-warning-ink); font-size: var(--font-size-md); }
 </style>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import ReleaseStatusBadge from './ReleaseStatusBadge.vue';
 import type { ReleaseSummary } from '@/stores/releaseInventory';
 
@@ -7,11 +8,23 @@ const props = defineProps<{
   canCreateOperation?: boolean;
   canEmergency?: boolean;
   canConvergence?: boolean;
+  /** Rollback needs release/write plus deployer/admin (server-authoritative). */
+  canRollback?: boolean;
   customerId?: string;
   clusterId?: string;
   customerName?: string;
   clusterName?: string;
 }>();
+
+const emit = defineEmits<{
+  /** The owner owns the dialog; ROLLBACK is queued as a new operation. */
+  rollback: [release: ReleaseSummary];
+}>();
+
+/** A rollback needs a bound definition and somewhere to go back to. */
+function canRollbackRow(release: ReleaseSummary): boolean {
+  return Boolean(props.canRollback && release.releaseDefinitionId && release.revision > 1);
+}
 
 const valuesRevisionEnabled = import.meta.env.VITE_ENABLE_VALUES_REVISION !== 'false';
 
@@ -51,7 +64,7 @@ function formatTimestamp(value: string | null): string {
           <th scope="col">状态</th>
           <th scope="col">Chart</th>
           <th scope="col">Revision</th>
-          <th scope="col">Values digest</th>
+          <th scope="col">{{ t('release.table.valuesDigest') }}</th>
           <th scope="col">最近同步</th>
           <th v-if="canEmergency || canConvergence" scope="col">紧急变更</th>
           <th v-if="canCreateOperation" scope="col">操作</th>
@@ -59,7 +72,26 @@ function formatTimestamp(value: string | null): string {
       </thead>
       <tbody>
         <tr v-for="release in releases" :key="`${release.namespace}/${release.name}`">
-          <td><strong>{{ release.namespace }}/{{ release.name }}</strong></td>
+          <td>
+            <strong>{{ release.namespace }}/{{ release.name }}</strong>
+            <!-- Operation history is a READ entry: it must not sit behind the
+                 create-operation capability, or a viewer never reaches it. -->
+            <RouterLink
+              v-if="release.releaseDefinitionId"
+              class="release-table__history"
+              :to="{
+                name: 'OperationList',
+                params: { customerId, clusterId, releaseId: release.releaseDefinitionId },
+                query: {
+                  customerName,
+                  clusterName,
+                  releaseName: `${release.namespace}/${release.name}`,
+                },
+              }"
+            >
+              操作历史
+            </RouterLink>
+          </td>
           <td><ReleaseStatusBadge :status="release.status" /></td>
           <td>{{ release.chart }}<span v-if="release.chartVersion">@{{ release.chartVersion }}</span></td>
           <td>{{ release.revision }}</td>
@@ -122,6 +154,15 @@ function formatTimestamp(value: string | null): string {
               创建操作
             </RouterLink>
             <span v-else>未绑定 Definition</span>
+            <button
+              v-if="canRollbackRow(release)"
+              type="button"
+              class="release-table__rollback"
+              :data-testid="`release-rollback-${release.namespace}-${release.name}`"
+              @click="emit('rollback', release)"
+            >
+              回滚
+            </button>
           </td>
         </tr>
       </tbody>
@@ -130,16 +171,16 @@ function formatTimestamp(value: string | null): string {
 </template>
 
 <style scoped>
-.release-table-wrap { overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 0.65rem; background: #fff; }
+.release-table-wrap { overflow-x: auto; border: 1px solid var(--color-border); border-radius: 0.65rem; background: var(--color-surface); }
 .release-table { width: 100%; border-collapse: collapse; min-width: 58rem; }
-th, td { padding: 0.9rem 1rem; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: middle; }
-th { color: #475569; background: #f8fafc; font-size: 0.75rem; letter-spacing: 0.04em; text-transform: uppercase; }
+th, td { padding: 0.9rem 1rem; border-bottom: 1px solid var(--color-border); text-align: left; vertical-align: middle; }
+th { color: var(--color-muted-strong); background: var(--color-bg); font-size: var(--font-size-xs); letter-spacing: 0.04em; text-transform: uppercase; }
 tbody tr:last-child td { border-bottom: 0; }
-code { color: #334155; font-size: 0.75rem; overflow-wrap: anywhere; }
-.values-link { color: #2563eb; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; overflow-wrap: anywhere; }
-.release-table__operation { color: #1d4ed8; font-weight: 700; text-decoration: none; white-space: nowrap; }
-.emergency-link { color: #dc2626; font-weight: 700; text-decoration: none; white-space: nowrap; }
-.emergency-link.blocked { color: #94a3b8; cursor: not-allowed; }
-.convergence-link { color: #7c3aed; font-weight: 700; text-decoration: none; white-space: nowrap; margin-left: 0.6rem; }
-.muted { color: #94a3b8; white-space: nowrap; }
+code { color: var(--color-text-secondary); font-size: var(--font-size-xs); overflow-wrap: anywhere; }
+.values-link { color: var(--color-primary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--font-size-xs); overflow-wrap: anywhere; }
+.release-table__operation { color: var(--color-primary-hover); font-weight: 700; text-decoration: none; white-space: nowrap; }
+.emergency-link { color: var(--color-danger); font-weight: 700; text-decoration: none; white-space: nowrap; }
+.emergency-link.blocked { color: var(--color-subtle); cursor: not-allowed; }
+.convergence-link { color: var(--color-violet); font-weight: 700; text-decoration: none; white-space: nowrap; margin-left: 0.6rem; }
+.muted { color: var(--color-subtle); white-space: nowrap; }
 </style>

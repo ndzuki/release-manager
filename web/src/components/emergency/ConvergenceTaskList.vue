@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
+import { statusLabel } from '@/i18n/status-labels';
 // Pending convergence task list with server-projected selectability
 // (plan v3 Step 7, AC-058-34/42): selectable rows carry checkboxes; bound or
 // incompatible rows stay visible with their reason and a Continue link.
@@ -11,18 +13,7 @@ defineProps<{
 
 const emit = defineEmits<{ toggle: [taskId: string]; continue: [taskId: string] }>();
 
-function opTypeLabel(opType: string): string {
-  switch (opType) {
-    case 'SET_CONTAINER_IMAGE':
-      return '镜像变更';
-    case 'SET_REPLICAS':
-      return '副本变更';
-    case 'SET_APPROVED_ANNOTATION':
-      return '注解变更';
-    default:
-      return opType;
-  }
-}
+const opTypeLabel = (opType: string): string => statusLabel('emergencyOperation', opType);
 </script>
 
 <template>
@@ -30,11 +21,11 @@ function opTypeLabel(opType: string): string {
     <thead>
       <tr>
         <th scope="col" aria-label="选择"></th>
-        <th scope="col">目标</th>
-        <th scope="col">类型</th>
-        <th scope="col">原因</th>
-        <th scope="col">Promotion paths</th>
-        <th scope="col">状态</th>
+        <th scope="col">{{ t('emergency.tasks.target') }}</th>
+        <th scope="col">{{ t('emergency.tasks.type') }}</th>
+        <th scope="col">{{ t('emergency.tasks.reason') }}</th>
+        <th scope="col">{{ t('emergency.tasks.promotionPaths') }}</th>
+        <th scope="col">{{ t('emergency.tasks.status') }}</th>
       </tr>
     </thead>
     <tbody>
@@ -55,11 +46,11 @@ function opTypeLabel(opType: string): string {
         <td><code v-for="path in task.promotionPaths" :key="path" class="path">{{ path }}</code></td>
         <td>
           <span v-if="task.activeRevisionId" class="status">
-            已绑定 {{ task.activeRevisionStatus || 'draft' }}
-            <button type="button" class="continue" @click="emit('continue', task.taskId)">Continue</button>
+            {{ t('emergency.tasks.bound') }} {{ statusLabel('valuesRevision', task.activeRevisionStatus || 'draft') }}
+            <button type="button" class="continue" @click="emit('continue', task.taskId)">{{ t('emergency.tasks.continue') }}</button>
           </span>
           <span v-else-if="!task.selectable" class="status muted">{{ task.incompatibilityReason || '不可选' }}</span>
-          <span v-else class="status">pending_promotion</span>
+          <span v-else class="status">{{ t('emergency.tasks.pendingPromotion') }}</span>
         </td>
       </tr>
     </tbody>
@@ -68,11 +59,11 @@ function opTypeLabel(opType: string): string {
 
 <style scoped>
 .task-table { width: 100%; border-collapse: collapse; }
-.task-table th, .task-table td { padding: 0.6rem 0.75rem; border-bottom: 1px solid #e2e8f0; text-align: left; }
-.task-table th { color: #475569; background: #f8fafc; font-size: 0.75rem; text-transform: uppercase; }
+.task-table th, .task-table td { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--color-border); text-align: left; }
+.task-table th { color: var(--color-muted-strong); background: var(--color-bg); font-size: var(--font-size-xs); text-transform: uppercase; }
 .reason { max-width: 16rem; overflow-wrap: anywhere; }
-.path { display: block; font-size: 0.75rem; color: #334155; }
-.status { font-size: 0.85rem; color: #475569; }
-.muted { color: #94a3b8; }
-.continue { margin-left: 0.5rem; color: #2563eb; }
+.path { display: block; font-size: var(--font-size-xs); color: var(--color-text-secondary); }
+.status { font-size: var(--font-size-sm); color: var(--color-muted-strong); }
+.muted { color: var(--color-subtle); }
+.continue { margin-left: 0.5rem; color: var(--color-primary); }
 </style>

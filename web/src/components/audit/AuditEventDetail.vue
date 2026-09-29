@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
+import { statusLabel } from '@/i18n/status-labels';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { ActorKind, type AuditEvent } from '@/gen/audit/v1/audit_pb';
 
@@ -11,12 +13,12 @@ const emit = defineEmits<{
 }>();
 
 const actorKindLabels: Record<ActorKind, string> = {
-  [ActorKind.UNSPECIFIED]: 'unknown',
-  [ActorKind.ANONYMOUS]: 'anonymous',
-  [ActorKind.USER]: 'user',
-  [ActorKind.SERVICE]: 'service',
-  [ActorKind.API_KEY]: 'api_key',
-  [ActorKind.SYSTEM]: 'system',
+  [ActorKind.UNSPECIFIED]: t('audit.table.unknownActor'),
+  [ActorKind.ANONYMOUS]: t('audit.actor.anonymous'),
+  [ActorKind.USER]: t('audit.actor.user'),
+  [ActorKind.SERVICE]: t('audit.actor.service'),
+  [ActorKind.API_KEY]: t('audit.actor.apiKey'),
+  [ActorKind.SYSTEM]: t('audit.actor.service'),
 };
 
 function formatTime(event: AuditEvent): string {
@@ -25,41 +27,41 @@ function formatTime(event: AuditEvent): string {
 </script>
 
 <template>
-  <aside class="audit-detail" aria-label="Audit event details">
+  <aside class="audit-detail" :aria-label="t('audit.detail.title')">
     <header class="audit-detail__header">
       <div>
-        <p>Audit event</p>
+        <p>{{ t('audit.detail.title') }}</p>
         <h2>{{ props.event.id }}</h2>
       </div>
-      <button type="button" aria-label="Close audit details" @click="emit('close')">Close</button>
+      <button type="button" :aria-label="t('audit.detail.close')" @click="emit('close')">{{ t('action.close') }}</button>
     </header>
     <dl class="audit-detail__grid">
       <div>
-        <dt>Timestamp</dt>
+        <dt>{{ t('audit.detail.timestamp') }}</dt>
         <dd>{{ formatTime(props.event) }}</dd>
       </div>
       <div>
-        <dt>Actor</dt>
-        <dd>{{ actorKindLabels[props.event.actor?.kind ?? ActorKind.UNSPECIFIED] }}:{{ props.event.actor?.id || 'unknown' }}</dd>
+        <dt>{{ t('audit.table.actor') }}</dt>
+        <dd>{{ actorKindLabels[props.event.actor?.kind ?? ActorKind.UNSPECIFIED] }}:{{ props.event.actor?.id || t('audit.table.unknownActor') }}</dd>
       </div>
       <div>
-        <dt>Resource</dt>
+        <dt>{{ t('audit.table.resource') }}</dt>
         <dd>{{ props.event.resourceType }}:{{ props.event.resourceId }}</dd>
       </div>
       <div>
-        <dt>Action</dt>
+        <dt>{{ t('audit.table.action') }}</dt>
         <dd>{{ props.event.action }}</dd>
       </div>
       <div>
-        <dt>Status</dt>
-        <dd>{{ props.event.status }}</dd>
+        <dt>{{ t('audit.table.status') }}</dt>
+        <dd>{{ statusLabel('audit', props.event.status) }}</dd>
       </div>
       <div>
-        <dt>Duration</dt>
+        <dt>{{ t('audit.table.duration') }}</dt>
         <dd>{{ props.event.durationMs }} ms</dd>
       </div>
       <div class="audit-detail__summary">
-        <dt>Change summary</dt>
+        <dt>{{ t('audit.detail.changeSummary') }}</dt>
         <dd>{{ props.event.changeSummary || '—' }}</dd>
       </div>
     </dl>
@@ -71,9 +73,9 @@ function formatTime(event: AuditEvent): string {
   display: grid;
   gap: 1rem;
   padding: 1rem;
-  border: 1px solid #bfdbfe;
+  border: 1px solid var(--color-info-border-soft);
   border-radius: 0.75rem;
-  background: #eff6ff;
+  background: var(--color-info-soft);
 }
 
 .audit-detail__header {
@@ -89,8 +91,8 @@ function formatTime(event: AuditEvent): string {
 }
 
 .audit-detail__header p {
-  color: #1d4ed8;
-  font-size: 0.75rem;
+  color: var(--color-primary-hover);
+  font-size: var(--font-size-xs);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -98,15 +100,15 @@ function formatTime(event: AuditEvent): string {
 
 .audit-detail__header h2 {
   font-family: ui-monospace, monospace;
-  font-size: 1rem;
+  font-size: var(--font-size-base);
 }
 
 .audit-detail__header button {
   padding: 0.4rem 0.65rem;
-  border: 1px solid #93c5fd;
+  border: 1px solid var(--color-info-border);
   border-radius: 0.375rem;
-  background: #fff;
-  color: #1d4ed8;
+  background: var(--color-surface);
+  color: var(--color-primary-hover);
   cursor: pointer;
 }
 
@@ -122,8 +124,8 @@ function formatTime(event: AuditEvent): string {
 }
 
 .audit-detail__grid dt {
-  color: #475569;
-  font-size: 0.75rem;
+  color: var(--color-muted-strong);
+  font-size: var(--font-size-xs);
   font-weight: 700;
   text-transform: uppercase;
 }

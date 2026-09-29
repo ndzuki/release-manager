@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { onUnmounted, ref } from 'vue';
 import type { TimelineEntry } from '@/types/operation';
 
@@ -36,7 +37,7 @@ const kindLabel: Record<string, string> = {
   ACK: '已确认',
   ROLLOUT_PROGRESS: '发布进度',
   ERROR: '错误',
-  EMERGENCY_EFFECT_RESOLVED: 'Emergency 生效结果已确认',
+  EMERGENCY_EFFECT_RESOLVED: t('operation.timeline.effectConfirmed'),
   UNSPECIFIED: '未知事件',
 };
 </script>
@@ -57,18 +58,18 @@ const kindLabel: Record<string, string> = {
       </template>
 
       <template v-else-if="entry.kind === 'ACK'">
-        <p class="timeline-entry__text">{{ entry.ackStage ? `ACK 已确认（${entry.ackStage}）` : 'ACK 已确认' }}</p>
+        <p class="timeline-entry__text">{{ entry.ackStage ? `${t('operation.timeline.ack')}（${entry.ackStage}）` : t('operation.timeline.ack') }}</p>
       </template>
 
       <template v-else-if="entry.kind === 'ROLLOUT_PROGRESS'">
         <p class="timeline-entry__text">
-          {{ entry.workloadRef || 'Workload' }}：{{ entry.ready }}/{{ entry.desired }} 就绪
+          {{ entry.workloadRef || t('operation.timeline.workload') }}：{{ entry.ready }}/{{ entry.desired }} 就绪
         </p>
       </template>
 
       <template v-else-if="entry.kind === 'ERROR'">
         <p class="timeline-entry__text">{{ entry.errorMessage || entry.errorCode || '发布出错' }}</p>
-        <p v-if="entry.errorCode" class="timeline-entry__code">错误码：{{ entry.errorCode }}</p>
+        <p v-if="entry.errorCode" class="timeline-entry__code">{{ t('operation.timeline.errorCode') }}{{ entry.errorCode }}</p>
         <div v-if="entry.operationId || entry.requestId" class="timeline-entry__identities">
           <button
             v-if="entry.operationId"
@@ -101,21 +102,21 @@ const kindLabel: Record<string, string> = {
 </template>
 
 <style scoped>
-.timeline-entry { display: flex; gap: 0.75rem; padding: 0.75rem 1rem; border: 1px solid #e2e8f0; border-radius: 0.6rem; background: #fff; }
-.timeline-entry:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
-.timeline-entry__dot { flex: none; width: 0.6rem; height: 0.6rem; margin-top: 0.35rem; border-radius: 50%; background: #94a3b8; }
-.timeline-entry--state_transition .timeline-entry__dot { background: #2563eb; }
-.timeline-entry--ack .timeline-entry__dot { background: #0891b2; }
-.timeline-entry--rollout_progress .timeline-entry__dot { background: #ca8a04; }
-.timeline-entry--error .timeline-entry__dot { background: #dc2626; }
-.timeline-entry--emergency_effect_resolved .timeline-entry__dot { background: #2563eb; }
+.timeline-entry { display: flex; gap: 0.75rem; padding: 0.75rem 1rem; border: 1px solid var(--color-border); border-radius: 0.6rem; background: var(--color-surface); }
+.timeline-entry:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.timeline-entry__dot { flex: none; width: 0.6rem; height: 0.6rem; margin-top: 0.35rem; border-radius: 50%; background: var(--color-subtle); }
+.timeline-entry--state_transition .timeline-entry__dot { background: var(--color-primary); }
+.timeline-entry--ack .timeline-entry__dot { background: var(--color-cyan); }
+.timeline-entry--rollout_progress .timeline-entry__dot { background: var(--color-warning-solid-deep); }
+.timeline-entry--error .timeline-entry__dot { background: var(--color-danger); }
+.timeline-entry--emergency_effect_resolved .timeline-entry__dot { background: var(--color-primary); }
 .timeline-entry__body { display: grid; gap: 0.3rem; min-width: 0; }
 .timeline-entry__header { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; }
-.timeline-entry__header time { color: #64748b; font-size: 0.8rem; }
-.timeline-entry__text { margin: 0; color: #334155; font-size: 0.9rem; overflow-wrap: anywhere; }
-.timeline-entry__code { margin: 0; color: #b91c1c; font-size: 0.8rem; }
+.timeline-entry__header time { color: var(--color-muted); font-size: var(--font-size-sm); }
+.timeline-entry__text { margin: 0; color: var(--color-text-secondary); font-size: var(--font-size-md); overflow-wrap: anywhere; }
+.timeline-entry__code { margin: 0; color: var(--color-error); font-size: var(--font-size-sm); }
 .timeline-entry__identities { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-.timeline-entry__copy { padding: 0.25rem 0.5rem; border: 1px solid #cbd5e1; border-radius: 0.35rem; background: #fff; color: #1d4ed8; font-size: 0.78rem; cursor: pointer; }
-.timeline-entry--error { border-color: #fecaca; background: #fef2f2; }
-.timeline-entry--emergency_effect_resolved { border-color: #bfdbfe; background: #eff6ff; }
+.timeline-entry__copy { padding: 0.25rem 0.5rem; border: 1px solid var(--color-border-strong); border-radius: 0.35rem; background: var(--color-surface); color: var(--color-primary-hover); font-size: var(--font-size-xs); cursor: pointer; }
+.timeline-entry--error { border-color: var(--color-danger-border-soft); background: var(--color-danger-soft); }
+.timeline-entry--emergency_effect_resolved { border-color: var(--color-info-border-soft); background: var(--color-info-soft); }
 </style>

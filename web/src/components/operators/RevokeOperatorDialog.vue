@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, shallowRef } from 'vue';
+import { t } from '@/i18n/messages';
+import { computed, shallowRef, useId } from 'vue';
 import { validateRevokeReason } from '@/utils/operator-validation';
+import AppDialog from '@/components/common/AppDialog.vue';
 
 interface Props {
   operatorName: string;
@@ -15,6 +17,7 @@ const emit = defineEmits<{
 }>();
 const reason = shallowRef('');
 const violation = computed(() => validateRevokeReason(reason.value));
+const violationId = useId();
 
 function submit(): void {
   if (violation.value) return;
@@ -23,34 +26,72 @@ function submit(): void {
 </script>
 
 <template>
-  <div class="backdrop" role="presentation">
-    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="revoke-title">
-      <h2 id="revoke-title">Revoke {{ operatorName }}</h2>
-      <p>This immediately revokes active sessions and cannot be undone.</p>
-      <label>
-        Reason
-        <textarea v-model="reason" rows="4" maxlength="500" />
-      </label>
-      <p v-if="violation" class="error">{{ violation.description }}</p>
-      <p v-if="errorMessage" class="error" role="alert">{{ errorMessage }}</p>
-      <div class="actions">
-        <button type="button" :disabled="submitting" @click="emit('cancel')">Cancel</button>
-        <button type="button" class="danger" :disabled="submitting || Boolean(violation)" @click="submit">
-          {{ submitting ? 'Revoking…' : 'Confirm revoke' }}
-        </button>
-      </div>
-    </section>
-  </div>
+  <!-- Rendered only while the parent wants it open, so `open` is always true;
+       the reason textarea makes a backdrop-click close actively harmful. -->
+  <AppDialog
+    :open="true"
+    :title="`${t('operator.table.revoke')} ${operatorName}`"
+    :description="t('operator.revoke.warning')"
+    danger
+    :close-on-backdrop="false"
+    :close-on-escape="!submitting"
+    @close="emit('cancel')"
+  >
+    <label class="revoke-reason">
+      {{ t('operator.revoke.reason') }}
+      <textarea
+        v-model="reason"
+        rows="4"
+        maxlength="500"
+        :aria-invalid="Boolean(violation)"
+        :aria-describedby="violation ? violationId : undefined"
+      />
+    </label>
+    <p v-if="violation" :id="violationId" class="revoke-reason__error" role="alert">
+      {{ violation.description }}
+    </p>
+    <p v-if="errorMessage" class="revoke-reason__error" role="alert">{{ errorMessage }}</p>
+
+    <template #footer>
+      <button type="button" :disabled="submitting" @click="emit('cancel')">{{ t('action.cancel') }}</button>
+      <button
+        type="button"
+        class="revoke-reason__danger"
+        :disabled="submitting || Boolean(violation)"
+        @click="submit"
+      >
+        {{ submitting ? t('operator.revoke.inProgress') : t('operator.revoke.confirm') }}
+      </button>
+    </template>
+  </AppDialog>
 </template>
 
 <style scoped>
-.backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 1rem; background: rgb(15 23 42 / 0.72); }
-.dialog { display: grid; width: min(32rem, 100%); gap: 1rem; padding: 1.5rem; border-radius: 0.75rem; background: #fff; }
-.dialog h2, .dialog p { margin: 0; }
-.dialog label { display: grid; gap: 0.35rem; font-weight: 700; }
-textarea { padding: 0.65rem; border: 1px solid #94a3b8; border-radius: 0.375rem; font: inherit; }
-.actions { display: flex; justify-content: flex-end; gap: 0.75rem; }
-button { padding: 0.55rem 0.8rem; border: 1px solid #94a3b8; border-radius: 0.375rem; background: #fff; cursor: pointer; }
-.danger { border-color: #ef4444; color: #b91c1c; }
-.error { color: #b91c1c; }
+.revoke-reason {
+  display: grid;
+  gap: var(--space-1);
+  font-weight: var(--font-weight-bold);
+}
+
+.revoke-reason textarea {
+  padding: 0.65rem; /* HEAD value; no 4px-scale step */
+  border: 1px solid var(--color-subtle);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-weight: var(--font-weight-regular);
+}
+
+.revoke-reason textarea[aria-invalid='true'] {
+  border-color: var(--color-error);
+}
+
+.revoke-reason__error {
+  margin: 0;
+  color: var(--color-error);
+}
+
+.revoke-reason__danger {
+  border-color: var(--color-danger-border);
+  color: var(--color-error);
+}
 </style>

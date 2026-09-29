@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { computed, shallowRef, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useRoute, useRouter } from 'vue-router';
@@ -51,42 +52,42 @@ useOperatorPolling({ heartbeatIntervalSeconds, refresh });
   <section class="page">
     <header class="page__header">
       <div>
-        <p class="eyebrow">Cluster operators</p>
-        <h1>Operator registration history</h1>
-        <p>Review identity lifecycle and service-owned session status for this cluster.</p>
+        <p class="eyebrow">{{ t('operator.list.title') }}</p>
+        <h1>{{ t('operator.list.subtitle') }}</h1>
+        <p>{{ t('operator.list.description') }}</p>
       </div>
       <div class="actions">
-        <button type="button" @click="refresh">Refresh</button>
+        <button type="button" @click="refresh">{{ t('action.refresh') }}</button>
         <RouterLink
           v-if="auth.canEnrollOperators"
           class="primary"
           :to="{ name: 'OperatorEnroll', params: { customerId: customerId, clusterId: clusterId } }"
-        >Generate token</RouterLink>
+        >{{ t('operator.list.generate') }}</RouterLink>
       </div>
     </header>
 
-    <LoadingState v-if="store.loading && !store.hasOperators" message="Loading operators…" />
+    <LoadingState v-if="store.loading && !store.hasOperators" :message="t('operator.list.loading')" />
     <ForbiddenState v-else-if="store.forbidden" />
     <ErrorState v-else-if="store.error && !store.hasOperators" :message="store.error.message">
-      <button type="button" @click="refresh">Retry</button>
+      <button type="button" @click="refresh">{{ t('action.retry') }}</button>
     </ErrorState>
     <EmptyState
       v-else-if="!store.hasOperators"
-      title="No operators registered"
-      message="Generate an enrollment token to register the first operator for this cluster."
+      :title="t('operator.list.empty')"
+      :message="t('operator.list.emptyHint')"
     >
       <template #action>
         <RouterLink
           v-if="auth.canEnrollOperators"
           class="primary"
           :to="{ name: 'OperatorEnroll', params: { customerId: customerId, clusterId: clusterId } }"
-        >Generate the first token</RouterLink>
+        >{{ t('operator.list.generateFirst') }}</RouterLink>
       </template>
     </EmptyState>
 
     <div v-else class="content">
       <p v-if="store.error" class="warning" role="alert">
-        {{ store.error.message }} Existing data remains visible; use Refresh to retry.
+        {{ store.error.message }} {{ t('operator.list.stale') }}
       </p>
       <OperatorFilters :model-value="store.filters" @update:model-value="handleFilters" />
       <OperatorTable
@@ -100,7 +101,7 @@ useOperatorPolling({ heartbeatIntervalSeconds, refresh });
         type="button"
         :disabled="store.loadingMore"
         @click="store.loadList(customerId, clusterId, true)"
-      >{{ store.loadingMore ? 'Loading…' : 'Load more' }}</button>
+      >{{ store.loadingMore ? t('state.loading.label') : t('operator.list.loadMore') }}</button>
     </div>
 
     <RevokeOperatorDialog
@@ -118,11 +119,11 @@ useOperatorPolling({ heartbeatIntervalSeconds, refresh });
 .page { display: grid; gap: 1.5rem; max-width: 76rem; margin: 0 auto; }
 .page__header, .actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 h1, p { margin: 0; }
-.page__header > div:first-child > p:last-child { margin-top: 0.375rem; color: #64748b; }
-.eyebrow { color: #2563eb; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; }
+.page__header > div:first-child > p:last-child { margin-top: 0.375rem; color: var(--color-muted); }
+.eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; text-transform: uppercase; }
 .actions { justify-content: flex-end; }
-.actions button, .primary, .content > button { padding: 0.6rem 0.85rem; border: 1px solid #94a3b8; border-radius: 0.375rem; background: #fff; color: inherit; cursor: pointer; text-decoration: none; }
-.primary { border-color: #2563eb; background: #2563eb; color: #fff; }
+.actions button, .primary, .content > button { padding: 0.6rem 0.85rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); color: inherit; cursor: pointer; text-decoration: none; }
+.primary { border-color: var(--color-primary); background: var(--color-primary); color: var(--color-on-accent); }
 .content { display: grid; gap: 1rem; }
-.warning { padding: 0.75rem; border-radius: 0.5rem; background: #fff7ed; color: #9a3412; }
+.warning { padding: 0.75rem; border-radius: 0.5rem; background: var(--color-warning-soft); color: var(--color-warning-ink); }
 </style>

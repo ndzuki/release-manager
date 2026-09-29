@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { computed, shallowRef } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
@@ -26,7 +27,7 @@ async function selectOrganization(organizationId: string): Promise<void> {
     await auth.switchOrganization(organizationId);
     await router.replace({ path: router.currentRoute.value.fullPath, query: { ...router.currentRoute.value.query } });
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'Unable to switch organization.';
+    errorMessage.value = error instanceof Error ? error.message : t('shell.organization.switchError');
   } finally {
     switching.value = false;
   }
@@ -35,7 +36,7 @@ async function selectOrganization(organizationId: string): Promise<void> {
 
 <template>
   <div v-if="canSwitchOrganizations" class="organization-switcher">
-    <label class="organization-switcher__label" for="active-organization">Organization</label>
+    <label class="organization-switcher__label" for="active-organization">{{ t('shell.organization.choose') }}</label>
     <select
       id="active-organization"
       v-model="selectedOrganizationId"
@@ -60,22 +61,22 @@ async function selectOrganization(organizationId: string): Promise<void> {
 }
 
 .organization-switcher__label {
-  font-size: 0.75rem;
-  color: var(--color-muted, #64748b);
+  font-size: var(--font-size-xs);
+  color: var(--color-muted);
 }
 
 .organization-switcher__select {
   min-width: 12rem;
   padding: 0.4rem 0.6rem;
-  border: 1px solid var(--color-border, #cbd5e1);
+  border: 1px solid var(--color-border-strong);
   border-radius: 0.375rem;
-  background: var(--color-surface, #fff);
+  background: var(--color-surface);
 }
 
 .organization-switcher__error {
   margin: 0;
   max-width: 18rem;
-  color: var(--color-error, #b91c1c);
-  font-size: 0.75rem;
+  color: var(--color-error);
+  font-size: var(--font-size-xs);
 }
 </style>

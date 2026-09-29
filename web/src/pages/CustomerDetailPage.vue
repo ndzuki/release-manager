@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { computed, onMounted, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import ErrorState from '@/components/common/ErrorState.vue';
@@ -14,13 +15,14 @@ import type { CustomerFormInput } from '@/types/customer';
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
+const clusterRoutingEnabled = import.meta.env.VITE_FEATURE_CLUSTER_ROUTING !== 'false';
 const store = useCustomerStore();
 const showDisableDialog = shallowRef(false);
 
 const customerId = computed(() => typeof route.params.id === 'string' ? route.params.id : '');
 const isCreate = computed(() => customerId.value === '');
 const canWrite = computed(() => auth.canWrite && !isCreate.value);
-const title = computed(() => isCreate.value ? 'Create customer' : (store.current?.name ?? 'Customer'));
+const title = computed(() => isCreate.value ? t('customer.detail.create') : (store.current?.name ?? t('customer.detail.label')));
 const form = computed<CustomerFormInput | null>(() => store.draft);
 
 onMounted(async () => {
@@ -61,47 +63,54 @@ async function disable() {
 
 <template>
   <section class="customer-detail">
-    <LoadingState v-if="store.loading && !isCreate" message="Loading customer…" />
+    <LoadingState v-if="store.loading && !isCreate" :message="t('state.loading.customer')" />
     <ForbiddenState v-else-if="store.forbidden" />
     <ErrorState v-else-if="store.error" :message="store.error">
-      <button type="button" @click="router.push({ name: 'CustomerList' })">Back to customers</button>
+      <button type="button" @click="router.push({ name: 'CustomerList' })">{{ t('customer.detail.back') }}</button>
     </ErrorState>
     <template v-else>
       <header class="customer-detail__header">
         <div>
-          <p class="eyebrow">Customer</p>
+          <p class="eyebrow">{{ t('customer.detail.label') }}</p>
           <h1>{{ title }}</h1>
           <p v-if="store.current" :class="store.current.status === 'disabled' ? 'disabled-copy' : 'muted'">
-            {{ store.current.status === 'disabled' ? 'Disabled — read-only history remains available.' : 'Tenant boundary for release management.' }}
+            {{ store.current.status === 'disabled' ? t('customer.detail.disabledBanner') : t('customer.detail.subtitle') }}
           </p>
         </div>
         <div class="customer-detail__actions">
-          <RouterLink :to="{ name: 'CustomerList' }">Back</RouterLink>
-          <button v-if="canWrite && store.current?.status === 'active'" type="button" class="danger" @click="showDisableDialog = true">Disable customer</button>
+          <!-- Plan N2/N8: the customer subtree had no path to clusters at all, so the
+               release subtree was only reachable by typing a URL. -->
+          <RouterLink
+            v-if="!isCreate && clusterRoutingEnabled && store.current"
+            class="primary"
+            :to="{ name: 'ClusterList', params: { customerId: store.current.id } }"
+          >{{ t('nav.clusters') }}</RouterLink>
+          <RouterLink :to="{ name: 'CustomerList' }">{{ t('customer.detail.back') }}</RouterLink>
+          <button v-if="canWrite && store.current?.status === 'active'" type="button" class="danger" @click="showDisableDialog = true">{{ t('customer.detail.disable') }}</button>
         </div>
       </header>
 
       <div v-if="store.current?.status === 'disabled'" class="disabled-banner" role="status">
-        This customer is disabled. Editing and disabling are unavailable.
+        {{ t('customer.detail.disabled') }}
       </div>
       <div v-if="isCreate && !auth.canWrite" class="readonly-banner" role="status">
-        Your viewer role has no customer creation entry.
+        {{ t('customer.detail.readonly') }}
       </div>
 
       <section v-if="form && (!isCreate || auth.canWrite)" class="customer-detail__panel">
-        <h2>{{ isCreate ? 'Customer details' : 'Edit customer' }}</h2>
+        <h2>{{ isCreate ? t('customer.detail.details') : t('customer.detail.editTitle') }}</h2>
         <div v-if="store.saveError?.code === 'optimistic_lock_conflict'" class="conflict-banner" role="alert">
-          This customer changed since you opened it. Refresh to rebase your draft, then retry saving.
-          <button type="button" @click="refresh">Refresh</button>
+          {{ t('customer.detail.stale') }}
+          <button type="button" @click="refresh">{{ t('action.refresh') }}</button>
         </div>
         <ErrorState v-else-if="store.saveError" :message="store.saveError.message">
-          <button type="button" @click="store.clearSaveError()">Dismiss</button>
+          <button type="button" @click="store.clearSaveError()">{{ t('action.dismiss') }}</button>
         </ErrorState>
         <CustomerForm
           v-model="store.draft!"
           :readonly="!auth.canWrite || store.current?.status === 'disabled'"
           :submitting="store.saving"
-          :submit-label="isCreate ? 'Create customer' : 'Save changes'"
+          :submit-label="isCreate ? t('customer.detail.create') : t('customer.detail.save')"
           :field-violations="store.saveError?.fieldViolations"
           @submit="save"
         />
@@ -116,7 +125,7 @@ async function disable() {
       />
 
       <ErrorState v-if="store.disableError" :message="store.disableError">
-        <button type="button" @click="store.clearDisableError()">Dismiss</button>
+        <button type="button" @click="store.clearDisableError()">{{ t('action.dismiss') }}</button>
       </ErrorState>
     </template>
 
@@ -133,16 +142,16 @@ async function disable() {
 .customer-detail { display: grid; gap: 1.5rem; max-width: 72rem; margin: 0 auto; }
 .customer-detail__header, .customer-detail__actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 .customer-detail__header h1, .customer-detail__header p { margin: 0; }
-.eyebrow { color: #2563eb; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; }
-.muted { color: #64748b; margin-top: 0.375rem !important; }
-.disabled-copy { color: #b91c1c; margin-top: 0.375rem !important; }
-.customer-detail__actions a, .customer-detail__actions button { padding: 0.5rem 0.75rem; border: 1px solid #94a3b8; border-radius: 0.375rem; background: #fff; text-decoration: none; }
-.danger { color: #b91c1c; cursor: pointer; }
-.customer-detail__panel { display: grid; gap: 1rem; padding: 1rem; border: 1px solid #cbd5e1; border-radius: 0.75rem; }
-.customer-detail__panel h2 { margin: 0; font-size: 1.1rem; }
+.eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 700; text-transform: uppercase; }
+.muted { color: var(--color-muted); margin-top: 0.375rem !important; }
+.disabled-copy { color: var(--color-error); margin-top: 0.375rem !important; }
+.customer-detail__actions a, .customer-detail__actions button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); text-decoration: none; }
+.danger { color: var(--color-error); cursor: pointer; }
+.customer-detail__panel { display: grid; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
+.customer-detail__panel h2 { margin: 0; font-size: var(--font-size-lg); }
 .disabled-banner, .readonly-banner, .conflict-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.875rem 1rem; border-radius: 0.5rem; }
-.disabled-banner { background: #fef2f2; color: #991b1b; }
-.readonly-banner { background: #f1f5f9; color: #475569; }
-.conflict-banner { background: #fff7ed; color: #9a3412; }
-.conflict-banner button { padding: 0.4rem 0.65rem; border: 1px solid #c2410c; border-radius: 0.375rem; background: #fff; color: #9a3412; cursor: pointer; }
+.disabled-banner { background: var(--color-danger-soft); color: var(--color-error-strong); }
+.readonly-banner { background: var(--color-surface-muted); color: var(--color-muted-strong); }
+.conflict-banner { background: var(--color-warning-soft); color: var(--color-warning-ink); }
+.conflict-banner button { padding: 0.4rem 0.65rem; border: 1px solid var(--color-danger-orange); border-radius: 0.375rem; background: var(--color-surface); color: var(--color-warning-ink); cursor: pointer; }
 </style>

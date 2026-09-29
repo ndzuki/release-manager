@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
+
 interface ErrorStateProps {
   title?: string;
   message?: string;
@@ -7,7 +9,7 @@ interface ErrorStateProps {
 }
 
 withDefaults(defineProps<ErrorStateProps>(), {
-  title: 'Something went wrong',
+  title: t('error.title'),
   message: '',
   details: '',
   actionLabel: '',
@@ -22,7 +24,7 @@ const emit = defineEmits<{ action: [] }>();
     <h2 id="error-state-title" class="error-state__title">{{ title }}</h2>
     <p v-if="message" class="error-state__text">{{ message }}</p>
     <details v-if="details" class="error-state__details">
-      <summary>Technical details</summary>
+      <summary>{{ t('error.technicalDetails') }}</summary>
       <pre>{{ details }}</pre>
     </details>
     <slot name="action">
@@ -42,7 +44,7 @@ const emit = defineEmits<{ action: [] }>();
   gap: 0.6rem;
   padding: 1.5rem;
   border-radius: 0.5rem;
-  background: #fef2f2;
+  background: var(--color-danger-soft);
   text-align: center;
 }
 
@@ -52,8 +54,8 @@ const emit = defineEmits<{ action: [] }>();
   height: 2rem;
   place-items: center;
   border-radius: 50%;
-  background: #dc2626;
-  color: #fff;
+  background: var(--color-danger);
+  color: var(--color-on-accent);
   font-weight: 800;
 }
 
@@ -63,14 +65,14 @@ const emit = defineEmits<{ action: [] }>();
 }
 
 .error-state__title {
-  color: #991b1b;
-  font-size: 1rem;
+  color: var(--color-error-strong);
+  font-size: var(--font-size-base);
 }
 
 .error-state__text,
 .error-state__details {
-  color: #7f1d1d;
-  font-size: 0.875rem;
+  color: var(--color-danger-ink-deep);
+  font-size: var(--font-size-md);
 }
 
 .error-state__details pre {
@@ -81,10 +83,10 @@ const emit = defineEmits<{ action: [] }>();
 
 .error-state__action {
   padding: 0.45rem 0.75rem;
-  border: 1px solid #ef4444;
+  border: 1px solid var(--color-danger-border);
   border-radius: 0.375rem;
-  background: #fff;
-  color: #991b1b;
+  background: var(--color-surface);
+  color: var(--color-error-strong);
   cursor: pointer;
 }
 </style>

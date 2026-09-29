@@ -52,6 +52,13 @@ export function createAppRouter(
             component: () => import('@/pages/OperationCreatePage.vue'),
             meta: { requiresAuth: true, requiresOperationCreate: true, feature: 'releaseOperations' },
           }, {
+            // W3 (UX plan N5): the operation history had no route, so a user who
+            // left an operation detail could never get back to it.
+            path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations',
+            name: 'OperationList',
+            component: () => import('@/pages/OperationListPage.vue'),
+            meta: { requiresAuth: true, feature: 'releaseOperations' },
+          }, {
             path: '/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations/:operationId',
             name: 'OperationDetail',
             component: () => import('@/pages/OperationDetailPage.vue'),
@@ -71,6 +78,77 @@ export function createAppRouter(
             meta: { requiresAuth: true, feature: 'releaseOperations' },
           }]
         : []),
+      {
+        // A1 (UX plan §6.1): membership management had no console surface; the
+        // four RPCs exist since REQ-026.
+        // Local accounts are platform_admin-only server-side (procedure_policy.go);
+        // the page renders ForbiddenState for anyone else.
+        path: '/settings/users',
+        name: 'LocalUsers',
+        component: () => import('@/pages/LocalUsersPage.vue'),
+        meta: { requiresAuth: true },
+      },
+      {
+        path: '/settings/organization',
+        name: 'OrganizationMembers',
+        component: () => import('@/pages/OrganizationPage.vue'),
+        meta: { requiresAuth: true },
+      },
+      {
+        // A7 (UX plan §6.1): artifact lifecycle GC / bundle restore (REQ-069), which
+        // only platform_admin may run (cleanup/write).
+        path: '/artifacts/lifecycle',
+        name: 'ArtifactLifecycle',
+        component: () => import('@/pages/ArtifactLifecyclePage.vue'),
+        meta: { requiresAuth: true, feature: 'releaseOperations' },
+      },
+      {
+        // A8 (UX plan §6.1): bundles were only a hidden dropdown in the operation
+        // form; their digests/evidence had no surface.
+        path: '/bundles',
+        name: 'Bundles',
+        component: () => import('@/pages/BundlesPage.vue'),
+        meta: { requiresAuth: true, feature: 'releaseOperations' },
+      },
+      {
+        // A9 (UX plan §6.1): definitions had no list/editor; the promotion mapping
+        // is the convergence prerequisite (REQ-040).
+        path: '/definitions',
+        name: 'Definitions',
+        component: () => import('@/pages/DefinitionsPage.vue'),
+        meta: { requiresAuth: true, feature: 'releaseOperations' },
+      },
+      {
+        // A10 (UX plan §6.1): stuck emergency locks had no console surface
+        // (REQ-087 ListStuckLocks/ReleaseEmergencyLock).
+        path: '/emergency/stuck-locks',
+        name: 'StuckLocks',
+        component: () => import('@/pages/StuckLocksPage.vue'),
+        meta: { requiresAuth: true, feature: 'releaseOperations' },
+      },
+      {
+        // A5 (UX plan §6.1): trust roots had no console surface (REQ-012/REQ-043).
+        path: '/settings/trust',
+        name: 'TrustPolicy',
+        component: () => import('@/pages/TrustPolicyPage.vue'),
+        meta: { requiresAuth: true },
+      },
+      {
+        // A2 + A3 (UX plan §6.1): org->customer bindings and capability grants had
+        // no console surface; the RPCs exist since REQ-049 / REQ-027.
+        path: '/settings/bindings',
+        name: 'GovernanceBindings',
+        component: () => import('@/pages/BindingsPage.vue'),
+        meta: { requiresAuth: true },
+      },
+      {
+        // A4 (UX plan §6.1): the console had no password-change surface at all,
+        // although REQ-025 defines the RPC and revokes sessions on success.
+        path: '/settings/password',
+        name: 'ChangePassword',
+        component: () => import('@/pages/ChangePasswordPage.vue'),
+        meta: { requiresAuth: true },
+      },
       {
         path: '/',
         name: 'Home',
@@ -173,7 +251,11 @@ export function installAuthGuard(router: Router): void {
     }
 
     if (to.meta.requiresWrite && !auth.canWrite) {
-      return { name: 'ClusterList', params: { customerId: to.params.customerId } };
+      // Plan N4: this used to redirect silently to the list, so a read-only user who
+      // followed a "create cluster" link saw the list again with no explanation. The
+      // sibling guard below already routes to the forbidden surface; say WHY here too.
+      auth.setForbiddenMessage('需要写权限才能创建或修改集群；你的角色只有只读权限。');
+      return { name: 'Forbidden' };
     }
 
     if (to.meta.feature === 'clusterRouting' && import.meta.env.VITE_FEATURE_CLUSTER_ROUTING === 'false') {

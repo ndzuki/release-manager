@@ -282,9 +282,13 @@ describe('ValuesEditorPage return to task list (AC-055-15)', () => {
     const wrapper = mountWithActions();
     await flushPromises();
     await wrapper.find('[data-testid="discard"]').trigger('click');
-    const confirm = wrapper.findAll('button').find((b) => b.text() === '确认丢弃');
+    // AppDialog teleports the overlay to body, so confirm through the real DOM.
+    const dialog = document.querySelector<HTMLElement>('.app-dialog__panel');
+    expect(dialog, 'the discard confirmation must be rendered').not.toBeNull();
+    const confirm = Array.from(dialog!.querySelectorAll('button'))
+      .find((element) => element.textContent?.trim() === '确认丢弃');
     expect(confirm, 'the discard confirmation must be rendered').toBeTruthy();
-    await confirm!.trigger('click');
+    confirm!.click();
     await flushPromises();
 
     expect(mocks.push).toHaveBeenCalledWith(

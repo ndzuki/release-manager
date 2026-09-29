@@ -86,14 +86,14 @@ function setPolicy(policy: ConvergencePolicy): void {
 
 <style scoped>
 .change-form { display: grid; gap: 1rem; }
-.field-label { display: block; margin-bottom: 0.25rem; color: #475569; font-size: 0.85rem; }
-.field-input { width: 100%; padding: 0.5rem; border: 1px solid #cbd5e1; border-radius: 0.375rem; }
+.field-label { display: block; margin-bottom: 0.25rem; color: var(--color-muted-strong); font-size: var(--font-size-sm); }
+.field-input { width: 100%; padding: 0.5rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; }
 .reason-input { resize: vertical; }
-.byte-count { font-size: 0.8rem; color: #94a3b8; }
-.byte-count.over { color: #b91c1c; }
-.policy-fieldset { display: grid; gap: 0.4rem; border: 1px solid #e2e8f0; border-radius: 0.5rem; padding: 0.75rem; }
-.policy-fieldset label.disabled { color: #94a3b8; }
-.hint { color: #64748b; font-size: 0.85rem; }
-.error-text { color: #b91c1c; font-size: 0.85rem; }
-.summary-bar { padding: 0.6rem 0.75rem; border: 1px solid #fecaca; border-radius: 0.375rem; background: #fef2f2; color: #b91c1c; }
+.byte-count { font-size: var(--font-size-sm); color: var(--color-subtle); }
+.byte-count.over { color: var(--color-error); }
+.policy-fieldset { display: grid; gap: 0.4rem; border: 1px solid var(--color-border); border-radius: 0.5rem; padding: 0.75rem; }
+.policy-fieldset label.disabled { color: var(--color-subtle); }
+.hint { color: var(--color-muted); font-size: var(--font-size-sm); }
+.error-text { color: var(--color-error); font-size: var(--font-size-sm); }
+.summary-bar { padding: 0.6rem 0.75rem; border: 1px solid var(--color-danger-border-soft); border-radius: 0.375rem; background: var(--color-danger-soft); color: var(--color-error); }
 </style>

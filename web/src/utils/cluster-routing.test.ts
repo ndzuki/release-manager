@@ -40,8 +40,8 @@ describe('validateClusterForm', () => {
 
     expect(result.valid).toBe(false);
     expect(result.violations).toEqual(expect.arrayContaining([
-      { field: 'imageRules[0].sourcePrefix', description: 'Route source prefix conflicts with another rule' },
-      { field: 'imageRules[1].sourcePrefix', description: 'Route source prefix conflicts with another rule' },
+      { field: 'imageRules[0].sourcePrefix', description: '源前缀与其它规则冲突' },
+      { field: 'imageRules[1].sourcePrefix', description: '源前缀与其它规则冲突' },
     ]));
   });
 
@@ -52,13 +52,13 @@ describe('validateClusterForm', () => {
 
     expect(result.violations).toContainEqual({
       field: 'chartRules[0].mode',
-      description: 'Chart Pull-Through Cache has not passed capability testing',
+      description: 'Chart 透传缓存尚未通过能力测试',
     });
   });
 
   it.each([
-    ['', 'Cluster name is required'],
-    ['x'.repeat(254), 'Cluster name must contain at most 253 characters'],
+    ['', '集群名称必填'],
+    ['x'.repeat(254), '集群名称不得超过 253 个字符'],
   ])('rejects invalid cluster name boundary %#', (name, description) => {
     const result = validateClusterForm(form({ name }));
 

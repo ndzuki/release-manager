@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { computed, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import EmptyState from '@/components/common/EmptyState.vue';
@@ -48,16 +49,16 @@ async function viewExistingOperation(): Promise<void> {
 
 <template>
   <section class="operation-page">
-    <nav class="operation-page__breadcrumbs" aria-label="Breadcrumb">
+    <nav class="operation-page__breadcrumbs" :aria-label="t('values.page.breadcrumb')">
       <span>{{ customerName }}</span><span aria-hidden="true">/</span>
       <span>{{ clusterName }}</span><span aria-hidden="true">/</span>
       <span>{{ releaseName }}</span><span aria-hidden="true">/</span>
-      <strong>New operation</strong>
+      <strong>{{ t('operation.create.eyebrow') }}</strong>
     </nav>
 
     <header class="operation-page__header">
       <div>
-        <p class="operation-page__eyebrow">Release operation</p>
+        <p class="operation-page__eyebrow">{{ t('operation.create.subtitle') }}</p>
         <h1>创建发布操作</h1>
         <p>选择制品和已审批配置，确认完整目标后启动 Preflight。</p>
       </div>
@@ -119,12 +120,12 @@ async function viewExistingOperation(): Promise<void> {
 
 <style scoped>
 .operation-page { display: grid; gap: 1.5rem; max-width: 64rem; margin: 0 auto; }
-.operation-page__breadcrumbs { display: flex; flex-wrap: wrap; gap: 0.45rem; color: #64748b; font-size: 0.85rem; }
+.operation-page__breadcrumbs { display: flex; flex-wrap: wrap; gap: 0.45rem; color: var(--color-muted); font-size: var(--font-size-sm); }
 .operation-page__header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
 .operation-page__header h1, .operation-page__header p { margin: 0; }
 .operation-page__header div { display: grid; gap: 0.35rem; }
-.operation-page__eyebrow { color: #2563eb; font-size: 0.75rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
-.operation-page__header a, .operation-page button { padding: 0.6rem 0.85rem; border: 1px solid #94a3b8; border-radius: 0.4rem; background: #fff; color: #0f172a; text-decoration: none; }
-.operation-page__existing { border-color: #2563eb !important; color: #1d4ed8 !important; }
+.operation-page__eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+.operation-page__header a, .operation-page button { padding: 0.6rem 0.85rem; border: 1px solid var(--color-subtle); border-radius: 0.4rem; background: var(--color-surface); color: var(--color-text); text-decoration: none; }
+.operation-page__existing { border-color: var(--color-primary) !important; color: var(--color-primary-hover) !important; }
 @media (max-width: 42rem) { .operation-page__header { flex-direction: column; } }
 </style>

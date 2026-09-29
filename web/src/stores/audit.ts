@@ -1,3 +1,4 @@
+import { t } from '@/i18n/messages';
 import { defineStore } from 'pinia';
 import { computed, shallowRef } from 'vue';
 import { Code, ConnectError } from '@connectrpc/connect';
@@ -138,12 +139,12 @@ function toLocalInput(date: Date): string {
 function validateRange(filters: AuditFilters): AuditFailure | null {
   const from = asDate(filters.from);
   const to = asDate(filters.to);
-  if (!from || !to) return { reason: 'invalid_argument', message: 'Select a valid start and end time.' };
-  if (from > to) return { reason: 'invalid_argument', message: 'The start time must not be after the end time.' };
+  if (!from || !to) return { reason: 'invalid_argument', message: t('audit.error.range') };
+  if (from > to) return { reason: 'invalid_argument', message: t('audit.error.rangeOrder') };
   if (to.getTime() - from.getTime() > maxAuditRangeDays * 24 * 60 * 60 * 1000) {
     return {
       reason: 'range_too_large',
-      message: `Please narrow the time range to ${maxAuditRangeDays} days or less.`,
+      message: t('audit.error.narrowDays', { days: String(maxAuditRangeDays) }),
     };
   }
   return null;
@@ -172,32 +173,32 @@ function failureFrom(error: unknown): AuditFailure {
   const connectError = ConnectError.from(error);
   const reason = connectError.metadata.get('X-Reason-Code');
   if (reason === 'permission_denied' || connectError.code === Code.PermissionDenied) {
-    return { reason: 'permission_denied', message: 'You do not have access to this organization.' };
+    return { reason: 'permission_denied', message: t('audit.error.noAccess') };
   }
   if (reason === 'range_too_large') {
     return {
       reason: 'range_too_large',
-      message: `The query range is too large. Please narrow it to ${maxAuditRangeDays} days or less.`,
+      message: t('audit.error.rangeTooLarge', { days: String(maxAuditRangeDays) }),
     };
   }
   if (reason === 'invalid_cursor') {
-    return { reason: 'invalid_cursor', message: 'This page expired. The first page was reloaded.' };
+    return { reason: 'invalid_cursor', message: t('audit.error.expired') };
   }
   if (reason === 'export_unavailable' || connectError.code === Code.Unavailable) {
-    return { reason: 'export_unavailable', message: 'Audit export is unavailable. Try again later.' };
+    return { reason: 'export_unavailable', message: t('audit.error.exportUnavailable') };
   }
   if (connectError.code === Code.DeadlineExceeded) {
-    return { reason: 'deadline_exceeded', message: 'The request timed out. Please retry.' };
+    return { reason: 'deadline_exceeded', message: t('audit.error.timeout') };
   }
   if (connectError.code === Code.Internal) {
-    return { reason: 'internal', message: 'The audit service failed. Please retry later.' };
+    return { reason: 'internal', message: t('audit.error.service') };
   }
   if (connectError.code === Code.InvalidArgument) {
     // No stable reason header (e.g. service-side validation beyond the wire
     // contract): surface the server message verbatim.
-    return { reason: 'invalid_argument', message: connectError.rawMessage || 'The query was rejected.' };
+    return { reason: 'invalid_argument', message: connectError.rawMessage || t('audit.error.rejected') };
   }
-  return { reason: 'unknown', message: connectError.rawMessage || 'The audit request failed.' };
+  return { reason: 'unknown', message: connectError.rawMessage || t('audit.error.requestFailed') };
 }
 
 export const useAuditStore = defineStore('audit', () => {

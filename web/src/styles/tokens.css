@@ -1,0 +1,173 @@
+/*
+ * Design tokens (ADR-029).
+ *
+ * Before this file the console referenced `var(--color-*, <hardcoded>)` 46 times
+ * with ZERO definitions anywhere in web/src, so every one of those declarations
+ * silently fell back to its inline literal: the stylesheet looked tokenised and
+ * was not. Those six names are defined first, which makes the existing 46 usages
+ * resolve for real; the extended set below is what new and migrated code must
+ * use. Migrating the remaining hardcoded values (609 occurrences / 62 distinct
+ * colours at the time of writing) is deliberately incremental — see
+ * docs/ux-revamp-plan.md §9 and TASK-176.
+ *
+ * Rules for new code: no raw hex, no raw font-size, no raw radius. If a value is
+ * missing, add a token here instead of inlining it.
+ */
+
+:root {
+  /* --- Semantic colours ------------------------------------------------- */
+  --color-bg: #f8fafc;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f1f5f9;
+  --color-border: #e2e8f0;
+  --color-border-strong: #cbd5e1;
+  --color-text: #0f172a;
+  --color-muted: #64748b;
+  --color-subtle: #94a3b8;
+  --color-primary: #2563eb;
+  --color-primary-hover: #1d4ed8;
+  --color-error: #b91c1c;
+  --color-danger-soft: #fef2f2;
+  --color-warning: #b45309;
+  --color-warning-soft: #fff7ed;
+  --color-warning-border: #fdba74;
+  --color-success: #15803d;
+  --color-info: #1d4ed8;
+  --color-info-soft: #eff6ff;
+  --color-info-border: #93c5fd;
+
+  /* Focus ring: one definition instead of per-component outlines. */
+  --focus-ring: 0 0 0 3px rgb(37 99 235 / 35%);
+
+  /* --- Type scale -------------------------------------------------------- */
+  /* AC-180-09 (2026-09-28): the type scale was collapsed from 16 sizes to five
+     body steps (xs 12px / sm 13px / md 14px / base 16px / lg 18px) plus three
+     display steps (xl 24 / 2xl 32 / 3xl 48). Every retired size moved to its
+     nearest step; the largest shift is +1.6px on a single badge and the most
+     common one is -0.6px on 31 secondary labels, reviewed against before/after
+     screenshots of four pages. */
+  --font-size-base: 1rem;
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.8125rem;
+  --font-size-md: 0.875rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.5rem;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 700;
+  --line-height-tight: 1.25;
+  --line-height-base: 1.5;
+  --font-family-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+    'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* --- Spacing scale (4px base) ----------------------------------------- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+
+  /* --- Radius ----------------------------------------------------------- */
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+
+  /* --- Elevation & layering -------------------------------------------- */
+  --shadow-lg: 0 12px 32px rgb(15 23 42 / 12%);
+  --z-dialog-backdrop: 100;
+  --z-dialog: 101;
+
+  /* --- Motion ---------------------------------------------------------- */
+}
+
+
+/* Palette extensions required by the migration of the 538 hardcoded values.
+   Every value below is byte-identical to the literal it replaces, so the
+   substitution is provably value-preserving (scripts/…, see TASK-180). */
+:root {
+  --color-text-secondary: #334155;
+  --color-muted-strong: #475569;
+  --color-on-accent: #ffffff;
+  --color-danger: #dc2626;
+  --color-error-strong: #991b1b;
+  --color-danger-surface: #fee2e2;
+  --color-success-surface: #dcfce7;
+  --color-success-ink: #166534;
+  --color-warning-ink: #9a3412;
+  --color-warning-ink-strong: #92400e;
+  --color-warning-surface: #fffbeb;
+}
+
+/* Migration batch 2 (TASK-180 AC-180-06): the remaining one-off values, again
+   byte-identical to the literals they replace. The font-size entries are an
+   honest enumeration rather than a redesign: collapsing 0.78/0.8/0.85/0.88/0.9
+   onto the five-step scale changes rendered size, which is a design decision that
+   needs a visual review, not a silent rename. Collapse list is AC-180-06. */
+:root {
+  --color-warning-subtle: #fef3c7;
+  --color-warning-border-strong: #fde68a;
+  --color-warning-solid: #f59e0b;
+  --color-warning-solid-strong: #d97706;
+  --color-warning-solid-deep: #ca8a04;
+  --color-warning-ink-deep: #78350f;
+  --color-danger-border: #ef4444;
+  --color-danger-border-soft: #fecaca;
+  --color-danger-border-strong: #fca5a5;
+  --color-danger-border-bright: #f87171;
+  --color-danger-ink-deep: #7f1d1d;
+  --color-danger-orange: #c2410c;
+  --color-info-border-soft: #bfdbfe;
+  --color-info-ink: #1e3a8a;
+  --color-info-subtle: #e0f2fe;
+  --color-info-ink-strong: #075985;
+  --color-info-surface: #dbeafe;
+  --color-violet: #7c3aed;
+  --color-violet-ink: #5b21b6;
+  --color-violet-border: #c4b5fd;
+  --color-violet-subtle: #ede9fe;
+  --color-violet-border-soft: #ddd6fe;
+  --color-violet-surface: #f5f3ff;
+  --color-violet-ink-deep: #6d28d9;
+  --color-success-surface-soft: #f0fdf4;
+  --color-success-border: #86efac;
+  --color-success-border-soft: #bbf7d0;
+  --color-cyan: #0891b2;
+  --font-size-2xl: 2rem;
+  --font-size-3xl: 3rem;
+}
+
+:root {
+  --color-warning-border-bright: #fbbf24;
+}
+
+/* Editor surface (CodeMirror is dark regardless of the console theme, so it gets
+   its own tokens instead of borrowing --color-text/--color-border by value). */
+:root {
+  --editor-surface: #0f172a;
+  --editor-text: #e2e8f0;
+  --editor-caret: #f8fafc;
+  --editor-gutter-surface: #111827;
+  --editor-gutter-text: #64748b;
+  --editor-active-line: #1e293b80;
+  --editor-active-line-gutter: #1e293b;
+}
+
+/* Deliberately absent:
+   - a generic --status-<level> triple layer: the status classes in the console are
+     named after states (draft/approved/rejected/superseded/pending_approval/
+     online/offline/revoked/suspect/unknown), not after levels, and they already
+     compose the semantic --color-* tokens. A parallel level-named layer would be a
+     second vocabulary for the same colours, so it was removed rather than left
+     unused (review of TASK-180: every token must have a consumer);
+   - toast/z-index/transition tokens for surfaces that do not exist yet. They will
+     be added by the wave that builds them (W3), not in advance. */
+
+/* Type-scale history, so nobody re-derives it wrongly:
+   - TASK-180 first removed `--font-size-sm` (13px) because its only "consumers"
+     were 0.85rem/0.8rem pointed at it by mistake (the dialog-rewrite blocker);
+   - AC-180-09 then collapsed the 16 one-off sizes onto the scale and reintroduced
+     13px as the deliberate step for secondary labels, so `--font-size-sm` is live
+     again. The scale is xs/sm/md/base/lg + xl/2xl/3xl. */

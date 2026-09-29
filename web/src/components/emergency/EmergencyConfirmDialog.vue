@@ -1,9 +1,11 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 // Frozen-intent confirmation dialog (plan v3 Step 4, AC-058-15/16/17):
 // renders a read-only summary of the frozen intent, requires the explicit
 // risk acceptance checkbox, and submits through the store seam. Closing the
 // dialog keeps the page form and the frozen key (reopening the same intent
 // reuses it — handled by the store).
+import AppDialog from '@/components/common/AppDialog.vue';
 import type { CandidateArtifactDisplay, WorkloadRefDisplay } from '@/features/emergency/model';
 
 defineProps<{
@@ -26,55 +28,94 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div v-if="open" class="dialog-backdrop" role="dialog" aria-modal="true" aria-label="确认紧急变更">
-    <div class="dialog">
-      <h2>确认紧急变更</h2>
-      <dl class="intent-summary">
-        <template v-if="workload">
-          <dt>目标</dt>
-          <dd>{{ workload.kind }} {{ workload.namespace }}/{{ workload.name }}</dd>
-        </template>
-        <dt>容器</dt>
-        <dd>{{ container || '—' }}</dd>
-        <dt>制品</dt>
-        <dd>{{ artifact ? `${artifact.repository}（${artifact.digest}）` : '—' }}</dd>
-        <dt>收敛策略</dt>
-        <dd>{{ policy }}</dd>
-        <dt>原因</dt>
-        <dd class="reason">{{ reason }}</dd>
-      </dl>
-      <p class="risk-hint">确认后系统将立即投递变更命令（可能影响线上服务），且此确认不替代收敛审批。</p>
-      <label class="risk-row">
-        <input
-          type="checkbox"
-          :checked="riskAccepted"
-          @change="emit('update:risk-accepted', ($event.target as HTMLInputElement).checked)"
-        />
-        我已确认变更内容与风险
-      </label>
-      <p v-if="error" class="error-text" role="alert">{{ error.message }}</p>
-      <div class="dialog-actions">
-        <button type="button" class="secondary" :disabled="submitting" @click="emit('cancel')">取消</button>
-        <button type="button" class="primary" :disabled="submitting || !riskAccepted" @click="emit('confirm')">
-          {{ submitting ? '提交中…' : '确认提交' }}
-        </button>
-      </div>
-    </div>
-  </div>
+  <!-- The command is delivered the moment this is confirmed, so the summary must
+       not be dismissed by a stray backdrop click; Escape still cancels. -->
+  <AppDialog
+    :open="open"
+:title="t('emergency.confirm.submit')"
+    danger
+    :close-on-backdrop="false"
+    :close-on-escape="!submitting"
+    @close="emit('cancel')"
+  >
+    <dl class="emergency-confirm__summary">
+      <template v-if="workload">
+        <dt>{{ t('emergency.confirm.target') }}</dt>
+        <dd>{{ workload.kind }} {{ workload.namespace }}/{{ workload.name }}</dd>
+      </template>
+      <dt>{{ t('emergency.confirm.container') }}</dt>
+      <dd>{{ container || '—' }}</dd>
+      <dt>{{ t('emergency.confirm.artifact') }}</dt>
+      <dd>{{ artifact ? `${artifact.repository}（${artifact.digest}）` : '—' }}</dd>
+      <dt>{{ t('emergency.confirm.policy') }}</dt>
+      <dd>{{ policy }}</dd>
+      <dt>{{ t('emergency.confirm.reason') }}</dt>
+      <dd class="emergency-confirm__reason">{{ reason }}</dd>
+    </dl>
+    <p class="emergency-confirm__hint">{{ t('emergency.confirm.warning') }}</p>
+    <label class="emergency-confirm__risk">
+      <input
+        type="checkbox"
+        :checked="riskAccepted"
+        @change="emit('update:risk-accepted', ($event.target as HTMLInputElement).checked)"
+      />
+      {{ t('emergency.confirm.ack') }}
+    </label>
+    <p v-if="error" class="emergency-confirm__error" role="alert">{{ error.message }}</p>
+
+    <template #footer>
+      <button type="button" :disabled="submitting" @click="emit('cancel')">{{ t('emergency.confirm.cancel') }}</button>
+      <button type="button" class="primary" :disabled="submitting || !riskAccepted" @click="emit('confirm')">
+        {{ submitting ? '提交中…' : '确认提交' }}
+      </button>
+    </template>
+  </AppDialog>
 </template>
 
 <style scoped>
-.dialog-backdrop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgb(15 23 42 / 50%); z-index: 40; }
-.dialog { width: min(560px, 92vw); display: grid; gap: 0.9rem; padding: 1.25rem; border-radius: 0.5rem; background: #fff; }
-.intent-summary { display: grid; grid-template-columns: max-content 1fr; gap: 0.4rem 0.9rem; }
-.intent-summary dt { color: #64748b; }
-.intent-summary dd { margin: 0; }
-.reason { white-space: pre-wrap; }
-.risk-hint { color: #92400e; font-size: 0.85rem; }
-.risk-row { display: flex; gap: 0.5rem; align-items: center; }
-.dialog-actions { display: flex; justify-content: flex-end; gap: 0.6rem; }
-.primary { padding: 0.5rem 1rem; border: 0; border-radius: 0.375rem; background: #dc2626; color: #fff; }
-.primary:disabled { background: #fca5a5; }
-.secondary { padding: 0.5rem 1rem; border: 1px solid #cbd5e1; border-radius: 0.375rem; background: #fff; }
-.error-text { color: #b91c1c; }
+.emergency-confirm__summary {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+}
+
+.emergency-confirm__summary dt {
+  color: var(--color-muted);
+}
+
+.emergency-confirm__summary dd {
+  margin: 0;
+}
+
+.emergency-confirm__reason {
+  overflow-wrap: anywhere;
+}
+
+/* HEAD's .risk-hint set an amber-800 colour and 0.85rem; both are tokenised
+   one-to-one (see the equivalence pins in src/styles/tokens.test.ts). */
+.emergency-confirm__hint {
+  margin: 0;
+  color: var(--color-warning-ink-strong);
+  font-size: var(--font-size-sm);
+}
+
+.emergency-confirm__risk {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.emergency-confirm__error {
+  margin: 0;
+  color: var(--color-error);
+}
+
+/* HEAD's primary button was borderless on a red-600 fill; the emergency
+   confirmation therefore stays danger-toned rather than brand blue. */
+.primary {
+  border: 0;
+  background: var(--color-danger);
+  color: var(--color-on-accent);
+}
 </style>

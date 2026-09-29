@@ -21,9 +21,9 @@ defineProps<{
 </template>
 
 <style scoped>
-.locked-paths { display: grid; gap: 0.6rem; padding: 1rem; border: 1px solid #ddd6fe; border-radius: 0.65rem; background: #f5f3ff; }
-.locked-paths h3 { margin: 0; color: #5b21b6; }
+.locked-paths { display: grid; gap: 0.6rem; padding: 1rem; border: 1px solid var(--color-violet-border-soft); border-radius: 0.65rem; background: var(--color-violet-surface); }
+.locked-paths h3 { margin: 0; color: var(--color-violet-ink); }
 .path-list { display: grid; gap: 0.3rem; margin: 0; padding-left: 1.2rem; }
-.path-list code { color: #334155; font-size: 0.8rem; }
-.hint { margin: 0; color: #6d28d9; font-size: 0.8rem; }
+.path-list code { color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+.hint { margin: 0; color: var(--color-violet-ink-deep); font-size: var(--font-size-sm); }
 </style>

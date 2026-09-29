@@ -1,3 +1,4 @@
+import { t } from '@/i18n/messages';
 import { defineStore } from 'pinia';
 import { computed, shallowRef } from 'vue';
 import { Code, ConnectError } from '@connectrpc/connect';
@@ -39,6 +40,29 @@ export const useAuthStore = defineStore('auth', () => {
   const canWrite = computed(() => !user.value?.roles.some((role) => role.toLowerCase() === 'viewer'));
   const roleNames = computed(() => user.value?.roles.map((role) => role.toLowerCase()) ?? []);
   const canReadOperators = computed(() => isAuthenticated.value);
+  // Bundles are read by platform_admin (via *) and release_admin only — see the
+  // `bundle read` rule in internal/auth/casbin.go; deployer/viewer have no rule, so
+  // showing them the catalogue only bounces them to the forbidden page.
+  // Both CleanupService RPCs are modeCasbin + adminOnly on object `cleanup`
+  // (internal/auth/procedure_policy.go), so only platform_admin holds them.
+  const canRunCleanup = computed(() => roleNames.value.includes('platform_admin'));
+
+  // Trust-root rotation/retirement/revocation is platform_admin-only server-side
+  // (procedure_policy.go marks those procedures adminOnly: no non-wildcard role holds
+  // trust_root write), so the buttons must not be offered to anyone else.
+  const canManageTrustRoots = computed(() => roleNames.value.includes('platform_admin'));
+
+  // Local accounts live in the `auth` namespace, which procedure_policy.go marks
+  // adminOnly (no non-wildcard policy row exists), so only platform_admin may see them.
+  const canManageLocalUsers = computed(() => roleNames.value.includes('platform_admin'));
+  // `binding read` is granted to platform_admin (via *) and release_admin; viewer has
+  // no rule (internal/auth/casbin.go), so the binding surfaces must stay hidden for it.
+  const canReadBindings = computed(
+    () => roleNames.value.some((role) => role === 'platform_admin' || role === 'release_admin'),
+  );
+  const canReadBundles = computed(
+    () => roleNames.value.some((role) => role === 'platform_admin' || role === 'release_admin'),
+  );
   const canEnrollOperators = computed(() => roleNames.value.some((role) => role === 'platform_admin' || role === 'release_admin'));
   const canRevokeOperators = computed(() => roleNames.value.some((role) => role === 'platform_admin' || role === 'release_admin'));
   const canCreateReleaseOperation = computed(
@@ -145,7 +169,7 @@ export const useAuthStore = defineStore('auth', () => {
       return;
     }
     if (error.code === Code.PermissionDenied) {
-      const message = error.rawMessage || 'You do not have permission to perform this action.';
+      const message = error.rawMessage || t('auth.permissionDenied');
       forbiddenMessage.value = message;
       await forbiddenNavigator?.(message);
     }
@@ -161,6 +185,11 @@ export const useAuthStore = defineStore('auth', () => {
 
   function clearReturnUrl(): void {
     returnUrl.value = null;
+  }
+
+  /** Lets a client-side guard explain a refusal instead of redirecting silently (N4). */
+  function setForbiddenMessage(message: string): void {
+    forbiddenMessage.value = message;
   }
 
   function consumeForbiddenMessage(): string | null {
@@ -183,6 +212,12 @@ export const useAuthStore = defineStore('auth', () => {
     activeOrganization,
     canWrite,
     canReadOperators,
+    canReadBindings,
+    canReadBundles,
+    canRunCleanup,
+    canManageTrustRoots,
+    canManageLocalUsers,
+    roleNames,
     canEnrollOperators,
     canRevokeOperators,
     canCreateReleaseOperation,
@@ -195,6 +230,7 @@ export const useAuthStore = defineStore('auth', () => {
     clearSession,
     setReturnUrl,
     clearReturnUrl,
+    setForbiddenMessage,
     consumeForbiddenMessage,
     handleConnectError,
   };

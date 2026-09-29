@@ -16,6 +16,10 @@ export default defineConfig({
     // ports; override with E2E_BASE_URL for staging environments.
     baseURL: process.env.E2E_BASE_URL ?? 'http://127.0.0.1:5173',
     trace: 'retain-on-failure',
+    // CI installs the bundled Chromium; a developer machine already has Google
+    // Chrome and this repository's convention is to reuse it rather than download
+    // another browser. Set E2E_CHANNEL=chrome to run against the system browser.
+    channel: process.env.E2E_CHANNEL === 'chrome' ? 'chrome' : undefined,
   },
   // The dev server is started by the operator/CI environment (the web proxy
   // targets the service ports); `npm run dev` can be used locally.

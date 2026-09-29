@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import type { ClusterSummary } from '@/types/cluster';
 
 defineProps<{
@@ -11,9 +12,9 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
 
 <template>
   <label class="target-field">
-    Target cluster
+    {{ t('cluster.target.select') }}
     <select :value="modelValue" @change="emit('update:modelValue', ($event.target as HTMLSelectElement).value)">
-      <option value="">Select a cluster</option>
+      <option value="">{{ t('cluster.target.placeholder') }}</option>
       <option v-for="cluster in clusters" :key="cluster.id" :value="cluster.id" :disabled="!cluster.enabled">
         {{ cluster.name }}{{ cluster.enabled ? '' : ' — disabled' }}
       </option>
@@ -23,5 +24,5 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
 
 <style scoped>
 .target-field { display: grid; gap: 0.5rem; font-weight: 600; }
-select { padding: 0.625rem; border: 1px solid #cbd5e1; border-radius: 0.375rem; font: inherit; }
+select { padding: 0.625rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; font: inherit; }
 </style>

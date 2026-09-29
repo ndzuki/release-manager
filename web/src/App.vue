@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { storeToRefs } from 'pinia';
 import { RouterView, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
@@ -20,7 +21,7 @@ useSessionExpiry({
 </script>
 
 <template>
-  <LoadingState v-if="auth.status === 'idle' || auth.status === 'initializing'" message="Restoring session…" />
+  <LoadingState v-if="auth.status === 'idle' || auth.status === 'initializing'" :message="t('app.restoringSession')" />
   <AppShell v-else-if="auth.isAuthenticated">
     <RouterView />
   </AppShell>
