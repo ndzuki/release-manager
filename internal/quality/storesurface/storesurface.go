@@ -27,6 +27,7 @@ package storesurface
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
 	"go/types"
 	"sort"
 	"strings"
@@ -319,15 +320,18 @@ func (b bindings) covers(iface *types.Interface, recv types.Type) bool {
 	return b[iface][concreteKey(recv)]
 }
 
+// concreteKey names a concrete type unambiguously: aliases are resolved first (an alias used
+// silently to be dropped before, so a binding through one counted for nothing), and the key is
+// the fully qualified type string, which keeps instantiated generics apart.
 func concreteKey(t types.Type) string {
+	t = types.Unalias(t)
 	if pointer, ok := t.(*types.Pointer); ok {
-		t = pointer.Elem()
+		t = types.Unalias(pointer.Elem())
 	}
-	named, ok := t.(*types.Named)
-	if !ok {
+	if _, ok := t.(*types.Named); !ok {
 		return ""
 	}
-	return named.Obj().Pkg().Path() + "." + named.Obj().Name()
+	return types.TypeString(t, func(pkg *types.Package) string { return pkg.Path() })
 }
 
 func isInterfaceType(t types.Type) bool {
@@ -338,7 +342,21 @@ func isInterfaceType(t types.Type) bool {
 	return ok
 }
 
-// collectBindings walks every shipping package and records the explicit interface bindings.
+// collectBindings walks every shipping package and records the interface bindings shipping
+// code states explicitly. Two forms are collected, and only these:
+//
+//   - a function whose declared result is the interface and whose body returns a concrete named
+//     type (the store's accessors: `func (s *Store) Bundles() store.BundleStore { return s.bundles }`); and
+//   - a file-level `var x Iface = <concrete>`, which also covers compile-time assertions such
+//     as `var _ Iface = (*T)(nil)`.
+//
+// The collector is deliberately narrow. Review found that a broader walk fabricated bindings --
+// attributing a nested closure's `return` to the enclosing function's result list made a
+// genuinely dead method look alive -- and that trying to catch assignments, named-result writes
+// and conversions produced both false alive and false dead results. The failure mode of the
+// narrow rule is visible, not silent: a binding written some other way leaves the method in the
+// report, where an operator registers it (or extends this function) instead of the gate quietly
+// accepting a dead method.
 func collectBindings(pkgs []*packages.Package) bindings {
 	bound := bindings{}
 	for _, pkg := range pkgs {
@@ -346,38 +364,54 @@ func collectBindings(pkgs []*packages.Package) bindings {
 			continue
 		}
 		for _, file := range pkg.Syntax {
+			collectFileLevelBindings(pkg.TypesInfo, file, bound)
 			for _, decl := range file.Decls {
 				funcDecl, ok := decl.(*ast.FuncDecl)
 				if !ok || funcDecl.Body == nil {
 					continue
 				}
-				bindReturns(pkg.TypesInfo, funcDecl, bound)
-				ast.Inspect(funcDecl.Body, func(node ast.Node) bool {
-					switch stmt := node.(type) {
-					case *ast.ValueSpec:
-						bindValueSpec(pkg.TypesInfo, stmt, bound)
-					case *ast.CallExpr:
-						bindConversion(pkg.TypesInfo, stmt, bound)
-					}
-					return true
-				})
+				bindFunctionReturns(pkg.TypesInfo, funcDecl.Type.Results, funcDecl.Body, bound)
 			}
 		}
 	}
 	return bound
 }
 
-func bindReturns(info *types.Info, decl *ast.FuncDecl, bound bindings) {
-	if decl.Type.Results == nil {
+// collectFileLevelBindings handles `var x Iface = <concrete>` at file scope, including
+// compile-time assertions such as `var _ Iface = (*T)(nil)`.
+func collectFileLevelBindings(info *types.Info, file *ast.File, bound bindings) {
+	for _, decl := range file.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			valueSpec, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			bindValueSpec(info, valueSpec, bound)
+		}
+	}
+}
+
+// bindFunctionReturns records what one function returns as an interface. Nested function
+// literals are skipped: their `return`s belong to their own signature, and attributing them to
+// the enclosing function produced bindings that no code ever made (found in review).
+func bindFunctionReturns(info *types.Info, results *ast.FieldList, body *ast.BlockStmt, bound bindings) {
+	if results == nil {
 		return
 	}
-	ast.Inspect(decl.Body, func(node ast.Node) bool {
+	ast.Inspect(body, func(node ast.Node) bool {
+		if _, isLiteral := node.(*ast.FuncLit); isLiteral {
+			return false
+		}
 		stmt, ok := node.(*ast.ReturnStmt)
 		if !ok {
 			return true
 		}
 		for position, result := range stmt.Results {
-			expected := resultTypeAt(info, decl, position)
+			expected := resultTypeAt(info, results, position)
 			iface := interfaceOf(expected)
 			if iface == nil {
 				continue
@@ -388,16 +422,15 @@ func bindReturns(info *types.Info, decl *ast.FuncDecl, bound bindings) {
 	})
 }
 
-// resultTypeAt resolves the declared result type at position i, or "" when the function uses
-// named results in a way this walker cannot line up.
-func resultTypeAt(info *types.Info, decl *ast.FuncDecl, position int) types.Type {
-	results := decl.Type.Results.List
-	if len(results) == 0 {
+// resultTypeAt resolves the declared result type at position i. Named results make the
+// positions explicit; otherwise the statement order matches. It is called with the result list
+// of the function whose body is being walked, never an enclosing one.
+func resultTypeAt(info *types.Info, results *ast.FieldList, position int) types.Type {
+	if results == nil || len(results.List) == 0 {
 		return nil
 	}
-	// Named results make the positions explicit; otherwise the statement order matches.
 	fields := 0
-	for _, field := range results {
+	for _, field := range results.List {
 		count := len(field.Names)
 		if count == 0 {
 			count = 1
@@ -421,14 +454,6 @@ func bindValueSpec(info *types.Info, spec *ast.ValueSpec, bound bindings) {
 	for _, value := range spec.Values {
 		bound.add(iface, staticType(info, value))
 	}
-}
-
-func bindConversion(info *types.Info, call *ast.CallExpr, bound bindings) {
-	iface := interfaceOf(info.TypeOf(call.Fun))
-	if iface == nil || len(call.Args) != 1 {
-		return
-	}
-	bound.add(iface, staticType(info, call.Args[0]))
 }
 
 func interfaceOf(t types.Type) *types.Interface {

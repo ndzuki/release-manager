@@ -111,13 +111,40 @@ type CStore interface {
 	Ping(ctx context.Context) error
 }
 
+// XStore is bound by nothing: the only function that returns it never returns a concrete value,
+// and its body contains a closure that does. Review showed that walking into closures fabricated
+// a binding here and made XStore.Ping look alive.
+type XStore interface {
+	Ping(ctx context.Context) error
+}
+
 type AStoreImpl struct{}
+
+type XStoreImpl struct{}
+
+func (s *XStoreImpl) Ping(ctx context.Context) error { return nil }
+
+// BoundAtFileScope binds *AStoreImpl to AStore at file level.
+var BoundAtFileScope AStore = &AStoreImpl{}
+
+// AliasOfImpl exercises the alias path: the key must resolve through types.Unalias.
+type AliasOfImpl = AStoreImpl
+
+var BoundThroughAlias AStore = &AliasOfImpl{}
 
 // NewAStore binds *AStoreImpl to AStore, which is what makes its concrete calls count.
 func NewAStore() AStore { return &AStoreImpl{} }
 
 func (s *AStoreImpl) Ping(ctx context.Context) error         { return nil }
 func (s *AStoreImpl) ConcreteOnly(ctx context.Context) error { return nil }
+
+// NeverBound returns no value: the nested closure returns a concrete type, and that must not
+// count as a binding of XStore.
+func NeverBound() XStore {
+	build := func() *XStoreImpl { return &XStoreImpl{} }
+	_ = build
+	return nil
+}
 `,
 		// AStore.Ping is called through the interface.
 		"internal/app/app.go": `package app
@@ -143,6 +170,33 @@ import (
 func useConcrete() error { return (&store.AStoreImpl{}).ConcreteOnly(context.Background()) }
 
 func useConcretePing() error { return (&store.AStoreImpl{}).Ping(context.Background()) }
+`,
+		// Calls on the concrete types bound at file scope must count, including through an alias.
+		"internal/app/filebound.go": `package app
+
+import (
+	"context"
+
+	"example.com/fake/internal/store"
+)
+
+func useFileBound() error {
+	if err := (&store.AStoreImpl{}).Ping(context.Background()); err != nil {
+		return err
+	}
+	return (&store.AliasOfImpl{}).Ping(context.Background())
+}
+`,
+		// A call on the closure's concrete type must NOT keep XStore.Ping alive.
+		"internal/app/closure.go": `package app
+
+import (
+	"context"
+
+	"example.com/fake/internal/store"
+)
+
+func useClosureType() error { return (&store.XStoreImpl{}).Ping(context.Background()) }
 `,
 		// Comments and string literals must not keep BStore.Dead alive.
 		"internal/app/comment.go": `package app
@@ -180,8 +234,8 @@ func TestAnalyzeIsTypeBased(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
-	if analysis.Interfaces != 3 || analysis.Declared != 5 {
-		t.Fatalf("want 3 interfaces / 5 declarations, got %d / %d", analysis.Interfaces, analysis.Declared)
+	if analysis.Interfaces != 4 || analysis.Declared != 6 {
+		t.Fatalf("want 4 interfaces / 6 declarations, got %d / %d", analysis.Interfaces, analysis.Declared)
 	}
 	dead := map[string]bool{}
 	for _, m := range analysis.Dead {
@@ -192,7 +246,7 @@ func TestAnalyzeIsTypeBased(t *testing.T) {
 			t.Errorf("%s has a call site and must not be dead", alive)
 		}
 	}
-	for _, wantDead := range []string{"BStore.Ping", "BStore.Dead", "CStore.Ping"} {
+	for _, wantDead := range []string{"BStore.Ping", "BStore.Dead", "CStore.Ping", "XStore.Ping"} {
 		if !dead[wantDead] {
 			t.Errorf("%s has no attributable call site and must stay dead", wantDead)
 		}
