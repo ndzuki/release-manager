@@ -63,9 +63,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "taskcheck: %v\n", err)
 			os.Exit(2)
 		}
-		reqResult := taskcheck.CheckRequirements(reqs)
-		result.Findings = append(result.Findings, reqResult.Findings...)
-		result.Checked += reqResult.Checked
+		mergeResults(result, taskcheck.CheckRequirements(reqs))
 	}
 	taskcheck.SortFindings(result.Findings)
 
@@ -83,14 +81,37 @@ func main() {
 		}
 	}
 
-	fmt.Printf("taskcheck: %d completed card(s) checked, %d verified, %d violation(s), %d unverified\n",
-		result.Checked, result.Verified, violations, unverified)
+	fmt.Println(summaryLine(*result, violations, unverified))
 	if result.Failed(opts) {
 		if violations == 0 && unverified > 0 {
 			fmt.Fprintln(os.Stderr, "taskcheck: set ALLOW_UNVERIFIED_TASKS=1 to accept unverified merge evidence explicitly")
 		}
 		os.Exit(1)
 	}
+}
+
+// mergeResults folds the requirement side of the ledger into the card result. It exists as a
+// seam because the defect this fixes was the accumulation itself: the two populations must
+// stay in separate fields, and a reviewer showed that reverting the addition kept every test
+// green while the summary silently went back to reporting requirements as cards.
+func mergeResults(cards, reqs *taskcheck.Result) {
+	if reqs == nil {
+		return
+	}
+	cards.Findings = append(cards.Findings, reqs.Findings...)
+	cards.RequirementsChecked += reqs.Checked
+}
+
+// summaryLine renders the run summary. It reports cards and requirement records separately:
+// they are different populations, and folding one into the other made the reported "card"
+// count describe neither.
+func summaryLine(result taskcheck.Result, violations, unverified int) string {
+	checked := fmt.Sprintf("%d completed card(s)", result.Checked)
+	if result.RequirementsChecked > 0 {
+		checked += fmt.Sprintf(" and %d requirement record(s)", result.RequirementsChecked)
+	}
+	return fmt.Sprintf("taskcheck: %s checked, %d verified, %d violation(s), %d unverified",
+		checked, result.Verified, violations, unverified)
 }
 
 // loadEvidence reads the git and gh evidence files. gh evidence is best-effort:
