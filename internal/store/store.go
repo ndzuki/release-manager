@@ -2236,7 +2236,6 @@ type OperatorLifecycleStore interface {
 type EnrollmentTokenStore interface {
 	Create(ctx context.Context, t *EnrollmentToken) error
 	GetByToken(ctx context.Context, token string) (*EnrollmentToken, error)
-	MarkUsed(ctx context.Context, id, operatorID string) error
 	Revoke(ctx context.Context, id string) error
 	GetPendingByCluster(ctx context.Context, customerID, clusterID string) (*EnrollmentToken, error)
 	ListByCustomer(ctx context.Context, customerID string) ([]*EnrollmentToken, error)
@@ -2282,11 +2281,9 @@ type OutboxStore interface {
 	// GetByOperationID resolves the outbox row for a standard operation
 	// (used for rollout_progress ownership checks, AC-077-15).
 	GetByOperationID(ctx context.Context, operationID string) (*OutboxEntry, error)
-	GetPendingForOperator(ctx context.Context, operatorID string) (*OutboxEntry, error)
 	GetDeliveredNotAcked(ctx context.Context, operatorID string) ([]*OutboxEntry, error)
 	GetInflightForOperator(ctx context.Context, operatorID string) (*OutboxEntry, error)
 	GetNextSequence(ctx context.Context) (int64, error)
-	UpdateSequence(ctx context.Context, id string, sequence int64) error
 	// PersistAck atomically marks a delivered command as persisted and appends
 	// an ACK timeline entry in the same transaction (TASK-077 AC-077-01).
 	// Returns (nil, nil) when the command is already persisted so a replayed
@@ -2382,7 +2379,6 @@ type AuditExportStore interface {
 type NotificationStore interface {
 	Create(ctx context.Context, j *NotificationJob) error
 	Get(ctx context.Context, id string) (*NotificationJob, error)
-	GetPending(ctx context.Context, now time.Time, limit int) ([]*NotificationJob, error)
 	UpdateStatus(ctx context.Context, id string, status NotificationStatus, attempts int, retryCount int, errorCode string, nextRetryAt *time.Time, lastError string, sentAt *time.Time) error
 	MarkDeadLetter(ctx context.Context, id string, errorCode, lastError string) error
 	ClaimNext(ctx context.Context, now time.Time) (*NotificationJob, error)

@@ -183,10 +183,12 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 	require.NoError(t, st.Clusters().Create(ctx, cl))
 
 	tok := &store.EnrollmentToken{
-		ID:         uuid.New().String(),
-		CustomerID: cust.ID,
-		ClusterID:  cl.ID,
-		TokenHash:  sha256Hex("test-token-abc"),
+		ID:           uuid.New().String(),
+		CustomerID:   cust.ID,
+		ClusterID:    cl.ID,
+		OperatorName: "op-001",
+		TokenHash:    sha256Hex("test-token-abc"),
+		ExpiresAt:    time.Now().UTC().Add(time.Hour),
 	}
 	require.NoError(t, st.EnrollmentTokens().Create(ctx, tok))
 
@@ -194,8 +196,13 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.TokenStatePending, got.State)
 
-	// Mark used.
-	require.NoError(t, st.EnrollmentTokens().MarkUsed(ctx, tok.ID, "op-001"))
+	// Consume the token through the canonical enrollment path; the bare
+	// MarkUsed CAS has no production caller (operator/service.go drives
+	// OperatorManagement().EnrollOperator).
+	_, err = st.OperatorManagement().EnrollOperator(ctx, tok.ID, &store.Operator{
+		ID: "op-001", Name: "op-001", CustomerID: cust.ID, ClusterID: cl.ID, CertSerial: "serial-op-001",
+	}, &store.Session{ID: uuid.New().String()})
+	require.NoError(t, err)
 
 	got, err = st.EnrollmentTokens().GetByToken(ctx, "test-token-abc")
 	require.NoError(t, err)

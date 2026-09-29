@@ -64,34 +64,6 @@ func (s *notificationStore) Get(ctx context.Context, id string) (*store.Notifica
 	return scanNotificationJob(row)
 }
 
-func (s *notificationStore) GetPending(ctx context.Context, now time.Time, limit int) ([]*store.NotificationJob, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, operation_id, channel, recipient, status, attempts,
-			retry_count, max_retries, error_code, next_retry_at, last_error,
-			sent_at, dead_letter_at,
-			metadata, created_at, updated_at
-		FROM notification_jobs
-		WHERE status IN ('pending', 'failed')
-		  AND (next_retry_at IS NULL OR next_retry_at <= ?)
-		ORDER BY created_at ASC
-		LIMIT ?
-	`, now.UTC().Format(time.RFC3339), limit)
-	if err != nil {
-		return nil, fmt.Errorf("query pending notification jobs: %w", err)
-	}
-	defer rows.Close()
-
-	var jobs []*store.NotificationJob
-	for rows.Next() {
-		j, err := scanNotificationJobFromRows(rows)
-		if err != nil {
-			return nil, err
-		}
-		jobs = append(jobs, j)
-	}
-	return jobs, rows.Err()
-}
-
 // ClaimNext atomically claims the next due pending job by updating its
 // status to 'sending' in a single statement with a row-level lock.
 // Returns nil, nil when no jobs are available.
@@ -217,25 +189,6 @@ func scanNotificationJob(row interface{ Scan(...interface{}) error }) (*store.No
 			return nil, store.ErrNotFound
 		}
 		return nil, fmt.Errorf("scan notification job: %w", err)
-	}
-	return buildNotificationJob(id, opID, channel, recipient, status, attempts,
-		retryCount, maxRetries, errorCode, nextRetryStr, lastError, sentAtStr, deadLetterStr,
-		metaJSON, createdStr, updatedStr)
-}
-
-func scanNotificationJobFromRows(rows *sql.Rows) (*store.NotificationJob, error) {
-	var (
-		id, opID, channel, recipient, status, errorCode, lastError, metaJSON string
-		attempts, retryCount, maxRetries                                     int
-		nextRetryStr, sentAtStr, deadLetterStr                               *string
-		createdStr, updatedStr                                               string
-	)
-	err := rows.Scan(&id, &opID, &channel, &recipient, &status, &attempts,
-		&retryCount, &maxRetries, &errorCode, &nextRetryStr, &lastError,
-		&sentAtStr, &deadLetterStr,
-		&metaJSON, &createdStr, &updatedStr)
-	if err != nil {
-		return nil, fmt.Errorf("scan notification job from rows: %w", err)
 	}
 	return buildNotificationJob(id, opID, channel, recipient, status, attempts,
 		retryCount, maxRetries, errorCode, nextRetryStr, lastError, sentAtStr, deadLetterStr,
