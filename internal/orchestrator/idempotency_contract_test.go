@@ -304,12 +304,14 @@ func TestCreateOperationAdoptsAnUnclaimedBundleFromAnotherOrganization(t *testin
 		ChartRef: "nginx", CreatedAt: time.Now().UTC(),
 	}))
 
-	// org-002 (a different organization, a different customer) adopts it.
+	// org-002 (a different organization, a different customer) adopts it. The bundle is
+	// UNATTRIBUTED (created directly in the store, like a row written before migration
+	// 000032), and TASK-216 deliberately keeps first-come-first-served for those.
 	req, ctx := createOperationRequestForScope(
 		"adopt-unclaimed", "user-002", "org-002", "def-002", "bundle-unclaimed-foreign", "values-def-002",
 	)
 	_, err := svc.CreateOperation(ctx, req)
-	require.NoError(t, err, "KNOWN LIMITATION: an unclaimed bundle is adoptable (TASK-216)")
+	require.NoError(t, err, "an unattributed, unclaimed bundle stays adoptable (TASK-216)")
 
 	// And the owner of the definition it was submitted for can no longer adopt it.
 	ownerReq, ownerCtx := createOperationRequestForScope(
@@ -319,4 +321,38 @@ func TestCreateOperationAdoptsAnUnclaimedBundleFromAnotherOrganization(t *testin
 	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err),
 		"the adoption above now blocks the original organization: that is why TASK-216 matters")
+}
+
+// TASK-216: a bundle another organization submitted is not adoptable merely because no
+// definition has claimed it yet -- adopting it would block that submitter's own first install.
+func TestCreateOperationRefusesABundleAnotherOrganizationSubmitted(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	t.Cleanup(cleanup)
+	seedDefinition(t, st)
+	seedActorScope(t, st)
+	seedDefinitionForScope(t, st)
+
+	require.NoError(t, st.Bundles().Create(t.Context(), &store.ReleaseBundle{
+		ID: "bundle-submitted-by-org-001", Name: "submitted", DigestAlg: "sha256",
+		DigestValue: fmt.Sprintf("%064x", 59), Status: store.BundleValidated,
+		ChartRef: "nginx", CreatedAt: time.Now().UTC(),
+		SubmittedByOrganizationID: "org-001", SubmittedByUserID: "user-001",
+	}))
+
+	// org-002 (a different organization, a different customer) must be refused even though no
+	// definition has claimed the bundle yet.
+	req, ctx := createOperationRequestForScope(
+		"adopt-submitted", "user-002", "org-002", "def-002", "bundle-submitted-by-org-001", "values-def-002",
+	)
+	_, err := svc.CreateOperation(ctx, req)
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "was submitted by another organization")
+
+	// The submitting organization can still use its own bundle (the UoW then claims it).
+	ownerReq, ownerCtx := createOperationRequestForScope(
+		"use-own-submitted", "user-001", "org-001", "def-001", "bundle-submitted-by-org-001", "vr-001",
+	)
+	_, err = svc.CreateOperation(ownerCtx, ownerReq)
+	require.NoError(t, err, "the submitter must keep access to the bundle it submitted")
 }

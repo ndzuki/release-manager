@@ -33,8 +33,9 @@ func (s *bundleStore) Create(ctx context.Context, b *store.ReleaseBundle) error 
 			signature_ref, signature_digest,
 			sbom_ref, sbom_digest,
 			provenance_ref, provenance_digest,
+			submitted_by_organization_id, submitted_by_user_id,
 			created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		b.ID, b.Name, b.DigestAlg, b.DigestValue, string(b.Status),
 		b.ChartRef, b.ChartVersion, b.ChartDigest,
@@ -43,6 +44,7 @@ func (s *bundleStore) Create(ctx context.Context, b *store.ReleaseBundle) error 
 		b.SignatureRef, b.SignatureDigest,
 		b.SBOMRef, b.SBOMDigest,
 		b.ProvenanceRef, b.ProvenanceDigest,
+		b.SubmittedByOrganizationID, b.SubmittedByUserID,
 		b.CreatedAt.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
@@ -60,6 +62,7 @@ func (s *bundleStore) Get(ctx context.Context, id string) (*store.ReleaseBundle,
 			signature_ref, signature_digest,
 			sbom_ref, sbom_digest,
 			provenance_ref, provenance_digest,
+			submitted_by_organization_id, submitted_by_user_id,
 			archived_at, archived_from_status, created_at
 		FROM release_bundles WHERE id = ?
 	`, id)
@@ -75,6 +78,7 @@ func (s *bundleStore) GetByDigest(ctx context.Context, alg, value string) (*stor
 			signature_ref, signature_digest,
 			sbom_ref, sbom_digest,
 			provenance_ref, provenance_digest,
+			submitted_by_organization_id, submitted_by_user_id,
 			archived_at, archived_from_status, created_at
 		FROM release_bundles WHERE digest_alg = ? AND digest_value = ?
 	`, alg, value)
@@ -89,6 +93,7 @@ func scanBundle(row interface{ Scan(...interface{}) error }) (*store.ReleaseBund
 		gitCommit, pipelineID                    string
 		sigRef, sigDigest, sbomRef               string
 		sbomDigest, provRef, provDigest          string
+		submittedByOrg, submittedByUser          string
 		archivedAt, archivedFromStatus           *string
 		createdAt                                string
 	)
@@ -99,6 +104,7 @@ func scanBundle(row interface{ Scan(...interface{}) error }) (*store.ReleaseBund
 		&imagesJSON,
 		&gitCommit, &pipelineID,
 		&sigRef, &sigDigest, &sbomRef, &sbomDigest, &provRef, &provDigest,
+		&submittedByOrg, &submittedByUser,
 		&archivedAt, &archivedFromStatus,
 		&createdAt,
 	); err != nil {
@@ -135,26 +141,28 @@ func scanBundle(row interface{ Scan(...interface{}) error }) (*store.ReleaseBund
 	}
 
 	return &store.ReleaseBundle{
-		ID:                 id,
-		Name:               name,
-		DigestAlg:          digestAlg,
-		DigestValue:        digestValue,
-		Status:             store.BundleStatus(status),
-		ChartRef:           chartRef,
-		ChartVersion:       chartVersion,
-		ChartDigest:        chartDigest,
-		Images:             images,
-		GitCommit:          gitCommit,
-		PipelineID:         pipelineID,
-		SignatureRef:       sigRef,
-		SignatureDigest:    sigDigest,
-		SBOMRef:            sbomRef,
-		SBOMDigest:         sbomDigest,
-		ProvenanceRef:      provRef,
-		ProvenanceDigest:   provDigest,
-		ArchivedAt:         archived,
-		ArchivedFromStatus: archivedFrom,
-		CreatedAt:          ts,
+		ID:                        id,
+		SubmittedByOrganizationID: submittedByOrg,
+		SubmittedByUserID:         submittedByUser,
+		Name:                      name,
+		DigestAlg:                 digestAlg,
+		DigestValue:               digestValue,
+		Status:                    store.BundleStatus(status),
+		ChartRef:                  chartRef,
+		ChartVersion:              chartVersion,
+		ChartDigest:               chartDigest,
+		Images:                    images,
+		GitCommit:                 gitCommit,
+		PipelineID:                pipelineID,
+		SignatureRef:              sigRef,
+		SignatureDigest:           sigDigest,
+		SBOMRef:                   sbomRef,
+		SBOMDigest:                sbomDigest,
+		ProvenanceRef:             provRef,
+		ProvenanceDigest:          provDigest,
+		ArchivedAt:                archived,
+		ArchivedFromStatus:        archivedFrom,
+		CreatedAt:                 ts,
 	}, nil
 }
 

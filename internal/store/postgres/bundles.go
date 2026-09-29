@@ -64,13 +64,15 @@ func (s *bundleStore) CreateTx(tx *gorm.DB, bundle *store.ReleaseBundle) error {
 			git_commit, pipeline_id,
 			signature_ref, signature_digest, sbom_ref, sbom_digest,
 			provenance_ref, provenance_digest,
+			submitted_by_organization_id, submitted_by_user_id,
 			archived_at, archived_from_status, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, bundle.ID, bundle.Name, bundle.DigestAlg, bundle.DigestValue, string(bundle.Status),
 		bundle.ChartRef, bundle.ChartVersion, bundle.ChartDigest, string(imagesJSON),
 		bundle.GitCommit, bundle.PipelineID,
 		bundle.SignatureRef, bundle.SignatureDigest, bundle.SBOMRef, bundle.SBOMDigest,
 		bundle.ProvenanceRef, bundle.ProvenanceDigest,
+		bundle.SubmittedByOrganizationID, bundle.SubmittedByUserID,
 		bundle.ArchivedAt, archivedFrom, bundle.CreatedAt.UTC()).Error; err != nil {
 		return fmt.Errorf("insert release bundle: %w", err)
 	}
@@ -103,6 +105,7 @@ func getBundle(ctx context.Context, db *gorm.DB, suffix string, args ...any) (*s
 			b.signature_ref, b.signature_digest,
 			b.sbom_ref, b.sbom_digest,
 			b.provenance_ref, b.provenance_digest,
+			b.submitted_by_organization_id, b.submitted_by_user_id,
 			b.archived_at, b.archived_from_status, b.created_at
 		FROM release_bundles AS b `+suffix, args...).Row()
 	bundle, err := scanBundle(row)
@@ -129,6 +132,7 @@ func scanBundle(row interface{ Scan(...any) error }) (*store.ReleaseBundle, erro
 		&bundle.SignatureRef, &bundle.SignatureDigest,
 		&bundle.SBOMRef, &bundle.SBOMDigest,
 		&bundle.ProvenanceRef, &bundle.ProvenanceDigest,
+		&bundle.SubmittedByOrganizationID, &bundle.SubmittedByUserID,
 		&archivedAt, &archivedFrom, &bundle.CreatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -203,6 +207,7 @@ func (s *bundleStore) List(ctx context.Context, filter store.BundleListFilter) (
 			b.signature_ref, b.signature_digest,
 			b.sbom_ref, b.sbom_digest,
 			b.provenance_ref, b.provenance_digest,
+			b.submitted_by_organization_id, b.submitted_by_user_id,
 			b.archived_at, b.archived_from_status, b.created_at
 		FROM release_bundles AS b
 		WHERE `+strings.Join(where, " AND ")+`

@@ -74,6 +74,12 @@ message BundleSummary {
   string chart_digest = 7;
   repeated BundleImageBindingSummary images = 8;
   google.protobuf.Timestamp created_at = 9;
+  // The organization that submitted this bundle. Empty means attribution is unknown: the
+  // bundle predates submitter attribution (migration 000032), so the first-come-first-served
+  // rule still applies to it (TASK-216).
+  string submitted_by_organization_id = 10;
+  // The submitting user, when known. Displayed for audit only; it never authorizes.
+  string submitted_by_user_id = 11;
 }
 
 message SubmitBundleResponse {

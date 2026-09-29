@@ -336,6 +336,14 @@ func (s *Service) CreateOperation(
 				return nil, connect.NewError(connect.CodePermissionDenied,
 					fmt.Errorf("bundle_not_reachable: bundle %s belongs to another organization", bundle.ID))
 			}
+			// A bundle someone else submitted is not adoptable just because no definition has
+			// claimed it yet; otherwise adopting it would block that submitter's own first
+			// install. Rows written before migration 000032 carry an empty submitter and keep
+			// the first-come-first-served rule (TASK-216).
+			if bundle.SubmittedByOrganizationID != "" && bundle.SubmittedByOrganizationID != actor.OrganizationID {
+				return nil, connect.NewError(connect.CodePermissionDenied,
+					fmt.Errorf("bundle_not_reachable: bundle %s was submitted by another organization", bundle.ID))
+			}
 		}
 	}
 	switch bundle.Status {

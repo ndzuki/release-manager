@@ -66,9 +66,16 @@ func (s *BundleService) SubmitBundle(
 	bundle.ID = uuid.NewString()
 	bundle.CreatedAt = time.Now().UTC()
 
+	// Attribution (TASK-216): the write path later refuses a bundle another organization
+	// submitted, so record who submitted it while the actor is available. A service actor has
+	// no organization, which leaves the bundle unattributed and subject to the
+	// first-come-first-served rule exactly like rows written before migration 000032.
+	actor, _ := authctx.ActorFromContext(ctx)
+	bundle.SubmittedByOrganizationID = actor.OrganizationID
+	bundle.SubmittedByUserID = actor.UserID
+
 	var idempotency *store.IdempotencyRecord
 	if key := req.Header().Get("Idempotency-Key"); key != "" {
-		actor, _ := authctx.ActorFromContext(ctx)
 		identity := actor.Service
 		if identity == "" {
 			identity = actor.UserID
@@ -566,6 +573,8 @@ func bundleSummaryToProto(bundle *store.ReleaseBundle) *orchestratorv1.BundleSum
 		Status: bundleStatusToProto(bundle.Status), ChartRef: bundle.ChartRef,
 		ChartVersion: bundle.ChartVersion, ChartDigest: bundle.ChartDigest,
 		Images: images, CreatedAt: timestamppb.New(bundle.CreatedAt),
+		SubmittedByOrganizationId: bundle.SubmittedByOrganizationID,
+		SubmittedByUserId:         bundle.SubmittedByUserID,
 	}
 }
 

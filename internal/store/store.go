@@ -1539,26 +1539,31 @@ type ArtifactReference struct {
 
 // ReleaseBundle represents an immutable release artifact bundle.
 type ReleaseBundle struct {
-	ID                 string
-	Name               string
-	DigestAlg          string
-	DigestValue        string
-	Status             BundleStatus
-	ChartRef           string
-	ChartVersion       string
-	ChartDigest        string
-	Images             []BundleImage
-	GitCommit          string
-	PipelineID         string
-	SignatureRef       string
-	SignatureDigest    string
-	SBOMRef            string
-	SBOMDigest         string
-	ProvenanceRef      string
-	ProvenanceDigest   string
-	ArchivedAt         *time.Time
-	ArchivedFromStatus *BundleStatus
-	CreatedAt          time.Time
+	ID   string
+	Name string
+	// SubmittedByOrganizationID is the organization that submitted the bundle; empty means
+	// unknown (rows written before migration 000032), which keeps the first-come-first-served
+	// adoption rule for them (TASK-216). SubmittedByUserID is display-only.
+	SubmittedByOrganizationID string
+	SubmittedByUserID         string
+	DigestAlg                 string
+	DigestValue               string
+	Status                    BundleStatus
+	ChartRef                  string
+	ChartVersion              string
+	ChartDigest               string
+	Images                    []BundleImage
+	GitCommit                 string
+	PipelineID                string
+	SignatureRef              string
+	SignatureDigest           string
+	SBOMRef                   string
+	SBOMDigest                string
+	ProvenanceRef             string
+	ProvenanceDigest          string
+	ArchivedAt                *time.Time
+	ArchivedFromStatus        *BundleStatus
+	CreatedAt                 time.Time
 }
 
 // ClaimedBundleOutsideOrganizationPredicate reports whether a bundle is claimed by a

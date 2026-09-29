@@ -464,3 +464,37 @@ func TestGetBundleDoesNotResolveAliases(t *testing.T) {
 	// bundleError carries the reason inside the message rather than in X-Reason-Code.
 	assert.Contains(t, err.Error(), "bundle_not_found")
 }
+
+// TASK-216: SubmitBundle records the submitting organization and exposes it, so the write path
+// can refuse an unrelated organization that tries to adopt the bundle later.
+func TestSubmitBundleRecordsTheSubmitter(t *testing.T) {
+	st := bundleServiceStore(t)
+	svc := NewBundleService(st, nil, nil)
+	ctx := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-attrib", OrganizationID: "org-attrib", Roles: []string{string(store.RoleReleaseAdmin)},
+	})
+
+	resp, err := svc.SubmitBundle(ctx, connect.NewRequest(&orchestratorv1.SubmitBundleRequest{
+		Name:         "attributed-bundle",
+		ChartRef:     "oci://registry.example.com/charts/api",
+		ChartVersion: "1.0.0",
+		ChartDigest:  "sha256:" + strings.Repeat("a", 64),
+		GitCommit:    strings.Repeat("c", 40),
+		PipelineId:   "pipeline-attrib",
+		Images: []*commonv1.BundleImage{{
+			Ref:        "registry.example.com/team/api",
+			Digest:     "sha256:" + strings.Repeat("b", 64),
+			ValuesPath: "api.image.digest",
+			ValueKind:  commonv1.ImageValueKind_IMAGE_VALUE_KIND_DIGEST,
+		}},
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "org-attrib", resp.Msg.GetBundle().GetSubmittedByOrganizationId())
+	assert.Equal(t, "user-attrib", resp.Msg.GetBundle().GetSubmittedByUserId())
+
+	// Persisted, not just echoed: the write path reads the bundle back from the store.
+	got, err := st.Bundles().Get(context.Background(), resp.Msg.GetBundle().GetId())
+	require.NoError(t, err)
+	assert.Equal(t, "org-attrib", got.SubmittedByOrganizationID)
+	assert.Equal(t, "user-attrib", got.SubmittedByUserID)
+}

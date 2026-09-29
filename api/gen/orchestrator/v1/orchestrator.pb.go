@@ -1144,18 +1144,24 @@ func (x *BundleImageBindingSummary) GetValueKind() v1.ImageValueKind {
 }
 
 type BundleSummary struct {
-	state         protoimpl.MessageState       `protogen:"open.v1"`
-	Id            string                       `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                       `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Digest        *v1.ReleaseDigest            `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"`
-	Status        v1.BundleStatus              `protobuf:"varint,4,opt,name=status,proto3,enum=common.v1.BundleStatus" json:"status,omitempty"`
-	ChartRef      string                       `protobuf:"bytes,5,opt,name=chart_ref,json=chartRef,proto3" json:"chart_ref,omitempty"`
-	ChartVersion  string                       `protobuf:"bytes,6,opt,name=chart_version,json=chartVersion,proto3" json:"chart_version,omitempty"`
-	ChartDigest   string                       `protobuf:"bytes,7,opt,name=chart_digest,json=chartDigest,proto3" json:"chart_digest,omitempty"`
-	Images        []*BundleImageBindingSummary `protobuf:"bytes,8,rep,name=images,proto3" json:"images,omitempty"`
-	CreatedAt     *timestamppb.Timestamp       `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState       `protogen:"open.v1"`
+	Id           string                       `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name         string                       `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Digest       *v1.ReleaseDigest            `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"`
+	Status       v1.BundleStatus              `protobuf:"varint,4,opt,name=status,proto3,enum=common.v1.BundleStatus" json:"status,omitempty"`
+	ChartRef     string                       `protobuf:"bytes,5,opt,name=chart_ref,json=chartRef,proto3" json:"chart_ref,omitempty"`
+	ChartVersion string                       `protobuf:"bytes,6,opt,name=chart_version,json=chartVersion,proto3" json:"chart_version,omitempty"`
+	ChartDigest  string                       `protobuf:"bytes,7,opt,name=chart_digest,json=chartDigest,proto3" json:"chart_digest,omitempty"`
+	Images       []*BundleImageBindingSummary `protobuf:"bytes,8,rep,name=images,proto3" json:"images,omitempty"`
+	CreatedAt    *timestamppb.Timestamp       `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// The organization that submitted this bundle. Empty means attribution is unknown: the
+	// bundle predates submitter attribution (migration 000032), so the first-come-first-served
+	// rule still applies to it (TASK-216).
+	SubmittedByOrganizationId string `protobuf:"bytes,10,opt,name=submitted_by_organization_id,json=submittedByOrganizationId,proto3" json:"submitted_by_organization_id,omitempty"`
+	// The submitting user, when known. Displayed for audit only; it never authorizes.
+	SubmittedByUserId string `protobuf:"bytes,11,opt,name=submitted_by_user_id,json=submittedByUserId,proto3" json:"submitted_by_user_id,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *BundleSummary) Reset() {
@@ -1249,6 +1255,20 @@ func (x *BundleSummary) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *BundleSummary) GetSubmittedByOrganizationId() string {
+	if x != nil {
+		return x.SubmittedByOrganizationId
+	}
+	return ""
+}
+
+func (x *BundleSummary) GetSubmittedByUserId() string {
+	if x != nil {
+		return x.SubmittedByUserId
+	}
+	return ""
 }
 
 type SubmitBundleResponse struct {
@@ -11329,7 +11349,7 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\vvalues_path\x18\x03 \x01(\tR\n" +
 	"valuesPath\x128\n" +
 	"\n" +
-	"value_kind\x18\x04 \x01(\x0e2\x19.common.v1.ImageValueKindR\tvalueKind\"\xfa\x02\n" +
+	"value_kind\x18\x04 \x01(\x0e2\x19.common.v1.ImageValueKindR\tvalueKind\"\xec\x03\n" +
 	"\rBundleSummary\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x120\n" +
@@ -11340,7 +11360,10 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\fchart_digest\x18\a \x01(\tR\vchartDigest\x12B\n" +
 	"\x06images\x18\b \x03(\v2*.orchestrator.v1.BundleImageBindingSummaryR\x06images\x129\n" +
 	"\n" +
-	"created_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"h\n" +
+	"created_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12?\n" +
+	"\x1csubmitted_by_organization_id\x18\n" +
+	" \x01(\tR\x19submittedByOrganizationId\x12/\n" +
+	"\x14submitted_by_user_id\x18\v \x01(\tR\x11submittedByUserId\"h\n" +
 	"\x14SubmitBundleResponse\x126\n" +
 	"\x06bundle\x18\x01 \x01(\v2\x1e.orchestrator.v1.BundleSummaryR\x06bundle\x12\x18\n" +
 	"\acreated\x18\x02 \x01(\bR\acreated\"\xa3\x04\n" +

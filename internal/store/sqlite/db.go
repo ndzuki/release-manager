@@ -1670,6 +1670,8 @@ var migrationStatements = []string{
 	`ALTER TABLE release_bundles ADD COLUMN signature_digest TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE release_bundles ADD COLUMN sbom_digest TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE release_bundles ADD COLUMN provenance_digest TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_bundles ADD COLUMN submitted_by_organization_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE release_bundles ADD COLUMN submitted_by_user_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE release_definitions ADD COLUMN current_bundle_id TEXT`,
 
 	// Candidate artifacts (REQ-069)
