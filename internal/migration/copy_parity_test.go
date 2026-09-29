@@ -88,12 +88,13 @@ func TestArtifactDigestColumnsAreNotRegisteredAsDropped(t *testing.T) {
 		"signature_ref", "signature_digest",
 		"sbom_ref", "sbom_digest",
 		"provenance_ref", "provenance_digest",
+		"submitted_by_organization_id", "submitted_by_user_id",
 		"created_at",
 	}
 
 	insertable, _ := insertableColumns("release_bundles", source)
 
-	for _, column := range []string{"signature_digest", "sbom_digest", "provenance_digest"} {
+	for _, column := range []string{"signature_digest", "sbom_digest", "provenance_digest", "submitted_by_organization_id", "submitted_by_user_id"} {
 		assert.Contains(t, insertable, column, "the cutover must carry %s", column)
 	}
 

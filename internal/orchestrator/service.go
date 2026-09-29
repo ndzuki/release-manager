@@ -317,8 +317,15 @@ func (s *Service) CreateOperation(
 	//                                                 makes this definition the owner)
 	//   claimed by a definition of another tenant  -> refused
 	//
-	// Two organizations bound to the SAME customer stay allowed: reachability succeeds
-	// first, because such a bundle is theirs too.
+	// Two organizations bound to the SAME customer stay allowed for a bundle that is already
+	// claimed, because reachability succeeds first: such a bundle is theirs too.
+	//
+	// An ATTRIBUTED bundle nobody has claimed yet is different (TASK-216). Reachability is
+	// false for every organization until a definition owns the bundle, so the submitter check
+	// below refuses a different organization even when it is bound to the same customer.
+	// That is deliberate: whoever adopts it first blocks the submitter's own first install,
+	// and the submitter is the one organization with a claim to it. Bundles submitted through
+	// a service token carry no organization at all, so they stay unattributed and adoptable.
 	//
 	// The check runs BEFORE the status switch on purpose: a foreign caller must not learn
 	// the bundle's status from `bundle_not_ready`/`bundle_rejected`.
